@@ -80,7 +80,7 @@ func TestMakeMollieAPICall_InlineDecodeErrors(t *testing.T) {
 		return newJSONResponse(http.StatusOK, `{"id":`), nil
 	}))
 
-	_, err := makeMollieAPICall(context.Background(), http.MethodPost, "https://mollie.test/v2/payments", []byte(`{}`), "test-key")
+	_, err := makeMollieAPICall(context.Background(), http.MethodPost, "https://mollie.test/v2/payments", []byte(`{}`), "test-key", "")
 	if err == nil || !strings.Contains(err.Error(), "failed to parse Mollie response") {
 		t.Fatalf("expected parse error, got %v", err)
 	}
@@ -88,7 +88,10 @@ func TestMakeMollieAPICall_InlineDecodeErrors(t *testing.T) {
 
 func TestMakeMollieAPICall_MapsInlineResponse(t *testing.T) {
 	expiresAt := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
-	withDefaultTransport(t, testRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
+	withDefaultTransport(t, testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if got := req.Header.Get("Idempotency-Key"); got != "idem-123" {
+			t.Fatalf("expected idempotency key header, got %q", got)
+		}
 		return newJSONResponse(http.StatusOK, `{
 			"id":"tr_123",
 			"status":"open",
@@ -97,7 +100,7 @@ func TestMakeMollieAPICall_MapsInlineResponse(t *testing.T) {
 		}`), nil
 	}))
 
-	resp, err := makeMollieAPICall(context.Background(), http.MethodPost, "https://mollie.test/v2/payments", []byte(`{}`), "test-key")
+	resp, err := makeMollieAPICall(context.Background(), http.MethodPost, "https://mollie.test/v2/payments", []byte(`{}`), "test-key", "idem-123")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

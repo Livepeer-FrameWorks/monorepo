@@ -18,6 +18,10 @@
   const dispatch = createEventDispatcher();
   const marketingSiteUrl = getMarketingSiteUrl().replace(/\/$/, "");
 
+  function resolvedHref(href: string) {
+    return resolve(href as "/");
+  }
+
   // Track current child index for cycling when collapsed
   let sectionChildIndex: Record<string, number> = {};
 
@@ -35,7 +39,7 @@
     const activeChildren = Object.values(section.children).filter((child) => child.active === true);
 
     const currentIndex = activeChildren.findIndex((child) =>
-      child.href ? resolve(child.href) === currentPath : false
+      child.href ? resolvedHref(child.href) === currentPath : false
     );
 
     // Check if we're currently in this section (any child matches)
@@ -62,7 +66,7 @@
     for (const [sectionKey, section] of Object.entries(navigationConfig)) {
       if (sectionKey !== "dashboard" && section.children) {
         for (const [_childKey, child] of Object.entries(section.children)) {
-          if (child.href && resolve(child.href) === currentPath) {
+          if (child.href && resolvedHref(child.href) === currentPath) {
             // Expand the section in the store (non-persisted) so user can toggle it later
             // Use untrack to prevent this effect from re-running if the store changes
             untrack(() => {
@@ -101,7 +105,7 @@
 
     // Find current page index if we're already in this section
     const currentChildIndex = activeChildren.findIndex(([, child]) =>
-      child.href ? resolve(child.href) === currentPath : false
+      child.href ? resolvedHref(child.href) === currentPath : false
     );
 
     if (currentChildIndex !== -1) {
@@ -137,7 +141,7 @@
     }
     // Navigate to active routes using SvelteKit client-side routing
     if (item.href && item.active === true) {
-      goto(resolve(item.href!));
+      goto(resolve(item.href as "/"));
     }
   }
 
@@ -151,7 +155,7 @@
     if (item.active === "disabled") {
       return `${baseClass} disabled ${childPadding}`;
     }
-    if (item.href && resolve(item.href) === currentPath) {
+    if (item.href && resolvedHref(item.href) === currentPath) {
       return `${baseClass} active ${childPadding}`;
     }
     return `${baseClass} ${childPadding}`;

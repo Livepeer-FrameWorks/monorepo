@@ -812,7 +812,7 @@
     } else {
       url.searchParams.set("type", type);
     }
-    goto(resolve(`${url.pathname}${url.search}`), { replaceState: true, noScroll: true });
+    goto(resolve(`${url.pathname}${url.search}` as "/"), { replaceState: true, noScroll: true });
   }
 
   // Icons

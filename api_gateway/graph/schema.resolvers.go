@@ -531,6 +531,19 @@ func (r *billingStatusResolver) CurrentTier(ctx context.Context, obj *proto.Bill
 	return obj.Tier, nil
 }
 
+// PaymentMethods is the resolver for the paymentMethods field.
+func (r *billingStatusResolver) PaymentMethods(ctx context.Context, obj *proto.BillingStatusResponse) ([]model.PaymentMethod, error) {
+	methods := make([]model.PaymentMethod, 0, len(obj.GetPaymentMethods()))
+	for _, method := range obj.GetPaymentMethods() {
+		gqlMethod, err := paymentMethodFromPurser(method)
+		if err != nil {
+			return nil, err
+		}
+		methods = append(methods, gqlMethod)
+	}
+	return methods, nil
+}
+
 // NextBillingDate is the resolver for the nextBillingDate field.
 func (r *billingStatusResolver) NextBillingDate(ctx context.Context, obj *proto.BillingStatusResponse) (*time.Time, error) {
 	if obj.NextBillingDate == nil {
@@ -569,6 +582,11 @@ func (r *billingStatusResolver) LiveUsage(ctx context.Context, obj *proto.Billin
 // InvoicePreview is the resolver for the invoicePreview field.
 func (r *billingStatusResolver) InvoicePreview(ctx context.Context, obj *proto.BillingStatusResponse) (*proto.Invoice, error) {
 	return r.DoGetInvoicePreview(ctx)
+}
+
+// Entitlements is the resolver for the entitlements field.
+func (r *billingTierResolver) Entitlements(ctx context.Context, obj *proto.BillingTier) ([]*model.EntitlementEntry, error) {
+	return entitlementMapToEntries(obj.GetEntitlements()), nil
 }
 
 // Metadata is the resolver for the metadata field.
@@ -2550,18 +2568,7 @@ func (r *nodePerformance5mResolver) TotalBandwidth(ctx context.Context, obj *pro
 
 // Method is the resolver for the method field.
 func (r *paymentResolver) Method(ctx context.Context, obj *proto.PaymentResponse) (model.PaymentMethod, error) {
-	// Convert payment method string to GraphQL enum
-	switch strings.ToLower(obj.Method) {
-	case "card", "mollie":
-		return model.PaymentMethodCard, nil
-	case "crypto", "crypto_btc", "crypto_eth":
-		return model.PaymentMethodCrypto, nil
-	case "bank_transfer":
-		return model.PaymentMethodBankTransfer, nil
-	default:
-		// Default to card if method not specified
-		return model.PaymentMethodCard, nil
-	}
+	return paymentMethodFromPurser(obj.Method)
 }
 
 // Status is the resolver for the status field.
@@ -2577,6 +2584,24 @@ func (r *paymentResolver) Status(ctx context.Context, obj *proto.PaymentResponse
 	default:
 		return model.PaymentStatusPending, fmt.Errorf("unknown payment status: %s", obj.Status)
 	}
+}
+
+// ExpiresAt is the resolver for the expiresAt field.
+func (r *paymentResolver) ExpiresAt(ctx context.Context, obj *proto.PaymentResponse) (*time.Time, error) {
+	if obj.ExpiresAt == nil {
+		return nil, nil
+	}
+	t := obj.ExpiresAt.AsTime()
+	return &t, nil
+}
+
+// QuotedAt is the resolver for the quotedAt field.
+func (r *paymentResolver) QuotedAt(ctx context.Context, obj *proto.PaymentResponse) (*time.Time, error) {
+	if obj.QuotedAt == nil {
+		return nil, nil
+	}
+	t := obj.QuotedAt.AsTime()
+	return &t, nil
 }
 
 // CreatedAt is the resolver for the createdAt field.
@@ -5249,6 +5274,11 @@ func (r *tenantSubscriptionResolver) CancelledAt(ctx context.Context, obj *proto
 	return &t, nil
 }
 
+// EntitlementOverrides is the resolver for the entitlementOverrides field.
+func (r *tenantSubscriptionResolver) EntitlementOverrides(ctx context.Context, obj *proto.TenantSubscription) ([]*model.EntitlementEntry, error) {
+	return entitlementMapToEntries(obj.GetEntitlementOverrides()), nil
+}
+
 // CreatedAt is the resolver for the createdAt field.
 func (r *tenantSubscriptionResolver) CreatedAt(ctx context.Context, obj *proto.TenantSubscription) (*time.Time, error) {
 	if obj.CreatedAt == nil || !obj.CreatedAt.IsValid() {
@@ -5943,6 +5973,9 @@ func (r *Resolver) BillingDetails() generated.BillingDetailsResolver {
 // BillingStatus returns generated.BillingStatusResolver implementation.
 func (r *Resolver) BillingStatus() generated.BillingStatusResolver { return &billingStatusResolver{r} }
 
+// BillingTier returns generated.BillingTierResolver implementation.
+func (r *Resolver) BillingTier() generated.BillingTierResolver { return &billingTierResolver{r} }
+
 // BootstrapToken returns generated.BootstrapTokenResolver implementation.
 func (r *Resolver) BootstrapToken() generated.BootstrapTokenResolver {
 	return &bootstrapTokenResolver{r}
@@ -6314,6 +6347,7 @@ type artifactEventResolver struct{ *Resolver }
 type artifactStateResolver struct{ *Resolver }
 type billingDetailsResolver struct{ *Resolver }
 type billingStatusResolver struct{ *Resolver }
+type billingTierResolver struct{ *Resolver }
 type bootstrapTokenResolver struct{ *Resolver }
 type bufferEventResolver struct{ *Resolver }
 type cityMetricResolver struct{ *Resolver }

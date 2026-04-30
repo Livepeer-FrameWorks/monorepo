@@ -1,4 +1,4 @@
-# Fetch all available billing tiers with pricing, features, and resource allocations
+# Fetch all available billing tiers with pricing rules and entitlements
 query GetBillingTiers {
   billingTiers {
     id
@@ -16,37 +16,17 @@ query GetBillingTiers {
       supportLevel
       sla
     }
-    bandwidthAllocation {
-      limit
+    pricingRules {
+      meter
+      model
+      currency
+      includedQuantity
       unitPrice
-      unit
+      configJson
     }
-    storageAllocation {
-      limit
-      unitPrice
-      unit
-    }
-    computeAllocation {
-      limit
-      unitPrice
-      unit
-    }
-    overageRates {
-      bandwidth {
-        limit
-        unitPrice
-        unit
-      }
-      storage {
-        limit
-        unitPrice
-        unit
-      }
-      compute {
-        limit
-        unitPrice
-        unit
-      }
+    entitlements {
+      key
+      value
     }
     supportLevel
     slaLevel

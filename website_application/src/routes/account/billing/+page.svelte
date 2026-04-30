@@ -35,6 +35,17 @@
   let error = $state<string | null>(null);
   let selectedTierId = $state("");
   let promoteLoading = $state(false);
+  let paymentLoadingInvoiceId = $state<string | null>(null);
+  let invoiceCryptoPayment = $state<{
+    invoiceId: string;
+    walletAddress: string;
+    asset: string;
+    network: string;
+    expectedAmountToken: string;
+    quotedPriceUsd: string;
+    quoteSource: string;
+    expiresAt: string | null;
+  } | null>(null);
 
   // Derived state from Houdini stores
   let loading = $derived(
@@ -43,6 +54,11 @@
   let billingStatus = $derived($billingStatusStore.data?.billingStatus ?? null);
   let availableTiers = $derived($billingTiersStore.data?.billingTiers ?? []);
   let invoices = $derived($invoicesStore.data?.invoicesConnection?.edges?.map((e) => e.node) ?? []);
+  let availablePaymentMethods = $derived.by(() => {
+    const methods =
+      (billingStatus as { paymentMethods?: PaymentMethod$options[] } | null)?.paymentMethods ?? [];
+    return new Set(methods.map((method) => String(method)));
+  });
 
   // Unmask fragment data for currentTier using get() pattern
   let currentTier = $derived(
@@ -62,8 +78,24 @@
     if (!isAuthenticated) {
       await auth.checkAuth();
     }
+    showPaymentReturnToast();
     await loadBillingData();
   });
+
+  function showPaymentReturnToast() {
+    const params = new URLSearchParams(window.location.search);
+    const payment = params.get("payment");
+    if (payment === "success") {
+      toast.success("Payment submitted. Your invoice will update after confirmation.");
+    } else if (payment === "cancelled") {
+      toast.info("Payment cancelled");
+    } else if (payment === "demo") {
+      toast.success("Demo payment created");
+    } else {
+      return;
+    }
+    window.history.replaceState({}, "", resolve("/account/billing"));
+  }
 
   async function loadBillingData() {
     try {
@@ -81,31 +113,63 @@
   }
 
   async function createPayment(
-    amount: number,
     invoiceId?: string,
     method: PaymentMethod$options = PaymentMethod.CARD
   ) {
+    let targetInvoiceId: string | undefined;
     try {
-      // Find the most recent unpaid invoice if not provided
-      const targetInvoiceId = invoiceId || invoices.find((inv) => inv.status === "PENDING")?.id;
+      const targetInvoice = invoiceId
+        ? invoices.find((inv) => inv.id === invoiceId)
+        : invoices.find((inv) => inv.status === "PENDING" || inv.status === "OVERDUE");
+      targetInvoiceId = targetInvoice?.id;
       if (!targetInvoiceId) {
-        toast.error("No pending invoice found");
+        toast.error("No payable invoice found");
         return;
       }
-      await createPaymentMutation.mutate({
+      paymentLoadingInvoiceId = targetInvoiceId;
+      const result = await createPaymentMutation.mutate({
         input: {
-          amount,
-          currency: "USD",
           method,
           invoiceId: targetInvoiceId,
+          returnUrl: `${window.location.origin}${resolve("/account/billing")}`,
         },
       });
-      await loadBillingData(); // Refresh data
-      toast.success("Payment processed successfully!");
+      const payment = result.data?.createPayment;
+      if (payment?.__typename === "Payment") {
+        if (payment.walletAddress) {
+          invoiceCryptoPayment = {
+            invoiceId: targetInvoiceId,
+            walletAddress: payment.walletAddress,
+            asset: payment.assetSymbol || String(method).replace("CRYPTO_", ""),
+            network: payment.network || "",
+            expectedAmountToken: payment.expectedAmountToken || "",
+            quotedPriceUsd: payment.quotedPriceUsd || "",
+            quoteSource: payment.quoteSource || "",
+            expiresAt: payment.expiresAt ?? null,
+          };
+          toast.success("Deposit address created");
+        } else if (payment.paymentUrl) {
+          window.location.href = payment.paymentUrl;
+          return;
+        } else {
+          toast.success("Payment created");
+        }
+      }
+      await loadBillingData();
     } catch (err) {
       console.error("Failed to create payment:", err);
       toast.error("Failed to process payment. Please try again.");
+    } finally {
+      if (paymentLoadingInvoiceId === targetInvoiceId) {
+        paymentLoadingInvoiceId = null;
+      }
     }
+  }
+
+  function copyInvoiceCryptoAddress() {
+    if (!invoiceCryptoPayment?.walletAddress) return;
+    navigator.clipboard.writeText(invoiceCryptoPayment.walletAddress);
+    toast.success("Address copied to clipboard");
   }
 
   async function handlePromoteToPaid() {
@@ -132,16 +196,40 @@
     }
   }
 
-  function formatCurrency(amount: number, currency = "USD") {
+  function moneyNumber(value: unknown): number {
+    if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+    if (typeof value === "string") {
+      const parsed = parseFloat(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+  }
+
+  function formatCurrency(amount: unknown, currency = "EUR") {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: currency,
-    }).format(amount);
+    }).format(moneyNumber(amount));
+  }
+
+  function formatUnitPrice(amount: unknown, currency = "EUR") {
+    const value = moneyNumber(amount);
+    const precision = Math.abs(value) > 0 && Math.abs(value) < 0.01 ? 6 : 2;
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: precision,
+      maximumFractionDigits: 9,
+    }).format(value);
   }
 
   function formatDate(dateString: string | null | undefined) {
     if (!dateString) return "N/A";
     return new Date(dateString).toLocaleDateString();
+  }
+
+  function paymentMethodAvailable(method: PaymentMethod$options) {
+    return availablePaymentMethods.has(String(method));
   }
 
   function getStatusColor(status: string | null | undefined) {
@@ -183,6 +271,8 @@
   const SparklesIcon = getIconComponent("Sparkles");
   const GaugeIcon = getIconComponent("Gauge");
   const ArrowUpIcon = getIconComponent("ArrowUp");
+  const CoinsIcon = getIconComponent("Coins");
+  const CopyIcon = getIconComponent("Copy");
 
   // Derived: is this a prepaid account that can upgrade?
   const isPrepaid = $derived(billingStatus?.subscription?.billingModel === "prepaid");
@@ -296,7 +386,10 @@
                 <DashboardMetricCard
                   icon={CreditCardIcon}
                   iconColor="text-muted-foreground"
-                  value={formatCurrency(currentTier?.basePrice || 0)}
+                  value={formatCurrency(
+                    currentTier?.basePrice || 0,
+                    currentTier?.currency || "EUR"
+                  )}
                   valueColor="text-foreground"
                   label="Monthly Cost"
                 />
@@ -307,17 +400,81 @@
           <!-- Outstanding Balance Alert -->
           {#if billingStatus.outstandingAmount > 0}
             <div class="bg-warning/20 border-y border-warning px-4 sm:px-6 lg:px-8 py-4">
-              <div class="flex items-center justify-between">
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p class="text-warning font-semibold">
-                  Outstanding Balance: {formatCurrency(billingStatus.outstandingAmount)}
+                  Outstanding Balance: {formatCurrency(
+                    billingStatus.outstandingAmount,
+                    billingStatus.currency
+                  )}
                 </p>
-                <Button
-                  variant="default"
-                  onclick={() => billingStatus && createPayment(billingStatus.outstandingAmount)}
-                  class="bg-warning text-background hover:bg-warning/90"
+                <div class="flex flex-wrap gap-2">
+                  {#if paymentMethodAvailable(PaymentMethod.CARD)}
+                    <Button
+                      variant="default"
+                      onclick={() => billingStatus && createPayment()}
+                      class="bg-warning text-background hover:bg-warning/90"
+                      disabled={paymentLoadingInvoiceId !== null}
+                    >
+                      <CreditCardIcon class="w-4 h-4" />
+                      Card
+                    </Button>
+                  {/if}
+                  {#if paymentMethodAvailable(PaymentMethod.CRYPTO_USDC)}
+                    <Button
+                      variant="outline"
+                      onclick={() =>
+                        billingStatus && createPayment(undefined, PaymentMethod.CRYPTO_USDC)}
+                      disabled={paymentLoadingInvoiceId !== null}
+                    >
+                      <CoinsIcon class="w-4 h-4" />
+                      USDC
+                    </Button>
+                  {/if}
+                  {#if paymentMethodAvailable(PaymentMethod.CRYPTO_ETH)}
+                    <Button
+                      variant="outline"
+                      onclick={() =>
+                        billingStatus && createPayment(undefined, PaymentMethod.CRYPTO_ETH)}
+                      disabled={paymentLoadingInvoiceId !== null}
+                    >
+                      <CoinsIcon class="w-4 h-4" />
+                      ETH
+                    </Button>
+                  {/if}
+                  {#if availablePaymentMethods.size === 0}
+                    <p class="text-sm text-muted-foreground">
+                      No payment methods are currently configured.
+                    </p>
+                  {/if}
+                </div>
+              </div>
+            </div>
+          {/if}
+          {#if invoiceCryptoPayment}
+            <div class="border-y border-success/60 bg-success/10 px-4 sm:px-6 lg:px-8 py-4">
+              <div class="flex flex-col gap-3">
+                <div class="flex items-center gap-2">
+                  <CoinsIcon class="w-4 h-4 text-success" />
+                  <p class="font-semibold">
+                    Send {invoiceCryptoPayment.expectedAmountToken}
+                    {invoiceCryptoPayment.asset}
+                    on {invoiceCryptoPayment.network}
+                  </p>
+                </div>
+                <p class="text-xs text-muted-foreground">
+                  Locked at ${invoiceCryptoPayment.quotedPriceUsd}/{invoiceCryptoPayment.asset}
+                  ({invoiceCryptoPayment.quoteSource}). Quote valid until {formatDate(
+                    invoiceCryptoPayment.expiresAt
+                  )}.
+                </p>
+                <div
+                  class="flex items-center gap-2 p-3 bg-muted/30 rounded-md font-mono text-sm break-all"
                 >
-                  Pay Now
-                </Button>
+                  <span class="flex-1">{invoiceCryptoPayment.walletAddress}</span>
+                  <Button variant="ghost" size="sm" onclick={copyInvoiceCryptoAddress}>
+                    <CopyIcon class="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
             </div>
           {/if}
@@ -538,18 +695,42 @@
                                 </tr>
                               </thead>
                               <tbody>
-                                {#each invoice.lineItems as item, idx (`${invoice.id}-${idx}`)}
+                                {#each invoice.lineItems as item (`${invoice.id}-${item.lineKey}`)}
                                   <tr class="border-t border-border/20">
                                     <td class="py-2">{item.description}</td>
                                     <td class="py-2 text-right font-mono">{item.quantity}</td>
                                     <td class="py-2 text-right font-mono"
-                                      >{formatCurrency(item.unitPrice, invoice.currency)}</td
+                                      >{formatUnitPrice(
+                                        item.unitPrice,
+                                        item.currency || invoice.currency
+                                      )}</td
                                     >
                                     <td class="py-2 text-right font-mono font-semibold"
-                                      >{formatCurrency(item.total, invoice.currency)}</td
+                                      >{formatCurrency(
+                                        item.total,
+                                        item.currency || invoice.currency
+                                      )}</td
                                     >
                                   </tr>
                                 {/each}
+                                {#if moneyNumber(invoice.prepaidCreditApplied) > 0}
+                                  <tr class="border-t border-border/20">
+                                    <td class="py-2">Prepaid credit applied</td>
+                                    <td class="py-2 text-right font-mono">1</td>
+                                    <td class="py-2 text-right font-mono"
+                                      >-{formatCurrency(
+                                        invoice.prepaidCreditApplied,
+                                        invoice.currency
+                                      )}</td
+                                    >
+                                    <td class="py-2 text-right font-mono font-semibold"
+                                      >-{formatCurrency(
+                                        invoice.prepaidCreditApplied,
+                                        invoice.currency
+                                      )}</td
+                                    >
+                                  </tr>
+                                {/if}
                               </tbody>
                             </table>
                           </td>

@@ -15,28 +15,38 @@ import (
 //go:embed catalog/billing_tiers.yaml
 var embeddedBillingTiersYAML []byte
 
+// CatalogPricingRule is one priced behavior for a meter on a tier. Fields map
+// 1:1 to columns in purser.tier_pricing_rules.
+type CatalogPricingRule struct {
+	Meter            string         `yaml:"meter"`
+	Model            string         `yaml:"model"`
+	Currency         string         `yaml:"currency,omitempty"`
+	IncludedQuantity float64        `yaml:"included_quantity,omitempty"`
+	UnitPrice        string         `yaml:"unit_price"` // string for decimal precision
+	Config           map[string]any `yaml:"config,omitempty"`
+}
+
 // CatalogTier is the embedded-catalog row that ReconcileBillingTierCatalog upserts
-// into purser.billing_tiers. Field shapes match the SQL columns 1:1; JSONB columns
-// are marshaled from any-typed nested maps so YAML can express them naturally.
+// into purser.billing_tiers (+ tier_entitlements + tier_pricing_rules). Field
+// shapes match the SQL columns 1:1 where applicable; the entitlement map and
+// rule slice are flattened into normalized rows by the reconciler.
 type CatalogTier struct {
-	TierName            string         `yaml:"tier_name"`
-	DisplayName         string         `yaml:"display_name"`
-	Description         string         `yaml:"description"`
-	BasePrice           float64        `yaml:"base_price"`
-	Currency            string         `yaml:"currency"`
-	BillingPeriod       string         `yaml:"billing_period"`
-	BandwidthAllocation map[string]any `yaml:"bandwidth_allocation"`
-	StorageAllocation   map[string]any `yaml:"storage_allocation"`
-	ComputeAllocation   map[string]any `yaml:"compute_allocation"`
-	Features            map[string]any `yaml:"features"`
-	SupportLevel        string         `yaml:"support_level"`
-	SLALevel            string         `yaml:"sla_level"`
-	MeteringEnabled     bool           `yaml:"metering_enabled"`
-	OverageRates        map[string]any `yaml:"overage_rates"`
-	TierLevel           int            `yaml:"tier_level"`
-	IsEnterprise        bool           `yaml:"is_enterprise"`
-	IsDefaultPrepaid    bool           `yaml:"is_default_prepaid"`
-	IsDefaultPostpaid   bool           `yaml:"is_default_postpaid"`
+	TierName          string               `yaml:"tier_name"`
+	DisplayName       string               `yaml:"display_name"`
+	Description       string               `yaml:"description"`
+	BasePrice         float64              `yaml:"base_price"`
+	Currency          string               `yaml:"currency"`
+	BillingPeriod     string               `yaml:"billing_period"`
+	Features          map[string]any       `yaml:"features"`
+	SupportLevel      string               `yaml:"support_level"`
+	SLALevel          string               `yaml:"sla_level"`
+	MeteringEnabled   bool                 `yaml:"metering_enabled"`
+	Entitlements      map[string]any       `yaml:"entitlements"`
+	PricingRules      []CatalogPricingRule `yaml:"pricing_rules"`
+	TierLevel         int                  `yaml:"tier_level"`
+	IsEnterprise      bool                 `yaml:"is_enterprise"`
+	IsDefaultPrepaid  bool                 `yaml:"is_default_prepaid"`
+	IsDefaultPostpaid bool                 `yaml:"is_default_postpaid"`
 	// processes_live/processes_vod arrive as YAML strings carrying raw JSON.
 	// MistServer reads them verbatim, so we keep them as strings end-to-end.
 	ProcessesLive string `yaml:"processes_live"`

@@ -180,7 +180,7 @@ func (hw *HDWallet) EnsureState(ctx context.Context, xpub string) (bool, error) 
 
 // DepositAddressParams describes a request to allocate an HD-derived deposit
 // address. Purpose drives which optional fields are required:
-//   - "invoice"  → InvoiceID required, ExpectedAmountCents/Quote unused.
+//   - "invoice"  → InvoiceID and Quote required.
 //   - "prepaid"  → ExpectedAmountCents and Quote required.
 type DepositAddressParams struct {
 	TenantID  string
@@ -192,24 +192,45 @@ type DepositAddressParams struct {
 	InvoiceID           *string
 	ExpectedAmountCents *int64
 
-	Quote *DepositQuote // nil for invoice purpose
+	Quote *DepositQuote
 }
 
-// DepositQuote is the locked quote persisted on a prepaid wallet row at
-// CreateCryptoTopup time so the monitor can credit deterministically when
-// the deposit confirms.
+// DepositQuote is the locked quote persisted on a wallet row when the deposit
+// address is created. The monitor compares the on-chain receipt against this
+// quote, so invoice payments and prepaid top-ups use the same conversion path.
 type DepositQuote struct {
 	ExpectedAmountBaseUnits *big.Int         // Token base units the user must send (NOT NULL)
 	QuotedPriceUSD          decimal.Decimal  // USD per 1 whole token
 	QuotedUSDToEURRate      *decimal.Decimal // Populated when CreditedAmountCurrency == "EUR"
 	QuotedAt                time.Time
 	QuoteSource             string // "chainlink" | "one_to_one"
-	CreditedAmountCurrency  string // "USD" | "EUR" — what the prepaid balance is denominated in
+	CreditedAmountCurrency  string // "USD" | "EUR" — invoice/prepaid balance currency
 }
 
 // GenerateDepositAddress allocates an HD-derived deposit address and inserts
 // a crypto_wallets row. See DepositAddressParams for the shape.
 func (hw *HDWallet) GenerateDepositAddress(p DepositAddressParams) (walletID string, address string, err error) {
+	ctx := context.Background()
+	tx, err := hw.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+
+	walletID, address, err = hw.GenerateDepositAddressTx(ctx, tx, p)
+	if err != nil {
+		return "", "", err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return "", "", fmt.Errorf("failed to commit: %w", err)
+	}
+
+	return walletID, address, nil
+}
+
+// GenerateDepositAddressTx allocates an HD-derived deposit address in the caller's transaction.
+func (hw *HDWallet) GenerateDepositAddressTx(ctx context.Context, tx *sql.Tx, p DepositAddressParams) (walletID string, address string, err error) {
 	if p.Purpose != "invoice" && p.Purpose != "prepaid" {
 		return "", "", fmt.Errorf("invalid purpose: %s", p.Purpose)
 	}
@@ -222,33 +243,26 @@ func (hw *HDWallet) GenerateDepositAddress(p DepositAddressParams) (walletID str
 	if p.Purpose == "invoice" && (p.InvoiceID == nil || *p.InvoiceID == "") {
 		return "", "", fmt.Errorf("invoice_id required for invoice purpose")
 	}
+	if p.Quote == nil {
+		return "", "", fmt.Errorf("quote required")
+	}
+	if p.Quote.ExpectedAmountBaseUnits == nil || p.Quote.ExpectedAmountBaseUnits.Sign() <= 0 {
+		return "", "", fmt.Errorf("quote.ExpectedAmountBaseUnits must be positive")
+	}
+	if p.Quote.QuoteSource == "" {
+		return "", "", fmt.Errorf("quote.QuoteSource required")
+	}
+	if p.Quote.CreditedAmountCurrency == "" {
+		return "", "", fmt.Errorf("quote.CreditedAmountCurrency required")
+	}
+	if p.Quote.CreditedAmountCurrency == "EUR" && p.Quote.QuotedUSDToEURRate == nil {
+		return "", "", fmt.Errorf("quote.QuotedUSDToEURRate required when CreditedAmountCurrency is EUR")
+	}
 	if p.Purpose == "prepaid" {
 		if p.ExpectedAmountCents == nil || *p.ExpectedAmountCents <= 0 {
 			return "", "", fmt.Errorf("expected_amount_cents required for prepaid purpose")
 		}
-		if p.Quote == nil {
-			return "", "", fmt.Errorf("quote required for prepaid purpose")
-		}
-		if p.Quote.ExpectedAmountBaseUnits == nil || p.Quote.ExpectedAmountBaseUnits.Sign() <= 0 {
-			return "", "", fmt.Errorf("quote.ExpectedAmountBaseUnits must be positive")
-		}
-		if p.Quote.QuoteSource == "" {
-			return "", "", fmt.Errorf("quote.QuoteSource required")
-		}
-		if p.Quote.CreditedAmountCurrency == "" {
-			return "", "", fmt.Errorf("quote.CreditedAmountCurrency required")
-		}
-		if p.Quote.CreditedAmountCurrency == "EUR" && p.Quote.QuotedUSDToEURRate == nil {
-			return "", "", fmt.Errorf("quote.QuotedUSDToEURRate required when CreditedAmountCurrency is EUR")
-		}
 	}
-
-	ctx := context.Background()
-	tx, err := hw.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	derivationIndex, xpub, err := hw.GetNextNonZeroDerivationIndexTx(ctx, tx)
 	if err != nil {
@@ -304,10 +318,6 @@ func (hw *HDWallet) GenerateDepositAddress(p DepositAddressParams) (walletID str
 	)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to insert crypto wallet: %w", err)
-	}
-
-	if err = tx.Commit(); err != nil {
-		return "", "", fmt.Errorf("failed to commit: %w", err)
 	}
 
 	hw.logger.WithFields(logging.Fields{

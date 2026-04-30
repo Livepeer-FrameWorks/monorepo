@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/mcperrors"
@@ -34,7 +35,7 @@ func RegisterBillingResources(server *mcp.Server, clients *clients.ServiceClient
 		Description: "Current pricing for resources (streaming, storage, processing).",
 		MIMEType:    "application/json",
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-		return handleBillingPricing(ctx, clients, logger)
+		return handleBillingPricing(ctx, clients)
 	})
 
 	// billing://transactions - Balance transaction history
@@ -59,26 +60,15 @@ type BalanceInfo struct {
 	DrainRateCentsPerHour int64  `json:"drain_rate_cents_per_hour,omitempty"`
 	EstimatedHoursLeft    int    `json:"estimated_hours_left,omitempty"`
 
-	// Live metrics (from Periscope)
+	// Live metrics from Periscope. Monetary rating stays in Purser.
 	LiveMetrics *LiveMetrics `json:"live_metrics,omitempty"`
-
-	// Pricing rates (for burn rate calculation)
-	Rates *PricingRates `json:"rates,omitempty"`
 }
 
-// LiveMetrics represents current usage for burn rate calculation.
+// LiveMetrics represents current operational usage for billing context.
 type LiveMetrics struct {
-	ActiveStreams       int32   `json:"active_streams"`
-	TotalViewers        int32   `json:"total_viewers"`
-	StorageGB           float64 `json:"storage_gb"`
-	BurnRateCentsPerMin float64 `json:"burn_rate_cents_per_min"`
-	TimeToZeroMinutes   float64 `json:"time_to_zero_minutes,omitempty"`
-}
-
-// PricingRates represents the rates used for burn calculation.
-type PricingRates struct {
-	DeliveryCentsPerViewerMin float64 `json:"delivery_cents_per_viewer_min"`
-	StorageCentsPerGBHour     float64 `json:"storage_cents_per_gb_hour"`
+	ActiveStreams int32   `json:"active_streams"`
+	TotalViewers  int32   `json:"total_viewers"`
+	StorageGB     float64 `json:"storage_gb"`
 }
 
 func handleBillingBalance(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
@@ -124,101 +114,16 @@ func handleBillingBalance(ctx context.Context, clients *clients.ServiceClients, 
 		}
 	}
 
-	// Get rates from tenant's billing tier
-	rates := getTenantPricingRates(ctx, clients, tenantID, logger)
-	if rates != nil {
-		info.Rates = rates
-
-		// Get live usage metrics from Periscope
-		liveMetrics := getLiveUsageMetrics(ctx, clients, tenantID, rates, logger)
-		if liveMetrics != nil {
-			info.LiveMetrics = liveMetrics
-		}
+	liveMetrics := getLiveUsageMetrics(ctx, clients, tenantID, logger)
+	if liveMetrics != nil {
+		info.LiveMetrics = liveMetrics
 	}
 
 	return marshalResourceResult("billing://balance", info)
 }
 
-// getTenantPricingRates fetches the tenant's billing tier and extracts rates.
-func getTenantPricingRates(ctx context.Context, clients *clients.ServiceClients, tenantID string, logger logging.Logger) *PricingRates {
-	tiersResp, err := clients.Purser.GetBillingTiers(ctx, false, nil)
-	if err != nil {
-		logger.WithError(err).Debug("Failed to get billing tiers for rates")
-		return nil
-	}
-	if len(tiersResp.Tiers) == 0 {
-		return nil
-	}
-
-	// Find tenant's current tier
-	var currentTier *pb.BillingTier
-	sub, err := clients.Purser.GetSubscription(ctx, tenantID)
-	if err != nil {
-		logger.WithError(err).Debug("Failed to get subscription for tier lookup")
-	} else if sub.Subscription != nil {
-		for _, tier := range tiersResp.Tiers {
-			if tier.Id == sub.Subscription.TierId {
-				currentTier = tier
-				break
-			}
-		}
-	}
-
-	// Fall back to prepaid/default tier
-	if currentTier == nil {
-		for _, tier := range tiersResp.Tiers {
-			if tier.TierName == "prepaid" || tier.TierLevel == 0 {
-				currentTier = tier
-				break
-			}
-		}
-	}
-	if currentTier == nil {
-		for _, tier := range tiersResp.Tiers {
-			if tier.IsActive {
-				currentTier = tier
-				break
-			}
-		}
-	}
-	if currentTier == nil {
-		return nil
-	}
-
-	rates := &PricingRates{}
-
-	// Extract rates from OverageRates (primary source)
-	if currentTier.OverageRates != nil {
-		if currentTier.OverageRates.Bandwidth != nil {
-			rates.DeliveryCentsPerViewerMin = currentTier.OverageRates.Bandwidth.UnitPrice
-		}
-		if currentTier.OverageRates.Storage != nil {
-			rates.StorageCentsPerGBHour = currentTier.OverageRates.Storage.UnitPrice
-		}
-	}
-
-	// Fall back to Allocations if no OverageRates
-	if rates.DeliveryCentsPerViewerMin == 0 && currentTier.BandwidthAllocation != nil {
-		rates.DeliveryCentsPerViewerMin = currentTier.BandwidthAllocation.UnitPrice
-	}
-	if rates.StorageCentsPerGBHour == 0 && currentTier.StorageAllocation != nil {
-		rates.StorageCentsPerGBHour = currentTier.StorageAllocation.UnitPrice
-	}
-
-	// Only return rates if we have at least one configured
-	if rates.DeliveryCentsPerViewerMin == 0 && rates.StorageCentsPerGBHour == 0 {
-		return nil
-	}
-
-	return rates
-}
-
-// getLiveUsageMetrics fetches current usage from Periscope and calculates burn rate.
-func getLiveUsageMetrics(ctx context.Context, clients *clients.ServiceClients, tenantID string, rates *PricingRates, logger logging.Logger) *LiveMetrics {
-	if rates == nil {
-		return nil
-	}
-
+// getLiveUsageMetrics fetches current operational usage from Periscope.
+func getLiveUsageMetrics(ctx context.Context, clients *clients.ServiceClients, tenantID string, logger logging.Logger) *LiveMetrics {
 	// Get live usage summary (last hour as proxy for current usage)
 	usageResp, err := clients.Periscope.GetLiveUsageSummary(ctx, tenantID, nil)
 	if err != nil {
@@ -230,20 +135,11 @@ func getLiveUsageMetrics(ctx context.Context, clients *clients.ServiceClients, t
 	}
 
 	summary := usageResp.Summary
-	metrics := &LiveMetrics{
-		TotalViewers: summary.TotalViewers,
-		StorageGB:    summary.AverageStorageGb,
+	return &LiveMetrics{
+		ActiveStreams: summary.TotalStreams,
+		TotalViewers:  summary.TotalViewers,
+		StorageGB:     summary.AverageStorageGb,
 	}
-
-	// Calculate burn rate based on actual usage and actual rates
-	// Delivery: viewer-minutes × rate (convert viewer hours to minutes)
-	deliveryBurnPerMin := (summary.ViewerHours / 60.0) * rates.DeliveryCentsPerViewerMin
-	// Storage: GB × rate per hour / 60 (to get per-minute rate)
-	storageBurnPerMin := summary.AverageStorageGb * (rates.StorageCentsPerGBHour / 60.0)
-
-	metrics.BurnRateCentsPerMin = deliveryBurnPerMin + storageBurnPerMin
-
-	return metrics
 }
 
 // PricingInfo represents the billing://pricing response.
@@ -256,11 +152,11 @@ type PricingInfo struct {
 
 // ResourcePricing represents pricing for a single resource type.
 type ResourcePricing struct {
-	UnitPrice float64 `json:"unit_price"`
-	Unit      string  `json:"unit"`
+	UnitPrice string `json:"unit_price"`
+	Unit      string `json:"unit"`
 }
 
-func handleBillingPricing(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
+func handleBillingPricing(ctx context.Context, clients *clients.ServiceClients) (*mcp.ReadResourceResult, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 
 	// Fetch billing tiers from API - fail if API fails
@@ -275,11 +171,13 @@ func handleBillingPricing(ctx context.Context, clients *clients.ServiceClients, 
 
 	// Find the tenant's current tier if authenticated
 	var currentTier *pb.BillingTier
+	var subscription *pb.TenantSubscription
 	if tenantID != "" {
 		sub, err := clients.Purser.GetSubscription(ctx, tenantID)
 		if err != nil {
-			logger.WithError(err).Debug("Failed to get subscription for tier lookup")
+			return nil, fmt.Errorf("failed to get subscription for tier lookup: %w", err)
 		} else if sub.Subscription != nil {
+			subscription = sub.Subscription
 			for _, tier := range tiersResp.Tiers {
 				if tier.Id == sub.Subscription.TierId {
 					currentTier = tier
@@ -292,7 +190,7 @@ func handleBillingPricing(ctx context.Context, clients *clients.ServiceClients, 
 	// Use the first (default) tier if no current tier found
 	if currentTier == nil {
 		for _, tier := range tiersResp.Tiers {
-			if tier.TierName == "prepaid" || tier.TierLevel == 0 {
+			if tier.TierName == "payg" || tier.TierLevel == 0 {
 				currentTier = tier
 				break
 			}
@@ -318,51 +216,95 @@ func handleBillingPricing(ctx context.Context, clients *clients.ServiceClients, 
 		Resources: map[string]ResourcePricing{},
 	}
 
-	// Extract pricing from overage rates
-	if currentTier.OverageRates != nil {
-		if currentTier.OverageRates.Bandwidth != nil {
-			pricing.Resources["bandwidth"] = ResourcePricing{
-				UnitPrice: currentTier.OverageRates.Bandwidth.UnitPrice,
-				Unit:      currentTier.OverageRates.Bandwidth.Unit,
-			}
+	for _, rule := range effectivePricingRules(currentTier.GetPricingRules(), subscription) {
+		unitPrice := rule.GetUnitPrice()
+		if unitPrice == "" {
+			return nil, fmt.Errorf("pricing rule %q has empty unit_price", rule.GetMeter())
 		}
-		if currentTier.OverageRates.Storage != nil {
-			pricing.Resources["storage"] = ResourcePricing{
-				UnitPrice: currentTier.OverageRates.Storage.UnitPrice,
-				Unit:      currentTier.OverageRates.Storage.Unit,
-			}
-		}
-		if currentTier.OverageRates.Compute != nil {
-			pricing.Resources["compute"] = ResourcePricing{
-				UnitPrice: currentTier.OverageRates.Compute.UnitPrice,
-				Unit:      currentTier.OverageRates.Compute.Unit,
-			}
-		}
-	}
-
-	// Extract from allocations if no overage rates
-	if len(pricing.Resources) == 0 {
-		if currentTier.BandwidthAllocation != nil && currentTier.BandwidthAllocation.UnitPrice > 0 {
-			pricing.Resources["bandwidth"] = ResourcePricing{
-				UnitPrice: currentTier.BandwidthAllocation.UnitPrice,
-				Unit:      currentTier.BandwidthAllocation.Unit,
-			}
-		}
-		if currentTier.StorageAllocation != nil && currentTier.StorageAllocation.UnitPrice > 0 {
-			pricing.Resources["storage"] = ResourcePricing{
-				UnitPrice: currentTier.StorageAllocation.UnitPrice,
-				Unit:      currentTier.StorageAllocation.Unit,
-			}
-		}
-		if currentTier.ComputeAllocation != nil && currentTier.ComputeAllocation.UnitPrice > 0 {
-			pricing.Resources["compute"] = ResourcePricing{
-				UnitPrice: currentTier.ComputeAllocation.UnitPrice,
-				Unit:      currentTier.ComputeAllocation.Unit,
-			}
+		switch rule.GetMeter() {
+		case "average_storage_gb":
+			pricing.Resources[rule.GetMeter()] = ResourcePricing{UnitPrice: unitPrice, Unit: "gb"}
+		case "ai_gpu_hours":
+			pricing.Resources[rule.GetMeter()] = ResourcePricing{UnitPrice: unitPrice, Unit: "gpu_hours"}
+		default:
+			pricing.Resources[rule.GetMeter()] = ResourcePricing{UnitPrice: unitPrice, Unit: rule.GetMeter()}
 		}
 	}
 
 	return marshalResourceResult("billing://pricing", pricing)
+}
+
+func effectivePricingRules(tierRules []*pb.PricingRule, subscription *pb.TenantSubscription) []*pb.PricingRule {
+	if subscription == nil || len(subscription.GetPricingOverrides()) == 0 {
+		return tierRules
+	}
+	overrides := make(map[string]*pb.PricingRule, len(subscription.GetPricingOverrides()))
+	for _, override := range subscription.GetPricingOverrides() {
+		if override == nil || override.GetMeter() == "" {
+			continue
+		}
+		overrides[override.GetMeter()] = override
+	}
+
+	out := make([]*pb.PricingRule, 0, len(tierRules)+len(overrides))
+	seen := make(map[string]bool, len(tierRules))
+	for _, tierRule := range tierRules {
+		if tierRule == nil {
+			continue
+		}
+		meter := tierRule.GetMeter()
+		seen[meter] = true
+		if override, ok := overrides[meter]; ok {
+			out = append(out, mergePricingRule(tierRule, override))
+			continue
+		}
+		out = append(out, tierRule)
+	}
+
+	extraMeters := make([]string, 0, len(overrides))
+	for meter := range overrides {
+		if !seen[meter] {
+			extraMeters = append(extraMeters, meter)
+		}
+	}
+	sort.Strings(extraMeters)
+	for _, meter := range extraMeters {
+		out = append(out, overrides[meter])
+	}
+	return out
+}
+
+func mergePricingRule(base, override *pb.PricingRule) *pb.PricingRule {
+	if base == nil {
+		return override
+	}
+	merged := &pb.PricingRule{
+		Meter:            base.GetMeter(),
+		Model:            base.GetModel(),
+		Currency:         base.GetCurrency(),
+		IncludedQuantity: base.GetIncludedQuantity(),
+		UnitPrice:        base.GetUnitPrice(),
+		ConfigJson:       base.GetConfigJson(),
+	}
+	if override.GetMeter() != "" {
+		merged.Meter = override.GetMeter()
+	}
+	if override.GetModel() != "" {
+		merged.Model = override.GetModel()
+	}
+	if override.GetCurrency() != "" {
+		merged.Currency = override.GetCurrency()
+	}
+	if override.GetIncludedQuantity() != "" {
+		merged.IncludedQuantity = override.GetIncludedQuantity()
+	}
+	if override.GetUnitPrice() != "" {
+		merged.UnitPrice = override.GetUnitPrice()
+	}
+	if override.GetConfigJson() != "" && override.GetConfigJson() != "{}" {
+		merged.ConfigJson = override.GetConfigJson()
+	}
+	return merged
 }
 
 // TransactionInfo represents a balance transaction.

@@ -4,10 +4,21 @@ mutation CreatePayment($input: CreatePaymentInput!) {
     __typename
     ... on Payment {
       id
+      paymentUrl
+      walletAddress
       amount
       currency
       method
       status
+      expiresAt
+      qrCode
+      expectedAmountBaseUnits
+      expectedAmountToken
+      quotedPriceUsd
+      quoteSource
+      assetSymbol
+      network
+      quotedAt
       createdAt
     }
     ... on ValidationError {

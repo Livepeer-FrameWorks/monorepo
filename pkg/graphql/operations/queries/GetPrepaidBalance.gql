@@ -1,4 +1,4 @@
-query GetPrepaidBalance($currency: String = "USD") {
+query GetPrepaidBalance($currency: String = "EUR") {
   prepaidBalance(currency: $currency) {
     id
     tenantId

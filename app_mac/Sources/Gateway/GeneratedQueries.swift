@@ -6,14 +6,6 @@ enum GQL {
 
   // MARK: - fragments
 
-  static let AllocationFields = """
-  fragment AllocationFields on AllocationDetails {
-    limit
-    unitPrice
-    unit
-  }
-  """
-
   static let AuthErrorFields = """
   fragment AuthErrorFields on AuthError {
     __typename
@@ -43,25 +35,17 @@ enum GQL {
       supportLevel
       sla
     }
-    bandwidthAllocation {
-      ...AllocationFields
+    pricingRules {
+      meter
+      model
+      currency
+      includedQuantity
+      unitPrice
+      configJson
     }
-    storageAllocation {
-      ...AllocationFields
-    }
-    computeAllocation {
-      ...AllocationFields
-    }
-    overageRates {
-      bandwidth {
-        ...AllocationFields
-      }
-      storage {
-        ...AllocationFields
-      }
-      compute {
-        ...AllocationFields
-      }
+    entitlements {
+      key
+      value
     }
   }
   """
@@ -793,6 +777,7 @@ enum GQL {
     billingStatus {
       billingStatus
       currency
+      paymentMethods
       nextBillingDate
       trialEndsAt
       outstandingAmount
@@ -810,21 +795,6 @@ enum GQL {
         trialEndsAt
         nextBillingDate
         cancelledAt
-        customPricing {
-          basePrice
-          discountRate
-          overageRates {
-            bandwidth {
-              ...AllocationFields
-            }
-            storage {
-              ...AllocationFields
-            }
-            compute {
-              ...AllocationFields
-            }
-          }
-        }
         customFeatures {
           recording
           analytics
@@ -833,8 +803,17 @@ enum GQL {
           supportLevel
           sla
         }
-        customAllocations {
-          ...AllocationFields
+        pricingOverrides {
+          meter
+          model
+          currency
+          includedQuantity
+          unitPrice
+          configJson
+        }
+        entitlementOverrides {
+          key
+          value
         }
         paymentMethod
         createdAt
@@ -849,6 +828,7 @@ enum GQL {
         amount
         baseAmount
         meteredAmount
+        prepaidCreditApplied
         currency
         dueDate
         periodStart
@@ -857,10 +837,15 @@ enum GQL {
           ...UsageSummaryFields
         }
         lineItems {
+          lineKey
+          meter
           description
           quantity
+          includedQuantity
+          billableQuantity
           unitPrice
           total
+          currency
         }
       }
     }
@@ -868,7 +853,7 @@ enum GQL {
   """
 
   static let GetBillingTiers = """
-  # Fetch all available billing tiers with pricing, features, and resource allocations
+  # Fetch all available billing tiers with pricing rules and entitlements
   query GetBillingTiers {
     billingTiers {
       id
@@ -886,37 +871,17 @@ enum GQL {
         supportLevel
         sla
       }
-      bandwidthAllocation {
-        limit
+      pricingRules {
+        meter
+        model
+        currency
+        includedQuantity
         unitPrice
-        unit
+        configJson
       }
-      storageAllocation {
-        limit
-        unitPrice
-        unit
-      }
-      computeAllocation {
-        limit
-        unitPrice
-        unit
-      }
-      overageRates {
-        bandwidth {
-          limit
-          unitPrice
-          unit
-        }
-        storage {
-          limit
-          unitPrice
-          unit
-        }
-        compute {
-          limit
-          unitPrice
-          unit
-        }
+      entitlements {
+        key
+        value
       }
       supportLevel
       slaLevel
@@ -1439,15 +1404,21 @@ enum GQL {
         node {
           id
           amount
+          prepaidCreditApplied
           currency
           status
           dueDate
           createdAt
           lineItems {
+            lineKey
+            meter
             description
             quantity
+            includedQuantity
+            billableQuantity
             unitPrice
             total
+            currency
           }
         }
       }
@@ -1856,7 +1827,7 @@ enum GQL {
   """
 
   static let GetPrepaidBalance = """
-  query GetPrepaidBalance($currency: String = "USD") {
+  query GetPrepaidBalance($currency: String = "EUR") {
     prepaidBalance(currency: $currency) {
       id
       tenantId
@@ -3682,10 +3653,21 @@ enum GQL {
       __typename
       ... on Payment {
         id
+        paymentUrl
+        walletAddress
         amount
         currency
         method
         status
+        expiresAt
+        qrCode
+        expectedAmountBaseUnits
+        expectedAmountToken
+        quotedPriceUsd
+        quoteSource
+        assetSymbol
+        network
+        quotedAt
         createdAt
       }
       ... on ValidationError {

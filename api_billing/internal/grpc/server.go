@@ -1,15 +1,13 @@
 package grpc
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"math"
-	"net/http"
+	"math/big"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -46,29 +44,108 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	billingpkg "frameworks/api_billing/internal/billing"
+	"frameworks/api_billing/internal/rating"
 )
 
-// scanAllocationDetails scans a JSONB column into AllocationDetails proto
-func scanAllocationDetails(data []byte) *pb.AllocationDetails {
-	if len(data) == 0 {
-		return nil
+// loadTierPricingRules reads pricing rules for a tier and converts them into
+// the protobuf shape exposed on BillingTier.
+func loadTierPricingRules(ctx context.Context, db *sql.DB, tierID string) ([]*pb.PricingRule, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT meter, model, currency, included_quantity::text, unit_price::text, config::text
+		FROM purser.tier_pricing_rules
+		WHERE tier_id = $1
+	`, tierID)
+	if err != nil {
+		return nil, err
 	}
-	var raw struct {
-		Limit     *float64 `json:"limit"`
-		UnitPrice float64  `json:"unit_price"`
-		Unit      string   `json:"unit"`
+	defer rows.Close()
+	var out []*pb.PricingRule
+	for rows.Next() {
+		var meter, model, currency, included, unitPrice, config string
+		if err := rows.Scan(&meter, &model, &currency, &included, &unitPrice, &config); err != nil {
+			return nil, err
+		}
+		out = append(out, &pb.PricingRule{
+			Meter:            meter,
+			Model:            model,
+			Currency:         currency,
+			IncludedQuantity: included,
+			UnitPrice:        unitPrice,
+			ConfigJson:       config,
+		})
 	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil
+	return out, rows.Err()
+}
+
+// loadTierEntitlements reads entitlements for a tier into a map of
+// JSON-encoded values keyed by entitlement key.
+func loadTierEntitlements(ctx context.Context, db *sql.DB, tierID string) (map[string]string, error) {
+	rows, err := db.QueryContext(ctx, `SELECT key, value::text FROM purser.tier_entitlements WHERE tier_id = $1`, tierID)
+	if err != nil {
+		return nil, err
 	}
-	ad := &pb.AllocationDetails{
-		UnitPrice: raw.UnitPrice,
-		Unit:      raw.Unit,
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		out[k] = v
 	}
-	if raw.Limit != nil {
-		ad.Limit = raw.Limit
+	return out, rows.Err()
+}
+
+// loadSubscriptionPricingOverrides reads per-tenant pricing overrides into
+// proto messages.
+func loadSubscriptionPricingOverrides(ctx context.Context, db *sql.DB, subscriptionID string) ([]*pb.PricingRule, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT meter, COALESCE(model, ''), COALESCE(currency, ''),
+		       COALESCE(included_quantity::text, ''), COALESCE(unit_price::text, ''),
+		       COALESCE(config::text, '{}')
+		FROM purser.subscription_pricing_overrides
+		WHERE subscription_id = $1
+	`, subscriptionID)
+	if err != nil {
+		return nil, err
 	}
-	return ad
+	defer rows.Close()
+	var out []*pb.PricingRule
+	for rows.Next() {
+		var meter, model, currency, included, unitPrice, config string
+		if err := rows.Scan(&meter, &model, &currency, &included, &unitPrice, &config); err != nil {
+			return nil, err
+		}
+		out = append(out, &pb.PricingRule{
+			Meter:            meter,
+			Model:            model,
+			Currency:         currency,
+			IncludedQuantity: included,
+			UnitPrice:        unitPrice,
+			ConfigJson:       config,
+		})
+	}
+	return out, rows.Err()
+}
+
+// loadSubscriptionEntitlementOverrides reads per-tenant entitlement overrides.
+func loadSubscriptionEntitlementOverrides(ctx context.Context, db *sql.DB, subscriptionID string) (map[string]string, error) {
+	rows, err := db.QueryContext(ctx, `SELECT key, value::text FROM purser.subscription_entitlement_overrides WHERE subscription_id = $1`, subscriptionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
 }
 
 // scanBillingFeatures scans a JSONB column into BillingFeatures proto
@@ -99,21 +176,6 @@ func scanBillingFeatures(data []byte) *pb.BillingFeatures {
 	}
 }
 
-// marshalCustomPricing converts CustomPricing proto to JSONB bytes
-func marshalCustomPricing(cp *pb.CustomPricing) ([]byte, error) {
-	if cp == nil {
-		return []byte("{}"), nil
-	}
-	raw := struct {
-		BasePrice    float64 `json:"base_price"`
-		DiscountRate float64 `json:"discount_rate"`
-	}{
-		BasePrice:    cp.BasePrice,
-		DiscountRate: cp.DiscountRate,
-	}
-	return json.Marshal(raw)
-}
-
 // marshalBillingFeatures converts BillingFeatures proto to JSONB bytes
 func marshalBillingFeatures(bf *pb.BillingFeatures) ([]byte, error) {
 	if bf == nil {
@@ -135,55 +197,6 @@ func marshalBillingFeatures(bf *pb.BillingFeatures) ([]byte, error) {
 		SLA:            bf.Sla,
 	}
 	return json.Marshal(raw)
-}
-
-// marshalAllocationDetails converts AllocationDetails proto to JSONB bytes
-func marshalAllocationDetails(ad *pb.AllocationDetails) ([]byte, error) {
-	if ad == nil {
-		return []byte("{}"), nil
-	}
-	raw := struct {
-		Limit     *float64 `json:"limit,omitempty"`
-		UnitPrice float64  `json:"unit_price,omitempty"`
-		Unit      string   `json:"unit,omitempty"`
-	}{
-		Limit:     ad.Limit,
-		UnitPrice: ad.UnitPrice,
-		Unit:      ad.Unit,
-	}
-	return json.Marshal(raw)
-}
-
-// scanOverageRates scans a JSONB column into OverageRates proto
-func scanOverageRates(data []byte) *pb.OverageRates {
-	if len(data) == 0 {
-		return nil
-	}
-	var raw struct {
-		Bandwidth struct {
-			Limit     *float64 `json:"limit"`
-			UnitPrice float64  `json:"unit_price"`
-			Unit      string   `json:"unit"`
-		} `json:"bandwidth"`
-		Storage struct {
-			Limit     *float64 `json:"limit"`
-			UnitPrice float64  `json:"unit_price"`
-			Unit      string   `json:"unit"`
-		} `json:"storage"`
-		Compute struct {
-			Limit     *float64 `json:"limit"`
-			UnitPrice float64  `json:"unit_price"`
-			Unit      string   `json:"unit"`
-		} `json:"compute"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil
-	}
-	return &pb.OverageRates{
-		Bandwidth: &pb.AllocationDetails{Limit: raw.Bandwidth.Limit, UnitPrice: raw.Bandwidth.UnitPrice, Unit: raw.Bandwidth.Unit},
-		Storage:   &pb.AllocationDetails{Limit: raw.Storage.Limit, UnitPrice: raw.Storage.UnitPrice, Unit: raw.Storage.Unit},
-		Compute:   &pb.AllocationDetails{Limit: raw.Compute.Limit, UnitPrice: raw.Compute.UnitPrice, Unit: raw.Compute.Unit},
-	}
 }
 
 // mapToProtoStruct converts a map[string]interface{} to protobuf Struct
@@ -310,8 +323,7 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 
 	query := fmt.Sprintf(`
 		SELECT id, tier_name, display_name, description, base_price, currency, billing_period,
-		       bandwidth_allocation, storage_allocation, compute_allocation, features,
-		       support_level, sla_level, metering_enabled, overage_rates,
+		       features, support_level, sla_level, metering_enabled,
 		       is_active, tier_level, is_enterprise,
 		       created_at, updated_at,
 		       COALESCE(is_default_prepaid, false), COALESCE(is_default_postpaid, false),
@@ -333,29 +345,33 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 	for rows.Next() {
 		var tier pb.BillingTier
 		var createdAt, updatedAt time.Time
-		var bandwidthAlloc, storageAlloc, computeAlloc, features, overageRates []byte
+		var features []byte
 		var processesLive, processesVod sql.NullString
 
 		err := rows.Scan(
 			&tier.Id, &tier.TierName, &tier.DisplayName, &tier.Description,
 			&tier.BasePrice, &tier.Currency, &tier.BillingPeriod,
-			&bandwidthAlloc, &storageAlloc, &computeAlloc, &features,
-			&tier.SupportLevel, &tier.SlaLevel, &tier.MeteringEnabled, &overageRates,
+			&features, &tier.SupportLevel, &tier.SlaLevel, &tier.MeteringEnabled,
 			&tier.IsActive, &tier.TierLevel, &tier.IsEnterprise,
 			&createdAt, &updatedAt,
 			&tier.IsDefaultPrepaid, &tier.IsDefaultPostpaid,
 			&processesLive, &processesVod,
 		)
 		if err != nil {
-			s.logger.WithError(err).Warn("Failed to scan billing tier")
-			continue
+			return nil, status.Errorf(codes.Internal, "scan billing tier: %v", err)
 		}
 
-		tier.BandwidthAllocation = scanAllocationDetails(bandwidthAlloc)
-		tier.StorageAllocation = scanAllocationDetails(storageAlloc)
-		tier.ComputeAllocation = scanAllocationDetails(computeAlloc)
 		tier.Features = scanBillingFeatures(features)
-		tier.OverageRates = scanOverageRates(overageRates)
+		rules, rulesErr := loadTierPricingRules(ctx, s.db, tier.Id)
+		if rulesErr != nil {
+			return nil, status.Errorf(codes.Internal, "load pricing rules for tier %q: %v", tier.TierName, rulesErr)
+		}
+		tier.PricingRules = rules
+		ents, entsErr := loadTierEntitlements(ctx, s.db, tier.Id)
+		if entsErr != nil {
+			return nil, status.Errorf(codes.Internal, "load entitlements for tier %q: %v", tier.TierName, entsErr)
+		}
+		tier.Entitlements = ents
 		tier.CreatedAt = timestamppb.New(createdAt)
 		tier.UpdatedAt = timestamppb.New(updatedAt)
 		if processesLive.Valid {
@@ -365,6 +381,9 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 			tier.ProcessesVod = processesVod.String
 		}
 		tiers = append(tiers, &tier)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate billing tiers: %v", err)
 	}
 
 	// Determine pagination info
@@ -409,13 +428,12 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 
 	var tier pb.BillingTier
 	var createdAt, updatedAt time.Time
-	var bandwidthAlloc, storageAlloc, computeAlloc, features, overageRates []byte
+	var features []byte
 	var processesLive, processesVod sql.NullString
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, tier_name, display_name, description, base_price, currency, billing_period,
-		       bandwidth_allocation, storage_allocation, compute_allocation, features,
-		       support_level, sla_level, metering_enabled, overage_rates,
+		       features, support_level, sla_level, metering_enabled,
 		       is_active, tier_level, is_enterprise,
 		       created_at, updated_at,
 		       COALESCE(is_default_prepaid, false), COALESCE(is_default_postpaid, false),
@@ -425,8 +443,7 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 	`, tierID).Scan(
 		&tier.Id, &tier.TierName, &tier.DisplayName, &tier.Description,
 		&tier.BasePrice, &tier.Currency, &tier.BillingPeriod,
-		&bandwidthAlloc, &storageAlloc, &computeAlloc, &features,
-		&tier.SupportLevel, &tier.SlaLevel, &tier.MeteringEnabled, &overageRates,
+		&features, &tier.SupportLevel, &tier.SlaLevel, &tier.MeteringEnabled,
 		&tier.IsActive, &tier.TierLevel, &tier.IsEnterprise,
 		&createdAt, &updatedAt,
 		&tier.IsDefaultPrepaid, &tier.IsDefaultPostpaid,
@@ -441,11 +458,17 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	tier.BandwidthAllocation = scanAllocationDetails(bandwidthAlloc)
-	tier.StorageAllocation = scanAllocationDetails(storageAlloc)
-	tier.ComputeAllocation = scanAllocationDetails(computeAlloc)
 	tier.Features = scanBillingFeatures(features)
-	tier.OverageRates = scanOverageRates(overageRates)
+	rules, rulesErr := loadTierPricingRules(ctx, s.db, tier.Id)
+	if rulesErr != nil {
+		return nil, status.Errorf(codes.Internal, "load pricing rules: %v", rulesErr)
+	}
+	tier.PricingRules = rules
+	ents, entsErr := loadTierEntitlements(ctx, s.db, tier.Id)
+	if entsErr != nil {
+		return nil, status.Errorf(codes.Internal, "load entitlements: %v", entsErr)
+	}
+	tier.Entitlements = ents
 	tier.CreatedAt = timestamppb.New(createdAt)
 	tier.UpdatedAt = timestamppb.New(updatedAt)
 	if processesLive.Valid {
@@ -474,22 +497,40 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 	var billingModel sql.NullString
 	var subscriptionStatus sql.NullString
 	var balanceCents sql.NullInt64
+	var retentionRaw sql.NullString
 
 	currency := billing.DefaultCurrency()
 
-	// Query subscription and prepaid balance
+	// Query subscription, prepaid balance, and the recording_retention_days
+	// entitlement in one round-trip. Commodore's StartDVR uses the retention
+	// value here to default expires_at, so this avoids per-DVR-start
+	// GetSubscription + GetBillingTier roundtrips.
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
 			ts.billing_model,
 			ts.status,
-			pb.balance_cents
+			pb.balance_cents,
+			te.value::text
 		FROM purser.tenant_subscriptions ts
 		LEFT JOIN purser.prepaid_balances pb
 			ON pb.tenant_id = ts.tenant_id AND pb.currency = $2
+		LEFT JOIN LATERAL (
+			-- Precedence: subscription override (priority 1) deterministically
+			-- beats tier entitlement (priority 2) regardless of UNION ordering.
+			SELECT value FROM (
+				SELECT value, 1 AS priority FROM purser.subscription_entitlement_overrides
+				WHERE subscription_id = ts.id AND key = 'recording_retention_days'
+				UNION ALL
+				SELECT value, 2 AS priority FROM purser.tier_entitlements
+				WHERE tier_id = ts.tier_id AND key = 'recording_retention_days'
+			) src
+			ORDER BY priority
+			LIMIT 1
+		) te ON TRUE
 		WHERE ts.tenant_id = $1 AND ts.status != 'cancelled'
 		ORDER BY ts.created_at DESC
 		LIMIT 1
-	`, tenantID, currency).Scan(&billingModel, &subscriptionStatus, &balanceCents)
+	`, tenantID, currency).Scan(&billingModel, &subscriptionStatus, &balanceCents, &retentionRaw)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// No subscription = assume postpaid, not suspended, not negative
@@ -529,11 +570,27 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 	}
 
 	return &pb.GetTenantBillingStatusResponse{
-		BillingModel:      model,
-		IsSuspended:       isSuspended,
-		IsBalanceNegative: isBalanceNegative,
-		BalanceCents:      balance,
+		BillingModel:           model,
+		IsSuspended:            isSuspended,
+		IsBalanceNegative:      isBalanceNegative,
+		BalanceCents:           balance,
+		RecordingRetentionDays: parseRetentionDays(retentionRaw),
 	}, nil
+}
+
+// parseRetentionDays decodes a tier_entitlements / subscription_entitlement_overrides
+// value into an int32 days count. The canonical shape is a bare JSON integer
+// (e.g. 90). Returns 0 when missing or unparseable so callers fall back to the
+// system default.
+func parseRetentionDays(raw sql.NullString) int32 {
+	if !raw.Valid || raw.String == "" {
+		return 0
+	}
+	var asInt int32
+	if err := json.Unmarshal([]byte(raw.String), &asInt); err == nil && asInt > 0 {
+		return asInt
+	}
+	return 0
 }
 
 // NOTE: Usage ingestion is handled via Kafka (billing.usage_reports topic)
@@ -545,6 +602,9 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *pb.GetUsageReco
 	tenantID := req.GetTenantId()
 	ctxTenantID := middleware.GetTenantID(ctx)
 	isServiceCall := middleware.IsServiceCall(ctx)
+	if !isServiceCall && ctxTenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "tenant context required")
+	}
 
 	if !isServiceCall {
 		if ctxTenantID == "" {
@@ -975,6 +1035,20 @@ func (s *PurserServer) GetSubscription(ctx context.Context, req *pb.GetSubscript
 		sub.MollieSubscriptionId = &mollieSubscriptionID.String
 	}
 
+	// Per-tenant override rows live in their own tables; load them so the
+	// returned subscription reflects the full effective state. Mutation
+	// callers (UpdateSubscription) and direct reads must see the same shape.
+	if overrides, err := loadSubscriptionPricingOverrides(ctx, s.db, sub.Id); err != nil {
+		return nil, status.Errorf(codes.Internal, "load pricing overrides: %v", err)
+	} else if len(overrides) > 0 {
+		sub.PricingOverrides = overrides
+	}
+	if overrides, err := loadSubscriptionEntitlementOverrides(ctx, s.db, sub.Id); err != nil {
+		return nil, status.Errorf(codes.Internal, "load entitlement overrides: %v", err)
+	} else if len(overrides) > 0 {
+		sub.EntitlementOverrides = overrides
+	}
+
 	return &pb.GetSubscriptionResponse{
 		Subscription: &sub,
 	}, nil
@@ -994,12 +1068,27 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *pb.CreateSub
 	// Verify tier exists
 	var tierExists bool
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM purser.billing_tiers WHERE id = $1 AND is_active = true)`, tierID).Scan(&tierExists)
-	if err != nil || !tierExists {
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to verify billing tier: %v", err)
+	}
+	if !tierExists {
 		return nil, status.Error(codes.NotFound, "billing tier not found")
 	}
 
+	billingModel := req.GetBillingModel()
+	if billingModel == "" {
+		billingModel = "postpaid"
+	}
+	if billingModel != "postpaid" && billingModel != "prepaid" {
+		return nil, status.Error(codes.InvalidArgument, "billing_model must be postpaid or prepaid")
+	}
+	featuresJSON, err := marshalBillingFeatures(req.GetCustomFeatures())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid custom_features: %v", err)
+	}
+
 	// Create subscription
-	subID := fmt.Sprintf("sub_%d", time.Now().UnixNano())
+	subID := uuid.New().String()
 	now := time.Now()
 
 	var trialEndsAt sql.NullTime
@@ -1021,12 +1110,12 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *pb.CreateSub
 
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO purser.tenant_subscriptions (
-			id, tenant_id, tier_id, status, billing_email, started_at,
+			id, tenant_id, tier_id, status, billing_email, billing_model, started_at,
 			trial_ends_at, next_billing_date, billing_period_start, billing_period_end,
-			payment_method, created_at, updated_at
+			payment_method, custom_features, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9, $10, $5, $5)
-	`, subID, tenantID, tierID, billingEmail, now, trialEndsAt, periodEnd, periodStart, periodEnd, req.GetPaymentMethod())
+		VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9, $10, $11, $12, $6, $6)
+	`, subID, tenantID, tierID, billingEmail, billingModel, now, trialEndsAt, periodEnd, periodStart, periodEnd, req.GetPaymentMethod(), featuresJSON)
 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create subscription: %v", err)
@@ -1038,6 +1127,7 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *pb.CreateSub
 		TierId:             tierID,
 		Status:             "active",
 		BillingEmail:       billingEmail,
+		BillingModel:       billingModel,
 		StartedAt:          timestamppb.New(now),
 		BillingPeriodStart: timestamppb.New(periodStart),
 		BillingPeriodEnd:   timestamppb.New(periodEnd),
@@ -1051,6 +1141,9 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *pb.CreateSub
 		pm := req.GetPaymentMethod()
 		sub.PaymentMethod = &pm
 	}
+	if req.GetCustomFeatures() != nil {
+		sub.CustomFeatures = req.GetCustomFeatures()
+	}
 
 	s.emitBillingEvent(ctx, eventSubscriptionCreated, tenantID, userID, "subscription", subID, &pb.BillingEvent{
 		SubscriptionId: subID,
@@ -1061,46 +1154,11 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *pb.CreateSub
 	return sub, nil
 }
 
-// validateCustomPricing validates custom pricing fields
-func validateCustomPricing(cp *pb.CustomPricing) error {
-	if cp == nil {
-		return nil
-	}
-	if cp.BasePrice < 0 {
-		return fmt.Errorf("base_price cannot be negative")
-	}
-	if cp.DiscountRate < 0 || cp.DiscountRate > 1 {
-		return fmt.Errorf("discount_rate must be between 0 and 1")
-	}
-	if cp.OverageRates != nil {
-		if err := validateAllocationDetails(cp.OverageRates.Bandwidth); err != nil {
-			return fmt.Errorf("overage_rates.bandwidth: %w", err)
-		}
-		if err := validateAllocationDetails(cp.OverageRates.Storage); err != nil {
-			return fmt.Errorf("overage_rates.storage: %w", err)
-		}
-		if err := validateAllocationDetails(cp.OverageRates.Compute); err != nil {
-			return fmt.Errorf("overage_rates.compute: %w", err)
-		}
-	}
-	return nil
-}
-
-// validateAllocationDetails validates allocation detail fields
-func validateAllocationDetails(ad *pb.AllocationDetails) error {
-	if ad == nil {
-		return nil
-	}
-	if ad.Limit != nil && *ad.Limit < 0 {
-		return fmt.Errorf("limit cannot be negative")
-	}
-	if ad.UnitPrice < 0 {
-		return fmt.Errorf("unit_price cannot be negative")
-	}
-	return nil
-}
-
-// UpdateSubscription updates an existing subscription
+// UpdateSubscription updates an existing subscription, including per-tenant
+// pricing/entitlement overrides in purser.subscription_pricing_overrides and
+// purser.subscription_entitlement_overrides. The header update and override
+// writes commit in a single transaction so a partial failure cannot leave
+// custom_features / tier / status touched while overrides rolled back.
 func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSubscriptionRequest) (*pb.TenantSubscription, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
@@ -1108,17 +1166,10 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSub
 	}
 
 	userID := middleware.GetUserID(ctx)
-	// Validate custom fields before saving
-	if err := validateCustomPricing(req.CustomPricing); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid custom_pricing: %v", err)
-	}
-	if err := validateAllocationDetails(req.CustomAllocations); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid custom_allocations: %v", err)
-	}
 
 	// Build dynamic update
 	updates := []string{"updated_at = NOW()"}
-	args := []interface{}{}
+	args := []any{}
 	argIdx := 1
 
 	if req.TierId != nil {
@@ -1152,16 +1203,6 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSub
 		argIdx++
 	}
 
-	// Handle custom billing fields (JSONB)
-	if req.CustomPricing != nil {
-		pricingJSON, err := marshalCustomPricing(req.CustomPricing)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid custom_pricing: %v", err)
-		}
-		updates = append(updates, fmt.Sprintf("custom_pricing = $%d", argIdx))
-		args = append(args, pricingJSON)
-		argIdx++
-	}
 	if req.CustomFeatures != nil {
 		featuresJSON, err := marshalBillingFeatures(req.CustomFeatures)
 		if err != nil {
@@ -1171,28 +1212,30 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSub
 		args = append(args, featuresJSON)
 		argIdx++
 	}
-	if req.CustomAllocations != nil {
-		allocJSON, err := marshalAllocationDetails(req.CustomAllocations)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid custom_allocations: %v", err)
-		}
-		updates = append(updates, fmt.Sprintf("custom_allocations = $%d", argIdx))
-		args = append(args, allocJSON)
-		argIdx++
-	}
 
 	query := fmt.Sprintf("UPDATE purser.tenant_subscriptions SET %s WHERE tenant_id = $%d AND status != 'cancelled'",
 		strings.Join(updates, ", "), argIdx)
 	args = append(args, tenantID)
 
-	result, err := s.db.ExecContext(ctx, query, args...)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+
+	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update subscription: %v", err)
 	}
-
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
 		return nil, status.Error(codes.NotFound, "subscription not found")
+	}
+	if overrideErr := s.applySubscriptionOverridesTx(ctx, tx, tenantID, req); overrideErr != nil {
+		return nil, overrideErr
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "commit subscription update: %v", commitErr)
 	}
 
 	// Return updated subscription
@@ -1212,6 +1255,130 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSub
 		})
 	}
 	return resp.Subscription, nil
+}
+
+// applySubscriptionOverridesTx upserts per-tenant pricing/entitlement overrides
+// from an UpdateSubscriptionRequest inside an existing transaction so the
+// header update and override writes commit together. Pricing rules and
+// entitlement keys are replaced wholesale when the request supplies them;
+// ClearPricingOverrides / ClearEntitlementOverrides delete all rows for the
+// subscription. Supplying both a clear flag and rows is treated as
+// "clear, then insert".
+func (s *PurserServer) applySubscriptionOverridesTx(ctx context.Context, tx *sql.Tx, tenantID string, req *pb.UpdateSubscriptionRequest) error {
+	if !req.GetClearPricingOverrides() && len(req.GetPricingOverrides()) == 0 &&
+		!req.GetClearEntitlementOverrides() && len(req.GetEntitlementOverrides()) == 0 {
+		return nil
+	}
+
+	var subscriptionID string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1 AND status != 'cancelled' ORDER BY created_at DESC LIMIT 1`,
+		tenantID,
+	).Scan(&subscriptionID); err != nil {
+		return status.Errorf(codes.Internal, "lookup subscription id: %v", err)
+	}
+
+	if req.GetClearPricingOverrides() || len(req.GetPricingOverrides()) > 0 {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM purser.subscription_pricing_overrides WHERE subscription_id = $1`,
+			subscriptionID,
+		); err != nil {
+			return status.Errorf(codes.Internal, "clear pricing overrides: %v", err)
+		}
+		for _, rule := range req.GetPricingOverrides() {
+			if err := validatePricingOverrideRule(rule); err != nil {
+				return status.Errorf(codes.InvalidArgument, "invalid pricing override %q: %v", rule.GetMeter(), err)
+			}
+			currency := normalizeOverrideCurrency(rule.GetCurrency())
+			if _, err := tx.ExecContext(ctx, `
+					INSERT INTO purser.subscription_pricing_overrides
+					    (subscription_id, meter, model, currency, included_quantity, unit_price, config)
+				VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, ''),
+				        NULLIF($5, '')::NUMERIC, NULLIF($6, '')::NUMERIC,
+				        COALESCE(NULLIF($7, ''), '{}')::JSONB)
+				ON CONFLICT (subscription_id, meter) DO UPDATE SET
+				    model = EXCLUDED.model,
+				    currency = EXCLUDED.currency,
+				    included_quantity = EXCLUDED.included_quantity,
+				    unit_price = EXCLUDED.unit_price,
+				    config = EXCLUDED.config
+			`,
+				subscriptionID, rule.GetMeter(), rule.GetModel(), currency,
+				rule.GetIncludedQuantity(), rule.GetUnitPrice(), rule.GetConfigJson(),
+			); err != nil {
+				return status.Errorf(codes.Internal, "upsert pricing override %q: %v", rule.GetMeter(), err)
+			}
+		}
+	}
+
+	if req.GetClearEntitlementOverrides() || len(req.GetEntitlementOverrides()) > 0 {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM purser.subscription_entitlement_overrides WHERE subscription_id = $1`,
+			subscriptionID,
+		); err != nil {
+			return status.Errorf(codes.Internal, "clear entitlement overrides: %v", err)
+		}
+		for k, v := range req.GetEntitlementOverrides() {
+			if k == "" {
+				return status.Error(codes.InvalidArgument, "entitlement override key is required")
+			}
+			if !json.Valid([]byte(v)) {
+				return status.Errorf(codes.InvalidArgument, "entitlement override %q must be valid JSON", k)
+			}
+			if _, err := tx.ExecContext(ctx, `
+					INSERT INTO purser.subscription_entitlement_overrides (subscription_id, key, value)
+					VALUES ($1, $2, $3::JSONB)
+				ON CONFLICT (subscription_id, key) DO UPDATE SET value = EXCLUDED.value
+			`, subscriptionID, k, v); err != nil {
+				return status.Errorf(codes.Internal, "upsert entitlement override %q: %v", k, err)
+			}
+		}
+	}
+	return nil
+}
+
+func validatePricingOverrideRule(rule *pb.PricingRule) error {
+	if rule == nil {
+		return errors.New("rule is nil")
+	}
+	if !rating.ValidMeter(rating.Meter(rule.GetMeter())) {
+		return fmt.Errorf("unsupported meter %q", rule.GetMeter())
+	}
+	if rule.GetModel() != "" && !rating.ValidModel(rating.Model(rule.GetModel())) {
+		return fmt.Errorf("unsupported model %q", rule.GetModel())
+	}
+	if currency := normalizeOverrideCurrency(rule.GetCurrency()); currency != "" {
+		if len(currency) != 3 {
+			return fmt.Errorf("currency %q must be a 3-letter code", rule.GetCurrency())
+		}
+		for _, ch := range currency {
+			if ch < 'A' || ch > 'Z' {
+				return fmt.Errorf("currency %q must use letters only", rule.GetCurrency())
+			}
+		}
+	}
+	if rule.GetIncludedQuantity() != "" {
+		if _, err := decimal.NewFromString(rule.GetIncludedQuantity()); err != nil {
+			return fmt.Errorf("included_quantity %q: %w", rule.GetIncludedQuantity(), err)
+		}
+	}
+	if rule.GetUnitPrice() != "" {
+		if _, err := decimal.NewFromString(rule.GetUnitPrice()); err != nil {
+			return fmt.Errorf("unit_price %q: %w", rule.GetUnitPrice(), err)
+		}
+	}
+	config := rule.GetConfigJson()
+	if config == "" {
+		config = "{}"
+	}
+	if !json.Valid([]byte(config)) {
+		return fmt.Errorf("config_json must be valid JSON")
+	}
+	return nil
+}
+
+func normalizeOverrideCurrency(currency string) string {
+	return strings.ToUpper(strings.TrimSpace(currency))
 }
 
 // CancelSubscription cancels a tenant's subscription
@@ -1262,9 +1429,11 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *pb.GetInvoiceRequest
 		return nil, status.Error(codes.InvalidArgument, "invoice_id required")
 	}
 
-	// Get tenant_id from context (for tenant isolation on user calls)
 	ctxTenantID := middleware.GetTenantID(ctx)
 	isServiceCall := middleware.IsServiceCall(ctx)
+	if !isServiceCall && ctxTenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "tenant context required")
+	}
 
 	var invoice pb.Invoice
 	var dueDate, createdAt, updatedAt time.Time
@@ -1273,7 +1442,6 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *pb.GetInvoiceRequest
 	var usageDetailsBytes []byte
 	var periodStart, periodEnd sql.NullTime
 
-	// Build query with optional tenant filter for user calls
 	query := `
 		SELECT i.id, i.tenant_id, i.amount, i.base_amount, i.metered_amount, i.prepaid_credit_applied, i.currency, i.status,
 		       i.due_date, i.paid_at, i.usage_details, i.created_at, i.updated_at, s.tier_id,
@@ -1283,8 +1451,7 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *pb.GetInvoiceRequest
 		WHERE i.id = $1`
 	args := []interface{}{invoiceID}
 
-	// Add tenant filter for user calls (not service-to-service)
-	if !isServiceCall && ctxTenantID != "" {
+	if !isServiceCall {
 		query += " AND i.tenant_id = $2"
 		args = append(args, ctxTenantID)
 	}
@@ -1315,27 +1482,37 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *pb.GetInvoiceRequest
 		invoice.PeriodEnd = timestamppb.New(periodEnd.Time)
 	}
 
-	// Always initialize to empty slice for GraphQL non-null list compliance
-	invoice.LineItems = []*pb.LineItem{}
-
 	// Convert usage_details JSONB to protobuf Struct and typed fields
 	if len(usageDetailsBytes) > 0 {
 		var detailsMap map[string]interface{}
 		if json.Unmarshal(usageDetailsBytes, &detailsMap) == nil {
 			invoice.UsageDetails = mapToProtoStruct(detailsMap)
 			invoice.UsageSummary = parseUsageDetailsToSummary(detailsMap, invoice.TenantId, invoice.PeriodStart, invoice.PeriodEnd)
-			invoice.LineItems = generateInvoiceLineItems(detailsMap, invoice.BaseAmount, invoice.MeteredAmount)
 			if invoice.UsageSummary != nil {
 				invoice.UsageSummary.GeoBreakdown = parseGeoBreakdown(detailsMap)
 			}
 		}
 	}
+	lineItems, lineErr := s.loadInvoiceLineItems(ctx, invoice.Id, invoice.TenantId)
+	if lineErr != nil {
+		return nil, status.Errorf(codes.Internal, "%v", lineErr)
+	}
+	invoice.LineItems = lineItems
 
-	// Get tier info
+	// Get tier info. NotFound is tolerated (tier may have been removed since
+	// the invoice was issued); other errors fail loud — a broken normalized
+	// pricing-rules table must not return a partial invoice with nil tier.
 	var tier *pb.BillingTier
 	if tierID != "" {
-		tierResp, _ := s.GetBillingTier(ctx, &pb.GetBillingTierRequest{TierId: tierID})
-		tier = tierResp
+		tierResp, tierErr := s.GetBillingTier(ctx, &pb.GetBillingTierRequest{TierId: tierID})
+		switch {
+		case tierErr == nil:
+			tier = tierResp
+		case status.Code(tierErr) == codes.NotFound:
+			// leave tier nil
+		default:
+			return nil, tierErr
+		}
 	}
 
 	return &pb.GetInvoiceResponse{
@@ -1415,7 +1592,7 @@ func (s *PurserServer) ListInvoices(ctx context.Context, req *pb.ListInvoicesReq
 			&inv.MeteredAmount, &inv.PrepaidCreditApplied, &inv.Currency, &inv.Status,
 			&dueDate, &paidAt, &usageDetails, &createdAt, &updatedAt, &periodStart, &periodEnd)
 		if err != nil {
-			continue
+			return nil, status.Errorf(codes.Internal, "scan invoice row: %v", err)
 		}
 
 		inv.DueDate = timestamppb.New(dueDate)
@@ -1430,22 +1607,26 @@ func (s *PurserServer) ListInvoices(ctx context.Context, req *pb.ListInvoicesReq
 		if periodEnd.Valid {
 			inv.PeriodEnd = timestamppb.New(periodEnd.Time)
 		}
-		// Always initialize to empty slice for GraphQL non-null list compliance
-		inv.LineItems = []*pb.LineItem{}
-
 		// Convert usage_details JSONB to protobuf Struct and typed fields
 		if len(usageDetails) > 0 {
 			var details map[string]interface{}
 			if json.Unmarshal(usageDetails, &details) == nil {
 				inv.UsageDetails = mapToProtoStruct(details)
 				inv.UsageSummary = parseUsageDetailsToSummary(details, inv.TenantId, inv.PeriodStart, inv.PeriodEnd)
-				inv.LineItems = generateInvoiceLineItems(details, inv.BaseAmount, inv.MeteredAmount)
 				if inv.UsageSummary != nil {
 					inv.UsageSummary.GeoBreakdown = parseGeoBreakdown(details)
 				}
 			}
 		}
+		lineItems, lineErr := s.loadInvoiceLineItems(ctx, inv.Id, inv.TenantId)
+		if lineErr != nil {
+			return nil, status.Errorf(codes.Internal, "%v", lineErr)
+		}
+		inv.LineItems = lineItems
 		invoices = append(invoices, &inv)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate invoice rows: %v", err)
 	}
 
 	// Determine pagination info
@@ -1488,19 +1669,52 @@ func (s *PurserServer) ListInvoices(ctx context.Context, req *pb.ListInvoicesReq
 // PAYMENT SERVICE
 // ============================================================================
 
+type cryptoPaymentQuoteDetails struct {
+	WalletAddress           string
+	ExpectedAmountBaseUnits string
+	ExpectedAmountToken     string
+	QuotedPriceUSD          string
+	QuoteSource             string
+	AssetSymbol             string
+	Network                 string
+	QuotedAt                time.Time
+	ExpiresAt               time.Time
+}
+
+type cryptoPaymentPlan struct {
+	Params            handlers.DepositAddressParams
+	ExpectedBaseUnits *big.Int
+	TokenDecimals     int32
+	NetworkName       string
+	Asset             string
+}
+
+func (d cryptoPaymentQuoteDetails) apply(resp *pb.PaymentResponse) {
+	resp.WalletAddress = d.WalletAddress
+	resp.ExpectedAmountBaseUnits = d.ExpectedAmountBaseUnits
+	resp.ExpectedAmountToken = d.ExpectedAmountToken
+	resp.QuotedPriceUsd = d.QuotedPriceUSD
+	resp.QuoteSource = d.QuoteSource
+	resp.AssetSymbol = d.AssetSymbol
+	resp.Network = d.Network
+	resp.QuotedAt = timestamppb.New(d.QuotedAt)
+	resp.ExpiresAt = timestamppb.New(d.ExpiresAt)
+}
+
 // CreatePayment initiates a payment for an invoice with tenant isolation
 func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest) (*pb.PaymentResponse, error) {
 	invoiceID := req.GetInvoiceId()
-	method := req.GetMethod()
+	method := strings.ToLower(req.GetMethod())
 
 	if invoiceID == "" || method == "" {
 		return nil, status.Error(codes.InvalidArgument, "invoice_id and method are required")
 	}
 
 	userID := middleware.GetUserID(ctx)
-	// Get tenant_id from context for isolation
 	ctxTenantID := middleware.GetTenantID(ctx)
-	isServiceCall := middleware.IsServiceCall(ctx)
+	if ctxTenantID == "" {
+		return nil, status.Error(codes.PermissionDenied, "tenant context required")
+	}
 
 	// Validate payment method is available
 	availableMethods := s.getAvailablePaymentMethods(ctx)
@@ -1515,36 +1729,44 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 		return nil, status.Errorf(codes.InvalidArgument, "payment method %s not available", method)
 	}
 
-	// Verify invoice exists, is unpaid, and belongs to tenant (for user calls)
-	var invoiceTenantID, invoiceStatus, invoiceCurrency string
-	var invoiceAmount float64
-	query := `SELECT tenant_id, amount, currency, status FROM purser.billing_invoices WHERE id = $1 AND status = 'pending'`
-	args := []interface{}{invoiceID}
-
-	// Add tenant filter for user calls
-	if !isServiceCall && ctxTenantID != "" {
-		query = `SELECT tenant_id, amount, currency, status FROM purser.billing_invoices WHERE id = $1 AND tenant_id = $2 AND status = 'pending'`
-		args = append(args, ctxTenantID)
-	}
-
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(&invoiceTenantID, &invoiceAmount, &invoiceCurrency, &invoiceStatus)
+	// Verify invoice exists, is unpaid, and belongs to the caller's tenant.
+	var invoiceTenantID, invoiceStatus, invoiceCurrency, invoiceAmountText string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, amount::text, currency, status
+		FROM purser.billing_invoices
+		WHERE id = $1 AND tenant_id = $2 AND status IN ('pending', 'overdue')
+	`, invoiceID, ctxTenantID).Scan(&invoiceTenantID, &invoiceAmountText, &invoiceCurrency, &invoiceStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "invoice not found or already paid")
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
+	invoiceAmountDec, err := decimal.NewFromString(invoiceAmountText)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "invalid invoice amount: %v", err)
+	}
+	invoiceAmount, _ := invoiceAmountDec.Float64()
 
-	// Idempotency: return existing pending payment for this invoice + method
+	if strings.HasPrefix(method, "crypto_") {
+		asset := strings.ToUpper(strings.TrimPrefix(method, "crypto_"))
+		if expireErr := s.expireStaleInvoiceCryptoPayments(ctx, invoiceID, invoiceTenantID, asset, method); expireErr != nil {
+			return nil, status.Errorf(codes.Internal, "expire stale crypto payments: %v", expireErr)
+		}
+	}
+
+	// Idempotency: return existing pending payment for this invoice + method.
 	var existingPaymentID, existingTxID string
+	var existingPaymentURL sql.NullString
 	var existingCreatedAt time.Time
 	err = s.db.QueryRowContext(ctx, `
-		SELECT id, tx_id, created_at
-		FROM purser.billing_payments
-		WHERE invoice_id = $1 AND method = $2 AND status = 'pending'
-		ORDER BY created_at DESC
+		SELECT bp.id, bp.tx_id, bp.payment_url, bp.created_at
+		FROM purser.billing_payments bp
+		JOIN purser.billing_invoices bi ON bi.id = bp.invoice_id AND bi.tenant_id = $3
+		WHERE bp.invoice_id = $1 AND bp.method = $2 AND bp.status = 'pending'
+		ORDER BY bp.created_at DESC
 		LIMIT 1
-	`, invoiceID, method).Scan(&existingPaymentID, &existingTxID, &existingCreatedAt)
+	`, invoiceID, method, invoiceTenantID).Scan(&existingPaymentID, &existingTxID, &existingPaymentURL, &existingCreatedAt)
 	if err == nil {
 		resp := &pb.PaymentResponse{
 			Id:        existingPaymentID,
@@ -1555,17 +1777,29 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 			CreatedAt: timestamppb.New(existingCreatedAt),
 		}
 		if strings.HasPrefix(method, "crypto_") {
-			resp.WalletAddress = existingTxID
 			asset := strings.TrimPrefix(method, "crypto_")
-			var expiresAt time.Time
-			if scanErr := s.db.QueryRowContext(ctx, `
-					SELECT expires_at
-					FROM purser.crypto_wallets
-					WHERE invoice_id = $1 AND asset = $2 AND status IN ('pending', 'confirming')
-					ORDER BY created_at DESC
-					LIMIT 1
-				`, invoiceID, strings.ToUpper(asset)).Scan(&expiresAt); scanErr == nil {
-				resp.ExpiresAt = timestamppb.New(expiresAt)
+			details, detailsErr := s.loadInvoiceCryptoPaymentQuote(ctx, invoiceID, invoiceTenantID, strings.ToUpper(asset))
+			if detailsErr != nil {
+				return nil, status.Errorf(codes.Internal, "load crypto payment quote: %v", detailsErr)
+			}
+			if details.WalletAddress != existingTxID {
+				return nil, status.Error(codes.Internal, "pending crypto payment wallet mismatch")
+			}
+			details.apply(resp)
+		}
+		if method == "card" {
+			if !existingPaymentURL.Valid || strings.TrimSpace(existingPaymentURL.String) == "" {
+				paymentURL, providerID, checkoutErr := s.createCardInvoiceCheckout(ctx, existingPaymentID, invoiceID, invoiceTenantID, invoiceAmountDec, invoiceCurrency, req.GetReturnUrl())
+				if checkoutErr != nil {
+					return nil, status.Errorf(codes.Internal, "failed to create card checkout: %v", checkoutErr)
+				}
+				if updateErr := s.attachCardCheckoutToPayment(ctx, existingPaymentID, providerID, paymentURL); updateErr != nil {
+					return nil, status.Errorf(codes.Internal, "failed to update payment checkout: %v", updateErr)
+				}
+				resp.PaymentUrl = paymentURL
+				resp.ExpiresAt = timestamppb.New(time.Now().Add(24 * time.Hour))
+			} else {
+				resp.PaymentUrl = existingPaymentURL.String
 			}
 		}
 		s.logger.WithFields(logging.Fields{
@@ -1594,36 +1828,51 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 	}
 
 	var txID string
+	paymentStored := false
 
 	// Route to appropriate payment processor
 	switch method {
-	case "stripe":
-		paymentURL, stripeIntentID, stripeErr := s.createStripePayment(invoiceID, invoiceTenantID, invoiceAmount, invoiceCurrency)
-		if stripeErr != nil {
-			s.logger.WithError(stripeErr).WithFields(logging.Fields{
+	case "card":
+		paymentID, existingPaymentURL, existingCreatedAt, err = s.ensurePendingCardPayment(ctx, paymentID, invoiceID, method, invoiceAmountDec, invoiceCurrency)
+		if err != nil {
+			s.logger.WithError(err).WithFields(logging.Fields{
+				"payment_id": paymentID,
+				"invoice_id": invoiceID,
+			}).Error("Failed to store pending card payment")
+			return nil, status.Errorf(codes.Internal, "failed to create payment: %v", err)
+		}
+		resp.Id = paymentID
+		resp.CreatedAt = timestamppb.New(existingCreatedAt)
+		if existingPaymentURL.Valid && strings.TrimSpace(existingPaymentURL.String) != "" {
+			resp.PaymentUrl = existingPaymentURL.String
+			paymentStored = true
+			break
+		}
+		paymentURL, providerID, checkoutErr := s.createCardInvoiceCheckout(ctx, paymentID, invoiceID, invoiceTenantID, invoiceAmountDec, invoiceCurrency, req.GetReturnUrl())
+		if checkoutErr != nil {
+			if markErr := s.markPaymentFailed(ctx, paymentID); markErr != nil {
+				s.logger.WithError(markErr).WithField("payment_id", paymentID).Warn("Failed to mark card payment failed")
+			}
+			s.logger.WithError(checkoutErr).WithFields(logging.Fields{
 				"invoice_id": invoiceID,
 				"method":     method,
-			}).Error("Failed to create Stripe payment")
-			return nil, status.Errorf(codes.Internal, "failed to create Stripe payment: %v", stripeErr)
+			}).Error("Failed to create card checkout")
+			return nil, status.Errorf(codes.Internal, "failed to create card checkout: %v", checkoutErr)
 		}
-		resp.PaymentUrl = paymentURL
-		txID = stripeIntentID
-
-	case "mollie":
-		paymentURL, mollieID, mollieErr := s.createMolliePayment(invoiceID, invoiceTenantID, invoiceAmount, invoiceCurrency)
-		if mollieErr != nil {
-			s.logger.WithError(mollieErr).WithFields(logging.Fields{
+		if updateErr := s.attachCardCheckoutToPayment(ctx, paymentID, providerID, paymentURL); updateErr != nil {
+			s.logger.WithError(updateErr).WithFields(logging.Fields{
+				"payment_id": paymentID,
 				"invoice_id": invoiceID,
-				"method":     method,
-			}).Error("Failed to create Mollie payment")
-			return nil, status.Errorf(codes.Internal, "failed to create Mollie payment: %v", mollieErr)
+			}).Error("Failed to store card checkout details")
+			return nil, status.Errorf(codes.Internal, "failed to update payment checkout: %v", updateErr)
 		}
 		resp.PaymentUrl = paymentURL
-		txID = mollieID
+		txID = providerID
+		paymentStored = true
 
-	case "crypto_btc", "crypto_eth", "crypto_usdc", "crypto_lpt":
+	case "crypto_eth", "crypto_usdc":
 		asset := strings.TrimPrefix(method, "crypto_")
-		walletAddr, walletErr := s.createCryptoPayment(invoiceID, invoiceTenantID, strings.ToUpper(asset), invoiceAmount, invoiceCurrency, expiresAt)
+		plan, walletErr := s.prepareCryptoPayment(ctx, invoiceID, invoiceTenantID, strings.ToUpper(asset), invoiceAmountDec, invoiceCurrency, expiresAt)
 		if walletErr != nil {
 			s.logger.WithError(walletErr).WithFields(logging.Fields{
 				"invoice_id": invoiceID,
@@ -1632,24 +1881,86 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 			}).Error("Failed to create crypto payment")
 			return nil, status.Errorf(codes.Internal, "failed to create crypto payment: %v", walletErr)
 		}
-		resp.WalletAddress = walletAddr
-		txID = walletAddr // Use wallet address as tx reference for crypto
+		dbTx, beginErr := s.db.BeginTx(ctx, nil)
+		if beginErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to begin payment transaction: %v", beginErr)
+		}
+		defer dbTx.Rollback() //nolint:errcheck // rollback is best-effort
+
+		if lockErr := lockInvoicePaymentTx(ctx, dbTx, invoiceID, method); lockErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to lock payment creation: %v", lockErr)
+		}
+
+		existing, existingErr := loadPendingInvoicePaymentTx(ctx, dbTx, invoiceID, invoiceTenantID, method)
+		if existingErr != nil && !errors.Is(existingErr, sql.ErrNoRows) {
+			return nil, status.Errorf(codes.Internal, "load existing crypto payment: %v", existingErr)
+		}
+		if existingErr == nil {
+			details, detailsErr := loadInvoiceCryptoPaymentQuoteFrom(ctx, dbTx, invoiceID, invoiceTenantID, strings.ToUpper(asset))
+			if detailsErr != nil {
+				return nil, status.Errorf(codes.Internal, "load crypto payment quote: %v", detailsErr)
+			}
+			if details.WalletAddress != existing.TxID {
+				return nil, status.Error(codes.Internal, "pending crypto payment wallet mismatch")
+			}
+			if commitErr := dbTx.Commit(); commitErr != nil {
+				return nil, status.Errorf(codes.Internal, "failed to commit payment transaction: %v", commitErr)
+			}
+			resp.Id = existing.ID
+			resp.CreatedAt = timestamppb.New(existing.CreatedAt)
+			details.apply(resp)
+			s.logger.WithFields(logging.Fields{
+				"payment_id": existing.ID,
+				"invoice_id": invoiceID,
+				"method":     method,
+			}).Info("Returning existing pending payment")
+			return resp, nil
+		}
+
+		quoteDetails, walletErr := s.createCryptoPaymentTx(ctx, dbTx, plan)
+		if walletErr != nil {
+			s.logger.WithError(walletErr).WithFields(logging.Fields{
+				"invoice_id": invoiceID,
+				"method":     method,
+				"asset":      asset,
+			}).Error("Failed to create crypto payment")
+			return nil, status.Errorf(codes.Internal, "failed to create crypto payment: %v", walletErr)
+		}
+		quoteDetails.apply(resp)
+		txID = quoteDetails.WalletAddress // Use wallet address as tx reference for crypto
+		_, err = dbTx.ExecContext(ctx, `
+				INSERT INTO purser.billing_payments (id, invoice_id, method, amount, currency, tx_id, payment_url, status, created_at, updated_at)
+				VALUES ($1, $2, $3, $4::numeric, $5, $6, NULLIF($7, ''), 'pending', NOW(), NOW())
+			`, paymentID, invoiceID, method, invoiceAmountDec.Round(2).String(), invoiceCurrency, txID, resp.PaymentUrl)
+		if err != nil {
+			s.logger.WithError(err).WithFields(logging.Fields{
+				"payment_id": paymentID,
+				"invoice_id": invoiceID,
+			}).Error("Failed to store payment record")
+			return nil, status.Errorf(codes.Internal, "failed to create payment: %v", err)
+		}
+		if err = dbTx.Commit(); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to commit payment transaction: %v", err)
+		}
+		paymentStored = true
 
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported payment method: %s", method)
 	}
 
 	// Create payment record
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO purser.billing_payments (id, invoice_id, method, amount, currency, tx_id, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW(), NOW())
-	`, paymentID, invoiceID, method, invoiceAmount, invoiceCurrency, txID)
-	if err != nil {
-		s.logger.WithError(err).WithFields(logging.Fields{
-			"payment_id": paymentID,
-			"invoice_id": invoiceID,
-		}).Error("Failed to store payment record")
-		return nil, status.Errorf(codes.Internal, "failed to create payment: %v", err)
+	if !paymentStored {
+		_, err = s.db.ExecContext(ctx, `
+				INSERT INTO purser.billing_payments (id, invoice_id, method, amount, currency, tx_id, payment_url, status, created_at, updated_at)
+				VALUES ($1, $2, $3, $4::numeric, $5, $6, NULLIF($7, ''), 'pending', NOW(), NOW())
+			`, paymentID, invoiceID, method, invoiceAmountDec.Round(2).String(), invoiceCurrency, txID, resp.PaymentUrl)
+		if err != nil {
+			s.logger.WithError(err).WithFields(logging.Fields{
+				"payment_id": paymentID,
+				"invoice_id": invoiceID,
+			}).Error("Failed to store payment record")
+			return nil, status.Errorf(codes.Internal, "failed to create payment: %v", err)
+		}
 	}
 
 	s.emitBillingEvent(ctx, eventPaymentCreated, invoiceTenantID, userID, "payment", paymentID, &pb.BillingEvent{
@@ -1676,19 +1987,12 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 func (s *PurserServer) getAvailablePaymentMethods(ctx context.Context) []string {
 	methods := []string{}
 
-	// Check Stripe
-	if os.Getenv("STRIPE_SECRET_KEY") != "" {
-		methods = append(methods, "stripe")
+	if os.Getenv("STRIPE_SECRET_KEY") != "" || os.Getenv("MOLLIE_API_KEY") != "" {
+		methods = append(methods, "card")
 	}
 
-	// Check Mollie
-	if os.Getenv("MOLLIE_API_KEY") != "" {
-		methods = append(methods, "mollie")
-	}
-
-	// Check crypto (Etherscan API for ETH/ERC-20, BlockCypher for BTC)
-	if s.hasHDWalletXpub(ctx) && hasAnyExplorerKey() {
-		methods = append(methods, "crypto_eth", "crypto_usdc", "crypto_lpt")
+	if s.hasHDWalletXpub(ctx) && hasArbitrumExplorerKey() {
+		methods = append(methods, "crypto_eth", "crypto_usdc")
 	}
 
 	return methods
@@ -1704,181 +2008,356 @@ func (s *PurserServer) hasHDWalletXpub(ctx context.Context) bool {
 	return strings.TrimSpace(xpub) != ""
 }
 
-func hasAnyExplorerKey() bool {
-	return os.Getenv("ETHERSCAN_API_KEY") != "" ||
-		os.Getenv("BASESCAN_API_KEY") != "" ||
-		os.Getenv("ARBISCAN_API_KEY") != ""
+func hasArbitrumExplorerKey() bool {
+	return os.Getenv("ARBISCAN_API_KEY") != ""
 }
 
-// createStripePayment creates a Stripe Payment Intent
-func (s *PurserServer) createStripePayment(invoiceID, tenantID string, amount float64, currency string) (string, string, error) {
-	stripeKey := os.Getenv("STRIPE_SECRET_KEY")
-	if stripeKey == "" {
-		return "", "", fmt.Errorf("stripe not configured")
+func (s *PurserServer) ensurePendingCardPayment(ctx context.Context, paymentID, invoiceID, method string, amount decimal.Decimal, currency string) (string, sql.NullString, time.Time, error) {
+	var storedID string
+	var paymentURL sql.NullString
+	var createdAt time.Time
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO purser.billing_payments (id, invoice_id, method, amount, currency, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4::numeric, $5, 'pending', NOW(), NOW())
+		ON CONFLICT (invoice_id, method) WHERE status = 'pending'
+		DO UPDATE SET updated_at = purser.billing_payments.updated_at
+		RETURNING id, payment_url, created_at
+	`, paymentID, invoiceID, method, amount.Round(2).String(), currency).Scan(&storedID, &paymentURL, &createdAt)
+	if err != nil {
+		return "", sql.NullString{}, time.Time{}, err
+	}
+	return storedID, paymentURL, createdAt, nil
+}
+
+func (s *PurserServer) createCardInvoiceCheckout(ctx context.Context, paymentID, invoiceID, tenantID string, amount decimal.Decimal, currency, requestedReturnURL string) (string, string, error) {
+	provider := handlers.ProviderStripe
+	if os.Getenv("MOLLIE_API_KEY") != "" {
+		provider = handlers.ProviderMollie
+	} else if os.Getenv("STRIPE_SECRET_KEY") == "" {
+		return "", "", fmt.Errorf("card payments are not configured")
+	}
+	amountCents := amount.Mul(decimal.NewFromInt(100)).Round(0).IntPart()
+	if amountCents <= 0 {
+		return "", "", fmt.Errorf("payment amount must be positive")
 	}
 
-	// Create Stripe Payment Intent via API
-	amountCents := int64(math.Round(amount * 100))
-	normalizedCurrency := strings.ToLower(currency)
-	data := strings.NewReader(fmt.Sprintf(
-		"amount=%d&currency=%s&metadata[invoice_id]=%s&metadata[tenant_id]=%s",
-		amountCents, normalizedCurrency, invoiceID, tenantID,
-	))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.stripe.com/v1/payment_intents", data)
+	successURL, cancelURL, err := invoicePaymentReturnURLs(requestedReturnURL)
 	if err != nil {
 		return "", "", err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Authorization", "Bearer "+stripeKey)
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", fmt.Errorf("stripe API request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return "", "", fmt.Errorf("stripe API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		ID           string `json:"id"`
-		ClientSecret string `json:"client_secret"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", "", fmt.Errorf("failed to decode stripe response: %w", err)
-	}
-
-	if result.ID == "" || result.ClientSecret == "" {
-		return "", "", fmt.Errorf("invalid stripe response: missing payment intent ID or client secret")
-	}
-
-	webappURL := strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL"))
-	if webappURL == "" {
-		return "", "", fmt.Errorf("WEBAPP_PUBLIC_URL is required")
-	}
-	paymentURL := fmt.Sprintf("%s/payment/stripe?client_secret=%s", webappURL, result.ClientSecret)
-
-	return paymentURL, result.ID, nil
-}
-
-// createMolliePayment creates a Mollie payment
-func (s *PurserServer) createMolliePayment(invoiceID, tenantID string, amount float64, currency string) (string, string, error) {
-	mollieKey := os.Getenv("MOLLIE_API_KEY")
-	if mollieKey == "" {
-		return "", "", fmt.Errorf("mollie not configured")
-	}
-
-	webappURL := strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL"))
-	if webappURL == "" {
-		return "", "", fmt.Errorf("WEBAPP_PUBLIC_URL is required")
-	}
-	webhookURL := config.GetGatewayPublicURL()
-	if webhookURL == "" {
-		return "", "", fmt.Errorf("GATEWAY_PUBLIC_URL is required")
-	}
-
-	payload := map[string]interface{}{
-		"amount": map[string]string{
-			"currency": strings.ToUpper(currency),
-			"value":    fmt.Sprintf("%.2f", amount),
-		},
-		"description": fmt.Sprintf("Invoice %s", invoiceID),
-		"redirectUrl": fmt.Sprintf("%s/billing/payment-complete", webappURL),
-		"webhookUrl":  fmt.Sprintf("%s/webhooks/billing/mollie", webhookURL),
-		"metadata": map[string]string{
-			"purpose":      "invoice",
-			"invoice_id":   invoiceID,
-			"tenant_id":    tenantID,
-			"reference_id": invoiceID,
-		},
-	}
-
-	payloadBytes, _ := json.Marshal(payload)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.mollie.com/v2/payments", bytes.NewReader(payloadBytes))
+	checkoutSvc := handlers.NewCheckoutService(s.db, s.logger)
+	result, err := checkoutSvc.CreateCheckout(ctx, handlers.CheckoutRequest{
+		Purpose:        handlers.PurposeInvoice,
+		Provider:       provider,
+		TenantID:       tenantID,
+		ReferenceID:    invoiceID,
+		AmountCents:    amountCents,
+		Currency:       strings.ToUpper(currency),
+		SuccessURL:     successURL,
+		CancelURL:      cancelURL,
+		Description:    fmt.Sprintf("Invoice %s", invoiceID),
+		IdempotencyKey: "invoice-payment-" + paymentID,
+	})
 	if err != nil {
 		return "", "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+mollieKey)
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", fmt.Errorf("mollie API request failed: %w", err)
+	if result.CheckoutURL == "" || result.SessionID == "" {
+		return "", "", fmt.Errorf("provider checkout response missing URL or ID")
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != 201 {
-		body, _ := io.ReadAll(resp.Body)
-		return "", "", fmt.Errorf("mollie API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		ID    string                       `json:"id"`
-		Links map[string]map[string]string `json:"_links"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", "", fmt.Errorf("failed to decode mollie response: %w", err)
-	}
-
-	checkoutURL := ""
-	if checkout, ok := result.Links["checkout"]; ok {
-		checkoutURL = checkout["href"]
-	}
-
-	return checkoutURL, result.ID, nil
+	return result.CheckoutURL, result.SessionID, nil
 }
 
-// createCryptoPayment creates a crypto wallet for invoice payment using HD wallet derivation.
-// This uses BIP32/BIP44 derivation from an extended public key (xpub) stored in the database.
-// Private keys NEVER touch the server - sweeps happen offline with the master seed.
-func (s *PurserServer) createCryptoPayment(invoiceID, tenantID, asset string, amount float64, currency string, expiresAt time.Time) (string, error) {
-	// Validate asset (ETH-network only: native ETH, USDC ERC-20, LPT ERC-20)
+func invoicePaymentReturnURLs(requestedReturnURL string) (string, string, error) {
+	webappBase := strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL"))
+	if webappBase == "" {
+		return "", "", fmt.Errorf("WEBAPP_PUBLIC_URL is required")
+	}
+	webappURL, err := url.Parse(webappBase)
+	if err != nil || webappURL.Scheme == "" || webappURL.Host == "" {
+		return "", "", fmt.Errorf("WEBAPP_PUBLIC_URL must be an absolute URL")
+	}
+
+	baseURL := strings.TrimRight(webappURL.String(), "/") + "/account/billing"
+	trimmedReturnURL := strings.TrimSpace(requestedReturnURL)
+	if trimmedReturnURL != "" {
+		requestedURL, parseErr := url.Parse(trimmedReturnURL)
+		if parseErr != nil {
+			return "", "", fmt.Errorf("invalid return_url: %w", parseErr)
+		}
+		if requestedURL.IsAbs() {
+			if requestedURL.Scheme != webappURL.Scheme || requestedURL.Host != webappURL.Host {
+				return "", "", fmt.Errorf("return_url must use WEBAPP_PUBLIC_URL origin")
+			}
+			baseURL = requestedURL.String()
+		} else if strings.HasPrefix(trimmedReturnURL, "/") {
+			baseURL = webappURL.ResolveReference(requestedURL).String()
+		} else {
+			return "", "", fmt.Errorf("return_url must be absolute or root-relative")
+		}
+	}
+	successURL, err := withPaymentQuery(baseURL, "success")
+	if err != nil {
+		return "", "", err
+	}
+	cancelURL, err := withPaymentQuery(baseURL, "cancelled")
+	if err != nil {
+		return "", "", err
+	}
+	return successURL, cancelURL, nil
+}
+
+func withPaymentQuery(rawURL, status string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid return_url: %w", err)
+	}
+	q := u.Query()
+	q.Set("payment", status)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+func (s *PurserServer) attachCardCheckoutToPayment(ctx context.Context, paymentID, providerID, paymentURL string) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE purser.billing_payments
+		SET tx_id = $2, payment_url = $3, updated_at = NOW()
+		WHERE id = $1 AND status = 'pending'
+	`, paymentID, providerID, paymentURL)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("pending payment %s not found", paymentID)
+	}
+	return nil
+}
+
+func (s *PurserServer) markPaymentFailed(ctx context.Context, paymentID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE purser.billing_payments
+		SET status = 'failed', updated_at = NOW()
+		WHERE id = $1 AND status = 'pending'
+	`, paymentID)
+	return err
+}
+
+func lockInvoicePaymentTx(ctx context.Context, tx *sql.Tx, invoiceID, method string) error {
+	_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, invoiceID+":"+method)
+	return err
+}
+
+type pendingInvoicePayment struct {
+	ID        string
+	TxID      string
+	URL       sql.NullString
+	CreatedAt time.Time
+}
+
+func loadPendingInvoicePaymentTx(ctx context.Context, tx *sql.Tx, invoiceID, tenantID, method string) (*pendingInvoicePayment, error) {
+	var p pendingInvoicePayment
+	err := tx.QueryRowContext(ctx, `
+		SELECT bp.id, bp.tx_id, bp.payment_url, bp.created_at
+		FROM purser.billing_payments bp
+		JOIN purser.billing_invoices bi ON bi.id = bp.invoice_id AND bi.tenant_id = $3
+		WHERE bp.invoice_id = $1 AND bp.method = $2 AND bp.status = 'pending'
+		ORDER BY bp.created_at DESC
+		LIMIT 1
+	`, invoiceID, method, tenantID).Scan(&p.ID, &p.TxID, &p.URL, &p.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+func (s *PurserServer) expireStaleInvoiceCryptoPayments(ctx context.Context, invoiceID, tenantID, asset, method string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin expiration transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				s.logger.WithError(rollbackErr).Warn("Failed to roll back payment expiration transaction")
+			}
+		}
+	}()
+
+	if _, err = tx.ExecContext(ctx, `
+		UPDATE purser.billing_payments bp
+		SET status = 'failed', updated_at = NOW()
+		FROM purser.crypto_wallets cw
+		WHERE bp.invoice_id = cw.invoice_id
+		  AND bp.tx_id = cw.wallet_address
+		  AND bp.method = $4
+		  AND bp.status = 'pending'
+		  AND cw.invoice_id = $1
+		  AND cw.tenant_id = $2
+		  AND cw.asset = $3
+		  AND cw.purpose = 'invoice'
+		  AND cw.status IN ('pending', 'confirming')
+		  AND cw.expires_at <= NOW()
+	`, invoiceID, tenantID, asset, method); err != nil {
+		return fmt.Errorf("expire payment rows: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `
+		UPDATE purser.crypto_wallets
+		SET status = 'expired', updated_at = NOW()
+		WHERE invoice_id = $1
+		  AND tenant_id = $2
+		  AND asset = $3
+		  AND purpose = 'invoice'
+		  AND status IN ('pending', 'confirming')
+		  AND expires_at <= NOW()
+	`, invoiceID, tenantID, asset); err != nil {
+		return fmt.Errorf("expire wallet rows: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit expiration transaction: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// prepareCryptoPayment locks the invoice's token quote before any database writes.
+func (s *PurserServer) prepareCryptoPayment(ctx context.Context, invoiceID, tenantID, asset string, amount decimal.Decimal, currency string, expiresAt time.Time) (*cryptoPaymentPlan, error) {
 	switch asset {
-	case "ETH", "USDC", "LPT":
-		// OK - supported ETH-network assets
+	case "ETH", "USDC":
 	default:
-		return "", fmt.Errorf("unsupported crypto asset: %s (only ETH, USDC, LPT supported)", asset)
+		return nil, fmt.Errorf("unsupported crypto asset for invoice payment: %s", asset)
 	}
 
 	normalizedCurrency := strings.ToUpper(currency)
-	if normalizedCurrency != "USD" {
-		return "", fmt.Errorf("unsupported invoice currency for crypto payment: %s", normalizedCurrency)
+	if normalizedCurrency != "USD" && normalizedCurrency != "EUR" {
+		return nil, fmt.Errorf("unsupported invoice currency for crypto payment: %s", normalizedCurrency)
 	}
-	if asset != "USDC" {
-		return "", fmt.Errorf("unsupported crypto asset for fiat invoice: %s", asset)
+	amountCents := amount.Mul(decimal.NewFromInt(100)).Round(0).IntPart()
+	if amountCents <= 0 {
+		return nil, fmt.Errorf("invoice amount must be positive")
 	}
 
-	// Invoice path: USDC-only, settled on Arbitrum (consistent with x402).
-	walletID, walletAddress, err := s.hdwallet.GenerateDepositAddress(handlers.DepositAddressParams{
-		TenantID:  tenantID,
-		Purpose:   "invoice",
-		Asset:     asset,
-		Network:   "arbitrum",
-		ExpiresAt: expiresAt,
-		InvoiceID: &invoiceID,
-	})
+	networkName := defaultNetworkForAsset(asset)
+	if networkName == "" {
+		return nil, fmt.Errorf("no default network for asset %s", asset)
+	}
+	network, ok := handlers.Networks[networkName]
+	if !ok {
+		return nil, fmt.Errorf("unknown network %q", networkName)
+	}
+	tokenDecimals, ok := handlers.TokenDecimals(asset)
+	if !ok {
+		return nil, fmt.Errorf("unknown token decimals for %s", asset)
+	}
+	quote, expectedBaseUnits, err := s.buildDepositQuote(ctx, network, asset, normalizedCurrency, amountCents, tokenDecimals)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate deposit address: %w", err)
+		return nil, err
+	}
+
+	return &cryptoPaymentPlan{
+		Params: handlers.DepositAddressParams{
+			TenantID:  tenantID,
+			Purpose:   "invoice",
+			Asset:     asset,
+			Network:   networkName,
+			ExpiresAt: expiresAt,
+			InvoiceID: &invoiceID,
+			Quote:     quote,
+		},
+		ExpectedBaseUnits: expectedBaseUnits,
+		TokenDecimals:     tokenDecimals,
+		NetworkName:       networkName,
+		Asset:             asset,
+	}, nil
+}
+
+// createCryptoPaymentTx stores the wallet row inside the payment transaction.
+func (s *PurserServer) createCryptoPaymentTx(ctx context.Context, dbTx *sql.Tx, plan *cryptoPaymentPlan) (*cryptoPaymentQuoteDetails, error) {
+	walletID, walletAddress, err := s.hdwallet.GenerateDepositAddressTx(ctx, dbTx, plan.Params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate deposit address: %w", err)
+	}
+
+	expectedAmountToken := decimal.NewFromBigInt(plan.ExpectedBaseUnits, -plan.TokenDecimals).StringFixedBank(plan.TokenDecimals)
+	invoiceID := ""
+	if plan.Params.InvoiceID != nil {
+		invoiceID = *plan.Params.InvoiceID
 	}
 
 	s.logger.WithFields(map[string]interface{}{
-		"wallet_id":  walletID,
-		"invoice_id": invoiceID,
-		"tenant_id":  tenantID,
-		"asset":      asset,
-		"address":    walletAddress,
+		"wallet_id":   walletID,
+		"invoice_id":  invoiceID,
+		"tenant_id":   plan.Params.TenantID,
+		"asset":       plan.Asset,
+		"network":     plan.NetworkName,
+		"address":     walletAddress,
+		"quote_units": plan.ExpectedBaseUnits.String(),
 	}).Info("Created crypto payment address for invoice")
 
-	return walletAddress, nil
+	return &cryptoPaymentQuoteDetails{
+		WalletAddress:           walletAddress,
+		ExpectedAmountBaseUnits: plan.ExpectedBaseUnits.String(),
+		ExpectedAmountToken:     expectedAmountToken,
+		QuotedPriceUSD:          plan.Params.Quote.QuotedPriceUSD.String(),
+		QuoteSource:             plan.Params.Quote.QuoteSource,
+		AssetSymbol:             plan.Asset,
+		Network:                 plan.NetworkName,
+		QuotedAt:                plan.Params.Quote.QuotedAt,
+		ExpiresAt:               plan.Params.ExpiresAt,
+	}, nil
+}
+
+func (s *PurserServer) loadInvoiceCryptoPaymentQuote(ctx context.Context, invoiceID, tenantID, asset string) (*cryptoPaymentQuoteDetails, error) {
+	return loadInvoiceCryptoPaymentQuoteFrom(ctx, s.db, invoiceID, tenantID, asset)
+}
+
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func loadInvoiceCryptoPaymentQuoteFrom(ctx context.Context, q rowQuerier, invoiceID, tenantID, asset string) (*cryptoPaymentQuoteDetails, error) {
+	var details cryptoPaymentQuoteDetails
+	err := q.QueryRowContext(ctx, `
+		SELECT wallet_address, expected_amount_base_units::text, quoted_price_usd::text,
+		       quote_source, asset, network, quoted_at, expires_at
+		FROM purser.crypto_wallets
+		WHERE invoice_id = $1
+		  AND tenant_id = $2
+		  AND asset = $3
+		  AND purpose = 'invoice'
+		  AND status IN ('pending', 'confirming')
+		  AND expires_at > NOW()
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, invoiceID, tenantID, asset).Scan(
+		&details.WalletAddress,
+		&details.ExpectedAmountBaseUnits,
+		&details.QuotedPriceUSD,
+		&details.QuoteSource,
+		&details.AssetSymbol,
+		&details.Network,
+		&details.QuotedAt,
+		&details.ExpiresAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("pending crypto wallet not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	tokenDecimals, ok := handlers.TokenDecimals(details.AssetSymbol)
+	if !ok {
+		return nil, fmt.Errorf("unknown token decimals for %s", details.AssetSymbol)
+	}
+	baseUnits, ok := new(big.Int).SetString(details.ExpectedAmountBaseUnits, 10)
+	if !ok || baseUnits.Sign() <= 0 {
+		return nil, fmt.Errorf("invalid expected_amount_base_units")
+	}
+	details.ExpectedAmountToken = decimal.NewFromBigInt(baseUnits, -tokenDecimals).StringFixedBank(tokenDecimals)
+	return &details, nil
 }
 
 // GetPaymentMethods returns available payment methods for a tenant
@@ -1907,13 +2386,13 @@ func (s *PurserServer) GetBillingStatus(ctx context.Context, req *pb.GetBillingS
 	// Get pending invoices
 	pendingInvoices, err := s.getPendingInvoices(ctx, tenantID)
 	if err != nil {
-		s.logger.WithError(err).Info("Failed to get pending invoices")
+		return nil, status.Errorf(codes.Internal, "failed to get pending invoices: %v", err)
 	}
 
 	// Get recent payments
 	recentPayments, err := s.getRecentPayments(ctx, tenantID, 5)
 	if err != nil {
-		s.logger.WithError(err).Info("Failed to get recent payments")
+		return nil, status.Errorf(codes.Internal, "failed to get recent payments: %v", err)
 	}
 
 	// Get usage summary for current month
@@ -1939,6 +2418,7 @@ func (s *PurserServer) GetBillingStatus(ctx context.Context, req *pb.GetBillingS
 		PendingInvoices:   pendingInvoices,
 		RecentPayments:    recentPayments,
 		UsageSummary:      usageSummary,
+		PaymentMethods:    s.getAvailablePaymentMethods(ctx),
 	}
 
 	if subscription.GetNextBillingDate() != nil {
@@ -1968,8 +2448,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 	var dunningAttempts sql.NullInt32
 
 	// JSONB fields
-	var customPricing, customFeatures, customAllocations, billingAddress []byte
-	var bandwidthAlloc, storageAlloc, computeAlloc, features, overageRates []byte
+	var customFeatures, billingAddress, features []byte
 	var processesLive, processesVod sql.NullString
 
 	err := s.db.QueryRowContext(ctx, `
@@ -1977,7 +2456,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 			ts.id, ts.tenant_id, ts.tier_id, ts.status, ts.billing_email,
 			ts.started_at, ts.trial_ends_at, ts.next_billing_date, ts.cancelled_at,
 			ts.billing_period_start, ts.billing_period_end,
-			ts.custom_pricing, ts.custom_features, ts.custom_allocations,
+			ts.custom_features,
 			ts.payment_method, ts.payment_reference, ts.billing_address,
 			ts.tax_id, ts.tax_rate,
 			ts.billing_model,
@@ -1986,9 +2465,8 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 			ts.created_at, ts.updated_at,
 			bt.id, bt.tier_name, bt.display_name, bt.description,
 			bt.base_price, bt.currency, bt.billing_period,
-			bt.bandwidth_allocation, bt.storage_allocation, bt.compute_allocation,
 			bt.features, bt.support_level, bt.sla_level,
-			bt.metering_enabled, bt.overage_rates, bt.is_active,
+			bt.metering_enabled, bt.is_active,
 			bt.tier_level, bt.is_enterprise, bt.created_at, bt.updated_at,
 			bt.processes_live, bt.processes_vod
 		FROM purser.tenant_subscriptions ts
@@ -2000,7 +2478,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 		&subscription.Id, &subscription.TenantId, &subscription.TierId, &subscription.Status, &subscription.BillingEmail,
 		&subStartedAt, &trialEndsAt, &nextBillingDate, &cancelledAt,
 		&billingPeriodStart, &billingPeriodEnd,
-		&customPricing, &customFeatures, &customAllocations,
+		&customFeatures,
 		&paymentMethod, &paymentReference, &billingAddress,
 		&taxID, &taxRate,
 		&billingModel,
@@ -2009,15 +2487,14 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 		&subCreatedAt, &subUpdatedAt,
 		&tier.Id, &tier.TierName, &tier.DisplayName, &tier.Description,
 		&tier.BasePrice, &tier.Currency, &tier.BillingPeriod,
-		&bandwidthAlloc, &storageAlloc, &computeAlloc,
 		&features, &tier.SupportLevel, &tier.SlaLevel,
-		&tier.MeteringEnabled, &overageRates, &tier.IsActive,
+		&tier.MeteringEnabled, &tier.IsActive,
 		&tier.TierLevel, &tier.IsEnterprise, &tierCreatedAt, &tierUpdatedAt,
 		&processesLive, &processesVod)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithField("tenant_id", tenantID).Warn("getSubscriptionAndTier: NO SUBSCRIPTION FOUND - returning free tier fallback")
-		// Return default free tier
+		s.logger.WithField("tenant_id", tenantID).Warn("getSubscriptionAndTier: no active subscription")
+		// Return a no-subscription response with the public free-tier display.
 		return &pb.TenantSubscription{
 				TenantId: tenantID,
 				Status:   "none",
@@ -2094,19 +2571,39 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 	}
 
 	// Parse JSONB fields for subscription
-	subscription.CustomPricing = scanCustomPricing(customPricing)
 	subscription.CustomFeatures = scanBillingFeatures(customFeatures)
-	subscription.CustomAllocations = scanAllocationDetails(customAllocations)
 	subscription.BillingAddress = scanBillingAddress(billingAddress)
 
-	// Set tier timestamps and JSONB fields
+	// Load per-tenant pricing/entitlement overrides. Errors surface — a
+	// missing/broken override table must fail loudly, not silently return a
+	// subscription with empty overrides.
+	pricingOverrides, poErr := loadSubscriptionPricingOverrides(ctx, s.db, subscription.Id)
+	if poErr != nil {
+		return nil, nil, fmt.Errorf("load subscription pricing overrides: %w", poErr)
+	}
+	subscription.PricingOverrides = pricingOverrides
+	entOverrides, eoErr := loadSubscriptionEntitlementOverrides(ctx, s.db, subscription.Id)
+	if eoErr != nil {
+		return nil, nil, fmt.Errorf("load subscription entitlement overrides: %w", eoErr)
+	}
+	subscription.EntitlementOverrides = entOverrides
+
+	// Set tier timestamps and load pricing rules + entitlements from the new
+	// tables. Errors are surfaced — a missing/broken normalized table must
+	// fail loudly, not return a tier with empty pricing.
 	tier.CreatedAt = timestamppb.New(tierCreatedAt)
 	tier.UpdatedAt = timestamppb.New(tierUpdatedAt)
-	tier.BandwidthAllocation = scanAllocationDetails(bandwidthAlloc)
-	tier.StorageAllocation = scanAllocationDetails(storageAlloc)
-	tier.ComputeAllocation = scanAllocationDetails(computeAlloc)
 	tier.Features = scanBillingFeatures(features)
-	tier.OverageRates = scanOverageRates(overageRates)
+	rules, rulesErr := loadTierPricingRules(ctx, s.db, tier.Id)
+	if rulesErr != nil {
+		return nil, nil, fmt.Errorf("load pricing rules for tier %s: %w", tier.Id, rulesErr)
+	}
+	tier.PricingRules = rules
+	ents, entsErr := loadTierEntitlements(ctx, s.db, tier.Id)
+	if entsErr != nil {
+		return nil, nil, fmt.Errorf("load entitlements for tier %s: %w", tier.Id, entsErr)
+	}
+	tier.Entitlements = ents
 	if processesLive.Valid {
 		tier.ProcessesLive = processesLive.String
 	}
@@ -2117,13 +2614,13 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 	return &subscription, &tier, nil
 }
 
-// getPendingInvoices fetches pending invoices for a tenant
+// getPendingInvoices fetches invoices that can still be paid by the tenant.
 func (s *PurserServer) getPendingInvoices(ctx context.Context, tenantID string) ([]*pb.Invoice, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, tenant_id, amount, base_amount, metered_amount, currency, status,
+		SELECT id, tenant_id, amount, base_amount, metered_amount, prepaid_credit_applied, currency, status,
 		       due_date, paid_at, usage_details, created_at, updated_at, period_start, period_end
 		FROM purser.billing_invoices
-		WHERE tenant_id = $1 AND status = 'pending'
+		WHERE tenant_id = $1 AND status IN ('pending', 'overdue')
 		ORDER BY due_date ASC
 	`, tenantID)
 	if err != nil {
@@ -2141,9 +2638,10 @@ func (s *PurserServer) getPendingInvoices(ctx context.Context, tenantID string) 
 		var periodStart, periodEnd sql.NullTime
 
 		err := rows.Scan(&inv.Id, &inv.TenantId, &inv.Amount, &baseAmount, &meteredAmount,
-			&inv.Currency, &inv.Status, &dueDate, &paidAt, &usageDetails, &createdAt, &updatedAt, &periodStart, &periodEnd)
+			&inv.PrepaidCreditApplied, &inv.Currency, &inv.Status, &dueDate, &paidAt, &usageDetails,
+			&createdAt, &updatedAt, &periodStart, &periodEnd)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("scan pending invoice row: %w", err)
 		}
 
 		inv.DueDate = timestamppb.New(dueDate)
@@ -2170,8 +2668,16 @@ func (s *PurserServer) getPendingInvoices(ctx context.Context, tenantID string) 
 				inv.UsageDetails = mapToProtoStruct(details)
 			}
 		}
+		lineItems, lineErr := s.loadInvoiceLineItems(ctx, inv.Id, inv.TenantId)
+		if lineErr != nil {
+			return nil, lineErr
+		}
+		inv.LineItems = lineItems
 
 		invoices = append(invoices, &inv)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending invoice rows: %w", err)
 	}
 
 	return invoices, nil
@@ -2203,7 +2709,7 @@ func (s *PurserServer) getRecentPayments(ctx context.Context, tenantID string, l
 		err := rows.Scan(&pay.Id, &pay.InvoiceId, &pay.Method, &pay.Amount, &pay.Currency,
 			&txID, &pay.Status, &confirmedAt, &createdAt, &updatedAt)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("scan recent payment row: %w", err)
 		}
 
 		if txID.Valid {
@@ -2216,6 +2722,9 @@ func (s *PurserServer) getRecentPayments(ctx context.Context, tenantID string, l
 		}
 
 		payments = append(payments, &pay)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recent payment rows: %w", err)
 	}
 
 	return payments, nil
@@ -2247,6 +2756,7 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 	var streamHours, viewerHours, egressGb, peakBandwidthMbps, averageStorageGb float64
 	var livepeerH264, livepeerVp9, livepeerAv1, livepeerHevc float64
 	var nativeAvH264, nativeAvVp9, nativeAvAv1, nativeAvHevc, nativeAvAac, nativeAvOpus float64
+	var gpuHours float64
 	var totalStreams, totalViewers, maxViewers, uniqueUsers int32
 
 	err := s.db.QueryRowContext(ctx, `
@@ -2266,6 +2776,7 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 			COALESCE(SUM(CASE WHEN usage_type = 'native_av_hevc_seconds' THEN usage_value ELSE 0 END), 0) as native_av_hevc_seconds,
 			COALESCE(SUM(CASE WHEN usage_type = 'native_av_aac_seconds' THEN usage_value ELSE 0 END), 0) as native_av_aac_seconds,
 			COALESCE(SUM(CASE WHEN usage_type = 'native_av_opus_seconds' THEN usage_value ELSE 0 END), 0) as native_av_opus_seconds,
+			COALESCE(SUM(CASE WHEN usage_type = 'gpu_hours' THEN usage_value ELSE 0 END), 0) as gpu_hours,
 			COALESCE(MAX(CASE WHEN usage_type = 'total_streams' THEN usage_value ELSE 0 END), 0)::int as total_streams,
 			COALESCE(MAX(CASE WHEN usage_type = 'total_viewers' THEN usage_value ELSE 0 END), 0)::int as total_viewers,
 			COALESCE(MAX(CASE WHEN usage_type = 'max_viewers' THEN usage_value ELSE 0 END), 0)::int as max_viewers,
@@ -2276,6 +2787,7 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 		&streamHours, &viewerHours, &egressGb, &peakBandwidthMbps, &averageStorageGb,
 		&livepeerH264, &livepeerVp9, &livepeerAv1, &livepeerHevc,
 		&nativeAvH264, &nativeAvVp9, &nativeAvAv1, &nativeAvHevc, &nativeAvAac, &nativeAvOpus,
+		&gpuHours,
 		&totalStreams, &totalViewers, &maxViewers, &uniqueUsers,
 	)
 	if err != nil {
@@ -2308,30 +2820,13 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 		NativeAvHevcSeconds: nativeAvHevc,
 		NativeAvAacSeconds:  nativeAvAac,
 		NativeAvOpusSeconds: nativeAvOpus,
+		GpuHours:            gpuHours,
 		TotalStreams:        totalStreams,
 		TotalViewers:        totalViewers,
 		ViewerHours:         viewerHours,
 		MaxViewers:          maxViewers,
 		UniqueUsers:         uniqueUsers,
 	}, nil
-}
-
-// scanCustomPricing scans JSONB into CustomPricing proto
-func scanCustomPricing(data []byte) *pb.CustomPricing {
-	if len(data) == 0 {
-		return nil
-	}
-	var raw struct {
-		BasePrice    float64 `json:"base_price"`
-		DiscountRate float64 `json:"discount_rate"`
-	}
-	if json.Unmarshal(data, &raw) != nil {
-		return nil
-	}
-	return &pb.CustomPricing{
-		BasePrice:    raw.BasePrice,
-		DiscountRate: raw.DiscountRate,
-	}
 }
 
 // scanBillingAddress scans JSONB into BillingAddress proto
@@ -2386,13 +2881,22 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *pb.TenantUsageRe
 		return nil, status.Error(codes.InvalidArgument, "start_date and end_date required")
 	}
 
-	// Query aggregated usage by type using precise timestamp boundaries
+	// Query aggregated usage by type using precise timestamp boundaries.
+	// Aggregation must match invoice generation (jobs.go:generateMonthlyInvoices)
+	// or preview will disagree with the actual bill: AVG storage / MAX peak /
+	// SUM everything else.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT usage_type, SUM(usage_value) as total
+		SELECT usage_type,
+		       CASE
+		           WHEN usage_type = 'average_storage_gb' THEN AVG(usage_value)
+		           WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers') THEN MAX(usage_value)
+		           ELSE SUM(usage_value)
+		       END AS total
 		FROM purser.usage_records
 		WHERE tenant_id = $1
 		  AND period_start < ($3::date + INTERVAL '1 day')
 		  AND period_end > $2::date
+		  AND usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
 		GROUP BY usage_type
 	`, tenantID, startDate, endDate)
 	if err != nil {
@@ -2401,97 +2905,78 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *pb.TenantUsageRe
 	defer func() { _ = rows.Close() }()
 
 	usage := make(map[string]float64)
-	costs := make(map[string]float64)
-	var totalCost float64
-
-	var viewerHours, averageStorageGb, gpuHours float64
-
 	for rows.Next() {
 		var usageType string
 		var total float64
-		if err := rows.Scan(&usageType, &total); err != nil {
-			continue
+		if scanErr := rows.Scan(&usageType, &total); scanErr != nil {
+			return nil, status.Errorf(codes.Internal, "scan usage row: %v", scanErr)
 		}
 		usage[usageType] = total
-		switch usageType {
-		case "viewer_hours":
-			viewerHours = total
-		case "average_storage_gb":
-			averageStorageGb = total
-		case "gpu_hours":
-			gpuHours = total
-		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, status.Errorf(codes.Internal, "iterate usage rows: %v", rowsErr)
 	}
 
-	// Compute usage-based costs from tier/subscription configuration (metered only)
-	if subscription, tier, err := s.getSubscriptionAndTier(ctx, tenantID); err == nil && tier != nil && tier.GetMeteringEnabled() {
-		effectiveBandwidthAllocation := tier.GetBandwidthAllocation()
-		effectiveStorageAllocation := tier.GetStorageAllocation()
-		effectiveOverageRates := tier.GetOverageRates()
-
-		if subscription != nil {
-			if subscription.CustomAllocations != nil && subscription.CustomAllocations.Limit != nil {
-				effectiveBandwidthAllocation = subscription.CustomAllocations
-			}
-			if subscription.CustomPricing != nil && subscription.CustomPricing.OverageRates != nil {
-				if subscription.CustomPricing.OverageRates.Bandwidth != nil && subscription.CustomPricing.OverageRates.Bandwidth.UnitPrice > 0 {
-					effectiveOverageRates.Bandwidth = subscription.CustomPricing.OverageRates.Bandwidth
-				}
-				if subscription.CustomPricing.OverageRates.Storage != nil && subscription.CustomPricing.OverageRates.Storage.UnitPrice > 0 {
-					effectiveOverageRates.Storage = subscription.CustomPricing.OverageRates.Storage
-				}
-				if subscription.CustomPricing.OverageRates.Compute != nil && subscription.CustomPricing.OverageRates.Compute.UnitPrice > 0 {
-					effectiveOverageRates.Compute = subscription.CustomPricing.OverageRates.Compute
-				}
-			}
-		}
-
-		// Bandwidth: billed on delivered minutes (viewer_hours * 60)
-		if effectiveBandwidthAllocation != nil && effectiveOverageRates != nil && effectiveOverageRates.Bandwidth != nil {
-			if effectiveBandwidthAllocation.Limit != nil && effectiveOverageRates.Bandwidth.UnitPrice > 0 {
-				deliveredMinutes := viewerHours * 60
-				billableMinutes := deliveredMinutes - *effectiveBandwidthAllocation.Limit
-				if billableMinutes > 0 {
-					cost := billableMinutes * effectiveOverageRates.Bandwidth.UnitPrice
-					costs["viewer_hours"] = cost
-					totalCost += cost
-				}
-			}
-		}
-
-		storageUsage := averageStorageGb
-		if effectiveStorageAllocation != nil && effectiveOverageRates != nil && effectiveOverageRates.Storage != nil {
-			if effectiveStorageAllocation.Limit != nil && effectiveOverageRates.Storage.UnitPrice > 0 {
-				billableStorage := storageUsage - *effectiveStorageAllocation.Limit
-				if billableStorage > 0 {
-					cost := billableStorage * effectiveOverageRates.Storage.UnitPrice
-					costs["average_storage_gb"] = cost
-					totalCost += cost
-				}
-			}
-		}
-
-		// Compute: bill all GPU hours if configured
-		if gpuHours > 0 && effectiveOverageRates != nil && effectiveOverageRates.Compute != nil && effectiveOverageRates.Compute.UnitPrice > 0 {
-			cost := gpuHours * effectiveOverageRates.Compute.UnitPrice
-			costs["gpu_hours"] = cost
-			totalCost += cost
-		}
-	}
-
-	return &pb.TenantUsageResponse{
+	// Rate via the engine. Same path as monthly invoice / draft / prepaid;
+	// this is the only place that turns metered usage into cost. Errors
+	// surface — a broken effective-tier load or rating call must NOT silently
+	// return a zero-cost response that would mask billing breakage.
+	tier, err := billingpkg.LoadEffectiveTier(ctx, s.db, tenantID)
+	currency := billing.DefaultCurrency()
+	resp := &pb.TenantUsageResponse{
 		TenantId:      tenantID,
 		BillingPeriod: startDate + " to " + endDate,
 		Usage:         usage,
-		Costs:         costs,
-		TotalCost:     totalCost,
-		Currency:      billing.DefaultCurrency(),
-	}, nil
+		Costs:         map[string]float64{},
+		Currency:      currency,
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		// No subscription is a legitimate steady state, not a billing failure.
+		return resp, nil
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "load effective tier: %v", err)
+	}
+	resp.Currency = tier.Currency
+
+	if !tier.MeteringEnabled {
+		return resp, nil
+	}
+
+	in := buildRatingInputForUsage(usage, tier)
+	res, err := rating.Rate(in)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "rate usage: %v", err)
+	}
+	// Preview line_items are metered only — base subscription is a fixed
+	// monthly fee separately surfaced via BaseAmount, not a per-period charge.
+	for _, line := range res.UsageLines {
+		resp.LineItems = append(resp.LineItems, lineItemToProto(line))
+		amount, _ := line.Amount.Float64()
+		if line.Meter != "" {
+			resp.Costs[string(line.Meter)] += amount
+		}
+	}
+	resp.BaseAmount = res.BaseAmount.String()
+	resp.UsageAmount = res.UsageAmount.String()
+	resp.TotalCost, _ = res.UsageAmount.Float64() // = sum of line_items, matches Costs map
+	return resp, nil
 }
 
 // ============================================================================
 // CLUSTER PRICING SERVICE
 // ============================================================================
+
+func formatOptionalMoney(raw sql.NullString) (string, error) {
+	if !raw.Valid {
+		return "", nil
+	}
+	value, err := decimal.NewFromString(raw.String)
+	if err != nil {
+		return "", err
+	}
+	return value.Round(2).StringFixed(2), nil
+}
 
 // GetClusterPricing retrieves pricing configuration for a cluster
 func (s *PurserServer) GetClusterPricing(ctx context.Context, req *pb.GetClusterPricingRequest) (*pb.ClusterPricing, error) {
@@ -2501,7 +2986,7 @@ func (s *PurserServer) GetClusterPricing(ctx context.Context, req *pb.GetCluster
 	}
 
 	var pricing pb.ClusterPricing
-	var basePrice sql.NullFloat64
+	var basePrice sql.NullString
 	var currency sql.NullString
 	var stripeProductID, stripePriceIDMonthly, stripeMeterID sql.NullString
 	var meteredRatesJSON, defaultQuotasJSON []byte
@@ -2510,7 +2995,7 @@ func (s *PurserServer) GetClusterPricing(ctx context.Context, req *pb.GetCluster
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, cluster_id, pricing_model,
 		       stripe_product_id, stripe_price_id_monthly, stripe_meter_id,
-		       base_price, currency, metered_rates,
+		       base_price::text, currency, metered_rates,
 		       required_tier_level, allow_free_tier,
 		       default_quotas, created_at, updated_at
 		FROM purser.cluster_pricing
@@ -2551,7 +3036,11 @@ func (s *PurserServer) GetClusterPricing(ctx context.Context, req *pb.GetCluster
 		pricing.StripeMeterId = &stripeMeterID.String
 	}
 	if basePrice.Valid {
-		pricing.BasePrice = fmt.Sprintf("%.2f", basePrice.Float64)
+		formattedBasePrice, formatErr := formatOptionalMoney(basePrice)
+		if formatErr != nil {
+			return nil, status.Errorf(codes.Internal, "invalid base_price: %v", formatErr)
+		}
+		pricing.BasePrice = formattedBasePrice
 	}
 	if currency.Valid {
 		pricing.Currency = currency.String
@@ -2614,7 +3103,7 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 	query := fmt.Sprintf(`
 		SELECT id, cluster_id, pricing_model,
 		       stripe_product_id, stripe_price_id_monthly, stripe_meter_id,
-		       base_price, currency, metered_rates,
+		       base_price::text, currency, metered_rates,
 		       required_tier_level, allow_free_tier,
 		       default_quotas, created_at, updated_at
 		FROM purser.cluster_pricing
@@ -2631,7 +3120,7 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 
 	for rows.Next() {
 		var pricing pb.ClusterPricing
-		var basePrice sql.NullFloat64
+		var basePrice sql.NullString
 		var currency sql.NullString
 		var stripeProductID, stripePriceIDMonthly, stripeMeterID sql.NullString
 		var meteredRatesJSON, defaultQuotasJSON []byte
@@ -2658,7 +3147,11 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 			pricing.StripeMeterId = &stripeMeterID.String
 		}
 		if basePrice.Valid {
-			pricing.BasePrice = fmt.Sprintf("%.2f", basePrice.Float64)
+			formattedBasePrice, formatErr := formatOptionalMoney(basePrice)
+			if formatErr != nil {
+				return nil, status.Errorf(codes.Internal, "invalid base_price: %v", formatErr)
+			}
+			pricing.BasePrice = formattedBasePrice
 		}
 		if currency.Valid {
 			pricing.Currency = currency.String
@@ -2758,12 +3251,13 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *pb.SetCluster
 	}
 
 	// Build upsert query
-	var basePrice sql.NullFloat64
+	var basePrice sql.NullString
 	if req.BasePrice != nil {
-		var f float64
-		if _, err := fmt.Sscanf(*req.BasePrice, "%f", &f); err == nil {
-			basePrice = sql.NullFloat64{Float64: f, Valid: true}
+		parsedBasePrice, err := decimal.NewFromString(*req.BasePrice)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid base_price: %v", err)
 		}
+		basePrice = sql.NullString{String: parsedBasePrice.Round(2).StringFixed(2), Valid: true}
 	}
 
 	currency := "EUR"
@@ -2836,7 +3330,7 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 	query := `
 		SELECT id, cluster_id, pricing_model,
 		       stripe_product_id, stripe_price_id_monthly, stripe_meter_id,
-		       base_price, currency, metered_rates,
+		       base_price::text, currency, metered_rates,
 		       required_tier_level, allow_free_tier,
 		       default_quotas, created_at, updated_at
 		FROM purser.cluster_pricing
@@ -2905,7 +3399,7 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 	var pricings []*pb.ClusterPricing
 	for rows.Next() {
 		var pricing pb.ClusterPricing
-		var basePrice sql.NullFloat64
+		var basePrice sql.NullString
 		var currency sql.NullString
 		var stripeProductID, stripePriceIDMonthly, stripeMeterID sql.NullString
 		var meteredRatesJSON, defaultQuotasJSON []byte
@@ -2918,7 +3412,7 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 			&pricing.RequiredTierLevel, &pricing.AllowFreeTier,
 			&defaultQuotasJSON, &createdAt, &updatedAt,
 		); err != nil {
-			continue
+			return nil, status.Errorf(codes.Internal, "scan cluster pricing: %v", err)
 		}
 
 		// Map optional fields
@@ -2932,7 +3426,11 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 			pricing.StripeMeterId = &stripeMeterID.String
 		}
 		if basePrice.Valid {
-			pricing.BasePrice = fmt.Sprintf("%.2f", basePrice.Float64)
+			formattedBasePrice, formatErr := formatOptionalMoney(basePrice)
+			if formatErr != nil {
+				return nil, status.Errorf(codes.Internal, "invalid base_price: %v", formatErr)
+			}
+			pricing.BasePrice = formattedBasePrice
 		}
 		if currency.Valid {
 			pricing.Currency = currency.String
@@ -3133,7 +3631,6 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.Cr
 		sess, err := s.stripeClient.CreateCheckoutSession(ctx, stripe.CheckoutSessionParams{
 			CustomerID:  cust.ID,
 			TenantID:    tenantID,
-			TierID:      clusterID, // For backward compatibility only
 			Purpose:     "cluster_subscription",
 			ReferenceID: clusterID,
 			ClusterID:   clusterID,
@@ -3309,7 +3806,7 @@ func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *
 	}
 
 	query := fmt.Sprintf(`
-		SELECT cluster_id, pricing_model, base_price, currency,
+		SELECT cluster_id, pricing_model, base_price::text, currency,
 		       required_tier_level, created_at
 		FROM purser.cluster_pricing
 		%s %s LIMIT $%d`,
@@ -3325,7 +3822,7 @@ func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *
 	var pricings []*pb.MarketplaceClusterPricing
 	for rows.Next() {
 		var p pb.MarketplaceClusterPricing
-		var basePrice sql.NullFloat64
+		var basePrice sql.NullString
 		var currency sql.NullString
 		var createdAt time.Time
 
@@ -3333,12 +3830,15 @@ func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *
 			&p.ClusterId, &p.PricingModel, &basePrice, &currency,
 			&p.RequiredTierLevel, &createdAt,
 		); err != nil {
-			s.logger.WithError(err).Warn("Failed to scan cluster pricing row")
-			continue
+			return nil, status.Errorf(codes.Internal, "scan marketplace cluster pricing: %v", err)
 		}
 
 		if basePrice.Valid {
-			p.MonthlyPriceCents = int32(basePrice.Float64 * 100)
+			value, err := decimal.NewFromString(basePrice.String)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "invalid base_price: %v", err)
+			}
+			p.MonthlyPriceCents = int32(value.Mul(decimal.NewFromInt(100)).Round(0).IntPart())
 		}
 		if currency.Valid {
 			p.Currency = currency.String
@@ -4460,9 +4960,9 @@ func (s *PurserServer) ListPendingTopups(ctx context.Context, req *pb.ListPendin
 // CRYPTO TOP-UP
 // ============================================================================
 
-// defaultNetworkForAsset returns the network on which a prepaid top-up of the
-// given asset is settled when the request doesn't override it. Arbitrum
-// across the board: cheap, fast, has the Chainlink ETH/USD feed and USDC.
+// defaultNetworkForAsset returns the network on which an invoice payment or
+// prepaid top-up of the given asset is settled. Arbitrum across the board:
+// cheap, fast, has the Chainlink ETH/USD feed and USDC.
 func defaultNetworkForAsset(asset string) string {
 	switch asset {
 	case "ETH", "USDC":
@@ -4470,6 +4970,46 @@ func defaultNetworkForAsset(asset string) string {
 	default:
 		return ""
 	}
+}
+
+func (s *PurserServer) buildDepositQuote(ctx context.Context, network handlers.NetworkConfig, asset, currency string, amountCents int64, tokenDecimals int32) (*handlers.DepositQuote, *big.Int, error) {
+	priceQuote, err := s.priceFeed.GetAssetUSDPrice(ctx, network, asset)
+	if err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"asset":   asset,
+			"network": network.Name,
+		}).Error("Failed to read asset USD price")
+		return nil, nil, fmt.Errorf("price feed unavailable for %s: %w", asset, err)
+	}
+
+	var quotedUSDToEURRate *decimal.Decimal
+	usdCents := decimal.NewFromInt(amountCents)
+	if currency == "EUR" {
+		rate, rateErr := handlers.GetEurUsdRate(s.logger)
+		if rateErr != nil {
+			return nil, nil, fmt.Errorf("EUR rate unavailable: %w", rateErr)
+		}
+		rateDec := decimal.NewFromFloat(rate)
+		quotedUSDToEURRate = &rateDec
+		usdCents = decimal.NewFromInt(amountCents).Div(rateDec)
+	}
+
+	amountUSD := usdCents.Div(decimal.NewFromInt(100))
+	amountToken := amountUSD.Div(priceQuote.PriceUSD)
+	expectedBaseUnitsDec := amountToken.Mul(decimal.New(1, tokenDecimals))
+	expectedBaseUnits := expectedBaseUnitsDec.Ceil().BigInt()
+	if expectedBaseUnits.Sign() <= 0 {
+		return nil, nil, fmt.Errorf("computed deposit amount is zero")
+	}
+
+	return &handlers.DepositQuote{
+		ExpectedAmountBaseUnits: expectedBaseUnits,
+		QuotedPriceUSD:          priceQuote.PriceUSD,
+		QuotedUSDToEURRate:      quotedUSDToEURRate,
+		QuotedAt:                time.Now(),
+		QuoteSource:             priceQuote.Source,
+		CreditedAmountCurrency:  currency,
+	}, expectedBaseUnits, nil
 }
 
 // CreateCryptoTopup generates an HD-derived deposit address for prepaid balance top-up.
@@ -4527,41 +5067,9 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryp
 		return nil, status.Errorf(codes.Internal, "unknown token decimals for %s", assetStr)
 	}
 
-	// Lock the USD price + (if EUR) ECB rate at quote time.
-	priceQuote, err := s.priceFeed.GetAssetUSDPrice(ctx, network, assetStr)
+	quote, expectedBaseUnits, err := s.buildDepositQuote(ctx, network, assetStr, normalizedCurrency, expectedAmountCents, tokenDecimals)
 	if err != nil {
-		s.logger.WithError(err).WithFields(logging.Fields{
-			"asset":   assetStr,
-			"network": networkName,
-		}).Error("Failed to read asset USD price")
-		return nil, status.Errorf(codes.Unavailable, "price feed unavailable for %s: %v", assetStr, err)
-	}
-
-	// Compute USD value the user wants credited. EUR top-ups convert input
-	// cents to USD via the locked ECB rate so the on-chain quote (Chainlink
-	// is USD-denominated) is anchored at the same rate that's used at credit.
-	var quotedUSDToEURRate *decimal.Decimal
-	usdCents := decimal.NewFromInt(expectedAmountCents)
-	if normalizedCurrency == "EUR" {
-		rate, rateErr := handlers.GetEurUsdRate(s.logger)
-		if rateErr != nil {
-			return nil, status.Errorf(codes.Unavailable, "EUR rate unavailable: %v", rateErr)
-		}
-		rateDec := decimal.NewFromFloat(rate)
-		quotedUSDToEURRate = &rateDec
-		// rate is EUR per USD; usdCents = eurCents / rate
-		usdCents = decimal.NewFromInt(expectedAmountCents).Div(rateDec)
-	}
-
-	// Token base units = (usdCents / 100) / priceUSD * 10^tokenDecimals
-	// Ceiling so we never quote less than the user asked for; small overpay
-	// (sub-base-unit) is fine.
-	amountUSD := usdCents.Div(decimal.NewFromInt(100))
-	amountToken := amountUSD.Div(priceQuote.PriceUSD)
-	expectedBaseUnitsDec := amountToken.Mul(decimal.New(1, tokenDecimals))
-	expectedBaseUnits := expectedBaseUnitsDec.Ceil().BigInt()
-	if expectedBaseUnits.Sign() <= 0 {
-		return nil, status.Error(codes.InvalidArgument, "computed deposit amount is zero (raise expected_amount_cents)")
+		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 
 	now := time.Now()
@@ -4574,14 +5082,7 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryp
 		Network:             networkName,
 		ExpiresAt:           expiresAt,
 		ExpectedAmountCents: &expectedAmountCents,
-		Quote: &handlers.DepositQuote{
-			ExpectedAmountBaseUnits: expectedBaseUnits,
-			QuotedPriceUSD:          priceQuote.PriceUSD,
-			QuotedUSDToEURRate:      quotedUSDToEURRate,
-			QuotedAt:                now,
-			QuoteSource:             priceQuote.Source,
-			CreditedAmountCurrency:  normalizedCurrency,
-		},
+		Quote:               quote,
 	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to generate deposit address")
@@ -4600,8 +5101,8 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryp
 		"address":               address,
 		"expected_cents":        expectedAmountCents,
 		"expected_amount_token": expectedAmountToken,
-		"quoted_price_usd":      priceQuote.PriceUSD.String(),
-		"quote_source":          priceQuote.Source,
+		"quoted_price_usd":      quote.QuotedPriceUSD.String(),
+		"quote_source":          quote.QuoteSource,
 	}).Info("Created crypto top-up deposit address")
 
 	s.emitBillingEvent(ctx, eventTopupCreated, tenantID, userID, "topup", walletID, &pb.BillingEvent{
@@ -4623,9 +5124,9 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryp
 		ExpiresAt:               timestamppb.New(expiresAt),
 		ExpectedAmountBaseUnits: expectedBaseUnits.String(),
 		ExpectedAmountToken:     expectedAmountToken,
-		QuotedPriceUsd:          priceQuote.PriceUSD.String(),
-		QuoteSource:             priceQuote.Source,
-		QuotedAt:                timestamppb.New(now),
+		QuotedPriceUsd:          quote.QuotedPriceUSD.String(),
+		QuoteSource:             quote.QuoteSource,
+		QuotedAt:                timestamppb.New(quote.QuotedAt),
 		Network:                 networkName,
 	}, nil
 }
@@ -5116,17 +5617,22 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 	}
 
 	// Get tier price
-	var basePrice float64
+	var basePriceText string
 	var currency, tierName string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT tier_name, base_price, currency FROM purser.billing_tiers WHERE id = $1
-	`, tierID).Scan(&tierName, &basePrice, &currency)
+		SELECT tier_name, base_price::text, currency FROM purser.billing_tiers WHERE id = $1
+	`, tierID).Scan(&tierName, &basePriceText, &currency)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "tier not found: %s", tierID)
 	}
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to get billing tier")
 		return nil, status.Error(codes.Internal, "failed to get billing tier")
+	}
+	basePrice, err := decimal.NewFromString(basePriceText)
+	if err != nil {
+		s.logger.WithError(err).WithField("tier_id", tierID).Error("Failed to parse billing tier base price")
+		return nil, status.Error(codes.Internal, "failed to parse billing tier price")
 	}
 
 	// Get or create Mollie customer
@@ -5193,7 +5699,7 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 		CustomerID:  mollieCustomerID,
 		TenantID:    tenantID,
 		TierID:      tierID,
-		Amount:      mollie.Amount(fmt.Sprintf("%.2f", basePrice), currency),
+		Amount:      mollie.Amount(basePrice.Round(2).StringFixed(2), currency),
 		Description: fmt.Sprintf("Subscription setup: %s", tierName),
 		Method:      getMolliePaymentMethod(method),
 		RedirectURL: redirectURL,
@@ -5264,17 +5770,22 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.Cre
 	}
 
 	// Get tier price
-	var basePrice float64
+	var basePriceText string
 	var currency, tierName string
 	err = s.db.QueryRowContext(ctx, `
-		SELECT tier_name, base_price, currency FROM purser.billing_tiers WHERE id = $1
-	`, tierID).Scan(&tierName, &basePrice, &currency)
+		SELECT tier_name, base_price::text, currency FROM purser.billing_tiers WHERE id = $1
+	`, tierID).Scan(&tierName, &basePriceText, &currency)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "tier not found: %s", tierID)
 	}
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to get billing tier")
 		return nil, status.Error(codes.Internal, "failed to get billing tier")
+	}
+	basePrice, err := decimal.NewFromString(basePriceText)
+	if err != nil {
+		s.logger.WithError(err).WithField("tier_id", tierID).Error("Failed to parse billing tier base price")
+		return nil, status.Error(codes.Internal, "failed to parse billing tier price")
 	}
 
 	// Build webhook URL
@@ -5289,7 +5800,7 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.Cre
 		CustomerID:  mollieCustomerID,
 		TenantID:    tenantID,
 		TierID:      tierID,
-		Amount:      mollie.Amount(fmt.Sprintf("%.2f", basePrice), currency),
+		Amount:      mollie.Amount(basePrice.Round(2).StringFixed(2), currency),
 		Interval:    "1 month",
 		Description: fmt.Sprintf("Subscription: %s", tierName),
 		WebhookURL:  webhookURL,
@@ -5808,6 +6319,7 @@ func parseUsageDetailsToSummary(usageDetails map[string]interface{}, tenantID st
 		NativeAvHevcSeconds: floatFromUsage(usageDetails, "native_av_hevc_seconds"),
 		NativeAvAacSeconds:  floatFromUsage(usageDetails, "native_av_aac_seconds"),
 		NativeAvOpusSeconds: floatFromUsage(usageDetails, "native_av_opus_seconds"),
+		GpuHours:            floatFromUsage(usageDetails, "gpu_hours"),
 		TotalStreams:        int32(floatFromUsage(usageDetails, "total_streams")),
 		TotalViewers:        int32(floatFromUsage(usageDetails, "total_viewers")),
 		ViewerHours:         floatFromUsage(usageDetails, "viewer_hours"),
@@ -5825,93 +6337,40 @@ func parseUsageDetailsToSummary(usageDetails map[string]interface{}, tenantID st
 	return summary
 }
 
-// generateInvoiceLineItems creates typed line items from usage and tier info
-func generateInvoiceLineItems(usageDetails map[string]interface{}, baseAmount, meteredAmount float64) []*pb.LineItem {
-	var items []*pb.LineItem
-
-	// 1. Base tier line item
-	tierName := "Service"
-	if tierInfo, ok := usageDetails["tier_info"].(map[string]interface{}); ok {
-		if dn, ok := tierInfo["display_name"].(string); ok && dn != "" {
-			tierName = dn
+// loadInvoiceLineItems reads persisted line items from purser.invoice_line_items.
+// New invoices always populate this table via the rating engine; an empty result
+// for an invoice is itself an integrity signal — the writer is supposed to
+// upsert line items in the same transaction as the invoice header.
+//
+// tenantID is required: line items are tenant-scoped financial-audit rows and
+// reads must filter by tenant per the cross-service tenant rule.
+func (s *PurserServer) loadInvoiceLineItems(ctx context.Context, invoiceID, tenantID string) ([]*pb.LineItem, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT line_key, COALESCE(meter, ''), description,
+		       quantity::text, included_quantity::text, billable_quantity::text,
+		       unit_price::text, amount::text, currency
+		FROM purser.invoice_line_items
+		WHERE invoice_id = $1 AND tenant_id = $2
+		ORDER BY (line_key = 'base_subscription') DESC, line_key ASC
+	`, invoiceID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("query line items for invoice %s: %w", invoiceID, err)
+	}
+	defer rows.Close()
+	items := []*pb.LineItem{}
+	for rows.Next() {
+		var li pb.LineItem
+		if scanErr := rows.Scan(&li.LineKey, &li.Meter, &li.Description,
+			&li.Quantity, &li.IncludedQuantity, &li.BillableQuantity,
+			&li.UnitPrice, &li.Total, &li.Currency); scanErr != nil {
+			return nil, fmt.Errorf("scan line item for invoice %s: %w", invoiceID, scanErr)
 		}
+		items = append(items, &li)
 	}
-	items = append(items, &pb.LineItem{
-		Description: tierName + " Tier",
-		Quantity:    1,
-		UnitPrice:   baseAmount,
-		Total:       baseAmount,
-	})
-
-	// 2. Usage metrics (informational, zero price)
-	usageMetrics := []struct {
-		key         string
-		displayName string
-		multiplier  float64
-	}{
-		{"viewer_hours", "Delivered Minutes", 60},
-		{"average_storage_gb", "Storage (GB)", 1},
-		{"stream_hours", "Stream Hours", 1},
-		{"egress_gb", "Egress (GB)", 1},
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("iterate line items for invoice %s: %w", invoiceID, rowsErr)
 	}
-
-	for _, m := range usageMetrics {
-		val := floatFromUsage(usageDetails, m.key)
-		if val > 0 {
-			displayVal := val * m.multiplier
-			items = append(items, &pb.LineItem{
-				Description: m.displayName,
-				Quantity:    int32(displayVal),
-				UnitPrice:   0,
-				Total:       0,
-			})
-		}
-	}
-
-	// 3. Processing/transcoding line items (informational)
-	codecMetrics := []struct {
-		key         string
-		displayName string
-	}{
-		{"livepeer_h264_seconds", "H264 Transcoding"},
-		{"livepeer_vp9_seconds", "VP9 Transcoding"},
-		{"livepeer_av1_seconds", "AV1 Transcoding"},
-		{"livepeer_hevc_seconds", "HEVC Transcoding"},
-		{"native_av_h264_seconds", "H264 Processing"},
-		{"native_av_vp9_seconds", "VP9 Processing"},
-		{"native_av_av1_seconds", "AV1 Processing"},
-		{"native_av_hevc_seconds", "HEVC Processing"},
-		{"native_av_aac_seconds", "AAC Transcoding"},
-		{"native_av_opus_seconds", "Opus Transcoding"},
-	}
-
-	for _, m := range codecMetrics {
-		seconds := floatFromUsage(usageDetails, m.key)
-		if seconds > 0 {
-			minutes := int32(seconds / 60)
-			if minutes < 1 {
-				minutes = 1
-			}
-			items = append(items, &pb.LineItem{
-				Description: m.displayName,
-				Quantity:    minutes,
-				UnitPrice:   0,
-				Total:       0,
-			})
-		}
-	}
-
-	// 4. Overage charges (if any)
-	if meteredAmount > 0 {
-		items = append(items, &pb.LineItem{
-			Description: "Overage charges",
-			Quantity:    1,
-			UnitPrice:   meteredAmount,
-			Total:       meteredAmount,
-		})
-	}
-
-	return items
+	return items, nil
 }
 
 // parseGeoBreakdown extracts CountryMetrics from usage_details

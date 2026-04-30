@@ -16,7 +16,6 @@
     BillingTierFieldsStore,
     UsageSummaryFieldsStore,
     LiveUsageSummaryFieldsStore,
-    AllocationFieldsStore,
   } from "$houdini";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
@@ -46,7 +45,6 @@
   const tierFragmentStore = new BillingTierFieldsStore();
   const usageSummaryFragmentStore = new UsageSummaryFieldsStore();
   const liveUsageFragmentStore = new LiveUsageSummaryFieldsStore();
-  const allocationFragmentStore = new AllocationFieldsStore();
 
   // Types from Houdini
   type UsageRecord = NonNullable<
@@ -111,12 +109,13 @@
     billingData?.liveUsage ? get(fragment(billingData.liveUsage, liveUsageFragmentStore)) : null
   );
 
-  // Helper to unmask nested allocation fields
-  function unmaskAllocation(
-    masked: { readonly " $fragments": { AllocationFields: object } } | null | undefined
-  ) {
-    if (!masked) return null;
-    return get(fragment(masked, allocationFragmentStore));
+  function moneyNumber(value: unknown): number {
+    if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+    if (typeof value === "string") {
+      const parsed = parseFloat(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
   }
 
   // Aggregate storage data from edges
@@ -499,37 +498,15 @@
     }
   }
 
-  function calculateEstimatedCosts() {
-    if (!currentTier?.basePrice) {
-      return { total: 0, breakdown: { base: 0, bandwidth: 0, streaming: 0, storage: 0 } };
-    }
-
-    // Unmask nested allocation fields to get rates
-    const bandwidthOverage = unmaskAllocation(currentTier.overageRates?.bandwidth);
-    const storageOverage = unmaskAllocation(currentTier.overageRates?.storage);
-    const computeAlloc = unmaskAllocation(currentTier.computeAllocation);
-
-    const bandwidthRate = bandwidthOverage?.unitPrice ?? 0;
-    const storageRate = storageOverage?.unitPrice ?? 0;
-    const streamingRate = computeAlloc?.unitPrice ?? 0;
-
-    const baseCost = currentTier.basePrice;
-    const bandwidthCost = usageData.egress_gb * bandwidthRate;
-    const streamingCost = usageData.stream_hours * streamingRate;
-    const storageCost = (usageSummary?.averageStorageGb ?? 0) * storageRate;
-
-    return {
-      total: baseCost + bandwidthCost + streamingCost + storageCost,
-      breakdown: {
-        base: baseCost,
-        bandwidth: bandwidthCost,
-        streaming: streamingCost,
-        storage: storageCost,
-      },
-    };
-  }
-
-  let estimatedCosts = $derived.by(() => calculateEstimatedCosts());
+  let ratedCosts = $derived.by(() => ({
+    total: moneyNumber(invoicePreview?.amount),
+    base: moneyNumber(invoicePreview?.baseAmount),
+    metered: moneyNumber(invoicePreview?.meteredAmount),
+    credit: moneyNumber(invoicePreview?.prepaidCreditApplied),
+    currency: invoicePreview?.currency ?? billingData?.currency ?? "EUR",
+    lineItems: invoicePreview?.lineItems ?? [],
+    hasPreview: invoicePreview != null,
+  }));
 
   function formatCurrency(amount: number, currency = "USD") {
     return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
@@ -921,56 +898,63 @@
             </div>
           </div>
 
-          <!-- Estimated Costs Slab -->
+          <!-- Rated Costs Slab -->
           <div class="slab">
             <div class="slab-header">
               <h3>What This Period Cost You</h3>
             </div>
             <div class="slab-body--padded">
               <div class="space-y-3">
-                {#if estimatedCosts.breakdown.base > 0}
+                {#if ratedCosts.lineItems.length > 0}
+                  {#each ratedCosts.lineItems as item (`${item.lineKey}-${item.meter}`)}
+                    <div class="flex items-center justify-between text-sm">
+                      <span class="text-muted-foreground">{item.description}</span>
+                      <span class="text-foreground"
+                        >{formatCurrency(moneyNumber(item.total), item.currency)}</span
+                      >
+                    </div>
+                  {/each}
+                  {#if ratedCosts.credit > 0}
+                    <div class="flex items-center justify-between text-sm">
+                      <span class="text-muted-foreground">Prepaid credit applied</span>
+                      <span class="text-foreground"
+                        >-{formatCurrency(ratedCosts.credit, ratedCosts.currency)}</span
+                      >
+                    </div>
+                  {/if}
+                {:else if ratedCosts.base > 0 || ratedCosts.metered > 0}
+                  {#if ratedCosts.base > 0}
+                    <div class="flex items-center justify-between text-sm">
+                      <span class="text-muted-foreground">Base plan</span>
+                      <span class="text-foreground"
+                        >{formatCurrency(ratedCosts.base, ratedCosts.currency)}</span
+                      >
+                    </div>
+                  {/if}
+                  {#if ratedCosts.metered > 0}
+                    <div class="flex items-center justify-between text-sm">
+                      <span class="text-muted-foreground">Metered usage</span>
+                      <span class="text-foreground"
+                        >{formatCurrency(ratedCosts.metered, ratedCosts.currency)}</span
+                      >
+                    </div>
+                  {/if}
+                {:else if currentTier?.basePrice}
                   <div class="flex items-center justify-between text-sm">
                     <span class="text-muted-foreground">Base plan</span>
                     <span class="text-foreground"
-                      >{formatCurrency(estimatedCosts.breakdown.base)}</span
-                    >
-                  </div>
-                {/if}
-                {#if estimatedCosts.breakdown.streaming > 0}
-                  <div class="flex items-center justify-between text-sm">
-                    <span class="text-muted-foreground"
-                      >Streaming ({formatNumber(usageData.stream_hours)}h)</span
-                    >
-                    <span class="text-foreground"
-                      >{formatCurrency(estimatedCosts.breakdown.streaming)}</span
-                    >
-                  </div>
-                {/if}
-                {#if estimatedCosts.breakdown.bandwidth > 0}
-                  <div class="flex items-center justify-between text-sm">
-                    <span class="text-muted-foreground"
-                      >Bandwidth ({formatNumber(usageData.egress_gb)} GB)</span
-                    >
-                    <span class="text-foreground"
-                      >{formatCurrency(estimatedCosts.breakdown.bandwidth)}</span
-                    >
-                  </div>
-                {/if}
-                {#if estimatedCosts.breakdown.storage > 0}
-                  <div class="flex items-center justify-between text-sm">
-                    <span class="text-muted-foreground"
-                      >Storage ({formatNumber(usageSummary?.averageStorageGb ?? 0)} GB)</span
-                    >
-                    <span class="text-foreground"
-                      >{formatCurrency(estimatedCosts.breakdown.storage)}</span
+                      >{formatCurrency(currentTier.basePrice, currentTier.currency)}</span
                     >
                   </div>
                 {/if}
                 <div class="pt-3 border-t border-border/30">
                   <div class="flex items-center justify-between">
-                    <span class="text-foreground font-medium">Estimated Total</span>
+                    <span class="text-foreground font-medium">Current total</span>
                     <span class="text-success font-bold text-xl">
-                      {formatCurrency(estimatedCosts.total)}
+                      {formatCurrency(
+                        ratedCosts.hasPreview ? ratedCosts.total : (currentTier?.basePrice ?? 0),
+                        ratedCosts.currency
+                      )}
                     </span>
                   </div>
                 </div>
@@ -1882,8 +1866,8 @@
               <LightbulbIcon class="w-4 h-4" />
               <AlertTitle>How We Calculate This</AlertTitle>
               <AlertDescription>
-                Your usage data comes from real streaming activity, and costs are estimated based on
-                your current plan. Your actual bill will match your subscription terms.
+                Your usage data comes from real streaming activity, and costs come from the current
+                invoice draft rated by your subscription terms.
               </AlertDescription>
             </Alert>
           </div>

@@ -127,16 +127,16 @@ The trade-off is latency — DVR playback goes through HLS/DASH segments, so it'
 
 ### Retention
 
-Recording availability and retention have two layers:
+Recording retention is driven by the tier `recording_retention_days` entitlement.
+Commodore reads it from Purser at DVR start, defaults `expiresAt` accordingly,
+and forwards `retention_until` to Foghorn. A caller-supplied `expiresAt` always
+wins. Tiers without a retention entitlement (PAYG, Enterprise) fall back to the
+30-day system default. Foghorn's hourly retention job marks expired artifacts
+as deleted; cleanup jobs then remove files and stale records.
 
-- Runtime DVR starts default to a 30-day expiration when no `expiresAt` is supplied.
-- The billing catalog seeds Free without DVR recording and paid plan policy with longer windows
-  (Supporter 90 days, Developer 180 days, Production 365 days, Enterprise custom).
-
-Current beta enforcement of billing-tier recording entitlements is not uniform across every DVR
-entry point. Treat the billing table as plan policy; runtime behavior is governed by the DVR request
-and cluster retention configuration until commercial enforcement is fully enabled. Foghorn's hourly
-retention job marks expired artifacts as deleted, then cleanup jobs remove files and stale records.
+Catalog defaults: Free 7 days, Supporter 90 days, Developer 180 days,
+Production 365 days, Enterprise custom (no entitlement set, falls through to
+the 30-day default unless overridden per request or per subscription).
 
 ### Listing Recordings
 

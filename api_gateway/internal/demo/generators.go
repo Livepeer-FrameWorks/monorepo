@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"sort"
 	"strings"
 	"time"
 
@@ -198,39 +199,109 @@ func GenerateViewerCountTimeSeries() []*pb.ViewerCountBucket {
 func GenerateBillingTiers() []*pb.BillingTier {
 	return []*pb.BillingTier{
 		{
-			Id:          "tier_demo_starter",
-			TierName:    "starter",
-			DisplayName: "Starter",
-			Description: "Perfect for trying out FrameWorks",
+			Id:          "tier_demo_payg",
+			TierName:    "payg",
+			DisplayName: "Pay As You Go",
+			Description: "Prepaid pay-as-you-go pricing with no included usage.",
 			BasePrice:   0.00,
-			Currency:    "USD",
+			Currency:    "EUR",
+			Features: &pb.BillingFeatures{
+				Recording:    true,
+				Analytics:    true,
+				ApiAccess:    true,
+				SupportLevel: "community",
+			},
+			PricingRules: demoPricingRulesForTier("payg"),
+			Entitlements: map[string]string{},
+			TierLevel:    0,
+			IsActive:     true,
+			IsEnterprise: false,
+		},
+		{
+			Id:          "tier_demo_free",
+			TierName:    "free",
+			DisplayName: "Free",
+			Description: "Self-hosted with Livepeer transcoding. Watermarked player, no SLA.",
+			BasePrice:   0.00,
+			Currency:    "EUR",
 			Features: &pb.BillingFeatures{
 				Recording:    false,
 				Analytics:    true,
+				ApiAccess:    true,
 				SupportLevel: "community",
 			},
+			PricingRules: []*pb.PricingRule{},
+			Entitlements: map[string]string{"recording_retention_days": "7"},
+			TierLevel:    1,
+			IsActive:     true,
+			IsEnterprise: false,
 		},
 		{
-			Id:          "tier_demo_pro",
-			TierName:    "professional",
-			DisplayName: "Professional",
-			Description: "For content creators and small businesses",
-			BasePrice:   29.99,
-			Currency:    "USD",
+			Id:          "tier_demo_supporter",
+			TierName:    "supporter",
+			DisplayName: "Supporter",
+			Description: "120K delivered minutes, 10 GPU-hours, hosted load balancing, custom subdomain.",
+			BasePrice:   79.00,
+			Currency:    "EUR",
+			Features: &pb.BillingFeatures{
+				Recording:    true,
+				Analytics:    true,
+				ApiAccess:    true,
+				SupportLevel: "basic",
+			},
+			PricingRules: demoPricingRulesForTier("supporter"),
+			Entitlements: map[string]string{"recording_retention_days": "90"},
+			TierLevel:    2,
+			IsActive:     true,
+			IsEnterprise: false,
+		},
+		{
+			Id:          "tier_demo_developer",
+			TierName:    "developer",
+			DisplayName: "Developer",
+			Description: "500K delivered minutes, 50 GPU-hours, team features, advanced analytics.",
+			BasePrice:   249.00,
+			Currency:    "EUR",
+			Features: &pb.BillingFeatures{
+				Recording:    true,
+				Analytics:    true,
+				ApiAccess:    true,
+				SupportLevel: "priority",
+			},
+			PricingRules: demoPricingRulesForTier("developer"),
+			Entitlements: map[string]string{"recording_retention_days": "180"},
+			TierLevel:    3,
+			IsActive:     true,
+			IsEnterprise: false,
+		},
+		{
+			Id:          "tier_demo_production",
+			TierName:    "production",
+			DisplayName: "Production",
+			Description: "2M delivered minutes, 250 GPU-hours, dedicated capacity, 24/7 support and SLA.",
+			BasePrice:   999.00,
+			Currency:    "EUR",
 			Features: &pb.BillingFeatures{
 				Recording:      true,
 				Analytics:      true,
+				ApiAccess:      true,
 				CustomBranding: true,
-				SupportLevel:   "basic",
+				Sla:            true,
+				SupportLevel:   "enterprise",
 			},
+			PricingRules: demoPricingRulesForTier("production"),
+			Entitlements: map[string]string{"recording_retention_days": "365"},
+			TierLevel:    4,
+			IsActive:     true,
+			IsEnterprise: false,
 		},
 		{
 			Id:          "tier_demo_enterprise",
 			TierName:    "enterprise",
 			DisplayName: "Enterprise",
-			Description: "For large organizations with custom needs",
-			BasePrice:   299.99,
-			Currency:    "USD",
+			Description: "Custom capacity, private deployments, dedicated support, custom SLAs.",
+			BasePrice:   0.00,
+			Currency:    "EUR",
 			Features: &pb.BillingFeatures{
 				Recording:      true,
 				Analytics:      true,
@@ -239,6 +310,11 @@ func GenerateBillingTiers() []*pb.BillingTier {
 				SupportLevel:   "dedicated",
 				Sla:            true,
 			},
+			PricingRules: []*pb.PricingRule{},
+			Entitlements: map[string]string{},
+			TierLevel:    5,
+			IsActive:     true,
+			IsEnterprise: true,
 		},
 	}
 }
@@ -249,12 +325,10 @@ func GenerateInvoices() []*pb.Invoice {
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	periodEnd := periodStart.AddDate(0, 1, 0)
 
-	// Build usage details for first invoice (within allocation, metered overage)
 	usageDetails1, _ := structpb.NewStruct(map[string]interface{}{
 		"viewer_hours":       708.33, // 42,500 delivered minutes / 60
 		"average_storage_gb": 15.2,
 		"stream_hours":       42.5,
-		"egress_gb":          125.0,
 		// Per-codec processing (matches ClickHouse columns)
 		"livepeer_h264_seconds":  2400.0,
 		"livepeer_vp9_seconds":   500.0,
@@ -267,9 +341,9 @@ func GenerateInvoices() []*pb.Invoice {
 		"native_av_aac_seconds":  150.0,
 		"native_av_opus_seconds": 50.0,
 		"tier_info": map[string]interface{}{
-			"tier_name":        "professional",
-			"display_name":     "Professional",
-			"base_price":       19.99,
+			"tier_name":        "supporter",
+			"display_name":     "Supporter",
+			"base_price":       79.00,
 			"metering_enabled": true,
 		},
 	})
@@ -279,7 +353,6 @@ func GenerateInvoices() []*pb.Invoice {
 		"viewer_hours":       583.33, // 35,000 delivered minutes / 60
 		"average_storage_gb": 19.0,
 		"stream_hours":       35.0,
-		"egress_gb":          98.0,
 		// Per-codec processing
 		"livepeer_h264_seconds":  1800.0,
 		"livepeer_vp9_seconds":   350.0,
@@ -292,9 +365,9 @@ func GenerateInvoices() []*pb.Invoice {
 		"native_av_aac_seconds":  120.0,
 		"native_av_opus_seconds": 40.0,
 		"tier_info": map[string]interface{}{
-			"tier_name":        "professional",
-			"display_name":     "Professional",
-			"base_price":       19.99,
+			"tier_name":        "supporter",
+			"display_name":     "Supporter",
+			"base_price":       79.00,
 			"metering_enabled": true,
 		},
 	})
@@ -303,11 +376,11 @@ func GenerateInvoices() []*pb.Invoice {
 		{
 			Id:                   "inv_demo_current_001",
 			TenantId:             "00000000-0000-0000-0000-000000000001",
-			Amount:               24.99, // net amount after credit
-			BaseAmount:           19.99,
-			MeteredAmount:        10.00,
-			PrepaidCreditApplied: 5.00, // demo: $5 prepaid credit applied
-			Currency:             "USD",
+			Amount:               74.53,
+			BaseAmount:           79.00,
+			MeteredAmount:        0.53,
+			PrepaidCreditApplied: 5.00,
+			Currency:             "EUR",
 			Status:               "paid",
 			DueDate:              timestamppb.New(now.Add(24 * time.Hour)),
 			UsageDetails:         usageDetails1,
@@ -336,7 +409,7 @@ func GenerateInvoices() []*pb.Invoice {
 				NativeAvOpusSeconds:   50.0,
 				TotalStreams:          38,
 				TotalViewers:          1450,
-				ViewerHours:           750.0,
+				ViewerHours:           708.33,
 				MaxViewers:            412,
 				UniqueUsers:           1120,
 				LivepeerSegmentCount:  5120,
@@ -367,22 +440,20 @@ func GenerateInvoices() []*pb.Invoice {
 				DefrostCount:    6,
 				DefrostBytes:    2_684_354_560,
 			},
-			LineItems: []*pb.LineItem{
-				{Description: "Professional Tier", Quantity: 1, UnitPrice: 19.99, Total: 19.99},
-				{Description: "Delivered Minutes (45,000 min)", Quantity: 45000, UnitPrice: 0.00025, Total: 11.25},
-				{Description: "Storage (15.2 GB avg)", Quantity: 15, UnitPrice: 0.05, Total: 0.75},
-				{Description: "Egress (125.0 GB)", Quantity: 125, UnitPrice: 0.003, Total: 0.38},
-				{Description: "Prepaid Credit Applied", Quantity: 1, UnitPrice: -5.00, Total: -5.00},
-			},
+			LineItems: demoLineItems(
+				demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "79.00", Total: "79.00"},
+				demoLineSpec{LineKey: "meter:delivered_minutes", Meter: "delivered_minutes", Quantity: "42500", IncludedQuantity: "120000", BillableQuantity: "0", UnitPrice: "0.00055", Total: "0.00"},
+				demoLineSpec{LineKey: "meter:average_storage_gb", Meter: "average_storage_gb", Quantity: "15.2", IncludedQuantity: "0", BillableQuantity: "15.2", UnitPrice: "0.035", Total: "0.53"},
+			),
 		},
 		{
 			Id:                   "inv_demo_previous_002",
 			TenantId:             "00000000-0000-0000-0000-000000000001",
-			Amount:               24.50,
-			BaseAmount:           19.99,
-			MeteredAmount:        4.51,
-			PrepaidCreditApplied: 0, // no credit applied
-			Currency:             "USD",
+			Amount:               79.67,
+			BaseAmount:           79.00,
+			MeteredAmount:        0.67,
+			PrepaidCreditApplied: 0,
+			Currency:             "EUR",
 			Status:               "paid",
 			DueDate:              timestamppb.New(now.Add(-30 * 24 * time.Hour)),
 			PaidAt:               timestamppb.New(now.Add(-28 * 24 * time.Hour)),
@@ -443,12 +514,11 @@ func GenerateInvoices() []*pb.Invoice {
 				DefrostCount:    4,
 				DefrostBytes:    2_147_483_648,
 			},
-			LineItems: []*pb.LineItem{
-				{Description: "Professional Tier", Quantity: 1, UnitPrice: 19.99, Total: 19.99},
-				{Description: "Delivered Minutes (35,000 min)", Quantity: 35000, UnitPrice: 0.00025, Total: 8.75},
-				{Description: "Storage (19.0 GB avg)", Quantity: 19, UnitPrice: 0.05, Total: 0.95},
-				{Description: "Egress (98.0 GB)", Quantity: 98, UnitPrice: 0.003, Total: 0.29},
-			},
+			LineItems: demoLineItems(
+				demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "79.00", Total: "79.00"},
+				demoLineSpec{LineKey: "meter:delivered_minutes", Meter: "delivered_minutes", Quantity: "35000", IncludedQuantity: "120000", BillableQuantity: "0", UnitPrice: "0.00055", Total: "0.00"},
+				demoLineSpec{LineKey: "meter:average_storage_gb", Meter: "average_storage_gb", Quantity: "19", IncludedQuantity: "0", BillableQuantity: "19", UnitPrice: "0.035", Total: "0.67"},
+			),
 		},
 	}
 }
@@ -460,16 +530,13 @@ func GenerateInvoicePreview() *pb.Invoice {
 	periodEnd := periodStart.AddDate(0, 1, 0)
 
 	usageDetails, _ := structpb.NewStruct(map[string]interface{}{
-		"usage_data": map[string]interface{}{
-			"viewer_hours":       412.5,
-			"average_storage_gb": 18.4,
-			"stream_hours":       68.5,
-			"egress_gb":          140.3,
-		},
+		"viewer_hours":       412.5,
+		"average_storage_gb": 18.4,
+		"stream_hours":       68.5,
 		"tier_info": map[string]interface{}{
-			"tier_name":        "professional",
-			"display_name":     "Professional",
-			"base_price":       19.99,
+			"tier_name":        "supporter",
+			"display_name":     "Supporter",
+			"base_price":       79.00,
 			"metering_enabled": true,
 		},
 	})
@@ -477,11 +544,11 @@ func GenerateInvoicePreview() *pb.Invoice {
 	return &pb.Invoice{
 		Id:                   "inv_demo_draft_0001",
 		TenantId:             "00000000-0000-0000-0000-000000000001",
-		Amount:               27.50,
-		BaseAmount:           19.99,
-		MeteredAmount:        7.51,
+		Amount:               79.64,
+		BaseAmount:           79.00,
+		MeteredAmount:        0.64,
 		PrepaidCreditApplied: 0,
-		Currency:             "USD",
+		Currency:             "EUR",
 		Status:               "draft",
 		DueDate:              timestamppb.New(periodEnd.AddDate(0, 0, 14)),
 		UsageDetails:         usageDetails,
@@ -549,12 +616,11 @@ func GenerateInvoicePreview() *pb.Invoice {
 			DefrostCount: 5,
 			DefrostBytes: 2_147_483_648,
 		},
-		LineItems: []*pb.LineItem{
-			{Description: "Professional Tier", Quantity: 1, UnitPrice: 19.99, Total: 19.99},
-			{Description: "Delivered Minutes (24,750 min)", Quantity: 24750, UnitPrice: 0.00025, Total: 6.19},
-			{Description: "Storage (18.4 GB avg)", Quantity: 18, UnitPrice: 0.05, Total: 0.92},
-			{Description: "Egress (140.3 GB)", Quantity: 140, UnitPrice: 0.003, Total: 0.42},
-		},
+		LineItems: demoLineItems(
+			demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "79.00", Total: "79.00"},
+			demoLineSpec{LineKey: "meter:delivered_minutes", Meter: "delivered_minutes", Quantity: "24750", IncludedQuantity: "120000", BillableQuantity: "0", UnitPrice: "0.00055", Total: "0.00"},
+			demoLineSpec{LineKey: "meter:average_storage_gb", Meter: "average_storage_gb", Quantity: "18.4", IncludedQuantity: "0", BillableQuantity: "18.4", UnitPrice: "0.035", Total: "0.64"},
+		),
 	}
 }
 
@@ -645,15 +711,12 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 	now := time.Now()
 	nextBilling := now.Add(18 * 24 * time.Hour)
 
-	// Demo custom allocation - 100,000 viewer-minutes included
-	customLimit := float64(100000)
-
 	return &pb.BillingStatusResponse{
 		TenantId: "00000000-0000-0000-0000-000000000001",
 		Subscription: &pb.TenantSubscription{
 			Id:                 "sub_demo_123",
 			TenantId:           "00000000-0000-0000-0000-000000000001",
-			TierId:             "tier_professional",
+			TierId:             "tier_demo_supporter",
 			Status:             "active",
 			BillingEmail:       "demo@frameworks.example",
 			StartedAt:          timestamppb.New(now.Add(-30 * 24 * time.Hour)),
@@ -662,16 +725,10 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 			BillingPeriodEnd:   timestamppb.New(nextBilling),
 			CreatedAt:          timestamppb.New(now.Add(-30 * 24 * time.Hour)),
 			UpdatedAt:          timestamppb.Now(),
-			// Demo custom terms for enterprise-style subscription
-			CustomPricing: &pb.CustomPricing{
-				BasePrice:    79.00, // Custom negotiated base price
-				DiscountRate: 0.20,  // 20% discount
-			},
-			CustomAllocations: &pb.AllocationDetails{
-				Limit:     &customLimit, // 100k viewer-minutes included
-				UnitPrice: 0.0005,       // $0.0005 per minute overage
-				Unit:      "viewer-minutes",
-			},
+			// Demo subscriptions leave per-tenant overrides empty so the tier's
+			// own pricing rules and entitlements apply.
+			PricingOverrides:     []*pb.PricingRule{},
+			EntitlementOverrides: map[string]string{},
 			CustomFeatures: &pb.BillingFeatures{
 				Recording:      true,
 				Analytics:      true,
@@ -682,28 +739,15 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 			},
 		},
 		Tier: &pb.BillingTier{
-			Id:            "tier_professional",
-			TierName:      "professional",
-			DisplayName:   "Professional",
-			Description:   "For growing businesses with advanced streaming needs",
-			BasePrice:     99.00,
-			Currency:      "USD",
-			BillingPeriod: "month",
-			BandwidthAllocation: &pb.AllocationDetails{
-				Limit:     float64Ptr(1000), // 1TB included
-				UnitPrice: 0.08,
-				Unit:      "GB",
-			},
-			StorageAllocation: &pb.AllocationDetails{
-				Limit:     float64Ptr(100), // 100GB included
-				UnitPrice: 0.10,
-				Unit:      "GB",
-			},
-			ComputeAllocation: &pb.AllocationDetails{
-				Limit:     float64Ptr(500), // 500 compute hours included
-				UnitPrice: 0.05,
-				Unit:      "hours",
-			},
+			Id:            "tier_demo_supporter",
+			TierName:      "supporter",
+			DisplayName:   "Supporter",
+			Description:   "120K delivered minutes, 10 GPU-hours, hosted load balancing, custom subdomain.",
+			BasePrice:     79.00,
+			Currency:      "EUR",
+			BillingPeriod: "monthly",
+			PricingRules:  demoPricingRulesForTier("supporter"),
+			Entitlements:  map[string]string{"recording_retention_days": "90"},
 			Features: &pb.BillingFeatures{
 				Recording:      true,
 				Analytics:      true,
@@ -715,32 +759,19 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 			SupportLevel:    "priority",
 			SlaLevel:        "99.9%",
 			MeteringEnabled: true,
-			OverageRates: &pb.OverageRates{
-				Bandwidth: &pb.AllocationDetails{
-					UnitPrice: 0.10,
-					Unit:      "GB",
-				},
-				Storage: &pb.AllocationDetails{
-					UnitPrice: 0.12,
-					Unit:      "GB",
-				},
-				Compute: &pb.AllocationDetails{
-					UnitPrice: 0.06,
-					Unit:      "hours",
-				},
-			},
-			IsActive:     true,
-			TierLevel:    2, // Professional tier in the middle
-			IsEnterprise: false,
-			CreatedAt:    timestamppb.New(now.Add(-90 * 24 * time.Hour)),
-			UpdatedAt:    timestamppb.New(now.Add(-7 * 24 * time.Hour)),
+			IsActive:        true,
+			TierLevel:       2,
+			IsEnterprise:    false,
+			CreatedAt:       timestamppb.New(now.Add(-90 * 24 * time.Hour)),
+			UpdatedAt:       timestamppb.New(now.Add(-7 * 24 * time.Hour)),
 		},
 		BillingStatus:     "active",
 		NextBillingDate:   timestamppb.New(nextBilling),
 		OutstandingAmount: 0.00,
-		Currency:          "USD",
+		Currency:          "EUR",
 		PendingInvoices:   []*pb.Invoice{}, // Empty slice
 		RecentPayments:    []*pb.Payment{}, // Empty slice
+		PaymentMethods:    []string{"card", "crypto_usdc", "crypto_eth"},
 		UsageSummary: &pb.UsageSummary{
 			Period:              "1d",
 			Timestamp:           timestamppb.Now(),
@@ -955,7 +986,7 @@ func GeneratePlatformOverview() *pb.GetPlatformOverviewResponse {
 		GeneratedAt:           timestamppb.New(now),
 		StreamHours:           284.5,         // ~12 days of streaming
 		EgressGb:              1247.8,        // ~1.2 TB egress
-		PeakViewers:           342,           // Unique viewers (legacy field)
+		PeakViewers:           342,           // Distinct viewers
 		TotalUploadBytes:      52428800000,   // ~50 GB uploaded
 		TotalDownloadBytes:    1340000000000, // ~1.2 TB downloaded
 		ViewerHours:           4892.5,        // Total accumulated watch time
@@ -4834,3 +4865,97 @@ func float32Ptr(v float32) *float32                            { return &v }
 func float64Ptr(v float64) *float64                            { return &v }
 func stringPtr(s string) *string                               { return &s }
 func ptrStreamStatus(v model.StreamStatus) *model.StreamStatus { return &v }
+
+type demoLineSpec struct {
+	LineKey          string
+	Meter            string
+	Description      string
+	Quantity         string
+	IncludedQuantity string
+	BillableQuantity string
+	UnitPrice        string
+	Total            string
+}
+
+// demoLineItems builds proto line items in the same identity/order shape as the
+// rating engine: base_subscription first, then meter:<name> rows sorted by key.
+func demoLineItems(specs ...demoLineSpec) []*pb.LineItem {
+	sort.SliceStable(specs, func(i, j int) bool {
+		if specs[i].LineKey == specs[j].LineKey {
+			return false
+		}
+		if specs[i].LineKey == "base_subscription" {
+			return true
+		}
+		if specs[j].LineKey == "base_subscription" {
+			return false
+		}
+		return specs[i].LineKey < specs[j].LineKey
+	})
+	out := make([]*pb.LineItem, 0, len(specs))
+	for _, spec := range specs {
+		if spec.LineKey == "" {
+			continue
+		}
+		desc := spec.Description
+		if desc == "" {
+			desc = demoLineDescription(spec.LineKey)
+		}
+		out = append(out, &pb.LineItem{
+			LineKey:          spec.LineKey,
+			Meter:            spec.Meter,
+			Description:      desc,
+			Quantity:         spec.Quantity,
+			IncludedQuantity: spec.IncludedQuantity,
+			BillableQuantity: spec.BillableQuantity,
+			UnitPrice:        spec.UnitPrice,
+			Total:            spec.Total,
+			Currency:         "EUR",
+		})
+	}
+	return out
+}
+
+func demoLineDescription(lineKey string) string {
+	switch lineKey {
+	case "base_subscription":
+		return "Base subscription"
+	case "meter:delivered_minutes":
+		return "Delivered minutes"
+	case "meter:average_storage_gb":
+		return "Recording storage (avg GB)"
+	case "meter:ai_gpu_hours":
+		return "AI GPU hours"
+	default:
+		return lineKey
+	}
+}
+
+func demoPricingRulesForTier(tierName string) []*pb.PricingRule {
+	switch tierName {
+	case "payg":
+		return []*pb.PricingRule{
+			{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.00055", ConfigJson: "{}"},
+			{Meter: "average_storage_gb", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.035", ConfigJson: "{}"},
+			{Meter: "ai_gpu_hours", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "1.50", ConfigJson: "{}"},
+		}
+	case "developer":
+		return []*pb.PricingRule{
+			{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "500000", UnitPrice: "0.00052", ConfigJson: "{}"},
+			{Meter: "average_storage_gb", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.030", ConfigJson: "{}"},
+			{Meter: "ai_gpu_hours", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "50", UnitPrice: "1.50", ConfigJson: "{}"},
+		}
+	case "production":
+		return []*pb.PricingRule{
+			{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "2000000", UnitPrice: "0.00050", ConfigJson: "{}"},
+			{Meter: "average_storage_gb", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.025", ConfigJson: "{}"},
+			{Meter: "ai_gpu_hours", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "250", UnitPrice: "1.50", ConfigJson: "{}"},
+		}
+	default:
+		return []*pb.PricingRule{
+			{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "120000", UnitPrice: "0.00055", ConfigJson: "{}"},
+			{Meter: "average_storage_gb", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.035", ConfigJson: "{}"},
+			{Meter: "ai_gpu_hours", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "10", UnitPrice: "1.50", ConfigJson: "{}"},
+		}
+	}
+}

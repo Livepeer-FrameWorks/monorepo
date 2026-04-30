@@ -592,18 +592,21 @@ models:
   BillingStatus:
     model:
       - frameworks/pkg/proto.BillingStatusResponse
+    fields:
+      paymentMethods:
+        resolver: true
   BillingTier:
     model:
       - frameworks/pkg/proto.BillingTier
   BillingFeatures:
     model:
       - frameworks/pkg/proto.BillingFeatures
-  AllocationDetails:
+  PricingRule:
     model:
-      - frameworks/pkg/proto.AllocationDetails
-  OverageRates:
+      - frameworks/pkg/proto.PricingRule
+  LineItem:
     model:
-      - frameworks/pkg/proto.OverageRates
+      - frameworks/pkg/proto.LineItem
   Invoice:
     model:
       - frameworks/pkg/proto.Invoice

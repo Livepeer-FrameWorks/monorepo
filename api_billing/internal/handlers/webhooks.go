@@ -393,14 +393,52 @@ func handleStripePaymentIntentGRPC(payload StripeWebhookPayload) error {
 		status = "failed"
 	}
 
-	_, err := db.ExecContext(ctx, `
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin payment intent transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				logger.WithError(rollbackErr).Warn("Failed to roll back Stripe payment intent transaction")
+			}
+		}
+	}()
+
+	result, err := tx.ExecContext(ctx, `
 		UPDATE purser.billing_payments
 		SET status = $1, updated_at = NOW(), confirmed_at = CASE WHEN $3 = 'confirmed' THEN NOW() ELSE confirmed_at END
-		WHERE invoice_id = $2 AND method = 'stripe'
-	`, status, invoiceID, status)
+		WHERE invoice_id = $2 AND method = 'card' AND tx_id = $4
+	`, status, invoiceID, status, obj.ID)
 	if err != nil {
 		return fmt.Errorf("failed to update payment status: %w", err)
 	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check updated payment rows: %w", err)
+	}
+	if rowsAffected == 0 {
+		logger.WithFields(logging.Fields{
+			"payment_intent_id": obj.ID,
+			"invoice_id":        invoiceID,
+			"status":            status,
+		}).Warn("Stripe webhook did not match an invoice payment")
+		return nil
+	}
+	if status == "confirmed" {
+		if _, err = tx.ExecContext(ctx, `
+			UPDATE purser.billing_invoices
+			SET status = 'paid', paid_at = NOW(), updated_at = NOW()
+			WHERE id = $1 AND status IN ('pending', 'overdue')
+		`, invoiceID); err != nil {
+			return fmt.Errorf("failed to update invoice status: %w", err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit payment intent transaction: %w", err)
+	}
+	committed = true
 
 	logger.WithFields(logging.Fields{
 		"payment_intent_id": obj.ID,
@@ -416,10 +454,10 @@ func handleStripePaymentIntentGRPC(payload StripeWebhookPayload) error {
 		SELECT p.id, i.tenant_id, p.amount, p.currency
 		FROM purser.billing_payments p
 		JOIN purser.billing_invoices i ON p.invoice_id = i.id
-		WHERE p.invoice_id = $1 AND p.method = 'stripe'
+		WHERE p.invoice_id = $1 AND p.method = 'card' AND p.tx_id = $2
 		ORDER BY p.created_at DESC
 		LIMIT 1
-	`, invoiceID).Scan(&paymentID, &tenantID, &amount, &currency); err == nil && tenantID != "" {
+	`, invoiceID, obj.ID).Scan(&paymentID, &tenantID, &amount, &currency); err == nil && tenantID != "" {
 		eventType := eventPaymentSucceeded
 		if status == "failed" {
 			eventType = eventPaymentFailed
@@ -475,7 +513,8 @@ func handleStripeSubscriptionEvent(payload StripeWebhookPayload) error {
 			SELECT tenant_id FROM purser.tenant_subscriptions WHERE stripe_customer_id = $1
 		`, obj.CustomerID).Scan(&tenantID)
 		if err != nil {
-			// Try metadata fallback
+			// Stripe subscription metadata carries tenant_id for checkout-created
+			// subscriptions before the local customer index has been populated.
 			if obj.Metadata.TenantID != "" {
 				tenantID = obj.Metadata.TenantID
 			} else {
@@ -821,12 +860,12 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 			return "", fmt.Errorf("missing Mollie customer or mandate ID")
 		}
 
-		if _, err := db.ExecContext(ctx, `
+		if _, execErr := db.ExecContext(ctx, `
 			INSERT INTO purser.mollie_customers (tenant_id, mollie_customer_id)
 			VALUES ($1, $2)
 			ON CONFLICT (tenant_id) DO UPDATE SET mollie_customer_id = $2
-		`, tenantID, payment.CustomerID); err != nil {
-			return "", fmt.Errorf("failed to upsert Mollie customer mapping: %w", err)
+		`, tenantID, payment.CustomerID); execErr != nil {
+			return "", fmt.Errorf("failed to upsert Mollie customer mapping: %w", execErr)
 		}
 
 		mandate, err := mollieClient.GetMandate(ctx, payment.CustomerID, payment.MandateID)
@@ -863,8 +902,12 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 	if invoiceID == "" {
 		invoiceID = referenceID
 	}
-	if err := updateInvoicePaymentStatus("mollie", payment.ID, invoiceID, newStatus); err != nil {
+	paymentUpdated, err := updateInvoicePaymentStatus("mollie", payment.ID, invoiceID, newStatus)
+	if err != nil {
 		return "", err
+	}
+	if !paymentUpdated {
+		return eventID, nil
 	}
 
 	if newStatus == "confirmed" || newStatus == "failed" {
@@ -873,7 +916,7 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 				logger.WithError(err).WithField("invoice_id", invoiceID).Warn("Failed to resolve tenant from invoice, billing event will be skipped")
 			}
 		}
-		if tenantID != "" {
+		if tenantID != "" && payment.Amount != nil {
 			amountCents, currency, err := mollieAmountToCents(payment.Amount.Value, payment.Amount.Currency)
 			if err == nil {
 				eventType := eventPaymentSucceeded
@@ -1031,19 +1074,45 @@ func mapMollieSubscriptionStatus(status string) string {
 	}
 }
 
-func updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) error {
+func updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) (bool, error) {
 	var paymentID string
 	var foundInvoiceID string
 	ctx := context.Background()
-	err := db.QueryRowContext(ctx, `
+	method := invoicePaymentMethodForProvider(provider)
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin invoice payment status transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				logger.WithError(rollbackErr).Warn("Failed to roll back invoice payment status transaction")
+			}
+		}
+	}()
+
+	err = tx.QueryRowContext(ctx, `
 		SELECT id, invoice_id FROM purser.billing_payments
 		WHERE tx_id = $1 AND method = $2
-	`, txID, provider).Scan(&paymentID, &foundInvoiceID)
+	`, txID, method).Scan(&paymentID, &foundInvoiceID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		if invoiceID == "" {
+			return false, nil
+		}
+		err = tx.QueryRowContext(ctx, `
+			SELECT id, invoice_id FROM purser.billing_payments
+			WHERE invoice_id = $1 AND method = $2 AND status = 'pending'
+			ORDER BY created_at DESC
+			LIMIT 1
+		`, invoiceID, method).Scan(&paymentID, &foundInvoiceID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
 	}
 	if err != nil {
-		return fmt.Errorf("failed to lookup payment: %w", err)
+		return false, fmt.Errorf("failed to lookup payment: %w", err)
 	}
 	if invoiceID == "" {
 		invoiceID = foundInvoiceID
@@ -1055,40 +1124,64 @@ func updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) err
 		confirmedAt = &now
 	}
 
-	_, err = db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		UPDATE purser.billing_payments
-		SET status = $1, confirmed_at = $2, updated_at = NOW()
+		SET status = $1, confirmed_at = $2, tx_id = COALESCE(NULLIF(tx_id, ''), $4), updated_at = NOW()
 		WHERE id = $3
-	`, newStatus, confirmedAt, paymentID)
+	`, newStatus, confirmedAt, paymentID, txID)
 	if err != nil {
-		return fmt.Errorf("failed to update payment status: %w", err)
+		return false, fmt.Errorf("failed to update payment status: %w", err)
 	}
 
 	if invoiceID == "" {
-		return nil
+		if err = tx.Commit(); err != nil {
+			return false, fmt.Errorf("commit invoice payment status transaction: %w", err)
+		}
+		committed = true
+		return true, nil
 	}
 
 	if newStatus == "confirmed" {
-		_, err = db.ExecContext(ctx, `
+		result, updateErr := tx.ExecContext(ctx, `
 			UPDATE purser.billing_invoices
 			SET status = 'paid', paid_at = $1, updated_at = NOW()
 			WHERE id = $2 AND status IN ('pending', 'overdue')
 		`, now, invoiceID)
-		if err != nil {
+		if updateErr != nil {
 			logger.WithFields(logging.Fields{
-				"error":      err.Error(),
+				"error":      updateErr.Error(),
 				"invoice_id": invoiceID,
 			}).Error("Failed to update invoice status")
-		} else {
-			sendPaymentStatusEmail(invoiceID, provider, "confirmed")
+			return false, fmt.Errorf("failed to update invoice status: %w", updateErr)
+		}
+		rows, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return false, fmt.Errorf("check invoice update rows: %w", rowsErr)
+		}
+		if rows == 0 {
+			return false, nil
 		}
 	}
 
-	if newStatus == "failed" {
-		sendPaymentStatusEmail(invoiceID, provider, "failed")
+	if err = tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit invoice payment status transaction: %w", err)
+	}
+	committed = true
+
+	if newStatus == "confirmed" || newStatus == "failed" {
+		sendPaymentStatusEmail(invoiceID, provider, newStatus)
 	}
 
-	return nil
+	return true, nil
+}
+
+func invoicePaymentMethodForProvider(provider string) string {
+	switch provider {
+	case "stripe", "mollie":
+		return "card"
+	default:
+		return provider
+	}
 }
 
 func upsertMollieMandate(tenantID string, info billingmollie.MandateInfo) error {

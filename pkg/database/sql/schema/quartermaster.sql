@@ -446,7 +446,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.tenant_cluster_access (
     -- ===== ACCESS CONTROL =====
     access_level VARCHAR(50) DEFAULT 'shared', -- shared, dedicated, priority
 
-    -- ===== RESOURCE LIMITS (synced from Purser custom_allocations) =====
+    -- ===== RESOURCE LIMITS (Quartermaster-owned capacity enforcement) =====
     resource_limits JSONB DEFAULT '{}',  -- Tenant-specific limits: {max_streams, max_viewers, max_bandwidth_mbps}
 
     -- ===== SUBSCRIPTION STATUS (Approval workflow) =====

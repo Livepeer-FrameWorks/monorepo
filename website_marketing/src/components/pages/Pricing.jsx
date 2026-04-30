@@ -57,8 +57,10 @@ const freeTier = {
     "Basic analytics",
   ],
   limitations: [
+    "10,000 delivered minutes/month included",
+    "7-day recording retention",
     "Self-host only (no SLA)",
-    "No GPU hours for AI or multiview",
+    "No GPU hours for AI workloads",
     "Watermarked playback in player",
   ],
   badge: "No Surprise Bills",
@@ -77,10 +79,14 @@ const paidTiers = [
     description: "Starter allowances with hosted load balancer and custom subdomain.",
     features: [
       <span key="delivery">
-        150,000 delivered minutes included <InfoTooltip>Overage €0.00049/min</InfoTooltip>
+        120,000 delivered minutes included <InfoTooltip>Overage €0.00055/min</InfoTooltip>
       </span>,
       <span key="gpu">
-        10 GPU-hours (shared) <InfoTooltip>Shared GPU fair-use during beta</InfoTooltip>
+        10 GPU-hours for AI workloads{" "}
+        <InfoTooltip>
+          Live transcription, V2V, automated highlights. Overage €1.50/hr. Standard transcoding and
+          multiview compositing are bundled in delivered minutes.
+        </InfoTooltip>
       </span>,
       "Hosted load balancer",
       "Custom subdomain (*.frameworks.network)",
@@ -104,10 +110,14 @@ const paidTiers = [
     description: "Expanded allowances, collaboration tooling, and shared GPU priority.",
     features: [
       <span key="delivery">
-        500,000 delivered minutes included <InfoTooltip>Overage €0.00047/min</InfoTooltip>
+        500,000 delivered minutes included <InfoTooltip>Overage €0.00052/min</InfoTooltip>
       </span>,
       <span key="gpu">
-        50 GPU-hours (shared, priority) <InfoTooltip>Shared GPU fair-use during beta</InfoTooltip>
+        50 GPU-hours for AI workloads (priority){" "}
+        <InfoTooltip>
+          Live transcription, V2V, automated highlights. Overage €1.50/hr. Standard transcoding and
+          multiview compositing are bundled in delivered minutes.
+        </InfoTooltip>
       </span>,
       "Team collaboration features",
       "Advanced analytics",
@@ -128,10 +138,14 @@ const paidTiers = [
     description: "High allowances, dedicated options, and enterprise support.",
     features: [
       <span key="delivery">
-        2,000,000 delivered minutes included <InfoTooltip>Overage €0.00045/min</InfoTooltip>
+        2,000,000 delivered minutes included <InfoTooltip>Overage €0.00050/min</InfoTooltip>
       </span>,
       <span key="gpu">
-        250 GPU-hours <InfoTooltip>Dedicated options quoted</InfoTooltip>
+        250 GPU-hours for AI workloads{" "}
+        <InfoTooltip>
+          Live transcription, V2V, automated highlights. Overage €1.50/hr. Dedicated options quoted.
+          Standard transcoding and multiview compositing are bundled in delivered minutes.
+        </InfoTooltip>
       </span>,
       "SLA & 24/7 support",
       "Dedicated capacity options",
@@ -166,7 +180,7 @@ const payAsYouGo = {
     "Connect a wallet or pay inline with x402. Your balance covers storage, transcoding, and delivered minutes. Designed for AI agents, automation, and usage-based workflows.",
   features: [
     "Wallet auth via EIP-191 signature — no email, no registration",
-    "Fund via card, crypto (ETH, USDC, LPT), or x402 gasless USDC on Base/Arbitrum",
+    "Fund via card, crypto deposits (ETH or USDC), or x402 gasless USDC on Base/Arbitrum",
     "Full MCP access: streams, clips, DVR, VOD, billing, analytics, QoE diagnostics",
     "GraphQL as an alternative operational interface (same auth)",
     "Auto-discovery via skill.json, llms.txt, and .well-known/mcp.json",
@@ -197,7 +211,7 @@ const gpuFeatureMatrix = [
   {
     feature: "Live AI Processing",
     description:
-      "AI transcription, video analysis, automated highlights, and real-time V2V transformations.",
+      "AI transcription, video analysis, automated highlights, and real-time V2V transformations. Metered against your GPU-hour allowance.",
     status: "pipeline",
     statusNote: "Pipeline: AI assist is in development; limited to internal and pilot workloads.",
     tiers: {
@@ -209,7 +223,8 @@ const gpuFeatureMatrix = [
   },
   {
     feature: "Multi-stream compositing",
-    description: "Combine multiple streams with studio-style mixing and effects.",
+    description:
+      "Combine multiple streams with studio-style mixing and effects. Bundled in delivered minutes — no separate GPU-hour charge.",
     status: "pipeline",
     statusNote: "Pipeline: compositing is in active development with limited pilot access.",
     tiers: {
@@ -759,9 +774,9 @@ const Pricing = () => {
               textureStrength="soft"
             >
               <HeadlineStack
-                eyebrow="GPU-powered features"
-                title="Advanced processing across every tier"
-                subtitle="FrameWorks infrastructure and the Livepeer network enable GPU workflows. Compare what each tier includes."
+                eyebrow="Advanced processing"
+                title="GPU-accelerated features across every tier"
+                subtitle="AI workloads (transcription, V2V, highlights) draw from your GPU-hour allowance. Standard transcoding and multiview compositing are bundled in delivered minutes."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"

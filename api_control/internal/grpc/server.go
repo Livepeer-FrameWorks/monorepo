@@ -993,11 +993,18 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 		return nil, err
 	}
 
-	// Check if tenant is suspended (prepaid balance < -$10)
-	if suspended, suspendErr := s.isTenantSuspended(ctx, tenantID); suspendErr != nil {
-		s.logger.WithError(suspendErr).Warn("Failed to check tenant suspension status")
-		// Continue anyway - don't block on suspension check failure
-	} else if suspended {
+	// One Purser RPC for both suspension AND retention. Avoids a per-DVR-start
+	// GetSubscription + GetBillingTier roundtrip since GetTenantBillingStatus
+	// returns recording_retention_days alongside is_suspended.
+	var billingStatus *pb.GetTenantBillingStatusResponse
+	if s.purserClient != nil {
+		var bsErr error
+		billingStatus, bsErr = s.purserClient.GetTenantBillingStatus(ctx, tenantID)
+		if bsErr != nil {
+			s.logger.WithError(bsErr).Warn("Failed to fetch billing status; continuing fail-open")
+		}
+	}
+	if billingStatus != nil && billingStatus.IsSuspended {
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to start recordings")
 	}
 
@@ -1030,10 +1037,17 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 		}
 	}
 
-	// Enforce 30-day default retention if not specified.
+	// Default retention: tier-driven via Purser (already fetched above),
+	// falling back to 30 days when the tier has no recording_retention_days
+	// entitlement (e.g. PAYG / Enterprise) or Purser is unavailable.
+	// Caller-supplied expires_at always wins.
 	expiresAt := req.ExpiresAt
 	if expiresAt == nil || *expiresAt <= 0 {
-		expiry := time.Now().Add(30 * 24 * time.Hour).Unix()
+		retentionDays := int32(30)
+		if billingStatus != nil && billingStatus.RecordingRetentionDays > 0 {
+			retentionDays = billingStatus.RecordingRetentionDays
+		}
+		expiry := time.Now().Add(time.Duration(retentionDays) * 24 * time.Hour).Unix()
 		expiresAt = &expiry
 	}
 

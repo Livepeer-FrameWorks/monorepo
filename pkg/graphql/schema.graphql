@@ -192,9 +192,9 @@ type Query {
   """
   prepaidBalance(
     """
-    Currency code (defaults to USD).
+    Currency code (defaults to EUR).
     """
-    currency: String = "USD"
+    currency: String = "EUR"
   ): PrepaidBalance
 
   """
@@ -2205,8 +2205,6 @@ type VodAssetEdge {
 
 input CreatePaymentInput {
   invoiceId: ID!
-  amount: Money!
-  currency: Currency
   method: PaymentMethod!
   returnUrl: String
 }
@@ -2215,48 +2213,28 @@ input CreatePaymentInput {
 Input for updating enterprise subscription custom terms.
 """
 input UpdateSubscriptionCustomTermsInput {
-  "Custom pricing overrides."
-  customPricing: CustomPricingInput
   "Custom feature flags."
   customFeatures: BillingFeaturesInput
-  "Custom resource allocations."
-  customAllocations: AllocationDetailsInput
+  "Per-subscription pricing rule overrides (wholesale replace by meter)."
+  pricingOverrides: [PricingRuleInput!]
+  "Per-subscription entitlement overrides."
+  entitlementOverrides: [EntitlementEntryInput!]
 }
 
-"""
-Custom pricing configuration for enterprise subscriptions.
-"""
-input CustomPricingInput {
-  "Custom base monthly price."
-  basePrice: Float
-  "Discount rate (0.0 to 1.0)."
-  discountRate: Float
-  "Custom overage rates."
-  overageRates: OverageRatesInput
+"A pricing rule input — mirrors PricingRule output type."
+input PricingRuleInput {
+  meter: String!
+  model: String!
+  currency: String!
+  includedQuantity: String!
+  unitPrice: String!
+  configJson: String
 }
 
-"""
-Overage rate configuration for custom pricing.
-"""
-input OverageRatesInput {
-  "Bandwidth overage configuration."
-  bandwidth: AllocationDetailsInput
-  "Storage overage configuration."
-  storage: AllocationDetailsInput
-  "Compute overage configuration."
-  compute: AllocationDetailsInput
-}
-
-"""
-Resource allocation configuration.
-"""
-input AllocationDetailsInput {
-  "Resource limit (null = unlimited)."
-  limit: Float
-  "Price per unit above the limit."
-  unitPrice: Float
-  "Unit of measurement (GiB, hours, etc.)."
-  unit: String
+"A key/JSON-value entitlement input."
+input EntitlementEntryInput {
+  key: String!
+  value: String!
 }
 
 """
@@ -2487,10 +2465,12 @@ type TimeRange {
 Supported payment methods.
 """
 enum PaymentMethod {
-  "Credit/debit card via Stripe."
+  "Credit/debit card via the configured card provider."
   CARD
-  "Cryptocurrency payment."
-  CRYPTO
+  "Ethereum invoice payment."
+  CRYPTO_ETH
+  "USDC invoice payment."
+  CRYPTO_USDC
   "ACH/wire bank transfer."
   BANK_TRANSFER
 }
@@ -2521,9 +2501,9 @@ enum CardPaymentProvider {
 Input for creating a card-based prepaid balance top-up.
 """
 input CreateCardTopupInput {
-  "Amount to top up in cents. Minimum $5.00 (500 cents)."
+  "Amount to top up in cents. Minimum €5.00 (500 cents)."
   amountCents: Int!
-  "Currency code (default: USD)."
+  "Currency code (default: EUR)."
   currency: String
   "Payment provider to use."
   provider: CardPaymentProvider!
@@ -2595,7 +2575,7 @@ input CreateCryptoTopupInput {
   amountCents: Int!
   "Crypto asset to receive (ETH or USDC; LPT not yet supported)."
   asset: CryptoAsset!
-  "Currency the prepaid balance is denominated in. USD or EUR; defaults to USD."
+  "Currency the prepaid balance is denominated in. USD or EUR; defaults to EUR."
   currency: String
 }
 
@@ -4007,13 +3987,13 @@ type PlatformOverview {
 }
 
 """
-A subscription tier defining pricing, features, and resource allocations.
+A subscription tier defining pricing rules, entitlements, and features.
 Tenants subscribe to a tier which determines their billing and capabilities.
 """
 type BillingTier {
   "Unique tier identifier."
   id: ID!
-  "Internal tier name (free, starter, pro, enterprise)."
+  "Internal tier name (payg, free, supporter, developer, production, enterprise)."
   tierName: String!
   "User-facing tier name."
   displayName: String!
@@ -4027,14 +4007,10 @@ type BillingTier {
   billingPeriod: String!
   "Feature flags for this tier."
   features: BillingFeatures!
-  "Bandwidth allocation and overage rates."
-  bandwidthAllocation: AllocationDetails
-  "Storage allocation and overage rates."
-  storageAllocation: AllocationDetails
-  "Compute/transcoding allocation and overage rates."
-  computeAllocation: AllocationDetails
-  "Rates charged for usage above allocations."
-  overageRates: OverageRates
+  "Priced behaviors per meter (rating engine input)."
+  pricingRules: [PricingRule!]!
+  "Non-billing grants (e.g. recordingRetentionDays). Values are JSON-encoded strings."
+  entitlements: [EntitlementEntry!]!
   "Support level included (community, email, priority, dedicated)."
   supportLevel: String
   "SLA guarantee level for enterprise tiers."
@@ -4043,6 +4019,30 @@ type BillingTier {
   meteringEnabled: Boolean!
   "Whether this is an enterprise tier with custom terms."
   isEnterprise: Boolean!
+}
+
+"""
+A pricing rule: how a meter rates to money. Decimal fields are strings to preserve precision.
+"""
+type PricingRule {
+  "Meter name (delivered_minutes, average_storage_gb, ai_gpu_hours, processing_seconds)."
+  meter: String!
+  "Pricing model (tiered_graduated, all_usage, codec_multiplier)."
+  model: String!
+  "Currency (ISO 4217)."
+  currency: String!
+  "Free quantity included before billing kicks in."
+  includedQuantity: String!
+  "Price per unit (decimal as string)."
+  unitPrice: String!
+  "Model-specific config (e.g. codec_multipliers); JSON-encoded."
+  configJson: String!
+}
+
+"A key-value entitlement entry. Values are JSON-encoded for type flexibility."
+type EntitlementEntry {
+  key: String!
+  value: String!
 }
 
 """
@@ -4062,31 +4062,6 @@ type BillingFeatures {
   supportLevel: String!
   "Whether SLA guarantees apply."
   sla: Boolean!
-}
-
-"""
-Resource allocation limits and pricing.
-Used for bandwidth, storage, and compute allocations.
-"""
-type AllocationDetails {
-  "Allocation limit (null = unlimited)."
-  limit: Float
-  "Price per unit above the limit."
-  unitPrice: Float
-  "Unit of measurement (GiB, hours, etc.)."
-  unit: String
-}
-
-"""
-Overage rates for usage above tier allocations.
-"""
-type OverageRates {
-  "Bandwidth overage rates."
-  bandwidth: AllocationDetails
-  "Storage overage rates."
-  storage: AllocationDetails
-  "Compute/transcoding overage rates."
-  compute: AllocationDetails
 }
 
 """
@@ -4129,17 +4104,28 @@ type Invoice {
 }
 
 """
-A single line item on an invoice.
+A single line item on an invoice or usage preview, produced by the rating engine.
+Decimal quantities are strings to preserve precision.
 """
 type LineItem {
+  "Stable identity: 'base_subscription', 'meter:<name>', 'meter:<name>:codec:<codec>'."
+  lineKey: String!
+  "Meter name; empty for base_subscription."
+  meter: String!
   "Description of the charge."
   description: String!
-  "Quantity of units."
-  quantity: Int!
-  "Price per unit."
-  unitPrice: Money!
-  "Total for this line item."
-  total: Money!
+  "Total quantity used (decimal as string)."
+  quantity: String!
+  "Free quantity (decimal as string)."
+  includedQuantity: String!
+  "Billable quantity (decimal as string)."
+  billableQuantity: String!
+  "Price per unit (decimal as string)."
+  unitPrice: String!
+  "Total for this line item (= billableQuantity * unitPrice), decimal as string."
+  total: String!
+  "Currency (ISO 4217)."
+  currency: String!
 }
 
 # Invoices Connection (for paginated invoices list)
@@ -4155,13 +4141,6 @@ type InvoicesConnection {
   totalCount: Int!
 }
 
-# Custom pricing override for enterprise tenants
-type CustomPricing {
-  basePrice: Float # Custom base price (overrides tier)
-  discountRate: Float # Discount rate (0-1)
-  overageRates: OverageRates # Custom overage rates
-}
-
 # Tenant subscription with custom terms
 type TenantSubscription {
   id: ID!
@@ -4173,10 +4152,11 @@ type TenantSubscription {
   trialEndsAt: Time
   nextBillingDate: Time
   cancelledAt: Time
-  # Custom enterprise terms
-  customPricing: CustomPricing
+  # Custom feature flags overlay
   customFeatures: BillingFeatures
-  customAllocations: AllocationDetails
+  # Per-subscription rating overrides (overlay on top of tier rules/entitlements).
+  pricingOverrides: [PricingRule!]!
+  entitlementOverrides: [EntitlementEntry!]!
   # Payment
   paymentMethod: String
   billingModel: String!
@@ -4189,6 +4169,8 @@ type BillingStatus {
   currentTier: BillingTier
   subscription: TenantSubscription # Full subscription details with custom terms
   billingStatus: String!
+  "Invoice payment methods currently configured for this tenant."
+  paymentMethods: [PaymentMethod!]!
   nextBillingDate: Time
   trialEndsAt: Time # Trial end date (from TenantSubscription.trial_ends_at)
   outstandingAmount: Float!
@@ -4354,6 +4336,12 @@ type TenantUsage {
   costs: [CostEntry!]!
   totalCost: Float!
   currency: String!
+  "Rated line items for the period (rating engine output)."
+  lineItems: [LineItem!]!
+  "Decimal-string base subscription portion."
+  baseAmount: String!
+  "Decimal-string metered portion."
+  usageAmount: String!
 }
 
 type UsageEntry {
@@ -4368,10 +4356,21 @@ type CostEntry {
 
 type Payment {
   id: ID!
+  paymentUrl: String
+  walletAddress: String
   amount: Money!
   currency: Currency!
   method: PaymentMethod!
   status: PaymentStatus!
+  expiresAt: Time
+  qrCode: String
+  expectedAmountBaseUnits: String
+  expectedAmountToken: String
+  quotedPriceUsd: String
+  quoteSource: String
+  assetSymbol: String
+  network: String
+  quotedAt: Time
   createdAt: Time!
 }
 

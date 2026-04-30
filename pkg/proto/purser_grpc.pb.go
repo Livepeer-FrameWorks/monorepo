@@ -746,7 +746,6 @@ const (
 // PaymentService handles payment processing
 type PaymentServiceClient interface {
 	// Initiate payment for an invoice
-	// Source: pkg/api/purser/types.go:PaymentRequest (lines 243-249)
 	CreatePayment(ctx context.Context, in *PaymentRequest, opts ...grpc.CallOption) (*PaymentResponse, error)
 	// Get available payment methods
 	GetPaymentMethods(ctx context.Context, in *GetPaymentMethodsRequest, opts ...grpc.CallOption) (*PaymentMethodResponse, error)
@@ -800,7 +799,6 @@ func (c *paymentServiceClient) GetBillingStatus(ctx context.Context, in *GetBill
 // PaymentService handles payment processing
 type PaymentServiceServer interface {
 	// Initiate payment for an invoice
-	// Source: pkg/api/purser/types.go:PaymentRequest (lines 243-249)
 	CreatePayment(context.Context, *PaymentRequest) (*PaymentResponse, error)
 	// Get available payment methods
 	GetPaymentMethods(context.Context, *GetPaymentMethodsRequest) (*PaymentMethodResponse, error)

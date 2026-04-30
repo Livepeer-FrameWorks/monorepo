@@ -133,8 +133,12 @@ type GetTenantBillingStatusResponse struct {
 	IsSuspended       bool                   `protobuf:"varint,2,opt,name=is_suspended,json=isSuspended,proto3" json:"is_suspended,omitempty"`                     // subscription status = 'suspended' (balance < -$10)
 	IsBalanceNegative bool                   `protobuf:"varint,3,opt,name=is_balance_negative,json=isBalanceNegative,proto3" json:"is_balance_negative,omitempty"` // prepaid balance <= 0 (soft gate, return 402)
 	BalanceCents      int64                  `protobuf:"varint,4,opt,name=balance_cents,json=balanceCents,proto3" json:"balance_cents,omitempty"`                  // current balance (for display/logging)
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Tier entitlements that downstream services need without a second RPC.
+	// recording_retention_days = 0 means "use the system default"
+	// (Foghorn / api_balancing fall back to 30 days).
+	RecordingRetentionDays int32 `protobuf:"varint,5,opt,name=recording_retention_days,json=recordingRetentionDays,proto3" json:"recording_retention_days,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *GetTenantBillingStatusResponse) Reset() {
@@ -195,6 +199,13 @@ func (x *GetTenantBillingStatusResponse) GetBalanceCents() int64 {
 	return 0
 }
 
+func (x *GetTenantBillingStatusResponse) GetRecordingRetentionDays() int32 {
+	if x != nil {
+		return x.RecordingRetentionDays
+	}
+	return 0
+}
+
 type GetBillingTiersRequest struct {
 	state           protoimpl.MessageState   `protogen:"open.v1"`
 	IncludeInactive bool                     `protobuf:"varint,1,opt,name=include_inactive,json=includeInactive,proto3" json:"include_inactive,omitempty"` // include inactive tiers (admin)
@@ -247,7 +258,6 @@ func (x *GetBillingTiersRequest) GetPagination() *CursorPaginationRequest {
 	return nil
 }
 
-// Matches pkg/api/purser/types.go:GetBillingTiersResponse (lines 111-115)
 type GetBillingTiersResponse struct {
 	state          protoimpl.MessageState    `protogen:"open.v1"`
 	Tiers          []*BillingTier            `protobuf:"bytes,1,rep,name=tiers,proto3" json:"tiers,omitempty"`                                         // json:"tiers"
@@ -352,29 +362,27 @@ func (x *GetBillingTierRequest) GetTierId() string {
 	return ""
 }
 
-// Matches pkg/models/billing.go:BillingTier (lines 169-204)
+// BillingTier mirrors purser.billing_tiers (+ tier_pricing_rules + tier_entitlements).
+// Pricing rules and entitlements are normalized into separate tables; this proto
+// flattens them onto the tier for transport to clients.
 type BillingTier struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	Id                  string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                              // json:"id"
-	TierName            string                 `protobuf:"bytes,2,opt,name=tier_name,json=tierName,proto3" json:"tier_name,omitempty"`                                  // json:"tier_name"
-	DisplayName         string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`                         // json:"display_name"
-	Description         string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`                                            // json:"description"
-	BasePrice           float64                `protobuf:"fixed64,5,opt,name=base_price,json=basePrice,proto3" json:"base_price,omitempty"`                             // json:"base_price"
-	Currency            string                 `protobuf:"bytes,6,opt,name=currency,proto3" json:"currency,omitempty"`                                                  // json:"currency"
-	BillingPeriod       string                 `protobuf:"bytes,7,opt,name=billing_period,json=billingPeriod,proto3" json:"billing_period,omitempty"`                   // json:"billing_period"
-	BandwidthAllocation *AllocationDetails     `protobuf:"bytes,8,opt,name=bandwidth_allocation,json=bandwidthAllocation,proto3" json:"bandwidth_allocation,omitempty"` // json:"bandwidth_allocation"
-	StorageAllocation   *AllocationDetails     `protobuf:"bytes,9,opt,name=storage_allocation,json=storageAllocation,proto3" json:"storage_allocation,omitempty"`       // json:"storage_allocation"
-	ComputeAllocation   *AllocationDetails     `protobuf:"bytes,10,opt,name=compute_allocation,json=computeAllocation,proto3" json:"compute_allocation,omitempty"`      // json:"compute_allocation"
-	Features            *BillingFeatures       `protobuf:"bytes,11,opt,name=features,proto3" json:"features,omitempty"`                                                 // json:"features"
-	SupportLevel        string                 `protobuf:"bytes,12,opt,name=support_level,json=supportLevel,proto3" json:"support_level,omitempty"`                     // json:"support_level"
-	SlaLevel            string                 `protobuf:"bytes,13,opt,name=sla_level,json=slaLevel,proto3" json:"sla_level,omitempty"`                                 // json:"sla_level"
-	MeteringEnabled     bool                   `protobuf:"varint,14,opt,name=metering_enabled,json=meteringEnabled,proto3" json:"metering_enabled,omitempty"`           // json:"metering_enabled"
-	OverageRates        *OverageRates          `protobuf:"bytes,15,opt,name=overage_rates,json=overageRates,proto3" json:"overage_rates,omitempty"`                     // json:"overage_rates"
-	IsActive            bool                   `protobuf:"varint,16,opt,name=is_active,json=isActive,proto3" json:"is_active,omitempty"`                                // json:"is_active"
-	TierLevel           int32                  `protobuf:"varint,17,opt,name=tier_level,json=tierLevel,proto3" json:"tier_level,omitempty"`                             // json:"tier_level"
-	IsEnterprise        bool                   `protobuf:"varint,18,opt,name=is_enterprise,json=isEnterprise,proto3" json:"is_enterprise,omitempty"`                    // json:"is_enterprise"
-	CreatedAt           *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`                              // json:"created_at"
-	UpdatedAt           *timestamppb.Timestamp `protobuf:"bytes,20,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`                              // json:"updated_at"
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                    // json:"id"
+	TierName        string                 `protobuf:"bytes,2,opt,name=tier_name,json=tierName,proto3" json:"tier_name,omitempty"`                        // json:"tier_name"
+	DisplayName     string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`               // json:"display_name"
+	Description     string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`                                  // json:"description"
+	BasePrice       float64                `protobuf:"fixed64,5,opt,name=base_price,json=basePrice,proto3" json:"base_price,omitempty"`                   // json:"base_price"
+	Currency        string                 `protobuf:"bytes,6,opt,name=currency,proto3" json:"currency,omitempty"`                                        // json:"currency"
+	BillingPeriod   string                 `protobuf:"bytes,7,opt,name=billing_period,json=billingPeriod,proto3" json:"billing_period,omitempty"`         // json:"billing_period"
+	Features        *BillingFeatures       `protobuf:"bytes,11,opt,name=features,proto3" json:"features,omitempty"`                                       // json:"features"
+	SupportLevel    string                 `protobuf:"bytes,12,opt,name=support_level,json=supportLevel,proto3" json:"support_level,omitempty"`           // json:"support_level"
+	SlaLevel        string                 `protobuf:"bytes,13,opt,name=sla_level,json=slaLevel,proto3" json:"sla_level,omitempty"`                       // json:"sla_level"
+	MeteringEnabled bool                   `protobuf:"varint,14,opt,name=metering_enabled,json=meteringEnabled,proto3" json:"metering_enabled,omitempty"` // json:"metering_enabled"
+	IsActive        bool                   `protobuf:"varint,16,opt,name=is_active,json=isActive,proto3" json:"is_active,omitempty"`                      // json:"is_active"
+	TierLevel       int32                  `protobuf:"varint,17,opt,name=tier_level,json=tierLevel,proto3" json:"tier_level,omitempty"`                   // json:"tier_level"
+	IsEnterprise    bool                   `protobuf:"varint,18,opt,name=is_enterprise,json=isEnterprise,proto3" json:"is_enterprise,omitempty"`          // json:"is_enterprise"
+	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`                    // json:"created_at"
+	UpdatedAt       *timestamppb.Timestamp `protobuf:"bytes,20,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`                    // json:"updated_at"
 	// Stripe integration for direct checkout
 	StripeProductId      *string `protobuf:"bytes,21,opt,name=stripe_product_id,json=stripeProductId,proto3,oneof" json:"stripe_product_id,omitempty"`                  // Stripe Product ID
 	StripePriceIdMonthly *string `protobuf:"bytes,22,opt,name=stripe_price_id_monthly,json=stripePriceIdMonthly,proto3,oneof" json:"stripe_price_id_monthly,omitempty"` // Stripe Price ID for monthly billing
@@ -384,6 +392,9 @@ type BillingTier struct {
 	// MistServer process definitions per stream type (raw JSON arrays with {{gateway_url}} placeholder)
 	ProcessesLive string `protobuf:"bytes,26,opt,name=processes_live,json=processesLive,proto3" json:"processes_live,omitempty"` // Process config for live streams
 	ProcessesVod  string `protobuf:"bytes,27,opt,name=processes_vod,json=processesVod,proto3" json:"processes_vod,omitempty"`    // Process config for VOD processing
+	// Rating engine inputs.
+	PricingRules  []*PricingRule    `protobuf:"bytes,28,rep,name=pricing_rules,json=pricingRules,proto3" json:"pricing_rules,omitempty"`                                                       // priced behaviors per meter
+	Entitlements  map[string]string `protobuf:"bytes,29,rep,name=entitlements,proto3" json:"entitlements,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // non-billing grants, JSON-encoded values
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -467,27 +478,6 @@ func (x *BillingTier) GetBillingPeriod() string {
 	return ""
 }
 
-func (x *BillingTier) GetBandwidthAllocation() *AllocationDetails {
-	if x != nil {
-		return x.BandwidthAllocation
-	}
-	return nil
-}
-
-func (x *BillingTier) GetStorageAllocation() *AllocationDetails {
-	if x != nil {
-		return x.StorageAllocation
-	}
-	return nil
-}
-
-func (x *BillingTier) GetComputeAllocation() *AllocationDetails {
-	if x != nil {
-		return x.ComputeAllocation
-	}
-	return nil
-}
-
 func (x *BillingTier) GetFeatures() *BillingFeatures {
 	if x != nil {
 		return x.Features
@@ -514,13 +504,6 @@ func (x *BillingTier) GetMeteringEnabled() bool {
 		return x.MeteringEnabled
 	}
 	return false
-}
-
-func (x *BillingTier) GetOverageRates() *OverageRates {
-	if x != nil {
-		return x.OverageRates
-	}
-	return nil
 }
 
 func (x *BillingTier) GetIsActive() bool {
@@ -607,7 +590,106 @@ func (x *BillingTier) GetProcessesVod() string {
 	return ""
 }
 
-// Matches pkg/models/billing.go:BillingFeatures (lines 12-19)
+func (x *BillingTier) GetPricingRules() []*PricingRule {
+	if x != nil {
+		return x.PricingRules
+	}
+	return nil
+}
+
+func (x *BillingTier) GetEntitlements() map[string]string {
+	if x != nil {
+		return x.Entitlements
+	}
+	return nil
+}
+
+// PricingRule is one priced behavior on a tier (or override on a subscription).
+// Mirrors purser.tier_pricing_rules.
+type PricingRule struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Meter            string                 `protobuf:"bytes,1,opt,name=meter,proto3" json:"meter,omitempty"`                                               // delivered_minutes | average_storage_gb | ai_gpu_hours | processing_seconds
+	Model            string                 `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`                                               // tiered_graduated | all_usage | codec_multiplier
+	Currency         string                 `protobuf:"bytes,3,opt,name=currency,proto3" json:"currency,omitempty"`                                         // ISO 4217
+	IncludedQuantity string                 `protobuf:"bytes,4,opt,name=included_quantity,json=includedQuantity,proto3" json:"included_quantity,omitempty"` // decimal as string
+	UnitPrice        string                 `protobuf:"bytes,5,opt,name=unit_price,json=unitPrice,proto3" json:"unit_price,omitempty"`                      // decimal as string
+	ConfigJson       string                 `protobuf:"bytes,6,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`                   // model-specific config (JSON object)
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *PricingRule) Reset() {
+	*x = PricingRule{}
+	mi := &file_purser_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PricingRule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PricingRule) ProtoMessage() {}
+
+func (x *PricingRule) ProtoReflect() protoreflect.Message {
+	mi := &file_purser_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PricingRule.ProtoReflect.Descriptor instead.
+func (*PricingRule) Descriptor() ([]byte, []int) {
+	return file_purser_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *PricingRule) GetMeter() string {
+	if x != nil {
+		return x.Meter
+	}
+	return ""
+}
+
+func (x *PricingRule) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *PricingRule) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *PricingRule) GetIncludedQuantity() string {
+	if x != nil {
+		return x.IncludedQuantity
+	}
+	return ""
+}
+
+func (x *PricingRule) GetUnitPrice() string {
+	if x != nil {
+		return x.UnitPrice
+	}
+	return ""
+}
+
+func (x *PricingRule) GetConfigJson() string {
+	if x != nil {
+		return x.ConfigJson
+	}
+	return ""
+}
+
 type BillingFeatures struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	Recording              bool                   `protobuf:"varint,1,opt,name=recording,proto3" json:"recording,omitempty"`                                                         // json:"recording"
@@ -623,7 +705,7 @@ type BillingFeatures struct {
 
 func (x *BillingFeatures) Reset() {
 	*x = BillingFeatures{}
-	mi := &file_purser_proto_msgTypes[6]
+	mi := &file_purser_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -635,7 +717,7 @@ func (x *BillingFeatures) String() string {
 func (*BillingFeatures) ProtoMessage() {}
 
 func (x *BillingFeatures) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[6]
+	mi := &file_purser_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -648,7 +730,7 @@ func (x *BillingFeatures) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BillingFeatures.ProtoReflect.Descriptor instead.
 func (*BillingFeatures) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{6}
+	return file_purser_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *BillingFeatures) GetRecording() bool {
@@ -700,154 +782,30 @@ func (x *BillingFeatures) GetProcessingCustomizable() bool {
 	return false
 }
 
-// Matches pkg/models/billing.go:AllocationDetails (lines 24-28)
-type AllocationDetails struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Limit         *float64               `protobuf:"fixed64,1,opt,name=limit,proto3,oneof" json:"limit,omitempty"`                    // json:"limit" (nil = unlimited)
-	UnitPrice     float64                `protobuf:"fixed64,2,opt,name=unit_price,json=unitPrice,proto3" json:"unit_price,omitempty"` // json:"unit_price,omitempty"
-	Unit          string                 `protobuf:"bytes,3,opt,name=unit,proto3" json:"unit,omitempty"`                              // json:"unit,omitempty"
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *AllocationDetails) Reset() {
-	*x = AllocationDetails{}
-	mi := &file_purser_proto_msgTypes[7]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *AllocationDetails) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*AllocationDetails) ProtoMessage() {}
-
-func (x *AllocationDetails) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[7]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use AllocationDetails.ProtoReflect.Descriptor instead.
-func (*AllocationDetails) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *AllocationDetails) GetLimit() float64 {
-	if x != nil && x.Limit != nil {
-		return *x.Limit
-	}
-	return 0
-}
-
-func (x *AllocationDetails) GetUnitPrice() float64 {
-	if x != nil {
-		return x.UnitPrice
-	}
-	return 0
-}
-
-func (x *AllocationDetails) GetUnit() string {
-	if x != nil {
-		return x.Unit
-	}
-	return ""
-}
-
-// Matches pkg/models/billing.go:OverageRates (lines 31-35)
-type OverageRates struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Bandwidth     *AllocationDetails     `protobuf:"bytes,1,opt,name=bandwidth,proto3" json:"bandwidth,omitempty"` // json:"bandwidth,omitempty"
-	Storage       *AllocationDetails     `protobuf:"bytes,2,opt,name=storage,proto3" json:"storage,omitempty"`     // json:"storage,omitempty"
-	Compute       *AllocationDetails     `protobuf:"bytes,3,opt,name=compute,proto3" json:"compute,omitempty"`     // json:"compute,omitempty"
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *OverageRates) Reset() {
-	*x = OverageRates{}
-	mi := &file_purser_proto_msgTypes[8]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *OverageRates) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*OverageRates) ProtoMessage() {}
-
-func (x *OverageRates) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[8]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use OverageRates.ProtoReflect.Descriptor instead.
-func (*OverageRates) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *OverageRates) GetBandwidth() *AllocationDetails {
-	if x != nil {
-		return x.Bandwidth
-	}
-	return nil
-}
-
-func (x *OverageRates) GetStorage() *AllocationDetails {
-	if x != nil {
-		return x.Storage
-	}
-	return nil
-}
-
-func (x *OverageRates) GetCompute() *AllocationDetails {
-	if x != nil {
-		return x.Compute
-	}
-	return nil
-}
-
-// Matches pkg/api/purser/types.go:CreateTierRequest (lines 176-193)
+// CreateBillingTierRequest creates a new tier in purser.billing_tiers. Pricing
+// rules and entitlements are populated separately via dedicated admin RPCs (or
+// the bootstrap reconciler); this RPC creates the parent tier row only.
 type CreateBillingTierRequest struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	TierName            string                 `protobuf:"bytes,1,opt,name=tier_name,json=tierName,proto3" json:"tier_name,omitempty"`                // json:"tier_name" required
-	DisplayName         string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`       // json:"display_name" required
-	Description         string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`                          // json:"description"
-	BasePrice           float64                `protobuf:"fixed64,4,opt,name=base_price,json=basePrice,proto3" json:"base_price,omitempty"`           // json:"base_price"
-	Currency            string                 `protobuf:"bytes,5,opt,name=currency,proto3" json:"currency,omitempty"`                                // json:"currency"
-	BillingPeriod       string                 `protobuf:"bytes,6,opt,name=billing_period,json=billingPeriod,proto3" json:"billing_period,omitempty"` // json:"billing_period"
-	BandwidthAllocation *AllocationDetails     `protobuf:"bytes,7,opt,name=bandwidth_allocation,json=bandwidthAllocation,proto3" json:"bandwidth_allocation,omitempty"`
-	StorageAllocation   *AllocationDetails     `protobuf:"bytes,8,opt,name=storage_allocation,json=storageAllocation,proto3" json:"storage_allocation,omitempty"`
-	ComputeAllocation   *AllocationDetails     `protobuf:"bytes,9,opt,name=compute_allocation,json=computeAllocation,proto3" json:"compute_allocation,omitempty"`
-	Features            *BillingFeatures       `protobuf:"bytes,10,opt,name=features,proto3" json:"features,omitempty"`
-	SupportLevel        string                 `protobuf:"bytes,11,opt,name=support_level,json=supportLevel,proto3" json:"support_level,omitempty"`           // json:"support_level"
-	SlaLevel            string                 `protobuf:"bytes,12,opt,name=sla_level,json=slaLevel,proto3" json:"sla_level,omitempty"`                       // json:"sla_level"
-	MeteringEnabled     bool                   `protobuf:"varint,13,opt,name=metering_enabled,json=meteringEnabled,proto3" json:"metering_enabled,omitempty"` // json:"metering_enabled"
-	OverageRates        *OverageRates          `protobuf:"bytes,14,opt,name=overage_rates,json=overageRates,proto3" json:"overage_rates,omitempty"`
-	TierLevel           int32                  `protobuf:"varint,15,opt,name=tier_level,json=tierLevel,proto3" json:"tier_level,omitempty"`          // json:"tier_level"
-	IsEnterprise        bool                   `protobuf:"varint,16,opt,name=is_enterprise,json=isEnterprise,proto3" json:"is_enterprise,omitempty"` // json:"is_enterprise"
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	TierName        string                 `protobuf:"bytes,1,opt,name=tier_name,json=tierName,proto3" json:"tier_name,omitempty"`                // json:"tier_name" required
+	DisplayName     string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`       // json:"display_name" required
+	Description     string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`                          // json:"description"
+	BasePrice       float64                `protobuf:"fixed64,4,opt,name=base_price,json=basePrice,proto3" json:"base_price,omitempty"`           // json:"base_price"
+	Currency        string                 `protobuf:"bytes,5,opt,name=currency,proto3" json:"currency,omitempty"`                                // json:"currency"
+	BillingPeriod   string                 `protobuf:"bytes,6,opt,name=billing_period,json=billingPeriod,proto3" json:"billing_period,omitempty"` // json:"billing_period"
+	Features        *BillingFeatures       `protobuf:"bytes,10,opt,name=features,proto3" json:"features,omitempty"`
+	SupportLevel    string                 `protobuf:"bytes,11,opt,name=support_level,json=supportLevel,proto3" json:"support_level,omitempty"`           // json:"support_level"
+	SlaLevel        string                 `protobuf:"bytes,12,opt,name=sla_level,json=slaLevel,proto3" json:"sla_level,omitempty"`                       // json:"sla_level"
+	MeteringEnabled bool                   `protobuf:"varint,13,opt,name=metering_enabled,json=meteringEnabled,proto3" json:"metering_enabled,omitempty"` // json:"metering_enabled"
+	TierLevel       int32                  `protobuf:"varint,15,opt,name=tier_level,json=tierLevel,proto3" json:"tier_level,omitempty"`                   // json:"tier_level"
+	IsEnterprise    bool                   `protobuf:"varint,16,opt,name=is_enterprise,json=isEnterprise,proto3" json:"is_enterprise,omitempty"`          // json:"is_enterprise"
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *CreateBillingTierRequest) Reset() {
 	*x = CreateBillingTierRequest{}
-	mi := &file_purser_proto_msgTypes[9]
+	mi := &file_purser_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -859,7 +817,7 @@ func (x *CreateBillingTierRequest) String() string {
 func (*CreateBillingTierRequest) ProtoMessage() {}
 
 func (x *CreateBillingTierRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[9]
+	mi := &file_purser_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -872,7 +830,7 @@ func (x *CreateBillingTierRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBillingTierRequest.ProtoReflect.Descriptor instead.
 func (*CreateBillingTierRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{9}
+	return file_purser_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CreateBillingTierRequest) GetTierName() string {
@@ -917,27 +875,6 @@ func (x *CreateBillingTierRequest) GetBillingPeriod() string {
 	return ""
 }
 
-func (x *CreateBillingTierRequest) GetBandwidthAllocation() *AllocationDetails {
-	if x != nil {
-		return x.BandwidthAllocation
-	}
-	return nil
-}
-
-func (x *CreateBillingTierRequest) GetStorageAllocation() *AllocationDetails {
-	if x != nil {
-		return x.StorageAllocation
-	}
-	return nil
-}
-
-func (x *CreateBillingTierRequest) GetComputeAllocation() *AllocationDetails {
-	if x != nil {
-		return x.ComputeAllocation
-	}
-	return nil
-}
-
 func (x *CreateBillingTierRequest) GetFeatures() *BillingFeatures {
 	if x != nil {
 		return x.Features
@@ -966,13 +903,6 @@ func (x *CreateBillingTierRequest) GetMeteringEnabled() bool {
 	return false
 }
 
-func (x *CreateBillingTierRequest) GetOverageRates() *OverageRates {
-	if x != nil {
-		return x.OverageRates
-	}
-	return nil
-}
-
 func (x *CreateBillingTierRequest) GetTierLevel() int32 {
 	if x != nil {
 		return x.TierLevel
@@ -987,33 +917,28 @@ func (x *CreateBillingTierRequest) GetIsEnterprise() bool {
 	return false
 }
 
-// Matches pkg/api/purser/types.go:UpdateTierRequest (lines 196-213)
 type UpdateBillingTierRequest struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	TierId              string                 `protobuf:"bytes,1,opt,name=tier_id,json=tierId,proto3" json:"tier_id,omitempty"`                            // target tier
-	DisplayName         *string                `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3,oneof" json:"display_name,omitempty"`       // json:"display_name,omitempty"
-	Description         *string                `protobuf:"bytes,3,opt,name=description,proto3,oneof" json:"description,omitempty"`                          // json:"description,omitempty"
-	BasePrice           *float64               `protobuf:"fixed64,4,opt,name=base_price,json=basePrice,proto3,oneof" json:"base_price,omitempty"`           // json:"base_price,omitempty"
-	Currency            *string                `protobuf:"bytes,5,opt,name=currency,proto3,oneof" json:"currency,omitempty"`                                // json:"currency,omitempty"
-	BillingPeriod       *string                `protobuf:"bytes,6,opt,name=billing_period,json=billingPeriod,proto3,oneof" json:"billing_period,omitempty"` // json:"billing_period,omitempty"
-	BandwidthAllocation *AllocationDetails     `protobuf:"bytes,7,opt,name=bandwidth_allocation,json=bandwidthAllocation,proto3,oneof" json:"bandwidth_allocation,omitempty"`
-	StorageAllocation   *AllocationDetails     `protobuf:"bytes,8,opt,name=storage_allocation,json=storageAllocation,proto3,oneof" json:"storage_allocation,omitempty"`
-	ComputeAllocation   *AllocationDetails     `protobuf:"bytes,9,opt,name=compute_allocation,json=computeAllocation,proto3,oneof" json:"compute_allocation,omitempty"`
-	Features            *BillingFeatures       `protobuf:"bytes,10,opt,name=features,proto3,oneof" json:"features,omitempty"`
-	SupportLevel        *string                `protobuf:"bytes,11,opt,name=support_level,json=supportLevel,proto3,oneof" json:"support_level,omitempty"`           // json:"support_level,omitempty"
-	SlaLevel            *string                `protobuf:"bytes,12,opt,name=sla_level,json=slaLevel,proto3,oneof" json:"sla_level,omitempty"`                       // json:"sla_level,omitempty"
-	MeteringEnabled     *bool                  `protobuf:"varint,13,opt,name=metering_enabled,json=meteringEnabled,proto3,oneof" json:"metering_enabled,omitempty"` // json:"metering_enabled,omitempty"
-	OverageRates        *OverageRates          `protobuf:"bytes,14,opt,name=overage_rates,json=overageRates,proto3,oneof" json:"overage_rates,omitempty"`
-	TierLevel           *int32                 `protobuf:"varint,15,opt,name=tier_level,json=tierLevel,proto3,oneof" json:"tier_level,omitempty"`          // json:"tier_level,omitempty"
-	IsEnterprise        *bool                  `protobuf:"varint,16,opt,name=is_enterprise,json=isEnterprise,proto3,oneof" json:"is_enterprise,omitempty"` // json:"is_enterprise,omitempty"
-	IsActive            *bool                  `protobuf:"varint,17,opt,name=is_active,json=isActive,proto3,oneof" json:"is_active,omitempty"`             // json:"is_active,omitempty"
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	TierId          string                 `protobuf:"bytes,1,opt,name=tier_id,json=tierId,proto3" json:"tier_id,omitempty"`                            // target tier
+	DisplayName     *string                `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3,oneof" json:"display_name,omitempty"`       // json:"display_name,omitempty"
+	Description     *string                `protobuf:"bytes,3,opt,name=description,proto3,oneof" json:"description,omitempty"`                          // json:"description,omitempty"
+	BasePrice       *float64               `protobuf:"fixed64,4,opt,name=base_price,json=basePrice,proto3,oneof" json:"base_price,omitempty"`           // json:"base_price,omitempty"
+	Currency        *string                `protobuf:"bytes,5,opt,name=currency,proto3,oneof" json:"currency,omitempty"`                                // json:"currency,omitempty"
+	BillingPeriod   *string                `protobuf:"bytes,6,opt,name=billing_period,json=billingPeriod,proto3,oneof" json:"billing_period,omitempty"` // json:"billing_period,omitempty"
+	Features        *BillingFeatures       `protobuf:"bytes,10,opt,name=features,proto3,oneof" json:"features,omitempty"`
+	SupportLevel    *string                `protobuf:"bytes,11,opt,name=support_level,json=supportLevel,proto3,oneof" json:"support_level,omitempty"`           // json:"support_level,omitempty"
+	SlaLevel        *string                `protobuf:"bytes,12,opt,name=sla_level,json=slaLevel,proto3,oneof" json:"sla_level,omitempty"`                       // json:"sla_level,omitempty"
+	MeteringEnabled *bool                  `protobuf:"varint,13,opt,name=metering_enabled,json=meteringEnabled,proto3,oneof" json:"metering_enabled,omitempty"` // json:"metering_enabled,omitempty"
+	TierLevel       *int32                 `protobuf:"varint,15,opt,name=tier_level,json=tierLevel,proto3,oneof" json:"tier_level,omitempty"`                   // json:"tier_level,omitempty"
+	IsEnterprise    *bool                  `protobuf:"varint,16,opt,name=is_enterprise,json=isEnterprise,proto3,oneof" json:"is_enterprise,omitempty"`          // json:"is_enterprise,omitempty"
+	IsActive        *bool                  `protobuf:"varint,17,opt,name=is_active,json=isActive,proto3,oneof" json:"is_active,omitempty"`                      // json:"is_active,omitempty"
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *UpdateBillingTierRequest) Reset() {
 	*x = UpdateBillingTierRequest{}
-	mi := &file_purser_proto_msgTypes[10]
+	mi := &file_purser_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1025,7 +950,7 @@ func (x *UpdateBillingTierRequest) String() string {
 func (*UpdateBillingTierRequest) ProtoMessage() {}
 
 func (x *UpdateBillingTierRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[10]
+	mi := &file_purser_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1038,7 +963,7 @@ func (x *UpdateBillingTierRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateBillingTierRequest.ProtoReflect.Descriptor instead.
 func (*UpdateBillingTierRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{10}
+	return file_purser_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *UpdateBillingTierRequest) GetTierId() string {
@@ -1083,27 +1008,6 @@ func (x *UpdateBillingTierRequest) GetBillingPeriod() string {
 	return ""
 }
 
-func (x *UpdateBillingTierRequest) GetBandwidthAllocation() *AllocationDetails {
-	if x != nil {
-		return x.BandwidthAllocation
-	}
-	return nil
-}
-
-func (x *UpdateBillingTierRequest) GetStorageAllocation() *AllocationDetails {
-	if x != nil {
-		return x.StorageAllocation
-	}
-	return nil
-}
-
-func (x *UpdateBillingTierRequest) GetComputeAllocation() *AllocationDetails {
-	if x != nil {
-		return x.ComputeAllocation
-	}
-	return nil
-}
-
 func (x *UpdateBillingTierRequest) GetFeatures() *BillingFeatures {
 	if x != nil {
 		return x.Features
@@ -1130,13 +1034,6 @@ func (x *UpdateBillingTierRequest) GetMeteringEnabled() bool {
 		return *x.MeteringEnabled
 	}
 	return false
-}
-
-func (x *UpdateBillingTierRequest) GetOverageRates() *OverageRates {
-	if x != nil {
-		return x.OverageRates
-	}
-	return nil
 }
 
 func (x *UpdateBillingTierRequest) GetTierLevel() int32 {
@@ -1169,7 +1066,7 @@ type GetSubscriptionRequest struct {
 
 func (x *GetSubscriptionRequest) Reset() {
 	*x = GetSubscriptionRequest{}
-	mi := &file_purser_proto_msgTypes[11]
+	mi := &file_purser_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1181,7 +1078,7 @@ func (x *GetSubscriptionRequest) String() string {
 func (*GetSubscriptionRequest) ProtoMessage() {}
 
 func (x *GetSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[11]
+	mi := &file_purser_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1194,7 +1091,7 @@ func (x *GetSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*GetSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{11}
+	return file_purser_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *GetSubscriptionRequest) GetTenantId() string {
@@ -1204,7 +1101,6 @@ func (x *GetSubscriptionRequest) GetTenantId() string {
 	return ""
 }
 
-// Matches pkg/api/purser/types.go:GetSubscriptionResponse (lines 82-85)
 type GetSubscriptionResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Subscription  *TenantSubscription    `protobuf:"bytes,1,opt,name=subscription,proto3" json:"subscription,omitempty"` // json:"subscription,omitempty"
@@ -1215,7 +1111,7 @@ type GetSubscriptionResponse struct {
 
 func (x *GetSubscriptionResponse) Reset() {
 	*x = GetSubscriptionResponse{}
-	mi := &file_purser_proto_msgTypes[12]
+	mi := &file_purser_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1227,7 +1123,7 @@ func (x *GetSubscriptionResponse) String() string {
 func (*GetSubscriptionResponse) ProtoMessage() {}
 
 func (x *GetSubscriptionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[12]
+	mi := &file_purser_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1240,7 +1136,7 @@ func (x *GetSubscriptionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSubscriptionResponse.ProtoReflect.Descriptor instead.
 func (*GetSubscriptionResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{12}
+	return file_purser_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GetSubscriptionResponse) GetSubscription() *TenantSubscription {
@@ -1266,7 +1162,7 @@ type GetBillingDetailsRequest struct {
 
 func (x *GetBillingDetailsRequest) Reset() {
 	*x = GetBillingDetailsRequest{}
-	mi := &file_purser_proto_msgTypes[13]
+	mi := &file_purser_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1278,7 +1174,7 @@ func (x *GetBillingDetailsRequest) String() string {
 func (*GetBillingDetailsRequest) ProtoMessage() {}
 
 func (x *GetBillingDetailsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[13]
+	mi := &file_purser_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1291,7 +1187,7 @@ func (x *GetBillingDetailsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBillingDetailsRequest.ProtoReflect.Descriptor instead.
 func (*GetBillingDetailsRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{13}
+	return file_purser_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GetBillingDetailsRequest) GetTenantId() string {
@@ -1314,7 +1210,7 @@ type UpdateBillingDetailsRequest struct {
 
 func (x *UpdateBillingDetailsRequest) Reset() {
 	*x = UpdateBillingDetailsRequest{}
-	mi := &file_purser_proto_msgTypes[14]
+	mi := &file_purser_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1326,7 +1222,7 @@ func (x *UpdateBillingDetailsRequest) String() string {
 func (*UpdateBillingDetailsRequest) ProtoMessage() {}
 
 func (x *UpdateBillingDetailsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[14]
+	mi := &file_purser_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1339,7 +1235,7 @@ func (x *UpdateBillingDetailsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateBillingDetailsRequest.ProtoReflect.Descriptor instead.
 func (*UpdateBillingDetailsRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{14}
+	return file_purser_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *UpdateBillingDetailsRequest) GetTenantId() string {
@@ -1393,7 +1289,7 @@ type BillingDetails struct {
 
 func (x *BillingDetails) Reset() {
 	*x = BillingDetails{}
-	mi := &file_purser_proto_msgTypes[15]
+	mi := &file_purser_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1405,7 +1301,7 @@ func (x *BillingDetails) String() string {
 func (*BillingDetails) ProtoMessage() {}
 
 func (x *BillingDetails) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[15]
+	mi := &file_purser_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1418,7 +1314,7 @@ func (x *BillingDetails) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BillingDetails.ProtoReflect.Descriptor instead.
 func (*BillingDetails) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{15}
+	return file_purser_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *BillingDetails) GetTenantId() string {
@@ -1470,30 +1366,31 @@ func (x *BillingDetails) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-// Matches pkg/models/billing.go:TenantSubscription (lines 207-238)
 type TenantSubscription struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	Id                 string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                                    // json:"id"
-	TenantId           string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                        // json:"tenant_id"
-	TierId             string                 `protobuf:"bytes,3,opt,name=tier_id,json=tierId,proto3" json:"tier_id,omitempty"`                                              // json:"tier_id"
-	Status             string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`                                                            // json:"status"
-	BillingEmail       string                 `protobuf:"bytes,5,opt,name=billing_email,json=billingEmail,proto3" json:"billing_email,omitempty"`                            // json:"billing_email"
-	StartedAt          *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`                                     // json:"started_at"
-	TrialEndsAt        *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=trial_ends_at,json=trialEndsAt,proto3,oneof" json:"trial_ends_at,omitempty"`                       // json:"trial_ends_at,omitempty"
-	NextBillingDate    *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=next_billing_date,json=nextBillingDate,proto3,oneof" json:"next_billing_date,omitempty"`           // json:"next_billing_date,omitempty"
-	CancelledAt        *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=cancelled_at,json=cancelledAt,proto3,oneof" json:"cancelled_at,omitempty"`                         // json:"cancelled_at,omitempty"
-	CustomPricing      *CustomPricing         `protobuf:"bytes,10,opt,name=custom_pricing,json=customPricing,proto3" json:"custom_pricing,omitempty"`                        // json:"custom_pricing"
-	CustomFeatures     *BillingFeatures       `protobuf:"bytes,11,opt,name=custom_features,json=customFeatures,proto3" json:"custom_features,omitempty"`                     // json:"custom_features"
-	CustomAllocations  *AllocationDetails     `protobuf:"bytes,12,opt,name=custom_allocations,json=customAllocations,proto3" json:"custom_allocations,omitempty"`            // json:"custom_allocations"
-	PaymentMethod      *string                `protobuf:"bytes,13,opt,name=payment_method,json=paymentMethod,proto3,oneof" json:"payment_method,omitempty"`                  // json:"payment_method,omitempty"
-	PaymentReference   *string                `protobuf:"bytes,14,opt,name=payment_reference,json=paymentReference,proto3,oneof" json:"payment_reference,omitempty"`         // json:"payment_reference,omitempty"
-	BillingAddress     *BillingAddress        `protobuf:"bytes,15,opt,name=billing_address,json=billingAddress,proto3" json:"billing_address,omitempty"`                     // json:"billing_address"
-	TaxId              *string                `protobuf:"bytes,16,opt,name=tax_id,json=taxId,proto3,oneof" json:"tax_id,omitempty"`                                          // json:"tax_id,omitempty"
-	TaxRate            *float64               `protobuf:"fixed64,17,opt,name=tax_rate,json=taxRate,proto3,oneof" json:"tax_rate,omitempty"`                                  // json:"tax_rate,omitempty"
-	CreatedAt          *timestamppb.Timestamp `protobuf:"bytes,18,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`                                    // json:"created_at"
-	UpdatedAt          *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`                                    // json:"updated_at"
-	BillingPeriodStart *timestamppb.Timestamp `protobuf:"bytes,20,opt,name=billing_period_start,json=billingPeriodStart,proto3,oneof" json:"billing_period_start,omitempty"` // json:"billing_period_start,omitempty"
-	BillingPeriodEnd   *timestamppb.Timestamp `protobuf:"bytes,21,opt,name=billing_period_end,json=billingPeriodEnd,proto3,oneof" json:"billing_period_end,omitempty"`       // json:"billing_period_end,omitempty"
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                          // json:"id"
+	TenantId        string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                              // json:"tenant_id"
+	TierId          string                 `protobuf:"bytes,3,opt,name=tier_id,json=tierId,proto3" json:"tier_id,omitempty"`                                    // json:"tier_id"
+	Status          string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`                                                  // json:"status"
+	BillingEmail    string                 `protobuf:"bytes,5,opt,name=billing_email,json=billingEmail,proto3" json:"billing_email,omitempty"`                  // json:"billing_email"
+	StartedAt       *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`                           // json:"started_at"
+	TrialEndsAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=trial_ends_at,json=trialEndsAt,proto3,oneof" json:"trial_ends_at,omitempty"`             // json:"trial_ends_at,omitempty"
+	NextBillingDate *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=next_billing_date,json=nextBillingDate,proto3,oneof" json:"next_billing_date,omitempty"` // json:"next_billing_date,omitempty"
+	CancelledAt     *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=cancelled_at,json=cancelledAt,proto3,oneof" json:"cancelled_at,omitempty"`               // json:"cancelled_at,omitempty"
+	CustomFeatures  *BillingFeatures       `protobuf:"bytes,11,opt,name=custom_features,json=customFeatures,proto3" json:"custom_features,omitempty"`           // json:"custom_features"
+	// Per-subscription pricing/entitlement overlays live in
+	// purser.subscription_pricing_overrides and purser.subscription_entitlement_overrides.
+	PricingOverrides     []*PricingRule         `protobuf:"bytes,30,rep,name=pricing_overrides,json=pricingOverrides,proto3" json:"pricing_overrides,omitempty"`                                                                                       // override rules by meter
+	EntitlementOverrides map[string]string      `protobuf:"bytes,31,rep,name=entitlement_overrides,json=entitlementOverrides,proto3" json:"entitlement_overrides,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // override entitlement keys
+	PaymentMethod        *string                `protobuf:"bytes,13,opt,name=payment_method,json=paymentMethod,proto3,oneof" json:"payment_method,omitempty"`                                                                                          // json:"payment_method,omitempty"
+	PaymentReference     *string                `protobuf:"bytes,14,opt,name=payment_reference,json=paymentReference,proto3,oneof" json:"payment_reference,omitempty"`                                                                                 // json:"payment_reference,omitempty"
+	BillingAddress       *BillingAddress        `protobuf:"bytes,15,opt,name=billing_address,json=billingAddress,proto3" json:"billing_address,omitempty"`                                                                                             // json:"billing_address"
+	TaxId                *string                `protobuf:"bytes,16,opt,name=tax_id,json=taxId,proto3,oneof" json:"tax_id,omitempty"`                                                                                                                  // json:"tax_id,omitempty"
+	TaxRate              *float64               `protobuf:"fixed64,17,opt,name=tax_rate,json=taxRate,proto3,oneof" json:"tax_rate,omitempty"`                                                                                                          // json:"tax_rate,omitempty"
+	CreatedAt            *timestamppb.Timestamp `protobuf:"bytes,18,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`                                                                                                            // json:"created_at"
+	UpdatedAt            *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`                                                                                                            // json:"updated_at"
+	BillingPeriodStart   *timestamppb.Timestamp `protobuf:"bytes,20,opt,name=billing_period_start,json=billingPeriodStart,proto3,oneof" json:"billing_period_start,omitempty"`                                                                         // json:"billing_period_start,omitempty"
+	BillingPeriodEnd     *timestamppb.Timestamp `protobuf:"bytes,21,opt,name=billing_period_end,json=billingPeriodEnd,proto3,oneof" json:"billing_period_end,omitempty"`                                                                               // json:"billing_period_end,omitempty"
 	// Billing model: 'postpaid' (traditional invoicing) or 'prepaid' (balance-based)
 	// Wallet-only accounts MUST use prepaid (enforced at account creation)
 	BillingModel string `protobuf:"bytes,22,opt,name=billing_model,json=billingModel,proto3" json:"billing_model,omitempty"` // json:"billing_model"
@@ -1513,7 +1410,7 @@ type TenantSubscription struct {
 
 func (x *TenantSubscription) Reset() {
 	*x = TenantSubscription{}
-	mi := &file_purser_proto_msgTypes[16]
+	mi := &file_purser_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1525,7 +1422,7 @@ func (x *TenantSubscription) String() string {
 func (*TenantSubscription) ProtoMessage() {}
 
 func (x *TenantSubscription) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[16]
+	mi := &file_purser_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1538,7 +1435,7 @@ func (x *TenantSubscription) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantSubscription.ProtoReflect.Descriptor instead.
 func (*TenantSubscription) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{16}
+	return file_purser_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *TenantSubscription) GetId() string {
@@ -1604,13 +1501,6 @@ func (x *TenantSubscription) GetCancelledAt() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *TenantSubscription) GetCustomPricing() *CustomPricing {
-	if x != nil {
-		return x.CustomPricing
-	}
-	return nil
-}
-
 func (x *TenantSubscription) GetCustomFeatures() *BillingFeatures {
 	if x != nil {
 		return x.CustomFeatures
@@ -1618,9 +1508,16 @@ func (x *TenantSubscription) GetCustomFeatures() *BillingFeatures {
 	return nil
 }
 
-func (x *TenantSubscription) GetCustomAllocations() *AllocationDetails {
+func (x *TenantSubscription) GetPricingOverrides() []*PricingRule {
 	if x != nil {
-		return x.CustomAllocations
+		return x.PricingOverrides
+	}
+	return nil
+}
+
+func (x *TenantSubscription) GetEntitlementOverrides() map[string]string {
+	if x != nil {
+		return x.EntitlementOverrides
 	}
 	return nil
 }
@@ -1744,68 +1641,6 @@ func (x *TenantSubscription) GetBillingCompany() string {
 	return ""
 }
 
-// Matches pkg/models/billing.go:CustomPricing (lines 57-61)
-type CustomPricing struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	BasePrice     float64                `protobuf:"fixed64,1,opt,name=base_price,json=basePrice,proto3" json:"base_price,omitempty"`          // json:"base_price,omitempty"
-	DiscountRate  float64                `protobuf:"fixed64,2,opt,name=discount_rate,json=discountRate,proto3" json:"discount_rate,omitempty"` // json:"discount_rate,omitempty"
-	OverageRates  *OverageRates          `protobuf:"bytes,3,opt,name=overage_rates,json=overageRates,proto3" json:"overage_rates,omitempty"`   // json:"overage_rates,omitempty"
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CustomPricing) Reset() {
-	*x = CustomPricing{}
-	mi := &file_purser_proto_msgTypes[17]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CustomPricing) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CustomPricing) ProtoMessage() {}
-
-func (x *CustomPricing) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[17]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CustomPricing.ProtoReflect.Descriptor instead.
-func (*CustomPricing) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{17}
-}
-
-func (x *CustomPricing) GetBasePrice() float64 {
-	if x != nil {
-		return x.BasePrice
-	}
-	return 0
-}
-
-func (x *CustomPricing) GetDiscountRate() float64 {
-	if x != nil {
-		return x.DiscountRate
-	}
-	return 0
-}
-
-func (x *CustomPricing) GetOverageRates() *OverageRates {
-	if x != nil {
-		return x.OverageRates
-	}
-	return nil
-}
-
-// Matches pkg/models/billing.go:BillingAddress (lines 47-54)
 type BillingAddress struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Street        string                 `protobuf:"bytes,1,opt,name=street,proto3" json:"street,omitempty"`                           // json:"street"
@@ -1819,7 +1654,7 @@ type BillingAddress struct {
 
 func (x *BillingAddress) Reset() {
 	*x = BillingAddress{}
-	mi := &file_purser_proto_msgTypes[18]
+	mi := &file_purser_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1831,7 +1666,7 @@ func (x *BillingAddress) String() string {
 func (*BillingAddress) ProtoMessage() {}
 
 func (x *BillingAddress) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[18]
+	mi := &file_purser_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1844,7 +1679,7 @@ func (x *BillingAddress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BillingAddress.ProtoReflect.Descriptor instead.
 func (*BillingAddress) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{18}
+	return file_purser_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *BillingAddress) GetStreet() string {
@@ -1882,7 +1717,6 @@ func (x *BillingAddress) GetCountry() string {
 	return ""
 }
 
-// Matches pkg/api/purser/types.go:CreateSubscriptionRequest (lines 218-227)
 type CreateSubscriptionRequest struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	TenantId           string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                       // json:"tenant_id" required
@@ -1890,9 +1724,7 @@ type CreateSubscriptionRequest struct {
 	BillingEmail       string                 `protobuf:"bytes,3,opt,name=billing_email,json=billingEmail,proto3" json:"billing_email,omitempty"`                           // json:"billing_email" required
 	PaymentMethod      string                 `protobuf:"bytes,4,opt,name=payment_method,json=paymentMethod,proto3" json:"payment_method,omitempty"`                        // json:"payment_method"
 	TrialEndsAt        *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=trial_ends_at,json=trialEndsAt,proto3,oneof" json:"trial_ends_at,omitempty"`                      // json:"trial_ends_at,omitempty"
-	CustomPricing      *CustomPricing         `protobuf:"bytes,6,opt,name=custom_pricing,json=customPricing,proto3" json:"custom_pricing,omitempty"`                        // json:"custom_pricing,omitempty"
 	CustomFeatures     *BillingFeatures       `protobuf:"bytes,7,opt,name=custom_features,json=customFeatures,proto3" json:"custom_features,omitempty"`                     // json:"custom_features,omitempty"
-	CustomAllocations  *AllocationDetails     `protobuf:"bytes,8,opt,name=custom_allocations,json=customAllocations,proto3" json:"custom_allocations,omitempty"`            // json:"custom_allocations,omitempty"
 	BillingPeriodStart *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=billing_period_start,json=billingPeriodStart,proto3,oneof" json:"billing_period_start,omitempty"` // json:"billing_period_start,omitempty"
 	BillingPeriodEnd   *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=billing_period_end,json=billingPeriodEnd,proto3,oneof" json:"billing_period_end,omitempty"`      // json:"billing_period_end,omitempty"
 	// Billing model: 'postpaid' (default) or 'prepaid' (required for wallet accounts)
@@ -1903,7 +1735,7 @@ type CreateSubscriptionRequest struct {
 
 func (x *CreateSubscriptionRequest) Reset() {
 	*x = CreateSubscriptionRequest{}
-	mi := &file_purser_proto_msgTypes[19]
+	mi := &file_purser_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1915,7 +1747,7 @@ func (x *CreateSubscriptionRequest) String() string {
 func (*CreateSubscriptionRequest) ProtoMessage() {}
 
 func (x *CreateSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[19]
+	mi := &file_purser_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1928,7 +1760,7 @@ func (x *CreateSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*CreateSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{19}
+	return file_purser_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *CreateSubscriptionRequest) GetTenantId() string {
@@ -1966,23 +1798,9 @@ func (x *CreateSubscriptionRequest) GetTrialEndsAt() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *CreateSubscriptionRequest) GetCustomPricing() *CustomPricing {
-	if x != nil {
-		return x.CustomPricing
-	}
-	return nil
-}
-
 func (x *CreateSubscriptionRequest) GetCustomFeatures() *BillingFeatures {
 	if x != nil {
 		return x.CustomFeatures
-	}
-	return nil
-}
-
-func (x *CreateSubscriptionRequest) GetCustomAllocations() *AllocationDetails {
-	if x != nil {
-		return x.CustomAllocations
 	}
 	return nil
 }
@@ -2008,7 +1826,6 @@ func (x *CreateSubscriptionRequest) GetBillingModel() string {
 	return ""
 }
 
-// Matches pkg/api/purser/types.go:UpdateSubscriptionRequest (lines 230-238)
 type UpdateSubscriptionRequest struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	TenantId           string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                      // target subscription
@@ -2016,18 +1833,24 @@ type UpdateSubscriptionRequest struct {
 	BillingEmail       *string                `protobuf:"bytes,3,opt,name=billing_email,json=billingEmail,proto3,oneof" json:"billing_email,omitempty"`    // json:"billing_email,omitempty"
 	PaymentMethod      *string                `protobuf:"bytes,4,opt,name=payment_method,json=paymentMethod,proto3,oneof" json:"payment_method,omitempty"` // json:"payment_method,omitempty"
 	Status             *string                `protobuf:"bytes,5,opt,name=status,proto3,oneof" json:"status,omitempty"`                                    // json:"status,omitempty"
-	CustomPricing      *CustomPricing         `protobuf:"bytes,6,opt,name=custom_pricing,json=customPricing,proto3,oneof" json:"custom_pricing,omitempty"`
 	CustomFeatures     *BillingFeatures       `protobuf:"bytes,7,opt,name=custom_features,json=customFeatures,proto3,oneof" json:"custom_features,omitempty"`
-	CustomAllocations  *AllocationDetails     `protobuf:"bytes,8,opt,name=custom_allocations,json=customAllocations,proto3,oneof" json:"custom_allocations,omitempty"`
 	BillingPeriodStart *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=billing_period_start,json=billingPeriodStart,proto3,oneof" json:"billing_period_start,omitempty"` // json:"billing_period_start,omitempty"
 	BillingPeriodEnd   *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=billing_period_end,json=billingPeriodEnd,proto3,oneof" json:"billing_period_end,omitempty"`      // json:"billing_period_end,omitempty"
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Per-subscription pricing/entitlement overrides. When set, the override
+	// tables are replaced wholesale for this subscription. Empty repeated /
+	// empty map means "no change"; pass an explicit clear via the dedicated
+	// ClearOverrides bool fields.
+	PricingOverrides          []*PricingRule    `protobuf:"bytes,11,rep,name=pricing_overrides,json=pricingOverrides,proto3" json:"pricing_overrides,omitempty"`
+	EntitlementOverrides      map[string]string `protobuf:"bytes,12,rep,name=entitlement_overrides,json=entitlementOverrides,proto3" json:"entitlement_overrides,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	ClearPricingOverrides     bool              `protobuf:"varint,13,opt,name=clear_pricing_overrides,json=clearPricingOverrides,proto3" json:"clear_pricing_overrides,omitempty"`
+	ClearEntitlementOverrides bool              `protobuf:"varint,14,opt,name=clear_entitlement_overrides,json=clearEntitlementOverrides,proto3" json:"clear_entitlement_overrides,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *UpdateSubscriptionRequest) Reset() {
 	*x = UpdateSubscriptionRequest{}
-	mi := &file_purser_proto_msgTypes[20]
+	mi := &file_purser_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2039,7 +1862,7 @@ func (x *UpdateSubscriptionRequest) String() string {
 func (*UpdateSubscriptionRequest) ProtoMessage() {}
 
 func (x *UpdateSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[20]
+	mi := &file_purser_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2052,7 +1875,7 @@ func (x *UpdateSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*UpdateSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{20}
+	return file_purser_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *UpdateSubscriptionRequest) GetTenantId() string {
@@ -2090,23 +1913,9 @@ func (x *UpdateSubscriptionRequest) GetStatus() string {
 	return ""
 }
 
-func (x *UpdateSubscriptionRequest) GetCustomPricing() *CustomPricing {
-	if x != nil {
-		return x.CustomPricing
-	}
-	return nil
-}
-
 func (x *UpdateSubscriptionRequest) GetCustomFeatures() *BillingFeatures {
 	if x != nil {
 		return x.CustomFeatures
-	}
-	return nil
-}
-
-func (x *UpdateSubscriptionRequest) GetCustomAllocations() *AllocationDetails {
-	if x != nil {
-		return x.CustomAllocations
 	}
 	return nil
 }
@@ -2125,6 +1934,34 @@ func (x *UpdateSubscriptionRequest) GetBillingPeriodEnd() *timestamppb.Timestamp
 	return nil
 }
 
+func (x *UpdateSubscriptionRequest) GetPricingOverrides() []*PricingRule {
+	if x != nil {
+		return x.PricingOverrides
+	}
+	return nil
+}
+
+func (x *UpdateSubscriptionRequest) GetEntitlementOverrides() map[string]string {
+	if x != nil {
+		return x.EntitlementOverrides
+	}
+	return nil
+}
+
+func (x *UpdateSubscriptionRequest) GetClearPricingOverrides() bool {
+	if x != nil {
+		return x.ClearPricingOverrides
+	}
+	return false
+}
+
+func (x *UpdateSubscriptionRequest) GetClearEntitlementOverrides() bool {
+	if x != nil {
+		return x.ClearEntitlementOverrides
+	}
+	return false
+}
+
 type CancelSubscriptionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -2134,7 +1971,7 @@ type CancelSubscriptionRequest struct {
 
 func (x *CancelSubscriptionRequest) Reset() {
 	*x = CancelSubscriptionRequest{}
-	mi := &file_purser_proto_msgTypes[21]
+	mi := &file_purser_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2146,7 +1983,7 @@ func (x *CancelSubscriptionRequest) String() string {
 func (*CancelSubscriptionRequest) ProtoMessage() {}
 
 func (x *CancelSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[21]
+	mi := &file_purser_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2159,7 +1996,7 @@ func (x *CancelSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*CancelSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{21}
+	return file_purser_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *CancelSubscriptionRequest) GetTenantId() string {
@@ -2178,7 +2015,7 @@ type GetInvoiceRequest struct {
 
 func (x *GetInvoiceRequest) Reset() {
 	*x = GetInvoiceRequest{}
-	mi := &file_purser_proto_msgTypes[22]
+	mi := &file_purser_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2190,7 +2027,7 @@ func (x *GetInvoiceRequest) String() string {
 func (*GetInvoiceRequest) ProtoMessage() {}
 
 func (x *GetInvoiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[22]
+	mi := &file_purser_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2203,7 +2040,7 @@ func (x *GetInvoiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetInvoiceRequest.ProtoReflect.Descriptor instead.
 func (*GetInvoiceRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{22}
+	return file_purser_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetInvoiceRequest) GetInvoiceId() string {
@@ -2213,7 +2050,6 @@ func (x *GetInvoiceRequest) GetInvoiceId() string {
 	return ""
 }
 
-// Matches pkg/api/purser/types.go:GetInvoiceResponse (lines 118-121)
 type GetInvoiceResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Invoice       *Invoice               `protobuf:"bytes,1,opt,name=invoice,proto3" json:"invoice,omitempty"` // json:"invoice"
@@ -2224,7 +2060,7 @@ type GetInvoiceResponse struct {
 
 func (x *GetInvoiceResponse) Reset() {
 	*x = GetInvoiceResponse{}
-	mi := &file_purser_proto_msgTypes[23]
+	mi := &file_purser_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2236,7 +2072,7 @@ func (x *GetInvoiceResponse) String() string {
 func (*GetInvoiceResponse) ProtoMessage() {}
 
 func (x *GetInvoiceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[23]
+	mi := &file_purser_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2249,7 +2085,7 @@ func (x *GetInvoiceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetInvoiceResponse.ProtoReflect.Descriptor instead.
 func (*GetInvoiceResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{23}
+	return file_purser_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GetInvoiceResponse) GetInvoice() *Invoice {
@@ -2266,20 +2102,26 @@ func (x *GetInvoiceResponse) GetTier() *BillingTier {
 	return nil
 }
 
-// LineItem represents a single line on an invoice
+// LineItem is the rating engine's output line — one priced behavior on an
+// invoice or usage preview. Decimal fields are strings to preserve precision.
 type LineItem struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Description   string                 `protobuf:"bytes,1,opt,name=description,proto3" json:"description,omitempty"`                // Display text (e.g., "Professional Tier", "Delivered Minutes")
-	Quantity      int32                  `protobuf:"varint,2,opt,name=quantity,proto3" json:"quantity,omitempty"`                     // Count or 1 for flat items
-	UnitPrice     float64                `protobuf:"fixed64,3,opt,name=unit_price,json=unitPrice,proto3" json:"unit_price,omitempty"` // Price per unit
-	Total         float64                `protobuf:"fixed64,4,opt,name=total,proto3" json:"total,omitempty"`                          // quantity * unit_price
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Description      string                 `protobuf:"bytes,1,opt,name=description,proto3" json:"description,omitempty"`                                   // Display text
+	Quantity         string                 `protobuf:"bytes,2,opt,name=quantity,proto3" json:"quantity,omitempty"`                                         // Total quantity used (was int32; now string for decimals)
+	UnitPrice        string                 `protobuf:"bytes,3,opt,name=unit_price,json=unitPrice,proto3" json:"unit_price,omitempty"`                      // Decimal as string
+	Total            string                 `protobuf:"bytes,4,opt,name=total,proto3" json:"total,omitempty"`                                               // = billable_quantity * unit_price; rounded to 2dp
+	LineKey          string                 `protobuf:"bytes,5,opt,name=line_key,json=lineKey,proto3" json:"line_key,omitempty"`                            // Stable identity: "base_subscription", "meter:<name>", "meter:<name>:codec:<codec>"
+	Meter            string                 `protobuf:"bytes,6,opt,name=meter,proto3" json:"meter,omitempty"`                                               // Meter name; empty for base_subscription
+	IncludedQuantity string                 `protobuf:"bytes,7,opt,name=included_quantity,json=includedQuantity,proto3" json:"included_quantity,omitempty"` // Free quantity (decimal as string)
+	BillableQuantity string                 `protobuf:"bytes,8,opt,name=billable_quantity,json=billableQuantity,proto3" json:"billable_quantity,omitempty"` // = max(0, quantity - included_quantity)
+	Currency         string                 `protobuf:"bytes,9,opt,name=currency,proto3" json:"currency,omitempty"`                                         // ISO 4217
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *LineItem) Reset() {
 	*x = LineItem{}
-	mi := &file_purser_proto_msgTypes[24]
+	mi := &file_purser_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2291,7 +2133,7 @@ func (x *LineItem) String() string {
 func (*LineItem) ProtoMessage() {}
 
 func (x *LineItem) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[24]
+	mi := &file_purser_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2304,7 +2146,7 @@ func (x *LineItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LineItem.ProtoReflect.Descriptor instead.
 func (*LineItem) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{24}
+	return file_purser_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *LineItem) GetDescription() string {
@@ -2314,28 +2156,62 @@ func (x *LineItem) GetDescription() string {
 	return ""
 }
 
-func (x *LineItem) GetQuantity() int32 {
+func (x *LineItem) GetQuantity() string {
 	if x != nil {
 		return x.Quantity
 	}
-	return 0
+	return ""
 }
 
-func (x *LineItem) GetUnitPrice() float64 {
+func (x *LineItem) GetUnitPrice() string {
 	if x != nil {
 		return x.UnitPrice
 	}
-	return 0
+	return ""
 }
 
-func (x *LineItem) GetTotal() float64 {
+func (x *LineItem) GetTotal() string {
 	if x != nil {
 		return x.Total
 	}
-	return 0
+	return ""
 }
 
-// Matches pkg/models/billing.go:Invoice (lines 253-266)
+func (x *LineItem) GetLineKey() string {
+	if x != nil {
+		return x.LineKey
+	}
+	return ""
+}
+
+func (x *LineItem) GetMeter() string {
+	if x != nil {
+		return x.Meter
+	}
+	return ""
+}
+
+func (x *LineItem) GetIncludedQuantity() string {
+	if x != nil {
+		return x.IncludedQuantity
+	}
+	return ""
+}
+
+func (x *LineItem) GetBillableQuantity() string {
+	if x != nil {
+		return x.BillableQuantity
+	}
+	return ""
+}
+
+func (x *LineItem) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
 type Invoice struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	Id                   string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                                      // json:"id"
@@ -2361,7 +2237,7 @@ type Invoice struct {
 
 func (x *Invoice) Reset() {
 	*x = Invoice{}
-	mi := &file_purser_proto_msgTypes[25]
+	mi := &file_purser_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2373,7 +2249,7 @@ func (x *Invoice) String() string {
 func (*Invoice) ProtoMessage() {}
 
 func (x *Invoice) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[25]
+	mi := &file_purser_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2386,7 +2262,7 @@ func (x *Invoice) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Invoice.ProtoReflect.Descriptor instead.
 func (*Invoice) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{25}
+	return file_purser_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *Invoice) GetId() string {
@@ -2508,7 +2384,6 @@ func (x *Invoice) GetLineItems() []*LineItem {
 	return nil
 }
 
-// Matches pkg/api/purser/types.go:GetInvoicesRequest (lines 124-128)
 type ListInvoicesRequest struct {
 	state         protoimpl.MessageState   `protogen:"open.v1"`
 	TenantId      string                   `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // target tenant
@@ -2520,7 +2395,7 @@ type ListInvoicesRequest struct {
 
 func (x *ListInvoicesRequest) Reset() {
 	*x = ListInvoicesRequest{}
-	mi := &file_purser_proto_msgTypes[26]
+	mi := &file_purser_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2532,7 +2407,7 @@ func (x *ListInvoicesRequest) String() string {
 func (*ListInvoicesRequest) ProtoMessage() {}
 
 func (x *ListInvoicesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[26]
+	mi := &file_purser_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2545,7 +2420,7 @@ func (x *ListInvoicesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListInvoicesRequest.ProtoReflect.Descriptor instead.
 func (*ListInvoicesRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{26}
+	return file_purser_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ListInvoicesRequest) GetTenantId() string {
@@ -2569,7 +2444,6 @@ func (x *ListInvoicesRequest) GetPagination() *CursorPaginationRequest {
 	return nil
 }
 
-// Matches pkg/api/purser/types.go:GetInvoicesResponse (lines 137-140)
 type ListInvoicesResponse struct {
 	state         protoimpl.MessageState    `protogen:"open.v1"`
 	Invoices      []*Invoice                `protobuf:"bytes,1,rep,name=invoices,proto3" json:"invoices,omitempty"` // json:"invoices"
@@ -2580,7 +2454,7 @@ type ListInvoicesResponse struct {
 
 func (x *ListInvoicesResponse) Reset() {
 	*x = ListInvoicesResponse{}
-	mi := &file_purser_proto_msgTypes[27]
+	mi := &file_purser_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2592,7 +2466,7 @@ func (x *ListInvoicesResponse) String() string {
 func (*ListInvoicesResponse) ProtoMessage() {}
 
 func (x *ListInvoicesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[27]
+	mi := &file_purser_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2605,7 +2479,7 @@ func (x *ListInvoicesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListInvoicesResponse.ProtoReflect.Descriptor instead.
 func (*ListInvoicesResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{27}
+	return file_purser_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ListInvoicesResponse) GetInvoices() []*Invoice {
@@ -2622,13 +2496,10 @@ func (x *ListInvoicesResponse) GetPagination() *CursorPaginationResponse {
 	return nil
 }
 
-// Matches pkg/api/purser/types.go:PaymentRequest (lines 243-249)
 type PaymentRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	InvoiceId     string                 `protobuf:"bytes,1,opt,name=invoice_id,json=invoiceId,proto3" json:"invoice_id,omitempty"` // json:"invoice_id" required
-	Method        string                 `protobuf:"bytes,2,opt,name=method,proto3" json:"method,omitempty"`                        // json:"method" required (mollie, crypto_btc, etc.)
-	Amount        float64                `protobuf:"fixed64,3,opt,name=amount,proto3" json:"amount,omitempty"`                      // json:"amount" required
-	Currency      string                 `protobuf:"bytes,4,opt,name=currency,proto3" json:"currency,omitempty"`                    // json:"currency" required
+	Method        string                 `protobuf:"bytes,2,opt,name=method,proto3" json:"method,omitempty"`                        // json:"method" required (card, crypto_eth, crypto_usdc, bank_transfer)
 	ReturnUrl     string                 `protobuf:"bytes,5,opt,name=return_url,json=returnUrl,proto3" json:"return_url,omitempty"` // json:"return_url,omitempty"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2636,7 +2507,7 @@ type PaymentRequest struct {
 
 func (x *PaymentRequest) Reset() {
 	*x = PaymentRequest{}
-	mi := &file_purser_proto_msgTypes[28]
+	mi := &file_purser_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2648,7 +2519,7 @@ func (x *PaymentRequest) String() string {
 func (*PaymentRequest) ProtoMessage() {}
 
 func (x *PaymentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[28]
+	mi := &file_purser_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2661,7 +2532,7 @@ func (x *PaymentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PaymentRequest.ProtoReflect.Descriptor instead.
 func (*PaymentRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{28}
+	return file_purser_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *PaymentRequest) GetInvoiceId() string {
@@ -2678,20 +2549,6 @@ func (x *PaymentRequest) GetMethod() string {
 	return ""
 }
 
-func (x *PaymentRequest) GetAmount() float64 {
-	if x != nil {
-		return x.Amount
-	}
-	return 0
-}
-
-func (x *PaymentRequest) GetCurrency() string {
-	if x != nil {
-		return x.Currency
-	}
-	return ""
-}
-
 func (x *PaymentRequest) GetReturnUrl() string {
 	if x != nil {
 		return x.ReturnUrl
@@ -2699,26 +2556,32 @@ func (x *PaymentRequest) GetReturnUrl() string {
 	return ""
 }
 
-// Matches pkg/api/purser/types.go:PaymentResponse (lines 252-261)
 type PaymentResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                            // json:"id"
-	PaymentUrl    string                 `protobuf:"bytes,2,opt,name=payment_url,json=paymentUrl,proto3" json:"payment_url,omitempty"`          // json:"payment_url,omitempty" (traditional)
-	WalletAddress string                 `protobuf:"bytes,3,opt,name=wallet_address,json=walletAddress,proto3" json:"wallet_address,omitempty"` // json:"wallet_address,omitempty" (crypto)
-	Amount        float64                `protobuf:"fixed64,4,opt,name=amount,proto3" json:"amount,omitempty"`                                  // json:"amount"
-	Currency      string                 `protobuf:"bytes,5,opt,name=currency,proto3" json:"currency,omitempty"`                                // json:"currency"
-	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`       // json:"expires_at,omitempty"
-	Status        string                 `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`                                    // json:"status"
-	QrCode        string                 `protobuf:"bytes,8,opt,name=qr_code,json=qrCode,proto3" json:"qr_code,omitempty"`                      // json:"qr_code,omitempty" (crypto)
-	Method        string                 `protobuf:"bytes,9,opt,name=method,proto3" json:"method,omitempty"`                                    // json:"method" (card, crypto, bank_transfer)
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`            // json:"created_at"
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	Id                      string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                                               // json:"id"
+	PaymentUrl              string                 `protobuf:"bytes,2,opt,name=payment_url,json=paymentUrl,proto3" json:"payment_url,omitempty"`                                             // json:"payment_url,omitempty" (traditional)
+	WalletAddress           string                 `protobuf:"bytes,3,opt,name=wallet_address,json=walletAddress,proto3" json:"wallet_address,omitempty"`                                    // json:"wallet_address,omitempty" (crypto)
+	Amount                  float64                `protobuf:"fixed64,4,opt,name=amount,proto3" json:"amount,omitempty"`                                                                     // json:"amount"
+	Currency                string                 `protobuf:"bytes,5,opt,name=currency,proto3" json:"currency,omitempty"`                                                                   // json:"currency"
+	ExpiresAt               *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`                                          // json:"expires_at,omitempty"
+	Status                  string                 `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`                                                                       // json:"status"
+	QrCode                  string                 `protobuf:"bytes,8,opt,name=qr_code,json=qrCode,proto3" json:"qr_code,omitempty"`                                                         // json:"qr_code,omitempty" (crypto)
+	Method                  string                 `protobuf:"bytes,9,opt,name=method,proto3" json:"method,omitempty"`                                                                       // json:"method" (card, crypto_eth, crypto_usdc, bank_transfer)
+	CreatedAt               *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`                                               // json:"created_at"
+	ExpectedAmountBaseUnits string                 `protobuf:"bytes,11,opt,name=expected_amount_base_units,json=expectedAmountBaseUnits,proto3" json:"expected_amount_base_units,omitempty"` // token base units the payer must send
+	ExpectedAmountToken     string                 `protobuf:"bytes,12,opt,name=expected_amount_token,json=expectedAmountToken,proto3" json:"expected_amount_token,omitempty"`               // whole-token decimal display amount
+	QuotedPriceUsd          string                 `protobuf:"bytes,13,opt,name=quoted_price_usd,json=quotedPriceUsd,proto3" json:"quoted_price_usd,omitempty"`                              // locked USD price for one whole token
+	QuoteSource             string                 `protobuf:"bytes,14,opt,name=quote_source,json=quoteSource,proto3" json:"quote_source,omitempty"`                                         // chainlink, one_to_one, etc.
+	AssetSymbol             string                 `protobuf:"bytes,15,opt,name=asset_symbol,json=assetSymbol,proto3" json:"asset_symbol,omitempty"`                                         // ETH, USDC
+	Network                 string                 `protobuf:"bytes,16,opt,name=network,proto3" json:"network,omitempty"`                                                                    // ethereum, arbitrum, base, etc.
+	QuotedAt                *timestamppb.Timestamp `protobuf:"bytes,17,opt,name=quoted_at,json=quotedAt,proto3,oneof" json:"quoted_at,omitempty"`                                            // when the quote was locked
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *PaymentResponse) Reset() {
 	*x = PaymentResponse{}
-	mi := &file_purser_proto_msgTypes[29]
+	mi := &file_purser_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2730,7 +2593,7 @@ func (x *PaymentResponse) String() string {
 func (*PaymentResponse) ProtoMessage() {}
 
 func (x *PaymentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[29]
+	mi := &file_purser_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2743,7 +2606,7 @@ func (x *PaymentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PaymentResponse.ProtoReflect.Descriptor instead.
 func (*PaymentResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{29}
+	return file_purser_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *PaymentResponse) GetId() string {
@@ -2816,6 +2679,55 @@ func (x *PaymentResponse) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *PaymentResponse) GetExpectedAmountBaseUnits() string {
+	if x != nil {
+		return x.ExpectedAmountBaseUnits
+	}
+	return ""
+}
+
+func (x *PaymentResponse) GetExpectedAmountToken() string {
+	if x != nil {
+		return x.ExpectedAmountToken
+	}
+	return ""
+}
+
+func (x *PaymentResponse) GetQuotedPriceUsd() string {
+	if x != nil {
+		return x.QuotedPriceUsd
+	}
+	return ""
+}
+
+func (x *PaymentResponse) GetQuoteSource() string {
+	if x != nil {
+		return x.QuoteSource
+	}
+	return ""
+}
+
+func (x *PaymentResponse) GetAssetSymbol() string {
+	if x != nil {
+		return x.AssetSymbol
+	}
+	return ""
+}
+
+func (x *PaymentResponse) GetNetwork() string {
+	if x != nil {
+		return x.Network
+	}
+	return ""
+}
+
+func (x *PaymentResponse) GetQuotedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.QuotedAt
+	}
+	return nil
+}
+
 type GetPaymentMethodsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -2825,7 +2737,7 @@ type GetPaymentMethodsRequest struct {
 
 func (x *GetPaymentMethodsRequest) Reset() {
 	*x = GetPaymentMethodsRequest{}
-	mi := &file_purser_proto_msgTypes[30]
+	mi := &file_purser_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2837,7 +2749,7 @@ func (x *GetPaymentMethodsRequest) String() string {
 func (*GetPaymentMethodsRequest) ProtoMessage() {}
 
 func (x *GetPaymentMethodsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[30]
+	mi := &file_purser_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2850,7 +2762,7 @@ func (x *GetPaymentMethodsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPaymentMethodsRequest.ProtoReflect.Descriptor instead.
 func (*GetPaymentMethodsRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{30}
+	return file_purser_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *GetPaymentMethodsRequest) GetTenantId() string {
@@ -2860,7 +2772,6 @@ func (x *GetPaymentMethodsRequest) GetTenantId() string {
 	return ""
 }
 
-// Matches pkg/api/purser/types.go:PaymentMethodResponse (lines 159-161)
 type PaymentMethodResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Methods       []string               `protobuf:"bytes,1,rep,name=methods,proto3" json:"methods,omitempty"` // json:"methods"
@@ -2870,7 +2781,7 @@ type PaymentMethodResponse struct {
 
 func (x *PaymentMethodResponse) Reset() {
 	*x = PaymentMethodResponse{}
-	mi := &file_purser_proto_msgTypes[31]
+	mi := &file_purser_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2882,7 +2793,7 @@ func (x *PaymentMethodResponse) String() string {
 func (*PaymentMethodResponse) ProtoMessage() {}
 
 func (x *PaymentMethodResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[31]
+	mi := &file_purser_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2895,7 +2806,7 @@ func (x *PaymentMethodResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PaymentMethodResponse.ProtoReflect.Descriptor instead.
 func (*PaymentMethodResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{31}
+	return file_purser_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *PaymentMethodResponse) GetMethods() []string {
@@ -2914,7 +2825,7 @@ type GetBillingStatusRequest struct {
 
 func (x *GetBillingStatusRequest) Reset() {
 	*x = GetBillingStatusRequest{}
-	mi := &file_purser_proto_msgTypes[32]
+	mi := &file_purser_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2926,7 +2837,7 @@ func (x *GetBillingStatusRequest) String() string {
 func (*GetBillingStatusRequest) ProtoMessage() {}
 
 func (x *GetBillingStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[32]
+	mi := &file_purser_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2939,7 +2850,7 @@ func (x *GetBillingStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBillingStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetBillingStatusRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{32}
+	return file_purser_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *GetBillingStatusRequest) GetTenantId() string {
@@ -2962,13 +2873,14 @@ type BillingStatusResponse struct {
 	PendingInvoices   []*Invoice             `protobuf:"bytes,8,rep,name=pending_invoices,json=pendingInvoices,proto3" json:"pending_invoices,omitempty"` // Pending invoices awaiting payment
 	RecentPayments    []*Payment             `protobuf:"bytes,9,rep,name=recent_payments,json=recentPayments,proto3" json:"recent_payments,omitempty"`    // Last 5 payments
 	UsageSummary      *UsageSummary          `protobuf:"bytes,10,opt,name=usage_summary,json=usageSummary,proto3" json:"usage_summary,omitempty"`         // Current month usage aggregation (typed)
+	PaymentMethods    []string               `protobuf:"bytes,11,rep,name=payment_methods,json=paymentMethods,proto3" json:"payment_methods,omitempty"`   // Public methods: card, crypto_eth, crypto_usdc, bank_transfer
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
 
 func (x *BillingStatusResponse) Reset() {
 	*x = BillingStatusResponse{}
-	mi := &file_purser_proto_msgTypes[33]
+	mi := &file_purser_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2980,7 +2892,7 @@ func (x *BillingStatusResponse) String() string {
 func (*BillingStatusResponse) ProtoMessage() {}
 
 func (x *BillingStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[33]
+	mi := &file_purser_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2993,7 +2905,7 @@ func (x *BillingStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BillingStatusResponse.ProtoReflect.Descriptor instead.
 func (*BillingStatusResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{33}
+	return file_purser_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *BillingStatusResponse) GetTenantId() string {
@@ -3066,12 +2978,19 @@ func (x *BillingStatusResponse) GetUsageSummary() *UsageSummary {
 	return nil
 }
 
+func (x *BillingStatusResponse) GetPaymentMethods() []string {
+	if x != nil {
+		return x.PaymentMethods
+	}
+	return nil
+}
+
 // Payment record
 type Payment struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	InvoiceId     string                 `protobuf:"bytes,2,opt,name=invoice_id,json=invoiceId,proto3" json:"invoice_id,omitempty"`
-	Method        string                 `protobuf:"bytes,3,opt,name=method,proto3" json:"method,omitempty"` // stripe, mollie, crypto_btc, etc.
+	Method        string                 `protobuf:"bytes,3,opt,name=method,proto3" json:"method,omitempty"` // card, crypto_eth, crypto_usdc, bank_transfer
 	Amount        float64                `protobuf:"fixed64,4,opt,name=amount,proto3" json:"amount,omitempty"`
 	Currency      string                 `protobuf:"bytes,5,opt,name=currency,proto3" json:"currency,omitempty"`
 	TxId          string                 `protobuf:"bytes,6,opt,name=tx_id,json=txId,proto3" json:"tx_id,omitempty"` // Transaction ID from payment provider
@@ -3085,7 +3004,7 @@ type Payment struct {
 
 func (x *Payment) Reset() {
 	*x = Payment{}
-	mi := &file_purser_proto_msgTypes[34]
+	mi := &file_purser_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3097,7 +3016,7 @@ func (x *Payment) String() string {
 func (*Payment) ProtoMessage() {}
 
 func (x *Payment) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[34]
+	mi := &file_purser_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3110,7 +3029,7 @@ func (x *Payment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Payment.ProtoReflect.Descriptor instead.
 func (*Payment) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{34}
+	return file_purser_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *Payment) GetId() string {
@@ -3183,7 +3102,6 @@ func (x *Payment) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-// Matches pkg/api/purser/types.go:UsageIngestRequest (lines 97-101)
 type UsageIngestRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	UsageSummaries []*UsageSummary        `protobuf:"bytes,1,rep,name=usage_summaries,json=usageSummaries,proto3" json:"usage_summaries,omitempty"` // json:"usage_summaries"
@@ -3195,7 +3113,7 @@ type UsageIngestRequest struct {
 
 func (x *UsageIngestRequest) Reset() {
 	*x = UsageIngestRequest{}
-	mi := &file_purser_proto_msgTypes[35]
+	mi := &file_purser_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3207,7 +3125,7 @@ func (x *UsageIngestRequest) String() string {
 func (*UsageIngestRequest) ProtoMessage() {}
 
 func (x *UsageIngestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[35]
+	mi := &file_purser_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3220,7 +3138,7 @@ func (x *UsageIngestRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UsageIngestRequest.ProtoReflect.Descriptor instead.
 func (*UsageIngestRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{35}
+	return file_purser_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *UsageIngestRequest) GetUsageSummaries() []*UsageSummary {
@@ -3258,7 +3176,7 @@ type CountryMetrics struct {
 
 func (x *CountryMetrics) Reset() {
 	*x = CountryMetrics{}
-	mi := &file_purser_proto_msgTypes[36]
+	mi := &file_purser_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3270,7 +3188,7 @@ func (x *CountryMetrics) String() string {
 func (*CountryMetrics) ProtoMessage() {}
 
 func (x *CountryMetrics) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[36]
+	mi := &file_purser_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3283,7 +3201,7 @@ func (x *CountryMetrics) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CountryMetrics.ProtoReflect.Descriptor instead.
 func (*CountryMetrics) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{36}
+	return file_purser_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *CountryMetrics) GetCountryCode() string {
@@ -3315,7 +3233,6 @@ func (x *CountryMetrics) GetEgressGb() float64 {
 }
 
 // Usage summary from Periscope (15-minute interval aggregations)
-// Matches pkg/models/service_types.go:UsageSummary
 type UsageSummary struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	TenantId    string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -3371,17 +3288,21 @@ type UsageSummary struct {
 	FrozenDvrBytes  uint64 `protobuf:"varint,42,opt,name=frozen_dvr_bytes,json=frozenDvrBytes,proto3" json:"frozen_dvr_bytes,omitempty"`
 	FrozenVodBytes  uint64 `protobuf:"varint,43,opt,name=frozen_vod_bytes,json=frozenVodBytes,proto3" json:"frozen_vod_bytes,omitempty"`
 	// Freeze/defrost operations
-	FreezeCount   uint32 `protobuf:"varint,44,opt,name=freeze_count,json=freezeCount,proto3" json:"freeze_count,omitempty"`
-	FreezeBytes   uint64 `protobuf:"varint,45,opt,name=freeze_bytes,json=freezeBytes,proto3" json:"freeze_bytes,omitempty"`
-	DefrostCount  uint32 `protobuf:"varint,46,opt,name=defrost_count,json=defrostCount,proto3" json:"defrost_count,omitempty"`
-	DefrostBytes  uint64 `protobuf:"varint,47,opt,name=defrost_bytes,json=defrostBytes,proto3" json:"defrost_bytes,omitempty"`
+	FreezeCount  uint32 `protobuf:"varint,44,opt,name=freeze_count,json=freezeCount,proto3" json:"freeze_count,omitempty"`
+	FreezeBytes  uint64 `protobuf:"varint,45,opt,name=freeze_bytes,json=freezeBytes,proto3" json:"freeze_bytes,omitempty"`
+	DefrostCount uint32 `protobuf:"varint,46,opt,name=defrost_count,json=defrostCount,proto3" json:"defrost_count,omitempty"`
+	DefrostBytes uint64 `protobuf:"varint,47,opt,name=defrost_bytes,json=defrostBytes,proto3" json:"defrost_bytes,omitempty"`
+	// AI GPU compute, in hours. Producers attribute GPU usage from AI workloads
+	// here so per-event prepaid deduction can bill it in real time and the
+	// monthly aggregation path picks it up via processUsageSummary.
+	GpuHours      float64 `protobuf:"fixed64,48,opt,name=gpu_hours,json=gpuHours,proto3" json:"gpu_hours,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UsageSummary) Reset() {
 	*x = UsageSummary{}
-	mi := &file_purser_proto_msgTypes[37]
+	mi := &file_purser_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3393,7 +3314,7 @@ func (x *UsageSummary) String() string {
 func (*UsageSummary) ProtoMessage() {}
 
 func (x *UsageSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[37]
+	mi := &file_purser_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3406,7 +3327,7 @@ func (x *UsageSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UsageSummary.ProtoReflect.Descriptor instead.
 func (*UsageSummary) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{37}
+	return file_purser_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *UsageSummary) GetTenantId() string {
@@ -3738,7 +3659,13 @@ func (x *UsageSummary) GetDefrostBytes() uint64 {
 	return 0
 }
 
-// Matches pkg/api/purser/types.go:UsageIngestResponse (lines 104-108)
+func (x *UsageSummary) GetGpuHours() float64 {
+	if x != nil {
+		return x.GpuHours
+	}
+	return 0
+}
+
 type UsageIngestResponse struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ProcessedCount int32                  `protobuf:"varint,1,opt,name=processed_count,json=processedCount,proto3" json:"processed_count,omitempty"` // json:"processed_count"
@@ -3750,7 +3677,7 @@ type UsageIngestResponse struct {
 
 func (x *UsageIngestResponse) Reset() {
 	*x = UsageIngestResponse{}
-	mi := &file_purser_proto_msgTypes[38]
+	mi := &file_purser_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3762,7 +3689,7 @@ func (x *UsageIngestResponse) String() string {
 func (*UsageIngestResponse) ProtoMessage() {}
 
 func (x *UsageIngestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[38]
+	mi := &file_purser_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3775,7 +3702,7 @@ func (x *UsageIngestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UsageIngestResponse.ProtoReflect.Descriptor instead.
 func (*UsageIngestResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{38}
+	return file_purser_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *UsageIngestResponse) GetProcessedCount() int32 {
@@ -3812,7 +3739,7 @@ type GetUsageRecordsRequest struct {
 
 func (x *GetUsageRecordsRequest) Reset() {
 	*x = GetUsageRecordsRequest{}
-	mi := &file_purser_proto_msgTypes[39]
+	mi := &file_purser_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3824,7 +3751,7 @@ func (x *GetUsageRecordsRequest) String() string {
 func (*GetUsageRecordsRequest) ProtoMessage() {}
 
 func (x *GetUsageRecordsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[39]
+	mi := &file_purser_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3837,7 +3764,7 @@ func (x *GetUsageRecordsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUsageRecordsRequest.ProtoReflect.Descriptor instead.
 func (*GetUsageRecordsRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{39}
+	return file_purser_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *GetUsageRecordsRequest) GetTenantId() string {
@@ -3875,7 +3802,6 @@ func (x *GetUsageRecordsRequest) GetPagination() *CursorPaginationRequest {
 	return nil
 }
 
-// Matches pkg/api/purser/types.go:UsageRecord (lines 278-288)
 type UsageRecord struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                            // json:"id"
@@ -3895,7 +3821,7 @@ type UsageRecord struct {
 
 func (x *UsageRecord) Reset() {
 	*x = UsageRecord{}
-	mi := &file_purser_proto_msgTypes[40]
+	mi := &file_purser_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3907,7 +3833,7 @@ func (x *UsageRecord) String() string {
 func (*UsageRecord) ProtoMessage() {}
 
 func (x *UsageRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[40]
+	mi := &file_purser_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3920,7 +3846,7 @@ func (x *UsageRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UsageRecord.ProtoReflect.Descriptor instead.
 func (*UsageRecord) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{40}
+	return file_purser_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *UsageRecord) GetId() string {
@@ -4000,7 +3926,6 @@ func (x *UsageRecord) GetGranularity() string {
 	return ""
 }
 
-// Matches pkg/api/purser/types.go:UsageRecordsResponse (lines 291-296)
 type UsageRecordsResponse struct {
 	state         protoimpl.MessageState    `protogen:"open.v1"`
 	UsageRecords  []*UsageRecord            `protobuf:"bytes,1,rep,name=usage_records,json=usageRecords,proto3" json:"usage_records,omitempty"` // json:"usage_records"
@@ -4013,7 +3938,7 @@ type UsageRecordsResponse struct {
 
 func (x *UsageRecordsResponse) Reset() {
 	*x = UsageRecordsResponse{}
-	mi := &file_purser_proto_msgTypes[41]
+	mi := &file_purser_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4025,7 +3950,7 @@ func (x *UsageRecordsResponse) String() string {
 func (*UsageRecordsResponse) ProtoMessage() {}
 
 func (x *UsageRecordsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[41]
+	mi := &file_purser_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4038,7 +3963,7 @@ func (x *UsageRecordsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UsageRecordsResponse.ProtoReflect.Descriptor instead.
 func (*UsageRecordsResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{41}
+	return file_purser_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *UsageRecordsResponse) GetUsageRecords() []*UsageRecord {
@@ -4081,7 +4006,7 @@ type GetUsageAggregatesRequest struct {
 
 func (x *GetUsageAggregatesRequest) Reset() {
 	*x = GetUsageAggregatesRequest{}
-	mi := &file_purser_proto_msgTypes[42]
+	mi := &file_purser_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4093,7 +4018,7 @@ func (x *GetUsageAggregatesRequest) String() string {
 func (*GetUsageAggregatesRequest) ProtoMessage() {}
 
 func (x *GetUsageAggregatesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[42]
+	mi := &file_purser_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4106,7 +4031,7 @@ func (x *GetUsageAggregatesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUsageAggregatesRequest.ProtoReflect.Descriptor instead.
 func (*GetUsageAggregatesRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{42}
+	return file_purser_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *GetUsageAggregatesRequest) GetTenantId() string {
@@ -4150,7 +4075,7 @@ type UsageAggregate struct {
 
 func (x *UsageAggregate) Reset() {
 	*x = UsageAggregate{}
-	mi := &file_purser_proto_msgTypes[43]
+	mi := &file_purser_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4162,7 +4087,7 @@ func (x *UsageAggregate) String() string {
 func (*UsageAggregate) ProtoMessage() {}
 
 func (x *UsageAggregate) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[43]
+	mi := &file_purser_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4175,7 +4100,7 @@ func (x *UsageAggregate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UsageAggregate.ProtoReflect.Descriptor instead.
 func (*UsageAggregate) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{43}
+	return file_purser_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *UsageAggregate) GetUsageType() string {
@@ -4222,7 +4147,7 @@ type GetUsageAggregatesResponse struct {
 
 func (x *GetUsageAggregatesResponse) Reset() {
 	*x = GetUsageAggregatesResponse{}
-	mi := &file_purser_proto_msgTypes[44]
+	mi := &file_purser_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4234,7 +4159,7 @@ func (x *GetUsageAggregatesResponse) String() string {
 func (*GetUsageAggregatesResponse) ProtoMessage() {}
 
 func (x *GetUsageAggregatesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[44]
+	mi := &file_purser_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4247,7 +4172,7 @@ func (x *GetUsageAggregatesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUsageAggregatesResponse.ProtoReflect.Descriptor instead.
 func (*GetUsageAggregatesResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{44}
+	return file_purser_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *GetUsageAggregatesResponse) GetAggregates() []*UsageAggregate {
@@ -4257,7 +4182,6 @@ func (x *GetUsageAggregatesResponse) GetAggregates() []*UsageAggregate {
 	return nil
 }
 
-// Matches pkg/api/purser/types.go:UsageFilters (lines 299-303)
 type UsageFilters struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"` // json:"cluster_id"
@@ -4269,7 +4193,7 @@ type UsageFilters struct {
 
 func (x *UsageFilters) Reset() {
 	*x = UsageFilters{}
-	mi := &file_purser_proto_msgTypes[45]
+	mi := &file_purser_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4281,7 +4205,7 @@ func (x *UsageFilters) String() string {
 func (*UsageFilters) ProtoMessage() {}
 
 func (x *UsageFilters) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[45]
+	mi := &file_purser_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4294,7 +4218,7 @@ func (x *UsageFilters) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UsageFilters.ProtoReflect.Descriptor instead.
 func (*UsageFilters) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{45}
+	return file_purser_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *UsageFilters) GetClusterId() string {
@@ -4318,7 +4242,6 @@ func (x *UsageFilters) GetTimeRange() *TimeRange {
 	return nil
 }
 
-// Matches pkg/api/purser/types.go:CheckUserLimitRequest (lines 22-25)
 type CheckUserLimitRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // json:"tenant_id"
@@ -4329,7 +4252,7 @@ type CheckUserLimitRequest struct {
 
 func (x *CheckUserLimitRequest) Reset() {
 	*x = CheckUserLimitRequest{}
-	mi := &file_purser_proto_msgTypes[46]
+	mi := &file_purser_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4341,7 +4264,7 @@ func (x *CheckUserLimitRequest) String() string {
 func (*CheckUserLimitRequest) ProtoMessage() {}
 
 func (x *CheckUserLimitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[46]
+	mi := &file_purser_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4354,7 +4277,7 @@ func (x *CheckUserLimitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckUserLimitRequest.ProtoReflect.Descriptor instead.
 func (*CheckUserLimitRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{46}
+	return file_purser_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *CheckUserLimitRequest) GetTenantId() string {
@@ -4371,7 +4294,6 @@ func (x *CheckUserLimitRequest) GetEmail() string {
 	return ""
 }
 
-// Matches pkg/api/purser/types.go:CheckUserLimitResponse (lines 28-33)
 type CheckUserLimitResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Allowed       bool                   `protobuf:"varint,1,opt,name=allowed,proto3" json:"allowed,omitempty"`                               // json:"allowed"
@@ -4384,7 +4306,7 @@ type CheckUserLimitResponse struct {
 
 func (x *CheckUserLimitResponse) Reset() {
 	*x = CheckUserLimitResponse{}
-	mi := &file_purser_proto_msgTypes[47]
+	mi := &file_purser_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4396,7 +4318,7 @@ func (x *CheckUserLimitResponse) String() string {
 func (*CheckUserLimitResponse) ProtoMessage() {}
 
 func (x *CheckUserLimitResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[47]
+	mi := &file_purser_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4409,7 +4331,7 @@ func (x *CheckUserLimitResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckUserLimitResponse.ProtoReflect.Descriptor instead.
 func (*CheckUserLimitResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{47}
+	return file_purser_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *CheckUserLimitResponse) GetAllowed() bool {
@@ -4440,7 +4362,6 @@ func (x *CheckUserLimitResponse) GetError() string {
 	return ""
 }
 
-// Matches pkg/api/purser/types.go:TenantUsageRequest (lines 52-56)
 type TenantUsageRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`    // json:"tenant_id"
@@ -4452,7 +4373,7 @@ type TenantUsageRequest struct {
 
 func (x *TenantUsageRequest) Reset() {
 	*x = TenantUsageRequest{}
-	mi := &file_purser_proto_msgTypes[48]
+	mi := &file_purser_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4464,7 +4385,7 @@ func (x *TenantUsageRequest) String() string {
 func (*TenantUsageRequest) ProtoMessage() {}
 
 func (x *TenantUsageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[48]
+	mi := &file_purser_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4477,7 +4398,7 @@ func (x *TenantUsageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantUsageRequest.ProtoReflect.Descriptor instead.
 func (*TenantUsageRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{48}
+	return file_purser_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *TenantUsageRequest) GetTenantId() string {
@@ -4501,22 +4422,31 @@ func (x *TenantUsageRequest) GetEndDate() string {
 	return ""
 }
 
-// Matches pkg/api/purser/types.go:TenantUsageResponse (lines 59-66)
+// TenantUsageResponse returns rated usage for a tenant period. line_items are
+// the metered rating-engine outputs only — the monthly base subscription fee
+// is reported separately in base_amount, since "preview cost for this period"
+// is the metered/overage figure, not a full pro-rated invoice.
 type TenantUsageResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                                       // json:"tenant_id"
 	BillingPeriod string                 `protobuf:"bytes,2,opt,name=billing_period,json=billingPeriod,proto3" json:"billing_period,omitempty"`                                        // json:"billing_period"
-	Usage         map[string]float64     `protobuf:"bytes,3,rep,name=usage,proto3" json:"usage,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"fixed64,2,opt,name=value"` // json:"usage" (resource_type -> usage)
-	Costs         map[string]float64     `protobuf:"bytes,4,rep,name=costs,proto3" json:"costs,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"fixed64,2,opt,name=value"` // json:"costs" (resource_type -> cost)
-	TotalCost     float64                `protobuf:"fixed64,5,opt,name=total_cost,json=totalCost,proto3" json:"total_cost,omitempty"`                                                  // json:"total_cost"
-	Currency      string                 `protobuf:"bytes,6,opt,name=currency,proto3" json:"currency,omitempty"`                                                                       // json:"currency"
+	Usage         map[string]float64     `protobuf:"bytes,3,rep,name=usage,proto3" json:"usage,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"fixed64,2,opt,name=value"` // json:"usage" (meter -> quantity)
+	Costs         map[string]float64     `protobuf:"bytes,4,rep,name=costs,proto3" json:"costs,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"fixed64,2,opt,name=value"` // json:"costs" (meter -> amount)
+	// Metered cost only (= sum of line_items). To get an "all-in" figure, add
+	// base_amount.
+	TotalCost float64 `protobuf:"fixed64,5,opt,name=total_cost,json=totalCost,proto3" json:"total_cost,omitempty"` // json:"total_cost"
+	Currency  string  `protobuf:"bytes,6,opt,name=currency,proto3" json:"currency,omitempty"`                      // json:"currency"
+	// Metered line items (one per priced meter); excludes base_subscription.
+	LineItems     []*LineItem `protobuf:"bytes,7,rep,name=line_items,json=lineItems,proto3" json:"line_items,omitempty"`
+	BaseAmount    string      `protobuf:"bytes,8,opt,name=base_amount,json=baseAmount,proto3" json:"base_amount,omitempty"`    // decimal-string base subscription portion (informational)
+	UsageAmount   string      `protobuf:"bytes,9,opt,name=usage_amount,json=usageAmount,proto3" json:"usage_amount,omitempty"` // decimal-string metered portion (= total_cost)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TenantUsageResponse) Reset() {
 	*x = TenantUsageResponse{}
-	mi := &file_purser_proto_msgTypes[49]
+	mi := &file_purser_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4528,7 +4458,7 @@ func (x *TenantUsageResponse) String() string {
 func (*TenantUsageResponse) ProtoMessage() {}
 
 func (x *TenantUsageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[49]
+	mi := &file_purser_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4541,7 +4471,7 @@ func (x *TenantUsageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantUsageResponse.ProtoReflect.Descriptor instead.
 func (*TenantUsageResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{49}
+	return file_purser_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *TenantUsageResponse) GetTenantId() string {
@@ -4586,6 +4516,27 @@ func (x *TenantUsageResponse) GetCurrency() string {
 	return ""
 }
 
+func (x *TenantUsageResponse) GetLineItems() []*LineItem {
+	if x != nil {
+		return x.LineItems
+	}
+	return nil
+}
+
+func (x *TenantUsageResponse) GetBaseAmount() string {
+	if x != nil {
+		return x.BaseAmount
+	}
+	return ""
+}
+
+func (x *TenantUsageResponse) GetUsageAmount() string {
+	if x != nil {
+		return x.UsageAmount
+	}
+	return ""
+}
+
 // ClusterPricing represents pricing configuration for a cluster
 // Maps to purser.cluster_pricing table
 type ClusterPricing struct {
@@ -4620,7 +4571,7 @@ type ClusterPricing struct {
 
 func (x *ClusterPricing) Reset() {
 	*x = ClusterPricing{}
-	mi := &file_purser_proto_msgTypes[50]
+	mi := &file_purser_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4632,7 +4583,7 @@ func (x *ClusterPricing) String() string {
 func (*ClusterPricing) ProtoMessage() {}
 
 func (x *ClusterPricing) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[50]
+	mi := &file_purser_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4645,7 +4596,7 @@ func (x *ClusterPricing) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterPricing.ProtoReflect.Descriptor instead.
 func (*ClusterPricing) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{50}
+	return file_purser_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ClusterPricing) GetId() string {
@@ -4776,7 +4727,7 @@ type GetClusterPricingRequest struct {
 
 func (x *GetClusterPricingRequest) Reset() {
 	*x = GetClusterPricingRequest{}
-	mi := &file_purser_proto_msgTypes[51]
+	mi := &file_purser_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4788,7 +4739,7 @@ func (x *GetClusterPricingRequest) String() string {
 func (*GetClusterPricingRequest) ProtoMessage() {}
 
 func (x *GetClusterPricingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[51]
+	mi := &file_purser_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4801,7 +4752,7 @@ func (x *GetClusterPricingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClusterPricingRequest.ProtoReflect.Descriptor instead.
 func (*GetClusterPricingRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{51}
+	return file_purser_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *GetClusterPricingRequest) GetClusterId() string {
@@ -4821,7 +4772,7 @@ type GetClustersPricingBatchRequest struct {
 
 func (x *GetClustersPricingBatchRequest) Reset() {
 	*x = GetClustersPricingBatchRequest{}
-	mi := &file_purser_proto_msgTypes[52]
+	mi := &file_purser_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4833,7 +4784,7 @@ func (x *GetClustersPricingBatchRequest) String() string {
 func (*GetClustersPricingBatchRequest) ProtoMessage() {}
 
 func (x *GetClustersPricingBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[52]
+	mi := &file_purser_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4846,7 +4797,7 @@ func (x *GetClustersPricingBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClustersPricingBatchRequest.ProtoReflect.Descriptor instead.
 func (*GetClustersPricingBatchRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{52}
+	return file_purser_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *GetClustersPricingBatchRequest) GetClusterIds() []string {
@@ -4872,7 +4823,7 @@ type GetClustersPricingBatchResponse struct {
 
 func (x *GetClustersPricingBatchResponse) Reset() {
 	*x = GetClustersPricingBatchResponse{}
-	mi := &file_purser_proto_msgTypes[53]
+	mi := &file_purser_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4884,7 +4835,7 @@ func (x *GetClustersPricingBatchResponse) String() string {
 func (*GetClustersPricingBatchResponse) ProtoMessage() {}
 
 func (x *GetClustersPricingBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[53]
+	mi := &file_purser_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4897,7 +4848,7 @@ func (x *GetClustersPricingBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClustersPricingBatchResponse.ProtoReflect.Descriptor instead.
 func (*GetClustersPricingBatchResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{53}
+	return file_purser_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *GetClustersPricingBatchResponse) GetPricings() map[string]*ClusterPricing {
@@ -4927,7 +4878,7 @@ type SetClusterPricingRequest struct {
 
 func (x *SetClusterPricingRequest) Reset() {
 	*x = SetClusterPricingRequest{}
-	mi := &file_purser_proto_msgTypes[54]
+	mi := &file_purser_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4939,7 +4890,7 @@ func (x *SetClusterPricingRequest) String() string {
 func (*SetClusterPricingRequest) ProtoMessage() {}
 
 func (x *SetClusterPricingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[54]
+	mi := &file_purser_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4952,7 +4903,7 @@ func (x *SetClusterPricingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetClusterPricingRequest.ProtoReflect.Descriptor instead.
 func (*SetClusterPricingRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{54}
+	return file_purser_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *SetClusterPricingRequest) GetClusterId() string {
@@ -5042,7 +4993,7 @@ type ListClusterPricingsRequest struct {
 
 func (x *ListClusterPricingsRequest) Reset() {
 	*x = ListClusterPricingsRequest{}
-	mi := &file_purser_proto_msgTypes[55]
+	mi := &file_purser_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5054,7 +5005,7 @@ func (x *ListClusterPricingsRequest) String() string {
 func (*ListClusterPricingsRequest) ProtoMessage() {}
 
 func (x *ListClusterPricingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[55]
+	mi := &file_purser_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5067,7 +5018,7 @@ func (x *ListClusterPricingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListClusterPricingsRequest.ProtoReflect.Descriptor instead.
 func (*ListClusterPricingsRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{55}
+	return file_purser_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *ListClusterPricingsRequest) GetOwnerTenantId() string {
@@ -5094,7 +5045,7 @@ type ListClusterPricingsResponse struct {
 
 func (x *ListClusterPricingsResponse) Reset() {
 	*x = ListClusterPricingsResponse{}
-	mi := &file_purser_proto_msgTypes[56]
+	mi := &file_purser_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5106,7 +5057,7 @@ func (x *ListClusterPricingsResponse) String() string {
 func (*ListClusterPricingsResponse) ProtoMessage() {}
 
 func (x *ListClusterPricingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[56]
+	mi := &file_purser_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5119,7 +5070,7 @@ func (x *ListClusterPricingsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListClusterPricingsResponse.ProtoReflect.Descriptor instead.
 func (*ListClusterPricingsResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{56}
+	return file_purser_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *ListClusterPricingsResponse) GetPricings() []*ClusterPricing {
@@ -5146,7 +5097,7 @@ type CheckClusterAccessRequest struct {
 
 func (x *CheckClusterAccessRequest) Reset() {
 	*x = CheckClusterAccessRequest{}
-	mi := &file_purser_proto_msgTypes[57]
+	mi := &file_purser_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5158,7 +5109,7 @@ func (x *CheckClusterAccessRequest) String() string {
 func (*CheckClusterAccessRequest) ProtoMessage() {}
 
 func (x *CheckClusterAccessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[57]
+	mi := &file_purser_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5171,7 +5122,7 @@ func (x *CheckClusterAccessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckClusterAccessRequest.ProtoReflect.Descriptor instead.
 func (*CheckClusterAccessRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{57}
+	return file_purser_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *CheckClusterAccessRequest) GetTenantId() string {
@@ -5202,7 +5153,7 @@ type CheckClusterAccessResponse struct {
 
 func (x *CheckClusterAccessResponse) Reset() {
 	*x = CheckClusterAccessResponse{}
-	mi := &file_purser_proto_msgTypes[58]
+	mi := &file_purser_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5214,7 +5165,7 @@ func (x *CheckClusterAccessResponse) String() string {
 func (*CheckClusterAccessResponse) ProtoMessage() {}
 
 func (x *CheckClusterAccessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[58]
+	mi := &file_purser_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5227,7 +5178,7 @@ func (x *CheckClusterAccessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckClusterAccessResponse.ProtoReflect.Descriptor instead.
 func (*CheckClusterAccessResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{58}
+	return file_purser_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *CheckClusterAccessResponse) GetAllowed() bool {
@@ -5286,7 +5237,7 @@ type CreateClusterSubscriptionRequest struct {
 
 func (x *CreateClusterSubscriptionRequest) Reset() {
 	*x = CreateClusterSubscriptionRequest{}
-	mi := &file_purser_proto_msgTypes[59]
+	mi := &file_purser_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5298,7 +5249,7 @@ func (x *CreateClusterSubscriptionRequest) String() string {
 func (*CreateClusterSubscriptionRequest) ProtoMessage() {}
 
 func (x *CreateClusterSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[59]
+	mi := &file_purser_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5311,7 +5262,7 @@ func (x *CreateClusterSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateClusterSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*CreateClusterSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{59}
+	return file_purser_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *CreateClusterSubscriptionRequest) GetTenantId() string {
@@ -5370,7 +5321,7 @@ type ClusterSubscriptionResponse struct {
 
 func (x *ClusterSubscriptionResponse) Reset() {
 	*x = ClusterSubscriptionResponse{}
-	mi := &file_purser_proto_msgTypes[60]
+	mi := &file_purser_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5382,7 +5333,7 @@ func (x *ClusterSubscriptionResponse) String() string {
 func (*ClusterSubscriptionResponse) ProtoMessage() {}
 
 func (x *ClusterSubscriptionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[60]
+	mi := &file_purser_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5395,7 +5346,7 @@ func (x *ClusterSubscriptionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterSubscriptionResponse.ProtoReflect.Descriptor instead.
 func (*ClusterSubscriptionResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{60}
+	return file_purser_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *ClusterSubscriptionResponse) GetSubscriptionId() string {
@@ -5450,7 +5401,7 @@ type CancelClusterSubscriptionRequest struct {
 
 func (x *CancelClusterSubscriptionRequest) Reset() {
 	*x = CancelClusterSubscriptionRequest{}
-	mi := &file_purser_proto_msgTypes[61]
+	mi := &file_purser_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5462,7 +5413,7 @@ func (x *CancelClusterSubscriptionRequest) String() string {
 func (*CancelClusterSubscriptionRequest) ProtoMessage() {}
 
 func (x *CancelClusterSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[61]
+	mi := &file_purser_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5475,7 +5426,7 @@ func (x *CancelClusterSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelClusterSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*CancelClusterSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{61}
+	return file_purser_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *CancelClusterSubscriptionRequest) GetTenantId() string {
@@ -5502,7 +5453,7 @@ type ListMarketplaceClusterPricingsRequest struct {
 
 func (x *ListMarketplaceClusterPricingsRequest) Reset() {
 	*x = ListMarketplaceClusterPricingsRequest{}
-	mi := &file_purser_proto_msgTypes[62]
+	mi := &file_purser_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5514,7 +5465,7 @@ func (x *ListMarketplaceClusterPricingsRequest) String() string {
 func (*ListMarketplaceClusterPricingsRequest) ProtoMessage() {}
 
 func (x *ListMarketplaceClusterPricingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[62]
+	mi := &file_purser_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5527,7 +5478,7 @@ func (x *ListMarketplaceClusterPricingsRequest) ProtoReflect() protoreflect.Mess
 
 // Deprecated: Use ListMarketplaceClusterPricingsRequest.ProtoReflect.Descriptor instead.
 func (*ListMarketplaceClusterPricingsRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{62}
+	return file_purser_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *ListMarketplaceClusterPricingsRequest) GetTenantId() string {
@@ -5554,7 +5505,7 @@ type ListMarketplaceClusterPricingsResponse struct {
 
 func (x *ListMarketplaceClusterPricingsResponse) Reset() {
 	*x = ListMarketplaceClusterPricingsResponse{}
-	mi := &file_purser_proto_msgTypes[63]
+	mi := &file_purser_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5566,7 +5517,7 @@ func (x *ListMarketplaceClusterPricingsResponse) String() string {
 func (*ListMarketplaceClusterPricingsResponse) ProtoMessage() {}
 
 func (x *ListMarketplaceClusterPricingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[63]
+	mi := &file_purser_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5579,7 +5530,7 @@ func (x *ListMarketplaceClusterPricingsResponse) ProtoReflect() protoreflect.Mes
 
 // Deprecated: Use ListMarketplaceClusterPricingsResponse.ProtoReflect.Descriptor instead.
 func (*ListMarketplaceClusterPricingsResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{63}
+	return file_purser_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ListMarketplaceClusterPricingsResponse) GetPricings() []*MarketplaceClusterPricing {
@@ -5611,7 +5562,7 @@ type MarketplaceClusterPricing struct {
 
 func (x *MarketplaceClusterPricing) Reset() {
 	*x = MarketplaceClusterPricing{}
-	mi := &file_purser_proto_msgTypes[64]
+	mi := &file_purser_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5623,7 +5574,7 @@ func (x *MarketplaceClusterPricing) String() string {
 func (*MarketplaceClusterPricing) ProtoMessage() {}
 
 func (x *MarketplaceClusterPricing) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[64]
+	mi := &file_purser_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5636,7 +5587,7 @@ func (x *MarketplaceClusterPricing) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarketplaceClusterPricing.ProtoReflect.Descriptor instead.
 func (*MarketplaceClusterPricing) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{64}
+	return file_purser_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *MarketplaceClusterPricing) GetClusterId() string {
@@ -5706,7 +5657,7 @@ type PrepaidBalance struct {
 
 func (x *PrepaidBalance) Reset() {
 	*x = PrepaidBalance{}
-	mi := &file_purser_proto_msgTypes[65]
+	mi := &file_purser_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5718,7 +5669,7 @@ func (x *PrepaidBalance) String() string {
 func (*PrepaidBalance) ProtoMessage() {}
 
 func (x *PrepaidBalance) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[65]
+	mi := &file_purser_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5731,7 +5682,7 @@ func (x *PrepaidBalance) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepaidBalance.ProtoReflect.Descriptor instead.
 func (*PrepaidBalance) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{65}
+	return file_purser_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *PrepaidBalance) GetId() string {
@@ -5815,7 +5766,7 @@ type BalanceTransaction struct {
 
 func (x *BalanceTransaction) Reset() {
 	*x = BalanceTransaction{}
-	mi := &file_purser_proto_msgTypes[66]
+	mi := &file_purser_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5827,7 +5778,7 @@ func (x *BalanceTransaction) String() string {
 func (*BalanceTransaction) ProtoMessage() {}
 
 func (x *BalanceTransaction) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[66]
+	mi := &file_purser_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5840,7 +5791,7 @@ func (x *BalanceTransaction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BalanceTransaction.ProtoReflect.Descriptor instead.
 func (*BalanceTransaction) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{66}
+	return file_purser_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *BalanceTransaction) GetId() string {
@@ -5909,14 +5860,14 @@ func (x *BalanceTransaction) GetCreatedAt() *timestamppb.Timestamp {
 type GetPrepaidBalanceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	Currency      string                 `protobuf:"bytes,2,opt,name=currency,proto3" json:"currency,omitempty"` // Optional, defaults to USD
+	Currency      string                 `protobuf:"bytes,2,opt,name=currency,proto3" json:"currency,omitempty"` // Optional, defaults to EUR
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetPrepaidBalanceRequest) Reset() {
 	*x = GetPrepaidBalanceRequest{}
-	mi := &file_purser_proto_msgTypes[67]
+	mi := &file_purser_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5928,7 +5879,7 @@ func (x *GetPrepaidBalanceRequest) String() string {
 func (*GetPrepaidBalanceRequest) ProtoMessage() {}
 
 func (x *GetPrepaidBalanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[67]
+	mi := &file_purser_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5941,7 +5892,7 @@ func (x *GetPrepaidBalanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPrepaidBalanceRequest.ProtoReflect.Descriptor instead.
 func (*GetPrepaidBalanceRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{67}
+	return file_purser_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *GetPrepaidBalanceRequest) GetTenantId() string {
@@ -5962,7 +5913,7 @@ type TopupBalanceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	AmountCents   int64                  `protobuf:"varint,2,opt,name=amount_cents,json=amountCents,proto3" json:"amount_cents,omitempty"`            // Amount to add (must be positive)
-	Currency      string                 `protobuf:"bytes,3,opt,name=currency,proto3" json:"currency,omitempty"`                                      // Optional, defaults to USD
+	Currency      string                 `protobuf:"bytes,3,opt,name=currency,proto3" json:"currency,omitempty"`                                      // Optional, defaults to EUR
 	Description   string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`                                // e.g., "Crypto top-up: 0.1 ETH"
 	ReferenceId   *string                `protobuf:"bytes,5,opt,name=reference_id,json=referenceId,proto3,oneof" json:"reference_id,omitempty"`       // e.g., crypto_wallet_id
 	ReferenceType *string                `protobuf:"bytes,6,opt,name=reference_type,json=referenceType,proto3,oneof" json:"reference_type,omitempty"` // e.g., "crypto_payment"
@@ -5972,7 +5923,7 @@ type TopupBalanceRequest struct {
 
 func (x *TopupBalanceRequest) Reset() {
 	*x = TopupBalanceRequest{}
-	mi := &file_purser_proto_msgTypes[68]
+	mi := &file_purser_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5984,7 +5935,7 @@ func (x *TopupBalanceRequest) String() string {
 func (*TopupBalanceRequest) ProtoMessage() {}
 
 func (x *TopupBalanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[68]
+	mi := &file_purser_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5997,7 +5948,7 @@ func (x *TopupBalanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TopupBalanceRequest.ProtoReflect.Descriptor instead.
 func (*TopupBalanceRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{68}
+	return file_purser_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *TopupBalanceRequest) GetTenantId() string {
@@ -6046,8 +5997,8 @@ type DeductBalanceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	AmountCents   int64                  `protobuf:"varint,2,opt,name=amount_cents,json=amountCents,proto3" json:"amount_cents,omitempty"`            // Amount to deduct (must be positive, will be stored as negative)
-	Currency      string                 `protobuf:"bytes,3,opt,name=currency,proto3" json:"currency,omitempty"`                                      // Optional, defaults to USD
-	Description   string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`                                // e.g., "Usage: 2.5 viewer-hours @ $0.01/hr"
+	Currency      string                 `protobuf:"bytes,3,opt,name=currency,proto3" json:"currency,omitempty"`                                      // Optional, defaults to EUR
+	Description   string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`                                // e.g., "Usage: 2.5 viewer-hours @ EUR 0.01/hr"
 	ReferenceId   *string                `protobuf:"bytes,5,opt,name=reference_id,json=referenceId,proto3,oneof" json:"reference_id,omitempty"`       // e.g., usage_record_id
 	ReferenceType *string                `protobuf:"bytes,6,opt,name=reference_type,json=referenceType,proto3,oneof" json:"reference_type,omitempty"` // e.g., "usage_record"
 	unknownFields protoimpl.UnknownFields
@@ -6056,7 +6007,7 @@ type DeductBalanceRequest struct {
 
 func (x *DeductBalanceRequest) Reset() {
 	*x = DeductBalanceRequest{}
-	mi := &file_purser_proto_msgTypes[69]
+	mi := &file_purser_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6068,7 +6019,7 @@ func (x *DeductBalanceRequest) String() string {
 func (*DeductBalanceRequest) ProtoMessage() {}
 
 func (x *DeductBalanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[69]
+	mi := &file_purser_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6081,7 +6032,7 @@ func (x *DeductBalanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeductBalanceRequest.ProtoReflect.Descriptor instead.
 func (*DeductBalanceRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{69}
+	return file_purser_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *DeductBalanceRequest) GetTenantId() string {
@@ -6130,7 +6081,7 @@ type AdjustBalanceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	AmountCents   int64                  `protobuf:"varint,2,opt,name=amount_cents,json=amountCents,proto3" json:"amount_cents,omitempty"` // Can be positive (credit) or negative (debit)
-	Currency      string                 `protobuf:"bytes,3,opt,name=currency,proto3" json:"currency,omitempty"`                           // Optional, defaults to USD
+	Currency      string                 `protobuf:"bytes,3,opt,name=currency,proto3" json:"currency,omitempty"`                           // Optional, defaults to EUR
 	Description   string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`                     // Required - reason for adjustment
 	ReferenceId   *string                `protobuf:"bytes,5,opt,name=reference_id,json=referenceId,proto3,oneof" json:"reference_id,omitempty"`
 	ReferenceType *string                `protobuf:"bytes,6,opt,name=reference_type,json=referenceType,proto3,oneof" json:"reference_type,omitempty"`
@@ -6140,7 +6091,7 @@ type AdjustBalanceRequest struct {
 
 func (x *AdjustBalanceRequest) Reset() {
 	*x = AdjustBalanceRequest{}
-	mi := &file_purser_proto_msgTypes[70]
+	mi := &file_purser_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6152,7 +6103,7 @@ func (x *AdjustBalanceRequest) String() string {
 func (*AdjustBalanceRequest) ProtoMessage() {}
 
 func (x *AdjustBalanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[70]
+	mi := &file_purser_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6165,7 +6116,7 @@ func (x *AdjustBalanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdjustBalanceRequest.ProtoReflect.Descriptor instead.
 func (*AdjustBalanceRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{70}
+	return file_purser_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *AdjustBalanceRequest) GetTenantId() string {
@@ -6222,7 +6173,7 @@ type ListBalanceTransactionsRequest struct {
 
 func (x *ListBalanceTransactionsRequest) Reset() {
 	*x = ListBalanceTransactionsRequest{}
-	mi := &file_purser_proto_msgTypes[71]
+	mi := &file_purser_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6234,7 +6185,7 @@ func (x *ListBalanceTransactionsRequest) String() string {
 func (*ListBalanceTransactionsRequest) ProtoMessage() {}
 
 func (x *ListBalanceTransactionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[71]
+	mi := &file_purser_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6247,7 +6198,7 @@ func (x *ListBalanceTransactionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBalanceTransactionsRequest.ProtoReflect.Descriptor instead.
 func (*ListBalanceTransactionsRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{71}
+	return file_purser_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *ListBalanceTransactionsRequest) GetTenantId() string {
@@ -6288,7 +6239,7 @@ type ListBalanceTransactionsResponse struct {
 
 func (x *ListBalanceTransactionsResponse) Reset() {
 	*x = ListBalanceTransactionsResponse{}
-	mi := &file_purser_proto_msgTypes[72]
+	mi := &file_purser_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6300,7 +6251,7 @@ func (x *ListBalanceTransactionsResponse) String() string {
 func (*ListBalanceTransactionsResponse) ProtoMessage() {}
 
 func (x *ListBalanceTransactionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[72]
+	mi := &file_purser_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6313,7 +6264,7 @@ func (x *ListBalanceTransactionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBalanceTransactionsResponse.ProtoReflect.Descriptor instead.
 func (*ListBalanceTransactionsResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{72}
+	return file_purser_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *ListBalanceTransactionsResponse) GetTransactions() []*BalanceTransaction {
@@ -6333,16 +6284,16 @@ func (x *ListBalanceTransactionsResponse) GetPagination() *CursorPaginationRespo
 type InitializePrepaidBalanceRequest struct {
 	state                    protoimpl.MessageState `protogen:"open.v1"`
 	TenantId                 string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	Currency                 string                 `protobuf:"bytes,2,opt,name=currency,proto3" json:"currency,omitempty"`                                                                      // Optional, defaults to USD
+	Currency                 string                 `protobuf:"bytes,2,opt,name=currency,proto3" json:"currency,omitempty"`                                                                      // Optional, defaults to EUR
 	InitialBalanceCents      int64                  `protobuf:"varint,3,opt,name=initial_balance_cents,json=initialBalanceCents,proto3" json:"initial_balance_cents,omitempty"`                  // Usually 0 for new wallet accounts
-	LowBalanceThresholdCents int64                  `protobuf:"varint,4,opt,name=low_balance_threshold_cents,json=lowBalanceThresholdCents,proto3" json:"low_balance_threshold_cents,omitempty"` // Optional, defaults to 500 ($5)
+	LowBalanceThresholdCents int64                  `protobuf:"varint,4,opt,name=low_balance_threshold_cents,json=lowBalanceThresholdCents,proto3" json:"low_balance_threshold_cents,omitempty"` // Optional, defaults to 500 (EUR 5)
 	unknownFields            protoimpl.UnknownFields
 	sizeCache                protoimpl.SizeCache
 }
 
 func (x *InitializePrepaidBalanceRequest) Reset() {
 	*x = InitializePrepaidBalanceRequest{}
-	mi := &file_purser_proto_msgTypes[73]
+	mi := &file_purser_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6354,7 +6305,7 @@ func (x *InitializePrepaidBalanceRequest) String() string {
 func (*InitializePrepaidBalanceRequest) ProtoMessage() {}
 
 func (x *InitializePrepaidBalanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[73]
+	mi := &file_purser_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6367,7 +6318,7 @@ func (x *InitializePrepaidBalanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitializePrepaidBalanceRequest.ProtoReflect.Descriptor instead.
 func (*InitializePrepaidBalanceRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{73}
+	return file_purser_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *InitializePrepaidBalanceRequest) GetTenantId() string {
@@ -6403,14 +6354,14 @@ func (x *InitializePrepaidBalanceRequest) GetLowBalanceThresholdCents() int64 {
 type InitializePrepaidAccountRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	Currency      string                 `protobuf:"bytes,2,opt,name=currency,proto3" json:"currency,omitempty"` // Optional, defaults to USD
+	Currency      string                 `protobuf:"bytes,2,opt,name=currency,proto3" json:"currency,omitempty"` // Optional, defaults to EUR
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *InitializePrepaidAccountRequest) Reset() {
 	*x = InitializePrepaidAccountRequest{}
-	mi := &file_purser_proto_msgTypes[74]
+	mi := &file_purser_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6422,7 +6373,7 @@ func (x *InitializePrepaidAccountRequest) String() string {
 func (*InitializePrepaidAccountRequest) ProtoMessage() {}
 
 func (x *InitializePrepaidAccountRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[74]
+	mi := &file_purser_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6435,7 +6386,7 @@ func (x *InitializePrepaidAccountRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitializePrepaidAccountRequest.ProtoReflect.Descriptor instead.
 func (*InitializePrepaidAccountRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{74}
+	return file_purser_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *InitializePrepaidAccountRequest) GetTenantId() string {
@@ -6465,7 +6416,7 @@ type InitializePrepaidAccountResponse struct {
 
 func (x *InitializePrepaidAccountResponse) Reset() {
 	*x = InitializePrepaidAccountResponse{}
-	mi := &file_purser_proto_msgTypes[75]
+	mi := &file_purser_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6477,7 +6428,7 @@ func (x *InitializePrepaidAccountResponse) String() string {
 func (*InitializePrepaidAccountResponse) ProtoMessage() {}
 
 func (x *InitializePrepaidAccountResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[75]
+	mi := &file_purser_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6490,7 +6441,7 @@ func (x *InitializePrepaidAccountResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitializePrepaidAccountResponse.ProtoReflect.Descriptor instead.
 func (*InitializePrepaidAccountResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{75}
+	return file_purser_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *InitializePrepaidAccountResponse) GetSubscriptionId() string {
@@ -6539,7 +6490,7 @@ type InitializePostpaidAccountRequest struct {
 
 func (x *InitializePostpaidAccountRequest) Reset() {
 	*x = InitializePostpaidAccountRequest{}
-	mi := &file_purser_proto_msgTypes[76]
+	mi := &file_purser_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6551,7 +6502,7 @@ func (x *InitializePostpaidAccountRequest) String() string {
 func (*InitializePostpaidAccountRequest) ProtoMessage() {}
 
 func (x *InitializePostpaidAccountRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[76]
+	mi := &file_purser_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6564,7 +6515,7 @@ func (x *InitializePostpaidAccountRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitializePostpaidAccountRequest.ProtoReflect.Descriptor instead.
 func (*InitializePostpaidAccountRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{76}
+	return file_purser_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *InitializePostpaidAccountRequest) GetTenantId() string {
@@ -6586,7 +6537,7 @@ type InitializePostpaidAccountResponse struct {
 
 func (x *InitializePostpaidAccountResponse) Reset() {
 	*x = InitializePostpaidAccountResponse{}
-	mi := &file_purser_proto_msgTypes[77]
+	mi := &file_purser_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6598,7 +6549,7 @@ func (x *InitializePostpaidAccountResponse) String() string {
 func (*InitializePostpaidAccountResponse) ProtoMessage() {}
 
 func (x *InitializePostpaidAccountResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[77]
+	mi := &file_purser_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6611,7 +6562,7 @@ func (x *InitializePostpaidAccountResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use InitializePostpaidAccountResponse.ProtoReflect.Descriptor instead.
 func (*InitializePostpaidAccountResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{77}
+	return file_purser_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *InitializePostpaidAccountResponse) GetSubscriptionId() string {
@@ -6646,8 +6597,8 @@ func (x *InitializePostpaidAccountResponse) GetPrimaryClusterId() string {
 type CreateCardTopupRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	TenantId    string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	AmountCents int64                  `protobuf:"varint,2,opt,name=amount_cents,json=amountCents,proto3" json:"amount_cents,omitempty"` // Amount to top up (minimum $5 / 500 cents)
-	Currency    string                 `protobuf:"bytes,3,opt,name=currency,proto3" json:"currency,omitempty"`                           // Optional, defaults to USD
+	AmountCents int64                  `protobuf:"varint,2,opt,name=amount_cents,json=amountCents,proto3" json:"amount_cents,omitempty"` // Amount to top up (minimum EUR 5 / 500 cents)
+	Currency    string                 `protobuf:"bytes,3,opt,name=currency,proto3" json:"currency,omitempty"`                           // Optional, defaults to EUR
 	Provider    string                 `protobuf:"bytes,4,opt,name=provider,proto3" json:"provider,omitempty"`                           // "stripe" or "mollie"
 	SuccessUrl  string                 `protobuf:"bytes,5,opt,name=success_url,json=successUrl,proto3" json:"success_url,omitempty"`     // Redirect after successful payment
 	CancelUrl   string                 `protobuf:"bytes,6,opt,name=cancel_url,json=cancelUrl,proto3" json:"cancel_url,omitempty"`        // Redirect if user cancels
@@ -6663,7 +6614,7 @@ type CreateCardTopupRequest struct {
 
 func (x *CreateCardTopupRequest) Reset() {
 	*x = CreateCardTopupRequest{}
-	mi := &file_purser_proto_msgTypes[78]
+	mi := &file_purser_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6675,7 +6626,7 @@ func (x *CreateCardTopupRequest) String() string {
 func (*CreateCardTopupRequest) ProtoMessage() {}
 
 func (x *CreateCardTopupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[78]
+	mi := &file_purser_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6688,7 +6639,7 @@ func (x *CreateCardTopupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateCardTopupRequest.ProtoReflect.Descriptor instead.
 func (*CreateCardTopupRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{78}
+	return file_purser_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *CreateCardTopupRequest) GetTenantId() string {
@@ -6784,7 +6735,7 @@ type CreateCardTopupResponse struct {
 
 func (x *CreateCardTopupResponse) Reset() {
 	*x = CreateCardTopupResponse{}
-	mi := &file_purser_proto_msgTypes[79]
+	mi := &file_purser_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6796,7 +6747,7 @@ func (x *CreateCardTopupResponse) String() string {
 func (*CreateCardTopupResponse) ProtoMessage() {}
 
 func (x *CreateCardTopupResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[79]
+	mi := &file_purser_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6809,7 +6760,7 @@ func (x *CreateCardTopupResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateCardTopupResponse.ProtoReflect.Descriptor instead.
 func (*CreateCardTopupResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{79}
+	return file_purser_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *CreateCardTopupResponse) GetTopupId() string {
@@ -6882,7 +6833,7 @@ type PendingTopup struct {
 
 func (x *PendingTopup) Reset() {
 	*x = PendingTopup{}
-	mi := &file_purser_proto_msgTypes[80]
+	mi := &file_purser_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6894,7 +6845,7 @@ func (x *PendingTopup) String() string {
 func (*PendingTopup) ProtoMessage() {}
 
 func (x *PendingTopup) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[80]
+	mi := &file_purser_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6907,7 +6858,7 @@ func (x *PendingTopup) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PendingTopup.ProtoReflect.Descriptor instead.
 func (*PendingTopup) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{80}
+	return file_purser_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *PendingTopup) GetId() string {
@@ -7010,7 +6961,7 @@ type GetPendingTopupRequest struct {
 
 func (x *GetPendingTopupRequest) Reset() {
 	*x = GetPendingTopupRequest{}
-	mi := &file_purser_proto_msgTypes[81]
+	mi := &file_purser_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7022,7 +6973,7 @@ func (x *GetPendingTopupRequest) String() string {
 func (*GetPendingTopupRequest) ProtoMessage() {}
 
 func (x *GetPendingTopupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[81]
+	mi := &file_purser_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7035,7 +6986,7 @@ func (x *GetPendingTopupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPendingTopupRequest.ProtoReflect.Descriptor instead.
 func (*GetPendingTopupRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{81}
+	return file_purser_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *GetPendingTopupRequest) GetLookup() isGetPendingTopupRequest_Lookup {
@@ -7097,7 +7048,7 @@ type ListPendingTopupsRequest struct {
 
 func (x *ListPendingTopupsRequest) Reset() {
 	*x = ListPendingTopupsRequest{}
-	mi := &file_purser_proto_msgTypes[82]
+	mi := &file_purser_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7109,7 +7060,7 @@ func (x *ListPendingTopupsRequest) String() string {
 func (*ListPendingTopupsRequest) ProtoMessage() {}
 
 func (x *ListPendingTopupsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[82]
+	mi := &file_purser_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7122,7 +7073,7 @@ func (x *ListPendingTopupsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPendingTopupsRequest.ProtoReflect.Descriptor instead.
 func (*ListPendingTopupsRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{82}
+	return file_purser_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *ListPendingTopupsRequest) GetTenantId() string {
@@ -7156,7 +7107,7 @@ type ListPendingTopupsResponse struct {
 
 func (x *ListPendingTopupsResponse) Reset() {
 	*x = ListPendingTopupsResponse{}
-	mi := &file_purser_proto_msgTypes[83]
+	mi := &file_purser_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7168,7 +7119,7 @@ func (x *ListPendingTopupsResponse) String() string {
 func (*ListPendingTopupsResponse) ProtoMessage() {}
 
 func (x *ListPendingTopupsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[83]
+	mi := &file_purser_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7181,7 +7132,7 @@ func (x *ListPendingTopupsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPendingTopupsResponse.ProtoReflect.Descriptor instead.
 func (*ListPendingTopupsResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{83}
+	return file_purser_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *ListPendingTopupsResponse) GetTopups() []*PendingTopup {
@@ -7202,15 +7153,15 @@ type CreateCryptoTopupRequest struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	TenantId            string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	ExpectedAmountCents int64                  `protobuf:"varint,2,opt,name=expected_amount_cents,json=expectedAmountCents,proto3" json:"expected_amount_cents,omitempty"` // Target credit amount in `currency` cents
-	Asset               CryptoAsset            `protobuf:"varint,3,opt,name=asset,proto3,enum=purser.CryptoAsset" json:"asset,omitempty"`                                  // ETH, USDC, or LPT
-	Currency            string                 `protobuf:"bytes,4,opt,name=currency,proto3" json:"currency,omitempty"`                                                     // Target currency for balance (USD, EUR) - defaults to USD
+	Asset               CryptoAsset            `protobuf:"varint,3,opt,name=asset,proto3,enum=purser.CryptoAsset" json:"asset,omitempty"`                                  // ETH or USDC; LPT is reserved
+	Currency            string                 `protobuf:"bytes,4,opt,name=currency,proto3" json:"currency,omitempty"`                                                     // Target currency for balance (EUR, USD) - defaults to EUR
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
 
 func (x *CreateCryptoTopupRequest) Reset() {
 	*x = CreateCryptoTopupRequest{}
-	mi := &file_purser_proto_msgTypes[84]
+	mi := &file_purser_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7222,7 +7173,7 @@ func (x *CreateCryptoTopupRequest) String() string {
 func (*CreateCryptoTopupRequest) ProtoMessage() {}
 
 func (x *CreateCryptoTopupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[84]
+	mi := &file_purser_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7235,7 +7186,7 @@ func (x *CreateCryptoTopupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateCryptoTopupRequest.ProtoReflect.Descriptor instead.
 func (*CreateCryptoTopupRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{84}
+	return file_purser_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *CreateCryptoTopupRequest) GetTenantId() string {
@@ -7271,7 +7222,7 @@ type CreateCryptoTopupResponse struct {
 	TopupId             string                 `protobuf:"bytes,1,opt,name=topup_id,json=topupId,proto3" json:"topup_id,omitempty"`                      // Internal tracking ID
 	DepositAddress      string                 `protobuf:"bytes,2,opt,name=deposit_address,json=depositAddress,proto3" json:"deposit_address,omitempty"` // HD-derived Ethereum address
 	Asset               CryptoAsset            `protobuf:"varint,3,opt,name=asset,proto3,enum=purser.CryptoAsset" json:"asset,omitempty"`
-	AssetSymbol         string                 `protobuf:"bytes,4,opt,name=asset_symbol,json=assetSymbol,proto3" json:"asset_symbol,omitempty"`                            // Human-readable: "ETH", "USDC", "LPT"
+	AssetSymbol         string                 `protobuf:"bytes,4,opt,name=asset_symbol,json=assetSymbol,proto3" json:"asset_symbol,omitempty"`                            // Human-readable asset symbol
 	ExpectedAmountCents int64                  `protobuf:"varint,5,opt,name=expected_amount_cents,json=expectedAmountCents,proto3" json:"expected_amount_cents,omitempty"` // Echo back of request's expected_amount_cents
 	ExpiresAt           *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`                                  // Address valid for 24h
 	QrCodeData          string                 `protobuf:"bytes,7,opt,name=qr_code_data,json=qrCodeData,proto3" json:"qr_code_data,omitempty"`                             // QR code as data URI (optional)
@@ -7289,7 +7240,7 @@ type CreateCryptoTopupResponse struct {
 
 func (x *CreateCryptoTopupResponse) Reset() {
 	*x = CreateCryptoTopupResponse{}
-	mi := &file_purser_proto_msgTypes[85]
+	mi := &file_purser_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7301,7 +7252,7 @@ func (x *CreateCryptoTopupResponse) String() string {
 func (*CreateCryptoTopupResponse) ProtoMessage() {}
 
 func (x *CreateCryptoTopupResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[85]
+	mi := &file_purser_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7314,7 +7265,7 @@ func (x *CreateCryptoTopupResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateCryptoTopupResponse.ProtoReflect.Descriptor instead.
 func (*CreateCryptoTopupResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{85}
+	return file_purser_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *CreateCryptoTopupResponse) GetTopupId() string {
@@ -7417,7 +7368,7 @@ type GetCryptoTopupRequest struct {
 
 func (x *GetCryptoTopupRequest) Reset() {
 	*x = GetCryptoTopupRequest{}
-	mi := &file_purser_proto_msgTypes[86]
+	mi := &file_purser_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7429,7 +7380,7 @@ func (x *GetCryptoTopupRequest) String() string {
 func (*GetCryptoTopupRequest) ProtoMessage() {}
 
 func (x *GetCryptoTopupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[86]
+	mi := &file_purser_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7442,7 +7393,7 @@ func (x *GetCryptoTopupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCryptoTopupRequest.ProtoReflect.Descriptor instead.
 func (*GetCryptoTopupRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{86}
+	return file_purser_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *GetCryptoTopupRequest) GetTopupId() string {
@@ -7481,7 +7432,7 @@ type CryptoTopup struct {
 
 func (x *CryptoTopup) Reset() {
 	*x = CryptoTopup{}
-	mi := &file_purser_proto_msgTypes[87]
+	mi := &file_purser_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7493,7 +7444,7 @@ func (x *CryptoTopup) String() string {
 func (*CryptoTopup) ProtoMessage() {}
 
 func (x *CryptoTopup) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[87]
+	mi := &file_purser_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7506,7 +7457,7 @@ func (x *CryptoTopup) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CryptoTopup.ProtoReflect.Descriptor instead.
 func (*CryptoTopup) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{87}
+	return file_purser_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *CryptoTopup) GetId() string {
@@ -7661,7 +7612,7 @@ type PromoteToPaidRequest struct {
 
 func (x *PromoteToPaidRequest) Reset() {
 	*x = PromoteToPaidRequest{}
-	mi := &file_purser_proto_msgTypes[88]
+	mi := &file_purser_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7673,7 +7624,7 @@ func (x *PromoteToPaidRequest) String() string {
 func (*PromoteToPaidRequest) ProtoMessage() {}
 
 func (x *PromoteToPaidRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[88]
+	mi := &file_purser_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7686,7 +7637,7 @@ func (x *PromoteToPaidRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromoteToPaidRequest.ProtoReflect.Descriptor instead.
 func (*PromoteToPaidRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{88}
+	return file_purser_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *PromoteToPaidRequest) GetTenantId() string {
@@ -7720,7 +7671,7 @@ type PromoteToPaidResponse struct {
 
 func (x *PromoteToPaidResponse) Reset() {
 	*x = PromoteToPaidResponse{}
-	mi := &file_purser_proto_msgTypes[89]
+	mi := &file_purser_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7732,7 +7683,7 @@ func (x *PromoteToPaidResponse) String() string {
 func (*PromoteToPaidResponse) ProtoMessage() {}
 
 func (x *PromoteToPaidResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[89]
+	mi := &file_purser_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7745,7 +7696,7 @@ func (x *PromoteToPaidResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromoteToPaidResponse.ProtoReflect.Descriptor instead.
 func (*PromoteToPaidResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{89}
+	return file_purser_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *PromoteToPaidResponse) GetSuccess() bool {
@@ -7817,7 +7768,7 @@ type CreateStripeCheckoutRequest struct {
 
 func (x *CreateStripeCheckoutRequest) Reset() {
 	*x = CreateStripeCheckoutRequest{}
-	mi := &file_purser_proto_msgTypes[90]
+	mi := &file_purser_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7829,7 +7780,7 @@ func (x *CreateStripeCheckoutRequest) String() string {
 func (*CreateStripeCheckoutRequest) ProtoMessage() {}
 
 func (x *CreateStripeCheckoutRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[90]
+	mi := &file_purser_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7842,7 +7793,7 @@ func (x *CreateStripeCheckoutRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateStripeCheckoutRequest.ProtoReflect.Descriptor instead.
 func (*CreateStripeCheckoutRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{90}
+	return file_purser_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *CreateStripeCheckoutRequest) GetTenantId() string {
@@ -7890,7 +7841,7 @@ type CreateStripeCheckoutResponse struct {
 
 func (x *CreateStripeCheckoutResponse) Reset() {
 	*x = CreateStripeCheckoutResponse{}
-	mi := &file_purser_proto_msgTypes[91]
+	mi := &file_purser_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7902,7 +7853,7 @@ func (x *CreateStripeCheckoutResponse) String() string {
 func (*CreateStripeCheckoutResponse) ProtoMessage() {}
 
 func (x *CreateStripeCheckoutResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[91]
+	mi := &file_purser_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7915,7 +7866,7 @@ func (x *CreateStripeCheckoutResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateStripeCheckoutResponse.ProtoReflect.Descriptor instead.
 func (*CreateStripeCheckoutResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{91}
+	return file_purser_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *CreateStripeCheckoutResponse) GetCheckoutUrl() string {
@@ -7942,7 +7893,7 @@ type CreateBillingPortalRequest struct {
 
 func (x *CreateBillingPortalRequest) Reset() {
 	*x = CreateBillingPortalRequest{}
-	mi := &file_purser_proto_msgTypes[92]
+	mi := &file_purser_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7954,7 +7905,7 @@ func (x *CreateBillingPortalRequest) String() string {
 func (*CreateBillingPortalRequest) ProtoMessage() {}
 
 func (x *CreateBillingPortalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[92]
+	mi := &file_purser_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7967,7 +7918,7 @@ func (x *CreateBillingPortalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBillingPortalRequest.ProtoReflect.Descriptor instead.
 func (*CreateBillingPortalRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{92}
+	return file_purser_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *CreateBillingPortalRequest) GetTenantId() string {
@@ -7993,7 +7944,7 @@ type CreateBillingPortalResponse struct {
 
 func (x *CreateBillingPortalResponse) Reset() {
 	*x = CreateBillingPortalResponse{}
-	mi := &file_purser_proto_msgTypes[93]
+	mi := &file_purser_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8005,7 +7956,7 @@ func (x *CreateBillingPortalResponse) String() string {
 func (*CreateBillingPortalResponse) ProtoMessage() {}
 
 func (x *CreateBillingPortalResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[93]
+	mi := &file_purser_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8018,7 +7969,7 @@ func (x *CreateBillingPortalResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBillingPortalResponse.ProtoReflect.Descriptor instead.
 func (*CreateBillingPortalResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{93}
+	return file_purser_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *CreateBillingPortalResponse) GetPortalUrl() string {
@@ -8037,7 +7988,7 @@ type SyncStripeSubscriptionRequest struct {
 
 func (x *SyncStripeSubscriptionRequest) Reset() {
 	*x = SyncStripeSubscriptionRequest{}
-	mi := &file_purser_proto_msgTypes[94]
+	mi := &file_purser_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8049,7 +8000,7 @@ func (x *SyncStripeSubscriptionRequest) String() string {
 func (*SyncStripeSubscriptionRequest) ProtoMessage() {}
 
 func (x *SyncStripeSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[94]
+	mi := &file_purser_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8062,7 +8013,7 @@ func (x *SyncStripeSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncStripeSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*SyncStripeSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{94}
+	return file_purser_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *SyncStripeSubscriptionRequest) GetTenantId() string {
@@ -8085,7 +8036,7 @@ type CreateMollieFirstPaymentRequest struct {
 
 func (x *CreateMollieFirstPaymentRequest) Reset() {
 	*x = CreateMollieFirstPaymentRequest{}
-	mi := &file_purser_proto_msgTypes[95]
+	mi := &file_purser_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8097,7 +8048,7 @@ func (x *CreateMollieFirstPaymentRequest) String() string {
 func (*CreateMollieFirstPaymentRequest) ProtoMessage() {}
 
 func (x *CreateMollieFirstPaymentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[95]
+	mi := &file_purser_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8110,7 +8061,7 @@ func (x *CreateMollieFirstPaymentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateMollieFirstPaymentRequest.ProtoReflect.Descriptor instead.
 func (*CreateMollieFirstPaymentRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{95}
+	return file_purser_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *CreateMollieFirstPaymentRequest) GetTenantId() string {
@@ -8159,7 +8110,7 @@ type CreateMollieFirstPaymentResponse struct {
 
 func (x *CreateMollieFirstPaymentResponse) Reset() {
 	*x = CreateMollieFirstPaymentResponse{}
-	mi := &file_purser_proto_msgTypes[96]
+	mi := &file_purser_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8171,7 +8122,7 @@ func (x *CreateMollieFirstPaymentResponse) String() string {
 func (*CreateMollieFirstPaymentResponse) ProtoMessage() {}
 
 func (x *CreateMollieFirstPaymentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[96]
+	mi := &file_purser_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8184,7 +8135,7 @@ func (x *CreateMollieFirstPaymentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateMollieFirstPaymentResponse.ProtoReflect.Descriptor instead.
 func (*CreateMollieFirstPaymentResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{96}
+	return file_purser_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *CreateMollieFirstPaymentResponse) GetPaymentUrl() string {
@@ -8220,7 +8171,7 @@ type CreateMollieSubscriptionRequest struct {
 
 func (x *CreateMollieSubscriptionRequest) Reset() {
 	*x = CreateMollieSubscriptionRequest{}
-	mi := &file_purser_proto_msgTypes[97]
+	mi := &file_purser_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8232,7 +8183,7 @@ func (x *CreateMollieSubscriptionRequest) String() string {
 func (*CreateMollieSubscriptionRequest) ProtoMessage() {}
 
 func (x *CreateMollieSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[97]
+	mi := &file_purser_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8245,7 +8196,7 @@ func (x *CreateMollieSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateMollieSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*CreateMollieSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{97}
+	return file_purser_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *CreateMollieSubscriptionRequest) GetTenantId() string {
@@ -8287,7 +8238,7 @@ type CreateMollieSubscriptionResponse struct {
 
 func (x *CreateMollieSubscriptionResponse) Reset() {
 	*x = CreateMollieSubscriptionResponse{}
-	mi := &file_purser_proto_msgTypes[98]
+	mi := &file_purser_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8299,7 +8250,7 @@ func (x *CreateMollieSubscriptionResponse) String() string {
 func (*CreateMollieSubscriptionResponse) ProtoMessage() {}
 
 func (x *CreateMollieSubscriptionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[98]
+	mi := &file_purser_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8312,7 +8263,7 @@ func (x *CreateMollieSubscriptionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateMollieSubscriptionResponse.ProtoReflect.Descriptor instead.
 func (*CreateMollieSubscriptionResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{98}
+	return file_purser_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *CreateMollieSubscriptionResponse) GetSubscriptionId() string {
@@ -8345,7 +8296,7 @@ type ListMollieMandatesRequest struct {
 
 func (x *ListMollieMandatesRequest) Reset() {
 	*x = ListMollieMandatesRequest{}
-	mi := &file_purser_proto_msgTypes[99]
+	mi := &file_purser_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8357,7 +8308,7 @@ func (x *ListMollieMandatesRequest) String() string {
 func (*ListMollieMandatesRequest) ProtoMessage() {}
 
 func (x *ListMollieMandatesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[99]
+	mi := &file_purser_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8370,7 +8321,7 @@ func (x *ListMollieMandatesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMollieMandatesRequest.ProtoReflect.Descriptor instead.
 func (*ListMollieMandatesRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{99}
+	return file_purser_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *ListMollieMandatesRequest) GetTenantId() string {
@@ -8395,7 +8346,7 @@ type MollieMandate struct {
 
 func (x *MollieMandate) Reset() {
 	*x = MollieMandate{}
-	mi := &file_purser_proto_msgTypes[100]
+	mi := &file_purser_proto_msgTypes[98]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8407,7 +8358,7 @@ func (x *MollieMandate) String() string {
 func (*MollieMandate) ProtoMessage() {}
 
 func (x *MollieMandate) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[100]
+	mi := &file_purser_proto_msgTypes[98]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8420,7 +8371,7 @@ func (x *MollieMandate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MollieMandate.ProtoReflect.Descriptor instead.
 func (*MollieMandate) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{100}
+	return file_purser_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *MollieMandate) GetId() string {
@@ -8481,7 +8432,7 @@ type ListMollieMandatesResponse struct {
 
 func (x *ListMollieMandatesResponse) Reset() {
 	*x = ListMollieMandatesResponse{}
-	mi := &file_purser_proto_msgTypes[101]
+	mi := &file_purser_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8493,7 +8444,7 @@ func (x *ListMollieMandatesResponse) String() string {
 func (*ListMollieMandatesResponse) ProtoMessage() {}
 
 func (x *ListMollieMandatesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[101]
+	mi := &file_purser_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8506,7 +8457,7 @@ func (x *ListMollieMandatesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMollieMandatesResponse.ProtoReflect.Descriptor instead.
 func (*ListMollieMandatesResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{101}
+	return file_purser_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *ListMollieMandatesResponse) GetMandates() []*MollieMandate {
@@ -8526,7 +8477,7 @@ type CancelMollieSubscriptionRequest struct {
 
 func (x *CancelMollieSubscriptionRequest) Reset() {
 	*x = CancelMollieSubscriptionRequest{}
-	mi := &file_purser_proto_msgTypes[102]
+	mi := &file_purser_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8538,7 +8489,7 @@ func (x *CancelMollieSubscriptionRequest) String() string {
 func (*CancelMollieSubscriptionRequest) ProtoMessage() {}
 
 func (x *CancelMollieSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[102]
+	mi := &file_purser_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8551,7 +8502,7 @@ func (x *CancelMollieSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelMollieSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*CancelMollieSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{102}
+	return file_purser_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *CancelMollieSubscriptionRequest) GetTenantId() string {
@@ -8578,7 +8529,7 @@ type GetPaymentRequirementsRequest struct {
 
 func (x *GetPaymentRequirementsRequest) Reset() {
 	*x = GetPaymentRequirementsRequest{}
-	mi := &file_purser_proto_msgTypes[103]
+	mi := &file_purser_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8590,7 +8541,7 @@ func (x *GetPaymentRequirementsRequest) String() string {
 func (*GetPaymentRequirementsRequest) ProtoMessage() {}
 
 func (x *GetPaymentRequirementsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[103]
+	mi := &file_purser_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8603,7 +8554,7 @@ func (x *GetPaymentRequirementsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPaymentRequirementsRequest.ProtoReflect.Descriptor instead.
 func (*GetPaymentRequirementsRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{103}
+	return file_purser_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *GetPaymentRequirementsRequest) GetTenantId() string {
@@ -8634,7 +8585,7 @@ type PaymentRequirements struct {
 
 func (x *PaymentRequirements) Reset() {
 	*x = PaymentRequirements{}
-	mi := &file_purser_proto_msgTypes[104]
+	mi := &file_purser_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8646,7 +8597,7 @@ func (x *PaymentRequirements) String() string {
 func (*PaymentRequirements) ProtoMessage() {}
 
 func (x *PaymentRequirements) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[104]
+	mi := &file_purser_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8659,7 +8610,7 @@ func (x *PaymentRequirements) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PaymentRequirements.ProtoReflect.Descriptor instead.
 func (*PaymentRequirements) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{104}
+	return file_purser_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *PaymentRequirements) GetX402Version() int32 {
@@ -8706,7 +8657,7 @@ type PaymentRequirement struct {
 
 func (x *PaymentRequirement) Reset() {
 	*x = PaymentRequirement{}
-	mi := &file_purser_proto_msgTypes[105]
+	mi := &file_purser_proto_msgTypes[103]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8718,7 +8669,7 @@ func (x *PaymentRequirement) String() string {
 func (*PaymentRequirement) ProtoMessage() {}
 
 func (x *PaymentRequirement) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[105]
+	mi := &file_purser_proto_msgTypes[103]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8731,7 +8682,7 @@ func (x *PaymentRequirement) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PaymentRequirement.ProtoReflect.Descriptor instead.
 func (*PaymentRequirement) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{105}
+	return file_purser_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *PaymentRequirement) GetScheme() string {
@@ -8803,7 +8754,7 @@ type X402PaymentPayload struct {
 
 func (x *X402PaymentPayload) Reset() {
 	*x = X402PaymentPayload{}
-	mi := &file_purser_proto_msgTypes[106]
+	mi := &file_purser_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8815,7 +8766,7 @@ func (x *X402PaymentPayload) String() string {
 func (*X402PaymentPayload) ProtoMessage() {}
 
 func (x *X402PaymentPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[106]
+	mi := &file_purser_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8828,7 +8779,7 @@ func (x *X402PaymentPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use X402PaymentPayload.ProtoReflect.Descriptor instead.
 func (*X402PaymentPayload) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{106}
+	return file_purser_proto_rawDescGZIP(), []int{104}
 }
 
 func (x *X402PaymentPayload) GetX402Version() int32 {
@@ -8869,7 +8820,7 @@ type X402ExactPayload struct {
 
 func (x *X402ExactPayload) Reset() {
 	*x = X402ExactPayload{}
-	mi := &file_purser_proto_msgTypes[107]
+	mi := &file_purser_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8881,7 +8832,7 @@ func (x *X402ExactPayload) String() string {
 func (*X402ExactPayload) ProtoMessage() {}
 
 func (x *X402ExactPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[107]
+	mi := &file_purser_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8894,7 +8845,7 @@ func (x *X402ExactPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use X402ExactPayload.ProtoReflect.Descriptor instead.
 func (*X402ExactPayload) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{107}
+	return file_purser_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *X402ExactPayload) GetSignature() string {
@@ -8925,7 +8876,7 @@ type X402Authorization struct {
 
 func (x *X402Authorization) Reset() {
 	*x = X402Authorization{}
-	mi := &file_purser_proto_msgTypes[108]
+	mi := &file_purser_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8937,7 +8888,7 @@ func (x *X402Authorization) String() string {
 func (*X402Authorization) ProtoMessage() {}
 
 func (x *X402Authorization) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[108]
+	mi := &file_purser_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8950,7 +8901,7 @@ func (x *X402Authorization) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use X402Authorization.ProtoReflect.Descriptor instead.
 func (*X402Authorization) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{108}
+	return file_purser_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *X402Authorization) GetFrom() string {
@@ -9006,7 +8957,7 @@ type VerifyX402PaymentRequest struct {
 
 func (x *VerifyX402PaymentRequest) Reset() {
 	*x = VerifyX402PaymentRequest{}
-	mi := &file_purser_proto_msgTypes[109]
+	mi := &file_purser_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9018,7 +8969,7 @@ func (x *VerifyX402PaymentRequest) String() string {
 func (*VerifyX402PaymentRequest) ProtoMessage() {}
 
 func (x *VerifyX402PaymentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[109]
+	mi := &file_purser_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9031,7 +8982,7 @@ func (x *VerifyX402PaymentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyX402PaymentRequest.ProtoReflect.Descriptor instead.
 func (*VerifyX402PaymentRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{109}
+	return file_purser_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *VerifyX402PaymentRequest) GetTenantId() string {
@@ -9069,7 +9020,7 @@ type VerifyX402PaymentResponse struct {
 
 func (x *VerifyX402PaymentResponse) Reset() {
 	*x = VerifyX402PaymentResponse{}
-	mi := &file_purser_proto_msgTypes[110]
+	mi := &file_purser_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9081,7 +9032,7 @@ func (x *VerifyX402PaymentResponse) String() string {
 func (*VerifyX402PaymentResponse) ProtoMessage() {}
 
 func (x *VerifyX402PaymentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[110]
+	mi := &file_purser_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9094,7 +9045,7 @@ func (x *VerifyX402PaymentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyX402PaymentResponse.ProtoReflect.Descriptor instead.
 func (*VerifyX402PaymentResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{110}
+	return file_purser_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *VerifyX402PaymentResponse) GetValid() bool {
@@ -9150,7 +9101,7 @@ type SettleX402PaymentRequest struct {
 
 func (x *SettleX402PaymentRequest) Reset() {
 	*x = SettleX402PaymentRequest{}
-	mi := &file_purser_proto_msgTypes[111]
+	mi := &file_purser_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9162,7 +9113,7 @@ func (x *SettleX402PaymentRequest) String() string {
 func (*SettleX402PaymentRequest) ProtoMessage() {}
 
 func (x *SettleX402PaymentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[111]
+	mi := &file_purser_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9175,7 +9126,7 @@ func (x *SettleX402PaymentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettleX402PaymentRequest.ProtoReflect.Descriptor instead.
 func (*SettleX402PaymentRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{111}
+	return file_purser_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *SettleX402PaymentRequest) GetTenantId() string {
@@ -9216,7 +9167,7 @@ type SettleX402PaymentResponse struct {
 
 func (x *SettleX402PaymentResponse) Reset() {
 	*x = SettleX402PaymentResponse{}
-	mi := &file_purser_proto_msgTypes[112]
+	mi := &file_purser_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9228,7 +9179,7 @@ func (x *SettleX402PaymentResponse) String() string {
 func (*SettleX402PaymentResponse) ProtoMessage() {}
 
 func (x *SettleX402PaymentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[112]
+	mi := &file_purser_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9241,7 +9192,7 @@ func (x *SettleX402PaymentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettleX402PaymentResponse.ProtoReflect.Descriptor instead.
 func (*SettleX402PaymentResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{112}
+	return file_purser_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *SettleX402PaymentResponse) GetSuccess() bool {
@@ -9316,7 +9267,7 @@ type GetTenantX402AddressRequest struct {
 
 func (x *GetTenantX402AddressRequest) Reset() {
 	*x = GetTenantX402AddressRequest{}
-	mi := &file_purser_proto_msgTypes[113]
+	mi := &file_purser_proto_msgTypes[111]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9328,7 +9279,7 @@ func (x *GetTenantX402AddressRequest) String() string {
 func (*GetTenantX402AddressRequest) ProtoMessage() {}
 
 func (x *GetTenantX402AddressRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[113]
+	mi := &file_purser_proto_msgTypes[111]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9341,7 +9292,7 @@ func (x *GetTenantX402AddressRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantX402AddressRequest.ProtoReflect.Descriptor instead.
 func (*GetTenantX402AddressRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{113}
+	return file_purser_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *GetTenantX402AddressRequest) GetTenantId() string {
@@ -9362,7 +9313,7 @@ type GetTenantX402AddressResponse struct {
 
 func (x *GetTenantX402AddressResponse) Reset() {
 	*x = GetTenantX402AddressResponse{}
-	mi := &file_purser_proto_msgTypes[114]
+	mi := &file_purser_proto_msgTypes[112]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9374,7 +9325,7 @@ func (x *GetTenantX402AddressResponse) String() string {
 func (*GetTenantX402AddressResponse) ProtoMessage() {}
 
 func (x *GetTenantX402AddressResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[114]
+	mi := &file_purser_proto_msgTypes[112]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9387,7 +9338,7 @@ func (x *GetTenantX402AddressResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantX402AddressResponse.ProtoReflect.Descriptor instead.
 func (*GetTenantX402AddressResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{114}
+	return file_purser_proto_rawDescGZIP(), []int{112}
 }
 
 func (x *GetTenantX402AddressResponse) GetAddress() string {
@@ -9417,12 +9368,13 @@ const file_purser_proto_rawDesc = "" +
 	"\n" +
 	"\fpurser.proto\x12\x06purser\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\fcommon.proto\x1a\fshared.proto\"<\n" +
 	"\x1dGetTenantBillingStatusRequest\x12\x1b\n" +
-	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"\xbd\x01\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"\xf7\x01\n" +
 	"\x1eGetTenantBillingStatusResponse\x12#\n" +
 	"\rbilling_model\x18\x01 \x01(\tR\fbillingModel\x12!\n" +
 	"\fis_suspended\x18\x02 \x01(\bR\visSuspended\x12.\n" +
 	"\x13is_balance_negative\x18\x03 \x01(\bR\x11isBalanceNegative\x12#\n" +
-	"\rbalance_cents\x18\x04 \x01(\x03R\fbalanceCents\"\x84\x01\n" +
+	"\rbalance_cents\x18\x04 \x01(\x03R\fbalanceCents\x128\n" +
+	"\x18recording_retention_days\x18\x05 \x01(\x05R\x16recordingRetentionDays\"\x84\x01\n" +
 	"\x16GetBillingTiersRequest\x12)\n" +
 	"\x10include_inactive\x18\x01 \x01(\bR\x0fincludeInactive\x12?\n" +
 	"\n" +
@@ -9435,7 +9387,7 @@ const file_purser_proto_rawDesc = "" +
 	"pagination\x18\x03 \x01(\v2 .common.CursorPaginationResponseR\n" +
 	"pagination\"0\n" +
 	"\x15GetBillingTierRequest\x12\x17\n" +
-	"\atier_id\x18\x01 \x01(\tR\x06tierId\"\x95\n" +
+	"\atier_id\x18\x01 \x01(\tR\x06tierId\"\xa3\n" +
 	"\n" +
 	"\vBillingTier\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
@@ -9445,16 +9397,11 @@ const file_purser_proto_rawDesc = "" +
 	"\n" +
 	"base_price\x18\x05 \x01(\x01R\tbasePrice\x12\x1a\n" +
 	"\bcurrency\x18\x06 \x01(\tR\bcurrency\x12%\n" +
-	"\x0ebilling_period\x18\a \x01(\tR\rbillingPeriod\x12L\n" +
-	"\x14bandwidth_allocation\x18\b \x01(\v2\x19.purser.AllocationDetailsR\x13bandwidthAllocation\x12H\n" +
-	"\x12storage_allocation\x18\t \x01(\v2\x19.purser.AllocationDetailsR\x11storageAllocation\x12H\n" +
-	"\x12compute_allocation\x18\n" +
-	" \x01(\v2\x19.purser.AllocationDetailsR\x11computeAllocation\x123\n" +
+	"\x0ebilling_period\x18\a \x01(\tR\rbillingPeriod\x123\n" +
 	"\bfeatures\x18\v \x01(\v2\x17.purser.BillingFeaturesR\bfeatures\x12#\n" +
 	"\rsupport_level\x18\f \x01(\tR\fsupportLevel\x12\x1b\n" +
 	"\tsla_level\x18\r \x01(\tR\bslaLevel\x12)\n" +
-	"\x10metering_enabled\x18\x0e \x01(\bR\x0fmeteringEnabled\x129\n" +
-	"\roverage_rates\x18\x0f \x01(\v2\x14.purser.OverageRatesR\foverageRates\x12\x1b\n" +
+	"\x10metering_enabled\x18\x0e \x01(\bR\x0fmeteringEnabled\x12\x1b\n" +
 	"\tis_active\x18\x10 \x01(\bR\bisActive\x12\x1d\n" +
 	"\n" +
 	"tier_level\x18\x11 \x01(\x05R\ttierLevel\x12#\n" +
@@ -9469,10 +9416,26 @@ const file_purser_proto_rawDesc = "" +
 	"\x12is_default_prepaid\x18\x18 \x01(\bR\x10isDefaultPrepaid\x12.\n" +
 	"\x13is_default_postpaid\x18\x19 \x01(\bR\x11isDefaultPostpaid\x12%\n" +
 	"\x0eprocesses_live\x18\x1a \x01(\tR\rprocessesLive\x12#\n" +
-	"\rprocesses_vod\x18\x1b \x01(\tR\fprocessesVodB\x14\n" +
+	"\rprocesses_vod\x18\x1b \x01(\tR\fprocessesVod\x128\n" +
+	"\rpricing_rules\x18\x1c \x03(\v2\x13.purser.PricingRuleR\fpricingRules\x12I\n" +
+	"\fentitlements\x18\x1d \x03(\v2%.purser.BillingTier.EntitlementsEntryR\fentitlements\x1a?\n" +
+	"\x11EntitlementsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x14\n" +
 	"\x12_stripe_product_idB\x1a\n" +
 	"\x18_stripe_price_id_monthlyB\x19\n" +
-	"\x17_stripe_price_id_yearly\"\x85\x02\n" +
+	"\x17_stripe_price_id_yearlyJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"J\x04\b\n" +
+	"\x10\vJ\x04\b\x0f\x10\x10R\x14bandwidth_allocationR\x12storage_allocationR\x12compute_allocationR\roverage_rates\"\xc2\x01\n" +
+	"\vPricingRule\x12\x14\n" +
+	"\x05meter\x18\x01 \x01(\tR\x05meter\x12\x14\n" +
+	"\x05model\x18\x02 \x01(\tR\x05model\x12\x1a\n" +
+	"\bcurrency\x18\x03 \x01(\tR\bcurrency\x12+\n" +
+	"\x11included_quantity\x18\x04 \x01(\tR\x10includedQuantity\x12\x1d\n" +
+	"\n" +
+	"unit_price\x18\x05 \x01(\tR\tunitPrice\x12\x1f\n" +
+	"\vconfig_json\x18\x06 \x01(\tR\n" +
+	"configJson\"\x85\x02\n" +
 	"\x0fBillingFeatures\x12\x1c\n" +
 	"\trecording\x18\x01 \x01(\bR\trecording\x12\x1c\n" +
 	"\tanalytics\x18\x02 \x01(\bR\tanalytics\x12'\n" +
@@ -9481,17 +9444,7 @@ const file_purser_proto_rawDesc = "" +
 	"api_access\x18\x04 \x01(\bR\tapiAccess\x12#\n" +
 	"\rsupport_level\x18\x05 \x01(\tR\fsupportLevel\x12\x10\n" +
 	"\x03sla\x18\x06 \x01(\bR\x03sla\x127\n" +
-	"\x17processing_customizable\x18\a \x01(\bR\x16processingCustomizable\"k\n" +
-	"\x11AllocationDetails\x12\x19\n" +
-	"\x05limit\x18\x01 \x01(\x01H\x00R\x05limit\x88\x01\x01\x12\x1d\n" +
-	"\n" +
-	"unit_price\x18\x02 \x01(\x01R\tunitPrice\x12\x12\n" +
-	"\x04unit\x18\x03 \x01(\tR\x04unitB\b\n" +
-	"\x06_limit\"\xb1\x01\n" +
-	"\fOverageRates\x127\n" +
-	"\tbandwidth\x18\x01 \x01(\v2\x19.purser.AllocationDetailsR\tbandwidth\x123\n" +
-	"\astorage\x18\x02 \x01(\v2\x19.purser.AllocationDetailsR\astorage\x123\n" +
-	"\acompute\x18\x03 \x01(\v2\x19.purser.AllocationDetailsR\acompute\"\xe1\x05\n" +
+	"\x17processing_customizable\x18\a \x01(\bR\x16processingCustomizable\"\xa9\x04\n" +
 	"\x18CreateBillingTierRequest\x12\x1b\n" +
 	"\ttier_name\x18\x01 \x01(\tR\btierName\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12 \n" +
@@ -9499,19 +9452,16 @@ const file_purser_proto_rawDesc = "" +
 	"\n" +
 	"base_price\x18\x04 \x01(\x01R\tbasePrice\x12\x1a\n" +
 	"\bcurrency\x18\x05 \x01(\tR\bcurrency\x12%\n" +
-	"\x0ebilling_period\x18\x06 \x01(\tR\rbillingPeriod\x12L\n" +
-	"\x14bandwidth_allocation\x18\a \x01(\v2\x19.purser.AllocationDetailsR\x13bandwidthAllocation\x12H\n" +
-	"\x12storage_allocation\x18\b \x01(\v2\x19.purser.AllocationDetailsR\x11storageAllocation\x12H\n" +
-	"\x12compute_allocation\x18\t \x01(\v2\x19.purser.AllocationDetailsR\x11computeAllocation\x123\n" +
+	"\x0ebilling_period\x18\x06 \x01(\tR\rbillingPeriod\x123\n" +
 	"\bfeatures\x18\n" +
 	" \x01(\v2\x17.purser.BillingFeaturesR\bfeatures\x12#\n" +
 	"\rsupport_level\x18\v \x01(\tR\fsupportLevel\x12\x1b\n" +
 	"\tsla_level\x18\f \x01(\tR\bslaLevel\x12)\n" +
-	"\x10metering_enabled\x18\r \x01(\bR\x0fmeteringEnabled\x129\n" +
-	"\roverage_rates\x18\x0e \x01(\v2\x14.purser.OverageRatesR\foverageRates\x12\x1d\n" +
+	"\x10metering_enabled\x18\r \x01(\bR\x0fmeteringEnabled\x12\x1d\n" +
 	"\n" +
 	"tier_level\x18\x0f \x01(\x05R\ttierLevel\x12#\n" +
-	"\ris_enterprise\x18\x10 \x01(\bR\fisEnterprise\"\xe4\b\n" +
+	"\ris_enterprise\x18\x10 \x01(\bR\fisEnterpriseJ\x04\b\a\x10\bJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"J\x04\b\x0e\x10\x0fR\x14bandwidth_allocationR\x12storage_allocationR\x12compute_allocationR\roverage_rates\"\xbf\x06\n" +
 	"\x18UpdateBillingTierRequest\x12\x17\n" +
 	"\atier_id\x18\x01 \x01(\tR\x06tierId\x12&\n" +
 	"\fdisplay_name\x18\x02 \x01(\tH\x00R\vdisplayName\x88\x01\x01\x12%\n" +
@@ -9519,39 +9469,32 @@ const file_purser_proto_rawDesc = "" +
 	"\n" +
 	"base_price\x18\x04 \x01(\x01H\x02R\tbasePrice\x88\x01\x01\x12\x1f\n" +
 	"\bcurrency\x18\x05 \x01(\tH\x03R\bcurrency\x88\x01\x01\x12*\n" +
-	"\x0ebilling_period\x18\x06 \x01(\tH\x04R\rbillingPeriod\x88\x01\x01\x12Q\n" +
-	"\x14bandwidth_allocation\x18\a \x01(\v2\x19.purser.AllocationDetailsH\x05R\x13bandwidthAllocation\x88\x01\x01\x12M\n" +
-	"\x12storage_allocation\x18\b \x01(\v2\x19.purser.AllocationDetailsH\x06R\x11storageAllocation\x88\x01\x01\x12M\n" +
-	"\x12compute_allocation\x18\t \x01(\v2\x19.purser.AllocationDetailsH\aR\x11computeAllocation\x88\x01\x01\x128\n" +
+	"\x0ebilling_period\x18\x06 \x01(\tH\x04R\rbillingPeriod\x88\x01\x01\x128\n" +
 	"\bfeatures\x18\n" +
-	" \x01(\v2\x17.purser.BillingFeaturesH\bR\bfeatures\x88\x01\x01\x12(\n" +
-	"\rsupport_level\x18\v \x01(\tH\tR\fsupportLevel\x88\x01\x01\x12 \n" +
-	"\tsla_level\x18\f \x01(\tH\n" +
-	"R\bslaLevel\x88\x01\x01\x12.\n" +
-	"\x10metering_enabled\x18\r \x01(\bH\vR\x0fmeteringEnabled\x88\x01\x01\x12>\n" +
-	"\roverage_rates\x18\x0e \x01(\v2\x14.purser.OverageRatesH\fR\foverageRates\x88\x01\x01\x12\"\n" +
+	" \x01(\v2\x17.purser.BillingFeaturesH\x05R\bfeatures\x88\x01\x01\x12(\n" +
+	"\rsupport_level\x18\v \x01(\tH\x06R\fsupportLevel\x88\x01\x01\x12 \n" +
+	"\tsla_level\x18\f \x01(\tH\aR\bslaLevel\x88\x01\x01\x12.\n" +
+	"\x10metering_enabled\x18\r \x01(\bH\bR\x0fmeteringEnabled\x88\x01\x01\x12\"\n" +
 	"\n" +
-	"tier_level\x18\x0f \x01(\x05H\rR\ttierLevel\x88\x01\x01\x12(\n" +
-	"\ris_enterprise\x18\x10 \x01(\bH\x0eR\fisEnterprise\x88\x01\x01\x12 \n" +
-	"\tis_active\x18\x11 \x01(\bH\x0fR\bisActive\x88\x01\x01B\x0f\n" +
+	"tier_level\x18\x0f \x01(\x05H\tR\ttierLevel\x88\x01\x01\x12(\n" +
+	"\ris_enterprise\x18\x10 \x01(\bH\n" +
+	"R\fisEnterprise\x88\x01\x01\x12 \n" +
+	"\tis_active\x18\x11 \x01(\bH\vR\bisActive\x88\x01\x01B\x0f\n" +
 	"\r_display_nameB\x0e\n" +
 	"\f_descriptionB\r\n" +
 	"\v_base_priceB\v\n" +
 	"\t_currencyB\x11\n" +
-	"\x0f_billing_periodB\x17\n" +
-	"\x15_bandwidth_allocationB\x15\n" +
-	"\x13_storage_allocationB\x15\n" +
-	"\x13_compute_allocationB\v\n" +
+	"\x0f_billing_periodB\v\n" +
 	"\t_featuresB\x10\n" +
 	"\x0e_support_levelB\f\n" +
 	"\n" +
 	"_sla_levelB\x13\n" +
-	"\x11_metering_enabledB\x10\n" +
-	"\x0e_overage_ratesB\r\n" +
+	"\x11_metering_enabledB\r\n" +
 	"\v_tier_levelB\x10\n" +
 	"\x0e_is_enterpriseB\f\n" +
 	"\n" +
-	"_is_active\"5\n" +
+	"_is_activeJ\x04\b\a\x10\bJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"J\x04\b\x0e\x10\x0fR\x14bandwidth_allocationR\x12storage_allocationR\x12compute_allocationR\roverage_rates\"5\n" +
 	"\x16GetSubscriptionRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"o\n" +
 	"\x17GetSubscriptionResponse\x12>\n" +
@@ -9582,7 +9525,7 @@ const file_purser_proto_rawDesc = "" +
 	"\vis_complete\x18\x06 \x01(\bR\n" +
 	"isComplete\x129\n" +
 	"\n" +
-	"updated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xf3\x0e\n" +
+	"updated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x91\x10\n" +
 	"\x12TenantSubscription\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
@@ -9593,11 +9536,10 @@ const file_purser_proto_rawDesc = "" +
 	"started_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12C\n" +
 	"\rtrial_ends_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampH\x00R\vtrialEndsAt\x88\x01\x01\x12K\n" +
 	"\x11next_billing_date\x18\b \x01(\v2\x1a.google.protobuf.TimestampH\x01R\x0fnextBillingDate\x88\x01\x01\x12B\n" +
-	"\fcancelled_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampH\x02R\vcancelledAt\x88\x01\x01\x12<\n" +
-	"\x0ecustom_pricing\x18\n" +
-	" \x01(\v2\x15.purser.CustomPricingR\rcustomPricing\x12@\n" +
-	"\x0fcustom_features\x18\v \x01(\v2\x17.purser.BillingFeaturesR\x0ecustomFeatures\x12H\n" +
-	"\x12custom_allocations\x18\f \x01(\v2\x19.purser.AllocationDetailsR\x11customAllocations\x12*\n" +
+	"\fcancelled_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampH\x02R\vcancelledAt\x88\x01\x01\x12@\n" +
+	"\x0fcustom_features\x18\v \x01(\v2\x17.purser.BillingFeaturesR\x0ecustomFeatures\x12@\n" +
+	"\x11pricing_overrides\x18\x1e \x03(\v2\x13.purser.PricingRuleR\x10pricingOverrides\x12i\n" +
+	"\x15entitlement_overrides\x18\x1f \x03(\v24.purser.TenantSubscription.EntitlementOverridesEntryR\x14entitlementOverrides\x12*\n" +
 	"\x0epayment_method\x18\r \x01(\tH\x03R\rpaymentMethod\x88\x01\x01\x120\n" +
 	"\x11payment_reference\x18\x0e \x01(\tH\x04R\x10paymentReference\x88\x01\x01\x12?\n" +
 	"\x0fbilling_address\x18\x0f \x01(\v2\x16.purser.BillingAddressR\x0ebillingAddress\x12\x1a\n" +
@@ -9617,7 +9559,10 @@ const file_purser_proto_rawDesc = "" +
 	"\x19stripe_current_period_end\x18\x1a \x01(\v2\x1a.google.protobuf.TimestampH\fR\x16stripeCurrentPeriodEnd\x88\x01\x01\x12)\n" +
 	"\x10dunning_attempts\x18\x1b \x01(\x05R\x0fdunningAttempts\x129\n" +
 	"\x16mollie_subscription_id\x18\x1c \x01(\tH\rR\x14mollieSubscriptionId\x88\x01\x01\x12,\n" +
-	"\x0fbilling_company\x18\x1d \x01(\tH\x0eR\x0ebillingCompany\x88\x01\x01B\x10\n" +
+	"\x0fbilling_company\x18\x1d \x01(\tH\x0eR\x0ebillingCompany\x88\x01\x01\x1aG\n" +
+	"\x19EntitlementOverridesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x10\n" +
 	"\x0e_trial_ends_atB\x14\n" +
 	"\x12_next_billing_dateB\x0f\n" +
 	"\r_cancelled_atB\x11\n" +
@@ -9632,57 +9577,54 @@ const file_purser_proto_rawDesc = "" +
 	"\x1b_stripe_subscription_statusB\x1c\n" +
 	"\x1a_stripe_current_period_endB\x19\n" +
 	"\x17_mollie_subscription_idB\x12\n" +
-	"\x10_billing_company\"\x8e\x01\n" +
-	"\rCustomPricing\x12\x1d\n" +
-	"\n" +
-	"base_price\x18\x01 \x01(\x01R\tbasePrice\x12#\n" +
-	"\rdiscount_rate\x18\x02 \x01(\x01R\fdiscountRate\x129\n" +
-	"\roverage_rates\x18\x03 \x01(\v2\x14.purser.OverageRatesR\foverageRates\"\x8d\x01\n" +
+	"\x10_billing_companyJ\x04\b\n" +
+	"\x10\vJ\x04\b\f\x10\rR\x0ecustom_pricingR\x12custom_allocations\"\x8d\x01\n" +
 	"\x0eBillingAddress\x12\x16\n" +
 	"\x06street\x18\x01 \x01(\tR\x06street\x12\x12\n" +
 	"\x04city\x18\x02 \x01(\tR\x04city\x12\x14\n" +
 	"\x05state\x18\x03 \x01(\tR\x05state\x12\x1f\n" +
 	"\vpostal_code\x18\x04 \x01(\tR\n" +
 	"postalCode\x12\x18\n" +
-	"\acountry\x18\x05 \x01(\tR\acountry\"\xb5\x05\n" +
+	"\acountry\x18\x05 \x01(\tR\acountry\"\xdd\x04\n" +
 	"\x19CreateSubscriptionRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
 	"\atier_id\x18\x02 \x01(\tR\x06tierId\x12#\n" +
 	"\rbilling_email\x18\x03 \x01(\tR\fbillingEmail\x12%\n" +
 	"\x0epayment_method\x18\x04 \x01(\tR\rpaymentMethod\x12C\n" +
-	"\rtrial_ends_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampH\x00R\vtrialEndsAt\x88\x01\x01\x12<\n" +
-	"\x0ecustom_pricing\x18\x06 \x01(\v2\x15.purser.CustomPricingR\rcustomPricing\x12@\n" +
-	"\x0fcustom_features\x18\a \x01(\v2\x17.purser.BillingFeaturesR\x0ecustomFeatures\x12H\n" +
-	"\x12custom_allocations\x18\b \x01(\v2\x19.purser.AllocationDetailsR\x11customAllocations\x12Q\n" +
+	"\rtrial_ends_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampH\x00R\vtrialEndsAt\x88\x01\x01\x12@\n" +
+	"\x0fcustom_features\x18\a \x01(\v2\x17.purser.BillingFeaturesR\x0ecustomFeatures\x12Q\n" +
 	"\x14billing_period_start\x18\t \x01(\v2\x1a.google.protobuf.TimestampH\x01R\x12billingPeriodStart\x88\x01\x01\x12M\n" +
 	"\x12billing_period_end\x18\n" +
 	" \x01(\v2\x1a.google.protobuf.TimestampH\x02R\x10billingPeriodEnd\x88\x01\x01\x12#\n" +
 	"\rbilling_model\x18\v \x01(\tR\fbillingModelB\x10\n" +
 	"\x0e_trial_ends_atB\x17\n" +
 	"\x15_billing_period_startB\x15\n" +
-	"\x13_billing_period_end\"\xee\x05\n" +
+	"\x13_billing_period_endJ\x04\b\x06\x10\aJ\x04\b\b\x10\tR\x0ecustom_pricingR\x12custom_allocations\"\xd7\a\n" +
 	"\x19UpdateSubscriptionRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1c\n" +
 	"\atier_id\x18\x02 \x01(\tH\x00R\x06tierId\x88\x01\x01\x12(\n" +
 	"\rbilling_email\x18\x03 \x01(\tH\x01R\fbillingEmail\x88\x01\x01\x12*\n" +
 	"\x0epayment_method\x18\x04 \x01(\tH\x02R\rpaymentMethod\x88\x01\x01\x12\x1b\n" +
-	"\x06status\x18\x05 \x01(\tH\x03R\x06status\x88\x01\x01\x12A\n" +
-	"\x0ecustom_pricing\x18\x06 \x01(\v2\x15.purser.CustomPricingH\x04R\rcustomPricing\x88\x01\x01\x12E\n" +
-	"\x0fcustom_features\x18\a \x01(\v2\x17.purser.BillingFeaturesH\x05R\x0ecustomFeatures\x88\x01\x01\x12M\n" +
-	"\x12custom_allocations\x18\b \x01(\v2\x19.purser.AllocationDetailsH\x06R\x11customAllocations\x88\x01\x01\x12Q\n" +
-	"\x14billing_period_start\x18\t \x01(\v2\x1a.google.protobuf.TimestampH\aR\x12billingPeriodStart\x88\x01\x01\x12M\n" +
+	"\x06status\x18\x05 \x01(\tH\x03R\x06status\x88\x01\x01\x12E\n" +
+	"\x0fcustom_features\x18\a \x01(\v2\x17.purser.BillingFeaturesH\x04R\x0ecustomFeatures\x88\x01\x01\x12Q\n" +
+	"\x14billing_period_start\x18\t \x01(\v2\x1a.google.protobuf.TimestampH\x05R\x12billingPeriodStart\x88\x01\x01\x12M\n" +
 	"\x12billing_period_end\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampH\bR\x10billingPeriodEnd\x88\x01\x01B\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampH\x06R\x10billingPeriodEnd\x88\x01\x01\x12@\n" +
+	"\x11pricing_overrides\x18\v \x03(\v2\x13.purser.PricingRuleR\x10pricingOverrides\x12p\n" +
+	"\x15entitlement_overrides\x18\f \x03(\v2;.purser.UpdateSubscriptionRequest.EntitlementOverridesEntryR\x14entitlementOverrides\x126\n" +
+	"\x17clear_pricing_overrides\x18\r \x01(\bR\x15clearPricingOverrides\x12>\n" +
+	"\x1bclear_entitlement_overrides\x18\x0e \x01(\bR\x19clearEntitlementOverrides\x1aG\n" +
+	"\x19EntitlementOverridesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\n" +
 	"\n" +
 	"\b_tier_idB\x10\n" +
 	"\x0e_billing_emailB\x11\n" +
 	"\x0f_payment_methodB\t\n" +
-	"\a_statusB\x11\n" +
-	"\x0f_custom_pricingB\x12\n" +
-	"\x10_custom_featuresB\x15\n" +
-	"\x13_custom_allocationsB\x17\n" +
+	"\a_statusB\x12\n" +
+	"\x10_custom_featuresB\x17\n" +
 	"\x15_billing_period_startB\x15\n" +
-	"\x13_billing_period_end\"8\n" +
+	"\x13_billing_period_endJ\x04\b\x06\x10\aJ\x04\b\b\x10\tR\x0ecustom_pricingR\x12custom_allocations\"8\n" +
 	"\x19CancelSubscriptionRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"2\n" +
 	"\x11GetInvoiceRequest\x12\x1d\n" +
@@ -9690,13 +9632,18 @@ const file_purser_proto_rawDesc = "" +
 	"invoice_id\x18\x01 \x01(\tR\tinvoiceId\"h\n" +
 	"\x12GetInvoiceResponse\x12)\n" +
 	"\ainvoice\x18\x01 \x01(\v2\x0f.purser.InvoiceR\ainvoice\x12'\n" +
-	"\x04tier\x18\x02 \x01(\v2\x13.purser.BillingTierR\x04tier\"}\n" +
+	"\x04tier\x18\x02 \x01(\v2\x13.purser.BillingTierR\x04tier\"\xa4\x02\n" +
 	"\bLineItem\x12 \n" +
 	"\vdescription\x18\x01 \x01(\tR\vdescription\x12\x1a\n" +
-	"\bquantity\x18\x02 \x01(\x05R\bquantity\x12\x1d\n" +
+	"\bquantity\x18\x02 \x01(\tR\bquantity\x12\x1d\n" +
 	"\n" +
-	"unit_price\x18\x03 \x01(\x01R\tunitPrice\x12\x14\n" +
-	"\x05total\x18\x04 \x01(\x01R\x05total\"\x97\x06\n" +
+	"unit_price\x18\x03 \x01(\tR\tunitPrice\x12\x14\n" +
+	"\x05total\x18\x04 \x01(\tR\x05total\x12\x19\n" +
+	"\bline_key\x18\x05 \x01(\tR\alineKey\x12\x14\n" +
+	"\x05meter\x18\x06 \x01(\tR\x05meter\x12+\n" +
+	"\x11included_quantity\x18\a \x01(\tR\x10includedQuantity\x12+\n" +
+	"\x11billable_quantity\x18\b \x01(\tR\x10billableQuantity\x12\x1a\n" +
+	"\bcurrency\x18\t \x01(\tR\bcurrency\"\x97\x06\n" +
 	"\aInvoice\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x16\n" +
@@ -9734,15 +9681,13 @@ const file_purser_proto_rawDesc = "" +
 	"\binvoices\x18\x01 \x03(\v2\x0f.purser.InvoiceR\binvoices\x12@\n" +
 	"\n" +
 	"pagination\x18\x02 \x01(\v2 .common.CursorPaginationResponseR\n" +
-	"pagination\"\x9a\x01\n" +
+	"pagination\"\x84\x01\n" +
 	"\x0ePaymentRequest\x12\x1d\n" +
 	"\n" +
 	"invoice_id\x18\x01 \x01(\tR\tinvoiceId\x12\x16\n" +
-	"\x06method\x18\x02 \x01(\tR\x06method\x12\x16\n" +
-	"\x06amount\x18\x03 \x01(\x01R\x06amount\x12\x1a\n" +
-	"\bcurrency\x18\x04 \x01(\tR\bcurrency\x12\x1d\n" +
+	"\x06method\x18\x02 \x01(\tR\x06method\x12\x1d\n" +
 	"\n" +
-	"return_url\x18\x05 \x01(\tR\treturnUrl\"\xf0\x02\n" +
+	"return_url\x18\x05 \x01(\tR\treturnUrlJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x06amountR\bcurrency\"\xb7\x05\n" +
 	"\x0fPaymentResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vpayment_url\x18\x02 \x01(\tR\n" +
@@ -9757,14 +9702,23 @@ const file_purser_proto_rawDesc = "" +
 	"\x06method\x18\t \x01(\tR\x06method\x129\n" +
 	"\n" +
 	"created_at\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAtB\r\n" +
-	"\v_expires_at\"7\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12;\n" +
+	"\x1aexpected_amount_base_units\x18\v \x01(\tR\x17expectedAmountBaseUnits\x122\n" +
+	"\x15expected_amount_token\x18\f \x01(\tR\x13expectedAmountToken\x12(\n" +
+	"\x10quoted_price_usd\x18\r \x01(\tR\x0equotedPriceUsd\x12!\n" +
+	"\fquote_source\x18\x0e \x01(\tR\vquoteSource\x12!\n" +
+	"\fasset_symbol\x18\x0f \x01(\tR\vassetSymbol\x12\x18\n" +
+	"\anetwork\x18\x10 \x01(\tR\anetwork\x12<\n" +
+	"\tquoted_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampH\x01R\bquotedAt\x88\x01\x01B\r\n" +
+	"\v_expires_atB\f\n" +
+	"\n" +
+	"_quoted_at\"7\n" +
 	"\x18GetPaymentMethodsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"1\n" +
 	"\x15PaymentMethodResponse\x12\x18\n" +
 	"\amethods\x18\x01 \x03(\tR\amethods\"6\n" +
 	"\x17GetBillingStatusRequest\x12\x1b\n" +
-	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"\x88\x04\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"\xb1\x04\n" +
 	"\x15BillingStatusResponse\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12>\n" +
 	"\fsubscription\x18\x02 \x01(\v2\x1a.purser.TenantSubscriptionR\fsubscription\x12'\n" +
@@ -9776,7 +9730,8 @@ const file_purser_proto_rawDesc = "" +
 	"\x10pending_invoices\x18\b \x03(\v2\x0f.purser.InvoiceR\x0fpendingInvoices\x128\n" +
 	"\x0frecent_payments\x18\t \x03(\v2\x0f.purser.PaymentR\x0erecentPayments\x129\n" +
 	"\rusage_summary\x18\n" +
-	" \x01(\v2\x14.purser.UsageSummaryR\fusageSummary\"\xfc\x02\n" +
+	" \x01(\v2\x14.purser.UsageSummaryR\fusageSummary\x12'\n" +
+	"\x0fpayment_methods\x18\v \x03(\tR\x0epaymentMethods\"\xfc\x02\n" +
 	"\aPayment\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -9801,7 +9756,7 @@ const file_purser_proto_rawDesc = "" +
 	"\fcountry_code\x18\x01 \x01(\tR\vcountryCode\x12!\n" +
 	"\fviewer_count\x18\x02 \x01(\x05R\vviewerCount\x12!\n" +
 	"\fviewer_hours\x18\x03 \x01(\x01R\vviewerHours\x12\x1b\n" +
-	"\tegress_gb\x18\x05 \x01(\x01R\begressGb\"\xb3\x0f\n" +
+	"\tegress_gb\x18\x05 \x01(\x01R\begressGb\"\xd0\x0f\n" +
 	"\fUsageSummary\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
 	"\n" +
@@ -9857,7 +9812,8 @@ const file_purser_proto_rawDesc = "" +
 	"\ffreeze_count\x18, \x01(\rR\vfreezeCount\x12!\n" +
 	"\ffreeze_bytes\x18- \x01(\x04R\vfreezeBytes\x12#\n" +
 	"\rdefrost_count\x18. \x01(\rR\fdefrostCount\x12#\n" +
-	"\rdefrost_bytes\x18/ \x01(\x04R\fdefrostBytes\"n\n" +
+	"\rdefrost_bytes\x18/ \x01(\x04R\fdefrostBytes\x12\x1b\n" +
+	"\tgpu_hours\x180 \x01(\x01R\bgpuHours\"n\n" +
 	"\x13UsageIngestResponse\x12'\n" +
 	"\x0fprocessed_count\x18\x01 \x01(\x05R\x0eprocessedCount\x12\x18\n" +
 	"\asuccess\x18\x02 \x01(\bR\asuccess\x12\x14\n" +
@@ -9938,7 +9894,7 @@ const file_purser_proto_rawDesc = "" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
 	"\n" +
 	"start_date\x18\x02 \x01(\tR\tstartDate\x12\x19\n" +
-	"\bend_date\x18\x03 \x01(\tR\aendDate\"\x84\x03\n" +
+	"\bend_date\x18\x03 \x01(\tR\aendDate\"\xf9\x03\n" +
 	"\x13TenantUsageResponse\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12%\n" +
 	"\x0ebilling_period\x18\x02 \x01(\tR\rbillingPeriod\x12<\n" +
@@ -9946,7 +9902,12 @@ const file_purser_proto_rawDesc = "" +
 	"\x05costs\x18\x04 \x03(\v2&.purser.TenantUsageResponse.CostsEntryR\x05costs\x12\x1d\n" +
 	"\n" +
 	"total_cost\x18\x05 \x01(\x01R\ttotalCost\x12\x1a\n" +
-	"\bcurrency\x18\x06 \x01(\tR\bcurrency\x1a8\n" +
+	"\bcurrency\x18\x06 \x01(\tR\bcurrency\x12/\n" +
+	"\n" +
+	"line_items\x18\a \x03(\v2\x10.purser.LineItemR\tlineItems\x12\x1f\n" +
+	"\vbase_amount\x18\b \x01(\tR\n" +
+	"baseAmount\x12!\n" +
+	"\fusage_amount\x18\t \x01(\tR\vusageAmount\x1a8\n" +
 	"\n" +
 	"UsageEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
@@ -10522,7 +10483,7 @@ func file_purser_proto_rawDescGZIP() []byte {
 }
 
 var file_purser_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_purser_proto_msgTypes = make([]protoimpl.MessageInfo, 118)
+var file_purser_proto_msgTypes = make([]protoimpl.MessageInfo, 119)
 var file_purser_proto_goTypes = []any{
 	(CryptoAsset)(0),                               // 0: purser.CryptoAsset
 	(*GetTenantBillingStatusRequest)(nil),          // 1: purser.GetTenantBillingStatusRequest
@@ -10531,385 +10492,372 @@ var file_purser_proto_goTypes = []any{
 	(*GetBillingTiersResponse)(nil),                // 4: purser.GetBillingTiersResponse
 	(*GetBillingTierRequest)(nil),                  // 5: purser.GetBillingTierRequest
 	(*BillingTier)(nil),                            // 6: purser.BillingTier
-	(*BillingFeatures)(nil),                        // 7: purser.BillingFeatures
-	(*AllocationDetails)(nil),                      // 8: purser.AllocationDetails
-	(*OverageRates)(nil),                           // 9: purser.OverageRates
-	(*CreateBillingTierRequest)(nil),               // 10: purser.CreateBillingTierRequest
-	(*UpdateBillingTierRequest)(nil),               // 11: purser.UpdateBillingTierRequest
-	(*GetSubscriptionRequest)(nil),                 // 12: purser.GetSubscriptionRequest
-	(*GetSubscriptionResponse)(nil),                // 13: purser.GetSubscriptionResponse
-	(*GetBillingDetailsRequest)(nil),               // 14: purser.GetBillingDetailsRequest
-	(*UpdateBillingDetailsRequest)(nil),            // 15: purser.UpdateBillingDetailsRequest
-	(*BillingDetails)(nil),                         // 16: purser.BillingDetails
-	(*TenantSubscription)(nil),                     // 17: purser.TenantSubscription
-	(*CustomPricing)(nil),                          // 18: purser.CustomPricing
-	(*BillingAddress)(nil),                         // 19: purser.BillingAddress
-	(*CreateSubscriptionRequest)(nil),              // 20: purser.CreateSubscriptionRequest
-	(*UpdateSubscriptionRequest)(nil),              // 21: purser.UpdateSubscriptionRequest
-	(*CancelSubscriptionRequest)(nil),              // 22: purser.CancelSubscriptionRequest
-	(*GetInvoiceRequest)(nil),                      // 23: purser.GetInvoiceRequest
-	(*GetInvoiceResponse)(nil),                     // 24: purser.GetInvoiceResponse
-	(*LineItem)(nil),                               // 25: purser.LineItem
-	(*Invoice)(nil),                                // 26: purser.Invoice
-	(*ListInvoicesRequest)(nil),                    // 27: purser.ListInvoicesRequest
-	(*ListInvoicesResponse)(nil),                   // 28: purser.ListInvoicesResponse
-	(*PaymentRequest)(nil),                         // 29: purser.PaymentRequest
-	(*PaymentResponse)(nil),                        // 30: purser.PaymentResponse
-	(*GetPaymentMethodsRequest)(nil),               // 31: purser.GetPaymentMethodsRequest
-	(*PaymentMethodResponse)(nil),                  // 32: purser.PaymentMethodResponse
-	(*GetBillingStatusRequest)(nil),                // 33: purser.GetBillingStatusRequest
-	(*BillingStatusResponse)(nil),                  // 34: purser.BillingStatusResponse
-	(*Payment)(nil),                                // 35: purser.Payment
-	(*UsageIngestRequest)(nil),                     // 36: purser.UsageIngestRequest
-	(*CountryMetrics)(nil),                         // 37: purser.CountryMetrics
-	(*UsageSummary)(nil),                           // 38: purser.UsageSummary
-	(*UsageIngestResponse)(nil),                    // 39: purser.UsageIngestResponse
-	(*GetUsageRecordsRequest)(nil),                 // 40: purser.GetUsageRecordsRequest
-	(*UsageRecord)(nil),                            // 41: purser.UsageRecord
-	(*UsageRecordsResponse)(nil),                   // 42: purser.UsageRecordsResponse
-	(*GetUsageAggregatesRequest)(nil),              // 43: purser.GetUsageAggregatesRequest
-	(*UsageAggregate)(nil),                         // 44: purser.UsageAggregate
-	(*GetUsageAggregatesResponse)(nil),             // 45: purser.GetUsageAggregatesResponse
-	(*UsageFilters)(nil),                           // 46: purser.UsageFilters
-	(*CheckUserLimitRequest)(nil),                  // 47: purser.CheckUserLimitRequest
-	(*CheckUserLimitResponse)(nil),                 // 48: purser.CheckUserLimitResponse
-	(*TenantUsageRequest)(nil),                     // 49: purser.TenantUsageRequest
-	(*TenantUsageResponse)(nil),                    // 50: purser.TenantUsageResponse
-	(*ClusterPricing)(nil),                         // 51: purser.ClusterPricing
-	(*GetClusterPricingRequest)(nil),               // 52: purser.GetClusterPricingRequest
-	(*GetClustersPricingBatchRequest)(nil),         // 53: purser.GetClustersPricingBatchRequest
-	(*GetClustersPricingBatchResponse)(nil),        // 54: purser.GetClustersPricingBatchResponse
-	(*SetClusterPricingRequest)(nil),               // 55: purser.SetClusterPricingRequest
-	(*ListClusterPricingsRequest)(nil),             // 56: purser.ListClusterPricingsRequest
-	(*ListClusterPricingsResponse)(nil),            // 57: purser.ListClusterPricingsResponse
-	(*CheckClusterAccessRequest)(nil),              // 58: purser.CheckClusterAccessRequest
-	(*CheckClusterAccessResponse)(nil),             // 59: purser.CheckClusterAccessResponse
-	(*CreateClusterSubscriptionRequest)(nil),       // 60: purser.CreateClusterSubscriptionRequest
-	(*ClusterSubscriptionResponse)(nil),            // 61: purser.ClusterSubscriptionResponse
-	(*CancelClusterSubscriptionRequest)(nil),       // 62: purser.CancelClusterSubscriptionRequest
-	(*ListMarketplaceClusterPricingsRequest)(nil),  // 63: purser.ListMarketplaceClusterPricingsRequest
-	(*ListMarketplaceClusterPricingsResponse)(nil), // 64: purser.ListMarketplaceClusterPricingsResponse
-	(*MarketplaceClusterPricing)(nil),              // 65: purser.MarketplaceClusterPricing
-	(*PrepaidBalance)(nil),                         // 66: purser.PrepaidBalance
-	(*BalanceTransaction)(nil),                     // 67: purser.BalanceTransaction
-	(*GetPrepaidBalanceRequest)(nil),               // 68: purser.GetPrepaidBalanceRequest
-	(*TopupBalanceRequest)(nil),                    // 69: purser.TopupBalanceRequest
-	(*DeductBalanceRequest)(nil),                   // 70: purser.DeductBalanceRequest
-	(*AdjustBalanceRequest)(nil),                   // 71: purser.AdjustBalanceRequest
-	(*ListBalanceTransactionsRequest)(nil),         // 72: purser.ListBalanceTransactionsRequest
-	(*ListBalanceTransactionsResponse)(nil),        // 73: purser.ListBalanceTransactionsResponse
-	(*InitializePrepaidBalanceRequest)(nil),        // 74: purser.InitializePrepaidBalanceRequest
-	(*InitializePrepaidAccountRequest)(nil),        // 75: purser.InitializePrepaidAccountRequest
-	(*InitializePrepaidAccountResponse)(nil),       // 76: purser.InitializePrepaidAccountResponse
-	(*InitializePostpaidAccountRequest)(nil),       // 77: purser.InitializePostpaidAccountRequest
-	(*InitializePostpaidAccountResponse)(nil),      // 78: purser.InitializePostpaidAccountResponse
-	(*CreateCardTopupRequest)(nil),                 // 79: purser.CreateCardTopupRequest
-	(*CreateCardTopupResponse)(nil),                // 80: purser.CreateCardTopupResponse
-	(*PendingTopup)(nil),                           // 81: purser.PendingTopup
-	(*GetPendingTopupRequest)(nil),                 // 82: purser.GetPendingTopupRequest
-	(*ListPendingTopupsRequest)(nil),               // 83: purser.ListPendingTopupsRequest
-	(*ListPendingTopupsResponse)(nil),              // 84: purser.ListPendingTopupsResponse
-	(*CreateCryptoTopupRequest)(nil),               // 85: purser.CreateCryptoTopupRequest
-	(*CreateCryptoTopupResponse)(nil),              // 86: purser.CreateCryptoTopupResponse
-	(*GetCryptoTopupRequest)(nil),                  // 87: purser.GetCryptoTopupRequest
-	(*CryptoTopup)(nil),                            // 88: purser.CryptoTopup
-	(*PromoteToPaidRequest)(nil),                   // 89: purser.PromoteToPaidRequest
-	(*PromoteToPaidResponse)(nil),                  // 90: purser.PromoteToPaidResponse
-	(*CreateStripeCheckoutRequest)(nil),            // 91: purser.CreateStripeCheckoutRequest
-	(*CreateStripeCheckoutResponse)(nil),           // 92: purser.CreateStripeCheckoutResponse
-	(*CreateBillingPortalRequest)(nil),             // 93: purser.CreateBillingPortalRequest
-	(*CreateBillingPortalResponse)(nil),            // 94: purser.CreateBillingPortalResponse
-	(*SyncStripeSubscriptionRequest)(nil),          // 95: purser.SyncStripeSubscriptionRequest
-	(*CreateMollieFirstPaymentRequest)(nil),        // 96: purser.CreateMollieFirstPaymentRequest
-	(*CreateMollieFirstPaymentResponse)(nil),       // 97: purser.CreateMollieFirstPaymentResponse
-	(*CreateMollieSubscriptionRequest)(nil),        // 98: purser.CreateMollieSubscriptionRequest
-	(*CreateMollieSubscriptionResponse)(nil),       // 99: purser.CreateMollieSubscriptionResponse
-	(*ListMollieMandatesRequest)(nil),              // 100: purser.ListMollieMandatesRequest
-	(*MollieMandate)(nil),                          // 101: purser.MollieMandate
-	(*ListMollieMandatesResponse)(nil),             // 102: purser.ListMollieMandatesResponse
-	(*CancelMollieSubscriptionRequest)(nil),        // 103: purser.CancelMollieSubscriptionRequest
-	(*GetPaymentRequirementsRequest)(nil),          // 104: purser.GetPaymentRequirementsRequest
-	(*PaymentRequirements)(nil),                    // 105: purser.PaymentRequirements
-	(*PaymentRequirement)(nil),                     // 106: purser.PaymentRequirement
-	(*X402PaymentPayload)(nil),                     // 107: purser.X402PaymentPayload
-	(*X402ExactPayload)(nil),                       // 108: purser.X402ExactPayload
-	(*X402Authorization)(nil),                      // 109: purser.X402Authorization
-	(*VerifyX402PaymentRequest)(nil),               // 110: purser.VerifyX402PaymentRequest
-	(*VerifyX402PaymentResponse)(nil),              // 111: purser.VerifyX402PaymentResponse
-	(*SettleX402PaymentRequest)(nil),               // 112: purser.SettleX402PaymentRequest
-	(*SettleX402PaymentResponse)(nil),              // 113: purser.SettleX402PaymentResponse
-	(*GetTenantX402AddressRequest)(nil),            // 114: purser.GetTenantX402AddressRequest
-	(*GetTenantX402AddressResponse)(nil),           // 115: purser.GetTenantX402AddressResponse
-	nil,                                            // 116: purser.TenantUsageResponse.UsageEntry
-	nil,                                            // 117: purser.TenantUsageResponse.CostsEntry
-	nil,                                            // 118: purser.GetClustersPricingBatchResponse.PricingsEntry
-	(*CursorPaginationRequest)(nil),                // 119: common.CursorPaginationRequest
-	(*CursorPaginationResponse)(nil),               // 120: common.CursorPaginationResponse
-	(*timestamppb.Timestamp)(nil),                  // 121: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),                        // 122: google.protobuf.Struct
-	(*TimeRange)(nil),                              // 123: common.TimeRange
-	(*WebhookRequest)(nil),                         // 124: shared.WebhookRequest
-	(*emptypb.Empty)(nil),                          // 125: google.protobuf.Empty
-	(*WebhookResponse)(nil),                        // 126: shared.WebhookResponse
+	(*PricingRule)(nil),                            // 7: purser.PricingRule
+	(*BillingFeatures)(nil),                        // 8: purser.BillingFeatures
+	(*CreateBillingTierRequest)(nil),               // 9: purser.CreateBillingTierRequest
+	(*UpdateBillingTierRequest)(nil),               // 10: purser.UpdateBillingTierRequest
+	(*GetSubscriptionRequest)(nil),                 // 11: purser.GetSubscriptionRequest
+	(*GetSubscriptionResponse)(nil),                // 12: purser.GetSubscriptionResponse
+	(*GetBillingDetailsRequest)(nil),               // 13: purser.GetBillingDetailsRequest
+	(*UpdateBillingDetailsRequest)(nil),            // 14: purser.UpdateBillingDetailsRequest
+	(*BillingDetails)(nil),                         // 15: purser.BillingDetails
+	(*TenantSubscription)(nil),                     // 16: purser.TenantSubscription
+	(*BillingAddress)(nil),                         // 17: purser.BillingAddress
+	(*CreateSubscriptionRequest)(nil),              // 18: purser.CreateSubscriptionRequest
+	(*UpdateSubscriptionRequest)(nil),              // 19: purser.UpdateSubscriptionRequest
+	(*CancelSubscriptionRequest)(nil),              // 20: purser.CancelSubscriptionRequest
+	(*GetInvoiceRequest)(nil),                      // 21: purser.GetInvoiceRequest
+	(*GetInvoiceResponse)(nil),                     // 22: purser.GetInvoiceResponse
+	(*LineItem)(nil),                               // 23: purser.LineItem
+	(*Invoice)(nil),                                // 24: purser.Invoice
+	(*ListInvoicesRequest)(nil),                    // 25: purser.ListInvoicesRequest
+	(*ListInvoicesResponse)(nil),                   // 26: purser.ListInvoicesResponse
+	(*PaymentRequest)(nil),                         // 27: purser.PaymentRequest
+	(*PaymentResponse)(nil),                        // 28: purser.PaymentResponse
+	(*GetPaymentMethodsRequest)(nil),               // 29: purser.GetPaymentMethodsRequest
+	(*PaymentMethodResponse)(nil),                  // 30: purser.PaymentMethodResponse
+	(*GetBillingStatusRequest)(nil),                // 31: purser.GetBillingStatusRequest
+	(*BillingStatusResponse)(nil),                  // 32: purser.BillingStatusResponse
+	(*Payment)(nil),                                // 33: purser.Payment
+	(*UsageIngestRequest)(nil),                     // 34: purser.UsageIngestRequest
+	(*CountryMetrics)(nil),                         // 35: purser.CountryMetrics
+	(*UsageSummary)(nil),                           // 36: purser.UsageSummary
+	(*UsageIngestResponse)(nil),                    // 37: purser.UsageIngestResponse
+	(*GetUsageRecordsRequest)(nil),                 // 38: purser.GetUsageRecordsRequest
+	(*UsageRecord)(nil),                            // 39: purser.UsageRecord
+	(*UsageRecordsResponse)(nil),                   // 40: purser.UsageRecordsResponse
+	(*GetUsageAggregatesRequest)(nil),              // 41: purser.GetUsageAggregatesRequest
+	(*UsageAggregate)(nil),                         // 42: purser.UsageAggregate
+	(*GetUsageAggregatesResponse)(nil),             // 43: purser.GetUsageAggregatesResponse
+	(*UsageFilters)(nil),                           // 44: purser.UsageFilters
+	(*CheckUserLimitRequest)(nil),                  // 45: purser.CheckUserLimitRequest
+	(*CheckUserLimitResponse)(nil),                 // 46: purser.CheckUserLimitResponse
+	(*TenantUsageRequest)(nil),                     // 47: purser.TenantUsageRequest
+	(*TenantUsageResponse)(nil),                    // 48: purser.TenantUsageResponse
+	(*ClusterPricing)(nil),                         // 49: purser.ClusterPricing
+	(*GetClusterPricingRequest)(nil),               // 50: purser.GetClusterPricingRequest
+	(*GetClustersPricingBatchRequest)(nil),         // 51: purser.GetClustersPricingBatchRequest
+	(*GetClustersPricingBatchResponse)(nil),        // 52: purser.GetClustersPricingBatchResponse
+	(*SetClusterPricingRequest)(nil),               // 53: purser.SetClusterPricingRequest
+	(*ListClusterPricingsRequest)(nil),             // 54: purser.ListClusterPricingsRequest
+	(*ListClusterPricingsResponse)(nil),            // 55: purser.ListClusterPricingsResponse
+	(*CheckClusterAccessRequest)(nil),              // 56: purser.CheckClusterAccessRequest
+	(*CheckClusterAccessResponse)(nil),             // 57: purser.CheckClusterAccessResponse
+	(*CreateClusterSubscriptionRequest)(nil),       // 58: purser.CreateClusterSubscriptionRequest
+	(*ClusterSubscriptionResponse)(nil),            // 59: purser.ClusterSubscriptionResponse
+	(*CancelClusterSubscriptionRequest)(nil),       // 60: purser.CancelClusterSubscriptionRequest
+	(*ListMarketplaceClusterPricingsRequest)(nil),  // 61: purser.ListMarketplaceClusterPricingsRequest
+	(*ListMarketplaceClusterPricingsResponse)(nil), // 62: purser.ListMarketplaceClusterPricingsResponse
+	(*MarketplaceClusterPricing)(nil),              // 63: purser.MarketplaceClusterPricing
+	(*PrepaidBalance)(nil),                         // 64: purser.PrepaidBalance
+	(*BalanceTransaction)(nil),                     // 65: purser.BalanceTransaction
+	(*GetPrepaidBalanceRequest)(nil),               // 66: purser.GetPrepaidBalanceRequest
+	(*TopupBalanceRequest)(nil),                    // 67: purser.TopupBalanceRequest
+	(*DeductBalanceRequest)(nil),                   // 68: purser.DeductBalanceRequest
+	(*AdjustBalanceRequest)(nil),                   // 69: purser.AdjustBalanceRequest
+	(*ListBalanceTransactionsRequest)(nil),         // 70: purser.ListBalanceTransactionsRequest
+	(*ListBalanceTransactionsResponse)(nil),        // 71: purser.ListBalanceTransactionsResponse
+	(*InitializePrepaidBalanceRequest)(nil),        // 72: purser.InitializePrepaidBalanceRequest
+	(*InitializePrepaidAccountRequest)(nil),        // 73: purser.InitializePrepaidAccountRequest
+	(*InitializePrepaidAccountResponse)(nil),       // 74: purser.InitializePrepaidAccountResponse
+	(*InitializePostpaidAccountRequest)(nil),       // 75: purser.InitializePostpaidAccountRequest
+	(*InitializePostpaidAccountResponse)(nil),      // 76: purser.InitializePostpaidAccountResponse
+	(*CreateCardTopupRequest)(nil),                 // 77: purser.CreateCardTopupRequest
+	(*CreateCardTopupResponse)(nil),                // 78: purser.CreateCardTopupResponse
+	(*PendingTopup)(nil),                           // 79: purser.PendingTopup
+	(*GetPendingTopupRequest)(nil),                 // 80: purser.GetPendingTopupRequest
+	(*ListPendingTopupsRequest)(nil),               // 81: purser.ListPendingTopupsRequest
+	(*ListPendingTopupsResponse)(nil),              // 82: purser.ListPendingTopupsResponse
+	(*CreateCryptoTopupRequest)(nil),               // 83: purser.CreateCryptoTopupRequest
+	(*CreateCryptoTopupResponse)(nil),              // 84: purser.CreateCryptoTopupResponse
+	(*GetCryptoTopupRequest)(nil),                  // 85: purser.GetCryptoTopupRequest
+	(*CryptoTopup)(nil),                            // 86: purser.CryptoTopup
+	(*PromoteToPaidRequest)(nil),                   // 87: purser.PromoteToPaidRequest
+	(*PromoteToPaidResponse)(nil),                  // 88: purser.PromoteToPaidResponse
+	(*CreateStripeCheckoutRequest)(nil),            // 89: purser.CreateStripeCheckoutRequest
+	(*CreateStripeCheckoutResponse)(nil),           // 90: purser.CreateStripeCheckoutResponse
+	(*CreateBillingPortalRequest)(nil),             // 91: purser.CreateBillingPortalRequest
+	(*CreateBillingPortalResponse)(nil),            // 92: purser.CreateBillingPortalResponse
+	(*SyncStripeSubscriptionRequest)(nil),          // 93: purser.SyncStripeSubscriptionRequest
+	(*CreateMollieFirstPaymentRequest)(nil),        // 94: purser.CreateMollieFirstPaymentRequest
+	(*CreateMollieFirstPaymentResponse)(nil),       // 95: purser.CreateMollieFirstPaymentResponse
+	(*CreateMollieSubscriptionRequest)(nil),        // 96: purser.CreateMollieSubscriptionRequest
+	(*CreateMollieSubscriptionResponse)(nil),       // 97: purser.CreateMollieSubscriptionResponse
+	(*ListMollieMandatesRequest)(nil),              // 98: purser.ListMollieMandatesRequest
+	(*MollieMandate)(nil),                          // 99: purser.MollieMandate
+	(*ListMollieMandatesResponse)(nil),             // 100: purser.ListMollieMandatesResponse
+	(*CancelMollieSubscriptionRequest)(nil),        // 101: purser.CancelMollieSubscriptionRequest
+	(*GetPaymentRequirementsRequest)(nil),          // 102: purser.GetPaymentRequirementsRequest
+	(*PaymentRequirements)(nil),                    // 103: purser.PaymentRequirements
+	(*PaymentRequirement)(nil),                     // 104: purser.PaymentRequirement
+	(*X402PaymentPayload)(nil),                     // 105: purser.X402PaymentPayload
+	(*X402ExactPayload)(nil),                       // 106: purser.X402ExactPayload
+	(*X402Authorization)(nil),                      // 107: purser.X402Authorization
+	(*VerifyX402PaymentRequest)(nil),               // 108: purser.VerifyX402PaymentRequest
+	(*VerifyX402PaymentResponse)(nil),              // 109: purser.VerifyX402PaymentResponse
+	(*SettleX402PaymentRequest)(nil),               // 110: purser.SettleX402PaymentRequest
+	(*SettleX402PaymentResponse)(nil),              // 111: purser.SettleX402PaymentResponse
+	(*GetTenantX402AddressRequest)(nil),            // 112: purser.GetTenantX402AddressRequest
+	(*GetTenantX402AddressResponse)(nil),           // 113: purser.GetTenantX402AddressResponse
+	nil,                                            // 114: purser.BillingTier.EntitlementsEntry
+	nil,                                            // 115: purser.TenantSubscription.EntitlementOverridesEntry
+	nil,                                            // 116: purser.UpdateSubscriptionRequest.EntitlementOverridesEntry
+	nil,                                            // 117: purser.TenantUsageResponse.UsageEntry
+	nil,                                            // 118: purser.TenantUsageResponse.CostsEntry
+	nil,                                            // 119: purser.GetClustersPricingBatchResponse.PricingsEntry
+	(*CursorPaginationRequest)(nil),                // 120: common.CursorPaginationRequest
+	(*CursorPaginationResponse)(nil),               // 121: common.CursorPaginationResponse
+	(*timestamppb.Timestamp)(nil),                  // 122: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),                        // 123: google.protobuf.Struct
+	(*TimeRange)(nil),                              // 124: common.TimeRange
+	(*WebhookRequest)(nil),                         // 125: shared.WebhookRequest
+	(*emptypb.Empty)(nil),                          // 126: google.protobuf.Empty
+	(*WebhookResponse)(nil),                        // 127: shared.WebhookResponse
 }
 var file_purser_proto_depIdxs = []int32{
-	119, // 0: purser.GetBillingTiersRequest.pagination:type_name -> common.CursorPaginationRequest
+	120, // 0: purser.GetBillingTiersRequest.pagination:type_name -> common.CursorPaginationRequest
 	6,   // 1: purser.GetBillingTiersResponse.tiers:type_name -> purser.BillingTier
-	120, // 2: purser.GetBillingTiersResponse.pagination:type_name -> common.CursorPaginationResponse
-	8,   // 3: purser.BillingTier.bandwidth_allocation:type_name -> purser.AllocationDetails
-	8,   // 4: purser.BillingTier.storage_allocation:type_name -> purser.AllocationDetails
-	8,   // 5: purser.BillingTier.compute_allocation:type_name -> purser.AllocationDetails
-	7,   // 6: purser.BillingTier.features:type_name -> purser.BillingFeatures
-	9,   // 7: purser.BillingTier.overage_rates:type_name -> purser.OverageRates
-	121, // 8: purser.BillingTier.created_at:type_name -> google.protobuf.Timestamp
-	121, // 9: purser.BillingTier.updated_at:type_name -> google.protobuf.Timestamp
-	8,   // 10: purser.OverageRates.bandwidth:type_name -> purser.AllocationDetails
-	8,   // 11: purser.OverageRates.storage:type_name -> purser.AllocationDetails
-	8,   // 12: purser.OverageRates.compute:type_name -> purser.AllocationDetails
-	8,   // 13: purser.CreateBillingTierRequest.bandwidth_allocation:type_name -> purser.AllocationDetails
-	8,   // 14: purser.CreateBillingTierRequest.storage_allocation:type_name -> purser.AllocationDetails
-	8,   // 15: purser.CreateBillingTierRequest.compute_allocation:type_name -> purser.AllocationDetails
-	7,   // 16: purser.CreateBillingTierRequest.features:type_name -> purser.BillingFeatures
-	9,   // 17: purser.CreateBillingTierRequest.overage_rates:type_name -> purser.OverageRates
-	8,   // 18: purser.UpdateBillingTierRequest.bandwidth_allocation:type_name -> purser.AllocationDetails
-	8,   // 19: purser.UpdateBillingTierRequest.storage_allocation:type_name -> purser.AllocationDetails
-	8,   // 20: purser.UpdateBillingTierRequest.compute_allocation:type_name -> purser.AllocationDetails
-	7,   // 21: purser.UpdateBillingTierRequest.features:type_name -> purser.BillingFeatures
-	9,   // 22: purser.UpdateBillingTierRequest.overage_rates:type_name -> purser.OverageRates
-	17,  // 23: purser.GetSubscriptionResponse.subscription:type_name -> purser.TenantSubscription
-	19,  // 24: purser.UpdateBillingDetailsRequest.address:type_name -> purser.BillingAddress
-	19,  // 25: purser.BillingDetails.address:type_name -> purser.BillingAddress
-	121, // 26: purser.BillingDetails.updated_at:type_name -> google.protobuf.Timestamp
-	121, // 27: purser.TenantSubscription.started_at:type_name -> google.protobuf.Timestamp
-	121, // 28: purser.TenantSubscription.trial_ends_at:type_name -> google.protobuf.Timestamp
-	121, // 29: purser.TenantSubscription.next_billing_date:type_name -> google.protobuf.Timestamp
-	121, // 30: purser.TenantSubscription.cancelled_at:type_name -> google.protobuf.Timestamp
-	18,  // 31: purser.TenantSubscription.custom_pricing:type_name -> purser.CustomPricing
-	7,   // 32: purser.TenantSubscription.custom_features:type_name -> purser.BillingFeatures
-	8,   // 33: purser.TenantSubscription.custom_allocations:type_name -> purser.AllocationDetails
-	19,  // 34: purser.TenantSubscription.billing_address:type_name -> purser.BillingAddress
-	121, // 35: purser.TenantSubscription.created_at:type_name -> google.protobuf.Timestamp
-	121, // 36: purser.TenantSubscription.updated_at:type_name -> google.protobuf.Timestamp
-	121, // 37: purser.TenantSubscription.billing_period_start:type_name -> google.protobuf.Timestamp
-	121, // 38: purser.TenantSubscription.billing_period_end:type_name -> google.protobuf.Timestamp
-	121, // 39: purser.TenantSubscription.stripe_current_period_end:type_name -> google.protobuf.Timestamp
-	9,   // 40: purser.CustomPricing.overage_rates:type_name -> purser.OverageRates
-	121, // 41: purser.CreateSubscriptionRequest.trial_ends_at:type_name -> google.protobuf.Timestamp
-	18,  // 42: purser.CreateSubscriptionRequest.custom_pricing:type_name -> purser.CustomPricing
-	7,   // 43: purser.CreateSubscriptionRequest.custom_features:type_name -> purser.BillingFeatures
-	8,   // 44: purser.CreateSubscriptionRequest.custom_allocations:type_name -> purser.AllocationDetails
-	121, // 45: purser.CreateSubscriptionRequest.billing_period_start:type_name -> google.protobuf.Timestamp
-	121, // 46: purser.CreateSubscriptionRequest.billing_period_end:type_name -> google.protobuf.Timestamp
-	18,  // 47: purser.UpdateSubscriptionRequest.custom_pricing:type_name -> purser.CustomPricing
-	7,   // 48: purser.UpdateSubscriptionRequest.custom_features:type_name -> purser.BillingFeatures
-	8,   // 49: purser.UpdateSubscriptionRequest.custom_allocations:type_name -> purser.AllocationDetails
-	121, // 50: purser.UpdateSubscriptionRequest.billing_period_start:type_name -> google.protobuf.Timestamp
-	121, // 51: purser.UpdateSubscriptionRequest.billing_period_end:type_name -> google.protobuf.Timestamp
-	26,  // 52: purser.GetInvoiceResponse.invoice:type_name -> purser.Invoice
-	6,   // 53: purser.GetInvoiceResponse.tier:type_name -> purser.BillingTier
-	121, // 54: purser.Invoice.due_date:type_name -> google.protobuf.Timestamp
-	121, // 55: purser.Invoice.paid_at:type_name -> google.protobuf.Timestamp
-	122, // 56: purser.Invoice.usage_details:type_name -> google.protobuf.Struct
-	121, // 57: purser.Invoice.created_at:type_name -> google.protobuf.Timestamp
-	121, // 58: purser.Invoice.updated_at:type_name -> google.protobuf.Timestamp
-	121, // 59: purser.Invoice.period_start:type_name -> google.protobuf.Timestamp
-	121, // 60: purser.Invoice.period_end:type_name -> google.protobuf.Timestamp
-	38,  // 61: purser.Invoice.usage_summary:type_name -> purser.UsageSummary
-	25,  // 62: purser.Invoice.line_items:type_name -> purser.LineItem
-	119, // 63: purser.ListInvoicesRequest.pagination:type_name -> common.CursorPaginationRequest
-	26,  // 64: purser.ListInvoicesResponse.invoices:type_name -> purser.Invoice
-	120, // 65: purser.ListInvoicesResponse.pagination:type_name -> common.CursorPaginationResponse
-	121, // 66: purser.PaymentResponse.expires_at:type_name -> google.protobuf.Timestamp
-	121, // 67: purser.PaymentResponse.created_at:type_name -> google.protobuf.Timestamp
-	17,  // 68: purser.BillingStatusResponse.subscription:type_name -> purser.TenantSubscription
-	6,   // 69: purser.BillingStatusResponse.tier:type_name -> purser.BillingTier
-	121, // 70: purser.BillingStatusResponse.next_billing_date:type_name -> google.protobuf.Timestamp
-	26,  // 71: purser.BillingStatusResponse.pending_invoices:type_name -> purser.Invoice
-	35,  // 72: purser.BillingStatusResponse.recent_payments:type_name -> purser.Payment
-	38,  // 73: purser.BillingStatusResponse.usage_summary:type_name -> purser.UsageSummary
-	121, // 74: purser.Payment.confirmed_at:type_name -> google.protobuf.Timestamp
-	121, // 75: purser.Payment.created_at:type_name -> google.protobuf.Timestamp
-	121, // 76: purser.Payment.updated_at:type_name -> google.protobuf.Timestamp
-	38,  // 77: purser.UsageIngestRequest.usage_summaries:type_name -> purser.UsageSummary
-	121, // 78: purser.UsageSummary.timestamp:type_name -> google.protobuf.Timestamp
-	37,  // 79: purser.UsageSummary.geo_breakdown:type_name -> purser.CountryMetrics
-	123, // 80: purser.GetUsageRecordsRequest.time_range:type_name -> common.TimeRange
-	119, // 81: purser.GetUsageRecordsRequest.pagination:type_name -> common.CursorPaginationRequest
-	122, // 82: purser.UsageRecord.usage_details:type_name -> google.protobuf.Struct
-	121, // 83: purser.UsageRecord.created_at:type_name -> google.protobuf.Timestamp
-	121, // 84: purser.UsageRecord.period_start:type_name -> google.protobuf.Timestamp
-	121, // 85: purser.UsageRecord.period_end:type_name -> google.protobuf.Timestamp
-	41,  // 86: purser.UsageRecordsResponse.usage_records:type_name -> purser.UsageRecord
-	46,  // 87: purser.UsageRecordsResponse.filters:type_name -> purser.UsageFilters
-	120, // 88: purser.UsageRecordsResponse.pagination:type_name -> common.CursorPaginationResponse
-	123, // 89: purser.GetUsageAggregatesRequest.time_range:type_name -> common.TimeRange
-	121, // 90: purser.UsageAggregate.period_start:type_name -> google.protobuf.Timestamp
-	121, // 91: purser.UsageAggregate.period_end:type_name -> google.protobuf.Timestamp
-	44,  // 92: purser.GetUsageAggregatesResponse.aggregates:type_name -> purser.UsageAggregate
-	123, // 93: purser.UsageFilters.time_range:type_name -> common.TimeRange
-	116, // 94: purser.TenantUsageResponse.usage:type_name -> purser.TenantUsageResponse.UsageEntry
-	117, // 95: purser.TenantUsageResponse.costs:type_name -> purser.TenantUsageResponse.CostsEntry
-	122, // 96: purser.ClusterPricing.metered_rates:type_name -> google.protobuf.Struct
-	122, // 97: purser.ClusterPricing.default_quotas:type_name -> google.protobuf.Struct
-	121, // 98: purser.ClusterPricing.created_at:type_name -> google.protobuf.Timestamp
-	121, // 99: purser.ClusterPricing.updated_at:type_name -> google.protobuf.Timestamp
-	118, // 100: purser.GetClustersPricingBatchResponse.pricings:type_name -> purser.GetClustersPricingBatchResponse.PricingsEntry
-	122, // 101: purser.SetClusterPricingRequest.metered_rates:type_name -> google.protobuf.Struct
-	122, // 102: purser.SetClusterPricingRequest.default_quotas:type_name -> google.protobuf.Struct
-	119, // 103: purser.ListClusterPricingsRequest.pagination:type_name -> common.CursorPaginationRequest
-	51,  // 104: purser.ListClusterPricingsResponse.pricings:type_name -> purser.ClusterPricing
-	120, // 105: purser.ListClusterPricingsResponse.pagination:type_name -> common.CursorPaginationResponse
-	119, // 106: purser.ListMarketplaceClusterPricingsRequest.pagination:type_name -> common.CursorPaginationRequest
-	65,  // 107: purser.ListMarketplaceClusterPricingsResponse.pricings:type_name -> purser.MarketplaceClusterPricing
-	120, // 108: purser.ListMarketplaceClusterPricingsResponse.pagination:type_name -> common.CursorPaginationResponse
-	121, // 109: purser.MarketplaceClusterPricing.created_at:type_name -> google.protobuf.Timestamp
-	121, // 110: purser.PrepaidBalance.created_at:type_name -> google.protobuf.Timestamp
-	121, // 111: purser.PrepaidBalance.updated_at:type_name -> google.protobuf.Timestamp
-	121, // 112: purser.BalanceTransaction.created_at:type_name -> google.protobuf.Timestamp
-	123, // 113: purser.ListBalanceTransactionsRequest.time_range:type_name -> common.TimeRange
-	119, // 114: purser.ListBalanceTransactionsRequest.pagination:type_name -> common.CursorPaginationRequest
-	67,  // 115: purser.ListBalanceTransactionsResponse.transactions:type_name -> purser.BalanceTransaction
-	120, // 116: purser.ListBalanceTransactionsResponse.pagination:type_name -> common.CursorPaginationResponse
-	19,  // 117: purser.CreateCardTopupRequest.billing_address:type_name -> purser.BillingAddress
-	121, // 118: purser.CreateCardTopupResponse.expires_at:type_name -> google.protobuf.Timestamp
-	121, // 119: purser.PendingTopup.expires_at:type_name -> google.protobuf.Timestamp
-	121, // 120: purser.PendingTopup.completed_at:type_name -> google.protobuf.Timestamp
-	121, // 121: purser.PendingTopup.created_at:type_name -> google.protobuf.Timestamp
-	121, // 122: purser.PendingTopup.updated_at:type_name -> google.protobuf.Timestamp
-	119, // 123: purser.ListPendingTopupsRequest.pagination:type_name -> common.CursorPaginationRequest
-	81,  // 124: purser.ListPendingTopupsResponse.topups:type_name -> purser.PendingTopup
-	120, // 125: purser.ListPendingTopupsResponse.pagination:type_name -> common.CursorPaginationResponse
-	0,   // 126: purser.CreateCryptoTopupRequest.asset:type_name -> purser.CryptoAsset
-	0,   // 127: purser.CreateCryptoTopupResponse.asset:type_name -> purser.CryptoAsset
-	121, // 128: purser.CreateCryptoTopupResponse.expires_at:type_name -> google.protobuf.Timestamp
-	121, // 129: purser.CreateCryptoTopupResponse.quoted_at:type_name -> google.protobuf.Timestamp
-	0,   // 130: purser.CryptoTopup.asset:type_name -> purser.CryptoAsset
-	121, // 131: purser.CryptoTopup.expires_at:type_name -> google.protobuf.Timestamp
-	121, // 132: purser.CryptoTopup.detected_at:type_name -> google.protobuf.Timestamp
-	121, // 133: purser.CryptoTopup.completed_at:type_name -> google.protobuf.Timestamp
-	121, // 134: purser.CryptoTopup.created_at:type_name -> google.protobuf.Timestamp
-	122, // 135: purser.MollieMandate.details:type_name -> google.protobuf.Struct
-	121, // 136: purser.MollieMandate.created_at:type_name -> google.protobuf.Timestamp
-	101, // 137: purser.ListMollieMandatesResponse.mandates:type_name -> purser.MollieMandate
-	106, // 138: purser.PaymentRequirements.accepts:type_name -> purser.PaymentRequirement
-	108, // 139: purser.X402PaymentPayload.payload:type_name -> purser.X402ExactPayload
-	109, // 140: purser.X402ExactPayload.authorization:type_name -> purser.X402Authorization
-	107, // 141: purser.VerifyX402PaymentRequest.payment:type_name -> purser.X402PaymentPayload
-	107, // 142: purser.SettleX402PaymentRequest.payment:type_name -> purser.X402PaymentPayload
-	51,  // 143: purser.GetClustersPricingBatchResponse.PricingsEntry.value:type_name -> purser.ClusterPricing
-	3,   // 144: purser.BillingService.GetBillingTiers:input_type -> purser.GetBillingTiersRequest
-	5,   // 145: purser.BillingService.GetBillingTier:input_type -> purser.GetBillingTierRequest
-	10,  // 146: purser.BillingService.CreateBillingTier:input_type -> purser.CreateBillingTierRequest
-	11,  // 147: purser.BillingService.UpdateBillingTier:input_type -> purser.UpdateBillingTierRequest
-	1,   // 148: purser.BillingService.GetTenantBillingStatus:input_type -> purser.GetTenantBillingStatusRequest
-	12,  // 149: purser.SubscriptionService.GetSubscription:input_type -> purser.GetSubscriptionRequest
-	20,  // 150: purser.SubscriptionService.CreateSubscription:input_type -> purser.CreateSubscriptionRequest
-	21,  // 151: purser.SubscriptionService.UpdateSubscription:input_type -> purser.UpdateSubscriptionRequest
-	22,  // 152: purser.SubscriptionService.CancelSubscription:input_type -> purser.CancelSubscriptionRequest
-	14,  // 153: purser.SubscriptionService.GetBillingDetails:input_type -> purser.GetBillingDetailsRequest
-	15,  // 154: purser.SubscriptionService.UpdateBillingDetails:input_type -> purser.UpdateBillingDetailsRequest
-	23,  // 155: purser.InvoiceService.GetInvoice:input_type -> purser.GetInvoiceRequest
-	27,  // 156: purser.InvoiceService.ListInvoices:input_type -> purser.ListInvoicesRequest
-	29,  // 157: purser.PaymentService.CreatePayment:input_type -> purser.PaymentRequest
-	31,  // 158: purser.PaymentService.GetPaymentMethods:input_type -> purser.GetPaymentMethodsRequest
-	33,  // 159: purser.PaymentService.GetBillingStatus:input_type -> purser.GetBillingStatusRequest
-	40,  // 160: purser.UsageService.GetUsageRecords:input_type -> purser.GetUsageRecordsRequest
-	49,  // 161: purser.UsageService.GetTenantUsage:input_type -> purser.TenantUsageRequest
-	43,  // 162: purser.UsageService.GetUsageAggregates:input_type -> purser.GetUsageAggregatesRequest
-	47,  // 163: purser.UsageService.CheckUserLimit:input_type -> purser.CheckUserLimitRequest
-	52,  // 164: purser.ClusterPricingService.GetClusterPricing:input_type -> purser.GetClusterPricingRequest
-	53,  // 165: purser.ClusterPricingService.GetClustersPricingBatch:input_type -> purser.GetClustersPricingBatchRequest
-	55,  // 166: purser.ClusterPricingService.SetClusterPricing:input_type -> purser.SetClusterPricingRequest
-	56,  // 167: purser.ClusterPricingService.ListClusterPricings:input_type -> purser.ListClusterPricingsRequest
-	58,  // 168: purser.ClusterPricingService.CheckClusterAccess:input_type -> purser.CheckClusterAccessRequest
-	60,  // 169: purser.ClusterPricingService.CreateClusterSubscription:input_type -> purser.CreateClusterSubscriptionRequest
-	62,  // 170: purser.ClusterPricingService.CancelClusterSubscription:input_type -> purser.CancelClusterSubscriptionRequest
-	63,  // 171: purser.ClusterPricingService.ListMarketplaceClusterPricings:input_type -> purser.ListMarketplaceClusterPricingsRequest
-	68,  // 172: purser.PrepaidService.GetPrepaidBalance:input_type -> purser.GetPrepaidBalanceRequest
-	69,  // 173: purser.PrepaidService.TopupBalance:input_type -> purser.TopupBalanceRequest
-	70,  // 174: purser.PrepaidService.DeductBalance:input_type -> purser.DeductBalanceRequest
-	71,  // 175: purser.PrepaidService.AdjustBalance:input_type -> purser.AdjustBalanceRequest
-	72,  // 176: purser.PrepaidService.ListBalanceTransactions:input_type -> purser.ListBalanceTransactionsRequest
-	74,  // 177: purser.PrepaidService.InitializePrepaidBalance:input_type -> purser.InitializePrepaidBalanceRequest
-	75,  // 178: purser.PrepaidService.InitializePrepaidAccount:input_type -> purser.InitializePrepaidAccountRequest
-	77,  // 179: purser.PrepaidService.InitializePostpaidAccount:input_type -> purser.InitializePostpaidAccountRequest
-	79,  // 180: purser.PrepaidService.CreateCardTopup:input_type -> purser.CreateCardTopupRequest
-	82,  // 181: purser.PrepaidService.GetPendingTopup:input_type -> purser.GetPendingTopupRequest
-	83,  // 182: purser.PrepaidService.ListPendingTopups:input_type -> purser.ListPendingTopupsRequest
-	85,  // 183: purser.PrepaidService.CreateCryptoTopup:input_type -> purser.CreateCryptoTopupRequest
-	87,  // 184: purser.PrepaidService.GetCryptoTopup:input_type -> purser.GetCryptoTopupRequest
-	89,  // 185: purser.PrepaidService.PromoteToPaid:input_type -> purser.PromoteToPaidRequest
-	124, // 186: purser.WebhookService.ProcessWebhook:input_type -> shared.WebhookRequest
-	91,  // 187: purser.StripeService.CreateCheckoutSession:input_type -> purser.CreateStripeCheckoutRequest
-	93,  // 188: purser.StripeService.CreateBillingPortalSession:input_type -> purser.CreateBillingPortalRequest
-	95,  // 189: purser.StripeService.SyncSubscription:input_type -> purser.SyncStripeSubscriptionRequest
-	96,  // 190: purser.MollieService.CreateFirstPayment:input_type -> purser.CreateMollieFirstPaymentRequest
-	98,  // 191: purser.MollieService.CreateMollieSubscription:input_type -> purser.CreateMollieSubscriptionRequest
-	100, // 192: purser.MollieService.ListMandates:input_type -> purser.ListMollieMandatesRequest
-	103, // 193: purser.MollieService.CancelMollieSubscription:input_type -> purser.CancelMollieSubscriptionRequest
-	104, // 194: purser.X402Service.GetPaymentRequirements:input_type -> purser.GetPaymentRequirementsRequest
-	110, // 195: purser.X402Service.VerifyX402Payment:input_type -> purser.VerifyX402PaymentRequest
-	112, // 196: purser.X402Service.SettleX402Payment:input_type -> purser.SettleX402PaymentRequest
-	114, // 197: purser.X402Service.GetTenantX402Address:input_type -> purser.GetTenantX402AddressRequest
-	4,   // 198: purser.BillingService.GetBillingTiers:output_type -> purser.GetBillingTiersResponse
-	6,   // 199: purser.BillingService.GetBillingTier:output_type -> purser.BillingTier
-	6,   // 200: purser.BillingService.CreateBillingTier:output_type -> purser.BillingTier
-	6,   // 201: purser.BillingService.UpdateBillingTier:output_type -> purser.BillingTier
-	2,   // 202: purser.BillingService.GetTenantBillingStatus:output_type -> purser.GetTenantBillingStatusResponse
-	13,  // 203: purser.SubscriptionService.GetSubscription:output_type -> purser.GetSubscriptionResponse
-	17,  // 204: purser.SubscriptionService.CreateSubscription:output_type -> purser.TenantSubscription
-	17,  // 205: purser.SubscriptionService.UpdateSubscription:output_type -> purser.TenantSubscription
-	125, // 206: purser.SubscriptionService.CancelSubscription:output_type -> google.protobuf.Empty
-	16,  // 207: purser.SubscriptionService.GetBillingDetails:output_type -> purser.BillingDetails
-	16,  // 208: purser.SubscriptionService.UpdateBillingDetails:output_type -> purser.BillingDetails
-	24,  // 209: purser.InvoiceService.GetInvoice:output_type -> purser.GetInvoiceResponse
-	28,  // 210: purser.InvoiceService.ListInvoices:output_type -> purser.ListInvoicesResponse
-	30,  // 211: purser.PaymentService.CreatePayment:output_type -> purser.PaymentResponse
-	32,  // 212: purser.PaymentService.GetPaymentMethods:output_type -> purser.PaymentMethodResponse
-	34,  // 213: purser.PaymentService.GetBillingStatus:output_type -> purser.BillingStatusResponse
-	42,  // 214: purser.UsageService.GetUsageRecords:output_type -> purser.UsageRecordsResponse
-	50,  // 215: purser.UsageService.GetTenantUsage:output_type -> purser.TenantUsageResponse
-	45,  // 216: purser.UsageService.GetUsageAggregates:output_type -> purser.GetUsageAggregatesResponse
-	48,  // 217: purser.UsageService.CheckUserLimit:output_type -> purser.CheckUserLimitResponse
-	51,  // 218: purser.ClusterPricingService.GetClusterPricing:output_type -> purser.ClusterPricing
-	54,  // 219: purser.ClusterPricingService.GetClustersPricingBatch:output_type -> purser.GetClustersPricingBatchResponse
-	51,  // 220: purser.ClusterPricingService.SetClusterPricing:output_type -> purser.ClusterPricing
-	57,  // 221: purser.ClusterPricingService.ListClusterPricings:output_type -> purser.ListClusterPricingsResponse
-	59,  // 222: purser.ClusterPricingService.CheckClusterAccess:output_type -> purser.CheckClusterAccessResponse
-	61,  // 223: purser.ClusterPricingService.CreateClusterSubscription:output_type -> purser.ClusterSubscriptionResponse
-	125, // 224: purser.ClusterPricingService.CancelClusterSubscription:output_type -> google.protobuf.Empty
-	64,  // 225: purser.ClusterPricingService.ListMarketplaceClusterPricings:output_type -> purser.ListMarketplaceClusterPricingsResponse
-	66,  // 226: purser.PrepaidService.GetPrepaidBalance:output_type -> purser.PrepaidBalance
-	67,  // 227: purser.PrepaidService.TopupBalance:output_type -> purser.BalanceTransaction
-	67,  // 228: purser.PrepaidService.DeductBalance:output_type -> purser.BalanceTransaction
-	67,  // 229: purser.PrepaidService.AdjustBalance:output_type -> purser.BalanceTransaction
-	73,  // 230: purser.PrepaidService.ListBalanceTransactions:output_type -> purser.ListBalanceTransactionsResponse
-	66,  // 231: purser.PrepaidService.InitializePrepaidBalance:output_type -> purser.PrepaidBalance
-	76,  // 232: purser.PrepaidService.InitializePrepaidAccount:output_type -> purser.InitializePrepaidAccountResponse
-	78,  // 233: purser.PrepaidService.InitializePostpaidAccount:output_type -> purser.InitializePostpaidAccountResponse
-	80,  // 234: purser.PrepaidService.CreateCardTopup:output_type -> purser.CreateCardTopupResponse
-	81,  // 235: purser.PrepaidService.GetPendingTopup:output_type -> purser.PendingTopup
-	84,  // 236: purser.PrepaidService.ListPendingTopups:output_type -> purser.ListPendingTopupsResponse
-	86,  // 237: purser.PrepaidService.CreateCryptoTopup:output_type -> purser.CreateCryptoTopupResponse
-	88,  // 238: purser.PrepaidService.GetCryptoTopup:output_type -> purser.CryptoTopup
-	90,  // 239: purser.PrepaidService.PromoteToPaid:output_type -> purser.PromoteToPaidResponse
-	126, // 240: purser.WebhookService.ProcessWebhook:output_type -> shared.WebhookResponse
-	92,  // 241: purser.StripeService.CreateCheckoutSession:output_type -> purser.CreateStripeCheckoutResponse
-	94,  // 242: purser.StripeService.CreateBillingPortalSession:output_type -> purser.CreateBillingPortalResponse
-	17,  // 243: purser.StripeService.SyncSubscription:output_type -> purser.TenantSubscription
-	97,  // 244: purser.MollieService.CreateFirstPayment:output_type -> purser.CreateMollieFirstPaymentResponse
-	99,  // 245: purser.MollieService.CreateMollieSubscription:output_type -> purser.CreateMollieSubscriptionResponse
-	102, // 246: purser.MollieService.ListMandates:output_type -> purser.ListMollieMandatesResponse
-	125, // 247: purser.MollieService.CancelMollieSubscription:output_type -> google.protobuf.Empty
-	105, // 248: purser.X402Service.GetPaymentRequirements:output_type -> purser.PaymentRequirements
-	111, // 249: purser.X402Service.VerifyX402Payment:output_type -> purser.VerifyX402PaymentResponse
-	113, // 250: purser.X402Service.SettleX402Payment:output_type -> purser.SettleX402PaymentResponse
-	115, // 251: purser.X402Service.GetTenantX402Address:output_type -> purser.GetTenantX402AddressResponse
-	198, // [198:252] is the sub-list for method output_type
-	144, // [144:198] is the sub-list for method input_type
-	144, // [144:144] is the sub-list for extension type_name
-	144, // [144:144] is the sub-list for extension extendee
-	0,   // [0:144] is the sub-list for field type_name
+	121, // 2: purser.GetBillingTiersResponse.pagination:type_name -> common.CursorPaginationResponse
+	8,   // 3: purser.BillingTier.features:type_name -> purser.BillingFeatures
+	122, // 4: purser.BillingTier.created_at:type_name -> google.protobuf.Timestamp
+	122, // 5: purser.BillingTier.updated_at:type_name -> google.protobuf.Timestamp
+	7,   // 6: purser.BillingTier.pricing_rules:type_name -> purser.PricingRule
+	114, // 7: purser.BillingTier.entitlements:type_name -> purser.BillingTier.EntitlementsEntry
+	8,   // 8: purser.CreateBillingTierRequest.features:type_name -> purser.BillingFeatures
+	8,   // 9: purser.UpdateBillingTierRequest.features:type_name -> purser.BillingFeatures
+	16,  // 10: purser.GetSubscriptionResponse.subscription:type_name -> purser.TenantSubscription
+	17,  // 11: purser.UpdateBillingDetailsRequest.address:type_name -> purser.BillingAddress
+	17,  // 12: purser.BillingDetails.address:type_name -> purser.BillingAddress
+	122, // 13: purser.BillingDetails.updated_at:type_name -> google.protobuf.Timestamp
+	122, // 14: purser.TenantSubscription.started_at:type_name -> google.protobuf.Timestamp
+	122, // 15: purser.TenantSubscription.trial_ends_at:type_name -> google.protobuf.Timestamp
+	122, // 16: purser.TenantSubscription.next_billing_date:type_name -> google.protobuf.Timestamp
+	122, // 17: purser.TenantSubscription.cancelled_at:type_name -> google.protobuf.Timestamp
+	8,   // 18: purser.TenantSubscription.custom_features:type_name -> purser.BillingFeatures
+	7,   // 19: purser.TenantSubscription.pricing_overrides:type_name -> purser.PricingRule
+	115, // 20: purser.TenantSubscription.entitlement_overrides:type_name -> purser.TenantSubscription.EntitlementOverridesEntry
+	17,  // 21: purser.TenantSubscription.billing_address:type_name -> purser.BillingAddress
+	122, // 22: purser.TenantSubscription.created_at:type_name -> google.protobuf.Timestamp
+	122, // 23: purser.TenantSubscription.updated_at:type_name -> google.protobuf.Timestamp
+	122, // 24: purser.TenantSubscription.billing_period_start:type_name -> google.protobuf.Timestamp
+	122, // 25: purser.TenantSubscription.billing_period_end:type_name -> google.protobuf.Timestamp
+	122, // 26: purser.TenantSubscription.stripe_current_period_end:type_name -> google.protobuf.Timestamp
+	122, // 27: purser.CreateSubscriptionRequest.trial_ends_at:type_name -> google.protobuf.Timestamp
+	8,   // 28: purser.CreateSubscriptionRequest.custom_features:type_name -> purser.BillingFeatures
+	122, // 29: purser.CreateSubscriptionRequest.billing_period_start:type_name -> google.protobuf.Timestamp
+	122, // 30: purser.CreateSubscriptionRequest.billing_period_end:type_name -> google.protobuf.Timestamp
+	8,   // 31: purser.UpdateSubscriptionRequest.custom_features:type_name -> purser.BillingFeatures
+	122, // 32: purser.UpdateSubscriptionRequest.billing_period_start:type_name -> google.protobuf.Timestamp
+	122, // 33: purser.UpdateSubscriptionRequest.billing_period_end:type_name -> google.protobuf.Timestamp
+	7,   // 34: purser.UpdateSubscriptionRequest.pricing_overrides:type_name -> purser.PricingRule
+	116, // 35: purser.UpdateSubscriptionRequest.entitlement_overrides:type_name -> purser.UpdateSubscriptionRequest.EntitlementOverridesEntry
+	24,  // 36: purser.GetInvoiceResponse.invoice:type_name -> purser.Invoice
+	6,   // 37: purser.GetInvoiceResponse.tier:type_name -> purser.BillingTier
+	122, // 38: purser.Invoice.due_date:type_name -> google.protobuf.Timestamp
+	122, // 39: purser.Invoice.paid_at:type_name -> google.protobuf.Timestamp
+	123, // 40: purser.Invoice.usage_details:type_name -> google.protobuf.Struct
+	122, // 41: purser.Invoice.created_at:type_name -> google.protobuf.Timestamp
+	122, // 42: purser.Invoice.updated_at:type_name -> google.protobuf.Timestamp
+	122, // 43: purser.Invoice.period_start:type_name -> google.protobuf.Timestamp
+	122, // 44: purser.Invoice.period_end:type_name -> google.protobuf.Timestamp
+	36,  // 45: purser.Invoice.usage_summary:type_name -> purser.UsageSummary
+	23,  // 46: purser.Invoice.line_items:type_name -> purser.LineItem
+	120, // 47: purser.ListInvoicesRequest.pagination:type_name -> common.CursorPaginationRequest
+	24,  // 48: purser.ListInvoicesResponse.invoices:type_name -> purser.Invoice
+	121, // 49: purser.ListInvoicesResponse.pagination:type_name -> common.CursorPaginationResponse
+	122, // 50: purser.PaymentResponse.expires_at:type_name -> google.protobuf.Timestamp
+	122, // 51: purser.PaymentResponse.created_at:type_name -> google.protobuf.Timestamp
+	122, // 52: purser.PaymentResponse.quoted_at:type_name -> google.protobuf.Timestamp
+	16,  // 53: purser.BillingStatusResponse.subscription:type_name -> purser.TenantSubscription
+	6,   // 54: purser.BillingStatusResponse.tier:type_name -> purser.BillingTier
+	122, // 55: purser.BillingStatusResponse.next_billing_date:type_name -> google.protobuf.Timestamp
+	24,  // 56: purser.BillingStatusResponse.pending_invoices:type_name -> purser.Invoice
+	33,  // 57: purser.BillingStatusResponse.recent_payments:type_name -> purser.Payment
+	36,  // 58: purser.BillingStatusResponse.usage_summary:type_name -> purser.UsageSummary
+	122, // 59: purser.Payment.confirmed_at:type_name -> google.protobuf.Timestamp
+	122, // 60: purser.Payment.created_at:type_name -> google.protobuf.Timestamp
+	122, // 61: purser.Payment.updated_at:type_name -> google.protobuf.Timestamp
+	36,  // 62: purser.UsageIngestRequest.usage_summaries:type_name -> purser.UsageSummary
+	122, // 63: purser.UsageSummary.timestamp:type_name -> google.protobuf.Timestamp
+	35,  // 64: purser.UsageSummary.geo_breakdown:type_name -> purser.CountryMetrics
+	124, // 65: purser.GetUsageRecordsRequest.time_range:type_name -> common.TimeRange
+	120, // 66: purser.GetUsageRecordsRequest.pagination:type_name -> common.CursorPaginationRequest
+	123, // 67: purser.UsageRecord.usage_details:type_name -> google.protobuf.Struct
+	122, // 68: purser.UsageRecord.created_at:type_name -> google.protobuf.Timestamp
+	122, // 69: purser.UsageRecord.period_start:type_name -> google.protobuf.Timestamp
+	122, // 70: purser.UsageRecord.period_end:type_name -> google.protobuf.Timestamp
+	39,  // 71: purser.UsageRecordsResponse.usage_records:type_name -> purser.UsageRecord
+	44,  // 72: purser.UsageRecordsResponse.filters:type_name -> purser.UsageFilters
+	121, // 73: purser.UsageRecordsResponse.pagination:type_name -> common.CursorPaginationResponse
+	124, // 74: purser.GetUsageAggregatesRequest.time_range:type_name -> common.TimeRange
+	122, // 75: purser.UsageAggregate.period_start:type_name -> google.protobuf.Timestamp
+	122, // 76: purser.UsageAggregate.period_end:type_name -> google.protobuf.Timestamp
+	42,  // 77: purser.GetUsageAggregatesResponse.aggregates:type_name -> purser.UsageAggregate
+	124, // 78: purser.UsageFilters.time_range:type_name -> common.TimeRange
+	117, // 79: purser.TenantUsageResponse.usage:type_name -> purser.TenantUsageResponse.UsageEntry
+	118, // 80: purser.TenantUsageResponse.costs:type_name -> purser.TenantUsageResponse.CostsEntry
+	23,  // 81: purser.TenantUsageResponse.line_items:type_name -> purser.LineItem
+	123, // 82: purser.ClusterPricing.metered_rates:type_name -> google.protobuf.Struct
+	123, // 83: purser.ClusterPricing.default_quotas:type_name -> google.protobuf.Struct
+	122, // 84: purser.ClusterPricing.created_at:type_name -> google.protobuf.Timestamp
+	122, // 85: purser.ClusterPricing.updated_at:type_name -> google.protobuf.Timestamp
+	119, // 86: purser.GetClustersPricingBatchResponse.pricings:type_name -> purser.GetClustersPricingBatchResponse.PricingsEntry
+	123, // 87: purser.SetClusterPricingRequest.metered_rates:type_name -> google.protobuf.Struct
+	123, // 88: purser.SetClusterPricingRequest.default_quotas:type_name -> google.protobuf.Struct
+	120, // 89: purser.ListClusterPricingsRequest.pagination:type_name -> common.CursorPaginationRequest
+	49,  // 90: purser.ListClusterPricingsResponse.pricings:type_name -> purser.ClusterPricing
+	121, // 91: purser.ListClusterPricingsResponse.pagination:type_name -> common.CursorPaginationResponse
+	120, // 92: purser.ListMarketplaceClusterPricingsRequest.pagination:type_name -> common.CursorPaginationRequest
+	63,  // 93: purser.ListMarketplaceClusterPricingsResponse.pricings:type_name -> purser.MarketplaceClusterPricing
+	121, // 94: purser.ListMarketplaceClusterPricingsResponse.pagination:type_name -> common.CursorPaginationResponse
+	122, // 95: purser.MarketplaceClusterPricing.created_at:type_name -> google.protobuf.Timestamp
+	122, // 96: purser.PrepaidBalance.created_at:type_name -> google.protobuf.Timestamp
+	122, // 97: purser.PrepaidBalance.updated_at:type_name -> google.protobuf.Timestamp
+	122, // 98: purser.BalanceTransaction.created_at:type_name -> google.protobuf.Timestamp
+	124, // 99: purser.ListBalanceTransactionsRequest.time_range:type_name -> common.TimeRange
+	120, // 100: purser.ListBalanceTransactionsRequest.pagination:type_name -> common.CursorPaginationRequest
+	65,  // 101: purser.ListBalanceTransactionsResponse.transactions:type_name -> purser.BalanceTransaction
+	121, // 102: purser.ListBalanceTransactionsResponse.pagination:type_name -> common.CursorPaginationResponse
+	17,  // 103: purser.CreateCardTopupRequest.billing_address:type_name -> purser.BillingAddress
+	122, // 104: purser.CreateCardTopupResponse.expires_at:type_name -> google.protobuf.Timestamp
+	122, // 105: purser.PendingTopup.expires_at:type_name -> google.protobuf.Timestamp
+	122, // 106: purser.PendingTopup.completed_at:type_name -> google.protobuf.Timestamp
+	122, // 107: purser.PendingTopup.created_at:type_name -> google.protobuf.Timestamp
+	122, // 108: purser.PendingTopup.updated_at:type_name -> google.protobuf.Timestamp
+	120, // 109: purser.ListPendingTopupsRequest.pagination:type_name -> common.CursorPaginationRequest
+	79,  // 110: purser.ListPendingTopupsResponse.topups:type_name -> purser.PendingTopup
+	121, // 111: purser.ListPendingTopupsResponse.pagination:type_name -> common.CursorPaginationResponse
+	0,   // 112: purser.CreateCryptoTopupRequest.asset:type_name -> purser.CryptoAsset
+	0,   // 113: purser.CreateCryptoTopupResponse.asset:type_name -> purser.CryptoAsset
+	122, // 114: purser.CreateCryptoTopupResponse.expires_at:type_name -> google.protobuf.Timestamp
+	122, // 115: purser.CreateCryptoTopupResponse.quoted_at:type_name -> google.protobuf.Timestamp
+	0,   // 116: purser.CryptoTopup.asset:type_name -> purser.CryptoAsset
+	122, // 117: purser.CryptoTopup.expires_at:type_name -> google.protobuf.Timestamp
+	122, // 118: purser.CryptoTopup.detected_at:type_name -> google.protobuf.Timestamp
+	122, // 119: purser.CryptoTopup.completed_at:type_name -> google.protobuf.Timestamp
+	122, // 120: purser.CryptoTopup.created_at:type_name -> google.protobuf.Timestamp
+	123, // 121: purser.MollieMandate.details:type_name -> google.protobuf.Struct
+	122, // 122: purser.MollieMandate.created_at:type_name -> google.protobuf.Timestamp
+	99,  // 123: purser.ListMollieMandatesResponse.mandates:type_name -> purser.MollieMandate
+	104, // 124: purser.PaymentRequirements.accepts:type_name -> purser.PaymentRequirement
+	106, // 125: purser.X402PaymentPayload.payload:type_name -> purser.X402ExactPayload
+	107, // 126: purser.X402ExactPayload.authorization:type_name -> purser.X402Authorization
+	105, // 127: purser.VerifyX402PaymentRequest.payment:type_name -> purser.X402PaymentPayload
+	105, // 128: purser.SettleX402PaymentRequest.payment:type_name -> purser.X402PaymentPayload
+	49,  // 129: purser.GetClustersPricingBatchResponse.PricingsEntry.value:type_name -> purser.ClusterPricing
+	3,   // 130: purser.BillingService.GetBillingTiers:input_type -> purser.GetBillingTiersRequest
+	5,   // 131: purser.BillingService.GetBillingTier:input_type -> purser.GetBillingTierRequest
+	9,   // 132: purser.BillingService.CreateBillingTier:input_type -> purser.CreateBillingTierRequest
+	10,  // 133: purser.BillingService.UpdateBillingTier:input_type -> purser.UpdateBillingTierRequest
+	1,   // 134: purser.BillingService.GetTenantBillingStatus:input_type -> purser.GetTenantBillingStatusRequest
+	11,  // 135: purser.SubscriptionService.GetSubscription:input_type -> purser.GetSubscriptionRequest
+	18,  // 136: purser.SubscriptionService.CreateSubscription:input_type -> purser.CreateSubscriptionRequest
+	19,  // 137: purser.SubscriptionService.UpdateSubscription:input_type -> purser.UpdateSubscriptionRequest
+	20,  // 138: purser.SubscriptionService.CancelSubscription:input_type -> purser.CancelSubscriptionRequest
+	13,  // 139: purser.SubscriptionService.GetBillingDetails:input_type -> purser.GetBillingDetailsRequest
+	14,  // 140: purser.SubscriptionService.UpdateBillingDetails:input_type -> purser.UpdateBillingDetailsRequest
+	21,  // 141: purser.InvoiceService.GetInvoice:input_type -> purser.GetInvoiceRequest
+	25,  // 142: purser.InvoiceService.ListInvoices:input_type -> purser.ListInvoicesRequest
+	27,  // 143: purser.PaymentService.CreatePayment:input_type -> purser.PaymentRequest
+	29,  // 144: purser.PaymentService.GetPaymentMethods:input_type -> purser.GetPaymentMethodsRequest
+	31,  // 145: purser.PaymentService.GetBillingStatus:input_type -> purser.GetBillingStatusRequest
+	38,  // 146: purser.UsageService.GetUsageRecords:input_type -> purser.GetUsageRecordsRequest
+	47,  // 147: purser.UsageService.GetTenantUsage:input_type -> purser.TenantUsageRequest
+	41,  // 148: purser.UsageService.GetUsageAggregates:input_type -> purser.GetUsageAggregatesRequest
+	45,  // 149: purser.UsageService.CheckUserLimit:input_type -> purser.CheckUserLimitRequest
+	50,  // 150: purser.ClusterPricingService.GetClusterPricing:input_type -> purser.GetClusterPricingRequest
+	51,  // 151: purser.ClusterPricingService.GetClustersPricingBatch:input_type -> purser.GetClustersPricingBatchRequest
+	53,  // 152: purser.ClusterPricingService.SetClusterPricing:input_type -> purser.SetClusterPricingRequest
+	54,  // 153: purser.ClusterPricingService.ListClusterPricings:input_type -> purser.ListClusterPricingsRequest
+	56,  // 154: purser.ClusterPricingService.CheckClusterAccess:input_type -> purser.CheckClusterAccessRequest
+	58,  // 155: purser.ClusterPricingService.CreateClusterSubscription:input_type -> purser.CreateClusterSubscriptionRequest
+	60,  // 156: purser.ClusterPricingService.CancelClusterSubscription:input_type -> purser.CancelClusterSubscriptionRequest
+	61,  // 157: purser.ClusterPricingService.ListMarketplaceClusterPricings:input_type -> purser.ListMarketplaceClusterPricingsRequest
+	66,  // 158: purser.PrepaidService.GetPrepaidBalance:input_type -> purser.GetPrepaidBalanceRequest
+	67,  // 159: purser.PrepaidService.TopupBalance:input_type -> purser.TopupBalanceRequest
+	68,  // 160: purser.PrepaidService.DeductBalance:input_type -> purser.DeductBalanceRequest
+	69,  // 161: purser.PrepaidService.AdjustBalance:input_type -> purser.AdjustBalanceRequest
+	70,  // 162: purser.PrepaidService.ListBalanceTransactions:input_type -> purser.ListBalanceTransactionsRequest
+	72,  // 163: purser.PrepaidService.InitializePrepaidBalance:input_type -> purser.InitializePrepaidBalanceRequest
+	73,  // 164: purser.PrepaidService.InitializePrepaidAccount:input_type -> purser.InitializePrepaidAccountRequest
+	75,  // 165: purser.PrepaidService.InitializePostpaidAccount:input_type -> purser.InitializePostpaidAccountRequest
+	77,  // 166: purser.PrepaidService.CreateCardTopup:input_type -> purser.CreateCardTopupRequest
+	80,  // 167: purser.PrepaidService.GetPendingTopup:input_type -> purser.GetPendingTopupRequest
+	81,  // 168: purser.PrepaidService.ListPendingTopups:input_type -> purser.ListPendingTopupsRequest
+	83,  // 169: purser.PrepaidService.CreateCryptoTopup:input_type -> purser.CreateCryptoTopupRequest
+	85,  // 170: purser.PrepaidService.GetCryptoTopup:input_type -> purser.GetCryptoTopupRequest
+	87,  // 171: purser.PrepaidService.PromoteToPaid:input_type -> purser.PromoteToPaidRequest
+	125, // 172: purser.WebhookService.ProcessWebhook:input_type -> shared.WebhookRequest
+	89,  // 173: purser.StripeService.CreateCheckoutSession:input_type -> purser.CreateStripeCheckoutRequest
+	91,  // 174: purser.StripeService.CreateBillingPortalSession:input_type -> purser.CreateBillingPortalRequest
+	93,  // 175: purser.StripeService.SyncSubscription:input_type -> purser.SyncStripeSubscriptionRequest
+	94,  // 176: purser.MollieService.CreateFirstPayment:input_type -> purser.CreateMollieFirstPaymentRequest
+	96,  // 177: purser.MollieService.CreateMollieSubscription:input_type -> purser.CreateMollieSubscriptionRequest
+	98,  // 178: purser.MollieService.ListMandates:input_type -> purser.ListMollieMandatesRequest
+	101, // 179: purser.MollieService.CancelMollieSubscription:input_type -> purser.CancelMollieSubscriptionRequest
+	102, // 180: purser.X402Service.GetPaymentRequirements:input_type -> purser.GetPaymentRequirementsRequest
+	108, // 181: purser.X402Service.VerifyX402Payment:input_type -> purser.VerifyX402PaymentRequest
+	110, // 182: purser.X402Service.SettleX402Payment:input_type -> purser.SettleX402PaymentRequest
+	112, // 183: purser.X402Service.GetTenantX402Address:input_type -> purser.GetTenantX402AddressRequest
+	4,   // 184: purser.BillingService.GetBillingTiers:output_type -> purser.GetBillingTiersResponse
+	6,   // 185: purser.BillingService.GetBillingTier:output_type -> purser.BillingTier
+	6,   // 186: purser.BillingService.CreateBillingTier:output_type -> purser.BillingTier
+	6,   // 187: purser.BillingService.UpdateBillingTier:output_type -> purser.BillingTier
+	2,   // 188: purser.BillingService.GetTenantBillingStatus:output_type -> purser.GetTenantBillingStatusResponse
+	12,  // 189: purser.SubscriptionService.GetSubscription:output_type -> purser.GetSubscriptionResponse
+	16,  // 190: purser.SubscriptionService.CreateSubscription:output_type -> purser.TenantSubscription
+	16,  // 191: purser.SubscriptionService.UpdateSubscription:output_type -> purser.TenantSubscription
+	126, // 192: purser.SubscriptionService.CancelSubscription:output_type -> google.protobuf.Empty
+	15,  // 193: purser.SubscriptionService.GetBillingDetails:output_type -> purser.BillingDetails
+	15,  // 194: purser.SubscriptionService.UpdateBillingDetails:output_type -> purser.BillingDetails
+	22,  // 195: purser.InvoiceService.GetInvoice:output_type -> purser.GetInvoiceResponse
+	26,  // 196: purser.InvoiceService.ListInvoices:output_type -> purser.ListInvoicesResponse
+	28,  // 197: purser.PaymentService.CreatePayment:output_type -> purser.PaymentResponse
+	30,  // 198: purser.PaymentService.GetPaymentMethods:output_type -> purser.PaymentMethodResponse
+	32,  // 199: purser.PaymentService.GetBillingStatus:output_type -> purser.BillingStatusResponse
+	40,  // 200: purser.UsageService.GetUsageRecords:output_type -> purser.UsageRecordsResponse
+	48,  // 201: purser.UsageService.GetTenantUsage:output_type -> purser.TenantUsageResponse
+	43,  // 202: purser.UsageService.GetUsageAggregates:output_type -> purser.GetUsageAggregatesResponse
+	46,  // 203: purser.UsageService.CheckUserLimit:output_type -> purser.CheckUserLimitResponse
+	49,  // 204: purser.ClusterPricingService.GetClusterPricing:output_type -> purser.ClusterPricing
+	52,  // 205: purser.ClusterPricingService.GetClustersPricingBatch:output_type -> purser.GetClustersPricingBatchResponse
+	49,  // 206: purser.ClusterPricingService.SetClusterPricing:output_type -> purser.ClusterPricing
+	55,  // 207: purser.ClusterPricingService.ListClusterPricings:output_type -> purser.ListClusterPricingsResponse
+	57,  // 208: purser.ClusterPricingService.CheckClusterAccess:output_type -> purser.CheckClusterAccessResponse
+	59,  // 209: purser.ClusterPricingService.CreateClusterSubscription:output_type -> purser.ClusterSubscriptionResponse
+	126, // 210: purser.ClusterPricingService.CancelClusterSubscription:output_type -> google.protobuf.Empty
+	62,  // 211: purser.ClusterPricingService.ListMarketplaceClusterPricings:output_type -> purser.ListMarketplaceClusterPricingsResponse
+	64,  // 212: purser.PrepaidService.GetPrepaidBalance:output_type -> purser.PrepaidBalance
+	65,  // 213: purser.PrepaidService.TopupBalance:output_type -> purser.BalanceTransaction
+	65,  // 214: purser.PrepaidService.DeductBalance:output_type -> purser.BalanceTransaction
+	65,  // 215: purser.PrepaidService.AdjustBalance:output_type -> purser.BalanceTransaction
+	71,  // 216: purser.PrepaidService.ListBalanceTransactions:output_type -> purser.ListBalanceTransactionsResponse
+	64,  // 217: purser.PrepaidService.InitializePrepaidBalance:output_type -> purser.PrepaidBalance
+	74,  // 218: purser.PrepaidService.InitializePrepaidAccount:output_type -> purser.InitializePrepaidAccountResponse
+	76,  // 219: purser.PrepaidService.InitializePostpaidAccount:output_type -> purser.InitializePostpaidAccountResponse
+	78,  // 220: purser.PrepaidService.CreateCardTopup:output_type -> purser.CreateCardTopupResponse
+	79,  // 221: purser.PrepaidService.GetPendingTopup:output_type -> purser.PendingTopup
+	82,  // 222: purser.PrepaidService.ListPendingTopups:output_type -> purser.ListPendingTopupsResponse
+	84,  // 223: purser.PrepaidService.CreateCryptoTopup:output_type -> purser.CreateCryptoTopupResponse
+	86,  // 224: purser.PrepaidService.GetCryptoTopup:output_type -> purser.CryptoTopup
+	88,  // 225: purser.PrepaidService.PromoteToPaid:output_type -> purser.PromoteToPaidResponse
+	127, // 226: purser.WebhookService.ProcessWebhook:output_type -> shared.WebhookResponse
+	90,  // 227: purser.StripeService.CreateCheckoutSession:output_type -> purser.CreateStripeCheckoutResponse
+	92,  // 228: purser.StripeService.CreateBillingPortalSession:output_type -> purser.CreateBillingPortalResponse
+	16,  // 229: purser.StripeService.SyncSubscription:output_type -> purser.TenantSubscription
+	95,  // 230: purser.MollieService.CreateFirstPayment:output_type -> purser.CreateMollieFirstPaymentResponse
+	97,  // 231: purser.MollieService.CreateMollieSubscription:output_type -> purser.CreateMollieSubscriptionResponse
+	100, // 232: purser.MollieService.ListMandates:output_type -> purser.ListMollieMandatesResponse
+	126, // 233: purser.MollieService.CancelMollieSubscription:output_type -> google.protobuf.Empty
+	103, // 234: purser.X402Service.GetPaymentRequirements:output_type -> purser.PaymentRequirements
+	109, // 235: purser.X402Service.VerifyX402Payment:output_type -> purser.VerifyX402PaymentResponse
+	111, // 236: purser.X402Service.SettleX402Payment:output_type -> purser.SettleX402PaymentResponse
+	113, // 237: purser.X402Service.GetTenantX402Address:output_type -> purser.GetTenantX402AddressResponse
+	184, // [184:238] is the sub-list for method output_type
+	130, // [130:184] is the sub-list for method input_type
+	130, // [130:130] is the sub-list for extension type_name
+	130, // [130:130] is the sub-list for extension extendee
+	0,   // [0:130] is the sub-list for field type_name
 }
 
 func init() { file_purser_proto_init() }
@@ -10920,41 +10868,40 @@ func file_purser_proto_init() {
 	file_common_proto_init()
 	file_shared_proto_init()
 	file_purser_proto_msgTypes[5].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[7].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[10].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[14].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[16].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[19].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[20].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[25].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[26].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[29].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[34].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[40].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[9].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[13].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[15].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[17].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[18].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[23].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[24].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[27].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[32].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[38].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[48].OneofWrappers = []any{}
 	file_purser_proto_msgTypes[50].OneofWrappers = []any{}
 	file_purser_proto_msgTypes[52].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[54].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[59].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[60].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[57].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[58].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[64].OneofWrappers = []any{}
 	file_purser_proto_msgTypes[66].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[67].OneofWrappers = []any{}
 	file_purser_proto_msgTypes[68].OneofWrappers = []any{}
 	file_purser_proto_msgTypes[69].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[70].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[71].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[76].OneofWrappers = []any{}
 	file_purser_proto_msgTypes[78].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[80].OneofWrappers = []any{}
-	file_purser_proto_msgTypes[81].OneofWrappers = []any{
+	file_purser_proto_msgTypes[79].OneofWrappers = []any{
 		(*GetPendingTopupRequest_TopupId)(nil),
 		(*GetPendingTopupRequest_CheckoutId)(nil),
 	}
-	file_purser_proto_msgTypes[82].OneofWrappers = []any{}
+	file_purser_proto_msgTypes[80].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_purser_proto_rawDesc), len(file_purser_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   118,
+			NumMessages:   119,
 			NumExtensions: 0,
 			NumServices:   11,
 		},

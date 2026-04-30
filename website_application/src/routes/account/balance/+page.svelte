@@ -52,7 +52,7 @@
   let totalTransactions = $state(0);
 
   // Top-up form state. LPT is hidden until a non-Chainlink price source ships.
-  let topupAmount = $state(10); // Default $10
+  let topupAmount = $state(10);
   let topupMethod = $state<"card" | "crypto">("card");
   let cryptoAsset = $state<"ETH" | "USDC">("USDC");
   let topupLoading = $state(false);
@@ -130,7 +130,7 @@
     loading = true;
     try {
       const [balanceResult, txResult] = await Promise.all([
-        balanceQuery.fetch(),
+        balanceQuery.fetch({ variables: { currency: "EUR" } }),
         transactionsQuery.fetch({ variables: { page: { first: 10 } } }),
       ]);
 

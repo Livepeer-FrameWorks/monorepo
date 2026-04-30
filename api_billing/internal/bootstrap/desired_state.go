@@ -37,17 +37,26 @@ type PurserSection struct {
 //   - is_active is a runtime lifecycle concern (admin tools deactivate
 //     tiers); bootstrap is for desired-state, not enable/disable churn.
 type BillingTier struct {
-	ID                  string         `yaml:"id"`
-	DisplayName         string         `yaml:"display_name,omitempty"`
-	TierLevel           int32          `yaml:"tier_level,omitempty"`
-	BasePriceMonthly    string         `yaml:"base_price_monthly,omitempty"`
-	Currency            string         `yaml:"currency,omitempty"`
-	BandwidthAllocation map[string]any `yaml:"bandwidth_allocation,omitempty"`
-	StorageAllocation   map[string]any `yaml:"storage_allocation,omitempty"`
-	ComputeAllocation   map[string]any `yaml:"compute_allocation,omitempty"`
-	Features            []string       `yaml:"features,omitempty"`
-	OverageRates        map[string]any `yaml:"overage_rates,omitempty"`
-	Override            bool           `yaml:"override,omitempty"`
+	ID               string               `yaml:"id"`
+	DisplayName      string               `yaml:"display_name,omitempty"`
+	TierLevel        int32                `yaml:"tier_level,omitempty"`
+	BasePriceMonthly string               `yaml:"base_price_monthly,omitempty"`
+	Currency         string               `yaml:"currency,omitempty"`
+	Features         []string             `yaml:"features,omitempty"`
+	Entitlements     map[string]any       `yaml:"entitlements,omitempty"`
+	PricingRules     []OverlayPricingRule `yaml:"pricing_rules,omitempty"`
+	Override         bool                 `yaml:"override,omitempty"`
+}
+
+// OverlayPricingRule mirrors cli/pkg/bootstrap.OverlayPricingRule. Kept as a
+// duplicate type so api_billing has no dependency on cli/*.
+type OverlayPricingRule struct {
+	Meter            string         `yaml:"meter"`
+	Model            string         `yaml:"model"`
+	Currency         string         `yaml:"currency,omitempty"`
+	IncludedQuantity float64        `yaml:"included_quantity,omitempty"`
+	UnitPrice        string         `yaml:"unit_price"`
+	Config           map[string]any `yaml:"config,omitempty"`
 }
 
 // ClusterPricing is one row reconciled into purser.cluster_pricing. Stable key:

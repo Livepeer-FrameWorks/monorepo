@@ -6,15 +6,21 @@ query GetInvoices($first: Int = 50, $after: String) {
       node {
         id
         amount
+        prepaidCreditApplied
         currency
         status
         dueDate
         createdAt
         lineItems {
+          lineKey
+          meter
           description
           quantity
+          includedQuantity
+          billableQuantity
           unitPrice
           total
+          currency
         }
       }
     }

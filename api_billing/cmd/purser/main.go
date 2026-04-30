@@ -25,6 +25,8 @@ import (
 	"frameworks/pkg/qmbootstrap"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
+
+	"github.com/shopspring/decimal"
 )
 
 func main() {
@@ -275,9 +277,9 @@ func main() {
 		}
 		defer func() { _ = qc.Close() }()
 		healthEndpoint := "/health"
-		httpPort, _ := strconv.Atoi(serverConfig.Port)
-		if httpPort <= 0 || httpPort > 65535 {
-			logger.Warn("Quartermaster bootstrap skipped: invalid port")
+		httpPort, err := strconv.Atoi(serverConfig.Port)
+		if err != nil || httpPort <= 0 || httpPort > 65535 {
+			logger.WithError(err).WithField("port", serverConfig.Port).Warn("Quartermaster bootstrap skipped: invalid port")
 			return
 		}
 		advertiseHost := config.GetEnv("PURSER_HOST", "purser")
@@ -311,11 +313,16 @@ func main() {
 	}
 }
 
-// syncBillingTiersWithStripe ensures each paid billing tier has a corresponding
-// Stripe product and monthly price. Idempotent — safe to run on every startup.
+// syncBillingTiersWithStripe reconciles each paid billing tier's Stripe product
+// and monthly price against the catalog's base_price. Runs on every startup.
+//
+// When a tier's base_price changes in the catalog, Stripe prices are immutable,
+// so SyncTier creates a new price; this function then deactivates the previous
+// one. Existing subscriptions on the old price keep billing at the old rate
+// until they are explicitly migrated.
 func syncBillingTiersWithStripe(ctx context.Context, db *sql.DB, stripeClient *stripe.Client, logger logging.Logger) error {
 	rows, err := db.QueryContext(ctx, `
-		SELECT id, tier_name, display_name, description, base_price, currency,
+		SELECT id, tier_name, display_name, description, base_price::text, currency,
 		       stripe_product_id, stripe_price_id_monthly
 		FROM purser.billing_tiers
 		WHERE base_price > 0 AND is_active = true
@@ -330,7 +337,7 @@ func syncBillingTiersWithStripe(ctx context.Context, db *sql.DB, stripeClient *s
 		tierName           string
 		displayName        string
 		description        string
-		basePrice          float64
+		basePrice          decimal.Decimal
 		currency           string
 		stripeProductID    sql.NullString
 		stripePriceMonthly sql.NullString
@@ -339,9 +346,14 @@ func syncBillingTiersWithStripe(ctx context.Context, db *sql.DB, stripeClient *s
 	var tiers []tier
 	for rows.Next() {
 		var t tier
+		var basePriceText string
 		if err := rows.Scan(&t.id, &t.tierName, &t.displayName, &t.description,
-			&t.basePrice, &t.currency, &t.stripeProductID, &t.stripePriceMonthly); err != nil {
+			&basePriceText, &t.currency, &t.stripeProductID, &t.stripePriceMonthly); err != nil {
 			return fmt.Errorf("scan tier: %w", err)
+		}
+		t.basePrice, err = decimal.NewFromString(basePriceText)
+		if err != nil {
+			return fmt.Errorf("parse tier %s base_price %q: %w", t.tierName, basePriceText, err)
 		}
 		tiers = append(tiers, t)
 	}
@@ -349,38 +361,56 @@ func syncBillingTiersWithStripe(ctx context.Context, db *sql.DB, stripeClient *s
 		return fmt.Errorf("iterate tiers: %w", err)
 	}
 
-	var synced int
+	var changed int
 	for _, t := range tiers {
-		if t.stripeProductID.Valid && t.stripePriceMonthly.Valid {
-			continue
-		}
-
 		productID, priceID, err := stripeClient.SyncTier(ctx, t.tierName, t.displayName, t.description, t.basePrice, t.currency)
 		if err != nil {
 			logger.WithError(err).WithField("tier", t.tierName).Error("Failed to sync tier with Stripe")
 			continue
 		}
 
-		_, err = db.ExecContext(ctx, `
+		productSame := t.stripeProductID.Valid && t.stripeProductID.String == productID
+		priceSame := t.stripePriceMonthly.Valid && t.stripePriceMonthly.String == priceID
+		if productSame && priceSame {
+			continue
+		}
+
+		oldPriceID := ""
+		if t.stripePriceMonthly.Valid && t.stripePriceMonthly.String != priceID {
+			oldPriceID = t.stripePriceMonthly.String
+		}
+
+		if _, err := db.ExecContext(ctx, `
 			UPDATE purser.billing_tiers
 			SET stripe_product_id = $1, stripe_price_id_monthly = $2, updated_at = NOW()
 			WHERE id = $3
-		`, productID, priceID, t.id)
-		if err != nil {
+		`, productID, priceID, t.id); err != nil {
 			logger.WithError(err).WithField("tier", t.tierName).Error("Failed to update tier Stripe IDs")
 			continue
 		}
 
-		logger.WithFields(map[string]interface{}{
-			"tier":       t.tierName,
-			"product_id": productID,
-			"price_id":   priceID,
-		}).Info("Synced billing tier with Stripe")
-		synced++
+		if oldPriceID != "" {
+			if err := stripeClient.DeactivatePrice(ctx, oldPriceID); err != nil {
+				logger.WithError(err).WithFields(map[string]any{
+					"tier":         t.tierName,
+					"old_price_id": oldPriceID,
+				}).Warn("Failed to deactivate old Stripe price; reconcile manually if it remains active")
+			}
+		}
+
+		logger.WithFields(map[string]any{
+			"tier":         t.tierName,
+			"product_id":   productID,
+			"price_id":     priceID,
+			"old_price_id": oldPriceID,
+			"base_price":   t.basePrice,
+			"currency":     t.currency,
+		}).Info("Reconciled billing tier with Stripe")
+		changed++
 	}
 
-	if synced > 0 {
-		logger.WithField("count", synced).Info("Stripe tier sync complete")
+	if changed > 0 {
+		logger.WithField("count", changed).Info("Stripe tier sync complete")
 	}
 	return nil
 }

@@ -91,6 +91,11 @@ type UsageSummary struct {
 	NativeAvAACSeconds  float64 `json:"native_av_aac_seconds"`
 	NativeAvOpusSeconds float64 `json:"native_av_opus_seconds"`
 
+	// AI GPU compute, in hours. Producers (Periscope/sidecar) attribute GPU
+	// usage from AI workloads here so per-event prepaid deduction can bill it
+	// in real time.
+	GPUHours float64 `json:"gpu_hours"`
+
 	// Viewer metrics
 	TotalStreams int       `json:"total_streams"`
 	TotalViewers int       `json:"total_viewers"`

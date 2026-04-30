@@ -3,13 +3,16 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/billing"
 	periscope "frameworks/pkg/clients/periscope"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/pagination"
@@ -454,21 +457,7 @@ func (r *Resolver) DoGetLiveUsageSummary(ctx context.Context, periodStart, perio
 func (r *Resolver) DoGetTenantUsage(ctx context.Context, timeRange *model.TimeRangeInput) (*model.TenantUsage, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic tenant usage")
-		return &model.TenantUsage{
-			BillingPeriod: time.Now().Format("2006-01"),
-			Usage: []*model.UsageEntry{
-				{ResourceType: "stream_hours", Amount: 42.5},
-				{ResourceType: "egress_gb", Amount: 15.2},
-				{ResourceType: "average_storage_gb", Amount: 5.0},
-			},
-			Costs: []*model.CostEntry{
-				{ResourceType: "stream_hours", Cost: 4.25},
-				{ResourceType: "egress_gb", Cost: 0.76},
-				{ResourceType: "average_storage_gb", Cost: 0.10},
-			},
-			TotalCost: 5.11,
-			Currency:  "EUR",
-		}, nil
+		return demoTenantUsageFromInvoicePreview(demo.GenerateInvoicePreview())
 	}
 
 	tenantID := ctxkeys.GetTenantID(ctx)
@@ -520,6 +509,53 @@ func (r *Resolver) DoGetTenantUsage(ctx context.Context, timeRange *model.TimeRa
 		Costs:         costEntries,
 		TotalCost:     usage.TotalCost,
 		Currency:      usage.Currency,
+		LineItems:     usage.GetLineItems(),
+		BaseAmount:    usage.GetBaseAmount(),
+		UsageAmount:   usage.GetUsageAmount(),
+	}, nil
+}
+
+func demoTenantUsageFromInvoicePreview(preview *pb.Invoice) (*model.TenantUsage, error) {
+	if preview == nil {
+		return nil, fmt.Errorf("demo invoice preview missing")
+	}
+
+	billingPeriod := time.Now().Format("2006-01")
+	if preview.PeriodStart != nil && preview.PeriodEnd != nil {
+		billingPeriod = preview.PeriodStart.AsTime().Format("2006-01-02") + " to " + preview.PeriodEnd.AsTime().Format("2006-01-02")
+	}
+
+	lineItems := make([]*pb.LineItem, 0, len(preview.GetLineItems()))
+	var usageEntries []*model.UsageEntry
+	var costEntries []*model.CostEntry
+	totalCost := 0.0
+	for _, item := range preview.GetLineItems() {
+		if item.GetLineKey() == "base_subscription" || item.GetMeter() == "" {
+			continue
+		}
+		quantity, err := strconv.ParseFloat(item.GetQuantity(), 64)
+		if err != nil {
+			return nil, fmt.Errorf("demo line item %q quantity: %w", item.GetLineKey(), err)
+		}
+		total, err := strconv.ParseFloat(item.GetTotal(), 64)
+		if err != nil {
+			return nil, fmt.Errorf("demo line item %q total: %w", item.GetLineKey(), err)
+		}
+		lineItems = append(lineItems, item)
+		usageEntries = append(usageEntries, &model.UsageEntry{ResourceType: item.GetMeter(), Amount: quantity})
+		costEntries = append(costEntries, &model.CostEntry{ResourceType: item.GetMeter(), Cost: total})
+		totalCost += total
+	}
+
+	return &model.TenantUsage{
+		BillingPeriod: billingPeriod,
+		Usage:         usageEntries,
+		Costs:         costEntries,
+		TotalCost:     totalCost,
+		Currency:      preview.GetCurrency(),
+		LineItems:     lineItems,
+		BaseAmount:    strconv.FormatFloat(preview.GetBaseAmount(), 'f', 2, 64),
+		UsageAmount:   strconv.FormatFloat(preview.GetMeteredAmount(), 'f', 2, 64),
 	}, nil
 }
 
@@ -674,20 +710,51 @@ func bucketForGranularity(ts time.Time, granularity string) (time.Time, time.Tim
 
 // DoCreatePayment processes a payment
 func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymentInput) (*pb.PaymentResponse, error) {
+	purserMethod, methodErr := purserPaymentMethod(input.Method)
+	if methodErr != nil {
+		return nil, methodErr
+	}
+
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic payment")
-		cur := "EUR"
-		if input.Currency != nil {
-			cur = *input.Currency
+		amount, cur, ok := demoInvoicePaymentAmount(input.InvoiceID)
+		if !ok {
+			return nil, fmt.Errorf("invoice not found: %s", input.InvoiceID)
 		}
-		return &pb.PaymentResponse{
+		resp := &pb.PaymentResponse{
 			Id:        "payment_demo_" + time.Now().Format("20060102150405"),
-			Amount:    input.Amount,
+			Amount:    amount,
 			Currency:  cur,
-			Status:    "completed",
-			Method:    string(input.Method),
+			Status:    "pending",
+			Method:    purserMethod,
 			CreatedAt: timestamppb.Now(),
-		}, nil
+			ExpiresAt: timestamppb.New(time.Now().Add(30 * time.Minute)),
+		}
+		switch purserMethod {
+		case "crypto_usdc":
+			resp.WalletAddress = "0x000000000000000000000000000000000000dEaD"
+			baseUnits := demoCryptoBaseUnits(amount, "1", 6)
+			resp.ExpectedAmountBaseUnits = baseUnits.String()
+			resp.ExpectedAmountToken = demoTokenAmount(baseUnits, 6)
+			resp.QuotedPriceUsd = "1.00"
+			resp.QuoteSource = "demo"
+			resp.AssetSymbol = "USDC"
+			resp.Network = "arbitrum"
+			resp.QuotedAt = resp.CreatedAt
+		case "crypto_eth":
+			resp.WalletAddress = "0x000000000000000000000000000000000000dEaD"
+			baseUnits := demoCryptoBaseUnits(amount, "3000", 18)
+			resp.ExpectedAmountBaseUnits = baseUnits.String()
+			resp.ExpectedAmountToken = demoTokenAmount(baseUnits, 18)
+			resp.QuotedPriceUsd = "3000.00"
+			resp.QuoteSource = "demo"
+			resp.AssetSymbol = "ETH"
+			resp.Network = "arbitrum"
+			resp.QuotedAt = resp.CreatedAt
+		case "card":
+			resp.PaymentUrl = "/account/billing?payment=demo"
+		}
+		return resp, nil
 	}
 
 	tenantID := ctxkeys.GetTenantID(ctx)
@@ -696,14 +763,9 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 	}
 
 	r.Logger.WithField("tenant_id", tenantID).
-		WithField("amount", input.Amount).
 		WithField("method", input.Method).
 		Info("Creating payment")
 
-	cur := "EUR"
-	if input.Currency != nil {
-		cur = *input.Currency
-	}
 	returnURL := ""
 	if input.ReturnURL != nil {
 		returnURL = *input.ReturnURL
@@ -711,9 +773,7 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 
 	paymentReq := &pb.PaymentRequest{
 		InvoiceId: input.InvoiceID,
-		Method:    string(input.Method),
-		Amount:    input.Amount,
-		Currency:  cur,
+		Method:    purserMethod,
 		ReturnUrl: returnURL,
 	}
 
@@ -729,7 +789,7 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 	userID := userIDFromContext(ctx)
 	provider := resp.Method
 	if provider == "" {
-		provider = string(input.Method)
+		provider = purserMethod
 	}
 	r.sendServiceEvent(ctx, &pb.ServiceEvent{
 		EventType:    apiEventPaymentCreated,
@@ -750,6 +810,61 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 	})
 
 	return resp, nil
+}
+
+func demoCryptoBaseUnits(amount float64, priceUSD string, tokenDecimals int32) *big.Int {
+	price := new(big.Rat)
+	if _, ok := price.SetString(priceUSD); !ok || price.Sign() <= 0 {
+		return big.NewInt(0)
+	}
+	amountRat := new(big.Rat)
+	if _, ok := amountRat.SetString(strconv.FormatFloat(amount, 'f', 2, 64)); !ok || amountRat.Sign() <= 0 {
+		return big.NewInt(0)
+	}
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(tokenDecimals)), nil)
+	baseUnits := new(big.Rat).Mul(new(big.Rat).Quo(amountRat, price), new(big.Rat).SetInt(scale))
+	return ceilRat(baseUnits)
+}
+
+func demoTokenAmount(baseUnits *big.Int, tokenDecimals int32) string {
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(tokenDecimals)), nil)
+	return new(big.Rat).SetFrac(baseUnits, scale).FloatString(int(tokenDecimals))
+}
+
+func ceilRat(v *big.Rat) *big.Int {
+	quotient, remainder := new(big.Int).QuoRem(v.Num(), v.Denom(), new(big.Int))
+	if remainder.Sign() > 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	return quotient
+}
+
+func purserPaymentMethod(method model.PaymentMethod) (string, error) {
+	switch strings.ToUpper(string(method)) {
+	case "CARD":
+		return "card", nil
+	case "CRYPTO_ETH":
+		return "crypto_eth", nil
+	case "CRYPTO_USDC":
+		return "crypto_usdc", nil
+	case "BANK_TRANSFER":
+		return "bank_transfer", nil
+	default:
+		return "", fmt.Errorf("unsupported payment method %q", method)
+	}
+}
+
+func demoInvoicePaymentAmount(invoiceID string) (float64, string, bool) {
+	for _, inv := range demo.GenerateInvoices() {
+		if inv.GetId() == invoiceID {
+			currency := inv.GetCurrency()
+			if currency == "" {
+				currency = billing.DefaultCurrency()
+			}
+			return inv.GetAmount(), currency, true
+		}
+	}
+	return 0, "", false
 }
 
 // DoSubmitX402Payment settles an x402 payment payload and credits the billable tenant.
@@ -846,21 +961,6 @@ func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID
 		TenantId: tenantID,
 	}
 
-	// Convert custom pricing input to proto
-	if input.CustomPricing != nil {
-		pricing := &pb.CustomPricing{}
-		if input.CustomPricing.BasePrice != nil {
-			pricing.BasePrice = *input.CustomPricing.BasePrice
-		}
-		if input.CustomPricing.DiscountRate != nil {
-			pricing.DiscountRate = *input.CustomPricing.DiscountRate
-		}
-		if input.CustomPricing.OverageRates != nil {
-			pricing.OverageRates = convertOverageRatesInput(input.CustomPricing.OverageRates)
-		}
-		req.CustomPricing = pricing
-	}
-
 	// Convert custom features input to proto
 	if input.CustomFeatures != nil {
 		features := &pb.BillingFeatures{}
@@ -885,9 +985,40 @@ func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID
 		req.CustomFeatures = features
 	}
 
-	// Convert custom allocations input to proto
-	if input.CustomAllocations != nil {
-		req.CustomAllocations = convertAllocationDetailsInput(input.CustomAllocations)
+	// Pricing rule overrides — pass-through to Purser. The header update and
+	// override writes commit in a single subscription-update transaction.
+	if input.PricingOverrides != nil {
+		if len(input.PricingOverrides) == 0 {
+			req.ClearPricingOverrides = true
+		} else {
+			rules := make([]*pb.PricingRule, 0, len(input.PricingOverrides))
+			for _, r := range input.PricingOverrides {
+				rule := &pb.PricingRule{
+					Meter:            r.Meter,
+					Model:            r.Model,
+					Currency:         r.Currency,
+					IncludedQuantity: r.IncludedQuantity,
+					UnitPrice:        r.UnitPrice,
+				}
+				if r.ConfigJSON != nil {
+					rule.ConfigJson = *r.ConfigJSON
+				}
+				rules = append(rules, rule)
+			}
+			req.PricingOverrides = rules
+		}
+	}
+
+	if input.EntitlementOverrides != nil {
+		if len(input.EntitlementOverrides) == 0 {
+			req.ClearEntitlementOverrides = true
+		} else {
+			ents := make(map[string]string, len(input.EntitlementOverrides))
+			for _, e := range input.EntitlementOverrides {
+				ents[e.Key] = e.Value
+			}
+			req.EntitlementOverrides = ents
+		}
 	}
 
 	// Call Purser to update the subscription
@@ -918,40 +1049,6 @@ func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID
 	return subscription, nil
 }
 
-func convertAllocationDetailsInput(input *model.AllocationDetailsInput) *pb.AllocationDetails {
-	if input == nil {
-		return nil
-	}
-	ad := &pb.AllocationDetails{}
-	if input.Limit != nil {
-		ad.Limit = input.Limit
-	}
-	if input.UnitPrice != nil {
-		ad.UnitPrice = *input.UnitPrice
-	}
-	if input.Unit != nil {
-		ad.Unit = *input.Unit
-	}
-	return ad
-}
-
-func convertOverageRatesInput(input *model.OverageRatesInput) *pb.OverageRates {
-	if input == nil {
-		return nil
-	}
-	rates := &pb.OverageRates{}
-	if input.Bandwidth != nil {
-		rates.Bandwidth = convertAllocationDetailsInput(input.Bandwidth)
-	}
-	if input.Storage != nil {
-		rates.Storage = convertAllocationDetailsInput(input.Storage)
-	}
-	if input.Compute != nil {
-		rates.Compute = convertAllocationDetailsInput(input.Compute)
-	}
-	return rates
-}
-
 // ============================================================================
 // PREPAID BALANCE RESOLVERS
 // ============================================================================
@@ -964,10 +1061,10 @@ func (r *Resolver) DoGetPrepaidBalance(ctx context.Context, currency *string) (*
 			ID:                       "demo-balance-001",
 			TenantID:                 "demo-tenant",
 			BalanceCents:             4523,
-			Currency:                 "USD",
+			Currency:                 billing.DefaultCurrency(),
 			LowBalanceThresholdCents: 500,
 			IsLowBalance:             false,
-			DrainRateCentsPerHour:    12, // demo: ~$0.12/hr spend rate
+			DrainRateCentsPerHour:    12,
 			CreatedAt:                time.Now().Add(-30 * 24 * time.Hour),
 			UpdatedAt:                time.Now().Add(-1 * time.Hour),
 		}, nil
@@ -978,7 +1075,7 @@ func (r *Resolver) DoGetPrepaidBalance(ctx context.Context, currency *string) (*
 		return nil, fmt.Errorf("tenant_id required")
 	}
 
-	curr := "USD"
+	curr := billing.DefaultCurrency()
 	if currency != nil && *currency != "" {
 		curr = *currency
 	}
@@ -1124,37 +1221,31 @@ func (r *Resolver) DoGetBalanceTransactionsConnection(ctx context.Context, page 
 
 // DoCreateStripeCheckout creates a Stripe Checkout Session for subscription setup
 func (r *Resolver) DoCreateStripeCheckout(ctx context.Context, tierID, billingPeriod, successURL, cancelURL string) (model.StripeCheckoutResult, error) {
-	// Paid tier subscriptions are locked — re-enable when tiers are self-service
-	return &model.ValidationError{
-		Message: "Paid tier subscriptions are not currently available",
-		Code:    ptrStr("TIER_LOCKED"),
-	}, nil
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic Stripe checkout")
+		return &model.StripeCheckoutSession{
+			SessionID:   "cs_demo_" + time.Now().Format("20060102150405"),
+			CheckoutURL: "https://checkout.stripe.com/demo",
+		}, nil
+	}
 
-	// if middleware.IsDemoMode(ctx) {
-	// 	r.Logger.Debug("Demo mode: returning synthetic Stripe checkout")
-	// 	return &model.StripeCheckoutSession{
-	// 		SessionID:   "cs_demo_" + time.Now().Format("20060102150405"),
-	// 		CheckoutURL: "https://checkout.stripe.com/demo",
-	// 	}, nil
-	// }
-	//
-	// tenantID := ctxkeys.GetTenantID(ctx)
-	// if tenantID == "" {
-	// 	return &model.AuthError{Message: "Authentication required"}, nil
-	// }
-	//
-	// r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).Info("Creating Stripe checkout session")
-	//
-	// resp, err := r.Clients.Purser.CreateStripeCheckoutSession(ctx, tenantID, tierID, billingPeriod, successURL, cancelURL)
-	// if err != nil {
-	// 	r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Stripe checkout")
-	// 	return &model.ValidationError{Message: "Failed to create checkout session: " + err.Error()}, nil
-	// }
-	//
-	// return &model.StripeCheckoutSession{
-	// 	SessionID:   resp.SessionId,
-	// 	CheckoutURL: resp.CheckoutUrl,
-	// }, nil
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return &model.AuthError{Message: "Authentication required"}, nil
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).Info("Creating Stripe checkout session")
+
+	resp, err := r.Clients.Purser.CreateStripeCheckoutSession(ctx, tenantID, tierID, billingPeriod, successURL, cancelURL)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Stripe checkout")
+		return &model.ValidationError{Message: "Failed to create checkout session: " + err.Error()}, nil
+	}
+
+	return &model.StripeCheckoutSession{
+		SessionID:   resp.SessionId,
+		CheckoutURL: resp.CheckoutUrl,
+	}, nil
 }
 
 // DoCreateStripeBillingPortal creates a Stripe Billing Portal session
@@ -1190,119 +1281,107 @@ func (r *Resolver) DoCreateStripeBillingPortal(ctx context.Context, returnURL st
 
 // DoCreateMollieFirstPayment creates a Mollie first payment to establish a mandate
 func (r *Resolver) DoCreateMollieFirstPayment(ctx context.Context, tierID, method, redirectURL string) (model.MollieFirstPaymentResult, error) {
-	// Paid tier subscriptions are locked — re-enable when tiers are self-service
-	return &model.ValidationError{
-		Message: "Paid tier subscriptions are not currently available",
-		Code:    ptrStr("TIER_LOCKED"),
-	}, nil
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic Mollie first payment")
+		ts := time.Now().Format("20060102150405")
+		return &model.MollieFirstPayment{
+			PaymentID:  "tr_demo" + ts[:8],
+			CustomerID: "cst_demo" + ts[:8],
+			PaymentURL: "https://www.mollie.com/demo/checkout",
+		}, nil
+	}
 
-	// if middleware.IsDemoMode(ctx) {
-	// 	r.Logger.Debug("Demo mode: returning synthetic Mollie first payment")
-	// 	ts := time.Now().Format("20060102150405")
-	// 	return &model.MollieFirstPayment{
-	// 		PaymentID:  "tr_demo" + ts[:8],
-	// 		CustomerID: "cst_demo" + ts[:8],
-	// 		PaymentURL: "https://www.mollie.com/demo/checkout",
-	// 	}, nil
-	// }
-	//
-	// tenantID := ctxkeys.GetTenantID(ctx)
-	// if tenantID == "" {
-	// 	return &model.AuthError{Message: "Authentication required"}, nil
-	// }
-	//
-	// r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).WithField("method", method).Info("Creating Mollie first payment")
-	//
-	// resp, err := r.Clients.Purser.CreateMollieFirstPayment(ctx, tenantID, tierID, method, redirectURL)
-	// if err != nil {
-	// 	r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Mollie first payment")
-	// 	return &model.ValidationError{Message: "Failed to create payment: " + err.Error()}, nil
-	// }
-	//
-	// userID := userIDFromContext(ctx)
-	// r.sendServiceEvent(ctx, &pb.ServiceEvent{
-	// 	EventType:    apiEventPaymentCreated,
-	// 	ResourceType: "payment",
-	// 	ResourceId:   resp.PaymentId,
-	// 	Payload: &pb.ServiceEvent_BillingEvent{
-	// 		BillingEvent: &pb.BillingEvent{
-	// 			TenantId:  tenantID,
-	// 			PaymentId: resp.PaymentId,
-	// 			Provider:  "mollie",
-	// 		},
-	// 	},
-	// 	UserId: userID,
-	// })
-	//
-	// return &model.MollieFirstPayment{
-	// 	PaymentID:  resp.PaymentId,
-	// 	CustomerID: resp.MollieCustomerId,
-	// 	PaymentURL: resp.PaymentUrl,
-	// }, nil
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return &model.AuthError{Message: "Authentication required"}, nil
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).WithField("method", method).Info("Creating Mollie first payment")
+
+	resp, err := r.Clients.Purser.CreateMollieFirstPayment(ctx, tenantID, tierID, method, redirectURL)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Mollie first payment")
+		return &model.ValidationError{Message: "Failed to create payment: " + err.Error()}, nil
+	}
+
+	userID := userIDFromContext(ctx)
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventPaymentCreated,
+		ResourceType: "payment",
+		ResourceId:   resp.PaymentId,
+		Payload: &pb.ServiceEvent_BillingEvent{
+			BillingEvent: &pb.BillingEvent{
+				TenantId:  tenantID,
+				PaymentId: resp.PaymentId,
+				Provider:  "mollie",
+			},
+		},
+		UserId: userID,
+	})
+
+	return &model.MollieFirstPayment{
+		PaymentID:  resp.PaymentId,
+		CustomerID: resp.MollieCustomerId,
+		PaymentURL: resp.PaymentUrl,
+	}, nil
 }
 
 // DoCreateMollieSubscription creates a Mollie subscription after mandate is valid
 func (r *Resolver) DoCreateMollieSubscription(ctx context.Context, tierID, mandateID string, description *string) (model.MollieSubscriptionResult, error) {
-	// Paid tier subscriptions are locked — re-enable when tiers are self-service
-	return &model.ValidationError{
-		Message: "Paid tier subscriptions are not currently available",
-		Code:    ptrStr("TIER_LOCKED"),
-	}, nil
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic Mollie subscription")
+		ts := time.Now().Format("20060102150405")
+		return &model.MollieSubscription{
+			SubscriptionID:  "sub_demo" + ts[:8],
+			Status:          "active",
+			NextPaymentDate: nil,
+		}, nil
+	}
 
-	// if middleware.IsDemoMode(ctx) {
-	// 	r.Logger.Debug("Demo mode: returning synthetic Mollie subscription")
-	// 	ts := time.Now().Format("20060102150405")
-	// 	return &model.MollieSubscription{
-	// 		SubscriptionID:  "sub_demo" + ts[:8],
-	// 		Status:          "active",
-	// 		NextPaymentDate: nil,
-	// 	}, nil
-	// }
-	//
-	// tenantID := ctxkeys.GetTenantID(ctx)
-	// if tenantID == "" {
-	// 	return &model.AuthError{Message: "Authentication required"}, nil
-	// }
-	//
-	// desc := ""
-	// if description != nil {
-	// 	desc = *description
-	// }
-	//
-	// r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).WithField("mandate_id", mandateID).Info("Creating Mollie subscription")
-	//
-	// resp, err := r.Clients.Purser.CreateMollieSubscription(ctx, tenantID, tierID, mandateID, desc)
-	// if err != nil {
-	// 	r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Mollie subscription")
-	// 	return &model.ValidationError{Message: "Failed to create subscription: " + err.Error()}, nil
-	// }
-	//
-	// userID := userIDFromContext(ctx)
-	// r.sendServiceEvent(ctx, &pb.ServiceEvent{
-	// 	EventType:    apiEventSubscriptionCreated,
-	// 	ResourceType: "subscription",
-	// 	ResourceId:   resp.SubscriptionId,
-	// 	Payload: &pb.ServiceEvent_BillingEvent{
-	// 		BillingEvent: &pb.BillingEvent{
-	// 			TenantId:       tenantID,
-	// 			SubscriptionId: resp.SubscriptionId,
-	// 			Provider:       "mollie",
-	// 			Status:         resp.Status,
-	// 		},
-	// 	},
-	// 	UserId: userID,
-	// })
-	//
-	// var nextPaymentDate *string
-	// if resp.NextPaymentDate != "" {
-	// 	nextPaymentDate = &resp.NextPaymentDate
-	// }
-	//
-	// return &model.MollieSubscription{
-	// 	SubscriptionID:  resp.SubscriptionId,
-	// 	Status:          resp.Status,
-	// 	NextPaymentDate: nextPaymentDate,
-	// }, nil
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return &model.AuthError{Message: "Authentication required"}, nil
+	}
+
+	desc := ""
+	if description != nil {
+		desc = *description
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).WithField("mandate_id", mandateID).Info("Creating Mollie subscription")
+
+	resp, err := r.Clients.Purser.CreateMollieSubscription(ctx, tenantID, tierID, mandateID, desc)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Mollie subscription")
+		return &model.ValidationError{Message: "Failed to create subscription: " + err.Error()}, nil
+	}
+
+	userID := userIDFromContext(ctx)
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventSubscriptionCreated,
+		ResourceType: "subscription",
+		ResourceId:   resp.SubscriptionId,
+		Payload: &pb.ServiceEvent_BillingEvent{
+			BillingEvent: &pb.BillingEvent{
+				TenantId:       tenantID,
+				SubscriptionId: resp.SubscriptionId,
+				Provider:       "mollie",
+				Status:         resp.Status,
+			},
+		},
+		UserId: userID,
+	})
+
+	var nextPaymentDate *string
+	if resp.NextPaymentDate != "" {
+		nextPaymentDate = &resp.NextPaymentDate
+	}
+
+	return &model.MollieSubscription{
+		SubscriptionID:  resp.SubscriptionId,
+		Status:          resp.Status,
+		NextPaymentDate: nextPaymentDate,
+	}, nil
 }
 
 // DoListMollieMandates lists Mollie mandates for the current tenant
@@ -1375,7 +1454,7 @@ func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCard
 		return nil, fmt.Errorf("unsupported payment provider: %s", input.Provider)
 	}
 
-	currency := "USD"
+	currency := billing.DefaultCurrency()
 	if input.Currency != nil && *input.Currency != "" {
 		currency = *input.Currency
 	}
@@ -1494,7 +1573,7 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 		return nil, fmt.Errorf("unsupported crypto asset: %s", input.Asset)
 	}
 
-	currency := "USD"
+	currency := billing.DefaultCurrency()
 	if input.Currency != nil && *input.Currency != "" {
 		currency = *input.Currency
 	}

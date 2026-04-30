@@ -628,9 +628,6 @@ func (h *X402Handler) recoverEIP3009Signer(payload *X402PaymentPayload, network 
 		return "", fmt.Errorf("invalid recovery id: %d", v)
 	}
 
-	// Use crypto library to recover (we need go-ethereum for this)
-	// For now, return a placeholder - actual implementation needs go-ethereum/crypto
-	// In production, use: crypto.Ecrecover(messageHash, append(sig[:64], v-27))
 	recoveredAddr, err := ecrecover(messageHash, r, s, v)
 	if err != nil {
 		return "", fmt.Errorf("ecrecover failed: %w", err)

@@ -3,6 +3,7 @@ query GetBillingStatus {
   billingStatus {
     billingStatus
     currency
+    paymentMethods
     nextBillingDate
     trialEndsAt
     outstandingAmount
@@ -20,21 +21,6 @@ query GetBillingStatus {
       trialEndsAt
       nextBillingDate
       cancelledAt
-      customPricing {
-        basePrice
-        discountRate
-        overageRates {
-          bandwidth {
-            ...AllocationFields
-          }
-          storage {
-            ...AllocationFields
-          }
-          compute {
-            ...AllocationFields
-          }
-        }
-      }
       customFeatures {
         recording
         analytics
@@ -43,8 +29,17 @@ query GetBillingStatus {
         supportLevel
         sla
       }
-      customAllocations {
-        ...AllocationFields
+      pricingOverrides {
+        meter
+        model
+        currency
+        includedQuantity
+        unitPrice
+        configJson
+      }
+      entitlementOverrides {
+        key
+        value
       }
       paymentMethod
       createdAt
@@ -59,6 +54,7 @@ query GetBillingStatus {
       amount
       baseAmount
       meteredAmount
+      prepaidCreditApplied
       currency
       dueDate
       periodStart
@@ -67,10 +63,15 @@ query GetBillingStatus {
         ...UsageSummaryFields
       }
       lineItems {
+        lineKey
+        meter
         description
         quantity
+        includedQuantity
+        billableQuantity
         unitPrice
         total
+        currency
       }
     }
   }

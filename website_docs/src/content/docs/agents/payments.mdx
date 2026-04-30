@@ -10,9 +10,8 @@ import { Aside } from "@astrojs/starlight/components";
 Agents need a positive prepaid balance to create streams, clips, DVR recordings, and VOD uploads. Two funding methods are available: **x402** (inline, instant) and **crypto deposits** (on-chain transfer).
 
 <Aside type="tip">
-  API requests are free but rate limited. Current beta does not commercially enforce paid-tier usage
-  allowances for stream count, viewer connections, or delivered minutes; prepaid balance still gates
-  agent write actions and suspension handling.
+  API requests are free but rate limited. Prepaid usage is deducted as reports arrive, and prepaid
+  balance still gates agent write actions and suspension handling.
 </Aside>
 
 ## x402 Protocol
@@ -152,12 +151,13 @@ more. When requirements aren't met, the error includes resolution guidance:
 Prepaid usage deductions can move an account toward zero or negative balance. Monitor via the
 `billing://balance` resource:
 
-| Field                       | Description          |
-| --------------------------- | -------------------- |
-| `balance_cents`             | Current balance      |
-| `drain_rate_cents_per_hour` | Current spend rate   |
-| `estimated_hours_left`      | Time until depletion |
+| Field                       | Description                             |
+| --------------------------- | --------------------------------------- |
+| `balance_cents`             | Current balance                         |
+| `drain_rate_cents_per_hour` | Recent rated spend rate, when available |
+| `estimated_hours_left`      | Time until depletion                    |
+| `live_metrics`              | Current operational usage context       |
 
 At zero or below, prepaid accounts are blocked from new billable operations unless the request is
-settled with x402. If the balance drops below -$10, Purser suspends the tenant and asks
+settled with x402. If the balance drops below -€10, Purser suspends the tenant and asks
 Commodore/Foghorn to terminate active streams and sessions. Top up proactively.

@@ -60,7 +60,6 @@ service InvoiceService {
 // PaymentService handles payment processing
 service PaymentService {
   // Initiate payment for an invoice
-  // Source: pkg/api/purser/types.go:PaymentRequest (lines 243-249)
   rpc CreatePayment(PaymentRequest) returns (PaymentResponse);
 
   // Get available payment methods
@@ -134,6 +133,10 @@ message GetTenantBillingStatusResponse {
   bool is_suspended = 2;          // subscription status = 'suspended' (balance < -$10)
   bool is_balance_negative = 3;   // prepaid balance <= 0 (soft gate, return 402)
   int64 balance_cents = 4;        // current balance (for display/logging)
+  // Tier entitlements that downstream services need without a second RPC.
+  // recording_retention_days = 0 means "use the system default"
+  // (Foghorn / api_balancing fall back to 30 days).
+  int32 recording_retention_days = 5;
 }
 
 // ============================================================================
@@ -145,7 +148,6 @@ message GetBillingTiersRequest {
   common.CursorPaginationRequest pagination = 2;
 }
 
-// Matches pkg/api/purser/types.go:GetBillingTiersResponse (lines 111-115)
 message GetBillingTiersResponse {
   repeated BillingTier tiers = 1;       // json:"tiers"
   repeated string payment_methods = 2;  // json:"payment_methods"
@@ -156,7 +158,9 @@ message GetBillingTierRequest {
   string tier_id = 1;
 }
 
-// Matches pkg/models/billing.go:BillingTier (lines 169-204)
+// BillingTier mirrors purser.billing_tiers (+ tier_pricing_rules + tier_entitlements).
+// Pricing rules and entitlements are normalized into separate tables; this proto
+// flattens them onto the tier for transport to clients.
 message BillingTier {
   string id = 1;                        // json:"id"
   string tier_name = 2;                 // json:"tier_name"
@@ -165,14 +169,12 @@ message BillingTier {
   double base_price = 5;                // json:"base_price"
   string currency = 6;                  // json:"currency"
   string billing_period = 7;            // json:"billing_period"
-  AllocationDetails bandwidth_allocation = 8; // json:"bandwidth_allocation"
-  AllocationDetails storage_allocation = 9;   // json:"storage_allocation"
-  AllocationDetails compute_allocation = 10;  // json:"compute_allocation"
+  reserved 8, 9, 10, 15;                // bandwidth_allocation, storage_allocation, compute_allocation, overage_rates (removed)
+  reserved "bandwidth_allocation", "storage_allocation", "compute_allocation", "overage_rates";
   BillingFeatures features = 11;        // json:"features"
   string support_level = 12;            // json:"support_level"
   string sla_level = 13;                // json:"sla_level"
   bool metering_enabled = 14;           // json:"metering_enabled"
-  OverageRates overage_rates = 15;      // json:"overage_rates"
   bool is_active = 16;                  // json:"is_active"
   int32 tier_level = 17;                // json:"tier_level"
   bool is_enterprise = 18;              // json:"is_enterprise"
@@ -190,9 +192,23 @@ message BillingTier {
   // MistServer process definitions per stream type (raw JSON arrays with {{gateway_url}} placeholder)
   string processes_live = 26;   // Process config for live streams
   string processes_vod = 27;    // Process config for VOD processing
+
+  // Rating engine inputs.
+  repeated PricingRule pricing_rules = 28; // priced behaviors per meter
+  map<string, string> entitlements = 29;   // non-billing grants, JSON-encoded values
 }
 
-// Matches pkg/models/billing.go:BillingFeatures (lines 12-19)
+// PricingRule is one priced behavior on a tier (or override on a subscription).
+// Mirrors purser.tier_pricing_rules.
+message PricingRule {
+  string meter = 1;             // delivered_minutes | average_storage_gb | ai_gpu_hours | processing_seconds
+  string model = 2;             // tiered_graduated | all_usage | codec_multiplier
+  string currency = 3;          // ISO 4217
+  string included_quantity = 4; // decimal as string
+  string unit_price = 5;        // decimal as string
+  string config_json = 6;       // model-specific config (JSON object)
+}
+
 message BillingFeatures {
   bool recording = 1;                   // json:"recording"
   bool analytics = 2;                   // json:"analytics"
@@ -203,21 +219,9 @@ message BillingFeatures {
   bool processing_customizable = 7;     // json:"processing_customizable,omitempty" - tenant can override tier process config
 }
 
-// Matches pkg/models/billing.go:AllocationDetails (lines 24-28)
-message AllocationDetails {
-  optional double limit = 1;            // json:"limit" (nil = unlimited)
-  double unit_price = 2;                // json:"unit_price,omitempty"
-  string unit = 3;                      // json:"unit,omitempty"
-}
-
-// Matches pkg/models/billing.go:OverageRates (lines 31-35)
-message OverageRates {
-  AllocationDetails bandwidth = 1;      // json:"bandwidth,omitempty"
-  AllocationDetails storage = 2;        // json:"storage,omitempty"
-  AllocationDetails compute = 3;        // json:"compute,omitempty"
-}
-
-// Matches pkg/api/purser/types.go:CreateTierRequest (lines 176-193)
+// CreateBillingTierRequest creates a new tier in purser.billing_tiers. Pricing
+// rules and entitlements are populated separately via dedicated admin RPCs (or
+// the bootstrap reconciler); this RPC creates the parent tier row only.
 message CreateBillingTierRequest {
   string tier_name = 1;                 // json:"tier_name" required
   string display_name = 2;              // json:"display_name" required
@@ -225,19 +229,16 @@ message CreateBillingTierRequest {
   double base_price = 4;                // json:"base_price"
   string currency = 5;                  // json:"currency"
   string billing_period = 6;            // json:"billing_period"
-  AllocationDetails bandwidth_allocation = 7;
-  AllocationDetails storage_allocation = 8;
-  AllocationDetails compute_allocation = 9;
+  reserved 7, 8, 9, 14;                 // bandwidth/storage/compute_allocation, overage_rates (removed)
+  reserved "bandwidth_allocation", "storage_allocation", "compute_allocation", "overage_rates";
   BillingFeatures features = 10;
   string support_level = 11;            // json:"support_level"
   string sla_level = 12;                // json:"sla_level"
   bool metering_enabled = 13;           // json:"metering_enabled"
-  OverageRates overage_rates = 14;
   int32 tier_level = 15;                // json:"tier_level"
   bool is_enterprise = 16;              // json:"is_enterprise"
 }
 
-// Matches pkg/api/purser/types.go:UpdateTierRequest (lines 196-213)
 message UpdateBillingTierRequest {
   string tier_id = 1;                   // target tier
   optional string display_name = 2;     // json:"display_name,omitempty"
@@ -245,14 +246,12 @@ message UpdateBillingTierRequest {
   optional double base_price = 4;       // json:"base_price,omitempty"
   optional string currency = 5;         // json:"currency,omitempty"
   optional string billing_period = 6;   // json:"billing_period,omitempty"
-  optional AllocationDetails bandwidth_allocation = 7;
-  optional AllocationDetails storage_allocation = 8;
-  optional AllocationDetails compute_allocation = 9;
+  reserved 7, 8, 9, 14;
+  reserved "bandwidth_allocation", "storage_allocation", "compute_allocation", "overage_rates";
   optional BillingFeatures features = 10;
   optional string support_level = 11;   // json:"support_level,omitempty"
   optional string sla_level = 12;       // json:"sla_level,omitempty"
   optional bool metering_enabled = 13;  // json:"metering_enabled,omitempty"
-  optional OverageRates overage_rates = 14;
   optional int32 tier_level = 15;       // json:"tier_level,omitempty"
   optional bool is_enterprise = 16;     // json:"is_enterprise,omitempty"
   optional bool is_active = 17;         // json:"is_active,omitempty"
@@ -266,7 +265,6 @@ message GetSubscriptionRequest {
   string tenant_id = 1;
 }
 
-// Matches pkg/api/purser/types.go:GetSubscriptionResponse (lines 82-85)
 message GetSubscriptionResponse {
   TenantSubscription subscription = 1;  // json:"subscription,omitempty"
   string error = 2;                     // json:"error,omitempty"
@@ -300,7 +298,6 @@ message BillingDetails {
   google.protobuf.Timestamp updated_at = 7;
 }
 
-// Matches pkg/models/billing.go:TenantSubscription (lines 207-238)
 message TenantSubscription {
   string id = 1;                        // json:"id"
   string tenant_id = 2;                 // json:"tenant_id"
@@ -311,9 +308,13 @@ message TenantSubscription {
   optional google.protobuf.Timestamp trial_ends_at = 7; // json:"trial_ends_at,omitempty"
   optional google.protobuf.Timestamp next_billing_date = 8; // json:"next_billing_date,omitempty"
   optional google.protobuf.Timestamp cancelled_at = 9; // json:"cancelled_at,omitempty"
-  CustomPricing custom_pricing = 10;    // json:"custom_pricing"
+  reserved 10, 12;                      // custom_pricing, custom_allocations (removed)
+  reserved "custom_pricing", "custom_allocations";
   BillingFeatures custom_features = 11; // json:"custom_features"
-  AllocationDetails custom_allocations = 12; // json:"custom_allocations"
+  // Per-subscription pricing/entitlement overlays live in
+  // purser.subscription_pricing_overrides and purser.subscription_entitlement_overrides.
+  repeated PricingRule pricing_overrides = 30;     // override rules by meter
+  map<string, string> entitlement_overrides = 31;  // override entitlement keys
   optional string payment_method = 13;  // json:"payment_method,omitempty"
   optional string payment_reference = 14; // json:"payment_reference,omitempty"
   BillingAddress billing_address = 15;  // json:"billing_address"
@@ -342,14 +343,6 @@ message TenantSubscription {
   optional string billing_company = 29;            // Company name for invoices
 }
 
-// Matches pkg/models/billing.go:CustomPricing (lines 57-61)
-message CustomPricing {
-  double base_price = 1;                // json:"base_price,omitempty"
-  double discount_rate = 2;             // json:"discount_rate,omitempty"
-  OverageRates overage_rates = 3;       // json:"overage_rates,omitempty"
-}
-
-// Matches pkg/models/billing.go:BillingAddress (lines 47-54)
 message BillingAddress {
   string street = 1;                    // json:"street"
   string city = 2;                      // json:"city"
@@ -358,16 +351,15 @@ message BillingAddress {
   string country = 5;                   // json:"country"
 }
 
-// Matches pkg/api/purser/types.go:CreateSubscriptionRequest (lines 218-227)
 message CreateSubscriptionRequest {
   string tenant_id = 1;                 // json:"tenant_id" required
   string tier_id = 2;                   // json:"tier_id" required
   string billing_email = 3;             // json:"billing_email" required
   string payment_method = 4;            // json:"payment_method"
   optional google.protobuf.Timestamp trial_ends_at = 5; // json:"trial_ends_at,omitempty"
-  CustomPricing custom_pricing = 6;     // json:"custom_pricing,omitempty"
+  reserved 6, 8;                        // custom_pricing, custom_allocations (removed)
+  reserved "custom_pricing", "custom_allocations";
   BillingFeatures custom_features = 7;  // json:"custom_features,omitempty"
-  AllocationDetails custom_allocations = 8; // json:"custom_allocations,omitempty"
   optional google.protobuf.Timestamp billing_period_start = 9; // json:"billing_period_start,omitempty"
   optional google.protobuf.Timestamp billing_period_end = 10;  // json:"billing_period_end,omitempty"
 
@@ -375,18 +367,26 @@ message CreateSubscriptionRequest {
   string billing_model = 11;            // json:"billing_model"
 }
 
-// Matches pkg/api/purser/types.go:UpdateSubscriptionRequest (lines 230-238)
 message UpdateSubscriptionRequest {
   string tenant_id = 1;                 // target subscription
   optional string tier_id = 2;          // json:"tier_id,omitempty"
   optional string billing_email = 3;    // json:"billing_email,omitempty"
   optional string payment_method = 4;   // json:"payment_method,omitempty"
   optional string status = 5;           // json:"status,omitempty"
-  optional CustomPricing custom_pricing = 6;
+  reserved 6, 8;
+  reserved "custom_pricing", "custom_allocations";
   optional BillingFeatures custom_features = 7;
-  optional AllocationDetails custom_allocations = 8;
   optional google.protobuf.Timestamp billing_period_start = 9; // json:"billing_period_start,omitempty"
   optional google.protobuf.Timestamp billing_period_end = 10;  // json:"billing_period_end,omitempty"
+
+  // Per-subscription pricing/entitlement overrides. When set, the override
+  // tables are replaced wholesale for this subscription. Empty repeated /
+  // empty map means "no change"; pass an explicit clear via the dedicated
+  // ClearOverrides bool fields.
+  repeated PricingRule pricing_overrides = 11;
+  map<string, string> entitlement_overrides = 12;
+  bool clear_pricing_overrides = 13;
+  bool clear_entitlement_overrides = 14;
 }
 
 message CancelSubscriptionRequest {
@@ -401,21 +401,25 @@ message GetInvoiceRequest {
   string invoice_id = 1;
 }
 
-// Matches pkg/api/purser/types.go:GetInvoiceResponse (lines 118-121)
 message GetInvoiceResponse {
   Invoice invoice = 1;                  // json:"invoice"
   BillingTier tier = 2;                 // json:"tier"
 }
 
-// LineItem represents a single line on an invoice
+// LineItem is the rating engine's output line — one priced behavior on an
+// invoice or usage preview. Decimal fields are strings to preserve precision.
 message LineItem {
-  string description = 1;                 // Display text (e.g., "Professional Tier", "Delivered Minutes")
-  int32 quantity = 2;                     // Count or 1 for flat items
-  double unit_price = 3;                  // Price per unit
-  double total = 4;                       // quantity * unit_price
+  string description = 1;          // Display text
+  string quantity = 2;             // Total quantity used (was int32; now string for decimals)
+  string unit_price = 3;           // Decimal as string
+  string total = 4;                // = billable_quantity * unit_price; rounded to 2dp
+  string line_key = 5;             // Stable identity: "base_subscription", "meter:<name>", "meter:<name>:codec:<codec>"
+  string meter = 6;                // Meter name; empty for base_subscription
+  string included_quantity = 7;    // Free quantity (decimal as string)
+  string billable_quantity = 8;    // = max(0, quantity - included_quantity)
+  string currency = 9;             // ISO 4217
 }
 
-// Matches pkg/models/billing.go:Invoice (lines 253-266)
 message Invoice {
   string id = 1;                        // json:"id"
   string tenant_id = 2;                 // json:"tenant_id"
@@ -436,14 +440,12 @@ message Invoice {
   repeated LineItem line_items = 17;          // Generated invoice line items
 }
 
-// Matches pkg/api/purser/types.go:GetInvoicesRequest (lines 124-128)
 message ListInvoicesRequest {
   string tenant_id = 1;                 // target tenant
   optional string status = 2;           // json:"status,omitempty"
   common.CursorPaginationRequest pagination = 3;
 }
 
-// Matches pkg/api/purser/types.go:GetInvoicesResponse (lines 137-140)
 message ListInvoicesResponse {
   repeated Invoice invoices = 1;        // json:"invoices"
   common.CursorPaginationResponse pagination = 2;
@@ -453,16 +455,14 @@ message ListInvoicesResponse {
 // PAYMENT MESSAGES
 // ============================================================================
 
-// Matches pkg/api/purser/types.go:PaymentRequest (lines 243-249)
 message PaymentRequest {
   string invoice_id = 1;                // json:"invoice_id" required
-  string method = 2;                    // json:"method" required (mollie, crypto_btc, etc.)
-  double amount = 3;                    // json:"amount" required
-  string currency = 4;                  // json:"currency" required
+  string method = 2;                    // json:"method" required (card, crypto_eth, crypto_usdc, bank_transfer)
+  reserved 3, 4;                        // amount/currency are derived from the invoice
+  reserved "amount", "currency";
   string return_url = 5;                // json:"return_url,omitempty"
 }
 
-// Matches pkg/api/purser/types.go:PaymentResponse (lines 252-261)
 message PaymentResponse {
   string id = 1;                        // json:"id"
   string payment_url = 2;               // json:"payment_url,omitempty" (traditional)
@@ -472,15 +472,21 @@ message PaymentResponse {
   optional google.protobuf.Timestamp expires_at = 6; // json:"expires_at,omitempty"
   string status = 7;                    // json:"status"
   string qr_code = 8;                   // json:"qr_code,omitempty" (crypto)
-  string method = 9;                    // json:"method" (card, crypto, bank_transfer)
+  string method = 9;                    // json:"method" (card, crypto_eth, crypto_usdc, bank_transfer)
   google.protobuf.Timestamp created_at = 10; // json:"created_at"
+  string expected_amount_base_units = 11; // token base units the payer must send
+  string expected_amount_token = 12;    // whole-token decimal display amount
+  string quoted_price_usd = 13;         // locked USD price for one whole token
+  string quote_source = 14;             // chainlink, one_to_one, etc.
+  string asset_symbol = 15;             // ETH, USDC
+  string network = 16;                  // ethereum, arbitrum, base, etc.
+  optional google.protobuf.Timestamp quoted_at = 17; // when the quote was locked
 }
 
 message GetPaymentMethodsRequest {
   string tenant_id = 1;
 }
 
-// Matches pkg/api/purser/types.go:PaymentMethodResponse (lines 159-161)
 message PaymentMethodResponse {
   repeated string methods = 1;          // json:"methods"
 }
@@ -501,13 +507,14 @@ message BillingStatusResponse {
   repeated Invoice pending_invoices = 8; // Pending invoices awaiting payment
   repeated Payment recent_payments = 9;  // Last 5 payments
   UsageSummary usage_summary = 10;       // Current month usage aggregation (typed)
+  repeated string payment_methods = 11;  // Public methods: card, crypto_eth, crypto_usdc, bank_transfer
 }
 
 // Payment record
 message Payment {
   string id = 1;
   string invoice_id = 2;
-  string method = 3;                     // stripe, mollie, crypto_btc, etc.
+  string method = 3;                     // card, crypto_eth, crypto_usdc, bank_transfer
   double amount = 4;
   string currency = 5;
   string tx_id = 6;                      // Transaction ID from payment provider
@@ -521,7 +528,6 @@ message Payment {
 // USAGE MESSAGES
 // ============================================================================
 
-// Matches pkg/api/purser/types.go:UsageIngestRequest (lines 97-101)
 message UsageIngestRequest {
   repeated UsageSummary usage_summaries = 1; // json:"usage_summaries"
   string source = 2;                    // json:"source"
@@ -538,7 +544,6 @@ message CountryMetrics {
 }
 
 // Usage summary from Periscope (15-minute interval aggregations)
-// Matches pkg/models/service_types.go:UsageSummary
 message UsageSummary {
   string tenant_id = 1;
   string cluster_id = 2;
@@ -607,9 +612,13 @@ message UsageSummary {
   uint64 freeze_bytes = 45;
   uint32 defrost_count = 46;
   uint64 defrost_bytes = 47;
+
+  // AI GPU compute, in hours. Producers attribute GPU usage from AI workloads
+  // here so per-event prepaid deduction can bill it in real time and the
+  // monthly aggregation path picks it up via processUsageSummary.
+  double gpu_hours = 48;
 }
 
-// Matches pkg/api/purser/types.go:UsageIngestResponse (lines 104-108)
 message UsageIngestResponse {
   int32 processed_count = 1;            // json:"processed_count"
   bool success = 2;                     // json:"success"
@@ -624,7 +633,6 @@ message GetUsageRecordsRequest {
   common.CursorPaginationRequest pagination = 5;
 }
 
-// Matches pkg/api/purser/types.go:UsageRecord (lines 278-288)
 message UsageRecord {
   string id = 1;                        // json:"id"
   string tenant_id = 2;                 // json:"tenant_id"
@@ -639,7 +647,6 @@ message UsageRecord {
   string granularity = 11;              // json:"granularity"
 }
 
-// Matches pkg/api/purser/types.go:UsageRecordsResponse (lines 291-296)
 message UsageRecordsResponse {
   repeated UsageRecord usage_records = 1; // json:"usage_records"
   string tenant_id = 2;                 // json:"tenant_id"
@@ -666,20 +673,17 @@ message GetUsageAggregatesResponse {
   repeated UsageAggregate aggregates = 1;
 }
 
-// Matches pkg/api/purser/types.go:UsageFilters (lines 299-303)
 message UsageFilters {
   string cluster_id = 1;                // json:"cluster_id"
   string usage_type = 2;                // json:"usage_type"
   common.TimeRange time_range = 3;      // json:"time_range"
 }
 
-// Matches pkg/api/purser/types.go:CheckUserLimitRequest (lines 22-25)
 message CheckUserLimitRequest {
   string tenant_id = 1;                 // json:"tenant_id"
   string email = 2;                     // json:"email"
 }
 
-// Matches pkg/api/purser/types.go:CheckUserLimitResponse (lines 28-33)
 message CheckUserLimitResponse {
   bool allowed = 1;                     // json:"allowed"
   int32 current_users = 2;              // json:"current_users,omitempty"
@@ -691,21 +695,29 @@ message CheckUserLimitResponse {
 // TENANT USAGE AGGREGATION
 // ============================================================================
 
-// Matches pkg/api/purser/types.go:TenantUsageRequest (lines 52-56)
 message TenantUsageRequest {
   string tenant_id = 1;                 // json:"tenant_id"
   string start_date = 2;                // json:"start_date"
   string end_date = 3;                  // json:"end_date"
 }
 
-// Matches pkg/api/purser/types.go:TenantUsageResponse (lines 59-66)
+// TenantUsageResponse returns rated usage for a tenant period. line_items are
+// the metered rating-engine outputs only — the monthly base subscription fee
+// is reported separately in base_amount, since "preview cost for this period"
+// is the metered/overage figure, not a full pro-rated invoice.
 message TenantUsageResponse {
   string tenant_id = 1;                 // json:"tenant_id"
   string billing_period = 2;            // json:"billing_period"
-  map<string, double> usage = 3;        // json:"usage" (resource_type -> usage)
-  map<string, double> costs = 4;        // json:"costs" (resource_type -> cost)
+  map<string, double> usage = 3;        // json:"usage" (meter -> quantity)
+  map<string, double> costs = 4;        // json:"costs" (meter -> amount)
+  // Metered cost only (= sum of line_items). To get an "all-in" figure, add
+  // base_amount.
   double total_cost = 5;                // json:"total_cost"
   string currency = 6;                  // json:"currency"
+  // Metered line items (one per priced meter); excludes base_subscription.
+  repeated LineItem line_items = 7;
+  string base_amount = 8;               // decimal-string base subscription portion (informational)
+  string usage_amount = 9;              // decimal-string metered portion (= total_cost)
 }
 
 // ============================================================================
@@ -945,13 +957,13 @@ message BalanceTransaction {
 
 message GetPrepaidBalanceRequest {
   string tenant_id = 1;
-  string currency = 2;                  // Optional, defaults to USD
+  string currency = 2;                  // Optional, defaults to EUR
 }
 
 message TopupBalanceRequest {
   string tenant_id = 1;
   int64 amount_cents = 2;               // Amount to add (must be positive)
-  string currency = 3;                  // Optional, defaults to USD
+  string currency = 3;                  // Optional, defaults to EUR
   string description = 4;               // e.g., "Crypto top-up: 0.1 ETH"
   optional string reference_id = 5;     // e.g., crypto_wallet_id
   optional string reference_type = 6;   // e.g., "crypto_payment"
@@ -960,8 +972,8 @@ message TopupBalanceRequest {
 message DeductBalanceRequest {
   string tenant_id = 1;
   int64 amount_cents = 2;               // Amount to deduct (must be positive, will be stored as negative)
-  string currency = 3;                  // Optional, defaults to USD
-  string description = 4;               // e.g., "Usage: 2.5 viewer-hours @ $0.01/hr"
+  string currency = 3;                  // Optional, defaults to EUR
+  string description = 4;               // e.g., "Usage: 2.5 viewer-hours @ EUR 0.01/hr"
   optional string reference_id = 5;     // e.g., usage_record_id
   optional string reference_type = 6;   // e.g., "usage_record"
 }
@@ -969,7 +981,7 @@ message DeductBalanceRequest {
 message AdjustBalanceRequest {
   string tenant_id = 1;
   int64 amount_cents = 2;               // Can be positive (credit) or negative (debit)
-  string currency = 3;                  // Optional, defaults to USD
+  string currency = 3;                  // Optional, defaults to EUR
   string description = 4;               // Required - reason for adjustment
   optional string reference_id = 5;
   optional string reference_type = 6;
@@ -989,16 +1001,16 @@ message ListBalanceTransactionsResponse {
 
 message InitializePrepaidBalanceRequest {
   string tenant_id = 1;
-  string currency = 2;                  // Optional, defaults to USD
+  string currency = 2;                  // Optional, defaults to EUR
   int64 initial_balance_cents = 3;      // Usually 0 for new wallet accounts
-  int64 low_balance_threshold_cents = 4; // Optional, defaults to 500 ($5)
+  int64 low_balance_threshold_cents = 4; // Optional, defaults to 500 (EUR 5)
 }
 
 // Initialize full prepaid account for wallet provisioning.
 // Creates subscription (billing_model=prepaid) + prepaid balance in one call.
 message InitializePrepaidAccountRequest {
   string tenant_id = 1;
-  string currency = 2;                  // Optional, defaults to USD
+  string currency = 2;                  // Optional, defaults to EUR
 }
 
 message InitializePrepaidAccountResponse {
@@ -1029,8 +1041,8 @@ message InitializePostpaidAccountResponse {
 // Request to create a card checkout session for prepaid top-up
 message CreateCardTopupRequest {
   string tenant_id = 1;
-  int64 amount_cents = 2;               // Amount to top up (minimum $5 / 500 cents)
-  string currency = 3;                  // Optional, defaults to USD
+  int64 amount_cents = 2;               // Amount to top up (minimum EUR 5 / 500 cents)
+  string currency = 3;                  // Optional, defaults to EUR
   string provider = 4;                  // "stripe" or "mollie"
   string success_url = 5;               // Redirect after successful payment
   string cancel_url = 6;                // Redirect if user cancels
@@ -1107,8 +1119,8 @@ enum CryptoAsset {
 message CreateCryptoTopupRequest {
   string tenant_id = 1;
   int64 expected_amount_cents = 2;     // Target credit amount in `currency` cents
-  CryptoAsset asset = 3;               // ETH, USDC, or LPT
-  string currency = 4;                 // Target currency for balance (USD, EUR) - defaults to USD
+  CryptoAsset asset = 3;               // ETH or USDC; LPT is reserved
+  string currency = 4;                 // Target currency for balance (EUR, USD) - defaults to EUR
   // Field 5 reserved for future per-call network override.
   reserved 5;
   reserved "network";
@@ -1118,7 +1130,7 @@ message CreateCryptoTopupResponse {
   string topup_id = 1;                 // Internal tracking ID
   string deposit_address = 2;          // HD-derived Ethereum address
   CryptoAsset asset = 3;
-  string asset_symbol = 4;             // Human-readable: "ETH", "USDC", "LPT"
+  string asset_symbol = 4;             // Human-readable asset symbol
   int64 expected_amount_cents = 5;     // Echo back of request's expected_amount_cents
   google.protobuf.Timestamp expires_at = 6;  // Address valid for 24h
   string qr_code_data = 7;             // QR code as data URI (optional)

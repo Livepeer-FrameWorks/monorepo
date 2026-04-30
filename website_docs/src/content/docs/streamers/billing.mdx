@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-FrameWorks billing is in beta. Today the shared Free service is not enforcing paid-tier usage allowances for live streams, viewer connections, or delivered-minute usage. API request rate limits still apply for abuse protection. The prepaid and paid tiers below are seeded in the platform but are not commercially enforced yet.
+FrameWorks billing is in beta. Paid plans are rated from metered usage, prepaid balances are deducted as usage is reported, and postpaid invoices are drafted for the active billing period. API request rate limits still apply for abuse protection.
 
 <Aside type="note">
   **Beta Pricing:** Current rates are beta pricing. As we scale, pricing may adjust—but you keep the
@@ -28,15 +28,17 @@ The delivered minutes price is **all-inclusive**: bandwidth, transcoding, and AB
 <Aside type="tip">
   **API requests are free.** Stream creation, analytics queries, configuration changes—all API
   operations cost nothing, though API traffic is still subject to request throttling. You only pay
-  when viewers watch or you store recordings once commercial enforcement is enabled.
+  when viewers watch, when recordings are stored, or when AI GPU workloads run.
 </Aside>
 
 ## Free Tier
 
-Access to the shared Free service with no current tier-based caps on live streams or viewer connections. API request limits still apply.
+Access to the shared Free service with the included allowances below. API request limits still apply.
 
 **Included:**
 
+- 10,000 delivered minutes/month
+- 7-day recording retention
 - Shared cluster access
 - Livepeer-backed transcoding
 - Analytics dashboard
@@ -45,7 +47,7 @@ Access to the shared Free service with no current tier-based caps on live stream
 **Seeded limitations:**
 
 - Recording is not included on the seeded Free tier
-- No GPU hours
+- No GPU hours (no AI workloads)
 - Watermarked player
 - Community support only
 - No SLA
@@ -62,17 +64,20 @@ Add funds to a prepaid balance and pay as usage accrues. Usage is deducted at th
 
 | Resource          | Rate         |
 | ----------------- | ------------ |
-| Delivered Minutes | €0.00049/min |
-| Storage (avg GB)  | €0.01/GB     |
-| GPU Hours         | €0.50/hr     |
+| Delivered Minutes | €0.00055/min |
+| Storage (avg GB)  | €0.035/GB    |
+| GPU Hours         | €1.50/hr     |
 
-## Metered Tiers (Planned)
+GPU-hours apply to AI workloads (live transcription, V2V transformations, automated highlights).
+Standard transcoding and multiview compositing are bundled into delivered minutes.
+
+## Metered Tiers
 
 Paid tiers include monthly allocations with overage billing:
 
 | Tier       | Base   | Delivered Minutes | GPU Hours | Retention |
 | ---------- | ------ | ----------------- | --------- | --------- |
-| Supporter  | €79    | 150K              | 10        | 90 days   |
+| Supporter  | €79    | 120K              | 10        | 90 days   |
 | Developer  | €249   | 500K              | 50        | 180 days  |
 | Production | €999   | 2M                | 250       | 365 days  |
 | Enterprise | Custom | Custom            | Custom    | Custom    |
@@ -81,9 +86,9 @@ Paid tiers include monthly allocations with overage billing:
 
 | Tier       | Delivered Minutes | Storage (avg GB) | GPU Hours |
 | ---------- | ----------------- | ---------------- | --------- |
-| Supporter  | €0.00049/min      | €0.01/GB         | €0.50/hr  |
-| Developer  | €0.00047/min      | €0.008/GB        | €0.50/hr  |
-| Production | €0.00045/min      | €0.005/GB        | €0.50/hr  |
+| Supporter  | €0.00055/min      | €0.035/GB        | €1.50/hr  |
+| Developer  | €0.00052/min      | €0.030/GB        | €1.50/hr  |
+| Production | €0.00050/min      | €0.025/GB        | €1.50/hr  |
 | Enterprise | Custom            | Custom           | Custom    |
 
 ## Billing Models
@@ -100,9 +105,9 @@ Load credits first, use resources as you go. Balance decreases as usage accrues.
 | €0 or below | New ingests blocked; playback may return 402 |
 | Below -€10  | Account suspended; streams terminated        |
 
-### Postpaid (Planned)
+### Postpaid
 
-Monthly subscription with included allocations. Overages invoiced at period end. Requires verified billing details. Planned for paid tiers; not active yet.
+Monthly subscription with included delivered-minute and GPU allocations. Storage is rated by average GB stored during the period. Overages are drafted during the billing period and invoiced at period end. Requires verified billing details.
 
 ## Topping Up
 

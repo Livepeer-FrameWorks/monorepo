@@ -61,14 +61,14 @@ ON CONFLICT (tenant_id, cluster_id) DO NOTHING;
 -- Demo user
 INSERT INTO commodore.users (id, tenant_id, email, password_hash, first_name, last_name, role, permissions)
 VALUES ('5eedface-5e1f-da7a-face-5e1fda7a0001', '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo@frameworks.dev', '$2a$10$MJAqE.2jQ/tbbkhQs68VHOm50iIEoq4tQIiF7PUfSJfzGuCKVsAla', 'Demo', 'User', 'owner', ARRAY['streams:read','streams:write','analytics:read','users:read','users:write','settings:write'])
-ON CONFLICT (email) DO NOTHING;
+ON CONFLICT DO NOTHING;
 
 UPDATE commodore.users SET verified = TRUE WHERE email = 'demo@frameworks.dev' AND tenant_id = '5eed517e-ba5e-da7a-517e-ba5eda7a0001';
 
 -- Service account
 INSERT INTO commodore.users (id, tenant_id, email, password_hash, first_name, last_name, role, permissions, is_active, verified)
 VALUES ('5eeddeaf-dead-beef-deaf-deadbeef0000', '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'service@internal', 'no-login', 'Service', 'Account', 'service', ARRAY['*'], TRUE, TRUE)
-ON CONFLICT (email) DO NOTHING;
+ON CONFLICT DO NOTHING;
 
 -- Demo API token for programmatic access testing
 -- Input token format: "fw_" + 64 hex chars (matching developer_tokens package format)
@@ -169,91 +169,80 @@ ON CONFLICT (node_id) DO NOTHING;
 -- Billing tiers required by the demo subscription rows below. Production
 -- clusters reconcile the canonical catalog through purser bootstrap; this file
 -- is only the Docker dev/demo fixture loaded on a fresh volume.
+--
+-- Pricing rules (purser.tier_pricing_rules) and entitlements
+-- (purser.tier_entitlements) are seeded below as separate rows.
 INSERT INTO purser.billing_tiers (
     tier_name, display_name, description, base_price, currency,
-    bandwidth_allocation, storage_allocation, compute_allocation,
-    features, support_level, sla_level, metering_enabled, overage_rates,
+    features, support_level, sla_level, metering_enabled,
     tier_level, is_enterprise, is_default_prepaid, is_default_postpaid,
     processes_live, processes_vod
 ) VALUES
-('payg', 'Pay As You Go', 'Prepaid pay-as-you-go pricing with no included allocations.', 0.00, 'EUR',
-'{"limit": 0, "unit": "delivered_minutes", "unit_price": 0.00049}',
-'{"limit": 0, "unit": "gb", "unit_price": 0.01}',
-'{"limit": 0, "unit": "gpu_hours", "unit_price": 0.50}',
+('payg', 'Pay As You Go', 'Prepaid pay-as-you-go pricing with no included usage.', 0.00, 'EUR',
 '{"recording": true, "analytics": true, "api_access": true, "support_level": "community"}',
-'community', 'none', true,
-'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0.00049}, "storage": {"limit": null, "unit": "gb", "unit_price": 0.01}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0.50}, "processing": {"h264_rate_per_min": 0, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0}}}',
-0, false, true, false,
-'[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none","x-LSP-name":"Audio to AAC"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":3200000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360","x-LSP-name":"ABR Transcode"},{"process":"Thumbs","x-LSP-name":"Thumbnail Sprites"}]',
-'[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":3200000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]'),
+'community', 'none', true, 0, false, true, false, '[]', '[]'),
 ('free', 'Free', 'Self-hosted with Livepeer transcoding. Watermarked player, no SLA.', 0.00, 'EUR',
-'{"limit": null, "unit": "delivered_minutes", "unit_price": 0}',
-'{"limit": 30, "unit": "retention_days", "unit_price": 0}',
-'{"limit": 0, "unit": "gpu_hours", "unit_price": 0}',
 '{"recording": false, "analytics": true, "api_access": true, "support_level": "community"}',
-'community', 'none', false,
-'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0}, "storage": {"limit": null, "unit": "gb", "unit_price": 0}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0}, "processing": {"h264_rate_per_min": 0, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0}}}',
-1, false, false, true,
-'[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none","x-LSP-name":"Audio to AAC"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":3200000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360","x-LSP-name":"ABR Transcode"},{"process":"Thumbs","x-LSP-name":"Thumbnail Sprites"}]',
-'[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":3200000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]'),
-('supporter', 'Supporter', '150K delivered mins, 10 GPU-hrs, hosted LB, custom subdomain. ~100-300 viewers.', 79.00, 'EUR',
-'{"limit": 150000, "unit": "delivered_minutes", "unit_price": 0.00049}',
-'{"limit": 90, "unit": "retention_days", "unit_price": 0}',
-'{"limit": 10, "unit": "gpu_hours", "unit_price": 0.50}',
+'community', 'none', false, 1, false, false, true, '[]', '[]'),
+('supporter', 'Supporter', '120K delivered mins, 10 GPU-hrs, hosted LB, custom subdomain. ~100-300 viewers.', 79.00, 'EUR',
 '{"recording": true, "analytics": true, "api_access": true, "support_level": "basic"}',
-'basic', 'none', true,
-'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0.00049}, "storage": {"limit": null, "unit": "gb", "unit_price": 0.01}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0.50}, "processing": {"h264_rate_per_min": 0, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0}}}',
-2, false, false, false,
-'[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none","x-LSP-name":"Audio to AAC"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":3200000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360","x-LSP-name":"ABR Transcode"},{"process":"Thumbs","x-LSP-name":"Thumbnail Sprites"}]',
-'[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":3200000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]'),
+'basic', 'none', true, 2, false, false, false, '[]', '[]'),
 ('developer', 'Developer', '500K delivered mins, 50 GPU-hrs (priority), team features, advanced analytics. ~500-1K viewers.', 249.00, 'EUR',
-'{"limit": 500000, "unit": "delivered_minutes", "unit_price": 0.00047}',
-'{"limit": 180, "unit": "retention_days", "unit_price": 0}',
-'{"limit": 50, "unit": "gpu_hours", "unit_price": 0.50}',
 '{"recording": true, "analytics": true, "api_access": true, "support_level": "priority"}',
-'priority', 'standard', true,
-'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0.00047}, "storage": {"limit": null, "unit": "gb", "unit_price": 0.008}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0.50}, "processing": {"h264_rate_per_min": 0, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0}}}',
-3, false, false, false,
-'[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none","x-LSP-name":"Audio to AAC"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":3200000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360","x-LSP-name":"ABR Transcode"},{"process":"Thumbs","x-LSP-name":"Thumbnail Sprites"}]',
-'[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":3200000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]'),
+'priority', 'standard', true, 3, false, false, false, '[]', '[]'),
 ('production', 'Production', '2M delivered mins, 250 GPU-hrs, dedicated capacity, 24/7 support + SLA. ~2-5K viewers.', 999.00, 'EUR',
-'{"limit": 2000000, "unit": "delivered_minutes", "unit_price": 0.00045}',
-'{"limit": 365, "unit": "retention_days", "unit_price": 0}',
-'{"limit": 250, "unit": "gpu_hours", "unit_price": 0.50}',
 '{"recording": true, "analytics": true, "api_access": true, "custom_branding": true, "sla": true, "support_level": "enterprise"}',
-'enterprise', 'premium', true,
-'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0.00045}, "storage": {"limit": null, "unit": "gb", "unit_price": 0.005}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0.50}, "processing": {"h264_rate_per_min": 0, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0}}}',
-4, false, false, false,
-'[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none","x-LSP-name":"Audio to AAC"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":3200000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360","x-LSP-name":"ABR Transcode"},{"process":"Thumbs","x-LSP-name":"Thumbnail Sprites"}]',
-'[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":3200000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]'),
+'enterprise', 'premium', true, 4, false, false, false, '[]', '[]'),
 ('enterprise', 'Enterprise', 'Custom capacity, private deployments, dedicated support, custom SLAs. Contact us.', 0.00, 'EUR',
-'{"limit": null, "unit": "delivered_minutes", "unit_price": 0}',
-'{"limit": null, "unit": "retention_days", "unit_price": 0}',
-'{"limit": null, "unit": "gpu_hours", "unit_price": 0}',
 '{"recording": true, "analytics": true, "api_access": true, "custom_branding": true, "sla": true, "support_level": "dedicated", "processing_customizable": true}',
-'dedicated', 'custom', true,
-'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0}, "storage": {"limit": null, "unit": "gb", "unit_price": 0}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0}, "processing": {"h264_rate_per_min": 0, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0}}}',
-5, true, false, false,
-'[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none","x-LSP-name":"Audio to AAC"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":3200000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360","x-LSP-name":"ABR Transcode"},{"process":"Thumbs","x-LSP-name":"Thumbnail Sprites"}]',
-'[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":3200000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]')
+'dedicated', 'custom', true, 5, true, false, false, '[]', '[]')
 ON CONFLICT (tier_name) DO UPDATE SET
     display_name = EXCLUDED.display_name,
     description = EXCLUDED.description,
     base_price = EXCLUDED.base_price,
-    bandwidth_allocation = EXCLUDED.bandwidth_allocation,
-    storage_allocation = EXCLUDED.storage_allocation,
-    compute_allocation = EXCLUDED.compute_allocation,
     features = EXCLUDED.features,
     support_level = EXCLUDED.support_level,
     sla_level = EXCLUDED.sla_level,
     metering_enabled = EXCLUDED.metering_enabled,
-    overage_rates = EXCLUDED.overage_rates,
     tier_level = EXCLUDED.tier_level,
     is_enterprise = EXCLUDED.is_enterprise,
     is_default_prepaid = EXCLUDED.is_default_prepaid,
-    is_default_postpaid = EXCLUDED.is_default_postpaid,
-    processes_live = EXCLUDED.processes_live,
-    processes_vod = EXCLUDED.processes_vod;
+    is_default_postpaid = EXCLUDED.is_default_postpaid;
+
+-- Tier entitlements (recording_retention_days drives Foghorn lifecycle).
+INSERT INTO purser.tier_entitlements (tier_id, key, value)
+SELECT bt.id, 'recording_retention_days', to_jsonb(v.days)
+FROM purser.billing_tiers bt
+JOIN (VALUES
+    ('free', 7), ('supporter', 90), ('developer', 180), ('production', 365)
+) AS v(tier_name, days) ON v.tier_name = bt.tier_name
+ON CONFLICT (tier_id, key) DO UPDATE SET value = EXCLUDED.value;
+
+-- Tier pricing rules (one row per tier x meter).
+INSERT INTO purser.tier_pricing_rules (tier_id, meter, model, currency, included_quantity, unit_price, config)
+SELECT bt.id, r.meter, r.model, 'EUR', r.included_quantity, r.unit_price, '{}'::jsonb
+FROM purser.billing_tiers bt
+JOIN (VALUES
+    ('payg', 'delivered_minutes', 'tiered_graduated', 0, 0.00055),
+    ('payg', 'average_storage_gb', 'all_usage', 0, 0.035),
+    ('payg', 'ai_gpu_hours', 'tiered_graduated', 0, 1.50),
+    ('supporter', 'delivered_minutes', 'tiered_graduated', 120000, 0.00055),
+    ('supporter', 'average_storage_gb', 'all_usage', 0, 0.035),
+    ('supporter', 'ai_gpu_hours', 'tiered_graduated', 10, 1.50),
+    ('developer', 'delivered_minutes', 'tiered_graduated', 500000, 0.00052),
+    ('developer', 'average_storage_gb', 'all_usage', 0, 0.030),
+    ('developer', 'ai_gpu_hours', 'tiered_graduated', 50, 1.50),
+    ('production', 'delivered_minutes', 'tiered_graduated', 2000000, 0.00050),
+    ('production', 'average_storage_gb', 'all_usage', 0, 0.025),
+    ('production', 'ai_gpu_hours', 'tiered_graduated', 250, 1.50)
+) AS r(tier_name, meter, model, included_quantity, unit_price)
+ON r.tier_name = bt.tier_name
+ON CONFLICT (tier_id, meter) DO UPDATE SET
+    model = EXCLUDED.model,
+    currency = EXCLUDED.currency,
+    included_quantity = EXCLUDED.included_quantity,
+    unit_price = EXCLUDED.unit_price,
+    config = EXCLUDED.config;
 
 -- Demo subscription in Purser
 INSERT INTO purser.tenant_subscriptions (
@@ -288,11 +277,11 @@ INSERT INTO purser.mollie_mandates (
     details = EXCLUDED.details,
     updated_at = NOW();
 
--- Demo prepaid balance for the demo tenant (starts at $50)
+-- Demo prepaid balance for the demo tenant (starts at EUR 50)
 INSERT INTO purser.prepaid_balances (
     tenant_id, balance_cents, currency, low_balance_threshold_cents, created_at, updated_at
 ) VALUES (
-    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 5000, 'USD', 500, NOW() - INTERVAL '7 days', NOW()
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 5000, 'EUR', 500, NOW() - INTERVAL '7 days', NOW()
 ) ON CONFLICT (tenant_id, currency) DO UPDATE SET
     balance_cents = EXCLUDED.balance_cents,
     updated_at = NOW();
@@ -543,13 +532,13 @@ INSERT INTO purser.billing_invoices (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'draft',
     'EUR',
-    249.00,
+    249.71,
     DATE_TRUNC('month', NOW()),
     DATE_TRUNC('month', NOW() + INTERVAL '1 month'),
     DATE_TRUNC('month', NOW()) + INTERVAL '1 month' + INTERVAL '14 days',
     NULL,
     249.00,  -- Developer tier base
-    0.00,    -- No metered charges yet
+    0.71,    -- Storage: 23.5 avg GB x EUR 0.030
     '{"viewer_hours": 4166.67, "average_storage_gb": 23.5, "stream_hours": 127.5, "egress_gb": 456.78, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
     DATE_TRUNC('month', NOW())
 ),
@@ -559,13 +548,13 @@ INSERT INTO purser.billing_invoices (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'paid',
     'EUR',
-    249.00,
+    250.36,
     DATE_TRUNC('month', NOW() - INTERVAL '1 month'),
     DATE_TRUNC('month', NOW()),
     DATE_TRUNC('month', NOW()) + INTERVAL '14 days',
     DATE_TRUNC('month', NOW()) + INTERVAL '5 days',
     249.00,
-    0.00,
+    1.36,
     '{"viewer_hours": 7500.0, "average_storage_gb": 45.2, "stream_hours": 342.0, "egress_gb": 1245.6, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
     DATE_TRUNC('month', NOW() - INTERVAL '1 month')
 ),
@@ -575,19 +564,116 @@ INSERT INTO purser.billing_invoices (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'paid',
     'EUR',
-    249.00,
+    249.96,
     DATE_TRUNC('month', NOW() - INTERVAL '2 months'),
     DATE_TRUNC('month', NOW() - INTERVAL '1 month'),
     DATE_TRUNC('month', NOW()) - INTERVAL '1 month' + INTERVAL '14 days',
     DATE_TRUNC('month', NOW()) - INTERVAL '1 month' + INTERVAL '3 days',
     249.00,
-    0.00,
+    0.96,
     '{"viewer_hours": 5833.33, "average_storage_gb": 32.1, "stream_hours": 215.25, "egress_gb": 890.2, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
     DATE_TRUNC('month', NOW() - INTERVAL '2 months')
 )
 ON CONFLICT (id) DO UPDATE SET
     status = EXCLUDED.status,
-    paid_at = EXCLUDED.paid_at;
+    amount = EXCLUDED.amount,
+    base_amount = EXCLUDED.base_amount,
+    metered_amount = EXCLUDED.metered_amount,
+    usage_details = EXCLUDED.usage_details,
+    paid_at = EXCLUDED.paid_at,
+    updated_at = NOW();
+
+-- Demo invoice line items. The runtime writer stores these transactionally with
+-- every invoice; seed data does the same so a fresh dev DB exercises the
+-- line-item rendering path instead of falling back to invoice aggregates.
+INSERT INTO purser.invoice_line_items (
+    invoice_id, tenant_id, line_key, meter, description,
+    quantity, included_quantity, billable_quantity,
+    unit_price, amount, currency
+) VALUES
+(
+    '5eedb111-fee5-da7a-b111-fee5da7a0001',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    'base_subscription',
+    NULL,
+    'Base subscription',
+    1, 0, 1, 249.00, 249.00, 'EUR'
+),
+(
+    '5eedb111-fee5-da7a-b111-fee5da7a0001',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    'meter:delivered_minutes',
+    'delivered_minutes',
+    'Delivered minutes',
+    250000, 500000, 0, 0.00052, 0.00, 'EUR'
+),
+(
+    '5eedb111-fee5-da7a-b111-fee5da7a0001',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    'meter:average_storage_gb',
+    'average_storage_gb',
+    'Recording storage (avg GB)',
+    23.5, 0, 23.5, 0.030, 0.71, 'EUR'
+),
+(
+    '5eedb111-fee5-da7a-b111-fee5da7a0002',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    'base_subscription',
+    NULL,
+    'Base subscription',
+    1, 0, 1, 249.00, 249.00, 'EUR'
+),
+(
+    '5eedb111-fee5-da7a-b111-fee5da7a0002',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    'meter:delivered_minutes',
+    'delivered_minutes',
+    'Delivered minutes',
+    450000, 500000, 0, 0.00052, 0.00, 'EUR'
+),
+(
+    '5eedb111-fee5-da7a-b111-fee5da7a0002',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    'meter:average_storage_gb',
+    'average_storage_gb',
+    'Recording storage (avg GB)',
+    45.2, 0, 45.2, 0.030, 1.36, 'EUR'
+),
+(
+    '5eedb111-fee5-da7a-b111-fee5da7a0003',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    'base_subscription',
+    NULL,
+    'Base subscription',
+    1, 0, 1, 249.00, 249.00, 'EUR'
+),
+(
+    '5eedb111-fee5-da7a-b111-fee5da7a0003',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    'meter:delivered_minutes',
+    'delivered_minutes',
+    'Delivered minutes',
+    350000, 500000, 0, 0.00052, 0.00, 'EUR'
+),
+(
+    '5eedb111-fee5-da7a-b111-fee5da7a0003',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    'meter:average_storage_gb',
+    'average_storage_gb',
+    'Recording storage (avg GB)',
+    32.1, 0, 32.1, 0.030, 0.96, 'EUR'
+)
+ON CONFLICT (invoice_id, line_key) DO UPDATE SET
+    tenant_id = EXCLUDED.tenant_id,
+    meter = EXCLUDED.meter,
+    description = EXCLUDED.description,
+    quantity = EXCLUDED.quantity,
+    included_quantity = EXCLUDED.included_quantity,
+    billable_quantity = EXCLUDED.billable_quantity,
+    unit_price = EXCLUDED.unit_price,
+    amount = EXCLUDED.amount,
+    currency = EXCLUDED.currency,
+    updated_at = NOW();
 
 -- ============================================================================
 -- PURSER: Demo Billing Payments (Payment Transactions)
@@ -601,8 +687,8 @@ INSERT INTO purser.billing_payments (
 (
     '5eedba1d-fee5-da7a-ba1d-fee5da7a0001',
     '5eedb111-fee5-da7a-b111-fee5da7a0002',  -- Previous month paid invoice
-    'directdebit',
-    249.00,
+    'card',
+    250.36,
     'EUR',
     'tr_demo_sepa_001',
     'confirmed',
@@ -613,8 +699,8 @@ INSERT INTO purser.billing_payments (
 (
     '5eedba1d-fee5-da7a-ba1d-fee5da7a0002',
     '5eedb111-fee5-da7a-b111-fee5da7a0003',  -- Two months ago paid invoice
-    'directdebit',
-    249.00,
+    'card',
+    249.96,
     'EUR',
     'tr_demo_sepa_002',
     'confirmed',
@@ -622,13 +708,15 @@ INSERT INTO purser.billing_payments (
     DATE_TRUNC('month', NOW()) - INTERVAL '1 month' + INTERVAL '3 days'
 )
 ON CONFLICT (id) DO UPDATE SET
+    amount = EXCLUDED.amount,
+    currency = EXCLUDED.currency,
     status = EXCLUDED.status,
     confirmed_at = EXCLUDED.confirmed_at;
 
 -- ============================================================================
 -- PURSER: Demo Balance Transactions (Prepaid Audit Trail)
 -- ============================================================================
--- Transaction history explaining the $50 prepaid balance
+-- Transaction history explaining the EUR 50 prepaid balance
 
 INSERT INTO purser.balance_transactions (
     id, tenant_id, amount_cents, balance_after_cents, transaction_type, description,
@@ -637,8 +725,8 @@ INSERT INTO purser.balance_transactions (
 (
     '5eedba1a-5ce5-da7a-ba1a-5ce5da7a0001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
-    5000,       -- +$50.00 topup
-    5000,       -- Balance after: $50.00
+    5000,       -- +EUR 50.00 topup
+    5000,       -- Balance after: EUR 50.00
     'topup',
     'Initial demo balance - card payment',
     '5eedba1a-5ce5-da7a-ba1a-5ce5da7a0002',  -- Reference to a notional card payment
@@ -660,8 +748,8 @@ INSERT INTO purser.tenant_balance_rollups (
     topup_count, first_topup_at, last_topup_at, created_at, updated_at
 ) VALUES (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
-    5000,       -- $50.00 total topups
-    4600,       -- ~€46.00 EUR equivalent
+    5000,       -- EUR 50.00 total topups
+    5000,       -- EUR 50.00 EUR equivalent
     0,          -- No usage deductions yet
     1,          -- 1 topup
     NOW() - INTERVAL '7 days',
@@ -671,6 +759,7 @@ INSERT INTO purser.tenant_balance_rollups (
 )
 ON CONFLICT (tenant_id) DO UPDATE SET
     total_topup_cents = EXCLUDED.total_topup_cents,
+    total_topup_eur_cents = EXCLUDED.total_topup_eur_cents,
     total_usage_cents = EXCLUDED.total_usage_cents,
     topup_count = EXCLUDED.topup_count,
     updated_at = NOW();

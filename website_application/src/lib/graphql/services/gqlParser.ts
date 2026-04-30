@@ -355,8 +355,7 @@ function getDefaultForInputType(typeName: string): unknown {
 
     case "CreatePaymentInput":
       return {
-        amount: 1000,
-        currency: "USD",
+        invoiceId: "inv_demo_current_001",
         method: "CARD",
       };
 
@@ -385,24 +384,20 @@ function getDefaultForInputType(typeName: string): unknown {
         billingCycle: "monthly",
       };
 
-    case "CustomPricingInput":
+    case "PricingRuleInput":
       return {
-        monthlyPriceCents: 5000,
-        billingCycle: "monthly",
+        meter: "delivered_minutes",
+        model: "tiered_graduated",
+        currency: "EUR",
+        includedQuantity: "120000",
+        unitPrice: "0.00055",
+        configJson: "{}",
       };
 
-    case "OverageRatesInput":
+    case "EntitlementEntryInput":
       return {
-        bandwidth: { unit: "GB", unitPrice: 0.01 },
-        storage: { unit: "GB", unitPrice: 0.02 },
-        compute: { unit: "hour", unitPrice: 0.05 },
-      };
-
-    case "AllocationDetailsInput":
-      return {
-        unit: "GB",
-        included: 100,
-        unitPrice: 0.02,
+        key: "recording_retention_days",
+        value: "90",
       };
 
     case "BillingFeaturesInput":

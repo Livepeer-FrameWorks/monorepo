@@ -207,20 +207,33 @@ type ClusterPricing struct {
 // canonical catalog at compile time; this slot is the overlay surface for adding
 // new tiers or overriding fields on built-in tiers. Stable key: ID.
 type BillingTier struct {
-	ID                  string         `yaml:"id"`
-	DisplayName         string         `yaml:"display_name,omitempty"`
-	TierLevel           int32          `yaml:"tier_level,omitempty"`
-	BasePriceMonthly    string         `yaml:"base_price_monthly,omitempty"`
-	Currency            string         `yaml:"currency,omitempty"`
-	BandwidthAllocation map[string]any `yaml:"bandwidth_allocation,omitempty"`
-	StorageAllocation   map[string]any `yaml:"storage_allocation,omitempty"`
-	ComputeAllocation   map[string]any `yaml:"compute_allocation,omitempty"`
-	Features            []string       `yaml:"features,omitempty"`
-	OverageRates        map[string]any `yaml:"overage_rates,omitempty"`
+	ID               string   `yaml:"id"`
+	DisplayName      string   `yaml:"display_name,omitempty"`
+	TierLevel        int32    `yaml:"tier_level,omitempty"`
+	BasePriceMonthly string   `yaml:"base_price_monthly,omitempty"`
+	Currency         string   `yaml:"currency,omitempty"`
+	Features         []string `yaml:"features,omitempty"`
+	// Entitlements are non-billing grants (e.g. recording_retention_days).
+	Entitlements map[string]any `yaml:"entitlements,omitempty"`
+	// PricingRules wholly replace the embedded tier's rules when present on an
+	// overlay entry — there is no per-rule merge.
+	PricingRules []OverlayPricingRule `yaml:"pricing_rules,omitempty"`
 	// Override = true on an overlay entry merges field-by-field over the embedded
 	// catalog's tier with the same ID. Without Override, an ID collision with the
 	// embedded catalog is a configuration error.
 	Override bool `yaml:"override,omitempty"`
+}
+
+// OverlayPricingRule is the operator-overlay representation of a pricing rule.
+// Mirrors api_billing/internal/bootstrap.CatalogPricingRule; kept here as a
+// separate type so the CLI doesn't depend on the Purser package.
+type OverlayPricingRule struct {
+	Meter            string         `yaml:"meter"`
+	Model            string         `yaml:"model"`
+	Currency         string         `yaml:"currency,omitempty"`
+	IncludedQuantity float64        `yaml:"included_quantity,omitempty"`
+	UnitPrice        string         `yaml:"unit_price"`
+	Config           map[string]any `yaml:"config,omitempty"`
 }
 
 // CustomerBilling is a Purser-owned per-customer-tenant billing/subscription record.

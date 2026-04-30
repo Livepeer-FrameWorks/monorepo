@@ -11,8 +11,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"github.com/shopspring/decimal"
 	"github.com/sirupsen/logrus"
 
+	billingpkg "frameworks/api_billing/internal/billing"
+	"frameworks/api_billing/internal/rating"
 	"frameworks/pkg/billing"
 	decklog "frameworks/pkg/clients/decklog"
 	periscope "frameworks/pkg/clients/periscope"
@@ -23,92 +26,45 @@ import (
 	pb "frameworks/pkg/proto"
 )
 
-// calculateCharges computes base and metered charges based on usage and pricing rules.
-func calculateCharges(usageData map[string]float64, basePrice float64, meteringEnabled bool, overageRates models.OverageRates, storageAllocation, bandwidthAllocation models.AllocationDetails, customPricing models.CustomPricing, customAllocations models.AllocationDetails) (baseAmount, meteredAmount float64) {
-	// Base price (custom override if provided)
-	baseAmount = basePrice
-	if customPricing.BasePrice > 0 {
-		baseAmount = customPricing.BasePrice
+// collectInvoiceUsage aggregates usage_records into the per-meter map invoice
+// rating consumes. Same aggregation as updateInvoiceDraft and GetTenantUsage:
+// AVG storage, MAX peak/max_viewers, SUM the rest, skip uniques. Returns an
+// error on query/scan/iteration failure so the monthly invoice writer fails
+// closed instead of finalizing on partial usage.
+func (jm *JobManager) collectInvoiceUsage(ctx context.Context, tenantID string, periodStart, periodEnd time.Time, into map[string]float64) error {
+	rows, err := jm.db.QueryContext(ctx, `
+		SELECT usage_type,
+			CASE
+				WHEN usage_type = 'average_storage_gb' THEN AVG(usage_value)
+				WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers') THEN MAX(usage_value)
+				ELSE SUM(usage_value)
+			END as aggregated_value
+		FROM purser.usage_records
+		WHERE tenant_id = $1
+		  AND period_start < $3
+		  AND period_end > $2
+		  AND usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
+		GROUP BY usage_type
+	`, tenantID, periodStart, periodEnd)
+	if err != nil {
+		return fmt.Errorf("query usage_records: %w", err)
 	}
-
-	if !meteringEnabled {
-		return baseAmount, 0
-	}
-
-	// Effective allocations (custom overrides bandwidth allocation)
-	effectiveBandwidthAllocation := bandwidthAllocation
-	if customAllocations.Limit != nil {
-		effectiveBandwidthAllocation = customAllocations
-	}
-
-	// Effective overage rates (custom overrides defaults)
-	effectiveOverageRates := overageRates
-	if customPricing.OverageRates.Bandwidth.UnitPrice > 0 {
-		effectiveOverageRates.Bandwidth = customPricing.OverageRates.Bandwidth
-	}
-	if customPricing.OverageRates.Storage.UnitPrice > 0 {
-		effectiveOverageRates.Storage = customPricing.OverageRates.Storage
-	}
-	if customPricing.OverageRates.Compute.UnitPrice > 0 {
-		effectiveOverageRates.Compute = customPricing.OverageRates.Compute
-	}
-	if customPricing.OverageRates.Processing.H264RatePerMin > 0 {
-		effectiveOverageRates.Processing = customPricing.OverageRates.Processing
-	}
-
-	// 1) Bandwidth (delivered minutes)
-	viewerMinutes := usageData["viewer_hours"] * 60
-	if effectiveBandwidthAllocation.Limit != nil && viewerMinutes > 0 && effectiveOverageRates.Bandwidth.UnitPrice > 0 {
-		billable := viewerMinutes - *effectiveBandwidthAllocation.Limit
-		if billable > 0 {
-			meteredAmount += billable * effectiveOverageRates.Bandwidth.UnitPrice
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var usageType string
+		var val float64
+		if err := rows.Scan(&usageType, &val); err != nil {
+			return fmt.Errorf("scan usage row: %w", err)
 		}
+		into[usageType] = val
 	}
-
-	// 2) Storage overage
-	storageUsage := usageData["average_storage_gb"]
-	if storageAllocation.Limit != nil && storageUsage > 0 && effectiveOverageRates.Storage.UnitPrice > 0 {
-		billable := storageUsage - *storageAllocation.Limit
-		if billable > 0 {
-			meteredAmount += billable * effectiveOverageRates.Storage.UnitPrice
-		}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate usage rows: %w", err)
 	}
-
-	// 3) Compute overage (GPU hours)
-	gpuHours := usageData["gpu_hours"]
-	if gpuHours > 0 && effectiveOverageRates.Compute.UnitPrice > 0 {
-		meteredAmount += gpuHours * effectiveOverageRates.Compute.UnitPrice
-	}
-
-	// 4) Processing/transcoding overage (per-codec pricing)
-	processingRates := effectiveOverageRates.Processing
-	if processingRates.H264RatePerMin > 0 {
-		baseRate := processingRates.H264RatePerMin
-		calcCodecCost := func(seconds float64, codec string) float64 {
-			if seconds <= 0 {
-				return 0
-			}
-			minutes := seconds / 60
-			mult := processingRates.GetCodecMultiplier(codec)
-			return minutes * baseRate * mult
-		}
-
-		meteredAmount += calcCodecCost(usageData["livepeer_h264_seconds"], "h264")
-		meteredAmount += calcCodecCost(usageData["livepeer_vp9_seconds"], "vp9")
-		meteredAmount += calcCodecCost(usageData["livepeer_av1_seconds"], "av1")
-		meteredAmount += calcCodecCost(usageData["livepeer_hevc_seconds"], "hevc")
-		meteredAmount += calcCodecCost(usageData["native_av_h264_seconds"], "h264")
-		meteredAmount += calcCodecCost(usageData["native_av_vp9_seconds"], "vp9")
-		meteredAmount += calcCodecCost(usageData["native_av_av1_seconds"], "av1")
-		meteredAmount += calcCodecCost(usageData["native_av_hevc_seconds"], "hevc")
-		meteredAmount += calcCodecCost(usageData["native_av_aac_seconds"], "aac")
-		meteredAmount += calcCodecCost(usageData["native_av_opus_seconds"], "opus")
-	}
-
-	return baseAmount, meteredAmount
+	return nil
 }
 
-func loadSubscriptionPeriod(ctx context.Context, db *sql.DB, tenantID string, now time.Time) (time.Time, time.Time) {
+func loadSubscriptionPeriod(ctx context.Context, db *sql.DB, tenantID string, now time.Time) (time.Time, time.Time, error) {
 	var start, end sql.NullTime
 	err := db.QueryRowContext(ctx, `
 		SELECT billing_period_start, billing_period_end
@@ -118,12 +74,15 @@ func loadSubscriptionPeriod(ctx context.Context, db *sql.DB, tenantID string, no
 		LIMIT 1
 	`, tenantID).Scan(&start, &end)
 	if err == nil && start.Valid && end.Valid && end.Time.After(start.Time) {
-		return start.Time, end.Time
+		return start.Time, end.Time, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, time.Time{}, fmt.Errorf("load subscription period: %w", err)
 	}
 
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	periodEnd := periodStart.AddDate(0, 1, 0)
-	return periodStart, periodEnd
+	return periodStart, periodEnd, nil
 }
 
 // enrichInvoiceFromPeriscope queries Periscope for accurate analytics data at invoice time.
@@ -342,14 +301,18 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 	}
 
 	if billingModel == "prepaid" {
-		// Prepaid: deduct usage cost from balance
+		// Prepaid: deduct usage cost from balance. Surface the error so Kafka
+		// retries the message; silently swallowing means the balance never
+		// got charged for usage that was already recorded.
 		if err := jm.processPrepaidUsage(ctx, summary); err != nil {
-			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to process prepaid usage")
+			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Error("Failed to process prepaid usage")
+			return fmt.Errorf("prepaid deduction failed: %w", err)
 		}
 	} else {
-		// Postpaid: update invoice draft
+		// Postpaid: update invoice draft. Same retry contract: propagate.
 		if err := jm.updateInvoiceDraft(ctx, summary.TenantID); err != nil {
-			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to update invoice draft")
+			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Error("Failed to update invoice draft")
+			return fmt.Errorf("invoice draft update failed: %w", err)
 		}
 	}
 
@@ -401,6 +364,7 @@ func buildUsageDataFromSummary(summary models.UsageSummary) map[string]float64 {
 		"native_av_hevc_seconds": summary.NativeAvHEVCSeconds,
 		"native_av_aac_seconds":  summary.NativeAvAACSeconds,
 		"native_av_opus_seconds": summary.NativeAvOpusSeconds,
+		"gpu_hours":              summary.GPUHours,
 		"api_requests":           summary.APIRequests,
 		"api_errors":             summary.APIErrors,
 		"api_duration_ms":        summary.APIDurationMs,
@@ -417,56 +381,44 @@ func usageSummaryReferenceID(summary models.UsageSummary) uuid.UUID {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(raw))
 }
 
-// processPrepaidUsage calculates usage cost and deducts from prepaid balance
+// processPrepaidUsage calculates usage cost and deducts from prepaid balance.
+// Uses rating.UsageAmount only, never TotalAmount, so per-event deductions
+// don't re-charge the monthly base subscription fee.
 func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.UsageSummary) error {
-	// Get subscription tier info for pricing
-	var (
-		basePrice           float64
-		meteringEnabled     bool
-		overageRates        models.OverageRates
-		storageAllocation   models.AllocationDetails
-		bandwidthAllocation models.AllocationDetails
-		customPricing       models.CustomPricing
-		customAllocations   models.AllocationDetails
-	)
-
-	err := jm.db.QueryRowContext(ctx, `
-		SELECT bt.base_price, bt.metering_enabled,
-		       bt.overage_rates, bt.storage_allocation, bt.bandwidth_allocation,
-		       ts.custom_pricing, ts.custom_allocations
-		FROM purser.tenant_subscriptions ts
-		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
-		WHERE ts.tenant_id = $1 AND ts.status = 'active' AND bt.is_active = true
-		ORDER BY ts.created_at DESC
-		LIMIT 1
-	`, summary.TenantID).Scan(&basePrice, &meteringEnabled,
-		&overageRates, &storageAllocation, &bandwidthAllocation,
-		&customPricing, &customAllocations)
-
+	tier, err := billingpkg.LoadEffectiveTier(ctx, jm.db, summary.TenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		jm.logger.WithField("tenant_id", summary.TenantID).Debug("No active subscription for prepaid usage")
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("failed to get subscription: %w", err)
+		return fmt.Errorf("failed to get effective tier: %w", err)
+	}
+	if !tier.MeteringEnabled {
+		return nil
 	}
 
-	// Use the same usage data extraction as postpaid
-	usageData := buildUsageDataFromSummary(summary)
-
-	// Calculate metered usage cost (skip base price - that's monthly, not per-report)
-	_, meteredAmount := calculateCharges(usageData, 0, meteringEnabled, overageRates, storageAllocation, bandwidthAllocation, customPricing, customAllocations)
-
-	if meteredAmount <= 0 {
-		return nil // No billable usage in this report
+	in := buildRatingInputFromSummary(summary, tier)
+	res, err := rating.Rate(in)
+	if err != nil {
+		return fmt.Errorf("rate usage: %w", err)
+	}
+	if res.UsageAmount.IsZero() || res.UsageAmount.IsNegative() {
+		return nil
 	}
 
-	// Convert to cents (meteredAmount is in dollars)
-	deductCents := int64(meteredAmount * 100)
+	// Convert UsageAmount to micro-cents (10^-8 of a currency unit) so sub-cent
+	// usage accumulates against the per-tenant remainder column instead of
+	// being truncated. The deduction commits whole cents from
+	// (carried_remainder + new_micro); any residual stays as new_remainder.
+	microPerUnit := decimal.NewFromInt(1_000_000)
+	desiredMicro := res.UsageAmount.Mul(microPerUnit).Round(0).IntPart()
+	if desiredMicro <= 0 {
+		return nil
+	}
 
 	// Deduct from prepaid balance
 	referenceID := usageSummaryReferenceID(summary)
-	previousBalance, newBalanceCents, applied, err := jm.deductPrepaidBalanceForUsage(ctx, summary.TenantID, deductCents, fmt.Sprintf("Usage: %s", summary.Period), referenceID)
+	previousBalance, newBalanceCents, applied, err := jm.deductPrepaidBalanceForUsageMicro(ctx, summary.TenantID, desiredMicro, fmt.Sprintf("Usage: %s", summary.Period), referenceID)
 	if err != nil {
 		return fmt.Errorf("failed to deduct prepaid balance: %w", err)
 	}
@@ -479,10 +431,12 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 		return nil
 	}
 
+	deductedCents := previousBalance - newBalanceCents
 	jm.logger.WithFields(logging.Fields{
 		"tenant_id":         summary.TenantID,
 		"period":            summary.Period,
-		"deducted_cents":    deductCents,
+		"requested_micro":   desiredMicro,
+		"deducted_cents":    deductedCents,
 		"new_balance_cents": newBalanceCents,
 	}).Info("Deducted prepaid usage")
 
@@ -493,6 +447,88 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 	}
 
 	return nil
+}
+
+// deductPrepaidBalanceForCreditTx deducts up to requestCents from the prepaid
+// balance inside an existing transaction. The actual deducted amount is
+// returned as appliedCents and is bounded by the row-locked balance; the
+// caller's requestCents is a ceiling, not a guarantee.
+//
+// Race-safety: the (tenant_id, reference_type, reference_id) UNIQUE index on
+// purser.balance_transactions is the idempotency gate. The ledger row is
+// inserted FIRST, then the balance is mutated. A racing duplicate hits the
+// unique violation before any balance update happens, so we never
+// double-debit even when concurrent transactions probe the ledger before
+// either commits.
+//
+// Used by updateInvoiceDraft so the credit deduction commits or rolls back
+// together with the invoice header and line items.
+func (jm *JobManager) deductPrepaidBalanceForCreditTx(ctx context.Context, tx *sql.Tx, tenantID string, requestCents int64, description string, referenceID *string) (newBalance, appliedCents int64, isDuplicate bool, err error) {
+	currency := billing.DefaultCurrency()
+	referenceType := "invoice_credit"
+
+	if _, insertErr := tx.ExecContext(ctx, `
+		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)
+		VALUES ($1, 0, $2)
+		ON CONFLICT (tenant_id, currency) DO NOTHING
+	`, tenantID, currency); insertErr != nil {
+		return 0, 0, false, insertErr
+	}
+
+	var currentBalance int64
+	if scanErr := tx.QueryRowContext(ctx, `
+		SELECT balance_cents FROM purser.prepaid_balances
+		WHERE tenant_id = $1 AND currency = $2 FOR UPDATE
+	`, tenantID, currency).Scan(&currentBalance); scanErr != nil {
+		return 0, 0, false, scanErr
+	}
+
+	// Cap against the LOCKED balance. requestCents is a ceiling.
+	applied := requestCents
+	if applied > currentBalance {
+		applied = currentBalance
+	}
+	if applied <= 0 {
+		return currentBalance, 0, false, nil
+	}
+
+	// Insert the ledger row FIRST. This is the idempotency gate: a racing
+	// duplicate (same reference_id) hits 23505 here before any balance
+	// mutation, so the caller's tx rolls back the no-op. Existing duplicates
+	// are detected via the same path; convert 23505 into is_duplicate=true
+	// without touching the balance, and look up the prior amount to surface
+	// to the caller.
+	if _, txErr := tx.ExecContext(ctx, `
+		INSERT INTO purser.balance_transactions (
+			tenant_id, amount_cents, balance_after_cents,
+			transaction_type, description, reference_id, reference_type, created_at
+		) VALUES ($1, $2, $3, 'credit', $4, $5, $6, NOW())
+	`, tenantID, -applied, currentBalance-applied, description, referenceID, referenceType); txErr != nil {
+		var pqErr *pq.Error
+		if errors.As(txErr, &pqErr) && pqErr.Code == "23505" {
+			// Duplicate ledger row exists. Read its amount so the caller can
+			// preserve prepaid_credit_applied. Balance is untouched.
+			var historicAmount int64
+			if probeErr := tx.QueryRowContext(ctx, `
+				SELECT amount_cents FROM purser.balance_transactions
+				WHERE tenant_id = $1 AND reference_type = $2 AND reference_id = $3
+				ORDER BY created_at DESC LIMIT 1
+			`, tenantID, referenceType, *referenceID).Scan(&historicAmount); probeErr != nil {
+				return 0, 0, false, probeErr
+			}
+			return currentBalance, -historicAmount, true, nil
+		}
+		return 0, 0, false, txErr
+	}
+
+	newBalance = currentBalance - applied
+	if _, updErr := tx.ExecContext(ctx, `
+		UPDATE purser.prepaid_balances SET balance_cents = $1, updated_at = NOW()
+		WHERE tenant_id = $2 AND currency = $3
+	`, newBalance, tenantID, currency); updErr != nil {
+		return 0, 0, false, updErr
+	}
+	return newBalance, applied, false, nil
 }
 
 // deductPrepaidBalanceForCredit deducts amount from prepaid balance for non-usage adjustments.
@@ -585,6 +621,91 @@ func (jm *JobManager) deductPrepaidBalanceForCredit(ctx context.Context, tenantI
 	}
 
 	return newBalance, false, nil
+}
+
+// microPerCent is the residual unit: 10^-8 of a currency unit, i.e. 10^4
+// micro-cents per cent. Sub-cent residuals accumulate here so a stream of
+// per-event deductions under €0.01 each eventually crosses a whole-cent
+// boundary instead of being truncated to zero.
+const microPerCent = int64(10_000)
+
+// deductPrepaidBalanceForUsageMicro deducts prepaid usage in micro-cents
+// (10^-8 of a currency unit). The fractional residual is carried in
+// prepaid_balances.balance_remainder_micro across deductions so micro-events
+// don't structurally leak revenue. Returns previous and new balances in cents
+// (the residual is private to the prepaid balance row).
+//
+// Idempotency is keyed on (tenant_id, reference_type='usage_summary', reference_id);
+// duplicate calls return applied=false.
+func (jm *JobManager) deductPrepaidBalanceForUsageMicro(ctx context.Context, tenantID string, amountMicro int64, description string, referenceID uuid.UUID) (int64, int64, bool, error) {
+	currency := billing.DefaultCurrency()
+
+	tx, err := jm.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+
+	if _, insertErr := tx.ExecContext(ctx, `
+		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)
+		VALUES ($1, 0, $2)
+		ON CONFLICT (tenant_id, currency) DO NOTHING
+	`, tenantID, currency); insertErr != nil {
+		return 0, 0, false, insertErr
+	}
+
+	var currentBalance, currentRemainder int64
+	if scanErr := tx.QueryRowContext(ctx, `
+		SELECT balance_cents, balance_remainder_micro
+		FROM purser.prepaid_balances
+		WHERE tenant_id = $1 AND currency = $2
+		FOR UPDATE
+	`, tenantID, currency).Scan(&currentBalance, &currentRemainder); scanErr != nil {
+		return 0, 0, false, scanErr
+	}
+
+	// Accumulate the residual; commit whole cents, carry the rest.
+	totalMicro := currentRemainder + amountMicro
+	deductCents := totalMicro / microPerCent
+	newRemainder := totalMicro % microPerCent
+	newBalance := currentBalance - deductCents
+
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO purser.balance_transactions (
+			tenant_id, amount_cents, balance_after_cents,
+			transaction_type, description, reference_id, reference_type, created_at
+		) VALUES ($1, $2, $3, 'usage', $4, $5, 'usage_summary', NOW())
+		ON CONFLICT (tenant_id, reference_type, reference_id)
+			WHERE reference_type = 'usage_summary'
+		DO NOTHING
+	`, tenantID, -deductCents, newBalance, description, referenceID)
+	if err != nil {
+		return 0, 0, false, err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if rowsAffected == 0 {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return 0, 0, false, commitErr
+		}
+		return currentBalance, currentBalance, false, nil
+	}
+
+	if _, updErr := tx.ExecContext(ctx, `
+		UPDATE purser.prepaid_balances
+		SET balance_cents = $1, balance_remainder_micro = $2, updated_at = NOW()
+		WHERE tenant_id = $3 AND currency = $4
+	`, newBalance, newRemainder, tenantID, currency); updErr != nil {
+		return 0, 0, false, updErr
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return 0, 0, false, commitErr
+	}
+	return currentBalance, newBalance, true, nil
 }
 
 // deductPrepaidBalanceForUsage deducts prepaid usage once per usage summary reference.
@@ -777,13 +898,12 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 
 	now := time.Now()
 
-	// Get all active tenant subscriptions with their tiers
+	// Identify tenants due for billing. Pricing rules / entitlements are loaded
+	// per-tenant via LoadEffectiveTier so this query stays narrow.
 	rows, err := jm.db.QueryContext(ctx, `
 		SELECT ts.tenant_id, ts.billing_email, ts.tier_id, ts.status,
 		       ts.billing_period_start, ts.billing_period_end,
-		       bt.tier_name, bt.display_name, bt.base_price, bt.currency, bt.billing_period,
-		       bt.metering_enabled, bt.overage_rates, bt.storage_allocation, bt.bandwidth_allocation,
-		       ts.custom_pricing, ts.custom_features, ts.custom_allocations
+		       bt.tier_name, bt.display_name, bt.billing_period
 		FROM purser.tenant_subscriptions ts
 		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 		WHERE ts.status = 'active'
@@ -805,27 +925,27 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 	var invoicesGenerated int
 	for rows.Next() {
 		var tenantID, billingEmail, tierID, subscriptionStatus string
-		var tierName, displayName, currency, billingPeriod string
-		var basePrice float64
-		var meteringEnabled bool
-		var overageRates models.OverageRates
-		var storageAllocation, bandwidthAllocation models.AllocationDetails
-		var customPricing models.CustomPricing
-		var customFeatures models.BillingFeatures
-		var customAllocations models.AllocationDetails
+		var tierName, displayName, billingPeriod string
 		var billingPeriodStart, billingPeriodEnd sql.NullTime
 
 		err = rows.Scan(&tenantID, &billingEmail, &tierID, &subscriptionStatus,
 			&billingPeriodStart, &billingPeriodEnd,
-			&tierName, &displayName, &basePrice, &currency, &billingPeriod,
-			&meteringEnabled, &overageRates, &storageAllocation, &bandwidthAllocation,
-			&customPricing, &customFeatures, &customAllocations)
+			&tierName, &displayName, &billingPeriod)
 		if err != nil {
 			jm.logger.WithFields(logging.Fields{
 				"error": err,
 			}).Error("Error scanning tenant subscription data")
 			continue
 		}
+
+		tier, tierErr := billingpkg.LoadEffectiveTier(ctx, jm.db, tenantID)
+		if tierErr != nil {
+			jm.logger.WithError(tierErr).WithField("tenant_id", tenantID).Error("Failed to load effective tier for invoice")
+			continue
+		}
+		basePrice, _ := tier.BasePrice.Float64()
+		currency := tier.Currency
+		meteringEnabled := tier.MeteringEnabled
 
 		var periodStart, periodEnd time.Time
 		if billingPeriodStart.Valid && billingPeriodEnd.Valid && billingPeriodEnd.Time.After(billingPeriodStart.Time) {
@@ -859,15 +979,37 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			continue // Invoice already finalized for this period
 		}
 
-		// Check for an existing draft invoice for the previous month
+		// Check for an existing draft invoice for the previous month, and
+		// preserve any prepaid credit it had already applied so finalization
+		// doesn't accidentally re-charge the gross amount on top. Read the
+		// credit as a decimal string and parse via decimal, with no float64 hop.
+		// Errors abort: a DB read failure here would otherwise silently zero
+		// the credit and double-charge.
 		var draftInvoiceID string
-		_ = jm.db.QueryRowContext(ctx, `
-			SELECT id FROM purser.billing_invoices
+		var existingCreditStr sql.NullString
+		switch err := jm.db.QueryRowContext(ctx, `
+			SELECT id, COALESCE(prepaid_credit_applied, 0)::text
+			FROM purser.billing_invoices
 			WHERE tenant_id = $1
 			  AND period_start = $2
 			  AND status = 'draft'
 			LIMIT 1
-		`, tenantID, periodStart).Scan(&draftInvoiceID)
+		`, tenantID, periodStart).Scan(&draftInvoiceID, &existingCreditStr); {
+		case err == nil, errors.Is(err, sql.ErrNoRows):
+			// nil err → draft found; ErrNoRows → no draft, leave zero values.
+		default:
+			jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to look up existing draft credit; skipping invoice for this period")
+			continue
+		}
+		existingCreditDec := decimal.Zero
+		if existingCreditStr.Valid && existingCreditStr.String != "" {
+			parsed, parseErr := decimal.NewFromString(existingCreditStr.String)
+			if parseErr != nil {
+				jm.logger.WithError(parseErr).WithField("tenant_id", tenantID).Error("Failed to parse existing prepaid_credit_applied; skipping invoice for this period")
+				continue
+			}
+			existingCreditDec = parsed
+		}
 
 		// Aggregate rollup-able usage metrics for billing period
 		// - SUM: flow metrics (viewer_hours, egress_gb, *_seconds)
@@ -876,36 +1018,37 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		// - SKIP: unique counts (from Periscope enrichment only - cannot roll up 5-min windows)
 		usageData := map[string]float64{}
 
-		usageRows, err := jm.db.QueryContext(ctx, `
-			SELECT usage_type,
-				CASE
-					WHEN usage_type = 'average_storage_gb' THEN AVG(usage_value)
-					WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers') THEN MAX(usage_value)
-					ELSE SUM(usage_value)
-				END as aggregated_value
-			FROM purser.usage_records
-			WHERE tenant_id = $1
-			  AND period_start < $3
-			  AND period_end > $2
-			  AND usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
-			GROUP BY usage_type
-		`, tenantID, periodStart, periodEnd)
-
-		if err != nil {
-			jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to fetch usage data")
-		} else {
-			defer func() { _ = usageRows.Close() }()
-			for usageRows.Next() {
-				var usageType string
-				var val float64
-				if scanErr := usageRows.Scan(&usageType, &val); scanErr == nil {
-					usageData[usageType] = val
-				}
-			}
+		// Fetch usage. A scan/query failure must abort this tenant's invoice:
+		// rating an invoice against an empty/partial usage map underbills.
+		// The next monthly run will retry; better than a finalized invoice
+		// missing real usage.
+		if usageErr := jm.collectInvoiceUsage(ctx, tenantID, periodStart, periodEnd, usageData); usageErr != nil {
+			jm.logger.WithError(usageErr).WithField("tenant_id", tenantID).Error("Failed to collect usage; skipping invoice for this period")
+			continue
 		}
 
-		baseAmount, meteredAmount := calculateCharges(usageData, basePrice, meteringEnabled, overageRates, storageAllocation, bandwidthAllocation, customPricing, customAllocations)
-		totalAmount := baseAmount + meteredAmount
+		ratingInput := buildRatingInputFromAggregates(usageData, tier)
+		ratingInput.PeriodStart = periodStart
+		ratingInput.PeriodEnd = periodEnd
+		ratingResult, ratingErr := rating.Rate(ratingInput)
+		if ratingErr != nil {
+			jm.logger.WithError(ratingErr).WithField("tenant_id", tenantID).Error("Failed to rate usage for invoice")
+			continue
+		}
+		// Money stays in decimal.Decimal until the SQL boundary; the columns are
+		// NUMERIC and the strings bind cleanly via $N::numeric; no float64
+		// step touches the cents.
+		baseDec := ratingResult.BaseAmount
+		meteredDec := ratingResult.UsageAmount
+		grossDec := ratingResult.TotalAmount
+		// Preserve prepaid credit already applied to the draft. The credit was
+		// debited during the draft phase; finalization must not rewrite the
+		// invoice amount as if the credit were never applied.
+		creditDec := existingCreditDec
+		totalDec := grossDec.Sub(creditDec)
+		if totalDec.IsNegative() {
+			totalDec = decimal.Zero
+		}
 
 		// Generate invoice
 		invoiceID := uuid.New().String()
@@ -913,7 +1056,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 
 		// Determine invoice status
 		status := "pending"
-		if totalAmount == 0 {
+		if totalDec.IsZero() {
 			status = "paid"
 		}
 
@@ -954,46 +1097,13 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			continue
 		}
 
-		// Store or finalize the invoice
-		if draftInvoiceID != "" {
-			_, err = jm.db.ExecContext(ctx, `
-				UPDATE purser.billing_invoices
-				SET amount = $1,
-					base_amount = $2,
-					metered_amount = $3,
-					currency = $4,
-					status = $5,
-					due_date = $6,
-					usage_details = $7,
-					period_start = $8,
-					period_end = $9,
-					updated_at = NOW()
-				WHERE id = $10
-			`, totalAmount, baseAmount, meteredAmount, currency, status, dueDate, usageJSON, periodStart, periodEnd, draftInvoiceID)
-			invoiceID = draftInvoiceID
-		} else {
-			_, err = jm.db.ExecContext(ctx, `
-				INSERT INTO purser.billing_invoices (
-					id, tenant_id, amount, currency, status, due_date,
-					base_amount, metered_amount,
-					usage_details, period_start, period_end,
-					created_at, updated_at
-				) VALUES (
-					$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW()
-				)
-			`, invoiceID, tenantID, totalAmount, currency, status, dueDate, baseAmount, meteredAmount, usageJSON, periodStart, periodEnd)
-		}
+		// Bind decimals as strings into NUMERIC columns so no float64 rounding
+		// can sneak in at the SQL boundary.
+		totalAmt := totalDec.Round(2).String()
+		baseAmt := baseDec.Round(2).String()
+		meteredAmt := meteredDec.Round(2).String()
+		creditAmt := creditDec.Round(2).String()
 
-		if err != nil {
-			jm.logger.WithFields(logging.Fields{
-				"error":     err,
-				"tenant_id": tenantID,
-				"amount":    totalAmount,
-			}).Error("Failed to create invoice")
-			continue
-		}
-
-		// Update subscription billing period + next billing date
 		periodDuration := periodEnd.Sub(periodStart)
 		if periodDuration <= 0 {
 			periodDuration = 30 * 24 * time.Hour
@@ -1001,17 +1111,81 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		nextPeriodStart := periodEnd
 		nextPeriodEnd := periodEnd.Add(periodDuration)
 		nextBillingDate := nextPeriodEnd
-		_, err = jm.db.ExecContext(ctx, `
-			UPDATE purser.tenant_subscriptions
-			SET next_billing_date = $1,
-			    billing_period_start = $2,
-			    billing_period_end = $3,
-			    updated_at = NOW()
-			WHERE tenant_id = $4
-		`, nextBillingDate, nextPeriodStart, nextPeriodEnd, tenantID)
 
+		// Store invoice header + rated line items atomically. If line-item
+		// persistence fails, the whole invoice rolls back so totals never live
+		// without their line-item audit trail. The subscription period advances
+		// in the same transaction so a finalized invoice cannot leave the
+		// subscription pointing at the already-billed period.
+		err = withTx(ctx, jm.db, func(tx *sql.Tx) error {
+			if draftInvoiceID != "" {
+				if txErr := tx.QueryRowContext(ctx, `
+						UPDATE purser.billing_invoices
+						SET amount = $1::numeric, base_amount = $2::numeric, metered_amount = $3::numeric,
+						    prepaid_credit_applied = $4::numeric, currency = $5,
+						    status = $6, due_date = $7, usage_details = $8,
+						    period_start = $9, period_end = $10, updated_at = NOW()
+						WHERE id = $11 AND tenant_id = $12 AND status = 'draft'
+						RETURNING id
+					`, totalAmt, baseAmt, meteredAmt, creditAmt, currency, status, dueDate, usageJSON, periodStart, periodEnd, draftInvoiceID, tenantID).Scan(&invoiceID); txErr != nil {
+					return fmt.Errorf("update invoice: %w", txErr)
+				}
+			} else if txErr := tx.QueryRowContext(ctx, `
+					INSERT INTO purser.billing_invoices (
+						id, tenant_id, amount, currency, status, due_date,
+						base_amount, metered_amount, prepaid_credit_applied,
+					usage_details, period_start, period_end,
+					created_at, updated_at
+					) VALUES (
+						$1, $2, $3::numeric, $4, $5, $6,
+						$7::numeric, $8::numeric, $9::numeric,
+						$10, $11, $12, NOW(), NOW()
+					)
+					ON CONFLICT (tenant_id, period_start) WHERE period_start IS NOT NULL
+					DO UPDATE SET
+						amount = EXCLUDED.amount,
+						currency = EXCLUDED.currency,
+						status = EXCLUDED.status,
+						due_date = EXCLUDED.due_date,
+						base_amount = EXCLUDED.base_amount,
+						metered_amount = EXCLUDED.metered_amount,
+						prepaid_credit_applied = EXCLUDED.prepaid_credit_applied,
+						usage_details = EXCLUDED.usage_details,
+						period_end = EXCLUDED.period_end,
+						updated_at = NOW()
+					WHERE purser.billing_invoices.status = 'draft'
+					RETURNING id
+					`, invoiceID, tenantID, totalAmt, currency, status, dueDate, baseAmt, meteredAmt, creditAmt, usageJSON, periodStart, periodEnd).Scan(&invoiceID); txErr != nil {
+				return fmt.Errorf("upsert invoice: %w", txErr)
+			}
+			if txErr := persistInvoiceLineItems(ctx, tx, invoiceID, tenantID, ratingResult); txErr != nil {
+				return txErr
+			}
+			result, txErr := tx.ExecContext(ctx, `
+					UPDATE purser.tenant_subscriptions
+					SET next_billing_date = $1,
+					    billing_period_start = $2,
+					    billing_period_end = $3,
+					    updated_at = NOW()
+					WHERE tenant_id = $4
+				`, nextBillingDate, nextPeriodStart, nextPeriodEnd, tenantID)
+			if txErr != nil {
+				return fmt.Errorf("advance subscription period: %w", txErr)
+			}
+			if rows, rowsErr := result.RowsAffected(); rowsErr != nil {
+				return fmt.Errorf("advance subscription period rows: %w", rowsErr)
+			} else if rows == 0 {
+				return fmt.Errorf("advance subscription period: no subscription row for tenant %s", tenantID)
+			}
+			return nil
+		})
 		if err != nil {
-			jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to update next billing date")
+			jm.logger.WithFields(logging.Fields{
+				"error":     err,
+				"tenant_id": tenantID,
+				"amount":    totalAmt,
+			}).Error("Failed to create invoice")
+			continue
 		}
 
 		invoicesGenerated++
@@ -1019,18 +1193,20 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			"invoice_id":       invoiceID,
 			"tenant_id":        tenantID,
 			"tier_name":        tierName,
-			"base_amount":      totalAmount - meteredAmount,
-			"metered_amount":   meteredAmount,
-			"total_amount":     totalAmount,
+			"base_amount":      baseAmt,
+			"metered_amount":   meteredAmt,
+			"total_amount":     totalAmt,
 			"currency":         currency,
 			"due_date":         dueDate,
 			"metering_enabled": meteringEnabled,
 		}).Info("Generated monthly invoice")
 
-		// Send invoice created email notification
+		// Send invoice created email notification. The email service takes a
+		// float64 for display rendering. Render at the boundary, after the
+		// canonical decimal value has already been written to the DB.
 		if billingEmail != "" {
-			// usageDetails already has usage_data and enrichment from Periscope
-			err = jm.emailService.SendInvoiceCreatedEmail(billingEmail, "", invoiceID, totalAmount, currency, dueDate, usageDetails)
+			emailTotal, _ := totalDec.Round(2).Float64()
+			err = jm.emailService.SendInvoiceCreatedEmail(billingEmail, "", invoiceID, emailTotal, currency, dueDate, usageDetails)
 			if err != nil {
 				jm.logger.WithError(err).WithFields(logging.Fields{
 					"billing_email": billingEmail,
@@ -1038,6 +1214,9 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 				}).Error("Failed to send invoice created email")
 			}
 		}
+	}
+	if err := rows.Err(); err != nil {
+		jm.logger.WithError(err).Error("Invoice subscription cursor failed")
 	}
 
 	jm.logger.WithFields(logging.Fields{
@@ -1227,7 +1406,7 @@ func (jm *JobManager) retryFailedPayments(ctx context.Context) {
 		UPDATE purser.billing_payments
 		SET status = 'pending', updated_at = NOW()
 		WHERE status = 'failed' 
-		  AND method IN ('mollie')
+		  AND method = 'card'
 		  AND created_at > NOW() - INTERVAL '24 hours'
 		  AND updated_at < NOW() - INTERVAL '1 hour'
 	`)
@@ -1367,8 +1546,8 @@ func (jm *JobManager) cleanupExpiredWallets(ctx context.Context) {
 
 // ============================================================================
 // USAGE PROCESSING (Kafka ingestion)
-// These methods were moved from usage.go when HTTP handlers were deleted.
-// Usage ingestion flows: Periscope -> Kafka -> JobManager.handleUsageReport
+// Periscope produces tenant usage summaries to Kafka; Purser persists them
+// and rates them through the billing engine.
 // ============================================================================
 
 // processUsageSummary processes a single usage summary and stores it in the usage records table
@@ -1492,41 +1671,27 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 
 // updateInvoiceDraft creates or updates an invoice draft for the tenant based on usage
 func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) error {
-	var (
-		tierID              string
-		subscriptionStatus  string
-		tierName            string
-		displayName         string
-		basePrice           float64
-		currency            string
-		meteringEnabled     bool
-		overageRates        models.OverageRates
-		storageAllocation   models.AllocationDetails
-		bandwidthAllocation models.AllocationDetails
-		customPricing       models.CustomPricing
-		customAllocations   models.AllocationDetails
-	)
-
-	err := jm.db.QueryRowContext(ctx, `
-		SELECT ts.tier_id, ts.status, bt.tier_name, bt.display_name, bt.base_price, bt.currency, bt.metering_enabled,
-		       bt.overage_rates, bt.storage_allocation, bt.bandwidth_allocation, ts.custom_pricing, ts.custom_allocations
-		FROM purser.tenant_subscriptions ts
-		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
-		WHERE ts.tenant_id = $1 AND ts.status = 'active' AND bt.is_active = true
-	`, tenantID).Scan(&tierID, &subscriptionStatus, &tierName, &displayName, &basePrice, &currency, &meteringEnabled,
-		&overageRates, &storageAllocation, &bandwidthAllocation, &customPricing, &customAllocations)
-
+	tier, err := billingpkg.LoadEffectiveTier(ctx, jm.db, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		jm.logger.WithField("tenant_id", tenantID).Info("No active subscription, skipping invoice draft")
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("failed to get subscription: %w", err)
+		return fmt.Errorf("failed to load effective tier: %w", err)
 	}
+	tierID := tier.TierID
+	tierName := tier.TierName
+	displayName := tier.TierName
+	basePrice, _ := tier.BasePrice.Float64()
+	currency := tier.Currency
+	meteringEnabled := tier.MeteringEnabled
 
 	// Get current billing period
 	now := time.Now()
-	periodStart, periodEnd := loadSubscriptionPeriod(ctx, jm.db, tenantID, now)
+	periodStart, periodEnd, periodErr := loadSubscriptionPeriod(ctx, jm.db, tenantID, now)
+	if periodErr != nil {
+		return periodErr
+	}
 
 	var finalizedCount int
 	if countErr := jm.db.QueryRowContext(ctx, `
@@ -1545,84 +1710,27 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 		return nil
 	}
 
-	// Aggregate usage for current billing period
-	// Only aggregate rollup-able metrics - uniques come from Periscope enrichment
-	rows, err := jm.db.QueryContext(ctx, `
-		SELECT usage_type,
-		       CASE
-			       WHEN usage_type = 'average_storage_gb' THEN AVG(usage_value)
-			       WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers') THEN MAX(usage_value)
-			       ELSE SUM(usage_value)
-		       END as total
-		FROM purser.usage_records
-		WHERE tenant_id = $1
-		  AND period_start < $3
-		  AND period_end > $2
-		  AND usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
-		GROUP BY usage_type
-	`, tenantID, periodStart, periodEnd)
-	if err != nil {
-		return fmt.Errorf("failed to query usage: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
+	// Aggregate usage via the shared fail-closed helper; query/scan/iteration
+	// errors abort the draft update so we never apply the wrong prepaid
+	// credit on partial usage and ack the Kafka message as processed.
 	usageTotals := make(map[string]float64)
-
-	for rows.Next() {
-		var usageType string
-		var total float64
-		if scanErr := rows.Scan(&usageType, &total); scanErr != nil {
-			continue
-		}
-		usageTotals[usageType] = total
+	if usageErr := jm.collectInvoiceUsage(ctx, tenantID, periodStart, periodEnd, usageTotals); usageErr != nil {
+		return fmt.Errorf("collect invoice usage: %w", usageErr)
 	}
 
-	// Calculate charges (base + metered)
-	baseAmount, meteredAmount := calculateCharges(usageTotals, basePrice, meteringEnabled, overageRates, storageAllocation, bandwidthAllocation, customPricing, customAllocations)
-	grossAmount := baseAmount + meteredAmount
-
-	// Apply prepaid credit if available (for postpaid users with prepaid balance)
-	var prepaidCreditApplied float64
-	prepaidBalance, err := jm.getPrepaidBalance(ctx, tenantID)
+	// Rate the period via the engine; one source of truth for invoice math.
+	// Money stays as decimal.Decimal end-to-end and binds to NUMERIC columns
+	// as decimal strings; float64 never touches the cents.
+	ratingInput := buildRatingInputFromAggregates(usageTotals, tier)
+	ratingInput.PeriodStart = periodStart
+	ratingInput.PeriodEnd = periodEnd
+	ratingResult, err := rating.Rate(ratingInput)
 	if err != nil {
-		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to get prepaid balance for invoice")
-	} else if prepaidBalance > 0 && grossAmount > 0 {
-		// Convert gross amount to cents for comparison
-		grossAmountCents := int64(grossAmount * 100)
-		// Credit to apply is min of balance and gross amount
-		creditToApplyCents := prepaidBalance
-		if creditToApplyCents > grossAmountCents {
-			creditToApplyCents = grossAmountCents
-		}
-		referenceID := uuid.NewSHA1(
-			uuid.NameSpaceOID,
-			[]byte(fmt.Sprintf("invoice_credit:%s:%s", tenantID, periodStart.Format("2006-01-02"))),
-		).String()
-
-		// Deduct from prepaid balance (idempotent via referenceID)
-		var duplicate bool
-		_, duplicate, err = jm.deductPrepaidBalanceForCredit(ctx, tenantID, creditToApplyCents, fmt.Sprintf("Invoice credit: %s", periodStart.Format("2006-01")), &referenceID)
-		if err != nil {
-			jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to deduct prepaid balance for invoice credit")
-		} else if duplicate {
-			amountCents, found, lookupErr := jm.getBalanceTransactionByReference(ctx, tenantID, "invoice_credit", referenceID)
-			if lookupErr != nil {
-				jm.logger.WithError(lookupErr).WithField("tenant_id", tenantID).Warn("Failed to fetch prior invoice credit transaction")
-			} else if found && amountCents < 0 {
-				prepaidCreditApplied = float64(-amountCents) / 100.0
-			}
-		} else {
-			prepaidCreditApplied = float64(creditToApplyCents) / 100.0
-			jm.logger.WithFields(logging.Fields{
-				"tenant_id":              tenantID,
-				"prepaid_credit_applied": prepaidCreditApplied,
-				"gross_amount":           grossAmount,
-			}).Info("Applied prepaid credit to invoice")
-		}
+		return fmt.Errorf("rate usage: %w", err)
 	}
-
-	// Net amount is gross minus credit applied
-	totalAmount := grossAmount - prepaidCreditApplied
+	baseDec := ratingResult.BaseAmount
+	meteredDec := ratingResult.UsageAmount
+	grossDec := ratingResult.TotalAmount
 
 	// Build flat usage_details - all metrics at top level for email and API
 	usageDetails := map[string]interface{}{
@@ -1636,8 +1744,6 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 			"metering_enabled": meteringEnabled,
 		},
 	}
-
-	// Add rollup-able billing metrics
 	for k, v := range usageTotals {
 		usageDetails[k] = v
 	}
@@ -1648,58 +1754,110 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 		usageJSON = []byte("{}")
 	}
 
-	// Upsert draft invoice in billing_invoices
+	creditReferenceID := uuid.NewSHA1(
+		uuid.NameSpaceOID,
+		[]byte(fmt.Sprintf("invoice_credit:%s:%s", tenantID, periodStart.Format("2006-01-02"))),
+	).String()
+
+	// Apply prepaid credit, write invoice header + line items in one
+	// transaction so the credit and the invoice always commit together. If any
+	// step fails, the credit is not deducted from the prepaid balance.
+	//
+	// Idempotency: the credit is keyed on (tenant_id, period). On rerun the
+	// prior ledger row is the source of truth; a newly computed gross amount
+	// must NOT override an already-applied credit. We look up the prior row
+	// first; if present we preserve it. Only when there is no prior row do we
+	// deduct fresh.
 	dueDate := periodEnd.AddDate(0, 0, 14)
-	result, err := jm.db.ExecContext(ctx, `
-		UPDATE purser.billing_invoices
-		SET amount = $1,
-			base_amount = $2,
-			metered_amount = $3,
-			prepaid_credit_applied = $4,
-			currency = $5,
-			status = 'draft',
-			due_date = $6,
-			usage_details = $7,
-			period_start = $8,
-			period_end = $9,
-			updated_at = NOW()
-		WHERE tenant_id = $10
-		  AND status = 'draft'
-		  AND period_start = $8
-	`, totalAmount, baseAmount, meteredAmount, prepaidCreditApplied, currency, dueDate, usageJSON, periodStart, periodEnd, tenantID)
-
-	if err != nil {
-		return fmt.Errorf("failed to update invoice draft: %w", err)
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		_, err = jm.db.ExecContext(ctx, `
-			INSERT INTO purser.billing_invoices (
-				id, tenant_id, amount, currency, status, due_date,
-				base_amount, metered_amount, prepaid_credit_applied, usage_details,
-				period_start, period_end,
-				created_at, updated_at
-			) VALUES (
-				gen_random_uuid(), $1, $2, $3, 'draft', $4,
-				$5, $6, $7, $8, $9, $10, NOW(), NOW()
-			)
-		`, tenantID, totalAmount, currency, dueDate, baseAmount, meteredAmount, prepaidCreditApplied, usageJSON, periodStart, periodEnd)
-		if err != nil {
-			return fmt.Errorf("failed to insert invoice draft: %w", err)
+	var invoiceID string
+	var prepaidCreditDec decimal.Decimal
+	var netDec decimal.Decimal
+	hundred := decimal.NewFromInt(100)
+	err = withTx(ctx, jm.db, func(tx *sql.Tx) error {
+		if grossDec.IsPositive() {
+			var priorAmountCents int64
+			priorErr := tx.QueryRowContext(ctx, `
+				SELECT amount_cents FROM purser.balance_transactions
+				WHERE tenant_id = $1 AND reference_type = 'invoice_credit' AND reference_id = $2
+				ORDER BY created_at DESC LIMIT 1
+			`, tenantID, creditReferenceID).Scan(&priorAmountCents)
+			switch {
+			case priorErr == nil && priorAmountCents < 0:
+				// Prior credit exists; preserve it. Do not deduct again.
+				prepaidCreditDec = decimal.NewFromInt(-priorAmountCents).Div(hundred)
+			case errors.Is(priorErr, sql.ErrNoRows), priorErr == nil:
+				// No prior credit: deduct fresh. gross-to-cents uses decimal so we
+				// don't lose precision on binary-float edges. The helper caps
+				// against the row-locked balance and returns the actual amount.
+				grossCents := grossDec.Mul(hundred).Round(0).IntPart()
+				requestCents := grossCents
+				if requestCents > 0 {
+					creditDesc := fmt.Sprintf("Invoice credit: %s", periodStart.Format("2006-01"))
+					_, applied, _, txErr := jm.deductPrepaidBalanceForCreditTx(ctx, tx, tenantID, requestCents, creditDesc, &creditReferenceID)
+					if txErr != nil {
+						return fmt.Errorf("deduct prepaid credit: %w", txErr)
+					}
+					if applied > 0 {
+						prepaidCreditDec = decimal.NewFromInt(applied).Div(hundred)
+					}
+				}
+			default:
+				return fmt.Errorf("lookup prior invoice credit: %w", priorErr)
+			}
 		}
-	}
+		totalDec := grossDec.Sub(prepaidCreditDec)
+		if totalDec.IsNegative() {
+			totalDec = decimal.Zero
+		}
+		netDec = totalDec
 
+		// Pass decimals as strings into Postgres NUMERIC columns so no float64
+		// rounding can sneak in at the SQL boundary. PG parses '1.99'::numeric
+		// exactly; '1.9900000000000002'::float8 ≠ 1.99.
+		totalAmt := totalDec.Round(2).String()
+		baseAmt := baseDec.Round(2).String()
+		meteredAmt := meteredDec.Round(2).String()
+		creditAmt := prepaidCreditDec.Round(2).String()
+
+		txErr := tx.QueryRowContext(ctx, `
+				INSERT INTO purser.billing_invoices (
+					id, tenant_id, amount, currency, status, due_date,
+					base_amount, metered_amount, prepaid_credit_applied, usage_details,
+					period_start, period_end,
+					created_at, updated_at
+				) VALUES (
+					gen_random_uuid(), $1, $2::numeric, $3, 'draft', $4,
+					$5::numeric, $6::numeric, $7::numeric, $8, $9, $10, NOW(), NOW()
+				)
+				ON CONFLICT (tenant_id, period_start) WHERE period_start IS NOT NULL
+				DO UPDATE SET
+					amount = EXCLUDED.amount,
+					currency = EXCLUDED.currency,
+					status = 'draft',
+					due_date = EXCLUDED.due_date,
+					base_amount = EXCLUDED.base_amount,
+					metered_amount = EXCLUDED.metered_amount,
+					prepaid_credit_applied = EXCLUDED.prepaid_credit_applied,
+					usage_details = EXCLUDED.usage_details,
+					period_end = EXCLUDED.period_end,
+					updated_at = NOW()
+				WHERE purser.billing_invoices.status = 'draft'
+				RETURNING id
+			`, tenantID, totalAmt, currency, dueDate, baseAmt, meteredAmt, creditAmt, usageJSON, periodStart, periodEnd).Scan(&invoiceID)
+		if txErr != nil {
+			return fmt.Errorf("upsert invoice draft: %w", txErr)
+		}
+		return persistInvoiceLineItems(ctx, tx, invoiceID, tenantID, ratingResult)
+	})
 	if err != nil {
-		return fmt.Errorf("failed to upsert invoice draft: %w", err)
+		return fmt.Errorf("invoice draft transaction: %w", err)
 	}
-
 	jm.logger.WithFields(logging.Fields{
 		"tenant_id":              tenantID,
 		"billing_period":         periodStart.Format("2006-01"),
-		"gross_amount":           grossAmount,
-		"prepaid_credit_applied": prepaidCreditApplied,
-		"net_amount":             totalAmount,
+		"gross_amount":           grossDec.String(),
+		"prepaid_credit_applied": prepaidCreditDec.String(),
+		"net_amount":             netDec.String(),
 	}).Info("Updated invoice draft")
 
 	return nil

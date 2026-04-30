@@ -195,16 +195,6 @@ type APIUsageEdge struct {
 	Node   *proto.APIUsageRecord `json:"node"`
 }
 
-// Resource allocation configuration.
-type AllocationDetailsInput struct {
-	// Resource limit (null = unlimited).
-	Limit *float64 `json:"limit,omitempty"`
-	// Price per unit above the limit.
-	UnitPrice *float64 `json:"unitPrice,omitempty"`
-	// Unit of measurement (GiB, hours, etc.).
-	Unit *string `json:"unit,omitempty"`
-}
-
 type ArtifactEventEdge struct {
 	Cursor string           `json:"cursor"`
 	Node   *proto.ClipEvent `json:"node"`
@@ -635,9 +625,9 @@ type CreateBootstrapTokenInput struct {
 
 // Input for creating a card-based prepaid balance top-up.
 type CreateCardTopupInput struct {
-	// Amount to top up in cents. Minimum $5.00 (500 cents).
+	// Amount to top up in cents. Minimum €5.00 (500 cents).
 	AmountCents int `json:"amountCents"`
-	// Currency code (default: USD).
+	// Currency code (default: EUR).
 	Currency *string `json:"currency,omitempty"`
 	// Payment provider to use.
 	Provider CardPaymentProvider `json:"provider"`
@@ -714,7 +704,7 @@ type CreateCryptoTopupInput struct {
 	AmountCents int `json:"amountCents"`
 	// Crypto asset to receive (ETH or USDC; LPT not yet supported).
 	Asset proto.CryptoAsset `json:"asset"`
-	// Currency the prepaid balance is denominated in. USD or EUR; defaults to USD.
+	// Currency the prepaid balance is denominated in. USD or EUR; defaults to EUR.
 	Currency *string `json:"currency,omitempty"`
 }
 
@@ -751,8 +741,6 @@ func (CreateEnrollmentTokenResponse) IsCreateEnrollmentTokenResult() {}
 
 type CreatePaymentInput struct {
 	InvoiceID string        `json:"invoiceId"`
-	Amount    float64       `json:"amount"`
-	Currency  *string       `json:"currency,omitempty"`
 	Method    PaymentMethod `json:"method"`
 	ReturnURL *string       `json:"returnUrl,omitempty"`
 }
@@ -875,16 +863,6 @@ type CryptoTopupStatus struct {
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 }
 
-// Custom pricing configuration for enterprise subscriptions.
-type CustomPricingInput struct {
-	// Custom base monthly price.
-	BasePrice *float64 `json:"basePrice,omitempty"`
-	// Discount rate (0.0 to 1.0).
-	DiscountRate *float64 `json:"discountRate,omitempty"`
-	// Custom overage rates.
-	OverageRates *OverageRatesInput `json:"overageRates,omitempty"`
-}
-
 type DVRRecordingEdge struct {
 	Cursor string         `json:"cursor"`
 	Node   *proto.DVRInfo `json:"node"`
@@ -940,6 +918,18 @@ type EdgeTelemetrySetup struct {
 	Enabled     bool    `json:"enabled"`
 	WriteURL    *string `json:"writeUrl,omitempty"`
 	BearerToken *string `json:"bearerToken,omitempty"`
+}
+
+// A key-value entitlement entry. Values are JSON-encoded for type flexibility.
+type EntitlementEntry struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// A key/JSON-value entitlement input.
+type EntitlementEntryInput struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 type FederationEventEdge struct {
@@ -1244,21 +1234,21 @@ func (NotFoundError) IsUnlinkWalletResult() {}
 
 func (NotFoundError) IsSendMessageResult() {}
 
-// Overage rate configuration for custom pricing.
-type OverageRatesInput struct {
-	// Bandwidth overage configuration.
-	Bandwidth *AllocationDetailsInput `json:"bandwidth,omitempty"`
-	// Storage overage configuration.
-	Storage *AllocationDetailsInput `json:"storage,omitempty"`
-	// Compute overage configuration.
-	Compute *AllocationDetailsInput `json:"compute,omitempty"`
-}
-
 type PageInfo struct {
 	StartCursor     *string `json:"startCursor,omitempty"`
 	EndCursor       *string `json:"endCursor,omitempty"`
 	HasNextPage     bool    `json:"hasNextPage"`
 	HasPreviousPage bool    `json:"hasPreviousPage"`
+}
+
+// A pricing rule input — mirrors PricingRule output type.
+type PricingRuleInput struct {
+	Meter            string  `json:"meter"`
+	Model            string  `json:"model"`
+	Currency         string  `json:"currency"`
+	IncludedQuantity string  `json:"includedQuantity"`
+	UnitPrice        string  `json:"unitPrice"`
+	ConfigJSON       *string `json:"configJson,omitempty"`
 }
 
 type ProcessingUsageConnection struct {
@@ -1558,6 +1548,12 @@ type TenantUsage struct {
 	Costs         []*CostEntry  `json:"costs"`
 	TotalCost     float64       `json:"totalCost"`
 	Currency      string        `json:"currency"`
+	// Rated line items for the period (rating engine output).
+	LineItems []*proto.LineItem `json:"lineItems"`
+	// Decimal-string base subscription portion.
+	BaseAmount string `json:"baseAmount"`
+	// Decimal-string metered portion.
+	UsageAmount string `json:"usageAmount"`
 }
 
 // Time range for filtering time-series data.
@@ -1628,12 +1624,12 @@ type UpdateStreamInput struct {
 
 // Input for updating enterprise subscription custom terms.
 type UpdateSubscriptionCustomTermsInput struct {
-	// Custom pricing overrides.
-	CustomPricing *CustomPricingInput `json:"customPricing,omitempty"`
 	// Custom feature flags.
 	CustomFeatures *BillingFeaturesInput `json:"customFeatures,omitempty"`
-	// Custom resource allocations.
-	CustomAllocations *AllocationDetailsInput `json:"customAllocations,omitempty"`
+	// Per-subscription pricing rule overrides (wholesale replace by meter).
+	PricingOverrides []*PricingRuleInput `json:"pricingOverrides,omitempty"`
+	// Per-subscription entitlement overrides.
+	EntitlementOverrides []*EntitlementEntryInput `json:"entitlementOverrides,omitempty"`
 }
 
 // Input for updating tenant settings.
@@ -2348,23 +2344,26 @@ func (e NodeStatus) MarshalJSON() ([]byte, error) {
 type PaymentMethod string
 
 const (
-	// Credit/debit card via Stripe.
+	// Credit/debit card via the configured card provider.
 	PaymentMethodCard PaymentMethod = "CARD"
-	// Cryptocurrency payment.
-	PaymentMethodCrypto PaymentMethod = "CRYPTO"
+	// Ethereum invoice payment.
+	PaymentMethodCryptoEth PaymentMethod = "CRYPTO_ETH"
+	// USDC invoice payment.
+	PaymentMethodCryptoUsdc PaymentMethod = "CRYPTO_USDC"
 	// ACH/wire bank transfer.
 	PaymentMethodBankTransfer PaymentMethod = "BANK_TRANSFER"
 )
 
 var AllPaymentMethod = []PaymentMethod{
 	PaymentMethodCard,
-	PaymentMethodCrypto,
+	PaymentMethodCryptoEth,
+	PaymentMethodCryptoUsdc,
 	PaymentMethodBankTransfer,
 }
 
 func (e PaymentMethod) IsValid() bool {
 	switch e {
-	case PaymentMethodCard, PaymentMethodCrypto, PaymentMethodBankTransfer:
+	case PaymentMethodCard, PaymentMethodCryptoEth, PaymentMethodCryptoUsdc, PaymentMethodBankTransfer:
 		return true
 	}
 	return false

@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"math/big"
 	"net/http"
 	"strings"
@@ -38,20 +37,24 @@ func TestConfirmPrepaidTopupCreatesBalanceAndTransaction(t *testing.T) {
 
 	currency := "USD"
 
+	mock.ExpectExec("INSERT INTO purser.prepaid_balances").
+		WithArgs("tenant-1", currency).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
 	mock.ExpectQuery("SELECT balance_cents FROM purser.prepaid_balances").
 		WithArgs("tenant-1", currency).
-		WillReturnError(sql.ErrNoRows)
+		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(0)))
 
-	mock.ExpectExec("INSERT INTO purser.prepaid_balances").
-		WithArgs("tenant-1", int64(2500), currency).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("UPDATE purser.prepaid_balances").
+		WithArgs(int64(2500), "tenant-1", currency).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	mock.ExpectExec("INSERT INTO purser.balance_transactions").
 		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(2500), int64(2500), sqlmock.AnyArg(), "wallet-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectExec("UPDATE purser.crypto_wallets").
-		WithArgs("wallet-1", int64(2500), "USD").
+		WithArgs("wallet-1", int64(2500), "USD", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	mock.ExpectRollback()
@@ -76,6 +79,56 @@ func TestConfirmPrepaidTopupCreatesBalanceAndTransaction(t *testing.T) {
 		t.Fatalf("failed to rollback: %v", err)
 	}
 
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestConfirmInvoicePaymentUpdatesPendingIntent(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	mock.ExpectBegin()
+	dbTx, err := mockDB.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+
+	invoiceID := "invoice-1"
+	wallet := PendingWallet{
+		ID:            "wallet-1",
+		TenantID:      "tenant-1",
+		Purpose:       "invoice",
+		InvoiceID:     &invoiceID,
+		Asset:         "USDC",
+		Network:       "base",
+		WalletAddress: "0xwallet",
+	}
+	chainTx := CryptoTransaction{Hash: "0xtx", BlockNumber: 123}
+
+	mock.ExpectQuery("UPDATE purser.billing_payments bp").
+		WithArgs("0xtx", sqlmock.AnyArg(), 42.5, "USDC", "base", int64(123), "invoice-1", "tenant-1", "crypto_usdc", "0xwallet").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "amount", "currency"}).AddRow("payment-1", 42.50, "EUR"))
+	mock.ExpectExec("UPDATE purser.billing_invoices").
+		WithArgs(sqlmock.AnyArg(), "invoice-1", "tenant-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectRollback()
+
+	cm := &CryptoMonitor{db: mockDB, logger: logrus.New()}
+	payment, err := cm.confirmInvoicePayment(context.Background(), dbTx, wallet, chainTx, 42.5, time.Now())
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if payment.PaymentID != "payment-1" || payment.Amount != 42.50 || payment.Currency != "EUR" {
+		t.Fatalf("unexpected payment result: %+v", payment)
+	}
+
+	if err := dbTx.Rollback(); err != nil {
+		t.Fatalf("failed to rollback: %v", err)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
@@ -127,6 +180,33 @@ func TestEvaluatePayment_PrepaidETHComparesBaseUnits(t *testing.T) {
 	match = cm.evaluatePayment(tx, wallet, 0, network)
 	if match.amountSeen {
 		t.Fatalf("expected amountSeen=false for 1%% underpay")
+	}
+}
+
+func TestEvaluatePayment_InvoiceETHComparesQuotedBaseUnits(t *testing.T) {
+	cm := &CryptoMonitor{logger: logrus.New()}
+	network := NetworkConfig{Confirmations: 3}
+	expectedBaseUnits, _ := new(big.Int).SetString("15000000000000000", 10)
+	wallet := PendingWallet{
+		Asset:                   "ETH",
+		Purpose:                 "invoice",
+		ExpectedAmountBaseUnits: expectedBaseUnits,
+		QuotedPriceUSD:          decimal.NewFromInt(3300),
+	}
+
+	tx := CryptoTransaction{Value: "15000000000000000", Confirmations: 2}
+	match := cm.evaluatePayment(tx, wallet, 0, network)
+	if !match.amountSeen {
+		t.Fatalf("expected amountSeen for exact invoice quote")
+	}
+	if match.confirmed {
+		t.Fatalf("expected invoice quote to wait for required confirmations")
+	}
+
+	tx.Confirmations = 3
+	match = cm.evaluatePayment(tx, wallet, 0, network)
+	if !match.amountSeen || !match.confirmed {
+		t.Fatalf("expected invoice quote seen + confirmed, got %+v", match)
 	}
 }
 

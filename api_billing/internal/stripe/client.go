@@ -3,13 +3,13 @@ package stripe
 import (
 	"context"
 	"fmt"
+	"maps"
+	"strings"
 	"time"
 
 	"frameworks/pkg/logging"
 
-	"math"
-	"strings"
-
+	"github.com/shopspring/decimal"
 	"github.com/stripe/stripe-go/v82"
 	"github.com/stripe/stripe-go/v82/billingportal/session"
 	checkoutsession "github.com/stripe/stripe-go/v82/checkout/session"
@@ -79,16 +79,14 @@ func (c *Client) CreateOrGetCustomer(ctx context.Context, info CustomerInfo) (*s
 			"tenant_id": info.TenantID,
 		},
 	}
-	for k, v := range info.Metadata {
-		createParams.Metadata[k] = v
-	}
+	maps.Copy(createParams.Metadata, info.Metadata)
 
 	cust, err := customer.New(createParams)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Stripe customer: %w", err)
 	}
 
-	c.logger.WithFields(map[string]interface{}{
+	c.logger.WithFields(map[string]any{
 		"customer_id": cust.ID,
 		"tenant_id":   info.TenantID,
 	}).Info("Created new Stripe customer")
@@ -156,7 +154,7 @@ func (c *Client) CreateCheckoutSession(ctx context.Context, params CheckoutSessi
 		return nil, fmt.Errorf("failed to create checkout session: %w", err)
 	}
 
-	c.logger.WithFields(map[string]interface{}{
+	c.logger.WithFields(map[string]any{
 		"session_id": sess.ID,
 		"tenant_id":  params.TenantID,
 		"price_id":   params.PriceID,
@@ -243,7 +241,7 @@ func (c *Client) UpdateSubscription(ctx context.Context, subscriptionID, newPric
 		return nil, fmt.Errorf("failed to update subscription: %w", err)
 	}
 
-	c.logger.WithFields(map[string]interface{}{
+	c.logger.WithFields(map[string]any{
 		"subscription_id": subscriptionID,
 		"new_price_id":    newPriceID,
 	}).Info("Subscription updated")
@@ -255,7 +253,7 @@ func (c *Client) UpdateSubscription(ctx context.Context, subscriptionID, newPric
 type WebhookEvent struct {
 	Type     string
 	ID       string
-	Data     map[string]interface{}
+	Data     map[string]any
 	RawEvent *stripe.Event
 }
 
@@ -354,7 +352,7 @@ func (c *Client) FindOrCreateProduct(ctx context.Context, tierName, displayName,
 
 	for iter.Next() {
 		prod := iter.Product()
-		c.logger.WithFields(map[string]interface{}{
+		c.logger.WithFields(map[string]any{
 			"product_id": prod.ID,
 			"tier_name":  tierName,
 		}).Debug("Found existing Stripe product")
@@ -375,7 +373,7 @@ func (c *Client) FindOrCreateProduct(ctx context.Context, tierName, displayName,
 		return nil, fmt.Errorf("failed to create Stripe product: %w", err)
 	}
 
-	c.logger.WithFields(map[string]interface{}{
+	c.logger.WithFields(map[string]any{
 		"product_id": prod.ID,
 		"tier_name":  tierName,
 	}).Info("Created Stripe product")
@@ -399,7 +397,7 @@ func (c *Client) FindOrCreatePrice(ctx context.Context, productID string, amount
 	for iter.Next() {
 		p := iter.Price()
 		if p.UnitAmount == amountCents {
-			c.logger.WithFields(map[string]interface{}{
+			c.logger.WithFields(map[string]any{
 				"price_id":   p.ID,
 				"product_id": productID,
 			}).Debug("Found existing Stripe price")
@@ -422,7 +420,7 @@ func (c *Client) FindOrCreatePrice(ctx context.Context, productID string, amount
 		return nil, fmt.Errorf("failed to create Stripe price: %w", err)
 	}
 
-	c.logger.WithFields(map[string]interface{}{
+	c.logger.WithFields(map[string]any{
 		"price_id":     p.ID,
 		"product_id":   productID,
 		"amount_cents": amountCents,
@@ -435,17 +433,35 @@ func (c *Client) FindOrCreatePrice(ctx context.Context, productID string, amount
 
 // SyncTier ensures a Stripe product and monthly price exist for the given tier.
 // Returns the Stripe product ID and monthly price ID. Idempotent.
-func (c *Client) SyncTier(ctx context.Context, tierName, displayName, description string, basePrice float64, currency string) (productID, monthlyPriceID string, err error) {
+func (c *Client) SyncTier(ctx context.Context, tierName, displayName, description string, basePrice decimal.Decimal, currency string) (productID, monthlyPriceID string, err error) {
 	prod, err := c.FindOrCreateProduct(ctx, tierName, displayName, description)
 	if err != nil {
 		return "", "", err
 	}
 
-	amountCents := int64(math.Round(basePrice * 100))
+	amountCents := basePrice.Mul(decimal.NewFromInt(100)).Round(0).IntPart()
 	p, err := c.FindOrCreatePrice(ctx, prod.ID, amountCents, currency, "month")
 	if err != nil {
 		return prod.ID, "", err
 	}
 
 	return prod.ID, p.ID, nil
+}
+
+// DeactivatePrice marks a Stripe price as inactive. Stripe prices are immutable,
+// so when a tier's base_price changes we create a new price and deactivate the
+// previous one. Existing subscriptions on the old price keep billing at the old
+// rate; new subscriptions can only use the active price.
+func (c *Client) DeactivatePrice(ctx context.Context, priceID string) error {
+	if priceID == "" {
+		return nil
+	}
+	_, err := stripeprice.Update(priceID, &stripe.PriceParams{
+		Active: stripe.Bool(false),
+	})
+	if err != nil {
+		return fmt.Errorf("deactivate price %s: %w", priceID, err)
+	}
+	c.logger.WithField("price_id", priceID).Info("Deactivated stale Stripe price")
+	return nil
 }

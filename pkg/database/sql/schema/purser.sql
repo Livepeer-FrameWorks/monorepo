@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS purser.billing_invoices (
 
     -- ===== FINANCIAL DETAILS =====
     status VARCHAR(50) NOT NULL DEFAULT 'pending', -- draft, pending, paid, overdue, cancelled
-    currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+    currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
     amount DECIMAL(10,2) NOT NULL DEFAULT 0,
 
     -- ===== BILLING PERIOD =====
@@ -54,10 +54,11 @@ CREATE TABLE IF NOT EXISTS purser.billing_payments (
     invoice_id UUID NOT NULL REFERENCES purser.billing_invoices(id) ON DELETE CASCADE,
     
     -- ===== PAYMENT DETAILS =====
-    method VARCHAR(50) NOT NULL, -- crypto, stripe, bank_transfer
+    method VARCHAR(50) NOT NULL, -- card, crypto_eth, crypto_usdc, bank_transfer
     amount DECIMAL(10,2) NOT NULL,
-    currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+    currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
     tx_id VARCHAR(255), -- External transaction ID
+    payment_url TEXT,
     actual_tx_amount DECIMAL(30,18),
     asset_type VARCHAR(10),
     network VARCHAR(20),
@@ -66,6 +67,7 @@ CREATE TABLE IF NOT EXISTS purser.billing_payments (
     -- ===== STATUS =====
     status VARCHAR(50) NOT NULL DEFAULT 'pending', -- pending, confirmed, failed
     confirmed_at TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT chk_billing_payments_method CHECK (method IN ('card', 'crypto_eth', 'crypto_usdc', 'bank_transfer')),
     
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -115,7 +117,7 @@ CREATE TABLE IF NOT EXISTS purser.crypto_wallets (
     invoice_id UUID REFERENCES purser.billing_invoices(id) ON DELETE CASCADE,
 
     -- For prepaid top-ups: expected amount in the tenant's prepaid currency
-    -- (USD or EUR cents). NULL for invoice — amount comes from the invoice.
+    -- (EUR or USD cents). NULL for invoice — amount comes from the invoice.
     expected_amount_cents BIGINT,
 
     -- ===== WALLET DETAILS =====
@@ -189,15 +191,16 @@ CREATE TABLE IF NOT EXISTS purser.crypto_wallets (
     ),
 
     -- Unique constraints:
-    -- For invoices: one wallet per invoice+asset
-    -- For prepaid: derivation_index must be unique (global address pool)
-    UNIQUE(invoice_id, asset),
+    -- Prepaid and invoice wallets share one global derivation index pool.
     UNIQUE(derivation_index)
 );
 
 CREATE INDEX IF NOT EXISTS idx_purser_crypto_wallets_active ON purser.crypto_wallets(status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_purser_crypto_wallets_tenant ON purser.crypto_wallets(tenant_id, purpose);
 CREATE INDEX IF NOT EXISTS idx_purser_crypto_wallets_address ON purser.crypto_wallets(wallet_address);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_crypto_wallets_active_invoice_asset
+    ON purser.crypto_wallets(invoice_id, asset)
+    WHERE purpose = 'invoice' AND status IN ('pending', 'confirming');
 CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_crypto_wallets_tx
     ON purser.crypto_wallets(network, tx_hash)
     WHERE tx_hash IS NOT NULL;
@@ -206,7 +209,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_crypto_wallets_tx
 -- BILLING TIERS & SUBSCRIPTION PLANS
 -- ============================================================================
 
--- Service tier definitions with pricing and resource allocations
+-- Service tier definitions. Metered pricing and non-billing entitlements live in
+-- tier_pricing_rules and tier_entitlements.
 CREATE TABLE IF NOT EXISTS purser.billing_tiers (
     -- ===== IDENTITY =====
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -219,20 +223,17 @@ CREATE TABLE IF NOT EXISTS purser.billing_tiers (
     currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
     billing_period VARCHAR(20) NOT NULL DEFAULT 'monthly',
     
-    -- ===== RESOURCE ALLOCATIONS =====
-    bandwidth_allocation JSONB DEFAULT '{}', -- Bandwidth limits and guarantees
-    storage_allocation JSONB DEFAULT '{}',   -- Storage quotas and retention
-    compute_allocation JSONB DEFAULT '{}',   -- CPU/GPU/processing limits
-    
     -- ===== FEATURES & SUPPORT =====
+    -- Pricing rules live in purser.tier_pricing_rules; entitlements (e.g.
+    -- recording_retention_days) live in purser.tier_entitlements.
     features JSONB NOT NULL DEFAULT '{}',    -- Feature flags and capabilities
     support_level VARCHAR(50) DEFAULT 'community',
     sla_level VARCHAR(50) DEFAULT 'none',
-    
-    -- ===== METERING & OVERAGES =====
+
+    -- ===== METERING =====
     metering_enabled BOOLEAN DEFAULT false,
-    overage_rates JSONB DEFAULT '{}',        -- Per-unit overage pricing
-    
+
+
     -- ===== STATUS & TIER LEVEL =====
     is_active BOOLEAN DEFAULT true,
     tier_level INTEGER DEFAULT 0,
@@ -256,6 +257,44 @@ CREATE TABLE IF NOT EXISTS purser.billing_tiers (
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- ============================================================================
+-- TIER ENTITLEMENTS & PRICING RULES
+-- ============================================================================
+-- The rating engine in api_billing/internal/rating consumes pricing rules to
+-- turn metered usage into invoice line items. Entitlements are non-billing
+-- grants (e.g. recording_retention_days drives Foghorn lifecycle, not money).
+
+-- Non-pricing grants attached to a tier. Values are JSON-encoded scalars.
+-- Canonical shape: the bare YAML scalar (e.g. value=90, value="basic"). The
+-- bootstrap reconciler, migration backfill, and parseRetentionDays all agree
+-- on this; do not introduce wrapper objects.
+CREATE TABLE IF NOT EXISTS purser.tier_entitlements (
+    tier_id UUID NOT NULL REFERENCES purser.billing_tiers(id) ON DELETE CASCADE,
+    key VARCHAR(64) NOT NULL,
+    value JSONB NOT NULL,
+    PRIMARY KEY (tier_id, key)
+);
+
+-- One row per (tier, meter). model is one of:
+--   tiered_graduated  -- (qty - included_quantity) * unit_price
+--   all_usage         -- qty * unit_price
+--   codec_multiplier  -- per-codec processing fee using config.codec_multipliers
+CREATE TABLE IF NOT EXISTS purser.tier_pricing_rules (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tier_id UUID NOT NULL REFERENCES purser.billing_tiers(id) ON DELETE CASCADE,
+    meter VARCHAR(64) NOT NULL,
+    model VARCHAR(32) NOT NULL,
+    currency CHAR(3) NOT NULL,
+    included_quantity NUMERIC(20,6) NOT NULL DEFAULT 0,
+    unit_price NUMERIC(20,9) NOT NULL DEFAULT 0,
+    config JSONB NOT NULL DEFAULT '{}',
+    CONSTRAINT chk_tier_pricing_meter CHECK (meter IN ('delivered_minutes', 'average_storage_gb', 'ai_gpu_hours', 'processing_seconds')),
+    CONSTRAINT chk_tier_pricing_model CHECK (model IN ('tiered_graduated', 'all_usage', 'codec_multiplier')),
+    UNIQUE (tier_id, meter)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tier_pricing_rules_tier ON purser.tier_pricing_rules(tier_id);
 
 -- ============================================================================
 -- TENANT SUBSCRIPTIONS
@@ -287,9 +326,10 @@ CREATE TABLE IF NOT EXISTS purser.tenant_subscriptions (
     cancelled_at TIMESTAMP,
 
     -- ===== CUSTOMIZATION =====
-    custom_pricing JSONB DEFAULT '{}',       -- Custom pricing overrides
+    -- Per-tenant pricing/entitlement overrides live in
+    -- purser.subscription_pricing_overrides and
+    -- purser.subscription_entitlement_overrides.
     custom_features JSONB DEFAULT '{}',      -- Custom feature flags
-    custom_allocations JSONB DEFAULT '{}',   -- Custom resource limits
 
     -- ===== PAYMENT & BILLING =====
     payment_method VARCHAR(50),
@@ -320,6 +360,63 @@ CREATE TABLE IF NOT EXISTS purser.tenant_subscriptions (
 );
 
 -- ============================================================================
+-- SUBSCRIPTION OVERRIDES
+-- ============================================================================
+-- Per-subscription overlays on top of the tier catalog. The rating engine
+-- merges tier_pricing_rules + subscription_pricing_overrides at rate time;
+-- entitlement overrides shadow tier_entitlements similarly.
+
+CREATE TABLE IF NOT EXISTS purser.subscription_pricing_overrides (
+    subscription_id UUID NOT NULL REFERENCES purser.tenant_subscriptions(id) ON DELETE CASCADE,
+    meter VARCHAR(64) NOT NULL,
+    model VARCHAR(32),
+    currency CHAR(3),
+    included_quantity NUMERIC(20,6),
+    unit_price NUMERIC(20,9),
+    config JSONB DEFAULT '{}',
+    CONSTRAINT chk_subscription_pricing_meter CHECK (meter IN ('delivered_minutes', 'average_storage_gb', 'ai_gpu_hours', 'processing_seconds')),
+    CONSTRAINT chk_subscription_pricing_model CHECK (model IS NULL OR model IN ('tiered_graduated', 'all_usage', 'codec_multiplier')),
+    PRIMARY KEY (subscription_id, meter)
+);
+
+CREATE TABLE IF NOT EXISTS purser.subscription_entitlement_overrides (
+    subscription_id UUID NOT NULL REFERENCES purser.tenant_subscriptions(id) ON DELETE CASCADE,
+    key VARCHAR(64) NOT NULL,
+    value JSONB NOT NULL,
+    PRIMARY KEY (subscription_id, key)
+);
+
+-- ============================================================================
+-- INVOICE LINE ITEMS
+-- ============================================================================
+-- One row per priced behavior on an invoice. Generated by rating.Rate and
+-- upserted on (invoice_id, line_key). Drafts refresh as usage accumulates;
+-- finalized invoices are application-layer-guarded against further writes.
+
+CREATE TABLE IF NOT EXISTS purser.invoice_line_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    invoice_id UUID NOT NULL REFERENCES purser.billing_invoices(id) ON DELETE CASCADE,
+    -- Denormalized tenant_id so financial-audit reads can filter by tenant
+    -- without a join. Required by the cross-service tenant-filter rule.
+    tenant_id UUID NOT NULL,
+    line_key VARCHAR(128) NOT NULL,
+    meter VARCHAR(64),
+    description TEXT NOT NULL,
+    quantity NUMERIC(20,6) NOT NULL,
+    included_quantity NUMERIC(20,6) NOT NULL DEFAULT 0,
+    billable_quantity NUMERIC(20,6) NOT NULL,
+    unit_price NUMERIC(20,9) NOT NULL,
+    amount NUMERIC(20,2) NOT NULL,
+    currency CHAR(3) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (invoice_id, line_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_invoice_line_items_invoice ON purser.invoice_line_items(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_invoice_line_items_tenant ON purser.invoice_line_items(tenant_id);
+
+-- ============================================================================
 -- PREPAID BALANCE SYSTEM
 -- ============================================================================
 -- Balance-based billing for wallet accounts and agents
@@ -334,10 +431,15 @@ CREATE TABLE IF NOT EXISTS purser.prepaid_balances (
 
     -- ===== BALANCE STATE =====
     balance_cents BIGINT NOT NULL DEFAULT 0,          -- Current balance in cents
-    currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+    -- Sub-cent residual from rated micro-events. Each prepaid deduction
+    -- accumulates fractional cents here until they cross a whole-cent boundary,
+    -- so per-event usage under €0.01 doesn't structurally leak revenue.
+    -- Unit is millionths of a cent (10^-8 of a unit currency).
+    balance_remainder_micro BIGINT NOT NULL DEFAULT 0,
+    currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
 
     -- ===== ALERTS =====
-    low_balance_threshold_cents BIGINT DEFAULT 500,   -- Alert when below $5
+    low_balance_threshold_cents BIGINT DEFAULT 500,   -- Alert when below €5
 
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -395,7 +497,7 @@ CREATE TABLE IF NOT EXISTS purser.pending_topups (
 
     -- ===== AMOUNT =====
     amount_cents BIGINT NOT NULL,                 -- Amount to credit on success
-    currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+    currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
 
     -- ===== STATUS & LIFECYCLE =====
     -- pending: checkout created, awaiting payment
@@ -445,7 +547,7 @@ CREATE TABLE IF NOT EXISTS purser.usage_records (
     cluster_id VARCHAR(100) NOT NULL,
     
     -- ===== USAGE METRICS =====
-    usage_type VARCHAR(50) NOT NULL,         -- stream_hours, egress_gb, storage_gb
+    usage_type VARCHAR(50) NOT NULL,         -- viewer_hours, average_storage_gb, gpu_hours, codec seconds, operational metrics
     usage_value DECIMAL(15,6) NOT NULL DEFAULT 0,
     usage_details JSONB DEFAULT '{}',        -- Additional usage metadata
     
@@ -468,13 +570,18 @@ CREATE INDEX IF NOT EXISTS idx_purser_usage_records_created_at ON purser.usage_r
 CREATE INDEX IF NOT EXISTS idx_purser_usage_records_period ON purser.usage_records(tenant_id, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_purser_usage_records_granularity_period ON purser.usage_records(tenant_id, granularity, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_purser_billing_invoices_period ON purser.billing_invoices(tenant_id, status, period_start);
-
 CREATE INDEX IF NOT EXISTS idx_purser_billing_invoices_tenant_status_due ON purser.billing_invoices(tenant_id, status, due_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_billing_invoices_tenant_period_unique
+    ON purser.billing_invoices(tenant_id, period_start)
+    WHERE period_start IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_purser_billing_payments_invoice_id ON purser.billing_payments(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_purser_billing_payments_tx_id ON purser.billing_payments(tx_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_billing_payments_tx_unique
     ON purser.billing_payments(tx_id)
     WHERE tx_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_billing_payments_pending_invoice_method
+    ON purser.billing_payments(invoice_id, method)
+    WHERE status = 'pending';
 
 -- ============================================================================
 -- BILLING & SUBSCRIPTION INDEXES
@@ -520,7 +627,7 @@ CREATE TABLE IF NOT EXISTS purser.cluster_pricing (
     currency VARCHAR(3) DEFAULT 'EUR',
 
     -- ===== METERED RATES (override tenant tier rates) =====
-    -- Format: {"delivered_minutes": 0.0005, "storage_gb": 0.01, "egress_gb": 0.02}
+    -- Format: {"delivered_minutes": 0.0005, "average_storage_gb": 0.01}
     metered_rates JSONB DEFAULT '{}',
 
     -- ===== VISIBILITY & ACCESS RULES =====

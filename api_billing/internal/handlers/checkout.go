@@ -16,6 +16,7 @@ import (
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
+	"github.com/shopspring/decimal"
 	"github.com/stripe/stripe-go/v82"
 	"github.com/stripe/stripe-go/v82/checkout/session"
 )
@@ -60,6 +61,7 @@ type CheckoutRequest struct {
 	BillingName      string
 	BillingCompany   string
 	BillingVATNumber string
+	IdempotencyKey   string
 }
 
 // CheckoutResult contains the response from creating a checkout session
@@ -151,6 +153,9 @@ func (s *CheckoutService) createStripeCheckout(ctx context.Context, req Checkout
 		LineItems:  lineItems,
 		Metadata:   metadata,
 	}
+	if req.IdempotencyKey != "" {
+		params.SetIdempotencyKey(req.IdempotencyKey)
+	}
 
 	// Pre-fill customer email if provided
 	if req.BillingEmail != "" {
@@ -197,8 +202,7 @@ func (s *CheckoutService) createMollieCheckout(ctx context.Context, req Checkout
 		"reference_id": req.ReferenceID,
 	}
 
-	// Convert amount from cents to decimal string (Mollie requires "10.00" format)
-	amountStr := fmt.Sprintf("%.2f", float64(req.AmountCents)/100)
+	amountStr := decimal.NewFromInt(req.AmountCents).Div(decimal.NewFromInt(100)).StringFixed(2)
 
 	webhookURL := ""
 	webhookBase := config.GetGatewayPublicURL()
@@ -226,7 +230,7 @@ func (s *CheckoutService) createMollieCheckout(ctx context.Context, req Checkout
 	}
 
 	// Use the existing Mollie HTTP client pattern
-	resp, err := makeMollieAPICall(ctx, "POST", "https://api.mollie.com/v2/payments", body, mollieKey)
+	resp, err := makeMollieAPICall(ctx, "POST", "https://api.mollie.com/v2/payments", body, mollieKey, req.IdempotencyKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Mollie payment: %w", err)
 	}
@@ -261,7 +265,7 @@ type MolliePaymentResponse struct {
 }
 
 // makeMollieAPICall makes an authenticated request to Mollie API
-func makeMollieAPICall(ctx context.Context, method, url string, body []byte, apiKey string) (*MolliePaymentResponse, error) {
+func makeMollieAPICall(ctx context.Context, method, url string, body []byte, apiKey, idempotencyKey string) (*MolliePaymentResponse, error) {
 	var reqBody *string
 	if body != nil {
 		s := string(body)
@@ -269,10 +273,14 @@ func makeMollieAPICall(ctx context.Context, method, url string, body []byte, api
 	}
 
 	client := &httpClient{}
-	resp, err := client.doRequest(ctx, method, url, reqBody, map[string]string{
+	headers := map[string]string{
 		"Authorization": "Bearer " + apiKey,
 		"Content-Type":  "application/json",
-	})
+	}
+	if idempotencyKey != "" {
+		headers["Idempotency-Key"] = idempotencyKey
+	}
+	resp, err := client.doRequest(ctx, method, url, reqBody, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -360,8 +368,6 @@ func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) er
 			TenantID    string `json:"tenant_id"`
 			ReferenceID string `json:"reference_id"`
 			ClusterID   string `json:"cluster_id"`
-			// Older checkout sessions may still include TierID in metadata.
-			TierID string `json:"tier_id"`
 		} `json:"metadata"`
 		AmountTotal int64  `json:"amount_total"`
 		Currency    string `json:"currency"`
@@ -372,14 +378,9 @@ func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) er
 
 	purpose := CheckoutPurpose(sess.Metadata.Purpose)
 
-	// Older Stripe sessions may not include purpose in metadata.
 	if purpose == "" {
-		if sess.Mode == "subscription" {
-			purpose = PurposeSubscription
-		} else {
-			// Legacy one-time payments were for invoices
-			purpose = PurposeInvoice
-		}
+		logger.WithField("session_id", sess.ID).Warn("Stripe checkout session missing purpose metadata, ignoring")
+		return nil
 	}
 
 	logger.WithFields(logging.Fields{
@@ -420,9 +421,6 @@ func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) er
 		clusterID := sess.Metadata.ClusterID
 		if clusterID == "" {
 			clusterID = sess.Metadata.ReferenceID
-		}
-		if clusterID == "" {
-			clusterID = sess.Metadata.TierID
 		}
 		return handleClusterSubscriptionCheckoutCompleted(
 			ctx,
@@ -526,24 +524,23 @@ func handleInvoiceCheckoutCompleted(ctx context.Context, sessionID, tenantID, in
 		logger.WithField("session_id", sessionID).Debug("No invoice_id in checkout metadata, skipping")
 		return nil
 	}
-
-	now := time.Now()
-	_, err := db.ExecContext(ctx, `
-		UPDATE purser.billing_invoices
-		SET status = 'paid', paid_at = $1, updated_at = NOW()
-		WHERE id = $2 AND status IN ('pending', 'overdue')
-	`, now, invoiceID)
+	updated, err := updateInvoicePaymentStatus("stripe", sessionID, invoiceID, "confirmed")
 	if err != nil {
-		return fmt.Errorf("failed to update invoice status: %w", err)
+		return err
+	}
+	if !updated {
+		logger.WithFields(logging.Fields{
+			"session_id": sessionID,
+			"tenant_id":  tenantID,
+			"invoice_id": invoiceID,
+		}).Warn("Stripe checkout did not match a pending invoice payment")
+		return nil
 	}
 
 	logger.WithFields(logging.Fields{
 		"tenant_id":  tenantID,
 		"invoice_id": invoiceID,
 	}).Info("Marked invoice as paid from Stripe checkout")
-
-	// Send payment success email
-	go sendPaymentStatusEmail(invoiceID, "stripe", "confirmed")
 
 	return nil
 }

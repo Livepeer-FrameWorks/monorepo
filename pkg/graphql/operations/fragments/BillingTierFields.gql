@@ -18,24 +18,16 @@ fragment BillingTierFields on BillingTier {
     supportLevel
     sla
   }
-  bandwidthAllocation {
-    ...AllocationFields
+  pricingRules {
+    meter
+    model
+    currency
+    includedQuantity
+    unitPrice
+    configJson
   }
-  storageAllocation {
-    ...AllocationFields
-  }
-  computeAllocation {
-    ...AllocationFields
-  }
-  overageRates {
-    bandwidth {
-      ...AllocationFields
-    }
-    storage {
-      ...AllocationFields
-    }
-    compute {
-      ...AllocationFields
-    }
+  entitlements {
+    key
+    value
   }
 }

@@ -9,12 +9,12 @@ const formatNumber = (n) =>
   new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n);
 
 const PRICING_PLANS = [
-  { name: "Supporter", price: 79, includedMin: 150000, overPerMin: 0.00049, includedGpu: 10 },
-  { name: "Developer", price: 249, includedMin: 500000, overPerMin: 0.00047, includedGpu: 50 },
-  { name: "Production", price: 999, includedMin: 2000000, overPerMin: 0.00045, includedGpu: 250 },
+  { name: "Supporter", price: 79, includedMin: 120000, overPerMin: 0.00055, includedGpu: 10 },
+  { name: "Developer", price: 249, includedMin: 500000, overPerMin: 0.00052, includedGpu: 50 },
+  { name: "Production", price: 999, includedMin: 2000000, overPerMin: 0.0005, includedGpu: 250 },
 ];
 
-const GPU_OVERAGE_PER_HOUR = 0.5;
+const GPU_OVERAGE_PER_HOUR = 1.5;
 const ENTERPRISE_MIN_THRESHOLD = 5_000_000;
 
 const Calculator = ({ className, variant = "default" }) => {

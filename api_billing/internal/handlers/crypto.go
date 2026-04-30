@@ -59,7 +59,7 @@ type PendingWallet struct {
 	InvoiceAmount       *float64 // invoice amount in currency (for invoice purpose)
 	InvoiceCurrency     *string  // invoice currency (for invoice purpose)
 
-	// Locked quote (prepaid path only) — see DepositQuote.
+	// Locked quote — see DepositQuote.
 	ExpectedAmountBaseUnits *big.Int
 	QuotedPriceUSD          decimal.Decimal
 	QuotedUSDToEURRate      *decimal.Decimal
@@ -151,11 +151,11 @@ func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 			bi.amount as invoice_amount,
 			bi.currency as invoice_currency
 		FROM purser.crypto_wallets cw
-		LEFT JOIN purser.billing_invoices bi ON cw.invoice_id = bi.id
+		LEFT JOIN purser.billing_invoices bi ON cw.invoice_id = bi.id AND bi.tenant_id = cw.tenant_id
 		WHERE cw.status IN ('pending', 'confirming')
 		  AND cw.expires_at > NOW()
 		  AND (
-			  (cw.purpose = 'invoice' AND bi.status = 'pending')
+			  (cw.purpose = 'invoice' AND bi.status IN ('pending', 'overdue'))
 			  OR cw.purpose = 'prepaid'
 		  )
 	`)
@@ -238,6 +238,11 @@ func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 
 		cm.checkWalletForPayments(ctx, wallet)
 	}
+	if err := rows.Err(); err != nil {
+		cm.logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed while iterating crypto wallets")
+	}
 }
 
 // checkWalletForPayments checks a specific wallet address for payments
@@ -258,16 +263,12 @@ func (cm *CryptoMonitor) checkWalletForPayments(ctx context.Context, wallet Pend
 	}
 
 	// Compute the on-chain amount we expect to see in the asset's whole-token
-	// units (not USD). For invoice and USDC-prepaid the legacy path equates
-	// 1 token = 1 USD; for ETH-prepaid we read the locked
-	// expected_amount_base_units quote.
+	// units. New invoice and prepaid wallets persist expected_amount_base_units;
+	// rows without a quote are ignored so they cannot settle against stale
+	// currency assumptions.
 	var expectedAmount float64
 	switch {
-	case wallet.Purpose == "invoice" && wallet.InvoiceAmount != nil:
-		expectedAmount = *wallet.InvoiceAmount
-	case wallet.Purpose == "prepaid" && wallet.Asset == "USDC" && wallet.ExpectedAmountCents != nil:
-		expectedAmount = float64(*wallet.ExpectedAmountCents) / 100.0
-	case wallet.Purpose == "prepaid" && wallet.ExpectedAmountBaseUnits != nil:
+	case wallet.ExpectedAmountBaseUnits != nil:
 		td, ok := TokenDecimals(wallet.Asset)
 		if !ok {
 			cm.logger.WithFields(logging.Fields{"wallet_id": wallet.ID, "asset": wallet.Asset}).Error("Unknown token decimals")
@@ -280,26 +281,6 @@ func (cm *CryptoMonitor) checkWalletForPayments(ctx context.Context, wallet Pend
 			"purpose":   wallet.Purpose,
 		}).Error("Missing expected amount for wallet")
 		return
-	}
-
-	if wallet.Purpose == "invoice" && wallet.InvoiceCurrency != nil {
-		currency := strings.ToUpper(*wallet.InvoiceCurrency)
-		if currency != "USD" {
-			// Legacy safety: don't get stuck forever on existing non-USD invoice wallets.
-			cm.logger.WithFields(logging.Fields{
-				"wallet_id": wallet.ID,
-				"currency":  currency,
-			}).Warn("Unsupported invoice currency for crypto payment (skipping wallet)")
-			return
-		}
-		if wallet.Asset != "USDC" {
-			cm.logger.WithFields(logging.Fields{
-				"wallet_id": wallet.ID,
-				"asset":     wallet.Asset,
-				"currency":  currency,
-			}).Error("Unsupported crypto asset for fiat invoice")
-			return
-		}
 	}
 
 	if wallet.Purpose == "prepaid" && wallet.Asset == "LPT" {
@@ -380,14 +361,13 @@ type paymentMatch struct {
 	amountSeen  bool     // tx amount within tolerance of the wallet's expected amount
 	confirmed   bool     // also has the network's required confirmation count
 	txBaseUnits *big.Int // exact on-chain amount in token base units
-	txAmount    float64  // legacy float (whole tokens) — used by the invoice display path only
+	txAmount    float64  // whole-token display value persisted on invoice payment rows
 }
 
 // evaluatePayment checks whether `tx` is a valid receipt for `wallet` and
 // returns whether it's also confirmed enough to credit. Money math operates
 // on `*big.Int` base units to avoid 18-decimal float truncation; the float
-// `txAmount` is a convenience for the invoice path which historically
-// reasoned in whole-token floats.
+// `txAmount` is only a display/audit value persisted on invoice payment rows.
 func (cm *CryptoMonitor) evaluatePayment(tx CryptoTransaction, wallet PendingWallet, expectedAmount float64, network NetworkConfig) paymentMatch {
 	baseUnits, err := parseTransactionBaseUnits(tx.Value)
 	if err != nil {
@@ -411,14 +391,12 @@ func (cm *CryptoMonitor) evaluatePayment(tx CryptoTransaction, wallet PendingWal
 
 	amountSeen := false
 	switch {
-	case wallet.Purpose == "prepaid" && wallet.ExpectedAmountBaseUnits != nil:
-		// Prepaid (any asset): compare on-chain base units against the quoted
-		// expected_amount_base_units. The quote already accounts for tenant
-		// currency (EUR top-ups are anchored to USD via the locked ECB rate),
-		// so the float `expected_amount_cents/100` would be wrong for EUR
-		// even when asset == USDC. Asset-specific tolerance: USDC has only 6
-		// decimals so 0.1% covers wallet-rounding noise; 18-decimal assets
-		// truncate more aggressively in user-wallet UIs, so 0.5%.
+	case wallet.ExpectedAmountBaseUnits != nil:
+		// Compare on-chain base units against the locked quote. The quote already
+		// accounts for invoice/prepaid currency, including EUR via the locked ECB
+		// rate. Asset-specific tolerance: USDC has only 6 decimals so 0.1% covers
+		// wallet-rounding noise; 18-decimal assets truncate more aggressively in
+		// user-wallet UIs, so 0.5%.
 		toleranceBP := int64(995) // 0.5%
 		if wallet.Asset == "USDC" {
 			toleranceBP = 999 // 0.1%
@@ -427,7 +405,6 @@ func (cm *CryptoMonitor) evaluatePayment(tx CryptoTransaction, wallet PendingWal
 		minBaseUnits.Div(minBaseUnits, big.NewInt(1000))
 		amountSeen = baseUnits.Cmp(minBaseUnits) >= 0
 	default:
-		// Invoice path: legacy 1:1 USD float comparison (USDC invoices only).
 		amountSeen = txAmountFloat >= expectedAmount*0.999
 	}
 
@@ -467,7 +444,7 @@ func (cm *CryptoMonitor) markConfirming(wallet PendingWallet, tx CryptoTransacti
 	}
 
 	now := time.Now()
-	_, err := cm.db.ExecContext(ctx, `
+	result, err := cm.db.ExecContext(ctx, `
 		UPDATE purser.crypto_wallets
 		SET status = 'confirming',
 		    tx_hash = $2,
@@ -475,14 +452,28 @@ func (cm *CryptoMonitor) markConfirming(wallet PendingWallet, tx CryptoTransacti
 		    detected_at = COALESCE(detected_at, $4),
 		    updated_at = NOW()
 		WHERE id = $1
+		  AND tenant_id = $5
 		  AND status IN ('pending', 'confirming')
-	`, wallet.ID, tx.Hash, tx.Confirmations, now)
+	`, wallet.ID, tx.Hash, tx.Confirmations, now, wallet.TenantID)
 	if err != nil {
 		cm.logger.WithFields(logging.Fields{
 			"error":     err,
 			"wallet_id": wallet.ID,
 			"tx_hash":   tx.Hash,
 		}).Error("Failed to mark wallet confirming")
+		return
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		cm.logger.WithFields(logging.Fields{"error": err, "wallet_id": wallet.ID}).Error("Failed to read confirming update result")
+		return
+	}
+	if rowsAffected == 0 {
+		cm.logger.WithFields(logging.Fields{
+			"wallet_id": wallet.ID,
+			"tenant_id": wallet.TenantID,
+			"tx_hash":   tx.Hash,
+		}).Warn("Wallet confirming update matched no tenant-scoped row")
 		return
 	}
 
@@ -494,9 +485,9 @@ func (cm *CryptoMonitor) markConfirming(wallet PendingWallet, tx CryptoTransacti
 }
 
 // confirmPayment processes a confirmed crypto payment.
-// For invoice: marks invoice as paid (legacy float-USD path; USDC only).
-// For prepaid: credits tenant's prepaid balance using the locked quote and
-// the on-chain receipt in base units.
+// Invoice and prepaid wallets both validate the on-chain receipt against the
+// locked base-unit quote persisted when the address was created; prepaid
+// wallets then credit the tenant balance using the same locked quote.
 func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransaction, txBaseUnits *big.Int, txAmount float64) {
 	ctx := context.Background()
 	if tx.Hash != "" {
@@ -538,10 +529,11 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 
 	var creditedCents int64
 	var creditedCurrency string
+	var invoicePayment *confirmedInvoicePayment
 
 	switch wallet.Purpose {
 	case "invoice":
-		err = cm.confirmInvoicePayment(ctx, dbTx, wallet, tx, txAmount, now)
+		invoicePayment, err = cm.confirmInvoicePayment(ctx, dbTx, wallet, tx, txAmount, now)
 	case "prepaid":
 		creditedCents, creditedCurrency, err = cm.confirmPrepaidTopup(ctx, dbTx, wallet, tx, txBaseUnits, now)
 	default:
@@ -558,7 +550,7 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 	}
 
 	// Persist the exact on-chain receipt in base units; no float round-trip.
-	_, err = dbTx.ExecContext(ctx, `
+	result, err := dbTx.ExecContext(ctx, `
 		UPDATE purser.crypto_wallets
 		SET status = 'completed',
 			tx_hash = $2,
@@ -569,9 +561,22 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 			completed_at = $6,
 			updated_at = NOW()
 		WHERE id = $1
-	`, wallet.ID, tx.Hash, txBaseUnits.String(), tx.BlockNumber, tx.Confirmations, now)
+		  AND tenant_id = $7
+	`, wallet.ID, tx.Hash, txBaseUnits.String(), tx.BlockNumber, tx.Confirmations, now, wallet.TenantID)
 	if err != nil {
 		cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to update wallet status")
+		return
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to read wallet completion update result")
+		return
+	}
+	if rowsAffected == 0 {
+		cm.logger.WithFields(logging.Fields{
+			"wallet_id": wallet.ID,
+			"tenant_id": wallet.TenantID,
+		}).Error("Wallet completion update matched no tenant-scoped row")
 		return
 	}
 
@@ -588,20 +593,12 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 	}).Info("Crypto payment confirmed successfully")
 
 	if wallet.Purpose == "invoice" && wallet.InvoiceID != nil {
-		var paymentID, currency string
-		var amount float64
-		if err := cm.db.QueryRowContext(ctx, `
-			SELECT id, amount, currency
-			FROM purser.billing_payments
-			WHERE invoice_id = $1 AND status = 'confirmed'
-			ORDER BY created_at DESC
-			LIMIT 1
-		`, *wallet.InvoiceID).Scan(&paymentID, &amount, &currency); err == nil {
-			emitBillingEvent(eventPaymentSucceeded, wallet.TenantID, "payment", paymentID, &pb.BillingEvent{
-				PaymentId: paymentID,
+		if invoicePayment != nil {
+			emitBillingEvent(eventPaymentSucceeded, wallet.TenantID, "payment", invoicePayment.PaymentID, &pb.BillingEvent{
+				PaymentId: invoicePayment.PaymentID,
 				InvoiceId: *wallet.InvoiceID,
-				Amount:    amount,
-				Currency:  currency,
+				Amount:    invoicePayment.Amount,
+				Currency:  invoicePayment.Currency,
 				Provider:  "crypto",
 				Status:    "confirmed",
 				Asset:     wallet.Asset,
@@ -610,8 +607,8 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 			})
 			emitBillingEvent(eventInvoicePaid, wallet.TenantID, "invoice", *wallet.InvoiceID, &pb.BillingEvent{
 				InvoiceId: *wallet.InvoiceID,
-				Amount:    amount,
-				Currency:  currency,
+				Amount:    invoicePayment.Amount,
+				Currency:  invoicePayment.Currency,
 				Provider:  "crypto",
 				Status:    "paid",
 				Asset:     wallet.Asset,
@@ -633,48 +630,74 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 	}
 }
 
-// confirmInvoicePayment marks an invoice as paid
-func (cm *CryptoMonitor) confirmInvoicePayment(ctx context.Context, dbTx *sql.Tx, wallet PendingWallet, tx CryptoTransaction, txAmount float64, now time.Time) error {
+type confirmedInvoicePayment struct {
+	PaymentID string
+	Amount    float64
+	Currency  string
+}
+
+// confirmInvoicePayment marks the pending invoice payment intent as confirmed.
+func (cm *CryptoMonitor) confirmInvoicePayment(ctx context.Context, dbTx *sql.Tx, wallet PendingWallet, tx CryptoTransaction, txAmount float64, now time.Time) (*confirmedInvoicePayment, error) {
 	if wallet.InvoiceID == nil {
-		return fmt.Errorf("invoice_id is nil for invoice wallet")
+		return nil, fmt.Errorf("invoice_id is nil for invoice wallet")
 	}
 
-	paymentID := uuid.New().String()
+	method := ""
+	switch wallet.Asset {
+	case "ETH":
+		method = "crypto_eth"
+	case "USDC":
+		method = "crypto_usdc"
+	default:
+		return nil, fmt.Errorf("unsupported invoice asset: %s", wallet.Asset)
+	}
 
-	// Create payment record
-	_, err := dbTx.ExecContext(ctx, `
-		INSERT INTO purser.billing_payments (
-			id, invoice_id, method, amount, currency, tx_id, status, confirmed_at, created_at, updated_at,
-			actual_tx_amount, asset_type, network, block_number
-		)
-		SELECT $1, $2,
-			   CASE
-				   WHEN $6 = 'ETH' THEN 'crypto_eth'
-				   WHEN $6 = 'USDC' THEN 'crypto_usdc'
-				   WHEN $6 = 'LPT' THEN 'crypto_lpt'
-			   END,
-			   bi.amount, bi.currency, $3, 'confirmed', $4, NOW(), NOW(),
-			   $7, $6, $8, $9
+	var payment confirmedInvoicePayment
+	err := dbTx.QueryRowContext(ctx, `
+		UPDATE purser.billing_payments bp
+		SET tx_id = $1,
+			status = 'confirmed',
+			confirmed_at = $2,
+			updated_at = NOW(),
+			actual_tx_amount = $3,
+			asset_type = $4,
+			network = $5,
+			block_number = $6
 		FROM purser.billing_invoices bi
-		WHERE bi.id = $5
-	`, paymentID, *wallet.InvoiceID, tx.Hash, now, *wallet.InvoiceID, wallet.Asset, txAmount, wallet.Network, tx.BlockNumber)
-
+		WHERE bp.invoice_id = bi.id
+		  AND bp.invoice_id = $7
+		  AND bi.tenant_id = $8
+		  AND bp.method = $9
+		  AND bp.status = 'pending'
+		  AND bp.tx_id = $10
+		RETURNING bp.id, bp.amount, bp.currency
+	`, tx.Hash, now, txAmount, wallet.Asset, wallet.Network, tx.BlockNumber, *wallet.InvoiceID, wallet.TenantID, method, wallet.WalletAddress).
+		Scan(&payment.PaymentID, &payment.Amount, &payment.Currency)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("pending invoice payment not found for wallet %s", wallet.ID)
+	}
 	if err != nil {
-		return fmt.Errorf("failed to create payment record: %w", err)
+		return nil, fmt.Errorf("failed to confirm payment record: %w", err)
 	}
 
-	// Mark invoice as paid
-	_, err = dbTx.ExecContext(ctx, `
+	result, err := dbTx.ExecContext(ctx, `
 		UPDATE purser.billing_invoices
 		SET status = 'paid', paid_at = $1, updated_at = NOW()
-		WHERE id = $2 AND status IN ('pending', 'overdue')
-	`, now, *wallet.InvoiceID)
+		WHERE id = $2 AND tenant_id = $3 AND status IN ('pending', 'overdue')
+	`, now, *wallet.InvoiceID, wallet.TenantID)
 
 	if err != nil {
-		return fmt.Errorf("failed to update invoice status: %w", err)
+		return nil, fmt.Errorf("failed to update invoice status: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read invoice update result: %w", err)
+	}
+	if rowsAffected == 0 {
+		return nil, fmt.Errorf("invoice %s is not payable for tenant %s", *wallet.InvoiceID, wallet.TenantID)
 	}
 
-	return nil
+	return &payment, nil
 }
 
 // confirmPrepaidTopup credits a tenant's prepaid balance and returns the
@@ -731,28 +754,35 @@ func (cm *CryptoMonitor) confirmPrepaidTopup(ctx context.Context, dbTx *sql.Tx, 
 		return 0, "", fmt.Errorf("invalid credit amount: %d cents", amountCents)
 	}
 
-	// Get current balance (or 0 if not exists)
+	_, err := dbTx.ExecContext(ctx, `
+		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, updated_at)
+		VALUES ($1, 0, $2, NOW())
+		ON CONFLICT (tenant_id, currency) DO NOTHING
+	`, wallet.TenantID, currency)
+	if err != nil {
+		return 0, "", fmt.Errorf("failed to initialize prepaid balance: %w", err)
+	}
+
+	// Lock the balance row before computing the new total. Multiple confirmed
+	// deposits for the same tenant must add to the current committed balance,
+	// never overwrite each other from a stale read.
 	var currentBalance int64
-	err := dbTx.QueryRowContext(ctx, `
+	err = dbTx.QueryRowContext(ctx, `
 		SELECT balance_cents FROM purser.prepaid_balances
 		WHERE tenant_id = $1 AND currency = $2
+		FOR UPDATE
 	`, wallet.TenantID, currency).Scan(&currentBalance)
-
-	if errors.Is(err, sql.ErrNoRows) {
-		currentBalance = 0
-	} else if err != nil {
+	if err != nil {
 		return 0, "", fmt.Errorf("failed to get current balance: %w", err)
 	}
 
 	newBalance := currentBalance + amountCents
 
-	// Upsert prepaid balance
 	_, err = dbTx.ExecContext(ctx, `
-		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, updated_at)
-		VALUES ($1, $2, $3, NOW())
-		ON CONFLICT (tenant_id, currency)
-		DO UPDATE SET balance_cents = $2, updated_at = NOW()
-	`, wallet.TenantID, newBalance, currency)
+		UPDATE purser.prepaid_balances
+		SET balance_cents = $1, updated_at = NOW()
+		WHERE tenant_id = $2 AND currency = $3
+	`, newBalance, wallet.TenantID, currency)
 
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to update prepaid balance: %w", err)
@@ -781,15 +811,23 @@ func (cm *CryptoMonitor) confirmPrepaidTopup(ctx context.Context, dbTx *sql.Tx, 
 
 	// Persist the credited amount + currency on the wallet so GetCryptoTopup
 	// can render it without recomputing from the on-chain receipt.
-	_, err = dbTx.ExecContext(ctx, `
+	result, err := dbTx.ExecContext(ctx, `
 		UPDATE purser.crypto_wallets
 		SET credited_amount_cents = $2,
 		    credited_amount_currency = $3,
 		    updated_at = NOW()
 		WHERE id = $1
-	`, wallet.ID, amountCents, currency)
+		  AND tenant_id = $4
+	`, wallet.ID, amountCents, currency, wallet.TenantID)
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to update credited amount on wallet: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, "", fmt.Errorf("failed to read credited wallet update result: %w", err)
+	}
+	if rowsAffected == 0 {
+		return 0, "", fmt.Errorf("credited wallet update matched no tenant-scoped row")
 	}
 
 	cm.logger.WithFields(logging.Fields{
@@ -971,7 +1009,7 @@ func (cm *CryptoMonitor) parseTransactionAmount(value string, asset string) (flo
 // parseTransactionBaseUnits decodes the on-chain `value` field (always base
 // units encoded as a decimal string from Etherscan/Arbiscan) into an exact
 // *big.Int. Use this for any monetary comparison or persistence; the float
-// helpers above are reserved for legacy invoice display.
+// helpers above are reserved for non-authoritative display values.
 func parseTransactionBaseUnits(value string) (*big.Int, error) {
 	n := new(big.Int)
 	if _, ok := n.SetString(value, 10); !ok {

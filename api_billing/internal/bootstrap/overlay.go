@@ -74,20 +74,15 @@ func mergeTier(base CatalogTier, o BillingTier) (CatalogTier, error) {
 	if o.Currency != "" {
 		base.Currency = o.Currency
 	}
-	if len(o.BandwidthAllocation) > 0 {
-		base.BandwidthAllocation = o.BandwidthAllocation
-	}
-	if len(o.StorageAllocation) > 0 {
-		base.StorageAllocation = o.StorageAllocation
-	}
-	if len(o.ComputeAllocation) > 0 {
-		base.ComputeAllocation = o.ComputeAllocation
-	}
 	if len(o.Features) > 0 {
 		base.Features = featuresFromList(o.Features)
 	}
-	if len(o.OverageRates) > 0 {
-		base.OverageRates = o.OverageRates
+	if len(o.Entitlements) > 0 {
+		base.Entitlements = o.Entitlements
+	}
+	if len(o.PricingRules) > 0 {
+		// Wholesale replace: overlay carries a complete rule set when present.
+		base.PricingRules = pricingRulesFromOverlay(o.PricingRules)
 	}
 	return base, nil
 }
@@ -98,17 +93,29 @@ func fromOverlay(o BillingTier) (CatalogTier, error) {
 		return CatalogTier{}, err
 	}
 	return CatalogTier{
-		TierName:            o.ID,
-		DisplayName:         o.DisplayName,
-		BasePrice:           price,
-		Currency:            o.Currency,
-		BandwidthAllocation: o.BandwidthAllocation,
-		StorageAllocation:   o.StorageAllocation,
-		ComputeAllocation:   o.ComputeAllocation,
-		Features:            featuresFromList(o.Features),
-		OverageRates:        o.OverageRates,
-		TierLevel:           int(o.TierLevel),
+		TierName:     o.ID,
+		DisplayName:  o.DisplayName,
+		BasePrice:    price,
+		Currency:     o.Currency,
+		Features:     featuresFromList(o.Features),
+		Entitlements: o.Entitlements,
+		PricingRules: pricingRulesFromOverlay(o.PricingRules),
+		TierLevel:    int(o.TierLevel),
 	}, nil
+}
+
+// pricingRulesFromOverlay converts the CLI overlay's PricingRule slice into
+// the catalog's CatalogPricingRule slice. The two types are field-for-field
+// identical; the conversion exists to keep api_billing free of a cli/* import.
+func pricingRulesFromOverlay(rules []OverlayPricingRule) []CatalogPricingRule {
+	if len(rules) == 0 {
+		return nil
+	}
+	out := make([]CatalogPricingRule, len(rules))
+	for i, r := range rules {
+		out[i] = CatalogPricingRule(r)
+	}
+	return out
 }
 
 // featuresFromList projects the overlay's []string feature list into the

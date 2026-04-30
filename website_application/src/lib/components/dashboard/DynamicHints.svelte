@@ -172,7 +172,7 @@
       >
       {#if currentHint.link}
         <a
-          href={resolve(currentHint.link as string)}
+          href={resolve(currentHint.link as "/")}
           class="text-primary hover:underline text-sm shrink-0"
         >
           {currentHint.linkText} →

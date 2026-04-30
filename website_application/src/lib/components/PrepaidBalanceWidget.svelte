@@ -12,7 +12,7 @@
 
   let loading = $state(true);
   let balanceCents = $state(0);
-  let currency = $state("USD");
+  let currency = $state("EUR");
   let isLowBalance = $state(false);
   let error = $state<string | null>(null);
 
@@ -24,7 +24,7 @@
     loading = true;
     error = null;
     try {
-      const result = await balanceQuery.fetch();
+      const result = await balanceQuery.fetch({ variables: { currency } });
       if (result.data?.prepaidBalance) {
         balanceCents = result.data.prepaidBalance.balanceCents;
         currency = result.data.prepaidBalance.currency;
