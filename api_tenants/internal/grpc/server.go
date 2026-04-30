@@ -764,7 +764,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		var resolvedNodeIP sql.NullString
 		err := exec.QueryRowContext(ctx, `
 			SELECT cluster_id,
-			       COALESCE(wireguard_ip::text, internal_ip::text, external_ip::text)
+			       COALESCE(host(wireguard_ip), host(internal_ip), host(external_ip))
 			FROM quartermaster.infrastructure_nodes
 			WHERE node_id = $1
 		`, *req.NodeId).Scan(&nodeClusterID, &resolvedNodeIP)
@@ -868,6 +868,10 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			ORDER BY updated_at DESC NULLS LAST, started_at DESC NULLS LAST LIMIT 1
 		`, serviceID, clusterID, proto, port, advHost).Scan(&existingID, &existingInstanceID)
 	}
+	registeredNodeID := ""
+	if resolvedNodeID != nil {
+		registeredNodeID = *resolvedNodeID
+	}
 
 	if existingID != "" {
 		// Update existing row
@@ -891,6 +895,20 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			return nil, status.Errorf(codes.Internal, "failed to update service instance: %v", err)
 		}
 		instanceID = existingInstanceID
+		s.logger.WithFields(logging.Fields{
+			"service_type":     serviceType,
+			"service_id":       serviceID,
+			"instance_id":      instanceID,
+			"cluster_id":       clusterID,
+			"node_id":          registeredNodeID,
+			"protocol":         proto,
+			"advertise_host":   advHost,
+			"port":             port,
+			"health_endpoint":  req.GetHealthEndpoint(),
+			"registration_op":  "update",
+			"health_status":    "unknown",
+			"last_check_reset": true,
+		}).Info("Service instance registered")
 	} else {
 		// Insert new row
 		_, err = exec.ExecContext(ctx, `
@@ -902,6 +920,19 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			s.logger.WithError(err).Error("Failed to create service instance")
 			return nil, status.Errorf(codes.Internal, "failed to create service instance: %v", err)
 		}
+		s.logger.WithFields(logging.Fields{
+			"service_type":    serviceType,
+			"service_id":      serviceID,
+			"instance_id":     instanceID,
+			"cluster_id":      clusterID,
+			"node_id":         registeredNodeID,
+			"protocol":        proto,
+			"advertise_host":  advHost,
+			"port":            port,
+			"health_endpoint": req.GetHealthEndpoint(),
+			"registration_op": "create",
+			"health_status":   "unknown",
+		}).Info("Service instance registered")
 	}
 
 	// 6. Look up cluster owner tenant for dual-tenant attribution
@@ -3850,7 +3881,7 @@ func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseW
 	siJoin := `
 		JOIN quartermaster.service_instances si
 			ON si.cluster_id = n.cluster_id
-			AND (si.node_id = n.node_id OR si.advertise_host = n.external_ip::text OR si.advertise_host = n.internal_ip::text)`
+			AND (si.node_id = n.node_id OR si.advertise_host = host(n.external_ip) OR si.advertise_host = host(n.internal_ip) OR si.advertise_host = host(n.wireguard_ip))`
 
 	var totalNodes int32
 	if err := s.db.QueryRowContext(ctx,
@@ -4439,7 +4470,7 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	var existingWGIP sql.NullString
 	var existingWGPort sql.NullInt32
 	err = tx.QueryRowContext(ctx, `
-		SELECT cluster_id, wireguard_ip::text, wireguard_listen_port
+		SELECT cluster_id, host(wireguard_ip), wireguard_listen_port
 		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = $1
 	`, nodeID).Scan(&existingClusterID, &existingWGIP, &existingWGPort)
@@ -4730,7 +4761,7 @@ func (s *QuartermasterServer) bootstrapReplay(ctx context.Context, tx *sql.Tx, t
 		SELECT
 			n.cluster_id,
 			n.wireguard_public_key,
-			n.wireguard_ip::text,
+			host(n.wireguard_ip),
 			n.wireguard_listen_port,
 			c.owner_tenant_id::text
 		FROM quartermaster.infrastructure_nodes n
@@ -4830,7 +4861,7 @@ func loadClusterMeshConfig(ctx context.Context, db *sql.DB, clusterID string) (s
 // SyncMesh once connected.
 func (s *QuartermasterServer) collectBootstrapSeed(ctx context.Context, clusterID, excludeNodeID string) ([]*pb.InfrastructurePeer, map[string]*pb.ServiceEndpoints) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT n.node_name, n.wireguard_public_key, n.external_ip::text, n.internal_ip::text, n.wireguard_ip::text, n.wireguard_listen_port
+		SELECT n.node_name, n.wireguard_public_key, host(n.external_ip), host(n.internal_ip), host(n.wireguard_ip), n.wireguard_listen_port
 		FROM quartermaster.infrastructure_nodes n
 		WHERE n.node_id != $1
 		  AND n.wireguard_public_key IS NOT NULL
@@ -4873,7 +4904,7 @@ func (s *QuartermasterServer) collectBootstrapSeed(ctx context.Context, clusterI
 
 	endpoints := make(map[string]*pb.ServiceEndpoints)
 	svcRows, svcErr := s.db.QueryContext(ctx, `
-		SELECT s.type, n.wireguard_ip::text
+		SELECT s.type, host(n.wireguard_ip)
 		FROM quartermaster.services s
 		JOIN quartermaster.service_instances si ON si.service_id = s.service_id
 		JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
@@ -5261,7 +5292,7 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 	var storedListenPort sql.NullInt32
 	var clusterID string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT wireguard_ip::text, wireguard_public_key, external_ip::text, internal_ip::text, wireguard_listen_port, cluster_id
+		SELECT host(wireguard_ip), wireguard_public_key, host(external_ip), host(internal_ip), wireguard_listen_port, cluster_id
 		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = $1
 	`, nodeID).Scan(&currentWgIP, &storedPublicKey, &externalIP, &internalIP, &storedListenPort, &clusterID)
@@ -5307,6 +5338,7 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		UPDATE quartermaster.infrastructure_nodes
 		SET last_heartbeat = NOW(),
 		    applied_mesh_revision = $2,
+		    status = 'active',
 		    updated_at = NOW()
 		WHERE node_id = $1
 	`, nodeID, appliedRev)
@@ -5316,7 +5348,7 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 
 	// 3. Get all peer nodes (same cluster, active, with WireGuard configured)
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT n.node_name, n.wireguard_public_key, n.external_ip::text, n.internal_ip::text, n.wireguard_ip::text, n.wireguard_listen_port
+		SELECT n.node_name, n.wireguard_public_key, host(n.external_ip), host(n.internal_ip), host(n.wireguard_ip), n.wireguard_listen_port
 		FROM quartermaster.infrastructure_nodes n
 		WHERE n.node_id != $1
 		  AND n.wireguard_public_key IS NOT NULL
@@ -5384,7 +5416,7 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 	// 4. Fetch service endpoints for mesh DNS aliases (keyed by canonical service type)
 	serviceEndpoints := make(map[string]*pb.ServiceEndpoints)
 	svcRows, err := s.db.QueryContext(ctx, `
-		SELECT s.type, n.wireguard_ip::text
+		SELECT s.type, host(n.wireguard_ip)
 		FROM quartermaster.services s
 		JOIN quartermaster.service_instances si ON si.service_id = s.service_id
 		JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
@@ -6623,7 +6655,7 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 // a new one for an enrolling node.
 func loadTakenMeshIPs(ctx context.Context, tx *sql.Tx, clusterID string) (map[string]struct{}, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT wireguard_ip::text
+		SELECT host(wireguard_ip)
 		FROM quartermaster.infrastructure_nodes
 		WHERE cluster_id = $1 AND wireguard_ip IS NOT NULL
 	`, clusterID)

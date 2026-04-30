@@ -176,7 +176,7 @@ func TestBootstrapServiceRejectsMissingNodeReference(t *testing.T) {
 	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
 		WithArgs("cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
-	mock.ExpectQuery("SELECT cluster_id,\\s+COALESCE\\(wireguard_ip::text, internal_ip::text, external_ip::text\\)").
+	mock.ExpectQuery("SELECT cluster_id,\\s+COALESCE\\(host\\(wireguard_ip\\), host\\(internal_ip\\), host\\(external_ip\\)\\)").
 		WithArgs("node-missing").
 		WillReturnError(sql.ErrNoRows)
 
@@ -259,7 +259,7 @@ func TestBootstrapServiceRejectsNodeFromDifferentCluster(t *testing.T) {
 	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
 		WithArgs("cluster-a").
 		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
-	mock.ExpectQuery("SELECT cluster_id,\\s+COALESCE\\(wireguard_ip::text, internal_ip::text, external_ip::text\\)").
+	mock.ExpectQuery("SELECT cluster_id,\\s+COALESCE\\(host\\(wireguard_ip\\), host\\(internal_ip\\), host\\(external_ip\\)\\)").
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "addr"}).AddRow("cluster-b", "10.1.0.10"))
 
@@ -290,7 +290,7 @@ func TestBootstrapServiceDerivesAdvertiseHostFromNodeID(t *testing.T) {
 	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
 		WithArgs("cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
-	mock.ExpectQuery("SELECT cluster_id,\\s+COALESCE\\(wireguard_ip::text, internal_ip::text, external_ip::text\\)").
+	mock.ExpectQuery("SELECT cluster_id,\\s+COALESCE\\(host\\(wireguard_ip\\), host\\(internal_ip\\), host\\(external_ip\\)\\)").
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "addr"}).AddRow("cluster-1", "10.88.0.2"))
 	mock.ExpectBegin()
@@ -348,7 +348,7 @@ func TestBootstrapServiceFallsBackToInternalIPWhenWireGuardEmpty(t *testing.T) {
 	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
 		WithArgs("cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
-	mock.ExpectQuery("SELECT cluster_id,\\s+COALESCE\\(wireguard_ip::text, internal_ip::text, external_ip::text\\)").
+	mock.ExpectQuery("SELECT cluster_id,\\s+COALESCE\\(host\\(wireguard_ip\\), host\\(internal_ip\\), host\\(external_ip\\)\\)").
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "addr"}).AddRow("cluster-1", "127.0.0.1"))
 	mock.ExpectBegin()

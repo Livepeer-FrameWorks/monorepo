@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -94,8 +95,6 @@ func main() {
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create DLQ Kafka producer (DLQ disabled)")
 		dlqProducer = nil
-	} else {
-		defer func() { _ = dlqProducer.Close() }()
 	}
 
 	wrapWithDLQ := func(consumerName string, handler func(context.Context, kafka.Message) error) func(context.Context, kafka.Message) error {
@@ -198,10 +197,9 @@ func main() {
 
 	// Start consuming
 	ctx, cancel := context.WithCancel(context.Background())
+	consumerDone := make(chan error, 1)
 	go func() {
-		if err := consumer.Start(ctx); err != nil {
-			logger.WithError(err).Error("Kafka consumer error")
-		}
+		consumerDone <- consumer.Start(ctx)
 	}()
 
 	// Optional health check server
@@ -264,12 +262,37 @@ func main() {
 	// Cleanup
 	cancel()
 	if consumer != nil {
-		if err := consumer.Close(); err != nil {
-			logger.WithError(err).Warn("Failed to close Kafka consumer")
+		closeWithTimeout(logger, "Kafka consumer", 10*time.Second, consumer.Close)
+	}
+	select {
+	case err := <-consumerDone:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			logger.WithError(err).Error("Kafka consumer error")
 		}
+	case <-time.After(2 * time.Second):
+		logger.Warn("Kafka consumer did not report shutdown before timeout")
+	}
+	if dlqProducer != nil {
+		closeWithTimeout(logger, "DLQ Kafka producer", 10*time.Second, dlqProducer.Close)
 	}
 
 	logger.Info("Periscope-Ingest stopped")
+}
+
+func closeWithTimeout(logger logging.Logger, name string, timeout time.Duration, closeFn func() error) {
+	done := make(chan error, 1)
+	go func() {
+		done <- closeFn()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			logger.WithError(err).WithField("component", name).Warn("Failed to close component")
+		}
+	case <-time.After(timeout):
+		logger.WithField("component", name).Warn("Timed out closing component")
+	}
 }
 
 func startHealthServer(healthChecker *monitoring.HealthChecker, metricsCollector *monitoring.MetricsCollector, logger logging.Logger) {

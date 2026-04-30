@@ -23,7 +23,7 @@ func TestSyncMeshRequiresStoredWireGuardIdentity(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	mock.ExpectQuery(`SELECT wireguard_ip::text, wireguard_public_key, external_ip::text, internal_ip::text, wireguard_listen_port, cluster_id\s+FROM quartermaster\.infrastructure_nodes\s+WHERE node_id = \$1`).
+	mock.ExpectQuery(`SELECT host\(wireguard_ip\), wireguard_public_key, host\(external_ip\), host\(internal_ip\), wireguard_listen_port, cluster_id\s+FROM quartermaster\.infrastructure_nodes\s+WHERE node_id = \$1`).
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "pub-key-1", "1.2.3.4", "10.0.0.5", nil, "cluster-1"))
 
@@ -46,7 +46,7 @@ func TestSyncMeshRejectsPublicKeyMismatch(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	mock.ExpectQuery(`SELECT wireguard_ip::text, wireguard_public_key, external_ip::text, internal_ip::text, wireguard_listen_port, cluster_id`).
+	mock.ExpectQuery(`SELECT host\(wireguard_ip\), wireguard_public_key, host\(external_ip\), host\(internal_ip\), wireguard_listen_port, cluster_id`).
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "stored-pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
 
@@ -72,7 +72,7 @@ func TestSyncMeshServiceEndpointsKeyedByType(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	mock.ExpectQuery(`SELECT wireguard_ip::text, wireguard_public_key, external_ip::text, internal_ip::text, wireguard_listen_port, cluster_id`).
+	mock.ExpectQuery(`SELECT host\(wireguard_ip\), wireguard_public_key, host\(external_ip\), host\(internal_ip\), wireguard_listen_port, cluster_id`).
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "pub-key-1", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
 
@@ -85,7 +85,7 @@ func TestSyncMeshServiceEndpointsKeyedByType(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
 
 	// Return services keyed by canonical service type
-	mock.ExpectQuery(`SELECT s\.type, n\.wireguard_ip::text`).
+	mock.ExpectQuery(`SELECT s\.type, host\(n\.wireguard_ip\)`).
 		WithArgs("cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"type", "wireguard_ip"}).
 			AddRow("bridge", "10.200.0.5").
@@ -125,7 +125,7 @@ func TestSyncMeshReturnsStoredPortOverRequestEcho(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	mock.ExpectQuery(`SELECT wireguard_ip::text, wireguard_public_key, external_ip::text, internal_ip::text, wireguard_listen_port, cluster_id`).
+	mock.ExpectQuery(`SELECT host\(wireguard_ip\), wireguard_public_key, host\(external_ip\), host\(internal_ip\), wireguard_listen_port, cluster_id`).
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51900), "cluster-1"))
 
@@ -136,7 +136,7 @@ func TestSyncMeshReturnsStoredPortOverRequestEcho(t *testing.T) {
 	mock.ExpectQuery(`SELECT n\.node_name, n\.wireguard_public_key`).
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
-	mock.ExpectQuery(`SELECT s\.type, n\.wireguard_ip::text`).
+	mock.ExpectQuery(`SELECT s\.type, host\(n\.wireguard_ip\)`).
 		WithArgs("cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"type", "wireguard_ip"}))
 
@@ -149,6 +149,37 @@ func TestSyncMeshReturnsStoredPortOverRequestEcho(t *testing.T) {
 	}
 	if resp.GetMeshRevision() == "" {
 		t.Fatal("MeshRevision should be populated")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestSyncMeshMarksNodeActive(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery(`SELECT host\(wireguard_ip\), wireguard_public_key, host\(external_ip\), host\(internal_ip\), wireguard_listen_port, cluster_id`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).
+			AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
+	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes.*status = 'active'`).
+		WithArgs("node-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT n\.node_name, n\.wireguard_public_key`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
+	mock.ExpectQuery(`SELECT s\.type, host\(n\.wireguard_ip\)`).
+		WithArgs("cluster-1").
+		WillReturnRows(sqlmock.NewRows([]string{"type", "wireguard_ip"}))
+
+	if _, err := server.SyncMesh(t.Context(), &pb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51820}); err != nil {
+		t.Fatalf("sync mesh: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
@@ -201,7 +232,7 @@ func TestSyncMeshExcludesPeerWithMissingEndpoint(t *testing.T) {
 	logger, logBuf := captureLogger()
 	server := NewQuartermasterServer(db, logger, nil, nil, nil, nil, nil)
 
-	mock.ExpectQuery(`SELECT wireguard_ip::text, wireguard_public_key, external_ip::text, internal_ip::text, wireguard_listen_port, cluster_id`).
+	mock.ExpectQuery(`SELECT host\(wireguard_ip\), wireguard_public_key, host\(external_ip\), host\(internal_ip\), wireguard_listen_port, cluster_id`).
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
@@ -213,7 +244,7 @@ func TestSyncMeshExcludesPeerWithMissingEndpoint(t *testing.T) {
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}).
 			AddRow("peer-orphan", "peer-pub", nil, nil, "10.200.0.6", int32(51820)))
-	mock.ExpectQuery(`SELECT s\.type, n\.wireguard_ip::text`).
+	mock.ExpectQuery(`SELECT s\.type, host\(n\.wireguard_ip\)`).
 		WithArgs("cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"type", "wireguard_ip"}))
 
@@ -255,7 +286,7 @@ func TestSyncMeshExcludesPeerWithScanError(t *testing.T) {
 	logger, logBuf := captureLogger()
 	server := NewQuartermasterServer(db, logger, nil, nil, nil, nil, nil)
 
-	mock.ExpectQuery(`SELECT wireguard_ip::text, wireguard_public_key, external_ip::text, internal_ip::text, wireguard_listen_port, cluster_id`).
+	mock.ExpectQuery(`SELECT host\(wireguard_ip\), wireguard_public_key, host\(external_ip\), host\(internal_ip\), wireguard_listen_port, cluster_id`).
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
@@ -266,7 +297,7 @@ func TestSyncMeshExcludesPeerWithScanError(t *testing.T) {
 	mock.ExpectQuery(`SELECT n\.node_name, n\.wireguard_public_key`).
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"node_name"}).AddRow("peer-broken"))
-	mock.ExpectQuery(`SELECT s\.type, n\.wireguard_ip::text`).
+	mock.ExpectQuery(`SELECT s\.type, host\(n\.wireguard_ip\)`).
 		WithArgs("cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"type", "wireguard_ip"}))
 

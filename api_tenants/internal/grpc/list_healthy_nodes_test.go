@@ -403,15 +403,15 @@ func TestListHealthyNodesForDNS_QueriesCastInetAddressesForAdvertiseHost(t *test
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 	svcType := "bridge"
 
-	mock.ExpectQuery(`(?s)si\.advertise_host = n\.external_ip::text.*si\.advertise_host = n\.internal_ip::text`).
+	mock.ExpectQuery(`(?s)si\.advertise_host = host\(n\.external_ip\).*si\.advertise_host = host\(n\.internal_ip\).*si\.advertise_host = host\(n\.wireguard_ip\)`).
 		WithArgs(svcType).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
-	mock.ExpectQuery(`(?s)si\.advertise_host = n\.external_ip::text.*si\.advertise_host = n\.internal_ip::text`).
+	mock.ExpectQuery(`(?s)si\.advertise_host = host\(n\.external_ip\).*si\.advertise_host = host\(n\.internal_ip\).*si\.advertise_host = host\(n\.wireguard_ip\)`).
 		WithArgs(svcType, int32(300)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
-	mock.ExpectQuery(`(?s)si\.advertise_host = n\.external_ip::text.*si\.advertise_host = n\.internal_ip::text`).
+	mock.ExpectQuery(`(?s)si\.advertise_host = host\(n\.external_ip\).*si\.advertise_host = host\(n\.internal_ip\).*si\.advertise_host = host\(n\.wireguard_ip\)`).
 		WithArgs(svcType, int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "cluster-1", "node-1", "core", "1.2.3.4")...))
 

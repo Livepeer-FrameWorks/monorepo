@@ -133,6 +133,7 @@ These are outputs and should not be treated as first-class editable config:
 - `KAFKA_BROKERS`
 - `COMMODORE_URL`, `QUARTERMASTER_URL`, `PURSER_URL`, `PERISCOPE_QUERY_URL`, `PERISCOPE_INGEST_URL`, `MISTSERVER_URL`, `HELMSMAN_WEBHOOK_URL`
 - `COMMODORE_GRPC_ADDR`, `QUARTERMASTER_GRPC_ADDR`, `PURSER_GRPC_ADDR`, `PERISCOPE_GRPC_ADDR`, `SIGNALMAN_GRPC_ADDR`, `DECKHAND_GRPC_ADDR`, `SKIPPER_GRPC_ADDR`
+- `GATEWAY_MCP_URL` (derived from Bridge's mesh endpoint for Skipper)
 - `FOGHORN_CONTROL_ADDR`, `FOGHORN_CONTROL_BIND_ADDR`
 - All `VITE_*` (derived by configgen from canonical public URLs)
 - `AUTH_PUBLIC_URL` (derived from `GATEWAY_PUBLIC_URL + /auth`)

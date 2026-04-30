@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -813,13 +814,21 @@ func (a *Agent) validateManagedSelfIdentity(resp *pb.InfrastructureSyncResponse)
 	if resp == nil {
 		return fmt.Errorf("empty sync response")
 	}
-	if strings.TrimSpace(a.wireguardIP) == "" {
-		return fmt.Errorf("local wireguard_ip is not configured")
+	localIP, err := parseWireGuardIdentityIP(a.wireguardIP)
+	if err != nil {
+		if strings.TrimSpace(a.wireguardIP) == "" {
+			return fmt.Errorf("local wireguard_ip is not configured")
+		}
+		return fmt.Errorf("local wireguard_ip %q is invalid: %w", a.wireguardIP, err)
 	}
-	if resp.GetWireguardIp() == "" {
-		return fmt.Errorf("sync response omitted wireguard_ip for node %s", a.nodeID)
+	remoteIP, err := parseWireGuardIdentityIP(resp.GetWireguardIp())
+	if err != nil {
+		if strings.TrimSpace(resp.GetWireguardIp()) == "" {
+			return fmt.Errorf("sync response omitted wireguard_ip for node %s", a.nodeID)
+		}
+		return fmt.Errorf("sync response wireguard_ip %q is invalid: %w", resp.GetWireguardIp(), err)
 	}
-	if resp.GetWireguardIp() != a.wireguardIP {
+	if remoteIP != localIP {
 		return fmt.Errorf("sync response wireguard_ip %q does not match local GitOps identity %q", resp.GetWireguardIp(), a.wireguardIP)
 	}
 	if a.listenPort <= 0 {
@@ -832,6 +841,17 @@ func (a *Agent) validateManagedSelfIdentity(resp *pb.InfrastructureSyncResponse)
 		return fmt.Errorf("sync response wireguard port %d does not match local GitOps identity %d", resp.GetWireguardPort(), a.listenPort)
 	}
 	return nil
+}
+
+func parseWireGuardIdentityIP(value string) (netip.Addr, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return netip.Addr{}, fmt.Errorf("empty wireguard_ip")
+	}
+	if prefix, err := netip.ParsePrefix(value); err == nil {
+		return prefix.Addr(), nil
+	}
+	return netip.ParseAddr(value)
 }
 
 func dynamicPeersToLastKnown(peers []*pb.InfrastructurePeer) []lastKnownPeer {

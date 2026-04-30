@@ -1763,6 +1763,12 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					}
 					for k, v := range inst.Config {
 						config.Metadata["redis_"+k] = v
+						config.Metadata[k] = v
+					}
+					if _, ok := config.Metadata["bind"]; !ok {
+						if host, hostOK := manifest.GetHost(inst.Host); hostOK && strings.TrimSpace(host.WireguardIP) != "" {
+							config.Metadata["bind"] = fmt.Sprintf("127.0.0.1 %s", strings.TrimSpace(host.WireguardIP))
+						}
 					}
 				}
 			}
@@ -3151,6 +3157,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 				if port == 0 {
 					port = 6379
 				}
+				if strings.TrimSpace(inst.Host) == strings.TrimSpace(task.Host) {
+					rHost = "127.0.0.1"
+				}
 				// REDIS_{NAME}_ADDR for each named instance
 				key := fmt.Sprintf("REDIS_%s_ADDR", strings.ToUpper(inst.Name))
 				env[key] = fmt.Sprintf("%s:%d", rHost, port)
@@ -3204,6 +3213,15 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 				port = 18018
 			}
 			env["SKIPPER_SPOKE_URL"] = fmt.Sprintf("http://skipper.internal:%d/mcp/spoke", port)
+		}
+	}
+	if baseName == "skipper" {
+		if bridge, ok := manifest.Services["bridge"]; ok && bridge.Enabled {
+			port := bridge.Port
+			if port == 0 {
+				port = 18090
+			}
+			env["GATEWAY_MCP_URL"] = fmt.Sprintf("http://bridge.internal:%d/mcp", port)
 		}
 	}
 

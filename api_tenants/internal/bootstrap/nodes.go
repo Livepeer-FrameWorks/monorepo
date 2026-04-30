@@ -80,8 +80,8 @@ func upsertNode(ctx context.Context, exec DBTX, n Node) (string, error) {
 	const probeSQL = `
 		SELECT
 			node_name, node_type, cluster_id,
-			COALESCE(external_ip::text, ''),
-			COALESCE(wireguard_ip::text, ''),
+			COALESCE(host(external_ip), ''),
+			COALESCE(host(wireguard_ip), ''),
 			COALESCE(wireguard_public_key, ''),
 			COALESCE(wireguard_listen_port, 0)
 		FROM quartermaster.infrastructure_nodes
