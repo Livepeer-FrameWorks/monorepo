@@ -2374,6 +2374,7 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 			"name":     name,
 			"domains":  domains,
 			"upstream": fmt.Sprintf("127.0.0.1:%d", port),
+			"profile":  proxyRouteProfileForService(name),
 		}
 		if bundleID != "" {
 			site["tls_bundle_id"] = bundleID
@@ -2400,6 +2401,7 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 		}
 		if name, ok := route["name"].(string); ok && name != "" {
 			site["name"] = name
+			site["profile"] = proxyRouteProfileForService(name)
 		}
 		copyProxySiteMetadata(site, stringMapFromAny(route["metadata"]))
 		appendSite(site)
@@ -2431,6 +2433,7 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 		}
 		if cfg.Kind != "" {
 			site["kind"] = cfg.Kind
+			site["profile"] = proxyRouteProfileForKind(cfg.Kind)
 		}
 		if cfg.TLSBundleID != "" {
 			site["tls_bundle_id"] = cfg.TLSBundleID
@@ -2511,7 +2514,16 @@ func copyProxySiteMetadata(site map[string]any, metadata map[string]string) {
 	// TLS leave tls_bundle_id empty and supply their own paths.
 	bundleID, _ := stringFromAny(site["tls_bundle_id"])
 	managed := strings.TrimSpace(bundleID) != ""
-	overridable := []string{"path_prefix"}
+	overridable := []string{
+		"path_prefix",
+		"profile",
+		"client_max_body_size",
+		"client_body_timeout",
+		"send_timeout",
+		"proxy_connect_timeout",
+		"proxy_read_timeout",
+		"proxy_send_timeout",
+	}
 	if !managed {
 		overridable = append(overridable, "tls_mode", "tls_cert_path", "tls_key_path")
 	}
@@ -2525,6 +2537,44 @@ func copyProxySiteMetadata(site map[string]any, metadata map[string]string) {
 	}
 	if raw := strings.TrimSpace(metadata["extra_directives"]); raw != "" {
 		site["extra_directives"] = splitCSVStrings(raw)
+	}
+	for _, key := range []string{"proxy_request_buffering", "proxy_buffering", "websocket"} {
+		if value := strings.TrimSpace(metadata[key]); value != "" {
+			site[key] = parseBoolLike(value)
+		}
+	}
+}
+
+func proxyRouteProfileForService(serviceName string) string {
+	switch serviceName {
+	case "livepeer-gateway":
+		return "media_ingest"
+	case "chartroom", "chatwoot", "foredeck", "grafana", "listmonk", "logbook", "metabase", "steward":
+		return "web_ui"
+	default:
+		return "api"
+	}
+}
+
+func proxyRouteProfileForKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "media_ingest", "media-ingest":
+		return "media_ingest"
+	case "media_delivery", "media-delivery", "http_delivery", "http-delivery":
+		return "media_delivery"
+	case "web", "web_ui", "web-ui", "ui":
+		return "web_ui"
+	default:
+		return "api"
+	}
+}
+
+func parseBoolLike(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "t", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
 	}
 }
 

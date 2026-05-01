@@ -16,9 +16,83 @@ nginx_config_path_by_family:
   Debian: /etc/nginx/conf.d/frameworks.conf
   Archlinux: /etc/nginx/sites-enabled/frameworks.conf
   RedHat: /etc/nginx/conf.d/frameworks.conf
+nginx_http_include_path: ""
+nginx_http_include_path_by_family:
+  Debian: /etc/nginx/conf.d/*.conf
+  Archlinux: /etc/nginx/sites-enabled/*
+  RedHat: /etc/nginx/conf.d/*.conf
+nginx_main_config_path: /etc/nginx/nginx.conf
+nginx_worker_processes: auto
+nginx_worker_rlimit_nofile: 200000
+nginx_worker_connections: 16384
+nginx_multi_accept: true
+nginx_worker_user: "{{ nginx_worker_user_by_family[ansible_facts.os_family] | default('nginx') }}"
+nginx_worker_user_by_family:
+  Debian: www-data
+  Archlinux: http
+  RedHat: nginx
+nginx_module_includes: "{{ nginx_module_includes_by_family[ansible_facts.os_family] | default([]) }}"
+nginx_module_includes_by_family:
+  Debian:
+    - /etc/nginx/modules-enabled/*.conf
+  Archlinux:
+    - /etc/nginx/modules.d/*.conf
+  RedHat: []
+nginx_mime_types_path: /etc/nginx/mime.types
+nginx_default_type: application/octet-stream
+nginx_sendfile: true
+nginx_tcp_nopush: true
+nginx_tcp_nodelay: true
+nginx_keepalive_timeout: 65s
+nginx_keepalive_requests: 10000
+nginx_send_timeout: 60s
+nginx_server_tokens: false
 nginx_backup_dir: /var/backups/frameworks/nginx
 nginx_server_names_hash_bucket_size: 128
 nginx_types_hash_max_size: 4096
+nginx_types_hash_bucket_size: 128
+nginx_systemd_limit_nofile: 200000
+nginx_route_profiles:
+  api:
+    client_max_body_size: 16m
+    client_body_timeout: 60s
+    send_timeout: 60s
+    proxy_request_buffering: true
+    proxy_buffering: true
+    proxy_connect_timeout: 5s
+    proxy_read_timeout: 300s
+    proxy_send_timeout: 300s
+    websocket: true
+  web_ui:
+    client_max_body_size: 16m
+    client_body_timeout: 60s
+    send_timeout: 60s
+    proxy_request_buffering: true
+    proxy_buffering: true
+    proxy_connect_timeout: 5s
+    proxy_read_timeout: 300s
+    proxy_send_timeout: 300s
+    websocket: true
+  media_ingest:
+    client_max_body_size: 512m
+    client_body_timeout: 900s
+    send_timeout: 900s
+    proxy_request_buffering: false
+    proxy_buffering: false
+    proxy_connect_timeout: 5s
+    proxy_read_timeout: 900s
+    proxy_send_timeout: 900s
+    websocket: false
+  media_delivery:
+    client_max_body_size: 16m
+    client_body_timeout: 300s
+    send_timeout: 300s
+    proxy_request_buffering: false
+    proxy_buffering: true
+    proxy_connect_timeout: 5s
+    proxy_read_timeout: 300s
+    proxy_send_timeout: 300s
+    websocket: false
 nginx_https_port: 443
 # Distros put the nginx binary in different places (/usr/sbin on Debian,
 # /usr/bin on some Arch builds). The reload service unit's ExecStartPre

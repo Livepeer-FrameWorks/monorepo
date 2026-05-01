@@ -27,17 +27,29 @@ func TestReverseProxyComposeVarsRendersNginxConfigMount(t *testing.T) {
 		t.Fatalf("compose did not map host port to container port 80:\n%s", compose)
 	}
 	files := vars["compose_stack_files"].(map[string]any)
+	rootConf := files["nginx.conf"].(string)
 	conf := files["frameworks.conf"].(string)
 	for _, want := range []string{
 		`extra_hosts:`,
 		`"18090:80"`,
+		`ulimits:`,
+		`./nginx.conf:/etc/nginx/nginx.conf:ro`,
 		"server_name bridge.example.com;",
 		"proxy_pass http://host.docker.internal:18000;",
-		"proxy_read_timeout 86400;",
-		"proxy_send_timeout 86400;",
+		"include /etc/nginx/conf.d/frameworks.conf;",
+		"client_max_body_size 16m;",
+		"client_body_timeout 60s;",
+		"send_timeout 60s;",
+		"proxy_request_buffering on;",
+		"proxy_buffering on;",
+		"proxy_set_header Upgrade $http_upgrade;",
+		"proxy_read_timeout 300s;",
+		"proxy_send_timeout 300s;",
+		"worker_processes auto;",
+		"worker_connections 16384;",
 	} {
-		if !strings.Contains(compose+conf, want) {
-			t.Fatalf("docker nginx output missing %q:\ncompose:\n%s\nconfig:\n%s", want, compose, conf)
+		if !strings.Contains(compose+conf+rootConf, want) {
+			t.Fatalf("docker nginx output missing %q:\ncompose:\n%s\nroot:\n%s\nconfig:\n%s", want, compose, rootConf, conf)
 		}
 	}
 }
@@ -64,7 +76,8 @@ func TestReverseProxyComposeVarsRendersTLSMountsAndHTTPSPort(t *testing.T) {
 		`"80:80"`,
 		`"443:443"`,
 		`/etc/frameworks/certs:/etc/frameworks/certs:ro`,
-		`listen 443 ssl http2;`,
+		`listen 443 ssl;`,
+		`http2 on;`,
 		`ssl_certificate /etc/frameworks/certs/bridge.crt;`,
 		`proxy_pass http://host.docker.internal:18000;`,
 	} {
@@ -76,12 +89,44 @@ func TestReverseProxyComposeVarsRendersTLSMountsAndHTTPSPort(t *testing.T) {
 	}
 }
 
+func TestReverseProxyComposeVarsAppliesMediaIngestProfile(t *testing.T) {
+	vars, err := reverseProxyComposeVars("nginx", 18090, ServiceConfig{
+		Mode:  "docker",
+		Image: "nginx:alpine",
+		Port:  18090,
+		Metadata: map[string]any{"proxy_sites": []map[string]any{{
+			"domains":  []string{"livepeer.example.com"},
+			"upstream": "127.0.0.1:18060",
+			"profile":  "media_ingest",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("reverseProxyComposeVars: %v", err)
+	}
+	files := vars["compose_stack_files"].(map[string]any)
+	conf := files["frameworks.conf"].(string)
+	for _, want := range []string{
+		"client_max_body_size 512m;",
+		"client_body_timeout 900s;",
+		"send_timeout 900s;",
+		"proxy_request_buffering off;",
+		"proxy_buffering off;",
+		"proxy_read_timeout 900s;",
+		"proxy_send_timeout 900s;",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("docker nginx media ingest config missing %q:\n%s", want, conf)
+		}
+	}
+}
+
 func TestNginxRoleVarsUsesProxySites(t *testing.T) {
 	vars, err := nginxRoleVars(context.TODO(), nilHost(), ServiceConfig{
 		Port: 18090,
 		Metadata: map[string]any{"proxy_sites": []map[string]any{{
 			"domains":  []string{"bridge.example.com"},
 			"upstream": "127.0.0.1:18000",
+			"profile":  "api",
 		}}},
 	}, RoleBuildHelpers{})
 	if err != nil {
@@ -93,6 +138,9 @@ func TestNginxRoleVarsUsesProxySites(t *testing.T) {
 	}
 	if vars["nginx_http_port"] != 18090 {
 		t.Fatalf("nginx_http_port = %v", vars["nginx_http_port"])
+	}
+	if sites[0]["profile"] != "api" {
+		t.Fatalf("profile = %v", sites[0]["profile"])
 	}
 }
 
@@ -130,17 +178,42 @@ func TestRenderCaddyfileSupportsTLSAndPathPrefixes(t *testing.T) {
 	}
 }
 
-func TestNativeNginxTemplateUsesLongLivedProxyTimeouts(t *testing.T) {
+func TestNativeNginxTemplatesOwnRootConfigAndRouteProfiles(t *testing.T) {
 	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/nginx/templates/frameworks.conf.j2")
 	for _, want := range []string{
+		"nginx_route_profiles",
+		"client_max_body_size {{ site.client_max_body_size | default(profile.client_max_body_size) }};",
+		"client_body_timeout {{ site.client_body_timeout | default(profile.client_body_timeout) }};",
+		"send_timeout {{ site.send_timeout | default(profile.send_timeout) }};",
+		"proxy_request_buffering {{ 'on' if site.proxy_request_buffering | default(profile.proxy_request_buffering) else 'off' }};",
+		"proxy_buffering {{ 'on' if site.proxy_buffering | default(profile.proxy_buffering) else 'off' }};",
 		"proxy_set_header Upgrade $http_upgrade;",
 		"proxy_set_header Connection \"upgrade\";",
-		"proxy_read_timeout 86400;",
-		"proxy_send_timeout 86400;",
+		"http2 on;",
+		"proxy_read_timeout {{ site.proxy_read_timeout | default(profile.proxy_read_timeout) }};",
+		"proxy_send_timeout {{ site.proxy_send_timeout | default(profile.proxy_send_timeout) }};",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("native nginx template missing %q:\n%s", want, content)
 		}
+	}
+	root := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/nginx/templates/nginx.conf.j2")
+	for _, want := range []string{
+		"worker_processes {{ nginx_worker_processes }};",
+		"worker_rlimit_nofile {{ nginx_worker_rlimit_nofile }};",
+		"worker_connections {{ nginx_worker_connections }};",
+		"server_names_hash_bucket_size {{ nginx_server_names_hash_bucket_size }};",
+		"types_hash_max_size {{ nginx_types_hash_max_size }};",
+		"types_hash_bucket_size {{ nginx_types_hash_bucket_size }};",
+		"include {{ nginx_effective_http_include_path }};",
+	} {
+		if !strings.Contains(root, want) {
+			t.Fatalf("native nginx root template missing %q:\n%s", want, root)
+		}
+	}
+	systemd := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/nginx/templates/nginx-systemd-override.conf.j2")
+	if !strings.Contains(systemd, "LimitNOFILE={{ nginx_systemd_limit_nofile }}") {
+		t.Fatalf("native nginx systemd override missing LimitNOFILE:\n%s", systemd)
 	}
 }
 

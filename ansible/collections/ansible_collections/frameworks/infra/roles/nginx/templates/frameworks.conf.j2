@@ -1,6 +1,3 @@
-server_names_hash_bucket_size {{ nginx_server_names_hash_bucket_size }};
-types_hash_max_size {{ nginx_types_hash_max_size }};
-
 {% if nginx_sites | length == 0 %}
 server {
     listen {{ nginx_http_port }} default_server;
@@ -9,6 +6,8 @@ server {
 }
 {% endif %}
 {% for site in nginx_sites %}
+{% set profile_name = site.profile | default('api') %}
+{% set profile = nginx_route_profiles[profile_name] | default(nginx_route_profiles.api) %}
 server {
     listen {{ nginx_http_port }};
     server_name {{ site.domains | join(' ') }};
@@ -17,14 +16,22 @@ server {
     location {{ path_prefix }} {
         proxy_pass {{ site.proxy_pass }};
         proxy_http_version 1.1;
+        client_max_body_size {{ site.client_max_body_size | default(profile.client_max_body_size) }};
+        client_body_timeout {{ site.client_body_timeout | default(profile.client_body_timeout) }};
+        send_timeout {{ site.send_timeout | default(profile.send_timeout) }};
+        proxy_request_buffering {{ 'on' if site.proxy_request_buffering | default(profile.proxy_request_buffering) else 'off' }};
+        proxy_buffering {{ 'on' if site.proxy_buffering | default(profile.proxy_buffering) else 'off' }};
+        proxy_connect_timeout {{ site.proxy_connect_timeout | default(profile.proxy_connect_timeout) }};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+{% if site.websocket | default(profile.websocket) %}
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_read_timeout 86400;
-        proxy_send_timeout 86400;
+{% endif %}
+        proxy_read_timeout {{ site.proxy_read_timeout | default(profile.proxy_read_timeout) }};
+        proxy_send_timeout {{ site.proxy_send_timeout | default(profile.proxy_send_timeout) }};
     }
 {% endfor %}
 }
@@ -32,6 +39,7 @@ server {
 {% if site.tls_mode | default('') == 'files' and site.tls_cert_path | default('') | length > 0 and site.tls_key_path | default('') | length > 0 %}
 server {
     listen {{ nginx_https_port }} ssl;
+    http2 on;
     server_name {{ site.domains | join(' ') }};
     ssl_certificate {{ site.tls_cert_path }};
     ssl_certificate_key {{ site.tls_key_path }};
@@ -40,14 +48,22 @@ server {
     location {{ path_prefix }} {
         proxy_pass {{ site.proxy_pass }};
         proxy_http_version 1.1;
+        client_max_body_size {{ site.client_max_body_size | default(profile.client_max_body_size) }};
+        client_body_timeout {{ site.client_body_timeout | default(profile.client_body_timeout) }};
+        send_timeout {{ site.send_timeout | default(profile.send_timeout) }};
+        proxy_request_buffering {{ 'on' if site.proxy_request_buffering | default(profile.proxy_request_buffering) else 'off' }};
+        proxy_buffering {{ 'on' if site.proxy_buffering | default(profile.proxy_buffering) else 'off' }};
+        proxy_connect_timeout {{ site.proxy_connect_timeout | default(profile.proxy_connect_timeout) }};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+{% if site.websocket | default(profile.websocket) %}
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_read_timeout 86400;
-        proxy_send_timeout 86400;
+{% endif %}
+        proxy_read_timeout {{ site.proxy_read_timeout | default(profile.proxy_read_timeout) }};
+        proxy_send_timeout {{ site.proxy_send_timeout | default(profile.proxy_send_timeout) }};
     }
 {% endfor %}
 }

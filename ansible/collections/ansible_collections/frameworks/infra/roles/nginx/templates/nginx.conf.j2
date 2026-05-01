@@ -1,0 +1,34 @@
+{% if nginx_worker_user | default('') | length > 0 %}
+user {{ nginx_worker_user }};
+{% endif %}
+worker_processes {{ nginx_worker_processes }};
+worker_rlimit_nofile {{ nginx_worker_rlimit_nofile }};
+
+{% for include_path in nginx_module_includes %}
+include {{ include_path }};
+{% endfor %}
+
+events {
+    worker_connections {{ nginx_worker_connections }};
+    multi_accept {{ 'on' if nginx_multi_accept else 'off' }};
+}
+
+http {
+    include {{ nginx_mime_types_path }};
+    default_type {{ nginx_default_type }};
+
+    server_tokens {{ 'on' if nginx_server_tokens else 'off' }};
+    server_names_hash_bucket_size {{ nginx_server_names_hash_bucket_size }};
+    types_hash_max_size {{ nginx_types_hash_max_size }};
+    types_hash_bucket_size {{ nginx_types_hash_bucket_size }};
+
+    sendfile {{ 'on' if nginx_sendfile else 'off' }};
+    tcp_nopush {{ 'on' if nginx_tcp_nopush else 'off' }};
+    tcp_nodelay {{ 'on' if nginx_tcp_nodelay else 'off' }};
+
+    keepalive_timeout {{ nginx_keepalive_timeout }};
+    keepalive_requests {{ nginx_keepalive_requests }};
+    send_timeout {{ nginx_send_timeout }};
+
+    include {{ nginx_effective_http_include_path }};
+}

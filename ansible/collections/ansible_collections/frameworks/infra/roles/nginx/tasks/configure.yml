@@ -11,6 +11,11 @@
         nginx_config_path
         | default(nginx_config_path_by_family[ansible_facts.os_family] | default('/etc/nginx/conf.d/frameworks.conf'), true)
       }}
+    nginx_effective_http_include_path: >-
+      {{
+        nginx_http_include_path
+        | default(nginx_http_include_path_by_family[ansible_facts.os_family] | default('/etc/nginx/conf.d/*.conf'), true)
+      }}
 
 - name: Ensure Nginx config directory
   ansible.builtin.file:
@@ -40,6 +45,33 @@
   when:
     - not ansible_check_mode
     - nginx_effective_backup_path != nginx_effective_config_path + '.bak'
+
+- name: Ensure Nginx systemd override directory
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ nginx_service_name }}.service.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode
+
+- name: Render Nginx systemd limits override
+  ansible.builtin.template:
+    src: nginx-systemd-override.conf.j2
+    dest: "/etc/systemd/system/{{ nginx_service_name }}.service.d/frameworks.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  register: nginx_systemd_override_render
+  when: not ansible_check_mode
+
+- name: Reload systemd after Nginx override change
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when:
+    - not ansible_check_mode
+    - nginx_systemd_override_render is changed
+  notify: nginx restart
 
 - name: Ensure ingress TLS placeholders before validation
   ansible.builtin.import_tasks: tls_placeholders.yml
@@ -71,13 +103,24 @@
       register: nginx_config_render
       notify: nginx reload
 
+    - name: Render Nginx root config
+      ansible.builtin.template:
+        src: nginx.conf.j2
+        dest: "{{ nginx_main_config_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+        validate: "{{ nginx_binary_path }} -t -c %s"
+      register: nginx_root_config_render
+      notify: nginx reload
+
     - name: Validate full Nginx config
       ansible.builtin.command: "{{ nginx_binary_path }} -t"
       changed_when: false
       register: nginx_config_validate
       when:
         - not ansible_check_mode
-        - nginx_config_render is changed
+        - nginx_config_render is changed or nginx_root_config_render is changed
   rescue:
     - name: Restore previous Nginx config after validation failure
       ansible.builtin.copy:
