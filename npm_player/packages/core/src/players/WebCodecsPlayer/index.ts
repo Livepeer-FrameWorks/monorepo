@@ -127,6 +127,10 @@ interface PipelineInfo {
   audioWriter?: WritableStreamDefaultWriter<AudioData>;
 }
 
+export function buildSupportedAudioCodecList(tracks: TrackInfo[]): string[] {
+  return Array.from(new Set(tracks.map((track) => track.codec)));
+}
+
 /**
  * WebCodecsPlayerImpl - WebCodecs-based low-latency player
  */
@@ -162,6 +166,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   private pipelines = new Map<number, PipelineInfo>();
   private tracks: TrackInfo[] = [];
   private tracksByIndex = new Map<number, TrackInfo>(); // Track metadata indexed by track idx
+  private selectedMediaTrackIds: Set<number> | null = null;
   private queuedInitData = new Map<number, Uint8Array>(); // Queued INIT data waiting for track info
   private queuedChunks = new Map<number, RawChunk[]>(); // Queued chunks waiting for decoder config
   private isDestroyed = false;
@@ -434,6 +439,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this.tracks = [];
     this.queuedInitData.clear();
     this.queuedChunks.clear();
+    this.selectedMediaTrackIds = null;
     this.isDestroyed = false;
     this.useDirectRendering = false;
     this._duration = Infinity;
@@ -570,7 +576,9 @@ export class WebCodecsPlayerImpl extends BasePlayer {
         ? () => this.audioRenderer?.getCurrentTime() ?? 0
         : undefined,
       liveCatchup: wcOptions.liveCatchup,
+      localRateMode: "always",
       onSpeedChange: (main, tweak) => {
+        const combined = main * tweak;
         this.sendToWorker({
           type: "frametiming",
           action: "setSpeed",
@@ -579,7 +587,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
           uid: this.workerUidCounter++,
         });
         if (this.videoElement) {
-          this.videoElement.playbackRate = main * tweak;
+          this.videoElement.playbackRate = combined;
         }
       },
       onFastForwardRequest: (ms) => {
@@ -599,7 +607,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this.setupWebSocketHandlers();
 
     // Validate track codecs before connecting so we only advertise playable codecs.
-    const supportedAudioCodecs: Set<string> = new Set();
+    const supportedAudioTracks: TrackInfo[] = [];
     const supportedVideoCodecs: Set<string> = new Set();
 
     if (streamInfo?.meta?.tracks) {
@@ -622,7 +630,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
           const result = await WebCodecsPlayerImpl.isTrackSupported(trackInfo);
           if (result.supported) {
             if (track.type === "audio") {
-              supportedAudioCodecs.add(track.codec);
+              supportedAudioTracks.push(trackInfo);
             } else {
               supportedVideoCodecs.add(track.codec);
             }
@@ -637,7 +645,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     // If stream has audio tracks but none validated, reject so PlayerManager falls back
     // to a player that can handle the audio (e.g., HLS.js, native HTML5)
     const hasAudioTracks = streamInfo?.meta?.tracks?.some((t) => t.type === "audio");
-    if (hasAudioTracks && supportedAudioCodecs.size === 0 && supportedVideoCodecs.size > 0) {
+    if (hasAudioTracks && supportedAudioTracks.length === 0 && supportedVideoCodecs.size > 0) {
       const audioCodecs = streamInfo!.meta.tracks
         .filter((t) => t.type === "audio")
         .map((t) => t.codec);
@@ -647,11 +655,11 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     }
 
     // If no codecs validated, check if we have any tracks at all
-    if (supportedAudioCodecs.size === 0 && supportedVideoCodecs.size === 0) {
+    if (supportedAudioTracks.length === 0 && supportedVideoCodecs.size === 0) {
       // Fallback: Use default codec list if no tracks provided or all failed
       // This handles streams where track info isn't available until WebSocket connects
       this.log("No validated codecs, using default codec list");
-      ["AAC", "MP3", "opus", "FLAC", "AC3"].forEach((c) => supportedAudioCodecs.add(c));
+      supportedAudioTracks.push({ idx: -1, type: "audio", codec: "opus", rate: 48000 });
       ["H264", "HEVC", "VP8", "VP9", "AV1", "JPEG"].forEach((c) => supportedVideoCodecs.add(c));
     }
 
@@ -659,7 +667,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     // Format: [[ [audio codecs], [video codecs] ]] - audio FIRST per Object.values({audio:[], video:[]}) order
     const supportedCombinations: string[][][] = [
       [
-        Array.from(supportedAudioCodecs), // Audio codecs (position 0)
+        buildSupportedAudioCodecList(supportedAudioTracks), // Audio codecs (position 0)
         Array.from(supportedVideoCodecs), // Video codecs (position 1)
       ],
     ];
@@ -675,15 +683,6 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       this.log(`Failed to connect: ${err}`, "error");
       this.emit("error", err instanceof Error ? err : new Error(String(err)));
       throw err;
-    }
-
-    // Proactively create pipelines for pre-populated tracks
-    // This ensures pipelines exist when first chunks arrive, they just need init data
-    for (const [idx, track] of this.tracksByIndex) {
-      if (track.type === "video" || track.type === "audio") {
-        this.log(`Creating pipeline proactively for track ${idx} (${track.type} ${track.codec})`);
-        await this.createPipeline(track);
-      }
     }
 
     // Initialize metadata WebSocket for subtitle/meta tracks (separate socket)
@@ -733,11 +732,30 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     // AudioWorklet renderer — only for browsers where audio routes through it.
     // Firefox/Safari route audio through polyfill → video.srcObject instead.
     if (hasNativeMediaStreamTrackGenerator() && !isSafari()) {
-      this.audioRenderer = new AudioWorkletRenderer();
-      this.audioRenderer.onUnderrun = () => {
-        this.log("Audio underrun", "warn");
-      };
+      this.audioRenderer = this.createAudioRenderer();
     }
+  }
+
+  private createAudioRenderer(track?: TrackInfo): AudioWorkletRenderer {
+    const renderer = new AudioWorkletRenderer({
+      sampleRate: track?.rate,
+      channels: track?.channels,
+    });
+    renderer.onUnderrun = () => {
+      this.log("Audio underrun", "warn");
+    };
+    return renderer;
+  }
+
+  private configureAudioRendererForTrack(track: TrackInfo): void {
+    if (!this.audioRenderer || track.type !== "audio") return;
+    if (this.audioRenderer.getAudioContext()) return;
+    this.audioRenderer.destroy();
+    this.audioRenderer = this.createAudioRenderer(track);
+  }
+
+  private isSelectedMediaTrack(trackIdx: number): boolean {
+    return this.selectedMediaTrackIds === null || this.selectedMediaTrackIds.has(trackIdx);
   }
 
   /**
@@ -1247,6 +1265,14 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       return;
     }
 
+    const nextSelectedTrackIds = new Set(trackIndices);
+    for (const idx of Array.from(this.pipelines.keys())) {
+      if (!nextSelectedTrackIds.has(idx)) {
+        await this.closePipeline(idx, true);
+      }
+    }
+    this.selectedMediaTrackIds = nextSelectedTrackIds;
+
     // MistServer sends codec strings and track ids in matching positions.
     for (let i = 0; i < trackIndices.length; i++) {
       const trackIdx = trackIndices[i];
@@ -1276,6 +1302,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     for (const trackIdx of trackIndices) {
       const track = this.tracksByIndex.get(trackIdx);
       if (track && (track.type === "video" || track.type === "audio")) {
+        this.configureAudioRendererForTrack(track);
         await this.createPipeline(track);
       }
     }
@@ -1304,8 +1331,12 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
           // Process any queued init data for this track
           if (this.queuedInitData.has(track.idx)) {
-            if (track.type === "video" || track.type === "audio") {
+            if (
+              (track.type === "video" || track.type === "audio") &&
+              this.isSelectedMediaTrack(track.idx)
+            ) {
               this.log(`Processing queued INIT data for track ${track.idx}`);
+              this.configureAudioRendererForTrack(track);
               await this.createPipeline(track);
               const initData = this.queuedInitData.get(track.idx)!;
               this.configurePipeline(track.idx, initData);
@@ -1379,6 +1410,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     // Create pipelines for tracks announced by on_time.
     if (msg.tracks && msg.tracks.length > 0) {
       for (const trackIdx of msg.tracks) {
+        if (!this.isSelectedMediaTrack(trackIdx)) continue;
         if (!this.pipelines.has(trackIdx)) {
           const track = this.tracksByIndex.get(trackIdx);
           if (track && (track.type === "video" || track.type === "audio")) {
@@ -1427,7 +1459,9 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       this.tracksByIndex.set(track.idx, track);
 
       if (track.type === "video" || track.type === "audio") {
+        if (!this.isSelectedMediaTrack(track.idx)) continue;
         if (!this.pipelines.has(track.idx)) {
+          this.configureAudioRendererForTrack(track);
           await this.createPipeline(track);
         }
       }
@@ -1438,6 +1472,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
   private handleChunk(chunk: RawChunk): void {
     if (this.isDestroyed) return;
+    if (!this.isSelectedMediaTrack(chunk.trackIndex)) return;
 
     const pipeline = this.pipelines.get(chunk.trackIndex);
 
@@ -1710,8 +1745,10 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
   private async createPipeline(track: TrackInfo): Promise<void> {
     if (this.pipelines.has(track.idx)) return;
+    if (!this.isSelectedMediaTrack(track.idx)) return;
 
     this.log(`Creating pipeline for track ${track.idx} (${track.type} ${track.codec})`);
+    this.configureAudioRendererForTrack(track);
 
     const pipeline: PipelineInfo = {
       idx: track.idx,

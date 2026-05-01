@@ -135,6 +135,14 @@ describe("scorer", () => {
       expect(calculateProtocolPenalty("ws/video/mp4")).toBe(0.5);
     });
 
+    it("penalizes WebCodecs raw transports more than MEWS", () => {
+      expect(calculateProtocolPenalty("ws/video/raw")).toBe(0.65);
+      expect(calculateProtocolPenalty("ws/video/h264")).toBe(0.65);
+      expect(calculateProtocolPenalty("ws/video/raw")).toBeGreaterThan(
+        calculateProtocolPenalty("ws/video/mp4")
+      );
+    });
+
     it("pattern-based: any webm gets 0.5", () => {
       expect(calculateProtocolPenalty("some/video/webm-variant")).toBe(0.5);
     });
@@ -184,9 +192,9 @@ describe("scorer", () => {
   // calculateReliabilityScore
   // =========================================================================
   describe("calculateReliabilityScore", () => {
-    it("webcodecs and videojs are highest reliability", () => {
-      expect(calculateReliabilityScore("webcodecs")).toBe(0.95);
+    it("videojs has top reliability and webcodecs is lower", () => {
       expect(calculateReliabilityScore("videojs")).toBe(0.95);
+      expect(calculateReliabilityScore("webcodecs")).toBe(0.75);
     });
 
     it("dashjs has lowest reliability", () => {
@@ -202,8 +210,20 @@ describe("scorer", () => {
   // calculateModeBonus
   // =========================================================================
   describe("calculateModeBonus", () => {
-    it("low-latency favors WebCodecs raw highest", () => {
-      expect(calculateModeBonus("ws/video/raw", "low-latency")).toBe(0.55);
+    it("low-latency keeps WebCodecs below WHEP and MEWS", () => {
+      expect(calculateModeBonus("ws/video/raw", "low-latency")).toBe(0.2);
+      expect(calculateModeBonus("ws/video/raw", "low-latency")).toBeLessThan(
+        calculateModeBonus("whep", "low-latency")
+      );
+      expect(calculateModeBonus("ws/video/raw", "low-latency")).toBeLessThan(
+        calculateModeBonus("ws/video/mp4", "low-latency")
+      );
+    });
+
+    it("quality keeps WebCodecs below HLS", () => {
+      expect(calculateModeBonus("ws/video/raw", "quality")).toBeLessThan(
+        calculateModeBonus("html5/application/vnd.apple.mpegurl", "quality")
+      );
     });
 
     it("low-latency: WHEP > HLS", () => {
@@ -292,6 +312,52 @@ describe("scorer", () => {
       const clean = scorePlayer(["video"], 0, 0, { mimeType: "html5/video/mp4" });
       const penalized = scorePlayer(["video"], 0, 0, { mimeType: "html5/video/webm" });
       expect(clean.total).toBeGreaterThan(penalized.total);
+    });
+
+    it("low-latency ranks WebCodecs below WHEP and MEWS for full A/V", () => {
+      const common = {
+        maxPriority: 100,
+        totalSources: 4,
+        playbackMode: "low-latency" as const,
+      };
+      const webcodecs = scorePlayer(["video", "audio"], 0, 0, {
+        ...common,
+        playerShortname: "webcodecs",
+        mimeType: "ws/video/raw",
+      });
+      const whep = scorePlayer(["video", "audio"], 1, 1, {
+        ...common,
+        playerShortname: "native",
+        mimeType: "whep",
+      });
+      const mews = scorePlayer(["video", "audio"], 2, 2, {
+        ...common,
+        playerShortname: "mews",
+        mimeType: "ws/video/mp4",
+      });
+
+      expect(webcodecs.total).toBeLessThan(whep.total);
+      expect(webcodecs.total).toBeLessThan(mews.total);
+    });
+
+    it("quality ranks WebCodecs below HLS for full A/V", () => {
+      const common = {
+        maxPriority: 100,
+        totalSources: 2,
+        playbackMode: "quality" as const,
+      };
+      const webcodecs = scorePlayer(["video", "audio"], 0, 0, {
+        ...common,
+        playerShortname: "webcodecs",
+        mimeType: "ws/video/raw",
+      });
+      const hls = scorePlayer(["video", "audio"], 2, 1, {
+        ...common,
+        playerShortname: "videojs",
+        mimeType: "html5/application/vnd.apple.mpegurl",
+      });
+
+      expect(webcodecs.total).toBeLessThan(hls.total);
     });
 
     it("uses default weights when not specified", () => {

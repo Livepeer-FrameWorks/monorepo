@@ -165,6 +165,16 @@ describe("createPlayerControllerStore", () => {
     expect(state.duration).toBeNaN();
   });
 
+  it("reflects configured muted state before attach", () => {
+    const store = createPlayerControllerStore({
+      contentId: "test-stream",
+      contentType: "live",
+      muted: true,
+    });
+
+    expect(get(store).isMuted).toBe(true);
+  });
+
   it("attaches controller to container", async () => {
     const { PlayerController } = await import("@livepeer-frameworks/player-core");
     const store = createPlayerControllerStore({
@@ -375,6 +385,30 @@ describe("event → state updates", () => {
     const state = get(store);
     expect(state.volume).toBe(0.7);
     expect(state.isMuted).toBe(false);
+  });
+
+  it("ready syncs actual muted state from the controller", async () => {
+    const store = await createAttachedStore();
+    const video = document.createElement("video");
+    mockIsMuted.mockReturnValue(true);
+    mockGetVolume.mockReturnValue(0.8);
+
+    fire("ready", { videoElement: video });
+
+    const state = get(store);
+    expect(state.isMuted).toBe(true);
+    expect(state.volume).toBe(0.8);
+  });
+
+  it("muteChange updates muted state for autoplay fallback", async () => {
+    const store = await createAttachedStore();
+    mockGetVolume.mockReturnValue(1);
+
+    fire("muteChange", { muted: true });
+
+    const state = get(store);
+    expect(state.isMuted).toBe(true);
+    expect(state.volume).toBe(1);
   });
 
   it("loopChange updates isLoopEnabled", async () => {

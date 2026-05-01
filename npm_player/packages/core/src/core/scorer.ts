@@ -163,11 +163,12 @@ export function isProtocolBlacklisted(mimeType: string): boolean {
  * Medium penalties (0.20): Experimental or spotty support
  */
 export const PROTOCOL_PENALTIES: Record<string, number> = {
-  // WebCodecs raw - NOW PREFERRED for low-latency (no penalty)
-  // 'ws/video/raw': 0,
-  // 'wss/video/raw': 0,
-  // 'ws/video/h264': 0,
-  // 'wss/video/h264': 0,
+  // WebCodecs is useful as an explicit low-level option, but the raw-frame path
+  // owns more A/V timing than browser-native transports and should not win by default.
+  "ws/video/raw": 0.65,
+  "wss/video/raw": 0.65,
+  "ws/video/h264": 0.65,
+  "wss/video/h264": 0.65,
   // WebM - reference supports but unreliable in practice
   "html5/video/webm": 0.8, // Heavy penalty - very broken
   "html5/audio/webm": 0.6,
@@ -216,7 +217,7 @@ export function calculateProtocolPenalty(mimeType: string): number {
  * Based on library maturity, error recovery, and overall stability
  */
 export const PLAYER_RELIABILITY: Record<string, number> = {
-  webcodecs: 0.95, // Stable, lowest latency option
+  webcodecs: 0.75, // Low-level decoder path; keep selectable but behind browser transport stacks.
   videojs: 0.95, // Fast loading, built-in HLS via VHS
   hlsjs: 0.9, // Battle-tested but slower to load
   native: 0.85, // Native is lightweight but has edge cases
@@ -242,25 +243,25 @@ export function calculateReliabilityScore(playerShortname: string): number {
  * that naturally pushes it below full combos.
  *
  * Priority rationale:
- * - Low-latency: WHEP/WebRTC first (<1s), then MP4/WS (2-5s), HLS last (10-30s)
- * - Quality: MP4/WS first (stable + low latency), HLS fallback, WHEP minimal
+ * - Low-latency: WHEP/WebRTC and MP4/WS first; WebCodecs remains a fallback/manual option
+ * - Quality: HLS/MP4/WS first; WebCodecs stays behind ABR-capable HLS
  * - VOD: MP4/HLS first (seekable), WHEP hard penalty (no seek support)
  * - Auto: MP4/WS balanced choice, WHEP for low latency, HLS last resort
  */
 export const MODE_PROTOCOL_BONUSES: Record<PlaybackMode, Record<string, number>> = {
   "low-latency": {
-    // WebCodecs raw/h264: HIGHEST PRIORITY - ultra-low latency via WebCodecs API
-    "ws/video/raw": 0.55,
-    "wss/video/raw": 0.55,
-    "ws/video/h264": 0.52,
-    "wss/video/h264": 0.52,
     // WHEP/WebRTC: sub-second latency
     whep: 0.5,
-    webrtc: 0.25,
-    "mist/webrtc": 0.25,
+    webrtc: 0.35,
+    "mist/webrtc": 0.35,
     // MP4/WS (MEWS): 2-5s latency, good fallback
-    "ws/video/mp4": 0.3,
-    "wss/video/mp4": 0.3,
+    "ws/video/mp4": 0.35,
+    "wss/video/mp4": 0.35,
+    // WebCodecs raw/h264: low latency, but less stable than browser transport stacks
+    "ws/video/raw": 0.2,
+    "wss/video/raw": 0.2,
+    "ws/video/h264": 0.18,
+    "wss/video/h264": 0.18,
     // Progressive MP4: lower latency than HLS (2-5s vs 10-30s)
     "html5/video/mp4": 0.35,
     // HLS: high latency, minimal bonus
@@ -270,14 +271,14 @@ export const MODE_PROTOCOL_BONUSES: Record<PlaybackMode, Record<string, number>>
     // MP4/WS: stable + lower latency than HLS, preferred when supported
     "ws/video/mp4": 0.45,
     "wss/video/mp4": 0.45,
-    // WebCodecs raw: below MEWS but above HLS - good quality + low latency
-    "ws/video/raw": 0.4,
-    "wss/video/raw": 0.4,
-    "ws/video/h264": 0.38,
-    "wss/video/h264": 0.38,
     // HLS: ABR support, universal fallback
     "html5/application/vnd.apple.mpegurl": 0.3,
     "html5/video/mp4": 0.2,
+    // WebCodecs has no manifest-level ABR and should sit behind HLS in quality mode.
+    "ws/video/raw": 0.1,
+    "wss/video/raw": 0.1,
+    "ws/video/h264": 0.08,
+    "wss/video/h264": 0.08,
     // WebRTC: minimal for quality mode
     whep: 0.05,
     webrtc: 0.05,
@@ -296,11 +297,6 @@ export const MODE_PROTOCOL_BONUSES: Record<PlaybackMode, Record<string, number>>
     "mist/webrtc": 0.1,
   },
   auto: {
-    // WebCodecs raw: highest priority for low-latency live streams
-    "ws/video/raw": 0.5,
-    "wss/video/raw": 0.5,
-    "ws/video/h264": 0.48,
-    "wss/video/h264": 0.48,
     // Direct MP4: simple, reliable, preferred over HLS when available
     "html5/video/mp4": 0.42,
     // WHEP/WebRTC: good for low latency
@@ -310,6 +306,11 @@ export const MODE_PROTOCOL_BONUSES: Record<PlaybackMode, Record<string, number>>
     // MP4/WS (MEWS): lower latency than HLS
     "ws/video/mp4": 0.3,
     "wss/video/mp4": 0.3,
+    // WebCodecs remains available, but should not be the default live choice.
+    "ws/video/raw": 0.15,
+    "wss/video/raw": 0.15,
+    "ws/video/h264": 0.13,
+    "wss/video/h264": 0.13,
     // HLS: high latency, fallback option (but reliable)
     "html5/application/vnd.apple.mpegurl": 0.2,
   },

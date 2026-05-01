@@ -9,7 +9,7 @@
  * - Pull-based design — worklet requests samples, never starves on push
  * - Underrun detection with throttled events
  * - Desktop/mobile buffer tuning
- * - Playback rate via AudioContext
+ * - Playback timing is driven by AudioContext's stable hardware clock
  */
 
 /**
@@ -36,6 +36,9 @@ class FWAudioProcessor extends AudioWorkletProcessor {
     };
   }
   pushSamples(msg) {
+    if (msg.channels !== this.channels) {
+      this.backBuffer.length = msg.channels;
+    }
     this.channels = msg.channels;
     const off = this.readOffset;
     for (let ch = 0; ch < msg.channels; ch++) {
@@ -152,7 +155,6 @@ export class AudioWorkletRenderer {
         this.onUnderrun?.(e.data.time);
       }
     };
-
     // Firefox/Safari create AudioContext in "suspended" state (autoplay policy).
     // Without resume(), the worklet runs but produces silence.
     if (this.audioContext.state === "suspended") {
@@ -241,12 +243,11 @@ export class AudioWorkletRenderer {
   }
 
   /**
-   * Set playback rate. Changes AudioContext playback rate.
-   * Note: This affects pitch. For pitch-corrected speed, a SoundTouch WASM would be needed.
+   * Keep audio on the AudioContext hardware clock.
+   * Frame scheduling and server requests handle live catchup; resampling this
+   * direct audio path causes audible artifacts.
    */
   setPlaybackRate(rate: number): void {
-    // AudioContext doesn't expose playback-rate control here. Speed changes come
-    // from the frame timing controller feeding samples at a different cadence.
     void rate;
   }
 

@@ -177,6 +177,18 @@ describe("usePlayerController", () => {
     expect(result.current.state.duration).toBeNaN();
   });
 
+  it("reflects configured muted state before controller ready", () => {
+    const { result } = renderHook(() =>
+      usePlayerController({
+        contentId: "test-stream",
+        contentType: "live",
+        muted: true,
+      })
+    );
+
+    expect(result.current.state.isMuted).toBe(true);
+  });
+
   it("provides stable action callbacks", () => {
     const { result, rerender } = renderHook(() =>
       usePlayerController({
@@ -363,6 +375,32 @@ describe("event -> state updates", () => {
 
     expect(result.current.state.volume).toBe(0.5);
     expect(result.current.state.isMuted).toBe(false);
+  });
+
+  it("ready syncs actual muted state from the controller", () => {
+    const { result } = renderWithController();
+    const video = document.createElement("video");
+    mockIsMuted.mockReturnValue(true);
+    mockGetVolume.mockReturnValue(0.8);
+
+    act(() => {
+      fire("ready", { videoElement: video });
+    });
+
+    expect(result.current.state.isMuted).toBe(true);
+    expect(result.current.state.volume).toBe(0.8);
+  });
+
+  it("muteChange updates muted state for autoplay fallback", () => {
+    const { result } = renderWithController();
+    mockGetVolume.mockReturnValue(1);
+
+    act(() => {
+      fire("muteChange", { muted: true });
+    });
+
+    expect(result.current.state.isMuted).toBe(true);
+    expect(result.current.state.volume).toBe(1);
   });
 
   it("loopChange updates isLoopEnabled", () => {

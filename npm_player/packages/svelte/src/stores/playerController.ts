@@ -202,6 +202,15 @@ const initialState: PlayerControllerState = {
   thumbnailCues: [],
 };
 
+function createInitialState(
+  config: Pick<PlayerControllerStoreConfig, "muted">
+): PlayerControllerState {
+  return {
+    ...initialState,
+    isMuted: config.muted === true,
+  };
+}
+
 // ============================================================================
 // Store Factory
 // ============================================================================
@@ -245,7 +254,7 @@ export function createPlayerControllerStore(
   const { enabled = true, ...controllerConfig } = config;
 
   // Internal state
-  const store = writable<PlayerControllerState>(initialState);
+  const store = writable<PlayerControllerState>(createInitialState(controllerConfig));
   let controller: PlayerController | null = null;
   let unsubscribers: Array<() => void> = [];
 
@@ -296,6 +305,8 @@ export function createPlayerControllerStore(
           isPlaying: controller!.isPlaying(),
           isPaused: controller!.isPaused(),
           isBuffering: controller!.isBuffering(),
+          isMuted: controller!.isMuted(),
+          volume: controller!.getVolume(),
           hasPlaybackStarted: controller!.hasPlaybackStarted(),
           shouldShowControls: controller!.shouldShowControls(),
           shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
@@ -324,6 +335,8 @@ export function createPlayerControllerStore(
           isPlaying: controller!.isPlaying(),
           isPaused: controller!.isPaused(),
           isBuffering: controller!.isBuffering(),
+          isMuted: controller!.isMuted(),
+          volume: controller!.getVolume(),
           hasPlaybackStarted: controller!.hasPlaybackStarted(),
           shouldShowControls: controller!.shouldShowControls(),
           shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
@@ -356,6 +369,8 @@ export function createPlayerControllerStore(
           metadata: controller!.getMetadata(),
           isEffectivelyLive: controller!.isEffectivelyLive(),
           shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
+          isMuted: controller!.isMuted(),
+          volume: controller!.getVolume(),
           currentPlayerInfo: controller!.getCurrentPlayerInfo(),
           currentSourceInfo: controller!.getCurrentSourceInfo(),
         }));
@@ -392,6 +407,12 @@ export function createPlayerControllerStore(
     unsubscribers.push(
       controller.on("volumeChange", ({ volume, muted }) => {
         store.update((prev) => ({ ...prev, volume, isMuted: muted }));
+      })
+    );
+
+    unsubscribers.push(
+      controller.on("muteChange", ({ muted }) => {
+        store.update((prev) => ({ ...prev, isMuted: muted, volume: controller!.getVolume() }));
       })
     );
 

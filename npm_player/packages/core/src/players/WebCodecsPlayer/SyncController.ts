@@ -124,6 +124,8 @@ export class SyncController {
             thresholdMs?: number;
             requestMs?: number;
           };
+      /** Whether local playback-rate tweaks are safe for the active render path. */
+      localRateMode?: "none" | "always";
     } = {}
   ) {
     this.profile = options.profile ?? getLatencyProfile("low");
@@ -157,7 +159,7 @@ export class SyncController {
       maxSpeedUp: this.profile.maxSpeedUp,
       minSpeedDown: this.profile.minSpeedDown,
       serverRateMode: "none",
-      localRateMode: "always",
+      localRateMode: options.localRateMode ?? "always",
       liveSetSpeedToggle: true,
       bucketHysteresis: true,
       pendingFastForward: true,

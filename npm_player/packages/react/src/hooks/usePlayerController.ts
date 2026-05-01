@@ -230,6 +230,15 @@ const initialState: PlayerControllerState = {
   thumbnailCues: [],
 };
 
+function createInitialState(
+  config: Pick<UsePlayerControllerConfig, "muted">
+): PlayerControllerState {
+  return {
+    ...initialState,
+    isMuted: config.muted === true,
+  };
+}
+
 // ============================================================================
 // Hook
 // ============================================================================
@@ -248,7 +257,9 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
 
   const containerRef = useRef<HTMLDivElement>(null);
   const controllerRef = useRef<PlayerController | null>(null);
-  const [state, setState] = useState<PlayerControllerState>(initialState);
+  const [state, setState] = useState<PlayerControllerState>(() =>
+    createInitialState(controllerConfig)
+  );
 
   // Stable config ref for effect dependencies
   const configRef = useRef(controllerConfig);
@@ -311,6 +322,8 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
           isPlaying: controller.isPlaying(),
           isPaused: controller.isPaused(),
           isBuffering: controller.isBuffering(),
+          isMuted: controller.isMuted(),
+          volume: controller.getVolume(),
           hasPlaybackStarted: controller.hasPlaybackStarted(),
           shouldShowControls: controller.shouldShowControls(),
           shouldShowIdleScreen: controller.shouldShowIdleScreen(),
@@ -341,6 +354,8 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
           isPlaying: controller.isPlaying(),
           isPaused: controller.isPaused(),
           isBuffering: controller.isBuffering(),
+          isMuted: controller.isMuted(),
+          volume: controller.getVolume(),
           hasPlaybackStarted: controller.hasPlaybackStarted(),
           shouldShowControls: controller.shouldShowControls(),
           shouldShowIdleScreen: controller.shouldShowIdleScreen(),
@@ -375,6 +390,8 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
           streamInfo: controller.getStreamInfo(),
           isEffectivelyLive: controller.isEffectivelyLive(),
           shouldShowIdleScreen: controller.shouldShowIdleScreen(),
+          isMuted: controller.isMuted(),
+          volume: controller.getVolume(),
           currentPlayerInfo: controller.getCurrentPlayerInfo(),
           currentSourceInfo: controller.getCurrentSourceInfo(),
           qualities: controller.getQualities(),
@@ -414,6 +431,12 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
     unsubs.push(
       controller.on("volumeChange", ({ volume, muted }) => {
         setState((prev) => ({ ...prev, volume, isMuted: muted }));
+      })
+    );
+
+    unsubs.push(
+      controller.on("muteChange", ({ muted }) => {
+        setState((prev) => ({ ...prev, isMuted: muted, volume: controller.getVolume() }));
       })
     );
 

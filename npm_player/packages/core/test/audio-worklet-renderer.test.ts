@@ -301,9 +301,17 @@ describe("AudioWorkletRenderer", () => {
   });
 
   describe("setPlaybackRate", () => {
-    it("is a no-op", () => {
+    it("is a no-op for the stable audio clock", async () => {
+      const { workletNode } = installMocks();
       const renderer = new AudioWorkletRenderer();
-      renderer.setPlaybackRate(2.0);
+      await renderer.start();
+      vi.mocked(workletNode.port.postMessage).mockClear();
+
+      renderer.setPlaybackRate(1.05);
+
+      expect(workletNode.port.postMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "playbackRate" })
+      );
     });
   });
 

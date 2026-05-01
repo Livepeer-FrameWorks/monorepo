@@ -368,12 +368,10 @@ export class HlsJsPlayerImpl extends BasePlayer {
     if (!this.hls) return;
     if (id === "auto") {
       this.hls.currentLevel = -1;
-      this.hls.autoLevelEnabled = true;
       return;
     }
     const idx = parseInt(id, 10);
     if (!isNaN(idx)) {
-      this.hls.autoLevelEnabled = false;
       this.hls.currentLevel = idx;
     }
   }

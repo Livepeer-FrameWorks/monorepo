@@ -1504,6 +1504,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   /** Set muted state. Unmuting restores the previous volume. */
   setMuted(muted: boolean): void {
     if (!this.videoElement) return;
+    this.config.muted = muted;
 
     if (muted) {
       // Save current volume before muting (if non-zero)
@@ -1512,10 +1513,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       }
     }
 
+    this.videoElement.muted = muted;
     if (this.currentPlayer?.setMuted) {
       this.currentPlayer.setMuted(muted);
-    } else {
-      this.videoElement.muted = muted;
     }
 
     // Restore volume when unmuting
@@ -1791,7 +1791,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
   /** Check if muted */
   isMuted(): boolean {
-    return this.videoElement?.muted ?? false;
+    return (
+      this.currentPlayer?.isMuted?.() ?? this.videoElement?.muted ?? this.config.muted === true
+    );
   }
 
   /** Skip backward by specified ms (default 10000ms = 10s) */
@@ -1828,7 +1830,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   /** Toggle mute */
   toggleMute(): void {
     if (this.videoElement) {
-      this.setMuted(!this.videoElement.muted);
+      this.setMuted(!this.isMuted());
     }
   }
 
@@ -3197,6 +3199,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         }
         // Initialize sub-controllers after video is ready
         this.initializeSubControllers();
+        this.emit("volumeChange", { volume: el.volume, muted: this.isMuted() });
         this.emit("ready", { videoElement: el });
 
         // Drain queued play intent from pre-boot play() calls
@@ -3211,6 +3214,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
             onMutedFallback: () => {
               this.log("[initializePlayer] Autoplay succeeded with muted fallback");
               this.emit("muteChange", { muted: true });
+              this.emit("volumeChange", { volume: el.volume, muted: true });
             },
             onFailed: () => {
               this.log("[initializePlayer] Autoplay failed entirely — awaiting user interaction");
