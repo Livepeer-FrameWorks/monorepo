@@ -2145,7 +2145,7 @@ func resolveLiveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointReques
 func collectRemoteEdges(ctx context.Context, peers []*pb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
 	var candidates []balancer.RemoteEdgeCandidate
 	for _, peer := range peers {
-		if peer.GetClusterId() == clusterID || peer.GetClusterId() == "" {
+		if peer.GetClusterId() == clusterID || peer.GetClusterId() == "" || control.IsServedCluster(peer.GetClusterId()) {
 			continue
 		}
 		record, err := remoteEdgeCache.GetEdgeSummary(ctx, peer.GetClusterId())
@@ -2482,7 +2482,7 @@ func queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, 
 	var queriedCount uint32
 
 	for _, peer := range peers {
-		if peer.GetClusterId() == clusterID || peer.GetClusterId() == "" {
+		if peer.GetClusterId() == clusterID || peer.GetClusterId() == "" || control.IsServedCluster(peer.GetClusterId()) {
 			continue
 		}
 		addr := peerManager.GetPeerAddr(peer.GetClusterId())

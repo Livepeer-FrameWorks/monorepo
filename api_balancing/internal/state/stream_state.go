@@ -917,7 +917,13 @@ func (sm *StreamStateManager) SetProbeVerified(nodeID string, verified bool) {
 		sm.nodes[nodeID] = n
 	}
 	n.ProbeVerified = verified
+	nodePayload, err := json.Marshal(n)
 	sm.mu.Unlock()
+	if err != nil {
+		return
+	}
+
+	sm.persistNodeWriteThrough(nodeID, nodePayload)
 }
 
 // SetNodeInfo updates per-node info

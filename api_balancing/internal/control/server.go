@@ -567,6 +567,11 @@ func isServedCluster(id string) bool {
 	return ok
 }
 
+// IsServedCluster reports whether this Foghorn instance serves cluster id.
+func IsServedCluster(id string) bool {
+	return isServedCluster(id)
+}
+
 // LoadServedClusters bulk-loads all active cluster assignments from the DB
 // and atomically swaps the served set. localClusterID is always preserved.
 func LoadServedClusters() {
@@ -934,6 +939,14 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				// so the balancer's tenant filter sees the correct ownership.
 				if canonicalNodeID != nodeID {
 					state.DefaultManager().SetNodeConnectionInfo(context.Background(), nodeID, "", tenantID, clusterID, nil)
+				}
+			}
+			if fingerprintResolved {
+				// Fingerprint resolution means Quartermaster already knows this node;
+				// do not let a stale activation-probe flag from Redis keep it unroutable.
+				state.DefaultManager().SetProbeVerified(canonicalNodeID, true)
+				if canonicalNodeID != nodeID {
+					state.DefaultManager().SetProbeVerified(nodeID, true)
 				}
 			}
 
@@ -2330,13 +2343,12 @@ type MistTriggerProcessor interface {
 
 // processMistTrigger processes typed MistServer triggers forwarded from Helmsman
 func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
-	if trigger != nil && (trigger.ClusterId == nil || strings.TrimSpace(trigger.GetClusterId()) == "") {
-		// Prefer the node's actual cluster from the state manager (accurate for
-		// remote nodes in multi-cluster deployments) over the local Foghorn cluster.
+	if trigger != nil {
 		if ns := state.DefaultManager().GetNodeState(nodeID); ns != nil && strings.TrimSpace(ns.ClusterID) != "" {
 			cid := strings.TrimSpace(ns.ClusterID)
 			trigger.ClusterId = &cid
-		} else if cid := strings.TrimSpace(localClusterID); cid != "" {
+		} else if (trigger.ClusterId == nil || strings.TrimSpace(trigger.GetClusterId()) == "") && strings.TrimSpace(localClusterID) != "" {
+			cid := strings.TrimSpace(localClusterID)
 			trigger.ClusterId = &cid
 		}
 	}

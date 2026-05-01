@@ -321,6 +321,50 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 	}
 }
 
+func TestValidateStreamKey_UsesMediaClusterWhenFoghornRunsOnPlatformCluster(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id"}).
+		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123")
+	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
+	mock.ExpectExec("UPDATE commodore.streams SET active_ingest_cluster_id").WithArgs("demo-media", "good-key").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	server := &CommodoreServer{
+		db:     db,
+		logger: logrus.New(),
+		routeCache: map[string]*clusterRoute{
+			"tenant-id": {
+				clusterID: "demo-media",
+				clusterPeers: []*pb.TenantClusterPeer{
+					{ClusterId: "central-primary", ClusterType: "central"},
+					{ClusterId: "demo-media", ClusterType: "edge"},
+				},
+				resolvedAt: time.Now(),
+			},
+		},
+		routeCacheTTL: 5 * time.Minute,
+	}
+
+	resp, err := server.ValidateStreamKey(context.Background(), &pb.ValidateStreamKeyRequest{
+		StreamKey: "good-key",
+		ClusterId: "central-primary",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.GetOriginClusterId() != "demo-media" {
+		t.Fatalf("expected origin cluster to stay on media cluster, got %q", resp.GetOriginClusterId())
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestSelectActiveIngestCluster(t *testing.T) {
 	now := time.Now()
 	tests := []struct {

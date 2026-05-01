@@ -620,6 +620,11 @@ func (s *CommodoreServer) resolveFoghornForContent(ctx context.Context, contentI
 		if client, ok := s.foghornPool.Get(foghornPoolKey(activeClusterID.String, "")); ok {
 			return client, &clusterRoute{clusterID: activeClusterID.String}, nil
 		}
+		if tenantID.Valid && tenantID.String != "" {
+			if client, clusterErr := s.resolveFoghornForCluster(ctx, activeClusterID.String, tenantID.String); clusterErr == nil {
+				return client, &clusterRoute{clusterID: activeClusterID.String}, nil
+			}
+		}
 	}
 
 	// Fall back to tenant-based routing (populates pool for next time)
@@ -657,6 +662,11 @@ func (s *CommodoreServer) resolveFoghornForStreamKey(ctx context.Context, stream
 		if client, ok := s.foghornPool.Get(foghornPoolKey(activeClusterID.String, "")); ok {
 			return client, &clusterRoute{clusterID: activeClusterID.String}, nil
 		}
+		if tenantID.Valid && tenantID.String != "" {
+			if client, clusterErr := s.resolveFoghornForCluster(ctx, activeClusterID.String, tenantID.String); clusterErr == nil {
+				return client, &clusterRoute{clusterID: activeClusterID.String}, nil
+			}
+		}
 	}
 
 	// Fall back to tenant-based routing (populates pool for next time)
@@ -677,6 +687,35 @@ func clusterInPeers(peers []*pb.TenantClusterPeer, clusterID string) bool {
 		}
 	}
 	return false
+}
+
+func canOwnLiveIngest(clusterType string) bool {
+	switch strings.ToLower(strings.TrimSpace(clusterType)) {
+	case "", "edge", "media", "selfhosted", "self-hosted":
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveLiveIngestClusterID(route *clusterRoute, requestedClusterID string) string {
+	if route == nil {
+		return requestedClusterID
+	}
+
+	resolvedClusterID := route.clusterID
+	if requestedClusterID == "" {
+		return resolvedClusterID
+	}
+	if requestedClusterID == route.clusterID || requestedClusterID == route.officialClusterID {
+		return requestedClusterID
+	}
+	for _, peer := range route.clusterPeers {
+		if peer.GetClusterId() == requestedClusterID && canOwnLiveIngest(peer.GetClusterType()) {
+			return requestedClusterID
+		}
+	}
+	return resolvedClusterID
 }
 
 // resolveFoghornForArtifact returns a Foghorn client routed to the artifact's
@@ -771,14 +810,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 	}
 
 	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
-		resolvedOriginClusterID := route.clusterID
-		if ingestClusterID := req.GetClusterId(); ingestClusterID != "" {
-			if ingestClusterID == route.clusterID ||
-				ingestClusterID == route.officialClusterID ||
-				clusterInPeers(route.clusterPeers, ingestClusterID) {
-				resolvedOriginClusterID = ingestClusterID
-			}
-		}
+		resolvedOriginClusterID := resolveLiveIngestClusterID(route, req.GetClusterId())
 		resp.OriginClusterId = &resolvedOriginClusterID
 		if route.officialClusterID != "" {
 			resp.OfficialClusterId = &route.officialClusterID
@@ -816,8 +848,12 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 	}
 	resp.ProcessesJson = s.resolveProcessesJSON(ctx, tenantID, processClusterID, "live")
 
-	// Track which cluster this stream is ingesting on (Foghorn reports its own cluster_id)
-	if ingestClusterID := req.GetClusterId(); ingestClusterID != "" {
+	// Track the media cluster this stream ingests on.
+	activeIngestClusterID := req.GetClusterId()
+	if originClusterID := resp.GetOriginClusterId(); originClusterID != "" {
+		activeIngestClusterID = originClusterID
+	}
+	if activeIngestClusterID != "" {
 		res, updateErr := s.db.ExecContext(ctx, `
 			UPDATE commodore.streams
 			SET active_ingest_cluster_id = $1,
@@ -831,13 +867,13 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 					OR active_ingest_cluster_updated_at IS NULL
 					OR active_ingest_cluster_updated_at < NOW() - INTERVAL '30 seconds'
 				)
-		`, ingestClusterID, streamKey)
+		`, activeIngestClusterID, streamKey)
 		if updateErr != nil {
 			s.logger.WithError(updateErr).WithField("stream_key", streamKey).Warn("Failed to record ingest cluster")
 		} else if rows, rowsErr := res.RowsAffected(); rowsErr == nil && rows == 0 {
 			s.logger.WithFields(logging.Fields{
 				"stream_key":        streamKey,
-				"ingest_cluster_id": ingestClusterID,
+				"ingest_cluster_id": activeIngestClusterID,
 			}).Debug("Skipped ingest cluster update due to active lease")
 		}
 	}

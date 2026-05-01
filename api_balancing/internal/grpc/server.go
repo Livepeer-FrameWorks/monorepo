@@ -1486,7 +1486,7 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 func (s *FoghornGRPCServer) collectRemoteEdges(ctx context.Context, peers []*pb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
 	var candidates []balancer.RemoteEdgeCandidate
 	for _, peer := range peers {
-		if peer.GetClusterId() == s.clusterID || peer.GetClusterId() == "" {
+		if peer.GetClusterId() == s.clusterID || peer.GetClusterId() == "" || control.IsServedCluster(peer.GetClusterId()) {
 			continue
 		}
 		record, err := s.remoteEdgeCache.GetEdgeSummary(ctx, peer.GetClusterId())
@@ -1789,7 +1789,7 @@ func (s *FoghornGRPCServer) queryStreamFanOut(ctx context.Context, internalName,
 	var wg sync.WaitGroup
 
 	for _, peer := range peers {
-		if peer.GetClusterId() == s.clusterID || peer.GetClusterId() == "" {
+		if peer.GetClusterId() == s.clusterID || peer.GetClusterId() == "" || control.IsServedCluster(peer.GetClusterId()) {
 			continue
 		}
 		addr := s.peerManager.GetPeerAddr(peer.GetClusterId())

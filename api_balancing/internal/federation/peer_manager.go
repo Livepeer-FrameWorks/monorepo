@@ -302,7 +302,7 @@ func (pm *PeerManager) NotifyPeers(peers []*pb.TenantClusterPeer, tenantID strin
 
 	pm.mu.Lock()
 	for _, peer := range peers {
-		if peer.GetClusterId() == pm.clusterID || peer.GetClusterId() == "" {
+		if peer.GetClusterId() == pm.clusterID || peer.GetClusterId() == "" || control.IsServedCluster(peer.GetClusterId()) {
 			continue
 		}
 		lifecycle := peerStreamScoped

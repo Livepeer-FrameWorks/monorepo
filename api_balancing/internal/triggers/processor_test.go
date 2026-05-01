@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -587,12 +588,26 @@ type stubCommodoreInternalService struct {
 	pb.UnimplementedInternalServiceServer
 	validateResponse          *pb.ValidateStreamKeyResponse
 	validateErr               error
+	mu                        sync.Mutex
+	validateClusterIDs        []string
 	resolveIdentifierResponse *pb.ResolveIdentifierResponse
 	resolveIdentifierErr      error
 }
 
 func (s *stubCommodoreInternalService) ValidateStreamKey(ctx context.Context, req *pb.ValidateStreamKeyRequest) (*pb.ValidateStreamKeyResponse, error) {
+	s.mu.Lock()
+	s.validateClusterIDs = append(s.validateClusterIDs, req.GetClusterId())
+	s.mu.Unlock()
 	return s.validateResponse, s.validateErr
+}
+
+func (s *stubCommodoreInternalService) LastValidateClusterID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.validateClusterIDs) == 0 {
+		return ""
+	}
+	return s.validateClusterIDs[len(s.validateClusterIDs)-1]
 }
 
 func (s *stubCommodoreInternalService) ResolveIdentifier(ctx context.Context, req *pb.ResolveIdentifierRequest) (*pb.ResolveIdentifierResponse, error) {
@@ -613,6 +628,11 @@ func newTestProcessor(t *testing.T) *Processor {
 }
 
 func setupCommodoreClient(t *testing.T, response *pb.ValidateStreamKeyResponse, responseErr error) (*commodore.GRPCClient, func()) {
+	client, cleanup, _ := setupCommodoreClientWithStub(t, response, responseErr)
+	return client, cleanup
+}
+
+func setupCommodoreClientWithStub(t *testing.T, response *pb.ValidateStreamKeyResponse, responseErr error) (*commodore.GRPCClient, func(), *stubCommodoreInternalService) {
 	t.Helper()
 
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
@@ -621,10 +641,11 @@ func setupCommodoreClient(t *testing.T, response *pb.ValidateStreamKeyResponse, 
 	}
 
 	server := grpc.NewServer()
-	pb.RegisterInternalServiceServer(server, &stubCommodoreInternalService{
+	stub := &stubCommodoreInternalService{
 		validateResponse: response,
 		validateErr:      responseErr,
-	})
+	}
+	pb.RegisterInternalServiceServer(server, stub)
 
 	go func() {
 		_ = server.Serve(listener)
@@ -647,7 +668,7 @@ func setupCommodoreClient(t *testing.T, response *pb.ValidateStreamKeyResponse, 
 		_ = listener.Close()
 	}
 
-	return client, cleanup
+	return client, cleanup, stub
 }
 
 func setupCommodoreResolveIdentifierClient(t *testing.T, response *pb.ResolveIdentifierResponse, responseErr error) (*commodore.GRPCClient, func()) {
@@ -1150,7 +1171,47 @@ func TestHandlePushRewrite_PopulatesClusterContextFields(t *testing.T) {
 	if trigger.GetOriginClusterId() != "cluster-origin" {
 		t.Fatalf("expected origin_cluster_id to be populated, got %q", trigger.GetOriginClusterId())
 	}
-	if trigger.GetClusterId() != "cluster-local" {
-		t.Fatalf("expected cluster_id to use local cluster, got %q", trigger.GetClusterId())
+	if trigger.GetClusterId() != "cluster-origin" {
+		t.Fatalf("expected cluster_id to use origin cluster, got %q", trigger.GetClusterId())
+	}
+}
+
+func TestHandlePushRewrite_ValidatesUsingTriggerMediaCluster(t *testing.T) {
+	response := &pb.ValidateStreamKeyResponse{
+		Valid:           true,
+		TenantId:        "tenant-1",
+		UserId:          "user-1",
+		StreamId:        "stream-id-1",
+		InternalName:    "stream-a",
+		OriginClusterId: func() *string { s := "demo-media"; return &s }(),
+	}
+	commodoreClient, cleanup, stub := setupCommodoreClientWithStub(t, response, nil)
+	t.Cleanup(cleanup)
+
+	processor := newTestProcessor(t)
+	processor.commodoreClient = commodoreClient
+	processor.clusterID = "central-primary"
+
+	mediaClusterID := "demo-media"
+	trigger := &pb.MistTrigger{
+		NodeId:    "edge-node-1",
+		ClusterId: &mediaClusterID,
+		TriggerPayload: &pb.MistTrigger_PushRewrite{
+			PushRewrite: &pb.PushRewriteTrigger{StreamName: "stream-a", Hostname: "127.0.0.1"},
+		},
+	}
+
+	_, blocking, err := processor.handlePushRewrite(trigger)
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if blocking {
+		t.Fatal("expected PUSH_REWRITE to allow ingest")
+	}
+	if got := stub.LastValidateClusterID(); got != "demo-media" {
+		t.Fatalf("expected ValidateStreamKey cluster_id demo-media, got %q", got)
+	}
+	if trigger.GetClusterId() != "demo-media" {
+		t.Fatalf("expected trigger cluster_id to remain demo-media, got %q", trigger.GetClusterId())
 	}
 }

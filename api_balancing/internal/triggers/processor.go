@@ -790,8 +790,15 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		"hostname":   pushRewrite.GetHostname(),
 	}).Debug("Processing PUSH_REWRITE trigger")
 
-	// Call Commodore to validate stream key (pass our cluster_id for stream→cluster tracking)
-	streamValidation, err := p.commodoreClient.ValidateStreamKey(context.Background(), pushRewrite.GetStreamName(), p.clusterID)
+	ingestClusterID := strings.TrimSpace(p.resolveNodeClusterID(trigger.GetNodeId()))
+	if ingestClusterID == "" {
+		ingestClusterID = strings.TrimSpace(trigger.GetClusterId())
+	}
+	if ingestClusterID == "" {
+		ingestClusterID = strings.TrimSpace(p.clusterID)
+	}
+
+	streamValidation, err := p.commodoreClient.ValidateStreamKey(context.Background(), pushRewrite.GetStreamName(), ingestClusterID)
 	if err != nil {
 		p.logger.WithFields(logging.Fields{
 			"stream_key": pushRewrite.GetStreamName(),
@@ -900,8 +907,11 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 	if originClusterID := streamValidation.GetOriginClusterId(); originClusterID != "" {
 		trigger.OriginClusterId = &originClusterID
 	}
-	if (trigger.ClusterId == nil || *trigger.ClusterId == "") && p.clusterID != "" {
-		clusterID := p.clusterID
+	if originClusterID := streamValidation.GetOriginClusterId(); originClusterID != "" &&
+		(trigger.ClusterId == nil || strings.TrimSpace(trigger.GetClusterId()) == "" || strings.TrimSpace(trigger.GetClusterId()) == strings.TrimSpace(p.clusterID)) {
+		trigger.ClusterId = &originClusterID
+	} else if (trigger.ClusterId == nil || strings.TrimSpace(trigger.GetClusterId()) == "") && ingestClusterID != "" {
+		clusterID := ingestClusterID
 		trigger.ClusterId = &clusterID
 	}
 

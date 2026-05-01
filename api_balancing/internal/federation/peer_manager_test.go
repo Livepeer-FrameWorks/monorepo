@@ -13,10 +13,10 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
 
+	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/state"
 	"frameworks/pkg/clients/foghorn"
 	pb "frameworks/pkg/proto"
-
-	"frameworks/api_balancing/internal/state"
 )
 
 func TestRecordAndAverage_SingleSample(t *testing.T) {
@@ -246,6 +246,23 @@ func TestNotifyPeers_SkipsSelfAndDuplicate(t *testing.T) {
 	got := pm.GetPeers()
 	if len(got) != 1 {
 		t.Fatalf("expected 1 peer, got %d: %v", len(got), got)
+	}
+}
+
+func TestNotifyPeers_SkipsServedVirtualCluster(t *testing.T) {
+	pm := newTestPeerManager(t, "central-primary-test", nil, false)
+	control.AddServedCluster("demo-media-test")
+
+	pm.NotifyPeers([]*pb.TenantClusterPeer{
+		{ClusterId: "demo-media-test", ClusterSlug: "demo", BaseUrl: "example.com"},
+		{ClusterId: "remote-media-test", ClusterSlug: "remote", BaseUrl: "example.com"},
+	}, "tenant-a")
+
+	if pm.GetPeerAddr("demo-media-test") != "" {
+		t.Fatal("should not register a cluster served by this Foghorn as a remote peer")
+	}
+	if pm.GetPeerAddr("remote-media-test") == "" {
+		t.Fatal("expected remote media cluster to be registered")
 	}
 }
 

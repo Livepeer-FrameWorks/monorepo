@@ -250,6 +250,50 @@ func TestResolveViewerEndpoint_FailsClosedWhenQuartermasterUnavailable(t *testin
 	}
 }
 
+func TestResolveFoghornForContent_RoutesActiveClusterOnPoolMiss(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	pool := newTestPool(t)
+	server := &CommodoreServer{
+		db:            db,
+		logger:        logrus.New(),
+		foghornPool:   pool,
+		routeCacheTTL: 5 * time.Minute,
+		routeCache: map[string]*clusterRoute{
+			"tenant-1": {
+				clusterID:   "demo-media",
+				foghornAddr: "foghorn-primary:50051",
+				clusterPeers: []*pb.TenantClusterPeer{
+					{ClusterId: "peer-media", FoghornGrpcAddr: "foghorn-peer:50051"},
+				},
+				resolvedAt: time.Now(),
+			},
+		},
+	}
+
+	mock.ExpectQuery("SELECT tenant_id, active_ingest_cluster_id\\s+FROM commodore.streams WHERE playback_id = \\$1").
+		WithArgs("playback-1").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id"}).AddRow("tenant-1", "peer-media"))
+
+	client, route, err := server.resolveFoghornForContent(context.Background(), "playback-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if client == nil {
+		t.Fatal("expected client")
+	}
+	if route == nil || route.clusterID != "peer-media" {
+		t.Fatalf("expected active cluster route, got %+v", route)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
 func TestResolveAddrFromRoute_PrimaryCluster(t *testing.T) {
 	route := &clusterRoute{
 		clusterID:   "cluster-primary",
