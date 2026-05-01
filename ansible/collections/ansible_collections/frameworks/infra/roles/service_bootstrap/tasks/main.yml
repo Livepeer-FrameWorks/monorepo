@@ -96,14 +96,11 @@
         state: absent
       when: service_bootstrap_apply is succeeded
 
-    - name: Service_bootstrap | apply | preserve desired-state file on failure for triage
-      ansible.builtin.command:
-        argv:
-          - mv
-          - "{{ service_bootstrap_state_dir }}/bootstrap.yaml"
-          - "{{ service_bootstrap_state_dir }}/bootstrap-failed-{{ ansible_date_time.epoch }}.yaml"
+    - name: Service_bootstrap | apply | remove desired-state file on failure
+      ansible.builtin.file:
+        path: "{{ service_bootstrap_state_dir }}/bootstrap.yaml"
+        state: absent
       when: service_bootstrap_apply is failed
-      changed_when: true
 
 - name: Service_bootstrap | validate
   when: service_bootstrap_mode == "validate"
