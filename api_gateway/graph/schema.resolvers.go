@@ -3776,6 +3776,11 @@ func (r *queryResolver) VodAssetsConnection(ctx context.Context, page *model.Con
 	return r.DoGetVodAssetsConnection(ctx, first, after, last, before)
 }
 
+// VodUploadStatus is the resolver for the vodUploadStatus field.
+func (r *queryResolver) VodUploadStatus(ctx context.Context, uploadID string) (model.VodUploadStatusResult, error) {
+	return r.DoGetVodUploadStatus(ctx, uploadID)
+}
+
 // ResolveViewerEndpoint is the resolver for the resolveViewerEndpoint field.
 // Returns proto.ViewerEndpointResponse directly via autobind.
 func (r *queryResolver) ResolveViewerEndpoint(ctx context.Context, contentID string) (*proto.ViewerEndpointResponse, error) {
@@ -5918,6 +5923,14 @@ func (r *vodLifecycleResolver) FilePath(ctx context.Context, obj *proto.VodLifec
 	return obj.FilePath, nil
 }
 
+// SizeBytes is the resolver for the sizeBytes field.
+func (r *vodUploadedPartResolver) SizeBytes(ctx context.Context, obj *proto.VodUploadedPart) (float64, error) {
+	if obj == nil {
+		return 0, nil
+	}
+	return float64(obj.SizeBytes), nil
+}
+
 // APIUsage returns generated.APIUsageResolver implementation.
 func (r *Resolver) APIUsage() generated.APIUsageResolver { return &aPIUsageResolver{r} }
 
@@ -6334,6 +6347,11 @@ func (r *Resolver) ViewerSession() generated.ViewerSessionResolver { return &vie
 // VodLifecycle returns generated.VodLifecycleResolver implementation.
 func (r *Resolver) VodLifecycle() generated.VodLifecycleResolver { return &vodLifecycleResolver{r} }
 
+// VodUploadedPart returns generated.VodUploadedPartResolver implementation.
+func (r *Resolver) VodUploadedPart() generated.VodUploadedPartResolver {
+	return &vodUploadedPartResolver{r}
+}
+
 type aPIUsageResolver struct{ *Resolver }
 type aPIUsageOperationSummaryResolver struct{ *Resolver }
 type aPIUsageRecordResolver struct{ *Resolver }
@@ -6434,3 +6452,4 @@ type viewerHoursHourlyResolver struct{ *Resolver }
 type viewerMetricsResolver struct{ *Resolver }
 type viewerSessionResolver struct{ *Resolver }
 type vodLifecycleResolver struct{ *Resolver }
+type vodUploadedPartResolver struct{ *Resolver }

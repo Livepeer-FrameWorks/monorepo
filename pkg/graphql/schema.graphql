@@ -521,6 +521,16 @@ type Query {
   vodAssetsConnection(page: ConnectionInput): VodAssetsConnection!
 
   """
+  Read server-authoritative state of an in-flight VOD upload session.
+  Polling complement to the VodLifecycle subscription; intended for reload-recovery
+  and agent workflows that need a request/response shape.
+  """
+  vodUploadStatus(
+    "Upload session ID returned by createVodUpload."
+    uploadId: ID!
+  ): VodUploadStatusResult!
+
+  """
   Resolve a playback ID to viewer endpoints (HLS, DASH, etc.).
   Used by players to get the optimal CDN endpoint for playback.
   """
@@ -1674,6 +1684,7 @@ union CreateVodUploadResult = VodUploadSession | ValidationError | AuthError
 union CompleteVodUploadResult = VodAsset | ValidationError | NotFoundError | AuthError
 union AbortVodUploadResult = DeleteSuccess | NotFoundError | AuthError
 union DeleteVodAssetResult = DeleteSuccess | NotFoundError | AuthError
+union VodUploadStatusResult = VodUploadStatus | ValidationError | NotFoundError | AuthError
 
 union CreatePaymentResult = Payment | ValidationError | AuthError
 union SubmitX402PaymentResult = X402PaymentResult | ValidationError | NotFoundError | AuthError
@@ -2072,6 +2083,8 @@ enum VodAssetStatus {
   FAILED
   "Marked for deletion."
   DELETED
+  "Multipart upload session deadline elapsed without completion; client must restart."
+  EXPIRED
 }
 
 """
@@ -2141,6 +2154,45 @@ type VodUploadPart {
   partNumber: Int!
   "Presigned PUT URL for uploading this part."
   presignedUrl: String!
+}
+
+"""
+A part S3 has already received for an in-flight multipart upload (returned by ListParts).
+Used by the client uploader to reconcile local resume state against the server.
+"""
+type VodUploadedPart {
+  "1-indexed part number."
+  partNumber: Int!
+  "ETag header value returned by S3."
+  etag: String!
+  "Size of the uploaded part in bytes."
+  sizeBytes: Float!
+}
+
+"""
+Server-authoritative state of an in-flight multipart upload. Returned as a polling
+complement to the realtime VodLifecycle subscription, used for reload-recovery and
+agent (MCP) workflows.
+"""
+type VodUploadStatus {
+  "Upload session ID (S3 uploadId)."
+  uploadId: ID!
+  "Current state of the upload session."
+  state: VodAssetStatus!
+  "S3 multipart session deadline. Past this point, state is EXPIRED."
+  expiresAt: Time
+  "Asset retention deadline (informational; distinct from upload-session expiry)."
+  retentionUntil: Time
+  "Parts S3 has already received."
+  uploadedParts: [VodUploadedPart!]!
+  "Part numbers still missing for completion (1-indexed)."
+  missingParts: [Int!]!
+  "Last error code emitted by the pipeline, if any."
+  lastErrorCode: String
+  "Hash for playback URL resolution."
+  artifactHash: String
+  "Public playback identifier (available once known)."
+  playbackId: ID
 }
 
 # VOD asset type (user-uploaded video file)

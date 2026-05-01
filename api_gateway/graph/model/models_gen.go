@@ -177,6 +177,10 @@ type UpdateTenantResult interface {
 	IsUpdateTenantResult()
 }
 
+type VodUploadStatusResult interface {
+	IsVodUploadStatusResult()
+}
+
 type WalletLoginResult interface {
 	IsWalletLoginResult()
 }
@@ -255,6 +259,8 @@ func (AuthError) IsCompleteVodUploadResult() {}
 func (AuthError) IsAbortVodUploadResult() {}
 
 func (AuthError) IsDeleteVodAssetResult() {}
+
+func (AuthError) IsVodUploadStatusResult() {}
 
 func (AuthError) IsCreatePaymentResult() {}
 
@@ -1206,6 +1212,8 @@ func (NotFoundError) IsAbortVodUploadResult() {}
 
 func (NotFoundError) IsDeleteVodAssetResult() {}
 
+func (NotFoundError) IsVodUploadStatusResult() {}
+
 func (NotFoundError) IsSubmitX402PaymentResult() {}
 
 func (NotFoundError) IsStripeCheckoutResult() {}
@@ -1682,6 +1690,8 @@ func (ValidationError) IsCreateVodUploadResult() {}
 
 func (ValidationError) IsCompleteVodUploadResult() {}
 
+func (ValidationError) IsVodUploadStatusResult() {}
+
 func (ValidationError) IsCreatePaymentResult() {}
 
 func (ValidationError) IsSubmitX402PaymentResult() {}
@@ -1873,6 +1883,32 @@ type VodUploadSession struct {
 }
 
 func (VodUploadSession) IsCreateVodUploadResult() {}
+
+// Server-authoritative state of an in-flight multipart upload. Returned as a polling
+// complement to the realtime VodLifecycle subscription, used for reload-recovery and
+// agent (MCP) workflows.
+type VodUploadStatus struct {
+	// Upload session ID (S3 uploadId).
+	UploadID string `json:"uploadId"`
+	// Current state of the upload session.
+	State VodAssetStatus `json:"state"`
+	// S3 multipart session deadline. Past this point, state is EXPIRED.
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	// Asset retention deadline (informational; distinct from upload-session expiry).
+	RetentionUntil *time.Time `json:"retentionUntil,omitempty"`
+	// Parts S3 has already received.
+	UploadedParts []*proto.VodUploadedPart `json:"uploadedParts"`
+	// Part numbers still missing for completion (1-indexed).
+	MissingParts []int `json:"missingParts"`
+	// Last error code emitted by the pipeline, if any.
+	LastErrorCode *string `json:"lastErrorCode,omitempty"`
+	// Hash for playback URL resolution.
+	ArtifactHash *string `json:"artifactHash,omitempty"`
+	// Public playback identifier (available once known).
+	PlaybackID *string `json:"playbackId,omitempty"`
+}
+
+func (VodUploadStatus) IsVodUploadStatusResult() {}
 
 // Input for wallet-based authentication.
 // The signature proves ownership of the wallet address.
@@ -2720,6 +2756,8 @@ const (
 	VodAssetStatusFailed VodAssetStatus = "FAILED"
 	// Marked for deletion.
 	VodAssetStatusDeleted VodAssetStatus = "DELETED"
+	// Multipart upload session deadline elapsed without completion; client must restart.
+	VodAssetStatusExpired VodAssetStatus = "EXPIRED"
 )
 
 var AllVodAssetStatus = []VodAssetStatus{
@@ -2728,11 +2766,12 @@ var AllVodAssetStatus = []VodAssetStatus{
 	VodAssetStatusReady,
 	VodAssetStatusFailed,
 	VodAssetStatusDeleted,
+	VodAssetStatusExpired,
 }
 
 func (e VodAssetStatus) IsValid() bool {
 	switch e {
-	case VodAssetStatusUploading, VodAssetStatusProcessing, VodAssetStatusReady, VodAssetStatusFailed, VodAssetStatusDeleted:
+	case VodAssetStatusUploading, VodAssetStatusProcessing, VodAssetStatusReady, VodAssetStatusFailed, VodAssetStatusDeleted, VodAssetStatusExpired:
 		return true
 	}
 	return false

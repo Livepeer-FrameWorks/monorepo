@@ -848,6 +848,14 @@ func (c *GRPCClient) AbortVodUpload(ctx context.Context, tenantID, uploadID stri
 	})
 }
 
+// GetVodUploadStatus reads server-authoritative state of an in-flight multipart upload.
+func (c *GRPCClient) GetVodUploadStatus(ctx context.Context, tenantID, uploadID string) (*pb.GetVodUploadStatusResponse, error) {
+	return c.vod.GetVodUploadStatus(ctx, &pb.GetVodUploadStatusRequest{
+		TenantId: tenantID,
+		UploadId: uploadID,
+	})
+}
+
 // GetVodAsset gets a single VOD asset by hash
 func (c *GRPCClient) GetVodAsset(ctx context.Context, tenantID, artifactHash string) (*pb.VodAssetInfo, error) {
 	return c.vod.GetVodAsset(ctx, &pb.GetVodAssetRequest{

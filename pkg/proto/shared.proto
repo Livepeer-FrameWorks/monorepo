@@ -356,6 +356,7 @@ enum VodStatus {
   VOD_STATUS_READY = 3;        // Ready for playback
   VOD_STATUS_FAILED = 4;       // Validation or upload failed
   VOD_STATUS_DELETED = 5;      // Marked for deletion
+  VOD_STATUS_EXPIRED = 6;      // Multipart session deadline elapsed without completion
 }
 
 // CreateVodUploadRequest - initiate a multipart upload
@@ -408,6 +409,33 @@ message VodCompletedPart {
 message CompleteVodUploadResponse {
   VodAssetInfo asset = 1;
   reserved 2;
+}
+
+// GetVodUploadStatusRequest - read server-authoritative state of an in-flight multipart upload
+message GetVodUploadStatusRequest {
+  string tenant_id = 1;
+  string upload_id = 2;
+}
+
+// VodUploadedPart - a part S3 has already received (returned by ListParts).
+// Distinct from VodUploadPart, which carries an outgoing presigned URL.
+message VodUploadedPart {
+  int32 part_number = 1;
+  string etag = 2;
+  int64 size_bytes = 3;
+}
+
+// GetVodUploadStatusResponse - reconciled upload state for the client to drive resume/restart.
+message GetVodUploadStatusResponse {
+  string upload_id = 1;
+  VodStatus state = 2;
+  google.protobuf.Timestamp expires_at = 3;       // S3 multipart session deadline
+  google.protobuf.Timestamp retention_until = 4;  // artifact retention (informational)
+  repeated VodUploadedPart uploaded_parts = 5;    // from S3 ListParts
+  repeated int32 missing_parts = 6;               // computed from total_parts \ uploaded
+  string last_error_code = 7;
+  string artifact_hash = 8;
+  string playback_id = 9;
 }
 
 // AbortVodUploadRequest - cancel multipart upload

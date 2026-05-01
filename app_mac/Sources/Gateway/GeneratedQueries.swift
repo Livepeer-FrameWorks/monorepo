@@ -3419,6 +3419,41 @@ enum GQL {
   }
   """
 
+  static let GetVodUploadStatus = """
+  query GetVodUploadStatus($uploadId: ID!) {
+    vodUploadStatus(uploadId: $uploadId) {
+      ... on VodUploadStatus {
+        uploadId
+        state
+        expiresAt
+        retentionUntil
+        uploadedParts {
+          partNumber
+          etag
+          sizeBytes
+        }
+        missingParts
+        lastErrorCode
+        artifactHash
+        playbackId
+      }
+      ... on ValidationError {
+        message
+        field
+        code
+      }
+      ... on NotFoundError {
+        message
+        code
+      }
+      ... on AuthError {
+        message
+        code
+      }
+    }
+  }
+  """
+
   static let ResolveViewerEndpoint = """
   # Resolve viewer endpoint for playback
   # Returns optimal node(s) for streaming content to the viewer

@@ -3236,12 +3236,13 @@ var ViewerService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	VodService_CreateVodUpload_FullMethodName   = "/commodore.VodService/CreateVodUpload"
-	VodService_CompleteVodUpload_FullMethodName = "/commodore.VodService/CompleteVodUpload"
-	VodService_AbortVodUpload_FullMethodName    = "/commodore.VodService/AbortVodUpload"
-	VodService_GetVodAsset_FullMethodName       = "/commodore.VodService/GetVodAsset"
-	VodService_ListVodAssets_FullMethodName     = "/commodore.VodService/ListVodAssets"
-	VodService_DeleteVodAsset_FullMethodName    = "/commodore.VodService/DeleteVodAsset"
+	VodService_CreateVodUpload_FullMethodName    = "/commodore.VodService/CreateVodUpload"
+	VodService_CompleteVodUpload_FullMethodName  = "/commodore.VodService/CompleteVodUpload"
+	VodService_AbortVodUpload_FullMethodName     = "/commodore.VodService/AbortVodUpload"
+	VodService_GetVodUploadStatus_FullMethodName = "/commodore.VodService/GetVodUploadStatus"
+	VodService_GetVodAsset_FullMethodName        = "/commodore.VodService/GetVodAsset"
+	VodService_ListVodAssets_FullMethodName      = "/commodore.VodService/ListVodAssets"
+	VodService_DeleteVodAsset_FullMethodName     = "/commodore.VodService/DeleteVodAsset"
 )
 
 // VodServiceClient is the client API for VodService service.
@@ -3254,6 +3255,8 @@ type VodServiceClient interface {
 	CompleteVodUpload(ctx context.Context, in *CompleteVodUploadRequest, opts ...grpc.CallOption) (*CompleteVodUploadResponse, error)
 	// Cancel in-progress upload
 	AbortVodUpload(ctx context.Context, in *AbortVodUploadRequest, opts ...grpc.CallOption) (*AbortVodUploadResponse, error)
+	// Read upload status (proxies to Foghorn; tenant_id from auth context).
+	GetVodUploadStatus(ctx context.Context, in *GetVodUploadStatusRequest, opts ...grpc.CallOption) (*GetVodUploadStatusResponse, error)
 	// Get single VOD asset
 	GetVodAsset(ctx context.Context, in *GetVodAssetRequest, opts ...grpc.CallOption) (*VodAssetInfo, error)
 	// List VOD assets with pagination
@@ -3300,6 +3303,16 @@ func (c *vodServiceClient) AbortVodUpload(ctx context.Context, in *AbortVodUploa
 	return out, nil
 }
 
+func (c *vodServiceClient) GetVodUploadStatus(ctx context.Context, in *GetVodUploadStatusRequest, opts ...grpc.CallOption) (*GetVodUploadStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetVodUploadStatusResponse)
+	err := c.cc.Invoke(ctx, VodService_GetVodUploadStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *vodServiceClient) GetVodAsset(ctx context.Context, in *GetVodAssetRequest, opts ...grpc.CallOption) (*VodAssetInfo, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(VodAssetInfo)
@@ -3340,6 +3353,8 @@ type VodServiceServer interface {
 	CompleteVodUpload(context.Context, *CompleteVodUploadRequest) (*CompleteVodUploadResponse, error)
 	// Cancel in-progress upload
 	AbortVodUpload(context.Context, *AbortVodUploadRequest) (*AbortVodUploadResponse, error)
+	// Read upload status (proxies to Foghorn; tenant_id from auth context).
+	GetVodUploadStatus(context.Context, *GetVodUploadStatusRequest) (*GetVodUploadStatusResponse, error)
 	// Get single VOD asset
 	GetVodAsset(context.Context, *GetVodAssetRequest) (*VodAssetInfo, error)
 	// List VOD assets with pagination
@@ -3364,6 +3379,9 @@ func (UnimplementedVodServiceServer) CompleteVodUpload(context.Context, *Complet
 }
 func (UnimplementedVodServiceServer) AbortVodUpload(context.Context, *AbortVodUploadRequest) (*AbortVodUploadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AbortVodUpload not implemented")
+}
+func (UnimplementedVodServiceServer) GetVodUploadStatus(context.Context, *GetVodUploadStatusRequest) (*GetVodUploadStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetVodUploadStatus not implemented")
 }
 func (UnimplementedVodServiceServer) GetVodAsset(context.Context, *GetVodAssetRequest) (*VodAssetInfo, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetVodAsset not implemented")
@@ -3449,6 +3467,24 @@ func _VodService_AbortVodUpload_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VodService_GetVodUploadStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetVodUploadStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VodServiceServer).GetVodUploadStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VodService_GetVodUploadStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VodServiceServer).GetVodUploadStatus(ctx, req.(*GetVodUploadStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _VodService_GetVodAsset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetVodAssetRequest)
 	if err := dec(in); err != nil {
@@ -3521,6 +3557,10 @@ var VodService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AbortVodUpload",
 			Handler:    _VodService_AbortVodUpload_Handler,
+		},
+		{
+			MethodName: "GetVodUploadStatus",
+			Handler:    _VodService_GetVodUploadStatus_Handler,
 		},
 		{
 			MethodName: "GetVodAsset",

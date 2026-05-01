@@ -503,12 +503,13 @@ var ViewerControlService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	VodControlService_CreateVodUpload_FullMethodName   = "/foghorn.VodControlService/CreateVodUpload"
-	VodControlService_CompleteVodUpload_FullMethodName = "/foghorn.VodControlService/CompleteVodUpload"
-	VodControlService_AbortVodUpload_FullMethodName    = "/foghorn.VodControlService/AbortVodUpload"
-	VodControlService_GetVodAsset_FullMethodName       = "/foghorn.VodControlService/GetVodAsset"
-	VodControlService_ListVodAssets_FullMethodName     = "/foghorn.VodControlService/ListVodAssets"
-	VodControlService_DeleteVodAsset_FullMethodName    = "/foghorn.VodControlService/DeleteVodAsset"
+	VodControlService_CreateVodUpload_FullMethodName    = "/foghorn.VodControlService/CreateVodUpload"
+	VodControlService_CompleteVodUpload_FullMethodName  = "/foghorn.VodControlService/CompleteVodUpload"
+	VodControlService_AbortVodUpload_FullMethodName     = "/foghorn.VodControlService/AbortVodUpload"
+	VodControlService_GetVodUploadStatus_FullMethodName = "/foghorn.VodControlService/GetVodUploadStatus"
+	VodControlService_GetVodAsset_FullMethodName        = "/foghorn.VodControlService/GetVodAsset"
+	VodControlService_ListVodAssets_FullMethodName      = "/foghorn.VodControlService/ListVodAssets"
+	VodControlService_DeleteVodAsset_FullMethodName     = "/foghorn.VodControlService/DeleteVodAsset"
 )
 
 // VodControlServiceClient is the client API for VodControlService service.
@@ -523,6 +524,9 @@ type VodControlServiceClient interface {
 	CompleteVodUpload(ctx context.Context, in *CompleteVodUploadRequest, opts ...grpc.CallOption) (*CompleteVodUploadResponse, error)
 	// AbortVodUpload cancels an in-progress multipart upload
 	AbortVodUpload(ctx context.Context, in *AbortVodUploadRequest, opts ...grpc.CallOption) (*AbortVodUploadResponse, error)
+	// GetVodUploadStatus reports server-authoritative state of an in-flight multipart upload,
+	// including which parts S3 has already received (via ListParts).
+	GetVodUploadStatus(ctx context.Context, in *GetVodUploadStatusRequest, opts ...grpc.CallOption) (*GetVodUploadStatusResponse, error)
 	// GetVodAsset returns a single VOD asset by hash
 	GetVodAsset(ctx context.Context, in *GetVodAssetRequest, opts ...grpc.CallOption) (*VodAssetInfo, error)
 	// ListVodAssets returns paginated list of VOD assets for a tenant
@@ -563,6 +567,16 @@ func (c *vodControlServiceClient) AbortVodUpload(ctx context.Context, in *AbortV
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AbortVodUploadResponse)
 	err := c.cc.Invoke(ctx, VodControlService_AbortVodUpload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vodControlServiceClient) GetVodUploadStatus(ctx context.Context, in *GetVodUploadStatusRequest, opts ...grpc.CallOption) (*GetVodUploadStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetVodUploadStatusResponse)
+	err := c.cc.Invoke(ctx, VodControlService_GetVodUploadStatus_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -611,6 +625,9 @@ type VodControlServiceServer interface {
 	CompleteVodUpload(context.Context, *CompleteVodUploadRequest) (*CompleteVodUploadResponse, error)
 	// AbortVodUpload cancels an in-progress multipart upload
 	AbortVodUpload(context.Context, *AbortVodUploadRequest) (*AbortVodUploadResponse, error)
+	// GetVodUploadStatus reports server-authoritative state of an in-flight multipart upload,
+	// including which parts S3 has already received (via ListParts).
+	GetVodUploadStatus(context.Context, *GetVodUploadStatusRequest) (*GetVodUploadStatusResponse, error)
 	// GetVodAsset returns a single VOD asset by hash
 	GetVodAsset(context.Context, *GetVodAssetRequest) (*VodAssetInfo, error)
 	// ListVodAssets returns paginated list of VOD assets for a tenant
@@ -635,6 +652,9 @@ func (UnimplementedVodControlServiceServer) CompleteVodUpload(context.Context, *
 }
 func (UnimplementedVodControlServiceServer) AbortVodUpload(context.Context, *AbortVodUploadRequest) (*AbortVodUploadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AbortVodUpload not implemented")
+}
+func (UnimplementedVodControlServiceServer) GetVodUploadStatus(context.Context, *GetVodUploadStatusRequest) (*GetVodUploadStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetVodUploadStatus not implemented")
 }
 func (UnimplementedVodControlServiceServer) GetVodAsset(context.Context, *GetVodAssetRequest) (*VodAssetInfo, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetVodAsset not implemented")
@@ -720,6 +740,24 @@ func _VodControlService_AbortVodUpload_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VodControlService_GetVodUploadStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetVodUploadStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VodControlServiceServer).GetVodUploadStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VodControlService_GetVodUploadStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VodControlServiceServer).GetVodUploadStatus(ctx, req.(*GetVodUploadStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _VodControlService_GetVodAsset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetVodAssetRequest)
 	if err := dec(in); err != nil {
@@ -792,6 +830,10 @@ var VodControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AbortVodUpload",
 			Handler:    _VodControlService_AbortVodUpload_Handler,
+		},
+		{
+			MethodName: "GetVodUploadStatus",
+			Handler:    _VodControlService_GetVodUploadStatus_Handler,
 		},
 		{
 			MethodName: "GetVodAsset",

@@ -12,6 +12,7 @@ import (
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"
 	"frameworks/pkg/logging"
+	pb "frameworks/pkg/proto"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -59,6 +60,17 @@ func RegisterVODTools(server *mcp.Server, clients *clients.ServiceClients, resol
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args DeleteVodAssetInput) (*mcp.CallToolResult, any, error) {
 			return handleDeleteVodAsset(ctx, args, resolver, checker, logger)
+		},
+	)
+
+	// get_vod_upload_status - Read server-authoritative state of an in-flight upload
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        "get_vod_upload_status",
+			Description: "Read the server-authoritative state of an in-flight VOD upload, including which parts S3 has already received and which parts are still missing. Returns a recommendedAction (retry_missing_parts | restart_expired | wait_processing | ready | complete_upload) so callers know what to do next.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, args GetVodUploadStatusInput) (*mcp.CallToolResult, any, error) {
+			return handleGetVodUploadStatus(ctx, args, resolver, logger)
 		},
 	)
 }
@@ -356,3 +368,116 @@ func handleDeleteVodAsset(ctx context.Context, args DeleteVodAssetInput, resolve
 		return toolError("Unexpected result type from VOD asset deletion")
 	}
 }
+
+// GetVodUploadStatusInput represents input for get_vod_upload_status tool.
+type GetVodUploadStatusInput struct {
+	UploadID string `json:"upload_id" jsonschema:"required" jsonschema_description:"Upload session ID returned by create_vod_upload"`
+}
+
+// VodUploadStatusUploadedPart represents one S3-confirmed uploaded part.
+type VodUploadStatusUploadedPart struct {
+	PartNumber int    `json:"part_number"`
+	ETag       string `json:"etag"`
+	SizeBytes  int64  `json:"size_bytes"`
+}
+
+// GetVodUploadStatusResult is the JSON shape returned by the get_vod_upload_status MCP tool.
+type GetVodUploadStatusResult struct {
+	UploadID          string                        `json:"upload_id"`
+	State             string                        `json:"state"`
+	ExpiresAt         *string                       `json:"expires_at,omitempty"`
+	RetentionUntil    *string                       `json:"retention_until,omitempty"`
+	UploadedParts     []VodUploadStatusUploadedPart `json:"uploaded_parts"`
+	MissingParts      []int                         `json:"missing_parts"`
+	LastErrorCode     string                        `json:"last_error_code,omitempty"`
+	ArtifactHash      string                        `json:"artifact_hash,omitempty"`
+	PlaybackID        string                        `json:"playback_id,omitempty"`
+	RecommendedAction string                        `json:"recommended_action"`
+}
+
+// recommendedActionForVodUpload maps proto state + completion to a single agent-actionable verb.
+func recommendedActionForVodUpload(state pbVodStatusEnum, missingCount int, lastErrorCode string) string {
+	switch state {
+	case vodStatusReady:
+		return "ready"
+	case vodStatusProcessing:
+		return "wait_processing"
+	case vodStatusFailed, vodStatusDeleted:
+		return "restart_expired"
+	case vodStatusExpired:
+		return "restart_expired"
+	case vodStatusUploading:
+		if lastErrorCode != "" {
+			return "retry_missing_parts"
+		}
+		if missingCount == 0 {
+			return "complete_upload"
+		}
+		return "retry_missing_parts"
+	default:
+		return "wait_processing"
+	}
+}
+
+// pbVodStatusEnum / vodStatus* constants alias the proto enum so the recommendation function
+// stays readable. The aliasing keeps the proto import scoped to the implementation.
+type pbVodStatusEnum = pb.VodStatus
+
+const (
+	vodStatusUploading  = pb.VodStatus_VOD_STATUS_UPLOADING
+	vodStatusProcessing = pb.VodStatus_VOD_STATUS_PROCESSING
+	vodStatusReady      = pb.VodStatus_VOD_STATUS_READY
+	vodStatusFailed     = pb.VodStatus_VOD_STATUS_FAILED
+	vodStatusDeleted    = pb.VodStatus_VOD_STATUS_DELETED
+	vodStatusExpired    = pb.VodStatus_VOD_STATUS_EXPIRED
+)
+
+func handleGetVodUploadStatus(ctx context.Context, args GetVodUploadStatusInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+	if ctxkeys.GetTenantID(ctx) == "" {
+		return nil, nil, mcperrors.AuthRequired()
+	}
+	if args.UploadID == "" {
+		return toolError("upload_id is required")
+	}
+
+	resp, err := resolver.DoGetVodUploadStatusProto(ctx, args.UploadID)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to read VOD upload status")
+		return toolError(fmt.Sprintf("Failed to read VOD upload status: %v", err))
+	}
+
+	uploaded := make([]VodUploadStatusUploadedPart, 0, len(resp.UploadedParts))
+	for _, p := range resp.UploadedParts {
+		uploaded = append(uploaded, VodUploadStatusUploadedPart{
+			PartNumber: int(p.PartNumber),
+			ETag:       p.Etag,
+			SizeBytes:  p.SizeBytes,
+		})
+	}
+	missing := make([]int, 0, len(resp.MissingParts))
+	for _, m := range resp.MissingParts {
+		missing = append(missing, int(m))
+	}
+
+	out := GetVodUploadStatusResult{
+		UploadID:          resp.UploadId,
+		State:             resp.State.String(),
+		UploadedParts:     uploaded,
+		MissingParts:      missing,
+		LastErrorCode:     resp.LastErrorCode,
+		ArtifactHash:      resp.ArtifactHash,
+		PlaybackID:        resp.PlaybackId,
+		RecommendedAction: recommendedActionForVodUpload(resp.State, len(missing), resp.LastErrorCode),
+	}
+	if resp.ExpiresAt != nil {
+		s := resp.ExpiresAt.AsTime().Format(timeRFC3339Nano)
+		out.ExpiresAt = &s
+	}
+	if resp.RetentionUntil != nil {
+		s := resp.RetentionUntil.AsTime().Format(timeRFC3339Nano)
+		out.RetentionUntil = &s
+	}
+	return toolSuccess(out)
+}
+
+const timeRFC3339Nano = "2006-01-02T15:04:05.999999999Z07:00"

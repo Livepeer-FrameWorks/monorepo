@@ -204,6 +204,120 @@ func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.Complete
 	return protoToVodAsset(resp.Asset), nil
 }
 
+// DoGetVodUploadStatusProto fetches server-authoritative upload status via the Commodore proxy.
+// Returns the proto response so the MCP tool can map to its own JSON shape; the GraphQL
+// resolver builds a model.VodUploadStatusResult union value via DoGetVodUploadStatus.
+// Tenant_id is taken from the auth context, never from the wire.
+func (r *Resolver) DoGetVodUploadStatusProto(ctx context.Context, uploadID string) (*pb.GetVodUploadStatusResponse, error) {
+	if err := middleware.RequirePermission(ctx, "streams:read"); err != nil {
+		return nil, err
+	}
+	if uploadID == "" {
+		return nil, fmt.Errorf("upload_id is required")
+	}
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+	resp, err := r.Clients.Commodore.GetVodUploadStatus(ctx, tenantID, uploadID)
+	if err != nil {
+		r.Logger.WithError(err).WithField("upload_id", uploadID).Warn("Failed to read VOD upload status")
+		return nil, err
+	}
+	return resp, nil
+}
+
+// DoGetVodUploadStatus is the GraphQL-facing entry that wraps DoGetVodUploadStatusProto and
+// maps the proto response (or gRPC error) into a VodUploadStatusResult union value.
+func (r *Resolver) DoGetVodUploadStatus(ctx context.Context, uploadID string) (model.VodUploadStatusResult, error) {
+	if uploadID == "" {
+		return &model.ValidationError{
+			Message: "upload_id is required",
+			Field:   strPtr("uploadId"),
+			Code:    strPtr("VALIDATION_FAILED"),
+		}, nil
+	}
+
+	resp, err := r.DoGetVodUploadStatusProto(ctx, uploadID)
+	if err != nil {
+		if st, ok := status.FromError(err); ok {
+			switch st.Code() {
+			case codes.NotFound:
+				return &model.NotFoundError{
+					Message:      "Upload not found",
+					Code:         strPtr("NOT_FOUND"),
+					ResourceType: "VodUpload",
+					ResourceID:   uploadID,
+				}, nil
+			case codes.Unauthenticated, codes.PermissionDenied:
+				return &model.AuthError{Message: st.Message()}, nil
+			case codes.InvalidArgument:
+				return &model.ValidationError{
+					Message: st.Message(),
+					Code:    strPtr("VALIDATION_FAILED"),
+				}, nil
+			}
+		}
+		// Surface internal errors at the schema level rather than masking as NotFound.
+		return nil, fmt.Errorf("failed to read VOD upload status: %w", err)
+	}
+
+	out := &model.VodUploadStatus{
+		UploadID:      resp.UploadId,
+		State:         protoToVodAssetStatus(resp.State),
+		UploadedParts: resp.UploadedParts,
+		MissingParts:  int32SliceToIntSlice(resp.MissingParts),
+	}
+	if resp.ExpiresAt != nil {
+		t := resp.ExpiresAt.AsTime()
+		out.ExpiresAt = &t
+	}
+	if resp.RetentionUntil != nil {
+		t := resp.RetentionUntil.AsTime()
+		out.RetentionUntil = &t
+	}
+	if resp.LastErrorCode != "" {
+		s := resp.LastErrorCode
+		out.LastErrorCode = &s
+	}
+	if resp.ArtifactHash != "" {
+		s := resp.ArtifactHash
+		out.ArtifactHash = &s
+	}
+	if resp.PlaybackId != "" {
+		s := resp.PlaybackId
+		out.PlaybackID = &s
+	}
+	return out, nil
+}
+
+func protoToVodAssetStatus(s pb.VodStatus) model.VodAssetStatus {
+	switch s {
+	case pb.VodStatus_VOD_STATUS_UPLOADING:
+		return model.VodAssetStatusUploading
+	case pb.VodStatus_VOD_STATUS_PROCESSING:
+		return model.VodAssetStatusProcessing
+	case pb.VodStatus_VOD_STATUS_READY:
+		return model.VodAssetStatusReady
+	case pb.VodStatus_VOD_STATUS_FAILED:
+		return model.VodAssetStatusFailed
+	case pb.VodStatus_VOD_STATUS_DELETED:
+		return model.VodAssetStatusDeleted
+	case pb.VodStatus_VOD_STATUS_EXPIRED:
+		return model.VodAssetStatusExpired
+	default:
+		return model.VodAssetStatusUploading
+	}
+}
+
+func int32SliceToIntSlice(in []int32) []int {
+	out := make([]int, len(in))
+	for i, v := range in {
+		out[i] = int(v)
+	}
+	return out
+}
+
 // DoAbortVodUpload cancels an in-progress multipart upload
 func (r *Resolver) DoAbortVodUpload(ctx context.Context, uploadID string) (model.AbortVodUploadResult, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {

@@ -216,6 +216,8 @@ CREATE TABLE IF NOT EXISTS foghorn.vod_metadata (
     -- ===== S3 MULTIPART UPLOAD TRACKING =====
     s3_upload_id VARCHAR(255),              -- S3 multipart upload ID (null after completion)
     s3_key VARCHAR(500),                    -- S3 object key
+    upload_expires_at TIMESTAMPTZ,          -- S3 multipart session deadline; status returns EXPIRED past this
+    total_parts INTEGER,                    -- Number of parts declared at create time, used to compute missing_parts
 
     -- ===== FILE METADATA (populated after validation) =====
     duration_ms INTEGER,                    -- Video duration in milliseconds

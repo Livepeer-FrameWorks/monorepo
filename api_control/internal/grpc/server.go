@@ -6366,6 +6366,54 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *pb.Complet
 	return resp, nil
 }
 
+// GetVodUploadStatus reads media upload state from Foghorn, then validates and
+// enriches the response with Commodore-owned VOD registry metadata.
+func (s *CommodoreServer) GetVodUploadStatus(ctx context.Context, req *pb.GetVodUploadStatusRequest) (*pb.GetVodUploadStatusResponse, error) {
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if req.GetUploadId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "upload_id is required")
+	}
+
+	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, trailers, err := foghornClient.GetVodUploadStatus(ctx, tenantID, req.UploadId)
+	if err != nil {
+		s.logger.WithError(err).WithField("upload_id", req.UploadId).Warn("Failed to read VOD upload status via Foghorn")
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
+	}
+	if resp == nil || resp.ArtifactHash == "" {
+		return nil, status.Error(codes.NotFound, "upload not found")
+	}
+
+	var playbackID string
+	err = s.db.QueryRowContext(ctx, `
+		SELECT playback_id
+		FROM commodore.vod_assets
+		WHERE tenant_id = $1 AND vod_hash = $2
+	`, tenantID, resp.ArtifactHash).Scan(&playbackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":      tenantID,
+			"upload_id":      req.UploadId,
+			"artifact_hash":  resp.ArtifactHash,
+			"foghorn_status": resp.State.String(),
+		}).Warn("Foghorn VOD upload status has no matching Commodore VOD registry row")
+		return nil, status.Error(codes.NotFound, "upload not found")
+	}
+	if err != nil {
+		s.logger.WithError(err).WithField("artifact_hash", resp.ArtifactHash).Error("Failed to enrich VOD upload status")
+		return nil, status.Error(codes.Internal, "failed to enrich upload status")
+	}
+	resp.PlaybackId = playbackID
+	return resp, nil
+}
+
 // AbortVodUpload cancels multipart upload via Foghorn
 func (s *CommodoreServer) AbortVodUpload(ctx context.Context, req *pb.AbortVodUploadRequest) (*pb.AbortVodUploadResponse, error) {
 	// Get tenant context from metadata

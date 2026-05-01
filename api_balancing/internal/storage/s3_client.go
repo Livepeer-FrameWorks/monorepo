@@ -337,11 +337,10 @@ func (c *S3Client) ParseS3URL(s3URL string) (string, error) {
 		return "", fmt.Errorf("not an s3:// URL: %s", s3URL)
 	}
 	withoutScheme := strings.TrimPrefix(s3URL, "s3://")
-	slashIdx := strings.Index(withoutScheme, "/")
-	if slashIdx < 0 {
+	_, fullKey, ok := strings.Cut(withoutScheme, "/")
+	if !ok {
 		return "", fmt.Errorf("no key in s3 URL: %s", s3URL)
 	}
-	fullKey := withoutScheme[slashIdx+1:]
 	// Strip the configured prefix so Delete()/fullKey() won't double-prepend
 	if c.config.Prefix != "" {
 		prefix := strings.TrimSuffix(c.config.Prefix, "/") + "/"
@@ -402,6 +401,14 @@ type CompletedPart struct {
 type UploadPart struct {
 	PartNumber   int
 	PresignedURL string
+}
+
+// UploadedPart represents a part that S3 has already received, as returned by ListParts.
+// Distinct from CompletedPart (sent at finalize time) and UploadPart (presigned URL handed out).
+type UploadedPart struct {
+	PartNumber int
+	ETag       string
+	SizeBytes  int64
 }
 
 // CalculatePartSize determines optimal part size and count for a given file size.
@@ -542,6 +549,68 @@ func (c *S3Client) CompleteMultipartUpload(ctx context.Context, key, uploadID st
 	}).Info("Completed multipart upload")
 
 	return nil
+}
+
+// ListUploadedParts returns the parts S3 has already received for an in-flight multipart upload.
+// Used to reconcile client-side resume state with server truth.
+func (c *S3Client) ListUploadedParts(ctx context.Context, key, uploadID string) ([]UploadedPart, error) {
+	fullKey := c.fullKey(key)
+
+	paginator := s3.NewListPartsPaginator(c.client, &s3.ListPartsInput{
+		Bucket:   aws.String(c.config.Bucket),
+		Key:      aws.String(fullKey),
+		UploadId: aws.String(uploadID),
+	})
+
+	var out []UploadedPart
+	for paginator.HasMorePages() {
+		resp, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list uploaded parts: %w", err)
+		}
+		out = append(out, mapListedParts(resp.Parts)...)
+	}
+	return out, nil
+}
+
+// mapListedParts converts SDK part records into our UploadedPart shape.
+// Skips entries with no part number; strips quoted ETags.
+func mapListedParts(parts []types.Part) []UploadedPart {
+	out := make([]UploadedPart, 0, len(parts))
+	for _, p := range parts {
+		if p.PartNumber == nil {
+			continue
+		}
+		etag := ""
+		if p.ETag != nil {
+			etag = strings.Trim(*p.ETag, "\"")
+		}
+		size := int64(0)
+		if p.Size != nil {
+			size = *p.Size
+		}
+		out = append(out, UploadedPart{
+			PartNumber: int(*p.PartNumber),
+			ETag:       etag,
+			SizeBytes:  size,
+		})
+	}
+	return out
+}
+
+// MissingPartNumbers returns the 1..total set minus parts already in `uploaded`.
+func MissingPartNumbers(uploaded []UploadedPart, total int) []int {
+	have := make(map[int]struct{}, len(uploaded))
+	for _, p := range uploaded {
+		have[p.PartNumber] = struct{}{}
+	}
+	missing := make([]int, 0, total)
+	for i := 1; i <= total; i++ {
+		if _, ok := have[i]; !ok {
+			missing = append(missing, i)
+		}
+	}
+	return missing
 }
 
 // AbortMultipartUpload cancels an in-progress multipart upload.

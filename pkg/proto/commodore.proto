@@ -1141,6 +1141,8 @@ service VodService {
   rpc CompleteVodUpload(shared.CompleteVodUploadRequest) returns (shared.CompleteVodUploadResponse);
   // Cancel in-progress upload
   rpc AbortVodUpload(shared.AbortVodUploadRequest) returns (shared.AbortVodUploadResponse);
+  // Read upload status (proxies to Foghorn; tenant_id from auth context).
+  rpc GetVodUploadStatus(shared.GetVodUploadStatusRequest) returns (shared.GetVodUploadStatusResponse);
   // Get single VOD asset
   rpc GetVodAsset(shared.GetVodAssetRequest) returns (shared.VodAssetInfo);
   // List VOD assets with pagination

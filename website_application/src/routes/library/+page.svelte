@@ -22,6 +22,7 @@
     CompleteVodUploadStore,
     AbortVodUploadStore,
     DeleteVodAssetStore,
+    GetVodUploadStatusStore,
     ClipLifecycleStore,
     DvrLifecycleStore,
     VodLifecycleStore,
@@ -61,6 +62,16 @@
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import {
+    createUploadEngine,
+    createIndexedDBSessionStore,
+    createMemorySessionStore,
+    findRecoverable,
+    attachDropZone,
+    isVideoFile,
+    type UploadEngine,
+    type SessionStore,
+  } from "$lib/uploads";
 
   // Type definitions
   type ArtifactType = "all" | "clips" | "dvr" | "vod";
@@ -100,6 +111,7 @@
   const completeVodUploadMutation = new CompleteVodUploadStore();
   const abortVodUploadMutation = new AbortVodUploadStore();
   const deleteVodMutation = new DeleteVodAssetStore();
+  const vodUploadStatusQuery = new GetVodUploadStatusStore();
 
   // Subscriptions
   const clipLifecycleSub = new ClipLifecycleStore();
@@ -393,8 +405,29 @@
   let uploadDescription = $state("");
   let uploading = $state(false);
   let uploadProgress = $state(0);
-  let uploadStage = $state<"idle" | "initializing" | "uploading" | "completing" | "done">("idle");
+  let uploadStage = $state<
+    "idle" | "initializing" | "uploading" | "paused" | "completing" | "processing" | "done"
+  >("idle");
   let currentUploadId = $state<string | null>(null);
+  let dragActive = $state(false);
+  let recoveryOffer = $state<{
+    uploadId: string;
+    completedParts: number;
+    totalParts: number;
+  } | null>(null);
+  let resumeRequested = $state(false);
+
+  let uploadEngine: UploadEngine | null = null;
+  let sessionStore: SessionStore | null = null;
+  function getSessionStore(): SessionStore {
+    if (!sessionStore) {
+      sessionStore =
+        typeof globalThis !== "undefined" && "indexedDB" in globalThis
+          ? createIndexedDBSessionStore()
+          : createMemorySessionStore();
+    }
+    return sessionStore;
+  }
 
   const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
@@ -630,15 +663,110 @@
   }
 
   // Upload VOD
+  async function handleFileChosen(file: File) {
+    uploadFile = file;
+    if (!uploadTitle) {
+      uploadTitle = file.name.replace(/\.[^/.]+$/, "");
+    }
+    // Best-effort recovery offer based on local IndexedDB session.
+    try {
+      const candidate = await findRecoverable(getSessionStore(), file);
+      if (candidate) {
+        recoveryOffer = {
+          uploadId: candidate.record.uploadId,
+          completedParts: candidate.completedParts.length,
+          totalParts: candidate.record.totalParts,
+        };
+      } else {
+        recoveryOffer = null;
+      }
+    } catch {
+      recoveryOffer = null;
+    }
+  }
+
   function handleFileSelect(event: Event) {
     const target = event.target as HTMLInputElement;
     const file = target.files?.[0];
-    if (file) {
-      uploadFile = file;
-      if (!uploadTitle) {
-        uploadTitle = file.name.replace(/\.[^/.]+$/, "");
+    if (file) handleFileChosen(file);
+  }
+
+  function dropZoneAction(node: HTMLElement) {
+    return attachDropZone(node, {
+      accept: isVideoFile,
+      onEnter: () => (dragActive = true),
+      onLeave: () => (dragActive = false),
+      onFiles: (files) => {
+        if (uploading) return;
+        if (files.length > 0) handleFileChosen(files[0]);
+      },
+    });
+  }
+
+  type UploadSessionInputs =
+    | {
+        kind: "upload";
+        uploadId: string;
+        partSize: number;
+        parts: { partNumber: number; presignedUrl: string }[];
+        serverConfirmedParts: { partNumber: number; etag: string }[];
       }
+    | {
+        kind: "finalized";
+        stage: "processing" | "done";
+      };
+
+  async function prepareResumeSession(file: File): Promise<UploadSessionInputs | null> {
+    if (!resumeRequested || !recoveryOffer) return null;
+    const candidate = await findRecoverable(getSessionStore(), file);
+    if (!candidate) return null;
+
+    // Verify with the server because the local IndexedDB record may be stale or expired.
+    const statusResult = await vodUploadStatusQuery.fetch({
+      variables: { uploadId: candidate.record.uploadId },
+      policy: "NetworkOnly",
+    });
+    const data = statusResult.data?.vodUploadStatus;
+    if (!data || data.__typename !== "VodUploadStatus") {
+      // NotFound / Auth / Validation: drop the local session and fall through to fresh upload.
+      await getSessionStore().delete(candidate.record.uploadId);
+      toast.info("Previous upload is no longer resumable; starting fresh.");
+      return null;
     }
+    if (data.state === "EXPIRED") {
+      await getSessionStore().delete(candidate.record.uploadId);
+      toast.info("Previous upload session expired; starting fresh.");
+      return null;
+    }
+    if (data.state === "PROCESSING" || data.state === "READY") {
+      await getSessionStore().delete(candidate.record.uploadId);
+      recoveryOffer = null;
+      resumeRequested = false;
+      toast.info(
+        data.state === "READY"
+          ? "Previous upload already finished processing."
+          : "Previous upload already completed; processing continues in the library."
+      );
+      return { kind: "finalized", stage: data.state === "READY" ? "done" : "processing" };
+    }
+    if (data.state === "FAILED" || data.state === "DELETED") {
+      await getSessionStore().delete(candidate.record.uploadId);
+      toast.info("Previous upload can no longer be resumed; starting fresh.");
+      return null;
+    }
+    return {
+      kind: "upload",
+      uploadId: candidate.record.uploadId,
+      partSize: candidate.record.partSize,
+      parts: candidate.record.parts.map((p) => ({
+        partNumber: p.partNumber,
+        presignedUrl: p.presignedUrl,
+      })),
+      serverConfirmedParts: data.uploadedParts.map((p) => ({
+        partNumber: p.partNumber,
+        etag: p.etag,
+      })),
+    };
   }
 
   async function startUpload() {
@@ -647,61 +775,97 @@
       return;
     }
 
+    const file = uploadFile;
+    uploading = true;
+    uploadStage = "initializing";
+    uploadProgress = 0;
+
+    let activeUploadId: string | null = null;
+    let abortOnFailure = true;
     try {
-      uploading = true;
-      uploadStage = "initializing";
-      uploadProgress = 0;
-
-      const initResult = await createVodUploadMutation.mutate({
-        input: {
-          filename: uploadFile.name,
-          sizeBytes: uploadFile.size,
-          contentType: uploadFile.type || "video/mp4",
-          title: uploadTitle.trim() || undefined,
-          description: uploadDescription.trim() || undefined,
-        },
-      });
-
-      const createResult = initResult.data?.createVodUpload;
-      if (createResult?.__typename !== "VodUploadSession") {
-        const error = createResult as unknown as { message?: string };
-        throw new Error(error.message || "Failed to initialize upload");
+      let session: UploadSessionInputs | null = await prepareResumeSession(file);
+      if (session?.kind === "finalized") {
+        uploadStage = session.stage;
+        await loadData();
+        return;
+      }
+      if (!session) {
+        const initResult = await createVodUploadMutation.mutate({
+          input: {
+            filename: file.name,
+            sizeBytes: file.size,
+            contentType: file.type || "video/mp4",
+            title: uploadTitle.trim() || undefined,
+            description: uploadDescription.trim() || undefined,
+          },
+        });
+        const createResult = initResult.data?.createVodUpload;
+        if (createResult?.__typename !== "VodUploadSession") {
+          const error = createResult as unknown as { message?: string };
+          throw new Error(error?.message || "Failed to initialize upload");
+        }
+        session = {
+          kind: "upload",
+          uploadId: createResult.id,
+          partSize: createResult.partSize,
+          parts: createResult.parts.map((p) => ({
+            partNumber: p.partNumber,
+            presignedUrl: p.presignedUrl,
+          })),
+          serverConfirmedParts: [],
+        };
       }
 
-      currentUploadId = createResult.id;
-      const parts = createResult.parts;
-      const partSize = createResult.partSize;
+      activeUploadId = session.uploadId;
+      currentUploadId = activeUploadId;
+
+      const engine = createUploadEngine({
+        uploadId: session.uploadId,
+        file,
+        partSize: session.partSize,
+        parts: session.parts,
+        store: getSessionStore(),
+      });
+      uploadEngine = engine;
+      if (session.serverConfirmedParts.length > 0) {
+        engine.seedCompleted(session.serverConfirmedParts);
+      }
 
       uploadStage = "uploading";
 
-      const completedParts: { partNumber: number; etag: string }[] = [];
-      const totalParts = parts.length;
-
-      for (let i = 0; i < parts.length; i++) {
-        const part = parts[i];
-        const start = i * partSize;
-        const end = Math.min(start + partSize, uploadFile.size);
-        const chunk = uploadFile.slice(start, end);
-
-        const response = await fetch(part.presignedUrl, {
-          method: "PUT",
-          body: chunk,
-          headers: { "Content-Type": uploadFile.type || "application/octet-stream" },
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to upload part ${part.partNumber}`);
+      const transferComplete = new Promise<{ partNumber: number; etag: string }[]>(
+        (resolve, reject) => {
+          engine.on((event) => {
+            switch (event.type) {
+              case "progress":
+                uploadProgress = event.percent;
+                break;
+              case "stateChange":
+                if (event.state === "paused") uploadStage = "paused";
+                else if (event.state === "uploading") uploadStage = "uploading";
+                else if (event.state === "failed")
+                  reject(new Error("Upload failed; see error event"));
+                else if (event.state === "aborted") reject(new Error("Upload aborted"));
+                break;
+              case "transferComplete":
+                resolve(event.parts);
+                break;
+              case "error":
+                // Surfaced via state change; keep latest message in toast on hard failure.
+                break;
+            }
+          });
         }
+      );
 
-        const etag = response.headers.get("ETag")?.replace(/"/g, "") || "";
-        completedParts.push({ partNumber: part.partNumber, etag });
-        uploadProgress = Math.round(((i + 1) / totalParts) * 100);
-      }
+      engine.start();
+      const completedParts = await transferComplete;
+      abortOnFailure = false;
 
       uploadStage = "completing";
 
       const completeResult = await completeVodUploadMutation.mutate({
-        input: { uploadId: currentUploadId, parts: completedParts },
+        input: { uploadId: activeUploadId, parts: completedParts },
       });
 
       if (completeResult.data?.completeVodUpload?.__typename !== "VodAsset") {
@@ -709,24 +873,69 @@
         throw new Error(error?.message || "Failed to complete upload");
       }
 
-      uploadStage = "done";
-      toast.success("Video uploaded successfully!");
+      await getSessionStore().delete(activeUploadId);
+      recoveryOffer = null;
+      resumeRequested = false;
+      uploadStage = "processing";
+      toast.success("Upload complete — video is being processed.");
       await loadData();
-      resetUploadForm();
-      showUploadModal = false;
     } catch (error) {
       console.error("Upload failed:", error);
       toast.error(`Upload failed: ${error instanceof Error ? error.message : "Unknown error"}`);
-      if (currentUploadId) {
+      if (activeUploadId && abortOnFailure) {
         try {
-          await abortVodUploadMutation.mutate({ uploadId: currentUploadId });
-        } catch {}
+          await abortVodUploadMutation.mutate({ uploadId: activeUploadId });
+        } catch {
+          // ignore — server will eventually expire the session.
+        }
       }
+      if (!abortOnFailure && activeUploadId) {
+        try {
+          const candidate = await findRecoverable(getSessionStore(), file);
+          if (candidate?.record.uploadId === activeUploadId) {
+            recoveryOffer = {
+              uploadId: activeUploadId,
+              completedParts: candidate.completedParts.length,
+              totalParts: candidate.record.totalParts,
+            };
+            resumeRequested = true;
+          }
+        } catch {
+          // Recovery is still possible after re-selecting the same file.
+        }
+      }
+      uploadStage = "idle";
     } finally {
       uploading = false;
+      uploadEngine = null;
       currentUploadId = null;
-      uploadStage = "idle";
+      if (abortOnFailure) {
+        resumeRequested = false;
+      }
     }
+  }
+
+  function pauseUpload() {
+    uploadEngine?.pause();
+  }
+
+  function resumeUpload() {
+    uploadEngine?.resume();
+  }
+
+  function acceptRecovery() {
+    // Marks the next startUpload to resume the existing session: it will query
+    // vodUploadStatus to confirm the session is still live, then reuse the cached
+    // presigned URLs and skip parts the server has already received.
+    resumeRequested = true;
+  }
+
+  function dismissRecovery() {
+    if (recoveryOffer) {
+      void getSessionStore().delete(recoveryOffer.uploadId);
+    }
+    recoveryOffer = null;
+    resumeRequested = false;
   }
 
   function resetUploadForm() {
@@ -736,9 +945,15 @@
     uploadProgress = 0;
     uploadStage = "idle";
     currentUploadId = null;
+    recoveryOffer = null;
+    resumeRequested = false;
   }
 
   function cancelUpload() {
+    if (uploadEngine) {
+      uploadEngine.abort();
+      uploadEngine = null;
+    }
     if (currentUploadId && uploading) {
       abortVodUploadMutation.mutate({ uploadId: currentUploadId });
     }
@@ -1835,7 +2050,10 @@
           >Video File</label
         >
         <div
-          class="relative border-2 border-dashed border-border rounded-lg p-6 text-center hover:border-primary/50 transition-colors"
+          use:dropZoneAction
+          class="relative border-2 border-dashed rounded-lg p-6 text-center transition-colors {dragActive
+            ? 'border-primary bg-primary/5'
+            : 'border-border hover:border-primary/50'}"
         >
           {#if uploadFile}
             <div class="flex items-center justify-center gap-3">
@@ -1859,6 +2077,33 @@
             disabled={uploading}
           />
         </div>
+        {#if recoveryOffer && !uploading}
+          <div
+            class="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-foreground flex items-center justify-between gap-2"
+          >
+            <span>
+              {#if resumeRequested}
+                Will resume previous upload ({recoveryOffer.completedParts}/{recoveryOffer.totalParts}
+                parts already uploaded). Server will reconcile remaining parts.
+              {:else}
+                Resume previous upload? {recoveryOffer.completedParts}/{recoveryOffer.totalParts} parts
+                already uploaded.
+              {/if}
+            </span>
+            <div class="flex gap-2">
+              {#if !resumeRequested}
+                <button type="button" class="underline text-primary" onclick={acceptRecovery}
+                  >Resume</button
+                >
+              {/if}
+              <button
+                type="button"
+                class="underline text-muted-foreground"
+                onclick={dismissRecovery}>Discard</button
+              >
+            </div>
+          </div>
+        {/if}
       </div>
 
       <div class="space-y-2">
@@ -1887,16 +2132,56 @@
         />
       </div>
 
-      {#if uploading}
-        <div class="space-y-2">
-          <div class="flex justify-between text-xs text-muted-foreground">
-            <span>
-              {#if uploadStage === "initializing"}Initializing...{:else if uploadStage === "uploading"}Uploading...
-                {uploadProgress}%{:else if uploadStage === "completing"}Completing...{:else if uploadStage === "done"}Complete!{/if}
-            </span>
-            <span>{uploadProgress}%</span>
+      {#if uploading || uploadStage === "processing" || uploadStage === "done"}
+        <div class="space-y-3">
+          <!-- Transfer phase -->
+          <div class="space-y-1">
+            <div class="flex justify-between text-xs">
+              <span class="font-medium uppercase tracking-wide text-muted-foreground">Transfer</span
+              >
+              <span class="text-muted-foreground"
+                >{#if uploadStage === "initializing"}Initializing…{:else if uploadStage === "uploading"}{uploadProgress}%{:else if uploadStage === "paused"}Paused
+                  at {uploadProgress}%{:else}{uploadProgress}%{/if}</span
+              >
+            </div>
+            <Progress value={uploadProgress} max={100} class="h-2" />
+            {#if uploadStage === "uploading" || uploadStage === "paused"}
+              <div class="flex justify-end gap-2 pt-1">
+                {#if uploadStage === "uploading"}
+                  <button
+                    type="button"
+                    class="text-xs underline text-muted-foreground"
+                    onclick={pauseUpload}>Pause</button
+                  >
+                {:else}
+                  <button
+                    type="button"
+                    class="text-xs underline text-primary"
+                    onclick={resumeUpload}>Resume</button
+                  >
+                {/if}
+              </div>
+            {/if}
           </div>
-          <Progress value={uploadProgress} max={100} class="h-2" />
+
+          <!-- Processing phase (post-transfer) -->
+          {#if uploadStage === "completing" || uploadStage === "processing" || uploadStage === "done"}
+            <div class="space-y-1 border-t border-border pt-3">
+              <div class="flex justify-between text-xs">
+                <span class="font-medium uppercase tracking-wide text-muted-foreground"
+                  >Processing</span
+                >
+                <span class="text-muted-foreground">
+                  {#if uploadStage === "completing"}Finalizing…{:else if uploadStage === "processing"}Analyzing
+                    video…{:else}Ready{/if}
+                </span>
+              </div>
+              <p class="text-xs text-muted-foreground/70">
+                Server is extracting metadata and preparing playback. You can safely close this
+                dialog; progress is shown in the library.
+              </p>
+            </div>
+          {/if}
         </div>
       {/if}
     </form>
@@ -1908,14 +2193,18 @@
         class="rounded-none h-12 flex-1 border-r border-[hsl(var(--tn-fg-gutter)/0.3)]"
         onclick={cancelUpload}
         disabled={uploading && uploadStage === "completing"}
-        >{uploading ? "Cancel" : "Close"}</Button
+        >{#if uploading}Cancel{:else if uploadStage === "processing" || uploadStage === "done"}Close{:else}Close{/if}</Button
       >
       <Button
         type="submit"
         variant="ghost"
         class="rounded-none h-12 flex-1 text-primary"
-        disabled={uploading || !uploadFile}
-        form="upload-form">{uploading ? "Uploading..." : "Upload"}</Button
+        disabled={uploading ||
+          !uploadFile ||
+          uploadStage === "processing" ||
+          uploadStage === "done"}
+        form="upload-form"
+        >{#if uploadStage === "uploading"}Uploading…{:else if uploadStage === "paused"}Paused{:else if uploadStage === "completing"}Finalizing…{:else if uploadStage === "processing"}Processing…{:else if uploadStage === "done"}Done{:else}Upload{/if}</Button
       >
     </DialogFooter>
   </DialogContent>

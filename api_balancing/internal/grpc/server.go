@@ -55,6 +55,7 @@ type S3ClientInterface interface {
 	GeneratePresignedUploadParts(key, uploadID string, partCount int, expiry time.Duration) ([]storage.UploadPart, error)
 	CompleteMultipartUpload(ctx context.Context, key, uploadID string, parts []storage.CompletedPart) error
 	AbortMultipartUpload(ctx context.Context, key, uploadID string) error
+	ListUploadedParts(ctx context.Context, key, uploadID string) ([]storage.UploadedPart, error)
 	BuildVodS3Key(tenantID, artifactHash, filename string) string
 	BuildS3URL(key string) string
 	Delete(ctx context.Context, key string) error
@@ -561,7 +562,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	}
 
 	// Build requested_params JSON for audit
-	requestedParams := map[string]interface{}{
+	requestedParams := map[string]any{
 		"mode": req.Mode.String(),
 	}
 	if req.StartUnix != nil {
@@ -674,7 +675,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	}
 
 	// Update stream state
-	state.DefaultManager().UpdateStreamInstanceInfo(req.StreamInternalName, storageNodeID, map[string]interface{}{
+	state.DefaultManager().UpdateStreamInstanceInfo(req.StreamInternalName, storageNodeID, map[string]any{
 		"clip_status":     "requested",
 		"clip_request_id": reqID,
 		"clip_format":     format,
@@ -1091,7 +1092,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	}
 
 	// Update stream state
-	state.DefaultManager().UpdateStreamInstanceInfo(req.InternalName, storageNodeID, map[string]interface{}{
+	state.DefaultManager().UpdateStreamInstanceInfo(req.InternalName, storageNodeID, map[string]any{
 		"dvr_status": "requested",
 		"dvr_hash":   dvrHash,
 	})
@@ -2091,18 +2092,34 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 		return nil, status.Errorf(codes.Internal, "failed to store artifact: %v", err)
 	}
 
+	uploadExpiresAt := time.Now().Add(2 * time.Hour)
+
 	// Store VOD metadata
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.vod_metadata (
 			artifact_hash, filename, title, description, content_type,
-			s3_upload_id, s3_key, created_at, updated_at
+			s3_upload_id, s3_key, upload_expires_at, total_parts, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-	`, artifactHash, req.Filename, req.GetTitle(), req.GetDescription(), contentType, uploadID, s3Key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+	`, artifactHash, req.Filename, req.GetTitle(), req.GetDescription(), contentType, uploadID, s3Key, uploadExpiresAt, partCount)
 
 	if err != nil {
-		// Log but don't fail - primary artifact is created
 		s.logger.WithError(err).Error("Failed to store VOD metadata")
+		if abortErr := s.s3Client.AbortMultipartUpload(ctx, s3Key, uploadID); abortErr != nil {
+			s.logger.WithError(abortErr).WithField("upload_id", uploadID).Warn("Failed to abort multipart upload after metadata write failure")
+		}
+		if _, markErr := s.db.ExecContext(ctx, `
+			UPDATE foghorn.artifacts
+			SET status = 'failed',
+			    sync_status = 'failed',
+			    sync_error = $1,
+			    error_message = $1,
+			    updated_at = NOW()
+			WHERE artifact_hash = $2
+		`, fmt.Sprintf("failed to store upload metadata: %v", err), artifactHash); markErr != nil {
+			s.logger.WithError(markErr).WithField("artifact_hash", artifactHash).Error("Failed to mark VOD artifact failed after metadata write failure")
+		}
+		return nil, status.Error(codes.Internal, "failed to store upload metadata")
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -2152,9 +2169,139 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 		ArtifactHash: artifactHash,
 		PartSize:     partSize,
 		Parts:        protoParts,
-		ExpiresAt:    timestamppb.New(time.Now().Add(2 * time.Hour)),
+		ExpiresAt:    timestamppb.New(uploadExpiresAt),
 		PlaybackId:   req.GetPlaybackId(),
 	}, nil
+}
+
+// GetVodUploadStatus reports server-authoritative state of an in-flight multipart upload.
+// Used by the gateway/MCP and by the browser uploader's reload-recovery path to reconcile
+// local state against what S3 has actually received.
+func (s *FoghornGRPCServer) GetVodUploadStatus(ctx context.Context, req *pb.GetVodUploadStatusRequest) (*pb.GetVodUploadStatusResponse, error) {
+	if req.TenantId == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if req.UploadId == "" {
+		return nil, status.Error(codes.InvalidArgument, "upload_id is required")
+	}
+
+	var (
+		artifactHash    string
+		s3Key           string
+		artStatus       string
+		errorMessage    sql.NullString
+		retentionUntil  sql.NullTime
+		uploadExpiresAt sql.NullTime
+		totalParts      sql.NullInt64
+	)
+	err := s.db.QueryRowContext(ctx, `
+			SELECT v.artifact_hash, COALESCE(v.s3_key, ''), a.status,
+			       a.error_message, a.retention_until, v.upload_expires_at, v.total_parts
+			FROM foghorn.vod_metadata v
+			JOIN foghorn.artifacts a ON v.artifact_hash = a.artifact_hash
+			WHERE v.s3_upload_id = $1 AND a.tenant_id = $2
+		`, req.UploadId, req.TenantId).Scan(
+		&artifactHash, &s3Key, &artStatus,
+		&errorMessage, &retentionUntil, &uploadExpiresAt, &totalParts,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Wrong-tenant or missing upload — collapse both into NotFound to avoid existence leak.
+		return nil, status.Error(codes.NotFound, "upload not found")
+	} else if err != nil {
+		s.logger.WithError(err).Error("Failed to load upload status")
+		return nil, status.Error(codes.Internal, "failed to load upload status")
+	}
+
+	resp := &pb.GetVodUploadStatusResponse{
+		UploadId:     req.UploadId,
+		State:        mapArtifactStatusToVodStatus(artStatus),
+		ArtifactHash: artifactHash,
+	}
+	if errorMessage.Valid && errorMessage.String != "" {
+		resp.LastErrorCode = vodUploadLastErrorCode(resp.State, errorMessage.String)
+	}
+	if retentionUntil.Valid {
+		resp.RetentionUntil = timestamppb.New(retentionUntil.Time)
+	}
+	if uploadExpiresAt.Valid {
+		resp.ExpiresAt = timestamppb.New(uploadExpiresAt.Time)
+	}
+
+	// Once multipart upload is complete, S3 ListParts is no longer part of status.
+	switch resp.State {
+	case pb.VodStatus_VOD_STATUS_PROCESSING,
+		pb.VodStatus_VOD_STATUS_READY,
+		pb.VodStatus_VOD_STATUS_FAILED,
+		pb.VodStatus_VOD_STATUS_DELETED:
+		return resp, nil
+	}
+
+	// Expired session: report EXPIRED without paying for a ListParts call.
+	if uploadExpiresAt.Valid && time.Now().After(uploadExpiresAt.Time) {
+		resp.State = pb.VodStatus_VOD_STATUS_EXPIRED
+		resp.LastErrorCode = "upload_expired"
+		return resp, nil
+	}
+
+	// Live session: reconcile against S3.
+	if s.s3Client == nil {
+		return resp, nil
+	}
+	uploaded, err := s.s3Client.ListUploadedParts(ctx, s3Key, req.UploadId)
+	if err != nil {
+		s.logger.WithError(err).Warn("ListUploadedParts failed; returning state without reconciliation")
+		resp.LastErrorCode = "storage_reconciliation_failed"
+		return resp, nil
+	}
+	resp.UploadedParts = make([]*pb.VodUploadedPart, 0, len(uploaded))
+	for _, p := range uploaded {
+		resp.UploadedParts = append(resp.UploadedParts, &pb.VodUploadedPart{
+			PartNumber: int32(p.PartNumber),
+			Etag:       p.ETag,
+			SizeBytes:  p.SizeBytes,
+		})
+	}
+	if totalParts.Valid {
+		missing := storage.MissingPartNumbers(uploaded, int(totalParts.Int64))
+		resp.MissingParts = make([]int32, 0, len(missing))
+		for _, m := range missing {
+			resp.MissingParts = append(resp.MissingParts, int32(m))
+		}
+	}
+	return resp, nil
+}
+
+// mapArtifactStatusToVodStatus maps the foghorn.artifacts.status string column to the
+// VodStatus enum surfaced to clients. Unknown/empty maps to UNSPECIFIED.
+func mapArtifactStatusToVodStatus(s string) pb.VodStatus {
+	switch s {
+	case "uploading", "requested":
+		return pb.VodStatus_VOD_STATUS_UPLOADING
+	case "processing":
+		return pb.VodStatus_VOD_STATUS_PROCESSING
+	case "ready":
+		return pb.VodStatus_VOD_STATUS_READY
+	case "failed":
+		return pb.VodStatus_VOD_STATUS_FAILED
+	case "deleted":
+		return pb.VodStatus_VOD_STATUS_DELETED
+	default:
+		return pb.VodStatus_VOD_STATUS_UNSPECIFIED
+	}
+}
+
+func vodUploadLastErrorCode(state pb.VodStatus, errorMessage string) string {
+	if errorMessage == "" {
+		return ""
+	}
+	switch state {
+	case pb.VodStatus_VOD_STATUS_FAILED:
+		return "processing_failed"
+	case pb.VodStatus_VOD_STATUS_DELETED:
+		return "deleted"
+	default:
+		return "artifact_error"
+	}
 }
 
 // CompleteVodUpload finalizes a multipart upload after all parts are uploaded
@@ -2435,7 +2582,7 @@ func (s *FoghornGRPCServer) ListVodAssets(ctx context.Context, req *pb.ListVodAs
 
 	// Build base WHERE clause - no tenant_id filter (matches clips pattern)
 	baseWhere := "a.artifact_type = 'vod' AND a.status != 'deleted'"
-	args := []interface{}{}
+	args := []any{}
 	argIdx := 1
 
 	// Count total

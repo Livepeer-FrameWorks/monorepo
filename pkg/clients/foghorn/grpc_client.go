@@ -337,6 +337,20 @@ func (c *GRPCClient) AbortVodUpload(ctx context.Context, tenantID, uploadID stri
 	return resp, trailers, err
 }
 
+// GetVodUploadStatus reads server-authoritative state of an in-flight multipart upload.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) GetVodUploadStatus(ctx context.Context, tenantID, uploadID string) (*pb.GetVodUploadStatusResponse, metadata.MD, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	var trailers metadata.MD
+	resp, err := c.vod.GetVodUploadStatus(ctx, &pb.GetVodUploadStatusRequest{
+		TenantId: tenantID,
+		UploadId: uploadID,
+	}, grpc.Trailer(&trailers))
+	return resp, trailers, err
+}
+
 // GetVodAsset returns a single VOD asset by hash.
 // Returns any trailers emitted by the downstream service.
 func (c *GRPCClient) GetVodAsset(ctx context.Context, tenantID, artifactHash string) (*pb.VodAssetInfo, metadata.MD, error) {

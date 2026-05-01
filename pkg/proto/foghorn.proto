@@ -47,6 +47,9 @@ service VodControlService {
   rpc CompleteVodUpload(shared.CompleteVodUploadRequest) returns (shared.CompleteVodUploadResponse);
   // AbortVodUpload cancels an in-progress multipart upload
   rpc AbortVodUpload(shared.AbortVodUploadRequest) returns (shared.AbortVodUploadResponse);
+  // GetVodUploadStatus reports server-authoritative state of an in-flight multipart upload,
+  // including which parts S3 has already received (via ListParts).
+  rpc GetVodUploadStatus(shared.GetVodUploadStatusRequest) returns (shared.GetVodUploadStatusResponse);
   // GetVodAsset returns a single VOD asset by hash
   rpc GetVodAsset(shared.GetVodAssetRequest) returns (shared.VodAssetInfo);
   // ListVodAssets returns paginated list of VOD assets for a tenant
