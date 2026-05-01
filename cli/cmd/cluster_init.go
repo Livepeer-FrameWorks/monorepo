@@ -167,8 +167,8 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 	if provErr != nil {
 		return provErr
 	}
-	if err := prov.Initialize(ctx, host, config); err != nil {
-		return err
+	if initErr := prov.Initialize(ctx, host, config); initErr != nil {
+		return initErr
 	}
 
 	schemaDatabases := make([]provisioner.SchemaDatabase, 0, len(pg.Databases))
@@ -178,7 +178,21 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 			Owner: db.Owner,
 		})
 	}
-	return applyPostgresSchemasAndMigrations(ctx, cmd.OutOrStdout(), service, host, config, prov, schemaDatabases)
+	dbNames := make([]string, 0, len(schemaDatabases))
+	for _, db := range schemaDatabases {
+		dbNames = append(dbNames, db.Name)
+	}
+	target := ""
+	if hasMigrations, hasErr := provisioner.HasMigrations(dbNames, "expand"); hasErr != nil {
+		return hasErr
+	} else if hasMigrations {
+		var targetErr error
+		target, targetErr = resolveMigrationTarget(rc, "")
+		if targetErr != nil {
+			return fmt.Errorf("resolve init target version: %w", targetErr)
+		}
+	}
+	return applyPostgresSchemasAndMigrations(ctx, cmd.OutOrStdout(), service, host, config, prov, schemaDatabases, target)
 }
 
 func applyPostgresSchemasAndMigrations(
@@ -189,6 +203,7 @@ func applyPostgresSchemasAndMigrations(
 	config provisioner.ServiceConfig,
 	prov provisioner.Provisioner,
 	databases []provisioner.SchemaDatabase,
+	targetVersion string,
 ) error {
 	schemaItems, schemaCleanup, err := provisioner.BuildSchemaItems(databases)
 	defer schemaCleanup()
@@ -217,7 +232,18 @@ func applyPostgresSchemasAndMigrations(
 	for _, db := range databases {
 		dbNames = append(dbNames, db.Name)
 	}
-	migrationItems, err := provisioner.BuildMigrationItems(dbNames)
+	if targetVersion == "" {
+		hasMigrations, hasErr := provisioner.HasMigrations(dbNames, "expand")
+		if hasErr != nil {
+			return hasErr
+		}
+		if !hasMigrations {
+			return nil
+		}
+		return fmt.Errorf("target version required when embedded expand migrations exist")
+	}
+	fmt.Fprintf(out, "Applying %s expand migrations up to %s...\n", service, targetVersion)
+	migrationItems, err := provisioner.BuildMigrationItems(dbNames, "expand", targetVersion)
 	if err != nil {
 		return fmt.Errorf("collect migrations: %w", err)
 	}

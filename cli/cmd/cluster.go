@@ -65,6 +65,7 @@ invocation. Explicit flags always win over saved context defaults.`,
 	cluster.AddCommand(newClusterSetChannelCmd())
 	cluster.AddCommand(newClusterPreflightCmd())
 	cluster.AddCommand(newClusterMigrateCmd())
+	cluster.AddCommand(newClusterDataMigrateCmd())
 	cluster.AddCommand(newClusterSeedCmd())
 
 	return cluster
@@ -376,6 +377,8 @@ Default mode (read-only, no SOPS decryption):
   - Infrastructure reachability: Postgres/Yugabyte, Kafka, Zookeeper, ClickHouse,
     Redis — port/connection probes only, not query performance or replication state.
   - Application services: HTTP /health endpoints.
+  - Database migrations: embedded SQL migrations are compared against the
+    PostgreSQL/YugabyteDB _migrations ledger when credentials are available.
   - Control plane: read-only view of SystemTenantID + Quartermaster address from
     the active context. Authenticated checks are skipped (reported as
     "not verified") — pass --deep for the full check.
@@ -384,6 +387,8 @@ Default mode (read-only, no SOPS decryption):
   - All of the above, plus authenticated Quartermaster/Commodore/Purser checks:
     default cluster + platform-official cluster flags, operator-account presence
     in the system tenant, pricing config for clusters that declared it.
+  - YugabyteDB migration checks can use DATABASE_PASSWORD from decrypted
+    env_files when postgres.password is not set directly in the manifest.
   - Requires a readable age key (SOPS_AGE_KEY_FILE, --age-key, or the active
     context's set-age-key value). Fails explicitly if the key is missing or
     decryption errors — never silently falls back.
@@ -566,8 +571,10 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 	fmt.Fprintln(out, "")
 
 	var serviceToken string
+	var sharedEnv map[string]string
 	if deep {
-		sharedEnv, err := rc.SharedEnv()
+		var err error
+		sharedEnv, err = rc.SharedEnv()
 		if err != nil {
 			ux.FormatError(cmd.ErrOrStderr(), fmt.Errorf("--deep requires SOPS decryption, which failed: %w", err), "set an age key via 'frameworks context set-age-key <path>' or SOPS_AGE_KEY_FILE, then re-run")
 			return fmt.Errorf("--deep: SOPS decrypt failed: %w", err)
@@ -582,6 +589,10 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 	var remediationSteps []ux.NextStep
 	totalChecks := 0
 	passedChecks := 0
+
+	doctorSSHKey := stringFlag(cmd, "ssh-key").Value
+	doctorSSHPool := fwssh.NewPool(30*time.Second, doctorSSHKey)
+	defer doctorSSHPool.Close()
 
 	fmt.Fprintln(cmd.OutOrStdout(), "Infrastructure Health:")
 	fmt.Fprintln(cmd.OutOrStdout(), "")
@@ -607,12 +618,29 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 	}
 
 	if manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled {
-		host, ok := manifest.GetHost(manifest.Infrastructure.Postgres.Host)
+		pgHostName := manifest.Infrastructure.Postgres.Host
+		if manifest.Infrastructure.Postgres.IsYugabyte() && len(manifest.Infrastructure.Postgres.Nodes) > 0 {
+			pgHostName = manifest.Infrastructure.Postgres.Nodes[0].Host
+		}
+		host, ok := manifest.GetHost(pgHostName)
 		if !ok {
-			recordMiss("Postgres/Yugabyte", fmt.Sprintf("host %q not found in manifest", manifest.Infrastructure.Postgres.Host))
+			recordMiss("Postgres/Yugabyte", fmt.Sprintf("host %q not found in manifest", pgHostName))
 		} else {
-			checker := &health.PostgresChecker{User: "postgres", Password: "", Database: "postgres"}
-			runInfraCheck("Postgres/Yugabyte", checker.Check(host.ExternalIP, manifest.Infrastructure.Postgres.Port))
+			password, pwErr := resolveYugabytePassword(manifest.Infrastructure.Postgres, sharedEnv)
+			if pwErr != nil {
+				if manifest.Infrastructure.Postgres.IsYugabyte() && !deep {
+					ux.Warn(out, fmt.Sprintf("Postgres/Yugabyte: authenticated check unavailable without decrypted Yugabyte password (%v); run with --deep to include it", pwErr))
+					remediationSteps = append(remediationSteps, ux.NextStep{
+						Cmd: "frameworks cluster doctor --deep",
+						Why: "Decrypt gitops secrets so doctor can run authenticated Yugabyte probes.",
+					})
+				} else {
+					recordMiss("Postgres/Yugabyte", pwErr.Error())
+				}
+			} else {
+				checker := &health.PostgresChecker{User: postgresDoctorUser(manifest.Infrastructure.Postgres), Password: password, Database: "postgres"}
+				runInfraCheck("Postgres/Yugabyte", checker.Check(host.ExternalIP, manifest.Infrastructure.Postgres.EffectivePort()))
+			}
 		}
 	}
 
@@ -684,13 +712,9 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 		if !svc.Enabled {
 			continue
 		}
-		if svc.Host == "" {
-			continue
-		}
-
-		host, ok := manifest.GetHost(svc.Host)
+		host, ok := firstServiceHost(manifest, svc)
 		if !ok {
-			recordMiss(name, fmt.Sprintf("host %q not found in manifest", svc.Host))
+			recordMiss(name, "host not found in manifest")
 			continue
 		}
 
@@ -717,12 +741,9 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			if !svc.Enabled {
 				continue
 			}
-			if svc.Host == "" {
-				continue
-			}
-			host, ok := manifest.GetHost(svc.Host)
+			host, ok := firstServiceHost(manifest, svc)
 			if !ok {
-				recordMiss(name, fmt.Sprintf("host %q not found in manifest", svc.Host))
+				recordMiss(name, "host not found in manifest")
 				continue
 			}
 			port, err := resolvePort(name, svc)
@@ -736,6 +757,62 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			}
 			checker := &health.HTTPChecker{Path: path, Timeout: 5 * time.Second}
 			runInfraCheck(name, checker.Check(host.ExternalIP, port))
+		}
+		fmt.Fprintln(out, "")
+	}
+
+	if manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled {
+		fmt.Fprintln(cmd.OutOrStdout(), "Database Migrations:")
+		fmt.Fprintln(cmd.OutOrStdout(), "")
+		pgHostName := manifest.Infrastructure.Postgres.Host
+		if manifest.Infrastructure.Postgres.IsYugabyte() && len(manifest.Infrastructure.Postgres.Nodes) > 0 {
+			pgHostName = manifest.Infrastructure.Postgres.Nodes[0].Host
+		}
+		host, ok := manifest.GetHost(pgHostName)
+		if !ok {
+			recordMiss("Postgres migrations", fmt.Sprintf("host %q not found in manifest", pgHostName))
+		} else {
+			doctorTarget, targetErr := resolveMigrationTarget(rc, "")
+			if targetErr != nil {
+				doctorTarget = ""
+			}
+			password, pwErr := resolveYugabytePassword(manifest.Infrastructure.Postgres, sharedEnv)
+			if pwErr != nil && manifest.Infrastructure.Postgres.IsYugabyte() && !deep {
+				ux.Warn(out, fmt.Sprintf("Postgres migrations: ledger check unavailable without decrypted Yugabyte password (%v); run with --deep to include it", pwErr))
+				remediationSteps = append(remediationSteps, ux.NextStep{
+					Cmd: "frameworks cluster doctor --deep",
+					Why: "Decrypt gitops secrets so doctor can query Yugabyte _migrations.",
+				})
+			} else {
+				totalChecks++
+				result := doctorPostgresMigrations(cmd.Context(), doctorSSHPool, manifest, host, password, doctorTarget)
+				printHealthResult(cmd, "Postgres migrations", result)
+				if result.OK {
+					passedChecks++
+				} else if strings.Contains(result.Error, "--deep") {
+					remediationSteps = append(remediationSteps, ux.NextStep{
+						Cmd: "frameworks cluster doctor --deep",
+						Why: "Decrypt gitops secrets so doctor can query Yugabyte _migrations.",
+					})
+				} else {
+					remediationSteps = append(remediationSteps, ux.NextStep{
+						Cmd: "frameworks cluster migrate --phase expand --dry-run",
+						Why: "Preview pending embedded PostgreSQL/YugabyteDB migrations and checksum drift.",
+					})
+				}
+			}
+
+			totalChecks++
+			dmResult := doctorDataMigrations(cmd.Context(), doctorSSHPool, manifest, "", doctorTarget)
+			printHealthResult(cmd, "Data migrations", dmResult)
+			if dmResult.OK {
+				passedChecks++
+			} else {
+				remediationSteps = append(remediationSteps, ux.NextStep{
+					Cmd: "frameworks cluster data-migrate list",
+					Why: "List required data migrations and their current state.",
+				})
+			}
 		}
 		fmt.Fprintln(out, "")
 	}

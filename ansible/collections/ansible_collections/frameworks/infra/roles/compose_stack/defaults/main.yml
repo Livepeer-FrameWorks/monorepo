@@ -24,6 +24,7 @@ compose_stack_service: {}
 compose_stack_env: {}
 compose_stack_registry_auth: {}
 compose_stack_require_registry_auth: false
+compose_stack_data_migrations_marker: ""
 compose_stack_pull: "policy" # policy | always | missing | never
 compose_stack_wait: true
 compose_stack_validate_timeout: 120

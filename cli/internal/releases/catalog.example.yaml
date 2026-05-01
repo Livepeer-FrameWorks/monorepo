@@ -1,0 +1,30 @@
+# Shape illustration for cli/internal/releases/catalog.yaml. NOT loaded.
+#
+# service_databases is the explicit ownership map: each application service
+# whose deploy depends on schema/data migrations names the platform database
+# it owns. Empty map = no service has declared ownership; every gate that
+# needs ownership info reports "service database not declared in catalog"
+# rather than passing silently.
+service_databases:
+  purser: purser
+  quartermaster: quartermaster
+  commodore: commodore
+  periscope-ingest: periscope
+  periscope-query: periscope
+
+# releases is the upgrade-knowledge surface. Each entry is a real platform
+# release. Path(from, to) walks compatible_from + requires_intermediate to
+# determine which intermediates an upgrade must transit.
+releases:
+  - version: v0.5.0
+    min_cli_version: v0.5.0
+    compatible_from: v0.4.0
+    requires_intermediate: []
+    required_data_migrations:
+      - id: billing-rating-v2
+        service: purser
+        introduced_in: v0.5.0
+        required_before_phase: postdeploy
+        # required_before_version is optional; defaults to the next release
+        # after introduced_in. Set explicitly to extend the deadline.
+        required_before_version: v0.6.0

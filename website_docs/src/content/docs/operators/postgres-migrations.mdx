@@ -8,8 +8,9 @@ sidebar:
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Rolling deploy safety">
-  Apply migrations **before** deploying service versions that depend on new columns/tables. See
-  [Running Cluster Upgrades](/operators/running-upgrades) for the full upgrade sequence.
+  Apply expand-compatible migrations **before** deploying service versions that depend on new
+  columns/tables. Destructive contract migrations and large data migrations are separate release
+  steps. See [Running Cluster Upgrades](/operators/running-upgrades) for the full upgrade sequence.
 </Aside>
 
 ## Overview
@@ -17,46 +18,63 @@ import { Aside } from "@astrojs/starlight/components";
 PostgreSQL and YugabyteDB schema changes are managed through embedded,
 versioned migrations:
 
-| Scenario      | What to use                                                                         |
-| ------------- | ----------------------------------------------------------------------------------- |
-| Fresh install | Bootstrap schemas via `frameworks cluster init`                                     |
-| Upgrading     | `frameworks cluster migrate` applies migrations from `pkg/database/sql/migrations/` |
+| Scenario      | What to use                                                                                                                |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Fresh install | Bootstrap baseline schemas and `expand` migrations via `frameworks cluster init` or `frameworks cluster provision --ready` |
+| Upgrading     | `frameworks cluster migrate` applies migrations from `pkg/database/sql/migrations/`                                        |
 
 ## Migration structure
 
-Migrations are organized by release version:
+Migrations are organized by target database, release version, and phase:
 
 ```
 pkg/database/sql/migrations/
-└── v0.2.11/
-    ├── 001_bootstrap_tenant_aliases.sql
-    └── 002_crypto_wallet_status_and_quote.sql
+└── purser/
+    └── v0.3.0/
+        ├── expand/
+        │   ├── 001_add_rating_tables.sql
+        │   └── 002_add_rating_index.notx.sql
+        ├── postdeploy/
+        │   └── 001_require_rating_v2_complete.sql
+        └── contract/
+            └── 001_drop_legacy_rating_json.sql
 ```
 
-The CLI embeds these files, expands them for each PostgreSQL/Yugabyte database
-listed in the manifest, and records applied files in that database's
-`_migrations` table.
+The first path segment after `migrations/` must match a configured database
+name, for example `purser`, `quartermaster`, or `commodore`. The CLI embeds
+these files, applies only migrations whose database exists in the manifest, and
+records applied files in that database's `_migrations` table.
 
 ## Upgrade procedure
 
 1. **Check release notes** for required migrations
-2. **Apply migrations** through the CLI:
+2. **Confirm the phase**. Routine rolling upgrades apply `expand` migrations.
+   `postdeploy` migrations run after new binaries are live. `contract`
+   migrations require the release's explicit cleanup runbook.
+3. **Apply migrations** through the CLI:
 
 ```bash
-frameworks cluster migrate
+frameworks cluster migrate validate
+frameworks cluster migrate --phase expand
 ```
 
-3. **Verify** the changes:
+4. **Verify** the changes:
 
 ```bash
-psql -h <host> -d quartermaster -c "SELECT version, seq, filename FROM _migrations ORDER BY version, seq;"
+psql -h <host> -d purser -c "SELECT version, phase, seq, filename, checksum FROM _migrations ORDER BY version, phase, seq;"
 ```
 
-4. **Deploy** new service versions:
+5. **Deploy** new service versions:
 
 ```bash
 frameworks cluster upgrade quartermaster --version v1.1.0
 ```
+
+6. **Run required data migrations** after compatible binaries are deployed.
+   Catalog-declared service-owned background migrations are managed with
+   `frameworks cluster data-migrate`. If a service has not adopted the
+   data-migrations command surface, the CLI reports that as a blocker instead
+   of treating the migration as complete.
 
 ## Writing migrations
 
@@ -67,13 +85,24 @@ Guidelines for contributors:
 3. **Use defaults or NULL for new columns** - safe for rollback
 4. **Update bootstrap schema** - corresponding file in `pkg/database/sql/schema/` must reflect final state
 5. **One migration per logical change** - easier to track and debug
+6. **Put the file in the correct phase directory** - `expand`, `postdeploy`, or
+   `contract`
+7. **Do not hide large data rewrites inside schema migrations** - use a
+   resumable background data migration when row counts, locks, external calls, or billing
+   semantics make the work operationally significant
+8. **Use `.notx.sql` only when PostgreSQL requires autocommit** - for example
+   `CREATE INDEX CONCURRENTLY`; keep the file idempotent because the SQL and
+   `_migrations` insert cannot be one database transaction in that mode
+
+Run the validator before opening a PR:
+
+```bash
+frameworks cluster migrate validate
+```
 
 Example migration file:
 
 ```sql
--- Migration: v0.2.11/001_bootstrap_tenant_aliases.sql
--- Required before: quartermaster v0.2.11
-
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'quartermaster') THEN
@@ -88,11 +117,72 @@ END
 $$;
 ```
 
+Example layout:
+
+```text
+pkg/database/sql/migrations/purser/v0.3.0/
+├── expand/
+│   ├── 001_add_billing_rating_tables.sql
+│   └── 002_add_rating_lookup_index.notx.sql
+├── postdeploy/
+│   └── 001_require_billing_rating_v2_complete.sql
+└── contract/
+    └── 001_drop_legacy_billing_json.sql
+```
+
+Do not place files directly under `pkg/database/sql/migrations/vX.Y.Z/`. The
+runner treats that as an invalid layout and fails instead of silently ignoring
+the file.
+
+## Background Data Migrations
+
+Schema migrations make the destination shape available. They do not guarantee
+existing rows already contain the new semantic data.
+
+Use SQL data migrations only when the transform is small, deterministic, and
+safe to run inside the migration budget. Prefer service-owned background data
+migrations for large tables, tenant-by-tenant work, external lookups,
+billing/rating recalculation, or anything that must expose progress.
+
+Background data migrations should be:
+
+- **idempotent** - safe to re-run after partial completion
+- **batched and throttled** - avoid long locks and transaction bloat
+- **observable** - report scanned/changed/skipped/error counts
+- **resumable** - persist progress or use deterministic checkpoints
+- **tenant-scoped** - every query must preserve `tenant_id` boundaries
+- **verified** - include a dry-run or check mode where practical
+
+For billing migrations, do not rewrite finalized invoices unless the release is
+explicitly correcting historical data. Prefer effective-dated pricing history,
+new draft invoice recalculation, and immutable invoice snapshots for audit.
+
+## Local compose
+
+The root Docker Compose stack is a seeded development environment. PostgreSQL
+loads baseline schema files and demo seeds only when the `postgres_data` volume
+is first created. For local development, it is acceptable to reset the seeded
+database instead of preserving data through every incompatible schema change:
+
+```bash
+docker compose down -v
+docker compose up -d
+```
+
+Do not use that shortcut for operator-managed clusters. Deployed clusters still
+need migrations, background data migrations, and rollback-safe release sequencing.
+
 ## Rollback
 
 - **Nullable columns are safe to leave** - older service versions simply won't populate them
 - **Don't drop columns during rollback** unless explicitly required
 - Re-deploying an older service version is usually sufficient
+- **Do not depend on down migrations for normal rollback** - rollback should
+  usually mean redeploying the previous binary while the expanded schema stays
+  in place
+- **Contract migrations end the normal rollback window** - after old fields are
+  dropped or constraints are narrowed, recovery usually requires a forward fix
+  or database restore
 
 ## Troubleshooting
 

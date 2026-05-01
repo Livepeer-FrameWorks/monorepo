@@ -2,6 +2,7 @@
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
 		proto graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
+		validate-migrations \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
 		ansible-galaxy-install ansible-lint ansible-yamllint ansible-test ansible-check ansible-molecule ansible-molecule-run ansible-molecule-all provision-hello
 
@@ -529,6 +530,10 @@ lint-report:
 
 lint-analyze:
 	@./scripts/lint-analyze.sh
+
+validate-migrations:
+	@echo "Validating embedded SQL migrations..."
+	@cd cli && go run . cluster migrate validate
 
 ci-local:
 	@failed=0; \

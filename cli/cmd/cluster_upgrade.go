@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -10,8 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/cli/internal/releases"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/detect"
+	serviceexec "frameworks/cli/pkg/exec"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
@@ -29,6 +32,47 @@ func copyMetadata(in map[string]any) map[string]any {
 	return out
 }
 
+func detectServicePlatformVersion(ctx context.Context, sshPool *ssh.Pool, host inventory.Host, runtime string, state *detect.ServiceState) (string, error) {
+	mode := serviceexec.Mode(state.Mode)
+	if mode != serviceexec.ModeDocker {
+		mode = serviceexec.ModeNative
+	}
+	shellCmd, err := serviceexec.Command(serviceexec.Spec{
+		Mode:          mode,
+		ContainerName: state.Metadata["container_name"],
+		BinaryName:    runtime,
+	}, []string{"version", "--json"})
+	if err != nil {
+		return "", err
+	}
+	cfg := &ssh.ConnectionConfig{
+		Address:  host.ExternalIP,
+		Port:     22,
+		User:     host.User,
+		HostName: host.Name,
+		Timeout:  30 * time.Second,
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	result, err := sshPool.Run(runCtx, cfg, shellCmd)
+	if err != nil {
+		return "", fmt.Errorf("ssh run: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return "", fmt.Errorf("exit %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	var payload struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal([]byte(result.Stdout), &payload); err != nil {
+		return "", fmt.Errorf("parse version output: %w", err)
+	}
+	if strings.TrimSpace(payload.Version) == "" {
+		return "", fmt.Errorf("version output did not include platform version")
+	}
+	return strings.TrimSpace(payload.Version), nil
+}
+
 // newClusterUpgradeCmd creates the upgrade command
 func newClusterUpgradeCmd() *cobra.Command {
 	var version string
@@ -37,6 +81,8 @@ func newClusterUpgradeCmd() *cobra.Command {
 	var yes bool
 	var noRollback bool
 	var all bool
+	var skipMigrationCheck bool
+	var skipDataMigrationCheck bool
 
 	cmd := &cobra.Command{
 		Use:   "upgrade [service]",
@@ -60,7 +106,12 @@ Version can be:
   - Channel: stable, rc (uses latest from channel)
   - Default: cluster channel (or stable)
 
-Use --all to upgrade all enabled services in dependency order.`,
+Use --all to upgrade all enabled services in dependency order.
+
+Before upgrading services that depend on PostgreSQL/YugabyteDB schema changes,
+run expand-compatible migrations with 'frameworks cluster migrate'. Service
+rollback does not undo schema or data migrations, so destructive contract steps
+and required data migrations must follow the target release notes.`,
 		Example: `  frameworks cluster upgrade quartermaster
   frameworks cluster upgrade commodore --version v0.0.0-rc2
   frameworks cluster upgrade bridge --version rc --dry-run
@@ -81,9 +132,9 @@ Use --all to upgrade all enabled services in dependency order.`,
 			}
 			defer rc.Cleanup()
 			if all {
-				return runUpgradeAll(cmd, rc, version, dryRun, skipValidation, yes, noRollback)
+				return runUpgradeAll(cmd, rc, version, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck)
 			}
-			return runUpgrade(cmd, rc, args[0], version, dryRun, skipValidation, yes, noRollback)
+			return runUpgrade(cmd, rc, args[0], version, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck)
 		},
 	}
 
@@ -93,7 +144,40 @@ Use --all to upgrade all enabled services in dependency order.`,
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompt")
 	cmd.Flags().BoolVar(&noRollback, "no-rollback", false, "Skip automatic rollback on health check failure")
 	cmd.Flags().BoolVar(&all, "all", false, "Upgrade all enabled services in dependency order")
+	cmd.Flags().BoolVar(&skipMigrationCheck, "skip-migration-check", false, "DANGEROUS: skip pre-deploy schema migration gate (expand + prior postdeploy)")
+	cmd.Flags().BoolVar(&skipDataMigrationCheck, "skip-data-migration-check", false, "DANGEROUS: skip pre-deploy data migration gate (prior required data migrations)")
 
+	cmd.AddCommand(newClusterUpgradePlanCmd())
+
+	return cmd
+}
+
+func newClusterUpgradePlanCmd() *cobra.Command {
+	var version string
+
+	cmd := &cobra.Command{
+		Use:   "plan",
+		Short: "Show an upgrade plan without changing the cluster",
+		Long: `Show a non-mutating upgrade plan for the selected release.
+
+The plan includes service rollout order and embedded PostgreSQL/YugabyteDB
+migrations grouped by phase. Upgrade gates use the embedded release catalog,
+live applied migration state, and service-owned data-migration state before
+rollout.`,
+		Example: `  frameworks cluster upgrade plan
+  frameworks cluster upgrade plan --version v0.3.0`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
+			}
+			defer rc.Cleanup()
+			return runUpgradePlan(cmd, rc, version)
+		},
+	}
+
+	cmd.Flags().StringVar(&version, "version", "", "Version to plan for (stable, rc, v1.2.3); defaults to cluster channel")
 	return cmd
 }
 
@@ -112,8 +196,107 @@ func resolveUpgradeVersion(cmd *cobra.Command, manifest *inventory.Manifest, ver
 	return version
 }
 
+func resolveUpgradePlanTarget(rc *resolvedCluster, version string) (string, error) {
+	channel, resolvedVersion := gitops.ResolveVersion(version)
+	gitopsManifest, err := gitops.FetchFromRepositories(gitops.FetchOptions{}, rc.ReleaseRepos, channel, resolvedVersion)
+	if err != nil {
+		return "", fmt.Errorf("resolve upgrade plan target from %s/%s: %w", channel, resolvedVersion, err)
+	}
+	target := strings.TrimSpace(gitopsManifest.PlatformVersion)
+	if !concreteVersionPattern.MatchString(target) {
+		return "", fmt.Errorf("selected release manifest has non-concrete platform_version %q; expected vX.Y.Z", target)
+	}
+	return target, nil
+}
+
+func runUpgradePlan(cmd *cobra.Command, rc *resolvedCluster, version string) error {
+	manifest := rc.Manifest
+	version = resolveUpgradeVersion(cmd, manifest, version)
+
+	target, err := resolveUpgradePlanTarget(rc, version)
+	if err != nil {
+		return err
+	}
+
+	planner := orchestrator.NewPlanner(manifest)
+	plan, err := planner.Plan(context.Background(), orchestrator.ProvisionOptions{
+		Phase: orchestrator.PhaseAll,
+	})
+	if err != nil {
+		return fmt.Errorf("build service rollout plan: %w", err)
+	}
+	services := collectUpgradeableServices(plan)
+
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Upgrade plan (channel: %s, version: %s)", manifest.ResolvedChannel(), version))
+	if len(services) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "Services: none found in manifest")
+	} else {
+		fmt.Fprintf(cmd.OutOrStdout(), "Services: %s\n", strings.Join(services, " -> "))
+	}
+
+	dbNames := postgresDatabaseNames(manifest)
+	switch {
+	case len(dbNames) == 0:
+		fmt.Fprintln(cmd.OutOrStdout(), "\nPostgreSQL/YugabyteDB migrations: postgres not enabled")
+	case target == "":
+		fmt.Fprintln(cmd.OutOrStdout(), "\nPostgreSQL/YugabyteDB migrations: skipped (target version unresolved)")
+	default:
+		fmt.Fprintf(cmd.OutOrStdout(), "\nPostgreSQL/YugabyteDB migrations (up to %s):\n", target)
+		for _, phase := range []string{"expand", "postdeploy", "contract"} {
+			items, itemErr := provisioner.BuildMigrationItems(dbNames, phase, target)
+			if itemErr != nil {
+				return fmt.Errorf("collect %s migrations: %w", phase, itemErr)
+			}
+			printMigrationPlanPhase(cmd, phase, items)
+		}
+	}
+
+	fmt.Fprintln(cmd.OutOrStdout(), "\nPlanner state:")
+	fmt.Fprintln(cmd.OutOrStdout(), "  target version: from selected GitOps/release manifest")
+	fmt.Fprintln(cmd.OutOrStdout(), "  current service versions: not implemented yet")
+	fmt.Fprintln(cmd.OutOrStdout(), "  embedded SQL migrations: available")
+	fmt.Fprintln(cmd.OutOrStdout(), "  embedded release catalog: available")
+	fmt.Fprintln(cmd.OutOrStdout(), "  applied SQL migration query: checked by upgrade gates")
+	fmt.Fprintln(cmd.OutOrStdout(), "  service data migration state: checked by data-migration gates")
+	fmt.Fprintln(cmd.OutOrStdout(), "\nSuggested flow:")
+	fmt.Fprintln(cmd.OutOrStdout(), "  frameworks cluster migrate --phase expand --dry-run")
+	fmt.Fprintln(cmd.OutOrStdout(), "  frameworks cluster migrate --phase expand")
+	fmt.Fprintf(cmd.OutOrStdout(), "  frameworks cluster upgrade --all --version %s --dry-run\n", version)
+	fmt.Fprintf(cmd.OutOrStdout(), "  frameworks cluster upgrade --all --version %s --yes\n", version)
+	fmt.Fprintln(cmd.OutOrStdout(), "  frameworks cluster status")
+	return nil
+}
+
+func postgresDatabaseNames(manifest *inventory.Manifest) []string {
+	pg := manifest.Infrastructure.Postgres
+	if pg == nil || !pg.Enabled {
+		return nil
+	}
+	dbNames := make([]string, 0, len(pg.Databases))
+	for _, db := range pg.Databases {
+		dbNames = append(dbNames, db.Name)
+	}
+	return dbNames
+}
+
+func printMigrationPlanPhase(cmd *cobra.Command, phase string, items []map[string]any) {
+	if len(items) == 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "  %s: none\n", phase)
+		return
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "  %s:\n", phase)
+	for _, item := range items {
+		tx := "tx"
+		if transactional, ok := item["transactional"].(bool); ok && !transactional {
+			tx = "notx"
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "    - %s/%s/%s (%s)\n",
+			item["db"], item["version"], item["filename"], tx)
+	}
+}
+
 // runUpgrade executes the upgrade command against an already-resolved manifest.
-func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version string, dryRun, skipValidation, yes, noRollback bool) error {
+func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version string, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck bool) error {
 	manifest := rc.Manifest
 	manifestPath := rc.ManifestPath
 	var err error
@@ -182,7 +365,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	if !found {
 		if svcConfig, ok := manifest.Services[serviceName]; ok {
 			if svcConfig.Enabled {
-				host, found = manifest.GetHost(svcConfig.Host)
+				host, found = firstServiceHost(manifest, svcConfig)
 			}
 		}
 	}
@@ -191,7 +374,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	if !found {
 		if ifaceConfig, ok := manifest.Interfaces[serviceName]; ok {
 			if ifaceConfig.Enabled {
-				host, found = manifest.GetHost(ifaceConfig.Host)
+				host, found = firstServiceHost(manifest, ifaceConfig)
 			}
 		}
 	}
@@ -200,7 +383,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	if !found {
 		if obsConfig, ok := manifest.Observability[serviceName]; ok {
 			if obsConfig.Enabled {
-				host, found = manifest.GetHost(obsConfig.Host)
+				host, found = firstServiceHost(manifest, obsConfig)
 			}
 		}
 	}
@@ -236,6 +419,16 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	previousMode := state.Mode
 
 	fmt.Fprintf(cmd.OutOrStdout(), "  Current: %s (mode: %s, running: %v)\n", state.Version, state.Mode, state.Running)
+	currentPlatformVersion := ""
+	if releases.ServiceDatabase(serviceName) != "" {
+		platformVersion, platformVersionErr := detectServicePlatformVersion(ctx, sshPool, host, deployName, state)
+		if platformVersionErr != nil {
+			fmt.Fprintf(cmd.OutOrStderr(), "  WARNING: could not read current platform version from %s version --json: %v\n", deployName, platformVersionErr)
+		} else {
+			currentPlatformVersion = platformVersion
+			fmt.Fprintf(cmd.OutOrStdout(), "  Current platform: %s\n", currentPlatformVersion)
+		}
+	}
 
 	// Fetch GitOps manifest for new version
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[2/6] Fetching GitOps manifest...\n")
@@ -278,22 +471,27 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	manifestDir := filepath.Dir(rc.ManifestPath)
 	sharedEnv, envErr := rc.SharedEnv()
 	if envErr != nil {
-		// Upgrades for services that rely on SOPS-backed secrets fail
-		// loud; non-secret services still work because their vars
-		// builders tolerate missing env values.
-		fmt.Fprintf(cmd.OutOrStderr(), "  warning: shared env decrypt failed: %v\n", envErr)
-		sharedEnv = nil
+		return fmt.Errorf("load manifest env_files: %w", envErr)
 	}
-	config, err := buildTaskConfig(task, manifest, map[string]interface{}{}, true, manifestDir, sharedEnv, rc.ReleaseRepos)
+	config, err := buildTaskConfig(task, manifest, map[string]any{}, true, manifestDir, sharedEnv, rc.ReleaseRepos)
 	if err != nil {
 		return fmt.Errorf("build upgrade config: %w", err)
 	}
-	// Override the resolved version with the one requested by the upgrade
-	// command; buildTaskConfig pulls from the manifest, which may be pinned
-	// to a different version than the user is moving to.
-	config.Version = version
+	if validateErr := validateProductionServiceEnv(manifest, serviceName, config.EnvVars); validateErr != nil {
+		return fmt.Errorf("upgrade target %s: %w", deployName, validateErr)
+	}
+	// Use the concrete artifact version from the selected GitOps release.
+	// Selectors such as "stable" are not installable service versions.
+	config.Version = svcInfo.Version
 	config.Mode = state.Mode
 	rc.applyReleaseMetadata(config.Metadata)
+
+	// Pre-deploy gate: schema + prior data migrations. Runs in dry-run too —
+	// gate is read-only and fail-closed semantics matter most when the
+	// operator is about to commit.
+	if gateErr := runUpgradePreDeployGate(ctx, cmd, rc, sshPool, manifest, gitopsManifest.PlatformVersion, currentPlatformVersion, serviceName, skipMigrationCheck, skipDataMigrationCheck); gateErr != nil {
+		return gateErr
+	}
 
 	if dryRun {
 		fmt.Fprintf(cmd.OutOrStdout(), "\n[DRY-RUN] Would upgrade %s from %s to %s\n", serviceName, state.Version, svcInfo.Version)
@@ -446,7 +644,7 @@ func saveUpgradedVersion(manifest *inventory.Manifest, serviceName, newVersion, 
 }
 
 // runUpgradeAll upgrades all enabled services in dependency order.
-func runUpgradeAll(cmd *cobra.Command, rc *resolvedCluster, version string, dryRun, skipValidation, yes, noRollback bool) error {
+func runUpgradeAll(cmd *cobra.Command, rc *resolvedCluster, version string, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck bool) error {
 	manifest := rc.Manifest
 	var err error
 	version = resolveUpgradeVersion(cmd, manifest, version)
@@ -471,14 +669,10 @@ func runUpgradeAll(cmd *cobra.Command, rc *resolvedCluster, version string, dryR
 	fmt.Fprintf(cmd.OutOrStdout(), "Order: %s\n\n", strings.Join(services, " -> "))
 
 	if dryRun {
-		for _, svc := range services {
-			fmt.Fprintf(cmd.OutOrStdout(), "  [DRY-RUN] Would upgrade: %s\n", svc)
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), "\nDry-run complete. Use without --dry-run to execute.")
-		return nil
+		fmt.Fprintln(cmd.OutOrStdout(), "Dry-run mode: checking each service gate without applying changes.")
 	}
 
-	if !yes {
+	if !dryRun && !yes {
 		fmt.Fprintf(os.Stderr, "Upgrade %d services to %s? [y/N]: ", len(services), version)
 		reader := bufio.NewReader(os.Stdin)
 		response, readErr := reader.ReadString('\n')
@@ -495,7 +689,7 @@ func runUpgradeAll(cmd *cobra.Command, rc *resolvedCluster, version string, dryR
 	var succeeded, failed []string
 	for i, svc := range services {
 		fmt.Fprintf(cmd.OutOrStdout(), "\n[%d/%d] Upgrading %s...\n", i+1, len(services), svc)
-		if err := runUpgrade(cmd, rc, svc, version, false, skipValidation, true, noRollback); err != nil {
+		if err := runUpgrade(cmd, rc, svc, version, dryRun, skipValidation, true, noRollback, skipMigrationCheck, skipDataMigrationCheck); err != nil {
 			fmt.Fprintf(cmd.OutOrStderr(), "  ✗ %s failed: %v\n", svc, err)
 			failed = append(failed, svc)
 			fmt.Fprintf(cmd.OutOrStderr(), "\nStopping upgrade sequence. Succeeded: %v, Failed: %v, Remaining: %v\n",
@@ -503,6 +697,11 @@ func runUpgradeAll(cmd *cobra.Command, rc *resolvedCluster, version string, dryR
 			return fmt.Errorf("upgrade --all stopped: %s failed", svc)
 		}
 		succeeded = append(succeeded, svc)
+	}
+
+	if dryRun {
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Dry-run complete: %d service(s) passed upgrade gates", len(succeeded)))
+		return nil
 	}
 
 	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("All %d services upgraded", len(succeeded)))
@@ -535,16 +734,17 @@ func waitForHealth(ctx context.Context, check func() error, interval, timeout ti
 	}
 }
 
-// collectUpgradeableServices extracts deduplicated service IDs from an
-// execution plan, stripping the @host suffix that the planner appends for
-// multi-host replicated services. Infrastructure is included now that
-// role-based provisioners own their own restart semantics via notified
-// handlers — `cluster upgrade --all` no longer needs to carve it out.
+// collectUpgradeableServices extracts deduplicated service IDs from app and
+// interface plan tasks. Infrastructure has release-artifact semantics per
+// role and is upgraded through its own command paths, not this service loop.
 func collectUpgradeableServices(plan *orchestrator.ExecutionPlan) []string {
 	seen := make(map[string]bool)
 	var services []string
 	for _, batch := range plan.Batches {
 		for _, task := range batch {
+			if task.Phase == orchestrator.PhaseInfrastructure {
+				continue
+			}
 			svcID := task.ServiceID
 			if !seen[svcID] {
 				seen[svcID] = true

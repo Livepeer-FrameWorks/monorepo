@@ -1,0 +1,7 @@
+service_databases:
+  commodore: commodore
+  periscope-ingest: periscope
+  periscope-query: periscope
+  purser: purser
+  quartermaster: quartermaster
+releases: []

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
+	"frameworks/pkg/datamigrate"
 )
 
 func TestServiceComposeVarsUsesSeparateContainerPortAndHealthPath(t *testing.T) {
@@ -104,6 +105,43 @@ func TestServiceComposeVarsOmitsIncompleteRegistryAuth(t *testing.T) {
 	}
 	if got := vars["compose_stack_require_registry_auth"]; got != true {
 		t.Fatalf("compose_stack_require_registry_auth got %v, want true", got)
+	}
+}
+
+func TestServiceComposeVarsInstallsDataMigrationsMarkerFromMetadata(t *testing.T) {
+	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
+		ServiceName:  "purser",
+		DefaultPort:  18003,
+		DefaultImage: "example/purser:test",
+	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+		Mode:     "docker",
+		Metadata: map[string]any{"data_migrations": true},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceComposeVars: %v", err)
+	}
+
+	if got := vars["compose_stack_data_migrations_marker"]; got != datamigrate.AdoptionMarkerPath("purser") {
+		t.Fatalf("compose_stack_data_migrations_marker got %v", got)
+	}
+}
+
+func TestServiceComposeVarsInstallsDataMigrationsMarkerAtDeployName(t *testing.T) {
+	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
+		ServiceName:  "purser",
+		DefaultPort:  18003,
+		DefaultImage: "example/purser:test",
+	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+		Mode:       "docker",
+		DeployName: "billing-api",
+		Metadata:   map[string]any{"data_migrations": true},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceComposeVars: %v", err)
+	}
+
+	if got := vars["compose_stack_data_migrations_marker"]; got != datamigrate.AdoptionMarkerPath("billing-api") {
+		t.Fatalf("compose_stack_data_migrations_marker got %v", got)
 	}
 }
 

@@ -87,9 +87,12 @@ The CLI provisions in dependency order:
 
 Use `--only infrastructure|applications|interfaces` to run a single phase.
 
-`--ready` extends the pipeline with database migrations (`cluster init`) and static
-reference seeds (`cluster seed`), plus optional admin bootstrap if you pass
-`--bootstrap-admin-email`. Add `--seed-demo` to also load sample tenant/user/stream data.
+`--ready` extends the pipeline with `cluster init` and static reference seeds
+(`cluster seed`), plus optional admin bootstrap if you pass
+`--bootstrap-admin-email`. For PostgreSQL/YugabyteDB, `cluster init` applies
+baseline schemas first and then embedded `expand` migrations from the
+database/version/phase migration layout. Add `--seed-demo` to also load sample
+tenant/user/stream data.
 
 </Aside>
 

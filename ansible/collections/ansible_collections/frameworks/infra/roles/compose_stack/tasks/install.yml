@@ -17,6 +17,24 @@
   loop: "{{ compose_stack_files | dict2items }}"
   when: compose_stack_files | length > 0
 
+- name: Ensure data-migrations marker directory
+  ansible.builtin.file:
+    path: "{{ compose_stack_data_migrations_marker | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: compose_stack_data_migrations_marker | length > 0
+
+- name: Mark data-migrations adoption
+  ansible.builtin.copy:
+    dest: "{{ compose_stack_data_migrations_marker }}"
+    content: "{{ compose_stack_name }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when: compose_stack_data_migrations_marker | length > 0
+
 - name: Install Docker Engine packages
   ansible.builtin.package:
     name: "{{ compose_stack_docker_engine_packages_by_family[ansible_facts.os_family] | default(compose_stack_docker_engine_packages) }}"

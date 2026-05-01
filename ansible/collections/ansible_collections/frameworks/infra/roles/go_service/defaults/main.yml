@@ -23,6 +23,7 @@ go_service_livepeer_expected_wallet_address: ""
 go_service_internal_ca_bundle_pem: ""
 go_service_internal_tls_cert_pem: ""
 go_service_internal_tls_key_pem: ""
+go_service_data_migrations_marker: ""
 
 go_service_user: frameworks
 go_service_group: frameworks

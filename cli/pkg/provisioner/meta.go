@@ -25,3 +25,16 @@ func metaIntOr(m map[string]any, key string, def int) int {
 	}
 	return def
 }
+
+// metaBool returns a bool from Metadata, falling back to def when absent
+// or of the wrong type.
+func metaBool(m map[string]any, key string, def bool) bool {
+	v, ok := m[key]
+	if !ok {
+		return def
+	}
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return def
+}

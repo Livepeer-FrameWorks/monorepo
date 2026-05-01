@@ -19,6 +19,13 @@ upgrade command downloads or pulls the target release artifact, lets the role
 restart the service when the artifact or config changes, validates health, and
 rolls back on health-check failure unless `--no-rollback` is set.
 
+<Aside type="caution" title="Migrations are not magic data migrations">
+  `cluster migrate` applies PostgreSQL/YugabyteDB schema migrations. It does not prove that existing
+  rows have been transformed into a new semantic model, and it does not make destructive migrations
+  safe for rollback. Release notes must call out any required data migration, read/write flip, or
+  contract step.
+</Aside>
+
 ## Recommended flow
 
 <Steps>
@@ -31,7 +38,8 @@ rolls back on health-check failure unless `--no-rollback` is set.
 2. Preview database migrations:
 
    ```bash
-   frameworks cluster migrate --dry-run
+   frameworks cluster upgrade plan --version stable
+   frameworks cluster migrate --phase expand --dry-run
    ```
 
 3. Preview the service or cluster upgrade:
@@ -42,10 +50,11 @@ rolls back on health-check failure unless `--no-rollback` is set.
    ```
 
 4. Apply PostgreSQL/YugabyteDB migrations before upgrading services that depend
-   on new schema:
+   on new schema. This normal path assumes the pending migrations are compatible
+   with both the currently running service version and the target version:
 
    ```bash
-   frameworks cluster migrate
+   frameworks cluster migrate --phase expand
    ```
 
 5. Upgrade one service, or all enabled services in dependency order:
@@ -55,7 +64,17 @@ rolls back on health-check failure unless `--no-rollback` is set.
    frameworks cluster upgrade --all --yes
    ```
 
-6. Verify health after the rollout:
+6. Run any catalog-declared data migration after compatible binaries are
+   deployed. For example, a billing model migration may need to populate new
+   normalized tables from old JSONB columns before reads can be flipped:
+
+   ```bash
+   frameworks cluster data-migrate list --to-version v0.0.0
+   frameworks cluster data-migrate run <service>.<id> --dry-run
+   frameworks cluster data-migrate run <service>.<id>
+   ```
+
+7. Verify health and migration-specific checks after the rollout:
 
    ```bash
    frameworks cluster status
@@ -82,11 +101,37 @@ frameworks cluster set-channel stable
 frameworks cluster set-channel rc
 ```
 
-## Migrations
+## Schema and data migration phases
 
 PostgreSQL and YugabyteDB migrations are managed by `frameworks cluster
 migrate`. Run them before deploying service versions that require new tables,
 columns, or indexes.
+
+Normal rolling upgrades must follow an expand/data/postdeploy/contract model:
+
+| Phase      | What changes                                                            | Rollback expectation                                               |
+| ---------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Expand     | Add nullable/defaulted columns, tables, indexes, or broader constraints | Old and new binaries both run against the expanded schema          |
+| Deploy     | Roll out binaries that can read/write both shapes                       | Roll back by redeploying the old binary                            |
+| Data       | Populate new rows/columns from old data in batches                      | Background data migration is idempotent and safe to pause/resume   |
+| Postdeploy | Prefer or require the new shape once verified                           | Roll back only while fallback/dual-write remains                   |
+| Contract   | Drop old columns/tables/values and fallback code                        | Not a normal rollback point; requires a new forward fix or restore |
+
+Do not put destructive contract work in the same normal upgrade step as the
+expand work. Column drops, table drops, enum/check narrowing, required fields
+without a complete background data migration, and semantic rewrites that old
+binaries cannot handle require a later contract release or an explicit downtime
+runbook.
+
+For billing and other audit-sensitive domains:
+
+- finalized invoices should remain immutable unless the release explicitly
+  documents a correction,
+- pricing and rating changes should be effective-dated,
+- draft/open records may be recalculated only by a documented background data
+  migration or rating command,
+- release verification should include counts and totals, not just service
+  health.
 
 ClickHouse migrations are not applied by `cluster migrate`. For ClickHouse
 schema changes, follow the release notes and the [ClickHouse Migrations](/operators/clickhouse-migrations)
@@ -98,12 +143,63 @@ If health validation fails, `cluster upgrade` attempts to roll the service back
 to the previously detected version. Keep rollback enabled for normal production
 rollouts.
 
+This rollback only swaps the service artifact back. It does not undo schema or
+data migrations. That is intentional for expand-compatible changes: the old
+binary should keep working while extra tables/columns remain in place. If a
+release includes a migration that makes the old binary invalid, treat it as a
+downtime upgrade with a tested database restore or forward-fix plan.
+
 Use `--no-rollback` only when you want to inspect a failed upgraded service in
 place:
 
 ```bash
 frameworks cluster upgrade bridge --version rc --no-rollback
 ```
+
+## CLI support status
+
+Today, `frameworks cluster migrate --phase expand` applies pending embedded
+PostgreSQL/YugabyteDB migrations from the database/version/phase directory
+layout. The command records phase and checksum in `_migrations`, rejects edited
+applied migrations, and does not run service-specific data migrations.
+
+`frameworks cluster doctor` also checks the migration ledger: embedded
+PostgreSQL/YugabyteDB migrations are compared with `_migrations` in each
+configured database so pending required migrations and checksum drift show up
+during normal diagnostics.
+
+`frameworks cluster upgrade plan` shows the target rollout order and embedded
+SQL migrations by phase. The CLI embeds a release catalog for service database
+ownership, data-migration requirements, compatibility floors, and hard
+intermediate release requirements. `cluster upgrade` uses that catalog together
+with live `_migrations` and service-owned `_data_migrations` state to refuse
+unsafe DB-backed rollouts before changing binaries.
+
+`frameworks cluster data-migrate` is the first-class surface for resumable
+service-owned data migrations. `list` shows catalog-declared work and adoption
+state; `run --dry-run` is read-only; `run`, `status`, `verify`, `pause`, and
+`resume` operate through the service binary on the target host. If a
+release declares a required data migration but the service binary cannot report
+state, upgrade and postdeploy/contract gates fail closed instead of treating
+the unknown as safe.
+
+Contract migrations are intentionally separate. `cluster migrate --phase
+contract` runs only after the matching data-migration gate succeeds, so
+destructive cleanup cannot be mixed into the routine expand/deploy step.
+
+## Local compose exception
+
+The root `docker-compose.yml` is a seeded development stack, not an
+operator-managed cluster. For local development, incompatible schema changes can
+be handled by recreating volumes and reseeding:
+
+```bash
+docker compose down -v
+docker compose up -d
+```
+
+That shortcut is acceptable for local compose because demo data is disposable.
+It is not an operator upgrade path.
 
 ## When to use provision
 

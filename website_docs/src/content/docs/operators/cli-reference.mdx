@@ -94,7 +94,7 @@ frameworks cluster detect --gitops-dir ~/work/gitops --cluster production
 
 ### frameworks cluster doctor
 
-Run comprehensive health checks across the entire cluster.
+Run read-only health checks across the cluster.
 
 **Usage:**
 
@@ -108,8 +108,12 @@ frameworks cluster doctor [flags]
 - **Applications:** Health endpoints for enabled services
 - **Interfaces:** Health endpoints for enabled interfaces
 - **Observability:** Health endpoints for enabled observability services
+- **Database migrations:** Embedded PostgreSQL/YugabyteDB migrations compared
+  against each configured database's `_migrations` ledger
 
-Note: This command does not validate schemas or run mesh checks.
+Note: This command checks migration ledger drift, not full physical schema
+introspection. For YugabyteDB clusters where the password is only in SOPS
+env_files, pass `--deep` so doctor can decrypt `DATABASE_PASSWORD`.
 
 **Output:**
 
@@ -331,12 +335,19 @@ frameworks cluster init postgres --manifest production.yaml
 
 ### Additional Cluster Provisioning Commands
 
-| Command                                    | Purpose                                                                                                                                |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `frameworks cluster seed`                  | Apply idempotent static seed data; add `--demo` for sample tenant/user/stream data and `--force` to skip the prompt.                   |
-| `frameworks cluster migrate`               | Apply pending SQL migrations from `pkg/database/sql/migrations/`; use `--dry-run` for Ansible check/diff mode.                         |
-| `frameworks cluster sync-geoip`            | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                         |
-| `frameworks cluster set-channel <channel>` | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster upgrade` uses this when no explicit version is given. |
+| Command                                                 | Purpose                                                                                                                                                                                                                                     |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frameworks cluster seed`                               | Apply idempotent static seed data; add `--demo` for sample tenant/user/stream data and `--force` to skip the prompt.                                                                                                                        |
+| `frameworks cluster migrate`                            | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version). |
+| `frameworks cluster migrate validate`                   | Validate migration path layout, checksums-at-source assumptions, and conservative expand-phase SQL safety rules.                                                                                                                            |
+| `frameworks cluster data-migrate list`                  | List required data migrations declared in the embedded release catalog up to `--to-version`. Empty catalog reports "no required data migrations declared" — never silent OK.                                                                |
+| `frameworks cluster data-migrate status <service>.<id>` | Show persisted state for one data migration on its owning service host (queries the service binary's `data-migrations status --format json`).                                                                                               |
+| `frameworks cluster data-migrate run <service>.<id>`    | Run one data migration to completion or until error; honors `--batch-size`, `--dry-run`, `--scope-kind/--scope-value`.                                                                                                                      |
+| `frameworks cluster data-migrate verify <service>.<id>` | Run the migration's read-only verification on the service host.                                                                                                                                                                             |
+| `frameworks cluster data-migrate pause <service>.<id>`  | Mark a data migration paused.                                                                                                                                                                                                               |
+| `frameworks cluster data-migrate resume <service>.<id>` | Mark a paused data migration runnable again.                                                                                                                                                                                                |
+| `frameworks cluster sync-geoip`                         | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                              |
+| `frameworks cluster set-channel <channel>`              | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster upgrade` uses this when no explicit version is given.                                                                                                      |
 
 **Examples:**
 
@@ -348,7 +359,13 @@ frameworks cluster seed
 frameworks cluster seed --demo --force
 
 # Preview migrations without applying them
-frameworks cluster migrate --dry-run
+frameworks cluster migrate --phase expand --dry-run
+
+# Validate embedded migration files
+frameworks cluster migrate validate
+
+# Apply expand-compatible schema migrations
+frameworks cluster migrate --phase expand
 
 # Distribute a local GeoIP database and restart target services
 frameworks cluster sync-geoip \
@@ -485,6 +502,9 @@ frameworks cluster upgrade commodore --version stable
 # Upgrade to specific version
 frameworks cluster upgrade bridge --version v0.0.0-rc1
 
+# Show rollout order and embedded migration phases
+frameworks cluster upgrade plan --version stable
+
 # Preview upgrade
 frameworks cluster upgrade signalman --version stable --dry-run
 
@@ -499,7 +519,15 @@ frameworks cluster upgrade --all --yes
   Service upgrades may require schema migrations. For ClickHouse changes, apply `ALTER TABLE`
   statements **before** upgrading services. See [ClickHouse
   Migrations](/operators/clickhouse-migrations). For PostgreSQL/YugabyteDB migrations, run
-  `frameworks cluster migrate` before upgrading services that depend on the new schema.
+  `frameworks cluster migrate --phase expand --to-version vX.Y.Z` before upgrading services that
+  depend on the new schema. Upgrade commands run the same migration and data-migration gates in
+  dry-run and apply mode.
+</Aside>
+
+<Aside type="note" title="Background data migration support">
+  `frameworks cluster data-migrate` lists and runs service-owned background data migrations declared
+  in the embedded release catalog. A declared migration that the target service cannot report is
+  treated as a blocker, not as completed.
 </Aside>
 
 ---

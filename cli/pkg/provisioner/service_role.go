@@ -14,6 +14,7 @@ import (
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/pkg/datamigrate"
 )
 
 // ServiceRoleConfig customizes the generic service-role provisioner for a
@@ -48,6 +49,11 @@ type ServiceRoleConfig struct {
 
 	// Args are appended to ExecStart for native services.
 	Args []string
+
+	// DataMigrations means the service binary dispatches pkg/datamigrate's
+	// data-migrations command surface. The provisioner installs the host marker
+	// the cluster CLI checks before invoking that command.
+	DataMigrations bool
 }
 
 // NewServiceRoleProvisioner returns a Provisioner that picks compose_stack
@@ -144,7 +150,8 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 			"container_port": containerPort,
 			"health_path":    healthPath,
 		},
-		"compose_stack_env": envAny,
+		"compose_stack_env":                    envAny,
+		"compose_stack_data_migrations_marker": dataMigrationsMarker(cfg, config),
 	}, nil
 }
 
@@ -270,6 +277,7 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		"go_service_livepeer_expected_keystore_path":  livepeerKeystorePath,
 		"go_service_livepeer_expected_keystore_dir":   livepeerKeystoreDir,
 		"go_service_livepeer_expected_wallet_address": envMap["eth_acct_addr"],
+		"go_service_data_migrations_marker":           dataMigrationsMarker(cfg, config),
 	}
 	if ca := metaString(config.Metadata, "internal_ca_bundle_pem"); ca != "" {
 		vars["go_service_internal_ca_bundle_pem"] = ca
@@ -281,6 +289,14 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		vars["go_service_internal_tls_key_pem"] = key
 	}
 	return vars, nil
+}
+
+func dataMigrationsMarker(cfg ServiceRoleConfig, config ServiceConfig) string {
+	if !cfg.DataMigrations && !metaBool(config.Metadata, "data_migrations", false) {
+		return ""
+	}
+	runtimeName := firstNonEmpty(config.DeployName, cfg.ServiceName)
+	return datamigrate.AdoptionMarkerPath(runtimeName)
 }
 
 func nonNilStringSlice(values []string) []string {

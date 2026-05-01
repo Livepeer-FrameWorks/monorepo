@@ -669,7 +669,14 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "  Warning: continuing despite Yugabyte verification issues (--ignore-validation)")
 			}
-			if err := initializeDeferredYugabyte(ctx, cmd, manifest, sshPool, sharedEnv); err != nil {
+			ybTarget, ybErr := resolveMigrationTargetFromParts(manifest, releaseRepos, "")
+			if ybErr != nil {
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("resolve migration target: %v", ybErr))
+				fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
+				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+				return fmt.Errorf("resolve migration target: %w", ybErr)
+			}
+			if err := initializeDeferredYugabyte(ctx, cmd, manifest, sshPool, sharedEnv, ybTarget); err != nil {
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Yugabyte initialization failed: %v", err))
 				fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
 				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
@@ -1023,7 +1030,7 @@ done
 	return nil
 }
 
-func initializeDeferredYugabyte(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool, sharedEnv map[string]string) error {
+func initializeDeferredYugabyte(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool, sharedEnv map[string]string, targetVersion string) error {
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled || !pg.IsYugabyte() || len(pg.Nodes) == 0 {
 		return nil
@@ -1071,7 +1078,7 @@ func initializeDeferredYugabyte(ctx context.Context, cmd *cobra.Command, manifes
 	if err := prov.Initialize(ctx, host, config); err != nil {
 		return err
 	}
-	if err := applyPostgresSchemasAndMigrations(ctx, cmd.OutOrStdout(), "yugabyte", host, config, prov, schemaDatabases); err != nil {
+	if err := applyPostgresSchemasAndMigrations(ctx, cmd.OutOrStdout(), "yugabyte", host, config, prov, schemaDatabases, targetVersion); err != nil {
 		return err
 	}
 	ux.Success(cmd.OutOrStdout(), "YugabyteDB initialized")
@@ -3624,6 +3631,9 @@ func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string
 	case "quartermaster", "commodore", "purser":
 		if strings.TrimSpace(env["DATABASE_HOST"]) == "" {
 			return fmt.Errorf("service %s: non-dev deploy requires DATABASE_HOST", serviceID)
+		}
+		if strings.TrimSpace(env["DATABASE_PASSWORD"]) == "" && strings.TrimSpace(env["DATABASE_URL"]) == "" {
+			return fmt.Errorf("service %s: non-dev deploy requires DATABASE_PASSWORD (or DATABASE_URL with embedded credentials)", serviceID)
 		}
 	}
 

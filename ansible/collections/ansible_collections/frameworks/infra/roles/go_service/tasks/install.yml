@@ -33,6 +33,24 @@
   loop: "{{ go_service_state_dirs }}"
   when: go_service_state_dirs | length > 0
 
+- name: Ensure data-migrations marker directory
+  ansible.builtin.file:
+    path: "{{ go_service_data_migrations_marker | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: go_service_data_migrations_marker | length > 0
+
+- name: Mark data-migrations adoption
+  ansible.builtin.copy:
+    dest: "{{ go_service_data_migrations_marker }}"
+    content: "{{ go_service_name }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when: go_service_data_migrations_marker | length > 0
+
 - name: Render service files
   ansible.builtin.copy:
     dest: "{{ item.path }}"

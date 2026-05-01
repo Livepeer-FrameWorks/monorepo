@@ -1,9 +1,7 @@
 ---
-# Migration items delivered by the CLI: list of {db, version, sequence,
-# filename, checksum, sql}. The role reads the _migrations tracking table
-# on each target database, filters to pending, and applies them inside a
-# transaction. ansible-playbook --check --diff shows which migrations would
-# run without applying.
+# Migration items delivered by the CLI: list of {db, version, phase, sequence,
+# filename, checksum, transactional, sql}. The role validates already-applied
+# checksums, filters to pending, and records successful applies in _migrations.
 
 - name: Ensure _migrations tracking table per database
   become: true
@@ -14,12 +12,39 @@
     query: |
       CREATE TABLE IF NOT EXISTS _migrations (
         version    TEXT NOT NULL,
+        phase      TEXT NOT NULL DEFAULT 'expand',
         seq        INT NOT NULL,
         filename   TEXT NOT NULL,
         checksum   TEXT NOT NULL,
+        transactional BOOLEAN NOT NULL DEFAULT true,
         applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        PRIMARY KEY (version, seq)
-      )
+        PRIMARY KEY (version, phase, seq)
+      );
+      ALTER TABLE _migrations
+        ADD COLUMN IF NOT EXISTS phase TEXT NOT NULL DEFAULT 'expand';
+      ALTER TABLE _migrations
+        ADD COLUMN IF NOT EXISTS transactional BOOLEAN NOT NULL DEFAULT true;
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conrelid = '_migrations'::regclass
+            AND conname = '_migrations_pkey'
+            AND array_length(conkey, 1) = 2
+        ) THEN
+          ALTER TABLE _migrations DROP CONSTRAINT _migrations_pkey;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conrelid = '_migrations'::regclass
+            AND conname = '_migrations_pkey'
+        ) THEN
+          ALTER TABLE _migrations
+            ADD CONSTRAINT _migrations_pkey PRIMARY KEY (version, phase, seq);
+        END IF;
+      END $$;
   loop: "{{ postgres_migrate_items | default([]) | map(attribute='db') | unique | list }}"
   loop_control:
     loop_var: db_entry
@@ -30,25 +55,57 @@
   community.postgresql.postgresql_query:
     login_unix_socket: /var/run/postgresql
     db: "{{ db_entry }}"
-    query: "SELECT version || ':' || seq AS key FROM _migrations"
+    query: "SELECT version || ':' || phase || ':' || seq AS key, checksum FROM _migrations"
   register: postgres_applied_queries
   changed_when: false
+  failed_when: false
   check_mode: false
   loop: "{{ postgres_migrate_items | default([]) | map(attribute='db') | unique | list }}"
   loop_control:
     loop_var: db_entry
+
+- name: Fail on migration ledger read errors
+  ansible.builtin.fail:
+    msg: >-
+      Read _migrations failed for {{ item.db_entry }}:
+      {{ item.msg | default(item.stderr | default('unknown error')) }}
+  loop: "{{ postgres_applied_queries.results | default([]) }}"
+  loop_control:
+    label: "{{ item.db_entry }}"
+  vars:
+    ledger_read_error: "{{ (item.msg | default('')) ~ (item.stderr | default('')) }}"
+  when:
+    - item.failed | default(false)
+    - "'_migrations' not in ledger_read_error or 'does not exist' not in ledger_read_error"
 
 - name: Index applied migrations by database
   ansible.builtin.set_fact:
     postgres_applied_by_db: >-
       {{ postgres_applied_by_db | default({})
          | combine({ item.db_entry:
-                     (item.query_result | default([]) | map(attribute='key') | list) }) }}
+                     dict((item.query_result | default([]) | map(attribute='key') | list)
+                          | zip(item.query_result | default([]) | map(attribute='checksum') | list)) }) }}
   loop: "{{ postgres_applied_queries.results | default([]) }}"
   loop_control:
     label: "{{ item.db_entry }}"
 
-- name: Apply pending migrations (query + _migrations insert in one transaction)
+- name: Fail on edited applied migrations
+  ansible.builtin.fail:
+    msg: >-
+      Migration checksum mismatch for {{ item.db }}/{{ item.version }}/{{ item.phase }}/{{ item.filename }}:
+      database has {{ postgres_applied_by_db[item.db][item.version ~ ':' ~ item.phase ~ ':' ~ (item.sequence | string)] }},
+      embedded file has {{ item.checksum }}.
+  loop: "{{ postgres_migrate_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}/{{ item.version }}/{{ item.phase }}/{{ item.filename }}"
+  vars:
+    migration_key: "{{ item.version ~ ':' ~ item.phase ~ ':' ~ (item.sequence | string) }}"
+  when:
+    - postgres_migrate_items | default([]) | length > 0
+    - migration_key in (postgres_applied_by_db[item.db] | default({}))
+    - postgres_applied_by_db[item.db][migration_key] != item.checksum
+
+- name: Apply pending migrations
   become: true
   become_user: postgres
   community.postgresql.postgresql_query:
@@ -57,14 +114,16 @@
     query:
       - "{{ item.sql }}"
       - >-
-        INSERT INTO _migrations (version, seq, filename, checksum)
-        VALUES ('{{ item.version }}', {{ item.sequence }},
-                '{{ item.filename }}', '{{ item.checksum }}')
-    autocommit: false
+        INSERT INTO _migrations (version, phase, seq, filename, checksum, transactional)
+        VALUES ('{{ item.version }}', '{{ item.phase }}', {{ item.sequence }},
+                '{{ item.filename }}', '{{ item.checksum }}',
+                {{ item.transactional | default(true) | ternary('true', 'false') }})
+    autocommit: "{{ not (item.transactional | default(true)) }}"
   loop: "{{ postgres_migrate_items | default([]) }}"
   loop_control:
-    label: "{{ item.db }}/{{ item.version }}/{{ item.filename }}"
+    label: "{{ item.db }}/{{ item.version }}/{{ item.phase }}/{{ item.filename }}"
+  vars:
+    migration_key: "{{ item.version ~ ':' ~ item.phase ~ ':' ~ (item.sequence | string) }}"
   when:
     - postgres_migrate_items | default([]) | length > 0
-    - (item.version ~ ':' ~ (item.sequence | string))
-      not in (postgres_applied_by_db[item.db] | default([]))
+    - migration_key not in (postgres_applied_by_db[item.db] | default({}))

@@ -29,7 +29,7 @@ func TestClusterDoctorCmd_HelpLongDescribesDefaultVsDeep(t *testing.T) {
 	t.Parallel()
 	cmd := newClusterDoctorCmd()
 	long := cmd.Long
-	for _, want := range []string{"Default mode", "--deep mode", "not verified"} {
+	for _, want := range []string{"Default mode", "--deep mode", "not verified", "_migrations"} {
 		if !strings.Contains(long, want) {
 			t.Errorf("Long description missing %q:\n%s", want, long)
 		}

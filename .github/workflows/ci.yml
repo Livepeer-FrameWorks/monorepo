@@ -30,6 +30,7 @@ jobs:
             go:
               - '**/*.go'
               - '**/*.proto'
+              - '**/*.sql'
               - '**/go.mod'
               - '**/go.sum'
               - 'Makefile'

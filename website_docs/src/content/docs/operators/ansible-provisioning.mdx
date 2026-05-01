@@ -46,19 +46,19 @@ ansible/
 
 The CLI's subcommands map onto role tags:
 
-| CLI                           | Ansible tags                                                           | Flags            |
-| ----------------------------- | ---------------------------------------------------------------------- | ---------------- |
-| `cluster provision`           | `install,configure,service,validate`                                   | —                |
-| `cluster provision --dry-run` | `install,configure,service`                                            | `--check --diff` |
-| `cluster doctor`              | (observed-state survey, no role run)                                   | —                |
-| `cluster upgrade`             | `install,configure,service,validate`                                   | —                |
-| `cluster upgrade --dry-run`   | `install,configure,service`                                            | `--check --diff` |
-| `cluster init`                | `init`; Postgres/Yugabyte also run `schema` and `migrate`              | —                |
-| `cluster seed`                | `seed`; ClickHouse seeds only with `--demo` and a `periscope` database | —                |
-| `cluster migrate`             | `migrate`                                                              | —                |
-| `cluster migrate --dry-run`   | `migrate`                                                              | `--check --diff` |
-| `cluster restart`             | `restart`                                                              | —                |
-| `cluster drift`               | (observed-state survey, no role run)                                   | —                |
+| CLI                           | Ansible tags                                                                 | Flags            |
+| ----------------------------- | ---------------------------------------------------------------------------- | ---------------- |
+| `cluster provision`           | `install,configure,service,validate`                                         | —                |
+| `cluster provision --dry-run` | `install,configure,service`                                                  | `--check --diff` |
+| `cluster doctor`              | (observed-state survey, no role run)                                         | —                |
+| `cluster upgrade`             | `install,configure,service,validate`                                         | —                |
+| `cluster upgrade --dry-run`   | `install,configure,service`                                                  | `--check --diff` |
+| `cluster init`                | `init`; Postgres/Yugabyte also run baseline `schema` and `expand` migrations | —                |
+| `cluster seed`                | `seed`; ClickHouse seeds only with `--demo` and a `periscope` database       | —                |
+| `cluster migrate`             | `migrate` for the selected schema phase                                      | —                |
+| `cluster migrate --dry-run`   | `migrate` for the selected schema phase                                      | `--check --diff` |
+| `cluster restart`             | `restart`                                                                    | —                |
+| `cluster drift`               | (observed-state survey, no role run)                                         | —                |
 
 `cluster drift` and `cluster doctor` / `cluster status` are observed-state
 surveys built on top of the detect + health layers. They run direct port /

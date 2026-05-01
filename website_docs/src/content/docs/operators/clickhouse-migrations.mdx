@@ -8,7 +8,8 @@ sidebar:
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Rolling deploy safety">
-  Apply migrations **before** deploying service versions that depend on new columns/tables.
+  Apply expand-compatible migrations **before** deploying service versions that depend on new
+  columns/tables. Destructive changes and historical data rewrites need an explicit release runbook.
 </Aside>
 
 ## Overview
@@ -32,16 +33,20 @@ cluster migrate` does not apply ClickHouse migrations.
 
 ## Planned migration structure
 
-When ClickHouse migrations are implemented, use the same release-versioned shape
-as PostgreSQL:
-
-Migrations are organized by release version:
+When ClickHouse migrations are implemented, use the same database/version/phase
+shape as PostgreSQL:
 
 ```
 pkg/database/sql/clickhouse/migrations/
-└── v1.1.0/
-    ├── 001_add_filename_to_artifacts.sql
-    └── 002_add_viewer_node_tracking.sql
+└── periscope/
+    └── v1.1.0/
+        ├── expand/
+        │   ├── 001_add_filename_to_artifacts.sql
+        │   └── 002_add_viewer_node_tracking.sql
+        ├── postdeploy/
+        │   └── 001_rebuild_artifact_projection.sql
+        └── contract/
+            └── 001_drop_legacy_artifact_view.sql
 ```
 
 ## Upgrade procedure
@@ -58,7 +63,7 @@ clickhouse-client -h <host> < pkg/database/sql/clickhouse/periscope.sql
 2. **For upgrades**, check release notes for required ClickHouse DDL and apply the DDL in order:
 
 ```bash
-clickhouse-client -h <host> < pkg/database/sql/clickhouse/migrations/v1.1.0/001_add_filename_to_artifacts.sql
+clickhouse-client -h <host> < pkg/database/sql/clickhouse/migrations/periscope/v1.1.0/expand/001_add_filename_to_artifacts.sql
 ```
 
 3. **Verify** the changes:
@@ -72,6 +77,10 @@ clickhouse-client --query "DESCRIBE TABLE periscope.artifact_events" | grep file
 ```bash
 frameworks cluster upgrade periscope-ingest --version v1.1.0
 ```
+
+5. **Run any required analytics background data migration** documented in the release notes.
+   ClickHouse schema DDL does not automatically repopulate historical analytics
+   rows into new event fields, projections, or materialized views.
 
 ## ON CLUSTER / Replicated setups
 
@@ -95,13 +104,15 @@ Guidelines for contributors:
 3. **Use Nullable for new columns** - safe for rollback (old code ignores them)
 4. **Update bootstrap schema** - `pkg/database/sql/clickhouse/periscope.sql` must reflect final state
 5. **One migration per logical change** - easier to track and debug
+6. **Put the file in the correct phase directory** - `expand`, `postdeploy`, or
+   `contract`
+7. **Keep historical rewrites explicit** - large `ALTER ... UPDATE`,
+   materialized-view rebuilds, or replay-from-Kafka jobs should be release
+   steps with progress and verification, not incidental DDL
 
 Example migration file:
 
 ```sql
--- Migration: v1.1.0/001_add_filename_to_artifacts.sql
--- Required before: periscope-ingest v1.1.0
-
 ALTER TABLE periscope.artifact_events
   ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
 
@@ -114,6 +125,9 @@ ALTER TABLE periscope.artifact_state_current
 - **Nullable columns are safe to leave** - older service versions simply won't populate them
 - **Don't drop columns during rollback** unless explicitly required
 - Re-deploying an older service version is usually sufficient
+- **Do not rely on DDL rollback for normal recovery** - keep expand changes
+  compatible, redeploy the previous binary, and leave extra columns in place
+  until the contract release
 
 ## Troubleshooting
 
