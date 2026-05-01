@@ -122,6 +122,7 @@ func newDVRManagerWithMist(t *testing.T, mc DVRMistClient) *DVRManager {
 		jobs:        make(map[string]*DVRJob),
 		storagePath: t.TempDir(),
 		mistClient:  mc,
+		diskCheck:   func(string, uint64) error { return nil },
 	}
 }
 

@@ -87,6 +87,17 @@ type DVRManager struct {
 	mutex       sync.RWMutex
 	storagePath string
 	mistClient  DVRMistClient
+	// diskCheck is the precondition called before starting/continuing a recording.
+	// Tests inject a stub so they don't depend on host disk pressure.
+	// Nil means use the production storage.HasSpaceFor.
+	diskCheck func(path string, requiredBytes uint64) error
+}
+
+func (dm *DVRManager) hasSpaceFor(path string, requiredBytes uint64) error {
+	if dm.diskCheck != nil {
+		return dm.diskCheck(path, requiredBytes)
+	}
+	return storage.HasSpaceFor(path, requiredBytes)
 }
 
 // Global DVR manager instance
@@ -253,7 +264,7 @@ func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceURL 
 	if err := os.MkdirAll(dm.storagePath, 0755); err != nil {
 		return err
 	}
-	if err := storage.HasSpaceFor(dm.storagePath, 0); err != nil {
+	if err := dm.hasSpaceFor(dm.storagePath, 0); err != nil {
 		return fmt.Errorf("insufficient disk space for DVR recording: %w", err)
 	}
 
@@ -401,7 +412,7 @@ func (dm *DVRManager) monitorJob(job *DVRJob) {
 				return // Job completed or stopped
 			}
 
-			if err := storage.HasSpaceFor(dm.storagePath, 0); err != nil {
+			if err := dm.hasSpaceFor(dm.storagePath, 0); err != nil {
 				job.Logger.WithError(err).Error("Stopping DVR recording due to insufficient disk space")
 				if job.PushID > 0 {
 					if stopErr := dm.mistClient.PushStop(job.PushID); stopErr != nil {
@@ -637,10 +648,7 @@ func (dm *DVRManager) createOrRecreatePush(job *DVRJob) (int, error) {
 // calculateRetryDelay calculates exponential backoff delay for push retries
 func (dm *DVRManager) calculateRetryDelay(retryCount int) time.Duration {
 	// Exponential backoff: 5s, 10s, 20s, 40s, 60s (max)
-	delay := InitialRetryDelay * time.Duration(1<<uint(retryCount))
-	if delay > MaxRetryDelay {
-		delay = MaxRetryDelay
-	}
+	delay := min(InitialRetryDelay*time.Duration(1<<uint(retryCount)), MaxRetryDelay)
 	return delay
 }
 
