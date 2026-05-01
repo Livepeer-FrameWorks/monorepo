@@ -430,10 +430,10 @@ func (r *Resolver) DoGetLiveUsageSummary(ctx context.Context, periodStart, perio
 		return nil, fmt.Errorf("tenant context required")
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	start := periodStart
 	if start == nil {
-		s := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		s := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 		start = &s
 	}
 	end := periodEnd
@@ -1442,6 +1442,9 @@ func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCard
 	if tenantID == "" {
 		return nil, fmt.Errorf("authentication required")
 	}
+	if input.AmountCents <= 0 || input.AmountCents > 10_000_000 {
+		return nil, fmt.Errorf("amount_cents must be between 1 and 10000000")
+	}
 
 	// Map GraphQL provider enum to proto
 	var provider string
@@ -1565,6 +1568,9 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("authentication required")
+	}
+	if input.AmountCents <= 0 || input.AmountCents > 10_000_000 {
+		return nil, fmt.Errorf("amount_cents must be between 1 and 10000000")
 	}
 
 	// Validate asset (already a proto enum from gqlgen)

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"net/http"
 	"os"
@@ -331,8 +332,7 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 		// Check nonce not already used (on-chain check)
 		nonceUsed, nonceErr := h.checkNonceUsed(ctx, network, auth.From, auth.Nonce)
 		if nonceErr != nil {
-			h.logger.WithFields(logging.Fields{"error": nonceErr, "network": network.Name}).Warn("Failed to check nonce on-chain, continuing")
-			// Continue - we'll catch replay at settlement
+			return &VerifyResult{Valid: false, Error: "failed to verify nonce on-chain"}, nil //nolint:nilerr // verification failures are returned in VerifyResult
 		} else if nonceUsed {
 			return &VerifyResult{Valid: false, Error: "nonce already used"}, nil
 		}
@@ -353,8 +353,7 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 		// Check payer USDC balance on the specified network
 		balance, balanceErr := h.getUSDCBalance(ctx, network, auth.From)
 		if balanceErr != nil {
-			h.logger.WithFields(logging.Fields{"error": balanceErr, "network": network.Name}).Warn("Failed to check USDC balance")
-			// Continue - settlement will fail if insufficient
+			return &VerifyResult{Valid: false, Error: "failed to verify payer balance"}, nil //nolint:nilerr // verification failures are returned in VerifyResult
 		} else if balance.Cmp(amountBig) < 0 {
 			return &VerifyResult{Valid: false, Error: "insufficient USDC balance"}, nil
 		}
@@ -761,20 +760,26 @@ func (h *X402Handler) sendRawTransaction(ctx context.Context, network NetworkCon
 		return "", fmt.Errorf("failed to get nonce: %w", err)
 	}
 
-	// Get gas price
+	// Get fee market inputs for EIP-1559 fee caps.
 	gasPrice, err := h.getGasPrice(ctx, network)
 	if err != nil {
 		return "", fmt.Errorf("failed to get gas price: %w", err)
 	}
+	priorityFee, err := h.getPriorityFee(ctx, network)
+	if err != nil {
+		return "", fmt.Errorf("failed to get priority fee: %w", err)
+	}
 
-	// Build a legacy gas-price transaction. This signer does not populate
-	// EIP-1559 fee fields yet.
+	// Build an EIP-1559 dynamic-fee transaction.
 	gasLimit := uint64(150000) // Conservative estimate for transferWithAuthorization
 
 	chainId := big.NewInt(network.ChainID)
+	maxPriorityFeePerGas := priorityFee
+	maxFeePerGas := new(big.Int).Mul(gasPrice, big.NewInt(2))
+	maxFeePerGas.Add(maxFeePerGas, maxPriorityFeePerGas)
 
 	// Sign transaction
-	signedTx, err := h.signTransaction(nonce, to, big.NewInt(0), gasLimit, gasPrice, data, chainId)
+	signedTx, err := h.signDynamicFeeTransaction(nonce, to, big.NewInt(0), gasLimit, maxFeePerGas, maxPriorityFeePerGas, data, chainId)
 	if err != nil {
 		return "", fmt.Errorf("failed to sign transaction: %w", err)
 	}
@@ -987,6 +992,19 @@ func (h *X402Handler) getGasPrice(ctx context.Context, network NetworkConfig) (*
 	return gasPrice, nil
 }
 
+func (h *X402Handler) getPriorityFee(ctx context.Context, network NetworkConfig) (*big.Int, error) {
+	var result string
+	err := h.rpc.Call(ctx, network, "eth_maxPriorityFeePerGas", []any{}, &result)
+	if err != nil {
+		return nil, err
+	}
+	priorityFee, _ := new(big.Int).SetString(strings.TrimPrefix(result, "0x"), 16)
+	if priorityFee == nil || priorityFee.Sign() < 0 {
+		return nil, fmt.Errorf("invalid priority fee result")
+	}
+	return priorityFee, nil
+}
+
 // simulateTransfer runs eth_call to verify the transfer will succeed before submitting
 func (h *X402Handler) simulateTransfer(ctx context.Context, network NetworkConfig, callData []byte) error {
 	var result string
@@ -1010,7 +1028,7 @@ func (h *X402Handler) convertToEurCents(usdCents int64) (int64, error) {
 		return 0, err
 	}
 	// EUR = USD * rate (e.g., 0.92 EUR per USD)
-	eurCents := int64(float64(usdCents) * rate)
+	eurCents := int64(math.Round(float64(usdCents) * rate))
 	return eurCents, nil
 }
 
@@ -1217,7 +1235,7 @@ func (h *X402Handler) getCountryFromIP(clientIP string) string {
 	return "NL" // Fallback to Netherlands (our base)
 }
 
-func (h *X402Handler) signTransaction(nonce uint64, to string, value *big.Int, gasLimit uint64, gasPrice *big.Int, data []byte, chainId *big.Int) ([]byte, error) {
+func (h *X402Handler) signDynamicFeeTransaction(nonce uint64, to string, value *big.Int, gasLimit uint64, maxFeePerGas *big.Int, maxPriorityFeePerGas *big.Int, data []byte, chainId *big.Int) ([]byte, error) {
 	if h.gasWalletPrivKey == "" {
 		return nil, fmt.Errorf("gas wallet private key not configured")
 	}
@@ -1231,17 +1249,18 @@ func (h *X402Handler) signTransaction(nonce uint64, to string, value *big.Int, g
 
 	// Build transaction
 	toAddr := common.HexToAddress(to)
-	tx := types.NewTx(&types.LegacyTx{
-		Nonce:    nonce,
-		To:       &toAddr,
-		Value:    value,
-		Gas:      gasLimit,
-		GasPrice: gasPrice,
-		Data:     data,
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID:   chainId,
+		Nonce:     nonce,
+		To:        &toAddr,
+		Value:     value,
+		Gas:       gasLimit,
+		GasFeeCap: maxFeePerGas,
+		GasTipCap: maxPriorityFeePerGas,
+		Data:      data,
 	})
 
-	// Sign with EIP-155 (chain ID protected)
-	signer := types.NewEIP155Signer(chainId)
+	signer := types.NewLondonSigner(chainId)
 	signedTx, err := types.SignTx(tx, signer, privKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign transaction: %w", err)

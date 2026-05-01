@@ -135,12 +135,17 @@ func verifyStripeSignature(payload []byte, signature, secret string) bool {
 	}
 
 	now := time.Now().Unix()
-	if now-timestampInt > 300 { // 5 minutes tolerance
+	const toleranceSeconds int64 = 300 // 5 minutes tolerance
+	drift := now - timestampInt
+	if drift < 0 {
+		drift = -drift
+	}
+	if drift > toleranceSeconds {
 		logger.WithFields(logging.Fields{
-			"timestamp":   timestampInt,
-			"current":     now,
-			"age_seconds": now - timestampInt,
-		}).Warn("Stripe webhook timestamp too old")
+			"timestamp":  timestampInt,
+			"current":    now,
+			"drift_secs": drift,
+		}).Warn("Stripe webhook timestamp outside tolerance window")
 		return false
 	}
 

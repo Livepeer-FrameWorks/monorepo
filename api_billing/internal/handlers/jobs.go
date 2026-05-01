@@ -1403,12 +1403,18 @@ func (jm *JobManager) runPaymentRetry(ctx context.Context) {
 func (jm *JobManager) retryFailedPayments(ctx context.Context) {
 	// Mark failed traditional payments for retry (crypto payments don't need retry)
 	_, err := jm.db.ExecContext(ctx, `
-		UPDATE purser.billing_payments
+		UPDATE purser.billing_payments bp
 		SET status = 'pending', updated_at = NOW()
-		WHERE status = 'failed' 
-		  AND method = 'card'
-		  AND created_at > NOW() - INTERVAL '24 hours'
-		  AND updated_at < NOW() - INTERVAL '1 hour'
+		WHERE bp.status = 'failed'
+		  AND bp.method = 'card'
+		  AND bp.created_at > NOW() - INTERVAL '24 hours'
+		  AND bp.updated_at < NOW() - INTERVAL '1 hour'
+		  AND EXISTS (
+			SELECT 1
+			FROM purser.billing_invoices bi
+			WHERE bi.id = bp.invoice_id
+			  AND bi.status IN ('pending', 'overdue')
+		  )
 	`)
 
 	if err != nil {

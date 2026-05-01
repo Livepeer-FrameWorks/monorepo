@@ -3881,17 +3881,6 @@ func clusterScopedGatewayHost(manifest *inventory.Manifest, clusterID string) st
 	return fqdn
 }
 
-func globalGatewayHost(rootDomain string) string {
-	if rootDomain == "" {
-		return ""
-	}
-	fqdn, ok := pkgdns.ServiceFQDN("livepeer-gateway", rootDomain)
-	if !ok {
-		return ""
-	}
-	return fqdn
-}
-
 func portFromBindAddr(raw string, fallback int) int {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

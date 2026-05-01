@@ -877,14 +877,13 @@ func (s *PurserServer) CheckUserLimit(ctx context.Context, req *pb.CheckUserLimi
 			s.logger.WithFields(logging.Fields{
 				"tenant_id": tenantID,
 				"error":     err,
-			}).Warn("Failed to get user count from Commodore, allowing by default")
-			//nolint:nilerr // fail-open: allow by default on internal errors
-			return &pb.CheckUserLimitResponse{Allowed: true}, nil
+			}).Error("Failed to get user count from Commodore")
+			return nil, status.Error(codes.Unavailable, "failed to verify user limit")
 		}
 		currentUsers = userCount.ActiveCount
 	} else {
-		s.logger.Warn("Commodore client not available, allowing by default")
-		return &pb.CheckUserLimitResponse{Allowed: true}, nil
+		s.logger.Error("Commodore client not available for user limit check")
+		return nil, status.Error(codes.Unavailable, "user limit service unavailable")
 	}
 
 	// Get tier limit
@@ -905,9 +904,8 @@ func (s *PurserServer) CheckUserLimit(ctx context.Context, req *pb.CheckUserLimi
 		s.logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
 			"error":     err,
-		}).Warn("Failed to get tier limit, allowing by default")
-		//nolint:nilerr // fail-open: allow by default on internal errors
-		return &pb.CheckUserLimitResponse{Allowed: true}, nil
+		}).Error("Failed to get tier limit")
+		return nil, status.Error(codes.Internal, "failed to read tier limit")
 	}
 
 	// Unlimited if max_users is null or 0
@@ -2743,7 +2741,8 @@ func (s *PurserServer) getSubscriptionPeriod(ctx context.Context, tenantID strin
 		return start.Time, end.Time
 	}
 
-	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	utcNow := now.UTC()
+	periodStart := time.Date(utcNow.Year(), utcNow.Month(), 1, 0, 0, 0, 0, time.UTC)
 	periodEnd := periodStart.AddDate(0, 1, 0)
 	return periodStart, periodEnd
 }
