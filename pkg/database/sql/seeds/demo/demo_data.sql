@@ -1438,11 +1438,13 @@ ON CONFLICT (instance_id) DO UPDATE SET
     status = 'running',
     updated_at = NOW();
 
--- Assign HA Foghorn instances to the platform cluster. The local dev
--- Mist/Helmsman stack sends triggers to foghorn-1 only, so demo-media resolves
--- playback through foghorn-1.
+-- Assign HA Foghorn instances to the platform cluster and the demo media cluster.
+-- Media clusters are served by the whole Foghorn HA set; a peer must not stop
+-- serving demo-media just because Mist/Helmsman triggers currently arrive at
+-- another peer.
 INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id) VALUES
     ('5eedf0e1-0001-da7a-f0e1-0001da7a0001', 'central-primary'),
     ('5eedf0e1-0001-da7a-f0e1-0001da7a0001', 'demo-media'),
-    ('5eedf0e1-0002-da7a-f0e1-0002da7a0002', 'central-primary')
+    ('5eedf0e1-0002-da7a-f0e1-0002da7a0002', 'central-primary'),
+    ('5eedf0e1-0002-da7a-f0e1-0002da7a0002', 'demo-media')
 ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true;
