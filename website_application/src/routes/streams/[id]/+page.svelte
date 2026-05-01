@@ -322,8 +322,8 @@
     ].filter((entry) => entry.minutes > 0);
   });
 
-  let loading = $derived($streamStore.fetching || $streamKeysStore.fetching);
   let error = $state<string | null>(null);
+  let loading = $derived(!error && ($streamStore.fetching || $streamKeysStore.fetching));
   let showEditModal = $state(false);
   let showDeleteModal = $state(false);
   let showCreateKeyModal = $state(false);
@@ -771,9 +771,10 @@
         error = "Stream not found";
         return;
       }
+      const fetchedStreamId = (result.data.stream as { streamId?: string | null }).streamId;
       const resolvedStreamId = resolveOperationalStreamId({
         routeParamId: streamId,
-        streamUuid: stream?.streamId,
+        streamUuid: fetchedStreamId,
       });
 
       if (!resolvedStreamId) {

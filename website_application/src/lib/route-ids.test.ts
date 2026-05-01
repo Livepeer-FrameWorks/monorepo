@@ -34,6 +34,7 @@ describe("route id helpers", () => {
 
   it("validates UUID shape", () => {
     expect(isUuid("123e4567-e89b-12d3-a456-426614174000")).toBe(true);
+    expect(isUuid("5eedfeed-11fe-ca57-feed-11feca570001")).toBe(true);
     expect(isUuid("not-a-uuid")).toBe(false);
   });
 });
