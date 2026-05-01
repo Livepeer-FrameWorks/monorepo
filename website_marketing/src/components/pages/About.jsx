@@ -68,7 +68,7 @@ const About = () => {
       title: "Public Beta Expansion",
       subtitle: "Selfhosted operators",
       icon: SparklesIcon,
-      badges: ["Alpha Access", "Hybrid Workflows"],
+      badges: ["Beta Access", "Hybrid Workflows"],
       summary: "Core platform is live with limited capacity and a semi-autonomous Media plane",
       points: [
         "Operators onboard quickly through the CLI.",

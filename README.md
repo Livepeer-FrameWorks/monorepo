@@ -4,7 +4,7 @@
 [![codecov](https://img.shields.io/codecov/c/github/Livepeer-FrameWorks/monorepo)](https://codecov.io/gh/Livepeer-FrameWorks/monorepo)
 [![license](https://img.shields.io/github/license/Livepeer-FrameWorks/monorepo)](LICENSE.md)
 
-> Warning: This stack is pre‑release and experimental. Do not deploy to production. Interfaces and schemas change frequently. Use for local development and evaluation only.
+> Warning: This stack is in active beta. Interfaces and schemas change frequently. If deploying in a production environment, be careful with data migrations when updating major versions. Plan ahead for stuff to break.
 
 **Sovereign SaaS for live video.** Run on your infrastructure, ours, or both—no vendor lock-in.
 

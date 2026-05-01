@@ -8,9 +8,8 @@
     tone?: import("$lib/components/ui/badge").BadgeTone;
   }
 
-  // Note: kept component name for minimal touch points; default label now reflects alpha stage.
   let {
-    label = "Public Alpha",
+    label = "Public Beta",
     className = "",
     variant = "secondary",
     tone = undefined,

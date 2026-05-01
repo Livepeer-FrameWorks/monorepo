@@ -214,9 +214,9 @@
             <AlertTriangle class="w-5 h-5 text-warning-alt mt-0.5" />
           </div>
           <div>
-            <h3 class="text-sm font-medium text-warning-alt">Alpha Release</h3>
+            <h3 class="text-sm font-medium text-warning-alt">Beta Release</h3>
             <p class="text-sm text-muted-foreground mt-1">
-              FrameWorks is currently in alpha and rapidly evolving. Features may change, and there
+              FrameWorks is currently in beta and rapidly evolving. Features may change, and there
               could be occasional service interruptions.
             </p>
           </div>
