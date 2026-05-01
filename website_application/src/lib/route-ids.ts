@@ -1,3 +1,5 @@
+import { decodeRelayId } from "$lib/utils/formatters";
+
 export interface StreamIdentifierInput {
   routeParamId: string;
   streamUuid?: string | null;
@@ -15,6 +17,11 @@ export function resolveOperationalStreamId({
 }: StreamIdentifierInput): string {
   if (isUuid(streamUuid)) {
     return streamUuid;
+  }
+
+  const decodedRouteParamId = decodeRelayId(routeParamId, "Stream");
+  if (isUuid(decodedRouteParamId)) {
+    return decodedRouteParamId;
   }
 
   if (isUuid(routeParamId)) {

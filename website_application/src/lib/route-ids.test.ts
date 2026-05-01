@@ -11,6 +11,14 @@ describe("route id helpers", () => {
     ).toBe("123e4567-e89b-12d3-a456-426614174000");
   });
 
+  it("resolves stream Relay IDs to their raw UUID", () => {
+    expect(
+      resolveOperationalStreamId({
+        routeParamId: btoa("Stream:5eedfeed-11fe-ca57-feed-11feca570001"),
+      })
+    ).toBe("5eedfeed-11fe-ca57-feed-11feca570001");
+  });
+
   it("ignores non-UUID stream payload ids and falls back to route param UUID", () => {
     expect(
       resolveOperationalStreamId({
@@ -20,7 +28,7 @@ describe("route id helpers", () => {
     ).toBe("123e4567-e89b-12d3-a456-426614174000");
   });
 
-  it("accepts UUID route params for backwards compatibility", () => {
+  it("accepts raw UUID route params", () => {
     expect(
       resolveOperationalStreamId({
         routeParamId: "123e4567-e89b-12d3-a456-426614174000",
@@ -30,6 +38,14 @@ describe("route id helpers", () => {
 
   it("does not fail-open on non-UUID route params", () => {
     expect(resolveOperationalStreamId({ routeParamId: "U3RyZWFtOjEyMw==" })).toBe("");
+  });
+
+  it("does not resolve Relay IDs for other types", () => {
+    expect(
+      resolveOperationalStreamId({
+        routeParamId: btoa("Clip:5eedfeed-11fe-ca57-feed-11feca570001"),
+      })
+    ).toBe("");
   });
 
   it("validates UUID shape", () => {

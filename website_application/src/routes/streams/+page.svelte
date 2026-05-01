@@ -202,7 +202,6 @@
     const streamIndex = streams.findIndex((s) => s?.id === streamId);
     if (streamIndex < 0) return;
 
-    const updatedStream = { ...streams[streamIndex] };
     const status =
       event.status ??
       (event.type === "STREAM_START"
@@ -210,7 +209,14 @@
         : event.type === "STREAM_END"
           ? "OFFLINE"
           : undefined);
+
+    // Buffer/track/rewrite/source events arrive without a definitive status —
+    // ignore them here so they don't clobber the live state set by the initial
+    // query or by an earlier START/END event.
+    if (status === undefined) return;
+
     const isLive = status === "LIVE";
+    const updatedStream = { ...streams[streamIndex] };
 
     if (updatedStream.metrics) {
       updatedStream.metrics = {

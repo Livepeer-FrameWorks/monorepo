@@ -81,7 +81,7 @@
 </script>
 
 <div class="dashboard-grid border-t border-[hsl(var(--tn-fg-gutter)/0.3)]">
-  <div class="slab">
+  <div class="slab col-span-full">
     <div class="slab-header flex items-center justify-between">
       <div>
         <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">

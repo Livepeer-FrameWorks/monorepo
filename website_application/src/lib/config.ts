@@ -33,9 +33,22 @@ function parseStreamingUrl(url?: string): ParsedStreamingUrl {
   }
 }
 
+function isLocalHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname.endsWith(".localhost")
+  );
+}
+
+function preferLocalStreamingEnv(): boolean {
+  return import.meta.env.DEV && isLocalHostname(ingest.hostname);
+}
+
 // Resolved cluster-aware endpoints. When streamingConfig is available (user
 // authenticated + Quartermaster routing), cluster domains override env vars.
-// Cluster domains always use TLS.
+// Local dev keeps the env endpoints so OBS talks to the Docker-exposed Mist port.
 interface ResolvedEndpoints {
   ingestHostname: string;
   ingestUseTls: boolean;
@@ -51,7 +64,7 @@ interface ResolvedEndpoints {
 
 function resolveEndpoints(): ResolvedEndpoints {
   const sc = getStreamingConfig();
-  if (sc?.ingestDomain) {
+  if (sc?.ingestDomain && !preferLocalStreamingEnv()) {
     return {
       ingestHostname: sc.ingestDomain,
       ingestUseTls: true,
