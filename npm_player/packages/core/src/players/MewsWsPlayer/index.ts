@@ -18,7 +18,7 @@ import { WebSocketManager } from "./WebSocketManager";
 import { SourceBufferManager } from "./SourceBufferManager";
 import { translateCodec } from "../../core/CodecUtils";
 import { getBrowserInfo, isFileProtocol, isIPadWithBrokenHEVC } from "../../core/detector";
-import { formatQualityLabel } from "../../core/TimeFormat";
+import { buildQualityLevelsFromStreamTracks } from "../../core/QualityLevels";
 import { DeliveryPolicy } from "../../core/delivery/delivery-policy";
 import { DesiredBufferModel } from "../../core/delivery/desired-buffer";
 import { normalizeLiveCatchupConfig } from "../../core/delivery/live-catchup";
@@ -872,15 +872,12 @@ export class MewsWsPlayerImpl extends BasePlayer {
     const qualities: Array<{ id: string; label: string; isAuto?: boolean; active?: boolean }> = [
       { id: "auto", label: "Auto", isAuto: true, active: this.selectedTrack === "auto" },
     ];
-    // Surface concrete video tracks from stream metadata
-    if (this.streamInfoRef?.meta?.tracks) {
-      for (const track of this.streamInfoRef.meta.tracks) {
-        if (track.type === "video" && track.idx !== undefined) {
-          const id = String(track.idx);
-          const label = formatQualityLabel(track.width, track.height, track.bps);
-          qualities.push({ id, label, isAuto: false, active: this.selectedTrack === id });
-        }
-      }
+    for (const level of buildQualityLevelsFromStreamTracks(this.streamInfoRef?.meta?.tracks)) {
+      qualities.push({
+        ...level,
+        isAuto: false,
+        active: this.selectedTrack === level.id,
+      });
     }
     return qualities;
   }

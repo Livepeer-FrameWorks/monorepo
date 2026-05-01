@@ -199,6 +199,10 @@ export class WebSocketController {
     return this.send({ type: "fast_forward", ff_add: Math.round(ms) });
   }
 
+  setTracks(options: { video?: string; audio?: string; subtitle?: string }): boolean {
+    return this.send({ type: "tracks", ...options });
+  }
+
   /**
    * Get current connection state
    */

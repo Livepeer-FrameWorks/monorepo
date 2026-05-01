@@ -18,8 +18,17 @@ export type {
   PlayerManagerOptions,
   PlayerManagerEvents,
 } from "./core/PlayerManager";
-export { PlayerController, buildStreamInfoFromEndpoints } from "./core/PlayerController";
-export type { PlayerControllerConfig, PlayerControllerEvents } from "./core/PlayerController";
+export {
+  PlayerController,
+  buildQualityLevelsFromMistTracks,
+  buildStreamInfoFromEndpoints,
+} from "./core/PlayerController";
+export type {
+  MistQualityLevel,
+  MistQualityTrackInput,
+  PlayerControllerConfig,
+  PlayerControllerEvents,
+} from "./core/PlayerController";
 export {
   ensurePlayersRegistered,
   registerAllPlayers,

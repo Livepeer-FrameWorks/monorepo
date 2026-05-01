@@ -54,10 +54,16 @@ export {
   buildStreamInfoFromEndpoints,
   MIST_SOURCE_TYPES,
   PROTOCOL_TO_MIME,
+  buildQualityLevelsFromMistTracks,
   getMimeTypeForProtocol,
   getSourceTypeInfo,
 } from "./PlayerController";
-export type { PlayerControllerConfig, PlayerControllerEvents } from "./PlayerController";
+export type {
+  MistQualityLevel,
+  MistQualityTrackInput,
+  PlayerControllerConfig,
+  PlayerControllerEvents,
+} from "./PlayerController";
 
 // MistServer reporting (MistMetaPlayer feature backport)
 export { MistReporter } from "./MistReporter";

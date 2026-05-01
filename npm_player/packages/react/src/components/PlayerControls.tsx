@@ -17,6 +17,7 @@ import {
   getAvailableLocales,
   getLocaleDisplayName,
   createTranslator,
+  buildQualityLevelsFromMistTracks,
 } from "@livepeer-frameworks/player-core";
 import type { FwLocale } from "@livepeer-frameworks/player-core";
 import { Slider } from "../ui/slider";
@@ -193,29 +194,32 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   // HLS/DASH players which expect numeric indices (e.g., "0", "1", "2")
   // Quality levels - prefer props, then player API, then Mist tracks
   const qualities = useMemo(() => {
+    const concreteLevels = (
+      levels: Array<{
+        id: string;
+        isAuto?: boolean;
+        label: string;
+        bitrate?: number;
+        width?: number;
+        height?: number;
+        active?: boolean;
+      }>
+    ) => levels.filter((q) => q.id !== "auto" && !q.isAuto);
+
     // Priority 1: Props from parent (usePlayerController hook)
     if (propQualities && propQualities.length > 0) {
-      return propQualities;
+      return concreteLevels(propQualities);
     }
 
     // Priority 2: Player's quality API
     const playerQualities = player?.getQualities?.();
     if (playerQualities && playerQualities.length > 0) {
-      return playerQualities;
+      return concreteLevels(playerQualities);
     }
 
-    // Fallback to Mist track metadata for players without quality API
+    // MistServer track metadata supplies authoritative selectable tracks when the active player reports no levels.
     if (mistTracks) {
-      return Object.entries(mistTracks)
-        .filter(([, t]) => t.type === "video")
-        .map(([id, t]) => ({
-          id,
-          label: t.height ? `${t.height}p` : t.codec,
-          width: t.width,
-          height: t.height,
-          bitrate: t.bps,
-        }))
-        .sort((a, b) => (b.height || 0) - (a.height || 0));
+      return concreteLevels(buildQualityLevelsFromMistTracks(mistTracks));
     }
     return [];
   }, [propQualities, player, mistTracks]);

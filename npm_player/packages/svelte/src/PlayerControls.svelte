@@ -23,6 +23,7 @@
     formatTimeDisplay,
     getAvailableLocales,
     getLocaleDisplayName,
+    buildQualityLevelsFromMistTracks,
   } from "@livepeer-frameworks/player-core";
   import type { FwLocale } from "@livepeer-frameworks/player-core";
   import SeekBar from "./SeekBar.svelte";
@@ -239,25 +240,28 @@
   // This fixes a critical bug where Mist track IDs (e.g., "a1", "v0") were passed to
   // HLS/DASH players which expect numeric indices (e.g., "0", "1", "2")
   let qualities = $derived.by(() => {
+    const concreteLevels = (
+      levels: Array<{
+        id: string;
+        isAuto?: boolean;
+        label: string;
+        bitrate?: number;
+        width?: number;
+        height?: number;
+        active?: boolean;
+      }>
+    ) => levels.filter((q) => q.id !== "auto" && !q.isAuto);
+
     // Try player's quality API first - this returns properly indexed levels
     const playerQualities = globalPlayerManager.getCurrentPlayer()?.getQualities?.();
     if (playerQualities && playerQualities.length > 0) {
-      return playerQualities;
+      return concreteLevels(playerQualities);
     }
 
-    // Fallback to Mist track metadata for players without quality API
+    // MistServer track metadata supplies authoritative selectable tracks when the active player reports no levels.
     const mistTracks = mistStreamInfo?.meta?.tracks;
     if (mistTracks) {
-      return Object.entries(mistTracks)
-        .filter(([, t]) => t.type === "video")
-        .map(([id, t]) => ({
-          id,
-          label: t.height ? `${t.height}p` : t.codec,
-          width: t.width,
-          height: t.height,
-          bitrate: t.bps,
-        }))
-        .sort((a, b) => (b.height || 0) - (a.height || 0));
+      return concreteLevels(buildQualityLevelsFromMistTracks(mistTracks));
     }
     return [];
   });

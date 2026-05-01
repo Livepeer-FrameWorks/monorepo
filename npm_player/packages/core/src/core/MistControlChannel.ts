@@ -174,6 +174,10 @@ export class MistControlChannel extends TypedEventEmitter<MistControlChannelEven
     this.send({ type: "set_speed", play_rate: rate });
   }
 
+  setTracks(options: { video?: string; audio?: string; subtitle?: string }): void {
+    this.send({ type: "tracks", ...options });
+  }
+
   close(): void {
     try {
       this.channel.close();

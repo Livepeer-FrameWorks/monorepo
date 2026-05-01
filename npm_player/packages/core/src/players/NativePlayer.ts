@@ -2,6 +2,7 @@ import { BasePlayer } from "../core/PlayerInterface";
 import { isLiveStreamType } from "../core/PlayerInterface";
 import { LiveDurationProxy } from "../core/LiveDurationProxy";
 import { MistControlChannel } from "../core/MistControlChannel";
+import { buildQualityLevelsFromStreamTracks } from "../core/QualityLevels";
 import { normalizeLiveCatchupConfig } from "../core/delivery/live-catchup";
 import { decideDeadPointRecovery } from "../core/mist/dead-point-recovery";
 import { LiveEdgeRateController } from "../core/mist/live-edge-rate-controller";
@@ -74,6 +75,8 @@ export class NativePlayerImpl extends BasePlayer {
   private whepEndMs = 0;
   private whepPlayRate: number | "auto" | "fast-forward" = "auto";
   private currentOptions: PlayerOptions | null = null;
+  private streamInfoRef: StreamInfo | null = null;
+  private selectedTrack = "auto";
 
   // Reference html5.js features
   private liveDurationProxy: LiveDurationProxy | null = null;
@@ -271,6 +274,7 @@ export class NativePlayerImpl extends BasePlayer {
     this.currentSourceUrl = source.url;
     this.currentMimeType = source.type;
     this.currentOptions = options;
+    this.streamInfoRef = streamInfo ?? null;
     this.isMP3Source = source.type === "html5/audio/mp3";
     container.classList.add("fw-player-container");
 
@@ -453,6 +457,28 @@ export class NativePlayerImpl extends BasePlayer {
     return true;
   }
 
+  getQualities(): Array<{ id: string; label: string; isAuto?: boolean; active?: boolean }> {
+    if (this.currentMimeType !== "whep") return [];
+    const qualities: Array<{ id: string; label: string; isAuto?: boolean; active?: boolean }> = [
+      { id: "auto", label: "Auto", isAuto: true, active: this.selectedTrack === "auto" },
+    ];
+    for (const level of buildQualityLevelsFromStreamTracks(this.streamInfoRef?.meta?.tracks)) {
+      qualities.push({ ...level, isAuto: false, active: this.selectedTrack === level.id });
+    }
+    return qualities;
+  }
+
+  selectQuality(id: string): void {
+    if (this.currentMimeType !== "whep" || !this.controlChannel) return;
+    if (id === "auto") {
+      this.controlChannel.setTracks({});
+      this.selectedTrack = "auto";
+      return;
+    }
+    this.controlChannel.setTracks({ video: id });
+    this.selectedTrack = id;
+  }
+
   getCurrentTime(): number {
     if (this.controlChannel?.isOpen && this.videoElement) {
       return (this.whepSeekOffset + this.videoElement.currentTime) * 1000;
@@ -569,6 +595,8 @@ export class NativePlayerImpl extends BasePlayer {
     this.pausedAt = null;
     this.currentSourceUrl = null;
     this.currentMimeType = null;
+    this.streamInfoRef = null;
+    this.selectedTrack = "auto";
     this.cleanupLiveSeek();
     this.listeners.clear();
   }

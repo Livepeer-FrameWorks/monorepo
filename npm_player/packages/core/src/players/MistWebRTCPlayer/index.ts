@@ -18,6 +18,7 @@ import type {
   PlayerCapability,
 } from "../../core/PlayerInterface";
 import { MistSignaling, type MistTimeUpdate } from "../../core/MistSignaling";
+import { buildQualityLevelsFromStreamTracks } from "../../core/QualityLevels";
 import { normalizeLiveCatchupConfig } from "../../core/delivery/live-catchup";
 import { decideDeadPointRecovery } from "../../core/mist/dead-point-recovery";
 import { LiveEdgeRateController } from "../../core/mist/live-edge-rate-controller";
@@ -54,6 +55,8 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
   // Store source/options for loop reconnect (P1)
   private currentSource: StreamSource | null = null;
   private currentOptions: PlayerOptions | null = null;
+  private streamInfoRef: StreamInfo | null = null;
+  private selectedTrack = "auto";
 
   // Stats tracking
   private lastInboundStats: {
@@ -152,12 +155,14 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
   async initialize(
     container: HTMLElement,
     source: StreamSource,
-    options: PlayerOptions
+    options: PlayerOptions,
+    streamInfo?: StreamInfo
   ): Promise<HTMLVideoElement> {
     this.destroyed = false;
     this.container = container;
     this.currentSource = source;
     this.currentOptions = options;
+    this.streamInfoRef = streamInfo ?? null;
     container.classList.add("fw-player-container");
 
     // Load browser equalizer script (P0) - extract host from source URL
@@ -261,6 +266,10 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     this.videoElement = null;
     this.incomingMediaStream = null;
     this.container = null;
+    this.currentSource = null;
+    this.currentOptions = null;
+    this.streamInfoRef = null;
+    this.selectedTrack = "auto";
     this.listeners.clear();
   }
 
@@ -318,27 +327,24 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
    * Get available quality levels from signaling
    */
   getQualities(): Array<{ id: string; label: string; isAuto?: boolean; active?: boolean }> {
-    // Always offer auto as first option
     const qualities: Array<{ id: string; label: string; isAuto?: boolean; active?: boolean }> = [
-      { id: "auto", label: "Auto", isAuto: true, active: this.playRate === "auto" },
+      { id: "auto", label: "Auto", isAuto: true, active: this.selectedTrack === "auto" },
     ];
-
-    // If we have track info from signaling, add quality options
-    // MistServer provides track selection via ~widthxheight or |bitrate patterns
-    // For now, we expose auto mode - full track enumeration would require
-    // parsing the signaling track info which varies by stream
+    for (const level of buildQualityLevelsFromStreamTracks(this.streamInfoRef?.meta?.tracks)) {
+      qualities.push({ ...level, isAuto: false, active: this.selectedTrack === level.id });
+    }
     return qualities;
   }
 
-  // Track selection via signaling
   selectQuality(id: string): void {
     if (!this.signaling?.isConnected) return;
 
     if (id === "auto") {
-      this.signaling.setSpeed("auto");
+      this.signaling.setTracks({});
+      this.selectedTrack = "auto";
     } else {
-      // Track selection: ~widthxheight or |bitrate
       this.signaling.setTracks({ video: id });
+      this.selectedTrack = id;
     }
   }
 

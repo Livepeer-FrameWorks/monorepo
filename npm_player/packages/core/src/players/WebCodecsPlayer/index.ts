@@ -47,6 +47,7 @@ import {
   hasNativeMediaStreamTrackGenerator,
 } from "./polyfills/MediaStreamTrackGenerator";
 import { translateCodec, buildDescription } from "../../core/CodecUtils";
+import { buildQualityLevelsFromStreamTracks } from "../../core/QualityLevels";
 import { decideDeadPointRecovery } from "../../core/mist/dead-point-recovery";
 import { WebGLRenderer } from "../../rendering/WebGLRenderer";
 import { CanvasRenderer } from "../../rendering/CanvasRenderer";
@@ -167,6 +168,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   private tracks: TrackInfo[] = [];
   private tracksByIndex = new Map<number, TrackInfo>(); // Track metadata indexed by track idx
   private selectedMediaTrackIds: Set<number> | null = null;
+  private selectedVideoTrack = "auto";
   private queuedInitData = new Map<number, Uint8Array>(); // Queued INIT data waiting for track info
   private queuedChunks = new Map<number, RawChunk[]>(); // Queued chunks waiting for decoder config
   private isDestroyed = false;
@@ -440,6 +442,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this.queuedInitData.clear();
     this.queuedChunks.clear();
     this.selectedMediaTrackIds = null;
+    this.selectedVideoTrack = "auto";
     this.isDestroyed = false;
     this.useDirectRendering = false;
     this._duration = Infinity;
@@ -1720,6 +1723,29 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     }
 
     return tracks;
+  }
+
+  getQualities(): Array<{ id: string; label: string; isAuto?: boolean; active?: boolean }> {
+    const qualities: Array<{ id: string; label: string; isAuto?: boolean; active?: boolean }> = [
+      { id: "auto", label: "Auto", isAuto: true, active: this.selectedVideoTrack === "auto" },
+    ];
+    for (const level of buildQualityLevelsFromStreamTracks(
+      Array.from(this.tracksByIndex.values())
+    )) {
+      qualities.push({ ...level, isAuto: false, active: this.selectedVideoTrack === level.id });
+    }
+    return qualities;
+  }
+
+  selectQuality(id: string): void {
+    if (!this.wsController) return;
+    if (id === "auto") {
+      this.wsController.setTracks({});
+      this.selectedVideoTrack = "auto";
+      return;
+    }
+    this.wsController.setTracks({ video: id });
+    this.selectedVideoTrack = id;
   }
 
   /**

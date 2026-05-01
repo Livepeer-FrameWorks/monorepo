@@ -44,6 +44,7 @@ exports[`public API snapshot > keeps exported symbol surface stable 1`] = `
   "appendUrlParams",
   "applyTheme",
   "applyThemeOverrides",
+  "buildQualityLevelsFromMistTracks",
   "buildStreamInfoFromEndpoints",
   "buildStructure",
   "buildUrl",

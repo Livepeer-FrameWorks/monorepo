@@ -18,6 +18,7 @@ import { InteractionController } from "./InteractionController";
 import { MistReporter } from "./MistReporter";
 import { QualityMonitor, type PlayerProtocol } from "./QualityMonitor";
 import { MetaTrackManager } from "./MetaTrackManager";
+import { normalizeMistSourceUrls } from "./MistSourceUrls";
 import { ThumbnailSpriteManager } from "./ThumbnailSpriteManager";
 import type { ThumbnailCue } from "./ThumbnailVttParser";
 import { attemptAutoplay, type AutoplayResult } from "./AutoplayRecovery";
@@ -52,6 +53,12 @@ import type {
   PlayerOptions as CorePlayerOptions,
 } from "./PlayerInterface";
 import { isLiveStreamType } from "./PlayerInterface";
+import { buildQualityLevelsFromStreamTracks } from "./QualityLevels";
+export {
+  buildQualityLevelsFromMistTracks,
+  buildQualityLevelsFromStreamTracks,
+} from "./QualityLevels";
+export type { MistQualityLevel, MistQualityTrackInput } from "./QualityLevels";
 
 // ============================================================================
 // Types
@@ -301,6 +308,8 @@ export const PROTOCOL_TO_MIME: Record<string, string> = {
   DASH: "dash/video/mp4",
   MP4: "html5/video/mp4",
   WEBM: "html5/video/webm",
+  TS: "html5/video/mpeg",
+  H264: "html5/video/h264",
   WHEP: "whep",
   WebRTC: "webrtc",
   MIST_WEBRTC: "mist/webrtc", // MistServer native WebRTC signaling
@@ -336,6 +345,8 @@ export const PROTOCOL_TO_MIME: Record<string, string> = {
 
   // MistServer specific
   HTTP: "html5/video/mp4", // Default HTTP is MP4
+  JSON: "html5/text/javascript",
+  JSON_WS: "html5/text/javascript",
   MIST_HTML: "mist/html",
   PLAYER_JS: "mist/html",
 };
@@ -681,6 +692,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private _lastVttOffset: number = 0;
   private _previewUrl: string | null = null;
   private _playbackQuality: PlaybackQuality | null = null;
+  private selectedQualityId: string = "auto";
   private bootMs: number = Date.now();
   private playerManagerUnsubs: Array<() => void> = [];
 
@@ -1630,11 +1642,14 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     isAuto?: boolean;
     active?: boolean;
   }> {
-    return this.currentPlayer?.getQualities?.() ?? [];
+    const playerQualities = this.currentPlayer?.getQualities?.() ?? [];
+    if (playerQualities.length > 0) return playerQualities;
+    return buildQualityLevelsFromStreamTracks(this.streamInfo?.meta?.tracks);
   }
 
   /** Select a quality level */
   selectQuality(id: string): void {
+    this.selectedQualityId = id;
     this.currentPlayer?.selectQuality?.(id);
   }
 
@@ -2636,63 +2651,17 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this.setState("gateway_loading", { gatewayStatus: "loading" });
 
     try {
-      let baseUrl = mistUrl;
-      while (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
-      const jsonUrl = `${baseUrl}/json_${encodeURIComponent(contentId)}.js?metaeverywhere=1&inclzero=1`;
-      this.log(`[resolveFromMistServer] Fetching ${jsonUrl}`);
-
-      const response = await fetch(jsonUrl, { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error(`MistServer HTTP ${response.status}`);
-      }
-
-      // MistServer can return JSONP: callback({...}); - strip wrapper if present
-      let text = await response.text();
-      const jsonpMatch = text.match(/^[^(]+\(([\s\S]*)\);?$/);
-      if (jsonpMatch) {
-        text = jsonpMatch[1];
-      }
-      const data = JSON.parse(text);
+      const data = await this.fetchMistStreamInfo(mistUrl, contentId, "resolveFromMistServer");
 
       if (data.error) {
         throw new Error(data.error);
       }
 
-      const mistDatachannelsRaw = data?.capa?.datachannels;
-      const mistDatachannels =
-        mistDatachannelsRaw === undefined ? undefined : Boolean(mistDatachannelsRaw);
-      this.log(
-        `[resolveFromMistServer] capa.datachannels=${String(mistDatachannelsRaw)} normalized=${String(mistDatachannels)}`
-      );
-      const rawSources: StreamSource[] = Array.isArray(data.source)
-        ? data.source.map((s: { url: string; type: string }) => ({
-            ...s,
-            mistDatachannels,
-          }))
-        : [];
-      if (rawSources.length === 0) {
-        throw new Error("No sources available from MistServer");
-      }
+      const { sources, tracks } = this.applyMistStreamInfo(data, "resolveFromMistServer", mistUrl);
 
-      let tracks: StreamTrack[] = [];
-      if (data.meta?.tracks && typeof data.meta.tracks === "object") {
-        tracks = this.parseMistTracks(data.meta.tracks);
-        this.mistTracks = tracks.length > 0 ? tracks : null;
-        this.log(`[resolveFromMistServer] Parsed ${tracks.length} tracks from MistServer`);
-      }
-      if (tracks.length === 0) {
-        tracks = [{ type: "video", codec: "H264", codecstring: "avc1.42E01E" }];
-      }
-
-      this.streamInfo = {
-        source: rawSources as StreamSource[],
-        meta: { tracks },
-        type: data.type === "vod" ? "vod" : "live",
-      };
-
-      const httpSources = rawSources.filter((s) => !s.url.startsWith("ws://"));
+      const httpSources = sources.filter((s) => !s.url.startsWith("ws://"));
       const primarySource =
-        httpSources.length > 0 ? this.selectBestSource(httpSources) : rawSources[0];
+        httpSources.length > 0 ? this.selectBestSource(httpSources) : sources[0];
 
       this.endpoints = {
         primary: {
@@ -2709,12 +2678,78 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       this.detectPreviewUrl();
 
       this.setState("gateway_ready", { gatewayStatus: "ready" });
-      this.log(`[resolveFromMistServer] ${rawSources.length} sources, ${tracks.length} tracks`);
+      this.log(`[resolveFromMistServer] ${sources.length} sources, ${tracks.length} tracks`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "MistServer resolution failed";
       this.setState("gateway_error", { gatewayStatus: "error", error: message });
       throw error;
     }
+  }
+
+  private async fetchMistStreamInfo(
+    mistUrl: string,
+    contentId: string,
+    logScope: string
+  ): Promise<MistStreamInfo & Record<string, any>> {
+    let baseUrl = mistUrl;
+    while (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
+    const jsonUrl = `${baseUrl}/json_${encodeURIComponent(contentId)}.js?metaeverywhere=1&inclzero=1`;
+    this.log(`[${logScope}] Fetching ${jsonUrl}`);
+
+    const response = await fetch(jsonUrl, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`MistServer HTTP ${response.status}`);
+    }
+
+    let text = await response.text();
+    const jsonpMatch = text.match(/^[^(]+\(([\s\S]*)\);?$/);
+    if (jsonpMatch) {
+      text = jsonpMatch[1];
+    }
+    return JSON.parse(text);
+  }
+
+  private applyMistStreamInfo(
+    data: MistStreamInfo & Record<string, any>,
+    logScope: string,
+    mistBaseUrl: string
+  ): { sources: StreamSource[]; tracks: StreamTrack[] } {
+    const mistDatachannelsRaw = data?.capa?.datachannels;
+    const mistDatachannels =
+      mistDatachannelsRaw === undefined ? undefined : Boolean(mistDatachannelsRaw);
+    this.log(
+      `[${logScope}] capa.datachannels=${String(mistDatachannelsRaw)} normalized=${String(mistDatachannels)}`
+    );
+    const sources: StreamSource[] = Array.isArray(data.source)
+      ? (normalizeMistSourceUrls(
+          data.source.map((s: { url: string; type: string }) => ({
+            ...s,
+            mistDatachannels,
+          })),
+          mistBaseUrl
+        ) ?? [])
+      : [];
+    if (sources.length === 0) {
+      throw new Error("No sources available from MistServer");
+    }
+
+    let tracks: StreamTrack[] = [];
+    if (data.meta?.tracks && typeof data.meta.tracks === "object") {
+      tracks = this.parseMistTracks(data.meta.tracks);
+      this.mistTracks = tracks.length > 0 ? tracks : null;
+      this.log(`[${logScope}] Parsed ${tracks.length} tracks from MistServer`);
+    }
+    if (tracks.length === 0) {
+      tracks = [{ type: "video", codec: "H264", codecstring: "avc1.42E01E" }];
+    }
+
+    this.streamInfo = {
+      source: sources,
+      meta: { tracks },
+      type: data.type === "vod" ? "vod" : "live",
+    };
+
+    return { sources, tracks };
   }
 
   /**
@@ -2793,11 +2828,33 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     try {
       this.endpoints = await this.gatewayClient.resolve();
       this.setMetadataSeed(this.endpoints?.metadata ?? null);
+      await this.hydrateFromSelectedMistEdge(contentId);
       this.setState("gateway_ready", { gatewayStatus: "ready" });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Gateway resolution failed";
       this.setState("gateway_error", { gatewayStatus: "error", error: message });
       throw error;
+    }
+  }
+
+  private async hydrateFromSelectedMistEdge(contentId: string): Promise<void> {
+    const mistBaseUrl = this.endpoints?.primary?.baseUrl;
+    if (!mistBaseUrl) return;
+
+    try {
+      const data = await this.fetchMistStreamInfo(mistBaseUrl, contentId, "resolveFromGateway");
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      const { sources, tracks } = this.applyMistStreamInfo(data, "resolveFromGateway", mistBaseUrl);
+      this.detectThumbnailVttUrl();
+      this.detectPreviewUrl();
+      this.log(
+        `[resolveFromGateway] Mist edge supplied ${sources.length} sources, ${tracks.length} tracks`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Mist edge source discovery failed";
+      this.log(`[resolveFromGateway] Mist edge source discovery unavailable: ${message}`);
     }
   }
 
@@ -2846,6 +2903,13 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
       this.streamState = state;
       this._prevStreamIsOnline = isNowOnline;
+
+      if (state.streamInfo?.source && Array.isArray(state.streamInfo.source) && this.streamInfo) {
+        this.streamInfo.source = normalizeMistSourceUrls(
+          state.streamInfo.source as StreamSource[],
+          mistBaseUrl
+        ) as StreamSource[];
+      }
 
       // Update track metadata if MistServer provides better data
       // This handles cold-start: Gateway gives fallback codecs, MistServer gives real ones
@@ -3123,6 +3187,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     const { autoplay, muted, controls } = this.config;
     const poster = this.config.poster || this._previewUrl || undefined;
+    this.selectedQualityId = "auto";
 
     // Clear container
     container.innerHTML = "";
@@ -3453,12 +3518,16 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     this.abrController = new ABRController({
       options: { mode: "auto" },
-      getQualities: () => player.getQualities?.() ?? [],
-      selectQuality: (id) => player.selectQuality?.(id),
+      getQualities: () => this.getQualities(),
+      selectQuality: (id) => this.selectQuality(id),
       getCurrentQuality: () => {
-        const qualities = player.getQualities?.() ?? [];
+        const qualities = this.getQualities();
         const currentId = player.getCurrentQuality?.();
-        return qualities.find((q) => q.id === currentId) ?? null;
+        return (
+          qualities.find((q) => q.id === currentId) ??
+          qualities.find((q) => q.id === this.selectedQualityId) ??
+          null
+        );
       },
       // Wire up bandwidth estimate from player stats
       getBandwidthEstimate: async () => {

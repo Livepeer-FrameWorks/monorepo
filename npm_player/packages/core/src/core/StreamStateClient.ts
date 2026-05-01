@@ -6,6 +6,7 @@
  */
 
 import { TypedEventEmitter } from "./EventEmitter";
+import { normalizeMistSourceUrls } from "./MistSourceUrls";
 import { TimerManager } from "./TimerManager";
 import type { StreamState, StreamStatus, MistStreamInfo } from "../types";
 
@@ -411,7 +412,9 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
         ...this.state.streamInfo, // Keep existing source/meta if present
         ...data, // Override with new data
         // Explicitly preserve source if not in new data
-        source: data.source || this.state.streamInfo?.source,
+        source:
+          normalizeMistSourceUrls(data.source, this.config.mistBaseUrl) ||
+          this.state.streamInfo?.source,
         // Merge meta to preserve tracks
         meta: {
           ...this.state.streamInfo?.meta,

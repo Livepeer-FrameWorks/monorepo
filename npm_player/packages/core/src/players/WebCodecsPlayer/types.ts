@@ -203,13 +203,21 @@ export interface FastForwardCommand {
   ff_add: number; // milliseconds of additional data to request
 }
 
+export interface TracksCommand {
+  type: "tracks";
+  video?: string;
+  audio?: string;
+  subtitle?: string;
+}
+
 export type ControlCommand =
   | PlayCommand
   | HoldCommand
   | SeekCommand
   | SetSpeedCommand
   | RequestCodecDataCommand
-  | FastForwardCommand;
+  | FastForwardCommand
+  | TracksCommand;
 
 // ============================================================================
 // Worker Message Types
