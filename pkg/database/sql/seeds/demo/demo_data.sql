@@ -39,8 +39,10 @@ ON CONFLICT (cluster_id) DO UPDATE SET
 
 -- Demo tenant (must exist before any cluster references it via owner_tenant_id FK)
 INSERT INTO quartermaster.tenants (id, name, subdomain, deployment_tier, primary_cluster_id, official_cluster_id)
-VALUES ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'Demo Organization', 'demo', 'pro', 'central-primary', 'demo-media')
-ON CONFLICT (id) DO NOTHING;
+VALUES ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'Demo Organization', 'demo', 'pro', 'demo-media', 'demo-media')
+ON CONFLICT (id) DO UPDATE SET
+    primary_cluster_id = EXCLUDED.primary_cluster_id,
+    official_cluster_id = EXCLUDED.official_cluster_id;
 
 -- Tenant-private self-hosted cluster. This is intentionally non-platform:
 -- Purser grants access through Quartermaster's general access path after
@@ -197,30 +199,47 @@ ON CONFLICT (node_id) DO NOTHING;
 --
 -- Pricing rules (purser.tier_pricing_rules) and entitlements
 -- (purser.tier_entitlements) are seeded below as separate rows.
+WITH demo_process_config AS (
+    SELECT
+        '[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none","x-LSP-name":"Audio to AAC"},{"process":"Thumbs","x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_live,
+        '[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]'::jsonb AS processes_vod
+)
 INSERT INTO purser.billing_tiers (
     tier_name, display_name, description, base_price, currency,
     features, support_level, sla_level, metering_enabled,
     tier_level, is_enterprise, is_default_prepaid, is_default_postpaid,
     processes_live, processes_vod
-) VALUES
+)
+SELECT
+    v.tier_name, v.display_name, v.description, v.base_price, v.currency,
+    v.features::jsonb, v.support_level, v.sla_level, v.metering_enabled,
+    v.tier_level, v.is_enterprise, v.is_default_prepaid, v.is_default_postpaid,
+    pc.processes_live, pc.processes_vod
+FROM (VALUES
 ('payg', 'Pay As You Go', 'Prepaid pay-as-you-go pricing with no included usage.', 0.00, 'EUR',
 '{"recording": true, "analytics": true, "api_access": true, "support_level": "community"}',
-'community', 'none', true, 0, false, true, false, '[]', '[]'),
+'community', 'none', true, 0, false, true, false),
 ('free', 'Free', 'Self-hosted with Livepeer transcoding. Watermarked player, no SLA.', 0.00, 'EUR',
 '{"recording": false, "analytics": true, "api_access": true, "support_level": "community"}',
-'community', 'none', false, 1, false, false, true, '[]', '[]'),
+'community', 'none', false, 1, false, false, true),
 ('supporter', 'Supporter', '120K delivered mins, 10 GPU-hrs, hosted LB, custom subdomain. ~100-300 viewers.', 79.00, 'EUR',
 '{"recording": true, "analytics": true, "api_access": true, "support_level": "basic"}',
-'basic', 'none', true, 2, false, false, false, '[]', '[]'),
+'basic', 'none', true, 2, false, false, false),
 ('developer', 'Developer', '500K delivered mins, 50 GPU-hrs (priority), team features, advanced analytics. ~500-1K viewers.', 249.00, 'EUR',
 '{"recording": true, "analytics": true, "api_access": true, "support_level": "priority"}',
-'priority', 'standard', true, 3, false, false, false, '[]', '[]'),
+'priority', 'standard', true, 3, false, false, false),
 ('production', 'Production', '2M delivered mins, 250 GPU-hrs, dedicated capacity, 24/7 support + SLA. ~2-5K viewers.', 999.00, 'EUR',
 '{"recording": true, "analytics": true, "api_access": true, "custom_branding": true, "sla": true, "support_level": "enterprise"}',
-'enterprise', 'premium', true, 4, false, false, false, '[]', '[]'),
+'enterprise', 'premium', true, 4, false, false, false),
 ('enterprise', 'Enterprise', 'Custom capacity, private deployments, dedicated support, custom SLAs. Contact us.', 0.00, 'EUR',
 '{"recording": true, "analytics": true, "api_access": true, "custom_branding": true, "sla": true, "support_level": "dedicated", "processing_customizable": true}',
-'dedicated', 'custom', true, 5, true, false, false, '[]', '[]')
+'dedicated', 'custom', true, 5, true, false, false)
+) AS v(
+    tier_name, display_name, description, base_price, currency,
+    features, support_level, sla_level, metering_enabled,
+    tier_level, is_enterprise, is_default_prepaid, is_default_postpaid
+)
+CROSS JOIN demo_process_config pc
 ON CONFLICT (tier_name) DO UPDATE SET
     display_name = EXCLUDED.display_name,
     description = EXCLUDED.description,
@@ -1419,10 +1438,11 @@ ON CONFLICT (instance_id) DO UPDATE SET
     status = 'running',
     updated_at = NOW();
 
--- Assign foghorn instances to serve both clusters.
+-- Assign HA Foghorn instances to the platform cluster. The local dev
+-- Mist/Helmsman stack sends triggers to foghorn-1 only, so demo-media resolves
+-- playback through foghorn-1.
 INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id) VALUES
     ('5eedf0e1-0001-da7a-f0e1-0001da7a0001', 'central-primary'),
     ('5eedf0e1-0001-da7a-f0e1-0001da7a0001', 'demo-media'),
-    ('5eedf0e1-0002-da7a-f0e1-0002da7a0002', 'central-primary'),
-    ('5eedf0e1-0002-da7a-f0e1-0002da7a0002', 'demo-media')
+    ('5eedf0e1-0002-da7a-f0e1-0002da7a0002', 'central-primary')
 ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true;

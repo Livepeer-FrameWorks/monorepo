@@ -778,9 +778,9 @@ SELECT
     status,
     count() AS event_count,
     countIf(status = 'success') AS success_count,
-    sum(latency_ms) AS sum_latency_ms,
-    sum(routing_distance_km) AS sum_distance_km,
-    max(latency_ms) AS max_latency_ms,
+    sum(ifNull(latency_ms, 0)) AS sum_latency_ms,
+    sum(ifNull(routing_distance_km, 0)) AS sum_distance_km,
+    max(ifNull(latency_ms, 0)) AS max_latency_ms,
     avg(score) AS avg_score
 FROM routing_decisions
 GROUP BY hour, tenant_id, cluster_id, remote_cluster_id, status;
