@@ -8,12 +8,7 @@
     tone?: import("$lib/components/ui/badge").BadgeTone;
   }
 
-  let {
-    label = "Public Beta",
-    className = "",
-    variant = "secondary",
-    tone = undefined,
-  }: Props = $props();
+  let { label = "Beta", className = "", variant = "secondary", tone = undefined }: Props = $props();
 </script>
 
 <Badge class={`uppercase tracking-wide ${className}`} {variant} {tone}>
