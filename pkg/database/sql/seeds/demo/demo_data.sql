@@ -37,6 +37,11 @@ ON CONFLICT (cluster_id) DO UPDATE SET
     visibility = 'public',
     short_description = COALESCE(EXCLUDED.short_description, quartermaster.infrastructure_clusters.short_description);
 
+-- Demo tenant (must exist before any cluster references it via owner_tenant_id FK)
+INSERT INTO quartermaster.tenants (id, name, subdomain, deployment_tier, primary_cluster_id, official_cluster_id)
+VALUES ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'Demo Organization', 'demo', 'pro', 'central-primary', 'demo-media')
+ON CONFLICT (id) DO NOTHING;
+
 -- Tenant-private self-hosted cluster. This is intentionally non-platform:
 -- Purser grants access through Quartermaster's general access path after
 -- classifying it as tenant_private, and usage rates at zero when priced as
@@ -70,11 +75,6 @@ ON CONFLICT (service_id) DO NOTHING;
 INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas, config_blob)
 VALUES ('central-primary', 'api_tenants', 'running', 1, '{"database_url": "postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks"}')
 ON CONFLICT (cluster_id, service_id) DO NOTHING;
-
--- Demo tenant
-INSERT INTO quartermaster.tenants (id, name, subdomain, deployment_tier, primary_cluster_id, official_cluster_id)
-VALUES ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'Demo Organization', 'demo', 'pro', 'central-primary', 'demo-media')
-ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO quartermaster.tenant_cluster_assignments (tenant_id, cluster_id, deployment_tier, is_primary)
 VALUES

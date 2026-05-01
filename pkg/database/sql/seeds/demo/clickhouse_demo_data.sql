@@ -803,7 +803,7 @@ INSERT INTO periscope.storage_events (
 -- 9. Processing Events - 7 days of 5-minute samples
 -- =================================================================================================
 INSERT INTO periscope.processing_events (
-    timestamp, tenant_id, node_id, stream_id, internal_name,
+    timestamp, tenant_id, node_id, cluster_id, stream_id, internal_name,
     process_type, track_type, duration_ms,
     input_codec, output_codec,
     width, height, rendition_count,
@@ -813,6 +813,7 @@ SELECT
     toDateTime(now() - INTERVAL (number * 5) MINUTE) as timestamp,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
     'edge-node-1' as node_id,
+    'central-primary' as cluster_id,
     '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
     'demo_live_stream_001' as internal_name,
     'transcode' as process_type,
@@ -1012,6 +1013,7 @@ INSERT INTO periscope.processing_hourly
 SELECT
     toStartOfHour(timestamp) AS hour,
     tenant_id,
+    cluster_id,
     process_type,
     lower(coalesce(output_codec, 'unknown')) AS output_codec,
     coalesce(track_type, 'video') AS track_type,
@@ -1019,7 +1021,7 @@ SELECT
     countState() AS segment_count,
     uniqState(stream_id) AS unique_streams
 FROM periscope.processing_events
-GROUP BY hour, tenant_id, process_type, output_codec, track_type;
+GROUP BY hour, tenant_id, cluster_id, process_type, output_codec, track_type;
 
 -- Backfill client_qoe_5m from client_qoe_samples
 INSERT INTO periscope.client_qoe_5m
@@ -1102,18 +1104,20 @@ INSERT INTO periscope.storage_usage_hourly
 SELECT
     toStartOfHour(timestamp) AS hour,
     tenant_id,
+    cluster_id,
     avgState(total_bytes) AS avg_total_bytes,
     avgState(clip_bytes) AS avg_clip_bytes,
     avgState(dvr_bytes) AS avg_dvr_bytes,
     avgState(vod_bytes) AS avg_vod_bytes
 FROM periscope.storage_snapshots
-GROUP BY hour, tenant_id;
+GROUP BY hour, tenant_id, cluster_id;
 
 -- Backfill processing_daily from processing_hourly
 INSERT INTO periscope.processing_daily
 SELECT
     toDate(hour) AS day,
     tenant_id,
+    cluster_id,
     sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'h264') / 1000.0 AS livepeer_h264_seconds,
     sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'vp9') / 1000.0 AS livepeer_vp9_seconds,
     sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'av1') / 1000.0 AS livepeer_av1_seconds,
@@ -1133,7 +1137,7 @@ SELECT
     sumMergeIf(total_duration_ms, process_type = 'Livepeer') / 1000.0 AS livepeer_seconds,
     sumMergeIf(total_duration_ms, process_type = 'AV') / 1000.0 AS native_av_seconds
 FROM periscope.processing_hourly
-GROUP BY day, tenant_id;
+GROUP BY day, tenant_id, cluster_id;
 
 -- Backfill api_usage_hourly from api_requests
 INSERT INTO periscope.api_usage_hourly
