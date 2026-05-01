@@ -2292,16 +2292,19 @@ func quartermasterHTTPURL(grpcAddr string) string {
 }
 
 var proxyRouteServiceNames = map[string]struct{}{
-	"bridge":    {},
-	"chandler":  {},
-	"chartroom": {},
-	"chatwoot":  {},
-	"foghorn":   {},
-	"foredeck":  {},
-	"logbook":   {},
-	"listmonk":  {},
-	"steward":   {},
-	"vmauth":    {},
+	"bridge":           {},
+	"chandler":         {},
+	"chartroom":        {},
+	"chatwoot":         {},
+	"foghorn":          {},
+	"foredeck":         {},
+	"grafana":          {},
+	"logbook":          {},
+	"listmonk":         {},
+	"livepeer-gateway": {},
+	"metabase":         {},
+	"steward":          {},
+	"vmauth":           {},
 }
 
 func buildExtraProxyRoutesForHost(manifest *inventory.Manifest, hostName, clusterID string) []map[string]any {

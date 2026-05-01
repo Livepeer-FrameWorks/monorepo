@@ -1,4 +1,26 @@
 ---
+- name: Validate vmauth configuration
+  ansible.builtin.assert:
+    that:
+      - vmauth_artifact_url | length > 0
+      - vmauth_artifact_checksum | length > 0
+      - vmauth_username | length > 0
+      - vmauth_password | length > 0
+      - vmauth_upstream_url | length > 0
+    fail_msg: "vmauth requires artifact URL/checksum, basic auth credentials, and an upstream URL"
+
+- name: Set vmauth extract directory
+  ansible.builtin.set_fact:
+    vmauth_extract_dir: "/tmp/frameworks-vmauth-{{ vmauth_artifact_checksum | hash('sha1') }}"
+
+- name: Ensure vmauth extract directory
+  ansible.builtin.file:
+    path: "{{ vmauth_extract_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Download vmauth binary
   ansible.builtin.get_url:
     url: "{{ vmauth_artifact_url }}"
@@ -10,11 +32,39 @@
 - name: Extract vmauth
   ansible.builtin.unarchive:
     src: /tmp/vmauth.tar.gz
-    dest: /usr/local/bin
+    dest: "{{ vmauth_extract_dir }}"
     remote_src: true
     mode: "0755"
-    creates: "{{ vmauth_bin }}"
+    creates: "{{ vmauth_extract_dir }}/{{ vmauth_artifact_binary }}"
   when: not ansible_check_mode
+
+- name: Install vmauth binary
+  ansible.builtin.copy:
+    src: "{{ vmauth_extract_dir }}/{{ vmauth_artifact_binary }}"
+    dest: "{{ vmauth_bin }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  notify: vmauth restart
+  when: not ansible_check_mode
+
+- name: Ensure vmauth config directory
+  ansible.builtin.file:
+    path: "{{ vmauth_config_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render vmauth config
+  ansible.builtin.template:
+    src: vmauth.yml.j2
+    dest: "{{ vmauth_config_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: vmauth restart
 
 - name: Render vmauth systemd unit
   ansible.builtin.template:

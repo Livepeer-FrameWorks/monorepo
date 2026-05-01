@@ -35,6 +35,10 @@ func PublicServiceType(serviceName string) (string, bool) {
 		return "listmonk", true
 	case "chatwoot":
 		return "chatwoot", true
+	case "grafana":
+		return "grafana", true
+	case "metabase":
+		return "metabase", true
 	case "livepeer-gateway":
 		return "livepeer-gateway", true
 	case "vmauth":

@@ -1,24 +1,58 @@
 ---
+- name: Resolve active Nginx config path
+  ansible.builtin.set_fact:
+    nginx_effective_config_dir: >-
+      {{
+        nginx_config_dir
+        | default(nginx_config_dir_by_family[ansible_facts.os_family] | default('/etc/nginx/conf.d'), true)
+      }}
+    nginx_effective_config_path: >-
+      {{
+        nginx_config_path
+        | default(nginx_config_path_by_family[ansible_facts.os_family] | default('/etc/nginx/conf.d/frameworks.conf'), true)
+      }}
+
 - name: Ensure Nginx config directory
   ansible.builtin.file:
-    path: "{{ nginx_config_dir }}"
+    path: "{{ nginx_effective_config_dir }}"
     state: directory
     owner: root
     group: root
     mode: "0755"
+
+- name: Resolve Nginx backup path
+  ansible.builtin.set_fact:
+    nginx_effective_backup_path: "{{ nginx_backup_dir }}/{{ nginx_effective_config_path | basename }}.bak"
+
+- name: Ensure Nginx backup directory
+  ansible.builtin.file:
+    path: "{{ nginx_backup_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode
+
+- name: Remove stale in-tree Nginx backup config
+  ansible.builtin.file:
+    path: "{{ nginx_effective_config_path }}.bak"
+    state: absent
+  when:
+    - not ansible_check_mode
+    - nginx_effective_backup_path != nginx_effective_config_path + '.bak'
 
 - name: Ensure ingress TLS placeholders before validation
   ansible.builtin.import_tasks: tls_placeholders.yml
 
 - name: Stat current FrameWorks Nginx config
   ansible.builtin.stat:
-    path: "{{ nginx_config_path }}"
+    path: "{{ nginx_effective_config_path }}"
   register: nginx_config_stat
 
 - name: Backup current FrameWorks Nginx config
   ansible.builtin.copy:
-    src: "{{ nginx_config_path }}"
-    dest: "{{ nginx_config_path }}.bak"
+    src: "{{ nginx_effective_config_path }}"
+    dest: "{{ nginx_effective_backup_path }}"
     remote_src: true
     mode: "0644"
   when:
@@ -30,7 +64,7 @@
     - name: Render FrameWorks Nginx config
       ansible.builtin.template:
         src: frameworks.conf.j2
-        dest: "{{ nginx_config_path }}"
+        dest: "{{ nginx_effective_config_path }}"
         owner: root
         group: root
         mode: "0644"
@@ -47,8 +81,8 @@
   rescue:
     - name: Restore previous Nginx config after validation failure
       ansible.builtin.copy:
-        src: "{{ nginx_config_path }}.bak"
-        dest: "{{ nginx_config_path }}"
+        src: "{{ nginx_effective_backup_path }}"
+        dest: "{{ nginx_effective_config_path }}"
         remote_src: true
         mode: "0644"
       when:
@@ -57,7 +91,7 @@
 
     - name: Remove broken first-run Nginx config
       ansible.builtin.file:
-        path: "{{ nginx_config_path }}"
+        path: "{{ nginx_effective_config_path }}"
         state: absent
       when:
         - not ansible_check_mode

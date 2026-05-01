@@ -16,6 +16,7 @@ node_exporter_enabled: true
 # checksum + version directly, mirroring the yugabyte pattern.
 victoriametrics_artifact_url: ""
 victoriametrics_artifact_checksum: ""
+victoriametrics_artifact_binary: victoria-metrics-prod
 victoriametrics_version: ""
 victoriametrics_port: 8428
 victoriametrics_storage_path: /var/lib/victoria-metrics-data
@@ -23,14 +24,25 @@ victoriametrics_retention_period: "12"
 
 vmagent_artifact_url: ""
 vmagent_artifact_checksum: ""
+vmagent_artifact_binary: vmagent-prod
 vmagent_version: ""
 vmagent_port: 8429
+vmagent_config_path: /etc/vmagent/scrape.yml
+vmagent_scrape_interval: "30s"
+vmagent_scrape_targets: []
 vmagent_remote_write_url: ""
+vmagent_remote_write_basic_auth_username: ""
+vmagent_remote_write_basic_auth_password: ""
 
 vmauth_artifact_url: ""
 vmauth_artifact_checksum: ""
+vmauth_artifact_binary: vmauth-prod
 vmauth_version: ""
 vmauth_port: 8427
+vmauth_config_path: /etc/vmauth/config.yml
+vmauth_username: ""
+vmauth_password: ""
+vmauth_upstream_url: ""
 
 # Select which components to install on this host. Override from manifest.
 prometheus_stack_components: [prometheus, node_exporter]

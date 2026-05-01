@@ -17,6 +17,8 @@ var managedServiceTypes = []string{
 	"steward",
 	"listmonk",
 	"chatwoot",
+	"grafana",
+	"metabase",
 }
 
 var clusterScopedServiceTypes = map[string]struct{}{
@@ -48,6 +50,8 @@ var publicSubdomains = map[string]string{
 	"steward":          "steward",
 	"listmonk":         "listmonk",
 	"chatwoot":         "chatwoot",
+	"grafana":          "grafana",
+	"metabase":         "metabase",
 }
 
 // ManagedServiceTypes returns the public service types Navigator reconciles.

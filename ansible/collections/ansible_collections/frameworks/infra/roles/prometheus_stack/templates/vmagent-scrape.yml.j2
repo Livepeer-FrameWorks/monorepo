@@ -1,0 +1,18 @@
+global:
+  scrape_interval: {{ vmagent_scrape_interval }}
+scrape_configs:
+{% for target in vmagent_scrape_targets %}
+  - job_name: {{ target.job_name | to_json }}
+    metrics_path: {{ target.path | default('/metrics') | to_json }}
+    static_configs:
+      - targets:
+{% for address in target.targets %}
+          - {{ address | to_json }}
+{% endfor %}
+{% if target.labels is defined and target.labels | length > 0 %}
+        labels:
+{% for key, value in target.labels | dictsort %}
+          {{ key }}: {{ value | string | to_json }}
+{% endfor %}
+{% endif %}
+{% endfor %}

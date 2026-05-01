@@ -184,7 +184,19 @@ func TestPublicServiceTypeIncludesChandler(t *testing.T) {
 }
 
 func TestProxyRouteServiceNamesIncludeDefaultCloudflareProxyServices(t *testing.T) {
-	for _, service := range []string{"bridge", "chandler", "chartroom", "chatwoot", "foredeck", "listmonk", "logbook", "steward"} {
+	for _, service := range []string{
+		"bridge",
+		"chandler",
+		"chartroom",
+		"chatwoot",
+		"foredeck",
+		"grafana",
+		"listmonk",
+		"livepeer-gateway",
+		"logbook",
+		"metabase",
+		"steward",
+	} {
 		if _, ok := proxyRouteServiceNames[service]; !ok {
 			t.Fatalf("expected %s to be eligible for local reverse proxy routing", service)
 		}

@@ -1,0 +1,4 @@
+users:
+  - username: {{ vmauth_username | to_json }}
+    password: {{ vmauth_password | to_json }}
+    url_prefix: {{ vmauth_upstream_url | to_json }}

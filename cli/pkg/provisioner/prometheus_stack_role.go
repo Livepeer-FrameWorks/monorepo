@@ -42,14 +42,38 @@ func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config Se
 				vars["vmagent_artifact_checksum"] = art.Checksum
 				vars["vmagent_version"] = firstNonEmpty(config.Version, art.Version)
 			}
-			if rw, ok := config.Metadata["remote_write_url"].(string); ok {
+			if targets, ok := config.Metadata["scrape_targets"]; ok {
+				vars["vmagent_scrape_targets"] = targets
+			}
+			if interval := strings.TrimSpace(config.EnvVars["VMAGENT_SCRAPE_INTERVAL"]); interval != "" {
+				vars["vmagent_scrape_interval"] = interval
+			}
+			if rw := firstNonEmpty(
+				metaString(config.Metadata, "remote_write_url"),
+				config.EnvVars["VMAGENT_REMOTE_WRITE_URL"],
+			); rw != "" {
 				vars["vmagent_remote_write_url"] = rw
+			}
+			if username := strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_BASIC_AUTH_USERNAME"]); username != "" {
+				vars["vmagent_remote_write_basic_auth_username"] = username
+			}
+			if password := strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_BASIC_AUTH_PASSWORD"]); password != "" {
+				vars["vmagent_remote_write_basic_auth_password"] = password
 			}
 		case "vmauth":
 			if art, err := helpers.ResolveArtifact("vmauth", archKey, channel, config.Metadata); err == nil {
 				vars["vmauth_artifact_url"] = art.URL
 				vars["vmauth_artifact_checksum"] = art.Checksum
 				vars["vmauth_version"] = firstNonEmpty(config.Version, art.Version)
+			}
+			if username := strings.TrimSpace(config.EnvVars["VM_HTTP_AUTH_USERNAME"]); username != "" {
+				vars["vmauth_username"] = username
+			}
+			if password := strings.TrimSpace(config.EnvVars["VM_HTTP_AUTH_PASSWORD"]); password != "" {
+				vars["vmauth_password"] = password
+			}
+			if upstream := vmauthUpstreamURL(config.EnvVars); upstream != "" {
+				vars["vmauth_upstream_url"] = upstream
 			}
 		case "prometheus":
 			if v := firstNonEmpty(config.Version, metaString(config.Metadata, "version")); v != "" {
@@ -71,6 +95,19 @@ func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config Se
 		}
 	}
 	return vars, nil
+}
+
+func vmauthUpstreamURL(env map[string]string) string {
+	if env == nil {
+		return ""
+	}
+	if upstream := strings.TrimSpace(env["VMAUTH_UPSTREAM_URL"]); upstream != "" {
+		return strings.TrimRight(upstream, "/")
+	}
+	upstream := strings.TrimSpace(env["VMAUTH_UPSTREAM_WRITE_URL"])
+	upstream = strings.TrimSuffix(upstream, "/")
+	upstream = strings.TrimSuffix(upstream, "/api/v1/write")
+	return strings.TrimSuffix(upstream, "/")
 }
 
 func prometheusStackRoleDetect(ctx context.Context, host inventory.Host, helpers RoleBuildHelpers) (*detect.ServiceState, error) {

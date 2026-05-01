@@ -1,22 +1,51 @@
 ---
+- name: Validate VictoriaMetrics artifact configuration
+  ansible.builtin.assert:
+    that:
+      - victoriametrics_artifact_url | length > 0
+      - victoriametrics_artifact_checksum | length > 0
+    fail_msg: "victoriametrics requires artifact URL and checksum"
+
+- name: Set VictoriaMetrics extract directory
+  ansible.builtin.set_fact:
+    victoriametrics_extract_dir: "/tmp/frameworks-victoriametrics-{{ victoriametrics_artifact_checksum | hash('sha1') }}"
+
+- name: Ensure VictoriaMetrics extract directory
+  ansible.builtin.file:
+    path: "{{ victoriametrics_extract_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Download VictoriaMetrics binary
   ansible.builtin.get_url:
     url: "{{ victoriametrics_artifact_url }}"
     dest: /tmp/victoria-metrics.tar.gz
     checksum: "{{ victoriametrics_artifact_checksum }}"
     mode: "0644"
-  when: victoriametrics_artifact_url | length > 0
+  when: not ansible_check_mode
 
 - name: Extract VictoriaMetrics
   ansible.builtin.unarchive:
     src: /tmp/victoria-metrics.tar.gz
-    dest: /usr/local/bin
+    dest: "{{ victoriametrics_extract_dir }}"
     remote_src: true
     mode: "0755"
-    creates: "{{ victoriametrics_bin }}"
+    creates: "{{ victoriametrics_extract_dir }}/{{ victoriametrics_artifact_binary }}"
   when:
-    - victoriametrics_artifact_url | length > 0
     - not ansible_check_mode
+
+- name: Install VictoriaMetrics binary
+  ansible.builtin.copy:
+    src: "{{ victoriametrics_extract_dir }}/{{ victoriametrics_artifact_binary }}"
+    dest: "{{ victoriametrics_bin }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  notify: victoriametrics restart
+  when: not ansible_check_mode
 
 - name: Ensure VictoriaMetrics storage dir
   ansible.builtin.file:

@@ -1,4 +1,25 @@
 ---
+- name: Validate vmagent configuration
+  ansible.builtin.assert:
+    that:
+      - vmagent_artifact_url | length > 0
+      - vmagent_artifact_checksum | length > 0
+      - vmagent_remote_write_url | length > 0
+      - vmagent_scrape_targets | length > 0
+    fail_msg: "vmagent requires artifact URL/checksum, remote write URL, and at least one scrape target"
+
+- name: Set vmagent extract directory
+  ansible.builtin.set_fact:
+    vmagent_extract_dir: "/tmp/frameworks-vmagent-{{ vmagent_artifact_checksum | hash('sha1') }}"
+
+- name: Ensure vmagent extract directory
+  ansible.builtin.file:
+    path: "{{ vmagent_extract_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Download vmagent binary
   ansible.builtin.get_url:
     url: "{{ vmagent_artifact_url }}"
@@ -10,11 +31,39 @@
 - name: Extract vmagent
   ansible.builtin.unarchive:
     src: /tmp/vmagent.tar.gz
-    dest: /usr/local/bin
+    dest: "{{ vmagent_extract_dir }}"
     remote_src: true
     mode: "0755"
-    creates: "{{ vmagent_bin }}"
+    creates: "{{ vmagent_extract_dir }}/{{ vmagent_artifact_binary }}"
   when: not ansible_check_mode
+
+- name: Install vmagent binary
+  ansible.builtin.copy:
+    src: "{{ vmagent_extract_dir }}/{{ vmagent_artifact_binary }}"
+    dest: "{{ vmagent_bin }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  notify: vmagent restart
+  when: not ansible_check_mode
+
+- name: Ensure vmagent config directory
+  ansible.builtin.file:
+    path: "{{ vmagent_config_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render vmagent scrape config
+  ansible.builtin.template:
+    src: vmagent-scrape.yml.j2
+    dest: "{{ vmagent_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: vmagent restart
 
 - name: Render vmagent systemd unit
   ansible.builtin.template:

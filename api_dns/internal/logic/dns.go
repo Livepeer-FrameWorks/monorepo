@@ -151,8 +151,10 @@ func loadProxyServices() map[string]bool {
 			"chartroom": true,
 			"chatwoot":  true,
 			"foredeck":  true,
+			"grafana":   true,
 			"listmonk":  true,
 			"logbook":   true,
+			"metabase":  true,
 			"steward":   true,
 		}
 	}

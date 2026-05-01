@@ -1,3 +1,6 @@
+server_names_hash_bucket_size {{ nginx_server_names_hash_bucket_size }};
+types_hash_max_size {{ nginx_types_hash_max_size }};
+
 {% if nginx_sites | length == 0 %}
 server {
     listen {{ nginx_http_port }} default_server;
@@ -28,7 +31,7 @@ server {
 
 {% if site.tls_mode | default('') == 'files' and site.tls_cert_path | default('') | length > 0 and site.tls_key_path | default('') | length > 0 %}
 server {
-    listen {{ nginx_https_port }} ssl http2;
+    listen {{ nginx_https_port }} ssl;
     server_name {{ site.domains | join(' ') }};
     ssl_certificate {{ site.tls_cert_path }};
     ssl_certificate_key {{ site.tls_key_path }};

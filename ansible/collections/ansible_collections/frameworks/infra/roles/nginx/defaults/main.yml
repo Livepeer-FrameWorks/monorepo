@@ -6,8 +6,19 @@ nginx_package_by_family:
   Archlinux: nginx
   RedHat: nginx
 nginx_service_name: nginx
-nginx_config_dir: /etc/nginx/conf.d
-nginx_config_path: /etc/nginx/conf.d/frameworks.conf
+nginx_config_dir: ""
+nginx_config_path: ""
+nginx_config_dir_by_family:
+  Debian: /etc/nginx/conf.d
+  Archlinux: /etc/nginx/sites-enabled
+  RedHat: /etc/nginx/conf.d
+nginx_config_path_by_family:
+  Debian: /etc/nginx/conf.d/frameworks.conf
+  Archlinux: /etc/nginx/sites-enabled/frameworks.conf
+  RedHat: /etc/nginx/conf.d/frameworks.conf
+nginx_backup_dir: /var/backups/frameworks/nginx
+nginx_server_names_hash_bucket_size: 128
+nginx_types_hash_max_size: 4096
 nginx_https_port: 443
 # Distros put the nginx binary in different places (/usr/sbin on Debian,
 # /usr/bin on some Arch builds). The reload service unit's ExecStartPre
