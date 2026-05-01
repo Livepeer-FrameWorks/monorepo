@@ -4,6 +4,14 @@
   tags: [install, configure, service]
   when: "'prometheus' in prometheus_stack_components or 'node_exporter' in prometheus_stack_components"
 
+- name: Prometheus_stack | VictoriaMetrics shared runtime identity
+  ansible.builtin.import_tasks: vm_identity.yml
+  tags: [install, configure, service]
+  when: >-
+    prometheus_stack_components
+    | intersect(['victoriametrics', 'vmagent', 'vmauth'])
+    | length > 0
+
 - name: Prometheus_stack | victoriametrics
   ansible.builtin.import_tasks: victoriametrics.yml
   tags: [install, configure, service]

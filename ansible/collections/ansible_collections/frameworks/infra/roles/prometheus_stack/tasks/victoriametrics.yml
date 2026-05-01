@@ -1,14 +1,4 @@
 ---
-- name: Ensure victoriametrics system user
-  ansible.builtin.user:
-    name: "{{ prometheus_stack_user }}"
-    group: "{{ prometheus_stack_group }}"
-    system: true
-    shell: /usr/sbin/nologin
-    create_home: false
-    state: present
-  when: prometheus_stack_user != ""
-
 - name: Download VictoriaMetrics binary
   ansible.builtin.get_url:
     url: "{{ victoriametrics_artifact_url }}"

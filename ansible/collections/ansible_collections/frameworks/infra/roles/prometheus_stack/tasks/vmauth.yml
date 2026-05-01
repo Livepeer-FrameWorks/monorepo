@@ -1,13 +1,4 @@
 ---
-- name: Ensure prometheus user (vmauth runs under same uid)
-  ansible.builtin.user:
-    name: "{{ prometheus_stack_user }}"
-    group: "{{ prometheus_stack_group }}"
-    system: true
-    shell: /usr/sbin/nologin
-    create_home: false
-    state: present
-
 - name: Download vmauth binary
   ansible.builtin.get_url:
     url: "{{ vmauth_artifact_url }}"
