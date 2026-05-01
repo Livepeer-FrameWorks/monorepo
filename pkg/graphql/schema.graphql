@@ -571,6 +571,12 @@ type Query {
   skipperReports(limit: Int, offset: Int): SkipperReportsConnection!
 
   """
+  Fetch a single Skipper investigation report by id.
+  Returns null when the report does not exist or is not owned by the current tenant.
+  """
+  skipperReport(id: ID!): SkipperReport
+
+  """
   Get count of unread Skipper investigation reports.
   """
   skipperUnreadReportCount: Int!

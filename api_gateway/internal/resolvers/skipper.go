@@ -403,6 +403,24 @@ func (r *Resolver) DoSkipperReports(ctx context.Context, limit, offset *int) (*m
 	}, nil
 }
 
+// DoSkipperReport fetches a single investigation report by id for the current tenant.
+// Lookups are tenant-scoped by the Skipper service, so any failure (including a
+// missing or cross-tenant id) surfaces as an error to the caller.
+func (r *Resolver) DoSkipperReport(ctx context.Context, id string) (*pb.SkipperReport, error) {
+	if r.Clients.Skipper == nil {
+		return nil, fmt.Errorf("skipper service unavailable")
+	}
+	if _, err := middleware.RequireAuth(ctx); err != nil {
+		return nil, fmt.Errorf("authentication required: %w", err)
+	}
+
+	resp, err := r.Clients.Skipper.GetReport(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get report: %w", err)
+	}
+	return resp, nil
+}
+
 // DoSkipperUnreadReportCount returns the unread investigation report count.
 func (r *Resolver) DoSkipperUnreadReportCount(ctx context.Context) (int, error) {
 	if r.Clients.Skipper == nil {

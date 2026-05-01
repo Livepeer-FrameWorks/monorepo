@@ -3881,6 +3881,11 @@ func (r *queryResolver) SkipperReports(ctx context.Context, limit *int, offset *
 	return r.Resolver.DoSkipperReports(ctx, limit, offset)
 }
 
+// SkipperReport is the resolver for the skipperReport field.
+func (r *queryResolver) SkipperReport(ctx context.Context, id string) (*proto.SkipperReport, error) {
+	return r.Resolver.DoSkipperReport(ctx, id)
+}
+
 // SkipperUnreadReportCount is the resolver for the skipperUnreadReportCount field.
 func (r *queryResolver) SkipperUnreadReportCount(ctx context.Context) (int, error) {
 	return r.Resolver.DoSkipperUnreadReportCount(ctx)

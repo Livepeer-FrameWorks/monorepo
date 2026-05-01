@@ -9,3 +9,4 @@ export { default as SkipperStreamCard } from "./SkipperStreamCard.svelte";
 export { default as SkipperSearchCard } from "./SkipperSearchCard.svelte";
 export { default as SkipperActionCard } from "./SkipperActionCard.svelte";
 export { default as SkipperCodeCard } from "./SkipperCodeCard.svelte";
+export { default as SkipperReportDialog } from "./SkipperReportDialog.svelte";

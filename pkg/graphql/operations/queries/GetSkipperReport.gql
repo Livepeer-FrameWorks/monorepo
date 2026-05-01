@@ -1,0 +1,15 @@
+query GetSkipperReport($id: ID!) {
+  skipperReport(id: $id) {
+    id
+    trigger
+    summary
+    metricsReviewed
+    rootCause
+    recommendations {
+      text
+      confidence
+    }
+    createdAt
+    readAt
+  }
+}

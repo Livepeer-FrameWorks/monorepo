@@ -2,8 +2,10 @@
   import { notificationStore, type SkipperReport } from "$lib/stores/notifications.svelte";
   import { resolve } from "$app/paths";
   import { onMount } from "svelte";
+  import { formatRelativeTime } from "$lib/utils/formatters";
 
   const skipperPath = resolve("/skipper");
+  const investigationsPath = resolve("/skipper/investigations");
 
   let panelEl: HTMLDivElement | undefined = $state();
 
@@ -16,19 +18,6 @@
     document.addEventListener("click", handleClickOutside, true);
     return () => document.removeEventListener("click", handleClickOutside, true);
   });
-
-  function formatRelativeTime(dateStr: string): string {
-    const now = Date.now();
-    const then = new Date(dateStr).getTime();
-    const diffMs = now - then;
-    const diffMin = Math.floor(diffMs / 60000);
-    if (diffMin < 1) return "just now";
-    if (diffMin < 60) return `${diffMin}m ago`;
-    const diffHr = Math.floor(diffMin / 60);
-    if (diffHr < 24) return `${diffHr}h ago`;
-    const diffDay = Math.floor(diffHr / 24);
-    return `${diffDay}d ago`;
-  }
 
   function isUnread(report: SkipperReport): boolean {
     return report.readAt === null || report.readAt === undefined;
@@ -123,7 +112,7 @@
         <span class="text-xs text-muted-foreground">All caught up</span>
       {/if}
       <a
-        href={skipperPath}
+        href={investigationsPath}
         onclick={() => notificationStore.closePanel()}
         class="text-xs text-[hsl(var(--tn-blue))] hover:underline"
       >

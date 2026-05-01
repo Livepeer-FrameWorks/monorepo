@@ -1,9 +1,11 @@
 import { browser } from "$app/environment";
 import {
+  GetSkipperReportStore,
   GetSkipperReportsStore,
   GetSkipperUnreadReportCountStore,
   MarkSkipperReportsReadStore,
   type GetSkipperReports$result,
+  type GetSkipperReport$result,
 } from "$houdini";
 
 export interface SkipperReport {
@@ -18,8 +20,9 @@ export interface SkipperReport {
 }
 
 type SkipperReportNode = GetSkipperReports$result["skipperReports"]["nodes"][number];
+type SkipperReportSingle = NonNullable<GetSkipperReport$result["skipperReport"]>;
 
-function toSkipperReport(node: SkipperReportNode): SkipperReport {
+function toSkipperReport(node: SkipperReportNode | SkipperReportSingle): SkipperReport {
   return {
     id: node.id,
     trigger: node.trigger,
@@ -37,6 +40,7 @@ function toSkipperReport(node: SkipperReportNode): SkipperReport {
 
 function createNotificationStore() {
   const reportsQuery = new GetSkipperReportsStore();
+  const reportQuery = new GetSkipperReportStore();
   const unreadCountQuery = new GetSkipperUnreadReportCountStore();
   const markReadMutation = new MarkSkipperReportsReadStore();
 
@@ -108,6 +112,26 @@ function createNotificationStore() {
     }
   }
 
+  async function getReport(id: string): Promise<SkipperReport | null> {
+    if (!browser) return null;
+    const cached = reports.find((r) => r.id === id);
+    if (cached) return cached;
+    try {
+      const resp = await reportQuery.fetch({
+        policy: "NetworkOnly",
+        variables: { id },
+      });
+      if (resp.errors?.length) {
+        throw new Error(resp.errors[0].message);
+      }
+      const node = resp.data?.skipperReport;
+      return node ? toSkipperReport(node) : null;
+    } catch (err) {
+      console.error("Failed to fetch Skipper report:", err);
+      return null;
+    }
+  }
+
   async function markRead(ids: string[]) {
     if (!browser || ids.length === 0) return;
     try {
@@ -162,6 +186,7 @@ function createNotificationStore() {
     },
 
     loadReports,
+    getReport,
     refreshUnreadCount,
     markAllRead,
     markRead,

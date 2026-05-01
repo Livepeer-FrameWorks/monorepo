@@ -2219,6 +2219,24 @@ enum GQL {
   }
   """
 
+  static let GetSkipperReport = """
+  query GetSkipperReport($id: ID!) {
+    skipperReport(id: $id) {
+      id
+      trigger
+      summary
+      metricsReviewed
+      rootCause
+      recommendations {
+        text
+        confidence
+      }
+      createdAt
+      readAt
+    }
+  }
+  """
+
   static let GetSkipperReports = """
   query GetSkipperReports($limit: Int = 20, $offset: Int = 0) {
     skipperReports(limit: $limit, offset: $offset) {

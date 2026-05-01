@@ -1,8 +1,11 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
+  import { page } from "$app/state";
+  import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { getIconComponent } from "$lib/iconUtils";
-  import { notificationStore } from "$lib/stores/notifications.svelte";
+  import { notificationStore, type SkipperReport } from "$lib/stores/notifications.svelte";
   import {
     GetSkipperConversationsStore,
     GetSkipperConversationStore,
@@ -21,6 +24,8 @@
   import SkipperConversationList, {
     type SkipperConversationSummary,
   } from "$lib/components/skipper/SkipperConversationList.svelte";
+  import SkipperReportDialog from "$lib/components/skipper/SkipperReportDialog.svelte";
+  import { formatRelativeTime } from "$lib/utils/formatters";
 
   // Houdini stores
   const conversationsQuery = new GetSkipperConversationsStore();
@@ -54,14 +59,35 @@
 
   let showInvestigations = $state(true);
 
-  function formatRelativeTime(dateStr: string): string {
-    const diffMs = Date.now() - new Date(dateStr).getTime();
-    const diffMin = Math.floor(diffMs / 60000);
-    if (diffMin < 1) return "just now";
-    if (diffMin < 60) return `${diffMin}m ago`;
-    const diffHr = Math.floor(diffMin / 60);
-    if (diffHr < 24) return `${diffHr}h ago`;
-    return `${Math.floor(diffHr / 24)}d ago`;
+  let reportParam = $derived(page.url.searchParams.get("report"));
+  let reportDialogOpen = $state(false);
+
+  $effect(() => {
+    if (reportParam) {
+      reportDialogOpen = true;
+    } else {
+      reportDialogOpen = false;
+    }
+  });
+
+  function closeReportDialog() {
+    reportDialogOpen = false;
+    if (page.url.searchParams.get("report")) {
+      void goto(resolve("/skipper"), { replaceState: true, keepFocus: true, noScroll: true });
+    }
+  }
+
+  function openReport(id: string) {
+    // eslint-disable-next-line svelte/no-navigation-without-resolve
+    void goto(`${resolve("/skipper")}?report=${encodeURIComponent(id)}`, {
+      replaceState: true,
+      keepFocus: true,
+      noScroll: true,
+    });
+  }
+
+  function handleAskAboutReport(report: SkipperReport) {
+    draft = `Tell me more about the ${report.trigger} investigation: ${report.summary}`;
   }
 
   let isMobile = $state(false);
@@ -651,9 +677,7 @@
             {:else}
               {#each notificationStore.reports.slice(0, 5) as report (report.id)}
                 <button
-                  onclick={() => {
-                    if (!report.readAt) notificationStore.markRead([report.id]);
-                  }}
+                  onclick={() => openReport(report.id)}
                   class="w-full text-left px-4 py-2 border-b border-[hsl(var(--tn-fg-gutter)/0.05)] hover:bg-[hsl(var(--tn-bg-visual))] transition-colors cursor-pointer {!report.readAt
                     ? 'border-l-2 border-l-[hsl(var(--tn-blue))]'
                     : 'border-l-2 border-l-transparent'}"
@@ -706,3 +730,12 @@
     </div>
   </div>
 </div>
+
+<SkipperReportDialog
+  open={reportDialogOpen}
+  reportId={reportParam}
+  onAskAbout={handleAskAboutReport}
+  onOpenChange={(value) => {
+    if (!value) closeReportDialog();
+  }}
+/>
