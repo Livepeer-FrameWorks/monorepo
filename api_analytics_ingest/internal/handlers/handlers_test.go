@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	dbsql "frameworks/pkg/database/sql"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
@@ -210,6 +211,25 @@ func TestBoolToUint8(t *testing.T) {
 				t.Fatalf("boolToUint8(%t) = %d, want %d", tc.input, got, tc.expected)
 			}
 		})
+	}
+}
+
+func TestRoutingClusterHourlyMVCoalescesNullableMeasures(t *testing.T) {
+	content, err := dbsql.Content.ReadFile("clickhouse/periscope.sql")
+	if err != nil {
+		t.Fatalf("read ClickHouse schema: %v", err)
+	}
+
+	schema := string(content)
+	required := []string{
+		"sum(ifNull(latency_ms, 0)) AS sum_latency_ms",
+		"sum(ifNull(routing_distance_km, 0)) AS sum_distance_km",
+		"max(ifNull(latency_ms, 0)) AS max_latency_ms",
+	}
+	for _, expr := range required {
+		if !strings.Contains(schema, expr) {
+			t.Fatalf("routing_cluster_hourly_mv missing null-safe expression %q", expr)
+		}
 	}
 }
 
