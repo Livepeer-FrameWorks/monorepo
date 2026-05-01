@@ -194,6 +194,11 @@ func buildAdvertiseAddr(host sql.NullString, port sql.NullInt32) (string, bool) 
 	return net.JoinHostPort(cleanHost, fmt.Sprintf("%d", port.Int32)), true
 }
 
+func isLoopbackAddress(host string) bool {
+	ip := net.ParseIP(strings.TrimSpace(host))
+	return ip != nil && ip.IsLoopback()
+}
+
 // ValidateTenant validates a tenant and returns its features/limits
 // Billing info is fetched via Purser gRPC (no cross-service DB access)
 func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *pb.ValidateTenantRequest) (*pb.ValidateTenantResponse, error) {
@@ -782,14 +787,21 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		}
 	}
 
+	requestedAdvertiseHost := req.GetAdvertiseHost()
+	if requestedAdvertiseHost == "" {
+		requestedAdvertiseHost = req.GetHost()
+	}
+
 	advHost := ""
-	if req.NodeId != nil && nodeIP != "" {
+	// Loopback node addresses are namespace-local; prefer an explicit service
+	// host so local Docker services remain reachable from Quartermaster.
+	if req.NodeId != nil && nodeIP != "" && !isLoopbackAddress(nodeIP) {
 		advHost = nodeIP
 	} else {
-		advHost = req.GetAdvertiseHost()
-		if advHost == "" {
-			advHost = req.GetHost()
-		}
+		advHost = requestedAdvertiseHost
+	}
+	if advHost == "" {
+		advHost = nodeIP
 	}
 	if advHost == "" {
 		return nil, status.Error(codes.InvalidArgument, "advertise_host or host required (or provide node_id with a registered node address)")

@@ -336,7 +336,7 @@ func TestBootstrapServiceDerivesAdvertiseHostFromNodeID(t *testing.T) {
 	}
 }
 
-func TestBootstrapServiceFallsBackToInternalIPWhenWireGuardEmpty(t *testing.T) {
+func TestBootstrapServiceUsesAdvertiseHostWhenNodeAddressIsLoopback(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
@@ -361,13 +361,13 @@ func TestBootstrapServiceFallsBackToInternalIPWhenWireGuardEmpty(t *testing.T) {
 		WithArgs("commodore", "cluster-1", "http", int32(18005), "node-1").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("INSERT INTO quartermaster.service_instances").
-		WithArgs(sqlmock.AnyArg(), "cluster-1", "node-1", "commodore", "http", "127.0.0.1", "/health", "v1.0.0", int32(18005), nil).
+		WithArgs(sqlmock.AnyArg(), "cluster-1", "node-1", "commodore", "http", "commodore", "/health", "v1.0.0", int32(18005), nil).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
 		WithArgs("cluster-1").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("UPDATE quartermaster.service_instances\\s+SET status = 'stopped'").
-		WithArgs("commodore", "cluster-1", sqlmock.AnyArg(), "127.0.0.1", "http", int32(18005)).
+		WithArgs("commodore", "cluster-1", sqlmock.AnyArg(), "commodore", "http", int32(18005)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("(?s)SELECT.*FROM quartermaster\\.infrastructure_nodes.*WHERE node_id = \\$1").
 		WithArgs("node-1").
@@ -386,8 +386,8 @@ func TestBootstrapServiceFallsBackToInternalIPWhenWireGuardEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected success, got error: %v", err)
 	}
-	if resp.GetAdvertiseAddr() != "127.0.0.1:18005" {
-		t.Fatalf("expected fallback advertise addr 127.0.0.1:18005, got %q", resp.GetAdvertiseAddr())
+	if resp.GetAdvertiseAddr() != "commodore:18005" {
+		t.Fatalf("expected explicit advertise addr commodore:18005, got %q", resp.GetAdvertiseAddr())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
