@@ -606,8 +606,13 @@ func EnsureTrailingSlash(s string) string {
 // that already contain it, so we can use it for HOST replacement.
 func ExtractPublicHostFromOutputs(outputs map[string]interface{}) string {
 	// Try to extract from HLS, HTTP, or other outputs that typically have full URLs
-	for _, key := range []string{"HLS", "HTTP", "CMAF", "HDS"} {
-		raw, ok := outputs[key]
+	for _, keys := range [][]string{
+		{"HLS", "HLS (TS)"},
+		{"HTTP", "MP4", "MP4 progressive"},
+		{"CMAF", "HLS (CMAF)"},
+		{"HDS", "Flash Dynamic (HDS)"},
+	} {
+		raw, ok := findOutputRaw(outputs, keys...)
 		if !ok {
 			continue
 		}
@@ -636,6 +641,22 @@ func ExtractPublicHostFromOutputs(outputs map[string]interface{}) string {
 		}
 	}
 	return ""
+}
+
+func findOutputRaw(outputs map[string]interface{}, keys ...string) (interface{}, bool) {
+	for _, key := range keys {
+		if raw, ok := outputs[key]; ok {
+			return raw, true
+		}
+	}
+	for outputKey, raw := range outputs {
+		for _, key := range keys {
+			if strings.EqualFold(outputKey, key) {
+				return raw, true
+			}
+		}
+	}
+	return nil, false
 }
 
 // ResolveTemplateURL replaces placeholders in Mist outputs ($ for stream name, HOST for hostname)
@@ -671,7 +692,7 @@ func ResolveTemplateURL(raw interface{}, baseURL, streamName string) string {
 	return s
 }
 
-func ToWebSocketURL(rawURL string, secureDefault bool) string {
+func toWebSocketURL(rawURL string, secureDefault bool) string {
 	if rawURL == "" {
 		return ""
 	}
@@ -693,20 +714,52 @@ func ToWebSocketURL(rawURL string, secureDefault bool) string {
 	return rawURL
 }
 
-func addWebSocketOutput(outputs map[string]*pb.OutputEndpoint, rawOutputs map[string]interface{}, outputKey, protocol string, base string, streamName string, secureDefault bool, isLive bool) {
-	raw, ok := rawOutputs[outputKey]
+func addResolvedOutput(outputs map[string]*pb.OutputEndpoint, rawOutputs map[string]interface{}, protocol string, base string, streamName string, isLive bool, keys ...string) bool {
+	raw, ok := findOutputRaw(rawOutputs, keys...)
 	if !ok {
-		return
+		return false
 	}
 	u := ResolveTemplateURL(raw, base, streamName)
 	if u == "" {
-		return
+		return false
 	}
-	wsURL := ToWebSocketURL(u, secureDefault)
+	outputs[protocol] = &pb.OutputEndpoint{Protocol: protocol, Url: u, Capabilities: BuildOutputCapabilities(protocol, isLive)}
+	return true
+}
+
+func addWebSocketOutput(outputs map[string]*pb.OutputEndpoint, rawOutputs map[string]interface{}, protocol string, base string, streamName string, secureDefault bool, isLive bool, keys ...string) bool {
+	raw, ok := findOutputRaw(rawOutputs, keys...)
+	if !ok {
+		return false
+	}
+	u := ResolveTemplateURL(raw, base, streamName)
+	if u == "" {
+		return false
+	}
+	wsURL := toWebSocketURL(u, secureDefault)
 	if wsURL == "" {
-		return
+		return false
 	}
 	outputs[protocol] = &pb.OutputEndpoint{Protocol: protocol, Url: wsURL, Capabilities: BuildOutputCapabilities(protocol, isLive)}
+	return true
+}
+
+func addDerivedOutput(outputs map[string]*pb.OutputEndpoint, protocol string, base string, streamName string, isLive bool, path string) {
+	if _, exists := outputs[protocol]; exists {
+		return
+	}
+	outputs[protocol] = &pb.OutputEndpoint{Protocol: protocol, Url: base + streamName + path, Capabilities: BuildOutputCapabilities(protocol, isLive)}
+}
+
+func addDerivedWebSocketOutput(outputs map[string]*pb.OutputEndpoint, protocol string, base string, streamName string, secureDefault bool, isLive bool, path string) {
+	if _, exists := outputs[protocol]; exists {
+		return
+	}
+	wsBase := toWebSocketURL(base, secureDefault)
+	if wsBase == "" {
+		return
+	}
+	outputs[protocol] = &pb.OutputEndpoint{Protocol: protocol, Url: wsBase + streamName + path, Capabilities: BuildOutputCapabilities(protocol, isLive)}
 }
 
 // BuildOutputsMap constructs the per-protocol outputs for a node/stream
@@ -722,49 +775,40 @@ func BuildOutputsMap(baseURL string, rawOutputs map[string]interface{}, streamNa
 	publicHost := ExtractPublicHostFromOutputs(rawOutputs)
 
 	// WHEP
-	if raw, ok := rawOutputs["WHEP"]; ok {
-		if u := ResolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["WHEP"] = &pb.OutputEndpoint{Protocol: "WHEP", Url: u, Capabilities: BuildOutputCapabilities("WHEP", isLive)}
-		}
-	}
+	addResolvedOutput(outputs, rawOutputs, "WHEP", base, streamName, isLive, "WHEP", "WebRTC with WHEP signalling")
 	if _, ok := outputs["WHEP"]; !ok {
 		if u := DeriveWHEPFromHTML(html); u != "" {
 			outputs["WHEP"] = &pb.OutputEndpoint{Protocol: "WHEP", Url: u, Capabilities: BuildOutputCapabilities("WHEP", isLive)}
 		}
 	}
 
-	if raw, ok := rawOutputs["HLS"]; ok {
-		if u := ResolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["HLS"] = &pb.OutputEndpoint{Protocol: "HLS", Url: u, Capabilities: BuildOutputCapabilities("HLS", isLive)}
-		}
-	}
-	if raw, ok := rawOutputs["DASH"]; ok {
-		if u := ResolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["DASH"] = &pb.OutputEndpoint{Protocol: "DASH", Url: u, Capabilities: BuildOutputCapabilities("DASH", isLive)}
-		}
-	}
-	if raw, ok := rawOutputs["MP4"]; ok {
-		if u := ResolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["MP4"] = &pb.OutputEndpoint{Protocol: "MP4", Url: u, Capabilities: BuildOutputCapabilities("MP4", isLive)}
-		}
-	}
-	if raw, ok := rawOutputs["WEBM"]; ok {
-		if u := ResolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["WEBM"] = &pb.OutputEndpoint{Protocol: "WEBM", Url: u, Capabilities: BuildOutputCapabilities("WEBM", isLive)}
-		}
-	}
-	if raw, ok := rawOutputs["HTTP"]; ok && !isLive {
-		if u := ResolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["HTTP"] = &pb.OutputEndpoint{Protocol: "HTTP", Url: u, Capabilities: BuildOutputCapabilities("HTTP", isLive)}
-		}
+	addResolvedOutput(outputs, rawOutputs, "MIST_WEBRTC", base, streamName, isLive, "WebRTC", "WebRTC with WebSocket signalling")
+	addResolvedOutput(outputs, rawOutputs, "HLS", base, streamName, isLive, "HLS", "HLS (TS)")
+	addResolvedOutput(outputs, rawOutputs, "DASH", base, streamName, isLive, "DASH")
+	addResolvedOutput(outputs, rawOutputs, "HLS_CMAF", base, streamName, isLive, "HLS (CMAF)", "CMAF")
+	addResolvedOutput(outputs, rawOutputs, "MP4", base, streamName, isLive, "MP4", "MP4 progressive")
+	addResolvedOutput(outputs, rawOutputs, "WEBM", base, streamName, isLive, "WEBM", "MKV", "MKV progressive", "WebM progressive")
+	addResolvedOutput(outputs, rawOutputs, "AAC", base, streamName, isLive, "AAC", "AAC progressive")
+	addResolvedOutput(outputs, rawOutputs, "TS", base, streamName, isLive, "TS", "TS HTTP progressive")
+	addResolvedOutput(outputs, rawOutputs, "H264", base, streamName, isLive, "H264", "Annex B progressive")
+	if !isLive {
+		addResolvedOutput(outputs, rawOutputs, "HTTP", base, streamName, isLive, "HTTP")
 	}
 
 	secureDefault := strings.HasPrefix(strings.ToLower(base), "https://")
-	addWebSocketOutput(outputs, rawOutputs, "MP4", "MEWS", base, streamName, secureDefault, isLive)
-	addWebSocketOutput(outputs, rawOutputs, "WEBM", "MEWS_WEBM", base, streamName, secureDefault, isLive)
-	addWebSocketOutput(outputs, rawOutputs, "WSRaw", "RAW_WS", base, streamName, secureDefault, isLive)
-	addWebSocketOutput(outputs, rawOutputs, "WSRAW", "RAW_WS", base, streamName, secureDefault, isLive)
-	addWebSocketOutput(outputs, rawOutputs, "H264", "H264_WS", base, streamName, secureDefault, isLive)
+	addWebSocketOutput(outputs, rawOutputs, "MEWS", base, streamName, secureDefault, isLive, "MP4 WebSocket", "MP4")
+	addWebSocketOutput(outputs, rawOutputs, "MEWS_WEBM", base, streamName, secureDefault, isLive, "WebM WebSocket", "WEBM", "MKV", "MKV progressive")
+	addWebSocketOutput(outputs, rawOutputs, "RAW_WS", base, streamName, secureDefault, isLive, "WSRaw", "WSRAW", "Raw WebSocket")
+	addWebSocketOutput(outputs, rawOutputs, "H264_WS", base, streamName, secureDefault, isLive, "Annex B WebSocket", "H264")
+	addWebSocketOutput(outputs, rawOutputs, "JSON_WS", base, streamName, secureDefault, isLive, "JSON WebSocket")
+
+	if isLive {
+		addDerivedWebSocketOutput(outputs, "RAW_WS", base, streamName, secureDefault, isLive, ".raw")
+		addDerivedWebSocketOutput(outputs, "MEWS", base, streamName, secureDefault, isLive, ".mp4")
+		addDerivedWebSocketOutput(outputs, "H264_WS", base, streamName, secureDefault, isLive, ".h264")
+	}
+	addDerivedOutput(outputs, "MP4", base, streamName, isLive, ".mp4")
+	addDerivedOutput(outputs, "HLS", base, "hls/"+streamName, isLive, "/index.m3u8")
 
 	// Direct protocols (bypass nginx, need HOST replacement with public host)
 	directProtocols := []string{"RTMP", "RTSP", "SRT", "DTSC"}
@@ -801,6 +845,17 @@ func BuildOutputCapabilities(protocol string, isLive bool) *pb.OutputCapability 
 	case "MP4", "WEBM":
 		caps.SupportsQualitySwitch = false
 		caps.SupportsSeek = true
+	case "AAC", "MP3", "FLAC", "WAV":
+		caps.SupportsQualitySwitch = false
+		caps.HasVideo = false
+	case "H264":
+		caps.SupportsQualitySwitch = false
+		caps.HasAudio = false
+	case "JSON", "JSON_WS":
+		caps.SupportsSeek = false
+		caps.SupportsQualitySwitch = false
+		caps.HasAudio = false
+		caps.HasVideo = false
 	}
 	return caps
 }

@@ -116,6 +116,58 @@ func TestBuildOutputsMapIncludesMistWebSocketOutputs(t *testing.T) {
 	}
 }
 
+func TestBuildOutputsMapAcceptsMistDisplayOutputNames(t *testing.T) {
+	rawOutputs := map[string]interface{}{
+		"HLS (TS)":                    "http://public.example.com:18090/view/hls/$/index.m3u8",
+		"MP4 WebSocket":               "ws://public.example.com:18090/view/$.mp4",
+		"Raw WebSocket":               "ws://public.example.com:18090/view/$.raw",
+		"Annex B WebSocket":           "ws://public.example.com:18090/view/$.h264",
+		"WebRTC with WHEP signalling": "http://public.example.com:18090/view/webrtc/$",
+		"AAC progressive":             "http://public.example.com:18090/view/$.aac",
+	}
+
+	outputs := BuildOutputsMap("http://edge-egress.example.com/view", rawOutputs, "stream", true)
+
+	if outputs["HLS"].Url != "http://public.example.com:18090/view/hls/stream/index.m3u8" {
+		t.Fatalf("unexpected HLS url: %q", outputs["HLS"].Url)
+	}
+	if outputs["MEWS"].Url != "ws://public.example.com:18090/view/stream.mp4" {
+		t.Fatalf("unexpected MEWS url: %q", outputs["MEWS"].Url)
+	}
+	if outputs["RAW_WS"].Url != "ws://public.example.com:18090/view/stream.raw" {
+		t.Fatalf("unexpected RAW_WS url: %q", outputs["RAW_WS"].Url)
+	}
+	if outputs["H264_WS"].Url != "ws://public.example.com:18090/view/stream.h264" {
+		t.Fatalf("unexpected H264_WS url: %q", outputs["H264_WS"].Url)
+	}
+	if outputs["WHEP"].Url != "http://public.example.com:18090/view/webrtc/stream" {
+		t.Fatalf("unexpected WHEP url: %q", outputs["WHEP"].Url)
+	}
+	if outputs["AAC"].Url != "http://public.example.com:18090/view/stream.aac" {
+		t.Fatalf("unexpected AAC url: %q", outputs["AAC"].Url)
+	}
+	if outputs["AAC"].Capabilities.HasVideo {
+		t.Fatal("AAC output should not advertise video")
+	}
+}
+
+func TestBuildOutputsMapDerivesStandardMistPlaybackOutputs(t *testing.T) {
+	outputs := BuildOutputsMap("http://public.example.com:18090/view", map[string]interface{}{}, "stream", true)
+
+	expected := map[string]string{
+		"RAW_WS":  "ws://public.example.com:18090/view/stream.raw",
+		"MEWS":    "ws://public.example.com:18090/view/stream.mp4",
+		"H264_WS": "ws://public.example.com:18090/view/stream.h264",
+		"MP4":     "http://public.example.com:18090/view/stream.mp4",
+		"HLS":     "http://public.example.com:18090/view/hls/stream/index.m3u8",
+	}
+	for protocol, expectedURL := range expected {
+		if outputs[protocol].Url != expectedURL {
+			t.Fatalf("unexpected %s url: %q", protocol, outputs[protocol].Url)
+		}
+	}
+}
+
 func TestResolveTemplateURL(t *testing.T) {
 	tests := []struct {
 		name       string
