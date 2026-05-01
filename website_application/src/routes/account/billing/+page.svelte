@@ -252,6 +252,82 @@
     expandedInvoiceId = expandedInvoiceId === invoiceId ? null : invoiceId;
   }
 
+  type InvoiceLineItemLike = {
+    lineKey: string;
+    description: string;
+    quantity: string;
+    unitPrice: string;
+    total: string;
+    currency: string;
+    clusterId?: string | null;
+    clusterName?: string | null;
+    clusterKind?: string | null;
+    pricingLabel?: string | null;
+  };
+
+  type LineItemGroup = {
+    key: string;
+    label: string;
+    kind: string | null;
+    items: InvoiceLineItemLike[];
+  };
+
+  // groupLineItems splits invoice line items into render groups: one per
+  // cluster (platform-official → tenant-private → marketplace order),
+  // plus a "Subscription" bucket for tenant-scoped lines like
+  // base_subscription. Mirrors the email template's shape so the
+  // dashboard and email match.
+  function groupLineItems(items: readonly InvoiceLineItemLike[]): LineItemGroup[] {
+    const platformScoped: InvoiceLineItemLike[] = [];
+    const byCluster = new Map<string, LineItemGroup>();
+    const order: string[] = [];
+    for (const item of items) {
+      if (!item.clusterId) {
+        platformScoped.push(item);
+        continue;
+      }
+      const existing = byCluster.get(item.clusterId);
+      if (existing) {
+        existing.items.push(item);
+        continue;
+      }
+      const grp: LineItemGroup = {
+        key: `cluster-${item.clusterId}`,
+        label: item.clusterName || item.clusterId,
+        kind: item.clusterKind ?? null,
+        items: [item],
+      };
+      byCluster.set(item.clusterId, grp);
+      order.push(item.clusterId);
+    }
+    const out: LineItemGroup[] = [];
+    for (const kind of ["platform_official", "tenant_private", "third_party_marketplace"]) {
+      for (const cid of order) {
+        const grp = byCluster.get(cid)!;
+        if (grp.kind === kind) out.push(grp);
+      }
+    }
+    for (const cid of order) {
+      const grp = byCluster.get(cid)!;
+      if (
+        grp.kind !== "platform_official" &&
+        grp.kind !== "tenant_private" &&
+        grp.kind !== "third_party_marketplace"
+      ) {
+        out.push(grp);
+      }
+    }
+    if (platformScoped.length > 0) {
+      out.push({
+        key: "subscription",
+        label: "Subscription",
+        kind: null,
+        items: platformScoped,
+      });
+    }
+    return out;
+  }
+
   // Trial days remaining
   const trialDaysRemaining = $derived.by(() => {
     if (!billingStatus?.trialEndsAt) return null;
@@ -683,56 +759,93 @@
                             <p
                               class="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3"
                             >
-                              Line Items
+                              Charges
                             </p>
-                            <table class="w-full text-sm">
-                              <thead>
-                                <tr class="text-xs text-muted-foreground">
-                                  <th class="text-left py-1">Description</th>
-                                  <th class="text-right py-1">Qty</th>
-                                  <th class="text-right py-1">Unit Price</th>
-                                  <th class="text-right py-1">Total</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {#each invoice.lineItems as item (`${invoice.id}-${item.lineKey}`)}
-                                  <tr class="border-t border-border/20">
-                                    <td class="py-2">{item.description}</td>
-                                    <td class="py-2 text-right font-mono">{item.quantity}</td>
-                                    <td class="py-2 text-right font-mono"
-                                      >{formatUnitPrice(
-                                        item.unitPrice,
-                                        item.currency || invoice.currency
-                                      )}</td
+                            {#each groupLineItems(invoice.lineItems) as group (`${invoice.id}-${group.key}`)}
+                              <div class="mb-4 last:mb-0">
+                                <div class="flex items-center gap-2 mb-2">
+                                  <span class="text-sm font-semibold">{group.label}</span>
+                                  {#if group.kind === "platform_official"}
+                                    <span
+                                      class="px-2 py-0.5 text-[10px] font-medium rounded-full bg-blue-50 text-blue-700"
+                                      >Platform</span
                                     >
-                                    <td class="py-2 text-right font-mono font-semibold"
-                                      >{formatCurrency(
-                                        item.total,
-                                        item.currency || invoice.currency
-                                      )}</td
+                                  {:else if group.kind === "tenant_private"}
+                                    <span
+                                      class="px-2 py-0.5 text-[10px] font-medium rounded-full bg-emerald-50 text-emerald-700"
+                                      >Self-hosted</span
                                     >
-                                  </tr>
-                                {/each}
-                                {#if moneyNumber(invoice.prepaidCreditApplied) > 0}
-                                  <tr class="border-t border-border/20">
+                                  {:else if group.kind === "third_party_marketplace"}
+                                    <span
+                                      class="px-2 py-0.5 text-[10px] font-medium rounded-full bg-purple-50 text-purple-700"
+                                      >Marketplace</span
+                                    >
+                                  {/if}
+                                </div>
+                                <table class="w-full text-sm">
+                                  <thead>
+                                    <tr class="text-xs text-muted-foreground">
+                                      <th class="text-left py-1">Item</th>
+                                      <th class="text-right py-1">Qty</th>
+                                      <th class="text-right py-1">Unit Price</th>
+                                      <th class="text-right py-1">Total</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {#each group.items as item (`${invoice.id}-${item.lineKey}`)}
+                                      <tr
+                                        class="border-t border-border/20"
+                                        class:text-muted-foreground={moneyNumber(item.total) === 0}
+                                      >
+                                        <td class="py-2">
+                                          <div>{item.description}</div>
+                                          {#if item.pricingLabel}
+                                            <div class="text-[10px] text-muted-foreground">
+                                              {item.pricingLabel}
+                                            </div>
+                                          {/if}
+                                        </td>
+                                        <td class="py-2 text-right font-mono">{item.quantity}</td>
+                                        <td class="py-2 text-right font-mono"
+                                          >{formatUnitPrice(
+                                            item.unitPrice,
+                                            item.currency || invoice.currency
+                                          )}</td
+                                        >
+                                        <td class="py-2 text-right font-mono font-semibold">
+                                          {#if moneyNumber(item.total) === 0}
+                                            <span
+                                              class="px-2 py-0.5 text-[10px] font-medium rounded-full bg-emerald-50 text-emerald-700"
+                                              >Included</span
+                                            >
+                                          {:else}
+                                            {formatCurrency(
+                                              item.total,
+                                              item.currency || invoice.currency
+                                            )}
+                                          {/if}
+                                        </td>
+                                      </tr>
+                                    {/each}
+                                  </tbody>
+                                </table>
+                              </div>
+                            {/each}
+                            {#if moneyNumber(invoice.prepaidCreditApplied) > 0}
+                              <table class="w-full text-sm border-t border-border/40 mt-2 pt-2">
+                                <tbody>
+                                  <tr>
                                     <td class="py-2">Prepaid credit applied</td>
-                                    <td class="py-2 text-right font-mono">1</td>
                                     <td class="py-2 text-right font-mono"
                                       >-{formatCurrency(
                                         invoice.prepaidCreditApplied,
                                         invoice.currency
                                       )}</td
                                     >
-                                    <td class="py-2 text-right font-mono font-semibold"
-                                      >-{formatCurrency(
-                                        invoice.prepaidCreditApplied,
-                                        invoice.currency
-                                      )}</td
-                                    >
                                   </tr>
-                                {/if}
-                              </tbody>
-                            </table>
+                                </tbody>
+                              </table>
+                            {/if}
                           </td>
                         </tr>
                       {/if}

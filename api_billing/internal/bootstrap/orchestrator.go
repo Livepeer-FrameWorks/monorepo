@@ -10,6 +10,7 @@ import (
 type Sections struct {
 	BillingTierCatalog Result
 	ClusterPricing     Result
+	PlatformFeePolicy  Result
 	CustomerBilling    Result
 	// PostCommit is the cross-service work the dispatcher runs after the
 	// outer reconcile transaction commits — and skips when --dry-run rolls
@@ -29,7 +30,9 @@ type Sections struct {
 //  1. billing_tier_catalog (embedded ⊕ overlay) — establishes tier rows that
 //     customer_billing references.
 //  2. cluster_pricing.
-//  3. customer_billing — resolves tenant alias → UUID via the supplied
+//  3. platform_fee_policy — establishes the global marketplace revenue-share
+//     default when ops has not configured a policy yet.
+//  4. customer_billing — resolves tenant alias → UUID via the supplied
 //     QMBootstrapClient (bootstrap calls Quartermaster's ResolveTenantAliases gRPC).
 //     Emits PostCommitOps for cross-service entitlement work.
 func Reconcile(ctx context.Context, exec DBTX, desired PurserSection, embedded []CatalogTier, resolver QMBootstrapClient) (*Sections, error) {
@@ -52,6 +55,12 @@ func Reconcile(ctx context.Context, exec DBTX, desired PurserSection, embedded [
 	out.ClusterPricing = pricingRes
 	if err != nil {
 		return out, fmt.Errorf("cluster_pricing: %w", err)
+	}
+
+	feeRes, err := ReconcileDefaultPlatformFeePolicy(ctx, exec)
+	out.PlatformFeePolicy = feeRes
+	if err != nil {
+		return out, fmt.Errorf("platform_fee_policy: %w", err)
 	}
 
 	if len(desired.CustomerBilling) > 0 {

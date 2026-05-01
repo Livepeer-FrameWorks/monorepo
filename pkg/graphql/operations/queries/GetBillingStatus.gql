@@ -72,6 +72,11 @@ query GetBillingStatus {
         unitPrice
         total
         currency
+        clusterId
+        clusterName
+        clusterKind
+        pricingSource
+        pricingLabel
       }
     }
   }

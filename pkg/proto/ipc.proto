@@ -1378,6 +1378,12 @@ message ProcessBillingEvent {
   optional double rtf_out = 67;               // real-time factor out
   optional int64 pipeline_lag_ms = 68;
   optional int64 output_bitrate_bps = 69;
+
+  // Cluster attribution for cluster-aware billing. Set by the producer
+  // (Helmsman/Foghorn) from the local cluster identity so processing
+  // minutes can be billed against the right cluster's pricing model.
+  optional string cluster_id = 70;
+  optional string origin_cluster_id = 71;
 }
 
 message StorageInfo {

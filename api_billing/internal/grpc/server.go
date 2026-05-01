@@ -229,6 +229,7 @@ type PurserServer struct {
 	pb.UnimplementedInvoiceServiceServer
 	pb.UnimplementedPaymentServiceServer
 	pb.UnimplementedClusterPricingServiceServer
+	pb.UnimplementedOperatorRevenueServiceServer
 	pb.UnimplementedPrepaidServiceServer
 	pb.UnimplementedWebhookServiceServer
 	pb.UnimplementedStripeServiceServer
@@ -2987,13 +2988,13 @@ func (s *PurserServer) GetClusterPricing(ctx context.Context, req *pb.GetCluster
 	var pricing pb.ClusterPricing
 	var basePrice sql.NullString
 	var currency sql.NullString
-	var stripeProductID, stripePriceIDMonthly, stripeMeterID sql.NullString
+	var stripeProductID, stripePriceIDMonthly, stripeMeterEventName sql.NullString
 	var meteredRatesJSON, defaultQuotasJSON []byte
 	var createdAt, updatedAt time.Time
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, cluster_id, pricing_model,
-		       stripe_product_id, stripe_price_id_monthly, stripe_meter_id,
+		       stripe_product_id, stripe_price_id_monthly, stripe_meter_event_name,
 		       base_price::text, currency, metered_rates,
 		       required_tier_level, allow_free_tier,
 		       default_quotas, created_at, updated_at
@@ -3001,7 +3002,7 @@ func (s *PurserServer) GetClusterPricing(ctx context.Context, req *pb.GetCluster
 		WHERE cluster_id = $1
 	`, clusterID).Scan(
 		&pricing.Id, &pricing.ClusterId, &pricing.PricingModel,
-		&stripeProductID, &stripePriceIDMonthly, &stripeMeterID,
+		&stripeProductID, &stripePriceIDMonthly, &stripeMeterEventName,
 		&basePrice, &currency, &meteredRatesJSON,
 		&pricing.RequiredTierLevel, &pricing.AllowFreeTier,
 		&defaultQuotasJSON, &createdAt, &updatedAt,
@@ -3031,8 +3032,8 @@ func (s *PurserServer) GetClusterPricing(ctx context.Context, req *pb.GetCluster
 	if stripePriceIDMonthly.Valid {
 		pricing.StripePriceIdMonthly = &stripePriceIDMonthly.String
 	}
-	if stripeMeterID.Valid {
-		pricing.StripeMeterId = &stripeMeterID.String
+	if stripeMeterEventName.Valid {
+		pricing.StripeMeterEventName = &stripeMeterEventName.String
 	}
 	if basePrice.Valid {
 		formattedBasePrice, formatErr := formatOptionalMoney(basePrice)
@@ -3101,7 +3102,7 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 
 	query := fmt.Sprintf(`
 		SELECT id, cluster_id, pricing_model,
-		       stripe_product_id, stripe_price_id_monthly, stripe_meter_id,
+		       stripe_product_id, stripe_price_id_monthly, stripe_meter_event_name,
 		       base_price::text, currency, metered_rates,
 		       required_tier_level, allow_free_tier,
 		       default_quotas, created_at, updated_at
@@ -3121,13 +3122,13 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 		var pricing pb.ClusterPricing
 		var basePrice sql.NullString
 		var currency sql.NullString
-		var stripeProductID, stripePriceIDMonthly, stripeMeterID sql.NullString
+		var stripeProductID, stripePriceIDMonthly, stripeMeterEventName sql.NullString
 		var meteredRatesJSON, defaultQuotasJSON []byte
 		var createdAt, updatedAt time.Time
 
 		if err := rows.Scan(
 			&pricing.Id, &pricing.ClusterId, &pricing.PricingModel,
-			&stripeProductID, &stripePriceIDMonthly, &stripeMeterID,
+			&stripeProductID, &stripePriceIDMonthly, &stripeMeterEventName,
 			&basePrice, &currency, &meteredRatesJSON,
 			&pricing.RequiredTierLevel, &pricing.AllowFreeTier,
 			&defaultQuotasJSON, &createdAt, &updatedAt,
@@ -3142,8 +3143,8 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 		if stripePriceIDMonthly.Valid {
 			pricing.StripePriceIdMonthly = &stripePriceIDMonthly.String
 		}
-		if stripeMeterID.Valid {
-			pricing.StripeMeterId = &stripeMeterID.String
+		if stripeMeterEventName.Valid {
+			pricing.StripeMeterEventName = &stripeMeterEventName.String
 		}
 		if basePrice.Valid {
 			formattedBasePrice, formatErr := formatOptionalMoney(basePrice)
@@ -3169,7 +3170,6 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 		pricing.CreatedAt = timestamppb.New(createdAt)
 		pricing.UpdatedAt = timestamppb.New(updatedAt)
 
-		applyEligibility(tenantID, tenantTierLevel, &pricing)
 		result[pricing.ClusterId] = &pricing
 	}
 
@@ -3197,6 +3197,9 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 		for _, p := range result {
 			p.IsPlatformOfficial = officialIDs[p.ClusterId]
 		}
+	}
+	for _, p := range result {
+		s.applyCommercialEligibility(ctx, tenantID, tenantTierLevel, p)
 	}
 
 	return &pb.GetClustersPricingBatchResponse{
@@ -3229,6 +3232,120 @@ func applyEligibility(tenantID string, tenantTierLevel int32, pricing *pb.Cluste
 
 	pricing.IsEligible = true
 	pricing.DenialReason = nil
+}
+
+type commercialClusterKind string
+
+const (
+	commercialKindPlatformOfficial commercialClusterKind = "platform_official"
+	commercialKindTenantPrivate    commercialClusterKind = "tenant_private"
+	commercialKindThirdParty       commercialClusterKind = "third_party_marketplace"
+)
+
+func (s *PurserServer) classifyCommercialCluster(ctx context.Context, consumingTenantID, clusterID string) (commercialClusterKind, *uuid.UUID, error) {
+	if s.quartermasterClient == nil {
+		return "", nil, status.Error(codes.Unavailable, "quartermaster client not configured")
+	}
+	resp, err := s.quartermasterClient.GetCluster(ctx, clusterID)
+	if err != nil {
+		return "", nil, status.Errorf(codes.Internal, "get cluster: %v", err)
+	}
+	c := resp.GetCluster()
+	if c == nil {
+		return "", nil, status.Error(codes.NotFound, "cluster not found")
+	}
+	if c.GetIsPlatformOfficial() {
+		return commercialKindPlatformOfficial, nil, nil
+	}
+	owner := c.GetOwnerTenantId()
+	if owner == "" {
+		return "", nil, status.Error(codes.FailedPrecondition, "cluster ownership is ambiguous")
+	}
+	ownerID, err := uuid.Parse(owner)
+	if err != nil {
+		return "", nil, status.Errorf(codes.FailedPrecondition, "invalid cluster owner_tenant_id: %v", err)
+	}
+	if ownerID.String() == consumingTenantID {
+		return commercialKindTenantPrivate, &ownerID, nil
+	}
+	return commercialKindThirdParty, &ownerID, nil
+}
+
+func (s *PurserServer) requireMarketplaceOwnerApproved(ctx context.Context, ownerID uuid.UUID) error {
+	var ownerStatus string
+	var payoutEligible bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT status, payout_eligible
+		FROM purser.cluster_owners
+		WHERE tenant_id = $1
+	`, ownerID).Scan(&ownerStatus, &payoutEligible)
+	if errors.Is(err, sql.ErrNoRows) {
+		return status.Error(codes.FailedPrecondition, "cluster operator is not approved for marketplace")
+	}
+	if err != nil {
+		return status.Errorf(codes.Internal, "query cluster operator approval: %v", err)
+	}
+	if ownerStatus != "approved" || !payoutEligible {
+		return status.Error(codes.FailedPrecondition, "cluster operator is not payout eligible")
+	}
+	return nil
+}
+
+func (s *PurserServer) applyCommercialEligibility(ctx context.Context, tenantID string, tenantTierLevel int32, pricing *pb.ClusterPricing) {
+	if pricing != nil && !pricing.IsEligible && pricing.DenialReason != nil {
+		return
+	}
+	applyEligibility(tenantID, tenantTierLevel, pricing)
+	if pricing == nil || !pricing.IsEligible || tenantID == "" {
+		return
+	}
+	kind, ownerID, err := s.classifyCommercialCluster(ctx, tenantID, pricing.ClusterId)
+	if err != nil {
+		pricing.IsEligible = false
+		reason := status.Convert(err).Message()
+		pricing.DenialReason = &reason
+		return
+	}
+	if kind != commercialKindThirdParty {
+		return
+	}
+	if pricing.Id == "" {
+		pricing.IsEligible = false
+		reason := "third-party cluster pricing is not configured"
+		pricing.DenialReason = &reason
+		return
+	}
+	if ownerID == nil {
+		pricing.IsEligible = false
+		reason := "cluster operator is not approved for marketplace"
+		pricing.DenialReason = &reason
+		return
+	}
+	if err := s.requireMarketplaceOwnerApproved(ctx, *ownerID); err != nil {
+		pricing.IsEligible = false
+		reason := status.Convert(err).Message()
+		pricing.DenialReason = &reason
+	}
+}
+
+func (s *PurserServer) grantClusterAccessForKind(ctx context.Context, tenantID, clusterID string, kind commercialClusterKind) error {
+	if s.quartermasterClient == nil {
+		return status.Error(codes.FailedPrecondition, "quartermaster client not configured")
+	}
+	if kind == commercialKindPlatformOfficial {
+		if err := s.quartermasterClient.BootstrapClusterAccess(ctx, tenantID, clusterID); err != nil {
+			return status.Errorf(codes.Internal, "grant platform cluster access: %v", err)
+		}
+		return nil
+	}
+	if err := s.quartermasterClient.GrantClusterAccess(ctx, &pb.GrantClusterAccessRequest{
+		TenantId:    tenantID,
+		ClusterId:   clusterID,
+		AccessLevel: "shared",
+	}); err != nil {
+		return status.Errorf(codes.Internal, "grant cluster access: %v", err)
+	}
+	return nil
 }
 
 // SetClusterPricing creates or updates pricing configuration for a cluster
@@ -3274,10 +3391,20 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *pb.SetCluster
 		allowFreeTier = *req.AllowFreeTier
 	}
 
-	// Marshal JSONB fields
+	// Marshal JSONB fields. Validate metered_rates shape at write time so
+	// the rating engine never sees a malformed config later (which would
+	// otherwise fail invoice rating with no per-cluster context).
 	var meteredRatesBytes, defaultQuotasBytes []byte
 	if req.MeteredRates != nil {
-		meteredRatesBytes, _ = json.Marshal(req.MeteredRates.AsMap())
+		ratesMap := req.MeteredRates.AsMap()
+		if validateErr := validateMeteredRatesShape(ratesMap, pricingModel); validateErr != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "metered_rates: %v", validateErr)
+		}
+		marshaled, marshalErr := json.Marshal(ratesMap)
+		if marshalErr != nil {
+			return nil, status.Errorf(codes.Internal, "marshal metered_rates: %v", marshalErr)
+		}
+		meteredRatesBytes = marshaled
 	} else {
 		meteredRatesBytes = []byte("{}")
 	}
@@ -3293,7 +3420,7 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *pb.SetCluster
 		INSERT INTO purser.cluster_pricing (
 			cluster_id, pricing_model, base_price, currency,
 			required_tier_level, allow_free_tier, metered_rates, default_quotas,
-			stripe_product_id, stripe_price_id_monthly, stripe_meter_id,
+			stripe_product_id, stripe_price_id_monthly, stripe_meter_event_name,
 			updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
 		ON CONFLICT (cluster_id) DO UPDATE SET
@@ -3306,12 +3433,12 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *pb.SetCluster
 			default_quotas = EXCLUDED.default_quotas,
 			stripe_product_id = COALESCE(EXCLUDED.stripe_product_id, purser.cluster_pricing.stripe_product_id),
 			stripe_price_id_monthly = COALESCE(EXCLUDED.stripe_price_id_monthly, purser.cluster_pricing.stripe_price_id_monthly),
-			stripe_meter_id = COALESCE(EXCLUDED.stripe_meter_id, purser.cluster_pricing.stripe_meter_id),
+			stripe_meter_event_name = COALESCE(EXCLUDED.stripe_meter_event_name, purser.cluster_pricing.stripe_meter_event_name),
 			updated_at = NOW()
 		RETURNING id
 	`, clusterID, pricingModel, basePrice, currency,
 		requiredTierLevel, allowFreeTier, meteredRatesBytes, defaultQuotasBytes,
-		req.StripeProductId, req.StripePriceIdMonthly, req.StripeMeterId,
+		req.StripeProductId, req.StripePriceIdMonthly, req.StripeMeterEventName,
 	).Scan(&pricingID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to set cluster pricing: %v", err)
@@ -3321,6 +3448,51 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *pb.SetCluster
 	return s.GetClusterPricing(ctx, &pb.GetClusterPricingRequest{ClusterId: clusterID})
 }
 
+// validateMeteredRatesShape rejects metered_rates JSON that the rating
+// engine would later choke on. The contract: each meter key maps to an
+// object with a numeric/string unit_price; optional model (defaults to
+// all_usage), included_quantity, config. metered/custom must have at
+// least one entry; tier_inherit/free_unmetered/monthly accept empty.
+func validateMeteredRatesShape(rates map[string]any, pricingModel string) error {
+	requiresRates := pricingModel == "metered" || pricingModel == "custom"
+	if requiresRates && len(rates) == 0 {
+		return fmt.Errorf("pricing_model %q requires at least one entry", pricingModel)
+	}
+	validMeters := map[string]bool{
+		"delivered_minutes":  true,
+		"average_storage_gb": true,
+		"ai_gpu_hours":       true,
+		"processing_seconds": true,
+	}
+	for meter, raw := range rates {
+		if !validMeters[meter] {
+			return fmt.Errorf("unsupported meter %q (allowed: delivered_minutes, average_storage_gb, ai_gpu_hours, processing_seconds)", meter)
+		}
+		row, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("meter %q must be an object with unit_price; got %T", meter, raw)
+		}
+		if _, hasPrice := row["unit_price"]; !hasPrice {
+			return fmt.Errorf("meter %q missing required unit_price", meter)
+		}
+		// unit_price accepts string or numeric.
+		switch v := row["unit_price"].(type) {
+		case string, float64, float32, int, int64:
+			// ok
+		default:
+			return fmt.Errorf("meter %q unit_price must be string or number; got %T", meter, v)
+		}
+		if model, ok := row["model"].(string); ok && model != "" {
+			switch model {
+			case "all_usage", "tiered_graduated", "codec_multiplier":
+			default:
+				return fmt.Errorf("meter %q model %q not supported (allowed: all_usage, tiered_graduated, codec_multiplier)", meter, model)
+			}
+		}
+	}
+	return nil
+}
+
 // ListClusterPricings returns pricing configs for clusters owned by a tenant
 func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClusterPricingsRequest) (*pb.ListClusterPricingsResponse, error) {
 	ownerTenantID := req.GetOwnerTenantId()
@@ -3328,7 +3500,7 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 	// Build query - if no owner specified, list all (admin use case)
 	query := `
 		SELECT id, cluster_id, pricing_model,
-		       stripe_product_id, stripe_price_id_monthly, stripe_meter_id,
+		       stripe_product_id, stripe_price_id_monthly, stripe_meter_event_name,
 		       base_price::text, currency, metered_rates,
 		       required_tier_level, allow_free_tier,
 		       default_quotas, created_at, updated_at
@@ -3400,13 +3572,13 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 		var pricing pb.ClusterPricing
 		var basePrice sql.NullString
 		var currency sql.NullString
-		var stripeProductID, stripePriceIDMonthly, stripeMeterID sql.NullString
+		var stripeProductID, stripePriceIDMonthly, stripeMeterEventName sql.NullString
 		var meteredRatesJSON, defaultQuotasJSON []byte
 		var createdAt, updatedAt time.Time
 
 		if err := rows.Scan(
 			&pricing.Id, &pricing.ClusterId, &pricing.PricingModel,
-			&stripeProductID, &stripePriceIDMonthly, &stripeMeterID,
+			&stripeProductID, &stripePriceIDMonthly, &stripeMeterEventName,
 			&basePrice, &currency, &meteredRatesJSON,
 			&pricing.RequiredTierLevel, &pricing.AllowFreeTier,
 			&defaultQuotasJSON, &createdAt, &updatedAt,
@@ -3421,8 +3593,8 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 		if stripePriceIDMonthly.Valid {
 			pricing.StripePriceIdMonthly = &stripePriceIDMonthly.String
 		}
-		if stripeMeterID.Valid {
-			pricing.StripeMeterId = &stripeMeterID.String
+		if stripeMeterEventName.Valid {
+			pricing.StripeMeterEventName = &stripeMeterEventName.String
 		}
 		if basePrice.Valid {
 			formattedBasePrice, formatErr := formatOptionalMoney(basePrice)
@@ -3515,6 +3687,29 @@ func (s *PurserServer) CheckClusterAccess(ctx context.Context, req *pb.CheckClus
 		resp.DenialReason = "this platform cluster requires a paid subscription"
 		return resp, nil
 	}
+	kind, ownerID, err := s.classifyCommercialCluster(ctx, tenantID, clusterID)
+	if err != nil {
+		resp.Allowed = false
+		resp.DenialReason = status.Convert(err).Message()
+		return resp, nil
+	}
+	if kind == commercialKindThirdParty {
+		if pricing.Id == "" {
+			resp.Allowed = false
+			resp.DenialReason = "third-party cluster pricing is not configured"
+			return resp, nil
+		}
+		if ownerID == nil {
+			resp.Allowed = false
+			resp.DenialReason = "cluster operator is not approved for marketplace"
+			return resp, nil
+		}
+		if err := s.requireMarketplaceOwnerApproved(ctx, *ownerID); err != nil {
+			resp.Allowed = false
+			resp.DenialReason = status.Convert(err).Message()
+			return resp, nil
+		}
+	}
 
 	resp.Allowed = true
 
@@ -3562,9 +3757,22 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.Cr
 	if err != nil {
 		return nil, err
 	}
+	kind, ownerID, err := s.classifyCommercialCluster(ctx, tenantID, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	if kind == commercialKindThirdParty {
+		if ownerID == nil {
+			return nil, status.Error(codes.FailedPrecondition, "cluster operator is not approved for marketplace")
+		}
+		if err := s.requireMarketplaceOwnerApproved(ctx, *ownerID); err != nil {
+			return nil, err
+		}
+	}
 
-	// For free/tier_inherit clusters, create access immediately via Quartermaster
-	// For paid clusters, we'd create a Stripe subscription
+	// Resolve based on pricing model: free/tier_inherit/metered grant
+	// Quartermaster access immediately; monthly redirects to Stripe
+	// checkout (access on webhook); custom requires owner approval.
 	resp := &pb.ClusterSubscriptionResponse{
 		ClusterId: clusterID,
 		TenantId:  tenantID,
@@ -3572,8 +3780,11 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.Cr
 
 	switch pricing.PricingModel {
 	case "free_unmetered", "tier_inherit":
-		// Create tenant_cluster_access directly (via Quartermaster call would be cleaner)
-		// For now, we just return success - Gateway will call Quartermaster to create access
+		// No payment gate. Purser still grants access because this is where
+		// pricing, operator vetting, and self-hosted classification are checked.
+		if grantErr := s.grantClusterAccessForKind(ctx, tenantID, clusterID, kind); grantErr != nil {
+			return nil, grantErr
+		}
 		resp.Status = "active"
 
 	case "monthly":
@@ -3667,7 +3878,11 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.Cr
 			"tenant", tenantID, "cluster", clusterID, "session", sess.ID)
 
 	case "metered":
-		// Metered clusters can be activated immediately, billing happens on usage
+		// Metered clusters activate immediately — usage rates against the
+		// cluster's metered_rates at invoice time, no upfront payment.
+		if grantErr := s.grantClusterAccessForKind(ctx, tenantID, clusterID, kind); grantErr != nil {
+			return nil, grantErr
+		}
 		resp.Status = "active"
 
 	case "custom":
@@ -4006,6 +4221,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	pb.RegisterInvoiceServiceServer(server, purserServer)
 	pb.RegisterPaymentServiceServer(server, purserServer)
 	pb.RegisterClusterPricingServiceServer(server, purserServer)
+	pb.RegisterOperatorRevenueServiceServer(server, purserServer)
 	pb.RegisterPrepaidServiceServer(server, purserServer)
 	pb.RegisterWebhookServiceServer(server, purserServer)
 	pb.RegisterStripeServiceServer(server, purserServer)
@@ -6347,7 +6563,10 @@ func (s *PurserServer) loadInvoiceLineItems(ctx context.Context, invoiceID, tena
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT line_key, COALESCE(meter, ''), description,
 		       quantity::text, included_quantity::text, billable_quantity::text,
-		       unit_price::text, amount::text, currency
+		       unit_price::text, amount::text, currency,
+		       COALESCE(cluster_id, ''),
+		       COALESCE(cluster_kind, ''),
+		       pricing_source
 		FROM purser.invoice_line_items
 		WHERE invoice_id = $1 AND tenant_id = $2
 		ORDER BY (line_key = 'base_subscription') DESC, line_key ASC
@@ -6361,15 +6580,79 @@ func (s *PurserServer) loadInvoiceLineItems(ctx context.Context, invoiceID, tena
 		var li pb.LineItem
 		if scanErr := rows.Scan(&li.LineKey, &li.Meter, &li.Description,
 			&li.Quantity, &li.IncludedQuantity, &li.BillableQuantity,
-			&li.UnitPrice, &li.Total, &li.Currency); scanErr != nil {
+			&li.UnitPrice, &li.Total, &li.Currency,
+			&li.ClusterId, &li.ClusterKind, &li.PricingSource); scanErr != nil {
 			return nil, fmt.Errorf("scan line item for invoice %s: %w", invoiceID, scanErr)
 		}
+		li.PricingLabel = pricingLabelFor(li.PricingSource, li.ClusterKind)
 		items = append(items, &li)
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return nil, fmt.Errorf("iterate line items for invoice %s: %w", invoiceID, rowsErr)
 	}
+	// Best-effort cluster_name enrichment from Quartermaster — same shape
+	// as the email path. One RPC per distinct cluster_id; failures degrade
+	// silently (the dashboard renders the cluster_id as a fallback). This
+	// keeps the gateway from needing its own enrichment layer.
+	enrichLineItemClusterNames(ctx, s, items)
 	return items, nil
+}
+
+// enrichLineItemClusterNames populates LineItem.cluster_name on each item
+// with a non-empty cluster_id by looking up Quartermaster. Idempotent and
+// best-effort.
+func enrichLineItemClusterNames(ctx context.Context, s *PurserServer, items []*pb.LineItem) {
+	if s.quartermasterClient == nil || len(items) == 0 {
+		return
+	}
+	names := map[string]string{}
+	for _, li := range items {
+		if li.ClusterId == "" {
+			continue
+		}
+		if _, ok := names[li.ClusterId]; ok {
+			continue
+		}
+		resp, err := s.quartermasterClient.GetCluster(ctx, li.ClusterId)
+		if err != nil || resp == nil || resp.GetCluster() == nil {
+			names[li.ClusterId] = ""
+			continue
+		}
+		names[li.ClusterId] = resp.GetCluster().GetClusterName()
+	}
+	for _, li := range items {
+		if li.ClusterId != "" {
+			li.ClusterName = names[li.ClusterId]
+		}
+	}
+}
+
+// pricingLabelFor maps a (pricing_source, cluster_kind) tuple to the
+// human-readable badge rendered on invoice presentation surfaces (email,
+// dashboard, gRPC clients without locale logic). The labels are deliberately
+// neutral and short — UI may localize at render time.
+func pricingLabelFor(pricingSource, clusterKind string) string {
+	switch pricingSource {
+	case "tier":
+		return "Subscription tier"
+	case "cluster_metered":
+		if clusterKind == "third_party_marketplace" {
+			return "Marketplace metered"
+		}
+		return "Cluster metered"
+	case "cluster_monthly":
+		return "Cluster monthly"
+	case "cluster_custom":
+		return "Custom contract"
+	case "free_unmetered":
+		return "Free (no charge)"
+	case "self_hosted":
+		return "Self-hosted (no charge)"
+	case "included_subscription":
+		return "Included in subscription"
+	default:
+		return ""
+	}
 }
 
 // parseGeoBreakdown extracts CountryMetrics from usage_details

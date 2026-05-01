@@ -15,7 +15,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	billingmollie "frameworks/api_billing/internal/mollie"
+	"frameworks/api_billing/internal/operator"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/models"
 	pb "frameworks/pkg/proto"
@@ -89,7 +92,12 @@ type StripeInvoiceObject struct {
 	AmountPaid     int64  `json:"amount_paid"`
 	Currency       string `json:"currency"`
 	AttemptCount   int    `json:"attempt_count"`
-	Metadata       struct {
+	// Subscription invoices carry the billing period directly. Used by
+	// the operator credit ledger writer to record the period the payment
+	// covered.
+	PeriodStart int64 `json:"period_start"`
+	PeriodEnd   int64 `json:"period_end"`
+	Metadata    struct {
 		TenantID string `json:"tenant_id"`
 	} `json:"metadata"`
 }
@@ -606,6 +614,14 @@ func handleStripeInvoicePaid(payload StripeWebhookPayload) error {
 		"amount_paid": obj.AmountPaid,
 	}).Info("Processed successful Stripe invoice payment")
 
+	// If this invoice corresponds to a monthly cluster_subscription, write
+	// the operator credit ledger row so marketplace revenue is tracked from
+	// day one. Pre-launch with marketplace disabled the lookup returns no
+	// rows and this is a no-op.
+	if err := recordMonthlyClusterCredit(ctx, &obj); err != nil {
+		return fmt.Errorf("record monthly cluster credit: %w", err)
+	}
+
 	emitBillingEvent(eventInvoicePaid, tenantID, "invoice", obj.ID, &pb.BillingEvent{
 		InvoiceId: obj.ID,
 		Amount:    float64(obj.AmountPaid) / 100.0,
@@ -615,6 +631,73 @@ func handleStripeInvoicePaid(payload StripeWebhookPayload) error {
 	})
 
 	return nil
+}
+
+// recordMonthlyClusterCredit looks up whether the given Stripe invoice is
+// for a cluster_subscription and, if so, writes an operator_credit_ledger
+// accrual row. Marketplace launch reads this ledger to compute payouts.
+func recordMonthlyClusterCredit(ctx context.Context, obj *StripeInvoiceObject) error {
+	if obj.SubscriptionID == "" || obj.AmountPaid <= 0 {
+		return nil
+	}
+	// Resolve the cluster_subscription + owner from our books.
+	var (
+		clusterID         string
+		consumingTenantID string
+	)
+	err := db.QueryRowContext(ctx, `
+		SELECT cluster_id, tenant_id
+		FROM purser.cluster_subscriptions
+		WHERE stripe_subscription_id = $1
+	`, obj.SubscriptionID).Scan(&clusterID, &consumingTenantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // not a cluster subscription
+	}
+	if err != nil {
+		return fmt.Errorf("lookup cluster_subscription by stripe_subscription_id: %w", err)
+	}
+	// Resolve the owner via Quartermaster (cluster_owner_tenant_id lives there).
+	if qmClient == nil {
+		return errors.New("quartermaster client not configured")
+	}
+	resp, err := qmClient.GetCluster(ctx, clusterID)
+	if err != nil || resp == nil || resp.GetCluster() == nil {
+		return fmt.Errorf("get cluster %s: %w", clusterID, err)
+	}
+	ownerStr := resp.GetCluster().GetOwnerTenantId()
+	if ownerStr == "" || ownerStr == consumingTenantID {
+		// platform-owned or self-hosted (consumer == owner): no operator
+		// credit. Self-payment doesn't make sense as a payable.
+		return nil
+	}
+	ownerUUID, err := uuid.Parse(ownerStr)
+	if err != nil {
+		return fmt.Errorf("parse cluster owner_tenant_id %q: %w", ownerStr, err)
+	}
+
+	periodStart := time.Unix(obj.PeriodStart, 0).UTC()
+	periodEnd := time.Unix(obj.PeriodEnd, 0).UTC()
+	if obj.PeriodStart == 0 || obj.PeriodEnd == 0 || !periodEnd.After(periodStart) {
+		// Stripe normally sends these on subscription invoices. When the
+		// payload omits them, receipt time keeps the row queryable by a
+		// deterministic period.
+		periodEnd = time.Now().UTC()
+		periodStart = periodEnd.AddDate(0, -1, 0)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	if persistErr := operator.PersistStripeSubscriptionCredit(ctx, tx,
+		obj.ID, ownerUUID, clusterID, strings.ToUpper(obj.Currency), obj.AmountPaid,
+		periodStart, periodEnd, "cluster_monthly"); persistErr != nil {
+		if rbErr := tx.Rollback(); rbErr != nil {
+			return fmt.Errorf("rollback failed (%w) after credit error: %w", rbErr, persistErr)
+		}
+		return persistErr
+	}
+	return tx.Commit()
 }
 
 // handleStripeInvoiceFailed handles invoice.payment_failed events

@@ -1,11 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
-	"frameworks/api_billing/internal/billing"
+	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
 	"frameworks/pkg/models"
 )
@@ -20,13 +23,7 @@ func dec(s string) decimal.Decimal {
 
 func TestBuildRatingInputFromSummary_BasePriceIsZero(t *testing.T) {
 	// Per-event prepaid path must never charge the monthly base fee.
-	tier := &billing.EffectiveTier{
-		Currency:        "EUR",
-		BasePrice:       dec("79.00"),
-		MeteringEnabled: true,
-		Rules:           nil,
-	}
-	in := buildRatingInputFromSummary(models.UsageSummary{ViewerHours: 100, GPUHours: 5}, tier)
+	in := buildRatingInputFromSummary(models.UsageSummary{ViewerHours: 100, GPUHours: 5}, "EUR", nil)
 	if !in.BasePrice.IsZero() {
 		t.Errorf("BasePrice = %s, want 0 (per-event path must never charge base fee)", in.BasePrice)
 	}
@@ -42,29 +39,21 @@ func TestBuildRatingInputFromSummary_BasePriceIsZero(t *testing.T) {
 	}
 }
 
-func TestBuildRatingInputFromAggregates_BasePriceFromTier(t *testing.T) {
-	tier := &billing.EffectiveTier{
-		Currency:        "EUR",
-		BasePrice:       dec("79.00"),
-		MeteringEnabled: true,
-	}
+func TestUsageMapFromAggregates_ConvertsViewerHoursToMinutes(t *testing.T) {
 	usage := map[string]float64{
 		"viewer_hours":       1000,
 		"average_storage_gb": 50,
 		"gpu_hours":          12,
 	}
-	in := buildRatingInputFromAggregates(usage, tier)
-	if !in.BasePrice.Equal(dec("79.00")) {
-		t.Errorf("BasePrice = %s, want 79.00", in.BasePrice)
+	got := usageMapFromAggregates(usage)
+	if v := got[rating.MeterDeliveredMinutes]; !v.Equal(dec("60000")) {
+		t.Errorf("delivered_minutes = %s, want 60000 (1000h * 60)", v)
 	}
-	if got := in.Usage[rating.MeterDeliveredMinutes]; !got.Equal(dec("60000")) {
-		t.Errorf("delivered_minutes = %s, want 60000 (1000h * 60)", got)
+	if v := got[rating.MeterAverageStorageGB]; !v.Equal(dec("50")) {
+		t.Errorf("average_storage_gb = %s, want 50", v)
 	}
-	if got := in.Usage[rating.MeterAverageStorageGB]; !got.Equal(dec("50")) {
-		t.Errorf("average_storage_gb = %s, want 50", got)
-	}
-	if got := in.Usage[rating.MeterAIGPUHours]; !got.Equal(dec("12")) {
-		t.Errorf("ai_gpu_hours = %s, want 12", got)
+	if v := got[rating.MeterAIGPUHours]; !v.Equal(dec("12")) {
+		t.Errorf("ai_gpu_hours = %s, want 12", v)
 	}
 }
 
@@ -102,5 +91,64 @@ func TestCodecSecondsFromSummary_SumsBothSources(t *testing.T) {
 	}
 	if v, ok := got["aac"]; !ok || !v.Equal(dec("20")) {
 		t.Errorf("aac = %v, want 20", v)
+	}
+}
+
+func TestFlattenUsageAcrossClusters_SumsPerMeter(t *testing.T) {
+	per := map[string]map[string]float64{
+		"":          {"average_storage_gb": 2.0, "viewer_hours": 1.0},
+		"cluster-a": {"viewer_hours": 3.0},
+		"cluster-b": {"viewer_hours": 4.5, "gpu_hours": 1.0},
+	}
+	got := flattenUsageAcrossClusters(per)
+	if got["viewer_hours"] != 8.5 {
+		t.Errorf("viewer_hours = %v, want 8.5 (sum across clusters)", got["viewer_hours"])
+	}
+	if got["average_storage_gb"] != 2.0 {
+		t.Errorf("average_storage_gb = %v, want 2.0", got["average_storage_gb"])
+	}
+	if got["gpu_hours"] != 1.0 {
+		t.Errorf("gpu_hours = %v, want 1.0", got["gpu_hours"])
+	}
+}
+
+func TestClusterLineKey_LongClusterIDStaysWithinSchemaLimit(t *testing.T) {
+	longClusterID := "cluster-" +
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	got := clusterLineKey("meter:average_storage_gb", longClusterID, "202604")
+	if len(got) > 128 {
+		t.Fatalf("line key length = %d, want <= 128 (%q)", len(got), got)
+	}
+	if got == "meter:average_storage_gb:"+longClusterID+":202604" {
+		t.Fatalf("long cluster id was not compacted")
+	}
+}
+
+func TestMarketplaceLineSplitCents_UsesPlatformFeePolicy(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	owner := uuid.New()
+	jm := &JobManager{db: mockDB}
+	mock.ExpectQuery(`FROM purser\.platform_fee_policy`).
+		WithArgs(owner, "cluster_metered").
+		WillReturnRows(sqlmock.NewRows([]string{"fee_basis_points"}).AddRow(2000))
+
+	operatorCents, platformCents, err := jm.marketplaceLineSplitCents(context.Background(), dec("5.00"), &pricing.ClusterPricing{
+		Kind:          pricing.KindThirdPartyMarketplace,
+		OwnerTenantID: &owner,
+		PricingSource: pricing.SourceClusterMetered,
+	})
+	if err != nil {
+		t.Fatalf("marketplaceLineSplitCents: %v", err)
+	}
+	if operatorCents != 400 || platformCents != 100 {
+		t.Fatalf("split = operator %d platform %d, want 400/100", operatorCents, platformCents)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
 	}
 }

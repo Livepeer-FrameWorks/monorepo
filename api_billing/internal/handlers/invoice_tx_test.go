@@ -9,6 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/shopspring/decimal"
 
+	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
 )
 
@@ -21,20 +22,26 @@ func TestPersistInvoiceLineItems_UpsertsAllLines(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	res := rating.Result{
-		BaseLine: rating.LineItem{
-			LineKey: rating.LineKeyBaseSubscription, Description: "Base",
-			Quantity: decimal.NewFromInt(1), BillableQuantity: decimal.NewFromInt(1),
-			UnitPrice: decimal.NewFromInt(79), Amount: decimal.NewFromInt(79),
-			Currency: "EUR",
+	res := &clusterRatingResult{
+		BaseLine: pricedLine{
+			LineItem: rating.LineItem{
+				LineKey: rating.LineKeyBaseSubscription, Description: "Base",
+				Quantity: decimal.NewFromInt(1), BillableQuantity: decimal.NewFromInt(1),
+				UnitPrice: decimal.NewFromInt(79), Amount: decimal.NewFromInt(79),
+				Currency: "EUR",
+			},
+			PricingSource: pricing.SourceTier,
 		},
-		UsageLines: []rating.LineItem{
+		UsageLines: []pricedLine{
 			{
-				LineKey: "meter:delivered_minutes", Meter: rating.MeterDeliveredMinutes,
-				Description: "Delivered minutes",
-				Quantity:    decimal.NewFromInt(120000), IncludedQuantity: decimal.NewFromInt(100000),
-				BillableQuantity: decimal.NewFromInt(20000), UnitPrice: decimal.NewFromFloat(0.00055),
-				Amount: decimal.NewFromFloat(11.0), Currency: "EUR",
+				LineItem: rating.LineItem{
+					LineKey: "meter:delivered_minutes", Meter: rating.MeterDeliveredMinutes,
+					Description: "Delivered minutes",
+					Quantity:    decimal.NewFromInt(120000), IncludedQuantity: decimal.NewFromInt(100000),
+					BillableQuantity: decimal.NewFromInt(20000), UnitPrice: decimal.NewFromFloat(0.00055),
+					Amount: decimal.NewFromFloat(11.0), Currency: "EUR",
+				},
+				PricingSource: pricing.SourceTier,
 			},
 		},
 	}
@@ -68,12 +75,15 @@ func TestPersistInvoiceLineItems_SweepsStaleLines(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	res := rating.Result{
-		BaseLine: rating.LineItem{
-			LineKey: rating.LineKeyBaseSubscription, Description: "Base",
-			Quantity: decimal.NewFromInt(1), BillableQuantity: decimal.NewFromInt(1),
-			UnitPrice: decimal.NewFromInt(79), Amount: decimal.NewFromInt(79),
-			Currency: "EUR",
+	res := &clusterRatingResult{
+		BaseLine: pricedLine{
+			LineItem: rating.LineItem{
+				LineKey: rating.LineKeyBaseSubscription, Description: "Base",
+				Quantity: decimal.NewFromInt(1), BillableQuantity: decimal.NewFromInt(1),
+				UnitPrice: decimal.NewFromInt(79), Amount: decimal.NewFromInt(79),
+				Currency: "EUR",
+			},
+			PricingSource: pricing.SourceTier,
 		},
 	}
 

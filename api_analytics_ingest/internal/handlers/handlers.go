@@ -275,10 +275,12 @@ func (h *AnalyticsHandler) processStorageSnapshot(ctx context.Context, event kaf
 	}
 	storageSnapshot := tp.StorageSnapshot
 
-	// Write to ClickHouse for each tenant's usage in the snapshot
+	// Write to ClickHouse for each tenant's usage in the snapshot.
+	// cluster_id flows through from the MistTrigger envelope so storage
+	// rollups can be billed per cluster.
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO storage_snapshots (
-			timestamp, node_id, tenant_id, storage_scope,
+			timestamp, node_id, tenant_id, cluster_id, storage_scope,
 			total_bytes, file_count, dvr_bytes, clip_bytes, vod_bytes,
 			frozen_dvr_bytes, frozen_clip_bytes, frozen_vod_bytes
 		)`)
@@ -297,6 +299,8 @@ func (h *AnalyticsHandler) processStorageSnapshot(ctx context.Context, event kaf
 		snapshotTimestamp = time.Unix(ts, 0)
 	}
 
+	clusterID := mt.GetClusterId()
+
 	for _, usage := range storageSnapshot.GetUsage() {
 		if !isValidUUIDString(usage.GetTenantId()) {
 			h.logger.WithFields(logging.Fields{
@@ -310,6 +314,7 @@ func (h *AnalyticsHandler) processStorageSnapshot(ctx context.Context, event kaf
 			snapshotTimestamp,
 			storageSnapshot.GetNodeId(),
 			usage.GetTenantId(),
+			clusterID,
 			storageScope,
 			usage.GetTotalBytes(),
 			usage.GetFileCount(),
@@ -2766,10 +2771,23 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 		h.metrics.ClickHouseInserts.WithLabelValues("process_billing", "attempt").Inc()
 	}
 
-	// Write to process_billing table
+	// Write to process_billing table. cluster_id flows from the
+	// ProcessBillingEvent (set by Helmsman/Foghorn) so processing minutes
+	// can be billed against the right cluster's pricing model. Falls back
+	// to the MistTrigger envelope's cluster_id when the producer hasn't
+	// stamped the event directly.
+	clusterID := pbe.GetClusterId()
+	if clusterID == "" {
+		clusterID = mt.GetClusterId()
+	}
+	originClusterID := pbe.GetOriginClusterId()
+	if originClusterID == "" {
+		originClusterID = mt.GetOriginClusterId()
+	}
+
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO processing_events (
-			timestamp, tenant_id, node_id, stream_id, internal_name,
+			timestamp, tenant_id, node_id, cluster_id, origin_cluster_id, stream_id, internal_name,
 			process_type, track_type, duration_ms,
 			input_codec, output_codec,
 			segment_number, width, height, rendition_count, broadcaster_url, upload_time_us,
@@ -2799,6 +2817,8 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 		event.Timestamp,
 		tenantID,
 		pbe.GetNodeId(),
+		clusterID,
+		originClusterID,
 		parseUUID(mt.GetStreamId()),
 		streamName,
 		// Process info

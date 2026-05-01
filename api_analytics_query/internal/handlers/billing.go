@@ -253,46 +253,13 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		uniqueUsers = 0
 	}
 
-	// Query ClickHouse for average storage usage (using hourly MV for efficiency)
-	var avgStorageGB float64
-	err = bs.clickhouse.QueryRowContext(ctx, `
-		SELECT COALESCE(avgMerge(avg_total_bytes) / (1024*1024*1024), 0) as avg_storage_gb
-		FROM storage_usage_hourly
-		WHERE tenant_id = ?
-		AND hour BETWEEN ? AND ?
-	`, tenantID, startTime, endTime).Scan(&avgStorageGB)
-	if err != nil && !errors.Is(err, database.ErrNoRows) {
-		bs.logger.WithError(err).Info("Failed to query storage_usage_hourly, defaulting to 0")
-		avgStorageGB = 0
-	}
-
-	// Processing/transcoding usage from processing_daily (per-codec breakdown only)
-	var livepeerH264Seconds, livepeerVP9Seconds, livepeerAV1Seconds, livepeerHEVCSeconds float64
-	var nativeAvH264Seconds, nativeAvVP9Seconds, nativeAvAV1Seconds, nativeAvHEVCSeconds float64
-	var nativeAvAACSeconds, nativeAvOpusSeconds float64
-
-	err = bs.clickhouse.QueryRowContext(ctx, `
-		SELECT
-			COALESCE(sum(livepeer_h264_seconds), 0) as livepeer_h264_seconds,
-			COALESCE(sum(livepeer_vp9_seconds), 0) as livepeer_vp9_seconds,
-			COALESCE(sum(livepeer_av1_seconds), 0) as livepeer_av1_seconds,
-			COALESCE(sum(livepeer_hevc_seconds), 0) as livepeer_hevc_seconds,
-			COALESCE(sum(native_av_h264_seconds), 0) as native_av_h264_seconds,
-			COALESCE(sum(native_av_vp9_seconds), 0) as native_av_vp9_seconds,
-			COALESCE(sum(native_av_av1_seconds), 0) as native_av_av1_seconds,
-			COALESCE(sum(native_av_hevc_seconds), 0) as native_av_hevc_seconds,
-			COALESCE(sum(native_av_aac_seconds), 0) as native_av_aac_seconds,
-			COALESCE(sum(native_av_opus_seconds), 0) as native_av_opus_seconds
-		FROM processing_daily
-		WHERE tenant_id = ?
-		AND day BETWEEN toDate(?) AND toDate(?)
-	`, tenantID, startTime, endTime).Scan(
-		&livepeerH264Seconds, &livepeerVP9Seconds, &livepeerAV1Seconds, &livepeerHEVCSeconds,
-		&nativeAvH264Seconds, &nativeAvVP9Seconds, &nativeAvAV1Seconds, &nativeAvHEVCSeconds,
-		&nativeAvAACSeconds, &nativeAvOpusSeconds)
-	if err != nil && !errors.Is(err, database.ErrNoRows) {
-		bs.logger.WithError(err).Info("Failed to query processing usage, defaulting to 0")
-	}
+	// Query ClickHouse for average storage usage per cluster. cluster_id
+	// flows from the MistTrigger envelope into storage_snapshots and the
+	// storage_usage_hourly rollup so each cluster's storage can be billed
+	// to the right pricing model. Empty cluster_id falls back to the
+	// tenant's primary cluster.
+	clusterStorageGB := bs.queryClusterStorageGB(ctx, tenantID, startTime, endTime, primaryClusterID)
+	clusterProcessing := bs.queryClusterProcessingSeconds(ctx, tenantID, startTime, endTime, primaryClusterID)
 
 	// API usage aggregates from api_usage_hourly (Gateway API summaries)
 	var apiRequests, apiErrors, apiDurationMs, apiComplexity float64
@@ -354,25 +321,24 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		}
 	}
 
+	totalStorageGB := 0.0
+	for _, gb := range clusterStorageGB {
+		totalStorageGB += gb
+	}
+	totalProcessingSeconds := 0.0
+	for _, proc := range clusterProcessing {
+		totalProcessingSeconds += proc.Total()
+	}
 	hasUsage := streamHours != 0 ||
 		totalEgressGB != 0 ||
 		totalViewerHours != 0 ||
-		avgStorageGB != 0 ||
+		totalStorageGB != 0 ||
+		totalProcessingSeconds != 0 ||
 		peakBandwidth != 0 ||
 		totalStreams != 0 ||
 		maxViewers != 0 ||
 		totalUniqueViewers != 0 ||
 		uniqueUsers != 0 ||
-		livepeerH264Seconds != 0 ||
-		livepeerVP9Seconds != 0 ||
-		livepeerAV1Seconds != 0 ||
-		livepeerHEVCSeconds != 0 ||
-		nativeAvH264Seconds != 0 ||
-		nativeAvVP9Seconds != 0 ||
-		nativeAvAV1Seconds != 0 ||
-		nativeAvHEVCSeconds != 0 ||
-		nativeAvAACSeconds != 0 ||
-		nativeAvOpusSeconds != 0 ||
 		apiRequests != 0 ||
 		apiErrors != 0 ||
 		apiDurationMs != 0 ||
@@ -392,32 +358,53 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	now := time.Now()
 	var summaries []*models.UsageSummary
 
+	// Make sure clusters that only had storage or processing (no
+	// viewer/egress) still get a UsageSummary so those meters bill
+	// against the right cluster's pricing.
+	for cid := range clusterStorageGB {
+		if _, ok := clusterMetrics[cid]; !ok {
+			clusterMetrics[cid] = &clusterViewerMetrics{}
+		}
+	}
+	for cid := range clusterProcessing {
+		if _, ok := clusterMetrics[cid]; !ok {
+			clusterMetrics[cid] = &clusterViewerMetrics{}
+		}
+	}
+
 	for cid, vm := range clusterMetrics {
 		summary := &models.UsageSummary{
-			TenantID:     tenantID,
-			ClusterID:    cid,
-			Period:       period,
-			EgressGB:     sanitizeFloat(vm.EgressGB),
-			ViewerHours:  sanitizeFloat(vm.ViewerHours),
-			TotalViewers: vm.UniqueViewers,
-			Timestamp:    now,
+			TenantID:         tenantID,
+			ClusterID:        cid,
+			Period:           period,
+			EgressGB:         sanitizeFloat(vm.EgressGB),
+			ViewerHours:      sanitizeFloat(vm.ViewerHours),
+			TotalViewers:     vm.UniqueViewers,
+			AverageStorageGB: clusterStorageGB[cid], // already sanitized at scan time
+			Timestamp:        now,
 		}
 
-		// Non-cluster-scoped metrics are attributed to the primary cluster
+		// Per-cluster processing seconds. Each cluster's transcoding work
+		// is attributed to that cluster's pricing model.
+		if proc, ok := clusterProcessing[cid]; ok {
+			summary.LivepeerH264Seconds = sanitizeFloat(proc.LivepeerH264Seconds)
+			summary.LivepeerVP9Seconds = sanitizeFloat(proc.LivepeerVP9Seconds)
+			summary.LivepeerAV1Seconds = sanitizeFloat(proc.LivepeerAV1Seconds)
+			summary.LivepeerHEVCSeconds = sanitizeFloat(proc.LivepeerHEVCSeconds)
+			summary.NativeAvH264Seconds = sanitizeFloat(proc.NativeAvH264Seconds)
+			summary.NativeAvVP9Seconds = sanitizeFloat(proc.NativeAvVP9Seconds)
+			summary.NativeAvAV1Seconds = sanitizeFloat(proc.NativeAvAV1Seconds)
+			summary.NativeAvHEVCSeconds = sanitizeFloat(proc.NativeAvHEVCSeconds)
+			summary.NativeAvAACSeconds = sanitizeFloat(proc.NativeAvAACSeconds)
+			summary.NativeAvOpusSeconds = sanitizeFloat(proc.NativeAvOpusSeconds)
+		}
+
+		// Tenant-level metrics still attach to the primary cluster
+		// (peaks, API counters, MTD unique users — these aren't naturally
+		// cluster-scoped).
 		if cid == primaryClusterID {
 			summary.StreamHours = sanitizeFloat(streamHours)
 			summary.PeakBandwidthMbps = sanitizeFloat(peakBandwidth)
-			summary.AverageStorageGB = sanitizeFloat(avgStorageGB)
-			summary.LivepeerH264Seconds = sanitizeFloat(livepeerH264Seconds)
-			summary.LivepeerVP9Seconds = sanitizeFloat(livepeerVP9Seconds)
-			summary.LivepeerAV1Seconds = sanitizeFloat(livepeerAV1Seconds)
-			summary.LivepeerHEVCSeconds = sanitizeFloat(livepeerHEVCSeconds)
-			summary.NativeAvH264Seconds = sanitizeFloat(nativeAvH264Seconds)
-			summary.NativeAvVP9Seconds = sanitizeFloat(nativeAvVP9Seconds)
-			summary.NativeAvAV1Seconds = sanitizeFloat(nativeAvAV1Seconds)
-			summary.NativeAvHEVCSeconds = sanitizeFloat(nativeAvHEVCSeconds)
-			summary.NativeAvAACSeconds = sanitizeFloat(nativeAvAACSeconds)
-			summary.NativeAvOpusSeconds = sanitizeFloat(nativeAvOpusSeconds)
 			summary.TotalStreams = totalStreams
 			summary.MaxViewers = maxViewers
 			summary.UniqueUsers = uniqueUsers
@@ -441,6 +428,128 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	}).Info("Generated usage summaries for tenant")
 
 	return summaries, nil
+}
+
+// clusterProcessingMetrics holds the per-codec second totals for one cluster.
+type clusterProcessingMetrics struct {
+	LivepeerH264Seconds float64
+	LivepeerVP9Seconds  float64
+	LivepeerAV1Seconds  float64
+	LivepeerHEVCSeconds float64
+	NativeAvH264Seconds float64
+	NativeAvVP9Seconds  float64
+	NativeAvAV1Seconds  float64
+	NativeAvHEVCSeconds float64
+	NativeAvAACSeconds  float64
+	NativeAvOpusSeconds float64
+}
+
+// Total returns the sum across all codecs — useful for a quick has-data check.
+func (c clusterProcessingMetrics) Total() float64 {
+	return c.LivepeerH264Seconds + c.LivepeerVP9Seconds + c.LivepeerAV1Seconds + c.LivepeerHEVCSeconds +
+		c.NativeAvH264Seconds + c.NativeAvVP9Seconds + c.NativeAvAV1Seconds + c.NativeAvHEVCSeconds +
+		c.NativeAvAACSeconds + c.NativeAvOpusSeconds
+}
+
+// queryClusterProcessingSeconds returns processing-second totals grouped by
+// cluster_id for the period. Empty cluster_id is bucketed under the
+// tenant's primary cluster.
+func (bs *BillingSummarizer) queryClusterProcessingSeconds(ctx context.Context, tenantID string, startTime, endTime time.Time, primaryClusterID string) map[string]clusterProcessingMetrics {
+	out := map[string]clusterProcessingMetrics{}
+	rows, err := bs.clickhouse.QueryContext(ctx, `
+		SELECT cluster_id,
+		       COALESCE(sum(livepeer_h264_seconds), 0) as livepeer_h264_seconds,
+		       COALESCE(sum(livepeer_vp9_seconds), 0)  as livepeer_vp9_seconds,
+		       COALESCE(sum(livepeer_av1_seconds), 0)  as livepeer_av1_seconds,
+		       COALESCE(sum(livepeer_hevc_seconds), 0) as livepeer_hevc_seconds,
+		       COALESCE(sum(native_av_h264_seconds), 0) as native_av_h264_seconds,
+		       COALESCE(sum(native_av_vp9_seconds), 0)  as native_av_vp9_seconds,
+		       COALESCE(sum(native_av_av1_seconds), 0)  as native_av_av1_seconds,
+		       COALESCE(sum(native_av_hevc_seconds), 0) as native_av_hevc_seconds,
+		       COALESCE(sum(native_av_aac_seconds), 0)  as native_av_aac_seconds,
+		       COALESCE(sum(native_av_opus_seconds), 0) as native_av_opus_seconds
+		FROM processing_daily
+		WHERE tenant_id = ?
+		AND day BETWEEN toDate(?) AND toDate(?)
+		GROUP BY cluster_id
+	`, tenantID, startTime, endTime)
+	if err != nil {
+		if !errors.Is(err, database.ErrNoRows) {
+			bs.logger.WithError(err).Info("Failed to query processing_daily per cluster, defaulting to 0")
+		}
+		return out
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var cid string
+		var m clusterProcessingMetrics
+		if scanErr := rows.Scan(&cid,
+			&m.LivepeerH264Seconds, &m.LivepeerVP9Seconds, &m.LivepeerAV1Seconds, &m.LivepeerHEVCSeconds,
+			&m.NativeAvH264Seconds, &m.NativeAvVP9Seconds, &m.NativeAvAV1Seconds, &m.NativeAvHEVCSeconds,
+			&m.NativeAvAACSeconds, &m.NativeAvOpusSeconds); scanErr != nil {
+			bs.logger.WithError(scanErr).Warn("Failed to scan processing row")
+			continue
+		}
+		if cid == "" {
+			cid = primaryClusterID
+		}
+		// Sum into existing entry if cluster appears more than once.
+		existing := out[cid]
+		existing.LivepeerH264Seconds += m.LivepeerH264Seconds
+		existing.LivepeerVP9Seconds += m.LivepeerVP9Seconds
+		existing.LivepeerAV1Seconds += m.LivepeerAV1Seconds
+		existing.LivepeerHEVCSeconds += m.LivepeerHEVCSeconds
+		existing.NativeAvH264Seconds += m.NativeAvH264Seconds
+		existing.NativeAvVP9Seconds += m.NativeAvVP9Seconds
+		existing.NativeAvAV1Seconds += m.NativeAvAV1Seconds
+		existing.NativeAvHEVCSeconds += m.NativeAvHEVCSeconds
+		existing.NativeAvAACSeconds += m.NativeAvAACSeconds
+		existing.NativeAvOpusSeconds += m.NativeAvOpusSeconds
+		out[cid] = existing
+	}
+	if iterErr := rows.Err(); iterErr != nil {
+		bs.logger.WithError(iterErr).Warn("Failed to iterate processing rows")
+	}
+	return out
+}
+
+// queryClusterStorageGB returns avg storage in GB grouped by cluster_id for
+// the period. Empty cluster_id is bucketed under the tenant's primary
+// cluster. Errors degrade silently to an empty map so the rest of the
+// summary can still emit.
+func (bs *BillingSummarizer) queryClusterStorageGB(ctx context.Context, tenantID string, startTime, endTime time.Time, primaryClusterID string) map[string]float64 {
+	out := map[string]float64{}
+	rows, err := bs.clickhouse.QueryContext(ctx, `
+		SELECT cluster_id,
+		       COALESCE(avgMerge(avg_total_bytes) / (1024*1024*1024), 0) as avg_storage_gb
+		FROM storage_usage_hourly
+		WHERE tenant_id = ?
+		AND hour BETWEEN ? AND ?
+		GROUP BY cluster_id
+	`, tenantID, startTime, endTime)
+	if err != nil {
+		if !errors.Is(err, database.ErrNoRows) {
+			bs.logger.WithError(err).Info("Failed to query storage_usage_hourly per cluster, defaulting to 0")
+		}
+		return out
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var cid string
+		var gb float64
+		if scanErr := rows.Scan(&cid, &gb); scanErr != nil {
+			bs.logger.WithError(scanErr).Warn("Failed to scan storage row")
+			continue
+		}
+		if cid == "" {
+			cid = primaryClusterID
+		}
+		out[cid] += sanitizeFloat(gb)
+	}
+	if iterErr := rows.Err(); iterErr != nil {
+		bs.logger.WithError(iterErr).Warn("Failed to iterate storage rows")
+	}
+	return out
 }
 
 func attributedViewerClusterID(clusterID, originClusterID, primaryClusterID string) string {

@@ -38,7 +38,7 @@ type streamContext struct {
 	BillingModel      string                  // "postpaid" or "prepaid" - affects cache TTL
 	IsSuspended       bool                    // true if tenant is suspended (balance < -$10)
 	IsBalanceNegative bool                    // true if prepaid balance <= 0 (should return 402)
-	OfficialClusterID string                  // billing-tier cluster for coverage routing (Phase 2)
+	OfficialClusterID string                  // billing-tier cluster for coverage routing
 	OriginClusterID   string                  // cluster where stream was originally ingested (for federation attribution)
 	ClusterPeers      []*pb.TenantClusterPeer // tenant's full cluster context for demand-driven peering
 	ProcessesJSON     string                  // MistServer process config for STREAM_PROCESS trigger
@@ -663,6 +663,21 @@ func (p *Processor) handleProcessBilling(trigger *pb.MistTrigger) (string, bool,
 	if pbill.StreamId == nil || *pbill.StreamId == "" {
 		if streamID := trigger.GetStreamId(); streamID != "" {
 			pbill.StreamId = &streamID
+		}
+	}
+
+	// Stamp cluster identity onto the billing event so processing minutes
+	// are billed against the right cluster's pricing model. Foghorn has the
+	// authoritative local cluster_id; Helmsman doesn't, which is why this
+	// enrichment lives here rather than at the producer.
+	if (pbill.ClusterId == nil || *pbill.ClusterId == "") && p.clusterID != "" {
+		clusterID := p.clusterID
+		pbill.ClusterId = &clusterID
+	}
+	if pbill.OriginClusterId == nil || *pbill.OriginClusterId == "" {
+		if origin := trigger.GetOriginClusterId(); origin != "" {
+			oc := origin
+			pbill.OriginClusterId = &oc
 		}
 	}
 

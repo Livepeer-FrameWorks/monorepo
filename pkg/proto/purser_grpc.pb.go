@@ -734,6 +734,193 @@ var InvoiceService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	OperatorRevenueService_GetOperatorRevenue_FullMethodName   = "/purser.OperatorRevenueService/GetOperatorRevenue"
+	OperatorRevenueService_ListOperatorClusters_FullMethodName = "/purser.OperatorRevenueService/ListOperatorClusters"
+	OperatorRevenueService_GetOperatorPayouts_FullMethodName   = "/purser.OperatorRevenueService/GetOperatorPayouts"
+)
+
+// OperatorRevenueServiceClient is the client API for OperatorRevenueService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// OperatorRevenueService exposes the operator-side revenue derived from
+// purser.operator_credit_ledger. Read-only; ledger writes happen inside the
+// invoice finalization tx.
+type OperatorRevenueServiceClient interface {
+	GetOperatorRevenue(ctx context.Context, in *GetOperatorRevenueRequest, opts ...grpc.CallOption) (*GetOperatorRevenueResponse, error)
+	ListOperatorClusters(ctx context.Context, in *ListOperatorClustersRequest, opts ...grpc.CallOption) (*ListOperatorClustersResponse, error)
+	GetOperatorPayouts(ctx context.Context, in *GetOperatorPayoutsRequest, opts ...grpc.CallOption) (*GetOperatorPayoutsResponse, error)
+}
+
+type operatorRevenueServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewOperatorRevenueServiceClient(cc grpc.ClientConnInterface) OperatorRevenueServiceClient {
+	return &operatorRevenueServiceClient{cc}
+}
+
+func (c *operatorRevenueServiceClient) GetOperatorRevenue(ctx context.Context, in *GetOperatorRevenueRequest, opts ...grpc.CallOption) (*GetOperatorRevenueResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetOperatorRevenueResponse)
+	err := c.cc.Invoke(ctx, OperatorRevenueService_GetOperatorRevenue_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *operatorRevenueServiceClient) ListOperatorClusters(ctx context.Context, in *ListOperatorClustersRequest, opts ...grpc.CallOption) (*ListOperatorClustersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListOperatorClustersResponse)
+	err := c.cc.Invoke(ctx, OperatorRevenueService_ListOperatorClusters_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *operatorRevenueServiceClient) GetOperatorPayouts(ctx context.Context, in *GetOperatorPayoutsRequest, opts ...grpc.CallOption) (*GetOperatorPayoutsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetOperatorPayoutsResponse)
+	err := c.cc.Invoke(ctx, OperatorRevenueService_GetOperatorPayouts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// OperatorRevenueServiceServer is the server API for OperatorRevenueService service.
+// All implementations must embed UnimplementedOperatorRevenueServiceServer
+// for forward compatibility.
+//
+// OperatorRevenueService exposes the operator-side revenue derived from
+// purser.operator_credit_ledger. Read-only; ledger writes happen inside the
+// invoice finalization tx.
+type OperatorRevenueServiceServer interface {
+	GetOperatorRevenue(context.Context, *GetOperatorRevenueRequest) (*GetOperatorRevenueResponse, error)
+	ListOperatorClusters(context.Context, *ListOperatorClustersRequest) (*ListOperatorClustersResponse, error)
+	GetOperatorPayouts(context.Context, *GetOperatorPayoutsRequest) (*GetOperatorPayoutsResponse, error)
+	mustEmbedUnimplementedOperatorRevenueServiceServer()
+}
+
+// UnimplementedOperatorRevenueServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedOperatorRevenueServiceServer struct{}
+
+func (UnimplementedOperatorRevenueServiceServer) GetOperatorRevenue(context.Context, *GetOperatorRevenueRequest) (*GetOperatorRevenueResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetOperatorRevenue not implemented")
+}
+func (UnimplementedOperatorRevenueServiceServer) ListOperatorClusters(context.Context, *ListOperatorClustersRequest) (*ListOperatorClustersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListOperatorClusters not implemented")
+}
+func (UnimplementedOperatorRevenueServiceServer) GetOperatorPayouts(context.Context, *GetOperatorPayoutsRequest) (*GetOperatorPayoutsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetOperatorPayouts not implemented")
+}
+func (UnimplementedOperatorRevenueServiceServer) mustEmbedUnimplementedOperatorRevenueServiceServer() {
+}
+func (UnimplementedOperatorRevenueServiceServer) testEmbeddedByValue() {}
+
+// UnsafeOperatorRevenueServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to OperatorRevenueServiceServer will
+// result in compilation errors.
+type UnsafeOperatorRevenueServiceServer interface {
+	mustEmbedUnimplementedOperatorRevenueServiceServer()
+}
+
+func RegisterOperatorRevenueServiceServer(s grpc.ServiceRegistrar, srv OperatorRevenueServiceServer) {
+	// If the following call panics, it indicates UnimplementedOperatorRevenueServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&OperatorRevenueService_ServiceDesc, srv)
+}
+
+func _OperatorRevenueService_GetOperatorRevenue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetOperatorRevenueRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OperatorRevenueServiceServer).GetOperatorRevenue(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OperatorRevenueService_GetOperatorRevenue_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OperatorRevenueServiceServer).GetOperatorRevenue(ctx, req.(*GetOperatorRevenueRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OperatorRevenueService_ListOperatorClusters_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListOperatorClustersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OperatorRevenueServiceServer).ListOperatorClusters(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OperatorRevenueService_ListOperatorClusters_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OperatorRevenueServiceServer).ListOperatorClusters(ctx, req.(*ListOperatorClustersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OperatorRevenueService_GetOperatorPayouts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetOperatorPayoutsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OperatorRevenueServiceServer).GetOperatorPayouts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OperatorRevenueService_GetOperatorPayouts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OperatorRevenueServiceServer).GetOperatorPayouts(ctx, req.(*GetOperatorPayoutsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// OperatorRevenueService_ServiceDesc is the grpc.ServiceDesc for OperatorRevenueService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var OperatorRevenueService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "purser.OperatorRevenueService",
+	HandlerType: (*OperatorRevenueServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetOperatorRevenue",
+			Handler:    _OperatorRevenueService_GetOperatorRevenue_Handler,
+		},
+		{
+			MethodName: "ListOperatorClusters",
+			Handler:    _OperatorRevenueService_ListOperatorClusters_Handler,
+		},
+		{
+			MethodName: "GetOperatorPayouts",
+			Handler:    _OperatorRevenueService_GetOperatorPayouts_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "purser.proto",
+}
+
+const (
 	PaymentService_CreatePayment_FullMethodName     = "/purser.PaymentService/CreatePayment"
 	PaymentService_GetPaymentMethods_FullMethodName = "/purser.PaymentService/GetPaymentMethods"
 	PaymentService_GetBillingStatus_FullMethodName  = "/purser.PaymentService/GetBillingStatus"

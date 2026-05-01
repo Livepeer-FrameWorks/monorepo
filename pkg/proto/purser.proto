@@ -57,6 +57,15 @@ service InvoiceService {
   rpc ListInvoices(ListInvoicesRequest) returns (ListInvoicesResponse);
 }
 
+// OperatorRevenueService exposes the operator-side revenue derived from
+// purser.operator_credit_ledger. Read-only; ledger writes happen inside the
+// invoice finalization tx.
+service OperatorRevenueService {
+  rpc GetOperatorRevenue(GetOperatorRevenueRequest) returns (GetOperatorRevenueResponse);
+  rpc ListOperatorClusters(ListOperatorClustersRequest) returns (ListOperatorClustersResponse);
+  rpc GetOperatorPayouts(GetOperatorPayoutsRequest) returns (GetOperatorPayoutsResponse);
+}
+
 // PaymentService handles payment processing
 service PaymentService {
   // Initiate payment for an invoice
@@ -397,6 +406,67 @@ message CancelSubscriptionRequest {
 // INVOICE MESSAGES
 // ============================================================================
 
+// ============================================================================
+// OPERATOR REVENUE MESSAGES
+// ============================================================================
+
+// Cluster-owner queries the credit ledger for what they've earned.
+message GetOperatorRevenueRequest {
+  string tenant_id = 1;                          // owning tenant (cluster operator)
+  google.protobuf.Timestamp range_start = 2;     // inclusive
+  google.protobuf.Timestamp range_end = 3;       // exclusive
+  optional string cluster_id = 4;                // filter to a single cluster
+}
+
+message OperatorRevenueByCluster {
+  string cluster_id = 1;
+  string cluster_name = 2;                       // joined from Quartermaster
+  string currency = 3;
+  int64 gross_cents = 4;
+  int64 platform_fee_cents = 5;
+  int64 payable_cents = 6;
+  int32 line_count = 7;                          // number of accrual rows in the range
+}
+
+message GetOperatorRevenueResponse {
+  // Per-cluster aggregates. Sum of payable_cents across entries is the
+  // operator's net earned amount in the range.
+  repeated OperatorRevenueByCluster clusters = 1;
+  string currency = 2;                           // tenant's primary currency
+  int64 total_gross_cents = 3;
+  int64 total_platform_fee_cents = 4;
+  int64 total_payable_cents = 5;
+}
+
+message ListOperatorClustersRequest {
+  string tenant_id = 1;                          // owning tenant
+}
+
+message ListOperatorClustersResponse {
+  repeated OperatorRevenueByCluster clusters = 1; // lifetime aggregate per cluster
+}
+
+message GetOperatorPayoutsRequest {
+  string tenant_id = 1;                          // owning tenant
+  optional google.protobuf.Timestamp range_start = 2;
+  optional google.protobuf.Timestamp range_end = 3;
+}
+
+message OperatorPayout {
+  string id = 1;
+  string currency = 2;
+  int64 total_cents = 3;
+  string status = 4;                             // pending | processing | paid | failed | cancelled
+  string method = 5;
+  string external_reference = 6;
+  google.protobuf.Timestamp created_at = 7;
+  optional google.protobuf.Timestamp paid_at = 8;
+}
+
+message GetOperatorPayoutsResponse {
+  repeated OperatorPayout payouts = 1;
+}
+
 message GetInvoiceRequest {
   string invoice_id = 1;
 }
@@ -413,11 +483,21 @@ message LineItem {
   string quantity = 2;             // Total quantity used (was int32; now string for decimals)
   string unit_price = 3;           // Decimal as string
   string total = 4;                // = billable_quantity * unit_price; rounded to 2dp
-  string line_key = 5;             // Stable identity: "base_subscription", "meter:<name>", "meter:<name>:codec:<codec>"
+  string line_key = 5;             // Stable identity: "base_subscription", "meter:<name>:<cluster_id>:<yyyymm>"
   string meter = 6;                // Meter name; empty for base_subscription
   string included_quantity = 7;    // Free quantity (decimal as string)
   string billable_quantity = 8;    // = max(0, quantity - included_quantity)
   string currency = 9;             // ISO 4217
+
+  // Cluster attribution. Empty for tenant-scoped lines (base_subscription).
+  // Set for cluster usage lines.
+  string cluster_id = 10;
+  string cluster_name = 11;        // Joined from Quartermaster at read time
+  string cluster_kind = 12;        // platform_official | tenant_private | third_party_marketplace
+  // PricingSource explains why the line was priced as it was — drives the
+  // presentation badge in email/dashboard.
+  string pricing_source = 13;      // tier | cluster_metered | cluster_monthly | cluster_custom | free_unmetered | self_hosted | included_subscription
+  string pricing_label = 14;       // Human-readable label of pricing_source for direct rendering
 }
 
 message Invoice {
@@ -737,7 +817,9 @@ message ClusterPricing {
   // Stripe integration
   optional string stripe_product_id = 4;      // Stripe Product ID
   optional string stripe_price_id_monthly = 5; // Stripe Price ID for monthly
-  optional string stripe_meter_id = 6;         // Stripe Billing Meter ID
+  // Stripe meter event_name (NOT the mtr_xxx ID). Passed as
+  // BillingMeterEventParams.EventName when firing meter events.
+  optional string stripe_meter_event_name = 6;
 
   // Pricing details
   string base_price = 7;                // Decimal as string (e.g., "29.99")
@@ -787,7 +869,8 @@ message SetClusterPricingRequest {
   // Stripe IDs (admin only - normally auto-created)
   optional string stripe_product_id = 9;
   optional string stripe_price_id_monthly = 10;
-  optional string stripe_meter_id = 11;
+  // Stripe meter event_name (NOT the mtr_xxx ID).
+  optional string stripe_meter_event_name = 11;
 }
 
 message ListClusterPricingsRequest {

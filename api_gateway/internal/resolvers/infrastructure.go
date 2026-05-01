@@ -1004,7 +1004,16 @@ func (r *Resolver) buildServiceInstancesConnectionFromSlice(instances []*pb.Serv
 	}
 }
 
-// DoSubscribeToCluster subscribes a tenant to a cluster
+// DoSubscribeToCluster subscribes a tenant to a cluster.
+//
+// Routes through Purser's CreateClusterSubscription so the cluster's
+// pricing model is honored: free_unmetered / tier_inherit / metered
+// grant access immediately through the correct Quartermaster entitlement path;
+// monthly returns a Stripe checkout URL; custom returns pending_approval.
+//
+// Caller surfaces non-active outcomes as structured errors with stable
+// "status:..." prefixes so the UI can switch on them. A typed payload
+// would be cleaner but requires a coordinated GraphQL/Houdini change.
 func (r *Resolver) DoSubscribeToCluster(ctx context.Context, clusterID string) (bool, error) {
 	tenantID := ""
 	if user := middleware.GetUserFromContext(ctx); user != nil {
@@ -1014,12 +1023,19 @@ func (r *Resolver) DoSubscribeToCluster(ctx context.Context, clusterID string) (
 		return false, fmt.Errorf("tenant context required")
 	}
 
-	_, err := r.Clients.Quartermaster.SubscribeToCluster(ctx, &pb.SubscribeToClusterRequest{
-		TenantId:  tenantID,
-		ClusterId: clusterID,
-	})
+	resp, err := r.Clients.Purser.CreateClusterSubscription(ctx, tenantID, clusterID, "")
 	if err != nil {
 		return false, fmt.Errorf("failed to subscribe: %w", err)
+	}
+
+	switch resp.GetStatus() {
+	case "pending_payment":
+		// Monthly cluster: caller must redirect the user to checkout
+		// before access is granted (the Stripe webhook then provisions).
+		return false, fmt.Errorf("status:pending_payment checkout_url:%s", resp.GetCheckoutUrl())
+	case "pending_approval":
+		// Custom cluster: cluster owner must approve.
+		return false, fmt.Errorf("status:pending_approval")
 	}
 
 	r.sendServiceEvent(ctx, &pb.ServiceEvent{
@@ -1701,7 +1717,12 @@ func (r *Resolver) DoListMyClusterInvites(ctx context.Context) ([]*pb.ClusterInv
 	return resp.Invites, nil
 }
 
-// DoRequestClusterSubscription requests subscription to a cluster
+// DoRequestClusterSubscription requests subscription to a cluster.
+//
+// Defensive pricing precondition: monthly clusters require Stripe checkout
+// before access can be granted. Letting an approval workflow short-circuit
+// payment would create active access without a paid subscription, so we
+// route monthly through the subscribeToCluster flow instead.
 func (r *Resolver) DoRequestClusterSubscription(ctx context.Context, clusterID string, inviteToken *string) (model.ClusterSubscriptionResult, error) {
 	if middleware.IsDemoMode(ctx) {
 		return &model.ValidationError{
@@ -1715,6 +1736,10 @@ func (r *Resolver) DoRequestClusterSubscription(ctx context.Context, clusterID s
 	}
 	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
+	}
+
+	if gate := r.requireCommercialAccessAllowed(ctx, tenantID, clusterID); gate != nil {
+		return gate, nil
 	}
 
 	req := &pb.RequestClusterSubscriptionRequest{
@@ -1763,6 +1788,14 @@ func (r *Resolver) DoAcceptClusterInvite(ctx context.Context, inviteToken string
 	}
 	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
+	}
+
+	clusterID, lookupFailure := r.clusterIDForInviteToken(ctx, tenantID, inviteToken)
+	if lookupFailure != "" {
+		return &model.ValidationError{Message: lookupFailure}, nil
+	}
+	if gate := r.requireCommercialAccessAllowed(ctx, tenantID, clusterID); gate != nil {
+		return gate, nil
 	}
 
 	sub, err := r.Clients.Quartermaster.AcceptClusterInvite(ctx, &pb.AcceptClusterInviteRequest{
@@ -1861,6 +1894,47 @@ func (r *Resolver) DoApproveClusterSubscription(ctx context.Context, subscriptio
 	}
 
 	return sub, nil
+}
+
+func (r *Resolver) clusterIDForInviteToken(ctx context.Context, tenantID, inviteToken string) (string, string) {
+	if r.Clients.Quartermaster == nil {
+		return "", "cluster service unavailable"
+	}
+	resp, err := r.Clients.Quartermaster.ListMyClusterInvites(ctx, &pb.ListMyClusterInvitesRequest{TenantId: tenantID})
+	if err != nil {
+		return "", fmt.Sprintf("failed to verify invite pricing: %v", err)
+	}
+	for _, invite := range resp.GetInvites() {
+		if invite.GetInviteToken() == inviteToken {
+			return invite.GetClusterId(), ""
+		}
+	}
+	return "", "invalid or expired invite token"
+}
+
+// requireCommercialAccessAllowed asks Purser whether this tenant can enter a
+// cluster access flow before Quartermaster writes tenant_cluster_access.
+func (r *Resolver) requireCommercialAccessAllowed(ctx context.Context, tenantID, clusterID string) model.ClusterSubscriptionResult {
+	if r.Clients.Purser == nil {
+		return &model.ValidationError{Message: "Billing service unavailable; cannot verify cluster pricing"}
+	}
+	access, err := r.Clients.Purser.CheckClusterAccess(ctx, tenantID, clusterID)
+	if err != nil {
+		return &model.ValidationError{Message: fmt.Sprintf("Failed to verify cluster pricing: %v", err)}
+	}
+	if access.GetPricingModel() == "monthly" {
+		return &model.ValidationError{
+			Message: "This cluster requires a paid subscription. Use subscribeToCluster to start Stripe checkout.",
+		}
+	}
+	if !access.GetAllowed() {
+		reason := access.GetDenialReason()
+		if reason == "" {
+			reason = "Cluster is not available for this tenant"
+		}
+		return &model.ValidationError{Message: reason}
+	}
+	return nil
 }
 
 // DoRejectClusterSubscription rejects a subscription request

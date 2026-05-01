@@ -35,7 +35,42 @@ type EmailData struct {
 	DaysPastDue   int
 	Balance       float64
 	LoginURL      string
-	UsageDetails  map[string]interface{}
+	// LineItems is the cluster-attributed presentation source of truth for
+	// the invoice. Email renders only from this — usage_details is raw/debug
+	// JSON kept for audit, never read here.
+	LineItems []EmailInvoiceLineItem
+	// LineItemGroups is the same data grouped by cluster for the template
+	// loop. Built by buildEmailInvoiceData; the template is otherwise
+	// responsible for nothing structural.
+	LineItemGroups []EmailLineItemGroup
+}
+
+// EmailInvoiceLineItem is a local presentation DTO for email templates. Built
+// from persisted purser.invoice_line_items. Decoupled from rating.LineItem so
+// that template-shape changes don't ripple into the rating engine.
+type EmailInvoiceLineItem struct {
+	Description   string
+	ClusterID     string
+	ClusterName   string
+	ClusterKind   string
+	Quantity      string
+	UnitPrice     string
+	Total         string
+	Currency      string
+	PricingSource string
+	PricingLabel  string
+	IsZeroPrice   bool
+}
+
+// EmailLineItemGroup is one cluster (or tenant-scope bucket) in the
+// rendered table. PlatformScoped is true for tenant-level lines
+// (base_subscription); ClusterID/ClusterName are empty in that case.
+type EmailLineItemGroup struct {
+	ClusterID      string
+	ClusterName    string
+	ClusterKind    string
+	PlatformScoped bool
+	Lines          []EmailInvoiceLineItem
 }
 
 // NewEmailService creates a new email service instance
@@ -61,8 +96,11 @@ func (es *EmailService) IsConfigured() bool {
 	return es.smtpHost != "" && es.smtpUser != "" && es.smtpPassword != "" && es.fromEmail != ""
 }
 
-// SendInvoiceCreatedEmail sends notification when a new invoice is created
-func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoiceID string, amount float64, currency string, dueDate time.Time, usageDetails map[string]interface{}) error {
+// SendInvoiceCreatedEmail sends notification when a new invoice is created.
+// lineItems is the cluster-attributed presentation source of truth — the
+// caller queries purser.invoice_line_items and maps to []EmailInvoiceLineItem
+// before invoking. Do not pass usage_details; that JSON is raw/debug only.
+func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoiceID string, amount float64, currency string, dueDate time.Time, lineItems []EmailInvoiceLineItem) error {
 	if !es.IsConfigured() {
 		es.logger.Warn("Email service not configured, skipping invoice created email")
 		return nil
@@ -71,13 +109,14 @@ func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoice
 	subject := fmt.Sprintf("New Invoice %s - FrameWorks", invoiceID)
 
 	data := EmailData{
-		TenantName:   tenantName,
-		InvoiceID:    invoiceID,
-		Amount:       amount,
-		Currency:     currency,
-		DueDate:      dueDate,
-		LoginURL:     os.Getenv("WEBAPP_PUBLIC_URL") + "/login",
-		UsageDetails: usageDetails,
+		TenantName:     tenantName,
+		InvoiceID:      invoiceID,
+		Amount:         amount,
+		Currency:       currency,
+		DueDate:        dueDate,
+		LoginURL:       os.Getenv("WEBAPP_PUBLIC_URL") + "/login",
+		LineItems:      lineItems,
+		LineItemGroups: groupEmailLineItems(lineItems),
 	}
 
 	body, err := es.renderTemplate("invoice_created", data)
@@ -86,6 +125,62 @@ func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoice
 	}
 
 	return es.sendEmail(tenantEmail, subject, body)
+}
+
+// groupEmailLineItems splits line items into render-friendly groups: one
+// group per cluster, plus a "Subscription" bucket for tenant-scoped lines
+// (base_subscription). Groups are ordered: platform clusters first,
+// tenant-private next, marketplace last; the subscription group is always
+// last. Empty clusters are skipped.
+func groupEmailLineItems(lines []EmailInvoiceLineItem) []EmailLineItemGroup {
+	if len(lines) == 0 {
+		return nil
+	}
+	platformScoped := []EmailInvoiceLineItem{}
+	clusterGroups := map[string]*EmailLineItemGroup{}
+	clusterOrder := []string{}
+	for _, l := range lines {
+		if l.ClusterID == "" {
+			platformScoped = append(platformScoped, l)
+			continue
+		}
+		grp, ok := clusterGroups[l.ClusterID]
+		if !ok {
+			grp = &EmailLineItemGroup{
+				ClusterID:   l.ClusterID,
+				ClusterName: l.ClusterName,
+				ClusterKind: l.ClusterKind,
+			}
+			clusterGroups[l.ClusterID] = grp
+			clusterOrder = append(clusterOrder, l.ClusterID)
+		}
+		grp.Lines = append(grp.Lines, l)
+	}
+
+	out := make([]EmailLineItemGroup, 0, len(clusterGroups)+1)
+	// Platform-official → tenant_private → third_party_marketplace.
+	for _, kind := range []string{"platform_official", "tenant_private", "third_party_marketplace"} {
+		for _, cid := range clusterOrder {
+			if clusterGroups[cid].ClusterKind == kind {
+				out = append(out, *clusterGroups[cid])
+			}
+		}
+	}
+	// Then any cluster lines whose kind didn't match the canonical set.
+	for _, cid := range clusterOrder {
+		kind := clusterGroups[cid].ClusterKind
+		if kind != "platform_official" && kind != "tenant_private" && kind != "third_party_marketplace" {
+			out = append(out, *clusterGroups[cid])
+		}
+	}
+	if len(platformScoped) > 0 {
+		out = append(out, EmailLineItemGroup{
+			ClusterName:    "Subscription",
+			PlatformScoped: true,
+			Lines:          platformScoped,
+		})
+	}
+	return out
 }
 
 // SendPaymentSuccessEmail sends notification when payment is successful
@@ -235,160 +330,60 @@ func (es *EmailService) renderTemplate(templateName string, data EmailData) (str
     <title>New Invoice</title>
 </head>
 <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+    <div style="max-width: 640px; margin: 0 auto; padding: 20px;">
         <h2 style="color: #2c3e50;">New Invoice from FrameWorks</h2>
-        
+
         <p>Hello {{.TenantName}},</p>
-        
+
         <p>A new invoice has been generated for your FrameWorks account:</p>
-        
+
         <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0;">
             <p><strong>Invoice ID:</strong> {{.InvoiceID}}</p>
             <p><strong>Amount:</strong> {{.Amount}} {{.Currency}}</p>
             <p><strong>Due Date:</strong> {{.DueDate.Format "January 2, 2006"}}</p>
         </div>
 
-        {{if .UsageDetails}}
-        <h3 style="color: #2c3e50; margin-top: 30px;">Usage Breakdown</h3>
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
-            <tr style="background-color: #eee;">
-                <th style="padding: 10px; text-align: left; border-bottom: 1px solid #ddd;">Metric</th>
-                <th style="padding: 10px; text-align: right; border-bottom: 1px solid #ddd;">Value</th>
-            </tr>
-            {{if .UsageDetails.viewer_hours}}
-            <tr>
-                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Viewer Hours</td>
-                <td style="padding: 10px; text-align: right; border-bottom: 1px solid #ddd;">{{printf "%.2f" .UsageDetails.viewer_hours}} hrs</td>
-            </tr>
-            {{end}}
-            {{if .UsageDetails.egress_gb}}
-            <tr>
-                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Bandwidth (Egress)</td>
-                <td style="padding: 10px; text-align: right; border-bottom: 1px solid #ddd;">{{printf "%.2f" .UsageDetails.egress_gb}} GB</td>
-            </tr>
-            {{end}}
-            {{if .UsageDetails.average_storage_gb}}
-            <tr>
-                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Avg Storage</td>
-                <td style="padding: 10px; text-align: right; border-bottom: 1px solid #ddd;">{{printf "%.2f" .UsageDetails.average_storage_gb}} GB</td>
-            </tr>
-            {{end}}
-            {{if .UsageDetails.unique_users}}
-            <tr>
-                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Unique Viewers</td>
-                <td style="padding: 10px; text-align: right; border-bottom: 1px solid #ddd;">{{.UsageDetails.unique_users}}</td>
-            </tr>
-            {{end}}
-        </table>
-
-        {{if .UsageDetails.geo_breakdown}}
-        <h4 style="color: #2c3e50; margin-top: 20px;">Top Regions</h4>
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 0.9em;">
+        {{if .LineItemGroups}}
+        <h3 style="color: #2c3e50; margin-top: 30px;">Charges</h3>
+        {{range .LineItemGroups}}
+        <h4 style="color: #2c3e50; margin-top: 20px; margin-bottom: 8px;">
+            {{if .ClusterName}}{{.ClusterName}}{{else}}Cluster {{.ClusterID}}{{end}}
+            {{if eq .ClusterKind "tenant_private"}}<span style="font-size: 0.75em; color: #16a085; background: #e8f8f4; padding: 2px 8px; border-radius: 10px; margin-left: 8px;">Self-hosted</span>{{end}}
+            {{if eq .ClusterKind "third_party_marketplace"}}<span style="font-size: 0.75em; color: #8e44ad; background: #f3eaf8; padding: 2px 8px; border-radius: 10px; margin-left: 8px;">Marketplace</span>{{end}}
+            {{if eq .ClusterKind "platform_official"}}<span style="font-size: 0.75em; color: #2980b9; background: #eaf3fb; padding: 2px 8px; border-radius: 10px; margin-left: 8px;">Platform</span>{{end}}
+        </h4>
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 0.95em;">
             <tr style="background-color: #f8f9fa;">
-                <th style="padding: 8px 10px; text-align: left; border-bottom: 1px solid #ddd;">Country</th>
-                <th style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #ddd;">Viewers</th>
-                <th style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #ddd;">Hours</th>
+                <th style="padding: 8px 10px; text-align: left; border-bottom: 1px solid #ddd;">Item</th>
+                <th style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #ddd;">Quantity</th>
+                <th style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #ddd;">Unit price</th>
+                <th style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #ddd;">Total</th>
             </tr>
-            {{range .UsageDetails.geo_breakdown}}
-            <tr>
-                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">{{.country_code}}</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{.viewer_count}} ({{printf "%.1f" .percentage}}%)</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" .viewer_hours}}h</td>
+            {{range .Lines}}
+            <tr{{if .IsZeroPrice}} style="color: #666;"{{end}}>
+                <td style="padding: 8px 10px; border-bottom: 1px solid #eee;">
+                    {{.Description}}
+                    {{if .PricingLabel}}<div style="font-size: 0.8em; color: #95a5a6;">{{.PricingLabel}}</div>{{end}}
+                </td>
+                <td style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #eee;">{{.Quantity}}</td>
+                <td style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #eee;">{{.UnitPrice}} {{.Currency}}</td>
+                <td style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #eee;">
+                    {{if .IsZeroPrice}}<span style="color: #16a085; font-weight: 600;">Included</span>{{else}}{{.Total}} {{.Currency}}{{end}}
+                </td>
             </tr>
             {{end}}
         </table>
+        {{end}}
         {{end}}
 
-        {{if or .UsageDetails.livepeer_h264_seconds .UsageDetails.native_av_h264_seconds}}
-        <h4 style="color: #2c3e50; margin-top: 20px;">Processing / Transcoding</h4>
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 0.9em;">
-            <tr style="background-color: #f8f9fa;">
-                <th style="padding: 8px 10px; text-align: left; border-bottom: 1px solid #ddd;">Codec</th>
-                <th style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #ddd;">Minutes</th>
-                <th style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #ddd;">Rate</th>
-            </tr>
-            {{if .UsageDetails.livepeer_h264_seconds}}
-            <tr>
-                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Livepeer H264</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.livepeer_h264_seconds 60)}} min</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">1.0x</td>
-            </tr>
-            {{end}}
-            {{if .UsageDetails.livepeer_vp9_seconds}}
-            <tr>
-                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Livepeer VP9</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.livepeer_vp9_seconds 60)}} min</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">1.5x</td>
-            </tr>
-            {{end}}
-            {{if .UsageDetails.livepeer_av1_seconds}}
-            <tr>
-                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Livepeer AV1</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.livepeer_av1_seconds 60)}} min</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">2.0x</td>
-            </tr>
-            {{end}}
-            {{if .UsageDetails.livepeer_hevc_seconds}}
-            <tr>
-                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Livepeer HEVC</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.livepeer_hevc_seconds 60)}} min</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">1.5x</td>
-            </tr>
-            {{end}}
-            {{if .UsageDetails.native_av_h264_seconds}}
-            <tr>
-                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Native AV H264</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.native_av_h264_seconds 60)}} min</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">1.0x</td>
-            </tr>
-            {{end}}
-            {{if .UsageDetails.native_av_vp9_seconds}}
-            <tr>
-                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Native AV VP9</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.native_av_vp9_seconds 60)}} min</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">1.5x</td>
-            </tr>
-            {{end}}
-            {{if .UsageDetails.native_av_av1_seconds}}
-            <tr>
-                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Native AV AV1</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.native_av_av1_seconds 60)}} min</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">2.0x</td>
-            </tr>
-            {{end}}
-            {{if .UsageDetails.native_av_hevc_seconds}}
-            <tr>
-                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Native AV HEVC</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.native_av_hevc_seconds 60)}} min</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">1.5x</td>
-            </tr>
-            {{end}}
-            {{if .UsageDetails.native_av_aac_seconds}}
-            <tr>
-                <td style="padding: 5px 10px; border-bottom: 1px solid #eee; color: #666;">Audio (AAC)</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee; color: #666;">{{printf "%.1f" (divFloat .UsageDetails.native_av_aac_seconds 60)}} min</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee; color: #27ae60;">FREE</td>
-            </tr>
-            {{end}}
-            {{if .UsageDetails.native_av_opus_seconds}}
-            <tr>
-                <td style="padding: 5px 10px; border-bottom: 1px solid #eee; color: #666;">Audio (Opus)</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee; color: #666;">{{printf "%.1f" (divFloat .UsageDetails.native_av_opus_seconds 60)}} min</td>
-                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee; color: #27ae60;">FREE</td>
-            </tr>
-            {{end}}
-        </table>
-        {{end}}
-        {{end}}
-        
         <p>Please log in to your account to view the invoice details and make payment:</p>
-        
+
         <p style="text-align: center; margin: 30px 0;">
             <a href="{{.LoginURL}}" style="background-color: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">View Invoice</a>
         </p>
-        
+
         <p>If you have any questions, please contact our support team.</p>
-        
+
         <p>Best regards,<br>The FrameWorks Team</p>
     </div>
 </body>

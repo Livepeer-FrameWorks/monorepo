@@ -25,7 +25,10 @@ CREATE TABLE IF NOT EXISTS purser.billing_invoices (
     tenant_id UUID NOT NULL,
 
     -- ===== FINANCIAL DETAILS =====
-    status VARCHAR(50) NOT NULL DEFAULT 'pending', -- draft, pending, paid, overdue, cancelled
+    -- manual_review is a hard hold: no payment, no Stripe meter push, no
+    -- operator credit ledger insertion, no period advance until ops resolves
+    -- and re-finalizes.
+    status VARCHAR(50) NOT NULL DEFAULT 'pending',
     currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
     amount DECIMAL(10,2) NOT NULL DEFAULT 0,
 
@@ -41,10 +44,14 @@ CREATE TABLE IF NOT EXISTS purser.billing_invoices (
     base_amount DECIMAL(10,2) NOT NULL DEFAULT 0,    -- Subscription base fee
     metered_amount DECIMAL(10,2) NOT NULL DEFAULT 0, -- Usage-based charges
     prepaid_credit_applied DECIMAL(10,2) NOT NULL DEFAULT 0, -- Credit applied from prepaid balance
-    usage_details JSONB NOT NULL DEFAULT '{}',       -- Detailed usage breakdown
+    usage_details JSONB NOT NULL DEFAULT '{}',       -- Raw usage breakdown for debug/audit; presentation surfaces (email, dashboard) read invoice_line_items.
 
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+
+    CONSTRAINT chk_billing_invoices_status CHECK (status IN (
+        'draft', 'pending', 'paid', 'overdue', 'failed', 'cancelled', 'manual_review'
+    ))
 );
 
 -- Payment transactions against invoices
@@ -408,13 +415,178 @@ CREATE TABLE IF NOT EXISTS purser.invoice_line_items (
     unit_price NUMERIC(20,9) NOT NULL,
     amount NUMERIC(20,2) NOT NULL,
     currency CHAR(3) NOT NULL,
+    -- Cluster attribution: NULL for tenant-scoped lines (base_subscription).
+    -- Set for cluster usage lines.
+    cluster_id VARCHAR(100),
+    cluster_kind VARCHAR(32),
+    cluster_owner_tenant_id UUID,
+    -- Why the line was priced the way it was. Stamped at rating time.
+    pricing_source VARCHAR(32) NOT NULL DEFAULT 'tier',
+    -- Per-line operator credit and platform fee. Non-zero only for
+    -- third_party_marketplace lines.
+    operator_credit_cents BIGINT NOT NULL DEFAULT 0,
+    platform_fee_cents BIGINT NOT NULL DEFAULT 0,
+    -- Snapshot of cluster_pricing_history.version_id at rating time, so
+    -- a later mid-period repricing remains auditable per-line.
+    price_version_id UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (invoice_id, line_key)
+    UNIQUE (invoice_id, line_key),
+    CONSTRAINT chk_invoice_line_items_pricing_source CHECK (pricing_source IN (
+        'tier', 'cluster_metered', 'cluster_monthly', 'cluster_custom',
+        'free_unmetered', 'self_hosted', 'included_subscription'
+    )),
+    CONSTRAINT chk_invoice_line_items_cluster_kind CHECK (cluster_kind IS NULL OR cluster_kind IN (
+        'platform_official', 'tenant_private', 'third_party_marketplace'
+    ))
 );
 
 CREATE INDEX IF NOT EXISTS idx_invoice_line_items_invoice ON purser.invoice_line_items(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_invoice_line_items_tenant ON purser.invoice_line_items(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_invoice_line_items_cluster ON purser.invoice_line_items(cluster_id) WHERE cluster_id IS NOT NULL;
+
+-- Operator credit ledger: one accrual per priced third_party_marketplace
+-- line; clawbacks/adjustments reference the original via reverses_ledger_id.
+-- payable_cents is signed so SUM aggregates net.
+-- A ledger row is sourced either from a usage-priced invoice line
+-- (source_type='invoice_line', invoice_line_item_id set) or a Stripe
+-- subscription invoice for a monthly cluster (source_type='stripe_subscription',
+-- stripe_invoice_id set). The split exists because monthly cluster revenue
+-- is collected entirely on the Stripe side and never produces a row in
+-- purser.invoice_line_items.
+--
+-- Default status is 'held' so credits accumulate as a complete audit
+-- trail without auto-promoting to payable. Operator vetting flips the
+-- relevant rows to 'accruing' (or the writer can default to 'accruing'
+-- when cluster_owners.status='approved' AND payout_eligible).
+CREATE TABLE IF NOT EXISTS purser.operator_credit_ledger (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_type VARCHAR(32) NOT NULL DEFAULT 'invoice_line',
+    invoice_line_item_id UUID REFERENCES purser.invoice_line_items(id) ON DELETE CASCADE,
+    stripe_invoice_id VARCHAR(255),
+    entry_type VARCHAR(16) NOT NULL,
+    reverses_ledger_id UUID REFERENCES purser.operator_credit_ledger(id),
+    cluster_owner_tenant_id UUID NOT NULL,
+    cluster_id VARCHAR(100) NOT NULL,
+    invoice_id UUID REFERENCES purser.billing_invoices(id) ON DELETE CASCADE,
+    period_start TIMESTAMPTZ NOT NULL,
+    period_end TIMESTAMPTZ NOT NULL,
+    currency CHAR(3) NOT NULL,
+    gross_cents BIGINT NOT NULL DEFAULT 0,
+    platform_fee_cents BIGINT NOT NULL DEFAULT 0,
+    payable_cents BIGINT NOT NULL DEFAULT 0,
+    status VARCHAR(20) NOT NULL DEFAULT 'held',
+    payout_batch_id UUID,
+    notes JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_op_credit_entry_type CHECK (entry_type IN ('accrual', 'clawback', 'adjustment')),
+    CONSTRAINT chk_op_credit_status CHECK (status IN ('accruing', 'eligible', 'paid_out', 'clawed_back', 'held')),
+    CONSTRAINT chk_op_credit_source CHECK (
+        (source_type = 'invoice_line'        AND invoice_line_item_id IS NOT NULL) OR
+        (source_type = 'stripe_subscription' AND stripe_invoice_id    IS NOT NULL)
+    ),
+    CONSTRAINT chk_op_credit_reverses CHECK (
+        (entry_type = 'accrual' AND reverses_ledger_id IS NULL) OR
+        (entry_type IN ('clawback', 'adjustment') AND reverses_ledger_id IS NOT NULL)
+    )
+);
+
+-- One accrual per priced invoice line.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_op_credit_accrual_invoice_line
+    ON purser.operator_credit_ledger(invoice_line_item_id)
+    WHERE entry_type = 'accrual' AND source_type = 'invoice_line';
+-- One accrual per Stripe subscription invoice (Stripe enforces uniqueness on
+-- invoice_id; this index makes our writer idempotent on retry too).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_op_credit_accrual_stripe_invoice
+    ON purser.operator_credit_ledger(stripe_invoice_id)
+    WHERE entry_type = 'accrual' AND source_type = 'stripe_subscription';
+
+CREATE INDEX IF NOT EXISTS idx_op_credit_owner_status
+    ON purser.operator_credit_ledger(cluster_owner_tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_op_credit_invoice
+    ON purser.operator_credit_ledger(invoice_id) WHERE invoice_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_op_credit_payout_batch
+    ON purser.operator_credit_ledger(payout_batch_id) WHERE payout_batch_id IS NOT NULL;
+
+-- Per-tenant operator vetting / KYC / payout-eligibility state. Keyed by
+-- the owning tenant_id (Quartermaster's infrastructure_clusters.owner_tenant_id
+-- joins here). Marketplace listings and CreateClusterSubscription gate on
+-- status='approved' AND payout_eligible once marketplace launches; until
+-- then the table is populated by ops via internal tooling and consulted by
+-- the credit ledger writer to set ledger status.
+CREATE TABLE IF NOT EXISTS purser.cluster_owners (
+    tenant_id UUID PRIMARY KEY,
+    -- draft: row exists, KYC not started
+    -- pending_review: KYC submitted, awaiting ops decision
+    -- approved: vetted; marketplace clusters can be public + payouts eligible
+    -- suspended: paused (TOS violation, payout dispute, etc.)
+    status VARCHAR(32) NOT NULL DEFAULT 'draft',
+    payout_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+    legal_entity_name VARCHAR(255),
+    contact_email VARCHAR(255),
+    -- ISO 3166-1 alpha-2 country code for tax routing.
+    tax_country CHAR(2),
+    tax_id VARCHAR(64),
+    -- Free-form metadata for the KYC provider (Stripe Connect account id,
+    -- Persona inquiry id, etc.). Schema-less by design — the provider
+    -- contract dictates the fields.
+    kyc_metadata JSONB NOT NULL DEFAULT '{}',
+    payout_method VARCHAR(32),                -- bank_transfer | stripe_connect | manual | ...
+    payout_metadata JSONB NOT NULL DEFAULT '{}',
+    notes TEXT,
+    approved_at TIMESTAMPTZ,
+    approved_by UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_cluster_owners_status CHECK (status IN ('draft', 'pending_review', 'approved', 'suspended'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_cluster_owners_status
+    ON purser.cluster_owners(status);
+CREATE INDEX IF NOT EXISTS idx_cluster_owners_payout_eligible
+    ON purser.cluster_owners(tenant_id) WHERE payout_eligible = TRUE;
+
+-- Settlement skeleton. Real integration (bank transfer, Stripe Connect)
+-- happens elsewhere; this table exists so payout_batch_id has a destination
+-- and so reads can JOIN.
+CREATE TABLE IF NOT EXISTS purser.operator_payouts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cluster_owner_tenant_id UUID NOT NULL,
+    currency CHAR(3) NOT NULL,
+    total_cents BIGINT NOT NULL DEFAULT 0,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    method VARCHAR(32),
+    external_reference VARCHAR(255),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    paid_at TIMESTAMPTZ,
+    CONSTRAINT chk_op_payout_status CHECK (status IN ('pending', 'processing', 'paid', 'failed', 'cancelled'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_op_payouts_owner_status
+    ON purser.operator_payouts(cluster_owner_tenant_id, status);
+
+-- Platform fee policy: effective-dated, optionally per-owner. NULL
+-- cluster_owner_tenant_id is the global default for the kind.
+CREATE TABLE IF NOT EXISTS purser.platform_fee_policy (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cluster_kind VARCHAR(32) NOT NULL,
+    cluster_owner_tenant_id UUID,
+    pricing_source VARCHAR(32),
+    fee_basis_points INT NOT NULL DEFAULT 0,
+    effective_from TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    effective_to TIMESTAMPTZ,
+    notes TEXT,
+    CONSTRAINT chk_platform_fee_kind CHECK (cluster_kind IN (
+        'platform_official', 'tenant_private', 'third_party_marketplace'
+    )),
+    CONSTRAINT chk_platform_fee_window CHECK (effective_to IS NULL OR effective_to > effective_from),
+    CONSTRAINT chk_platform_fee_bps CHECK (fee_basis_points >= 0 AND fee_basis_points <= 10000)
+);
+
+CREATE INDEX IF NOT EXISTS idx_platform_fee_lookup
+    ON purser.platform_fee_policy(cluster_kind, cluster_owner_tenant_id, effective_from DESC)
+    WHERE effective_to IS NULL;
 
 -- ============================================================================
 -- PREPAID BALANCE SYSTEM
@@ -620,14 +792,27 @@ CREATE TABLE IF NOT EXISTS purser.cluster_pricing (
     -- ===== STRIPE INTEGRATION =====
     stripe_product_id VARCHAR(255),        -- Stripe Product ID for this cluster
     stripe_price_id_monthly VARCHAR(255),  -- Stripe Price ID for monthly model
-    stripe_meter_id VARCHAR(255),          -- Stripe Billing Meter ID for metered model
+    -- Stripe meter event_name (NOT the mtr_xxx ID). This is the value
+    -- passed as BillingMeterEventParams.EventName when firing meter
+    -- events. The Stripe Billing Meter has both an id (mtr_xxx) and an
+    -- event_name (the customer-facing string); usage events route by
+    -- event_name. Setting the wrong value here drops the events on the
+    -- floor.
+    stripe_meter_event_name VARCHAR(255),
 
     -- ===== BASE PRICING (for 'monthly' model) =====
     base_price DECIMAL(10,2) DEFAULT 0.00,
     currency VARCHAR(3) DEFAULT 'EUR',
 
     -- ===== METERED RATES (override tenant tier rates) =====
-    -- Format: {"delivered_minutes": 0.0005, "average_storage_gb": 0.01}
+    -- Format: per-meter object with unit_price (required) and optional
+    -- model (defaults to all_usage), included_quantity, config:
+    --   {
+    --     "delivered_minutes":  {"unit_price": "0.0005", "model": "tiered_graduated", "included_quantity": "0"},
+    --     "average_storage_gb": {"unit_price": "0.01"}
+    --   }
+    -- Validated at write time by SetClusterPricing; runtime shape must
+    -- match validateMeteredRatesShape in api_billing/internal/grpc.
     metered_rates JSONB DEFAULT '{}',
 
     -- ===== VISIBILITY & ACCESS RULES =====
@@ -649,6 +834,98 @@ CREATE TABLE IF NOT EXISTS purser.cluster_pricing (
 
 CREATE INDEX IF NOT EXISTS idx_purser_cluster_pricing_model ON purser.cluster_pricing(pricing_model);
 CREATE INDEX IF NOT EXISTS idx_purser_cluster_pricing_tier_level ON purser.cluster_pricing(required_tier_level);
+-- A Stripe meter is owned by exactly one cluster; collisions would mis-route
+-- usage events. Partial index permits NULLs (clusters with no metered model).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cluster_pricing_stripe_meter
+    ON purser.cluster_pricing(stripe_meter_event_name)
+    WHERE stripe_meter_event_name IS NOT NULL;
+
+-- At-least-once delivery surface for Stripe meter events. Rows are written
+-- inside the invoice finalization tx; an async flusher reads pending rows
+-- (sent_at IS NULL) and pushes to Stripe. UNIQUE (tenant, cluster, meter,
+-- period) makes re-running finalization a no-op.
+CREATE TABLE IF NOT EXISTS purser.stripe_meter_events_outbox (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    cluster_id VARCHAR(100) NOT NULL DEFAULT '',
+    meter VARCHAR(64) NOT NULL,
+    stripe_meter_event_name VARCHAR(255) NOT NULL,
+    quantity NUMERIC(20,6) NOT NULL,
+    period_start TIMESTAMPTZ NOT NULL,
+    period_end TIMESTAMPTZ NOT NULL,
+    invoice_id UUID REFERENCES purser.billing_invoices(id) ON DELETE SET NULL,
+    sent_at TIMESTAMPTZ,
+    attempt_count INT NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_stripe_meter_events_outbox_period
+    ON purser.stripe_meter_events_outbox(tenant_id, cluster_id, meter, stripe_meter_event_name, period_start);
+CREATE INDEX IF NOT EXISTS idx_stripe_meter_events_outbox_pending
+    ON purser.stripe_meter_events_outbox(created_at)
+    WHERE sent_at IS NULL;
+
+-- Effective-dated audit trail of cluster pricing config. Rating reads the row
+-- effective at period_start so a mid-period repricing remains visible
+-- per-version on the invoice. The trigger below maintains the timeline.
+CREATE TABLE IF NOT EXISTS purser.cluster_pricing_history (
+    version_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cluster_id VARCHAR(100) NOT NULL,
+    pricing_model VARCHAR(20) NOT NULL,
+    stripe_product_id VARCHAR(255),
+    stripe_price_id_monthly VARCHAR(255),
+    stripe_meter_event_name VARCHAR(255),
+    base_price DECIMAL(10,2) NOT NULL DEFAULT 0,
+    currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
+    metered_rates JSONB NOT NULL DEFAULT '{}',
+    required_tier_level INT NOT NULL DEFAULT 0,
+    allow_free_tier BOOLEAN NOT NULL DEFAULT FALSE,
+    default_quotas JSONB NOT NULL DEFAULT '{}',
+    effective_from TIMESTAMPTZ NOT NULL,
+    effective_to TIMESTAMPTZ,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_cluster_pricing_history_model
+        CHECK (pricing_model IN ('free_unmetered', 'metered', 'monthly', 'tier_inherit', 'custom')),
+    CONSTRAINT chk_cluster_pricing_history_window
+        CHECK (effective_to IS NULL OR effective_to > effective_from)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cluster_pricing_history_cluster_open
+    ON purser.cluster_pricing_history(cluster_id)
+    WHERE effective_to IS NULL;
+CREATE INDEX IF NOT EXISTS idx_cluster_pricing_history_cluster_window
+    ON purser.cluster_pricing_history(cluster_id, effective_from DESC);
+
+CREATE OR REPLACE FUNCTION purser.cluster_pricing_history_record()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE purser.cluster_pricing_history
+        SET effective_to = NOW()
+        WHERE cluster_id = NEW.cluster_id
+          AND effective_to IS NULL;
+    INSERT INTO purser.cluster_pricing_history (
+        cluster_id, pricing_model,
+        stripe_product_id, stripe_price_id_monthly, stripe_meter_event_name,
+        base_price, currency, metered_rates,
+        required_tier_level, allow_free_tier, default_quotas,
+        effective_from
+    ) VALUES (
+        NEW.cluster_id, NEW.pricing_model,
+        NEW.stripe_product_id, NEW.stripe_price_id_monthly, NEW.stripe_meter_event_name,
+        NEW.base_price, NEW.currency, NEW.metered_rates,
+        NEW.required_tier_level, NEW.allow_free_tier, NEW.default_quotas,
+        NOW()
+    );
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_cluster_pricing_history ON purser.cluster_pricing;
+CREATE TRIGGER trg_cluster_pricing_history
+    AFTER INSERT OR UPDATE ON purser.cluster_pricing
+    FOR EACH ROW EXECUTE FUNCTION purser.cluster_pricing_history_record();
 
 CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_stripe_customer ON purser.tenant_subscriptions(stripe_customer_id);
 CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_stripe_subscription ON purser.tenant_subscriptions(stripe_subscription_id);

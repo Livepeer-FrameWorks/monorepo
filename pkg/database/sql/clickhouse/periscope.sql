@@ -1081,6 +1081,7 @@ CREATE TABLE IF NOT EXISTS storage_snapshots (
     timestamp DateTime,
     tenant_id UUID,
     node_id LowCardinality(String),
+    cluster_id LowCardinality(String) DEFAULT '',
     storage_scope LowCardinality(String) DEFAULT 'hot',
 
     total_bytes UInt64,
@@ -1098,29 +1099,33 @@ PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (timestamp, tenant_id, node_id)
 TTL timestamp + INTERVAL 90 DAY;
 
--- Storage usage hourly rollup (must be after storage_snapshots table)
+-- Storage usage hourly rollup (must be after storage_snapshots table).
+-- cluster_id is part of the GROUP BY so the rollup feeds per-cluster
+-- average_storage_gb usage_records for cluster-aware billing.
 CREATE TABLE IF NOT EXISTS storage_usage_hourly (
     hour DateTime,
     tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
     avg_total_bytes AggregateFunction(avg, UInt64),
     avg_clip_bytes AggregateFunction(avg, UInt64),
     avg_dvr_bytes AggregateFunction(avg, UInt64),
     avg_vod_bytes AggregateFunction(avg, UInt64)
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(hour)
-ORDER BY (hour, tenant_id)
+ORDER BY (hour, tenant_id, cluster_id)
 TTL hour + INTERVAL 90 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS storage_usage_hourly_mv TO storage_usage_hourly AS
 SELECT
     toStartOfHour(timestamp) AS hour,
     tenant_id,
+    cluster_id,
     avgState(total_bytes) AS avg_total_bytes,
     avgState(clip_bytes) AS avg_clip_bytes,
     avgState(dvr_bytes) AS avg_dvr_bytes,
     avgState(vod_bytes) AS avg_vod_bytes
 FROM storage_snapshots
-GROUP BY hour, tenant_id;
+GROUP BY hour, tenant_id, cluster_id;
 
 CREATE TABLE IF NOT EXISTS storage_events (
     timestamp DateTime,
@@ -1154,6 +1159,8 @@ CREATE TABLE IF NOT EXISTS processing_events (
     timestamp DateTime,
     tenant_id UUID,
     node_id LowCardinality(String),
+    cluster_id LowCardinality(String) DEFAULT '',
+    origin_cluster_id LowCardinality(String) DEFAULT '',
     stream_id UUID,
     internal_name String,
 
@@ -1214,6 +1221,7 @@ TTL timestamp + INTERVAL 90 DAY;
 CREATE TABLE IF NOT EXISTS processing_hourly (
     hour DateTime,
     tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
     process_type LowCardinality(String),
     output_codec LowCardinality(String),
     track_type LowCardinality(String),
@@ -1223,13 +1231,14 @@ CREATE TABLE IF NOT EXISTS processing_hourly (
     unique_streams AggregateFunction(uniq, UUID)
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(hour)
-ORDER BY (hour, tenant_id, process_type, output_codec, track_type)
+ORDER BY (hour, tenant_id, cluster_id, process_type, output_codec, track_type)
 TTL hour + INTERVAL 365 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS processing_hourly_mv TO processing_hourly AS
 SELECT
     toStartOfHour(timestamp) AS hour,
     tenant_id,
+    cluster_id,
     process_type,
     lower(coalesce(output_codec, 'unknown')) AS output_codec,
     coalesce(track_type, 'video') AS track_type,
@@ -1237,11 +1246,12 @@ SELECT
     countState() AS segment_count,
     uniqState(stream_id) AS unique_streams
 FROM processing_events
-GROUP BY hour, tenant_id, process_type, output_codec, track_type;
+GROUP BY hour, tenant_id, cluster_id, process_type, output_codec, track_type;
 
 CREATE TABLE IF NOT EXISTS processing_daily (
     day Date,
     tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
 
     livepeer_h264_seconds Float64,
     livepeer_vp9_seconds Float64,
@@ -1266,13 +1276,17 @@ CREATE TABLE IF NOT EXISTS processing_daily (
     native_av_seconds Float64
 ) ENGINE = SummingMergeTree()
 PARTITION BY toYYYYMM(day)
-ORDER BY (day, tenant_id)
+-- cluster_id is part of the sort key so SummingMergeTree merges rows
+-- per cluster, not across clusters. Without this, two clusters'
+-- processing seconds collapse into one daily row.
+ORDER BY (day, tenant_id, cluster_id)
 TTL day + INTERVAL 730 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS processing_daily_mv TO processing_daily AS
 SELECT
     toDate(hour) AS day,
     tenant_id,
+    cluster_id,
     sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'h264') / 1000.0 AS livepeer_h264_seconds,
     sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'vp9') / 1000.0 AS livepeer_vp9_seconds,
     sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'av1') / 1000.0 AS livepeer_av1_seconds,
@@ -1292,7 +1306,7 @@ SELECT
     sumMergeIf(total_duration_ms, process_type = 'Livepeer') / 1000.0 AS livepeer_seconds,
     sumMergeIf(total_duration_ms, process_type = 'AV') / 1000.0 AS native_av_seconds
 FROM processing_hourly
-GROUP BY day, tenant_id;
+GROUP BY day, tenant_id, cluster_id;
 
 -- ============================================================================
 -- INGEST ERRORS (DLQ)

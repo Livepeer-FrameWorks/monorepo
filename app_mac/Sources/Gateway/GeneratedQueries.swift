@@ -846,6 +846,11 @@ enum GQL {
           unitPrice
           total
           currency
+          clusterId
+          clusterName
+          clusterKind
+          pricingSource
+          pricingLabel
         }
       }
     }
@@ -1419,6 +1424,11 @@ enum GQL {
             unitPrice
             total
             currency
+            clusterId
+            clusterName
+            clusterKind
+            pricingSource
+            pricingLabel
           }
         }
       }

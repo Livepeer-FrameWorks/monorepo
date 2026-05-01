@@ -442,8 +442,9 @@ func GenerateInvoices() []*pb.Invoice {
 			},
 			LineItems: demoLineItems(
 				demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "79.00", Total: "79.00"},
-				demoLineSpec{LineKey: "meter:delivered_minutes", Meter: "delivered_minutes", Quantity: "42500", IncludedQuantity: "120000", BillableQuantity: "0", UnitPrice: "0.00055", Total: "0.00"},
-				demoLineSpec{LineKey: "meter:average_storage_gb", Meter: "average_storage_gb", Quantity: "15.2", IncludedQuantity: "0", BillableQuantity: "15.2", UnitPrice: "0.035", Total: "0.53"},
+				demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:current", Meter: "delivered_minutes", Quantity: "42500", IncludedQuantity: "120000", BillableQuantity: "0", UnitPrice: "0.00055", Total: "0.00", ClusterID: "demo-media", ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+				demoLineSpec{LineKey: "meter:average_storage_gb:demo-media:current", Meter: "average_storage_gb", Quantity: "15.2", IncludedQuantity: "0", BillableQuantity: "15.2", UnitPrice: "0.035", Total: "0.53", ClusterID: "demo-media", ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+				demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:current", Meter: "delivered_minutes", Quantity: "8300", IncludedQuantity: "0", BillableQuantity: "8300", UnitPrice: "0.00", Total: "0.00", ClusterID: "demo-selfhosted", ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 			),
 		},
 		{
@@ -516,8 +517,9 @@ func GenerateInvoices() []*pb.Invoice {
 			},
 			LineItems: demoLineItems(
 				demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "79.00", Total: "79.00"},
-				demoLineSpec{LineKey: "meter:delivered_minutes", Meter: "delivered_minutes", Quantity: "35000", IncludedQuantity: "120000", BillableQuantity: "0", UnitPrice: "0.00055", Total: "0.00"},
-				demoLineSpec{LineKey: "meter:average_storage_gb", Meter: "average_storage_gb", Quantity: "19", IncludedQuantity: "0", BillableQuantity: "19", UnitPrice: "0.035", Total: "0.67"},
+				demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:previous", Meter: "delivered_minutes", Quantity: "35000", IncludedQuantity: "120000", BillableQuantity: "0", UnitPrice: "0.00055", Total: "0.00", ClusterID: "demo-media", ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+				demoLineSpec{LineKey: "meter:average_storage_gb:demo-media:previous", Meter: "average_storage_gb", Quantity: "19", IncludedQuantity: "0", BillableQuantity: "19", UnitPrice: "0.035", Total: "0.67", ClusterID: "demo-media", ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+				demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:previous", Meter: "delivered_minutes", Quantity: "6100", IncludedQuantity: "0", BillableQuantity: "6100", UnitPrice: "0.00", Total: "0.00", ClusterID: "demo-selfhosted", ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 			),
 		},
 	}
@@ -618,8 +620,9 @@ func GenerateInvoicePreview() *pb.Invoice {
 		},
 		LineItems: demoLineItems(
 			demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "79.00", Total: "79.00"},
-			demoLineSpec{LineKey: "meter:delivered_minutes", Meter: "delivered_minutes", Quantity: "24750", IncludedQuantity: "120000", BillableQuantity: "0", UnitPrice: "0.00055", Total: "0.00"},
-			demoLineSpec{LineKey: "meter:average_storage_gb", Meter: "average_storage_gb", Quantity: "18.4", IncludedQuantity: "0", BillableQuantity: "18.4", UnitPrice: "0.035", Total: "0.64"},
+			demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:draft", Meter: "delivered_minutes", Quantity: "24750", IncludedQuantity: "120000", BillableQuantity: "0", UnitPrice: "0.00055", Total: "0.00", ClusterID: "demo-media", ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+			demoLineSpec{LineKey: "meter:average_storage_gb:demo-media:draft", Meter: "average_storage_gb", Quantity: "18.4", IncludedQuantity: "0", BillableQuantity: "18.4", UnitPrice: "0.035", Total: "0.64", ClusterID: "demo-media", ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+			demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:draft", Meter: "delivered_minutes", Quantity: "4200", IncludedQuantity: "0", BillableQuantity: "4200", UnitPrice: "0.00", Total: "0.00", ClusterID: "demo-selfhosted", ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 		),
 	}
 }
@@ -3494,6 +3497,22 @@ func GenerateMySubscriptions() []*pb.InfrastructureCluster {
 			CreatedAt:            timestamppb.New(now.Add(-30 * 24 * time.Hour)),
 			UpdatedAt:            timestamppb.New(now.Add(-1 * time.Hour)),
 		},
+		{
+			Id:                   "cluster_demo_selfhosted",
+			ClusterId:            "demo-selfhosted",
+			ClusterName:          "Demo Self-hosted Cluster",
+			ClusterType:          infra.ClusterTypeEdge,
+			DeploymentModel:      "self_hosted",
+			BaseUrl:              "https://selfhosted.demo.frameworks.dev",
+			MaxConcurrentStreams: 25,
+			MaxConcurrentViewers: 2500,
+			MaxBandwidthMbps:     1000,
+			HealthStatus:         "healthy",
+			IsActive:             true,
+			IsDefaultCluster:     false,
+			CreatedAt:            timestamppb.New(now.Add(-7 * 24 * time.Hour)),
+			UpdatedAt:            timestamppb.New(now.Add(-30 * time.Minute)),
+		},
 	}
 }
 
@@ -4875,6 +4894,11 @@ type demoLineSpec struct {
 	BillableQuantity string
 	UnitPrice        string
 	Total            string
+	ClusterID        string
+	ClusterName      string
+	ClusterKind      string
+	PricingSource    string
+	PricingLabel     string
 }
 
 // demoLineItems builds proto line items in the same identity/order shape as the
@@ -4911,6 +4935,11 @@ func demoLineItems(specs ...demoLineSpec) []*pb.LineItem {
 			UnitPrice:        spec.UnitPrice,
 			Total:            spec.Total,
 			Currency:         "EUR",
+			ClusterId:        spec.ClusterID,
+			ClusterName:      spec.ClusterName,
+			ClusterKind:      spec.ClusterKind,
+			PricingSource:    spec.PricingSource,
+			PricingLabel:     spec.PricingLabel,
 		})
 	}
 	return out

@@ -25,26 +25,27 @@ func TestCollectInvoiceUsageAggregatesRows(t *testing.T) {
 	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 
+	// Rows now carry cluster_id; legacy unattributed rows arrive as "".
+	// Two distinct clusters split the same meter to verify partitioning.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
 		WithArgs("tenant-1", start, end).
-		WillReturnRows(sqlmock.NewRows([]string{"usage_type", "aggregated_value"}).
-			AddRow("average_storage_gb", 2.5).
-			AddRow("peak_bandwidth_mbps", 9.0).
-			AddRow("viewer_hours", 3.0))
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
+			AddRow("", "average_storage_gb", 2.5).
+			AddRow("cluster-a", "viewer_hours", 3.0).
+			AddRow("cluster-b", "viewer_hours", 1.5))
 
-	got := map[string]float64{}
-	if err := jm.collectInvoiceUsage(context.Background(), "tenant-1", start, end, got); err != nil {
+	got, err := jm.collectInvoiceUsage(context.Background(), "tenant-1", start, end)
+	if err != nil {
 		t.Fatalf("collectInvoiceUsage: %v", err)
 	}
-	want := map[string]float64{
-		"average_storage_gb":  2.5,
-		"peak_bandwidth_mbps": 9.0,
-		"viewer_hours":        3.0,
+	if got[""]["average_storage_gb"] != 2.5 {
+		t.Errorf("legacy bucket missing average_storage_gb: %v", got[""])
 	}
-	for k, wantV := range want {
-		if got[k] != wantV {
-			t.Errorf("usage[%s] = %v, want %v", k, got[k], wantV)
-		}
+	if got["cluster-a"]["viewer_hours"] != 3.0 {
+		t.Errorf("cluster-a viewer_hours = %v, want 3.0", got["cluster-a"]["viewer_hours"])
+	}
+	if got["cluster-b"]["viewer_hours"] != 1.5 {
+		t.Errorf("cluster-b viewer_hours = %v, want 1.5", got["cluster-b"]["viewer_hours"])
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet sqlmock expectations: %v", err)
@@ -64,11 +65,11 @@ func TestCollectInvoiceUsageRowsErrorFailsClosed(t *testing.T) {
 
 	mock.ExpectQuery(`FROM purser\.usage_records`).
 		WithArgs("tenant-1", start, end).
-		WillReturnRows(sqlmock.NewRows([]string{"usage_type", "aggregated_value"}).
-			AddRow("viewer_hours", 3.0).
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
+			AddRow("", "viewer_hours", 3.0).
 			RowError(0, errors.New("cursor failed")))
 
-	err = jm.collectInvoiceUsage(context.Background(), "tenant-1", start, end, map[string]float64{})
+	_, err = jm.collectInvoiceUsage(context.Background(), "tenant-1", start, end)
 	if err == nil {
 		t.Fatalf("collectInvoiceUsage err = nil, want cursor failure")
 	}
@@ -120,10 +121,12 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM purser\.billing_invoices`).
 		WithArgs(tenantID, periodStart).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	// New per-cluster shape: rows now carry cluster_id. Empty cluster_id
+	// keeps the legacy platform-official path.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
 		WithArgs(tenantID, periodStart, periodEnd).
-		WillReturnRows(sqlmock.NewRows([]string{"usage_type", "aggregated_value"}).
-			AddRow("average_storage_gb", 2.0))
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
+			AddRow("", "average_storage_gb", 2.0))
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT amount_cents FROM purser\.balance_transactions`).
 		WithArgs(tenantID, sqlmock.AnyArg()).
@@ -198,8 +201,8 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectQuery(`FROM purser\.usage_records`).
 		WithArgs(tenantID, periodStart, periodEnd).
-		WillReturnRows(sqlmock.NewRows([]string{"usage_type", "aggregated_value"}).
-			AddRow("average_storage_gb", 2.0))
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
+			AddRow("", "average_storage_gb", 2.0))
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT amount_cents FROM purser\.balance_transactions`).
 		WithArgs(tenantID, sqlmock.AnyArg()).

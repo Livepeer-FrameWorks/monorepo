@@ -4108,7 +4108,7 @@ A single line item on an invoice or usage preview, produced by the rating engine
 Decimal quantities are strings to preserve precision.
 """
 type LineItem {
-  "Stable identity: 'base_subscription', 'meter:<name>', 'meter:<name>:codec:<codec>'."
+  "Stable identity: 'base_subscription', 'meter:<name>:<cluster_id>:<yyyymm>'."
   lineKey: String!
   "Meter name; empty for base_subscription."
   meter: String!
@@ -4126,6 +4126,16 @@ type LineItem {
   total: String!
   "Currency (ISO 4217)."
   currency: String!
+  "Cluster id this line was attributed to; null for tenant-scoped lines (base_subscription)."
+  clusterId: String
+  "Display name of the cluster, joined from Quartermaster at read time. Null when clusterId is null."
+  clusterName: String
+  "platform_official | tenant_private | third_party_marketplace; null when clusterId is null."
+  clusterKind: String
+  "Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription."
+  pricingSource: String!
+  "Human-readable label of pricingSource (e.g. 'Self-hosted (no charge)', 'Marketplace metered'). Empty when not populated by the gateway."
+  pricingLabel: String!
 }
 
 # Invoices Connection (for paginated invoices list)

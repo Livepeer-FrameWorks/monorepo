@@ -9,25 +9,35 @@ import (
 	"github.com/shopspring/decimal"
 
 	"frameworks/api_billing/internal/billing"
+	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
 	"frameworks/pkg/models"
 )
 
 // buildRatingInputFromSummary turns a single UsageSummary into a rating.Input.
-// Used by per-event prepaid deduction. BasePrice is zero; the per-event
-// deduction never re-charges the monthly base fee.
-func buildRatingInputFromSummary(summary models.UsageSummary, tier *billing.EffectiveTier) rating.Input {
-	usage := map[rating.Meter]decimal.Decimal{
-		rating.MeterDeliveredMinutes: decimal.NewFromFloat(summary.ViewerHours).Mul(decimal.NewFromInt(60)),
-		rating.MeterAverageStorageGB: decimal.NewFromFloat(summary.AverageStorageGB),
-		rating.MeterAIGPUHours:       decimal.NewFromFloat(summary.GPUHours),
-	}
+// Used by the per-event prepaid deduction path. BasePrice is zero; per-event
+// deductions never re-charge the monthly base fee.
+//
+// rules is the rule set the rating engine should apply. For the legacy
+// path it's tier.Rules; for the cluster-aware path it's the result of
+// pricing.ResolveClusterPricing for summary.ClusterID.
+func buildRatingInputFromSummary(summary models.UsageSummary, currency string, rules []rating.Rule) rating.Input {
 	codecSeconds := codecSecondsFromSummary(summary)
+	processingSeconds := decimal.Zero
+	for _, secs := range codecSeconds {
+		processingSeconds = processingSeconds.Add(secs)
+	}
+	usage := map[rating.Meter]decimal.Decimal{
+		rating.MeterDeliveredMinutes:  decimal.NewFromFloat(summary.ViewerHours).Mul(decimal.NewFromInt(60)),
+		rating.MeterAverageStorageGB:  decimal.NewFromFloat(summary.AverageStorageGB),
+		rating.MeterAIGPUHours:        decimal.NewFromFloat(summary.GPUHours),
+		rating.MeterProcessingSeconds: processingSeconds,
+	}
 
 	return rating.Input{
-		Currency:     tier.Currency,
-		BasePrice:    decimal.Zero, // per-event path: never charge base subscription
-		Rules:        tier.Rules,
+		Currency:     currency,
+		BasePrice:    decimal.Zero,
+		Rules:        rules,
 		Usage:        usage,
 		CodecSeconds: codecSeconds,
 	}
@@ -53,32 +63,6 @@ func codecSecondsFromSummary(s models.UsageSummary) map[string]decimal.Decimal {
 	return out
 }
 
-// buildRatingInputFromAggregates turns aggregated usage values (e.g. from
-// purser.usage_records) into a rating.Input. BasePrice is the tier's monthly
-// fee; this path is for invoice generation.
-func buildRatingInputFromAggregates(usageData map[string]float64, tier *billing.EffectiveTier) rating.Input {
-	viewerHours := decimal.NewFromFloat(usageData["viewer_hours"])
-	usage := map[rating.Meter]decimal.Decimal{
-		rating.MeterDeliveredMinutes: viewerHours.Mul(decimal.NewFromInt(60)),
-		rating.MeterAverageStorageGB: decimal.NewFromFloat(usageData["average_storage_gb"]),
-		rating.MeterAIGPUHours:       decimal.NewFromFloat(usageData["gpu_hours"]),
-	}
-	codecSeconds := codecSecondsFromAggregates(usageData)
-
-	basePrice := decimal.Zero
-	if tier.MeteringEnabled || !tier.BasePrice.IsZero() {
-		basePrice = tier.BasePrice
-	}
-
-	return rating.Input{
-		Currency:     tier.Currency,
-		BasePrice:    basePrice,
-		Rules:        tier.Rules,
-		Usage:        usage,
-		CodecSeconds: codecSeconds,
-	}
-}
-
 // codecSecondsFromAggregates sums livepeer_<codec>_seconds and
 // native_av_<codec>_seconds into a single per-codec map.
 func codecSecondsFromAggregates(usageData map[string]float64) map[string]decimal.Decimal {
@@ -93,36 +77,68 @@ func codecSecondsFromAggregates(usageData map[string]float64) map[string]decimal
 	return out
 }
 
-// persistInvoiceLineItems upserts every line in the rating result onto the
-// invoice. Each row is keyed by (invoice_id, line_key); the UNIQUE index makes
-// re-rating a draft idempotent. tenantID is denormalized into every row so
-// financial-audit reads can filter by tenant per the cross-service tenant rule.
-// Finalized invoices are guarded at the call site (the writer must check
-// status before upserting).
-func persistInvoiceLineItems(ctx context.Context, db dbExec, invoiceID, tenantID string, result rating.Result) error {
+// persistInvoiceLineItems upserts every line in result onto the invoice. Each
+// row is keyed by (invoice_id, line_key); the UNIQUE index makes re-rating a
+// draft idempotent. tenantID is denormalized into every row so financial-audit
+// reads can filter by tenant per the cross-service tenant rule. Finalized
+// invoices are guarded at the call site.
+//
+// Cluster context (cluster_id, cluster_kind, cluster_owner_tenant_id,
+// pricing_source, operator_credit_cents, platform_fee_cents,
+// price_version_id) is written from the pricedLine fields. Tenant-scoped
+// lines (base_subscription) write NULLs for the cluster columns.
+func persistInvoiceLineItems(ctx context.Context, db dbExec, invoiceID, tenantID string, result *clusterRatingResult) error {
 	if invoiceID == "" {
 		return errors.New("persistInvoiceLineItems: empty invoice_id")
 	}
 	if tenantID == "" {
 		return errors.New("persistInvoiceLineItems: empty tenant_id")
 	}
-	all := append([]rating.LineItem{result.BaseLine}, result.UsageLines...)
+	if result == nil {
+		return errors.New("persistInvoiceLineItems: nil result")
+	}
+	all := append([]pricedLine{result.BaseLine}, result.UsageLines...)
 
-	// Track desired keys to delete obsolete rows from prior runs (e.g. a meter
-	// that previously had usage but no longer does).
 	desired := make(map[string]bool, len(all))
-	for _, li := range all {
-		desired[li.LineKey] = true
+	for _, pl := range all {
+		desired[pl.LineKey] = true
 		meter := sql.NullString{}
-		if li.Meter != "" {
-			meter = sql.NullString{String: string(li.Meter), Valid: true}
+		if pl.Meter != "" {
+			meter = sql.NullString{String: string(pl.Meter), Valid: true}
+		}
+		clusterID := sql.NullString{}
+		if pl.ClusterID != nil {
+			clusterID = sql.NullString{String: *pl.ClusterID, Valid: true}
+		}
+		clusterKind := sql.NullString{}
+		if pl.ClusterKind != nil {
+			clusterKind = sql.NullString{String: *pl.ClusterKind, Valid: true}
+		}
+		ownerID := sql.NullString{}
+		if pl.ClusterOwnerTenantID != nil {
+			ownerID = sql.NullString{String: pl.ClusterOwnerTenantID.String(), Valid: true}
+		}
+		versionID := sql.NullString{}
+		if pl.PriceVersionID != nil {
+			versionID = sql.NullString{String: pl.PriceVersionID.String(), Valid: true}
+		}
+		pricingSource := string(pl.PricingSource)
+		if pricingSource == "" {
+			pricingSource = string(pricing.SourceTier)
 		}
 		if _, err := db.ExecContext(ctx, `
 			INSERT INTO purser.invoice_line_items (
 				invoice_id, tenant_id, line_key, meter, description,
 				quantity, included_quantity, billable_quantity,
-				unit_price, amount, currency, created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+				unit_price, amount, currency,
+				cluster_id, cluster_kind, cluster_owner_tenant_id,
+				pricing_source, operator_credit_cents, platform_fee_cents,
+				price_version_id, created_at, updated_at
+			) VALUES (
+				$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+				$12, $13, $14::uuid, $15, $16, $17, $18::uuid,
+				NOW(), NOW()
+			)
 			ON CONFLICT (invoice_id, line_key) DO UPDATE SET
 				meter = EXCLUDED.meter,
 				description = EXCLUDED.description,
@@ -132,11 +148,21 @@ func persistInvoiceLineItems(ctx context.Context, db dbExec, invoiceID, tenantID
 				unit_price = EXCLUDED.unit_price,
 				amount = EXCLUDED.amount,
 				currency = EXCLUDED.currency,
+				cluster_id = EXCLUDED.cluster_id,
+				cluster_kind = EXCLUDED.cluster_kind,
+				cluster_owner_tenant_id = EXCLUDED.cluster_owner_tenant_id,
+				pricing_source = EXCLUDED.pricing_source,
+				operator_credit_cents = EXCLUDED.operator_credit_cents,
+				platform_fee_cents = EXCLUDED.platform_fee_cents,
+				price_version_id = EXCLUDED.price_version_id,
 				updated_at = NOW()
-		`, invoiceID, tenantID, li.LineKey, meter, li.Description,
-			li.Quantity.String(), li.IncludedQuantity.String(), li.BillableQuantity.String(),
-			li.UnitPrice.String(), li.Amount.Round(2).String(), li.Currency); err != nil {
-			return fmt.Errorf("upsert line %q: %w", li.LineKey, err)
+		`, invoiceID, tenantID, pl.LineKey, meter, pl.Description,
+			pl.Quantity.String(), pl.IncludedQuantity.String(), pl.BillableQuantity.String(),
+			pl.UnitPrice.String(), pl.Amount.Round(2).String(), pl.Currency,
+			clusterID, clusterKind, ownerID,
+			pricingSource, pl.OperatorCreditCents, pl.PlatformFeeCents,
+			versionID); err != nil {
+			return fmt.Errorf("upsert line %q: %w", pl.LineKey, err)
 		}
 	}
 
@@ -161,8 +187,6 @@ func persistInvoiceLineItems(ctx context.Context, db dbExec, invoiceID, tenantID
 		}
 	}
 	if err := rows.Err(); err != nil {
-		// Don't issue DELETEs from a possibly-truncated stale set; that
-		// would leave obsolete line items in place.
 		return fmt.Errorf("iterate line keys: %w", err)
 	}
 	for _, key := range stale {
@@ -184,7 +208,7 @@ type dbExec interface {
 
 // withTx runs fn inside a single SQL transaction, committing on nil error and
 // rolling back otherwise. Used by invoice writes so totals and line items move
-// together. A failed line-item upsert undoes the invoice header write.
+// together.
 func withTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -198,3 +222,7 @@ func withTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
 	}
 	return tx.Commit()
 }
+
+// _ exists only to keep the billing import alive when build tags excise the
+// rest of the file. Refer to billing.EffectiveTier for the resolver context.
+var _ = billing.EffectiveTier{}

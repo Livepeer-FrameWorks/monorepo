@@ -10235,8 +10235,13 @@ type ProcessBillingEvent struct {
 	RtfOut              *float64 `protobuf:"fixed64,67,opt,name=rtf_out,json=rtfOut,proto3,oneof" json:"rtf_out,omitempty"` // real-time factor out
 	PipelineLagMs       *int64   `protobuf:"varint,68,opt,name=pipeline_lag_ms,json=pipelineLagMs,proto3,oneof" json:"pipeline_lag_ms,omitempty"`
 	OutputBitrateBps    *int64   `protobuf:"varint,69,opt,name=output_bitrate_bps,json=outputBitrateBps,proto3,oneof" json:"output_bitrate_bps,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Cluster attribution for cluster-aware billing. Set by the producer
+	// (Helmsman/Foghorn) from the local cluster identity so processing
+	// minutes can be billed against the right cluster's pricing model.
+	ClusterId       *string `protobuf:"bytes,70,opt,name=cluster_id,json=clusterId,proto3,oneof" json:"cluster_id,omitempty"`
+	OriginClusterId *string `protobuf:"bytes,71,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ProcessBillingEvent) Reset() {
@@ -10617,6 +10622,20 @@ func (x *ProcessBillingEvent) GetOutputBitrateBps() int64 {
 		return *x.OutputBitrateBps
 	}
 	return 0
+}
+
+func (x *ProcessBillingEvent) GetClusterId() string {
+	if x != nil && x.ClusterId != nil {
+		return *x.ClusterId
+	}
+	return ""
+}
+
+func (x *ProcessBillingEvent) GetOriginClusterId() string {
+	if x != nil && x.OriginClusterId != nil {
+		return *x.OriginClusterId
+	}
+	return ""
 }
 
 type StorageInfo struct {
@@ -14256,7 +14275,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x1alivepeer_gateway_available\x18\x01 \x01(\bR\x18livepeerGatewayAvailable\x120\n" +
 	"\x14livepeer_gateway_url\x18\x02 \x01(\tR\x12livepeerGatewayUrl\x120\n" +
 	"\x14gateway_input_codecs\x18\x03 \x03(\tR\x12gatewayInputCodecs\x12,\n" +
-	"\x12local_input_codecs\x18\x04 \x03(\tR\x10localInputCodecs\"\x82\x17\n" +
+	"\x12local_input_codecs\x18\x04 \x03(\tR\x10localInputCodecs\"\xfc\x17\n" +
 	"\x13ProcessBillingEvent\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1f\n" +
 	"\vstream_name\x18\x02 \x01(\tR\n" +
@@ -14317,7 +14336,10 @@ const file_ipc_proto_rawDesc = "" +
 	"\x06rtf_in\x18B \x01(\x01H)R\x05rtfIn\x88\x01\x01\x12\x1c\n" +
 	"\artf_out\x18C \x01(\x01H*R\x06rtfOut\x88\x01\x01\x12+\n" +
 	"\x0fpipeline_lag_ms\x18D \x01(\x03H+R\rpipelineLagMs\x88\x01\x01\x121\n" +
-	"\x12output_bitrate_bps\x18E \x01(\x03H,R\x10outputBitrateBps\x88\x01\x01B\f\n" +
+	"\x12output_bitrate_bps\x18E \x01(\x03H,R\x10outputBitrateBps\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"cluster_id\x18F \x01(\tH-R\tclusterId\x88\x01\x01\x12/\n" +
+	"\x11origin_cluster_id\x18G \x01(\tH.R\x0foriginClusterId\x88\x01\x01B\f\n" +
 	"\n" +
 	"_tenant_idB\f\n" +
 	"\n" +
@@ -14365,7 +14387,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"\b_rtf_outB\x12\n" +
 	"\x10_pipeline_lag_msB\x15\n" +
-	"\x13_output_bitrate_bps\"f\n" +
+	"\x13_output_bitrate_bpsB\r\n" +
+	"\v_cluster_idB\x14\n" +
+	"\x12_origin_cluster_id\"f\n" +
 	"\vStorageInfo\x12\x1d\n" +
 	"\n" +
 	"local_path\x18\x01 \x01(\tR\tlocalPath\x12\x1b\n" +

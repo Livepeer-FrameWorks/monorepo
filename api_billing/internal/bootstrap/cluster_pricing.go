@@ -10,10 +10,10 @@ import (
 )
 
 // ReconcileClusterPricing upserts every ClusterPricing row in desired into
-// purser.cluster_pricing. The Stripe ID columns (stripe_product_id,
-// stripe_price_id_monthly, stripe_meter_id) are owned by Purser's startup Stripe
-// sync and are NEVER touched here — the upsert uses COALESCE so existing values
-// survive.
+// purser.cluster_pricing. The Stripe-owned columns (stripe_product_id,
+// stripe_price_id_monthly, stripe_meter_event_name) are owned by Purser's
+// startup Stripe sync and are NEVER touched here — the upsert uses COALESCE
+// so existing values survive.
 //
 // Stable key: cluster_id. Result reports created/updated/noop per row so callers
 // can assert the idempotency contract on a re-run.

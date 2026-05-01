@@ -7643,6 +7643,22 @@ func (s *QuartermasterServer) ListMyClusterInvites(ctx context.Context, req *pb.
 	}, nil
 }
 
+func rejectDirectCommercialClusterAccess(tenantID string, isPlatformOfficial bool, ownerTenantID sql.NullString, pricingModel, action string) error {
+	if pricingModel == "monthly" {
+		return status.Errorf(codes.FailedPrecondition, "monthly clusters require paid checkout before access can be %s", action)
+	}
+	if isPlatformOfficial {
+		return nil
+	}
+	if !ownerTenantID.Valid || ownerTenantID.String == "" {
+		return status.Error(codes.FailedPrecondition, "cluster ownership is ambiguous")
+	}
+	if ownerTenantID.String == tenantID {
+		return nil
+	}
+	return status.Error(codes.FailedPrecondition, "third-party cluster access must be started through billing")
+}
+
 // RequestClusterSubscription requests access to a cluster
 func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, req *pb.RequestClusterSubscriptionRequest) (*pb.ClusterSubscription, error) {
 	tenantID := req.GetTenantId()
@@ -7663,16 +7679,20 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 	var visibility, pricingModel string
 	var requiresApproval bool
 	var ownerTenantID sql.NullString
+	var isPlatformOfficial bool
 	err := s.db.QueryRowContext(ctx, `
-		SELECT visibility, pricing_model, requires_approval, owner_tenant_id
+		SELECT visibility, pricing_model, requires_approval, owner_tenant_id, is_platform_official
 		FROM quartermaster.infrastructure_clusters
 		WHERE cluster_id = $1 AND is_active = true
-	`, clusterID).Scan(&visibility, &pricingModel, &requiresApproval, &ownerTenantID)
+	`, clusterID).Scan(&visibility, &pricingModel, &requiresApproval, &ownerTenantID, &isPlatformOfficial)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "cluster not found")
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if commercialErr := rejectDirectCommercialClusterAccess(tenantID, isPlatformOfficial, ownerTenantID, pricingModel, "requested"); commercialErr != nil {
+		return nil, commercialErr
 	}
 
 	// Check visibility rules
@@ -7797,14 +7817,18 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *pb.A
 	}
 
 	// Look up the invite
-	var inviteID, clusterID, invitedTenantID, accessLevel string
+	var inviteID, clusterID, invitedTenantID, accessLevel, pricingModel string
 	var resourceLimits sql.NullString
+	var ownerTenantID sql.NullString
+	var isPlatformOfficial bool
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, cluster_id, invited_tenant_id, access_level, resource_limits
-		FROM quartermaster.cluster_invites
-		WHERE invite_token = $1 AND status = 'pending'
-		  AND (expires_at IS NULL OR expires_at > NOW())
-	`, inviteToken).Scan(&inviteID, &clusterID, &invitedTenantID, &accessLevel, &resourceLimits)
+		SELECT i.id, i.cluster_id, i.invited_tenant_id, i.access_level, i.resource_limits,
+		       c.pricing_model, c.owner_tenant_id, c.is_platform_official
+		FROM quartermaster.cluster_invites i
+		JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = i.cluster_id
+		WHERE i.invite_token = $1 AND i.status = 'pending'
+		  AND (i.expires_at IS NULL OR i.expires_at > NOW())
+	`, inviteToken).Scan(&inviteID, &clusterID, &invitedTenantID, &accessLevel, &resourceLimits, &pricingModel, &ownerTenantID, &isPlatformOfficial)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "invalid or expired invite token")
 	}
@@ -7814,6 +7838,9 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *pb.A
 
 	if invitedTenantID != tenantID {
 		return nil, status.Error(codes.PermissionDenied, "invite is for a different tenant")
+	}
+	if commercialErr := rejectDirectCommercialClusterAccess(tenantID, isPlatformOfficial, ownerTenantID, pricingModel, "accepted"); commercialErr != nil {
+		return nil, commercialErr
 	}
 
 	// Mark invite as accepted
@@ -7980,14 +8007,15 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 
 	userID := middleware.GetUserID(ctx)
 	// Get subscription and verify ownership
-	var tenantID, clusterID string
+	var tenantID, clusterID, pricingModel string
 	var dbOwnerID sql.NullString
+	var isPlatformOfficial bool
 	err := s.db.QueryRowContext(ctx, `
-		SELECT a.tenant_id, a.cluster_id, c.owner_tenant_id
+		SELECT a.tenant_id, a.cluster_id, c.owner_tenant_id, c.pricing_model, c.is_platform_official
 		FROM quartermaster.tenant_cluster_access a
 		JOIN quartermaster.infrastructure_clusters c ON a.cluster_id = c.cluster_id
 		WHERE a.id = $1
-	`, subscriptionID).Scan(&tenantID, &clusterID, &dbOwnerID)
+	`, subscriptionID).Scan(&tenantID, &clusterID, &dbOwnerID, &pricingModel, &isPlatformOfficial)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "subscription not found")
 	}
@@ -7996,6 +8024,9 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 	}
 	if !dbOwnerID.Valid || dbOwnerID.String != ownerTenantID {
 		return nil, status.Error(codes.PermissionDenied, "only cluster owner can approve subscriptions")
+	}
+	if commercialErr := rejectDirectCommercialClusterAccess(tenantID, isPlatformOfficial, dbOwnerID, pricingModel, "approved"); commercialErr != nil {
+		return nil, commercialErr
 	}
 
 	_, err = s.db.ExecContext(ctx, `

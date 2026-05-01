@@ -60,8 +60,8 @@ type OverlayPricingRule struct {
 }
 
 // ClusterPricing is one row reconciled into purser.cluster_pricing. Stable key:
-// ClusterID. Stripe IDs (stripe_product_id, stripe_price_id_*, stripe_meter_id)
-// are not in this shape — the Stripe sync owns them.
+// ClusterID. Stripe-owned columns (stripe_product_id, stripe_price_id_*,
+// stripe_meter_event_name) are not in this shape — the Stripe sync owns them.
 type ClusterPricing struct {
 	ClusterID         string         `yaml:"cluster_id"`
 	PricingModel      string         `yaml:"pricing_model"`

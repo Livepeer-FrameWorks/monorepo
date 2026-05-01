@@ -15,7 +15,10 @@ import (
 	"github.com/sirupsen/logrus"
 
 	billingpkg "frameworks/api_billing/internal/billing"
+	"frameworks/api_billing/internal/operator"
+	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
+	stripeoutbox "frameworks/api_billing/internal/stripe"
 	"frameworks/pkg/billing"
 	decklog "frameworks/pkg/clients/decklog"
 	periscope "frameworks/pkg/clients/periscope"
@@ -25,44 +28,6 @@ import (
 	"frameworks/pkg/models"
 	pb "frameworks/pkg/proto"
 )
-
-// collectInvoiceUsage aggregates usage_records into the per-meter map invoice
-// rating consumes. Same aggregation as updateInvoiceDraft and GetTenantUsage:
-// AVG storage, MAX peak/max_viewers, SUM the rest, skip uniques. Returns an
-// error on query/scan/iteration failure so the monthly invoice writer fails
-// closed instead of finalizing on partial usage.
-func (jm *JobManager) collectInvoiceUsage(ctx context.Context, tenantID string, periodStart, periodEnd time.Time, into map[string]float64) error {
-	rows, err := jm.db.QueryContext(ctx, `
-		SELECT usage_type,
-			CASE
-				WHEN usage_type = 'average_storage_gb' THEN AVG(usage_value)
-				WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers') THEN MAX(usage_value)
-				ELSE SUM(usage_value)
-			END as aggregated_value
-		FROM purser.usage_records
-		WHERE tenant_id = $1
-		  AND period_start < $3
-		  AND period_end > $2
-		  AND usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
-		GROUP BY usage_type
-	`, tenantID, periodStart, periodEnd)
-	if err != nil {
-		return fmt.Errorf("query usage_records: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var usageType string
-		var val float64
-		if err := rows.Scan(&usageType, &val); err != nil {
-			return fmt.Errorf("scan usage row: %w", err)
-		}
-		into[usageType] = val
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate usage rows: %w", err)
-	}
-	return nil
-}
 
 func loadSubscriptionPeriod(ctx context.Context, db *sql.DB, tenantID string, now time.Time) (time.Time, time.Time, error) {
 	var start, end sql.NullTime
@@ -257,6 +222,38 @@ func (jm *JobManager) Start(ctx context.Context) {
 
 	// Start wallet cleanup job
 	go jm.runWalletCleanup(ctx)
+
+	// Start Stripe meter event flusher.
+	go jm.runStripeMeterFlusher(ctx)
+}
+
+// runStripeMeterFlusher periodically pushes outbox rows to Stripe.
+// Cadence is 5 minutes; identifier-based idempotency on the Stripe side
+// means a missed tick or duplicate delivery is collapsed within 24 h.
+func (jm *JobManager) runStripeMeterFlusher(ctx context.Context) {
+	flusher := stripeoutbox.NewMeterFlusher(jm.db)
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-jm.stopCh:
+			return
+		case <-ticker.C:
+			sent, deferred, err := flusher.Flush(ctx)
+			if err != nil {
+				jm.logger.WithError(err).Error("Stripe meter flusher: read failure")
+				continue
+			}
+			if sent > 0 || deferred > 0 {
+				jm.logger.WithFields(logging.Fields{
+					"sent":     sent,
+					"deferred": deferred,
+				}).Info("Stripe meter flusher tick")
+			}
+		}
+	}
 }
 
 // Stop stops all background jobs
@@ -397,7 +394,63 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 		return nil
 	}
 
-	in := buildRatingInputFromSummary(summary, tier)
+	// Resolve cluster pricing for the summary's cluster. The Kafka usage
+	// summary already carries summary.ClusterID; the resolver picks the
+	// effective rules per cluster pricing model. Empty cluster_id (legacy
+	// data) falls through to tier rules.
+	rules := tier.Rules
+	currency := tier.Currency
+	if summary.ClusterID != "" {
+		resolver := jm.pricingResolver()
+		if resolver != nil {
+			resolved, resolveErr := pricing.ResolveClusterPricing(ctx, pricing.ResolveInputs{
+				DB: jm.db, QM: resolver,
+				ConsumingTenantID: summary.TenantID,
+				ClusterID:         summary.ClusterID,
+				AsOf:              time.Now(),
+				TierRules:         tier.Rules,
+				TierCurrency:      tier.Currency,
+			})
+			switch {
+			case errors.Is(resolveErr, pricing.ErrCustomPricingMissingForCluster):
+				// Defense in depth: gateway routes subscription via
+				// Purser.CreateClusterSubscription which rejects custom
+				// pricing without metered_rates. If we still see usage on
+				// such a cluster, it's a misconfiguration that needs ops
+				// attention. Skip the deduction (don't poison-pill Kafka)
+				// but make it loud: ERROR + metric.
+				if metrics != nil {
+					metrics.BillingCalculations.WithLabelValues("prepaid", "custom_pricing_missing").Inc()
+				}
+				jm.logger.WithFields(logging.Fields{
+					"tenant_id":  summary.TenantID,
+					"cluster_id": summary.ClusterID,
+					"period":     summary.Period,
+				}).Error("Skipping prepaid deduction: cluster has unconfigured custom pricing — fix cluster_pricing.metered_rates and reconcile")
+				return nil
+			case errors.Is(resolveErr, pricing.ErrAmbiguousClusterOwnership):
+				if metrics != nil {
+					metrics.BillingCalculations.WithLabelValues("prepaid", "ambiguous_cluster_ownership").Inc()
+				}
+				jm.logger.WithFields(logging.Fields{
+					"tenant_id":  summary.TenantID,
+					"cluster_id": summary.ClusterID,
+				}).Error("Skipping prepaid deduction: cluster ownership ambiguous (no platform_official, no owner_tenant_id)")
+				return nil
+			case resolveErr != nil:
+				return fmt.Errorf("resolve cluster pricing for %s: %w", summary.ClusterID, resolveErr)
+			}
+			rules = resolved.MeteredRules
+			// Use the resolver's currency: a cluster priced in a
+			// different currency from the tenant's tier would otherwise
+			// fail the rating engine's currency-match invariant.
+			if resolved.Currency != "" {
+				currency = resolved.Currency
+			}
+		}
+	}
+
+	in := buildRatingInputFromSummary(summary, currency, rules)
 	res, err := rating.Rate(in)
 	if err != nil {
 		return fmt.Errorf("rate usage: %w", err)
@@ -960,13 +1013,16 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			continue // Billing period not closed yet
 		}
 
-		// Check if a finalized invoice already exists for the previous month
+		// Check if a terminally-finalized invoice already exists for the
+		// previous month. manual_review is NOT terminal — it's a hold that
+		// must be re-runnable once ops fixes the underlying cluster
+		// pricing, so we treat it like draft for finalization purposes.
 		var existingCount int
 		err = jm.db.QueryRowContext(ctx, `
 			SELECT COUNT(*) FROM purser.billing_invoices
 			WHERE tenant_id = $1
 			  AND period_start = $2
-			  AND status != 'draft'
+			  AND status NOT IN ('draft', 'manual_review')
 		`, tenantID, periodStart).Scan(&existingCount)
 		if err != nil {
 			jm.logger.WithFields(logging.Fields{
@@ -979,12 +1035,13 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			continue // Invoice already finalized for this period
 		}
 
-		// Check for an existing draft invoice for the previous month, and
-		// preserve any prepaid credit it had already applied so finalization
-		// doesn't accidentally re-charge the gross amount on top. Read the
-		// credit as a decimal string and parse via decimal, with no float64 hop.
-		// Errors abort: a DB read failure here would otherwise silently zero
-		// the credit and double-charge.
+		// Check for an existing draft (or held manual_review) invoice for
+		// the previous month, and preserve any prepaid credit it had
+		// already applied so finalization doesn't accidentally re-charge
+		// the gross amount on top. Read the credit as a decimal string
+		// and parse via decimal, with no float64 hop. Errors abort: a DB
+		// read failure here would otherwise silently zero the credit and
+		// double-charge.
 		var draftInvoiceID string
 		var existingCreditStr sql.NullString
 		switch err := jm.db.QueryRowContext(ctx, `
@@ -992,7 +1049,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			FROM purser.billing_invoices
 			WHERE tenant_id = $1
 			  AND period_start = $2
-			  AND status = 'draft'
+			  AND status IN ('draft', 'manual_review')
 			LIMIT 1
 		`, tenantID, periodStart).Scan(&draftInvoiceID, &existingCreditStr); {
 		case err == nil, errors.Is(err, sql.ErrNoRows):
@@ -1016,28 +1073,23 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		// - AVG: average_storage_gb
 		// - MAX: peak_bandwidth_mbps, max_viewers
 		// - SKIP: unique counts (from Periscope enrichment only - cannot roll up 5-min windows)
-		usageData := map[string]float64{}
-
-		// Fetch usage. A scan/query failure must abort this tenant's invoice:
-		// rating an invoice against an empty/partial usage map underbills.
-		// The next monthly run will retry; better than a finalized invoice
-		// missing real usage.
-		if usageErr := jm.collectInvoiceUsage(ctx, tenantID, periodStart, periodEnd, usageData); usageErr != nil {
+		// Fetch usage partitioned by cluster_id. A scan/query failure must
+		// abort this tenant's invoice: rating against an empty/partial usage
+		// map underbills.
+		perClusterUsage, usageErr := jm.collectInvoiceUsage(ctx, tenantID, periodStart, periodEnd)
+		if usageErr != nil {
 			jm.logger.WithError(usageErr).WithField("tenant_id", tenantID).Error("Failed to collect usage; skipping invoice for this period")
 			continue
 		}
+		usageData := flattenUsageAcrossClusters(perClusterUsage)
 
-		ratingInput := buildRatingInputFromAggregates(usageData, tier)
-		ratingInput.PeriodStart = periodStart
-		ratingInput.PeriodEnd = periodEnd
-		ratingResult, ratingErr := rating.Rate(ratingInput)
+		ratingResult, ratingErr := jm.rateInvoiceForTenant(ctx, tenantID, periodStart, periodEnd, tier, true, perClusterUsage)
 		if ratingErr != nil {
 			jm.logger.WithError(ratingErr).WithField("tenant_id", tenantID).Error("Failed to rate usage for invoice")
 			continue
 		}
-		// Money stays in decimal.Decimal until the SQL boundary; the columns are
-		// NUMERIC and the strings bind cleanly via $N::numeric; no float64
-		// step touches the cents.
+		// Money stays in decimal.Decimal until the SQL boundary; NUMERIC
+		// columns bind cleanly via $N::numeric. No float64 touches the cents.
 		baseDec := ratingResult.BaseAmount
 		meteredDec := ratingResult.UsageAmount
 		grossDec := ratingResult.TotalAmount
@@ -1054,9 +1106,20 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		invoiceID := uuid.New().String()
 		dueDate := periodEnd.AddDate(0, 0, 14) // 14 days to pay
 
-		// Determine invoice status
+		// Determine invoice status. manual_review takes precedence: when any
+		// cluster's pricing failed to resolve we hold the entire invoice so
+		// no payment captures, Stripe meter pushes, ledger writes, or
+		// subscription period advances happen until ops resolves and
+		// re-finalizes. Lines persist for ops visibility.
 		status := "pending"
-		if totalDec.IsZero() {
+		switch {
+		case len(ratingResult.ManualReviewReasons) > 0:
+			status = "manual_review"
+			jm.logger.WithFields(logging.Fields{
+				"tenant_id": tenantID,
+				"reasons":   strings.Join(ratingResult.ManualReviewReasons, "; "),
+			}).Warn("Invoice routed to manual_review; finalization halted")
+		case totalDec.IsZero():
 			status = "paid"
 		}
 
@@ -1125,7 +1188,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 						    prepaid_credit_applied = $4::numeric, currency = $5,
 						    status = $6, due_date = $7, usage_details = $8,
 						    period_start = $9, period_end = $10, updated_at = NOW()
-						WHERE id = $11 AND tenant_id = $12 AND status = 'draft'
+						WHERE id = $11 AND tenant_id = $12 AND status IN ('draft', 'manual_review')
 						RETURNING id
 					`, totalAmt, baseAmt, meteredAmt, creditAmt, currency, status, dueDate, usageJSON, periodStart, periodEnd, draftInvoiceID, tenantID).Scan(&invoiceID); txErr != nil {
 					return fmt.Errorf("update invoice: %w", txErr)
@@ -1153,13 +1216,31 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 						usage_details = EXCLUDED.usage_details,
 						period_end = EXCLUDED.period_end,
 						updated_at = NOW()
-					WHERE purser.billing_invoices.status = 'draft'
+					WHERE purser.billing_invoices.status IN ('draft', 'manual_review')
 					RETURNING id
 					`, invoiceID, tenantID, totalAmt, currency, status, dueDate, baseAmt, meteredAmt, creditAmt, usageJSON, periodStart, periodEnd).Scan(&invoiceID); txErr != nil {
 				return fmt.Errorf("upsert invoice: %w", txErr)
 			}
 			if txErr := persistInvoiceLineItems(ctx, tx, invoiceID, tenantID, ratingResult); txErr != nil {
 				return txErr
+			}
+			// Operator credit ledger: write accrual rows for marketplace
+			// lines in the same tx as the invoice finalization. The
+			// helper skips manual_review invoices internally.
+			if txErr := operator.ComputeAndPersistCredits(ctx, tx, invoiceID, status); txErr != nil {
+				return fmt.Errorf("persist operator credits: %w", txErr)
+			}
+			// Enqueue Stripe meter events in the outbox. The async
+			// flusher (separate worker) reads pending rows and pushes
+			// to Stripe; rollback discards the row.
+			if txErr := stripeoutbox.EnqueueMeterEvents(ctx, tx, invoiceID, tenantID, status); txErr != nil {
+				return fmt.Errorf("enqueue stripe meter events: %w", txErr)
+			}
+			// manual_review: do not advance the subscription period.
+			// Resolution flow is ops fixes pricing → re-finalize → side
+			// effects fire once on the corrected total.
+			if status == "manual_review" {
+				return nil
 			}
 			result, txErr := tx.ExecContext(ctx, `
 					UPDATE purser.tenant_subscriptions
@@ -1201,12 +1282,16 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			"metering_enabled": meteringEnabled,
 		}).Info("Generated monthly invoice")
 
-		// Send invoice created email notification. The email service takes a
-		// float64 for display rendering. Render at the boundary, after the
-		// canonical decimal value has already been written to the DB.
+		// Send invoice created email notification. Read line items from
+		// the canonical surface (purser.invoice_line_items); usage_details
+		// is raw/debug JSON only, never rendered to customers.
 		if billingEmail != "" {
 			emailTotal, _ := totalDec.Round(2).Float64()
-			err = jm.emailService.SendInvoiceCreatedEmail(billingEmail, "", invoiceID, emailTotal, currency, dueDate, usageDetails)
+			emailLines, emailErr := jm.loadEmailLineItems(ctx, invoiceID, tenantID)
+			if emailErr != nil {
+				jm.logger.WithError(emailErr).WithField("invoice_id", invoiceID).Warn("Failed to load invoice line items for email; sending without breakdown")
+			}
+			err = jm.emailService.SendInvoiceCreatedEmail(billingEmail, "", invoiceID, emailTotal, currency, dueDate, emailLines)
 			if err != nil {
 				jm.logger.WithError(err).WithFields(logging.Fields{
 					"billing_email": billingEmail,
@@ -1699,12 +1784,15 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 		return periodErr
 	}
 
+	// manual_review is a hold, not a terminal state — let the draft refresh
+	// re-rate it once ops fixes the cluster pricing. Only truly finalized
+	// invoices block draft updates.
 	var finalizedCount int
 	if countErr := jm.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM purser.billing_invoices
 		WHERE tenant_id = $1
 		  AND period_start = $2
-		  AND status != 'draft'
+		  AND status NOT IN ('draft', 'manual_review')
 	`, tenantID, periodStart).Scan(&finalizedCount); countErr != nil {
 		return fmt.Errorf("failed to check finalized invoices: %w", countErr)
 	}
@@ -1719,24 +1807,35 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	// Aggregate usage via the shared fail-closed helper; query/scan/iteration
 	// errors abort the draft update so we never apply the wrong prepaid
 	// credit on partial usage and ack the Kafka message as processed.
-	usageTotals := make(map[string]float64)
-	if usageErr := jm.collectInvoiceUsage(ctx, tenantID, periodStart, periodEnd, usageTotals); usageErr != nil {
-		return fmt.Errorf("collect invoice usage: %w", usageErr)
+	perClusterUsage, err := jm.collectInvoiceUsage(ctx, tenantID, periodStart, periodEnd)
+	if err != nil {
+		return fmt.Errorf("collect invoice usage: %w", err)
 	}
+	usageTotals := flattenUsageAcrossClusters(perClusterUsage)
 
 	// Rate the period via the engine; one source of truth for invoice math.
 	// Money stays as decimal.Decimal end-to-end and binds to NUMERIC columns
 	// as decimal strings; float64 never touches the cents.
-	ratingInput := buildRatingInputFromAggregates(usageTotals, tier)
-	ratingInput.PeriodStart = periodStart
-	ratingInput.PeriodEnd = periodEnd
-	ratingResult, err := rating.Rate(ratingInput)
+	ratingResult, err := jm.rateInvoiceForTenant(ctx, tenantID, periodStart, periodEnd, tier, true, perClusterUsage)
 	if err != nil {
 		return fmt.Errorf("rate usage: %w", err)
 	}
 	baseDec := ratingResult.BaseAmount
 	meteredDec := ratingResult.UsageAmount
 	grossDec := ratingResult.TotalAmount
+
+	// manual_review: an unconfigured cluster pricing means we cannot finalize
+	// the credit. Hold the entire draft — no prepaid deduction, no draft
+	// invoice write, no period advance. Operator fixes pricing then re-runs.
+	if len(ratingResult.ManualReviewReasons) > 0 {
+		jm.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"reasons":   strings.Join(ratingResult.ManualReviewReasons, "; "),
+		}).Warn("Invoice draft routed to manual_review; deduction halted")
+		// Persist a manual_review header so ops can see and act on it. No
+		// credit is deducted; lines are written for visibility.
+		return jm.persistManualReviewDraft(ctx, tenantID, periodStart, periodEnd, currency, ratingResult)
+	}
 
 	// Build flat usage_details - all metrics at top level for email and API
 	usageDetails := map[string]interface{}{
@@ -1847,7 +1946,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 					usage_details = EXCLUDED.usage_details,
 					period_end = EXCLUDED.period_end,
 					updated_at = NOW()
-				WHERE purser.billing_invoices.status = 'draft'
+				WHERE purser.billing_invoices.status IN ('draft', 'manual_review')
 				RETURNING id
 			`, tenantID, totalAmt, currency, dueDate, baseAmt, meteredAmt, creditAmt, usageJSON, periodStart, periodEnd).Scan(&invoiceID)
 		if txErr != nil {
@@ -1858,6 +1957,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	if err != nil {
 		return fmt.Errorf("invoice draft transaction: %w", err)
 	}
+	_ = invoiceID
 	jm.logger.WithFields(logging.Fields{
 		"tenant_id":              tenantID,
 		"billing_period":         periodStart.Format("2006-01"),

@@ -21,6 +21,11 @@ query GetInvoices($first: Int = 50, $after: String) {
           unitPrice
           total
           currency
+          clusterId
+          clusterName
+          clusterKind
+          pricingSource
+          pricingLabel
         }
       }
     }

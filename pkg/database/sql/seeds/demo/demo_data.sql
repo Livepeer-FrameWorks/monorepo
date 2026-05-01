@@ -37,6 +37,30 @@ ON CONFLICT (cluster_id) DO UPDATE SET
     visibility = 'public',
     short_description = COALESCE(EXCLUDED.short_description, quartermaster.infrastructure_clusters.short_description);
 
+-- Tenant-private self-hosted cluster. This is intentionally non-platform:
+-- Purser grants access through Quartermaster's general access path after
+-- classifying it as tenant_private, and usage rates at zero when priced as
+-- free_unmetered.
+INSERT INTO quartermaster.infrastructure_clusters (
+    cluster_id, cluster_name, cluster_type, base_url,
+    owner_tenant_id,
+    max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
+    is_default_cluster, is_platform_official,
+    visibility, short_description
+)
+VALUES (
+    'demo-selfhosted', 'Demo Self-hosted Cluster', 'edge', 'selfhosted.demo.frameworks.network',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    200, 20000, 2000,
+    FALSE, FALSE,
+    'private', 'Tenant-owned media cluster for local offload testing'
+)
+ON CONFLICT (cluster_id) DO UPDATE SET
+    owner_tenant_id = EXCLUDED.owner_tenant_id,
+    is_platform_official = FALSE,
+    visibility = 'private',
+    short_description = COALESCE(EXCLUDED.short_description, quartermaster.infrastructure_clusters.short_description);
+
 -- Ensure service catalog minimal entry
 INSERT INTO quartermaster.services (service_id, name, plane, description, default_port, health_check_path, docker_image, type, protocol)
 VALUES ('api_tenants', 'Quartermaster', 'control', 'Tenant and cluster management service', 9008, '/health', 'frameworks/quartermaster', 'api_tenants', 'http')
@@ -55,7 +79,8 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO quartermaster.tenant_cluster_assignments (tenant_id, cluster_id, deployment_tier, is_primary)
 VALUES
     ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'pro', TRUE),
-    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-media', 'pro', FALSE)
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-media', 'pro', FALSE),
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-selfhosted', 'pro', FALSE)
 ON CONFLICT (tenant_id, cluster_id) DO NOTHING;
 
 -- Demo user
@@ -291,30 +316,47 @@ INSERT INTO purser.cluster_subscriptions (
     tenant_id, cluster_id, status, created_at, updated_at
 ) VALUES
     ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'active', NOW(), NOW()),
-    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-media', 'active', NOW(), NOW())
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-media', 'active', NOW(), NOW()),
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-selfhosted', 'active', NOW(), NOW())
 ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     status = EXCLUDED.status,
     updated_at = NOW();
 
--- Cluster pricing for the platform cluster (free tier, no metering)
+-- Cluster pricing for demo clusters
 INSERT INTO purser.cluster_pricing (
     cluster_id, pricing_model,
     allow_free_tier, required_tier_level,
     default_quotas
-) VALUES (
-    'central-primary', 'free_unmetered',
-    TRUE, 0,  -- Available to free tier
-    '{"max_streams": 5, "max_viewers": 500, "max_bandwidth_mbps": 100, "retention_days": 7}'
-) ON CONFLICT (cluster_id) DO UPDATE SET
+) VALUES
+    (
+        'central-primary', 'free_unmetered',
+        TRUE, 0,
+        '{"max_streams": 5, "max_viewers": 500, "max_bandwidth_mbps": 100, "retention_days": 7}'
+    ),
+    (
+        'demo-selfhosted', 'free_unmetered',
+        TRUE, 0,
+        '{"max_streams": 25, "max_viewers": 2500, "max_bandwidth_mbps": 1000, "retention_days": 30}'
+    )
+ON CONFLICT (cluster_id) DO UPDATE SET
     pricing_model = 'free_unmetered',
     allow_free_tier = TRUE;
 
--- Grant access to both clusters for the demo tenant
+INSERT INTO purser.platform_fee_policy (
+    cluster_kind, cluster_owner_tenant_id, pricing_source, fee_basis_points, notes
+)
+VALUES (
+    'third_party_marketplace', NULL, NULL, 2000, 'default marketplace revenue-share policy'
+)
+ON CONFLICT DO NOTHING;
+
+-- Grant access to demo clusters for the demo tenant
 INSERT INTO quartermaster.tenant_cluster_access (
     tenant_id, cluster_id, access_level, is_active
 ) VALUES
     ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'owner', TRUE),
-    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-media', 'owner', TRUE)
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-media', 'owner', TRUE),
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-selfhosted', 'owner', TRUE)
 ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     access_level = EXCLUDED.access_level,
     is_active = TRUE;
