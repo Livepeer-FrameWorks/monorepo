@@ -76,6 +76,46 @@ func TestBuildOutputsMap(t *testing.T) {
 	}
 }
 
+func TestBuildOutputsMapOmitsGenericHTTPForLive(t *testing.T) {
+	rawOutputs := map[string]interface{}{
+		"HLS":  "http://public.example.com:18090/view/hls/$/index.m3u8",
+		"HTTP": "http://public.example.com:18090/view/$.html",
+	}
+
+	outputs := BuildOutputsMap("http://public.example.com:18090/view", rawOutputs, "stream", true)
+
+	if _, ok := outputs["HTTP"]; ok {
+		t.Fatal("live outputs should not expose Mist HTTP HTML as progressive HTTP media")
+	}
+	if outputs["HLS"].Url != "http://public.example.com:18090/view/hls/stream/index.m3u8" {
+		t.Fatalf("unexpected HLS url: %q", outputs["HLS"].Url)
+	}
+}
+
+func TestBuildOutputsMapIncludesMistWebSocketOutputs(t *testing.T) {
+	rawOutputs := map[string]interface{}{
+		"MP4":   "https://public.example.com:18090/view/$.mp4",
+		"WEBM":  "//public.example.com:18090/view/$.webm",
+		"WSRaw": "https://public.example.com:18090/view/$.raw",
+		"H264":  "http://public.example.com:18090/view/$.h264",
+	}
+
+	outputs := BuildOutputsMap("https://edge-egress.example.com/view", rawOutputs, "stream", true)
+
+	if outputs["MEWS"].Url != "wss://public.example.com:18090/view/stream.mp4" {
+		t.Fatalf("unexpected MEWS url: %q", outputs["MEWS"].Url)
+	}
+	if outputs["MEWS_WEBM"].Url != "wss://public.example.com:18090/view/stream.webm" {
+		t.Fatalf("unexpected MEWS_WEBM url: %q", outputs["MEWS_WEBM"].Url)
+	}
+	if outputs["RAW_WS"].Url != "wss://public.example.com:18090/view/stream.raw" {
+		t.Fatalf("unexpected RAW_WS url: %q", outputs["RAW_WS"].Url)
+	}
+	if outputs["H264_WS"].Url != "ws://public.example.com:18090/view/stream.h264" {
+		t.Fatalf("unexpected H264_WS url: %q", outputs["H264_WS"].Url)
+	}
+}
+
 func TestResolveTemplateURL(t *testing.T) {
 	tests := []struct {
 		name       string

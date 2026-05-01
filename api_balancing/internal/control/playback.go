@@ -671,6 +671,44 @@ func ResolveTemplateURL(raw interface{}, baseURL, streamName string) string {
 	return s
 }
 
+func ToWebSocketURL(rawURL string, secureDefault bool) string {
+	if rawURL == "" {
+		return ""
+	}
+	if strings.HasPrefix(rawURL, "ws://") || strings.HasPrefix(rawURL, "wss://") {
+		return rawURL
+	}
+	if strings.HasPrefix(rawURL, "//") {
+		if secureDefault {
+			return "wss:" + rawURL
+		}
+		return "ws:" + rawURL
+	}
+	if strings.HasPrefix(rawURL, "https://") {
+		return "wss://" + strings.TrimPrefix(rawURL, "https://")
+	}
+	if strings.HasPrefix(rawURL, "http://") {
+		return "ws://" + strings.TrimPrefix(rawURL, "http://")
+	}
+	return rawURL
+}
+
+func addWebSocketOutput(outputs map[string]*pb.OutputEndpoint, rawOutputs map[string]interface{}, outputKey, protocol string, base string, streamName string, secureDefault bool, isLive bool) {
+	raw, ok := rawOutputs[outputKey]
+	if !ok {
+		return
+	}
+	u := ResolveTemplateURL(raw, base, streamName)
+	if u == "" {
+		return
+	}
+	wsURL := ToWebSocketURL(u, secureDefault)
+	if wsURL == "" {
+		return
+	}
+	outputs[protocol] = &pb.OutputEndpoint{Protocol: protocol, Url: wsURL, Capabilities: BuildOutputCapabilities(protocol, isLive)}
+}
+
 // BuildOutputsMap constructs the per-protocol outputs for a node/stream
 func BuildOutputsMap(baseURL string, rawOutputs map[string]interface{}, streamName string, isLive bool) map[string]*pb.OutputEndpoint {
 	outputs := make(map[string]*pb.OutputEndpoint)
@@ -715,11 +753,18 @@ func BuildOutputsMap(baseURL string, rawOutputs map[string]interface{}, streamNa
 			outputs["WEBM"] = &pb.OutputEndpoint{Protocol: "WEBM", Url: u, Capabilities: BuildOutputCapabilities("WEBM", isLive)}
 		}
 	}
-	if raw, ok := rawOutputs["HTTP"]; ok {
+	if raw, ok := rawOutputs["HTTP"]; ok && !isLive {
 		if u := ResolveTemplateURL(raw, base, streamName); u != "" {
 			outputs["HTTP"] = &pb.OutputEndpoint{Protocol: "HTTP", Url: u, Capabilities: BuildOutputCapabilities("HTTP", isLive)}
 		}
 	}
+
+	secureDefault := strings.HasPrefix(strings.ToLower(base), "https://")
+	addWebSocketOutput(outputs, rawOutputs, "MP4", "MEWS", base, streamName, secureDefault, isLive)
+	addWebSocketOutput(outputs, rawOutputs, "WEBM", "MEWS_WEBM", base, streamName, secureDefault, isLive)
+	addWebSocketOutput(outputs, rawOutputs, "WSRaw", "RAW_WS", base, streamName, secureDefault, isLive)
+	addWebSocketOutput(outputs, rawOutputs, "WSRAW", "RAW_WS", base, streamName, secureDefault, isLive)
+	addWebSocketOutput(outputs, rawOutputs, "H264", "H264_WS", base, streamName, secureDefault, isLive)
 
 	// Direct protocols (bypass nginx, need HOST replacement with public host)
 	directProtocols := []string{"RTMP", "RTSP", "SRT", "DTSC"}
