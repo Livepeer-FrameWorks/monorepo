@@ -114,7 +114,39 @@ func TestBuildServiceEnvVarsMapsLivepeerUppercaseAliases(t *testing.T) {
 		t.Fatalf("expected auth_webhook_url from LIVEPEER_AUTH_WEBHOOK_URL, got %q", got)
 	}
 	if got := env["gateway_host"]; got != "livepeer.example" {
-		t.Fatalf("expected gateway_host from LIVEPEER_GATEWAY_HOST, got %q", got)
+		t.Fatalf("expected gateway_host from LIVEPEER_GATEWAY_HOST when no cluster DNS is available, got %q", got)
+	}
+}
+
+func TestBuildServiceEnvVarsOverridesLivepeerGatewayHostWithClusterScopedDNS(t *testing.T) {
+	envFile := writeTestEnvFile(t, "LIVEPEER_GATEWAY_HOST=livepeer.example\n")
+
+	manifest := &inventory.Manifest{
+		Profile:    "dev",
+		RootDomain: "frameworks.network",
+		EnvFiles:   []string{envFile},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-central-primary": {Name: "Media Central Primary"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway": {
+				Enabled: true,
+			},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Name:      "livepeer-gateway",
+		Type:      "livepeer-gateway",
+		ServiceID: "livepeer-gateway",
+		ClusterID: "media-central-primary",
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+
+	if got := env["gateway_host"]; got != "livepeer.media-central-primary.frameworks.network" {
+		t.Fatalf("expected cluster-scoped gateway_host, got %q", got)
 	}
 }
 

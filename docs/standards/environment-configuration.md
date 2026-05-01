@@ -138,7 +138,7 @@ These are outputs and should not be treated as first-class editable config:
 - All `VITE_*` (derived by configgen from canonical public URLs)
 - `AUTH_PUBLIC_URL` (derived from `GATEWAY_PUBLIC_URL + /auth`)
 
-> Foghorn's HTTP balancer base (the value MistServer's `balance:<base>` source consumes on every edge) is not an environment variable on Helmsman. Foghorn derives it once from `FOGHORN_PUBLIC_BASE` (explicit override) or `https://${FOGHORN_HOST}:18008`, falling back to `http://foghorn:18008` for in-cluster docker-compose, and ships it to every connected edge over the gRPC `ConfigSeed` stream.
+> Foghorn's HTTP balancer base (the value MistServer's `balance:<base>` source consumes on every edge) is not an environment variable on Helmsman. Foghorn derives it from the edge node's resolved cluster as `https://foghorn.<cluster>.<root-domain>` and ships it to every connected edge over the gRPC `ConfigSeed` stream. `FOGHORN_PUBLIC_BASE` / `FOGHORN_HOST` are fallback escape hatches for deployments without managed cluster DNS.
 
 ### Canonical environment selectors
 

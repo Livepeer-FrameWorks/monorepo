@@ -373,15 +373,12 @@ func resolveTLSBundleEmail(opts DeriveOptions) string {
 // that the manifest can produce on its own (no on-host runtime data).
 //
 // livepeer-gateway emits:
-//   - public_host: the gateway's published hostname. Resolution order:
-//     service `config.gateway_host` (manifest authority), then
-//     `gateway_host` / `LIVEPEER_GATEWAY_HOST` from shared env, then the
-//     cluster-scoped FQDN (livepeer.<cluster-slug>.<root-domain>) when the
-//     manifest has a root domain, then the root-domain FQDN, then the
-//     host's external IP as a last resort. api_balancing uses this to
-//     build the gateway URL for media routing, so the IP fallback is
-//     correct only when no DNS is configured.
-//   - public_port: the manifest service port.
+//   - public_host: the gateway's cluster-scoped published hostname
+//     (livepeer.<cluster-slug>.<root-domain>) when possible, then explicit
+//     gateway host config, then the host's external IP as a last resort.
+//     api_balancing uses this to build the gateway URL for media routing, so
+//     the IP fallback is correct only when no DNS is configured.
+//   - public_scheme/public_port: the public ingress endpoint, currently https/443.
 //   - wallet_address: required by Purser's deposit monitor
 //     (api_billing/internal/handlers/livepeer_deposit.go skips gateways
 //     whose registry metadata lacks it). Resolution order: service config
@@ -404,8 +401,9 @@ func deriveServiceMetadata(serviceName, hostKey, clusterID string, port int, m *
 	}
 	publicHost := resolveLivepeerPublicHost(serviceName, svc, opts, m, clusterID, host.ExternalIP)
 	md := map[string]string{
-		servicedefs.LivepeerGatewayMetadataPublicHost: publicHost,
-		servicedefs.LivepeerGatewayMetadataPublicPort: strconvI(port),
+		servicedefs.LivepeerGatewayMetadataPublicHost:   publicHost,
+		servicedefs.LivepeerGatewayMetadataPublicPort:   "443",
+		servicedefs.LivepeerGatewayMetadataPublicScheme: "https",
 	}
 	if wallet := resolveLivepeerWalletAddress(svc, opts); wallet != "" {
 		md[servicedefs.LivepeerGatewayMetadataWalletAddress] = wallet
@@ -413,10 +411,15 @@ func deriveServiceMetadata(serviceName, hostKey, clusterID string, port int, m *
 	return md
 }
 
-// resolveLivepeerPublicHost picks the gateway's published hostname. Service
-// config / shared-env override wins; otherwise the cluster-scoped FQDN, then
-// the root-domain FQDN, then the host's external IP.
+// resolveLivepeerPublicHost picks the gateway's cluster-scoped published
+// hostname before considering explicit overrides. The service's go-livepeer
+// bind port is private to the node; public media routing goes through ingress.
 func resolveLivepeerPublicHost(serviceName string, svc inventory.ServiceConfig, opts DeriveOptions, m *inventory.Manifest, clusterID, externalIP string) string {
+	if scope := clusterderive.ClusterScopedRootDomain(m, clusterID); scope != "" {
+		if fqdn, ok := pkgdns.ServiceFQDN(serviceName, scope); ok {
+			return fqdn
+		}
+	}
 	if v := strings.TrimSpace(svc.Config["gateway_host"]); v != "" {
 		return v
 	}
@@ -425,16 +428,6 @@ func resolveLivepeerPublicHost(serviceName string, svc inventory.ServiceConfig, 
 	}
 	if v := strings.TrimSpace(opts.SharedEnv["LIVEPEER_GATEWAY_HOST"]); v != "" {
 		return v
-	}
-	if scope := clusterderive.ClusterScopedRootDomain(m, clusterID); scope != "" {
-		if fqdn, ok := pkgdns.ServiceFQDN(serviceName, scope); ok {
-			return fqdn
-		}
-	}
-	if m != nil && m.RootDomain != "" {
-		if fqdn, ok := pkgdns.ServiceFQDN(serviceName, m.RootDomain); ok {
-			return fqdn
-		}
 	}
 	return externalIP
 }
@@ -458,30 +451,6 @@ func resolveLivepeerWalletAddress(svc inventory.ServiceConfig, opts DeriveOption
 		}
 	}
 	return ""
-}
-
-// strconvI is a minimal int→string helper for the metadata map; avoids a strconv
-// import where this file otherwise has none.
-func strconvI(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }
 
 // Render merges the derived layer with the optional overlay and produces the final

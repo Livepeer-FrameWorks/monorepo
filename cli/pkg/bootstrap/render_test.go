@@ -391,11 +391,16 @@ func TestDeriveEmitsRegistryEntryPerHost(t *testing.T) {
 }
 
 // TestDeriveLivepeerGatewayMetadataWithGatewayHost pins the production
-// resolution: when service config sets gateway_host, that wins over both the
-// cluster-scoped FQDN and the host external IP. Wallet address comes from
+// resolution: cluster-scoped DNS wins over an explicit gateway_host because
+// public media routing goes through managed ingress. Wallet address comes from
 // shared env. Admin endpoints are intentionally not modeled.
 func TestDeriveLivepeerGatewayMetadataWithGatewayHost(t *testing.T) {
 	m := minimalManifest()
+	m.RootDomain = "frameworks.network"
+	m.Hosts["core-eu-1"] = inventory.Host{ExternalIP: "203.0.113.10", Cluster: "core-eu"}
+	m.Clusters = map[string]inventory.ClusterConfig{
+		"core-eu": {Name: "Core EU"},
+	}
 	m.Services = map[string]inventory.ServiceConfig{
 		"livepeer-gateway": {
 			Enabled: true,
@@ -413,17 +418,20 @@ func TestDeriveLivepeerGatewayMetadataWithGatewayHost(t *testing.T) {
 		t.Fatalf("expected 1 registry entry; got %d", got)
 	}
 	md := d.Quartermaster.ServiceRegistry[0].Metadata
-	if md["public_host"] != "livepeer.frameworks.network" {
-		t.Errorf("public_host = %q, want livepeer.frameworks.network", md["public_host"])
+	if md["public_host"] != "livepeer.core-eu.frameworks.network" {
+		t.Errorf("public_host = %q, want livepeer.core-eu.frameworks.network", md["public_host"])
 	}
-	if md["public_port"] != "8935" {
-		t.Errorf("public_port = %q, want 8935", md["public_port"])
+	if md["public_port"] != "443" {
+		t.Errorf("public_port = %q, want 443", md["public_port"])
+	}
+	if md["public_scheme"] != "https" {
+		t.Errorf("public_scheme = %q, want https", md["public_scheme"])
 	}
 	if md["wallet_address"] != "0xabc123" {
 		t.Errorf("wallet_address = %q, want 0xabc123", md["wallet_address"])
 	}
 	for k := range md {
-		if k != "public_host" && k != "public_port" && k != "wallet_address" {
+		if k != "public_host" && k != "public_port" && k != "public_scheme" && k != "wallet_address" {
 			t.Errorf("unexpected metadata key %q (admin endpoints must not appear in derived metadata)", k)
 		}
 	}

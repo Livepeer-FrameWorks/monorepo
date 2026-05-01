@@ -345,8 +345,11 @@ func TestServiceRegistrationMetadataUsesResolvedGatewayWallet(t *testing.T) {
 	if metadata[servicedefs.LivepeerGatewayMetadataPublicHost] != "livepeer.media-central-primary.frameworks.network" {
 		t.Fatalf("expected cluster-scoped public host, got %q", metadata[servicedefs.LivepeerGatewayMetadataPublicHost])
 	}
-	if metadata[servicedefs.LivepeerGatewayMetadataPublicPort] != "8935" {
-		t.Fatalf("expected public port 8935, got %q", metadata[servicedefs.LivepeerGatewayMetadataPublicPort])
+	if metadata[servicedefs.LivepeerGatewayMetadataPublicPort] != "443" {
+		t.Fatalf("expected public port 443, got %q", metadata[servicedefs.LivepeerGatewayMetadataPublicPort])
+	}
+	if metadata[servicedefs.LivepeerGatewayMetadataPublicScheme] != "https" {
+		t.Fatalf("expected public scheme https, got %q", metadata[servicedefs.LivepeerGatewayMetadataPublicScheme])
 	}
 	if metadata[servicedefs.LivepeerGatewayMetadataAdminHost] != "10.0.0.10" {
 		t.Fatalf("expected admin host from external IP, got %q", metadata[servicedefs.LivepeerGatewayMetadataAdminHost])

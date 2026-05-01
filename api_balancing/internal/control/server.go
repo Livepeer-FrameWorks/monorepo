@@ -2582,16 +2582,24 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		CaBundle:            caBundle,
 		TenantId:            ownerTenantID,
 		Telemetry:           telemetry,
-		FoghornBalancerBase: foghornBalancerBase(),
+		FoghornBalancerBase: foghornBalancerBase(resolvedClusterID),
 	}
 }
 
-// foghornBalancerBase returns the public HTTP base URL Helmsman should use
-// for MistServer's balance:<base> source. FOGHORN_PUBLIC_BASE is the explicit
-// override (used when Foghorn sits behind a load balancer); otherwise we
-// derive https://${FOGHORN_HOST}:18008 if the advertise host is set; the
-// final fallback is the in-cluster docker-compose service name.
-func foghornBalancerBase() string {
+// foghornBalancerBase returns the public HTTP base URL Helmsman should use for
+// MistServer's balance:<base> source. Runtime cluster state wins: edge nodes get
+// their cluster-scoped Foghorn DNS name. Env overrides are fallback escape
+// hatches for non-managed deployments.
+func foghornBalancerBase(clusterID string) string {
+	if clusterID != "" {
+		rootDomain := platformRootDomain()
+		clusterSlug := pkgdns.SanitizeLabel(clusterID)
+		if clusterSlug != "" && rootDomain != "" {
+			if fqdn, ok := pkgdns.ServiceFQDN("foghorn", clusterSlug+"."+rootDomain); ok && fqdn != "" {
+				return "https://" + fqdn
+			}
+		}
+	}
 	if v := strings.TrimSpace(os.Getenv("FOGHORN_PUBLIC_BASE")); v != "" {
 		return v
 	}

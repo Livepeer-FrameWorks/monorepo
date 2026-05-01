@@ -3150,10 +3150,11 @@ func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inv
 	}
 
 	metadata := map[string]string{
-		servicedefs.LivepeerGatewayMetadataPublicHost: gatewayPublicHost(config.EnvVars, manifest, clusterID),
-		servicedefs.LivepeerGatewayMetadataPublicPort: strconv.Itoa(portFromBindAddr(config.EnvVars["http_addr"], 8935)),
-		servicedefs.LivepeerGatewayMetadataAdminHost:  hostInfo.ExternalIP,
-		servicedefs.LivepeerGatewayMetadataAdminPort:  strconv.Itoa(portFromBindAddr(config.EnvVars["cli_addr"], 7935)),
+		servicedefs.LivepeerGatewayMetadataPublicHost:   gatewayPublicHost(config.EnvVars, manifest, clusterID),
+		servicedefs.LivepeerGatewayMetadataPublicPort:   "443",
+		servicedefs.LivepeerGatewayMetadataPublicScheme: "https",
+		servicedefs.LivepeerGatewayMetadataAdminHost:    hostInfo.ExternalIP,
+		servicedefs.LivepeerGatewayMetadataAdminPort:    strconv.Itoa(portFromBindAddr(config.EnvVars["cli_addr"], 7935)),
 	}
 	if walletAddr := firstNonEmptyEnv(config.EnvVars, "eth_acct_addr", "LIVEPEER_ETH_ACCT_ADDR"); walletAddr != "" {
 		metadata[servicedefs.LivepeerGatewayMetadataWalletAddress] = walletAddr
@@ -3853,16 +3854,7 @@ func applyDefaultLivepeerGatewayHost(env map[string]string, manifest *inventory.
 		return
 	}
 
-	current := strings.TrimSpace(env["gateway_host"])
-	if current == "" {
-		env["gateway_host"] = clusterHost
-		return
-	}
-
-	globalHost := globalGatewayHost(manifest.RootDomain)
-	if current == globalHost {
-		env["gateway_host"] = clusterHost
-	}
+	env["gateway_host"] = clusterHost
 }
 
 func gatewayPublicHost(env map[string]string, manifest *inventory.Manifest, clusterID string) string {

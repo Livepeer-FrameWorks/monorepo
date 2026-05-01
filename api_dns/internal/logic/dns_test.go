@@ -1323,10 +1323,13 @@ func TestLoadProxyServices_Default(t *testing.T) {
 }
 
 func TestLoadProxyServices_Custom(t *testing.T) {
-	t.Setenv("NAVIGATOR_PROXY_SERVICES", "edge-egress, bridge, ")
+	t.Setenv("NAVIGATOR_PROXY_SERVICES", "edge-egress, bridge, livepeer-gateway, ")
 	proxy := loadProxyServices()
 	if !proxy["edge-egress"] || !proxy["bridge"] {
 		t.Fatalf("expected edge-egress, bridge from env, got %v", proxy)
+	}
+	if proxy["livepeer-gateway"] {
+		t.Fatal("livepeer-gateway should never be Cloudflare-proxied")
 	}
 	if proxy["chartroom"] {
 		t.Fatal("chartroom should not be in custom proxy list")

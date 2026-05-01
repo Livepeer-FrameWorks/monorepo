@@ -167,6 +167,7 @@ func loadProxyServices() map[string]bool {
 		}
 		proxy[name] = true
 	}
+	delete(proxy, "livepeer-gateway")
 	return proxy
 }
 

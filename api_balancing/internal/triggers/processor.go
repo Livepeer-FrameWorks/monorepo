@@ -180,23 +180,46 @@ func (p *Processor) getLivepeerGatewayURL() string {
 		return ""
 	}
 
-	inst := resp.GetInstances()[0]
-	scheme := inst.GetProtocol()
+	p.gatewayURL = livepeerGatewayURLFromInstance(resp.GetInstances()[0])
+	return p.gatewayURL
+}
+
+func livepeerGatewayURLFromInstance(inst *pb.ServiceInstance) string {
+	if inst == nil {
+		return ""
+	}
+
+	metadata := inst.GetMetadata()
+	publicHost := strings.TrimSpace(metadata[servicedefs.LivepeerGatewayMetadataPublicHost])
+	host := publicHost
+	if host == "" {
+		host = strings.TrimSpace(inst.GetHost())
+	}
+	if host == "" {
+		return ""
+	}
+
+	scheme := strings.TrimSpace(metadata[servicedefs.LivepeerGatewayMetadataPublicScheme])
 	if scheme == "" {
+		scheme = strings.TrimSpace(inst.GetProtocol())
+	}
+	if scheme == "" || publicHost != "" {
 		scheme = "https"
 	}
-	host := strings.TrimSpace(inst.GetMetadata()[servicedefs.LivepeerGatewayMetadataPublicHost])
-	if host == "" {
-		host = inst.GetHost()
-	}
+
 	port := inst.GetPort()
-	if rawPort := strings.TrimSpace(inst.GetMetadata()[servicedefs.LivepeerGatewayMetadataPublicPort]); rawPort != "" {
+	if publicHost != "" {
+		port = 443
+	} else if rawPort := strings.TrimSpace(metadata[servicedefs.LivepeerGatewayMetadataPublicPort]); rawPort != "" {
 		if parsed, convErr := strconv.Atoi(rawPort); convErr == nil && parsed > 0 {
 			port = int32(parsed)
 		}
 	}
-	p.gatewayURL = fmt.Sprintf("%s://%s:%d", scheme, host, port)
-	return p.gatewayURL
+
+	if (scheme == "https" && port == 443) || (scheme == "http" && port == 80) || port == 0 {
+		return fmt.Sprintf("%s://%s", scheme, host)
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, host, port)
 }
 
 // SubstituteGatewayURL replaces {{gateway_url}} in process config JSON with the
