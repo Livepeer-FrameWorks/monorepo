@@ -983,11 +983,8 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		WHERE service_id = $1 AND cluster_id = $2 AND instance_id != $3
 		  AND protocol = $5
 		  AND status != 'stopped'
-		  AND (
-		    last_health_check IS NULL OR
-		    last_health_check < NOW() - INTERVAL '10 minutes' OR
-		    (COALESCE(advertise_host, '') = $4 AND COALESCE(port, 0) = $6)
-		  )
+		  AND COALESCE(advertise_host, '') = $4
+		  AND COALESCE(port, 0) = $6
 	`, serviceID, clusterID, instanceID, advHost, proto, port)
 
 	if serviceType == "foghorn" {
