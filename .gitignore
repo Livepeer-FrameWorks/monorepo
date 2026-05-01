@@ -28,6 +28,7 @@ ansible/.ansible/
 
 # Node.js & Frontend
 node_modules/
+.pnpm-store/
 dist/
 build/
 .svelte-kit/
@@ -40,6 +41,9 @@ test-results/
 *.log
 .env*
 !.env.example
+
+# Claude Code per-project local state
+.claude/
 
 # Houdini (GraphQL client)
 $houdini/
