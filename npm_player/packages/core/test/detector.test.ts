@@ -379,6 +379,31 @@ describe("detector", () => {
       expect(result.compatible).toBe(true);
     });
 
+    it("treats Opus as audio-compatible when AAC is also present", () => {
+      const result = checkWebRTCCodecCompatibility([
+        { type: "video", codec: "H264" },
+        { type: "audio", codec: "AAC" },
+        { type: "audio", codec: "Opus" },
+      ]);
+
+      expect(result.videoCompatible).toBe(true);
+      expect(result.audioCompatible).toBe(true);
+      expect(result.compatible).toBe(true);
+      expect(result.details.compatibleAudioCodecs).toContain("Opus");
+      expect(result.incompatibleCodecs).toContain("audio:AAC");
+    });
+
+    it("matches RTP-style Opus labels from WebRTC capability metadata", () => {
+      const result = checkWebRTCCodecCompatibility([
+        { type: "video", codec: "avc1.42E01E" },
+        { type: "audio", codec: "mp4a.40.2,opus/48000/2" },
+      ]);
+
+      expect(result.videoCompatible).toBe(true);
+      expect(result.audioCompatible).toBe(true);
+      expect(result.details.compatibleAudioCodecs).toEqual(["mp4a.40.2,opus/48000/2"]);
+    });
+
     it("audio-only stream (no video) is compatible if audio codec is ok", () => {
       const result = checkWebRTCCodecCompatibility([{ type: "audio", codec: "OPUS" }]);
       expect(result.videoCompatible).toBe(true); // no video tracks = compatible

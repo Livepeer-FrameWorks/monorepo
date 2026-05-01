@@ -305,7 +305,16 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
 
     unsubs.push(
       controller.on("stateChange", ({ state: newState }) => {
-        setState((prev) => ({ ...prev, state: newState }));
+        setState((prev) => ({
+          ...prev,
+          state: newState,
+          isPlaying: controller.isPlaying(),
+          isPaused: controller.isPaused(),
+          isBuffering: controller.isBuffering(),
+          hasPlaybackStarted: controller.hasPlaybackStarted(),
+          shouldShowControls: controller.shouldShowControls(),
+          shouldShowIdleScreen: controller.shouldShowIdleScreen(),
+        }));
         onStateChange?.(newState);
       })
     );
@@ -325,7 +334,17 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
 
     unsubs.push(
       controller.on("timeUpdate", ({ currentTime, duration }) => {
-        setState((prev) => ({ ...prev, currentTime, duration }));
+        setState((prev) => ({
+          ...prev,
+          currentTime,
+          duration,
+          isPlaying: controller.isPlaying(),
+          isPaused: controller.isPaused(),
+          isBuffering: controller.isBuffering(),
+          hasPlaybackStarted: controller.hasPlaybackStarted(),
+          shouldShowControls: controller.shouldShowControls(),
+          shouldShowIdleScreen: controller.shouldShowIdleScreen(),
+        }));
       })
     );
 

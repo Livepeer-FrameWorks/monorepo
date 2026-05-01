@@ -6,7 +6,7 @@
   - Animated colored bubbles with Tokyo Night palette
   - Center logo with mouse-tracking "push away" effect
   - Bouncing DVD logo component
-  - Hitmarker sound effects (Web Audio API synthesis)
+  - Hitmarker sound effects with an embedded audio fallback
   - Floating particles with gradients
   - Pulsing circle around logo
   - Animated background gradient shifts
@@ -105,8 +105,8 @@
     bubbles[index].timeoutId = timeout1;
   }
 
-  // Hitmarker sound synthesis
-  function createSyntheticHitmarkerSound() {
+  // Hitmarker sound playback
+  function playSyntheticHitmarkerFallback() {
     try {
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
 
@@ -233,12 +233,10 @@
       const audio = new Audio(hitmarkerDataUrl);
       audio.volume = 0.3;
       audio.play().catch(() => {
-        // Fallback to synthetic sound if data URL fails
-        createSyntheticHitmarkerSound();
+        playSyntheticHitmarkerFallback();
       });
     } catch {
-      // Fallback to synthetic sound
-      createSyntheticHitmarkerSound();
+      playSyntheticHitmarkerFallback();
     }
   }
 

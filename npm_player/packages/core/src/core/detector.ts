@@ -269,11 +269,31 @@ const AUDIO_CODEC_ALIASES: Record<string, string[]> = {
   G711: ["pcmu"],
 };
 
+function splitCodecTokens(codec: string): string[] {
+  return codec
+    .split(",")
+    .map((token) => token.trim().replace(/^["']|["']$/g, ""))
+    .filter(Boolean);
+}
+
+function getCodecAliasKeys(codec: string): string[] {
+  const withoutMime = codec.replace(/^(audio|video)\//i, "");
+  const family = withoutMime.split(/[./]/)[0] || withoutMime;
+  return Array.from(new Set([withoutMime.toUpperCase(), family.toUpperCase()]));
+}
+
 function getCodecMimeVariants(type: "video" | "audio", codec: string): string[] {
-  const upper = codec.toUpperCase();
   const aliasMap = type === "video" ? VIDEO_CODEC_ALIASES : AUDIO_CODEC_ALIASES;
-  const variants = aliasMap[upper] ?? [upper.toLowerCase()];
-  return variants.map((v) => `${type}/${v}`);
+  const variants = new Set<string>();
+
+  for (const token of splitCodecTokens(codec)) {
+    for (const key of getCodecAliasKeys(token)) {
+      const aliases = aliasMap[key] ?? [key.toLowerCase()];
+      aliases.forEach((alias) => variants.add(`${type}/${alias.toLowerCase()}`));
+    }
+  }
+
+  return Array.from(variants);
 }
 
 /**

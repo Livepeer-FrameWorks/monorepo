@@ -290,7 +290,16 @@ export function createPlayerControllerStore(
     // Subscribe to events
     unsubscribers.push(
       controller.on("stateChange", ({ state }) => {
-        store.update((prev) => ({ ...prev, state }));
+        store.update((prev) => ({
+          ...prev,
+          state,
+          isPlaying: controller!.isPlaying(),
+          isPaused: controller!.isPaused(),
+          isBuffering: controller!.isBuffering(),
+          hasPlaybackStarted: controller!.hasPlaybackStarted(),
+          shouldShowControls: controller!.shouldShowControls(),
+          shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
+        }));
       })
     );
 
@@ -308,7 +317,17 @@ export function createPlayerControllerStore(
 
     unsubscribers.push(
       controller.on("timeUpdate", ({ currentTime, duration }) => {
-        store.update((prev) => ({ ...prev, currentTime, duration }));
+        store.update((prev) => ({
+          ...prev,
+          currentTime,
+          duration,
+          isPlaying: controller!.isPlaying(),
+          isPaused: controller!.isPaused(),
+          isBuffering: controller!.isBuffering(),
+          hasPlaybackStarted: controller!.hasPlaybackStarted(),
+          shouldShowControls: controller!.shouldShowControls(),
+          shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
+        }));
       })
     );
 

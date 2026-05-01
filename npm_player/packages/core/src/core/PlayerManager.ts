@@ -198,7 +198,9 @@ export class PlayerManager {
   private computeCacheKey(streamInfo: StreamInfo, mode: PlaybackMode): string {
     return JSON.stringify({
       sources: streamInfo.source.map((s) => `${s.type}:${s.url ?? ""}`).sort(),
-      tracks: streamInfo.meta?.tracks?.map((t) => t.codec).sort() ?? [],
+      tracks:
+        streamInfo.meta?.tracks?.map((t) => `${t.type}:${t.codec}:${t.codecstring ?? ""}`).sort() ??
+        [],
       mode,
       forcePlayer: this.options.forcePlayer,
       forceSource: this.options.forceSource,

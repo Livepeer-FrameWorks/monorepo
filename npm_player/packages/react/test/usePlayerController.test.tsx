@@ -314,6 +314,8 @@ describe("event -> state updates", () => {
 
   it("timeUpdate updates currentTime and duration", () => {
     const { result } = renderWithController();
+    mockHasPlaybackStarted.mockReturnValue(true);
+    mockShouldShowIdleScreen.mockReturnValue(false);
 
     act(() => {
       fire("timeUpdate", { currentTime: 30.5, duration: 120 });
@@ -321,6 +323,8 @@ describe("event -> state updates", () => {
 
     expect(result.current.state.currentTime).toBe(30.5);
     expect(result.current.state.duration).toBe(120);
+    expect(result.current.state.hasPlaybackStarted).toBe(true);
+    expect(result.current.state.shouldShowIdleScreen).toBe(false);
   });
 
   it("error updates error and isPassiveError", () => {

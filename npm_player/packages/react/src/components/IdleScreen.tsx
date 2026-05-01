@@ -216,6 +216,7 @@ interface StatusOverlayProps {
   message: string;
   percentage?: number;
   error?: string;
+  details?: string;
   onRetry?: () => void;
 }
 
@@ -316,6 +317,7 @@ const StatusOverlay: React.FC<StatusOverlayProps> = ({
   message,
   percentage,
   error,
+  details,
   onRetry,
 }) => {
   const showRetry = (status === "ERROR" || status === "INVALID") && onRetry;
@@ -352,6 +354,23 @@ const StatusOverlay: React.FC<StatusOverlayProps> = ({
         <StatusIcon status={status} />
         <span>{displayMessage}</span>
       </div>
+
+      {details && details !== displayMessage && (
+        <div
+          style={{
+            color: "#9aa5ce",
+            fontSize: "11px",
+            lineHeight: 1.4,
+            maxWidth: "360px",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            fontFamily:
+              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace",
+          }}
+        >
+          {details}
+        </div>
+      )}
 
       {/* Progress bar */}
       {showProgress && (
@@ -531,6 +550,8 @@ export interface IdleScreenProps {
   percentage?: number;
   /** Error message */
   error?: string;
+  /** Additional diagnostic details, shown when available */
+  details?: string;
   /** Callback for retry button */
   onRetry?: () => void;
 }
@@ -540,6 +561,7 @@ export const IdleScreen: React.FC<IdleScreenProps> = ({
   message = "Waiting for stream...",
   percentage,
   error,
+  details,
   onRetry,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -758,6 +780,7 @@ export const IdleScreen: React.FC<IdleScreenProps> = ({
         message={message}
         percentage={percentage}
         error={error}
+        details={details}
         onRetry={onRetry}
       />
 

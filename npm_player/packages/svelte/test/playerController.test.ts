@@ -337,9 +337,15 @@ describe("event → state updates", () => {
 
   it("timeUpdate updates currentTime and duration", async () => {
     const store = await createAttachedStore();
+    mockHasPlaybackStarted.mockReturnValue(true);
+    mockShouldShowIdleScreen.mockReturnValue(false);
+
     fire("timeUpdate", { currentTime: 42.5, duration: 120 });
+
     expect(get(store).currentTime).toBe(42.5);
     expect(get(store).duration).toBe(120);
+    expect(get(store).hasPlaybackStarted).toBe(true);
+    expect(get(store).shouldShowIdleScreen).toBe(false);
   });
 
   it("error event updates error and isPassiveError", async () => {

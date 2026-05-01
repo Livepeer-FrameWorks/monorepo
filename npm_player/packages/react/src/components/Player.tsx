@@ -208,6 +208,18 @@ const PlayerInner: React.FC<PlayerProps> = ({
       ? t("resolvingEndpoint")
       : t("waitingForStream")
     : t("waitingForStream");
+  const streamStateMessage = state.streamState?.message;
+  const streamStateError = state.streamState?.error;
+  const idleMessage = state.isEffectivelyLive
+    ? streamStateError || streamStateMessage
+    : t("loading");
+  const idleDetails =
+    options?.devMode &&
+    streamStateError &&
+    streamStateMessage &&
+    streamStateError !== streamStateMessage
+      ? streamStateMessage
+      : undefined;
 
   // ============================================================================
   // Render
@@ -302,8 +314,9 @@ const PlayerInner: React.FC<PlayerProps> = ({
                 {!showWaitingForEndpoint && state.shouldShowIdleScreen && (
                   <IdleScreen
                     status={state.isEffectivelyLive ? state.streamState?.status : undefined}
-                    message={state.isEffectivelyLive ? state.streamState?.message : t("loading")}
+                    message={idleMessage}
                     percentage={state.isEffectivelyLive ? state.streamState?.percentage : undefined}
+                    details={idleDetails}
                   />
                 )}
 

@@ -385,6 +385,21 @@
         : $translatorStore("waitingForStream")
       : $translatorStore("waitingForStream")
   );
+  let streamStateMessage = $derived(storeState.streamState?.message);
+  let streamStateError = $derived(storeState.streamState?.error);
+  let idleMessage = $derived(
+    storeState.isEffectivelyLive
+      ? streamStateError || streamStateMessage
+      : $translatorStore("loading")
+  );
+  let idleDetails = $derived(
+    options?.devMode &&
+      streamStateError &&
+      streamStateMessage &&
+      streamStateError !== streamStateMessage
+      ? streamStateMessage
+      : undefined
+  );
 </script>
 
 <ContextMenu>
@@ -494,12 +509,11 @@
           {#if !showWaitingForEndpoint && storeState.shouldShowIdleScreen}
             <IdleScreen
               status={storeState.isEffectivelyLive ? storeState.streamState?.status : undefined}
-              message={storeState.isEffectivelyLive
-                ? storeState.streamState?.message
-                : $translatorStore("loading")}
+              message={idleMessage}
               percentage={storeState.isEffectivelyLive
                 ? storeState.streamState?.percentage
                 : undefined}
+              details={idleDetails}
             />
           {/if}
 

@@ -373,6 +373,13 @@ function mapCodecLabel(codecstr: string): string {
   return codecstr;
 }
 
+function splitCapabilityCodecs(codecs: string[]): string[] {
+  return codecs
+    .flatMap((codec) => codec.split(","))
+    .map((codec) => codec.trim().replace(/^["']|["']$/g, ""))
+    .filter(Boolean);
+}
+
 // ============================================================================
 // Standalone Stream Info Builder
 // ============================================================================
@@ -469,11 +476,16 @@ export function buildStreamInfoFromEndpoints(
 
   // Derive tracks from capabilities
   const tracks: StreamTrack[] = [];
+  const trackKeys = new Set<string>();
   const pushCodecTracks = (cap?: OutputCapabilities) => {
     if (!cap) return;
-    const codecs = cap.codecs || [];
+    const codecs = splitCapabilityCodecs(cap.codecs || []);
     const addTrack = (type: "video" | "audio", codecstr: string) => {
-      tracks.push({ type, codec: mapCodecLabel(codecstr), codecstring: codecstr });
+      const codec = mapCodecLabel(codecstr);
+      const key = `${type}:${codec}:${codecstr}`;
+      if (trackKeys.has(key)) return;
+      trackKeys.add(key);
+      tracks.push({ type, codec, codecstring: codecstr });
     };
     codecs.forEach((c) => {
       const lc = c.toLowerCase();
@@ -1224,18 +1236,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    * Logic:
    * - For cold start content (VOD/DVR): Show loading only while waiting for Gateway sources
    * - For live streams: Show loading while waiting for MistServer to come online
-   * - Never show idle after playback has started (unless explicit error)
+   * - Never show idle after playback has started; a stale stream-state error must not cover active playback
    */
   shouldShowIdleScreen(): boolean {
-    // For live streams, always show idle/offline UI when stream state says offline,
-    // even if playback started earlier in this controller lifetime.
-    if (!this.needsColdStart()) {
-      if (this.streamState?.isOnline === false || this.streamState?.status === "OFFLINE") {
-        return true;
-      }
-    }
-
-    // For non-offline states, keep idle hidden once playback started.
     if (this._hasPlaybackStarted) return false;
 
     if (this.needsColdStart()) {
@@ -1256,6 +1259,61 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
 
     return false;
+  }
+
+  private markPlaybackProgress(reportedTimeMs?: number): void {
+    const currentTime = Number.isFinite(reportedTimeMs)
+      ? reportedTimeMs!
+      : this.getEffectiveCurrentTime();
+
+    if (!Number.isFinite(currentTime) || currentTime <= 0) return;
+
+    this._hasPlaybackStarted = true;
+    this._isBuffering = false;
+
+    if (this._stallStartTime > 0) {
+      this.log(`Stall cleared after ${Date.now() - this._stallStartTime}ms`);
+      this._stallStartTime = 0;
+    }
+
+    if (!this.isPaused()) {
+      this.setState("playing");
+    }
+
+    this.attemptClearError();
+  }
+
+  private bindCurrentPlayerEvents(playerForListener: IPlayer): void {
+    const onSeekableChange = () => {
+      this.updateSeekingState();
+    };
+    const onBufferLow = () => {
+      this.qualityMonitor?.recordBufferLow();
+    };
+
+    playerForListener.on("seekablechange", onSeekableChange);
+    playerForListener.on("bufferlow", onBufferLow);
+
+    let onDirectRenderTimeUpdate: ((timeMs: number) => void) | null = null;
+    if (playerForListener.isDirectRendering) {
+      onDirectRenderTimeUpdate = (timeMs) => {
+        this.markPlaybackProgress(timeMs);
+        this.updateSeekingState();
+        this.emit("timeUpdate", {
+          currentTime: this.getEffectiveCurrentTime(),
+          duration: this.getEffectiveDuration(),
+        });
+      };
+      playerForListener.on("timeupdate", onDirectRenderTimeUpdate);
+    }
+
+    this.cleanupFns.push(() => {
+      playerForListener.off("seekablechange", onSeekableChange);
+      playerForListener.off("bufferlow", onBufferLow);
+      if (onDirectRenderTimeUpdate) {
+        playerForListener.off("timeupdate", onDirectRenderTimeUpdate);
+      }
+    });
   }
 
   /**
@@ -2223,6 +2281,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     // Check if video is still playing (passive error scenario)
     const video = this.videoElement;
     const isVideoPlaying = video && !video.paused && video.currentTime > 0;
+    const isPlaybackActive =
+      isVideoPlaying ||
+      (this._hasPlaybackStarted && this.state === "playing") ||
+      (this.isPlaying() && this.getEffectiveCurrentTime() > 0);
 
     // Attempt fallback on hard failures before showing error UI
     if (this.shouldAttemptFallback(error) && this.playerManager.canAttemptFallback()) {
@@ -2251,7 +2313,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this._errorCleared = false;
     this._playbackResumedSinceError = false;
     this._errorText = error;
-    this._isPassiveError = isVideoPlaying ?? false;
+    this._isPassiveError = Boolean(isPlaybackActive);
 
     this.setState("error", { error });
     this.emit("error", { error });
@@ -3131,19 +3193,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         this.setupVideoEventListeners(el);
         // Listen for player-reported seekable range updates (WebRTC/WHEP data channel)
         if (this.currentPlayer) {
-          const playerForListener = this.currentPlayer;
-          const onSeekableChange = () => {
-            this.updateSeekingState();
-          };
-          const onBufferLow = () => {
-            this.qualityMonitor?.recordBufferLow();
-          };
-          playerForListener.on("seekablechange", onSeekableChange);
-          playerForListener.on("bufferlow", onBufferLow);
-          this.cleanupFns.push(() => {
-            playerForListener.off("seekablechange", onSeekableChange);
-            playerForListener.off("bufferlow", onBufferLow);
-          });
+          this.bindCurrentPlayerEvents(this.currentPlayer);
         }
         // Initialize sub-controllers after video is ready
         this.initializeSubControllers();
@@ -3187,6 +3237,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
             this.container.appendChild(this.videoElement);
           }
         } catch {}
+        this.markPlaybackProgress(_t);
         this.emit("timeUpdate", {
           currentTime: this.getEffectiveCurrentTime(),
           duration: this.getEffectiveDuration(),
@@ -3276,13 +3327,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     const onEnded = () => this.setState("ended");
     const onTimeUpdate = () => {
       this.updateSeekingState();
+      this.markPlaybackProgress(el.currentTime * 1000);
       this.emit("timeUpdate", {
         currentTime: this.getEffectiveCurrentTime(),
         duration: this.getEffectiveDuration(),
       });
-      if (this.getEffectiveCurrentTime() > 0) {
-        this.attemptClearError();
-      }
     };
     const onDurationChange = () => {
       this.updateSeekingState();
