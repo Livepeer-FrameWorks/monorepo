@@ -2,6 +2,9 @@ import { BasePlayer } from "../core/PlayerInterface";
 import { isLiveStreamType } from "../core/PlayerInterface";
 import { LiveDurationProxy } from "../core/LiveDurationProxy";
 import { MistControlChannel } from "../core/MistControlChannel";
+import { normalizeLiveCatchupConfig } from "../core/delivery/live-catchup";
+import { decideDeadPointRecovery } from "../core/mist/dead-point-recovery";
+import { LiveEdgeRateController } from "../core/mist/live-edge-rate-controller";
 import {
   checkProtocolMismatch,
   getBrowserInfo,
@@ -21,7 +24,6 @@ import type {
  * - HTML5 video element for direct media
  * - WHEP (WebRTC HTTP Egress Protocol) for WebRTC streams
  *
- * Ported from reference html5.js with:
  * - Live duration proxy for meaningful seek bar
  * - Auto-recovery on long pause (reload after 5s)
  * - MP3 seeking restriction
@@ -61,8 +63,9 @@ export class NativePlayerImpl extends BasePlayer {
   private container: HTMLElement | null = null;
   private destroyed = false;
 
-  // MistControl data channel for WHEP seeking (upstream wheprtc.js compliance)
+  // MistControl data channel for WHEP seeking
   private controlChannel: MistControlChannel | null = null;
+  private whepLiveEdge: LiveEdgeRateController | null = null;
   private whepSeekOffset = 0;
   private whepDurationMs = 0;
   private whepIsLive = true;
@@ -80,7 +83,7 @@ export class NativePlayerImpl extends BasePlayer {
   private sourceElement: HTMLSourceElement | null = null; // legacy, always null now
   private isMP3Source = false;
 
-  // Auto-recovery threshold (reference: 5 seconds)
+  // Auto-recovery threshold for live playback that stalls in a paused state.
   private static readonly PAUSE_RECOVERY_THRESHOLD = 5000;
 
   isMimeSupported(mimetype: string): boolean {
@@ -290,10 +293,8 @@ export class NativePlayerImpl extends BasePlayer {
     // Set up event listeners
     this.setupVideoEventListeners(video, options);
 
-    // Setup reference features for HTML5 playback
-    // Use LiveDurationProxy for all live streams (non-WHEP)
-    // WHEP handles its own live edge via signaling
-    // This enables seeking and jump-to-live for native MP4/WebM/HLS live streams
+    // LiveDurationProxy supplies seek and jump-to-live for non-WHEP live streams.
+    // WHEP handles live edge through Mist control signaling.
     const isLiveStream = isLiveStreamType(streamInfo?.type);
     if (source.type !== "whep" && isLiveStream) {
       // Upstream html5.js:158-160: force loop=false for live
@@ -349,7 +350,6 @@ export class NativePlayerImpl extends BasePlayer {
 
   /**
    * Setup live duration proxy for meaningful seek bar on live streams
-   * Ported from reference html5.js:194-202
    */
   private setupLiveDurationProxy(video: HTMLVideoElement): void {
     this.liveDurationProxy = new LiveDurationProxy(video, {
@@ -360,7 +360,6 @@ export class NativePlayerImpl extends BasePlayer {
 
   /**
    * Setup auto-recovery on long pause
-   * Ported from reference html5.js:227-239
    *
    * If the stream has been paused for more than 5 seconds,
    * reload the stream on play to recover from stale buffer.
@@ -392,7 +391,6 @@ export class NativePlayerImpl extends BasePlayer {
 
   /**
    * Set a new source URL dynamically
-   * Ported from reference html5.js:276-281
    */
   setSource(url: string): void {
     if (!this.videoElement) return;
@@ -406,11 +404,10 @@ export class NativePlayerImpl extends BasePlayer {
 
   /**
    * Override seek for MP3 files (seeking not supported) and WHEP data channel seeking.
-   * Ported from reference html5.js:185-191 + upstream wheprtc.js ControlChannel seeking.
    */
   seek(timeMs: number): void {
     if (this.isMP3Source) return;
-    // WHEP: seek via MistControl data channel (upstream util.js:1821-1867)
+    // WHEP: seek via MistControl data channel
     if (this.controlChannel?.isOpen && this.videoElement) {
       this.videoElement.pause();
       this.whepSeekOffset = timeMs / 1000 - this.videoElement.currentTime;
@@ -526,6 +523,7 @@ export class NativePlayerImpl extends BasePlayer {
         this.controlChannel.close();
       } catch {}
       this.controlChannel = null;
+      this.whepLiveEdge = null;
     }
     this.whepSeekOffset = 0;
     this.whepDurationMs = 0;
@@ -712,17 +710,18 @@ export class NativePlayerImpl extends BasePlayer {
     };
   }
 
-  private getLiveCatchupWindowMs(): number | null {
-    const value = this.currentOptions?.liveCatchup;
-    if (!value) return null;
-    return typeof value === "number" ? value * 1000 : 60000;
-  }
-
   /**
    * Set up MistControl data channel event handlers for WHEP seeking.
-   * Mirrors upstream util.js ControlChannelAPI behavior.
    */
   private setupMistControl(control: MistControlChannel, video: HTMLVideoElement): void {
+    this.whepLiveEdge = new LiveEdgeRateController({
+      transport: control.transport,
+      config: normalizeLiveCatchupConfig(this.currentOptions?.liveCatchup, {
+        undefinedMeans: "off",
+      }),
+      isLive: () => this.whepIsLive,
+    });
+
     control.on("open", () => {
       if (this.destroyed) return;
       if (this.controlOpenTimer) {
@@ -753,22 +752,7 @@ export class NativePlayerImpl extends BasePlayer {
       this.whepBufferWindow = update.end - update.begin;
       this.whepBeginMs = update.begin;
       this.whepEndMs = update.end === 0 ? update.current : update.end;
-      const liveCatchupWindowMs = this.getLiveCatchupWindowMs();
-      const distanceToLiveMs = update.end - update.current;
-      if (this.whepIsLive && update.play_rate_curr !== "fast-forward") {
-        if (
-          update.play_rate_curr === "auto" &&
-          (!liveCatchupWindowMs || distanceToLiveMs > liveCatchupWindowMs)
-        ) {
-          control.setSpeed(1);
-        } else if (
-          update.play_rate_curr === 1 &&
-          liveCatchupWindowMs &&
-          distanceToLiveMs < liveCatchupWindowMs
-        ) {
-          control.setSpeed("auto");
-        }
-      }
+      this.whepLiveEdge?.ingestOnTime(update);
       this.emit("seekablechange", {
         start: update.begin,
         end: this.whepEndMs,
@@ -798,16 +782,13 @@ export class NativePlayerImpl extends BasePlayer {
     // Handle at_dead_point recovery near the start of the available buffer.
     control.on("pause", (msg) => {
       if (this.destroyed) return;
-      if (msg.reason === "at_dead_point" && msg.begin !== undefined && msg.end !== undefined) {
-        const isSlowed = typeof this.whepPlayRate === "number" && this.whepPlayRate < 1;
-        const seekTo = msg.begin + (isSlowed ? 1000 : 5000);
-        if (!isNaN(seekTo) && seekTo > 0) {
-          if (isSlowed) {
-            control.setSpeed("auto");
-          }
-          control.seek(seekTo);
-          return;
+      const recovery = decideDeadPointRecovery(msg, this.whepPlayRate);
+      if (recovery.kind === "seek_recover") {
+        if (recovery.resetSpeedToAuto) {
+          control.setSpeed("auto");
         }
+        control.seek(recovery.seekToMs);
+        return;
       }
       if (msg.paused) video.pause();
     });
@@ -844,7 +825,7 @@ export class NativePlayerImpl extends BasePlayer {
     this.peerConnection = pc;
     this.incomingMediaStream = null;
 
-    // Create MistControl data channel for seeking/DVR (upstream wheprtc.js compliance).
+    // Create MistControl data channel for seeking/DVR.
     // Must be created before createOffer() so it's included in the SDP exchange.
     const mistControlDC = pc.createDataChannel("MistControl");
     this.controlChannel = new MistControlChannel(mistControlDC);
@@ -922,6 +903,7 @@ export class NativePlayerImpl extends BasePlayer {
     if (!pc.sctp) {
       console.warn("[NativePlayer] WHEP negotiated without SCTP; continuing without seek/control");
       this.controlChannel = null;
+      this.whepLiveEdge = null;
     } else if (this.controlChannel && !this.controlChannel.isOpen) {
       if (this.controlOpenTimer) clearTimeout(this.controlOpenTimer);
       this.controlOpenTimer = setTimeout(() => {

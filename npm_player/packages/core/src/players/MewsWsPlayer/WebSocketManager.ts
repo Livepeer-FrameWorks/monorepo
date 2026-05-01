@@ -4,13 +4,16 @@
  * Handles WebSocket connection, reconnection with exponential backoff,
  * message sending, and typed message listeners.
  *
- * Ported from reference: mews.js:387-883
  */
 
 import type { WebSocketManagerOptions, MewsMessage, MewsMessageListener } from "./types";
+import type { MistCommand } from "../../core/mist/protocol";
+import type { MistSendDecorator } from "../../core/mist/transport";
+import { MistWebSocketTransport } from "../../core/mist/transports/websocket-transport";
 
 export class WebSocketManager {
-  private ws: WebSocket | null = null;
+  private transport: MistWebSocketTransport;
+  private connected = false;
   private url: string;
   private maxReconnectAttempts: number;
   private reconnectAttempts = 0;
@@ -23,7 +26,7 @@ export class WebSocketManager {
   // Track pending retry timers so they can be cancelled on destroy
   private pendingRetryTimers: Set<ReturnType<typeof setTimeout>> = new Set();
 
-  // Message listener registry (ported from mews.js:440-451)
+  // Message listener registry
   // Allows multiple listeners per message type for proper seek/play sequencing
   private listeners: Record<string, MewsMessageListener[]> = {};
 
@@ -43,6 +46,12 @@ export class WebSocketManager {
     this.onClose = options.onClose;
     this.onError = options.onError;
     this.shouldReconnect = options.shouldReconnect;
+    this.transport = new MistWebSocketTransport(this.url, {
+      maxReconnectAttempts: this.maxReconnectAttempts,
+      reconnectDelayMs: 500,
+      maxReconnectDelayMs: 5000,
+    });
+    this.bindTransport();
   }
 
   connect(): void {
@@ -57,59 +66,13 @@ export class WebSocketManager {
       }
     } catch {}
 
-    const ws = new WebSocket(this.url);
-    ws.binaryType = "arraybuffer";
-    this.ws = ws;
-
-    // Connection timeout — if WS doesn't open within 5s, treat as failed
     this.clearConnectionTimeout();
     this.connectionTimeout = setTimeout(() => {
-      if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
-        this.ws.close();
+      if (!this.connected) {
         this.onError("WebSocket connection timeout");
       }
     }, WebSocketManager.CONNECTION_TIMEOUT_MS);
-
-    ws.onopen = () => {
-      this.clearConnectionTimeout();
-      this.wasConnected = true;
-      this.reconnectAttempts = 0;
-      this.clearReconnectTimer();
-      this.onOpen();
-    };
-
-    ws.onmessage = (e: MessageEvent<ArrayBuffer | string>) => {
-      this.onMessage(e.data);
-    };
-
-    ws.onerror = () => {
-      this.onError("WebSocket error");
-    };
-
-    ws.onclose = () => {
-      if (this.isDestroyed) return;
-
-      const canReconnect =
-        this.wasConnected &&
-        !this.reconnectionDisabled &&
-        this.reconnectAttempts < this.maxReconnectAttempts &&
-        (!this.shouldReconnect || this.shouldReconnect());
-
-      if (canReconnect) {
-        const backoff = Math.min(5000, 500 * Math.pow(2, this.reconnectAttempts));
-        this.reconnectAttempts++;
-        this.reconnectTimer = setTimeout(() => {
-          if (!this.isDestroyed) {
-            this.connect();
-          }
-        }, backoff);
-      } else {
-        this.onClose();
-        if (!this.reconnectionDisabled) {
-          this.onError("WebSocket closed");
-        }
-      }
-    };
+    void this.transport.connect().catch(() => {});
   }
 
   /**
@@ -139,7 +102,7 @@ export class WebSocketManager {
       this.pendingRetryTimers.add(timer);
     };
 
-    if (!this.ws) {
+    if (!this.connected) {
       // No socket at all, try to connect and retry
       if (!this.isDestroyed && retry < MAX_RETRIES) {
         scheduleRetry(RETRY_DELAY);
@@ -147,26 +110,8 @@ export class WebSocketManager {
       return false;
     }
 
-    if (this.ws.readyState < WebSocket.OPEN) {
-      // Still connecting, wait and retry (if not destroyed)
-      if (!this.isDestroyed && retry < MAX_RETRIES) {
-        scheduleRetry(RETRY_DELAY);
-      }
-      return false;
-    }
-
-    if (this.ws.readyState >= WebSocket.CLOSING) {
-      // Closing or closed, trigger reconnect and retry
-      if (!this.isDestroyed && retry < MAX_RETRIES) {
-        this.connect();
-        scheduleRetry(RETRY_DELAY * 2);
-      }
-      return false;
-    }
-
     try {
-      this.ws.send(JSON.stringify(cmd));
-      return true;
+      return this.transport.send(cmd as any);
     } catch {
       return false;
     }
@@ -201,12 +146,8 @@ export class WebSocketManager {
     // Clear all listeners to prevent memory leaks
     this.listeners = {};
 
-    if (this.ws) {
-      try {
-        this.ws.close();
-      } catch {}
-      this.ws = null;
-    }
+    this.transport.destroy();
+    this.connected = false;
     console.debug("[WebSocketManager] destroy() completed");
   }
 
@@ -216,22 +157,50 @@ export class WebSocketManager {
   }
 
   sendDirect(cmd: object): boolean {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    if (!this.connected) return false;
     try {
-      this.ws.send(JSON.stringify(cmd));
-      return true;
+      return this.transport.send(cmd as any);
     } catch {
       return false;
     }
   }
 
+  addSendDecorator(decorator: MistSendDecorator<MistCommand>): () => void {
+    return this.transport.addSendDecorator(decorator);
+  }
+
   isConnected(): boolean {
-    return this.ws?.readyState === WebSocket.OPEN;
+    return this.connected;
+  }
+
+  private bindTransport(): void {
+    this.transport.on("statechange", ({ state }) => {
+      if (state === "connected") {
+        this.connected = true;
+        this.wasConnected = true;
+        this.reconnectAttempts = 0;
+        this.clearReconnectTimer();
+        this.clearConnectionTimeout();
+        this.onOpen();
+      } else if (state === "disconnected") {
+        const shouldRetry =
+          !this.isDestroyed &&
+          !this.reconnectionDisabled &&
+          (!this.shouldReconnect || this.shouldReconnect());
+        this.connected = false;
+        if (!shouldRetry) {
+          this.onClose();
+        }
+      }
+    });
+
+    this.transport.on("binary", ({ data }) => this.onMessage(data));
+    this.transport.on("event", ({ event }) => this.onMessage(JSON.stringify(event)));
+    this.transport.on("error", ({ message }) => this.onError(message));
   }
 
   /**
    * Add a listener for a specific message type.
-   * Ported from mews.js:441-444
    *
    * @param type - Message type to listen for (e.g., 'on_time', 'codec_data', 'seek')
    * @param callback - Function to call when message is received
@@ -245,7 +214,6 @@ export class WebSocketManager {
 
   /**
    * Remove a listener for a specific message type.
-   * Ported from mews.js:445-450
    *
    * @param type - Message type
    * @param callback - The exact callback function to remove
@@ -266,7 +234,6 @@ export class WebSocketManager {
   /**
    * Notify all listeners for a given message type.
    * Called internally when a JSON message is received.
-   * Ported from mews.js:795-799
    *
    * @param msg - Parsed message object
    */

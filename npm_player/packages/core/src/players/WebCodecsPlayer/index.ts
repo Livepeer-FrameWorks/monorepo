@@ -47,6 +47,7 @@ import {
   hasNativeMediaStreamTrackGenerator,
 } from "./polyfills/MediaStreamTrackGenerator";
 import { translateCodec, buildDescription } from "../../core/CodecUtils";
+import { decideDeadPointRecovery } from "../../core/mist/dead-point-recovery";
 import { WebGLRenderer } from "../../rendering/WebGLRenderer";
 import { CanvasRenderer } from "../../rendering/CanvasRenderer";
 import { AudioWorkletRenderer } from "../../rendering/AudioWorkletRenderer";
@@ -68,8 +69,7 @@ function isRawVideoCodec(codec: string): boolean {
 // Import inline worker (bundled via rollup-plugin-web-worker-loader)
 
 /**
- * Convert string (ASCII with escaped chars) to Uint8Array
- * Reference: rawws.js:76-84 - init data is raw ASCII from stream info JSON
+ * Convert stream-info init data from raw ASCII to bytes.
  */
 function str2bin(str: string): Uint8Array {
   const out = new Uint8Array(str.length);
@@ -179,7 +179,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   private _bufferMs = 0;
   private _seekableBeginS: number | null = null;
   private _seekableEndS: number | null = null;
-  /** Date.now() when last on_time was received — for moving live edge (OG rawws.js:1477) */
+  /** Date.now() when last on_time was received — for moving live edge */
   private _onTimeReceivedAt: number = 0;
   private _activeSeekId: number | undefined = undefined;
   private _seekSafetyTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -228,8 +228,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   }
 
   /**
-   * Test if a track's codec is supported by WebCodecs
-   * Reference: rawws.js:75-137 - isTrackSupported()
+   * Test if a track's codec is supported by WebCodecs.
    */
   static async isTrackSupported(track: TrackInfo): Promise<{ supported: boolean; config: any }> {
     const cacheKey = WebCodecsPlayerImpl.getCodecCacheKey(track);
@@ -464,8 +463,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this.container = container;
     container.classList.add("fw-player-container");
 
-    // Pre-populate track metadata from streamInfo (fetched via HTTP before WebSocket)
-    // This is how the reference player (rawws.js) gets track info - from MistVideo.info.meta.tracks
+    // Pre-populate track metadata from HTTP stream info before the WebSocket opens.
     if (streamInfo?.meta?.tracks) {
       this.log(`Pre-populating ${streamInfo.meta.tracks.length} tracks from streamInfo`);
       for (const track of streamInfo.meta.tracks) {
@@ -587,6 +585,9 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       onFastForwardRequest: (ms) => {
         this.wsController?.fastForward(ms);
       },
+      onSetSpeedRequest: (rate) => {
+        this.wsController?.setSpeed(rate);
+      },
     });
     this.syncController.on("bufferlow", (data) => this.emit("bufferlow", data));
 
@@ -597,9 +598,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
     this.setupWebSocketHandlers();
 
-    // Validate track codecs using isConfigSupported() BEFORE connecting
-    // Reference: rawws.js:75-137 tests each track's codec support
-    // This fixes "codec unsupported" errors by only sending verified codecs
+    // Validate track codecs before connecting so we only advertise playable codecs.
     const supportedAudioCodecs: Set<string> = new Set();
     const supportedVideoCodecs: Set<string> = new Set();
 
@@ -656,8 +655,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       ["H264", "HEVC", "VP8", "VP9", "AV1", "JPEG"].forEach((c) => supportedVideoCodecs.add(c));
     }
 
-    // Connect and request codec data
-    // Per MistServer rawws.js line 1544, we need to tell the server what codecs we support
+    // Connect and tell MistServer which codec combinations are supported.
     // Format: [[ [audio codecs], [video codecs] ]] - audio FIRST per Object.values({audio:[], video:[]}) order
     const supportedCombinations: string[][][] = [
       [
@@ -1119,9 +1117,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
             this.emit("timeupdate", this.videoElement.currentTime * 1000);
           }
         } else if (msg.kind === "seeked") {
-          // Worker confirmed decoder reached seek target frame.
-          // OG webcodecsworker.js:492 emits 'seeked' when target frame is decoded;
-          // rawws.js:1055 forwards it to the video event bus.
+          // Worker confirmed decoder reached the seek target frame.
           if (
             this._activeSeekId !== undefined &&
             this.syncController?.isSeekActive(this._activeSeekId)
@@ -1145,8 +1141,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       }
 
       case "writeframe": {
-        // Safari audio: worker sends frames via postMessage, we write them here
-        // Reference: rawws.js line 897-918
+        // Safari audio frames are relayed from the worker and written on main.
         const pipeline = this.pipelines.get(msg.idx);
         if (pipeline?.safariAudioWriter) {
           const frame = msg.frame;
@@ -1252,8 +1247,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       return;
     }
 
-    // Store codec strings by track index for later lookup
-    // Per rawws.js: codecs[i] corresponds to tracks[i]
+    // MistServer sends codec strings and track ids in matching positions.
     for (let i = 0; i < trackIndices.length; i++) {
       const trackIdx = trackIndices[i];
       const codec = codecs[i];
@@ -1363,8 +1357,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       this._seekableEndS = msg.end / 1000;
     }
 
-    // Buffer management: compute buffer from worker frame timing and evaluate.
-    // OG rawws.js:460-464: buffer = decoded_point - playback_point (microseconds→ms)
+    // Buffer is decoded media time minus playback media time (microseconds to ms).
     if (
       this.syncController &&
       this._lastWorkerStats?.frameTiming &&
@@ -1383,7 +1376,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       }
     }
 
-    // Create pipelines for tracks mentioned in on_time.tracks (like reference player)
+    // Create pipelines for tracks announced by on_time.
     if (msg.tracks && msg.tracks.length > 0) {
       for (const trackIdx of msg.tracks) {
         if (!this.pipelines.has(trackIdx)) {
@@ -1408,7 +1401,6 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
   /**
    * Handle set_speed updates from server.
-   * Upstream rawws.js uses this signal to maintain rate/jitter state.
    */
   private handleSetSpeed(msg: SetSpeedMessage): void {
     this.syncController?.setServerPlayRate(msg.play_rate_curr, msg.play_rate_prev, {
@@ -1495,12 +1487,10 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       return;
     }
 
-    // Queue chunks until pipeline is configured (decoder needs init data first)
-    // Per rawws.js: frames are queued when decoder is "unconfigured" (line 1408-1410)
+    // Queue chunks until the decoder has init data.
     if (!pipeline.configured) {
       // For AUDIO tracks: configure on FIRST frame (audio doesn't have key/delta distinction)
       // Audio chunks are sent as type 0 (delta) by the server even though they're independent
-      // Reference: rawws.js line 768-769 forces audio type to 'key'
       const isAudioTrack = pipeline.track.type === "audio";
 
       // For VIDEO tracks: wait for KEY frame before configuring
@@ -1541,7 +1531,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
     // Video keyframe gate: drop delta frames until first keyframe after configure.
     // Joining a live stream mid-GOP means the server sends deltas before the next
-    // keyframe. Decoding those without a reference produces moshing artifacts.
+    // keyframe. Decoding delta frames before their keyframe produces artifacts.
     if (pipeline.awaitingKeyframe) {
       if (chunk.type === "key") {
         pipeline.awaitingKeyframe = false;
@@ -1575,8 +1565,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
   /**
    * Handle server-initiated pause (e.g., server-side buffer underrun).
-   * Latest upstream seeks near the buffer start and restores auto speed if we had slowed down.
-   * Otherwise, per rawws.js:661-662, pause frame timing so the worker stops outputting frames.
+   * Dead-point pauses recover near the buffer start; other pauses stop frame output.
    */
   private handleServerPause(msg: {
     paused: boolean;
@@ -1584,18 +1573,16 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     begin?: number;
     end?: number;
   }): void {
-    if (msg.reason === "at_dead_point" && msg.begin !== undefined && msg.end !== undefined) {
-      const serverRate = this.syncController?.getServerPlayRate();
-      const isSlowed = typeof serverRate === "number" && serverRate < 1;
-      const seekTo = msg.begin + (isSlowed ? 1000 : 5000);
-      if (!isNaN(seekTo) && seekTo > 0) {
-        this.log("At dead point: seeking near available buffer start");
-        if (isSlowed) {
-          this.wsController?.setSpeed("auto");
-        }
-        this.wsController?.seek(seekTo);
-        return;
+    const recovery = decideDeadPointRecovery(msg, this.syncController?.getServerPlayRate());
+    if (recovery.kind === "seek_recover") {
+      this.log("At dead point: seeking near available buffer start");
+      if (recovery.resetSpeedToAuto) {
+        this.wsController?.setSpeed("auto");
       }
+      this.wsController?.seek(recovery.seekToMs);
+      return;
+    }
+    if (recovery.kind === "pause_only") {
       this.log("At dead point: seek target invalid; pausing");
     }
 
@@ -1827,8 +1814,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
         [generator.writable]
       );
     } else if (isSafari()) {
-      // Safari: Worker uses VideoTrackGenerator (video) or frame relay (audio)
-      // Reference: rawws.js line 1012-1037
+      // Safari uses VideoTrackGenerator for video and main-thread frame relay for audio.
       this.log(`Safari detected - using worker-based track generator for ${track.type}`);
 
       if (track.type === "audio") {
@@ -1870,12 +1856,11 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       }
     }
 
-    // Per rawws.js: Do NOT configure from HTTP info automatically.
-    // Wait for WebSocket binary INIT frames to configure decoders.
-    // This ensures we use the exact init data the server sends for this session.
+    // Wait for WebSocket binary INIT frames so the decoder uses this session's
+    // exact server-provided init data.
     //
     // However, if track.init is empty/undefined, the codec doesn't need init data
-    // and we can configure immediately (per rawws.js line 1239-1241).
+    // and we can configure immediately.
     // This applies to codecs like opus, mp3, vp8, vp9 that don't need init data.
     if (!track.init || track.init === "") {
       this.log(
@@ -1906,7 +1891,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     // Copy the header to avoid transfer issues (neutered buffers)
     const headerCopy = new Uint8Array(header);
 
-    // For video: pass raw init data as description (matches reference rawws.js: description = header).
+    // For video, pass raw init data as the WebCodecs description.
     // MistServer HTTP info provides valid AVCDecoderConfigurationRecord / HEVCDecoderConfigurationRecord.
     // For audio: normalize init data (e.g., Vorbis header validation, AAC AudioSpecificConfig).
     const normalizedHeader =
@@ -2136,8 +2121,6 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
   jumpToLive(): void {
     if (this.streamType === "live") {
-      // OG rawws.js:1476: duration = (info.end + now - received) * 1e-3
-      // OG skins.js:3271: api.currentTime = api.duration
       // The live edge moves forward by elapsed time since last on_time.
       let liveEdgeMs: number;
       if (this._seekableEndS !== null && this._onTimeReceivedAt > 0) {
@@ -2157,11 +2140,9 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   /**
    * Check if seeking is supported.
    * WebCodecs can seek via server commands when connected.
-   * Reference: rawws.js line 1294-1304 implements seeking via control channel
    */
   canSeek(): boolean {
-    // WebCodecs CAN seek via server commands when WebSocket is connected
-    // This overrides the default MediaStream check in SeekingUtils
+    // Server-side seeking overrides the default MediaStream capability check.
     return this.wsController !== null && !this.isDestroyed;
   }
 
@@ -2184,7 +2165,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   }
 
   getDuration(): number {
-    // OG rawws.js:1476: live duration = (on_time.end + elapsed_since_received) * 1e-3
+    // Live duration advances from the last server on_time end by local elapsed time.
     if (this.streamType === "live" && this._seekableEndS !== null && this._onTimeReceivedAt > 0) {
       const elapsedSec = (Date.now() - this._onTimeReceivedAt) / 1000;
       return (this._seekableEndS + elapsedSec) * 1000;

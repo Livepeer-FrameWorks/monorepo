@@ -15,6 +15,7 @@
  */
 
 import type { MetaTrackEvent, MetaTrackEventType } from "../../types";
+import { MistMetadataWsTransport } from "../../core/mist/transports/metadata-transport";
 
 interface MetaMessage {
   time: number;
@@ -37,7 +38,8 @@ export interface MetadataWebSocketOptions {
 type MetadataCallback = (event: MetaTrackEvent) => void;
 
 export class MetadataWebSocket {
-  private ws: WebSocket | null = null;
+  private transport: MistMetadataWsTransport | null = null;
+  private connected = false;
   private url: string;
   private getCurrentTime: () => number;
   private getPlaybackRate: () => number;
@@ -78,7 +80,7 @@ export class MetadataWebSocket {
     }
     this.subscriptions[trackId].callbacks.push(callback);
 
-    if (this.ws === null) {
+    if (this.transport === null) {
       this.connect();
     } else {
       this.sendTrackSelection();
@@ -148,11 +150,17 @@ export class MetadataWebSocket {
     if (this.destroyed) return;
 
     this.log("Connecting metadata socket");
-    this.ws = new WebSocket(this.url);
+    this.transport = new MistMetadataWsTransport(this.url, {
+      maxReconnectAttempts: 5,
+      reconnectDelayMs: 500,
+      maxReconnectDelayMs: 5000,
+    });
+    this.connected = false;
     this.sendQueue = [];
     this.checkTimer = null;
-
-    this.ws.onopen = () => {
+    this.transport.on("statechange", ({ state }) => {
+      if (state !== "connected") return;
+      this.connected = true;
       this.log("Metadata socket opened");
       this.sendTrackSelection();
 
@@ -166,21 +174,21 @@ export class MetadataWebSocket {
       this.send({ type: "seek", seek_time: currentMs, ff_to: ffTo });
       this.lastFfTime = Date.now();
 
-      this.ws!.onmessage = (e: MessageEvent) => this.handleMessage(e);
-      this.ws!.onclose = () => {
-        this.log("Metadata socket closed");
-      };
-
       // Drain queued messages
-      while (this.sendQueue.length && this.ws?.readyState === WebSocket.OPEN) {
+      while (this.sendQueue.length && this.connected) {
         const msg = this.sendQueue.shift()!;
-        this.ws!.send(JSON.stringify(msg));
+        this.transport!.send(msg as any);
       }
-    };
+    });
+    this.transport.on("event", ({ event }) => this.handleParsedMessage(event));
+    this.transport.on("statechange", ({ state }) => {
+      if (state === "disconnected") {
+        this.connected = false;
+        this.log("Metadata socket closed");
+      }
+    });
 
-    this.ws.onerror = () => {
-      this.log("Metadata socket error");
-    };
+    void this.transport.connect();
   }
 
   private disconnect(): void {
@@ -189,26 +197,17 @@ export class MetadataWebSocket {
       clearTimeout(this.farAheadTimer);
       this.farAheadTimer = null;
     }
-    if (this.ws) {
-      this.ws.onopen = null;
-      this.ws.onmessage = null;
-      this.ws.onclose = null;
-      this.ws.onerror = null;
-      this.ws.close();
-      this.ws = null;
-    }
+    this.transport?.destroy();
+    this.transport = null;
+    this.connected = false;
     this.sendQueue = [];
     this.isFarAhead = false;
   }
 
   private send(obj: object): void {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(obj));
+    if (this.connected && this.transport) {
+      this.transport.send(obj as any);
       return;
-    }
-
-    if (this.ws && this.ws.readyState >= WebSocket.CLOSING) {
-      this.connect();
     }
 
     this.sendQueue.push(obj);
@@ -223,17 +222,7 @@ export class MetadataWebSocket {
     }
   }
 
-  private handleMessage(event: MessageEvent): void {
-    if (!event.data) return;
-
-    let message: any;
-    try {
-      message = JSON.parse(event.data as string);
-    } catch {
-      this.log("Invalid metadata message");
-      return;
-    }
-
+  private handleParsedMessage(message: any): void {
     // Data message: {time, track, data}
     if ("time" in message && "track" in message && "data" in message) {
       this.bufferMessage(message as MetaMessage);

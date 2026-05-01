@@ -35,6 +35,7 @@
     type FwThemePreset,
     type FwThemeOverrides,
     type FwLocale,
+    type ThumbnailCue,
   } from "@livepeer-frameworks/player-core";
   import {
     createPlayerControllerStore,
@@ -229,6 +230,7 @@
     controllerLiveEdge: 0,
     controllerCanSeek: false,
     controllerHasAudio: true,
+    thumbnailCues: [] as ThumbnailCue[],
   });
 
   // Track if we've already attached to prevent double-attach race

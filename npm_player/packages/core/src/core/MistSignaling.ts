@@ -20,6 +20,9 @@
  */
 
 import { TypedEventEmitter } from "./EventEmitter";
+import type { MistCommand, MistEvent, MistPlayRate } from "./mist/protocol";
+import type { MistMediaTransport, MistOnceHandle } from "./mist/transport";
+import { MistSignalingTransport } from "./mist/transports/signaling-transport";
 
 export interface MistSignalingConfig {
   /** WebSocket URL (will convert http to ws) */
@@ -44,7 +47,7 @@ export interface MistTimeUpdate {
   /** Whether at live point */
   live_point?: boolean;
   /** Current server-side playback rate */
-  play_rate_curr?: number | "auto" | "fast-forward";
+  play_rate_curr?: MistPlayRate;
 }
 
 export interface MistSignalingEvents {
@@ -60,8 +63,8 @@ export interface MistSignalingEvents {
   seeked: { live_point?: boolean };
   /** Playback speed changed */
   speed_changed: {
-    play_rate: number | "auto" | "fast-forward";
-    play_rate_curr: number | "auto" | "fast-forward";
+    play_rate: MistPlayRate;
+    play_rate_curr: MistPlayRate;
   };
   /** Server-initiated pause (e.g., buffer underrun at_dead_point) */
   pause_request: { paused: boolean; reason?: string; begin?: number; end?: number };
@@ -77,12 +80,14 @@ export type MistSignalingState = "connecting" | "connected" | "disconnected" | "
  * MistSignaling handles WebSocket communication with MistServer for WebRTC
  */
 export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
-  private ws: WebSocket | null = null;
-  private url: string;
-  private timeout: number;
+  private readonly _transport: MistSignalingTransport;
+  private readonly url: string;
+  private readonly timeout: number;
   private timeoutId: ReturnType<typeof setTimeout> | null = null;
-  private onLog: (message: string) => void;
+  private readonly onLog: (message: string) => void;
   private _state: MistSignalingState = "disconnected";
+  private seekHandle: MistOnceHandle<Extract<MistEvent, { type: "seek" }>> | null = null;
+  private suppressNextTransportDisconnect = false;
 
   // Promise for seek operation
   public seekPromise: {
@@ -92,10 +97,18 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
 
   constructor(config: MistSignalingConfig) {
     super();
-    // Convert http(s) to ws(s)
     this.url = config.url.replace(/^http/, "ws");
     this.timeout = config.timeout ?? 5000;
     this.onLog = config.onLog ?? (() => {});
+    this._transport = new MistSignalingTransport(this.url, { maxReconnectAttempts: -1 });
+    this.bindTransport();
+  }
+
+  /**
+   * Underlying typed Mist media transport.
+   */
+  get transport(): MistMediaTransport {
+    return this._transport;
   }
 
   /**
@@ -116,10 +129,7 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
    * Connect to MistServer WebSocket
    */
   connect(): void {
-    if (
-      this.ws &&
-      (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
-    ) {
+    if (this._transport.state === "connected" || this._transport.state === "connecting") {
       this.onLog("Already connected or connecting");
       return;
     }
@@ -127,151 +137,41 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
     this._state = "connecting";
     this.onLog(`Connecting to ${this.url}`);
 
-    try {
-      this.ws = new WebSocket(this.url);
-    } catch (e) {
-      this.onLog(`Failed to create WebSocket: ${e}`);
-      this._state = "disconnected";
-      return;
-    }
-
-    // Connection timeout
     this.timeoutId = setTimeout(() => {
-      if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+      if (this._state === "connecting") {
         this.onLog("WebSocket connection timeout");
-        this.ws.close();
+        this.suppressNextTransportDisconnect = true;
+        this._transport.disconnect("Connection timeout");
         this._state = "disconnected";
         this.emit("error", { message: "Connection timeout" });
       }
     }, this.timeout);
 
-    this.ws.onopen = () => {
-      if (this.timeoutId) {
-        clearTimeout(this.timeoutId);
-        this.timeoutId = null;
+    void this._transport.connect().catch((e) => {
+      this.clearTimeout();
+      if (this.suppressNextTransportDisconnect) {
+        this.suppressNextTransportDisconnect = false;
+        return;
       }
-      this._state = "connected";
-      this.onLog("WebSocket connected");
-      this.emit("connected", undefined);
-    };
-
-    this.ws.onmessage = (event) => {
-      try {
-        const cmd = JSON.parse(event.data);
-        this.handleMessage(cmd);
-      } catch (err) {
-        this.onLog(`Failed to parse message: ${err}`);
-      }
-    };
-
-    this.ws.onclose = (event) => {
-      if (this.timeoutId) {
-        clearTimeout(this.timeoutId);
-        this.timeoutId = null;
-      }
-      this._state = "closed";
-      this.onLog(`WebSocket closed (code: ${event.code})`);
-      this.emit("disconnected", { code: event.code });
-    };
-
-    this.ws.onerror = (event) => {
-      this.onLog(`WebSocket error: ${event}`);
-    };
-  }
-
-  /**
-   * Handle incoming message from MistServer
-   */
-  private handleMessage(cmd: Record<string, unknown>): void {
-    const type = cmd.type as string;
-    const payload =
-      cmd.data && typeof cmd.data === "object" ? (cmd.data as Record<string, unknown>) : cmd;
-
-    switch (type) {
-      case "on_connected":
-        // Already handled by onopen
-        break;
-
-      case "on_disconnected":
-        this._state = "disconnected";
-        this.emit("disconnected", { code: (payload.code as number) || 0 });
-        break;
-
-      case "on_answer_sdp":
-        this.emit("answer_sdp", {
-          result: payload.result as boolean,
-          answer_sdp: payload.answer_sdp as string,
-        });
-        break;
-
-      case "on_time":
-        this.emit("time_update", {
-          current: payload.current as number,
-          end: payload.end as number,
-          begin: payload.begin as number,
-          tracks: payload.tracks as string[] | undefined,
-          paused: payload.paused as boolean | undefined,
-          live_point: payload.live_point as boolean | undefined,
-          play_rate_curr: payload.play_rate_curr as number | "auto" | "fast-forward" | undefined,
-        });
-        break;
-
-      case "seek":
-        this.emit("seeked", {
-          live_point: payload.live_point as boolean | undefined,
-        });
-        // Resolve seek promise if pending
-        if (this.seekPromise) {
-          this.seekPromise.resolve("Seeked");
-          this.seekPromise = null;
-        }
-        break;
-
-      case "set_speed":
-        this.emit("speed_changed", {
-          play_rate: payload.play_rate as number | "auto" | "fast-forward",
-          play_rate_curr: payload.play_rate_curr as number | "auto" | "fast-forward",
-        });
-        break;
-
-      case "pause":
-        this.emit("pause_request", {
-          paused: payload.paused as boolean,
-          reason: payload.reason as string | undefined,
-          begin: payload.begin as number | undefined,
-          end: payload.end as number | undefined,
-        });
-        break;
-
-      case "on_stop":
-        this.emit("stopped", undefined);
-        break;
-
-      case "on_error":
-        this.emit("error", { message: payload.message as string });
-        break;
-
-      default:
-        this.onLog(`Unhandled message type: ${type}`);
-    }
+      this.onLog(`Failed to create WebSocket: ${e}`);
+      this._state = "disconnected";
+    });
   }
 
   /**
    * Send a message to MistServer
    */
   send(cmd: Record<string, unknown>): boolean {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!this.isConnected) {
       this.onLog("Cannot send: WebSocket not connected");
       return false;
     }
 
-    try {
-      this.ws.send(JSON.stringify(cmd));
-      return true;
-    } catch (e) {
-      this.onLog(`Failed to send message: ${e}`);
-      return false;
+    const sent = this._transport.send(cmd as MistCommand);
+    if (!sent) {
+      this.onLog("Failed to send message");
     }
+    return sent;
   }
 
   /**
@@ -291,17 +191,37 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
         return;
       }
 
-      // Cancel previous seek if pending
       if (this.seekPromise) {
         this.seekPromise.reject("New seek requested");
+        this.seekHandle?.cancel("New seek requested");
       }
 
-      // Send seek command (time in ms for MistServer)
       const seekTime = time === "live" ? "live" : time * 1000;
-      this.send({ type: "seek", seek_time: seekTime });
+      this.seekHandle = this._transport.once("seek");
+      this.seekHandle.promise
+        .then(() => {
+          resolve("Seeked");
+          if (this.seekPromise?.resolve === resolve) {
+            this.seekPromise = null;
+            this.seekHandle = null;
+          }
+        })
+        .catch((e) => {
+          reject(e instanceof Error ? e.message : String(e));
+          if (this.seekPromise?.reject === reject) {
+            this.seekPromise = null;
+            this.seekHandle = null;
+          }
+        });
 
-      // Store promise handlers
       this.seekPromise = { resolve, reject };
+
+      if (!this.send({ type: "seek", seek_time: seekTime })) {
+        this.seekHandle.cancel("Send failed");
+        this.seekPromise = null;
+        this.seekHandle = null;
+        reject("Send failed");
+      }
     });
   }
 
@@ -347,21 +267,19 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
    * Close the connection
    */
   close(): void {
-    if (this.timeoutId) {
-      clearTimeout(this.timeoutId);
-      this.timeoutId = null;
-    }
+    this.clearTimeout();
 
     if (this.seekPromise) {
       this.seekPromise.reject("Connection closed");
       this.seekPromise = null;
     }
+    this.seekHandle?.cancel("Connection closed");
+    this.seekHandle = null;
 
-    if (this.ws) {
+    if (this._state !== "disconnected") {
       this._state = "closed";
-      this.ws.close();
-      this.ws = null;
     }
+    this._transport.disconnect("Connection closed");
   }
 
   /**
@@ -369,7 +287,122 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
    */
   destroy(): void {
     this.close();
+    this._transport.destroy();
     this.removeAllListeners();
+  }
+
+  private bindTransport(): void {
+    this._transport.on("statechange", ({ state, code }) => {
+      switch (state) {
+        case "connecting":
+        case "reconnecting":
+          this._state = "connecting";
+          break;
+        case "connected":
+          this.clearTimeout();
+          this._state = "connected";
+          this.onLog("WebSocket connected");
+          this.emit("connected", undefined);
+          break;
+        case "disconnected":
+          this.clearTimeout();
+          if (this.suppressNextTransportDisconnect) {
+            this.suppressNextTransportDisconnect = false;
+            break;
+          }
+          if (this._state === "connecting" && code === undefined) {
+            this._state = "disconnected";
+            break;
+          }
+          this._state = "closed";
+          this.onLog(`WebSocket closed (code: ${code ?? 0})`);
+          this.emit("disconnected", { code: code ?? 0 });
+          break;
+        case "closed":
+          this._state = "closed";
+          break;
+      }
+    });
+
+    this._transport.on("event", ({ event }) => this.handleEvent(event));
+    this._transport.on("error", ({ message }) => {
+      this.onLog(`WebSocket error: ${message}`);
+    });
+  }
+
+  /**
+   * Handle incoming message from MistServer
+   */
+  private handleEvent(event: MistEvent): void {
+    switch (event.type) {
+      case "on_connected":
+        break;
+
+      case "on_disconnected":
+        this._state = "disconnected";
+        this.emit("disconnected", { code: event.code ?? 0 });
+        break;
+
+      case "on_answer_sdp":
+        this.emit("answer_sdp", {
+          result: event.result ?? false,
+          answer_sdp: event.answer_sdp ?? "",
+        });
+        break;
+
+      case "on_time":
+        this.emit("time_update", {
+          current: event.current,
+          end: event.end,
+          begin: event.begin,
+          tracks: event.tracks as string[] | undefined,
+          paused: event.paused,
+          live_point: event.live_point,
+          play_rate_curr: event.play_rate_curr,
+        });
+        break;
+
+      case "seek":
+        this.emit("seeked", {
+          live_point: event.live_point,
+        });
+        break;
+
+      case "set_speed":
+        this.emit("speed_changed", {
+          play_rate: event.play_rate ?? "auto",
+          play_rate_curr: event.play_rate_curr ?? event.play_rate ?? "auto",
+        });
+        break;
+
+      case "pause":
+        this.emit("pause_request", {
+          paused: event.paused ?? false,
+          reason: event.reason,
+          begin: event.begin,
+          end: event.end,
+        });
+        break;
+
+      case "on_stop":
+        this.emit("stopped", undefined);
+        break;
+
+      case "on_error":
+      case "error":
+        this.emit("error", { message: event.message ?? "Unknown Mist signaling error" });
+        break;
+
+      default:
+        this.onLog(`Unhandled message type: ${event.type}`);
+    }
+  }
+
+  private clearTimeout(): void {
+    if (this.timeoutId) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = null;
+    }
   }
 }
 

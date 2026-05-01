@@ -61,12 +61,23 @@ describe("SyncController fast-forward handshake parity", () => {
       serverJitterMs: 100,
     });
 
-    // Next on_time: still no set_speed, not in fast-forward => should slow down.
+    // First follow-up on_time keeps the pending request open.
     await sleep(120);
     sync.evaluateBuffer(desired * 0.2, {
       playRateCurr: "auto",
       serverCurrentMs: 5_050,
       serverEndMs: 6_050,
+      serverJitterMs: 100,
+    });
+
+    expect(speedReasons.includes("slowdown")).toBe(false);
+
+    // Second follow-up on_time: still no set_speed, not in fast-forward => should slow down.
+    await sleep(120);
+    sync.evaluateBuffer(desired * 0.2, {
+      playRateCurr: "auto",
+      serverCurrentMs: 5_100,
+      serverEndMs: 6_100,
       serverJitterMs: 100,
     });
 

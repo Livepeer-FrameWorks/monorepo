@@ -20,6 +20,7 @@
  */
 
 import { TypedEventEmitter } from "./EventEmitter";
+import { MistDataChannelTransport } from "./mist/transports/data-channel-transport";
 
 export interface MistControlTimeUpdate {
   /** Current playback position in ms */
@@ -54,12 +55,14 @@ export interface MistControlChannelEvents {
 
 export class MistControlChannel extends TypedEventEmitter<MistControlChannelEvents> {
   private channel: RTCDataChannel;
+  public readonly transport: MistDataChannelTransport;
   private queue: Record<string, unknown>[] = [];
   private _isOpen = false;
 
   constructor(channel: RTCDataChannel) {
     super();
     this.channel = channel;
+    this.transport = new MistDataChannelTransport(channel);
 
     channel.addEventListener("open", () => {
       this._isOpen = true;
@@ -137,13 +140,12 @@ export class MistControlChannel extends TypedEventEmitter<MistControlChannelEven
   }
 
   send(cmd: Record<string, unknown>): boolean {
-    if (!this._isOpen) {
+    if (!this._isOpen || this.transport.state !== "connected") {
       this.queue.push(cmd);
       return false;
     }
     try {
-      this.channel.send(JSON.stringify(cmd));
-      return true;
+      return this.transport.send(cmd as any);
     } catch {
       return false;
     }

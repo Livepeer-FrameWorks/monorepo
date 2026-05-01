@@ -4,7 +4,6 @@
  * Low-latency WebSocket MP4 streaming using MediaSource Extensions.
  * Protocol: Custom MEWS (MistServer Extended WebSocket)
  *
- * Ported from reference: mews.js (MistMetaPlayer)
  */
 
 import { BasePlayer } from "../../core/PlayerInterface";
@@ -20,6 +19,14 @@ import { SourceBufferManager } from "./SourceBufferManager";
 import { translateCodec } from "../../core/CodecUtils";
 import { getBrowserInfo, isFileProtocol, isIPadWithBrokenHEVC } from "../../core/detector";
 import { formatQualityLabel } from "../../core/TimeFormat";
+import { DeliveryPolicy } from "../../core/delivery/delivery-policy";
+import { DesiredBufferModel } from "../../core/delivery/desired-buffer";
+import { normalizeLiveCatchupConfig } from "../../core/delivery/live-catchup";
+import { decideDeadPointRecovery } from "../../core/mist/dead-point-recovery";
+import type { MistPlayRate } from "../../core/mist/protocol";
+import { ServerDelayTracker } from "../../core/mist/server-delay";
+import { CallbackMistTransport } from "../../core/mist/transports/callback-transport";
+import { MewsBufferedProbe } from "./BufferProbe.MewsBuffered";
 import type { MewsMessage, AnalyticsConfig, OnTimeMessage, MewsMessageListener } from "./types";
 
 export class MewsWsPlayerImpl extends BasePlayer {
@@ -38,9 +45,8 @@ export class MewsWsPlayerImpl extends BasePlayer {
   private isDestroyed = false;
   private debugging = false;
 
-  // Server delay estimation (ported from mews.js:833-882)
-  private serverDelays: number[] = [];
-  private pendingDelayTypes: Record<string, number> = {};
+  // Server delay estimation
+  private serverDelays = new ServerDelayTracker(5, () => Date.now());
 
   // Supported codecs (short names for MistServer protocol)
   private supportedCodecs: string[] = [];
@@ -49,48 +55,41 @@ export class MewsWsPlayerImpl extends BasePlayer {
   private isReady = false;
   private readyResolvers: Array<() => void> = [];
 
-  // Duration tracking (ported from mews.js:1113)
+  // Duration tracking
   private lastDuration = Infinity;
 
-  // Live vs VoD detection (ported from mews.js:105-107, 508)
+  // Live vs VoD detection
   private streamType: "live" | "vod" | "unknown" = "unknown";
 
-  // Current tracks for change detection (ported from mews.js:455, 593-619)
+  // Current tracks for change detection
   private currentTracks: string[] = [];
   private selectedTrack: string = "auto";
   private streamInfoRef: StreamInfo | null = null;
 
-  // Last codecs for track switch comparison (ported from mews.js:687)
+  // Last codecs for track switch comparison
   private lastCodecs: string[] | null = null;
 
-  // Playback rate tuning (ported from mews.js:453, 509-545)
-  // "direct" prevents compounding; "multiplicative" matches upstream behavior
+  // Playback rate tuning
+  // "direct" prevents compounding; "multiplicative" preserves server-authored scaling.
   private rateAdjustmentMode: "direct" | "multiplicative" = "direct";
   private requestedRate = 1;
+  private desiredBuffer: DesiredBufferModel | null = null;
+  private requestBuffer: DesiredBufferModel | null = null;
+  private bufferProbe: MewsBufferedProbe | null = null;
+  private deliveryPolicy: DeliveryPolicy | null = null;
 
-  // ABR state (ported from mews.js:1266-1314)
+  // ABR state
   private bitCounter: number[] = [];
   private bitsSince: number[] = [];
   private currentBps: number | null = null;
   private nWaiting = 0;
   private nWaitingThreshold = 3;
 
-  // Seeking state (ported from mews.js:1169-1175)
+  // Seeking state
   private seeking = false;
 
-  // Autoplay option (mews.js:135-136 — checkReady calls play when autoplay is set)
+  // Autoplay option
   private autoplay = false;
-  private liveCatchupWindowMs: number | null = null;
-  private lastLiveCatchupAt = 0;
-  private keepAwayExtraMs = 0;
-  private pendingBufferRequest: {
-    at: number;
-    bufferMs: number;
-    desiredMs: number;
-    serverCurrentMs: number;
-    gotSetSpeed: boolean;
-    sawFastForward: boolean;
-  } | null = null;
 
   // Seekable range from on_time messages (begin/end in ms)
   private seekableBeginMs: number | null = null;
@@ -109,7 +108,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
     source: StreamSource,
     streamInfo: StreamInfo
   ): boolean | string[] {
-    // Basic requirements check (mews.js:10)
+    // Basic requirements check
     if (!("WebSocket" in window) || !("MediaSource" in window) || !("Promise" in window)) {
       return false;
     }
@@ -119,18 +118,18 @@ export class MewsWsPlayerImpl extends BasePlayer {
       return false;
     }
 
-    // Safari cannot play WebM via MSE (reference html5.js:28-29)
+    // Safari cannot play WebM via MSE
     const browser = getBrowserInfo();
     if (mimetype.includes("webm") && browser.isSafari) {
       return false;
     }
 
-    // macOS MSE breaks MEWS playback (mews.js:23-26)
+    // macOS MSE breaks MEWS playback
     if (navigator.platform.toUpperCase().indexOf("MAC") >= 0) {
       return false;
     }
 
-    // Check codec compatibility using ACTUAL stream codecs (mews.js:45-83)
+    // Check codec compatibility against the stream's advertised tracks.
     const container = mimetype.split("/")[2] || "mp4";
     const playableTracks: Record<string, number> = {};
     let hasSubtitles = false;
@@ -160,7 +159,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
       }
     }
 
-    // Check for subtitle source (mews.js:73-80)
+    // Check for subtitle source
     if (hasSubtitles) {
       const hasVttSource = streamInfo.source?.some((s) => s.type === "html5/text/vtt");
       if (hasVttSource) {
@@ -184,24 +183,18 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
     const video = document.createElement("video");
     video.classList.add("fw-player-video");
-    video.setAttribute("playsinline", ""); // iphones (mews.js:92)
-    video.setAttribute("crossorigin", "anonymous"); // mews.js:111
+    video.setAttribute("playsinline", "");
+    video.setAttribute("crossorigin", "anonymous");
 
-    // Apply options (mews.js:95-110)
+    // Apply options
     this.autoplay = !!options.autoplay;
-    this.liveCatchupWindowMs =
-      typeof options.liveCatchup === "number"
-        ? options.liveCatchup * 1000
-        : options.liveCatchup
-          ? 60000
-          : null;
     if (options.autoplay) video.autoplay = true;
     if (options.muted) video.muted = true;
     video.controls = options.controls === true;
     if (options.loop) video.loop = true;
     if (options.poster) video.poster = options.poster;
 
-    // Live streams don't loop (mews.js:105-107)
+    // Live streams don't loop
     if (this.streamType === "live") {
       video.loop = false;
     }
@@ -209,6 +202,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
     this.videoElement = video;
     container.appendChild(video);
     this.setupVideoEventListeners(video, options);
+    this.setupDeliveryPolicy(video, options);
 
     // Analytics configuration
     const anyOpts = options as any;
@@ -227,10 +221,10 @@ export class MewsWsPlayerImpl extends BasePlayer {
     // Fallback: will be determined by server on_time messages (end === 0 means live)
 
     try {
-      // Initialize MediaSource (mews.js:138-196)
+      // Initialize MediaSource
       this.mediaSource = new MediaSource();
 
-      // Set up MediaSource event handlers (mews.js:143-195)
+      // Set up MediaSource event handlers
       this.mediaSource.addEventListener("sourceopen", () => this.handleSourceOpen(source));
       this.mediaSource.addEventListener("sourceclose", () => this.handleSourceClose());
       this.mediaSource.addEventListener("sourceended", () => this.handleSourceEnded());
@@ -248,7 +242,6 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Handle MediaSource sourceopen event.
-   * Ported from mews.js:143-148, 198-204, 885-902
    */
   private handleSourceOpen(source: StreamSource): void {
     if (!this.mediaSource || !this.videoElement) return;
@@ -280,13 +273,73 @@ export class MewsWsPlayerImpl extends BasePlayer {
       onError: (msg) => this.emit("error", msg),
       shouldReconnect: () => !this.sbManager?.paused && !this.videoElement?.error,
     });
+    this.wsManager.addSendDecorator((cmd) => {
+      if ((cmd.type === "play" || cmd.type === "seek") && cmd.ff_add === undefined) {
+        return { ...cmd, ff_add: this.getForwardBufferMs() };
+      }
+      return cmd;
+    });
 
     this.wsManager.connect();
   }
 
+  private setupDeliveryPolicy(video: HTMLVideoElement, options: PlayerOptions): void {
+    this.bufferProbe = new MewsBufferedProbe(video);
+    this.desiredBuffer = new DesiredBufferModel({
+      baseMs: () => (this.streamType === "live" ? 600 : 3000),
+    });
+    this.desiredBuffer.setFactor("serverDelay", () => this.getServerDelay());
+    this.desiredBuffer.setFactor("liveJitter", () =>
+      this.streamType === "live" ? (this.bufferProbe?.sample().jitterMs ?? 0) : 0
+    );
+    this.requestBuffer = new DesiredBufferModel({
+      baseMs: () => (this.streamType === "live" ? 600 : 1000),
+    });
+    this.requestBuffer.setFactor("serverDelay", () => this.getServerDelay());
+
+    this.deliveryPolicy = new DeliveryPolicy({
+      transport: this.createDeliveryTransport(),
+      probe: this.bufferProbe,
+      desired: this.desiredBuffer,
+      liveCatchup: normalizeLiveCatchupConfig(options.liveCatchup, {
+        undefinedMeans: "off",
+      }),
+      isLive: () => this.streamType === "live",
+      speedDownThreshold: 0.6,
+      speedUpThreshold: 2,
+      maxSpeedUp: 1.08,
+      minSpeedDown: 0.98,
+      serverRateMode: "vod-only",
+      localRateMode: "always",
+      liveSetSpeedToggle: true,
+      bucketHysteresis: true,
+      pendingFastForward: true,
+      applyLocalRate: (rate) => {
+        if (this.streamType === "live") {
+          this.applyLocalPlaybackRate(rate);
+        }
+      },
+      tickSource: "on_time",
+      now: () => performance.now(),
+    });
+
+    this.deliveryPolicy.on("bufferlow", (data) => this.emit("bufferlow", data));
+    this.deliveryPolicy.on("serverratesuggest", ({ rate }) => {
+      if (this.streamType === "live") return;
+      this.requestedRate = rate === "auto" ? 1 : rate;
+      this.send({ type: "set_speed", play_rate: rate });
+    });
+  }
+
+  private createDeliveryTransport(): CallbackMistTransport {
+    return new CallbackMistTransport((cmd) => {
+      this.send(cmd);
+      return true;
+    });
+  }
+
   /**
    * Handle MediaSource sourceclose event.
-   * Ported from mews.js:150-153
    */
   private handleSourceClose(): void {
     if (this.debugging) console.log("MEWS: MediaSource closed");
@@ -295,7 +348,6 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Handle MediaSource sourceended event.
-   * Ported from mews.js:154-194
    */
   private handleSourceEnded(): void {
     if (this.debugging) console.log("MEWS: MediaSource ended");
@@ -304,10 +356,9 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Handle WebSocket open event.
-   * Ported from mews.js:401-403, 885-902
    */
   private handleWsOpen(): void {
-    // Request codec data (mews.js:885-902)
+    // Request codec data
     const listener: MewsMessageListener = (msg) => {
       // Got codec data, set up source buffer
       if (this.mediaSource?.readyState === "open") {
@@ -322,7 +373,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
           }
           this.readyResolvers = [];
 
-          // checkReady (mews.js:128-141): auto-play once WS + MS + SB are all ready
+          // checkReady: auto-play once WS + MS + SB are all ready
           if (this.autoplay) {
             this.play().catch(() => {});
           }
@@ -334,14 +385,13 @@ export class MewsWsPlayerImpl extends BasePlayer {
     this.wsManager?.addListener("codec_data", listener);
     this.logDelay("codec_data");
 
-    // Send request with SHORT codec names (mews.js:901)
+    // Send request with SHORT codec names
     // CRITICAL: MistServer expects short names like "H264", not browser codec strings
     this.send({ type: "request_codec_data", supported_codecs: this.supportedCodecs });
   }
 
   /**
    * Handle WebSocket close event with reconnection logic.
-   * Ported from mews.js:408-431
    */
   private handleWsClose(): void {
     if (this.debugging) console.log("MEWS: WebSocket closed");
@@ -351,14 +401,13 @@ export class MewsWsPlayerImpl extends BasePlayer {
   /**
    * Handle incoming WebSocket message.
    * Routes to binary append or JSON control message handler.
-   * Ported from mews.js:456-830
    */
   private handleMessage(data: ArrayBuffer | string): void {
     if (typeof data === "string") {
       try {
         const msg = JSON.parse(data) as MewsMessage;
         this.handleControlMessage(msg);
-        // Notify listeners (mews.js:795-799)
+        // Notify listeners
         this.wsManager?.notifyListeners(msg);
       } catch (e) {
         if (this.debugging) console.error("MEWS: Failed to parse message", e);
@@ -366,7 +415,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
       return;
     }
 
-    // Binary data - MP4 segment (mews.js:802-829)
+    // Binary data - MP4 segment
     const bytes = new Uint8Array(data);
     this.sbManager?.append(bytes);
     this.trackBits(data);
@@ -374,7 +423,6 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Handle JSON control messages.
-   * Ported from mews.js:461-799
    */
   private handleControlMessage(msg: MewsMessage): void {
     if (this.debugging && msg.type !== "on_time") {
@@ -415,16 +463,15 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Handle on_stop message - stream ended (VoD).
-   * Ported from mews.js:462-471
    */
   private handleOnStop(): void {
     // Mark as VoD (stream ended)
     this.streamType = "vod";
 
-    // Prevent reconnection after server closes the WS (mews.js:469-471)
+    // Prevent reconnection after server closes the WS
     this.wsManager?.disableReconnection();
 
-    // Wait for buffer to finish playing (mews.js:465-469)
+    // Wait for buffer to finish playing
     const onWaiting = () => {
       if (this.sbManager) {
         this.sbManager.paused = true;
@@ -437,7 +484,6 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Handle on_time message - playback time sync.
-   * Ported from mews.js:473-621
    */
   private handleOnTime(msg: OnTimeMessage): void {
     const data = msg.data;
@@ -451,14 +497,15 @@ export class MewsWsPlayerImpl extends BasePlayer {
     if (data.begin !== undefined) this.seekableBeginMs = data.begin;
     if (endMs !== undefined) this.seekableEndMs = endMs;
 
-    // Buffer calculation (mews.js:474)
+    // Buffer calculation
     const buffer = currentMs - this.videoElement.currentTime * 1000;
-    const serverDelay = this.getServerDelay();
-    const desiredBuffer = this.getDesiredBufferMs(serverDelay);
-    const desiredBufferWithJitter = desiredBuffer + jitter;
-
-    // VoD gets extra buffer (mews.js:480)
-    const actualDesiredBuffer = this.streamType !== "live" ? desiredBuffer + 2000 : desiredBuffer;
+    this.bufferProbe?.updateServerState({
+      currentMs,
+      endMs,
+      jitterMs: jitter,
+      playRateCurr: data.play_rate_curr,
+    });
+    const desiredBuffer = this.getForwardBufferMs();
 
     if (this.debugging) {
       console.log(
@@ -484,7 +531,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
       return;
     }
 
-    // Update duration (mews.js:501-504)
+    // Update duration
     if (endMs !== undefined && this.lastDuration !== endMs / 1000) {
       this.lastDuration = endMs / 1000;
       // Duration is updated via native video element durationchange event
@@ -493,30 +540,15 @@ export class MewsWsPlayerImpl extends BasePlayer {
     // Mark source buffer as not paused
     this.sbManager.paused = false;
 
-    // Playback rate tuning for LIVE streams (mews.js:508-545)
-    if (this.streamType === "live") {
-      if (this.applySharedBufferPolicy(buffer, desiredBufferWithJitter, data)) return;
-      this.tuneLivePlaybackRate(buffer, desiredBufferWithJitter, data.play_rate_curr);
-      const distanceToLiveMs = (endMs || currentMs) - currentMs;
-      if (
-        data.play_rate_curr === "auto" &&
-        (!this.liveCatchupWindowMs || distanceToLiveMs > this.liveCatchupWindowMs)
-      ) {
-        this.send({ type: "set_speed", play_rate: 1 });
-      } else if (
-        data.play_rate_curr === 1 &&
-        this.liveCatchupWindowMs &&
-        distanceToLiveMs < this.liveCatchupWindowMs
-      ) {
-        this.send({ type: "set_speed", play_rate: "auto" });
-      }
-    } else {
-      // VoD - adjust server delivery speed (mews.js:547-586)
-      if (this.applySharedBufferPolicy(buffer, actualDesiredBuffer, data)) return;
-      this.tuneVodDeliverySpeed(buffer, actualDesiredBuffer, data.play_rate_curr);
-    }
+    this.deliveryPolicy?.ingestOnTime({
+      current: currentMs,
+      end: endMs ?? currentMs,
+      begin: data.begin ?? 0,
+      jitter,
+      play_rate_curr: data.play_rate_curr,
+    });
 
-    // Track change detection (mews.js:593-619)
+    // Track change detection
     if (data.tracks && this.currentTracks.join(",") !== data.tracks.join(",")) {
       if (this.debugging) {
         for (const trackId of data.tracks) {
@@ -529,209 +561,11 @@ export class MewsWsPlayerImpl extends BasePlayer {
     }
   }
 
-  /**
-   * Tune playback rate for live streams.
-   * Ported from mews.js:508-545
-   *
-   * Fixed: Use direct assignment instead of multiplication to prevent
-   * compounding rate adjustments on each on_time message.
-   */
-  private tuneLivePlaybackRate(
-    buffer: number,
-    desiredBuffer: number,
-    playRateCurr?: "auto" | "fast-forward" | number
-  ): void {
-    if (!this.videoElement) return;
-
-    const applyRate = (rate: number) => {
-      if (this.rateAdjustmentMode === "multiplicative") {
-        this.videoElement!.playbackRate *= rate / this.requestedRate;
-      } else {
-        this.videoElement!.playbackRate = rate;
-      }
-      this.requestedRate = rate;
-    };
-
-    if (this.requestedRate === 1) {
-      if (playRateCurr === "auto" && this.videoElement.currentTime > 0) {
-        if (buffer > desiredBuffer * 2) {
-          // Buffer too big, speed up (mews.js:513-516)
-          const rate = 1 + Math.min(1, (buffer - desiredBuffer) / desiredBuffer) * 0.08;
-          applyRate(rate);
-          if (this.debugging) console.log("MEWS: speeding up to", this.requestedRate);
-        } else if (buffer < 0) {
-          // Negative buffer, slow down (mews.js:518-521)
-          applyRate(0.8);
-          if (this.debugging) console.log("MEWS: slowing down to", this.requestedRate);
-        } else if (buffer < desiredBuffer / 2) {
-          // Buffer too small, slow down (mews.js:523-526)
-          const rate = 1 + Math.min(1, (buffer - desiredBuffer) / desiredBuffer) * 0.08;
-          applyRate(rate);
-          if (this.debugging) console.log("MEWS: adjusting to", this.requestedRate);
-        }
-      }
-    } else if (this.requestedRate > 1) {
-      if (buffer < desiredBuffer) {
-        applyRate(1);
-        if (this.debugging) console.log("MEWS: returning to normal rate");
-      }
-    } else {
-      if (buffer > desiredBuffer) {
-        applyRate(1);
-        if (this.debugging) console.log("MEWS: returning to normal rate");
-      }
-    }
-  }
-
-  /**
-   * Tune server delivery speed for VoD.
-   * Ported from mews.js:547-586
-   */
-  private tuneVodDeliverySpeed(
-    buffer: number,
-    desiredBuffer: number,
-    playRateCurr?: "auto" | "fast-forward" | number
-  ): void {
-    if (this.requestedRate === 1) {
-      if (playRateCurr === "auto") {
-        if (buffer < desiredBuffer / 2) {
-          if (buffer < -10000) {
-            // Way behind, seek to current position (mews.js:553-554)
-            this.send({
-              type: "seek",
-              seek_time: Math.round((this.videoElement?.currentTime || 0) * 1000),
-              ff_add: this.getForwardBufferMs(),
-            });
-          } else {
-            // Request faster delivery (mews.js:557-560)
-            this.requestedRate = 2;
-            this.send({ type: "set_speed", play_rate: this.requestedRate });
-            if (this.debugging) console.log("MEWS: requesting faster delivery");
-          }
-        } else if (buffer - desiredBuffer > desiredBuffer) {
-          // Too much buffer, slow down (mews.js:563-566)
-          this.requestedRate = 0.5;
-          this.send({ type: "set_speed", play_rate: this.requestedRate });
-          if (this.debugging) console.log("MEWS: requesting slower delivery");
-        }
-      }
-    } else if (this.requestedRate > 1) {
-      if (buffer > desiredBuffer) {
-        // Enough buffer, return to realtime (mews.js:571-575)
-        this.send({ type: "set_speed", play_rate: "auto" });
-        this.requestedRate = 1;
-        if (this.debugging) console.log("MEWS: returning to realtime delivery");
-      }
-    } else {
-      if (buffer < desiredBuffer) {
-        // Buffer small enough, return to realtime (mews.js:579-583)
-        this.send({ type: "set_speed", play_rate: "auto" });
-        this.requestedRate = 1;
-        if (this.debugging) console.log("MEWS: returning to realtime delivery");
-      }
-    }
-  }
-
-  private getDesiredBufferMs(serverDelay = this.getServerDelay()): number {
-    const base = this.streamType === "live" ? 100 : 500;
-    return Math.round(base + 500 + this.keepAwayExtraMs + serverDelay);
-  }
-
   private getForwardBufferMs(): number {
-    return Math.max(0, this.getDesiredBufferMs());
-  }
-
-  private applySharedBufferPolicy(
-    buffer: number,
-    desired: number,
-    data: OnTimeMessage["data"]
-  ): boolean {
-    if (!this.videoElement) return false;
-
-    const now = performance.now();
-    const playRateCurr = data.play_rate_curr;
-    const serverCurrentMs = data.current;
-    const serverEndMs = data.end;
-
-    if (this.pendingBufferRequest) {
-      const pending = this.pendingBufferRequest;
-
-      if (!pending.gotSetSpeed) {
-        if (playRateCurr !== "fast-forward") {
-          this.keepAwayExtraMs = Math.min(this.keepAwayExtraMs + 100, 500);
-          this.applyLocalPlaybackRate(0.98);
-          this.pendingBufferRequest = null;
-        }
-        return true;
-      }
-
-      if (pending.sawFastForward) {
-        const increase = serverCurrentMs - pending.serverCurrentMs - (now - pending.at);
-        if (pending.bufferMs + increase < pending.desiredMs * 0.6) {
-          this.keepAwayExtraMs = Math.min(this.keepAwayExtraMs + 100, 500);
-          this.applyLocalPlaybackRate(0.98);
-        }
-      }
-      this.pendingBufferRequest = null;
-      return true;
-    }
-
-    if (
-      buffer < desired * 0.6 &&
-      playRateCurr !== "fast-forward" &&
-      this.requestedRate >= 1 &&
-      serverEndMs !== undefined &&
-      serverCurrentMs < serverEndMs
-    ) {
-      this.emit("bufferlow", { current: buffer, desired });
-      this.pendingBufferRequest = {
-        at: now,
-        bufferMs: buffer,
-        desiredMs: desired,
-        serverCurrentMs,
-        gotSetSpeed: false,
-        sawFastForward: false,
-      };
-      this.send({ type: "fast_forward", ff_add: Math.round(desired) });
-      if (this.requestedRate > 1) {
-        this.applyLocalPlaybackRate(1);
-      }
-      return true;
-    }
-
-    if (buffer < desired * 0.6 && serverEndMs !== undefined && serverCurrentMs >= serverEndMs) {
-      this.emit("bufferlow", { current: buffer, desired });
-      this.applyLocalPlaybackRate(0.98);
-      return true;
-    }
-
-    if (this.requestedRate < 1 && buffer >= desired) {
-      this.applyLocalPlaybackRate(1);
-      this.keepAwayExtraMs = Math.max(0, this.keepAwayExtraMs - 50);
-      return true;
-    }
-
-    if (
-      this.streamType === "live" &&
-      this.liveCatchupWindowMs &&
-      playRateCurr !== "fast-forward" &&
-      serverEndMs !== undefined
-    ) {
-      const distanceToLive = serverEndMs - serverCurrentMs;
-      const jitter = data.jitter || 0;
-      if (
-        distanceToLive < this.liveCatchupWindowMs &&
-        distanceToLive > Math.max(jitter * 1.1, jitter + 250) &&
-        buffer - desired < 1000 &&
-        now - this.lastLiveCatchupAt > 2000
-      ) {
-        this.lastLiveCatchupAt = now;
-        this.send({ type: "fast_forward", ff_add: 5000 });
-        return true;
-      }
-    }
-
-    return false;
+    return Math.max(
+      0,
+      this.requestBuffer?.getDesiredMs() ?? this.desiredBuffer?.getDesiredMs() ?? 0
+    );
   }
 
   private applyLocalPlaybackRate(rate: number): void {
@@ -749,14 +583,11 @@ export class MewsWsPlayerImpl extends BasePlayer {
     const playRateCurr = data.play_rate_curr as "auto" | "fast-forward" | number | undefined;
     const playRatePrev = data.play_rate_prev as "auto" | "fast-forward" | number | undefined;
 
-    if (this.pendingBufferRequest) {
-      this.pendingBufferRequest.gotSetSpeed = true;
-      if (playRatePrev === "fast-forward") {
-        this.pendingBufferRequest.sawFastForward = true;
-      } else {
-        this.pendingBufferRequest = null;
-      }
-    }
+    this.deliveryPolicy?.ingestSetSpeedAck({
+      type: "set_speed",
+      play_rate_curr: playRateCurr,
+      play_rate_prev: playRatePrev,
+    });
 
     if (typeof playRateCurr === "number" && this.streamType !== "live") {
       this.requestedRate = playRateCurr;
@@ -765,7 +596,6 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Handle tracks message - codec switch.
-   * Ported from mews.js:623-788
    */
   private handleTracks(msg: MewsMessage): void {
     const codecs: string[] = msg.data?.codecs || [];
@@ -776,18 +606,18 @@ export class MewsWsPlayerImpl extends BasePlayer {
       return;
     }
 
-    // Check if codecs are same as before (mews.js:676)
+    // Check if codecs are same as before
     const prevCodecs = this.lastCodecs || this.sbManager?.getCodecs() || [];
     if (this.codecsEqual(prevCodecs, codecs)) {
       if (this.debugging) console.log("MEWS: keeping buffer, codecs same");
-      // If at position 0 and switch point is not 0, seek to switch point (mews.js:678-679)
+      // If at position 0 and switch point is not 0, seek to switch point
       if (this.videoElement?.currentTime === 0 && switchPointMs && switchPointMs !== 0) {
         this.setSeekingPosition(switchPointMs / 1000);
       }
       return;
     }
 
-    // Different codecs, save for next comparison (mews.js:687)
+    // Different codecs, save for next comparison
     this.lastCodecs = codecs;
 
     // Change codecs (will handle msgqueue internally)
@@ -796,22 +626,18 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Handle pause message.
-   * Ported from mews.js:790-792
    */
   private handlePause(msg: MewsMessage): void {
     const data = msg.data || {};
-    if (data.reason === "at_dead_point" && data.begin !== undefined && data.end !== undefined) {
-      const isSlowed = this.requestedRate < 1;
-      const seekTo = data.begin + (isSlowed ? 1000 : 5000);
-      if (!isNaN(seekTo) && seekTo > 0) {
-        if (isSlowed) {
-          this.requestedRate = 1;
-          if (this.videoElement) this.videoElement.playbackRate = 1;
-          this.send({ type: "set_speed", play_rate: "auto" });
-        }
-        this.send({ type: "seek", seek_time: seekTo, ff_add: this.getForwardBufferMs() });
-        return;
+    const recovery = decideDeadPointRecovery(data, this.requestedRate);
+    if (recovery.kind === "seek_recover") {
+      if (recovery.resetSpeedToAuto) {
+        this.requestedRate = 1;
+        if (this.videoElement) this.videoElement.playbackRate = 1;
+        this.send({ type: "set_speed", play_rate: "auto" });
       }
+      this.send({ type: "seek", seek_time: recovery.seekToMs });
+      return;
     }
     if (this.sbManager) {
       this.sbManager.paused = true;
@@ -820,20 +646,19 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Set video currentTime with retry logic.
-   * Ported from mews.js:635-672
    */
   private setSeekingPosition(tSec: number, retries = 10): void {
     if (!this.videoElement || !this.sbManager || retries <= 0) return;
 
     const currPos = this.videoElement.currentTime;
     if (currPos > tSec) {
-      // Don't seek backwards (mews.js:637-639)
+      // Don't seek backwards
       tSec = currPos;
     }
 
     const buffered = this.videoElement.buffered;
     if (!buffered.length || buffered.end(buffered.length - 1) < tSec) {
-      // Desired position not in buffer yet, wait for more data (mews.js:641-644)
+      // Desired position not in buffer yet, wait for more data
       this.sbManager.scheduleAfterUpdate(() => this.setSeekingPosition(tSec, retries - 1));
       return;
     }
@@ -841,7 +666,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
     this.videoElement.currentTime = tSec;
 
     if (this.videoElement.currentTime < tSec - 0.001) {
-      // Didn't reach target, retry (mews.js:648-651)
+      // Didn't reach target, retry
       this.sbManager.scheduleAfterUpdate(() => this.setSeekingPosition(tSec, retries - 1));
     }
   }
@@ -861,13 +686,12 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Play with optional skip to live edge.
-   * Ported from mews.js:959-1023
    */
   async play(): Promise<void> {
     const v = this.videoElement;
     if (!v) return;
 
-    // If already playing, nothing to do (mews.js:961-964)
+    // If already playing, nothing to do
     if (!v.paused) return;
 
     // Wait for ready state (codec_data received) with timeout
@@ -883,7 +707,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
       });
     }
 
-    // Use listener to wait for on_time before playing (mews.js:973-1017)
+    // Use listener to wait for on_time before playing
     return new Promise((resolve, reject) => {
       // Flag to prevent race condition where multiple on_time messages
       // could trigger seek before the first completes
@@ -905,7 +729,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
         const data = (msg as OnTimeMessage).data;
 
         if (this.streamType === "live") {
-          // Live stream - wait for buffer then seek to live edge (mews.js:978-998)
+          // Live stream - wait for buffer then seek to live edge
           const waitForBuffer = () => {
             if (!v.buffered.length) return;
 
@@ -934,7 +758,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
           // Wait for buffer via updateend
           this.sbManager?.scheduleAfterUpdate(waitForBuffer);
         } else {
-          // VoD - just play when we have data (mews.js:1010-1016)
+          // VoD - just play when we have data
           this.sbManager!.paused = false;
           if (v.buffered.length && v.buffered.start(0) > v.currentTime) {
             v.currentTime = v.buffered.start(0);
@@ -945,20 +769,18 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
       this.wsManager?.addListener("on_time", onTime);
 
-      // Send play command (mews.js:1020-1022)
+      // Send play command
       const skipToLive = this.streamType === "live" && v.currentTime === 0;
-      const ffAdd = this.getForwardBufferMs();
       if (skipToLive) {
-        this.send({ type: "play", seek_time: "live", ff_add: ffAdd });
+        this.send({ type: "play", seek_time: "live" });
       } else {
-        this.send({ type: "play", ff_add: ffAdd });
+        this.send({ type: "play" });
       }
     });
   }
 
   /**
    * Pause playback and server delivery.
-   * Ported from mews.js:1025-1029
    */
   pause(): void {
     this.videoElement?.pause();
@@ -970,25 +792,24 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Seek to position with server sync.
-   * Ported from mews.js:1071-1111
    */
   seek(timeMs: number): void {
     if (!this.videoElement || isNaN(timeMs) || timeMs < 0) return;
 
-    // Calculate seek time with server delay compensation (mews.js:1082)
+    // Calculate seek time with server delay compensation
     const seekMs = Math.round(Math.max(0, timeMs - (250 + this.getServerDelay())));
 
     this.logDelay("seek");
-    this.send({ type: "seek", seek_time: seekMs, ff_add: this.getForwardBufferMs() });
+    this.send({ type: "seek", seek_time: seekMs });
 
-    // Wait for seek acknowledgment then on_time (mews.js:1084-1108)
+    // Wait for seek acknowledgment then on_time
     const onSeek: MewsMessageListener = () => {
       this.wsManager?.removeListener("seek", onSeek);
 
       const onTime: MewsMessageListener = (msg) => {
         this.wsManager?.removeListener("on_time", onTime);
 
-        // Use server's actual position (mews.js:1089) — server sends ms
+        // Use server's actual position — server sends ms
         const actualTimeSec = (msg as OnTimeMessage).data.current / 1000;
         this.trySetCurrentTime(actualTimeSec);
       };
@@ -1005,7 +826,6 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Try to set currentTime with retry logic.
-   * Ported from mews.js:1092-1103
    */
   private trySetCurrentTime(tSec: number, retries = 10): void {
     const v = this.videoElement;
@@ -1014,7 +834,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
     v.currentTime = tSec;
 
     if (v.currentTime < tSec - 0.001 && retries > 0) {
-      // Failed to seek, retry (mews.js:1095-1100)
+      // Failed to seek, retry
       this.sbManager?.scheduleAfterUpdate(() => this.trySetCurrentTime(tSec, retries - 1));
     }
   }
@@ -1040,7 +860,6 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Set playback rate.
-   * Ported from mews.js:1119-1129
    */
   setPlaybackRate(rate: number): void {
     super.setPlaybackRate(rate);
@@ -1079,7 +898,6 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Set tracks for ABR or quality selection.
-   * Ported from mews.js:1030-1037
    */
   setTracks(obj: { video?: string; audio?: string; subtitle?: string }): void {
     if (!Object.keys(obj).length) return;
@@ -1106,7 +924,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
    */
   jumpToLive(): void {
     if (this.streamType !== "live" || !this.wsManager) return;
-    this.send({ type: "play", seek_time: "live", ff_add: this.getForwardBufferMs() });
+    this.send({ type: "play", seek_time: "live" });
     this.videoElement?.play().catch(() => {});
   }
 
@@ -1124,7 +942,6 @@ export class MewsWsPlayerImpl extends BasePlayer {
   /**
    * Install waiting event handler.
    * Handles buffer gaps and ABR.
-   * Ported from mews.js:1177-1186, 1272-1278
    */
   private installWaitingHandler(): void {
     if (!this.videoElement) return;
@@ -1135,7 +952,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
       const v = this.videoElement!;
       if (!v.buffered || !v.buffered.length) return;
 
-      // Check for buffer gap and jump it (mews.js:1180-1186)
+      // Check for buffer gap and jump it
       const bufferIdx = this.sbManager?.findBufferIndex(v.currentTime);
       if (bufferIdx !== false && typeof bufferIdx === "number") {
         // currentTime is in a range — check for gap to next range
@@ -1159,7 +976,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
         }
       }
 
-      // ABR trigger (mews.js:1272-1278)
+      // ABR trigger
       this.nWaiting++;
       if (this.nWaiting >= this.nWaitingThreshold && this.currentBps) {
         this.nWaiting = 0;
@@ -1171,7 +988,6 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Install seeking event handlers.
-   * Ported from mews.js:1169-1175
    */
   private installSeekingHandler(): void {
     if (!this.videoElement) return;
@@ -1187,22 +1003,21 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Install pause event handler for browser pause detection.
-   * Ported from mews.js:1188-1200
    */
   private installPauseHandler(): void {
     if (!this.videoElement) return;
 
     this.videoElement.addEventListener("pause", () => {
       if (this.sbManager && !this.sbManager.paused) {
-        // Browser paused (probably tab hidden) - pause download (mews.js:1189-1192)
+        // Browser paused (probably tab hidden) - pause download
         if (this.debugging) console.log("MEWS: browser paused, pausing download");
         this.send({ type: "hold" });
         this.sbManager.paused = true;
 
-        // Resume on play (mews.js:1193-1197)
+        // Resume on play
         const onPlay = () => {
           if (this.sbManager?.paused) {
-            this.send({ type: "play", ff_add: this.getForwardBufferMs() });
+            this.send({ type: "play" });
           }
           this.videoElement?.removeEventListener("play", onPlay);
         };
@@ -1213,7 +1028,6 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Install loop handler for VoD content.
-   * Ported from mews.js:1157-1167
    */
   private installLoopHandler(): void {
     if (!this.videoElement) return;
@@ -1223,7 +1037,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
       if (!v) return;
 
       if (v.loop && this.streamType !== "live") {
-        // Loop VoD content (mews.js:1159-1166)
+        // Loop VoD content
         this.seek(0);
         this.sbManager?.clearBuffer();
       }
@@ -1234,7 +1048,6 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Send command to server with retry.
-   * Ported from mews.js:904-944
    */
   private send(cmd: object): void {
     if (this.wsManager) {
@@ -1244,45 +1057,27 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   /**
    * Log delay for server RTT estimation.
-   * Ported from mews.js:835-862
    */
   private logDelay(type: string): void {
-    this.pendingDelayTypes[type] = Date.now();
+    this.serverDelays.beginRequest(type);
   }
 
   /**
    * Resolve delay measurement.
-   * Ported from mews.js:855-861, 863-867
    */
   private resolveDelay(type: string): void {
-    const start = this.pendingDelayTypes[type];
-    if (start) {
-      const delay = Date.now() - start;
-      this.serverDelays.unshift(delay);
-      if (this.serverDelays.length > 5) {
-        this.serverDelays.pop();
-      }
-      delete this.pendingDelayTypes[type];
-    }
+    this.serverDelays.resolveRequest(type);
   }
 
   /**
    * Get average server delay.
-   * Ported from mews.js:869-881
    */
   private getServerDelay(): number {
-    if (!this.serverDelays.length) return 500;
-    const n = Math.min(3, this.serverDelays.length);
-    let sum = 0;
-    for (let i = 0; i < n; i++) {
-      sum += this.serverDelays[i];
-    }
-    return sum / n;
+    return this.serverDelays.getAverageDelay(500);
   }
 
   /**
    * Track bandwidth for ABR.
-   * Ported from mews.js:1280-1303
    */
   private trackBits(buf: ArrayBuffer): void {
     this.bitCounter.push(buf.byteLength * 8);
@@ -1341,8 +1136,12 @@ export class MewsWsPlayerImpl extends BasePlayer {
       clearInterval(this.analyticsTimer);
       this.analyticsTimer = null;
     }
+    this.deliveryPolicy?.destroy();
+    this.deliveryPolicy = null;
+    this.bufferProbe = null;
+    this.desiredBuffer = null;
 
-    // Tell server to stop encoding before closing the WS (upstream mews.js behavior).
+    // Tell server to stop encoding before closing the WS.
     // Use sendDirect to avoid retry logic — fire-and-forget.
     this.wsManager?.sendDirect({ type: "stop" });
     this.wsManager?.destroy();

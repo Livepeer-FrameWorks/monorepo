@@ -1,4 +1,6 @@
 import type { MetaTrackEvent, MetaTrackEventType } from "../types";
+import type { MistEvent, MistMetadataCommand } from "./mist/protocol";
+import { MistMetadataWsTransport } from "./mist/transports/metadata-transport";
 import { TimerManager } from "./TimerManager";
 
 export interface MetaTrackSubscription {
@@ -24,6 +26,73 @@ export interface MetaTrackManagerConfig {
 }
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
+type MetaSocket = {
+  readyState: number;
+  send: (data: string) => void;
+  close: () => void;
+  onopen: ((ev: Event) => void) | null;
+  onmessage: ((e: MessageEvent<any>) => void) | null;
+  onclose: ((ev: CloseEvent) => void) | null;
+  onerror: ((e: Event) => void) | null;
+};
+
+class MetadataTransportSocket implements MetaSocket {
+  readyState = 0;
+  onopen: ((ev: Event) => void) | null = null;
+  onmessage: ((e: MessageEvent<any>) => void) | null = null;
+  onclose: ((ev: CloseEvent) => void) | null = null;
+  onerror: ((e: Event) => void) | null = null;
+
+  private readonly transport: MistMetadataWsTransport;
+
+  constructor(url: string) {
+    this.transport = new MistMetadataWsTransport(url, { maxReconnectAttempts: -1 });
+    this.transport.on("statechange", ({ state }) => {
+      if (state === "connected") {
+        this.readyState = WebSocket.OPEN;
+        this.onopen?.({} as Event);
+        return;
+      }
+
+      if (state === "connecting" || state === "reconnecting") {
+        this.readyState = WebSocket.CONNECTING;
+        return;
+      }
+
+      this.readyState = WebSocket.CLOSED;
+      this.onclose?.({} as CloseEvent);
+    });
+    this.transport.on("event", ({ event }) => {
+      this.onmessage?.({ data: this.stringifyEvent(event) } as MessageEvent<string>);
+    });
+    this.transport.on("error", () => {
+      this.onerror?.({} as Event);
+    });
+
+    void this.transport.connect().catch(() => {});
+  }
+
+  send(data: string): void {
+    try {
+      this.transport.send(JSON.parse(data) as MistMetadataCommand);
+    } catch {
+      this.onerror?.({} as Event);
+    }
+  }
+
+  close(): void {
+    this.transport.destroy();
+  }
+
+  private stringifyEvent(event: MistEvent): string {
+    if (event.type === "metadata") {
+      const { type: _type, ...metadata } = event;
+      return JSON.stringify(metadata);
+    }
+
+    return JSON.stringify(event);
+  }
+}
 
 /**
  * MetaTrackManager - Handles real-time metadata subscriptions via MistServer WebSocket
@@ -59,7 +128,7 @@ type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecti
  */
 export class MetaTrackManager {
   private config: MetaTrackManagerConfig;
-  private ws: WebSocket | null = null;
+  private ws: MetaSocket | null = null;
   private state: ConnectionState = "disconnected";
   private subscriptions: Map<string, Set<(event: MetaTrackEvent) => void>> = new Map();
   private pendingSubscriptions: Set<string> = new Set();
@@ -86,6 +155,7 @@ export class MetaTrackManager {
   private fastForwardInterval: number;
   private lastFastForwardTime = 0;
   private timedEventBuffer: Map<string, MetaTrackEvent[]> = new Map(); // trackId -> events sorted by time
+  private readonly createSocket: (url: string) => MetaSocket;
 
   // Far-ahead state machine (upstream player.js:781-790)
   private isFarAhead = false;
@@ -99,6 +169,7 @@ export class MetaTrackManager {
     this.bufferAhead = config.bufferAhead ?? 5;
     this.maxMessageAge = config.maxMessageAge ?? 5;
     this.fastForwardInterval = config.fastForwardInterval ?? 5;
+    this.createSocket = (url: string) => new MetadataTransportSocket(url);
 
     // Add initial subscriptions
     if (config.subscriptions) {
@@ -144,53 +215,22 @@ export class MetaTrackManager {
   private createWebSocket(connectionId: number): void {
     try {
       const wsUrl = this.buildWsUrl();
-      this.ws = new WebSocket(wsUrl);
+      this.ws = this.createSocket(wsUrl);
 
       this.ws.onopen = () => {
-        // Verify still valid
-        if (this.connectionId !== connectionId) {
-          this.ws?.close();
-          return;
-        }
-
-        this.log("Connected");
-        this.state = "connected";
-        this.reconnectAttempt = 0;
-
-        // Merge pending subscriptions into existing
-        for (const trackId of this.pendingSubscriptions) {
-          if (!this.subscriptions.has(trackId)) {
-            this.subscriptions.set(trackId, new Set());
-          }
-        }
-        this.pendingSubscriptions.clear();
-
-        // Send all subscribed tracks at once (MistServer protocol)
-        this.sendTracksUpdate();
-
-        // Send initial seek to current playback position
-        this.sendSeek(this.currentPlaybackTime);
-
-        // Flush message buffer
-        this.flushMessageBuffer();
+        this.handleSocketOpen(connectionId);
       };
 
       this.ws.onmessage = (event) => {
-        this.handleMessage(event.data);
+        this.handleSocketMessage(event.data);
       };
 
       this.ws.onerror = (event) => {
-        this.log("WebSocket error");
-        console.warn("[MetaTrackManager] WebSocket error:", event);
+        this.handleSocketError(event);
       };
 
       this.ws.onclose = () => {
-        this.log("Disconnected");
-        this.ws = null;
-
-        if (this.state !== "disconnected") {
-          this.scheduleReconnect();
-        }
+        this.handleSocketClose();
       };
     } catch (error) {
       this.log(`Connection error: ${error}`);
@@ -504,16 +544,15 @@ export class MetaTrackManager {
    * MistServer protocol: {type:"tracks", meta:"1,2,3"} (comma-separated track indices)
    */
   private sendTracksUpdate(): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.isSocketOpen()) {
       const trackIds = Array.from(this.subscriptions.keys());
       // Support "all" as special track ID to subscribe to all meta tracks
       const metaValue = trackIds.includes("all") ? "all" : trackIds.join(",");
 
-      const message = JSON.stringify({
+      this.sendJson({
         type: "tracks",
         meta: metaValue,
       });
-      this.ws.send(message);
       this.log(`Set tracks: ${metaValue}`);
     }
   }
@@ -523,16 +562,15 @@ export class MetaTrackManager {
    * MistServer protocol: {type:"seek", seek_time:<ms>, ff_to:<ms>}
    */
   private sendSeek(timeInSeconds: number): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.isSocketOpen()) {
       const seekTimeMs = Math.round(timeInSeconds * 1000);
       const ffToMs = Math.round((timeInSeconds + this.bufferAhead) * 1000);
 
-      const message = JSON.stringify({
+      this.sendJson({
         type: "seek",
         seek_time: seekTimeMs,
         ff_to: ffToMs,
       });
-      this.ws.send(message);
       this.log(`Seek to ${timeInSeconds}s, buffer ahead to ${timeInSeconds + this.bufferAhead}s`);
     }
   }
@@ -541,8 +579,8 @@ export class MetaTrackManager {
    * Send hold command (pause metadata delivery)
    */
   private sendHold(): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "hold" }));
+    if (this.isSocketOpen()) {
+      this.sendJson({ type: "hold" });
       this.log("Sent hold");
     }
   }
@@ -551,8 +589,8 @@ export class MetaTrackManager {
    * Send play command (resume metadata delivery)
    */
   private sendPlay(): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "play" }));
+    if (this.isSocketOpen()) {
+      this.sendJson({ type: "play" });
       this.log("Sent play");
     }
   }
@@ -561,12 +599,11 @@ export class MetaTrackManager {
    * Send fast-forward command
    */
   private sendFastForward(targetTimeSeconds: number): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      const message = JSON.stringify({
+    if (this.isSocketOpen()) {
+      this.sendJson({
         type: "fast_forward",
         ff_to: Math.round(targetTimeSeconds * 1000),
       });
-      this.ws.send(message);
       this.log(`Fast-forward to ${targetTimeSeconds}s`);
     }
   }
@@ -577,10 +614,68 @@ export class MetaTrackManager {
    * Upstream player.js:888 sends this on ratechange.
    */
   sendSetSpeed(rate: number): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.isSocketOpen()) {
       const playRate = rate === 1 ? "auto" : rate;
-      this.ws.send(JSON.stringify({ type: "set_speed", play_rate: playRate }));
+      this.sendJson({ type: "set_speed", play_rate: playRate });
       this.log(`Set speed: ${playRate}`);
+    }
+  }
+
+  private isSocketOpen(): boolean {
+    return !!this.ws && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  private sendJson(payload: Record<string, unknown>): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    this.ws.send(JSON.stringify(payload));
+  }
+
+  private handleSocketOpen(connectionId: number): void {
+    // Verify still valid
+    if (this.connectionId !== connectionId) {
+      this.ws?.close();
+      return;
+    }
+
+    this.log("Connected");
+    this.state = "connected";
+    this.reconnectAttempt = 0;
+
+    // Merge pending subscriptions into existing
+    for (const trackId of this.pendingSubscriptions) {
+      if (!this.subscriptions.has(trackId)) {
+        this.subscriptions.set(trackId, new Set());
+      }
+    }
+    this.pendingSubscriptions.clear();
+
+    // Send all subscribed tracks at once (MistServer protocol)
+    this.sendTracksUpdate();
+
+    // Send initial seek to current playback position
+    this.sendSeek(this.currentPlaybackTime);
+
+    // Flush message buffer
+    this.flushMessageBuffer();
+  }
+
+  private handleSocketMessage(data: string): void {
+    this.handleMessage(data);
+  }
+
+  private handleSocketError(event: unknown): void {
+    this.log("WebSocket error");
+    console.warn("[MetaTrackManager] WebSocket error:", event);
+  }
+
+  private handleSocketClose(): void {
+    this.log("Disconnected");
+    this.ws = null;
+
+    if (this.state !== "disconnected") {
+      this.scheduleReconnect();
     }
   }
 

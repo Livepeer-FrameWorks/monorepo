@@ -22,6 +22,8 @@ import type {
   TrackInfo,
 } from "./types";
 import { parseRawChunk, formatChunkForLog } from "./RawChunkParser";
+import { ServerDelayTracker } from "../../core/mist/server-delay";
+import { MistWebSocketTransport } from "../../core/mist/transports/websocket-transport";
 
 /** Connection states */
 export type ConnectionState =
@@ -73,64 +75,10 @@ const DEFAULTS: Required<WebSocketControllerOptions> = {
 };
 
 /**
- * Server delay tracker for estimating round-trip time
- */
-class ServerDelayTracker {
-  private delays: number[] = [];
-  private pending = new Map<string, number>();
-  private maxSamples = 3;
-
-  /**
-   * Start timing a request
-   */
-  startTiming(requestType: string): void {
-    this.pending.set(requestType, performance.now());
-  }
-
-  /**
-   * Complete timing and record delay
-   */
-  completeTiming(requestType: string): number | null {
-    const startTime = this.pending.get(requestType);
-    if (startTime === undefined) {
-      return null;
-    }
-
-    this.pending.delete(requestType);
-    const delay = performance.now() - startTime;
-
-    this.delays.push(delay);
-    if (this.delays.length > this.maxSamples) {
-      this.delays.shift();
-    }
-
-    return delay;
-  }
-
-  /**
-   * Get average server delay
-   */
-  getAverageDelay(): number {
-    if (this.delays.length === 0) {
-      return 0;
-    }
-    return this.delays.reduce((sum, d) => sum + d, 0) / this.delays.length;
-  }
-
-  /**
-   * Clear all pending timings
-   */
-  clear(): void {
-    this.pending.clear();
-    this.delays = [];
-  }
-}
-
-/**
  * WebSocketController - Manages raw frame WebSocket connection
  */
 export class WebSocketController {
-  private ws: WebSocket | null = null;
+  private transport: MistWebSocketTransport;
   private url: string;
   private options: Required<WebSocketControllerOptions>;
   private state: ConnectionState = "disconnected";
@@ -144,65 +92,23 @@ export class WebSocketController {
   constructor(url: string, options: WebSocketControllerOptions = {}) {
     this.url = url;
     this.options = { ...DEFAULTS, ...options };
+    this.transport = new MistWebSocketTransport(url, {
+      maxReconnectAttempts: this.options.maxReconnectAttempts,
+      reconnectDelayMs: this.options.reconnectDelayMs,
+      maxReconnectDelayMs: this.options.maxReconnectDelayMs,
+    });
+    this.bindTransport();
   }
 
   /**
    * Connect to WebSocket server
    */
   connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (this.ws && this.state === "connected") {
-        resolve();
-        return;
-      }
-
-      this.intentionalClose = false;
-      this.setState("connecting");
-
-      try {
-        this.ws = new WebSocket(this.url);
-        this.ws.binaryType = "arraybuffer";
-
-        // Connection timeout
-        this.connectionTimer = setTimeout(() => {
-          if (this.state === "connecting") {
-            this.log("Connection timeout");
-            this.ws?.close();
-            reject(new Error("Connection timeout"));
-          }
-        }, this.options.connectionTimeoutMs);
-
-        this.ws.onopen = () => {
-          this.clearConnectionTimer();
-          this.setState("connected");
-          this.reconnectAttempts = 0;
-          this.log("Connected");
-          resolve();
-        };
-
-        this.ws.onclose = (event) => {
-          this.clearConnectionTimer();
-          this.log(`Disconnected: ${event.code} ${event.reason}`);
-
-          if (!this.intentionalClose && this.shouldReconnect()) {
-            this.scheduleReconnect();
-          } else {
-            this.setState("disconnected");
-          }
-        };
-
-        this.ws.onerror = (_event) => {
-          this.log("WebSocket error");
-          this.emit("error", new Error("WebSocket error"));
-        };
-
-        this.ws.onmessage = (event) => {
-          this.handleMessage(event);
-        };
-      } catch (err) {
-        this.setState("error");
-        reject(err);
-      }
+    this.intentionalClose = false;
+    this.setState("connecting");
+    return this.transport.connect().catch((err) => {
+      this.setState("error");
+      throw err;
     });
   }
 
@@ -213,18 +119,8 @@ export class WebSocketController {
     this.intentionalClose = true;
     this.clearReconnectTimer();
     this.clearConnectionTimer();
-
-    if (this.ws) {
-      // Send hold command before closing
-      try {
-        this.send({ type: "hold" });
-      } catch {
-        // Ignore send errors during close
-      }
-
-      this.ws.close();
-      this.ws = null;
-    }
+    this.send({ type: "hold" });
+    this.transport.disconnect();
 
     this.serverDelay.clear();
     this.setState("disconnected");
@@ -234,21 +130,14 @@ export class WebSocketController {
    * Send a control command
    */
   send(command: ControlCommand): boolean {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      this.log(`Cannot send ${command.type}: not connected`);
-      return false;
-    }
-
     // Track timing for certain commands
     const timedCommands = ["seek", "set_speed", "request_codec_data"];
     if (timedCommands.includes(command.type)) {
-      this.serverDelay.startTiming(command.type);
+      this.serverDelay.beginRequest(command.type);
     }
-
-    const message = JSON.stringify(command);
-    this.log(`Sending: ${message}`);
-    this.ws.send(message);
-    return true;
+    const sent = this.transport.send(command as any);
+    if (!sent) this.log(`Cannot send ${command.type}: not connected`);
+    return sent;
   }
 
   /**
@@ -289,10 +178,9 @@ export class WebSocketController {
   }
 
   /**
-   * Request codec initialization data
-   * @param supportedCombinations - Array of codec combinations we can play
-   *   Format: [[ ["H264"], ["AAC"] ]] means "H264 video AND AAC audio"
-   *   Per MistServer rawws.js line 1544
+   * Request codec initialization data.
+   * @param supportedCombinations - Array of codec combinations we can play.
+   *   Format: [[ ["H264"], ["AAC"] ]] means "H264 video AND AAC audio.
    */
   requestCodecData(supportedCombinations?: string[][][]): boolean {
     if (supportedCombinations && supportedCombinations.length > 0) {
@@ -329,7 +217,30 @@ export class WebSocketController {
    * Check if connected
    */
   isConnected(): boolean {
-    return this.state === "connected" && this.ws?.readyState === WebSocket.OPEN;
+    return this.state === "connected";
+  }
+
+  private bindTransport(): void {
+    this.transport.on("statechange", ({ state }) => {
+      if (state === "connected") {
+        this.clearConnectionTimer();
+        this.setState("connected");
+        this.reconnectAttempts = 0;
+        this.log("Connected");
+        return;
+      }
+      if (state === "reconnecting") {
+        this.setState("reconnecting");
+        return;
+      }
+      if (state === "disconnected" && !this.intentionalClose) {
+        this.setState("disconnected");
+      }
+    });
+
+    this.transport.on("binary", ({ data }) => this.handleBinaryMessage(data));
+    this.transport.on("event", ({ event }) => this.handleControlMessage(JSON.stringify(event)));
+    this.transport.on("error", ({ message }) => this.emit("error", new Error(message)));
   }
 
   /**
@@ -430,11 +341,11 @@ export class WebSocketController {
 
       // Complete timing for responses
       if (message.type === "codec_data") {
-        this.serverDelay.completeTiming("request_codec_data");
+        this.serverDelay.resolveRequest("request_codec_data");
       } else if (message.type === "seek") {
-        this.serverDelay.completeTiming("seek");
+        this.serverDelay.resolveRequest("seek");
       } else if (message.type === "set_speed") {
-        this.serverDelay.completeTiming("set_speed");
+        this.serverDelay.resolveRequest("set_speed");
       }
 
       // Route to appropriate handler
@@ -492,7 +403,6 @@ export class WebSocketController {
 
         case "seek":
           // Seek acknowledgment from server (expected after send({type:"seek"}).
-          // OG rawws.js does not treat this as unknown/noise.
           break;
 
         default:

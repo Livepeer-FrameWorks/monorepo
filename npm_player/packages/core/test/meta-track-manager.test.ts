@@ -69,6 +69,18 @@ describe("MetaTrackManager", () => {
     expect(seek).toEqual({ type: "seek", seek_time: 0, ff_to: 5000 });
   });
 
+  it("uses socket factory seam during connect", () => {
+    const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
+    const factorySpy = vi.fn((url: string) => new MockWebSocket(url) as unknown as WebSocket);
+    (manager as any).createSocket = factorySpy;
+
+    manager.connect();
+    vi.advanceTimersByTime(100);
+
+    expect(factorySpy).toHaveBeenCalledTimes(1);
+    expect(factorySpy).toHaveBeenCalledWith("ws://mist.test/json_abc.js?rate=1");
+  });
+
   it("disconnect closes socket and clears timers", () => {
     const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
     manager.connect();
