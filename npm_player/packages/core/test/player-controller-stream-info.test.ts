@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  PlayerController,
   buildQualityLevelsFromMistTracks,
   buildStreamInfoFromEndpoints,
 } from "../src/core/PlayerController";
@@ -64,6 +65,83 @@ describe("normalizeMistSourceUrls", () => {
       "ws://localhost:18090/view/live%2Bdemo.raw?tkn=1",
       "ws://localhost:18090/view/live%2Bdemo.mp4?tkn=1",
     ]);
+  });
+});
+
+describe("PlayerController Mist edge hydration", () => {
+  it("uses gateway metadata only to pick the Mist edge stream name and base URL", async () => {
+    const controller = new PlayerController({
+      contentId: "pb_demo_live_001",
+      contentType: "live",
+      playerManager: {
+        on: vi.fn(() => () => {}),
+      } as any,
+    });
+    (controller as any).endpoints = {
+      primary: {
+        nodeId: "edge-1",
+        protocol: "MP4",
+        url: "http://localhost:18090/view/live%2Bdemo_live_stream_001.mp4?tkn=1",
+        outputs: {
+          MP4: {
+            protocol: "MP4",
+            url: "http://localhost/view/live%2Bdemo_live_stream_001.mp4?tkn=1",
+          },
+        },
+      },
+      fallbacks: [],
+      metadata: {
+        contentId: "live+demo_live_stream_001",
+        thumbnailAssets: { assetKey: "asset-1", posterUrl: "https://cdn/poster.jpg" },
+      },
+    };
+    (controller as any).setMetadataSeed((controller as any).endpoints.metadata);
+
+    const requested: string[] = [];
+    (controller as any).fetchMistStreamInfo = vi.fn(
+      async (_baseUrl: string, streamName: string) => {
+        requested.push(streamName);
+        if (streamName !== "live+demo_live_stream_001") {
+          throw new Error("wrong stream");
+        }
+        return {
+          type: "live",
+          capa: { datachannels: true },
+          source: [
+            {
+              type: "html5/video/mp4",
+              url: "http://localhost/view/live%2Bdemo_live_stream_001.mp4?tkn=1",
+            },
+            {
+              type: "html5/application/vnd.apple.mpegurl",
+              url: "/view/hls/live%2Bdemo_live_stream_001/index.m3u8?tkn=1",
+            },
+            { type: "whep", url: "/view/webrtc/live%2Bdemo_live_stream_001?tkn=1" },
+          ],
+          meta: {
+            tracks: {
+              video: { type: "video", codec: "H264", width: 800, height: 600, idx: 1 },
+              audio: { type: "audio", codec: "AAC", idx: 2 },
+            },
+          },
+        };
+      }
+    );
+
+    await (controller as any).hydrateFromSelectedMistEdge("pb_demo_live_001");
+
+    expect(requested).toEqual(["live+demo_live_stream_001"]);
+    expect((controller as any).streamInfo.source.map((s: { type: string }) => s.type)).toEqual([
+      "html5/video/mp4",
+      "html5/application/vnd.apple.mpegurl",
+      "whep",
+    ]);
+    expect((controller as any).streamInfo.source[0].url).toBe(
+      "http://localhost:18090/view/live%2Bdemo_live_stream_001.mp4?tkn=1"
+    );
+    expect((controller as any)._thumbnailAssets).toEqual(
+      expect.objectContaining({ assetKey: "asset-1" })
+    );
   });
 });
 

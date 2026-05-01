@@ -40,6 +40,7 @@ export { default as SpeedIndicator } from "./SpeedIndicator.svelte";
 export { default as SkipIndicator } from "./SkipIndicator.svelte";
 export { default as IdleScreen } from "./IdleScreen.svelte";
 export { default as LoadingScreen } from "./LoadingScreen.svelte";
+export { default as LoadingPoster } from "./LoadingPoster.svelte";
 export { default as StreamStateOverlay } from "./StreamStateOverlay.svelte";
 export { default as SubtitleRenderer } from "./SubtitleRenderer.svelte";
 export { default as DvdLogo } from "./DvdLogo.svelte";

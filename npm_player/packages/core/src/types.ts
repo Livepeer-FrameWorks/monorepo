@@ -189,6 +189,58 @@ export interface EndpointInfo {
   loadScore?: number;
 }
 
+/** Chandler thumbnail asset URLs for the loading-state poster/animation. */
+export interface ThumbnailAssetUrls {
+  /** Full-resolution single-frame JPEG (poster.jpg). */
+  posterUrl: string;
+  /** VTT cues pointing into the sprite via #xywh fragments. */
+  spriteVttUrl: string;
+  /** Sprite sheet JPEG (10x10 grid). */
+  spriteJpgUrl: string;
+  /** streamId for live, artifactHash for DVR/clip. */
+  assetKey: string;
+}
+
+/**
+ * Loading-state poster snapshot consumed by framework wrappers to render the
+ * boot/connecting overlay. Animate mode cycles through sprite tiles via CSS
+ * background-position; latest mode renders the full-resolution posterUrl.
+ *
+ * Bumps `generation` on every server-side regen (~5s for live), so consumers
+ * can cache-bust static <img> sources to avoid stale posters.
+ */
+export interface LoadingPosterInfo {
+  /**
+   * Live sprite source — for Mist push, this is a fresh blob URL replaced on
+   * every regen; for Chandler poll it's the resolved sprite.jpg URL. Falls back
+   * to the static Chandler sprite URL when no cues have arrived yet.
+   */
+  spriteJpgUrl?: string;
+  /** Chandler poster.jpg if available — full-resolution single frame. */
+  posterUrl?: string;
+  /** Mist lang:"pre" preview JPEG fallback. */
+  mistPreviewUrl?: string;
+  /** Bumped on every cue update — wrappers should use this to cache-bust img.src. */
+  generation: number;
+  /** Parsed sprite cues (xywh into spriteJpgUrl). Empty if no sprite source yet. */
+  cues: Array<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    startTime: number;
+    endTime: number;
+  }>;
+  /** Tile geometry derived from the first cue (all tiles are uniform). */
+  tileWidth: number;
+  tileHeight: number;
+  columns: number;
+  rows: number;
+  /** Pixel bounds of the sprite area covered by cues. */
+  spriteWidth: number;
+  spriteHeight: number;
+}
+
 export interface ContentMetadata {
   title?: string;
   description?: string;
@@ -216,8 +268,8 @@ export interface ContentMetadata {
   dvrStatus?: "recording" | "completed";
   /** Native container format: mp4, m3u8, webm, etc. */
   format?: string;
-  /** Chandler URL for pre-generated sprite VTT (DVR/defrost fallback when no embedded thumbvtt track) */
-  thumbnailSpriteVttUrl?: string;
+  /** Chandler-served thumbnail asset URLs (poster, sprite, VTT cues) */
+  thumbnailAssets?: ThumbnailAssetUrls;
   /** MistServer authoritative snapshot (merged into this metadata) */
   mist?: MistStreamInfo;
   /** Parsed track summary (derived from Mist metadata when available) */

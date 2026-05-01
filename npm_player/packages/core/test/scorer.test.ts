@@ -226,6 +226,27 @@ describe("scorer", () => {
       );
     });
 
+    it("quality favors HLS over progressive MP4 and MEWS", () => {
+      expect(calculateModeBonus("html5/application/vnd.apple.mpegurl", "quality")).toBeGreaterThan(
+        calculateModeBonus("html5/video/mp4", "quality")
+      );
+      expect(calculateModeBonus("html5/application/vnd.apple.mpegurl", "quality")).toBeGreaterThan(
+        calculateModeBonus("ws/video/mp4", "quality")
+      );
+    });
+
+    it("auto keeps WHEP behind HTTP/MSE transports", () => {
+      expect(calculateModeBonus("html5/video/mp4", "auto")).toBeGreaterThan(
+        calculateModeBonus("whep", "auto")
+      );
+      expect(calculateModeBonus("html5/application/vnd.apple.mpegurl", "auto")).toBeGreaterThan(
+        calculateModeBonus("whep", "auto")
+      );
+      expect(calculateModeBonus("ws/video/mp4", "auto")).toBeGreaterThan(
+        calculateModeBonus("whep", "auto")
+      );
+    });
+
     it("low-latency: WHEP > HLS", () => {
       expect(calculateModeBonus("whep", "low-latency")).toBeGreaterThan(
         calculateModeBonus("html5/application/vnd.apple.mpegurl", "low-latency")
@@ -358,6 +379,32 @@ describe("scorer", () => {
       });
 
       expect(webcodecs.total).toBeLessThan(hls.total);
+    });
+
+    it("auto ranks WHEP below MP4 and HLS for full A/V", () => {
+      const common = {
+        maxPriority: 100,
+        totalSources: 3,
+        playbackMode: "auto" as const,
+      };
+      const mp4 = scorePlayer(["video", "audio"], 1, 0, {
+        ...common,
+        playerShortname: "native",
+        mimeType: "html5/video/mp4",
+      });
+      const hls = scorePlayer(["video", "audio"], 2, 1, {
+        ...common,
+        playerShortname: "videojs",
+        mimeType: "html5/application/vnd.apple.mpegurl",
+      });
+      const whep = scorePlayer(["video", "audio"], 3, 2, {
+        ...common,
+        playerShortname: "native",
+        mimeType: "whep",
+      });
+
+      expect(whep.total).toBeLessThan(mp4.total);
+      expect(whep.total).toBeLessThan(hls.total);
     });
 
     it("uses default weights when not specified", () => {

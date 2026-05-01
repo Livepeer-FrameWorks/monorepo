@@ -14,6 +14,8 @@ import {
   type ContentMetadata,
   type ClassifiedError,
   type ThumbnailCue,
+  type LoadingPosterInfo,
+  type StreamInfo,
 } from "@livepeer-frameworks/player-core";
 
 // ============================================================================
@@ -32,6 +34,8 @@ export interface PlayerControllerState {
   streamState: StreamState | null;
   /** Resolved endpoints */
   endpoints: ContentEndpoints | null;
+  /** Full source/track matrix used for player selection. */
+  streamInfo: StreamInfo | null;
   /** Content metadata */
   metadata: ContentMetadata | null;
   /** Video element (null if not ready) */
@@ -96,6 +100,8 @@ export interface PlayerControllerState {
   controllerHasAudio: boolean;
   /** Thumbnail sprite cues (auto-detected from MistServer tracks) */
   thumbnailCues: ThumbnailCue[];
+  /** Loading-state poster snapshot for the boot/connecting overlay. */
+  loadingPoster: LoadingPosterInfo | null;
 }
 
 export interface PlayerControllerStore extends Readable<PlayerControllerState> {
@@ -168,6 +174,7 @@ const initialState: PlayerControllerState = {
   state: "booting",
   streamState: null,
   endpoints: null,
+  streamInfo: null,
   metadata: null,
   videoElement: null,
   currentTime: 0,
@@ -200,6 +207,7 @@ const initialState: PlayerControllerState = {
   controllerCanSeek: false,
   controllerHasAudio: true,
   thumbnailCues: [],
+  loadingPoster: null,
 };
 
 function createInitialState(
@@ -277,6 +285,7 @@ export function createPlayerControllerStore(
       playbackQuality: controller!.getPlaybackQuality(),
       isLoopEnabled: controller!.isLoopEnabled(),
       subtitlesEnabled: controller!.isSubtitlesEnabled(),
+      streamInfo: controller!.getStreamInfo(),
     }));
   }
 
@@ -320,6 +329,7 @@ export function createPlayerControllerStore(
           ...prev,
           streamState,
           metadata: controller!.getMetadata(),
+          streamInfo: controller!.getStreamInfo(),
           isEffectivelyLive: controller!.isEffectivelyLive(),
           shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
         }));
@@ -367,6 +377,7 @@ export function createPlayerControllerStore(
           videoElement,
           endpoints: controller!.getEndpoints(),
           metadata: controller!.getMetadata(),
+          streamInfo: controller!.getStreamInfo(),
           isEffectivelyLive: controller!.isEffectivelyLive(),
           shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
           isMuted: controller!.isMuted(),
@@ -400,6 +411,7 @@ export function createPlayerControllerStore(
           ...prev,
           currentPlayerInfo: controller!.getCurrentPlayerInfo(),
           currentSourceInfo: { url: source.url, type: source.type },
+          streamInfo: controller!.getStreamInfo(),
         }));
       })
     );
@@ -484,6 +496,13 @@ export function createPlayerControllerStore(
     unsubscribers.push(
       controller.on("thumbnailCuesChange", ({ cues }) => {
         store.update((prev) => ({ ...prev, thumbnailCues: cues }));
+      })
+    );
+
+    // Loading-state poster snapshot
+    unsubscribers.push(
+      controller.on("loadingPosterChange", ({ poster }) => {
+        store.update((prev) => ({ ...prev, loadingPoster: poster }));
       })
     );
 

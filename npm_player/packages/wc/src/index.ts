@@ -17,6 +17,8 @@ export { FwSettingsMenu } from "./components/fw-settings-menu.js";
 export { FwIdleScreen } from "./components/fw-idle-screen.js";
 export { FwLoadingSpinner } from "./components/fw-loading-spinner.js";
 export { FwLoadingScreen } from "./components/fw-loading-screen.js";
+export { FwLoadingPoster } from "./components/fw-loading-poster.js";
+export type { LoadingPosterMode } from "./components/fw-loading-poster.js";
 export { FwStreamStateOverlay } from "./components/fw-stream-state-overlay.js";
 export { FwThumbnailOverlay } from "./components/fw-thumbnail-overlay.js";
 export { FwDvdLogo } from "./components/fw-dvd-logo.js";

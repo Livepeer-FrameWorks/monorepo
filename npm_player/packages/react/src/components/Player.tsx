@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo } from "react";
 import IdleScreen from "./IdleScreen";
+import LoadingPoster from "./LoadingPoster";
 import TitleOverlay from "./TitleOverlay";
 import StatsPanel from "./StatsPanel";
 import PlayerControls from "./PlayerControls";
@@ -220,6 +221,23 @@ const PlayerInner: React.FC<PlayerProps> = ({
     streamStateError !== streamStateMessage
       ? streamStateMessage
       : undefined;
+  const hasLoadingPosterSource = !!(
+    state.loadingPoster &&
+    (state.loadingPoster.posterUrl ||
+      state.loadingPoster.spriteJpgUrl ||
+      state.loadingPoster.mistPreviewUrl ||
+      state.loadingPoster.cues.length > 0)
+  );
+  const streamStatus = String(state.streamState?.status ?? "").toUpperCase();
+  const isIdleOnlyStatus =
+    streamStatus === "OFFLINE" || streamStatus === "ERROR" || streamStatus === "INVALID";
+  const showLoadingPosterOverlay =
+    hasLoadingPosterSource &&
+    !showWaitingForEndpoint &&
+    !state.hasPlaybackStarted &&
+    !state.error &&
+    !displayedError &&
+    !isIdleOnlyStatus;
 
   // ============================================================================
   // Render
@@ -254,6 +272,13 @@ const PlayerInner: React.FC<PlayerProps> = ({
               >
                 {/* Video container - PlayerController attaches here */}
                 <div ref={containerRef} className="fw-player-container" />
+
+                {showLoadingPosterOverlay && (
+                  <LoadingPoster
+                    loadingPoster={state.loadingPoster}
+                    className="absolute inset-0 z-[4]"
+                  />
+                )}
 
                 {/* Title/Description overlay */}
                 <TitleOverlay
@@ -311,14 +336,18 @@ const PlayerInner: React.FC<PlayerProps> = ({
                 {showWaitingForEndpoint && <IdleScreen status="OFFLINE" message={waitingMessage} />}
 
                 {/* Idle screen */}
-                {!showWaitingForEndpoint && state.shouldShowIdleScreen && (
-                  <IdleScreen
-                    status={state.isEffectivelyLive ? state.streamState?.status : undefined}
-                    message={idleMessage}
-                    percentage={state.isEffectivelyLive ? state.streamState?.percentage : undefined}
-                    details={idleDetails}
-                  />
-                )}
+                {!showWaitingForEndpoint &&
+                  state.shouldShowIdleScreen &&
+                  !showLoadingPosterOverlay && (
+                    <IdleScreen
+                      status={state.isEffectivelyLive ? state.streamState?.status : undefined}
+                      message={idleMessage}
+                      percentage={
+                        state.isEffectivelyLive ? state.streamState?.percentage : undefined
+                      }
+                      details={idleDetails}
+                    />
+                  )}
 
                 {/* Buffering spinner */}
                 {showBufferingSpinner && (

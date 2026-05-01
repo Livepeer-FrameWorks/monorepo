@@ -38,13 +38,16 @@ import type {
   ContentEndpoints,
   ContentMetadata,
   EndpointInfo,
+  LoadingPosterInfo,
   MistStreamInfo,
   OutputEndpoint,
   OutputCapabilities,
   PlayerState,
   PlayerStateContext,
   StreamState,
+  ThumbnailAssetUrls,
 } from "../types";
+import { ChandlerAssetSource } from "./ChandlerAssetSource";
 import type {
   StreamInfo,
   StreamSource,
@@ -213,6 +216,9 @@ export interface PlayerControllerEvents {
 
   /** Thumbnail sprite cues changed (auto-detected from MistServer tracks) */
   thumbnailCuesChange: { cues: ThumbnailCue[] };
+
+  /** Loading-state poster info changed (sprite cues + URLs + tile geometry for the loading overlay). */
+  loadingPosterChange: { poster: LoadingPosterInfo | null };
 }
 
 // ============================================================================
@@ -691,6 +697,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private _rawThumbnailCues: ThumbnailCue[] = [];
   private _lastVttOffset: number = 0;
   private _previewUrl: string | null = null;
+  private _thumbnailAssets: ThumbnailAssetUrls | null = null;
+  private _loadingPosterGeneration: number = 0;
   private _playbackQuality: PlaybackQuality | null = null;
   private selectedQualityId: string = "auto";
   private bootMs: number = Date.now();
@@ -1000,9 +1008,14 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     return this.thumbnailSpriteManager?.getCues() ?? [];
   }
 
-  /** Get auto-detected preview image URL (null if no preview track found or explicit poster set) */
+  /** Get auto-detected Mist `lang:"pre"` preview image URL (null if no preview track found). */
   getPreviewUrl(): string | null {
     return this._previewUrl;
+  }
+
+  /** Get the loading-state poster snapshot (sprite cues + URLs + tile geometry), or null. */
+  getLoadingPoster(): LoadingPosterInfo | null {
+    return this.buildLoadingPosterInfo();
   }
 
   /** Get video element (null if not ready) */
@@ -2624,6 +2637,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     if (endpoints?.primary) {
       this.endpoints = endpoints;
       this.setMetadataSeed(endpoints.metadata ?? null);
+      this.detectThumbnailVttUrl();
+      this.detectPreviewUrl();
+      await this.hydrateFromSelectedMistEdge(contentId);
       this.setState("gateway_ready", { gatewayStatus: "ready" });
       return;
     }
@@ -2828,6 +2844,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     try {
       this.endpoints = await this.gatewayClient.resolve();
       this.setMetadataSeed(this.endpoints?.metadata ?? null);
+      // Spin up Chandler-tier sprite + poster URLs as soon as metadata is known, so cold streams
+      // (Mist not yet ingesting) still get a loading poster even if Mist hydration fails below.
+      this.detectThumbnailVttUrl();
+      this.detectPreviewUrl();
       await this.hydrateFromSelectedMistEdge(contentId);
       this.setState("gateway_ready", { gatewayStatus: "ready" });
     } catch (error) {
@@ -2837,21 +2857,55 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
   }
 
-  private async hydrateFromSelectedMistEdge(contentId: string): Promise<void> {
-    const mistBaseUrl = this.endpoints?.primary?.baseUrl;
-    if (!mistBaseUrl) return;
+  private getSelectedMistBaseUrl(): string | undefined {
+    const explicitBaseUrl = this.endpoints?.primary?.baseUrl || this.config.mistUrl;
+    if (explicitBaseUrl) return explicitBaseUrl;
+
+    const endpointUrl = this.endpoints?.primary?.url;
+    if (!endpointUrl) return undefined;
 
     try {
-      const data = await this.fetchMistStreamInfo(mistBaseUrl, contentId, "resolveFromGateway");
-      if (data.error) {
-        throw new Error(data.error);
+      return new URL(endpointUrl).origin;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private getMistStreamName(fallbackContentId: string = this.config.contentId): string {
+    return this.getMetadata()?.contentId || fallbackContentId;
+  }
+
+  private async hydrateFromSelectedMistEdge(contentId: string): Promise<void> {
+    const mistBaseUrl = this.getSelectedMistBaseUrl();
+    if (!mistBaseUrl) return;
+
+    const streamName = this.getMistStreamName(contentId);
+    const candidates = streamName === contentId ? [streamName] : [streamName, contentId];
+
+    try {
+      let lastError: unknown;
+      for (const candidate of candidates) {
+        try {
+          const data = await this.fetchMistStreamInfo(mistBaseUrl, candidate, "resolveFromGateway");
+          if (data.error) {
+            throw new Error(data.error);
+          }
+          const { sources, tracks } = this.applyMistStreamInfo(
+            data,
+            "resolveFromGateway",
+            mistBaseUrl
+          );
+          this.detectThumbnailVttUrl();
+          this.detectPreviewUrl();
+          this.log(
+            `[resolveFromGateway] Mist edge supplied ${sources.length} sources, ${tracks.length} tracks for ${candidate}`
+          );
+          return;
+        } catch (error) {
+          lastError = error;
+        }
       }
-      const { sources, tracks } = this.applyMistStreamInfo(data, "resolveFromGateway", mistBaseUrl);
-      this.detectThumbnailVttUrl();
-      this.detectPreviewUrl();
-      this.log(
-        `[resolveFromGateway] Mist edge supplied ${sources.length} sources, ${tracks.length} tracks`
-      );
+      throw lastError;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Mist edge source discovery failed";
       this.log(`[resolveFromGateway] Mist edge source discovery unavailable: ${message}`);
@@ -2877,12 +2931,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     // Use endpoint baseUrl if available, otherwise fall back to config.mistUrl
     // This allows polling to start even when initial endpoint resolution failed
-    const mistBaseUrl = this.endpoints?.primary?.baseUrl || mistUrl;
+    const mistBaseUrl = this.getSelectedMistBaseUrl() || mistUrl;
     if (!mistBaseUrl) return;
 
-    // Use playback ID from metadata if available
-    const metadata = this.getMetadata();
-    const streamName = metadata?.contentId || contentId;
+    const streamName = this.getMistStreamName(contentId);
 
     // For effectively live content, use WebSocket for real-time updates
     // For completed VOD content, use HTTP polling only
@@ -2977,14 +3029,16 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       return;
     }
 
-    if (!this.container || !this.config.mistUrl) {
-      this.log("[initializeLateFromStreamState] Missing container or mistUrl");
+    const mistUrl = this.getSelectedMistBaseUrl();
+    if (!this.container || !mistUrl) {
+      this.log("[initializeLateFromStreamState] Missing container or Mist base URL");
       return;
     }
 
     try {
-      const sources = streamInfo.source;
-      const mistUrl = this.config.mistUrl;
+      const sources =
+        normalizeMistSourceUrls(streamInfo.source as StreamSource[], mistUrl) ??
+        (streamInfo.source as StreamSource[]);
       const contentId = this.config.contentId;
 
       let tracks: StreamTrack[] = [];
@@ -2998,7 +3052,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       }
 
       this.streamInfo = {
-        source: sources as StreamSource[],
+        source: sources,
         meta: { tracks },
         type: streamInfo.type === "vod" ? "vod" : "live",
       };
@@ -3087,10 +3141,23 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   }
 
   /**
-   * Detect thumbnail VTT URL from MistServer tracks.
-   * Looks for a track with codec "thumbvtt" (dedicated thumbnail sprite VTT output).
+   * Detect thumbnail VTT URL with tiered Mist→Chandler fallback.
+   *
+   * Source priority:
+   *   1. Mist `thumbvtt` track (live push mode) — freshest, only when streamInfo has the track
+   *   2. Chandler `sprite.vtt` from `endpoints.metadata.thumbnailAssets` — works for cold streams
+   *      and persists post-defrost
+   *
+   * Also captures the Chandler asset URLs (poster, sprite, vtt) so the loading-state
+   * overlay can fall through tiers without a sprite-cue dependency.
    */
   private detectThumbnailVttUrl(): void {
+    // Capture Chandler asset URLs once metadata is known (used by the loading-poster overlay).
+    const metaAssets = this.endpoints?.metadata?.thumbnailAssets ?? this.metadata?.thumbnailAssets;
+    if (metaAssets && this._thumbnailAssets?.assetKey !== metaAssets.assetKey) {
+      this._thumbnailAssets = metaAssets;
+    }
+
     const tracks = this.streamInfo?.meta?.tracks;
     const thumbVttTrack = tracks?.find((t) => t.codec === "thumbvtt");
 
@@ -3098,22 +3165,27 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     let baseUrl: string | undefined;
 
     if (thumbVttTrack && thumbVttTrack.idx !== undefined) {
-      const mistBaseUrl = this.endpoints?.primary?.baseUrl || this.config.mistUrl;
-      if (!mistBaseUrl) return;
-      const streamName = this.metadata?.contentId || this.config.contentId;
-      vttUrl = `${mistBaseUrl.replace(/\/$/, "")}/${streamName}.thumbvtt?track=${thumbVttTrack.idx}`;
-      baseUrl = mistBaseUrl.replace(/\/$/, "");
-    } else {
-      // Fallback: pre-generated sprite VTT from bucket (DVR, post-defrost)
-      const bucketVttUrl =
-        this.endpoints?.metadata?.thumbnailSpriteVttUrl || this.metadata?.thumbnailSpriteVttUrl;
-      if (!bucketVttUrl) return;
-      vttUrl = bucketVttUrl;
-      baseUrl = bucketVttUrl.substring(0, bucketVttUrl.lastIndexOf("/"));
+      const mistBaseUrl = this.getSelectedMistBaseUrl();
+      if (mistBaseUrl) {
+        const streamName = this.getMistStreamName();
+        vttUrl = `${mistBaseUrl.replace(/\/$/, "")}/${streamName}.thumbvtt?track=${thumbVttTrack.idx}`;
+        baseUrl = mistBaseUrl.replace(/\/$/, "");
+      }
+    } else if (metaAssets?.spriteVttUrl) {
+      vttUrl = metaAssets.spriteVttUrl;
+      baseUrl = metaAssets.spriteVttUrl.substring(0, metaAssets.spriteVttUrl.lastIndexOf("/"));
     }
 
-    if (!vttUrl || !baseUrl) return;
-    if (vttUrl === this._thumbnailVttUrl && this.thumbnailSpriteManager) return;
+    if (!vttUrl || !baseUrl) {
+      // No sprite source — still emit a loading-poster snapshot so the overlay can use
+      // the Chandler poster or Mist preview alone.
+      this.emitLoadingPosterChange();
+      return;
+    }
+    if (vttUrl === this._thumbnailVttUrl && this.thumbnailSpriteManager) {
+      this.emitLoadingPosterChange();
+      return;
+    }
     this._thumbnailVttUrl = vttUrl;
     this.log(`[detectThumbnailVttUrl] Found thumbnail VTT: ${vttUrl}`);
 
@@ -3135,34 +3207,100 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
                 endTime: c.endTime - offset,
               }));
         this.emit("thumbnailCuesChange", { cues: rebased });
+        this.emitLoadingPosterChange();
       },
       log: (msg) => this.log(msg),
     });
+    this.emitLoadingPosterChange();
   }
 
   /**
-   * Detect preview image URL from MistServer tracks.
-   * Looks for a JPEG track with lang "pre" (single-frame preview, distinct from sprite sheet).
-   * Sets _previewUrl which is used as poster when no explicit poster is configured.
+   * Detect Mist `lang:"pre"` preview image URL when the JPEG track is present.
+   * Stored as a fallback tier in the loading-poster source priority — `config.poster`
+   * is the lowest tier and decided in the overlay component, not here.
    */
   private detectPreviewUrl(): void {
-    if (this.config.poster) return; // explicit poster takes precedence
-
     const tracks = this.streamInfo?.meta?.tracks;
     if (!tracks || tracks.length === 0) return;
 
     const previewTrack = tracks.find((t) => t.codec === "JPEG" && t.lang === "pre");
     if (!previewTrack || previewTrack.idx === undefined) return;
 
-    const mistBaseUrl = this.endpoints?.primary?.baseUrl || this.config.mistUrl;
+    const mistBaseUrl = this.getSelectedMistBaseUrl();
     if (!mistBaseUrl) return;
 
-    const streamName = this.metadata?.contentId || this.config.contentId;
+    const streamName = this.getMistStreamName();
     const previewUrl = `${mistBaseUrl.replace(/\/$/, "")}/${streamName}.jpg?video=pre`;
 
     if (previewUrl === this._previewUrl) return;
     this._previewUrl = previewUrl;
     this.log(`[detectPreviewUrl] Found preview image: ${previewUrl}`);
+    this.emitLoadingPosterChange();
+  }
+
+  private buildLoadingPosterInfo(): LoadingPosterInfo | null {
+    const cues = this._rawThumbnailCues;
+    const assets = this._thumbnailAssets;
+    const posterUrl = assets?.posterUrl;
+    const mistPreviewUrl = this._previewUrl ?? undefined;
+    // Prefer the live sprite source from cue urls — for Mist push this is a fresh
+    // blob URL replaced on every regen; for Chandler poll it's the resolved sprite.jpg.
+    // Falls back to the static Chandler URL when no cues have arrived yet.
+    const liveSpriteUrl = cues[0]?.url;
+    const spriteJpgUrl = liveSpriteUrl ?? assets?.spriteJpgUrl;
+
+    if (!posterUrl && !spriteJpgUrl && !mistPreviewUrl && cues.length === 0) {
+      return null;
+    }
+
+    let tileWidth = 0;
+    let tileHeight = 0;
+    let columns = 0;
+    let rows = 0;
+    let spriteWidth = 0;
+    let spriteHeight = 0;
+    const usableCues = cues.filter(
+      (c) =>
+        c.x !== undefined && c.y !== undefined && c.width !== undefined && c.height !== undefined
+    );
+    if (usableCues.length > 0) {
+      tileWidth = usableCues[0].width ?? 0;
+      tileHeight = usableCues[0].height ?? 0;
+      const maxX = usableCues.reduce((m, c) => Math.max(m, c.x ?? 0), 0);
+      const maxY = usableCues.reduce((m, c) => Math.max(m, c.y ?? 0), 0);
+      spriteWidth = usableCues.reduce((m, c) => Math.max(m, (c.x ?? 0) + (c.width ?? 0)), 0);
+      spriteHeight = usableCues.reduce((m, c) => Math.max(m, (c.y ?? 0) + (c.height ?? 0)), 0);
+      columns = tileWidth > 0 ? Math.floor(maxX / tileWidth) + 1 : 0;
+      rows = tileHeight > 0 ? Math.floor(maxY / tileHeight) + 1 : 0;
+    }
+
+    return {
+      posterUrl,
+      spriteJpgUrl,
+      mistPreviewUrl,
+      // Generation counter — cues arrive every ~5s on live regen. Wrappers can use
+      // this to cache-bust <img> sources so the static poster doesn't go stale.
+      generation: this._loadingPosterGeneration,
+      cues: usableCues.map((c) => ({
+        x: c.x ?? 0,
+        y: c.y ?? 0,
+        width: c.width ?? 0,
+        height: c.height ?? 0,
+        startTime: c.startTime,
+        endTime: c.endTime,
+      })),
+      tileWidth,
+      tileHeight,
+      columns,
+      rows,
+      spriteWidth,
+      spriteHeight,
+    };
+  }
+
+  private emitLoadingPosterChange(): void {
+    this._loadingPosterGeneration++;
+    this.emit("loadingPosterChange", { poster: this.buildLoadingPosterInfo() });
   }
 
   private async initializePlayer(): Promise<void> {
@@ -3796,12 +3934,12 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   }
 
   private initializeMetaTrackManager(): void {
-    const mistUrl = this.endpoints?.primary?.baseUrl;
+    const mistUrl = this.getSelectedMistBaseUrl();
     if (!mistUrl) return;
 
     this.metaTrackManager = new MetaTrackManager({
       mistBaseUrl: mistUrl,
-      streamName: this.config.contentId,
+      streamName: this.getMistStreamName(),
       debug: this.config.debug,
     });
 

@@ -133,6 +133,9 @@ export type { BreakpointConfig } from "./core/BreakpointObserver";
 export { parseThumbnailVtt, findCueAtTime, fetchThumbnailVtt } from "./core/ThumbnailVttParser";
 export type { ThumbnailCue } from "./core/ThumbnailVttParser";
 
+// Chandler thumbnail asset URL builder (poster, sprite, VTT)
+export { ChandlerAssetSource } from "./core/ChandlerAssetSource";
+
 // Styles
 export { ensurePlayerStyles, injectPlayerStyles } from "./styles";
 

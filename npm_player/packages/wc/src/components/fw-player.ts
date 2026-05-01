@@ -500,6 +500,25 @@ export class FwPlayer extends LitElement {
     return !s.endpoints?.primary && s.state !== "booting";
   }
 
+  private get _hasLoadingPosterSource() {
+    const lp = this.pc.s.loadingPoster;
+    return !!(lp && (lp.posterUrl || lp.spriteJpgUrl || lp.mistPreviewUrl || lp.cues.length > 0));
+  }
+
+  private get _showLoadingPosterOverlay() {
+    const s = this.pc.s;
+    const status = String(s.streamState?.status ?? "").toUpperCase();
+    const idleOnlyStatus = status === "OFFLINE" || status === "ERROR" || status === "INVALID";
+    return (
+      this._hasLoadingPosterSource &&
+      !this._showWaitingForEndpoint &&
+      !s.hasPlaybackStarted &&
+      !s.error &&
+      !this._displayedError &&
+      !idleOnlyStatus
+    );
+  }
+
   private get _waitingMessage() {
     const s = this.pc.s;
     if (this.gatewayUrl && s.state === "gateway_loading") {
@@ -611,6 +630,15 @@ export class FwPlayer extends LitElement {
           <!-- Video container -->
           <div id="container" part="video-container" class="fw-player-container"></div>
 
+          ${this._showLoadingPosterOverlay
+            ? html`
+                <fw-loading-poster
+                  style="position:absolute; inset:0; z-index:4;"
+                  .loadingPoster=${s.loadingPoster}
+                ></fw-loading-poster>
+              `
+            : nothing}
+
           <!-- Subtitle renderer -->
           ${s.subtitlesEnabled
             ? html`
@@ -672,7 +700,9 @@ export class FwPlayer extends LitElement {
             : nothing}
 
           <!-- Idle screen -->
-          ${!this._showWaitingForEndpoint && s.shouldShowIdleScreen
+          ${!this._showWaitingForEndpoint &&
+          s.shouldShowIdleScreen &&
+          !this._showLoadingPosterOverlay
             ? html`
                 <fw-idle-screen
                   .status=${s.isEffectivelyLive ? s.streamState?.status : undefined}

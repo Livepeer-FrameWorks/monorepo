@@ -1,6 +1,8 @@
 import React, { useRef, useEffect, useState } from "react";
 import DvdLogo from "./DvdLogo";
 import logomarkAsset from "../assets/logomark.svg";
+import { LoadingPoster, type LoadingPosterMode } from "./LoadingPoster";
+import type { LoadingPosterInfo } from "@livepeer-frameworks/player-core";
 import type { StreamStatus } from "../types";
 
 // ============================================================================
@@ -554,6 +556,10 @@ export interface IdleScreenProps {
   details?: string;
   /** Callback for retry button */
   onRetry?: () => void;
+  /** Loading-state poster snapshot — replaces the gradient art when a source is available. */
+  loadingPoster?: LoadingPosterInfo | null;
+  /** Loading poster render mode — "animate" cycles the sprite, "latest" shows the static poster. */
+  loadingPosterMode?: LoadingPosterMode;
 }
 
 export const IdleScreen: React.FC<IdleScreenProps> = ({
@@ -563,7 +569,16 @@ export const IdleScreen: React.FC<IdleScreenProps> = ({
   error,
   details,
   onRetry,
+  loadingPoster,
+  loadingPosterMode = "animate",
 }) => {
+  const hasPosterSource = !!(
+    loadingPoster &&
+    (loadingPoster.posterUrl ||
+      loadingPoster.spriteJpgUrl ||
+      loadingPoster.mistPreviewUrl ||
+      loadingPoster.cues.length > 0)
+  );
   const containerRef = useRef<HTMLDivElement>(null);
   const [hitmarkers, setHitmarkers] = useState<Hitmarker[]>([]);
 
@@ -637,7 +652,9 @@ export const IdleScreen: React.FC<IdleScreenProps> = ({
           position: "absolute",
           inset: 0,
           zIndex: 5,
-          background: `
+          background: hasPosterSource
+            ? "hsl(var(--tn-bg-dark, 235 21% 11%))"
+            : `
           linear-gradient(135deg,
             hsl(var(--tn-bg-dark, 235 21% 11%)) 0%,
             hsl(var(--tn-bg, 233 23% 17%)) 25%,
@@ -646,8 +663,8 @@ export const IdleScreen: React.FC<IdleScreenProps> = ({
             hsl(var(--tn-bg-dark, 235 21% 11%)) 100%
           )
         `,
-          backgroundSize: "400% 400%",
-          animation: "gradientShift 16s ease-in-out infinite",
+          backgroundSize: hasPosterSource ? "auto" : "400% 400%",
+          animation: hasPosterSource ? "none" : "gradientShift 16s ease-in-out infinite",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
@@ -658,6 +675,10 @@ export const IdleScreen: React.FC<IdleScreenProps> = ({
         } as React.CSSProperties
       }
     >
+      {hasPosterSource && (
+        <LoadingPoster loadingPoster={loadingPoster ?? null} mode={loadingPosterMode} />
+      )}
+
       {/* Hitmarkers */}
       {hitmarkers.map((hitmarker) => (
         <div
@@ -732,38 +753,40 @@ export const IdleScreen: React.FC<IdleScreenProps> = ({
         </div>
       ))}
 
-      {/* Floating particles */}
-      {[...Array(12)].map((_, index) => (
-        <div
-          key={`particle-${index}`}
-          style={{
-            position: "absolute",
-            left: `${Math.random() * 100}%`,
-            width: `${Math.random() * 4 + 2}px`,
-            height: `${Math.random() * 4 + 2}px`,
-            borderRadius: "50%",
-            background: [
-              "#7aa2f7",
-              "#bb9af7",
-              "#9ece6a",
-              "#73daca",
-              "#7dcfff",
-              "#f7768e",
-              "#e0af68",
-              "#2ac3de",
-            ][index % 8],
-            opacity: 0,
-            animation: `floatUp ${8 + Math.random() * 4}s linear infinite`,
-            animationDelay: `${Math.random() * 8}s`,
-            pointerEvents: "none",
-          }}
-        />
-      ))}
-
-      {/* Animated bubbles */}
-      {[...Array(8)].map((_, index) => (
-        <AnimatedBubble key={index} index={index} />
-      ))}
+      {/* Floating particles + bubbles — suppressed when a stream poster is shown to avoid visual clash */}
+      {!hasPosterSource && (
+        <>
+          {[...Array(12)].map((_, index) => (
+            <div
+              key={`particle-${index}`}
+              style={{
+                position: "absolute",
+                left: `${Math.random() * 100}%`,
+                width: `${Math.random() * 4 + 2}px`,
+                height: `${Math.random() * 4 + 2}px`,
+                borderRadius: "50%",
+                background: [
+                  "#7aa2f7",
+                  "#bb9af7",
+                  "#9ece6a",
+                  "#73daca",
+                  "#7dcfff",
+                  "#f7768e",
+                  "#e0af68",
+                  "#2ac3de",
+                ][index % 8],
+                opacity: 0,
+                animation: `floatUp ${8 + Math.random() * 4}s linear infinite`,
+                animationDelay: `${Math.random() * 8}s`,
+                pointerEvents: "none",
+              }}
+            />
+          ))}
+          {[...Array(8)].map((_, index) => (
+            <AnimatedBubble key={index} index={index} />
+          ))}
+        </>
+      )}
 
       {/* Center logo */}
       <CenterLogo

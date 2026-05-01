@@ -9,6 +9,7 @@
 import "./define.js";
 export { FwPlayer } from "./components/fw-player.js";
 export { FwLoadingScreen } from "./components/fw-loading-screen.js";
+export { FwLoadingPoster } from "./components/fw-loading-poster.js";
 export { FwIdleScreen } from "./components/fw-idle-screen.js";
 export { FwStreamStateOverlay } from "./components/fw-stream-state-overlay.js";
 export { FwThumbnailOverlay } from "./components/fw-thumbnail-overlay.js";

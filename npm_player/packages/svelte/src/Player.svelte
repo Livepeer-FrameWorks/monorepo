@@ -5,6 +5,7 @@
 <script lang="ts">
   import { onMount, setContext, type Snippet } from "svelte";
   import IdleScreen from "./IdleScreen.svelte";
+  import LoadingPoster from "./LoadingPoster.svelte";
   import SubtitleRenderer from "./SubtitleRenderer.svelte";
   import PlayerControls from "./PlayerControls.svelte";
   import SpeedIndicator from "./SpeedIndicator.svelte";
@@ -36,6 +37,8 @@
     type FwThemeOverrides,
     type FwLocale,
     type ThumbnailCue,
+    type LoadingPosterInfo,
+    type StreamInfo,
   } from "@livepeer-frameworks/player-core";
   import {
     createPlayerControllerStore,
@@ -200,6 +203,7 @@
     state: "booting" as PlayerState,
     streamState: null as any,
     endpoints: null as any,
+    streamInfo: null as StreamInfo | null,
     metadata: null as any,
     videoElement: null as HTMLVideoElement | null,
     currentTime: 0,
@@ -231,6 +235,7 @@
     controllerCanSeek: false,
     controllerHasAudio: true,
     thumbnailCues: [] as ThumbnailCue[],
+    loadingPoster: null as LoadingPosterInfo | null,
   });
 
   // Track if we've already attached to prevent double-attach race
@@ -400,6 +405,27 @@
       ? streamStateMessage
       : undefined
   );
+  let hasLoadingPosterSource = $derived(
+    !!(
+      storeState.loadingPoster &&
+      (storeState.loadingPoster.posterUrl ||
+        storeState.loadingPoster.spriteJpgUrl ||
+        storeState.loadingPoster.mistPreviewUrl ||
+        storeState.loadingPoster.cues.length > 0)
+    )
+  );
+  let streamStatus = $derived(String(storeState.streamState?.status ?? "").toUpperCase());
+  let isIdleOnlyStatus = $derived(
+    streamStatus === "OFFLINE" || streamStatus === "ERROR" || streamStatus === "INVALID"
+  );
+  let showLoadingPosterOverlay = $derived(
+    hasLoadingPosterSource &&
+      !showWaitingForEndpoint &&
+      !storeState.hasPlaybackStarted &&
+      !storeState.error &&
+      !displayedError &&
+      !isIdleOnlyStatus
+  );
 </script>
 
 <ContextMenu>
@@ -469,17 +495,7 @@
               playbackMode={devPlaybackMode}
               onModeChange={handleModeChange}
               onReload={handleReload}
-              streamInfo={storeState.currentSourceInfo
-                ? {
-                    source: [
-                      {
-                        url: storeState.currentSourceInfo.url,
-                        type: storeState.currentSourceInfo.type,
-                      },
-                    ],
-                    meta: { tracks: [] },
-                  }
-                : null}
+              streamInfo={storeState.streamInfo}
               mistStreamInfo={storeState.streamState?.streamInfo}
               currentPlayer={storeState.currentPlayerInfo}
               currentSource={storeState.currentSourceInfo}
@@ -505,8 +521,14 @@
             <IdleScreen status="OFFLINE" message={waitingMessage} />
           {/if}
 
+          {#if showLoadingPosterOverlay}
+            <div class="absolute inset-0 z-[4]">
+              <LoadingPoster loadingPoster={storeState.loadingPoster} />
+            </div>
+          {/if}
+
           <!-- Idle screen -->
-          {#if !showWaitingForEndpoint && storeState.shouldShowIdleScreen}
+          {#if !showWaitingForEndpoint && storeState.shouldShowIdleScreen && !showLoadingPosterOverlay}
             <IdleScreen
               status={storeState.isEffectivelyLive ? storeState.streamState?.status : undefined}
               message={idleMessage}
@@ -709,17 +731,7 @@
             playbackMode={devPlaybackMode}
             onModeChange={handleModeChange}
             onReload={handleReload}
-            streamInfo={storeState.currentSourceInfo
-              ? {
-                  source: [
-                    {
-                      url: storeState.currentSourceInfo.url,
-                      type: storeState.currentSourceInfo.type,
-                    },
-                  ],
-                  meta: { tracks: [] },
-                }
-              : null}
+            streamInfo={storeState.streamInfo}
             mistStreamInfo={storeState.streamState?.streamInfo}
             currentPlayer={storeState.currentPlayerInfo}
             currentSource={storeState.currentSourceInfo}

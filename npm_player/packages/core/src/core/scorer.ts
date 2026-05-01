@@ -244,9 +244,9 @@ export function calculateReliabilityScore(playerShortname: string): number {
  *
  * Priority rationale:
  * - Low-latency: WHEP/WebRTC and MP4/WS first; WebCodecs remains a fallback/manual option
- * - Quality: HLS/MP4/WS first; WebCodecs stays behind ABR-capable HLS
+ * - Quality: ABR-capable HLS first; WebCodecs stays behind browser-native ABR
  * - VOD: MP4/HLS first (seekable), WHEP hard penalty (no seek support)
- * - Auto: MP4/WS balanced choice, WHEP for low latency, HLS last resort
+ * - Auto: browser-native HTTP/MSE paths first; WHEP is opt-in via low-latency
  */
 export const MODE_PROTOCOL_BONUSES: Record<PlaybackMode, Record<string, number>> = {
   "low-latency": {
@@ -262,18 +262,19 @@ export const MODE_PROTOCOL_BONUSES: Record<PlaybackMode, Record<string, number>>
     "wss/video/raw": 0.2,
     "ws/video/h264": 0.18,
     "wss/video/h264": 0.18,
-    // Progressive MP4: lower latency than HLS (2-5s vs 10-30s)
-    "html5/video/mp4": 0.35,
+    // Progressive MP4 is not an adaptive live transport; keep it below WHEP/MEWS here.
+    "html5/video/mp4": 0.12,
     // HLS: high latency, minimal bonus
     "html5/application/vnd.apple.mpegurl": 0.05,
   },
   quality: {
-    // MP4/WS: stable + lower latency than HLS, preferred when supported
-    "ws/video/mp4": 0.45,
-    "wss/video/mp4": 0.45,
-    // HLS: ABR support, universal fallback
-    "html5/application/vnd.apple.mpegurl": 0.3,
-    "html5/video/mp4": 0.2,
+    // HLS: ABR support, universal browser path
+    "html5/application/vnd.apple.mpegurl": 0.5,
+    "html5/application/vnd.apple.mpegurl;version=7": 0.42,
+    // MP4/WS is selectable, but quality mode should favor manifest ABR first.
+    "ws/video/mp4": 0.28,
+    "wss/video/mp4": 0.28,
+    "html5/video/mp4": 0.15,
     // WebCodecs has no manifest-level ABR and should sit behind HLS in quality mode.
     "ws/video/raw": 0.1,
     "wss/video/raw": 0.1,
@@ -297,22 +298,24 @@ export const MODE_PROTOCOL_BONUSES: Record<PlaybackMode, Record<string, number>>
     "mist/webrtc": 0.1,
   },
   auto: {
-    // Direct MP4: simple, reliable, preferred over HLS when available
-    "html5/video/mp4": 0.42,
-    // WHEP/WebRTC: good for low latency
-    whep: 0.38,
-    webrtc: 0.2,
-    "mist/webrtc": 0.2,
+    // Direct MP4 is the most predictable default in local/dev and clip-like playback.
+    "html5/video/mp4": 0.55,
+    // HLS: reliable ABR live path.
+    "html5/application/vnd.apple.mpegurl": 0.32,
+    "html5/application/vnd.apple.mpegurl;version=7": 0.26,
     // MP4/WS (MEWS): lower latency than HLS
-    "ws/video/mp4": 0.3,
-    "wss/video/mp4": 0.3,
+    "ws/video/mp4": 0.24,
+    "wss/video/mp4": 0.24,
+    // WHEP/WebRTC are available, but local/dev environments commonly lack a
+    // complete ICE/datachannel setup. Keep them for explicit low-latency mode.
+    whep: 0.08,
+    webrtc: 0.06,
+    "mist/webrtc": 0.06,
     // WebCodecs remains available, but should not be the default live choice.
     "ws/video/raw": 0.15,
     "wss/video/raw": 0.15,
     "ws/video/h264": 0.13,
     "wss/video/h264": 0.13,
-    // HLS: high latency, fallback option (but reliable)
-    "html5/application/vnd.apple.mpegurl": 0.2,
   },
 };
 

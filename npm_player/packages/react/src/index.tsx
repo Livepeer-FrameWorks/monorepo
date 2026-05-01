@@ -11,6 +11,8 @@ export { default as PlayerControls } from "./components/PlayerControls";
 // Overlay components
 export { default as LoadingScreen } from "./components/LoadingScreen";
 export { default as IdleScreen } from "./components/IdleScreen";
+export { LoadingPoster, default as LoadingPosterDefault } from "./components/LoadingPoster";
+export type { LoadingPosterMode, LoadingPosterProps } from "./components/LoadingPoster";
 export { default as ThumbnailOverlay } from "./components/ThumbnailOverlay";
 export { default as TitleOverlay } from "./components/TitleOverlay";
 export { default as StreamStateOverlay } from "./components/StreamStateOverlay";
