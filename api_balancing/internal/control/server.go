@@ -2393,8 +2393,7 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 
 		if blocking {
 			errorCode := pb.IngestErrorCode_INGEST_ERROR_INTERNAL
-			var ingestErr *ingesterrors.IngestError
-			if errors.As(err, &ingestErr) {
+			if ingestErr, ok := errors.AsType[*ingesterrors.IngestError](err); ok {
 				errorCode = ingestErr.Code
 			}
 			// Send error response for blocking triggers
@@ -4844,7 +4843,7 @@ func tlsMaterialState(bundle *pb.TLSCertBundle, caBundle []byte) string {
 		payload = append(payload, bundle.GetKeyPem()...)
 		payload = append(payload, '\x00')
 		payload = append(payload, bundle.GetDomain()...)
-		payload = append(payload, []byte(fmt.Sprintf("\x00%d", bundle.GetExpiresAt()))...)
+		payload = fmt.Appendf(payload, "\x00%d", bundle.GetExpiresAt())
 	}
 	payload = append(payload, '\x00')
 	payload = append(payload, caBundle...)
@@ -5027,36 +5026,60 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 	// Resolve internal_name → stable S3 key identifier.
 	// Live streams: stream_id (UUID, never rotated).
 	// Artifacts: artifact_hash (32-char hex, immutable PK).
+	// The MistServer wildcard prefix ("live+" / "vod+") routes; the bare name is the lookup key.
 	var thumbnailKey string
-	ss := state.DefaultManager().GetStreamState(internalName)
-	if ss != nil && ss.StreamID != "" {
-		thumbnailKey = ss.StreamID
-	} else if strings.Contains(internalName, "+") {
-		// Artifact thumbnail (e.g., vod+{artifactInternalName} from MistProcThumbs on DVR playback).
-		artifactInternalName := mist.ExtractInternalName(internalName)
-		if conn := GetDB(); conn != nil {
-			err := conn.QueryRowContext(context.Background(),
-				`SELECT artifact_hash FROM foghorn.artifacts WHERE internal_name = $1`,
-				artifactInternalName,
-			).Scan(&thumbnailKey)
-			if err != nil {
+	bareName := mist.ExtractInternalName(internalName)
+	switch {
+	case strings.HasPrefix(internalName, "live+"):
+		// In-memory StreamState is populated by PUSH_REWRITE on ingest. If foghorn restarted
+		// while the stream was already live, fall back to Commodore — it owns the
+		// internal_name → stream_id mapping authoritatively.
+		if ss := state.DefaultManager().GetStreamState(bareName); ss != nil && ss.StreamID != "" {
+			thumbnailKey = ss.StreamID
+		} else if CommodoreClient != nil {
+			resp, err := CommodoreClient.ResolveInternalName(context.Background(), bareName)
+			if err != nil || resp == nil || resp.StreamId == "" {
 				logger.WithFields(logging.Fields{
 					"stream_name":   internalName,
-					"internal_name": artifactInternalName,
-				}).Warn("Could not resolve internal_name to artifact_hash for thumbnail upload")
+					"internal_name": bareName,
+					"error":         err,
+				}).Warn("Could not resolve internal_name to stream_id for thumbnail upload")
 				return
 			}
+			thumbnailKey = resp.StreamId
+			state.DefaultManager().SetStreamStreamID(bareName, resp.StreamId)
 		} else {
-			logger.Warn("DB not available for artifact hash resolution")
+			logger.WithField("internal_name", bareName).Warn("Commodore client unavailable for stream_id resolution")
 			return
 		}
 		logger.WithFields(logging.Fields{
 			"stream_name":   internalName,
-			"internal_name": artifactInternalName,
+			"internal_name": bareName,
+			"stream_id":     thumbnailKey,
+		}).Info("Resolved live stream_id for thumbnail S3 key")
+	case strings.HasPrefix(internalName, "vod+"):
+		conn := GetDB()
+		if conn == nil {
+			logger.Warn("DB not available for artifact hash resolution")
+			return
+		}
+		if err := conn.QueryRowContext(context.Background(),
+			`SELECT artifact_hash FROM foghorn.artifacts WHERE internal_name = $1`,
+			bareName,
+		).Scan(&thumbnailKey); err != nil {
+			logger.WithFields(logging.Fields{
+				"stream_name":   internalName,
+				"internal_name": bareName,
+			}).Warn("Could not resolve internal_name to artifact_hash for thumbnail upload")
+			return
+		}
+		logger.WithFields(logging.Fields{
+			"stream_name":   internalName,
+			"internal_name": bareName,
 			"artifact_hash": thumbnailKey,
 		}).Info("Resolved artifact hash for thumbnail S3 key")
-	} else {
-		logger.WithField("internal_name", internalName).Warn("Stream not found or missing stream_id for thumbnail upload")
+	default:
+		logger.WithField("internal_name", internalName).Warn("Thumbnail upload from unrecognised stream prefix; expected live+ or vod+")
 		return
 	}
 

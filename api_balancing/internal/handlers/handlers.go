@@ -2799,7 +2799,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	if protocol == "" || protocol == "any" {
 		// Record metrics
 		if metrics != nil {
-			metrics.RoutingDecisions.WithLabelValues("generic_viewer", contentType, response.Primary.NodeId).Inc()
+			metrics.RoutingDecisions.WithLabelValues("generic_viewer_"+contentType, response.Primary.NodeId).Inc()
 		}
 
 		logger.WithFields(logging.Fields{
@@ -2852,7 +2852,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// Record metrics
 	if metrics != nil {
-		metrics.RoutingDecisions.WithLabelValues("generic_viewer_redirect", protocol, response.Primary.NodeId).Inc()
+		metrics.RoutingDecisions.WithLabelValues("generic_viewer_redirect_"+protocol, response.Primary.NodeId).Inc()
 	}
 
 	logger.WithFields(logging.Fields{
