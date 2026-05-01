@@ -84,7 +84,7 @@ func (r *Resolver) DoGetMe(ctx context.Context) (*pb.User, error) {
 		}
 		demoEmail := "developer@frameworks.demo"
 		return &pb.User{
-			Id:        "demo_user_developer",
+			Id:        "5eedface-5e1f-da7a-face-5e1fda7a0001",
 			Email:     &demoEmail,
 			FirstName: "Demo",
 			LastName:  "Developer",

@@ -215,6 +215,9 @@ func (r *Resolver) DoGetVodUploadStatusProto(ctx context.Context, uploadID strin
 	if uploadID == "" {
 		return nil, fmt.Errorf("upload_id is required")
 	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateVodUploadStatus(uploadID), nil
+	}
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")

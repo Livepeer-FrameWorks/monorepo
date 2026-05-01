@@ -24,9 +24,10 @@ func newClusterSeedCmd() *cobra.Command {
 		Short: "Load seed data into databases",
 		Long: `Load seed data into cluster databases.
 
-By default, only static seeds (production reference data like billing tiers)
-are applied. Use --demo to also apply demo data (sample tenant, user, stream)
-for development and testing.
+By default, static SQL seeds are applied when a database has SQL-owned
+reference data. Service-owned bootstrap state such as billing tiers,
+tenants, clusters, and users is reconciled by the provisioning bootstrap
+commands. Use --demo to also apply demo data for development and testing.
 
 Seed operations are idempotent (ON CONFLICT guards).`,
 		Example: `  frameworks cluster seed --demo

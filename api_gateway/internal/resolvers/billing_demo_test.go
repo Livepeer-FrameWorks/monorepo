@@ -13,8 +13,8 @@ func TestDemoTenantUsageUsesInvoicePreviewLineItems(t *testing.T) {
 		t.Fatalf("demoTenantUsageFromInvoicePreview: %v", err)
 	}
 
-	if usage.UsageAmount != "0.64" {
-		t.Fatalf("UsageAmount = %q, want 0.64", usage.UsageAmount)
+	if usage.UsageAmount != "0.71" {
+		t.Fatalf("UsageAmount = %q, want 0.71", usage.UsageAmount)
 	}
 	if usage.TotalCost != preview.MeteredAmount {
 		t.Fatalf("TotalCost = %v, want %v", usage.TotalCost, preview.MeteredAmount)

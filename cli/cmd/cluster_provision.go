@@ -70,9 +70,10 @@ Phase Options (--only):
 Provisioning is idempotent - safe to run multiple times.
 Existing services will be detected and skipped unless --force is used.
 
-Pass --ready to chain 'cluster init' and 'cluster seed' (static seeds only)
-after service batches — gives you a fully usable platform in a single
-command. Add --seed-demo for demo tenant/user/stream data as well.
+Pass --ready to chain 'cluster init' and 'cluster seed' after service
+batches. Service-owned bootstrap state is reconciled during provisioning;
+the seed step only applies SQL-owned reference/demo data. Add --seed-demo
+for demo tenant/user/stream data as well.
 
 The manifest source (single file, local gitops repo, or GitHub repo) is
 chosen by the persistent cluster-group flags. Run 'frameworks setup' to
@@ -347,7 +348,7 @@ func renderProvisionSummary(ctx context.Context, cmd *cobra.Command, manifest *i
 	if ready {
 		fields = append(fields,
 			ux.ResultField{Key: "init", OK: initRan, Detail: "postgres/kafka/clickhouse"},
-			ux.ResultField{Key: "seeds", OK: seedsRan, Detail: "static (+demo if --seed-demo)"},
+			ux.ResultField{Key: "seeds", OK: seedsRan, Detail: "SQL-owned data (+demo if --seed-demo)"},
 		)
 	}
 	fields = append(fields, ux.ResultField{

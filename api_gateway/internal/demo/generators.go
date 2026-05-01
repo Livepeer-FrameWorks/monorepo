@@ -19,18 +19,32 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const (
+	DemoTenantID          = "5eed517e-ba5e-da7a-517e-ba5eda7a0001"
+	DemoUserID            = "5eedface-5e1f-da7a-face-5e1fda7a0001"
+	DemoStreamID          = "5eedfeed-11fe-ca57-feed-11feca570001"
+	DemoStreamInternal    = "demo_live_stream_001"
+	DemoStreamKey         = "sk_demo_live_stream_primary_key"
+	DemoPlaybackID        = "pb_demo_live_001"
+	DemoCentralClusterID  = "central-primary"
+	DemoMediaClusterID    = "demo-media"
+	DemoSelfHostedCluster = "demo-selfhosted"
+	DemoVodHash           = "c3d4e5f678901234567890123456abcd"
+	DemoVodPlaybackID     = "vod1a2b3c4d5e6fg"
+)
+
 // GenerateStreams creates realistic demo stream data
 func GenerateStreams() []*pb.Stream {
 	now := time.Now()
 
 	return []*pb.Stream{
 		{
-			StreamId:       "00000000-0000-0000-0000-000000000001",
-			InternalName:   "demo_live_stream_001",
+			StreamId:       DemoStreamID,
+			InternalName:   DemoStreamInternal,
 			Title:          "Live: FrameWorks Demo Stream",
 			Description:    "Demonstrating live streaming capabilities",
-			StreamKey:      "sk_demo_live_a1b2c3d4e5f6",
-			PlaybackId:     "pb_demo_live_x7y8z9",
+			StreamKey:      DemoStreamKey,
+			PlaybackId:     DemoPlaybackID,
 			IsLive:         true,
 			Status:         "live",
 			IsRecording:    true,
@@ -105,7 +119,7 @@ func GenerateStreamAnalyticsSummary(streamID string) *pb.StreamAnalyticsSummary 
 	start := now.Add(-7 * 24 * time.Hour)
 
 	return &pb.StreamAnalyticsSummary{
-		TenantId:  "00000000-0000-0000-0000-000000000001",
+		TenantId:  DemoTenantID,
 		StreamId:  streamID,
 		TimeRange: &pb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(now)},
 
@@ -341,9 +355,9 @@ func GenerateInvoices() []*pb.Invoice {
 		"native_av_aac_seconds":  150.0,
 		"native_av_opus_seconds": 50.0,
 		"tier_info": map[string]interface{}{
-			"tier_name":        "supporter",
-			"display_name":     "Supporter",
-			"base_price":       79.00,
+			"tier_name":        "developer",
+			"display_name":     "Developer",
+			"base_price":       249.00,
 			"metering_enabled": true,
 		},
 	})
@@ -365,9 +379,9 @@ func GenerateInvoices() []*pb.Invoice {
 		"native_av_aac_seconds":  120.0,
 		"native_av_opus_seconds": 40.0,
 		"tier_info": map[string]interface{}{
-			"tier_name":        "supporter",
-			"display_name":     "Supporter",
-			"base_price":       79.00,
+			"tier_name":        "developer",
+			"display_name":     "Developer",
+			"base_price":       249.00,
 			"metering_enabled": true,
 		},
 	})
@@ -375,11 +389,11 @@ func GenerateInvoices() []*pb.Invoice {
 	return []*pb.Invoice{
 		{
 			Id:                   "inv_demo_current_001",
-			TenantId:             "00000000-0000-0000-0000-000000000001",
-			Amount:               74.53,
-			BaseAmount:           79.00,
-			MeteredAmount:        0.53,
-			PrepaidCreditApplied: 5.00,
+			TenantId:             DemoTenantID,
+			Amount:               249.46,
+			BaseAmount:           249.00,
+			MeteredAmount:        0.46,
+			PrepaidCreditApplied: 0,
 			Currency:             "EUR",
 			Status:               "paid",
 			DueDate:              timestamppb.New(now.Add(24 * time.Hour)),
@@ -389,7 +403,7 @@ func GenerateInvoices() []*pb.Invoice {
 			PeriodStart:          timestamppb.New(periodStart),
 			PeriodEnd:            timestamppb.New(periodEnd),
 			UsageSummary: &pb.UsageSummary{
-				TenantId:              "00000000-0000-0000-0000-000000000001",
+				TenantId:              DemoTenantID,
 				Period:                periodStart.Format(time.RFC3339) + "/" + periodEnd.Format(time.RFC3339),
 				Timestamp:             timestamppb.New(now.Add(-30 * 24 * time.Hour)),
 				Granularity:           "monthly",
@@ -441,18 +455,18 @@ func GenerateInvoices() []*pb.Invoice {
 				DefrostBytes:    2_684_354_560,
 			},
 			LineItems: demoLineItems(
-				demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "79.00", Total: "79.00"},
-				demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:current", Meter: "delivered_minutes", Quantity: "42500", IncludedQuantity: "120000", BillableQuantity: "0", UnitPrice: "0.00055", Total: "0.00", ClusterID: "demo-media", ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
-				demoLineSpec{LineKey: "meter:average_storage_gb:demo-media:current", Meter: "average_storage_gb", Quantity: "15.2", IncludedQuantity: "0", BillableQuantity: "15.2", UnitPrice: "0.035", Total: "0.53", ClusterID: "demo-media", ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
-				demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:current", Meter: "delivered_minutes", Quantity: "8300", IncludedQuantity: "0", BillableQuantity: "8300", UnitPrice: "0.00", Total: "0.00", ClusterID: "demo-selfhosted", ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
+				demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "249.00", Total: "249.00"},
+				demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:current", Meter: "delivered_minutes", Quantity: "42500", IncludedQuantity: "500000", BillableQuantity: "0", UnitPrice: "0.00052", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+				demoLineSpec{LineKey: "meter:average_storage_gb:demo-media:current", Meter: "average_storage_gb", Quantity: "15.2", IncludedQuantity: "0", BillableQuantity: "15.2", UnitPrice: "0.030", Total: "0.46", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+				demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:current", Meter: "delivered_minutes", Quantity: "8300", IncludedQuantity: "0", BillableQuantity: "8300", UnitPrice: "0.00", Total: "0.00", ClusterID: DemoSelfHostedCluster, ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 			),
 		},
 		{
 			Id:                   "inv_demo_previous_002",
-			TenantId:             "00000000-0000-0000-0000-000000000001",
-			Amount:               79.67,
-			BaseAmount:           79.00,
-			MeteredAmount:        0.67,
+			TenantId:             DemoTenantID,
+			Amount:               249.57,
+			BaseAmount:           249.00,
+			MeteredAmount:        0.57,
 			PrepaidCreditApplied: 0,
 			Currency:             "EUR",
 			Status:               "paid",
@@ -464,7 +478,7 @@ func GenerateInvoices() []*pb.Invoice {
 			PeriodStart:          timestamppb.New(periodStart.AddDate(0, -1, 0)),
 			PeriodEnd:            timestamppb.New(periodStart),
 			UsageSummary: &pb.UsageSummary{
-				TenantId:              "00000000-0000-0000-0000-000000000001",
+				TenantId:              DemoTenantID,
 				Period:                periodStart.AddDate(0, -1, 0).Format(time.RFC3339) + "/" + periodStart.Format(time.RFC3339),
 				Timestamp:             timestamppb.New(now.Add(-28 * 24 * time.Hour)),
 				Granularity:           "monthly",
@@ -516,10 +530,10 @@ func GenerateInvoices() []*pb.Invoice {
 				DefrostBytes:    2_147_483_648,
 			},
 			LineItems: demoLineItems(
-				demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "79.00", Total: "79.00"},
-				demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:previous", Meter: "delivered_minutes", Quantity: "35000", IncludedQuantity: "120000", BillableQuantity: "0", UnitPrice: "0.00055", Total: "0.00", ClusterID: "demo-media", ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
-				demoLineSpec{LineKey: "meter:average_storage_gb:demo-media:previous", Meter: "average_storage_gb", Quantity: "19", IncludedQuantity: "0", BillableQuantity: "19", UnitPrice: "0.035", Total: "0.67", ClusterID: "demo-media", ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
-				demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:previous", Meter: "delivered_minutes", Quantity: "6100", IncludedQuantity: "0", BillableQuantity: "6100", UnitPrice: "0.00", Total: "0.00", ClusterID: "demo-selfhosted", ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
+				demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "249.00", Total: "249.00"},
+				demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:previous", Meter: "delivered_minutes", Quantity: "35000", IncludedQuantity: "500000", BillableQuantity: "0", UnitPrice: "0.00052", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+				demoLineSpec{LineKey: "meter:average_storage_gb:demo-media:previous", Meter: "average_storage_gb", Quantity: "19", IncludedQuantity: "0", BillableQuantity: "19", UnitPrice: "0.030", Total: "0.57", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+				demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:previous", Meter: "delivered_minutes", Quantity: "6100", IncludedQuantity: "0", BillableQuantity: "6100", UnitPrice: "0.00", Total: "0.00", ClusterID: DemoSelfHostedCluster, ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 			),
 		},
 	}
@@ -532,23 +546,24 @@ func GenerateInvoicePreview() *pb.Invoice {
 	periodEnd := periodStart.AddDate(0, 1, 0)
 
 	usageDetails, _ := structpb.NewStruct(map[string]interface{}{
-		"viewer_hours":       412.5,
-		"average_storage_gb": 18.4,
-		"stream_hours":       68.5,
+		"viewer_hours":       4166.67,
+		"average_storage_gb": 23.5,
+		"stream_hours":       127.5,
+		"egress_gb":          456.78,
 		"tier_info": map[string]interface{}{
-			"tier_name":        "supporter",
-			"display_name":     "Supporter",
-			"base_price":       79.00,
+			"tier_name":        "developer",
+			"display_name":     "Developer",
+			"base_price":       249.00,
 			"metering_enabled": true,
 		},
 	})
 
 	return &pb.Invoice{
 		Id:                   "inv_demo_draft_0001",
-		TenantId:             "00000000-0000-0000-0000-000000000001",
-		Amount:               79.64,
-		BaseAmount:           79.00,
-		MeteredAmount:        0.64,
+		TenantId:             DemoTenantID,
+		Amount:               249.71,
+		BaseAmount:           249.00,
+		MeteredAmount:        0.71,
 		PrepaidCreditApplied: 0,
 		Currency:             "EUR",
 		Status:               "draft",
@@ -559,14 +574,14 @@ func GenerateInvoicePreview() *pb.Invoice {
 		PeriodStart:          timestamppb.New(periodStart),
 		PeriodEnd:            timestamppb.New(periodEnd),
 		UsageSummary: &pb.UsageSummary{
-			TenantId:              "00000000-0000-0000-0000-000000000001",
+			TenantId:              DemoTenantID,
 			Period:                periodStart.Format(time.RFC3339) + "/" + periodEnd.Format(time.RFC3339),
 			Timestamp:             timestamppb.New(now),
 			Granularity:           "monthly",
-			StreamHours:           68.5,
-			EgressGb:              140.3,
+			StreamHours:           127.5,
+			EgressGb:              456.78,
 			PeakBandwidthMbps:     125.4,
-			AverageStorageGb:      18.4,
+			AverageStorageGb:      23.5,
 			LivepeerH264Seconds:   2340.0,
 			LivepeerVp9Seconds:    480.0,
 			LivepeerAv1Seconds:    180.0,
@@ -579,7 +594,7 @@ func GenerateInvoicePreview() *pb.Invoice {
 			NativeAvOpusSeconds:   60.0,
 			TotalStreams:          42,
 			TotalViewers:          1250,
-			ViewerHours:           412.5,
+			ViewerHours:           4166.67,
 			MaxViewers:            347,
 			UniqueUsers:           980,
 			LivepeerSegmentCount:  4280,
@@ -619,10 +634,10 @@ func GenerateInvoicePreview() *pb.Invoice {
 			DefrostBytes: 2_147_483_648,
 		},
 		LineItems: demoLineItems(
-			demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "79.00", Total: "79.00"},
-			demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:draft", Meter: "delivered_minutes", Quantity: "24750", IncludedQuantity: "120000", BillableQuantity: "0", UnitPrice: "0.00055", Total: "0.00", ClusterID: "demo-media", ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
-			demoLineSpec{LineKey: "meter:average_storage_gb:demo-media:draft", Meter: "average_storage_gb", Quantity: "18.4", IncludedQuantity: "0", BillableQuantity: "18.4", UnitPrice: "0.035", Total: "0.64", ClusterID: "demo-media", ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
-			demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:draft", Meter: "delivered_minutes", Quantity: "4200", IncludedQuantity: "0", BillableQuantity: "4200", UnitPrice: "0.00", Total: "0.00", ClusterID: "demo-selfhosted", ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
+			demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "249.00", Total: "249.00"},
+			demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:draft", Meter: "delivered_minutes", Quantity: "250000", IncludedQuantity: "500000", BillableQuantity: "0", UnitPrice: "0.00052", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+			demoLineSpec{LineKey: "meter:average_storage_gb:demo-media:draft", Meter: "average_storage_gb", Quantity: "23.5", IncludedQuantity: "0", BillableQuantity: "23.5", UnitPrice: "0.030", Total: "0.71", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+			demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:draft", Meter: "delivered_minutes", Quantity: "4200", IncludedQuantity: "0", BillableQuantity: "4200", UnitPrice: "0.00", Total: "0.00", ClusterID: DemoSelfHostedCluster, ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 		),
 	}
 }
@@ -715,13 +730,13 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 	nextBilling := now.Add(18 * 24 * time.Hour)
 
 	return &pb.BillingStatusResponse{
-		TenantId: "00000000-0000-0000-0000-000000000001",
+		TenantId: DemoTenantID,
 		Subscription: &pb.TenantSubscription{
 			Id:                 "sub_demo_123",
-			TenantId:           "00000000-0000-0000-0000-000000000001",
-			TierId:             "tier_demo_supporter",
+			TenantId:           DemoTenantID,
+			TierId:             "tier_demo_developer",
 			Status:             "active",
-			BillingEmail:       "demo@frameworks.example",
+			BillingEmail:       "demo@frameworks.dev",
 			StartedAt:          timestamppb.New(now.Add(-30 * 24 * time.Hour)),
 			NextBillingDate:    timestamppb.New(nextBilling),
 			BillingPeriodStart: timestamppb.New(time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())),
@@ -742,15 +757,15 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 			},
 		},
 		Tier: &pb.BillingTier{
-			Id:            "tier_demo_supporter",
-			TierName:      "supporter",
-			DisplayName:   "Supporter",
-			Description:   "120K delivered minutes, 10 GPU-hours, hosted load balancing, custom subdomain.",
-			BasePrice:     79.00,
+			Id:            "tier_demo_developer",
+			TierName:      "developer",
+			DisplayName:   "Developer",
+			Description:   "500K delivered minutes, 50 GPU-hours, team features, advanced analytics.",
+			BasePrice:     249.00,
 			Currency:      "EUR",
 			BillingPeriod: "monthly",
-			PricingRules:  demoPricingRulesForTier("supporter"),
-			Entitlements:  map[string]string{"recording_retention_days": "90"},
+			PricingRules:  demoPricingRulesForTier("developer"),
+			Entitlements:  map[string]string{"recording_retention_days": "180"},
 			Features: &pb.BillingFeatures{
 				Recording:      true,
 				Analytics:      true,
@@ -763,7 +778,7 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 			SlaLevel:        "99.9%",
 			MeteringEnabled: true,
 			IsActive:        true,
-			TierLevel:       2,
+			TierLevel:       3,
 			IsEnterprise:    false,
 			CreatedAt:       timestamppb.New(now.Add(-90 * 24 * time.Hour)),
 			UpdatedAt:       timestamppb.New(now.Add(-7 * 24 * time.Hour)),
@@ -3430,9 +3445,9 @@ func GenerateClips() []*pb.ClipInfo {
 func GenerateMarketplaceClusters() []*pb.MarketplaceClusterEntry {
 	return []*pb.MarketplaceClusterEntry{
 		{
-			ClusterId:        "cluster_demo_platform",
-			ClusterName:      "FrameWorks Platform (Free)",
-			ShortDescription: stringPtr("Free tier platform cluster for all users"),
+			ClusterId:        DemoMediaClusterID,
+			ClusterName:      "Demo Media Cluster",
+			ShortDescription: stringPtr("Platform media cluster seeded for local development"),
 			Visibility:       pb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC,
 			PricingModel:     pb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED,
 			OwnerName:        stringPtr("FrameWorks"),
@@ -3440,9 +3455,9 @@ func GenerateMarketplaceClusters() []*pb.MarketplaceClusterEntry {
 			IsSubscribed:     true,
 		},
 		{
-			ClusterId:         "cluster_demo_us_west",
-			ClusterName:       "US West CDN (Oregon)",
-			ShortDescription:  stringPtr("Low-latency US West Coast edge delivery"),
+			ClusterId:         DemoCentralClusterID,
+			ClusterName:       "Central Primary",
+			ShortDescription:  stringPtr("Core platform cluster used by provisioned central services"),
 			Visibility:        pb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC,
 			PricingModel:      pb.ClusterPricingModel_CLUSTER_PRICING_METERED,
 			MonthlyPriceCents: 0,
@@ -3451,15 +3466,15 @@ func GenerateMarketplaceClusters() []*pb.MarketplaceClusterEntry {
 			IsSubscribed:      false,
 		},
 		{
-			ClusterId:         "cluster_demo_eu_west",
-			ClusterName:       "EU West CDN (Ireland)",
-			ShortDescription:  stringPtr("GDPR-compliant European edge delivery"),
-			Visibility:        pb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC,
-			PricingModel:      pb.ClusterPricingModel_CLUSTER_PRICING_METERED,
+			ClusterId:         DemoSelfHostedCluster,
+			ClusterName:       "Demo Self-hosted Cluster",
+			ShortDescription:  stringPtr("Tenant-owned edge cluster with self-hosted pricing"),
+			Visibility:        pb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE,
+			PricingModel:      pb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED,
 			MonthlyPriceCents: 0,
-			OwnerName:         stringPtr("FrameWorks"),
+			OwnerName:         stringPtr("Demo Tenant"),
 			IsEligible:        true,
-			IsSubscribed:      false,
+			IsSubscribed:      true,
 		},
 		{
 			ClusterId:         "cluster_demo_enterprise",
@@ -3482,8 +3497,8 @@ func GenerateMySubscriptions() []*pb.InfrastructureCluster {
 	now := time.Now()
 	return []*pb.InfrastructureCluster{
 		{
-			Id:                   "cluster_demo_platform",
-			ClusterId:            "demo-media",
+			Id:                   DemoMediaClusterID,
+			ClusterId:            DemoMediaClusterID,
 			ClusterName:          "Demo Media Cluster",
 			ClusterType:          infra.ClusterTypeEdge,
 			DeploymentModel:      "managed",
@@ -3498,8 +3513,8 @@ func GenerateMySubscriptions() []*pb.InfrastructureCluster {
 			UpdatedAt:            timestamppb.New(now.Add(-1 * time.Hour)),
 		},
 		{
-			Id:                   "cluster_demo_selfhosted",
-			ClusterId:            "demo-selfhosted",
+			Id:                   DemoSelfHostedCluster,
+			ClusterId:            DemoSelfHostedCluster,
 			ClusterName:          "Demo Self-hosted Cluster",
 			ClusterType:          infra.ClusterTypeEdge,
 			DeploymentModel:      "self_hosted",
@@ -3908,32 +3923,53 @@ func GenerateVodUploadSession(filename string, sizeBytes float64) *model.VodUplo
 	return &model.VodUploadSession{
 		ID:           "demo_upload_" + now.Format("20060102150405"),
 		ArtifactID:   "artifact_demo_vod_" + now.Format("20060102150405"),
-		ArtifactHash: "vod_demo_hash_" + now.Format("150405"),
-		PlaybackID:   "pl_demo_vod_" + now.Format("150405"),
+		ArtifactHash: DemoVodHash,
+		PlaybackID:   DemoVodPlaybackID,
 		PartSize:     float64(partSize),
 		Parts:        parts,
 		ExpiresAt:    now.Add(2 * time.Hour),
 	}
 }
 
+// GenerateVodUploadStatus creates resumable multipart upload state for demo mode.
+func GenerateVodUploadStatus(uploadID string) *pb.GetVodUploadStatusResponse {
+	now := time.Now()
+	if strings.TrimSpace(uploadID) == "" {
+		uploadID = "demo_upload_active"
+	}
+
+	return &pb.GetVodUploadStatusResponse{
+		UploadId:       uploadID,
+		State:          pb.VodStatus_VOD_STATUS_UPLOADING,
+		ExpiresAt:      timestamppb.New(now.Add(90 * time.Minute)),
+		RetentionUntil: timestamppb.New(now.AddDate(0, 0, 180)),
+		UploadedParts: []*pb.VodUploadedPart{
+			{PartNumber: 1, Etag: "\"demo-part-1-etag\"", SizeBytes: 20 * 1024 * 1024},
+			{PartNumber: 3, Etag: "\"demo-part-3-etag\"", SizeBytes: 20 * 1024 * 1024},
+		},
+		MissingParts: []int32{2, 4, 5},
+		ArtifactHash: DemoVodHash,
+		PlaybackId:   DemoVodPlaybackID,
+	}
+}
+
 // GenerateVodAsset creates a single demo VOD asset
 func GenerateVodAsset() *model.VodAsset {
 	now := time.Now()
-	title := "Demo Video Upload"
-	description := "A demo video file for testing"
-	filename := "demo_video.mp4"
-	sizeBytes := float64(150 * 1024 * 1024) // 150MB
-	durationMs := 180000                    // 3 minutes
-	resolution := "1920x1080"
-	videoCodec := "h264"
-	audioCodec := "aac"
-	bitrateKbps := 5000
+	title := "Product Demo 2024"
+	description := "Annual product demonstration showcasing new streaming features"
+	filename := "product_demo_2024.webm"
+	sizeBytes := float64(149099)
+	durationMs := 4000
+	resolution := "640x360"
+	videoCodec := "vp9"
+	audioCodec := "opus"
+	bitrateKbps := 300
 
-	artifactHash := "c3d4e5f678901234567890123456abcd"
 	return &model.VodAsset{
-		ID:              globalid.Encode(globalid.TypeVodAsset, artifactHash),
-		ArtifactHash:    artifactHash,
-		PlaybackID:      "pl_demo_vod_001",
+		ID:              globalid.Encode(globalid.TypeVodAsset, DemoVodHash),
+		ArtifactHash:    DemoVodHash,
+		PlaybackID:      DemoVodPlaybackID,
 		Title:           &title,
 		Description:     &description,
 		Filename:        &filename,
@@ -3960,20 +3996,20 @@ func GenerateVodAssets() []*model.VodAsset {
 
 	return []*model.VodAsset{
 		{
-			ID:              "vod_demo_001",
-			ArtifactHash:    "c3d4e5f678901234567890123456abcd",
-			PlaybackID:      "pl_demo_vod_001",
-			Title:           sp("Product Demo Video"),
-			Description:     sp("Full product demonstration walkthrough"),
-			Filename:        sp("product_demo_2024.mp4"),
+			ID:              globalid.Encode(globalid.TypeVodAsset, DemoVodHash),
+			ArtifactHash:    DemoVodHash,
+			PlaybackID:      DemoVodPlaybackID,
+			Title:           sp("Product Demo 2024"),
+			Description:     sp("Annual product demonstration showcasing new streaming features"),
+			Filename:        sp("product_demo_2024.webm"),
 			Status:          model.VodAssetStatusReady,
 			StorageLocation: "s3",
-			SizeBytes:       fp(250 * 1024 * 1024),
-			DurationMs:      ip(300000), // 5 minutes
-			Resolution:      sp("1920x1080"),
-			VideoCodec:      sp("h264"),
-			AudioCodec:      sp("aac"),
-			BitrateKbps:     ip(6000),
+			SizeBytes:       fp(149099),
+			DurationMs:      ip(4000),
+			Resolution:      sp("640x360"),
+			VideoCodec:      sp("vp9"),
+			AudioCodec:      sp("opus"),
+			BitrateKbps:     ip(300),
 			CreatedAt:       now.Add(-48 * time.Hour),
 			UpdatedAt:       now.Add(-47 * time.Hour),
 		},

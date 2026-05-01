@@ -350,9 +350,8 @@ func (m *Manifest) Validate() error {
 			defaultClusterCount++
 		}
 		if cluster.OwnerTenant != "" && cluster.OwnerTenant != "frameworks" {
-			uuidRe := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-			if !uuidRe.MatchString(cluster.OwnerTenant) {
-				return fmt.Errorf("cluster '%s': owner_tenant must be 'frameworks' or a valid UUID, got %q", id, cluster.OwnerTenant)
+			if !validBootstrapTenantAlias(cluster.OwnerTenant) {
+				return fmt.Errorf("cluster '%s': owner_tenant must be 'frameworks' or a bootstrap tenant alias matching ^[a-z][a-z0-9-]*$, got %q", id, cluster.OwnerTenant)
 			}
 		}
 		if cluster.Pricing != nil {
@@ -459,6 +458,12 @@ func (m *Manifest) Validate() error {
 	}
 
 	return nil
+}
+
+var bootstrapTenantAliasRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
+
+func validBootstrapTenantAlias(alias string) bool {
+	return bootstrapTenantAliasRE.MatchString(alias)
 }
 
 // GetHost returns a host by name

@@ -30,8 +30,8 @@ func DemoModePostAuth(logger logging.Logger) gin.HandlerFunc {
 		ctx := context.WithValue(c.Request.Context(), ctxkeys.KeyDemoMode, true)
 
 		// Set demo identifiers for resolvers that need them
-		ctx = context.WithValue(ctx, ctxkeys.KeyDemoTenantID, "demo_tenant_frameworks")
-		ctx = context.WithValue(ctx, ctxkeys.KeyDemoUserID, "demo_user_developer")
+		ctx = context.WithValue(ctx, ctxkeys.KeyDemoTenantID, "5eed517e-ba5e-da7a-517e-ba5eda7a0001")
+		ctx = context.WithValue(ctx, ctxkeys.KeyDemoUserID, "5eedface-5e1f-da7a-face-5e1fda7a0001")
 
 		// SECURITY: Do NOT set KeyTenantID or KeyUserID here.
 		// Injecting fake credentials would bypass rate limiting, which checks for empty/public tenant_id.

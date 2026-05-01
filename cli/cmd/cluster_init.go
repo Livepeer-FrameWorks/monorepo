@@ -89,7 +89,7 @@ func runInit(cmd *cobra.Command, rc *resolvedCluster, service string) error {
 
 	ux.Success(out, "Initialization complete")
 	ux.PrintNextSteps(out, []ux.NextStep{
-		{Cmd: "frameworks cluster seed", Why: "Load static seed data (billing tiers, reference data)."},
+		{Cmd: "frameworks cluster seed", Why: "Load SQL-owned seed data when configured."},
 		{Cmd: "frameworks cluster doctor", Why: "Verify the cluster is ready."},
 	})
 	return nil

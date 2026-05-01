@@ -1164,7 +1164,7 @@ ON CONFLICT (artifact_hash) DO UPDATE SET
 
 INSERT INTO foghorn.vod_metadata (
     artifact_hash, filename, title, description, content_type,
-    s3_upload_id, s3_key,
+    s3_upload_id, s3_key, upload_expires_at, total_parts,
     duration_ms, resolution, video_codec, audio_codec, bitrate_kbps,
     width, height, fps, audio_channels, audio_sample_rate,
     created_at, updated_at
@@ -1178,6 +1178,8 @@ INSERT INTO foghorn.vod_metadata (
     'video/webm',
     NULL,            -- Upload completed
     'vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/c3d4e5f678901234567890123456abcd/c3d4e5f678901234567890123456abcd.webm',
+    NULL,
+    1,
     4000,            -- 4 seconds
     '640x360',
     'vp9',
@@ -1196,6 +1198,8 @@ INSERT INTO foghorn.vod_metadata (
     'video/mp4',
     'abc123multipartupload',   -- Still has upload ID (not yet cleaned)
     'vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/20240101120500d4e5f6789012345a/20240101120500d4e5f6789012345a.mp4',
+    NOW() + INTERVAL '90 minutes',
+    5,
     NULL,            -- Not yet validated
     NULL,
     NULL,
@@ -1214,6 +1218,8 @@ INSERT INTO foghorn.vod_metadata (
     'video/x-msvideo',
     NULL,
     'vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/20240101120600e5f6789012345678/20240101120600e5f6789012345678.avi',
+    NOW() - INTERVAL '1 day',
+    1,
     NULL,
     NULL,
     NULL,
