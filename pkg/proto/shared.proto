@@ -293,8 +293,16 @@ message PlaybackMetadata {
   optional string clip_source = 18;
   optional google.protobuf.Timestamp created_at = 19;
   optional string format = 20;  // Native container format: mp4, m3u8, webm, etc.
-  optional string thumbnail_url = 22; // Chandler asset URL for poster image
-  optional string thumbnail_sprite_vtt_url = 23; // Chandler URL for sprite VTT (DVR/artifact thumbnail fallback)
+  reserved 22, 23;
+  optional ThumbnailAssets thumbnail_assets = 24;
+}
+
+// ThumbnailAssets - Chandler-served thumbnail asset URLs (poster, sprite, VTT cues)
+message ThumbnailAssets {
+  string poster_url = 1;       // Full-resolution single-frame JPEG
+  string sprite_vtt_url = 2;   // VTT cues pointing into sprite via #xywh fragments
+  string sprite_jpg_url = 3;   // Sprite sheet JPEG (10x10 grid)
+  string asset_key = 4;        // streamId for live, artifactHash for DVR/clip
 }
 
 // ViewerEndpointResponse - response with resolved endpoints

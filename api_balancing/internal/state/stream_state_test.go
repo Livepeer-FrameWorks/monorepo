@@ -456,7 +456,9 @@ func TestDisconnectVirtualViewer_OutOfOrderUserEndAbandonsPending(t *testing.T) 
 
 	viewerID := sm.CreateVirtualViewer(nodeID, streamName, clientIP)
 
-	sm.DisconnectVirtualViewerBySessionID("", nodeID, streamName, clientIP)
+	if disconnected := sm.DisconnectVirtualViewerBySessionID("", nodeID, streamName, clientIP); disconnected {
+		t.Fatal("expected out-of-order USER_END to abandon pending viewer without reporting a disconnect")
+	}
 
 	sm.mu.RLock()
 	state := sm.virtualViewers[viewerID].State
@@ -468,6 +470,31 @@ func TestDisconnectVirtualViewer_OutOfOrderUserEndAbandonsPending(t *testing.T) 
 	}
 	if pending != 0 {
 		t.Fatalf("expected pending redirects to decrement to 0, got %d", pending)
+	}
+}
+
+func TestDisconnectVirtualViewerBySessionID_ReturnsTrueForActiveViewer(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	nodeID := "node-active-disconnect"
+	streamName := "stream-active-disconnect"
+	clientIP := "203.0.113.8"
+
+	viewerID := sm.CreateVirtualViewer(nodeID, streamName, clientIP)
+	if confirmed := sm.ConfirmVirtualViewerByID(viewerID, nodeID, streamName, clientIP, "mist-session-active"); !confirmed {
+		t.Fatal("expected viewer confirmation")
+	}
+
+	if disconnected := sm.DisconnectVirtualViewerBySessionID("mist-session-active", nodeID, streamName, clientIP); !disconnected {
+		t.Fatal("expected active viewer disconnect to be reported")
+	}
+
+	sm.mu.RLock()
+	viewerState := sm.virtualViewers[viewerID].State
+	sm.mu.RUnlock()
+
+	if viewerState != VirtualViewerDisconnected {
+		t.Fatalf("expected viewer to be disconnected, got %s", viewerState)
 	}
 }
 
@@ -601,6 +628,35 @@ func TestUpdateStreamFromBuffer_InvalidJSONReturnsError(t *testing.T) {
 	err := sm.UpdateStreamFromBuffer("stream", "internal", "node", "tenant", "READY", "{invalid")
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestNodeActiveViewersUsesConfirmedViewersNotRawConnections(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	internalName := "internal-viewers"
+	nodeID := "node-viewers"
+	tenantID := "tenant-viewers"
+
+	sm.SetNodeInfo(nodeID, "", true, nil, nil, "", "", nil)
+	sm.UpdateNodeStats(internalName, nodeID, 17, 1, 0, 0, false)
+	sm.UpdateUserConnection(internalName, nodeID, tenantID, 1)
+	sm.UpdateUserConnection(internalName, nodeID, tenantID, 1)
+
+	if got := sm.GetNodeActiveViewers(nodeID); got != 2 {
+		t.Fatalf("expected 2 confirmed viewers, got %d", got)
+	}
+
+	snapshot := sm.GetAllNodesSnapshot()
+	if snapshot == nil || len(snapshot.Nodes) != 1 {
+		t.Fatalf("expected one node snapshot, got %#v", snapshot)
+	}
+	stream := snapshot.Nodes[0].Streams[internalName]
+	if stream.Total != 17 {
+		t.Fatalf("expected raw total connections to remain 17, got %d", stream.Total)
+	}
+	if stream.Viewers != 2 {
+		t.Fatalf("expected snapshot viewers to use confirmed viewers, got %d", stream.Viewers)
 	}
 }
 

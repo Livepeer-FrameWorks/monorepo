@@ -34,5 +34,10 @@ fragment PlaybackMetadataFields on PlaybackMetadata {
   recordingSizeBytes
   clipSource
   createdAt
-  thumbnailSpriteVttUrl
+  thumbnailAssets {
+    posterUrl
+    spriteVttUrl
+    spriteJpgUrl
+    assetKey
+  }
 }

@@ -627,6 +627,170 @@ func newTestProcessor(t *testing.T) *Processor {
 	}
 }
 
+func TestHandleUserNewCountsOnlyConfirmedPlaybackViewer(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+
+	processor := newTestProcessor(t)
+	tenantID := "tenant-1"
+	nodeID := "node-1"
+	internalName := "stream-count"
+	clientIP := "192.0.2.10"
+	processor.streamCache.Set(tenantID+":"+internalName, streamContext{TenantID: tenantID}, time.Minute)
+
+	viewerID := sm.CreateVirtualViewer(nodeID, internalName, clientIP)
+
+	resp, abort, err := processor.handleUserNew(&pb.MistTrigger{
+		NodeId:   nodeID,
+		TenantId: &tenantID,
+		TriggerPayload: &pb.MistTrigger_ViewerConnect{
+			ViewerConnect: &pb.ViewerConnectTrigger{
+				StreamName: "live+" + internalName,
+				Host:       clientIP,
+				Connector:  "HLS",
+				RequestUrl: "https://edge.example/view?fwcid=" + viewerID,
+				SessionId:  "mist-session-1",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleUserNew failed: %v", err)
+	}
+	if abort || resp != "true" {
+		t.Fatalf("expected allowed USER_NEW, got response=%q abort=%v", resp, abort)
+	}
+	if got := sm.GetStreamState(internalName).Viewers; got != 1 {
+		t.Fatalf("expected 1 viewer after confirmed USER_NEW, got %d", got)
+	}
+
+	_, _, err = processor.handleUserNew(&pb.MistTrigger{
+		NodeId:   nodeID,
+		TenantId: &tenantID,
+		TriggerPayload: &pb.MistTrigger_ViewerConnect{
+			ViewerConnect: &pb.ViewerConnectTrigger{
+				StreamName: "live+" + internalName,
+				Host:       clientIP,
+				Connector:  "HLS",
+				RequestUrl: "https://edge.example/view?fwcid=" + viewerID,
+				SessionId:  "mist-session-1",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("duplicate handleUserNew failed: %v", err)
+	}
+	if got := sm.GetStreamState(internalName).Viewers; got != 1 {
+		t.Fatalf("expected duplicate USER_NEW not to increment viewers, got %d", got)
+	}
+}
+
+func TestHandleUserEndCountsOnlyConfirmedPlaybackDisconnect(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+
+	processor := newTestProcessor(t)
+	tenantID := "tenant-1"
+	nodeID := "node-1"
+	internalName := "stream-disconnect"
+	clientIP := "192.0.2.11"
+	processor.streamCache.Set(tenantID+":"+internalName, streamContext{TenantID: tenantID}, time.Minute)
+
+	viewerID := sm.CreateVirtualViewer(nodeID, internalName, clientIP)
+	if confirmed := sm.ConfirmVirtualViewerByID(viewerID, nodeID, internalName, clientIP, "mist-session-1"); !confirmed {
+		t.Fatal("expected virtual viewer confirmation")
+	}
+	sm.UpdateUserConnection(internalName, nodeID, tenantID, 1)
+
+	_, _, err := processor.handleUserEnd(&pb.MistTrigger{
+		NodeId:   nodeID,
+		TenantId: &tenantID,
+		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+				SessionId:  "mist-session-1",
+				StreamName: "live+" + internalName,
+				Connector:  "HLS",
+				Host:       clientIP,
+				Duration:   10,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleUserEnd failed: %v", err)
+	}
+	if got := sm.GetStreamState(internalName).Viewers; got != 0 {
+		t.Fatalf("expected viewer count to decrement after confirmed disconnect, got %d", got)
+	}
+
+	_, _, err = processor.handleUserEnd(&pb.MistTrigger{
+		NodeId:   nodeID,
+		TenantId: &tenantID,
+		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+				SessionId:  "missing-session",
+				StreamName: "live+" + internalName,
+				Connector:  "HLS",
+				Host:       clientIP,
+				Duration:   10,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unmatched handleUserEnd failed: %v", err)
+	}
+	if got := sm.GetStreamState(internalName).Viewers; got != 0 {
+		t.Fatalf("expected unmatched USER_END not to decrement below zero, got %d", got)
+	}
+}
+
+func TestHandleUserTriggersIgnoreNonPlaybackConnectors(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+
+	processor := newTestProcessor(t)
+	tenantID := "tenant-1"
+	nodeID := "node-1"
+	internalName := "stream-thumb"
+
+	resp, abort, err := processor.handleUserNew(&pb.MistTrigger{
+		NodeId:   nodeID,
+		TenantId: &tenantID,
+		TriggerPayload: &pb.MistTrigger_ViewerConnect{
+			ViewerConnect: &pb.ViewerConnectTrigger{
+				StreamName: "live+" + internalName,
+				Host:       "192.0.2.12",
+				Connector:  "ThumbVTT",
+				RequestUrl: "https://edge.example/thumbs.vtt",
+				SessionId:  "thumb-session",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("non-playback handleUserNew failed: %v", err)
+	}
+	if abort || resp != "true" {
+		t.Fatalf("expected non-playback USER_NEW to be allowed without counting, got response=%q abort=%v", resp, abort)
+	}
+
+	_, _, err = processor.handleUserEnd(&pb.MistTrigger{
+		NodeId:   nodeID,
+		TenantId: &tenantID,
+		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+				SessionId:  "thumb-session",
+				StreamName: "live+" + internalName,
+				Connector:  "Raw/WS,info_json",
+				Host:       "192.0.2.12",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("non-playback handleUserEnd failed: %v", err)
+	}
+	if got := sm.GetStreamState(internalName); got != nil {
+		t.Fatalf("expected non-playback triggers not to create stream state, got %+v", got)
+	}
+}
+
 func setupCommodoreClient(t *testing.T, response *pb.ValidateStreamKeyResponse, responseErr error) (*commodore.GRPCClient, func()) {
 	client, cleanup, _ := setupCommodoreClientWithStub(t, response, responseErr)
 	return client, cleanup

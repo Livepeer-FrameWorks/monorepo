@@ -737,6 +737,7 @@ func HandleNodesOverview(c *gin.Context) {
 			for name, s := range n.Streams {
 				streams = append(streams, map[string]interface{}{
 					"name":       name,
+					"viewers":    s.Viewers,
 					"total":      s.Total,
 					"inputs":     s.Inputs,
 					"bandwidth":  s.Bandwidth,
@@ -1471,7 +1472,7 @@ func handleStreamStats(c *gin.Context, streamName string) {
 		}
 		if stream, exists := node.Streams[streamName]; exists {
 			result[streamName] = []interface{}{
-				stream.Total,     // viewers
+				stream.Viewers,   // event-confirmed playback viewers
 				stream.Bandwidth, // bandwidth
 				stream.BytesUp,   // bytes up
 				stream.BytesDown, // bytes down
@@ -1494,7 +1495,7 @@ func handleViewerCount(c *gin.Context, streamName string) {
 			continue
 		}
 		if stream, exists := node.Streams[streamName]; exists {
-			totalViewers += stream.Total
+			totalViewers += stream.Viewers
 		}
 	}
 
@@ -2040,7 +2041,7 @@ func getTagAdjustments(c *gin.Context, query url.Values) map[string]int {
 func getTotalViewers(node state.EnhancedBalancerNodeSnapshot) uint64 {
 	total := uint64(0)
 	for _, stream := range node.Streams {
-		total += stream.Total
+		total += stream.Viewers
 	}
 	return total
 }
@@ -2797,6 +2798,8 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// If no protocol or "any", return full JSON response
 	if protocol == "" || protocol == "any" {
+		control.AppendViewerCorrelationID(response, viewerID)
+
 		// Record metrics
 		if metrics != nil {
 			metrics.RoutingDecisions.WithLabelValues("generic_viewer_"+contentType, response.Primary.NodeId).Inc()
@@ -2868,20 +2871,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 }
 
 func appendCorrelationID(redirectURL, viewerID string) string {
-	if viewerID == "" || redirectURL == "" {
-		return redirectURL
-	}
-
-	parsedURL, err := url.Parse(redirectURL)
-	if err != nil {
-		return redirectURL
-	}
-
-	query := parsedURL.Query()
-	// Always override any existing fwcid to avoid stale/malicious correlation IDs.
-	query.Set("fwcid", viewerID)
-	parsedURL.RawQuery = query.Encode()
-	return parsedURL.String()
+	return control.AppendCorrelationID(redirectURL, viewerID)
 }
 
 // normalizeProtocol converts protocol hints to standard names

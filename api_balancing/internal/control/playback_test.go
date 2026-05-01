@@ -14,26 +14,26 @@ import (
 func TestExtractPublicHostFromOutputs(t *testing.T) {
 	tests := []struct {
 		name     string
-		outputs  map[string]interface{}
+		outputs  map[string]any
 		expected string
 	}{
 		{
 			name: "hls_protocol_relative",
-			outputs: map[string]interface{}{
+			outputs: map[string]any{
 				"HLS": "//localhost:18090/view/stream/index.m3u8",
 			},
 			expected: "localhost:18090",
 		},
 		{
 			name: "http_array",
-			outputs: map[string]interface{}{
-				"HTTP": []interface{}{"http://media.example.com:8080/live/stream/index.m3u8"},
+			outputs: map[string]any{
+				"HTTP": []any{"http://media.example.com:8080/live/stream/index.m3u8"},
 			},
 			expected: "media.example.com:8080",
 		},
 		{
 			name: "no_matches",
-			outputs: map[string]interface{}{
+			outputs: map[string]any{
 				"WHEP": "https://example.com/webrtc/stream",
 			},
 			expected: "",
@@ -51,7 +51,7 @@ func TestExtractPublicHostFromOutputs(t *testing.T) {
 }
 
 func TestBuildOutputsMap(t *testing.T) {
-	rawOutputs := map[string]interface{}{
+	rawOutputs := map[string]any{
 		"HLS":  "//public.example.com:18090/view/$/index.m3u8",
 		"HTTP": "http://public.example.com:8080/live/$/index.m3u8",
 		"RTMP": "rtmp://HOST:1935/live/$",
@@ -77,7 +77,7 @@ func TestBuildOutputsMap(t *testing.T) {
 }
 
 func TestBuildOutputsMapOmitsGenericHTTPForLive(t *testing.T) {
-	rawOutputs := map[string]interface{}{
+	rawOutputs := map[string]any{
 		"HLS":  "http://public.example.com:18090/view/hls/$/index.m3u8",
 		"HTTP": "http://public.example.com:18090/view/$.html",
 	}
@@ -93,7 +93,7 @@ func TestBuildOutputsMapOmitsGenericHTTPForLive(t *testing.T) {
 }
 
 func TestBuildOutputsMapIncludesMistWebSocketOutputs(t *testing.T) {
-	rawOutputs := map[string]interface{}{
+	rawOutputs := map[string]any{
 		"MP4":   "https://public.example.com:18090/view/$.mp4",
 		"WEBM":  "//public.example.com:18090/view/$.webm",
 		"WSRaw": "https://public.example.com:18090/view/$.raw",
@@ -117,7 +117,7 @@ func TestBuildOutputsMapIncludesMistWebSocketOutputs(t *testing.T) {
 }
 
 func TestBuildOutputsMapAcceptsMistDisplayOutputNames(t *testing.T) {
-	rawOutputs := map[string]interface{}{
+	rawOutputs := map[string]any{
 		"HLS (TS)":                    "http://public.example.com:18090/view/hls/$/index.m3u8",
 		"MP4 WebSocket":               "ws://public.example.com:18090/view/$.mp4",
 		"Raw WebSocket":               "ws://public.example.com:18090/view/$.raw",
@@ -152,7 +152,7 @@ func TestBuildOutputsMapAcceptsMistDisplayOutputNames(t *testing.T) {
 }
 
 func TestBuildOutputsMapDerivesStandardMistPlaybackOutputs(t *testing.T) {
-	outputs := BuildOutputsMap("http://public.example.com:18090/view", map[string]interface{}{}, "stream", true)
+	outputs := BuildOutputsMap("http://public.example.com:18090/view", map[string]any{}, "stream", true)
 
 	expected := map[string]string{
 		"RAW_WS":  "ws://public.example.com:18090/view/stream.raw",
@@ -171,21 +171,21 @@ func TestBuildOutputsMapDerivesStandardMistPlaybackOutputs(t *testing.T) {
 func TestResolveTemplateURL(t *testing.T) {
 	tests := []struct {
 		name       string
-		raw        interface{}
+		raw        any
 		baseURL    string
 		streamName string
 		expected   string
 	}{
 		{
 			name:       "non_string_raw",
-			raw:        map[string]interface{}{"url": "http://example.com"},
+			raw:        map[string]any{"url": "http://example.com"},
 			baseURL:    "https://edge-egress.example.com/live",
 			streamName: "stream",
 			expected:   "",
 		},
 		{
 			name:       "array_non_string",
-			raw:        []interface{}{123},
+			raw:        []any{123},
 			baseURL:    "https://edge-egress.example.com/live",
 			streamName: "stream",
 			expected:   "",
@@ -217,8 +217,8 @@ func TestResolveTemplateURL(t *testing.T) {
 }
 
 func TestSelectPrimaryArtifactOutputFallback(t *testing.T) {
-	outputs := map[string]interface{}{
-		"HLS":  []interface{}{123},
+	outputs := map[string]any{
+		"HLS":  []any{123},
 		"DASH": "https://cdn.example.com/dash/$/index.mpd",
 	}
 
@@ -529,5 +529,76 @@ func TestResolveRemoteArtifact_AdoptionUpsertHealsMissingOriginMetadata(t *testi
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestBuildThumbnailAssets(t *testing.T) {
+	tests := []struct {
+		name         string
+		chandlerBase string
+		assetKey     string
+		want         *pb.ThumbnailAssets
+	}{
+		{
+			name:         "live stream",
+			chandlerBase: "https://chandler.example.com",
+			assetKey:     "stream-uuid-123",
+			want: &pb.ThumbnailAssets{
+				PosterUrl:    "https://chandler.example.com/assets/stream-uuid-123/poster.jpg",
+				SpriteVttUrl: "https://chandler.example.com/assets/stream-uuid-123/sprite.vtt",
+				SpriteJpgUrl: "https://chandler.example.com/assets/stream-uuid-123/sprite.jpg",
+				AssetKey:     "stream-uuid-123",
+			},
+		},
+		{
+			name:         "DVR artifact with trailing slash",
+			chandlerBase: "https://chandler.example.com/",
+			assetKey:     "abc123hash",
+			want: &pb.ThumbnailAssets{
+				PosterUrl:    "https://chandler.example.com/assets/abc123hash/poster.jpg",
+				SpriteVttUrl: "https://chandler.example.com/assets/abc123hash/sprite.vtt",
+				SpriteJpgUrl: "https://chandler.example.com/assets/abc123hash/sprite.jpg",
+				AssetKey:     "abc123hash",
+			},
+		},
+		{
+			name:         "empty base returns nil",
+			chandlerBase: "",
+			assetKey:     "key",
+			want:         nil,
+		},
+		{
+			name:         "empty asset key returns nil",
+			chandlerBase: "https://chandler.example.com",
+			assetKey:     "",
+			want:         nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildThumbnailAssets(tt.chandlerBase, tt.assetKey)
+			if tt.want == nil {
+				if got != nil {
+					t.Fatalf("expected nil, got %+v", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("expected non-nil, got nil")
+			}
+			if got.PosterUrl != tt.want.PosterUrl {
+				t.Errorf("PosterUrl: got %q, want %q", got.PosterUrl, tt.want.PosterUrl)
+			}
+			if got.SpriteVttUrl != tt.want.SpriteVttUrl {
+				t.Errorf("SpriteVttUrl: got %q, want %q", got.SpriteVttUrl, tt.want.SpriteVttUrl)
+			}
+			if got.SpriteJpgUrl != tt.want.SpriteJpgUrl {
+				t.Errorf("SpriteJpgUrl: got %q, want %q", got.SpriteJpgUrl, tt.want.SpriteJpgUrl)
+			}
+			if got.AssetKey != tt.want.AssetKey {
+				t.Errorf("AssetKey: got %q, want %q", got.AssetKey, tt.want.AssetKey)
+			}
+		})
 	}
 }

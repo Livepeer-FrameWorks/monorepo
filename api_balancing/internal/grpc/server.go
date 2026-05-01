@@ -1397,12 +1397,17 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 		if internalName == "" {
 			internalName = req.ContentId
 		}
-		state.DefaultManager().CreateVirtualViewer(response.Primary.NodeId, internalName, clientIP)
+		viewerID := state.DefaultManager().CreateVirtualViewer(response.Primary.NodeId, internalName, clientIP)
+		control.AppendViewerCorrelationID(response, viewerID)
 	}
 
 	// Enrich live metadata from unified state
 	if resolvedType == "live" && response.Metadata != nil {
-		st := state.DefaultManager().GetStreamState(req.ContentId)
+		stateKey := resolution.InternalName
+		if stateKey == "" {
+			stateKey = req.ContentId
+		}
+		st := state.DefaultManager().GetStreamState(stateKey)
 		if st != nil {
 			response.Metadata.IsLive = st.Status == "live"
 			response.Metadata.Status = st.Status

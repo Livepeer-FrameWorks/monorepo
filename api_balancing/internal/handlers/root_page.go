@@ -995,7 +995,7 @@ func HandleRootPage(c *gin.Context) {
 		for name, stream := range node.Streams {
 			streamList = append(streamList, StreamInfo{
 				Name:         name,
-				Total:        stream.Total,
+				Total:        stream.Viewers,
 				Inputs:       stream.Inputs,
 				Bandwidth:    stream.Bandwidth,
 				BandwidthStr: formatBytesPerSec(uint64(stream.Bandwidth)),

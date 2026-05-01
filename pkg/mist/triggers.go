@@ -40,6 +40,57 @@ const (
 	TriggerNodeLifecycle   TriggerType = "NODE_LIFECYCLE_UPDATE"
 )
 
+// IsPlaybackViewerConnector reports whether a Mist connector represents an actual viewer session.
+func IsPlaybackViewerConnector(connector string) bool {
+	connector = strings.TrimSpace(connector)
+	if connector == "" {
+		return false
+	}
+
+	parts := strings.Split(connector, ",")
+	for _, part := range parts {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if part == "info_json" {
+			return false
+		}
+	}
+
+	for _, part := range parts {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if part == "" || strings.HasPrefix(part, "input:") || strings.HasPrefix(part, "output:") {
+			continue
+		}
+		switch part {
+		case "hls", "webrtc", "whep", "dash", "cmaf", "hss",
+			"mp4", "webm", "mkv", "flv", "rtmp", "rtsp", "srt", "dtsc", "dtscquic",
+			"ts", "httpts", "raw/ws", "wsraw", "h264", "aac", "mp3", "flac", "wav", "ogg", "opus":
+			return true
+		}
+	}
+
+	return false
+}
+
+// IsPlaybackViewerRequest filters Mist viewer/session triggers down to actual playback media.
+func IsPlaybackViewerRequest(connector, requestURL string) bool {
+	if !IsPlaybackViewerConnector(connector) {
+		return false
+	}
+	req := strings.ToLower(strings.TrimSpace(requestURL))
+	if req == "" {
+		return true
+	}
+	for _, marker := range []string{
+		"/json_", ".json", "info_json", "metaeverywhere=",
+		".jpg", ".jpeg", ".png", "poster", "sprite", ".thumbvtt", ".vtt", ".webvtt", ".srt",
+	} {
+		if strings.Contains(req, marker) {
+			return false
+		}
+	}
+	return true
+}
+
 // ParseTriggerToProtobuf parses raw MistServer trigger payload and returns a protobuf MistTrigger
 func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID string, logger logging.Logger) (*pb.MistTrigger, error) {
 	// Parse parameters from newline-separated format
@@ -156,11 +207,18 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) < 8 {
 			return nil, fmt.Errorf("USER_END requires 8 parameters, got %d", len(params))
 		}
+		sessionID := params[0]
+		if len(params) > 11 && params[11] != "" {
+			sessionID = params[11]
+		}
 		trigger := &pb.ViewerDisconnectTrigger{
-			SessionId:  params[0],
+			SessionId:  sessionID,
 			StreamName: params[1],
 			Connector:  params[2],
 			Host:       params[3],
+		}
+		if params[0] != "" && params[0] != sessionID {
+			trigger.SessionIdentifier = &params[0]
 		}
 
 		if duration, err := strconv.ParseInt(params[4], 10, 64); err == nil {

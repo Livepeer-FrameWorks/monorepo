@@ -5803,7 +5803,15 @@ type PlaybackMetadata {
   recordingSizeBytes: Float
   clipSource: String
   createdAt: Time
-  thumbnailSpriteVttUrl: String
+  thumbnailAssets: ThumbnailAssets
+}
+
+# Chandler-served thumbnail asset URLs (poster, sprite, VTT cues)
+type ThumbnailAssets {
+  posterUrl: String!
+  spriteVttUrl: String!
+  spriteJpgUrl: String!
+  assetKey: String!
 }
 
 # Track information for playback (matches proto PlaybackTrack)

@@ -227,9 +227,7 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 				return nil, fmt.Errorf("storage node unknown: %w", err)
 			}
 			if _, err := StartDefrost(ctx, contentType, artifactResp.ArtifactHash, nodeID, 30*time.Second, controlLogger()); err != nil {
-				// If defrost already in progress, return retry
-				var defrostErr *DefrostingError
-				if errors.As(err, &defrostErr) {
+				if defrostErr, ok := errors.AsType[*DefrostingError](err); ok {
 					return nil, defrostErr
 				}
 				return nil, fmt.Errorf("failed to start defrost: %w", err)
@@ -375,11 +373,8 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	if format.Valid && format.String != "" {
 		metadata.Format = &format.String
 	}
-	// DVR artifacts with pre-generated thumbnails: provide Chandler URL for player fallback
 	if hasThumbnails && (contentType == "dvr" || contentType == "clip") {
-		chandlerBase := getChandlerBaseURL()
-		vttURL := chandlerBase + "/assets/" + artifactResp.ArtifactHash + "/sprite.vtt"
-		metadata.ThumbnailSpriteVttUrl = &vttURL
+		metadata.ThumbnailAssets = buildThumbnailAssets(getChandlerBaseURL(), artifactResp.ArtifactHash)
 	}
 
 	return &pb.ViewerEndpointResponse{
@@ -421,7 +416,7 @@ func artifactGeoDistance(viewerLat, viewerLon float64, node state.ArtifactNodeIn
 	return CalculateGeoDistance(viewerLat, viewerLon, node.GeoLatitude, node.GeoLongitude)
 }
 
-func selectPrimaryArtifactOutput(outputs map[string]interface{}, baseURL, playbackID, format string) (string, string) {
+func selectPrimaryArtifactOutput(outputs map[string]any, baseURL, playbackID, format string) (string, string) {
 	if outputs == nil {
 		return "", ""
 	}
@@ -563,6 +558,9 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 	}
 	if streamID != "" {
 		metadata.StreamId = &streamID
+		// Live streams: Helmsman uploads thumbnails to Chandler whenever Mist's process_thumbs runs.
+		// The asset may 404 for streams that have never been live; the player's fallback chain handles that.
+		metadata.ThumbnailAssets = buildThumbnailAssets(getChandlerBaseURL(), streamID)
 	}
 
 	// Enrich with stream state if available
@@ -588,6 +586,56 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 	}, nil
 }
 
+func buildThumbnailAssets(chandlerBase, assetKey string) *pb.ThumbnailAssets {
+	if chandlerBase == "" || assetKey == "" {
+		return nil
+	}
+	base := strings.TrimRight(chandlerBase, "/") + "/assets/" + assetKey
+	return &pb.ThumbnailAssets{
+		PosterUrl:    base + "/poster.jpg",
+		SpriteVttUrl: base + "/sprite.vtt",
+		SpriteJpgUrl: base + "/sprite.jpg",
+		AssetKey:     assetKey,
+	}
+}
+
+// AppendViewerCorrelationID adds the virtual viewer ID to every playback URL in a response.
+func AppendViewerCorrelationID(resp *pb.ViewerEndpointResponse, viewerID string) {
+	if resp == nil || viewerID == "" {
+		return
+	}
+	appendToEndpoint := func(endpoint *pb.ViewerEndpoint) {
+		if endpoint == nil {
+			return
+		}
+		endpoint.Url = AppendCorrelationID(endpoint.GetUrl(), viewerID)
+		for _, output := range endpoint.GetOutputs() {
+			if output != nil {
+				output.Url = AppendCorrelationID(output.GetUrl(), viewerID)
+			}
+		}
+	}
+	appendToEndpoint(resp.Primary)
+	for _, endpoint := range resp.Fallbacks {
+		appendToEndpoint(endpoint)
+	}
+}
+
+// AppendCorrelationID adds a virtual viewer ID to a playback URL.
+func AppendCorrelationID(rawURL, viewerID string) string {
+	if viewerID == "" || rawURL == "" {
+		return rawURL
+	}
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	query := parsedURL.Query()
+	query.Set("fwcid", viewerID)
+	parsedURL.RawQuery = query.Encode()
+	return parsedURL.String()
+}
+
 // =============================================================================
 // HELPER FUNCTIONS (consolidated from grpc/server.go and handlers/handlers.go)
 // =============================================================================
@@ -604,7 +652,7 @@ func EnsureTrailingSlash(s string) string {
 // MistServer outputs like HLS contain the actual public-facing host (e.g., "localhost:18090")
 // while WebRTC uses "HOST" placeholder. This function extracts the public host from outputs
 // that already contain it, so we can use it for HOST replacement.
-func ExtractPublicHostFromOutputs(outputs map[string]interface{}) string {
+func ExtractPublicHostFromOutputs(outputs map[string]any) string {
 	// Try to extract from HLS, HTTP, or other outputs that typically have full URLs
 	for _, keys := range [][]string{
 		{"HLS", "HLS (TS)"},
@@ -620,7 +668,7 @@ func ExtractPublicHostFromOutputs(outputs map[string]interface{}) string {
 		switch v := raw.(type) {
 		case string:
 			s = v
-		case []interface{}:
+		case []any:
 			if len(v) > 0 {
 				if ss, ok := v[0].(string); ok {
 					s = ss
@@ -643,7 +691,7 @@ func ExtractPublicHostFromOutputs(outputs map[string]interface{}) string {
 	return ""
 }
 
-func findOutputRaw(outputs map[string]interface{}, keys ...string) (interface{}, bool) {
+func findOutputRaw(outputs map[string]any, keys ...string) (any, bool) {
 	for _, key := range keys {
 		if raw, ok := outputs[key]; ok {
 			return raw, true
@@ -660,12 +708,12 @@ func findOutputRaw(outputs map[string]interface{}, keys ...string) (interface{},
 }
 
 // ResolveTemplateURL replaces placeholders in Mist outputs ($ for stream name, HOST for hostname)
-func ResolveTemplateURL(raw interface{}, baseURL, streamName string) string {
+func ResolveTemplateURL(raw any, baseURL, streamName string) string {
 	var s string
 	switch v := raw.(type) {
 	case string:
 		s = v
-	case []interface{}:
+	case []any:
 		if len(v) > 0 {
 			if ss, ok := v[0].(string); ok {
 				s = ss
@@ -705,16 +753,16 @@ func toWebSocketURL(rawURL string, secureDefault bool) string {
 		}
 		return "ws:" + rawURL
 	}
-	if strings.HasPrefix(rawURL, "https://") {
-		return "wss://" + strings.TrimPrefix(rawURL, "https://")
+	if rest, ok := strings.CutPrefix(rawURL, "https://"); ok {
+		return "wss://" + rest
 	}
-	if strings.HasPrefix(rawURL, "http://") {
-		return "ws://" + strings.TrimPrefix(rawURL, "http://")
+	if rest, ok := strings.CutPrefix(rawURL, "http://"); ok {
+		return "ws://" + rest
 	}
 	return rawURL
 }
 
-func addResolvedOutput(outputs map[string]*pb.OutputEndpoint, rawOutputs map[string]interface{}, protocol string, base string, streamName string, isLive bool, keys ...string) bool {
+func addResolvedOutput(outputs map[string]*pb.OutputEndpoint, rawOutputs map[string]any, protocol string, base string, streamName string, isLive bool, keys ...string) bool {
 	raw, ok := findOutputRaw(rawOutputs, keys...)
 	if !ok {
 		return false
@@ -727,7 +775,7 @@ func addResolvedOutput(outputs map[string]*pb.OutputEndpoint, rawOutputs map[str
 	return true
 }
 
-func addWebSocketOutput(outputs map[string]*pb.OutputEndpoint, rawOutputs map[string]interface{}, protocol string, base string, streamName string, secureDefault bool, isLive bool, keys ...string) bool {
+func addWebSocketOutput(outputs map[string]*pb.OutputEndpoint, rawOutputs map[string]any, protocol string, base string, streamName string, secureDefault bool, isLive bool, keys ...string) bool {
 	raw, ok := findOutputRaw(rawOutputs, keys...)
 	if !ok {
 		return false
@@ -763,7 +811,7 @@ func addDerivedWebSocketOutput(outputs map[string]*pb.OutputEndpoint, protocol s
 }
 
 // BuildOutputsMap constructs the per-protocol outputs for a node/stream
-func BuildOutputsMap(baseURL string, rawOutputs map[string]interface{}, streamName string, isLive bool) map[string]*pb.OutputEndpoint {
+func BuildOutputsMap(baseURL string, rawOutputs map[string]any, streamName string, isLive bool) map[string]*pb.OutputEndpoint {
 	outputs := make(map[string]*pb.OutputEndpoint)
 
 	base := EnsureTrailingSlash(baseURL)
@@ -1010,8 +1058,7 @@ func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, arti
 		return nil, fmt.Errorf("no local storage node for remote artifact defrost: %w", err)
 	}
 	if _, err := StartRemoteDefrost(ctx, contentType, artifactHash, nodeID, 30*time.Second, controlLogger(), resp.GetUrl(), resp.GetSegmentUrls()); err != nil {
-		var defrostErr *DefrostingError
-		if errors.As(err, &defrostErr) {
+		if defrostErr, ok := errors.AsType[*DefrostingError](err); ok {
 			return nil, defrostErr
 		}
 		return nil, fmt.Errorf("failed to start remote artifact defrost: %w", err)

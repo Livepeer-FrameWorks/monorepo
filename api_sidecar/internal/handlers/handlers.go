@@ -960,10 +960,6 @@ func HandleStreamEnd(c *gin.Context) {
 // This is a blocking trigger that validates new viewer connections
 func HandleUserNew(c *gin.Context) {
 	incMistWebhook("USER_NEW", "received")
-	// Track infrastructure event
-	if metrics != nil {
-		metrics.InfrastructureEvents.WithLabelValues("user_connected").Inc()
-	}
 
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
@@ -989,6 +985,24 @@ func HandleUserNew(c *gin.Context) {
 		}).Error("Failed to parse USER_NEW trigger")
 		c.String(http.StatusOK, "false") // Deny session on error
 		return
+	}
+
+	if viewerConnect := mistTrigger.GetViewerConnect(); viewerConnect != nil && !mist.IsPlaybackViewerRequest(viewerConnect.GetConnector(), viewerConnect.GetRequestUrl()) {
+		incMistWebhook("USER_NEW", "ignored_non_viewer")
+		logger.WithFields(logging.Fields{
+			"connector":     viewerConnect.GetConnector(),
+			"stream_name":   viewerConnect.GetStreamName(),
+			"session_id":    viewerConnect.GetSessionId(),
+			"trigger_type":  "USER_NEW",
+			"connection_ip": viewerConnect.GetHost(),
+		}).Debug("Ignoring non-viewer USER_NEW connector")
+		c.String(http.StatusOK, "true")
+		return
+	}
+
+	// Track infrastructure event
+	if metrics != nil {
+		metrics.InfrastructureEvents.WithLabelValues("user_connected").Inc()
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
@@ -1056,6 +1070,19 @@ func HandleUserEnd(c *gin.Context) {
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to parse USER_END trigger")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	if viewerDisconnect := mistTrigger.GetViewerDisconnect(); viewerDisconnect != nil && !mist.IsPlaybackViewerRequest(viewerDisconnect.GetConnector(), "") {
+		incMistWebhook("USER_END", "ignored_non_viewer")
+		logger.WithFields(logging.Fields{
+			"connector":     viewerDisconnect.GetConnector(),
+			"stream_name":   viewerDisconnect.GetStreamName(),
+			"session_id":    viewerDisconnect.GetSessionId(),
+			"trigger_type":  "USER_END",
+			"connection_ip": viewerDisconnect.GetHost(),
+		}).Debug("Ignoring non-viewer USER_END connector")
 		c.String(http.StatusOK, "OK")
 		return
 	}

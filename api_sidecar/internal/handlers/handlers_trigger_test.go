@@ -171,6 +171,60 @@ func TestTriggerHandlersRejectMalformedPayloads(t *testing.T) {
 	}
 }
 
+func TestUserViewerHandlersIgnoreNonPlaybackConnectors(t *testing.T) {
+	setupTriggerTest(t, "tenant-39b")
+
+	tests := []struct {
+		name     string
+		body     string
+		handler  func(*gin.Context)
+		response string
+	}{
+		{
+			name:     "user_new_thumbvtt",
+			body:     "live+stream-1\n192.0.2.20\nconn-1\nThumbVTT\nhttp://example.com/thumbs.vtt\nsess-1",
+			handler:  HandleUserNew,
+			response: "true",
+		},
+		{
+			name:     "user_end_thumbvtt",
+			body:     "sess-1\nlive+stream-1\nThumbVTT\n192.0.2.20\n17\n0\n0\ntags",
+			handler:  HandleUserEnd,
+			response: "OK",
+		},
+		{
+			name:     "user_new_http",
+			body:     "live+stream-1\n192.0.2.20\nconn-2\nHTTP\nhttp://example.com/poster.jpg\nsess-2",
+			handler:  HandleUserNew,
+			response: "true",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			forwarded := false
+			stubSendMistTrigger(t, func(trigger *pb.MistTrigger) (*control.MistTriggerResult, error) {
+				forwarded = true
+				return &control.MistTriggerResult{Response: "forwarded"}, nil
+			})
+
+			ctx, recorder := newWebhookContext(test.body)
+			test.handler(ctx)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("expected status 200, got %d", recorder.Code)
+			}
+			if recorder.Body.String() != test.response {
+				t.Fatalf("expected response %q, got %q", test.response, recorder.Body.String())
+			}
+			if forwarded {
+				t.Fatalf("expected non-viewer connector not to be forwarded")
+			}
+		})
+	}
+}
+
 func TestHandleStreamProcessUsesLocalOverride(t *testing.T) {
 	setupTriggerTest(t, "tenant-39b")
 

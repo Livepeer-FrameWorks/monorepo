@@ -348,7 +348,12 @@ enum GQL {
     recordingSizeBytes
     clipSource
     createdAt
-    thumbnailSpriteVttUrl
+    thumbnailAssets {
+      posterUrl
+      spriteVttUrl
+      spriteJpgUrl
+      assetKey
+    }
   }
   """
 

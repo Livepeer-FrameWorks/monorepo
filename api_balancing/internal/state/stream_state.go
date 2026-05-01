@@ -1101,7 +1101,7 @@ func (sm *StreamStateManager) GetNodeActiveViewers(nodeID string) int {
 	total := 0
 	for _, nodes := range sm.streamInstances {
 		if inst := nodes[nodeID]; inst != nil {
-			total += inst.TotalConnections
+			total += inst.Viewers
 		}
 	}
 	return total
@@ -1165,6 +1165,7 @@ func (sm *StreamStateManager) SetNodeStoragePaths(nodeID string, storageLocal, s
 // BalancerStreamSummary provides per-stream metrics for balancer decisions
 type BalancerStreamSummary struct {
 	Total      uint64 `json:"total"`
+	Viewers    uint64 `json:"viewers"`
 	Inputs     uint32 `json:"inputs"`
 	Bandwidth  uint32 `json:"bandwidth"`
 	BytesUp    uint64 `json:"bytes_up"`
@@ -1217,6 +1218,7 @@ func (sm *StreamStateManager) GetBalancerNodeSnapshots() []BalancerNodeSnapshot 
 			}
 			m[internalName] = BalancerStreamSummary{
 				Total:      uint64(inst.TotalConnections),
+				Viewers:    uint64(inst.Viewers),
 				Inputs:     uint32(inst.Inputs),
 				Bandwidth:  0,
 				BytesUp:    uint64(inst.BytesUp),
@@ -1995,6 +1997,7 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 			}
 			m[internalName] = BalancerStreamSummary{
 				Total:      uint64(inst.TotalConnections),
+				Viewers:    uint64(inst.Viewers),
 				Inputs:     uint32(inst.Inputs),
 				Bandwidth:  0, // TODO: Calculate from BytesUp/BytesDown if needed
 				BytesUp:    uint64(inst.BytesUp),
@@ -2924,6 +2927,28 @@ func (sm *StreamStateManager) CreateVirtualViewer(nodeID, streamName, clientIP s
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
+	return sm.createVirtualViewerLocked(nodeID, streamName, clientIP)
+}
+
+// EnsurePendingVirtualViewer creates a PENDING virtual viewer unless this client already has one.
+func (sm *StreamStateManager) EnsurePendingVirtualViewer(nodeID, streamName, clientIP string) (string, bool) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	for _, viewerID := range sm.viewersByNode[nodeID] {
+		viewer := sm.virtualViewers[viewerID]
+		if viewer == nil || viewer.StreamName != streamName || viewer.ClientIP != clientIP {
+			continue
+		}
+		if viewer.State == VirtualViewerPending || viewer.State == VirtualViewerActive {
+			return viewer.ID, false
+		}
+	}
+
+	return sm.createVirtualViewerLocked(nodeID, streamName, clientIP), true
+}
+
+func (sm *StreamStateManager) createVirtualViewerLocked(nodeID, streamName, clientIP string) string {
 	// Ensure node exists
 	node := sm.nodes[nodeID]
 	if node == nil {
@@ -3038,13 +3063,13 @@ func (sm *StreamStateManager) ConfirmVirtualViewerByID(viewerID, nodeID, streamN
 
 // DisconnectVirtualViewer transitions an ACTIVE viewer to DISCONNECTED when USER_END arrives.
 // Matches by (nodeID, streamName, clientIP), oldest ACTIVE first.
-func (sm *StreamStateManager) DisconnectVirtualViewer(nodeID, streamName, clientIP string) {
-	sm.DisconnectVirtualViewerBySessionID("", nodeID, streamName, clientIP)
+func (sm *StreamStateManager) DisconnectVirtualViewer(nodeID, streamName, clientIP string) bool {
+	return sm.DisconnectVirtualViewerBySessionID("", nodeID, streamName, clientIP)
 }
 
 // DisconnectVirtualViewerBySessionID transitions an ACTIVE viewer to DISCONNECTED when USER_END arrives.
 // If mistSessionID is provided, match by Mist session ID; otherwise fallback to IP matching.
-func (sm *StreamStateManager) DisconnectVirtualViewerBySessionID(mistSessionID, nodeID, streamName, clientIP string) {
+func (sm *StreamStateManager) DisconnectVirtualViewerBySessionID(mistSessionID, nodeID, streamName, clientIP string) bool {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -3085,6 +3110,8 @@ func (sm *StreamStateManager) DisconnectVirtualViewerBySessionID(mistSessionID, 
 	if matchedViewer != nil {
 		matchedViewer.State = VirtualViewerDisconnected
 		matchedViewer.DisconnectTime = time.Now()
+		sm.cleanupOldViewersLocked(nodeID, 5*time.Minute)
+		return true
 	} else {
 		var pendingViewer *VirtualViewer
 		var pendingTime time.Time
@@ -3120,6 +3147,7 @@ func (sm *StreamStateManager) DisconnectVirtualViewerBySessionID(mistSessionID, 
 
 	// Cleanup old DISCONNECTED viewers (keep for a short retention period)
 	sm.cleanupOldViewersLocked(nodeID, 5*time.Minute)
+	return false
 }
 
 // ReconcileVirtualViewers is called on NODE_LIFECYCLE_UPDATE to reconcile state with reality.
