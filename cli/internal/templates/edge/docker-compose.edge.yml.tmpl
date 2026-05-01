@@ -31,6 +31,8 @@ services:
       - MIST_DEBUG=3
     expose:
       - "8080"
+    volumes:
+      - mist_thumbs:/tmp/mist_thumbs
     restart: unless-stopped
 
   helmsman:
@@ -53,6 +55,7 @@ services:
       - ./pki:/etc/frameworks/pki
       - ./telemetry:/etc/frameworks/telemetry
       - caddy_admin:/run/caddy
+      - mist_thumbs:/tmp/mist_thumbs
     expose:
       - "18007"
     restart: unless-stopped
@@ -63,3 +66,4 @@ volumes:
   caddy_data: {}
   caddy_config: {}
   caddy_admin: {}
+  mist_thumbs: {}

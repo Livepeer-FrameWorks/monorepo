@@ -9,6 +9,7 @@ volumes:
   postgres_data:
   foghorn_redis_data:
   mistserver_data:
+  mist_thumbs:
   kafka_data:
   clickhouse_data:
   platform_redis_data:
@@ -151,6 +152,8 @@ services:
       - mistserver_data:/var/lib/mistserver
       # Demo recordings for dev environment (clips & DVR artifacts)
       - ./infrastructure/demo-recordings:/var/lib/mistserver/recordings
+      # Shared with helmsman so MistProcThumbs writes are visible to the uploader.
+      - mist_thumbs:/tmp/mist_thumbs
     restart: unless-stopped
     command: ["MistController", "-c", "/etc/mistserver.conf"]
     depends_on:
@@ -631,6 +634,7 @@ services:
     volumes:
       - ./infrastructure/edge/machine-id:/etc/machine-id:ro
       - ./infrastructure/demo-recordings:/var/lib/mistserver/recordings
+      - mist_thumbs:/tmp/mist_thumbs
     depends_on:
       commodore:
         condition: service_started
