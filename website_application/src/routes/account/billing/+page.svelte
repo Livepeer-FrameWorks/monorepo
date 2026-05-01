@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { SvelteMap } from "svelte/reactivity";
   import { get } from "svelte/store";
   import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
@@ -279,7 +280,7 @@
   // dashboard and email match.
   function groupLineItems(items: readonly InvoiceLineItemLike[]): LineItemGroup[] {
     const platformScoped: InvoiceLineItemLike[] = [];
-    const byCluster = new Map<string, LineItemGroup>();
+    const byCluster = new SvelteMap<string, LineItemGroup>();
     const order: string[] = [];
     for (const item of items) {
       if (!item.clusterId) {
