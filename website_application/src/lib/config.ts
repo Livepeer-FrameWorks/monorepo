@@ -42,8 +42,17 @@ function isLocalHostname(hostname: string): boolean {
   );
 }
 
+function isLocalRuntimeOrigin(): boolean {
+  if (typeof window === "undefined") return false;
+  return isLocalHostname(window.location.hostname);
+}
+
 function preferLocalStreamingEnv(): boolean {
-  return import.meta.env.DEV && isLocalHostname(ingest.hostname);
+  // Either a Vite dev build pointed at localhost env URLs, or any bundle
+  // actually being served from a local origin (e.g. adapter-node behind the
+  // dev nginx on :18090). Both should bypass cluster-derived domains so
+  // assets resolve same-origin via the local proxy.
+  return (import.meta.env.DEV && isLocalHostname(ingest.hostname)) || isLocalRuntimeOrigin();
 }
 
 // Resolved cluster-aware endpoints. When streamingConfig is available (user
@@ -199,7 +208,7 @@ export function getAssetUrl(assetId: string, file: string): string {
     const proto = ep.chandlerUseTls ? "https" : "http";
     return `${proto}://${ep.chandlerHostname}/assets/${assetId}/${file}`;
   }
-  if (isDev) return `/assets/${assetId}/${file}`;
+  if (isDev || isLocalRuntimeOrigin()) return `/assets/${assetId}/${file}`;
   return "";
 }
 
