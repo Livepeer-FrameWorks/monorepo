@@ -880,7 +880,7 @@ SELECT
         'ClipsConnection', 'CreateClip', 'UpdateStream', 'ValidateStreamKey'
     ], 1 + rand()%8) as operation_name,
     arrayElement(['query', 'query', 'query', 'mutation'], 1 + rand()%4) as operation_type,
-    if(rand()%3 = 0, [cityHash64('demo@frameworks.dev')], []) as user_hashes,
+    if(rand()%3 = 0, [cityHash64('demo@frameworks.network')], []) as user_hashes,
     if(rand()%2 = 0, [cityHash64('fw_demo_token')], []) as token_hashes,
     toUInt32(5 + rand()%50) as request_count,
     toUInt32(rand()%3) as error_count,

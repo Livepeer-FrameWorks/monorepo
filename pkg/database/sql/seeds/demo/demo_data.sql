@@ -87,10 +87,10 @@ ON CONFLICT (tenant_id, cluster_id) DO NOTHING;
 
 -- Demo user
 INSERT INTO commodore.users (id, tenant_id, email, password_hash, first_name, last_name, role, permissions)
-VALUES ('5eedface-5e1f-da7a-face-5e1fda7a0001', '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo@frameworks.dev', '$2a$10$MJAqE.2jQ/tbbkhQs68VHOm50iIEoq4tQIiF7PUfSJfzGuCKVsAla', 'Demo', 'User', 'owner', ARRAY['streams:read','streams:write','analytics:read','users:read','users:write','settings:write'])
+VALUES ('5eedface-5e1f-da7a-face-5e1fda7a0001', '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo@frameworks.network', '$2a$10$MJAqE.2jQ/tbbkhQs68VHOm50iIEoq4tQIiF7PUfSJfzGuCKVsAla', 'Demo', 'User', 'owner', ARRAY['streams:read','streams:write','analytics:read','users:read','users:write','settings:write'])
 ON CONFLICT DO NOTHING;
 
-UPDATE commodore.users SET verified = TRUE WHERE email = 'demo@frameworks.dev' AND tenant_id = '5eed517e-ba5e-da7a-517e-ba5eda7a0001';
+UPDATE commodore.users SET verified = TRUE WHERE email = 'demo@frameworks.network' AND tenant_id = '5eed517e-ba5e-da7a-517e-ba5eda7a0001';
 
 -- Service account
 INSERT INTO commodore.users (id, tenant_id, email, password_hash, first_name, last_name, role, permissions, is_active, verified)
@@ -294,7 +294,7 @@ INSERT INTO purser.tenant_subscriptions (
     billing_period_start, billing_period_end
 )
 SELECT
-    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', bt.id, 'active', 'demo@frameworks.dev',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', bt.id, 'active', 'demo@frameworks.network',
     NOW(), NOW() + INTERVAL '1 month',
     DATE_TRUNC('month', NOW()),
     DATE_TRUNC('month', NOW()) + INTERVAL '1 month'

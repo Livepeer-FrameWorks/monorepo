@@ -736,7 +736,7 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 			TenantId:           DemoTenantID,
 			TierId:             "tier_demo_developer",
 			Status:             "active",
-			BillingEmail:       "demo@frameworks.dev",
+			BillingEmail:       "demo@frameworks.network",
 			StartedAt:          timestamppb.New(now.Add(-30 * 24 * time.Hour)),
 			NextBillingDate:    timestamppb.New(nextBilling),
 			BillingPeriodStart: timestamppb.New(time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())),
