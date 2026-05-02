@@ -95,7 +95,7 @@ const snippetIngestVanilla = `import { createStreamCrafter } from '@livepeer-fra
 
 const studio = createStreamCrafter({
   target: '#studio',
-  whipUrl: 'https://edge-ingest.example.com/webrtc/stream-key',
+  whipUrl: 'https://edge-ingest.eu.example.com/webrtc/stream-key',
   profile: 'broadcast',
   theme: 'dracula',
   locale: 'en',
@@ -115,7 +115,7 @@ const snippetIngestWc = `<!-- IIFE via npm CDN — no bundler needed -->
 <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
 
 <fw-streamcrafter
-  whip-url="https://edge-ingest.example.com/webrtc/your-stream-key"
+  whip-url="https://edge-ingest.eu.example.com/webrtc/your-stream-key"
   initial-profile="broadcast"
 ></fw-streamcrafter>`;
 

@@ -348,7 +348,7 @@ type EdgeManifest struct {
 	Version         string     `yaml:"version"`
 	Channel         string     `yaml:"channel,omitempty"` // Release channel: "stable", "rc", or explicit version (e.g., "v0.2.0-rc3")
 	RootDomain      string     `yaml:"root_domain"`
-	PoolDomain      string     `yaml:"pool_domain"` // Shared LB pool domain (e.g., edge.example.com)
+	PoolDomain      string     `yaml:"pool_domain"` // Shared edge pool domain (e.g., edge.media-eu.example.com)
 	Email           string     `yaml:"email"`       // ACME email
 	ClusterID       string     `yaml:"cluster_id,omitempty"`
 	EnrollmentToken string     `yaml:"enrollment_token,omitempty"` // Token for node bootstrap

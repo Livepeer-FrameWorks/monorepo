@@ -327,6 +327,81 @@ func TestEnsureTLSBundleObtainsAndPersistsBundle(t *testing.T) {
 	require.Equal(t, 1, provider.cleanupCalls)
 }
 
+func TestCertificateNeedsBunnyProvider(t *testing.T) {
+	tests := []struct {
+		name    string
+		domains []string
+		want    bool
+	}{
+		{name: "cluster wildcard", domains: []string{"*.media-eu.frameworks.network"}, want: true},
+		{name: "cluster bundle", domains: []string{"media-eu.frameworks.network", "*.media-eu.frameworks.network"}, want: true},
+		{name: "media service name under cluster zone", domains: []string{"livepeer.media-eu.frameworks.network"}, want: true},
+		{name: "root wildcard stays cloudflare", domains: []string{"*.frameworks.network"}, want: false},
+		{name: "root apex stays cloudflare", domains: []string{"frameworks.network"}, want: false},
+		{name: "single root service stays cloudflare", domains: []string{"bridge.frameworks.network"}, want: false},
+		{name: "nested wildcard under media cluster zone", domains: []string{"*.edge.media-eu.frameworks.network"}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, certificateNeedsBunnyProvider(tt.domains, "frameworks.network"))
+		})
+	}
+}
+
+func TestUseBunnyForClusterZonesSelectsProviderByDelegatedZone(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("BRAND_DOMAIN", "frameworks.network")
+	notAfter := time.Now().Add(10 * time.Hour)
+	certPEM, keyPEM := buildTestCert(t, notAfter)
+
+	cloudflareProvider := &fakeDNSProvider{}
+	bunnyProvider := &fakeDNSProvider{}
+	acme := &fakeACMEClient{
+		resource: &certificate.Resource{
+			Certificate: certPEM,
+			PrivateKey:  keyPEM,
+		},
+	}
+	fakeStore := &fakeStore{
+		getCertFunc: func(ctx context.Context, tenantID, domain string) (*store.Certificate, error) {
+			return nil, store.ErrNotFound
+		},
+		saveCertFunc: func(ctx context.Context, tenantID string, cert *store.Certificate) error {
+			return nil
+		},
+		getTLSBundleFunc: func(ctx context.Context, bundleID string) (*store.TLSBundle, error) {
+			return nil, store.ErrNotFound
+		},
+		saveTLSBundleFunc: func(ctx context.Context, bundle *store.TLSBundle) error {
+			return nil
+		},
+		getAccountFunc: func(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error) {
+			return nil, store.ErrNotFound
+		},
+		saveAccountFunc: func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error {
+			return nil
+		},
+	}
+
+	manager := NewCertManager(fakeStore)
+	manager.acmeClientFactory = func(config *lego.Config) (acmeClient, error) {
+		return acme, nil
+	}
+	manager.dnsProviderFactory = func() (challenge.Provider, error) {
+		return cloudflareProvider, nil
+	}
+	manager.bunnyDNSProviderFactory = func() (challenge.Provider, error) {
+		return bunnyProvider, nil
+	}
+	manager.UseBunnyForClusterZones("frameworks.network")
+
+	_, _, _, err := manager.IssueCertificate(ctx, "", "livepeer.media-eu.frameworks.network", "ops@frameworks.network")
+	require.NoError(t, err)
+	require.Equal(t, 0, cloudflareProvider.presentCalls)
+	require.Equal(t, 1, bunnyProvider.presentCalls)
+}
+
 func buildTestCert(t *testing.T, notAfter time.Time) ([]byte, []byte) {
 	t.Helper()
 

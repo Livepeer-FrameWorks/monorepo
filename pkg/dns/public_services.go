@@ -1,5 +1,13 @@
 package dns
 
+type Provider string
+
+const (
+	ProviderNone       Provider = "none"
+	ProviderCloudflare Provider = "cloudflare"
+	ProviderBunny      Provider = "bunny"
+)
+
 var managedServiceTypes = []string{
 	"edge",
 	"edge-egress",
@@ -19,6 +27,27 @@ var managedServiceTypes = []string{
 	"chatwoot",
 	"grafana",
 	"metabase",
+}
+
+var serviceProviders = map[string]Provider{
+	"edge":             ProviderBunny,
+	"edge-egress":      ProviderBunny,
+	"edge-ingest":      ProviderBunny,
+	"edge-storage":     ProviderBunny,
+	"edge-processing":  ProviderBunny,
+	"telemetry":        ProviderBunny,
+	"chandler":         ProviderBunny,
+	"foghorn":          ProviderBunny,
+	"livepeer-gateway": ProviderBunny,
+	"bridge":           ProviderCloudflare,
+	"chartroom":        ProviderCloudflare,
+	"foredeck":         ProviderCloudflare,
+	"logbook":          ProviderCloudflare,
+	"steward":          ProviderCloudflare,
+	"listmonk":         ProviderCloudflare,
+	"chatwoot":         ProviderCloudflare,
+	"grafana":          ProviderCloudflare,
+	"metabase":         ProviderCloudflare,
 }
 
 var clusterScopedServiceTypes = map[string]struct{}{
@@ -61,6 +90,37 @@ func ManagedServiceTypes() []string {
 	return out
 }
 
+// ProviderForServiceType returns the DNS provider responsible for a public
+// service type. Unknown services are not publicly managed.
+func ProviderForServiceType(serviceType string) Provider {
+	if provider, ok := serviceProviders[serviceType]; ok {
+		return provider
+	}
+	return ProviderNone
+}
+
+// BunnyManagedServiceTypes returns service types reconciled under delegated
+// media cluster zones in Bunny DNS.
+func BunnyManagedServiceTypes() []string {
+	return managedServiceTypesForProvider(ProviderBunny)
+}
+
+// CloudflareManagedServiceTypes returns root/public service types reconciled in
+// Cloudflare DNS.
+func CloudflareManagedServiceTypes() []string {
+	return managedServiceTypesForProvider(ProviderCloudflare)
+}
+
+func managedServiceTypesForProvider(provider Provider) []string {
+	out := make([]string, 0, len(managedServiceTypes))
+	for _, serviceType := range managedServiceTypes {
+		if ProviderForServiceType(serviceType) == provider {
+			out = append(out, serviceType)
+		}
+	}
+	return out
+}
+
 // IsClusterScopedServiceType reports whether Navigator should also reconcile
 // per-cluster records for the given service type.
 func IsClusterScopedServiceType(serviceType string) bool {
@@ -75,8 +135,17 @@ func PublicSubdomain(serviceType string) (string, bool) {
 	return subdomain, ok
 }
 
-// ServiceFQDN resolves the public FQDN for a managed service type under the
-// given root domain.
+// RootServiceFQDN resolves root/API/web/admin service names. Media services are
+// only published under media cluster scopes.
+func RootServiceFQDN(serviceType, rootDomain string) (string, bool) {
+	if ProviderForServiceType(serviceType) == ProviderBunny {
+		return "", false
+	}
+	return ServiceFQDN(serviceType, rootDomain)
+}
+
+// ServiceFQDN resolves the service label under the supplied DNS scope. For media
+// services, pass the media cluster scope such as `ams.example.com`.
 func ServiceFQDN(serviceType, rootDomain string) (string, bool) {
 	subdomain, ok := PublicSubdomain(serviceType)
 	if !ok {

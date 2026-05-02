@@ -22,6 +22,7 @@ import (
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/lego"
+	"github.com/go-acme/lego/v4/providers/dns/bunny"
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/registration"
 )
@@ -45,9 +46,11 @@ type acmeClient interface {
 }
 
 type CertManager struct {
-	store              certStore
-	acmeClientFactory  func(config *lego.Config) (acmeClient, error)
-	dnsProviderFactory func() (challenge.Provider, error)
+	store                        certStore
+	acmeClientFactory            func(config *lego.Config) (acmeClient, error)
+	dnsProviderFactory           func() (challenge.Provider, error)
+	bunnyDNSProviderFactory      func() (challenge.Provider, error)
+	dnsProviderForDomainsFactory func(domains []string) (challenge.Provider, error)
 }
 
 // NewCertManager creates a new CertManager
@@ -58,6 +61,22 @@ func NewCertManager(s certStore) *CertManager {
 		dnsProviderFactory: func() (challenge.Provider, error) {
 			return cloudflare.NewDNSProvider()
 		},
+		bunnyDNSProviderFactory: func() (challenge.Provider, error) {
+			return bunny.NewDNSProvider()
+		},
+	}
+}
+
+func (m *CertManager) UseBunnyForClusterZones(rootDomain string) {
+	rootDomain = strings.TrimSuffix(strings.TrimSpace(strings.ToLower(rootDomain)), ".")
+	if rootDomain == "" {
+		return
+	}
+	m.dnsProviderForDomainsFactory = func(domains []string) (challenge.Provider, error) {
+		if certificateNeedsBunnyProvider(domains, rootDomain) {
+			return m.bunnyDNSProviderFactory()
+		}
+		return m.dnsProviderFactory()
 	}
 }
 
@@ -202,13 +221,16 @@ func (m *CertManager) obtainCertificate(ctx context.Context, tenantID string, do
 		return "", "", time.Time{}, fmt.Errorf("failed to create lego client: %w", err)
 	}
 
-	if os.Getenv("CLOUDFLARE_DNS_API_TOKEN") == "" && os.Getenv("CLOUDFLARE_API_TOKEN") != "" {
-		os.Setenv("CLOUDFLARE_DNS_API_TOKEN", os.Getenv("CLOUDFLARE_API_TOKEN"))
+	providerFactory := m.dnsProviderFactory
+	if m.dnsProviderForDomainsFactory != nil {
+		providerFactory = func() (challenge.Provider, error) {
+			return m.dnsProviderForDomainsFactory(domains)
+		}
 	}
 
-	provider, err := m.dnsProviderFactory()
+	provider, err := providerFactory()
 	if err != nil {
-		return "", "", time.Time{}, fmt.Errorf("failed to create cloudflare provider: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("failed to create DNS provider: %w", err)
 	}
 	if challengeErr := client.SetDNS01Provider(&resilientDNSProvider{provider: provider}); challengeErr != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to set DNS provider: %w", challengeErr)
@@ -278,6 +300,30 @@ func isCloudflareUnknownRecordCleanupError(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "cloudflare") && strings.Contains(msg, "unknown record id")
+}
+
+func certificateNeedsBunnyProvider(domains []string, rootDomain string) bool {
+	rootDomain = strings.TrimSuffix(strings.TrimSpace(strings.ToLower(rootDomain)), ".")
+	for _, domain := range domains {
+		normalized := strings.TrimSuffix(strings.TrimSpace(strings.ToLower(domain)), ".")
+		isWildcard := strings.HasPrefix(normalized, "*.")
+		base := strings.TrimPrefix(normalized, "*.")
+		if base == rootDomain {
+			continue
+		}
+		if !strings.HasSuffix(base, "."+rootDomain) {
+			continue
+		}
+		prefix := strings.TrimSuffix(base, "."+rootDomain)
+		labels := strings.Split(prefix, ".")
+		if len(labels) == 1 && labels[0] != "" && isWildcard {
+			return true
+		}
+		if len(labels) >= 2 {
+			return true
+		}
+	}
+	return false
 }
 
 type legoClient struct {

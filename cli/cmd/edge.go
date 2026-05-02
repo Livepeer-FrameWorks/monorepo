@@ -562,8 +562,8 @@ func newEdgeProvisionCmd() *cobra.Command {
 
 Single node example:
   frameworks edge provision --ssh ubuntu@edge-1.example.com \
-    --pool-domain edge.example.com \
-    --node-domain edge-1.example.com \
+    --pool-domain edge.media-eu.example.com \
+    --node-domain edge-1.media-eu.example.com \
     --node-name edge-us-east-1 \
     --email ops@example.com \
     --fetch-cert
@@ -792,8 +792,8 @@ Multi-node manifest example:
 
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "SSH target (user@host, required)")
 	cmd.Flags().StringVar(&sshKey, "ssh-key", "", "SSH private key path")
-	cmd.Flags().StringVar(&poolDomain, "pool-domain", "", "Load balancer pool domain (e.g., edge.example.com)")
-	cmd.Flags().StringVar(&nodeDomain, "node-domain", "", "Individual node domain (e.g., edge-1.example.com)")
+	cmd.Flags().StringVar(&poolDomain, "pool-domain", "", "Edge pool domain (e.g., edge.media-eu.example.com)")
+	cmd.Flags().StringVar(&nodeDomain, "node-domain", "", "Individual node domain (e.g., edge-1.media-eu.example.com)")
 	cmd.Flags().StringVar(&nodeName, "node-name", "", "Node name for registration (default: derived from domain/ssh)")
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "Cluster ID for node registration")
 	cmd.Flags().StringVar(&region, "region", "", "Region for node registration (e.g., us-east-1)")

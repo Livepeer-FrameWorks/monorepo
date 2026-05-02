@@ -26,8 +26,10 @@ require (
 	github.com/go-faster/errors v0.7.1 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/lib/pq v1.12.3 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/nrdcg/bunny-go v0.1.0 // indirect
 	github.com/paulmach/orb v0.13.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect

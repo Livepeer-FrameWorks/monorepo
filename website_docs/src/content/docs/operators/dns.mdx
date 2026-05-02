@@ -28,7 +28,8 @@ Navigator (`api_dns`) automatically manages Cloudflare DNS based on node invento
 2. Navigator fetches nodes for that service type and filters to those with external IPs
 3. Updates Cloudflare DNS:
    - Single node → A record
-   - Multiple nodes → Load balancer pool with geo-steering
+   - Multiple nodes on root/global hostnames → load balancer with one proximity-steered pool per Quartermaster cluster
+   - Multiple nodes on cluster-scoped hostnames → one load balancer pool for that cluster
 4. Applies proxying rules (default: `chartroom`, `foredeck`, and `logbook`)
 5. Handles ACME certificate issuance via DNS-01 challenges
 
@@ -53,25 +54,19 @@ By default, the CLI assumes `frameworks.network` if `--domain` is not provided.
 
 ## Recommended DNS Structure
 
-### Public Endpoints (GeoDNS)
+### Public Endpoints
 
-| Subdomain                 | Purpose           | Service            |
-| ------------------------- | ----------------- | ------------------ |
-| `example.com`             | Marketing site    | Foredeck (Website) |
-| `chartroom.example.com`   | Web console       | Chartroom          |
-| `bridge.example.com`      | GraphQL API       | Bridge             |
-| `foghorn.example.com`     | Viewer routing    | Foghorn            |
-| `livepeer.example.com`    | Transcode gateway | Livepeer Gateway   |
-| `edge-ingest.example.com` | Stream ingest     | Edge ingest nodes  |
-| `edge.example.com`        | Edge pool domain  | Edge nodes         |
-| `edge-egress.example.com` | Edge egress pool  | Edge egress nodes  |
-| `telemetry.example.com`   | Edge telemetry    | Telemetry ingress  |
-| `logbook.example.com`     | Docs site         | Logbook            |
-| `steward.example.com`     | Forms API         | Steward            |
-| `listmonk.example.com`    | Newsletter/admin  | Listmonk           |
-| `chatwoot.example.com`    | Support inbox     | Chatwoot           |
+| Subdomain               | Purpose          | Service            |
+| ----------------------- | ---------------- | ------------------ |
+| `example.com`           | Marketing site   | Foredeck (Website) |
+| `chartroom.example.com` | Web console      | Chartroom          |
+| `bridge.example.com`    | GraphQL API      | Bridge             |
+| `logbook.example.com`   | Docs site        | Logbook            |
+| `steward.example.com`   | Forms API        | Steward            |
+| `listmonk.example.com`  | Newsletter/admin | Listmonk           |
+| `chatwoot.example.com`  | Support inbox    | Chatwoot           |
 
-Navigator only manages subdomains for service types that exist in Quartermaster inventory. Granular subdomains like `edge-egress` and `edge-ingest` are only created when the cluster has a wildcard TLS certificate; otherwise all edge traffic routes through the `edge` pool.
+Cloudflare remains authoritative for root/API/web/admin/support names. Navigator can reconcile those records through Cloudflare, but media and edge traffic is cluster-scoped and delegated to Bunny DNS.
 
 ### Internal Services (Private Network / Mesh)
 
@@ -89,28 +84,9 @@ export COMMODORE_URL=http://10.0.1.10:18001
 export PURSER_URL=http://10.0.1.11:18003
 ```
 
-### Per-Edge A Records
+### Media Cluster DNS
 
-Navigator creates individual A records for each edge node, enabling direct node addressing:
-
-```
-{node_label}.{cluster_slug}.{base_domain}  →  A  →  {node_external_ip}
-
-`node_label` is the node ID with a single `edge-` prefix.
-```
-
-For example, with cluster slug `production` and base domain `frameworks.network`:
-
-| Record                                      | IP              |
-| ------------------------------------------- | --------------- |
-| `edge-nyc-01.production.frameworks.network` | `203.0.113.10`  |
-| `edge-ams-01.production.frameworks.network` | `198.51.100.20` |
-
-Navigator sanitizes the node ID into a DNS-safe label. Nodes without an external IP are skipped.
-
-### Cluster-Scoped DNS
-
-In multi-cluster deployments, each cluster gets its own set of service subdomains under `{cluster_slug}.{base_domain}`:
+In multi-cluster deployments, each media cluster gets a delegated Bunny DNS zone at `{cluster_slug}.{base_domain}`:
 
 | Pattern                         | Purpose                                       |
 | ------------------------------- | --------------------------------------------- |
@@ -124,7 +100,9 @@ In multi-cluster deployments, each cluster gets its own set of service subdomain
 | `foghorn.{slug}.{base}`         | Viewer routing / playback resolution          |
 | `livepeer.{slug}.{base}`        | Livepeer gateway for this cluster             |
 
-Navigator applies smart record logic per subdomain: 1 healthy node → A record, 2+ healthy nodes → load balancer pool with geo-steering. Empty active-cluster inventory preserves existing DNS records to avoid deleting working records during transient outages; inactive clusters are cleaned up.
+Navigator creates the Bunny zone, delegates `{cluster_slug}.{base_domain}` from Cloudflare with NS records, and reconciles each media service as a Bunny A-record set. Records use Bunny geolocation Smart Routing when Quartermaster has node coordinates. Quartermaster remains the health source; Navigator removes unhealthy nodes from the desired record set instead of enabling provider-side health checks.
+
+Media and edge names are cluster-scoped only. Navigator removes unsupported root-level media records such as `edge-ingest.example.com` and `foghorn.example.com` during reconciliation.
 
 ### Wildcard TLS Certificates
 
@@ -134,7 +112,7 @@ Each cluster uses a wildcard certificate for its subdomain space:
 *.{cluster_slug}.{base_domain}
 ```
 
-Certificates are issued via ACME DNS-01 challenges through Cloudflare. Navigator manages issuance and renewal.
+Certificates are issued via ACME DNS-01 challenges through the provider authoritative for the name. Cloudflare handles root/API/web/admin names; Bunny handles media cluster wildcards such as `*.{cluster_slug}.{base_domain}`.
 
 Once issued, certificates are distributed to edge nodes via **ConfigSeed** — Foghorn pushes TLS bundles to Helmsman over the existing gRPC control stream. Edges do not need direct access to the ACME provider.
 
@@ -143,8 +121,7 @@ Once issued, certificates are distributed to edge nodes via **ConfigSeed** — F
 Tenant-specific subdomains CNAME to the shared infrastructure:
 
 ```
-tenant1.example.com         → CNAME → foghorn.example.com (or edge.example.com)
-tenant1.edge-ingest.example.com  → CNAME → edge-ingest.example.com
+tenant1.example.com  → CNAME → foghorn.{cluster_slug}.example.com
 ```
 
 ---
@@ -162,13 +139,14 @@ Environment variables for Navigator:
 CLOUDFLARE_API_TOKEN="your-api-token"
 CLOUDFLARE_ZONE_ID="your-zone-id"
 CLOUDFLARE_ACCOUNT_ID="your-account-id"
+BUNNY_API_KEY="your-bunny-api-key"
 ```
 
 Optional environment variables:
 
 ```bash
 # Cloudflare proxy overrides (comma-separated service types)
-NAVIGATOR_PROXY_SERVICES="bridge,chandler,chartroom,chatwoot,foredeck,listmonk,logbook,steward"
+NAVIGATOR_PROXY_SERVICES="bridge,chartroom,chatwoot,foredeck,grafana,listmonk,logbook,metabase,steward"
 
 # Certificate issuance
 ACME_ENV="production"              # or "staging"

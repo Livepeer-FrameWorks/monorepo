@@ -84,19 +84,27 @@ func newDNSDoctorCmd() *cobra.Command {
 					}
 					return fmt.Errorf("failed to get healthy nodes for %s: %w", serviceType, err)
 				}
-				fqdn, ok := pkgdns.ServiceFQDN(serviceType, domain)
-				if !ok {
-					continue
-				}
 				wantIPs := uniqueExternalIPs(nodesResp.Nodes)
 				if len(wantIPs) == 0 {
 					continue
 				}
-				expectedIPs[fqdn] = wantIPs
 
-				if !pkgdns.IsClusterScopedServiceType(serviceType) {
+				switch pkgdns.ProviderForServiceType(serviceType) {
+				case pkgdns.ProviderCloudflare:
+					fqdn, ok := pkgdns.RootServiceFQDN(serviceType, domain)
+					if !ok {
+						continue
+					}
+					expectedIPs[fqdn] = wantIPs
+					continue
+				case pkgdns.ProviderBunny:
+					if !pkgdns.IsClusterScopedServiceType(serviceType) {
+						continue
+					}
+				default:
 					continue
 				}
+
 				for clusterID, clusterIPs := range clusterExternalIPs(nodesResp.Nodes) {
 					clusterSlug := clusterSlugs[clusterID]
 					if clusterSlug == "" {

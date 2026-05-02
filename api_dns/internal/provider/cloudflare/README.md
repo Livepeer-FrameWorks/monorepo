@@ -28,7 +28,7 @@ client := cloudflare.NewClient(
 
 ```go
 // Create CNAME
-record, err := client.CreateCNAME("tenant1", "foghorn.example.com", false, 60)
+record, err := client.CreateCNAME("tenant1", "bridge.example.com", false, 60)
 
 // Create A record
 record, err := client.CreateARecord("api", "192.0.2.1", true, 60)
@@ -90,8 +90,8 @@ updatedPool, err := client.RemoveOriginFromPool(poolID, "192.0.2.11")
 ```go
 // Create geo-routed load balancer
 lb := cloudflare.LoadBalancer{
-    Name:         "foghorn.example.com",
-    Description:  "Playback geo-routing",
+    Name:         "bridge.example.com",
+    Description:  "API geo-routing",
     TTL:          60,
     FallbackPool: fallbackPoolID,
     DefaultPools: []string{defaultPoolID},

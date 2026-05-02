@@ -11,20 +11,15 @@ Every cluster — official or community — uses the same domain naming pattern.
 
 ## Domain Pattern
 
-| Domain                      | Level   | Purpose                                          |
-| --------------------------- | ------- | ------------------------------------------------ |
-| `foghorn.{base}`            | Root    | GeoDNS across official cluster Foghorn instances |
-| `foghorn.{slug}.{base}`     | Cluster | Points to this cluster's Foghorn instance(s)     |
-| `livepeer.{base}`           | Root    | GeoDNS across official cluster Livepeer gateways |
-| `livepeer.{slug}.{base}`    | Cluster | Points to this cluster's Livepeer gateway(s)     |
-| `edge.{base}`               | Root    | Edge pool across official edge nodes             |
-| `edge.{slug}.{base}`        | Cluster | Points to this cluster's edge pool               |
-| `edge-ingest.{base}`        | Root    | GeoDNS across official cluster ingest nodes      |
-| `edge-ingest.{slug}.{base}` | Cluster | Points to this cluster's ingest nodes            |
-| `edge-egress.{base}`        | Root    | GeoDNS across official cluster edge nodes        |
-| `edge-egress.{slug}.{base}` | Cluster | Points to this cluster's edge nodes              |
+| Domain                      | Level   | Purpose                                      |
+| --------------------------- | ------- | -------------------------------------------- |
+| `foghorn.{slug}.{base}`     | Cluster | Points to this cluster's Foghorn instance(s) |
+| `livepeer.{slug}.{base}`    | Cluster | Points to this cluster's Livepeer gateway(s) |
+| `edge.{slug}.{base}`        | Cluster | Points to this cluster's edge pool           |
+| `edge-ingest.{slug}.{base}` | Cluster | Points to this cluster's ingest nodes        |
+| `edge-egress.{slug}.{base}` | Cluster | Points to this cluster's edge nodes          |
 
-Root domains are public service names. Slug-qualified domains are reconciled for cluster-scoped service types: `edge`, edge capability services, `telemetry`, `chandler`, `foghorn`, and `livepeer`.
+Media domains are scoped to a media cluster slug: `edge`, edge capability services, `telemetry`, `chandler`, `foghorn`, and `livepeer`.
 
 ## Protocol Routing
 
@@ -72,9 +67,10 @@ Navigator currently implements DNS through Cloudflare:
 
 1. Quartermaster returns DNS-eligible nodes with non-empty `external_ip`.
 2. A service with one healthy IP gets an A record.
-3. A service with two or more healthy IPs gets a Cloudflare load balancer and pool.
-4. The load balancer is created with `steering_policy: geo`; Navigator does not currently configure Route53 or measured-latency routing.
-5. Health monitors remove unhealthy origins from the pool automatically.
+3. A root/global service with two or more healthy IPs gets a Cloudflare load balancer with one pool per Quartermaster cluster.
+4. Pool `latitude` / `longitude` values are set from the centroid of healthy node coordinates, and the load balancer uses `steering_policy: proximity` when at least two pools have coordinates.
+5. Cluster-scoped domains use one pool for that cluster and balance across healthy origins inside the pool.
+6. Cloudflare health monitors suppress externally unreachable origins between Navigator reconciliations; Quartermaster remains the desired-state source.
 
 <Aside type="note">
   GeoDNS is a stopgap until anycast DNS with a custom backend resolver is justified — typically at

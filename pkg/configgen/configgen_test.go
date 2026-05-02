@@ -113,9 +113,9 @@ WEBAPP_PUBLIC_URL=https://chartroom.frameworks.network/app
 MARKETING_PUBLIC_URL=https://frameworks.network
 DOCS_PUBLIC_URL=https://logbook.frameworks.network
 FORMS_PUBLIC_URL=https://steward.frameworks.network
-STREAMING_INGEST_URL=https://edge-ingest.frameworks.network
-STREAMING_PLAY_URL=https://foghorn.frameworks.network
-STREAMING_EDGE_URL=https://edge-egress.frameworks.network
+STREAMING_INGEST_URL=https://edge-ingest.media-eu.frameworks.network
+STREAMING_PLAY_URL=https://foghorn.media-eu.frameworks.network
+STREAMING_EDGE_URL=https://edge-egress.media-eu.frameworks.network
 FROM_EMAIL=info@frameworks.network
 TURNSTILE_AUTH_SITE_KEY=site-auth
 TURNSTILE_FORMS_SITE_KEY=site-forms
@@ -144,9 +144,9 @@ TURNSTILE_FORMS_SITE_KEY=site-forms
 		"VITE_MARKETING_SITE_URL":       "https://frameworks.network",
 		"VITE_DOCS_SITE_URL":            "https://logbook.frameworks.network",
 		"VITE_CONTACT_API_URL":          "https://steward.frameworks.network",
-		"VITE_STREAMING_INGEST_URL":     "https://edge-ingest.frameworks.network",
-		"VITE_STREAMING_PLAY_URL":       "https://foghorn.frameworks.network",
-		"VITE_STREAMING_EDGE_URL":       "https://edge-egress.frameworks.network",
+		"VITE_STREAMING_INGEST_URL":     "https://edge-ingest.media-eu.frameworks.network",
+		"VITE_STREAMING_PLAY_URL":       "https://foghorn.media-eu.frameworks.network",
+		"VITE_STREAMING_EDGE_URL":       "https://edge-egress.media-eu.frameworks.network",
 		"VITE_TURNSTILE_AUTH_SITE_KEY":  "site-auth",
 		"VITE_TURNSTILE_FORMS_SITE_KEY": "site-forms",
 		"VITE_CONTACT_EMAIL":            "info@frameworks.network",
@@ -238,7 +238,7 @@ DOCS_PUBLIC_URL=https://docs.example.com
 FORMS_PUBLIC_URL=https://forms.example.com
 STREAMING_INGEST_URL=https://ingest.example.com
 STREAMING_PLAY_URL=https://play.example.com
-STREAMING_EDGE_URL=https://edge.example.com
+STREAMING_EDGE_URL=https://edge-egress.media-eu.example.com
 `
 
 	os.WriteFile(basePath, []byte(base), 0o600)

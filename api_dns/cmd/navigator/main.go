@@ -8,11 +8,13 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"frameworks/api_dns/internal/logic"
+	"frameworks/api_dns/internal/provider/bunny"
 	"frameworks/api_dns/internal/provider/cloudflare"
 	"frameworks/api_dns/internal/store"
 	"frameworks/api_dns/internal/worker"
@@ -98,7 +100,12 @@ func main() {
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to load Cloudflare configuration")
 	}
+	configureCloudflareACMETokenAlias()
 	cfClient := cloudflare.NewClientFromConfig(cfConfig)
+	bunnyClient := bunny.NewClientFromConfig(bunny.LoadConfig())
+	if bunnyClient == nil {
+		logger.WithField("services", pkgdns.BunnyManagedServiceTypes()).Warn("BUNNY_API_KEY not configured; media cluster DNS will use explicit Cloudflare fallback")
+	}
 
 	// Quartermaster gRPC client
 	qmGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
@@ -129,7 +136,11 @@ func main() {
 		Retries:  config.GetEnvInt("NAVIGATOR_CF_MONITOR_RETRIES", 2),
 	}
 	dnsManager := logic.NewDNSManager(cfClient, qmClient, logger, rootDomain, recordTTL, lbTTL, time.Duration(staleSeconds)*time.Second, monitorConfig)
+	dnsManager.SetBunnyClient(bunnyClient)
 	certManager := logic.NewCertManager(certStore)
+	if bunnyClient != nil {
+		certManager.UseBunnyForClusterZones(rootDomain)
+	}
 	internalCAManager := logic.NewInternalCAManager(certStore, qmClient, logger, rootDomain)
 	dnsManager.SetCertChecker(certManager)
 	if err := internalCAManager.EnsureCA(context.Background()); err != nil {
@@ -323,6 +334,13 @@ func main() {
 	if err := server.Start(serverConfig, app, logger); err != nil {
 		logger.WithError(err).Fatal("Navigator HTTP server failed")
 	}
+}
+
+func configureCloudflareACMETokenAlias() {
+	if os.Getenv("CLOUDFLARE_DNS_API_TOKEN") != "" || os.Getenv("CLOUDFLARE_API_TOKEN") == "" {
+		return
+	}
+	_ = os.Setenv("CLOUDFLARE_DNS_API_TOKEN", os.Getenv("CLOUDFLARE_API_TOKEN"))
 }
 
 func requirePrivatePeerUnaryInterceptor() grpc.UnaryServerInterceptor {

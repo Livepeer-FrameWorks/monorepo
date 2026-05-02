@@ -156,6 +156,7 @@ var requiredExternalEnv = map[string][]RequiredEnvVar{
 		{Key: "CLOUDFLARE_API_TOKEN", SetupGuide: "https://dash.cloudflare.com/profile/api-tokens"},
 		{Key: "CLOUDFLARE_ZONE_ID", SetupGuide: "Cloudflare dashboard > domain > Zone ID"},
 		{Key: "CLOUDFLARE_ACCOUNT_ID", SetupGuide: "Cloudflare dashboard > Account Home"},
+		{Key: "BUNNY_API_KEY", SetupGuide: "Bunny dashboard > Account settings > API key"},
 	},
 	"chatwoot": {
 		{Key: "DATABASE_HOST", SetupGuide: "Enable postgres in infrastructure config"},

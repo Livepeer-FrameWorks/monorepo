@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_dns/internal/provider/bunny"
 	"frameworks/api_dns/internal/provider/cloudflare"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/proto"
@@ -22,8 +23,10 @@ type fakeCloudflareClient struct {
 	listDNSRecords       func(recordType, name string) ([]cloudflare.DNSRecord, error)
 	updateDNSRecord      func(recordID string, record cloudflare.DNSRecord) (*cloudflare.DNSRecord, error)
 	deleteDNSRecord      func(recordID string) error
+	createDNSRecord      func(record cloudflare.DNSRecord) (*cloudflare.DNSRecord, error)
 	createARecord        func(name, content string, proxied bool, ttl int) (*cloudflare.DNSRecord, error)
 	getPool              func(poolID string) (*cloudflare.Pool, error)
+	deletePool           func(poolID string) error
 	removeOriginFromPool func(poolID, originIP string) (*cloudflare.Pool, error)
 	addOriginToPool      func(poolID string, origin cloudflare.Origin) (*cloudflare.Pool, error)
 	createLoadBalancer   func(lb cloudflare.LoadBalancer) (*cloudflare.LoadBalancer, error)
@@ -71,6 +74,13 @@ func (f *fakeCloudflareClient) DeleteDNSRecord(recordID string) error {
 	return nil
 }
 
+func (f *fakeCloudflareClient) CreateDNSRecord(record cloudflare.DNSRecord) (*cloudflare.DNSRecord, error) {
+	if f.createDNSRecord != nil {
+		return f.createDNSRecord(record)
+	}
+	return &record, nil
+}
+
 func (f *fakeCloudflareClient) CreateARecord(name, content string, proxied bool, ttl int) (*cloudflare.DNSRecord, error) {
 	if f.createARecord != nil {
 		return f.createARecord(name, content, proxied, ttl)
@@ -83,6 +93,13 @@ func (f *fakeCloudflareClient) GetPool(poolID string) (*cloudflare.Pool, error) 
 		return f.getPool(poolID)
 	}
 	return nil, errors.New("pool not found")
+}
+
+func (f *fakeCloudflareClient) DeletePool(poolID string) error {
+	if f.deletePool != nil {
+		return f.deletePool(poolID)
+	}
+	return nil
 }
 
 func (f *fakeCloudflareClient) RemoveOriginFromPool(poolID, originIP string) (*cloudflare.Pool, error) {
@@ -167,6 +184,30 @@ type fakeQuartermasterClient struct {
 	clustersErr      error
 }
 
+type fakeBunnyClient struct {
+	ensureZone         func(ctx context.Context, domain string) (*bunny.Zone, bool, error)
+	reconcileRecordSet func(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error
+}
+
+func (f *fakeBunnyClient) EnsureZone(ctx context.Context, domain string) (*bunny.Zone, bool, error) {
+	if f.ensureZone != nil {
+		return f.ensureZone(ctx, domain)
+	}
+	return &bunny.Zone{ID: 1, Domain: domain, Nameserver1: "kiki.bunny.net", Nameserver2: "coco.bunny.net"}, false, nil
+}
+
+func (f *fakeBunnyClient) FindZone(ctx context.Context, domain string) (*bunny.Zone, bool, error) {
+	zone, _, err := f.EnsureZone(ctx, domain)
+	return zone, err == nil && zone != nil, err
+}
+
+func (f *fakeBunnyClient) ReconcileRecordSet(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error {
+	if f.reconcileRecordSet != nil {
+		return f.reconcileRecordSet(ctx, zoneID, name, recordType, desired)
+	}
+	return nil
+}
+
 func (f *fakeQuartermasterClient) ListHealthyNodesForDNS(ctx context.Context, staleThresholdSeconds int, serviceType string) (*proto.ListHealthyNodesForDNSResponse, error) {
 	f.callCount++
 	f.serviceType = serviceType
@@ -187,12 +228,12 @@ func TestSyncService_UsesStaleAgeSeconds(t *testing.T) {
 	logger := logrus.New()
 	manager := NewDNSManager(cf, qm, logger, "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
 
-	_, err := manager.SyncService(context.Background(), "edge-egress", "")
+	_, err := manager.SyncService(context.Background(), "bridge", "")
 	if err == nil {
 		t.Fatal("expected error from Quartermaster")
 	}
-	if qm.serviceType != "edge-egress" {
-		t.Fatalf("expected service type edge-egress, got %s", qm.serviceType)
+	if qm.serviceType != "bridge" {
+		t.Fatalf("expected service type bridge, got %s", qm.serviceType)
 	}
 	if qm.staleAge != 300 {
 		t.Fatalf("expected stale age 300 seconds, got %d", qm.staleAge)
@@ -226,7 +267,7 @@ func TestSyncService_NoActiveNodesPreservesDNS(t *testing.T) {
 	hook := logrustest.NewLocal(logger)
 	manager := NewDNSManager(cf, qm, logger, "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
 
-	_, err := manager.SyncService(context.Background(), "edge-egress", "")
+	_, err := manager.SyncService(context.Background(), "bridge", "")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -244,12 +285,13 @@ func TestSyncService_NoActiveNodesPreservesDNS(t *testing.T) {
 	if warnEntry.Level != logrus.WarnLevel {
 		t.Fatalf("expected warn level log, got %s", warnEntry.Level.String())
 	}
-	if warnEntry.Data["service"] != "edge-egress" {
-		t.Fatalf("expected service field edge-egress, got %v", warnEntry.Data["service"])
+	if warnEntry.Data["service"] != "bridge" {
+		t.Fatalf("expected service field bridge, got %v", warnEntry.Data["service"])
 	}
 }
 
-func TestApplyLoadBalancerConfig_ReturnsPartialErrors(t *testing.T) {
+func TestApplyLoadBalancerConfig_UpdatesPoolAsWholeState(t *testing.T) {
+	var updatedPool cloudflare.Pool
 	cf := &fakeCloudflareClient{
 		listMonitors: func() ([]cloudflare.Monitor, error) {
 			return nil, nil
@@ -259,31 +301,25 @@ func TestApplyLoadBalancerConfig_ReturnsPartialErrors(t *testing.T) {
 			return &monitor, nil
 		},
 		listPools: func() ([]cloudflare.Pool, error) {
-			return nil, nil
-		},
-		createPool: func(pool cloudflare.Pool) (*cloudflare.Pool, error) {
-			pool.ID = "pool"
-			return &pool, nil
-		},
-		getPool: func(poolID string) (*cloudflare.Pool, error) {
-			return &cloudflare.Pool{
-				ID: poolID,
+			return []cloudflare.Pool{{
+				ID:   "pool",
+				Name: "edge-egress",
 				Origins: []cloudflare.Origin{
 					{Name: "one", Address: "1.1.1.1"},
 					{Name: "two", Address: "2.2.2.2"},
 				},
-			}, nil
+			}}, nil
+		},
+		updatePool: func(poolID string, pool cloudflare.Pool) (*cloudflare.Pool, error) {
+			updatedPool = pool
+			return &pool, nil
 		},
 		removeOriginFromPool: func(poolID, originIP string) (*cloudflare.Pool, error) {
-			if originIP == "1.1.1.1" {
-				return nil, errors.New("remove failed")
-			}
+			t.Fatal("pool reconciliation should not remove origins one at a time")
 			return nil, nil
 		},
 		addOriginToPool: func(poolID string, origin cloudflare.Origin) (*cloudflare.Pool, error) {
-			if origin.Address == "3.3.3.3" {
-				return nil, errors.New("add failed")
-			}
+			t.Fatal("pool reconciliation should not add origins one at a time")
 			return nil, nil
 		},
 		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) {
@@ -305,14 +341,205 @@ func TestApplyLoadBalancerConfig_ReturnsPartialErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if len(partialErrors) != 2 {
-		t.Fatalf("expected 2 partial errors, got %d", len(partialErrors))
+	if len(partialErrors) != 0 {
+		t.Fatalf("expected no partial errors, got %v", partialErrors)
 	}
-	if _, ok := partialErrors["edge-egress.example.com:1.1.1.1"]; !ok {
-		t.Fatalf("expected partial error for stale origin removal")
+	gotOrigins := make([]string, 0, len(updatedPool.Origins))
+	for _, origin := range updatedPool.Origins {
+		gotOrigins = append(gotOrigins, origin.Address)
 	}
-	if _, ok := partialErrors["edge-egress.example.com:3.3.3.3"]; !ok {
-		t.Fatalf("expected partial error for origin add failure")
+	if strings.Join(gotOrigins, ",") != "2.2.2.2,3.3.3.3" {
+		t.Fatalf("expected whole-state origins [2.2.2.2 3.3.3.3], got %v", gotOrigins)
+	}
+	if updatedPool.OriginSteering == nil || updatedPool.OriginSteering.Policy != "random" {
+		t.Fatalf("expected random origin steering, got %#v", updatedPool.OriginSteering)
+	}
+}
+
+func TestSyncService_RootLoadBalancerCreatesClusterProximityPools(t *testing.T) {
+	ip1 := "10.0.0.1"
+	ip2 := "10.0.0.2"
+	ip3 := "10.0.1.1"
+	ip4 := "10.0.1.2"
+	latEU1, lonEU1 := 52.0, 4.0
+	latEU2, lonEU2 := 54.0, 6.0
+	latUS1, lonUS1 := 40.0, -74.0
+	latUS2, lonUS2 := 42.0, -72.0
+
+	qm := &fakeQuartermasterClient{
+		response: &proto.ListHealthyNodesForDNSResponse{
+			Nodes: []*proto.InfrastructureNode{
+				{NodeId: "eu-1", ClusterId: "cluster-eu", ExternalIp: strPtr(ip1), Latitude: &latEU1, Longitude: &lonEU1},
+				{NodeId: "eu-2", ClusterId: "cluster-eu", ExternalIp: strPtr(ip2), Latitude: &latEU2, Longitude: &lonEU2},
+				{NodeId: "us-1", ClusterId: "cluster-us", ExternalIp: strPtr(ip3), Latitude: &latUS1, Longitude: &lonUS1},
+				{NodeId: "us-2", ClusterId: "cluster-us", ExternalIp: strPtr(ip4), Latitude: &latUS2, Longitude: &lonUS2},
+			},
+		},
+	}
+
+	createdPools := map[string]cloudflare.Pool{}
+	var createdLB cloudflare.LoadBalancer
+	cf := &fakeCloudflareClient{
+		listMonitors: func() ([]cloudflare.Monitor, error) {
+			return nil, nil
+		},
+		createMonitor: func(monitor cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			monitor.ID = "monitor"
+			return &monitor, nil
+		},
+		listPools: func() ([]cloudflare.Pool, error) {
+			return nil, nil
+		},
+		createPool: func(pool cloudflare.Pool) (*cloudflare.Pool, error) {
+			pool.ID = pool.Name
+			createdPools[pool.Name] = pool
+			return &pool, nil
+		},
+		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) {
+			return nil, nil
+		},
+		createLoadBalancer: func(lb cloudflare.LoadBalancer) (*cloudflare.LoadBalancer, error) {
+			createdLB = lb
+			lb.ID = "lb"
+			return &lb, nil
+		},
+		listDNSRecords: func(recordType, name string) ([]cloudflare.DNSRecord, error) {
+			return nil, nil
+		},
+	}
+
+	m := newTestManager(cf)
+	m.qmClient = qm
+
+	partialErrors, err := m.SyncService(context.Background(), "bridge", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(partialErrors) != 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+	if len(createdPools) != 2 {
+		t.Fatalf("expected one pool per cluster, got %d (%v)", len(createdPools), createdPools)
+	}
+
+	euPool := createdPools["bridge-example-com-cluster-eu"]
+	if euPool.Latitude == nil || euPool.Longitude == nil || *euPool.Latitude != 53.0 || *euPool.Longitude != 5.0 {
+		t.Fatalf("expected EU centroid 53,5, got lat=%v lon=%v", euPool.Latitude, euPool.Longitude)
+	}
+	if len(euPool.Origins) != 2 {
+		t.Fatalf("expected EU pool to have 2 origins, got %d", len(euPool.Origins))
+	}
+	if euPool.OriginSteering == nil || euPool.OriginSteering.Policy != "random" {
+		t.Fatalf("expected random origin steering, got %#v", euPool.OriginSteering)
+	}
+
+	usPool := createdPools["bridge-example-com-cluster-us"]
+	if usPool.Latitude == nil || usPool.Longitude == nil || *usPool.Latitude != 41.0 || *usPool.Longitude != -73.0 {
+		t.Fatalf("expected US centroid 41,-73, got lat=%v lon=%v", usPool.Latitude, usPool.Longitude)
+	}
+	if createdLB.SteeringPolicy != "proximity" {
+		t.Fatalf("expected proximity steering, got %q", createdLB.SteeringPolicy)
+	}
+	if len(createdLB.DefaultPools) != 2 {
+		t.Fatalf("expected 2 default pools, got %v", createdLB.DefaultPools)
+	}
+}
+
+func TestSyncService_SingleNodeDeletesManagedPools(t *testing.T) {
+	ip := "10.0.0.1"
+	var deletedPools []string
+	qm := &fakeQuartermasterClient{
+		response: &proto.ListHealthyNodesForDNSResponse{
+			Nodes: []*proto.InfrastructureNode{{ExternalIp: &ip}},
+		},
+	}
+	cf := &fakeCloudflareClient{
+		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) {
+			return []cloudflare.LoadBalancer{{ID: "lb1", Name: "bridge.example.com"}}, nil
+		},
+		deleteLoadBalancer: func(loadBalancerID string) error {
+			return nil
+		},
+		listDNSRecords: func(recordType, name string) ([]cloudflare.DNSRecord, error) {
+			return nil, nil
+		},
+		createARecord: func(name, content string, proxied bool, ttl int) (*cloudflare.DNSRecord, error) {
+			return &cloudflare.DNSRecord{Name: name, Content: content}, nil
+		},
+		listPools: func() ([]cloudflare.Pool, error) {
+			return []cloudflare.Pool{
+				{ID: "legacy", Name: "bridge"},
+				{ID: "cluster", Name: "bridge-example-com-cluster-eu"},
+				{ID: "unrelated", Name: "foghorn-example-com-cluster-eu"},
+			}, nil
+		},
+		deletePool: func(poolID string) error {
+			deletedPools = append(deletedPools, poolID)
+			return nil
+		},
+	}
+	m := newTestManager(cf)
+	m.qmClient = qm
+
+	partialErrors, err := m.SyncService(context.Background(), "bridge", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(partialErrors) != 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+	if strings.Join(deletedPools, ",") != "legacy,cluster" {
+		t.Fatalf("expected legacy and managed cluster pools deleted, got %v", deletedPools)
+	}
+}
+
+func TestApplyRootLoadBalancerConfig_PoolUpdateFailureSkipsCleanup(t *testing.T) {
+	var dnsDeleted, poolDeleted, lbListed bool
+	cf := &fakeCloudflareClient{
+		listMonitors: func() ([]cloudflare.Monitor, error) {
+			return nil, nil
+		},
+		createMonitor: func(monitor cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			monitor.ID = "monitor"
+			return &monitor, nil
+		},
+		listPools: func() ([]cloudflare.Pool, error) {
+			return []cloudflare.Pool{{ID: "pool", Name: "edge-egress-example-com-cluster-eu"}}, nil
+		},
+		updatePool: func(poolID string, pool cloudflare.Pool) (*cloudflare.Pool, error) {
+			return nil, errors.New("endpoint quota exceeded")
+		},
+		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) {
+			lbListed = true
+			return nil, nil
+		},
+		listDNSRecords: func(recordType, name string) ([]cloudflare.DNSRecord, error) {
+			return []cloudflare.DNSRecord{{ID: "a", Name: name}}, nil
+		},
+		deleteDNSRecord: func(recordID string) error {
+			dnsDeleted = true
+			return nil
+		},
+		deletePool: func(poolID string) error {
+			poolDeleted = true
+			return nil
+		},
+	}
+	m := newTestManager(cf)
+	lat, lon := 52.0, 4.0
+
+	_, err := m.applyRootLoadBalancerConfig(context.Background(), "edge-egress.example.com", "edge-egress", []dnsNode{
+		{NodeID: "eu-1", ClusterID: "cluster-eu", ExternalIP: "10.0.0.1", Latitude: &lat, Longitude: &lon},
+		{NodeID: "eu-2", ClusterID: "cluster-eu", ExternalIP: "10.0.0.2", Latitude: &lat, Longitude: &lon},
+	}, false)
+	if err == nil {
+		t.Fatal("expected pool update error")
+	}
+	if !strings.Contains(err.Error(), "endpoint quota exceeded") {
+		t.Fatalf("expected quota error, got %v", err)
+	}
+	if lbListed || dnsDeleted || poolDeleted {
+		t.Fatalf("cleanup should not run after pool update failure (lbListed=%v dnsDeleted=%v poolDeleted=%v)", lbListed, dnsDeleted, poolDeleted)
 	}
 }
 
@@ -457,6 +684,193 @@ func TestSyncServiceByCluster_EdgeEgressCleanupSkipsServiceRecord(t *testing.T) 
 	}
 	if len(deleted) != 1 || deleted[0] != "stale" {
 		t.Fatalf("expected only stale node record to be deleted, got %v", deleted)
+	}
+}
+
+func TestSyncServiceByCluster_UsesBunnyForMediaClusterService(t *testing.T) {
+	latEU, lonEU := 52.3676, 4.9041
+	latUS, lonUS := 40.7128, -74.0060
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
+			ClusterId:   "media-eu",
+			ClusterName: "Media EU",
+			IsActive:    true,
+		}}},
+		response: &proto.ListHealthyNodesForDNSResponse{Nodes: []*proto.InfrastructureNode{
+			{
+				NodeId:     "edge-ams-1",
+				ClusterId:  "media-eu",
+				ExternalIp: strPtr("198.51.100.10"),
+				Latitude:   &latEU,
+				Longitude:  &lonEU,
+			},
+			{
+				NodeId:     "edge-nyc-1",
+				ClusterId:  "media-eu",
+				ExternalIp: strPtr("203.0.113.10"),
+				Latitude:   &latUS,
+				Longitude:  &lonUS,
+			},
+		}},
+	}
+
+	var delegated []cloudflare.DNSRecord
+	var deletedNS []string
+	cf := &fakeCloudflareClient{
+		listDNSRecords: func(recordType, name string) ([]cloudflare.DNSRecord, error) {
+			if recordType == "NS" && name == "media-eu.example.com" {
+				return []cloudflare.DNSRecord{
+					{ID: "stale-ns", Name: name, Content: "old.bunny.net", Type: "NS"},
+				}, nil
+			}
+			return nil, nil
+		},
+		createDNSRecord: func(record cloudflare.DNSRecord) (*cloudflare.DNSRecord, error) {
+			delegated = append(delegated, record)
+			return &record, nil
+		},
+		deleteDNSRecord: func(recordID string) error {
+			deletedNS = append(deletedNS, recordID)
+			return nil
+		},
+	}
+
+	var desired []bunny.Record
+	bc := &fakeBunnyClient{
+		ensureZone: func(ctx context.Context, domain string) (*bunny.Zone, bool, error) {
+			if domain != "media-eu.example.com" {
+				t.Fatalf("EnsureZone domain = %q, want media-eu.example.com", domain)
+			}
+			return &bunny.Zone{ID: 42, Domain: domain, Nameserver1: "kiki.bunny.net", Nameserver2: "coco.bunny.net"}, true, nil
+		},
+		reconcileRecordSet: func(ctx context.Context, zoneID int64, name string, recordType int, got []bunny.Record) error {
+			if zoneID != 42 {
+				t.Fatalf("zoneID = %d, want 42", zoneID)
+			}
+			if name != "edge-ingest" {
+				t.Fatalf("record name = %q, want edge-ingest", name)
+			}
+			if recordType != bunny.RecordTypeA {
+				t.Fatalf("recordType = %d, want A", recordType)
+			}
+			desired = append(desired, got...)
+			return nil
+		},
+	}
+
+	logger := logrus.New()
+	logger.SetLevel(logrus.FatalLevel)
+	manager := NewDNSManager(cf, qm, logger, "example.com", 30, 60, 5*time.Minute, MonitorConfig{})
+	manager.SetBunnyClient(bc)
+
+	partialErrors, err := manager.SyncServiceByCluster(context.Background(), "edge-ingest")
+	if err != nil {
+		t.Fatalf("SyncServiceByCluster returned error: %v", err)
+	}
+	if len(partialErrors) > 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+	if len(delegated) != 2 {
+		t.Fatalf("expected 2 NS delegation records, got %d", len(delegated))
+	}
+	if len(deletedNS) != 1 || deletedNS[0] != "stale-ns" {
+		t.Fatalf("expected stale NS deleted, got %v", deletedNS)
+	}
+	if len(desired) != 2 {
+		t.Fatalf("expected 2 Bunny A records, got %d", len(desired))
+	}
+	for _, record := range desired {
+		if record.TTL != 30 {
+			t.Fatalf("record TTL = %d, want 30", record.TTL)
+		}
+		if record.SmartRoutingType != bunny.SmartRoutingGeolocation {
+			t.Fatalf("SmartRoutingType = %d, want geolocation", record.SmartRoutingType)
+		}
+		if record.MonitorType != bunny.MonitorTypeNone {
+			t.Fatalf("MonitorType = %d, want none", record.MonitorType)
+		}
+		if record.GeolocationLatitude == nil || record.GeolocationLongitude == nil {
+			t.Fatal("expected geolocation coordinates on Bunny record")
+		}
+	}
+}
+
+func TestSyncServiceByCluster_ClearsBunnyForInactiveCluster(t *testing.T) {
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
+			ClusterId:   "media-eu",
+			ClusterName: "Media EU",
+			IsActive:    false,
+		}}},
+		response: &proto.ListHealthyNodesForDNSResponse{},
+	}
+
+	var clearedBunny bool
+	bc := &fakeBunnyClient{
+		ensureZone: func(ctx context.Context, domain string) (*bunny.Zone, bool, error) {
+			if domain != "media-eu.example.com" {
+				t.Fatalf("FindZone domain = %q, want media-eu.example.com", domain)
+			}
+			return &bunny.Zone{ID: 42, Domain: domain, Nameserver1: "kiki.bunny.net", Nameserver2: "coco.bunny.net"}, false, nil
+		},
+		reconcileRecordSet: func(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error {
+			if zoneID != 42 || name != "edge-ingest" || recordType != bunny.RecordTypeA {
+				t.Fatalf("unexpected Bunny clear request: zone=%d name=%s type=%d", zoneID, name, recordType)
+			}
+			if desired != nil {
+				t.Fatalf("expected nil desired records for inactive cleanup, got %v", desired)
+			}
+			clearedBunny = true
+			return nil
+		},
+	}
+
+	var lbDeleted, aDeleted, poolDeleted bool
+	cf := &fakeCloudflareClient{
+		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) {
+			return []cloudflare.LoadBalancer{{ID: "lb1", Name: "edge-ingest.media-eu.example.com"}}, nil
+		},
+		deleteLoadBalancer: func(loadBalancerID string) error {
+			if loadBalancerID == "lb1" {
+				lbDeleted = true
+			}
+			return nil
+		},
+		listDNSRecords: func(recordType, name string) ([]cloudflare.DNSRecord, error) {
+			if recordType == "A" && name == "edge-ingest.media-eu.example.com" {
+				return []cloudflare.DNSRecord{{ID: "a1", Name: name, Type: "A"}}, nil
+			}
+			return nil, nil
+		},
+		deleteDNSRecord: func(recordID string) error {
+			if recordID == "a1" {
+				aDeleted = true
+			}
+			return nil
+		},
+		listPools: func() ([]cloudflare.Pool, error) {
+			return []cloudflare.Pool{{ID: "pool1", Name: "edge-ingest-media-eu-example-com"}}, nil
+		},
+		deletePool: func(poolID string) error {
+			if poolID == "pool1" {
+				poolDeleted = true
+			}
+			return nil
+		},
+	}
+
+	manager := NewDNSManager(cf, qm, logrus.New(), "example.com", 30, 60, 5*time.Minute, MonitorConfig{})
+	manager.SetBunnyClient(bc)
+
+	partialErrors, err := manager.SyncServiceByCluster(context.Background(), "edge-ingest")
+	if err != nil {
+		t.Fatalf("SyncServiceByCluster returned error: %v", err)
+	}
+	if len(partialErrors) > 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+	if !clearedBunny || !lbDeleted || !aDeleted || !poolDeleted {
+		t.Fatalf("expected Bunny and Cloudflare cleanup; bunny=%v lb=%v a=%v pool=%v", clearedBunny, lbDeleted, aDeleted, poolDeleted)
 	}
 }
 
@@ -695,7 +1109,7 @@ func TestApplySingleNodeConfig_CleansUpConflictingLB(t *testing.T) {
 }
 
 func TestClearDNSConfig_DeletesMatchingRecordsAndLBs(t *testing.T) {
-	var lbDeleted, aDeleted, cnameDeleted bool
+	var lbDeleted, aDeleted, cnameDeleted, poolDeleted bool
 	cf := &fakeCloudflareClient{
 		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) {
 			return []cloudflare.LoadBalancer{
@@ -724,6 +1138,15 @@ func TestClearDNSConfig_DeletesMatchingRecordsAndLBs(t *testing.T) {
 			}
 			return nil
 		},
+		listPools: func() ([]cloudflare.Pool, error) {
+			return []cloudflare.Pool{{ID: "pool1", Name: "edge-egress-example-com"}}, nil
+		},
+		deletePool: func(id string) error {
+			if id == "pool1" {
+				poolDeleted = true
+			}
+			return nil
+		},
 	}
 	m := newTestManager(cf)
 
@@ -739,6 +1162,9 @@ func TestClearDNSConfig_DeletesMatchingRecordsAndLBs(t *testing.T) {
 	}
 	if !cnameDeleted {
 		t.Fatal("expected CNAME record deleted")
+	}
+	if !poolDeleted {
+		t.Fatal("expected managed pool deleted")
 	}
 }
 
@@ -1149,12 +1575,12 @@ func TestSyncService_SingleNode(t *testing.T) {
 	m := newTestManager(cf)
 	m.qmClient = qm
 
-	_, err := m.SyncService(context.Background(), "edge-egress", "")
+	_, err := m.SyncService(context.Background(), "bridge", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if createdFQDN != "edge-egress.example.com" {
-		t.Fatalf("expected edge-egress.example.com, got %s", createdFQDN)
+	if createdFQDN != "bridge.example.com" {
+		t.Fatalf("expected bridge.example.com, got %s", createdFQDN)
 	}
 }
 
@@ -1178,12 +1604,12 @@ func TestSyncService_CustomRootDomain(t *testing.T) {
 	m := newTestManager(cf)
 	m.qmClient = qm
 
-	_, err := m.SyncService(context.Background(), "edge-egress", "custom.net")
+	_, err := m.SyncService(context.Background(), "bridge", "custom.net")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if createdFQDN != "edge-egress.custom.net" {
-		t.Fatalf("expected edge-egress.custom.net, got %s", createdFQDN)
+	if createdFQDN != "bridge.custom.net" {
+		t.Fatalf("expected bridge.custom.net, got %s", createdFQDN)
 	}
 }
 
@@ -1222,13 +1648,6 @@ func TestSyncService_SubdomainMapping(t *testing.T) {
 		serviceType     string
 		expectedSubpart string
 	}{
-		{"edge", "edge.example.com"},
-		{"edge-egress", "edge-egress.example.com"},
-		{"edge-ingest", "edge-ingest.example.com"},
-		{"edge-storage", "edge-storage.example.com"},
-		{"edge-processing", "edge-processing.example.com"},
-		{"foghorn", "foghorn.example.com"},
-		{"livepeer-gateway", "livepeer.example.com"},
 		{"bridge", "bridge.example.com"},
 		{"chartroom", "chartroom.example.com"},
 		{"foredeck", "example.com"},
@@ -1268,6 +1687,21 @@ func TestSyncService_SubdomainMapping(t *testing.T) {
 	}
 }
 
+func TestSyncService_RejectsRootMediaServices(t *testing.T) {
+	ip := "10.0.0.1"
+	qm := &fakeQuartermasterClient{
+		response: &proto.ListHealthyNodesForDNSResponse{
+			Nodes: []*proto.InfrastructureNode{{ExternalIp: &ip}},
+		},
+	}
+	m := newTestManager(&fakeCloudflareClient{})
+	m.qmClient = qm
+
+	if _, err := m.SyncService(context.Background(), "foghorn", ""); err == nil {
+		t.Fatal("expected root media SyncService to fail")
+	}
+}
+
 func TestSyncService_ProxiedServices(t *testing.T) {
 	ip := "10.0.0.1"
 	var proxiedValue bool
@@ -1297,25 +1731,21 @@ func TestSyncService_ProxiedServices(t *testing.T) {
 		t.Fatal("expected chartroom to be proxied")
 	}
 
-	// "edge-egress" is NOT in proxy map, should not be proxied
-	proxiedValue = true // reset
-	_, err = m.SyncService(context.Background(), "edge-egress", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if proxiedValue {
-		t.Fatal("expected edge-egress to not be proxied")
-	}
+	// Media services are cluster-scoped; loadProxyServices covers their default
+	// proxy exclusion without exercising root reconciliation.
 }
 
 func TestLoadProxyServices_Default(t *testing.T) {
 	// Unset the env var to test default behavior
 	t.Setenv("NAVIGATOR_PROXY_SERVICES", "")
 	proxy := loadProxyServices()
-	for _, svc := range []string{"bridge", "chandler", "chartroom", "chatwoot", "foredeck", "listmonk", "logbook", "steward"} {
+	for _, svc := range []string{"bridge", "chartroom", "chatwoot", "foredeck", "grafana", "listmonk", "logbook", "metabase", "steward"} {
 		if !proxy[svc] {
 			t.Fatalf("expected %s in default proxied services, got %v", svc, proxy)
 		}
+	}
+	if proxy["chandler"] {
+		t.Fatal("chandler should not be proxied by default")
 	}
 	if proxy["edge-egress"] {
 		t.Fatal("edge-egress should not be proxied by default")
@@ -1374,7 +1804,7 @@ func TestClusterServiceFQDN(t *testing.T) {
 	}
 }
 
-func TestSyncServiceByCluster_EdgeEgressCreatesNodeRecords(t *testing.T) {
+func TestSyncServiceByCluster_EdgeEgressDoesNotCreateNodeRecords(t *testing.T) {
 	ip := "10.0.0.1"
 	var createdRecords []string
 
@@ -1425,12 +1855,12 @@ func TestSyncServiceByCluster_EdgeEgressCreatesNodeRecords(t *testing.T) {
 			hasNodeRecord = true
 		}
 	}
-	if !hasNodeRecord {
-		t.Fatalf("expected edge node A record, got records: %v", createdRecords)
+	if hasNodeRecord {
+		t.Fatalf("expected no edge node A record, got records: %v", createdRecords)
 	}
 }
 
-func TestSyncServiceByCluster_EdgeEgressPreservesEdgePrefixedNodeIDs(t *testing.T) {
+func TestSyncServiceByCluster_EdgeEgressSkipsEdgePrefixedNodeIDs(t *testing.T) {
 	ip := "10.0.0.1"
 	var createdRecords []string
 
@@ -1474,9 +1904,6 @@ func TestSyncServiceByCluster_EdgeEgressPreservesEdgePrefixedNodeIDs(t *testing.
 	if len(partialErrors) > 0 {
 		t.Fatalf("unexpected partial errors: %v", partialErrors)
 	}
-	if len(createdRecords) == 0 {
-		t.Fatal("expected edge node record to be created")
-	}
 	hasNodeRecord := false
 	for _, record := range createdRecords {
 		if record == "edge-eu-1.cluster-abc.example.com" {
@@ -1484,8 +1911,8 @@ func TestSyncServiceByCluster_EdgeEgressPreservesEdgePrefixedNodeIDs(t *testing.
 			break
 		}
 	}
-	if !hasNodeRecord {
-		t.Fatalf("expected edge-prefixed node ID to be reused as-is, got %v", createdRecords)
+	if hasNodeRecord {
+		t.Fatalf("expected no direct node record, got %v", createdRecords)
 	}
 }
 

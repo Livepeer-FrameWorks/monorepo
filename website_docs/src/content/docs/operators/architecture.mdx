@@ -288,7 +288,8 @@ Traffic routing and TLS termination vary by deployment tier:
   - Supports HTTP/2, HTTP/3, and WebSocket upgrades natively.
 - **Production (Central/Regional):** Navigator manages public DNS via Cloudflare API.
   - Single node → A record pointing directly to service
-  - Multiple nodes → Cloudflare load balancer pool with geo-steering
+  - Multiple root/global nodes → Cloudflare load balancer with one proximity-steered pool per Quartermaster cluster
+  - Multiple cluster-scoped nodes → Cloudflare load balancer with one pool for that cluster
   - Certificates issued via Let's Encrypt (DNS-01 validation through Cloudflare)
 
 > **Note:** Cloudflare is used for DNS management and geographic load balancing (DNS-only mode, not proxied). Traffic flows directly to FrameWorks services. A self-hosted anycast DNS solution is planned to replace Cloudflare dependency once an ASN is acquired.

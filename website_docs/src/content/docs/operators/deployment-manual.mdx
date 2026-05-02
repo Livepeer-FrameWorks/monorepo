@@ -27,14 +27,14 @@ deployment assumes:
 
 ## Streaming URI Quick Reference
 
-| Purpose            | Domain                        | Path                                | Example                                                         |
-| ------------------ | ----------------------------- | ----------------------------------- | --------------------------------------------------------------- |
-| **RTMP Ingest**    | `edge-ingest.your-domain.com` | `/live/{streamKey}`                 | `rtmp://edge-ingest.your-domain.com:1935/live/sk_abc123`        |
-| **WHIP Ingest**    | `edge-ingest.your-domain.com` | `/webrtc/{streamKey}`               | `https://edge-ingest.your-domain.com/webrtc/sk_abc123`          |
-| **HLS Playback**   | `foghorn.your-domain.com`     | `/play/{playbackId}/hls/index.m3u8` | `https://foghorn.your-domain.com/play/pk_xyz789/hls/index.m3u8` |
-| **WebRTC (WHEP)**  | `foghorn.your-domain.com`     | `/play/{playbackId}/webrtc`         | `https://foghorn.your-domain.com/play/pk_xyz789/webrtc`         |
-| **Viewer Routing** | `foghorn.your-domain.com`     | `/play/{contentId}`                 | Returns JSON or 307 redirect                                    |
-| **GraphQL API**    | `bridge.your-domain.com`      | `/graphql`                          | `resolveViewerEndpoint` query                                   |
+| Purpose            | Domain                                  | Path                                | Example                                                            |
+| ------------------ | --------------------------------------- | ----------------------------------- | ------------------------------------------------------------------ |
+| **RTMP Ingest**    | `edge-ingest.{cluster}.your-domain.com` | `/live/{streamKey}`                 | `rtmp://edge-ingest.eu.your-domain.com:1935/live/sk_abc123`        |
+| **WHIP Ingest**    | `edge-ingest.{cluster}.your-domain.com` | `/webrtc/{streamKey}`               | `https://edge-ingest.eu.your-domain.com/webrtc/sk_abc123`          |
+| **HLS Playback**   | `foghorn.{cluster}.your-domain.com`     | `/play/{playbackId}/hls/index.m3u8` | `https://foghorn.eu.your-domain.com/play/pk_xyz789/hls/index.m3u8` |
+| **WebRTC (WHEP)**  | `foghorn.{cluster}.your-domain.com`     | `/play/{playbackId}/webrtc`         | `https://foghorn.eu.your-domain.com/play/pk_xyz789/webrtc`         |
+| **Viewer Routing** | `foghorn.{cluster}.your-domain.com`     | `/play/{contentId}`                 | Returns JSON or 307 redirect                                       |
+| **GraphQL API**    | `bridge.your-domain.com`                | `/graphql`                          | `resolveViewerEndpoint` query                                      |
 
 **Note:** `/play/*` and `/resolve/*` return JSON unless a protocol/extension is requested (then 307 redirect).
 
@@ -1226,9 +1226,9 @@ WEBAPP_PUBLIC_URL=https://chartroom.your-domain.com
 MARKETING_PUBLIC_URL=https://your-domain.com
 DOCS_PUBLIC_URL=https://logbook.your-domain.com
 FORMS_PUBLIC_URL=https://steward.your-domain.com
-STREAMING_INGEST_URL=https://edge-ingest.your-domain.com
-STREAMING_PLAY_URL=https://foghorn.your-domain.com
-STREAMING_EDGE_URL=https://edge.your-domain.com
+STREAMING_INGEST_URL=https://edge-ingest.<media-cluster>.your-domain.com
+STREAMING_PLAY_URL=https://foghorn.<media-cluster>.your-domain.com
+STREAMING_EDGE_URL=https://edge-egress.<media-cluster>.your-domain.com
 TURNSTILE_AUTH_SITE_KEY=<your-turnstile-site-key>
 TURNSTILE_FORMS_SITE_KEY=<your-turnstile-forms-key>
 FROM_EMAIL=info@your-domain.com
@@ -1447,8 +1447,9 @@ server {
 ```
 
 <Aside type="tip">
-  For streaming endpoints (`edge.your-domain.com`, `edge-ingest.your-domain.com`), use DNS-only mode
-  without proxying to avoid interference with RTMP, SRT, and WebRTC protocols.
+  For streaming endpoints (`edge.{cluster}.your-domain.com`, `edge-ingest.{cluster}
+  .your-domain.com`), use DNS-only mode without proxying to avoid interference with RTMP, SRT, and
+  WebRTC protocols.
 </Aside>
 
 ---

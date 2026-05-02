@@ -1407,7 +1407,7 @@ frameworks edge provision --manifest edges.yaml
 
 - `--ssh string` - SSH target (user@host)
 - `--ssh-key` - SSH private key path
-- `--pool-domain string` - Shared LB pool domain (e.g., edge.example.com)
+- `--pool-domain string` - Shared edge pool domain (e.g., edge.media-eu.example.com)
 - `--node-domain string` - Individual node domain
 - `--node-name string` - Node name for registration
 - `--cluster-id string` - Cluster ID for registration
@@ -1430,8 +1430,8 @@ frameworks edge provision --manifest edges.yaml
 # Provision single node with explicit domains (manual/admin path; requires
 # a platform or self-hosted context with Quartermaster reachability)
 frameworks edge provision --ssh ubuntu@10.0.0.5 \
-  --pool-domain edge.example.com \
-  --node-domain edge-1.example.com \
+  --pool-domain edge.media-eu.example.com \
+  --node-domain edge-1.media-eu.example.com \
   --register --fetch-cert --email admin@example.com
 
 # Provision with enrollment token (auto-assigns domain via PreRegisterEdge,

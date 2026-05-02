@@ -31,17 +31,23 @@ type HealthCheck struct {
 
 // Pool represents a CloudFlare load balancer pool (group of origins)
 type Pool struct {
-	ID                string   `json:"id,omitempty"`
-	Name              string   `json:"name"`
-	Description       string   `json:"description,omitempty"`
-	Enabled           bool     `json:"enabled"`
-	MinimumOrigins    int      `json:"minimum_origins,omitempty"`
-	Monitor           string   `json:"monitor,omitempty"`       // Health check monitor ID
-	CheckRegions      []string `json:"check_regions,omitempty"` // Regions to run health checks from
-	NotificationEmail string   `json:"notification_email,omitempty"`
-	Origins           []Origin `json:"origins"`
-	Latitude          *float64 `json:"latitude,omitempty"`
-	Longitude         *float64 `json:"longitude,omitempty"`
+	ID                string          `json:"id,omitempty"`
+	Name              string          `json:"name"`
+	Description       string          `json:"description,omitempty"`
+	Enabled           bool            `json:"enabled"`
+	MinimumOrigins    int             `json:"minimum_origins,omitempty"`
+	Monitor           string          `json:"monitor,omitempty"`       // Health check monitor ID
+	CheckRegions      []string        `json:"check_regions,omitempty"` // Regions to run health checks from
+	NotificationEmail string          `json:"notification_email,omitempty"`
+	Origins           []Origin        `json:"origins"`
+	Latitude          *float64        `json:"latitude,omitempty"`
+	Longitude         *float64        `json:"longitude,omitempty"`
+	OriginSteering    *OriginSteering `json:"origin_steering,omitempty"`
+}
+
+// OriginSteering controls how origins inside a pool are selected.
+type OriginSteering struct {
+	Policy string `json:"policy,omitempty"` // random, hash, least_outstanding_requests, least_connections
 }
 
 // LoadBalancer represents a CloudFlare load balancer (geo-routing configuration)
@@ -59,7 +65,7 @@ type LoadBalancer struct {
 	Enabled            bool                `json:"enabled"`
 	SessionAffinity    string              `json:"session_affinity,omitempty"` // "none", "cookie", "ip_cookie"
 	SessionAffinityTTL int                 `json:"session_affinity_ttl,omitempty"`
-	SteeringPolicy     string              `json:"steering_policy,omitempty"` // "off", "geo", "random", "dynamic_latency"
+	SteeringPolicy     string              `json:"steering_policy,omitempty"` // "off", "geo", "proximity", "random", "dynamic_latency"
 }
 
 // Monitor represents a health check monitor

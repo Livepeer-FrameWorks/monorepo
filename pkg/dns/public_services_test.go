@@ -23,6 +23,48 @@ func TestManagedServiceTypesIncludesLivepeerGateway(t *testing.T) {
 	}
 }
 
+func TestProviderForServiceType(t *testing.T) {
+	tests := []struct {
+		serviceType string
+		want        Provider
+	}{
+		{serviceType: "edge-ingest", want: ProviderBunny},
+		{serviceType: "foghorn", want: ProviderBunny},
+		{serviceType: "chandler", want: ProviderBunny},
+		{serviceType: "bridge", want: ProviderCloudflare},
+		{serviceType: "chartroom", want: ProviderCloudflare},
+		{serviceType: "grafana", want: ProviderCloudflare},
+		{serviceType: "signalman", want: ProviderNone},
+		{serviceType: "unknown", want: ProviderNone},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.serviceType, func(t *testing.T) {
+			if got := ProviderForServiceType(tt.serviceType); got != tt.want {
+				t.Fatalf("ProviderForServiceType(%q) = %q, want %q", tt.serviceType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestManagedServiceTypesByProvider(t *testing.T) {
+	bunny := BunnyManagedServiceTypes()
+	if !slices.Contains(bunny, "edge-ingest") {
+		t.Fatal("BunnyManagedServiceTypes() should include edge-ingest")
+	}
+	if slices.Contains(bunny, "bridge") {
+		t.Fatal("BunnyManagedServiceTypes() should not include bridge")
+	}
+
+	cloudflare := CloudflareManagedServiceTypes()
+	if !slices.Contains(cloudflare, "bridge") {
+		t.Fatal("CloudflareManagedServiceTypes() should include bridge")
+	}
+	if slices.Contains(cloudflare, "foghorn") {
+		t.Fatal("CloudflareManagedServiceTypes() should not include foghorn")
+	}
+}
+
 func TestPublicSubdomain(t *testing.T) {
 	tests := []struct {
 		serviceType string
@@ -61,7 +103,6 @@ func TestServiceFQDN(t *testing.T) {
 		{serviceType: "chandler", rootDomain: "example.com", want: "chandler.example.com", ok: true},
 		{serviceType: "telemetry", rootDomain: "example.com", want: "telemetry.example.com", ok: true},
 		{serviceType: "chandler", rootDomain: "cluster-a.example.com", want: "chandler.cluster-a.example.com", ok: true},
-		{serviceType: "livepeer-gateway", rootDomain: "example.com", want: "livepeer.example.com", ok: true},
 		{serviceType: "livepeer-gateway", rootDomain: "cluster-a.example.com", want: "livepeer.cluster-a.example.com", ok: true},
 		{serviceType: "grafana", rootDomain: "example.com", want: "grafana.example.com", ok: true},
 		{serviceType: "foredeck", rootDomain: "example.com", want: "example.com", ok: true},
@@ -78,6 +119,18 @@ func TestServiceFQDN(t *testing.T) {
 				t.Fatalf("ServiceFQDN(%q, %q) = %q, want %q", tt.serviceType, tt.rootDomain, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRootServiceFQDNRejectsMediaServices(t *testing.T) {
+	if got, ok := RootServiceFQDN("livepeer-gateway", "example.com"); ok || got != "" {
+		t.Fatalf("RootServiceFQDN(livepeer-gateway) = %q, %v; want empty false", got, ok)
+	}
+	if got, ok := RootServiceFQDN("edge-ingest", "example.com"); ok || got != "" {
+		t.Fatalf("RootServiceFQDN(edge-ingest) = %q, %v; want empty false", got, ok)
+	}
+	if got, ok := RootServiceFQDN("bridge", "example.com"); !ok || got != "bridge.example.com" {
+		t.Fatalf("RootServiceFQDN(bridge) = %q, %v; want bridge.example.com true", got, ok)
 	}
 }
 

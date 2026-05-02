@@ -60,15 +60,12 @@ func (r *DNSReconciler) Start(ctx context.Context) {
 
 func (r *DNSReconciler) reconcile(ctx context.Context) {
 	for _, serviceType := range r.serviceTypes {
-		partialErrors, err := r.dnsManager.SyncService(ctx, serviceType, "")
-		if err != nil {
-			r.logger.WithError(err).WithField("service_type", serviceType).Error("DNS reconciliation failed")
-		}
-		if len(partialErrors) > 0 {
-			r.logger.WithField("service_type", serviceType).WithField("partial_errors", partialErrors).Warn("DNS reconciliation completed with partial errors")
-		}
-
-		if pkgdns.IsClusterScopedServiceType(serviceType) {
+		switch pkgdns.ProviderForServiceType(serviceType) {
+		case pkgdns.ProviderBunny:
+			if !pkgdns.IsClusterScopedServiceType(serviceType) {
+				r.logger.WithField("service_type", serviceType).Warn("Bunny-managed service is not cluster-scoped; skipping root DNS reconciliation")
+				continue
+			}
 			clusterPartialErrors, clusterErr := r.dnsManager.SyncServiceByCluster(ctx, serviceType)
 			if clusterErr != nil {
 				r.logger.WithError(clusterErr).WithField("service_type", serviceType).Error("Cluster DNS reconciliation failed")
@@ -76,6 +73,16 @@ func (r *DNSReconciler) reconcile(ctx context.Context) {
 			if len(clusterPartialErrors) > 0 {
 				r.logger.WithField("service_type", serviceType).WithField("partial_errors", clusterPartialErrors).Warn("Cluster DNS reconciliation completed with partial errors")
 			}
+		case pkgdns.ProviderCloudflare:
+			partialErrors, err := r.dnsManager.SyncService(ctx, serviceType, "")
+			if err != nil {
+				r.logger.WithError(err).WithField("service_type", serviceType).Error("DNS reconciliation failed")
+			}
+			if len(partialErrors) > 0 {
+				r.logger.WithField("service_type", serviceType).WithField("partial_errors", partialErrors).Warn("DNS reconciliation completed with partial errors")
+			}
+		default:
+			r.logger.WithField("service_type", serviceType).Debug("Skipping service with no public DNS provider")
 		}
 	}
 
