@@ -57,6 +57,9 @@ func TestIsPlaybackViewerRequest(t *testing.T) {
 		expected   bool
 	}{
 		{name: "hls manifest", connector: "HLS", requestURL: "http://edge/view/hls/live+stream/index.m3u8", expected: true},
+		{name: "http hls manifest", connector: "HTTP", requestURL: "http://edge/view/hls/live+stream/index.m3u8", expected: true},
+		{name: "mime hls manifest", connector: "html5/application/vnd.apple.mpegurl", requestURL: "http://edge/view/hls/live+stream/index.m3u8", expected: true},
+		{name: "http mp4 playback", connector: "HTTP", requestURL: "http://edge/view/live+stream.mp4", expected: true},
 		{name: "webrtc session", connector: "WebRTC", requestURL: "http://edge/view/webrtc/live+stream", expected: true},
 		{name: "json websocket", connector: "Raw/WS", requestURL: "ws://edge/json_live+stream.js?metaeverywhere=1", expected: false},
 		{name: "poster request", connector: "HTTP", requestURL: "http://edge/assets/stream/poster.jpg", expected: false},

@@ -73,12 +73,10 @@ func IsPlaybackViewerConnector(connector string) bool {
 
 // IsPlaybackViewerRequest filters Mist viewer/session triggers down to actual playback media.
 func IsPlaybackViewerRequest(connector, requestURL string) bool {
-	if !IsPlaybackViewerConnector(connector) {
-		return false
-	}
+	playbackConnector := IsPlaybackViewerConnector(connector)
 	req := strings.ToLower(strings.TrimSpace(requestURL))
 	if req == "" {
-		return true
+		return playbackConnector
 	}
 	for _, marker := range []string{
 		"/json_", ".json", "info_json", "metaeverywhere=",
@@ -88,7 +86,23 @@ func IsPlaybackViewerRequest(connector, requestURL string) bool {
 			return false
 		}
 	}
-	return true
+	if playbackConnector {
+		return true
+	}
+	return hasPlaybackRequestMarker(req)
+}
+
+func hasPlaybackRequestMarker(req string) bool {
+	for _, marker := range []string{
+		"/hls/", "/cmaf/", "/webrtc/",
+		".m3u8", ".mpd", ".mp4", ".m4s", ".webm", ".mkv", ".flv", ".ts",
+		".aac", ".mp3", ".flac", ".wav", ".ogg", ".opus", ".sdp", ".raw", ".h264",
+	} {
+		if strings.Contains(req, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseTriggerToProtobuf parses raw MistServer trigger payload and returns a protobuf MistTrigger

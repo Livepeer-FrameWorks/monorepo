@@ -383,6 +383,70 @@ func TestConfirmVirtualViewerByID_MultiTabCorrelation(t *testing.T) {
 	}
 }
 
+func TestStartVirtualViewerByID_UsesCorrelationID(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	nodeID := "node-play-rewrite"
+	streamName := "stream-play-rewrite"
+	clientIP := "10.10.0.6"
+
+	viewerA := sm.CreateVirtualViewer(nodeID, streamName, clientIP)
+	viewerB := sm.CreateVirtualViewer(nodeID, streamName, clientIP)
+
+	startedID, started := sm.StartVirtualViewerByID(viewerB, nodeID, streamName, clientIP)
+	if !started {
+		t.Fatal("expected correlated playback intent to start viewerB")
+	}
+	if startedID != viewerB {
+		t.Fatalf("expected viewerB to start, got %s", startedID)
+	}
+
+	_, duplicate := sm.StartVirtualViewerByID(viewerB, nodeID, streamName, clientIP)
+	if duplicate {
+		t.Fatal("expected duplicate playback intent to be ignored")
+	}
+
+	sm.mu.RLock()
+	viewerAState := sm.virtualViewers[viewerA].State
+	viewerBState := sm.virtualViewers[viewerB].State
+	pending := sm.nodes[nodeID].PendingRedirects
+	sm.mu.RUnlock()
+
+	if viewerAState != VirtualViewerPending {
+		t.Fatalf("expected viewerA to remain pending, got %s", viewerAState)
+	}
+	if viewerBState != VirtualViewerActive {
+		t.Fatalf("expected viewerB to be active, got %s", viewerBState)
+	}
+	if pending != 1 {
+		t.Fatalf("expected 1 pending redirect remaining, got %d", pending)
+	}
+}
+
+func TestStartVirtualViewerByID_DeduplicatesDirectPlaybackByIP(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	nodeID := "node-direct-playback"
+	streamName := "stream-direct-playback"
+	clientIP := "198.51.100.10"
+
+	viewerID, started := sm.StartVirtualViewerByID("", nodeID, streamName, clientIP)
+	if !started {
+		t.Fatal("expected direct playback intent to start")
+	}
+	if viewerID == "" {
+		t.Fatal("expected generated viewer ID")
+	}
+
+	againID, duplicate := sm.StartVirtualViewerByID("", nodeID, streamName, clientIP)
+	if duplicate {
+		t.Fatal("expected duplicate direct playback intent to be ignored")
+	}
+	if againID != viewerID {
+		t.Fatalf("expected duplicate to return existing viewer ID %s, got %s", viewerID, againID)
+	}
+}
+
 func TestConfirmVirtualViewer_OldestPendingWins(t *testing.T) {
 	sm := NewStreamStateManager()
 

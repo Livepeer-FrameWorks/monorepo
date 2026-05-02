@@ -627,7 +627,7 @@ func newTestProcessor(t *testing.T) *Processor {
 	}
 }
 
-func TestHandleUserNewCountsOnlyConfirmedPlaybackViewer(t *testing.T) {
+func TestHandlePlayRewriteStartsCorrelatedPlaybackViewer(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
@@ -640,27 +640,26 @@ func TestHandleUserNewCountsOnlyConfirmedPlaybackViewer(t *testing.T) {
 
 	viewerID := sm.CreateVirtualViewer(nodeID, internalName, clientIP)
 
-	resp, abort, err := processor.handleUserNew(&pb.MistTrigger{
+	resp, abort, err := processor.handlePlayRewrite(&pb.MistTrigger{
 		NodeId:   nodeID,
 		TenantId: &tenantID,
-		TriggerPayload: &pb.MistTrigger_ViewerConnect{
-			ViewerConnect: &pb.ViewerConnectTrigger{
-				StreamName: "live+" + internalName,
-				Host:       clientIP,
-				Connector:  "HLS",
-				RequestUrl: "https://edge.example/view?fwcid=" + viewerID,
-				SessionId:  "mist-session-1",
+		TriggerPayload: &pb.MistTrigger_PlayRewrite{
+			PlayRewrite: &pb.ViewerResolveTrigger{
+				RequestedStream: "live+" + internalName,
+				ViewerHost:      clientIP,
+				OutputType:      "HLS",
+				RequestUrl:      "https://edge.example/view/hls/live+stream/index.m3u8?fwcid=" + viewerID,
 			},
 		},
 	})
 	if err != nil {
-		t.Fatalf("handleUserNew failed: %v", err)
+		t.Fatalf("handlePlayRewrite failed: %v", err)
 	}
-	if abort || resp != "true" {
-		t.Fatalf("expected allowed USER_NEW, got response=%q abort=%v", resp, abort)
+	if abort || resp != "live+"+internalName {
+		t.Fatalf("expected allowed PLAY_REWRITE, got response=%q abort=%v", resp, abort)
 	}
 	if got := sm.GetStreamState(internalName).Viewers; got != 1 {
-		t.Fatalf("expected 1 viewer after confirmed USER_NEW, got %d", got)
+		t.Fatalf("expected 1 viewer after PLAY_REWRITE, got %d", got)
 	}
 
 	_, _, err = processor.handleUserNew(&pb.MistTrigger{
@@ -677,10 +676,84 @@ func TestHandleUserNewCountsOnlyConfirmedPlaybackViewer(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("duplicate handleUserNew failed: %v", err)
+		t.Fatalf("handleUserNew failed: %v", err)
 	}
 	if got := sm.GetStreamState(internalName).Viewers; got != 1 {
-		t.Fatalf("expected duplicate USER_NEW not to increment viewers, got %d", got)
+		t.Fatalf("expected USER_NEW session attachment not to increment viewers, got %d", got)
+	}
+
+	_, _, err = processor.handlePlayRewrite(&pb.MistTrigger{
+		NodeId:   nodeID,
+		TenantId: &tenantID,
+		TriggerPayload: &pb.MistTrigger_PlayRewrite{
+			PlayRewrite: &pb.ViewerResolveTrigger{
+				RequestedStream: "live+" + internalName,
+				ViewerHost:      clientIP,
+				OutputType:      "HLS",
+				RequestUrl:      "https://edge.example/view/hls/live+stream/index.m3u8?fwcid=" + viewerID,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("duplicate handlePlayRewrite failed: %v", err)
+	}
+	if got := sm.GetStreamState(internalName).Viewers; got != 1 {
+		t.Fatalf("expected duplicate PLAY_REWRITE not to increment viewers, got %d", got)
+	}
+
+	_, _, err = processor.handleUserEnd(&pb.MistTrigger{
+		NodeId:   nodeID,
+		TenantId: &tenantID,
+		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+				SessionId:  "mist-session-1",
+				StreamName: "live+" + internalName,
+				Connector:  "HTTP",
+				Host:       clientIP,
+				Duration:   10,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleUserEnd failed: %v", err)
+	}
+	if got := sm.GetStreamState(internalName).Viewers; got != 0 {
+		t.Fatalf("expected generic HTTP USER_END with attached session to decrement viewers, got %d", got)
+	}
+}
+
+func TestHandleUserNewDoesNotStartPlaybackViewer(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+
+	processor := newTestProcessor(t)
+	tenantID := "tenant-1"
+	nodeID := "node-1"
+	internalName := "stream-user-new"
+	clientIP := "192.0.2.10"
+	processor.streamCache.Set(tenantID+":"+internalName, streamContext{TenantID: tenantID}, time.Minute)
+
+	resp, abort, err := processor.handleUserNew(&pb.MistTrigger{
+		NodeId:   nodeID,
+		TenantId: &tenantID,
+		TriggerPayload: &pb.MistTrigger_ViewerConnect{
+			ViewerConnect: &pb.ViewerConnectTrigger{
+				StreamName: "live+" + internalName,
+				Host:       clientIP,
+				Connector:  "HLS",
+				RequestUrl: "https://edge.example/view",
+				SessionId:  "mist-session-1",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleUserNew failed: %v", err)
+	}
+	if abort || resp != "true" {
+		t.Fatalf("expected allowed USER_NEW, got response=%q abort=%v", resp, abort)
+	}
+	if got := sm.GetStreamState(internalName); got != nil {
+		t.Fatalf("expected USER_NEW alone not to create viewer count, got %+v", got)
 	}
 }
 

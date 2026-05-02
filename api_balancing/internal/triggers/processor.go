@@ -1154,15 +1154,18 @@ func (p *Processor) handlePlayRewrite(trigger *pb.MistTrigger) (string, bool, er
 		trigger.StreamId = &target.StreamID
 		defaultStream.StreamId = &target.StreamID
 	}
-	if target.ContentType == "live" && mist.IsPlaybackViewerRequest(defaultStream.GetOutputType(), defaultStream.GetRequestUrl()) && extractCorrelationID(defaultStream.GetRequestUrl()) == "" {
-		if viewerID, created := state.DefaultManager().EnsurePendingVirtualViewer(trigger.GetNodeId(), resolvedName, defaultStream.GetViewerHost()); created {
+	isLivePlayback := target.ContentType == "live" || strings.HasPrefix(target.InternalName, "live+")
+	if isLivePlayback && mist.IsPlaybackViewerRequest(defaultStream.GetOutputType(), defaultStream.GetRequestUrl()) {
+		correlationID := extractCorrelationID(defaultStream.GetRequestUrl())
+		if viewerID, started := state.DefaultManager().StartVirtualViewerByID(correlationID, trigger.GetNodeId(), resolvedName, defaultStream.GetViewerHost()); started {
+			state.DefaultManager().UpdateUserConnection(resolvedName, trigger.GetNodeId(), target.TenantID, 1)
 			p.logger.WithFields(logging.Fields{
 				"viewer_id":     viewerID,
 				"internal_name": resolvedName,
 				"viewer_host":   defaultStream.GetViewerHost(),
 				"output_type":   defaultStream.GetOutputType(),
 				"node_id":       trigger.GetNodeId(),
-			}).Debug("Created fallback virtual viewer from direct PLAY_REWRITE")
+			}).Info("Started playback viewer from PLAY_REWRITE")
 		}
 	}
 
@@ -1593,23 +1596,21 @@ func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error)
 		}).Error("Failed to send user connection trigger to Decklog")
 	}
 
-	// Confirm virtual viewer: transition PENDING -> ACTIVE
-	// This decrements PendingRedirects and recalculates AddBandwidth
 	clientIP := userNew.GetHost()
 	correlationID := extractCorrelationID(userNew.GetRequestUrl())
-	if confirmed := state.DefaultManager().ConfirmVirtualViewerByID(
+	if attached := state.DefaultManager().AttachVirtualViewerSession(
 		correlationID,
 		trigger.GetNodeId(),
 		internalName,
 		clientIP,
 		userNew.GetSessionId(),
-	); confirmed {
-		state.DefaultManager().UpdateUserConnection(internalName, trigger.GetNodeId(), info.TenantID, 1)
+	); attached {
 		p.logger.WithFields(logging.Fields{
 			"node_id":       trigger.GetNodeId(),
 			"internal_name": internalName,
 			"client_ip":     clientIP,
-		}).Debug("Virtual viewer confirmed (PENDING -> ACTIVE)")
+			"session_id":    userNew.GetSessionId(),
+		}).Debug("Attached Mist session to active playback viewer")
 	}
 
 	// Allow user connection by returning "true"
@@ -1728,6 +1729,7 @@ func (p *Processor) handleUserEnd(trigger *pb.MistTrigger) (string, bool, error)
 		return "", false, fmt.Errorf("unexpected payload type for ViewerDisconnect: %T", trigger.GetTriggerPayload())
 	}
 	userEnd := payload.ViewerDisconnect
+	internalStreamName := mist.ExtractInternalName(userEnd.GetStreamName())
 	p.logger.WithFields(logging.Fields{
 		"session_id":        userEnd.GetSessionId(),
 		"internal_name":     userEnd.GetStreamName(),
@@ -1739,10 +1741,11 @@ func (p *Processor) handleUserEnd(trigger *pb.MistTrigger) (string, bool, error)
 		"node_id":           trigger.GetNodeId(),
 	}).Debug("Processing USER_END trigger")
 
-	if !mist.IsPlaybackViewerRequest(userEnd.GetConnector(), "") {
+	if !mist.IsPlaybackViewerRequest(userEnd.GetConnector(), "") &&
+		!state.DefaultManager().HasActiveVirtualViewerSession(userEnd.GetSessionId(), trigger.GetNodeId(), internalStreamName) {
 		p.logger.WithFields(logging.Fields{
 			"session_id":    userEnd.GetSessionId(),
-			"internal_name": mist.ExtractInternalName(userEnd.GetStreamName()),
+			"internal_name": internalStreamName,
 			"connector":     userEnd.GetConnector(),
 			"node_id":       trigger.GetNodeId(),
 		}).Debug("Ignoring non-viewer USER_END connector")
@@ -1794,7 +1797,6 @@ func (p *Processor) handleUserEnd(trigger *pb.MistTrigger) (string, bool, error)
 		}).Error("Failed to send user disconnect trigger to Decklog")
 	}
 
-	internalStreamName := mist.ExtractInternalName(userEnd.GetStreamName())
 	clientIP := userEnd.GetHost()
 	if disconnected := state.DefaultManager().DisconnectVirtualViewerBySessionID(userEnd.GetSessionId(), trigger.GetNodeId(), internalStreamName, clientIP); disconnected {
 		state.DefaultManager().UpdateUserConnection(internalStreamName, trigger.GetNodeId(), info.TenantID, -1)

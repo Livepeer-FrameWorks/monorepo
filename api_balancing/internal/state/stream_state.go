@@ -2985,6 +2985,142 @@ func (sm *StreamStateManager) createVirtualViewerLocked(nodeID, streamName, clie
 	return viewerID
 }
 
+// StartVirtualViewerByID marks filtered playback intent as an active viewer.
+// If viewerID is present it correlates a prior gateway redirect; otherwise it
+// deduplicates direct edge playback by node, stream, and client IP.
+func (sm *StreamStateManager) StartVirtualViewerByID(viewerID, nodeID, streamName, clientIP string) (string, bool) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	node := sm.nodes[nodeID]
+	if node == nil {
+		node = newNodeState(nodeID)
+		sm.nodes[nodeID] = node
+	}
+
+	if viewerID != "" {
+		if viewer := sm.virtualViewers[viewerID]; viewer != nil &&
+			viewer.NodeID == nodeID &&
+			viewer.StreamName == streamName {
+			return viewer.ID, sm.activateVirtualViewerLocked(node, viewer)
+		}
+	}
+
+	var oldestPending *VirtualViewer
+	var oldestPendingTime time.Time
+	for _, candidateID := range sm.viewersByNode[nodeID] {
+		viewer := sm.virtualViewers[candidateID]
+		if viewer == nil || viewer.StreamName != streamName || viewer.ClientIP != clientIP {
+			continue
+		}
+		if viewer.State == VirtualViewerActive {
+			return viewer.ID, false
+		}
+		if viewer.State == VirtualViewerPending && (oldestPending == nil || viewer.RedirectTime.Before(oldestPendingTime)) {
+			oldestPending = viewer
+			oldestPendingTime = viewer.RedirectTime
+		}
+	}
+	if oldestPending != nil {
+		return oldestPending.ID, sm.activateVirtualViewerLocked(node, oldestPending)
+	}
+
+	activeViewerID := uuid.New().String()
+	viewer := &VirtualViewer{
+		ID:          activeViewerID,
+		NodeID:      nodeID,
+		StreamName:  streamName,
+		ClientIP:    clientIP,
+		State:       VirtualViewerActive,
+		ConnectTime: time.Now(),
+	}
+	sm.virtualViewers[activeViewerID] = viewer
+	sm.viewersByNode[nodeID] = append(sm.viewersByNode[nodeID], activeViewerID)
+	return activeViewerID, true
+}
+
+func (sm *StreamStateManager) activateVirtualViewerLocked(node *NodeState, viewer *VirtualViewer) bool {
+	if viewer.State == VirtualViewerActive {
+		return false
+	}
+	if viewer.State != VirtualViewerPending {
+		return false
+	}
+
+	viewer.State = VirtualViewerActive
+	viewer.ConnectTime = time.Now()
+
+	node.PendingRedirects--
+	if node.PendingRedirects < 0 {
+		node.PendingRedirects = 0
+	}
+	if node.AddBandwidth >= viewer.EstBandwidth {
+		node.AddBandwidth -= viewer.EstBandwidth
+	} else {
+		node.AddBandwidth = 0
+	}
+
+	sm.recomputeNodeScoresLocked(node)
+	return true
+}
+
+// AttachVirtualViewerSession records Mist's session id on an already counted playback intent.
+func (sm *StreamStateManager) AttachVirtualViewerSession(viewerID, nodeID, streamName, clientIP, mistSessionID string) bool {
+	if mistSessionID == "" {
+		return false
+	}
+
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if viewerID != "" {
+		if viewer := sm.virtualViewers[viewerID]; viewer != nil &&
+			viewer.State == VirtualViewerActive &&
+			viewer.NodeID == nodeID &&
+			viewer.StreamName == streamName {
+			viewer.MistSessionID = mistSessionID
+			return true
+		}
+	}
+
+	for _, candidateID := range sm.viewersByNode[nodeID] {
+		viewer := sm.virtualViewers[candidateID]
+		if viewer == nil || viewer.State != VirtualViewerActive {
+			continue
+		}
+		if viewer.StreamName != streamName || viewer.ClientIP != clientIP {
+			continue
+		}
+		if viewer.MistSessionID == "" || viewer.MistSessionID == mistSessionID {
+			viewer.MistSessionID = mistSessionID
+			return true
+		}
+	}
+
+	return false
+}
+
+func (sm *StreamStateManager) HasActiveVirtualViewerSession(mistSessionID, nodeID, streamName string) bool {
+	if mistSessionID == "" {
+		return false
+	}
+
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	for _, candidateID := range sm.viewersByNode[nodeID] {
+		viewer := sm.virtualViewers[candidateID]
+		if viewer == nil || viewer.State != VirtualViewerActive {
+			continue
+		}
+		if viewer.StreamName == streamName && viewer.MistSessionID == mistSessionID {
+			return true
+		}
+	}
+
+	return false
+}
+
 // ConfirmVirtualViewer transitions a PENDING viewer to ACTIVE when USER_NEW arrives.
 // Matches by (nodeID, streamName, clientIP), oldest PENDING first.
 // Returns true if a matching viewer was found and confirmed.
@@ -3037,28 +3173,11 @@ func (sm *StreamStateManager) ConfirmVirtualViewerByID(viewerID, nodeID, streamN
 		return false
 	}
 
-	// Transition to ACTIVE
-	matchedViewer.State = VirtualViewerActive
-	matchedViewer.ConnectTime = time.Now()
 	if mistSessionID != "" {
 		matchedViewer.MistSessionID = mistSessionID
 	}
 
-	// Decrement pending count and remove bandwidth penalty
-	node.PendingRedirects--
-	if node.PendingRedirects < 0 {
-		node.PendingRedirects = 0
-	}
-	if node.AddBandwidth >= matchedViewer.EstBandwidth {
-		node.AddBandwidth -= matchedViewer.EstBandwidth
-	} else {
-		node.AddBandwidth = 0
-	}
-
-	// Recompute scores
-	sm.recomputeNodeScoresLocked(node)
-
-	return true
+	return sm.activateVirtualViewerLocked(node, matchedViewer)
 }
 
 // DisconnectVirtualViewer transitions an ACTIVE viewer to DISCONNECTED when USER_END arrives.
