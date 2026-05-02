@@ -17,6 +17,9 @@ platforms:
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
     cgroupns_mode: host
+    dns_servers:
+      - "1.1.1.1"
+      - "8.8.8.8"
     tmpfs:
       - /run
       - /tmp
