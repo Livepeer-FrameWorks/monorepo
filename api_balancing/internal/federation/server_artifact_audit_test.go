@@ -37,8 +37,8 @@ func TestPrepareArtifactRejectsInconsistentS3Metadata(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes"}).
-		AddRow("stream-a", "source-stream-a", "clip", "mp4", "s3", "failed", 1024)
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster"}).
+		AddRow("stream-a", "source-stream-a", "clip", "mp4", "s3", "failed", 1024, nil)
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	srv := NewFederationServer(FederationServerConfig{
@@ -69,8 +69,8 @@ func TestPrepareArtifactRejectsTypeMismatch(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes"}).
-		AddRow("stream-a", "source-stream-a", "clip", "mp4", "s3", "synced", 1024)
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster"}).
+		AddRow("stream-a", "source-stream-a", "clip", "mp4", "s3", "synced", 1024, nil)
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	srv := NewFederationServer(FederationServerConfig{

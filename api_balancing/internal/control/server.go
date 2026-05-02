@@ -4356,19 +4356,25 @@ func processCanDeleteRequest(req *pb.CanDeleteRequest, nodeID string, stream pb.
 			logger.WithField("asset_hash", assetHash).Info("Asset synced to S3, safe to delete local copy (no cached_at)")
 		}
 	} else {
-		// Check if this is a remote artifact (origin S3 has authoritative copy)
+		// Check if this is a remote artifact (storage cluster's S3 holds the
+		// authoritative copy). storage_cluster_id is the cluster whose S3
+		// minted the upload URLs; NULL preserves the prior origin-as-storage
+		// semantic for rows written before delegation existed.
 		if db != nil {
-			var originCluster sql.NullString
+			var authoritativeCluster sql.NullString
 			_ = db.QueryRowContext(context.Background(), `
-				SELECT origin_cluster_id FROM foghorn.artifacts WHERE artifact_hash = $1 LIMIT 1
-			`, assetHash).Scan(&originCluster)
-			if originCluster.Valid && originCluster.String != "" && !isServedCluster(originCluster.String) {
+				SELECT COALESCE(storage_cluster_id, origin_cluster_id)
+				FROM foghorn.artifacts
+				WHERE artifact_hash = $1
+				LIMIT 1
+			`, assetHash).Scan(&authoritativeCluster)
+			if authoritativeCluster.Valid && authoritativeCluster.String != "" && !isServedCluster(authoritativeCluster.String) {
 				response.SafeToDelete = true
 				response.Reason = "remote_synced"
 				logger.WithFields(logging.Fields{
-					"asset_hash":     assetHash,
-					"origin_cluster": originCluster.String,
-				}).Info("Remote artifact — safe to delete (origin S3 authoritative)")
+					"asset_hash":            assetHash,
+					"authoritative_cluster": authoritativeCluster.String,
+				}).Info("Remote artifact — safe to delete (storage cluster's S3 authoritative)")
 				sendCanDeleteResponse(stream, response, logger)
 				return
 			}
@@ -5326,4 +5332,81 @@ func getChandlerBaseURL() string {
 		chandlerBase = "http://" + chandlerHost + ":" + chandlerPort
 	}
 	return chandlerBase
+}
+
+// chandlerPerClusterCache caches per-cluster Chandler base URLs (chandler.<slug>.<base>)
+// resolved via Quartermaster. 5-minute TTL per cluster. The cache is keyed by
+// cluster_id; values are the fully-formed `https://chandler.<slug>.<base-domain>`
+// string. Empty cluster_id and resolution failures are NOT cached so transient
+// Quartermaster outages don't poison subsequent lookups.
+var (
+	chandlerPerClusterMu    sync.RWMutex
+	chandlerPerClusterCache = map[string]chandlerCachedURL{}
+)
+
+type chandlerCachedURL struct {
+	url        string
+	resolvedAt time.Time
+}
+
+const chandlerPerClusterTTL = 5 * time.Minute
+
+// getChandlerBaseURLForCluster returns the Chandler base URL for the named
+// cluster — `https://chandler.<cluster-slug>.<cluster-base-domain>` derived
+// from Quartermaster cluster metadata. Per-cluster cache with a 5-minute TTL
+// per entry; cache state is independent of the legacy `resolvedChandlerBaseURL`
+// global used by `getChandlerBaseURL()`, so a per-cluster lookup never mutates
+// the platform-level Chandler URL that other callers depend on.
+//
+// Returns "" if the cluster ID is empty, no cluster lookup is configured, the
+// Quartermaster lookup fails, or the cluster has no slug/base-domain.
+func getChandlerBaseURLForCluster(clusterID string) string {
+	clusterID = strings.TrimSpace(clusterID)
+	if clusterID == "" {
+		return ""
+	}
+
+	chandlerPerClusterMu.RLock()
+	if entry, ok := chandlerPerClusterCache[clusterID]; ok && time.Since(entry.resolvedAt) < chandlerPerClusterTTL {
+		chandlerPerClusterMu.RUnlock()
+		return entry.url
+	}
+	chandlerPerClusterMu.RUnlock()
+
+	if getClusterFn == nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cluster, err := getClusterFn(ctx, clusterID)
+	if err != nil || cluster == nil {
+		return ""
+	}
+	baseDomain := strings.TrimSpace(cluster.GetBaseUrl())
+	if baseDomain == "" {
+		return ""
+	}
+	clusterSlug := pkgdns.ClusterSlug(clusterID, cluster.GetClusterName())
+	if clusterSlug == "" {
+		return ""
+	}
+	fqdn, ok := pkgdns.ServiceFQDN("chandler", clusterSlug+"."+baseDomain)
+	if !ok || fqdn == "" {
+		return ""
+	}
+	url := "https://" + fqdn
+
+	chandlerPerClusterMu.Lock()
+	chandlerPerClusterCache[clusterID] = chandlerCachedURL{url: url, resolvedAt: time.Now()}
+	chandlerPerClusterMu.Unlock()
+
+	return url
+}
+
+// clearChandlerPerClusterCache resets the per-cluster Chandler URL cache. Test
+// hook only — production callers should not invalidate this cache directly.
+func clearChandlerPerClusterCache() {
+	chandlerPerClusterMu.Lock()
+	chandlerPerClusterCache = map[string]chandlerCachedURL{}
+	chandlerPerClusterMu.Unlock()
 }

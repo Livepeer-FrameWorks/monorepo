@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     tenant_id UUID NOT NULL,                -- Tenant owning the artifact (required)
     user_id UUID,                           -- User who created the artifact (for Decklog events)
     origin_cluster_id VARCHAR(100),         -- Which cluster originally created the artifact (NULL = local)
+    storage_cluster_id VARCHAR(100),        -- Which cluster's S3 actually holds the bytes; NULL = same as origin_cluster_id
 
     -- ===== LIFECYCLE STATE =====
     status VARCHAR(50) DEFAULT 'requested', -- requested, processing, ready, failed, deleted
@@ -107,6 +108,7 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_internal_name ON foghorn.artifa
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_tenant ON foghorn.artifacts(tenant_id) WHERE tenant_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_user ON foghorn.artifacts(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_retention ON foghorn.artifacts(retention_until) WHERE retention_until IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_storage_cluster ON foghorn.artifacts(storage_cluster_id, sync_status) WHERE storage_cluster_id IS NOT NULL;
 
 -- ============================================================================
 -- WARM STORAGE DISTRIBUTION (NODE CACHES)

@@ -186,6 +186,164 @@ func TestInvalidateChandlerThumbnailCache(t *testing.T) {
 	}
 }
 
+func TestGetChandlerBaseURLForCluster_DerivesPerClusterURL(t *testing.T) {
+	prevGetCluster := getClusterFn
+	clearChandlerPerClusterCache()
+	t.Cleanup(func() {
+		getClusterFn = prevGetCluster
+		clearChandlerPerClusterCache()
+	})
+
+	getClusterFn = func(_ context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
+		switch clusterID {
+		case "media-eu-1":
+			return &pb.InfrastructureCluster{
+				ClusterId:   "media-eu-1",
+				ClusterName: "Media EU 1",
+				BaseUrl:     "frameworks.network",
+			}, nil
+		case "media-us-1":
+			return &pb.InfrastructureCluster{
+				ClusterId:   "media-us-1",
+				ClusterName: "Media US 1",
+				BaseUrl:     "frameworks.network",
+			}, nil
+		}
+		return nil, errors.New("unexpected cluster id")
+	}
+
+	if got := getChandlerBaseURLForCluster("media-eu-1"); got != "https://chandler.media-eu-1.frameworks.network" {
+		t.Fatalf("media-eu-1: got %q", got)
+	}
+	if got := getChandlerBaseURLForCluster("media-us-1"); got != "https://chandler.media-us-1.frameworks.network" {
+		t.Fatalf("media-us-1: got %q", got)
+	}
+}
+
+func TestGetChandlerBaseURLForCluster_PerClusterCachingIsolatesEntries(t *testing.T) {
+	prevGetCluster := getClusterFn
+	clearChandlerPerClusterCache()
+	t.Cleanup(func() {
+		getClusterFn = prevGetCluster
+		clearChandlerPerClusterCache()
+	})
+
+	calls := map[string]int{}
+	getClusterFn = func(_ context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
+		calls[clusterID]++
+		return &pb.InfrastructureCluster{
+			ClusterId:   clusterID,
+			ClusterName: clusterID,
+			BaseUrl:     "frameworks.network",
+		}, nil
+	}
+
+	// First call to media-eu-1 populates only that cluster's cache entry.
+	_ = getChandlerBaseURLForCluster("media-eu-1")
+	// Lookup against media-us-1 must NOT be served from media-eu-1's cache.
+	gotUS := getChandlerBaseURLForCluster("media-us-1")
+	if gotUS != "https://chandler.media-us-1.frameworks.network" {
+		t.Fatalf("media-us-1 leaked from media-eu-1 cache, got %q", gotUS)
+	}
+
+	// Re-lookup of media-eu-1 within TTL must hit cache.
+	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
+		t.Fatal("cache miss within TTL")
+		return nil, nil
+	}
+	if got := getChandlerBaseURLForCluster("media-eu-1"); got != "https://chandler.media-eu-1.frameworks.network" {
+		t.Fatalf("expected cached media-eu-1 URL, got %q", got)
+	}
+
+	if calls["media-eu-1"] != 1 || calls["media-us-1"] != 1 {
+		t.Fatalf("each cluster should be resolved exactly once, got %#v", calls)
+	}
+}
+
+func TestGetChandlerBaseURLForCluster_EmptyClusterIDReturnsEmpty(t *testing.T) {
+	prevGetCluster := getClusterFn
+	clearChandlerPerClusterCache()
+	t.Cleanup(func() {
+		getClusterFn = prevGetCluster
+		clearChandlerPerClusterCache()
+	})
+
+	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
+		t.Fatal("must not call cluster lookup for empty cluster id")
+		return nil, nil
+	}
+	if got := getChandlerBaseURLForCluster(""); got != "" {
+		t.Fatalf("expected empty result for empty cluster id, got %q", got)
+	}
+}
+
+func TestGetChandlerBaseURLForCluster_LookupErrorIsNotCached(t *testing.T) {
+	prevGetCluster := getClusterFn
+	clearChandlerPerClusterCache()
+	t.Cleanup(func() {
+		getClusterFn = prevGetCluster
+		clearChandlerPerClusterCache()
+	})
+
+	calls := 0
+	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
+		calls++
+		return nil, errors.New("quartermaster down")
+	}
+
+	if got := getChandlerBaseURLForCluster("media-eu-1"); got != "" {
+		t.Fatalf("expected empty on lookup error, got %q", got)
+	}
+	if got := getChandlerBaseURLForCluster("media-eu-1"); got != "" {
+		t.Fatalf("expected empty on second lookup error, got %q", got)
+	}
+	if calls != 2 {
+		t.Fatalf("error result must NOT be cached; expected two calls, got %d", calls)
+	}
+}
+
+func TestGetChandlerBaseURLForCluster_DoesNotMutateLegacyResolvedURL(t *testing.T) {
+	// Invariant: getChandlerBaseURLForCluster keeps its per-cluster cache
+	// fully separate from the resolvedChandlerBaseURL global that
+	// getChandlerBaseURL() reads. A per-cluster lookup must never poison or
+	// pre-populate the platform-level Chandler URL.
+	prevClusterID := localClusterID
+	prevGetCluster := getClusterFn
+	clearResolvedChandlerBaseURL()
+	clearChandlerPerClusterCache()
+	t.Cleanup(func() {
+		localClusterID = prevClusterID
+		getClusterFn = prevGetCluster
+		clearResolvedChandlerBaseURL()
+		clearChandlerPerClusterCache()
+	})
+
+	t.Setenv("CHANDLER_BASE_URL", "")
+	t.Setenv("CHANDLER_HOST", "chandler-public")
+	t.Setenv("CHANDLER_PORT", "18020")
+
+	localClusterID = "media-central-primary"
+	getClusterFn = func(_ context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
+		return &pb.InfrastructureCluster{
+			ClusterId:   clusterID,
+			ClusterName: clusterID,
+			BaseUrl:     "frameworks.network",
+		}, nil
+	}
+
+	_ = getChandlerBaseURLForCluster("media-eu-1")
+
+	// Legacy resolvedChandlerBaseURL must still be empty (not contaminated by
+	// the per-cluster lookup); getChandlerBaseURL() must still derive its own
+	// platform URL from localClusterID.
+	if cached := cachedChandlerBaseURL(); cached != "" {
+		t.Fatalf("per-cluster helper leaked into legacy cache: %q", cached)
+	}
+	if got := getChandlerBaseURL(); got != "https://chandler.media-central-primary.frameworks.network" {
+		t.Fatalf("legacy getChandlerBaseURL changed behaviour: %q", got)
+	}
+}
+
 func TestInvalidateChandlerThumbnailCacheDeduplicatesBaseURLs(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

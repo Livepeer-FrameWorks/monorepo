@@ -363,6 +363,7 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 
 	var internalName, streamInternalName, artifactType, format, storageLocation, syncStatus string
 	var sizeBytes sql.NullInt64
+	var authoritativeCluster sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COALESCE(internal_name, ''),
 		       COALESCE(stream_internal_name, ''),
@@ -370,16 +371,25 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 		       COALESCE(format, ''),
 		       COALESCE(storage_location, ''),
 		       COALESCE(sync_status, ''),
-		       size_bytes
+		       size_bytes,
+		       COALESCE(storage_cluster_id, origin_cluster_id)
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND tenant_id = $2 AND status != 'deleted'
-	`, hash, tenantID).Scan(&internalName, &streamInternalName, &artifactType, &format, &storageLocation, &syncStatus, &sizeBytes)
+	`, hash, tenantID).Scan(&internalName, &streamInternalName, &artifactType, &format, &storageLocation, &syncStatus, &sizeBytes, &authoritativeCluster)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return &pb.PrepareArtifactResponse{Error: "artifact not found"}, nil
 		}
 		log.WithError(err).Error("PrepareArtifact DB query failed")
 		return nil, status.Error(codes.Internal, "failed to query artifact")
+	}
+
+	// Authoritative cluster = where the bytes actually live. NULL preserves
+	// the prior origin-as-storage semantic for rows written before delegation
+	// existed. PR 3a reads + logs this only; the local-vs-redirect decision
+	// branch lands in PR 3b co-shipped with the proto change.
+	if authoritativeCluster.Valid && authoritativeCluster.String != "" {
+		log = log.WithField("authoritative_cluster", authoritativeCluster.String)
 	}
 
 	location := strings.ToLower(strings.TrimSpace(storageLocation))
