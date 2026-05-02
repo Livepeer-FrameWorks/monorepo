@@ -195,6 +195,18 @@ func grpcCABundlePath() string {
 	return "/etc/frameworks/pki/ca.crt"
 }
 
+func edgeTLSPaths() (string, string) {
+	certPath := strings.TrimSpace(os.Getenv("HELMSMAN_TLS_CERT_PATH"))
+	if certPath == "" {
+		certPath = "/etc/frameworks/certs/cert.pem"
+	}
+	keyPath := strings.TrimSpace(os.Getenv("HELMSMAN_TLS_KEY_PATH"))
+	if keyPath == "" {
+		keyPath = "/etc/frameworks/certs/key.pem"
+	}
+	return certPath, keyPath
+}
+
 func edgeTelemetryTokenPath() string {
 	return "/etc/frameworks/telemetry/token"
 }
@@ -245,8 +257,7 @@ func (m *Manager) applyCABundle(bundle []byte) bool {
 
 // applyTLSBundle writes cert/key files to disk. Returns true if files were changed.
 func (m *Manager) applyTLSBundle(bundle *pb.TLSCertBundle) bool {
-	certPath := "/etc/frameworks/certs/cert.pem"
-	keyPath := "/etc/frameworks/certs/key.pem"
+	certPath, keyPath := edgeTLSPaths()
 
 	if err := os.MkdirAll(filepath.Dir(certPath), 0o755); err != nil {
 		m.logger.WithError(err).Warn("Failed to create TLS certificate directory")
@@ -266,14 +277,30 @@ func (m *Manager) applyTLSBundle(bundle *pb.TLSCertBundle) bool {
 		}
 	}
 
-	if err := os.WriteFile(certPath, certBytes, 0o600); err != nil {
-		m.logger.WithError(err).Warn("Failed to write TLS certificate file")
+	certTmp, err := writeManagedFileTemp(certPath, certBytes, 0o644)
+	if err != nil {
+		m.logger.WithError(err).Warn("Failed to stage TLS certificate file")
 		return false
 	}
-	if err := os.WriteFile(keyPath, keyBytes, 0o600); err != nil {
-		m.logger.WithError(err).Warn("Failed to write TLS key file")
+	defer func() { removeIfNotEmpty(certTmp) }()
+
+	keyTmp, err := writeManagedFileTemp(keyPath, keyBytes, 0o640)
+	if err != nil {
+		m.logger.WithError(err).Warn("Failed to stage TLS key file")
 		return false
 	}
+	defer func() { removeIfNotEmpty(keyTmp) }()
+
+	if err := os.Rename(keyTmp, keyPath); err != nil {
+		m.logger.WithError(err).Warn("Failed to install TLS key file")
+		return false
+	}
+	keyTmp = ""
+	if err := os.Rename(certTmp, certPath); err != nil {
+		m.logger.WithError(err).Warn("Failed to install TLS certificate file")
+		return false
+	}
+	certTmp = ""
 
 	m.logger.WithFields(logging.Fields{
 		"domain":     bundle.GetDomain(),
@@ -284,8 +311,7 @@ func (m *Manager) applyTLSBundle(bundle *pb.TLSCertBundle) bool {
 }
 
 func (m *Manager) removeTLSBundle() {
-	certPath := "/etc/frameworks/certs/cert.pem"
-	keyPath := "/etc/frameworks/certs/key.pem"
+	certPath, keyPath := edgeTLSPaths()
 
 	certGone := true
 	if _, err := os.Stat(certPath); err == nil {
@@ -304,6 +330,39 @@ func (m *Manager) removeTLSBundle() {
 	if certGone {
 		m.logger.Info("Removed TLS certificate files")
 		m.reloadCaddy(nil)
+	}
+}
+
+func writeManagedFileTemp(path string, data []byte, mode os.FileMode) (string, error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return "", err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return "", err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", err
+	}
+	return tmpPath, nil
+}
+
+func removeIfNotEmpty(path string) {
+	if path != "" {
+		_ = os.Remove(path)
 	}
 }
 
@@ -330,8 +389,7 @@ func (m *Manager) activateCaddy(seed *pb.ConfigSeed, certChanged bool) {
 	params.MistUpstream = strings.TrimPrefix(params.MistUpstream, "http://")
 
 	if seed.GetTls() != nil {
-		params.TLSCertPath = "/etc/frameworks/certs/cert.pem"
-		params.TLSKeyPath = "/etc/frameworks/certs/key.pem"
+		params.TLSCertPath, params.TLSKeyPath = edgeTLSPaths()
 	}
 
 	rendered, err := RenderCaddyfile(params)

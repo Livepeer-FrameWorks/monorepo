@@ -17,6 +17,45 @@
         | default(nginx_http_include_path_by_family[ansible_facts.os_family] | default('/etc/nginx/conf.d/*.conf'), true)
       }}
 
+- name: Validate Nginx HTTP/2 directive mode
+  ansible.builtin.assert:
+    that:
+      - nginx_http2_directive_mode in ['auto', 'listen_parameter', 'standalone']
+    fail_msg: >-
+      nginx_http2_directive_mode must be one of auto, listen_parameter, or standalone.
+
+- name: Detect Nginx version
+  ansible.builtin.command: "{{ nginx_binary_path }} -v"
+  register: nginx_version_detect
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Extract Nginx version
+  ansible.builtin.set_fact:
+    nginx_detected_version: >-
+      {{
+        (
+          (nginx_version_detect.stderr | default(''))
+          ~ ' '
+          ~ (nginx_version_detect.stdout | default(''))
+        )
+        | regex_search('nginx/[0-9]+(?:\\.[0-9]+)*')
+        | default('nginx/0.0.0', true)
+        | regex_replace('^nginx/', '')
+      }}
+
+- name: Resolve Nginx HTTP/2 directive mode
+  ansible.builtin.set_fact:
+    nginx_effective_http2_directive_mode: >-
+      {% if nginx_http2_directive_mode != 'auto' -%}
+      {{ nginx_http2_directive_mode }}
+      {%- elif nginx_detected_version is version(nginx_http2_standalone_min_version, '>=') -%}
+      standalone
+      {%- else -%}
+      listen_parameter
+      {%- endif %}
+
 - name: Ensure Nginx config directory
   ansible.builtin.file:
     path: "{{ nginx_effective_config_dir }}"
@@ -144,5 +183,7 @@
       ansible.builtin.fail:
         msg: |
           Nginx config validation failed; previous config restored if it existed.
-          stdout: {{ nginx_config_validate.stdout | default('') }}
-          stderr: {{ nginx_config_validate.stderr | default('') }}
+          root stdout: {{ nginx_root_config_render.stdout | default('') }}
+          root stderr: {{ nginx_root_config_render.stderr | default('') }}
+          validate stdout: {{ nginx_config_validate.stdout | default('') }}
+          validate stderr: {{ nginx_config_validate.stderr | default('') }}

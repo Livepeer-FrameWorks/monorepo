@@ -457,6 +457,7 @@ type proxySite struct {
 	Upstream              string
 	Profile               string
 	PathPrefixes          []string
+	TLSBundleID           string
 	TLSMode               string
 	TLSCertPath           string
 	TLSKeyPath            string
@@ -489,6 +490,9 @@ func proxySiteMapsForMode(metadata map[string]any, mode string) []map[string]any
 		}
 		if len(site.PathPrefixes) > 0 {
 			item["path_prefixes"] = site.PathPrefixes
+		}
+		if site.TLSBundleID != "" {
+			item["tls_bundle_id"] = site.TLSBundleID
 		}
 		if site.TLSMode != "" {
 			item["tls_mode"] = site.TLSMode
@@ -544,6 +548,7 @@ func normalizeProxySites(metadata map[string]any, mode string) []proxySite {
 			Upstream:              normalizeProxyUpstream(stringValue(raw["upstream"]), mode),
 			Profile:               stringValue(raw["profile"]),
 			PathPrefixes:          normalizePathPrefixes(raw),
+			TLSBundleID:           stringValue(raw["tls_bundle_id"]),
 			TLSMode:               strings.ToLower(stringValue(raw["tls_mode"])),
 			TLSCertPath:           stringValue(raw["tls_cert_path"]),
 			TLSKeyPath:            stringValue(raw["tls_key_path"]),

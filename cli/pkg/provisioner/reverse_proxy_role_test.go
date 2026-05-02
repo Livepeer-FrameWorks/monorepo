@@ -124,9 +124,13 @@ func TestNginxRoleVarsUsesProxySites(t *testing.T) {
 	vars, err := nginxRoleVars(context.TODO(), nilHost(), ServiceConfig{
 		Port: 18090,
 		Metadata: map[string]any{"proxy_sites": []map[string]any{{
-			"domains":  []string{"bridge.example.com"},
-			"upstream": "127.0.0.1:18000",
-			"profile":  "api",
+			"domains":       []string{"bridge.example.com"},
+			"upstream":      "127.0.0.1:18000",
+			"profile":       "api",
+			"tls_bundle_id": "bridge-cert",
+			"tls_cert_path": "/etc/frameworks/ingress/tls/bridge-cert/tls.crt",
+			"tls_key_path":  "/etc/frameworks/ingress/tls/bridge-cert/tls.key",
+			"tls_mode":      "files",
 		}}},
 	}, RoleBuildHelpers{})
 	if err != nil {
@@ -141,6 +145,9 @@ func TestNginxRoleVarsUsesProxySites(t *testing.T) {
 	}
 	if sites[0]["profile"] != "api" {
 		t.Fatalf("profile = %v", sites[0]["profile"])
+	}
+	if sites[0]["tls_bundle_id"] != "bridge-cert" {
+		t.Fatalf("tls_bundle_id = %v", sites[0]["tls_bundle_id"])
 	}
 }
 
@@ -189,7 +196,8 @@ func TestNativeNginxTemplatesOwnRootConfigAndRouteProfiles(t *testing.T) {
 		"proxy_buffering {{ 'on' if site.proxy_buffering | default(profile.proxy_buffering) else 'off' }};",
 		"proxy_set_header Upgrade $http_upgrade;",
 		"proxy_set_header Connection \"upgrade\";",
-		"http2 on;",
+		"nginx_effective_http2_directive_mode == 'listen_parameter'",
+		"nginx_effective_http2_directive_mode == 'standalone'",
 		"proxy_read_timeout {{ site.proxy_read_timeout | default(profile.proxy_read_timeout) }};",
 		"proxy_send_timeout {{ site.proxy_send_timeout | default(profile.proxy_send_timeout) }};",
 	} {

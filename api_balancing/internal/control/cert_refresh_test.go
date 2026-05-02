@@ -124,6 +124,31 @@ func TestLastPushedTLSState_DeduplicatesStateChanges(t *testing.T) {
 	}
 }
 
+func TestStripWildcardSiteWithoutTLS(t *testing.T) {
+	seed := &pb.ConfigSeed{
+		Site: &pb.SiteConfig{SiteAddress: "*.cluster.frameworks.network"},
+	}
+	stripWildcardSiteWithoutTLS(seed)
+	if seed.GetSite() != nil {
+		t.Fatal("wildcard site without TLS should be stripped")
+	}
+
+	withTLS := &pb.ConfigSeed{
+		Tls:  &pb.TLSCertBundle{CertPem: "cert", KeyPem: "key"},
+		Site: &pb.SiteConfig{SiteAddress: "*.cluster.frameworks.network"},
+	}
+	stripWildcardSiteWithoutTLS(withTLS)
+	if withTLS.GetSite() == nil {
+		t.Fatal("wildcard site with TLS should be retained")
+	}
+
+	apex := &pb.ConfigSeed{Site: &pb.SiteConfig{SiteAddress: "edge.frameworks.network"}}
+	stripWildcardSiteWithoutTLS(apex)
+	if apex.GetSite() == nil {
+		t.Fatal("non-wildcard site without TLS should be retained for Caddy-managed ACME")
+	}
+}
+
 func TestTLSBundleState(t *testing.T) {
 	t.Run("nil bundle", func(t *testing.T) {
 		if got := tlsBundleState(nil); got != tlsStateNoCert {

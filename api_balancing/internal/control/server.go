@@ -972,12 +972,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			if tenantID != "" {
 				seed.TenantId = tenantID
 			}
-			// Wildcard site without TLS cert is unusable — Caddy would attempt
-			// auto-ACME DNS-01 which isn't configured. Stay on bootstrap until
-			// Navigator provisions the cert.
-			if seed.GetTls() == nil && seed.GetSite() != nil && strings.HasPrefix(seed.GetSite().GetSiteAddress(), "*.") {
-				seed.Site = nil
-			}
+			stripWildcardSiteWithoutTLS(seed)
 			_ = SendConfigSeed(nodeID, seed)
 
 			// Fresh enrollments without a usable site are not routable.
@@ -4676,6 +4671,7 @@ func refreshTLSBundles(log logging.Logger) {
 		// transiently on a second call; using the pre-resolved bundle
 		// avoids pushing a seed that silently drops TLS.
 		seed.Tls = bundle
+		stripWildcardSiteWithoutTLS(seed)
 		if err := SendConfigSeed(n.connID, seed); err != nil {
 			log.WithError(err).WithField("node_id", n.canonicalID).Warn("Failed to push renewed TLS certificate")
 			continue
@@ -4696,6 +4692,15 @@ func refreshTLSBundles(log logging.Logger) {
 			"domain":     bundle.GetDomain(),
 			"expires_at": bundle.GetExpiresAt(),
 		}).Info("Pushed renewed TLS certificate to edge")
+	}
+}
+
+func stripWildcardSiteWithoutTLS(seed *pb.ConfigSeed) {
+	if seed == nil || seed.GetTls() != nil || seed.GetSite() == nil {
+		return
+	}
+	if strings.HasPrefix(seed.GetSite().GetSiteAddress(), "*.") {
+		seed.Site = nil
 	}
 }
 

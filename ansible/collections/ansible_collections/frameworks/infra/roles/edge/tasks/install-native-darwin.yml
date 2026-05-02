@@ -75,7 +75,10 @@
     helmsman_mist_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
     helmsman_mist_api_password: "{{ edge_mist_api_password }}"
-    helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir ~ '/pki/ca.crt' if edge_ca_bundle_pem | length > 0 else '' }}"
+    helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir }}/pki/ca.crt"
+    helmsman_extra_env:
+      HELMSMAN_TLS_CERT_PATH: "{{ edge_darwin_conf_dir }}/certs/cert.pem"
+      HELMSMAN_TLS_KEY_PATH: "{{ edge_darwin_conf_dir }}/certs/key.pem"
     helmsman_darwin_domain: "{{ edge_darwin_domain }}"
 
 - name: Apply caddy bootstrap (darwin)

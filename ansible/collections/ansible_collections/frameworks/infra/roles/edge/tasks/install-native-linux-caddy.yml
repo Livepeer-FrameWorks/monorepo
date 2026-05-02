@@ -17,6 +17,17 @@
     shell: /usr/sbin/nologin
     create_home: false
 
+- name: Ensure ConfigSeed-managed edge TLS directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ edge_cert_dir }}", owner: frameworks, group: caddy, mode: "2770" }
+    - { path: "{{ edge_conf_dir }}/pki", owner: frameworks, group: frameworks, mode: "0750" }
+
 - name: Ensure caddy directories
   ansible.builtin.file:
     path: "{{ item.path }}"
@@ -102,15 +113,17 @@
 - name: Chown edge cert for caddy (when present)
   ansible.builtin.file:
     path: "{{ edge_cert_dir }}/cert.pem"
-    owner: caddy
+    owner: frameworks
     group: caddy
+    mode: "0644"
   when: edge_cert_pem | length > 0
 
 - name: Chown edge key for caddy (when present)
   ansible.builtin.file:
     path: "{{ edge_cert_dir }}/key.pem"
-    owner: caddy
+    owner: frameworks
     group: caddy
+    mode: "0640"
   when: edge_key_pem | length > 0
 
 - name: Flush handlers before starting edge caddy

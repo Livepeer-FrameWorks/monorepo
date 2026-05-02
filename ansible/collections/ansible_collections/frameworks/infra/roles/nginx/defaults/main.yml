@@ -94,10 +94,16 @@ nginx_route_profiles:
     proxy_send_timeout: 300s
     websocket: false
 nginx_https_port: 443
+nginx_http2_directive_mode: auto
+nginx_http2_standalone_min_version: "1.25.1"
 # Distros put the nginx binary in different places (/usr/sbin on Debian,
 # /usr/bin on some Arch builds). The reload service unit's ExecStartPre
 # uses this so `nginx -t` is found regardless.
-nginx_binary_path: /usr/sbin/nginx
+nginx_binary_path: "{{ nginx_binary_path_by_family[ansible_facts.os_family] | default('/usr/sbin/nginx') }}"
+nginx_binary_path_by_family:
+  Debian: /usr/sbin/nginx
+  Archlinux: /usr/bin/nginx
+  RedHat: /usr/sbin/nginx
 nginx_openssl_package_by_family:
   Debian: openssl
   Archlinux: openssl

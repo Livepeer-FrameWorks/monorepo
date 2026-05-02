@@ -38,9 +38,11 @@ server {
 
 {% if site.tls_mode | default('') == 'files' and site.tls_cert_path | default('') | length > 0 and site.tls_key_path | default('') | length > 0 %}
 server {
-    listen {{ nginx_https_port }} ssl;
-    http2 on;
+    listen {{ nginx_https_port }} ssl{% if nginx_effective_http2_directive_mode == 'listen_parameter' %} http2{% endif %};
     server_name {{ site.domains | join(' ') }};
+{% if nginx_effective_http2_directive_mode == 'standalone' %}
+    http2 on;
+{% endif %}
     ssl_certificate {{ site.tls_cert_path }};
     ssl_certificate_key {{ site.tls_key_path }};
 
