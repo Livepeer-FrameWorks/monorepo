@@ -102,6 +102,12 @@ export interface PlayerControllerState {
   thumbnailCues: ThumbnailCue[];
   /** Loading-state poster snapshot for the boot/connecting overlay. */
   loadingPoster: LoadingPosterInfo | null;
+  /**
+   * Controller's verdict on whether the loading-poster overlay should be visible.
+   * Wrappers should mask this with their own displayedError fade lifecycle.
+   * Recomputed on poster, stateChange, streamStateChange, timeUpdate, error, errorCleared, ready.
+   */
+  shouldShowLoadingPoster: boolean;
 }
 
 export interface PlayerControllerStore extends Readable<PlayerControllerState> {
@@ -208,6 +214,7 @@ const initialState: PlayerControllerState = {
   controllerHasAudio: true,
   thumbnailCues: [],
   loadingPoster: null,
+  shouldShowLoadingPoster: false,
 };
 
 function createInitialState(
@@ -282,10 +289,13 @@ export function createPlayerControllerStore(
       hasPlaybackStarted: controller!.hasPlaybackStarted(),
       shouldShowControls: controller!.shouldShowControls(),
       shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
+      shouldShowLoadingPoster: controller!.getShouldShowLoadingPoster(),
       playbackQuality: controller!.getPlaybackQuality(),
       isLoopEnabled: controller!.isLoopEnabled(),
       subtitlesEnabled: controller!.isSubtitlesEnabled(),
       streamInfo: controller!.getStreamInfo(),
+      thumbnailCues: controller!.getThumbnailCues?.() ?? prev.thumbnailCues,
+      loadingPoster: controller!.getLoadingPoster?.() ?? prev.loadingPoster,
     }));
   }
 
@@ -304,6 +314,14 @@ export function createPlayerControllerStore(
 
     // Create new controller
     controller = new PlayerController(controllerConfig);
+    const initialPoster = controller.getLoadingPoster?.();
+    store.update((prev) => ({
+      ...prev,
+      shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
+      loadingPoster: initialPoster ?? prev.loadingPoster,
+      shouldShowLoadingPoster: controller!.getShouldShowLoadingPoster(),
+      isLoopEnabled: controller!.isLoopEnabled(),
+    }));
 
     // Subscribe to events
     unsubscribers.push(
@@ -319,6 +337,9 @@ export function createPlayerControllerStore(
           hasPlaybackStarted: controller!.hasPlaybackStarted(),
           shouldShowControls: controller!.shouldShowControls(),
           shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
+          shouldShowLoadingPoster: controller!.getShouldShowLoadingPoster(),
+          thumbnailCues: controller!.getThumbnailCues?.() ?? prev.thumbnailCues,
+          loadingPoster: controller!.getLoadingPoster?.() ?? prev.loadingPoster,
         }));
       })
     );
@@ -332,6 +353,8 @@ export function createPlayerControllerStore(
           streamInfo: controller!.getStreamInfo(),
           isEffectivelyLive: controller!.isEffectivelyLive(),
           shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
+          thumbnailCues: controller!.getThumbnailCues?.() ?? prev.thumbnailCues,
+          loadingPoster: controller!.getLoadingPoster?.() ?? prev.loadingPoster,
         }));
       })
     );
@@ -350,6 +373,9 @@ export function createPlayerControllerStore(
           hasPlaybackStarted: controller!.hasPlaybackStarted(),
           shouldShowControls: controller!.shouldShowControls(),
           shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
+          shouldShowLoadingPoster: controller!.getShouldShowLoadingPoster(),
+          thumbnailCues: controller!.getThumbnailCues?.() ?? prev.thumbnailCues,
+          loadingPoster: controller!.getLoadingPoster?.() ?? prev.loadingPoster,
         }));
       })
     );
@@ -384,6 +410,9 @@ export function createPlayerControllerStore(
           volume: controller!.getVolume(),
           currentPlayerInfo: controller!.getCurrentPlayerInfo(),
           currentSourceInfo: controller!.getCurrentSourceInfo(),
+          thumbnailCues: controller!.getThumbnailCues?.() ?? prev.thumbnailCues,
+          loadingPoster: controller!.getLoadingPoster?.() ?? prev.loadingPoster,
+          shouldShowLoadingPoster: controller!.getShouldShowLoadingPoster(),
         }));
 
         // Add video event listeners for state sync
@@ -412,6 +441,9 @@ export function createPlayerControllerStore(
           currentPlayerInfo: controller!.getCurrentPlayerInfo(),
           currentSourceInfo: { url: source.url, type: source.type },
           streamInfo: controller!.getStreamInfo(),
+          thumbnailCues: controller!.getThumbnailCues?.() ?? prev.thumbnailCues,
+          loadingPoster: controller!.getLoadingPoster?.() ?? prev.loadingPoster,
+          shouldShowLoadingPoster: controller!.getShouldShowLoadingPoster(),
         }));
       })
     );
@@ -495,16 +527,46 @@ export function createPlayerControllerStore(
     // Thumbnail sprite cues
     unsubscribers.push(
       controller.on("thumbnailCuesChange", ({ cues }) => {
-        store.update((prev) => ({ ...prev, thumbnailCues: cues }));
+        store.update((prev) => ({
+          ...prev,
+          thumbnailCues: cues,
+          loadingPoster: controller!.getLoadingPoster?.() ?? prev.loadingPoster,
+          shouldShowLoadingPoster: controller!.getShouldShowLoadingPoster(),
+        }));
       })
     );
 
     // Loading-state poster snapshot
     unsubscribers.push(
       controller.on("loadingPosterChange", ({ poster }) => {
-        store.update((prev) => ({ ...prev, loadingPoster: poster }));
+        store.update((prev) => ({
+          ...prev,
+          loadingPoster: poster,
+          shouldShowLoadingPoster: controller!.getShouldShowLoadingPoster(),
+        }));
       })
     );
+
+    // shouldShowLoadingPoster derives from inputs that fire across multiple
+    // events. Recompute on every relevant transition; cheap & idempotent.
+    const recomputeShouldShow = () => {
+      store.update((prev) => {
+        const next = controller!.getShouldShowLoadingPoster();
+        return next === prev.shouldShowLoadingPoster
+          ? prev
+          : { ...prev, shouldShowLoadingPoster: next };
+      });
+    };
+    for (const evt of [
+      "stateChange",
+      "streamStateChange",
+      "timeUpdate",
+      "error",
+      "errorCleared",
+      "ready",
+    ] as const) {
+      unsubscribers.push(controller.on(evt, recomputeShouldShow));
+    }
 
     // Error handling events - show toasts/modals
     unsubscribers.push(
@@ -542,7 +604,7 @@ export function createPlayerControllerStore(
     if (controller) {
       controller.detach();
     }
-    store.set(initialState);
+    store.set(createInitialState(controllerConfig));
   }
 
   /**
@@ -557,7 +619,7 @@ export function createPlayerControllerStore(
       controller = null;
     }
 
-    store.set(initialState);
+    store.set(createInitialState(controllerConfig));
   }
 
   // Action methods

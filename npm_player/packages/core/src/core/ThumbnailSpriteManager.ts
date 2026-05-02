@@ -4,12 +4,13 @@ export interface ThumbnailSpriteManagerOptions {
   vttUrl: string;
   baseUrl: string;
   isLive: boolean;
+  supportsPush?: boolean;
   refreshInterval?: number;
   onCuesChange?: (cues: ThumbnailCue[]) => void;
   log?: (msg: string) => void;
 }
 
-const DEFAULT_REFRESH_INTERVAL = 5000;
+const DEFAULT_REFRESH_INTERVAL = 2000;
 
 export class ThumbnailSpriteManager {
   private cues: ThumbnailCue[] = [];
@@ -17,15 +18,19 @@ export class ThumbnailSpriteManager {
   private fetching = false;
   private abortController: AbortController | null = null;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
+  private seedRetryTimer: ReturnType<typeof setInterval> | null = null;
   private options: ThumbnailSpriteManagerOptions;
   private spriteObjectUrl: string | null = null;
 
   constructor(options: ThumbnailSpriteManagerOptions) {
     this.options = options;
     if (options.isLive) {
-      this.startPush();
+      this.startPolling();
+      if (options.supportsPush) {
+        this.startPush();
+      }
     } else {
-      this.poll();
+      this.startSeedPolling();
     }
   }
 
@@ -168,6 +173,7 @@ export class ThumbnailSpriteManager {
             ...cue,
             url: this.spriteObjectUrl || this.resolveUrl(cue.url),
           }));
+          this.stopSeedPolling();
           this.options.log?.(`[ThumbnailSpriteManager] Push: ${this.cues.length} cues`);
           this.options.onCuesChange?.(this.cues);
         }
@@ -183,9 +189,33 @@ export class ThumbnailSpriteManager {
     return null;
   }
 
-  /** Poll fallback (live) or one-shot (VOD) */
+  /**
+   * Seed thumbnails from regular VTT immediately. This covers live push startup
+   * latency and early VOD/Chandler 404s while thumbnails are still being uploaded.
+   */
+  private startSeedPolling(): void {
+    if (this.destroyed || this.seedRetryTimer) return;
+    this.poll();
+    const interval = this.options.refreshInterval ?? DEFAULT_REFRESH_INTERVAL;
+    this.seedRetryTimer = setInterval(() => {
+      if (this.cues.length > 0) {
+        this.stopSeedPolling();
+        return;
+      }
+      this.poll();
+    }, interval);
+  }
+
+  private stopSeedPolling(): void {
+    if (!this.seedRetryTimer) return;
+    clearInterval(this.seedRetryTimer);
+    this.seedRetryTimer = null;
+  }
+
+  /** Poll fallback for live when push is unsupported or stops. */
   private startPolling(): void {
     if (this.destroyed) return;
+    if (this.refreshTimer) return;
     this.poll();
     if (this.options.isLive) {
       const interval = this.options.refreshInterval ?? DEFAULT_REFRESH_INTERVAL;
@@ -197,15 +227,21 @@ export class ThumbnailSpriteManager {
     if (this.destroyed || this.fetching) return;
     this.fetching = true;
     try {
-      const response = await fetch(this.options.vttUrl);
+      const response = await fetch(this.options.vttUrl, { cache: "no-store" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const text = await response.text();
       if (this.destroyed) return;
       const rawCues = parseThumbnailVtt(text);
+      const cacheVersion = Date.now();
       this.cues = rawCues.map((cue) => ({
         ...cue,
-        url: this.resolveUrl(cue.url),
+        url: this.options.isLive
+          ? this.cacheBustUrl(this.resolveUrl(cue.url), cacheVersion)
+          : this.resolveUrl(cue.url),
       }));
+      if (this.cues.length > 0) {
+        this.stopSeedPolling();
+      }
       this.options.log?.(`[ThumbnailSpriteManager] Poll: ${this.cues.length} cues`);
       this.options.onCuesChange?.(this.cues);
     } catch (e) {
@@ -222,6 +258,13 @@ export class ThumbnailSpriteManager {
     const base = this.options.baseUrl.replace(/\/$/, "");
     if (url.startsWith("/")) return base + url;
     return base + "/" + url;
+  }
+
+  private cacheBustUrl(url: string, version: number): string {
+    if (url.startsWith("blob:") || url.startsWith("data:")) return url;
+    const [withoutHash, hash = ""] = url.split("#", 2);
+    const separator = withoutHash.includes("?") ? "&" : "?";
+    return `${withoutHash}${separator}_fw_thumb=${version}${hash ? `#${hash}` : ""}`;
   }
 
   getCues(): ThumbnailCue[] {
@@ -241,10 +284,15 @@ export class ThumbnailSpriteManager {
       clearInterval(this.refreshTimer);
       this.refreshTimer = null;
     }
+    this.stopSeedPolling();
+    this.cues = [];
     if (this.options.isLive) {
-      this.startPush();
+      this.startPolling();
+      if (this.options.supportsPush) {
+        this.startPush();
+      }
     } else {
-      this.poll();
+      this.startSeedPolling();
     }
   }
 
@@ -256,6 +304,7 @@ export class ThumbnailSpriteManager {
       clearInterval(this.refreshTimer);
       this.refreshTimer = null;
     }
+    this.stopSeedPolling();
     if (this.spriteObjectUrl) {
       URL.revokeObjectURL(this.spriteObjectUrl);
       this.spriteObjectUrl = null;

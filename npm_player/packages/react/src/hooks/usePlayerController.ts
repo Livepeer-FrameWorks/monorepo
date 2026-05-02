@@ -130,6 +130,13 @@ export interface PlayerControllerState {
   thumbnailCues: ThumbnailCue[];
   /** Loading-state poster snapshot for the boot/connecting overlay. */
   loadingPoster: LoadingPosterInfo | null;
+  /**
+   * Controller's verdict on whether the loading-poster overlay should be visible.
+   * Wrappers should mask this with their own displayedError fade lifecycle:
+   * `state.shouldShowLoadingPoster && !displayedError`. Recomputed on poster,
+   * stateChange, streamStateChange, timeUpdate, error, errorCleared, and ready events.
+   */
+  shouldShowLoadingPoster: boolean;
 }
 
 export interface UsePlayerControllerReturn {
@@ -232,6 +239,7 @@ const initialState: PlayerControllerState = {
   toast: null,
   thumbnailCues: [],
   loadingPoster: null,
+  shouldShowLoadingPoster: false,
 };
 
 function createInitialState(
@@ -310,11 +318,14 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
         hasPlaybackStarted: c.hasPlaybackStarted(),
         shouldShowControls: c.shouldShowControls(),
         shouldShowIdleScreen: c.shouldShowIdleScreen(),
+        shouldShowLoadingPoster: c.getShouldShowLoadingPoster(),
         playbackQuality: c.getPlaybackQuality(),
         isLoopEnabled: c.isLoopEnabled(),
         subtitlesEnabled: c.isSubtitlesEnabled(),
         qualities: c.getQualities(),
         streamInfo: c.getStreamInfo(),
+        thumbnailCues: c.getThumbnailCues?.() ?? prev.thumbnailCues,
+        loadingPoster: c.getLoadingPoster?.() ?? prev.loadingPoster,
       }));
     };
 
@@ -331,6 +342,8 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
           hasPlaybackStarted: controller.hasPlaybackStarted(),
           shouldShowControls: controller.shouldShowControls(),
           shouldShowIdleScreen: controller.shouldShowIdleScreen(),
+          thumbnailCues: controller.getThumbnailCues?.() ?? prev.thumbnailCues,
+          loadingPoster: controller.getLoadingPoster?.() ?? prev.loadingPoster,
         }));
         onStateChange?.(newState);
       })
@@ -344,6 +357,8 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
           metadata: controller.getMetadata(),
           isEffectivelyLive: controller.isEffectivelyLive(),
           shouldShowIdleScreen: controller.shouldShowIdleScreen(),
+          thumbnailCues: controller.getThumbnailCues?.() ?? prev.thumbnailCues,
+          loadingPoster: controller.getLoadingPoster?.() ?? prev.loadingPoster,
         }));
         onStreamStateChange?.(streamState);
       })
@@ -363,6 +378,9 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
           hasPlaybackStarted: controller.hasPlaybackStarted(),
           shouldShowControls: controller.shouldShowControls(),
           shouldShowIdleScreen: controller.shouldShowIdleScreen(),
+          shouldShowLoadingPoster: controller.getShouldShowLoadingPoster(),
+          thumbnailCues: controller.getThumbnailCues?.() ?? prev.thumbnailCues,
+          loadingPoster: controller.getLoadingPoster?.() ?? prev.loadingPoster,
         }));
       })
     );
@@ -399,6 +417,9 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
           currentPlayerInfo: controller.getCurrentPlayerInfo(),
           currentSourceInfo: controller.getCurrentSourceInfo(),
           qualities: controller.getQualities(),
+          thumbnailCues: controller.getThumbnailCues?.() ?? prev.thumbnailCues,
+          loadingPoster: controller.getLoadingPoster?.() ?? prev.loadingPoster,
+          shouldShowLoadingPoster: controller.getShouldShowLoadingPoster(),
         }));
         onReady?.(videoElement);
 
@@ -428,6 +449,9 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
           currentPlayerInfo: controller.getCurrentPlayerInfo(),
           currentSourceInfo: { url: source.url, type: source.type },
           qualities: controller.getQualities(),
+          thumbnailCues: controller.getThumbnailCues?.() ?? prev.thumbnailCues,
+          loadingPoster: controller.getLoadingPoster?.() ?? prev.loadingPoster,
+          shouldShowLoadingPoster: controller.getShouldShowLoadingPoster(),
         }));
       })
     );
@@ -523,15 +547,45 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
 
     unsubs.push(
       controller.on("thumbnailCuesChange", ({ cues }) => {
-        setState((prev) => ({ ...prev, thumbnailCues: cues }));
+        setState((prev) => ({
+          ...prev,
+          thumbnailCues: cues,
+          loadingPoster: controller.getLoadingPoster?.() ?? prev.loadingPoster,
+          shouldShowLoadingPoster: controller.getShouldShowLoadingPoster(),
+        }));
       })
     );
 
     unsubs.push(
       controller.on("loadingPosterChange", ({ poster }) => {
-        setState((prev) => ({ ...prev, loadingPoster: poster }));
+        setState((prev) => ({
+          ...prev,
+          loadingPoster: poster,
+          shouldShowLoadingPoster: controller.getShouldShowLoadingPoster(),
+        }));
       })
     );
+
+    // shouldShowLoadingPoster derives from inputs that fire across multiple
+    // events. Recompute on every relevant transition; cheap & idempotent.
+    const recomputeShouldShow = () => {
+      setState((prev) => {
+        const next = controller.getShouldShowLoadingPoster();
+        return next === prev.shouldShowLoadingPoster
+          ? prev
+          : { ...prev, shouldShowLoadingPoster: next };
+      });
+    };
+    for (const evt of [
+      "stateChange",
+      "streamStateChange",
+      "timeUpdate",
+      "error",
+      "errorCleared",
+      "ready",
+    ] as const) {
+      unsubs.push(controller.on(evt, recomputeShouldShow));
+    }
 
     // Attach controller to container
     // Note: Video event listeners are set up in the 'ready' handler above
@@ -539,19 +593,23 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
       console.warn("[usePlayerController] Attach failed:", err);
     });
 
-    // Set initial state
+    // Set initial state from controller before async attach/gateway work can emit.
+    const initialPoster = controller.getLoadingPoster?.();
     setState((prev) => ({
       ...prev,
       isLoopEnabled: controller.isLoopEnabled(),
+      shouldShowIdleScreen: controller.shouldShowIdleScreen(),
+      loadingPoster: initialPoster ?? prev.loadingPoster,
+      shouldShowLoadingPoster: controller.getShouldShowLoadingPoster(),
     }));
 
     return () => {
       unsubs.forEach((fn) => fn());
       controller.destroy();
       controllerRef.current = null;
-      setState(initialState);
+      setState(createInitialState(configRef.current));
     };
-  }, [enabled, config.contentId, config.contentType]); // Re-create on content change
+  }, [enabled, config.contentId, config.contentType, config.poster]); // Re-create on content/poster change
 
   // Stable action callbacks
   const play = useCallback(async () => {

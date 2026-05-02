@@ -17,9 +17,8 @@
   import { readable } from "svelte/store";
   import type { Readable } from "svelte/store";
   import { createTranslator, type TranslateFn } from "@livepeer-frameworks/player-core";
-  import type { StreamStatus, LoadingPosterInfo } from "@livepeer-frameworks/player-core";
+  import type { StreamStatus } from "@livepeer-frameworks/player-core";
   import DvdLogo from "./DvdLogo.svelte";
-  import LoadingPoster from "./LoadingPoster.svelte";
   import logomarkAsset from "./assets/logomark.svg";
 
   interface Props {
@@ -29,8 +28,6 @@
     error?: string;
     details?: string;
     onRetry?: () => void;
-    loadingPoster?: LoadingPosterInfo | null;
-    loadingPosterMode?: "animate" | "latest";
   }
 
   const translatorStore: Readable<TranslateFn> =
@@ -45,19 +42,7 @@
     error = undefined,
     details = undefined,
     onRetry = undefined,
-    loadingPoster = null,
-    loadingPosterMode = "animate",
   }: Props = $props();
-
-  let hasPosterSource = $derived(
-    !!(
-      loadingPoster &&
-      (loadingPoster.posterUrl ||
-        loadingPoster.spriteJpgUrl ||
-        loadingPoster.mistPreviewUrl ||
-        loadingPoster.cues.length > 0)
-    )
-  );
 
   let effectiveMessage = $derived(message ?? t("waitingForStream"));
 
@@ -423,17 +408,11 @@
 <div
   bind:this={containerRef}
   class="idle-container fw-player-root"
-  class:has-poster={hasPosterSource}
   role="status"
   aria-label="Stream status"
   onmousemove={handleMouseMove}
   onmouseleave={handleMouseLeave}
 >
-  <!-- Loading-state poster (replaces gradient art when stream poster is available) -->
-  {#if hasPosterSource}
-    <LoadingPoster {loadingPoster} mode={loadingPosterMode} />
-  {/if}
-
   <!-- Hitmarkers -->
   {#each hitmarkers as hitmarker (hitmarker.id)}
     <div class="hitmarker" style="left: {hitmarker.x}px; top: {hitmarker.y}px;">
@@ -444,12 +423,11 @@
     </div>
   {/each}
 
-  <!-- Floating particles + bubbles — suppressed when a stream poster is shown -->
-  {#if !hasPosterSource}
-    {#each particles as particle, _i}
-      <div
-        class="particle"
-        style="
+  <!-- Floating particles + bubbles -->
+  {#each particles as particle, _i}
+    <div
+      class="particle"
+      style="
           left: {particle.left}%;
           width: {particle.size}px;
           height: {particle.size}px;
@@ -457,13 +435,13 @@
           animation-duration: {particle.duration}s;
           animation-delay: {particle.delay}s;
         "
-      ></div>
-    {/each}
+    ></div>
+  {/each}
 
-    {#each bubbles as bubble, _i}
-      <div
-        class="bubble"
-        style="
+  {#each bubbles as bubble, _i}
+    <div
+      class="bubble"
+      style="
           top: {bubble.position.top}%;
           left: {bubble.position.left}%;
           width: {bubble.size}px;
@@ -471,9 +449,8 @@
           background: {bubble.color};
           opacity: {bubble.opacity};
         "
-      ></div>
-    {/each}
-  {/if}
+    ></div>
+  {/each}
 
   <!-- Center logo with push-away effect -->
   <div
@@ -716,11 +693,6 @@
     user-select: none;
     -webkit-user-select: none;
   }
-  .idle-container.has-poster {
-    background: hsl(var(--tn-bg-dark, 235 21% 11%));
-    animation: none;
-  }
-
   .bubble {
     position: absolute;
     border-radius: 50%;

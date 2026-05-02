@@ -2,27 +2,24 @@ import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { LoadingPosterInfo } from "@livepeer-frameworks/player-core";
 
-export type LoadingPosterMode = "animate" | "latest";
-
 /**
- * Loading-state poster overlay element.
- *
- * Source priority (per mode):
- *   - "animate": sprite cycle → Chandler poster.jpg → Mist preview JPEG → fallbackPosterUrl
- *   - "latest":  Chandler poster.jpg → Mist preview JPEG → fallbackPosterUrl (never uses sprite)
- *
- * The sprite is thumbnail-resolution and is only suitable for animation; the static fallback
- * tier always uses the full-resolution poster.jpg / Mist lang:"pre" frame.
+ * Loading-state poster overlay element. Dumb spec consumer — dispatches on
+ * `loadingPoster.mode` and reads spec fields. The controller
+ * (PlayerController.buildLoadingPosterInfo) owns source priority and the
+ * synthetic-vs-measured decision.
  */
 @customElement("fw-loading-poster")
 export class FwLoadingPoster extends LitElement {
   @property({ attribute: false }) loadingPoster: LoadingPosterInfo | null = null;
-  @property({ type: String }) mode: LoadingPosterMode = "animate";
-  @property({ type: String, attribute: "fallback-poster-url" }) fallbackPosterUrl?: string;
-  @property({ type: Number, attribute: "cycle-ms" }) cycleMs = 2000;
 
   @state() private _tickIdx = 0;
+  @state() private _measuredW = 0;
+  @state() private _measuredH = 0;
+  @state() private _spriteFailed = false;
+  private _measuredUrl: string | null = null;
   private _intervalId: ReturnType<typeof setInterval> | null = null;
+  private static readonly CYCLE_MS = 2000;
+  private readonly _clipId = `fw-loading-poster-clip-${Math.random().toString(36).slice(2)}`;
 
   static styles = css`
     :host {
@@ -31,23 +28,36 @@ export class FwLoadingPoster extends LitElement {
       inset: 0;
       pointer-events: none;
     }
+    .root {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+      pointer-events: none;
+    }
     .sprite {
       position: absolute;
       inset: 0;
-      pointer-events: none;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
     }
     img {
       position: absolute;
       inset: 0;
       width: 100%;
       height: 100%;
-      object-fit: cover;
+      background: #000;
+      object-fit: contain;
     }
   `;
 
   updated(changed: Map<string, unknown>) {
-    if (changed.has("loadingPoster") || changed.has("mode") || changed.has("cycleMs")) {
+    if (changed.has("loadingPoster")) {
       this._restartCycle();
+      this._maybeMeasureSprite();
     }
   }
 
@@ -56,22 +66,22 @@ export class FwLoadingPoster extends LitElement {
     this._stopCycle();
   }
 
-  private _canAnimate(): boolean {
+  private _tileCount(): number {
     const lp = this.loadingPoster;
-    if (this.mode !== "animate" || !lp) return false;
-    return !!lp.spriteJpgUrl && lp.cues.length >= 2 && lp.columns > 0 && lp.rows > 0;
+    if (!lp || lp.mode !== "animate") return 0;
+    return lp.geometry === "measured" ? lp.cues.length : 0;
   }
 
   private _restartCycle() {
     this._stopCycle();
-    if (!this._canAnimate()) {
+    const tiles = this._tileCount();
+    if (tiles < 2) {
       this._tickIdx = 0;
       return;
     }
-    const cues = this.loadingPoster!.cues;
-    const stepMs = Math.max(20, Math.floor(this.cycleMs / cues.length));
+    const stepMs = Math.max(20, Math.floor(FwLoadingPoster.CYCLE_MS / tiles));
     this._intervalId = setInterval(() => {
-      this._tickIdx = (this._tickIdx + 1) % cues.length;
+      this._tickIdx = (this._tickIdx + 1) % tiles;
     }, stepMs);
   }
 
@@ -82,34 +92,105 @@ export class FwLoadingPoster extends LitElement {
     }
   }
 
+  private _maybeMeasureSprite() {
+    const lp = this.loadingPoster;
+    if (!lp || lp.mode !== "animate" || lp.geometry !== "measured" || !lp.spriteJpgUrl) return;
+    if (this._measuredUrl === lp.spriteJpgUrl && (this._measuredW > 0 || this._spriteFailed)) {
+      return;
+    }
+    this._measuredUrl = lp.spriteJpgUrl;
+    this._measuredW = 0;
+    this._measuredH = 0;
+    this._spriteFailed = false;
+    const img = new Image();
+    img.onload = () => {
+      if (this._measuredUrl !== lp.spriteJpgUrl) return;
+      this._measuredW = img.naturalWidth;
+      this._measuredH = img.naturalHeight;
+    };
+    img.onerror = () => {
+      if (this._measuredUrl !== lp.spriteJpgUrl) return;
+      this._spriteFailed = true;
+    };
+    img.src = lp.spriteJpgUrl;
+  }
+
+  private _shouldCacheBust(p: LoadingPosterInfo): boolean {
+    if (!p.staticUrl) return false;
+    if (p.staticUrl.startsWith("data:") || p.staticUrl.startsWith("blob:")) return false;
+    if (p.staticSource === "thumbnail-prop") return false;
+    return true;
+  }
+
+  private _withCacheBust(p: LoadingPosterInfo): string | undefined {
+    if (!p.staticUrl) return undefined;
+    if (!this._shouldCacheBust(p)) return p.staticUrl;
+    const sep = p.staticUrl.includes("?") ? "&" : "?";
+    return `${p.staticUrl}${sep}_g=${p.generation}`;
+  }
+
   render() {
     const lp = this.loadingPoster;
-    if (this._canAnimate() && lp) {
-      const cue = lp.cues[this._tickIdx % lp.cues.length];
-      const spriteWidth = lp.spriteWidth || cue.width * lp.columns;
-      const spriteHeight = lp.spriteHeight || cue.height * lp.rows;
-      return html`<svg
-        class="sprite"
-        viewBox=${`${cue.x} ${cue.y} ${cue.width} ${cue.height}`}
-        preserveAspectRatio="xMidYMid slice"
-        aria-hidden="true"
-      >
-        <image href=${lp.spriteJpgUrl!} x="0" y="0" width=${spriteWidth} height=${spriteHeight} />
-      </svg>`;
+    if (!lp) return nothing;
+
+    if (lp.mode === "animate" && lp.spriteJpgUrl) {
+      let cueRect: {
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+        imgW: number;
+        imgH: number;
+      } | null = null;
+      if (lp.geometry === "measured") {
+        const cue = lp.cues[this._tickIdx % Math.max(lp.cues.length, 1)];
+        if (
+          cue &&
+          this._measuredUrl === lp.spriteJpgUrl &&
+          this._measuredW > 0 &&
+          this._measuredH > 0
+        ) {
+          cueRect = {
+            x: cue.x,
+            y: cue.y,
+            w: cue.width,
+            h: cue.height,
+            imgW: this._measuredW,
+            imgH: this._measuredH,
+          };
+        }
+      }
+
+      if (cueRect) {
+        return html`<div class="root" aria-hidden="true">
+          <svg
+            class="sprite"
+            viewBox=${`0 0 ${cueRect.w} ${cueRect.h}`}
+            preserveAspectRatio="xMidYMid meet"
+          >
+            <defs>
+              <clipPath id=${this._clipId} clipPathUnits="userSpaceOnUse">
+                <rect x="0" y="0" width=${cueRect.w} height=${cueRect.h}></rect>
+              </clipPath>
+            </defs>
+            <g clip-path=${`url(#${this._clipId})`}>
+              <image
+                href=${lp.spriteJpgUrl}
+                x=${-cueRect.x}
+                y=${-cueRect.y}
+                width=${cueRect.imgW}
+                height=${cueRect.imgH}
+                preserveAspectRatio="none"
+              />
+            </g>
+          </svg>
+        </div>`;
+      }
     }
-    const rawUrl = lp?.posterUrl || lp?.mistPreviewUrl || this.fallbackPosterUrl;
-    if (!rawUrl) return nothing;
-    // Cache-bust on every cue regen so the browser refetches poster.jpg. Skip for
-    // data:/blob: URLs and for the user-provided fallback (no refresh contract).
-    const isRefreshable =
-      rawUrl !== this.fallbackPosterUrl &&
-      !rawUrl.startsWith("data:") &&
-      !rawUrl.startsWith("blob:");
-    const url =
-      isRefreshable && lp
-        ? `${rawUrl}${rawUrl.includes("?") ? "&" : "?"}_g=${lp.generation}`
-        : rawUrl;
-    return html`<img src=${url} alt="" aria-hidden="true" />`;
+
+    const url = this._withCacheBust(lp);
+    if (!url) return nothing;
+    return html`<div class="root" aria-hidden="true"><img src=${url} alt="" /></div>`;
   }
 }
 

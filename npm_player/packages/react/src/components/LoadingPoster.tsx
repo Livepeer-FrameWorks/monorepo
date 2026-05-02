@@ -1,123 +1,192 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { LoadingPosterInfo } from "@livepeer-frameworks/player-core";
-
-export type LoadingPosterMode = "animate" | "latest";
 
 export interface LoadingPosterProps {
   /** Snapshot from the controller; null hides the component. */
   loadingPoster: LoadingPosterInfo | null;
-  /**
-   * Render mode:
-   *   - "animate" (default): cycle through all sprite tiles in ~2s
-   *   - "latest": full-resolution Chandler poster.jpg, no sprite (sprite tiles are too low-res for static display)
-   */
-  mode?: LoadingPosterMode;
-  /** Optional explicit fallback poster URL (e.g. config.poster). */
-  fallbackPosterUrl?: string;
-  /** Total animation cycle duration in ms (animate mode only). Default: 2000. */
-  cycleMs?: number;
-  /** Style/class overrides for the outer element. */
+  /** Outer-element class (positioning is supplied by the parent overlay slot). */
   className?: string;
+  /** Style overrides forwarded to the outer element. */
   style?: React.CSSProperties;
 }
 
-const STATIC_IMG_BASE_STYLE: React.CSSProperties = {
+const CYCLE_MS = 2000;
+
+const POSTER_ROOT_STYLE: React.CSSProperties = {
   position: "absolute",
   inset: 0,
   width: "100%",
   height: "100%",
-  objectFit: "cover",
+  backgroundColor: "#000",
+  overflow: "hidden",
   pointerEvents: "none",
 };
 
-const SPRITE_FRAME_STYLE: React.CSSProperties = {
+const STATIC_IMG_STYLE: React.CSSProperties = {
   position: "absolute",
   inset: 0,
+  width: "100%",
+  height: "100%",
+  objectFit: "contain",
+  backgroundColor: "#000",
   pointerEvents: "none",
 };
+
+const SPRITE_SVG_STYLE: React.CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  width: "100%",
+  height: "100%",
+  pointerEvents: "none",
+  overflow: "hidden",
+};
+
+interface SpriteNaturalSize {
+  url: string;
+  width: number;
+  height: number;
+}
+
+function shouldCacheBust(p: LoadingPosterInfo): boolean {
+  if (!p.staticUrl) return false;
+  if (p.staticUrl.startsWith("data:") || p.staticUrl.startsWith("blob:")) return false;
+  if (p.staticSource === "thumbnail-prop") return false;
+  return true;
+}
+
+function withCacheBust(p: LoadingPosterInfo): string | undefined {
+  if (!p.staticUrl) return undefined;
+  if (!shouldCacheBust(p)) return p.staticUrl;
+  const sep = p.staticUrl.includes("?") ? "&" : "?";
+  return `${p.staticUrl}${sep}_g=${p.generation}`;
+}
 
 /**
  * Loading-state poster overlay shown while the stream is booting / connecting.
+ * Dumb renderer: dispatches on `loadingPoster.mode` and reads the spec's
+ * resolved fields. The controller owns the source-priority logic; real VTT
+ * cues are the only source of sprite crop geometry.
  *
- * Source priority (per mode):
- *   - "animate": sprite cycle → Chandler poster.jpg → Mist preview JPEG → fallbackPosterUrl
- *   - "latest":  Chandler poster.jpg → Mist preview JPEG → fallbackPosterUrl (never uses sprite)
- *
- * Returns null when no source is available.
+ * Returns null when the spec is null.
  */
 export const LoadingPoster: React.FC<LoadingPosterProps> = ({
   loadingPoster,
-  mode = "animate",
-  fallbackPosterUrl,
-  cycleMs = 2000,
   className,
   style,
 }) => {
   const [tickIdx, setTickIdx] = useState(0);
+  const [spriteSize, setSpriteSize] = useState<SpriteNaturalSize | null>(null);
+  const [spriteFailed, setSpriteFailed] = useState(false);
+  const measureUrlRef = useRef<string | null>(null);
+  const clipId = useMemo(() => `fw-loading-poster-clip-${Math.random().toString(36).slice(2)}`, []);
 
-  const cues = loadingPoster?.cues ?? [];
-  const spriteJpgUrl = loadingPoster?.spriteJpgUrl;
-  const cols = loadingPoster?.columns ?? 0;
-  const rows = loadingPoster?.rows ?? 0;
-  const canAnimateSprite =
-    mode === "animate" && spriteJpgUrl && cues.length >= 2 && cols > 0 && rows > 0;
+  const isAnimate = loadingPoster?.mode === "animate";
+  const cueCount = loadingPoster?.cues.length ?? 0;
+  const tileCount = isAnimate && loadingPoster?.geometry === "measured" ? cueCount : 0;
 
+  // Cycle ticker — runs only when there's something to cycle through.
   useEffect(() => {
-    if (!canAnimateSprite) {
+    if (!isAnimate || tileCount < 2) {
       setTickIdx(0);
       return;
     }
-    const stepMs = Math.max(20, Math.floor(cycleMs / cues.length));
-    const id = setInterval(() => {
-      setTickIdx((i) => (i + 1) % cues.length);
-    }, stepMs);
+    const stepMs = Math.max(20, Math.floor(CYCLE_MS / tileCount));
+    const id = setInterval(() => setTickIdx((i) => (i + 1) % tileCount), stepMs);
     return () => clearInterval(id);
-  }, [canAnimateSprite, cues.length, cycleMs]);
+  }, [isAnimate, tileCount]);
 
-  if (canAnimateSprite) {
-    const cue = cues[tickIdx % cues.length];
-    const spriteWidth = loadingPoster?.spriteWidth || cue.width * cols;
-    const spriteHeight = loadingPoster?.spriteHeight || cue.height * rows;
+  useEffect(() => {
+    if (!isAnimate || loadingPoster?.geometry !== "measured") return;
+    const url = loadingPoster?.spriteJpgUrl;
+    if (!url) return;
+    if (measureUrlRef.current === url && (spriteSize || spriteFailed)) return;
+    measureUrlRef.current = url;
+    setSpriteSize(null);
+    setSpriteFailed(false);
+    const img = new Image();
+    let cancelled = false;
+    img.onload = () => {
+      if (cancelled) return;
+      setSpriteSize({ url, width: img.naturalWidth, height: img.naturalHeight });
+    };
+    img.onerror = () => {
+      if (cancelled) return;
+      setSpriteFailed(true);
+    };
+    img.src = url;
+    return () => {
+      cancelled = true;
+    };
+  }, [isAnimate, loadingPoster?.geometry, loadingPoster?.spriteJpgUrl, spriteFailed, spriteSize]);
+
+  if (!loadingPoster) return null;
+
+  // Static branch — straightforward <img>.
+  if (loadingPoster.mode === "static") {
+    const src = withCacheBust(loadingPoster);
+    if (!src) return null;
     return (
-      <svg
-        className={className}
-        style={{
-          ...SPRITE_FRAME_STYLE,
-          ...style,
-        }}
-        viewBox={`${cue.x} ${cue.y} ${cue.width} ${cue.height}`}
-        preserveAspectRatio="xMidYMid slice"
-        aria-hidden="true"
-      >
-        <image href={spriteJpgUrl} x={0} y={0} width={spriteWidth} height={spriteHeight} />
-      </svg>
+      <div className={className} style={{ ...POSTER_ROOT_STYLE, ...style }} aria-hidden="true">
+        <img src={src} alt="" style={STATIC_IMG_STYLE} />
+      </div>
     );
   }
 
-  const staticUrl = loadingPoster?.posterUrl || loadingPoster?.mistPreviewUrl || fallbackPosterUrl;
-  if (!staticUrl) return null;
+  // Animate branch.
+  // Resolve current tile's pixel rect.
+  let cueRect: { x: number; y: number; width: number; height: number } | null = null;
+  let imageWidth = 0;
+  let imageHeight = 0;
+  if (loadingPoster.geometry === "measured") {
+    const cue = loadingPoster.cues[tickIdx % Math.max(loadingPoster.cues.length, 1)];
+    if (
+      cue &&
+      spriteSize &&
+      spriteSize.url === loadingPoster.spriteJpgUrl &&
+      spriteSize.width > 0 &&
+      spriteSize.height > 0
+    ) {
+      cueRect = { x: cue.x, y: cue.y, width: cue.width, height: cue.height };
+      imageWidth = spriteSize.width;
+      imageHeight = spriteSize.height;
+    }
+  }
 
-  // Cache-bust on every cue regen (loadingPoster.generation bumps each time) so the
-  // browser refetches the latest poster.jpg. Skip on data: / blob: URLs and on the
-  // user-provided fallback (no implicit refresh contract there).
-  const isRefreshable =
-    !!staticUrl &&
-    staticUrl !== fallbackPosterUrl &&
-    !staticUrl.startsWith("data:") &&
-    !staticUrl.startsWith("blob:");
-  const finalUrl =
-    isRefreshable && loadingPoster
-      ? `${staticUrl}${staticUrl.includes("?") ? "&" : "?"}_g=${loadingPoster.generation}`
-      : staticUrl;
+  // Real VTT cues or the sprite image dimensions are not available yet — show static fallback.
+  if (!cueRect || !loadingPoster.spriteJpgUrl) {
+    const src = withCacheBust(loadingPoster);
+    if (!src) return null;
+    return (
+      <div className={className} style={{ ...POSTER_ROOT_STYLE, ...style }} aria-hidden="true">
+        <img src={src} alt="" style={STATIC_IMG_STYLE} />
+      </div>
+    );
+  }
 
   return (
-    <img
-      className={className}
-      src={finalUrl}
-      alt=""
-      style={{ ...STATIC_IMG_BASE_STYLE, ...style }}
-      aria-hidden="true"
-    />
+    <div className={className} style={{ ...POSTER_ROOT_STYLE, ...style }} aria-hidden="true">
+      <svg
+        style={SPRITE_SVG_STYLE}
+        viewBox={`0 0 ${cueRect.width} ${cueRect.height}`}
+        preserveAspectRatio="xMidYMid meet"
+      >
+        <defs>
+          <clipPath id={clipId} clipPathUnits="userSpaceOnUse">
+            <rect x="0" y="0" width={cueRect.width} height={cueRect.height} />
+          </clipPath>
+        </defs>
+        <g clipPath={`url(#${clipId})`}>
+          <image
+            href={loadingPoster.spriteJpgUrl}
+            x={-cueRect.x}
+            y={-cueRect.y}
+            width={imageWidth}
+            height={imageHeight}
+            preserveAspectRatio="none"
+          />
+        </g>
+      </svg>
+    </div>
   );
 };
 

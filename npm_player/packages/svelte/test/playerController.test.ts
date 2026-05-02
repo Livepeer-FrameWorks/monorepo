@@ -18,7 +18,7 @@ import {
 // ---------------------------------------------------------------------------
 
 // Captured event handlers — fire these in tests to verify state updates
-let eventHandlers: Map<string, Function>;
+let eventHandlers: Map<string, Function[]>;
 
 const mockAttach = vi.fn().mockResolvedValue(undefined);
 const mockDestroy = vi.fn();
@@ -53,6 +53,7 @@ const mockGetVolume = vi.fn().mockReturnValue(1);
 const mockHasPlaybackStarted = vi.fn().mockReturnValue(false);
 const mockShouldShowControls = vi.fn().mockReturnValue(false);
 const mockShouldShowIdleScreen = vi.fn().mockReturnValue(true);
+const mockGetShouldShowLoadingPoster = vi.fn().mockReturnValue(false);
 const mockGetPlaybackQuality = vi.fn().mockReturnValue(null);
 const mockIsLoopEnabled = vi.fn().mockReturnValue(false);
 const mockIsSubtitlesEnabled = vi.fn().mockReturnValue(false);
@@ -65,10 +66,18 @@ const mockGetCurrentPlayerInfo = vi.fn().mockReturnValue(null);
 const mockGetCurrentSourceInfo = vi.fn().mockReturnValue(null);
 const mockShouldSuppressVideoEvents = vi.fn().mockReturnValue(false);
 
-// Event-capturing `on()` — stores handlers for programmatic firing
+// Event-capturing `on()` — stores handlers for programmatic firing.
+// Multiple subscribers per event are supported (the controller now subscribes
+// recomputeShouldShow to several events alongside the primary handlers).
 const mockOn = vi.fn((event: string, handler: Function) => {
-  eventHandlers.set(event, handler);
-  return () => eventHandlers.delete(event);
+  if (!eventHandlers.has(event)) eventHandlers.set(event, []);
+  eventHandlers.get(event)!.push(handler);
+  return () => {
+    const arr = eventHandlers.get(event);
+    if (!arr) return;
+    const idx = arr.indexOf(handler);
+    if (idx >= 0) arr.splice(idx, 1);
+  };
 });
 
 vi.mock("@livepeer-frameworks/player-core", () => ({
@@ -108,6 +117,7 @@ vi.mock("@livepeer-frameworks/player-core", () => ({
       hasPlaybackStarted: mockHasPlaybackStarted,
       shouldShowControls: mockShouldShowControls,
       shouldShowIdleScreen: mockShouldShowIdleScreen,
+      getShouldShowLoadingPoster: mockGetShouldShowLoadingPoster,
       getPlaybackQuality: mockGetPlaybackQuality,
       isLoopEnabled: mockIsLoopEnabled,
       isSubtitlesEnabled: mockIsSubtitlesEnabled,
@@ -128,8 +138,8 @@ vi.mock("@livepeer-frameworks/player-core", () => ({
 // ---------------------------------------------------------------------------
 
 function fire(event: string, data?: unknown): void {
-  const handler = eventHandlers.get(event);
-  if (handler) handler(data);
+  const handlers = eventHandlers.get(event);
+  if (handlers) handlers.forEach((h) => h(data));
 }
 
 async function createAttachedStore() {
@@ -356,6 +366,23 @@ describe("event → state updates", () => {
     expect(get(store).duration).toBe(120);
     expect(get(store).hasPlaybackStarted).toBe(true);
     expect(get(store).shouldShowIdleScreen).toBe(false);
+  });
+
+  it("timeUpdate recomputes shouldShowLoadingPoster after playback progress", async () => {
+    const store = await createAttachedStore();
+    mockGetShouldShowLoadingPoster.mockReturnValue(true);
+
+    fire("loadingPosterChange", { poster: {} });
+
+    expect(get(store).shouldShowLoadingPoster).toBe(true);
+
+    mockHasPlaybackStarted.mockReturnValue(true);
+    mockGetShouldShowLoadingPoster.mockReturnValue(false);
+
+    fire("timeUpdate", { currentTime: 42.5, duration: 120 });
+
+    expect(get(store).hasPlaybackStarted).toBe(true);
+    expect(get(store).shouldShowLoadingPoster).toBe(false);
   });
 
   it("error event updates error and isPassiveError", async () => {

@@ -1,45 +1,37 @@
 <!--
   LoadingPoster.svelte - Loading-state poster overlay.
 
-  Source priority (per mode):
-    - "animate": sprite cycle → Chandler poster.jpg → Mist preview JPEG → fallbackPosterUrl
-    - "latest":  Chandler poster.jpg → Mist preview JPEG → fallbackPosterUrl (never uses sprite)
+  Dumb renderer: dispatches on `loadingPoster.mode` and reads spec fields. The
+  controller (PlayerController.buildLoadingPosterInfo) owns source priority
+  and the synthetic-vs-measured decision.
 -->
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onDestroy } from "svelte";
   import type { LoadingPosterInfo } from "@livepeer-frameworks/player-core";
-
-  type Mode = "animate" | "latest";
 
   interface Props {
     loadingPoster: LoadingPosterInfo | null;
-    mode?: Mode;
-    fallbackPosterUrl?: string;
-    cycleMs?: number;
+    className?: string;
   }
 
-  let {
-    loadingPoster = null,
-    mode = "animate",
-    fallbackPosterUrl = undefined,
-    cycleMs = 2000,
-  }: Props = $props();
+  let { loadingPoster = null, className = "" }: Props = $props();
+
+  const CYCLE_MS = 2000;
+  const clipId = `fw-loading-poster-clip-${Math.random().toString(36).slice(2)}`;
 
   let tickIdx = $state(0);
   let intervalId: ReturnType<typeof setInterval> | undefined;
+  let measuredUrl = $state<string | null>(null);
+  let measuredW = $state(0);
+  let measuredH = $state(0);
+  let spriteFailed = $state(false);
 
-  let cues = $derived(loadingPoster?.cues ?? []);
-  let spriteJpgUrl = $derived(loadingPoster?.spriteJpgUrl);
-  let cols = $derived(loadingPoster?.columns ?? 0);
-  let rows = $derived(loadingPoster?.rows ?? 0);
-  let spriteWidth = $derived(loadingPoster?.spriteWidth ?? 0);
-  let spriteHeight = $derived(loadingPoster?.spriteHeight ?? 0);
-  let canAnimateSprite = $derived(
-    mode === "animate" && !!spriteJpgUrl && cues.length >= 2 && cols > 0 && rows > 0
-  );
+  let isAnimate = $derived(loadingPoster?.mode === "animate");
+  let cueCount = $derived(loadingPoster?.cues.length ?? 0);
+  let tileCount = $derived(isAnimate && loadingPoster?.geometry === "measured" ? cueCount : 0);
 
   $effect(() => {
-    if (!canAnimateSprite) {
+    if (!isAnimate || tileCount < 2) {
       tickIdx = 0;
       if (intervalId !== undefined) {
         clearInterval(intervalId);
@@ -47,10 +39,10 @@
       }
       return;
     }
-    const stepMs = Math.max(20, Math.floor(cycleMs / cues.length));
+    const stepMs = Math.max(20, Math.floor(CYCLE_MS / tileCount));
     if (intervalId !== undefined) clearInterval(intervalId);
     intervalId = setInterval(() => {
-      tickIdx = (tickIdx + 1) % cues.length;
+      tickIdx = (tickIdx + 1) % tileCount;
     }, stepMs);
     return () => {
       if (intervalId !== undefined) clearInterval(intervalId);
@@ -58,57 +50,126 @@
     };
   });
 
+  $effect(() => {
+    if (!isAnimate || loadingPoster?.geometry !== "measured") return;
+    const url = loadingPoster?.spriteJpgUrl;
+    if (!url) return;
+    if (measuredUrl === url && (measuredW > 0 || spriteFailed)) return;
+    measuredUrl = url;
+    measuredW = 0;
+    measuredH = 0;
+    spriteFailed = false;
+    const img = new Image();
+    let cancelled = false;
+    img.onload = () => {
+      if (cancelled) return;
+      measuredW = img.naturalWidth;
+      measuredH = img.naturalHeight;
+    };
+    img.onerror = () => {
+      if (cancelled) return;
+      spriteFailed = true;
+    };
+    img.src = url;
+    return () => {
+      cancelled = true;
+    };
+  });
+
   onDestroy(() => {
     if (intervalId !== undefined) clearInterval(intervalId);
   });
 
-  let cue = $derived(canAnimateSprite ? cues[tickIdx % cues.length] : undefined);
-  let viewBox = $derived(cue ? `${cue.x} ${cue.y} ${cue.width} ${cue.height}` : "0 0 1 1");
-  let imageWidth = $derived(cue ? spriteWidth || cue.width * cols : 1);
-  let imageHeight = $derived(cue ? spriteHeight || cue.height * rows : 1);
+  function shouldCacheBust(p: LoadingPosterInfo): boolean {
+    if (!p.staticUrl) return false;
+    if (p.staticUrl.startsWith("data:") || p.staticUrl.startsWith("blob:")) return false;
+    if (p.staticSource === "thumbnail-prop") return false;
+    return true;
+  }
+  function withCacheBust(p: LoadingPosterInfo): string | undefined {
+    if (!p.staticUrl) return undefined;
+    if (!shouldCacheBust(p)) return p.staticUrl;
+    const sep = p.staticUrl.includes("?") ? "&" : "?";
+    return `${p.staticUrl}${sep}_g=${p.generation}`;
+  }
 
-  let rawStaticUrl = $derived(
-    !canAnimateSprite
-      ? loadingPoster?.posterUrl || loadingPoster?.mistPreviewUrl || fallbackPosterUrl
-      : undefined
-  );
-  let staticUrl = $derived.by(() => {
-    if (!rawStaticUrl) return undefined;
-    const isRefreshable =
-      rawStaticUrl !== fallbackPosterUrl &&
-      !rawStaticUrl.startsWith("data:") &&
-      !rawStaticUrl.startsWith("blob:");
-    if (!isRefreshable || !loadingPoster) return rawStaticUrl;
-    const sep = rawStaticUrl.includes("?") ? "&" : "?";
-    return `${rawStaticUrl}${sep}_g=${loadingPoster.generation}`;
+  // Resolve current cue rect for animate mode.
+  let cueRect = $derived.by(() => {
+    if (!isAnimate || !loadingPoster) return null;
+    if (loadingPoster.geometry === "measured") {
+      const cue = loadingPoster.cues[tickIdx % Math.max(loadingPoster.cues.length, 1)];
+      if (!cue) return null;
+      if (measuredUrl !== loadingPoster.spriteJpgUrl || measuredW <= 0 || measuredH <= 0) {
+        return null;
+      }
+      return {
+        x: cue.x,
+        y: cue.y,
+        w: cue.width,
+        h: cue.height,
+        imgW: measuredW,
+        imgH: measuredH,
+      };
+    }
+    return null;
   });
+
+  let staticSrc = $derived(loadingPoster ? withCacheBust(loadingPoster) : undefined);
 </script>
 
-{#if canAnimateSprite}
-  <svg
-    class="fw-loading-poster-sprite"
-    {viewBox}
-    preserveAspectRatio="xMidYMid slice"
-    aria-hidden="true"
-  >
-    <image href={spriteJpgUrl} x="0" y="0" width={imageWidth} height={imageHeight} />
-  </svg>
-{:else if staticUrl}
-  <img class="fw-loading-poster-img" src={staticUrl} alt="" aria-hidden="true" />
+{#if loadingPoster}
+  <div class={`fw-loading-poster-root ${className}`} aria-hidden="true">
+    {#if cueRect && loadingPoster.spriteJpgUrl}
+      <svg
+        class="fw-loading-poster-sprite"
+        viewBox={`0 0 ${cueRect.w} ${cueRect.h}`}
+        preserveAspectRatio="xMidYMid meet"
+      >
+        <defs>
+          <clipPath id={clipId} clipPathUnits="userSpaceOnUse">
+            <rect x="0" y="0" width={cueRect.w} height={cueRect.h} />
+          </clipPath>
+        </defs>
+        <g clip-path={`url(#${clipId})`}>
+          <image
+            href={loadingPoster.spriteJpgUrl}
+            x={-cueRect.x}
+            y={-cueRect.y}
+            width={cueRect.imgW}
+            height={cueRect.imgH}
+            preserveAspectRatio="none"
+          />
+        </g>
+      </svg>
+    {:else if staticSrc}
+      <img class="fw-loading-poster-img" src={staticSrc} alt="" />
+    {/if}
+  </div>
 {/if}
 
 <style>
+  .fw-loading-poster-root {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+    pointer-events: none;
+  }
   .fw-loading-poster-sprite {
     position: absolute;
     inset: 0;
-    pointer-events: none;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
   }
   .fw-loading-poster-img {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
-    object-fit: cover;
-    pointer-events: none;
+    background: #000;
+    object-fit: contain;
   }
 </style>

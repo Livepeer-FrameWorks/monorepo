@@ -64,6 +64,7 @@ export interface PlayerControllerHostState {
   toast: { message: string; timestamp: number } | null;
   thumbnailCues: ThumbnailCue[];
   loadingPoster: LoadingPosterInfo | null;
+  shouldShowLoadingPoster: boolean;
 }
 
 const initialState: PlayerControllerHostState = {
@@ -102,6 +103,7 @@ const initialState: PlayerControllerHostState = {
   toast: null,
   thumbnailCues: [],
   loadingPoster: null,
+  shouldShowLoadingPoster: false,
 };
 
 type HostElement = ReactiveControllerHost & HTMLElement;
@@ -155,7 +157,14 @@ export class PlayerControllerHost implements ReactiveController {
     this.controller = controller;
     this.subscribeToEvents(controller);
 
-    this.update({ isLoopEnabled: controller.isLoopEnabled() });
+    const initialPoster = controller.getLoadingPoster?.();
+    this.update({
+      isLoopEnabled: controller.isLoopEnabled(),
+      shouldShowIdleScreen: controller.shouldShowIdleScreen?.() ?? this.s.shouldShowIdleScreen,
+      loadingPoster: initialPoster ?? this.s.loadingPoster,
+      shouldShowLoadingPoster:
+        controller.getShouldShowLoadingPoster?.() ?? this.s.shouldShowLoadingPoster,
+    });
 
     try {
       await controller.attach(container);
@@ -199,12 +208,15 @@ export class PlayerControllerHost implements ReactiveController {
       hasPlaybackStarted: c.hasPlaybackStarted(),
       shouldShowControls: c.shouldShowControls(),
       shouldShowIdleScreen: c.shouldShowIdleScreen(),
+      shouldShowLoadingPoster: c.getShouldShowLoadingPoster(),
       playbackQuality: c.getPlaybackQuality(),
       isLoopEnabled: c.isLoopEnabled(),
       subtitlesEnabled: c.isSubtitlesEnabled(),
       qualities: c.getQualities(),
       textTracks: c.getTextTracks(),
       streamInfo: c.getStreamInfo(),
+      thumbnailCues: c.getThumbnailCues?.() ?? this.s.thumbnailCues,
+      loadingPoster: c.getLoadingPoster?.() ?? this.s.loadingPoster,
     });
   }
 
@@ -218,6 +230,8 @@ export class PlayerControllerHost implements ReactiveController {
         this.update({
           state,
           shouldShowIdleScreen: controller.shouldShowIdleScreen(),
+          thumbnailCues: controller.getThumbnailCues?.() ?? this.s.thumbnailCues,
+          loadingPoster: controller.getLoadingPoster?.() ?? this.s.loadingPoster,
         });
         this.dispatchEvent("fw-state-change", { state });
       })
@@ -230,6 +244,8 @@ export class PlayerControllerHost implements ReactiveController {
           metadata: controller.getMetadata(),
           isEffectivelyLive: controller.isEffectivelyLive(),
           shouldShowIdleScreen: controller.shouldShowIdleScreen(),
+          thumbnailCues: controller.getThumbnailCues?.() ?? this.s.thumbnailCues,
+          loadingPoster: controller.getLoadingPoster?.() ?? this.s.loadingPoster,
         });
         this.dispatchEvent("fw-stream-state", { state: streamState });
       })
@@ -241,6 +257,9 @@ export class PlayerControllerHost implements ReactiveController {
           currentTime,
           duration,
           shouldShowControls: controller.shouldShowControls(),
+          shouldShowLoadingPoster: controller.getShouldShowLoadingPoster(),
+          thumbnailCues: controller.getThumbnailCues?.() ?? this.s.thumbnailCues,
+          loadingPoster: controller.getLoadingPoster?.() ?? this.s.loadingPoster,
         };
         if (this.s.qualities.length === 0) {
           const qualities = controller.getQualities();
@@ -283,6 +302,9 @@ export class PlayerControllerHost implements ReactiveController {
           currentSourceInfo: controller.getCurrentSourceInfo(),
           qualities: controller.getQualities(),
           textTracks: controller.getTextTracks(),
+          thumbnailCues: controller.getThumbnailCues?.() ?? this.s.thumbnailCues,
+          loadingPoster: controller.getLoadingPoster?.() ?? this.s.loadingPoster,
+          shouldShowLoadingPoster: controller.getShouldShowLoadingPoster(),
         });
         this.dispatchEvent("fw-ready", { videoElement });
         this.syncState();
@@ -400,15 +422,41 @@ export class PlayerControllerHost implements ReactiveController {
 
     u.push(
       controller.on("thumbnailCuesChange", ({ cues }) => {
-        this.update({ thumbnailCues: cues });
+        this.update({
+          thumbnailCues: cues,
+          loadingPoster: controller.getLoadingPoster?.() ?? this.s.loadingPoster,
+          shouldShowLoadingPoster: controller.getShouldShowLoadingPoster(),
+        });
       })
     );
 
     u.push(
       controller.on("loadingPosterChange", ({ poster }) => {
-        this.update({ loadingPoster: poster });
+        this.update({
+          loadingPoster: poster,
+          shouldShowLoadingPoster: controller.getShouldShowLoadingPoster(),
+        });
       })
     );
+
+    // shouldShowLoadingPoster derives from inputs that fire across multiple
+    // events. Recompute on every relevant transition; cheap & idempotent.
+    const recomputeShouldShow = () => {
+      const next = controller.getShouldShowLoadingPoster();
+      if (next !== this.s.shouldShowLoadingPoster) {
+        this.update({ shouldShowLoadingPoster: next });
+      }
+    };
+    for (const evt of [
+      "stateChange",
+      "streamStateChange",
+      "timeUpdate",
+      "error",
+      "errorCleared",
+      "ready",
+    ] as const) {
+      u.push(controller.on(evt, recomputeShouldShow));
+    }
   }
 
   // ---- Event Dispatching ----

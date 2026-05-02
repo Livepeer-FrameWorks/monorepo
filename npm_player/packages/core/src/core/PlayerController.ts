@@ -20,7 +20,7 @@ import { QualityMonitor, type PlayerProtocol } from "./QualityMonitor";
 import { MetaTrackManager } from "./MetaTrackManager";
 import { normalizeMistSourceUrls } from "./MistSourceUrls";
 import { ThumbnailSpriteManager } from "./ThumbnailSpriteManager";
-import type { ThumbnailCue } from "./ThumbnailVttParser";
+import { normalizeThumbnailCueTimeline, type ThumbnailCue } from "./ThumbnailVttParser";
 import { attemptAutoplay, type AutoplayResult } from "./AutoplayRecovery";
 import {
   calculateSeekableRange,
@@ -695,10 +695,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private thumbnailSpriteManager: ThumbnailSpriteManager | null = null;
   private _thumbnailVttUrl: string | null = null;
   private _rawThumbnailCues: ThumbnailCue[] = [];
-  private _lastVttOffset: number = 0;
+  private _lastThumbnailCueRangeKey: string = "";
   private _previewUrl: string | null = null;
   private _thumbnailAssets: ThumbnailAssetUrls | null = null;
   private _loadingPosterGeneration: number = 0;
+  private _lastLoadingPoster: LoadingPosterInfo | null = null;
   private _playbackQuality: PlaybackQuality | null = null;
   private selectedQualityId: string = "auto";
   private bootMs: number = Date.now();
@@ -843,7 +844,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this.thumbnailSpriteManager?.destroy();
     this.thumbnailSpriteManager = null;
     this._rawThumbnailCues = [];
-    this._lastVttOffset = 0;
+    this._lastThumbnailCueRangeKey = "";
+    this._thumbnailAssets = null;
+    this._previewUrl = null;
+    this._loadingPosterGeneration = 0;
+    this._lastLoadingPoster = null;
     this.detach();
     this.setState("destroyed");
     this.emit("destroyed", undefined as never);
@@ -1005,7 +1010,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
   /** Get current thumbnail sprite cues (empty if not available) */
   getThumbnailCues(): ThumbnailCue[] {
-    return this.thumbnailSpriteManager?.getCues() ?? [];
+    return this.normalizeThumbnailCuesForCurrentRange();
   }
 
   /** Get auto-detected Mist `lang:"pre"` preview image URL (null if no preview track found). */
@@ -2075,20 +2080,13 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this._seekableStart = seekableStart;
     this._liveEdge = liveEdge;
 
-    // Re-emit rebased thumbnail cues if the VTT offset changed significantly
+    // Re-emit normalized thumbnail cues if the live seek coordinate space moved.
     if (seekableChanged && this._rawThumbnailCues.length > 0) {
-      const newOffset = this.getVttTimeOffsetSec();
-      if (Math.abs(newOffset - this._lastVttOffset) > 0.5) {
-        this._lastVttOffset = newOffset;
-        const rebased =
-          newOffset === 0
-            ? this._rawThumbnailCues
-            : this._rawThumbnailCues.map((c) => ({
-                ...c,
-                startTime: c.startTime - newOffset,
-                endTime: c.endTime - newOffset,
-              }));
-        this.emit("thumbnailCuesChange", { cues: rebased });
+      const normalized = this.normalizeThumbnailCuesForCurrentRange();
+      const rangeKey = this.getThumbnailCueRangeKey(normalized);
+      if (rangeKey !== this._lastThumbnailCueRangeKey) {
+        this._lastThumbnailCueRangeKey = rangeKey;
+        this.emit("thumbnailCuesChange", { cues: normalized });
       }
     }
 
@@ -3163,6 +3161,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     let vttUrl: string | undefined;
     let baseUrl: string | undefined;
+    let supportsPush = false;
 
     if (thumbVttTrack && thumbVttTrack.idx !== undefined) {
       const mistBaseUrl = this.getSelectedMistBaseUrl();
@@ -3170,6 +3169,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         const streamName = this.getMistStreamName();
         vttUrl = `${mistBaseUrl.replace(/\/$/, "")}/${streamName}.thumbvtt?track=${thumbVttTrack.idx}`;
         baseUrl = mistBaseUrl.replace(/\/$/, "");
+        supportsPush = true;
       }
     } else if (metaAssets?.spriteVttUrl) {
       vttUrl = metaAssets.spriteVttUrl;
@@ -3194,20 +3194,13 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       vttUrl,
       baseUrl,
       isLive: this.isEffectivelyLive(),
+      supportsPush,
       onCuesChange: (cues) => {
         this._rawThumbnailCues = cues;
-        const offset = this.getVttTimeOffsetSec();
-        this._lastVttOffset = offset;
-        const rebased =
-          offset === 0
-            ? cues
-            : cues.map((c) => ({
-                ...c,
-                startTime: c.startTime - offset,
-                endTime: c.endTime - offset,
-              }));
-        this.emit("thumbnailCuesChange", { cues: rebased });
-        this.emitLoadingPosterChange();
+        const normalized = this.normalizeThumbnailCuesForCurrentRange();
+        this._lastThumbnailCueRangeKey = this.getThumbnailCueRangeKey(normalized);
+        this.emit("thumbnailCuesChange", { cues: normalized });
+        this.emitLoadingPosterChange(true);
       },
       log: (msg) => this.log(msg),
     });
@@ -3241,66 +3234,201 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private buildLoadingPosterInfo(): LoadingPosterInfo | null {
     const cues = this._rawThumbnailCues;
     const assets = this._thumbnailAssets;
-    const posterUrl = assets?.posterUrl;
-    const mistPreviewUrl = this._previewUrl ?? undefined;
+
+    // Resolve static URL priority chain (single place).
+    let staticUrl: string | undefined;
+    let staticSource: LoadingPosterInfo["staticSource"];
+    if (assets?.posterUrl) {
+      staticUrl = assets.posterUrl;
+      staticSource = "chandler-poster";
+    } else if (this._previewUrl) {
+      staticUrl = this._previewUrl;
+      staticSource = "mist-preview";
+    } else if (this.config.poster) {
+      staticUrl = this.config.poster;
+      staticSource = "thumbnail-prop";
+    }
+
     // Prefer the live sprite source from cue urls — for Mist push this is a fresh
     // blob URL replaced on every regen; for Chandler poll it's the resolved sprite.jpg.
     // Falls back to the static Chandler URL when no cues have arrived yet.
     const liveSpriteUrl = cues[0]?.url;
-    const spriteJpgUrl = liveSpriteUrl ?? assets?.spriteJpgUrl;
+    const spriteJpgUrl = liveSpriteUrl ?? assets?.spriteJpgUrl ?? undefined;
 
-    if (!posterUrl && !spriteJpgUrl && !mistPreviewUrl && cues.length === 0) {
-      return null;
-    }
-
-    let tileWidth = 0;
-    let tileHeight = 0;
-    let columns = 0;
-    let rows = 0;
-    let spriteWidth = 0;
-    let spriteHeight = 0;
     const usableCues = cues.filter(
       (c) =>
         c.x !== undefined && c.y !== undefined && c.width !== undefined && c.height !== undefined
     );
-    if (usableCues.length > 0) {
-      tileWidth = usableCues[0].width ?? 0;
-      tileHeight = usableCues[0].height ?? 0;
-      const maxX = usableCues.reduce((m, c) => Math.max(m, c.x ?? 0), 0);
-      const maxY = usableCues.reduce((m, c) => Math.max(m, c.y ?? 0), 0);
-      spriteWidth = usableCues.reduce((m, c) => Math.max(m, (c.x ?? 0) + (c.width ?? 0)), 0);
-      spriteHeight = usableCues.reduce((m, c) => Math.max(m, (c.y ?? 0) + (c.height ?? 0)), 0);
-      columns = tileWidth > 0 ? Math.floor(maxX / tileWidth) + 1 : 0;
-      rows = tileHeight > 0 ? Math.floor(maxY / tileHeight) + 1 : 0;
+
+    // Animate path: sprite URL is known.
+    if (spriteJpgUrl) {
+      if (usableCues.length > 0) {
+        const tileWidth = usableCues[0].width ?? 0;
+        const tileHeight = usableCues[0].height ?? 0;
+        const maxX = usableCues.reduce((m, c) => Math.max(m, c.x ?? 0), 0);
+        const maxY = usableCues.reduce((m, c) => Math.max(m, c.y ?? 0), 0);
+        const spriteWidth = usableCues.reduce(
+          (m, c) => Math.max(m, (c.x ?? 0) + (c.width ?? 0)),
+          0
+        );
+        const spriteHeight = usableCues.reduce(
+          (m, c) => Math.max(m, (c.y ?? 0) + (c.height ?? 0)),
+          0
+        );
+        const columns = tileWidth > 0 ? Math.floor(maxX / tileWidth) + 1 : 0;
+        const rows = tileHeight > 0 ? Math.floor(maxY / tileHeight) + 1 : 0;
+        return {
+          mode: "animate",
+          geometry: "measured",
+          spriteJpgUrl,
+          cues: usableCues.map((c) => ({
+            x: c.x ?? 0,
+            y: c.y ?? 0,
+            width: c.width ?? 0,
+            height: c.height ?? 0,
+            startTime: c.startTime,
+            endTime: c.endTime,
+          })),
+          tileWidth,
+          tileHeight,
+          columns,
+          rows,
+          spriteWidth,
+          spriteHeight,
+          staticUrl,
+          staticSource,
+          generation: this._loadingPosterGeneration,
+        };
+      }
+      // No VTT yet. Keep the unified loading-poster overlay alive, but do not
+      // invent crop geometry; the VTT xywh values are the only source of truth.
+      return {
+        mode: "animate",
+        geometry: "synthetic",
+        spriteJpgUrl,
+        cues: [],
+        tileWidth: 0,
+        tileHeight: 0,
+        columns: 0,
+        rows: 0,
+        spriteWidth: 0,
+        spriteHeight: 0,
+        staticUrl,
+        staticSource,
+        generation: this._loadingPosterGeneration,
+      };
     }
 
-    return {
-      posterUrl,
-      spriteJpgUrl,
-      mistPreviewUrl,
-      // Generation counter — cues arrive every ~5s on live regen. Wrappers can use
-      // this to cache-bust <img> sources so the static poster doesn't go stale.
-      generation: this._loadingPosterGeneration,
-      cues: usableCues.map((c) => ({
-        x: c.x ?? 0,
-        y: c.y ?? 0,
-        width: c.width ?? 0,
-        height: c.height ?? 0,
-        startTime: c.startTime,
-        endTime: c.endTime,
-      })),
-      tileWidth,
-      tileHeight,
-      columns,
-      rows,
-      spriteWidth,
-      spriteHeight,
-    };
+    // Static path: no sprite, but a poster frame is known.
+    if (staticUrl) {
+      return {
+        mode: "static",
+        cues: [],
+        columns: 0,
+        rows: 0,
+        tileWidth: 0,
+        tileHeight: 0,
+        spriteWidth: 0,
+        spriteHeight: 0,
+        staticUrl,
+        staticSource,
+        generation: this._loadingPosterGeneration,
+      };
+    }
+
+    // Nothing to show.
+    return null;
   }
 
-  private emitLoadingPosterChange(): void {
-    this._loadingPosterGeneration++;
-    this.emit("loadingPosterChange", { poster: this.buildLoadingPosterInfo() });
+  /**
+   * Returns true when a meaningful change occurred between two consecutive
+   * snapshots. Compared on output content (not the generation counter, which
+   * IS the change marker we're computing). Cue contents compared deeply.
+   */
+  private loadingPosterChanged(
+    prev: LoadingPosterInfo | null,
+    next: LoadingPosterInfo | null
+  ): boolean {
+    if (prev === next) return false;
+    if (!prev || !next) return prev !== next;
+    if (prev.mode !== next.mode) return true;
+    if (prev.geometry !== next.geometry) return true;
+    if (prev.spriteJpgUrl !== next.spriteJpgUrl) return true;
+    if (prev.staticUrl !== next.staticUrl) return true;
+    if (prev.staticSource !== next.staticSource) return true;
+    if (
+      prev.tileWidth !== next.tileWidth ||
+      prev.tileHeight !== next.tileHeight ||
+      prev.columns !== next.columns ||
+      prev.rows !== next.rows ||
+      prev.spriteWidth !== next.spriteWidth ||
+      prev.spriteHeight !== next.spriteHeight
+    )
+      return true;
+    if (prev.cues.length !== next.cues.length) return true;
+    for (let i = 0; i < prev.cues.length; i++) {
+      const a = prev.cues[i];
+      const b = next.cues[i];
+      if (
+        a.x !== b.x ||
+        a.y !== b.y ||
+        a.width !== b.width ||
+        a.height !== b.height ||
+        a.startTime !== b.startTime ||
+        a.endTime !== b.endTime
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Recompute the loading-poster snapshot. Bumps `generation` and emits only
+   * when output changed vs. the last emit. Callers that suspect a same-URL
+   * asset refresh (e.g. Mist push regen with stable blob URL) should pass
+   * `forceBump: true` so the renderer cache-busts even when fields look identical.
+   */
+  private emitLoadingPosterChange(forceBump: boolean = false): void {
+    const candidate = this.buildLoadingPosterInfo();
+    const changed = this.loadingPosterChanged(this._lastLoadingPoster, candidate);
+    if (!changed && !forceBump) return;
+    if (changed || forceBump) {
+      this._loadingPosterGeneration++;
+      // Re-stamp the candidate's generation now that we've bumped (the cheap path
+      // built it with the pre-bump value).
+      const stamped = candidate
+        ? { ...candidate, generation: this._loadingPosterGeneration }
+        : null;
+      this._lastLoadingPoster = stamped;
+      this.emit("loadingPosterChange", { poster: stamped });
+      return;
+    }
+  }
+
+  /**
+   * True when the controller is still resolving the gateway endpoint and
+   * should show a "waiting" indicator. Pulled out of wrapper duplication.
+   */
+  shouldShowWaitingForEndpoint(): boolean {
+    return !this.endpoints?.primary && this.state !== "booting";
+  }
+
+  /**
+   * True when the loading-poster overlay should be visible. Single source of
+   * truth for the overlay-vs-video gating; wrappers must NOT re-derive this
+   * other than masking with their own displayed-error fade lifecycle.
+   *
+   * Recompute on: loadingPosterChange, stateChange, streamStateChange,
+   * timeUpdate, error, errorCleared, ready — any event that flips an input below.
+   */
+  getShouldShowLoadingPoster(): boolean {
+    if (!this.getLoadingPoster()) return false;
+    if (this._hasPlaybackStarted) return false;
+    if (this._errorText) return false;
+    const status = String(this.streamState?.status ?? "").toUpperCase();
+    if (status === "OFFLINE" || status === "ERROR" || status === "INVALID") return false;
+    return true;
   }
 
   private async initializePlayer(): Promise<void> {
@@ -3324,7 +3452,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     );
 
     const { autoplay, muted, controls } = this.config;
-    const poster = this.config.poster || this._previewUrl || undefined;
+    // Use the unified loading-poster pipeline so the native <video poster>
+    // attribute and the overlay agree on what to show.
+    const poster = this.getLoadingPoster()?.staticUrl;
     this.selectedQualityId = "auto";
 
     // Clear container
@@ -4063,18 +4193,27 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     return { start, end };
   }
 
-  /**
-   * Compute the offset (in seconds) between VTT absolute timestamps and player seekbar coordinates.
-   * For absolute-time players (WebRTC, WHEP, NativePlayer) this returns ~0.
-   * For browser-local players (HLS.js, VideoJS) this returns the difference so cues can be rebased.
-   */
-  private getVttTimeOffsetSec(): number {
-    const mistRange = this.getMistTrackSeekRange();
-    if (!mistRange || mistRange.end <= 0) return 0;
-    if (!Number.isFinite(this._liveEdge) || this._liveEdge <= 0) return 0;
-    // If seekbar coordinates are already close to absolute, no rebase needed
-    if (Math.abs(this._liveEdge - mistRange.end) < 5000) return 0;
-    return (mistRange.end - this._liveEdge) / 1000;
+  private normalizeThumbnailCuesForCurrentRange(): ThumbnailCue[] {
+    return normalizeThumbnailCueTimeline(this._rawThumbnailCues, {
+      isLive: this.isEffectivelyLive(),
+      seekableStartMs: this._seekableStart,
+      liveEdgeMs: this._liveEdge,
+      mistRangeMs: this.getMistTrackSeekRange(),
+    });
+  }
+
+  private getThumbnailCueRangeKey(cues: ThumbnailCue[]): string {
+    if (cues.length === 0) return "empty";
+    const first = cues[0];
+    const last = cues[cues.length - 1];
+    const round = (value: number) => Math.round(value * 2) / 2;
+    return [
+      cues.length,
+      round(first.startTime),
+      round(first.endTime),
+      round(last.startTime),
+      round(last.endTime),
+    ].join(":");
   }
 }
 

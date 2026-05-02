@@ -500,23 +500,10 @@ export class FwPlayer extends LitElement {
     return !s.endpoints?.primary && s.state !== "booting";
   }
 
-  private get _hasLoadingPosterSource() {
-    const lp = this.pc.s.loadingPoster;
-    return !!(lp && (lp.posterUrl || lp.spriteJpgUrl || lp.mistPreviewUrl || lp.cues.length > 0));
-  }
-
   private get _showLoadingPosterOverlay() {
-    const s = this.pc.s;
-    const status = String(s.streamState?.status ?? "").toUpperCase();
-    const idleOnlyStatus = status === "OFFLINE" || status === "ERROR" || status === "INVALID";
-    return (
-      this._hasLoadingPosterSource &&
-      !this._showWaitingForEndpoint &&
-      !s.hasPlaybackStarted &&
-      !s.error &&
-      !this._displayedError &&
-      !idleOnlyStatus
-    );
+    // Controller owns the visibility decision (PlayerController.getShouldShowLoadingPoster).
+    // Wrapper masks with its local displayedError fade lifecycle.
+    return this.pc.s.shouldShowLoadingPoster && !this._displayedError;
   }
 
   private get _waitingMessage() {
@@ -686,7 +673,7 @@ export class FwPlayer extends LitElement {
           ></fw-skip-indicator>
 
           <!-- Waiting for endpoint -->
-          ${this._showWaitingForEndpoint
+          ${this._showWaitingForEndpoint && !this._showLoadingPosterOverlay
             ? html`
                 <fw-idle-screen
                   status="OFFLINE"

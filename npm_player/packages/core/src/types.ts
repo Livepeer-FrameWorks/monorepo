@@ -195,34 +195,39 @@ export interface ThumbnailAssetUrls {
   posterUrl: string;
   /** VTT cues pointing into the sprite via #xywh fragments. */
   spriteVttUrl: string;
-  /** Sprite sheet JPEG (10x10 grid). */
+  /** Sprite sheet JPEG; tile coordinates live in sprite.vtt. */
   spriteJpgUrl: string;
   /** streamId for live, artifactHash for DVR/clip. */
   assetKey: string;
 }
 
 /**
- * Loading-state poster snapshot consumed by framework wrappers to render the
- * boot/connecting overlay. Animate mode cycles through sprite tiles via CSS
- * background-position; latest mode renders the full-resolution posterUrl.
+ * Loading-state poster snapshot — the controller's verdict on what the
+ * "video is about to start" overlay should render. Single source of truth;
+ * wrappers and the renderer consume this without re-deriving.
  *
- * Bumps `generation` on every server-side regen (~5s for live), so consumers
- * can cache-bust static <img> sources to avoid stale posters.
+ * mode:
+ *  - "animate": cycle sprite tiles. `spriteJpgUrl` is set. Cues come from one of:
+ *      - geometry: "measured" — real VTT cues parsed; x/y/w/h are pixel coords.
+ *      - geometry: "synthetic" — VTT not yet fetched. `cues` is empty and
+ *        renderers must use `staticUrl`; VTT xywh is the only sprite geometry source.
+ *  - "static": render `staticUrl` as a still image (object-fit: contain).
+ *
+ * Bumps `generation` only when output fields actually change (URL, cue contents,
+ * geometry transition, or asset-refresh signal from ThumbnailSpriteManager).
+ * Renderers use `_g=N` to cache-bust same-URL refresh; skip for data:/blob:/thumbnail-prop.
  */
 export interface LoadingPosterInfo {
-  /**
-   * Live sprite source — for Mist push, this is a fresh blob URL replaced on
-   * every regen; for Chandler poll it's the resolved sprite.jpg URL. Falls back
-   * to the static Chandler sprite URL when no cues have arrived yet.
-   */
+  /** Renderer dispatch. */
+  mode: "animate" | "static";
+
+  /** Sprite-grid source. Set when mode === "animate". */
   spriteJpgUrl?: string;
-  /** Chandler poster.jpg if available — full-resolution single frame. */
-  posterUrl?: string;
-  /** Mist lang:"pre" preview JPEG fallback. */
-  mistPreviewUrl?: string;
-  /** Bumped on every cue update — wrappers should use this to cache-bust img.src. */
-  generation: number;
-  /** Parsed sprite cues (xywh into spriteJpgUrl). Empty if no sprite source yet. */
+
+  /** Cue geometry provenance. Set only when mode === "animate". */
+  geometry?: "measured" | "synthetic";
+
+  /** Real cues (xywh in pixel coords). Empty when geometry === "synthetic". */
   cues: Array<{
     x: number;
     y: number;
@@ -231,14 +236,30 @@ export interface LoadingPosterInfo {
     startTime: number;
     endTime: number;
   }>;
-  /** Tile geometry derived from the first cue (all tiles are uniform). */
-  tileWidth: number;
-  tileHeight: number;
+
+  /** Grid cardinality from real VTT cues; zero while geometry === "synthetic". */
   columns: number;
   rows: number;
-  /** Pixel bounds of the sprite area covered by cues. */
+
+  /** Pixel geometry. Populated only when geometry === "measured" (zero in synthetic). */
+  tileWidth: number;
+  tileHeight: number;
   spriteWidth: number;
   spriteHeight: number;
+
+  /**
+   * Static frame URL. Resolved in priority order: Chandler poster.jpg →
+   * Mist lang:"pre" preview → user-supplied thumbnailUrl prop. Always set in
+   * mode "static"; also present in mode "animate" as the failure fallback
+   * (used while the sprite is loading or if it errors).
+   */
+  staticUrl?: string;
+
+  /** Provenance for `staticUrl`. Used by renderer to skip cache-bust on user URLs. */
+  staticSource?: "chandler-poster" | "mist-preview" | "thumbnail-prop";
+
+  /** Asset-version counter. Renderer cache-busts via `?_g=N`. */
+  generation: number;
 }
 
 export interface ContentMetadata {

@@ -5,7 +5,7 @@ import type { ThumbnailAssetUrls } from "../types";
  *
  * Chandler exposes three files per assetKey under /assets/<assetKey>/:
  *   - poster.jpg   (full-resolution single-frame JPEG)
- *   - sprite.jpg   (10x10 grid sprite sheet)
+ *   - sprite.jpg   (sprite sheet; tile coordinates live in sprite.vtt)
  *   - sprite.vtt   (VTT cues with #xywh fragments)
  *
  * For live, assetKey is the streamId. For DVR/clip, assetKey is the artifactHash.

@@ -45,6 +45,7 @@ const mockGetVolume = vi.fn().mockReturnValue(1);
 const mockHasPlaybackStarted = vi.fn().mockReturnValue(false);
 const mockShouldShowControls = vi.fn().mockReturnValue(false);
 const mockShouldShowIdleScreen = vi.fn().mockReturnValue(true);
+const mockGetShouldShowLoadingPoster = vi.fn().mockReturnValue(false);
 const mockGetPlaybackQuality = vi.fn().mockReturnValue(null);
 const mockIsLoopEnabled = vi.fn().mockReturnValue(false);
 const mockIsSubtitlesEnabled = vi.fn().mockReturnValue(false);
@@ -105,6 +106,7 @@ vi.mock("@livepeer-frameworks/player-core", () => ({
       hasPlaybackStarted: mockHasPlaybackStarted,
       shouldShowControls: mockShouldShowControls,
       shouldShowIdleScreen: mockShouldShowIdleScreen,
+      getShouldShowLoadingPoster: mockGetShouldShowLoadingPoster,
       getPlaybackQuality: mockGetPlaybackQuality,
       isLoopEnabled: mockIsLoopEnabled,
       isSubtitlesEnabled: mockIsSubtitlesEnabled,
@@ -337,6 +339,27 @@ describe("event -> state updates", () => {
     expect(result.current.state.duration).toBe(120);
     expect(result.current.state.hasPlaybackStarted).toBe(true);
     expect(result.current.state.shouldShowIdleScreen).toBe(false);
+  });
+
+  it("timeUpdate recomputes shouldShowLoadingPoster after playback progress", () => {
+    const { result } = renderWithController();
+    mockGetShouldShowLoadingPoster.mockReturnValue(true);
+
+    act(() => {
+      fire("loadingPosterChange", { poster: {} });
+    });
+
+    expect(result.current.state.shouldShowLoadingPoster).toBe(true);
+
+    mockHasPlaybackStarted.mockReturnValue(true);
+    mockGetShouldShowLoadingPoster.mockReturnValue(false);
+
+    act(() => {
+      fire("timeUpdate", { currentTime: 30.5, duration: 120 });
+    });
+
+    expect(result.current.state.hasPlaybackStarted).toBe(true);
+    expect(result.current.state.shouldShowLoadingPoster).toBe(false);
   });
 
   it("error updates error and isPassiveError", () => {

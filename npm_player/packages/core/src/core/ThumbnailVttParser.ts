@@ -8,6 +8,14 @@ export interface ThumbnailCue {
   height?: number;
 }
 
+export interface ThumbnailCueTimelineOptions {
+  isLive: boolean;
+  seekableStartMs: number;
+  liveEdgeMs: number;
+  mistRangeMs?: { start: number; end: number } | null;
+  maxLiveEdgeGapSec?: number;
+}
+
 function parseTimestamp(ts: string): number {
   const parts = ts.trim().split(":");
   if (parts.length === 3) {
@@ -56,7 +64,7 @@ export function parseThumbnailVtt(vttText: string): ThumbnailCue[] {
     if (timeLine === -1) continue;
 
     const timeMatch = lines[timeLine].match(
-      /(\d{1,2}:?\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{1,2}:?\d{2}:\d{2}\.\d{3})/
+      /(\d+:\d{2}:\d{2}\.\d{3}|\d{1,2}:\d{2}\.\d{3})\s*-->\s*(\d+:\d{2}:\d{2}\.\d{3}|\d{1,2}:\d{2}\.\d{3})/
     );
     if (!timeMatch) continue;
 
@@ -83,6 +91,89 @@ export function parseThumbnailVtt(vttText: string): ThumbnailCue[] {
   }
 
   return cues;
+}
+
+function getCueRange(cues: ThumbnailCue[]): { start: number; end: number } | null {
+  if (cues.length === 0) return null;
+  let start = Infinity;
+  let end = -Infinity;
+  for (const cue of cues) {
+    if (Number.isFinite(cue.startTime)) start = Math.min(start, cue.startTime);
+    if (Number.isFinite(cue.endTime)) end = Math.max(end, cue.endTime);
+  }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+  return { start, end };
+}
+
+/**
+ * Rebase live thumbnail cue times into the active player's seek coordinate space.
+ *
+ * Mist/Chandler sprite VTT can be expressed as absolute Mist track time, browser
+ * media time, or live-window-relative time depending on source/protocol. The seek
+ * bar and seek() calls must use the same coordinates, so normalize cues before UI
+ * lookup.
+ */
+export function normalizeThumbnailCueTimeline(
+  cues: ThumbnailCue[],
+  options: ThumbnailCueTimelineOptions
+): ThumbnailCue[] {
+  if (!options.isLive || cues.length === 0) return cues;
+
+  const cueRange = getCueRange(cues);
+  const playerStart = options.seekableStartMs / 1000;
+  const playerEnd = options.liveEdgeMs / 1000;
+  if (
+    !cueRange ||
+    !Number.isFinite(playerStart) ||
+    !Number.isFinite(playerEnd) ||
+    playerEnd <= playerStart
+  ) {
+    return cues;
+  }
+
+  const playerWindow = playerEnd - playerStart;
+  const cueWindow = cueRange.end - cueRange.start;
+  const tolerance = Math.max(1, Math.min(10, playerWindow * 0.1));
+  const maxGap = options.maxLiveEdgeGapSec ?? Math.max(30, Math.min(120, playerWindow * 0.25));
+  const overlapsPlayerWindow =
+    cueRange.end >= playerStart - tolerance && cueRange.start <= playerEnd + tolerance;
+  const trailsLiveEdge = cueRange.end <= playerEnd && playerEnd - cueRange.end <= maxGap;
+  let offset = 0;
+
+  if (Math.abs(cueRange.end - playerEnd) <= tolerance || (overlapsPlayerWindow && trailsLiveEdge)) {
+    offset = 0;
+  } else {
+    const mistRange = options.mistRangeMs;
+    const mistEnd = mistRange ? mistRange.end / 1000 : NaN;
+    if (Number.isFinite(mistEnd) && Math.abs(cueRange.end - mistEnd) <= tolerance) {
+      offset = playerEnd - mistEnd;
+    } else {
+      offset = playerEnd - cueRange.end;
+    }
+  }
+
+  const normalized =
+    offset === 0
+      ? cues.map((cue) => ({ ...cue }))
+      : cues.map((cue) => ({
+          ...cue,
+          startTime: cue.startTime + offset,
+          endTime: cue.endTime + offset,
+        }));
+
+  const normalizedRange = getCueRange(normalized);
+  if (!normalizedRange) return normalized;
+
+  const liveEdgeGap = playerEnd - normalizedRange.end;
+  if (liveEdgeGap > 0 && liveEdgeGap <= maxGap) {
+    let lastIndex = 0;
+    for (let i = 1; i < normalized.length; i += 1) {
+      if (normalized[i].endTime > normalized[lastIndex].endTime) lastIndex = i;
+    }
+    normalized[lastIndex] = { ...normalized[lastIndex], endTime: playerEnd };
+  }
+
+  return normalized;
 }
 
 export function findCueAtTime(cues: ThumbnailCue[], time: number): ThumbnailCue | null {

@@ -236,6 +236,7 @@
     controllerHasAudio: true,
     thumbnailCues: [] as ThumbnailCue[],
     loadingPoster: null as LoadingPosterInfo | null,
+    shouldShowLoadingPoster: false,
   });
 
   // Track if we've already attached to prevent double-attach race
@@ -405,27 +406,9 @@
       ? streamStateMessage
       : undefined
   );
-  let hasLoadingPosterSource = $derived(
-    !!(
-      storeState.loadingPoster &&
-      (storeState.loadingPoster.posterUrl ||
-        storeState.loadingPoster.spriteJpgUrl ||
-        storeState.loadingPoster.mistPreviewUrl ||
-        storeState.loadingPoster.cues.length > 0)
-    )
-  );
-  let streamStatus = $derived(String(storeState.streamState?.status ?? "").toUpperCase());
-  let isIdleOnlyStatus = $derived(
-    streamStatus === "OFFLINE" || streamStatus === "ERROR" || streamStatus === "INVALID"
-  );
-  let showLoadingPosterOverlay = $derived(
-    hasLoadingPosterSource &&
-      !showWaitingForEndpoint &&
-      !storeState.hasPlaybackStarted &&
-      !storeState.error &&
-      !displayedError &&
-      !isIdleOnlyStatus
-  );
+  // Controller owns the visibility decision (PlayerController.getShouldShowLoadingPoster).
+  // Wrapper masks with its local displayedError fade lifecycle.
+  let showLoadingPosterOverlay = $derived(storeState.shouldShowLoadingPoster && !displayedError);
 </script>
 
 <ContextMenu>
@@ -517,7 +500,7 @@
           <SkipIndicator direction={skipDirection} seconds={10} onhide={handleSkipIndicatorHide} />
 
           <!-- Waiting for endpoint overlay -->
-          {#if showWaitingForEndpoint}
+          {#if showWaitingForEndpoint && !showLoadingPosterOverlay}
             <IdleScreen status="OFFLINE" message={waitingMessage} />
           {/if}
 

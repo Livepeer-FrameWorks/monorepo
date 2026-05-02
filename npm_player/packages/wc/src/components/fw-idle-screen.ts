@@ -4,14 +4,8 @@ import { sharedStyles } from "../styles/shared-styles.js";
 import { utilityStyles } from "../styles/utility-styles.js";
 import { LOGOMARK_DATA_URL } from "../constants/media-assets.js";
 import { playHitmarkerSound } from "./shared/hitmarker-audio.js";
-import {
-  createTranslator,
-  type TranslateFn,
-  type LoadingPosterInfo,
-} from "@livepeer-frameworks/player-core";
+import { createTranslator, type TranslateFn } from "@livepeer-frameworks/player-core";
 import "./fw-dvd-logo.js";
-import "./fw-loading-poster.js";
-import type { LoadingPosterMode } from "./fw-loading-poster.js";
 
 interface ParticleState {
   left: number;
@@ -67,9 +61,6 @@ export class FwIdleScreen extends LitElement {
   @property({ type: Boolean, attribute: "retry-enabled" }) retryEnabled = false;
   @property({ attribute: false }) onRetry?: () => void;
   @property({ attribute: false }) translator?: TranslateFn;
-  @property({ attribute: false }) loadingPoster: LoadingPosterInfo | null = null;
-  @property({ type: String, attribute: "loading-poster-mode" })
-  loadingPosterMode: LoadingPosterMode = "animate";
 
   private _defaultTranslator: TranslateFn = createTranslator({ locale: "en" });
 
@@ -117,11 +108,6 @@ export class FwIdleScreen extends LitElement {
         user-select: none;
         -webkit-user-select: none;
       }
-      .idle-container.has-poster {
-        background: hsl(var(--tn-bg-dark, 235 21% 11%));
-        animation: none;
-      }
-
       .particles,
       .bubbles {
         position: absolute;
@@ -667,26 +653,15 @@ export class FwIdleScreen extends LitElement {
   protected render() {
     const progress = Math.min(100, Math.max(0, this.percentage ?? 0));
     const logoSrc = this.logoSrc || LOGOMARK_DATA_URL;
-    const lp = this.loadingPoster;
-    const hasPosterSource = !!(
-      lp &&
-      (lp.posterUrl || lp.spriteJpgUrl || lp.mistPreviewUrl || lp.cues.length > 0)
-    );
 
     return html`
       <div
-        class="idle-container fw-player-root ${hasPosterSource ? "has-poster" : ""}"
+        class="idle-container fw-player-root"
         role="status"
         aria-label="Stream status"
         @mousemove=${this._handleMouseMove}
         @mouseleave=${this._handleMouseLeave}
       >
-        ${hasPosterSource
-          ? html`<fw-loading-poster
-              .loadingPoster=${this.loadingPoster}
-              .mode=${this.loadingPosterMode}
-            ></fw-loading-poster>`
-          : nothing}
         ${this._hitmarkers.map(
           (hitmarker) => html`
             <div class="hitmarker" style="left: ${hitmarker.x}px; top: ${hitmarker.y}px;">
@@ -698,7 +673,7 @@ export class FwIdleScreen extends LitElement {
           `
         )}
 
-        <div class="particles" ?hidden=${hasPosterSource}>
+        <div class="particles">
           ${this._particles.map(
             (particle) => html`
               <div
@@ -716,7 +691,7 @@ export class FwIdleScreen extends LitElement {
           )}
         </div>
 
-        <div class="bubbles" ?hidden=${hasPosterSource}>
+        <div class="bubbles">
           ${this._bubbles.map(
             (bubble) => html`
               <div

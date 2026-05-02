@@ -221,23 +221,9 @@ const PlayerInner: React.FC<PlayerProps> = ({
     streamStateError !== streamStateMessage
       ? streamStateMessage
       : undefined;
-  const hasLoadingPosterSource = !!(
-    state.loadingPoster &&
-    (state.loadingPoster.posterUrl ||
-      state.loadingPoster.spriteJpgUrl ||
-      state.loadingPoster.mistPreviewUrl ||
-      state.loadingPoster.cues.length > 0)
-  );
-  const streamStatus = String(state.streamState?.status ?? "").toUpperCase();
-  const isIdleOnlyStatus =
-    streamStatus === "OFFLINE" || streamStatus === "ERROR" || streamStatus === "INVALID";
-  const showLoadingPosterOverlay =
-    hasLoadingPosterSource &&
-    !showWaitingForEndpoint &&
-    !state.hasPlaybackStarted &&
-    !state.error &&
-    !displayedError &&
-    !isIdleOnlyStatus;
+  // Controller owns the visibility decision (PlayerController.getShouldShowLoadingPoster).
+  // Wrapper masks with its local displayedError fade lifecycle.
+  const showLoadingPosterOverlay = state.shouldShowLoadingPoster && !displayedError;
 
   // ============================================================================
   // Render
@@ -333,7 +319,9 @@ const PlayerInner: React.FC<PlayerProps> = ({
                 />
 
                 {/* Waiting for endpoint overlay */}
-                {showWaitingForEndpoint && <IdleScreen status="OFFLINE" message={waitingMessage} />}
+                {showWaitingForEndpoint && !showLoadingPosterOverlay && (
+                  <IdleScreen status="OFFLINE" message={waitingMessage} />
+                )}
 
                 {/* Idle screen */}
                 {!showWaitingForEndpoint &&
