@@ -427,7 +427,7 @@ func (a *Agent) applyStartupMesh() {
 	case lk != nil && lk.Source == "dynamic":
 		// Cache of a prior Quartermaster sync — applied at startup, before
 		// the live SyncMesh loop takes over with layer="managed".
-		a.applyPersistedMesh(lk, "last_known")
+		a.applyPersistedMesh(mergeLastKnownWithSeed(lk, sp), "last_known")
 	case lk != nil && sp != nil && lk.Source == "seed" && lk.Version == sp.Version:
 		a.applyPersistedMesh(lk, "seed")
 	case sp != nil && a.privateKeyFile != "" && a.wireguardIP != "":
@@ -710,32 +710,25 @@ func (a *Agent) sync() {
 	}
 
 	const layer = "managed"
-	peers := make([]wireguard.Peer, 0, len(resp.Peers))
-	dnsRecords := make(map[string][]string)
-
-	for _, p := range resp.Peers {
-		label := p.NodeName
-		if label == "" {
-			label = p.PublicKey
-		}
-		peer, err := parsePeerStrings(label, p.PublicKey, p.Endpoint, p.AllowedIps, int(p.KeepAlive))
-		if err != nil {
-			a.logger.WithError(err).WithField("peer", label).Error("Quartermaster returned a malformed peer; failing sync")
-			a.recordApplyFailure(layer, "invalid_peer")
-			a.syncFailed()
-			return
-		}
-		peers = append(peers, peer)
-
-		if p.NodeName != "" && len(peer.AllowedIPs) > 0 {
-			dnsRecords[p.NodeName] = []string{peer.AllowedIPs[0].IP.String()}
-		}
+	seed, seedErr := loadStaticPeers(a.staticPeersFile)
+	if seedErr != nil {
+		a.logger.WithError(seedErr).Warn("Managed apply: failed to load seed peers; applying dynamic mesh only")
 	}
+	merged := mergeLastKnownWithSeed(&lastKnownMesh{
+		Source:  "dynamic",
+		Version: resp.MeshRevision,
+		Peers:   dynamicPeersToLastKnown(resp.Peers),
+		DNS:     dynamicDNSRecords(resp),
+	}, seed)
 
-	// Add Service Endpoints (Aliases)
-	for sName, sEndpoints := range resp.ServiceEndpoints {
-		dnsRecords[sName] = append(dnsRecords[sName], sEndpoints.Ips...)
+	peers, err := lastKnownPeersToWireGuard(merged.Peers)
+	if err != nil {
+		a.logger.WithError(err).Error("Managed apply: malformed effective peer set")
+		a.recordApplyFailure(layer, "invalid_peer")
+		a.syncFailed()
+		return
 	}
+	dnsRecords := merged.DNS
 
 	cfg, cfgErr := selfConfig(privKey, a.wireguardIP, a.listenPort)
 	if cfgErr != nil {
@@ -791,14 +784,9 @@ func (a *Agent) sync() {
 
 	a.syncSucceeded()
 	a.setLayerMetric("managed")
-	if err := writeLastKnown(a.lastKnownPath, &lastKnownMesh{
-		Source:      "dynamic",
-		Version:     resp.MeshRevision,
-		WireguardIP: a.wireguardIP,
-		ListenPort:  a.listenPort,
-		Peers:       dynamicPeersToLastKnown(resp.Peers),
-		DNS:         dnsRecords,
-	}); err != nil {
+	merged.WireguardIP = a.wireguardIP
+	merged.ListenPort = a.listenPort
+	if err := writeLastKnown(a.lastKnownPath, merged); err != nil {
 		a.logger.WithError(err).Warn("Failed to persist last-known mesh snapshot")
 	}
 	if err := a.syncInternalCertificates(); err != nil {
@@ -866,6 +854,27 @@ func dynamicPeersToLastKnown(peers []*pb.InfrastructurePeer) []lastKnownPeer {
 		}
 	}
 	return out
+}
+
+func dynamicDNSRecords(resp *pb.InfrastructureSyncResponse) map[string][]string {
+	records := make(map[string][]string)
+	if resp == nil {
+		return records
+	}
+	for _, p := range resp.Peers {
+		if p.GetNodeName() == "" || len(p.GetAllowedIps()) == 0 {
+			continue
+		}
+		_, cidr, err := net.ParseCIDR(p.GetAllowedIps()[0])
+		if err != nil {
+			continue
+		}
+		records[p.GetNodeName()] = []string{cidr.IP.String()}
+	}
+	for name, endpoints := range resp.ServiceEndpoints {
+		records[name] = append([]string(nil), endpoints.GetIps()...)
+	}
+	return records
 }
 
 func (a *Agent) registerNode(ctx context.Context, publicKey string) error {

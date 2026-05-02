@@ -1640,6 +1640,105 @@ func TestApplyStartupMeshWithEmptySeedStillConfiguresSelfAddress(t *testing.T) {
 	}
 }
 
+func TestApplyStartupMeshFallsBackToSeedWhenDynamicCacheHasNoPeers(t *testing.T) {
+	tmp := t.TempDir()
+	keyPath := filepath.Join(tmp, "wg.key")
+	privB64, _ := genPrivateKeyB64(t)
+	if err := os.WriteFile(keyPath, []byte(privB64+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	peerKey := mustGenPubB64(t)
+	staticPeersPath := filepath.Join(tmp, "static-peers.json")
+	if err := os.WriteFile(staticPeersPath, []byte(`{
+		"version": "seed-v1",
+		"peers": [{
+			"name": "peer-1",
+			"public_key": "`+peerKey+`",
+			"allowed_ips": ["10.88.0.3/32"],
+			"endpoint": "203.0.113.3:51820",
+			"keep_alive": 25
+		}]
+	}`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	lastKnownPath := filepath.Join(tmp, "last_known.json")
+	if err := writeLastKnown(lastKnownPath, &lastKnownMesh{
+		Source:      "dynamic",
+		Version:     "empty-managed",
+		WireguardIP: "10.88.0.2",
+		ListenPort:  51820,
+		Peers:       []lastKnownPeer{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	wg := &fakeWireguard{}
+	agent := &Agent{
+		logger:          logging.NewLogger(),
+		wgManager:       wg,
+		dnsServer:       &fakeDNS{},
+		wireguardIP:     "10.88.0.2",
+		listenPort:      51820,
+		privateKeyFile:  keyPath,
+		staticPeersFile: staticPeersPath,
+		lastKnownPath:   lastKnownPath,
+	}
+
+	agent.applyStartupMesh()
+
+	if len(wg.applied) != 1 {
+		t.Fatalf("expected exactly one wgManager.Apply call, got %d", len(wg.applied))
+	}
+	if len(wg.applied[0].Peers) != 1 || wg.applied[0].Peers[0].PublicKey.String() != peerKey {
+		t.Fatalf("expected seed peer to be applied instead of empty dynamic cache, got %+v", wg.applied[0].Peers)
+	}
+}
+
+func TestAgentSyncMergesSeedPeersWhenManagedPeersAreEmpty(t *testing.T) {
+	tmp := t.TempDir()
+	peerKey := mustGenPubB64(t)
+	staticPeersPath := filepath.Join(tmp, "static-peers.json")
+	if err := os.WriteFile(staticPeersPath, []byte(`{
+		"version": "seed-v1",
+		"peers": [{
+			"name": "peer-1",
+			"public_key": "`+peerKey+`",
+			"allowed_ips": ["10.0.0.2/32"],
+			"endpoint": "203.0.113.3:51820",
+			"keep_alive": 25
+		}]
+	}`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeMeshClient{
+		syncResponses: []meshSyncResult{
+			{resp: &pb.InfrastructureSyncResponse{
+				WireguardIp:   "10.0.0.10",
+				WireguardPort: 51820,
+			}},
+		},
+	}
+	wg := &fakeWireguard{}
+	dns := &fakeDNS{}
+	agent := newTestAgent(t, client, wg, dns)
+	agent.staticPeersFile = staticPeersPath
+
+	agent.sync()
+
+	if len(wg.applied) != 1 {
+		t.Fatalf("expected managed apply to preserve seed peers, got %d applies", len(wg.applied))
+	}
+	if len(wg.applied[0].Peers) != 1 || wg.applied[0].Peers[0].PublicKey.String() != peerKey {
+		t.Fatalf("expected seed peer to survive empty managed response, got %+v", wg.applied[0].Peers)
+	}
+	if len(dns.updates) != 1 {
+		t.Fatalf("expected DNS update after merged apply, got %d updates", len(dns.updates))
+	}
+	if agent.consecutiveFails.Load() != 0 {
+		t.Fatalf("expected sync failure count to remain 0, got %d", agent.consecutiveFails.Load())
+	}
+}
+
 func TestSyncIngressCertificatesWritesAndTouchesTrigger(t *testing.T) {
 	dir := t.TempDir()
 	tlsRoot := filepath.Join(dir, "ingress", "tls")
