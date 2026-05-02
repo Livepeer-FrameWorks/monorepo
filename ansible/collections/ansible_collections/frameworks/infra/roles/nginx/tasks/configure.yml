@@ -45,16 +45,24 @@
         | regex_replace('^nginx/', '')
       }}
 
-- name: Resolve Nginx HTTP/2 directive mode
+- name: Use explicit Nginx HTTP/2 directive mode
   ansible.builtin.set_fact:
-    nginx_effective_http2_directive_mode: >-
-      {% if nginx_http2_directive_mode != 'auto' -%}
-      {{ nginx_http2_directive_mode }}
-      {%- elif nginx_detected_version is version(nginx_http2_standalone_min_version, '>=') -%}
-      standalone
-      {%- else -%}
-      listen_parameter
-      {%- endif %}
+    nginx_effective_http2_directive_mode: "{{ nginx_http2_directive_mode }}"
+  when: nginx_http2_directive_mode != 'auto'
+
+- name: Use standalone Nginx HTTP/2 directive mode for newer Nginx
+  ansible.builtin.set_fact:
+    nginx_effective_http2_directive_mode: standalone
+  when:
+    - nginx_http2_directive_mode == 'auto'
+    - nginx_detected_version is version(nginx_http2_standalone_min_version, '>=')
+
+- name: Use listen parameter Nginx HTTP/2 directive mode for older Nginx
+  ansible.builtin.set_fact:
+    nginx_effective_http2_directive_mode: listen_parameter
+  when:
+    - nginx_http2_directive_mode == 'auto'
+    - nginx_detected_version is version(nginx_http2_standalone_min_version, '<')
 
 - name: Ensure Nginx config directory
   ansible.builtin.file:

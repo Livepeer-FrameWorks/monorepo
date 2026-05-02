@@ -62,8 +62,8 @@
     src: vmauth.yml.j2
     dest: "{{ vmauth_config_path }}"
     owner: root
-    group: root
-    mode: "0600"
+    group: "{{ prometheus_stack_group }}"
+    mode: "0640"
   notify: vmauth restart
 
 - name: Render vmauth systemd unit

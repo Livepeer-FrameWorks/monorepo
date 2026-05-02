@@ -24,6 +24,7 @@
   when: "'victoriametrics' in prometheus_stack_components"
 
 - name: Validate vmagent listener
+  when: "'vmagent' in prometheus_stack_components"
   block:
     - name: Wait for vmagent listener
       ansible.builtin.wait_for:
@@ -52,11 +53,34 @@
 
           journalctl:
           {{ vmagent_journal_after_failed_validate.stdout | default('(no output)') }}
-  when: "'vmagent' in prometheus_stack_components"
 
 - name: Validate vmauth listener
-  ansible.builtin.wait_for:
-    host: 127.0.0.1
-    port: "{{ vmauth_port }}"
-    timeout: 30
   when: "'vmauth' in prometheus_stack_components"
+  block:
+    - name: Wait for vmauth listener
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ vmauth_port }}"
+        timeout: 30
+  rescue:
+    - name: Capture vmauth systemctl status
+      ansible.builtin.command: systemctl status vmauth --no-pager -l
+      register: vmauth_status_after_failed_validate
+      changed_when: false
+      failed_when: false
+
+    - name: Capture vmauth journal
+      ansible.builtin.command: journalctl -u vmauth -n 120 --no-pager
+      register: vmauth_journal_after_failed_validate
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with vmauth diagnostics
+      ansible.builtin.fail:
+        msg: |-
+          vmauth did not listen on 127.0.0.1:{{ vmauth_port }}
+          systemctl status:
+          {{ vmauth_status_after_failed_validate.stdout | default('(no output)') }}
+
+          journalctl:
+          {{ vmauth_journal_after_failed_validate.stdout | default('(no output)') }}
