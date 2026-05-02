@@ -225,6 +225,11 @@ type FoghornMetrics struct {
 	DBQueries             *prometheus.CounterVec
 	DBDuration            *prometheus.HistogramVec
 	DBConnections         *prometheus.GaugeVec
+
+	// LivepeerAuthRejected counts Livepeer gateway auth-webhook rejections by reason.
+	// Reasons: stream_not_found, stream_not_live, peer_context_missing,
+	// peer_unreachable, commodore_unreachable, invalid_request.
+	LivepeerAuthRejected *prometheus.CounterVec
 }
 
 // StreamIDRegex matches public playback IDs and internal names (live+/vod+).
