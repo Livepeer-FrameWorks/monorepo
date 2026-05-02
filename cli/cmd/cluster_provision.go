@@ -3316,6 +3316,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	baseName := task.ServiceID
 	if baseName == "foghorn" {
 		env["FOGHORN_CONTROL_BIND_ADDR"] = fmt.Sprintf(":%d", defaultGRPCPort("foghorn"))
+		if chandler, ok := manifest.Services["chandler"]; ok && chandler.Enabled {
+			env["CHANDLER_INTERNAL_URL"] = strings.Join(chandlerInternalURLs(manifest, chandler), ",")
+		}
 		// Wire REDIS_URL from the foghorn Redis instance for HA state sync
 		if addr := env["REDIS_FOGHORN_ADDR"]; addr != "" {
 			env["REDIS_URL"] = fmt.Sprintf("redis://%s", addr)
@@ -3907,6 +3910,37 @@ func serviceHosts(svc inventory.ServiceConfig) []string {
 		return []string{svc.Host}
 	}
 	return nil
+}
+
+func chandlerInternalURLs(manifest *inventory.Manifest, svc inventory.ServiceConfig) []string {
+	port := svc.Port
+	if port == 0 {
+		port = defaultPort("chandler")
+	}
+
+	hosts := serviceHosts(svc)
+	if len(hosts) == 0 {
+		return []string{fmt.Sprintf("http://chandler.internal:%d", port)}
+	}
+
+	urls := make([]string, 0, len(hosts))
+	seen := make(map[string]bool, len(hosts))
+	for _, hostName := range hosts {
+		meshHost := manifestMeshHostname(manifest, hostName)
+		if meshHost == "" {
+			continue
+		}
+		url := fmt.Sprintf("http://%s:%d", meshHost, port)
+		if seen[url] {
+			continue
+		}
+		seen[url] = true
+		urls = append(urls, url)
+	}
+	if len(urls) == 0 {
+		return []string{fmt.Sprintf("http://chandler.internal:%d", port)}
+	}
+	return urls
 }
 
 func applyDefaultLivepeerGatewayHost(env map[string]string, manifest *inventory.Manifest, clusterID string) {

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -20,11 +21,13 @@ import (
 )
 
 type fakeS3 struct {
-	data []byte
-	err  error
+	data  []byte
+	err   error
+	calls int
 }
 
 func (f *fakeS3) GetObject(_ context.Context, _ *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	f.calls++
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -46,14 +49,15 @@ func newTestHandler(s3client S3Getter, prefix string) (*AssetHandler, prometheus
 	misses := prometheus.NewCounter(prometheus.CounterOpts{Name: "test_misses"})
 	s3errs := prometheus.NewCounter(prometheus.CounterOpts{Name: "test_s3errs"})
 	h := &AssetHandler{
-		s3:          s3client,
-		bucket:      "test-bucket",
-		prefix:      prefix,
-		cache:       cache.NewLRU(1024*1024, 5*time.Minute),
-		logger:      logging.NewLoggerWithService("test"),
-		cacheHits:   hits,
-		cacheMisses: misses,
-		s3Errors:    s3errs,
+		s3:           s3client,
+		bucket:       "test-bucket",
+		prefix:       prefix,
+		serviceToken: "test-token",
+		cache:        cache.NewLRU(1024*1024, 5*time.Minute),
+		logger:       logging.NewLoggerWithService("test"),
+		cacheHits:    hits,
+		cacheMisses:  misses,
+		s3Errors:     s3errs,
 	}
 	return h, hits, misses, s3errs
 }
@@ -67,6 +71,19 @@ func serveRequest(h *AssetHandler, urlPath string) *httptest.ResponseRecorder {
 	h.RegisterRoutes(router)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, urlPath, nil)
+	router.ServeHTTP(w, req)
+	return w
+}
+
+func serveJSONRequest(h *AssetHandler, method, urlPath, body, token string) *httptest.ResponseRecorder {
+	router := gin.New()
+	h.RegisterRoutes(router)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(method, urlPath, bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	router.ServeHTTP(w, req)
 	return w
 }
@@ -175,7 +192,7 @@ func TestHandleGetAsset_PathTraversal(t *testing.T) {
 }
 
 func TestHandleGetAsset_AllAllowedFiles(t *testing.T) {
-	for file, expectedCT := range allowedFiles {
+	for file, expected := range allowedFiles {
 		t.Run(file, func(t *testing.T) {
 			fake := &fakeS3{data: []byte("content")}
 			h, _, _, _ := newTestHandler(fake, "")
@@ -186,8 +203,8 @@ func TestHandleGetAsset_AllAllowedFiles(t *testing.T) {
 				t.Fatalf("expected 200 for %s, got %d", file, w.Code)
 			}
 			ct := w.Header().Get("Content-Type")
-			if !strings.HasPrefix(ct, strings.Split(expectedCT, ";")[0]) {
-				t.Fatalf("expected content type starting with %q, got %q", expectedCT, ct)
+			if !strings.HasPrefix(ct, strings.Split(expected.contentType, ";")[0]) {
+				t.Fatalf("expected content type starting with %q, got %q", expected.contentType, ct)
 			}
 		})
 	}
@@ -214,5 +231,80 @@ func TestHandleGetAsset_CacheControl(t *testing.T) {
 	cc := w.Header().Get("Cache-Control")
 	if cc != "public, max-age=30" {
 		t.Fatalf("expected cache-control header, got %q", cc)
+	}
+}
+
+func TestHandleGetAsset_SpriteCacheControl(t *testing.T) {
+	fake := &fakeS3{data: []byte("data")}
+	h, _, _, _ := newTestHandler(fake, "")
+
+	w := serveRequest(h, "/assets/stream123/sprite.jpg")
+
+	cc := w.Header().Get("Cache-Control")
+	if cc != "public, no-cache" {
+		t.Fatalf("expected sprite cache-control header, got %q", cc)
+	}
+}
+
+func TestHandleGetAsset_QueryDoesNotBypassServerCache(t *testing.T) {
+	fake := &fakeS3{data: []byte("jpeg-data")}
+	h, hits, misses, _ := newTestHandler(fake, "")
+
+	serveRequest(h, "/assets/stream123/sprite.jpg?_fw_thumb=1")
+	w := serveRequest(h, "/assets/stream123/sprite.jpg?_fw_thumb=2")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if fake.calls != 1 {
+		t.Fatalf("expected one S3 fetch, got %d", fake.calls)
+	}
+	if counterValue(hits) != 1 {
+		t.Fatalf("expected 1 cache hit, got %v", counterValue(hits))
+	}
+	if counterValue(misses) != 1 {
+		t.Fatalf("expected 1 cache miss, got %v", counterValue(misses))
+	}
+}
+
+func TestHandleInvalidateCache_RequiresServiceToken(t *testing.T) {
+	fake := &fakeS3{data: []byte("jpeg-data")}
+	h, _, _, _ := newTestHandler(fake, "")
+
+	w := serveJSONRequest(h, http.MethodPost, "/internal/assets/cache/invalidate", `{"assetKey":"stream123"}`, "")
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestHandleInvalidateCache_RemovesSelectedFiles(t *testing.T) {
+	fake := &fakeS3{data: []byte("jpeg-data")}
+	h, hits, misses, _ := newTestHandler(fake, "")
+
+	serveRequest(h, "/assets/stream123/sprite.jpg")
+	serveRequest(h, "/assets/stream123/sprite.vtt")
+	w := serveJSONRequest(
+		h,
+		http.MethodPost,
+		"/internal/assets/cache/invalidate",
+		`{"assetKey":"stream123","files":["sprite.jpg"]}`,
+		"test-token",
+	)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	serveRequest(h, "/assets/stream123/sprite.jpg")
+	serveRequest(h, "/assets/stream123/sprite.vtt")
+
+	if fake.calls != 3 {
+		t.Fatalf("expected 3 S3 fetches, got %d", fake.calls)
+	}
+	if counterValue(hits) != 1 {
+		t.Fatalf("expected 1 cache hit, got %v", counterValue(hits))
+	}
+	if counterValue(misses) != 3 {
+		t.Fatalf("expected 3 cache misses, got %v", counterValue(misses))
 	}
 }

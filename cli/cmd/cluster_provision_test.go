@@ -715,11 +715,54 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 	if _, ok := env["CHANDLER_HOST"]; ok {
 		t.Fatalf("expected CHANDLER_HOST not to be auto-generated as an internal dependency, got %q", env["CHANDLER_HOST"])
 	}
+	if env["CHANDLER_INTERNAL_URL"] != "http://central-eu-1.internal:18020" {
+		t.Fatalf("expected CHANDLER_INTERNAL_URL to use Chandler host mesh URL, got %q", env["CHANDLER_INTERNAL_URL"])
+	}
 	if env["LISTMONK_URL"] != "http://central-eu-1.internal:9001" {
 		t.Fatalf("expected LISTMONK_URL to use mesh host, got %q", env["LISTMONK_URL"])
 	}
 	if env["CHATWOOT_HOST"] != "central-eu-1.internal" {
 		t.Fatalf("expected CHATWOOT_HOST to use mesh host, got %q", env["CHATWOOT_HOST"])
+	}
+}
+
+func TestBuildServiceEnvVarsDerivesAllChandlerInternalURLs(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "dev",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"central-eu-1":  {ExternalIP: "10.0.0.10"},
+			"regional-eu-1": {ExternalIP: "10.0.0.11"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn": {
+				Enabled: true,
+				Host:    "central-eu-1",
+			},
+			"chandler": {
+				Enabled: true,
+				Hosts:   []string{"central-eu-1", "regional-eu-1"},
+				Port:    18020,
+			},
+		},
+	}
+	task := &orchestrator.Task{
+		Name:      "foghorn",
+		Type:      "foghorn",
+		ServiceID: "foghorn",
+		Host:      "central-eu-1",
+		ClusterID: "cluster-a",
+		Phase:     orchestrator.PhaseApplications,
+	}
+
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+
+	want := "http://central-eu-1.internal:18020,http://regional-eu-1.internal:18020"
+	if env["CHANDLER_INTERNAL_URL"] != want {
+		t.Fatalf("expected all Chandler internal URLs, got %q", env["CHANDLER_INTERNAL_URL"])
 	}
 }
 
@@ -779,6 +822,7 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 			"decklog":          {Enabled: true, Host: "central-eu-1"},
 			"signalman":        {Enabled: true, Host: "central-eu-1"},
 			"navigator":        {Enabled: true, Host: "central-eu-1"},
+			"chandler":         {Enabled: true, Host: "central-eu-1"},
 			"foghorn":          {Enabled: true, Host: "central-eu-1"},
 			"deckhand":         {Enabled: true, Host: "central-eu-1"},
 			"skipper":          {Enabled: true, Host: "central-eu-1"},
@@ -858,6 +902,7 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 			serviceID: "foghorn",
 			want: map[string]string{
 				"FOGHORN_CONTROL_BIND_ADDR": ":18019",
+				"CHANDLER_INTERNAL_URL":     "http://central-eu-1.internal:18020",
 				"COMMODORE_GRPC_ADDR":       "commodore.internal:19001",
 				"QUARTERMASTER_GRPC_ADDR":   "quartermaster.internal:19002",
 				"NAVIGATOR_GRPC_ADDR":       "navigator.internal:18011",

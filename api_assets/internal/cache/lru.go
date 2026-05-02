@@ -33,6 +33,10 @@ func NewLRU(maxBytes int64, ttl time.Duration) *LRU {
 }
 
 func (c *LRU) Get(key string) ([]byte, string, bool) {
+	return c.GetFresh(key, c.ttl)
+}
+
+func (c *LRU) GetFresh(key string, maxAge time.Duration) ([]byte, string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -44,7 +48,10 @@ func (c *LRU) Get(key string) ([]byte, string, bool) {
 	if !ok {
 		return nil, "", false
 	}
-	if time.Since(e.fetchedAt) > c.ttl {
+	if maxAge <= 0 {
+		maxAge = c.ttl
+	}
+	if time.Since(e.fetchedAt) > maxAge {
 		c.removeElement(elem)
 		return nil, "", false
 	}
@@ -73,6 +80,18 @@ func (c *LRU) Put(key string, data []byte, contentType string) {
 	elem := c.order.PushFront(e)
 	c.items[key] = elem
 	c.curBytes += int64(len(data))
+}
+
+func (c *LRU) Delete(key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	elem, ok := c.items[key]
+	if !ok {
+		return false
+	}
+	c.removeElement(elem)
+	return true
 }
 
 func (c *LRU) removeElement(elem *list.Element) {

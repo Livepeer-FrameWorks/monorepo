@@ -31,12 +31,13 @@ func main() {
 		logger.Warn("STORAGE_S3_BUCKET not set — asset requests will return 503 until configured")
 	}
 	s3Cfg := handlers.S3Config{
-		Bucket:    s3Bucket,
-		Prefix:    config.GetEnv("STORAGE_S3_PREFIX", ""),
-		Region:    config.GetEnv("STORAGE_S3_REGION", "us-east-1"),
-		Endpoint:  config.GetEnv("STORAGE_S3_ENDPOINT", ""),
-		AccessKey: config.GetEnv("STORAGE_S3_ACCESS_KEY", ""),
-		SecretKey: config.GetEnv("STORAGE_S3_SECRET_KEY", ""),
+		Bucket:       s3Bucket,
+		Prefix:       config.GetEnv("STORAGE_S3_PREFIX", ""),
+		Region:       config.GetEnv("STORAGE_S3_REGION", "us-east-1"),
+		Endpoint:     config.GetEnv("STORAGE_S3_ENDPOINT", ""),
+		AccessKey:    config.GetEnv("STORAGE_S3_ACCESS_KEY", ""),
+		SecretKey:    config.GetEnv("STORAGE_S3_SECRET_KEY", ""),
+		ServiceToken: config.GetEnv("SERVICE_TOKEN", ""),
 	}
 
 	maxCacheBytes := int64(config.GetEnvInt("CACHE_MAX_BYTES", 50*1024*1024)) // 50MB default

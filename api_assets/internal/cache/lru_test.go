@@ -72,6 +72,21 @@ func TestTTL_NotExpired(t *testing.T) {
 	}
 }
 
+func TestGetFresh_UsesCallerMaxAge(t *testing.T) {
+	c := NewLRU(1024, 1*time.Hour)
+	c.Put("k1", []byte("data"), "text/plain")
+
+	time.Sleep(5 * time.Millisecond)
+
+	_, _, ok := c.GetFresh("k1", 1*time.Millisecond)
+	if ok {
+		t.Fatal("expected miss after caller max age expiry")
+	}
+	if c.Len() != 0 {
+		t.Fatalf("expected expired entry removed, len=%d", c.Len())
+	}
+}
+
 func TestEviction_MaxBytes(t *testing.T) {
 	c := NewLRU(10, 5*time.Minute)
 	c.Put("k1", []byte("12345"), "t")
@@ -134,6 +149,24 @@ func TestPut_UpdatesExisting(t *testing.T) {
 	}
 	if c.SizeBytes() != 8 {
 		t.Fatalf("expected 8 bytes, got %d", c.SizeBytes())
+	}
+}
+
+func TestDelete(t *testing.T) {
+	c := NewLRU(1024, 5*time.Minute)
+	c.Put("k1", []byte("data"), "text/plain")
+
+	if !c.Delete("k1") {
+		t.Fatal("expected delete hit")
+	}
+	if c.Delete("k1") {
+		t.Fatal("expected second delete miss")
+	}
+	if _, _, ok := c.Get("k1"); ok {
+		t.Fatal("deleted key should miss")
+	}
+	if c.Len() != 0 || c.SizeBytes() != 0 {
+		t.Fatalf("expected empty cache, len=%d size=%d", c.Len(), c.SizeBytes())
 	}
 }
 

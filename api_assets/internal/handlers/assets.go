@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -16,22 +17,47 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"frameworks/api_assets/internal/cache"
+	"frameworks/pkg/auth"
 	"frameworks/pkg/logging"
 )
 
-var allowedFiles = map[string]string{
-	"poster.jpg": "image/jpeg",
-	"sprite.jpg": "image/jpeg",
-	"sprite.vtt": "text/vtt; charset=utf-8",
+const (
+	defaultAssetCacheMaxAge = 30 * time.Second
+	liveSpriteCacheMaxAge   = 30 * time.Second
+)
+
+type assetPolicy struct {
+	contentType  string
+	cacheControl string
+	cacheMaxAge  time.Duration
+}
+
+var allowedFiles = map[string]assetPolicy{
+	"poster.jpg": {
+		contentType:  "image/jpeg",
+		cacheControl: "public, max-age=30",
+		cacheMaxAge:  defaultAssetCacheMaxAge,
+	},
+	"sprite.jpg": {
+		contentType:  "image/jpeg",
+		cacheControl: "public, no-cache",
+		cacheMaxAge:  liveSpriteCacheMaxAge,
+	},
+	"sprite.vtt": {
+		contentType:  "text/vtt; charset=utf-8",
+		cacheControl: "public, no-cache",
+		cacheMaxAge:  liveSpriteCacheMaxAge,
+	},
 }
 
 type S3Config struct {
-	Bucket    string
-	Prefix    string
-	Region    string
-	Endpoint  string
-	AccessKey string
-	SecretKey string
+	Bucket       string
+	Prefix       string
+	Region       string
+	Endpoint     string
+	AccessKey    string
+	SecretKey    string
+	ServiceToken string
 }
 
 // S3Getter abstracts the S3 GetObject call for testability.
@@ -40,11 +66,12 @@ type S3Getter interface {
 }
 
 type AssetHandler struct {
-	s3     S3Getter
-	bucket string
-	prefix string
-	cache  *cache.LRU
-	logger logging.Logger
+	s3           S3Getter
+	bucket       string
+	prefix       string
+	serviceToken string
+	cache        *cache.LRU
+	logger       logging.Logger
 
 	cacheHits   prometheus.Counter
 	cacheMisses prometheus.Counter
@@ -77,26 +104,35 @@ func NewAssetHandler(cfg S3Config, lru *cache.LRU, logger logging.Logger, cacheH
 	client := s3.NewFromConfig(awsCfg, s3Opts...)
 
 	return &AssetHandler{
-		s3:          client,
-		bucket:      cfg.Bucket,
-		prefix:      cfg.Prefix,
-		cache:       lru,
-		logger:      logger,
-		cacheHits:   cacheHits,
-		cacheMisses: cacheMisses,
-		s3Errors:    s3Errors,
+		s3:           client,
+		bucket:       cfg.Bucket,
+		prefix:       cfg.Prefix,
+		serviceToken: cfg.ServiceToken,
+		cache:        lru,
+		logger:       logger,
+		cacheHits:    cacheHits,
+		cacheMisses:  cacheMisses,
+		s3Errors:     s3Errors,
 	}, nil
 }
 
 func (h *AssetHandler) RegisterRoutes(router *gin.Engine) {
 	router.GET("/assets/:assetKey/:file", h.handleGetAsset)
+	if h.serviceToken != "" {
+		router.POST("/internal/assets/cache/invalidate", auth.ServiceAuthMiddleware(h.serviceToken), h.handleInvalidateCache)
+	}
+}
+
+type invalidateCacheRequest struct {
+	AssetKey string   `json:"assetKey"`
+	Files    []string `json:"files"`
 }
 
 func (h *AssetHandler) handleGetAsset(c *gin.Context) {
 	assetKey := c.Param("assetKey")
 	file := c.Param("file")
 
-	contentType, ok := allowedFiles[file]
+	policy, ok := allowedFiles[file]
 	if !ok {
 		c.Status(http.StatusNotFound)
 		return
@@ -116,9 +152,9 @@ func (h *AssetHandler) handleGetAsset(c *gin.Context) {
 	s3Key := h.fullKey(path.Join("thumbnails", assetKey, file))
 
 	// Check cache
-	if data, ct, hit := h.cache.Get(s3Key); hit {
+	if data, ct, hit := h.cache.GetFresh(s3Key, policy.cacheMaxAge); hit {
 		h.cacheHits.Inc()
-		c.Header("Cache-Control", "public, max-age=30")
+		c.Header("Cache-Control", policy.cacheControl)
 		c.Data(http.StatusOK, ct, data)
 		return
 	}
@@ -145,10 +181,47 @@ func (h *AssetHandler) handleGetAsset(c *gin.Context) {
 		return
 	}
 
-	h.cache.Put(s3Key, data, contentType)
+	h.cache.Put(s3Key, data, policy.contentType)
 
-	c.Header("Cache-Control", "public, max-age=30")
-	c.Data(http.StatusOK, contentType, data)
+	c.Header("Cache-Control", policy.cacheControl)
+	c.Data(http.StatusOK, policy.contentType, data)
+}
+
+func (h *AssetHandler) handleInvalidateCache(c *gin.Context) {
+	var req invalidateCacheRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	assetKey := strings.TrimSpace(req.AssetKey)
+	if assetKey == "" || strings.Contains(assetKey, "/") || strings.Contains(assetKey, "..") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid assetKey"})
+		return
+	}
+
+	files := req.Files
+	if len(files) == 0 {
+		files = make([]string, 0, len(allowedFiles))
+		for file := range allowedFiles {
+			files = append(files, file)
+		}
+	}
+
+	invalidated := 0
+	for _, file := range files {
+		file = strings.TrimSpace(file)
+		if _, ok := allowedFiles[file]; !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file"})
+			return
+		}
+		s3Key := h.fullKey(path.Join("thumbnails", assetKey, file))
+		if h.cache.Delete(s3Key) {
+			invalidated++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"invalidated": invalidated})
 }
 
 func (h *AssetHandler) fullKey(key string) string {

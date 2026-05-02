@@ -5152,6 +5152,114 @@ func processThumbnailUploaded(req *pb.ThumbnailUploaded, nodeID string, logger l
 	if isArtifactThumbnail(thumbnailKey) {
 		markArtifactHasThumbnails(thumbnailKey, logger)
 	}
+	invalidateChandlerThumbnailCache(thumbnailKey, s3Keys, logger)
+}
+
+type chandlerInvalidateRequest struct {
+	AssetKey string   `json:"assetKey"`
+	Files    []string `json:"files"`
+}
+
+func invalidateChandlerThumbnailCache(thumbnailKey string, s3Keys []string, logger logging.Logger) {
+	if thumbnailKey == "" || len(s3Keys) == 0 {
+		return
+	}
+
+	serviceToken := strings.TrimSpace(os.Getenv("SERVICE_TOKEN"))
+	if serviceToken == "" {
+		logger.Warn("SERVICE_TOKEN missing, skipping Chandler thumbnail cache invalidation")
+		return
+	}
+
+	files := make([]string, 0, len(s3Keys))
+	seen := make(map[string]bool, len(s3Keys))
+	for _, key := range s3Keys {
+		file := filepath.Base(key)
+		switch file {
+		case "poster.jpg", "sprite.jpg", "sprite.vtt":
+			if !seen[file] {
+				seen[file] = true
+				files = append(files, file)
+			}
+		}
+	}
+	if len(files) == 0 {
+		return
+	}
+
+	baseURLs := getChandlerInternalBaseURLs()
+	if len(baseURLs) == 0 {
+		logger.Warn("Chandler URL missing, skipping thumbnail cache invalidation")
+		return
+	}
+
+	body, err := json.Marshal(chandlerInvalidateRequest{
+		AssetKey: thumbnailKey,
+		Files:    files,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to encode Chandler cache invalidation request")
+		return
+	}
+
+	for _, baseURL := range baseURLs {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/internal/assets/cache/invalidate", strings.NewReader(string(body)))
+		if err != nil {
+			cancel()
+			logger.WithError(err).WithField("base_url", baseURL).Warn("Failed to build Chandler cache invalidation request")
+			continue
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+serviceToken)
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(httpReq)
+		cancel()
+		if err != nil {
+			logger.WithError(err).WithFields(logging.Fields{
+				"thumbnail_key": thumbnailKey,
+				"base_url":      baseURL,
+			}).Warn("Chandler thumbnail cache invalidation failed")
+			continue
+		}
+		statusCode := resp.StatusCode
+		_ = resp.Body.Close()
+		if statusCode < 200 || statusCode >= 300 {
+			logger.WithFields(logging.Fields{
+				"thumbnail_key": thumbnailKey,
+				"base_url":      baseURL,
+				"status":        statusCode,
+			}).Warn("Chandler thumbnail cache invalidation returned non-2xx")
+			continue
+		}
+		logger.WithFields(logging.Fields{
+			"thumbnail_key": thumbnailKey,
+			"base_url":      baseURL,
+			"files":         files,
+		}).Debug("Chandler thumbnail cache invalidated")
+	}
+}
+
+func getChandlerInternalBaseURLs() []string {
+	if base := strings.TrimSpace(os.Getenv("CHANDLER_INTERNAL_URL")); base != "" {
+		return splitChandlerBaseURLs(base)
+	}
+	return splitChandlerBaseURLs(getChandlerBaseURL())
+}
+
+func splitChandlerBaseURLs(raw string) []string {
+	parts := strings.Split(raw, ",")
+	baseURLs := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, part := range parts {
+		baseURL := strings.TrimRight(strings.TrimSpace(part), "/")
+		if baseURL == "" || seen[baseURL] {
+			continue
+		}
+		seen[baseURL] = true
+		baseURLs = append(baseURLs, baseURL)
+	}
+	return baseURLs
 }
 
 // isArtifactThumbnail checks if the thumbnail key is an artifact hash.

@@ -6,6 +6,8 @@ S3-backed asset proxy for stream media files. Serves posters, sprite sheets, and
 
 - Proxies allowed asset files (poster.jpg, sprite.jpg, sprite.vtt) from S3-compatible storage
 - LRU cache to avoid redundant S3 fetches
+- `poster.jpg` is browser-cacheable for 30s; `sprite.jpg` and `sprite.vtt` require browser revalidation and are purged from Chandler's in-memory cache after upload
+- Service-token authenticated cache invalidation endpoint for internal callers
 - Public asset route `GET /assets/:assetKey/:file`
 - S3 object path `thumbnails/{assetKey}/{file}`, optionally prefixed by `STORAGE_S3_PREFIX`
 - `assetKey` is the stream ID or artifact hash produced by the thumbnail pipeline; the public route is not a tenant/path hierarchy
