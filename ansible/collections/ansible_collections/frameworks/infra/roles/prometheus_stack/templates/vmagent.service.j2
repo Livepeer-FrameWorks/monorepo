@@ -6,12 +6,22 @@ Wants=network-online.target
 [Service]
 User={{ prometheus_stack_user }}
 Group={{ prometheus_stack_group }}
+EnvironmentFile={{ vmagent_env_path }}
+{% if vmagent_remote_write_basic_auth_username | length > 0 %}
 ExecStart={{ vmagent_bin }} \
   -httpListenAddr=:{{ vmagent_port }} \
   -promscrape.config={{ vmagent_config_path }} \
-  -remoteWrite.url={{ vmagent_remote_write_url }}{% if vmagent_remote_write_basic_auth_username | length > 0 %} \
-  -remoteWrite.basicAuth.username={{ vmagent_remote_write_basic_auth_username }} \
-  -remoteWrite.basicAuth.password={{ vmagent_remote_write_basic_auth_password }}{% endif %}
+  -remoteWrite.tmpDataPath={{ vmagent_tmp_data_path }} \
+  -remoteWrite.url=${VMAGENT_REMOTE_WRITE_URL} \
+  -remoteWrite.basicAuth.username=${VMAGENT_REMOTE_WRITE_BASIC_AUTH_USERNAME} \
+  -remoteWrite.basicAuth.password=${VMAGENT_REMOTE_WRITE_BASIC_AUTH_PASSWORD}
+{% else %}
+ExecStart={{ vmagent_bin }} \
+  -httpListenAddr=:{{ vmagent_port }} \
+  -promscrape.config={{ vmagent_config_path }} \
+  -remoteWrite.tmpDataPath={{ vmagent_tmp_data_path }} \
+  -remoteWrite.url=${VMAGENT_REMOTE_WRITE_URL}
+{% endif %}
 Restart=always
 RestartSec=5
 

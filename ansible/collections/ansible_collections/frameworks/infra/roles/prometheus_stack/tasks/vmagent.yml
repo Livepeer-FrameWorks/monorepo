@@ -56,6 +56,14 @@
     group: root
     mode: "0755"
 
+- name: Ensure vmagent remote-write data directory
+  ansible.builtin.file:
+    path: "{{ vmagent_tmp_data_path }}"
+    state: directory
+    owner: "{{ omit if ansible_check_mode else prometheus_stack_user }}"
+    group: "{{ omit if ansible_check_mode else prometheus_stack_group }}"
+    mode: "0755"
+
 - name: Render vmagent scrape config
   ansible.builtin.template:
     src: vmagent-scrape.yml.j2
@@ -63,6 +71,16 @@
     owner: root
     group: root
     mode: "0644"
+  notify: vmagent restart
+
+- name: Render vmagent env file
+  ansible.builtin.template:
+    src: vmagent.env.j2
+    dest: "{{ vmagent_env_path }}"
+    owner: root
+    group: "{{ prometheus_stack_group }}"
+    mode: "0640"
+  no_log: true
   notify: vmagent restart
 
 - name: Render vmagent systemd unit

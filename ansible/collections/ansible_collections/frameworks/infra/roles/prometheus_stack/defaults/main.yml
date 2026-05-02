@@ -28,6 +28,8 @@ vmagent_artifact_binary: vmagent-prod
 vmagent_version: ""
 vmagent_port: 8429
 vmagent_config_path: /etc/vmagent/scrape.yml
+vmagent_env_path: /etc/vmagent/vmagent.env
+vmagent_tmp_data_path: /var/lib/vmagent/remotewrite-data
 vmagent_scrape_interval: "30s"
 vmagent_scrape_targets: []
 vmagent_remote_write_url: ""

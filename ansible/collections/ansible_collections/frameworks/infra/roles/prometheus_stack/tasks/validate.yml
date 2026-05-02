@@ -24,10 +24,34 @@
   when: "'victoriametrics' in prometheus_stack_components"
 
 - name: Validate vmagent listener
-  ansible.builtin.wait_for:
-    host: 127.0.0.1
-    port: "{{ vmagent_port }}"
-    timeout: 30
+  block:
+    - name: Wait for vmagent listener
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ vmagent_port }}"
+        timeout: 30
+  rescue:
+    - name: Capture vmagent systemctl status
+      ansible.builtin.command: systemctl status vmagent --no-pager -l
+      register: vmagent_status_after_failed_validate
+      changed_when: false
+      failed_when: false
+
+    - name: Capture vmagent journal
+      ansible.builtin.command: journalctl -u vmagent -n 120 --no-pager
+      register: vmagent_journal_after_failed_validate
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with vmagent diagnostics
+      ansible.builtin.fail:
+        msg: |-
+          vmagent did not listen on 127.0.0.1:{{ vmagent_port }}
+          systemctl status:
+          {{ vmagent_status_after_failed_validate.stdout | default('(no output)') }}
+
+          journalctl:
+          {{ vmagent_journal_after_failed_validate.stdout | default('(no output)') }}
   when: "'vmagent' in prometheus_stack_components"
 
 - name: Validate vmauth listener
