@@ -577,6 +577,11 @@ func main() {
 			"Attempts and results when forwarding MistTriggers to Decklog",
 			[]string{"trigger_type", "status"},
 		),
+		ServiceResolutionRejected: metricsCollector.NewCounter(
+			"foghorn_service_resolution_rejected_total",
+			"Service-discovery resolutions that ended without a usable target",
+			[]string{"reason", "service"},
+		),
 	})
 	if geoipReader != nil && geoipCache != nil {
 		triggerProcessor.SetGeoIPCache(geoipCache)

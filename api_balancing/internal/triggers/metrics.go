@@ -7,4 +7,8 @@ type ProcessorMetrics struct {
 	// DecklogTriggerSends counts attempts and results when forwarding MistTriggers to Decklog.
 	// Labels: trigger_type, status
 	DecklogTriggerSends *prometheus.CounterVec
+
+	// ServiceResolutionRejected counts service-discovery resolutions that ended without
+	// a usable target. Labels: reason ("service_unavailable"), service ("livepeer-gateway").
+	ServiceResolutionRejected *prometheus.CounterVec
 }
