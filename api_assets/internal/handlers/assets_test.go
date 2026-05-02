@@ -70,7 +70,7 @@ func serveRequest(h *AssetHandler, urlPath string) *httptest.ResponseRecorder {
 	router := gin.New()
 	h.RegisterRoutes(router)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, urlPath, nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, urlPath, nil)
 	router.ServeHTTP(w, req)
 	return w
 }
@@ -79,7 +79,7 @@ func serveJSONRequest(h *AssetHandler, method, urlPath, body, token string) *htt
 	router := gin.New()
 	h.RegisterRoutes(router)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(method, urlPath, bytes.NewBufferString(body))
+	req := httptest.NewRequestWithContext(context.Background(), method, urlPath, bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
