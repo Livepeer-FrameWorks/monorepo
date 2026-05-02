@@ -77,6 +77,78 @@ func loadStaticPeers(path string) (*staticPeersFile, error) {
 	return &sp, nil
 }
 
+func mergeLastKnownWithSeed(lk *lastKnownMesh, sp *staticPeersFile) *lastKnownMesh {
+	if lk == nil {
+		lk = &lastKnownMesh{}
+	}
+	merged := &lastKnownMesh{
+		Source:      lk.Source,
+		Version:     lk.Version,
+		WireguardIP: lk.WireguardIP,
+		ListenPort:  lk.ListenPort,
+		Peers:       mergeLastKnownPeers(staticToLastKnownPeers(staticSeedPeers(sp)), lk.Peers),
+		DNS:         mergeDNSRecords(staticSeedDNS(sp), lk.DNS),
+	}
+	return merged
+}
+
+func staticSeedPeers(sp *staticPeersFile) []staticPeer {
+	if sp == nil {
+		return nil
+	}
+	return sp.Peers
+}
+
+func staticSeedDNS(sp *staticPeersFile) map[string][]string {
+	if sp == nil {
+		return nil
+	}
+	return sp.DNS
+}
+
+func mergeLastKnownPeers(base, overlay []lastKnownPeer) []lastKnownPeer {
+	out := make([]lastKnownPeer, 0, len(base)+len(overlay))
+	positions := make(map[string]int, len(base)+len(overlay))
+	for _, peer := range base {
+		key := strings.TrimSpace(peer.PublicKey)
+		if key == "" {
+			continue
+		}
+		positions[key] = len(out)
+		out = append(out, copyLastKnownPeer(peer))
+	}
+	for _, peer := range overlay {
+		key := strings.TrimSpace(peer.PublicKey)
+		if key == "" {
+			continue
+		}
+		copied := copyLastKnownPeer(peer)
+		if pos, ok := positions[key]; ok {
+			out[pos] = copied
+			continue
+		}
+		positions[key] = len(out)
+		out = append(out, copied)
+	}
+	return out
+}
+
+func copyLastKnownPeer(peer lastKnownPeer) lastKnownPeer {
+	peer.AllowedIPs = append([]string(nil), peer.AllowedIPs...)
+	return peer
+}
+
+func mergeDNSRecords(base, overlay map[string][]string) map[string][]string {
+	out := make(map[string][]string, len(base)+len(overlay))
+	for name, ips := range base {
+		out[name] = append([]string(nil), ips...)
+	}
+	for name, ips := range overlay {
+		out[name] = append([]string(nil), ips...)
+	}
+	return out
+}
+
 // loadLastKnown reads the persisted snapshot, or (nil, nil) if absent.
 func loadLastKnown(path string) (*lastKnownMesh, error) {
 	if path == "" {
@@ -263,18 +335,26 @@ func lastKnownToWireGuard(lk *lastKnownMesh, privateKey, selfIP string, selfPort
 	if err != nil {
 		return wireguard.Config{}, err
 	}
-	peers := make([]wireguard.Peer, 0, len(lk.Peers))
-	for _, p := range lk.Peers {
+	peers, err := lastKnownPeersToWireGuard(lk.Peers)
+	if err != nil {
+		return wireguard.Config{}, err
+	}
+	cfg.Peers = peers
+	return cfg, nil
+}
+
+func lastKnownPeersToWireGuard(in []lastKnownPeer) ([]wireguard.Peer, error) {
+	peers := make([]wireguard.Peer, 0, len(in))
+	for _, p := range in {
 		label := p.Name
 		if label == "" {
 			label = p.PublicKey
 		}
 		peer, err := parsePeerStrings(label, p.PublicKey, p.Endpoint, p.AllowedIPs, p.KeepAlive)
 		if err != nil {
-			return wireguard.Config{}, err
+			return nil, err
 		}
 		peers = append(peers, peer)
 	}
-	cfg.Peers = peers
-	return cfg, nil
+	return peers, nil
 }
