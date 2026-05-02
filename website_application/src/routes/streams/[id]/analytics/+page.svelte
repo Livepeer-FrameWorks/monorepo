@@ -174,8 +174,8 @@
   let streamEvents = $derived.by(() => {
     const edges =
       $streamEventsStore.data?.analytics?.lifecycle?.streamEventsConnection?.edges ?? [];
-    return edges.map((e) => ({
-      id: e.node.eventId,
+    return edges.map((e, i) => ({
+      id: `${e.node.eventId}-${i}`,
       timestamp: e.node.timestamp,
       type: mapEventType(e.node.type),
       message: e.node.status ?? e.node.details ?? "Event",
@@ -492,7 +492,7 @@
                       <div class="flex items-center gap-3">
                         <span class="text-xs font-medium {tierColor} w-12">{tierLabel}</span>
                         <div class="flex-1 h-6 flex items-end gap-px">
-                          {#each qualityTierTrendData as day (day.date)}
+                          {#each qualityTierTrendData as day, i (`${day.date}-${i}`)}
                             {@const value = (day[tier as keyof typeof day] as number) || 0}
                             {@const maxValue = Math.max(
                               ...qualityTierTrendData.map(
@@ -610,7 +610,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {#each streamDailyAnalytics.slice().reverse() as day (day.day)}
+                  {#each streamDailyAnalytics.slice().reverse() as day, i (`${day.day}-${i}`)}
                     <tr class="border-b border-border/30 hover:bg-muted/10">
                       <td class="py-3 px-4 font-mono text-xs"
                         >{new Date(day.day).toLocaleDateString()}</td
