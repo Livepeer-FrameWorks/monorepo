@@ -31,6 +31,7 @@ import (
 	"frameworks/pkg/models"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/servicedefs"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -472,15 +473,17 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		}
 	}
 
-	// Resolve Foghorn gRPC address via foghorn_cluster_assignments (best-effort)
+	// Resolve Foghorn gRPC address via service_cluster_assignments (best-effort)
 	var foghornHost sql.NullString
 	var foghornPort sql.NullInt32
 	_ = s.db.QueryRowContext(ctx, `
 		SELECT si.advertise_host, si.port
-		FROM quartermaster.foghorn_cluster_assignments fca
-		JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
-		WHERE fca.cluster_id = $1
-		  AND fca.is_active = true
+		FROM quartermaster.service_cluster_assignments sca
+		JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
+		JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		WHERE sca.cluster_id = $1
+		  AND sca.is_active = true
+		  AND svc.type = 'foghorn'
 		  AND si.status = 'running'
 		  AND COALESCE(si.advertise_host, '') <> ''
 		  AND COALESCE(si.port, 0) > 0
@@ -517,10 +520,12 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 			var offFoghornPort sql.NullInt32
 			_ = s.db.QueryRowContext(ctx, `
 				SELECT si.advertise_host, si.port
-				FROM quartermaster.foghorn_cluster_assignments fca
-				JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
-				WHERE fca.cluster_id = $1
-				  AND fca.is_active = true
+				FROM quartermaster.service_cluster_assignments sca
+				JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
+				JOIN quartermaster.services svc ON svc.service_id = si.service_id
+				WHERE sca.cluster_id = $1
+				  AND sca.is_active = true
+				  AND svc.type = 'foghorn'
 				  AND si.status = 'running'
 				  AND COALESCE(si.advertise_host, '') <> ''
 				  AND COALESCE(si.port, 0) > 0
@@ -540,10 +545,12 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		       COALESCE(ic.s3_bucket, ''), COALESCE(ic.s3_endpoint, ''), COALESCE(ic.s3_region, ''),
 		       COALESCE(
 		           (SELECT si.advertise_host
-		            FROM quartermaster.foghorn_cluster_assignments fca
-		            JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
-		            WHERE fca.cluster_id = ic.cluster_id
-		              AND fca.is_active = TRUE
+		            FROM quartermaster.service_cluster_assignments sca
+		            JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
+		            JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		            WHERE sca.cluster_id = ic.cluster_id
+		              AND sca.is_active = TRUE
+		              AND svc.type = 'foghorn'
 		              AND si.status = 'running'
 		              AND COALESCE(si.advertise_host, '') <> ''
 		              AND COALESCE(si.port, 0) > 0
@@ -553,10 +560,12 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		       ) AS foghorn_advertise_host,
 		       COALESCE(
 		           (SELECT si.port
-		            FROM quartermaster.foghorn_cluster_assignments fca
-		            JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
-		            WHERE fca.cluster_id = ic.cluster_id
-		              AND fca.is_active = TRUE
+		            FROM quartermaster.service_cluster_assignments sca
+		            JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
+		            JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		            WHERE sca.cluster_id = ic.cluster_id
+		              AND sca.is_active = TRUE
+		              AND svc.type = 'foghorn'
 		              AND si.status = 'running'
 		              AND COALESCE(si.advertise_host, '') <> ''
 		              AND COALESCE(si.port, 0) > 0
@@ -987,30 +996,6 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		  AND COALESCE(port, 0) = $6
 	`, serviceID, clusterID, instanceID, advHost, proto, port)
 
-	if serviceType == "foghorn" {
-		_, _ = s.db.ExecContext(ctx, `
-			DELETE FROM quartermaster.foghorn_cluster_assignments
-			WHERE foghorn_instance_id IN (
-				SELECT si.id
-				FROM quartermaster.service_instances si
-				JOIN quartermaster.services svc ON svc.service_id = si.service_id
-				WHERE svc.type = 'foghorn'
-				  AND si.service_id = $1
-				  AND si.cluster_id = $2
-				  AND si.instance_id != $3
-				  AND si.status != 'running'
-			)
-		`, serviceID, clusterID, instanceID)
-
-		_, _ = s.db.ExecContext(ctx, `
-			INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
-			SELECT si.id, $1
-			FROM quartermaster.service_instances si
-			WHERE si.instance_id = $2
-			ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true
-		`, clusterID, instanceID)
-	}
-
 	resp := &pb.BootstrapServiceResponse{
 		ServiceId:  serviceID,
 		InstanceId: instanceID,
@@ -1045,16 +1030,20 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *pb.GetNodeO
 	err := s.db.QueryRowContext(ctx, `
 		SELECT n.node_id, n.cluster_id, c.cluster_name, c.owner_tenant_id, t.name,
 			(SELECT si.advertise_host
-			 FROM quartermaster.foghorn_cluster_assignments fca
-			 JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
-			 WHERE fca.cluster_id = n.cluster_id AND fca.is_active = true AND si.status = 'running'
+			 FROM quartermaster.service_cluster_assignments sca
+			 JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
+			 JOIN quartermaster.services svc ON svc.service_id = si.service_id
+			 WHERE sca.cluster_id = n.cluster_id AND sca.is_active = true
+			   AND svc.type = 'foghorn' AND si.status = 'running'
 			   AND si.protocol = 'grpc'
 			   AND COALESCE(si.advertise_host, '') <> '' AND COALESCE(si.port, 0) > 0
 			 ORDER BY si.updated_at DESC, si.id ASC LIMIT 1),
 			(SELECT si.port
-			 FROM quartermaster.foghorn_cluster_assignments fca
-			 JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
-			 WHERE fca.cluster_id = n.cluster_id AND fca.is_active = true AND si.status = 'running'
+			 FROM quartermaster.service_cluster_assignments sca
+			 JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
+			 JOIN quartermaster.services svc ON svc.service_id = si.service_id
+			 WHERE sca.cluster_id = n.cluster_id AND sca.is_active = true
+			   AND svc.type = 'foghorn' AND si.status = 'running'
 			   AND si.protocol = 'grpc'
 			   AND COALESCE(si.advertise_host, '') <> '' AND COALESCE(si.port, 0) > 0
 			 ORDER BY si.updated_at DESC, si.id ASC LIMIT 1)
@@ -1103,6 +1092,21 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 	}
 
 	tenantID := middleware.GetTenantID(ctx)
+	isPool := dns.IsPoolAssignedServiceType(serviceType)
+	if isPool && req.GetClusterId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required for pool-assigned service discovery")
+	}
+
+	// For pool-assigned services (foghorn/chandler/livepeer-gateway) the
+	// logical media cluster lives in service_cluster_assignments; the physical
+	// si.cluster_id stays bound to the host. Tenant access and the requested
+	// cluster filter therefore both apply against sca.cluster_id, not si.
+	clusterCol := "si.cluster_id"
+	extraJoin := ""
+	if isPool {
+		clusterCol = "sca.cluster_id"
+		extraJoin = "\n\t\tJOIN quartermaster.service_cluster_assignments sca ON sca.service_instance_id = si.id AND sca.is_active = TRUE\n\t\tJOIN quartermaster.infrastructure_clusters c ON c.cluster_id = sca.cluster_id"
+	}
 
 	// Build dynamic query
 	args := []any{serviceType}
@@ -1112,26 +1116,26 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 
 	if tenantID != "" {
 		// Authenticated: Filter by subscription OR ownership
-		whereClause += fmt.Sprintf(` AND (si.cluster_id IN (
+		whereClause += fmt.Sprintf(` AND (%s IN (
 			SELECT tca.cluster_id FROM quartermaster.tenant_cluster_access tca
 			WHERE tca.tenant_id = $%d AND tca.is_active = true
-		) OR si.cluster_id IN (
+		) OR %s IN (
 			SELECT ic.cluster_id FROM quartermaster.infrastructure_clusters ic
 			WHERE ic.owner_tenant_id = $%d
-		))`, argIdx, argIdx)
+		))`, clusterCol, argIdx, clusterCol, argIdx)
 		args = append(args, tenantID)
 		argIdx++
 	} else {
 		// Unauthenticated: Filter by default cluster only
-		whereClause += ` AND si.cluster_id IN (
+		whereClause += fmt.Sprintf(` AND %s IN (
 			SELECT ic.cluster_id FROM quartermaster.infrastructure_clusters ic
 			WHERE ic.is_default_cluster = true
-		)`
+		)`, clusterCol)
 	}
 
 	// Optional: scope to specific cluster
 	if clusterID := req.GetClusterId(); clusterID != "" {
-		whereClause += fmt.Sprintf(" AND si.cluster_id = $%d", argIdx)
+		whereClause += fmt.Sprintf(" AND %s = $%d", clusterCol, argIdx)
 		args = append(args, clusterID)
 		argIdx++
 	}
@@ -1153,16 +1157,25 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		orderDir = "ASC"
 	}
 
-	query := fmt.Sprintf(`
-		SELECT si.id, si.instance_id, si.service_id, si.cluster_id, si.node_id,
+	selectClause := `si.id, si.instance_id, si.service_id, si.cluster_id, si.node_id,
 		       si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status, COALESCE(si.metadata, '{}'::jsonb),
-		       si.last_health_check, si.created_at, si.updated_at
+		       si.last_health_check, si.created_at, si.updated_at`
+	if isPool {
+		// Override cluster_id with the assignment cluster, and pull cluster
+		// metadata so the handler can synthesize per-cluster public_host.
+		selectClause = `si.id, si.instance_id, si.service_id, sca.cluster_id, si.node_id,
+		       si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status, COALESCE(si.metadata, '{}'::jsonb),
+		       si.last_health_check, si.created_at, si.updated_at, c.cluster_name, c.base_url`
+	}
+
+	query := fmt.Sprintf(`
+		SELECT %s
 		FROM quartermaster.service_instances si
-		JOIN quartermaster.services s ON si.service_id = s.service_id
+		JOIN quartermaster.services s ON si.service_id = s.service_id%s
 		%s
 		ORDER BY si.created_at %s, si.id %s
 		LIMIT $%d
-	`, whereClause, orderDir, orderDir, argIdx)
+	`, selectClause, extraJoin, whereClause, orderDir, orderDir, argIdx)
 	args = append(args, params.Limit+1)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -1178,13 +1191,17 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		var lastHealthCheck sql.NullTime
 		var metadataJSON []byte
 		var createdAt, updatedAt time.Time
+		var clusterName, clusterBaseURL sql.NullString
 
-		err := rows.Scan(
+		scanTargets := []any{
 			&inst.Id, &inst.InstanceId, &inst.ServiceId, &inst.ClusterId, &nodeID,
 			&inst.Protocol, &host, &inst.Port, &healthEndpoint, &inst.Status, &metadataJSON,
 			&lastHealthCheck, &createdAt, &updatedAt,
-		)
-		if err != nil {
+		}
+		if isPool {
+			scanTargets = append(scanTargets, &clusterName, &clusterBaseURL)
+		}
+		if err := rows.Scan(scanTargets...); err != nil {
 			continue
 		}
 
@@ -1203,6 +1220,18 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		inst.Metadata = unmarshalStringMapJSON(metadataJSON)
 		inst.CreatedAt = timestamppb.New(createdAt)
 		inst.UpdatedAt = timestamppb.New(updatedAt)
+
+		if isPool {
+			// Synthesize the per-assignment public_host. For an M:N pool, the
+			// same physical instance returns a different public_host per
+			// requested cluster, so this cannot be stored as static metadata.
+			if publicHost := synthesizePublicHost(serviceType, inst.ClusterId, clusterName.String, clusterBaseURL.String); publicHost != "" {
+				if inst.Metadata == nil {
+					inst.Metadata = map[string]string{}
+				}
+				inst.Metadata[servicedefs.LivepeerGatewayMetadataPublicHost] = publicHost
+			}
+		}
 
 		instances = append(instances, &inst)
 	}
@@ -1237,31 +1266,35 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 }
 
 // ============================================================================
-// FOGHORN POOL MANAGEMENT
+// SERVICE POOL MANAGEMENT
 // ============================================================================
 
-func (s *QuartermasterServer) GetFoghornPoolStatus(ctx context.Context, _ *pb.GetFoghornPoolStatusRequest) (*pb.GetFoghornPoolStatusResponse, error) {
-	// Query all Foghorn instances with their cluster assignments via junction table
+func (s *QuartermasterServer) GetServicePoolStatus(ctx context.Context, req *pb.GetServicePoolStatusRequest) (*pb.GetServicePoolStatusResponse, error) {
+	serviceType, err := resolveAssignmentServiceType(req.GetServiceType())
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT si.id, si.instance_id, COALESCE(si.advertise_host, '') AS host,
 		       COALESCE(si.port, 0) AS port, si.status, si.created_at,
-		       COALESCE(fca.cluster_id, '') AS assigned_cluster
+		       COALESCE(sca.cluster_id, '') AS assigned_cluster
 		FROM quartermaster.service_instances si
 		JOIN quartermaster.services svc ON svc.service_id = si.service_id
-		LEFT JOIN quartermaster.foghorn_cluster_assignments fca
-		  ON fca.foghorn_instance_id = si.id AND fca.is_active = true
-		WHERE svc.type = 'foghorn'
+		LEFT JOIN quartermaster.service_cluster_assignments sca
+		  ON sca.service_instance_id = si.id AND sca.is_active = true
+		WHERE svc.type = $1
 		ORDER BY assigned_cluster, si.started_at ASC
-	`)
+	`, serviceType)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	clusterMap := make(map[string]*pb.FoghornPoolClusterEntry)
+	clusterMap := make(map[string]*pb.ServicePoolClusterEntry)
 	seenInstances := make(map[string]bool)
 	var total, unassigned, assigned int32
-	var assignments []*pb.FoghornInstanceAssignment
+	var assignments []*pb.ServiceInstanceAssignment
 
 	for rows.Next() {
 		var id, instanceID, host, instStatus, assignedCluster string
@@ -1286,19 +1319,19 @@ func (s *QuartermasterServer) GetFoghornPoolStatus(ctx context.Context, _ *pb.Ge
 				seenInstances[id+":counted"] = true
 				assigned++
 			}
-			assignments = append(assignments, &pb.FoghornInstanceAssignment{
-				FoghornInstanceId: id,
-				ClusterId:         assignedCluster,
-				IsActive:          true,
-				CreatedAt:         timestamppb.New(createdAt),
+			assignments = append(assignments, &pb.ServiceInstanceAssignment{
+				InstanceId: id,
+				ClusterId:  assignedCluster,
+				IsActive:   true,
+				CreatedAt:  timestamppb.New(createdAt),
 			})
 		}
 
-		// Group by cluster for backward-compat clusters view
+		// Group assignments by logical cluster for the pool-status response.
 		clusterID := assignedCluster
 		entry, ok := clusterMap[clusterID]
 		if !ok {
-			entry = &pb.FoghornPoolClusterEntry{ClusterId: clusterID}
+			entry = &pb.ServicePoolClusterEntry{ClusterId: clusterID}
 			clusterMap[clusterID] = entry
 		}
 		entry.InstanceCount++
@@ -1313,12 +1346,12 @@ func (s *QuartermasterServer) GetFoghornPoolStatus(ctx context.Context, _ *pb.Ge
 		})
 	}
 
-	clusters := make([]*pb.FoghornPoolClusterEntry, 0, len(clusterMap))
+	clusters := make([]*pb.ServicePoolClusterEntry, 0, len(clusterMap))
 	for _, entry := range clusterMap {
 		clusters = append(clusters, entry)
 	}
 
-	return &pb.GetFoghornPoolStatusResponse{
+	return &pb.GetServicePoolStatusResponse{
 		Total:       total,
 		Unassigned:  unassigned,
 		Assigned:    assigned,
@@ -1327,37 +1360,51 @@ func (s *QuartermasterServer) GetFoghornPoolStatus(ctx context.Context, _ *pb.Ge
 	}, nil
 }
 
-func (s *QuartermasterServer) AddToFoghornPool(ctx context.Context, req *pb.AddToFoghornPoolRequest) (*pb.AddToFoghornPoolResponse, error) {
+func resolveAssignmentServiceType(svcType string) (string, error) {
+	if t := strings.TrimSpace(svcType); t != "" {
+		if !dns.IsPoolAssignedServiceType(t) {
+			return "", status.Errorf(codes.InvalidArgument, "service_type %q is not pool-assigned", t)
+		}
+		return t, nil
+	}
+	return "", status.Error(codes.InvalidArgument, "service_type required")
+}
+
+func (s *QuartermasterServer) AddToServicePool(ctx context.Context, req *pb.AddToServicePoolRequest) (*pb.AddToServicePoolResponse, error) {
 	var res sql.Result
 	var err error
+	serviceType, err := resolveAssignmentServiceType(req.GetServiceType())
+	if err != nil {
+		return nil, err
+	}
 
 	if ids := req.GetInstanceIds(); len(ids) > 0 {
-		// Remove all cluster assignments for specific Foghorn instances
+		// Remove all cluster assignments for specific instances of service_type.
 		res, err = s.db.ExecContext(ctx, `
-			DELETE FROM quartermaster.foghorn_cluster_assignments
-			WHERE foghorn_instance_id IN (
+			DELETE FROM quartermaster.service_cluster_assignments
+			WHERE service_instance_id IN (
 				SELECT si.id FROM quartermaster.service_instances si
 				JOIN quartermaster.services svc ON svc.service_id = si.service_id
-				WHERE si.id = ANY($1) AND svc.type = 'foghorn'
+				WHERE si.id = ANY($1) AND svc.type = $2
 			)
-		`, pq.Array(ids))
+		`, pq.Array(ids), serviceType)
 	} else if req.GetCount() > 0 && req.GetFromClusterId() != "" {
-		// Remove N oldest assignments from a specific cluster
+		// Remove N oldest assignments from a specific cluster.
 		res, err = s.db.ExecContext(ctx, `
-			DELETE FROM quartermaster.foghorn_cluster_assignments
+			DELETE FROM quartermaster.service_cluster_assignments
 			WHERE id IN (
-				SELECT fca.id
-				FROM quartermaster.foghorn_cluster_assignments fca
-				JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
+				SELECT sca.id
+				FROM quartermaster.service_cluster_assignments sca
+				JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
 				JOIN quartermaster.services svc ON svc.service_id = si.service_id
-				WHERE svc.type = 'foghorn'
-				  AND fca.cluster_id = $1
-				  AND fca.is_active = true
+				WHERE svc.type = $3
+				  AND sca.cluster_id = $1
+				  AND sca.is_active = true
 				  AND si.status = 'running'
 				ORDER BY si.started_at ASC
 				LIMIT $2
 			)
-		`, req.GetFromClusterId(), req.GetCount())
+		`, req.GetFromClusterId(), req.GetCount(), serviceType)
 	} else {
 		return nil, status.Error(codes.InvalidArgument, "provide instance_ids or (count + from_cluster_id)")
 	}
@@ -1367,41 +1414,44 @@ func (s *QuartermasterServer) AddToFoghornPool(ctx context.Context, req *pb.AddT
 	}
 
 	released, _ := res.RowsAffected()
-	return &pb.AddToFoghornPoolResponse{Released: int32(released)}, nil
+	return &pb.AddToServicePoolResponse{Released: int32(released)}, nil
 }
 
-func (s *QuartermasterServer) DrainFoghornInstance(ctx context.Context, req *pb.DrainFoghornInstanceRequest) (*pb.DrainFoghornInstanceResponse, error) {
+func (s *QuartermasterServer) DrainServiceInstance(ctx context.Context, req *pb.DrainServiceInstanceRequest) (*pb.DrainServiceInstanceResponse, error) {
 	instanceID := req.GetInstanceId()
 	if instanceID == "" {
 		return nil, status.Error(codes.InvalidArgument, "instance_id required")
 	}
+	serviceType, err := resolveAssignmentServiceType(req.GetServiceType())
+	if err != nil {
+		return nil, err
+	}
 
-	// Get one of the previous cluster assignments before removing
+	// Get one of the previous cluster assignments before removing.
 	var previousClusterID sql.NullString
 	_ = s.db.QueryRowContext(ctx, `
-		SELECT fca.cluster_id
-		FROM quartermaster.foghorn_cluster_assignments fca
-		JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
+		SELECT sca.cluster_id
+		FROM quartermaster.service_cluster_assignments sca
+		JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
 		JOIN quartermaster.services svc ON svc.service_id = si.service_id
-		WHERE si.id = $1 AND svc.type = 'foghorn' AND fca.is_active = true
+		WHERE si.id = $1 AND svc.type = $2 AND sca.is_active = true
 		LIMIT 1
-	`, instanceID).Scan(&previousClusterID)
+	`, instanceID, serviceType).Scan(&previousClusterID)
 
-	// Remove all cluster assignments for this instance
 	res, err := s.db.ExecContext(ctx, `
-		DELETE FROM quartermaster.foghorn_cluster_assignments
-		WHERE foghorn_instance_id = (
+		DELETE FROM quartermaster.service_cluster_assignments
+		WHERE service_instance_id = (
 			SELECT si.id FROM quartermaster.service_instances si
 			JOIN quartermaster.services svc ON svc.service_id = si.service_id
-			WHERE si.id = $1 AND svc.type = 'foghorn'
+			WHERE si.id = $1 AND svc.type = $2
 		)
-	`, instanceID)
+	`, instanceID, serviceType)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 	if affected, _ := res.RowsAffected(); affected == 0 {
 		if !previousClusterID.Valid {
-			return nil, status.Error(codes.NotFound, "instance not found or not a foghorn instance")
+			return nil, status.Errorf(codes.NotFound, "instance not found or not a %s instance", serviceType)
 		}
 	}
 
@@ -1409,16 +1459,19 @@ func (s *QuartermasterServer) DrainFoghornInstance(ctx context.Context, req *pb.
 	if previousClusterID.Valid {
 		prev = previousClusterID.String
 	}
-	return &pb.DrainFoghornInstanceResponse{PreviousClusterId: prev}, nil
+	return &pb.DrainServiceInstanceResponse{PreviousClusterId: prev}, nil
 }
 
-func (s *QuartermasterServer) AssignFoghornToCluster(ctx context.Context, req *pb.AssignFoghornToClusterRequest) (*emptypb.Empty, error) {
+func (s *QuartermasterServer) AssignServiceToCluster(ctx context.Context, req *pb.AssignServiceToClusterRequest) (*emptypb.Empty, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
+	serviceType, err := resolveAssignmentServiceType(req.GetServiceType())
+	if err != nil {
+		return nil, err
+	}
 
-	// Verify cluster exists
 	var exists bool
 	if err := s.db.QueryRowContext(ctx,
 		"SELECT EXISTS(SELECT 1 FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1 AND is_active = true)",
@@ -1426,75 +1479,78 @@ func (s *QuartermasterServer) AssignFoghornToCluster(ctx context.Context, req *p
 		return nil, status.Error(codes.NotFound, "cluster not found or inactive")
 	}
 
-	if ids := req.GetFoghornInstanceIds(); len(ids) > 0 {
-		// Assign specific Foghorn instances
+	if ids := req.GetInstanceIds(); len(ids) > 0 {
 		for _, instID := range ids {
 			res, err := s.db.ExecContext(ctx, `
-				INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
+				INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id)
 				SELECT si.id, $1
 				FROM quartermaster.service_instances si
 				JOIN quartermaster.services svc ON svc.service_id = si.service_id
-				WHERE si.id = $2::uuid AND svc.type = 'foghorn' AND si.status = 'running'
-				ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true
-			`, clusterID, instID)
+				WHERE si.id = $2::uuid AND svc.type = $3 AND si.status = 'running'
+				ON CONFLICT (service_instance_id, cluster_id) DO UPDATE SET is_active = true, updated_at = NOW()
+			`, clusterID, instID, serviceType)
 			if err != nil {
 				return nil, status.Errorf(codes.Internal, "failed to assign instance %s: %v", instID, err)
 			}
 			if affected, rowsErr := res.RowsAffected(); rowsErr != nil {
 				return nil, status.Errorf(codes.Internal, "failed to confirm assignment for instance %s: %v", instID, rowsErr)
 			} else if affected == 0 {
-				return nil, status.Errorf(codes.NotFound, "foghorn instance %s not found or not running", instID)
+				return nil, status.Errorf(codes.NotFound, "%s instance %s not found or not running", serviceType, instID)
 			}
 		}
 	} else if count := req.GetCount(); count > 0 {
-		// Pick N Foghorns with fewest active assignments
 		res, err := s.db.ExecContext(ctx, `
-			INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
+			INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id)
 			SELECT si.id, $1
 			FROM quartermaster.service_instances si
 			JOIN quartermaster.services svc ON svc.service_id = si.service_id
-			LEFT JOIN quartermaster.foghorn_cluster_assignments fca
-			  ON fca.foghorn_instance_id = si.id AND fca.is_active = true
-			WHERE svc.type = 'foghorn' AND si.status = 'running'
+			LEFT JOIN quartermaster.service_cluster_assignments sca
+			  ON sca.service_instance_id = si.id AND sca.is_active = true
+			WHERE svc.type = $3 AND si.status = 'running'
 			GROUP BY si.id
-			ORDER BY COUNT(fca.id) ASC, si.started_at ASC, si.id ASC
+			ORDER BY COUNT(sca.id) ASC, si.started_at ASC, si.id ASC
 			LIMIT $2
-			ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true
-		`, clusterID, count)
+			ON CONFLICT (service_instance_id, cluster_id) DO UPDATE SET is_active = true, updated_at = NOW()
+		`, clusterID, count, serviceType)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to assign foghorns: %v", err)
+			return nil, status.Errorf(codes.Internal, "failed to assign %s instances: %v", serviceType, err)
 		}
 		if affected, rowsErr := res.RowsAffected(); rowsErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to confirm foghorn assignment: %v", rowsErr)
+			return nil, status.Errorf(codes.Internal, "failed to confirm %s assignment: %v", serviceType, rowsErr)
 		} else if affected < int64(count) {
-			return nil, status.Errorf(codes.FailedPrecondition, "assigned %d foghorns, requested %d", affected, count)
+			return nil, status.Errorf(codes.FailedPrecondition, "assigned %d %s instances, requested %d", affected, serviceType, count)
 		}
 	} else {
-		return nil, status.Error(codes.InvalidArgument, "provide foghorn_instance_ids or count")
+		return nil, status.Error(codes.InvalidArgument, "provide instance_ids or count")
 	}
 
 	return &emptypb.Empty{}, nil
 }
 
-func (s *QuartermasterServer) UnassignFoghornFromCluster(ctx context.Context, req *pb.UnassignFoghornFromClusterRequest) (*emptypb.Empty, error) {
+func (s *QuartermasterServer) UnassignServiceFromCluster(ctx context.Context, req *pb.UnassignServiceFromClusterRequest) (*emptypb.Empty, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
 
-	ids := req.GetFoghornInstanceIds()
+	ids := req.GetInstanceIds()
 	if len(ids) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "foghorn_instance_ids required")
+		return nil, status.Error(codes.InvalidArgument, "instance_ids required")
+	}
+	serviceType, err := resolveAssignmentServiceType(req.GetServiceType())
+	if err != nil {
+		return nil, err
 	}
 
-	_, err := s.db.ExecContext(ctx, `
-		DELETE FROM quartermaster.foghorn_cluster_assignments
+	_, err = s.db.ExecContext(ctx, `
+		DELETE FROM quartermaster.service_cluster_assignments
 		WHERE cluster_id = $1
-		  AND foghorn_instance_id IN (
+		  AND service_instance_id IN (
 			SELECT si.id FROM quartermaster.service_instances si
-			WHERE si.id = ANY($2::uuid[])
+			JOIN quartermaster.services svc ON svc.service_id = si.service_id
+			WHERE si.id = ANY($2::uuid[]) AND svc.type = $3
 		  )
-	`, clusterID, pq.Array(ids))
+	`, clusterID, pq.Array(ids), serviceType)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to unassign: %v", err)
 	}
@@ -1589,11 +1645,11 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 		SELECT si.id::text, si.advertise_host || ':' || si.port
 		FROM quartermaster.service_instances si
 		JOIN quartermaster.services svc ON svc.service_id = si.service_id
-		LEFT JOIN quartermaster.foghorn_cluster_assignments fca
-		  ON fca.foghorn_instance_id = si.id AND fca.is_active = true
+		LEFT JOIN quartermaster.service_cluster_assignments sca
+		  ON sca.service_instance_id = si.id AND sca.is_active = true
 		WHERE svc.type = 'foghorn' AND si.status = 'running' AND si.protocol = 'grpc'
 		GROUP BY si.id, si.advertise_host, si.port
-		ORDER BY COUNT(fca.id) ASC, si.started_at ASC, si.id ASC
+		ORDER BY COUNT(sca.id) ASC, si.started_at ASC, si.id ASC
 		LIMIT 1
 	`).Scan(&foghornInstanceID, &foghornAddr)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1605,9 +1661,12 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 
 	// Create junction table entry
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
-		VALUES ($1::uuid, $2)
-		ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true
+		INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id)
+		SELECT si.id, $2
+		FROM quartermaster.service_instances si
+		JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		WHERE si.id = $1::uuid AND svc.type = 'foghorn'
+		ON CONFLICT (service_instance_id, cluster_id) DO UPDATE SET is_active = true, updated_at = NOW()
 	`, foghornInstanceID, clusterID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to assign Foghorn to cluster: %v", err)
@@ -2797,19 +2856,19 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
 	}
 
-	// Assign idle Foghorn instances to this cluster via foghorn_cluster_assignments.
+	// Assign idle Foghorn instances to this cluster via service_cluster_assignments.
 	// "Idle" = Foghorn with zero active assignments in the junction table.
 	if foghornCount := req.GetFoghornCount(); foghornCount > 0 {
 		res, claimErr := s.db.ExecContext(ctx, `
-			INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
+			INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id)
 			SELECT si.id, $1
 			FROM quartermaster.service_instances si
 			JOIN quartermaster.services svc ON svc.service_id = si.service_id
-			LEFT JOIN quartermaster.foghorn_cluster_assignments fca
-			  ON fca.foghorn_instance_id = si.id AND fca.is_active = true
+			LEFT JOIN quartermaster.service_cluster_assignments sca
+			  ON sca.service_instance_id = si.id AND sca.is_active = true
 			WHERE svc.type = 'foghorn'
 			  AND si.status = 'running'
-			  AND fca.id IS NULL
+			  AND sca.id IS NULL
 			ORDER BY si.started_at ASC
 			LIMIT $2
 			ON CONFLICT DO NOTHING
@@ -3813,7 +3872,42 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 	if serviceTypeFilter == models.NodeTypeEdge {
 		return s.listHealthyEdgeNodes(ctx, baseWhere, baseArgs, staleThreshold)
 	}
+	// Pool-style media services (foghorn, chandler, livepeer-gateway) resolve
+	// their logical media-cluster identity via service_cluster_assignments.
+	// The physical service_instances row stays bound to the host cluster, so
+	// reads must follow the assignment table to surface the right cluster_id.
+	// Edge subtypes (edge-ingest/egress/storage/processing) keep the standard
+	// service_instances path: edge nodes are the media cluster physically, so
+	// si.cluster_id == the logical media cluster.
+	if dns.IsPoolAssignedServiceType(serviceTypeFilter) {
+		return s.listHealthyAssignedServiceNodes(ctx, baseWhere, baseArgs, serviceTypeFilter, staleThreshold)
+	}
 	return s.listHealthyServiceNodes(ctx, baseWhere, baseArgs, serviceTypeFilter, staleThreshold)
+}
+
+// synthesizePublicHost builds the per-assignment FQDN for a pool-assigned
+// service from DB cluster metadata. The same physical instance assigned to
+// multiple media clusters returns a different public_host per requested
+// cluster — so this is computed at lookup time rather than stored as static
+// service_instances metadata.
+func synthesizePublicHost(serviceType, clusterID, clusterName, baseURL string) string {
+	root := strings.TrimSpace(baseURL)
+	root = strings.TrimPrefix(root, "https://")
+	root = strings.TrimPrefix(root, "http://")
+	root = strings.TrimSuffix(root, "/")
+	if root == "" {
+		return ""
+	}
+	slug := dns.ClusterSlug(clusterID, clusterName)
+	if slug == "" {
+		return ""
+	}
+	scope := slug + "." + root
+	fqdn, ok := dns.ServiceFQDN(serviceType, scope)
+	if !ok {
+		return ""
+	}
+	return fqdn
 }
 
 // listHealthyEdgeNodes returns edge nodes with a recent heartbeat.
@@ -3929,6 +4023,84 @@ func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseW
 		%s
 		%s
 	`, siJoin, servicesJoin, healthWhere), healthArgs...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var nodes []*pb.InfrastructureNode
+	for rows.Next() {
+		node, err := scanNode(rows)
+		if err != nil {
+			s.logger.WithError(err).Warn("Failed to scan node")
+			continue
+		}
+		nodes = append(nodes, node)
+	}
+
+	return &pb.ListHealthyNodesForDNSResponse{
+		Nodes:        nodes,
+		TotalNodes:   totalNodes,
+		HealthyNodes: healthyNodes,
+	}, nil
+}
+
+// listHealthyAssignedServiceNodes resolves a cluster-scoped Bunny service's
+// healthy nodes via service_cluster_assignments. service_instances.cluster_id
+// stays the physical/runtime cluster (FK-bound to the host); the logical media
+// cluster comes from sca.cluster_id. The same physical instance can therefore
+// surface under multiple media-cluster DNS records (M:N).
+func (s *QuartermasterServer) listHealthyAssignedServiceNodes(ctx context.Context, baseWhere string, baseArgs []any, serviceTypeFilter string, staleThreshold int32) (*pb.ListHealthyNodesForDNSResponse, error) {
+	where := strings.ReplaceAll(baseWhere, "n.cluster_id", "sca.cluster_id")
+	args := append([]any{}, baseArgs...)
+	argIdx := len(args) + 1
+
+	if where == "" {
+		where = "WHERE TRUE"
+	}
+	where += fmt.Sprintf(" AND sca.is_active = TRUE AND s.type = $%d AND n.external_ip IS NOT NULL", argIdx)
+	args = append(args, serviceTypeFilter)
+	argIdx++
+
+	joins := `
+		JOIN quartermaster.service_cluster_assignments sca ON sca.service_instance_id = si.id
+		JOIN quartermaster.services s ON si.service_id = s.service_id
+		JOIN quartermaster.infrastructure_nodes n
+			ON si.node_id = n.node_id
+			OR si.advertise_host = host(n.external_ip)
+			OR si.advertise_host = host(n.internal_ip)
+			OR si.advertise_host = host(n.wireguard_ip)`
+
+	var totalNodes int32
+	if err := s.db.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT COUNT(DISTINCT (n.id, sca.cluster_id)) FROM quartermaster.service_instances si %s %s`, joins, where),
+		args...,
+	).Scan(&totalNodes); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	healthArgs := append([]any{}, args...)
+	healthArgs = append(healthArgs, staleThreshold)
+	healthWhere := where + fmt.Sprintf(" AND si.health_status = 'healthy' AND si.last_health_check > NOW() - ($%d * INTERVAL '1 second')", argIdx)
+
+	var healthyNodes int32
+	if err := s.db.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT COUNT(DISTINCT (n.id, sca.cluster_id)) FROM quartermaster.service_instances si %s %s`, joins, healthWhere),
+		healthArgs...,
+	).Scan(&healthyNodes); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT DISTINCT n.id, n.node_id, sca.cluster_id, n.node_name, n.node_type, n.internal_ip, n.external_ip,
+		       n.wireguard_ip, n.wireguard_public_key, n.wireguard_listen_port, n.region, n.availability_zone,
+		       n.latitude, n.longitude,
+		       n.cpu_cores, n.memory_gb, n.disk_gb,
+		       n.last_heartbeat, n.enrollment_origin, n.applied_mesh_revision, n.status, n.created_at, n.updated_at
+		FROM quartermaster.service_instances si
+		%s
+		%s
+	`, joins, healthWhere), healthArgs...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -5271,10 +5443,10 @@ func (s *QuartermasterServer) lookupClusterFoghornGRPC(ctx context.Context, clus
 	err := s.db.QueryRowContext(ctx, `
 		SELECT si.advertise_host || ':' || si.port
 		FROM quartermaster.service_instances si
-		JOIN quartermaster.foghorn_cluster_assignments fca ON fca.foghorn_instance_id = si.id
+		JOIN quartermaster.service_cluster_assignments sca ON sca.service_instance_id = si.id
 		JOIN quartermaster.services svc ON svc.service_id = si.service_id
-		WHERE fca.cluster_id = $1
-		  AND fca.is_active = true
+		WHERE sca.cluster_id = $1
+		  AND sca.is_active = true
 		  AND si.status = 'running'
 		  AND si.protocol = 'grpc'
 		  AND svc.type = 'foghorn'
@@ -8142,10 +8314,12 @@ func (s *QuartermasterServer) ListPeers(ctx context.Context, req *pb.ListPeersRe
 		       ic.cluster_type,
 		       COALESCE(
 		           (SELECT si.advertise_host || ':' || si.port
-		            FROM quartermaster.foghorn_cluster_assignments fca
-		            JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
-		            WHERE fca.cluster_id = pc.cluster_id
-		              AND fca.is_active = TRUE
+		            FROM quartermaster.service_cluster_assignments sca
+		            JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
+		            JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		            WHERE sca.cluster_id = pc.cluster_id
+		              AND sca.is_active = TRUE
+		              AND svc.type = 'foghorn'
 		              AND si.status = 'running'
 		              AND si.protocol = 'grpc'
 		            ORDER BY si.updated_at DESC, si.id ASC

@@ -10,9 +10,19 @@ import (
 	"sort"
 
 	fwsops "frameworks/cli/pkg/sops"
+	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/servicedefs"
 	"gopkg.in/yaml.v3"
 )
+
+// isClusterScopedBunny reports whether the manifest service name is a
+// cluster-scoped Bunny media service whose `cluster`/`clusters` pin is a
+// logical media-cluster assignment (foghorn/chandler/livepeer-gateway). Used
+// by Validate to enforce the media/edge constraint on logical pins.
+func isClusterScopedBunny(serviceName string) bool {
+	return pkgdns.ProviderForServiceType(serviceName) == pkgdns.ProviderBunny &&
+		pkgdns.IsClusterScopedServiceType(serviceName)
+}
 
 // strictUnmarshal rejects any YAML field that isn't declared on the target
 // struct. This enforces the schema at parse time — removed fields (ssh_key,
@@ -394,9 +404,39 @@ func (m *Manifest) Validate() error {
 		if svc.Enabled && svc.Host == "" && len(svc.Hosts) == 0 && !autoScopedServices[name] {
 			return fmt.Errorf("service '%s' is enabled but has no host or hosts defined", name)
 		}
+		if svc.Cluster != "" && len(svc.Clusters) > 0 {
+			return fmt.Errorf("service '%s' sets both 'cluster' and 'clusters'; use one (clusters: [...] is the M:N form, cluster: <id> is shorthand)", name)
+		}
 		if svc.Cluster != "" && len(m.Clusters) > 0 {
 			if _, ok := m.Clusters[svc.Cluster]; !ok {
 				return fmt.Errorf("service '%s' references undefined cluster '%s'", name, svc.Cluster)
+			}
+		}
+		for _, c := range svc.Clusters {
+			if len(m.Clusters) == 0 {
+				break
+			}
+			if _, ok := m.Clusters[c]; !ok {
+				return fmt.Errorf("service '%s' references undefined cluster '%s' (in clusters)", name, c)
+			}
+		}
+		// For cluster-scoped Bunny services, any explicit cluster pin must be a
+		// media/edge cluster. Physical placement (host/hosts) is independent
+		// and can live on a core/control cluster — this only checks logical
+		// assignment.
+		if isClusterScopedBunny(name) && len(m.Clusters) > 0 {
+			pins := append([]string{}, svc.Clusters...)
+			if svc.Cluster != "" {
+				pins = append(pins, svc.Cluster)
+			}
+			for _, c := range pins {
+				cfg, ok := m.Clusters[c]
+				if !ok {
+					continue
+				}
+				if cfg.Type != "edge" && !slices.Contains(cfg.Roles, "media") {
+					return fmt.Errorf("service '%s' is media/cluster-scoped and cannot be pinned to cluster '%s' (cluster must be type=edge or have role=media)", name, c)
+				}
 			}
 		}
 		if svc.Host != "" {

@@ -10044,26 +10044,29 @@ func (x *ListIngressSitesResponse) GetPagination() *CursorPaginationResponse {
 	return nil
 }
 
-type GetFoghornPoolStatusRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+type GetServicePoolStatusRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Required cluster-scoped Bunny service type: foghorn, chandler, or
+	// livepeer-gateway.
+	ServiceType   string `protobuf:"bytes,1,opt,name=service_type,json=serviceType,proto3" json:"service_type,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *GetFoghornPoolStatusRequest) Reset() {
-	*x = GetFoghornPoolStatusRequest{}
+func (x *GetServicePoolStatusRequest) Reset() {
+	*x = GetServicePoolStatusRequest{}
 	mi := &file_quartermaster_proto_msgTypes[128]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *GetFoghornPoolStatusRequest) String() string {
+func (x *GetServicePoolStatusRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GetFoghornPoolStatusRequest) ProtoMessage() {}
+func (*GetServicePoolStatusRequest) ProtoMessage() {}
 
-func (x *GetFoghornPoolStatusRequest) ProtoReflect() protoreflect.Message {
+func (x *GetServicePoolStatusRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_quartermaster_proto_msgTypes[128]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -10075,12 +10078,19 @@ func (x *GetFoghornPoolStatusRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use GetFoghornPoolStatusRequest.ProtoReflect.Descriptor instead.
-func (*GetFoghornPoolStatusRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use GetServicePoolStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetServicePoolStatusRequest) Descriptor() ([]byte, []int) {
 	return file_quartermaster_proto_rawDescGZIP(), []int{128}
 }
 
-type FoghornPoolClusterEntry struct {
+func (x *GetServicePoolStatusRequest) GetServiceType() string {
+	if x != nil {
+		return x.ServiceType
+	}
+	return ""
+}
+
+type ServicePoolClusterEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
 	InstanceCount int32                  `protobuf:"varint,2,opt,name=instance_count,json=instanceCount,proto3" json:"instance_count,omitempty"`
@@ -10089,20 +10099,20 @@ type FoghornPoolClusterEntry struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *FoghornPoolClusterEntry) Reset() {
-	*x = FoghornPoolClusterEntry{}
+func (x *ServicePoolClusterEntry) Reset() {
+	*x = ServicePoolClusterEntry{}
 	mi := &file_quartermaster_proto_msgTypes[129]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *FoghornPoolClusterEntry) String() string {
+func (x *ServicePoolClusterEntry) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*FoghornPoolClusterEntry) ProtoMessage() {}
+func (*ServicePoolClusterEntry) ProtoMessage() {}
 
-func (x *FoghornPoolClusterEntry) ProtoReflect() protoreflect.Message {
+func (x *ServicePoolClusterEntry) ProtoReflect() protoreflect.Message {
 	mi := &file_quartermaster_proto_msgTypes[129]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -10114,56 +10124,56 @@ func (x *FoghornPoolClusterEntry) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use FoghornPoolClusterEntry.ProtoReflect.Descriptor instead.
-func (*FoghornPoolClusterEntry) Descriptor() ([]byte, []int) {
+// Deprecated: Use ServicePoolClusterEntry.ProtoReflect.Descriptor instead.
+func (*ServicePoolClusterEntry) Descriptor() ([]byte, []int) {
 	return file_quartermaster_proto_rawDescGZIP(), []int{129}
 }
 
-func (x *FoghornPoolClusterEntry) GetClusterId() string {
+func (x *ServicePoolClusterEntry) GetClusterId() string {
 	if x != nil {
 		return x.ClusterId
 	}
 	return ""
 }
 
-func (x *FoghornPoolClusterEntry) GetInstanceCount() int32 {
+func (x *ServicePoolClusterEntry) GetInstanceCount() int32 {
 	if x != nil {
 		return x.InstanceCount
 	}
 	return 0
 }
 
-func (x *FoghornPoolClusterEntry) GetInstances() []*ServiceInstance {
+func (x *ServicePoolClusterEntry) GetInstances() []*ServiceInstance {
 	if x != nil {
 		return x.Instances
 	}
 	return nil
 }
 
-type FoghornInstanceAssignment struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	FoghornInstanceId string                 `protobuf:"bytes,1,opt,name=foghorn_instance_id,json=foghornInstanceId,proto3" json:"foghorn_instance_id,omitempty"` // service_instance UUID
-	ClusterId         string                 `protobuf:"bytes,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
-	IsActive          bool                   `protobuf:"varint,3,opt,name=is_active,json=isActive,proto3" json:"is_active,omitempty"`
-	CreatedAt         *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+type ServiceInstanceAssignment struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceId    string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	ClusterId     string                 `protobuf:"bytes,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	IsActive      bool                   `protobuf:"varint,3,opt,name=is_active,json=isActive,proto3" json:"is_active,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *FoghornInstanceAssignment) Reset() {
-	*x = FoghornInstanceAssignment{}
+func (x *ServiceInstanceAssignment) Reset() {
+	*x = ServiceInstanceAssignment{}
 	mi := &file_quartermaster_proto_msgTypes[130]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *FoghornInstanceAssignment) String() string {
+func (x *ServiceInstanceAssignment) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*FoghornInstanceAssignment) ProtoMessage() {}
+func (*ServiceInstanceAssignment) ProtoMessage() {}
 
-func (x *FoghornInstanceAssignment) ProtoReflect() protoreflect.Message {
+func (x *ServiceInstanceAssignment) ProtoReflect() protoreflect.Message {
 	mi := &file_quartermaster_proto_msgTypes[130]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -10175,284 +10185,304 @@ func (x *FoghornInstanceAssignment) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use FoghornInstanceAssignment.ProtoReflect.Descriptor instead.
-func (*FoghornInstanceAssignment) Descriptor() ([]byte, []int) {
+// Deprecated: Use ServiceInstanceAssignment.ProtoReflect.Descriptor instead.
+func (*ServiceInstanceAssignment) Descriptor() ([]byte, []int) {
 	return file_quartermaster_proto_rawDescGZIP(), []int{130}
 }
 
-func (x *FoghornInstanceAssignment) GetFoghornInstanceId() string {
-	if x != nil {
-		return x.FoghornInstanceId
-	}
-	return ""
-}
-
-func (x *FoghornInstanceAssignment) GetClusterId() string {
-	if x != nil {
-		return x.ClusterId
-	}
-	return ""
-}
-
-func (x *FoghornInstanceAssignment) GetIsActive() bool {
-	if x != nil {
-		return x.IsActive
-	}
-	return false
-}
-
-func (x *FoghornInstanceAssignment) GetCreatedAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.CreatedAt
-	}
-	return nil
-}
-
-type GetFoghornPoolStatusResponse struct {
-	state         protoimpl.MessageState       `protogen:"open.v1"`
-	Total         int32                        `protobuf:"varint,1,opt,name=total,proto3" json:"total,omitempty"`
-	Unassigned    int32                        `protobuf:"varint,2,opt,name=unassigned,proto3" json:"unassigned,omitempty"`
-	Assigned      int32                        `protobuf:"varint,3,opt,name=assigned,proto3" json:"assigned,omitempty"`
-	Clusters      []*FoghornPoolClusterEntry   `protobuf:"bytes,4,rep,name=clusters,proto3" json:"clusters,omitempty"`       // includes unassigned with cluster_id=""
-	Assignments   []*FoghornInstanceAssignment `protobuf:"bytes,5,rep,name=assignments,proto3" json:"assignments,omitempty"` // Full many-to-many mapping
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetFoghornPoolStatusResponse) Reset() {
-	*x = GetFoghornPoolStatusResponse{}
-	mi := &file_quartermaster_proto_msgTypes[131]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetFoghornPoolStatusResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetFoghornPoolStatusResponse) ProtoMessage() {}
-
-func (x *GetFoghornPoolStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[131]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetFoghornPoolStatusResponse.ProtoReflect.Descriptor instead.
-func (*GetFoghornPoolStatusResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{131}
-}
-
-func (x *GetFoghornPoolStatusResponse) GetTotal() int32 {
-	if x != nil {
-		return x.Total
-	}
-	return 0
-}
-
-func (x *GetFoghornPoolStatusResponse) GetUnassigned() int32 {
-	if x != nil {
-		return x.Unassigned
-	}
-	return 0
-}
-
-func (x *GetFoghornPoolStatusResponse) GetAssigned() int32 {
-	if x != nil {
-		return x.Assigned
-	}
-	return 0
-}
-
-func (x *GetFoghornPoolStatusResponse) GetClusters() []*FoghornPoolClusterEntry {
-	if x != nil {
-		return x.Clusters
-	}
-	return nil
-}
-
-func (x *GetFoghornPoolStatusResponse) GetAssignments() []*FoghornInstanceAssignment {
-	if x != nil {
-		return x.Assignments
-	}
-	return nil
-}
-
-type AddToFoghornPoolRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InstanceIds   []string               `protobuf:"bytes,1,rep,name=instance_ids,json=instanceIds,proto3" json:"instance_ids,omitempty"`         // specific instances to release to pool
-	Count         int32                  `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`                                       // alternatively, release N oldest from a cluster
-	FromClusterId string                 `protobuf:"bytes,3,opt,name=from_cluster_id,json=fromClusterId,proto3" json:"from_cluster_id,omitempty"` // cluster to release from (used with count)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *AddToFoghornPoolRequest) Reset() {
-	*x = AddToFoghornPoolRequest{}
-	mi := &file_quartermaster_proto_msgTypes[132]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *AddToFoghornPoolRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*AddToFoghornPoolRequest) ProtoMessage() {}
-
-func (x *AddToFoghornPoolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[132]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use AddToFoghornPoolRequest.ProtoReflect.Descriptor instead.
-func (*AddToFoghornPoolRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{132}
-}
-
-func (x *AddToFoghornPoolRequest) GetInstanceIds() []string {
-	if x != nil {
-		return x.InstanceIds
-	}
-	return nil
-}
-
-func (x *AddToFoghornPoolRequest) GetCount() int32 {
-	if x != nil {
-		return x.Count
-	}
-	return 0
-}
-
-func (x *AddToFoghornPoolRequest) GetFromClusterId() string {
-	if x != nil {
-		return x.FromClusterId
-	}
-	return ""
-}
-
-type AddToFoghornPoolResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Released      int32                  `protobuf:"varint,1,opt,name=released,proto3" json:"released,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *AddToFoghornPoolResponse) Reset() {
-	*x = AddToFoghornPoolResponse{}
-	mi := &file_quartermaster_proto_msgTypes[133]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *AddToFoghornPoolResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*AddToFoghornPoolResponse) ProtoMessage() {}
-
-func (x *AddToFoghornPoolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[133]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use AddToFoghornPoolResponse.ProtoReflect.Descriptor instead.
-func (*AddToFoghornPoolResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{133}
-}
-
-func (x *AddToFoghornPoolResponse) GetReleased() int32 {
-	if x != nil {
-		return x.Released
-	}
-	return 0
-}
-
-type DrainFoghornInstanceRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InstanceId    string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"` // service_instance UUID
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DrainFoghornInstanceRequest) Reset() {
-	*x = DrainFoghornInstanceRequest{}
-	mi := &file_quartermaster_proto_msgTypes[134]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DrainFoghornInstanceRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DrainFoghornInstanceRequest) ProtoMessage() {}
-
-func (x *DrainFoghornInstanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[134]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DrainFoghornInstanceRequest.ProtoReflect.Descriptor instead.
-func (*DrainFoghornInstanceRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{134}
-}
-
-func (x *DrainFoghornInstanceRequest) GetInstanceId() string {
+func (x *ServiceInstanceAssignment) GetInstanceId() string {
 	if x != nil {
 		return x.InstanceId
 	}
 	return ""
 }
 
-type DrainFoghornInstanceResponse struct {
+func (x *ServiceInstanceAssignment) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *ServiceInstanceAssignment) GetIsActive() bool {
+	if x != nil {
+		return x.IsActive
+	}
+	return false
+}
+
+func (x *ServiceInstanceAssignment) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+type GetServicePoolStatusResponse struct {
+	state         protoimpl.MessageState       `protogen:"open.v1"`
+	Total         int32                        `protobuf:"varint,1,opt,name=total,proto3" json:"total,omitempty"`
+	Unassigned    int32                        `protobuf:"varint,2,opt,name=unassigned,proto3" json:"unassigned,omitempty"`
+	Assigned      int32                        `protobuf:"varint,3,opt,name=assigned,proto3" json:"assigned,omitempty"`
+	Clusters      []*ServicePoolClusterEntry   `protobuf:"bytes,4,rep,name=clusters,proto3" json:"clusters,omitempty"` // includes unassigned with cluster_id=""
+	Assignments   []*ServiceInstanceAssignment `protobuf:"bytes,5,rep,name=assignments,proto3" json:"assignments,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetServicePoolStatusResponse) Reset() {
+	*x = GetServicePoolStatusResponse{}
+	mi := &file_quartermaster_proto_msgTypes[131]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetServicePoolStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetServicePoolStatusResponse) ProtoMessage() {}
+
+func (x *GetServicePoolStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_quartermaster_proto_msgTypes[131]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetServicePoolStatusResponse.ProtoReflect.Descriptor instead.
+func (*GetServicePoolStatusResponse) Descriptor() ([]byte, []int) {
+	return file_quartermaster_proto_rawDescGZIP(), []int{131}
+}
+
+func (x *GetServicePoolStatusResponse) GetTotal() int32 {
+	if x != nil {
+		return x.Total
+	}
+	return 0
+}
+
+func (x *GetServicePoolStatusResponse) GetUnassigned() int32 {
+	if x != nil {
+		return x.Unassigned
+	}
+	return 0
+}
+
+func (x *GetServicePoolStatusResponse) GetAssigned() int32 {
+	if x != nil {
+		return x.Assigned
+	}
+	return 0
+}
+
+func (x *GetServicePoolStatusResponse) GetClusters() []*ServicePoolClusterEntry {
+	if x != nil {
+		return x.Clusters
+	}
+	return nil
+}
+
+func (x *GetServicePoolStatusResponse) GetAssignments() []*ServiceInstanceAssignment {
+	if x != nil {
+		return x.Assignments
+	}
+	return nil
+}
+
+type AddToServicePoolRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceIds   []string               `protobuf:"bytes,1,rep,name=instance_ids,json=instanceIds,proto3" json:"instance_ids,omitempty"`         // specific instances to release to pool
+	Count         int32                  `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`                                       // alternatively, release N oldest from a cluster
+	FromClusterId string                 `protobuf:"bytes,3,opt,name=from_cluster_id,json=fromClusterId,proto3" json:"from_cluster_id,omitempty"` // cluster to release from (used with count)
+	// Required cluster-scoped Bunny service type: foghorn, chandler, or
+	// livepeer-gateway.
+	ServiceType   string `protobuf:"bytes,4,opt,name=service_type,json=serviceType,proto3" json:"service_type,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddToServicePoolRequest) Reset() {
+	*x = AddToServicePoolRequest{}
+	mi := &file_quartermaster_proto_msgTypes[132]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddToServicePoolRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddToServicePoolRequest) ProtoMessage() {}
+
+func (x *AddToServicePoolRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_quartermaster_proto_msgTypes[132]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddToServicePoolRequest.ProtoReflect.Descriptor instead.
+func (*AddToServicePoolRequest) Descriptor() ([]byte, []int) {
+	return file_quartermaster_proto_rawDescGZIP(), []int{132}
+}
+
+func (x *AddToServicePoolRequest) GetInstanceIds() []string {
+	if x != nil {
+		return x.InstanceIds
+	}
+	return nil
+}
+
+func (x *AddToServicePoolRequest) GetCount() int32 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+func (x *AddToServicePoolRequest) GetFromClusterId() string {
+	if x != nil {
+		return x.FromClusterId
+	}
+	return ""
+}
+
+func (x *AddToServicePoolRequest) GetServiceType() string {
+	if x != nil {
+		return x.ServiceType
+	}
+	return ""
+}
+
+type AddToServicePoolResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Released      int32                  `protobuf:"varint,1,opt,name=released,proto3" json:"released,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddToServicePoolResponse) Reset() {
+	*x = AddToServicePoolResponse{}
+	mi := &file_quartermaster_proto_msgTypes[133]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddToServicePoolResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddToServicePoolResponse) ProtoMessage() {}
+
+func (x *AddToServicePoolResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_quartermaster_proto_msgTypes[133]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddToServicePoolResponse.ProtoReflect.Descriptor instead.
+func (*AddToServicePoolResponse) Descriptor() ([]byte, []int) {
+	return file_quartermaster_proto_rawDescGZIP(), []int{133}
+}
+
+func (x *AddToServicePoolResponse) GetReleased() int32 {
+	if x != nil {
+		return x.Released
+	}
+	return 0
+}
+
+type DrainServiceInstanceRequest struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	InstanceId string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"` // service_instance UUID
+	// Required cluster-scoped Bunny service type: foghorn, chandler, or
+	// livepeer-gateway.
+	ServiceType   string `protobuf:"bytes,2,opt,name=service_type,json=serviceType,proto3" json:"service_type,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DrainServiceInstanceRequest) Reset() {
+	*x = DrainServiceInstanceRequest{}
+	mi := &file_quartermaster_proto_msgTypes[134]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DrainServiceInstanceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DrainServiceInstanceRequest) ProtoMessage() {}
+
+func (x *DrainServiceInstanceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_quartermaster_proto_msgTypes[134]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DrainServiceInstanceRequest.ProtoReflect.Descriptor instead.
+func (*DrainServiceInstanceRequest) Descriptor() ([]byte, []int) {
+	return file_quartermaster_proto_rawDescGZIP(), []int{134}
+}
+
+func (x *DrainServiceInstanceRequest) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
+func (x *DrainServiceInstanceRequest) GetServiceType() string {
+	if x != nil {
+		return x.ServiceType
+	}
+	return ""
+}
+
+type DrainServiceInstanceResponse struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	PreviousClusterId string                 `protobuf:"bytes,1,opt,name=previous_cluster_id,json=previousClusterId,proto3" json:"previous_cluster_id,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
 
-func (x *DrainFoghornInstanceResponse) Reset() {
-	*x = DrainFoghornInstanceResponse{}
+func (x *DrainServiceInstanceResponse) Reset() {
+	*x = DrainServiceInstanceResponse{}
 	mi := &file_quartermaster_proto_msgTypes[135]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DrainFoghornInstanceResponse) String() string {
+func (x *DrainServiceInstanceResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DrainFoghornInstanceResponse) ProtoMessage() {}
+func (*DrainServiceInstanceResponse) ProtoMessage() {}
 
-func (x *DrainFoghornInstanceResponse) ProtoReflect() protoreflect.Message {
+func (x *DrainServiceInstanceResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_quartermaster_proto_msgTypes[135]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -10464,12 +10494,12 @@ func (x *DrainFoghornInstanceResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DrainFoghornInstanceResponse.ProtoReflect.Descriptor instead.
-func (*DrainFoghornInstanceResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use DrainServiceInstanceResponse.ProtoReflect.Descriptor instead.
+func (*DrainServiceInstanceResponse) Descriptor() ([]byte, []int) {
 	return file_quartermaster_proto_rawDescGZIP(), []int{135}
 }
 
-func (x *DrainFoghornInstanceResponse) GetPreviousClusterId() string {
+func (x *DrainServiceInstanceResponse) GetPreviousClusterId() string {
 	if x != nil {
 		return x.PreviousClusterId
 	}
@@ -10759,31 +10789,35 @@ func (x *TenantClusterPeer) GetS3Region() string {
 	return ""
 }
 
-// Assign Foghorn instance(s) to a cluster. Supports assigning specific
-// instances or picking N least-loaded from the pool.
-type AssignFoghornToClusterRequest struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	ClusterId          string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
-	FoghornInstanceIds []string               `protobuf:"bytes,2,rep,name=foghorn_instance_ids,json=foghornInstanceIds,proto3" json:"foghorn_instance_ids,omitempty"` // Specific instance UUIDs to assign
-	Count              int32                  `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`                                                      // OR: pick N with fewest assignments
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+// Assign a pool-managed service instance to a logical cluster. Manifest
+// reconciliation sends explicit instance IDs; operator commands may also pick N
+// least-loaded instances from the pool.
+type AssignServiceToClusterRequest struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId   string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	InstanceIds []string               `protobuf:"bytes,2,rep,name=instance_ids,json=instanceIds,proto3" json:"instance_ids,omitempty"` // Specific instance UUIDs to assign
+	Count       int32                  `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`                               // OR: pick N with fewest assignments
+	// Required cluster-scoped Bunny service type: foghorn, chandler, or
+	// livepeer-gateway.
+	ServiceType   string `protobuf:"bytes,4,opt,name=service_type,json=serviceType,proto3" json:"service_type,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *AssignFoghornToClusterRequest) Reset() {
-	*x = AssignFoghornToClusterRequest{}
+func (x *AssignServiceToClusterRequest) Reset() {
+	*x = AssignServiceToClusterRequest{}
 	mi := &file_quartermaster_proto_msgTypes[140]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *AssignFoghornToClusterRequest) String() string {
+func (x *AssignServiceToClusterRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*AssignFoghornToClusterRequest) ProtoMessage() {}
+func (*AssignServiceToClusterRequest) ProtoMessage() {}
 
-func (x *AssignFoghornToClusterRequest) ProtoReflect() protoreflect.Message {
+func (x *AssignServiceToClusterRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_quartermaster_proto_msgTypes[140]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -10795,55 +10829,63 @@ func (x *AssignFoghornToClusterRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use AssignFoghornToClusterRequest.ProtoReflect.Descriptor instead.
-func (*AssignFoghornToClusterRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use AssignServiceToClusterRequest.ProtoReflect.Descriptor instead.
+func (*AssignServiceToClusterRequest) Descriptor() ([]byte, []int) {
 	return file_quartermaster_proto_rawDescGZIP(), []int{140}
 }
 
-func (x *AssignFoghornToClusterRequest) GetClusterId() string {
+func (x *AssignServiceToClusterRequest) GetClusterId() string {
 	if x != nil {
 		return x.ClusterId
 	}
 	return ""
 }
 
-func (x *AssignFoghornToClusterRequest) GetFoghornInstanceIds() []string {
+func (x *AssignServiceToClusterRequest) GetInstanceIds() []string {
 	if x != nil {
-		return x.FoghornInstanceIds
+		return x.InstanceIds
 	}
 	return nil
 }
 
-func (x *AssignFoghornToClusterRequest) GetCount() int32 {
+func (x *AssignServiceToClusterRequest) GetCount() int32 {
 	if x != nil {
 		return x.Count
 	}
 	return 0
 }
 
-// Remove Foghorn instance(s) from a cluster assignment.
-type UnassignFoghornFromClusterRequest struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	ClusterId          string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
-	FoghornInstanceIds []string               `protobuf:"bytes,2,rep,name=foghorn_instance_ids,json=foghornInstanceIds,proto3" json:"foghorn_instance_ids,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+func (x *AssignServiceToClusterRequest) GetServiceType() string {
+	if x != nil {
+		return x.ServiceType
+	}
+	return ""
 }
 
-func (x *UnassignFoghornFromClusterRequest) Reset() {
-	*x = UnassignFoghornFromClusterRequest{}
+// Remove pool-managed service instance(s) from a cluster assignment.
+type UnassignServiceFromClusterRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	InstanceIds   []string               `protobuf:"bytes,2,rep,name=instance_ids,json=instanceIds,proto3" json:"instance_ids,omitempty"`
+	ServiceType   string                 `protobuf:"bytes,3,opt,name=service_type,json=serviceType,proto3" json:"service_type,omitempty"` // Required cluster-scoped Bunny service type.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnassignServiceFromClusterRequest) Reset() {
+	*x = UnassignServiceFromClusterRequest{}
 	mi := &file_quartermaster_proto_msgTypes[141]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *UnassignFoghornFromClusterRequest) String() string {
+func (x *UnassignServiceFromClusterRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*UnassignFoghornFromClusterRequest) ProtoMessage() {}
+func (*UnassignServiceFromClusterRequest) ProtoMessage() {}
 
-func (x *UnassignFoghornFromClusterRequest) ProtoReflect() protoreflect.Message {
+func (x *UnassignServiceFromClusterRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_quartermaster_proto_msgTypes[141]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -10855,23 +10897,30 @@ func (x *UnassignFoghornFromClusterRequest) ProtoReflect() protoreflect.Message 
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use UnassignFoghornFromClusterRequest.ProtoReflect.Descriptor instead.
-func (*UnassignFoghornFromClusterRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use UnassignServiceFromClusterRequest.ProtoReflect.Descriptor instead.
+func (*UnassignServiceFromClusterRequest) Descriptor() ([]byte, []int) {
 	return file_quartermaster_proto_rawDescGZIP(), []int{141}
 }
 
-func (x *UnassignFoghornFromClusterRequest) GetClusterId() string {
+func (x *UnassignServiceFromClusterRequest) GetClusterId() string {
 	if x != nil {
 		return x.ClusterId
 	}
 	return ""
 }
 
-func (x *UnassignFoghornFromClusterRequest) GetFoghornInstanceIds() []string {
+func (x *UnassignServiceFromClusterRequest) GetInstanceIds() []string {
 	if x != nil {
-		return x.FoghornInstanceIds
+		return x.InstanceIds
 	}
 	return nil
+}
+
+func (x *UnassignServiceFromClusterRequest) GetServiceType() string {
+	if x != nil {
+		return x.ServiceType
+	}
+	return ""
 }
 
 // Enable self-hosting: creates tenant's private cluster, assigns to
@@ -12292,38 +12341,42 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\anode_id\x18\x03 \x01(\tR\x06nodeId\x12@\n" +
 	"\n" +
 	"pagination\x18\x04 \x01(\v2 .common.CursorPaginationResponseR\n" +
-	"pagination\"\x1d\n" +
-	"\x1bGetFoghornPoolStatusRequest\"\x9d\x01\n" +
-	"\x17FoghornPoolClusterEntry\x12\x1d\n" +
+	"pagination\"@\n" +
+	"\x1bGetServicePoolStatusRequest\x12!\n" +
+	"\fservice_type\x18\x01 \x01(\tR\vserviceType\"\x9d\x01\n" +
+	"\x17ServicePoolClusterEntry\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12%\n" +
 	"\x0einstance_count\x18\x02 \x01(\x05R\rinstanceCount\x12<\n" +
-	"\tinstances\x18\x03 \x03(\v2\x1e.quartermaster.ServiceInstanceR\tinstances\"\xc2\x01\n" +
-	"\x19FoghornInstanceAssignment\x12.\n" +
-	"\x13foghorn_instance_id\x18\x01 \x01(\tR\x11foghornInstanceId\x12\x1d\n" +
+	"\tinstances\x18\x03 \x03(\v2\x1e.quartermaster.ServiceInstanceR\tinstances\"\xb3\x01\n" +
+	"\x19ServiceInstanceAssignment\x12\x1f\n" +
+	"\vinstance_id\x18\x01 \x01(\tR\n" +
+	"instanceId\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x02 \x01(\tR\tclusterId\x12\x1b\n" +
 	"\tis_active\x18\x03 \x01(\bR\bisActive\x129\n" +
 	"\n" +
 	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x80\x02\n" +
-	"\x1cGetFoghornPoolStatusResponse\x12\x14\n" +
+	"\x1cGetServicePoolStatusResponse\x12\x14\n" +
 	"\x05total\x18\x01 \x01(\x05R\x05total\x12\x1e\n" +
 	"\n" +
 	"unassigned\x18\x02 \x01(\x05R\n" +
 	"unassigned\x12\x1a\n" +
 	"\bassigned\x18\x03 \x01(\x05R\bassigned\x12B\n" +
-	"\bclusters\x18\x04 \x03(\v2&.quartermaster.FoghornPoolClusterEntryR\bclusters\x12J\n" +
-	"\vassignments\x18\x05 \x03(\v2(.quartermaster.FoghornInstanceAssignmentR\vassignments\"z\n" +
-	"\x17AddToFoghornPoolRequest\x12!\n" +
+	"\bclusters\x18\x04 \x03(\v2&.quartermaster.ServicePoolClusterEntryR\bclusters\x12J\n" +
+	"\vassignments\x18\x05 \x03(\v2(.quartermaster.ServiceInstanceAssignmentR\vassignments\"\x9d\x01\n" +
+	"\x17AddToServicePoolRequest\x12!\n" +
 	"\finstance_ids\x18\x01 \x03(\tR\vinstanceIds\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x05R\x05count\x12&\n" +
-	"\x0ffrom_cluster_id\x18\x03 \x01(\tR\rfromClusterId\"6\n" +
-	"\x18AddToFoghornPoolResponse\x12\x1a\n" +
-	"\breleased\x18\x01 \x01(\x05R\breleased\">\n" +
-	"\x1bDrainFoghornInstanceRequest\x12\x1f\n" +
+	"\x0ffrom_cluster_id\x18\x03 \x01(\tR\rfromClusterId\x12!\n" +
+	"\fservice_type\x18\x04 \x01(\tR\vserviceType\"6\n" +
+	"\x18AddToServicePoolResponse\x12\x1a\n" +
+	"\breleased\x18\x01 \x01(\x05R\breleased\"a\n" +
+	"\x1bDrainServiceInstanceRequest\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
-	"instanceId\"N\n" +
-	"\x1cDrainFoghornInstanceResponse\x12.\n" +
+	"instanceId\x12!\n" +
+	"\fservice_type\x18\x02 \x01(\tR\vserviceType\"N\n" +
+	"\x1cDrainServiceInstanceResponse\x12.\n" +
 	"\x13previous_cluster_id\x18\x01 \x01(\tR\x11previousClusterId\"1\n" +
 	"\x10ListPeersRequest\x12\x1d\n" +
 	"\n" +
@@ -12349,16 +12402,18 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\ts3_bucket\x18\x14 \x01(\tR\bs3Bucket\x12\x1f\n" +
 	"\vs3_endpoint\x18\x15 \x01(\tR\n" +
 	"s3Endpoint\x12\x1b\n" +
-	"\ts3_region\x18\x16 \x01(\tR\bs3Region\"\x86\x01\n" +
-	"\x1dAssignFoghornToClusterRequest\x12\x1d\n" +
+	"\ts3_region\x18\x16 \x01(\tR\bs3Region\"\x9a\x01\n" +
+	"\x1dAssignServiceToClusterRequest\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x01 \x01(\tR\tclusterId\x120\n" +
-	"\x14foghorn_instance_ids\x18\x02 \x03(\tR\x12foghornInstanceIds\x12\x14\n" +
-	"\x05count\x18\x03 \x01(\x05R\x05count\"t\n" +
-	"!UnassignFoghornFromClusterRequest\x12\x1d\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12!\n" +
+	"\finstance_ids\x18\x02 \x03(\tR\vinstanceIds\x12\x14\n" +
+	"\x05count\x18\x03 \x01(\x05R\x05count\x12!\n" +
+	"\fservice_type\x18\x04 \x01(\tR\vserviceType\"\x88\x01\n" +
+	"!UnassignServiceFromClusterRequest\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x01 \x01(\tR\tclusterId\x120\n" +
-	"\x14foghorn_instance_ids\x18\x02 \x03(\tR\x12foghornInstanceIds\"\xa2\x01\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12!\n" +
+	"\finstance_ids\x18\x02 \x03(\tR\vinstanceIds\x12!\n" +
+	"\fservice_type\x18\x03 \x01(\tR\vserviceType\"\xa2\x01\n" +
 	"\x18EnableSelfHostingRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12!\n" +
 	"\fcluster_name\x18\x02 \x01(\tR\vclusterName\x120\n" +
@@ -12441,8 +12496,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x19RejectClusterSubscription\x12/.quartermaster.RejectClusterSubscriptionRequest\x1a\".quartermaster.ClusterSubscription\x12x\n" +
 	"\x17GetClusterMetadataBatch\x12-.quartermaster.GetClusterMetadataBatchRequest\x1a..quartermaster.GetClusterMetadataBatchResponse\x12N\n" +
 	"\tListPeers\x12\x1f.quartermaster.ListPeersRequest\x1a .quartermaster.ListPeersResponse\x12^\n" +
-	"\x16AssignFoghornToCluster\x12,.quartermaster.AssignFoghornToClusterRequest\x1a\x16.google.protobuf.Empty\x12f\n" +
-	"\x1aUnassignFoghornFromCluster\x120.quartermaster.UnassignFoghornFromClusterRequest\x1a\x16.google.protobuf.Empty\x12f\n" +
+	"\x16AssignServiceToCluster\x12,.quartermaster.AssignServiceToClusterRequest\x1a\x16.google.protobuf.Empty\x12f\n" +
+	"\x1aUnassignServiceFromCluster\x120.quartermaster.UnassignServiceFromClusterRequest\x1a\x16.google.protobuf.Empty\x12f\n" +
 	"\x11EnableSelfHosting\x12'.quartermaster.EnableSelfHostingRequest\x1a(.quartermaster.EnableSelfHostingResponse\x12q\n" +
 	"\x15CreateEnrollmentToken\x12+.quartermaster.CreateEnrollmentTokenRequest\x1a+.quartermaster.CreateBootstrapTokenResponse2\xbc\a\n" +
 	"\vNodeService\x12E\n" +
@@ -12462,9 +12517,9 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x1bBootstrapInfrastructureNode\x121.quartermaster.BootstrapInfrastructureNodeRequest\x1a2.quartermaster.BootstrapInfrastructureNodeResponse\x12c\n" +
 	"\x10BootstrapService\x12&.quartermaster.BootstrapServiceRequest\x1a'.quartermaster.BootstrapServiceResponse\x12c\n" +
 	"\x10DiscoverServices\x12&.quartermaster.ServiceDiscoveryRequest\x1a'.quartermaster.ServiceDiscoveryResponse\x12o\n" +
-	"\x14GetFoghornPoolStatus\x12*.quartermaster.GetFoghornPoolStatusRequest\x1a+.quartermaster.GetFoghornPoolStatusResponse\x12c\n" +
-	"\x10AddToFoghornPool\x12&.quartermaster.AddToFoghornPoolRequest\x1a'.quartermaster.AddToFoghornPoolResponse\x12o\n" +
-	"\x14DrainFoghornInstance\x12*.quartermaster.DrainFoghornInstanceRequest\x1a+.quartermaster.DrainFoghornInstanceResponse\x12o\n" +
+	"\x14GetServicePoolStatus\x12*.quartermaster.GetServicePoolStatusRequest\x1a+.quartermaster.GetServicePoolStatusResponse\x12c\n" +
+	"\x10AddToServicePool\x12&.quartermaster.AddToServicePoolRequest\x1a'.quartermaster.AddToServicePoolResponse\x12o\n" +
+	"\x14DrainServiceInstance\x12*.quartermaster.DrainServiceInstanceRequest\x1a+.quartermaster.DrainServiceInstanceResponse\x12o\n" +
 	"\x14CreateBootstrapToken\x12*.quartermaster.CreateBootstrapTokenRequest\x1a+.quartermaster.CreateBootstrapTokenResponse\x12l\n" +
 	"\x13ListBootstrapTokens\x12).quartermaster.ListBootstrapTokensRequest\x1a*.quartermaster.ListBootstrapTokensResponse\x12Z\n" +
 	"\x14RevokeBootstrapToken\x12*.quartermaster.RevokeBootstrapTokenRequest\x1a\x16.google.protobuf.Empty\x12u\n" +
@@ -12629,20 +12684,20 @@ var file_quartermaster_proto_goTypes = []any{
 	(*IngressSiteResponse)(nil),                 // 128: quartermaster.IngressSiteResponse
 	(*ListIngressSitesRequest)(nil),             // 129: quartermaster.ListIngressSitesRequest
 	(*ListIngressSitesResponse)(nil),            // 130: quartermaster.ListIngressSitesResponse
-	(*GetFoghornPoolStatusRequest)(nil),         // 131: quartermaster.GetFoghornPoolStatusRequest
-	(*FoghornPoolClusterEntry)(nil),             // 132: quartermaster.FoghornPoolClusterEntry
-	(*FoghornInstanceAssignment)(nil),           // 133: quartermaster.FoghornInstanceAssignment
-	(*GetFoghornPoolStatusResponse)(nil),        // 134: quartermaster.GetFoghornPoolStatusResponse
-	(*AddToFoghornPoolRequest)(nil),             // 135: quartermaster.AddToFoghornPoolRequest
-	(*AddToFoghornPoolResponse)(nil),            // 136: quartermaster.AddToFoghornPoolResponse
-	(*DrainFoghornInstanceRequest)(nil),         // 137: quartermaster.DrainFoghornInstanceRequest
-	(*DrainFoghornInstanceResponse)(nil),        // 138: quartermaster.DrainFoghornInstanceResponse
+	(*GetServicePoolStatusRequest)(nil),         // 131: quartermaster.GetServicePoolStatusRequest
+	(*ServicePoolClusterEntry)(nil),             // 132: quartermaster.ServicePoolClusterEntry
+	(*ServiceInstanceAssignment)(nil),           // 133: quartermaster.ServiceInstanceAssignment
+	(*GetServicePoolStatusResponse)(nil),        // 134: quartermaster.GetServicePoolStatusResponse
+	(*AddToServicePoolRequest)(nil),             // 135: quartermaster.AddToServicePoolRequest
+	(*AddToServicePoolResponse)(nil),            // 136: quartermaster.AddToServicePoolResponse
+	(*DrainServiceInstanceRequest)(nil),         // 137: quartermaster.DrainServiceInstanceRequest
+	(*DrainServiceInstanceResponse)(nil),        // 138: quartermaster.DrainServiceInstanceResponse
 	(*ListPeersRequest)(nil),                    // 139: quartermaster.ListPeersRequest
 	(*PeerCluster)(nil),                         // 140: quartermaster.PeerCluster
 	(*ListPeersResponse)(nil),                   // 141: quartermaster.ListPeersResponse
 	(*TenantClusterPeer)(nil),                   // 142: quartermaster.TenantClusterPeer
-	(*AssignFoghornToClusterRequest)(nil),       // 143: quartermaster.AssignFoghornToClusterRequest
-	(*UnassignFoghornFromClusterRequest)(nil),   // 144: quartermaster.UnassignFoghornFromClusterRequest
+	(*AssignServiceToClusterRequest)(nil),       // 143: quartermaster.AssignServiceToClusterRequest
+	(*UnassignServiceFromClusterRequest)(nil),   // 144: quartermaster.UnassignServiceFromClusterRequest
 	(*EnableSelfHostingRequest)(nil),            // 145: quartermaster.EnableSelfHostingRequest
 	(*EnableSelfHostingResponse)(nil),           // 146: quartermaster.EnableSelfHostingResponse
 	(*CreateEnrollmentTokenRequest)(nil),        // 147: quartermaster.CreateEnrollmentTokenRequest
@@ -12797,10 +12852,10 @@ var file_quartermaster_proto_depIdxs = []int32{
 	155, // 134: quartermaster.ListIngressSitesRequest.pagination:type_name -> common.CursorPaginationRequest
 	126, // 135: quartermaster.ListIngressSitesResponse.sites:type_name -> quartermaster.IngressSite
 	156, // 136: quartermaster.ListIngressSitesResponse.pagination:type_name -> common.CursorPaginationResponse
-	89,  // 137: quartermaster.FoghornPoolClusterEntry.instances:type_name -> quartermaster.ServiceInstance
-	154, // 138: quartermaster.FoghornInstanceAssignment.created_at:type_name -> google.protobuf.Timestamp
-	132, // 139: quartermaster.GetFoghornPoolStatusResponse.clusters:type_name -> quartermaster.FoghornPoolClusterEntry
-	133, // 140: quartermaster.GetFoghornPoolStatusResponse.assignments:type_name -> quartermaster.FoghornInstanceAssignment
+	89,  // 137: quartermaster.ServicePoolClusterEntry.instances:type_name -> quartermaster.ServiceInstance
+	154, // 138: quartermaster.ServiceInstanceAssignment.created_at:type_name -> google.protobuf.Timestamp
+	132, // 139: quartermaster.GetServicePoolStatusResponse.clusters:type_name -> quartermaster.ServicePoolClusterEntry
+	133, // 140: quartermaster.GetServicePoolStatusResponse.assignments:type_name -> quartermaster.ServiceInstanceAssignment
 	140, // 141: quartermaster.ListPeersResponse.peers:type_name -> quartermaster.PeerCluster
 	27,  // 142: quartermaster.EnableSelfHostingResponse.cluster:type_name -> quartermaster.InfrastructureCluster
 	91,  // 143: quartermaster.EnableSelfHostingResponse.bootstrap_token:type_name -> quartermaster.BootstrapToken
@@ -12848,8 +12903,8 @@ var file_quartermaster_proto_depIdxs = []int32{
 	65,  // 185: quartermaster.ClusterService.RejectClusterSubscription:input_type -> quartermaster.RejectClusterSubscriptionRequest
 	48,  // 186: quartermaster.ClusterService.GetClusterMetadataBatch:input_type -> quartermaster.GetClusterMetadataBatchRequest
 	139, // 187: quartermaster.ClusterService.ListPeers:input_type -> quartermaster.ListPeersRequest
-	143, // 188: quartermaster.ClusterService.AssignFoghornToCluster:input_type -> quartermaster.AssignFoghornToClusterRequest
-	144, // 189: quartermaster.ClusterService.UnassignFoghornFromCluster:input_type -> quartermaster.UnassignFoghornFromClusterRequest
+	143, // 188: quartermaster.ClusterService.AssignServiceToCluster:input_type -> quartermaster.AssignServiceToClusterRequest
+	144, // 189: quartermaster.ClusterService.UnassignServiceFromCluster:input_type -> quartermaster.UnassignServiceFromClusterRequest
 	145, // 190: quartermaster.ClusterService.EnableSelfHosting:input_type -> quartermaster.EnableSelfHostingRequest
 	147, // 191: quartermaster.ClusterService.CreateEnrollmentToken:input_type -> quartermaster.CreateEnrollmentTokenRequest
 	66,  // 192: quartermaster.NodeService.GetNode:input_type -> quartermaster.GetNodeRequest
@@ -12866,9 +12921,9 @@ var file_quartermaster_proto_depIdxs = []int32{
 	83,  // 203: quartermaster.BootstrapService.BootstrapInfrastructureNode:input_type -> quartermaster.BootstrapInfrastructureNodeRequest
 	85,  // 204: quartermaster.BootstrapService.BootstrapService:input_type -> quartermaster.BootstrapServiceRequest
 	87,  // 205: quartermaster.BootstrapService.DiscoverServices:input_type -> quartermaster.ServiceDiscoveryRequest
-	131, // 206: quartermaster.BootstrapService.GetFoghornPoolStatus:input_type -> quartermaster.GetFoghornPoolStatusRequest
-	135, // 207: quartermaster.BootstrapService.AddToFoghornPool:input_type -> quartermaster.AddToFoghornPoolRequest
-	137, // 208: quartermaster.BootstrapService.DrainFoghornInstance:input_type -> quartermaster.DrainFoghornInstanceRequest
+	131, // 206: quartermaster.BootstrapService.GetServicePoolStatus:input_type -> quartermaster.GetServicePoolStatusRequest
+	135, // 207: quartermaster.BootstrapService.AddToServicePool:input_type -> quartermaster.AddToServicePoolRequest
+	137, // 208: quartermaster.BootstrapService.DrainServiceInstance:input_type -> quartermaster.DrainServiceInstanceRequest
 	90,  // 209: quartermaster.BootstrapService.CreateBootstrapToken:input_type -> quartermaster.CreateBootstrapTokenRequest
 	93,  // 210: quartermaster.BootstrapService.ListBootstrapTokens:input_type -> quartermaster.ListBootstrapTokensRequest
 	95,  // 211: quartermaster.BootstrapService.RevokeBootstrapToken:input_type -> quartermaster.RevokeBootstrapTokenRequest
@@ -12924,8 +12979,8 @@ var file_quartermaster_proto_depIdxs = []int32{
 	59,  // 261: quartermaster.ClusterService.RejectClusterSubscription:output_type -> quartermaster.ClusterSubscription
 	49,  // 262: quartermaster.ClusterService.GetClusterMetadataBatch:output_type -> quartermaster.GetClusterMetadataBatchResponse
 	141, // 263: quartermaster.ClusterService.ListPeers:output_type -> quartermaster.ListPeersResponse
-	159, // 264: quartermaster.ClusterService.AssignFoghornToCluster:output_type -> google.protobuf.Empty
-	159, // 265: quartermaster.ClusterService.UnassignFoghornFromCluster:output_type -> google.protobuf.Empty
+	159, // 264: quartermaster.ClusterService.AssignServiceToCluster:output_type -> google.protobuf.Empty
+	159, // 265: quartermaster.ClusterService.UnassignServiceFromCluster:output_type -> google.protobuf.Empty
 	146, // 266: quartermaster.ClusterService.EnableSelfHosting:output_type -> quartermaster.EnableSelfHostingResponse
 	92,  // 267: quartermaster.ClusterService.CreateEnrollmentToken:output_type -> quartermaster.CreateBootstrapTokenResponse
 	68,  // 268: quartermaster.NodeService.GetNode:output_type -> quartermaster.NodeResponse
@@ -12942,9 +12997,9 @@ var file_quartermaster_proto_depIdxs = []int32{
 	84,  // 279: quartermaster.BootstrapService.BootstrapInfrastructureNode:output_type -> quartermaster.BootstrapInfrastructureNodeResponse
 	86,  // 280: quartermaster.BootstrapService.BootstrapService:output_type -> quartermaster.BootstrapServiceResponse
 	88,  // 281: quartermaster.BootstrapService.DiscoverServices:output_type -> quartermaster.ServiceDiscoveryResponse
-	134, // 282: quartermaster.BootstrapService.GetFoghornPoolStatus:output_type -> quartermaster.GetFoghornPoolStatusResponse
-	136, // 283: quartermaster.BootstrapService.AddToFoghornPool:output_type -> quartermaster.AddToFoghornPoolResponse
-	138, // 284: quartermaster.BootstrapService.DrainFoghornInstance:output_type -> quartermaster.DrainFoghornInstanceResponse
+	134, // 282: quartermaster.BootstrapService.GetServicePoolStatus:output_type -> quartermaster.GetServicePoolStatusResponse
+	136, // 283: quartermaster.BootstrapService.AddToServicePool:output_type -> quartermaster.AddToServicePoolResponse
+	138, // 284: quartermaster.BootstrapService.DrainServiceInstance:output_type -> quartermaster.DrainServiceInstanceResponse
 	92,  // 285: quartermaster.BootstrapService.CreateBootstrapToken:output_type -> quartermaster.CreateBootstrapTokenResponse
 	94,  // 286: quartermaster.BootstrapService.ListBootstrapTokens:output_type -> quartermaster.ListBootstrapTokensResponse
 	159, // 287: quartermaster.BootstrapService.RevokeBootstrapToken:output_type -> google.protobuf.Empty

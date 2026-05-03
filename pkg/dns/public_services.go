@@ -62,6 +62,18 @@ var clusterScopedServiceTypes = map[string]struct{}{
 	"livepeer-gateway": {},
 }
 
+var poolAssignedServiceTypes = []string{
+	"foghorn",
+	"chandler",
+	"livepeer-gateway",
+}
+
+var poolAssignedServiceTypeSet = map[string]struct{}{
+	"foghorn":          {},
+	"chandler":         {},
+	"livepeer-gateway": {},
+}
+
 var publicSubdomains = map[string]string{
 	"chandler":         "chandler",
 	"edge":             "edge",
@@ -126,6 +138,27 @@ func managedServiceTypesForProvider(provider Provider) []string {
 func IsClusterScopedServiceType(serviceType string) bool {
 	_, ok := clusterScopedServiceTypes[serviceType]
 	return ok
+}
+
+// PoolAssignedServiceTypes returns service types whose public media-cluster
+// identity is carried by Quartermaster service_cluster_assignments.
+func PoolAssignedServiceTypes() []string {
+	out := make([]string, len(poolAssignedServiceTypes))
+	copy(out, poolAssignedServiceTypes)
+	return out
+}
+
+// IsPoolAssignedServiceType reports whether DNS and discovery must resolve the
+// service's logical cluster through service_cluster_assignments.
+func IsPoolAssignedServiceType(serviceType string) bool {
+	_, ok := poolAssignedServiceTypeSet[serviceType]
+	return ok
+}
+
+// UsesBunnyClusterDNS reports whether a cluster type owns Bunny-managed media
+// DNS zones.
+func UsesBunnyClusterDNS(clusterType string) bool {
+	return clusterType == "edge"
 }
 
 // PublicSubdomain maps an internal service type to its public DNS label.

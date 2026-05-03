@@ -168,7 +168,7 @@ func newAdminCmd() *cobra.Command {
 	adm.AddCommand(newAdminTenantsCmd())
 	adm.AddCommand(newAdminClustersCmd())
 	adm.AddCommand(newAdminNodesCmd())
-	adm.AddCommand(newAdminFoghornPoolCmd())
+	adm.AddCommand(newAdminServicePoolCmd())
 	adm.AddCommand(newAdminBillingCmd())
 	adm.AddCommand(newAdminUsersCmd())
 	return adm
@@ -1798,18 +1798,22 @@ func newAdminNodesCreateCmd() *cobra.Command {
 
 // === Foghorn Pool ===
 
-func newAdminFoghornPoolCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "foghorn-pool", Short: "Foghorn instance pool operations"}
-	cmd.AddCommand(newAdminFoghornPoolStatusCmd())
-	cmd.AddCommand(newAdminFoghornPoolAddCmd())
-	cmd.AddCommand(newAdminFoghornPoolDrainCmd())
-	cmd.AddCommand(newAdminFoghornPoolAssignCmd())
-	cmd.AddCommand(newAdminFoghornPoolUnassignCmd())
+func newAdminServicePoolCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "service-pool", Short: "Pool-assigned service operations"}
+	cmd.AddCommand(newAdminServicePoolStatusCmd())
+	cmd.AddCommand(newAdminServicePoolAddCmd())
+	cmd.AddCommand(newAdminServicePoolDrainCmd())
+	cmd.AddCommand(newAdminServicePoolAssignCmd())
+	cmd.AddCommand(newAdminServicePoolUnassignCmd())
 	return cmd
 }
 
-func newAdminFoghornPoolStatusCmd() *cobra.Command {
-	return &cobra.Command{Use: "status", Short: "Show Foghorn pool status", RunE: func(cmd *cobra.Command, args []string) error {
+func newAdminServicePoolStatusCmd() *cobra.Command {
+	var serviceType string
+	cmd := &cobra.Command{Use: "status", Short: "Show service pool status", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(serviceType) == "" {
+			return fmt.Errorf("--service-type is required")
+		}
 		qm, ctxCfg, err := qmGRPCClientFromContext()
 		if err != nil {
 			return err
@@ -1821,7 +1825,7 @@ func newAdminFoghornPoolStatusCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		resp, err := qm.GetFoghornPoolStatus(cctx)
+		resp, err := qm.GetServicePoolStatus(cctx, serviceType)
 		if err != nil {
 			return err
 		}
@@ -1831,7 +1835,7 @@ func newAdminFoghornPoolStatusCmd() *cobra.Command {
 			return enc.Encode(resp)
 		}
 
-		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Foghorn pool: %d total, %d assigned, %d unassigned", resp.Total, resp.Assigned, resp.Unassigned))
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("%s service pool: %d total, %d assigned, %d unassigned", serviceType, resp.Total, resp.Assigned, resp.Unassigned))
 		for _, c := range resp.Clusters {
 			cid := c.ClusterId
 			if cid == "" {
@@ -1850,20 +1854,26 @@ func newAdminFoghornPoolStatusCmd() *cobra.Command {
 				if !a.IsActive {
 					active = "inactive"
 				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "    foghorn=%s → cluster=%s  %s\n", a.FoghornInstanceId, a.ClusterId, active)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "    instance=%s → cluster=%s  %s\n", a.InstanceId, a.ClusterId, active)
 			}
 		}
 		return nil
 	}}
+	cmd.Flags().StringVar(&serviceType, "service-type", "", "Service type to inspect")
+	return cmd
 }
 
-func newAdminFoghornPoolAddCmd() *cobra.Command {
+func newAdminServicePoolAddCmd() *cobra.Command {
 	var count int
 	var fromCluster string
 	var instanceIDs []string
-	cmd := &cobra.Command{Use: "add", Short: "Release Foghorn instances back to pool", RunE: func(cmd *cobra.Command, args []string) error {
+	var serviceType string
+	cmd := &cobra.Command{Use: "add", Short: "Release pool-assigned service instances back to pool", RunE: func(cmd *cobra.Command, args []string) error {
 		if len(instanceIDs) == 0 && (count == 0 || fromCluster == "") {
 			return fmt.Errorf("provide --instance-id or (--count + --from-cluster)")
+		}
+		if strings.TrimSpace(serviceType) == "" {
+			return fmt.Errorf("--service-type is required")
 		}
 		qm, ctxCfg, err := qmGRPCClientFromContext()
 		if err != nil {
@@ -1876,28 +1886,34 @@ func newAdminFoghornPoolAddCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		resp, err := qm.AddToFoghornPool(cctx, &pb.AddToFoghornPoolRequest{
+		resp, err := qm.AddToServicePool(cctx, &pb.AddToServicePoolRequest{
 			InstanceIds:   instanceIDs,
 			Count:         int32(count),
 			FromClusterId: fromCluster,
+			ServiceType:   serviceType,
 		})
 		if err != nil {
 			return err
 		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Released %d instance(s) to pool", resp.Released))
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Released %d %s instance(s) to pool", resp.Released, resolveServiceTypeLabel(serviceType)))
 		return nil
 	}}
 	cmd.Flags().StringSliceVar(&instanceIDs, "instance-id", nil, "instance UUID(s) to release")
 	cmd.Flags().IntVar(&count, "count", 0, "number of instances to release from cluster")
 	cmd.Flags().StringVar(&fromCluster, "from-cluster", "", "cluster to release instances from")
+	cmd.Flags().StringVar(&serviceType, "service-type", "", "service type to operate on (foghorn, chandler, livepeer-gateway)")
 	return cmd
 }
 
-func newAdminFoghornPoolDrainCmd() *cobra.Command {
+func newAdminServicePoolDrainCmd() *cobra.Command {
 	var instanceID string
-	cmd := &cobra.Command{Use: "drain", Short: "Drain a Foghorn instance from its cluster", RunE: func(cmd *cobra.Command, args []string) error {
+	var serviceType string
+	cmd := &cobra.Command{Use: "drain", Short: "Drain a pool-assigned service instance from its cluster", RunE: func(cmd *cobra.Command, args []string) error {
 		if instanceID == "" {
 			return fmt.Errorf("--instance-id is required")
+		}
+		if strings.TrimSpace(serviceType) == "" {
+			return fmt.Errorf("--service-type is required")
 		}
 		qm, ctxCfg, err := qmGRPCClientFromContext()
 		if err != nil {
@@ -1910,7 +1926,10 @@ func newAdminFoghornPoolDrainCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		resp, err := qm.DrainFoghornInstance(cctx, instanceID)
+		resp, err := qm.DrainServiceInstance(cctx, &pb.DrainServiceInstanceRequest{
+			InstanceId:  instanceID,
+			ServiceType: serviceType,
+		})
 		if err != nil {
 			return err
 		}
@@ -1923,20 +1942,25 @@ func newAdminFoghornPoolDrainCmd() *cobra.Command {
 		return nil
 	}}
 	cmd.Flags().StringVar(&instanceID, "instance-id", "", "instance UUID to drain (required)")
+	cmd.Flags().StringVar(&serviceType, "service-type", "", "service type to operate on (foghorn, chandler, livepeer-gateway)")
 	return cmd
 }
 
-func newAdminFoghornPoolAssignCmd() *cobra.Command {
+func newAdminServicePoolAssignCmd() *cobra.Command {
 	var clusterID string
 	var instanceIDs []string
 	var count int
-	cmd := &cobra.Command{Use: "assign", Short: "Assign Foghorn instance(s) to a cluster", RunE: func(cmd *cobra.Command, args []string) error {
+	var serviceType string
+	cmd := &cobra.Command{Use: "assign", Short: "Assign pool-assigned service instance(s) to a cluster", RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(clusterID) == "" {
 			return fmt.Errorf("--cluster-id is required")
 		}
 		if len(instanceIDs) == 0 && count == 0 {
 			return fmt.Errorf("provide --instance-id or --count")
 		}
+		if strings.TrimSpace(serviceType) == "" {
+			return fmt.Errorf("--service-type is required")
+		}
 		qm, ctxCfg, err := qmGRPCClientFromContext()
 		if err != nil {
 			return err
@@ -1948,36 +1972,50 @@ func newAdminFoghornPoolAssignCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		if err := qm.AssignFoghornToCluster(cctx, &pb.AssignFoghornToClusterRequest{
-			ClusterId:          clusterID,
-			FoghornInstanceIds: instanceIDs,
-			Count:              int32(count),
+		if err := qm.AssignServiceToCluster(cctx, &pb.AssignServiceToClusterRequest{
+			ClusterId:   clusterID,
+			InstanceIds: instanceIDs,
+			Count:       int32(count),
+			ServiceType: serviceType,
 		}); err != nil {
 			return err
 		}
+		label := resolveServiceTypeLabel(serviceType)
 		if len(instanceIDs) > 0 {
-			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Assigned %d Foghorn instance(s) to cluster %s", len(instanceIDs), clusterID))
+			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Assigned %d %s instance(s) to cluster %s", len(instanceIDs), label, clusterID))
 		} else {
-			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Assigned %d Foghorn instance(s) to cluster %s (least-loaded)", count, clusterID))
+			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Assigned %d %s instance(s) to cluster %s (least-loaded)", count, label, clusterID))
 		}
 		return nil
 	}}
-	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster to assign Foghorn(s) to (required)")
-	cmd.Flags().StringSliceVar(&instanceIDs, "instance-id", nil, "specific Foghorn instance UUID(s)")
-	cmd.Flags().IntVar(&count, "count", 0, "pick N least-loaded Foghorn instances")
+	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster to assign instance(s) to (required)")
+	cmd.Flags().StringSliceVar(&instanceIDs, "instance-id", nil, "specific service instance UUID(s)")
+	cmd.Flags().IntVar(&count, "count", 0, "pick N least-loaded instances")
+	cmd.Flags().StringVar(&serviceType, "service-type", "", "service type (foghorn, chandler, livepeer-gateway)")
 	return cmd
 }
 
-func newAdminFoghornPoolUnassignCmd() *cobra.Command {
+func resolveServiceTypeLabel(svcType string) string {
+	if t := strings.TrimSpace(svcType); t != "" {
+		return t
+	}
+	return "service"
+}
+
+func newAdminServicePoolUnassignCmd() *cobra.Command {
 	var clusterID string
 	var instanceIDs []string
-	cmd := &cobra.Command{Use: "unassign", Short: "Remove Foghorn instance(s) from a cluster", RunE: func(cmd *cobra.Command, args []string) error {
+	var serviceType string
+	cmd := &cobra.Command{Use: "unassign", Short: "Remove pool-assigned service instance(s) from a cluster", RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(clusterID) == "" {
 			return fmt.Errorf("--cluster-id is required")
 		}
 		if len(instanceIDs) == 0 {
 			return fmt.Errorf("--instance-id is required")
 		}
+		if strings.TrimSpace(serviceType) == "" {
+			return fmt.Errorf("--service-type is required")
+		}
 		qm, ctxCfg, err := qmGRPCClientFromContext()
 		if err != nil {
 			return err
@@ -1989,17 +2027,19 @@ func newAdminFoghornPoolUnassignCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		if err := qm.UnassignFoghornFromCluster(cctx, &pb.UnassignFoghornFromClusterRequest{
-			ClusterId:          clusterID,
-			FoghornInstanceIds: instanceIDs,
+		if err := qm.UnassignServiceFromCluster(cctx, &pb.UnassignServiceFromClusterRequest{
+			ClusterId:   clusterID,
+			InstanceIds: instanceIDs,
+			ServiceType: serviceType,
 		}); err != nil {
 			return err
 		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Unassigned %d Foghorn instance(s) from cluster %s", len(instanceIDs), clusterID))
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Unassigned %d %s instance(s) from cluster %s", len(instanceIDs), serviceType, clusterID))
 		return nil
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster to unassign from (required)")
-	cmd.Flags().StringSliceVar(&instanceIDs, "instance-id", nil, "Foghorn instance UUID(s) to remove (required)")
+	cmd.Flags().StringSliceVar(&instanceIDs, "instance-id", nil, "service instance UUID(s) to remove (required)")
+	cmd.Flags().StringVar(&serviceType, "service-type", "", "service type (foghorn, chandler, livepeer-gateway)")
 	return cmd
 }
 

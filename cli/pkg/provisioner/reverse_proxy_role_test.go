@@ -245,6 +245,21 @@ func TestListmonkComposeTemplateConsumesEnvFile(t *testing.T) {
 	}
 }
 
+func TestSpecialComposeRoleEntrypointsAreTaggedForCLIProvision(t *testing.T) {
+	for _, path := range []string{
+		"ansible/collections/ansible_collections/frameworks/infra/roles/chatwoot/tasks/main.yml",
+		"ansible/collections/ansible_collections/frameworks/infra/roles/listmonk/tasks/main.yml",
+	} {
+		content := readRepoFile(t, path)
+		if !strings.Contains(content, "name: frameworks.infra.compose_stack") {
+			t.Fatalf("%s does not delegate to compose_stack:\n%s", path, content)
+		}
+		if !strings.Contains(content, "tags: [install, configure, service, validate]") {
+			t.Fatalf("%s compose_stack lifecycle include lacks CLI provision tags:\n%s", path, content)
+		}
+	}
+}
+
 func readRepoFile(t *testing.T, path string) string {
 	t.Helper()
 	content, err := os.ReadFile("../../../" + path)

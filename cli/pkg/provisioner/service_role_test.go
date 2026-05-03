@@ -266,7 +266,7 @@ func TestServiceNativeVarsBuildsLivepeerGatewayArgsAndStateDir(t *testing.T) {
 		BinaryURL: "https://example.test/livepeer.tar.gz",
 		EnvVars: map[string]string{
 			"network":                "arbitrum-one-mainnet",
-			"http_addr":              ":8935",
+			"http_addr":              "0.0.0.0:8935",
 			"http_ingest":            "true",
 			"cli_addr":               ":7935",
 			"rtmp_addr":              "",
@@ -309,7 +309,7 @@ func TestServiceNativeVarsBuildsLivepeerGatewayArgsAndStateDir(t *testing.T) {
 		"-gateway",
 		"-dataDir=/var/lib/frameworks/livepeer-gateway",
 		"-network=arbitrum-one-mainnet",
-		"-httpAddr=:8935",
+		"-httpAddr=0.0.0.0:8935",
 		"-httpIngest=true",
 		"-cliAddr=:7935",
 		"-rtmpAddr=",

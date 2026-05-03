@@ -13,6 +13,7 @@ Every cluster — official or community — uses the same domain naming pattern.
 
 | Domain                      | Level   | Purpose                                      |
 | --------------------------- | ------- | -------------------------------------------- |
+| `{slug}.{base}`             | Cluster | Default media-cluster entrypoint via Foghorn |
 | `foghorn.{slug}.{base}`     | Cluster | Points to this cluster's Foghorn instance(s) |
 | `livepeer.{slug}.{base}`    | Cluster | Points to this cluster's Livepeer gateway(s) |
 | `edge.{slug}.{base}`        | Cluster | Points to this cluster's edge pool           |
@@ -25,14 +26,14 @@ Media domains are scoped to a media cluster slug: `edge`, edge capability servic
 
 HTTP-based protocols (HLS, DASH, WHEP, MP4) go through Foghorn, which issues 307 redirects to the nearest edge node. Non-HTTP protocols (SRT, RTMP, RTSP, DTSC) connect directly to edge nodes — they can't follow HTTP redirects.
 
-| Protocol                   | Domain                      | Transport                 |
-| -------------------------- | --------------------------- | ------------------------- |
-| HLS, DASH, WHEP, MP4, WebM | `foghorn.{slug}.{base}`     | HTTP 307 redirect to edge |
-| Livepeer gateway API       | `livepeer.{slug}.{base}`    | HTTP status/API endpoint  |
-| SRT (ingest)               | `edge-ingest.{slug}.{base}` | Direct UDP                |
-| RTMP (ingest)              | `edge-ingest.{slug}.{base}` | Direct TCP                |
-| SRT (playback)             | `edge-egress.{slug}.{base}` | Direct UDP                |
-| RTSP, DTSC                 | `edge-egress.{slug}.{base}` | Direct TCP                |
+| Protocol                   | Domain                                     | Transport                 |
+| -------------------------- | ------------------------------------------ | ------------------------- |
+| HLS, DASH, WHEP, MP4, WebM | `{slug}.{base}` or `foghorn.{slug}.{base}` | HTTP 307 redirect to edge |
+| Livepeer gateway API       | `livepeer.{slug}.{base}`                   | HTTP status/API endpoint  |
+| SRT (ingest)               | `edge-ingest.{slug}.{base}`                | Direct UDP                |
+| RTMP (ingest)              | `edge-ingest.{slug}.{base}`                | Direct TCP                |
+| SRT (playback)             | `edge-egress.{slug}.{base}`                | Direct UDP                |
+| RTSP, DTSC                 | `edge-egress.{slug}.{base}`                | Direct TCP                |
 
 ## DNS Configuration
 

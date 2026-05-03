@@ -241,12 +241,15 @@ func TestDeriveRejectsNilManifest(t *testing.T) {
 	}
 }
 
-// TestDeriveWalksAllServiceMaps verifies that public services in Services,
-// Interfaces, and Observability all contribute service_registry rows.
+// TestDeriveWalksAllServiceMaps verifies that non-self-registering public
+// services in Services, Interfaces, and Observability all contribute
+// service_registry rows. Self-registering services (bridge/foghorn/chandler)
+// are intentionally absent from the pre-seed — runtime BootstrapService
+// creates their rows.
 func TestDeriveWalksAllServiceMaps(t *testing.T) {
 	m := minimalManifest()
 	m.Services = map[string]inventory.ServiceConfig{
-		"chandler": {Enabled: true, Host: "core-eu-1", Port: 18020},
+		"chatwoot": {Enabled: true, Host: "core-eu-1", Port: 18092},
 	}
 	m.Interfaces = map[string]inventory.ServiceConfig{
 		"chartroom": {Enabled: true, Host: "core-eu-1", Port: 18030},
@@ -262,7 +265,7 @@ func TestDeriveWalksAllServiceMaps(t *testing.T) {
 	for _, e := range d.Quartermaster.ServiceRegistry {
 		names[e.ServiceName] = true
 	}
-	for _, want := range []string{"chandler", "chartroom", "vmauth"} {
+	for _, want := range []string{"chatwoot", "chartroom", "vmauth"} {
 		if !names[want] {
 			t.Errorf("expected %q in service_registry; got %v", want, names)
 		}
@@ -271,12 +274,13 @@ func TestDeriveWalksAllServiceMaps(t *testing.T) {
 
 // TestDeriveServiceRegistryFillsServicedefs exercises the servicedefs.Lookup
 // integration: HealthEndpoint and Protocol come from the canonical registry, not
-// from manifest input.
+// from manifest input. Uses chartroom because chandler self-registers and is
+// therefore not pre-seeded by Derive.
 func TestDeriveServiceRegistryFillsServicedefs(t *testing.T) {
 	m := minimalManifest()
 	m.Services = map[string]inventory.ServiceConfig{
 		// Manifest omits Port — servicedefs DefaultPort kicks in.
-		"chandler": {Enabled: true, Host: "core-eu-1"},
+		"chartroom": {Enabled: true, Host: "core-eu-1"},
 	}
 	d, err := Derive(m, DeriveOptions{})
 	if err != nil {
@@ -286,8 +290,8 @@ func TestDeriveServiceRegistryFillsServicedefs(t *testing.T) {
 		t.Fatalf("expected 1 registry entry; got %d", got)
 	}
 	e := d.Quartermaster.ServiceRegistry[0]
-	if e.Port != 18020 {
-		t.Errorf("Port = %d, want 18020 (servicedef default)", e.Port)
+	if e.Port != 18030 {
+		t.Errorf("Port = %d, want 18030 (servicedef default)", e.Port)
 	}
 	if e.HealthEndpoint != "/health" {
 		t.Errorf("HealthEndpoint = %q, want /health (servicedef)", e.HealthEndpoint)
@@ -357,7 +361,8 @@ func TestDeriveAdoptsExplicitTLSBundlesAndSites(t *testing.T) {
 
 // TestDeriveEmitsRegistryEntryPerHost pins the multi-host fix: a public service
 // deployed across multiple hosts must produce one ServiceRegistryEntry per host
-// (matching production NodeId: task.Host registration behavior).
+// (matching production NodeId: task.Host registration behavior). Uses chartroom
+// because chandler self-registers and is therefore not pre-seeded.
 func TestDeriveEmitsRegistryEntryPerHost(t *testing.T) {
 	m := minimalManifest()
 	m.Hosts["core-eu-2"] = inventory.Host{
@@ -370,7 +375,7 @@ func TestDeriveEmitsRegistryEntryPerHost(t *testing.T) {
 		Cluster:            "core-central-primary",
 	}
 	m.Services = map[string]inventory.ServiceConfig{
-		"chandler": {Enabled: true, Hosts: []string{"core-eu-1", "core-eu-2"}, Port: 18020},
+		"chartroom": {Enabled: true, Hosts: []string{"core-eu-1", "core-eu-2"}, Port: 18030},
 	}
 	d, err := Derive(m, DeriveOptions{})
 	if err != nil {
@@ -379,22 +384,23 @@ func TestDeriveEmitsRegistryEntryPerHost(t *testing.T) {
 
 	nodes := map[string]bool{}
 	for _, e := range d.Quartermaster.ServiceRegistry {
-		if e.ServiceName == "chandler" {
+		if e.ServiceName == "chartroom" {
 			nodes[e.NodeID] = true
 		}
 	}
 	for _, host := range []string{"core-eu-1", "core-eu-2"} {
 		if !nodes[host] {
-			t.Errorf("expected service_registry entry for chandler@%s; got %v", host, nodes)
+			t.Errorf("expected service_registry entry for chartroom@%s; got %v", host, nodes)
 		}
 	}
 }
 
-// TestDeriveLivepeerGatewayMetadataWithGatewayHost pins the production
-// resolution: cluster-scoped DNS wins over an explicit gateway_host because
-// public media routing goes through managed ingress. Wallet address comes from
-// shared env. Admin endpoints are intentionally not modeled.
-func TestDeriveLivepeerGatewayMetadataWithGatewayHost(t *testing.T) {
+// TestDeriveLivepeerGatewayMetadata pins the rendered metadata: invariant
+// fields (public_scheme, public_port, wallet_address) come from the manifest;
+// the cluster-derived public_host is NOT stored, because the same gateway
+// pool may serve multiple media clusters and DiscoverServices synthesizes the
+// per-cluster URL at request time from service_cluster_assignments.
+func TestDeriveLivepeerGatewayMetadata(t *testing.T) {
 	m := minimalManifest()
 	m.RootDomain = "frameworks.network"
 	m.Hosts["core-eu-1"] = inventory.Host{ExternalIP: "203.0.113.10", Cluster: "core-eu"}
@@ -406,7 +412,6 @@ func TestDeriveLivepeerGatewayMetadataWithGatewayHost(t *testing.T) {
 			Enabled: true,
 			Host:    "core-eu-1",
 			Port:    8935,
-			Config:  map[string]string{"gateway_host": "livepeer.frameworks.network"},
 		},
 	}
 	opts := DeriveOptions{SharedEnv: map[string]string{"LIVEPEER_ETH_ACCT_ADDR": "0xabc123"}}
@@ -418,8 +423,8 @@ func TestDeriveLivepeerGatewayMetadataWithGatewayHost(t *testing.T) {
 		t.Fatalf("expected 1 registry entry; got %d", got)
 	}
 	md := d.Quartermaster.ServiceRegistry[0].Metadata
-	if md["public_host"] != "livepeer.core-eu.frameworks.network" {
-		t.Errorf("public_host = %q, want livepeer.core-eu.frameworks.network", md["public_host"])
+	if _, ok := md["public_host"]; ok {
+		t.Errorf("public_host must not be stored as service metadata under M:N — got %q", md["public_host"])
 	}
 	if md["public_port"] != "443" {
 		t.Errorf("public_port = %q, want 443", md["public_port"])
@@ -431,26 +436,30 @@ func TestDeriveLivepeerGatewayMetadataWithGatewayHost(t *testing.T) {
 		t.Errorf("wallet_address = %q, want 0xabc123", md["wallet_address"])
 	}
 	for k := range md {
-		if k != "public_host" && k != "public_port" && k != "public_scheme" && k != "wallet_address" {
-			t.Errorf("unexpected metadata key %q (admin endpoints must not appear in derived metadata)", k)
+		if k != "public_port" && k != "public_scheme" && k != "wallet_address" {
+			t.Errorf("unexpected metadata key %q (cluster-derived fields and admin endpoints must not appear in derived metadata)", k)
 		}
 	}
 }
 
-// TestDeriveLivepeerGatewayMetadataClusterScopedFallback covers the case
-// where service config has no gateway_host but the manifest carries a root
-// domain — the renderer must build the cluster-scoped FQDN
-// (livepeer.<cluster-slug>.<root>) rather than fall back to the raw IP.
-func TestDeriveLivepeerGatewayMetadataClusterScopedFallback(t *testing.T) {
+func TestDeriveLivepeerGatewayPhysicalRegistryAndLogicalTLSBundles(t *testing.T) {
 	m := minimalManifest()
 	m.RootDomain = "frameworks.network"
+	m.Hosts["core-eu-1"] = inventory.Host{ExternalIP: "203.0.113.10", Cluster: "core-eu"}
 	m.Clusters = map[string]inventory.ClusterConfig{
-		"media-central-primary": {Name: "Media Central Primary"},
+		"core-eu":       {Name: "Core EU", Type: "central"},
+		"media-free-eu": {Name: "Media Free EU", Type: "edge", Roles: []string{"media"}},
+		"media-paid-eu": {Name: "Media Paid EU", Type: "edge", Roles: []string{"media"}},
 	}
-	m.Hosts["core-eu-1"] = inventory.Host{ExternalIP: "203.0.113.10", Cluster: "media-central-primary"}
 	m.Services = map[string]inventory.ServiceConfig{
-		"livepeer-gateway": {Enabled: true, Host: "core-eu-1", Port: 8935, Cluster: "media-central-primary"},
+		"livepeer-gateway": {
+			Enabled:  true,
+			Host:     "core-eu-1",
+			Port:     8935,
+			Clusters: []string{"media-free-eu", "media-paid-eu"},
+		},
 	}
+
 	d, err := Derive(m, DeriveOptions{SharedEnv: map[string]string{"LIVEPEER_ETH_ACCT_ADDR": "0xabc123"}})
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
@@ -458,10 +467,24 @@ func TestDeriveLivepeerGatewayMetadataClusterScopedFallback(t *testing.T) {
 	if got := len(d.Quartermaster.ServiceRegistry); got != 1 {
 		t.Fatalf("expected 1 registry entry; got %d", got)
 	}
-	md := d.Quartermaster.ServiceRegistry[0].Metadata
-	want := "livepeer.media-central-primary.frameworks.network"
-	if md["public_host"] != want {
-		t.Errorf("public_host = %q, want %q", md["public_host"], want)
+	if got := d.Quartermaster.ServiceRegistry[0].ClusterID; got != "core-eu" {
+		t.Fatalf("service_registry cluster_id = %q, want physical cluster core-eu", got)
+	}
+
+	bundles := map[string]TLSBundle{}
+	for _, b := range d.Quartermaster.Ingress.TLSBundles {
+		bundles[b.ID] = b
+	}
+	for _, clusterID := range []string{"media-free-eu", "media-paid-eu"} {
+		id := "wildcard-" + strings.ReplaceAll(clusterID+".frameworks.network", ".", "-")
+		b, ok := bundles[id]
+		if !ok {
+			t.Fatalf("missing TLS bundle %s; got %+v", id, bundles)
+		}
+		want := []string{clusterID + ".frameworks.network", "*." + clusterID + ".frameworks.network"}
+		if !slices.Equal(b.Domains, want) {
+			t.Fatalf("%s domains = %v, want %v", id, b.Domains, want)
+		}
 	}
 }
 
@@ -518,21 +541,22 @@ func TestDeriveProducesIngressAndServiceRegistry(t *testing.T) {
 	m := minimalManifest()
 	m.Services = map[string]inventory.ServiceConfig{
 		"bridge":    {Enabled: true, Host: "core-eu-1", Port: 18008},
-		"chandler":  {Enabled: true, Host: "core-eu-1", Port: 18012},
+		"chartroom": {Enabled: true, Host: "core-eu-1", Port: 18030},
 		"navigator": {Enabled: false, Host: "core-eu-1", Port: 18010},
 	}
 	d, err := Derive(m, DeriveOptions{})
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
+	// bridge self-registers, so only chartroom is pre-seeded.
 	if got := len(d.Quartermaster.ServiceRegistry); got != 1 {
-		t.Fatalf("expected 1 service_registry entry (chandler); got %d (%+v)", got, d.Quartermaster.ServiceRegistry)
+		t.Fatalf("expected 1 service_registry entry (chartroom); got %d (%+v)", got, d.Quartermaster.ServiceRegistry)
 	}
-	if d.Quartermaster.ServiceRegistry[0].ServiceName != "chandler" {
-		t.Fatalf("expected chandler in registry; got %q", d.Quartermaster.ServiceRegistry[0].ServiceName)
+	if d.Quartermaster.ServiceRegistry[0].ServiceName != "chartroom" {
+		t.Fatalf("expected chartroom in registry; got %q", d.Quartermaster.ServiceRegistry[0].ServiceName)
 	}
 	if got := len(d.Quartermaster.Ingress.Sites); got != 2 {
-		t.Fatalf("expected 2 ingress sites (bridge + chandler); got %d (%+v)", got, d.Quartermaster.Ingress.Sites)
+		t.Fatalf("expected 2 ingress sites (bridge + chartroom); got %d (%+v)", got, d.Quartermaster.Ingress.Sites)
 	}
 	for _, s := range d.Quartermaster.Ingress.Sites {
 		if s.Upstream.Host != "10.99.0.1" {

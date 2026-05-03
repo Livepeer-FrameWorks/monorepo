@@ -7,7 +7,6 @@ import (
 
 	"frameworks/cli/pkg/clusterderive"
 	"frameworks/cli/pkg/inventory"
-	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/servicedefs"
 )
 
@@ -204,53 +203,58 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 						entry.Protocol = defs.HealthProtocol
 						entry.HealthEndpoint = defs.HealthPath
 					}
-					if md := deriveServiceMetadata(serviceName, hostKey, clusterID, port, m, svc, opts); len(md) > 0 {
+					if md := deriveServiceMetadata(serviceName, hostKey, port, m, svc, opts); len(md) > 0 {
 						entry.Metadata = md
 					}
 					d.Quartermaster.ServiceRegistry = append(d.Quartermaster.ServiceRegistry, entry)
 				}
 
-				domains, bundleID := clusterderive.AutoIngressDomains(serviceName, m, clusterID)
-				if bundleID == "" || len(domains) == 0 {
-					continue
-				}
-
-				key := bundleKey{clusterID: clusterID, bundleID: bundleID}
-				if _, exists := autoBundles[key]; !exists {
-					bundleDomains := domains
-					if !strings.HasPrefix(bundleID, "apex-") {
-						bundleRoot := clusterderive.PublicServiceRootDomain(serviceType, m, clusterID)
-						bundleDomains = clusterderive.WildcardBundleDomains(bundleRoot)
+				for _, ingressClusterID := range serviceIngressClusterIDs(serviceName, m, svc, clusterID) {
+					domains, bundleID := clusterderive.AutoIngressDomains(serviceName, m, ingressClusterID)
+					if bundleID == "" || len(domains) == 0 {
+						continue
 					}
-					autoBundles[key] = TLSBundle{
-						ID:        bundleID,
-						ClusterID: clusterID,
-						Domains:   bundleDomains,
-						Issuer:    "navigator",
-						Email:     resolveTLSBundleEmail(opts),
-					}
-				}
 
-				host, hasHost := m.GetHost(hostKey)
-				if !hasHost {
-					continue
-				}
-				upstreamHost := host.WireguardIP
-				if upstreamHost == "" {
-					upstreamHost = host.ExternalIP
-				}
-				if upstreamHost == "" || port == 0 {
-					continue
-				}
-				siteID := serviceName + "-" + hostKey
-				autoSites[siteID] = IngressSite{
-					ID:          siteID,
-					ClusterID:   clusterID,
-					NodeID:      hostKey,
-					Domains:     domains,
-					TLSBundleID: bundleID,
-					Kind:        "http",
-					Upstream:    IngressUpstream{Host: upstreamHost, Port: port},
+					key := bundleKey{clusterID: ingressClusterID, bundleID: bundleID}
+					if _, exists := autoBundles[key]; !exists {
+						bundleDomains := domains
+						if !strings.HasPrefix(bundleID, "apex-") {
+							bundleRoot := clusterderive.PublicServiceRootDomain(serviceType, m, ingressClusterID)
+							bundleDomains = clusterderive.WildcardBundleDomains(bundleRoot)
+						}
+						autoBundles[key] = TLSBundle{
+							ID:        bundleID,
+							ClusterID: ingressClusterID,
+							Domains:   bundleDomains,
+							Issuer:    "navigator",
+							Email:     resolveTLSBundleEmail(opts),
+						}
+					}
+
+					host, hasHost := m.GetHost(hostKey)
+					if !hasHost {
+						continue
+					}
+					upstreamHost := host.WireguardIP
+					if upstreamHost == "" {
+						upstreamHost = host.ExternalIP
+					}
+					if upstreamHost == "" || port == 0 {
+						continue
+					}
+					siteID := serviceName + "-" + hostKey
+					if ingressClusterID != clusterID {
+						siteID += "-" + ingressClusterID
+					}
+					autoSites[siteID] = IngressSite{
+						ID:          siteID,
+						ClusterID:   ingressClusterID,
+						NodeID:      hostKey,
+						Domains:     domains,
+						TLSBundleID: bundleID,
+						Kind:        "http",
+						Upstream:    IngressUpstream{Host: upstreamHost, Port: port},
+					}
 				}
 			}
 		}
@@ -331,20 +335,27 @@ func splitHostPort(addr string) (string, int) {
 	return host, port
 }
 
-// serviceClusterIDForHost resolves the cluster id for a service on a specific host.
-// svc.Cluster wins (explicit pin); otherwise the host's cluster membership decides;
-// otherwise the service-name fallback. Per-host because a service deployed across
-// hosts in different clusters must produce one cluster-correct row per host.
+// serviceClusterIDForHost resolves the physical cluster id for a service on a
+// specific host. service_instances rows must carry the host's runtime cluster
+// (FK-bound to the node); logical media-cluster identity is decoupled and
+// recorded in service_cluster_assignments by a runtime reconciler.
 func serviceClusterIDForHost(m *inventory.Manifest, serviceName, hostKey string, svc inventory.ServiceConfig) string {
-	if svc.Cluster != "" {
-		return svc.Cluster
-	}
 	if hostKey != "" {
 		if c := m.HostCluster(hostKey); c != "" {
 			return c
 		}
 	}
 	return m.ResolveCluster(serviceName)
+}
+
+func serviceIngressClusterIDs(serviceName string, m *inventory.Manifest, svc inventory.ServiceConfig, physicalClusterID string) []string {
+	if logical := clusterderive.LogicalServiceClusterIDs(serviceName, svc, m); len(logical) > 0 {
+		return logical
+	}
+	if physicalClusterID == "" {
+		return nil
+	}
+	return []string{physicalClusterID}
 }
 
 // serviceHostKeys returns every host the service is deployed to. Single-host
@@ -372,26 +383,19 @@ func resolveTLSBundleEmail(opts DeriveOptions) string {
 // deriveServiceMetadata returns service-specific service_registry metadata
 // that the manifest can produce on its own (no on-host runtime data).
 //
-// livepeer-gateway emits:
-//   - public_host: the gateway's cluster-scoped published hostname
-//     (livepeer.<cluster-slug>.<root-domain>) when possible, then explicit
-//     gateway host config, then the host's external IP as a last resort.
-//     api_balancing uses this to build the gateway URL for media routing, so
-//     the IP fallback is correct only when no DNS is configured.
-//   - public_scheme/public_port: the public ingress endpoint, currently https/443.
-//   - wallet_address: required by Purser's deposit monitor
-//     (api_billing/internal/handlers/livepeer_deposit.go skips gateways
-//     whose registry metadata lacks it). Resolution order: service config
-//     `eth_acct_addr` / `LIVEPEER_ETH_ACCT_ADDR` first, then opts.SharedEnv
-//     (production gitops carries `LIVEPEER_ETH_ACCT_ADDR` in config/
-//     production.env). Validate() fails any livepeer-gateway entry without
-//     a resolvable wallet, so the gap shows up at render time.
+// livepeer-gateway emits invariant per-instance fields (wallet_address,
+// public_scheme, public_port). The cluster-derived public_host is NOT stored
+// here: the same gateway pool may serve multiple logical media clusters, so
+// the per-cluster URL is synthesized at DiscoverServices/DNS time from the
+// requested service_cluster_assignments.cluster_id.
 //
-// Admin endpoints (admin_host / admin_port) are intentionally NOT modeled —
-// the gateway's CLI port is container-local in docker mode, so admin access
-// uses operator transport (SSH tunnel, ansible-local exec, docker exec), not
-// service discovery.
-func deriveServiceMetadata(serviceName, hostKey, clusterID string, port int, m *inventory.Manifest, svc inventory.ServiceConfig, opts DeriveOptions) map[string]string {
+// wallet_address is required by Purser's deposit monitor
+// (api_billing/internal/handlers/livepeer_deposit.go skips gateways whose
+// registry metadata lacks it). Resolution order: service config
+// `eth_acct_addr` / `LIVEPEER_ETH_ACCT_ADDR` first, then opts.SharedEnv.
+// Validate() fails any livepeer-gateway entry without a resolvable wallet,
+// so the gap shows up at render time rather than as a silent skip later.
+func deriveServiceMetadata(serviceName, hostKey string, port int, m *inventory.Manifest, svc inventory.ServiceConfig, opts DeriveOptions) map[string]string {
 	if serviceName != "livepeer-gateway" {
 		return nil
 	}
@@ -399,9 +403,7 @@ func deriveServiceMetadata(serviceName, hostKey, clusterID string, port int, m *
 	if !ok || host.ExternalIP == "" || port == 0 {
 		return nil
 	}
-	publicHost := resolveLivepeerPublicHost(serviceName, svc, opts, m, clusterID, host.ExternalIP)
 	md := map[string]string{
-		servicedefs.LivepeerGatewayMetadataPublicHost:   publicHost,
 		servicedefs.LivepeerGatewayMetadataPublicPort:   "443",
 		servicedefs.LivepeerGatewayMetadataPublicScheme: "https",
 	}
@@ -409,27 +411,6 @@ func deriveServiceMetadata(serviceName, hostKey, clusterID string, port int, m *
 		md[servicedefs.LivepeerGatewayMetadataWalletAddress] = wallet
 	}
 	return md
-}
-
-// resolveLivepeerPublicHost picks the gateway's cluster-scoped published
-// hostname before considering explicit overrides. The service's go-livepeer
-// bind port is private to the node; public media routing goes through ingress.
-func resolveLivepeerPublicHost(serviceName string, svc inventory.ServiceConfig, opts DeriveOptions, m *inventory.Manifest, clusterID, externalIP string) string {
-	if scope := clusterderive.ClusterScopedRootDomain(m, clusterID); scope != "" {
-		if fqdn, ok := pkgdns.ServiceFQDN(serviceName, scope); ok {
-			return fqdn
-		}
-	}
-	if v := strings.TrimSpace(svc.Config["gateway_host"]); v != "" {
-		return v
-	}
-	if v := strings.TrimSpace(opts.SharedEnv["gateway_host"]); v != "" {
-		return v
-	}
-	if v := strings.TrimSpace(opts.SharedEnv["LIVEPEER_GATEWAY_HOST"]); v != "" {
-		return v
-	}
-	return externalIP
 }
 
 // resolveLivepeerWalletAddress reads the gateway's Ethereum address. Lookup

@@ -105,6 +105,9 @@ func (r *DNSReconciler) ensureClusterWildcardCerts(ctx context.Context) {
 		if !cluster.GetIsActive() {
 			continue
 		}
+		if !usesBunnyClusterDNS(cluster) {
+			continue
+		}
 		clusterSlug := logic.ClusterSlug(cluster)
 		if clusterSlug == "" || clusterSlug == "default" {
 			continue
@@ -124,6 +127,10 @@ func (r *DNSReconciler) ensureClusterWildcardCerts(ctx context.Context) {
 			"expires_at": cert.ExpiresAt,
 		}).Debug("Ensured cluster wildcard certificate")
 	}
+}
+
+func usesBunnyClusterDNS(cluster *proto.InfrastructureCluster) bool {
+	return pkgdns.UsesBunnyClusterDNS(strings.TrimSpace(cluster.GetClusterType()))
 }
 
 func (r *DNSReconciler) ensureTLSBundles(ctx context.Context) {

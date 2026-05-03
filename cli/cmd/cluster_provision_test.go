@@ -24,18 +24,52 @@ import (
 const testSharedSecrets = "SERVICE_TOKEN=test-token\nJWT_SECRET=test-jwt\nPASSWORD_RESET_SECRET=test-reset\nFIELD_ENCRYPTION_KEY=test-enc\nUSAGE_HASH_SECRET=test-hash\n"
 
 type fakeFoghornClusterAssigner struct {
-	calls  []string
-	errFor map[string]error
+	calls     []*pb.AssignServiceToClusterRequest
+	drains    []*pb.DrainServiceInstanceRequest
+	services  []*pb.Service
+	instances map[string][]*pb.ServiceInstance
+	errFor    map[string]error
 }
 
-func (f *fakeFoghornClusterAssigner) AssignFoghornToCluster(_ context.Context, req *pb.AssignFoghornToClusterRequest) error {
-	f.calls = append(f.calls, req.GetClusterId())
+func (f *fakeFoghornClusterAssigner) AssignServiceToCluster(_ context.Context, req *pb.AssignServiceToClusterRequest) error {
+	f.calls = append(f.calls, req)
 	if f.errFor != nil {
 		if err := f.errFor[req.GetClusterId()]; err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (f *fakeFoghornClusterAssigner) DrainServiceInstance(_ context.Context, req *pb.DrainServiceInstanceRequest) (*pb.DrainServiceInstanceResponse, error) {
+	f.drains = append(f.drains, req)
+	return &pb.DrainServiceInstanceResponse{}, nil
+}
+
+func (f *fakeFoghornClusterAssigner) ListServices(_ context.Context, _ *pb.CursorPaginationRequest) (*pb.ListServicesResponse, error) {
+	return &pb.ListServicesResponse{Services: f.services}, nil
+}
+
+func (f *fakeFoghornClusterAssigner) ListServiceInstances(_ context.Context, _, serviceID, _ string, _ *pb.CursorPaginationRequest) (*pb.ListServiceInstancesResponse, error) {
+	return &pb.ListServiceInstancesResponse{Instances: f.instances[serviceID]}, nil
+}
+
+func fakePoolServices(names ...string) []*pb.Service {
+	services := make([]*pb.Service, 0, len(names))
+	for _, name := range names {
+		services = append(services, &pb.Service{ServiceId: name, Type: name})
+	}
+	return services
+}
+
+func fakeServiceInstance(id, serviceID, nodeID, status string) *pb.ServiceInstance {
+	return &pb.ServiceInstance{
+		Id:         id,
+		InstanceId: id,
+		ServiceId:  serviceID,
+		NodeId:     &nodeID,
+		Status:     status,
+	}
 }
 
 func newTestCommandWithOutput(out *bytes.Buffer) *cobra.Command {
@@ -69,49 +103,186 @@ func (f *fakeIngressDesiredStateRegistrar) UpsertIngressSite(_ context.Context, 
 	return &pb.IngressSiteResponse{Site: site}, nil
 }
 
-func TestReconcileFoghornClusterAssignmentsWithClientAssignsAllManifestClusters(t *testing.T) {
+func TestReconcileServiceClusterAssignmentsWithClientAssignsMediaClusters(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",
 		Clusters: map[string]inventory.ClusterConfig{
-			"media-central-primary": {},
-			"core-central-primary":  {},
+			"media-central-primary": {Type: "edge", Roles: []string{"media"}, Default: true},
+			"core-central-primary":  {Type: "central"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn":          {Enabled: true, Host: "core-1"},
+			"chandler":         {Enabled: true, Host: "core-1"},
+			"livepeer-gateway": {Enabled: true, Host: "core-1"},
 		},
 	}
-	assigner := &fakeFoghornClusterAssigner{}
+	assigner := &fakeFoghornClusterAssigner{
+		services: fakePoolServices("foghorn", "chandler", "livepeer-gateway"),
+		instances: map[string][]*pb.ServiceInstance{
+			"foghorn":          {fakeServiceInstance("foghorn-core-1", "foghorn", "core-1", "running")},
+			"chandler":         {fakeServiceInstance("chandler-core-1", "chandler", "core-1", "running")},
+			"livepeer-gateway": {fakeServiceInstance("gateway-core-1", "livepeer-gateway", "core-1", "running")},
+		},
+	}
 
 	var out bytes.Buffer
-	if err := reconcileFoghornClusterAssignmentsWithClient(context.Background(), &out, manifest, assigner); err != nil {
+	if err := reconcileServiceClusterAssignmentsWithClient(context.Background(), &out, manifest, assigner); err != nil {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
 
-	if len(assigner.calls) != 2 {
-		t.Fatalf("expected 2 assignment calls, got %d", len(assigner.calls))
+	// One assignment per pool service (foghorn/chandler/livepeer-gateway), each
+	// targeting the default media cluster.
+	if len(assigner.calls) != 3 {
+		t.Fatalf("expected 3 assignment calls, got %d (%v)", len(assigner.calls), assigner.calls)
 	}
-	if assigner.calls[0] != "core-central-primary" || assigner.calls[1] != "media-central-primary" {
-		t.Fatalf("expected sorted cluster assignment order, got %v", assigner.calls)
+	for _, call := range assigner.calls {
+		if call.GetClusterId() != "media-central-primary" {
+			t.Fatalf("expected media-central-primary assignment, got %q", call.GetClusterId())
+		}
+		if call.GetCount() != 0 {
+			t.Fatalf("manifest reconciliation must assign explicit instances, got count=%d", call.GetCount())
+		}
+		if len(call.GetInstanceIds()) != 1 {
+			t.Fatalf("expected one explicit instance id, got %v", call.GetInstanceIds())
+		}
+	}
+	if len(assigner.drains) != 3 {
+		t.Fatalf("expected existing assignments to be cleared first, got %d drains", len(assigner.drains))
 	}
 
 	output := out.String()
-	if !strings.Contains(output, "Reconciling Foghorn cluster assignments") {
+	if !strings.Contains(output, "Reconciling service-cluster assignments") {
 		t.Fatalf("expected reconciliation banner in output, got %q", output)
 	}
 }
 
-func TestReconcileFoghornClusterAssignmentsWithClientReturnsClusterError(t *testing.T) {
+func TestReconcileServiceClusterAssignmentsWithClientAssignsDeclaredPoolInstances(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",
 		Clusters: map[string]inventory.ClusterConfig{
-			"core-central-primary":  {},
-			"media-central-primary": {},
+			"media-free-eu": {Type: "edge", Roles: []string{"media"}},
+			"media-paid-eu": {Type: "edge", Roles: []string{"media"}},
+			"core-eu":       {Type: "central"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway": {
+				Enabled:  true,
+				Hosts:    []string{"gateway-1", "gateway-2"},
+				Clusters: []string{"media-free-eu", "media-paid-eu"},
+			},
 		},
 	}
 	assigner := &fakeFoghornClusterAssigner{
+		services: fakePoolServices("foghorn", "chandler", "livepeer-gateway"),
+		instances: map[string][]*pb.ServiceInstance{
+			"livepeer-gateway": {
+				fakeServiceInstance("gateway-inst-1", "livepeer-gateway", "gateway-1", "running"),
+				fakeServiceInstance("gateway-inst-2", "livepeer-gateway", "gateway-2", "running"),
+				fakeServiceInstance("old-gateway", "livepeer-gateway", "old-host", "running"),
+			},
+		},
+	}
+
+	if err := reconcileServiceClusterAssignmentsWithClient(context.Background(), &bytes.Buffer{}, manifest, assigner); err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	if len(assigner.drains) != 3 {
+		t.Fatalf("expected all existing gateway assignments to be cleared, got %d drains", len(assigner.drains))
+	}
+	if len(assigner.calls) != 2 {
+		t.Fatalf("expected one assignment call per logical cluster, got %d", len(assigner.calls))
+	}
+	for _, call := range assigner.calls {
+		if call.GetCount() != 0 {
+			t.Fatalf("manifest reconciliation must not use Count; got %d", call.GetCount())
+		}
+		gotIDs := strings.Join(call.GetInstanceIds(), ",")
+		if gotIDs != "gateway-inst-1,gateway-inst-2" {
+			t.Fatalf("assigned ids = %q, want declared gateway hosts only", gotIDs)
+		}
+	}
+}
+
+func TestReconcileServiceClusterAssignmentsWithClientDrainsRemovedService(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn": {Enabled: false},
+		},
+	}
+	assigner := &fakeFoghornClusterAssigner{
+		services: fakePoolServices("foghorn"),
+		instances: map[string][]*pb.ServiceInstance{
+			"foghorn": {fakeServiceInstance("stale-foghorn", "foghorn", "core-1", "running")},
+		},
+	}
+
+	if err := reconcileServiceClusterAssignmentsWithClient(context.Background(), &bytes.Buffer{}, manifest, assigner); err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	if len(assigner.drains) != 1 || assigner.drains[0].GetInstanceId() != "stale-foghorn" {
+		t.Fatalf("expected stale service assignment drain, got %+v", assigner.drains)
+	}
+	if len(assigner.calls) != 0 {
+		t.Fatalf("disabled service must not be assigned, got %+v", assigner.calls)
+	}
+}
+
+func TestReconcileServiceClusterAssignmentsWithClientDoesNotDrainBeforeValidation(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-central-primary": {Type: "edge", Roles: []string{"media"}, Default: true},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn":  {Enabled: true, Host: "core-1"},
+			"chandler": {Enabled: true, Host: "core-2"},
+		},
+	}
+	assigner := &fakeFoghornClusterAssigner{
+		services: fakePoolServices("foghorn", "chandler"),
+		instances: map[string][]*pb.ServiceInstance{
+			"foghorn":  {fakeServiceInstance("foghorn-core-1", "foghorn", "core-1", "running")},
+			"chandler": {fakeServiceInstance("chandler-core-1", "chandler", "core-1", "running")},
+		},
+	}
+
+	err := reconcileServiceClusterAssignmentsWithClient(context.Background(), &bytes.Buffer{}, manifest, assigner)
+	if err == nil {
+		t.Fatal("expected missing chandler host validation error")
+	}
+	if len(assigner.drains) != 0 {
+		t.Fatalf("validation failure must not mutate existing assignments, got drains %+v", assigner.drains)
+	}
+	if len(assigner.calls) != 0 {
+		t.Fatalf("validation failure must not assign instances, got calls %+v", assigner.calls)
+	}
+}
+
+func TestReconcileServiceClusterAssignmentsWithClientReturnsClusterError(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Clusters: map[string]inventory.ClusterConfig{
+			"core-central-primary":  {Type: "central"},
+			"media-central-primary": {Type: "edge", Roles: []string{"media"}, Default: true},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn": {Enabled: true, Host: "core-1"},
+		},
+	}
+	assigner := &fakeFoghornClusterAssigner{
+		services: fakePoolServices("foghorn"),
+		instances: map[string][]*pb.ServiceInstance{
+			"foghorn": {fakeServiceInstance("foghorn-core-1", "foghorn", "core-1", "running")},
+		},
 		errFor: map[string]error{
 			"media-central-primary": errors.New("no running foghorn"),
 		},
 	}
 
-	err := reconcileFoghornClusterAssignmentsWithClient(context.Background(), &bytes.Buffer{}, manifest, assigner)
+	err := reconcileServiceClusterAssignmentsWithClient(context.Background(), &bytes.Buffer{}, manifest, assigner)
 	if err == nil {
 		t.Fatal("expected reconciliation error")
 	}
@@ -120,7 +291,7 @@ func TestReconcileFoghornClusterAssignmentsWithClientReturnsClusterError(t *test
 	}
 }
 
-func TestMaybeReconcileBatchFoghornAssignmentsSkipsBatchWithoutFoghorn(t *testing.T) {
+func TestMaybeReconcileBatchServiceClusterAssignmentsSkipsUnrelatedBatch(t *testing.T) {
 	var out bytes.Buffer
 	cmd := newTestCommandWithOutput(&out)
 	manifest := &inventory.Manifest{
@@ -133,15 +304,15 @@ func TestMaybeReconcileBatchFoghornAssignmentsSkipsBatchWithoutFoghorn(t *testin
 		{Name: "bridge@core-1", Type: "bridge", ServiceID: "bridge", InstanceID: "core-1", Host: "core-1"},
 	}
 
-	if err := maybeReconcileBatchFoghornAssignments(context.Background(), cmd, batch, manifest, map[string]any{}, nil); err != nil {
-		t.Fatalf("expected no error for non-foghorn batch, got %v", err)
+	if err := maybeReconcileBatchServiceClusterAssignments(context.Background(), cmd, batch, manifest, map[string]any{}, nil); err != nil {
+		t.Fatalf("expected no error for unrelated batch, got %v", err)
 	}
 	if out.Len() != 0 {
 		t.Fatalf("expected no reconciliation output, got %q", out.String())
 	}
 }
 
-func TestMaybeReconcileBatchFoghornAssignmentsRequiresQuartermasterRuntimeData(t *testing.T) {
+func TestMaybeReconcileBatchServiceClusterAssignmentsRequiresQuartermasterRuntimeData(t *testing.T) {
 	var out bytes.Buffer
 	cmd := newTestCommandWithOutput(&out)
 	manifest := &inventory.Manifest{
@@ -154,7 +325,7 @@ func TestMaybeReconcileBatchFoghornAssignmentsRequiresQuartermasterRuntimeData(t
 		{Name: "foghorn@core-1", Type: "foghorn", ServiceID: "foghorn", InstanceID: "core-1", Host: "core-1"},
 	}
 
-	err := maybeReconcileBatchFoghornAssignments(context.Background(), cmd, batch, manifest, map[string]any{}, nil)
+	err := maybeReconcileBatchServiceClusterAssignments(context.Background(), cmd, batch, manifest, map[string]any{}, nil)
 	if err == nil {
 		t.Fatal("expected missing runtime data error")
 	}
@@ -342,8 +513,8 @@ func TestServiceRegistrationMetadataUsesResolvedGatewayWallet(t *testing.T) {
 	if metadata[servicedefs.LivepeerGatewayMetadataWalletAddress] != "0xabc123" {
 		t.Fatalf("expected wallet metadata from resolved env, got %v", metadata)
 	}
-	if metadata[servicedefs.LivepeerGatewayMetadataPublicHost] != "livepeer.media-central-primary.frameworks.network" {
-		t.Fatalf("expected cluster-scoped public host, got %q", metadata[servicedefs.LivepeerGatewayMetadataPublicHost])
+	if _, ok := metadata[servicedefs.LivepeerGatewayMetadataPublicHost]; ok {
+		t.Fatalf("public_host must be synthesized by DiscoverServices, got static metadata %v", metadata)
 	}
 	if metadata[servicedefs.LivepeerGatewayMetadataPublicPort] != "443" {
 		t.Fatalf("expected public port 443, got %q", metadata[servicedefs.LivepeerGatewayMetadataPublicPort])
@@ -393,7 +564,6 @@ func TestExtractInfraCredentialsFromSplitManifestEnvFiles(t *testing.T) {
 func TestBuildServiceEnvVarsLoadsSplitManifestEnvFiles(t *testing.T) {
 	baseEnv := writeTestEnvFile(t, strings.Join([]string{
 		"ARBITRUM_RPC_ENDPOINT=https://arb.example",
-		"LIVEPEER_GATEWAY_HOST=livepeer.frameworks.network",
 	}, "\n")+"\n")
 	secretsEnv := writeTestEnvFile(t, "LIVEPEER_ETH_ACCT_ADDR=0xabc123\n")
 
@@ -430,8 +600,8 @@ func TestBuildServiceEnvVarsLoadsSplitManifestEnvFiles(t *testing.T) {
 	if got := env["eth_acct_addr"]; got != "0xabc123" {
 		t.Fatalf("expected eth_acct_addr from second env file, got %q", got)
 	}
-	if got := env["gateway_host"]; got != "livepeer.media-central-primary.frameworks.network" {
-		t.Fatalf("expected cluster-scoped gateway_host, got %q", got)
+	if got := env["gateway_host"]; got != "" {
+		t.Fatalf("gateway_host must not be auto-derived for an M:N gateway pool, got %q", got)
 	}
 }
 

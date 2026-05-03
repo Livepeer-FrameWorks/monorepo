@@ -37,7 +37,7 @@ var Services = map[string]Service{
 	"privateer": {ID: "privateer", DefaultPort: 18012, HealthPath: "/health", HealthProtocol: "http", Role: "mesh"},
 
 	// Assets
-	"chandler": {ID: "chandler", DefaultPort: 18020, HealthPath: "/health", HealthProtocol: "http", Role: "control"},
+	"chandler": {ID: "chandler", DefaultPort: 18020, HealthPath: "/health", HealthProtocol: "http", Role: "media"},
 
 	// AI / support
 	"skipper":  {ID: "skipper", DefaultPort: 18018, HealthPath: "/health", HealthProtocol: "http", Role: "support"},

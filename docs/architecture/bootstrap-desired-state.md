@@ -274,20 +274,12 @@ writes it as-is and must not enrich it from on-host state — if a service needs
 values that only exist at apply time, model them as SecretRef-backed fields in the
 schema, not as silent runtime reads.
 
-**livepeer-gateway** is the one service with derived metadata today. The renderer
-emits `public_host`, `public_port`, and `wallet_address`; `api_balancing` reads
-them through Quartermaster's `DiscoverServices` for media routing and Purser's
-deposit monitor reads `wallet_address` to credit tenant deposits.
-
-`public_host` resolves in this order:
-
-1. The livepeer-gateway service's `config.gateway_host` (manifest authority).
-2. `gateway_host` / `LIVEPEER_GATEWAY_HOST` from the operator's shared env.
-3. The cluster-scoped FQDN `livepeer.<cluster-slug>.<root-domain>` when the
-   manifest carries a root domain.
-4. The manifest's root-domain FQDN `livepeer.<root-domain>` as a last
-   DNS-backed fallback.
-5. The host's external IP, used only when no DNS source is configured.
+**livepeer-gateway** service-registry metadata contains only per-instance
+invariants such as `public_port`, `public_scheme`, and `wallet_address`.
+Quartermaster synthesizes `public_host` inside `DiscoverServices` from the
+requested logical media-cluster assignment, so one physical gateway pool can
+serve multiple media clusters without storing one static host on the instance.
+Purser's deposit monitor reads `wallet_address` to credit tenant deposits.
 
 `public_port` is the manifest service port.
 

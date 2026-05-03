@@ -331,7 +331,8 @@ type ServiceConfig struct {
 	Image     string            `yaml:"image,omitempty"`      // For docker mode
 	BinaryURL string            `yaml:"binary_url,omitempty"` // For native mode
 	Deploy    string            `yaml:"deploy,omitempty"`     // Underlying service slug (container/binary name)
-	Cluster   string            `yaml:"cluster,omitempty"`    // Explicit cluster assignment
+	Cluster   string            `yaml:"cluster,omitempty"`    // Explicit cluster assignment (singular shorthand for Clusters[0])
+	Clusters  []string          `yaml:"clusters,omitempty"`   // Logical cluster assignments for cluster-scoped media services (M:N)
 	Host      string            `yaml:"host,omitempty"`       // Single host
 	Hosts     []string          `yaml:"hosts,omitempty"`      // Multiple hosts (for replicas)
 	Port      int               `yaml:"port,omitempty"`

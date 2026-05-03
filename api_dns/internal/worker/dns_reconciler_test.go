@@ -56,3 +56,12 @@ func TestReconciler_CallsSyncServiceByClusterForClusterScopedTypes(t *testing.T)
 		t.Fatalf("expected ListClusters called 6 times (edge-egress, edge-ingest, edge-storage, edge-processing, foghorn, livepeer-gateway), got %d", qm.listClustersCount)
 	}
 }
+
+func TestUsesBunnyClusterDNSOnlyForEdgeClusters(t *testing.T) {
+	if !usesBunnyClusterDNS(&proto.InfrastructureCluster{ClusterType: "edge"}) {
+		t.Fatal("expected edge cluster to use Bunny DNS")
+	}
+	if usesBunnyClusterDNS(&proto.InfrastructureCluster{ClusterType: "central"}) {
+		t.Fatal("expected central cluster to stay out of Bunny DNS")
+	}
+}

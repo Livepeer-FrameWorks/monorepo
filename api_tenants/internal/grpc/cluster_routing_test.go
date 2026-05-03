@@ -263,7 +263,7 @@ func TestGetClusterRouting(t *testing.T) {
 					WithArgs("tenant-1", "cluster-1").
 					WillReturnError(sql.ErrNoRows)
 				// 4. Foghorn address
-				mock.ExpectQuery("FROM quartermaster.foghorn_cluster_assignments").
+				mock.ExpectQuery("FROM quartermaster.service_cluster_assignments").
 					WithArgs("cluster-1").
 					WillReturnRows(sqlmock.NewRows(foghornCols).AddRow("foghorn.cluster-1", int32(50051)))
 				// 5. No official cluster (same as primary), skip official lookup
@@ -318,7 +318,7 @@ func TestGetClusterRouting(t *testing.T) {
 					WithArgs("tenant-1", "cluster-eu").
 					WillReturnError(sql.ErrNoRows)
 				// 4. Foghorn address (primary)
-				mock.ExpectQuery("FROM quartermaster.foghorn_cluster_assignments").
+				mock.ExpectQuery("FROM quartermaster.service_cluster_assignments").
 					WithArgs("cluster-eu").
 					WillReturnRows(sqlmock.NewRows(foghornCols).AddRow("foghorn.eu", int32(50051)))
 				// 5. Official cluster info
@@ -327,7 +327,7 @@ func TestGetClusterRouting(t *testing.T) {
 					WillReturnRows(sqlmock.NewRows([]string{"cluster_name", "base_url"}).
 						AddRow("US Cluster", "us.frameworks.cloud"))
 				// 6. Official foghorn address
-				mock.ExpectQuery("FROM quartermaster.foghorn_cluster_assignments").
+				mock.ExpectQuery("FROM quartermaster.service_cluster_assignments").
 					WithArgs("cluster-us").
 					WillReturnRows(sqlmock.NewRows(foghornCols).AddRow("foghorn.us", int32(50051)))
 				// 7. Cluster peers
@@ -382,7 +382,7 @@ func TestGetClusterRouting(t *testing.T) {
 					WithArgs("tenant-1", "cluster-eu").
 					WillReturnError(sql.ErrNoRows)
 				// 4. Foghorn address
-				mock.ExpectQuery("FROM quartermaster.foghorn_cluster_assignments").
+				mock.ExpectQuery("FROM quartermaster.service_cluster_assignments").
 					WithArgs("cluster-eu").
 					WillReturnRows(sqlmock.NewRows(foghornCols))
 				// 5. Official cluster
@@ -391,7 +391,7 @@ func TestGetClusterRouting(t *testing.T) {
 					WillReturnRows(sqlmock.NewRows([]string{"cluster_name", "base_url"}).
 						AddRow("US Cluster", "us.frameworks.cloud"))
 				// 6. Official foghorn
-				mock.ExpectQuery("FROM quartermaster.foghorn_cluster_assignments").
+				mock.ExpectQuery("FROM quartermaster.service_cluster_assignments").
 					WithArgs("cluster-us").
 					WillReturnRows(sqlmock.NewRows(foghornCols))
 				// 7. Three peers: preferred, official, subscribed
@@ -477,7 +477,7 @@ func TestListPeers_UsesFoghornClusterAssignments(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr"}).
 		AddRow("peer-cluster", pq.Array([]string{"tenant-a"}), "Peer Cluster", "shared-lb", "foghorn.peer.example.com:18019")
 
-	mock.ExpectQuery("(?s)WITH my_tenants AS.*foghorn_cluster_assignments").
+	mock.ExpectQuery("(?s)WITH my_tenants AS.*service_cluster_assignments").
 		WithArgs("local-cluster").
 		WillReturnRows(rows)
 
@@ -523,7 +523,7 @@ func TestGetClusterRouting_FormatsIPv6FoghornAddresses(t *testing.T) {
 	mock.ExpectQuery("FROM quartermaster.tenant_cluster_access").
 		WithArgs("tenant-1", "cluster-v6").
 		WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery("FROM quartermaster.foghorn_cluster_assignments").
+	mock.ExpectQuery("FROM quartermaster.service_cluster_assignments").
 		WithArgs("cluster-v6").
 		WillReturnRows(sqlmock.NewRows([]string{"advertise_host", "port"}).AddRow("2001:db8::10", int32(50051)))
 	mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").

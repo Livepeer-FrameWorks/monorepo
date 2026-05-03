@@ -90,6 +90,7 @@ In multi-cluster deployments, each media cluster gets a delegated Bunny DNS zone
 
 | Pattern                         | Purpose                                       |
 | ------------------------------- | --------------------------------------------- |
+| `{slug}.{base}`                 | Default media-cluster entrypoint via Foghorn  |
 | `edge.{slug}.{base}`            | Edge pool domain for this cluster             |
 | `edge-ingest.{slug}.{base}`     | RTMP/SRT/WHIP ingest for this cluster's edges |
 | `edge-egress.{slug}.{base}`     | Viewer egress for this cluster's edges        |
@@ -100,7 +101,7 @@ In multi-cluster deployments, each media cluster gets a delegated Bunny DNS zone
 | `foghorn.{slug}.{base}`         | Viewer routing / playback resolution          |
 | `livepeer.{slug}.{base}`        | Livepeer gateway for this cluster             |
 
-Navigator creates the Bunny zone, delegates `{cluster_slug}.{base_domain}` from Cloudflare with NS records, and reconciles each media service as a Bunny A-record set. Records use Bunny geolocation Smart Routing when Quartermaster has node coordinates. Quartermaster remains the health source; Navigator removes unhealthy nodes from the desired record set instead of enabling provider-side health checks.
+Navigator creates the Bunny zone, delegates `{cluster_slug}.{base_domain}` from Cloudflare with NS records, and reconciles each media service as a Bunny A-record set. The zone apex and `foghorn.{slug}.{base}` both point at the cluster's assigned virtual Foghorn instance(s), so callers can use the cluster domain as the default playback/routing entrypoint. Records use Bunny geolocation Smart Routing when Quartermaster has node coordinates. Quartermaster remains the health source; Navigator removes unhealthy nodes from the desired record set instead of enabling provider-side health checks.
 
 Media and edge names are cluster-scoped only. Navigator removes unsupported root-level media records such as `edge-ingest.example.com` and `foghorn.example.com` during reconciliation.
 

@@ -1031,29 +1031,29 @@ Clusters (2)
 
 ---
 
-### frameworks admin foghorn-pool
+### frameworks admin service-pool
 
-Manage the Foghorn instance pool across clusters.
+Manage pool-assigned media services across logical clusters.
 
 **Subcommands:**
 
 ```bash
 # Show pool status (total, assigned, unassigned per cluster)
-frameworks admin foghorn-pool status
+frameworks admin service-pool status --service-type foghorn
 
 # Release instances back to the pool
-frameworks admin foghorn-pool add --instance-id <uuid>
-frameworks admin foghorn-pool add --count 2 --from-cluster <cluster-id>
+frameworks admin service-pool add --service-type foghorn --instance-id <uuid>
+frameworks admin service-pool add --service-type livepeer-gateway --count 2 --from-cluster <cluster-id>
 
-# Drain a Foghorn instance from its cluster
-frameworks admin foghorn-pool drain --instance-id <uuid>
+# Drain an instance from its cluster
+frameworks admin service-pool drain --service-type chandler --instance-id <uuid>
 
-# Assign Foghorn(s) to a cluster (many-to-many)
-frameworks admin foghorn-pool assign --cluster-id <id> --count 1
-frameworks admin foghorn-pool assign --cluster-id <id> --instance-id <uuid>
+# Assign service instance(s) to a cluster (many-to-many)
+frameworks admin service-pool assign --service-type foghorn --cluster-id <id> --count 1
+frameworks admin service-pool assign --service-type livepeer-gateway --cluster-id <id> --instance-id <uuid>
 
-# Remove Foghorn(s) from a cluster
-frameworks admin foghorn-pool unassign --cluster-id <id> --instance-id <uuid>
+# Remove service instance(s) from a cluster
+frameworks admin service-pool unassign --service-type chandler --cluster-id <id> --instance-id <uuid>
 ```
 
 **Flags for `add`:**

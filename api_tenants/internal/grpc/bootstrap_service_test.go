@@ -552,7 +552,7 @@ func TestBootstrapServiceSkipsIPLookupForHostname(t *testing.T) {
 	}
 }
 
-func TestBootstrapServiceFoghornRemovesGhostAssignments(t *testing.T) {
+func TestBootstrapServiceFoghornDoesNotRewriteLogicalAssignments(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
@@ -586,12 +586,6 @@ func TestBootstrapServiceFoghornRemovesGhostAssignments(t *testing.T) {
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec(`UPDATE quartermaster.service_instances\s+SET status = 'stopped', stopped_at = NOW\(\)`).
 		WithArgs("foghorn", "cluster-1", "inst-foghorn-1234", "10.0.0.2", "http", int32(9000)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("DELETE FROM quartermaster.foghorn_cluster_assignments").
-		WithArgs("foghorn", "cluster-1", "inst-foghorn-1234").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO quartermaster.foghorn_cluster_assignments").
-		WithArgs("cluster-1", "inst-foghorn-1234").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{

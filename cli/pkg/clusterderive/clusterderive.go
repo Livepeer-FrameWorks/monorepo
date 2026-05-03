@@ -6,6 +6,8 @@
 package clusterderive
 
 import (
+	"slices"
+	"sort"
 	"strings"
 
 	"frameworks/cli/pkg/inventory"
@@ -52,7 +54,7 @@ func PublicServiceType(serviceName string) (string, bool) {
 // or the runtime BootstrapService call collides with the bootstrap-seeded row.
 func SelfRegisters(serviceName string) bool {
 	switch serviceName {
-	case "bridge", "foghorn":
+	case "bridge", "foghorn", "chandler":
 		return true
 	}
 	return false
@@ -96,6 +98,71 @@ func PublicServiceRootDomain(serviceType string, manifest *inventory.Manifest, c
 		return ClusterScopedRootDomain(manifest, clusterID)
 	}
 	return strings.TrimSpace(manifest.RootDomain)
+}
+
+// LogicalServiceClusterIDs returns the full set of logical media clusters a
+// cluster-scoped Bunny service is assigned to. Resolution order:
+//  1. svc.Clusters (M:N explicit list)
+//  2. svc.Cluster (singular shorthand)
+//  3. manifest's default media cluster (Bunny services only)
+//
+// Returns nil for services that are not cluster-scoped Bunny services or for
+// which no media cluster can be resolved.
+func LogicalServiceClusterIDs(serviceName string, svc inventory.ServiceConfig, manifest *inventory.Manifest) []string {
+	if len(svc.Clusters) > 0 {
+		out := make([]string, 0, len(svc.Clusters))
+		for _, c := range svc.Clusters {
+			c = strings.TrimSpace(c)
+			if c != "" {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	if c := strings.TrimSpace(svc.Cluster); c != "" {
+		return []string{c}
+	}
+	serviceType, ok := PublicServiceType(serviceName)
+	if !ok || pkgdns.ProviderForServiceType(serviceType) != pkgdns.ProviderBunny {
+		return nil
+	}
+	if clusterID := defaultMediaClusterID(manifest); clusterID != "" {
+		return []string{clusterID}
+	}
+	return nil
+}
+
+func defaultMediaClusterID(manifest *inventory.Manifest) string {
+	mediaClusters := MediaClusterIDs(manifest)
+	if len(mediaClusters) == 0 {
+		return ""
+	}
+	for _, clusterID := range mediaClusters {
+		if manifest.Clusters[clusterID].Default {
+			return clusterID
+		}
+	}
+	if len(mediaClusters) == 1 {
+		return mediaClusters[0]
+	}
+	return ""
+}
+
+// MediaClusterIDs returns cluster IDs that should own Bunny media DNS zones.
+func MediaClusterIDs(manifest *inventory.Manifest) []string {
+	if manifest == nil {
+		return nil
+	}
+	var out []string
+	for clusterID, cluster := range manifest.Clusters {
+		isMedia := cluster.Type == "edge" || slices.Contains(cluster.Roles, "media")
+		if !isMedia {
+			continue
+		}
+		out = append(out, clusterID)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // WildcardBundleDomains returns the SANs for a wildcard bundle keyed off rootDomain:

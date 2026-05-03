@@ -12,7 +12,7 @@ import (
 	pb "frameworks/pkg/proto"
 )
 
-func TestAssignFoghornToClusterCountFailsWhenNoRunningFoghornAvailable(t *testing.T) {
+func TestAssignServiceToClusterCountFailsWhenNoRunningFoghornAvailable(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
@@ -24,13 +24,14 @@ func TestAssignFoghornToClusterCountFailsWhenNoRunningFoghornAvailable(t *testin
 	mock.ExpectQuery("SELECT EXISTS\\(SELECT 1 FROM quartermaster.infrastructure_clusters").
 		WithArgs("cluster-a").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-	mock.ExpectExec("INSERT INTO quartermaster.foghorn_cluster_assignments").
-		WithArgs("cluster-a", int32(1)).
+	mock.ExpectExec("INSERT INTO quartermaster.service_cluster_assignments").
+		WithArgs("cluster-a", int32(1), "foghorn").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	_, err = server.AssignFoghornToCluster(context.Background(), &pb.AssignFoghornToClusterRequest{
-		ClusterId: "cluster-a",
-		Count:     1,
+	_, err = server.AssignServiceToCluster(context.Background(), &pb.AssignServiceToClusterRequest{
+		ClusterId:   "cluster-a",
+		Count:       1,
+		ServiceType: "foghorn",
 	})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("expected FailedPrecondition, got %v", err)
@@ -41,7 +42,25 @@ func TestAssignFoghornToClusterCountFailsWhenNoRunningFoghornAvailable(t *testin
 	}
 }
 
-func TestAssignFoghornToClusterInstanceIDFailsWhenInstanceMissing(t *testing.T) {
+func TestAssignServiceToClusterRequiresServiceType(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+
+	_, err = server.AssignServiceToCluster(context.Background(), &pb.AssignServiceToClusterRequest{
+		ClusterId: "cluster-a",
+		Count:     1,
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", err)
+	}
+}
+
+func TestAssignServiceToClusterInstanceIDFailsWhenInstanceMissing(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
@@ -53,13 +72,14 @@ func TestAssignFoghornToClusterInstanceIDFailsWhenInstanceMissing(t *testing.T) 
 	mock.ExpectQuery("SELECT EXISTS\\(SELECT 1 FROM quartermaster.infrastructure_clusters").
 		WithArgs("cluster-a").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-	mock.ExpectExec("INSERT INTO quartermaster.foghorn_cluster_assignments[\\s\\S]*WHERE si.id = \\$2::uuid AND svc.type = 'foghorn' AND si.status = 'running'").
-		WithArgs("cluster-a", "11111111-1111-1111-1111-111111111111").
+	mock.ExpectExec("INSERT INTO quartermaster.service_cluster_assignments[\\s\\S]*WHERE si.id = \\$2::uuid AND svc.type = \\$3 AND si.status = 'running'").
+		WithArgs("cluster-a", "11111111-1111-1111-1111-111111111111", "foghorn").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	_, err = server.AssignFoghornToCluster(context.Background(), &pb.AssignFoghornToClusterRequest{
-		ClusterId:          "cluster-a",
-		FoghornInstanceIds: []string{"11111111-1111-1111-1111-111111111111"},
+	_, err = server.AssignServiceToCluster(context.Background(), &pb.AssignServiceToClusterRequest{
+		ClusterId:   "cluster-a",
+		InstanceIds: []string{"11111111-1111-1111-1111-111111111111"},
+		ServiceType: "foghorn",
 	})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("expected NotFound, got %v", err)

@@ -3565,7 +3565,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	}
 
 	// Fetch foghorn pool for peer connection derivation
-	poolStatus, err := r.Clients.Quartermaster.GetFoghornPoolStatus(ctx)
+	poolStatus, err := r.Clients.Quartermaster.GetServicePoolStatus(ctx, "foghorn")
 	if err != nil {
 		r.Logger.WithError(err).Warn("networkStatus: failed to get foghorn pool status")
 	}
@@ -3809,7 +3809,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 				continue
 			}
 			servedClusterID := assignment.GetClusterId()
-			hostClusterID := foghornHostClusterByInstanceID[assignment.GetFoghornInstanceId()]
+			hostClusterID := foghornHostClusterByInstanceID[assignment.GetInstanceId()]
 			addPeerConnection(hostClusterID, servedClusterID, "assignment")
 		}
 	}

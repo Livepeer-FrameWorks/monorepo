@@ -45,6 +45,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func newClusterProvisionCmd() *cobra.Command {
@@ -652,11 +654,11 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s provisioned", r.task.Name))
 		}
 
-		if err := maybeReconcileBatchFoghornAssignments(ctx, cmd, batch, manifest, runtimeData, raSession); err != nil {
-			ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Foghorn reconciliation failed: %v", err))
+		if err := maybeReconcileBatchServiceClusterAssignments(ctx, cmd, batch, manifest, runtimeData, raSession); err != nil {
+			ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Service-cluster reconciliation failed: %v", err))
 			fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
 			rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
-			return fmt.Errorf("foghorn reconciliation failed: %w", err)
+			return fmt.Errorf("service-cluster reconciliation failed: %w", err)
 		}
 
 		if batchContainsService(batch, "yugabyte") && !remainingBatchesContainService(plan.Batches[batchNum+1:], "yugabyte") {
@@ -921,12 +923,21 @@ func resolveServiceGRPCAddr(manifest *inventory.Manifest, serviceName string, de
 	return fmt.Sprintf("%s:%d", addr, grpcPort), nil
 }
 
-func maybeReconcileBatchFoghornAssignments(ctx context.Context, cmd *cobra.Command, batch []*orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
-	if !batchContainsService(batch, "foghorn") {
+func maybeReconcileBatchServiceClusterAssignments(ctx context.Context, cmd *cobra.Command, batch []*orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
+	// Run after any pool-assigned service has been deployed in this batch so
+	// the service_instances rows exist before we wire assignment FKs.
+	any := false
+	for _, name := range pkgdns.PoolAssignedServiceTypes() {
+		if batchContainsService(batch, name) {
+			any = true
+			break
+		}
+	}
+	if !any {
 		return nil
 	}
 
-	return reconcileFoghornClusterAssignments(ctx, cmd, manifest, runtimeData, sess)
+	return reconcileServiceClusterAssignments(ctx, cmd, manifest, runtimeData, sess)
 }
 
 // batchContainsPrivateer returns true if any task in the batch is a Privateer deployment.
@@ -1125,8 +1136,11 @@ func serviceRunning(state *detect.ServiceState) bool {
 	return state != nil && state.Exists && state.Running
 }
 
-type foghornClusterAssigner interface {
-	AssignFoghornToCluster(ctx context.Context, req *pb.AssignFoghornToClusterRequest) error
+type serviceClusterAssignmentClient interface {
+	AssignServiceToCluster(ctx context.Context, req *pb.AssignServiceToClusterRequest) error
+	DrainServiceInstance(ctx context.Context, req *pb.DrainServiceInstanceRequest) (*pb.DrainServiceInstanceResponse, error)
+	ListServices(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListServicesResponse, error)
+	ListServiceInstances(ctx context.Context, clusterID, serviceID, nodeID string, pagination *pb.CursorPaginationRequest) (*pb.ListServiceInstancesResponse, error)
 }
 
 func resolveQuartermasterRuntimeData(manifest *inventory.Manifest, runtimeData map[string]any) (string, string, error) {
@@ -1459,21 +1473,21 @@ var (
 	autoIngressDomains      = clusterderive.AutoIngressDomains
 )
 
-func reconcileFoghornClusterAssignments(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
+func reconcileServiceClusterAssignments(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
 	token, ok := runtimeData["service_token"].(string)
 	if !ok || token == "" {
-		return fmt.Errorf("missing Quartermaster connection info for foghorn reconciliation: service_token not set")
+		return fmt.Errorf("missing Quartermaster connection info for service-cluster reconciliation: service_token not set")
 	}
 
 	client, err := newQuartermasterClient(ctx, manifest, runtimeData, sess)
 	if err != nil {
-		return fmt.Errorf("connect Quartermaster for foghorn reconciliation: %w", err)
+		return fmt.Errorf("connect Quartermaster for service-cluster reconciliation: %w", err)
 	}
 	defer client.Close()
 
 	var lastErr error
 	for attempt := 1; attempt <= 6; attempt++ {
-		lastErr = reconcileFoghornClusterAssignmentsWithClient(ctx, cmd.OutOrStdout(), manifest, client)
+		lastErr = reconcileServiceClusterAssignmentsWithClient(ctx, cmd.OutOrStdout(), manifest, client)
 		if lastErr == nil {
 			return nil
 		}
@@ -1492,24 +1506,161 @@ func reconcileFoghornClusterAssignments(ctx context.Context, cmd *cobra.Command,
 	return lastErr
 }
 
-func reconcileFoghornClusterAssignmentsWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, assigner foghornClusterAssigner) error {
-	fmt.Fprintln(out, "  Reconciling Foghorn cluster assignments...")
+func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, client serviceClusterAssignmentClient) error {
+	fmt.Fprintln(out, "  Reconciling service-cluster assignments...")
 
-	for _, clusterID := range clusterderive.MediaClusterIDs(manifest) {
-		assignCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err := assigner.AssignFoghornToCluster(assignCtx, &pb.AssignFoghornToClusterRequest{
-			ClusterId: clusterID,
-			Count:     1,
-		})
-		cancel()
-		if err != nil {
-			return fmt.Errorf("assign foghorn to cluster %s: %w", clusterID, err)
+	serviceIDs, err := serviceIDsByType(ctx, client)
+	if err != nil {
+		return err
+	}
+
+	poolAssignedServices := pkgdns.PoolAssignedServiceTypes()
+	plans := make([]serviceAssignmentPlan, 0, len(poolAssignedServices))
+	for _, serviceName := range poolAssignedServices {
+		serviceID := serviceIDs[serviceName]
+		if serviceID == "" {
+			if svc, ok := manifest.Services[serviceName]; ok && svc.Enabled {
+				return fmt.Errorf("%s service is enabled but missing from Quartermaster service catalog", serviceName)
+			}
+			continue
 		}
 
-		ux.Success(out, fmt.Sprintf("Foghorn assigned to cluster %s", clusterID))
+		instances, err := serviceInstancesForService(ctx, client, serviceID)
+		if err != nil {
+			return fmt.Errorf("list %s instances: %w", serviceName, err)
+		}
+
+		svc, ok := manifest.Services[serviceName]
+		if !ok || !svc.Enabled {
+			plans = append(plans, serviceAssignmentPlan{serviceName: serviceName, instances: instances})
+			continue
+		}
+		targets := clusterderive.LogicalServiceClusterIDs(serviceName, svc, manifest)
+		if len(targets) == 0 {
+			return fmt.Errorf("%s has no logical media-cluster assignment", serviceName)
+		}
+		instanceIDs, err := desiredServiceInstanceIDs(serviceName, svc, instances)
+		if err != nil {
+			return err
+		}
+		plans = append(plans, serviceAssignmentPlan{
+			serviceName: serviceName,
+			instances:   instances,
+			targets:     targets,
+			instanceIDs: instanceIDs,
+		})
+	}
+
+	for _, plan := range plans {
+		if len(plan.instances) > 0 {
+			if err := drainServiceAssignments(ctx, client, plan.serviceName, plan.instances); err != nil {
+				return err
+			}
+		}
+		for _, clusterID := range plan.targets {
+			assignCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err := client.AssignServiceToCluster(assignCtx, &pb.AssignServiceToClusterRequest{
+				ClusterId:   clusterID,
+				InstanceIds: plan.instanceIDs,
+				ServiceType: plan.serviceName,
+			})
+			cancel()
+			if err != nil {
+				return fmt.Errorf("assign %s to cluster %s: %w", plan.serviceName, clusterID, err)
+			}
+
+			ux.Success(out, fmt.Sprintf("%s assigned %d instance(s) to cluster %s", plan.serviceName, len(plan.instanceIDs), clusterID))
+		}
 	}
 
 	return nil
+}
+
+type serviceAssignmentPlan struct {
+	serviceName string
+	instances   []*pb.ServiceInstance
+	targets     []string
+	instanceIDs []string
+}
+
+func serviceIDsByType(ctx context.Context, client serviceClusterAssignmentClient) (map[string]string, error) {
+	resp, err := client.ListServices(ctx, &pb.CursorPaginationRequest{First: 1000})
+	if err != nil {
+		return nil, fmt.Errorf("list Quartermaster services: %w", err)
+	}
+	out := make(map[string]string, len(resp.GetServices()))
+	for _, svc := range resp.GetServices() {
+		serviceType := strings.TrimSpace(svc.GetType())
+		if serviceType == "" {
+			serviceType = strings.TrimSpace(svc.GetServiceId())
+		}
+		if serviceType == "" || svc.GetServiceId() == "" {
+			continue
+		}
+		out[serviceType] = svc.GetServiceId()
+	}
+	return out, nil
+}
+
+func serviceInstancesForService(ctx context.Context, client serviceClusterAssignmentClient, serviceID string) ([]*pb.ServiceInstance, error) {
+	resp, err := client.ListServiceInstances(ctx, "", serviceID, "", &pb.CursorPaginationRequest{First: 1000})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetInstances(), nil
+}
+
+func drainServiceAssignments(ctx context.Context, client serviceClusterAssignmentClient, serviceName string, instances []*pb.ServiceInstance) error {
+	for _, inst := range instances {
+		if inst.GetId() == "" {
+			continue
+		}
+		drainCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		_, err := client.DrainServiceInstance(drainCtx, &pb.DrainServiceInstanceRequest{
+			InstanceId:  inst.GetId(),
+			ServiceType: serviceName,
+		})
+		cancel()
+		if err == nil || status.Code(err) == codes.NotFound {
+			continue
+		}
+		return fmt.Errorf("clear existing %s assignments for instance %s: %w", serviceName, inst.GetId(), err)
+	}
+	return nil
+}
+
+func desiredServiceInstanceIDs(serviceName string, svc inventory.ServiceConfig, instances []*pb.ServiceInstance) ([]string, error) {
+	hosts := serviceHosts(svc)
+	if len(hosts) == 0 {
+		return nil, fmt.Errorf("%s needs host or hosts before service-cluster assignments can be reconciled", serviceName)
+	}
+
+	byHost := make(map[string][]string)
+	for _, inst := range instances {
+		if inst.GetStatus() != "running" {
+			continue
+		}
+		nodeID := strings.TrimSpace(inst.GetNodeId())
+		if nodeID == "" || inst.GetId() == "" {
+			continue
+		}
+		byHost[nodeID] = append(byHost[nodeID], inst.GetId())
+	}
+
+	var ids []string
+	for _, host := range hosts {
+		host = strings.TrimSpace(host)
+		if host == "" {
+			continue
+		}
+		hostIDs := byHost[host]
+		if len(hostIDs) == 0 {
+			return nil, fmt.Errorf("%s has no running service instance on manifest host %s", serviceName, host)
+		}
+		ids = append(ids, hostIDs...)
+	}
+	sort.Strings(ids)
+	return ids, nil
 }
 
 // buildTaskConfig creates a ServiceConfig for a task.
@@ -3208,7 +3359,6 @@ func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inv
 	}
 
 	metadata := map[string]string{
-		servicedefs.LivepeerGatewayMetadataPublicHost:   gatewayPublicHost(config.EnvVars, manifest, clusterID),
 		servicedefs.LivepeerGatewayMetadataPublicPort:   "443",
 		servicedefs.LivepeerGatewayMetadataPublicScheme: "https",
 		servicedefs.LivepeerGatewayMetadataAdminHost:    hostInfo.ExternalIP,
@@ -3545,9 +3695,6 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		applyLivepeerRPCPool(env, livepeerServiceHostIndex(task, manifest))
 	}
 	normalizeServiceEnvVars(baseName, env)
-	if baseName == "livepeer-gateway" {
-		applyDefaultLivepeerGatewayHost(env, manifest, task.ClusterID)
-	}
 
 	// Shared platform secrets are validated (non-dev) or generated (dev) once
 	// in runProvision before tasks run — not per-task.
@@ -3827,7 +3974,6 @@ func normalizeLivepeerEnvVars(env map[string]string) {
 	setEnvIfEmpty(env, "orch_webhook_url", "LIVEPEER_ORCH_WEBHOOK_URL")
 	setEnvIfEmpty(env, "remote_signer_url", "LIVEPEER_REMOTE_SIGNER_URL")
 	setEnvIfEmpty(env, "auth_webhook_url", "LIVEPEER_AUTH_WEBHOOK_URL")
-	setEnvIfEmpty(env, "gateway_host", "LIVEPEER_GATEWAY_HOST")
 }
 
 func validateGatewayMeshCoverage(manifest *inventory.Manifest) error {
@@ -3941,39 +4087,6 @@ func chandlerInternalURLs(manifest *inventory.Manifest, svc inventory.ServiceCon
 		return []string{fmt.Sprintf("http://chandler.internal:%d", port)}
 	}
 	return urls
-}
-
-func applyDefaultLivepeerGatewayHost(env map[string]string, manifest *inventory.Manifest, clusterID string) {
-	clusterHost := clusterScopedGatewayHost(manifest, clusterID)
-	if clusterHost == "" {
-		return
-	}
-
-	env["gateway_host"] = clusterHost
-}
-
-func gatewayPublicHost(env map[string]string, manifest *inventory.Manifest, clusterID string) string {
-	if host := strings.TrimSpace(env["gateway_host"]); host != "" {
-		return host
-	}
-	return clusterScopedGatewayHost(manifest, clusterID)
-}
-
-func clusterScopedGatewayHost(manifest *inventory.Manifest, clusterID string) string {
-	if manifest == nil || manifest.RootDomain == "" || clusterID == "" {
-		return ""
-	}
-
-	clusterSlug := pkgdns.ClusterSlug(clusterID, manifest.Clusters[clusterID].Name)
-	if clusterSlug == "" {
-		return ""
-	}
-
-	fqdn, ok := pkgdns.ServiceFQDN("livepeer-gateway", clusterSlug+"."+manifest.RootDomain)
-	if !ok {
-		return ""
-	}
-	return fqdn
 }
 
 func portFromBindAddr(raw string, fallback int) int {

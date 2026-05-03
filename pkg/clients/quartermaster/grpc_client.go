@@ -562,30 +562,28 @@ func (c *GRPCClient) ValidateBootstrapTokenEx(ctx context.Context, req *pb.Valid
 }
 
 // ============================================================================
-// FOGHORN POOL MANAGEMENT
+// SERVICE POOL MANAGEMENT
 // ============================================================================
 
-func (c *GRPCClient) GetFoghornPoolStatus(ctx context.Context) (*pb.GetFoghornPoolStatusResponse, error) {
-	return c.bootstrap.GetFoghornPoolStatus(ctx, &pb.GetFoghornPoolStatusRequest{})
+func (c *GRPCClient) GetServicePoolStatus(ctx context.Context, serviceType string) (*pb.GetServicePoolStatusResponse, error) {
+	return c.bootstrap.GetServicePoolStatus(ctx, &pb.GetServicePoolStatusRequest{ServiceType: serviceType})
 }
 
-func (c *GRPCClient) AddToFoghornPool(ctx context.Context, req *pb.AddToFoghornPoolRequest) (*pb.AddToFoghornPoolResponse, error) {
-	return c.bootstrap.AddToFoghornPool(ctx, req)
+func (c *GRPCClient) AddToServicePool(ctx context.Context, req *pb.AddToServicePoolRequest) (*pb.AddToServicePoolResponse, error) {
+	return c.bootstrap.AddToServicePool(ctx, req)
 }
 
-func (c *GRPCClient) DrainFoghornInstance(ctx context.Context, instanceID string) (*pb.DrainFoghornInstanceResponse, error) {
-	return c.bootstrap.DrainFoghornInstance(ctx, &pb.DrainFoghornInstanceRequest{
-		InstanceId: instanceID,
-	})
+func (c *GRPCClient) DrainServiceInstance(ctx context.Context, req *pb.DrainServiceInstanceRequest) (*pb.DrainServiceInstanceResponse, error) {
+	return c.bootstrap.DrainServiceInstance(ctx, req)
 }
 
-func (c *GRPCClient) AssignFoghornToCluster(ctx context.Context, req *pb.AssignFoghornToClusterRequest) error {
-	_, err := c.cluster.AssignFoghornToCluster(ctx, req)
+func (c *GRPCClient) AssignServiceToCluster(ctx context.Context, req *pb.AssignServiceToClusterRequest) error {
+	_, err := c.cluster.AssignServiceToCluster(ctx, req)
 	return err
 }
 
-func (c *GRPCClient) UnassignFoghornFromCluster(ctx context.Context, req *pb.UnassignFoghornFromClusterRequest) error {
-	_, err := c.cluster.UnassignFoghornFromCluster(ctx, req)
+func (c *GRPCClient) UnassignServiceFromCluster(ctx context.Context, req *pb.UnassignServiceFromClusterRequest) error {
+	_, err := c.cluster.UnassignServiceFromCluster(ctx, req)
 	return err
 }
 

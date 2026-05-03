@@ -76,8 +76,7 @@ func TestBuildServiceEnvVarsMapsLivepeerUppercaseAliases(t *testing.T) {
 		"LIVEPEER_ETH_ACCT_ADDR=0xabc123\n"+
 		"LIVEPEER_ORCH_WEBHOOK_URL=https://orch.example\n"+
 		"LIVEPEER_REMOTE_SIGNER_URL=https://signer.example\n"+
-		"LIVEPEER_AUTH_WEBHOOK_URL=https://auth.example\n"+
-		"LIVEPEER_GATEWAY_HOST=livepeer.example\n")
+		"LIVEPEER_AUTH_WEBHOOK_URL=https://auth.example\n")
 
 	manifest := &inventory.Manifest{
 		Profile:  "dev",
@@ -113,24 +112,24 @@ func TestBuildServiceEnvVarsMapsLivepeerUppercaseAliases(t *testing.T) {
 	if got := env["auth_webhook_url"]; got != "https://auth.example" {
 		t.Fatalf("expected auth_webhook_url from LIVEPEER_AUTH_WEBHOOK_URL, got %q", got)
 	}
-	if got := env["gateway_host"]; got != "livepeer.example" {
-		t.Fatalf("expected gateway_host from LIVEPEER_GATEWAY_HOST when no cluster DNS is available, got %q", got)
+	if got := env["gateway_host"]; got != "" {
+		t.Fatalf("gateway_host must not be populated from shared env aliases, got %q", got)
 	}
 }
 
-func TestBuildServiceEnvVarsOverridesLivepeerGatewayHostWithClusterScopedDNS(t *testing.T) {
-	envFile := writeTestEnvFile(t, "LIVEPEER_GATEWAY_HOST=livepeer.example\n")
-
+func TestBuildServiceEnvVarsPreservesExplicitLivepeerGatewayHostConfig(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile:    "dev",
 		RootDomain: "frameworks.network",
-		EnvFiles:   []string{envFile},
 		Clusters: map[string]inventory.ClusterConfig{
 			"media-central-primary": {Name: "Media Central Primary"},
 		},
 		Services: map[string]inventory.ServiceConfig{
 			"livepeer-gateway": {
 				Enabled: true,
+				Config: map[string]string{
+					"gateway_host": "livepeer.manual.example",
+				},
 			},
 		},
 	}
@@ -145,12 +144,12 @@ func TestBuildServiceEnvVarsOverridesLivepeerGatewayHostWithClusterScopedDNS(t *
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
 
-	if got := env["gateway_host"]; got != "livepeer.media-central-primary.frameworks.network" {
-		t.Fatalf("expected cluster-scoped gateway_host, got %q", got)
+	if got := env["gateway_host"]; got != "livepeer.manual.example" {
+		t.Fatalf("expected explicit gateway_host config to be preserved, got %q", got)
 	}
 }
 
-func TestBuildServiceEnvVarsDefaultsGatewayHostToClusterScopedDNS(t *testing.T) {
+func TestBuildServiceEnvVarsDoesNotDefaultGatewayHost(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile:    "dev",
 		RootDomain: "frameworks.network",
@@ -177,12 +176,12 @@ func TestBuildServiceEnvVarsDefaultsGatewayHostToClusterScopedDNS(t *testing.T) 
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
 
-	if got := env["gateway_host"]; got != "livepeer.media-central-primary.frameworks.network" {
-		t.Fatalf("expected cluster-scoped gateway_host, got %q", got)
+	if got := env["gateway_host"]; got != "" {
+		t.Fatalf("gateway_host must not be auto-derived for an M:N gateway pool, got %q", got)
 	}
 }
 
-func TestBuildServiceEnvVarsRewritesGlobalGatewayHostToClusterScopedDNS(t *testing.T) {
+func TestBuildServiceEnvVarsIgnoresSharedLivepeerGatewayHostAlias(t *testing.T) {
 	envFile := writeTestEnvFile(t, "LIVEPEER_GATEWAY_HOST=livepeer.frameworks.network\n")
 
 	manifest := &inventory.Manifest{
@@ -209,8 +208,8 @@ func TestBuildServiceEnvVarsRewritesGlobalGatewayHostToClusterScopedDNS(t *testi
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
 
-	if got := env["gateway_host"]; got != "livepeer.media-central-primary.frameworks.network" {
-		t.Fatalf("expected cluster-scoped gateway_host, got %q", got)
+	if got := env["gateway_host"]; got != "" {
+		t.Fatalf("gateway_host must not be imported from shared env aliases, got %q", got)
 	}
 }
 
@@ -297,7 +296,6 @@ func TestBuildServiceEnvVarsLivepeerGatewayRuntimeDefaults(t *testing.T) {
 		"deposit_multiplier":     "1",
 		"block_polling_interval": "20",
 		"eth_url":                "https://rpc-one.example",
-		"gateway_host":           "livepeer.core-central-primary.frameworks.network",
 	}
 	for key, wantValue := range want {
 		if got := env[key]; got != wantValue {

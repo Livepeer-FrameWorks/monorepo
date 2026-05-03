@@ -14,6 +14,7 @@ Automates public DNS records, TLS certificate issuance, and internal service cer
 - Syncs cluster-scoped media/edge records in Bunny DNS from Quartermaster node/service inventory
 - Cloudflare root/global load balancers are split into one pool per Quartermaster cluster and use proximity steering when at least two pools have coordinates
 - Bunny media records are A-record sets under `<cluster>.<root>` zones with geolocation Smart Routing when node coordinates are available
+- Foghorn is published at both `foghorn.<cluster>.<root>` and the zone apex `<cluster>.<root>` so the cluster domain remains the default playback/routing entrypoint
 - Issues TLS certificates via Let's Encrypt DNS-01 challenges using Cloudflare or Bunny based on the delegated zone
 - Issues and stores internal gRPC certificates from Navigator's internal CA
 - Auto-renewal via background worker

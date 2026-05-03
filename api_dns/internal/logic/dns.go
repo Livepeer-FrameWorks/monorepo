@@ -91,6 +91,8 @@ type desiredPool struct {
 	Longitude   *float64
 }
 
+const rootIngressPoolServiceType = "public-ingress"
+
 type quartermasterClient interface {
 	ListHealthyNodesForDNS(ctx context.Context, staleThresholdSeconds int, serviceType string) (*proto.ListHealthyNodesForDNSResponse, error)
 	ListClusters(ctx context.Context, pagination *proto.CursorPaginationRequest) (*proto.ListClustersResponse, error)
@@ -278,10 +280,17 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 		clusterSlug := m.clusterSlug(cluster)
 		rootDomain := fmt.Sprintf("%s.%s", clusterSlug, m.domain)
 		useBunny := provider == pkgdns.ProviderBunny && m.bunnyClient != nil
+		svcFQDN := m.clusterServiceFQDN(serviceType, rootDomain)
+
+		if useBunny && !pkgdns.UsesBunnyClusterDNS(strings.TrimSpace(cluster.GetClusterType())) {
+			if err := m.clearBunnyClusterService(ctx, svcFQDN, serviceType, rootDomain); err != nil {
+				partialErrors[svcFQDN] = err.Error()
+			}
+			continue
+		}
 
 		// Inactive clusters: tear down their DNS records instead of syncing.
 		if !cluster.GetIsActive() {
-			svcFQDN := m.clusterServiceFQDN(serviceType, rootDomain)
 			if useBunny {
 				if err := m.clearBunnyClusterService(ctx, svcFQDN, serviceType, rootDomain); err != nil {
 					partialErrors[svcFQDN] = err.Error()
@@ -318,7 +327,6 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 
 		nodes := dnsNodesFromProto(nodesByCluster[cluster.GetClusterId()])
 
-		svcFQDN := m.clusterServiceFQDN(serviceType, rootDomain)
 		if len(nodes) == 0 {
 			m.logger.WithFields(logging.Fields{
 				"service_type": serviceType,
@@ -440,16 +448,23 @@ func (m *DNSManager) clearBunnyClusterService(ctx context.Context, fqdn, service
 		return fmt.Errorf("failed to find Bunny zone %s: %w", zoneDomain, err)
 	}
 	if ok {
-		recordName, nameOK := bunnyRecordName(serviceType)
+		recordNames, nameOK := bunnyRecordNames(serviceType)
 		if !nameOK {
 			return fmt.Errorf("unknown Bunny service type: %s", serviceType)
 		}
-		if err := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, recordName, bunny.RecordTypeA, nil); err != nil {
-			return err
+		for _, recordName := range recordNames {
+			if err := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, recordName, bunny.RecordTypeA, nil); err != nil {
+				return err
+			}
 		}
 	}
 	if _, err := m.clearDNSConfig(ctx, fqdn); err != nil {
 		return err
+	}
+	if serviceType == "foghorn" {
+		if _, err := m.clearDNSConfig(ctx, zoneDomain); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -463,11 +478,45 @@ func (m *DNSManager) syncBunnyClusterService(ctx context.Context, fqdn, serviceT
 		return nil, err
 	}
 
-	recordName, ok := bunnyRecordName(serviceType)
+	recordNames, ok := bunnyRecordNames(serviceType)
 	if !ok {
 		return nil, fmt.Errorf("unknown Bunny service type: %s", serviceType)
 	}
 
+	for _, recordName := range recordNames {
+		recordFQDN := bunnyRecordFQDN(recordName, zoneDomain)
+		records := m.bunnyRecordsForNodes(nodes, recordName, recordFQDN)
+		if reconcileErr := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, recordName, bunny.RecordTypeA, records); reconcileErr != nil {
+			return nil, reconcileErr
+		}
+	}
+
+	cleanupErrors, err := m.clearDNSConfig(ctx, fqdn)
+	if err != nil {
+		m.logger.WithError(err).WithField("fqdn", fqdn).Warn("Failed to clean old Cloudflare config after Bunny sync")
+		return map[string]string{fqdn + ":cloudflare-cleanup": err.Error()}, nil
+	}
+	if serviceType == "foghorn" {
+		apexCleanup, cleanupErr := m.clearDNSConfig(ctx, zoneDomain)
+		if cleanupErr != nil {
+			m.logger.WithError(cleanupErr).WithField("fqdn", zoneDomain).Warn("Failed to clean old Cloudflare config after Bunny apex sync")
+			if cleanupErrors == nil {
+				cleanupErrors = map[string]string{}
+			}
+			cleanupErrors[zoneDomain+":cloudflare-cleanup"] = cleanupErr.Error()
+			return cleanupErrors, nil
+		}
+		if cleanupErrors == nil && len(apexCleanup) > 0 {
+			cleanupErrors = map[string]string{}
+		}
+		for k, v := range apexCleanup {
+			cleanupErrors[k] = v
+		}
+	}
+	return cleanupErrors, nil
+}
+
+func (m *DNSManager) bunnyRecordsForNodes(nodes []dnsNode, recordName, fqdn string) []bunny.Record {
 	records := make([]bunny.Record, 0, len(nodes))
 	useGeo := countNodesWithLocation(nodes) >= 2
 	for _, node := range nodes {
@@ -488,17 +537,7 @@ func (m *DNSManager) syncBunnyClusterService(ctx context.Context, fqdn, serviceT
 		}
 		records = append(records, record)
 	}
-
-	if reconcileErr := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, recordName, bunny.RecordTypeA, records); reconcileErr != nil {
-		return nil, reconcileErr
-	}
-
-	cleanupErrors, err := m.clearDNSConfig(ctx, fqdn)
-	if err != nil {
-		m.logger.WithError(err).WithField("fqdn", fqdn).Warn("Failed to clean old Cloudflare config after Bunny sync")
-		return map[string]string{fqdn + ":cloudflare-cleanup": err.Error()}, nil
-	}
-	return cleanupErrors, nil
+	return records
 }
 
 func (m *DNSManager) ensureBunnyZoneDelegation(ctx context.Context, zoneDomain string, logFields logging.Fields) (*bunny.Zone, bool, error) {
@@ -522,6 +561,24 @@ func (m *DNSManager) ensureBunnyZoneDelegation(ctx context.Context, zoneDomain s
 
 func bunnyRecordName(serviceType string) (string, bool) {
 	return pkgdns.PublicSubdomain(serviceType)
+}
+
+func bunnyRecordNames(serviceType string) ([]string, bool) {
+	recordName, ok := bunnyRecordName(serviceType)
+	if !ok {
+		return nil, false
+	}
+	if serviceType == "foghorn" {
+		return []string{recordName, ""}, true
+	}
+	return []string{recordName}, true
+}
+
+func bunnyRecordFQDN(recordName, zoneDomain string) string {
+	if recordName == "" {
+		return zoneDomain
+	}
+	return recordName + "." + zoneDomain
 }
 
 func countNodesWithLocation(nodes []dnsNode) int {
@@ -673,7 +730,7 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 
 	// === Multi Node: Load Balancer Pool ===
 	log.Info("Multiple nodes detected, using Load Balancer")
-	return m.applyRootLoadBalancerConfig(ctx, fqdn, serviceType, activeNodes, m.shouldProxy(serviceType))
+	return m.applyRootLoadBalancerConfig(ctx, fqdn, serviceType, domain, activeNodes, m.shouldProxy(serviceType))
 }
 
 // applySingleNodeConfig ensures an A record exists and cleans up any LB config
@@ -838,35 +895,56 @@ func sameStringSet(a, b []string) bool {
 	return true
 }
 
-func (m *DNSManager) applyRootLoadBalancerConfig(ctx context.Context, fqdn, serviceType string, nodes []dnsNode, proxied bool) (map[string]string, error) {
-	nodesByCluster := map[string][]dnsNode{}
+func (m *DNSManager) applyRootLoadBalancerConfig(ctx context.Context, fqdn, serviceType, rootDomain string, nodes []dnsNode, proxied bool) (map[string]string, error) {
+	pools := sharedRootIngressPools(rootDomain, nodes)
+	return m.applyLoadBalancerPools(ctx, fqdn, serviceType, pools, proxied, serviceType)
+}
+
+func sharedRootIngressPools(rootDomain string, nodes []dnsNode) []desiredPool {
+	nodesByIP := map[string]dnsNode{}
 	for _, node := range nodes {
-		clusterID := strings.TrimSpace(node.ClusterID)
-		if clusterID == "" {
-			clusterID = "default"
+		ip := strings.TrimSpace(node.ExternalIP)
+		if ip == "" {
+			continue
 		}
-		nodesByCluster[clusterID] = append(nodesByCluster[clusterID], node)
+		existing, ok := nodesByIP[ip]
+		if !ok {
+			nodesByIP[ip] = node
+			continue
+		}
+		if existing.Latitude == nil && node.Latitude != nil {
+			existing.Latitude = node.Latitude
+		}
+		if existing.Longitude == nil && node.Longitude != nil {
+			existing.Longitude = node.Longitude
+		}
+		nodesByIP[ip] = existing
 	}
 
-	clusterIDs := make([]string, 0, len(nodesByCluster))
-	for clusterID := range nodesByCluster {
-		clusterIDs = append(clusterIDs, clusterID)
+	ips := make([]string, 0, len(nodesByIP))
+	for ip := range nodesByIP {
+		ips = append(ips, ip)
 	}
-	sort.Strings(clusterIDs)
+	sort.Strings(ips)
 
-	pools := make([]desiredPool, 0, len(clusterIDs))
-	for _, clusterID := range clusterIDs {
-		clusterNodes := nodesByCluster[clusterID]
+	pools := make([]desiredPool, 0, len(ips))
+	for _, ip := range ips {
+		node := nodesByIP[ip]
 		pool := desiredPool{
-			Name:        sanitizePoolName(fmt.Sprintf("%s-%s", fqdn, clusterID)),
-			ServiceType: serviceType,
-			Nodes:       clusterNodes,
+			Name:        sharedRootIngressPoolName(rootDomain, ip),
+			ServiceType: rootIngressPoolServiceType,
+			Nodes:       []dnsNode{node},
+			Latitude:    node.Latitude,
+			Longitude:   node.Longitude,
 		}
-		pool.Latitude, pool.Longitude = centroid(clusterNodes)
 		pools = append(pools, pool)
 	}
+	return pools
+}
 
-	return m.applyLoadBalancerPools(ctx, fqdn, serviceType, pools, proxied, serviceType)
+func sharedRootIngressPoolName(rootDomain, ip string) string {
+	originLabel := strings.NewReplacer(".", "-", ":", "-").Replace(strings.TrimSpace(ip))
+	return sanitizePoolName(fmt.Sprintf("%s-ingress-%s", rootDomain, originLabel))
 }
 
 // applyLoadBalancerConfig adapts an explicit IP slice into a single managed
@@ -889,12 +967,20 @@ func (m *DNSManager) applyLoadBalancerPools(ctx context.Context, fqdn, serviceTy
 	desiredPoolIDs := make([]string, 0, len(desiredPools))
 	desiredPoolNames := map[string]bool{}
 	for _, pool := range desiredPools {
+		desiredPoolNames[pool.Name] = true
+	}
+
+	preCreateCleanupErrors := m.cleanupManagedPools(fqdn, legacyPoolName, desiredPoolNames)
+	for k, v := range preCreateCleanupErrors {
+		partialErrors[k] = v
+	}
+
+	for _, pool := range desiredPools {
 		poolID, err := m.ensureDesiredPool(pool)
 		if err != nil {
 			return nil, err
 		}
 		desiredPoolIDs = append(desiredPoolIDs, poolID)
-		desiredPoolNames[pool.Name] = true
 	}
 	sort.Strings(desiredPoolIDs)
 
@@ -1068,17 +1154,27 @@ func (m *DNSManager) ensureMonitor(serviceType string) (string, error) {
 	if path == "" {
 		path = "/health"
 	}
+	monitorType := "http"
+	expectedCodes := "200"
+	followRedirects := false
+	if serviceType == rootIngressPoolServiceType {
+		path = "/"
+		port = 80
+		expectedCodes = "200-399"
+		followRedirects = true
+	}
 	m.logger.WithFields(logging.Fields{"name": monitorName, "port": port}).Info("Creating health check monitor")
 	monitor := cloudflare.Monitor{
-		Type:          "http",
-		Description:   monitorName,
-		Method:        "GET",
-		Path:          path,
-		Port:          port,
-		Timeout:       m.monitorConfig.Timeout,
-		Interval:      m.monitorConfig.Interval,
-		Retries:       m.monitorConfig.Retries,
-		ExpectedCodes: "200",
+		Type:            monitorType,
+		Description:     monitorName,
+		Method:          "GET",
+		Path:            path,
+		Port:            port,
+		Timeout:         m.monitorConfig.Timeout,
+		Interval:        m.monitorConfig.Interval,
+		Retries:         m.monitorConfig.Retries,
+		ExpectedCodes:   expectedCodes,
+		FollowRedirects: followRedirects,
 	}
 	created, err := m.cfClient.CreateMonitor(monitor)
 	if err != nil {

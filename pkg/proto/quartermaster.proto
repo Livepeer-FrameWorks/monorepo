@@ -153,15 +153,14 @@ service ClusterService {
   rpc ListPeers(ListPeersRequest) returns (ListPeersResponse);
 
   // ============================================================================
-  // FOGHORN-CLUSTER ASSIGNMENT RPCS
+  // SERVICE-CLUSTER ASSIGNMENT RPCS
   // ============================================================================
 
-  // Assign Foghorn instance(s) to a cluster (many-to-many).
-  // Supports assigning specific instances or picking N from pool.
-  rpc AssignFoghornToCluster(AssignFoghornToClusterRequest) returns (google.protobuf.Empty);
+  // Assign pool-managed service instance(s) to a logical cluster.
+  rpc AssignServiceToCluster(AssignServiceToClusterRequest) returns (google.protobuf.Empty);
 
-  // Remove Foghorn instance(s) from a cluster assignment.
-  rpc UnassignFoghornFromCluster(UnassignFoghornFromClusterRequest) returns (google.protobuf.Empty);
+  // Remove pool-managed service instance(s) from a logical cluster.
+  rpc UnassignServiceFromCluster(UnassignServiceFromClusterRequest) returns (google.protobuf.Empty);
 
   // ============================================================================
   // SELF-HOSTED EDGE RPCS
@@ -236,10 +235,10 @@ service BootstrapService {
   // Service discovery - find instances of a service type
   rpc DiscoverServices(ServiceDiscoveryRequest) returns (ServiceDiscoveryResponse);
 
-  // Foghorn pool management
-  rpc GetFoghornPoolStatus(GetFoghornPoolStatusRequest) returns (GetFoghornPoolStatusResponse);
-  rpc AddToFoghornPool(AddToFoghornPoolRequest) returns (AddToFoghornPoolResponse);
-  rpc DrainFoghornInstance(DrainFoghornInstanceRequest) returns (DrainFoghornInstanceResponse);
+  // Pool-managed service operations
+  rpc GetServicePoolStatus(GetServicePoolStatusRequest) returns (GetServicePoolStatusResponse);
+  rpc AddToServicePool(AddToServicePoolRequest) returns (AddToServicePoolResponse);
+  rpc DrainServiceInstance(DrainServiceInstanceRequest) returns (DrainServiceInstanceResponse);
 
   // Create/list/validate bootstrap tokens
   rpc CreateBootstrapToken(CreateBootstrapTokenRequest) returns (CreateBootstrapTokenResponse);
@@ -1537,47 +1536,57 @@ message ListIngressSitesResponse {
 }
 
 // ============================================================================
-// FOGHORN POOL MANAGEMENT MESSAGES
+// SERVICE POOL MANAGEMENT MESSAGES
 // ============================================================================
 
-message GetFoghornPoolStatusRequest {}
+message GetServicePoolStatusRequest {
+  // Required cluster-scoped Bunny service type: foghorn, chandler, or
+  // livepeer-gateway.
+  string service_type = 1;
+}
 
-message FoghornPoolClusterEntry {
+message ServicePoolClusterEntry {
   string cluster_id = 1;
   int32 instance_count = 2;
   repeated ServiceInstance instances = 3;
 }
 
-message FoghornInstanceAssignment {
-  string foghorn_instance_id = 1;          // service_instance UUID
+message ServiceInstanceAssignment {
+  string instance_id = 1;
   string cluster_id = 2;
   bool is_active = 3;
   google.protobuf.Timestamp created_at = 4;
 }
 
-message GetFoghornPoolStatusResponse {
+message GetServicePoolStatusResponse {
   int32 total = 1;
   int32 unassigned = 2;
   int32 assigned = 3;
-  repeated FoghornPoolClusterEntry clusters = 4;  // includes unassigned with cluster_id=""
-  repeated FoghornInstanceAssignment assignments = 5; // Full many-to-many mapping
+  repeated ServicePoolClusterEntry clusters = 4;  // includes unassigned with cluster_id=""
+  repeated ServiceInstanceAssignment assignments = 5;
 }
 
-message AddToFoghornPoolRequest {
+message AddToServicePoolRequest {
   repeated string instance_ids = 1;  // specific instances to release to pool
   int32 count = 2;                   // alternatively, release N oldest from a cluster
   string from_cluster_id = 3;        // cluster to release from (used with count)
+  // Required cluster-scoped Bunny service type: foghorn, chandler, or
+  // livepeer-gateway.
+  string service_type = 4;
 }
 
-message AddToFoghornPoolResponse {
+message AddToServicePoolResponse {
   int32 released = 1;
 }
 
-message DrainFoghornInstanceRequest {
+message DrainServiceInstanceRequest {
   string instance_id = 1;  // service_instance UUID
+  // Required cluster-scoped Bunny service type: foghorn, chandler, or
+  // livepeer-gateway.
+  string service_type = 2;
 }
 
-message DrainFoghornInstanceResponse {
+message DrainServiceInstanceResponse {
   string previous_cluster_id = 1;
 }
 
@@ -1618,21 +1627,26 @@ message TenantClusterPeer {
 }
 
 // ============================================================================
-// FOGHORN-CLUSTER ASSIGNMENT MESSAGES
+// SERVICE-CLUSTER ASSIGNMENT MESSAGES
 // ============================================================================
 
-// Assign Foghorn instance(s) to a cluster. Supports assigning specific
-// instances or picking N least-loaded from the pool.
-message AssignFoghornToClusterRequest {
+// Assign a pool-managed service instance to a logical cluster. Manifest
+// reconciliation sends explicit instance IDs; operator commands may also pick N
+// least-loaded instances from the pool.
+message AssignServiceToClusterRequest {
   string cluster_id = 1;
-  repeated string foghorn_instance_ids = 2;  // Specific instance UUIDs to assign
+  repeated string instance_ids = 2;  // Specific instance UUIDs to assign
   int32 count = 3;                           // OR: pick N with fewest assignments
+  // Required cluster-scoped Bunny service type: foghorn, chandler, or
+  // livepeer-gateway.
+  string service_type = 4;
 }
 
-// Remove Foghorn instance(s) from a cluster assignment.
-message UnassignFoghornFromClusterRequest {
+// Remove pool-managed service instance(s) from a cluster assignment.
+message UnassignServiceFromClusterRequest {
   string cluster_id = 1;
-  repeated string foghorn_instance_ids = 2;
+  repeated string instance_ids = 2;
+  string service_type = 3; // Required cluster-scoped Bunny service type.
 }
 
 // ============================================================================

@@ -1399,7 +1399,7 @@ INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_stat
     ('central-primary', 'periscope-ingest', 'running', 1)
 ON CONFLICT (cluster_id, service_id) DO NOTHING;
 
--- Foghorn runs on the platform cluster but serves media clusters via foghorn_cluster_assignments
+-- Foghorn runs on the platform cluster and publishes under assigned logical clusters.
 INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas) VALUES
     ('central-primary', 'foghorn', 'running', 2)
 ON CONFLICT (cluster_id, service_id) DO NOTHING;
@@ -1442,9 +1442,9 @@ ON CONFLICT (instance_id) DO UPDATE SET
 -- Media clusters are served by the whole Foghorn HA set; a peer must not stop
 -- serving demo-media just because Mist/Helmsman triggers currently arrive at
 -- another peer.
-INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id) VALUES
+INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id) VALUES
     ('5eedf0e1-0001-da7a-f0e1-0001da7a0001', 'central-primary'),
     ('5eedf0e1-0001-da7a-f0e1-0001da7a0001', 'demo-media'),
     ('5eedf0e1-0002-da7a-f0e1-0002da7a0002', 'central-primary'),
     ('5eedf0e1-0002-da7a-f0e1-0002da7a0002', 'demo-media')
-ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true;
+ON CONFLICT (service_instance_id, cluster_id) DO UPDATE SET is_active = true, updated_at = NOW();

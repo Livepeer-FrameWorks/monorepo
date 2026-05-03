@@ -50,7 +50,7 @@ func TestLoadServedClusters_PopulatesFromDB(t *testing.T) {
 	t.Cleanup(func() { db = prevDB })
 	setInstanceID(t, "foghorn-instance-1")
 
-	mock.ExpectQuery("SELECT fca.cluster_id").
+	mock.ExpectQuery("SELECT sca.cluster_id").
 		WithArgs("foghorn-instance-1").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).
 			AddRow("cluster-a").
@@ -88,7 +88,7 @@ func TestLoadServedClusters_SwapsOutStaleEntries(t *testing.T) {
 	setInstanceID(t, "foghorn-instance-1")
 
 	// First load: cluster-a + cluster-b
-	mock.ExpectQuery("SELECT fca.cluster_id").
+	mock.ExpectQuery("SELECT sca.cluster_id").
 		WithArgs("foghorn-instance-1").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).
 			AddRow("cluster-a").
@@ -101,7 +101,7 @@ func TestLoadServedClusters_SwapsOutStaleEntries(t *testing.T) {
 	}
 
 	// Second load: only cluster-b (cluster-a de-assigned)
-	mock.ExpectQuery("SELECT fca.cluster_id").
+	mock.ExpectQuery("SELECT sca.cluster_id").
 		WithArgs("foghorn-instance-1").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).
 			AddRow("cluster-b"))
@@ -139,7 +139,7 @@ func TestLoadServedClusters_PreservesLocalClusterID(t *testing.T) {
 	setInstanceID(t, "foghorn-instance-1")
 
 	// DB returns cluster-b only (local-primary not in DB result)
-	mock.ExpectQuery("SELECT fca.cluster_id").
+	mock.ExpectQuery("SELECT sca.cluster_id").
 		WithArgs("foghorn-instance-1").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).
 			AddRow("cluster-b"))
@@ -193,7 +193,7 @@ func TestLoadServedClusters_DBError(t *testing.T) {
 	t.Cleanup(func() { db = prevDB })
 	setInstanceID(t, "foghorn-instance-1")
 
-	mock.ExpectQuery("SELECT fca.cluster_id").
+	mock.ExpectQuery("SELECT sca.cluster_id").
 		WithArgs("foghorn-instance-1").
 		WillReturnError(context.DeadlineExceeded)
 

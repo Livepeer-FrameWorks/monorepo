@@ -9,7 +9,9 @@ import (
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/internal/preflight"
 	"frameworks/cli/internal/ux"
+	"frameworks/cli/pkg/clusterderive"
 	"frameworks/cli/pkg/inventory"
+	pkgdns "frameworks/pkg/dns"
 
 	"github.com/spf13/cobra"
 )
@@ -61,6 +63,8 @@ func newClusterPreflightCmd() *cobra.Command {
 				}
 				defer rc.Cleanup()
 				manifest := rc.Manifest
+
+				warnUnassignedClusterScopedBunny(cmd.OutOrStdout(), manifest)
 
 				fmt.Fprintln(cmd.OutOrStdout(), "\nInfrastructure connectivity:")
 				if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
@@ -143,6 +147,33 @@ func newClusterPreflightCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&domain, "domain", "", "Domain to validate DNS resolution")
 	return cmd
+}
+
+// warnUnassignedClusterScopedBunny prints a warning for each enabled
+// cluster-scoped Bunny service (foghorn, chandler, livepeer-gateway) that
+// resolves to zero logical media clusters. Triggered by manifests with no
+// media/edge cluster, or with multiple media clusters and no `default: true`
+// flag, since the assignment reconciler then has no target to pick.
+func warnUnassignedClusterScopedBunny(out io.Writer, manifest *inventory.Manifest) {
+	if manifest == nil {
+		return
+	}
+	any := false
+	for name, svc := range manifest.Services {
+		if !svc.Enabled {
+			continue
+		}
+		if !pkgdns.IsPoolAssignedServiceType(name) {
+			continue
+		}
+		if len(clusterderive.LogicalServiceClusterIDs(name, svc, manifest)) == 0 {
+			if !any {
+				fmt.Fprintln(out, "\nMedia-cluster assignment warnings:")
+				any = true
+			}
+			ux.Fail(out, fmt.Sprintf("%s has no logical media-cluster target — set services.%s.cluster(s) or mark a media cluster default: true", name, name))
+		}
+	}
 }
 
 func resolvePostgresConnectivityHost(pg *inventory.PostgresConfig) string {

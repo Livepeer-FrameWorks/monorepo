@@ -70,22 +70,22 @@ This:
 Navigator-managed DNS and certificates are driven separately from node/service
 inventory and certificate status, not directly by `admin clusters create`.
 
-### Foghorn Pool
+### Service Pool
 
-Foghorn instances are managed in a shared pool. Clusters can claim idle instances on creation, assign idle instances later, drain instances gracefully, or release existing assignments back to the pool.
+Cluster-scoped media services such as Foghorn, Chandler, and Livepeer gateway are assigned from shared pools to logical media clusters.
 
 ```bash
 # View pool status (shows per-cluster grouping)
-frameworks admin foghorn-pool status
+frameworks admin service-pool status --service-type foghorn
 
 # Assign idle instances to a cluster
-frameworks admin foghorn-pool assign --cluster-id <CLUSTER_ID> --count 2
+frameworks admin service-pool assign --service-type foghorn --cluster-id <CLUSTER_ID> --count 2
 
 # Release an assigned instance back to the pool
-frameworks admin foghorn-pool add --instance-id <UUID>
+frameworks admin service-pool add --service-type livepeer-gateway --instance-id <UUID>
 
 # Drain an instance from its cluster (graceful)
-frameworks admin foghorn-pool drain --instance-id <UUID>
+frameworks admin service-pool drain --service-type chandler --instance-id <UUID>
 ```
 
 ### Cluster Health

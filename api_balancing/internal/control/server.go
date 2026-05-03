@@ -585,14 +585,14 @@ func LoadServedClusters() {
 	}
 
 	rows, err := db.QueryContext(context.Background(), `
-		SELECT fca.cluster_id
-		FROM quartermaster.foghorn_cluster_assignments fca
-		JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
+		SELECT sca.cluster_id
+		FROM quartermaster.service_cluster_assignments sca
+		JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
 		JOIN quartermaster.services svc ON svc.service_id = si.service_id
 		WHERE si.instance_id = $1
 		  AND svc.type = 'foghorn'
 		  AND si.status = 'running'
-		  AND fca.is_active = true
+		  AND sca.is_active = true
 	`, instanceID)
 	if err != nil {
 		return

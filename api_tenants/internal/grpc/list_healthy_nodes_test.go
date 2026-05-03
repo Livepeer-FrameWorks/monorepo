@@ -390,9 +390,10 @@ func TestListHealthyNodesForDNS_EdgeSubtypeUsesServiceInstancePath(t *testing.T)
 
 	edgeEgress := "edge-egress"
 
-	// edge-egress is a capability registration (Foghorn → BootstrapService),
-	// so it routes through listHealthyServiceNodes (service_instance join),
-	// NOT the heartbeat path used by plain "edge".
+	// edge-* subtypes are NOT pool-assigned services: an edge node's physical
+	// cluster IS its logical media cluster, so service_instances.cluster_id is
+	// authoritative. Routing therefore goes through the standard
+	// listHealthyServiceNodes path (counts node ids only, no sca join).
 	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\) FROM quartermaster\.infrastructure_nodes n`).
 		WithArgs(edgeEgress).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
@@ -401,7 +402,7 @@ func TestListHealthyNodesForDNS_EdgeSubtypeUsesServiceInstancePath(t *testing.T)
 		WithArgs(edgeEgress, int32(300)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
-	mock.ExpectQuery(`SELECT DISTINCT n\.id, n\.node_id`).
+	mock.ExpectQuery(`SELECT DISTINCT n\.id, n\.node_id, n\.cluster_id`).
 		WithArgs(edgeEgress, int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", "cluster-1", "edge-node-1", "edge", "5.6.7.8")...))
 
@@ -417,6 +418,58 @@ func TestListHealthyNodesForDNS_EdgeSubtypeUsesServiceInstancePath(t *testing.T)
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+// TestListHealthyNodesForDNS_PoolServiceUsesAssignmentClusterForDNS pins the
+// generic assignment-aware path: foghorn / chandler / livepeer-gateway all
+// route through listHealthyAssignedServiceNodes. The returned cluster_id
+// comes from sca.cluster_id (logical media cluster), not from si.cluster_id
+// (physical/runtime cluster).
+func TestListHealthyNodesForDNS_PoolServiceUsesAssignmentClusterForDNS(t *testing.T) {
+	for _, svcType := range []string{"chandler", "foghorn", "livepeer-gateway"} {
+		t.Run(svcType, func(t *testing.T) {
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+			if err != nil {
+				t.Fatalf("failed to create sqlmock: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+			ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
+			queryShape := `(?s)FROM quartermaster\.service_instances si.*JOIN quartermaster\.service_cluster_assignments sca ON sca\.service_instance_id = si\.id.*sca\.is_active = TRUE.*s\.type = \$1`
+
+			mock.ExpectQuery(queryShape).
+				WithArgs(svcType).
+				WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+			mock.ExpectQuery(queryShape).
+				WithArgs(svcType, int32(300)).
+				WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+			mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, sca\.cluster_id.*FROM quartermaster\.service_instances si.*JOIN quartermaster\.service_cluster_assignments sca`).
+				WithArgs(svcType, int32(300)).
+				WillReturnRows(sqlmock.NewRows(nodeColumns).
+					AddRow(newNodeRow("uuid-1", "core-node-1", "media-central-primary", "core-node-1", "core", "1.2.3.4")...))
+
+			svc := svcType
+			resp, err := server.ListHealthyNodesForDNS(ctx, &pb.ListHealthyNodesForDNSRequest{
+				ServiceType: &svc,
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(resp.GetNodes()) != 1 {
+				t.Fatalf("expected 1 assigned %s node, got %d", svcType, len(resp.GetNodes()))
+			}
+			if got := resp.GetNodes()[0].GetClusterId(); got != "media-central-primary" {
+				t.Fatalf("expected assigned cluster media-central-primary, got %s", got)
+			}
+
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet sql expectations: %v", err)
+			}
+		})
 	}
 }
 

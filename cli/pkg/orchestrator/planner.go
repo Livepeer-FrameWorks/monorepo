@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 
@@ -325,14 +326,7 @@ func EffectivePrivateerHosts(svc inventory.ServiceConfig, hosts map[string]inven
 	}
 	var result []string
 	for name, h := range hosts {
-		isEdge := false
-		for _, role := range h.Roles {
-			if role == infra.NodeTypeEdge {
-				isEdge = true
-				break
-			}
-		}
-		if !isEdge {
+		if !slices.Contains(h.Roles, infra.NodeTypeEdge) {
 			result = append(result, name)
 		}
 	}
