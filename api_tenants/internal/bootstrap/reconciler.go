@@ -58,7 +58,7 @@ func ReconcileWithOptions(ctx context.Context, exec DBTX, qm QuartermasterSectio
 		return out, fmt.Errorf("clusters: %w", err)
 	}
 
-	nodesRes, err := ReconcileNodesWithOptions(ctx, exec, qm.Nodes, NodeOptions{GeoIPReader: opts.GeoIPReader})
+	nodesRes, err := ReconcileNodesWithOptions(ctx, exec, qm.Nodes, NodeOptions(opts))
 	out.Nodes = nodesRes
 	if err != nil {
 		return out, fmt.Errorf("nodes: %w", err)
