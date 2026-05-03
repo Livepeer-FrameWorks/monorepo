@@ -236,6 +236,8 @@ func TestChatwootComposeTemplateConsumesEnvFile(t *testing.T) {
 	for _, want := range []string{
 		"host.docker.internal:host-gateway",
 		"condition: service_healthy",
+		"set -e",
+		"exec bundle exec rails s",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("chatwoot compose template missing %q:\n%s", want, content)
