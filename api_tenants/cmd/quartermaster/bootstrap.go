@@ -12,6 +12,7 @@ import (
 	"frameworks/api_tenants/internal/bootstrap"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
+	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 
 	"gopkg.in/yaml.v3"
@@ -64,6 +65,10 @@ func runBootstrapCommand(args []string) int {
 	}
 
 	config.LoadEnv(logger)
+	geoIPReader := geoip.GetSharedReader()
+	if geoIPReader != nil {
+		logger.WithField("provider", geoIPReader.GetProvider()).Info("GeoIP reader loaded for bootstrap")
+	}
 	dbURL := config.RequireEnv("DATABASE_URL")
 	dbConfig := database.DefaultConfig()
 	dbConfig.URL = dbURL
@@ -76,7 +81,7 @@ func runBootstrapCommand(args []string) int {
 		fmt.Fprintf(os.Stderr, "quartermaster bootstrap: begin tx: %v\n", err)
 		return 1
 	}
-	out, err := bootstrap.Reconcile(ctx, tx, desired.Quartermaster)
+	out, err := bootstrap.ReconcileWithOptions(ctx, tx, desired.Quartermaster, bootstrap.ReconcileOptions{GeoIPReader: geoIPReader})
 	if out != nil {
 		printSection("tenants", out.Tenants)
 		printSection("clusters", out.Clusters)

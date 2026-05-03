@@ -31,8 +31,16 @@ type Sections struct {
 	SystemTenantAccess Result
 }
 
+type ReconcileOptions struct {
+	GeoIPReader GeoIPLookup
+}
+
 // Reconcile is the single entrypoint the bootstrap binary calls. It is idempotent.
 func Reconcile(ctx context.Context, exec DBTX, qm QuartermasterSection) (*Sections, error) {
+	return ReconcileWithOptions(ctx, exec, qm, ReconcileOptions{})
+}
+
+func ReconcileWithOptions(ctx context.Context, exec DBTX, qm QuartermasterSection, opts ReconcileOptions) (*Sections, error) {
 	if exec == nil {
 		return nil, errors.New("Reconcile: nil executor")
 	}
@@ -50,7 +58,7 @@ func Reconcile(ctx context.Context, exec DBTX, qm QuartermasterSection) (*Sectio
 		return out, fmt.Errorf("clusters: %w", err)
 	}
 
-	nodesRes, err := ReconcileNodes(ctx, exec, qm.Nodes)
+	nodesRes, err := ReconcileNodesWithOptions(ctx, exec, qm.Nodes, NodeOptions{GeoIPReader: opts.GeoIPReader})
 	out.Nodes = nodesRes
 	if err != nil {
 		return out, fmt.Errorf("nodes: %w", err)
