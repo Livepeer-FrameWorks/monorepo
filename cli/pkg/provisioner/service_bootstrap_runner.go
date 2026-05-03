@@ -113,7 +113,7 @@ func RunServiceBootstrap(ctx context.Context, pool *ssh.Pool, opts ServiceBootst
 	}
 
 	envVars := map[string]string{
-		"ANSIBLE_COLLECTIONS_PATH": cache.CollectionsPath + string(os.PathListSeparator) + filepath.Join(root, "collections"),
+		"ANSIBLE_COLLECTIONS_PATH": ansibleCollectionsPath(root, cache.CollectionsPath),
 		"ANSIBLE_ROLES_PATH":       cache.RolesPath,
 	}
 	for _, k := range []string{"SOPS_AGE_KEY_FILE", "SOPS_AGE_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION", "HOME", "USER", "PATH"} {

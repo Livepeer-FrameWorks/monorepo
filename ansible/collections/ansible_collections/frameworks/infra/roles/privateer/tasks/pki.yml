@@ -1,10 +1,17 @@
 ---
+- name: Privateer | ensure framework config root is traversable
+  ansible.builtin.file:
+    path: /etc/frameworks
+    state: directory
+    mode: "0755"
+  when: not ansible_check_mode
+
 - name: Privateer | ensure internal PKI directory
   ansible.builtin.file:
     path: "{{ (privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname }}"
     state: directory
-    owner: root
-    group: root
+    owner: "{{ privateer_user }}"
+    group: "{{ privateer_group }}"
     mode: "0755"
   when:
     - not ansible_check_mode
@@ -14,9 +21,20 @@
   ansible.builtin.copy:
     dest: "{{ privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path) }}"
     content: "{{ privateer_internal_ca_bundle_pem }}"
-    owner: root
-    group: root
+    owner: "{{ privateer_user }}"
+    group: "{{ privateer_group }}"
     mode: "0644"
+  when:
+    - not ansible_check_mode
+    - privateer_internal_ca_bundle_pem | length > 0
+
+- name: Privateer | ensure runtime service certificate directory
+  ansible.builtin.file:
+    path: "{{ ((privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname) + '/services' }}"
+    state: directory
+    owner: "{{ privateer_user }}"
+    group: "{{ privateer_group }}"
+    mode: "0755"
   when:
     - not ansible_check_mode
     - privateer_internal_ca_bundle_pem | length > 0

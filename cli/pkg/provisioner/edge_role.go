@@ -95,7 +95,7 @@ func runEdgeRole(ctx context.Context, pool *ssh.Pool, host inventory.Host, confi
 	}
 
 	envVars := map[string]string{
-		"ANSIBLE_COLLECTIONS_PATH": cache.CollectionsPath + string(os.PathListSeparator) + filepath.Join(root, "collections"),
+		"ANSIBLE_COLLECTIONS_PATH": ansibleCollectionsPath(root, cache.CollectionsPath),
 		"ANSIBLE_ROLES_PATH":       cache.RolesPath,
 	}
 	for _, k := range []string{"SOPS_AGE_KEY_FILE", "SOPS_AGE_KEY", "HOME", "USER", "PATH"} {

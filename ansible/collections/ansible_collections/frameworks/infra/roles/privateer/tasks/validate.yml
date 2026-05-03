@@ -5,10 +5,10 @@
     port: "{{ privateer_port }}"
     timeout: 30
 
-- name: Probe /health
+- name: Probe privateer health endpoint
   ansible.builtin.uri:
     url: "http://127.0.0.1:{{ privateer_port }}/health"
-    status_code: 200
+    status_code: [200, 503]
     return_content: false
 
 - name: Verify .internal resolution through system resolver

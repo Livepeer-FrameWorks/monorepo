@@ -310,6 +310,62 @@ func TestSpecialComposeRolesSetSlowFirstBootWaits(t *testing.T) {
 	}
 }
 
+func TestPrivateerRoleLetsRuntimeRefreshPKIAndBootstrapUnhealthy(t *testing.T) {
+	pki := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/privateer/tasks/pki.yml")
+	for _, want := range []string{
+		"path: /etc/frameworks",
+		`mode: "0755"`,
+		"ensure runtime service certificate directory",
+		"+ '/services'",
+		`owner: "{{ privateer_user }}"`,
+		`group: "{{ privateer_group }}"`,
+	} {
+		if !strings.Contains(pki, want) {
+			t.Fatalf("privateer PKI tasks should keep /etc/frameworks traversable and runtime PKI writable; missing %q:\n%s", want, pki)
+		}
+	}
+	for _, want := range []string{
+		`owner: "{{ privateer_user }}"`,
+		`group: "{{ privateer_group }}"`,
+	} {
+		if strings.Count(pki, want) < 3 {
+			t.Fatalf("privateer PKI tasks should make PKI directory, CA bundle, and service cert root privateer-owned; missing %q:\n%s", want, pki)
+		}
+	}
+
+	validate := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/privateer/tasks/validate.yml")
+	for _, want := range []string{
+		"status_code: [200, 503]",
+		"getent hosts quartermaster.internal",
+	} {
+		if !strings.Contains(validate, want) {
+			t.Fatalf("privateer validate task missing %q:\n%s", want, validate)
+		}
+	}
+}
+
+func TestSharedFrameworksPKIRolesPreservePrivateerAccess(t *testing.T) {
+	goServicePKI := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/go_service/tasks/pki.yml")
+	caDirTask := goServicePKI[:strings.Index(goServicePKI, "- name: Render internal CA trust bundle")]
+	for _, forbidden := range []string{
+		"owner: root",
+		"group: root",
+	} {
+		if strings.Contains(caDirTask, forbidden) {
+			t.Fatalf("go_service CA directory task must preserve existing shared PKI ownership; found %q:\n%s", forbidden, caDirTask)
+		}
+	}
+
+	chatwootSecret := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/chatwoot/tasks/secret.yml")
+	frameworksDirTask := chatwootSecret[:strings.Index(chatwootSecret, "- name: Check for an existing Chatwoot secret key")]
+	if !strings.Contains(frameworksDirTask, `mode: "0755"`) {
+		t.Fatalf("chatwoot must keep /etc/frameworks traversable for privateer TLS reads:\n%s", frameworksDirTask)
+	}
+	if strings.Contains(frameworksDirTask, `mode: "0750"`) {
+		t.Fatalf("chatwoot must not make /etc/frameworks private to root; privateer needs to read /etc/frameworks/pki/ca.crt:\n%s", frameworksDirTask)
+	}
+}
+
 func readRepoFile(t *testing.T, path string) string {
 	t.Helper()
 	content, err := os.ReadFile("../../../" + path)

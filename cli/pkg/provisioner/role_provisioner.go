@@ -303,10 +303,7 @@ func (r *RolePlaybookProvisioner) runWithOptions(ctx context.Context, host inven
 	}
 
 	envVars := map[string]string{
-		// Point Ansible at the user-level cache first, then fall back to
-		// the ansible/ tree so local role edits still take effect without
-		// needing `ansible-galaxy install --force`.
-		"ANSIBLE_COLLECTIONS_PATH": cache.CollectionsPath + string(os.PathListSeparator) + filepath.Join(r.AnsibleRoot, "collections"),
+		"ANSIBLE_COLLECTIONS_PATH": ansibleCollectionsPath(r.AnsibleRoot, cache.CollectionsPath),
 		"ANSIBLE_ROLES_PATH":       cache.RolesPath,
 	}
 	for _, k := range []string{"SOPS_AGE_KEY_FILE", "SOPS_AGE_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION", "HOME", "USER", "PATH"} {
@@ -329,6 +326,14 @@ func (r *RolePlaybookProvisioner) runWithOptions(ctx context.Context, host inven
 		WorkDir:    r.AnsibleRoot,
 		EnvVars:    envVars,
 	})
+}
+
+func ansibleCollectionsPath(ansibleRoot, cacheCollectionsPath string) string {
+	localCollectionsPath := filepath.Join(ansibleRoot, "collections")
+	if cacheCollectionsPath == "" || cacheCollectionsPath == localCollectionsPath {
+		return localCollectionsPath
+	}
+	return localCollectionsPath + string(os.PathListSeparator) + cacheCollectionsPath
 }
 
 func (r *RolePlaybookProvisioner) helpers() RoleBuildHelpers {
