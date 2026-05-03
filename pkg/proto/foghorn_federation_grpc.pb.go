@@ -68,10 +68,11 @@ type FoghornFederationClient interface {
 	// S3 backing for cross-cluster upload delegation. The caller is the Foghorn
 	// pool that received the upload request from Helmsman; the callee is the
 	// Foghorn pool that owns the named target_cluster_id's S3. Single-PUT
-	// covers thumbnails, clips, and DVR incremental segments/manifests;
-	// DVR-set covers the initial DVR freeze. VOD multipart is intentionally
-	// unsupported here — it requires a co-shipped Complete/Abort lifecycle
-	// shipping in a follow-up PR.
+	// covers thumbnails, clips, single-PUT VOD freezes, and DVR incremental
+	// segments/manifests; DVR-set covers the initial DVR freeze. VOD multipart
+	// create/complete/abort is not exposed by this RPC; CreateVodUpload returns
+	// storage_delegation_unsupported_for_vod when the resolver picks a remote
+	// storage cluster.
 	MintStorageURLs(ctx context.Context, in *MintStorageURLsRequest, opts ...grpc.CallOption) (*MintStorageURLsResponse, error)
 }
 
@@ -223,10 +224,11 @@ type FoghornFederationServer interface {
 	// S3 backing for cross-cluster upload delegation. The caller is the Foghorn
 	// pool that received the upload request from Helmsman; the callee is the
 	// Foghorn pool that owns the named target_cluster_id's S3. Single-PUT
-	// covers thumbnails, clips, and DVR incremental segments/manifests;
-	// DVR-set covers the initial DVR freeze. VOD multipart is intentionally
-	// unsupported here — it requires a co-shipped Complete/Abort lifecycle
-	// shipping in a follow-up PR.
+	// covers thumbnails, clips, single-PUT VOD freezes, and DVR incremental
+	// segments/manifests; DVR-set covers the initial DVR freeze. VOD multipart
+	// create/complete/abort is not exposed by this RPC; CreateVodUpload returns
+	// storage_delegation_unsupported_for_vod when the resolver picks a remote
+	// storage cluster.
 	MintStorageURLs(context.Context, *MintStorageURLsRequest) (*MintStorageURLsResponse, error)
 	mustEmbedUnimplementedFoghornFederationServer()
 }

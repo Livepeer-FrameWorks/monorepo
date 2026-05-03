@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"database/sql"
 	"math"
 	"strings"
 	"testing"
@@ -509,7 +510,7 @@ func TestResolveRemoteArtifact_AdoptionUpsertHealsMissingOriginMetadata(t *testi
 	defer mockDB.Close()
 
 	mock.ExpectExec("INSERT INTO foghorn.artifacts").
-		WithArgs("artifact-1", "clip", "tenant-1", "stream-a", "source-stream-a", "mp4", "cluster-origin").
+		WithArgs("artifact-1", "clip", "tenant-1", "stream-a", "source-stream-a", "mp4", "cluster-origin", sql.NullString{}).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	deps := &PlaybackDependencies{
@@ -522,6 +523,77 @@ func TestResolveRemoteArtifact_AdoptionUpsertHealsMissingOriginMetadata(t *testi
 	_, err = resolveRemoteArtifact(context.Background(), deps, "artifact-1", "cluster-origin", "clip", "tenant-1", []*pb.TenantClusterPeer{{ClusterId: "cluster-origin"}})
 	if err == nil {
 		t.Fatal("expected storage-node lookup error")
+	}
+	if !strings.Contains(err.Error(), "no local storage node") {
+		t.Fatalf("expected local storage node error, got %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+// redirectFedClient simulates an origin cluster that redirects PrepareArtifact
+// to a different storage cluster. The first call (to origin) returns a
+// redirect; the second (to the redirect target) returns ready=true.
+type redirectFedClient struct {
+	originCluster   string
+	redirectCluster string
+	calls           int
+}
+
+func (s *redirectFedClient) PrepareArtifact(ctx context.Context, clusterID, addr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
+	s.calls++
+	if clusterID == s.originCluster {
+		return &pb.PrepareArtifactResponse{RedirectClusterId: s.redirectCluster}, nil
+	}
+	return &pb.PrepareArtifactResponse{
+		Ready:              true,
+		InternalName:       "stream-a",
+		StreamInternalName: "source-stream-a",
+		Format:             "mp4",
+	}, nil
+}
+
+// TestResolveRemoteArtifact_RedirectPreservesOriginCluster asserts that when
+// PrepareArtifact returns redirect_cluster_id, the local adoption row keeps
+// the original origin_cluster_id (provenance) and writes the redirect target
+// to storage_cluster_id (where the bytes live). Without this distinction,
+// later read sites cannot tell origin and storage apart.
+func TestResolveRemoteArtifact_RedirectPreservesOriginCluster(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer mockDB.Close()
+
+	mock.ExpectExec("INSERT INTO foghorn.artifacts").
+		WithArgs(
+			"artifact-1", "clip", "tenant-1",
+			"stream-a", "source-stream-a", "mp4",
+			"cluster-origin", // origin_cluster_id stays original
+			sql.NullString{String: "cluster-storage", Valid: true}, // storage_cluster_id captures redirect
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	deps := &PlaybackDependencies{
+		DB: mockDB,
+		FedClient: &redirectFedClient{
+			originCluster:   "cluster-origin",
+			redirectCluster: "cluster-storage",
+		},
+		PeerResolver:   stubPeerResolver{},
+		LocalClusterID: "cluster-local",
+	}
+
+	_, err = resolveRemoteArtifact(context.Background(), deps,
+		"artifact-1", "cluster-origin", "clip", "tenant-1",
+		[]*pb.TenantClusterPeer{
+			{ClusterId: "cluster-origin"},
+			{ClusterId: "cluster-storage"},
+		})
+	if err == nil {
+		t.Fatal("expected storage-node lookup error after adoption")
 	}
 	if !strings.Contains(err.Error(), "no local storage node") {
 		t.Fatalf("expected local storage node error, got %v", err)

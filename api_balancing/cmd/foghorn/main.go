@@ -563,7 +563,7 @@ func main() {
 		if qmClient == nil || tenantID == "" {
 			return nil
 		}
-		v, ok, err := tenantRoutingCache.Get(ctx, "tenant:"+tenantID, func(loadCtx context.Context, _ string) (interface{}, bool, error) {
+		v, ok, cacheErr := tenantRoutingCache.Get(ctx, "tenant:"+tenantID, func(loadCtx context.Context, _ string) (interface{}, bool, error) {
 			rctx, cancel := context.WithTimeout(loadCtx, 1*time.Second)
 			defer cancel()
 			resp, qErr := qmClient.GetClusterRouting(rctx, &pb.GetClusterRoutingRequest{TenantId: tenantID})
@@ -572,10 +572,13 @@ func main() {
 			}
 			return resp, true, nil
 		})
-		if err != nil || !ok {
+		if cacheErr != nil || !ok {
 			return nil
 		}
-		routing, _ := v.(*pb.ClusterRoutingResponse)
+		routing, ok := v.(*pb.ClusterRoutingResponse)
+		if !ok {
+			return nil
+		}
 		return routing
 	}
 	advertisedBackingForTenant := func(ctx context.Context, tenantID, clusterID string) (federation.S3Backing, bool) {
@@ -649,6 +652,14 @@ func main() {
 	}
 
 	// Initialize trigger processor (Lifted from Handlers)
+	// Shared across the trigger processor (livepeer-gateway resolution) and
+	// the per-request storage cluster resolvers below — same metric name,
+	// label values distinguish service ("livepeer-gateway", "storage", ...).
+	serviceResolutionRejected := metricsCollector.NewCounter(
+		"foghorn_service_resolution_rejected_total",
+		"Service-discovery resolutions that ended without a usable target",
+		[]string{"reason", "service"},
+	)
 	triggerProcessor := triggers.NewProcessor(logger, commodoreClient, decklogClient, lb, geoipReader)
 	triggerProcessor.SetMetrics(&triggers.ProcessorMetrics{
 		DecklogTriggerSends: metricsCollector.NewCounter(
@@ -656,11 +667,7 @@ func main() {
 			"Attempts and results when forwarding MistTriggers to Decklog",
 			[]string{"trigger_type", "status"},
 		),
-		ServiceResolutionRejected: metricsCollector.NewCounter(
-			"foghorn_service_resolution_rejected_total",
-			"Service-discovery resolutions that ended without a usable target",
-			[]string{"reason", "service"},
-		),
+		ServiceResolutionRejected: serviceResolutionRejected,
 	})
 	if geoipReader != nil && geoipCache != nil {
 		triggerProcessor.SetGeoIPCache(geoipCache)
@@ -709,8 +716,8 @@ func main() {
 	}
 	// Storage resolver factory: builds a per-request storage.ClusterResolver
 	// using the local Foghorn S3 backing tuple and the tenant's advertised
-	// cluster_peers backings. Used by CreateVodUpload (and later by freeze
-	// + thumbnail upload paths) to pick local-mint vs federated-mint.
+	// cluster_peers backings. Used by CreateVodUpload, freeze, and thumbnail
+	// upload paths to pick local-mint vs federated-mint.
 	foghornServer.SetStorageResolverFactory(func(ctx context.Context, tenantID string) *storage.ClusterResolver {
 		return &storage.ClusterResolver{
 			LocalClusterID:       foghornCfg.ClusterID,
@@ -724,7 +731,8 @@ func main() {
 				}
 				return storage.S3Backing{Bucket: b.Bucket, Endpoint: b.Endpoint, Region: b.Region}, true
 			},
-			Logger: logger,
+			Logger:  logger,
+			Metrics: serviceResolutionRejected,
 		}
 	})
 	control.SetDecklogClient(decklogClient)
@@ -751,9 +759,9 @@ func main() {
 	}
 
 	// Wire the storage resolver factory + federated mint delegate into the
-	// control package so processFreezePermissionRequest (and later
-	// processThumbnailUploadRequest) can pick local-mint vs federated-mint
-	// per artifact, using the same rule the federation server uses for
+	// control package so processFreezePermissionRequest and
+	// processThumbnailUploadRequest pick local-mint vs federated-mint per
+	// artifact, using the same rule the federation server uses for
 	// PrepareArtifact redirect emission.
 	control.SetStorageResolverFactory(func(ctx context.Context, tenantID string) *storage.ClusterResolver {
 		return &storage.ClusterResolver{
@@ -768,7 +776,8 @@ func main() {
 				}
 				return storage.S3Backing{Bucket: b.Bucket, Endpoint: b.Endpoint, Region: b.Region}, true
 			},
-			Logger: logger,
+			Logger:  logger,
+			Metrics: serviceResolutionRejected,
 		}
 	})
 	if fedClient != nil && peerManager != nil {
@@ -785,6 +794,9 @@ func main() {
 		federationServer.SetClipCreator(foghornServer)
 		federationServer.SetDVRCreator(foghornServer)
 		federationServer.SetArtifactCommandHandler(foghornServer)
+		if commodoreClient != nil {
+			federationServer.SetMintArtifactResolver(commodoreClient)
+		}
 	}
 
 	if redisStore != nil && advertiseAddr != "" {

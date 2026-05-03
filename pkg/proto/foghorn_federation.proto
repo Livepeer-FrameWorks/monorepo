@@ -46,10 +46,11 @@ service FoghornFederation {
   // S3 backing for cross-cluster upload delegation. The caller is the Foghorn
   // pool that received the upload request from Helmsman; the callee is the
   // Foghorn pool that owns the named target_cluster_id's S3. Single-PUT
-  // covers thumbnails, clips, and DVR incremental segments/manifests;
-  // DVR-set covers the initial DVR freeze. VOD multipart is intentionally
-  // unsupported here — it requires a co-shipped Complete/Abort lifecycle
-  // shipping in a follow-up PR.
+  // covers thumbnails, clips, single-PUT VOD freezes, and DVR incremental
+  // segments/manifests; DVR-set covers the initial DVR freeze. VOD multipart
+  // create/complete/abort is not exposed by this RPC; CreateVodUpload returns
+  // storage_delegation_unsupported_for_vod when the resolver picks a remote
+  // storage cluster.
   rpc MintStorageURLs(MintStorageURLsRequest) returns (MintStorageURLsResponse);
 }
 
@@ -393,8 +394,11 @@ message MintStorageURLsRequest {
   string target_cluster_id = 3;
 
   // artifact_type is one of "thumbnail", "clip", "dvr", "dvr_segment",
-  // "dvr_manifest". "vod" is intentionally rejected here so callers either
-  // local-mint or surface storage_delegation_unsupported_for_vod.
+  // "dvr_manifest", "vod". For "vod" only OPERATION_PUT_SINGLE is supported
+  // (single-PUT freeze of an existing VOD asset). Multipart create / complete
+  // / abort is not exposed by this RPC; CreateVodUpload returns
+  // storage_delegation_unsupported_for_vod when the resolver picks a remote
+  // storage cluster.
   string artifact_type = 4;
 
   // artifact_key uniquely identifies the asset:
@@ -426,11 +430,16 @@ message MintStorageURLsRequest {
   // if empty.
   string content_type = 9;
 
-  // For live thumbnails: the stream's bare internal name, used by the
-  // storage-cluster Foghorn to verify tenant ownership against
-  // state.DefaultManager().GetStreamState(...). Empty for vod/clip/dvr/
-  // dvr_segment/dvr_manifest paths, which look up tenant via
-  // foghorn.artifacts WHERE artifact_hash = ... .
+  // For live thumbnails: the stream's bare internal name. The storage-
+  // cluster Foghorn validates tenant ownership using local stream state
+  // first; if the stream isn't in this pool's in-memory map (HA topology
+  // where ingest landed on a peer), it falls back to Commodore
+  // ResolveInternalName as the authoritative tenant + stream_id source.
+  // Empty for vod/clip/dvr/dvr_segment/dvr_manifest paths, which look up
+  // tenant via foghorn.artifacts WHERE artifact_hash = $1 AND tenant_id
+  // = $2 first, then fall back to Commodore Resolve{Clip,DVR,Vod}Hash
+  // when the local row is missing (delegated mints from a peer pool that
+  // hasn't replicated the row yet).
   string stream_internal_name = 10;
 }
 

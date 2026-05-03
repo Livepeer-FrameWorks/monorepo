@@ -216,9 +216,8 @@ func (s *FoghornGRPCServer) SetStorageResolverFactory(f storageResolverFactory) 
 // Origin candidate is the caller-supplied cluster_id (the tenant's intended
 // ingest cluster). Official candidate comes from Quartermaster's
 // GetClusterRouting if a Quartermaster client is wired. Returns
-// (cluster, mode); when no resolver factory is configured (tests), falls
-// back to local-mint against the caller-supplied cluster — preserving the
-// pre-PR-3b behaviour for the test path.
+// (cluster, mode); when no resolver factory is configured (tests / minimal
+// dev setups), falls back to local-mint against the caller-supplied cluster.
 func (s *FoghornGRPCServer) resolveVodStorageCluster(ctx context.Context, tenantID, ingestClusterID string) (string, storage.StorageMintMode) {
 	if s.storageResolver == nil {
 		// No resolver wired (tests / minimal dev setups) — preserve current
@@ -2091,11 +2090,11 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 		return nil, status.Error(codes.InvalidArgument, "internal_name is required")
 	}
 
-	// Resolve the storage cluster BEFORE the s3Client gate so a self-host
-	// pool with no local S3 client can still be told "use platform S3 via
-	// federation" (when that flow lands) instead of being rejected outright.
-	// Federated VOD multipart is intentionally unsupported in this PR — the
-	// Complete/Abort lifecycle ships in a follow-up. Local-mint only here.
+	// VOD multipart upload is local-mint only: when the resolver picks a
+	// remote storage cluster, callers receive
+	// storage_delegation_unsupported_for_vod. The Create/Complete/Abort
+	// multipart lifecycle is not exposed via the federation MintStorageURLs
+	// RPC, so we cannot delegate the create here.
 	storageCluster, mintMode := s.resolveVodStorageCluster(ctx, req.GetTenantId(), req.GetClusterId())
 	switch mintMode {
 	case storage.StorageMintViaFederation:

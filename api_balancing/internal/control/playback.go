@@ -16,6 +16,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
 	"frameworks/pkg/ctxkeys"
+	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -379,10 +380,9 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	if hasThumbnails && (contentType == "dvr" || contentType == "clip") {
 		// Pick the Chandler whose S3 actually serves this artifact's
 		// thumbnail. authoritativeCluster = COALESCE(storage_cluster_id,
-		// origin_cluster_id) — NULL on the column falls back to origin so
-		// pre-PR-3b artifact rows render with the same URL they did
-		// before. Empty / unresolvable cluster context falls back to the
-		// legacy local Chandler URL.
+		// origin_cluster_id) — NULL on storage_cluster_id falls back to
+		// origin. Empty or unresolvable cluster context falls back to the
+		// local Chandler URL.
 		chandlerBase := getChandlerBaseURL()
 		if authoritativeCluster.Valid && authoritativeCluster.String != "" {
 			if perCluster := getChandlerBaseURLForCluster(authoritativeCluster.String); perCluster != "" {
@@ -1083,6 +1083,9 @@ func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, arti
 	// a different storage cluster, re-issue PrepareArtifact against that
 	// cluster. Chained redirects fail closed — a redirected response that
 	// itself carries redirect_cluster_id is rejected to avoid loops.
+	// origin_cluster_id stays as the artifact's authoritative producer;
+	// storage_cluster_id captures where the bytes actually live.
+	storageClusterID := ""
 	if redirect := strings.TrimSpace(resp.GetRedirectClusterId()); redirect != "" {
 		if redirect == originClusterID || redirect == deps.LocalClusterID {
 			return nil, fmt.Errorf("storage redirect loop: origin %s -> %s", originClusterID, redirect)
@@ -1106,10 +1109,7 @@ func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, arti
 		if chained := strings.TrimSpace(resp.GetRedirectClusterId()); chained != "" {
 			return nil, fmt.Errorf("chained storage redirect rejected: %s -> %s -> %s", originClusterID, redirect, chained)
 		}
-		// Successful redirect: storage cluster IS the artifact's origin for
-		// the purposes of the local adoption record below, since that's
-		// where the bytes actually live.
-		originClusterID = redirect
+		storageClusterID = redirect
 	}
 
 	if resp.GetError() != "" {
@@ -1123,19 +1123,36 @@ func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, arti
 		return nil, NewDefrostingError(int(est), "remote artifact being prepared")
 	}
 
-	// Adopt the artifact locally (INSERT ON CONFLICT DO NOTHING)
+	// Adopt the artifact locally (INSERT ON CONFLICT DO NOTHING). When the
+	// origin cluster redirected us to a different storage cluster, persist
+	// both: origin_cluster_id stays as the producer, storage_cluster_id
+	// records where the bytes live so future read paths can resolve the
+	// right S3/Chandler without re-walking the redirect.
 	if deps.DB != nil {
-		_, _ = deps.DB.ExecContext(ctx, `
-			INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, internal_name, stream_internal_name, format, status, storage_location, sync_status, origin_cluster_id)
-			VALUES ($1, $2, $3, $4, $5, $6, 'active', 's3', 'synced', $7)
+		storageCluster := sql.NullString{String: storageClusterID, Valid: storageClusterID != ""}
+		if _, dbErr := deps.DB.ExecContext(ctx, `
+			INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, internal_name, stream_internal_name, format, status, storage_location, sync_status, origin_cluster_id, storage_cluster_id)
+			VALUES ($1, $2, $3, $4, $5, $6, 'active', 's3', 'synced', $7, $8)
 			ON CONFLICT (artifact_hash) DO UPDATE
 			SET storage_location = 's3',
 			    sync_status = 'synced',
 			    internal_name = CASE WHEN COALESCE(foghorn.artifacts.internal_name, '') = '' AND EXCLUDED.internal_name <> '' THEN EXCLUDED.internal_name ELSE foghorn.artifacts.internal_name END,
 			    stream_internal_name = CASE WHEN COALESCE(foghorn.artifacts.stream_internal_name, '') = '' AND EXCLUDED.stream_internal_name <> '' THEN EXCLUDED.stream_internal_name ELSE foghorn.artifacts.stream_internal_name END,
 			    format = CASE WHEN COALESCE(foghorn.artifacts.format, '') = '' AND EXCLUDED.format <> '' THEN EXCLUDED.format ELSE foghorn.artifacts.format END,
-			    origin_cluster_id = CASE WHEN COALESCE(foghorn.artifacts.origin_cluster_id, '') = '' THEN EXCLUDED.origin_cluster_id ELSE foghorn.artifacts.origin_cluster_id END
-		`, artifactHash, contentType, tenantID, resp.GetInternalName(), resp.GetStreamInternalName(), resp.GetFormat(), originClusterID)
+			    origin_cluster_id = CASE WHEN COALESCE(foghorn.artifacts.origin_cluster_id, '') = '' THEN EXCLUDED.origin_cluster_id ELSE foghorn.artifacts.origin_cluster_id END,
+			    storage_cluster_id = CASE WHEN COALESCE(foghorn.artifacts.storage_cluster_id, '') = '' AND EXCLUDED.storage_cluster_id IS NOT NULL THEN EXCLUDED.storage_cluster_id ELSE foghorn.artifacts.storage_cluster_id END
+		`, artifactHash, contentType, tenantID, resp.GetInternalName(), resp.GetStreamInternalName(), resp.GetFormat(), originClusterID, storageCluster); dbErr != nil {
+			// Adoption is best-effort — defrost can still proceed using the
+			// presigned URLs we already have. Failing the playback request
+			// would be worse than serving a one-off defrost without a
+			// persisted lifecycle row.
+			controlLogger().WithError(dbErr).WithFields(logging.Fields{
+				"artifact_hash":      artifactHash,
+				"tenant_id":          tenantID,
+				"origin_cluster_id":  originClusterID,
+				"storage_cluster_id": storageClusterID,
+			}).Warn("resolveRemoteArtifact: adoption upsert failed; subsequent reads will re-walk PrepareArtifact")
+		}
 	}
 
 	// Trigger local defrost using the origin cluster's presigned URLs

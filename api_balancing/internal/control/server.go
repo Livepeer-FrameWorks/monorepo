@@ -2875,8 +2875,8 @@ func SetS3Client(client S3ClientInterface) {
 }
 
 // Storage delegation wiring. Set once at startup from cmd/foghorn/main.go;
-// nil-safe defaults preserve the pre-PR-3b "always local mint" behaviour
-// for tests and for deployments running without federation enabled.
+// nil-safe defaults fall back to "always local mint" for tests and for
+// deployments running without federation enabled.
 var (
 	storageResolverFactory func(ctx context.Context, tenantID string) *storage.ClusterResolver
 	storageMintDelegate    StorageMintDelegate
@@ -2919,9 +2919,8 @@ var officialClusterCache = cache.New(cache.Options{
 // resolveFreezeStorageCluster runs the storage resolver for the freeze
 // flow. Origin candidate is the artifact row's origin_cluster_id.
 // Official candidate comes from Quartermaster.GetClusterRouting via the
-// cached helper. When no resolver factory is wired (tests / pre-PR-3b
-// deployments) falls back to (origin, StorageMintLocal) which preserves
-// the prior s3Client-based behaviour.
+// cached helper. When no resolver factory is wired (tests / minimal dev
+// setups) falls back to (origin, StorageMintLocal).
 func resolveFreezeStorageCluster(ctx context.Context, tenantID, originClusterID string) (string, storage.StorageMintMode) {
 	if storageResolverFactory == nil {
 		return originClusterID, storage.StorageMintLocal
@@ -2941,7 +2940,7 @@ func resolveFreezeStorageCluster(ctx context.Context, tenantID, originClusterID 
 // thumbnail upload flow. Origin candidate is the artifact / live stream's
 // authoritative cluster; official candidate comes from the cached
 // Quartermaster lookup. Mirrors resolveFreezeStorageCluster's fallback
-// behaviour when no factory is wired (tests / pre-PR-3b deployments).
+// behaviour when no factory is wired (tests / minimal dev setups).
 func resolveThumbnailStorageCluster(ctx context.Context, tenantID, originClusterID string) (string, storage.StorageMintMode) {
 	if storageResolverFactory == nil {
 		return originClusterID, storage.StorageMintLocal
@@ -3030,25 +3029,83 @@ func buildFreezeMintRequest(assetType, assetHash, dvrHash, tenantID, requestingC
 	return nil
 }
 
+// lookupAuthoritativeClusterUnambiguous reads COALESCE(storage_cluster_id,
+// origin_cluster_id) for an artifact hash. CanDeleteRequest does not carry
+// tenant_id, so to avoid letting a same-hash row from a different tenant
+// influence the can-delete shortcut we only return an answer when exactly
+// one row matches the hash. Returns (cluster, true) on the unambiguous
+// single-row case; (_, false) if zero rows, multiple rows, or DB error.
+func lookupAuthoritativeClusterUnambiguous(ctx context.Context, artifactHash string, logger logging.Logger) (string, bool) {
+	if db == nil {
+		return "", false
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT COALESCE(storage_cluster_id, origin_cluster_id)
+		FROM foghorn.artifacts
+		WHERE artifact_hash = $1
+	`, artifactHash)
+	if err != nil {
+		logger.WithError(err).WithField("asset_hash", artifactHash).Warn("authoritative-cluster lookup failed")
+		return "", false
+	}
+	defer rows.Close()
+	var first sql.NullString
+	count := 0
+	for rows.Next() {
+		var cluster sql.NullString
+		if scanErr := rows.Scan(&cluster); scanErr != nil {
+			logger.WithError(scanErr).WithField("asset_hash", artifactHash).Warn("authoritative-cluster scan failed")
+			return "", false
+		}
+		if count == 0 {
+			first = cluster
+		}
+		count++
+		if count > 1 {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		logger.WithError(err).WithField("asset_hash", artifactHash).Warn("authoritative-cluster row iteration failed")
+		return "", false
+	}
+	if count != 1 {
+		if count > 1 {
+			logger.WithField("asset_hash", artifactHash).Warn("authoritative-cluster lookup ambiguous (multiple tenant rows for hash); skipping remote-synced shortcut")
+		}
+		return "", false
+	}
+	if !first.Valid {
+		return "", true
+	}
+	return first.String, true
+}
+
 // persistFreezeStorageCluster updates the artifact row's storage_cluster_id
-// after a federated mint. NULL is preserved when the chosen storage cluster
-// matches origin, so legacy rows continue to look unchanged.
-func persistFreezeStorageCluster(ctx context.Context, artifactHash, storageCluster string) {
-	if db == nil || strings.TrimSpace(artifactHash) == "" || strings.TrimSpace(storageCluster) == "" {
+// after a federated mint. The UPDATE is scoped by (artifact_hash, tenant_id)
+// — storage ownership is a tenant-scoped attribute and a missing tenant
+// filter would let a same-hash row in a different tenant get rewritten.
+// NULL is preserved when the chosen storage cluster matches origin so rows
+// without a storage redirect look unchanged.
+func persistFreezeStorageCluster(ctx context.Context, artifactHash, tenantID, storageCluster string) {
+	if db == nil || strings.TrimSpace(artifactHash) == "" || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(storageCluster) == "" {
 		return
 	}
 	if _, err := db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
-		SET storage_cluster_id = $2,
+		SET storage_cluster_id = $3,
 		    updated_at = NOW()
 		WHERE artifact_hash = $1
-		  AND COALESCE(storage_cluster_id, '') <> $2
-	`, artifactHash, storageCluster); err != nil {
+		  AND tenant_id = $2
+		  AND COALESCE(storage_cluster_id, '') <> $3
+	`, artifactHash, tenantID, storageCluster); err != nil {
 		// Soft failure — the upload still works, the read side just
-		// can't reconstruct the storage cluster from the row. Log so we
-		// notice the drift.
-		// This intentionally doesn't fail the freeze response.
-		_ = err
+		// can't reconstruct the storage cluster from the row.
+		controlLogger().WithError(err).WithFields(logging.Fields{
+			"artifact_hash":   artifactHash,
+			"tenant_id":       tenantID,
+			"storage_cluster": storageCluster,
+		}).Warn("persistFreezeStorageCluster: UPDATE failed; storage cluster may be stale on read side")
 	}
 }
 
@@ -3072,7 +3129,10 @@ func resolveOfficialClusterID(ctx context.Context, tenantID string) string {
 	if err != nil || !ok {
 		return ""
 	}
-	s, _ := v.(string)
+	s, ok := v.(string)
+	if !ok {
+		return ""
+	}
 	return s
 }
 
@@ -3130,8 +3190,12 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		}
 	}
 
-	// Resolve tenant (and stream name if DB row was missing) via Commodore
+	// Resolve tenant (and stream/origin if DB row was missing) via Commodore.
+	// origin_cluster_id is required by the storage resolver's origin-first
+	// rule: a self-hosted origin with its own S3 should be preferred over
+	// the official cluster, but only if we know which cluster that is.
 	var tenantID string
+	var commodoreOrigin string
 	if CommodoreClient != nil {
 		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer resolveCancel()
@@ -3142,6 +3206,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 				if streamName == "" {
 					streamName = resp.StreamInternalName
 				}
+				commodoreOrigin = resp.OriginClusterId
 			}
 		case "dvr", "dvr_segment", "dvr_manifest":
 			if resp, resolveErr := CommodoreClient.ResolveDVRHash(resolveCtx, dvrHash); resolveErr == nil && resp.Found {
@@ -3149,6 +3214,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 				if streamName == "" {
 					streamName = resp.StreamInternalName
 				}
+				commodoreOrigin = resp.OriginClusterId
 			}
 		case "vod":
 			if resp, resolveErr := CommodoreClient.ResolveVodHash(resolveCtx, assetHash); resolveErr == nil && resp.Found {
@@ -3156,25 +3222,33 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 				if streamName == "" {
 					streamName = resp.InternalName
 				}
+				commodoreOrigin = resp.OriginClusterId
 			}
 		}
 	}
+	if commodoreOrigin != "" && !originCluster.Valid {
+		originCluster = sql.NullString{String: commodoreOrigin, Valid: true}
+	}
 
-	// If DB row was missing but Commodore resolved the artifact, create the lifecycle row
+	// If DB row was missing but Commodore resolved the artifact, create the
+	// lifecycle row. Persist origin_cluster_id so the storage resolver can
+	// honor origin-first on subsequent freezes for this asset.
 	if err != nil && tenantID != "" && streamName != "" {
+		insertOrigin := sql.NullString{String: commodoreOrigin, Valid: commodoreOrigin != ""}
 		if _, dbErr := db.ExecContext(ctx, `
 			INSERT INTO foghorn.artifacts
 				(artifact_hash, artifact_type, stream_internal_name, tenant_id,
-				 storage_location, sync_status, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, 'local', 'pending', NOW(), NOW())
+				 origin_cluster_id, storage_location, sync_status, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, 'local', 'pending', NOW(), NOW())
 			ON CONFLICT (artifact_hash) DO NOTHING`,
-			lookupHash, lookupType, streamName, tenantID); dbErr != nil {
+			lookupHash, lookupType, streamName, tenantID, insertOrigin); dbErr != nil {
 			logger.WithError(dbErr).WithField("asset_hash", lookupHash).Error("failed to create lifecycle row from Commodore")
 		}
 		logger.WithFields(logging.Fields{
-			"asset_hash": lookupHash,
-			"asset_type": lookupType,
-			"tenant_id":  tenantID,
+			"asset_hash":        lookupHash,
+			"asset_type":        lookupType,
+			"tenant_id":         tenantID,
+			"origin_cluster_id": commodoreOrigin,
 		}).Info("Created lifecycle row from Commodore during freeze permission")
 		err = nil
 	}
@@ -3329,7 +3403,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		if len(mintResp.GetSegmentUrls()) > 0 {
 			response.SegmentUrls = mintResp.GetSegmentUrls()
 		}
-		persistFreezeStorageCluster(ctx, lookupHash, storageCluster)
+		persistFreezeStorageCluster(ctx, lookupHash, tenantID, storageCluster)
 		sendFreezePermissionResponse(stream, response, logger)
 		return
 	}
@@ -3465,7 +3539,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 	// inherit the parent DVR's storage_cluster_id which was set on the
 	// initial freeze.
 	if assetType != "dvr_segment" && assetType != "dvr_manifest" && storageCluster != "" && storageCluster != originClusterID {
-		persistFreezeStorageCluster(context.Background(), lookupHash, storageCluster)
+		persistFreezeStorageCluster(context.Background(), lookupHash, tenantID, storageCluster)
 	}
 
 	sendFreezePermissionResponse(stream, response, logger)
@@ -4659,22 +4733,20 @@ func processCanDeleteRequest(req *pb.CanDeleteRequest, nodeID string, stream pb.
 	} else {
 		// Check if this is a remote artifact (storage cluster's S3 holds the
 		// authoritative copy). storage_cluster_id is the cluster whose S3
-		// minted the upload URLs; NULL preserves the prior origin-as-storage
-		// semantic for rows written before delegation existed.
+		// minted the upload URLs; NULL falls back to origin_cluster_id.
+		// CanDeleteRequest carries no tenant_id, so we read every row for
+		// the hash and only honor the remote-synced shortcut when there is
+		// exactly one match — multiple rows mean we can't prove which
+		// tenant's record this delete belongs to and could bleed a remote
+		// disposition across tenants.
 		if db != nil {
-			var authoritativeCluster sql.NullString
-			_ = db.QueryRowContext(context.Background(), `
-				SELECT COALESCE(storage_cluster_id, origin_cluster_id)
-				FROM foghorn.artifacts
-				WHERE artifact_hash = $1
-				LIMIT 1
-			`, assetHash).Scan(&authoritativeCluster)
-			if authoritativeCluster.Valid && authoritativeCluster.String != "" && !isServedCluster(authoritativeCluster.String) {
+			authoritativeCluster, ok := lookupAuthoritativeClusterUnambiguous(context.Background(), assetHash, logger)
+			if ok && authoritativeCluster != "" && !isServedCluster(authoritativeCluster) {
 				response.SafeToDelete = true
 				response.Reason = "remote_synced"
 				logger.WithFields(logging.Fields{
 					"asset_hash":            assetHash,
-					"authoritative_cluster": authoritativeCluster.String,
+					"authoritative_cluster": authoritativeCluster,
 				}).Info("Remote artifact — safe to delete (storage cluster's S3 authoritative)")
 				sendCanDeleteResponse(stream, response, logger)
 				return

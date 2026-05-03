@@ -2775,8 +2775,11 @@ type MintStorageURLsRequest struct {
 	// check against).
 	TargetClusterId string `protobuf:"bytes,3,opt,name=target_cluster_id,json=targetClusterId,proto3" json:"target_cluster_id,omitempty"`
 	// artifact_type is one of "thumbnail", "clip", "dvr", "dvr_segment",
-	// "dvr_manifest". "vod" is intentionally rejected here so callers either
-	// local-mint or surface storage_delegation_unsupported_for_vod.
+	// "dvr_manifest", "vod". For "vod" only OPERATION_PUT_SINGLE is supported
+	// (single-PUT freeze of an existing VOD asset). Multipart create / complete
+	// / abort is not exposed by this RPC; CreateVodUpload returns
+	// storage_delegation_unsupported_for_vod when the resolver picks a remote
+	// storage cluster.
 	ArtifactType string `protobuf:"bytes,4,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"`
 	// artifact_key uniquely identifies the asset:
 	//
@@ -2798,11 +2801,16 @@ type MintStorageURLsRequest struct {
 	// Used for OPERATION_PUT_SINGLE. Defaults to "application/octet-stream"
 	// if empty.
 	ContentType string `protobuf:"bytes,9,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
-	// For live thumbnails: the stream's bare internal name, used by the
-	// storage-cluster Foghorn to verify tenant ownership against
-	// state.DefaultManager().GetStreamState(...). Empty for vod/clip/dvr/
-	// dvr_segment/dvr_manifest paths, which look up tenant via
-	// foghorn.artifacts WHERE artifact_hash = ... .
+	// For live thumbnails: the stream's bare internal name. The storage-
+	// cluster Foghorn validates tenant ownership using local stream state
+	// first; if the stream isn't in this pool's in-memory map (HA topology
+	// where ingest landed on a peer), it falls back to Commodore
+	// ResolveInternalName as the authoritative tenant + stream_id source.
+	// Empty for vod/clip/dvr/dvr_segment/dvr_manifest paths, which look up
+	// tenant via foghorn.artifacts WHERE artifact_hash = $1 AND tenant_id
+	// = $2 first, then fall back to Commodore Resolve{Clip,DVR,Vod}Hash
+	// when the local row is missing (delegated mints from a peer pool that
+	// hasn't replicated the row yet).
 	StreamInternalName string `protobuf:"bytes,10,opt,name=stream_internal_name,json=streamInternalName,proto3" json:"stream_internal_name,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
