@@ -79,9 +79,13 @@ export class FwLoadingPoster extends LitElement {
       this._tickIdx = 0;
       return;
     }
+    let current = 0;
+    this._tickIdx = 0;
     const stepMs = Math.max(20, Math.floor(FwLoadingPoster.CYCLE_MS / tiles));
     this._intervalId = setInterval(() => {
-      this._tickIdx = (this._tickIdx + 1) % tiles;
+      current = Math.min(current + 1, tiles - 1);
+      this._tickIdx = current;
+      if (current >= tiles - 1) this._stopCycle();
     }, stepMs);
   }
 

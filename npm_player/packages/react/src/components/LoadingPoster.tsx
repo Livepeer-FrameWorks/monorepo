@@ -84,16 +84,22 @@ export const LoadingPoster: React.FC<LoadingPosterProps> = ({
   const cueCount = loadingPoster?.cues.length ?? 0;
   const tileCount = isAnimate && loadingPoster?.geometry === "measured" ? cueCount : 0;
 
-  // Cycle ticker — runs only when there's something to cycle through.
+  // Advance through the loading sequence once, then hold the final tile until playback starts.
   useEffect(() => {
     if (!isAnimate || tileCount < 2) {
       setTickIdx(0);
       return;
     }
+    let current = 0;
+    setTickIdx(0);
     const stepMs = Math.max(20, Math.floor(CYCLE_MS / tileCount));
-    const id = setInterval(() => setTickIdx((i) => (i + 1) % tileCount), stepMs);
+    const id = setInterval(() => {
+      current = Math.min(current + 1, tileCount - 1);
+      setTickIdx(current);
+      if (current >= tileCount - 1) clearInterval(id);
+    }, stepMs);
     return () => clearInterval(id);
-  }, [isAnimate, tileCount]);
+  }, [isAnimate, tileCount, loadingPoster?.generation, loadingPoster?.spriteJpgUrl]);
 
   useEffect(() => {
     if (!isAnimate || loadingPoster?.geometry !== "measured") return;

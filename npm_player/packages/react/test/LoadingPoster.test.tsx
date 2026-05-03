@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import React from "react";
-import { render, waitFor } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { LoadingPoster } from "../src/components/LoadingPoster";
 import type { LoadingPosterInfo } from "@livepeer-frameworks/player-core";
 
@@ -127,6 +127,34 @@ describe("LoadingPoster", () => {
     expect(image.getAttribute("y")).toBe("0");
     expect(image.getAttribute("width")).toBe("320");
     expect(image.getAttribute("height")).toBe("180");
+  });
+
+  it("animate-measured: plays once and holds the final tile", async () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(<LoadingPoster loadingPoster={measured10x10} />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      const image = () => container.querySelector("image") as SVGImageElement;
+      expect(image().getAttribute("x")).toBe("0");
+      expect(image().getAttribute("y")).toBe("0");
+
+      await act(async () => {
+        vi.advanceTimersByTime(1500);
+      });
+      expect(image().getAttribute("x")).toBe("-160");
+      expect(image().getAttribute("y")).toBe("-90");
+
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(image().getAttribute("x")).toBe("-160");
+      expect(image().getAttribute("y")).toBe("-90");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("animate-measured: sizes the sheet from natural image dimensions, not cue extents", async () => {

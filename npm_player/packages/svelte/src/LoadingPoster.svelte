@@ -27,11 +27,12 @@
   let spriteFailed = $state(false);
 
   let isAnimate = $derived(loadingPoster?.mode === "animate");
-  let cueCount = $derived(loadingPoster?.cues.length ?? 0);
-  let tileCount = $derived(isAnimate && loadingPoster?.geometry === "measured" ? cueCount : 0);
 
   $effect(() => {
-    if (!isAnimate || tileCount < 2) {
+    const poster = loadingPoster;
+    const tiles =
+      poster?.mode === "animate" && poster.geometry === "measured" ? poster.cues.length : 0;
+    if (tiles < 2) {
       tickIdx = 0;
       if (intervalId !== undefined) {
         clearInterval(intervalId);
@@ -39,10 +40,17 @@
       }
       return;
     }
-    const stepMs = Math.max(20, Math.floor(CYCLE_MS / tileCount));
+    let current = 0;
+    tickIdx = 0;
+    const stepMs = Math.max(20, Math.floor(CYCLE_MS / tiles));
     if (intervalId !== undefined) clearInterval(intervalId);
     intervalId = setInterval(() => {
-      tickIdx = (tickIdx + 1) % tileCount;
+      current = Math.min(current + 1, tiles - 1);
+      tickIdx = current;
+      if (current >= tiles - 1 && intervalId !== undefined) {
+        clearInterval(intervalId);
+        intervalId = undefined;
+      }
     }, stepMs);
     return () => {
       if (intervalId !== undefined) clearInterval(intervalId);
