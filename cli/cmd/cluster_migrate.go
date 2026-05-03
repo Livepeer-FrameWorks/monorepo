@@ -183,9 +183,15 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase stri
 	cfg := provisioner.ServiceConfig{
 		Port: pg.EffectivePort(),
 		Metadata: map[string]any{
+			"platform_channel":  manifest.ResolvedChannel(),
 			"postgres_password": password,
 			itemsKey:            items,
 		},
+	}
+	if len(rc.ReleaseRepos) > 0 {
+		repos := make([]string, len(rc.ReleaseRepos))
+		copy(repos, rc.ReleaseRepos)
+		cfg.Metadata["gitops_repositories"] = repos
 	}
 
 	if phase == "postdeploy" || phase == "contract" {
