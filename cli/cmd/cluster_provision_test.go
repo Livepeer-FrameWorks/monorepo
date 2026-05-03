@@ -701,6 +701,7 @@ func TestBuildServiceEnvVarsProductionForcesSecureDefaults(t *testing.T) {
 		"NAVIGATOR_INTERNAL_CA_ROOT_CERT_FILE=/etc/frameworks/ca/root.crt",
 		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_FILE=/etc/frameworks/ca/intermediate.crt",
 		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_FILE=/etc/frameworks/ca/intermediate.key",
+		"PLATFORM_ADMIN_PASSWORD=bootstrap-only",
 	}, "\n")+"\n")
 
 	manifest := &inventory.Manifest{
@@ -739,6 +740,9 @@ func TestBuildServiceEnvVarsProductionForcesSecureDefaults(t *testing.T) {
 	}
 	if _, ok := env["DECKLOG_USE_TLS"]; ok {
 		t.Fatalf("expected DECKLOG_USE_TLS to be absent from service env, got %q", env["DECKLOG_USE_TLS"])
+	}
+	if _, ok := env["PLATFORM_ADMIN_PASSWORD"]; ok {
+		t.Fatal("expected bootstrap-only password to be absent from service env")
 	}
 }
 

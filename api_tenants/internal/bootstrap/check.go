@@ -69,7 +69,7 @@ func Check(qm QuartermasterSection) error {
 		return fmt.Errorf("%d clusters marked is_default; at most one allowed", defaults)
 	}
 
-	nodeIDs := make(map[string]struct{})
+	nodeIDs := make(map[string]string)
 	for _, n := range qm.Nodes {
 		if err := validateNode(n); err != nil {
 			return err
@@ -80,7 +80,7 @@ func Check(qm QuartermasterSection) error {
 		if _, dup := nodeIDs[n.ID]; dup {
 			return fmt.Errorf("node id %q duplicated", n.ID)
 		}
-		nodeIDs[n.ID] = struct{}{}
+		nodeIDs[n.ID] = n.ClusterID
 	}
 
 	bundleIDs := make(map[string]struct{})
@@ -103,8 +103,12 @@ func Check(qm QuartermasterSection) error {
 		if _, ok := clusterIDs[s.ClusterID]; !ok {
 			return fmt.Errorf("ingress_site %q: cluster_id %q not defined in this file", s.ID, s.ClusterID)
 		}
-		if _, ok := nodeIDs[s.NodeID]; !ok {
+		nodeClusterID, ok := nodeIDs[s.NodeID]
+		if !ok {
 			return fmt.Errorf("ingress_site %q: node_id %q not defined in this file", s.ID, s.NodeID)
+		}
+		if nodeClusterID != s.ClusterID {
+			return fmt.Errorf("ingress_site %q: node_id %q belongs to cluster_id %q, not %q", s.ID, s.NodeID, nodeClusterID, s.ClusterID)
 		}
 		if _, ok := bundleIDs[s.TLSBundleID]; !ok {
 			return fmt.Errorf("ingress_site %q: tls_bundle_id %q not defined in this file", s.ID, s.TLSBundleID)
@@ -118,8 +122,12 @@ func Check(qm QuartermasterSection) error {
 		if _, ok := clusterIDs[e.ClusterID]; !ok {
 			return fmt.Errorf("service %q: cluster_id %q not defined in this file", e.ServiceName, e.ClusterID)
 		}
-		if _, ok := nodeIDs[e.NodeID]; !ok {
+		nodeClusterID, ok := nodeIDs[e.NodeID]
+		if !ok {
 			return fmt.Errorf("service %q: node_id %q not defined in this file", e.ServiceName, e.NodeID)
+		}
+		if nodeClusterID != e.ClusterID {
+			return fmt.Errorf("service %q: node_id %q belongs to cluster_id %q, not %q", e.ServiceName, e.NodeID, nodeClusterID, e.ClusterID)
 		}
 	}
 	return nil

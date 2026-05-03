@@ -248,7 +248,7 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 					}
 					autoSites[siteID] = IngressSite{
 						ID:          siteID,
-						ClusterID:   ingressClusterID,
+						ClusterID:   clusterID,
 						NodeID:      hostKey,
 						Domains:     domains,
 						TLSBundleID: bundleID,

@@ -486,6 +486,74 @@ func TestDeriveLivepeerGatewayPhysicalRegistryAndLogicalTLSBundles(t *testing.T)
 			t.Fatalf("%s domains = %v, want %v", id, b.Domains, want)
 		}
 	}
+
+	sites := map[string]IngressSite{}
+	for _, s := range d.Quartermaster.Ingress.Sites {
+		sites[s.ID] = s
+	}
+	site, ok := sites["livepeer-gateway-core-eu-1-media-free-eu"]
+	if !ok {
+		t.Fatalf("missing logical ingress site; got %+v", sites)
+	}
+	if site.ClusterID != "core-eu" {
+		t.Fatalf("ingress site cluster_id = %q, want physical cluster core-eu", site.ClusterID)
+	}
+	if site.NodeID != "core-eu-1" {
+		t.Fatalf("ingress site node_id = %q, want core-eu-1", site.NodeID)
+	}
+	if !slices.Equal(site.Domains, []string{"livepeer.media-free-eu.frameworks.network"}) {
+		t.Fatalf("ingress site domains = %v, want logical media-cluster domain", site.Domains)
+	}
+	if site.TLSBundleID != "wildcard-media-free-eu-frameworks-network" {
+		t.Fatalf("ingress site tls_bundle_id = %q, want logical media-cluster bundle", site.TLSBundleID)
+	}
+}
+
+func TestDeriveChandlerLogicalIngressUsesPhysicalNodeCluster(t *testing.T) {
+	m := minimalManifest()
+	m.RootDomain = "frameworks.network"
+	m.Hosts["core-eu-1"] = inventory.Host{
+		ExternalIP:  "203.0.113.10",
+		WireguardIP: "10.99.0.1",
+		Cluster:     "core-eu",
+	}
+	m.Clusters = map[string]inventory.ClusterConfig{
+		"core-eu":       {Name: "Core EU", Type: "central"},
+		"media-free-eu": {Name: "Media Free EU", Type: "edge", Roles: []string{"media"}, Default: true},
+	}
+	m.Services = map[string]inventory.ServiceConfig{
+		"chandler": {
+			Enabled: true,
+			Host:    "core-eu-1",
+			Port:    18020,
+		},
+	}
+
+	d, err := Derive(m, DeriveOptions{SharedEnv: map[string]string{"ACME_EMAIL": "ops@example.com"}})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if len(d.Quartermaster.ServiceRegistry) != 0 {
+		t.Fatalf("chandler self-registers; bootstrap must not pre-seed service_registry, got %+v", d.Quartermaster.ServiceRegistry)
+	}
+
+	sites := map[string]IngressSite{}
+	for _, s := range d.Quartermaster.Ingress.Sites {
+		sites[s.ID] = s
+	}
+	site, ok := sites["chandler-core-eu-1-media-free-eu"]
+	if !ok {
+		t.Fatalf("missing chandler logical ingress site; got %+v", sites)
+	}
+	if site.ClusterID != "core-eu" {
+		t.Fatalf("ingress site cluster_id = %q, want physical cluster core-eu", site.ClusterID)
+	}
+	if !slices.Equal(site.Domains, []string{"chandler.media-free-eu.frameworks.network"}) {
+		t.Fatalf("ingress site domains = %v, want logical media-cluster domain", site.Domains)
+	}
+	if site.TLSBundleID != "wildcard-media-free-eu-frameworks-network" {
+		t.Fatalf("ingress site tls_bundle_id = %q, want logical media-cluster bundle", site.TLSBundleID)
+	}
 }
 
 // TestDeriveLivepeerGatewayWalletFromServiceConfig confirms the manifest
