@@ -90,6 +90,33 @@ func TestLoadSharedEnvDoesNotValidateKeys(t *testing.T) {
 	}
 }
 
+func TestResolveSharedEnvPlaceholder(t *testing.T) {
+	env := map[string]string{"REDIS_CHATWOOT_PASSWORD": "redis secret"}
+	got, err := ResolveSharedEnvPlaceholder("${REDIS_CHATWOOT_PASSWORD}", env)
+	if err != nil {
+		t.Fatalf("ResolveSharedEnvPlaceholder: %v", err)
+	}
+	if got != "redis secret" {
+		t.Fatalf("resolved placeholder = %q, want redis secret", got)
+	}
+}
+
+func TestResolveSharedEnvPlaceholderLeavesPlainValue(t *testing.T) {
+	got, err := ResolveSharedEnvPlaceholder("literal-password", map[string]string{})
+	if err != nil {
+		t.Fatalf("ResolveSharedEnvPlaceholder: %v", err)
+	}
+	if got != "literal-password" {
+		t.Fatalf("plain value = %q, want literal-password", got)
+	}
+}
+
+func TestResolveSharedEnvPlaceholderRejectsMissingKey(t *testing.T) {
+	if _, err := ResolveSharedEnvPlaceholder("${MISSING}", map[string]string{}); err == nil {
+		t.Fatal("expected missing placeholder key to fail")
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {

@@ -47,3 +47,23 @@ func LoadSharedEnv(manifest *Manifest, manifestDir, ageKey string) (map[string]s
 	}
 	return env, nil
 }
+
+// ResolveSharedEnvPlaceholder resolves a whole-string ${KEY} placeholder from
+// a previously loaded shared env map. It intentionally does not perform global
+// string interpolation; callers opt into this only for fields that are allowed
+// to reference shared env secrets.
+func ResolveSharedEnvPlaceholder(value string, sharedEnv map[string]string) (string, error) {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "${") || !strings.HasSuffix(value, "}") {
+		return value, nil
+	}
+	key := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}"))
+	if key == "" {
+		return "", fmt.Errorf("empty shared env placeholder %q", value)
+	}
+	resolved := strings.TrimSpace(sharedEnv[key])
+	if resolved == "" {
+		return "", fmt.Errorf("shared env placeholder %s is not set", key)
+	}
+	return resolved, nil
+}

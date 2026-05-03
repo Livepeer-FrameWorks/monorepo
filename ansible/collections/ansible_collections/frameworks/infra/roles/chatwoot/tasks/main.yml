@@ -3,6 +3,36 @@
   ansible.builtin.import_tasks: secret.yml
   tags: [install, configure, service]
 
+- name: Chatwoot | check persisted secret key for validation
+  ansible.builtin.stat:
+    path: "{{ chatwoot_secret_key_path }}"
+  register: chatwoot_validate_secret_stat
+  when: chatwoot_secret_key_value is not defined
+  tags: [validate]
+
+- name: Chatwoot | require persisted secret key for validation
+  ansible.builtin.fail:
+    msg: "Chatwoot SECRET_KEY_BASE is missing at {{ chatwoot_secret_key_path }}; run install/configure before validate."
+  when:
+    - chatwoot_secret_key_value is not defined
+    - not chatwoot_validate_secret_stat.stat.exists
+  tags: [validate]
+
+- name: Chatwoot | read persisted secret key for validation
+  ansible.builtin.slurp:
+    src: "{{ chatwoot_secret_key_path }}"
+  register: chatwoot_validate_secret_slurp
+  no_log: true
+  when: chatwoot_secret_key_value is not defined
+  tags: [validate]
+
+- name: Chatwoot | register persisted secret key for validation
+  ansible.builtin.set_fact:
+    chatwoot_secret_key_value: "{{ chatwoot_validate_secret_slurp.content | b64decode | trim }}"
+  no_log: true
+  when: chatwoot_secret_key_value is not defined
+  tags: [validate]
+
 - name: Chatwoot | delegate lifecycle to compose_stack
   ansible.builtin.include_role:
     name: frameworks.infra.compose_stack

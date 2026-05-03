@@ -449,22 +449,6 @@ func redisURLWithOptionalPassword(addr string, password string) string {
 	return fmt.Sprintf("redis://:%s@%s", url.QueryEscape(password), addr)
 }
 
-func resolveSharedEnvPlaceholder(value string, sharedEnv map[string]string) (string, error) {
-	value = strings.TrimSpace(value)
-	if !strings.HasPrefix(value, "${") || !strings.HasSuffix(value, "}") {
-		return value, nil
-	}
-	key := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}"))
-	if key == "" {
-		return "", fmt.Errorf("empty shared env placeholder %q", value)
-	}
-	resolved := strings.TrimSpace(sharedEnv[key])
-	if resolved == "" {
-		return "", fmt.Errorf("shared env placeholder %s is not set", key)
-	}
-	return resolved, nil
-}
-
 func adminDetail(exists bool, bootstrapEmail string) string {
 	if exists {
 		if bootstrapEmail != "" {
@@ -1990,7 +1974,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					config.Metadata["instance"] = inst.Name
 					config.Metadata["instance_name"] = inst.Name
 					if inst.Password != "" {
-						password, err := resolveSharedEnvPlaceholder(inst.Password, sharedEnv)
+						password, err := inventory.ResolveSharedEnvPlaceholder(inst.Password, sharedEnv)
 						if err != nil {
 							return config, fmt.Errorf("redis %s password: %w", inst.Name, err)
 						}
@@ -3566,7 +3550,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 				prefix := fmt.Sprintf("REDIS_%s", strings.ToUpper(inst.Name))
 				env[prefix+"_ADDR"] = fmt.Sprintf("%s:%d", rHost, port)
 				if inst.Password != "" {
-					password, err := resolveSharedEnvPlaceholder(inst.Password, sharedEnv)
+					password, err := inventory.ResolveSharedEnvPlaceholder(inst.Password, sharedEnv)
 					if err != nil {
 						return nil, fmt.Errorf("redis %s password: %w", inst.Name, err)
 					}
