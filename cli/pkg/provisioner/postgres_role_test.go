@@ -45,6 +45,21 @@ func TestPostgresRoleAllowsDockerBridgeClients(t *testing.T) {
 	}
 }
 
+func TestPostgresRoleCreatesRequestedDatabaseExtensions(t *testing.T) {
+	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/postgres/tasks/init.yml")
+	for _, want := range []string{
+		"Create database extensions",
+		"community.postgresql.postgresql_ext:",
+		`db: "{{ item.0.name }}"`,
+		`name: "{{ item.1 }}"`,
+		"subelements('extensions', skip_missing=true)",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("postgres init should create requested extensions as postgres; missing %q:\n%s", want, content)
+		}
+	}
+}
+
 func TestPostgresRoleVarsPassesStableInstanceName(t *testing.T) {
 	vars, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
 		DeployName: "postgres-support",
@@ -58,6 +73,28 @@ func TestPostgresRoleVarsPassesStableInstanceName(t *testing.T) {
 	}
 	if got := vars["postgres_instance_name"]; got != "postgres-support" {
 		t.Fatalf("postgres_instance_name = %v, want postgres-support", got)
+	}
+}
+
+func TestPostgresRoleVarsRequestsChatwootExtensions(t *testing.T) {
+	vars, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
+		Metadata: map[string]any{
+			"postgres_password": "secret",
+			"databases": []map[string]string{
+				{"name": "chatwoot", "owner": "chatwoot"},
+			},
+		},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("postgresRoleVars: %v", err)
+	}
+	dbs, ok := vars["postgres_databases"].([]map[string]any)
+	if !ok || len(dbs) != 1 {
+		t.Fatalf("postgres_databases = %#v, want one database", vars["postgres_databases"])
+	}
+	extensions, ok := dbs[0]["extensions"].([]string)
+	if !ok || len(extensions) != 1 || extensions[0] != "pg_stat_statements" {
+		t.Fatalf("chatwoot extensions = %#v, want [pg_stat_statements]", dbs[0]["extensions"])
 	}
 }
 

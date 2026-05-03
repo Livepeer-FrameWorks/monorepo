@@ -3527,6 +3527,11 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 				}
 				if strings.TrimSpace(inst.Host) == strings.TrimSpace(task.Host) {
 					rHost = "127.0.0.1"
+					if task.ServiceID == "chatwoot" {
+						if host, ok := manifest.GetHost(inst.Host); ok && strings.TrimSpace(host.WireguardIP) != "" {
+							rHost = strings.TrimSpace(host.WireguardIP)
+						}
+					}
 				}
 				// REDIS_{NAME}_ADDR for each named instance
 				key := fmt.Sprintf("REDIS_%s_ADDR", strings.ToUpper(inst.Name))

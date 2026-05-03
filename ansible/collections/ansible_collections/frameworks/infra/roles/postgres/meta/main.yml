@@ -53,6 +53,10 @@ argument_specs:
           owner:
             type: str
             required: false
+          extensions:
+            type: list
+            elements: str
+            required: false
       postgres_max_connections:
         type: int
         required: false

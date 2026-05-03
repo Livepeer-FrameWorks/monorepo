@@ -50,9 +50,13 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 	if dbs, ok := config.Metadata["databases"].([]map[string]string); ok && len(dbs) > 0 {
 		list := make([]map[string]any, 0, len(dbs))
 		for _, db := range dbs {
-			entry := map[string]any{"name": db["name"]}
+			name := db["name"]
+			entry := map[string]any{"name": name}
 			if owner := db["owner"]; owner != "" {
 				entry["owner"] = owner
+			}
+			if name == "chatwoot" {
+				entry["extensions"] = []string{"pg_stat_statements"}
 			}
 			list = append(list, entry)
 		}

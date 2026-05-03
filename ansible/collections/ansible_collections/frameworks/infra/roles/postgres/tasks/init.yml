@@ -31,3 +31,16 @@
   loop_control:
     label: "{{ item.name }}"
   when: postgres_databases | length > 0
+
+- name: Create database extensions
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_ext:
+    login_unix_socket: /var/run/postgresql
+    db: "{{ item.0.name }}"
+    name: "{{ item.1 }}"
+    state: present
+  loop: "{{ postgres_databases | subelements('extensions', skip_missing=true) }}"
+  loop_control:
+    label: "{{ item.0.name }}:{{ item.1 }}"
+  when: postgres_databases | length > 0

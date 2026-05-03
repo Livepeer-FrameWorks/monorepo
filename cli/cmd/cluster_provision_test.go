@@ -814,7 +814,7 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 		Profile:    "dev",
 		RootDomain: "frameworks.network",
 		Hosts: map[string]inventory.Host{
-			"central-eu-1":  {ExternalIP: "10.0.0.10", Roles: []string{"control"}},
+			"central-eu-1":  {ExternalIP: "10.0.0.10", WireguardIP: "10.88.0.10", Roles: []string{"control"}},
 			"regional-eu-1": {ExternalIP: "10.0.0.11", Roles: []string{"services"}},
 			"yuga-eu-1":     {ExternalIP: "10.0.0.12", Roles: []string{"infrastructure"}},
 		},
@@ -913,6 +913,42 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 	}
 	if env["CHATWOOT_HOST"] != "central-eu-1.internal" {
 		t.Fatalf("expected CHATWOOT_HOST to use mesh host, got %q", env["CHATWOOT_HOST"])
+	}
+}
+
+func TestBuildServiceEnvVarsUsesMeshIPForColocatedChatwootRedis(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "dev",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"central-eu-1": {ExternalIP: "10.0.0.10", WireguardIP: "10.88.0.10", Roles: []string{"control"}},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Redis: &inventory.RedisConfig{
+				Enabled: true,
+				Instances: []inventory.RedisInstance{
+					{Name: "chatwoot", Host: "central-eu-1", Port: 6380},
+				},
+			},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"chatwoot": {Enabled: true, Host: "central-eu-1", Port: 18092},
+		},
+	}
+	task := &orchestrator.Task{
+		Name:      "chatwoot",
+		Type:      "chatwoot",
+		ServiceID: "chatwoot",
+		Host:      "central-eu-1",
+		Phase:     orchestrator.PhaseApplications,
+	}
+
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+	if env["REDIS_CHATWOOT_ADDR"] != "10.88.0.10:6380" {
+		t.Fatalf("expected REDIS_CHATWOOT_ADDR to use mesh IP for colocated Chatwoot Redis, got %q", env["REDIS_CHATWOOT_ADDR"])
 	}
 }
 
