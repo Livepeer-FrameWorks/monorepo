@@ -13,8 +13,8 @@ Agents authenticate with an EVM wallet signature. First-time wallets are auto-pr
 
 1. Agent creates or loads an EVM wallet (any chain, any client).
 2. Agent signs a login message using EIP-191 `personal_sign`.
-3. Agent calls `POST /auth/wallet-login` with the signed message.
-4. Server verifies the signature, creates a tenant if new, sets auth cookies, and returns user metadata.
+3. Agent sends the signature as MCP wallet headers, or calls GraphQL `walletLogin` to receive a bearer JWT for direct API calls.
+4. Server verifies the signature and creates a prepaid tenant if this is a new wallet.
 
 ## Message Format
 
@@ -81,7 +81,7 @@ For MCP and HTTP requests, pass wallet credentials in headers:
 | `X-Wallet-Signature` | EIP-191 `personal_sign` signature               |
 | `X-Wallet-Message`   | The signed message (includes timestamp + nonce) |
 
-Alternatively, use the GraphQL `walletLogin` mutation to exchange the same address/message/signature fields for a JWT, then use `Authorization: Bearer <jwt>` on subsequent requests. The REST `POST /auth/wallet-login` endpoint is cookie-oriented.
+For direct GraphQL or browser integrations, use the GraphQL `walletLogin` mutation to exchange the same address/message/signature fields for a JWT, then use `Authorization: Bearer <jwt>` on subsequent requests. The REST `POST /auth/wallet-login` endpoint is cookie-oriented for first-party sessions; it sets HttpOnly cookies and only returns user metadata.
 
 ## Client Configuration
 

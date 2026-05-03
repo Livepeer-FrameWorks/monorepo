@@ -65,37 +65,66 @@ func TestPublicOrJWTAuthInvalidBody(t *testing.T) {
 	}
 }
 
-func TestApplyX402CookiesUsesCookieDomain(t *testing.T) {
+func TestApplyX402SessionHeadersSetsCookiesWithoutOrigin(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-
-	t.Setenv("COOKIE_DOMAIN", ".example.com")
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", nil)
 
-	applyX402Cookies(c, &AuthResult{
+	applyX402SessionHeaders(c, &AuthResult{
 		AuthType: "x402",
 		JWTToken: "token",
 		TenantID: "tenant",
 	})
 
-	cookies := w.Result().Cookies()
-	var accessCookie *http.Cookie
-	var tenantCookie *http.Cookie
-	for _, cookie := range cookies {
-		switch cookie.Name {
-		case "access_token":
-			accessCookie = cookie
-		case "tenant_id":
-			tenantCookie = cookie
-		}
+	if got := w.Header().Get("X-Access-Token"); got != "token" {
+		t.Fatalf("expected X-Access-Token header, got %q", got)
 	}
+	if cookies := w.Result().Cookies(); len(cookies) != 2 {
+		t.Fatalf("expected x402 session cookies for non-browser/same-site flow, got %d", len(cookies))
+	}
+}
 
-	if accessCookie == nil || tenantCookie == nil {
-		t.Fatalf("expected access_token and tenant_id cookies, got %d", len(cookies))
+func TestApplyX402SessionHeadersSkipsCookiesForNonCredentialedCORS(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", nil)
+	c.Request.Header.Set("Origin", "https://developer.example")
+
+	applyX402SessionHeaders(c, &AuthResult{
+		AuthType: "x402",
+		JWTToken: "token",
+		TenantID: "tenant",
+	})
+
+	if got := w.Header().Get("X-Access-Token"); got != "token" {
+		t.Fatalf("expected X-Access-Token header, got %q", got)
 	}
-	if accessCookie.Domain != "example.com" || tenantCookie.Domain != "example.com" {
-		t.Fatalf("expected cookie domain example.com, got %q and %q", accessCookie.Domain, tenantCookie.Domain)
+	if cookies := w.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("expected no cookies for non-credentialed CORS flow, got %d", len(cookies))
+	}
+}
+
+func TestApplyX402SessionHeadersSetsCookiesForCredentialedCORS(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", nil)
+	c.Request.Header.Set("Origin", "https://chartroom.frameworks.network")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+	applyX402SessionHeaders(c, &AuthResult{
+		AuthType: "x402",
+		JWTToken: "token",
+		TenantID: "tenant",
+	})
+
+	if cookies := w.Result().Cookies(); len(cookies) != 2 {
+		t.Fatalf("expected x402 session cookies for credentialed CORS flow, got %d", len(cookies))
 	}
 }
 
@@ -113,8 +142,44 @@ func TestPublicOrJWTAuthRejectsUnauthenticatedMutation(t *testing.T) {
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d", w.Code)
+	}
+}
+
+func TestPublicOrJWTAuthInvalidXPaymentReturnsPaymentRequired(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.Use(PublicOrJWTAuth([]byte("secret"), &clients.ServiceClients{}))
+	r.POST("/graphql", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	body := []byte(`{"query":"mutation { createStream(input: {title: \"x\"}) { __typename } }"}`)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
+	req.Header.Set("X-PAYMENT", "not-base64")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402 for invalid x402 payment, got %d", w.Code)
+	}
+}
+
+func TestPublicOrJWTAuthAllowsWalletLoginMutation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(PublicOrJWTAuth([]byte("secret"), &clients.ServiceClients{}))
+	r.POST("/graphql", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	body := []byte(`{"query":"mutation { walletLogin(input: {address: \"0x0000000000000000000000000000000000000000\", message: \"FrameWorks Login\\nTimestamp: 2025-01-15T12:00:00Z\\nNonce: n\", signature: \"0xabc\"}) { __typename } }"}`)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for public walletLogin, got %d", w.Code)
 	}
 }
 
@@ -169,8 +234,8 @@ func TestPublicOrJWTAuthRejectsBatchedPublicAndPrivateMutation(t *testing.T) {
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401 for batched public+private mutation, got %d", w.Code)
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402 for batched public+private mutation, got %d", w.Code)
 	}
 }
 
@@ -208,8 +273,8 @@ func TestPublicOrJWTAuthRejectsMixedAllowlistedQuery(t *testing.T) {
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d", w.Code)
 	}
 }
 

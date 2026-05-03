@@ -28,7 +28,7 @@
     "mcp": "GET /.well-known/mcp.json",
     "mcp_rpc": "POST /mcp",
     "graphql": "POST /graphql",
-    "wallet_login": "POST /auth/wallet-login"
+    "wallet_login": "GraphQL mutation walletLogin"
   },
   "keywords": [
     "streaming",

@@ -7,12 +7,13 @@
   "x_auth_methods": {
     "wallet": {
       "type": "eip191",
-      "login_endpoint": "https://bridge.frameworks.network/auth/wallet-login",
+      "login_endpoint": "https://bridge.frameworks.network/graphql",
+      "login_operation": "walletLogin",
       "auto_provision": true
     },
     "x402": {
       "type": "eip3009",
-      "bootstrap_tools": ["get_payment_options", "submit_payment"],
+      "challenge_flow": "Call the operation, read the 402 payment requirements, retry the same operation with X-PAYMENT.",
       "chains": ["base", "arbitrum"],
       "token": "USDC"
     }

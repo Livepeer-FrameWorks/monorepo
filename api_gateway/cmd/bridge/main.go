@@ -389,7 +389,7 @@ func main() {
 
 	// Public API routes (no auth required)
 	{
-		app.GET("/status", func(c *gin.Context) {
+		server.HandleOptionalTrailingSlash(app, http.MethodGet, "/status", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{
 				"service": "bridge",
 				"status":  "ready",
@@ -397,7 +397,7 @@ func main() {
 			})
 		})
 
-		app.GET("/SKILL.md", func(c *gin.Context) {
+		server.HandleOptionalTrailingSlash(app, http.MethodGet, "/SKILL.md", func(c *gin.Context) {
 			if skills.skillMD == nil {
 				c.JSON(http.StatusNotFound, gin.H{"error": "SKILL.md not available"})
 				return
@@ -406,7 +406,7 @@ func main() {
 			c.Data(http.StatusOK, "text/markdown; charset=utf-8", skills.skillMD)
 		})
 
-		app.GET("/heartbeat.md", func(c *gin.Context) {
+		server.HandleOptionalTrailingSlash(app, http.MethodGet, "/heartbeat.md", func(c *gin.Context) {
 			if skills.heartbeatMD == nil {
 				c.JSON(http.StatusNotFound, gin.H{"error": "heartbeat.md not available"})
 				return
@@ -415,7 +415,7 @@ func main() {
 			c.Data(http.StatusOK, "text/markdown; charset=utf-8", skills.heartbeatMD)
 		})
 
-		app.GET("/skill.json", func(c *gin.Context) {
+		server.HandleOptionalTrailingSlash(app, http.MethodGet, "/skill.json", func(c *gin.Context) {
 			if skills.skillJSON == nil {
 				c.JSON(http.StatusNotFound, gin.H{"error": "skill.json not available"})
 				return
@@ -424,7 +424,7 @@ func main() {
 			c.Data(http.StatusOK, "application/json; charset=utf-8", skills.skillJSON)
 		})
 
-		app.GET("/llms.txt", func(c *gin.Context) {
+		server.HandleOptionalTrailingSlash(app, http.MethodGet, "/llms.txt", func(c *gin.Context) {
 			if skills.llmsTxt == nil {
 				c.JSON(http.StatusNotFound, gin.H{"error": "llms.txt not available"})
 				return
@@ -433,7 +433,7 @@ func main() {
 			c.Data(http.StatusOK, "text/plain; charset=utf-8", skills.llmsTxt)
 		})
 
-		app.GET("/robots.txt", func(c *gin.Context) {
+		server.HandleOptionalTrailingSlash(app, http.MethodGet, "/robots.txt", func(c *gin.Context) {
 			if skills.robotsTxt == nil {
 				c.JSON(http.StatusNotFound, gin.H{"error": "robots.txt not available"})
 				return
@@ -441,7 +441,7 @@ func main() {
 			c.Data(http.StatusOK, "text/plain; charset=utf-8", skills.robotsTxt)
 		})
 
-		app.GET("/.well-known/mcp.json", func(c *gin.Context) {
+		server.HandleOptionalTrailingSlash(app, http.MethodGet, "/.well-known/mcp.json", func(c *gin.Context) {
 			if skills.mcpJSON == nil {
 				c.JSON(http.StatusNotFound, gin.H{"error": "mcp.json not available"})
 				return
@@ -450,7 +450,7 @@ func main() {
 			c.Data(http.StatusOK, "application/json; charset=utf-8", skills.mcpJSON)
 		})
 
-		app.GET("/.well-known/security.txt", func(c *gin.Context) {
+		server.HandleOptionalTrailingSlash(app, http.MethodGet, "/.well-known/security.txt", func(c *gin.Context) {
 			if skills.securityTxt == nil {
 				c.JSON(http.StatusNotFound, gin.H{"error": "security.txt not available"})
 				return
@@ -458,7 +458,7 @@ func main() {
 			c.Data(http.StatusOK, "text/plain; charset=utf-8", skills.securityTxt)
 		})
 
-		app.GET("/.well-known/oauth-protected-resource", func(c *gin.Context) {
+		server.HandleOptionalTrailingSlash(app, http.MethodGet, "/.well-known/oauth-protected-resource", func(c *gin.Context) {
 			if skills.oauthPRM == nil {
 				c.JSON(http.StatusNotFound, gin.H{"error": "oauth-protected-resource not available"})
 				return
@@ -467,7 +467,7 @@ func main() {
 			c.Data(http.StatusOK, "application/json; charset=utf-8", skills.oauthPRM)
 		})
 
-		app.GET("/.well-known/did.json", func(c *gin.Context) {
+		server.HandleOptionalTrailingSlash(app, http.MethodGet, "/.well-known/did.json", func(c *gin.Context) {
 			if skills.didJSON == nil {
 				c.JSON(http.StatusNotFound, gin.H{"error": "did.json not available"})
 				return
@@ -481,22 +481,22 @@ func main() {
 	auth := app.Group("/auth")
 	{
 		// Public auth endpoints (no auth required)
-		auth.POST("/login", authHandlers.Login())
-		auth.POST("/wallet-login", authHandlers.WalletLogin())
-		auth.POST("/register", authHandlers.Register())
-		auth.GET("/verify/:token", authHandlers.VerifyEmail())
-		auth.POST("/resend-verification", authHandlers.ResendVerification())
-		auth.POST("/refresh", authHandlers.RefreshToken())
-		auth.POST("/forgot-password", authHandlers.ForgotPassword())
-		auth.POST("/reset-password", authHandlers.ResetPassword())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/login", authHandlers.Login())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/wallet-login", authHandlers.WalletLogin())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/register", authHandlers.Register())
+		server.HandleOptionalTrailingSlash(auth, http.MethodGet, "/verify/:token", authHandlers.VerifyEmail())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/resend-verification", authHandlers.ResendVerification())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/refresh", authHandlers.RefreshToken())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/forgot-password", authHandlers.ForgotPassword())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/reset-password", authHandlers.ResetPassword())
 
 		// Protected auth endpoints (require JWT from cookie or header)
 		authProtected := auth.Group("", middleware.RequireJWTAuth([]byte(jwtSecret)))
-		authProtected.POST("/logout", authHandlers.Logout())
-		authProtected.GET("/me", authHandlers.GetMe())
-		authProtected.PATCH("/me", authHandlers.UpdateMe())
-		authProtected.GET("/me/newsletter", authHandlers.GetNewsletterStatus())
-		authProtected.POST("/me/newsletter", authHandlers.UpdateNewsletter())
+		server.HandleOptionalTrailingSlash(authProtected, http.MethodPost, "/logout", authHandlers.Logout())
+		server.HandleOptionalTrailingSlash(authProtected, http.MethodGet, "/me", authHandlers.GetMe())
+		server.HandleOptionalTrailingSlash(authProtected, http.MethodPatch, "/me", authHandlers.UpdateMe())
+		server.HandleOptionalTrailingSlash(authProtected, http.MethodGet, "/me/newsletter", authHandlers.GetNewsletterStatus())
+		server.HandleOptionalTrailingSlash(authProtected, http.MethodPost, "/me/newsletter", authHandlers.UpdateNewsletter())
 	}
 
 	// Public infrastructure-node enrollment endpoint. Takes a bootstrap token
@@ -507,7 +507,7 @@ func main() {
 	// one externally-reachable Bridge surface.
 	{
 		infraBootstrap := handlers.NewInfrastructureBootstrapHandler(serviceClients.Quartermaster, logger)
-		app.POST("/v1/bootstrap/infrastructure-node", infraBootstrap.Handle)
+		server.HandleOptionalTrailingSlash(app, http.MethodPost, "/v1/bootstrap/infrastructure-node", infraBootstrap.Handle)
 	}
 
 	// Webhook routing - external payment provider webhooks forwarded to internal services via gRPC.
@@ -516,8 +516,8 @@ func main() {
 	webhookRouter := webhooks.NewRouter(logger)
 	webhookRouter.RegisterService("billing", serviceClients.Purser) // Stripe, Mollie webhooks
 	{
-		app.POST("/webhooks/:service/:provider", webhookRouter.Handle)
-		app.GET("/webhooks/health", webhookRouter.HandleHealth)
+		server.HandleOptionalTrailingSlash(app, http.MethodPost, "/webhooks/:service/:provider", webhookRouter.Handle)
+		server.HandleOptionalTrailingSlash(app, http.MethodGet, "/webhooks/health", webhookRouter.HandleHealth)
 		logger.Info("Webhook router enabled at /webhooks/:service/:provider")
 	}
 
@@ -529,15 +529,18 @@ func main() {
 
 	// IMPORTANT: WebSocket upgrades may authenticate in the GraphQL WS InitFunc (connectionParams),
 	// so rate limiting must not run before that auth has a chance to set tenant context.
-	graphqlHTTP := graphqlGroup.Group("/")
-	graphqlHTTP.Use(middleware.RateLimitMiddlewareWithX402(rateLimiter, tenantCache.GetLimitsFunc(), tenantCache, serviceClients.Purser, serviceClients.Purser, serviceClients.Commodore))
-	graphqlHTTP.Use(middleware.GraphQLContextMiddleware(serviceToken))
-	graphqlHTTP.Use(middleware.GraphQLAttachLoaders(serviceClients))
-	graphqlHTTP.Use(middleware.UsageTrackerMiddleware(usageTracker))
-
+	graphqlHTTPMiddleware := []gin.HandlerFunc{
+		middleware.RateLimitMiddlewareWithX402(rateLimiter, tenantCache.GetLimitsFunc(), tenantCache, serviceClients.Purser, serviceClients.Purser, serviceClients.Commodore),
+		middleware.GraphQLContextMiddleware(serviceToken),
+		middleware.GraphQLAttachLoaders(serviceClients),
+		middleware.UsageTrackerMiddleware(usageTracker),
+	}
 	{
-		graphqlHTTP.POST("/", gin.WrapH(gqlHandler))
-		graphqlGroup.GET("/ws", func(c *gin.Context) {
+		graphqlHandlers := append([]gin.HandlerFunc{}, graphqlHTTPMiddleware...)
+		graphqlHandlers = append(graphqlHandlers, gin.WrapH(gqlHandler))
+		server.HandleOptionalTrailingSlash(graphqlGroup, http.MethodPost, "", graphqlHandlers...)
+		server.HandleOptionalTrailingSlash(graphqlGroup, http.MethodOptions, "", func(c *gin.Context) {})
+		server.HandleOptionalTrailingSlash(graphqlGroup, http.MethodGet, "/ws", func(c *gin.Context) {
 			ctx := c.Request.Context()
 			if cookieToken, cookieErr := c.Cookie("access_token"); cookieErr == nil && cookieToken != "" {
 				ctx = context.WithValue(ctx, ctxkeys.KeyWSCookieToken, cookieToken)
@@ -549,7 +552,7 @@ func main() {
 		// Enable playground based on explicit config or GIN_MODE (default: enabled in non-release mode)
 		playgroundEnabled := config.GetEnvBool("GRAPHQL_PLAYGROUND_ENABLED", config.GetEnv("GIN_MODE", "debug") != "release")
 		if playgroundEnabled {
-			app.GET("/graphql/playground", gin.WrapH(playground.Handler("GraphQL Playground", "/graphql/")))
+			server.HandleOptionalTrailingSlash(app, http.MethodGet, "/graphql/playground", gin.WrapH(playground.Handler("GraphQL Playground", "/graphql/")))
 			logger.Info("GraphQL Playground enabled at /graphql/playground")
 		}
 	}

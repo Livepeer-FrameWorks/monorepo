@@ -37,10 +37,13 @@ func LoggingMiddleware(logger logging.Logger) gin.HandlerFunc {
 	}
 }
 
-// CORSMiddleware handles CORS headers with origin validation.
-// In dev mode (devMode=true), all origins are allowed.
-// In production, only origins in allowedOrigins are reflected.
-// Wildcard entries like "*.example.com" match any subdomain.
+const publicCORSAllowHeaders = "Content-Type, Authorization, X-Tenant-Id, X-Request-Id, X-PAYMENT, PAYMENT-SIGNATURE, X-Wallet-Address, X-Wallet-Signature, X-Wallet-Message, Mcp-Session-Id, Last-Event-ID"
+
+const publicCORSExposeHeaders = "X-Request-ID, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, Retry-After, X-Access-Token, X-Access-Token-Expires-At"
+
+// CORSMiddleware handles CORS headers with origin validation. Credentialed
+// CORS stays restricted to configured first-party origins; public protocol
+// endpoints allow non-cookie browser clients from any origin.
 func CORSMiddleware(allowedOrigins []string, devMode bool) gin.HandlerFunc {
 	exactOrigins := make(map[string]bool, len(allowedOrigins))
 	var wildcardSuffixes []string
@@ -82,10 +85,12 @@ func CORSMiddleware(allowedOrigins []string, devMode bool) gin.HandlerFunc {
 
 		origin := c.GetHeader("Origin")
 		allowed := origin != "" && isAllowed(origin)
+		publicAPI := origin != "" && isPublicCORSPath(c.Request.URL.Path)
 
 		if allowed {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Access-Control-Allow-Credentials", "true")
+			c.Header("Access-Control-Expose-Headers", publicCORSExposeHeaders)
 
 			if m := c.GetHeader("Access-Control-Request-Method"); m != "" {
 				c.Header("Access-Control-Allow-Methods", m)
@@ -96,12 +101,27 @@ func CORSMiddleware(allowedOrigins []string, devMode bool) gin.HandlerFunc {
 			if h := c.GetHeader("Access-Control-Request-Headers"); h != "" {
 				c.Header("Access-Control-Allow-Headers", h)
 			} else {
-				c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Tenant-Id, X-Request-Id")
+				c.Header("Access-Control-Allow-Headers", publicCORSAllowHeaders)
+			}
+		} else if publicAPI {
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Header("Access-Control-Expose-Headers", publicCORSExposeHeaders)
+
+			if m := c.GetHeader("Access-Control-Request-Method"); m != "" {
+				c.Header("Access-Control-Allow-Methods", m)
+			} else {
+				c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			}
+
+			if h := c.GetHeader("Access-Control-Request-Headers"); h != "" {
+				c.Header("Access-Control-Allow-Headers", h)
+			} else {
+				c.Header("Access-Control-Allow-Headers", publicCORSAllowHeaders)
 			}
 		}
 
 		if c.Request.Method == http.MethodOptions {
-			if allowed {
+			if allowed || publicAPI {
 				c.AbortWithStatus(http.StatusNoContent)
 			} else {
 				c.AbortWithStatus(http.StatusForbidden)
@@ -109,8 +129,25 @@ func CORSMiddleware(allowedOrigins []string, devMode bool) gin.HandlerFunc {
 			return
 		}
 
+		if publicAPI && !allowed && c.GetHeader("Cookie") != "" {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+
 		c.Next()
 	}
+}
+
+func isPublicCORSPath(path string) bool {
+	switch path {
+	case "/graphql", "/graphql/", "/graphql/ws", "/graphql/ws/", "/mcp", "/mcp/":
+		return true
+	case "/SKILL.md", "/heartbeat.md", "/skill.json", "/llms.txt":
+		return true
+	case "/.well-known/mcp.json", "/.well-known/oauth-protected-resource", "/.well-known/did.json":
+		return true
+	}
+	return strings.HasPrefix(path, "/mcp/")
 }
 
 // RecoveryMiddleware provides panic recovery with logging

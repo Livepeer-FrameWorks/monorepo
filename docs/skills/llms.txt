@@ -14,7 +14,7 @@
 - MCP Discovery: https://bridge.frameworks.network/.well-known/mcp.json
 - MCP Endpoint: POST https://bridge.frameworks.network/mcp (streamable-http)
 - GraphQL: POST https://bridge.frameworks.network/graphql
-- Wallet Login: POST https://bridge.frameworks.network/auth/wallet-login
+- Wallet Login: GraphQL mutation walletLogin at https://bridge.frameworks.network/graphql
 
 ## Auth
 

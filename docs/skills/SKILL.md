@@ -90,11 +90,11 @@ Or use environment variables: `FRAMEWORKS_WALLET_PRIVKEY`, `FRAMEWORKS_JWT`.
 
 ## Quick Start (Agent Flow)
 
-1. **Create or load an EVM wallet.**
-2. **Sign a wallet login message** (EIP-191) and call `POST /auth/wallet-login` to auto-provision a prepaid tenant.
-3. **Fund the tenant** via x402 or crypto deposit.
-4. **Connect** via MCP (`POST /mcp`) or GraphQL (`POST /graphql`) with wallet headers or JWT.
-5. **Create a stream** and push RTMP using the stream key.
+1. **Call the MCP tool or GraphQL operation you need.**
+2. **If the operation needs payment**, read the HTTP 402 / `INSUFFICIENT_BALANCE` response and its x402 payment requirements.
+3. **Sign an EIP-3009 USDC authorization** for one accepted network.
+4. **Retry the same operation** with `X-PAYMENT`.
+5. **Use the returned stream key or resource.**
 
 ## Wallet Authentication
 
@@ -112,7 +112,7 @@ Timestamp: 2025-01-15T12:00:00Z
 Nonce: 12345
 ```
 
-Wallet login endpoint: `POST /auth/wallet-login`
+For browser or direct GraphQL integrations, use the `walletLogin` mutation to exchange the same address/message/signature fields for a JWT. The REST `POST /auth/wallet-login` endpoint is cookie-oriented for first-party sessions.
 
 ## MCP Configuration
 
@@ -154,7 +154,7 @@ Key operations:
 - Queries: `streams`, `stream`, `me`, `billingStatus`, `prepaidBalance`
 - Subscriptions: `liveStreamEvents`, `liveViewerMetrics`, `liveFirehose`
 
-Authentication: same wallet headers or bearer token.
+x402: make the GraphQL request, read the 402 payment requirements, then retry the same request with `X-PAYMENT`. Wallet and bearer auth are separate optional modes. Embedded playback resolution is public and uses the playback ID as the capability.
 
 ## Rate Limits & Billing
 
@@ -278,9 +278,9 @@ Free operations (reads, listing, health checks) skip preflight entirely.
 
 ## Example: First Stream
 
-1. **Authenticate** — Sign EIP-191 message (`"FrameWorks Login\nTimestamp: <ISO8601>\nNonce: <random>"`), call `POST /auth/wallet-login` → receive JWT + tenant auto-provisioned.
-2. **Connect** — `POST /mcp` or `POST /graphql` with `Authorization: Bearer <jwt>` or wallet headers.
-3. **Resolve blockers** — Read `account://status` → check `blockers`. Fix `BILLING_DETAILS_MISSING` with `update_billing_details`, `INSUFFICIENT_BALANCE` with x402 or `topup_balance`.
+1. **Call** — `POST /mcp` or `POST /graphql` with the desired billable operation.
+2. **Pay if challenged** — On 402, sign one accepted x402 requirement and retry the same operation with `X-PAYMENT`.
+3. **Resolve blockers** — If the response asks for billing details, call `update_billing_details`; if it asks for balance, retry with x402 or use `topup_balance`.
 4. **Create & stream** — `create_stream` → capture `stream_key` + `rtmp_url`. Push RTMP: `rtmp://<ingest>/live/<stream_key>`.
 5. **Monitor** — Read `streams://{id}/health` periodically. If issues: `diagnose_rebuffering`, `diagnose_buffer_health`.
 6. **Wrap up** — `delete_stream` or leave. Check `billing://balance` for cost.

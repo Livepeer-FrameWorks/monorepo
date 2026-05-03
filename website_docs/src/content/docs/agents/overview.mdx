@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from "@astrojs/starlight/components";
 
-FrameWorks is an MCP-native live streaming platform. AI agents can discover the platform, authenticate with a wallet, fund prepaid balance, and operate supported MCP workflows without a signup form.
+FrameWorks is an MCP-native live streaming platform. AI agents can discover the platform, make billable calls, receive x402 payment challenges, and retry with payment attached. Wallet and bearer auth are also available for clients that want a persistent account context.
 
 <CardGrid>
   <LinkCard
@@ -22,14 +22,15 @@ FrameWorks is an MCP-native live streaming platform. AI agents can discover the 
 
 ## Quick Start
 
-1. **Create or load an EVM wallet.**
-2. **Sign a wallet login message** (EIP-191) and call `POST /auth/wallet-login` to auto-provision a prepaid tenant.
-3. **Check `account://status`** to confirm readiness and resolve any blockers.
-4. **Fund the tenant** via x402 (`submit_payment`) or crypto top-up — ETH or USDC — with a 24h price-locked quote (`topup_balance`, then `check_topup`).
-5. **Create a stream** via MCP `create_stream`, then push RTMP with the returned stream key.
+1. **Call the API operation you need** via MCP or GraphQL.
+2. **If the operation needs payment**, read the HTTP 402 / `INSUFFICIENT_BALANCE` response and its x402 payment requirements.
+3. **Sign an EIP-3009 USDC authorization** for one accepted network.
+4. **Retry the same operation** with `X-PAYMENT`.
+5. **Use the returned stream key or resource** from the original operation.
 
 <Aside type="tip">
-  No email, no signup form, no API key. A wallet signature is all you need to get started.
+  No signup form or auth endpoint is required for the x402 flow. The payment payload is attached to
+  the operation that needs it.
 </Aside>
 
 ## Discovery

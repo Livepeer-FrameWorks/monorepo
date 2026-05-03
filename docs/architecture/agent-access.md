@@ -12,9 +12,9 @@ Programmatic access for AI agents and autonomous clients: wallet auth, prepaid b
 ## Agent Quick Start
 
 1. **Create or load an EVM wallet.**
-2. **Sign a wallet login message** and call `/auth/wallet-login` to auto-provision a prepaid tenant.
-3. **Check `account://status`** to confirm readiness and blockers.
-4. **Fund the tenant** via x402 (`X-PAYMENT`) or a crypto deposit.
+2. **Call the MCP tool or GraphQL operation.**
+3. **If payment is required**, the Gateway returns HTTP 402 / `INSUFFICIENT_BALANCE` with x402 requirements.
+4. **Retry the same operation** with `X-PAYMENT`.
 5. **Create a stream** using MCP `create_stream`, then push RTMP with the returned stream key.
 
 ```
@@ -314,7 +314,7 @@ Before billable operations, the preflight checker validates:
 2. Billing details (required before billable operations)
 3. Prepaid balance (positive balance required)
 
-**Note**: x402 settlement enforces the €100 billing-details threshold for non-auth-only payments.
+**Note**: x402 settlement enforces the €100 billing-details threshold for settled payments.
 
 When balance is insufficient, the blocker response includes x402 payment options:
 

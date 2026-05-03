@@ -78,7 +78,8 @@ func RequireJWTAuth(secret []byte) gin.HandlerFunc {
 // 1. WebSocket upgrades → pass through (auth in InitFunc)
 // 2. POST requests → check allowlist FIRST
 //   - If allowlisted → proceed anonymously (ignore any tokens)
-//   - If not allowlisted → require auth
+//   - If not allowlisted and no auth is provided → return a 402 x402 challenge
+//   - If not allowlisted and auth is provided → require valid auth
 //
 // 3. Other methods → require auth
 func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.HandlerFunc {
@@ -111,12 +112,41 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 			}
 		}
 
+		if !hasAuthCredentials(c.Request) {
+			opName, variables := extractGraphQLRequest(c)
+			resourcePath := c.Request.URL.Path
+			if opName != "" {
+				if resource := graphqlResourcePath(opName, variables); resource != "" {
+					resourcePath = resource
+				} else {
+					resourcePath = "graphql://" + opName
+				}
+			}
+			var x402Provider X402Provider
+			if serviceClients != nil && serviceClients.Purser != nil {
+				x402Provider = serviceClients.Purser
+			}
+			c.JSON(http.StatusPaymentRequired, build402Response(c.Request.Context(), "", opName, resourcePath, x402Provider, nil))
+			c.Abort()
+			return
+		}
+
 		authResult, err := AuthenticateRequest(c.Request.Context(), c.Request, serviceClients, secret, AuthOptions{
 			AllowCookies: true,
 			AllowWallet:  true,
 			AllowX402:    true,
 		}, nil)
 		if err != nil {
+			if GetX402PaymentHeader(c.Request) != "" {
+				c.JSON(http.StatusPaymentRequired, gin.H{
+					"error":     "payment_failed",
+					"message":   err.Error(),
+					"code":      "X402_PAYMENT_FAILED",
+					"topup_url": "/account/billing",
+				})
+				c.Abort()
+				return
+			}
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication failed"})
 			c.Abort()
 			return
@@ -128,7 +158,7 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 		}
 
 		if authResult.AuthType == "x402" && authResult.JWTToken != "" {
-			applyX402Cookies(c, authResult)
+			applyX402SessionHeaders(c, authResult)
 		}
 
 		c.Set(string(ctxkeys.KeyUserID), authResult.UserID)
@@ -161,13 +191,35 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 	}
 }
 
-func applyX402Cookies(c *gin.Context, authResult *AuthResult) {
+func hasAuthCredentials(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if strings.TrimSpace(r.Header.Get("Authorization")) != "" {
+		return true
+	}
+	if strings.TrimSpace(GetX402PaymentHeader(r)) != "" {
+		return true
+	}
+	if strings.TrimSpace(r.Header.Get("X-Wallet-Address")) != "" {
+		return true
+	}
+	if _, err := r.Cookie("access_token"); err == nil {
+		return true
+	}
+	return false
+}
+
+func applyX402SessionHeaders(c *gin.Context, authResult *AuthResult) {
 	if authResult == nil || authResult.JWTToken == "" {
 		return
 	}
 	c.Header("X-Access-Token", authResult.JWTToken)
 	if authResult.ExpiresAt != nil {
 		c.Header("X-Access-Token-Expires-At", authResult.ExpiresAt.Format(time.RFC3339))
+	}
+	if !x402CookiesAllowed(c) {
+		return
 	}
 
 	isDev := config.IsDevelopment()
@@ -178,4 +230,14 @@ func applyX402Cookies(c *gin.Context, authResult *AuthResult) {
 	if authResult.TenantID != "" {
 		c.SetCookie("tenant_id", authResult.TenantID, 15*60, "/", cookieDomain, secure, true)
 	}
+}
+
+func x402CookiesAllowed(c *gin.Context) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	if c.Request.Header.Get("Origin") == "" {
+		return true
+	}
+	return c.Writer.Header().Get("Access-Control-Allow-Credentials") == "true"
 }

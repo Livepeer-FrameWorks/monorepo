@@ -30,12 +30,15 @@
     "wallet": {
       "description": "EIP-191 wallet signature (auto-provisions account on first use)",
       "headers": ["X-Wallet-Address", "X-Wallet-Signature", "X-Wallet-Message"],
-      "login_endpoint": "https://bridge.frameworks.network/auth/wallet-login"
+      "graphql_login": {
+        "endpoint": "https://bridge.frameworks.network/graphql",
+        "mutation": "walletLogin"
+      }
     },
     "x402": {
-      "description": "EIP-3009 gasless USDC (value=0 authenticates, value>0 tops up balance)",
+      "description": "EIP-3009 gasless USDC attached to the same API request after a 402 challenge",
       "header": "X-PAYMENT",
-      "bootstrap_tools": ["get_payment_options", "submit_payment"],
+      "challenge_flow": "Call the operation, read the 402 payment requirements, retry the same operation with X-PAYMENT.",
       "chains": ["base", "arbitrum"],
       "token": "USDC"
     }
@@ -48,7 +51,7 @@
   "endpoints": {
     "mcp": "https://bridge.frameworks.network/mcp",
     "graphql": "https://bridge.frameworks.network/graphql",
-    "wallet_login": "https://bridge.frameworks.network/auth/wallet-login",
+    "wallet_login": "https://bridge.frameworks.network/graphql",
     "skill_md": "https://frameworks.network/SKILL.md",
     "skill_json": "https://frameworks.network/skill.json"
   }

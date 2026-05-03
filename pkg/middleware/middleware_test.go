@@ -125,3 +125,105 @@ func TestRecoveryMiddleware(t *testing.T) {
 		t.Fatalf("expected 500, got %d", w.Code)
 	}
 }
+
+func TestCORSMiddlewareAllowsConfiguredOriginWithCredentials(t *testing.T) {
+	r := gin.New()
+	r.Use(CORSMiddleware([]string{"https://app.frameworks.network"}, false))
+	r.POST("/graphql", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", nil)
+	req.Header.Set("Origin", "https://app.frameworks.network")
+	r.ServeHTTP(w, req)
+
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "https://app.frameworks.network" {
+		t.Fatalf("expected configured origin to be reflected, got %q", got)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("expected credentialed CORS for configured origin, got %q", got)
+	}
+}
+
+func TestCORSMiddlewareAllowsPublicProtocolPreflightWithoutCredentials(t *testing.T) {
+	r := gin.New()
+	r.Use(CORSMiddleware([]string{"https://app.frameworks.network"}, false))
+	r.POST("/graphql", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodOptions, "/graphql", nil)
+	req.Header.Set("Origin", "https://developer.example")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	req.Header.Set("Access-Control-Request-Headers", "content-type,x-payment,x-wallet-address")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected public protocol preflight to pass, got %d", w.Code)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("expected wildcard public CORS, got %q", got)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Fatalf("expected no credentialed CORS for public origin, got %q", got)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Headers"); got != "content-type,x-payment,x-wallet-address" {
+		t.Fatalf("expected requested headers to be reflected, got %q", got)
+	}
+}
+
+func TestCORSMiddlewareBlocksPublicProtocolCookiesFromUnconfiguredOrigin(t *testing.T) {
+	r := gin.New()
+	r.Use(CORSMiddleware([]string{"https://app.frameworks.network"}, false))
+	r.POST("/graphql", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", nil)
+	req.Header.Set("Origin", "https://developer.example")
+	req.Header.Set("Cookie", "access_token=secret")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected cross-origin public API request with cookies to be blocked, got %d", w.Code)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("expected public CORS header on blocked response, got %q", got)
+	}
+}
+
+func TestCORSMiddlewareBlocksUnknownPreflightFromUnconfiguredOrigin(t *testing.T) {
+	r := gin.New()
+	r.Use(CORSMiddleware([]string{"https://app.frameworks.network"}, false))
+	r.POST("/auth/me", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodOptions, "/auth/me", nil)
+	req.Header.Set("Origin", "https://developer.example")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected unconfigured private preflight to be blocked, got %d", w.Code)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("expected no CORS origin for private route, got %q", got)
+	}
+}
+
+func TestCORSMiddlewareBlocksWalletLoginPreflightFromUnconfiguredOrigin(t *testing.T) {
+	r := gin.New()
+	r.Use(CORSMiddleware([]string{"https://app.frameworks.network"}, false))
+	r.POST("/auth/wallet-login", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodOptions, "/auth/wallet-login", nil)
+	req.Header.Set("Origin", "https://developer.example")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	req.Header.Set("Access-Control-Request-Headers", "content-type")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected wallet login preflight from unconfigured origin to be blocked, got %d", w.Code)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("expected no CORS origin for wallet login public origin, got %q", got)
+	}
+}

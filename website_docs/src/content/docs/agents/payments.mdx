@@ -27,6 +27,8 @@ Agents need a positive prepaid balance to create streams, clips, DVR recordings,
 5. Server verifies the signature, submits the transaction on-chain, and credits the balance.
 6. The original operation proceeds.
 
+For browser-based integrations, MCP and GraphQL are CORS-readable public protocol surfaces. JavaScript clients can make the actual unauthenticated API request, receive the 402 response body, sign the payment authorization, and retry with `X-PAYMENT`.
+
 ### Payment Options
 
 Call `get_payment_options` (public, no auth required) to get the platform's payment address and supported networks:
@@ -76,10 +78,6 @@ The `X-PAYMENT` header contains a base64-encoded JSON payload:
 
 `PAYMENT-SIGNATURE` is also accepted as a header name.
 
-### Auth-Only Mode
-
-Call `submit_payment` with an auth-only x402 payload (authorization `value = "0"`) to authenticate via wallet signature without transferring funds. This proves wallet ownership and provisions a tenant, similar to `wallet-login`.
-
 ### Supported Networks
 
 | Network  | Chain ID | USDC Contract                                |
@@ -111,7 +109,7 @@ LPT is not yet supported — Chainlink doesn't publish an official LPT/USD aggre
 ## Preflight Errors
 
 Billable MCP tools validate positive prepaid balance before executing. Account status can also report
-billing detail blockers; x402 settlement enforces billing details for non-auth payments of €100 or
+billing detail blockers; x402 settlement enforces billing details for payments of €100 or
 more. When requirements aren't met, the error includes resolution guidance:
 
 **Missing billing details:**

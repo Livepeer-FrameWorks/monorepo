@@ -30,6 +30,16 @@ type Config struct {
 	TLSKeyFile   string
 }
 
+type trailingSlashFallbackKey struct{}
+
+// HandleOptionalTrailingSlash registers a route for both slash spellings.
+func HandleOptionalTrailingSlash(routes gin.IRoutes, method, relativePath string, handlers ...gin.HandlerFunc) {
+	routes.Handle(method, relativePath, handlers...)
+	if alternate := alternateTrailingSlashPath(relativePath); alternate != relativePath {
+		routes.Handle(method, alternate, handlers...)
+	}
+}
+
 // DefaultConfig returns default server configuration
 func DefaultConfig(serviceName, defaultPort string) Config {
 	return Config{
@@ -104,6 +114,7 @@ func SetupServiceRouter(
 	}
 
 	router := gin.New()
+	router.RedirectTrailingSlash = false
 
 	// Parse CORS allowed origins from environment
 	var allowedOrigins []string
@@ -130,6 +141,36 @@ func SetupServiceRouter(
 	router.GET("/health", healthHandler)
 	router.HEAD("/health", healthHandler)
 	router.GET("/metrics", metricsCollector.Handler())
+	router.NoRoute(func(c *gin.Context) {
+		retryAlternateTrailingSlashPath(router, c)
+	})
 
 	return router
+}
+
+func retryAlternateTrailingSlashPath(router *gin.Engine, c *gin.Context) {
+	if c.Request == nil || c.Request.URL == nil {
+		return
+	}
+	if c.Request.Context().Value(trailingSlashFallbackKey{}) == true {
+		return
+	}
+	alternate := alternateTrailingSlashPath(c.Request.URL.Path)
+	if alternate == c.Request.URL.Path {
+		return
+	}
+	c.Request.URL.Path = alternate
+	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), trailingSlashFallbackKey{}, true))
+	router.HandleContext(c)
+}
+
+func alternateTrailingSlashPath(path string) string {
+	switch {
+	case path == "" || path == "/":
+		return path
+	case strings.HasSuffix(path, "/"):
+		return strings.TrimSuffix(path, "/")
+	default:
+		return path + "/"
+	}
 }

@@ -14,7 +14,7 @@ var allowlistedOperations = []string{"serviceinstanceshealth", "resolveviewerend
 // invoked without a JWT. Each entry needs its own per-call credential —
 // e.g. bootstrapEdge accepts a one-time bootstrap token in the input
 // itself, validated server-side via Quartermaster.
-var allowlistedMutationOperations = []string{"bootstrapedge"}
+var allowlistedMutationOperations = []string{"bootstrapedge", "walletlogin"}
 
 var allowlistedOperationSet = toLowerSet(allowlistedOperations)
 var allowlistedMutationSet = toLowerSet(allowlistedMutationOperations)
