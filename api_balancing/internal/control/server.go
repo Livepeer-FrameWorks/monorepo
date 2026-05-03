@@ -27,6 +27,7 @@ import (
 
 	"frameworks/api_balancing/internal/ingesterrors"
 	"frameworks/api_balancing/internal/state"
+	"frameworks/api_balancing/internal/storage"
 	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/decklog"
@@ -2873,6 +2874,208 @@ func SetS3Client(client S3ClientInterface) {
 	s3Client = client
 }
 
+// Storage delegation wiring. Set once at startup from cmd/foghorn/main.go;
+// nil-safe defaults preserve the pre-PR-3b "always local mint" behaviour
+// for tests and for deployments running without federation enabled.
+var (
+	storageResolverFactory func(ctx context.Context, tenantID string) *storage.ClusterResolver
+	storageMintDelegate    StorageMintDelegate
+)
+
+// StorageMintDelegate sends a MintStorageURLs request to the Foghorn pool
+// that owns the named storage cluster's S3. Wired from main.go to the
+// federation client + peer manager pair; absent in tests or when
+// federation isn't enabled.
+type StorageMintDelegate func(ctx context.Context, targetClusterID string, req *pb.MintStorageURLsRequest) (*pb.MintStorageURLsResponse, error)
+
+// SetStorageResolverFactory wires the per-request storage cluster resolver
+// factory (origin → official → legacy chain). Called once at startup.
+func SetStorageResolverFactory(f func(ctx context.Context, tenantID string) *storage.ClusterResolver) {
+	storageResolverFactory = f
+}
+
+// SetStorageMintDelegate wires the cross-cluster MintStorageURLs sender
+// used when the resolver picks StorageMintViaFederation. Called once at
+// startup; absent ⇒ federation mode falls back to a clear reject so we
+// don't accidentally local-mint against the wrong S3 backing.
+func SetStorageMintDelegate(d StorageMintDelegate) {
+	storageMintDelegate = d
+}
+
+// resolveOfficialClusterID returns the tenant's official cluster per
+// Quartermaster.GetClusterRouting. Cached for officialClusterCacheTTL.
+// Returns "" on RPC failure or when the tenant has no official cluster —
+// the storage resolver treats an empty slot as missing-candidate, not a
+// fatal error.
+const officialClusterCacheTTL = 60 * time.Second
+
+var officialClusterCache = cache.New(cache.Options{
+	TTL:                  officialClusterCacheTTL,
+	StaleWhileRevalidate: 0,
+	NegativeTTL:          5 * time.Second,
+	MaxEntries:           10000,
+}, cache.MetricsHooks{})
+
+// resolveFreezeStorageCluster runs the storage resolver for the freeze
+// flow. Origin candidate is the artifact row's origin_cluster_id.
+// Official candidate comes from Quartermaster.GetClusterRouting via the
+// cached helper. When no resolver factory is wired (tests / pre-PR-3b
+// deployments) falls back to (origin, StorageMintLocal) which preserves
+// the prior s3Client-based behaviour.
+func resolveFreezeStorageCluster(ctx context.Context, tenantID, originClusterID string) (string, storage.StorageMintMode) {
+	if storageResolverFactory == nil {
+		return originClusterID, storage.StorageMintLocal
+	}
+	resolver := storageResolverFactory(ctx, tenantID)
+	if resolver == nil {
+		return originClusterID, storage.StorageMintLocal
+	}
+	return resolver.Resolve(storage.ResolverInput{
+		OriginClusterID:   originClusterID,
+		OfficialClusterID: resolveOfficialClusterID(ctx, tenantID),
+		LegacyClusterID:   localClusterID,
+	})
+}
+
+// resolveThumbnailStorageCluster runs the storage resolver for the
+// thumbnail upload flow. Origin candidate is the artifact / live stream's
+// authoritative cluster; official candidate comes from the cached
+// Quartermaster lookup. Mirrors resolveFreezeStorageCluster's fallback
+// behaviour when no factory is wired (tests / pre-PR-3b deployments).
+func resolveThumbnailStorageCluster(ctx context.Context, tenantID, originClusterID string) (string, storage.StorageMintMode) {
+	if storageResolverFactory == nil {
+		return originClusterID, storage.StorageMintLocal
+	}
+	resolver := storageResolverFactory(ctx, tenantID)
+	if resolver == nil {
+		return originClusterID, storage.StorageMintLocal
+	}
+	return resolver.Resolve(storage.ResolverInput{
+		OriginClusterID:   originClusterID,
+		OfficialClusterID: resolveOfficialClusterID(ctx, tenantID),
+		LegacyClusterID:   localClusterID,
+	})
+}
+
+// thumbnailContentType maps an allowlisted thumbnail filename to the
+// MIME type the federated mint should record on the presigned PUT.
+func thumbnailContentType(fileName string) string {
+	switch fileName {
+	case "poster.jpg", "sprite.jpg":
+		return "image/jpeg"
+	case "sprite.vtt":
+		return "text/vtt"
+	}
+	return "application/octet-stream"
+}
+
+// buildFreezeMintRequest constructs the MintStorageURLs request that
+// matches the local-mint code paths' S3 key shapes for each freeze asset
+// type. Returns nil for unsupported asset types so the caller can reject
+// with a clear reason.
+func buildFreezeMintRequest(assetType, assetHash, dvrHash, tenantID, requestingCluster, targetCluster, localPath string, filenames []string) *pb.MintStorageURLsRequest {
+	base := &pb.MintStorageURLsRequest{
+		TenantId:          tenantID,
+		RequestingCluster: requestingCluster,
+		TargetClusterId:   targetCluster,
+	}
+	switch assetType {
+	case "clip":
+		format := "mp4"
+		if idx := strings.LastIndex(localPath, "."); idx != -1 {
+			format = localPath[idx+1:]
+		}
+		base.ArtifactType = "clip"
+		base.ArtifactKey = assetHash
+		base.Op = pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE
+		base.ContentType = "video/" + format
+		return base
+	case "dvr":
+		base.ArtifactType = "dvr"
+		base.ArtifactKey = assetHash
+		base.Op = pb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET
+		base.SegmentFilenames = filenames
+		return base
+	case "dvr_segment", "dvr_manifest":
+		filename := ""
+		if _, after, ok := strings.Cut(assetHash, "/"); ok {
+			filename = after
+		}
+		if filename == "" && len(filenames) > 0 {
+			filename = filenames[0]
+		}
+		if filename == "" {
+			return nil
+		}
+		base.ArtifactType = assetType
+		base.ArtifactKey = dvrHash + "/" + filename
+		base.Op = pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE
+		if assetType == "dvr_manifest" {
+			base.ContentType = "application/x-mpegURL"
+		} else {
+			base.ContentType = "video/mp2t"
+		}
+		return base
+	case "vod":
+		format := "mp4"
+		if idx := strings.LastIndex(localPath, "."); idx != -1 {
+			format = localPath[idx+1:]
+		}
+		base.ArtifactType = "vod"
+		base.ArtifactKey = assetHash
+		base.Op = pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE
+		base.ContentType = "video/" + format
+		return base
+	}
+	return nil
+}
+
+// persistFreezeStorageCluster updates the artifact row's storage_cluster_id
+// after a federated mint. NULL is preserved when the chosen storage cluster
+// matches origin, so legacy rows continue to look unchanged.
+func persistFreezeStorageCluster(ctx context.Context, artifactHash, storageCluster string) {
+	if db == nil || strings.TrimSpace(artifactHash) == "" || strings.TrimSpace(storageCluster) == "" {
+		return
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		SET storage_cluster_id = $2,
+		    updated_at = NOW()
+		WHERE artifact_hash = $1
+		  AND COALESCE(storage_cluster_id, '') <> $2
+	`, artifactHash, storageCluster); err != nil {
+		// Soft failure — the upload still works, the read side just
+		// can't reconstruct the storage cluster from the row. Log so we
+		// notice the drift.
+		// This intentionally doesn't fail the freeze response.
+		_ = err
+	}
+}
+
+func resolveOfficialClusterID(ctx context.Context, tenantID string) string {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" || quartermasterClient == nil {
+		return ""
+	}
+	v, ok, err := officialClusterCache.Get(ctx, "official:"+tenantID, func(loadCtx context.Context, _ string) (interface{}, bool, error) {
+		rctx, cancel := context.WithTimeout(loadCtx, 1*time.Second)
+		defer cancel()
+		routing, qErr := quartermasterClient.GetClusterRouting(rctx, &pb.GetClusterRoutingRequest{TenantId: tenantID})
+		if qErr != nil {
+			return "", false, qErr
+		}
+		if routing == nil || routing.OfficialClusterId == nil {
+			return "", true, nil
+		}
+		return *routing.OfficialClusterId, true, nil
+	})
+	if err != nil || !ok {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
+}
+
 // processFreezePermissionRequest handles freeze permission requests from Helmsman
 // Generates presigned URLs for secure S3 uploads without exposing credentials
 func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
@@ -2890,17 +3093,10 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		"node_id":    nodeID,
 	}).Info("Processing freeze permission request")
 
-	// Check if S3 client is configured
-	if s3Client == nil {
-		logger.Warn("S3 client not configured, rejecting freeze request")
-		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
-			RequestId: requestID,
-			AssetHash: assetHash,
-			Approved:  false,
-			Reason:    "s3_not_configured",
-		}, logger)
-		return
-	}
+	// Note: the s3Client nil-check is deferred until after the storage
+	// resolver runs. A self-host pool with no local S3 client must still
+	// be able to delegate to the platform pool's S3 via federation;
+	// rejecting up front would foreclose that path.
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -3014,13 +3210,29 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		return
 	}
 
-	// Remote artifact: origin S3 is authoritative — skip upload, just evict
-	isRemote := originCluster.Valid && originCluster.String != "" && !isServedCluster(originCluster.String)
-	if isRemote {
+	// Resolve the storage cluster for this asset using the same chain
+	// CreateVodUpload uses: origin (artifact row) → official (tenant
+	// routing) → legacy (this Foghorn's process cluster). The chosen
+	// cluster decides local-mint vs federated-mint vs reject; it also
+	// drives the storage_cluster_id we persist below for read-side
+	// reconstruction.
+	originClusterID := ""
+	if originCluster.Valid {
+		originClusterID = originCluster.String
+	}
+	storageCluster, mintMode := resolveFreezeStorageCluster(ctx, tenantID, originClusterID)
+
+	// Remote artifact: storage cluster is authoritative — skip upload,
+	// just evict. Replaces the prior origin_cluster_id-only check so a
+	// row with delegated storage routes to the storage cluster, not
+	// origin. NULL storage_cluster_id falls back to origin via the
+	// resolver's behaviour, preserving prior semantics for legacy rows.
+	if storageCluster != "" && storageCluster != localClusterID && !isServedCluster(storageCluster) {
 		logger.WithFields(logging.Fields{
-			"asset_hash":     assetHash,
-			"origin_cluster": originCluster.String,
-		}).Info("Remote artifact — skip_upload=true (origin S3 authoritative)")
+			"asset_hash":      assetHash,
+			"storage_cluster": storageCluster,
+			"origin_cluster":  originClusterID,
+		}).Info("Remote artifact — skip_upload=true (storage cluster's S3 authoritative)")
 		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
 			RequestId:  requestID,
 			AssetHash:  assetHash,
@@ -3055,6 +3267,86 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		AssetHash:        assetHash,
 		Approved:         true,
 		UrlExpirySeconds: expirySeconds,
+	}
+
+	// Branch on the resolver verdict. Local mode keeps the existing
+	// per-type s3Client paths below. Federation mode delegates the mint
+	// to the Foghorn pool that owns storageCluster's S3. Unavailable
+	// rejects with a structured reason so the operator can act.
+	switch mintMode {
+	case storage.StorageUnavailable:
+		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+			RequestId: requestID,
+			AssetHash: assetHash,
+			Approved:  false,
+			Reason:    "service_unavailable",
+		}, logger)
+		return
+
+	case storage.StorageMintViaFederation:
+		if storageMintDelegate == nil {
+			logger.WithField("storage_cluster", storageCluster).Warn("Federated mint required but no delegate wired")
+			sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+				RequestId: requestID,
+				AssetHash: assetHash,
+				Approved:  false,
+				Reason:    "peer_unreachable",
+			}, logger)
+			return
+		}
+		mintReq := buildFreezeMintRequest(assetType, assetHash, dvrHash, tenantID, localClusterID, storageCluster, localPath, req.GetFilenames())
+		if mintReq == nil {
+			sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+				RequestId: requestID,
+				AssetHash: assetHash,
+				Approved:  false,
+				Reason:    "unsupported_asset_type",
+			}, logger)
+			return
+		}
+		mintResp, mintErr := storageMintDelegate(ctx, storageCluster, mintReq)
+		if mintErr != nil || mintResp == nil || !mintResp.GetAccepted() {
+			reason := "peer_unreachable"
+			if mintResp != nil && mintResp.GetReason() != "" {
+				reason = mintResp.GetReason()
+			}
+			logger.WithError(mintErr).WithFields(logging.Fields{
+				"asset_hash":      assetHash,
+				"storage_cluster": storageCluster,
+				"reason":          reason,
+			}).Warn("Federated MintStorageURLs rejected freeze")
+			sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+				RequestId: requestID,
+				AssetHash: assetHash,
+				Approved:  false,
+				Reason:    reason,
+			}, logger)
+			return
+		}
+		if mintResp.GetPresignedPutUrl() != "" {
+			response.PresignedPutUrl = mintResp.GetPresignedPutUrl()
+		}
+		if len(mintResp.GetSegmentUrls()) > 0 {
+			response.SegmentUrls = mintResp.GetSegmentUrls()
+		}
+		persistFreezeStorageCluster(ctx, lookupHash, storageCluster)
+		sendFreezePermissionResponse(stream, response, logger)
+		return
+	}
+
+	// StorageMintLocal — proceed with the existing per-type code path
+	// against the local s3Client. The s3Client nil-check that used to
+	// fire at the top of the function lives here now: local-mint
+	// requires a configured client; federation does not.
+	if s3Client == nil {
+		logger.Warn("S3 client not configured, rejecting freeze request")
+		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+			RequestId: requestID,
+			AssetHash: assetHash,
+			Approved:  false,
+			Reason:    "s3_not_configured",
+		}, logger)
+		return
 	}
 
 	if assetType == "clip" {
@@ -3165,6 +3457,15 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		if _, dbErr := db.ExecContext(context.Background(), `UPDATE foghorn.artifacts SET storage_location = 'freezing', sync_status = 'in_progress', updated_at = NOW() WHERE artifact_hash = $1`, assetHash); dbErr != nil {
 			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to mark artifact as freezing")
 		}
+	}
+
+	// Persist storage_cluster_id when the resolver picked a cluster other
+	// than origin so the read side can reconstruct the right Chandler /
+	// PrepareArtifact target. Skip for incremental DVR sync — those rows
+	// inherit the parent DVR's storage_cluster_id which was set on the
+	// initial freeze.
+	if assetType != "dvr_segment" && assetType != "dvr_manifest" && storageCluster != "" && storageCluster != originClusterID {
+		persistFreezeStorageCluster(context.Background(), lookupHash, storageCluster)
 	}
 
 	sendFreezePermissionResponse(stream, response, logger)
@@ -5029,27 +5330,35 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 		"node_id":       nodeID,
 	}).Info("Processing thumbnail upload request")
 
-	if s3Client == nil {
-		logger.Warn("S3 client not configured, ignoring thumbnail upload request")
-		return
-	}
+	// Note: s3Client nil-check moved to inside the StorageMintLocal branch
+	// so a self-host pool with no local S3 can still federate to platform
+	// storage when the resolver picks that path.
 
-	// Resolve internal_name → stable S3 key identifier.
-	// Live streams: stream_id (UUID, never rotated).
-	// Artifacts: artifact_hash (32-char hex, immutable PK).
-	// The MistServer wildcard prefix ("live+" / "vod+") routes; the bare name is the lookup key.
-	var thumbnailKey string
+	// Resolve internal_name → stable S3 key identifier + cluster context
+	// for the storage resolver. The MistServer wildcard prefix ("live+" /
+	// "vod+") routes; the bare name is the lookup key.
+	var (
+		thumbnailKey       string
+		thumbTenantID      string
+		thumbOriginCluster string
+		isLive             bool
+		streamInternalName string
+	)
 	bareName := mist.ExtractInternalName(internalName)
 	switch {
 	case strings.HasPrefix(internalName, "live+"):
-		// In-memory StreamState is populated by PUSH_REWRITE on ingest. If foghorn restarted
-		// while the stream was already live, fall back to Commodore — it owns the
-		// internal_name → stream_id mapping authoritatively.
+		isLive = true
+		streamInternalName = bareName
+		// In-memory StreamState carries StreamID + TenantID populated by
+		// PUSH_REWRITE on ingest. It does NOT carry cluster context, so
+		// origin cluster must come from Commodore even when state is hot.
 		if ss := state.DefaultManager().GetStreamState(bareName); ss != nil && ss.StreamID != "" {
 			thumbnailKey = ss.StreamID
-		} else if CommodoreClient != nil {
+			thumbTenantID = ss.TenantID
+		}
+		if (thumbnailKey == "" || thumbOriginCluster == "") && CommodoreClient != nil {
 			resp, err := CommodoreClient.ResolveInternalName(context.Background(), bareName)
-			if err != nil || resp == nil || resp.StreamId == "" {
+			if err != nil || resp == nil {
 				logger.WithFields(logging.Fields{
 					"stream_name":   internalName,
 					"internal_name": bareName,
@@ -5057,9 +5366,23 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 				}).Warn("Could not resolve internal_name to stream_id for thumbnail upload")
 				return
 			}
-			thumbnailKey = resp.StreamId
-			state.DefaultManager().SetStreamStreamID(bareName, resp.StreamId)
-		} else {
+			if thumbnailKey == "" {
+				if resp.StreamId == "" {
+					logger.WithFields(logging.Fields{
+						"stream_name":   internalName,
+						"internal_name": bareName,
+					}).Warn("Commodore returned no stream_id for thumbnail upload")
+					return
+				}
+				thumbnailKey = resp.StreamId
+				state.DefaultManager().SetStreamStreamID(bareName, resp.StreamId)
+			}
+			if thumbTenantID == "" {
+				thumbTenantID = resp.GetTenantId()
+			}
+			thumbOriginCluster = resp.GetOriginClusterId()
+		}
+		if thumbnailKey == "" {
 			logger.WithField("internal_name", bareName).Warn("Commodore client unavailable for stream_id resolution")
 			return
 		}
@@ -5074,15 +5397,31 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 			logger.Warn("DB not available for artifact hash resolution")
 			return
 		}
+		// VOD+: also pull tenant_id and the authoritative storage cluster
+		// (storage_cluster_id with origin_cluster_id fallback) so the
+		// resolver can pick the right pool. Caller's stream state has no
+		// VOD context so the artifact row is the only source.
+		var artifactHash string
+		var tenantID sql.NullString
+		var authoritativeCluster sql.NullString
 		if err := conn.QueryRowContext(context.Background(),
-			`SELECT artifact_hash FROM foghorn.artifacts WHERE internal_name = $1`,
+			`SELECT artifact_hash, tenant_id::text, COALESCE(storage_cluster_id, origin_cluster_id)
+			   FROM foghorn.artifacts
+			  WHERE internal_name = $1`,
 			bareName,
-		).Scan(&thumbnailKey); err != nil {
+		).Scan(&artifactHash, &tenantID, &authoritativeCluster); err != nil {
 			logger.WithFields(logging.Fields{
 				"stream_name":   internalName,
 				"internal_name": bareName,
 			}).Warn("Could not resolve internal_name to artifact_hash for thumbnail upload")
 			return
+		}
+		thumbnailKey = artifactHash
+		if tenantID.Valid {
+			thumbTenantID = tenantID.String
+		}
+		if authoritativeCluster.Valid {
+			thumbOriginCluster = authoritativeCluster.String
 		}
 		logger.WithFields(logging.Fields{
 			"stream_name":   internalName,
@@ -5093,6 +5432,12 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 		logger.WithField("internal_name", internalName).Warn("Thumbnail upload from unrecognised stream prefix; expected live+ or vod+")
 		return
 	}
+
+	// Run the storage resolver — same chain freeze and CreateVodUpload use.
+	// Without a tenant we can't resolve an official cluster, so the
+	// resolver falls back to legacy local mint via thumbOriginCluster /
+	// localClusterID alone.
+	storageCluster, mintMode := resolveThumbnailStorageCluster(context.Background(), thumbTenantID, thumbOriginCluster)
 
 	expiry := 15 * time.Minute
 	resp := &pb.ThumbnailUploadResponse{
@@ -5106,29 +5451,89 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 		"sprite.vtt": true,
 	}
 
-	for _, fp := range filePaths {
-		fileName := filepath.Base(fp)
-		if !allowedThumbnailFiles[fileName] {
-			logger.WithField("file_name", fileName).Warn("Rejected thumbnail filename not in allowlist")
-			continue
-		}
-		s3Key := "thumbnails/" + thumbnailKey + "/" + fileName
+	switch mintMode {
+	case storage.StorageUnavailable:
+		logger.WithFields(logging.Fields{
+			"internal_name":  internalName,
+			"tenant_id":      thumbTenantID,
+			"origin_cluster": thumbOriginCluster,
+		}).Warn("Storage resolver returned unavailable for thumbnail upload — dropping")
+		return
 
-		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
-		if err != nil {
-			logger.WithFields(logging.Fields{
-				"file_name": fileName,
-				"s3_key":    s3Key,
-				"error":     err,
-			}).Error("Failed to generate presigned PUT URL for thumbnail")
-			continue
+	case storage.StorageMintViaFederation:
+		if storageMintDelegate == nil {
+			logger.WithField("storage_cluster", storageCluster).Warn("Federated thumbnail mint required but no delegate wired — dropping")
+			return
 		}
-		resp.Uploads = append(resp.Uploads, &pb.ThumbnailUploadResponse_PresignedUpload{
-			FileName:     fileName,
-			PresignedUrl: presignedURL,
-			S3Key:        s3Key,
-			LocalPath:    fp,
-		})
+		// streamInternalName goes on the request only for live thumbs so
+		// the callee can verify tenant via stream state. For vod+ the
+		// callee verifies via foghorn.artifacts WHERE artifact_hash =
+		// <key prefix>.
+		streamCtxName := ""
+		if isLive {
+			streamCtxName = streamInternalName
+		}
+		for _, fp := range filePaths {
+			fileName := filepath.Base(fp)
+			if !allowedThumbnailFiles[fileName] {
+				logger.WithField("file_name", fileName).Warn("Rejected thumbnail filename not in allowlist")
+				continue
+			}
+			mintReq := &pb.MintStorageURLsRequest{
+				TenantId:           thumbTenantID,
+				RequestingCluster:  localClusterID,
+				TargetClusterId:    storageCluster,
+				ArtifactType:       "thumbnail",
+				ArtifactKey:        thumbnailKey + "/" + fileName,
+				Op:                 pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
+				ContentType:        thumbnailContentType(fileName),
+				StreamInternalName: streamCtxName,
+			}
+			mintResp, mintErr := storageMintDelegate(context.Background(), storageCluster, mintReq)
+			if mintErr != nil || mintResp == nil || !mintResp.GetAccepted() {
+				logger.WithError(mintErr).WithFields(logging.Fields{
+					"file_name":       fileName,
+					"storage_cluster": storageCluster,
+				}).Warn("Federated MintStorageURLs failed for thumbnail")
+				continue
+			}
+			resp.Uploads = append(resp.Uploads, &pb.ThumbnailUploadResponse_PresignedUpload{
+				FileName:     fileName,
+				PresignedUrl: mintResp.GetPresignedPutUrl(),
+				S3Key:        mintResp.GetS3Key(),
+				LocalPath:    fp,
+			})
+		}
+
+	default: // StorageMintLocal
+		if s3Client == nil {
+			logger.Warn("S3 client not configured, ignoring thumbnail upload request")
+			return
+		}
+		for _, fp := range filePaths {
+			fileName := filepath.Base(fp)
+			if !allowedThumbnailFiles[fileName] {
+				logger.WithField("file_name", fileName).Warn("Rejected thumbnail filename not in allowlist")
+				continue
+			}
+			s3Key := "thumbnails/" + thumbnailKey + "/" + fileName
+
+			presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
+			if err != nil {
+				logger.WithFields(logging.Fields{
+					"file_name": fileName,
+					"s3_key":    s3Key,
+					"error":     err,
+				}).Error("Failed to generate presigned PUT URL for thumbnail")
+				continue
+			}
+			resp.Uploads = append(resp.Uploads, &pb.ThumbnailUploadResponse_PresignedUpload{
+				FileName:     fileName,
+				PresignedUrl: presignedURL,
+				S3Key:        s3Key,
+				LocalPath:    fp,
+			})
+		}
 	}
 
 	if len(resp.Uploads) == 0 {

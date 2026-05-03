@@ -236,6 +236,11 @@ func main() {
 			"Livepeer gateway auth-webhook rejections by reason",
 			[]string{"reason"},
 		),
+		StorageMint: metricsCollector.NewCounter(
+			"foghorn_storage_mint_total",
+			"MintStorageURLs federation-handler outcomes by result",
+			[]string{"result"},
+		),
 	}
 
 	// Control-plane (HelmsmanControl) and data-plane (Decklog fan-out) observability
@@ -744,7 +749,39 @@ func main() {
 		handlers.SetPeerManager(peerManager)
 		foghornServer.SetPeerManager(peerManager)
 	}
+
+	// Wire the storage resolver factory + federated mint delegate into the
+	// control package so processFreezePermissionRequest (and later
+	// processThumbnailUploadRequest) can pick local-mint vs federated-mint
+	// per artifact, using the same rule the federation server uses for
+	// PrepareArtifact redirect emission.
+	control.SetStorageResolverFactory(func(ctx context.Context, tenantID string) *storage.ClusterResolver {
+		return &storage.ClusterResolver{
+			LocalClusterID:       foghornCfg.ClusterID,
+			LocalClusterServed:   control.IsServedCluster,
+			LocalS3Backing:       localS3Backing,
+			LocalS3ClientPresent: s3ForGRPC != nil,
+			AdvertisedBacking: func(clusterID string) (storage.S3Backing, bool) {
+				b, ok := advertisedBackingForTenant(ctx, tenantID, clusterID)
+				if !ok {
+					return storage.S3Backing{}, false
+				}
+				return storage.S3Backing{Bucket: b.Bucket, Endpoint: b.Endpoint, Region: b.Region}, true
+			},
+			Logger: logger,
+		}
+	})
+	if fedClient != nil && peerManager != nil {
+		control.SetStorageMintDelegate(func(ctx context.Context, targetClusterID string, req *pb.MintStorageURLsRequest) (*pb.MintStorageURLsResponse, error) {
+			addr := peerManager.GetPeerAddr(targetClusterID)
+			if addr == "" {
+				return &pb.MintStorageURLsResponse{Accepted: false, Reason: "peer_unreachable"}, nil
+			}
+			return fedClient.MintStorageURLs(ctx, targetClusterID, addr, req)
+		})
+	}
 	if federationServer != nil {
+		federationServer.SetStorageMintMetric(metrics.StorageMint)
 		federationServer.SetClipCreator(foghornServer)
 		federationServer.SetDVRCreator(foghornServer)
 		federationServer.SetArtifactCommandHandler(foghornServer)

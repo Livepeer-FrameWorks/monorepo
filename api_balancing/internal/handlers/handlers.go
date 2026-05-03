@@ -230,6 +230,12 @@ type FoghornMetrics struct {
 	// Reasons: stream_not_found, stream_not_live, peer_context_missing,
 	// peer_unreachable, commodore_unreachable, invalid_request.
 	LivepeerAuthRejected *prometheus.CounterVec
+
+	// StorageMint counts MintStorageURLs federation-handler outcomes.
+	// Labels: result. Values: accepted, tenant_mismatch,
+	// storage_not_owned_here, unsupported_artifact_type,
+	// unsupported_operation, s3_error.
+	StorageMint *prometheus.CounterVec
 }
 
 // StreamIDRegex matches public playback IDs and internal names (live+/vod+).

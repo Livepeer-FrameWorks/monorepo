@@ -16,6 +16,7 @@ import (
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -76,6 +77,24 @@ type FederationServer struct {
 	localS3Backing    S3Backing
 	advertisedBacking AdvertisedBackingFunc
 	isServedCluster   func(clusterID string) bool
+
+	// storageMintCounter records MintStorageURLs outcomes. Optional;
+	// nil-safe (the handler only increments when the counter is set).
+	storageMintCounter *prometheus.CounterVec
+}
+
+// SetStorageMintMetric wires the MintStorageURLs outcome counter (label:
+// result). Production wires this from cmd/foghorn/main.go alongside the
+// other federation metrics; tests can leave it unset.
+func (s *FederationServer) SetStorageMintMetric(c *prometheus.CounterVec) {
+	s.storageMintCounter = c
+}
+
+func (s *FederationServer) recordStorageMint(result string) {
+	if s.storageMintCounter == nil {
+		return
+	}
+	s.storageMintCounter.WithLabelValues(result).Inc()
 }
 
 // AdvertisedBackingFunc returns the S3 backing tuple Quartermaster has on
@@ -606,10 +625,12 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 	// Storage ownership — the authoritative claim.
 	if !s.canLocallyMintFor(ctx, req.GetTenantId(), req.GetTargetClusterId()) {
 		log.Warn("MintStorageURLs: this Foghorn does not own the target storage cluster for this tenant")
+		s.recordStorageMint("storage_not_owned_here")
 		return &pb.MintStorageURLsResponse{Accepted: false, Reason: "storage_not_owned_here"}, nil
 	}
 	if s.s3Client == nil {
 		log.Warn("MintStorageURLs: ownership claim accepted but s3 client is nil (configuration race)")
+		s.recordStorageMint("s3_error")
 		return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
 	}
 
@@ -617,20 +638,25 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 	artType := strings.ToLower(strings.TrimSpace(req.GetArtifactType()))
 	op := req.GetOp()
 	switch artType {
-	case "thumbnail", "clip", "dvr_segment", "dvr_manifest":
+	case "thumbnail", "clip", "dvr_segment", "dvr_manifest", "vod":
+		// vod here is the single-PUT freeze of an existing VOD asset.
+		// Federated VOD multipart create flows through CreateVodUpload,
+		// which rejects with storage_delegation_unsupported_for_vod.
 		if op != pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE {
+			s.recordStorageMint("unsupported_operation")
 			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
 		}
 	case "dvr":
 		if op != pb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET {
+			s.recordStorageMint("unsupported_operation")
 			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
 		}
 		if len(req.GetSegmentFilenames()) == 0 {
+			s.recordStorageMint("unsupported_operation")
 			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
 		}
-	case "vod":
-		return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_artifact_type"}, nil
 	default:
+		s.recordStorageMint("unsupported_artifact_type")
 		return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_artifact_type"}, nil
 	}
 
@@ -638,6 +664,7 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 	// live thumbnails use stream state. Both reject with tenant_mismatch on
 	// failure.
 	if !s.verifyTenantOwnership(ctx, req, artType) {
+		s.recordStorageMint("tenant_mismatch")
 		return &pb.MintStorageURLsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
 	}
 
@@ -658,8 +685,10 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 		url, err := s.s3Client.GeneratePresignedPUT(s3Key, expiry)
 		if err != nil {
 			log.WithError(err).Error("GeneratePresignedPUT failed")
+			s.recordStorageMint("s3_error")
 			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
 		}
+		s.recordStorageMint("accepted")
 		return &pb.MintStorageURLsResponse{
 			Accepted:         true,
 			S3Key:            s3Key,
@@ -680,14 +709,17 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 		streamName, err := s.lookupArtifactStreamName(ctx, req.GetArtifactKey(), req.GetTenantId())
 		if err != nil {
 			log.WithError(err).Warn("clip stream lookup failed")
+			s.recordStorageMint("tenant_mismatch")
 			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
 		}
 		s3Key := s.s3Client.BuildClipS3Key(req.GetTenantId(), streamName, req.GetArtifactKey(), format)
 		url, err := s.s3Client.GeneratePresignedPUT(s3Key, expiry)
 		if err != nil {
 			log.WithError(err).Error("clip GeneratePresignedPUT failed")
+			s.recordStorageMint("s3_error")
 			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
 		}
+		s.recordStorageMint("accepted")
 		return &pb.MintStorageURLsResponse{
 			Accepted:         true,
 			S3Key:            s3Key,
@@ -699,6 +731,7 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 		streamName, err := s.lookupArtifactStreamName(ctx, req.GetArtifactKey(), req.GetTenantId())
 		if err != nil {
 			log.WithError(err).Warn("dvr stream lookup failed")
+			s.recordStorageMint("tenant_mismatch")
 			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
 		}
 		dvrPrefix := s.s3Client.BuildDVRS3Key(req.GetTenantId(), streamName, req.GetArtifactKey())
@@ -712,14 +745,44 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 			url, err := s.s3Client.GeneratePresignedPUT(s3Key, expiry)
 			if err != nil {
 				log.WithError(err).WithField("segment", fn).Error("dvr segment GeneratePresignedPUT failed")
+				s.recordStorageMint("s3_error")
 				return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
 			}
 			segmentURLs[fn] = url
 		}
+		s.recordStorageMint("accepted")
 		return &pb.MintStorageURLsResponse{
 			Accepted:         true,
 			S3Key:            dvrPrefix,
 			SegmentUrls:      segmentURLs,
+			UrlExpirySeconds: uint32(expiry.Seconds()),
+		}, nil
+
+	case "vod":
+		// Single-PUT freeze of an already-existing VOD asset (NOT
+		// multipart create — that flow lives in CreateVodUpload and is
+		// intentionally rejected via storage_delegation_unsupported_for_vod).
+		// Mirror the local-mint path's key shape exactly so a delegated
+		// freeze lands at the same key as a local one would: filename is
+		// `<hash>.<format>`, format derived from content_type.
+		format := "mp4"
+		if ct := strings.TrimSpace(req.GetContentType()); ct != "" {
+			if before, after, ok := strings.Cut(ct, "/"); ok && before == "video" && after != "" {
+				format = after
+			}
+		}
+		s3Key := s.s3Client.BuildVodS3Key(req.GetTenantId(), req.GetArtifactKey(), req.GetArtifactKey()+"."+format)
+		url, err := s.s3Client.GeneratePresignedPUT(s3Key, expiry)
+		if err != nil {
+			log.WithError(err).Error("vod GeneratePresignedPUT failed")
+			s.recordStorageMint("s3_error")
+			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
+		}
+		s.recordStorageMint("accepted")
+		return &pb.MintStorageURLsResponse{
+			Accepted:         true,
+			S3Key:            s3Key,
+			PresignedPutUrl:  url,
 			UrlExpirySeconds: uint32(expiry.Seconds()),
 		}, nil
 
@@ -729,11 +792,13 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 		// streamName, parentHash) + filename.
 		parentHash, fileName, ok := strings.Cut(req.GetArtifactKey(), "/")
 		if !ok || parentHash == "" || fileName == "" {
+			s.recordStorageMint("unsupported_operation")
 			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
 		}
 		streamName, err := s.lookupArtifactStreamName(ctx, parentHash, req.GetTenantId())
 		if err != nil {
 			log.WithError(err).Warn("dvr incremental stream lookup failed")
+			s.recordStorageMint("tenant_mismatch")
 			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
 		}
 		dvrPrefix := s.s3Client.BuildDVRS3Key(req.GetTenantId(), streamName, parentHash)
@@ -741,8 +806,10 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 		url, err := s.s3Client.GeneratePresignedPUT(s3Key, expiry)
 		if err != nil {
 			log.WithError(err).Error("dvr incremental GeneratePresignedPUT failed")
+			s.recordStorageMint("s3_error")
 			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
 		}
+		s.recordStorageMint("accepted")
 		return &pb.MintStorageURLsResponse{
 			Accepted:         true,
 			S3Key:            s3Key,

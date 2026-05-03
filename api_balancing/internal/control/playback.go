@@ -14,6 +14,7 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
+	"frameworks/api_balancing/internal/storage"
 	"frameworks/pkg/ctxkeys"
 	pb "frameworks/pkg/proto"
 
@@ -160,6 +161,7 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	var storageLocation sql.NullString
 	var syncStatus sql.NullString
 	var hasThumbnails bool
+	var authoritativeCluster sql.NullString
 
 	err = deps.DB.QueryRowContext(ctx, `
 		SELECT COALESCE(internal_name, ''),
@@ -170,10 +172,11 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 		       format,
 		       COALESCE(storage_location, ''),
 		       COALESCE(sync_status, ''),
-		       COALESCE(has_thumbnails, false)
+		       COALESCE(has_thumbnails, false),
+		       COALESCE(storage_cluster_id, origin_cluster_id)
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = $2 AND status != 'deleted' AND tenant_id = $3
-	`, artifactResp.ArtifactHash, artifactType, tenantID).Scan(&internalName, &status, &durationSeconds, &sizeBytes, &createdAt, &format, &storageLocation, &syncStatus, &hasThumbnails)
+	`, artifactResp.ArtifactHash, artifactType, tenantID).Scan(&internalName, &status, &durationSeconds, &sizeBytes, &createdAt, &format, &storageLocation, &syncStatus, &hasThumbnails, &authoritativeCluster)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
@@ -374,7 +377,19 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 		metadata.Format = &format.String
 	}
 	if hasThumbnails && (contentType == "dvr" || contentType == "clip") {
-		metadata.ThumbnailAssets = buildThumbnailAssets(getChandlerBaseURL(), artifactResp.ArtifactHash)
+		// Pick the Chandler whose S3 actually serves this artifact's
+		// thumbnail. authoritativeCluster = COALESCE(storage_cluster_id,
+		// origin_cluster_id) — NULL on the column falls back to origin so
+		// pre-PR-3b artifact rows render with the same URL they did
+		// before. Empty / unresolvable cluster context falls back to the
+		// legacy local Chandler URL.
+		chandlerBase := getChandlerBaseURL()
+		if authoritativeCluster.Valid && authoritativeCluster.String != "" {
+			if perCluster := getChandlerBaseURLForCluster(authoritativeCluster.String); perCluster != "" {
+				chandlerBase = perCluster
+			}
+		}
+		metadata.ThumbnailAssets = buildThumbnailAssets(chandlerBase, artifactResp.ArtifactHash)
 	}
 
 	return &pb.ViewerEndpointResponse{
@@ -558,9 +573,17 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 	}
 	if streamID != "" {
 		metadata.StreamId = &streamID
-		// Live streams: Helmsman uploads thumbnails to Chandler whenever Mist's process_thumbs runs.
-		// The asset may 404 for streams that have never been live; the player's fallback chain handles that.
-		metadata.ThumbnailAssets = buildThumbnailAssets(getChandlerBaseURL(), streamID)
+		// Live streams: Helmsman uploads thumbnails to Chandler whenever
+		// Mist's process_thumbs runs. The asset may 404 for streams that
+		// have never been live; the player's fallback chain handles that.
+		// Pick the Chandler whose S3 the thumbnail upload path actually
+		// targeted for this tenant — thumbnail upload uses the same
+		// resolveThumbnailStorageCluster chain. resolveLiveThumbnailChandlerBase
+		// runs the resolver with origin discovered via Commodore (cached)
+		// and falls back to the legacy local Chandler when no resolver
+		// factory is wired or the chain returns empty.
+		chandlerBase := resolveLiveThumbnailChandlerBase(ctx, tenantID, internalName)
+		metadata.ThumbnailAssets = buildThumbnailAssets(chandlerBase, streamID)
 	}
 
 	// Enrich with stream state if available
@@ -584,6 +607,35 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 		Fallbacks: endpoints[1:],
 		Metadata:  metadata,
 	}, nil
+}
+
+// resolveLiveThumbnailChandlerBase picks the Chandler base URL whose S3
+// the thumbnail upload path will write to for this stream. Mirrors the
+// chain processThumbnailUploadRequest uses — origin from Commodore plus
+// official from cached Quartermaster routing — so write and read end up
+// at the same cluster's Chandler. Falls back to the legacy local
+// getChandlerBaseURL() when cluster context is unresolvable so existing
+// single-cluster deployments behave exactly as before.
+func resolveLiveThumbnailChandlerBase(ctx context.Context, tenantID, internalName string) string {
+	originCluster := ""
+	if CommodoreClient != nil && internalName != "" {
+		rctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+		defer cancel()
+		if resp, err := CommodoreClient.ResolveInternalName(rctx, internalName); err == nil && resp != nil {
+			originCluster = resp.GetOriginClusterId()
+			if tenantID == "" {
+				tenantID = resp.GetTenantId()
+			}
+		}
+	}
+	storageCluster, mode := resolveThumbnailStorageCluster(ctx, tenantID, originCluster)
+	if mode == storage.StorageUnavailable || storageCluster == "" {
+		return getChandlerBaseURL()
+	}
+	if perCluster := getChandlerBaseURLForCluster(storageCluster); perCluster != "" {
+		return perCluster
+	}
+	return getChandlerBaseURL()
 }
 
 func buildThumbnailAssets(chandlerBase, assetKey string) *pb.ThumbnailAssets {
