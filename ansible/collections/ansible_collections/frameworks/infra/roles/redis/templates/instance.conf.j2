@@ -1,6 +1,8 @@
 bind {{ redis_bind_interface }}
 port {{ redis_port }}
-protected-mode yes
+{% set redis_bind_addresses = redis_bind_interface.split() %}
+{% set redis_loopback_only = (redis_bind_addresses | difference(['127.0.0.1', '::1', 'localhost'])) | length == 0 %}
+protected-mode {{ 'yes' if (redis_password | length > 0) or redis_loopback_only else 'no' }}
 supervised systemd
 daemonize no
 timeout 300

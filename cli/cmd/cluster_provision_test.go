@@ -927,7 +927,7 @@ func TestBuildServiceEnvVarsUsesMeshIPForColocatedChatwootRedis(t *testing.T) {
 			Redis: &inventory.RedisConfig{
 				Enabled: true,
 				Instances: []inventory.RedisInstance{
-					{Name: "chatwoot", Host: "central-eu-1", Port: 6380},
+					{Name: "chatwoot", Host: "central-eu-1", Port: 6380, Password: "${REDIS_CHATWOOT_PASSWORD}"},
 				},
 			},
 		},
@@ -943,12 +943,55 @@ func TestBuildServiceEnvVarsUsesMeshIPForColocatedChatwootRedis(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", map[string]string{
+		"REDIS_CHATWOOT_PASSWORD": "redis-secret",
+	})
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
 	if env["REDIS_CHATWOOT_ADDR"] != "10.88.0.10:6380" {
 		t.Fatalf("expected REDIS_CHATWOOT_ADDR to use mesh IP for colocated Chatwoot Redis, got %q", env["REDIS_CHATWOOT_ADDR"])
+	}
+	if env["REDIS_CHATWOOT_PASSWORD"] != "redis-secret" {
+		t.Fatalf("expected REDIS_CHATWOOT_PASSWORD to come from Redis instance config, got %q", env["REDIS_CHATWOOT_PASSWORD"])
+	}
+}
+
+func TestBuildServiceEnvVarsIncludesFoghornRedisPasswordInURL(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "dev",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"media-eu-1": {ExternalIP: "10.0.0.20", WireguardIP: "10.88.0.20", Roles: []string{"media"}},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Redis: &inventory.RedisConfig{
+				Enabled: true,
+				Instances: []inventory.RedisInstance{
+					{Name: "foghorn", Host: "media-eu-1", Port: 6380, Password: "${REDIS_FOGHORN_PASSWORD}"},
+				},
+			},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn": {Enabled: true, Host: "media-eu-1"},
+		},
+	}
+	task := &orchestrator.Task{
+		Name:      "foghorn",
+		Type:      "foghorn",
+		ServiceID: "foghorn",
+		Host:      "media-eu-1",
+		Phase:     orchestrator.PhaseApplications,
+	}
+
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", map[string]string{
+		"REDIS_FOGHORN_PASSWORD": "redis secret",
+	})
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+	if env["REDIS_URL"] != "redis://:redis+secret@127.0.0.1:6380" {
+		t.Fatalf("expected Foghorn REDIS_URL to include password, got %q", env["REDIS_URL"])
 	}
 }
 

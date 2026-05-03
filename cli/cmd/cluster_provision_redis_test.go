@@ -152,3 +152,65 @@ func TestBuildTaskConfig_RedisDefaultsBindToLoopbackAndMeshIP(t *testing.T) {
 		t.Fatalf("expected Redis to bind loopback and mesh IP by default, got %v", got)
 	}
 }
+
+func TestBuildTaskConfig_RedisPasswordFromSharedEnv(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Infrastructure: inventory.InfrastructureConfig{
+			Redis: &inventory.RedisConfig{
+				Enabled: true,
+				Instances: []inventory.RedisInstance{
+					{Name: "chatwoot", Host: "control-1", Password: "${REDIS_CHATWOOT_PASSWORD}"},
+				},
+			},
+		},
+	}
+
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Name:       "redis-chatwoot",
+		Type:       "redis",
+		ServiceID:  "redis",
+		InstanceID: "chatwoot",
+		Host:       "control-1",
+		Phase:      orchestrator.PhaseInfrastructure,
+	}, manifest, map[string]interface{}{}, false, "", map[string]string{
+		"REDIS_CHATWOOT_PASSWORD": "redis secret",
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig returned error: %v", err)
+	}
+
+	if got := cfg.Metadata["password"]; got != "redis secret" {
+		t.Fatalf("expected Redis role password from shared env, got %v", got)
+	}
+}
+
+func TestBuildTaskConfig_RedisPasswordFromSharedEnvFallback(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Infrastructure: inventory.InfrastructureConfig{
+			Redis: &inventory.RedisConfig{
+				Enabled: true,
+				Instances: []inventory.RedisInstance{
+					{Name: "chatwoot", Host: "control-1"},
+				},
+			},
+		},
+	}
+
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Name:       "redis-chatwoot",
+		Type:       "redis",
+		ServiceID:  "redis",
+		InstanceID: "chatwoot",
+		Host:       "control-1",
+		Phase:      orchestrator.PhaseInfrastructure,
+	}, manifest, map[string]interface{}{}, false, "", map[string]string{
+		"REDIS_CHATWOOT_PASSWORD": "redis secret",
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig returned error: %v", err)
+	}
+
+	if got := cfg.Metadata["password"]; got != "redis secret" {
+		t.Fatalf("expected Redis role password from shared env fallback, got %v", got)
+	}
+}

@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"net/url"
 
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
@@ -83,6 +84,9 @@ func firstNonEmptyEnv(env map[string]string, keys ...string) string {
 
 func chatwootRedisURL(config ServiceConfig) string {
 	if addr := config.EnvVars["REDIS_CHATWOOT_ADDR"]; addr != "" {
+		if password := config.EnvVars["REDIS_CHATWOOT_PASSWORD"]; password != "" {
+			return "redis://:" + url.QueryEscape(password) + "@" + rewriteLoopbackForDockerHost(addr)
+		}
 		return "redis://" + rewriteLoopbackForDockerHost(addr)
 	}
 	return "redis://host.docker.internal:6380"

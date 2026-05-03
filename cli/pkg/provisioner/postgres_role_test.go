@@ -45,6 +45,19 @@ func TestPostgresRoleAllowsDockerBridgeClients(t *testing.T) {
 	}
 }
 
+func TestRedisNamedInstanceDisablesProtectedModeWhenPasswordlessAndNonLoopback(t *testing.T) {
+	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/redis/templates/instance.conf.j2")
+	for _, want := range []string{
+		"redis_loopback_only",
+		"redis_password | length > 0",
+		"protected-mode {{ 'yes' if (redis_password | length > 0) or redis_loopback_only else 'no' }}",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("redis named instance template should manage protected mode for internal non-loopback binds; missing %q:\n%s", want, content)
+		}
+	}
+}
+
 func TestPostgresRoleCreatesRequestedDatabaseExtensions(t *testing.T) {
 	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/postgres/tasks/init.yml")
 	for _, want := range []string{

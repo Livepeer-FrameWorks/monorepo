@@ -442,6 +442,29 @@ func defaultGRPCPort(serviceID string) int {
 	return port
 }
 
+func redisURLWithOptionalPassword(addr string, password string) string {
+	if password == "" {
+		return fmt.Sprintf("redis://%s", addr)
+	}
+	return fmt.Sprintf("redis://:%s@%s", url.QueryEscape(password), addr)
+}
+
+func resolveSharedEnvPlaceholder(value string, sharedEnv map[string]string) (string, error) {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "${") || !strings.HasSuffix(value, "}") {
+		return value, nil
+	}
+	key := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}"))
+	if key == "" {
+		return "", fmt.Errorf("empty shared env placeholder %q", value)
+	}
+	resolved := strings.TrimSpace(sharedEnv[key])
+	if resolved == "" {
+		return "", fmt.Errorf("shared env placeholder %s is not set", key)
+	}
+	return resolved, nil
+}
+
 func adminDetail(exists bool, bootstrapEmail string) string {
 	if exists {
 		if bootstrapEmail != "" {
@@ -1967,7 +1990,13 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					config.Metadata["instance"] = inst.Name
 					config.Metadata["instance_name"] = inst.Name
 					if inst.Password != "" {
-						config.Metadata["password"] = inst.Password
+						password, err := resolveSharedEnvPlaceholder(inst.Password, sharedEnv)
+						if err != nil {
+							return config, fmt.Errorf("redis %s password: %w", inst.Name, err)
+						}
+						config.Metadata["password"] = password
+					} else if password := strings.TrimSpace(sharedEnv["REDIS_"+envNameToken(inst.Name)+"_PASSWORD"]); password != "" {
+						config.Metadata["password"] = password
 					}
 					for k, v := range inst.Config {
 						config.Metadata["redis_"+k] = v
@@ -3534,8 +3563,17 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 					}
 				}
 				// REDIS_{NAME}_ADDR for each named instance
-				key := fmt.Sprintf("REDIS_%s_ADDR", strings.ToUpper(inst.Name))
-				env[key] = fmt.Sprintf("%s:%d", rHost, port)
+				prefix := fmt.Sprintf("REDIS_%s", strings.ToUpper(inst.Name))
+				env[prefix+"_ADDR"] = fmt.Sprintf("%s:%d", rHost, port)
+				if inst.Password != "" {
+					password, err := resolveSharedEnvPlaceholder(inst.Password, sharedEnv)
+					if err != nil {
+						return nil, fmt.Errorf("redis %s password: %w", inst.Name, err)
+					}
+					env[prefix+"_PASSWORD"] = password
+				} else if password := strings.TrimSpace(sharedEnv[prefix+"_PASSWORD"]); password != "" {
+					env[prefix+"_PASSWORD"] = password
+				}
 			}
 		}
 	}
@@ -3563,7 +3601,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 		// Wire REDIS_URL from the foghorn Redis instance for HA state sync
 		if addr := env["REDIS_FOGHORN_ADDR"]; addr != "" {
-			env["REDIS_URL"] = fmt.Sprintf("redis://%s", addr)
+			env["REDIS_URL"] = redisURLWithOptionalPassword(addr, env["REDIS_FOGHORN_PASSWORD"])
 		}
 		// Instance ID for HA state sync — stable across restarts
 		if env["FOGHORN_INSTANCE_ID"] == "" {

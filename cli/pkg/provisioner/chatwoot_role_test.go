@@ -13,6 +13,7 @@ func TestChatwootEnvMapUsesNamedPostgresAndRedis(t *testing.T) {
 			"POSTGRES_CHATWOOT_PORT":     "5432",
 			"POSTGRES_CHATWOOT_PASSWORD": "chatwoot-secret",
 			"REDIS_CHATWOOT_ADDR":        "127.0.0.1:6380",
+			"REDIS_CHATWOOT_PASSWORD":    "redis secret",
 		},
 	})
 
@@ -28,5 +29,5 @@ func TestChatwootEnvMapUsesNamedPostgresAndRedis(t *testing.T) {
 	assertEnv("POSTGRES_DATABASE", "chatwoot")
 	assertEnv("POSTGRES_USERNAME", "chatwoot")
 	assertEnv("POSTGRES_PASSWORD", "chatwoot-secret")
-	assertEnv("REDIS_URL", "redis://host.docker.internal:6380")
+	assertEnv("REDIS_URL", "redis://:redis+secret@host.docker.internal:6380")
 }
