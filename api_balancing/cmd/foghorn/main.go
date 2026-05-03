@@ -458,6 +458,11 @@ func main() {
 	var s3ForJobs jobs.S3Client
 	var s3ForReconciler jobs.ReconcilerS3Client
 	var s3ForFederation *storage.S3Client
+	// localS3Backing captures the bucket/endpoint/region tuple this Foghorn
+	// pool is configured against. Used by federation ownership checks
+	// (PrepareArtifact redirect emit, MintStorageURLs callee validation)
+	// and by the storage resolver factory to decide local vs federated mint.
+	var localS3Backing storage.S3Backing
 	if s3Bucket := config.GetEnv("STORAGE_S3_BUCKET", ""); s3Bucket != "" {
 		s3Config := storage.S3Config{
 			Bucket:    s3Bucket,
@@ -466,6 +471,11 @@ func main() {
 			Endpoint:  config.GetEnv("STORAGE_S3_ENDPOINT", ""),
 			AccessKey: config.GetEnv("STORAGE_S3_ACCESS_KEY", ""),
 			SecretKey: config.GetEnv("STORAGE_S3_SECRET_KEY", ""),
+		}
+		localS3Backing = storage.S3Backing{
+			Bucket:   s3Config.Bucket,
+			Endpoint: s3Config.Endpoint,
+			Region:   s3Config.Region,
 		}
 		client, s3Err := storage.NewS3Client(s3Config, logger)
 		if s3Err != nil {
@@ -533,6 +543,58 @@ func main() {
 	var remoteEdgeCache *federation.RemoteEdgeCache
 	var fedClient *federation.FederationClient
 	var relayServer *foghorngrpc.RelayServer
+
+	// advertisedBackingForTenant resolves the S3 backing tuple Quartermaster
+	// has on record for (tenantID, clusterID) via cluster_peers metadata.
+	// Used by the federation server's ownership checks and by the storage
+	// resolver factory to decide local-mint vs federated-mint.
+	tenantRoutingCache := cache.New(cache.Options{
+		TTL:                  60 * time.Second,
+		StaleWhileRevalidate: 0,
+		NegativeTTL:          5 * time.Second,
+		MaxEntries:           10000,
+	}, cache.MetricsHooks{})
+	resolveTenantRouting := func(ctx context.Context, tenantID string) *pb.ClusterRoutingResponse {
+		if qmClient == nil || tenantID == "" {
+			return nil
+		}
+		v, ok, err := tenantRoutingCache.Get(ctx, "tenant:"+tenantID, func(loadCtx context.Context, _ string) (interface{}, bool, error) {
+			rctx, cancel := context.WithTimeout(loadCtx, 1*time.Second)
+			defer cancel()
+			resp, qErr := qmClient.GetClusterRouting(rctx, &pb.GetClusterRoutingRequest{TenantId: tenantID})
+			if qErr != nil {
+				return nil, false, qErr
+			}
+			return resp, true, nil
+		})
+		if err != nil || !ok {
+			return nil
+		}
+		routing, _ := v.(*pb.ClusterRoutingResponse)
+		return routing
+	}
+	advertisedBackingForTenant := func(ctx context.Context, tenantID, clusterID string) (federation.S3Backing, bool) {
+		routing := resolveTenantRouting(ctx, tenantID)
+		if routing == nil {
+			return federation.S3Backing{}, false
+		}
+		for _, peer := range routing.GetClusterPeers() {
+			if peer.GetClusterId() != clusterID {
+				continue
+			}
+			bucket := peer.GetS3Bucket()
+			if bucket == "" {
+				return federation.S3Backing{}, false
+			}
+			return federation.S3Backing{
+				Bucket:   bucket,
+				Endpoint: peer.GetS3Endpoint(),
+				Region:   peer.GetS3Region(),
+			}, true
+		}
+		return federation.S3Backing{}, false
+	}
+
 	if federationEnabled && redisClient != nil && qmClient != nil && bootstrapOwnerTenantID != "" {
 		remoteEdgeCache = federation.NewRemoteEdgeCache(redisClient, foghornCfg.ClusterID, logger)
 
@@ -543,6 +605,13 @@ func main() {
 			Cache:     remoteEdgeCache,
 			DB:        db,
 			S3Client:  s3ForFederation,
+			LocalS3Backing: federation.S3Backing{
+				Bucket:   localS3Backing.Bucket,
+				Endpoint: localS3Backing.Endpoint,
+				Region:   localS3Backing.Region,
+			},
+			AdvertisedBacking: advertisedBackingForTenant,
+			IsServedCluster:   control.IsServedCluster,
 		})
 
 		fedPool := foghornpool.NewPool(foghornpool.PoolConfig{
@@ -630,6 +699,29 @@ func main() {
 
 	// Create Foghorn control plane gRPC server (for Commodore: clips, DVR, viewer resolution, VOD uploads)
 	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, geoipCache, decklogClient, s3ForGRPC, purserClient)
+	if qmClient != nil {
+		foghornServer.SetQuartermasterClient(qmClient)
+	}
+	// Storage resolver factory: builds a per-request storage.ClusterResolver
+	// using the local Foghorn S3 backing tuple and the tenant's advertised
+	// cluster_peers backings. Used by CreateVodUpload (and later by freeze
+	// + thumbnail upload paths) to pick local-mint vs federated-mint.
+	foghornServer.SetStorageResolverFactory(func(ctx context.Context, tenantID string) *storage.ClusterResolver {
+		return &storage.ClusterResolver{
+			LocalClusterID:       foghornCfg.ClusterID,
+			LocalClusterServed:   control.IsServedCluster,
+			LocalS3Backing:       localS3Backing,
+			LocalS3ClientPresent: s3ForGRPC != nil,
+			AdvertisedBacking: func(clusterID string) (storage.S3Backing, bool) {
+				b, ok := advertisedBackingForTenant(ctx, tenantID, clusterID)
+				if !ok {
+					return storage.S3Backing{}, false
+				}
+				return storage.S3Backing{Bucket: b.Bucket, Endpoint: b.Endpoint, Region: b.Region}, true
+			},
+			Logger: logger,
+		}
+	})
 	control.SetDecklogClient(decklogClient)
 	control.SetDVRStopRegistry(foghornServer)
 

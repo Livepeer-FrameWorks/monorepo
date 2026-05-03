@@ -41,6 +41,16 @@ service FoghornFederation {
   // Used as a safety net when a command arrives at the wrong cluster (stale cache, race).
   // The receiving cluster tries to handle it locally and reports whether it succeeded.
   rpc ForwardArtifactCommand(ForwardArtifactCommandRequest) returns (ForwardArtifactCommandResponse);
+
+  // MintStorageURLs issues presigned PUT URLs against the storage cluster's
+  // S3 backing for cross-cluster upload delegation. The caller is the Foghorn
+  // pool that received the upload request from Helmsman; the callee is the
+  // Foghorn pool that owns the named target_cluster_id's S3. Single-PUT
+  // covers thumbnails, clips, and DVR incremental segments/manifests;
+  // DVR-set covers the initial DVR freeze. VOD multipart is intentionally
+  // unsupported here — it requires a co-shipped Complete/Abort lifecycle
+  // shipping in a follow-up PR.
+  rpc MintStorageURLs(MintStorageURLsRequest) returns (MintStorageURLsResponse);
 }
 
 message QueryStreamRequest {
@@ -107,6 +117,12 @@ message PrepareArtifactResponse {
   string format = 7;            // Container format (mp4, m3u8, etc.)
   string internal_name = 8;     // Artifact routing name (vod+{this})
   string stream_internal_name = 9; // Source stream routing name (for S3 key construction)
+
+  // redirect_cluster_id, when set, instructs the requesting cluster to
+  // re-issue PrepareArtifact against this cluster's federation peer. The
+  // other fields on this response are ignored when redirect_cluster_id is
+  // set. Single hop only — chained redirects fail closed at the consumer.
+  string redirect_cluster_id = 10;
 }
 
 message RemoteClipRequest {
@@ -358,4 +374,80 @@ message ForwardArtifactCommandRequest {
 message ForwardArtifactCommandResponse {
   bool handled = 1;          // True if this cluster owned the artifact and processed the command
   string error = 2;          // Error message if handled=false
+}
+
+// MintStorageURLsRequest asks the storage-cluster Foghorn to issue presigned
+// PUT URLs for an upload that the requesting Foghorn cannot mint locally.
+message MintStorageURLsRequest {
+  string tenant_id          = 1;
+  string requesting_cluster = 2;
+
+  // target_cluster_id names the storage cluster the caller resolved as the
+  // owner of this artifact's bytes. The callee validates that this Foghorn
+  // pool serves target_cluster_id AND the local S3 client's full backing
+  // tuple (bucket + endpoint + region) matches the cluster's advertised
+  // backing per Quartermaster. Mismatch → reason="storage_not_owned_here".
+  // This is the authoritative ownership check; requesting_cluster alone
+  // cannot validate ownership for live thumbnails (no DB row to cross-
+  // check against).
+  string target_cluster_id = 3;
+
+  // artifact_type is one of "thumbnail", "clip", "dvr", "dvr_segment",
+  // "dvr_manifest". "vod" is intentionally rejected here so callers either
+  // local-mint or surface storage_delegation_unsupported_for_vod.
+  string artifact_type = 4;
+
+  // artifact_key uniquely identifies the asset:
+  //   thumbnail (live):       "<streamID>/<filename>"
+  //   thumbnail (vod/clip):   "<artifact_hash>/<filename>"
+  //   clip:                   hash
+  //   dvr:                    hash (per-segment paths come from segment_filenames)
+  //   dvr_segment, dvr_manifest:
+  //                           "<parent_dvr_hash>/<filename>" (single PUT
+  //                           against the parent DVR's S3 prefix)
+  string artifact_key = 5;
+
+  enum Operation {
+    OPERATION_UNSPECIFIED = 0;
+    OPERATION_PUT_SINGLE  = 1; // thumbnail / clip / dvr_segment / dvr_manifest
+    OPERATION_PUT_DVR_SET = 2; // dvr (initial freeze): one presigned PUT per filename
+  }
+  Operation op = 6;
+
+  // Required for OPERATION_PUT_DVR_SET (relative segment filenames). Empty
+  // for OPERATION_PUT_SINGLE.
+  repeated string segment_filenames = 7;
+
+  // Optional sanity cap; storage-cluster Foghorn may reject above tier
+  // quotas. Zero means "no hint".
+  uint64 expected_bytes = 8;
+
+  // Used for OPERATION_PUT_SINGLE. Defaults to "application/octet-stream"
+  // if empty.
+  string content_type = 9;
+
+  // For live thumbnails: the stream's bare internal name, used by the
+  // storage-cluster Foghorn to verify tenant ownership against
+  // state.DefaultManager().GetStreamState(...). Empty for vod/clip/dvr/
+  // dvr_segment/dvr_manifest paths, which look up tenant via
+  // foghorn.artifacts WHERE artifact_hash = ... .
+  string stream_internal_name = 10;
+}
+
+message MintStorageURLsResponse {
+  bool   accepted          = 1;
+  // Populated when accepted = false. One of: tenant_mismatch,
+  // storage_not_owned_here, unsupported_artifact_type,
+  // unsupported_operation, s3_error, quota_exceeded.
+  string reason            = 2;
+
+  // OPERATION_PUT_SINGLE result. Empty for DVR set.
+  string s3_key            = 3;
+  string presigned_put_url = 4;
+
+  // OPERATION_PUT_DVR_SET result: filename -> presigned PUT URL. Empty for
+  // single. Map key is the same string passed in segment_filenames.
+  map<string, string> segment_urls = 5;
+
+  uint32 url_expiry_seconds = 6;
 }

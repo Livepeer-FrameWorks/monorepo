@@ -83,6 +83,21 @@ func (c *FederationClient) PrepareArtifact(ctx context.Context, clusterID, addr 
 	return client.Federation().PrepareArtifact(ctx, req)
 }
 
+// MintStorageURLs asks the storage-cluster Foghorn pool to issue presigned
+// PUT URLs against its S3 backing for an upload that this cluster cannot
+// mint locally.
+func (c *FederationClient) MintStorageURLs(ctx context.Context, clusterID, addr string, req *pb.MintStorageURLsRequest) (*pb.MintStorageURLsResponse, error) {
+	client, err := c.pool.GetOrCreate(clusterID, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
+	defer cancel()
+
+	return client.Federation().MintStorageURLs(ctx, req)
+}
+
 // CreateRemoteClip requests the origin cluster to create a clip on behalf of this cluster.
 func (c *FederationClient) CreateRemoteClip(ctx context.Context, clusterID, addr string, req *pb.RemoteClipRequest) (*pb.RemoteClipResponse, error) {
 	client, err := c.pool.GetOrCreate(clusterID, addr)

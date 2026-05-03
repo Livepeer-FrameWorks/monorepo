@@ -1026,6 +1026,40 @@ func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, arti
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare artifact from origin cluster: %w", err)
 	}
+
+	// Single-hop redirect: when the origin cluster reports the bytes live on
+	// a different storage cluster, re-issue PrepareArtifact against that
+	// cluster. Chained redirects fail closed — a redirected response that
+	// itself carries redirect_cluster_id is rejected to avoid loops.
+	if redirect := strings.TrimSpace(resp.GetRedirectClusterId()); redirect != "" {
+		if redirect == originClusterID || redirect == deps.LocalClusterID {
+			return nil, fmt.Errorf("storage redirect loop: origin %s -> %s", originClusterID, redirect)
+		}
+		if !isAuthorizedPeerCluster(redirect, clusterPeers) {
+			return nil, fmt.Errorf("storage redirect cluster %s is not authorized for tenant", redirect)
+		}
+		redirectAddr := deps.PeerResolver.GetPeerAddr(redirect)
+		if redirectAddr == "" {
+			return nil, fmt.Errorf("storage redirect cluster %s address unknown", redirect)
+		}
+		resp, err = deps.FedClient.PrepareArtifact(ctx, redirect, redirectAddr, &pb.PrepareArtifactRequest{
+			ArtifactId:        artifactHash,
+			RequestingCluster: deps.LocalClusterID,
+			ArtifactType:      contentType,
+			TenantId:          tenantID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to prepare artifact from storage cluster %s: %w", redirect, err)
+		}
+		if chained := strings.TrimSpace(resp.GetRedirectClusterId()); chained != "" {
+			return nil, fmt.Errorf("chained storage redirect rejected: %s -> %s -> %s", originClusterID, redirect, chained)
+		}
+		// Successful redirect: storage cluster IS the artifact's origin for
+		// the purposes of the local adoption record below, since that's
+		// where the bytes actually live.
+		originClusterID = redirect
+	}
+
 	if resp.GetError() != "" {
 		return nil, fmt.Errorf("origin cluster error: %s", resp.GetError())
 	}

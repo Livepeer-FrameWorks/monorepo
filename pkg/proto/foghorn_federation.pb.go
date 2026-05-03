@@ -21,6 +21,55 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type MintStorageURLsRequest_Operation int32
+
+const (
+	MintStorageURLsRequest_OPERATION_UNSPECIFIED MintStorageURLsRequest_Operation = 0
+	MintStorageURLsRequest_OPERATION_PUT_SINGLE  MintStorageURLsRequest_Operation = 1 // thumbnail / clip / dvr_segment / dvr_manifest
+	MintStorageURLsRequest_OPERATION_PUT_DVR_SET MintStorageURLsRequest_Operation = 2 // dvr (initial freeze): one presigned PUT per filename
+)
+
+// Enum value maps for MintStorageURLsRequest_Operation.
+var (
+	MintStorageURLsRequest_Operation_name = map[int32]string{
+		0: "OPERATION_UNSPECIFIED",
+		1: "OPERATION_PUT_SINGLE",
+		2: "OPERATION_PUT_DVR_SET",
+	}
+	MintStorageURLsRequest_Operation_value = map[string]int32{
+		"OPERATION_UNSPECIFIED": 0,
+		"OPERATION_PUT_SINGLE":  1,
+		"OPERATION_PUT_DVR_SET": 2,
+	}
+)
+
+func (x MintStorageURLsRequest_Operation) Enum() *MintStorageURLsRequest_Operation {
+	p := new(MintStorageURLsRequest_Operation)
+	*p = x
+	return p
+}
+
+func (x MintStorageURLsRequest_Operation) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (MintStorageURLsRequest_Operation) Descriptor() protoreflect.EnumDescriptor {
+	return file_foghorn_federation_proto_enumTypes[0].Descriptor()
+}
+
+func (MintStorageURLsRequest_Operation) Type() protoreflect.EnumType {
+	return &file_foghorn_federation_proto_enumTypes[0]
+}
+
+func (x MintStorageURLsRequest_Operation) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use MintStorageURLsRequest_Operation.Descriptor instead.
+func (MintStorageURLsRequest_Operation) EnumDescriptor() ([]byte, []int) {
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{30, 0}
+}
+
 type QueryStreamRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	StreamName        string                 `protobuf:"bytes,1,opt,name=stream_name,json=streamName,proto3" json:"stream_name,omitempty"`                         // Internal stream name to look up
@@ -536,8 +585,13 @@ type PrepareArtifactResponse struct {
 	Format             string                 `protobuf:"bytes,7,opt,name=format,proto3" json:"format,omitempty"`                                                                                                        // Container format (mp4, m3u8, etc.)
 	InternalName       string                 `protobuf:"bytes,8,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                                                                        // Artifact routing name (vod+{this})
 	StreamInternalName string                 `protobuf:"bytes,9,opt,name=stream_internal_name,json=streamInternalName,proto3" json:"stream_internal_name,omitempty"`                                                    // Source stream routing name (for S3 key construction)
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// redirect_cluster_id, when set, instructs the requesting cluster to
+	// re-issue PrepareArtifact against this cluster's federation peer. The
+	// other fields on this response are ignored when redirect_cluster_id is
+	// set. Single hop only — chained redirects fail closed at the consumer.
+	RedirectClusterId string `protobuf:"bytes,10,opt,name=redirect_cluster_id,json=redirectClusterId,proto3" json:"redirect_cluster_id,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *PrepareArtifactResponse) Reset() {
@@ -629,6 +683,13 @@ func (x *PrepareArtifactResponse) GetInternalName() string {
 func (x *PrepareArtifactResponse) GetStreamInternalName() string {
 	if x != nil {
 		return x.StreamInternalName
+	}
+	return ""
+}
+
+func (x *PrepareArtifactResponse) GetRedirectClusterId() string {
+	if x != nil {
+		return x.RedirectClusterId
 	}
 	return ""
 }
@@ -2698,6 +2759,245 @@ func (x *ForwardArtifactCommandResponse) GetError() string {
 	return ""
 }
 
+// MintStorageURLsRequest asks the storage-cluster Foghorn to issue presigned
+// PUT URLs for an upload that the requesting Foghorn cannot mint locally.
+type MintStorageURLsRequest struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	TenantId          string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	RequestingCluster string                 `protobuf:"bytes,2,opt,name=requesting_cluster,json=requestingCluster,proto3" json:"requesting_cluster,omitempty"`
+	// target_cluster_id names the storage cluster the caller resolved as the
+	// owner of this artifact's bytes. The callee validates that this Foghorn
+	// pool serves target_cluster_id AND the local S3 client's full backing
+	// tuple (bucket + endpoint + region) matches the cluster's advertised
+	// backing per Quartermaster. Mismatch → reason="storage_not_owned_here".
+	// This is the authoritative ownership check; requesting_cluster alone
+	// cannot validate ownership for live thumbnails (no DB row to cross-
+	// check against).
+	TargetClusterId string `protobuf:"bytes,3,opt,name=target_cluster_id,json=targetClusterId,proto3" json:"target_cluster_id,omitempty"`
+	// artifact_type is one of "thumbnail", "clip", "dvr", "dvr_segment",
+	// "dvr_manifest". "vod" is intentionally rejected here so callers either
+	// local-mint or surface storage_delegation_unsupported_for_vod.
+	ArtifactType string `protobuf:"bytes,4,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"`
+	// artifact_key uniquely identifies the asset:
+	//
+	//	thumbnail (live):       "<streamID>/<filename>"
+	//	thumbnail (vod/clip):   "<artifact_hash>/<filename>"
+	//	clip:                   hash
+	//	dvr:                    hash (per-segment paths come from segment_filenames)
+	//	dvr_segment, dvr_manifest:
+	//	                        "<parent_dvr_hash>/<filename>" (single PUT
+	//	                        against the parent DVR's S3 prefix)
+	ArtifactKey string                           `protobuf:"bytes,5,opt,name=artifact_key,json=artifactKey,proto3" json:"artifact_key,omitempty"`
+	Op          MintStorageURLsRequest_Operation `protobuf:"varint,6,opt,name=op,proto3,enum=foghorn_federation.MintStorageURLsRequest_Operation" json:"op,omitempty"`
+	// Required for OPERATION_PUT_DVR_SET (relative segment filenames). Empty
+	// for OPERATION_PUT_SINGLE.
+	SegmentFilenames []string `protobuf:"bytes,7,rep,name=segment_filenames,json=segmentFilenames,proto3" json:"segment_filenames,omitempty"`
+	// Optional sanity cap; storage-cluster Foghorn may reject above tier
+	// quotas. Zero means "no hint".
+	ExpectedBytes uint64 `protobuf:"varint,8,opt,name=expected_bytes,json=expectedBytes,proto3" json:"expected_bytes,omitempty"`
+	// Used for OPERATION_PUT_SINGLE. Defaults to "application/octet-stream"
+	// if empty.
+	ContentType string `protobuf:"bytes,9,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	// For live thumbnails: the stream's bare internal name, used by the
+	// storage-cluster Foghorn to verify tenant ownership against
+	// state.DefaultManager().GetStreamState(...). Empty for vod/clip/dvr/
+	// dvr_segment/dvr_manifest paths, which look up tenant via
+	// foghorn.artifacts WHERE artifact_hash = ... .
+	StreamInternalName string `protobuf:"bytes,10,opt,name=stream_internal_name,json=streamInternalName,proto3" json:"stream_internal_name,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *MintStorageURLsRequest) Reset() {
+	*x = MintStorageURLsRequest{}
+	mi := &file_foghorn_federation_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MintStorageURLsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MintStorageURLsRequest) ProtoMessage() {}
+
+func (x *MintStorageURLsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_federation_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MintStorageURLsRequest.ProtoReflect.Descriptor instead.
+func (*MintStorageURLsRequest) Descriptor() ([]byte, []int) {
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *MintStorageURLsRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *MintStorageURLsRequest) GetRequestingCluster() string {
+	if x != nil {
+		return x.RequestingCluster
+	}
+	return ""
+}
+
+func (x *MintStorageURLsRequest) GetTargetClusterId() string {
+	if x != nil {
+		return x.TargetClusterId
+	}
+	return ""
+}
+
+func (x *MintStorageURLsRequest) GetArtifactType() string {
+	if x != nil {
+		return x.ArtifactType
+	}
+	return ""
+}
+
+func (x *MintStorageURLsRequest) GetArtifactKey() string {
+	if x != nil {
+		return x.ArtifactKey
+	}
+	return ""
+}
+
+func (x *MintStorageURLsRequest) GetOp() MintStorageURLsRequest_Operation {
+	if x != nil {
+		return x.Op
+	}
+	return MintStorageURLsRequest_OPERATION_UNSPECIFIED
+}
+
+func (x *MintStorageURLsRequest) GetSegmentFilenames() []string {
+	if x != nil {
+		return x.SegmentFilenames
+	}
+	return nil
+}
+
+func (x *MintStorageURLsRequest) GetExpectedBytes() uint64 {
+	if x != nil {
+		return x.ExpectedBytes
+	}
+	return 0
+}
+
+func (x *MintStorageURLsRequest) GetContentType() string {
+	if x != nil {
+		return x.ContentType
+	}
+	return ""
+}
+
+func (x *MintStorageURLsRequest) GetStreamInternalName() string {
+	if x != nil {
+		return x.StreamInternalName
+	}
+	return ""
+}
+
+type MintStorageURLsResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Accepted bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	// Populated when accepted = false. One of: tenant_mismatch,
+	// storage_not_owned_here, unsupported_artifact_type,
+	// unsupported_operation, s3_error, quota_exceeded.
+	Reason string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	// OPERATION_PUT_SINGLE result. Empty for DVR set.
+	S3Key           string `protobuf:"bytes,3,opt,name=s3_key,json=s3Key,proto3" json:"s3_key,omitempty"`
+	PresignedPutUrl string `protobuf:"bytes,4,opt,name=presigned_put_url,json=presignedPutUrl,proto3" json:"presigned_put_url,omitempty"`
+	// OPERATION_PUT_DVR_SET result: filename -> presigned PUT URL. Empty for
+	// single. Map key is the same string passed in segment_filenames.
+	SegmentUrls      map[string]string `protobuf:"bytes,5,rep,name=segment_urls,json=segmentUrls,proto3" json:"segment_urls,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	UrlExpirySeconds uint32            `protobuf:"varint,6,opt,name=url_expiry_seconds,json=urlExpirySeconds,proto3" json:"url_expiry_seconds,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *MintStorageURLsResponse) Reset() {
+	*x = MintStorageURLsResponse{}
+	mi := &file_foghorn_federation_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MintStorageURLsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MintStorageURLsResponse) ProtoMessage() {}
+
+func (x *MintStorageURLsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_federation_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MintStorageURLsResponse.ProtoReflect.Descriptor instead.
+func (*MintStorageURLsResponse) Descriptor() ([]byte, []int) {
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *MintStorageURLsResponse) GetAccepted() bool {
+	if x != nil {
+		return x.Accepted
+	}
+	return false
+}
+
+func (x *MintStorageURLsResponse) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *MintStorageURLsResponse) GetS3Key() string {
+	if x != nil {
+		return x.S3Key
+	}
+	return ""
+}
+
+func (x *MintStorageURLsResponse) GetPresignedPutUrl() string {
+	if x != nil {
+		return x.PresignedPutUrl
+	}
+	return ""
+}
+
+func (x *MintStorageURLsResponse) GetSegmentUrls() map[string]string {
+	if x != nil {
+		return x.SegmentUrls
+	}
+	return nil
+}
+
+func (x *MintStorageURLsResponse) GetUrlExpirySeconds() uint32 {
+	if x != nil {
+		return x.UrlExpirySeconds
+	}
+	return 0
+}
+
 var File_foghorn_federation_proto protoreflect.FileDescriptor
 
 const file_foghorn_federation_proto_rawDesc = "" +
@@ -2755,7 +3055,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\tclip_hash\x18\x02 \x01(\tR\bclipHash\x12-\n" +
 	"\x12requesting_cluster\x18\x03 \x01(\tR\x11requestingCluster\x12#\n" +
 	"\rartifact_type\x18\x04 \x01(\tR\fartifactType\x12\x1b\n" +
-	"\ttenant_id\x18\x05 \x01(\tR\btenantId\"\xb2\x03\n" +
+	"\ttenant_id\x18\x05 \x01(\tR\btenantId\"\xe2\x03\n" +
 	"\x17PrepareArtifactResponse\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x1d\n" +
 	"\n" +
@@ -2766,7 +3066,9 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\fsegment_urls\x18\x06 \x03(\v2<.foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntryR\vsegmentUrls\x12\x16\n" +
 	"\x06format\x18\a \x01(\tR\x06format\x12#\n" +
 	"\rinternal_name\x18\b \x01(\tR\finternalName\x120\n" +
-	"\x14stream_internal_name\x18\t \x01(\tR\x12streamInternalName\x1a>\n" +
+	"\x14stream_internal_name\x18\t \x01(\tR\x12streamInternalName\x12.\n" +
+	"\x13redirect_cluster_id\x18\n" +
+	" \x01(\tR\x11redirectClusterId\x1a>\n" +
 	"\x10SegmentUrlsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb8\x03\n" +
@@ -2960,7 +3262,33 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\tstream_id\x18\x04 \x01(\tR\bstreamId\"P\n" +
 	"\x1eForwardArtifactCommandResponse\x12\x18\n" +
 	"\ahandled\x18\x01 \x01(\bR\ahandled\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error2\xd8\a\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\xa4\x04\n" +
+	"\x16MintStorageURLsRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12-\n" +
+	"\x12requesting_cluster\x18\x02 \x01(\tR\x11requestingCluster\x12*\n" +
+	"\x11target_cluster_id\x18\x03 \x01(\tR\x0ftargetClusterId\x12#\n" +
+	"\rartifact_type\x18\x04 \x01(\tR\fartifactType\x12!\n" +
+	"\fartifact_key\x18\x05 \x01(\tR\vartifactKey\x12D\n" +
+	"\x02op\x18\x06 \x01(\x0e24.foghorn_federation.MintStorageURLsRequest.OperationR\x02op\x12+\n" +
+	"\x11segment_filenames\x18\a \x03(\tR\x10segmentFilenames\x12%\n" +
+	"\x0eexpected_bytes\x18\b \x01(\x04R\rexpectedBytes\x12!\n" +
+	"\fcontent_type\x18\t \x01(\tR\vcontentType\x120\n" +
+	"\x14stream_internal_name\x18\n" +
+	" \x01(\tR\x12streamInternalName\"[\n" +
+	"\tOperation\x12\x19\n" +
+	"\x15OPERATION_UNSPECIFIED\x10\x00\x12\x18\n" +
+	"\x14OPERATION_PUT_SINGLE\x10\x01\x12\x19\n" +
+	"\x15OPERATION_PUT_DVR_SET\x10\x02\"\xdf\x02\n" +
+	"\x17MintStorageURLsResponse\x12\x1a\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x15\n" +
+	"\x06s3_key\x18\x03 \x01(\tR\x05s3Key\x12*\n" +
+	"\x11presigned_put_url\x18\x04 \x01(\tR\x0fpresignedPutUrl\x12_\n" +
+	"\fsegment_urls\x18\x05 \x03(\v2<.foghorn_federation.MintStorageURLsResponse.SegmentUrlsEntryR\vsegmentUrls\x12,\n" +
+	"\x12url_expiry_seconds\x18\x06 \x01(\rR\x10urlExpirySeconds\x1a>\n" +
+	"\x10SegmentUrlsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x012\xc4\b\n" +
 	"\x11FoghornFederation\x12^\n" +
 	"\vQueryStream\x12&.foghorn_federation.QueryStreamRequest\x1a'.foghorn_federation.QueryStreamResponse\x12a\n" +
 	"\x10NotifyOriginPull\x12*.foghorn_federation.OriginPullNotification\x1a!.foghorn_federation.OriginPullAck\x12j\n" +
@@ -2970,7 +3298,8 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\vPeerChannel\x12\x1f.foghorn_federation.PeerMessage\x1a\x1f.foghorn_federation.PeerMessage(\x010\x01\x12v\n" +
 	"\x13ListTenantArtifacts\x12..foghorn_federation.ListTenantArtifactsRequest\x1a/.foghorn_federation.ListTenantArtifactsResponse\x12\x82\x01\n" +
 	"\x17MigrateArtifactMetadata\x122.foghorn_federation.MigrateArtifactMetadataRequest\x1a3.foghorn_federation.MigrateArtifactMetadataResponse\x12\x7f\n" +
-	"\x16ForwardArtifactCommand\x121.foghorn_federation.ForwardArtifactCommandRequest\x1a2.foghorn_federation.ForwardArtifactCommandResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x16ForwardArtifactCommand\x121.foghorn_federation.ForwardArtifactCommandRequest\x1a2.foghorn_federation.ForwardArtifactCommandResponse\x12j\n" +
+	"\x0fMintStorageURLs\x12*.foghorn_federation.MintStorageURLsRequest\x1a+.foghorn_federation.MintStorageURLsResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
 
 var (
 	file_foghorn_federation_proto_rawDescOnce sync.Once
@@ -2984,78 +3313,87 @@ func file_foghorn_federation_proto_rawDescGZIP() []byte {
 	return file_foghorn_federation_proto_rawDescData
 }
 
-var file_foghorn_federation_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
+var file_foghorn_federation_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_foghorn_federation_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
 var file_foghorn_federation_proto_goTypes = []any{
-	(*QueryStreamRequest)(nil),              // 0: foghorn_federation.QueryStreamRequest
-	(*QueryStreamResponse)(nil),             // 1: foghorn_federation.QueryStreamResponse
-	(*EdgeCandidate)(nil),                   // 2: foghorn_federation.EdgeCandidate
-	(*OriginPullNotification)(nil),          // 3: foghorn_federation.OriginPullNotification
-	(*OriginPullAck)(nil),                   // 4: foghorn_federation.OriginPullAck
-	(*PrepareArtifactRequest)(nil),          // 5: foghorn_federation.PrepareArtifactRequest
-	(*PrepareArtifactResponse)(nil),         // 6: foghorn_federation.PrepareArtifactResponse
-	(*RemoteClipRequest)(nil),               // 7: foghorn_federation.RemoteClipRequest
-	(*RemoteClipResponse)(nil),              // 8: foghorn_federation.RemoteClipResponse
-	(*RemoteDVRRequest)(nil),                // 9: foghorn_federation.RemoteDVRRequest
-	(*RemoteDVRResponse)(nil),               // 10: foghorn_federation.RemoteDVRResponse
-	(*PeerMessage)(nil),                     // 11: foghorn_federation.PeerMessage
-	(*StreamLifecycleEvent)(nil),            // 12: foghorn_federation.StreamLifecycleEvent
-	(*EdgeTelemetry)(nil),                   // 13: foghorn_federation.EdgeTelemetry
-	(*ReplicationEvent)(nil),                // 14: foghorn_federation.ReplicationEvent
-	(*ClusterEdgeSummary)(nil),              // 15: foghorn_federation.ClusterEdgeSummary
-	(*EdgeSnapshot)(nil),                    // 16: foghorn_federation.EdgeSnapshot
-	(*ArtifactAdvertisement)(nil),           // 17: foghorn_federation.ArtifactAdvertisement
-	(*ArtifactLocation)(nil),                // 18: foghorn_federation.ArtifactLocation
-	(*StreamAdvertisement)(nil),             // 19: foghorn_federation.StreamAdvertisement
-	(*PeerStreamEdge)(nil),                  // 20: foghorn_federation.PeerStreamEdge
-	(*PeerHeartbeat)(nil),                   // 21: foghorn_federation.PeerHeartbeat
-	(*CapacitySummary)(nil),                 // 22: foghorn_federation.CapacitySummary
-	(*ListTenantArtifactsRequest)(nil),      // 23: foghorn_federation.ListTenantArtifactsRequest
-	(*ListTenantArtifactsResponse)(nil),     // 24: foghorn_federation.ListTenantArtifactsResponse
-	(*ArtifactMetadata)(nil),                // 25: foghorn_federation.ArtifactMetadata
-	(*MigrateArtifactMetadataRequest)(nil),  // 26: foghorn_federation.MigrateArtifactMetadataRequest
-	(*MigrateArtifactMetadataResponse)(nil), // 27: foghorn_federation.MigrateArtifactMetadataResponse
-	(*ForwardArtifactCommandRequest)(nil),   // 28: foghorn_federation.ForwardArtifactCommandRequest
-	(*ForwardArtifactCommandResponse)(nil),  // 29: foghorn_federation.ForwardArtifactCommandResponse
-	nil,                                     // 30: foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
+	(MintStorageURLsRequest_Operation)(0),   // 0: foghorn_federation.MintStorageURLsRequest.Operation
+	(*QueryStreamRequest)(nil),              // 1: foghorn_federation.QueryStreamRequest
+	(*QueryStreamResponse)(nil),             // 2: foghorn_federation.QueryStreamResponse
+	(*EdgeCandidate)(nil),                   // 3: foghorn_federation.EdgeCandidate
+	(*OriginPullNotification)(nil),          // 4: foghorn_federation.OriginPullNotification
+	(*OriginPullAck)(nil),                   // 5: foghorn_federation.OriginPullAck
+	(*PrepareArtifactRequest)(nil),          // 6: foghorn_federation.PrepareArtifactRequest
+	(*PrepareArtifactResponse)(nil),         // 7: foghorn_federation.PrepareArtifactResponse
+	(*RemoteClipRequest)(nil),               // 8: foghorn_federation.RemoteClipRequest
+	(*RemoteClipResponse)(nil),              // 9: foghorn_federation.RemoteClipResponse
+	(*RemoteDVRRequest)(nil),                // 10: foghorn_federation.RemoteDVRRequest
+	(*RemoteDVRResponse)(nil),               // 11: foghorn_federation.RemoteDVRResponse
+	(*PeerMessage)(nil),                     // 12: foghorn_federation.PeerMessage
+	(*StreamLifecycleEvent)(nil),            // 13: foghorn_federation.StreamLifecycleEvent
+	(*EdgeTelemetry)(nil),                   // 14: foghorn_federation.EdgeTelemetry
+	(*ReplicationEvent)(nil),                // 15: foghorn_federation.ReplicationEvent
+	(*ClusterEdgeSummary)(nil),              // 16: foghorn_federation.ClusterEdgeSummary
+	(*EdgeSnapshot)(nil),                    // 17: foghorn_federation.EdgeSnapshot
+	(*ArtifactAdvertisement)(nil),           // 18: foghorn_federation.ArtifactAdvertisement
+	(*ArtifactLocation)(nil),                // 19: foghorn_federation.ArtifactLocation
+	(*StreamAdvertisement)(nil),             // 20: foghorn_federation.StreamAdvertisement
+	(*PeerStreamEdge)(nil),                  // 21: foghorn_federation.PeerStreamEdge
+	(*PeerHeartbeat)(nil),                   // 22: foghorn_federation.PeerHeartbeat
+	(*CapacitySummary)(nil),                 // 23: foghorn_federation.CapacitySummary
+	(*ListTenantArtifactsRequest)(nil),      // 24: foghorn_federation.ListTenantArtifactsRequest
+	(*ListTenantArtifactsResponse)(nil),     // 25: foghorn_federation.ListTenantArtifactsResponse
+	(*ArtifactMetadata)(nil),                // 26: foghorn_federation.ArtifactMetadata
+	(*MigrateArtifactMetadataRequest)(nil),  // 27: foghorn_federation.MigrateArtifactMetadataRequest
+	(*MigrateArtifactMetadataResponse)(nil), // 28: foghorn_federation.MigrateArtifactMetadataResponse
+	(*ForwardArtifactCommandRequest)(nil),   // 29: foghorn_federation.ForwardArtifactCommandRequest
+	(*ForwardArtifactCommandResponse)(nil),  // 30: foghorn_federation.ForwardArtifactCommandResponse
+	(*MintStorageURLsRequest)(nil),          // 31: foghorn_federation.MintStorageURLsRequest
+	(*MintStorageURLsResponse)(nil),         // 32: foghorn_federation.MintStorageURLsResponse
+	nil,                                     // 33: foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
+	nil,                                     // 34: foghorn_federation.MintStorageURLsResponse.SegmentUrlsEntry
 }
 var file_foghorn_federation_proto_depIdxs = []int32{
-	2,  // 0: foghorn_federation.QueryStreamResponse.candidates:type_name -> foghorn_federation.EdgeCandidate
-	30, // 1: foghorn_federation.PrepareArtifactResponse.segment_urls:type_name -> foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
-	13, // 2: foghorn_federation.PeerMessage.edge_telemetry:type_name -> foghorn_federation.EdgeTelemetry
-	14, // 3: foghorn_federation.PeerMessage.replication_event:type_name -> foghorn_federation.ReplicationEvent
-	15, // 4: foghorn_federation.PeerMessage.cluster_summary:type_name -> foghorn_federation.ClusterEdgeSummary
-	12, // 5: foghorn_federation.PeerMessage.stream_lifecycle:type_name -> foghorn_federation.StreamLifecycleEvent
-	19, // 6: foghorn_federation.PeerMessage.stream_ad:type_name -> foghorn_federation.StreamAdvertisement
-	17, // 7: foghorn_federation.PeerMessage.artifact_ad:type_name -> foghorn_federation.ArtifactAdvertisement
-	21, // 8: foghorn_federation.PeerMessage.peer_heartbeat:type_name -> foghorn_federation.PeerHeartbeat
-	22, // 9: foghorn_federation.PeerMessage.capacity_summary:type_name -> foghorn_federation.CapacitySummary
-	16, // 10: foghorn_federation.ClusterEdgeSummary.edges:type_name -> foghorn_federation.EdgeSnapshot
-	18, // 11: foghorn_federation.ArtifactAdvertisement.artifacts:type_name -> foghorn_federation.ArtifactLocation
-	20, // 12: foghorn_federation.StreamAdvertisement.edges:type_name -> foghorn_federation.PeerStreamEdge
-	25, // 13: foghorn_federation.ListTenantArtifactsResponse.artifacts:type_name -> foghorn_federation.ArtifactMetadata
-	0,  // 14: foghorn_federation.FoghornFederation.QueryStream:input_type -> foghorn_federation.QueryStreamRequest
-	3,  // 15: foghorn_federation.FoghornFederation.NotifyOriginPull:input_type -> foghorn_federation.OriginPullNotification
-	5,  // 16: foghorn_federation.FoghornFederation.PrepareArtifact:input_type -> foghorn_federation.PrepareArtifactRequest
-	7,  // 17: foghorn_federation.FoghornFederation.CreateRemoteClip:input_type -> foghorn_federation.RemoteClipRequest
-	9,  // 18: foghorn_federation.FoghornFederation.CreateRemoteDVR:input_type -> foghorn_federation.RemoteDVRRequest
-	11, // 19: foghorn_federation.FoghornFederation.PeerChannel:input_type -> foghorn_federation.PeerMessage
-	23, // 20: foghorn_federation.FoghornFederation.ListTenantArtifacts:input_type -> foghorn_federation.ListTenantArtifactsRequest
-	26, // 21: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:input_type -> foghorn_federation.MigrateArtifactMetadataRequest
-	28, // 22: foghorn_federation.FoghornFederation.ForwardArtifactCommand:input_type -> foghorn_federation.ForwardArtifactCommandRequest
-	1,  // 23: foghorn_federation.FoghornFederation.QueryStream:output_type -> foghorn_federation.QueryStreamResponse
-	4,  // 24: foghorn_federation.FoghornFederation.NotifyOriginPull:output_type -> foghorn_federation.OriginPullAck
-	6,  // 25: foghorn_federation.FoghornFederation.PrepareArtifact:output_type -> foghorn_federation.PrepareArtifactResponse
-	8,  // 26: foghorn_federation.FoghornFederation.CreateRemoteClip:output_type -> foghorn_federation.RemoteClipResponse
-	10, // 27: foghorn_federation.FoghornFederation.CreateRemoteDVR:output_type -> foghorn_federation.RemoteDVRResponse
-	11, // 28: foghorn_federation.FoghornFederation.PeerChannel:output_type -> foghorn_federation.PeerMessage
-	24, // 29: foghorn_federation.FoghornFederation.ListTenantArtifacts:output_type -> foghorn_federation.ListTenantArtifactsResponse
-	27, // 30: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:output_type -> foghorn_federation.MigrateArtifactMetadataResponse
-	29, // 31: foghorn_federation.FoghornFederation.ForwardArtifactCommand:output_type -> foghorn_federation.ForwardArtifactCommandResponse
-	23, // [23:32] is the sub-list for method output_type
-	14, // [14:23] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	3,  // 0: foghorn_federation.QueryStreamResponse.candidates:type_name -> foghorn_federation.EdgeCandidate
+	33, // 1: foghorn_federation.PrepareArtifactResponse.segment_urls:type_name -> foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
+	14, // 2: foghorn_federation.PeerMessage.edge_telemetry:type_name -> foghorn_federation.EdgeTelemetry
+	15, // 3: foghorn_federation.PeerMessage.replication_event:type_name -> foghorn_federation.ReplicationEvent
+	16, // 4: foghorn_federation.PeerMessage.cluster_summary:type_name -> foghorn_federation.ClusterEdgeSummary
+	13, // 5: foghorn_federation.PeerMessage.stream_lifecycle:type_name -> foghorn_federation.StreamLifecycleEvent
+	20, // 6: foghorn_federation.PeerMessage.stream_ad:type_name -> foghorn_federation.StreamAdvertisement
+	18, // 7: foghorn_federation.PeerMessage.artifact_ad:type_name -> foghorn_federation.ArtifactAdvertisement
+	22, // 8: foghorn_federation.PeerMessage.peer_heartbeat:type_name -> foghorn_federation.PeerHeartbeat
+	23, // 9: foghorn_federation.PeerMessage.capacity_summary:type_name -> foghorn_federation.CapacitySummary
+	17, // 10: foghorn_federation.ClusterEdgeSummary.edges:type_name -> foghorn_federation.EdgeSnapshot
+	19, // 11: foghorn_federation.ArtifactAdvertisement.artifacts:type_name -> foghorn_federation.ArtifactLocation
+	21, // 12: foghorn_federation.StreamAdvertisement.edges:type_name -> foghorn_federation.PeerStreamEdge
+	26, // 13: foghorn_federation.ListTenantArtifactsResponse.artifacts:type_name -> foghorn_federation.ArtifactMetadata
+	0,  // 14: foghorn_federation.MintStorageURLsRequest.op:type_name -> foghorn_federation.MintStorageURLsRequest.Operation
+	34, // 15: foghorn_federation.MintStorageURLsResponse.segment_urls:type_name -> foghorn_federation.MintStorageURLsResponse.SegmentUrlsEntry
+	1,  // 16: foghorn_federation.FoghornFederation.QueryStream:input_type -> foghorn_federation.QueryStreamRequest
+	4,  // 17: foghorn_federation.FoghornFederation.NotifyOriginPull:input_type -> foghorn_federation.OriginPullNotification
+	6,  // 18: foghorn_federation.FoghornFederation.PrepareArtifact:input_type -> foghorn_federation.PrepareArtifactRequest
+	8,  // 19: foghorn_federation.FoghornFederation.CreateRemoteClip:input_type -> foghorn_federation.RemoteClipRequest
+	10, // 20: foghorn_federation.FoghornFederation.CreateRemoteDVR:input_type -> foghorn_federation.RemoteDVRRequest
+	12, // 21: foghorn_federation.FoghornFederation.PeerChannel:input_type -> foghorn_federation.PeerMessage
+	24, // 22: foghorn_federation.FoghornFederation.ListTenantArtifacts:input_type -> foghorn_federation.ListTenantArtifactsRequest
+	27, // 23: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:input_type -> foghorn_federation.MigrateArtifactMetadataRequest
+	29, // 24: foghorn_federation.FoghornFederation.ForwardArtifactCommand:input_type -> foghorn_federation.ForwardArtifactCommandRequest
+	31, // 25: foghorn_federation.FoghornFederation.MintStorageURLs:input_type -> foghorn_federation.MintStorageURLsRequest
+	2,  // 26: foghorn_federation.FoghornFederation.QueryStream:output_type -> foghorn_federation.QueryStreamResponse
+	5,  // 27: foghorn_federation.FoghornFederation.NotifyOriginPull:output_type -> foghorn_federation.OriginPullAck
+	7,  // 28: foghorn_federation.FoghornFederation.PrepareArtifact:output_type -> foghorn_federation.PrepareArtifactResponse
+	9,  // 29: foghorn_federation.FoghornFederation.CreateRemoteClip:output_type -> foghorn_federation.RemoteClipResponse
+	11, // 30: foghorn_federation.FoghornFederation.CreateRemoteDVR:output_type -> foghorn_federation.RemoteDVRResponse
+	12, // 31: foghorn_federation.FoghornFederation.PeerChannel:output_type -> foghorn_federation.PeerMessage
+	25, // 32: foghorn_federation.FoghornFederation.ListTenantArtifacts:output_type -> foghorn_federation.ListTenantArtifactsResponse
+	28, // 33: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:output_type -> foghorn_federation.MigrateArtifactMetadataResponse
+	30, // 34: foghorn_federation.FoghornFederation.ForwardArtifactCommand:output_type -> foghorn_federation.ForwardArtifactCommandResponse
+	32, // 35: foghorn_federation.FoghornFederation.MintStorageURLs:output_type -> foghorn_federation.MintStorageURLsResponse
+	26, // [26:36] is the sub-list for method output_type
+	16, // [16:26] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_foghorn_federation_proto_init() }
@@ -3078,13 +3416,14 @@ func file_foghorn_federation_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_foghorn_federation_proto_rawDesc), len(file_foghorn_federation_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   31,
+			NumEnums:      1,
+			NumMessages:   34,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_foghorn_federation_proto_goTypes,
 		DependencyIndexes: file_foghorn_federation_proto_depIdxs,
+		EnumInfos:         file_foghorn_federation_proto_enumTypes,
 		MessageInfos:      file_foghorn_federation_proto_msgTypes,
 	}.Build()
 	File_foghorn_federation_proto = out.File

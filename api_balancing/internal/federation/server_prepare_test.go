@@ -26,6 +26,9 @@ type fakeS3Client struct {
 func (f *fakeS3Client) GeneratePresignedGET(_ string, _ time.Duration) (string, error) {
 	return f.presignedGETResult, f.presignedGETErr
 }
+func (f *fakeS3Client) GeneratePresignedPUT(_ string, _ time.Duration) (string, error) {
+	return "", nil
+}
 func (f *fakeS3Client) GeneratePresignedURLsForDVR(_ string, _ bool, _ time.Duration) (map[string]string, error) {
 	return f.dvrSegmentURLs, f.dvrSegmentErr
 }

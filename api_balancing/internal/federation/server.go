@@ -44,6 +44,7 @@ type ArtifactCommandHandler interface {
 // can inject fakes without real AWS credentials.
 type FederationS3Client interface {
 	GeneratePresignedGET(key string, expiry time.Duration) (string, error)
+	GeneratePresignedPUT(key string, expiry time.Duration) (string, error)
 	GeneratePresignedURLsForDVR(dvrPrefix string, isUpload bool, expiry time.Duration) (map[string]string, error)
 	BuildClipS3Key(tenantID, streamName, clipHash, format string) string
 	BuildDVRS3Key(tenantID, internalName, dvrHash string) string
@@ -66,6 +67,39 @@ type FederationServer struct {
 	artifactHandler ArtifactCommandHandler
 	peerManager     PeerAddrResolver
 	fedClient       *FederationClient
+
+	// Storage-cluster ownership inputs. Both PrepareArtifact (read-side
+	// redirect) and MintStorageURLs (write-side ownership check) consult
+	// these. Wired from cmd/foghorn/main.go; unset in tests by default
+	// (canLocallyMintFor returns false for any non-empty target, which is
+	// the conservative answer when we don't know).
+	localS3Backing    S3Backing
+	advertisedBacking AdvertisedBackingFunc
+	isServedCluster   func(clusterID string) bool
+}
+
+// AdvertisedBackingFunc returns the S3 backing tuple Quartermaster has on
+// record for the (tenant, cluster) pair, sourced from the tenant's
+// cluster_peers metadata. ok=false when the tenant doesn't have access to
+// the cluster or the cluster doesn't advertise S3 backing.
+type AdvertisedBackingFunc func(ctx context.Context, tenantID, clusterID string) (S3Backing, bool)
+
+// S3Backing is the federation server's view of an S3 backing tuple.
+// Equality on the full tuple is required for "this Foghorn pool can mint
+// locally for that cluster" — bucket-name match alone collides across
+// S3-compatible providers (MinIO, R2, Bunny Storage). Mirrors
+// storage.S3Backing without the import dependency to keep package layering
+// clean.
+type S3Backing struct {
+	Bucket   string
+	Endpoint string
+	Region   string
+}
+
+func (b S3Backing) Equal(other S3Backing) bool {
+	return strings.EqualFold(strings.TrimSpace(b.Bucket), strings.TrimSpace(other.Bucket)) &&
+		strings.EqualFold(strings.TrimSpace(b.Endpoint), strings.TrimSpace(other.Endpoint)) &&
+		strings.EqualFold(strings.TrimSpace(b.Region), strings.TrimSpace(other.Region))
 }
 
 // PeerAddrResolver resolves gRPC addresses for peer clusters.
@@ -86,23 +120,64 @@ type FederationServerConfig struct {
 	ArtifactHandler ArtifactCommandHandler
 	PeerManager     PeerAddrResolver
 	FedClient       *FederationClient
+
+	// Storage ownership inputs (optional; when unset, canLocallyMintFor
+	// returns false and PrepareArtifact emits redirect for any non-empty
+	// authoritative cluster). Production wires all three from
+	// cmd/foghorn/main.go; tests can omit them or set focused stubs.
+	LocalS3Backing    S3Backing
+	AdvertisedBacking AdvertisedBackingFunc
+	IsServedCluster   func(clusterID string) bool
 }
 
 // NewFederationServer creates a new federation gRPC server.
 func NewFederationServer(cfg FederationServerConfig) *FederationServer {
 	return &FederationServer{
-		logger:          cfg.Logger,
-		lb:              cfg.LB,
-		clusterID:       cfg.ClusterID,
-		cache:           cfg.Cache,
-		db:              cfg.DB,
-		s3Client:        cfg.S3Client,
-		clipCreator:     cfg.ClipCreator,
-		dvrCreator:      cfg.DVRCreator,
-		artifactHandler: cfg.ArtifactHandler,
-		peerManager:     cfg.PeerManager,
-		fedClient:       cfg.FedClient,
+		logger:            cfg.Logger,
+		lb:                cfg.LB,
+		clusterID:         cfg.ClusterID,
+		cache:             cfg.Cache,
+		db:                cfg.DB,
+		s3Client:          cfg.S3Client,
+		clipCreator:       cfg.ClipCreator,
+		dvrCreator:        cfg.DVRCreator,
+		artifactHandler:   cfg.ArtifactHandler,
+		peerManager:       cfg.PeerManager,
+		fedClient:         cfg.FedClient,
+		localS3Backing:    cfg.LocalS3Backing,
+		advertisedBacking: cfg.AdvertisedBacking,
+		isServedCluster:   cfg.IsServedCluster,
 	}
+}
+
+// canLocallyMintFor reports whether this Foghorn pool can mint presigned
+// URLs against the named storage cluster's S3 for the given tenant.
+// Requires: the cluster is served locally AND the local S3 client's backing
+// tuple matches the cluster's advertised backing per Quartermaster's
+// cluster_peers metadata for this tenant. Returns false for empty inputs or
+// when ownership inputs aren't configured (tests).
+//
+// Unified ownership rule used by both PrepareArtifact (redirect emit when
+// remote owns) and MintStorageURLs (callee validation that we actually own
+// what the caller claims). Keeping the rule shared prevents asymmetry where
+// a pool would redirect a read but accept a write to the same cluster.
+func (s *FederationServer) canLocallyMintFor(ctx context.Context, tenantID, targetClusterID string) bool {
+	tenant := strings.TrimSpace(tenantID)
+	target := strings.TrimSpace(targetClusterID)
+	if tenant == "" || target == "" {
+		return false
+	}
+	if s.isServedCluster == nil || !s.isServedCluster(target) {
+		return false
+	}
+	if s.advertisedBacking == nil {
+		return false
+	}
+	advertised, ok := s.advertisedBacking(ctx, tenant, target)
+	if !ok || strings.TrimSpace(advertised.Bucket) == "" {
+		return false
+	}
+	return s.localS3Backing.Equal(advertised)
 }
 
 // SetClipCreator wires the clip creation delegate (set after FoghornGRPCServer is created).
@@ -386,10 +461,20 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 
 	// Authoritative cluster = where the bytes actually live. NULL preserves
 	// the prior origin-as-storage semantic for rows written before delegation
-	// existed. PR 3a reads + logs this only; the local-vs-redirect decision
-	// branch lands in PR 3b co-shipped with the proto change.
+	// existed.
 	if authoritativeCluster.Valid && authoritativeCluster.String != "" {
 		log = log.WithField("authoritative_cluster", authoritativeCluster.String)
+		// Redirect when this Foghorn pool can't sign URLs against the
+		// authoritative cluster's bucket. Uses the unified ownership rule
+		// (served + backing tuple match) so a pool serving the cluster but
+		// configured against a different S3 still redirects rather than
+		// signing against the wrong endpoint.
+		if !s.canLocallyMintFor(ctx, tenantID, authoritativeCluster.String) {
+			log.Info("PrepareArtifact: storage owned elsewhere — redirecting")
+			return &pb.PrepareArtifactResponse{
+				RedirectClusterId: authoritativeCluster.String,
+			}, nil
+		}
 	}
 
 	location := strings.ToLower(strings.TrimSpace(storageLocation))
@@ -482,6 +567,251 @@ func (s *FederationServer) buildArtifactS3Key(artType, tenantID, internalName, h
 	default:
 		return "artifacts/" + tenantID + "/" + hash
 	}
+}
+
+// MintStorageURLs issues presigned PUT URLs for an upload that the
+// requesting Foghorn cannot mint locally. The callee MUST own the named
+// target storage cluster (served + S3 backing tuple match) and the artifact
+// MUST belong to the requesting tenant. VOD multipart is intentionally
+// rejected here — its create/complete/abort lifecycle ships in a follow-up
+// PR with co-shipped Complete/Abort RPCs.
+func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStorageURLsRequest) (*pb.MintStorageURLsResponse, error) {
+	if err := requireFederationServiceAuth(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+	if req.GetTargetClusterId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "target_cluster_id required")
+	}
+	if req.GetArtifactType() == "" {
+		return nil, status.Error(codes.InvalidArgument, "artifact_type required")
+	}
+	if req.GetArtifactKey() == "" {
+		return nil, status.Error(codes.InvalidArgument, "artifact_key required")
+	}
+	if req.GetOp() == pb.MintStorageURLsRequest_OPERATION_UNSPECIFIED {
+		return nil, status.Error(codes.InvalidArgument, "op required")
+	}
+
+	log := s.logger.WithFields(logging.Fields{
+		"tenant_id":          req.GetTenantId(),
+		"requesting_cluster": req.GetRequestingCluster(),
+		"target_cluster":     req.GetTargetClusterId(),
+		"artifact_type":      req.GetArtifactType(),
+		"op":                 req.GetOp().String(),
+	})
+
+	// Storage ownership — the authoritative claim.
+	if !s.canLocallyMintFor(ctx, req.GetTenantId(), req.GetTargetClusterId()) {
+		log.Warn("MintStorageURLs: this Foghorn does not own the target storage cluster for this tenant")
+		return &pb.MintStorageURLsResponse{Accepted: false, Reason: "storage_not_owned_here"}, nil
+	}
+	if s.s3Client == nil {
+		log.Warn("MintStorageURLs: ownership claim accepted but s3 client is nil (configuration race)")
+		return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
+	}
+
+	// Operation / artifact-type compatibility.
+	artType := strings.ToLower(strings.TrimSpace(req.GetArtifactType()))
+	op := req.GetOp()
+	switch artType {
+	case "thumbnail", "clip", "dvr_segment", "dvr_manifest":
+		if op != pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE {
+			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
+		}
+	case "dvr":
+		if op != pb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET {
+			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
+		}
+		if len(req.GetSegmentFilenames()) == 0 {
+			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
+		}
+	case "vod":
+		return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_artifact_type"}, nil
+	default:
+		return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_artifact_type"}, nil
+	}
+
+	// Tenant ownership for non-thumbnail artifacts uses foghorn.artifacts;
+	// live thumbnails use stream state. Both reject with tenant_mismatch on
+	// failure.
+	if !s.verifyTenantOwnership(ctx, req, artType) {
+		return &pb.MintStorageURLsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
+	}
+
+	// Build the S3 key per artifact type, mirroring the local-mint code
+	// paths so a delegated upload lands at the same key as a local one
+	// would for the same input.
+	expiry := 30 * time.Minute
+	if artType == "thumbnail" {
+		expiry = 15 * time.Minute
+	}
+	switch artType {
+	case "thumbnail":
+		// artifact_key is "<streamID-or-artifactHash>/<filename>". Use the
+		// caller-provided key directly — both live (streamID) and vod/clip
+		// (artifact_hash) shapes match the existing S3 layout
+		// `thumbnails/<key>/<file>` produced by processThumbnailUploadRequest.
+		s3Key := "thumbnails/" + req.GetArtifactKey()
+		url, err := s.s3Client.GeneratePresignedPUT(s3Key, expiry)
+		if err != nil {
+			log.WithError(err).Error("GeneratePresignedPUT failed")
+			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
+		}
+		return &pb.MintStorageURLsResponse{
+			Accepted:         true,
+			S3Key:            s3Key,
+			PresignedPutUrl:  url,
+			UrlExpirySeconds: uint32(expiry.Seconds()),
+		}, nil
+
+	case "clip":
+		// Mirror processFreezePermissionRequest's clip-key construction.
+		// The caller passes the artifact_key as the clip hash; format is
+		// derived from content_type (default mp4 when empty).
+		format := "mp4"
+		if ct := strings.TrimSpace(req.GetContentType()); ct != "" {
+			if before, after, ok := strings.Cut(ct, "/"); ok && before == "video" && after != "" {
+				format = after
+			}
+		}
+		streamName, err := s.lookupArtifactStreamName(ctx, req.GetArtifactKey(), req.GetTenantId())
+		if err != nil {
+			log.WithError(err).Warn("clip stream lookup failed")
+			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
+		}
+		s3Key := s.s3Client.BuildClipS3Key(req.GetTenantId(), streamName, req.GetArtifactKey(), format)
+		url, err := s.s3Client.GeneratePresignedPUT(s3Key, expiry)
+		if err != nil {
+			log.WithError(err).Error("clip GeneratePresignedPUT failed")
+			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
+		}
+		return &pb.MintStorageURLsResponse{
+			Accepted:         true,
+			S3Key:            s3Key,
+			PresignedPutUrl:  url,
+			UrlExpirySeconds: uint32(expiry.Seconds()),
+		}, nil
+
+	case "dvr":
+		streamName, err := s.lookupArtifactStreamName(ctx, req.GetArtifactKey(), req.GetTenantId())
+		if err != nil {
+			log.WithError(err).Warn("dvr stream lookup failed")
+			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
+		}
+		dvrPrefix := s.s3Client.BuildDVRS3Key(req.GetTenantId(), streamName, req.GetArtifactKey())
+		segmentURLs := map[string]string{}
+		for _, fn := range req.GetSegmentFilenames() {
+			fn = strings.TrimSpace(fn)
+			if fn == "" {
+				continue
+			}
+			s3Key := dvrPrefix + fn
+			url, err := s.s3Client.GeneratePresignedPUT(s3Key, expiry)
+			if err != nil {
+				log.WithError(err).WithField("segment", fn).Error("dvr segment GeneratePresignedPUT failed")
+				return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
+			}
+			segmentURLs[fn] = url
+		}
+		return &pb.MintStorageURLsResponse{
+			Accepted:         true,
+			S3Key:            dvrPrefix,
+			SegmentUrls:      segmentURLs,
+			UrlExpirySeconds: uint32(expiry.Seconds()),
+		}, nil
+
+	case "dvr_segment", "dvr_manifest":
+		// artifact_key is "<parent_dvr_hash>/<filename>". Build the same key
+		// shape the local-mint path would have used: BuildDVRS3Key(tenant,
+		// streamName, parentHash) + filename.
+		parentHash, fileName, ok := strings.Cut(req.GetArtifactKey(), "/")
+		if !ok || parentHash == "" || fileName == "" {
+			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
+		}
+		streamName, err := s.lookupArtifactStreamName(ctx, parentHash, req.GetTenantId())
+		if err != nil {
+			log.WithError(err).Warn("dvr incremental stream lookup failed")
+			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
+		}
+		dvrPrefix := s.s3Client.BuildDVRS3Key(req.GetTenantId(), streamName, parentHash)
+		s3Key := dvrPrefix + fileName
+		url, err := s.s3Client.GeneratePresignedPUT(s3Key, expiry)
+		if err != nil {
+			log.WithError(err).Error("dvr incremental GeneratePresignedPUT failed")
+			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
+		}
+		return &pb.MintStorageURLsResponse{
+			Accepted:         true,
+			S3Key:            s3Key,
+			PresignedPutUrl:  url,
+			UrlExpirySeconds: uint32(expiry.Seconds()),
+		}, nil
+	}
+
+	// Unreachable — switch above is exhaustive given the artifact-type guard.
+	return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_artifact_type"}, nil
+}
+
+// verifyTenantOwnership checks whether the artifact named by the request
+// actually belongs to the tenant_id the caller passed. Live thumbnails use
+// in-memory stream state; everything else queries foghorn.artifacts.
+func (s *FederationServer) verifyTenantOwnership(ctx context.Context, req *pb.MintStorageURLsRequest, artType string) bool {
+	if artType == "thumbnail" && req.GetStreamInternalName() != "" {
+		// Live thumbnail path — stream state is authoritative.
+		sm := state.DefaultManager()
+		if sm == nil {
+			return false
+		}
+		ss := sm.GetStreamState(req.GetStreamInternalName())
+		return ss != nil && ss.TenantID == req.GetTenantId()
+	}
+	// Artifact-row path — the artifact_key carries the hash (possibly with
+	// a "/<filename>" suffix for thumbnails or dvr incremental). Strip any
+	// suffix to get the lookup hash.
+	lookupHash := req.GetArtifactKey()
+	if before, _, ok := strings.Cut(lookupHash, "/"); ok && before != "" {
+		lookupHash = before
+	}
+	if s.db == nil {
+		return false
+	}
+	var rowTenant string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT tenant_id::text
+		FROM foghorn.artifacts
+		WHERE artifact_hash = $1
+		LIMIT 1
+	`, lookupHash).Scan(&rowTenant)
+	if err != nil {
+		return false
+	}
+	return rowTenant == req.GetTenantId()
+}
+
+// lookupArtifactStreamName returns the stream_internal_name stored on the
+// artifact row. Used to reconstruct the same S3 key the local-mint path
+// would have produced for clips and DVRs.
+func (s *FederationServer) lookupArtifactStreamName(ctx context.Context, artifactHash, tenantID string) (string, error) {
+	if s.db == nil {
+		return "", errors.New("db unavailable")
+	}
+	var streamName sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT stream_internal_name
+		FROM foghorn.artifacts
+		WHERE artifact_hash = $1 AND tenant_id = $2
+		LIMIT 1
+	`, artifactHash, tenantID).Scan(&streamName)
+	if err != nil {
+		return "", err
+	}
+	if !streamName.Valid {
+		return "", nil
+	}
+	return streamName.String, nil
 }
 
 func (s *FederationServer) triggerAsyncFreeze(hash, artifactType, _tenantID string) {

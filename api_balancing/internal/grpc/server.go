@@ -89,24 +89,39 @@ type FoghornGRPCServer struct {
 	pb.UnimplementedTenantControlServiceServer
 	pb.UnimplementedNodeControlServiceServer
 
-	db               *sql.DB
-	logger           logging.Logger
-	lb               *balancer.LoadBalancer
-	geoipReader      *geoip.Reader
-	geoipCache       *cache.Cache
-	decklogClient    *decklog.BatchedClient
-	s3Client         S3ClientInterface
-	cacheInvalidator CacheInvalidator
-	purserClient     *purserclient.GRPCClient
-	remoteEdgeCache  *federation.RemoteEdgeCache
-	federationClient federationRPC
-	peerManager      peerAddrResolver
-	clusterID        string
-	pendingDVRStops  map[string]time.Time
-	pendingDVRMu     sync.Mutex
-	originPullMu     sync.Mutex
-	originPulling    map[string]struct{}
+	db                  *sql.DB
+	logger              logging.Logger
+	lb                  *balancer.LoadBalancer
+	geoipReader         *geoip.Reader
+	geoipCache          *cache.Cache
+	decklogClient       *decklog.BatchedClient
+	s3Client            S3ClientInterface
+	cacheInvalidator    CacheInvalidator
+	purserClient        *purserclient.GRPCClient
+	remoteEdgeCache     *federation.RemoteEdgeCache
+	federationClient    federationRPC
+	peerManager         peerAddrResolver
+	quartermasterClient quartermasterRoutingResolver
+	storageResolver     storageResolverFactory
+	clusterID           string
+	pendingDVRStops     map[string]time.Time
+	pendingDVRMu        sync.Mutex
+	originPullMu        sync.Mutex
+	originPulling       map[string]struct{}
 }
+
+// quartermasterRoutingResolver is the narrow Quartermaster surface this
+// server uses to resolve a tenant's official cluster + cluster_peers
+// metadata (for S3 backing lookup).
+type quartermasterRoutingResolver interface {
+	GetClusterRouting(ctx context.Context, req *pb.GetClusterRoutingRequest) (*pb.ClusterRoutingResponse, error)
+}
+
+// storageResolverFactory builds a per-request storage.ClusterResolver. The
+// factory is injected so tests can supply a stub without wiring real S3
+// config. Production wires it from cmd/foghorn/main.go to read the local
+// STORAGE_S3_* config and consult Quartermaster for advertised backings.
+type storageResolverFactory func(ctx context.Context, tenantID string) *storage.ClusterResolver
 
 // NewFoghornGRPCServer creates a new Foghorn gRPC server
 func NewFoghornGRPCServer(
@@ -183,6 +198,52 @@ func (s *FoghornGRPCServer) SetFederationClient(fc *federation.FederationClient)
 }
 
 // SetPeerManager enables peer address lookups for federation calls.
+// SetQuartermasterClient wires the Quartermaster client used to resolve a
+// tenant's official cluster (CreateVodUpload, freeze flow). Wired from
+// cmd/foghorn/main.go after qmClient is constructed.
+func (s *FoghornGRPCServer) SetQuartermasterClient(qm quartermasterRoutingResolver) {
+	s.quartermasterClient = qm
+}
+
+// SetStorageResolverFactory wires the per-request storage cluster resolver
+// factory. Production wires this from cmd/foghorn/main.go with the local S3
+// config + Quartermaster cluster_peers lookup; tests inject focused stubs.
+func (s *FoghornGRPCServer) SetStorageResolverFactory(f storageResolverFactory) {
+	s.storageResolver = f
+}
+
+// resolveVodStorageCluster runs the storage resolver for a VOD upload.
+// Origin candidate is the caller-supplied cluster_id (the tenant's intended
+// ingest cluster). Official candidate comes from Quartermaster's
+// GetClusterRouting if a Quartermaster client is wired. Returns
+// (cluster, mode); when no resolver factory is configured (tests), falls
+// back to local-mint against the caller-supplied cluster — preserving the
+// pre-PR-3b behaviour for the test path.
+func (s *FoghornGRPCServer) resolveVodStorageCluster(ctx context.Context, tenantID, ingestClusterID string) (string, storage.StorageMintMode) {
+	if s.storageResolver == nil {
+		// No resolver wired (tests / minimal dev setups) — preserve current
+		// behaviour: assume local mint against the caller's cluster.
+		return ingestClusterID, storage.StorageMintLocal
+	}
+	resolver := s.storageResolver(ctx, tenantID)
+	if resolver == nil {
+		return ingestClusterID, storage.StorageMintLocal
+	}
+	officialCluster := ""
+	if s.quartermasterClient != nil {
+		routingCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+		defer cancel()
+		if routing, err := s.quartermasterClient.GetClusterRouting(routingCtx, &pb.GetClusterRoutingRequest{TenantId: tenantID}); err == nil && routing != nil && routing.OfficialClusterId != nil {
+			officialCluster = *routing.OfficialClusterId
+		}
+	}
+	return resolver.Resolve(storage.ResolverInput{
+		OriginClusterID:   ingestClusterID,
+		OfficialClusterID: officialCluster,
+		LegacyClusterID:   s.clusterID,
+	})
+}
+
 func (s *FoghornGRPCServer) SetPeerManager(pm *federation.PeerManager) {
 	s.peerManager = pm
 }
@@ -2029,6 +2090,19 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 	if req.GetInternalName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "internal_name is required")
 	}
+
+	// Resolve the storage cluster BEFORE the s3Client gate so a self-host
+	// pool with no local S3 client can still be told "use platform S3 via
+	// federation" (when that flow lands) instead of being rejected outright.
+	// Federated VOD multipart is intentionally unsupported in this PR — the
+	// Complete/Abort lifecycle ships in a follow-up. Local-mint only here.
+	storageCluster, mintMode := s.resolveVodStorageCluster(ctx, req.GetTenantId(), req.GetClusterId())
+	switch mintMode {
+	case storage.StorageMintViaFederation:
+		return nil, status.Error(codes.Unimplemented, "storage_delegation_unsupported_for_vod")
+	case storage.StorageUnavailable:
+		return nil, status.Error(codes.FailedPrecondition, "storage service unavailable")
+	}
 	if s.s3Client == nil {
 		return nil, status.Error(codes.FailedPrecondition, "S3 storage not configured")
 	}
@@ -2079,16 +2153,23 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 		return nil, status.Errorf(codes.InvalidArgument, "filename must have an extension to determine format")
 	}
 
-	// Store artifact in foghorn.artifacts with status='uploading'
+	// Store artifact in foghorn.artifacts with status='uploading'.
+	// storage_cluster_id is set to the resolver-chosen cluster when it
+	// differs from the request's cluster_id (origin); when they match the
+	// column stays NULL to preserve the prior origin-as-storage semantic.
+	storageClusterArg := sql.NullString{}
+	if storageCluster != "" && storageCluster != req.GetClusterId() {
+		storageClusterArg = sql.NullString{String: storageCluster, Valid: true}
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (
 			id, artifact_hash, artifact_type, internal_name,
 			tenant_id, user_id, status,
-			sync_status, size_bytes, s3_url, format, origin_cluster_id, retention_until, created_at, updated_at
+			sync_status, size_bytes, s3_url, format, origin_cluster_id, storage_cluster_id, retention_until, created_at, updated_at
 		)
 		VALUES ($1, $2, 'vod', $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'uploading',
-		        'in_progress', $6, $7, $8, $9, NOW() + INTERVAL '30 days', NOW(), NOW())
-	`, artifactID, artifactHash, req.GetInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat, req.GetClusterId())
+		        'in_progress', $6, $7, $8, $9, $10, NOW() + INTERVAL '30 days', NOW(), NOW())
+	`, artifactID, artifactHash, req.GetInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat, req.GetClusterId(), storageClusterArg)
 
 	if err != nil {
 		// Abort S3 upload since we can't track it

@@ -28,6 +28,7 @@ const (
 	FoghornFederation_ListTenantArtifacts_FullMethodName     = "/foghorn_federation.FoghornFederation/ListTenantArtifacts"
 	FoghornFederation_MigrateArtifactMetadata_FullMethodName = "/foghorn_federation.FoghornFederation/MigrateArtifactMetadata"
 	FoghornFederation_ForwardArtifactCommand_FullMethodName  = "/foghorn_federation.FoghornFederation/ForwardArtifactCommand"
+	FoghornFederation_MintStorageURLs_FullMethodName         = "/foghorn_federation.FoghornFederation/MintStorageURLs"
 )
 
 // FoghornFederationClient is the client API for FoghornFederation service.
@@ -63,6 +64,15 @@ type FoghornFederationClient interface {
 	// Used as a safety net when a command arrives at the wrong cluster (stale cache, race).
 	// The receiving cluster tries to handle it locally and reports whether it succeeded.
 	ForwardArtifactCommand(ctx context.Context, in *ForwardArtifactCommandRequest, opts ...grpc.CallOption) (*ForwardArtifactCommandResponse, error)
+	// MintStorageURLs issues presigned PUT URLs against the storage cluster's
+	// S3 backing for cross-cluster upload delegation. The caller is the Foghorn
+	// pool that received the upload request from Helmsman; the callee is the
+	// Foghorn pool that owns the named target_cluster_id's S3. Single-PUT
+	// covers thumbnails, clips, and DVR incremental segments/manifests;
+	// DVR-set covers the initial DVR freeze. VOD multipart is intentionally
+	// unsupported here — it requires a co-shipped Complete/Abort lifecycle
+	// shipping in a follow-up PR.
+	MintStorageURLs(ctx context.Context, in *MintStorageURLsRequest, opts ...grpc.CallOption) (*MintStorageURLsResponse, error)
 }
 
 type foghornFederationClient struct {
@@ -166,6 +176,16 @@ func (c *foghornFederationClient) ForwardArtifactCommand(ctx context.Context, in
 	return out, nil
 }
 
+func (c *foghornFederationClient) MintStorageURLs(ctx context.Context, in *MintStorageURLsRequest, opts ...grpc.CallOption) (*MintStorageURLsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MintStorageURLsResponse)
+	err := c.cc.Invoke(ctx, FoghornFederation_MintStorageURLs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FoghornFederationServer is the server API for FoghornFederation service.
 // All implementations must embed UnimplementedFoghornFederationServer
 // for forward compatibility.
@@ -199,6 +219,15 @@ type FoghornFederationServer interface {
 	// Used as a safety net when a command arrives at the wrong cluster (stale cache, race).
 	// The receiving cluster tries to handle it locally and reports whether it succeeded.
 	ForwardArtifactCommand(context.Context, *ForwardArtifactCommandRequest) (*ForwardArtifactCommandResponse, error)
+	// MintStorageURLs issues presigned PUT URLs against the storage cluster's
+	// S3 backing for cross-cluster upload delegation. The caller is the Foghorn
+	// pool that received the upload request from Helmsman; the callee is the
+	// Foghorn pool that owns the named target_cluster_id's S3. Single-PUT
+	// covers thumbnails, clips, and DVR incremental segments/manifests;
+	// DVR-set covers the initial DVR freeze. VOD multipart is intentionally
+	// unsupported here — it requires a co-shipped Complete/Abort lifecycle
+	// shipping in a follow-up PR.
+	MintStorageURLs(context.Context, *MintStorageURLsRequest) (*MintStorageURLsResponse, error)
 	mustEmbedUnimplementedFoghornFederationServer()
 }
 
@@ -235,6 +264,9 @@ func (UnimplementedFoghornFederationServer) MigrateArtifactMetadata(context.Cont
 }
 func (UnimplementedFoghornFederationServer) ForwardArtifactCommand(context.Context, *ForwardArtifactCommandRequest) (*ForwardArtifactCommandResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ForwardArtifactCommand not implemented")
+}
+func (UnimplementedFoghornFederationServer) MintStorageURLs(context.Context, *MintStorageURLsRequest) (*MintStorageURLsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MintStorageURLs not implemented")
 }
 func (UnimplementedFoghornFederationServer) mustEmbedUnimplementedFoghornFederationServer() {}
 func (UnimplementedFoghornFederationServer) testEmbeddedByValue()                           {}
@@ -408,6 +440,24 @@ func _FoghornFederation_ForwardArtifactCommand_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FoghornFederation_MintStorageURLs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MintStorageURLsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FoghornFederationServer).MintStorageURLs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FoghornFederation_MintStorageURLs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FoghornFederationServer).MintStorageURLs(ctx, req.(*MintStorageURLsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FoghornFederation_ServiceDesc is the grpc.ServiceDesc for FoghornFederation service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -446,6 +496,10 @@ var FoghornFederation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ForwardArtifactCommand",
 			Handler:    _FoghornFederation_ForwardArtifactCommand_Handler,
+		},
+		{
+			MethodName: "MintStorageURLs",
+			Handler:    _FoghornFederation_MintStorageURLs_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
