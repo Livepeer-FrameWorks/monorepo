@@ -3,6 +3,7 @@ chatwoot_image: "chatwoot/chatwoot:latest"
 chatwoot_port: 18092
 chatwoot_project_dir: /opt/frameworks/chatwoot
 chatwoot_secret_key_path: /etc/frameworks/.chatwoot_secret_key
+chatwoot_wait_timeout: 600
 
 # Database, Redis, SMTP + frontend env all come from the manifest's shared
 # env_files. The role renders them into the compose .env via compose_stack.

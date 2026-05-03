@@ -233,6 +233,23 @@ func TestChatwootComposeTemplateConsumesEnvFile(t *testing.T) {
 	if got := strings.Count(content, "- .env"); got != 2 {
 		t.Fatalf("chatwoot compose .env count = %d, want 2:\n%s", got, content)
 	}
+	for _, want := range []string{
+		"host.docker.internal:host-gateway",
+		"condition: service_healthy",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("chatwoot compose template missing %q:\n%s", want, content)
+		}
+	}
+	for _, forbidden := range []string{
+		"chatwoot-postgres",
+		"postgres:16-alpine",
+		"chatwoot-postgres-data",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("chatwoot compose template must not include hidden Postgres sidecar %q:\n%s", forbidden, content)
+		}
+	}
 }
 
 func TestListmonkComposeTemplateConsumesEnvFile(t *testing.T) {
@@ -242,6 +259,9 @@ func TestListmonkComposeTemplateConsumesEnvFile(t *testing.T) {
 	}
 	if got := strings.Count(content, "- .env"); got != 1 {
 		t.Fatalf("listmonk compose .env count = %d, want 1:\n%s", got, content)
+	}
+	if !strings.Contains(content, "host.docker.internal:host-gateway") {
+		t.Fatalf("listmonk compose template missing host-gateway for native colocated Postgres:\n%s", content)
 	}
 }
 
@@ -256,6 +276,36 @@ func TestSpecialComposeRoleEntrypointsAreTaggedForCLIProvision(t *testing.T) {
 		}
 		if !strings.Contains(content, "tags: [install, configure, service, validate]") {
 			t.Fatalf("%s compose_stack lifecycle include lacks CLI provision tags:\n%s", path, content)
+		}
+	}
+}
+
+func TestSpecialComposeRolesSetSlowFirstBootWaits(t *testing.T) {
+	composeInstall := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/compose_stack/tasks/install.yml")
+	if !strings.Contains(composeInstall, "wait_timeout: \"{{ compose_stack_wait_timeout }}\"") {
+		t.Fatalf("compose_stack apply task does not pass wait_timeout:\n%s", composeInstall)
+	}
+
+	for _, tc := range []struct {
+		name       string
+		roleDir    string
+		waitVar    string
+		startAfter string
+	}{
+		{name: "chatwoot", roleDir: "chatwoot", waitVar: "chatwoot_wait_timeout: 600", startAfter: "start_period: 300s"},
+		{name: "listmonk", roleDir: "listmonk", waitVar: "listmonk_wait_timeout: 300", startAfter: "start_period: 120s"},
+	} {
+		defaults := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/"+tc.roleDir+"/defaults/main.yml")
+		if !strings.Contains(defaults, tc.waitVar) {
+			t.Fatalf("%s defaults missing %q:\n%s", tc.name, tc.waitVar, defaults)
+		}
+		tasks := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/"+tc.roleDir+"/tasks/main.yml")
+		if !strings.Contains(tasks, "compose_stack_wait_timeout: \"{{ "+tc.roleDir+"_wait_timeout }}\"") {
+			t.Fatalf("%s tasks do not forward compose_stack_wait_timeout:\n%s", tc.name, tasks)
+		}
+		compose := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/"+tc.roleDir+"/templates/compose.yml.j2")
+		if !strings.Contains(compose, tc.startAfter) || !strings.Contains(compose, "retries: 10") {
+			t.Fatalf("%s compose healthcheck is too short for first boot:\n%s", tc.name, compose)
 		}
 	}
 }

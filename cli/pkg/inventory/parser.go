@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 
 	fwsops "frameworks/cli/pkg/sops"
 	pkgdns "frameworks/pkg/dns"
@@ -267,6 +268,22 @@ func (m *Manifest) Validate() error {
 		for _, pgHost := range m.Infrastructure.Postgres.AllHosts() {
 			if _, ok := m.Hosts[pgHost]; !ok {
 				return fmt.Errorf("postgres host '%s' not found in hosts", pgHost)
+			}
+		}
+		seenPostgresInstances := map[string]struct{}{}
+		for _, inst := range m.Infrastructure.Postgres.Instances {
+			if strings.TrimSpace(inst.Name) == "" {
+				return fmt.Errorf("postgres instance name is required")
+			}
+			if _, exists := seenPostgresInstances[inst.Name]; exists {
+				return fmt.Errorf("duplicate postgres instance '%s'", inst.Name)
+			}
+			seenPostgresInstances[inst.Name] = struct{}{}
+			if strings.TrimSpace(inst.Host) == "" {
+				return fmt.Errorf("postgres instance '%s': host is required", inst.Name)
+			}
+			if _, ok := m.Hosts[inst.Host]; !ok {
+				return fmt.Errorf("postgres instance '%s' host '%s' not found in hosts", inst.Name, inst.Host)
 			}
 		}
 	}

@@ -27,6 +27,7 @@ compose_stack_require_registry_auth: false
 compose_stack_data_migrations_marker: ""
 compose_stack_pull: "policy" # policy | always | missing | never
 compose_stack_wait: true
+compose_stack_wait_timeout: 300
 compose_stack_validate_timeout: 120
 compose_stack_recreate: auto # auto | always | never
 compose_stack_manage_docker: true

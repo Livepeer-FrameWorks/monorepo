@@ -1779,24 +1779,51 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		switch task.Type {
 		case "postgres":
 			if manifest.Infrastructure.Postgres != nil {
-				if manifest.Infrastructure.Postgres.Mode != "" {
-					config.Mode = manifest.Infrastructure.Postgres.Mode
-				}
-				if manifest.Infrastructure.Postgres.Version != "" {
-					config.Version = manifest.Infrastructure.Postgres.Version
-				}
-				if manifest.Infrastructure.Postgres.Port != 0 {
-					config.Port = manifest.Infrastructure.Postgres.Port
-				}
-				if len(manifest.Infrastructure.Postgres.Databases) > 0 {
-					databases := make([]map[string]string, 0, len(manifest.Infrastructure.Postgres.Databases))
-					for _, db := range manifest.Infrastructure.Postgres.Databases {
-						databases = append(databases, map[string]string{
-							"name":  db.Name,
-							"owner": db.Owner,
-						})
+				if inst := resolvePostgresInstanceByID(task.InstanceID, manifest); inst != nil {
+					config.Mode = "native"
+					if inst.Mode != "" {
+						config.Mode = inst.Mode
 					}
-					config.Metadata["databases"] = databases
+					config.Version = manifest.Infrastructure.Postgres.Version
+					if inst.Version != "" {
+						config.Version = inst.Version
+					}
+					if config.Version == "" {
+						config.Version = "16"
+					}
+					config.Port = postgresInstancePort(inst)
+					config.Metadata["instance"] = inst.Name
+					config.Metadata["instance_name"] = inst.Name
+					if len(inst.Databases) > 0 {
+						config.Metadata["databases"] = databaseConfigsToMetadata(inst.Databases)
+					}
+					if len(inst.Tuning) > 0 {
+						config.Metadata["tuning"] = stringMapToAnyMap(inst.Tuning)
+					}
+					if inst.Password != "" {
+						config.Metadata["postgres_password"] = inst.Password
+					} else if password := strings.TrimSpace(sharedEnv["POSTGRES_"+envNameToken(inst.Name)+"_PASSWORD"]); password != "" {
+						config.Metadata["postgres_password"] = password
+					} else if password := strings.TrimSpace(sharedEnv["DATABASE_PASSWORD"]); password != "" {
+						config.Metadata["postgres_password"] = password
+					}
+					for k, v := range inst.Config {
+						config.Metadata["postgres_"+k] = v
+						config.Metadata[k] = v
+					}
+				} else {
+					if manifest.Infrastructure.Postgres.Mode != "" {
+						config.Mode = manifest.Infrastructure.Postgres.Mode
+					}
+					if manifest.Infrastructure.Postgres.Version != "" {
+						config.Version = manifest.Infrastructure.Postgres.Version
+					}
+					if manifest.Infrastructure.Postgres.Port != 0 {
+						config.Port = manifest.Infrastructure.Postgres.Port
+					}
+					if len(manifest.Infrastructure.Postgres.Databases) > 0 {
+						config.Metadata["databases"] = databaseConfigsToMetadata(manifest.Infrastructure.Postgres.Databases)
+					}
 				}
 			}
 		case "clickhouse":
@@ -1990,7 +2017,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		config.Mode = "native"
 		// Keep manifest-specified version for infra with explicit native version
 		// semantics; only fall back to "latest" for the remaining legacy cases.
-		keepVersion := task.Type == "yugabyte" || task.Type == "kafka" || task.Type == "kafka-controller" || task.Type == "clickhouse"
+		keepVersion := task.Type == "yugabyte" || task.Type == "postgres" || task.Type == "kafka" || task.Type == "kafka-controller" || task.Type == "clickhouse"
 		if !keepVersion || config.Version == "" {
 			config.Version = "latest"
 		}
@@ -2877,6 +2904,44 @@ func resolveRedisInstanceByID(instanceID string, manifest *inventory.Manifest) *
 	return nil
 }
 
+func resolvePostgresInstanceByID(instanceID string, manifest *inventory.Manifest) *inventory.PostgresInstance {
+	if manifest == nil || manifest.Infrastructure.Postgres == nil || instanceID == "" {
+		return nil
+	}
+	for i := range manifest.Infrastructure.Postgres.Instances {
+		if manifest.Infrastructure.Postgres.Instances[i].Name == instanceID {
+			return &manifest.Infrastructure.Postgres.Instances[i]
+		}
+	}
+	return nil
+}
+
+func postgresInstancePort(inst *inventory.PostgresInstance) int {
+	if inst == nil || inst.Port == 0 {
+		return 5432
+	}
+	return inst.Port
+}
+
+func databaseConfigsToMetadata(databases []inventory.DatabaseConfig) []map[string]string {
+	items := make([]map[string]string, 0, len(databases))
+	for _, db := range databases {
+		items = append(items, map[string]string{
+			"name":  db.Name,
+			"owner": db.Owner,
+		})
+	}
+	return items
+}
+
+func stringMapToAnyMap(values map[string]string) map[string]any {
+	out := make(map[string]any, len(values))
+	for k, v := range values {
+		out[k] = v
+	}
+	return out
+}
+
 func buildControllerQuorum(manifest *inventory.Manifest) string {
 	if manifest == nil || manifest.Infrastructure.Kafka == nil {
 		return ""
@@ -3390,6 +3455,27 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if pgHost != "" {
 			env["DATABASE_HOST"] = pgHost
 			env["DATABASE_PORT"] = strconv.Itoa(port)
+		}
+		for _, inst := range pg.Instances {
+			instHost := manifestMeshHostname(manifest, inst.Host)
+			if instHost == "" {
+				continue
+			}
+			if strings.TrimSpace(inst.Host) == strings.TrimSpace(task.Host) {
+				instHost = "127.0.0.1"
+			}
+			instPort := postgresInstancePort(&inst)
+			prefix := fmt.Sprintf("POSTGRES_%s", envNameToken(inst.Name))
+			env[prefix+"_HOST"] = instHost
+			env[prefix+"_PORT"] = strconv.Itoa(instPort)
+			env[prefix+"_ADDR"] = fmt.Sprintf("%s:%d", instHost, instPort)
+			if inst.Password != "" {
+				env[prefix+"_PASSWORD"] = inst.Password
+			} else if password := strings.TrimSpace(sharedEnv[prefix+"_PASSWORD"]); password != "" {
+				env[prefix+"_PASSWORD"] = password
+			} else if password := strings.TrimSpace(sharedEnv["DATABASE_PASSWORD"]); password != "" {
+				env[prefix+"_PASSWORD"] = password
+			}
 		}
 	}
 
@@ -4162,6 +4248,18 @@ func firstNonEmptyEnv(env map[string]string, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func envNameToken(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(strings.TrimSpace(name)) {
+		if r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	return strings.Trim(b.String(), "_")
 }
 
 // loadEnvFile reads a KEY=VALUE env file and merges values into the target map.

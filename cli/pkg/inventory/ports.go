@@ -37,6 +37,15 @@ func (m *Manifest) validatePortCollisions() error {
 				return err
 			}
 		}
+		for _, inst := range m.Infrastructure.Postgres.Instances {
+			instPort := inst.Port
+			if instPort == 0 {
+				instPort = 5432
+			}
+			if err := addPort(inst.Host, instPort, "postgres-"+inst.Name); err != nil {
+				return err
+			}
+		}
 		if m.Infrastructure.Postgres.IsYugabyte() {
 			const (
 				yugabyteMasterRPCPort  = 7100

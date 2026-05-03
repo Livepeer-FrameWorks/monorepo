@@ -7,6 +7,7 @@
     compose_stack_project_dir: "{{ listmonk_project_dir }}"
     compose_stack_compose_content: "{{ lookup('template', 'compose.yml.j2') }}"
     compose_stack_env: "{{ listmonk_env }}"
+    compose_stack_wait_timeout: "{{ listmonk_wait_timeout }}"
   tags: [install, configure, service, validate]
 
 - name: Listmonk | restart

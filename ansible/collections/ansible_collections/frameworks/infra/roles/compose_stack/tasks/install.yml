@@ -235,6 +235,7 @@
     pull: "{{ compose_stack_pull }}"
     recreate: "{{ compose_stack_recreate }}"
     wait: "{{ compose_stack_wait }}"
+    wait_timeout: "{{ compose_stack_wait_timeout }}"
   when:
     - not (compose_stack_render_only | default(false) | bool)
     - not ansible_check_mode

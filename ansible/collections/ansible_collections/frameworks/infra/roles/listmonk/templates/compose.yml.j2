@@ -8,14 +8,16 @@ services:
       - "{{ listmonk_port }}:9000"
     env_file:
       - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - frameworks
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:9000/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 30s
+      retries: 10
+      start_period: 120s
 networks:
   frameworks:
     driver: bridge

@@ -11,6 +11,7 @@
     compose_stack_project_dir: "{{ chatwoot_project_dir }}"
     compose_stack_compose_content: "{{ lookup('template', 'compose.yml.j2') }}"
     compose_stack_env: "{{ chatwoot_env | combine({'SECRET_KEY_BASE': chatwoot_secret_key_value}) }}"
+    compose_stack_wait_timeout: "{{ chatwoot_wait_timeout }}"
   tags: [install, configure, service, validate]
 
 - name: Chatwoot | restart

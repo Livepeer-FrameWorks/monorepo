@@ -150,18 +150,32 @@ type InfrastructureConfig struct {
 
 // PostgresConfig represents Postgres/YugabyteDB configuration
 type PostgresConfig struct {
-	Enabled           bool              `yaml:"enabled"`
-	Engine            string            `yaml:"engine,omitempty"` // "postgres" (default) or "yugabyte"
-	Mode              string            `yaml:"mode"`             // native (only supported mode for infrastructure)
-	Version           string            `yaml:"version"`
-	Host              string            `yaml:"host,omitempty"`  // Single-host (vanilla Postgres)
-	Nodes             []PostgresNode    `yaml:"nodes,omitempty"` // Multi-node (YugabyteDB)
-	Port              int               `yaml:"port"`
-	ReplicationFactor int               `yaml:"replication_factor,omitempty"` // Default: len(Nodes)
-	Databases         []DatabaseConfig  `yaml:"databases,omitempty"`
-	Tuning            map[string]string `yaml:"tuning,omitempty"`
-	SQLAccess         string            `yaml:"sql_access,omitempty"` // "direct" (default) or "ssh"
-	Password          string            `yaml:"password,omitempty"`
+	Enabled           bool               `yaml:"enabled"`
+	Engine            string             `yaml:"engine,omitempty"` // "postgres" (default) or "yugabyte"
+	Mode              string             `yaml:"mode"`             // native (only supported mode for infrastructure)
+	Version           string             `yaml:"version"`
+	Host              string             `yaml:"host,omitempty"`  // Single-host (vanilla Postgres)
+	Nodes             []PostgresNode     `yaml:"nodes,omitempty"` // Multi-node (YugabyteDB)
+	Instances         []PostgresInstance `yaml:"instances,omitempty"`
+	Port              int                `yaml:"port"`
+	ReplicationFactor int                `yaml:"replication_factor,omitempty"` // Default: len(Nodes)
+	Databases         []DatabaseConfig   `yaml:"databases,omitempty"`
+	Tuning            map[string]string  `yaml:"tuning,omitempty"`
+	SQLAccess         string             `yaml:"sql_access,omitempty"` // "direct" (default) or "ssh"
+	Password          string             `yaml:"password,omitempty"`
+}
+
+// PostgresInstance represents an additional named vanilla PostgreSQL instance.
+type PostgresInstance struct {
+	Name      string            `yaml:"name"`
+	Host      string            `yaml:"host"`
+	Port      int               `yaml:"port,omitempty"`
+	Version   string            `yaml:"version,omitempty"`
+	Mode      string            `yaml:"mode,omitempty"`
+	Password  string            `yaml:"password,omitempty"`
+	Databases []DatabaseConfig  `yaml:"databases,omitempty"`
+	Tuning    map[string]string `yaml:"tuning,omitempty"`
+	Config    map[string]string `yaml:"config,omitempty"`
 }
 
 // PostgresNode represents a node in a multi-node Postgres/YugabyteDB cluster
@@ -189,17 +203,20 @@ func (pg *PostgresConfig) EffectivePort() int {
 
 // AllHosts returns all host names for this config (single Host or multi-node Nodes)
 func (pg *PostgresConfig) AllHosts() []string {
+	hosts := make([]string, 0, len(pg.Nodes)+len(pg.Instances)+1)
 	if len(pg.Nodes) > 0 {
-		hosts := make([]string, len(pg.Nodes))
-		for i, n := range pg.Nodes {
-			hosts[i] = n.Host
+		for _, n := range pg.Nodes {
+			hosts = append(hosts, n.Host)
 		}
-		return hosts
+	} else if pg.Host != "" {
+		hosts = append(hosts, pg.Host)
 	}
-	if pg.Host != "" {
-		return []string{pg.Host}
+	for _, inst := range pg.Instances {
+		if inst.Host != "" {
+			hosts = append(hosts, inst.Host)
+		}
 	}
-	return nil
+	return hosts
 }
 
 // MasterAddresses builds the comma-separated master addresses string for YugabyteDB.

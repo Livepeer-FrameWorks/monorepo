@@ -826,6 +826,13 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 				Nodes: []inventory.PostgresNode{
 					{Host: "yuga-eu-1", ID: 1},
 				},
+				Instances: []inventory.PostgresInstance{
+					{
+						Name: "chatwoot",
+						Host: "central-eu-1",
+						Port: 5432,
+					},
+				},
 			},
 			ClickHouse: &inventory.ClickHouseConfig{
 				Enabled: true,
@@ -874,6 +881,15 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 	if env["DATABASE_URL"] != "postgres://foghorn@yuga-eu-1.internal:5433/foghorn?sslmode=disable" {
 		t.Fatalf("expected DATABASE_URL to use mesh host with service-level user and database, got %q", env["DATABASE_URL"])
 	}
+	if env["POSTGRES_CHATWOOT_HOST"] != "127.0.0.1" {
+		t.Fatalf("expected POSTGRES_CHATWOOT_HOST to use loopback for colocated Postgres, got %q", env["POSTGRES_CHATWOOT_HOST"])
+	}
+	if env["POSTGRES_CHATWOOT_PORT"] != "5432" {
+		t.Fatalf("expected POSTGRES_CHATWOOT_PORT to use named instance port, got %q", env["POSTGRES_CHATWOOT_PORT"])
+	}
+	if env["POSTGRES_CHATWOOT_ADDR"] != "127.0.0.1:5432" {
+		t.Fatalf("expected POSTGRES_CHATWOOT_ADDR to use loopback endpoint, got %q", env["POSTGRES_CHATWOOT_ADDR"])
+	}
 	if env["KAFKA_BROKERS"] != "central-eu-1.internal:9092,regional-eu-1.internal:9093" {
 		t.Fatalf("expected KAFKA_BROKERS to use mesh hosts, got %q", env["KAFKA_BROKERS"])
 	}
@@ -897,6 +913,66 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 	}
 	if env["CHATWOOT_HOST"] != "central-eu-1.internal" {
 		t.Fatalf("expected CHATWOOT_HOST to use mesh host, got %q", env["CHATWOOT_HOST"])
+	}
+}
+
+func TestBuildTaskConfigPostgresInstanceDoesNotInheritYugabyteSettings(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Channel: "stable",
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled: true,
+				Engine:  "yugabyte",
+				Version: "2.25.1.0",
+				Port:    5433,
+				Nodes:   []inventory.PostgresNode{{Host: "yuga-eu-1", ID: 1}},
+				Instances: []inventory.PostgresInstance{
+					{
+						Name:     "chatwoot",
+						Host:     "central-eu-1",
+						Port:     5432,
+						Version:  "16",
+						Password: "chatwoot-secret",
+						Databases: []inventory.DatabaseConfig{
+							{Name: "chatwoot", Owner: "chatwoot"},
+						},
+					},
+				},
+			},
+		},
+	}
+	task := &orchestrator.Task{
+		Name:       "postgres@chatwoot",
+		Type:       "postgres",
+		ServiceID:  "postgres",
+		InstanceID: "chatwoot",
+		Host:       "central-eu-1",
+		Phase:      orchestrator.PhaseInfrastructure,
+	}
+
+	config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", map[string]string{}, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig returned error: %v", err)
+	}
+
+	if config.Mode != "native" {
+		t.Fatalf("postgres instance mode = %q, want native", config.Mode)
+	}
+	if config.Version != "16" {
+		t.Fatalf("postgres instance version = %q, want 16", config.Version)
+	}
+	if config.Port != 5432 {
+		t.Fatalf("postgres instance port = %d, want 5432", config.Port)
+	}
+	if got := config.Metadata["postgres_password"]; got != "chatwoot-secret" {
+		t.Fatalf("postgres_password = %#v, want chatwoot-secret", got)
+	}
+	databases, ok := config.Metadata["databases"].([]map[string]string)
+	if !ok || len(databases) != 1 {
+		t.Fatalf("databases metadata = %#v, want one database", config.Metadata["databases"])
+	}
+	if databases[0]["name"] != "chatwoot" || databases[0]["owner"] != "chatwoot" {
+		t.Fatalf("databases[0] = %#v, want chatwoot/chatwoot", databases[0])
 	}
 }
 

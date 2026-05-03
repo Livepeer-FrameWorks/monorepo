@@ -41,12 +41,15 @@ func listmonkRoleDetect(_ context.Context, _ inventory.Host, _ RoleBuildHelpers)
 // LISTMONK_PASSWORD).
 func listmonkEnvMap(config ServiceConfig) map[string]any {
 	dbUser := orElse(config.EnvVars["DATABASE_USER"], "postgres")
+	dbHost := firstNonEmptyEnv(config.EnvVars, "POSTGRES_LISTMONK_HOST", "POSTGRES_SUPPORT_HOST", "POSTGRES_CHATWOOT_HOST", "DATABASE_HOST")
+	dbPort := firstNonEmptyEnv(config.EnvVars, "POSTGRES_LISTMONK_PORT", "POSTGRES_SUPPORT_PORT", "POSTGRES_CHATWOOT_PORT", "DATABASE_PORT")
+	dbPassword := firstNonEmptyEnv(config.EnvVars, "POSTGRES_LISTMONK_PASSWORD", "POSTGRES_SUPPORT_PASSWORD", "POSTGRES_CHATWOOT_PASSWORD", "DATABASE_PASSWORD")
 	env := map[string]any{
 		"LISTMONK_app__address":   "0.0.0.0:9000",
-		"LISTMONK_db__host":       config.EnvVars["DATABASE_HOST"],
-		"LISTMONK_db__port":       config.EnvVars["DATABASE_PORT"],
+		"LISTMONK_db__host":       rewriteLoopbackForDockerHost(dbHost),
+		"LISTMONK_db__port":       dbPort,
 		"LISTMONK_db__user":       dbUser,
-		"LISTMONK_db__password":   config.EnvVars["DATABASE_PASSWORD"],
+		"LISTMONK_db__password":   dbPassword,
 		"LISTMONK_db__database":   "listmonk",
 		"LISTMONK_db__ssl_mode":   "disable",
 		"LISTMONK_ADMIN_USER":     config.EnvVars["LISTMONK_USERNAME"],

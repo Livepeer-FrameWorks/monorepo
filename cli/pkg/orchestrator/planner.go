@@ -149,6 +149,12 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 			graph.AddTask(task)
 			hostDatabaseDeps[pg.Host] = append(hostDatabaseDeps[pg.Host], task.Name)
 		}
+		for _, inst := range pg.Instances {
+			task := NewTask("postgres", "postgres", inst.Name, inst.Host, PhaseInfrastructure)
+			task.DependsOn = withMesh(task.DependsOn)
+			graph.AddTask(task)
+			hostDatabaseDeps[inst.Host] = append(hostDatabaseDeps[inst.Host], task.Name)
+		}
 	}
 
 	// Add Redis

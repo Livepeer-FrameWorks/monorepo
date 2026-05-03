@@ -5,12 +5,15 @@ import "testing"
 func TestListmonkEnvMapWiresAdminCredsFromGitOps(t *testing.T) {
 	env := listmonkEnvMap(ServiceConfig{
 		EnvVars: map[string]string{
-			"DATABASE_HOST":     "pg.frameworks",
-			"DATABASE_PORT":     "5432",
-			"DATABASE_USER":     "postgres",
-			"DATABASE_PASSWORD": "pgsecret",
-			"LISTMONK_USERNAME": "admin",
-			"LISTMONK_PASSWORD": "from-sops",
+			"DATABASE_HOST":             "yuga-eu-1.internal",
+			"DATABASE_PORT":             "5433",
+			"DATABASE_USER":             "postgres",
+			"DATABASE_PASSWORD":         "pgsecret",
+			"POSTGRES_SUPPORT_HOST":     "127.0.0.1",
+			"POSTGRES_SUPPORT_PORT":     "5432",
+			"POSTGRES_SUPPORT_PASSWORD": "support-secret",
+			"LISTMONK_USERNAME":         "admin",
+			"LISTMONK_PASSWORD":         "from-sops",
 		},
 	})
 
@@ -19,6 +22,15 @@ func TestListmonkEnvMapWiresAdminCredsFromGitOps(t *testing.T) {
 	}
 	if got := env["LISTMONK_ADMIN_PASSWORD"]; got != "from-sops" {
 		t.Fatalf("LISTMONK_ADMIN_PASSWORD = %v, want %q (sourced from LISTMONK_PASSWORD)", got, "from-sops")
+	}
+	if got := env["LISTMONK_db__host"]; got != "host.docker.internal" {
+		t.Fatalf("LISTMONK_db__host = %v, want host.docker.internal", got)
+	}
+	if got := env["LISTMONK_db__port"]; got != "5432" {
+		t.Fatalf("LISTMONK_db__port = %v, want 5432", got)
+	}
+	if got := env["LISTMONK_db__password"]; got != "support-secret" {
+		t.Fatalf("LISTMONK_db__password = %v, want support-secret", got)
 	}
 }
 
