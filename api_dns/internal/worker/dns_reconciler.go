@@ -109,6 +109,10 @@ func (r *DNSReconciler) ensureClusterWildcardCerts(ctx context.Context) {
 		if clusterSlug == "" || clusterSlug == "default" {
 			continue
 		}
+		if zoneErr := r.dnsManager.EnsureBunnyClusterZone(ctx, clusterSlug); zoneErr != nil {
+			r.logger.WithError(zoneErr).WithField("cluster", cluster.GetClusterId()).Warn("Failed to ensure media cluster DNS zone")
+			continue
+		}
 		cert, certErr := r.certManager.EnsureClusterWildcardCertificate(ctx, clusterSlug, r.rootDomain, r.acmeEmail)
 		if certErr != nil {
 			r.logger.WithError(certErr).WithField("cluster", cluster.GetClusterId()).Warn("Failed to ensure cluster wildcard certificate")

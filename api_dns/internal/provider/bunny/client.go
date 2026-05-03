@@ -262,9 +262,7 @@ func sortRecords(records []Record) {
 func sameRecordIdentity(a, b Record) bool {
 	return normalizeRecordName(a.Name) == normalizeRecordName(b.Name) &&
 		a.Type == b.Type &&
-		a.Value == b.Value &&
-		floatPtrEqual(a.GeolocationLatitude, b.GeolocationLatitude) &&
-		floatPtrEqual(a.GeolocationLongitude, b.GeolocationLongitude)
+		a.Value == b.Value
 }
 
 func sameRecordConfig(a, b Record) bool {
@@ -273,6 +271,8 @@ func sameRecordConfig(a, b Record) bool {
 		a.Weight == b.Weight &&
 		a.MonitorType == b.MonitorType &&
 		a.SmartRoutingType == b.SmartRoutingType &&
+		floatPtrEqual(a.GeolocationLatitude, b.GeolocationLatitude) &&
+		floatPtrEqual(a.GeolocationLongitude, b.GeolocationLongitude) &&
 		a.Disabled == b.Disabled &&
 		a.Comment == b.Comment
 }

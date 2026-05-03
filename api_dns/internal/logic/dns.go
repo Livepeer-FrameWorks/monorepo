@@ -125,6 +125,19 @@ func (m *DNSManager) SetBunnyClient(client bunnyClient) {
 	m.bunnyClient = client
 }
 
+func (m *DNSManager) EnsureBunnyClusterZone(ctx context.Context, clusterSlug string) error {
+	if m.bunnyClient == nil {
+		return nil
+	}
+	clusterSlug = strings.TrimSpace(clusterSlug)
+	if clusterSlug == "" {
+		return fmt.Errorf("cluster slug is required")
+	}
+	zoneDomain := fmt.Sprintf("%s.%s", clusterSlug, m.domain)
+	_, _, err := m.ensureBunnyZoneDelegation(ctx, zoneDomain, logging.Fields{"cluster": clusterSlug})
+	return err
+}
+
 // isGranularEdgeService returns true for service types that require a wildcard
 // cert on the edge for TLS termination.
 func isGranularEdgeService(serviceType string) bool {
@@ -442,19 +455,12 @@ func (m *DNSManager) clearBunnyClusterService(ctx context.Context, fqdn, service
 }
 
 func (m *DNSManager) syncBunnyClusterService(ctx context.Context, fqdn, serviceType, zoneDomain string, nodes []dnsNode) (map[string]string, error) {
-	zone, created, err := m.bunnyClient.EnsureZone(ctx, zoneDomain)
+	zone, _, err := m.ensureBunnyZoneDelegation(ctx, zoneDomain, logging.Fields{
+		"service_type": serviceType,
+		"fqdn":         fqdn,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to ensure Bunny zone %s: %w", zoneDomain, err)
-	}
-	if created {
-		m.logger.WithFields(logging.Fields{
-			"zone":         zoneDomain,
-			"service_type": serviceType,
-		}).Info("Created Bunny DNS zone")
-	}
-
-	if delegationErr := m.ensureBunnyDelegation(zoneDomain, zone.Nameservers()); delegationErr != nil {
-		return nil, fmt.Errorf("failed to ensure Bunny delegation for %s: %w", zoneDomain, delegationErr)
+		return nil, err
 	}
 
 	recordName, ok := bunnyRecordName(serviceType)
@@ -493,6 +499,25 @@ func (m *DNSManager) syncBunnyClusterService(ctx context.Context, fqdn, serviceT
 		return map[string]string{fqdn + ":cloudflare-cleanup": err.Error()}, nil
 	}
 	return cleanupErrors, nil
+}
+
+func (m *DNSManager) ensureBunnyZoneDelegation(ctx context.Context, zoneDomain string, logFields logging.Fields) (*bunny.Zone, bool, error) {
+	zone, created, err := m.bunnyClient.EnsureZone(ctx, zoneDomain)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to ensure Bunny zone %s: %w", zoneDomain, err)
+	}
+	if created {
+		fields := logging.Fields{"zone": zoneDomain}
+		for k, v := range logFields {
+			fields[k] = v
+		}
+		m.logger.WithFields(fields).Info("Created Bunny DNS zone")
+	}
+
+	if err := m.ensureBunnyDelegation(zoneDomain, zone.Nameservers()); err != nil {
+		return nil, created, fmt.Errorf("failed to ensure Bunny delegation for %s: %w", zoneDomain, err)
+	}
+	return zone, created, nil
 }
 
 func bunnyRecordName(serviceType string) (string, bool) {

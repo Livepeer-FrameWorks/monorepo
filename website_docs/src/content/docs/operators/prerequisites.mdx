@@ -171,7 +171,8 @@ FrameWorks requires several external services. See [External Services](/operator
 
 **Required:**
 
-- Cloudflare (required if using Navigator-managed DNS; self-hosted Anycast DNS planned)
+- Cloudflare (required for Navigator-managed root/API/web/admin DNS)
+- Bunny DNS (optional; when configured, Navigator delegates media cluster DNS to Bunny)
 - SSL/TLS certificates (ACME/Let's Encrypt managed via Navigator/Caddy, or bring your own)
 
 **Optional:**

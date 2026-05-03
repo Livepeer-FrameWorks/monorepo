@@ -15,21 +15,21 @@ Navigator automates DNS record management and certificate issuance for your infr
 
 FrameWorks uses a two-layer routing strategy:
 
-- **DNS layer (Cloudflare)**: Infrastructure-level geo-routing to nearest region
+- **DNS layer (Cloudflare + Bunny)**: Infrastructure-level geo-routing to nearest region or media cluster
 - **Application layer (Foghorn)**: Capacity-aware routing to optimal edge node
 
-> **Note**: Cloudflare is the current DNS provider for convenience, but Navigator is designed to move to a fully self-hosted Anycast DNS layer in the future.
+> **Note**: Cloudflare remains the root/API/web/admin DNS provider. Bunny DNS handles delegated media cluster zones so edge growth does not consume Cloudflare Load Balancing endpoints.
 
 ### How Navigator Works
 
-Navigator (`api_dns`) automatically manages Cloudflare DNS based on node inventory from Quartermaster:
+Navigator (`api_dns`) automatically manages DNS based on node inventory from Quartermaster:
 
 1. Quartermaster triggers a DNS sync (for example, when nodes are created/registered)
 2. Navigator fetches nodes for that service type and filters to those with external IPs
-3. Updates Cloudflare DNS:
-   - Single node → A record
-   - Multiple nodes on root/global hostnames → load balancer with one proximity-steered pool per Quartermaster cluster
-   - Multiple nodes on cluster-scoped hostnames → one load balancer pool for that cluster
+3. Updates the authoritative provider:
+   - Root/API/web/admin names → Cloudflare A records or load balancers
+   - Multiple nodes on root/global hostnames → Cloudflare load balancer with one proximity-steered pool per Quartermaster cluster
+   - Media cluster names → Bunny A-record sets with geolocation Smart Routing when coordinates are available
 4. Applies proxying rules (default: `chartroom`, `foredeck`, and `logbook`)
 5. Handles ACME certificate issuance via DNS-01 challenges
 

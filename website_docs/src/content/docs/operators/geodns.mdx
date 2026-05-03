@@ -63,18 +63,20 @@ Use wildcard certificates issued via DNS-01 challenge (Let's Encrypt or equivale
 
 ## GeoDNS Strategy
 
-Navigator currently implements DNS through Cloudflare:
+Navigator splits DNS by traffic class:
 
 1. Quartermaster returns DNS-eligible nodes with non-empty `external_ip`.
-2. A service with one healthy IP gets an A record.
-3. A root/global service with two or more healthy IPs gets a Cloudflare load balancer with one pool per Quartermaster cluster.
-4. Pool `latitude` / `longitude` values are set from the centroid of healthy node coordinates, and the load balancer uses `steering_policy: proximity` when at least two pools have coordinates.
-5. Cluster-scoped domains use one pool for that cluster and balance across healthy origins inside the pool.
-6. Cloudflare health monitors suppress externally unreachable origins between Navigator reconciliations; Quartermaster remains the desired-state source.
+2. Root/API/web/admin services stay in Cloudflare.
+3. A root/global service with one healthy IP gets a Cloudflare A record.
+4. A root/global service with two or more healthy IPs gets a Cloudflare load balancer with one pool per Quartermaster cluster.
+5. Cloudflare pool `latitude` / `longitude` values are set from the centroid of healthy node coordinates, and the load balancer uses `steering_policy: proximity` when at least two pools have coordinates.
+6. Media and edge services are cluster-scoped under `{cluster_slug}.{base_domain}` and delegated to Bunny DNS.
+7. Bunny media records are same-name A-record sets with geolocation Smart Routing when node coordinates are available.
+8. Quartermaster remains the health source; Navigator removes unhealthy nodes from the desired DNS state instead of relying on Bunny health checks.
 
 <Aside type="note">
-  GeoDNS is a stopgap until anycast DNS with a custom backend resolver is justified — typically at
-  10+ PoPs where sub-30-second failover matters.
+  Bunny cluster zones are created and delegated by Navigator before cluster wildcard certificates
+  are issued, so ACME DNS-01 validation uses the provider authoritative for the cluster name.
 </Aside>
 
 ## How the Frontend Uses This

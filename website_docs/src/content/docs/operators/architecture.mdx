@@ -286,13 +286,14 @@ Traffic routing and TLS termination vary by deployment tier:
   which rewrites and reloads Caddy for viewer traffic.
   - Managed via CLI templates (`cli/internal/templates/edge/Caddyfile.tmpl`).
   - Supports HTTP/2, HTTP/3, and WebSocket upgrades natively.
-- **Production (Central/Regional):** Navigator manages public DNS via Cloudflare API.
-  - Single node → A record pointing directly to service
+- **Production (Central/Regional):** Navigator manages public DNS through Cloudflare for root/API/web/admin names and Bunny DNS for delegated media cluster zones.
+  - Root/API/web/admin names → Cloudflare A records or load balancers
   - Multiple root/global nodes → Cloudflare load balancer with one proximity-steered pool per Quartermaster cluster
-  - Multiple cluster-scoped nodes → Cloudflare load balancer with one pool for that cluster
-  - Certificates issued via Let's Encrypt (DNS-01 validation through Cloudflare)
+  - Media cluster names → Bunny A-record sets under `{cluster_slug}.{base_domain}`
+  - Media cluster records use Bunny geolocation Smart Routing when Quartermaster has node coordinates
+  - Certificates issued via Let's Encrypt DNS-01 through the provider authoritative for the name
 
-> **Note:** Cloudflare is used for DNS management and geographic load balancing (DNS-only mode, not proxied). Traffic flows directly to FrameWorks services. A self-hosted anycast DNS solution is planned to replace Cloudflare dependency once an ASN is acquired.
+> **Note:** Cloudflare remains authoritative for root/API/web/admin/support names. Bunny DNS is authoritative for delegated media cluster zones. Traffic flows directly to FrameWorks services; provider-side proxies are not used for media traffic.
 
 ---
 

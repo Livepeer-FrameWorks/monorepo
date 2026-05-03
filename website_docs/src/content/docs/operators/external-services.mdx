@@ -157,7 +157,7 @@ During provisioning, the CLI decrypts the hosts file, merges IPs and SSH targets
 
 **Purpose:** Domain management, geographic routing, load balancing
 
-**Required Provider:** Cloudflare (API support required for Navigator automation; _self-hosted Anycast planned_)
+**Required Provider:** Cloudflare for root/API/web/admin DNS. Bunny DNS is optional; when `BUNNY_API_KEY` is configured, Navigator delegates media cluster zones to Bunny.
 
 **Managed By:** Navigator (`api_dns`) - automates DNS record management based on node inventory
 

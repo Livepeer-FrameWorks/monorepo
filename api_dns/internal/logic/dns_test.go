@@ -795,6 +795,43 @@ func TestSyncServiceByCluster_UsesBunnyForMediaClusterService(t *testing.T) {
 	}
 }
 
+func TestEnsureBunnyClusterZoneCreatesZoneAndDelegates(t *testing.T) {
+	var ensuredZone string
+	bc := &fakeBunnyClient{
+		ensureZone: func(ctx context.Context, domain string) (*bunny.Zone, bool, error) {
+			ensuredZone = domain
+			return &bunny.Zone{ID: 42, Domain: domain, Nameserver1: "kiki.bunny.net", Nameserver2: "coco.bunny.net"}, true, nil
+		},
+	}
+
+	var delegated []cloudflare.DNSRecord
+	cf := &fakeCloudflareClient{
+		listDNSRecords: func(recordType, name string) ([]cloudflare.DNSRecord, error) {
+			if recordType != "NS" || name != "media-eu.example.com" {
+				t.Fatalf("unexpected delegation lookup: type=%s name=%s", recordType, name)
+			}
+			return nil, nil
+		},
+		createDNSRecord: func(record cloudflare.DNSRecord) (*cloudflare.DNSRecord, error) {
+			delegated = append(delegated, record)
+			return &record, nil
+		},
+	}
+
+	manager := NewDNSManager(cf, &fakeQuartermasterClient{}, logrus.New(), "example.com", 30, 60, 5*time.Minute, MonitorConfig{})
+	manager.SetBunnyClient(bc)
+
+	if err := manager.EnsureBunnyClusterZone(context.Background(), "media-eu"); err != nil {
+		t.Fatalf("EnsureBunnyClusterZone returned error: %v", err)
+	}
+	if ensuredZone != "media-eu.example.com" {
+		t.Fatalf("ensured zone = %q, want media-eu.example.com", ensuredZone)
+	}
+	if len(delegated) != 2 {
+		t.Fatalf("expected 2 NS records, got %d", len(delegated))
+	}
+}
+
 func TestSyncServiceByCluster_ClearsBunnyForInactiveCluster(t *testing.T) {
 	qm := &fakeQuartermasterClient{
 		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{

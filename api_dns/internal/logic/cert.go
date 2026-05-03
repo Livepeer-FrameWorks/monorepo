@@ -113,7 +113,8 @@ func normalizeDomains(domains []string) []string {
 	return normalized
 }
 
-// IssueCertificate requests a certificate for a domain using Cloudflare DNS-01.
+// IssueCertificate requests a certificate using the DNS-01 provider
+// authoritative for the requested domain.
 // It implements "Cache-First" logic.
 // tenantID is optional - empty string means platform-wide certificate.
 func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, email string) (certPEM, keyPEM string, expiresAt time.Time, err error) {
