@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/federation"
@@ -108,6 +109,7 @@ type FoghornGRPCServer struct {
 	pendingDVRMu        sync.Mutex
 	originPullMu        sync.Mutex
 	originPulling       map[string]struct{}
+	artifactCleaner     *artifacts.Cleaner
 }
 
 // quartermasterRoutingResolver is the narrow Quartermaster surface this
@@ -184,6 +186,15 @@ func (s *FoghornGRPCServer) enrichClusterID(explicit, streamName, tenantID strin
 // SetCacheInvalidator sets the cache invalidator for tenant cache management
 func (s *FoghornGRPCServer) SetCacheInvalidator(ci CacheInvalidator) {
 	s.cacheInvalidator = ci
+}
+
+// SetArtifactCleaner wires the shared cleanup helper used by DeleteClip,
+// DeleteDVR, and DeleteVodAsset to delete S3 bytes (locally or via the
+// federation delete delegate). Wired from cmd/foghorn/main.go; nil in
+// tests that don't focus on cleanup, in which case the delete handlers
+// soft-delete only and report cleanup as pending.
+func (s *FoghornGRPCServer) SetArtifactCleaner(c *artifacts.Cleaner) {
+	s.artifactCleaner = c
 }
 
 // SetRemoteEdgeCache enables remote edge scoring for cross-cluster viewer routing.
@@ -761,18 +772,22 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 
 	// Check current status from foghorn.artifacts
 	var (
-		currentStatus  string
-		sizeBytes      sql.NullInt64
-		retentionUntil sql.NullTime
-		internalName   sql.NullString
-		denormTenantID sql.NullString
-		denormUserID   sql.NullString
+		currentStatus    string
+		sizeBytes        sql.NullInt64
+		retentionUntil   sql.NullTime
+		internalName     sql.NullString
+		denormTenantID   sql.NullString
+		denormUserID     sql.NullString
+		format           sql.NullString
+		storageClusterID sql.NullString
+		originClusterID  sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT status, size_bytes, retention_until, stream_internal_name, tenant_id, user_id
+		SELECT status, size_bytes, retention_until, stream_internal_name, tenant_id, user_id,
+		       format, storage_cluster_id, origin_cluster_id
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = 'clip' AND tenant_id = $2
-	`, req.ClipHash, req.GetTenantId()).Scan(&currentStatus, &sizeBytes, &retentionUntil, &internalName, &denormTenantID, &denormUserID)
+	`, req.ClipHash, req.GetTenantId()).Scan(&currentStatus, &sizeBytes, &retentionUntil, &internalName, &denormTenantID, &denormUserID, &format, &storageClusterID, &originClusterID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_clip", req.ClipHash, req.GetTenantId(), ""); handled {
@@ -824,6 +839,31 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 		}
 	}
 
+	// Delete S3 bytes immediately (cross-cluster aware via the federation
+	// delete delegate). Failure marks cleanup-pending; soft-delete still
+	// proceeds so the row enters the purge cycle for retries.
+	if s.artifactCleaner == nil {
+		if cleanupError != "" {
+			cleanupError += "; "
+		}
+		cleanupError += "s3 cleanup pending: cleaner not wired"
+		s.logger.WithField("clip_hash", req.ClipHash).Warn("Artifact cleaner not wired; clip S3 cleanup deferred to purge job")
+	} else if errCleanup := s.artifactCleaner.Delete(ctx, artifacts.ArtifactRef{
+		Hash:             req.ClipHash,
+		Type:             "clip",
+		TenantID:         req.GetTenantId(),
+		StreamInternal:   internalName.String,
+		Format:           format.String,
+		StorageClusterID: storageClusterID.String,
+		OriginClusterID:  originClusterID.String,
+	}); errCleanup != nil {
+		if cleanupError != "" {
+			cleanupError += "; "
+		}
+		cleanupError += fmt.Sprintf("s3 cleanup pending: %v", errCleanup)
+		s.logger.WithError(errCleanup).WithField("clip_hash", req.ClipHash).Warn("Failed to delete clip from S3, will be retried by purge job")
+	}
+
 	// Soft delete in foghorn.artifacts
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW()
@@ -839,9 +879,13 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 	// Emit deletion lifecycle immediately (do not wait for node cleanup)
 	s.emitClipDeletedLifecycle(ctx, req.ClipHash, nodeID, sizeBytes, retentionUntil, internalName, denormTenantID, denormUserID, cleanupError)
 
+	message := "clip deleted successfully"
+	if cleanupError != "" {
+		message = "clip deleted (" + cleanupError + ")"
+	}
 	return &pb.DeleteClipResponse{
 		Success: true,
-		Message: "clip deleted successfully",
+		Message: message,
 	}, nil
 }
 
@@ -1258,21 +1302,24 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 
 	// Get DVR artifact info
 	var (
-		dvrStatus      string
-		internalName   string
-		sizeBytes      sql.NullInt64
-		retentionUntil sql.NullTime
-		startedAt      sql.NullTime
-		endedAt        sql.NullTime
-		denormTenantID sql.NullString
-		denormUserID   sql.NullString
+		dvrStatus        string
+		internalName     string
+		sizeBytes        sql.NullInt64
+		retentionUntil   sql.NullTime
+		startedAt        sql.NullTime
+		endedAt          sql.NullTime
+		denormTenantID   sql.NullString
+		denormUserID     sql.NullString
+		storageClusterID sql.NullString
+		originClusterID  sql.NullString
 	)
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT status, COALESCE(stream_internal_name, ''), size_bytes, retention_until, started_at, ended_at, tenant_id, user_id
+		SELECT status, COALESCE(stream_internal_name, ''), size_bytes, retention_until, started_at, ended_at, tenant_id, user_id,
+		       storage_cluster_id, origin_cluster_id
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
-	`, req.DvrHash, req.GetTenantId()).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID)
+	`, req.DvrHash, req.GetTenantId()).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID, &storageClusterID, &originClusterID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_dvr", req.DvrHash, req.GetTenantId(), ""); handled {
@@ -1342,6 +1389,29 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 		}
 	}
 
+	// Delete S3 bytes immediately (cross-cluster aware). Failure marks
+	// cleanup-pending; soft-delete still proceeds.
+	if s.artifactCleaner == nil {
+		if cleanupError != "" {
+			cleanupError += "; "
+		}
+		cleanupError += "s3 cleanup pending: cleaner not wired"
+		s.logger.WithField("dvr_hash", req.DvrHash).Warn("Artifact cleaner not wired; DVR S3 cleanup deferred to purge job")
+	} else if errCleanup := s.artifactCleaner.Delete(ctx, artifacts.ArtifactRef{
+		Hash:             req.DvrHash,
+		Type:             "dvr",
+		TenantID:         req.GetTenantId(),
+		StreamInternal:   internalName,
+		StorageClusterID: storageClusterID.String,
+		OriginClusterID:  originClusterID.String,
+	}); errCleanup != nil {
+		if cleanupError != "" {
+			cleanupError += "; "
+		}
+		cleanupError += fmt.Sprintf("s3 cleanup pending: %v", errCleanup)
+		s.logger.WithError(errCleanup).WithField("dvr_hash", req.DvrHash).Warn("Failed to delete DVR from S3, will be retried by purge job")
+	}
+
 	// Soft delete in foghorn.artifacts
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW()
@@ -1357,9 +1427,13 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 	// Emit deletion lifecycle immediately (do not wait for node cleanup)
 	s.emitDVRDeletedLifecycle(ctx, req.DvrHash, nodeID, sizeBytes, retentionUntil, startedAt, endedAt, internalName, denormTenantID, denormUserID, cleanupError)
 
+	message := "DVR recording deleted successfully"
+	if cleanupError != "" {
+		message = "DVR recording deleted (" + cleanupError + ")"
+	}
 	return &pb.DeleteDVRResponse{
 		Success: true,
-		Message: "DVR recording deleted successfully",
+		Message: message,
 	}, nil
 }
 
@@ -2774,18 +2848,24 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 	// Check current status
 	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
 	var (
-		currentStatus  string
-		s3Key          string
-		sizeBytes      sql.NullInt64
-		retentionUntil sql.NullTime
-		userID         sql.NullString
+		currentStatus    string
+		s3Key            string
+		s3URL            sql.NullString
+		formatStr        sql.NullString
+		sizeBytes        sql.NullInt64
+		retentionUntil   sql.NullTime
+		userID           sql.NullString
+		storageClusterID sql.NullString
+		originClusterID  sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT a.status, COALESCE(v.s3_key, ''), a.size_bytes, a.retention_until, a.user_id
+		SELECT a.status, COALESCE(v.s3_key, ''), a.s3_url, a.format,
+		       a.size_bytes, a.retention_until, a.user_id,
+		       a.storage_cluster_id, a.origin_cluster_id
 		FROM foghorn.artifacts a
 		LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
 		WHERE a.artifact_hash = $1 AND a.artifact_type = 'vod' AND a.tenant_id = $2
-	`, req.ArtifactHash, req.GetTenantId()).Scan(&currentStatus, &s3Key, &sizeBytes, &retentionUntil, &userID)
+	`, req.ArtifactHash, req.GetTenantId()).Scan(&currentStatus, &s3Key, &s3URL, &formatStr, &sizeBytes, &retentionUntil, &userID, &storageClusterID, &originClusterID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_vod", req.ArtifactHash, req.GetTenantId(), ""); handled {
@@ -2852,15 +2932,33 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 		}
 	}
 
-	// Delete from S3 if we have a key and client
-	if s3Key != "" && s.s3Client != nil && currentStatus != "uploading" {
-		if errDelete := s.s3Client.Delete(ctx, s3Key); errDelete != nil {
+	// Delete from S3 immediately (cross-cluster aware via the federation
+	// delete delegate). The cleaner derives the target from
+	// vod_metadata.s3_key, falling back to a.s3_url and finally to the
+	// deterministic BuildVodS3Key shape so VODs whose s3_key was never
+	// recorded still get cleaned. Failure marks cleanup-pending; soft-
+	// delete still proceeds so the row enters the purge cycle for
+	// retries.
+	if currentStatus != "uploading" {
+		if s.artifactCleaner == nil {
+			cleanupErrors = append(cleanupErrors, "s3 cleanup pending: cleaner not wired")
+			s.logger.WithField("artifact_hash", req.ArtifactHash).Warn("Artifact cleaner not wired; VOD S3 cleanup deferred to purge job")
+		} else if errDelete := s.artifactCleaner.Delete(ctx, artifacts.ArtifactRef{
+			Hash:             req.ArtifactHash,
+			Type:             "vod",
+			TenantID:         req.GetTenantId(),
+			Format:           formatStr.String,
+			VODS3Key:         s3Key,
+			S3URL:            s3URL.String,
+			StorageClusterID: storageClusterID.String,
+			OriginClusterID:  originClusterID.String,
+		}); errDelete != nil {
 			cleanupErrors = append(cleanupErrors, fmt.Sprintf("s3 cleanup pending: %v", errDelete))
 			s.logger.WithFields(logging.Fields{
 				"artifact_hash": req.ArtifactHash,
 				"s3_key":        s3Key,
 				"error":         errDelete,
-			}).Warn("Failed to delete from S3, will be cleaned up later")
+			}).Warn("Failed to delete from S3, will be retried by purge job")
 		}
 	}
 

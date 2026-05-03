@@ -52,6 +52,27 @@ service FoghornFederation {
   // storage_delegation_unsupported_for_vod when the resolver picks a remote
   // storage cluster.
   rpc MintStorageURLs(MintStorageURLsRequest) returns (MintStorageURLsResponse);
+
+  // DeleteStorageObjects asks the storage-cluster Foghorn to delete an
+  // artifact's S3 bytes from its local backing. The caller is the Foghorn
+  // pool with the authoritative artifact row (origin or local); the callee
+  // is the pool that owns the named target_cluster_id's S3.
+  //
+  // Caller resolves the deletion target (s3_key for clip/vod, s3_prefix for
+  // dvr) from its own foghorn.artifacts + vod_metadata and passes it on the
+  // wire. The callee MUST NOT reconstruct the target from its own row:
+  // rows on the storage cluster may be cache-healed stubs created by
+  // MintStorageURLs and lack vod_metadata.s3_key, format, or other delete-
+  // critical fields, which would lead to wrong-key deletes or silent leaks.
+  //
+  // The callee validates service auth, target_cluster_id ownership (same
+  // bucket-tuple check as MintStorageURLs), tenant binding when a local row
+  // exists, and per-tenant key/prefix shape, then deletes exactly the
+  // supplied target via its local S3 client. NotFound on the supplied
+  // key/prefix is reported as accepted=true (idempotent retries). Auth,
+  // ownership, and shape failures are NEVER collapsed into not-found
+  // success.
+  rpc DeleteStorageObjects(DeleteStorageObjectsRequest) returns (DeleteStorageObjectsResponse);
 }
 
 message QueryStreamRequest {
@@ -459,4 +480,63 @@ message MintStorageURLsResponse {
   map<string, string> segment_urls = 5;
 
   uint32 url_expiry_seconds = 6;
+}
+
+// DeleteStorageObjectsRequest asks the storage-cluster Foghorn to delete
+// an artifact's S3 bytes. The caller resolves the target from its
+// authoritative row; the callee validates and operates on exactly what
+// was sent.
+message DeleteStorageObjectsRequest {
+  string tenant_id          = 1;
+  string requesting_cluster = 2;
+
+  // target_cluster_id names the storage cluster the caller resolved as
+  // the owner of these bytes. Same ownership semantics as
+  // MintStorageURLsRequest.target_cluster_id: callee rejects with
+  // reason="storage_not_owned_here" unless this Foghorn pool serves the
+  // named cluster AND the local S3 client's full backing tuple
+  // (bucket + endpoint + region) matches the cluster's advertised
+  // backing per Quartermaster.
+  string target_cluster_id = 3;
+
+  string artifact_hash = 4;
+
+  // artifact_type is one of "clip", "dvr", "vod".
+  string artifact_type = 5;
+
+  // Caller-resolved deletion target. Exactly one must be set.
+  //   s3_key:    exact object key (clip, vod). Callee calls Delete(key).
+  //   s3_prefix: prefix to recursively delete (dvr). Callee calls
+  //              DeletePrefix(prefix).
+  // Callee validates that the supplied target starts with the expected
+  // per-tenant prefix for the artifact_type
+  // (clips/<tenant>/..., dvr/<tenant>/..., vod/<tenant>/...) before
+  // deleting; mismatch → reason="invalid_target_shape".
+  oneof target {
+    string s3_key    = 6;
+    string s3_prefix = 7;
+  }
+}
+
+message DeleteStorageObjectsResponse {
+  bool accepted = 1;
+
+  // Populated when accepted = false. One of:
+  //   tenant_mismatch          — caller tenant != row tenant on callee
+  //                              (when callee row exists).
+  //   storage_not_owned_here   — target_cluster_id mismatch or
+  //                              bucket-tuple mismatch.
+  //   invalid_target_shape     — supplied key/prefix doesn't match the
+  //                              expected per-tenant prefix for the
+  //                              artifact_type.
+  //   unsupported_artifact_type
+  //   missing_target           — neither s3_key nor s3_prefix set, or
+  //                              wrong oneof case for the artifact_type
+  //                              (e.g. dvr with s3_key).
+  //   s3_error                 — non-NotFound S3 failure.
+  //
+  // S3 NotFound on the supplied key/prefix is reported as accepted=true
+  // (idempotent). Auth, ownership, and shape failures are NEVER
+  // collapsed into not-found success.
+  string reason = 2;
 }

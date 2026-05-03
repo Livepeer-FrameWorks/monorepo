@@ -2880,6 +2880,7 @@ func SetS3Client(client S3ClientInterface) {
 var (
 	storageResolverFactory func(ctx context.Context, tenantID string) *storage.ClusterResolver
 	storageMintDelegate    StorageMintDelegate
+	storageDeleteDelegate  StorageDeleteDelegate
 )
 
 // StorageMintDelegate sends a MintStorageURLs request to the Foghorn pool
@@ -2887,6 +2888,14 @@ var (
 // federation client + peer manager pair; absent in tests or when
 // federation isn't enabled.
 type StorageMintDelegate func(ctx context.Context, targetClusterID string, req *pb.MintStorageURLsRequest) (*pb.MintStorageURLsResponse, error)
+
+// StorageDeleteDelegate sends a DeleteStorageObjects request to the
+// Foghorn pool that owns the named storage cluster's S3. Wired from
+// main.go to the federation client + peer manager pair; absent in tests
+// or when federation isn't enabled. Cleanup paths fall back to a clear
+// "remote storage cleanup pending" when the delegate is nil so we don't
+// accidentally delete against the wrong bucket.
+type StorageDeleteDelegate func(ctx context.Context, targetClusterID string, req *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error)
 
 // SetStorageResolverFactory wires the per-request storage cluster resolver
 // factory (origin → official → legacy chain). Called once at startup.
@@ -2900,6 +2909,20 @@ func SetStorageResolverFactory(f func(ctx context.Context, tenantID string) *sto
 // don't accidentally local-mint against the wrong S3 backing.
 func SetStorageMintDelegate(d StorageMintDelegate) {
 	storageMintDelegate = d
+}
+
+// SetStorageDeleteDelegate wires the cross-cluster DeleteStorageObjects
+// sender used by cleanup paths when an artifact's storage_cluster_id
+// points to a peer cluster. Called once at startup.
+func SetStorageDeleteDelegate(d StorageDeleteDelegate) {
+	storageDeleteDelegate = d
+}
+
+// GetStorageDeleteDelegate returns the wired delegate (nil when
+// federation isn't enabled). Cleanup helpers consume it via this
+// accessor to keep the package boundary thin and testable.
+func GetStorageDeleteDelegate() StorageDeleteDelegate {
+	return storageDeleteDelegate
 }
 
 // resolveOfficialClusterID returns the tenant's official cluster per

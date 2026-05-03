@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/balancer"
 	foghornconfig "frameworks/api_balancing/internal/config"
 	"frameworks/api_balancing/internal/control"
@@ -460,7 +461,6 @@ func main() {
 	// We need separate interface variables because different consumers expect
 	// different interface types (foghorngrpc.S3ClientInterface vs jobs.S3Client).
 	var s3ForGRPC foghorngrpc.S3ClientInterface
-	var s3ForJobs jobs.S3Client
 	var s3ForReconciler jobs.ReconcilerS3Client
 	var s3ForFederation *storage.S3Client
 	// localS3Backing captures the bucket/endpoint/region tuple this Foghorn
@@ -488,7 +488,6 @@ func main() {
 		} else {
 			// Only assign to interfaces if successfully created (avoids typed nil issue)
 			s3ForGRPC = client
-			s3ForJobs = client
 			s3ForReconciler = client
 			s3ForFederation = client
 			control.SetS3Client(client)
@@ -788,6 +787,37 @@ func main() {
 			}
 			return fedClient.MintStorageURLs(ctx, targetClusterID, addr, req)
 		})
+		control.SetStorageDeleteDelegate(func(ctx context.Context, targetClusterID string, req *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error) {
+			addr := peerManager.GetPeerAddr(targetClusterID)
+			if addr == "" {
+				return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "peer_unreachable"}, nil
+			}
+			return fedClient.DeleteStorageObjects(ctx, targetClusterID, addr, req)
+		})
+	}
+
+	// Wire the shared artifact cleaner used by gRPC delete handlers and
+	// the purge job. Uses the federation delete delegate when an
+	// artifact's storage_cluster_id points to a peer cluster, the local
+	// S3 client otherwise. Wired even when local S3 is absent
+	// (storage-via-federation deployments) so remote rows still get
+	// cleaned via the delegate.
+	var deleteDelegate artifacts.DeleteDelegate
+	if d := control.GetStorageDeleteDelegate(); d != nil {
+		deleteDelegate = func(ctx context.Context, targetClusterID string, req *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error) {
+			return d(ctx, targetClusterID, req)
+		}
+	}
+	if s3ForFederation != nil || deleteDelegate != nil {
+		var localS3 artifacts.S3Client
+		if s3ForFederation != nil {
+			localS3 = s3ForFederation
+		}
+		foghornServer.SetArtifactCleaner(&artifacts.Cleaner{
+			LocalCluster: foghornCfg.ClusterID,
+			S3:           localS3,
+			Delegate:     deleteDelegate,
+		})
 	}
 	if federationServer != nil {
 		federationServer.SetStorageMintMetric(metrics.StorageMint)
@@ -894,13 +924,28 @@ func main() {
 	orphanCleanupJob.Start()
 	defer orphanCleanupJob.Stop()
 
-	// Start purge job (hard-deletes old soft-deleted records)
+	// Start purge job (hard-deletes old soft-deleted records, frees S3
+	// bytes via the shared cleaner so cross-cluster deletes route
+	// through the federation delegate).
+	var purgeCleaner *artifacts.Cleaner
+	if s3ForFederation != nil || deleteDelegate != nil {
+		var localS3 artifacts.S3Client
+		if s3ForFederation != nil {
+			localS3 = s3ForFederation
+		}
+		purgeCleaner = &artifacts.Cleaner{
+			LocalCluster: foghornCfg.ClusterID,
+			S3:           localS3,
+			Delegate:     deleteDelegate,
+		}
+	}
 	purgeDeletedJob := jobs.NewPurgeDeletedJob(jobs.PurgeDeletedConfig{
 		DB:           db,
 		Logger:       logger,
 		Interval:     24 * time.Hour,
 		RetentionAge: 30 * 24 * time.Hour, // 30 days
-		S3Client:     s3ForJobs,
+		Cleaner:      purgeCleaner,
+		S3Aborter:    s3ForFederation,
 	})
 	purgeDeletedJob.Start()
 	defer purgeDeletedJob.Stop()

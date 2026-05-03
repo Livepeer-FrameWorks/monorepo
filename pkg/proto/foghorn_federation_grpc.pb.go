@@ -29,6 +29,7 @@ const (
 	FoghornFederation_MigrateArtifactMetadata_FullMethodName = "/foghorn_federation.FoghornFederation/MigrateArtifactMetadata"
 	FoghornFederation_ForwardArtifactCommand_FullMethodName  = "/foghorn_federation.FoghornFederation/ForwardArtifactCommand"
 	FoghornFederation_MintStorageURLs_FullMethodName         = "/foghorn_federation.FoghornFederation/MintStorageURLs"
+	FoghornFederation_DeleteStorageObjects_FullMethodName    = "/foghorn_federation.FoghornFederation/DeleteStorageObjects"
 )
 
 // FoghornFederationClient is the client API for FoghornFederation service.
@@ -74,6 +75,26 @@ type FoghornFederationClient interface {
 	// storage_delegation_unsupported_for_vod when the resolver picks a remote
 	// storage cluster.
 	MintStorageURLs(ctx context.Context, in *MintStorageURLsRequest, opts ...grpc.CallOption) (*MintStorageURLsResponse, error)
+	// DeleteStorageObjects asks the storage-cluster Foghorn to delete an
+	// artifact's S3 bytes from its local backing. The caller is the Foghorn
+	// pool with the authoritative artifact row (origin or local); the callee
+	// is the pool that owns the named target_cluster_id's S3.
+	//
+	// Caller resolves the deletion target (s3_key for clip/vod, s3_prefix for
+	// dvr) from its own foghorn.artifacts + vod_metadata and passes it on the
+	// wire. The callee MUST NOT reconstruct the target from its own row:
+	// rows on the storage cluster may be cache-healed stubs created by
+	// MintStorageURLs and lack vod_metadata.s3_key, format, or other delete-
+	// critical fields, which would lead to wrong-key deletes or silent leaks.
+	//
+	// The callee validates service auth, target_cluster_id ownership (same
+	// bucket-tuple check as MintStorageURLs), tenant binding when a local row
+	// exists, and per-tenant key/prefix shape, then deletes exactly the
+	// supplied target via its local S3 client. NotFound on the supplied
+	// key/prefix is reported as accepted=true (idempotent retries). Auth,
+	// ownership, and shape failures are NEVER collapsed into not-found
+	// success.
+	DeleteStorageObjects(ctx context.Context, in *DeleteStorageObjectsRequest, opts ...grpc.CallOption) (*DeleteStorageObjectsResponse, error)
 }
 
 type foghornFederationClient struct {
@@ -187,6 +208,16 @@ func (c *foghornFederationClient) MintStorageURLs(ctx context.Context, in *MintS
 	return out, nil
 }
 
+func (c *foghornFederationClient) DeleteStorageObjects(ctx context.Context, in *DeleteStorageObjectsRequest, opts ...grpc.CallOption) (*DeleteStorageObjectsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteStorageObjectsResponse)
+	err := c.cc.Invoke(ctx, FoghornFederation_DeleteStorageObjects_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FoghornFederationServer is the server API for FoghornFederation service.
 // All implementations must embed UnimplementedFoghornFederationServer
 // for forward compatibility.
@@ -230,6 +261,26 @@ type FoghornFederationServer interface {
 	// storage_delegation_unsupported_for_vod when the resolver picks a remote
 	// storage cluster.
 	MintStorageURLs(context.Context, *MintStorageURLsRequest) (*MintStorageURLsResponse, error)
+	// DeleteStorageObjects asks the storage-cluster Foghorn to delete an
+	// artifact's S3 bytes from its local backing. The caller is the Foghorn
+	// pool with the authoritative artifact row (origin or local); the callee
+	// is the pool that owns the named target_cluster_id's S3.
+	//
+	// Caller resolves the deletion target (s3_key for clip/vod, s3_prefix for
+	// dvr) from its own foghorn.artifacts + vod_metadata and passes it on the
+	// wire. The callee MUST NOT reconstruct the target from its own row:
+	// rows on the storage cluster may be cache-healed stubs created by
+	// MintStorageURLs and lack vod_metadata.s3_key, format, or other delete-
+	// critical fields, which would lead to wrong-key deletes or silent leaks.
+	//
+	// The callee validates service auth, target_cluster_id ownership (same
+	// bucket-tuple check as MintStorageURLs), tenant binding when a local row
+	// exists, and per-tenant key/prefix shape, then deletes exactly the
+	// supplied target via its local S3 client. NotFound on the supplied
+	// key/prefix is reported as accepted=true (idempotent retries). Auth,
+	// ownership, and shape failures are NEVER collapsed into not-found
+	// success.
+	DeleteStorageObjects(context.Context, *DeleteStorageObjectsRequest) (*DeleteStorageObjectsResponse, error)
 	mustEmbedUnimplementedFoghornFederationServer()
 }
 
@@ -269,6 +320,9 @@ func (UnimplementedFoghornFederationServer) ForwardArtifactCommand(context.Conte
 }
 func (UnimplementedFoghornFederationServer) MintStorageURLs(context.Context, *MintStorageURLsRequest) (*MintStorageURLsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MintStorageURLs not implemented")
+}
+func (UnimplementedFoghornFederationServer) DeleteStorageObjects(context.Context, *DeleteStorageObjectsRequest) (*DeleteStorageObjectsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteStorageObjects not implemented")
 }
 func (UnimplementedFoghornFederationServer) mustEmbedUnimplementedFoghornFederationServer() {}
 func (UnimplementedFoghornFederationServer) testEmbeddedByValue()                           {}
@@ -460,6 +514,24 @@ func _FoghornFederation_MintStorageURLs_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FoghornFederation_DeleteStorageObjects_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteStorageObjectsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FoghornFederationServer).DeleteStorageObjects(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FoghornFederation_DeleteStorageObjects_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FoghornFederationServer).DeleteStorageObjects(ctx, req.(*DeleteStorageObjectsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FoghornFederation_ServiceDesc is the grpc.ServiceDesc for FoghornFederation service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -502,6 +574,10 @@ var FoghornFederation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MintStorageURLs",
 			Handler:    _FoghornFederation_MintStorageURLs_Handler,
+		},
+		{
+			MethodName: "DeleteStorageObjects",
+			Handler:    _FoghornFederation_DeleteStorageObjects_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

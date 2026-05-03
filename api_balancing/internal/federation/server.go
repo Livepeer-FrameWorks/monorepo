@@ -50,6 +50,8 @@ type FederationS3Client interface {
 	BuildClipS3Key(tenantID, streamName, clipHash, format string) string
 	BuildDVRS3Key(tenantID, internalName, dvrHash string) string
 	BuildVodS3Key(tenantID, artifactHash, filename string) string
+	Delete(ctx context.Context, key string) error
+	DeletePrefix(ctx context.Context, prefix string) (int, error)
 }
 
 // FederationServer implements the FoghornFederation gRPC service.
@@ -827,6 +829,208 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 
 	// Unreachable — switch above is exhaustive given the artifact-type guard.
 	return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_artifact_type"}, nil
+}
+
+// DeleteStorageObjects handles a peer Foghorn pool asking us to delete an
+// artifact's S3 bytes from our local backing. The caller resolves the
+// deletion target (s3_key for clip/vod, s3_prefix for dvr) from its own
+// authoritative artifact row and passes it on the wire; we validate
+// ownership/tenant/path-shape and operate on exactly the supplied target.
+//
+// We never reconstruct the target from a local foghorn.artifacts row:
+// rows here may be cache-healed stubs that lack vod_metadata.s3_key or
+// other delete-critical fields. Trusting them would risk wrong-key
+// deletes or silent leaks.
+//
+// NotFound on the supplied target → accepted=true (idempotent retries).
+// Auth, ownership, and shape failures are NEVER collapsed into not-found
+// success.
+func (s *FederationServer) DeleteStorageObjects(ctx context.Context, req *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error) {
+	if err := requireFederationServiceAuth(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+	if req.GetTargetClusterId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "target_cluster_id required")
+	}
+	if req.GetArtifactType() == "" {
+		return nil, status.Error(codes.InvalidArgument, "artifact_type required")
+	}
+	if req.GetArtifactHash() == "" {
+		return nil, status.Error(codes.InvalidArgument, "artifact_hash required")
+	}
+
+	log := s.logger.WithFields(logging.Fields{
+		"tenant_id":          req.GetTenantId(),
+		"requesting_cluster": req.GetRequestingCluster(),
+		"target_cluster":     req.GetTargetClusterId(),
+		"artifact_type":      req.GetArtifactType(),
+		"artifact_hash":      req.GetArtifactHash(),
+	})
+
+	if !s.canLocallyMintFor(ctx, req.GetTenantId(), req.GetTargetClusterId()) {
+		log.Warn("DeleteStorageObjects: this Foghorn does not own the target storage cluster for this tenant")
+		return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "storage_not_owned_here"}, nil
+	}
+	if s.s3Client == nil {
+		log.Warn("DeleteStorageObjects: ownership claim accepted but s3 client is nil (configuration race)")
+		return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "s3_error"}, nil
+	}
+
+	artType := strings.ToLower(strings.TrimSpace(req.GetArtifactType()))
+	tenantPrefix := func(top string) string {
+		return top + "/" + req.GetTenantId() + "/"
+	}
+
+	hash := strings.TrimSpace(req.GetArtifactHash())
+
+	switch artType {
+	case "clip":
+		key := strings.TrimSpace(req.GetS3Key())
+		if key == "" {
+			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "missing_target"}, nil
+		}
+		// Defense-in-depth: refuse keys outside the caller's tenant
+		// namespace AND keys whose basename doesn't bind to artifact_hash.
+		// Without the hash check, a same-tenant request for clip c1 could
+		// delete clip c2's bytes by submitting c2's key.
+		if !strings.HasPrefix(key, "clips/") || !strings.HasPrefix(key, tenantPrefix("clips")) || !clipKeyMatchesHash(key, hash) {
+			log.WithField("supplied_key", key).Warn("DeleteStorageObjects: supplied clip s3_key doesn't bind to expected tenant+hash")
+			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "invalid_target_shape"}, nil
+		}
+		if !s.tenantMatchesLocalRow(ctx, hash, req.GetTenantId()) {
+			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
+		}
+		if err := s.s3Client.Delete(ctx, key); err != nil {
+			log.WithError(err).WithField("key", key).Error("DeleteStorageObjects: s3 delete failed")
+			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "s3_error"}, nil
+		}
+		return &pb.DeleteStorageObjectsResponse{Accepted: true}, nil
+
+	case "vod":
+		key := strings.TrimSpace(req.GetS3Key())
+		if key == "" {
+			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "missing_target"}, nil
+		}
+		if !strings.HasPrefix(key, "vod/") || !strings.HasPrefix(key, tenantPrefix("vod")) || !vodKeyMatchesHash(key, req.GetTenantId(), hash) {
+			log.WithField("supplied_key", key).Warn("DeleteStorageObjects: supplied vod s3_key doesn't bind to expected tenant+hash")
+			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "invalid_target_shape"}, nil
+		}
+		if !s.tenantMatchesLocalRow(ctx, hash, req.GetTenantId()) {
+			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
+		}
+		if err := s.s3Client.Delete(ctx, key); err != nil {
+			log.WithError(err).WithField("key", key).Error("DeleteStorageObjects: s3 delete failed")
+			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "s3_error"}, nil
+		}
+		return &pb.DeleteStorageObjectsResponse{Accepted: true}, nil
+
+	case "dvr":
+		prefix := strings.TrimSpace(req.GetS3Prefix())
+		if prefix == "" {
+			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "missing_target"}, nil
+		}
+		if !strings.HasPrefix(prefix, "dvr/") || !strings.HasPrefix(prefix, tenantPrefix("dvr")) || !dvrPrefixMatchesHash(prefix, hash) {
+			log.WithField("supplied_prefix", prefix).Warn("DeleteStorageObjects: supplied dvr s3_prefix doesn't bind to expected tenant+hash")
+			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "invalid_target_shape"}, nil
+		}
+		if !s.tenantMatchesLocalRow(ctx, hash, req.GetTenantId()) {
+			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
+		}
+		if _, err := s.s3Client.DeletePrefix(ctx, prefix); err != nil {
+			log.WithError(err).WithField("prefix", prefix).Error("DeleteStorageObjects: s3 delete-prefix failed")
+			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "s3_error"}, nil
+		}
+		return &pb.DeleteStorageObjectsResponse{Accepted: true}, nil
+
+	default:
+		return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "unsupported_artifact_type"}, nil
+	}
+}
+
+// clipKeyMatchesHash verifies a clip key's basename (before extension)
+// equals the expected artifact_hash. Mirrors BuildClipS3Key's shape:
+// `clips/<tenant>/<stream>/<hash>.<format>`. Refuses keys without an
+// extension or with a basename that doesn't equal hash.
+func clipKeyMatchesHash(key, hash string) bool {
+	if hash == "" {
+		return false
+	}
+	slash := strings.LastIndexByte(key, '/')
+	if slash < 0 || slash == len(key)-1 {
+		return false
+	}
+	basename := key[slash+1:]
+	dot := strings.IndexByte(basename, '.')
+	if dot <= 0 {
+		return false
+	}
+	return basename[:dot] == hash
+}
+
+// vodKeyMatchesHash verifies that the path segment after `vod/<tenant>/`
+// equals the expected artifact_hash. Mirrors BuildVodS3Key's shape:
+// `vod/<tenant>/<artifact_hash>/<filename>`.
+func vodKeyMatchesHash(key, tenantID, hash string) bool {
+	if hash == "" || tenantID == "" {
+		return false
+	}
+	prefix := "vod/" + tenantID + "/"
+	if !strings.HasPrefix(key, prefix) {
+		return false
+	}
+	rest := key[len(prefix):]
+	slash := strings.IndexByte(rest, '/')
+	if slash <= 0 {
+		// No filename component; refuse — tenant-wide deletes are not
+		// what this RPC is for.
+		return false
+	}
+	return rest[:slash] == hash
+}
+
+// dvrPrefixMatchesHash verifies the supplied DVR prefix's last non-empty
+// segment equals the expected artifact_hash. Mirrors BuildDVRS3Key's
+// shape: `dvr/<tenant>/<stream>/<hash>` (BuildDVRS3Key does not append
+// a trailing slash; tolerate one if present so callers that add it
+// don't break).
+func dvrPrefixMatchesHash(prefix, hash string) bool {
+	if hash == "" {
+		return false
+	}
+	trimmed := strings.TrimSuffix(prefix, "/")
+	slash := strings.LastIndexByte(trimmed, '/')
+	if slash < 0 || slash == len(trimmed)-1 {
+		return false
+	}
+	return trimmed[slash+1:] == hash
+}
+
+// tenantMatchesLocalRow returns false only if a local foghorn.artifacts
+// row for the given hash exists with a different tenant_id. Missing row
+// (NoRows) returns true: we may simply not have a local copy of the
+// metadata (the authoritative caller does), which is expected for
+// cross-cluster cleanup.
+func (s *FederationServer) tenantMatchesLocalRow(ctx context.Context, artifactHash, claimedTenant string) bool {
+	if s.db == nil {
+		return true
+	}
+	var rowTenant sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT tenant_id FROM foghorn.artifacts WHERE artifact_hash = $1`, artifactHash).Scan(&rowTenant)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return true
+		}
+		// On unexpected errors, fail closed.
+		s.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("DeleteStorageObjects: failed to read local tenant for cross-check")
+		return false
+	}
+	if !rowTenant.Valid {
+		return true
+	}
+	return rowTenant.String == claimedTenant
 }
 
 // mintArtifactContext is what resolveMintArtifactContext returns to the

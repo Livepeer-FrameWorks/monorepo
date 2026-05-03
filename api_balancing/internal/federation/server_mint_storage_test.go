@@ -55,6 +55,12 @@ func (f *fakeMintS3Client) BuildDVRS3Key(tenantID, internalName, dvrHash string)
 func (f *fakeMintS3Client) BuildVodS3Key(tenantID, artifactHash, filename string) string {
 	return "vod/" + tenantID + "/" + artifactHash + "/" + filename
 }
+func (f *fakeMintS3Client) Delete(_ context.Context, _ string) error {
+	return nil
+}
+func (f *fakeMintS3Client) DeletePrefix(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
 
 // mintTestServer builds a FederationServer that owns the named target
 // cluster's storage by default.

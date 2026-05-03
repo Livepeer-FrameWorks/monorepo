@@ -3006,6 +3006,221 @@ func (x *MintStorageURLsResponse) GetUrlExpirySeconds() uint32 {
 	return 0
 }
 
+// DeleteStorageObjectsRequest asks the storage-cluster Foghorn to delete
+// an artifact's S3 bytes. The caller resolves the target from its
+// authoritative row; the callee validates and operates on exactly what
+// was sent.
+type DeleteStorageObjectsRequest struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	TenantId          string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	RequestingCluster string                 `protobuf:"bytes,2,opt,name=requesting_cluster,json=requestingCluster,proto3" json:"requesting_cluster,omitempty"`
+	// target_cluster_id names the storage cluster the caller resolved as
+	// the owner of these bytes. Same ownership semantics as
+	// MintStorageURLsRequest.target_cluster_id: callee rejects with
+	// reason="storage_not_owned_here" unless this Foghorn pool serves the
+	// named cluster AND the local S3 client's full backing tuple
+	// (bucket + endpoint + region) matches the cluster's advertised
+	// backing per Quartermaster.
+	TargetClusterId string `protobuf:"bytes,3,opt,name=target_cluster_id,json=targetClusterId,proto3" json:"target_cluster_id,omitempty"`
+	ArtifactHash    string `protobuf:"bytes,4,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`
+	// artifact_type is one of "clip", "dvr", "vod".
+	ArtifactType string `protobuf:"bytes,5,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"`
+	// Caller-resolved deletion target. Exactly one must be set.
+	//
+	//	s3_key:    exact object key (clip, vod). Callee calls Delete(key).
+	//	s3_prefix: prefix to recursively delete (dvr). Callee calls
+	//	           DeletePrefix(prefix).
+	//
+	// Callee validates that the supplied target starts with the expected
+	// per-tenant prefix for the artifact_type
+	// (clips/<tenant>/..., dvr/<tenant>/..., vod/<tenant>/...) before
+	// deleting; mismatch → reason="invalid_target_shape".
+	//
+	// Types that are valid to be assigned to Target:
+	//
+	//	*DeleteStorageObjectsRequest_S3Key
+	//	*DeleteStorageObjectsRequest_S3Prefix
+	Target        isDeleteStorageObjectsRequest_Target `protobuf_oneof:"target"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteStorageObjectsRequest) Reset() {
+	*x = DeleteStorageObjectsRequest{}
+	mi := &file_foghorn_federation_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteStorageObjectsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteStorageObjectsRequest) ProtoMessage() {}
+
+func (x *DeleteStorageObjectsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_federation_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteStorageObjectsRequest.ProtoReflect.Descriptor instead.
+func (*DeleteStorageObjectsRequest) Descriptor() ([]byte, []int) {
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *DeleteStorageObjectsRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *DeleteStorageObjectsRequest) GetRequestingCluster() string {
+	if x != nil {
+		return x.RequestingCluster
+	}
+	return ""
+}
+
+func (x *DeleteStorageObjectsRequest) GetTargetClusterId() string {
+	if x != nil {
+		return x.TargetClusterId
+	}
+	return ""
+}
+
+func (x *DeleteStorageObjectsRequest) GetArtifactHash() string {
+	if x != nil {
+		return x.ArtifactHash
+	}
+	return ""
+}
+
+func (x *DeleteStorageObjectsRequest) GetArtifactType() string {
+	if x != nil {
+		return x.ArtifactType
+	}
+	return ""
+}
+
+func (x *DeleteStorageObjectsRequest) GetTarget() isDeleteStorageObjectsRequest_Target {
+	if x != nil {
+		return x.Target
+	}
+	return nil
+}
+
+func (x *DeleteStorageObjectsRequest) GetS3Key() string {
+	if x != nil {
+		if x, ok := x.Target.(*DeleteStorageObjectsRequest_S3Key); ok {
+			return x.S3Key
+		}
+	}
+	return ""
+}
+
+func (x *DeleteStorageObjectsRequest) GetS3Prefix() string {
+	if x != nil {
+		if x, ok := x.Target.(*DeleteStorageObjectsRequest_S3Prefix); ok {
+			return x.S3Prefix
+		}
+	}
+	return ""
+}
+
+type isDeleteStorageObjectsRequest_Target interface {
+	isDeleteStorageObjectsRequest_Target()
+}
+
+type DeleteStorageObjectsRequest_S3Key struct {
+	S3Key string `protobuf:"bytes,6,opt,name=s3_key,json=s3Key,proto3,oneof"`
+}
+
+type DeleteStorageObjectsRequest_S3Prefix struct {
+	S3Prefix string `protobuf:"bytes,7,opt,name=s3_prefix,json=s3Prefix,proto3,oneof"`
+}
+
+func (*DeleteStorageObjectsRequest_S3Key) isDeleteStorageObjectsRequest_Target() {}
+
+func (*DeleteStorageObjectsRequest_S3Prefix) isDeleteStorageObjectsRequest_Target() {}
+
+type DeleteStorageObjectsResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Accepted bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	// Populated when accepted = false. One of:
+	//
+	//	tenant_mismatch          — caller tenant != row tenant on callee
+	//	                           (when callee row exists).
+	//	storage_not_owned_here   — target_cluster_id mismatch or
+	//	                           bucket-tuple mismatch.
+	//	invalid_target_shape     — supplied key/prefix doesn't match the
+	//	                           expected per-tenant prefix for the
+	//	                           artifact_type.
+	//	unsupported_artifact_type
+	//	missing_target           — neither s3_key nor s3_prefix set, or
+	//	                           wrong oneof case for the artifact_type
+	//	                           (e.g. dvr with s3_key).
+	//	s3_error                 — non-NotFound S3 failure.
+	//
+	// S3 NotFound on the supplied key/prefix is reported as accepted=true
+	// (idempotent). Auth, ownership, and shape failures are NEVER
+	// collapsed into not-found success.
+	Reason        string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteStorageObjectsResponse) Reset() {
+	*x = DeleteStorageObjectsResponse{}
+	mi := &file_foghorn_federation_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteStorageObjectsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteStorageObjectsResponse) ProtoMessage() {}
+
+func (x *DeleteStorageObjectsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_federation_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteStorageObjectsResponse.ProtoReflect.Descriptor instead.
+func (*DeleteStorageObjectsResponse) Descriptor() ([]byte, []int) {
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *DeleteStorageObjectsResponse) GetAccepted() bool {
+	if x != nil {
+		return x.Accepted
+	}
+	return false
+}
+
+func (x *DeleteStorageObjectsResponse) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 var File_foghorn_federation_proto protoreflect.FileDescriptor
 
 const file_foghorn_federation_proto_rawDesc = "" +
@@ -3296,7 +3511,19 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x12url_expiry_seconds\x18\x06 \x01(\rR\x10urlExpirySeconds\x1a>\n" +
 	"\x10SegmentUrlsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x012\xc4\b\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa1\x02\n" +
+	"\x1bDeleteStorageObjectsRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12-\n" +
+	"\x12requesting_cluster\x18\x02 \x01(\tR\x11requestingCluster\x12*\n" +
+	"\x11target_cluster_id\x18\x03 \x01(\tR\x0ftargetClusterId\x12#\n" +
+	"\rartifact_hash\x18\x04 \x01(\tR\fartifactHash\x12#\n" +
+	"\rartifact_type\x18\x05 \x01(\tR\fartifactType\x12\x17\n" +
+	"\x06s3_key\x18\x06 \x01(\tH\x00R\x05s3Key\x12\x1d\n" +
+	"\ts3_prefix\x18\a \x01(\tH\x00R\bs3PrefixB\b\n" +
+	"\x06target\"R\n" +
+	"\x1cDeleteStorageObjectsResponse\x12\x1a\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason2\xbf\t\n" +
 	"\x11FoghornFederation\x12^\n" +
 	"\vQueryStream\x12&.foghorn_federation.QueryStreamRequest\x1a'.foghorn_federation.QueryStreamResponse\x12a\n" +
 	"\x10NotifyOriginPull\x12*.foghorn_federation.OriginPullNotification\x1a!.foghorn_federation.OriginPullAck\x12j\n" +
@@ -3307,7 +3534,8 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x13ListTenantArtifacts\x12..foghorn_federation.ListTenantArtifactsRequest\x1a/.foghorn_federation.ListTenantArtifactsResponse\x12\x82\x01\n" +
 	"\x17MigrateArtifactMetadata\x122.foghorn_federation.MigrateArtifactMetadataRequest\x1a3.foghorn_federation.MigrateArtifactMetadataResponse\x12\x7f\n" +
 	"\x16ForwardArtifactCommand\x121.foghorn_federation.ForwardArtifactCommandRequest\x1a2.foghorn_federation.ForwardArtifactCommandResponse\x12j\n" +
-	"\x0fMintStorageURLs\x12*.foghorn_federation.MintStorageURLsRequest\x1a+.foghorn_federation.MintStorageURLsResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x0fMintStorageURLs\x12*.foghorn_federation.MintStorageURLsRequest\x1a+.foghorn_federation.MintStorageURLsResponse\x12y\n" +
+	"\x14DeleteStorageObjects\x12/.foghorn_federation.DeleteStorageObjectsRequest\x1a0.foghorn_federation.DeleteStorageObjectsResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
 
 var (
 	file_foghorn_federation_proto_rawDescOnce sync.Once
@@ -3322,7 +3550,7 @@ func file_foghorn_federation_proto_rawDescGZIP() []byte {
 }
 
 var file_foghorn_federation_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_foghorn_federation_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
+var file_foghorn_federation_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
 var file_foghorn_federation_proto_goTypes = []any{
 	(MintStorageURLsRequest_Operation)(0),   // 0: foghorn_federation.MintStorageURLsRequest.Operation
 	(*QueryStreamRequest)(nil),              // 1: foghorn_federation.QueryStreamRequest
@@ -3357,12 +3585,14 @@ var file_foghorn_federation_proto_goTypes = []any{
 	(*ForwardArtifactCommandResponse)(nil),  // 30: foghorn_federation.ForwardArtifactCommandResponse
 	(*MintStorageURLsRequest)(nil),          // 31: foghorn_federation.MintStorageURLsRequest
 	(*MintStorageURLsResponse)(nil),         // 32: foghorn_federation.MintStorageURLsResponse
-	nil,                                     // 33: foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
-	nil,                                     // 34: foghorn_federation.MintStorageURLsResponse.SegmentUrlsEntry
+	(*DeleteStorageObjectsRequest)(nil),     // 33: foghorn_federation.DeleteStorageObjectsRequest
+	(*DeleteStorageObjectsResponse)(nil),    // 34: foghorn_federation.DeleteStorageObjectsResponse
+	nil,                                     // 35: foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
+	nil,                                     // 36: foghorn_federation.MintStorageURLsResponse.SegmentUrlsEntry
 }
 var file_foghorn_federation_proto_depIdxs = []int32{
 	3,  // 0: foghorn_federation.QueryStreamResponse.candidates:type_name -> foghorn_federation.EdgeCandidate
-	33, // 1: foghorn_federation.PrepareArtifactResponse.segment_urls:type_name -> foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
+	35, // 1: foghorn_federation.PrepareArtifactResponse.segment_urls:type_name -> foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
 	14, // 2: foghorn_federation.PeerMessage.edge_telemetry:type_name -> foghorn_federation.EdgeTelemetry
 	15, // 3: foghorn_federation.PeerMessage.replication_event:type_name -> foghorn_federation.ReplicationEvent
 	16, // 4: foghorn_federation.PeerMessage.cluster_summary:type_name -> foghorn_federation.ClusterEdgeSummary
@@ -3376,7 +3606,7 @@ var file_foghorn_federation_proto_depIdxs = []int32{
 	21, // 12: foghorn_federation.StreamAdvertisement.edges:type_name -> foghorn_federation.PeerStreamEdge
 	26, // 13: foghorn_federation.ListTenantArtifactsResponse.artifacts:type_name -> foghorn_federation.ArtifactMetadata
 	0,  // 14: foghorn_federation.MintStorageURLsRequest.op:type_name -> foghorn_federation.MintStorageURLsRequest.Operation
-	34, // 15: foghorn_federation.MintStorageURLsResponse.segment_urls:type_name -> foghorn_federation.MintStorageURLsResponse.SegmentUrlsEntry
+	36, // 15: foghorn_federation.MintStorageURLsResponse.segment_urls:type_name -> foghorn_federation.MintStorageURLsResponse.SegmentUrlsEntry
 	1,  // 16: foghorn_federation.FoghornFederation.QueryStream:input_type -> foghorn_federation.QueryStreamRequest
 	4,  // 17: foghorn_federation.FoghornFederation.NotifyOriginPull:input_type -> foghorn_federation.OriginPullNotification
 	6,  // 18: foghorn_federation.FoghornFederation.PrepareArtifact:input_type -> foghorn_federation.PrepareArtifactRequest
@@ -3387,18 +3617,20 @@ var file_foghorn_federation_proto_depIdxs = []int32{
 	27, // 23: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:input_type -> foghorn_federation.MigrateArtifactMetadataRequest
 	29, // 24: foghorn_federation.FoghornFederation.ForwardArtifactCommand:input_type -> foghorn_federation.ForwardArtifactCommandRequest
 	31, // 25: foghorn_federation.FoghornFederation.MintStorageURLs:input_type -> foghorn_federation.MintStorageURLsRequest
-	2,  // 26: foghorn_federation.FoghornFederation.QueryStream:output_type -> foghorn_federation.QueryStreamResponse
-	5,  // 27: foghorn_federation.FoghornFederation.NotifyOriginPull:output_type -> foghorn_federation.OriginPullAck
-	7,  // 28: foghorn_federation.FoghornFederation.PrepareArtifact:output_type -> foghorn_federation.PrepareArtifactResponse
-	9,  // 29: foghorn_federation.FoghornFederation.CreateRemoteClip:output_type -> foghorn_federation.RemoteClipResponse
-	11, // 30: foghorn_federation.FoghornFederation.CreateRemoteDVR:output_type -> foghorn_federation.RemoteDVRResponse
-	12, // 31: foghorn_federation.FoghornFederation.PeerChannel:output_type -> foghorn_federation.PeerMessage
-	25, // 32: foghorn_federation.FoghornFederation.ListTenantArtifacts:output_type -> foghorn_federation.ListTenantArtifactsResponse
-	28, // 33: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:output_type -> foghorn_federation.MigrateArtifactMetadataResponse
-	30, // 34: foghorn_federation.FoghornFederation.ForwardArtifactCommand:output_type -> foghorn_federation.ForwardArtifactCommandResponse
-	32, // 35: foghorn_federation.FoghornFederation.MintStorageURLs:output_type -> foghorn_federation.MintStorageURLsResponse
-	26, // [26:36] is the sub-list for method output_type
-	16, // [16:26] is the sub-list for method input_type
+	33, // 26: foghorn_federation.FoghornFederation.DeleteStorageObjects:input_type -> foghorn_federation.DeleteStorageObjectsRequest
+	2,  // 27: foghorn_federation.FoghornFederation.QueryStream:output_type -> foghorn_federation.QueryStreamResponse
+	5,  // 28: foghorn_federation.FoghornFederation.NotifyOriginPull:output_type -> foghorn_federation.OriginPullAck
+	7,  // 29: foghorn_federation.FoghornFederation.PrepareArtifact:output_type -> foghorn_federation.PrepareArtifactResponse
+	9,  // 30: foghorn_federation.FoghornFederation.CreateRemoteClip:output_type -> foghorn_federation.RemoteClipResponse
+	11, // 31: foghorn_federation.FoghornFederation.CreateRemoteDVR:output_type -> foghorn_federation.RemoteDVRResponse
+	12, // 32: foghorn_federation.FoghornFederation.PeerChannel:output_type -> foghorn_federation.PeerMessage
+	25, // 33: foghorn_federation.FoghornFederation.ListTenantArtifacts:output_type -> foghorn_federation.ListTenantArtifactsResponse
+	28, // 34: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:output_type -> foghorn_federation.MigrateArtifactMetadataResponse
+	30, // 35: foghorn_federation.FoghornFederation.ForwardArtifactCommand:output_type -> foghorn_federation.ForwardArtifactCommandResponse
+	32, // 36: foghorn_federation.FoghornFederation.MintStorageURLs:output_type -> foghorn_federation.MintStorageURLsResponse
+	34, // 37: foghorn_federation.FoghornFederation.DeleteStorageObjects:output_type -> foghorn_federation.DeleteStorageObjectsResponse
+	27, // [27:38] is the sub-list for method output_type
+	16, // [16:27] is the sub-list for method input_type
 	16, // [16:16] is the sub-list for extension type_name
 	16, // [16:16] is the sub-list for extension extendee
 	0,  // [0:16] is the sub-list for field type_name
@@ -3419,13 +3651,17 @@ func file_foghorn_federation_proto_init() {
 		(*PeerMessage_PeerHeartbeat)(nil),
 		(*PeerMessage_CapacitySummary)(nil),
 	}
+	file_foghorn_federation_proto_msgTypes[32].OneofWrappers = []any{
+		(*DeleteStorageObjectsRequest_S3Key)(nil),
+		(*DeleteStorageObjectsRequest_S3Prefix)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_foghorn_federation_proto_rawDesc), len(file_foghorn_federation_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   34,
+			NumMessages:   36,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

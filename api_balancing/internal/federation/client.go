@@ -98,6 +98,23 @@ func (c *FederationClient) MintStorageURLs(ctx context.Context, clusterID, addr 
 	return client.Federation().MintStorageURLs(ctx, req)
 }
 
+// DeleteStorageObjects asks the storage-cluster Foghorn pool to delete an
+// artifact's S3 bytes from its local backing. The caller resolves the
+// target (s3_key/s3_prefix) from its authoritative row and passes it on
+// the wire; the callee validates ownership/tenant/shape and operates on
+// exactly the supplied target.
+func (c *FederationClient) DeleteStorageObjects(ctx context.Context, clusterID, addr string, req *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error) {
+	client, err := c.pool.GetOrCreate(clusterID, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
+	defer cancel()
+
+	return client.Federation().DeleteStorageObjects(ctx, req)
+}
+
 // CreateRemoteClip requests the origin cluster to create a clip on behalf of this cluster.
 func (c *FederationClient) CreateRemoteClip(ctx context.Context, clusterID, addr string, req *pb.RemoteClipRequest) (*pb.RemoteClipResponse, error) {
 	client, err := c.pool.GetOrCreate(clusterID, addr)

@@ -41,6 +41,12 @@ func (f *fakeS3Client) BuildDVRS3Key(tenantID, internalName, dvrHash string) str
 func (f *fakeS3Client) BuildVodS3Key(tenantID, artifactHash, filename string) string {
 	return fmt.Sprintf("vod/%s/%s/%s", tenantID, artifactHash, filename)
 }
+func (f *fakeS3Client) Delete(_ context.Context, _ string) error {
+	return nil
+}
+func (f *fakeS3Client) DeletePrefix(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
 
 func TestPrepareArtifact_DefrostingState(t *testing.T) {
 	db, mock, err := sqlmock.New()
