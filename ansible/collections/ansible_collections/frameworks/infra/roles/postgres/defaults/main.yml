@@ -26,7 +26,7 @@ postgres_databases: []
 
 # pg_hba entries rendered into Postgres's client auth file. Defaults allow
 # local peer auth for the postgres superuser plus scram-sha-256 password auth
-# from the cluster-internal network.
+# from loopback and Docker bridge networks used by colocated compose apps.
 postgres_hba_entries:
   - type: local
     database: all
@@ -45,6 +45,11 @@ postgres_hba_entries:
     database: all
     user: all
     address: "::1/128"
+    auth_method: scram-sha-256
+  - type: host
+    database: all
+    user: all
+    address: "172.16.0.0/12"
     auth_method: scram-sha-256
 
 # Performance defaults — overridable from the manifest's `tuning:` block.

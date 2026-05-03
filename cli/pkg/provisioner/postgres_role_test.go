@@ -32,6 +32,19 @@ func TestPostgresRoleSuppliesArchVarsMissingFromGalaxyRole(t *testing.T) {
 	}
 }
 
+func TestPostgresRoleAllowsDockerBridgeClients(t *testing.T) {
+	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/postgres/defaults/main.yml")
+	for _, want := range []string{
+		"Docker bridge networks used by colocated compose apps",
+		`address: "172.16.0.0/12"`,
+		"auth_method: scram-sha-256",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("postgres role should allow Docker bridge clients with password auth; missing %q:\n%s", want, content)
+		}
+	}
+}
+
 func TestPostgresRoleVarsPassesStableInstanceName(t *testing.T) {
 	vars, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
 		DeployName: "postgres-support",
