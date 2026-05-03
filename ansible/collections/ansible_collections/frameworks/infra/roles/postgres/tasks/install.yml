@@ -2,6 +2,64 @@
 # Delegates install + config rendering + service start to geerlingguy.postgresql.
 # We map our vars onto its variable surface so there is a single source of
 # truth: the FrameWorks manifest.
+- name: Postgres | compute effective OS paths for geerlingguy.postgresql
+  ansible.builtin.set_fact:
+    frameworks_postgres_data_dir: "{{ (postgres_arch_pgroot + '/data') if ansible_facts.os_family == 'Archlinux' else postgres_data_dir }}"
+    frameworks_postgres_config_dir: "{{ (postgres_arch_pgroot + '/data') if ansible_facts.os_family == 'Archlinux' else postgres_config_dir }}"
+    frameworks_postgres_bin_path: "{{ '/usr/sbin' if ansible_facts.os_family == 'Archlinux' else ('/usr/lib/postgresql/' ~ postgres_version ~ '/bin') }}"
+
+- name: Postgres | define Arch variables missing from geerlingguy.postgresql loader
+  ansible.builtin.set_fact:
+    postgresql_packages:
+      - postgresql
+    postgresql_daemon: postgresql
+  when: ansible_facts.os_family == "Archlinux"
+
+- name: Postgres | refresh Arch package database before dependency install
+  community.general.pacman:
+    update_cache: true
+  when: ansible_facts.os_family == "Archlinux"
+
+- name: Postgres | ensure Arch PGROOT exists
+  ansible.builtin.file:
+    path: "{{ postgres_arch_pgroot }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0700"
+  when: ansible_facts.os_family == "Archlinux"
+
+- name: Postgres | ensure Arch systemd override directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/postgresql.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: ansible_facts.os_family == "Archlinux"
+
+- name: Postgres | redirect Arch PostgreSQL unit to managed PGROOT
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/postgresql.service.d/frameworks.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Service]
+      Environment=
+      Environment=PGROOT={{ postgres_arch_pgroot }}
+      PIDFile=
+      PIDFile={{ postgres_arch_pgroot }}/data/postmaster.pid
+  register: frameworks_postgres_arch_unit_override
+  when: ansible_facts.os_family == "Archlinux"
+
+- name: Postgres | reload systemd for Arch PGROOT override
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when:
+    - ansible_facts.os_family == "Archlinux"
+    - frameworks_postgres_arch_unit_override.changed
+
 - name: Install and configure PostgreSQL via geerlingguy.postgresql
   ansible.builtin.include_role:
     name: geerlingguy.postgresql
@@ -9,9 +67,9 @@
       tags: [install, configure, service]
   vars:
     postgresql_version: "{{ postgres_version }}"
-    postgresql_data_dir: "{{ postgres_data_dir }}"
-    postgresql_config_path: "{{ postgres_config_dir }}"
-    postgresql_bin_path: "/usr/lib/postgresql/{{ postgres_version }}/bin"
+    postgresql_data_dir: "{{ frameworks_postgres_data_dir }}"
+    postgresql_config_path: "{{ frameworks_postgres_config_dir }}"
+    postgresql_bin_path: "{{ frameworks_postgres_bin_path }}"
     postgresql_port: "{{ postgres_port }}"
     postgresql_restarted_state: "reloaded"
     postgresql_global_config_options:

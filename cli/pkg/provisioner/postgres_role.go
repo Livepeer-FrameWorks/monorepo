@@ -35,6 +35,7 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 		"postgres_port":             port,
 		"postgres_admin_password":   pwd,
 		"postgres_listen_addresses": "*",
+		"postgres_instance_name":    sanitizePostgresInstanceName(firstNonEmpty(config.DeployName, "postgres")),
 	}
 
 	if tuning, ok := config.Metadata["tuning"].(map[string]any); ok {
@@ -67,6 +68,29 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 		vars["postgres_migrate_items"] = items
 	}
 	return vars, nil
+}
+
+func sanitizePostgresInstanceName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		valid := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if valid {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "postgres"
+	}
+	return out
 }
 
 // postgresRoleDetect checks whether a postgresql server is running on the host.
