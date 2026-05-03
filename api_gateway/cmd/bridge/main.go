@@ -689,7 +689,7 @@ func loadSkillFiles(logger logging.Logger) skillFiles {
 	if envDir := strings.TrimSpace(os.Getenv("SKILL_FILES_DIR")); envDir != "" {
 		candidates = append(candidates, envDir)
 	}
-	candidates = append(candidates, "/app", "docs/skills")
+	candidates = append(candidates, ".", "/app", "docs/skills", "../docs/skills")
 
 	var dir string
 	for _, candidate := range candidates {

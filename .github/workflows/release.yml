@@ -838,7 +838,14 @@ jobs:
               -o "${BINARY}" \
               "${cmd}")
 
-            tar czf "dist/binaries/${OUTPUT}.tar.gz" -C "${context}" "${BINARY}"
+            if [[ "$name" == "bridge" ]]; then
+              tar czf "dist/binaries/${OUTPUT}.tar.gz" \
+                -C "${context}" "${BINARY}" \
+                -C "${GITHUB_WORKSPACE}/docs/skills" \
+                SKILL.md skill.json heartbeat.md mcp.json security.txt llms.txt robots.txt did.json oauth-protected-resource.json
+            else
+              tar czf "dist/binaries/${OUTPUT}.tar.gz" -C "${context}" "${BINARY}"
+            fi
             rm "${context}/${BINARY}"
           done
 
@@ -913,7 +920,14 @@ jobs:
               -o "${BINARY}" \
               "${cmd}")
 
-            tar czf "dist/binaries/${OUTPUT}.tar.gz" -C "${context}" "${BINARY}"
+            if [[ "$name" == "bridge" ]]; then
+              tar czf "dist/binaries/${OUTPUT}.tar.gz" \
+                -C "${context}" "${BINARY}" \
+                -C "${GITHUB_WORKSPACE}/docs/skills" \
+                SKILL.md skill.json heartbeat.md mcp.json security.txt llms.txt robots.txt did.json oauth-protected-resource.json
+            else
+              tar czf "dist/binaries/${OUTPUT}.tar.gz" -C "${context}" "${BINARY}"
+            fi
             rm "${context}/${BINARY}"
           done
 
@@ -989,7 +1003,24 @@ jobs:
             codesign --verify --verbose=2 "${context}/${BINARY}"
 
             # Notarize the final shipped zip artifact
-            ditto -c -k --keepParent "${context}/${BINARY}" "dist/binaries/${OUTPUT}"
+            if [[ "$name" == "bridge" ]]; then
+              staging_dir="$(mktemp -d)"
+              cp "${context}/${BINARY}" "${staging_dir}/${BINARY}"
+              cp docs/skills/SKILL.md \
+                 docs/skills/skill.json \
+                 docs/skills/heartbeat.md \
+                 docs/skills/mcp.json \
+                 docs/skills/security.txt \
+                 docs/skills/llms.txt \
+                 docs/skills/robots.txt \
+                 docs/skills/did.json \
+                 docs/skills/oauth-protected-resource.json \
+                 "${staging_dir}/"
+              (cd "${staging_dir}" && ditto -c -k . "${GITHUB_WORKSPACE}/dist/binaries/${OUTPUT}")
+              rm -rf "${staging_dir}"
+            else
+              ditto -c -k --keepParent "${context}/${BINARY}" "dist/binaries/${OUTPUT}"
+            fi
             xcrun notarytool submit "dist/binaries/${OUTPUT}" \
               --apple-id "${{ secrets.APPLE_ID }}" \
               --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" \

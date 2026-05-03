@@ -3,6 +3,7 @@
   "type": "module",
   "version": "0.1.0",
   "scripts": {
+    "predev": "../scripts/copy-agent-files.sh public",
     "dev": "astro dev",
     "start": "astro dev",
     "prebuild": "../scripts/copy-agent-files.sh public",
