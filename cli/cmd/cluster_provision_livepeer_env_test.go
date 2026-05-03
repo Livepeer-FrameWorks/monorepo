@@ -286,7 +286,7 @@ func TestBuildServiceEnvVarsLivepeerGatewayRuntimeDefaults(t *testing.T) {
 
 	want := map[string]string{
 		"network":                "arbitrum-one-mainnet",
-		"http_addr":              ":8935",
+		"http_addr":              "0.0.0.0:8935",
 		"http_ingest":            "true",
 		"cli_addr":               ":7935",
 		"rtmp_addr":              "",

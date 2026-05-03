@@ -1495,7 +1495,7 @@ func reconcileFoghornClusterAssignments(ctx context.Context, cmd *cobra.Command,
 func reconcileFoghornClusterAssignmentsWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, assigner foghornClusterAssigner) error {
 	fmt.Fprintln(out, "  Reconciling Foghorn cluster assignments...")
 
-	for _, clusterID := range manifest.AllClusterIDs() {
+	for _, clusterID := range clusterderive.MediaClusterIDs(manifest) {
 		assignCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		err := assigner.AssignFoghornToCluster(assignCtx, &pb.AssignFoghornToClusterRequest{
 			ClusterId: clusterID,
@@ -3702,7 +3702,7 @@ func normalizeServiceEnvVars(serviceID string, env map[string]string) {
 func applyLivepeerGatewayRuntimeDefaults(env map[string]string) {
 	defaults := map[string]string{
 		"network":                "arbitrum-one-mainnet",
-		"http_addr":              ":8935",
+		"http_addr":              "0.0.0.0:8935",
 		"http_ingest":            "true",
 		"cli_addr":               ":7935",
 		"rtmp_addr":              "",
