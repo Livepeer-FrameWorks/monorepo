@@ -35,3 +35,21 @@ func TestNavigatorRequiresExplicitACMEEmail(t *testing.T) {
 	}
 	t.Fatal("navigator must require ACME_EMAIL so certificate issuance never falls back to a platform contact")
 }
+
+func TestListmonkRequiresAdminCredsFromGitOps(t *testing.T) {
+	required := RequiredExternalEnv("listmonk")
+	want := map[string]bool{
+		"LISTMONK_USERNAME": false,
+		"LISTMONK_PASSWORD": false,
+	}
+	for _, req := range required {
+		if _, ok := want[req.Key]; ok {
+			want[req.Key] = true
+		}
+	}
+	for key, found := range want {
+		if !found {
+			t.Fatalf("listmonk must require %s so first-install admin creds are GitOps-controlled, not Listmonk's installer defaults", key)
+		}
+	}
+}

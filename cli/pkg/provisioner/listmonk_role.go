@@ -34,16 +34,23 @@ func listmonkRoleDetect(_ context.Context, _ inventory.Host, _ RoleBuildHelpers)
 // from the manifest's shared env_files via config.EnvVars. Empty values are
 // omitted for optional keys (SMTP, frontend URL); required keys are always
 // present even if empty so Listmonk's config parse is total.
+//
+// LISTMONK_ADMIN_USER / LISTMONK_ADMIN_PASSWORD are read by `--install` to
+// create the Super Admin on first run; they must match the values FrameWorks
+// services use to authenticate against Listmonk (LISTMONK_USERNAME /
+// LISTMONK_PASSWORD).
 func listmonkEnvMap(config ServiceConfig) map[string]any {
 	dbUser := orElse(config.EnvVars["DATABASE_USER"], "postgres")
 	env := map[string]any{
-		"LISTMONK_app__address": "0.0.0.0:9000",
-		"LISTMONK_db__host":     config.EnvVars["DATABASE_HOST"],
-		"LISTMONK_db__port":     config.EnvVars["DATABASE_PORT"],
-		"LISTMONK_db__user":     dbUser,
-		"LISTMONK_db__password": config.EnvVars["DATABASE_PASSWORD"],
-		"LISTMONK_db__database": "listmonk",
-		"LISTMONK_db__ssl_mode": "disable",
+		"LISTMONK_app__address":   "0.0.0.0:9000",
+		"LISTMONK_db__host":       config.EnvVars["DATABASE_HOST"],
+		"LISTMONK_db__port":       config.EnvVars["DATABASE_PORT"],
+		"LISTMONK_db__user":       dbUser,
+		"LISTMONK_db__password":   config.EnvVars["DATABASE_PASSWORD"],
+		"LISTMONK_db__database":   "listmonk",
+		"LISTMONK_db__ssl_mode":   "disable",
+		"LISTMONK_ADMIN_USER":     config.EnvVars["LISTMONK_USERNAME"],
+		"LISTMONK_ADMIN_PASSWORD": config.EnvVars["LISTMONK_PASSWORD"],
 	}
 	if v := config.EnvVars["SMTP_HOST"]; v != "" {
 		env["LISTMONK_app__smtp__host"] = v
