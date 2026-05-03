@@ -77,6 +77,11 @@ func TestLookupKeyEnvHandlesQuotes(t *testing.T) {
 	if !ok || got != "quoted value" {
 		t.Fatalf("env quoted lookup: %q ok=%v", got, ok)
 	}
+
+	got, ok = lookupKey(data, "dotenv", "OTHER")
+	if !ok || got != "plain" {
+		t.Fatalf("dotenv lookup: %q ok=%v", got, ok)
+	}
 }
 
 // TestLookupKeyYAMLProperParser verifies the yaml.v3 path handles real YAML — quoted

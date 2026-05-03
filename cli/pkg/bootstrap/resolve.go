@@ -127,13 +127,13 @@ func (r *DefaultResolver) resolveFlag(name string) (string, error) {
 
 // lookupKey extracts a key from decrypted SOPS file contents.
 //
-//   - env: dotenv-style `KEY=value` lines, comments and quotes handled.
+//   - env/dotenv: dotenv-style `KEY=value` lines, comments and quotes handled.
 //   - yaml: yaml.v3 decodes the document into a top-level mapping; key is the
 //     map key. Nested structures are rejected — the schema only references
 //     top-level keys, and ad-hoc traversal is exactly what got us into trouble.
 func lookupKey(data []byte, format, key string) (string, bool) {
 	switch format {
-	case "env":
+	case "env", "dotenv":
 		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "#") {
