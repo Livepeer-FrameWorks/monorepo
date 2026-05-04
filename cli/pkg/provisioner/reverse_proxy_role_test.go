@@ -237,6 +237,10 @@ func TestChatwootComposeTemplateConsumesEnvFile(t *testing.T) {
 		"host.docker.internal:host-gateway",
 		"condition: service_healthy",
 		"set -e",
+		"Waiting for Redis",
+		"Redis.new(url: ENV.fetch(\"REDIS_URL\")).ping",
+		"CHATWOOT_INSTALLATION_ONBOARDING",
+		"User.count.zero? && Account.count.zero?",
 		"exec bundle exec rails s",
 	} {
 		if !strings.Contains(content, want) {
