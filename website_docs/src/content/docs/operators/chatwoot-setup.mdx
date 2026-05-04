@@ -48,11 +48,17 @@ Go to **Settings → Custom Attributes** and add each of these:
 | Conversation | Page URL     | `page_url`  | Link | Page where conversation started |
 | Conversation | Subject      | `subject`   | Text | Conversation subject line       |
 
+Deckhand writes these as conversation custom attributes when it creates a
+support thread. Contacts are matched using the contact `source_id`; no contact
+custom attributes are required for the current integration.
+
 ### 5. Configure Webhook
 
 1. Go to **Settings → Integrations → Webhooks**
 2. Click **Configure** then **Add new webhook**
-3. Set the URL: `http://deckhand:18015/webhooks/chatwoot`
+3. Set the URL:
+   - Ansible Docker Chatwoot + native Deckhand: `http://host.docker.internal:18015/webhooks/chatwoot`
+   - Same Docker network for both services: `http://deckhand:18015/webhooks/chatwoot`
 4. Check these events:
    - `conversation_created`
    - `conversation_updated`
@@ -74,6 +80,10 @@ CHATWOOT_ACCOUNT_ID=1
 CHATWOOT_INBOX_ID=1
 ```
 
+For production GitOps deployments, set `CHATWOOT_FRONTEND_URL`,
+`CHATWOOT_ACCOUNT_ID`, `CHATWOOT_INBOX_ID`, and `CHATWOOT_API_TOKEN` in the
+shared environment after creating the Chatwoot account and API inbox.
+
 ## How It Works
 
 1. User opens support chat in webapp
@@ -88,6 +98,8 @@ CHATWOOT_INBOX_ID=1
 
 **Empty conversations list:** Contact's `source_id` doesn't match tenant ID. Edit the contact in Chatwoot and set `source_id` to the tenant's UUID.
 
-**Webhook not firing:** Verify the webhook URL is reachable from Chatwoot container (`http://deckhand:18015/webhooks/chatwoot`).
+**Webhook not firing:** Verify the webhook URL is reachable from the Chatwoot
+container. For the Ansible Docker stack, use
+`http://host.docker.internal:18015/webhooks/chatwoot`.
 
 **"Inbox not found" errors:** Ensure `CHATWOOT_INBOX_ID` matches the inbox you created.

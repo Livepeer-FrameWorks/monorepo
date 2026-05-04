@@ -50,6 +50,10 @@
     unknown: "Could not validate against available data",
   };
 
+  function hasBlockSources(): boolean {
+    return !!message.blocks?.some((block) => block.sources?.length);
+  }
+
   function escapeHtml(value: string) {
     return value
       .replaceAll("&", "&amp;")
@@ -216,6 +220,22 @@
           >
             {@html renderMarkdown(block.content)}
           </div>
+          {#if block.sources?.length}
+            <ul class="docs-skipper-message__block-sources">
+              {#each block.sources as source}
+                <li>
+                  <a
+                    class="docs-skipper-message__link"
+                    href={source.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {source.label}
+                  </a>
+                </li>
+              {/each}
+            </ul>
+          {/if}
         {/each}
       </div>
     {:else}
@@ -232,7 +252,7 @@
     {/if}
   </div>
 
-  {#if message.role === "assistant" && message.citations?.length}
+  {#if message.role === "assistant" && message.citations?.length && !hasBlockSources()}
     <details class="docs-skipper-message__details">
       <summary class="docs-skipper-message__details-summary">
         Citations

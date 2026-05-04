@@ -75,6 +75,7 @@ _Active development. Core functionality is established; work is focused on full 
 ### Product & Services
 
 - **Livepeer Gateway**: Transcoding is active. Work is focused on native integration and exposed controls.
+- **DRM**: FairPlay, Widevine, and PlayReady content protection, in development with the MistServer team.
 
 ---
 
@@ -122,6 +123,9 @@ _Backlog items for future development cycles._
 ### Platform & Infrastructure
 
 - **DNS**: Self-hosted anycast DNS. [RFC: Anycast DNS]
+- **Managed Object Storage**: Standalone S3-compatible block storage as a customer-facing service. Distinct from the in-pipeline edge-cluster storage, which is internal infrastructure.
+- **Managed DNS**: DNS-as-a-service for customers with health checks, latency-based, and geo routing. Distinct from the self-hosted anycast DNS work, which removes a third-party dependency for our own platform.
+- **Generic CDN / Proxy**: Image, asset, and generic HTTP proxying for non-streaming traffic.
 - **Security**: Vault secrets management. [RFC: Vault Secrets Management]
 - **Refactoring**: Large-file strategy to reduce repo churn. [RFC: Large File Refactor]
 

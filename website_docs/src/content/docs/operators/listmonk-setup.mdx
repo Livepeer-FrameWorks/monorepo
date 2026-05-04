@@ -1,0 +1,86 @@
+---
+title: "Listmonk Setup"
+description: "Post-provision configuration for the newsletter and mailing-list backend."
+sidebar:
+  order: 11
+---
+
+Listmonk provides the newsletter and mailing-list backend used by FrameWorks
+forms and account flows. Provisioning starts the container, creates the
+database tables, and creates the first admin user from GitOps credentials. A
+few application settings still need operator-owned values.
+
+## GitOps Inputs
+
+Set these before provisioning:
+
+```bash
+# gitops/config/<env>.env
+LISTMONK_FRONTEND_URL=https://listmonk.example.com
+LISTMONK_USERNAME=admin
+DEFAULT_MAILING_LIST_ID=1
+
+# gitops/secrets/<env>.env, edited via gitops/scripts/sops-env.sh
+LISTMONK_PASSWORD=<admin-password>
+```
+
+`cluster provision` maps `LISTMONK_FRONTEND_URL` into Listmonk's
+`app.root_url` database setting. This is separate from the process environment:
+Listmonk seeds `app.root_url` to `http://localhost:9000` on first install, and
+that database setting controls login form actions, public list links, and
+subscription URLs.
+
+## First Login
+
+Open your deployed Listmonk URL and sign in with:
+
+- Username: `LISTMONK_USERNAME`
+- Password: `LISTMONK_PASSWORD`
+
+If the browser redirects to `http://localhost:9000`, force-refresh the login
+page. If it persists, verify `settings.app.root_url` in the `listmonk`
+database.
+
+## General Settings
+
+Go to **Settings → General** and configure:
+
+| Setting       | Value                                                                |
+| ------------- | -------------------------------------------------------------------- |
+| Root URL      | Your public Listmonk URL, for example `https://listmonk.example.com` |
+| Site name     | Public mailing-list name                                             |
+| From email    | A sender address your SMTP account is authorized to use              |
+| Notify emails | Operator addresses that should receive Listmonk notifications        |
+
+`From email` must match an address allowed by the SMTP provider. For Fastmail,
+use a mailbox or configured sending alias, for example
+`FrameWorks <news@example.com>`.
+
+## SMTP
+
+Go to **Settings → SMTP** and configure at least one enabled SMTP server.
+
+For Fastmail:
+
+| Field         | Port 465              | Port 587              |
+| ------------- | --------------------- | --------------------- |
+| Host          | `smtp.fastmail.com`   | `smtp.fastmail.com`   |
+| Port          | `465`                 | `587`                 |
+| Auth protocol | `login`               | `login`               |
+| TLS type      | `TLS`                 | `STARTTLS`            |
+| Username      | Full email address    | Full email address    |
+| Password      | Fastmail app password | Fastmail app password |
+
+Do not use `cram` auth for Fastmail. A `551 5.7.1 Not authorised to send from
+this header address` response means the SMTP login worked, but `From email`
+does not match a sendable address on that account.
+
+## Lists
+
+Provisioning creates Listmonk's default lists. FrameWorks services subscribe
+users to `DEFAULT_MAILING_LIST_ID`.
+
+- Use a public double-opt-in list for public newsletter signups.
+- Keep private/internal lists separate from public forms.
+- Update `DEFAULT_MAILING_LIST_ID` in GitOps when changing which list the
+  FrameWorks forms service targets.

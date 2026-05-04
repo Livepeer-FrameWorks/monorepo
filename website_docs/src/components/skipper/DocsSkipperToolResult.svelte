@@ -22,6 +22,13 @@
     Similarity?: number;
   }
 
+  interface MCPToolInfo {
+    name?: string;
+    category?: string;
+    description?: string;
+    available_in_current_mode?: boolean;
+  }
+
   const diagnosticTools = new Set([
     "diagnose_rebuffering",
     "diagnose_buffer_health",
@@ -63,6 +70,8 @@
   const payload = getPayload();
   const isSearch = searchTools.has(toolName);
   const isDiagnostic = diagnosticTools.has(toolName);
+  const isInventory =
+    toolName === "list_mcp_tools" || detail.title === "Current MCP tool inventory";
 
   // Search helpers
   function getResults(): SearchResult[] {
@@ -111,6 +120,26 @@
     if (typeof value === "boolean") return value ? "Yes" : "No";
     if (value === null || value === undefined) return "N/A";
     return String(value);
+  }
+
+  function getGatewayTools(): MCPToolInfo[] {
+    if (Array.isArray(payload.gateway_tools)) return payload.gateway_tools as MCPToolInfo[];
+    return [];
+  }
+
+  function groupedGatewayTools(): Array<[string, MCPToolInfo[]]> {
+    const groups = new Map<string, MCPToolInfo[]>();
+    for (const tool of getGatewayTools()) {
+      const category = tool.category || "Other";
+      groups.set(category, [...(groups.get(category) ?? []), tool]);
+    }
+    return Array.from(groups.entries());
+  }
+
+  function gatewayToolCount(): number {
+    return typeof payload.gateway_tool_count === "number"
+      ? payload.gateway_tool_count
+      : getGatewayTools().length;
   }
 
   // Fallback
@@ -208,6 +237,28 @@
         </ul>
       </div>
     {/if}
+  </div>
+{:else if isInventory}
+  {@const groups = groupedGatewayTools()}
+  {@const count = gatewayToolCount()}
+  <div class="docs-skipper-tool-card">
+    <div class="docs-skipper-tool-card__header">
+      <span class="docs-skipper-tool-card__title">MCP Tool Inventory</span>
+      <span class="docs-skipper-tool-card__count"> {count} tool{count === 1 ? "" : "s"} </span>
+    </div>
+    {#each groups as [category, tools] (category)}
+      <div class="docs-skipper-tool-card__section">
+        <div class="docs-skipper-tool-card__label">{category}</div>
+        {#each tools as tool (tool.name)}
+          <div class="docs-skipper-tool-card__metric">
+            <span class="docs-skipper-tool-card__metric-key">{tool.name}</span>
+            <span class="docs-skipper-tool-card__metric-value">
+              {tool.available_in_current_mode ? "Available here" : "Gateway only"}
+            </span>
+          </div>
+        {/each}
+      </div>
+    {/each}
   </div>
 {:else}
   <details class="docs-skipper-message__details">

@@ -500,6 +500,7 @@ TO_EMAIL=contact@your-domain.com
 
 # Listmonk
 LISTMONK_URL=http://<listmonk-host>:9000 # Use :9001 if you rely on the repo docker-compose port mapping
+LISTMONK_FRONTEND_URL=https://listmonk.<your-domain>
 LISTMONK_USERNAME=admin
 LISTMONK_PASSWORD=<listmonk-password>
 DEFAULT_MAILING_LIST_ID=1
@@ -559,8 +560,8 @@ Ensure it can reach the Postgres/Yugabyte instance and the `listmonk` database/u
 docker run -d --name listmonk \
   -p 9000:9000 \
   -e LISTMONK_app__address="0.0.0.0:9000" \
-  -e LISTMONK_app__admin_username=admin \
-  -e LISTMONK_app__admin_password=<listmonk-admin-password> \
+  -e LISTMONK_ADMIN_USER=admin \
+  -e LISTMONK_ADMIN_PASSWORD=<listmonk-admin-password> \
   -e LISTMONK_db__host=<db-host> \
   -e LISTMONK_db__port=<db-port> \
   -e LISTMONK_db__user=listmonk \
@@ -569,6 +570,10 @@ docker run -d --name listmonk \
   -e LISTMONK_db__ssl_mode=disable \
   listmonk/listmonk:v4.0.1
 ```
+
+After first start, configure Listmonk's application settings. The public root
+URL, sender address, SMTP server, and list choice live in Listmonk's database,
+not just the process environment. See [Listmonk Setup](/operators/listmonk-setup).
 
 ---
 
@@ -638,7 +643,10 @@ After Chatwoot is running, configure it for Deckhand integration:
    - Create: `tenant_id` (Text), `page_url` (Link), `subject` (Text)
 4. **Configure webhook:**
    - Settings → Webhooks → Add Webhook
-   - URL: `http://deckhand:18015/webhooks/chatwoot` (internal Docker network)
+   - URL: `http://host.docker.internal:18015/webhooks/chatwoot` when Chatwoot
+     runs in the Ansible Docker stack and Deckhand runs natively on the host.
+     Use `http://deckhand:18015/webhooks/chatwoot` only when both containers
+     share a Docker network.
    - Enable events: `conversation_created`, `conversation_updated`, `message_created`, `message_updated`
 
 <Aside type="note">

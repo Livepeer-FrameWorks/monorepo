@@ -1,0 +1,99 @@
+---
+title: Thumbnails & Previews
+description: Poster frames and animated sprite previews for live streams, DVR recordings, and clips.
+---
+
+import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+FrameWorks generates two thumbnail assets for every stream and recording: a high-resolution **poster frame** and a low-resolution **sprite sheet** with synchronized VTT cues. Both are served by **Chandler**, the regional static-asset cache, and are exposed in the GraphQL playback metadata.
+
+## What you get
+
+| Asset        | File         | Purpose                                                                   |
+| ------------ | ------------ | ------------------------------------------------------------------------- |
+| Poster frame | `poster.jpg` | Full-resolution single-frame JPEG. Use as the click-to-play overlay.      |
+| Sprite sheet | `sprite.jpg` | Tiled grid (10×10) of low-resolution thumbnails across the timeline.      |
+| Sprite cues  | `sprite.vtt` | WebVTT cues pointing into `sprite.jpg` via `#xywh=` fragment identifiers. |
+
+<Aside type="caution" title="Don't use a sprite tile as a static frame">
+  Sprite tiles are deliberately low resolution — they're built for hover-scrub previews, not static
+  display. For poster frames and key art, always use `poster.jpg`.
+</Aside>
+
+## URL pattern
+
+Assets are served from the regional Chandler host at:
+
+```
+https://{chandler-host}/assets/{assetId}/{file}
+```
+
+`assetId` is:
+
+- the **stream ID** for live streams,
+- the **artifact hash** for DVR recordings and clips.
+
+Example URLs:
+
+```
+https://chandler.example.com/assets/abc123def456/poster.jpg
+https://chandler.example.com/assets/abc123def456/sprite.jpg
+https://chandler.example.com/assets/abc123def456/sprite.vtt
+```
+
+The Chandler hostname for your environment is returned by the GraphQL playback resolver — you don't need to hardcode it.
+
+## In the FrameWorks Player
+
+Sprite hover-scrub is **automatic**. When the stream has thumbnail processing enabled, the player auto-detects the sprite track from MistServer metadata and shows tiles on the seek bar during hover. No configuration needed for live or VOD content.
+
+To set the click-to-play poster overlay, pass `thumbnailUrl`:
+
+```tsx
+<Player
+  contentType="live"
+  contentId="<YOUR_PLAYBACK_ID>"
+  thumbnailUrl="https://chandler.example.com/assets/<assetId>/poster.jpg"
+/>
+```
+
+See [Playback Advanced — Thumbnails](/builders/playback-advanced/#thumbnails) for the full SDK reference.
+
+## In the GraphQL API
+
+The playback metadata returned by the gateway includes a `thumbnailAssets` field:
+
+```graphql
+{
+  poster_url # Full-resolution single-frame JPEG
+  sprite_jpg_url # Sprite sheet JPEG (10×10 grid)
+  sprite_vtt_url # VTT cues with #xywh= fragments
+  asset_key # streamId for live, artifactHash for DVR/clip
+}
+```
+
+These URLs are pre-resolved against the regional Chandler — use them directly without further construction.
+
+## Building your own hover-scrub UI
+
+If you're not using the FrameWorks Player, you can render hover-scrub previews yourself by parsing `sprite.vtt`. Each cue points into `sprite.jpg` with a `#xywh=x,y,width,height` fragment:
+
+```vtt
+WEBVTT
+
+00:00:00.000 --> 00:00:10.000
+sprite.jpg#xywh=0,0,160,90
+
+00:00:10.000 --> 00:00:20.000
+sprite.jpg#xywh=160,0,160,90
+```
+
+For each timestamp, draw the matching tile from the sprite using a CSS `background-position` or a `<canvas>` blit.
+
+## Related
+
+<CardGrid>
+  <LinkCard title="Playback Advanced — Thumbnails" href="/builders/playback-advanced/#thumbnails" />
+  <LinkCard title="Player Embedding" href="/builders/playback" />
+  <LinkCard title="Multistreaming" href="/builders/multistreaming" />
+</CardGrid>
