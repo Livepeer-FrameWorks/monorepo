@@ -55,6 +55,9 @@ func listmonkEnvMap(config ServiceConfig) map[string]any {
 		"LISTMONK_ADMIN_USER":     config.EnvVars["LISTMONK_USERNAME"],
 		"LISTMONK_ADMIN_PASSWORD": config.EnvVars["LISTMONK_PASSWORD"],
 	}
+	if v := firstNonEmptyEnv(config.EnvVars, "LISTMONK_FRONTEND_URL", "LISTMONK_PUBLIC_URL"); v != "" {
+		env["LISTMONK_app__root"] = v
+	}
 	if v := config.EnvVars["SMTP_HOST"]; v != "" {
 		env["LISTMONK_app__smtp__host"] = v
 	}

@@ -14,6 +14,7 @@ func TestListmonkEnvMapWiresAdminCredsFromGitOps(t *testing.T) {
 			"POSTGRES_SUPPORT_PASSWORD": "support-secret",
 			"LISTMONK_USERNAME":         "admin",
 			"LISTMONK_PASSWORD":         "from-sops",
+			"LISTMONK_FRONTEND_URL":     "https://listmonk.frameworks.network",
 		},
 	})
 
@@ -31,6 +32,9 @@ func TestListmonkEnvMapWiresAdminCredsFromGitOps(t *testing.T) {
 	}
 	if got := env["LISTMONK_db__password"]; got != "support-secret" {
 		t.Fatalf("LISTMONK_db__password = %v, want support-secret", got)
+	}
+	if got := env["LISTMONK_app__root"]; got != "https://listmonk.frameworks.network" {
+		t.Fatalf("LISTMONK_app__root = %v, want public URL", got)
 	}
 }
 
