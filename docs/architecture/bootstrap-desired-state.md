@@ -91,7 +91,7 @@ quartermaster:
 
 purser:
   cluster_pricing: [ ... ]         # one row per cluster that declares pricing
-  customer_billing: [ ... ]        # one entry per customer tenant from overlay
+  customer_billing: [ ... ]        # explicit tenant-to-tier billing links
 
 commodore:
   # users live under accounts (see below); commodore: section is reserved for future
@@ -101,18 +101,16 @@ accounts:
   - kind: system_operator
     tenant: { ref: quartermaster.system_tenant }
     users: [ ... ]
-    billing: none
   - kind: customer
     tenant: { ref: quartermaster.tenants[<alias>] }
     users: [ ... ]
-    billing: { ... }
 ```
 
-The `accounts:` array is the cross-service coordination surface. Each entry pins a
-tenant + users + billing relationship. The CLI renderer validates intra-file
-references, then the service-specific bootstrap commands reconcile their owned
-sections; there is not currently a top-level `frameworks bootstrap validate`
-command.
+The `accounts:` array creates users for a tenant. Billing tier membership is
+tenant-level state and is declared under `purser.customer_billing`. The CLI renderer
+validates intra-file references, then the service-specific bootstrap commands
+reconcile their owned sections; there is not currently a top-level
+`frameworks bootstrap validate` command.
 
 ---
 
@@ -353,8 +351,9 @@ customer_billing:
     cluster_access: derived # derived from tier eligibility + is_platform_official
 ```
 
-Only `customer`-kind accounts produce entries here. `system_operator` accounts have
-`billing: none` and never appear in this section.
+Operators declare explicit rows here when a tenant needs billing tier membership
+and media-cluster entitlement, including `quartermaster.system_tenant`. Account
+entries create users; tenant-to-tier links belong in Purser desired state.
 
 Stable: `tenant.ref`. Update-on-drift for `model` and `tier`.
 
@@ -560,6 +559,11 @@ purser:
       pricing_model: flat
       base_price: "499.00"
       currency: USD
+  customer_billing:
+    - tenant: { ref: quartermaster.tenants[northwind] }
+      model: prepaid
+      tier: developer
+      cluster_access: derived
 
 accounts:
   - kind: customer
@@ -568,10 +572,6 @@ accounts:
       - email: admin@northwind.example
         role: owner
         password_ref: { sops: gitops/secrets/northwind.env, key: NORTHWIND_OWNER_PASSWORD }
-    billing:
-      model: prepaid
-      tier: developer
-      cluster_access: derived
 ```
 
 The CLI merges the overlay onto the manifest-derived state. The final rendered file is

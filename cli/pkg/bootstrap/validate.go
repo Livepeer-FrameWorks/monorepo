@@ -290,11 +290,11 @@ func (r *Rendered) validateAccounts(errs *ValidationErrors) {
 		switch a.Kind {
 		case AccountSystemOperator:
 			if !a.Billing.IsNone() {
-				*errs = append(*errs, &ValidationError{Path: path + ".billing.model", Msg: "system_operator accounts must have billing.model = none"})
+				*errs = append(*errs, &ValidationError{Path: path + ".billing.model", Msg: "account billing is not authoritative; declare tenant billing in purser.customer_billing"})
 			}
 		case AccountCustomer:
-			if a.Billing.IsNone() {
-				*errs = append(*errs, &ValidationError{Path: path + ".billing.model", Msg: "customer accounts require billing (prepaid|postpaid)"})
+			if !a.Billing.IsNone() {
+				*errs = append(*errs, &ValidationError{Path: path + ".billing.model", Msg: "account billing is not authoritative; declare tenant billing in purser.customer_billing"})
 			}
 		case "":
 			*errs = append(*errs, &ValidationError{Path: path + ".kind", Msg: "required"})

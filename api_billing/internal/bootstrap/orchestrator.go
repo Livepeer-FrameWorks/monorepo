@@ -15,7 +15,7 @@ type Sections struct {
 	// PostCommit is the cross-service work the dispatcher runs after the
 	// outer reconcile transaction commits — and skips when --dry-run rolls
 	// back. Today: QM BootstrapClusterAccess + UpdateTenant(primary_cluster)
-	// for every customer in customer_billing, matching the runtime
+	// for every tenant in customer_billing, matching the runtime
 	// entitlement primitives. The dispatcher dispatches per Op.Kind.
 	PostCommit []PostCommitOp
 }

@@ -9,7 +9,7 @@ package bootstrap
 //	purser:
 //	  billing_tiers: [...]      # overlay-only catalog additions/overrides
 //	  cluster_pricing: [...]    # one row per cluster declaring pricing
-//	  customer_billing: [...]   # one entry per customer tenant
+//	  customer_billing: [...]   # explicit tenant-to-tier billing links
 //
 // The bootstrap subcommand decodes with KnownFields(true), so typos and stale
 // fields fail parse — that's the only schema-evolution check we want at this
@@ -73,7 +73,7 @@ type ClusterPricing struct {
 	DefaultQuotas     map[string]any `yaml:"default_quotas,omitempty"`
 }
 
-// CustomerBilling is a per-customer-tenant subscription row. Tenant references
+// CustomerBilling is a tenant-to-tier subscription row. Tenant references
 // the QM tenant by alias; ReconcileCustomerBilling resolves alias → UUID via
 // Quartermaster's ResolveTenantAliases gRPC.
 type CustomerBilling struct {

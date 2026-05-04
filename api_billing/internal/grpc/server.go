@@ -2406,14 +2406,23 @@ func (s *PurserServer) GetBillingStatus(ctx context.Context, req *pb.GetBillingS
 		outstanding += inv.Amount
 	}
 
+	billingStatus := subscription.GetStatus()
+	if billingStatus == "" {
+		billingStatus = "none"
+	}
+	currency := billing.DefaultCurrency()
+	if tier.GetCurrency() != "" {
+		currency = tier.GetCurrency()
+	}
+
 	// Build response
 	resp := &pb.BillingStatusResponse{
 		TenantId:          tenantID,
 		Subscription:      subscription,
 		Tier:              tier,
-		BillingStatus:     subscription.GetStatus(),
+		BillingStatus:     billingStatus,
 		OutstandingAmount: outstanding,
-		Currency:          tier.GetCurrency(),
+		Currency:          currency,
 		PendingInvoices:   pendingInvoices,
 		RecentPayments:    recentPayments,
 		UsageSummary:      usageSummary,
@@ -2493,15 +2502,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 
 	if errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithField("tenant_id", tenantID).Warn("getSubscriptionAndTier: no active subscription")
-		// Return a no-subscription response with the public free-tier display.
-		return &pb.TenantSubscription{
-				TenantId: tenantID,
-				Status:   "none",
-			}, &pb.BillingTier{
-				TierName:    "free",
-				DisplayName: "Free Tier",
-				Currency:    billing.DefaultCurrency(),
-			}, nil
+		return nil, nil, nil
 	}
 	if err != nil {
 		s.logger.WithError(err).WithField("tenant_id", tenantID).Error("getSubscriptionAndTier: query error")

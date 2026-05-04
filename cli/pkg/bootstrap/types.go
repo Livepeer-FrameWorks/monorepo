@@ -236,7 +236,7 @@ type OverlayPricingRule struct {
 	Config           map[string]any `yaml:"config,omitempty"`
 }
 
-// CustomerBilling is a Purser-owned per-customer-tenant billing/subscription record.
+// CustomerBilling is a Purser-owned tenant-to-tier billing/subscription record.
 // Tenant references the QM tenant by alias; Purser bootstrap resolves the alias to a
 // UUID via QM's persisted alias mapping at apply time. Stable key: Tenant ref.
 type CustomerBilling struct {

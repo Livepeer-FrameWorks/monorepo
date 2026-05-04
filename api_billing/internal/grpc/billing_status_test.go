@@ -1,8 +1,13 @@
 package grpc
 
 import (
+	"context"
 	"database/sql"
 	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
+
+	"frameworks/pkg/logging"
 )
 
 // TestParseRetentionDays_BareScalarOnly locks the canonical decoder contract:
@@ -29,5 +34,35 @@ func TestParseRetentionDays_BareScalarOnly(t *testing.T) {
 				t.Errorf("parseRetentionDays(%+v) = %d, want %d", tc.raw, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestGetSubscriptionAndTierNoActiveSubscription(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	server := &PurserServer{db: mockDB, logger: logging.NewLogger()}
+	tenantID := "tenant-without-subscription"
+
+	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts`).
+		WithArgs(tenantID).
+		WillReturnError(sql.ErrNoRows)
+
+	subscription, tier, err := server.getSubscriptionAndTier(context.Background(), tenantID)
+	if err != nil {
+		t.Fatalf("getSubscriptionAndTier: %v", err)
+	}
+	if subscription != nil {
+		t.Fatalf("expected nil subscription when no active subscription exists, got %+v", subscription)
+	}
+	if tier != nil {
+		t.Fatalf("expected nil tier when no active subscription exists, got %+v", tier)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
 	}
 }

@@ -132,13 +132,15 @@ func TestRenderOverlayAddsCustomerTenantAndCluster(t *testing.T) {
 			ClusterPricing: []ClusterPricing{
 				{ClusterID: "northwind-private-eu", PricingModel: "flat", BasePrice: "499.00", Currency: "USD"},
 			},
+			CustomerBilling: []CustomerBilling{
+				{Tenant: TenantRefAlias("northwind"), Model: "prepaid", Tier: "developer", ClusterAccess: "derived"},
+			},
 		},
 		Accounts: []AccountDerived{
 			{
-				Kind:    AccountCustomer,
-				Tenant:  TenantRefAlias("northwind"),
-				Users:   []AccountUserDerived{{AccountUserCommon: AccountUserCommon{Email: "admin@northwind.example", Role: "owner"}}},
-				Billing: AccountBilling{Mode: "prepaid", Tier: "developer", ClusterAccess: "derived"},
+				Kind:   AccountCustomer,
+				Tenant: TenantRefAlias("northwind"),
+				Users:  []AccountUserDerived{{AccountUserCommon: AccountUserCommon{Email: "admin@northwind.example", Role: "owner"}}},
 			},
 		},
 	}
@@ -159,6 +161,9 @@ func TestRenderOverlayAddsCustomerTenantAndCluster(t *testing.T) {
 	}
 	if got := len(r.Accounts); got != 1 {
 		t.Fatalf("expected 1 account, got %d", got)
+	}
+	if got := len(r.Purser.CustomerBilling); got != 1 {
+		t.Fatalf("expected 1 explicit customer_billing row, got %d", got)
 	}
 }
 

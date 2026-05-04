@@ -76,18 +76,32 @@ func TestValidateRejectsMultipleDefaultClusters(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsCustomerAccountWithBillingNone(t *testing.T) {
+func TestValidateAcceptsCustomerAccountWithoutBilling(t *testing.T) {
+	r := validRendered()
+	r.Quartermaster.Tenants = append(r.Quartermaster.Tenants, Tenant{Alias: "northwind", Name: "Northwind Traders"})
+	r.Accounts = append(r.Accounts, AccountRendered{
+		Kind:   AccountCustomer,
+		Tenant: TenantRef{Ref: "quartermaster.tenants[northwind]"},
+		Users:  []AccountUserRendered{{AccountUserCommon: AccountUserCommon{Email: "admin@northwind.example", Role: "owner"}, Password: "pw"}},
+	})
+	err := r.Validate()
+	if err != nil {
+		t.Fatalf("expected customer account without billing to validate; got %v", err)
+	}
+}
+
+func TestValidateRejectsAccountBilling(t *testing.T) {
 	r := validRendered()
 	r.Quartermaster.Tenants = append(r.Quartermaster.Tenants, Tenant{Alias: "northwind", Name: "Northwind Traders"})
 	r.Accounts = append(r.Accounts, AccountRendered{
 		Kind:    AccountCustomer,
 		Tenant:  TenantRef{Ref: "quartermaster.tenants[northwind]"},
 		Users:   []AccountUserRendered{{AccountUserCommon: AccountUserCommon{Email: "admin@northwind.example", Role: "owner"}, Password: "pw"}},
-		Billing: AccountBilling{Mode: "none"},
+		Billing: AccountBilling{Mode: "prepaid", Tier: "developer"},
 	})
 	err := r.Validate()
-	if err == nil || !strings.Contains(err.Error(), "customer accounts require billing") {
-		t.Fatalf("expected customer-billing-required error; got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "purser.customer_billing") {
+		t.Fatalf("expected account billing rejection; got %v", err)
 	}
 }
 
@@ -100,8 +114,8 @@ func TestValidateRejectsSystemOperatorWithBillingPrepaid(t *testing.T) {
 		Billing: AccountBilling{Mode: "prepaid"},
 	})
 	err := r.Validate()
-	if err == nil || !strings.Contains(err.Error(), "system_operator accounts must have billing.model = none") {
-		t.Fatalf("expected system_operator-billing-none error; got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "purser.customer_billing") {
+		t.Fatalf("expected account billing rejection; got %v", err)
 	}
 }
 
@@ -147,10 +161,9 @@ func TestValidateRejectsMalformedTenantRef(t *testing.T) {
 func TestValidateRejectsAccountWithUnknownTenantRef(t *testing.T) {
 	r := validRendered()
 	r.Accounts = append(r.Accounts, AccountRendered{
-		Kind:    AccountCustomer,
-		Tenant:  TenantRef{Ref: "quartermaster.tenants[ghost]"},
-		Users:   []AccountUserRendered{{AccountUserCommon: AccountUserCommon{Email: "x@example.com", Role: "owner"}, Password: "pw"}},
-		Billing: AccountBilling{Mode: "prepaid", Tier: "developer"},
+		Kind:   AccountCustomer,
+		Tenant: TenantRef{Ref: "quartermaster.tenants[ghost]"},
+		Users:  []AccountUserRendered{{AccountUserCommon: AccountUserCommon{Email: "x@example.com", Role: "owner"}, Password: "pw"}},
 	})
 	err := r.Validate()
 	if err == nil || !strings.Contains(err.Error(), "does not resolve") {
