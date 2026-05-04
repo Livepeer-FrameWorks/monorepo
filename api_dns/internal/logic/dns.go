@@ -518,7 +518,6 @@ func (m *DNSManager) syncBunnyClusterService(ctx context.Context, fqdn, serviceT
 
 func (m *DNSManager) bunnyRecordsForNodes(nodes []dnsNode, recordName, fqdn string) []bunny.Record {
 	records := make([]bunny.Record, 0, len(nodes))
-	useGeo := countNodesWithLocation(nodes) >= 2
 	for _, node := range nodes {
 		record := bunny.Record{
 			Type:             bunny.RecordTypeA,
@@ -530,7 +529,7 @@ func (m *DNSManager) bunnyRecordsForNodes(nodes []dnsNode, recordName, fqdn stri
 			SmartRoutingType: bunny.SmartRoutingNone,
 			Comment:          fmt.Sprintf("Managed by Navigator for %s", fqdn),
 		}
-		if useGeo && node.Latitude != nil && node.Longitude != nil {
+		if node.Latitude != nil && node.Longitude != nil {
 			record.SmartRoutingType = bunny.SmartRoutingGeolocation
 			record.GeolocationLatitude = node.Latitude
 			record.GeolocationLongitude = node.Longitude
@@ -579,16 +578,6 @@ func bunnyRecordFQDN(recordName, zoneDomain string) string {
 		return zoneDomain
 	}
 	return recordName + "." + zoneDomain
-}
-
-func countNodesWithLocation(nodes []dnsNode) int {
-	count := 0
-	for _, node := range nodes {
-		if node.Latitude != nil && node.Longitude != nil {
-			count++
-		}
-	}
-	return count
 }
 
 func (m *DNSManager) ensureBunnyDelegation(zoneDomain string, nameservers []string) error {

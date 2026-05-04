@@ -964,6 +964,7 @@ func TestSyncServiceByCluster_UsesBunnyForMediaClusterService(t *testing.T) {
 }
 
 func TestSyncServiceByCluster_PublishesFoghornAtClusterApex(t *testing.T) {
+	lat, lon := 52.3676, 4.9041
 	qm := &fakeQuartermasterClient{
 		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
 			ClusterId:   "media-eu",
@@ -975,6 +976,8 @@ func TestSyncServiceByCluster_PublishesFoghornAtClusterApex(t *testing.T) {
 			NodeId:     "foghorn-core-1",
 			ClusterId:  "media-eu",
 			ExternalIp: strPtr("198.51.100.10"),
+			Latitude:   &lat,
+			Longitude:  &lon,
 		}}},
 	}
 
@@ -996,6 +999,15 @@ func TestSyncServiceByCluster_PublishesFoghornAtClusterApex(t *testing.T) {
 			}
 			if got[0].Value != "198.51.100.10" {
 				t.Fatalf("record value = %q, want 198.51.100.10", got[0].Value)
+			}
+			if got[0].SmartRoutingType != bunny.SmartRoutingGeolocation {
+				t.Fatalf("SmartRoutingType = %d, want geolocation", got[0].SmartRoutingType)
+			}
+			if got[0].GeolocationLatitude == nil || *got[0].GeolocationLatitude != lat {
+				t.Fatalf("GeolocationLatitude = %v, want %v", got[0].GeolocationLatitude, lat)
+			}
+			if got[0].GeolocationLongitude == nil || *got[0].GeolocationLongitude != lon {
+				t.Fatalf("GeolocationLongitude = %v, want %v", got[0].GeolocationLongitude, lon)
 			}
 			return nil
 		},
