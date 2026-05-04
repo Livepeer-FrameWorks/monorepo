@@ -4,3 +4,9 @@ listmonk_port: 9001
 listmonk_project_dir: /opt/frameworks/listmonk
 listmonk_wait_timeout: 300
 listmonk_env: {}
+listmonk_public_url: ""
+listmonk_db_host: ""
+listmonk_db_port: 5432
+listmonk_db_user: postgres
+listmonk_db_password: ""
+listmonk_db_database: listmonk

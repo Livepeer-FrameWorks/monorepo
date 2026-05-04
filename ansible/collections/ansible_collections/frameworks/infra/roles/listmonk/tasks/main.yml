@@ -10,6 +10,45 @@
     compose_stack_wait_timeout: "{{ listmonk_wait_timeout }}"
   tags: [install, configure, service, validate]
 
+- name: Listmonk | reconcile public root URL in settings
+  community.postgresql.postgresql_query:
+    login_host: "{{ listmonk_db_host }}"
+    port: "{{ listmonk_db_port }}"
+    login_user: "{{ listmonk_db_user }}"
+    login_password: "{{ listmonk_db_password }}"
+    db: "{{ listmonk_db_database }}"
+    query: |-
+      WITH upsert AS (
+        INSERT INTO settings (key, value, updated_at)
+        VALUES ('app.root_url', to_jsonb(%s::text), NOW())
+        ON CONFLICT (key) DO UPDATE
+          SET value = EXCLUDED.value,
+              updated_at = NOW()
+        WHERE settings.value IS DISTINCT FROM EXCLUDED.value
+        RETURNING 1
+      )
+      SELECT COUNT(*)::int AS changed FROM upsert
+    positional_args:
+      - "{{ listmonk_public_url }}"
+  register: listmonk_root_url_reconcile
+  changed_when: (listmonk_root_url_reconcile.query_result[0].changed | default(0) | int) > 0
+  no_log: true
+  when:
+    - listmonk_public_url | length > 0
+    - listmonk_db_host | length > 0
+    - not ansible_check_mode
+  tags: [install, configure, service]
+
+- name: Listmonk | restart after public root URL change
+  ansible.builtin.include_role:
+    name: frameworks.infra.compose_stack
+    tasks_from: restart.yml
+  vars:
+    compose_stack_name: listmonk
+    compose_stack_project_dir: "{{ listmonk_project_dir }}"
+  when: listmonk_root_url_reconcile is changed
+  tags: [install, configure, service]
+
 - name: Listmonk | restart
   ansible.builtin.import_tasks: restart.yml
   tags: [restart, never]

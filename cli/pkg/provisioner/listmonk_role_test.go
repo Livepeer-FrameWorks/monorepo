@@ -1,6 +1,11 @@
 package provisioner
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"frameworks/cli/pkg/inventory"
+)
 
 func TestListmonkEnvMapWiresAdminCredsFromGitOps(t *testing.T) {
 	env := listmonkEnvMap(ServiceConfig{
@@ -35,6 +40,37 @@ func TestListmonkEnvMapWiresAdminCredsFromGitOps(t *testing.T) {
 	}
 	if got := env["LISTMONK_app__root"]; got != "https://listmonk.frameworks.network" {
 		t.Fatalf("LISTMONK_app__root = %v, want public URL", got)
+	}
+}
+
+func TestListmonkRoleVarsWiresPublicURLReconcileDatabase(t *testing.T) {
+	vars, err := listmonkRoleVars(context.Background(), inventory.Host{}, ServiceConfig{
+		EnvVars: map[string]string{
+			"DATABASE_HOST":             "yuga-eu-1.internal",
+			"DATABASE_PORT":             "5433",
+			"DATABASE_USER":             "postgres",
+			"DATABASE_PASSWORD":         "pgsecret",
+			"POSTGRES_SUPPORT_HOST":     "127.0.0.1",
+			"POSTGRES_SUPPORT_PORT":     "5432",
+			"POSTGRES_SUPPORT_PASSWORD": "support-secret",
+			"LISTMONK_FRONTEND_URL":     "https://listmonk.frameworks.network",
+		},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("listmonkRoleVars returned error: %v", err)
+	}
+
+	if got := vars["listmonk_public_url"]; got != "https://listmonk.frameworks.network" {
+		t.Fatalf("listmonk_public_url = %v, want public URL", got)
+	}
+	if got := vars["listmonk_db_host"]; got != "127.0.0.1" {
+		t.Fatalf("listmonk_db_host = %v, want Postgres host from host perspective", got)
+	}
+	if got := vars["listmonk_db_port"]; got != "5432" {
+		t.Fatalf("listmonk_db_port = %v, want support Postgres port", got)
+	}
+	if got := vars["listmonk_db_password"]; got != "support-secret" {
+		t.Fatalf("listmonk_db_password = %v, want support Postgres password", got)
 	}
 }
 

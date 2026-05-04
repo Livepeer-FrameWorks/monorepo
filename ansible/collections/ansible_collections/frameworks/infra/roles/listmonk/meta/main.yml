@@ -28,3 +28,26 @@ argument_specs:
         type: dict
         required: true
         description: LISTMONK_* configuration (DB, SMTP) passed to compose .env.
+      listmonk_public_url:
+        type: str
+        required: false
+        description: Public Listmonk URL reconciled into settings.app.root_url.
+      listmonk_db_host:
+        type: str
+        required: false
+        description: PostgreSQL host from the Ansible host perspective.
+      listmonk_db_port:
+        type: int
+        required: false
+        default: 5432
+      listmonk_db_user:
+        type: str
+        required: false
+        default: postgres
+      listmonk_db_password:
+        type: str
+        required: false
+      listmonk_db_database:
+        type: str
+        required: false
+        default: listmonk
