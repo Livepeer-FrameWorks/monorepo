@@ -30,7 +30,7 @@
   },
   "dependencies": {
     "@livepeer-frameworks/player-core": "workspace:*",
-    "bits-ui": "^2.17.3"
+    "bits-ui": "^2.18.1"
   },
   "peerDependencies": {
     "svelte": "^5.0.0"
@@ -39,13 +39,13 @@
     "@sveltejs/package": "^2.5.7",
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@testing-library/svelte": "^5.3.1",
-    "@vitest/coverage-v8": "^4.1.4",
-    "jsdom": "^29.0.2",
-    "svelte": "^5.55.4",
-    "svelte-check": "^4.4.6",
-    "typescript": "^6.0.2",
-    "vite": "^8.0.8",
-    "vitest": "^4.1.4"
+    "@vitest/coverage-v8": "^4.1.5",
+    "jsdom": "^29.1.1",
+    "svelte": "^5.55.5",
+    "svelte-check": "^4.4.7",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.10",
+    "vitest": "^4.1.5"
   },
   "keywords": [
     "svelte",
