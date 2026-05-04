@@ -51,3 +51,92 @@ func TestApplyTrafficGeoOnlySetsKnownClusters(t *testing.T) {
 		t.Fatal("expected unknown remote cluster geo to remain unset")
 	}
 }
+
+func TestAddAssignedPoolClusterGeoUsesPhysicalNodeGeoForVirtualCluster(t *testing.T) {
+	nodesByCluster := map[string]*networkClusterGeo{
+		"core": {
+			nodeCount: 2,
+			latSum:    20,
+			lonSum:    40,
+			geoCount:  2,
+		},
+	}
+	nodesByID := map[string]*pb.InfrastructureNode{
+		"node-a": {NodeId: "node-a", ClusterId: "core", Latitude: floatPtr(10), Longitude: floatPtr(20), Region: stringPtr("eu")},
+		"node-b": {NodeId: "node-b", ClusterId: "core", Latitude: floatPtr(30), Longitude: floatPtr(60), Region: stringPtr("eu")},
+	}
+	instancesByID := map[string]*pb.ServiceInstance{
+		"inst-a": {Id: "inst-a", NodeId: stringPtr("node-a")},
+		"inst-b": {Id: "inst-b", NodeId: stringPtr("node-b")},
+	}
+
+	addAssignedPoolClusterGeo(nodesByCluster, nodesByID, instancesByID, []*pb.GetServicePoolStatusResponse{{
+		Assignments: []*pb.ServiceInstanceAssignment{
+			{InstanceId: "inst-a", ClusterId: "media"},
+			{InstanceId: "inst-b", ClusterId: "media"},
+		},
+	}})
+
+	media := nodesByCluster["media"]
+	if media == nil {
+		t.Fatal("expected virtual media cluster geo")
+	}
+	if media.geoCount != 2 {
+		t.Fatalf("expected two backing nodes, got %d", media.geoCount)
+	}
+	if got := media.latSum / float64(media.geoCount); got != 20 {
+		t.Fatalf("expected averaged latitude 20, got %v", got)
+	}
+	if got := media.lonSum / float64(media.geoCount); got != 40 {
+		t.Fatalf("expected averaged longitude 40, got %v", got)
+	}
+}
+
+func TestAddAssignedPoolClusterGeoDoesNotOverrideDirectClusterGeo(t *testing.T) {
+	nodesByCluster := map[string]*networkClusterGeo{
+		"media": {
+			latSum:   1,
+			lonSum:   2,
+			geoCount: 1,
+		},
+	}
+	nodesByID := map[string]*pb.InfrastructureNode{
+		"node-a": {NodeId: "node-a", Latitude: floatPtr(30), Longitude: floatPtr(60)},
+	}
+	instancesByID := map[string]*pb.ServiceInstance{
+		"inst-a": {Id: "inst-a", NodeId: stringPtr("node-a")},
+	}
+
+	addAssignedPoolClusterGeo(nodesByCluster, nodesByID, instancesByID, []*pb.GetServicePoolStatusResponse{{
+		Assignments: []*pb.ServiceInstanceAssignment{{InstanceId: "inst-a", ClusterId: "media"}},
+	}})
+
+	media := nodesByCluster["media"]
+	if media.geoCount != 1 || media.latSum != 1 || media.lonSum != 2 {
+		t.Fatalf("expected direct geo to remain unchanged, got %+v", media)
+	}
+}
+
+func TestAddAssignedPoolClusterGeoDeduplicatesNodeAcrossPoolServices(t *testing.T) {
+	nodesByCluster := map[string]*networkClusterGeo{}
+	nodesByID := map[string]*pb.InfrastructureNode{
+		"node-a": {NodeId: "node-a", Latitude: floatPtr(30), Longitude: floatPtr(60)},
+	}
+	instancesByID := map[string]*pb.ServiceInstance{
+		"foghorn-a":  {Id: "foghorn-a", NodeId: stringPtr("node-a")},
+		"chandler-a": {Id: "chandler-a", NodeId: stringPtr("node-a")},
+	}
+
+	addAssignedPoolClusterGeo(nodesByCluster, nodesByID, instancesByID, []*pb.GetServicePoolStatusResponse{
+		{Assignments: []*pb.ServiceInstanceAssignment{{InstanceId: "foghorn-a", ClusterId: "media"}}},
+		{Assignments: []*pb.ServiceInstanceAssignment{{InstanceId: "chandler-a", ClusterId: "media"}}},
+	})
+
+	media := nodesByCluster["media"]
+	if media == nil {
+		t.Fatal("expected media geo")
+	}
+	if media.geoCount != 1 || media.latSum != 30 || media.lonSum != 60 {
+		t.Fatalf("expected one backing node contribution, got %+v", media)
+	}
+}

@@ -699,7 +699,10 @@
       .sort()
       .join("|"),
     nodesKey: nodes
-      .map((n) => `${n.id}:${n.clusterId ?? ""}:${n.nodeType ?? ""}:${n.status ?? ""}`)
+      .map(
+        (n) =>
+          `${n.id}:${n.lat}:${n.lng}:${n.clusterId ?? ""}:${n.nodeType ?? ""}:${n.status ?? ""}`
+      )
       .sort()
       .join("|"),
     bucketsKey: buckets
@@ -718,7 +721,7 @@
     clustersKey: clusters
       .map(
         (c) =>
-          `${c.id}:${c.status}:${c.nodeCount}:${c.healthyNodeCount}:${c.peerCount ?? ""}:${(c.services ?? []).join(",")}`
+          `${c.id}:${c.lat}:${c.lng}:${c.status}:${c.nodeCount}:${c.healthyNodeCount}:${c.peerCount ?? ""}:${(c.services ?? []).join(",")}`
       )
       .sort()
       .join("|"),

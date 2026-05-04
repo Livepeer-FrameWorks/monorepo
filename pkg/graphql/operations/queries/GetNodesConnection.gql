@@ -3,7 +3,7 @@ query GetNodesConnection(
   $clusterId: String
   $status: NodeStatus
   $type: String
-  $first: Int = 50
+  $first: Int = 25
   $after: String
 ) {
   nodesConnection(

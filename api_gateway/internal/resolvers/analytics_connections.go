@@ -12,6 +12,7 @@ import (
 	"frameworks/api_gateway/internal/middleware"
 	periscopeclient "frameworks/pkg/clients/periscope"
 	"frameworks/pkg/ctxkeys"
+	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
 
@@ -3411,6 +3412,71 @@ func applyTrafficGeo(pairs []*pb.ClusterPairTraffic, clusterGeo map[string]struc
 	}
 }
 
+type networkClusterGeo struct {
+	nodeCount    int
+	healthyCount int
+	latSum       float64
+	lonSum       float64
+	geoCount     int
+	region       string
+}
+
+func addNetworkClusterGeo(cg *networkClusterGeo, n *pb.InfrastructureNode) bool {
+	if cg == nil || n == nil || n.Latitude == nil || n.Longitude == nil {
+		return false
+	}
+	cg.latSum += *n.Latitude
+	cg.lonSum += *n.Longitude
+	cg.geoCount++
+	return true
+}
+
+func addAssignedPoolClusterGeo(nodesByCluster map[string]*networkClusterGeo, nodesByID map[string]*pb.InfrastructureNode, instancesByID map[string]*pb.ServiceInstance, poolStatuses []*pb.GetServicePoolStatusResponse) {
+	seenClusterNode := make(map[string]bool)
+	clustersWithDirectGeo := make(map[string]bool)
+	for clusterID, cg := range nodesByCluster {
+		if cg != nil && cg.geoCount > 0 {
+			clustersWithDirectGeo[clusterID] = true
+		}
+	}
+	for _, poolStatus := range poolStatuses {
+		if poolStatus == nil {
+			continue
+		}
+		for _, assignment := range poolStatus.Assignments {
+			if assignment == nil || assignment.GetClusterId() == "" || assignment.GetInstanceId() == "" {
+				continue
+			}
+			if clustersWithDirectGeo[assignment.GetClusterId()] {
+				continue
+			}
+			cg, ok := nodesByCluster[assignment.GetClusterId()]
+			inst := instancesByID[assignment.GetInstanceId()]
+			if inst == nil || inst.NodeId == nil || *inst.NodeId == "" {
+				continue
+			}
+			node := nodesByID[*inst.NodeId]
+			if node == nil {
+				continue
+			}
+			if !ok {
+				cg = &networkClusterGeo{}
+				nodesByCluster[assignment.GetClusterId()] = cg
+			}
+			key := assignment.GetClusterId() + "|" + node.NodeId
+			if seenClusterNode[key] {
+				continue
+			}
+			if addNetworkClusterGeo(cg, node) {
+				seenClusterNode[key] = true
+			}
+			if cg.region == "" && node.Region != nil && *node.Region != "" {
+				cg.region = *node.Region
+			}
+		}
+	}
+}
+
 // enrichTrafficMatrixGeo attaches cluster lat/lon to traffic matrix pairs
 // by averaging node geo per cluster.
 func (r *Resolver) enrichTrafficMatrixGeo(ctx context.Context, pairs []*pb.ClusterPairTraffic) {
@@ -3564,10 +3630,22 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		return demo.GenerateNetworkStatus(), nil
 	}
 
-	// Fetch foghorn pool for peer connection derivation
+	// Fetch pool assignments for peer connection derivation and virtual cluster geo.
 	poolStatus, err := r.Clients.Quartermaster.GetServicePoolStatus(ctx, "foghorn")
 	if err != nil {
 		r.Logger.WithError(err).Warn("networkStatus: failed to get foghorn pool status")
+	}
+	poolStatuses := []*pb.GetServicePoolStatusResponse{poolStatus}
+	for _, serviceType := range pkgdns.PoolAssignedServiceTypes() {
+		if serviceType == "foghorn" {
+			continue
+		}
+		servicePoolStatus, poolErr := r.Clients.Quartermaster.GetServicePoolStatus(ctx, serviceType)
+		if poolErr != nil {
+			r.Logger.WithError(poolErr).WithField("service_type", serviceType).Warn("networkStatus: failed to get service pool status")
+			continue
+		}
+		poolStatuses = append(poolStatuses, servicePoolStatus)
 	}
 
 	// Fetch all nodes (for geo + counts + individual exposure)
@@ -3620,21 +3698,18 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	}
 
 	// Group nodes by cluster: count, healthy count, average geo, and region
-	type clusterGeo struct {
-		nodeCount    int
-		healthyCount int
-		latSum       float64
-		lonSum       float64
-		geoCount     int
-		region       string
-	}
-	nodesByCluster := make(map[string]*clusterGeo)
+	nodesByCluster := make(map[string]*networkClusterGeo)
+	nodesByID := make(map[string]*pb.InfrastructureNode)
 	var networkNodes []*model.NetworkNode
 	if nodesResp != nil {
 		for _, n := range nodesResp.Nodes {
+			if n == nil {
+				continue
+			}
+			nodesByID[n.NodeId] = n
 			cg, ok := nodesByCluster[n.ClusterId]
 			if !ok {
-				cg = &clusterGeo{}
+				cg = &networkClusterGeo{}
 				nodesByCluster[n.ClusterId] = cg
 			}
 			cg.nodeCount++
@@ -3645,9 +3720,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			if n.Latitude != nil && n.Longitude != nil {
 				lat = *n.Latitude
 				lon = *n.Longitude
-				cg.latSum += lat
-				cg.lonSum += lon
-				cg.geoCount++
+				addNetworkClusterGeo(cg, n)
 			}
 			nodeStatus := "offline"
 			if n.LastHeartbeat != nil || nodesWithHealthyService[n.NodeId] {
@@ -3665,6 +3738,15 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			})
 		}
 	}
+	instancesByID := make(map[string]*pb.ServiceInstance)
+	if instancesResp != nil {
+		for _, si := range instancesResp.Instances {
+			if si != nil && si.Id != "" {
+				instancesByID[si.Id] = si
+			}
+		}
+	}
+	addAssignedPoolClusterGeo(nodesByCluster, nodesByID, instancesByID, poolStatuses)
 
 	activeClusters := make(map[string]*pb.InfrastructureCluster)
 	for _, c := range clustersResp.Clusters {

@@ -3678,8 +3678,15 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 			)
 		`
 		baseArgs = append(baseArgs, tenantID)
+	} else if ctxkeys.GetAuthType(ctx) == "service" {
+		baseWhere = `
+			WHERE n.cluster_id IN (
+				SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c
+				WHERE c.is_active = true
+			)
+		`
 	} else {
-		// Unauthenticated / service-to-service: all platform-official clusters
+		// Unauthenticated: all platform-official clusters
 		baseWhere = `
 			WHERE n.cluster_id IN (
 				SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c
