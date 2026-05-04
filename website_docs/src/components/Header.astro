@@ -20,6 +20,9 @@ const shouldRenderSearch =
   <div class="sl-flex print:hidden">
     {shouldRenderSearch && <Search />}
   </div>
+  <div class="mobile-auth print:hidden">
+    <DocsAuthButton client:idle />
+  </div>
   <div class="sl-hidden md:sl-flex print:hidden right-group">
     <div class="sl-flex social-icons">
       <SocialIcons />
@@ -49,7 +52,8 @@ const shouldRenderSearch =
     }
 
     .right-group,
-    .social-icons {
+    .social-icons,
+    .mobile-auth {
       gap: 1rem;
       align-items: center;
     }
@@ -58,8 +62,16 @@ const shouldRenderSearch =
       height: 2rem;
       border-inline-end: 1px solid var(--sl-color-gray-5);
     }
+    .mobile-auth {
+      display: flex;
+      flex: 0 0 auto;
+      margin-inline-start: auto;
+    }
 
     @media (min-width: 50rem) {
+      .mobile-auth {
+        display: none;
+      }
       :global(:root[data-has-sidebar]) {
         --__sidebar-pad: calc(2 * var(--sl-nav-pad-x));
       }

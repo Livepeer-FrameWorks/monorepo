@@ -1,4 +1,7 @@
-const API_URL = import.meta.env.PUBLIC_API_URL || "";
+const API_URL = (import.meta.env.PUBLIC_API_URL || import.meta.env.VITE_GATEWAY_URL || "").replace(
+  /\/$/,
+  ""
+);
 
 export interface AuthUser {
   id: string;

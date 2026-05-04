@@ -102,7 +102,7 @@ SERVICE_TOKEN=change-me
 	}
 }
 
-func TestGenerateFrontendOnlyEmits16Outputs(t *testing.T) {
+func TestGenerateFrontendOnlyEmits18Outputs(t *testing.T) {
 	t.Setenv("TZ", "UTC")
 
 	dir := t.TempDir()
@@ -134,24 +134,26 @@ TURNSTILE_FORMS_SITE_KEY=site-forms
 		t.Fatalf("Generate returned error: %v", err)
 	}
 
-	// 16 generated outputs + ENV_CONTEXT + ENV_GENERATED_AT = 18 keys
+	// 18 generated outputs + ENV_CONTEXT + ENV_GENERATED_AT = 20 keys
 	want := map[string]string{
-		"VITE_GATEWAY_URL":              "https://bridge.frameworks.network",
-		"VITE_GRAPHQL_HTTP_URL":         "https://bridge.frameworks.network/graphql",
-		"VITE_GRAPHQL_WS_URL":           "wss://bridge.frameworks.network/graphql/ws",
-		"VITE_AUTH_URL":                 "https://bridge.frameworks.network/auth",
-		"VITE_APP_URL":                  "https://chartroom.frameworks.network/app",
-		"VITE_MARKETING_SITE_URL":       "https://frameworks.network",
-		"VITE_DOCS_SITE_URL":            "https://logbook.frameworks.network",
-		"VITE_CONTACT_API_URL":          "https://steward.frameworks.network",
-		"VITE_STREAMING_INGEST_URL":     "https://edge-ingest.media-eu.frameworks.network",
-		"VITE_STREAMING_PLAY_URL":       "https://foghorn.media-eu.frameworks.network",
-		"VITE_STREAMING_EDGE_URL":       "https://edge-egress.media-eu.frameworks.network",
-		"VITE_TURNSTILE_AUTH_SITE_KEY":  "site-auth",
-		"VITE_TURNSTILE_FORMS_SITE_KEY": "site-forms",
-		"VITE_CONTACT_EMAIL":            "info@frameworks.network",
-		"VITE_MCP_URL":                  "https://bridge.frameworks.network/mcp",
-		"VITE_WEBHOOKS_URL":             "https://bridge.frameworks.network/webhooks",
+		"PUBLIC_API_URL":                 "https://bridge.frameworks.network",
+		"PUBLIC_TURNSTILE_AUTH_SITE_KEY": "site-auth",
+		"VITE_GATEWAY_URL":               "https://bridge.frameworks.network",
+		"VITE_GRAPHQL_HTTP_URL":          "https://bridge.frameworks.network/graphql",
+		"VITE_GRAPHQL_WS_URL":            "wss://bridge.frameworks.network/graphql/ws",
+		"VITE_AUTH_URL":                  "https://bridge.frameworks.network/auth",
+		"VITE_APP_URL":                   "https://chartroom.frameworks.network/app",
+		"VITE_MARKETING_SITE_URL":        "https://frameworks.network",
+		"VITE_DOCS_SITE_URL":             "https://logbook.frameworks.network",
+		"VITE_CONTACT_API_URL":           "https://steward.frameworks.network",
+		"VITE_STREAMING_INGEST_URL":      "https://edge-ingest.media-eu.frameworks.network",
+		"VITE_STREAMING_PLAY_URL":        "https://foghorn.media-eu.frameworks.network",
+		"VITE_STREAMING_EDGE_URL":        "https://edge-egress.media-eu.frameworks.network",
+		"VITE_TURNSTILE_AUTH_SITE_KEY":   "site-auth",
+		"VITE_TURNSTILE_FORMS_SITE_KEY":  "site-forms",
+		"VITE_CONTACT_EMAIL":             "info@frameworks.network",
+		"VITE_MCP_URL":                   "https://bridge.frameworks.network/mcp",
+		"VITE_WEBHOOKS_URL":              "https://bridge.frameworks.network/webhooks",
 	}
 	for key, expected := range want {
 		if got := env[key]; got != expected {
@@ -219,6 +221,9 @@ TURNSTILE_AUTH_SITE_KEY=prod-key
 	}
 	if got := env["VITE_TURNSTILE_AUTH_SITE_KEY"]; got != "prod-key" {
 		t.Errorf("VITE_TURNSTILE_AUTH_SITE_KEY = %q, want overlay value", got)
+	}
+	if got := env["PUBLIC_TURNSTILE_AUTH_SITE_KEY"]; got != "prod-key" {
+		t.Errorf("PUBLIC_TURNSTILE_AUTH_SITE_KEY = %q, want overlay value", got)
 	}
 	// Base value not overridden
 	if got := env["VITE_STREAMING_INGEST_URL"]; got != "http://localhost:8080" {

@@ -1,6 +1,9 @@
 import { createClient, type Client } from "graphql-ws";
 
-const API_URL = import.meta.env.PUBLIC_API_URL || "";
+const API_URL = (import.meta.env.PUBLIC_API_URL || import.meta.env.VITE_GATEWAY_URL || "").replace(
+  /\/$/,
+  ""
+);
 
 export async function gqlQuery<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
   const res = await fetch(`${API_URL}/graphql/`, {

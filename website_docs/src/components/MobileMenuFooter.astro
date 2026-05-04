@@ -3,6 +3,7 @@ import LanguageSelect from "virtual:starlight/components/LanguageSelect";
 import SocialIcons from "virtual:starlight/components/SocialIcons";
 import ThemeSelect from "virtual:starlight/components/ThemeSelect";
 import DiscordBadge from "./DiscordBadge.svelte";
+import DocsAuthButton from "./auth/DocsAuthButton.svelte";
 ---
 
 <div class="mobile-preferences sl-flex">
@@ -10,6 +11,7 @@ import DiscordBadge from "./DiscordBadge.svelte";
     <SocialIcons />
     <DiscordBadge client:idle />
   </div>
+  <DocsAuthButton client:idle />
   <ThemeSelect />
   <LanguageSelect />
 </div>

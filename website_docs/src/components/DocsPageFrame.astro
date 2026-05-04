@@ -50,6 +50,13 @@ const { hasSidebar } = Astro.locals.starlightRoute;
       );
     }
 
+    .sidebar > :global(button) {
+      position: fixed;
+      z-index: calc(var(--sl-z-index-navbar) + 1);
+      inset-block-start: calc((var(--sl-nav-height) - var(--sl-menu-button-size)) / 2);
+      inset-inline-end: var(--sl-nav-pad-x);
+    }
+
     .sidebar-pane {
       visibility: var(--sl-sidebar-visibility, hidden);
       position: fixed;
@@ -74,6 +81,10 @@ const { hasSidebar } = Astro.locals.starlightRoute;
     }
 
     @media (min-width: 50rem) {
+      .sidebar > :global(button) {
+        display: none;
+      }
+
       .sidebar-content::after {
         content: "";
         padding-bottom: 1px;

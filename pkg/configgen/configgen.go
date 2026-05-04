@@ -182,7 +182,7 @@ func Generate(opts Options) (map[string]string, error) {
 func filterFrontendEnv(env map[string]string) map[string]string {
 	filtered := make(map[string]string)
 	for key, value := range env {
-		if strings.HasPrefix(key, "VITE_") {
+		if strings.HasPrefix(key, "VITE_") || strings.HasPrefix(key, "PUBLIC_") {
 			filtered[key] = value
 		}
 	}
@@ -395,6 +395,7 @@ func computeViteVariables(env map[string]string) error {
 	}
 	env["VITE_GRAPHQL_HTTP_URL"] = graphQLHTTPURL
 	env["VITE_GATEWAY_URL"] = gatewayBaseURL
+	env["PUBLIC_API_URL"] = gatewayBaseURL
 
 	wsBase, err := convertToWS(gatewayBaseURL)
 	if err != nil {
@@ -475,6 +476,7 @@ func computeViteVariables(env map[string]string) error {
 
 	if authKey := env["TURNSTILE_AUTH_SITE_KEY"]; authKey != "" {
 		env["VITE_TURNSTILE_AUTH_SITE_KEY"] = authKey
+		env["PUBLIC_TURNSTILE_AUTH_SITE_KEY"] = authKey
 	}
 	if formsKey := env["TURNSTILE_FORMS_SITE_KEY"]; formsKey != "" {
 		env["VITE_TURNSTILE_FORMS_SITE_KEY"] = formsKey
