@@ -992,10 +992,12 @@ func (m *DNSManager) applyLoadBalancerPools(ctx context.Context, fqdn, serviceTy
 	}
 
 	var lbID string
+	var previousPoolIDs []string
 	for _, lb := range lbs {
 		// CreateLoadBalancer stores the FQDN in Name, so compare against that field here.
 		if lb.Name == fqdn {
 			lbID = lb.ID
+			previousPoolIDs = poolIDsFromLoadBalancer(lb)
 			break
 		}
 	}
@@ -1026,16 +1028,25 @@ func (m *DNSManager) applyLoadBalancerPools(ctx context.Context, fqdn, serviceTy
 		if getLBErr != nil {
 			return nil, fmt.Errorf("failed to get LB details: %w", getLBErr)
 		}
+		previousPoolIDs = poolIDsFromLoadBalancer(*currentLB)
 
 		fallbackPool := ""
 		if len(desiredPoolIDs) > 0 {
 			fallbackPool = desiredPoolIDs[0]
 		}
 		steeringPolicy := steeringPolicyForPools(desiredPools)
-		needsUpdate := currentLB.FallbackPool != fallbackPool || !sameStringSet(currentLB.DefaultPools, desiredPoolIDs) || currentLB.SteeringPolicy != steeringPolicy
+		needsUpdate := currentLB.FallbackPool != fallbackPool ||
+			!sameStringSet(currentLB.DefaultPools, desiredPoolIDs) ||
+			currentLB.SteeringPolicy != steeringPolicy ||
+			len(currentLB.RegionPools) > 0 ||
+			len(currentLB.CountryPools) > 0 ||
+			len(currentLB.PopPools) > 0
 		if needsUpdate || currentLB.TTL != m.lbTTL || currentLB.Proxied != proxied {
 			currentLB.FallbackPool = fallbackPool
 			currentLB.DefaultPools = desiredPoolIDs
+			currentLB.RegionPools = nil
+			currentLB.CountryPools = nil
+			currentLB.PopPools = nil
 			currentLB.TTL = m.lbTTL
 			currentLB.Proxied = proxied
 			currentLB.SteeringPolicy = steeringPolicy
@@ -1073,11 +1084,51 @@ func (m *DNSManager) applyLoadBalancerPools(ctx context.Context, fqdn, serviceTy
 	for k, v := range stalePoolErrors {
 		partialErrors[k] = v
 	}
+	stalePoolIDErrors := m.cleanupPoolIDs(fqdn, previousPoolIDs, desiredPoolIDs)
+	for k, v := range stalePoolIDErrors {
+		partialErrors[k] = v
+	}
 
 	if len(partialErrors) == 0 {
 		return nil, nil
 	}
 	return partialErrors, nil
+}
+
+func poolIDsFromLoadBalancer(lb cloudflare.LoadBalancer) []string {
+	seen := map[string]struct{}{}
+	add := func(poolID string) {
+		poolID = strings.TrimSpace(poolID)
+		if poolID != "" {
+			seen[poolID] = struct{}{}
+		}
+	}
+	add(lb.FallbackPool)
+	for _, poolID := range lb.DefaultPools {
+		add(poolID)
+	}
+	for _, poolIDs := range lb.RegionPools {
+		for _, poolID := range poolIDs {
+			add(poolID)
+		}
+	}
+	for _, poolIDs := range lb.CountryPools {
+		for _, poolID := range poolIDs {
+			add(poolID)
+		}
+	}
+	for _, poolIDs := range lb.PopPools {
+		for _, poolID := range poolIDs {
+			add(poolID)
+		}
+	}
+
+	out := make([]string, 0, len(seen))
+	for poolID := range seen {
+		out = append(out, poolID)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ClearServiceDNS is the explicit decommission path for removing all DNS
@@ -1219,6 +1270,27 @@ func (m *DNSManager) cleanupManagedPools(fqdn, legacyPoolName string, desiredNam
 		}
 		if err := m.cfClient.DeletePool(pool.ID); err != nil {
 			partialErrors[fmt.Sprintf("%s:pool:%s", fqdn, pool.Name)] = err.Error()
+		}
+	}
+	if len(partialErrors) == 0 {
+		return nil
+	}
+	return partialErrors
+}
+
+func (m *DNSManager) cleanupPoolIDs(fqdn string, previousPoolIDs, desiredPoolIDs []string) map[string]string {
+	desired := map[string]bool{}
+	for _, poolID := range desiredPoolIDs {
+		desired[poolID] = true
+	}
+
+	partialErrors := map[string]string{}
+	for _, poolID := range previousPoolIDs {
+		if desired[poolID] {
+			continue
+		}
+		if err := m.cfClient.DeletePool(poolID); err != nil {
+			partialErrors[fmt.Sprintf("%s:pool:%s", fqdn, poolID)] = err.Error()
 		}
 	}
 	if len(partialErrors) == 0 {

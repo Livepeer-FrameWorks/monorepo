@@ -518,6 +518,94 @@ func TestSyncService_RootLoadBalancersReuseSharedIngressPools(t *testing.T) {
 	}
 }
 
+func TestSyncService_RootLoadBalancerReplacesLegacyMixedPool(t *testing.T) {
+	ip1 := "10.0.0.1"
+	ip2 := "10.0.1.1"
+	lat1, lon1 := 52.0, 4.0
+	lat2, lon2 := 40.0, -74.0
+	qm := &fakeQuartermasterClient{
+		response: &proto.ListHealthyNodesForDNSResponse{
+			Nodes: []*proto.InfrastructureNode{
+				{NodeId: "regional-eu-1", ClusterId: "core-central-primary", ExternalIp: strPtr(ip1), Latitude: &lat1, Longitude: &lon1},
+				{NodeId: "regional-us-1", ClusterId: "core-central-primary", ExternalIp: strPtr(ip2), Latitude: &lat2, Longitude: &lon2},
+			},
+		},
+	}
+
+	legacyPool := cloudflare.Pool{
+		ID:   "legacy-mixed",
+		Name: "old-operator-pool",
+		Origins: []cloudflare.Origin{
+			{Name: "regional-eu-1", Address: ip1, Enabled: true, Weight: 1},
+			{Name: "regional-us-1", Address: ip2, Enabled: true, Weight: 1},
+		},
+	}
+	pools := map[string]cloudflare.Pool{legacyPool.ID: legacyPool}
+	var updatedLB cloudflare.LoadBalancer
+	var deletedPools []string
+	cf := &fakeCloudflareClient{
+		listMonitors: func() ([]cloudflare.Monitor, error) {
+			return []cloudflare.Monitor{{ID: "ingress-monitor", Description: "nav-public-ingress-health"}}, nil
+		},
+		listPools: func() ([]cloudflare.Pool, error) {
+			out := make([]cloudflare.Pool, 0, len(pools))
+			for _, pool := range pools {
+				out = append(out, pool)
+			}
+			return out, nil
+		},
+		createPool: func(pool cloudflare.Pool) (*cloudflare.Pool, error) {
+			pool.ID = pool.Name
+			pools[pool.ID] = pool
+			return &pool, nil
+		},
+		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) {
+			return []cloudflare.LoadBalancer{{ID: "lb", Name: "bridge.example.com", DefaultPools: []string{"legacy-mixed"}, FallbackPool: "legacy-mixed"}}, nil
+		},
+		getLoadBalancer: func(lbID string) (*cloudflare.LoadBalancer, error) {
+			return &cloudflare.LoadBalancer{
+				ID:           lbID,
+				Name:         "bridge.example.com",
+				DefaultPools: []string{"legacy-mixed"},
+				FallbackPool: "legacy-mixed",
+				RegionPools:  map[string][]string{"WEU": {"legacy-mixed"}},
+			}, nil
+		},
+		updateLoadBalancer: func(lbID string, lb cloudflare.LoadBalancer) (*cloudflare.LoadBalancer, error) {
+			updatedLB = lb
+			return &lb, nil
+		},
+		deletePool: func(poolID string) error {
+			deletedPools = append(deletedPools, poolID)
+			delete(pools, poolID)
+			return nil
+		},
+		listDNSRecords: func(recordType, name string) ([]cloudflare.DNSRecord, error) {
+			return nil, nil
+		},
+	}
+
+	m := newTestManager(cf)
+	m.qmClient = qm
+
+	partialErrors, err := m.SyncService(context.Background(), "bridge", "")
+	if err != nil {
+		t.Fatalf("sync bridge: %v", err)
+	}
+	if len(partialErrors) != 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+	if updatedLB.SteeringPolicy != "proximity" {
+		t.Fatalf("expected proximity steering, got %q", updatedLB.SteeringPolicy)
+	}
+	if len(updatedLB.RegionPools) != 0 {
+		t.Fatalf("expected stale region pools cleared, got %v", updatedLB.RegionPools)
+	}
+	if !slices.Contains(deletedPools, "legacy-mixed") {
+		t.Fatalf("expected legacy mixed pool deleted, got %v", deletedPools)
+	}
+}
+
 func TestSyncService_SingleNodeDeletesManagedPools(t *testing.T) {
 	ip := "10.0.0.1"
 	var deletedPools []string
