@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -2697,10 +2698,10 @@ func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingCo
 	rtmpPort := config.GetEnvInt("STREAMING_RTMP_PORT", 1935)
 
 	cfg := &model.StreamingConfig{
-		IngestDomain:   strPtr(fmt.Sprintf("edge-ingest.%s.%s", slug, baseURL)),
-		EdgeDomain:     strPtr(fmt.Sprintf("edge-egress.%s.%s", slug, baseURL)),
-		PlayDomain:     strPtr(fmt.Sprintf("foghorn.%s.%s", slug, baseURL)),
-		ChandlerDomain: strPtr(fmt.Sprintf("chandler.%s.%s", slug, baseURL)),
+		IngestDomain:   strPtr(streamingConfigDomain("edge-ingest", slug, baseURL)),
+		EdgeDomain:     strPtr(streamingConfigDomain("edge-egress", slug, baseURL)),
+		PlayDomain:     strPtr(streamingConfigDomain("foghorn", slug, baseURL)),
+		ChandlerDomain: strPtr(streamingConfigDomain("chandler", slug, baseURL)),
 		SrtPort:        &srtPort,
 		RtmpPort:       &rtmpPort,
 	}
@@ -2712,14 +2713,49 @@ func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingCo
 	offSlug := resp.GetOfficialClusterSlug()
 	offBase := resp.GetOfficialBaseUrl()
 	if offSlug != "" && offBase != "" {
-		cfg.OfficialIngestDomain = strPtr(fmt.Sprintf("edge-ingest.%s.%s", offSlug, offBase))
-		cfg.OfficialEdgeDomain = strPtr(fmt.Sprintf("edge-egress.%s.%s", offSlug, offBase))
-		cfg.OfficialPlayDomain = strPtr(fmt.Sprintf("foghorn.%s.%s", offSlug, offBase))
-		cfg.OfficialChandlerDomain = strPtr(fmt.Sprintf("chandler.%s.%s", offSlug, offBase))
+		cfg.OfficialIngestDomain = strPtr(streamingConfigDomain("edge-ingest", offSlug, offBase))
+		cfg.OfficialEdgeDomain = strPtr(streamingConfigDomain("edge-egress", offSlug, offBase))
+		cfg.OfficialPlayDomain = strPtr(streamingConfigDomain("foghorn", offSlug, offBase))
+		cfg.OfficialChandlerDomain = strPtr(streamingConfigDomain("chandler", offSlug, offBase))
 		if name := resp.GetOfficialClusterName(); name != "" {
 			cfg.OfficialClusterLabel = strPtr(name)
 		}
 	}
 
 	return cfg, nil
+}
+
+func streamingConfigDomain(prefix, slug, baseURL string) string {
+	baseDomain := normalizeStreamingBaseDomain(baseURL)
+	if prefix == "" || slug == "" || baseDomain == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s.%s.%s", prefix, slug, baseDomain)
+}
+
+func normalizeStreamingBaseDomain(baseURL string) string {
+	domain := strings.TrimSpace(baseURL)
+	if domain == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(domain); err == nil && parsed.Host != "" {
+		domain = parsed.Host
+	}
+	domain = strings.TrimPrefix(domain, "//")
+	if before, _, ok := strings.Cut(domain, "/"); ok {
+		domain = before
+	}
+	if before, _, ok := strings.Cut(domain, "?"); ok {
+		domain = before
+	}
+	if before, _, ok := strings.Cut(domain, "#"); ok {
+		domain = before
+	}
+	domain = strings.Trim(domain, ".")
+	if host, port, ok := strings.Cut(domain, ":"); ok {
+		if _, err := strconv.Atoi(port); err == nil {
+			domain = host
+		}
+	}
+	return strings.Trim(domain, ".")
 }
