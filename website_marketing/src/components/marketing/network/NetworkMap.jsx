@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { motion } from "framer-motion";
 import { useNetworkStatus } from "./useNetworkStatus";
+import { spreadOverlappingMarkers } from "./spreadOverlap";
 import "leaflet/dist/leaflet.css";
 
 const TILE_URL = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
@@ -128,7 +129,7 @@ function nodePopupHtml(node, services) {
 }
 
 // Draws all layers onto the Leaflet map
-function drawLayers(L, layersRef, pulseTimersRef, data) {
+function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
   const {
     membership: memberLayer,
     clusters: clusterLayer,
@@ -146,6 +147,8 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
   connLayer.clearLayers();
   nodeLayer.clearLayers();
   pulseLayer.clearLayers();
+  spreadablesRef.current.nodes = [];
+  spreadablesRef.current.clusters = [];
 
   const clusterMap = {};
   data.clusters.forEach((c) => {
@@ -258,13 +261,14 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
 
     const nodeSvcs = servicesByNode[node.nodeId];
 
-    L.marker([node.latitude, node.longitude], { icon, interactive: true })
+    const nodeMarker = L.marker([node.latitude, node.longitude], { icon, interactive: true })
       .bindPopup(nodePopupHtml(node, nodeSvcs), {
         className: "network-viz__popup",
         maxWidth: 400,
         minWidth: 200,
       })
       .addTo(nodeLayer);
+    spreadablesRef.current.nodes.push({ marker: nodeMarker, iconRadius: size / 2 });
   });
 
   // 3. Cluster markers (on top) — core vs edge visual distinction
@@ -290,7 +294,7 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
       iconAnchor: [radius, radius],
     });
 
-    L.marker([cluster.latitude, cluster.longitude], {
+    const clusterMarker = L.marker([cluster.latitude, cluster.longitude], {
       icon,
       interactive: true,
       zIndexOffset: 1000,
@@ -304,7 +308,11 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
         { className: "network-viz__popup", maxWidth: 400, minWidth: 220 }
       )
       .addTo(clusterLayer);
+    spreadablesRef.current.clusters.push({ marker: clusterMarker, iconRadius: radius });
   });
+
+  spreadOverlappingMarkers(map, spreadablesRef.current.nodes);
+  spreadOverlappingMarkers(map, spreadablesRef.current.clusters);
 }
 
 function startPulse(L, layer, pulseTimersRef, from, to, color = "rgb(125, 207, 255)") {
@@ -370,6 +378,7 @@ function NetworkMapInner({ data }) {
     pulses: null,
   });
   const pulseTimersRef = useRef([]);
+  const spreadablesRef = useRef({ nodes: [], clusters: [] });
   const [mapReady, setMapReady] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -418,6 +427,11 @@ function NetworkMapInner({ data }) {
       layersRef.current.pulses = L.layerGroup().addTo(map);
       layersRef.current.clusters = L.layerGroup().addTo(map);
 
+      map.on("zoomend", () => {
+        spreadOverlappingMarkers(map, spreadablesRef.current.nodes);
+        spreadOverlappingMarkers(map, spreadablesRef.current.clusters);
+      });
+
       leafletRef.current = L;
       mapRef.current = map;
       setMapReady(true);
@@ -438,7 +452,7 @@ function NetworkMapInner({ data }) {
   useEffect(() => {
     const L = leafletRef.current;
     if (!L || !mapRef.current) return;
-    drawLayers(L, layersRef, pulseTimersRef, data);
+    drawLayers(L, mapRef.current, layersRef, pulseTimersRef, spreadablesRef, data);
   }, [data, mapReady]);
 
   const toggleFullscreen = useCallback(() => {

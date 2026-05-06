@@ -7,6 +7,7 @@ import {
   FilmIcon,
   GlobeAltIcon,
   CpuChipIcon,
+  LockClosedIcon,
 } from "@heroicons/react/24/outline";
 import { Section, SectionContainer } from "@/components/ui/section";
 import StatusTag from "../shared/StatusTag";
@@ -29,6 +30,8 @@ import {
 } from "@/components/marketing";
 
 const About = () => {
+  const docsBase = (config.docsUrl ?? "/docs").replace(/\/+$/, "");
+
   const team = [
     {
       name: "MistServer Team",
@@ -173,6 +176,17 @@ const About = () => {
         "AI-native live video: transcribe, analyze, automate, and transform streams in real time.",
       status: "pipeline",
       statusNote: "In development with limited pilot workloads.",
+    },
+    {
+      title: "DRM Content Protection",
+      badge: "Studio Grade",
+      icon: LockClosedIcon,
+      tone: "violet",
+      description:
+        "FairPlay, Widevine, and PlayReady protection for premium and licensed content, built natively into MistServer.",
+      status: "pipeline",
+      statusNote:
+        "In development with the MistServer team; landing in our build ahead of upstream where it makes sense.",
     },
   ];
 
@@ -410,6 +424,16 @@ const About = () => {
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
+                actions={
+                  <CTACluster align="end">
+                    <MarketingCTAButton
+                      intent="secondary"
+                      href={`${docsBase}/roadmap`}
+                      label="See the full roadmap"
+                      icon="book"
+                    />
+                  </CTACluster>
+                }
               />
               <MarketingFeatureWall items={pipelineCards} columns={3} stackAt="md" />
             </MarketingBand>
