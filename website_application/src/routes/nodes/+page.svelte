@@ -209,6 +209,7 @@
     unhealthy: "Unhealthy",
     unknown: "Unknown",
   };
+  const recentHeartbeatMs = 5 * 60 * 1000;
 
   // Subscribe to auth store
   const unsubscribeAuth = auth.subscribe((authState) => {
@@ -368,22 +369,50 @@
   });
 
   // Helper functions
+  function findNodeByKey(nodeId: string) {
+    return nodes.find((n) => n.id === nodeId || n.nodeId === nodeId);
+  }
+
+  function hasRecentHeartbeat(node: { lastHeartbeat?: string | null } | null | undefined) {
+    if (!node?.lastHeartbeat) return false;
+    const timestamp = new Date(node.lastHeartbeat).getTime();
+    if (Number.isNaN(timestamp)) return false;
+    return Date.now() - timestamp <= recentHeartbeatMs;
+  }
+
   function getNodeStatus(nodeId: string) {
     // First check real-time subscription data
     const health = systemHealth[nodeId];
     if (health) return health.event.status;
 
     // Fallback to liveState from node record (ClickHouse live_nodes)
-    const node = nodes.find((n) => n.id === nodeId);
+    const node = findNodeByKey(nodeId);
     if (node?.liveState?.isHealthy === true) return "HEALTHY";
     if (node?.liveState?.isHealthy === false) return "UNHEALTHY";
+    if (hasRecentHeartbeat(node)) return "HEALTHY";
+    if (node?.lastHeartbeat) return "DEGRADED";
 
     return "UNKNOWN";
   }
 
   function getNodeHealthScore(nodeId: string) {
     const health = systemHealth[nodeId];
-    if (!health) return 0;
+    if (!health) {
+      const node = findNodeByKey(nodeId);
+      if (node?.liveState) {
+        const liveState = node.liveState;
+        if (!liveState.isHealthy) return 0;
+        const cpuScore = Math.max(0, 100 - liveState.cpuPercent);
+        const memPercent = liveState.ramTotalBytes
+          ? (liveState.ramUsedBytes / liveState.ramTotalBytes) * 100
+          : 0;
+        const memScore = Math.max(0, 100 - memPercent);
+        return Math.round((cpuScore + memScore) / 2);
+      }
+      if (hasRecentHeartbeat(node)) return 80;
+      if (node?.lastHeartbeat) return 50;
+      return 0;
+    }
 
     const event = health.event;
     const cpuPercent = event.cpuTenths / 10;
@@ -399,20 +428,33 @@
 
   function formatCpuUsage(nodeId: string) {
     const health = systemHealth[nodeId];
-    if (!health) return "0%";
+    if (!health) {
+      const cpu = findNodeByKey(nodeId)?.liveState?.cpuPercent;
+      return typeof cpu === "number" ? `${cpu.toFixed(1)}%` : "—";
+    }
     return `${(health.event.cpuTenths / 10).toFixed(1)}%`;
   }
 
   function formatMemoryUsage(nodeId: string) {
     const health = systemHealth[nodeId];
-    if (!health || !health.event.ramMax) return "0%";
+    if (!health) {
+      const liveState = findNodeByKey(nodeId)?.liveState;
+      if (!liveState?.ramTotalBytes) return "—";
+      return `${Math.round((liveState.ramUsedBytes / liveState.ramTotalBytes) * 100)}%`;
+    }
+    if (!health.event.ramMax) return "—";
     const percent = (health.event.ramCurrent! / health.event.ramMax) * 100;
     return `${Math.round(percent)}%`;
   }
 
   function formatDiskUsage(nodeId: string) {
     const health = systemHealth[nodeId];
-    if (!health || !health.event.diskTotalBytes) return "0%";
+    if (!health) {
+      const liveState = findNodeByKey(nodeId)?.liveState;
+      if (!liveState?.diskTotalBytes) return "—";
+      return `${Math.round((liveState.diskUsedBytes / liveState.diskTotalBytes) * 100)}%`;
+    }
+    if (!health.event.diskTotalBytes) return "—";
     const percent = (health.event.diskUsedBytes! / health.event.diskTotalBytes) * 100;
     return `${Math.round(percent)}%`;
   }

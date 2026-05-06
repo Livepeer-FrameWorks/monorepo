@@ -9,8 +9,18 @@
     getMcpEndpoint,
     getRtmpServerUrl,
   } from "$lib/config";
+  import playerCorePkg from "../../../../../npm_player/packages/core/package.json";
+  import playerReactPkg from "../../../../../npm_player/packages/react/package.json";
+  import playerSveltePkg from "../../../../../npm_player/packages/svelte/package.json";
+  import playerWcPkg from "../../../../../npm_player/packages/wc/package.json";
+  import streamcrafterCorePkg from "../../../../../npm_studio/packages/core/package.json";
+  import streamcrafterReactPkg from "../../../../../npm_studio/packages/react/package.json";
+  import streamcrafterSveltePkg from "../../../../../npm_studio/packages/svelte/package.json";
+  import streamcrafterWcPkg from "../../../../../npm_studio/packages/wc/package.json";
 
   type Framework = "react" | "svelte" | "wc" | "vanilla";
+  type PackageByFramework = Record<Exclude<Framework, "vanilla"> | "core", string>;
+  type VersionByFramework = Record<Framework | "core", string>;
 
   // Break the "import" keyword in code example strings so Vite's dep scanner
   // doesn't treat them as real imports (the packages aren't installed locally).
@@ -37,7 +47,13 @@
       svelte: "@livepeer-frameworks/player-svelte",
       wc: "@livepeer-frameworks/player-wc",
     },
-    version: "0.1.0",
+    versions: {
+      core: playerCorePkg.version,
+      react: playerReactPkg.version,
+      svelte: playerSveltePkg.version,
+      wc: playerWcPkg.version,
+      vanilla: playerCorePkg.version,
+    },
     features: [
       "HLS.js, DASH.js, and native playback",
       "WebRTC for ultra-low latency",
@@ -90,7 +106,7 @@ const player = new FrameWorksPlayer('#player-container', {
 // When done:
 player.destroy();`,
     },
-    docsUrl: `${docsBaseUrl}/streamers/playback`,
+    docsUrl: `${docsBaseUrl}/builders/playback`,
     githubUrl: `${githubBaseUrl}/tree/master/npm_player`,
   };
 
@@ -105,7 +121,13 @@ player.destroy();`,
       svelte: "@livepeer-frameworks/streamcrafter-svelte",
       wc: "@livepeer-frameworks/streamcrafter-wc",
     },
-    version: "0.1.0",
+    versions: {
+      core: streamcrafterCorePkg.version,
+      react: streamcrafterReactPkg.version,
+      svelte: streamcrafterSveltePkg.version,
+      wc: streamcrafterWcPkg.version,
+      vanilla: streamcrafterCorePkg.version,
+    },
     features: [
       "WebCodecs hardware encoding",
       "WHIP ingest protocol",
@@ -169,7 +191,7 @@ await controller.startStreaming();
 // Stop streaming
 await controller.stopStreaming();`,
     },
-    docsUrl: `${docsBaseUrl}/streamers/ingest`,
+    docsUrl: `${docsBaseUrl}/builders/ingest`,
     githubUrl: `${githubBaseUrl}/tree/master/npm_studio`,
   };
 
@@ -187,7 +209,7 @@ await controller.stopStreaming();`,
       "Wallet-based agent auth",
       "x402 machine payments",
     ],
-    docsUrl: `${docsBaseUrl}/streamers/mcp`,
+    docsUrl: `${docsBaseUrl}/agents/mcp`,
     specUrl: "https://modelcontextprotocol.io",
   };
 
@@ -213,12 +235,25 @@ await controller.stopStreaming();`,
     },
   ];
 
-  function getFrameworkInstall(packages: Record<string, string>, framework: Framework): string {
+  function getFrameworkPackage(packages: PackageByFramework, framework: Framework): string {
     if (framework === "vanilla") {
-      return `npm install ${packages.core}`;
+      return packages.core;
     }
+    return packages[framework];
+  }
+
+  function getFrameworkInstall(packages: PackageByFramework, framework: Framework): string {
+    const packageName = getFrameworkPackage(packages, framework);
     // Wrapper packages include core as dependency, no need to install both
-    return `npm install ${packages[framework]}`;
+    return `npm install ${packageName}`;
+  }
+
+  function getFrameworkVersion(versions: VersionByFramework, framework: Framework): string {
+    return framework === "vanilla" ? versions.core : versions[framework];
+  }
+
+  function npmPackageUrl(packages: PackageByFramework, framework: Framework): string {
+    return `https://www.npmjs.com/package/${encodeURIComponent(getFrameworkPackage(packages, framework))}`;
   }
 
   function copyToClipboard(text: string) {
@@ -346,7 +381,17 @@ await controller.stopStreaming();`,
               </div>
               <div>
                 <h3 class="font-semibold text-foreground">{playerSdk.name}</h3>
-                <span class="text-xs text-muted-foreground">v{playerSdk.version}</span>
+                <Button
+                  variant="link"
+                  size="sm"
+                  class="h-auto p-0 text-xs font-normal text-muted-foreground hover:text-primary inline-flex items-center gap-1"
+                  href={npmPackageUrl(playerSdk.packages, selectedFramework)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  npm v{getFrameworkVersion(playerSdk.versions, selectedFramework)}
+                  <ExternalLinkIcon class="w-3 h-3" />
+                </Button>
               </div>
             </div>
             <div class="flex items-center gap-2">
@@ -444,7 +489,17 @@ await controller.stopStreaming();`,
               </div>
               <div>
                 <h3 class="font-semibold text-foreground">{studioSdk.name}</h3>
-                <span class="text-xs text-muted-foreground">v{studioSdk.version}</span>
+                <Button
+                  variant="link"
+                  size="sm"
+                  class="h-auto p-0 text-xs font-normal text-muted-foreground hover:text-primary inline-flex items-center gap-1"
+                  href={npmPackageUrl(studioSdk.packages, selectedFramework)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  npm v{getFrameworkVersion(studioSdk.versions, selectedFramework)}
+                  <ExternalLinkIcon class="w-3 h-3" />
+                </Button>
               </div>
             </div>
             <div class="flex items-center gap-2">
@@ -645,6 +700,63 @@ await controller.stopStreaming();`,
           </div>
         </div>
 
+        <!-- Platform Features -->
+        <div class="slab col-span-full">
+          <div class="slab-header">
+            <div class="flex items-center gap-2">
+              <ZapIcon class="w-4 h-4 text-info" />
+              <h3>Platform Features</h3>
+            </div>
+          </div>
+          <div class="slab-body--padded">
+            <p class="text-sm text-muted-foreground mb-4">
+              Built-in features available without an extra SDK — exposed via the GraphQL API and the
+              Player SDK.
+            </p>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Button
+                variant="ghost"
+                href={`${docsBaseUrl}/builders/multistreaming`}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="h-auto w-full justify-start whitespace-normal flex items-start gap-3 p-4 border border-border/50 rounded-lg hover:border-primary/50 hover:bg-muted/30 transition-colors group"
+              >
+                <RadioIcon class="w-5 h-5 text-muted-foreground group-hover:text-primary mt-0.5" />
+                <div class="flex-1">
+                  <div class="font-medium text-foreground group-hover:text-primary">
+                    Multistreaming
+                  </div>
+                  <div class="text-xs text-muted-foreground mt-1">
+                    Push one stream to YouTube, Twitch, or any RTMP target.
+                  </div>
+                </div>
+                <ExternalLinkIcon class="w-4 h-4 text-muted-foreground" />
+              </Button>
+
+              <Button
+                variant="ghost"
+                href={`${docsBaseUrl}/builders/thumbnails-and-previews`}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="h-auto w-full justify-start whitespace-normal flex items-start gap-3 p-4 border border-border/50 rounded-lg hover:border-primary/50 hover:bg-muted/30 transition-colors group"
+              >
+                <PackageIcon
+                  class="w-5 h-5 text-muted-foreground group-hover:text-primary mt-0.5"
+                />
+                <div class="flex-1">
+                  <div class="font-medium text-foreground group-hover:text-primary">
+                    Thumbnails &amp; Previews
+                  </div>
+                  <div class="text-xs text-muted-foreground mt-1">
+                    Animated sprite previews and poster frames, auto-detected by the player.
+                  </div>
+                </div>
+                <ExternalLinkIcon class="w-4 h-4 text-muted-foreground" />
+              </Button>
+            </div>
+          </div>
+        </div>
+
         <!-- Resources -->
         <div class="slab col-span-full">
           <div class="slab-header">
@@ -654,13 +766,13 @@ await controller.stopStreaming();`,
             </div>
           </div>
           <div class="slab-body--padded">
-            <!-- eslint-disable svelte/no-navigation-without-resolve -->
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              <a
+              <Button
+                variant="ghost"
                 href={docsBaseUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                class="flex items-center gap-3 p-4 border border-border/50 rounded-lg hover:border-primary/50 hover:bg-muted/30 transition-colors group"
+                class="h-auto w-full justify-start whitespace-normal flex items-center gap-3 p-4 border border-border/50 rounded-lg hover:border-primary/50 hover:bg-muted/30 transition-colors group"
               >
                 <BookOpenIcon class="w-5 h-5 text-muted-foreground group-hover:text-primary" />
                 <div>
@@ -670,13 +782,14 @@ await controller.stopStreaming();`,
                   <div class="text-xs text-muted-foreground">Complete API reference</div>
                 </div>
                 <ExternalLinkIcon class="w-4 h-4 text-muted-foreground ml-auto" />
-              </a>
+              </Button>
 
-              <a
+              <Button
+                variant="ghost"
                 href={githubBaseUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                class="flex items-center gap-3 p-4 border border-border/50 rounded-lg hover:border-primary/50 hover:bg-muted/30 transition-colors group"
+                class="h-auto w-full justify-start whitespace-normal flex items-center gap-3 p-4 border border-border/50 rounded-lg hover:border-primary/50 hover:bg-muted/30 transition-colors group"
               >
                 <GithubIcon class="w-5 h-5 text-muted-foreground group-hover:text-primary" />
                 <div>
@@ -684,7 +797,7 @@ await controller.stopStreaming();`,
                   <div class="text-xs text-muted-foreground">Source code</div>
                 </div>
                 <ExternalLinkIcon class="w-4 h-4 text-muted-foreground ml-auto" />
-              </a>
+              </Button>
 
               <a
                 href="https://www.npmjs.com/org/livepeer-frameworks"

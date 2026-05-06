@@ -45,7 +45,7 @@
       Share these URLs with viewers to watch your stream.
       <!-- eslint-disable svelte/no-navigation-without-resolve -->
       <a
-        href={`${getDocsSiteUrl()}/streamers/playback`}
+        href={`${getDocsSiteUrl()}/builders/playback`}
         target="_blank"
         rel="noopener noreferrer"
         class="text-info hover:underline inline-flex items-center gap-1"
@@ -76,7 +76,7 @@
           contentType="live"
           showPrimary={true}
           showAdditional={true}
-          docsUrl={`${getDocsSiteUrl()}/streamers/playback`}
+          docsUrl={`${getDocsSiteUrl()}/builders/playback`}
         />
       </div>
 
@@ -112,7 +112,7 @@
               variant="ghost"
               size="sm"
               class="border border-border/30"
-              onclick={() => window.open(`${getDocsSiteUrl()}/streamers/playback`, "_blank")}
+              onclick={() => window.open(`${getDocsSiteUrl()}/builders/playback`, "_blank")}
             >
               <ExternalLinkIcon class="w-4 h-4 mr-2" />
               Player Docs

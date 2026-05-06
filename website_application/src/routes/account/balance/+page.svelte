@@ -323,7 +323,7 @@
                 Balance is used for streaming, storage, and transcoding. API requests are free.
                 <!-- eslint-disable svelte/no-navigation-without-resolve -->
                 <a
-                  href={`${docsSiteUrl}/streamers/billing`}
+                  href={`${docsSiteUrl}/builders/billing`}
                   class="text-primary hover:underline"
                   target="_blank"
                   rel="noopener">Learn more</a

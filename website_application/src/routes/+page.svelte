@@ -326,7 +326,7 @@
         <div>
           <h1 class="text-xl font-bold text-foreground">Dashboard</h1>
           <p class="text-sm text-muted-foreground">
-            Welcome back, {user?.email?.split("@")[0] || "Streamer"}
+            Welcome back, {user?.first_name || "Captain"}
           </p>
         </div>
       </div>

@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import type { Map, LayerGroup } from "leaflet";
+  import type { Map, LayerGroup, Marker } from "leaflet";
   import { getIconComponent } from "$lib/iconUtils";
+  import { spreadOverlappingMarkers, type Spreadable } from "./spreadOverlap";
   import "leaflet/dist/leaflet.css";
   import markerIconUrl from "leaflet/dist/images/marker-icon.png";
   import markerIconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png";
@@ -147,6 +148,9 @@
   let membershipLayer: LayerGroup | null = null;
   let serviceLayer: LayerGroup | null = null;
   let pulseTimers: number[] = [];
+  let nodeSpreadables: Spreadable[] = [];
+  let clusterSpreadables: Spreadable[] = [];
+  let zoomHandlerAttached = false;
 
   const MEMBERSHIP_COLOR = "rgba(148, 163, 184, 0.35)";
   const NODE_STATUS_COLORS: Record<string, string> = {
@@ -319,6 +323,8 @@
     // Clean up pulse timers
     pulseTimers.forEach(clearInterval);
     pulseTimers = [];
+    nodeSpreadables = [];
+    clusterSpreadables = [];
 
     // Remove old layer groups from map entirely
     if (bucketLayer) map.removeLayer(bucketLayer);
@@ -500,10 +506,11 @@
       }
       nodePopup += "</div>";
 
-      leaflet
+      const nodeMarker: Marker = leaflet
         .marker([node.lat, node.lng], { icon: nodeIcon })
         .bindPopup(nodePopup, { className: "dark-popup", maxWidth: 400, minWidth: 200 })
         .addTo(layerGroup!);
+      nodeSpreadables.push({ marker: nodeMarker, iconRadius: size / 2 });
     });
 
     // Build per-cluster service list from node-owned services.
@@ -686,11 +693,25 @@
 
       popup += "</div>";
 
-      leaflet
+      const clusterMarker: Marker = leaflet
         .marker([cluster.lat, cluster.lng], { icon, zIndexOffset: 1000 })
         .bindPopup(popup, { className: "dark-popup", maxWidth: 400, minWidth: 220 })
         .addTo(clusterLayer!);
+      clusterSpreadables.push({ marker: clusterMarker, iconRadius: radius });
     });
+
+    applySpread();
+
+    if (!zoomHandlerAttached && map) {
+      map.on("zoomend", applySpread);
+      zoomHandlerAttached = true;
+    }
+  }
+
+  function applySpread() {
+    if (!map) return;
+    spreadOverlappingMarkers(map, nodeSpreadables);
+    spreadOverlappingMarkers(map, clusterSpreadables);
   }
 
   let drawTrigger = $derived({

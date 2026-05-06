@@ -73,6 +73,18 @@
       priority: 40,
     },
     {
+      id: "multistreaming",
+      icon: "Radio",
+      iconColor: "text-info",
+      title: "Multistream Everywhere",
+      getDescription: () =>
+        "Push one stream to YouTube, Twitch, or any RTMP target at the same time.",
+      link: "/streams",
+      linkText: "Add Targets",
+      condition: () => hasStreams,
+      priority: 35,
+    },
+    {
       id: "analytics",
       icon: "ChartLine",
       iconColor: "text-accent-purple",
@@ -82,6 +94,18 @@
       linkText: "View Analytics",
       condition: () => hasStreams,
       priority: 30,
+    },
+    {
+      id: "thumbnails",
+      icon: "Image",
+      iconColor: "text-success",
+      title: "Sprite Previews & Posters",
+      getDescription: () =>
+        "Hover-scrub previews and poster frames are auto-generated. Embed them in your players.",
+      link: "/developer/sdks",
+      linkText: "Learn More",
+      condition: () => hasStreams,
+      priority: 25,
     },
     {
       id: "graphql-api",

@@ -75,9 +75,16 @@
   // Real-time health
   type SystemHealthEvent = NonNullable<SystemHealth$result["liveSystemHealth"]>;
   let currentHealth = $state<{ event: SystemHealthEvent; ts: Date } | null>(null);
+  const recentHeartbeatMs = 5 * 60 * 1000;
 
   // Live state from node data
   let liveState = $derived(node?.liveState ?? null);
+  let hasRecentHeartbeat = $derived.by(() => {
+    if (!node?.lastHeartbeat) return false;
+    const timestamp = new Date(node.lastHeartbeat).getTime();
+    if (Number.isNaN(timestamp)) return false;
+    return Date.now() - timestamp <= recentHeartbeatMs;
+  });
 
   let cpuPercent = $derived.by(() => {
     if (currentHealth) return (currentHealth.event.cpuTenths / 10).toFixed(1);
@@ -110,7 +117,9 @@
     return "—";
   });
 
-  let isHealthy = $derived(currentHealth?.event.isHealthy ?? liveState?.isHealthy ?? null);
+  let isHealthy = $derived(
+    currentHealth?.event.isHealthy ?? liveState?.isHealthy ?? (hasRecentHeartbeat ? true : null)
+  );
 
   let timeRange = $state("24h");
   let currentRange = $derived(resolveTimeRange(timeRange));
@@ -417,6 +426,10 @@
             {:else if liveState}
               <p class="text-xs text-muted-foreground mt-1">
                 Last reported {formatTimeAgo(liveState.updatedAt)}
+              </p>
+            {:else if hasRecentHeartbeat}
+              <p class="text-xs text-muted-foreground mt-1">
+                Mesh heartbeat active; resource telemetry is not reported for this node.
               </p>
             {/if}
           </div>

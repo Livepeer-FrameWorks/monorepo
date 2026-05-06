@@ -299,7 +299,7 @@
               and even for non-FrameWorks media servers.
               <!-- eslint-disable svelte/no-navigation-without-resolve -->
               <a
-                href={`${getDocsSiteUrl()}/streamers/ingest`}
+                href={`${getDocsSiteUrl()}/builders/ingest`}
                 target="_blank"
                 rel="noopener noreferrer"
                 class="text-primary hover:underline">Read the Docs</a

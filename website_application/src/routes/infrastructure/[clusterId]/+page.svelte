@@ -102,6 +102,7 @@
   // Real-time system health
   type SystemHealthEvent = NonNullable<SystemHealth$result["liveSystemHealth"]>;
   let systemHealth = $state<Record<string, { event: SystemHealthEvent; ts: Date }>>({});
+  const recentHeartbeatMs = 5 * 60 * 1000;
 
   let timeRange = $state("24h");
   let currentRange = $derived(resolveTimeRange(timeRange));
@@ -276,6 +277,24 @@
       default:
         return "border-muted-foreground/40 bg-muted-foreground/10 text-muted-foreground";
     }
+  }
+
+  function hasRecentHeartbeat(node: { lastHeartbeat?: string | null } | null | undefined) {
+    if (!node?.lastHeartbeat) return false;
+    const timestamp = new Date(node.lastHeartbeat).getTime();
+    if (Number.isNaN(timestamp)) return false;
+    return Date.now() - timestamp <= recentHeartbeatMs;
+  }
+
+  function getNodeRecordStatus(node: {
+    liveState?: { isHealthy: boolean } | null;
+    lastHeartbeat?: string | null;
+  }) {
+    if (node.liveState?.isHealthy === true) return "Healthy";
+    if (node.liveState?.isHealthy === false) return "Unhealthy";
+    if (hasRecentHeartbeat(node)) return "Healthy";
+    if (node.lastHeartbeat) return "Degraded";
+    return "Unknown";
   }
 
   function formatServiceName(serviceId: string) {
@@ -495,6 +514,7 @@
               <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {#each nodes as node (node.id)}
                   {@const health = systemHealth[node.nodeId]}
+                  {@const status = health?.event.status ?? getNodeRecordStatus(node)}
                   {@const cpuPercent = health ? (health.event.cpuTenths / 10).toFixed(1) : null}
                   {@const memPercent = health?.event.ramMax
                     ? (((health.event.ramCurrent || 0) / health.event.ramMax) * 100).toFixed(0)
@@ -511,13 +531,9 @@
                           </div>
                           <Badge
                             variant="outline"
-                            class="text-[0.6rem] uppercase {getStatusBadgeClass(
-                              health?.event.status ??
-                                (node.liveState?.isHealthy ? 'healthy' : 'unknown')
-                            )}"
+                            class="text-[0.6rem] uppercase {getStatusBadgeClass(status)}"
                           >
-                            {health?.event.status ??
-                              (node.liveState?.isHealthy ? "Healthy" : "Unknown")}
+                            {status}
                           </Badge>
                         </div>
                       </div>

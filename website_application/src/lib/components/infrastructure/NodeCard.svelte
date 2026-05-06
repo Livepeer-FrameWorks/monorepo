@@ -16,6 +16,15 @@
     memoryGb: number | null;
     diskGb: number | null;
     availabilityZone?: string | null;
+    liveState?: {
+      cpuPercent: number;
+      ramUsedBytes: number;
+      ramTotalBytes: number;
+      diskUsedBytes: number;
+      diskTotalBytes: number;
+      isHealthy: boolean;
+      updatedAt: string;
+    } | null;
   }
 
   // Real-time system health data structure (includes ts which is computed client-side)
@@ -49,6 +58,14 @@
     formatMemoryUsage,
     formatDiskUsage,
   }: Props = $props();
+
+  let hasResourceStats = $derived(!!systemHealth[node.id] || !!node.liveState);
+  let hasRecentHeartbeat = $derived.by(() => {
+    if (!node.lastHeartbeat) return false;
+    const timestamp = new Date(node.lastHeartbeat).getTime();
+    if (Number.isNaN(timestamp)) return false;
+    return Date.now() - timestamp <= 5 * 60 * 1000;
+  });
 </script>
 
 <div class="slab slab--compact h-full border-border/50">
@@ -86,7 +103,7 @@
   <div class="slab-body--padded pt-5 space-y-4">
     <!-- Resource Usage -->
     <div class="grid grid-cols-3 gap-2 text-sm min-h-[44px]">
-      {#if systemHealth[node.id]}
+      {#if hasResourceStats}
         <div>
           <p class="text-muted-foreground">CPU</p>
           <p class="font-medium">{formatCpuUsage(node.id)}</p>
@@ -101,9 +118,9 @@
         </div>
       {:else}
         <div
-          class="col-span-3 flex items-center justify-center text-xs text-muted-foreground animate-pulse"
+          class="col-span-3 flex items-center justify-center text-center text-xs text-muted-foreground"
         >
-          Waiting for live stats...
+          {hasRecentHeartbeat ? "Mesh heartbeat active" : "No recent heartbeat"}
         </div>
       {/if}
     </div>
