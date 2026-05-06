@@ -3,8 +3,8 @@ module frameworks/cli
 go 1.26.2
 
 require (
-	github.com/ClickHouse/clickhouse-go/v2 v2.45.0
-	github.com/IBM/sarama v1.47.0
+	github.com/ClickHouse/clickhouse-go/v2 v2.46.0
+	github.com/IBM/sarama v1.48.0
 	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0-00010101000000-000000000000
 	github.com/apenella/go-ansible/v2 v2.4.1
 	github.com/fatih/color v1.19.0
@@ -12,7 +12,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.12.3
-	github.com/mattn/go-isatty v0.0.21
+	github.com/mattn/go-isatty v0.0.22
 	github.com/sirupsen/logrus v1.9.4
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
@@ -20,7 +20,7 @@ require (
 	golang.org/x/term v0.42.0
 	golang.org/x/text v0.36.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
-	google.golang.org/grpc v1.80.0
+	google.golang.org/grpc v1.81.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 )
