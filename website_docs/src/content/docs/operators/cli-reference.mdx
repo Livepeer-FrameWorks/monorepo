@@ -13,6 +13,14 @@ The FrameWorks CLI is your swiss-army knife for platform management. Provisionin
   Use `frameworks menu` to launch an interactive menu for exploring these commands.
 </Aside>
 
+<Aside type="note" title="Command Shape Source Of Truth">
+  This page explains command intent, persona boundaries, and common workflows.
+  It does not pin rendered CLI output. For exact flags, defaults, arguments, and
+  output formats, run `frameworks <command> --help` with the CLI version you are
+  operating. The docs test suite cross-checks documented commands and documented
+  long flags against Cobra.
+</Aside>
+
 ## Global Flags
 
 ```bash
@@ -31,11 +39,11 @@ Note: the manifest-source flags (`--manifest`, `--gitops-dir`, `--github-repo`, 
 
 `frameworks setup` creates a context with a persona and an access mode. The persona captures the operator's intent; the access mode controls how operator-originated CLI calls reach control-plane gRPC services.
 
-| Persona      | Default shape                                                                                                                                         | Typical commands                                                               |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `platform`   | Public Bridge plus GitOps-backed access to core services. Setup defaults to `access_mode=ssh`.                                                        | `admin`, `services`, `dns doctor`, `mesh status`, `context check`, `cluster *` |
-| `selfhosted` | Public Bridge plus saved Quartermaster/Foghorn gRPC endpoints for an owned edge/self-hosted footprint. It does not imply access to the platform core. | `edge *`, `cluster nodes *` for owned clusters                                 |
-| `user`       | Public Bridge/account API only; this is the persona for someone who is not running their own edge node.                                               | `login`, insights, Skipper, account-facing workflows                           |
+| Persona      | Default shape                                                                                            | Typical commands                                                               |
+| ------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `platform`   | Public Bridge plus GitOps-backed access to core services. Setup defaults to `access_mode=ssh`.           | `admin`, `services`, `dns doctor`, `mesh status`, `context check`, `cluster *` |
+| `selfhosted` | Public Bridge for a tenant-owned BYO edge footprint. The operator does not run Quartermaster or Foghorn. | `login`, `edge deploy`, local edge diagnostics                                 |
+| `user`       | Public Bridge/account API only; this is the persona for someone who is not running their own edge node.  | `login`, insights, Skipper, account-facing workflows                           |
 
 Access modes:
 
@@ -50,7 +58,7 @@ frameworks context set-access-mode ssh
 frameworks context check
 ```
 
-For platform contexts, per-service non-local URLs saved with `frameworks context set-url` still override manifest-derived targets, but they must declare transport explicitly: use `--tls` for TLS endpoints or `--allow-insecure` for plaintext gRPC. Localhost defaults, manifest SSH tunnels, and mesh-derived addresses keep their established transport behavior. Localhost defaults are ignored in `ssh` and `mesh` modes so a newly created platform context does not accidentally dial the operator laptop for core services. The self-hosted setup wizard asks for the same transport choice when it captures owner Quartermaster/Foghorn endpoints.
+For platform contexts, per-service non-local URLs saved with `frameworks context set-url` still override manifest-derived targets, but they must declare transport explicitly: use `--tls` for TLS endpoints or `--allow-insecure` for plaintext gRPC. Localhost defaults, manifest SSH tunnels, and mesh-derived addresses keep their established transport behavior. Localhost defaults are ignored in `ssh` and `mesh` modes so a newly created platform context does not accidentally dial the operator laptop for core services. Self-hosted/BYO edge contexts use Bridge and do not collect core gRPC endpoints.
 
 Older configs that still say `persona: edge` are normalized to `user`; `edge` is not a user-facing persona.
 
@@ -94,13 +102,8 @@ frameworks cluster detect [flags]
 5. Try health endpoints
 6. Try direct connections (DB, Kafka, etc.)
 
-**Output:**
-
-```
-✓ commodore (central-01): running [docker, v0.0.0-rc1, detected by: health-endpoint]
-✓ postgres (central-01): running [docker, v15.2, detected by: port-check]
-✗ signalman (regional-01): not found
-```
+The text report groups discovered service state by host and detection method.
+Use `--output json` when a pipeline needs machine-readable state.
 
 **Flags:** inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
 
@@ -142,29 +145,9 @@ Note: This command checks migration ledger drift, not full physical schema
 introspection. For YugabyteDB clusters where the password is only in SOPS
 env_files, pass `--deep` so doctor can decrypt `DATABASE_PASSWORD`.
 
-**Output:**
-
-```
-Infrastructure Health:
-
-✓ Postgres/Yugabyte   : healthy (queries: 1.2ms avg)
-✓ ClickHouse          : healthy (queries: 0.8ms avg)
-✓ Kafka Broker 1      : healthy
-✓ Kafka Broker 2      : healthy
-
-Application Services:
-
-✓ commodore           : healthy
-✓ bridge              : healthy
-✗ signalman           : connection refused
-
-Summary: 7/8 checks passed
-
-Recommendations:
-  - Check failed services with: frameworks cluster detect
-  - Review service logs for errors
-  - Verify network connectivity between hosts
-```
+The report groups infrastructure, application, interface, observability, and
+migration-ledger checks. Use `--output json` when a pipeline needs the current
+result shape.
 
 **Flags:** inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
 
@@ -578,10 +561,8 @@ frameworks cluster backup <component> [flags]
 - `config` - Configuration files (.env, docker-compose.yml, /etc/frameworks)
 - `all` - Backup everything
 
-**Output:**
-
-- Files stored in the output directory with timestamps
-- Timestamped filenames: `postgres-YYYYMMDD-HHMMSS` database dump format
+Backups are local-only. The command writes timestamped artifacts under the
+selected output directory; treat the exact filenames as CLI-owned.
 
 **Flags:**
 
@@ -679,15 +660,7 @@ frameworks cluster diagnose network [flags]
 - Ping test from each host to every other host
 - Reports success/failure matrix
 
-**Output:**
-
-```
-Network Connectivity Diagnostics
-
-✓ 10.0.1.10 → 10.0.1.11: OK
-✓ 10.0.1.10 → 10.0.1.12: OK
-✗ 10.0.1.11 → 10.0.1.12: FAILED (no response)
-```
+The report shows host-to-host connectivity results for the manifest targets.
 
 **Examples:**
 
@@ -714,17 +687,7 @@ frameworks cluster diagnose resources [flags]
 - Disk usage (/)
 - Load average (1m, 5m, 15m)
 
-**Output:**
-
-```
-Resource Usage Diagnostics
-
-Host: central-01 (10.0.1.10)
-  CPU: 23.5% used
-  Memory: 4.2G / 16G (26.25%)
-  Disk: 120G / 500G (24% used)
-  Load: 0.45, 0.62, 0.71
-```
+The report shows CPU, memory, disk, and load data for each manifest host.
 
 **Examples:**
 
@@ -747,17 +710,7 @@ frameworks cluster diagnose ports [flags]
 **Checks Standard Ports:**
 Uses the CLI's built-in port list for core services, interfaces, and gRPC endpoints. For the canonical port table, see [Architecture Overview](/operators/architecture#core-services).
 
-**Output:**
-
-```
-Port Conflict Diagnostics
-
-Host: central-01 (10.0.1.10)
-  Port 5432 (Postgres): IN USE
-  Port 9092 (Kafka): IN USE
-  Port 18000 (Bridge): IN USE
-  Port 18001 (Commodore): IN USE
-```
+The report checks the CLI's built-in port set against each manifest host.
 
 **Examples:**
 
@@ -784,23 +737,8 @@ frameworks cluster diagnose kafka [flags]
 - Broker API version check
 - Cluster responsiveness
 
-**Output:**
-
-```
-Kafka Diagnostics
-
-Topics:
-  analytics_events
-  stream_commands
-  routing_updates
-
-Consumer Groups:
-  periscope-ingest
-  decklog-processor
-
-Broker Status:
-  ✓ Broker is responding
-```
+The report covers topic listing, consumer groups, broker API reachability, and
+cluster responsiveness for the configured Kafka target.
 
 **Examples:**
 
@@ -1264,12 +1202,14 @@ frameworks admin nodes hardware --node-id edge-nyc-01 --cpu-cores 16 --memory-gb
 
 ## Cluster Node Lifecycle Commands
 
-Use `frameworks cluster nodes ...` for edge-node lifecycle operations in clusters
-you operate. Platform/provider contexts use GitOps/service-token backed
-control-plane access. Self-hosted owner contexts use the active tenant JWT
-against configured owner control-plane endpoints. They default to the active
-context's `cluster_id`; when a TTY has no active cluster, the CLI prompts for
-one. Pass `--cluster-id` when scripting against another cluster.
+Use `frameworks cluster nodes ...` for provider/operator edge-node lifecycle
+operations in platform-managed clusters. These commands require a `platform`
+context because they call Quartermaster and Foghorn directly with
+GitOps/service-token backed control-plane access. BYO edge operators should use
+`frameworks edge deploy`, which goes through Bridge instead of direct core gRPC.
+The commands default to the active context's `cluster_id`; when a TTY has no
+active cluster, the CLI prompts for one. Pass `--cluster-id` when scripting
+against another cluster.
 
 ```bash
 frameworks cluster nodes add --ssh ubuntu@edge-1.example.com
@@ -1280,14 +1220,13 @@ frameworks cluster nodes remove --node edge-1 --wait 4h
 frameworks cluster nodes evict --node edge-1
 ```
 
-`add` expands an existing cluster. It uses the active context's `cluster_id` or
-prompts for a cluster on TTYs, mints a short-lived enrollment token internally
-through Quartermaster, passes it into the edge deployment pipeline, and does not
-print the token. Platform contexts mint with service auth and the system tenant;
-self-hosted owner contexts mint with the active tenant JWT. Quartermaster
-requires owner/operator/provider authority; ordinary cluster subscriptions
-cannot mint node enrollment tokens. Lifecycle-managed adds default to native
-mode and, unless `--version` is supplied, install from the cluster's release
+`add` expands an existing platform-managed cluster. It uses the active context's
+`cluster_id` or prompts for a cluster on TTYs, mints a short-lived enrollment
+token internally through Quartermaster, passes it into the edge deployment
+pipeline, and does not print the token. Quartermaster requires provider
+authority for this path; ordinary tenant subscriptions cannot mint node
+enrollment tokens. Lifecycle-managed adds default to native mode and, unless
+`--version` is supplied, install from the cluster's release
 target. Clusters without a release target use the stable manifest. Pass
 `--mode docker` only for nodes managed outside the agent-pull release
 reconciler.
@@ -1345,8 +1284,7 @@ default the catalog records every platform artifact in the manifest; `--os` and
 provider repair/backfill path. Normal provider `cluster provision` and
 `cluster upgrade --all` runs publish the selected GitOps manifest and sync
 cluster targets automatically without clearing an operator pause or rollout
-override; owner contexts set targets against releases already present in the
-catalog. Release rows must
+override. Release rows must
 include at least one updateable edge component (`helmsman`, `mist`, or `caddy`);
 config-schema-only rows are rejected because runtime configuration still flows
 through ConfigSeed. Operators do not label releases to change rollout behavior;
@@ -1570,13 +1508,13 @@ frameworks edge provision --manifest edges.yaml
 - `--fetch-cert` - Fetch TLS certificate from Navigator
 - `--skip-preflight` - Skip preflight checks
 
-`--register` is for the manual provisioning path, where an admin supplies `--pool-domain`/`--node-domain` directly without an enrollment token and wants to create the Quartermaster node row in the same step. It is rejected when combined with `--enrollment-token` (the token path already registers the node via Foghorn's `PreRegisterEdge`) and when the active context uses the `user` persona (which intentionally does not have Quartermaster reachability — only Bridge). Manifest entries that set `register_qm: true` together with an enrollment token are rejected the same way.
+`--register` is for the platform manual provisioning path, where an admin supplies `--pool-domain`/`--node-domain` directly without an enrollment token and wants to create the Quartermaster node row in the same step. It is rejected unless the active context uses the `platform` persona, and it is rejected when combined with `--enrollment-token` because the token path already registers the node through Foghorn's `PreRegisterEdge`. Manifest entries that set `register_qm: true` follow the same platform-only rule and cannot be combined with an enrollment token.
 
 **Examples:**
 
 ```bash
 # Provision single node with explicit domains (manual/admin path; requires
-# a platform or self-hosted context with Quartermaster reachability)
+# a platform context with Quartermaster reachability)
 frameworks edge provision --ssh ubuntu@10.0.0.5 \
   --pool-domain edge.media-eu.example.com \
   --node-domain edge-1.media-eu.example.com \
@@ -1681,8 +1619,6 @@ frameworks edge doctor --domain edge1.example.com
 
 - `--dir` - Directory
 - `--domain` - Domain to check
-- `--ssh` - Run remotely via SSH
-- `--ssh-key` - SSH private key path
 
 ---
 
@@ -1807,10 +1743,9 @@ frameworks services plan --interactive
 frameworks services plan --include commodore,quartermaster --exclude purser
 ```
 
-**Output:**
-
-- Service fragment files (one per service)
-- `.central.env` (merged env file)
+The command writes service fragments and a merged central env file into the
+selected target directory. Exact filenames are CLI-owned; inspect
+`frameworks services plan --help` before scripting against them.
 
 **Flags:**
 
@@ -2106,12 +2041,10 @@ Deletes both `user_session` and `refresh_token` so a running tray can't silently
 
 ### frameworks setup
 
-Run the interactive onboarding wizard. It captures the operator persona,
-Bridge/control-plane endpoints, and GitOps manifest defaults into a CLI
-context, then makes that context current. Self-hosted setup asks for
-Quartermaster and Foghorn gRPC addresses because `cluster nodes list`,
-`drain`, `remove`, and `evict` call owner control-plane APIs rather than
-platform GitOps service tokens.
+Run the interactive onboarding wizard. It captures the operator persona, Bridge
+endpoint, and platform GitOps manifest defaults into a CLI context, then makes
+that context current. Self-hosted/BYO edge setup uses Bridge and does not ask
+for Quartermaster or Foghorn gRPC addresses.
 
 ```bash
 frameworks setup

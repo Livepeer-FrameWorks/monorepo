@@ -1,0 +1,97 @@
+---
+title: "Migrate to FrameWorks"
+description: "Moving from another live-video platform? Pick your starting point."
+sidebar:
+  order: 1
+---
+
+import { Aside, LinkCard, CardGrid } from "@astrojs/starlight/components";
+
+Moving to FrameWorks from another platform? This section is the home of our **migration program**: dedicated guides for the platforms we see most often, a generic guide for the ones we haven't written up yet, and a standing offer to help you 1:1 if your case doesn't fit a template.
+
+## Available guides
+
+<CardGrid>
+  <LinkCard
+    title="Livepeer Studio"
+    href="/migrate/livepeer-studio"
+    description="Available now — REST → GraphQL, player swap, multistream, and playback access-control differences."
+  />
+  <LinkCard
+    title="Any video API"
+    href="/migrate/generic"
+    description="Available now — universal checklist for platforms without a dedicated guide."
+  />
+</CardGrid>
+
+### In progress
+
+- **MistServer (self-hosted)** — for operators running their own MistServer who want our managed control plane on top.
+- **Bunny Stream**
+- **Mux**
+
+### Planned
+
+- Wowza (Streaming Cloud + Streaming Engine)
+- Cloudflare Stream
+- AWS IVS
+- Vimeo
+- api.video
+- Ant Media
+
+### Don't see your platform?
+
+[Open a forum post](https://forum.frameworks.network), [drop into Discord](%DISCORD_URL%), file an
+in-app ticket from `/support`, or ask Skipper directly. Include the source platform, the APIs you
+use today, and the migration deadline so support can point you at the closest existing guide or
+scope the missing platform-specific steps.
+
+## Migration assistance
+
+We don't ship one-shot importers yet. What we do offer:
+
+- **Concierge migration** for paid tiers and self-hosted operators with non-trivial libraries: we'll help pull your VOD assets, rewrite your integration, and validate side-by-side. Reach out before you start so we can scope it.
+- **Skipper, on demand:** the AI consultant can answer API and troubleshooting questions from the docs and protocol references.
+- **Direct human help** via in-app ticketing, Discord, and the forum.
+
+Not available yet: Studio asset importer, OpenAPI → GraphQL codegen pointers, and an
+encoder-config converter.
+
+## What every migration looks like
+
+Regardless of where you're coming from, the moves are the same:
+
+1. **Create a FrameWorks account and a first stream.** Wallet sign-in works if you'd rather skip email.
+2. **Repoint your encoder.** RTMP, RTMPS, WHIP, or SRT — the URL changes; the protocols stay.
+3. **Swap the player.** `@livepeer-frameworks/player-*` ships React, Svelte, Web Components, and a vanilla core.
+4. **Rewire your API integration.** Most platforms are REST; FrameWorks is GraphQL-first. See [Any video API](/migrate/generic) for the universals.
+5. **Review playback access policies.** Public playback IDs are straightforward; JWT/webhook gating needs a separate plan.
+6. **Re-attach multistream targets.** Push targets are scoped per-stream on FrameWorks (and on most platforms).
+7. **Validate side-by-side.** Run your old and new streams in parallel before you cut over.
+
+## Concepts worth knowing before you start
+
+A few things differ from most peers, so we surface them once here instead of repeating them in every guide:
+
+- **GraphQL-first API.** REST is used for auth, webhook ingress, and playback URLs only. The application surface is GraphQL — query, mutation, and subscription. Codegen against `pkg/graphql/schema.graphql` is the recommended path; Houdini, urql, and Apollo all work.
+- **Subscriptions instead of outbound webhooks.** Real-time events flow over GraphQL subscriptions
+  today. HTTP-callback delivery is tracked in an outbound-webhooks RFC, but subscriptions are the
+  supported event surface for current migrations.
+- **Wallet auth + x402 for agents.** Autonomous callers don't need an account. Sign with an EVM wallet (EIP-191) or attach a gasless USDC payment (EIP-3009) and go. See [Agent Access](/agents/overview).
+- **Sovereign and hybrid hosting.** You can run the entire stack on your own hardware, or mix BYO edge nodes with our managed control plane.
+- **Skipper.** The in-product AI consultant runs diagnostics (rebuffering, packet loss, routing), explains the API, and is reachable from the dashboard, the docs (`⌘J`), or via MCP. Treat it as a first-line support channel.
+
+<Aside type="note">
+  Some FrameWorks features are still in beta — billing rates, hybrid edge deployment, the cluster
+  marketplace, DRM. Each per-source guide flags the ones relevant to that migration.
+</Aside>
+
+## Get help
+
+| Channel                     | Best for                                                                                    | Where                                                        |
+| --------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| **Skipper** (AI consultant) | Quick troubleshooting, API discovery, diagnostics, after-hours, non-human callers           | Dashboard `/skipper` · `⌘J` in docs · MCP at `/mcp`          |
+| **In-app ticketing**        | Account-specific issues, billing, anything tied to your tenant data, library-migration help | Dashboard `/support`                                         |
+| **Forum**                   | Long-form Q&A, recipes, searchable community knowledge                                      | [forum.frameworks.network](https://forum.frameworks.network) |
+| **Discord**                 | Real-time chat, casual questions                                                            | [Join](%DISCORD_URL%)                                        |
+| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](%GITHUB_URL%)                 |

@@ -47,8 +47,8 @@ are derived from event streams and optimized for analytics/query paths.
 
 ## Schema Sources
 
-The docs website should not be the exact table catalog. The repository SQL is the contract used by
-the CLI/provisioner and local development stack.
+This page is intentionally not a full table catalog. The repository SQL is the contract used by the
+CLI/provisioner and local development stack.
 
 | Store                                    | Source                                           | Notes                                                                                                              |
 | ---------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
@@ -57,10 +57,10 @@ the CLI/provisioner and local development stack.
 | Static seed data                         | `pkg/database/sql/seeds/static/purser_tiers.sql` | Production reference data such as billing tiers.                                                                   |
 | Demo seed data                           | `pkg/database/sql/seeds/demo/*.sql`              | Local/demo data only; separate from demo-mode API fallbacks.                                                       |
 
-The SQL files are regular enough to generate a table and materialized-view index from
-`CREATE TABLE IF NOT EXISTS` and `CREATE MATERIALIZED VIEW IF NOT EXISTS` statements. Column-level
-or constraint-level public docs should come from a SQL parser or database introspection step instead
-of hand-maintained Markdown.
+The SQL files are regular enough for tooling to generate a table and materialized-view index from
+`CREATE TABLE IF NOT EXISTS` and `CREATE MATERIALIZED VIEW IF NOT EXISTS` statements. For
+column-level or constraint-level reference material, prefer generated output from a SQL parser or
+database introspection over hand-maintained Markdown.
 
 ## Analytics Shape
 

@@ -1,0 +1,307 @@
+---
+title: "Migrate from Livepeer Studio"
+description: "Move your Livepeer Studio integration to FrameWorks: REST → GraphQL, player swap, multistream targets, recordings, and playback access-control differences."
+sidebar:
+  order: 2
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+If you're running on [Livepeer Studio](https://livepeer.studio) today and considering FrameWorks, this page is for you. The two platforms overlap on live streaming basics, but the API shape and a few access-control features differ enough that a straight endpoint swap is not enough.
+
+This guide covers what stays, what changes, what you gain, and exactly how to do the swap.
+
+## TL;DR
+
+- **What stays:** RTMP/RTMPS and WHIP ingest, HLS and WebRTC playback, multistream targets, clips, recordings.
+- **What changes:** REST → GraphQL · API key → JWT or developer token · outbound webhooks → GraphQL subscriptions or polling · Studio playback access policies need a new plan · `@livepeer/react` → `@livepeer-frameworks/player-*`.
+- **Capabilities to evaluate:** SRT ingest · low-latency HLS · DASH delivery · sprite-sheet seek previews · AV1 in the codec list · self-hosting / hybrid options · MCP, wallet auth, and x402 for agents · Skipper.
+- **What's not yet at parity:** AI Pipelines, outbound webhooks, pull-from-source ingest, C2PA
+  signing, first-class Python/Go SDKs, JWT/webhook playback access control, full DRM, and
+  multi-participant rooms. See [the gap list](#whats-not-yet-at-parity-and-whats-coming) before
+  planning a production cutover.
+
+<Aside type="note">
+  FrameWorks is in active beta. Billing rates, hybrid edge deployment, and the cluster marketplace
+  are all flagged below — read the [beta and tricky bits](#beta-and-tricky-bits) section before you
+  cut over production traffic.
+</Aside>
+
+## Translation table
+
+The shapes you know in Studio, mapped to FrameWorks:
+
+### Streams
+
+| Studio                          | FrameWorks                                                                                |
+| ------------------------------- | ----------------------------------------------------------------------------------------- |
+| `POST /stream`                  | `createStream(input)` mutation                                                            |
+| `GET /stream/{id}`              | `stream(id)` query                                                                        |
+| `PATCH /stream/{id}`            | `updateStream(id, input)` mutation                                                        |
+| `DELETE /stream/{id}`           | `deleteStream(id)` mutation                                                               |
+| `DELETE /stream/{id}/terminate` | No direct equivalent today; stop the encoder, or delete the stream if you are retiring it |
+| `record: true` flag at create   | `record: true` at create, or `startDVR(streamId)` post-create                             |
+
+### Recordings, clips, and VOD
+
+| Studio                                           | FrameWorks                                                                                 |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `POST /clip`                                     | `createClip(input)` mutation                                                               |
+| `GET /session/{id}/clips`                        | `clipsConnection` or `clip(id)`                                                            |
+| `POST /asset/request-upload` (direct/TUS upload) | `createVodUpload(input)` → S3 multipart upload                                             |
+| `POST /asset/upload/url`                         | No direct equivalent today                                                                 |
+| Tasks API for upload/transcode progress          | `vodUploadStatus`, `liveVodLifecycle`, or `liveProcessingEvents` depending on the workflow |
+| `GET /asset/{id}`                                | `vodAsset(id)` query                                                                       |
+| `DELETE /asset/{id}`                             | `deleteVodAsset(id)` mutation                                                              |
+
+### Multistream
+
+| Studio                                     | FrameWorks                                                         |
+| ------------------------------------------ | ------------------------------------------------------------------ |
+| `POST /multistream/target`                 | No global target library; use `createPushTarget(streamId, input)`  |
+| `PATCH /multistream/target/{id}`           | `updatePushTarget(id, input)` mutation                             |
+| `DELETE /multistream/target/{id}`          | `deletePushTarget(id)` mutation                                    |
+| Inline or attach target to a stream        | `createPushTarget(streamId, input)` creates a stream-scoped target |
+| Per-target rendition profile / `videoOnly` | Not exposed today                                                  |
+
+### Access control
+
+Studio uses the term "access control" for two separate concerns: authenticating your application to the API, and deciding whether a viewer can play a stream or asset. FrameWorks covers the first today. The second is not yet a public feature.
+
+**API and dashboard access**
+
+| Studio           | FrameWorks                                                                                   |
+| ---------------- | -------------------------------------------------------------------------------------------- |
+| API key (Bearer) | Developer token (Bearer) — see [Agent Access](/agents/overview) for wallet/x402 alternatives |
+| Team login       | Email/password login                                                                         |
+| —                | Wallet sign-in (EIP-191)                                                                     |
+
+**Viewer-side playback access**
+
+| Studio                             | FrameWorks                           |
+| ---------------------------------- | ------------------------------------ |
+| Default public playback ID         | Default public playback ID           |
+| `POST /access-control/signing-key` | Not exposed today                    |
+| `playbackPolicy: { type: "jwt" }`  | Not exposed today                    |
+| `Livepeer-Jwt` header or `?jwt=`   | Not exposed today                    |
+| `playback.accessControl` webhook   | Not exposed today                    |
+| DRM                                | In progress with the MistServer team |
+
+<Aside type="caution">
+  Stream keys are ingest secrets, not viewer authorization keys. If your Studio integration depends
+  on JWT-gated playback, webhook access checks, or DRM, do not treat FrameWorks playback IDs as a
+  drop-in replacement yet. Plan that part of the migration with us before you cut over.
+</Aside>
+
+### Real-time events
+
+| Studio webhook                                                                       | FrameWorks path                                                        |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| `stream.started` / `stream.idle`                                                     | `liveStreamEvents(streamId)`                                           |
+| `recording.ready` / `recording.started` / `recording.waiting`                        | `liveDvrLifecycle(streamId)` plus `liveStorageEvents(streamId)`        |
+| `asset.ready` / `asset.created` / `asset.updated` / `asset.failed` / `asset.deleted` | `liveVodLifecycle` for VOD uploads; `liveStorageEvents` for artifacts  |
+| `multistream.connected` / `multistream.error` / `multistream.disconnected`           | Poll `stream(id).pushTargets.status`; no dedicated subscription today  |
+| `task.spawned` / `task.updated` / `task.completed` / `task.failed`                   | No one-for-one Task API; use workflow-specific lifecycle subscriptions |
+| `playback.user.new`                                                                  | `liveConnectionEvents(streamId)`                                       |
+| `playback.accessControl`                                                             | Planned                                                                |
+| `stream.detection` (object detection)                                                | Planned                                                                |
+
+<Aside type="caution">
+  FrameWorks does not deliver outbound HTTP webhooks today — events flow over GraphQL subscriptions
+  (WebSocket). If your environment can't hold an open subscription, fall back to polling the
+  relevant query (`stream(id)`, `vodAsset(id)`) on a short interval. HTTP-callback delivery is
+  tracked in the outbound-webhooks RFC, but subscriptions are the supported event surface today.
+</Aside>
+
+## Step-by-step
+
+### 1. Create a FrameWorks account and a stream
+
+Sign up at [%APP_URL%](%APP_URL%) — email + password, or sign in with an EVM wallet if you'd rather skip email entirely. Then:
+
+```graphql
+mutation CreateStream {
+  createStream(input: { name: "my-first-stream" }) {
+    ... on Stream {
+      id
+      streamKey
+      playbackId
+    }
+  }
+}
+```
+
+You get back a `streamKey` (secret — for your encoder) and a `playbackId` (public — for viewers).
+
+### 2. Repoint your encoder
+
+Studio uses GeoDNS-routed `rtmp://rtmp.livepeer.com/live` and a WHIP endpoint at `https://playback.livepeer.studio/webrtc/{streamKey}`. FrameWorks publishes its equivalents via the dashboard or `resolveIngestEndpoint(streamKey)`. RTMP/RTMPS and WHIP remain the low-effort path; SRT is also available on FrameWorks ingest when your encoder supports it.
+
+OBS / FFmpeg / hardware encoder → swap the URL, keep the rest.
+
+### 3. Swap the player
+
+If you were using `@livepeer/react`:
+
+```diff
+- import { Player } from "@livepeer/react";
+- <Player playbackId={playbackId} />
++ import { Player } from "@livepeer-frameworks/player-react";
++ <Player playbackId={playbackId} gatewayUrl="%GATEWAY_URL%" />
+```
+
+Svelte and Web Components are first-class too:
+
+- `@livepeer-frameworks/player-svelte`
+- `@livepeer-frameworks/player-wc` (`<fw-player>`)
+- `@livepeer-frameworks/player-core` (headless / vanilla)
+
+The component prop names and theming model differ — see [Player (Playback)](/builders/playback) for the full surface.
+
+### 4. Rewire REST calls as GraphQL
+
+Pick your client:
+
+- **Houdini** (SvelteKit-native) — what we use internally
+- **urql** or **Apollo** for React
+- **graphql-request** for plain Node/Bun scripts
+
+Codegen against the schema gives you typed queries:
+
+```bash
+# example with graphql-codegen
+pnpm dlx graphql-codegen \
+  --schema %GATEWAY_URL%/graphql \
+  --documents 'src/**/*.graphql' \
+  --generates ./src/gql/generated.ts:typescript,typescript-operations
+```
+
+If you want to read the schema directly, it lives at [`pkg/graphql/schema.graphql`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql) on GitHub, and the playground is at [`%GATEWAY_URL%/graphql/playground`](%GATEWAY_URL%/graphql/playground).
+
+### 5. Replace webhooks with subscriptions
+
+Before (Studio):
+
+```js
+// Express endpoint receiving webhooks
+app.post("/livepeer-webhook", verifyStudioSignature, (req, res) => {
+  if (req.body.event === "stream.started") {
+    notifyDashboard(req.body.payload.streamId);
+  }
+  res.sendStatus(200);
+});
+```
+
+After (FrameWorks):
+
+```js
+import { createClient } from "graphql-ws";
+
+const ws = createClient({ url: "wss://%GATEWAY_HOST%/graphql", connectionParams: { authToken } });
+ws.subscribe(
+  {
+    query: `subscription { liveStreamEvents { streamId state } }`,
+  },
+  {
+    next: (msg) => {
+      const { streamId, state } = msg.data.liveStreamEvents;
+      if (state === "live") notifyDashboard(streamId);
+    },
+    error: console.error,
+    complete: () => {},
+  }
+);
+```
+
+If you can't keep a connection open (a serverless cron, for instance), poll `stream(id)` every few seconds instead — it's idempotent and cheap.
+
+### 6. Plan playback access control
+
+If your Studio streams or assets are public, there is no extra work here: move to the new `playbackId` and update embeds.
+
+If you use Studio signing keys, `playbackPolicy: { type: "jwt" }`, `Livepeer-Jwt`, or `playback.accessControl` webhooks, this is a gap to handle explicitly. FrameWorks does not yet expose a customer-managed signing-key API or a playback policy field on streams/VOD assets. Keep that traffic on Studio until the feature lands, or talk to us about a scoped interim arrangement.
+
+### 7. Re-attach multistream targets
+
+Targets are stream-scoped on both platforms — they don't carry over when a stream is recreated. After your stream is up:
+
+```graphql
+mutation Restream {
+  createPushTarget(
+    streamId: "stream_xxx"
+    input: {
+      platform: "twitch"
+      name: "Twitch — main channel"
+      targetUri: "rtmp://live.twitch.tv/app/live_xxxxxxxxxx_xxx"
+    }
+  ) {
+    id
+    status
+  }
+}
+```
+
+### 8. Validate side by side
+
+Run a low-traffic test stream through both platforms in parallel for a day. Watch the FrameWorks side via [`liveStreamEvents`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql) and `liveViewerMetrics`, compare against Studio's dashboard, and only point production traffic over once you trust the numbers.
+
+## What you gain on FrameWorks
+
+- **SRT ingest** — available for encoders and networks where SRT is the better fit.
+- **Low-latency HLS delivery** on the HLS stack itself, not only via WebRTC.
+- **DASH** alongside HLS for player flexibility.
+- **AV1** in the codec list where the selected cluster and process configuration support it.
+- **Sprite-sheet seek previews** — a 10×10 grid plus a WebVTT cue file, generated for every recording, ready for hover-scrub UIs.
+- **Self-hosting and hybrid hosting.** Run the whole stack on your hardware, or mix BYO edge with our managed control plane. Hybrid is experimental — see the beta flags below.
+- **Cross-cluster federation** — one viewer pool routed across clusters; the closer edge wins automatically.
+- **Agent-first surface.** MCP server at [`/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json), wallet auth (EIP-191), and gasless USDC payments via x402 (EIP-3009). See [Agent Access](/agents/overview).
+- **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from the dashboard, the docs (`⌘J`), or MCP.
+- **Player on Svelte and as Web Components**, not just React.
+
+## What's not yet at parity, and what's coming
+
+Current gaps to account for:
+
+- **AI Pipelines** (text-to-image, image-to-video, ASR, live-video-to-video, segmentation) — not
+  exposed as a FrameWorks API today. Keep managed Studio/Daydream AI calls on Livepeer until
+  FrameWorks exposes an equivalent surface.
+- **Outbound webhooks** — today we use GraphQL subscriptions. HTTP-callback delivery is tracked in
+  the outbound-webhooks RFC.
+- **Pull-from-source ingest** — Studio supports `pull` config on stream create; FrameWorks does not
+  expose an equivalent ingest mode today.
+- **C2PA signing and creator-ID provenance on transcode** — not exposed as a public FrameWorks API
+  today.
+- **First-class Python and Go SDKs** — internal Go clients exist; use GraphQL codegen against the
+  schema until first-party SDKs are published.
+- **JWT and webhook-based playback access control** — public playback IDs are available today;
+  customer-managed signing keys and playback policies are not.
+- **DRM (Widevine / FairPlay / PlayReady)** — in progress with the MistServer team.
+- **Multi-participant rooms** — tracked in the Parlor RFC.
+- **VOD URL import and Studio library importer** — no direct `upload via URL` equivalent or one-shot Studio-asset importer today. If you have a sizeable library, [open an in-app ticket](%APP_URL%/support) or message us in [Discord](%DISCORD_URL%) so we can scope the migration.
+- **Per-target rendition selection on multistream** — Studio lets you pick which rendition goes to each push target. We push the default output today.
+
+## Beta and tricky bits
+
+Heads-up so nothing surprises you:
+
+- **Billing is in beta.** Rates may adjust as we scale, but you keep the allowances you signed up for through beta.
+- **Hybrid edge deployment** is highly experimental — fine for testing, not for production.
+- **Cluster marketplace** is in progress. Public clusters work; the operator-marketplace flow is still being built.
+- **GraphQL learning curve.** If you've never written a query, the [docs playground](%GATEWAY_URL%/graphql/playground) is the quickest way to inspect available fields. Skipper can also draft queries.
+- **Subscriptions are connection-oriented.** Polling fallback is fine if a long-lived connection is awkward in your stack.
+- **The player swap is not API-compatible.** Props and theming differ — budget a few hours to walk through [Player (Playback)](/builders/playback) examples.
+- **Stream keys, playback IDs, and asset IDs are not transferable.** Reissue stream keys and update embeds.
+- **Playback signing is not portable.** Studio's ECDSA signing keys, `Livepeer-Jwt`, and playback policies do not have a public FrameWorks equivalent yet.
+- **No webhook history backfill.** Past Studio events stay on Studio; subscribe fresh on FrameWorks.
+
+## Get help
+
+Pick whichever channel fits.
+
+| Channel                     | Best for                                                                                    | Where                                                        |
+| --------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| **Skipper** (AI consultant) | Quick troubleshooting, API discovery, diagnostics, after-hours, non-human callers           | Dashboard `/skipper` · `⌘J` in docs · MCP at `/mcp`          |
+| **In-app ticketing**        | Account-specific issues, billing, anything tied to your tenant data, library-migration help | Dashboard `/support`                                         |
+| **Forum**                   | Long-form Q&A, recipes, searchable community knowledge                                      | [forum.frameworks.network](https://forum.frameworks.network) |
+| **Discord**                 | Real-time chat, casual questions                                                            | [Join](%DISCORD_URL%)                                        |
+| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](%GITHUB_URL%)                 |

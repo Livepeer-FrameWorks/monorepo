@@ -88,9 +88,9 @@ For Livepeer-network deployments, check the current Livepeer AI docs and ask in 
 
 <Aside type="caution" title="Estimates only">
   We do not have enough production Skipper usage data yet to publish reliable per-chat cost
-  estimates. The table below is a planning aid, not a billing promise. We should replace it with
-  measured data once we have real prompt sizes, tool-call counts, conversation lengths, provider
-  choices, and model mix.
+  estimates. The table below is a planning aid, not a billing promise. It should be treated as a
+  rough model until deployments have measured prompt sizes, tool-call counts, conversation lengths,
+  provider choices, and model mix.
 </Aside>
 
 Skipper cost depends on:
@@ -110,9 +110,9 @@ Early planning shape:
 | Budget hosted SaaS model         | Usually low at modest chat volume                  | Fast setup when answer quality requirements are modest. |
 | Higher-quality hosted SaaS model | Can climb quickly with long prompts/tool results   | Harder support cases or premium account tiers.          |
 
-For budgeting, start by logging real `tokensInput`, `tokensOutput`, tool calls, and provider/model
-per request. Recalculate the table from production data instead of maintaining static vendor
-pricing in this page.
+For budgeting, use Skipper's recorded `tokensInput`, `tokensOutput`, tool calls, and provider/model
+fields as the source of truth. Real deployments should compare that usage data with current
+provider pricing or local inference costs before committing to a support-tier margin.
 
 ---
 

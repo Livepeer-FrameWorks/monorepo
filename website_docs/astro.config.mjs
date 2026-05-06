@@ -242,6 +242,10 @@ export default defineConfig({
       ],
       sidebar: [
         {
+          label: "Migrate",
+          autogenerate: { directory: "migrate" },
+        },
+        {
           label: "For Builders",
           items: [
             { slug: "builders/quick-start" },
