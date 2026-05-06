@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	commodoreCli "frameworks/pkg/clients/commodore"
-	purserclient "frameworks/pkg/clients/purser"
-	"frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/logging"
+	commodoreCli "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
+	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // ClusterPricing declares that a cluster expects pricing config to exist

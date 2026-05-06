@@ -3,7 +3,7 @@ package testutil
 import (
 	"time"
 
-	"frameworks/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 
 	"github.com/golang-jwt/jwt/v5"
 )

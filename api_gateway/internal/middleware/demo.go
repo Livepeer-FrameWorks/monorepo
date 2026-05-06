@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/gin-gonic/gin"
 )
 

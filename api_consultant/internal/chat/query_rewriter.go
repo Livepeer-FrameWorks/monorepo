@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/llm"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 )
 
 const queryRewriteTimeout = 10 * time.Second

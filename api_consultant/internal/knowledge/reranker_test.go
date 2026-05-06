@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"frameworks/pkg/llm"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 )
 
 func TestRRFRerankPreservesOrder(t *testing.T) {

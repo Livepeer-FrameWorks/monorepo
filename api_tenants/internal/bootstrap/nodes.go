@@ -8,7 +8,7 @@ import (
 	"net/netip"
 
 	geobucket "frameworks/api_tenants/internal/geo"
-	"frameworks/pkg/geoip"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 )
 
 // GeoIPLookup is the small subset of the shared GeoIP reader used by bootstrap.

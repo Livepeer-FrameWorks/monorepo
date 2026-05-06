@@ -19,9 +19,8 @@ type menuSection struct {
 	recommended bool
 }
 
-// menuSectionsForPersona returns the sections in display order with
-// recommendation tags set for the active persona. No section is ever
-// hidden; power users keep access to everything.
+// menuSectionsForPersona returns the sections in display order for commands
+// that make sense for the active persona.
 func menuSectionsForPersona(p fwcfg.Persona) []menuSection {
 	account := menuSection{key: "account", label: "Account & Hosted"}
 	edge := menuSection{key: "edge", label: "Edge Operations"}
@@ -34,16 +33,16 @@ func menuSectionsForPersona(p fwcfg.Persona) []menuSection {
 	switch p {
 	case fwcfg.PersonaUser, fwcfg.PersonaEdge:
 		account.recommended = true
-		return []menuSection{account, settings, edge, services, cluster, controlPlane, dnsMesh}
+		return []menuSection{account, settings}
 	case fwcfg.PersonaSelfHosted:
 		edge.recommended = true
-		return []menuSection{edge, account, settings, services, cluster, controlPlane, dnsMesh}
+		return []menuSection{edge, account, settings}
 	case fwcfg.PersonaPlatform:
 		cluster.recommended = true
 		controlPlane.recommended = true
 		return []menuSection{cluster, controlPlane, services, dnsMesh, edge, account, settings}
 	default:
-		return []menuSection{account, edge, services, controlPlane, cluster, dnsMesh, settings}
+		return []menuSection{account, settings}
 	}
 }
 

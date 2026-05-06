@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"frameworks/api_ticketing/internal/chatwoot"
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func newTestServer() *Server {

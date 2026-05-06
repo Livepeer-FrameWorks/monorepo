@@ -10,7 +10,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/sirupsen/logrus"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestValidateStreamKey(t *testing.T) {

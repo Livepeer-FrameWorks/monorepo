@@ -12,7 +12,7 @@ import (
 	"frameworks/cli/pkg/preflight"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
-	"frameworks/pkg/datamigrate"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 )
 
 // doctorPostgresMigrations validates the _migrations LEDGER (not the live

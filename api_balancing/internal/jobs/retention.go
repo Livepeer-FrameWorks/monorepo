@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
-	"frameworks/pkg/clients/decklog"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/protobuf/proto"
 )

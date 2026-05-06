@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"frameworks/api_dns/internal/store"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // RenewalWorker handles background certificate renewal

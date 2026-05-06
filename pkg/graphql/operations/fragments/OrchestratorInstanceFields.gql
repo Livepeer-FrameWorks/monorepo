@@ -1,0 +1,20 @@
+fragment OrchestratorInstanceFields on OrchestratorInstance {
+  __typename
+  tenantId
+  orchAddr
+  resolvedIp
+  canonicalUrl
+  advertisedNodeUrls
+  capabilities
+  pricePerUnitEth
+  pixelsPerUnit
+  capabilityPrices {
+    capability
+    pricePerUnitEth
+    pixelsPerUnit
+  }
+  hardware
+  source
+  lastSeen
+  updatedAt
+}

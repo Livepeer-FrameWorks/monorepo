@@ -4,7 +4,7 @@ import (
 	"context"
 	"sort"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 const maxAnomalousStreams = 20

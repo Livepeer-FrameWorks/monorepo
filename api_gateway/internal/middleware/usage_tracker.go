@@ -5,11 +5,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"frameworks/pkg/clients/decklog"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
-	"frameworks/pkg/tenants"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/handler/extension"

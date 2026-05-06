@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	fwsops "frameworks/cli/pkg/sops"
-	pkgdns "frameworks/pkg/dns"
-	"frameworks/pkg/servicedefs"
+	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"gopkg.in/yaml.v3"
 )
 

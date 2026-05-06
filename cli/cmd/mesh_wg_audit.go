@@ -11,7 +11,7 @@ import (
 	"frameworks/cli/internal/mesh"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/spf13/cobra"
 )

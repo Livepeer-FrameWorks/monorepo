@@ -6,8 +6,8 @@ import (
 	"io"
 	"testing"
 
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/sirupsen/logrus"
 )

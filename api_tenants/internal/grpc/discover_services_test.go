@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"google.golang.org/grpc/codes"

@@ -8,10 +8,10 @@ import (
 	"fmt"
 
 	"frameworks/api_gateway/internal/clients"
-	"frameworks/pkg/billing"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // Blocker represents something preventing an operation.

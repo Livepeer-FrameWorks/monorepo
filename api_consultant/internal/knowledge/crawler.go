@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"golang.org/x/net/html"
 	"golang.org/x/sync/errgroup"

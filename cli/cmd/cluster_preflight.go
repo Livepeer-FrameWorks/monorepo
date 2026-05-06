@@ -11,7 +11,7 @@ import (
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/clusterderive"
 	"frameworks/cli/pkg/inventory"
-	pkgdns "frameworks/pkg/dns"
+	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 
 	"github.com/spf13/cobra"
 )

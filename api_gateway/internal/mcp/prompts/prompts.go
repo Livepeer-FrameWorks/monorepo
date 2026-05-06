@@ -8,8 +8,8 @@ import (
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/preflight"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )

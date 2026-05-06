@@ -4,7 +4,7 @@ import (
 	"math"
 
 	"frameworks/api_balancing/internal/geo"
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // RoutingEvent captures all context for a viewer routing decision.

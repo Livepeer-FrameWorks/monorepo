@@ -16,9 +16,9 @@ import (
 	"frameworks/cli/internal/services"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/internal/xexec"
-	qmclient "frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/configgen"
-	"frameworks/pkg/logging"
+	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/configgen"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/spf13/cobra"
 )

@@ -10,7 +10,7 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
-	infra "frameworks/pkg/models"
+	infra "github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 )
 
 func privateerRoleVars(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {

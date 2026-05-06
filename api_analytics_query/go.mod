@@ -3,8 +3,8 @@ module frameworks/api_analytics_query
 go 1.26.2
 
 require (
-	frameworks/pkg v0.0.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.23.2
@@ -14,7 +14,7 @@ require (
 	google.golang.org/protobuf v1.36.11
 )
 
-replace frameworks/pkg => ../pkg
+replace github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg
 
 require (
 	github.com/ClickHouse/ch-go v0.71.0 // indirect

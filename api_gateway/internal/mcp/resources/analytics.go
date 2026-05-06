@@ -7,9 +7,9 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/resolvers"
-	"frameworks/pkg/clients/periscope"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )

@@ -8,8 +8,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
-	"frameworks/pkg/billing"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // TestDeductPrepaidBalanceForCreditTx_FreshDeduction verifies the happy path:

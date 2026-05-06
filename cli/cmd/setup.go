@@ -94,9 +94,6 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		if err := promptBridgeURL(reader, out, &ctx); err != nil {
 			return err
 		}
-		if err := promptOwnerControlPlane(reader, out, &ctx); err != nil {
-			return err
-		}
 	}
 
 	if cfg.Contexts == nil {
@@ -130,31 +127,12 @@ func setupResultFields(ctx fwcfg.Context) []ux.ResultField {
 		{Key: "access mode", OK: true, Detail: string(ctx.EffectiveAccessMode())},
 		{Key: "bridge url", OK: ctx.Endpoints.BridgeURL != "", Detail: ctx.Endpoints.BridgeURL},
 	}
-	if !ctx.Persona.IsUser() {
-		switch ctx.Persona {
-		case fwcfg.PersonaPlatform:
-			fields = append(fields, ux.ResultField{
-				Key:    "control plane",
-				OK:     ctx.Gitops != nil,
-				Detail: "GitOps resolver",
-			})
-		case fwcfg.PersonaSelfHosted:
-			fields = append(fields, ux.ResultField{
-				Key:    "quartermaster grpc",
-				OK:     ctx.Endpoints.QuartermasterGRPCAddr != "",
-				Detail: ctx.Endpoints.QuartermasterGRPCAddr,
-			}, ux.ResultField{
-				Key:    "foghorn grpc",
-				OK:     ctx.Endpoints.FoghornGRPCAddr != "",
-				Detail: ctx.Endpoints.FoghornGRPCAddr,
-			})
-		default:
-			fields = append(fields, ux.ResultField{
-				Key:    "control plane",
-				OK:     ctx.Endpoints.QuartermasterGRPCAddr != "",
-				Detail: ctx.Endpoints.QuartermasterGRPCAddr,
-			})
-		}
+	if ctx.Persona == fwcfg.PersonaPlatform {
+		fields = append(fields, ux.ResultField{
+			Key:    "control plane",
+			OK:     ctx.Gitops != nil,
+			Detail: "GitOps resolver",
+		})
 		if ctx.Gitops != nil {
 			fields = append(fields, ux.ResultField{
 				Key:    "gitops",
@@ -181,8 +159,8 @@ func setupNextSteps(persona fwcfg.Persona) []ux.NextStep {
 		}
 	case fwcfg.PersonaSelfHosted:
 		return []ux.NextStep{
-			{Cmd: "frameworks edge deploy --ssh <user>@<host>", Why: "Deploy or update your self-hosted edge node."},
-			{Cmd: "frameworks cluster nodes list", Why: "Inspect your cluster nodes through owner control-plane APIs."},
+			{Cmd: "frameworks login", Why: "Authenticate before Bridge creates or reuses your private edge cluster."},
+			{Cmd: "frameworks edge deploy --ssh <user>@<host>", Why: "Deploy or update your self-hosted edge node through Bridge."},
 		}
 	default:
 		return nil
@@ -192,7 +170,7 @@ func setupNextSteps(persona fwcfg.Persona) []ux.NextStep {
 func promptPersona(reader *bufio.Reader, out interface{ Write([]byte) (int, error) }) (fwcfg.Persona, error) {
 	fmt.Fprintln(out, "What are you primarily using the Frameworks CLI for?")
 	fmt.Fprintln(out, "  [1] Platform operations (deploy/manage the whole FrameWorks platform)")
-	fmt.Fprintln(out, "  [2] Self-hosted edge node (run your own edge footprint)")
+	fmt.Fprintln(out, "  [2] Self-hosted/BYO edge node (run your own edge footprint)")
 	fmt.Fprintln(out, "  [3] User/account (hosted account, insights, Skipper)")
 	fmt.Fprint(out, "Select [1-3]: ")
 
@@ -241,7 +219,7 @@ func suggestedContextName(p fwcfg.Persona) string {
 	case fwcfg.PersonaPlatform:
 		return "platform-prod"
 	case fwcfg.PersonaSelfHosted:
-		return "my-cluster"
+		return "my-edge"
 	case fwcfg.PersonaUser, fwcfg.PersonaEdge:
 		return "my-account"
 	default:
@@ -259,54 +237,6 @@ func promptBridgeURL(reader *bufio.Reader, out interface{ Write([]byte) (int, er
 		ctx.Endpoints.BridgeURL = v
 	}
 	return nil
-}
-
-func promptOwnerControlPlane(reader *bufio.Reader, out interface{ Write([]byte) (int, error) }, ctx *fwcfg.Context) error {
-	fmt.Fprintln(out, "Self-hosted lifecycle commands need owner control-plane gRPC endpoints.")
-	fmt.Fprint(out, "Quartermaster gRPC address (host:port): ")
-	qmRaw, err := reader.ReadString('\n')
-	if err != nil {
-		return err
-	}
-	qmAddr := strings.TrimSpace(qmRaw)
-	if qmAddr == "" {
-		return fmt.Errorf("quartermaster gRPC address is required for self-hosted cluster lifecycle")
-	}
-	fmt.Fprint(out, "Foghorn gRPC address (host:port): ")
-	fhRaw, err := reader.ReadString('\n')
-	if err != nil {
-		return err
-	}
-	fhAddr := strings.TrimSpace(fhRaw)
-	if fhAddr == "" {
-		return fmt.Errorf("foghorn gRPC address is required for self-hosted cluster lifecycle")
-	}
-	ctx.Endpoints.QuartermasterGRPCAddr = qmAddr
-	ctx.Endpoints.FoghornGRPCAddr = fhAddr
-	if err := promptOwnerControlPlaneTransport(reader, out, ctx); err != nil {
-		return err
-	}
-	return nil
-}
-
-func promptOwnerControlPlaneTransport(reader *bufio.Reader, out interface{ Write([]byte) (int, error) }, ctx *fwcfg.Context) error {
-	fmt.Fprint(out, "Control-plane gRPC transport [tls] (tls|plaintext): ")
-	raw, err := reader.ReadString('\n')
-	if err != nil {
-		return err
-	}
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", "tls":
-		ctx.Endpoints.UseTLS = true
-		ctx.Endpoints.AllowInsecure = false
-		return nil
-	case "plaintext", "plain", "insecure":
-		ctx.Endpoints.UseTLS = false
-		ctx.Endpoints.AllowInsecure = true
-		return nil
-	default:
-		return fmt.Errorf("control-plane gRPC transport must be tls or plaintext")
-	}
 }
 
 func promptAccessMode(reader *bufio.Reader, out interface{ Write([]byte) (int, error) }, ctx *fwcfg.Context, suggested fwcfg.AccessMode) error {

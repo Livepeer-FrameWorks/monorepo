@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/state"
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )

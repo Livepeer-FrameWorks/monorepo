@@ -9,7 +9,7 @@ import (
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
-	"frameworks/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
 	"github.com/spf13/cobra"
 )

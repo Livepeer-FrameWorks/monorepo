@@ -7,10 +7,10 @@ import (
 
 	"frameworks/api_consultant/internal/chat"
 	"frameworks/api_consultant/internal/diagnostics"
-	"frameworks/pkg/clients/periscope"
-	"frameworks/pkg/llm"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 type fakeOrchestrator struct {

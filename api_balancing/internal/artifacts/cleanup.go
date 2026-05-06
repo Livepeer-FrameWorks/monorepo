@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"strings"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // BuildClipS3Key formats a clip's deterministic S3 key. Pure string

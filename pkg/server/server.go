@@ -12,10 +12,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"frameworks/pkg/config"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
-	"frameworks/pkg/monitoring"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 )
 
 // Config represents server configuration

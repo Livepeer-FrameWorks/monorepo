@@ -1,8 +1,8 @@
 package notify
 
 import (
-	"frameworks/pkg/config"
-	"frameworks/pkg/email"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 )
 
 type Config struct {

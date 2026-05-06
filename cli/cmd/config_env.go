@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"frameworks/pkg/configgen"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/configgen"
 	"github.com/spf13/cobra"
 )
 

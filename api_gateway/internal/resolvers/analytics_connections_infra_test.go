@@ -3,7 +3,7 @@ package resolvers
 import (
 	"testing"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func floatPtr(v float64) *float64 { return &v }

@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"frameworks/pkg/auth"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

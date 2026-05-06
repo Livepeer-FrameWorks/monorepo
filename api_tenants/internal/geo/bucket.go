@@ -1,7 +1,7 @@
 package geo
 
 import (
-	"frameworks/pkg/geoip"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 
 	"github.com/uber/h3-go/v4"
 )

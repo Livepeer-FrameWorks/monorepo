@@ -9,7 +9,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestGetNodeOwner_FormatsIPv6FoghornAddress(t *testing.T) {

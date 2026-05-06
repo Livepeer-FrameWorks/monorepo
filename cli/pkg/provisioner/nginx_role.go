@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"frameworks/cli/pkg/inventory"
-	"frameworks/pkg/ingress"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
 )
 
 func nginxRoleVars(_ context.Context, _ inventory.Host, config ServiceConfig, _ RoleBuildHelpers) (map[string]any, error) {

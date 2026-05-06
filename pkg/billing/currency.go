@@ -1,6 +1,6 @@
 package billing
 
-import "frameworks/pkg/config"
+import "github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 
 const (
 	defaultCurrencyEnv      = "BILLING_CURRENCY"

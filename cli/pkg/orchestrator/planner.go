@@ -8,8 +8,8 @@ import (
 	"strconv"
 
 	"frameworks/cli/pkg/inventory"
-	infra "frameworks/pkg/models"
-	"frameworks/pkg/servicedefs"
+	infra "github.com/Livepeer-FrameWorks/monorepo/pkg/models"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // Planner creates execution plans from manifests

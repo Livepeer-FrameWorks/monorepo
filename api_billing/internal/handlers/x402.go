@@ -15,12 +15,12 @@ import (
 	"sync"
 	"time"
 
-	"frameworks/pkg/billing"
-	"frameworks/pkg/config"
-	"frameworks/pkg/countries"
-	"frameworks/pkg/geoip"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"

@@ -9,7 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/google/uuid"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 func TestRecordBalanceTransaction_DuplicateReferenceReturnsExisting(t *testing.T) {

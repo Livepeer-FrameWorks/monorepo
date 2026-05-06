@@ -7,15 +7,15 @@ import (
 
 	"frameworks/api_assets/internal/cache"
 	"frameworks/api_assets/internal/handlers"
-	"frameworks/pkg/config"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/monitoring"
-	pb "frameworks/pkg/proto"
-	"frameworks/pkg/qmbootstrap"
-	"frameworks/pkg/server"
-	"frameworks/pkg/version"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
-	qmclient "frameworks/pkg/clients/quartermaster"
+	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 )
 
 func main() {

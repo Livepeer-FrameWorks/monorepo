@@ -10,8 +10,8 @@ import (
 	"github.com/lib/pq"
 
 	"frameworks/api_balancing/internal/state"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // ReconcilerS3Client defines S3 operations needed by the artifact reconciler.

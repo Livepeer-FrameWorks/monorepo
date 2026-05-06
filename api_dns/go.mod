@@ -3,8 +3,8 @@ module frameworks/api_dns
 go 1.26.2
 
 require (
-	frameworks/pkg v0.0.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/failsafe-go/failsafe-go v0.9.6
 	github.com/gin-gonic/gin v1.12.0
 	github.com/stretchr/testify v1.11.1
@@ -91,4 +91,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace frameworks/pkg => ../pkg
+replace github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg

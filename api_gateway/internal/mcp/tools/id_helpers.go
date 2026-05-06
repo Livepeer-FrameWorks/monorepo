@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"frameworks/api_gateway/internal/clients"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/globalid"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 
 	"github.com/google/uuid"
 )

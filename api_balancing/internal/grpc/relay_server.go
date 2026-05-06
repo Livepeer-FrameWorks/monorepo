@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"frameworks/api_balancing/internal/control"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	grpclib "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"frameworks/api_gateway/internal/clients"
-	"frameworks/pkg/auth"
-	"frameworks/pkg/clients/commodore"
-	"frameworks/pkg/ctxkeys"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"

@@ -1,0 +1,7 @@
+fragment OrchestratorListFields on Orchestrator {
+  __typename
+  tenantId
+  orchAddr
+  lastSeen
+  updatedAt
+}

@@ -7,7 +7,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // TestParseRetentionDays_BareScalarOnly locks the canonical decoder contract:

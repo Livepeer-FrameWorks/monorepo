@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"frameworks/pkg/clients/commodore"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // StreamLoader loads streams with request-scoped caching.

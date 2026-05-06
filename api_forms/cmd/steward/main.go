@@ -2,14 +2,14 @@ package main
 
 import (
 	"frameworks/api_forms/internal/handlers"
-	"frameworks/pkg/clients/listmonk"
-	"frameworks/pkg/config"
-	"frameworks/pkg/email"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/monitoring"
-	"frameworks/pkg/server"
-	"frameworks/pkg/turnstile"
-	"frameworks/pkg/version"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/listmonk"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/turnstile"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"strconv"
 )
 

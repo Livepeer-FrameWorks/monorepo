@@ -3,9 +3,9 @@ module frameworks/cli
 go 1.26.2
 
 require (
-	frameworks/pkg v0.0.0-00010101000000-000000000000
 	github.com/ClickHouse/clickhouse-go/v2 v2.45.0
 	github.com/IBM/sarama v1.47.0
+	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0-00010101000000-000000000000
 	github.com/apenella/go-ansible/v2 v2.4.1
 	github.com/fatih/color v1.19.0
 	github.com/getsops/sops/v3 v3.12.2
@@ -178,4 +178,4 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
 
-replace frameworks/pkg => ../pkg
+replace github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg

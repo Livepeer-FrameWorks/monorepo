@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	qmclient "frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/config"
-	"frameworks/pkg/database"
-	"frameworks/pkg/kafka"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/models"
+	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 
 	"github.com/sirupsen/logrus"
 )

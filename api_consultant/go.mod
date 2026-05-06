@@ -4,9 +4,9 @@ go 1.26.2
 
 require (
 	codeberg.org/readeck/go-readability/v2 v2.1.1
-	frameworks/pkg v0.0.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
+	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-rod/rod v0.116.2
 	github.com/go-rod/stealth v0.4.9
@@ -102,7 +102,7 @@ require (
 )
 
 replace (
-	frameworks/pkg => ../pkg
+	github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg
 
 	// https://github.com/go-rod/rod/pull/1201 — fetchup v0.5+ API fix, unmerged upstream
 	github.com/go-rod/rod v0.116.2 => github.com/secustor/rod v0.0.0-20250623131453-b3c0bf554994

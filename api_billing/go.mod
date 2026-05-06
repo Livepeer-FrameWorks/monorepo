@@ -3,8 +3,8 @@ module frameworks/api_billing
 go 1.26.2
 
 require (
-	frameworks/pkg v0.0.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/VictorAvelar/mollie-api-go/v4 v4.16.0
 	github.com/btcsuite/btcd v0.25.0
 	github.com/btcsuite/btcd/btcutil v1.1.6
@@ -21,7 +21,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-replace frameworks/pkg => ../pkg
+replace github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg
 
 require (
 	github.com/ClickHouse/ch-go v0.71.0 // indirect

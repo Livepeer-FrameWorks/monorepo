@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"time"
 
-	"frameworks/pkg/clients"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/grpcutil"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/pagination"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
@@ -20,18 +20,19 @@ import (
 
 // GRPCClient is the gRPC client for Periscope analytics
 type GRPCClient struct {
-	conn       *grpc.ClientConn
-	stream     pb.StreamAnalyticsServiceClient
-	viewer     pb.ViewerAnalyticsServiceClient
-	track      pb.TrackAnalyticsServiceClient
-	connection pb.ConnectionAnalyticsServiceClient
-	node       pb.NodeAnalyticsServiceClient
-	routing    pb.RoutingAnalyticsServiceClient
-	federation pb.FederationAnalyticsServiceClient
-	platform   pb.PlatformAnalyticsServiceClient
-	clip       pb.ClipAnalyticsServiceClient
-	aggregated pb.AggregatedAnalyticsServiceClient
-	logger     logging.Logger
+	conn         *grpc.ClientConn
+	stream       pb.StreamAnalyticsServiceClient
+	viewer       pb.ViewerAnalyticsServiceClient
+	track        pb.TrackAnalyticsServiceClient
+	connection   pb.ConnectionAnalyticsServiceClient
+	node         pb.NodeAnalyticsServiceClient
+	routing      pb.RoutingAnalyticsServiceClient
+	federation   pb.FederationAnalyticsServiceClient
+	platform     pb.PlatformAnalyticsServiceClient
+	clip         pb.ClipAnalyticsServiceClient
+	aggregated   pb.AggregatedAnalyticsServiceClient
+	orchestrator pb.OrchestratorAnalyticsServiceClient
+	logger       logging.Logger
 }
 
 // GRPCConfig represents the configuration for the gRPC client
@@ -132,18 +133,19 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 
 	return &GRPCClient{
-		conn:       conn,
-		stream:     pb.NewStreamAnalyticsServiceClient(conn),
-		viewer:     pb.NewViewerAnalyticsServiceClient(conn),
-		track:      pb.NewTrackAnalyticsServiceClient(conn),
-		connection: pb.NewConnectionAnalyticsServiceClient(conn),
-		node:       pb.NewNodeAnalyticsServiceClient(conn),
-		routing:    pb.NewRoutingAnalyticsServiceClient(conn),
-		federation: pb.NewFederationAnalyticsServiceClient(conn),
-		platform:   pb.NewPlatformAnalyticsServiceClient(conn),
-		clip:       pb.NewClipAnalyticsServiceClient(conn),
-		aggregated: pb.NewAggregatedAnalyticsServiceClient(conn),
-		logger:     config.Logger,
+		conn:         conn,
+		stream:       pb.NewStreamAnalyticsServiceClient(conn),
+		viewer:       pb.NewViewerAnalyticsServiceClient(conn),
+		track:        pb.NewTrackAnalyticsServiceClient(conn),
+		connection:   pb.NewConnectionAnalyticsServiceClient(conn),
+		node:         pb.NewNodeAnalyticsServiceClient(conn),
+		routing:      pb.NewRoutingAnalyticsServiceClient(conn),
+		federation:   pb.NewFederationAnalyticsServiceClient(conn),
+		platform:     pb.NewPlatformAnalyticsServiceClient(conn),
+		clip:         pb.NewClipAnalyticsServiceClient(conn),
+		aggregated:   pb.NewAggregatedAnalyticsServiceClient(conn),
+		orchestrator: pb.NewOrchestratorAnalyticsServiceClient(conn),
+		logger:       config.Logger,
 	}, nil
 }
 
@@ -962,4 +964,82 @@ func (c *GRPCClient) GetClientQoeSummary(ctx context.Context, tenantID string, s
 		req.StreamId = streamID
 	}
 	return c.aggregated.GetClientQoeSummary(ctx, req)
+}
+
+// ListOrchestrators lists vantage-independent orchestrator state for a tenant.
+// orchAddr empty = full list; non-empty = single-row filter.
+func (c *GRPCClient) ListOrchestrators(ctx context.Context, tenantID string, orchAddr *string, opts *CursorPaginationOpts) (*pb.ListOrchestratorsResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &pb.ListOrchestratorsRequest{
+		TenantId:   tenantID,
+		Pagination: buildCursorPagination(opts),
+	}
+	if orchAddr != nil {
+		req.OrchAddr = orchAddr
+	}
+	return c.orchestrator.ListOrchestrators(ctx, req)
+}
+
+// GetOrchestrator returns one orchestrator's state plus all per-vantage rows.
+func (c *GRPCClient) GetOrchestrator(ctx context.Context, tenantID, orchAddr string) (*pb.GetOrchestratorResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	return c.orchestrator.GetOrchestrator(ctx, &pb.GetOrchestratorRequest{
+		TenantId: tenantID,
+		OrchAddr: orchAddr,
+	})
+}
+
+// ListOrchestratorInstances returns per-instance rows for the tenant.
+// Each instance carries its own price/capabilities/hardware — usually
+// consistent within an orch's pool but not guaranteed.
+func (c *GRPCClient) ListOrchestratorInstances(ctx context.Context, tenantID string, orchAddr *string) (*pb.ListOrchestratorInstancesResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &pb.ListOrchestratorInstancesRequest{TenantId: tenantID}
+	if orchAddr != nil {
+		req.OrchAddr = orchAddr
+	}
+	return c.orchestrator.ListOrchestratorInstances(ctx, req)
+}
+
+// ListOrchestratorVantages returns every per-vantage row for the tenant
+// (optionally filtered to one orch). Federation map calls this without a
+// filter to render every observation in one pass.
+func (c *GRPCClient) ListOrchestratorVantages(ctx context.Context, tenantID string, orchAddr *string) (*pb.ListOrchestratorVantagesResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &pb.ListOrchestratorVantagesRequest{TenantId: tenantID}
+	if orchAddr != nil {
+		req.OrchAddr = orchAddr
+	}
+	return c.orchestrator.ListOrchestratorVantages(ctx, req)
+}
+
+// GetOrchestratorPerformanceSeries returns discovery and outcome points from
+// the 5m or 1h orchestrator rollups. interval defaults to 5m on empty.
+func (c *GRPCClient) GetOrchestratorPerformanceSeries(ctx context.Context, tenantID, orchAddr string, timeRange *TimeRangeOpts, interval *string, gatewayID, resolvedIP *string) (*pb.GetOrchestratorPerformanceSeriesResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &pb.GetOrchestratorPerformanceSeriesRequest{
+		TenantId:  tenantID,
+		OrchAddr:  orchAddr,
+		TimeRange: buildTimeRange(timeRange),
+	}
+	if interval != nil {
+		req.Interval = interval
+	}
+	if gatewayID != nil {
+		req.GatewayId = gatewayID
+	}
+	if resolvedIP != nil {
+		req.ResolvedIp = resolvedIP
+	}
+	return c.orchestrator.GetOrchestratorPerformanceSeries(ctx, req)
 }

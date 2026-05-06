@@ -321,6 +321,71 @@ type Query {
   ): Node
 
   """
+  List orchestrators discovered by Livepeer gateways under this cluster owner
+  tenant. Federation-map data source. Vantage-independent; the per-region
+  table comes from `orchestratorVantages`.
+  """
+  orchestratorsConnection(
+    """
+    Pagination options.
+    """
+    page: ConnectionInput
+    """
+    Optional filter to a single orchestrator (eth address).
+    """
+    orchAddr: String
+  ): OrchestratorsConnection!
+
+  """
+  Fetch a single orchestrator with every known instance and per-(gateway,
+  instance) vantage. Side-panel data source. tenant scope is the cluster
+  owner.
+  """
+  orchestrator(
+    """
+    The orchestrator's eth address (hex).
+    """
+    orchAddr: String!
+  ): OrchestratorWithDetails
+
+  """
+  List per-instance rows for the cluster owner. Each carries its own
+  price/capabilities/hardware — usually consistent across an orch's pool but
+  not guaranteed. Use the optional `orchAddr` filter to scope to one orch.
+  """
+  orchestratorInstances(
+    orchAddr: String
+  ): [OrchestratorInstance!]!
+
+  """
+  List per-(gateway, instance) vantage observations. Multi-region observation
+  surfaces here as multiple rows. Use the optional `orchAddr` filter to
+  scope to one orchestrator.
+  """
+  orchestratorVantages(
+    orchAddr: String
+  ): [OrchestratorVantage!]!
+
+  """
+  Time-series performance points for an orchestrator from the discovery
+  rollups (5m or 1h). `meanLatencyMs` is server-pre-computed; callers don't
+  divide latency_sum/latency_count themselves.
+  """
+  orchestratorPerformanceSeries(
+    orchAddr: String!
+    timeRange: TimeRangeInput!
+    """
+    Rollup interval. "5m" (default) or "1h".
+    """
+    interval: String
+    """
+    Optional drill-down filters.
+    """
+    gatewayId: String
+    resolvedIp: String
+  ): [OrchestratorPerformancePoint!]!
+
+  """
   Discover service instances by type.
   """
   discoverServicesConnection(
@@ -6147,4 +6212,130 @@ type SkipperReportsConnection {
   nodes: [SkipperReport!]!
   totalCount: Int!
   unreadCount: Int!
+}
+
+# ============================================================================
+# Orchestrator visibility — Livepeer orchestrators discovered by our gateways.
+# Backed by ClickHouse periscope.orchestrator_* tables. Multi-IP / multi-vantage
+# is first-class: `Orchestrator` is the vantage-independent state per
+# (cluster_owner_tenant, orch_addr); `OrchestratorVantage` is the per-region /
+# per-IP observation (one row per gateway × resolved IP). The federation map
+# reads from these to render the orchestrator layer + side panel.
+# ============================================================================
+
+"""
+Identity-level orchestrator row — keyed by eth address. An orchestrator
+typically fronts N instances behind a load-balanced DNS hostname; per-instance
+config (price, capabilities, hardware) lives on `OrchestratorInstance` and
+can legitimately differ across instances even under the same eth address.
+"""
+type Orchestrator {
+  tenantId: ID!
+  orchAddr: String!
+  lastSeen: Time!
+  updatedAt: Time!
+}
+
+"""
+Per-instance state. One per (tenant, orch_addr, resolved_ip). Multiple
+instances of the same orch can have independent prices, capabilities, and
+hardware — the side panel renders this list so divergence is visible.
+"""
+type OrchestratorInstance {
+  tenantId: ID!
+  orchAddr: String!
+  resolvedIp: String!
+  canonicalUrl: String!
+  advertisedNodeUrls: [String!]!
+  capabilities: [String!]!
+  pricePerUnitEth: String!
+  pixelsPerUnit: String!
+  capabilityPrices: [OrchestratorCapabilityPrice!]!
+  hardware: String!
+  source: String!
+  lastSeen: Time!
+  updatedAt: Time!
+}
+
+"""
+One per-capability price entry. The gateway emits these as typed
+`OrchestratorCapabilityPriceEntry` proto messages; if `capability` is empty
+it falls back to `pos:<N>` reflecting the index in upstream's
+`capabilities_prices` array. Prices are exposed as ETH-denominated decimal
+strings so clients never handle wei-scale integers through JSON floats.
+"""
+type OrchestratorCapabilityPrice {
+  capability: String!
+  pricePerUnitEth: String!
+  pixelsPerUnit: String!
+}
+
+"""
+Per-vantage observation: one row per (cluster owner tenant, gateway, orch
+address, resolved IP). DNS round-robin / geo-anycast surfaces as multiple
+vantages with different `resolvedIp`.
+"""
+type OrchestratorVantage {
+  tenantId: ID!
+  gatewayId: String!
+  gatewayRegion: String!
+  orchAddr: String!
+  resolvedIp: String!
+  latitude: Float!
+  longitude: Float!
+  city: String!
+  countryCode: String!
+  geoSource: String!
+  geoResolvedAt: Time!
+  latestLatencyMs: Int!
+  score: Float!
+  dialedRecently: Boolean!
+  lastSeen: Time!
+}
+
+"""
+One sample from discovery and outcome rollups. Discovery metrics are
+per-vantage; transcode and AI outcome metrics are keyed by the gateway and the
+resolved instance IP observed by the gateway.
+"""
+type OrchestratorPerformancePoint {
+  timestamp: Time!
+  gatewayId: String!
+  gatewayRegion: String!
+  resolvedIp: String!
+  attempts: Float!
+  successes: Float!
+  failures: Float!
+  meanLatencyMs: Float!
+  maxLatencyMs: Int!
+  transcodeAttempts: Float!
+  transcodeSuccesses: Float!
+  transcodeFailures: Float!
+  transcodeMeanOverallMs: Float!
+  transcodeMaxOverallMs: Int!
+  transcodePixels: Float!
+  aiAttempts: Float!
+  aiSuccesses: Float!
+  aiFailures: Float!
+  aiMeanLatencyMs: Float!
+  aiMaxLatencyMs: Int!
+}
+
+"""
+Detail response: orchestrator identity + every known instance (with their
+own price/capabilities/hardware) + every per-(gateway, instance) vantage.
+Used by the federation map's side panel.
+"""
+type OrchestratorWithDetails {
+  orchestrator: Orchestrator!
+  instances: [OrchestratorInstance!]!
+  vantages: [OrchestratorVantage!]!
+}
+
+"""
+Pagination wrapper for orchestrator listing.
+"""
+type OrchestratorsConnection {
+  nodes: [Orchestrator!]!
+  totalCount: Int!
 }

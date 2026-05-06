@@ -7,10 +7,10 @@ import (
 
 	"frameworks/api_gateway/internal/attribution"
 	gatewayerrors "frameworks/api_gateway/internal/errors"
-	"frameworks/pkg/clients/commodore"
-	"frameworks/pkg/config"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/gin-gonic/gin"
 )

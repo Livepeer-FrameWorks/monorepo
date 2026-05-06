@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"frameworks/cli/internal/ux"
-	"frameworks/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
 	"github.com/spf13/cobra"
 )

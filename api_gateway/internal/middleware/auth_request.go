@@ -9,9 +9,9 @@ import (
 
 	"frameworks/api_gateway/internal/attribution"
 	"frameworks/api_gateway/internal/clients"
-	"frameworks/pkg/auth"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 type AuthResult struct {

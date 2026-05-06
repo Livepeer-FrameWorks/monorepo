@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestValidateBehavior_AllValid(t *testing.T) {

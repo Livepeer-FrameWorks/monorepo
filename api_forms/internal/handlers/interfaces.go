@@ -2,8 +2,8 @@ package handlers
 
 import (
 	"context"
-	"frameworks/pkg/clients/listmonk"
-	"frameworks/pkg/turnstile"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/listmonk"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/turnstile"
 )
 
 type EmailSender interface {

@@ -7,6 +7,9 @@
     GetClusterTrafficMatrixStore,
     GetFederationSummaryStore,
     GetFederationEventsStore,
+    GetOrchestratorVantagesStore,
+    GetOrchestratorStore,
+    GetOrchestratorPerformanceSeriesStore,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
@@ -14,6 +17,7 @@
   import EmptyState from "$lib/components/EmptyState.svelte";
   import InfrastructureMetricCard from "$lib/components/shared/InfrastructureMetricCard.svelte";
   import RoutingMap from "$lib/components/charts/RoutingMap.svelte";
+  import OrchestratorSidePanel from "$lib/components/dashboard/OrchestratorSidePanel.svelte";
   import { Badge } from "$lib/components/ui/badge";
   import { getIconComponent } from "$lib/iconUtils";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
@@ -31,6 +35,14 @@
   const trafficStore = new GetClusterTrafficMatrixStore();
   const summaryStore = new GetFederationSummaryStore();
   const eventsStore = new GetFederationEventsStore();
+  // Orchestrator stores: vantage list drives the map layer; the detail
+  // store fills the side panel on click. Refreshed alongside the rest of
+  // the federation data on the same poll cadence.
+  const orchVantagesStore = new GetOrchestratorVantagesStore();
+  const orchDetailStore = new GetOrchestratorStore();
+  const orchPerformanceStore = new GetOrchestratorPerformanceSeriesStore();
+
+  let selectedOrchAddr = $state<string | null>(null);
 
   let isAuthenticated = false;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -65,6 +77,76 @@
   let federationEvents = $derived(
     $eventsStore.data?.analytics?.infra?.federationEventsConnection?.edges?.map((e) => e.node) ?? []
   );
+
+  // Orchestrator vantage rows. One row per (gateway, resolved IP); multi-IP /
+  // multi-region orchs surface as multiple rows and the side panel groups
+  // them by orch. We keep rows with missing geo (lat=lng=0) — they're folded
+  // onto an "unknown" off-map cluster so unresolved/failed MMDB lookups stay
+  // visible in the side panel rather than disappearing silently.
+  let orchestratorVantageRows = $derived($orchVantagesStore.data?.orchestratorVantages ?? []);
+
+  // Count instances per orch_addr from the vantage list (each unique
+  // resolved_ip per orch is a candidate instance). Used for the multi-IP
+  // badge on the map pin. Real instance state comes from the side-panel
+  // detail query.
+  let instanceCountByOrch = $derived.by(() => {
+    const m = new Map<string, Set<string>>();
+    for (const v of orchestratorVantageRows as Array<{ orchAddr: string; resolvedIp: string }>) {
+      const set = m.get(v.orchAddr) ?? new Set();
+      set.add(v.resolvedIp);
+      m.set(v.orchAddr, set);
+    }
+    return m;
+  });
+
+  let mapOrchestratorVantages = $derived(
+    (
+      orchestratorVantageRows as Array<{
+        orchAddr: string;
+        resolvedIp: string;
+        gatewayId: string;
+        gatewayRegion: string;
+        latitude: number;
+        longitude: number;
+        latestLatencyMs: number;
+        score: number;
+        dialedRecently: boolean;
+      }>
+    ).map((v) => ({
+      orchAddr: v.orchAddr,
+      resolvedIp: v.resolvedIp,
+      gatewayId: v.gatewayId,
+      gatewayRegion: v.gatewayRegion,
+      lat: v.latitude,
+      lng: v.longitude,
+      latestLatencyMs: v.latestLatencyMs,
+      score: v.score,
+      dialedRecently: v.dialedRecently,
+      instanceCount: instanceCountByOrch.get(v.orchAddr)?.size ?? 1,
+    }))
+  );
+
+  // Side-panel detail fetched on demand when a pin is clicked.
+  let selectedOrchestrator = $derived($orchDetailStore.data?.orchestrator ?? null);
+  let selectedOrchestratorPerformance = $derived(
+    $orchPerformanceStore.data?.orchestratorPerformanceSeries ?? []
+  );
+
+  function handleOrchestratorClick(orchAddr: string) {
+    selectedOrchAddr = orchAddr;
+    void orchDetailStore.fetch({ variables: { orchAddr } });
+    void orchPerformanceStore.fetch({
+      variables: {
+        orchAddr,
+        interval: "1h",
+        timeRange: { start: currentRange.start, end: currentRange.end },
+      },
+    });
+  }
+
+  function closeOrchestratorPanel() {
+    selectedOrchAddr = null;
+  }
 
   // Transform nodes for RoutingMap
   let mapNodes = $derived(
@@ -246,6 +328,7 @@
           trafficStore.fetch({ variables: { timeRange: timeRangeInput } }),
           summaryStore.fetch({ variables: { timeRange: timeRangeInput } }),
           eventsStore.fetch({ variables: { timeRange: timeRangeInput, first: 50 } }),
+          orchVantagesStore.fetch(),
         ]);
       }
 
@@ -276,6 +359,15 @@
     if (!value) return;
     timeRange = value;
     await loadData();
+    if (selectedOrchAddr) {
+      await orchPerformanceStore.fetch({
+        variables: {
+          orchAddr: selectedOrchAddr,
+          interval: "1h",
+          timeRange: { start: currentRange.start, end: currentRange.end },
+        },
+      });
+    }
   }
 
   // Metric cards
@@ -493,9 +585,23 @@
               clusters={mapClusters}
               relationships={mapRelationships}
               {serviceInstances}
+              orchestratorVantages={mapOrchestratorVantages}
+              onOrchestratorClick={handleOrchestratorClick}
               height={450}
               zoom={2}
             />
+
+            {#if selectedOrchAddr}
+              <div class="mt-3">
+                <OrchestratorSidePanel
+                  orchestrator={selectedOrchestrator?.orchestrator ?? null}
+                  instances={selectedOrchestrator?.instances ?? []}
+                  vantages={selectedOrchestrator?.vantages ?? []}
+                  performancePoints={selectedOrchestratorPerformance}
+                  onClose={closeOrchestratorPanel}
+                />
+              </div>
+            {/if}
 
             <!-- Summary footer -->
             <div

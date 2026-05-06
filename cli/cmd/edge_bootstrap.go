@@ -6,7 +6,7 @@ import (
 
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/pkg/clients/bridge"
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // bootstrapEdgeViaBridge is the canonical preregistration entry point

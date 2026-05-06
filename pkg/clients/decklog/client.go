@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"time"
 
-	"frameworks/pkg/grpcutil"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"google.golang.org/grpc"
 	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -100,10 +100,29 @@ type BatchedClientConfig struct {
 	Timeout       time.Duration
 	Source        string // Source identifier for all events (e.g., "foghorn")
 	ServiceToken  string // Service token for authentication
+
+	// Optional, when true, makes the client tolerant of missing Target —
+	// NewBatchedClient returns a no-op stub instead of failing, and Send*
+	// calls return nil silently. Used by the Livepeer gateway integration
+	// where FRAMEWORKS_DECKLOG_GRPC_ADDR may be unset (non-FW deployments
+	// of the gateway fork). Existing monorepo callers leave this false and
+	// keep failing loudly on misconfiguration.
+	Optional bool
 }
 
 // NewBatchedClient creates a new Decklog gRPC client
 func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedClient, error) {
+	// Optional + missing Target: return a no-op stub. Send* methods short-circuit
+	// when the underlying gRPC client is nil (see disabled() helper).
+	if cfg.Optional && cfg.Target == "" {
+		source := cfg.Source
+		if source == "" {
+			source = "unknown"
+		}
+		logger.WithField("source", source).Info("Decklog client disabled (no target; running in optional mode)")
+		return &BatchedClient{logger: logger, source: source}, nil
+	}
+
 	var opts []grpc.DialOption
 	var connectParams *grpc.ConnectParams
 
@@ -572,8 +591,36 @@ func (c *BatchedClient) SendFederationEvent(data *pb.FederationEventData) error 
 	return nil
 }
 
+// disabled is true for an Optional client constructed without a Target —
+// Send* methods short-circuit instead of calling a nil gRPC client.
+func (c *BatchedClient) disabled() bool { return c == nil || c.client == nil }
+
+// SendGatewayTelemetry sends a per-orchestrator telemetry event from a Livepeer
+// gateway to Decklog. The event must carry at least one tenant id (stream or
+// cluster owner); Decklog rejects the RPC otherwise. When the client was
+// constructed in Optional mode without a target, this is a quiet no-op.
+func (c *BatchedClient) SendGatewayTelemetry(event *pb.GatewayTelemetryEvent) error {
+	if c.disabled() {
+		return nil
+	}
+	ctx := c.authContext()
+	_, err := c.client.SendGatewayTelemetry(ctx, event)
+	if err != nil {
+		c.logger.WithFields(logging.Fields{
+			"gateway_id": event.GetGatewayId(),
+			"cluster_id": event.GetClusterId(),
+			"error":      err,
+		}).Error("Failed to send gateway telemetry to Decklog")
+		return fmt.Errorf("failed to send gateway telemetry: %w", err)
+	}
+	return nil
+}
+
 // SendServiceEvent sends a service-plane event to Decklog (service_events topic).
 func (c *BatchedClient) SendServiceEvent(event *pb.ServiceEvent) error {
+	if c.disabled() {
+		return nil
+	}
 	ctx := c.authContext()
 	_, err := c.client.SendServiceEvent(ctx, event)
 	if err != nil {

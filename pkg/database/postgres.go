@@ -8,7 +8,7 @@ import (
 
 	_ "github.com/lib/pq"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // PostgresConn represents a PostgreSQL database connection

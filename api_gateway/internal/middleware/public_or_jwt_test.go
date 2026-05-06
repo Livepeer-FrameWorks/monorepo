@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"frameworks/api_gateway/internal/clients"
-	"frameworks/pkg/auth"
-	"frameworks/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 
 	"github.com/gin-gonic/gin"
 )

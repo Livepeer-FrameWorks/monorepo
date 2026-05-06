@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	graphqlpkg "frameworks/pkg/graphql"
+	graphqlpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/graphql"
 
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/parser"

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	pkgredis "frameworks/pkg/redis"
+	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
 
 	goredis "github.com/redis/go-redis/v9"
 )

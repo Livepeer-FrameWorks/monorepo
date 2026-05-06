@@ -302,6 +302,60 @@ enum GQL {
   }
   """
 
+  static let OrchestratorInstanceFields = """
+  fragment OrchestratorInstanceFields on OrchestratorInstance {
+    __typename
+    tenantId
+    orchAddr
+    resolvedIp
+    canonicalUrl
+    advertisedNodeUrls
+    capabilities
+    pricePerUnitEth
+    pixelsPerUnit
+    capabilityPrices {
+      capability
+      pricePerUnitEth
+      pixelsPerUnit
+    }
+    hardware
+    source
+    lastSeen
+    updatedAt
+  }
+  """
+
+  static let OrchestratorListFields = """
+  fragment OrchestratorListFields on Orchestrator {
+    __typename
+    tenantId
+    orchAddr
+    lastSeen
+    updatedAt
+  }
+  """
+
+  static let OrchestratorVantageFields = """
+  fragment OrchestratorVantageFields on OrchestratorVantage {
+    __typename
+    tenantId
+    gatewayId
+    gatewayRegion
+    orchAddr
+    resolvedIp
+    latitude
+    longitude
+    city
+    countryCode
+    geoSource
+    geoResolvedAt
+    latestLatencyMs
+    score
+    dialedRecently
+    lastSeen
+  }
+  """
+
   static let PageInfoFields = """
   fragment PageInfoFields on PageInfo {
     hasNextPage
@@ -1768,6 +1822,110 @@ enum GQL {
         ...PageInfoFields
       }
       totalCount
+    }
+  }
+  """
+
+  static let GetOrchestrator = """
+  # Side-panel data: identity + every known instance (with its own
+  # price/capabilities/hardware) + every per-(gateway, instance) vantage row.
+  # Multiple instances of the same orch may have legitimately different prices
+  # even though they share the eth address.
+  query GetOrchestrator($orchAddr: String!) {
+    orchestrator(orchAddr: $orchAddr) {
+      orchestrator {
+        ...OrchestratorListFields
+      }
+      instances {
+        ...OrchestratorInstanceFields
+      }
+      vantages {
+        ...OrchestratorVantageFields
+      }
+    }
+  }
+  """
+
+  static let GetOrchestratorInstances = """
+  # Per-instance rows for the cluster owner. Each carries its own
+  # price/capabilities/hardware — usually consistent across an orch's pool but
+  # not guaranteed.
+  query GetOrchestratorInstances($orchAddr: String) {
+    orchestratorInstances(orchAddr: $orchAddr) {
+      ...OrchestratorInstanceFields
+    }
+  }
+  """
+
+  static let GetOrchestratorPerformanceSeries = """
+  # Time-series performance points for the side panel's mini-chart.
+  # `meanLatencyMs` is server-pre-computed.
+  query GetOrchestratorPerformanceSeries(
+    $orchAddr: String!
+    $timeRange: TimeRangeInput!
+    $interval: String
+    $gatewayId: String
+    $resolvedIp: String
+  ) {
+    orchestratorPerformanceSeries(
+      orchAddr: $orchAddr
+      timeRange: $timeRange
+      interval: $interval
+      gatewayId: $gatewayId
+      resolvedIp: $resolvedIp
+    ) {
+      timestamp
+      gatewayId
+      gatewayRegion
+      resolvedIp
+      attempts
+      successes
+      failures
+      meanLatencyMs
+      maxLatencyMs
+      transcodeAttempts
+      transcodeSuccesses
+      transcodeFailures
+      transcodeMeanOverallMs
+      transcodeMaxOverallMs
+      transcodePixels
+      aiAttempts
+      aiSuccesses
+      aiFailures
+      aiMeanLatencyMs
+      aiMaxLatencyMs
+    }
+  }
+  """
+
+  static let GetOrchestratorsConnection = """
+  # Fetch the orchestrator list for the federation map. Vantage-independent
+  # state only; the map merges this with `orchestratorVantages` to render
+  # multi-IP / multi-region observation.
+  query GetOrchestratorsConnection(
+    $orchAddr: String
+    $first: Int = 200
+    $after: String
+  ) {
+    orchestratorsConnection(
+      orchAddr: $orchAddr
+      page: { first: $first, after: $after }
+    ) {
+      nodes {
+        ...OrchestratorListFields
+      }
+      totalCount
+    }
+  }
+  """
+
+  static let GetOrchestratorVantages = """
+  # All per-vantage observations for the cluster owner — used by the
+  # federation map's per-vantage pin toggle to scatter every observed
+  # (gateway, IP) point. Filter by `orchAddr` from the side panel.
+  query GetOrchestratorVantages($orchAddr: String) {
+    orchestratorVantages(orchAddr: $orchAddr) {
+      ...OrchestratorVantageFields
     }
   }
   """

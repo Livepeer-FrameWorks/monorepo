@@ -12,13 +12,13 @@ import (
 	"time"
 
 	"frameworks/api_analytics_query/internal/metrics"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/database"
-	"frameworks/pkg/grpcutil"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
-	"frameworks/pkg/pagination"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -44,6 +44,7 @@ type PeriscopeServer struct {
 	pb.UnimplementedPlatformAnalyticsServiceServer
 	pb.UnimplementedClipAnalyticsServiceServer
 	pb.UnimplementedAggregatedAnalyticsServiceServer
+	pb.UnimplementedOrchestratorAnalyticsServiceServer
 
 	clickhouse database.ClickHouseConn
 	logger     logging.Logger
@@ -6212,6 +6213,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	pb.RegisterPlatformAnalyticsServiceServer(server, periscopeServer)
 	pb.RegisterClipAnalyticsServiceServer(server, periscopeServer)
 	pb.RegisterAggregatedAnalyticsServiceServer(server, periscopeServer)
+	pb.RegisterOrchestratorAnalyticsServiceServer(server, periscopeServer)
 
 	// Register gRPC health checking service
 	hs := health.NewServer()

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
-	"frameworks/pkg/datamigrate"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 )
 
 func TestServiceComposeVarsUsesSeparateContainerPortAndHealthPath(t *testing.T) {

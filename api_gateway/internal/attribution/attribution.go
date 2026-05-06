@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strings"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // IsAgent checks whether the request comes from an AI agent based on the

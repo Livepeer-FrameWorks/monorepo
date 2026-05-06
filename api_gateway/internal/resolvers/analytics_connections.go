@@ -10,11 +10,11 @@ import (
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
-	periscopeclient "frameworks/pkg/clients/periscope"
-	"frameworks/pkg/ctxkeys"
-	pkgdns "frameworks/pkg/dns"
-	"frameworks/pkg/pagination"
-	pb "frameworks/pkg/proto"
+	periscopeclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )

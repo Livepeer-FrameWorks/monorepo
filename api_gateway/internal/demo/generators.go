@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"frameworks/api_gateway/graph/model"
-	"frameworks/pkg/globalid"
-	infra "frameworks/pkg/models"
-	"frameworks/pkg/pagination"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	infra "github.com/Livepeer-FrameWorks/monorepo/pkg/models"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"

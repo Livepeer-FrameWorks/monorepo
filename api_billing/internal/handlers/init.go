@@ -6,9 +6,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"frameworks/api_billing/internal/mollie"
-	decklogclient "frameworks/pkg/clients/decklog"
-	qmclient "frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/logging"
+	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
+	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 var (

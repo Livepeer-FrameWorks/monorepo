@@ -869,7 +869,7 @@ const file_deckhand_proto_rawDesc = "" +
 	"\x0fGetConversation\x12 .deckhand.GetConversationRequest\x1a\x1e.deckhand.DeckhandConversation\x12Y\n" +
 	"\x12CreateConversation\x12#.deckhand.CreateConversationRequest\x1a\x1e.deckhand.DeckhandConversation\x12M\n" +
 	"\fListMessages\x12\x1d.deckhand.ListMessagesRequest\x1a\x1e.deckhand.ListMessagesResponse\x12F\n" +
-	"\vSendMessage\x12\x1c.deckhand.SendMessageRequest\x1a\x19.deckhand.DeckhandMessageB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\vSendMessage\x12\x1c.deckhand.SendMessageRequest\x1a\x19.deckhand.DeckhandMessageB3Z1github.com/Livepeer-FrameWorks/monorepo/pkg/protob\x06proto3"
 
 var (
 	file_deckhand_proto_rawDescOnce sync.Once

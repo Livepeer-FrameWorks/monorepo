@@ -1,10 +1,10 @@
 package handlers
 
 import (
-	decklogclient "frameworks/pkg/clients/decklog"
-	purserclient "frameworks/pkg/clients/purser"
-	qmclient "frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/logging"
+	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
+	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
+	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"

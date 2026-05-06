@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	dbsql "frameworks/pkg/database/sql"
-	"frameworks/pkg/kafka"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"

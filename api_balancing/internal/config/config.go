@@ -3,8 +3,8 @@ package config
 import (
 	"strings"
 
-	pkgconfig "frameworks/pkg/config"
-	pkgredis "frameworks/pkg/redis"
+	pkgconfig "github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
 )
 
 type Config struct {

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // mockReconcilerS3Client implements ReconcilerS3Client for testing.

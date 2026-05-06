@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/config"
-	"frameworks/pkg/logging"
-	pkgmesh "frameworks/pkg/mesh"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pkgmesh "github.com/Livepeer-FrameWorks/monorepo/pkg/mesh"
 
 	"github.com/google/uuid"
 )

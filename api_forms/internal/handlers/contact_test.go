@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"frameworks/api_forms/internal/validation"
-	"frameworks/pkg/turnstile"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/turnstile"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"

@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/google/uuid"
 )

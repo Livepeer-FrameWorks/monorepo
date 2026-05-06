@@ -7,7 +7,7 @@ import (
 
 	"frameworks/cli/pkg/clusterderive"
 	"frameworks/cli/pkg/inventory"
-	"frameworks/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // DeriveOptions carries values the manifest doesn't express on its own. The

@@ -18,7 +18,7 @@ import (
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	fwssh "frameworks/cli/pkg/ssh"
-	"frameworks/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"

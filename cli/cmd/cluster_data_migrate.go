@@ -13,7 +13,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/preflight"
 	"frameworks/cli/pkg/ssh"
-	"frameworks/pkg/datamigrate"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 
 	"github.com/spf13/cobra"
 )

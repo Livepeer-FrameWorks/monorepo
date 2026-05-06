@@ -3,7 +3,7 @@ package graph
 import (
 	"time"
 
-	proto "frameworks/pkg/proto"
+	proto "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // liveNodeFromSnapshot maps Privateer's core-infra resource snapshot into the

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 const serverTLSFilePollInterval = 500 * time.Millisecond

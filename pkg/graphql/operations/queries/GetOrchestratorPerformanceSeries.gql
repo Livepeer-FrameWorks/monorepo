@@ -1,0 +1,38 @@
+# Time-series performance points for the side panel's mini-chart.
+# `meanLatencyMs` is server-pre-computed.
+query GetOrchestratorPerformanceSeries(
+  $orchAddr: String!
+  $timeRange: TimeRangeInput!
+  $interval: String
+  $gatewayId: String
+  $resolvedIp: String
+) {
+  orchestratorPerformanceSeries(
+    orchAddr: $orchAddr
+    timeRange: $timeRange
+    interval: $interval
+    gatewayId: $gatewayId
+    resolvedIp: $resolvedIp
+  ) {
+    timestamp
+    gatewayId
+    gatewayRegion
+    resolvedIp
+    attempts
+    successes
+    failures
+    meanLatencyMs
+    maxLatencyMs
+    transcodeAttempts
+    transcodeSuccesses
+    transcodeFailures
+    transcodeMeanOverallMs
+    transcodeMaxOverallMs
+    transcodePixels
+    aiAttempts
+    aiSuccesses
+    aiFailures
+    aiMeanLatencyMs
+    aiMaxLatencyMs
+  }
+}

@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"frameworks/api_gateway/internal/resolvers"
-	"frameworks/pkg/globalid"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )

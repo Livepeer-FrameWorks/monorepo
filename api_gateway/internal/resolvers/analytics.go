@@ -10,9 +10,9 @@ import (
 	"frameworks/api_gateway/internal/datafetcher"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
-	periscopeclient "frameworks/pkg/clients/periscope"
-	"frameworks/pkg/ctxkeys"
-	pb "frameworks/pkg/proto"
+	periscopeclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/types/known/timestamppb"

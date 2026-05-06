@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"frameworks/pkg/config"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"

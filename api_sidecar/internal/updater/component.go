@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 type Result struct {

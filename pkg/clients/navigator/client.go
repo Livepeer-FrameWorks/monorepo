@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"frameworks/pkg/grpcutil"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto" // Import generated protobuf code
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto" // Import generated protobuf code
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"

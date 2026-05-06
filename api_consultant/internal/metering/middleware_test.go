@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"frameworks/api_consultant/internal/skipper"
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/gin-gonic/gin"
 )

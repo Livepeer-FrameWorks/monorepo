@@ -403,7 +403,7 @@ const file_foghorn_relay_proto_rawDesc = "" +
 	"\tdelivered\x18\x01 \x01(\bR\tdelivered\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error2m\n" +
 	"\fFoghornRelay\x12]\n" +
-	"\x0eForwardCommand\x12$.foghorn_relay.ForwardCommandRequest\x1a%.foghorn_relay.ForwardCommandResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x0eForwardCommand\x12$.foghorn_relay.ForwardCommandRequest\x1a%.foghorn_relay.ForwardCommandResponseB3Z1github.com/Livepeer-FrameWorks/monorepo/pkg/protob\x06proto3"
 
 var (
 	file_foghorn_relay_proto_rawDescOnce sync.Once

@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"frameworks/cli/pkg/provisioner"
-	"frameworks/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 func TestCatalogServicesHaveRegistryEntries(t *testing.T) {

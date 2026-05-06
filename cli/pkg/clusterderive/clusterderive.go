@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"frameworks/cli/pkg/inventory"
-	pkgdns "frameworks/pkg/dns"
+	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 )
 
 // PublicServiceType maps a manifest service name to its DNS subdomain type. Returns

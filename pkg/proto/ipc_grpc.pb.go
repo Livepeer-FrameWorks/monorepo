@@ -155,8 +155,9 @@ var HelmsmanControl_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	DecklogService_SendEvent_FullMethodName        = "/helmsmancontrol.DecklogService/SendEvent"
-	DecklogService_SendServiceEvent_FullMethodName = "/helmsmancontrol.DecklogService/SendServiceEvent"
+	DecklogService_SendEvent_FullMethodName            = "/helmsmancontrol.DecklogService/SendEvent"
+	DecklogService_SendServiceEvent_FullMethodName     = "/helmsmancontrol.DecklogService/SendServiceEvent"
+	DecklogService_SendGatewayTelemetry_FullMethodName = "/helmsmancontrol.DecklogService/SendGatewayTelemetry"
 )
 
 // DecklogServiceClient is the client API for DecklogService service.
@@ -164,14 +165,22 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // Service for sending events to Decklog (Foghorn -> Decklog/api_firehose)
-// - MistTrigger: media-plane analytics/events
-// - ServiceEvent: service-plane telemetry (API usage, messaging, etc.)
+//   - MistTrigger: media-plane analytics/events
+//   - ServiceEvent: service-plane telemetry (API usage, messaging, etc.)
+//   - GatewayTelemetryEvent: per-orchestrator discovery / state / outcome
+//     telemetry from Livepeer gateways (cluster-scoped or session-scoped).
+//
 // All producers MUST preserve the original payload (no rewriting).
 type DecklogServiceClient interface {
 	// Unified entrypoint for media-plane events.
 	SendEvent(ctx context.Context, in *MistTrigger, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Service-plane events (non-media).
 	SendServiceEvent(ctx context.Context, in *ServiceEvent, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// Livepeer gateway telemetry. Cluster-scoped events (discovery, state) are
+	// attributed to cluster_owner_tenant_id. Session-scoped events
+	// (transcode/AI outcomes) require both stream_tenant_id and
+	// cluster_owner_tenant_id.
+	SendGatewayTelemetry(ctx context.Context, in *GatewayTelemetryEvent, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type decklogServiceClient struct {
@@ -202,19 +211,37 @@ func (c *decklogServiceClient) SendServiceEvent(ctx context.Context, in *Service
 	return out, nil
 }
 
+func (c *decklogServiceClient) SendGatewayTelemetry(ctx context.Context, in *GatewayTelemetryEvent, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, DecklogService_SendGatewayTelemetry_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DecklogServiceServer is the server API for DecklogService service.
 // All implementations must embed UnimplementedDecklogServiceServer
 // for forward compatibility.
 //
 // Service for sending events to Decklog (Foghorn -> Decklog/api_firehose)
-// - MistTrigger: media-plane analytics/events
-// - ServiceEvent: service-plane telemetry (API usage, messaging, etc.)
+//   - MistTrigger: media-plane analytics/events
+//   - ServiceEvent: service-plane telemetry (API usage, messaging, etc.)
+//   - GatewayTelemetryEvent: per-orchestrator discovery / state / outcome
+//     telemetry from Livepeer gateways (cluster-scoped or session-scoped).
+//
 // All producers MUST preserve the original payload (no rewriting).
 type DecklogServiceServer interface {
 	// Unified entrypoint for media-plane events.
 	SendEvent(context.Context, *MistTrigger) (*emptypb.Empty, error)
 	// Service-plane events (non-media).
 	SendServiceEvent(context.Context, *ServiceEvent) (*emptypb.Empty, error)
+	// Livepeer gateway telemetry. Cluster-scoped events (discovery, state) are
+	// attributed to cluster_owner_tenant_id. Session-scoped events
+	// (transcode/AI outcomes) require both stream_tenant_id and
+	// cluster_owner_tenant_id.
+	SendGatewayTelemetry(context.Context, *GatewayTelemetryEvent) (*emptypb.Empty, error)
 	mustEmbedUnimplementedDecklogServiceServer()
 }
 
@@ -230,6 +257,9 @@ func (UnimplementedDecklogServiceServer) SendEvent(context.Context, *MistTrigger
 }
 func (UnimplementedDecklogServiceServer) SendServiceEvent(context.Context, *ServiceEvent) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method SendServiceEvent not implemented")
+}
+func (UnimplementedDecklogServiceServer) SendGatewayTelemetry(context.Context, *GatewayTelemetryEvent) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method SendGatewayTelemetry not implemented")
 }
 func (UnimplementedDecklogServiceServer) mustEmbedUnimplementedDecklogServiceServer() {}
 func (UnimplementedDecklogServiceServer) testEmbeddedByValue()                        {}
@@ -288,6 +318,24 @@ func _DecklogService_SendServiceEvent_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DecklogService_SendGatewayTelemetry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GatewayTelemetryEvent)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DecklogServiceServer).SendGatewayTelemetry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DecklogService_SendGatewayTelemetry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DecklogServiceServer).SendGatewayTelemetry(ctx, req.(*GatewayTelemetryEvent))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DecklogService_ServiceDesc is the grpc.ServiceDesc for DecklogService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -302,6 +350,10 @@ var DecklogService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SendServiceEvent",
 			Handler:    _DecklogService_SendServiceEvent_Handler,
+		},
+		{
+			MethodName: "SendGatewayTelemetry",
+			Handler:    _DecklogService_SendGatewayTelemetry_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

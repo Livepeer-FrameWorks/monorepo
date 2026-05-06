@@ -2462,3 +2462,258 @@ var AggregatedAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "periscope.proto",
 }
+
+const (
+	OrchestratorAnalyticsService_ListOrchestrators_FullMethodName                = "/periscope.OrchestratorAnalyticsService/ListOrchestrators"
+	OrchestratorAnalyticsService_GetOrchestrator_FullMethodName                  = "/periscope.OrchestratorAnalyticsService/GetOrchestrator"
+	OrchestratorAnalyticsService_ListOrchestratorInstances_FullMethodName        = "/periscope.OrchestratorAnalyticsService/ListOrchestratorInstances"
+	OrchestratorAnalyticsService_ListOrchestratorVantages_FullMethodName         = "/periscope.OrchestratorAnalyticsService/ListOrchestratorVantages"
+	OrchestratorAnalyticsService_GetOrchestratorPerformanceSeries_FullMethodName = "/periscope.OrchestratorAnalyticsService/GetOrchestratorPerformanceSeries"
+)
+
+// OrchestratorAnalyticsServiceClient is the client API for OrchestratorAnalyticsService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type OrchestratorAnalyticsServiceClient interface {
+	ListOrchestrators(ctx context.Context, in *ListOrchestratorsRequest, opts ...grpc.CallOption) (*ListOrchestratorsResponse, error)
+	GetOrchestrator(ctx context.Context, in *GetOrchestratorRequest, opts ...grpc.CallOption) (*GetOrchestratorResponse, error)
+	ListOrchestratorInstances(ctx context.Context, in *ListOrchestratorInstancesRequest, opts ...grpc.CallOption) (*ListOrchestratorInstancesResponse, error)
+	ListOrchestratorVantages(ctx context.Context, in *ListOrchestratorVantagesRequest, opts ...grpc.CallOption) (*ListOrchestratorVantagesResponse, error)
+	GetOrchestratorPerformanceSeries(ctx context.Context, in *GetOrchestratorPerformanceSeriesRequest, opts ...grpc.CallOption) (*GetOrchestratorPerformanceSeriesResponse, error)
+}
+
+type orchestratorAnalyticsServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewOrchestratorAnalyticsServiceClient(cc grpc.ClientConnInterface) OrchestratorAnalyticsServiceClient {
+	return &orchestratorAnalyticsServiceClient{cc}
+}
+
+func (c *orchestratorAnalyticsServiceClient) ListOrchestrators(ctx context.Context, in *ListOrchestratorsRequest, opts ...grpc.CallOption) (*ListOrchestratorsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListOrchestratorsResponse)
+	err := c.cc.Invoke(ctx, OrchestratorAnalyticsService_ListOrchestrators_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *orchestratorAnalyticsServiceClient) GetOrchestrator(ctx context.Context, in *GetOrchestratorRequest, opts ...grpc.CallOption) (*GetOrchestratorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetOrchestratorResponse)
+	err := c.cc.Invoke(ctx, OrchestratorAnalyticsService_GetOrchestrator_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *orchestratorAnalyticsServiceClient) ListOrchestratorInstances(ctx context.Context, in *ListOrchestratorInstancesRequest, opts ...grpc.CallOption) (*ListOrchestratorInstancesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListOrchestratorInstancesResponse)
+	err := c.cc.Invoke(ctx, OrchestratorAnalyticsService_ListOrchestratorInstances_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *orchestratorAnalyticsServiceClient) ListOrchestratorVantages(ctx context.Context, in *ListOrchestratorVantagesRequest, opts ...grpc.CallOption) (*ListOrchestratorVantagesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListOrchestratorVantagesResponse)
+	err := c.cc.Invoke(ctx, OrchestratorAnalyticsService_ListOrchestratorVantages_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *orchestratorAnalyticsServiceClient) GetOrchestratorPerformanceSeries(ctx context.Context, in *GetOrchestratorPerformanceSeriesRequest, opts ...grpc.CallOption) (*GetOrchestratorPerformanceSeriesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetOrchestratorPerformanceSeriesResponse)
+	err := c.cc.Invoke(ctx, OrchestratorAnalyticsService_GetOrchestratorPerformanceSeries_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// OrchestratorAnalyticsServiceServer is the server API for OrchestratorAnalyticsService service.
+// All implementations must embed UnimplementedOrchestratorAnalyticsServiceServer
+// for forward compatibility.
+type OrchestratorAnalyticsServiceServer interface {
+	ListOrchestrators(context.Context, *ListOrchestratorsRequest) (*ListOrchestratorsResponse, error)
+	GetOrchestrator(context.Context, *GetOrchestratorRequest) (*GetOrchestratorResponse, error)
+	ListOrchestratorInstances(context.Context, *ListOrchestratorInstancesRequest) (*ListOrchestratorInstancesResponse, error)
+	ListOrchestratorVantages(context.Context, *ListOrchestratorVantagesRequest) (*ListOrchestratorVantagesResponse, error)
+	GetOrchestratorPerformanceSeries(context.Context, *GetOrchestratorPerformanceSeriesRequest) (*GetOrchestratorPerformanceSeriesResponse, error)
+	mustEmbedUnimplementedOrchestratorAnalyticsServiceServer()
+}
+
+// UnimplementedOrchestratorAnalyticsServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedOrchestratorAnalyticsServiceServer struct{}
+
+func (UnimplementedOrchestratorAnalyticsServiceServer) ListOrchestrators(context.Context, *ListOrchestratorsRequest) (*ListOrchestratorsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListOrchestrators not implemented")
+}
+func (UnimplementedOrchestratorAnalyticsServiceServer) GetOrchestrator(context.Context, *GetOrchestratorRequest) (*GetOrchestratorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetOrchestrator not implemented")
+}
+func (UnimplementedOrchestratorAnalyticsServiceServer) ListOrchestratorInstances(context.Context, *ListOrchestratorInstancesRequest) (*ListOrchestratorInstancesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListOrchestratorInstances not implemented")
+}
+func (UnimplementedOrchestratorAnalyticsServiceServer) ListOrchestratorVantages(context.Context, *ListOrchestratorVantagesRequest) (*ListOrchestratorVantagesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListOrchestratorVantages not implemented")
+}
+func (UnimplementedOrchestratorAnalyticsServiceServer) GetOrchestratorPerformanceSeries(context.Context, *GetOrchestratorPerformanceSeriesRequest) (*GetOrchestratorPerformanceSeriesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetOrchestratorPerformanceSeries not implemented")
+}
+func (UnimplementedOrchestratorAnalyticsServiceServer) mustEmbedUnimplementedOrchestratorAnalyticsServiceServer() {
+}
+func (UnimplementedOrchestratorAnalyticsServiceServer) testEmbeddedByValue() {}
+
+// UnsafeOrchestratorAnalyticsServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to OrchestratorAnalyticsServiceServer will
+// result in compilation errors.
+type UnsafeOrchestratorAnalyticsServiceServer interface {
+	mustEmbedUnimplementedOrchestratorAnalyticsServiceServer()
+}
+
+func RegisterOrchestratorAnalyticsServiceServer(s grpc.ServiceRegistrar, srv OrchestratorAnalyticsServiceServer) {
+	// If the following call panics, it indicates UnimplementedOrchestratorAnalyticsServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&OrchestratorAnalyticsService_ServiceDesc, srv)
+}
+
+func _OrchestratorAnalyticsService_ListOrchestrators_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListOrchestratorsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrchestratorAnalyticsServiceServer).ListOrchestrators(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrchestratorAnalyticsService_ListOrchestrators_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrchestratorAnalyticsServiceServer).ListOrchestrators(ctx, req.(*ListOrchestratorsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OrchestratorAnalyticsService_GetOrchestrator_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetOrchestratorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrchestratorAnalyticsServiceServer).GetOrchestrator(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrchestratorAnalyticsService_GetOrchestrator_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrchestratorAnalyticsServiceServer).GetOrchestrator(ctx, req.(*GetOrchestratorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OrchestratorAnalyticsService_ListOrchestratorInstances_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListOrchestratorInstancesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrchestratorAnalyticsServiceServer).ListOrchestratorInstances(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrchestratorAnalyticsService_ListOrchestratorInstances_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrchestratorAnalyticsServiceServer).ListOrchestratorInstances(ctx, req.(*ListOrchestratorInstancesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OrchestratorAnalyticsService_ListOrchestratorVantages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListOrchestratorVantagesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrchestratorAnalyticsServiceServer).ListOrchestratorVantages(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrchestratorAnalyticsService_ListOrchestratorVantages_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrchestratorAnalyticsServiceServer).ListOrchestratorVantages(ctx, req.(*ListOrchestratorVantagesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OrchestratorAnalyticsService_GetOrchestratorPerformanceSeries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetOrchestratorPerformanceSeriesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrchestratorAnalyticsServiceServer).GetOrchestratorPerformanceSeries(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrchestratorAnalyticsService_GetOrchestratorPerformanceSeries_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrchestratorAnalyticsServiceServer).GetOrchestratorPerformanceSeries(ctx, req.(*GetOrchestratorPerformanceSeriesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// OrchestratorAnalyticsService_ServiceDesc is the grpc.ServiceDesc for OrchestratorAnalyticsService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var OrchestratorAnalyticsService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "periscope.OrchestratorAnalyticsService",
+	HandlerType: (*OrchestratorAnalyticsServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListOrchestrators",
+			Handler:    _OrchestratorAnalyticsService_ListOrchestrators_Handler,
+		},
+		{
+			MethodName: "GetOrchestrator",
+			Handler:    _OrchestratorAnalyticsService_GetOrchestrator_Handler,
+		},
+		{
+			MethodName: "ListOrchestratorInstances",
+			Handler:    _OrchestratorAnalyticsService_ListOrchestratorInstances_Handler,
+		},
+		{
+			MethodName: "ListOrchestratorVantages",
+			Handler:    _OrchestratorAnalyticsService_ListOrchestratorVantages_Handler,
+		},
+		{
+			MethodName: "GetOrchestratorPerformanceSeries",
+			Handler:    _OrchestratorAnalyticsService_GetOrchestratorPerformanceSeries_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "periscope.proto",
+}

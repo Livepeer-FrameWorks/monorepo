@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	goredis "github.com/redis/go-redis/v9"
 )

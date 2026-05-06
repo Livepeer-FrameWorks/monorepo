@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	foghornclient "frameworks/pkg/clients/foghorn"
-	pb "frameworks/pkg/proto"
+	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"

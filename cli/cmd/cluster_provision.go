@@ -31,7 +31,7 @@ import (
 	"frameworks/cli/pkg/credentials"
 	"frameworks/cli/pkg/detect"
 	fwsops "frameworks/cli/pkg/sops"
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"frameworks/cli/pkg/clusterderive"
 	"frameworks/cli/pkg/inventory"
@@ -39,9 +39,9 @@ import (
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/remoteaccess"
 	"frameworks/cli/pkg/ssh"
-	pkgdns "frameworks/pkg/dns"
-	"frameworks/pkg/ingress"
-	"frameworks/pkg/servicedefs"
+	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
@@ -672,6 +672,30 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			runtimeData["system_tenant_id"] = systemTenantID
 			if qmAddr, addrErr := resolveServiceGRPCAddr(manifest, "quartermaster", defaultGRPCPort("quartermaster")); addrErr == nil {
 				runtimeData["quartermaster_grpc_addr"] = qmAddr
+			}
+			// Pre-resolve every cluster's owner_tenant alias to its UUID so the
+			// per-cluster gateway env injection can populate
+			// FRAMEWORKS_CLUSTER_OWNER_TENANT_ID for non-platform clusters too
+			// (private/customer/marketplace cluster gateways need correct
+			// tenant attribution for telemetry, not just the system tenant).
+			//
+			// Hard-fail when any cluster runs livepeer-gateway: an empty
+			// FRAMEWORKS_CLUSTER_OWNER_TENANT_ID disables gateway telemetry
+			// entirely (Decklog rejects events with no tenant), so a silent
+			// warning would turn a configuration error into invisible data
+			// loss. Clusters without livepeer-gateway can degrade gracefully.
+			ownerMap, ownerErr := resolveClusterOwnerTenantIDs(bootstrapCtx, manifest, runtimeData, raSession)
+			if ownerErr != nil {
+				if anyClusterRunsLivepeerGateway(manifest) {
+					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Resolve cluster owner tenants: %v", ownerErr))
+					fmt.Fprintln(cmd.OutOrStdout(), "\n  Cluster runs livepeer-gateway — owner tenant must resolve to UUID for telemetry attribution.")
+					fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
+					rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+					return fmt.Errorf("resolve cluster owner tenants for livepeer-gateway clusters: %w", ownerErr)
+				}
+				ux.Warn(cmd.OutOrStdout(), fmt.Sprintf("Resolve cluster owner tenants: %v (no livepeer-gateway services — continuing)", ownerErr))
+			} else {
+				runtimeData["owner_tenant_ids_by_alias"] = ownerMap
 			}
 
 			ux.Success(cmd.OutOrStdout(), "System Tenant bootstrapped")
@@ -3779,9 +3803,71 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
-	if manifest.GeoIP != nil && manifest.GeoIP.Enabled && (baseName == "foghorn" || baseName == "quartermaster") {
+	if manifest.GeoIP != nil && manifest.GeoIP.Enabled && (baseName == "foghorn" || baseName == "quartermaster" || baseName == "livepeer-gateway") {
 		if env["GEOIP_MMDB_PATH"] == "" {
 			env["GEOIP_MMDB_PATH"] = effectiveGeoIPRemotePath(manifest, "")
+		}
+	}
+
+	// FrameWorks gateway telemetry context. The Livepeer gateway emits per-orch
+	// discovery, state, and outcome events to Decklog (SendGatewayTelemetry RPC).
+	// All events stamp cluster_owner_tenant_id from gitops; per-session events
+	// also carry the stream's tenant via the extended Foghorn auth response.
+	// See docs/architecture/orchestrator-visibility.md.
+	if baseName == "livepeer-gateway" {
+		if env["FRAMEWORKS_CLUSTER_ID"] == "" && task.ClusterID != "" {
+			env["FRAMEWORKS_CLUSTER_ID"] = task.ClusterID
+		}
+		if env["FRAMEWORKS_GATEWAY_ID"] == "" && task.Host != "" {
+			env["FRAMEWORKS_GATEWAY_ID"] = task.Host
+		}
+		if env["FRAMEWORKS_GATEWAY_REGION"] == "" {
+			if region := manifestTaskRegion(manifest, task); region != "" {
+				env["FRAMEWORKS_GATEWAY_REGION"] = region
+			}
+		}
+		// Cluster owner tenant: resolved per-alias by the bootstrap step into
+		// runtimeData["owner_tenant_ids_by_alias"]. Covers platform-official
+		// clusters (alias "frameworks" → system tenant UUID) AND non-platform
+		// clusters (private/customer/marketplace) so their gateway telemetry
+		// attributes correctly. Empty alias is treated as "frameworks".
+		if env["FRAMEWORKS_CLUSTER_OWNER_TENANT_ID"] == "" && task.ClusterID != "" {
+			if cluster, ok := manifest.Clusters[task.ClusterID]; ok {
+				ownerAlias := strings.TrimSpace(cluster.OwnerTenant)
+				if ownerAlias == "" {
+					ownerAlias = "frameworks"
+				}
+				if ownerMap, ok := runtimeData["owner_tenant_ids_by_alias"].(map[string]string); ok {
+					if id, ok := ownerMap[ownerAlias]; ok && id != "" {
+						env["FRAMEWORKS_CLUSTER_OWNER_TENANT_ID"] = id
+					}
+				}
+				// Fallback to system_tenant_id for the platform-cluster case
+				// when the owner-alias resolution didn't run (e.g., during a
+				// degraded provision where QM bootstrap succeeded but the
+				// alias batch failed).
+				if env["FRAMEWORKS_CLUSTER_OWNER_TENANT_ID"] == "" && ownerAlias == "frameworks" {
+					if id, ok := runtimeData["system_tenant_id"].(string); ok && id != "" {
+						env["FRAMEWORKS_CLUSTER_OWNER_TENANT_ID"] = id
+					}
+				}
+			}
+		}
+		// Decklog endpoint discovery. Address comes from the manifest service map;
+		// auth token is provisioned via the standard service-token mechanism into
+		// SERVICE_TOKEN already, so the gateway reuses that. TLS mode follows the
+		// internal-CA convention: present → mtls, absent → disabled (dev only).
+		if env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] == "" {
+			if addr, err := resolveServiceGRPCAddr(manifest, "decklog", defaultGRPCPort("decklog")); err == nil {
+				env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] = addr
+			}
+		}
+		if env["FRAMEWORKS_DECKLOG_TLS_MODE"] == "" {
+			if _, ok := manifest.Services["navigator"]; ok {
+				env["FRAMEWORKS_DECKLOG_TLS_MODE"] = "mtls"
+			} else {
+				env["FRAMEWORKS_DECKLOG_TLS_MODE"] = "disabled"
+			}
 		}
 	}
 
@@ -4108,6 +4194,21 @@ func manifestTaskRegion(manifest *inventory.Manifest, task *orchestrator.Task) s
 }
 
 const defaultLivepeerGatewayAuthWebhookURL = "http://foghorn.internal:18008/webhooks/livepeer/auth"
+
+// anyClusterRunsLivepeerGateway returns true when the manifest provisions a
+// livepeer-gateway service anywhere. Used to escalate owner-tenant
+// resolution failures from "warn and continue" to a hard provisioning error
+// — gateway telemetry without a cluster owner tenant is silently dropped
+// downstream, which is worse than failing fast.
+func anyClusterRunsLivepeerGateway(manifest *inventory.Manifest) bool {
+	if manifest == nil {
+		return false
+	}
+	if _, ok := manifest.Services["livepeer-gateway"]; ok {
+		return true
+	}
+	return false
+}
 
 func normalizeLivepeerEnvVars(env map[string]string) {
 	setEnvIfEmpty(env, "eth_url", livepeerRPCEnvKeys(env)...)

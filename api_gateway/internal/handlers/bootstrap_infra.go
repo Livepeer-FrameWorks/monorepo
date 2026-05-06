@@ -4,10 +4,10 @@ import (
 	"net/http"
 	"strings"
 
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
-	qmclient "frameworks/pkg/clients/quartermaster"
+	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc/codes"

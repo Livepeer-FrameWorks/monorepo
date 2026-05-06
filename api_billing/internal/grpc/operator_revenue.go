@@ -10,8 +10,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"frameworks/pkg/middleware"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // resolveOperatorTenantID enforces the same cross-tenant guard the invoice

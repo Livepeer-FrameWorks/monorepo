@@ -1,6 +1,6 @@
 package ingesterrors
 
-import pb "frameworks/pkg/proto"
+import pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 // IngestError is a typed error that can be mapped into MistTriggerResponse.error_code
 // so clients get structured ingest failure reasons.

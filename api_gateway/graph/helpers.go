@@ -6,10 +6,10 @@ import (
 
 	"frameworks/api_gateway/internal/loaders"
 	gwmiddleware "frameworks/api_gateway/internal/middleware"
-	"frameworks/pkg/clips"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clips"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // getLifecycleData fetches artifact lifecycle data from the ArtifactLifecycleLoader.

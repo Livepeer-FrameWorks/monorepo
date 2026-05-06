@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"frameworks/api_gateway/graph/model"
-	signalmanclient "frameworks/pkg/clients/signalman"
-	pkgconfig "frameworks/pkg/config"
-	"frameworks/pkg/globalid"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	signalmanclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/signalman"
+	pkgconfig "github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // SubscriptionManager manages gRPC streaming connections to Signalman for GraphQL subscriptions

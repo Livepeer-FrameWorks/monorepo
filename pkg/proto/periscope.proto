@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package periscope;
 
-option go_package = "frameworks/pkg/proto";
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
@@ -1824,4 +1824,176 @@ message GetClientQoeSummaryRequest {
 
 message GetClientQoeSummaryResponse {
   ClientQoeSummary summary = 1;
+}
+
+// ============================================================================
+// Orchestrator Analytics — vantage-independent state, per-vantage observations,
+// and time-series performance for Livepeer orchestrators discovered by our
+// gateways. Multi-IP / multi-vantage rows are intentional; the federation map
+// reads from the per-vantage table to surface DNS round-robin / geo-anycast.
+// See docs/architecture/orchestrator-visibility.md.
+// ============================================================================
+
+// Identity-level row — eth-address-keyed, minimal. An orchestrator with a
+// load-balanced DNS hostname fronts N instances; per-instance config (price,
+// capabilities, hardware) lives on OrchestratorInstance and can differ across
+// instances even under the same eth address.
+message Orchestrator {
+  string tenant_id = 1;
+  string orch_addr = 2;
+  google.protobuf.Timestamp last_seen = 3;
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+// Per-instance state. One per (tenant, orch_addr, resolved_ip). The federation
+// map's side panel reads from here for the per-instance config breakdown
+// (multiple instances may have legitimately different prices/capabilities).
+message OrchestratorInstance {
+  string tenant_id = 1;
+  string orch_addr = 2;
+  string resolved_ip = 3;
+
+  string canonical_url = 4;
+  repeated string advertised_node_urls = 5;
+  repeated string capabilities = 6;
+
+  int64 price_per_unit = 7;
+  int64 pixels_per_unit = 8;
+  repeated OrchestratorCapabilityPrice capability_prices = 9;
+
+  string hardware = 10;
+  string source = 11;
+
+  google.protobuf.Timestamp last_seen = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+message OrchestratorCapabilityPrice {
+  string capability = 1;
+  uint32 position = 2;
+  int64 price_per_unit = 3;
+  int64 pixels_per_unit = 4;
+}
+
+message OrchestratorVantage {
+  string tenant_id = 1;
+  string gateway_id = 2;
+  string gateway_region = 3;
+  string orch_addr = 4;
+  string resolved_ip = 5;
+
+  double latitude = 6;
+  double longitude = 7;
+  string city = 8;
+  string country_code = 9;
+  string geo_source = 10;
+  google.protobuf.Timestamp geo_resolved_at = 11;
+
+  uint32 latest_latency_ms = 12;
+  float score = 13;
+  bool dialed_recently = 14;
+  google.protobuf.Timestamp last_seen = 15;
+}
+
+message OrchestratorPerformancePoint {
+  google.protobuf.Timestamp timestamp = 1;
+  string gateway_id = 2;
+  string gateway_region = 3;
+  string resolved_ip = 4;
+
+  uint64 attempts = 5;
+  uint64 successes = 6;
+  uint64 failures = 7;
+  // mean_latency_ms = latency_sum / latency_count when latency_count > 0; the
+  // server pre-computes this so callers don't have to.
+  float mean_latency_ms = 8;
+  uint32 max_latency_ms = 9;
+
+  uint64 transcode_attempts = 10;
+  uint64 transcode_successes = 11;
+  uint64 transcode_failures = 12;
+  float transcode_mean_overall_ms = 13;
+  uint32 transcode_max_overall_ms = 14;
+  uint64 transcode_pixels = 15;
+
+  uint64 ai_attempts = 16;
+  uint64 ai_successes = 17;
+  uint64 ai_failures = 18;
+  float ai_mean_latency_ms = 19;
+  uint32 ai_max_latency_ms = 20;
+}
+
+message ListOrchestratorsRequest {
+  string tenant_id = 1;
+  common.CursorPaginationRequest pagination = 2;
+  // Optional: restrict to a specific orch (used for the "go to detail" path
+  // when the federation map's side panel opens).
+  optional string orch_addr = 3;
+}
+
+message ListOrchestratorsResponse {
+  common.CursorPaginationResponse pagination = 1;
+  repeated Orchestrator orchestrators = 2;
+}
+
+message GetOrchestratorRequest {
+  string tenant_id = 1;
+  string orch_addr = 2;
+}
+
+message GetOrchestratorResponse {
+  Orchestrator orchestrator = 1;
+  // All known instances for this orch under this tenant. One per
+  // resolved_ip. Each carries its own price/capabilities/hardware — they may
+  // legitimately differ across instances of the same orch.
+  repeated OrchestratorInstance instances = 2;
+  // All known per-(gateway, instance) vantage rows. Multi-region observation
+  // surfaces here so the side panel's per-region table can show how each
+  // gateway sees each instance.
+  repeated OrchestratorVantage vantages = 3;
+}
+
+message ListOrchestratorInstancesRequest {
+  string tenant_id = 1;
+  // Optional filter to one orch.
+  optional string orch_addr = 2;
+}
+
+message ListOrchestratorInstancesResponse {
+  repeated OrchestratorInstance instances = 1;
+}
+
+message ListOrchestratorVantagesRequest {
+  string tenant_id = 1;
+  // Optional filter — without it, lists every vantage row for the tenant
+  // (used when the federation map renders all known orchestrators in one
+  // pass).
+  optional string orch_addr = 2;
+}
+
+message ListOrchestratorVantagesResponse {
+  repeated OrchestratorVantage vantages = 1;
+}
+
+message GetOrchestratorPerformanceSeriesRequest {
+  string tenant_id = 1;
+  string orch_addr = 2;
+  common.TimeRange time_range = 3;
+  // "5m" or "1h" — picks the rollup. Default 5m.
+  optional string interval = 4;
+  // Optional filter to a specific gateway/region/IP for drill-down.
+  optional string gateway_id = 5;
+  optional string resolved_ip = 6;
+}
+
+message GetOrchestratorPerformanceSeriesResponse {
+  repeated OrchestratorPerformancePoint points = 1;
+}
+
+service OrchestratorAnalyticsService {
+  rpc ListOrchestrators(ListOrchestratorsRequest) returns (ListOrchestratorsResponse);
+  rpc GetOrchestrator(GetOrchestratorRequest) returns (GetOrchestratorResponse);
+  rpc ListOrchestratorInstances(ListOrchestratorInstancesRequest) returns (ListOrchestratorInstancesResponse);
+  rpc ListOrchestratorVantages(ListOrchestratorVantagesRequest) returns (ListOrchestratorVantagesResponse);
+  rpc GetOrchestratorPerformanceSeries(GetOrchestratorPerformanceSeriesRequest) returns (GetOrchestratorPerformanceSeriesResponse);
 }

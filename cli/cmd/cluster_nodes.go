@@ -21,11 +21,11 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
 	fwssh "frameworks/cli/pkg/ssh"
-	fhclient "frameworks/pkg/clients/foghorn"
-	qmclient "frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	fhclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
+	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -50,9 +50,8 @@ func newClusterNodesCmd() *cobra.Command {
 
 This is the lifecycle surface for operators who manage edge nodes in clusters
 registered with the FrameWorks control plane. Platform contexts use service-token
-control-plane access; self-hosted contexts use tenant-owner JWT access against
-configured control-plane endpoints. User contexts are for hosted account,
-insights, and Skipper workflows, not node lifecycle changes.`,
+control-plane access. BYO edge and hosted user contexts use Bridge workflows,
+not direct node lifecycle changes.`,
 	}
 	cmd.AddCommand(newClusterNodesAddCmd())
 	cmd.AddCommand(newClusterNodesListCmd())
@@ -1167,14 +1166,16 @@ func clusterNodesUseServiceAuth(ctxCfg fwcfg.Context) bool {
 
 func requireClusterLifecycleContext(ctxCfg fwcfg.Context) error {
 	switch ctxCfg.Persona {
-	case fwcfg.PersonaPlatform, fwcfg.PersonaSelfHosted:
+	case fwcfg.PersonaPlatform:
 		return nil
+	case fwcfg.PersonaSelfHosted:
+		return fmt.Errorf("cluster nodes requires a platform context; selfhosted contexts deploy BYO edges through Bridge with 'frameworks edge deploy'")
 	case fwcfg.PersonaUser, fwcfg.PersonaEdge:
-		return fmt.Errorf("cluster nodes changes require a platform/provider or self-hosted owner context; user contexts can inspect account and cluster insights but cannot mutate node lifecycle")
+		return fmt.Errorf("cluster nodes requires a platform context; user contexts can inspect account and cluster insights but cannot mutate node lifecycle")
 	case "":
-		return fmt.Errorf("cluster nodes requires an explicit context persona: platform for provider operations, selfhosted for tenant-owned clusters, or user for hosted account workflows")
+		return fmt.Errorf("cluster nodes requires an explicit platform context")
 	default:
-		return fmt.Errorf("cluster nodes does not support persona %q; use platform for provider operations or selfhosted for tenant-owned clusters", ctxCfg.Persona)
+		return fmt.Errorf("cluster nodes does not support persona %q; use platform for provider operations", ctxCfg.Persona)
 	}
 }
 

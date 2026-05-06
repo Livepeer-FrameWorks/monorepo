@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	pb "frameworks/pkg/proto"
-	"frameworks/pkg/qmbootstrap"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 
 	"github.com/sirupsen/logrus"
 	logrustest "github.com/sirupsen/logrus/hooks/test"

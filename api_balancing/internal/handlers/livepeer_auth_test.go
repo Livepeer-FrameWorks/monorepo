@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/sirupsen/logrus"
 )
@@ -86,15 +86,27 @@ func newAuthResolver(t *testing.T) *LivepeerAuthResolver {
 	}
 }
 
+// localCtx returns a tenant/stream context as if local state had a record.
+func localCtx(manifestID string) *LivepeerAuthContext {
+	return &LivepeerAuthContext{
+		TenantID:     "tenant-local",
+		StreamID:     "stream-local",
+		InternalName: manifestID,
+	}
+}
+
 func TestLivepeerAuth_LocalStateHitAuthorizesWithoutCommodore(t *testing.T) {
 	commod := &stubCommodore{}
 	r := newAuthResolver(t)
-	r.StreamLookup = func(string) bool { return true }
+	r.StreamLookup = func(m string) *LivepeerAuthContext { return localCtx(m) }
 	r.Commodore = commod
 
-	ok, reason := r.Authorize(context.Background(), "manifest-1")
-	if !ok {
-		t.Fatalf("expected authorize=true, got reason=%q", reason)
+	authCtx, reason := r.Authorize(context.Background(), "manifest-1")
+	if authCtx == nil {
+		t.Fatalf("expected authorize success, got reason=%q", reason)
+	}
+	if authCtx.TenantID != "tenant-local" {
+		t.Fatalf("expected local tenant context, got %+v", authCtx)
 	}
 	if commod.callCount() != 0 {
 		t.Fatalf("local hit must not call Commodore, got %d calls", commod.callCount())
@@ -104,13 +116,17 @@ func TestLivepeerAuth_LocalStateHitAuthorizesWithoutCommodore(t *testing.T) {
 func TestLivepeerAuth_PositiveCacheHitSkipsCommodoreAndPeers(t *testing.T) {
 	commod := &stubCommodore{}
 	r := newAuthResolver(t)
-	r.StreamLookup = func(string) bool { return false }
+	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	r.Commodore = commod
-	r.PositiveCache.add("manifest-cached")
+	cached := &LivepeerAuthContext{TenantID: "tenant-cached", StreamID: "stream-cached", InternalName: "manifest-cached"}
+	r.PositiveCache.add("manifest-cached", cached)
 
-	ok, reason := r.Authorize(context.Background(), "manifest-cached")
-	if !ok {
-		t.Fatalf("expected cache-backed authorize=true, got reason=%q", reason)
+	authCtx, reason := r.Authorize(context.Background(), "manifest-cached")
+	if authCtx == nil {
+		t.Fatalf("expected cache-backed authorize success, got reason=%q", reason)
+	}
+	if authCtx != cached {
+		t.Fatalf("expected cached context to flow through, got %+v", authCtx)
 	}
 	if commod.callCount() != 0 {
 		t.Fatalf("cache hit must not call Commodore, got %d calls", commod.callCount())
@@ -119,12 +135,12 @@ func TestLivepeerAuth_PositiveCacheHitSkipsCommodoreAndPeers(t *testing.T) {
 
 func TestLivepeerAuth_CommodoreNotFoundReturnsStreamNotFound(t *testing.T) {
 	r := newAuthResolver(t)
-	r.StreamLookup = func(string) bool { return false }
+	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	// Empty TenantId means "Commodore doesn't recognise this manifest".
 	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{TenantId: ""}}
 
-	ok, reason := r.Authorize(context.Background(), "ghost-manifest")
-	if ok {
+	authCtx, reason := r.Authorize(context.Background(), "ghost-manifest")
+	if authCtx != nil {
 		t.Fatal("expected reject for unknown manifest")
 	}
 	if reason != authRejectStreamNotFound {
@@ -134,11 +150,11 @@ func TestLivepeerAuth_CommodoreNotFoundReturnsStreamNotFound(t *testing.T) {
 
 func TestLivepeerAuth_CommodoreErrorReturnsCommodoreUnreachable(t *testing.T) {
 	r := newAuthResolver(t)
-	r.StreamLookup = func(string) bool { return false }
+	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	r.Commodore = &stubCommodore{err: errors.New("rpc closed")}
 
-	ok, reason := r.Authorize(context.Background(), "manifest-x")
-	if ok {
+	authCtx, reason := r.Authorize(context.Background(), "manifest-x")
+	if authCtx != nil {
 		t.Fatal("expected reject when Commodore is unreachable")
 	}
 	if reason != authRejectCommodoreUnreachable {
@@ -148,14 +164,14 @@ func TestLivepeerAuth_CommodoreErrorReturnsCommodoreUnreachable(t *testing.T) {
 
 func TestLivepeerAuth_NoClusterPeersReturnsPeerContextMissing(t *testing.T) {
 	r := newAuthResolver(t)
-	r.StreamLookup = func(string) bool { return false }
+	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{
 		TenantId:     "tenant-a",
 		ClusterPeers: nil,
 	}}
 
-	ok, reason := r.Authorize(context.Background(), "manifest-y")
-	if ok {
+	authCtx, reason := r.Authorize(context.Background(), "manifest-y")
+	if authCtx != nil {
 		t.Fatal("expected reject when Commodore returns no peers")
 	}
 	if reason != authRejectPeerContextMissing {
@@ -165,9 +181,10 @@ func TestLivepeerAuth_NoClusterPeersReturnsPeerContextMissing(t *testing.T) {
 
 func TestLivepeerAuth_PeerConfirmsLiveAuthorizesAndCaches(t *testing.T) {
 	r := newAuthResolver(t)
-	r.StreamLookup = func(string) bool { return false }
+	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{
 		TenantId: "tenant-a",
+		StreamId: "stream-a",
 		ClusterPeers: []*pb.TenantClusterPeer{
 			{ClusterId: "peer-cluster"},
 		},
@@ -177,18 +194,25 @@ func TestLivepeerAuth_PeerConfirmsLiveAuthorizesAndCaches(t *testing.T) {
 	}}
 	r.PeerAddrs = stubPeerAddrs{addrs: map[string]string{"peer-cluster": "peer-cluster.internal:18011"}}
 
-	ok, reason := r.Authorize(context.Background(), "manifest-live")
-	if !ok {
+	authCtx, reason := r.Authorize(context.Background(), "manifest-live")
+	if authCtx == nil {
 		t.Fatalf("expected authorize via peer, got reason=%q", reason)
 	}
-	if !r.PositiveCache.has("manifest-live") {
+	if authCtx.TenantID != "tenant-a" || authCtx.StreamID != "stream-a" || authCtx.InternalName != "manifest-live" {
+		t.Fatalf("unexpected auth context: %+v", authCtx)
+	}
+	cached := r.PositiveCache.get("manifest-live")
+	if cached == nil {
 		t.Fatal("expected positive cache to be populated after peer confirmation")
+	}
+	if cached.TenantID != "tenant-a" || cached.StreamID != "stream-a" {
+		t.Fatalf("expected cached context to carry tenant/stream, got %+v", cached)
 	}
 
 	// Re-authorize: must hit cache, not call Commodore again.
 	commodCalls := r.Commodore.(*stubCommodore).callCount()
-	ok2, _ := r.Authorize(context.Background(), "manifest-live")
-	if !ok2 {
+	authCtx2, _ := r.Authorize(context.Background(), "manifest-live")
+	if authCtx2 == nil {
 		t.Fatal("expected second authorize to hit cache")
 	}
 	if r.Commodore.(*stubCommodore).callCount() != commodCalls {
@@ -198,7 +222,7 @@ func TestLivepeerAuth_PeerConfirmsLiveAuthorizesAndCaches(t *testing.T) {
 
 func TestLivepeerAuth_PeerKnownButNotLiveReturnsStreamNotLive(t *testing.T) {
 	r := newAuthResolver(t)
-	r.StreamLookup = func(string) bool { return false }
+	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{
 		TenantId: "tenant-a",
 		ClusterPeers: []*pb.TenantClusterPeer{
@@ -211,8 +235,8 @@ func TestLivepeerAuth_PeerKnownButNotLiveReturnsStreamNotLive(t *testing.T) {
 	}}
 	r.PeerAddrs = stubPeerAddrs{addrs: map[string]string{"peer-cluster": "peer-cluster.internal:18011"}}
 
-	ok, reason := r.Authorize(context.Background(), "manifest-dead")
-	if ok {
+	authCtx, reason := r.Authorize(context.Background(), "manifest-dead")
+	if authCtx != nil {
 		t.Fatal("expected reject when no peer reports the stream live")
 	}
 	if reason != authRejectStreamNotLive {
@@ -222,7 +246,7 @@ func TestLivepeerAuth_PeerKnownButNotLiveReturnsStreamNotLive(t *testing.T) {
 
 func TestLivepeerAuth_AllPeerQueriesErrorReturnsPeerUnreachable(t *testing.T) {
 	r := newAuthResolver(t)
-	r.StreamLookup = func(string) bool { return false }
+	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{
 		TenantId: "tenant-a",
 		ClusterPeers: []*pb.TenantClusterPeer{
@@ -242,8 +266,8 @@ func TestLivepeerAuth_AllPeerQueriesErrorReturnsPeerUnreachable(t *testing.T) {
 		"peer-cluster-b": "peer-b.internal:18011",
 	}}
 
-	ok, reason := r.Authorize(context.Background(), "manifest-flapping")
-	if ok {
+	authCtx, reason := r.Authorize(context.Background(), "manifest-flapping")
+	if authCtx != nil {
 		t.Fatal("expected reject when every peer QueryStream errors")
 	}
 	if reason != authRejectPeerUnreachable {
@@ -253,7 +277,7 @@ func TestLivepeerAuth_AllPeerQueriesErrorReturnsPeerUnreachable(t *testing.T) {
 
 func TestLivepeerAuth_PeerListedButUnreachableReturnsPeerUnreachable(t *testing.T) {
 	r := newAuthResolver(t)
-	r.StreamLookup = func(string) bool { return false }
+	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{
 		TenantId: "tenant-a",
 		ClusterPeers: []*pb.TenantClusterPeer{
@@ -264,8 +288,8 @@ func TestLivepeerAuth_PeerListedButUnreachableReturnsPeerUnreachable(t *testing.
 	// Peer present in Commodore response but PeerManager has no addr → unreachable.
 	r.PeerAddrs = stubPeerAddrs{addrs: map[string]string{}}
 
-	ok, reason := r.Authorize(context.Background(), "manifest-isolated")
-	if ok {
+	authCtx, reason := r.Authorize(context.Background(), "manifest-isolated")
+	if authCtx != nil {
 		t.Fatal("expected reject when no peer is reachable")
 	}
 	if reason != authRejectPeerUnreachable {
@@ -275,7 +299,7 @@ func TestLivepeerAuth_PeerListedButUnreachableReturnsPeerUnreachable(t *testing.
 
 func TestLivepeerAuth_LocalClusterPeerIsSkipped(t *testing.T) {
 	r := newAuthResolver(t)
-	r.StreamLookup = func(string) bool { return false }
+	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{
 		TenantId: "tenant-a",
 		ClusterPeers: []*pb.TenantClusterPeer{
@@ -292,8 +316,8 @@ func TestLivepeerAuth_LocalClusterPeerIsSkipped(t *testing.T) {
 		"peer-cluster": "peer-cluster.internal:18011",
 	}}
 
-	ok, _ := r.Authorize(context.Background(), "manifest-z")
-	if !ok {
+	authCtx, _ := r.Authorize(context.Background(), "manifest-z")
+	if authCtx == nil {
 		t.Fatal("expected authorize via remote peer")
 	}
 	if fed.callCount(r.LocalCluster) != 0 {

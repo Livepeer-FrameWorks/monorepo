@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 type fakeS3 struct {

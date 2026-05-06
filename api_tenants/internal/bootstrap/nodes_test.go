@@ -8,7 +8,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 
-	"frameworks/pkg/geoip"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 )
 
 type fakeGeoLookup struct {

@@ -107,6 +107,21 @@
     status?: string | null;
   }
 
+  // Orchestrator vantage pin: one per (gateway, orch_addr, resolved_ip).
+  // Multi-IP orchs surface as multiple pins; the side panel groups by orch.
+  interface OrchestratorVantagePin {
+    orchAddr: string;
+    resolvedIp: string;
+    gatewayId: string;
+    gatewayRegion: string;
+    lat: number;
+    lng: number;
+    latestLatencyMs: number;
+    score: number;
+    dialedRecently: boolean;
+    instanceCount?: number;
+  }
+
   interface Props {
     routes: Route[];
     nodes: NodeLocation[];
@@ -116,6 +131,8 @@
     clusters?: ClusterMarker[];
     relationships?: RelationshipLine[];
     serviceInstances?: ServiceInstance[];
+    orchestratorVantages?: OrchestratorVantagePin[];
+    onOrchestratorClick?: (orchAddr: string) => void;
     height?: number;
     zoom?: number;
     center?: [number, number];
@@ -131,6 +148,8 @@
     clusters = [],
     relationships = [],
     serviceInstances = [],
+    orchestratorVantages = [],
+    onOrchestratorClick = undefined,
     height = 500,
     zoom = 2,
     center = [20, 0],
@@ -147,6 +166,7 @@
   let relationshipLayer: LayerGroup | null = null;
   let membershipLayer: LayerGroup | null = null;
   let serviceLayer: LayerGroup | null = null;
+  let orchestratorLayer: LayerGroup | null = null;
   let pulseTimers: number[] = [];
   let nodeSpreadables: Spreadable[] = [];
   let clusterSpreadables: Spreadable[] = [];
@@ -219,8 +239,12 @@
     layerGroup = L.layerGroup().addTo(map);
     serviceLayer = L.layerGroup().addTo(map);
     clusterLayer = L.layerGroup().addTo(map);
+    // Orchestrator layer sits on top: pins are interactive and should be
+    // clickable through other markers when stacked.
+    orchestratorLayer = L.layerGroup().addTo(map);
 
     drawMap(routes, nodes, buckets, flows, clusters, relationships);
+    drawOrchestrators(orchestratorVantages);
   }
 
   function handleWheel(e: WheelEvent) {
@@ -768,6 +792,96 @@
       drawMap(routes, nodes, buckets, flows, clusters, relationships);
     }
   });
+
+  // Orchestrator pins react independently — their data source (Periscope
+  // discovery rollups) updates on a different cadence than nodes/clusters.
+  $effect(() => {
+    if (map) {
+      drawOrchestrators(orchestratorVantages);
+    }
+  });
+
+  // Cheap deterministic hash so unknown-geo pins land at stable
+  // off-map positions across refreshes. Not cryptographic — just enough
+  // spread to avoid stacking pins for different orchs at one coord.
+  function hashStringForSpread(s: string): number {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+
+  // Color a vantage pin by recent reachability + latency. Failed-recently
+  // (dialed_recently=false) is amber even when latency is unknown.
+  function orchestratorPinColor(vantage: OrchestratorVantagePin): string {
+    if (!vantage.dialedRecently) return "rgb(245, 158, 11)"; // amber — stale or last attempt failed
+    if (vantage.latestLatencyMs >= 500) return "rgb(248, 113, 113)"; // red — slow
+    if (vantage.latestLatencyMs >= 200) return "rgb(250, 204, 21)"; // yellow — degraded
+    return "rgb(74, 222, 128)"; // green — healthy
+  }
+
+  // Off-map anchor for vantages with no resolved geo. Below the equator and
+  // far enough west to render in the Pacific gutter without overlapping
+  // real clusters; renders as a small "unknown" cluster the operator can
+  // click into instead of disappearing silently.
+  const UNKNOWN_GEO_ANCHOR: [number, number] = [-78, -160];
+
+  function drawOrchestrators(vantages: OrchestratorVantagePin[]): void {
+    if (!L || !orchestratorLayer || !map) return;
+    const leaflet = L;
+    orchestratorLayer.clearLayers();
+    if (!vantages.length) return;
+
+    for (const v of vantages) {
+      let lat = v.lat;
+      let lng = v.lng;
+      const unknownGeo = lat === 0 && lng === 0;
+      if (unknownGeo) {
+        // Spread unknown-geo pins around the off-map anchor so they don't
+        // stack on a single coordinate. Spread is deterministic per
+        // (orchAddr + resolvedIp) so the same pin stays in place across
+        // refresh cycles.
+        const seed = hashStringForSpread(v.orchAddr + ":" + v.resolvedIp);
+        lat = UNKNOWN_GEO_ANCHOR[0] + ((seed >> 8) & 0xff) / 64.0;
+        lng = UNKNOWN_GEO_ANCHOR[1] + (seed & 0xff) / 64.0;
+      }
+      const marker = leaflet.circleMarker([lat, lng], {
+        radius: 6,
+        color: orchestratorPinColor(v),
+        weight: 2,
+        fillColor: orchestratorPinColor(v),
+        fillOpacity: 0.65,
+      });
+      const rows = [
+        popupRow("Orch", `<code>${escapeHtml(v.orchAddr)}</code>`),
+        popupRow("IP", escapeHtml(v.resolvedIp)),
+        popupRow("Gateway", `${escapeHtml(v.gatewayId)} (${escapeHtml(v.gatewayRegion)})`),
+        popupRow(
+          "Latency",
+          v.dialedRecently ? `${v.latestLatencyMs} ms` : "stale (last dial failed)"
+        ),
+        popupRow("Score", v.score.toFixed(2)),
+      ];
+      if (unknownGeo) {
+        rows.unshift(
+          popupRow(
+            "Geo",
+            "unknown — pinned to off-map anchor (check GEOIP_MMDB_PATH or DNS resolution)"
+          )
+        );
+      }
+      if (v.instanceCount && v.instanceCount > 1) {
+        rows.push(popupRow("Instances", `${v.instanceCount} (multi-IP — see side panel)`));
+      }
+      marker.bindPopup(popupSection("Orchestrator", rows.join("")));
+      if (onOrchestratorClick) {
+        marker.on("click", () => onOrchestratorClick!(v.orchAddr));
+      }
+      marker.addTo(orchestratorLayer);
+    }
+  }
 </script>
 
 <div

@@ -3,8 +3,8 @@ package triggers
 import (
 	"testing"
 
-	pb "frameworks/pkg/proto"
-	"frameworks/pkg/servicedefs"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 func TestLivepeerGatewayURLUsesPublicIngress(t *testing.T) {

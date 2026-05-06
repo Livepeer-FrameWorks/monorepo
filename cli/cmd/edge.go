@@ -30,13 +30,13 @@ import (
 	"frameworks/cli/pkg/mistdiag"
 	"frameworks/cli/pkg/provisioner"
 	fwssh "frameworks/cli/pkg/ssh"
-	"frameworks/pkg/clients/foghorn"
-	"frameworks/pkg/clients/navigator"
-	"frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/ctxkeys"
-	pkgdns "frameworks/pkg/dns"
-	infra "frameworks/pkg/models"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
+	infra "github.com/Livepeer-FrameWorks/monorepo/pkg/models"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -600,13 +600,12 @@ Multi-node manifest example:
 			foghornAddrExplicit := cmd.Flags().Changed("foghorn-addr")
 
 			// --register belongs to the manual/admin path. The token path
-			// already registers the node via Foghorn's PreRegisterEdge, and
-			// the user persona doesn't have Quartermaster reachability.
+			// already registers the node via Foghorn's PreRegisterEdge.
 			if registerNode && enrollmentToken != "" {
 				return fmt.Errorf("--register is for the manual provisioning path; the token path already registers the node via Foghorn")
 			}
-			if registerNode && cliCtx.Persona.IsUser() {
-				return fmt.Errorf("--register requires Quartermaster access; the user persona only has Bridge — use a platform or self-hosted context for manual node registration")
+			if registerNode && cliCtx.Persona != fwcfg.PersonaPlatform {
+				return fmt.Errorf("--register requires Quartermaster access; use a platform context for manual node registration")
 			}
 
 			// Single node mode - require ssh target or --local
@@ -970,8 +969,8 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 	if registerNode && enrollmentToken != "" {
 		return fmt.Errorf("register_qm is for the manual provisioning path; the token path already registers the node via Foghorn")
 	}
-	if registerNode && cliCtx.Persona.IsUser() {
-		return fmt.Errorf("register_qm requires Quartermaster access; the user persona only has Bridge — use a platform or self-hosted context for manual node registration")
+	if registerNode && cliCtx.Persona != fwcfg.PersonaPlatform {
+		return fmt.Errorf("register_qm requires Quartermaster access; use a platform context for manual node registration")
 	}
 
 	var preRegFoghornAddr string

@@ -4,10 +4,10 @@ import (
 	"context"
 	"time"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"frameworks/api_analytics_query/internal/handlers"
-	"frameworks/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 // Scheduler handles periodic tasks for billing and usage summarization

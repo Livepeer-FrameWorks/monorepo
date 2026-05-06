@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"frameworks/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 )
 
 type Config struct {

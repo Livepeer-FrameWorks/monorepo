@@ -5,10 +5,11 @@ package model
 import (
 	"bytes"
 	"fmt"
-	"frameworks/pkg/proto"
 	"io"
 	"strconv"
 	"time"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 type AbortVodUploadResult interface {
@@ -1241,6 +1242,21 @@ func (NotFoundError) IsSetPreferredClusterResult() {}
 func (NotFoundError) IsUnlinkWalletResult() {}
 
 func (NotFoundError) IsSendMessageResult() {}
+
+// Detail response: orchestrator identity + every known instance (with their
+// own price/capabilities/hardware) + every per-(gateway, instance) vantage.
+// Used by the federation map's side panel.
+type OrchestratorWithDetails struct {
+	Orchestrator *proto.Orchestrator           `json:"orchestrator"`
+	Instances    []*proto.OrchestratorInstance `json:"instances"`
+	Vantages     []*proto.OrchestratorVantage  `json:"vantages"`
+}
+
+// Pagination wrapper for orchestrator listing.
+type OrchestratorsConnection struct {
+	Nodes      []*proto.Orchestrator `json:"nodes"`
+	TotalCount int                   `json:"totalCount"`
+}
 
 type PageInfo struct {
 	StartCursor     *string `json:"startCursor,omitempty"`

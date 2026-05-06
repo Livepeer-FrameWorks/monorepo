@@ -11,11 +11,11 @@ import (
 	"frameworks/api_consultant/internal/chat"
 	"frameworks/api_consultant/internal/diagnostics"
 	"frameworks/api_consultant/internal/skipper"
-	"frameworks/pkg/clients/periscope"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/llm"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )

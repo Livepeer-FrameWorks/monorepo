@@ -13,12 +13,12 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
-	fhclient "frameworks/pkg/clients/foghorn"
-	"frameworks/pkg/config"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/globalid"
-	"frameworks/pkg/pagination"
-	pb "frameworks/pkg/proto"
+	fhclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // Infrastructure pagination constants

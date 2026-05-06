@@ -11,10 +11,10 @@ import (
 
 	"frameworks/cli/internal/controlplane"
 	"frameworks/cli/internal/ux"
-	"frameworks/pkg/clients/quartermaster"
-	pkgdns "frameworks/pkg/dns"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/spf13/cobra"
 )

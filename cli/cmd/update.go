@@ -8,7 +8,7 @@ import (
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/installer"
 	"frameworks/cli/pkg/selfupdate"
-	fwv "frameworks/pkg/version"
+	fwv "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/spf13/cobra"
 )

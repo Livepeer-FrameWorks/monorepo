@@ -4,17 +4,17 @@ import (
 	"fmt"
 	"time"
 
-	"frameworks/pkg/cache"
-	"frameworks/pkg/clients/commodore"
-	"frameworks/pkg/clients/deckhand"
-	"frameworks/pkg/clients/decklog"
-	"frameworks/pkg/clients/periscope"
-	"frameworks/pkg/clients/purser"
-	"frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/clients/signalman"
-	skipperclient "frameworks/pkg/clients/skipper"
-	"frameworks/pkg/config"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/deckhand"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/signalman"
+	skipperclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/skipper"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // ServiceClients holds all downstream service gRPC clients

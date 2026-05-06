@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"frameworks/api_consultant/internal/notify"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 type Recommendation struct {

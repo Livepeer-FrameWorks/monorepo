@@ -6,12 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/cache"
-	"frameworks/pkg/clients"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/grpcutil"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"

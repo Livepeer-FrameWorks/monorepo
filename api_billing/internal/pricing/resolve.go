@@ -12,7 +12,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"frameworks/api_billing/internal/rating"
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // QuartermasterClient is the subset of the Quartermaster gRPC client the

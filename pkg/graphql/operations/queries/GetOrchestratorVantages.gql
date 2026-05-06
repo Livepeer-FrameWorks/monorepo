@@ -1,0 +1,8 @@
+# All per-vantage observations for the cluster owner — used by the
+# federation map's per-vantage pin toggle to scatter every observed
+# (gateway, IP) point. Filter by `orchAddr` from the side panel.
+query GetOrchestratorVantages($orchAddr: String) {
+  orchestratorVantages(orchAddr: $orchAddr) {
+    ...OrchestratorVantageFields
+  }
+}

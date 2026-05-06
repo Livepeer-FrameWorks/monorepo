@@ -8,8 +8,8 @@ import (
 	"frameworks/api_gateway/graph/model"
 	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"frameworks/api_gateway/internal/middleware"
-	"frameworks/pkg/ctxkeys"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // DoLogin handles user authentication business logic

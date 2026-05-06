@@ -3,7 +3,7 @@ package x402
 import (
 	"context"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 type MockPurserClient struct {

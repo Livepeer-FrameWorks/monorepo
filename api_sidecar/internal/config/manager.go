@@ -17,9 +17,9 @@ import (
 	"sync"
 	"time"
 
-	"frameworks/pkg/logging"
-	"frameworks/pkg/mist"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // Manager maintains desired vs current MistServer configuration and reconciles them via the Mist API.

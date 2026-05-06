@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // setMockValidator sets the package-level validateBootstrapTokenFn for tests

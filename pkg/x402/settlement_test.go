@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"frameworks/pkg/globalid"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/google/uuid"
 )

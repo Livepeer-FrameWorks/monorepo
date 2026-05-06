@@ -6,8 +6,8 @@ import (
 	"strings"
 	"sync"
 
-	pb "frameworks/pkg/proto"
-	"frameworks/pkg/x402"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 )
 
 // ParseX402PaymentHeader decodes and parses an X-PAYMENT header value.

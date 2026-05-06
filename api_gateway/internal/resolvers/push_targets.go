@@ -8,8 +8,8 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
-	"frameworks/pkg/globalid"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // DoGetStreamPushTargets returns push targets for a stream (Stream.pushTargets field resolver).

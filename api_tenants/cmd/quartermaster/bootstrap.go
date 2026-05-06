@@ -10,10 +10,10 @@ import (
 	"os"
 
 	"frameworks/api_tenants/internal/bootstrap"
-	"frameworks/pkg/config"
-	"frameworks/pkg/database"
-	"frameworks/pkg/geoip"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"gopkg.in/yaml.v3"
 )

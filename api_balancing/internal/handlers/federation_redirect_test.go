@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"frameworks/api_balancing/internal/federation"
-	"frameworks/pkg/clients/foghorn"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"

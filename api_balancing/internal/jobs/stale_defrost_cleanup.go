@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // StaleDefrostCleanupJob resets artifacts stuck in defrosting state.

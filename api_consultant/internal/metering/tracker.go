@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"frameworks/pkg/logging"
-	"frameworks/pkg/models"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 )
 
 type contextKey struct{}

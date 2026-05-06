@@ -11,8 +11,8 @@ import (
 
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
-	"frameworks/pkg/mesh/wgpolicy"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mesh/wgpolicy"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/spf13/cobra"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"

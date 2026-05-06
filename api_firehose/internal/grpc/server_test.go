@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"frameworks/pkg/kafka"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -1069,6 +1069,108 @@ func TestSendServiceEventNilTimestamp(t *testing.T) {
 
 	if payload.Timestamp.Before(before) || payload.Timestamp.After(after) {
 		t.Fatalf("expected timestamp between %s and %s, got %s", before, after, payload.Timestamp)
+	}
+}
+
+func TestSendGatewayTelemetryUsesClusterOwnerForDiscovery(t *testing.T) {
+	producer := &fakeProducer{}
+	server := newTestServer(producer)
+	clusterOwnerTenantID := "2f64c7d0-8c66-4b3b-88c4-421f8a3027f2"
+
+	_, err := server.SendGatewayTelemetry(context.Background(), &pb.GatewayTelemetryEvent{
+		GatewayId:            "gw-eu-1",
+		GatewayRegion:        "eu",
+		ClusterId:            "cluster-eu-1",
+		ClusterOwnerTenantId: clusterOwnerTenantID,
+		Payload: &pb.GatewayTelemetryEvent_Discovery{
+			Discovery: &pb.OrchestratorDiscoveryObserved{
+				OrchAddr:  "0xabc",
+				OrchUrl:   "https://orch.example",
+				Reachable: true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(producer.publishCalls) != 1 {
+		t.Fatalf("expected 1 publish, got %d", len(producer.publishCalls))
+	}
+	event := producer.publishCalls[0]
+	if event.EventType != "orchestrator_discovery_observed" {
+		t.Fatalf("expected discovery event, got %s", event.EventType)
+	}
+	if event.TenantID != clusterOwnerTenantID {
+		t.Fatalf("expected cluster owner tenant %s, got %s", clusterOwnerTenantID, event.TenantID)
+	}
+	if got := event.Data["cluster_owner_tenant_id"]; got != clusterOwnerTenantID {
+		t.Fatalf("expected cluster owner in data, got %v", got)
+	}
+}
+
+func TestSendGatewayTelemetryRejectsOutcomeMissingStreamTenant(t *testing.T) {
+	producer := &fakeProducer{}
+	server := newTestServer(producer)
+
+	_, err := server.SendGatewayTelemetry(context.Background(), &pb.GatewayTelemetryEvent{
+		GatewayId:            "gw-eu-1",
+		GatewayRegion:        "eu",
+		ClusterId:            "cluster-eu-1",
+		ClusterOwnerTenantId: "2f64c7d0-8c66-4b3b-88c4-421f8a3027f2",
+		Payload: &pb.GatewayTelemetryEvent_Transcode{
+			Transcode: &pb.OrchestratorTranscodeOutcome{
+				OrchAddr: "0xabc",
+				OrchUrl:  "https://orch.example",
+				Success:  true,
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected missing stream tenant to be rejected")
+	}
+	if len(producer.publishCalls) != 0 {
+		t.Fatalf("expected no publishes, got %d", len(producer.publishCalls))
+	}
+}
+
+func TestSendGatewayTelemetryUsesStreamTenantForOutcome(t *testing.T) {
+	producer := &fakeProducer{}
+	server := newTestServer(producer)
+	clusterOwnerTenantID := "2f64c7d0-8c66-4b3b-88c4-421f8a3027f2"
+	streamTenantID := "eaa0a2d3-7b64-4df2-9c36-5c5812f6d908"
+
+	_, err := server.SendGatewayTelemetry(context.Background(), &pb.GatewayTelemetryEvent{
+		GatewayId:            "gw-eu-1",
+		GatewayRegion:        "eu",
+		ClusterId:            "cluster-eu-1",
+		ClusterOwnerTenantId: clusterOwnerTenantID,
+		StreamTenantId:       streamTenantID,
+		Payload: &pb.GatewayTelemetryEvent_Ai{
+			Ai: &pb.OrchestratorAIOutcome{
+				OrchAddr: "0xabc",
+				OrchUrl:  "https://orch.example",
+				Success:  true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(producer.publishCalls) != 1 {
+		t.Fatalf("expected 1 publish, got %d", len(producer.publishCalls))
+	}
+	event := producer.publishCalls[0]
+	if event.EventType != "orchestrator_ai_outcome" {
+		t.Fatalf("expected AI outcome event, got %s", event.EventType)
+	}
+	if event.TenantID != streamTenantID {
+		t.Fatalf("expected stream tenant %s, got %s", streamTenantID, event.TenantID)
+	}
+	if got := event.Data["cluster_owner_tenant_id"]; got != clusterOwnerTenantID {
+		t.Fatalf("expected cluster owner in data, got %v", got)
+	}
+	if got := event.Data["stream_tenant_id"]; got != streamTenantID {
+		t.Fatalf("expected stream tenant in data, got %v", got)
 	}
 }
 

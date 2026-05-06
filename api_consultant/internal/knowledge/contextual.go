@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/llm"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 )
 
 const contextualTimeout = 60 * time.Second

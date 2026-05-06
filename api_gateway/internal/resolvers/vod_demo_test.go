@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"frameworks/pkg/ctxkeys"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestDemoVodUploadStatusDoesNotRequireTenantContext(t *testing.T) {

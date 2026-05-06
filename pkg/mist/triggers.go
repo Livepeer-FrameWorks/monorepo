@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // TriggerType represents the type of MistServer trigger

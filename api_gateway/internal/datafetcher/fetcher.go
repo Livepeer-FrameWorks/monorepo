@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"frameworks/api_gateway/internal/loaders"
-	"frameworks/pkg/cache"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // Service identifies a downstream dependency.

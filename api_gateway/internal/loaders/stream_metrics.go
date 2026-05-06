@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"frameworks/pkg/clients/periscope"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // StreamMetricsLoader loads stream metrics with request-scoped caching.

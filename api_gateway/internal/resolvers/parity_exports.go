@@ -2,7 +2,7 @@ package resolvers
 
 import (
 	"frameworks/api_gateway/graph/model"
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // ProtoToVodAssetForParity exposes VOD proto mapping for cross-package parity tests.

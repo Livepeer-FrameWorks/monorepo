@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"frameworks/api_consultant/internal/skipper"
-	"frameworks/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 var ErrConversationNotFound = errors.New("conversation not found")

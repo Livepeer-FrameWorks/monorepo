@@ -3,7 +3,7 @@ package foghorn
 import (
 	"testing"
 
-	"frameworks/pkg/grpcutil"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 )
 
 func TestAddrIsFQDN(t *testing.T) {

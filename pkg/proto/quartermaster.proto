@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package quartermaster;
 
-option go_package = "frameworks/pkg/proto";
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";

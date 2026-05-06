@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"frameworks/api_realtime/internal/metrics"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

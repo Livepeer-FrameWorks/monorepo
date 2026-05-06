@@ -4722,7 +4722,7 @@ const file_shared_proto_rawDesc = "" +
 	"\x10VOD_STATUS_READY\x10\x03\x12\x15\n" +
 	"\x11VOD_STATUS_FAILED\x10\x04\x12\x16\n" +
 	"\x12VOD_STATUS_DELETED\x10\x05\x12\x16\n" +
-	"\x12VOD_STATUS_EXPIRED\x10\x06B\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x12VOD_STATUS_EXPIRED\x10\x06B3Z1github.com/Livepeer-FrameWorks/monorepo/pkg/protob\x06proto3"
 
 var (
 	file_shared_proto_rawDescOnce sync.Once

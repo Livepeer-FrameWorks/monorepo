@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	foghornclient "frameworks/pkg/clients/foghorn"
-	"frameworks/pkg/ctxkeys"
-	pb "frameworks/pkg/proto"
+	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/sirupsen/logrus"

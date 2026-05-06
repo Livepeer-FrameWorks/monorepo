@@ -1001,7 +1001,7 @@ const file_foghorn_proto_rawDesc = "" +
 	"\rGetNodeHealth\x12\x1d.foghorn.GetNodeHealthRequest\x1a\x1e.foghorn.GetNodeHealthResponse2\xe9\x01\n" +
 	"\x14TenantControlService\x12i\n" +
 	"\x16TerminateTenantStreams\x12&.foghorn.TerminateTenantStreamsRequest\x1a'.foghorn.TerminateTenantStreamsResponse\x12f\n" +
-	"\x15InvalidateTenantCache\x12%.foghorn.InvalidateTenantCacheRequest\x1a&.foghorn.InvalidateTenantCacheResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x15InvalidateTenantCache\x12%.foghorn.InvalidateTenantCacheRequest\x1a&.foghorn.InvalidateTenantCacheResponseB3Z1github.com/Livepeer-FrameWorks/monorepo/pkg/protob\x06proto3"
 
 var (
 	file_foghorn_proto_rawDescOnce sync.Once

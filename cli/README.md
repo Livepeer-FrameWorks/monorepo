@@ -17,7 +17,7 @@ Unified operator tool for managing FrameWorks contexts, credentials, edge nodes,
 `frameworks setup` saves a persona and an access mode in each context:
 
 - `platform` is for operators who manage the full FrameWorks platform. Platform setup stores Bridge as the public API URL, stores GitOps manifest defaults, and defaults control-plane gRPC access to `ssh`. Commands such as `admin`, `services`, `dns`, and live mesh inspection resolve core service endpoints from the manifest and open SSH local-forwards to the hosts that run those services.
-- `selfhosted` is for tenant operators who manage their own cluster footprint, usually edge-only. It stays on local/saved endpoints by default, uses tenant JWT auth for owned-cluster lifecycle commands, and does not imply access to platform core services.
+- `selfhosted` is for tenant operators who run BYO edge nodes through Bridge. It does not imply direct access to Quartermaster, Foghorn, or other platform core services.
 - `user` is for hosted account/API usage: login, insights, Skipper, and account-facing workflows through public Bridge. This is the persona for someone who is not running their own edge node.
 
 Older configs that still say `persona: edge` are normalized to `user`; `edge` is not a user-facing persona.

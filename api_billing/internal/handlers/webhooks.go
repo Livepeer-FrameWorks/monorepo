@@ -19,9 +19,9 @@ import (
 
 	billingmollie "frameworks/api_billing/internal/mollie"
 	"frameworks/api_billing/internal/operator"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/models"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 var errMollieResourceNotFound = errors.New("mollie resource not found")

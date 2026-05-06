@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"frameworks/cli/pkg/inventory"
-	"frameworks/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // resolveDeployName returns the deploy slug for a canonical service ID.

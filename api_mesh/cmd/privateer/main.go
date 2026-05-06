@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"frameworks/api_mesh/internal/agent"
-	"frameworks/pkg/config"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/monitoring"
-	"frameworks/pkg/server"
-	"frameworks/pkg/version"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 )
 
 func main() {

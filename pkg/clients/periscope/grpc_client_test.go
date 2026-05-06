@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"frameworks/pkg/pagination"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 )
 
 func TestBuildTimeRange(t *testing.T) {

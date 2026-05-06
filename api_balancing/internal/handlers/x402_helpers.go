@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"frameworks/api_balancing/internal/triggers"
-	"frameworks/pkg/logging"
-	pkgx402 "frameworks/pkg/x402"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pkgx402 "github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 )
 
 type x402Decision struct {

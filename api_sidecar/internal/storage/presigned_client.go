@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // PresignedClient handles uploads/downloads using presigned URLs.

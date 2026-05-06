@@ -5,9 +5,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"frameworks/pkg/logging"
-	"frameworks/pkg/mist"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // fakeMistClient implements DVRMistClient for testing

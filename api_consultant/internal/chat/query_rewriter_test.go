@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"frameworks/pkg/llm"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 )
 
 type fakeRewriterLLM struct {

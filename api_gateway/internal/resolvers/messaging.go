@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"frameworks/api_gateway/graph/model"
-	"frameworks/pkg/globalid"
-	"frameworks/pkg/middleware"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

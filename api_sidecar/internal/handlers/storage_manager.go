@@ -19,8 +19,8 @@ import (
 
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/storage"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // PresignedTransfer abstracts presigned-URL upload/download so tests can

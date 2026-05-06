@@ -3,8 +3,8 @@ module frameworks/api_control
 go 1.26.2
 
 require (
-	frameworks/pkg v0.0.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.12.3
 	github.com/prometheus/client_golang v1.23.2
@@ -14,7 +14,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-replace frameworks/pkg => ../pkg
+replace github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg
 
 require (
 	github.com/ClickHouse/ch-go v0.71.0 // indirect

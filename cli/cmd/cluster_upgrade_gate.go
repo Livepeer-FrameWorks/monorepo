@@ -10,8 +10,8 @@ import (
 	"frameworks/cli/pkg/preflight"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
-	"frameworks/pkg/datamigrate"
-	fwv "frameworks/pkg/version"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
+	fwv "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/spf13/cobra"
 )

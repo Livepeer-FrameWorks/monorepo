@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"frameworks/api_ticketing/internal/chatwoot"
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"

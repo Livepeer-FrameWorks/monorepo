@@ -11,10 +11,10 @@ import (
 	"frameworks/api_consultant/internal/chat"
 	"frameworks/api_consultant/internal/knowledge"
 	"frameworks/api_consultant/internal/skipper"
-	"frameworks/pkg/llm"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/search"
-	"frameworks/pkg/version"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/search"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )

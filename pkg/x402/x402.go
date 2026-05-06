@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/grpc/metadata"
 )

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // Client provides GraphQL schema introspection with caching.

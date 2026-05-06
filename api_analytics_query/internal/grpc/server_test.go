@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"frameworks/pkg/logging"
-	"frameworks/pkg/pagination"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
-	"frameworks/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 
 	"github.com/DATA-DOG/go-sqlmock"
 

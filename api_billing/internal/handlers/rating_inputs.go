@@ -11,7 +11,7 @@ import (
 	"frameworks/api_billing/internal/billing"
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
-	"frameworks/pkg/models"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 )
 
 // buildRatingInputFromSummary turns a single UsageSummary into a rating.Input.

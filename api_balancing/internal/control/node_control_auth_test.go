@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"frameworks/pkg/auth"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"

@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"frameworks/pkg/configgen"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/configgen"
 )
 
 func main() {

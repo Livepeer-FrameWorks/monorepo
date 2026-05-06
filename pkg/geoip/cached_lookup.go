@@ -3,7 +3,7 @@ package geoip
 import (
 	"context"
 
-	"frameworks/pkg/cache"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 )
 
 // LookupCached performs a GeoIP lookup using an external cache when provided.

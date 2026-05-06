@@ -14,7 +14,7 @@ import (
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
-	"frameworks/pkg/datamigrate"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 )
 
 // ServiceRoleConfig customizes the generic service-role provisioner for a

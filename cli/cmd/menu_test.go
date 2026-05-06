@@ -51,20 +51,27 @@ func TestMenuSectionsForPersona_platformRecommendsClusterAndControlPlane(t *test
 	}
 }
 
-func TestMenuSectionsForPersona_neverHidesSections(t *testing.T) {
+func TestMenuSectionsForPersona_filtersPlatformOnlySections(t *testing.T) {
 	t.Parallel()
-	for _, p := range []fwcfg.Persona{fwcfg.PersonaPlatform, fwcfg.PersonaSelfHosted, fwcfg.PersonaUser, fwcfg.PersonaEdge, ""} {
-		sections := menuSectionsForPersona(p)
-		if len(sections) != 7 {
-			t.Errorf("persona %q: expected 7 sections, got %d", p, len(sections))
+
+	cases := []struct {
+		persona fwcfg.Persona
+		want    []string
+	}{
+		{fwcfg.PersonaUser, []string{"account", "settings"}},
+		{fwcfg.PersonaEdge, []string{"account", "settings"}},
+		{fwcfg.PersonaSelfHosted, []string{"edge", "account", "settings"}},
+		{fwcfg.PersonaPlatform, []string{"cluster", "control-plane", "services", "dns-mesh", "edge", "account", "settings"}},
+		{"", []string{"account", "settings"}},
+	}
+	for _, c := range cases {
+		sections := menuSectionsForPersona(c.persona)
+		if len(sections) != len(c.want) {
+			t.Fatalf("persona %q: expected %d sections, got %d", c.persona, len(c.want), len(sections))
 		}
-		keys := map[string]bool{}
-		for _, s := range sections {
-			keys[s.key] = true
-		}
-		for _, want := range []string{"account", "edge", "services", "control-plane", "cluster", "dns-mesh", "settings"} {
-			if !keys[want] {
-				t.Errorf("persona %q: missing section %q", p, want)
+		for i, section := range sections {
+			if section.key != c.want[i] {
+				t.Errorf("persona %q section %d = %q, want %q", c.persona, i, section.key, c.want[i])
 			}
 		}
 	}
@@ -78,7 +85,7 @@ func TestSetupNextSteps_byPersona(t *testing.T) {
 	}{
 		{fwcfg.PersonaUser, "frameworks login"},
 		{fwcfg.PersonaPlatform, "frameworks context check"},
-		{fwcfg.PersonaSelfHosted, "frameworks edge deploy --ssh <user>@<host>"},
+		{fwcfg.PersonaSelfHosted, "frameworks login"},
 	}
 	for _, c := range cases {
 		steps := setupNextSteps(c.persona)

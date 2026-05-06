@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // TestFilterRuntimeEnrolled_SplitsPendingAndInProgress covers the

@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"frameworks/pkg/geoip"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 )
 
 type DecklogEvent struct {

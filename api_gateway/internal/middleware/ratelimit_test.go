@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"reflect"
 )
 

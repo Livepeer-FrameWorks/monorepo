@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestPerStreamAnalyzerNil(t *testing.T) {

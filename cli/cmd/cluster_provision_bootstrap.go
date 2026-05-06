@@ -5,14 +5,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"frameworks/cli/pkg/bootstrap"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/remoteaccess"
 	"frameworks/cli/pkg/ssh"
-	"frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -196,6 +197,59 @@ func resolveSystemTenantIDViaQM(ctx context.Context, manifest *inventory.Manifes
 		return "", fmt.Errorf("system tenant alias %q: empty mapping in ResolveTenantAliases response", bootstrap.SystemTenantAlias)
 	}
 	return id, nil
+}
+
+// resolveClusterOwnerTenantIDs resolves every distinct cluster.owner_tenant
+// alias from the manifest (plus the system tenant) into UUIDs via QM and
+// returns the mapping alias→UUID. Empty/blank aliases are normalised to
+// "frameworks" (the system tenant). The result is stashed in runtimeData so
+// per-cluster env injection can look up the right tenant for telemetry
+// attribution without round-tripping QM each time.
+func resolveClusterOwnerTenantIDs(ctx context.Context, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) (map[string]string, error) {
+	aliasSet := map[string]struct{}{
+		bootstrap.SystemTenantAlias: {},
+	}
+	for _, cluster := range manifest.Clusters {
+		alias := strings.TrimSpace(cluster.OwnerTenant)
+		if alias == "" {
+			alias = bootstrap.SystemTenantAlias
+		}
+		aliasSet[alias] = struct{}{}
+	}
+	aliases := make([]string, 0, len(aliasSet))
+	for a := range aliasSet {
+		aliases = append(aliases, a)
+	}
+
+	serviceToken, grpcAddr, serverName, insecure, err := quartermasterDialEndpoint(ctx, manifest, runtimeData, sess)
+	if err != nil {
+		return nil, err
+	}
+	clientConfig := quartermaster.GRPCConfig{
+		GRPCAddr:      grpcAddr,
+		Timeout:       quartermasterRPCTimeout,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: insecure,
+		ServerName:    serverName,
+	}
+	if pki, ok := runtimeData["internal_pki_bootstrap"].(*internalPKIBootstrap); ok && pki != nil {
+		clientConfig.CACertPEM = pki.CABundlePEM
+	}
+	client, err := quartermaster.NewGRPCClient(clientConfig)
+	if err != nil {
+		return nil, fmt.Errorf("connect Quartermaster gRPC: %w", err)
+	}
+	defer client.Close()
+
+	resp, err := client.ResolveTenantAliases(ctx, aliases)
+	if err != nil {
+		return nil, fmt.Errorf("ResolveTenantAliases: %w", err)
+	}
+	if len(resp.GetUnknown()) > 0 {
+		return nil, fmt.Errorf("cluster owner aliases %v not in QM's bootstrap_tenant_aliases — register them via cluster owner setup before provisioning", resp.GetUnknown())
+	}
+	return resp.GetMapping(), nil
 }
 
 // commodoreBootstrapExtraArgs threads the --bootstrap-reset-credentials flag

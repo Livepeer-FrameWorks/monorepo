@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"frameworks/cli/internal/releases"
-	dbsql "frameworks/pkg/database/sql"
+	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
 // Migration represents a single versioned SQL migration file. Consumed by

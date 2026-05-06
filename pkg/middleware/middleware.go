@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // LoggingMiddleware provides structured request logging

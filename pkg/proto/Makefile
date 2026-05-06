@@ -34,4 +34,4 @@ install-tools:
 # Generate proto and copy to legacy location for backward compatibility
 generate-all: proto
 	@echo "Proto files generated in pkg/proto/"
-	@echo "All services should import from: frameworks/pkg/proto"
+	@echo "All services should import from: github.com/Livepeer-FrameWorks/monorepo/pkg/proto"

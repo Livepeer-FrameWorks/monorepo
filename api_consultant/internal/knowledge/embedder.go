@@ -10,7 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"frameworks/pkg/llm"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 )
 
 // ErrNoChunks is returned when content extraction produces text that is

@@ -5,7 +5,7 @@ import (
 
 	billingpkg "frameworks/api_billing/internal/billing"
 	"frameworks/api_billing/internal/rating"
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // buildRatingInputForUsage constructs a rating.Input for GetTenantUsage.

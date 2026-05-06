@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 )
 
 // Config stores environment configuration for Skipper.

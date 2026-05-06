@@ -1,8 +1,8 @@
 package control
 
 import (
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // SetupTestRegistry creates a temporary connection registry with an optional

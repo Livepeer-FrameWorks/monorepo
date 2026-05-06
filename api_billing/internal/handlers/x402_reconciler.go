@@ -17,9 +17,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"frameworks/pkg/billing"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // X402Reconciler monitors pending x402 settlements and confirms or fails them

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"frameworks/api_dns/internal/logic"
-	"frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/sirupsen/logrus"
 )

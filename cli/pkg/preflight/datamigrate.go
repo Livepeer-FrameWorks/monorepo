@@ -16,7 +16,7 @@ import (
 	"frameworks/cli/pkg/exec"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
-	"frameworks/pkg/datamigrate"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 )
 
 // CatalogRequirements translates every required data migration declared by

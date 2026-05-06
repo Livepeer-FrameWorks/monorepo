@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	dbsql "frameworks/pkg/database/sql"
+	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
 type SchemaDatabase struct {

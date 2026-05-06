@@ -3,8 +3,8 @@ package notify
 import (
 	"sync"
 
-	"frameworks/pkg/logging"
-	"frameworks/pkg/version"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )

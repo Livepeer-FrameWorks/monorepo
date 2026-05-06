@@ -6,8 +6,8 @@ import (
 	"errors"
 	"time"
 
-	"frameworks/pkg/billing"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 const suspensionThresholdCents int64 = -1000

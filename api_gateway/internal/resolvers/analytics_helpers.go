@@ -3,7 +3,7 @@ package resolvers
 import (
 	"fmt"
 
-	"frameworks/pkg/globalid"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 
 	"github.com/google/uuid"
 )

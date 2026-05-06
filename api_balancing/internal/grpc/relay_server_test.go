@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"frameworks/api_balancing/internal/control"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

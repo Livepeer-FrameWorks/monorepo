@@ -1,6 +1,6 @@
 package wireguard
 
-import "frameworks/pkg/mesh/wgpolicy"
+import "github.com/Livepeer-FrameWorks/monorepo/pkg/mesh/wgpolicy"
 
 // ValidateForApply enforces FrameWorks-specific mesh policy on a Config
 // that is already type-valid. The rules live in pkg/mesh/wgpolicy so the

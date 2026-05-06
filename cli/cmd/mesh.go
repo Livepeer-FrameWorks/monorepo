@@ -10,8 +10,8 @@ import (
 
 	"frameworks/cli/internal/controlplane"
 	"frameworks/cli/internal/ux"
-	"frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/spf13/cobra"
 )

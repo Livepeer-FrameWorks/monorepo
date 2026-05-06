@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"frameworks/api_sidecar/internal/storage"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/grpc/metadata"

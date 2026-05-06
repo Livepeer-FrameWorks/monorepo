@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/sirupsen/logrus"
 )

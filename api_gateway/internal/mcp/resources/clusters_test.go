@@ -3,7 +3,7 @@ package resources
 import (
 	"testing"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestMarketplaceEntryToDetail_FullMapping(t *testing.T) {

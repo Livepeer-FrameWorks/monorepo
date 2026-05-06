@@ -1,6 +1,11 @@
 package cmd
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	fwcfg "frameworks/cli/internal/config"
+)
 
 func TestClusterNodesAddDefaultsToNativeStable(t *testing.T) {
 	t.Parallel()
@@ -19,5 +24,17 @@ func TestClusterNodesAddDefaultsToNativeStable(t *testing.T) {
 	}
 	if version.DefValue != "stable" {
 		t.Fatalf("version default = %q, want stable", version.DefValue)
+	}
+}
+
+func TestRequireClusterLifecycleContextRejectsSelfHosted(t *testing.T) {
+	t.Parallel()
+
+	err := requireClusterLifecycleContext(fwcfg.Context{Persona: fwcfg.PersonaSelfHosted})
+	if err == nil {
+		t.Fatal("expected selfhosted persona to be rejected")
+	}
+	if !strings.Contains(err.Error(), "edge deploy") {
+		t.Fatalf("expected Bridge edge deploy guidance, got %v", err)
 	}
 }

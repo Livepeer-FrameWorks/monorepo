@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"

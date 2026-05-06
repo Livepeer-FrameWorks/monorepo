@@ -1,0 +1,18 @@
+fragment OrchestratorVantageFields on OrchestratorVantage {
+  __typename
+  tenantId
+  gatewayId
+  gatewayRegion
+  orchAddr
+  resolvedIp
+  latitude
+  longitude
+  city
+  countryCode
+  geoSource
+  geoResolvedAt
+  latestLatencyMs
+  score
+  dialedRecently
+  lastSeen
+}

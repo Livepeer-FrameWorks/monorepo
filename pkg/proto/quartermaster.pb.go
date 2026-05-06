@@ -13342,7 +13342,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x0fUpsertTLSBundle\x12%.quartermaster.UpsertTLSBundleRequest\x1a .quartermaster.TLSBundleResponse\x12]\n" +
 	"\x0eListTLSBundles\x12$.quartermaster.ListTLSBundlesRequest\x1a%.quartermaster.ListTLSBundlesResponse\x12`\n" +
 	"\x11UpsertIngressSite\x12'.quartermaster.UpsertIngressSiteRequest\x1a\".quartermaster.IngressSiteResponse\x12c\n" +
-	"\x10ListIngressSites\x12&.quartermaster.ListIngressSitesRequest\x1a'.quartermaster.ListIngressSitesResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x10ListIngressSites\x12&.quartermaster.ListIngressSitesRequest\x1a'.quartermaster.ListIngressSitesResponseB3Z1github.com/Livepeer-FrameWorks/monorepo/pkg/protob\x06proto3"
 
 var (
 	file_quartermaster_proto_rawDescOnce sync.Once

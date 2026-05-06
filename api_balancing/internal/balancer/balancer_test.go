@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"frameworks/api_balancing/internal/state"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 func seedNode(sm *state.StreamStateManager, nodeID string, capEdge bool, roles []string) {

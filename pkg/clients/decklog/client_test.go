@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -183,6 +183,10 @@ func (f *fakeDecklogServiceClient) SendEvent(_ context.Context, in *pb.MistTrigg
 }
 
 func (f *fakeDecklogServiceClient) SendServiceEvent(_ context.Context, _ *pb.ServiceEvent, _ ...grpc.CallOption) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, nil
+}
+
+func (f *fakeDecklogServiceClient) SendGatewayTelemetry(_ context.Context, _ *pb.GatewayTelemetryEvent, _ ...grpc.CallOption) (*emptypb.Empty, error) {
 	return &emptypb.Empty{}, nil
 }
 

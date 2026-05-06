@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"google.golang.org/grpc/connectivity"
 )

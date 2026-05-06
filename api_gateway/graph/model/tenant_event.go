@@ -3,7 +3,7 @@ package model
 import (
 	"time"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // TenantEvent is the unified firehose event type for live subscriptions.

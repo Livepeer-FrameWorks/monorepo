@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/llm"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 )
 
 const hydeTimeout = 15 * time.Second

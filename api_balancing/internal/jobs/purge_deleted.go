@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/artifacts"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // PurgeDeletedJob hard-deletes old soft-deleted artifact records and the

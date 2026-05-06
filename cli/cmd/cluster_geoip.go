@@ -40,7 +40,9 @@ func newClusterSyncGeoIPCmd() *cobra.Command {
 		Use:   "sync-geoip",
 		Short: "Provision GeoIP MMDB files to cluster services",
 		Long: `Download and distribute MaxMind GeoLite2-City MMDB files to services
-that need geolocation data (Foghorn and Quartermaster).
+that need geolocation data (Foghorn, Quartermaster, and the Livepeer gateway —
+the gateway uses GeoIP to attach lat/lng to discovered orchestrators at the
+gateway's network vantage).
 
 Sources:
   maxmind  - Download from MaxMind. Requires MAXMIND_LICENSE_KEY in the
@@ -63,7 +65,7 @@ Sources:
 	cmd.Flags().StringVar(&source, "source", "maxmind", "Source: maxmind or file")
 	cmd.Flags().StringVar(&filePath, "file", "", "Local .mmdb file path (when source=file)")
 	cmd.Flags().StringVar(&remotePath, "remote-path", "/var/lib/GeoIP/GeoLite2-City.mmdb", "Target path on hosts")
-	cmd.Flags().StringSliceVar(&services, "services", []string{"foghorn", "quartermaster"}, "Services to target")
+	cmd.Flags().StringSliceVar(&services, "services", []string{"foghorn", "quartermaster", "livepeer-gateway"}, "Services to target")
 	cmd.Flags().BoolVar(&restart, "restart", false, "Restart target services after upload")
 
 	return cmd

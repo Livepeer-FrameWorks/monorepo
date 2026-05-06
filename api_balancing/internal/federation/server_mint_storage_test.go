@@ -10,8 +10,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"frameworks/api_balancing/internal/state"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // fakeMintS3Client captures presigned PUT calls so the tests can assert

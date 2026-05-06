@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	fwv "frameworks/pkg/version"
+	fwv "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/spf13/cobra"
 )
 

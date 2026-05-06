@@ -1,7 +1,7 @@
 package model
 
 import (
-	"frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // GeographicDistribution is a manually-defined type for geographic analytics.

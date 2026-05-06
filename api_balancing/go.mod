@@ -3,8 +3,8 @@ module frameworks/api_balancing
 go 1.26.2
 
 require (
-	frameworks/pkg v0.0.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/alicebob/miniredis/v2 v2.37.0
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.15
@@ -23,7 +23,7 @@ require (
 	google.golang.org/protobuf v1.36.11
 )
 
-replace frameworks/pkg => ../pkg
+replace github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg
 
 require (
 	github.com/ClickHouse/ch-go v0.71.0 // indirect

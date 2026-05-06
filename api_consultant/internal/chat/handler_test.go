@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"frameworks/api_consultant/internal/skipper"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/gin-gonic/gin"

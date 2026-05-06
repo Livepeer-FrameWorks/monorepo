@@ -6,8 +6,8 @@ import (
 	"sync"
 
 	"frameworks/api_gateway/internal/clients"
-	"frameworks/pkg/ctxkeys"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // Loaders bundles per-request loaders. These provide simple de-dup and caching.

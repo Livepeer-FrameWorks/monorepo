@@ -14,11 +14,11 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/billing"
-	decklogclient "frameworks/pkg/clients/decklog"
-	"frameworks/pkg/config"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/shopspring/decimal"
 

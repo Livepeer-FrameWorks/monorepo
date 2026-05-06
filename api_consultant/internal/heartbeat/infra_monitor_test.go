@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"frameworks/api_consultant/internal/diagnostics"
-	"frameworks/pkg/clients/periscope"
-	"frameworks/pkg/email"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )

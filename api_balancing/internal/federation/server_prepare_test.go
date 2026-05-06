@@ -12,8 +12,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"frameworks/api_balancing/internal/storage"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 type fakeS3Client struct {

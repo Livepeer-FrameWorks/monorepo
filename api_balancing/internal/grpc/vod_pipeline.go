@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/jobs"
-	"frameworks/pkg/clients/decklog"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"

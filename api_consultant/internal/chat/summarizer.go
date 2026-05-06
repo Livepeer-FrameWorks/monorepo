@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"frameworks/api_consultant/internal/metering"
-	"frameworks/pkg/llm"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 )
 
 const (

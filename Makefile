@@ -19,11 +19,11 @@ component_version = $(if $(wildcard $(1)/VERSION),$(shell tr -d '\n' < $(1)/VERS
 # component_ldflags(binary_name, source_dir) returns the -ldflags block that
 # injects platform + per-component version fields into a go build.
 define component_ldflags
--ldflags "-X frameworks/pkg/version.Version=$(VERSION) \
-          -X frameworks/pkg/version.GitCommit=$(GIT_COMMIT) \
-          -X frameworks/pkg/version.BuildDate=$(BUILD_DATE) \
-          -X frameworks/pkg/version.ComponentName=$(1) \
-          -X frameworks/pkg/version.ComponentVersion=$(call component_version,$(2))"
+-ldflags "-X github.com/Livepeer-FrameWorks/monorepo/pkg/version.Version=$(VERSION) \
+          -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.GitCommit=$(GIT_COMMIT) \
+          -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.BuildDate=$(BUILD_DATE) \
+          -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentName=$(1) \
+          -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentVersion=$(call component_version,$(2))"
 endef
 
 # component_build_args(binary_name, source_dir) returns the docker build-args

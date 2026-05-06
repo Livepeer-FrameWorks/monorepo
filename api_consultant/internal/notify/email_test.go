@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"frameworks/pkg/email"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 type smtpCapture struct {

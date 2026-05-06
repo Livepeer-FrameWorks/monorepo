@@ -9,9 +9,9 @@ import (
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/api_gateway/internal/resolvers"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/logging"
-	x402 "frameworks/pkg/x402"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	x402 "github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )

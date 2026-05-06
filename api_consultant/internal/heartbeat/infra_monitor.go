@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"frameworks/api_consultant/internal/diagnostics"
-	"frameworks/pkg/clients/periscope"
-	"frameworks/pkg/email"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 const (

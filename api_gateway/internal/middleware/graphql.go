@@ -8,8 +8,8 @@ import (
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/loaders"
-	"frameworks/pkg/auth"
-	"frameworks/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 
 	"github.com/gin-gonic/gin"
 )

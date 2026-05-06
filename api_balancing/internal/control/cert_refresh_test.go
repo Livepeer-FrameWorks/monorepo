@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
-	navclient "frameworks/pkg/clients/navigator"
-	qmclient "frameworks/pkg/clients/quartermaster"
+	navclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
+	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 )
 
 // mockStream satisfies pb.HelmsmanControl_ConnectServer for registry population.

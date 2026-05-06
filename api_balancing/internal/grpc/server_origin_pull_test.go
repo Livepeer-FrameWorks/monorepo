@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 func TestTryBeginOriginPullDeduplicatesConcurrentCalls(t *testing.T) {

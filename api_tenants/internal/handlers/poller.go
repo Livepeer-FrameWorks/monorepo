@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"frameworks/pkg/grpcutil"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

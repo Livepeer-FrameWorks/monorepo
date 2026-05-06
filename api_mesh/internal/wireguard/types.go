@@ -3,7 +3,7 @@ package wireguard
 import (
 	"time"
 
-	"frameworks/pkg/mesh/wgpolicy"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mesh/wgpolicy"
 
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )

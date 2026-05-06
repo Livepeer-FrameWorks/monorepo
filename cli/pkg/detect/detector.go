@@ -9,7 +9,7 @@ import (
 
 	"frameworks/cli/pkg/inventory"
 	fwssh "frameworks/cli/pkg/ssh"
-	"frameworks/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // sshRunner is the minimal interface Detector needs. Production wraps a

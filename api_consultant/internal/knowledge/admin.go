@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"frameworks/api_consultant/internal/skipper"
-	"frameworks/pkg/auth"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )

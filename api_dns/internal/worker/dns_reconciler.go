@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"frameworks/api_dns/internal/logic"
-	pkgdns "frameworks/pkg/dns"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/proto"
+	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 type DNSReconciler struct {

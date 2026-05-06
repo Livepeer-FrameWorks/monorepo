@@ -3,7 +3,7 @@ module frameworks/api_mesh
 go 1.26.2
 
 require (
-	frameworks/pkg v0.0.0
+	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/miekg/dns v1.1.72
 	github.com/prometheus/client_golang v1.23.2
@@ -88,4 +88,4 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 )
 
-replace frameworks/pkg => ../pkg
+replace github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg

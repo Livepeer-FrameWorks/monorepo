@@ -14,15 +14,15 @@ import (
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/api_gateway/internal/resolvers"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/globalid"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/proto"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/gin-gonic/gin"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -2584,6 +2584,179 @@ func (r *nodePerformance5mResolver) TotalBandwidth(ctx context.Context, obj *pro
 	return float64(obj.TotalBandwidth), nil
 }
 
+// LastSeen is the resolver for the lastSeen field.
+func (r *orchestratorResolver) LastSeen(ctx context.Context, obj *proto.Orchestrator) (*time.Time, error) {
+	if obj.LastSeen == nil {
+		return nil, nil
+	}
+	t := obj.LastSeen.AsTime()
+	return &t, nil
+}
+
+// UpdatedAt is the resolver for the updatedAt field.
+func (r *orchestratorResolver) UpdatedAt(ctx context.Context, obj *proto.Orchestrator) (*time.Time, error) {
+	if obj.UpdatedAt == nil {
+		return nil, nil
+	}
+	t := obj.UpdatedAt.AsTime()
+	return &t, nil
+}
+
+// PricePerUnitEth is the resolver for the pricePerUnitEth field.
+func (r *orchestratorCapabilityPriceResolver) PricePerUnitEth(ctx context.Context, obj *proto.OrchestratorCapabilityPrice) (string, error) {
+	return formatWeiAsEth(obj.GetPricePerUnit()), nil
+}
+
+// PixelsPerUnit is the resolver for the pixelsPerUnit field.
+func (r *orchestratorCapabilityPriceResolver) PixelsPerUnit(ctx context.Context, obj *proto.OrchestratorCapabilityPrice) (string, error) {
+	return strconv.FormatInt(obj.GetPixelsPerUnit(), 10), nil
+}
+
+// PricePerUnitEth is the resolver for the pricePerUnitEth field.
+func (r *orchestratorInstanceResolver) PricePerUnitEth(ctx context.Context, obj *proto.OrchestratorInstance) (string, error) {
+	return formatWeiAsEth(obj.GetPricePerUnit()), nil
+}
+
+// PixelsPerUnit is the resolver for the pixelsPerUnit field.
+func (r *orchestratorInstanceResolver) PixelsPerUnit(ctx context.Context, obj *proto.OrchestratorInstance) (string, error) {
+	return strconv.FormatInt(obj.GetPixelsPerUnit(), 10), nil
+}
+
+// LastSeen is the resolver for the lastSeen field.
+func (r *orchestratorInstanceResolver) LastSeen(ctx context.Context, obj *proto.OrchestratorInstance) (*time.Time, error) {
+	if obj.LastSeen == nil {
+		return nil, nil
+	}
+	t := obj.LastSeen.AsTime()
+	return &t, nil
+}
+
+// UpdatedAt is the resolver for the updatedAt field.
+func (r *orchestratorInstanceResolver) UpdatedAt(ctx context.Context, obj *proto.OrchestratorInstance) (*time.Time, error) {
+	if obj.UpdatedAt == nil {
+		return nil, nil
+	}
+	t := obj.UpdatedAt.AsTime()
+	return &t, nil
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *orchestratorPerformancePointResolver) Timestamp(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// Attempts is the resolver for the attempts field.
+func (r *orchestratorPerformancePointResolver) Attempts(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (float64, error) {
+	return float64(obj.GetAttempts()), nil
+}
+
+// Successes is the resolver for the successes field.
+func (r *orchestratorPerformancePointResolver) Successes(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (float64, error) {
+	return float64(obj.GetSuccesses()), nil
+}
+
+// Failures is the resolver for the failures field.
+func (r *orchestratorPerformancePointResolver) Failures(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (float64, error) {
+	return float64(obj.GetFailures()), nil
+}
+
+// MeanLatencyMs is the resolver for the meanLatencyMs field.
+func (r *orchestratorPerformancePointResolver) MeanLatencyMs(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (float64, error) {
+	return float64(obj.GetMeanLatencyMs()), nil
+}
+
+// MaxLatencyMs is the resolver for the maxLatencyMs field.
+func (r *orchestratorPerformancePointResolver) MaxLatencyMs(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (int, error) {
+	return int(obj.GetMaxLatencyMs()), nil
+}
+
+// TranscodeAttempts is the resolver for the transcodeAttempts field.
+func (r *orchestratorPerformancePointResolver) TranscodeAttempts(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (float64, error) {
+	return float64(obj.GetTranscodeAttempts()), nil
+}
+
+// TranscodeSuccesses is the resolver for the transcodeSuccesses field.
+func (r *orchestratorPerformancePointResolver) TranscodeSuccesses(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (float64, error) {
+	return float64(obj.GetTranscodeSuccesses()), nil
+}
+
+// TranscodeFailures is the resolver for the transcodeFailures field.
+func (r *orchestratorPerformancePointResolver) TranscodeFailures(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (float64, error) {
+	return float64(obj.GetTranscodeFailures()), nil
+}
+
+// TranscodeMeanOverallMs is the resolver for the transcodeMeanOverallMs field.
+func (r *orchestratorPerformancePointResolver) TranscodeMeanOverallMs(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (float64, error) {
+	return float64(obj.GetTranscodeMeanOverallMs()), nil
+}
+
+// TranscodeMaxOverallMs is the resolver for the transcodeMaxOverallMs field.
+func (r *orchestratorPerformancePointResolver) TranscodeMaxOverallMs(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (int, error) {
+	return int(obj.GetTranscodeMaxOverallMs()), nil
+}
+
+// TranscodePixels is the resolver for the transcodePixels field.
+func (r *orchestratorPerformancePointResolver) TranscodePixels(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (float64, error) {
+	return float64(obj.GetTranscodePixels()), nil
+}
+
+// AiAttempts is the resolver for the aiAttempts field.
+func (r *orchestratorPerformancePointResolver) AiAttempts(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (float64, error) {
+	return float64(obj.GetAiAttempts()), nil
+}
+
+// AiSuccesses is the resolver for the aiSuccesses field.
+func (r *orchestratorPerformancePointResolver) AiSuccesses(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (float64, error) {
+	return float64(obj.GetAiSuccesses()), nil
+}
+
+// AiFailures is the resolver for the aiFailures field.
+func (r *orchestratorPerformancePointResolver) AiFailures(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (float64, error) {
+	return float64(obj.GetAiFailures()), nil
+}
+
+// AiMeanLatencyMs is the resolver for the aiMeanLatencyMs field.
+func (r *orchestratorPerformancePointResolver) AiMeanLatencyMs(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (float64, error) {
+	return float64(obj.GetAiMeanLatencyMs()), nil
+}
+
+// AiMaxLatencyMs is the resolver for the aiMaxLatencyMs field.
+func (r *orchestratorPerformancePointResolver) AiMaxLatencyMs(ctx context.Context, obj *proto.OrchestratorPerformancePoint) (int, error) {
+	return int(obj.GetAiMaxLatencyMs()), nil
+}
+
+// GeoResolvedAt is the resolver for the geoResolvedAt field.
+func (r *orchestratorVantageResolver) GeoResolvedAt(ctx context.Context, obj *proto.OrchestratorVantage) (*time.Time, error) {
+	if obj.GeoResolvedAt == nil {
+		return nil, nil
+	}
+	t := obj.GeoResolvedAt.AsTime()
+	return &t, nil
+}
+
+// LatestLatencyMs is the resolver for the latestLatencyMs field.
+func (r *orchestratorVantageResolver) LatestLatencyMs(ctx context.Context, obj *proto.OrchestratorVantage) (int, error) {
+	return int(obj.GetLatestLatencyMs()), nil
+}
+
+// Score is the resolver for the score field.
+func (r *orchestratorVantageResolver) Score(ctx context.Context, obj *proto.OrchestratorVantage) (float64, error) {
+	return float64(obj.GetScore()), nil
+}
+
+// LastSeen is the resolver for the lastSeen field.
+func (r *orchestratorVantageResolver) LastSeen(ctx context.Context, obj *proto.OrchestratorVantage) (*time.Time, error) {
+	if obj.LastSeen == nil {
+		return nil, nil
+	}
+	t := obj.LastSeen.AsTime()
+	return &t, nil
+}
+
 // Method is the resolver for the method field.
 func (r *paymentResolver) Method(ctx context.Context, obj *proto.PaymentResponse) (model.PaymentMethod, error) {
 	return paymentMethodFromPurser(obj.Method)
@@ -3626,6 +3799,32 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 	default:
 		return nil, fmt.Errorf("unsupported node type: %s", typ)
 	}
+}
+
+// OrchestratorsConnection is the resolver for the orchestratorsConnection field.
+func (r *queryResolver) OrchestratorsConnection(ctx context.Context, page *model.ConnectionInput, orchAddr *string) (*model.OrchestratorsConnection, error) {
+	first, after, _, _ := mergeConnectionInput(page, nil, nil, nil, nil)
+	return r.DoListOrchestrators(ctx, first, after, orchAddr)
+}
+
+// Orchestrator is the resolver for the orchestrator field.
+func (r *queryResolver) Orchestrator(ctx context.Context, orchAddr string) (*model.OrchestratorWithDetails, error) {
+	return r.DoGetOrchestrator(ctx, orchAddr)
+}
+
+// OrchestratorInstances is the resolver for the orchestratorInstances field.
+func (r *queryResolver) OrchestratorInstances(ctx context.Context, orchAddr *string) ([]*proto.OrchestratorInstance, error) {
+	return r.DoListOrchestratorInstances(ctx, orchAddr)
+}
+
+// OrchestratorVantages is the resolver for the orchestratorVantages field.
+func (r *queryResolver) OrchestratorVantages(ctx context.Context, orchAddr *string) ([]*proto.OrchestratorVantage, error) {
+	return r.DoListOrchestratorVantages(ctx, orchAddr)
+}
+
+// OrchestratorPerformanceSeries is the resolver for the orchestratorPerformanceSeries field.
+func (r *queryResolver) OrchestratorPerformanceSeries(ctx context.Context, orchAddr string, timeRange model.TimeRangeInput, interval *string, gatewayID *string, resolvedIP *string) ([]*proto.OrchestratorPerformancePoint, error) {
+	return r.DoGetOrchestratorPerformanceSeries(ctx, orchAddr, timeRange, interval, gatewayID, resolvedIP)
 }
 
 // DiscoverServicesConnection is the resolver for the discoverServicesConnection field.
@@ -6137,6 +6336,29 @@ func (r *Resolver) NodePerformance5m() generated.NodePerformance5mResolver {
 	return &nodePerformance5mResolver{r}
 }
 
+// Orchestrator returns generated.OrchestratorResolver implementation.
+func (r *Resolver) Orchestrator() generated.OrchestratorResolver { return &orchestratorResolver{r} }
+
+// OrchestratorCapabilityPrice returns generated.OrchestratorCapabilityPriceResolver implementation.
+func (r *Resolver) OrchestratorCapabilityPrice() generated.OrchestratorCapabilityPriceResolver {
+	return &orchestratorCapabilityPriceResolver{r}
+}
+
+// OrchestratorInstance returns generated.OrchestratorInstanceResolver implementation.
+func (r *Resolver) OrchestratorInstance() generated.OrchestratorInstanceResolver {
+	return &orchestratorInstanceResolver{r}
+}
+
+// OrchestratorPerformancePoint returns generated.OrchestratorPerformancePointResolver implementation.
+func (r *Resolver) OrchestratorPerformancePoint() generated.OrchestratorPerformancePointResolver {
+	return &orchestratorPerformancePointResolver{r}
+}
+
+// OrchestratorVantage returns generated.OrchestratorVantageResolver implementation.
+func (r *Resolver) OrchestratorVantage() generated.OrchestratorVantageResolver {
+	return &orchestratorVantageResolver{r}
+}
+
 // Payment returns generated.PaymentResolver implementation.
 func (r *Resolver) Payment() generated.PaymentResolver { return &paymentResolver{r} }
 
@@ -6420,6 +6642,11 @@ type nodeMetricResolver struct{ *Resolver }
 type nodeMetricHourlyResolver struct{ *Resolver }
 type nodeMetricsAggregatedResolver struct{ *Resolver }
 type nodePerformance5mResolver struct{ *Resolver }
+type orchestratorResolver struct{ *Resolver }
+type orchestratorCapabilityPriceResolver struct{ *Resolver }
+type orchestratorInstanceResolver struct{ *Resolver }
+type orchestratorPerformancePointResolver struct{ *Resolver }
+type orchestratorVantageResolver struct{ *Resolver }
 type paymentResolver struct{ *Resolver }
 type platformOverviewResolver struct{ *Resolver }
 type playbackInstanceResolver struct{ *Resolver }

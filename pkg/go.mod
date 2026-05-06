@@ -1,4 +1,4 @@
-module frameworks/pkg
+module github.com/Livepeer-FrameWorks/monorepo/pkg
 
 go 1.26.2
 

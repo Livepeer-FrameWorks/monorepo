@@ -11,7 +11,7 @@ import (
 	fwgitops "frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/remoteaccess"
-	"frameworks/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 type Endpoint struct {

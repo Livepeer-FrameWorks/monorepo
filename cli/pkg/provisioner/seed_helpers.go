@@ -3,7 +3,7 @@ package provisioner
 import (
 	"fmt"
 
-	dbsql "frameworks/pkg/database/sql"
+	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
 // BuildPostgresSeedItems materializes the static or demo seed SQL as role

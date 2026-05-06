@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"frameworks/api_gateway/internal/clients"
-	"frameworks/pkg/auth"
-	"frameworks/pkg/config"
-	"frameworks/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 
 	"github.com/gin-gonic/gin"
 )

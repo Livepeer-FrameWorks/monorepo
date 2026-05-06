@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"frameworks/api_sidecar/internal/control"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // ClipCleanupInfo holds information about an artifact candidate for cleanup

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/clients"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients"
 
 	"github.com/failsafe-go/failsafe-go"
 )

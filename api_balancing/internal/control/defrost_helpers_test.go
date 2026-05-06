@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"frameworks/api_balancing/internal/state"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 type mockLoadBalancer struct {

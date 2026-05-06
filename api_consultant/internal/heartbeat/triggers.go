@@ -9,8 +9,8 @@ import (
 
 	"frameworks/api_consultant/internal/diagnostics"
 
-	"frameworks/pkg/kafka"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 const defaultLookoutTopic = "lookout.incidents"

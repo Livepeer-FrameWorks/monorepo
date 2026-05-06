@@ -8,8 +8,8 @@ import (
 
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 type clipCreatorSpy struct {

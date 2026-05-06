@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"frameworks/pkg/clients"
-	"frameworks/pkg/clients/listmonk"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/listmonk"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"

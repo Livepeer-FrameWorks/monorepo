@@ -1,9 +1,9 @@
 package geo
 
 import (
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
-	"frameworks/pkg/geoip"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 
 	"github.com/uber/h3-go/v4"
 )

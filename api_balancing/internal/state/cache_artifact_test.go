@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestApplyRedisChange_Artifact_Upsert(t *testing.T) {

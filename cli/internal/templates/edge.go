@@ -17,8 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"frameworks/pkg/maintenance"
-	"frameworks/pkg/mist"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/maintenance"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
 
 //go:embed edge/*

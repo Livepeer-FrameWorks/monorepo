@@ -4,9 +4,9 @@ import (
 	"context"
 
 	"frameworks/api_gateway/internal/loaders"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/globalid"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func (r *Resolver) resolveStreamByID(ctx context.Context, streamID string) (*pb.Stream, error) {

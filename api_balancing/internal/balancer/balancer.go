@@ -9,8 +9,8 @@ import (
 
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // LoadBalancer is the main load balancer instance

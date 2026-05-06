@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"

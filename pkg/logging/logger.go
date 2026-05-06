@@ -3,7 +3,7 @@ package logging
 import (
 	"github.com/sirupsen/logrus"
 
-	"frameworks/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 )
 
 // Logger represents a logger instance

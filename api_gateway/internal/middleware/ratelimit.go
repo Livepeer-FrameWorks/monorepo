@@ -12,11 +12,11 @@ import (
 	"sync"
 	"time"
 
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/globalid"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
-	x402 "frameworks/pkg/x402"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	x402 "github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"

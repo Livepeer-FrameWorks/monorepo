@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"frameworks/api_sidecar/internal/storage"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 type fakePresignedClient struct {

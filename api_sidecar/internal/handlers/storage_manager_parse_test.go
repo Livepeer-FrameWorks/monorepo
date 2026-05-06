@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 func TestParseHLSManifest_Standard(t *testing.T) {

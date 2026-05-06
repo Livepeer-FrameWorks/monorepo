@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"frameworks/pkg/llm"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 )
 
 type compactFakeLLMProvider struct {

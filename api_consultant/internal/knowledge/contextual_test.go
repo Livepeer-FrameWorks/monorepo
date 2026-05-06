@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"frameworks/pkg/llm"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 )
 
 type mockStream struct {

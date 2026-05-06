@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"strconv"
 
-	"frameworks/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 
 	"golang.org/x/sys/unix"
 )

@@ -3,14 +3,14 @@ module frameworks/api_analytics_ingest
 go 1.26.2
 
 require (
-	frameworks/pkg v0.0.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.45.0
+	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.23.2
 	google.golang.org/protobuf v1.36.11
 )
 
-replace frameworks/pkg => ../pkg
+replace github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg
 
 require (
 	github.com/ClickHouse/ch-go v0.71.0 // indirect

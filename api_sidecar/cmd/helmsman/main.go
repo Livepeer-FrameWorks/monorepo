@@ -9,12 +9,12 @@ import (
 	sidecarconfig "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/handlers"
-	"frameworks/pkg/config"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/monitoring"
-	pb "frameworks/pkg/proto"
-	"frameworks/pkg/server"
-	"frameworks/pkg/version"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 )
 
 // notifyFoghornShutdown sends a final health update to Foghorn before shutdown using shared client

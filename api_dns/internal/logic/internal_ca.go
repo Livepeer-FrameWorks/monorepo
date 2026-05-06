@@ -19,9 +19,9 @@ import (
 	"time"
 
 	"frameworks/api_dns/internal/store"
-	"frameworks/pkg/config"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 const (

@@ -3,7 +3,7 @@ package graph
 import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/resolvers"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // This file will not be regenerated automatically.

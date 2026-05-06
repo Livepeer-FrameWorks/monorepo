@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package helmsmancontrol;
 
-option go_package = "frameworks/pkg/proto";
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
@@ -25,12 +25,19 @@ service HelmsmanControl {
 // Service for sending events to Decklog (Foghorn -> Decklog/api_firehose)
 // - MistTrigger: media-plane analytics/events
 // - ServiceEvent: service-plane telemetry (API usage, messaging, etc.)
+// - GatewayTelemetryEvent: per-orchestrator discovery / state / outcome
+//   telemetry from Livepeer gateways (cluster-scoped or session-scoped).
 // All producers MUST preserve the original payload (no rewriting).
 service DecklogService {
   // Unified entrypoint for media-plane events.
   rpc SendEvent(MistTrigger) returns (google.protobuf.Empty);
   // Service-plane events (non-media).
   rpc SendServiceEvent(ServiceEvent) returns (google.protobuf.Empty);
+  // Livepeer gateway telemetry. Cluster-scoped events (discovery, state) are
+  // attributed to cluster_owner_tenant_id. Session-scoped events
+  // (transcode/AI outcomes) require both stream_tenant_id and
+  // cluster_owner_tenant_id.
+  rpc SendGatewayTelemetry(GatewayTelemetryEvent) returns (google.protobuf.Empty);
 }
 
 // ServiceEvent represents service-level telemetry emitted by core services.
@@ -1708,4 +1715,134 @@ message ThumbnailUploadResponse {
 message ThumbnailUploaded {
   string thumbnail_key = 1; // echoed from ThumbnailUploadResponse
   repeated string s3_keys = 2;
+}
+
+// ============================================================================
+// Gateway telemetry: Livepeer gateway -> Decklog -> Periscope (orchestrator
+// visibility pipeline). See docs/architecture/orchestrator-visibility.md.
+//
+// Tenant policy:
+//   - stream_tenant_id: set on session-scoped events (transcode/AI outcomes)
+//     via the extended Foghorn auth response into go-livepeer StreamParameters.
+//   - cluster_owner_tenant_id: always set, from gitops cluster ownership.
+//   - Decklog rejects session-scoped events missing either tenant.
+// ============================================================================
+
+message GatewayTelemetryEvent {
+  // Identity baked into the gateway env at provision time.
+  string gateway_id = 1;
+  string gateway_region = 2;
+  string cluster_id = 3;
+  string cluster_owner_tenant_id = 4; // UUID, resolved by gitops
+  string stream_tenant_id = 5;        // UUID, propagated by auth response on session events; empty on global events
+
+  google.protobuf.Timestamp timestamp = 6;
+
+  oneof payload {
+    OrchestratorDiscoveryObserved discovery = 10;
+    OrchestratorStateUpdate       state     = 11;
+    OrchestratorTranscodeOutcome  transcode = 12;
+    OrchestratorAIOutcome         ai        = 13;
+  }
+}
+
+// Per-vantage geo + IP attachment. Emitted as part of every discovery / state
+// event so multi-IP / multi-region observation is preserved (one event per
+// resolved IP per attempt; DNS round-robin is first-class).
+message OrchestratorVantageGeo {
+  string resolved_ip = 1;
+  bool   dialed = 2;          // true on the IP the RPC actually used; false on sibling A-record IPs
+  double latitude = 3;
+  double longitude = 4;
+  string city = 5;
+  string country_code = 6;
+  string geo_source = 7;      // "mmdb" | "unknown"
+  google.protobuf.Timestamp geo_resolved_at = 8;
+}
+
+// Per GetOrchestratorInfo RPC attempt: success or failure leg. The dialed IP
+// carries discovery_latency_ms + reachability outcome; sibling resolved IPs
+// (same hostname) come along as additional rows with dialed=false so their
+// geo is recorded.
+message OrchestratorDiscoveryObserved {
+  string orch_addr = 1;             // eth address (hex)
+  string orch_url = 2;
+  string advertised_node_url = 3;   // when the orch advertises sub-nodes
+  uint32 discovery_latency_ms = 4;
+  bool   reachable = 5;
+  bool   compatible = 6;
+  float  score = 7;
+  string failure_reason = 8;
+  string failure_kind = 9;          // "dns" | "tcp" | "rpc" | "timeout" | ...
+  OrchestratorVantageGeo vantage = 10;
+}
+
+// Vantage-independent facts from a successful OrchestratorInfo response.
+// Emitted for every responding orch, including incompatible / not-selected
+// ones, so ranking can use full state.
+message OrchestratorStateUpdate {
+  string orch_addr = 1;
+  string canonical_url = 2;
+  repeated string advertised_node_urls = 3;
+  repeated string capabilities = 4;
+  // Pricing as raw fields (price_per_unit / pixels_per_unit) to avoid losing
+  // precision and to mirror upstream OrchestratorInfo.
+  int64 price_per_unit = 5;
+  int64 pixels_per_unit = 6;
+  reserved 7;
+  reserved "capability_prices";
+  string hardware = 8;       // free-form hardware string from upstream
+  string source = 9;         // "gateway_pool" for gateway-emitted state
+  OrchestratorVantageGeo vantage = 10;
+  // Typed per-capability pricing. Each entry is one capability/model with
+  // its own price_per_unit / pixels_per_unit. Empty when the gateway has no
+  // per-capability price facts for this instance.
+  repeated OrchestratorCapabilityPriceEntry capability_price_entries = 11;
+}
+
+// Per-capability price entry. Either capability (transcode codec, AI model
+// id) or position is set; the gateway emits whichever identifier it has.
+message OrchestratorCapabilityPriceEntry {
+  string capability = 1;        // transcode capability or AI model id
+  uint32 position = 2;           // index in upstream capabilities_prices, when capability is empty
+  int64 price_per_unit = 3;
+  int64 pixels_per_unit = 4;
+}
+
+// Per-segment / per-session transcode outcome. Emitted at the result/error
+// boundary in go-livepeer's segment_rpc path so failures count.
+message OrchestratorTranscodeOutcome {
+  string orch_addr = 1;
+  string orch_url = 2;
+  string session_id = 3;
+  string manifest_id_hash = 4;
+  uint64 seq_no = 5;
+  bool   success = 6;
+  float  latency_score = 7;
+  uint32 upload_ms = 8;
+  uint32 transcode_ms = 9;
+  uint32 overall_ms = 10;
+  uint64 pixels = 11;
+  repeated string profiles = 12;
+  string error_code = 13;
+  string error_kind = 14;
+  string resolved_ip = 15;
+}
+
+// Per-AI-job outcome. Same shape as transcode but for AI pipelines, kept
+// separate because pricing meters and consumers differ (GPU-hour vs delivered
+// minutes are not interchangeable).
+message OrchestratorAIOutcome {
+  string orch_addr = 1;
+  string orch_url = 2;
+  string session_id = 3;
+  string pipeline = 4;
+  string model = 5;
+  float  latency_score = 6;
+  int64  price_per_unit = 7;
+  uint32 latency_ms = 8;
+  bool   success = 9;
+  string error_code = 10;
+  string error_kind = 11;
+  string resolved_ip = 12;
 }

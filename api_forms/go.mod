@@ -2,10 +2,10 @@ module frameworks/api_forms
 
 go 1.26.2
 
-replace frameworks/pkg => ../pkg
+replace github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg
 
 require (
-	frameworks/pkg v0.0.0-00010101000000-000000000000
+	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0-00010101000000-000000000000
 	github.com/gin-gonic/gin v1.12.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sirupsen/logrus v1.9.4

@@ -6,8 +6,8 @@ import (
 
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/remoteaccess"
-	"frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // resolveServiceDial returns the dial address, TLS server name, and insecure

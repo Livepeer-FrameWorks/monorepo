@@ -7,7 +7,7 @@ import (
 	"fmt"
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/internal/controlplane"
-	"frameworks/pkg/grpcutil"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"net/http"
 	"net/url"
 	"strings"

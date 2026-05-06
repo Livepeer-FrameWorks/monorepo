@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"frameworks/pkg/ctxkeys"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 type fakeServiceEventSender struct {

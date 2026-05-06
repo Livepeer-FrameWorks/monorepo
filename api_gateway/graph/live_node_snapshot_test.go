@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	proto "frameworks/pkg/proto"
+	proto "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )

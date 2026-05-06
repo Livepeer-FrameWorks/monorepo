@@ -7,7 +7,7 @@ package mesh
 import (
 	"net"
 
-	pkgmesh "frameworks/pkg/mesh"
+	pkgmesh "github.com/Livepeer-FrameWorks/monorepo/pkg/mesh"
 )
 
 // GenerateKeyPair is an alias for pkg/mesh.GenerateKeyPair.

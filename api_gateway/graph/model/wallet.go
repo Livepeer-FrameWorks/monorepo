@@ -3,7 +3,7 @@ package model
 import (
 	"time"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // WalletIdentity represents a linked cryptocurrency wallet.

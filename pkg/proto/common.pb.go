@@ -522,7 +522,7 @@ const file_common_proto_rawDesc = "" +
 	"\tSortOrder\x12\x1a\n" +
 	"\x16SORT_ORDER_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eSORT_ORDER_ASC\x10\x01\x12\x13\n" +
-	"\x0fSORT_ORDER_DESC\x10\x02B\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x0fSORT_ORDER_DESC\x10\x02B3Z1github.com/Livepeer-FrameWorks/monorepo/pkg/protob\x06proto3"
 
 var (
 	file_common_proto_rawDescOnce sync.Once

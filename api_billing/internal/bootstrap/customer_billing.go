@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"frameworks/pkg/billing"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"

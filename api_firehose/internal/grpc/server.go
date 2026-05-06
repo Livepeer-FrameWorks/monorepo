@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"frameworks/pkg/grpcutil"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -20,8 +20,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"frameworks/pkg/kafka"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/google/uuid"
 )
 
@@ -431,6 +431,167 @@ func (s *DecklogServer) SendEvent(ctx context.Context, trigger *pb.MistTrigger) 
 		"tenant_id":    tenantID,
 		"event_id":     analyticsEvent.EventID,
 	}).Debug("Event sent to Kafka")
+
+	return &emptypb.Empty{}, nil
+}
+
+// SendGatewayTelemetry handles per-orchestrator telemetry from Livepeer
+// gateways. Discovery/state events are attributed to the cluster owner;
+// transcode/AI outcome events are attributed to the stream tenant and also
+// carry cluster-owner metadata for dual-attribution joins.
+func (s *DecklogServer) SendGatewayTelemetry(ctx context.Context, event *pb.GatewayTelemetryEvent) (*emptypb.Empty, error) {
+	start := time.Now()
+
+	if s.metrics != nil {
+		s.metrics.GRPCRequests.WithLabelValues("SendGatewayTelemetry", "requested").Inc()
+	}
+	if event == nil {
+		if s.metrics != nil {
+			s.metrics.GRPCRequests.WithLabelValues("SendGatewayTelemetry", "invalid_request").Inc()
+		}
+		return nil, fmt.Errorf("gateway telemetry event cannot be nil")
+	}
+
+	clusterOwnerTenantID := event.GetClusterOwnerTenantId()
+	if !isValidUUID(clusterOwnerTenantID) {
+		s.logger.WithFields(logging.Fields{
+			"gateway_id":              event.GetGatewayId(),
+			"cluster_id":              event.GetClusterId(),
+			"stream_tenant_id":        event.GetStreamTenantId(),
+			"cluster_owner_tenant_id": clusterOwnerTenantID,
+		}).Error("Rejected gateway telemetry: missing or invalid cluster_owner_tenant_id")
+		if s.metrics != nil {
+			s.metrics.GRPCRequests.WithLabelValues("SendGatewayTelemetry", "tenant_rejected").Inc()
+		}
+		return nil, fmt.Errorf("gateway telemetry: cluster_owner_tenant_id (valid UUID) is required")
+	}
+
+	var (
+		payload           proto.Message
+		eventType         string
+		effectiveTenantID = clusterOwnerTenantID
+	)
+	switch p := event.GetPayload().(type) {
+	case *pb.GatewayTelemetryEvent_Discovery:
+		payload, eventType = p.Discovery, "orchestrator_discovery_observed"
+	case *pb.GatewayTelemetryEvent_State:
+		payload, eventType = p.State, "orchestrator_state_update"
+	case *pb.GatewayTelemetryEvent_Transcode:
+		payload, eventType = p.Transcode, "orchestrator_transcode_outcome"
+		if !isValidUUID(event.GetStreamTenantId()) {
+			s.logger.WithFields(logging.Fields{
+				"gateway_id":              event.GetGatewayId(),
+				"cluster_id":              event.GetClusterId(),
+				"stream_tenant_id":        event.GetStreamTenantId(),
+				"cluster_owner_tenant_id": clusterOwnerTenantID,
+			}).Error("Rejected gateway transcode telemetry: missing or invalid stream_tenant_id")
+			if s.metrics != nil {
+				s.metrics.GRPCRequests.WithLabelValues("SendGatewayTelemetry", "tenant_rejected").Inc()
+			}
+			return nil, fmt.Errorf("gateway telemetry: stream_tenant_id (valid UUID) is required for transcode outcomes")
+		}
+		effectiveTenantID = event.GetStreamTenantId()
+	case *pb.GatewayTelemetryEvent_Ai:
+		payload, eventType = p.Ai, "orchestrator_ai_outcome"
+		if !isValidUUID(event.GetStreamTenantId()) {
+			s.logger.WithFields(logging.Fields{
+				"gateway_id":              event.GetGatewayId(),
+				"cluster_id":              event.GetClusterId(),
+				"stream_tenant_id":        event.GetStreamTenantId(),
+				"cluster_owner_tenant_id": clusterOwnerTenantID,
+			}).Error("Rejected gateway AI telemetry: missing or invalid stream_tenant_id")
+			if s.metrics != nil {
+				s.metrics.GRPCRequests.WithLabelValues("SendGatewayTelemetry", "tenant_rejected").Inc()
+			}
+			return nil, fmt.Errorf("gateway telemetry: stream_tenant_id (valid UUID) is required for AI outcomes")
+		}
+		effectiveTenantID = event.GetStreamTenantId()
+	default:
+		if s.metrics != nil {
+			s.metrics.GRPCRequests.WithLabelValues("SendGatewayTelemetry", "unknown_event_type").Inc()
+		}
+		return nil, fmt.Errorf("gateway telemetry: payload oneof must be one of discovery|state|transcode|ai")
+	}
+	if payload == nil {
+		if s.metrics != nil {
+			s.metrics.GRPCRequests.WithLabelValues("SendGatewayTelemetry", "unknown_event_type").Inc()
+		}
+		return nil, fmt.Errorf("gateway telemetry: payload oneof contains nil %s payload", eventType)
+	}
+
+	if s.metrics != nil && s.metrics.EventsIngested != nil {
+		s.metrics.EventsIngested.WithLabelValues(eventType, "received").Inc()
+	}
+
+	// Serialize the payload using the same transparent protojson approach
+	// SendEvent uses, then supplement Data with the gateway/cluster identity
+	// so Periscope can query without re-parsing the original wire envelope.
+	dataMap, err := protoMessageToMap(payload)
+	if err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"event_type": eventType,
+			"gateway_id": event.GetGatewayId(),
+		}).Error("Failed to serialise gateway telemetry payload")
+		if s.metrics != nil {
+			if s.metrics.EventsIngested != nil {
+				s.metrics.EventsIngested.WithLabelValues(eventType, "conversion_error").Inc()
+			}
+			s.metrics.GRPCRequests.WithLabelValues("SendGatewayTelemetry", "conversion_error").Inc()
+		}
+		return nil, err
+	}
+	dataMap["gateway_id"] = event.GetGatewayId()
+	dataMap["gateway_region"] = event.GetGatewayRegion()
+	dataMap["cluster_id"] = event.GetClusterId()
+	dataMap["cluster_owner_tenant_id"] = event.GetClusterOwnerTenantId()
+	if streamTenant := event.GetStreamTenantId(); streamTenant != "" {
+		dataMap["stream_tenant_id"] = streamTenant
+	}
+
+	ts := time.Now()
+	if event.GetTimestamp() != nil {
+		ts = event.GetTimestamp().AsTime()
+	}
+
+	analyticsEvent := &kafka.AnalyticsEvent{
+		EventID:   generateEventID(),
+		EventType: eventType,
+		Timestamp: ts,
+		Source:    "livepeer-gateway",
+		TenantID:  effectiveTenantID,
+		Data:      dataMap,
+	}
+
+	kafkaStart := time.Now()
+	if err := s.producer.PublishTypedEvent(analyticsEvent); err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"event_type": eventType,
+			"gateway_id": event.GetGatewayId(),
+		}).Error("Failed to publish gateway telemetry")
+		if s.metrics != nil {
+			if s.metrics.EventsIngested != nil {
+				s.metrics.EventsIngested.WithLabelValues(eventType, "publish_error").Inc()
+			}
+			s.metrics.GRPCRequests.WithLabelValues("SendGatewayTelemetry", "kafka_error").Inc()
+			s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish", "error").Inc()
+		}
+		return nil, err
+	}
+
+	if s.metrics != nil {
+		s.metrics.KafkaDuration.WithLabelValues("publish").Observe(time.Since(kafkaStart).Seconds())
+		s.metrics.EventsIngested.WithLabelValues(eventType, "processed").Inc()
+		s.metrics.ProcessingDuration.WithLabelValues(eventType).Observe(time.Since(start).Seconds())
+		s.metrics.GRPCRequests.WithLabelValues("SendGatewayTelemetry", "success").Inc()
+		s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish", "success").Inc()
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"event_type": eventType,
+		"gateway_id": event.GetGatewayId(),
+		"orch_addr":  dataMap["orch_addr"],
+		"tenant_id":  effectiveTenantID,
+	}).Debug("Gateway telemetry sent to Kafka")
 
 	return &emptypb.Empty{}, nil
 }

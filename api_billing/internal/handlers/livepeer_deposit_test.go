@@ -5,8 +5,8 @@ import (
 	"math/big"
 	"testing"
 
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestEthToWei_OneETH(t *testing.T) {

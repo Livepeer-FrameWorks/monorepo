@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/database"
-	"frameworks/pkg/kafka"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/mist"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
@@ -163,6 +163,14 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 		err = h.processAPIRequestBatch(ctx, event)
 	case "federation_event":
 		err = h.processFederationEvent(ctx, event)
+	case "orchestrator_discovery_observed":
+		err = h.processOrchestratorDiscoveryObserved(ctx, event)
+	case "orchestrator_state_update":
+		err = h.processOrchestratorStateUpdate(ctx, event)
+	case "orchestrator_transcode_outcome":
+		err = h.processOrchestratorTranscodeOutcome(ctx, event)
+	case "orchestrator_ai_outcome":
+		err = h.processOrchestratorAIOutcome(ctx, event)
 	default:
 		h.logger.WithFields(logging.Fields{
 			"event_type": event.EventType,

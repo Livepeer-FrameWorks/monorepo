@@ -1803,7 +1803,7 @@ const file_skipper_proto_rawDesc = "" +
 	"\vListReports\x12\".skipper.ListSkipperReportsRequest\x1a#.skipper.ListSkipperReportsResponse\x12E\n" +
 	"\tGetReport\x12 .skipper.GetSkipperReportRequest\x1a\x16.skipper.SkipperReport\x12b\n" +
 	"\x0fMarkReportsRead\x12&.skipper.MarkSkipperReportsReadRequest\x1a'.skipper.MarkSkipperReportsReadResponse\x12c\n" +
-	"\x14GetUnreadReportCount\x12$.skipper.GetUnreadReportCountRequest\x1a%.skipper.GetUnreadReportCountResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x14GetUnreadReportCount\x12$.skipper.GetUnreadReportCountRequest\x1a%.skipper.GetUnreadReportCountResponseB3Z1github.com/Livepeer-FrameWorks/monorepo/pkg/protob\x06proto3"
 
 var (
 	file_skipper_proto_rawDescOnce sync.Once

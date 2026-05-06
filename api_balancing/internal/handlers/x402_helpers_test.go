@@ -7,9 +7,9 @@ import (
 	"net"
 	"testing"
 
-	purserclient "frameworks/pkg/clients/purser"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"

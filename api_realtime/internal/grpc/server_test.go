@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"frameworks/api_realtime/internal/metrics"
-	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"

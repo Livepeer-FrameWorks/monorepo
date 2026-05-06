@@ -15,8 +15,8 @@ import (
 	"frameworks/api_consultant/internal/knowledge"
 	"frameworks/api_consultant/internal/metering"
 	"frameworks/api_consultant/internal/skipper"
-	"frameworks/pkg/llm"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 const defaultMaxToolRounds = 6

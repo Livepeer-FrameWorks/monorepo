@@ -17,7 +17,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 
 	"frameworks/api_assets/internal/cache"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 type fakeS3 struct {

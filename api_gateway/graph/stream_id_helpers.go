@@ -3,7 +3,7 @@ package graph
 import (
 	"fmt"
 
-	"frameworks/pkg/globalid"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 )
 
 func encodeStreamID(raw string) (string, error) {

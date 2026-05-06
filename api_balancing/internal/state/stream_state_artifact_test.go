@@ -3,7 +3,7 @@ package state
 import (
 	"testing"
 
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestSetNodeArtifacts_CreatesNode(t *testing.T) {

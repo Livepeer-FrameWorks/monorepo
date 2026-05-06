@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"frameworks/api_control/internal/bootstrap"
-	qmclient "frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/config"
-	"frameworks/pkg/database"
-	"frameworks/pkg/logging"
+	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"gopkg.in/yaml.v3"
 )

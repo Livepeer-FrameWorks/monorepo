@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/shopspring/decimal"
 	"github.com/stripe/stripe-go/v82"

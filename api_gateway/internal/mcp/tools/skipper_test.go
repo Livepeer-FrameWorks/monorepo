@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"frameworks/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )

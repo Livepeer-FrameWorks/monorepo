@@ -1,0 +1,36 @@
+# Notify go-livepeer when pkg/ changes on master so it can open an auto-bump
+# PR. Pairs with .github/workflows/bump-monorepo-pkg.yml in
+# Livepeer-FrameWorks/go-livepeer; that workflow runs `go get monorepo/pkg@<sha>`
+# and opens a PR. This keeps the gateway's monorepo/pkg dependency from
+# silently going stale between releases.
+#
+# Required secrets:
+#   GO_LIVEPEER_DISPATCH_TOKEN  — a fine-grained PAT or app token with
+#       repository_dispatch + actions:read on Livepeer-FrameWorks/go-livepeer.
+#       (GITHUB_TOKEN cannot dispatch across repos.)
+name: Notify go-livepeer pkg bump
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "pkg/**"
+      - ".github/workflows/notify-go-livepeer-pkg-bump.yml"
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send repository_dispatch
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GO_LIVEPEER_DISPATCH_TOKEN }}
+          repository: Livepeer-FrameWorks/go-livepeer
+          event-type: monorepo-pkg-changed
+          client-payload: |
+            {
+              "monorepo_sha": "${{ github.sha }}",
+              "monorepo_short_sha": "${{ github.sha }}",
+              "monorepo_ref": "${{ github.ref }}",
+              "triggered_by": "${{ github.event.head_commit.message }}"
+            }

@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 
-	qmclient "frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/config"
-	"frameworks/pkg/logging"
+	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // ValidatePlatformOfficialPricingCoverage is the cross-service invariant

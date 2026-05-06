@@ -5,9 +5,9 @@ import (
 	"strings"
 
 	"frameworks/api_balancing/internal/state"
-	"frameworks/pkg/clients/commodore"
-	"frameworks/pkg/mist"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // CommodoreClient holds the reference to the commodore gRPC client for resolution.

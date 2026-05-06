@@ -8022,7 +8022,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\x0eDeleteVodAsset\x12\x1d.shared.DeleteVodAssetRequest\x1a\x1e.shared.DeleteVodAssetResponse2\xbc\x01\n" +
 	"\x15NodeManagementService\x12S\n" +
 	"\x16SetNodeOperationalMode\x12\x1b.foghorn.SetNodeModeRequest\x1a\x1c.foghorn.SetNodeModeResponse\x12N\n" +
-	"\rGetNodeHealth\x12\x1d.foghorn.GetNodeHealthRequest\x1a\x1e.foghorn.GetNodeHealthResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\rGetNodeHealth\x12\x1d.foghorn.GetNodeHealthRequest\x1a\x1e.foghorn.GetNodeHealthResponseB3Z1github.com/Livepeer-FrameWorks/monorepo/pkg/protob\x06proto3"
 
 var (
 	file_commodore_proto_rawDescOnce sync.Once

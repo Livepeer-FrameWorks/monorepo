@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"frameworks/cli/internal/ux"
-	pb "frameworks/pkg/proto"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/spf13/cobra"
 )

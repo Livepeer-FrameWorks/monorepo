@@ -9,7 +9,7 @@ import (
 	"slices"
 	"time"
 
-	fieldcrypt "frameworks/pkg/crypto"
+	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 )
 
 var ErrNotFound = errors.New("record not found")

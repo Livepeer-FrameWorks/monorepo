@@ -933,7 +933,7 @@ const file_dns_proto_rawDesc = "" +
 	"\x0eGetCertificate\x12 .navigator.GetCertificateRequest\x1a!.navigator.GetCertificateResponse\x12O\n" +
 	"\fGetTLSBundle\x12\x1e.navigator.GetTLSBundleRequest\x1a\x1f.navigator.GetTLSBundleResponse\x12L\n" +
 	"\vGetCABundle\x12\x1d.navigator.GetCABundleRequest\x1a\x1e.navigator.GetCABundleResponse\x12^\n" +
-	"\x11IssueInternalCert\x12#.navigator.IssueInternalCertRequest\x1a$.navigator.IssueInternalCertResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x11IssueInternalCert\x12#.navigator.IssueInternalCertRequest\x1a$.navigator.IssueInternalCertResponseB3Z1github.com/Livepeer-FrameWorks/monorepo/pkg/protob\x06proto3"
 
 var (
 	file_dns_proto_rawDescOnce sync.Once

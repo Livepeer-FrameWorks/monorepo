@@ -12,9 +12,9 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
-	qmclient "frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 type releaseComponent struct {

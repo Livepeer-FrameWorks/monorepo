@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/gin-gonic/gin"
 )

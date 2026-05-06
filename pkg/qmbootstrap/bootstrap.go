@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // BootstrapClient is the minimum Quartermaster client surface required for service bootstrap.

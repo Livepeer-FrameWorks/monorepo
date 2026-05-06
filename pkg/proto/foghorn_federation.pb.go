@@ -3535,7 +3535,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x17MigrateArtifactMetadata\x122.foghorn_federation.MigrateArtifactMetadataRequest\x1a3.foghorn_federation.MigrateArtifactMetadataResponse\x12\x7f\n" +
 	"\x16ForwardArtifactCommand\x121.foghorn_federation.ForwardArtifactCommandRequest\x1a2.foghorn_federation.ForwardArtifactCommandResponse\x12j\n" +
 	"\x0fMintStorageURLs\x12*.foghorn_federation.MintStorageURLsRequest\x1a+.foghorn_federation.MintStorageURLsResponse\x12y\n" +
-	"\x14DeleteStorageObjects\x12/.foghorn_federation.DeleteStorageObjectsRequest\x1a0.foghorn_federation.DeleteStorageObjectsResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x14DeleteStorageObjects\x12/.foghorn_federation.DeleteStorageObjectsRequest\x1a0.foghorn_federation.DeleteStorageObjectsResponseB3Z1github.com/Livepeer-FrameWorks/monorepo/pkg/protob\x06proto3"
 
 var (
 	file_foghorn_federation_proto_rawDescOnce sync.Once

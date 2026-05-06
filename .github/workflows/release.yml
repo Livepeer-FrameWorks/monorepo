@@ -693,7 +693,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist/cli
           cd cli
-          LDFLAGS="-X frameworks/pkg/version.Version=${{ github.ref_name }} -X frameworks/pkg/version.GitCommit=${{ github.sha }} -X frameworks/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X frameworks/pkg/version.ComponentName=cli -X frameworks/pkg/version.ComponentVersion=${{ steps.compver.outputs.value }}"
+          LDFLAGS="-X github.com/Livepeer-FrameWorks/monorepo/pkg/version.Version=${{ github.ref_name }} -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.GitCommit=${{ github.sha }} -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentName=cli -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentVersion=${{ steps.compver.outputs.value }}"
           for target in linux-amd64 linux-arm64; do
             IFS='-' read -r os arch <<< "$target"
             out="frameworks-${os}-${arch}"
@@ -732,7 +732,7 @@ jobs:
           mkdir -p dist/cli
           cd cli
           GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 \
-            go build -ldflags "-X frameworks/pkg/version.Version=${{ github.ref_name }} -X frameworks/pkg/version.GitCommit=${{ github.sha }} -X frameworks/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X frameworks/pkg/version.ComponentName=cli -X frameworks/pkg/version.ComponentVersion=${{ steps.compver.outputs.value }}" -o "frameworks-darwin-arm64" .
+            go build -ldflags "-X github.com/Livepeer-FrameWorks/monorepo/pkg/version.Version=${{ github.ref_name }} -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.GitCommit=${{ github.sha }} -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentName=cli -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentVersion=${{ steps.compver.outputs.value }}" -o "frameworks-darwin-arm64" .
           mv "frameworks-darwin-arm64" "../dist/cli/frameworks-darwin-arm64"
 
       - name: Setup signing keychain
@@ -829,11 +829,11 @@ jobs:
             fi
 
             (cd "$context" && go build -ldflags "\
-              -X frameworks/pkg/version.Version=${VERSION} \
-              -X frameworks/pkg/version.GitCommit=${{ github.sha }} \
-              -X frameworks/pkg/version.BuildDate=${BUILD_DATE} \
-              -X frameworks/pkg/version.ComponentName=${name} \
-              -X frameworks/pkg/version.ComponentVersion=${svcver} \
+              -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.Version=${VERSION} \
+              -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.GitCommit=${{ github.sha }} \
+              -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.BuildDate=${BUILD_DATE} \
+              -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentName=${name} \
+              -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentVersion=${svcver} \
               -s -w" \
               -o "${BINARY}" \
               "${cmd}")
@@ -911,11 +911,11 @@ jobs:
             fi
 
             (cd "$context" && go build -ldflags "\
-              -X frameworks/pkg/version.Version=${VERSION} \
-              -X frameworks/pkg/version.GitCommit=${{ github.sha }} \
-              -X frameworks/pkg/version.BuildDate=${BUILD_DATE} \
-              -X frameworks/pkg/version.ComponentName=${name} \
-              -X frameworks/pkg/version.ComponentVersion=${svcver} \
+              -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.Version=${VERSION} \
+              -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.GitCommit=${{ github.sha }} \
+              -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.BuildDate=${BUILD_DATE} \
+              -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentName=${name} \
+              -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentVersion=${svcver} \
               -s -w" \
               -o "${BINARY}" \
               "${cmd}")
@@ -987,11 +987,11 @@ jobs:
             OUTPUT="frameworks-${name}-${VERSION}-darwin-arm64.zip"
 
             (cd "$context" && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "\
-              -X frameworks/pkg/version.Version=${VERSION} \
-              -X frameworks/pkg/version.GitCommit=${{ github.sha }} \
-              -X frameworks/pkg/version.BuildDate=${BUILD_DATE} \
-              -X frameworks/pkg/version.ComponentName=${name} \
-              -X frameworks/pkg/version.ComponentVersion=${svcver} \
+              -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.Version=${VERSION} \
+              -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.GitCommit=${{ github.sha }} \
+              -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.BuildDate=${BUILD_DATE} \
+              -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentName=${name} \
+              -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentVersion=${svcver} \
               -s -w" \
               -o "${BINARY}" \
               "${cmd}")

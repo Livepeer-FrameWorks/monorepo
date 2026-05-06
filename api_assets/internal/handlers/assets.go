@@ -17,8 +17,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"frameworks/api_assets/internal/cache"
-	"frameworks/pkg/auth"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 const (

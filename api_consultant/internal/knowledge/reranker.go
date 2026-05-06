@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/llm"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 )
 
 const rrfK = 60 // standard Reciprocal Rank Fusion constant

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"frameworks/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 type portRegistry map[string]map[int]string

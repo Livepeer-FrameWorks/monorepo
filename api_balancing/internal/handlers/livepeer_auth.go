@@ -10,9 +10,9 @@ import (
 
 	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/state"
-	"frameworks/pkg/clients/commodore"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/gin-gonic/gin"
 )
@@ -25,8 +25,24 @@ type livepeerAuthRequest struct {
 
 // livepeerAuthResponse is what go-livepeer expects back.
 // ManifestID is required — an empty value or non-200 status rejects the stream.
+// TenantID and StreamID propagate FrameWorks tenant context into go-livepeer's
+// authWebhookResponse → core.StreamParameters, so the gateway can stamp
+// per-session telemetry with the right tenant. Empty values are tolerated by
+// the gateway during rollout.
 type livepeerAuthResponse struct {
 	ManifestID string `json:"manifestID"`
+	TenantID   string `json:"tenantID,omitempty"`
+	StreamID   string `json:"streamID,omitempty"`
+}
+
+// LivepeerAuthContext is the resolved tenant/stream context for an authorized
+// livepeer-gateway transcode request. Authorize returns this on success and
+// nil on rejection. The fields here flow into the auth webhook response and,
+// from there, into go-livepeer's StreamParameters via createRTMPStreamIDHandler.
+type LivepeerAuthContext struct {
+	TenantID     string
+	StreamID     string
+	InternalName string
 }
 
 // HandleLivepeerAuth handles the auth webhook from go-livepeer gateways.
@@ -52,8 +68,8 @@ func HandleLivepeerAuth(c *gin.Context) {
 	}
 
 	resolver := defaultLivepeerAuthResolver()
-	ok, reason := resolver.Authorize(c.Request.Context(), manifestID)
-	if !ok {
+	authCtx, reason := resolver.Authorize(c.Request.Context(), manifestID)
+	if authCtx == nil {
 		logger.WithFields(logging.Fields{
 			"manifest_id": manifestID,
 			"reason":      reason,
@@ -63,8 +79,16 @@ func HandleLivepeerAuth(c *gin.Context) {
 		return
 	}
 
-	logger.WithField("manifest_id", manifestID).Debug("livepeer auth: stream authorized")
-	c.JSON(http.StatusOK, livepeerAuthResponse{ManifestID: manifestID})
+	logger.WithFields(logging.Fields{
+		"manifest_id": manifestID,
+		"tenant_id":   authCtx.TenantID,
+		"stream_id":   authCtx.StreamID,
+	}).Debug("livepeer auth: stream authorized")
+	c.JSON(http.StatusOK, livepeerAuthResponse{
+		ManifestID: manifestID,
+		TenantID:   authCtx.TenantID,
+		StreamID:   authCtx.StreamID,
+	})
 }
 
 // extractManifestID parses the manifestID from a go-livepeer push URL.
@@ -114,10 +138,12 @@ type federationStreamQuerier interface {
 
 // LivepeerAuthResolver answers "is this manifestID a real, live stream owned by
 // a real tenant" through a four-step chain: local in-memory state, positive-result
-// LRU, Commodore manifest resolution, federation peer fan-out.
+// LRU, Commodore manifest resolution, federation peer fan-out. On success it
+// returns the resolved tenant/stream context so callers can propagate tenant
+// attribution into per-session telemetry.
 type LivepeerAuthResolver struct {
 	LocalCluster  string
-	StreamLookup  func(manifestID string) bool
+	StreamLookup  func(manifestID string) *LivepeerAuthContext
 	Commodore     commodoreInternalNameResolver
 	Federation    federationStreamQuerier
 	PeerAddrs     peerAddrResolver // shared with the rest of the handlers package
@@ -131,8 +157,16 @@ type LivepeerAuthResolver struct {
 func defaultLivepeerAuthResolver() *LivepeerAuthResolver {
 	return &LivepeerAuthResolver{
 		LocalCluster: clusterID,
-		StreamLookup: func(manifestID string) bool {
-			return state.DefaultManager().GetStreamState(manifestID) != nil
+		StreamLookup: func(manifestID string) *LivepeerAuthContext {
+			s := state.DefaultManager().GetStreamState(manifestID)
+			if s == nil {
+				return nil
+			}
+			return &LivepeerAuthContext{
+				TenantID:     s.TenantID,
+				StreamID:     s.StreamID,
+				InternalName: s.InternalName,
+			}
 		},
 		Commodore:     commodoreAdapter{client: commodoreClient},
 		Federation:    federationAdapter{client: federationClient},
@@ -143,46 +177,57 @@ func defaultLivepeerAuthResolver() *LivepeerAuthResolver {
 	}
 }
 
-// Authorize runs the resolution chain. Returns (true, "") on success, or
-// (false, reason) with one of the constants above when the stream cannot be
-// confirmed.
-func (r *LivepeerAuthResolver) Authorize(ctx context.Context, manifestID string) (bool, string) {
+// Authorize runs the resolution chain. Returns (ctx, "") on success with the
+// resolved tenant/stream context; (nil, reason) with one of the constants above
+// when the stream cannot be confirmed.
+func (r *LivepeerAuthResolver) Authorize(ctx context.Context, manifestID string) (*LivepeerAuthContext, string) {
 	// 1. Local in-memory state. Pub/sub keeps this in sync within a Foghorn pool
 	// when EnableRedisSync is on, so this hit covers same-instance and same-pool
 	// streams without a network round trip.
-	if r.StreamLookup != nil && r.StreamLookup(manifestID) {
-		return true, ""
+	if r.StreamLookup != nil {
+		if c := r.StreamLookup(manifestID); c != nil {
+			return c, ""
+		}
 	}
 
 	// 2. Positive-result cache. Avoids repeated Commodore + peer fan-out for the
-	// burst of segments at session startup.
-	if r.PositiveCache != nil && r.PositiveCache.has(manifestID) {
-		return true, ""
+	// burst of segments at session startup. Caches the full auth context, not
+	// just a boolean, so the cached path still produces tenant attribution.
+	if r.PositiveCache != nil {
+		if c := r.PositiveCache.get(manifestID); c != nil {
+			return c, ""
+		}
 	}
 
 	// 3. Commodore: confirm manifest belongs to a real tenant + get peer context.
 	if r.Commodore == nil {
-		return false, authRejectCommodoreUnreachable
+		return nil, authRejectCommodoreUnreachable
 	}
 	resp, err := r.Commodore.ResolveInternalName(ctx, manifestID)
 	if err != nil {
 		if r.Logger != nil {
 			r.Logger.WithError(err).WithField("manifest_id", manifestID).Warn("livepeer auth: ResolveInternalName failed")
 		}
-		return false, authRejectCommodoreUnreachable
+		return nil, authRejectCommodoreUnreachable
 	}
 	if resp == nil || strings.TrimSpace(resp.GetTenantId()) == "" {
-		return false, authRejectStreamNotFound
+		return nil, authRejectStreamNotFound
+	}
+
+	authCtx := &LivepeerAuthContext{
+		TenantID:     resp.GetTenantId(),
+		StreamID:     resp.GetStreamId(),
+		InternalName: manifestID,
 	}
 
 	// 4. Federation peer fan-out. The stream may be live on a peer instance or
 	// peer cluster that this Foghorn doesn't directly serve.
 	peers := resp.GetClusterPeers()
 	if len(peers) == 0 {
-		return false, authRejectPeerContextMissing
+		return nil, authRejectPeerContextMissing
 	}
 	if r.Federation == nil || r.PeerAddrs == nil {
-		return false, authRejectPeerContextMissing
+		return nil, authRejectPeerContextMissing
 	}
 
 	queryCtx := ctx
@@ -208,7 +253,7 @@ func (r *LivepeerAuthResolver) Authorize(ctx context.Context, manifestID string)
 		peerResp, qerr := r.Federation.QueryStream(queryCtx, peerCluster, addr, &pb.QueryStreamRequest{
 			StreamName:        manifestID,
 			RequestingCluster: r.LocalCluster,
-			TenantId:          resp.GetTenantId(),
+			TenantId:          authCtx.TenantID,
 			IsSourceSelection: true,
 		})
 		if qerr != nil {
@@ -223,51 +268,62 @@ func (r *LivepeerAuthResolver) Authorize(ctx context.Context, manifestID string)
 		anyAnswered = true
 		if peerResp != nil && len(peerResp.GetCandidates()) > 0 {
 			if r.PositiveCache != nil {
-				r.PositiveCache.add(manifestID)
+				r.PositiveCache.add(manifestID, authCtx)
 			}
-			return true, ""
+			return authCtx, ""
 		}
 	}
 
 	if !anyAnswered {
-		return false, authRejectPeerUnreachable
+		return nil, authRejectPeerUnreachable
 	}
-	return false, authRejectStreamNotLive
+	return nil, authRejectStreamNotLive
 }
 
 // authPositiveCache holds short-lived "this manifest is authorised" entries to
-// avoid Commodore + peer fan-out on every segment at session startup.
+// avoid Commodore + peer fan-out on every segment at session startup. The cache
+// stores the full LivepeerAuthContext so cache hits still propagate tenant
+// attribution to telemetry consumers.
 type authPositiveCache struct {
 	mu      sync.Mutex
-	entries map[string]time.Time
+	entries map[string]authCacheEntry
 	ttl     time.Duration
+}
+
+type authCacheEntry struct {
+	ctx *LivepeerAuthContext
+	exp time.Time
 }
 
 func newAuthPositiveCache(ttl time.Duration) *authPositiveCache {
 	return &authPositiveCache{
-		entries: map[string]time.Time{},
+		entries: map[string]authCacheEntry{},
 		ttl:     ttl,
 	}
 }
 
-func (c *authPositiveCache) has(manifestID string) bool {
+func (c *authPositiveCache) get(manifestID string) *LivepeerAuthContext {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	exp, ok := c.entries[manifestID]
+	e, ok := c.entries[manifestID]
 	if !ok {
-		return false
+		return nil
 	}
-	if time.Now().After(exp) {
+	if time.Now().After(e.exp) {
 		delete(c.entries, manifestID)
-		return false
+		return nil
 	}
-	return true
+	return e.ctx
 }
 
-func (c *authPositiveCache) add(manifestID string) {
+func (c *authPositiveCache) has(manifestID string) bool {
+	return c.get(manifestID) != nil
+}
+
+func (c *authPositiveCache) add(manifestID string, authCtx *LivepeerAuthContext) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries[manifestID] = time.Now().Add(c.ttl)
+	c.entries[manifestID] = authCacheEntry{ctx: authCtx, exp: time.Now().Add(c.ttl)}
 }
 
 // livepeerAuthPositiveCache is the package-level positive cache used by the

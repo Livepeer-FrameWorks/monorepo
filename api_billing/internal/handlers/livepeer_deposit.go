@@ -14,10 +14,10 @@ import (
 	"sync"
 	"time"
 
-	qmclient "frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
-	"frameworks/pkg/servicedefs"
+	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"

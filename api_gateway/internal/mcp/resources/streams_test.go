@@ -3,7 +3,7 @@ package resources
 import (
 	"testing"
 
-	"frameworks/pkg/globalid"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 )
 
 func TestDecodeStreamIdentifier_Empty(t *testing.T) {

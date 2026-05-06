@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"frameworks/api_gateway/internal/clients"
-	"frameworks/pkg/globalid"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 
 	"github.com/google/uuid"
 )

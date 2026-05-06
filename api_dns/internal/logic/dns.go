@@ -10,10 +10,10 @@ import (
 
 	"frameworks/api_dns/internal/provider/bunny"
 	"frameworks/api_dns/internal/provider/cloudflare"
-	pkgdns "frameworks/pkg/dns"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/proto"
-	"frameworks/pkg/servicedefs"
+	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // MonitorConfig holds Cloudflare health monitor settings

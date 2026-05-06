@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"frameworks/pkg/llm"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 )
 
 // compactMessages implements tiered context compaction, replacing the naive

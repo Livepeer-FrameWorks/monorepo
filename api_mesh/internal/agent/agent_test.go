@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"frameworks/api_mesh/internal/wireguard"
-	"frameworks/pkg/logging"
-	pkgmesh "frameworks/pkg/mesh"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pkgmesh "github.com/Livepeer-FrameWorks/monorepo/pkg/mesh"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"

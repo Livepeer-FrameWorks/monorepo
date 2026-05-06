@@ -11109,7 +11109,7 @@ const file_purser_proto_rawDesc = "" +
 	"\x16GetPaymentRequirements\x12%.purser.GetPaymentRequirementsRequest\x1a\x1b.purser.PaymentRequirements\x12X\n" +
 	"\x11VerifyX402Payment\x12 .purser.VerifyX402PaymentRequest\x1a!.purser.VerifyX402PaymentResponse\x12X\n" +
 	"\x11SettleX402Payment\x12 .purser.SettleX402PaymentRequest\x1a!.purser.SettleX402PaymentResponse\x12a\n" +
-	"\x14GetTenantX402Address\x12#.purser.GetTenantX402AddressRequest\x1a$.purser.GetTenantX402AddressResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x14GetTenantX402Address\x12#.purser.GetTenantX402AddressRequest\x1a$.purser.GetTenantX402AddressResponseB3Z1github.com/Livepeer-FrameWorks/monorepo/pkg/protob\x06proto3"
 
 var (
 	file_purser_proto_rawDescOnce sync.Once

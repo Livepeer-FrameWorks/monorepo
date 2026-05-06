@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"frameworks/pkg/kafka"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/models"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 )
 
 type PublisherConfig struct {

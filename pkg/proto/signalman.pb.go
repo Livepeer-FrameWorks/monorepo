@@ -1399,7 +1399,7 @@ const file_signalman_proto_rawDesc = "" +
 	" EVENT_TYPE_SKIPPER_INVESTIGATION\x10<2\x9a\x01\n" +
 	"\x10SignalmanService\x12C\n" +
 	"\tSubscribe\x12\x18.signalman.ClientMessage\x1a\x18.signalman.ServerMessage(\x010\x01\x12A\n" +
-	"\vGetHubStats\x12\x1d.signalman.GetHubStatsRequest\x1a\x13.signalman.HubStatsB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\vGetHubStats\x12\x1d.signalman.GetHubStatsRequest\x1a\x13.signalman.HubStatsB3Z1github.com/Livepeer-FrameWorks/monorepo/pkg/protob\x06proto3"
 
 var (
 	file_signalman_proto_rawDescOnce sync.Once

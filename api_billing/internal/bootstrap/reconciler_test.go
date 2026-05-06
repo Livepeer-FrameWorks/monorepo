@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"testing"
 
-	"frameworks/pkg/mist"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )

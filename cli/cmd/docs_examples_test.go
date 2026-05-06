@@ -105,6 +105,25 @@ func TestCLIReferenceFlagsMatchCobra(t *testing.T) {
 	}
 }
 
+func TestCLIReferenceDoesNotPinRenderedOutput(t *testing.T) {
+	referencePath := filepath.Join("..", "..", "website_docs", "src", "content", "docs", "operators", "cli-reference.mdx")
+	contentBytes, err := os.ReadFile(referencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(contentBytes)
+
+	forbidden := []string{
+		"**Output:**",
+		"**Example output:**",
+	}
+	for _, marker := range forbidden {
+		if strings.Contains(content, marker) {
+			t.Errorf("cli reference must not pin rendered command output with %q; document behavior and let Cobra/help/output tests own exact shapes", marker)
+		}
+	}
+}
+
 func commandPaths(cmd *cobra.Command, parent []string) []string {
 	if cmd.Hidden {
 		return nil

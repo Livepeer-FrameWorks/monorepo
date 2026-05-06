@@ -7,7 +7,7 @@ import (
 
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
-	"frameworks/pkg/version"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/gin-gonic/gin"
 )

@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"frameworks/pkg/logging"
-	"frameworks/pkg/monitoring"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 
 	"github.com/gin-gonic/gin"
 )

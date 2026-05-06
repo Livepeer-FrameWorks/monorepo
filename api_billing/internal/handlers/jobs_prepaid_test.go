@@ -7,8 +7,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/google/uuid"
 
-	"frameworks/pkg/billing"
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 func TestDeductPrepaidBalanceForUsage_AppliesAndLocksBalance(t *testing.T) {

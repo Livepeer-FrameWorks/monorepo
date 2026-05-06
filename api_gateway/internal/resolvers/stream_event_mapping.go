@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"frameworks/api_gateway/graph/model"
-	"frameworks/pkg/globalid"
-	pb "frameworks/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"

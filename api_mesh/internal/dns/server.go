@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"frameworks/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/miekg/dns"
 )
 
