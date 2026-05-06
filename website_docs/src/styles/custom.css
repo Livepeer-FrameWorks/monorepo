@@ -629,6 +629,25 @@ code {
   margin: 0.6rem 0;
 }
 
+.docs-skipper-message__block-sources {
+  margin: 0.45rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0;
+  list-style: none;
+}
+
+.docs-skipper-message__block-sources .docs-skipper-message__link {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 0.15rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--sl-color-hairline-shade);
+  font-size: 0.65rem;
+  line-height: 1.2;
+}
+
 .docs-skipper-message__thinking {
   display: flex;
   align-items: center;
