@@ -193,6 +193,7 @@
   };
 
   var toolLabels = {
+    list_mcp_tools: "Reading MCP tool inventory",
     search_knowledge: "Searching knowledge base",
     search_web: "Searching the web",
     diagnose_rebuffering: "Diagnosing rebuffering",

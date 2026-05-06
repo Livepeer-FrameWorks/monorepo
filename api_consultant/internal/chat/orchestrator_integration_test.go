@@ -825,8 +825,59 @@ func TestOrchestratorPreservesTextAcrossToolRounds(t *testing.T) {
 	if !strings.Contains(result.Content, "Here is the SRT setup guide") {
 		t.Fatalf("expected round-1 text preserved, got %q", result.Content)
 	}
+	if len(result.Blocks) != 2 {
+		t.Fatalf("expected separate confidence blocks per assistant round, got %d: %#v", len(result.Blocks), result.Blocks)
+	}
+	if result.Blocks[0].Confidence != ConfidenceBestGuess || result.Blocks[1].Confidence != ConfidenceVerified {
+		t.Fatalf("expected per-round confidence chain, got %#v", result.Blocks)
+	}
+	if len(result.Blocks[1].Sources) != 1 || result.Blocks[1].Sources[0].URL != "https://example.com" {
+		t.Fatalf("expected second block source attached to second block, got %#v", result.Blocks[1].Sources)
+	}
 	if result.Confidence != ConfidenceVerified {
 		t.Fatalf("expected verified confidence (highest across blocks), got %s", result.Confidence)
+	}
+}
+
+func TestOrchestratorSeparatesUntaggedToolRoundText(t *testing.T) {
+	provider := &fakeProvider{
+		sequences: [][]llm.Chunk{
+			{
+				{Content: "[confidence:best_guess]\nI'll check the current tool registry.\n"},
+				{ToolCalls: []llm.ToolCall{{
+					ID:        "call-1",
+					Name:      "list_mcp_tools",
+					Arguments: `{}`,
+				}}},
+			},
+			{
+				{Content: "The current Gateway MCP inventory includes create_stream."},
+			},
+		},
+	}
+	orchestrator := NewOrchestrator(OrchestratorConfig{
+		LLMProvider: provider,
+		Gateway:     newFakeGateway("create_stream"),
+	})
+	ctx := skipper.WithMode(context.Background(), "docs")
+	result, err := orchestrator.Run(ctx, []llm.Message{
+		{Role: "system", Content: "You are a helpful assistant."},
+		{Role: "user", Content: "What MCP tools are available?"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(result.Blocks) != 2 {
+		t.Fatalf("expected two blocks split by assistant round, got %d: %#v", len(result.Blocks), result.Blocks)
+	}
+	if result.Blocks[0].Confidence != ConfidenceBestGuess {
+		t.Fatalf("expected first block best_guess, got %#v", result.Blocks[0])
+	}
+	if result.Blocks[1].Confidence != ConfidenceUnknown {
+		t.Fatalf("expected untagged final round to become unknown block, got %#v", result.Blocks[1])
+	}
+	if strings.Contains(result.Blocks[0].Content, "current Gateway MCP inventory") {
+		t.Fatalf("final text was concatenated into first block: %#v", result.Blocks)
 	}
 }
 
@@ -972,6 +1023,8 @@ func TestStripConfidenceTags(t *testing.T) {
 		{"end of line", "Some text[confidence:best_guess]", "Some text"},
 		{"middle of line", "Before [confidence:sourced] after", "Before  after"},
 		{"standalone", "[confidence:unknown]", ""},
+		{"closing standalone", "[/confidence]", ""},
+		{"closing inline", "Answer[/confidence] done", "Answer done"},
 		{"multiple", "[confidence:verified]A[confidence:sourced]B", "AB"},
 		{"no tag", "Just regular text", "Just regular text"},
 		{"unclosed tag", "[confidence:verified text", "[confidence:verified text"},
@@ -983,6 +1036,24 @@ func TestStripConfidenceTags(t *testing.T) {
 				t.Fatalf("stripConfidenceTags(%q) = %q, want %q", tc.in, got, tc.out)
 			}
 		})
+	}
+}
+
+func TestParseConfidenceBlocksWithClosingTagsAndNoSources(t *testing.T) {
+	input := "[confidence:verified]\nAvailable MCP Tools\n[/confidence]\n\n[confidence:best_guess]\nDiscovery details\n[/confidence]\n"
+	blocks := parseConfidenceBlocks(input)
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 blocks, got %d: %#v", len(blocks), blocks)
+	}
+	if blocks[0].Confidence != ConfidenceVerified || blocks[0].Content != "Available MCP Tools" {
+		t.Fatalf("unexpected first block: %#v", blocks[0])
+	}
+	if blocks[1].Confidence != ConfidenceBestGuess || blocks[1].Content != "Discovery details" {
+		t.Fatalf("unexpected second block: %#v", blocks[1])
+	}
+	joined := joinConfidenceContent(blocks)
+	if strings.Contains(joined, "[/confidence]") || strings.Contains(joined, "[confidence:") {
+		t.Fatalf("confidence markup leaked into content: %q", joined)
 	}
 }
 
@@ -1011,6 +1082,96 @@ func TestConfidenceStreamFilterInlineTag(t *testing.T) {
 	if !strings.Contains(joined, "with details.") {
 		t.Fatalf("expected content after tag preserved, got %q", joined)
 	}
+}
+
+func TestConfidenceStreamFilterClosingTag(t *testing.T) {
+	var tokens []string
+	streamer := tokenFunc(func(tok string) error {
+		tokens = append(tokens, tok)
+		return nil
+	})
+	filter := newConfidenceStreamFilter(streamer)
+	input := "Answer one.\n[/confidence]\n[confidence:best_guess]\nAnswer two."
+	if err := filter.Write(input); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := filter.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	joined := strings.Join(tokens, "")
+	if strings.Contains(joined, "[/confidence]") || strings.Contains(joined, "[confidence:") {
+		t.Fatalf("confidence tag leaked into streamed output: %q", joined)
+	}
+	if !strings.Contains(joined, "Answer one.") || !strings.Contains(joined, "Answer two.") {
+		t.Fatalf("expected answers preserved, got %q", joined)
+	}
+}
+
+func TestMCPToolInventoryUsesDiscoveredGatewayTools(t *testing.T) {
+	orchestrator := NewOrchestrator(OrchestratorConfig{
+		LLMProvider: &fakeProvider{},
+		Gateway:     newFakeGateway("create_stream", "ask_consultant", "introspect_schema"),
+	})
+	ctx := skipper.WithMode(context.Background(), "docs")
+	inventory := orchestrator.buildMCPToolInventory(ctx, true)
+	if inventory.GatewayToolCount != 3 {
+		t.Fatalf("expected 3 gateway tools, got %d", inventory.GatewayToolCount)
+	}
+	if !inventoryHasTool(inventory.GatewayTools, "create_stream", false) {
+		t.Fatalf("expected create_stream as docs-blocked gateway tool: %#v", inventory.GatewayTools)
+	}
+	if !inventoryHasTool(inventory.GatewayTools, "introspect_schema", true) {
+		t.Fatalf("expected introspect_schema as docs-available gateway tool: %#v", inventory.GatewayTools)
+	}
+	if inventoryHasTool(inventory.GatewayTools, "search_knowledge", true) {
+		t.Fatalf("search_knowledge should not be listed as a Gateway MCP tool")
+	}
+	if !inventoryHasTool(inventory.SkipperInternalTools, "search_knowledge", true) {
+		t.Fatalf("expected search_knowledge in internal Skipper tools: %#v", inventory.SkipperInternalTools)
+	}
+}
+
+func TestMCPInventoryQuestionInjectsCurrentInventoryAndSkipsRetrieval(t *testing.T) {
+	provider := &recordingProvider{
+		sequences: [][]llm.Chunk{{
+			{Content: "[confidence:verified]\nThe current inventory is available.\n[sources]\n[/sources]\n"},
+		}},
+	}
+	store := &inMemoryKnowledgeStore{
+		chunks: []knowledge.Chunk{
+			{TenantID: defaultGlobalTenantID, SourceURL: "https://example.com/stale", SourceTitle: "Stale MCP docs", Text: "Old hard-coded MCP list"},
+		},
+	}
+	embedder := &recordingEmbedder{}
+	orchestrator := NewOrchestrator(OrchestratorConfig{
+		LLMProvider: provider,
+		Knowledge:   store,
+		Embedder:    embedder,
+		Gateway:     newFakeGateway("create_stream", "introspect_schema"),
+	})
+	ctx := skipper.WithMode(context.Background(), "docs")
+	_, err := orchestrator.Run(ctx, []llm.Message{
+		{Role: "system", Content: SystemPrompt + DocsSystemPromptSuffix},
+		{Role: "user", Content: "What MCP tools are available?"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(embedder.queries) != 0 {
+		t.Fatalf("expected pre-retrieval to be skipped, got queries: %v", embedder.queries)
+	}
+	if len(provider.calls) == 0 || !strings.Contains(provider.calls[0][0].Content, "Trusted current FrameWorks MCP tool inventory") {
+		t.Fatalf("expected MCP inventory context in first LLM call: %#v", provider.calls)
+	}
+}
+
+func inventoryHasTool(tools []MCPToolInfo, name string, available bool) bool {
+	for _, tool := range tools {
+		if tool.Name == name {
+			return tool.AvailableInCurrentMode == available
+		}
+	}
+	return false
 }
 
 // tokenFunc adapts a function into a TokenStreamer for testing.

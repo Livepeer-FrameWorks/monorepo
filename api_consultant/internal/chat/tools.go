@@ -18,6 +18,22 @@ var ToolDefinitions = []ToolDefinition{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "list_mcp_tools",
+			Description: "List the current FrameWorks MCP tool inventory discovered from the Gateway MCP tools/list response. Use this for questions about available MCP tools or capabilities.",
+			Parameters: toolParams(
+				map[string]any{
+					"include_internal": map[string]any{
+						"type":        "boolean",
+						"description": "Include Skipper's internal helper tools separately from public Gateway MCP tools.",
+					},
+				},
+				nil,
+			),
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "search_knowledge",
 			Description: "Search the Skipper knowledge base for platform-specific guidance and verified docs.",
 			Parameters: toolParams(

@@ -168,15 +168,26 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 
 	var response strings.Builder
 	var fullResponse strings.Builder
+	var assistantResponses []string
 	var sources []Source
 	var toolCalls []ToolCallRecord
 	var details []ToolDetail
 	inputTokens := 0
 	filter := newConfidenceStreamFilter(streamer)
+	lastUserMessage := lastUserContent(messages)
+	isMCPInventoryQuestion := isMCPToolInventoryQuestion(lastUserMessage)
+	if isMCPInventoryQuestion {
+		inventory := o.buildMCPToolInventory(ctx, false)
+		messages = appendTrustedSystemContext(messages, formatMCPToolInventoryContext(inventory))
+		details = append(details, ToolDetail{
+			Title:   "Current MCP tool inventory",
+			Payload: inventory,
+		})
+	}
 
 	// Pre-retrieval: auto-search knowledge base using the user's last message
 	// before the first LLM call to save a round-trip.
-	if o.knowledge != nil && o.embedder != nil && len(messages) > 0 {
+	if !isMCPInventoryQuestion && o.knowledge != nil && o.embedder != nil && len(messages) > 0 {
 		userMsg := messages[len(messages)-1]
 		if userMsg.Role == "user" && strings.TrimSpace(userMsg.Content) != "" {
 			preResult := o.preRetrieve(ctx, userMsg.Content)
@@ -216,6 +227,7 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 		}
 
 		var pendingToolCalls []llm.ToolCall
+		var roundResponse strings.Builder
 		for {
 			chunk, err := stream.Recv()
 			if err != nil {
@@ -228,6 +240,7 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 			if chunk.Content != "" {
 				response.WriteString(chunk.Content)
 				fullResponse.WriteString(chunk.Content)
+				roundResponse.WriteString(chunk.Content)
 				if filterErr := filter.Write(chunk.Content); filterErr != nil {
 					_ = stream.Close()
 					return OrchestratorResult{}, filterErr
@@ -242,6 +255,9 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 		llmDuration.WithLabelValues(o.llmProviderName, o.llmModelName).Observe(time.Since(llmStart).Seconds())
 		if err := filter.Flush(); err != nil {
 			return OrchestratorResult{}, err
+		}
+		if strings.TrimSpace(roundResponse.String()) != "" {
+			assistantResponses = append(assistantResponses, roundResponse.String())
 		}
 
 		if len(pendingToolCalls) == 0 {
@@ -338,11 +354,13 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 		}
 
 		if round == o.maxRounds-1 && fullResponse.Len() == 0 {
-			fullResponse.WriteString("[confidence:unknown]\nReached maximum tool iterations before producing a final answer.\n[sources]\n[/sources]\n")
+			fallback := "[confidence:unknown]\nReached maximum tool iterations before producing a final answer.\n[sources]\n[/sources]\n"
+			fullResponse.WriteString(fallback)
+			assistantResponses = append(assistantResponses, fallback)
 		}
 	}
 
-	blocks := parseConfidenceBlocks(fullResponse.String())
+	blocks := parseConfidenceTurns(assistantResponses)
 	content := joinConfidenceContent(blocks)
 	confidence := summarizeConfidence(blocks)
 	blockSources := sourcesFromBlocks(blocks)
@@ -373,6 +391,7 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 // Read-only search, introspection, stream reads, and diagnostic tools only;
 // all mutation tools blocked.
 var docsAllowedTools = map[string]bool{
+	"list_mcp_tools":            true,
 	"search_knowledge":          true,
 	"search_web":                true,
 	"introspect_schema":         true,
@@ -418,6 +437,12 @@ var spokeMutationBlocklist = map[string]bool{
 // it only needs the local knowledge base for context.
 var heartbeatAllowedTools = map[string]bool{
 	"search_knowledge": true,
+}
+
+var localSkipperTools = map[string]bool{
+	"list_mcp_tools":   true,
+	"search_knowledge": true,
+	"search_web":       true,
 }
 
 func (o *Orchestrator) toolsForContext(ctx context.Context) []llm.Tool {
@@ -480,12 +505,132 @@ func (o *Orchestrator) executeTool(ctx context.Context, call llm.ToolCall) (Tool
 		}, nil
 	}
 	switch call.Name {
+	case "list_mcp_tools":
+		return o.listMCPTools(ctx, call.Arguments)
 	case "search_knowledge":
 		return o.searchKnowledge(ctx, call.Arguments)
 	case "search_web":
 		return o.searchWebTool(ctx, call.Arguments)
 	default:
 		return o.callGatewayTool(ctx, call)
+	}
+}
+
+type ListMCPToolsInput struct {
+	IncludeInternal bool `json:"include_internal,omitempty"`
+}
+
+type MCPToolInfo struct {
+	Name                   string `json:"name"`
+	Category               string `json:"category,omitempty"`
+	Description            string `json:"description,omitempty"`
+	AvailableInCurrentMode bool   `json:"available_in_current_mode"`
+}
+
+type MCPToolInventory struct {
+	Discovery            string        `json:"discovery"`
+	CurrentMode          string        `json:"current_mode,omitempty"`
+	GatewayToolCount     int           `json:"gateway_tool_count"`
+	GatewayTools         []MCPToolInfo `json:"gateway_tools"`
+	SkipperInternalTools []MCPToolInfo `json:"skipper_internal_tools,omitempty"`
+	Notes                []string      `json:"notes"`
+}
+
+func (o *Orchestrator) listMCPTools(ctx context.Context, arguments string) (ToolOutcome, error) {
+	var input ListMCPToolsInput
+	if strings.TrimSpace(arguments) != "" {
+		if err := json.Unmarshal([]byte(arguments), &input); err != nil {
+			return ToolOutcome{}, fmt.Errorf("parse list_mcp_tools arguments: %w", err)
+		}
+	}
+	inventory := o.buildMCPToolInventory(ctx, input.IncludeInternal)
+	contentBytes, err := json.MarshalIndent(inventory, "", "  ")
+	if err != nil {
+		return ToolOutcome{}, err
+	}
+	return ToolOutcome{
+		Content: string(contentBytes),
+		Detail: ToolDetail{
+			Title:   "Tool call: list_mcp_tools",
+			Payload: inventory,
+		},
+	}, nil
+}
+
+func (o *Orchestrator) buildMCPToolInventory(ctx context.Context, includeInternal bool) MCPToolInventory {
+	mode := skipper.GetMode(ctx)
+	gatewayTools := make([]MCPToolInfo, 0, len(o.tools))
+	internalTools := make([]MCPToolInfo, 0, len(localSkipperTools))
+	for _, tool := range o.tools {
+		info := MCPToolInfo{
+			Name:                   tool.Name,
+			Category:               mcpToolCategory(tool.Name),
+			Description:            tool.Description,
+			AvailableInCurrentMode: o.modeAllowsTool(ctx, tool.Name),
+		}
+		if localSkipperTools[tool.Name] {
+			if includeInternal {
+				internalTools = append(internalTools, info)
+			}
+			continue
+		}
+		gatewayTools = append(gatewayTools, info)
+	}
+	sort.Slice(gatewayTools, func(i, j int) bool {
+		if gatewayTools[i].Category == gatewayTools[j].Category {
+			return gatewayTools[i].Name < gatewayTools[j].Name
+		}
+		return gatewayTools[i].Category < gatewayTools[j].Category
+	})
+	sort.Slice(internalTools, func(i, j int) bool {
+		return internalTools[i].Name < internalTools[j].Name
+	})
+	return MCPToolInventory{
+		Discovery:            "Gateway MCP tools/list discovered by Skipper at startup. External MCP clients should call protocol-level tools/list on the Gateway for the exact live inventory.",
+		CurrentMode:          mode,
+		GatewayToolCount:     len(gatewayTools),
+		GatewayTools:         gatewayTools,
+		SkipperInternalTools: internalTools,
+		Notes: []string{
+			"introspect_schema explores the GraphQL schema; it is not MCP tool inventory discovery.",
+			"Docs mode can execute only tools marked available_in_current_mode=true. External agents should call dedicated Gateway MCP tools directly for mutations.",
+			"search_knowledge and search_web are Skipper helper tools, not public Gateway MCP tools.",
+		},
+	}
+}
+
+func mcpToolCategory(name string) string {
+	switch name {
+	case "update_billing_details":
+		return "Account & Auth"
+	case "get_payment_options", "submit_payment":
+		return "Payment"
+	case "topup_balance", "check_topup":
+		return "Billing"
+	case "create_stream", "update_stream", "delete_stream", "refresh_stream_key":
+		return "Streams"
+	case "create_clip", "delete_clip":
+		return "Clips"
+	case "start_dvr", "stop_dvr":
+		return "DVR"
+	case "create_vod_upload", "complete_vod_upload", "abort_vod_upload", "delete_vod_asset", "get_vod_upload_status":
+		return "VOD"
+	case "resolve_playback_endpoint":
+		return "Playback"
+	case "diagnose_rebuffering", "diagnose_buffer_health", "diagnose_packet_loss", "diagnose_routing", "get_stream_health_summary", "get_anomaly_report":
+		return "QoE Diagnostics"
+	case "search_support_history":
+		return "Support"
+	case "introspect_schema", "generate_query", "execute_query":
+		return "Schema"
+	case "ask_consultant":
+		return "Knowledge"
+	case "browse_marketplace", "subscribe_to_cluster", "set_preferred_cluster", "create_private_cluster", "create_enrollment_token", "get_node_info", "manage_node", "set_node_mode", "get_node_health":
+		return "Infrastructure"
+	case "list_mcp_tools", "search_knowledge", "search_web":
+		return "Skipper Internal"
+	default:
+		return "Other"
 	}
 }
 
@@ -898,6 +1043,73 @@ func mapKnowledgeResponse(query string, chunks []knowledge.Chunk) SearchKnowledg
 	}
 }
 
+func lastUserContent(messages []llm.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			return strings.TrimSpace(messages[i].Content)
+		}
+	}
+	return ""
+}
+
+func isMCPToolInventoryQuestion(query string) bool {
+	q := strings.ToLower(query)
+	if !strings.Contains(q, "mcp") {
+		return false
+	}
+	toolTerms := []string{"tool", "tools", "capabilities", "available", "inventory", "list", "what can"}
+	for _, term := range toolTerms {
+		if strings.Contains(q, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendTrustedSystemContext(messages []llm.Message, contextBlock string) []llm.Message {
+	if strings.TrimSpace(contextBlock) == "" {
+		return messages
+	}
+	contextBlock = "\n\n" + contextBlock
+	for i := range messages {
+		if messages[i].Role == "system" {
+			messages[i].Content += contextBlock
+			return messages
+		}
+	}
+	return append([]llm.Message{{Role: "system", Content: strings.TrimSpace(contextBlock)}}, messages...)
+}
+
+func formatMCPToolInventoryContext(inventory MCPToolInventory) string {
+	var b strings.Builder
+	b.WriteString("Trusted current FrameWorks MCP tool inventory\n")
+	b.WriteString(inventory.Discovery)
+	b.WriteString("\n")
+	if inventory.CurrentMode != "" {
+		fmt.Fprintf(&b, "Current Skipper mode: %s\n", inventory.CurrentMode)
+	}
+	fmt.Fprintf(&b, "Gateway tool count: %d\n", inventory.GatewayToolCount)
+	currentCategory := ""
+	for _, tool := range inventory.GatewayTools {
+		if tool.Category != currentCategory {
+			currentCategory = tool.Category
+			fmt.Fprintf(&b, "\n%s:\n", currentCategory)
+		}
+		availability := "not executable in this Skipper mode"
+		if tool.AvailableInCurrentMode {
+			availability = "executable in this Skipper mode"
+		}
+		fmt.Fprintf(&b, "- %s (%s): %s\n", tool.Name, availability, tool.Description)
+	}
+	if len(inventory.Notes) > 0 {
+		b.WriteString("\nNotes:\n")
+		for _, note := range inventory.Notes {
+			fmt.Fprintf(&b, "- %s\n", note)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
 func extractSectionHeading(text string) string {
 	for _, line := range strings.SplitN(text, "\n", 5) {
 		line = strings.TrimSpace(line)
@@ -1022,7 +1234,7 @@ func (f *confidenceStreamFilter) processLine(line string, addNewline bool) error
 	if f.inSources {
 		return nil
 	}
-	// Strip [confidence:...] tags wherever they appear in the line.
+	// Strip confidence markup wherever it appears in the line.
 	line = stripConfidenceTags(line)
 	output := line
 	if addNewline {
@@ -1038,6 +1250,7 @@ func (f *confidenceStreamFilter) processLine(line string, addNewline bool) error
 }
 
 func stripConfidenceTags(s string) string {
+	s = strings.ReplaceAll(s, "[/confidence]", "")
 	for {
 		start := strings.Index(s, "[confidence:")
 		if start == -1 {
@@ -1051,6 +1264,15 @@ func stripConfidenceTags(s string) string {
 	}
 }
 
+func parseConfidenceTurns(turns []string) []ConfidenceBlock {
+	var blocks []ConfidenceBlock
+	for _, turn := range turns {
+		parsed := parseConfidenceBlocks(turn)
+		blocks = append(blocks, parsed...)
+	}
+	return blocks
+}
+
 func parseConfidenceBlocks(input string) []ConfidenceBlock {
 	var blocks []ConfidenceBlock
 	remaining := input
@@ -1059,32 +1281,57 @@ func parseConfidenceBlocks(input string) []ConfidenceBlock {
 		if start == -1 {
 			break
 		}
+		if preamble := strings.TrimSpace(stripConfidenceTags(remaining[:start])); preamble != "" {
+			blocks = append(blocks, ConfidenceBlock{
+				Content:    preamble,
+				Confidence: ConfidenceUnknown,
+			})
+		}
 		endTag := strings.Index(remaining[start:], "]")
 		if endTag == -1 {
 			break
 		}
 		tag := remaining[start+len("[confidence:") : start+endTag]
 		afterTag := remaining[start+endTag+1:]
-		sourcesStart := strings.Index(afterTag, "[sources]")
-		if sourcesStart == -1 {
+		nextStart := strings.Index(afterTag, "[confidence:")
+		section := afterTag
+		if nextStart != -1 {
+			section = afterTag[:nextStart]
+		}
+
+		content := section
+		var parsedSources []Source
+		if sourcesStart := strings.Index(section, "[sources]"); sourcesStart != -1 {
+			content = section[:sourcesStart]
+			afterSources := section[sourcesStart+len("[sources]"):]
+			if sourcesEnd := strings.Index(afterSources, "[/sources]"); sourcesEnd != -1 {
+				parsedSources = parseSourcesBlock(afterSources[:sourcesEnd])
+				trailing := strings.TrimSpace(stripConfidenceTags(afterSources[sourcesEnd+len("[/sources]"):]))
+				if trailing != "" {
+					content = strings.TrimSpace(content)
+					if content != "" {
+						content += "\n\n" + trailing
+					} else {
+						content = trailing
+					}
+				}
+			}
+		}
+		content = strings.TrimSpace(stripConfidenceTags(content))
+		if content != "" || len(parsedSources) > 0 {
+			blocks = append(blocks, ConfidenceBlock{
+				Content:    content,
+				Confidence: Confidence(strings.TrimSpace(tag)),
+				Sources:    parsedSources,
+			})
+		}
+		if nextStart == -1 {
 			break
 		}
-		content := strings.TrimSpace(afterTag[:sourcesStart])
-		afterSources := afterTag[sourcesStart+len("[sources]"):]
-		sourcesEnd := strings.Index(afterSources, "[/sources]")
-		if sourcesEnd == -1 {
-			break
-		}
-		sourcesBlock := afterSources[:sourcesEnd]
-		blocks = append(blocks, ConfidenceBlock{
-			Content:    content,
-			Confidence: Confidence(strings.TrimSpace(tag)),
-			Sources:    parseSourcesBlock(sourcesBlock),
-		})
-		remaining = afterSources[sourcesEnd+len("[/sources]"):]
+		remaining = afterTag[nextStart:]
 	}
 	if len(blocks) == 0 {
-		trimmed := strings.TrimSpace(input)
+		trimmed := strings.TrimSpace(stripConfidenceTags(input))
 		if trimmed != "" {
 			blocks = append(blocks, ConfidenceBlock{
 				Content:    trimmed,
