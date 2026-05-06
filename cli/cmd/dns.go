@@ -9,7 +9,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"frameworks/cli/internal/config"
+	"frameworks/cli/internal/controlplane"
 	"frameworks/cli/internal/ux"
 	"frameworks/pkg/clients/quartermaster"
 	pkgdns "frameworks/pkg/dns"
@@ -44,10 +44,11 @@ func newDNSDoctorCmd() *cobra.Command {
 		Short: "Verify public DNS records match inventory",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// 1. Get Quartermaster gRPC Client
-			qmClient, err := getQuartermasterGRPCClient()
+			qmClient, cleanup, err := getQuartermasterGRPCClient(cmd.Context())
 			if err != nil {
 				return err
 			}
+			defer cleanup()
 			defer qmClient.Close()
 
 			isJSON := output == "json"
@@ -61,7 +62,7 @@ func newDNSDoctorCmd() *cobra.Command {
 			expectedIPs := make(map[string][]string)
 			serviceTypes := pkgdns.ManagedServiceTypes()
 			staleThresholdSeconds := 300
-			clustersResp, err := qmClient.ListClusters(context.Background(), nil)
+			clustersResp, err := qmClient.ListClusters(cmd.Context(), nil)
 			if err != nil {
 				if !isJSON {
 					fmt.Fprintln(cmd.OutOrStdout(), "❌")
@@ -77,7 +78,7 @@ func newDNSDoctorCmd() *cobra.Command {
 			}
 
 			for _, serviceType := range serviceTypes {
-				nodesResp, err := qmClient.ListHealthyNodesForDNS(context.Background(), staleThresholdSeconds, serviceType)
+				nodesResp, err := qmClient.ListHealthyNodesForDNS(cmd.Context(), staleThresholdSeconds, serviceType)
 				if err != nil {
 					if !isJSON {
 						fmt.Fprintln(cmd.OutOrStdout(), "❌")
@@ -211,23 +212,29 @@ func newDNSDoctorCmd() *cobra.Command {
 	return cmd
 }
 
-func getQuartermasterGRPCClient() (*quartermaster.GRPCClient, error) {
-	ctxConfig, err := activeContextWithAuth()
+func getQuartermasterGRPCClient(ctx context.Context) (*quartermaster.GRPCClient, func(), error) {
+	ctxConfig, err := activeContextWithAuth(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	grpcAddr, err := config.RequireEndpoint(ctxConfig, "quartermaster_grpc_addr", ctxConfig.Endpoints.QuartermasterGRPCAddr, false)
+	ep, err := controlplane.ResolveGRPC(ctx, ctxConfig, "quartermaster")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:      grpcAddr,
+	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:      ep.Address,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxConfig.Auth.ServiceToken,
-		AllowInsecure: true,
+		AllowInsecure: ep.AllowInsecure,
+		ServerName:    ep.ServerName,
 	})
+	if err != nil {
+		ep.Cleanup()
+		return nil, nil, err
+	}
+	return client, ep.Cleanup, nil
 }
 
 func slicesEqual(a, b []string) bool {

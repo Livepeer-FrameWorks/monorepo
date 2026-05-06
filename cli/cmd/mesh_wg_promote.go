@@ -60,10 +60,11 @@ retry-after-SyncMesh message rather than flipping a stale origin.`,
 			}
 			clusterID := rc.Manifest.HostCluster(hostName)
 
-			client, err := getMeshQuartermasterGRPCClient()
+			client, cleanup, err := getMeshQuartermasterGRPCClient(cmd.Context())
 			if err != nil {
 				return fmt.Errorf("connect to Quartermaster: %w", err)
 			}
+			defer cleanup()
 			defer client.Close()
 
 			qmNode, err := findQMNode(cmd.Context(), client, hostName, clusterID)

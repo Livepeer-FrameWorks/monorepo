@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,11 +16,13 @@ import (
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
+	"frameworks/api_sidecar/internal/updater"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/mist"
 	"frameworks/pkg/models"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/version"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -134,6 +137,45 @@ var (
 		[]string{"stream", "protocol", "host"},
 	)
 )
+
+func currentComponentVersions() []*pb.EdgeComponentVersion {
+	recorded := updater.ReadComponentVersions()
+	versions := []*pb.EdgeComponentVersion{{
+		Component: "helmsman",
+		Version: firstNonEmptyString(
+			recorded["HELMSMAN_VERSION"],
+			os.Getenv("HELMSMAN_VERSION"),
+			version.ComponentVersion,
+			version.Version,
+		),
+	}}
+	for _, component := range []struct {
+		name string
+		keys []string
+	}{
+		{name: "mist", keys: []string{"MIST_VERSION", "MISTSERVER_VERSION"}},
+		{name: "caddy", keys: []string{"CADDY_VERSION"}},
+		{name: "config_schema", keys: []string{"CONFIG_SCHEMA_VERSION", "FRAMEWORKS_CONFIG_SCHEMA_VERSION"}},
+	} {
+		values := make([]string, 0, len(component.keys)*2)
+		for _, key := range component.keys {
+			values = append(values, recorded[key], os.Getenv(key))
+		}
+		if value := firstNonEmptyString(values...); value != "" {
+			versions = append(versions, &pb.EdgeComponentVersion{Component: component.name, Version: value})
+		}
+	}
+	return versions
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
 
 // InitPrometheusMonitor initializes the Prometheus monitoring system with logger
 func InitPrometheusMonitor(logger logging.Logger) {
@@ -1506,10 +1548,14 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 	}
 
 	nodeUpdate := &pb.NodeLifecycleUpdate{
-		NodeId:    nodeID,
-		BaseUrl:   baseURL, // Client-facing URL for playback
-		EventType: "node_lifecycle_update",
-		Timestamp: time.Now().Unix(),
+		NodeId:            nodeID,
+		BaseUrl:           baseURL, // Client-facing URL for playback
+		EventType:         "node_lifecycle_update",
+		Timestamp:         time.Now().Unix(),
+		ComponentVersions: currentComponentVersions(),
+		DeployMode:        firstNonEmptyString(os.Getenv("DEPLOY_MODE"), "native"),
+		Os:                runtime.GOOS,
+		Arch:              runtime.GOARCH,
 	}
 
 	if jsonData != nil {

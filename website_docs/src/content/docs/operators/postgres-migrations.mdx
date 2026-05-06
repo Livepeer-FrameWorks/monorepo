@@ -18,10 +18,10 @@ import { Aside } from "@astrojs/starlight/components";
 PostgreSQL and YugabyteDB schema changes are managed through embedded,
 versioned migrations:
 
-| Scenario      | What to use                                                                                                                |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Fresh install | Bootstrap baseline schemas and `expand` migrations via `frameworks cluster init` or `frameworks cluster provision --ready` |
-| Upgrading     | `frameworks cluster migrate` applies migrations from `pkg/database/sql/migrations/`                                        |
+| Scenario      | What to use                                                                                                        |
+| ------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Fresh install | Bootstrap baseline schemas and `expand` migrations via `frameworks cluster init` or `frameworks cluster provision` |
+| Upgrading     | `frameworks cluster migrate` applies migrations from `pkg/database/sql/migrations/`                                |
 
 ## Migration structure
 

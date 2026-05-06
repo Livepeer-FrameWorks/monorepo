@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/internal/controlplane"
 	"frameworks/pkg/grpcutil"
 	"net/http"
 	"net/url"
@@ -40,7 +41,7 @@ func newContextCheckCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			results := runReachabilityChecks(ctx, timeout)
+			results := runReachabilityChecks(cmd.Context(), ctx, timeout)
 			if output == "json" {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
@@ -66,7 +67,7 @@ func newContextCheckCmd() *cobra.Command {
 	return cmd
 }
 
-func runReachabilityChecks(c fwcfg.Context, timeout time.Duration) []checkResult {
+func runReachabilityChecks(parent context.Context, c fwcfg.Context, timeout time.Duration) []checkResult {
 	ep := c.Endpoints
 	var res []checkResult
 	httpClient := &http.Client{Timeout: timeout, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
@@ -90,7 +91,7 @@ func runReachabilityChecks(c fwcfg.Context, timeout time.Duration) []checkResult
 		}
 		endpoint := u.String()
 		r := checkResult{Service: name, Endpoint: endpoint}
-		ctx, cancel := contextWithTimeout(timeout)
+		ctx, cancel := contextWithTimeout(parent, timeout)
 		defer cancel()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
@@ -115,22 +116,25 @@ func runReachabilityChecks(c fwcfg.Context, timeout time.Duration) []checkResult
 	}
 
 	// helper to check grpc health
-	checkGRPC := func(name, addr string) checkResult {
-		r := checkResult{Service: name, Endpoint: addr}
-		if strings.TrimSpace(addr) == "" {
+	checkGRPC := func(name string, target controlplane.Endpoint) checkResult {
+		r := checkResult{Service: name, Endpoint: target.Address}
+		if strings.TrimSpace(target.Address) == "" {
 			r.Status = "skip"
 			return r
 		}
-		ctx, cancel := contextWithTimeout(timeout)
+		ctx, cancel := contextWithTimeout(parent, timeout)
 		defer cancel()
-		transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{AllowInsecure: true}, nil)
+		transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
+			ServerName:    target.ServerName,
+			AllowInsecure: target.AllowInsecure,
+		}, nil)
 		if err != nil {
 			r.OK = false
 			r.Status = "tls config error"
 			r.Error = err.Error()
 			return r
 		}
-		conn, err := grpc.NewClient(addr, transport)
+		conn, err := grpc.NewClient(target.Address, transport)
 		if err != nil {
 			r.OK = false
 			r.Status = "dial error"
@@ -156,19 +160,45 @@ func runReachabilityChecks(c fwcfg.Context, timeout time.Duration) []checkResult
 	res = append(res, checkHTTP("bridge", ep.BridgeURL))
 	res = append(res, checkHTTP("signalman", ep.SignalmanWSURL))
 
-	// gRPC services
-	res = append(res, checkGRPC("commodore-grpc", ep.CommodoreGRPCAddr))
-	res = append(res, checkGRPC("quartermaster-grpc", ep.QuartermasterGRPCAddr))
-	res = append(res, checkGRPC("purser-grpc", ep.PurserGRPCAddr))
-	res = append(res, checkGRPC("periscope-grpc", ep.PeriscopeGRPCAddr))
-	res = append(res, checkGRPC("signalman-grpc", ep.SignalmanGRPCAddr))
-	res = append(res, checkGRPC("foghorn-grpc", ep.FoghornGRPCAddr))
-	res = append(res, checkGRPC("decklog-grpc", ep.DecklogGRPCAddr))
-	res = append(res, checkGRPC("navigator-grpc", ep.NavigatorGRPCAddr))
+	resolver := controlplane.NewResolver(c)
+	defer resolver.Close()
+
+	for _, svc := range []struct {
+		label string
+		id    string
+	}{
+		{"commodore-grpc", "commodore"},
+		{"quartermaster-grpc", "quartermaster"},
+		{"purser-grpc", "purser"},
+		{"periscope-grpc", "periscope"},
+		{"signalman-grpc", "signalman"},
+		{"foghorn-grpc", "foghorn"},
+		{"decklog-grpc", "decklog"},
+		{"navigator-grpc", "navigator"},
+	} {
+		resolveCtx, cancel := contextWithTimeout(parent, timeout)
+		target, err := resolver.ResolveGRPC(resolveCtx, svc.id)
+		cancel()
+		if err != nil {
+			res = append(res, checkResult{
+				Service:  svc.label,
+				Endpoint: "(resolve failed)",
+				OK:       false,
+				Status:   "resolve error",
+				Error:    err.Error(),
+			})
+			continue
+		}
+		r := checkGRPC(svc.label, target)
+		res = append(res, r)
+	}
 
 	return res
 }
 
-func contextWithTimeout(d time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), d)
+func contextWithTimeout(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, d)
 }

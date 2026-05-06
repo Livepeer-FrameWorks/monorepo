@@ -56,13 +56,14 @@ run 'frameworks mesh wg rotate <host>' afterwards.`,
 				manifestClusters[id] = true
 			}
 
-			client, err := getMeshQuartermasterGRPCClient()
+			client, cleanup, err := getMeshQuartermasterGRPCClient(cmd.Context())
 			if err != nil {
 				return fmt.Errorf("connect to Quartermaster: %w", err)
 			}
+			defer cleanup()
 			defer client.Close()
 
-			resp, err := client.ListNodes(context.Background(), "", "", "", nil)
+			resp, err := client.ListNodes(cmd.Context(), "", "", "", nil)
 			if err != nil {
 				return fmt.Errorf("list infrastructure_nodes: %w", err)
 			}

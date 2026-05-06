@@ -11,7 +11,7 @@
 
 The CLI derives almost all bootstrap state from the cluster manifest (`cluster.yaml` plus
 SOPS-encrypted host inventory). For a standard platform deployment, the rendered
-desired-state file is produced from the manifest alone: `cluster provision --ready` works
+desired-state file is produced from the manifest alone: `cluster provision` works
 end-to-end with zero overlay file.
 
 Operators only author an overlay when they need to express something the manifest cannot
@@ -488,7 +488,7 @@ The rendered file is exercised through:
 
 ### Minimal platform — derived only, no overlay
 
-A standard `cluster provision --ready` against a manifest with one central cluster and an
+A standard `cluster provision` against a manifest with one central cluster and an
 optional `--bootstrap-admin-email` flag produces a rendered file equivalent to:
 
 ```yaml

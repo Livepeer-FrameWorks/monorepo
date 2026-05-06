@@ -14,7 +14,7 @@ import (
 )
 
 type menuSection struct {
-	key         string // "edge", "services", "control-plane", "cluster", "dns-mesh", "settings"
+	key         string // "account", "edge", "services", "control-plane", "cluster", "dns-mesh", "settings"
 	label       string
 	recommended bool
 }
@@ -23,6 +23,7 @@ type menuSection struct {
 // recommendation tags set for the active persona. No section is ever
 // hidden; power users keep access to everything.
 func menuSectionsForPersona(p fwcfg.Persona) []menuSection {
+	account := menuSection{key: "account", label: "Account & Hosted"}
 	edge := menuSection{key: "edge", label: "Edge Operations"}
 	services := menuSection{key: "services", label: "Services & Health"}
 	controlPlane := menuSection{key: "control-plane", label: "Control Plane (Admin)"}
@@ -31,15 +32,18 @@ func menuSectionsForPersona(p fwcfg.Persona) []menuSection {
 	settings := menuSection{key: "settings", label: "Settings & Contexts"}
 
 	switch p {
-	case fwcfg.PersonaEdge:
+	case fwcfg.PersonaUser, fwcfg.PersonaEdge:
+		account.recommended = true
+		return []menuSection{account, settings, edge, services, cluster, controlPlane, dnsMesh}
+	case fwcfg.PersonaSelfHosted:
 		edge.recommended = true
-		return []menuSection{edge, services, settings, cluster, controlPlane, dnsMesh}
-	case fwcfg.PersonaPlatform, fwcfg.PersonaSelfHosted:
+		return []menuSection{edge, account, settings, services, cluster, controlPlane, dnsMesh}
+	case fwcfg.PersonaPlatform:
 		cluster.recommended = true
 		controlPlane.recommended = true
-		return []menuSection{cluster, controlPlane, services, dnsMesh, edge, settings}
+		return []menuSection{cluster, controlPlane, services, dnsMesh, edge, account, settings}
 	default:
-		return []menuSection{edge, services, controlPlane, cluster, dnsMesh, settings}
+		return []menuSection{account, edge, services, controlPlane, cluster, dnsMesh, settings}
 	}
 }
 
@@ -82,6 +86,8 @@ func runMainMenu(cmd *cobra.Command) error {
 		}
 		section := sections[idx-1]
 		switch section.key {
+		case "account":
+			accountMenu(cmd, reader)
 		case "edge":
 			edgeMenu(cmd, reader)
 		case "services":
@@ -95,6 +101,50 @@ func runMainMenu(cmd *cobra.Command) error {
 		case "settings":
 			settingsMenu(cmd, reader)
 		}
+	}
+}
+
+func accountMenu(cmd *cobra.Command, r *bufio.Reader) {
+	for {
+		fmt.Fprintln(cmd.OutOrStdout(), "\n-- Account & Hosted --")
+		fmt.Fprintln(cmd.OutOrStdout(), "1) Login")
+		fmt.Fprintln(cmd.OutOrStdout(), "2) Logout")
+		fmt.Fprintln(cmd.OutOrStdout(), "3) Context check")
+		fmt.Fprintln(cmd.OutOrStdout(), "0) Back")
+		fmt.Fprint(cmd.OutOrStdout(), "> ")
+		c, ok := readMenuChoice(cmd, r)
+		if !ok {
+			return
+		}
+		switch strings.TrimSpace(c) {
+		case "1":
+			runMenuCommand(cmd, newLoginCmd())
+		case "2":
+			runMenuCommand(cmd, newLogoutCmd())
+		case "3":
+			runMenuCommand(cmd, newContextCheckCmd())
+		case "0":
+			return
+		default:
+			fmt.Fprintln(cmd.OutOrStdout(), "Unknown option")
+		}
+	}
+}
+
+func readMenuChoice(cmd *cobra.Command, r *bufio.Reader) (string, bool) {
+	choice, err := r.ReadString('\n')
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "read menu choice: %v\n", err)
+		return "", false
+	}
+	return choice, true
+}
+
+func runMenuCommand(parent, child *cobra.Command) {
+	child.SetOut(parent.OutOrStdout())
+	child.SetErr(parent.ErrOrStderr())
+	if err := child.Execute(); err != nil {
+		fmt.Fprintf(parent.ErrOrStderr(), "%v\n", err)
 	}
 }
 
@@ -112,26 +162,29 @@ func edgeMenu(cmd *cobra.Command, r *bufio.Reader) {
 		fmt.Fprintln(cmd.OutOrStdout(), "9) Doctor")
 		fmt.Fprintln(cmd.OutOrStdout(), "0) Back")
 		fmt.Fprint(cmd.OutOrStdout(), "> ")
-		c, _ := r.ReadString('\n')
+		c, ok := readMenuChoice(cmd, r)
+		if !ok {
+			return
+		}
 		switch strings.TrimSpace(c) {
 		case "1":
-			_ = newEdgePreflightCmd().Execute()
+			runMenuCommand(cmd, newEdgePreflightCmd())
 		case "2":
-			_ = newEdgeTuneCmd().Execute()
+			runMenuCommand(cmd, newEdgeTuneCmd())
 		case "3":
-			_ = newEdgeInitCmd().Execute()
+			runMenuCommand(cmd, newEdgeInitCmd())
 		case "4":
-			_ = newEdgeEnrollCmd().Execute()
+			runMenuCommand(cmd, newEdgeEnrollCmd())
 		case "5":
-			_ = newEdgeStatusCmd().Execute()
+			runMenuCommand(cmd, newEdgeStatusCmd())
 		case "6":
-			_ = newEdgeUpdateCmd().Execute()
+			runMenuCommand(cmd, newEdgeUpdateCmd())
 		case "7":
-			_ = newEdgeCertCmd().Execute()
+			runMenuCommand(cmd, newEdgeCertCmd())
 		case "8":
-			_ = newEdgeLogsCmd().Execute()
+			runMenuCommand(cmd, newEdgeLogsCmd())
 		case "9":
-			_ = newEdgeDoctorCmd().Execute()
+			runMenuCommand(cmd, newEdgeDoctorCmd())
 		case "0":
 			return
 		default:
@@ -148,10 +201,13 @@ func servicesMenu(cmd *cobra.Command, r *bufio.Reader) {
 		fmt.Fprintln(cmd.OutOrStdout(), "3) Discover instances")
 		fmt.Fprintln(cmd.OutOrStdout(), "0) Back")
 		fmt.Fprint(cmd.OutOrStdout(), "> ")
-		c, _ := r.ReadString('\n')
+		c, ok := readMenuChoice(cmd, r)
+		if !ok {
+			return
+		}
 		switch strings.TrimSpace(c) {
 		case "1":
-			_ = newServicesHealthCmd().Execute()
+			runMenuCommand(cmd, newServicesHealthCmd())
 		case "2":
 			svcType := promptInputDefault(r, "Service type", "")
 			if svcType == "" {
@@ -160,7 +216,7 @@ func servicesMenu(cmd *cobra.Command, r *bufio.Reader) {
 			}
 			hc := newServicesHealthCmd()
 			_ = hc.Flags().Set("type", svcType)
-			_ = hc.Execute()
+			runMenuCommand(cmd, hc)
 		case "3":
 			svcType := promptInputDefault(r, "Service type", "")
 			if svcType == "" {
@@ -169,7 +225,7 @@ func servicesMenu(cmd *cobra.Command, r *bufio.Reader) {
 			}
 			dc := newServicesDiscoverCmd()
 			_ = dc.Flags().Set("type", svcType)
-			_ = dc.Execute()
+			runMenuCommand(cmd, dc)
 		case "0":
 			return
 		default:
@@ -186,7 +242,10 @@ func controlPlaneMenu(cmd *cobra.Command, r *bufio.Reader) {
 		fmt.Fprintln(cmd.OutOrStdout(), "3) Revoke bootstrap token")
 		fmt.Fprintln(cmd.OutOrStdout(), "0) Back")
 		fmt.Fprint(cmd.OutOrStdout(), "> ")
-		c, _ := r.ReadString('\n')
+		c, ok := readMenuChoice(cmd, r)
+		if !ok {
+			return
+		}
 		switch strings.TrimSpace(c) {
 		case "1":
 			kind := promptInputDefault(r, "Token kind (edge_node|service|infrastructure_node)", "edge_node")
@@ -223,15 +282,15 @@ func controlPlaneMenu(cmd *cobra.Command, r *bufio.Reader) {
 					_ = cc.Flags().Set("usage-limit", fmt.Sprintf("%d", v))
 				}
 			}
-			_ = cc.Execute()
+			runMenuCommand(cmd, cc)
 		case "2":
-			_ = newAdminBootstrapTokensListCmd().Execute()
+			runMenuCommand(cmd, newAdminBootstrapTokensListCmd())
 		case "3":
 			tokenID := promptInputDefault(r, "Token ID (leave empty to use name)", "")
 			if tokenID != "" {
 				rc := newAdminBootstrapTokensRevokeCmd()
 				rc.SetArgs([]string{tokenID})
-				_ = rc.Execute()
+				runMenuCommand(cmd, rc)
 				continue
 			}
 			name := promptInputDefault(r, "Token name", "")
@@ -239,7 +298,7 @@ func controlPlaneMenu(cmd *cobra.Command, r *bufio.Reader) {
 			if name != "" {
 				_ = rc.Flags().Set("name", name)
 			}
-			_ = rc.Execute()
+			runMenuCommand(cmd, rc)
 		case "0":
 			return
 		default:
@@ -260,18 +319,21 @@ func clusterOpsMenu(cmd *cobra.Command, r *bufio.Reader) {
 		fmt.Fprintln(cmd.OutOrStdout(), "7) Restart")
 		fmt.Fprintln(cmd.OutOrStdout(), "0) Back")
 		fmt.Fprint(cmd.OutOrStdout(), "> ")
-		c, _ := r.ReadString('\n')
+		c, ok := readMenuChoice(cmd, r)
+		if !ok {
+			return
+		}
 		switch strings.TrimSpace(c) {
 		case "1":
 			manifest := promptInputDefault(r, "Manifest path", "cluster.yaml")
 			cc := newClusterDetectCmd()
 			_ = cc.Flags().Set("manifest", manifest)
-			_ = cc.Execute()
+			runMenuCommand(cmd, cc)
 		case "2":
 			manifest := promptInputDefault(r, "Manifest path", "cluster.yaml")
 			cc := newClusterDoctorCmd()
 			_ = cc.Flags().Set("manifest", manifest)
-			_ = cc.Execute()
+			runMenuCommand(cmd, cc)
 		case "3":
 			manifest := promptInputDefault(r, "Manifest path", "cluster.yaml")
 			phase := promptInputDefault(r, "Phase (infrastructure|applications|interfaces|all)", "all")
@@ -280,14 +342,14 @@ func clusterOpsMenu(cmd *cobra.Command, r *bufio.Reader) {
 			if phase != "" {
 				_ = cc.Flags().Set("only", phase)
 			}
-			_ = cc.Execute()
+			runMenuCommand(cmd, cc)
 		case "4":
 			manifest := promptInputDefault(r, "Manifest path", "cluster.yaml")
 			service := promptInputDefault(r, "Service (postgres|kafka|clickhouse|all)", "all")
 			cc := newClusterInitCmd()
 			cc.SetArgs([]string{service})
 			_ = cc.Flags().Set("manifest", manifest)
-			_ = cc.Execute()
+			runMenuCommand(cmd, cc)
 		case "5":
 			manifest := promptInputDefault(r, "Manifest path", "cluster.yaml")
 			service := promptInputDefault(r, "Service to upgrade", "")
@@ -302,7 +364,7 @@ func clusterOpsMenu(cmd *cobra.Command, r *bufio.Reader) {
 			if version != "" {
 				_ = cc.Flags().Set("version", version)
 			}
-			_ = cc.Execute()
+			runMenuCommand(cmd, cc)
 		case "6":
 			manifest := promptInputDefault(r, "Manifest path", "cluster.yaml")
 			service := promptInputDefault(r, "Service to tail", "")
@@ -313,7 +375,7 @@ func clusterOpsMenu(cmd *cobra.Command, r *bufio.Reader) {
 			cc := newClusterLogsCmd()
 			cc.SetArgs([]string{service})
 			_ = cc.Flags().Set("manifest", manifest)
-			_ = cc.Execute()
+			runMenuCommand(cmd, cc)
 		case "7":
 			manifest := promptInputDefault(r, "Manifest path", "cluster.yaml")
 			service := promptInputDefault(r, "Service to restart", "")
@@ -324,7 +386,7 @@ func clusterOpsMenu(cmd *cobra.Command, r *bufio.Reader) {
 			cc := newClusterRestartCmd()
 			cc.SetArgs([]string{service})
 			_ = cc.Flags().Set("manifest", manifest)
-			_ = cc.Execute()
+			runMenuCommand(cmd, cc)
 		case "0":
 			return
 		default:
@@ -340,15 +402,18 @@ func dnsMeshMenu(cmd *cobra.Command, r *bufio.Reader) {
 		fmt.Fprintln(cmd.OutOrStdout(), "2) Mesh status")
 		fmt.Fprintln(cmd.OutOrStdout(), "0) Back")
 		fmt.Fprint(cmd.OutOrStdout(), "> ")
-		c, _ := r.ReadString('\n')
+		c, ok := readMenuChoice(cmd, r)
+		if !ok {
+			return
+		}
 		switch strings.TrimSpace(c) {
 		case "1":
 			domain := promptInputDefault(r, "Root domain", "frameworks.network")
 			cc := newDNSDoctorCmd()
 			_ = cc.Flags().Set("domain", domain)
-			_ = cc.Execute()
+			runMenuCommand(cmd, cc)
 		case "2":
-			_ = newMeshStatusCmd().Execute()
+			runMenuCommand(cmd, newMeshStatusCmd())
 		case "0":
 			return
 		default:
@@ -366,12 +431,15 @@ func settingsMenu(cmd *cobra.Command, r *bufio.Reader) {
 		fmt.Fprintln(cmd.OutOrStdout(), "4) Show config path")
 		fmt.Fprintln(cmd.OutOrStdout(), "0) Back")
 		fmt.Fprint(cmd.OutOrStdout(), "> ")
-		c, _ := r.ReadString('\n')
+		c, ok := readMenuChoice(cmd, r)
+		if !ok {
+			return
+		}
 		switch strings.TrimSpace(c) {
 		case "1":
-			_ = newLoginCmd().Execute()
+			runMenuCommand(cmd, newLoginCmd())
 		case "2":
-			_ = newContextListCmd().Execute()
+			runMenuCommand(cmd, newContextListCmd())
 		case "3":
 			name := promptInputDefault(r, "Context name", "")
 			if name == "" {
@@ -380,7 +448,7 @@ func settingsMenu(cmd *cobra.Command, r *bufio.Reader) {
 			}
 			cc := newContextUseCmd()
 			cc.SetArgs([]string{name})
-			_ = cc.Execute()
+			runMenuCommand(cmd, cc)
 		case "4":
 			path, err := fwcfg.ConfigPath()
 			if err != nil {
@@ -401,7 +469,11 @@ func promptInputDefault(r *bufio.Reader, label, def string) string {
 	} else {
 		fmt.Fprintf(os.Stdout, "%s: ", label)
 	}
-	input, _ := r.ReadString('\n')
+	input, err := r.ReadString('\n')
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "read input: %v\n", err)
+		return def
+	}
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return def

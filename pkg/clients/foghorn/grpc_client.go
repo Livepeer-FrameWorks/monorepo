@@ -45,6 +45,8 @@ type GRPCConfig struct {
 	UseTLS     bool
 	CACertFile string
 	ServerName string
+	// AllowInsecure disables TLS for operator-local/debug gRPC paths.
+	AllowInsecure bool
 }
 
 // authInterceptor propagates authentication to gRPC metadata.
@@ -112,16 +114,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		config.Timeout = 30 * time.Second
 	}
 
-	// Auto-detect TLS: explicit UseTLS flag, or FQDN address → TLS.
-	// Docker service names (no dots) → insecure. Production FQDNs → TLS.
-	useTLS := config.UseTLS || grpcutil.AddrIsFQDN(config.GRPCAddr)
-	tlsCfg := grpcutil.ClientTLSConfig{
-		CACertFile: config.CACertFile,
-		ServerName: config.ServerName,
-	}
-	if !useTLS {
-		tlsCfg.AllowInsecure = true
-	}
+	tlsCfg := foghornClientTLSConfig(config)
 	transport, err := grpcutil.ClientTLS(tlsCfg, config.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("configure Foghorn gRPC TLS: %w", err)
@@ -159,6 +152,22 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		logger:     config.Logger,
 		timeout:    config.Timeout,
 	}, nil
+}
+
+func foghornClientTLSConfig(config GRPCConfig) grpcutil.ClientTLSConfig {
+	tlsCfg := grpcutil.ClientTLSConfig{
+		CACertFile: config.CACertFile,
+		ServerName: config.ServerName,
+	}
+	if config.AllowInsecure {
+		tlsCfg.AllowInsecure = true
+		return tlsCfg
+	}
+	if config.UseTLS || grpcutil.AddrIsFQDN(config.GRPCAddr) {
+		return tlsCfg
+	}
+	tlsCfg.AllowInsecure = true
+	return tlsCfg
 }
 
 // Federation returns the FoghornFederation client for cross-cluster RPCs.

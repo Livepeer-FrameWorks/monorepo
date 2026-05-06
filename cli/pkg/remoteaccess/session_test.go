@@ -187,7 +187,7 @@ func TestSessionServerNameIsAuthoritativeNotLoopback(t *testing.T) {
 	}
 }
 
-func TestSessionInsecureFlagPropagated(t *testing.T) {
+func TestSessionInsecureEndpointOmitsServerName(t *testing.T) {
 	t.Parallel()
 	sess, _ := OpenSession(Options{
 		Manifest:      newTestManifest(),
@@ -205,6 +205,9 @@ func TestSessionInsecureFlagPropagated(t *testing.T) {
 	}
 	if !ep.Insecure {
 		t.Error("AllowInsecure=true should propagate to Endpoint.Insecure")
+	}
+	if ep.ServerName != "" {
+		t.Fatalf("ServerName = %q, want empty for insecure/plaintext endpoint", ep.ServerName)
 	}
 }
 

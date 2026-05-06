@@ -22,9 +22,8 @@ import (
 )
 
 // Endpoint is the dial address callers feed into a gRPC client. DialAddr is a
-// loopback address served by the SSH local-forward; ServerName is the
-// authoritative hostname the service certificate is issued against, used as
-// the TLS SNI/verification name when Insecure is false.
+// loopback address served by the SSH local-forward. ServerName is populated only
+// for TLS callers that verify against the service certificate name.
 type Endpoint struct {
 	DialAddr   string
 	ServerName string
@@ -38,9 +37,8 @@ type Options struct {
 	// SSHKeyPath is the operator's SSH key, mirroring the --ssh-key CLI flag.
 	// Empty falls back to ssh-agent and ~/.ssh defaults.
 	SSHKeyPath string
-	// AllowInsecure mirrors isDevProfile: when true, returned endpoints carry
-	// Insecure=true and TLS verification is skipped by the gRPC client. The
-	// tunnel is still opened — it's a transport, not a TLS decision.
+	// AllowInsecure marks tunneled endpoints as plaintext/insecure for callers.
+	// The tunnel is still opened; this only controls the gRPC client transport.
 	AllowInsecure bool
 	// SSHTimeout bounds resolution + dial steps. Default 10s.
 	SSHTimeout time.Duration
@@ -158,6 +156,9 @@ func (s *Session) Endpoint(ctx context.Context, target ServiceTarget) (Endpoint,
 		}
 	}
 
+	if s.allowInsecure {
+		serverName = ""
+	}
 	ep := Endpoint{
 		DialAddr:   tun.LocalAddr,
 		ServerName: serverName,
@@ -216,15 +217,13 @@ func (s *Session) resolveTarget(t ServiceTarget) (hostKey string, remotePort int
 		return "", 0, "", fmt.Errorf("remoteaccess: service %q has no gRPC port (default %d)", t.Name, t.DefaultGRPCPort)
 	}
 
-	// ServerName is the cert-bearing hostname for the service: the mesh
-	// address if present, else the host's external IP. The gRPC client uses
-	// it as the TLS SNI / verification name, since the dial address is the
-	// loopback endpoint of the local-forward and won't appear in any SAN.
+	// ServerName is the cert-bearing hostname for TLS callers: the mesh address
+	// if present, else the host's external IP.
 	serverName = s.manifest.MeshAddress(hostKey)
 	if serverName == "" || serverName == hostKey {
 		serverName = host.ExternalIP
 	}
-	if serverName == "" {
+	if serverName == "" && !s.allowInsecure {
 		return "", 0, "", fmt.Errorf("remoteaccess: service %q has no usable address for TLS server name", t.Name)
 	}
 	return hostKey, remotePort, serverName, nil

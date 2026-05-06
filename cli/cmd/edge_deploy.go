@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
@@ -35,6 +36,7 @@ func newEdgeDeployCmd() *cobra.Command {
 		skipPreflight   bool
 		version         string
 		timeout         time.Duration
+		tokenTTL        string
 	)
 
 	cmd := &cobra.Command{
@@ -70,6 +72,13 @@ Mode B — Pre-existing token (no login needed):
 				heading = "Deploying edge node (via Bridge — creates cluster + token)"
 			}
 			ux.Heading(out, fmt.Sprintf("%s on %s", heading, target))
+			if strings.TrimSpace(tokenTTL) != "" {
+				normalizedTTL, ttlErr := normalizeDuration(tokenTTL)
+				if ttlErr != nil {
+					return fmt.Errorf("--token-ttl: %w", ttlErr)
+				}
+				tokenTTL = normalizedTTL
+			}
 
 			var (
 				err           error
@@ -81,20 +90,21 @@ Mode B — Pre-existing token (no login needed):
 			)
 
 			deployCfg := deployConfig{
-				clusterID:       clusterID,
-				clusterName:     clusterName,
-				region:          region,
-				nodeName:        nodeName,
-				enrollmentToken: enrollmentToken,
-				foghornAddr:     foghornAddr,
-				sshTarget:       sshTarget,
-				sshKey:          sshKey,
-				mode:            mode,
-				email:           email,
-				applyTuning:     applyTuning,
-				skipPreflight:   skipPreflight,
-				version:         version,
-				timeout:         timeout,
+				clusterID:          clusterID,
+				clusterName:        clusterName,
+				region:             region,
+				nodeName:           nodeName,
+				enrollmentToken:    enrollmentToken,
+				foghornAddr:        foghornAddr,
+				sshTarget:          sshTarget,
+				sshKey:             sshKey,
+				mode:               mode,
+				email:              email,
+				applyTuning:        applyTuning,
+				skipPreflight:      skipPreflight,
+				version:            version,
+				timeout:            timeout,
+				enrollmentTokenTTL: tokenTTL,
 			}
 
 			if modeA {
@@ -140,24 +150,26 @@ Mode B — Pre-existing token (no login needed):
 	cmd.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "skip preflight checks")
 	cmd.Flags().StringVar(&version, "version", "", "platform version for binary resolution")
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "HTTPS verification timeout")
+	cmd.Flags().StringVar(&tokenTTL, "token-ttl", "", "enrollment token TTL when --cluster-id mints a token")
 	return cmd
 }
 
 type deployConfig struct {
-	clusterID       string
-	clusterName     string
-	region          string
-	nodeName        string
-	enrollmentToken string
-	foghornAddr     string
-	sshTarget       string
-	sshKey          string
-	mode            string
-	email           string
-	applyTuning     bool
-	skipPreflight   bool
-	version         string
-	timeout         time.Duration
+	clusterID          string
+	clusterName        string
+	region             string
+	nodeName           string
+	enrollmentToken    string
+	foghornAddr        string
+	sshTarget          string
+	sshKey             string
+	mode               string
+	email              string
+	applyTuning        bool
+	skipPreflight      bool
+	version            string
+	timeout            time.Duration
+	enrollmentTokenTTL string
 }
 
 // deployWithToken runs Mode B and populates nodeID / domain /
@@ -208,7 +220,11 @@ func deployAutomatic(ctx context.Context, cmd *cobra.Command, cfg *deployConfig,
 func resolveEnrollmentToken(ctx context.Context, cmd *cobra.Command, bc *bridge.Client, jwt string, cfg deployConfig) (string, bool, error) {
 	if cfg.clusterID != "" {
 		fmt.Fprintf(cmd.OutOrStdout(), "Creating enrollment token for cluster %s...\n", cfg.clusterID)
-		tok, err := bc.CreateEnrollmentToken(ctx, jwt, cfg.clusterID, nil, nil)
+		var ttl *string
+		if cfg.enrollmentTokenTTL != "" {
+			ttl = &cfg.enrollmentTokenTTL
+		}
+		tok, err := bc.CreateEnrollmentToken(ctx, jwt, cfg.clusterID, nil, ttl)
 		if err != nil {
 			return "", false, err
 		}
@@ -346,6 +362,10 @@ func loadActiveContextLax() (fwcfg.Context, error) {
 func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp *pb.PreRegisterEdgeResponse, foghornGRPC string) error {
 	host := sshTargetToHost(cfg.sshTarget)
 	pool := fwssh.NewPool(30*time.Second, cfg.sshKey)
+	clusterID := cfg.clusterID
+	if clusterID == "" {
+		clusterID = resp.GetClusterId()
+	}
 
 	epConfig := provisioner.EdgeProvisionConfig{
 		Mode:            cfg.mode,
@@ -355,6 +375,7 @@ func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, res
 		EnrollmentToken: cfg.enrollmentToken,
 		FoghornGRPCAddr: foghornGRPC,
 		NodeID:          resp.GetNodeId(),
+		ClusterID:       clusterID,
 		CertPEM:         resp.GetCertPem(),
 		KeyPEM:          resp.GetKeyPem(),
 		CABundlePEM:     string(resp.GetInternalCaBundle()),
@@ -375,6 +396,10 @@ func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp
 		ExternalIP: "localhost",
 		User:       os.Getenv("USER"),
 	}
+	clusterID := cfg.clusterID
+	if clusterID == "" {
+		clusterID = resp.GetClusterId()
+	}
 
 	epConfig := provisioner.EdgeProvisionConfig{
 		Mode:            "native",
@@ -384,6 +409,7 @@ func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp
 		EnrollmentToken: cfg.enrollmentToken,
 		FoghornGRPCAddr: foghornGRPC,
 		NodeID:          resp.GetNodeId(),
+		ClusterID:       clusterID,
 		CertPEM:         resp.GetCertPem(),
 		KeyPEM:          resp.GetKeyPem(),
 		CABundlePEM:     string(resp.GetInternalCaBundle()),

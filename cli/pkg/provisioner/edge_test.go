@@ -51,6 +51,15 @@ func TestEdgeProvisionConfig_ResolvedMode(t *testing.T) {
 	}
 }
 
+func TestSetEdgeComponentVersionVarRejectsControlCharacters(t *testing.T) {
+	t.Parallel()
+
+	vars := map[string]any{}
+	if err := setEdgeComponentVersionVar(vars, "edge_helmsman_version", "v1.2.3\nEXTRA=1"); err == nil {
+		t.Fatal("setEdgeComponentVersionVar accepted multiline version")
+	}
+}
+
 // The templates package is still used by `edge init` for operators who
 // render the compose/env/Caddyfile locally before running the role against
 // their own host. These tests pin the bootstrap shape so renames don't

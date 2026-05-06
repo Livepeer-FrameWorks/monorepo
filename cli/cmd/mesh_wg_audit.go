@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -76,10 +75,11 @@ not affect the divergence count or exit code.`,
 				return fmt.Errorf("%w\n\nRun: frameworks mesh wg generate --manifest %s", validateErr, rc.ManifestPath)
 			}
 
-			client, err := getMeshQuartermasterGRPCClient()
+			client, cleanup, err := getMeshQuartermasterGRPCClient(cmd.Context())
 			if err != nil {
 				return fmt.Errorf("connect to Quartermaster: %w", err)
 			}
+			defer cleanup()
 			defer client.Close()
 
 			// Build the set of clusters this manifest owns so we can filter
@@ -92,7 +92,7 @@ not affect the divergence count or exit code.`,
 
 			// List once without a cluster filter; we match per host below by
 			// (node_name, cluster_id) to handle multi-cluster manifests.
-			resp, err := client.ListNodes(context.Background(), "", "", "", nil)
+			resp, err := client.ListNodes(cmd.Context(), "", "", "", nil)
 			if err != nil {
 				return fmt.Errorf("list infrastructure_nodes: %w", err)
 			}

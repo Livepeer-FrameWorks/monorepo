@@ -333,6 +333,40 @@ func (r *nodeRepositoryDB) UpsertNodeLifecycles(ctx context.Context, updates []*
 	return err
 }
 
+func (r *nodeRepositoryDB) UpsertNodeComponents(ctx context.Context, updates []*pb.NodeLifecycleUpdate) error {
+	if db == nil {
+		return sql.ErrConnDone
+	}
+	var nodeIDs []string
+	var components []string
+	var versions []string
+	for _, update := range updates {
+		if update == nil {
+			continue
+		}
+		for _, component := range update.GetComponentVersions() {
+			if component == nil || component.GetComponent() == "" {
+				continue
+			}
+			nodeIDs = append(nodeIDs, update.GetNodeId())
+			components = append(components, component.GetComponent())
+			versions = append(versions, component.GetVersion())
+		}
+	}
+	if len(nodeIDs) == 0 {
+		return nil
+	}
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO foghorn.node_components (node_id, component, current_version, last_reported_at)
+		SELECT node_id, component, NULLIF(version, ''), NOW()
+		FROM unnest($1::text[], $2::text[], $3::text[]) AS t(node_id, component, version)
+		ON CONFLICT (node_id, component) DO UPDATE SET
+			current_version = EXCLUDED.current_version,
+			last_reported_at = NOW()
+	`, nodeIDs, components, versions)
+	return err
+}
+
 func (r *nodeRepositoryDB) UpsertNodeMaintenance(ctx context.Context, nodeID string, mode state.NodeOperationalMode, setBy string) error {
 	if db == nil {
 		return sql.ErrConnDone

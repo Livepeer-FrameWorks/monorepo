@@ -704,6 +704,11 @@ func runUpgradeAll(cmd *cobra.Command, rc *resolvedCluster, version string, dryR
 		return nil
 	}
 
+	ux.Heading(cmd.OutOrStdout(), "Syncing edge release target")
+	if err := syncClusterEdgeReleaseTargetFromGitOps(cmd, rc, version, nil); err != nil {
+		return fmt.Errorf("edge release target sync after upgrade --all: %w", err)
+	}
+
 	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("All %d services upgraded", len(succeeded)))
 	ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
 		{Cmd: "frameworks cluster status", Why: "Verify deployed versions match the target channel."},

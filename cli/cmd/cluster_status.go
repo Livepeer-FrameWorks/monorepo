@@ -239,7 +239,7 @@ func printStatusControlPlaneSection(cmd *cobra.Command, manifest *inventory.Mani
 func statusControlPlaneFallbacks() []ux.NextStep {
 	return []ux.NextStep{
 		{Cmd: "frameworks cluster doctor --deep", Why: "Run the authenticated doctor — decrypts SOPS and verifies default/official cluster, operator account, pricing."},
-		{Cmd: "frameworks cluster provision --ready", Why: "Re-run provisioning with SOPS access if the control plane needs more than verification."},
+		{Cmd: "frameworks cluster provision", Why: "Re-run provisioning with SOPS access if the control plane needs reconciliation."},
 		{Cmd: "frameworks admin clusters list", Why: "Any admin command that touches Quartermaster reads the service token and will succeed or fail explicitly."},
 	}
 }

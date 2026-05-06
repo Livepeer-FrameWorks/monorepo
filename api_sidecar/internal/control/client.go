@@ -23,6 +23,7 @@ import (
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/storage"
+	"frameworks/api_sidecar/internal/updater"
 	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/mist"
@@ -31,6 +32,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -110,9 +112,10 @@ var (
 )
 
 const (
-	blockingTriggerTimeout = 5 * time.Second
-	maxBlockingAttempts    = 3
-	reconnectJitterPct     = 25
+	blockingTriggerTimeout            = 5 * time.Second
+	desiredStateComponentApplyTimeout = 30 * time.Minute
+	maxBlockingAttempts               = 3
+	reconnectJitterPct                = 25
 )
 
 // SetOnSeed sets a callback invoked when Foghorn requests immediate JSON seed
@@ -348,6 +351,98 @@ func handleMistTriggerResponse(response *pb.MistTriggerResponse) {
 	}
 }
 
+func handleDesiredStateUpdate(ctx context.Context, logger logging.Logger, requestID string, update *pb.DesiredStateUpdate, send func(*pb.ControlMessage) error) {
+	if update == nil {
+		return
+	}
+	result := &pb.UpdateApplyResult{
+		NodeId:        update.GetNodeId(),
+		TargetRelease: update.GetTargetRelease(),
+	}
+	restartSelf := false
+	for _, component := range update.GetComponents() {
+		if component == nil {
+			continue
+		}
+		applyResult := &pb.ComponentApplyResult{
+			Component: component.GetComponent(),
+			Version:   component.GetVersion(),
+		}
+		if component.GetDrainRequired() {
+			switch {
+			case strings.TrimSpace(update.GetCordonToken()) == "":
+				applyResult.Detail = "drain-required update missing cordon token"
+				result.Components = append(result.Components, applyResult)
+				continue
+			case update.GetCordonTokenExpiresAt() == nil:
+				applyResult.Detail = "drain-required update missing cordon token expiry"
+				result.Components = append(result.Components, applyResult)
+				continue
+			case !update.GetCordonTokenExpiresAt().AsTime().After(time.Now()):
+				applyResult.Detail = "drain-required update cordon token expired"
+				result.Components = append(result.Components, applyResult)
+				continue
+			}
+		}
+		applyCtx, cancel := context.WithTimeout(ctx, desiredStateComponentApplyTimeout)
+		outcome := updater.Apply(applyCtx, component)
+		cancel()
+		applyResult.Success = outcome.Success
+		applyResult.Detail = outcome.Detail
+		if outcome.RestartSelf {
+			restartSelf = true
+		}
+		result.Components = append(result.Components, applyResult)
+	}
+	if logger != nil {
+		logger.WithFields(logging.Fields{
+			"node_id":        result.GetNodeId(),
+			"target_release": result.GetTargetRelease(),
+			"components":     len(result.GetComponents()),
+		}).Info("Processed desired state update")
+	}
+	msg := &pb.ControlMessage{
+		RequestId: requestID,
+		SentAt:    timestamppb.Now(),
+		Payload:   &pb.ControlMessage_UpdateApplyResult{UpdateApplyResult: result},
+	}
+	if sendDesiredStateResult(msg, restartSelf, logger, send) {
+		scheduleSelfRestart(logger)
+	}
+}
+
+func sendDesiredStateResult(msg *pb.ControlMessage, restartSelf bool, logger logging.Logger, send func(*pb.ControlMessage) error) bool {
+	err := send(msg)
+	if err == nil {
+		return restartSelf
+	}
+	if restartSelf {
+		if durableErr := enqueueDurableOutbox(msg); durableErr == nil {
+			if logger != nil {
+				logger.WithError(err).WithField("request_id", msg.GetRequestId()).Warn("Persisted self-update result after send failure")
+			}
+			return true
+		} else if logger != nil {
+			logger.WithError(durableErr).WithField("request_id", msg.GetRequestId()).Error("Failed to persist self-update result")
+		}
+	}
+	enqueueOutbox(msg)
+	if logger != nil {
+		logger.WithError(err).WithField("request_id", msg.GetRequestId()).Warn("Failed to send desired state update result")
+	}
+	return false
+}
+
+func scheduleSelfRestart(logger logging.Logger) {
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		if logger != nil {
+			logger.Info("Restarting Helmsman after self-update")
+		}
+		os.Exit(0)
+	}()
+}
+
 func notifyDisconnect() {
 	disconnectNotifyMu.Lock()
 	close(disconnectNotify)
@@ -387,6 +482,8 @@ func enqueueOutbox(msg *pb.ControlMessage) {
 
 // drainOutbox re-sends all queued messages on the current stream.
 func drainOutbox(stream pb.HelmsmanControl_ConnectClient) {
+	drainDurableOutbox(stream)
+
 	outboxMu.Lock()
 	pending := outbox
 	outbox = nil
@@ -399,6 +496,98 @@ func drainOutbox(stream pb.HelmsmanControl_ConnectClient) {
 			enqueueOutbox(msg)
 		}
 	}
+}
+
+func enqueueDurableOutbox(msg *pb.ControlMessage) error {
+	dir := durableOutboxDir()
+	if mkdirErr := os.MkdirAll(dir, 0o700); mkdirErr != nil {
+		return mkdirErr
+	}
+	payload, err := proto.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	name := fmt.Sprintf("%d-%s.pb", time.Now().UnixNano(), safeOutboxID(msg.GetRequestId()))
+	path := filepath.Join(dir, name)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, payload, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func drainDurableOutbox(stream pb.HelmsmanControl_ConnectClient) {
+	dir := durableOutboxDir()
+	files, err := filepath.Glob(filepath.Join(dir, "*.pb"))
+	if err != nil {
+		if pkgLogger != nil {
+			pkgLogger.WithError(err).Warn("Unable to list durable control outbox")
+		}
+		return
+	}
+	sort.Strings(files)
+	for _, path := range files {
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			if pkgLogger != nil {
+				pkgLogger.WithError(err).WithField("path", path).Warn("Unable to read durable control outbox message")
+			}
+			return
+		}
+		var msg pb.ControlMessage
+		if err := proto.Unmarshal(payload, &msg); err != nil {
+			if pkgLogger != nil {
+				pkgLogger.WithError(err).WithField("path", path).Warn("Dropping unreadable durable control outbox message")
+			}
+			_ = os.Remove(path)
+			continue
+		}
+		msg.SentAt = timestamppb.Now()
+		if err := stream.Send(&msg); err != nil {
+			if pkgLogger != nil {
+				pkgLogger.WithError(err).WithField("path", path).Warn("Failed to drain durable control outbox")
+			}
+			return
+		}
+		if err := os.Remove(path); err != nil && pkgLogger != nil {
+			pkgLogger.WithError(err).WithField("path", path).Warn("Failed to remove durable control outbox message")
+		}
+	}
+}
+
+func durableOutboxDir() string {
+	if dir := strings.TrimSpace(os.Getenv("FRAMEWORKS_CONTROL_OUTBOX_DIR")); dir != "" {
+		return dir
+	}
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), "frameworks-control-outbox")
+	}
+	return filepath.Join(cacheDir, "frameworks", "control-outbox")
+}
+
+func safeOutboxID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "message"
+	}
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_':
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "message"
+	}
+	return b.String()
 }
 
 // sendOrEnqueue attempts to send a message on the active stream.
@@ -672,6 +861,8 @@ func runClient(addr string, logger logging.Logger) error {
 						storeConn(getStream(), nid)
 					}
 				}
+			case *pb.ControlMessage_DesiredStateUpdate:
+				go handleDesiredStateUpdate(stream.Context(), logger, msg.GetRequestId(), x.DesiredStateUpdate, stream.Send)
 			case *pb.ControlMessage_FreezePermissionResponse:
 				// Handle freeze permission response from Foghorn
 				go handleFreezePermissionResponse(x.FreezePermissionResponse)

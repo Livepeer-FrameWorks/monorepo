@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -64,6 +65,90 @@ func (f *fakeControlStream) SendMsg(_ any) error {
 
 func (f *fakeControlStream) RecvMsg(_ any) error {
 	return nil
+}
+
+func TestSendDesiredStateResultPersistsBeforeSelfRestart(t *testing.T) {
+	resetTestOutbox(t)
+	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
+
+	msg := &pb.ControlMessage{
+		RequestId: "self-update-1",
+		Payload: &pb.ControlMessage_UpdateApplyResult{UpdateApplyResult: &pb.UpdateApplyResult{
+			NodeId: "node-1",
+		}},
+	}
+	shouldRestart := sendDesiredStateResult(msg, true, nil, func(*pb.ControlMessage) error {
+		return fmt.Errorf("stream closed")
+	})
+	if !shouldRestart {
+		t.Fatal("expected self-restart after durable outbox write")
+	}
+	files, err := filepath.Glob(filepath.Join(os.Getenv("FRAMEWORKS_CONTROL_OUTBOX_DIR"), "*.pb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected one durable outbox file, got %d", len(files))
+	}
+	outboxMu.Lock()
+	memoryLen := len(outbox)
+	outboxMu.Unlock()
+	if memoryLen != 0 {
+		t.Fatalf("expected durable self-update result without memory duplicate, got %d memory messages", memoryLen)
+	}
+
+	stream := &fakeControlStream{}
+	drainOutbox(stream)
+	if len(stream.sent) != 1 {
+		t.Fatalf("expected durable outbox drain to send one message, got %d", len(stream.sent))
+	}
+	files, err = filepath.Glob(filepath.Join(os.Getenv("FRAMEWORKS_CONTROL_OUTBOX_DIR"), "*.pb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("expected durable outbox file removed after drain, got %d", len(files))
+	}
+}
+
+func TestSendDesiredStateResultDoesNotRestartWithoutDurableOutbox(t *testing.T) {
+	resetTestOutbox(t)
+	outboxFile := filepath.Join(t.TempDir(), "outbox-file")
+	if err := os.WriteFile(outboxFile, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", outboxFile)
+
+	msg := &pb.ControlMessage{
+		RequestId: "self-update-2",
+		Payload: &pb.ControlMessage_UpdateApplyResult{UpdateApplyResult: &pb.UpdateApplyResult{
+			NodeId: "node-1",
+		}},
+	}
+	shouldRestart := sendDesiredStateResult(msg, true, nil, func(*pb.ControlMessage) error {
+		return fmt.Errorf("stream closed")
+	})
+	if shouldRestart {
+		t.Fatal("self-restart should wait for a sent or durable update result")
+	}
+	outboxMu.Lock()
+	memoryLen := len(outbox)
+	outboxMu.Unlock()
+	if memoryLen != 1 {
+		t.Fatalf("expected memory retry after durable outbox failure, got %d messages", memoryLen)
+	}
+}
+
+func resetTestOutbox(t *testing.T) {
+	t.Helper()
+	outboxMu.Lock()
+	outbox = nil
+	outboxMu.Unlock()
+	t.Cleanup(func() {
+		outboxMu.Lock()
+		outbox = nil
+		outboxMu.Unlock()
+	})
 }
 
 func TestSendMistTriggerOnceStreamDisconnected(t *testing.T) {

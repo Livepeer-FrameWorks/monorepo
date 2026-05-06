@@ -34,6 +34,7 @@ import (
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/middleware"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
 	"frameworks/pkg/x402"
@@ -461,7 +462,7 @@ func StartGRPCServer(ctx context.Context, addr string, server *FoghornGRPCServer
 	}
 
 	serverOpts := []grpc.ServerOption{
-		grpc.UnaryInterceptor(grpcutil.SanitizeUnaryServerInterceptor()),
+		grpc.ChainUnaryInterceptor(nodeControlAuthInterceptor(server.logger), grpcutil.SanitizeUnaryServerInterceptor()),
 	}
 	tlsCfg := grpcutil.ServerTLSConfig{
 		CertFile:      strings.TrimSpace(os.Getenv("GRPC_TLS_CERT_PATH")),
@@ -496,6 +497,29 @@ func StartGRPCServer(ctx context.Context, addr string, server *FoghornGRPCServer
 
 	server.logger.WithField("addr", addr).Info("Starting Foghorn gRPC server")
 	return grpcServer.Serve(lis)
+}
+
+func nodeControlAuthInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
+	protected := map[string]bool{
+		pb.NodeControlService_SetNodeOperationalMode_FullMethodName: true,
+		pb.NodeControlService_GetNodeHealth_FullMethodName:          true,
+	}
+	serviceToken := strings.TrimSpace(os.Getenv("SERVICE_TOKEN"))
+	jwtSecret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
+	authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
+		ServiceToken: serviceToken,
+		JWTSecret:    []byte(jwtSecret),
+		Logger:       logger,
+	})
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if !protected[info.FullMethod] {
+			return handler(ctx, req)
+		}
+		if serviceToken == "" && jwtSecret == "" {
+			return nil, status.Error(codes.Unauthenticated, "node lifecycle auth is not configured")
+		}
+		return authInterceptor(ctx, req, info, handler)
+	}
 }
 
 // =============================================================================
@@ -3496,10 +3520,8 @@ func (s *FoghornGRPCServer) SetNodeOperationalMode(ctx context.Context, req *pb.
 	if ns == nil {
 		return nil, status.Error(codes.NotFound, "node not found")
 	}
-
-	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID != "" && ns.TenantID != "" && ns.TenantID != tenantID {
-		return nil, status.Error(codes.PermissionDenied, "node is not owned by this tenant")
+	if err := authorizeNodeLifecycle(ctx, ns); err != nil {
+		return nil, err
 	}
 
 	mode := state.NodeOperationalMode(strings.ToLower(strings.TrimSpace(req.GetMode())))
@@ -3535,10 +3557,8 @@ func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *pb.GetNodeHe
 	if ns == nil {
 		return nil, status.Error(codes.NotFound, "node not found")
 	}
-
-	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID != "" && ns.TenantID != "" && ns.TenantID != tenantID {
-		return nil, status.Error(codes.PermissionDenied, "node is not owned by this tenant")
+	if err := authorizeNodeLifecycle(ctx, ns); err != nil {
+		return nil, err
 	}
 
 	lastHB := ""
@@ -3571,5 +3591,45 @@ func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *pb.GetNodeHe
 	if ns.Longitude != nil {
 		resp.Longitude = ns.Longitude
 	}
+	resp.ComponentVersions = s.loadNodeComponentVersions(ctx, nodeID)
 	return resp, nil
+}
+
+func (s *FoghornGRPCServer) loadNodeComponentVersions(ctx context.Context, nodeID string) []*pb.NodeComponentVersion {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT component, COALESCE(current_version, '')
+		FROM foghorn.node_components
+		WHERE node_id = $1
+		ORDER BY component
+	`, nodeID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []*pb.NodeComponentVersion
+	for rows.Next() {
+		v := &pb.NodeComponentVersion{}
+		if err := rows.Scan(&v.Component, &v.Version); err != nil {
+			return nil
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+func authorizeNodeLifecycle(ctx context.Context, ns *state.NodeState) error {
+	if ctxkeys.GetAuthType(ctx) == "service" {
+		return nil
+	}
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return status.Error(codes.Unauthenticated, "node lifecycle authentication required")
+	}
+	if ns.TenantID == "" || ns.TenantID != tenantID {
+		return status.Error(codes.PermissionDenied, "node is not owned by this tenant")
+	}
+	return nil
 }

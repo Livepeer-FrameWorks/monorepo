@@ -11,6 +11,7 @@ import (
 	foghorngrpc "frameworks/api_balancing/internal/grpc"
 	"frameworks/api_balancing/internal/handlers"
 	"frameworks/api_balancing/internal/jobs"
+	"frameworks/api_balancing/internal/orchestrator"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
 	"frameworks/api_balancing/internal/triggers"
@@ -34,10 +35,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	goredis "github.com/redis/go-redis/v9"
 	"net"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -48,6 +51,9 @@ type clientState struct {
 	commodoreOK      bool
 	commodoreErr     error
 }
+
+var releaseReconcilerOnce sync.Once
+var releaseReconcilerClient atomic.Pointer[qmclient.GRPCClient]
 
 func (cs *clientState) setQuartermaster(ok bool, err error) {
 	cs.mu.Lock()
@@ -326,6 +332,7 @@ func main() {
 		defer func() { _ = qmClient.Close() }()
 	}
 	control.SetQuartermasterClient(qmClient)
+	startReleaseReconciler(qmClient, logger)
 
 	// Commodore (gRPC)
 	commodoreGRPCURL := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
@@ -858,6 +865,7 @@ func main() {
 		Addr:         controlAddr,
 		Logger:       logger,
 		ServiceToken: serviceToken,
+		JWTSecret:    os.Getenv("JWT_SECRET"),
 		Registrars:   registrars,
 	})
 	if err != nil {
@@ -1084,12 +1092,24 @@ func reconnectQuartermaster(
 		reconnects.WithLabelValues("quartermaster", "success").Inc()
 		control.SetQuartermasterClient(client)
 		handlers.SetQuartermasterClient(client)
+		startReleaseReconciler(client, logger)
 		if triggerProcessor != nil {
 			triggerProcessor.SetQuartermasterClient(client)
 		}
 		logger.Info("Quartermaster reconnected")
 		return
 	}
+}
+
+func startReleaseReconciler(qmClient *qmclient.GRPCClient, logger logging.Logger) {
+	if qmClient == nil {
+		return
+	}
+	releaseReconcilerClient.Store(qmClient)
+	releaseReconcilerOnce.Do(func() {
+		interval := time.Duration(config.GetEnvInt("EDGE_RELEASE_RECONCILE_INTERVAL_SECONDS", 60)) * time.Second
+		orchestrator.StartReleaseReconciler(context.Background(), releaseReconcilerClient.Load, interval, logger)
+	})
 }
 
 func reconnectCommodore(

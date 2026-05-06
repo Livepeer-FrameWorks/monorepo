@@ -139,6 +139,12 @@ message GetNodeHealthResponse {
   string location = 17;
   optional double latitude = 18;
   optional double longitude = 19;
+  repeated NodeComponentVersion component_versions = 20;
+}
+
+message NodeComponentVersion {
+  string component = 1;
+  string version = 2;
 }
 
 // TenantControlService handles tenant-level operations called by Purser

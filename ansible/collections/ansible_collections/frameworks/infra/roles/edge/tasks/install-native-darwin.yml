@@ -77,6 +77,11 @@
     helmsman_mist_api_password: "{{ edge_mist_api_password }}"
     helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir }}/pki/ca.crt"
     helmsman_extra_env:
+      CLUSTER_ID: "{{ edge_cluster_id }}"
+      HELMSMAN_VERSION: "{{ edge_helmsman_version }}"
+      MISTSERVER_VERSION: "{{ edge_mistserver_version }}"
+      CADDY_VERSION: "{{ edge_caddy_version }}"
+      FRAMEWORKS_CONFIG_SCHEMA_VERSION: "{{ edge_config_schema_version }}"
       HELMSMAN_TLS_CERT_PATH: "{{ edge_darwin_conf_dir }}/certs/cert.pem"
       HELMSMAN_TLS_KEY_PATH: "{{ edge_darwin_conf_dir }}/certs/key.pem"
     helmsman_darwin_domain: "{{ edge_darwin_domain }}"

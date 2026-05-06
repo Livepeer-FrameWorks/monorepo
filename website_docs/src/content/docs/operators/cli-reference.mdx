@@ -50,7 +50,7 @@ frameworks context set-access-mode ssh
 frameworks context check
 ```
 
-For platform contexts, per-service non-local URLs saved with `frameworks context set-url` still override manifest-derived targets, but they must declare transport explicitly: use `--tls` for TLS endpoints or `--allow-insecure` for plaintext gRPC. Localhost defaults, manifest SSH tunnels, and mesh-derived addresses keep their established transport behavior. Localhost defaults are ignored in `ssh` and `mesh` modes so a newly created platform context does not accidentally dial the operator laptop for core services.
+For platform contexts, per-service non-local URLs saved with `frameworks context set-url` still override manifest-derived targets, but they must declare transport explicitly: use `--tls` for TLS endpoints or `--allow-insecure` for plaintext gRPC. Localhost defaults, manifest SSH tunnels, and mesh-derived addresses keep their established transport behavior. Localhost defaults are ignored in `ssh` and `mesh` modes so a newly created platform context does not accidentally dial the operator laptop for core services. The self-hosted setup wizard asks for the same transport choice when it captures owner Quartermaster/Foghorn endpoints.
 
 Older configs that still say `persona: edge` are normalized to `user`; `edge` is not a user-facing persona.
 
@@ -256,13 +256,12 @@ frameworks cluster provision [flags]
 4. Transfer files to target hosts via SSH and provision (Ansible for some infra)
 5. Start services
 6. Validate health (unless `--ignore-validation`)
+7. For application/all phases, run database init, static SQL seeds, service-owned bootstrap reconciliation, and edge release target sync
 
 **Flags:**
 
 - Inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
 - `--only string` - Phase to provision (`infrastructure`, `applications`, `interfaces`, `all`)
-- `--ready` - After service batches, also run `cluster init` + `cluster seed` (static seeds) so the platform is usable in one command.
-- `--seed-demo` - With `--ready`, additionally apply demo seeds (sample tenant/user/stream).
 - `--dry-run` - Show what would be deployed without actually deploying
 - `--force` - Force re-provision even if services exist
 - `--ignore-validation` - Continue even if health validation fails (dangerous)
@@ -271,11 +270,11 @@ frameworks cluster provision [flags]
 **Examples:**
 
 ```bash
-# Provision + init + seeds + admin bootstrap in one shot
-frameworks cluster provision --ready \
+# Provision + init + static seeds + admin bootstrap in one shot
+frameworks cluster provision \
   --bootstrap-admin-email you@co --bootstrap-admin-password-env DEPLOY_PW
 
-# Provision entire cluster (no init/seed)
+# Provision entire cluster
 frameworks cluster provision --gitops-dir gitops --cluster production
 
 # Provision only infrastructure
@@ -1288,9 +1287,10 @@ print the token. Platform contexts mint with service auth and the system tenant;
 self-hosted owner contexts mint with the active tenant JWT. Quartermaster
 requires owner/operator/provider authority; ordinary cluster subscriptions
 cannot mint node enrollment tokens. Lifecycle-managed adds default to native
-mode with the stable manifest so release-target updates can swap native
-artifacts. Pass `--mode docker` only for nodes managed outside the agent-pull
-release reconciler.
+mode and, unless `--version` is supplied, install from the cluster's release
+target. Clusters without a release target use the stable manifest. Pass
+`--mode docker` only for nodes managed outside the agent-pull release
+reconciler.
 Before provisioning, it probes the target for an existing FrameWorks edge stack
 and classifies clean, complete same-cluster, foreign, partial, and unmarked
 installs. Foreign clusters are refused. Same-cluster targets are treated as
@@ -1321,7 +1321,7 @@ health.
 
 ### frameworks cluster releases
 
-Manage the edge release catalog and the active cluster's rollout target.
+Inspect and repair the edge release catalog and active cluster rollout target.
 Provider/platform contexts use Quartermaster through the configured control-plane
 resolver.
 
@@ -1339,21 +1339,22 @@ List known edge releases. Use `--channel` and `--version` to narrow the catalog.
 ### frameworks cluster releases publish
 
 Fetch a GitOps release manifest and publish its edge component catalog into
-Quartermaster. Use `--version` for the GitOps release version or channel; `--os`
-and `--arch` select the component artifacts recorded in the release. Use
-`--security` or `--metadata security=true`/`--metadata kind=security` when the
-release should satisfy `security_only` rollout policy. GitOps manifests can also
-carry `security: true`, `kind: security`, `release_kind: security`, or a
-`metadata:` map. This is the provider repair/backfill path. Provider contexts
-also publish the selected GitOps manifest automatically when setting a release
-target; owner contexts set targets against releases already present in the
-catalog. Release rows must include at least one updateable edge component
-(`helmsman`, `mist`, or `caddy`); config-schema-only rows are rejected because
-runtime configuration still flows through ConfigSeed.
+Quartermaster. Use `--version` for the GitOps release version or channel. By
+default the catalog records every platform artifact in the manifest; `--os` and
+`--arch` narrow a repair/backfill publish to one platform. This is the
+provider repair/backfill path. Normal provider `cluster provision` and
+`cluster upgrade --all` runs publish the selected GitOps manifest and sync
+cluster targets automatically without clearing an operator pause or rollout
+override; owner contexts set targets against releases already present in the
+catalog. Release rows must
+include at least one updateable edge component (`helmsman`, `mist`, or `caddy`);
+config-schema-only rows are rejected because runtime configuration still flows
+through ConfigSeed. Operators do not label releases to change rollout behavior;
+disruptive Mist behavior requires a CI-generated update contract.
 
 ### frameworks cluster releases target
 
-Manage a cluster's desired edge release target.
+Inspect or override a cluster's desired edge release target.
 
 ### frameworks cluster releases target get
 
@@ -1362,15 +1363,23 @@ different cluster.
 
 ### frameworks cluster releases target set
 
-Set the active cluster's target channel, optional pinned version, rollout policy,
-and rollout-plan JSON. Pass `--cluster-id` when scripting. Foghorn reconciles
-non-manual targets against reported node component versions: Helmsman and Caddy
-changes apply over the existing Helmsman control stream, while Mist changes go
-through cordon, drain, update, warmup version confirmation, endpoint probing,
-and return-to-normal. Config-schema versions are reported for visibility; actual
-runtime config still flows through ConfigSeed. Provider contexts can pass
-`--security` or `--metadata key=value` here too; those flags apply to the
-automatic publish performed before the target is saved.
+Set the active cluster's target release track, optional pinned version, and rollout
+plan JSON. Pass `--cluster-id` when scripting. This is an override/repair path;
+provider `cluster provision` follows the manifest channel, and `cluster upgrade
+--all` syncs the target after the platform upgrade succeeds. Foghorn reconciles
+targets against reported node component versions and runtime platform metadata.
+Docker-mode edge nodes are not selected for native artifact convergence.
+Helmsman and Caddy changes apply over the existing Helmsman control stream,
+while Mist normally replaces the complete binary set atomically and sends `USR1`
+to MistController so new child processes use the new binaries without draining
+the node. Cordon, drain, update, warmup
+version confirmation, endpoint probing, and return-to-normal are reserved for
+Mist releases whose CI-generated update contract explicitly requires a
+disruptive apply strategy. Config-schema versions are reported for visibility;
+actual runtime config still flows through ConfigSeed.
+Supported rollout-plan controls are limited to implemented scheduler behavior
+such as `batch_size`, `canary`, `canary_count`, `error_abort`, and `max_failed`;
+capacity-floor fields are rejected until disruptive drain rollouts need them.
 
 ---
 

@@ -501,6 +501,8 @@ func RelayCommandType(req *pb.ForwardCommandRequest) string {
 		return "processing_job"
 	case *pb.ForwardCommandRequest_Freeze:
 		return "freeze"
+	case *pb.ForwardCommandRequest_DesiredStateUpdate:
+		return "desired_state_update"
 	default:
 		return "unknown"
 	}
@@ -1162,6 +1164,8 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			go processSyncComplete(x.SyncComplete, nodeID, registry.log)
 		case *pb.ControlMessage_ModeChangeRequest:
 			go processModeChangeRequest(x.ModeChangeRequest, nodeID, stream, registry.log)
+		case *pb.ControlMessage_UpdateApplyResult:
+			go processUpdateApplyResult(x.UpdateApplyResult, nodeID, registry.log)
 		case *pb.ControlMessage_ValidateEdgeTokenRequest:
 			go processValidateEdgeToken(msg.GetRequestId(), x.ValidateEdgeTokenRequest, nodeID, stream, registry.log)
 		case *pb.ControlMessage_ProcessingJobResult:
@@ -1531,6 +1535,7 @@ type GRPCServerConfig struct {
 	Addr         string
 	Logger       logging.Logger
 	ServiceToken string
+	JWTSecret    string
 	Registrars   []ServiceRegistrar
 }
 
@@ -1607,21 +1612,33 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 		grpcutil.SanitizeUnaryServerInterceptor(),
 	}
 
-	// Add auth interceptor if SERVICE_TOKEN is configured
+	nodeControlMethods := []string{
+		pb.NodeControlService_SetNodeOperationalMode_FullMethodName,
+		pb.NodeControlService_GetNodeHealth_FullMethodName,
+	}
+
 	if cfg.ServiceToken != "" {
+		skipMethods := []string{
+			"/grpc.health.v1.Health/Check",
+			"/grpc.health.v1.Health/Watch",
+			// HelmsmanControl uses bootstrap token validated in-method
+			pb.HelmsmanControl_Connect_FullMethodName,
+			// EdgeProvisioning uses enrollment token validated in-method
+			"/foghorn.EdgeProvisioningService/PreRegisterEdge",
+		}
+		if strings.TrimSpace(cfg.JWTSecret) != "" {
+			skipMethods = append(skipMethods, nodeControlMethods...)
+		}
 		authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
 			ServiceToken: cfg.ServiceToken,
 			Logger:       cfg.Logger,
-			SkipMethods: []string{
-				"/grpc.health.v1.Health/Check",
-				"/grpc.health.v1.Health/Watch",
-				// HelmsmanControl uses bootstrap token validated in-method
-				pb.HelmsmanControl_Connect_FullMethodName,
-				// EdgeProvisioning uses enrollment token validated in-method
-				"/foghorn.EdgeProvisioningService/PreRegisterEdge",
-			},
+			SkipMethods:  skipMethods,
 		})
 		unaryInterceptors = append([]grpc.UnaryServerInterceptor{authInterceptor}, unaryInterceptors...)
+	}
+	if cfg.ServiceToken != "" || strings.TrimSpace(cfg.JWTSecret) != "" {
+		nodeAuth := nodeControlAuthInterceptor(cfg.ServiceToken, cfg.JWTSecret, cfg.Logger)
+		unaryInterceptors = append([]grpc.UnaryServerInterceptor{nodeAuth}, unaryInterceptors...)
 	}
 
 	opts = append(opts, grpc.ChainUnaryInterceptor(unaryInterceptors...))
@@ -1662,6 +1679,29 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 		}
 	}()
 	return srv, nil
+}
+
+func nodeControlAuthInterceptor(serviceToken, jwtSecret string, logger logging.Logger) grpc.UnaryServerInterceptor {
+	protected := map[string]bool{
+		pb.NodeControlService_SetNodeOperationalMode_FullMethodName: true,
+		pb.NodeControlService_GetNodeHealth_FullMethodName:          true,
+	}
+	serviceToken = strings.TrimSpace(serviceToken)
+	jwtSecret = strings.TrimSpace(jwtSecret)
+	authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
+		ServiceToken: serviceToken,
+		JWTSecret:    []byte(jwtSecret),
+		Logger:       logger,
+	})
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if !protected[info.FullMethod] {
+			return handler(ctx, req)
+		}
+		if serviceToken == "" && jwtSecret == "" {
+			return nil, status.Error(codes.Unauthenticated, "node lifecycle auth is not configured")
+		}
+		return authInterceptor(ctx, req, info, handler)
+	}
 }
 
 func allowInsecureControlGRPC() bool {
@@ -2776,6 +2816,36 @@ func SendConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
 	}))
 }
 
+func SendDesiredStateUpdate(nodeID string, update *pb.DesiredStateUpdate) error {
+	err := SendLocalDesiredStateUpdate(nodeID, update)
+	if !shouldRelay(nodeID, err) {
+		return err
+	}
+	if commandRelay == nil || update == nil {
+		return ErrNotConnected
+	}
+	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_DesiredStateUpdate{DesiredStateUpdate: update},
+	}))
+}
+
+func SendLocalDesiredStateUpdate(nodeID string, update *pb.DesiredStateUpdate) error {
+	if update == nil {
+		return fmt.Errorf("nil DesiredStateUpdate")
+	}
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	return c.stream.Send(&pb.ControlMessage{
+		Payload: &pb.ControlMessage_DesiredStateUpdate{DesiredStateUpdate: update},
+		SentAt:  timestamppb.Now(),
+	})
+}
+
 func SendLocalPushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
@@ -2848,6 +2918,407 @@ func processModeChangeRequest(req *pb.ModeChangeRequest, nodeID string, _ pb.Hel
 
 	if err := PushOperationalMode(nodeID, protoMode); err != nil {
 		log.WithError(err).WithField("node_id", nodeID).Warn("Failed to push operational mode back to node")
+	}
+}
+
+func processUpdateApplyResult(result *pb.UpdateApplyResult, fallbackNodeID string, log logging.Logger) {
+	if result == nil {
+		return
+	}
+	nodeID := strings.TrimSpace(fallbackNodeID)
+	payloadNodeID := strings.TrimSpace(result.GetNodeId())
+	if nodeID == "" {
+		nodeID = payloadNodeID
+	}
+	if nodeID == "" {
+		return
+	}
+	if payloadNodeID != "" && fallbackNodeID != "" && payloadNodeID != fallbackNodeID {
+		if log != nil {
+			log.WithFields(logging.Fields{
+				"stream_node_id":  fallbackNodeID,
+				"payload_node_id": payloadNodeID,
+			}).Warn("Rejected node update apply result for a different stream identity")
+		}
+		return
+	}
+	success := true
+	sawComponent := false
+	var details []string
+	expectedVersions := make(map[string]string)
+	for _, component := range result.GetComponents() {
+		if component == nil {
+			continue
+		}
+		sawComponent = true
+		if !component.GetSuccess() {
+			success = false
+		}
+		if component.GetDetail() != "" {
+			details = append(details, fmt.Sprintf("%s: %s", component.GetComponent(), component.GetDetail()))
+		}
+		if component.GetSuccess() {
+			name := strings.ToLower(strings.TrimSpace(component.GetComponent()))
+			version := strings.TrimSpace(component.GetVersion())
+			if name != "" {
+				expectedVersions[name] = version
+			}
+		}
+	}
+	phase := "idle"
+	lastError := ""
+	targetRelease := strings.TrimSpace(result.GetTargetRelease())
+	updateState, foundUpdateState, updateStateErr := currentNodeUpdateState(nodeID)
+	if updateStateErr != nil {
+		if log != nil {
+			log.WithError(updateStateErr).WithField("node_id", nodeID).Warn("Rejected node update apply result because update state could not be loaded")
+		}
+		return
+	}
+	if !foundUpdateState || updateState.TargetRelease == "" || targetRelease == "" || targetRelease != updateState.TargetRelease || !updatePhaseAcceptsApplyResult(updateState.Phase) {
+		if log != nil {
+			log.WithFields(logging.Fields{
+				"node_id":                nodeID,
+				"result_target_release":  targetRelease,
+				"current_target_release": updateState.TargetRelease,
+				"current_phase":          updateState.Phase,
+				"state_found":            foundUpdateState,
+			}).Warn("Rejected node update apply result without matching persisted update state")
+		}
+		return
+	}
+	if !sawComponent || !success {
+		phase = "failed"
+		lastError = strings.Join(details, "; ")
+		if lastError == "" && !sawComponent {
+			lastError = "no component results"
+		}
+	} else if updateResultIncludesMist(result) && updatePhaseNeedsMistWarmup(updateState.Phase) {
+		phase = "warming"
+		if updatePhaseRestoresRouting(updateState.Phase) {
+			phase = "warming_restore"
+		}
+		if err := persistNodeUpdateStateWithDeadlineAndExpected(nodeID, targetRelease, phase, "", time.Now().Add(90*time.Second), expectedVersions); err != nil && log != nil {
+			log.WithError(err).WithField("node_id", nodeID).Warn("Failed to persist node update warmup phase")
+		}
+		go completeUpdateWarmup(nodeID, targetRelease, expectedVersions, time.Now(), log)
+		if log != nil {
+			log.WithFields(logging.Fields{
+				"node_id":        nodeID,
+				"target_release": targetRelease,
+				"phase":          phase,
+			}).Info("Processed node update apply result")
+		}
+		return
+	} else if updatePhaseRestoresRouting(updateState.Phase) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := state.DefaultManager().SetNodeOperationalMode(ctx, nodeID, state.NodeModeNormal, "update-orchestrator"); err != nil && log != nil {
+			log.WithError(err).WithField("node_id", nodeID).Warn("Failed to return node to normal mode after update")
+		}
+		cancel()
+		if err := PushOperationalMode(nodeID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL); err != nil && log != nil {
+			log.WithError(err).WithField("node_id", nodeID).Warn("Failed to push normal mode after update")
+		}
+	}
+	if err := persistNodeUpdateState(nodeID, targetRelease, phase, lastError); err != nil && log != nil {
+		log.WithError(err).WithField("node_id", nodeID).Warn("Failed to persist node update result")
+	}
+	if log != nil {
+		log.WithFields(logging.Fields{
+			"node_id":        nodeID,
+			"target_release": targetRelease,
+			"phase":          phase,
+		}).Info("Processed node update apply result")
+	}
+}
+
+func updateResultIncludesMist(result *pb.UpdateApplyResult) bool {
+	for _, component := range result.GetComponents() {
+		if component != nil && strings.EqualFold(strings.TrimSpace(component.GetComponent()), "mist") {
+			return true
+		}
+	}
+	return false
+}
+
+func completeUpdateWarmup(nodeID, targetRelease string, expectedVersions map[string]string, notBefore time.Time, log logging.Logger) {
+	deadline := time.Now().Add(90 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		current, found, err := currentNodeUpdateState(nodeID)
+		if err != nil {
+			persistNodeUpdateStateWithLog(nodeID, targetRelease, "failed", err.Error(), log, "Failed to persist node update warmup state lookup failure")
+			if log != nil {
+				log.WithError(err).WithField("node_id", nodeID).Warn("Failed to load node update warmup state")
+			}
+			return
+		}
+		if !found {
+			if log != nil {
+				log.WithField("node_id", nodeID).Warn("Stopped node update warmup because update state is missing")
+			}
+			return
+		}
+		if current.TargetRelease != "" && current.TargetRelease != targetRelease {
+			if log != nil {
+				log.WithFields(logging.Fields{
+					"node_id":                nodeID,
+					"warmup_target_release":  targetRelease,
+					"current_target_release": current.TargetRelease,
+				}).Warn("Stopped node update warmup after target changed")
+			}
+			return
+		}
+		if ok, reason, err := CompleteUpdateWarmupIfReady(context.Background(), nodeID, targetRelease, expectedVersions, notBefore, log); err != nil {
+			fenceNodeAfterUpdateWarmupFailure(nodeID, log)
+			persistNodeUpdateStateWithLog(nodeID, targetRelease, "failed", err.Error(), log, "Failed to persist node update warmup failure")
+			if log != nil {
+				log.WithError(err).WithField("node_id", nodeID).Warn("Failed to complete node update warmup")
+			}
+			return
+		} else if ok {
+			return
+		} else if log != nil {
+			log.WithFields(logging.Fields{
+				"node_id": nodeID,
+				"reason":  reason,
+			}).Debug("Node update warmup probe not ready")
+		}
+		if time.Now().After(deadline) {
+			fenceNodeAfterUpdateWarmupFailure(nodeID, log)
+			persistNodeUpdateStateWithLog(nodeID, targetRelease, "failed", "warmup probe timed out", log, "Failed to persist node update warmup timeout")
+			if log != nil {
+				log.WithField("node_id", nodeID).Warn("Node update warmup probe timed out")
+			}
+			return
+		}
+		<-ticker.C
+	}
+}
+
+func fenceNodeAfterUpdateWarmupFailure(nodeID string, log logging.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := state.DefaultManager().SetNodeOperationalMode(ctx, nodeID, state.NodeModeMaintenance, "update-orchestrator"); err != nil && log != nil {
+		log.WithError(err).WithField("node_id", nodeID).Warn("Failed to fence node after update warmup failure")
+	}
+	if err := PushOperationalMode(nodeID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE); err != nil && log != nil {
+		log.WithError(err).WithField("node_id", nodeID).Warn("Failed to push maintenance mode after update warmup failure")
+	}
+}
+
+// CompleteUpdateWarmupIfReady completes warmup once health, version reporting,
+// and the warmup endpoint all confirm the applied release.
+func CompleteUpdateWarmupIfReady(ctx context.Context, nodeID, targetRelease string, expectedVersions map[string]string, notBefore time.Time, log logging.Logger) (bool, string, error) {
+	current, found, err := currentNodeUpdateState(nodeID)
+	if err != nil {
+		return false, "", err
+	}
+	if !found {
+		return false, "update state missing", nil
+	}
+	if current.TargetRelease != "" && targetRelease != "" && current.TargetRelease != targetRelease {
+		return false, "target release changed", nil
+	}
+	if ok, reason := nodeWarmupReady(nodeID, expectedVersions, notBefore); !ok {
+		return false, reason, nil
+	}
+	if updatePhaseRestoresRouting(current.Phase) {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if err := state.DefaultManager().SetNodeOperationalMode(ctx, nodeID, state.NodeModeNormal, "update-orchestrator"); err != nil {
+			return false, "", err
+		}
+		if err := PushOperationalMode(nodeID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL); err != nil {
+			return false, "", err
+		}
+	}
+	if err := persistNodeUpdateState(nodeID, targetRelease, "idle", ""); err != nil {
+		return false, "", err
+	}
+	if log != nil {
+		log.WithFields(logging.Fields{
+			"node_id":        nodeID,
+			"target_release": targetRelease,
+		}).Info("Completed node update warmup")
+	}
+	return true, "", nil
+}
+
+func nodeWarmupReady(nodeID string, expectedVersions map[string]string, notBefore time.Time) (bool, string) {
+	node := state.DefaultManager().GetNodeState(nodeID)
+	if node == nil {
+		return false, "node state missing"
+	}
+	if !node.IsHealthy || node.IsStale {
+		return false, "node health not fresh"
+	}
+	if !node.LastHeartbeat.After(notBefore) && !node.LastUpdate.After(notBefore) {
+		return false, "fresh heartbeat pending"
+	}
+	if ok, reason := expectedComponentVersionsReported(nodeID, expectedVersions); !ok {
+		return false, reason
+	}
+	if err := probeWarmupEndpoint(node.BaseURL); err != nil {
+		return false, err.Error()
+	}
+	return true, ""
+}
+
+func expectedComponentVersionsReported(nodeID string, expected map[string]string) (bool, string) {
+	if len(expected) == 0 {
+		return false, "component version confirmation missing"
+	}
+	if db == nil {
+		return false, "component version database unavailable"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for component, version := range expected {
+		if strings.TrimSpace(version) == "" {
+			return false, fmt.Sprintf("%s result version missing", component)
+		}
+		var current string
+		err := db.QueryRowContext(ctx, `
+			SELECT COALESCE(current_version, '')
+			FROM foghorn.node_components
+			WHERE node_id = $1 AND component = $2
+		`, nodeID, component).Scan(&current)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, fmt.Sprintf("%s version not reported", component)
+		}
+		if err != nil {
+			return false, fmt.Sprintf("read %s version: %v", component, err)
+		}
+		if strings.TrimSpace(current) != version {
+			return false, fmt.Sprintf("%s version %q pending", component, version)
+		}
+	}
+	return true, ""
+}
+
+func probeWarmupEndpoint(baseURL string) error {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return fmt.Errorf("node base URL missing")
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, baseURL, nil)
+	if err != nil {
+		return fmt.Errorf("build warmup probe: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("warmup endpoint probe failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode >= http.StatusInternalServerError {
+		return fmt.Errorf("warmup endpoint returned HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func persistNodeUpdateStateWithLog(nodeID, targetRelease, phase, lastError string, log logging.Logger, message string) {
+	if err := persistNodeUpdateState(nodeID, targetRelease, phase, lastError); err != nil && log != nil {
+		log.WithError(err).WithField("node_id", nodeID).Warn(message)
+	}
+}
+
+func persistNodeUpdateState(nodeID, targetRelease, phase, lastError string) error {
+	return persistNodeUpdateStateWithDeadline(nodeID, targetRelease, phase, lastError, time.Time{})
+}
+
+func persistNodeUpdateStateWithDeadline(nodeID, targetRelease, phase, lastError string, deadline time.Time) error {
+	return persistNodeUpdateStateWithDeadlineAndExpected(nodeID, targetRelease, phase, lastError, deadline, nil)
+}
+
+func persistNodeUpdateStateWithDeadlineAndExpected(nodeID, targetRelease, phase, lastError string, deadline time.Time, expected map[string]string) error {
+	if db == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	deadlineArg := any(nil)
+	if !deadline.IsZero() {
+		deadlineArg = deadline
+	}
+	expectedArg := any(nil)
+	if len(expected) > 0 {
+		encoded, err := json.Marshal(expected)
+		if err != nil {
+			return err
+		}
+		expectedArg = string(encoded)
+	}
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO foghorn.node_update_state (node_id, target_release, phase, deadline, expected_components, last_error, updated_at)
+		VALUES ($1, NULLIF($2, ''), $3, $5, COALESCE($6::jsonb, '{}'::jsonb), NULLIF($4, ''), NOW())
+		ON CONFLICT (node_id) DO UPDATE SET
+			target_release = EXCLUDED.target_release,
+			phase = EXCLUDED.phase,
+			deadline = EXCLUDED.deadline,
+			expected_components = CASE
+				WHEN $6::jsonb IS NULL THEN foghorn.node_update_state.expected_components
+				ELSE EXCLUDED.expected_components
+			END,
+			last_error = EXCLUDED.last_error,
+			updated_at = NOW()
+	`, nodeID, targetRelease, phase, lastError, deadlineArg, expectedArg)
+	return err
+}
+
+type nodeUpdateProgress struct {
+	TargetRelease string
+	Phase         string
+}
+
+func currentNodeUpdateState(nodeID string) (nodeUpdateProgress, bool, error) {
+	if db == nil || strings.TrimSpace(nodeID) == "" {
+		return nodeUpdateProgress{}, false, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var progress nodeUpdateProgress
+	err := db.QueryRowContext(ctx, `
+		SELECT COALESCE(target_release, ''), phase
+		FROM foghorn.node_update_state
+		WHERE node_id = $1
+	`, nodeID).Scan(&progress.TargetRelease, &progress.Phase)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nodeUpdateProgress{}, false, nil
+	}
+	if err != nil {
+		return nodeUpdateProgress{}, false, err
+	}
+	return progress, true, nil
+}
+
+func updatePhaseRestoresRouting(phase string) bool {
+	switch phase {
+	case "cordoning", "draining", "drained", "updating_restore", "warming_restore":
+		return true
+	default:
+		return false
+	}
+}
+
+func updatePhaseNeedsMistWarmup(phase string) bool {
+	switch phase {
+	case "cordoning", "draining", "drained", "updating", "updating_restore", "warming", "warming_restore":
+		return true
+	default:
+		return false
+	}
+}
+
+func updatePhaseAcceptsApplyResult(phase string) bool {
+	switch phase {
+	case "updating", "updating_restore", "warming", "warming_restore":
+		return true
+	default:
+		return false
 	}
 }
 

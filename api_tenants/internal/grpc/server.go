@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -1713,8 +1714,7 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 	}, nil
 }
 
-// CreateEnrollmentToken creates a bootstrap token for a cluster the tenant has
-// an active subscription to. Tenant-facing alternative to admin-only CreateBootstrapToken.
+// CreateEnrollmentToken creates a bootstrap token for a cluster lifecycle actor.
 func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *pb.CreateEnrollmentTokenRequest) (*pb.CreateBootstrapTokenResponse, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
@@ -1722,6 +1722,7 @@ func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *pb
 	}
 
 	callerTenantID := middleware.GetTenantID(ctx)
+	serviceAuth := ctxkeys.GetAuthType(ctx) == "service"
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		tenantID = callerTenantID
@@ -1729,24 +1730,43 @@ func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *pb
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
-	if callerTenantID != "" && tenantID != callerTenantID {
+	providerActor, err := s.hasProviderLifecycleAuthority(ctx, callerTenantID)
+	if err != nil {
+		return nil, err
+	}
+	lifecycleActor := serviceAuth || providerActor
+	if callerTenantID != "" && tenantID != callerTenantID && !lifecycleActor {
 		return nil, status.Error(codes.PermissionDenied, "tenant_id does not match caller tenant")
 	}
 
-	// Verify active subscription
-	var subStatus string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT subscription_status FROM quartermaster.tenant_cluster_access
-		WHERE tenant_id = $1 AND cluster_id = $2 AND is_active = true
-	`, tenantID, clusterID).Scan(&subStatus)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.PermissionDenied, "no active subscription to this cluster")
+	var authorized bool
+	if lifecycleActor {
+		err = s.db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM quartermaster.infrastructure_clusters
+				WHERE cluster_id = $1 AND is_active = true
+			)
+		`, clusterID).Scan(&authorized)
+	} else {
+		err = s.db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM quartermaster.infrastructure_clusters
+				WHERE cluster_id = $1 AND owner_tenant_id = $2 AND is_active = true
+				UNION
+				SELECT 1 FROM quartermaster.tenant_cluster_access
+				WHERE cluster_id = $1
+				  AND tenant_id = $2
+				  AND access_level = 'owner'
+				  AND subscription_status = 'active'
+				  AND is_active = true
+			)
+		`, clusterID, tenantID).Scan(&authorized)
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	if subStatus != "active" {
-		return nil, status.Errorf(codes.FailedPrecondition, "subscription status is %q, must be active", subStatus)
+	if !authorized {
+		return nil, status.Error(codes.PermissionDenied, "cluster lifecycle access required")
 	}
 
 	// Parse TTL (default 30 days)
@@ -2245,7 +2265,10 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 		return nil, status.Errorf(codes.Internal, "failed to update tenant: %v", err)
 	}
 
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to inspect tenant update: %v", err)
+	}
 	if rows == 0 {
 		return nil, status.Error(codes.NotFound, "tenant not found")
 	}
@@ -2287,7 +2310,10 @@ func (s *QuartermasterServer) DeleteTenant(ctx context.Context, req *pb.DeleteTe
 		return nil, status.Errorf(codes.Internal, "failed to delete tenant: %v", err)
 	}
 
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to inspect tenant delete: %v", err)
+	}
 	if rows == 0 {
 		return nil, status.Error(codes.NotFound, "tenant not found")
 	}
@@ -2431,7 +2457,10 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *pb.U
 		return nil, status.Errorf(codes.Internal, "failed to update tenant cluster: %v", err)
 	}
 
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to inspect tenant cluster update: %v", err)
+	}
 	if rows == 0 {
 		return nil, status.Error(codes.NotFound, "tenant not found")
 	}
@@ -2996,7 +3025,10 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *pb.UpdateC
 		return nil, status.Errorf(codes.Internal, "failed to update cluster: %v", err)
 	}
 
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to inspect cluster update: %v", err)
+	}
 	if rows == 0 {
 		return nil, status.Error(codes.NotFound, "cluster not found")
 	}
@@ -3572,6 +3604,566 @@ func (s *QuartermasterServer) GetNodeByLogicalName(ctx context.Context, req *pb.
 	return &pb.NodeResponse{Node: node}, nil
 }
 
+// UpdateNodeStatus changes routing-visible node state for lifecycle actions.
+func (s *QuartermasterServer) UpdateNodeStatus(ctx context.Context, req *pb.UpdateNodeStatusRequest) (*pb.NodeResponse, error) {
+	nodeID := strings.TrimSpace(req.GetNodeId())
+	nextStatus := strings.TrimSpace(req.GetStatus())
+	if nodeID == "" || nextStatus == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id and status required")
+	}
+	switch nextStatus {
+	case "active", "offline", "maintenance", "retired", "evicted":
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported node status %q", nextStatus)
+	}
+
+	tenantID := middleware.GetTenantID(ctx)
+	authType := ctxkeys.GetAuthType(ctx)
+	if tenantID == "" && authType != "service" {
+		return nil, status.Error(codes.Unauthenticated, "authentication required")
+	}
+
+	where := []string{"(n.node_id = $1 OR n.id::text = $1)"}
+	args := []any{nodeID, nextStatus}
+	if expectedClusterID := strings.TrimSpace(req.GetExpectedClusterId()); expectedClusterID != "" {
+		args = append(args, expectedClusterID)
+		where = append(where, fmt.Sprintf("n.cluster_id = $%d", len(args)))
+	}
+	if tenantID != "" {
+		providerActor, err := s.hasProviderLifecycleAuthority(ctx, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		if providerActor {
+			where = append(where, `n.cluster_id IN (
+				SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c
+				WHERE c.is_active = true
+			)`)
+		} else {
+			args = append(args, tenantID)
+			tenantArg := len(args)
+			where = append(where, fmt.Sprintf(`n.cluster_id IN (
+				SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c
+				WHERE c.owner_tenant_id = $%d AND c.is_active = true
+				UNION
+				SELECT tca.cluster_id FROM quartermaster.tenant_cluster_access tca
+				WHERE tca.tenant_id = $%d
+				  AND tca.access_level = 'owner'
+				  AND tca.subscription_status = 'active'
+				  AND tca.is_active = true
+			)`, tenantArg, tenantArg))
+		}
+	} else {
+		where = append(where, `n.cluster_id IN (
+			SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c
+			WHERE c.is_active = true
+		)`)
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE quartermaster.infrastructure_nodes n
+		SET status = $2, updated_at = NOW()
+		WHERE %s
+		RETURNING n.node_id
+	`, strings.Join(where, " AND "))
+	var canonicalNodeID string
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&canonicalNodeID); errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "node not found")
+	} else if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update node status: %v", err)
+	}
+
+	node, err := s.queryNode(ctx, canonicalNodeID)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.NodeResponse{Node: node}, nil
+}
+
+func (s *QuartermasterServer) hasProviderLifecycleAuthority(ctx context.Context, tenantID string) (bool, error) {
+	if ctxkeys.GetAuthType(ctx) == "service" {
+		return true, nil
+	}
+	if ctxkeys.GetRole(ctx) != "provider" || strings.TrimSpace(tenantID) == "" {
+		return false, nil
+	}
+	parsedTenantID := uuid.Nil
+	if value, parseErr := uuid.Parse(tenantID); parseErr == nil {
+		parsedTenantID = value
+	}
+	if parsedTenantID == uuid.Nil {
+		return false, nil
+	}
+
+	var isProvider bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(is_provider, false)
+		FROM quartermaster.tenants
+		WHERE id = $1
+	`, tenantID).Scan(&isProvider)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, status.Errorf(codes.Internal, "provider authority check failed: %v", err)
+	}
+	return isProvider, nil
+}
+
+func (s *QuartermasterServer) ListEdgeReleases(ctx context.Context, req *pb.ListEdgeReleasesRequest) (*pb.ListEdgeReleasesResponse, error) {
+	where := []string{"TRUE"}
+	args := []any{}
+	if strings.TrimSpace(req.GetChannel()) != "" {
+		channel, err := normalizeReleaseTargetChannel(req.GetChannel())
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, channel)
+		where = append(where, fmt.Sprintf("channel = $%d", len(args)))
+	}
+	if version := strings.TrimSpace(req.GetVersion()); version != "" {
+		args = append(args, version)
+		where = append(where, fmt.Sprintf("version = $%d", len(args)))
+	}
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+			SELECT channel, version, components::text, published_at
+		FROM quartermaster.edge_releases
+		WHERE %s
+		ORDER BY channel, published_at DESC, version DESC
+	`, strings.Join(where, " AND ")), args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var releases []*pb.EdgeRelease
+	for rows.Next() {
+		release, err := scanEdgeRelease(rows)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "scan release: %v", err)
+		}
+		releases = append(releases, release)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "read releases: %v", err)
+	}
+	return &pb.ListEdgeReleasesResponse{Releases: releases}, nil
+}
+
+func (s *QuartermasterServer) UpsertEdgeRelease(ctx context.Context, req *pb.UpsertEdgeReleaseRequest) (*pb.EdgeReleaseResponse, error) {
+	tenantID := middleware.GetTenantID(ctx)
+	ok, err := s.hasProviderLifecycleAuthority(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, status.Error(codes.PermissionDenied, "provider authority required")
+	}
+	release := req.GetRelease()
+	if release == nil || strings.TrimSpace(release.GetChannel()) == "" || strings.TrimSpace(release.GetVersion()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "release channel and version required")
+	}
+	channel, err := normalizeReleaseTargetChannel(release.GetChannel())
+	if err != nil {
+		return nil, err
+	}
+	version := strings.TrimSpace(release.GetVersion())
+	components, err := normalizeJSONObject(release.GetComponentsJson(), "components_json")
+	if err != nil {
+		return nil, err
+	}
+	if validateErr := validateEdgeReleaseComponents(components); validateErr != nil {
+		return nil, validateErr
+	}
+	publishedAt := time.Now()
+	if release.GetPublishedAt() != nil {
+		publishedAt = release.GetPublishedAt().AsTime()
+	}
+	row := s.db.QueryRowContext(ctx, `
+			INSERT INTO quartermaster.edge_releases (channel, version, components, published_at)
+			VALUES ($1, $2, $3::jsonb, $4)
+			ON CONFLICT (channel, version) DO UPDATE SET
+				components = EXCLUDED.components,
+				published_at = EXCLUDED.published_at
+			RETURNING channel, version, components::text, published_at
+		`, channel, version, components, publishedAt)
+	saved, err := scanEdgeRelease(row)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "upsert release: %v", err)
+	}
+	return &pb.EdgeReleaseResponse{Release: saved}, nil
+}
+
+func validateEdgeReleaseComponents(raw string) error {
+	type releaseArtifact struct {
+		ArtifactURL string `json:"artifact_url"`
+		Checksum    string `json:"checksum"`
+	}
+	var components map[string]struct {
+		Version   string                     `json:"version"`
+		Artifacts map[string]releaseArtifact `json:"artifacts"`
+	}
+	if err := json.Unmarshal([]byte(raw), &components); err != nil {
+		return status.Errorf(codes.InvalidArgument, "components_json must be an object: %v", err)
+	}
+	hasUpdateableComponent := false
+	for component, values := range components {
+		if !validEdgeReleaseComponent(component) {
+			return status.Errorf(codes.InvalidArgument, "unsupported release component %q", component)
+		}
+		version := strings.TrimSpace(values.Version)
+		if version == "" {
+			return status.Errorf(codes.InvalidArgument, "%s version required", component)
+		}
+		if !envLineValueSafe(version) {
+			return status.Errorf(codes.InvalidArgument, "%s version contains unsupported control characters", component)
+		}
+		if component == "config_schema" {
+			continue
+		}
+		hasUpdateableComponent = true
+		if len(values.Artifacts) == 0 {
+			return status.Errorf(codes.InvalidArgument, "%s artifacts required", component)
+		}
+		for platform, artifact := range values.Artifacts {
+			if !validReleasePlatformKey(platform) {
+				return status.Errorf(codes.InvalidArgument, "%s artifact platform %q invalid", component, platform)
+			}
+			if strings.TrimSpace(artifact.ArtifactURL) == "" {
+				return status.Errorf(codes.InvalidArgument, "%s artifact_url required for %s", component, platform)
+			}
+			if strings.TrimSpace(artifact.Checksum) == "" {
+				return status.Errorf(codes.InvalidArgument, "%s checksum required for %s", component, platform)
+			}
+			if err := validateReleaseChecksum(artifact.Checksum); err != nil {
+				return status.Errorf(codes.InvalidArgument, "%s checksum invalid for %s: %v", component, platform, err)
+			}
+		}
+	}
+	if !hasUpdateableComponent {
+		return status.Error(codes.InvalidArgument, "components_json must include at least one updateable edge component")
+	}
+	return nil
+}
+
+func validReleasePlatformKey(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return false
+	}
+	if strings.Contains(value, "/") {
+		parts := strings.Split(value, "/")
+		return len(parts) == 2 && parts[0] != "" && parts[1] != ""
+	}
+	parts := strings.SplitN(value, "-", 2)
+	return len(parts) == 2 && parts[0] != "" && parts[1] != ""
+}
+
+func validateReleaseChecksum(value string) error {
+	value = strings.TrimSpace(value)
+	algo, digest, ok := strings.Cut(value, ":")
+	if !ok {
+		algo, digest = "sha256", value
+	}
+	var hexLen int
+	switch strings.ToLower(strings.TrimSpace(algo)) {
+	case "sha256":
+		hexLen = sha256.Size * 2
+	case "sha512":
+		hexLen = sha512.Size * 2
+	default:
+		return fmt.Errorf("unsupported checksum algorithm %q", algo)
+	}
+	digest = strings.TrimSpace(digest)
+	if len(digest) != hexLen {
+		return fmt.Errorf("digest must be %d hex characters", hexLen)
+	}
+	if _, err := hex.DecodeString(digest); err != nil {
+		return fmt.Errorf("digest must be hex: %w", err)
+	}
+	return nil
+}
+
+func validEdgeReleaseComponent(component string) bool {
+	switch component {
+	case "helmsman", "mist", "caddy", "config_schema":
+		return true
+	default:
+		return false
+	}
+}
+
+func envLineValueSafe(value string) bool {
+	return !strings.ContainsAny(value, "\r\n\x00")
+}
+
+func (s *QuartermasterServer) GetClusterReleaseTarget(ctx context.Context, req *pb.GetClusterReleaseTargetRequest) (*pb.ClusterReleaseTargetResponse, error) {
+	clusterID := strings.TrimSpace(req.GetClusterId())
+	if clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+	}
+	if err := s.authorizeClusterReleaseTarget(ctx, clusterID); err != nil {
+		return nil, err
+	}
+	target, err := s.queryClusterReleaseTarget(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.ClusterReleaseTargetResponse{Target: target}, nil
+}
+
+func (s *QuartermasterServer) ListClusterReleaseTargets(ctx context.Context, req *pb.ListClusterReleaseTargetsRequest) (*pb.ListClusterReleaseTargetsResponse, error) {
+	where := []string{"TRUE"}
+	args := []any{}
+	if clusterID := strings.TrimSpace(req.GetClusterId()); clusterID != "" {
+		if err := s.authorizeClusterReleaseTarget(ctx, clusterID); err != nil {
+			return nil, err
+		}
+		args = append(args, clusterID)
+		where = append(where, fmt.Sprintf("cluster_id = $%d", len(args)))
+	} else {
+		tenantID := middleware.GetTenantID(ctx)
+		ok, err := s.hasProviderLifecycleAuthority(ctx, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+		}
+	}
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+			SELECT cluster_id, channel, COALESCE(target_version, ''), rollout_plan::text, COALESCE(paused, false), updated_at
+		FROM quartermaster.cluster_release_targets
+		WHERE %s
+		ORDER BY updated_at DESC, cluster_id
+	`, strings.Join(where, " AND ")), args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var targets []*pb.ClusterReleaseTarget
+	for rows.Next() {
+		target, err := scanClusterReleaseTarget(rows)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "scan release target: %v", err)
+		}
+		targets = append(targets, target)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "read release targets: %v", err)
+	}
+	return &pb.ListClusterReleaseTargetsResponse{Targets: targets}, nil
+}
+
+func (s *QuartermasterServer) SetClusterReleaseTarget(ctx context.Context, req *pb.SetClusterReleaseTargetRequest) (*pb.ClusterReleaseTargetResponse, error) {
+	target := req.GetTarget()
+	if target == nil || strings.TrimSpace(target.GetClusterId()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster target required")
+	}
+	clusterID := strings.TrimSpace(target.GetClusterId())
+	if err := s.authorizeClusterReleaseTarget(ctx, clusterID); err != nil {
+		return nil, err
+	}
+	rolloutPlan, err := normalizeJSONObject(firstNonEmptyString(target.GetRolloutPlanJson(), "{}"), "rollout_plan_json")
+	if err != nil {
+		return nil, err
+	}
+	if validateErr := validateRolloutPlanJSON(rolloutPlan); validateErr != nil {
+		return nil, validateErr
+	}
+	channel, err := normalizeReleaseTargetChannel(target.GetChannel())
+	if err != nil {
+		return nil, err
+	}
+	targetVersion := strings.TrimSpace(target.GetTargetVersion())
+	if err := s.ensureEdgeReleaseTargetExists(ctx, channel, targetVersion); err != nil {
+		return nil, err
+	}
+	row := s.db.QueryRowContext(ctx, `
+				INSERT INTO quartermaster.cluster_release_targets (cluster_id, channel, target_version, rollout_plan, paused, updated_at)
+				VALUES ($1, $2, NULLIF($3, ''), $4::jsonb, $5, NOW())
+			ON CONFLICT (cluster_id) DO UPDATE SET
+				channel = EXCLUDED.channel,
+				target_version = EXCLUDED.target_version,
+				rollout_plan = EXCLUDED.rollout_plan,
+				paused = EXCLUDED.paused,
+				updated_at = NOW()
+			RETURNING cluster_id, channel, COALESCE(target_version, ''), rollout_plan::text, COALESCE(paused, false), updated_at
+		`, clusterID, channel, targetVersion, rolloutPlan, target.GetPaused())
+	saved, err := scanClusterReleaseTarget(row)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "set release target: %v", err)
+	}
+	return &pb.ClusterReleaseTargetResponse{Target: saved}, nil
+}
+
+func (s *QuartermasterServer) ensureEdgeReleaseTargetExists(ctx context.Context, channel, version string) error {
+	var exists bool
+	var err error
+	if strings.TrimSpace(version) == "" {
+		err = s.db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM quartermaster.edge_releases
+				WHERE channel = $1
+			)
+		`, channel).Scan(&exists)
+	} else {
+		err = s.db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM quartermaster.edge_releases
+				WHERE channel = $1 AND version = $2
+			)
+		`, channel, version).Scan(&exists)
+	}
+	if err != nil {
+		return status.Errorf(codes.Internal, "check edge release target: %v", err)
+	}
+	if exists {
+		return nil
+	}
+	if strings.TrimSpace(version) == "" {
+		return status.Errorf(codes.InvalidArgument, "edge release channel %s has no published releases", channel)
+	}
+	return status.Errorf(codes.InvalidArgument, "edge release %s:%s is not published", channel, version)
+}
+
+func (s *QuartermasterServer) authorizeClusterReleaseTarget(ctx context.Context, clusterID string) error {
+	tenantID := middleware.GetTenantID(ctx)
+	ok, err := s.hasProviderLifecycleAuthority(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	if tenantID == "" {
+		return status.Error(codes.Unauthenticated, "authentication required")
+	}
+	var authorized bool
+	err = s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM quartermaster.infrastructure_clusters
+			WHERE cluster_id = $1 AND owner_tenant_id = $2 AND is_active = true
+			UNION
+			SELECT 1 FROM quartermaster.tenant_cluster_access
+			WHERE cluster_id = $1
+			  AND tenant_id = $2
+			  AND access_level = 'owner'
+			  AND subscription_status = 'active'
+			  AND is_active = true
+		)
+	`, clusterID, tenantID).Scan(&authorized)
+	if err != nil {
+		return status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if !authorized {
+		return status.Error(codes.PermissionDenied, "cluster owner access required")
+	}
+	return nil
+}
+
+func (s *QuartermasterServer) queryClusterReleaseTarget(ctx context.Context, clusterID string) (*pb.ClusterReleaseTarget, error) {
+	row := s.db.QueryRowContext(ctx, `
+			SELECT cluster_id, channel, COALESCE(target_version, ''), rollout_plan::text, COALESCE(paused, false), updated_at
+		FROM quartermaster.cluster_release_targets
+		WHERE cluster_id = $1
+	`, clusterID)
+	target, err := scanClusterReleaseTarget(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "cluster release target not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get release target: %v", err)
+	}
+	return target, nil
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanEdgeRelease(row rowScanner) (*pb.EdgeRelease, error) {
+	var release pb.EdgeRelease
+	var publishedAt time.Time
+	if err := row.Scan(&release.Channel, &release.Version, &release.ComponentsJson, &publishedAt); err != nil {
+		return nil, err
+	}
+	release.PublishedAt = timestamppb.New(publishedAt)
+	return &release, nil
+}
+
+func scanClusterReleaseTarget(row rowScanner) (*pb.ClusterReleaseTarget, error) {
+	var target pb.ClusterReleaseTarget
+	var updatedAt time.Time
+	if err := row.Scan(&target.ClusterId, &target.Channel, &target.TargetVersion, &target.RolloutPlanJson, &target.Paused, &updatedAt); err != nil {
+		return nil, err
+	}
+	target.UpdatedAt = timestamppb.New(updatedAt)
+	return &target, nil
+}
+
+func normalizeJSONObject(raw, field string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = "{}"
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return "", status.Errorf(codes.InvalidArgument, "%s must be a JSON object", field)
+	}
+	encoded, err := json.Marshal(decoded)
+	if err != nil {
+		return "", status.Errorf(codes.InvalidArgument, "%s must be a JSON object", field)
+	}
+	return string(encoded), nil
+}
+
+type rolloutPlanConfig struct {
+	Canary               bool   `json:"canary"`
+	CanaryCount          int    `json:"canary_count"`
+	BatchSize            int    `json:"batch_size"`
+	CapacityFloor        int    `json:"capacity_floor"`
+	CapacityFloorPercent int    `json:"capacity_floor_percent"`
+	MaxFailed            int    `json:"max_failed"`
+	ErrorAbort           bool   `json:"error_abort"`
+	DrainDeadline        string `json:"drain_deadline"`
+	Force                bool   `json:"force"`
+}
+
+func validateRolloutPlanJSON(raw string) error {
+	var plan rolloutPlanConfig
+	if err := json.Unmarshal([]byte(raw), &plan); err != nil {
+		return status.Errorf(codes.InvalidArgument, "rollout_plan_json has invalid field types")
+	}
+	if plan.CapacityFloor != 0 || plan.CapacityFloorPercent != 0 {
+		return status.Error(codes.InvalidArgument, "rollout_plan_json capacity_floor fields are not supported for edge release targets")
+	}
+	if strings.TrimSpace(plan.DrainDeadline) != "" {
+		if _, err := time.ParseDuration(plan.DrainDeadline); err != nil {
+			return status.Errorf(codes.InvalidArgument, "rollout_plan_json drain_deadline must be a Go duration")
+		}
+	}
+	return nil
+}
+
+func normalizeReleaseTargetChannel(channel string) (string, error) {
+	channel = strings.ToLower(strings.TrimSpace(channel))
+	switch channel {
+	case "stable", "rc":
+		return channel, nil
+	default:
+		return "", status.Errorf(codes.InvalidArgument, "unsupported release channel %q", channel)
+	}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 // UpdateNodeHardware updates the hardware specs for a node (detected at startup by Helmsman)
 // Called by Foghorn when processing Register message with hardware info
 func (s *QuartermasterServer) UpdateNodeHardware(ctx context.Context, req *pb.UpdateNodeHardwareRequest) (*emptypb.Empty, error) {
@@ -3598,7 +4190,14 @@ func (s *QuartermasterServer) UpdateNodeHardware(ctx context.Context, req *pb.Up
 		return nil, status.Errorf(codes.Internal, "failed to update hardware specs: %v", err)
 	}
 
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"node_id": nodeID,
+			"error":   err,
+		}).Warn("Could not determine updated node hardware row count")
+		return nil, status.Errorf(codes.Internal, "failed to inspect node hardware update: %v", err)
+	}
 	if rows == 0 {
 		// Node not found - this is OK, it might not be enrolled yet
 		s.logger.WithField("node_id", nodeID).Debug("Node not found for hardware update (may not be enrolled yet)")

@@ -339,7 +339,7 @@ func ResolveVersion(versionStr string) (channel, version string) {
 		return "stable", versionStr
 	}
 
-	// If it's a channel name (stable, rc), use latest
+	// If it's a release track name, use latest
 	switch versionStr {
 	case "stable", "rc":
 		return versionStr, "latest"

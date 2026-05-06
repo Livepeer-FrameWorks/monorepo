@@ -29,6 +29,7 @@ setup' for interactive onboarding, or 'frameworks context create' +
 	ctx.AddCommand(newContextCheckCmd())
 	ctx.AddCommand(newContextSetClusterCmd())
 	ctx.AddCommand(newContextSetPersonaCmd())
+	ctx.AddCommand(newContextSetAccessModeCmd())
 	ctx.AddCommand(newContextSetGitopsSourceCmd())
 	ctx.AddCommand(newContextSetGitopsPathCmd())
 	ctx.AddCommand(newContextSetGitopsRepoCmd())
@@ -97,9 +98,10 @@ current — pair with 'frameworks context use <name>' to switch to it.`,
 				return fmt.Errorf("context %q already exists", name)
 			}
 			cfg.Contexts[name] = fwcfg.Context{
-				Name:      name,
-				Endpoints: fwcfg.DefaultEndpoints(),
-				Executor:  fwcfg.Executor{Type: "local"},
+				Name:       name,
+				Endpoints:  fwcfg.DefaultEndpoints(),
+				Executor:   fwcfg.Executor{Type: "local"},
+				AccessMode: fwcfg.AccessModeLocal,
 			}
 			if err := fwcfg.Save(cfg); err != nil {
 				return err
@@ -107,7 +109,7 @@ current — pair with 'frameworks context use <name>' to switch to it.`,
 			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Created context %q", name))
 			ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
 				{Cmd: fmt.Sprintf("frameworks context use %s", name), Why: "Switch to the newly created context."},
-				{Cmd: fmt.Sprintf("frameworks context set-persona <platform|selfhosted|edge> --context %s", name), Why: "Label the context by intent."},
+				{Cmd: fmt.Sprintf("frameworks context set-persona <platform|selfhosted|user> --context %s", name), Why: "Label the context by intent."},
 			})
 			return nil
 		},
@@ -224,6 +226,7 @@ func newContextShowCmd() *cobra.Command {
 			if c.Persona != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "  persona:             %s\n", c.Persona)
 			}
+			fmt.Fprintf(cmd.OutOrStdout(), "  access_mode:         %s\n", c.EffectiveAccessMode())
 			if c.ClusterID != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "  cluster_id:          %s\n", c.ClusterID)
 			}
@@ -271,18 +274,40 @@ func ctxFlag(cmd *cobra.Command, target *string) {
 
 func newContextSetURLCmd() *cobra.Command {
 	var explicitCtx string
+	var useTLS bool
+	var allowInsecure bool
 	cmd := &cobra.Command{
 		Use:   "set-url <service> <url>",
 		Short: "Update a service URL in a context",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("tls") && cmd.Flags().Changed("allow-insecure") {
+				return fmt.Errorf("--tls and --allow-insecure are mutually exclusive")
+			}
 			svc, url := args[0], args[1]
 			return mutateContext(cmd, explicitCtx, fmt.Sprintf("%s URL", svc), func(c *fwcfg.Context) error {
-				return setEndpointURL(&c.Endpoints, svc, url)
+				if err := setEndpointURL(&c.Endpoints, svc, url); err != nil {
+					return err
+				}
+				if cmd.Flags().Changed("tls") {
+					c.Endpoints.UseTLS = useTLS
+					if useTLS {
+						c.Endpoints.AllowInsecure = false
+					}
+				}
+				if cmd.Flags().Changed("allow-insecure") {
+					c.Endpoints.AllowInsecure = allowInsecure
+					if allowInsecure {
+						c.Endpoints.UseTLS = false
+					}
+				}
+				return nil
 			})
 		},
 	}
 	ctxFlag(cmd, &explicitCtx)
+	cmd.Flags().BoolVar(&useTLS, "tls", false, "require TLS for saved gRPC endpoint overrides")
+	cmd.Flags().BoolVar(&allowInsecure, "allow-insecure", false, "use plaintext gRPC for saved endpoint overrides")
 	return cmd
 }
 
@@ -334,18 +359,44 @@ func newContextSetClusterCmd() *cobra.Command {
 func newContextSetPersonaCmd() *cobra.Command {
 	var explicitCtx string
 	cmd := &cobra.Command{
-		Use:   "set-persona <platform|selfhosted|edge>",
+		Use:   "set-persona <platform|selfhosted|user>",
 		Short: "Set the persona for a context",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := fwcfg.Persona(args[0])
 			switch p {
-			case fwcfg.PersonaPlatform, fwcfg.PersonaSelfHosted, fwcfg.PersonaEdge:
+			case fwcfg.PersonaPlatform, fwcfg.PersonaSelfHosted, fwcfg.PersonaUser, fwcfg.PersonaEdge:
 			default:
-				return fmt.Errorf("persona must be one of platform|selfhosted|edge (got %q)", args[0])
+				return fmt.Errorf("persona must be one of platform|selfhosted|user (got %q)", args[0])
 			}
 			return mutateContext(cmd, explicitCtx, "persona", func(c *fwcfg.Context) error {
+				if p == fwcfg.PersonaEdge {
+					p = fwcfg.PersonaUser
+				}
 				c.Persona = p
+				return nil
+			})
+		},
+	}
+	ctxFlag(cmd, &explicitCtx)
+	return cmd
+}
+
+func newContextSetAccessModeCmd() *cobra.Command {
+	var explicitCtx string
+	cmd := &cobra.Command{
+		Use:   "set-access-mode <local|ssh|mesh>",
+		Short: "Set how this context reaches control-plane services",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mode := fwcfg.AccessMode(args[0])
+			switch mode {
+			case fwcfg.AccessModeLocal, fwcfg.AccessModeSSH, fwcfg.AccessModeMesh:
+			default:
+				return fmt.Errorf("access mode must be one of local|ssh|mesh (got %q)", args[0])
+			}
+			return mutateContext(cmd, explicitCtx, "access mode", func(c *fwcfg.Context) error {
+				c.AccessMode = mode
 				return nil
 			})
 		},

@@ -458,6 +458,11 @@ func (c *GRPCClient) CreateNode(ctx context.Context, req *pb.CreateNodeRequest) 
 	return c.node.CreateNode(ctx, req)
 }
 
+// UpdateNodeStatus changes a node's routing-visible registry status.
+func (c *GRPCClient) UpdateNodeStatus(ctx context.Context, req *pb.UpdateNodeStatusRequest) (*pb.NodeResponse, error) {
+	return c.node.UpdateNodeStatus(ctx, req)
+}
+
 // ResolveNodeFingerprint resolves a node fingerprint
 func (c *GRPCClient) ResolveNodeFingerprint(ctx context.Context, req *pb.ResolveNodeFingerprintRequest) (*pb.ResolveNodeFingerprintResponse, error) {
 	return c.node.ResolveNodeFingerprint(ctx, req)
@@ -593,6 +598,26 @@ func (c *GRPCClient) EnableSelfHosting(ctx context.Context, req *pb.EnableSelfHo
 
 func (c *GRPCClient) CreateEnrollmentToken(ctx context.Context, req *pb.CreateEnrollmentTokenRequest) (*pb.CreateBootstrapTokenResponse, error) {
 	return c.cluster.CreateEnrollmentToken(ctx, req)
+}
+
+func (c *GRPCClient) ListEdgeReleases(ctx context.Context, req *pb.ListEdgeReleasesRequest) (*pb.ListEdgeReleasesResponse, error) {
+	return c.cluster.ListEdgeReleases(ctx, req)
+}
+
+func (c *GRPCClient) UpsertEdgeRelease(ctx context.Context, req *pb.UpsertEdgeReleaseRequest) (*pb.EdgeReleaseResponse, error) {
+	return c.cluster.UpsertEdgeRelease(ctx, req)
+}
+
+func (c *GRPCClient) GetClusterReleaseTarget(ctx context.Context, req *pb.GetClusterReleaseTargetRequest) (*pb.ClusterReleaseTargetResponse, error) {
+	return c.cluster.GetClusterReleaseTarget(ctx, req)
+}
+
+func (c *GRPCClient) ListClusterReleaseTargets(ctx context.Context, req *pb.ListClusterReleaseTargetsRequest) (*pb.ListClusterReleaseTargetsResponse, error) {
+	return c.cluster.ListClusterReleaseTargets(ctx, req)
+}
+
+func (c *GRPCClient) SetClusterReleaseTarget(ctx context.Context, req *pb.SetClusterReleaseTargetRequest) (*pb.ClusterReleaseTargetResponse, error) {
+	return c.cluster.SetClusterReleaseTarget(ctx, req)
 }
 
 // ============================================================================

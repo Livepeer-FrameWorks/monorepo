@@ -1,6 +1,8 @@
 package control
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,6 +12,37 @@ import (
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 )
+
+func TestHandleDesiredStateUpdateQueuesResultOnSendFailure(t *testing.T) {
+	outboxMu.Lock()
+	outbox = nil
+	outboxMu.Unlock()
+	t.Cleanup(func() {
+		outboxMu.Lock()
+		outbox = nil
+		outboxMu.Unlock()
+	})
+
+	handleDesiredStateUpdate(context.Background(), logging.NewLogger(), "req-update-1", &pb.DesiredStateUpdate{
+		NodeId:        "node-1",
+		TargetRelease: "stable:v1",
+	}, func(*pb.ControlMessage) error {
+		return errors.New("stream closed")
+	})
+
+	outboxMu.Lock()
+	defer outboxMu.Unlock()
+	if len(outbox) != 1 {
+		t.Fatalf("outbox length = %d, want 1", len(outbox))
+	}
+	result := outbox[0].GetUpdateApplyResult()
+	if result == nil {
+		t.Fatal("queued message has no UpdateApplyResult payload")
+	}
+	if result.GetNodeId() != "node-1" || result.GetTargetRelease() != "stable:v1" {
+		t.Fatalf("queued result = node %q target %q", result.GetNodeId(), result.GetTargetRelease())
+	}
+}
 
 func TestBuildClipParams_AllFields(t *testing.T) {
 	startUnix := int64(1000)

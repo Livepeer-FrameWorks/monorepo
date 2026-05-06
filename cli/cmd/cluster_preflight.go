@@ -139,7 +139,7 @@ func newClusterPreflightCmd() *cobra.Command {
 				return fmt.Errorf("%d preflight check(s) failed", len(results)-okCount)
 			}
 			ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
-				{Cmd: "frameworks cluster provision --ready", Why: "All checks passed — provision the cluster and chain init+seed."},
+				{Cmd: "frameworks cluster provision", Why: "All checks passed — reconcile the cluster from the manifest."},
 			})
 			return nil
 		},

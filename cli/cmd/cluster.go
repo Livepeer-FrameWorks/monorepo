@@ -67,6 +67,8 @@ invocation. Explicit flags always win over saved context defaults.`,
 	cluster.AddCommand(newClusterMigrateCmd())
 	cluster.AddCommand(newClusterDataMigrateCmd())
 	cluster.AddCommand(newClusterSeedCmd())
+	cluster.AddCommand(newClusterNodesCmd())
+	cluster.AddCommand(newClusterReleasesCmd())
 
 	return cluster
 }
@@ -889,7 +891,7 @@ func doctorControlPlane(cmd *cobra.Command, manifest *inventory.Manifest, servic
 func doctorControlPlaneDetail(r readiness.Report, deep bool) string {
 	if !r.Checked {
 		if deep {
-			return "not verified (insufficient context; run 'cluster provision --ready' first)"
+			return "not verified (insufficient context; run 'cluster provision' first)"
 		}
 		return "not verified (pass --deep for authenticated check)"
 	}

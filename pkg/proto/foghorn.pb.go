@@ -429,26 +429,27 @@ func (x *GetNodeHealthRequest) GetNodeId() string {
 }
 
 type GetNodeHealthResponse struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	NodeId            string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	OperationalMode   string                 `protobuf:"bytes,2,opt,name=operational_mode,json=operationalMode,proto3" json:"operational_mode,omitempty"`
-	IsHealthy         bool                   `protobuf:"varint,3,opt,name=is_healthy,json=isHealthy,proto3" json:"is_healthy,omitempty"`
-	ActiveViewers     int32                  `protobuf:"varint,4,opt,name=active_viewers,json=activeViewers,proto3" json:"active_viewers,omitempty"`
-	ActiveStreams     int32                  `protobuf:"varint,5,opt,name=active_streams,json=activeStreams,proto3" json:"active_streams,omitempty"`
-	LastHeartbeat     string                 `protobuf:"bytes,6,opt,name=last_heartbeat,json=lastHeartbeat,proto3" json:"last_heartbeat,omitempty"` // ISO8601
-	ClusterId         string                 `protobuf:"bytes,7,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
-	TenantId          string                 `protobuf:"bytes,8,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // owning tenant (empty for operator nodes)
-	CpuPercent        float64                `protobuf:"fixed64,9,opt,name=cpu_percent,json=cpuPercent,proto3" json:"cpu_percent,omitempty"`
-	RamUsedMb         float64                `protobuf:"fixed64,10,opt,name=ram_used_mb,json=ramUsedMb,proto3" json:"ram_used_mb,omitempty"`
-	RamMaxMb          float64                `protobuf:"fixed64,11,opt,name=ram_max_mb,json=ramMaxMb,proto3" json:"ram_max_mb,omitempty"`
-	BandwidthUpMbps   float64                `protobuf:"fixed64,12,opt,name=bandwidth_up_mbps,json=bandwidthUpMbps,proto3" json:"bandwidth_up_mbps,omitempty"`
-	BandwidthDownMbps float64                `protobuf:"fixed64,13,opt,name=bandwidth_down_mbps,json=bandwidthDownMbps,proto3" json:"bandwidth_down_mbps,omitempty"`
-	BwLimitMbps       float64                `protobuf:"fixed64,14,opt,name=bw_limit_mbps,json=bwLimitMbps,proto3" json:"bw_limit_mbps,omitempty"`
-	DiskTotalBytes    uint64                 `protobuf:"varint,15,opt,name=disk_total_bytes,json=diskTotalBytes,proto3" json:"disk_total_bytes,omitempty"`
-	DiskUsedBytes     uint64                 `protobuf:"varint,16,opt,name=disk_used_bytes,json=diskUsedBytes,proto3" json:"disk_used_bytes,omitempty"`
-	Location          string                 `protobuf:"bytes,17,opt,name=location,proto3" json:"location,omitempty"`
-	Latitude          *float64               `protobuf:"fixed64,18,opt,name=latitude,proto3,oneof" json:"latitude,omitempty"`
-	Longitude         *float64               `protobuf:"fixed64,19,opt,name=longitude,proto3,oneof" json:"longitude,omitempty"`
+	state             protoimpl.MessageState  `protogen:"open.v1"`
+	NodeId            string                  `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	OperationalMode   string                  `protobuf:"bytes,2,opt,name=operational_mode,json=operationalMode,proto3" json:"operational_mode,omitempty"`
+	IsHealthy         bool                    `protobuf:"varint,3,opt,name=is_healthy,json=isHealthy,proto3" json:"is_healthy,omitempty"`
+	ActiveViewers     int32                   `protobuf:"varint,4,opt,name=active_viewers,json=activeViewers,proto3" json:"active_viewers,omitempty"`
+	ActiveStreams     int32                   `protobuf:"varint,5,opt,name=active_streams,json=activeStreams,proto3" json:"active_streams,omitempty"`
+	LastHeartbeat     string                  `protobuf:"bytes,6,opt,name=last_heartbeat,json=lastHeartbeat,proto3" json:"last_heartbeat,omitempty"` // ISO8601
+	ClusterId         string                  `protobuf:"bytes,7,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	TenantId          string                  `protobuf:"bytes,8,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // owning tenant (empty for operator nodes)
+	CpuPercent        float64                 `protobuf:"fixed64,9,opt,name=cpu_percent,json=cpuPercent,proto3" json:"cpu_percent,omitempty"`
+	RamUsedMb         float64                 `protobuf:"fixed64,10,opt,name=ram_used_mb,json=ramUsedMb,proto3" json:"ram_used_mb,omitempty"`
+	RamMaxMb          float64                 `protobuf:"fixed64,11,opt,name=ram_max_mb,json=ramMaxMb,proto3" json:"ram_max_mb,omitempty"`
+	BandwidthUpMbps   float64                 `protobuf:"fixed64,12,opt,name=bandwidth_up_mbps,json=bandwidthUpMbps,proto3" json:"bandwidth_up_mbps,omitempty"`
+	BandwidthDownMbps float64                 `protobuf:"fixed64,13,opt,name=bandwidth_down_mbps,json=bandwidthDownMbps,proto3" json:"bandwidth_down_mbps,omitempty"`
+	BwLimitMbps       float64                 `protobuf:"fixed64,14,opt,name=bw_limit_mbps,json=bwLimitMbps,proto3" json:"bw_limit_mbps,omitempty"`
+	DiskTotalBytes    uint64                  `protobuf:"varint,15,opt,name=disk_total_bytes,json=diskTotalBytes,proto3" json:"disk_total_bytes,omitempty"`
+	DiskUsedBytes     uint64                  `protobuf:"varint,16,opt,name=disk_used_bytes,json=diskUsedBytes,proto3" json:"disk_used_bytes,omitempty"`
+	Location          string                  `protobuf:"bytes,17,opt,name=location,proto3" json:"location,omitempty"`
+	Latitude          *float64                `protobuf:"fixed64,18,opt,name=latitude,proto3,oneof" json:"latitude,omitempty"`
+	Longitude         *float64                `protobuf:"fixed64,19,opt,name=longitude,proto3,oneof" json:"longitude,omitempty"`
+	ComponentVersions []*NodeComponentVersion `protobuf:"bytes,20,rep,name=component_versions,json=componentVersions,proto3" json:"component_versions,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -616,6 +617,65 @@ func (x *GetNodeHealthResponse) GetLongitude() float64 {
 	return 0
 }
 
+func (x *GetNodeHealthResponse) GetComponentVersions() []*NodeComponentVersion {
+	if x != nil {
+		return x.ComponentVersions
+	}
+	return nil
+}
+
+type NodeComponentVersion struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Component     string                 `protobuf:"bytes,1,opt,name=component,proto3" json:"component,omitempty"`
+	Version       string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NodeComponentVersion) Reset() {
+	*x = NodeComponentVersion{}
+	mi := &file_foghorn_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NodeComponentVersion) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NodeComponentVersion) ProtoMessage() {}
+
+func (x *NodeComponentVersion) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NodeComponentVersion.ProtoReflect.Descriptor instead.
+func (*NodeComponentVersion) Descriptor() ([]byte, []int) {
+	return file_foghorn_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *NodeComponentVersion) GetComponent() string {
+	if x != nil {
+		return x.Component
+	}
+	return ""
+}
+
+func (x *NodeComponentVersion) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
 // InvalidateTenantCacheRequest is sent when a tenant's suspension status changes
 type InvalidateTenantCacheRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -627,7 +687,7 @@ type InvalidateTenantCacheRequest struct {
 
 func (x *InvalidateTenantCacheRequest) Reset() {
 	*x = InvalidateTenantCacheRequest{}
-	mi := &file_foghorn_proto_msgTypes[6]
+	mi := &file_foghorn_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -639,7 +699,7 @@ func (x *InvalidateTenantCacheRequest) String() string {
 func (*InvalidateTenantCacheRequest) ProtoMessage() {}
 
 func (x *InvalidateTenantCacheRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[6]
+	mi := &file_foghorn_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -652,7 +712,7 @@ func (x *InvalidateTenantCacheRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvalidateTenantCacheRequest.ProtoReflect.Descriptor instead.
 func (*InvalidateTenantCacheRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{6}
+	return file_foghorn_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *InvalidateTenantCacheRequest) GetTenantId() string {
@@ -679,7 +739,7 @@ type InvalidateTenantCacheResponse struct {
 
 func (x *InvalidateTenantCacheResponse) Reset() {
 	*x = InvalidateTenantCacheResponse{}
-	mi := &file_foghorn_proto_msgTypes[7]
+	mi := &file_foghorn_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -691,7 +751,7 @@ func (x *InvalidateTenantCacheResponse) String() string {
 func (*InvalidateTenantCacheResponse) ProtoMessage() {}
 
 func (x *InvalidateTenantCacheResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[7]
+	mi := &file_foghorn_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -704,7 +764,7 @@ func (x *InvalidateTenantCacheResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvalidateTenantCacheResponse.ProtoReflect.Descriptor instead.
 func (*InvalidateTenantCacheResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{7}
+	return file_foghorn_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *InvalidateTenantCacheResponse) GetEntriesInvalidated() int32 {
@@ -725,7 +785,7 @@ type TerminateTenantStreamsRequest struct {
 
 func (x *TerminateTenantStreamsRequest) Reset() {
 	*x = TerminateTenantStreamsRequest{}
-	mi := &file_foghorn_proto_msgTypes[8]
+	mi := &file_foghorn_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -737,7 +797,7 @@ func (x *TerminateTenantStreamsRequest) String() string {
 func (*TerminateTenantStreamsRequest) ProtoMessage() {}
 
 func (x *TerminateTenantStreamsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[8]
+	mi := &file_foghorn_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -750,7 +810,7 @@ func (x *TerminateTenantStreamsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminateTenantStreamsRequest.ProtoReflect.Descriptor instead.
 func (*TerminateTenantStreamsRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{8}
+	return file_foghorn_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *TerminateTenantStreamsRequest) GetTenantId() string {
@@ -779,7 +839,7 @@ type TerminateTenantStreamsResponse struct {
 
 func (x *TerminateTenantStreamsResponse) Reset() {
 	*x = TerminateTenantStreamsResponse{}
-	mi := &file_foghorn_proto_msgTypes[9]
+	mi := &file_foghorn_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -791,7 +851,7 @@ func (x *TerminateTenantStreamsResponse) String() string {
 func (*TerminateTenantStreamsResponse) ProtoMessage() {}
 
 func (x *TerminateTenantStreamsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[9]
+	mi := &file_foghorn_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -804,7 +864,7 @@ func (x *TerminateTenantStreamsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminateTenantStreamsResponse.ProtoReflect.Descriptor instead.
 func (*TerminateTenantStreamsResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{9}
+	return file_foghorn_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *TerminateTenantStreamsResponse) GetStreamsTerminated() int32 {
@@ -863,7 +923,7 @@ const file_foghorn_proto_rawDesc = "" +
 	"\amessage\x18\x03 \x01(\tR\amessage\x122\n" +
 	"\x06status\x18\x04 \x01(\x0e2\x1a.foghorn.SetNodeModeStatusR\x06status\"/\n" +
 	"\x14GetNodeHealthRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\xd7\x05\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\xa5\x06\n" +
 	"\x15GetNodeHealthResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
 	"\x10operational_mode\x18\x02 \x01(\tR\x0foperationalMode\x12\x1d\n" +
@@ -888,10 +948,14 @@ const file_foghorn_proto_rawDesc = "" +
 	"\x0fdisk_used_bytes\x18\x10 \x01(\x04R\rdiskUsedBytes\x12\x1a\n" +
 	"\blocation\x18\x11 \x01(\tR\blocation\x12\x1f\n" +
 	"\blatitude\x18\x12 \x01(\x01H\x00R\blatitude\x88\x01\x01\x12!\n" +
-	"\tlongitude\x18\x13 \x01(\x01H\x01R\tlongitude\x88\x01\x01B\v\n" +
+	"\tlongitude\x18\x13 \x01(\x01H\x01R\tlongitude\x88\x01\x01\x12L\n" +
+	"\x12component_versions\x18\x14 \x03(\v2\x1d.foghorn.NodeComponentVersionR\x11componentVersionsB\v\n" +
 	"\t_latitudeB\f\n" +
 	"\n" +
-	"_longitude\"S\n" +
+	"_longitude\"N\n" +
+	"\x14NodeComponentVersion\x12\x1c\n" +
+	"\tcomponent\x18\x01 \x01(\tR\tcomponent\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\"S\n" +
 	"\x1cInvalidateTenantCacheRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"P\n" +
@@ -952,7 +1016,7 @@ func file_foghorn_proto_rawDescGZIP() []byte {
 }
 
 var file_foghorn_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_foghorn_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_foghorn_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_foghorn_proto_goTypes = []any{
 	(SetNodeModeStatus)(0),                 // 0: foghorn.SetNodeModeStatus
 	(*PreRegisterEdgeRequest)(nil),         // 1: foghorn.PreRegisterEdgeRequest
@@ -961,86 +1025,88 @@ var file_foghorn_proto_goTypes = []any{
 	(*SetNodeModeResponse)(nil),            // 4: foghorn.SetNodeModeResponse
 	(*GetNodeHealthRequest)(nil),           // 5: foghorn.GetNodeHealthRequest
 	(*GetNodeHealthResponse)(nil),          // 6: foghorn.GetNodeHealthResponse
-	(*InvalidateTenantCacheRequest)(nil),   // 7: foghorn.InvalidateTenantCacheRequest
-	(*InvalidateTenantCacheResponse)(nil),  // 8: foghorn.InvalidateTenantCacheResponse
-	(*TerminateTenantStreamsRequest)(nil),  // 9: foghorn.TerminateTenantStreamsRequest
-	(*TerminateTenantStreamsResponse)(nil), // 10: foghorn.TerminateTenantStreamsResponse
-	(*EdgeTelemetryConfig)(nil),            // 11: common.EdgeTelemetryConfig
-	(*CreateClipRequest)(nil),              // 12: shared.CreateClipRequest
-	(*DeleteClipRequest)(nil),              // 13: shared.DeleteClipRequest
-	(*StartDVRRequest)(nil),                // 14: shared.StartDVRRequest
-	(*StopDVRRequest)(nil),                 // 15: shared.StopDVRRequest
-	(*DeleteDVRRequest)(nil),               // 16: shared.DeleteDVRRequest
-	(*ViewerEndpointRequest)(nil),          // 17: shared.ViewerEndpointRequest
-	(*IngestEndpointRequest)(nil),          // 18: shared.IngestEndpointRequest
-	(*CreateVodUploadRequest)(nil),         // 19: shared.CreateVodUploadRequest
-	(*CompleteVodUploadRequest)(nil),       // 20: shared.CompleteVodUploadRequest
-	(*AbortVodUploadRequest)(nil),          // 21: shared.AbortVodUploadRequest
-	(*GetVodUploadStatusRequest)(nil),      // 22: shared.GetVodUploadStatusRequest
-	(*GetVodAssetRequest)(nil),             // 23: shared.GetVodAssetRequest
-	(*ListVodAssetsRequest)(nil),           // 24: shared.ListVodAssetsRequest
-	(*DeleteVodAssetRequest)(nil),          // 25: shared.DeleteVodAssetRequest
-	(*CreateClipResponse)(nil),             // 26: shared.CreateClipResponse
-	(*DeleteClipResponse)(nil),             // 27: shared.DeleteClipResponse
-	(*StartDVRResponse)(nil),               // 28: shared.StartDVRResponse
-	(*StopDVRResponse)(nil),                // 29: shared.StopDVRResponse
-	(*DeleteDVRResponse)(nil),              // 30: shared.DeleteDVRResponse
-	(*ViewerEndpointResponse)(nil),         // 31: shared.ViewerEndpointResponse
-	(*IngestEndpointResponse)(nil),         // 32: shared.IngestEndpointResponse
-	(*CreateVodUploadResponse)(nil),        // 33: shared.CreateVodUploadResponse
-	(*CompleteVodUploadResponse)(nil),      // 34: shared.CompleteVodUploadResponse
-	(*AbortVodUploadResponse)(nil),         // 35: shared.AbortVodUploadResponse
-	(*GetVodUploadStatusResponse)(nil),     // 36: shared.GetVodUploadStatusResponse
-	(*VodAssetInfo)(nil),                   // 37: shared.VodAssetInfo
-	(*ListVodAssetsResponse)(nil),          // 38: shared.ListVodAssetsResponse
-	(*DeleteVodAssetResponse)(nil),         // 39: shared.DeleteVodAssetResponse
+	(*NodeComponentVersion)(nil),           // 7: foghorn.NodeComponentVersion
+	(*InvalidateTenantCacheRequest)(nil),   // 8: foghorn.InvalidateTenantCacheRequest
+	(*InvalidateTenantCacheResponse)(nil),  // 9: foghorn.InvalidateTenantCacheResponse
+	(*TerminateTenantStreamsRequest)(nil),  // 10: foghorn.TerminateTenantStreamsRequest
+	(*TerminateTenantStreamsResponse)(nil), // 11: foghorn.TerminateTenantStreamsResponse
+	(*EdgeTelemetryConfig)(nil),            // 12: common.EdgeTelemetryConfig
+	(*CreateClipRequest)(nil),              // 13: shared.CreateClipRequest
+	(*DeleteClipRequest)(nil),              // 14: shared.DeleteClipRequest
+	(*StartDVRRequest)(nil),                // 15: shared.StartDVRRequest
+	(*StopDVRRequest)(nil),                 // 16: shared.StopDVRRequest
+	(*DeleteDVRRequest)(nil),               // 17: shared.DeleteDVRRequest
+	(*ViewerEndpointRequest)(nil),          // 18: shared.ViewerEndpointRequest
+	(*IngestEndpointRequest)(nil),          // 19: shared.IngestEndpointRequest
+	(*CreateVodUploadRequest)(nil),         // 20: shared.CreateVodUploadRequest
+	(*CompleteVodUploadRequest)(nil),       // 21: shared.CompleteVodUploadRequest
+	(*AbortVodUploadRequest)(nil),          // 22: shared.AbortVodUploadRequest
+	(*GetVodUploadStatusRequest)(nil),      // 23: shared.GetVodUploadStatusRequest
+	(*GetVodAssetRequest)(nil),             // 24: shared.GetVodAssetRequest
+	(*ListVodAssetsRequest)(nil),           // 25: shared.ListVodAssetsRequest
+	(*DeleteVodAssetRequest)(nil),          // 26: shared.DeleteVodAssetRequest
+	(*CreateClipResponse)(nil),             // 27: shared.CreateClipResponse
+	(*DeleteClipResponse)(nil),             // 28: shared.DeleteClipResponse
+	(*StartDVRResponse)(nil),               // 29: shared.StartDVRResponse
+	(*StopDVRResponse)(nil),                // 30: shared.StopDVRResponse
+	(*DeleteDVRResponse)(nil),              // 31: shared.DeleteDVRResponse
+	(*ViewerEndpointResponse)(nil),         // 32: shared.ViewerEndpointResponse
+	(*IngestEndpointResponse)(nil),         // 33: shared.IngestEndpointResponse
+	(*CreateVodUploadResponse)(nil),        // 34: shared.CreateVodUploadResponse
+	(*CompleteVodUploadResponse)(nil),      // 35: shared.CompleteVodUploadResponse
+	(*AbortVodUploadResponse)(nil),         // 36: shared.AbortVodUploadResponse
+	(*GetVodUploadStatusResponse)(nil),     // 37: shared.GetVodUploadStatusResponse
+	(*VodAssetInfo)(nil),                   // 38: shared.VodAssetInfo
+	(*ListVodAssetsResponse)(nil),          // 39: shared.ListVodAssetsResponse
+	(*DeleteVodAssetResponse)(nil),         // 40: shared.DeleteVodAssetResponse
 }
 var file_foghorn_proto_depIdxs = []int32{
-	11, // 0: foghorn.PreRegisterEdgeResponse.telemetry:type_name -> common.EdgeTelemetryConfig
+	12, // 0: foghorn.PreRegisterEdgeResponse.telemetry:type_name -> common.EdgeTelemetryConfig
 	0,  // 1: foghorn.SetNodeModeResponse.status:type_name -> foghorn.SetNodeModeStatus
-	12, // 2: foghorn.ClipControlService.CreateClip:input_type -> shared.CreateClipRequest
-	13, // 3: foghorn.ClipControlService.DeleteClip:input_type -> shared.DeleteClipRequest
-	14, // 4: foghorn.DVRControlService.StartDVR:input_type -> shared.StartDVRRequest
-	15, // 5: foghorn.DVRControlService.StopDVR:input_type -> shared.StopDVRRequest
-	16, // 6: foghorn.DVRControlService.DeleteDVR:input_type -> shared.DeleteDVRRequest
-	17, // 7: foghorn.ViewerControlService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
-	18, // 8: foghorn.ViewerControlService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
-	19, // 9: foghorn.VodControlService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
-	20, // 10: foghorn.VodControlService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
-	21, // 11: foghorn.VodControlService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
-	22, // 12: foghorn.VodControlService.GetVodUploadStatus:input_type -> shared.GetVodUploadStatusRequest
-	23, // 13: foghorn.VodControlService.GetVodAsset:input_type -> shared.GetVodAssetRequest
-	24, // 14: foghorn.VodControlService.ListVodAssets:input_type -> shared.ListVodAssetsRequest
-	25, // 15: foghorn.VodControlService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
-	1,  // 16: foghorn.EdgeProvisioningService.PreRegisterEdge:input_type -> foghorn.PreRegisterEdgeRequest
-	3,  // 17: foghorn.NodeControlService.SetNodeOperationalMode:input_type -> foghorn.SetNodeModeRequest
-	5,  // 18: foghorn.NodeControlService.GetNodeHealth:input_type -> foghorn.GetNodeHealthRequest
-	9,  // 19: foghorn.TenantControlService.TerminateTenantStreams:input_type -> foghorn.TerminateTenantStreamsRequest
-	7,  // 20: foghorn.TenantControlService.InvalidateTenantCache:input_type -> foghorn.InvalidateTenantCacheRequest
-	26, // 21: foghorn.ClipControlService.CreateClip:output_type -> shared.CreateClipResponse
-	27, // 22: foghorn.ClipControlService.DeleteClip:output_type -> shared.DeleteClipResponse
-	28, // 23: foghorn.DVRControlService.StartDVR:output_type -> shared.StartDVRResponse
-	29, // 24: foghorn.DVRControlService.StopDVR:output_type -> shared.StopDVRResponse
-	30, // 25: foghorn.DVRControlService.DeleteDVR:output_type -> shared.DeleteDVRResponse
-	31, // 26: foghorn.ViewerControlService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
-	32, // 27: foghorn.ViewerControlService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
-	33, // 28: foghorn.VodControlService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
-	34, // 29: foghorn.VodControlService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
-	35, // 30: foghorn.VodControlService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
-	36, // 31: foghorn.VodControlService.GetVodUploadStatus:output_type -> shared.GetVodUploadStatusResponse
-	37, // 32: foghorn.VodControlService.GetVodAsset:output_type -> shared.VodAssetInfo
-	38, // 33: foghorn.VodControlService.ListVodAssets:output_type -> shared.ListVodAssetsResponse
-	39, // 34: foghorn.VodControlService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
-	2,  // 35: foghorn.EdgeProvisioningService.PreRegisterEdge:output_type -> foghorn.PreRegisterEdgeResponse
-	4,  // 36: foghorn.NodeControlService.SetNodeOperationalMode:output_type -> foghorn.SetNodeModeResponse
-	6,  // 37: foghorn.NodeControlService.GetNodeHealth:output_type -> foghorn.GetNodeHealthResponse
-	10, // 38: foghorn.TenantControlService.TerminateTenantStreams:output_type -> foghorn.TerminateTenantStreamsResponse
-	8,  // 39: foghorn.TenantControlService.InvalidateTenantCache:output_type -> foghorn.InvalidateTenantCacheResponse
-	21, // [21:40] is the sub-list for method output_type
-	2,  // [2:21] is the sub-list for method input_type
-	2,  // [2:2] is the sub-list for extension type_name
-	2,  // [2:2] is the sub-list for extension extendee
-	0,  // [0:2] is the sub-list for field type_name
+	7,  // 2: foghorn.GetNodeHealthResponse.component_versions:type_name -> foghorn.NodeComponentVersion
+	13, // 3: foghorn.ClipControlService.CreateClip:input_type -> shared.CreateClipRequest
+	14, // 4: foghorn.ClipControlService.DeleteClip:input_type -> shared.DeleteClipRequest
+	15, // 5: foghorn.DVRControlService.StartDVR:input_type -> shared.StartDVRRequest
+	16, // 6: foghorn.DVRControlService.StopDVR:input_type -> shared.StopDVRRequest
+	17, // 7: foghorn.DVRControlService.DeleteDVR:input_type -> shared.DeleteDVRRequest
+	18, // 8: foghorn.ViewerControlService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
+	19, // 9: foghorn.ViewerControlService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
+	20, // 10: foghorn.VodControlService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
+	21, // 11: foghorn.VodControlService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
+	22, // 12: foghorn.VodControlService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
+	23, // 13: foghorn.VodControlService.GetVodUploadStatus:input_type -> shared.GetVodUploadStatusRequest
+	24, // 14: foghorn.VodControlService.GetVodAsset:input_type -> shared.GetVodAssetRequest
+	25, // 15: foghorn.VodControlService.ListVodAssets:input_type -> shared.ListVodAssetsRequest
+	26, // 16: foghorn.VodControlService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
+	1,  // 17: foghorn.EdgeProvisioningService.PreRegisterEdge:input_type -> foghorn.PreRegisterEdgeRequest
+	3,  // 18: foghorn.NodeControlService.SetNodeOperationalMode:input_type -> foghorn.SetNodeModeRequest
+	5,  // 19: foghorn.NodeControlService.GetNodeHealth:input_type -> foghorn.GetNodeHealthRequest
+	10, // 20: foghorn.TenantControlService.TerminateTenantStreams:input_type -> foghorn.TerminateTenantStreamsRequest
+	8,  // 21: foghorn.TenantControlService.InvalidateTenantCache:input_type -> foghorn.InvalidateTenantCacheRequest
+	27, // 22: foghorn.ClipControlService.CreateClip:output_type -> shared.CreateClipResponse
+	28, // 23: foghorn.ClipControlService.DeleteClip:output_type -> shared.DeleteClipResponse
+	29, // 24: foghorn.DVRControlService.StartDVR:output_type -> shared.StartDVRResponse
+	30, // 25: foghorn.DVRControlService.StopDVR:output_type -> shared.StopDVRResponse
+	31, // 26: foghorn.DVRControlService.DeleteDVR:output_type -> shared.DeleteDVRResponse
+	32, // 27: foghorn.ViewerControlService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
+	33, // 28: foghorn.ViewerControlService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
+	34, // 29: foghorn.VodControlService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
+	35, // 30: foghorn.VodControlService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
+	36, // 31: foghorn.VodControlService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
+	37, // 32: foghorn.VodControlService.GetVodUploadStatus:output_type -> shared.GetVodUploadStatusResponse
+	38, // 33: foghorn.VodControlService.GetVodAsset:output_type -> shared.VodAssetInfo
+	39, // 34: foghorn.VodControlService.ListVodAssets:output_type -> shared.ListVodAssetsResponse
+	40, // 35: foghorn.VodControlService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
+	2,  // 36: foghorn.EdgeProvisioningService.PreRegisterEdge:output_type -> foghorn.PreRegisterEdgeResponse
+	4,  // 37: foghorn.NodeControlService.SetNodeOperationalMode:output_type -> foghorn.SetNodeModeResponse
+	6,  // 38: foghorn.NodeControlService.GetNodeHealth:output_type -> foghorn.GetNodeHealthResponse
+	11, // 39: foghorn.TenantControlService.TerminateTenantStreams:output_type -> foghorn.TerminateTenantStreamsResponse
+	9,  // 40: foghorn.TenantControlService.InvalidateTenantCache:output_type -> foghorn.InvalidateTenantCacheResponse
+	22, // [22:41] is the sub-list for method output_type
+	3,  // [3:22] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_foghorn_proto_init() }
@@ -1057,7 +1123,7 @@ func file_foghorn_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_foghorn_proto_rawDesc), len(file_foghorn_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   10,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   7,
 		},

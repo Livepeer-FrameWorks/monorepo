@@ -484,6 +484,49 @@ CREATE INDEX IF NOT EXISTS idx_qm_tenant_cluster_access_cluster ON quartermaster
 CREATE INDEX IF NOT EXISTS idx_qm_tenant_cluster_access_active ON quartermaster.tenant_cluster_access(is_active);
 
 -- ============================================================================
+-- EDGE RELEASE TARGETING
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS quartermaster.edge_releases (
+    channel TEXT NOT NULL,
+    version TEXT NOT NULL,
+    components JSONB NOT NULL,
+    published_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (channel, version),
+    CONSTRAINT chk_qm_edge_release_channel CHECK (channel IN ('stable', 'rc')),
+    CONSTRAINT chk_qm_edge_release_components_object CHECK (jsonb_typeof(components) = 'object')
+);
+
+CREATE TABLE IF NOT EXISTS quartermaster.cluster_release_targets (
+    cluster_id VARCHAR(100) PRIMARY KEY REFERENCES quartermaster.infrastructure_clusters(cluster_id) ON DELETE CASCADE,
+    channel TEXT NOT NULL,
+    target_version TEXT,
+    paused BOOLEAN NOT NULL DEFAULT FALSE,
+    rollout_plan JSONB NOT NULL DEFAULT '{}',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_qm_cluster_release_target_channel CHECK (channel IN ('stable', 'rc')),
+    CONSTRAINT chk_qm_cluster_release_rollout_plan_object CHECK (jsonb_typeof(rollout_plan) = 'object')
+);
+
+DELETE FROM quartermaster.cluster_release_targets WHERE channel = 'edge';
+DELETE FROM quartermaster.edge_releases WHERE channel = 'edge';
+
+ALTER TABLE quartermaster.edge_releases
+    DROP COLUMN IF EXISTS metadata,
+    DROP CONSTRAINT IF EXISTS chk_qm_edge_release_channel,
+    ADD CONSTRAINT chk_qm_edge_release_channel CHECK (channel IN ('stable', 'rc'));
+
+ALTER TABLE quartermaster.cluster_release_targets
+    ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT FALSE,
+    DROP COLUMN IF EXISTS policy,
+    DROP CONSTRAINT IF EXISTS chk_qm_cluster_release_target_channel,
+    ADD CONSTRAINT chk_qm_cluster_release_target_channel CHECK (channel IN ('stable', 'rc'));
+
+DROP INDEX IF EXISTS quartermaster.idx_qm_cluster_release_targets_policy;
+CREATE INDEX IF NOT EXISTS idx_qm_edge_releases_published ON quartermaster.edge_releases(channel, published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_qm_cluster_release_targets_paused ON quartermaster.cluster_release_targets(paused);
+
+-- ============================================================================
 -- UTILITY FUNCTIONS
 -- ============================================================================
 

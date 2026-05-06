@@ -86,6 +86,8 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *pb.ForwardCommand
 		err = control.SendLocalProcessingJob(req.TargetNodeId, cmd.ProcessingJob)
 	case *pb.ForwardCommandRequest_Freeze:
 		err = control.SendLocalFreezeRequest(req.TargetNodeId, cmd.Freeze)
+	case *pb.ForwardCommandRequest_DesiredStateUpdate:
+		err = control.SendLocalDesiredStateUpdate(req.TargetNodeId, cmd.DesiredStateUpdate)
 	default:
 		return nil, status.Error(codes.InvalidArgument, "unknown command type")
 	}

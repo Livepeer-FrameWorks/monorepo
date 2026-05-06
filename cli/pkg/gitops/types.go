@@ -22,7 +22,7 @@ type ExternalDependency struct {
 	ReleaseURL string           `yaml:"release_url,omitempty"`
 	ReleaseTag string           `yaml:"release_tag,omitempty"`
 	Binaries   []ExternalBinary `yaml:"binaries,omitempty"`
-	Raw        map[string]any   `yaml:",inline"` // Catch any additional fields
+	Raw        map[string]any   `yaml:",inline"` // Preserve dependency fields this CLI does not consume.
 }
 
 // ExternalBinary represents a binary artifact for an external dependency.

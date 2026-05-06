@@ -95,13 +95,17 @@ func activePersona() fwcfg.Persona {
 
 func loginNextSteps(persona fwcfg.Persona) []ux.NextStep {
 	switch persona {
-	case fwcfg.PersonaEdge:
+	case fwcfg.PersonaUser, fwcfg.PersonaEdge:
 		return []ux.NextStep{
-			{Cmd: "frameworks edge deploy --ssh <user>@<host>", Why: "Deploy an edge node; Bridge will auto-create a cluster + token."},
+			{Cmd: "frameworks menu", Why: "Open account, insights, and hosted workflows."},
 		}
-	case fwcfg.PersonaPlatform, fwcfg.PersonaSelfHosted:
+	case fwcfg.PersonaSelfHosted:
 		return []ux.NextStep{
-			{Cmd: "frameworks cluster provision --ready", Why: "Provision infra + init + static seeds in one shot."},
+			{Cmd: "frameworks edge deploy --ssh <user>@<host>", Why: "Deploy or update your self-hosted edge node."},
+		}
+	case fwcfg.PersonaPlatform:
+		return []ux.NextStep{
+			{Cmd: "frameworks cluster provision", Why: "Provision infra, services, init, static seeds, and bootstrap state."},
 		}
 	default:
 		return []ux.NextStep{

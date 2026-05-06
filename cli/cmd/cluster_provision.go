@@ -54,8 +54,6 @@ func newClusterProvisionCmd() *cobra.Command {
 	var dryRun bool
 	var force bool
 	var ignoreValidation bool
-	var ready bool
-	var seedDemo bool
 
 	cmd := &cobra.Command{
 		Use:   "provision",
@@ -72,16 +70,17 @@ Phase Options (--only):
 Provisioning is idempotent - safe to run multiple times.
 Existing services will be detected and skipped unless --force is used.
 
-Pass --ready to chain 'cluster init' and 'cluster seed' after service
-batches. Service-owned bootstrap state is reconciled during provisioning;
-the seed step only applies SQL-owned reference/demo data. Add --seed-demo
-for demo tenant/user/stream data as well.
+For application/all phases, provisioning also initializes databases and
+applies static SQL-owned reference seeds. Service-owned bootstrap state
+such as tenants, clusters, billing tiers, and operator users is reconciled
+during the service bootstrap step. Demo data is never loaded by provision;
+use 'frameworks cluster seed --demo' explicitly for local development.
 
 The manifest source (single file, local gitops repo, or GitHub repo) is
 chosen by the persistent cluster-group flags. Run 'frameworks setup' to
 save a default, or pass them explicitly.`,
 		Example: `  # Provision and make the platform usable in one shot
-  frameworks cluster provision --ready --bootstrap-admin-email you@co --bootstrap-admin-password-env PW
+  frameworks cluster provision --bootstrap-admin-email you@co --bootstrap-admin-password-env PW
 
   # Dry-run against a local manifest
   frameworks cluster provision --manifest ./cluster.yaml --dry-run
@@ -97,7 +96,7 @@ save a default, or pass them explicitly.`,
 				return err
 			}
 			defer rc.Cleanup()
-			return runProvision(cmd, rc, only, dryRun, force, ignoreValidation, ready, seedDemo)
+			return runProvision(cmd, rc, only, dryRun, force, ignoreValidation)
 		},
 	}
 
@@ -105,8 +104,6 @@ save a default, or pass them explicitly.`,
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show plan without executing")
 	cmd.Flags().BoolVar(&force, "force", false, "Force re-provision even if exists")
 	cmd.Flags().BoolVar(&ignoreValidation, "ignore-validation", false, "Continue even if health validation fails (DANGEROUS)")
-	cmd.Flags().BoolVar(&ready, "ready", false, "After service batches, also run 'cluster init' and 'cluster seed' so the platform is usable in one command")
-	cmd.Flags().BoolVar(&seedDemo, "seed-demo", false, "With --ready, apply demo seeds (sample tenant/user/stream) in addition to static seeds")
 
 	cmd.Flags().String("bootstrap-admin-email", "", "Create an initial operator user with this email")
 	cmd.Flags().String("bootstrap-admin-password", "", "Plaintext password for bootstrap admin (prefer --bootstrap-admin-password-env or --bootstrap-admin-password-file)")
@@ -121,7 +118,7 @@ save a default, or pass them explicitly.`,
 	return cmd
 }
 
-func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, force, ignoreValidation, ready, seedDemo bool) error {
+func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, force, ignoreValidation bool) error {
 	manifest := rc.Manifest
 	manifestPath := rc.ManifestPath
 	out := cmd.OutOrStdout()
@@ -236,20 +233,45 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 	}
 
 	initRan, seedsRan := false, false
-	if ready {
-		ux.Heading(out, "Running post-provision --ready chain")
+	if phaseRunsPostProvisionInit(phase) {
+		ux.Heading(out, "Reconciling platform data")
 		if err := runInit(cmd, rc, "all"); err != nil {
-			return fmt.Errorf("cluster init (from --ready): %w", err)
+			return fmt.Errorf("cluster init: %w", err)
 		}
 		initRan = true
-		if err := runSeed(cmd, rc, seedDemo, true); err != nil {
-			return fmt.Errorf("cluster seed (from --ready): %w", err)
+		if err := runSeed(cmd, rc, false, true); err != nil {
+			return fmt.Errorf("cluster seed: %w", err)
 		}
 		seedsRan = true
 	}
 
-	renderProvisionSummary(ctx, cmd, manifest, only, ready, initRan, seedsRan)
+	if phaseSyncsEdgeReleaseTarget(phase) {
+		ux.Heading(out, "Syncing edge release target")
+		if err := syncClusterEdgeReleaseTargetFromGitOps(cmd, rc, manifest.ResolvedChannel(), sharedEnv); err != nil {
+			return fmt.Errorf("edge release target sync: %w", err)
+		}
+	}
+
+	renderProvisionSummary(ctx, cmd, manifest, only, initRan, seedsRan)
 	return nil
+}
+
+func phaseRunsPostProvisionInit(phase orchestrator.Phase) bool {
+	switch phase {
+	case orchestrator.PhaseApplications, orchestrator.PhaseAll:
+		return true
+	default:
+		return false
+	}
+}
+
+func phaseSyncsEdgeReleaseTarget(phase orchestrator.Phase) bool {
+	switch phase {
+	case orchestrator.PhaseApplications, orchestrator.PhaseAll:
+		return true
+	default:
+		return false
+	}
 }
 
 // validateIngressBundleIDs rejects manifests with unsafe TLS bundle ids.
@@ -309,12 +331,12 @@ func meshIdentityRemediation(rc *resolvedCluster) string {
 // renderProvisionSummary prints the multi-line Result block and the Next:
 // block for a successful provision. Both degrade cleanly in CI / JSON modes
 // via the ux helpers.
-func renderProvisionSummary(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, only string, ready, initRan, seedsRan bool) {
+func renderProvisionSummary(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, only string, initRan, seedsRan bool) {
 	out := cmd.OutOrStdout()
 
-	// Build a fresh readiness report that reflects the true state after
-	// --ready's init+seed chain. The earlier validateControlPlane call
-	// inside postProvisionFinalize may have seen pre-init state.
+	// Build a fresh readiness report after post-provision init/seed work.
+	// The earlier validateControlPlane call inside postProvisionFinalize may
+	// have seen pre-init state.
 	adminBootstrapped, _ := cmd.Flags().GetString("bootstrap-admin-email") //nolint:errcheck // flag always exists
 	report := buildControlPlaneReport(ctx, manifest, collectRuntimeForReadinessOnly(cmd, manifest), nil)
 
@@ -348,10 +370,10 @@ func renderProvisionSummary(ctx context.Context, cmd *cobra.Command, manifest *i
 		{Key: "control-plane", OK: report.OK(), Detail: controlPlaneDetail(report)},
 		adminField,
 	}
-	if ready {
+	if initRan || seedsRan {
 		fields = append(fields,
 			ux.ResultField{Key: "init", OK: initRan, Detail: "postgres/kafka/clickhouse"},
-			ux.ResultField{Key: "seeds", OK: seedsRan, Detail: "SQL-owned data (+demo if --seed-demo)"},
+			ux.ResultField{Key: "seeds", OK: seedsRan, Detail: "static SQL-owned data"},
 		)
 	}
 	fields = append(fields, ux.ResultField{
@@ -381,12 +403,6 @@ func renderProvisionSummary(ctx context.Context, cmd *cobra.Command, manifest *i
 		steps = append(steps, ux.NextStep{
 			Cmd: "frameworks cluster doctor",
 			Why: "The post-run summary couldn't re-verify the control plane — doctor can, given SOPS access to the manifest env_files.",
-		})
-	}
-	if !ready {
-		steps = append(steps, ux.NextStep{
-			Cmd: "frameworks cluster provision --ready",
-			Why: "Re-run with --ready to chain init + seed and land a usable platform in one shot.",
 		})
 	}
 	ux.PrintNextSteps(out, steps)

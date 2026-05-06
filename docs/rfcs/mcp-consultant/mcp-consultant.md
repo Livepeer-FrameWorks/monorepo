@@ -158,7 +158,7 @@ Returns JSON with authoritative doc site entry points. The customer's LLM naviga
   "sources": [
     {
       "name": "FrameWorks Docs",
-      "description": "Platform documentation for streamers, operators, and selfhosters",
+      "description": "Platform documentation for builders, operators, and selfhosters",
       "index": "https://logbook.frameworks.network/",
       "sitemap": "https://logbook.frameworks.network/sitemap-index.xml"
     },

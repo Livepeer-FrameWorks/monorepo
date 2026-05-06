@@ -139,6 +139,7 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 	vars := map[string]any{
 		"edge_mode":              mode,
 		"edge_node_id":           config.NodeID,
+		"edge_cluster_id":        config.ClusterID,
 		"edge_domain":            config.primaryDomain(),
 		"edge_acme_email":        config.Email,
 		"edge_foghorn_grpc_addr": config.FoghornGRPCAddr,
@@ -167,6 +168,16 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 		}
 		if image != "" {
 			vars["edge_mistserver_image"] = image
+		}
+		for key, value := range map[string]string{
+			"edge_config_schema_version": strings.TrimSpace(manifest.PlatformVersion),
+			"edge_mistserver_version":    edgeExternalVersion(manifest, "mistserver"),
+			"edge_helmsman_version":      edgeServiceVersion(manifest, "helmsman"),
+			"edge_caddy_version":         edgeComponentVersion(manifest, "caddy"),
+		} {
+			if versionErr := setEdgeComponentVersionVar(vars, key, value); versionErr != nil {
+				return nil, versionErr
+			}
 		}
 	}
 
@@ -245,6 +256,46 @@ func edgeExternalImage(manifest *gitops.Manifest, name string) (string, error) {
 		return dep.Image, nil
 	}
 	return dep.Image + "@" + dep.Digest, nil
+}
+
+func edgeComponentVersion(manifest *gitops.Manifest, name string) string {
+	if version := edgeExternalVersion(manifest, name); version != "" {
+		return version
+	}
+	return edgeServiceVersion(manifest, name)
+}
+
+func edgeExternalVersion(manifest *gitops.Manifest, name string) string {
+	dep := manifest.GetExternalDependency(name)
+	if dep == nil {
+		return ""
+	}
+	for _, value := range []string{dep.ReleaseTag, dep.Digest, dep.ReleaseURL} {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	if dep.Image != "" {
+		return dep.Image
+	}
+	return ""
+}
+
+func edgeServiceVersion(manifest *gitops.Manifest, name string) string {
+	info, err := manifest.GetServiceInfo(name)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(info.Version)
+}
+
+func setEdgeComponentVersionVar(vars map[string]any, key, value string) error {
+	value = strings.TrimSpace(value)
+	if strings.ContainsAny(value, "\r\n\x00") {
+		return fmt.Errorf("edge: %s contains unsupported control characters", key)
+	}
+	vars[key] = value
+	return nil
 }
 
 func edgeExternalBinary(manifest *gitops.Manifest, name, arch string) (string, string, error) {

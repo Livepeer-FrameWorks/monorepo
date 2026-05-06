@@ -8,7 +8,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"frameworks/cli/internal/config"
+	"frameworks/cli/internal/controlplane"
 	"frameworks/cli/internal/ux"
 	"frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/logging"
@@ -47,23 +47,29 @@ func newMeshCmd() *cobra.Command {
 }
 
 // getMeshQuartermasterGRPCClient creates a gRPC client to Quartermaster for mesh operations
-func getMeshQuartermasterGRPCClient() (*quartermaster.GRPCClient, error) {
-	ctxConfig, err := activeContextWithAuth()
+func getMeshQuartermasterGRPCClient(ctx context.Context) (*quartermaster.GRPCClient, func(), error) {
+	ctxConfig, err := activeContextWithAuth(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	grpcAddr, err := config.RequireEndpoint(ctxConfig, "quartermaster_grpc_addr", ctxConfig.Endpoints.QuartermasterGRPCAddr, false)
+	ep, err := controlplane.ResolveGRPC(ctx, ctxConfig, "quartermaster")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:      grpcAddr,
+	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:      ep.Address,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxConfig.Auth.ServiceToken,
-		AllowInsecure: true,
+		AllowInsecure: ep.AllowInsecure,
+		ServerName:    ep.ServerName,
 	})
+	if err != nil {
+		ep.Cleanup()
+		return nil, nil, err
+	}
+	return client, ep.Cleanup, nil
 }
 
 // newMeshStatusCmd shows the mesh status
@@ -79,10 +85,11 @@ GitOps cluster manifest: ORIGIN and KEY-MATCH columns are added so operators
 can spot divergence at a glance. The command never errors on mismatch — for
 exit-coded divergence checking, use 'frameworks mesh wg audit'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := getMeshQuartermasterGRPCClient()
+			client, cleanup, err := getMeshQuartermasterGRPCClient(cmd.Context())
 			if err != nil {
 				return err
 			}
+			defer cleanup()
 			defer client.Close()
 
 			isJSON := output == "json"
@@ -92,7 +99,7 @@ exit-coded divergence checking, use 'frameworks mesh wg audit'.`,
 			}
 
 			// Fetch Nodes via gRPC
-			resp, err := client.ListNodes(context.Background(), "", "", "", nil)
+			resp, err := client.ListNodes(cmd.Context(), "", "", "", nil)
 			if err != nil {
 				if !isJSON {
 					fmt.Fprintln(cmd.OutOrStdout(), "❌")
@@ -237,13 +244,14 @@ func buildStatusAuditIndex(cmd *cobra.Command) map[statusKey]auditRow {
 		manifestClusters[id] = true
 	}
 
-	client, err := getMeshQuartermasterGRPCClient()
+	client, cleanup, err := getMeshQuartermasterGRPCClient(cmd.Context())
 	if err != nil {
 		fmt.Fprintf(cmd.OutOrStdout(), "Note: manifest cross-reference unavailable: %v\n", err)
 		return nil
 	}
+	defer cleanup()
 	defer client.Close()
-	resp, err := client.ListNodes(context.Background(), "", "", "", nil)
+	resp, err := client.ListNodes(cmd.Context(), "", "", "", nil)
 	if err != nil {
 		fmt.Fprintf(cmd.OutOrStdout(), "Note: manifest cross-reference unavailable: %v\n", err)
 		return nil

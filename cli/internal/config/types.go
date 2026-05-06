@@ -14,6 +14,7 @@ type Endpoints struct {
 
 	// TLS configuration for external (non-mesh) connections
 	UseTLS        bool   `yaml:"use_tls" json:"use_tls"`                 // Enable TLS for gRPC connections (via Caddy proxy)
+	AllowInsecure bool   `yaml:"allow_insecure" json:"allow_insecure"`   // Use plaintext gRPC transport for local/private dev endpoints
 	TLSSkipVerify bool   `yaml:"tls_skip_verify" json:"tls_skip_verify"` // Skip TLS certificate verification (dev only!)
 	TLSCACert     string `yaml:"tls_ca_cert" json:"tls_ca_cert"`         // Path to CA certificate for custom CAs
 }
@@ -32,31 +33,54 @@ type Auth struct {
 }
 
 type Context struct {
-	Name      string    `yaml:"name" json:"name"`
-	ClusterID string    `yaml:"cluster_id,omitempty" json:"cluster_id,omitempty"`
-	Endpoints Endpoints `yaml:"endpoints" json:"endpoints"`
-	Executor  Executor  `yaml:"executor" json:"executor"`
-	Auth      Auth      `yaml:"auth" json:"-"`
-	Persona   Persona   `yaml:"persona,omitempty" json:"persona,omitempty"`
-	Gitops    *Gitops   `yaml:"gitops,omitempty" json:"gitops,omitempty"`
+	Name       string     `yaml:"name" json:"name"`
+	ClusterID  string     `yaml:"cluster_id,omitempty" json:"cluster_id,omitempty"`
+	Endpoints  Endpoints  `yaml:"endpoints" json:"endpoints"`
+	Executor   Executor   `yaml:"executor" json:"executor"`
+	Auth       Auth       `yaml:"auth" json:"-"`
+	Persona    Persona    `yaml:"persona,omitempty" json:"persona,omitempty"`
+	AccessMode AccessMode `yaml:"access_mode,omitempty" json:"access_mode,omitempty"`
+	Gitops     *Gitops    `yaml:"gitops,omitempty" json:"gitops,omitempty"`
 
 	// Remembered state — populated only by the success paths of mutating
 	// commands (cluster provision, cluster detect). Read-path resolvers
-	// must NOT write to these fields, or context becomes haunted with
+	// must NOT write to these fields, or context becomes polluted with
 	// speculative values from dry-runs and --help paths.
 	LastManifestPath string `yaml:"last_manifest_path,omitempty" json:"last_manifest_path,omitempty"`
 	SystemTenantID   string `yaml:"system_tenant_id,omitempty" json:"system_tenant_id,omitempty"`
 }
 
-// Persona labels a context by operator intent. Shapes setup prompts and
-// first-run hints only; commands do not branch on persona.
+// Persona labels a context by operator intent and capability boundary.
 type Persona string
 
 const (
 	PersonaPlatform   Persona = "platform"
 	PersonaSelfHosted Persona = "selfhosted"
-	PersonaEdge       Persona = "edge"
+	PersonaUser       Persona = "user"
+	// PersonaEdge is a deprecated config alias for PersonaUser.
+	PersonaEdge Persona = "edge"
 )
+
+func (p Persona) IsUser() bool {
+	return p == PersonaUser || p == PersonaEdge
+}
+
+// AccessMode describes how operator-originated CLI calls reach control-plane
+// services. Empty is treated as local to preserve existing contexts.
+type AccessMode string
+
+const (
+	AccessModeLocal AccessMode = "local"
+	AccessModeSSH   AccessMode = "ssh"
+	AccessModeMesh  AccessMode = "mesh"
+)
+
+func (c Context) EffectiveAccessMode() AccessMode {
+	if c.AccessMode == "" {
+		return AccessModeLocal
+	}
+	return c.AccessMode
+}
 
 // GitopsSource names the manifest-sourcing strategy for a context.
 type GitopsSource string

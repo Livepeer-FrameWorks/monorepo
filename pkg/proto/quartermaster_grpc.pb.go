@@ -697,6 +697,11 @@ const (
 	ClusterService_UnassignServiceFromCluster_FullMethodName = "/quartermaster.ClusterService/UnassignServiceFromCluster"
 	ClusterService_EnableSelfHosting_FullMethodName          = "/quartermaster.ClusterService/EnableSelfHosting"
 	ClusterService_CreateEnrollmentToken_FullMethodName      = "/quartermaster.ClusterService/CreateEnrollmentToken"
+	ClusterService_ListEdgeReleases_FullMethodName           = "/quartermaster.ClusterService/ListEdgeReleases"
+	ClusterService_UpsertEdgeRelease_FullMethodName          = "/quartermaster.ClusterService/UpsertEdgeRelease"
+	ClusterService_GetClusterReleaseTarget_FullMethodName    = "/quartermaster.ClusterService/GetClusterReleaseTarget"
+	ClusterService_ListClusterReleaseTargets_FullMethodName  = "/quartermaster.ClusterService/ListClusterReleaseTargets"
+	ClusterService_SetClusterReleaseTarget_FullMethodName    = "/quartermaster.ClusterService/SetClusterReleaseTarget"
 )
 
 // ClusterServiceClient is the client API for ClusterService service.
@@ -762,9 +767,15 @@ type ClusterServiceClient interface {
 	// Enable self-hosting: creates tenant's private cluster, assigns to shared Foghorn,
 	// and returns an enrollment token for edge provisioning.
 	EnableSelfHosting(ctx context.Context, in *EnableSelfHostingRequest, opts ...grpc.CallOption) (*EnableSelfHostingResponse, error)
-	// Create an enrollment token for a cluster the tenant is subscribed to.
-	// Tenant-facing alternative to admin-only CreateBootstrapToken.
+	// Create an enrollment token for a cluster the caller owns or can administer.
+	// Provider/service callers may mint for active clusters; subscribers cannot.
 	CreateEnrollmentToken(ctx context.Context, in *CreateEnrollmentTokenRequest, opts ...grpc.CallOption) (*CreateBootstrapTokenResponse, error)
+	// Edge release catalog and per-cluster rollout target controls.
+	ListEdgeReleases(ctx context.Context, in *ListEdgeReleasesRequest, opts ...grpc.CallOption) (*ListEdgeReleasesResponse, error)
+	UpsertEdgeRelease(ctx context.Context, in *UpsertEdgeReleaseRequest, opts ...grpc.CallOption) (*EdgeReleaseResponse, error)
+	GetClusterReleaseTarget(ctx context.Context, in *GetClusterReleaseTargetRequest, opts ...grpc.CallOption) (*ClusterReleaseTargetResponse, error)
+	ListClusterReleaseTargets(ctx context.Context, in *ListClusterReleaseTargetsRequest, opts ...grpc.CallOption) (*ListClusterReleaseTargetsResponse, error)
+	SetClusterReleaseTarget(ctx context.Context, in *SetClusterReleaseTargetRequest, opts ...grpc.CallOption) (*ClusterReleaseTargetResponse, error)
 }
 
 type clusterServiceClient struct {
@@ -1085,6 +1096,56 @@ func (c *clusterServiceClient) CreateEnrollmentToken(ctx context.Context, in *Cr
 	return out, nil
 }
 
+func (c *clusterServiceClient) ListEdgeReleases(ctx context.Context, in *ListEdgeReleasesRequest, opts ...grpc.CallOption) (*ListEdgeReleasesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListEdgeReleasesResponse)
+	err := c.cc.Invoke(ctx, ClusterService_ListEdgeReleases_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) UpsertEdgeRelease(ctx context.Context, in *UpsertEdgeReleaseRequest, opts ...grpc.CallOption) (*EdgeReleaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EdgeReleaseResponse)
+	err := c.cc.Invoke(ctx, ClusterService_UpsertEdgeRelease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) GetClusterReleaseTarget(ctx context.Context, in *GetClusterReleaseTargetRequest, opts ...grpc.CallOption) (*ClusterReleaseTargetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClusterReleaseTargetResponse)
+	err := c.cc.Invoke(ctx, ClusterService_GetClusterReleaseTarget_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) ListClusterReleaseTargets(ctx context.Context, in *ListClusterReleaseTargetsRequest, opts ...grpc.CallOption) (*ListClusterReleaseTargetsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListClusterReleaseTargetsResponse)
+	err := c.cc.Invoke(ctx, ClusterService_ListClusterReleaseTargets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) SetClusterReleaseTarget(ctx context.Context, in *SetClusterReleaseTargetRequest, opts ...grpc.CallOption) (*ClusterReleaseTargetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClusterReleaseTargetResponse)
+	err := c.cc.Invoke(ctx, ClusterService_SetClusterReleaseTarget_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ClusterServiceServer is the server API for ClusterService service.
 // All implementations must embed UnimplementedClusterServiceServer
 // for forward compatibility.
@@ -1148,9 +1209,15 @@ type ClusterServiceServer interface {
 	// Enable self-hosting: creates tenant's private cluster, assigns to shared Foghorn,
 	// and returns an enrollment token for edge provisioning.
 	EnableSelfHosting(context.Context, *EnableSelfHostingRequest) (*EnableSelfHostingResponse, error)
-	// Create an enrollment token for a cluster the tenant is subscribed to.
-	// Tenant-facing alternative to admin-only CreateBootstrapToken.
+	// Create an enrollment token for a cluster the caller owns or can administer.
+	// Provider/service callers may mint for active clusters; subscribers cannot.
 	CreateEnrollmentToken(context.Context, *CreateEnrollmentTokenRequest) (*CreateBootstrapTokenResponse, error)
+	// Edge release catalog and per-cluster rollout target controls.
+	ListEdgeReleases(context.Context, *ListEdgeReleasesRequest) (*ListEdgeReleasesResponse, error)
+	UpsertEdgeRelease(context.Context, *UpsertEdgeReleaseRequest) (*EdgeReleaseResponse, error)
+	GetClusterReleaseTarget(context.Context, *GetClusterReleaseTargetRequest) (*ClusterReleaseTargetResponse, error)
+	ListClusterReleaseTargets(context.Context, *ListClusterReleaseTargetsRequest) (*ListClusterReleaseTargetsResponse, error)
+	SetClusterReleaseTarget(context.Context, *SetClusterReleaseTargetRequest) (*ClusterReleaseTargetResponse, error)
 	mustEmbedUnimplementedClusterServiceServer()
 }
 
@@ -1253,6 +1320,21 @@ func (UnimplementedClusterServiceServer) EnableSelfHosting(context.Context, *Ena
 }
 func (UnimplementedClusterServiceServer) CreateEnrollmentToken(context.Context, *CreateEnrollmentTokenRequest) (*CreateBootstrapTokenResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateEnrollmentToken not implemented")
+}
+func (UnimplementedClusterServiceServer) ListEdgeReleases(context.Context, *ListEdgeReleasesRequest) (*ListEdgeReleasesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListEdgeReleases not implemented")
+}
+func (UnimplementedClusterServiceServer) UpsertEdgeRelease(context.Context, *UpsertEdgeReleaseRequest) (*EdgeReleaseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpsertEdgeRelease not implemented")
+}
+func (UnimplementedClusterServiceServer) GetClusterReleaseTarget(context.Context, *GetClusterReleaseTargetRequest) (*ClusterReleaseTargetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetClusterReleaseTarget not implemented")
+}
+func (UnimplementedClusterServiceServer) ListClusterReleaseTargets(context.Context, *ListClusterReleaseTargetsRequest) (*ListClusterReleaseTargetsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListClusterReleaseTargets not implemented")
+}
+func (UnimplementedClusterServiceServer) SetClusterReleaseTarget(context.Context, *SetClusterReleaseTargetRequest) (*ClusterReleaseTargetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetClusterReleaseTarget not implemented")
 }
 func (UnimplementedClusterServiceServer) mustEmbedUnimplementedClusterServiceServer() {}
 func (UnimplementedClusterServiceServer) testEmbeddedByValue()                        {}
@@ -1833,6 +1915,96 @@ func _ClusterService_CreateEnrollmentToken_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClusterService_ListEdgeReleases_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListEdgeReleasesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).ListEdgeReleases(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_ListEdgeReleases_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).ListEdgeReleases(ctx, req.(*ListEdgeReleasesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_UpsertEdgeRelease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpsertEdgeReleaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).UpsertEdgeRelease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_UpsertEdgeRelease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).UpsertEdgeRelease(ctx, req.(*UpsertEdgeReleaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_GetClusterReleaseTarget_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetClusterReleaseTargetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).GetClusterReleaseTarget(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_GetClusterReleaseTarget_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).GetClusterReleaseTarget(ctx, req.(*GetClusterReleaseTargetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_ListClusterReleaseTargets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListClusterReleaseTargetsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).ListClusterReleaseTargets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_ListClusterReleaseTargets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).ListClusterReleaseTargets(ctx, req.(*ListClusterReleaseTargetsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_SetClusterReleaseTarget_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetClusterReleaseTargetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).SetClusterReleaseTarget(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_SetClusterReleaseTarget_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).SetClusterReleaseTarget(ctx, req.(*SetClusterReleaseTargetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ClusterService_ServiceDesc is the grpc.ServiceDesc for ClusterService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1964,6 +2136,26 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "CreateEnrollmentToken",
 			Handler:    _ClusterService_CreateEnrollmentToken_Handler,
 		},
+		{
+			MethodName: "ListEdgeReleases",
+			Handler:    _ClusterService_ListEdgeReleases_Handler,
+		},
+		{
+			MethodName: "UpsertEdgeRelease",
+			Handler:    _ClusterService_UpsertEdgeRelease_Handler,
+		},
+		{
+			MethodName: "GetClusterReleaseTarget",
+			Handler:    _ClusterService_GetClusterReleaseTarget_Handler,
+		},
+		{
+			MethodName: "ListClusterReleaseTargets",
+			Handler:    _ClusterService_ListClusterReleaseTargets_Handler,
+		},
+		{
+			MethodName: "SetClusterReleaseTarget",
+			Handler:    _ClusterService_SetClusterReleaseTarget_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "quartermaster.proto",
@@ -1974,6 +2166,7 @@ const (
 	NodeService_ListNodes_FullMethodName               = "/quartermaster.NodeService/ListNodes"
 	NodeService_ListHealthyNodesForDNS_FullMethodName  = "/quartermaster.NodeService/ListHealthyNodesForDNS"
 	NodeService_CreateNode_FullMethodName              = "/quartermaster.NodeService/CreateNode"
+	NodeService_UpdateNodeStatus_FullMethodName        = "/quartermaster.NodeService/UpdateNodeStatus"
 	NodeService_SetNodeEnrollmentOrigin_FullMethodName = "/quartermaster.NodeService/SetNodeEnrollmentOrigin"
 	NodeService_ResolveNodeFingerprint_FullMethodName  = "/quartermaster.NodeService/ResolveNodeFingerprint"
 	NodeService_GetNodeOwner_FullMethodName            = "/quartermaster.NodeService/GetNodeOwner"
@@ -1992,6 +2185,7 @@ type NodeServiceClient interface {
 	ListNodes(ctx context.Context, in *ListNodesRequest, opts ...grpc.CallOption) (*ListNodesResponse, error)
 	ListHealthyNodesForDNS(ctx context.Context, in *ListHealthyNodesForDNSRequest, opts ...grpc.CallOption) (*ListHealthyNodesForDNSResponse, error)
 	CreateNode(ctx context.Context, in *CreateNodeRequest, opts ...grpc.CallOption) (*NodeResponse, error)
+	UpdateNodeStatus(ctx context.Context, in *UpdateNodeStatusRequest, opts ...grpc.CallOption) (*NodeResponse, error)
 	SetNodeEnrollmentOrigin(ctx context.Context, in *SetNodeEnrollmentOriginRequest, opts ...grpc.CallOption) (*SetNodeEnrollmentOriginResponse, error)
 	// Resolve node fingerprint for identity binding
 	// Source: pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest
@@ -2052,6 +2246,16 @@ func (c *nodeServiceClient) CreateNode(ctx context.Context, in *CreateNodeReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(NodeResponse)
 	err := c.cc.Invoke(ctx, NodeService_CreateNode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeServiceClient) UpdateNodeStatus(ctx context.Context, in *UpdateNodeStatusRequest, opts ...grpc.CallOption) (*NodeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NodeResponse)
+	err := c.cc.Invoke(ctx, NodeService_UpdateNodeStatus_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -2128,6 +2332,7 @@ type NodeServiceServer interface {
 	ListNodes(context.Context, *ListNodesRequest) (*ListNodesResponse, error)
 	ListHealthyNodesForDNS(context.Context, *ListHealthyNodesForDNSRequest) (*ListHealthyNodesForDNSResponse, error)
 	CreateNode(context.Context, *CreateNodeRequest) (*NodeResponse, error)
+	UpdateNodeStatus(context.Context, *UpdateNodeStatusRequest) (*NodeResponse, error)
 	SetNodeEnrollmentOrigin(context.Context, *SetNodeEnrollmentOriginRequest) (*SetNodeEnrollmentOriginResponse, error)
 	// Resolve node fingerprint for identity binding
 	// Source: pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest
@@ -2165,6 +2370,9 @@ func (UnimplementedNodeServiceServer) ListHealthyNodesForDNS(context.Context, *L
 }
 func (UnimplementedNodeServiceServer) CreateNode(context.Context, *CreateNodeRequest) (*NodeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateNode not implemented")
+}
+func (UnimplementedNodeServiceServer) UpdateNodeStatus(context.Context, *UpdateNodeStatusRequest) (*NodeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateNodeStatus not implemented")
 }
 func (UnimplementedNodeServiceServer) SetNodeEnrollmentOrigin(context.Context, *SetNodeEnrollmentOriginRequest) (*SetNodeEnrollmentOriginResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetNodeEnrollmentOrigin not implemented")
@@ -2273,6 +2481,24 @@ func _NodeService_CreateNode_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(NodeServiceServer).CreateNode(ctx, req.(*CreateNodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeService_UpdateNodeStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateNodeStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).UpdateNodeStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_UpdateNodeStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).UpdateNodeStatus(ctx, req.(*UpdateNodeStatusRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2407,6 +2633,10 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateNode",
 			Handler:    _NodeService_CreateNode_Handler,
+		},
+		{
+			MethodName: "UpdateNodeStatus",
+			Handler:    _NodeService_UpdateNodeStatus_Handler,
 		},
 		{
 			MethodName: "SetNodeEnrollmentOrigin",

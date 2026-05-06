@@ -170,9 +170,16 @@ service ClusterService {
   // and returns an enrollment token for edge provisioning.
   rpc EnableSelfHosting(EnableSelfHostingRequest) returns (EnableSelfHostingResponse);
 
-  // Create an enrollment token for a cluster the tenant is subscribed to.
-  // Tenant-facing alternative to admin-only CreateBootstrapToken.
+  // Create an enrollment token for a cluster the caller owns or can administer.
+  // Provider/service callers may mint for active clusters; subscribers cannot.
   rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (CreateBootstrapTokenResponse);
+
+  // Edge release catalog and per-cluster rollout target controls.
+  rpc ListEdgeReleases(ListEdgeReleasesRequest) returns (ListEdgeReleasesResponse);
+  rpc UpsertEdgeRelease(UpsertEdgeReleaseRequest) returns (EdgeReleaseResponse);
+  rpc GetClusterReleaseTarget(GetClusterReleaseTargetRequest) returns (ClusterReleaseTargetResponse);
+  rpc ListClusterReleaseTargets(ListClusterReleaseTargetsRequest) returns (ListClusterReleaseTargetsResponse);
+  rpc SetClusterReleaseTarget(SetClusterReleaseTargetRequest) returns (ClusterReleaseTargetResponse);
 }
 
 // SetNodeEnrollmentOriginRequest flips a node's enrollment_origin. Used by
@@ -197,6 +204,7 @@ service NodeService {
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
   rpc ListHealthyNodesForDNS(ListHealthyNodesForDNSRequest) returns (ListHealthyNodesForDNSResponse);
   rpc CreateNode(CreateNodeRequest) returns (NodeResponse);
+  rpc UpdateNodeStatus(UpdateNodeStatusRequest) returns (NodeResponse);
   rpc SetNodeEnrollmentOrigin(SetNodeEnrollmentOriginRequest) returns (SetNodeEnrollmentOriginResponse);
 
   // Resolve node fingerprint for identity binding
@@ -961,6 +969,71 @@ message CreateNodeRequest {
   optional int32 wireguard_port = 16;   // json:"wireguard_port,omitempty"
 }
 
+message UpdateNodeStatusRequest {
+  string node_id = 1;                   // logical node_id or database UUID
+  string status = 2;                    // active | offline | maintenance | retired | evicted
+  optional string expected_cluster_id = 3; // guard against updating a node from another cluster
+}
+
+message EdgeRelease {
+  string channel = 1;
+  string version = 2;
+  string components_json = 3;
+  reserved 4;
+  reserved "metadata_json";
+  google.protobuf.Timestamp published_at = 5;
+}
+
+message ListEdgeReleasesRequest {
+  string channel = 1;
+  string version = 2;
+}
+
+message ListEdgeReleasesResponse {
+  repeated EdgeRelease releases = 1;
+}
+
+message UpsertEdgeReleaseRequest {
+  EdgeRelease release = 1;
+}
+
+message EdgeReleaseResponse {
+  EdgeRelease release = 1;
+}
+
+message ClusterReleaseTarget {
+  string cluster_id = 1;
+  string channel = 2;
+  string target_version = 3;
+  reserved 4;
+  reserved "policy";
+  string rollout_plan_json = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  bool paused = 7;
+}
+
+message GetClusterReleaseTargetRequest {
+  string cluster_id = 1;
+}
+
+message ListClusterReleaseTargetsRequest {
+  string cluster_id = 1;
+  reserved 2;
+  reserved "policy";
+}
+
+message ListClusterReleaseTargetsResponse {
+  repeated ClusterReleaseTarget targets = 1;
+}
+
+message SetClusterReleaseTargetRequest {
+  ClusterReleaseTarget target = 1;
+}
+
+message ClusterReleaseTargetResponse {
+  ClusterReleaseTarget target = 1;
+}
+
 // Matches pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest (lines 180-190)
 message ResolveNodeFingerprintRequest {
   string peer_ip = 1;                   // json:"peer_ip"
@@ -1667,10 +1740,9 @@ message EnableSelfHostingResponse {
   string foghorn_addr = 3;              // Address of the assigned Foghorn
 }
 
-// Create an enrollment token for a cluster the tenant is subscribed to.
-// Tenant-facing alternative to admin-only CreateBootstrapToken.
+// Create an enrollment token for a cluster the caller owns or can administer.
 message CreateEnrollmentTokenRequest {
-  string cluster_id = 1;                 // Must have active subscription
+  string cluster_id = 1;                 // Must have owner/provider lifecycle authority
   optional string tenant_id = 2;         // Defaults to JWT tenant
   optional string name = 3;              // Token display name
   optional string ttl = 4;              // e.g. "720h" (default: 30 days)

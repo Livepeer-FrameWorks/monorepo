@@ -32,8 +32,8 @@ curl -sSfL https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/downl
 # 4. Detect hosts (verify SSH connectivity)
 frameworks cluster detect --manifest cluster.yaml
 
-# 5. Provision + init + seeds (one command, usable platform)
-frameworks cluster provision --manifest cluster.yaml --ready \
+# 5. Provision + init + static seeds (one command, usable platform)
+frameworks cluster provision --manifest cluster.yaml \
   --bootstrap-admin-email you@co --bootstrap-admin-password-env DEPLOY_PW
 
 # 6. Verify health — subsequent commands pick up the saved manifest path
@@ -87,12 +87,13 @@ The CLI provisions in dependency order:
 
 Use `--only infrastructure|applications|interfaces` to run a single phase.
 
-`--ready` extends the pipeline with `cluster init` and static reference seeds
-(`cluster seed`), plus optional admin bootstrap if you pass
-`--bootstrap-admin-email`. For PostgreSQL/YugabyteDB, `cluster init` applies
-baseline schemas first and then embedded `expand` migrations from the
-database/version/phase migration layout. Add `--seed-demo` to also load sample
-tenant/user/stream data.
+For application/all phases, `cluster provision` runs `cluster init`, static
+reference seeds (`cluster seed`), service-owned bootstrap reconciliation, and
+edge release target sync as part of the provision run. For PostgreSQL/YugabyteDB,
+`cluster init` applies baseline schemas first and then embedded `expand`
+migrations from the database/version/phase migration layout. Demo tenant/user/
+stream data is intentionally not part of provisioning; use
+`frameworks cluster seed --demo` only for local development/test stacks.
 
 </Aside>
 

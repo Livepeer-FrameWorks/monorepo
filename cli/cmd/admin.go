@@ -13,6 +13,7 @@ import (
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/internal/controlplane"
 	fwcredentials "frameworks/cli/internal/credentials"
 	"frameworks/cli/internal/platformauth"
 	"frameworks/cli/internal/ux"
@@ -188,7 +189,7 @@ func newAdminTokensCmd() *cobra.Command {
 // (user identity), and resolves SERVICE_TOKEN from the active context's
 // manifest/gitops source (platform configuration). Service tokens are
 // never read from the credential store or env vars.
-func activeContextWithAuth() (fwcfg.Context, error) {
+func activeContextWithAuth(ctx context.Context) (fwcfg.Context, error) {
 	cfg, err := fwcfg.Load()
 	if err != nil {
 		return fwcfg.Context{}, err
@@ -202,7 +203,7 @@ func activeContextWithAuth() (fwcfg.Context, error) {
 	if err != nil {
 		return fwcfg.Context{}, err
 	}
-	token, err := platformauth.ResolveManifestServiceToken(context.Background(), ctxCfg, cfg)
+	token, err := platformauth.ResolveManifestServiceToken(ctx, ctxCfg, cfg)
 	if err != nil {
 		return fwcfg.Context{}, err
 	}
@@ -210,28 +211,30 @@ func activeContextWithAuth() (fwcfg.Context, error) {
 	return ctxCfg, nil
 }
 
-func commodoreGRPCClientFromContext() (*commodore.GRPCClient, fwcfg.Context, error) {
-	ctxCfg, err := activeContextWithAuth()
+func commodoreGRPCClientFromContext(ctx context.Context) (*commodore.GRPCClient, fwcfg.Context, func(), error) {
+	ctxCfg, err := activeContextWithAuth(ctx)
 	if err != nil {
-		return nil, fwcfg.Context{}, err
+		return nil, fwcfg.Context{}, nil, err
 	}
 
-	grpcAddr, err := fwcfg.RequireEndpoint(ctxCfg, "commodore_grpc_addr", ctxCfg.Endpoints.CommodoreGRPCAddr, false)
+	ep, err := controlplane.ResolveGRPC(ctx, ctxCfg, "commodore")
 	if err != nil {
-		return nil, fwcfg.Context{}, err
+		return nil, fwcfg.Context{}, nil, err
 	}
 
 	cli, err := commodore.NewGRPCClient(commodore.GRPCConfig{
-		GRPCAddr:      grpcAddr,
+		GRPCAddr:      ep.Address,
 		Timeout:       15 * time.Second,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
-		AllowInsecure: true,
+		AllowInsecure: ep.AllowInsecure,
+		ServerName:    ep.ServerName,
 	})
 	if err != nil {
-		return nil, fwcfg.Context{}, fmt.Errorf("failed to connect to Commodore gRPC: %w", err)
+		ep.Cleanup()
+		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Commodore gRPC: %w", err)
 	}
-	return cli, ctxCfg, nil
+	return cli, ctxCfg, ep.Cleanup, nil
 }
 
 func newAdminTokensCreateCmd() *cobra.Command {
@@ -248,10 +251,11 @@ func newAdminTokensCreateCmd() *cobra.Command {
 			return fmt.Errorf("--expires: %w", err)
 		}
 
-		cli, _, err := commodoreGRPCClientFromContext()
+		cli, _, cleanup, err := commodoreGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = cli.Close() }()
 
 		req := &pb.CreateAPITokenRequest{TokenName: name}
@@ -264,7 +268,7 @@ func newAdminTokensCreateCmd() *cobra.Command {
 			req.ExpiresAt = expiresAt
 		}
 
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		resp, err := cli.CreateAPIToken(cctx, req)
 		if err != nil {
@@ -289,13 +293,14 @@ func newAdminTokensCreateCmd() *cobra.Command {
 
 func newAdminTokensListCmd() *cobra.Command {
 	return &cobra.Command{Use: "list", Short: "List developer API tokens", RunE: func(cmd *cobra.Command, args []string) error {
-		cli, _, err := commodoreGRPCClientFromContext()
+		cli, _, cleanup, err := commodoreGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = cli.Close() }()
 
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		resp, err := cli.ListAPITokens(cctx, nil)
 		if err != nil {
@@ -318,13 +323,14 @@ func newAdminTokensRevokeCmd() *cobra.Command {
 	var name string
 	var yes bool
 	cmd := &cobra.Command{Use: "revoke [id]", Short: "Revoke developer API token by ID or name", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		cli, _, err := commodoreGRPCClientFromContext()
+		cli, _, cleanup, err := commodoreGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = cli.Close() }()
 
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 
 		var tokenID string
@@ -387,75 +393,83 @@ func newAdminBootstrapTokensCmd() *cobra.Command {
 	return bt
 }
 
-func qmGRPCClientFromContext() (*qmclient.GRPCClient, fwcfg.Context, error) {
-	ctxCfg, err := activeContextWithAuth()
+func qmGRPCClientFromContext(ctx context.Context) (*qmclient.GRPCClient, fwcfg.Context, func(), error) {
+	ctxCfg, err := activeContextWithAuth(ctx)
 	if err != nil {
-		return nil, fwcfg.Context{}, err
+		return nil, fwcfg.Context{}, nil, err
 	}
 
-	grpcAddr, err := fwcfg.RequireEndpoint(ctxCfg, "quartermaster_grpc_addr", ctxCfg.Endpoints.QuartermasterGRPCAddr, false)
+	ep, err := controlplane.ResolveGRPC(ctx, ctxCfg, "quartermaster")
 	if err != nil {
-		return nil, fwcfg.Context{}, err
+		return nil, fwcfg.Context{}, nil, err
 	}
 
 	qm, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:      grpcAddr,
+		GRPCAddr:      ep.Address,
 		Timeout:       15 * time.Second,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
-		AllowInsecure: true,
+		AllowInsecure: ep.AllowInsecure,
+		ServerName:    ep.ServerName,
 	})
 	if err != nil {
-		return nil, fwcfg.Context{}, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
+		ep.Cleanup()
+		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
 	}
-	return qm, ctxCfg, nil
+	return qm, ctxCfg, ep.Cleanup, nil
 }
 
-func foghornGRPCClientFromContext() (*fhclient.GRPCClient, fwcfg.Context, error) {
-	ctxCfg, err := activeContextWithAuth()
+func foghornGRPCClientFromContext(ctx context.Context) (*fhclient.GRPCClient, fwcfg.Context, func(), error) {
+	ctxCfg, err := activeContextWithAuth(ctx)
 	if err != nil {
-		return nil, fwcfg.Context{}, err
+		return nil, fwcfg.Context{}, nil, err
 	}
 
-	grpcAddr, err := fwcfg.RequireEndpoint(ctxCfg, "foghorn_grpc_addr", ctxCfg.Endpoints.FoghornGRPCAddr, false)
+	ep, err := controlplane.ResolveGRPC(ctx, ctxCfg, "foghorn")
 	if err != nil {
-		return nil, fwcfg.Context{}, err
+		return nil, fwcfg.Context{}, nil, err
 	}
 
 	fh, err := fhclient.NewGRPCClient(fhclient.GRPCConfig{
-		GRPCAddr:     grpcAddr,
-		Timeout:      30 * time.Second,
-		Logger:       logging.NewLogger(),
-		ServiceToken: ctxCfg.Auth.ServiceToken,
+		GRPCAddr:      ep.Address,
+		Timeout:       30 * time.Second,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  ctxCfg.Auth.ServiceToken,
+		UseTLS:        !ep.AllowInsecure,
+		ServerName:    ep.ServerName,
+		AllowInsecure: ep.AllowInsecure,
 	})
 	if err != nil {
-		return nil, fwcfg.Context{}, fmt.Errorf("failed to connect to Foghorn gRPC: %w", err)
+		ep.Cleanup()
+		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Foghorn gRPC: %w", err)
 	}
-	return fh, ctxCfg, nil
+	return fh, ctxCfg, ep.Cleanup, nil
 }
 
-func purserGRPCClientFromContext() (*purserclient.GRPCClient, fwcfg.Context, error) {
-	ctxCfg, err := activeContextWithAuth()
+func purserGRPCClientFromContext(ctx context.Context) (*purserclient.GRPCClient, fwcfg.Context, func(), error) {
+	ctxCfg, err := activeContextWithAuth(ctx)
 	if err != nil {
-		return nil, fwcfg.Context{}, err
+		return nil, fwcfg.Context{}, nil, err
 	}
 
-	grpcAddr, err := fwcfg.RequireEndpoint(ctxCfg, "purser_grpc_addr", ctxCfg.Endpoints.PurserGRPCAddr, false)
+	ep, err := controlplane.ResolveGRPC(ctx, ctxCfg, "purser")
 	if err != nil {
-		return nil, fwcfg.Context{}, err
+		return nil, fwcfg.Context{}, nil, err
 	}
 
 	p, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:      grpcAddr,
+		GRPCAddr:      ep.Address,
 		Timeout:       15 * time.Second,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
-		AllowInsecure: true,
+		AllowInsecure: ep.AllowInsecure,
+		ServerName:    ep.ServerName,
 	})
 	if err != nil {
-		return nil, fwcfg.Context{}, fmt.Errorf("failed to connect to Purser gRPC: %w", err)
+		ep.Cleanup()
+		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Purser gRPC: %w", err)
 	}
-	return p, ctxCfg, nil
+	return p, ctxCfg, ep.Cleanup, nil
 }
 
 func newAdminBootstrapTokensCreateCmd() *cobra.Command {
@@ -516,10 +530,11 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 			return fmt.Errorf("--usage-limit cannot be negative")
 		}
 
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
 		req := &pb.CreateBootstrapTokenRequest{
 			Name: name,
@@ -539,7 +554,7 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 			ul := int32(usageLimit)
 			req.UsageLimit = &ul
 		}
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -577,12 +592,13 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 
 func newAdminBootstrapTokensListCmd() *cobra.Command {
 	return &cobra.Command{Use: "list", Short: "List bootstrap tokens", RunE: func(cmd *cobra.Command, args []string) error {
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -620,12 +636,13 @@ func newAdminBootstrapTokensRevokeCmd() *cobra.Command {
 	var name string
 	var yes bool
 	cmd := &cobra.Command{Use: "revoke [id]", Short: "Revoke bootstrap token by ID or name", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -690,12 +707,13 @@ func newAdminTenantsCmd() *cobra.Command {
 
 func newAdminTenantsListCmd() *cobra.Command {
 	return &cobra.Command{Use: "list", Short: "List all tenants", RunE: func(cmd *cobra.Command, args []string) error {
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -736,12 +754,13 @@ func newAdminClustersCmd() *cobra.Command {
 
 func newAdminClustersListCmd() *cobra.Command {
 	return &cobra.Command{Use: "list", Short: "List all clusters", RunE: func(cmd *cobra.Command, args []string) error {
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -804,12 +823,13 @@ func newAdminClustersCreateCmd() *cobra.Command {
 			return fmt.Errorf("--deployment-model must be 'managed' or 'shared'")
 		}
 
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -904,12 +924,13 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 			return fmt.Errorf("--deployment-model must be 'managed' or 'shared'")
 		}
 
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1007,12 +1028,13 @@ func newAdminClustersAccessListCmd() *cobra.Command {
 		if err := validateUUID(tenantID); err != nil {
 			return fmt.Errorf("--tenant-id: %w", err)
 		}
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1065,12 +1087,13 @@ func newAdminClustersAccessGrantCmd() *cobra.Command {
 			return fmt.Errorf("--resource-limits: %w", err)
 		}
 
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1137,12 +1160,13 @@ func newAdminClustersInvitesCreateCmd() *cobra.Command {
 			return fmt.Errorf("--resource-limits: %w", err)
 		}
 
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1192,12 +1216,13 @@ func newAdminClustersInvitesListCmd() *cobra.Command {
 		if err := validateUUID(ownerTenantID); err != nil {
 			return fmt.Errorf("--owner-tenant-id: %w", err)
 		}
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1244,12 +1269,13 @@ func newAdminClustersInvitesRevokeCmd() *cobra.Command {
 		if err := validateUUID(ownerTenantID); err != nil {
 			return fmt.Errorf("--owner-tenant-id: %w", err)
 		}
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1277,12 +1303,13 @@ func newAdminClustersInvitesListMineCmd() *cobra.Command {
 				return fmt.Errorf("--tenant-id: %w", err)
 			}
 		}
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1326,12 +1353,13 @@ func newAdminClustersInvitesAcceptCmd() *cobra.Command {
 				return fmt.Errorf("--tenant-id: %w", err)
 			}
 		}
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1380,12 +1408,13 @@ func newAdminClustersSubscriptionsListCmd() *cobra.Command {
 		if err := validateUUID(tenantID); err != nil {
 			return fmt.Errorf("--tenant-id: %w", err)
 		}
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1424,12 +1453,13 @@ func newAdminClustersCertStatusCmd() *cobra.Command {
 		if strings.TrimSpace(clusterID) == "" {
 			return fmt.Errorf("--cluster-id is required")
 		}
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1484,12 +1514,13 @@ func newAdminClustersCreateEdgeCmd() *cobra.Command {
 				return fmt.Errorf("--tenant-id: %w", err)
 			}
 		}
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1565,12 +1596,13 @@ func newAdminClustersEnrollmentTokenCmd() *cobra.Command {
 			}
 		}
 
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1630,12 +1662,13 @@ func newAdminNodesListCmd() *cobra.Command {
 	var nodeType string
 	var region string
 	cmd := &cobra.Command{Use: "list", Short: "List nodes", RunE: func(cmd *cobra.Command, args []string) error {
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1719,12 +1752,13 @@ func newAdminNodesCreateCmd() *cobra.Command {
 			return fmt.Errorf("--metadata: %w", err)
 		}
 
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1814,12 +1848,13 @@ func newAdminServicePoolStatusCmd() *cobra.Command {
 		if strings.TrimSpace(serviceType) == "" {
 			return fmt.Errorf("--service-type is required")
 		}
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1875,12 +1910,13 @@ func newAdminServicePoolAddCmd() *cobra.Command {
 		if strings.TrimSpace(serviceType) == "" {
 			return fmt.Errorf("--service-type is required")
 		}
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1915,12 +1951,13 @@ func newAdminServicePoolDrainCmd() *cobra.Command {
 		if strings.TrimSpace(serviceType) == "" {
 			return fmt.Errorf("--service-type is required")
 		}
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -1961,12 +1998,13 @@ func newAdminServicePoolAssignCmd() *cobra.Command {
 		if strings.TrimSpace(serviceType) == "" {
 			return fmt.Errorf("--service-type is required")
 		}
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -2016,12 +2054,13 @@ func newAdminServicePoolUnassignCmd() *cobra.Command {
 		if strings.TrimSpace(serviceType) == "" {
 			return fmt.Errorf("--service-type is required")
 		}
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -2052,12 +2091,13 @@ func newAdminNodesHardwareCmd() *cobra.Command {
 		if strings.TrimSpace(nodeID) == "" {
 			return fmt.Errorf("--node-id is required")
 		}
-		qm, ctxCfg, err := qmGRPCClientFromContext()
+		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -2100,12 +2140,13 @@ func newAdminBillingCmd() *cobra.Command {
 
 func newAdminBillingTiersCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "tiers", Short: "List billing tiers", RunE: func(cmd *cobra.Command, args []string) error {
-		p, ctxCfg, err := purserGRPCClientFromContext()
+		p, ctxCfg, cleanup, err := purserGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = p.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -2145,12 +2186,13 @@ func newAdminBillingInitPostpaidCmd() *cobra.Command {
 		if err := validateUUID(tenantID); err != nil {
 			return fmt.Errorf("--tenant-id: %w", err)
 		}
-		p, ctxCfg, err := purserGRPCClientFromContext()
+		p, ctxCfg, cleanup, err := purserGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = p.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -2186,12 +2228,13 @@ func newAdminBillingPromoteCmd() *cobra.Command {
 		if err := validateUUID(tenantID); err != nil {
 			return fmt.Errorf("--tenant-id: %w", err)
 		}
-		p, ctxCfg, err := purserGRPCClientFromContext()
+		p, ctxCfg, cleanup, err := purserGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = p.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -2238,12 +2281,13 @@ func newAdminBillingSetClusterPricingCmd() *cobra.Command {
 			return fmt.Errorf("--pricing-model must be one of: free_unmetered, metered, monthly, tier_inherit, custom")
 		}
 
-		p, ctxCfg, err := purserGRPCClientFromContext()
+		p, ctxCfg, cleanup, err := purserGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = p.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -2345,12 +2389,13 @@ Password input methods, in precedence order:
 				return err
 			}
 
-			cli, ctxCfg, err := commodoreGRPCClientFromContext()
+			cli, ctxCfg, cleanup, err := commodoreGRPCClientFromContext(cmd.Context())
 			if err != nil {
 				return err
 			}
+			defer cleanup()
 			defer func() { _ = cli.Close() }()
-			cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 			defer cancel()
 			if ctxCfg.Auth.JWT != "" {
 				cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
@@ -2474,13 +2519,14 @@ func newAdminClustersMigrateArtifactsCmd() *cobra.Command {
 			return fmt.Errorf("--from-cluster is required")
 		}
 
-		fh, ctxCfg, err := foghornGRPCClientFromContext()
+		fh, ctxCfg, cleanup, err := foghornGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer func() { _ = fh.Close() }()
 
-		cctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		cctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/internal/controlplane"
 	"frameworks/cli/internal/services"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/internal/xexec"
@@ -37,40 +38,43 @@ func newServicesCmd() *cobra.Command {
 	return svc
 }
 
-func newQMGRPCClientFromContext() (*qmclient.GRPCClient, fwcfg.Context, error) {
-	ctxCfg, err := activeContextWithAuth()
+func newQMGRPCClientFromContext(ctx context.Context) (*qmclient.GRPCClient, fwcfg.Context, func(), error) {
+	ctxCfg, err := activeContextWithAuth(ctx)
 	if err != nil {
-		return nil, fwcfg.Context{}, err
+		return nil, fwcfg.Context{}, nil, err
 	}
 
-	grpcAddr, err := fwcfg.RequireEndpoint(ctxCfg, "quartermaster_grpc_addr", ctxCfg.Endpoints.QuartermasterGRPCAddr, false)
+	ep, err := controlplane.ResolveGRPC(ctx, ctxCfg, "quartermaster")
 	if err != nil {
-		return nil, fwcfg.Context{}, err
+		return nil, fwcfg.Context{}, nil, err
 	}
 
 	qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:      grpcAddr,
+		GRPCAddr:      ep.Address,
 		Timeout:       15 * time.Second,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
-		AllowInsecure: true,
+		AllowInsecure: ep.AllowInsecure,
+		ServerName:    ep.ServerName,
 	})
 	if err != nil {
-		return nil, fwcfg.Context{}, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
+		ep.Cleanup()
+		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
 	}
-	return qc, ctxCfg, nil
+	return qc, ctxCfg, ep.Cleanup, nil
 }
 
 func newServicesHealthCmd() *cobra.Command {
 	var serviceID string
 	var svcType string
 	cmd := &cobra.Command{Use: "health", Short: "Show aggregated service health", RunE: func(cmd *cobra.Command, args []string) error {
-		qc, _, err := newQMGRPCClientFromContext()
+		qc, _, cleanup, err := newQMGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer qc.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 
 		// Use gRPC to get services health
@@ -233,12 +237,13 @@ func newServicesDiscoverCmd() *cobra.Command {
 		if strings.TrimSpace(svcType) == "" {
 			return fmt.Errorf("--type is required")
 		}
-		qc, _, err := newQMGRPCClientFromContext()
+		qc, _, cleanup, err := newQMGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
+		defer cleanup()
 		defer qc.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 
 		// Use gRPC DiscoverServices

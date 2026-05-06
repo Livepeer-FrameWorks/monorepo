@@ -40,13 +40,14 @@ func resolveGatewayAddr(cmd *cobra.Command) (string, error) {
 	}
 
 	clusterID, _ := cmd.Flags().GetString("cluster")
-	qc, _, err := newQMGRPCClientFromContext()
+	qc, _, cleanup, err := newQMGRPCClientFromContext(cmd.Context())
 	if err != nil {
 		return "", fmt.Errorf("cannot discover gateway (use --gateway to specify directly): %w", err)
 	}
+	defer cleanup()
 	defer func() { _ = qc.Close() }()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
 	defer cancel()
 
 	resp, err := qc.DiscoverServices(ctx, "livepeer-gateway", clusterID, nil)

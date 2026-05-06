@@ -131,6 +131,9 @@ type NodeState struct {
 	OperationalMode      NodeOperationalMode    `json:"operational_mode,omitempty"`
 	TenantID             string                 `json:"tenant_id,omitempty"`  // Tenant owning this dedicated node
 	ClusterID            string                 `json:"cluster_id,omitempty"` // Virtual cluster this node belongs to
+	DeployMode           string                 `json:"deploy_mode,omitempty"`
+	OS                   string                 `json:"os,omitempty"`
+	Arch                 string                 `json:"arch,omitempty"`
 	Latitude             *float64               `json:"latitude,omitempty"`
 	Longitude            *float64               `json:"longitude,omitempty"`
 	Location             string                 `json:"location,omitempty"`
@@ -2631,6 +2634,7 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *pb
 		lonPtr = &v
 	}
 	sm.SetNodeInfo(update.GetNodeId(), update.GetBaseUrl(), update.GetIsHealthy(), latPtr, lonPtr, update.GetLocation(), update.GetOutputsJson(), nil)
+	sm.SetNodeRuntimeInfo(update.GetNodeId(), update.GetDeployMode(), update.GetOs(), update.GetArch())
 	sm.UpdateNodeMetrics(update.GetNodeId(), struct {
 		CPU                  float64
 		RAMMax               float64
@@ -2706,6 +2710,25 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *pb
 	return nil
 }
 
+func (sm *StreamStateManager) SetNodeRuntimeInfo(nodeID, deployMode, osName, arch string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	n := sm.nodes[nodeID]
+	if n == nil {
+		n = newNodeState(nodeID)
+		sm.nodes[nodeID] = n
+	}
+	if deployMode = strings.TrimSpace(deployMode); deployMode != "" {
+		n.DeployMode = deployMode
+	}
+	if osName = strings.TrimSpace(osName); osName != "" {
+		n.OS = osName
+	}
+	if arch = strings.TrimSpace(arch); arch != "" {
+		n.Arch = arch
+	}
+}
+
 func (sm *StreamStateManager) queueNodeLifecycleWrite(update *pb.NodeLifecycleUpdate) {
 	if sm.nodeRepo == nil || update == nil {
 		return
@@ -2753,6 +2776,9 @@ func (sm *StreamStateManager) flushNodeLifecycleBatch(batch []*pb.NodeLifecycleU
 	defer cancel()
 	if err := sm.nodeRepo.UpsertNodeLifecycles(ctx, batch); err != nil && stateLogger != nil {
 		stateLogger.WithError(err).Warn("Failed to batch upsert node lifecycle updates")
+	}
+	if err := sm.nodeRepo.UpsertNodeComponents(ctx, batch); err != nil && stateLogger != nil {
+		stateLogger.WithError(err).Warn("Failed to upsert node component versions")
 	}
 }
 
@@ -2863,6 +2889,7 @@ type NodeRepository interface {
 	ListNodeMaintenance(ctx context.Context) ([]NodeMaintenanceRecord, error)
 	UpsertNodeOutputs(ctx context.Context, nodeID string, baseURL string, outputsJSON string) error
 	UpsertNodeLifecycles(ctx context.Context, updates []*pb.NodeLifecycleUpdate) error
+	UpsertNodeComponents(ctx context.Context, updates []*pb.NodeLifecycleUpdate) error
 	UpsertNodeMaintenance(ctx context.Context, nodeID string, mode NodeOperationalMode, setBy string) error
 }
 

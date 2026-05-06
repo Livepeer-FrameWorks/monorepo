@@ -18,6 +18,7 @@ import (
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/internal/controlplane"
 	fwcredentials "frameworks/cli/internal/credentials"
 	"frameworks/cli/internal/platformauth"
 	"frameworks/cli/internal/preflight"
@@ -600,12 +601,12 @@ Multi-node manifest example:
 
 			// --register belongs to the manual/admin path. The token path
 			// already registers the node via Foghorn's PreRegisterEdge, and
-			// the edge persona doesn't have Quartermaster reachability.
+			// the user persona doesn't have Quartermaster reachability.
 			if registerNode && enrollmentToken != "" {
 				return fmt.Errorf("--register is for the manual provisioning path; the token path already registers the node via Foghorn")
 			}
-			if registerNode && cliCtx.Persona == fwcfg.PersonaEdge {
-				return fmt.Errorf("--register requires Quartermaster access; the edge persona only has Bridge — use a platform or self-hosted context for manual node registration")
+			if registerNode && cliCtx.Persona.IsUser() {
+				return fmt.Errorf("--register requires Quartermaster access; the user persona only has Bridge — use a platform or self-hosted context for manual node registration")
 			}
 
 			// Single node mode - require ssh target or --local
@@ -969,8 +970,8 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 	if registerNode && enrollmentToken != "" {
 		return fmt.Errorf("register_qm is for the manual provisioning path; the token path already registers the node via Foghorn")
 	}
-	if registerNode && cliCtx.Persona == fwcfg.PersonaEdge {
-		return fmt.Errorf("register_qm requires Quartermaster access; the edge persona only has Bridge — use a platform or self-hosted context for manual node registration")
+	if registerNode && cliCtx.Persona.IsUser() {
+		return fmt.Errorf("register_qm requires Quartermaster access; the user persona only has Bridge — use a platform or self-hosted context for manual node registration")
 	}
 
 	var preRegFoghornAddr string
@@ -1201,17 +1202,22 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, cluste
 		return err
 	}
 	cliCtx.Auth = fwcfg.Auth{JWT: jwt, ServiceToken: token}
-	// Create Quartermaster gRPC client
+	ep, err := controlplane.ResolveGRPC(cmd.Context(), cliCtx, "quartermaster")
+	if err != nil {
+		return err
+	}
+	defer ep.Cleanup()
 	qmClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:      cliCtx.Endpoints.QuartermasterGRPCAddr,
+		GRPCAddr:      ep.Address,
 		Timeout:       30 * time.Second,
 		ServiceToken:  cliCtx.Auth.ServiceToken,
-		AllowInsecure: true,
+		AllowInsecure: ep.AllowInsecure,
+		ServerName:    ep.ServerName,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to connect to Quartermaster: %w", err)
 	}
-	defer qmClient.Close()
+	defer func() { _ = qmClient.Close() }()
 
 	nodeID := canonicalEdgeNodeID(nodeName)
 	if nodeID == "" {
@@ -1234,7 +1240,7 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, cluste
 		req.Region = &region
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 	defer cancel()
 	if cliCtx.Auth.JWT != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, cliCtx.Auth.JWT)

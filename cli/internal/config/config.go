@@ -114,9 +114,8 @@ func Save(cfg Config) error {
 }
 
 // IsLocalContext reports whether a context targets local development.
-// Decided by inspecting the bridge URL — naming heuristics ("local",
-// "default", "") were brittle: a fresh edge persona context named
-// "default" should not silently dodge endpoint validation.
+// Decided by inspecting the bridge URL; context names and personas are not
+// reliable signals for endpoint reachability.
 func IsLocalContext(ctx Context) bool {
 	return IsLocalhostEndpoint(ctx.Endpoints.BridgeURL)
 }

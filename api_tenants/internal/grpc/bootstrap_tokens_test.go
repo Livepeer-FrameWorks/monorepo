@@ -86,6 +86,104 @@ func TestCreateEnrollmentTokenRejectsCrossTenantRequest(t *testing.T) {
 	}
 }
 
+func TestCreateEnrollmentTokenRejectsSubscriberAccess(t *testing.T) {
+	srv, _, mock := newMockQuartermasterServer(t)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+			SELECT EXISTS (
+				SELECT 1 FROM quartermaster.infrastructure_clusters
+				WHERE cluster_id = $1 AND owner_tenant_id = $2 AND is_active = true
+				UNION
+				SELECT 1 FROM quartermaster.tenant_cluster_access
+				WHERE cluster_id = $1
+				  AND tenant_id = $2
+				  AND access_level = 'owner'
+				  AND subscription_status = 'active'
+				  AND is_active = true
+			)
+		`)).
+		WithArgs("cluster-1", "tenant-subscriber").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-subscriber")
+	_, err := srv.CreateEnrollmentToken(ctx, &pb.CreateEnrollmentTokenRequest{ClusterId: "cluster-1"})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("status code = %v, want PermissionDenied", status.Code(err))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestCreateEnrollmentTokenRejectsTenantAdminSubscriberAccess(t *testing.T) {
+	srv, _, mock := newMockQuartermasterServer(t)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+			SELECT EXISTS (
+				SELECT 1 FROM quartermaster.infrastructure_clusters
+				WHERE cluster_id = $1 AND owner_tenant_id = $2 AND is_active = true
+				UNION
+				SELECT 1 FROM quartermaster.tenant_cluster_access
+				WHERE cluster_id = $1
+				  AND tenant_id = $2
+				  AND access_level = 'owner'
+				  AND subscription_status = 'active'
+				  AND is_active = true
+			)
+		`)).
+		WithArgs("cluster-1", "tenant-subscriber").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-subscriber")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "admin")
+	_, err := srv.CreateEnrollmentToken(ctx, &pb.CreateEnrollmentTokenRequest{ClusterId: "cluster-1"})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("status code = %v, want PermissionDenied", status.Code(err))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestCreateEnrollmentTokenAllowsOwnerAccess(t *testing.T) {
+	srv, _, mock := newMockQuartermasterServer(t)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+			SELECT EXISTS (
+				SELECT 1 FROM quartermaster.infrastructure_clusters
+				WHERE cluster_id = $1 AND owner_tenant_id = $2 AND is_active = true
+				UNION
+				SELECT 1 FROM quartermaster.tenant_cluster_access
+				WHERE cluster_id = $1
+				  AND tenant_id = $2
+				  AND access_level = 'owner'
+				  AND subscription_status = 'active'
+				  AND is_active = true
+			)
+		`)).
+		WithArgs("cluster-1", "tenant-owner").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectExec(regexp.QuoteMeta(`
+			INSERT INTO quartermaster.bootstrap_tokens (
+				id, token_hash, token_prefix, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
+			) VALUES ($1, $2, $3, 'edge_node', $4, $5, $6, $7, $5, NOW())
+		`)).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "Enrollment token for cluster-1", "tenant-owner", "cluster-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-owner")
+	resp, err := srv.CreateEnrollmentToken(ctx, &pb.CreateEnrollmentTokenRequest{ClusterId: "cluster-1"})
+	if err != nil {
+		t.Fatalf("CreateEnrollmentToken: %v", err)
+	}
+	if resp.GetToken().GetTenantId() != "tenant-owner" {
+		t.Fatalf("tenant_id = %q, want tenant-owner", resp.GetToken().GetTenantId())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
 func TestBootstrapEdgeNode_ServedClusterValidation(t *testing.T) {
 	srv, _, mock := newMockQuartermasterServer(t)
 	expiresAt := time.Now().Add(time.Hour)

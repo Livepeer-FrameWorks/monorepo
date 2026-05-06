@@ -29,3 +29,40 @@ func TestAddrIsFQDN(t *testing.T) {
 		})
 	}
 }
+
+func TestFoghornClientTLSConfigHonorsExplicitTLSForIPAddress(t *testing.T) {
+	t.Parallel()
+
+	cfg := foghornClientTLSConfig(GRPCConfig{
+		GRPCAddr: "10.88.0.10:18019",
+		UseTLS:   true,
+	})
+	if cfg.AllowInsecure {
+		t.Fatal("AllowInsecure = true, want false for explicit TLS")
+	}
+}
+
+func TestFoghornClientTLSConfigHonorsExplicitInsecureForFQDN(t *testing.T) {
+	t.Parallel()
+
+	cfg := foghornClientTLSConfig(GRPCConfig{
+		GRPCAddr:      "foghorn.frameworks.example:18019",
+		AllowInsecure: true,
+	})
+	if !cfg.AllowInsecure {
+		t.Fatal("AllowInsecure = false, want true for explicit insecure")
+	}
+}
+
+func TestFoghornClientTLSConfigKeepsLegacyDefaults(t *testing.T) {
+	t.Parallel()
+
+	fqdn := foghornClientTLSConfig(GRPCConfig{GRPCAddr: "foghorn.frameworks.example:18019"})
+	if fqdn.AllowInsecure {
+		t.Fatal("FQDN default AllowInsecure = true, want false")
+	}
+	local := foghornClientTLSConfig(GRPCConfig{GRPCAddr: "foghorn:18019"})
+	if !local.AllowInsecure {
+		t.Fatal("single-label default AllowInsecure = false, want true")
+	}
+}

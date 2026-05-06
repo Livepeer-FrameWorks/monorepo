@@ -10,6 +10,7 @@
 
 edge_mode: docker # docker | native
 edge_node_id: ""
+edge_cluster_id: ""
 edge_domain: ""
 edge_acme_email: ""
 edge_foghorn_grpc_addr: ""
@@ -41,12 +42,16 @@ edge_mistserver_image: mistserver:latest
 # keys let the Go caller hand the full set in one map.
 edge_mistserver_artifact_url: ""
 edge_mistserver_artifact_checksum: ""
+edge_mistserver_version: ""
 edge_helmsman_artifact_url: ""
 edge_helmsman_artifact_checksum: ""
+edge_helmsman_version: ""
 edge_caddy_artifact_url: ""
 edge_caddy_artifact_checksum: ""
+edge_caddy_version: ""
 edge_vmagent_artifact_url: ""
 edge_vmagent_artifact_checksum: ""
+edge_config_schema_version: ""
 
 # Optional kernel/fs tuning (sysctl + limits.d). Applied on native-linux
 # only — docker mode defers kernel concerns to the container host.
