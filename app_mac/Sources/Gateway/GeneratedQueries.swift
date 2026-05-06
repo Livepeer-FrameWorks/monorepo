@@ -1367,7 +1367,7 @@ enum GQL {
       cluster
       createdAt
     }
-    clustersConnection(page: { first: 50 }) {
+    clustersConnection(page: { first: 25 }) {
       edges {
         cursor
         node {
@@ -1376,25 +1376,12 @@ enum GQL {
           clusterName
           clusterType
           deploymentModel
-          baseUrl
-          databaseUrl
-          periscopeUrl
-          kafkaBrokers
           maxConcurrentStreams
           maxConcurrentViewers
           maxBandwidthMbps
           healthStatus
-          isActive
-          isDefaultCluster
-          isSubscribed
           createdAt
-          updatedAt
-          ownerTenantId
           visibility
-          pricingModel
-          monthlyPriceCents
-          requiresApproval
-          shortDescription
         }
       }
       pageInfo {
@@ -1762,7 +1749,7 @@ enum GQL {
     $clusterId: String
     $status: NodeStatus
     $type: String
-    $first: Int = 50
+    $first: Int = 25
     $after: String
   ) {
     nodesConnection(
