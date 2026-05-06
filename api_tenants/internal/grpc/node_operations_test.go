@@ -25,7 +25,7 @@ func TestGetNode_Success(t *testing.T) {
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
 	now := time.Now()
-	mock.ExpectQuery(`SELECT id, node_id, cluster_id, node_name, node_type`).
+	mock.ExpectQuery(`SELECT n\.id, n\.node_id, n\.cluster_id, n\.node_name, n\.node_type`).
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow([]driver.Value{
 			"uuid-1", "node-1", "cluster-1", "my-node", "core",
@@ -34,6 +34,8 @@ func TestGetNode_Success(t *testing.T) {
 			nil, nil,
 			int32(4), int32(16), int32(100),
 			nil, "gitops_seed", nil, "active", now, now,
+			"tenant-1",
+			nil, nil, nil, nil, nil, nil, nil,
 		}...))
 
 	resp, err := server.GetNode(context.Background(), &pb.GetNodeRequest{NodeId: "node-1"})
@@ -83,7 +85,7 @@ func TestGetNode_NotFound(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	mock.ExpectQuery(`SELECT id, node_id`).
+	mock.ExpectQuery(`SELECT n\.id, n\.node_id`).
 		WithArgs("nonexistent").
 		WillReturnError(sql.ErrNoRows)
 
@@ -179,12 +181,14 @@ func TestGetNodeByLogicalName_Success(t *testing.T) {
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
 	now := time.Now()
-	mock.ExpectQuery(`SELECT id, node_id`).
+	mock.ExpectQuery(`SELECT n\.id, n\.node_id`).
 		WithArgs("edge-node-1").
 		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow([]driver.Value{
 			"uuid-1", "edge-node-1", "cluster-1", "edge-1", "edge",
 			nil, "5.6.7.8", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 			nil, "gitops_seed", nil, "active", now, now,
+			"tenant-1",
+			nil, nil, nil, nil, nil, nil, nil,
 		}...))
 
 	resp, err := server.GetNodeByLogicalName(context.Background(), &pb.GetNodeByLogicalNameRequest{NodeId: "edge-node-1"})

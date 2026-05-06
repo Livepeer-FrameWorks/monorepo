@@ -3126,9 +3126,9 @@ func CompleteUpdateWarmupIfReady(ctx context.Context, nodeID, targetRelease stri
 		return false, reason, nil
 	}
 	if updatePhaseRestoresRouting(current.Phase) {
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		setCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		if err := state.DefaultManager().SetNodeOperationalMode(ctx, nodeID, state.NodeModeNormal, "update-orchestrator"); err != nil {
+		if err := state.DefaultManager().SetNodeOperationalMode(setCtx, nodeID, state.NodeModeNormal, "update-orchestrator"); err != nil {
 			return false, "", err
 		}
 		if err := PushOperationalMode(nodeID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL); err != nil {

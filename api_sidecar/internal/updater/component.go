@@ -108,7 +108,7 @@ func WriteComponentVersion(component, version string) error {
 	}
 	values := map[string]string{}
 	if b, readErr := os.ReadFile(path); readErr == nil {
-		for _, line := range strings.Split(string(b), "\n") {
+		for line := range strings.SplitSeq(string(b), "\n") {
 			k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
 			if ok && k != "" {
 				values[k] = v
@@ -159,7 +159,7 @@ func ReadComponentVersions() map[string]string {
 	out := map[string]string{}
 	if path := componentVersionPath(); path != "" {
 		if b, err := os.ReadFile(path); err == nil {
-			for _, line := range strings.Split(string(b), "\n") {
+			for line := range strings.SplitSeq(string(b), "\n") {
 				k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
 				if ok && k != "" {
 					out[k] = v
@@ -297,7 +297,7 @@ func applyMistServer(ctx context.Context, artifact string) error {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
-	if _, err := os.Stat(filepath.Join(staging, "bin", "MistController")); err != nil {
+	if _, statErr := os.Stat(filepath.Join(staging, "bin", "MistController")); statErr != nil {
 		return fmt.Errorf("MistController missing from artifact")
 	}
 	replacement, err := mistPayloadReplacement(staging, root)
@@ -323,19 +323,19 @@ func mistPayloadReplacement(staging, root string) (dirReplacement, error) {
 		_ = os.RemoveAll(replacementRoot)
 		return dirReplacement{}, err
 	}
-	if info, err := os.Stat(root); err == nil {
+	if info, statErr := os.Stat(root); statErr == nil {
 		if !info.IsDir() {
 			return cleanup(fmt.Errorf("MistServer install root is not a directory: %s", root))
 		}
-		if err := copyDirTree(root, replacementRoot); err != nil {
-			return cleanup(err)
+		if copyErr := copyDirTree(root, replacementRoot); copyErr != nil {
+			return cleanup(copyErr)
 		}
-	} else if errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(replacementRoot, 0o755); err != nil {
-			return cleanup(err)
+	} else if errors.Is(statErr, os.ErrNotExist) {
+		if mkErr := os.MkdirAll(replacementRoot, 0o755); mkErr != nil {
+			return cleanup(mkErr)
 		}
 	} else {
-		return cleanup(err)
+		return cleanup(statErr)
 	}
 
 	payloadDirs := []string{"bin", "lib"}
@@ -347,7 +347,7 @@ func mistPayloadReplacement(staging, root string) (dirReplacement, error) {
 			if dir == "lib" {
 				if _, oldErr := os.Stat(filepath.Join(root, dir)); oldErr == nil {
 					return cleanup(fmt.Errorf("MistServer artifact missing %s directory required by current install", dir))
-				} else if oldErr != nil && !errors.Is(oldErr, os.ErrNotExist) {
+				} else if !errors.Is(oldErr, os.ErrNotExist) {
 					return cleanup(oldErr)
 				}
 			}
@@ -508,21 +508,6 @@ func executableFromArtifact(artifact string, names []string, prefix string) (str
 		return "", cleanup, fmt.Errorf("component binary not found in artifact")
 	}
 	return found, cleanup, nil
-}
-
-func extractArtifactUnder(root, artifact string) (string, error) {
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return "", err
-	}
-	staging, err := os.MkdirTemp(root, ".update-*")
-	if err != nil {
-		return "", err
-	}
-	if err := extractInto(artifact, staging); err != nil {
-		_ = os.RemoveAll(staging)
-		return "", err
-	}
-	return staging, nil
 }
 
 func extractArtifactSibling(root, artifact string) (string, error) {
@@ -686,20 +671,21 @@ func replaceDirsAtomically(replacements []dirReplacement, after func() error) er
 	prepared := make([]dirReplacement, len(replacements))
 	copy(prepared, replacements)
 	for i := range prepared {
-		if _, err := os.Stat(prepared[i].dst); err == nil {
-			if err := exchangeDirs(prepared[i].src, prepared[i].dst); err != nil {
+		_, statErr := os.Stat(prepared[i].dst)
+		if statErr == nil {
+			if exchErr := exchangeDirs(prepared[i].src, prepared[i].dst); exchErr != nil {
 				rollbackErr := rollbackDirReplacements(prepared)
-				return errors.Join(err, rollbackErr)
+				return errors.Join(exchErr, rollbackErr)
 			}
 			prepared[i].hadDst = true
 			prepared[i].installed = true
 			continue
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return errors.Join(err, rollbackDirReplacements(prepared))
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return errors.Join(statErr, rollbackDirReplacements(prepared))
 		}
-		if err := os.Rename(prepared[i].src, prepared[i].dst); err != nil {
+		if renameErr := os.Rename(prepared[i].src, prepared[i].dst); renameErr != nil {
 			rollbackErr := rollbackDirReplacements(prepared)
-			return errors.Join(err, rollbackErr)
+			return errors.Join(renameErr, rollbackErr)
 		}
 		prepared[i].installed = true
 	}

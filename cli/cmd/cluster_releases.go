@@ -364,7 +364,7 @@ func edgeReleaseQMClientForGitOpsSync(cmd *cobra.Command, rc *resolvedCluster, s
 	if serviceToken == "" {
 		env, envErr := rc.SharedEnv()
 		if envErr != nil {
-			return nil, fwcfg.Context{}, nil, fmt.Errorf("%w; fallback service-token load failed: %v", err, envErr)
+			return nil, fwcfg.Context{}, nil, fmt.Errorf("%w; fallback service-token load failed: %w", err, envErr)
 		}
 		serviceToken = strings.TrimSpace(env["SERVICE_TOKEN"])
 	}
@@ -382,7 +382,7 @@ func edgeReleaseQMClientForGitOpsSync(cmd *cobra.Command, rc *resolvedCluster, s
 		AllowInsecure: isDevProfile(rc.Manifest),
 	})
 	if sessErr != nil {
-		return nil, fwcfg.Context{}, nil, fmt.Errorf("%w; fallback remote access failed: %v", err, sessErr)
+		return nil, fwcfg.Context{}, nil, fmt.Errorf("%w; fallback remote access failed: %w", err, sessErr)
 	}
 	ep, epErr := sess.Endpoint(cmd.Context(), remoteaccess.ServiceTarget{
 		Name:            "quartermaster",
@@ -390,7 +390,7 @@ func edgeReleaseQMClientForGitOpsSync(cmd *cobra.Command, rc *resolvedCluster, s
 	})
 	if epErr != nil {
 		_ = sess.Close()
-		return nil, fwcfg.Context{}, nil, fmt.Errorf("%w; fallback Quartermaster endpoint failed: %v", err, epErr)
+		return nil, fwcfg.Context{}, nil, fmt.Errorf("%w; fallback Quartermaster endpoint failed: %w", err, epErr)
 	}
 	fallbackQM, qmErr := qmclient.NewGRPCClient(qmclient.GRPCConfig{
 		GRPCAddr:      ep.DialAddr,
@@ -402,7 +402,7 @@ func edgeReleaseQMClientForGitOpsSync(cmd *cobra.Command, rc *resolvedCluster, s
 	})
 	if qmErr != nil {
 		_ = sess.Close()
-		return nil, fwcfg.Context{}, nil, fmt.Errorf("%w; fallback Quartermaster client failed: %v", err, qmErr)
+		return nil, fwcfg.Context{}, nil, fmt.Errorf("%w; fallback Quartermaster client failed: %w", err, qmErr)
 	}
 	return fallbackQM, fwcfg.Context{
 		Persona: fwcfg.PersonaPlatform,

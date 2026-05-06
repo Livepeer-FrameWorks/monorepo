@@ -311,7 +311,7 @@ func TestBootstrapServiceDerivesAdvertiseHostFromNodeID(t *testing.T) {
 	mock.ExpectExec("UPDATE quartermaster.service_instances\\s+SET status = 'stopped'").
 		WithArgs("commodore", "cluster-1", sqlmock.AnyArg(), "10.88.0.2", "http", int32(18005)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery("(?s)SELECT.*FROM quartermaster\\.infrastructure_nodes.*WHERE node_id = \\$1").
+	mock.ExpectQuery("(?s)SELECT.*FROM quartermaster\\.infrastructure_nodes.*WHERE n\\.node_id = \\$1").
 		WithArgs("node-1").
 		WillReturnError(sql.ErrNoRows)
 
@@ -369,7 +369,7 @@ func TestBootstrapServiceUsesAdvertiseHostWhenNodeAddressIsLoopback(t *testing.T
 	mock.ExpectExec("UPDATE quartermaster.service_instances\\s+SET status = 'stopped'").
 		WithArgs("commodore", "cluster-1", sqlmock.AnyArg(), "commodore", "http", int32(18005)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery("(?s)SELECT.*FROM quartermaster\\.infrastructure_nodes.*WHERE node_id = \\$1").
+	mock.ExpectQuery("(?s)SELECT.*FROM quartermaster\\.infrastructure_nodes.*WHERE n\\.node_id = \\$1").
 		WithArgs("node-1").
 		WillReturnError(sql.ErrNoRows)
 

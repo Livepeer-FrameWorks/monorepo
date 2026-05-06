@@ -41,12 +41,14 @@ func TestCreateNode_Success(t *testing.T) {
 
 	// queryNode re-read
 	now := time.Now()
-	mock.ExpectQuery(`SELECT id, node_id, cluster_id, node_name, node_type`).
+	mock.ExpectQuery(`SELECT n\.id, n\.node_id, n\.cluster_id, n\.node_name, n\.node_type`).
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow([]driver.Value{
 			"uuid-1", "node-1", "cluster-1", "my-node", "core",
 			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 			nil, "gitops_seed", nil, "active", now, now,
+			"tenant-1",
+			nil, nil, nil, nil, nil, nil, nil,
 		}...))
 
 	resp, err := server.CreateNode(context.Background(), &pb.CreateNodeRequest{
@@ -128,7 +130,7 @@ func TestCreateNode_Idempotent(t *testing.T) {
 	}
 
 	// Two identical calls should both succeed via ON CONFLICT DO UPDATE.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		mock.ExpectQuery(`SELECT EXISTS`).
 			WithArgs("cluster-1").
 			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
@@ -143,12 +145,14 @@ func TestCreateNode_Idempotent(t *testing.T) {
 			).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
-		mock.ExpectQuery(`SELECT id, node_id, cluster_id, node_name, node_type`).
+		mock.ExpectQuery(`SELECT n\.id, n\.node_id, n\.cluster_id, n\.node_name, n\.node_type`).
 			WithArgs("node-1").
 			WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow([]driver.Value{
 				"uuid-1", "node-1", "cluster-1", "my-node", "core",
 				nil, "1.2.3.4", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 				nil, "gitops_seed", nil, "active", now, now,
+				"tenant-1",
+				nil, nil, nil, nil, nil, nil, nil,
 			}...))
 
 		resp, callErr := server.CreateNode(context.Background(), req)

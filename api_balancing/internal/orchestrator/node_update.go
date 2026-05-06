@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -160,7 +161,9 @@ func ApplyMistUpdate(ctx context.Context, req MistUpdateRequest) error {
 		}
 		ready, _, err := control.CompleteUpdateWarmupIfReady(ctx, req.NodeID, req.TargetRelease, expected, progress.UpdatedAt, nil)
 		if err != nil {
-			_ = fenceNodeAfterUpdateFailure(ctx, req.NodeID)
+			if fenceErr := fenceNodeAfterUpdateFailure(ctx, req.NodeID); fenceErr != nil {
+				err = errors.Join(err, fmt.Errorf("post-warmup fence: %w", fenceErr))
+			}
 			return persistFailure(ctx, req.NodeID, req.TargetRelease, err, progress.Deadline)
 		}
 		if ready {
