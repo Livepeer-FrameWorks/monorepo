@@ -1,6 +1,6 @@
 ---
-title: "ClickHouse Schema Updates"
-description: "Current ClickHouse bootstrap behavior and how to handle schema changes."
+title: "ClickHouse Schema Migrations"
+description: "Versioned migrations for upgrading ClickHouse schemas."
 sidebar:
   order: 8
 ---
@@ -9,37 +9,31 @@ import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Rolling deploy safety">
   Apply expand-compatible migrations **before** deploying service versions that depend on new
-  columns/tables. Destructive changes and historical data rewrites need an explicit release runbook.
+  columns/tables. Heavy mutations and destructive contract changes are separate release steps.
 </Aside>
 
 ## Overview
 
-ClickHouse currently has a bootstrap schema, not an implemented versioned
-migration runner:
+ClickHouse schema changes are managed through embedded, versioned migrations
+that follow the same model as PostgreSQL. The runner is wired into the same
+CLI commands.
 
-| Scenario      | What to use                                                                                |
-| ------------- | ------------------------------------------------------------------------------------------ |
-| Fresh install | `frameworks cluster init clickhouse` creates databases; apply the baseline schema manually |
-| Upgrading     | Manual SQL from release notes until a ClickHouse migration runner lands                    |
+| Scenario      | What to use                                                                                              |
+| ------------- | -------------------------------------------------------------------------------------------------------- |
+| Fresh install | `frameworks cluster init clickhouse` creates databases, applies the baseline schema, and runs migrations |
+| Upgrading     | `frameworks cluster migrate` applies pending migrations from `pkg/database/sql/clickhouse/migrations/`   |
 
-The embedded baseline schema lives in `pkg/database/sql/clickhouse/periscope.sql`
-and is mounted automatically by the local Docker Compose ClickHouse service on a
-fresh container. In CLI-managed deployments, `frameworks cluster init
-clickhouse` creates the configured databases only; apply the baseline SQL with
-`clickhouse-client` until a ClickHouse schema/migration runner lands. The
-repository has a reserved `pkg/database/sql/clickhouse/migrations/` path, but
-there are no versioned ClickHouse migration files there today and `frameworks
-cluster migrate` does not apply ClickHouse migrations.
+`cluster init clickhouse` and `cluster migrate` are idempotent. Each migration
+records itself in a per-database `_migrations` ledger; re-running is a no-op.
 
-## Planned migration structure
+## Migration structure
 
-When ClickHouse migrations are implemented, use the same database/version/phase
-shape as PostgreSQL:
+Migrations are organized by target database, release version, and phase:
 
 ```
 pkg/database/sql/clickhouse/migrations/
 └── periscope/
-    └── v1.1.0/
+    └── v0.2.31/
         ├── expand/
         │   ├── 001_add_filename_to_artifacts.sql
         │   └── 002_add_viewer_node_tracking.sql
@@ -49,68 +43,131 @@ pkg/database/sql/clickhouse/migrations/
             └── 001_drop_legacy_artifact_view.sql
 ```
 
+The first path segment after `clickhouse/migrations/` must match a configured
+ClickHouse database name (today: `periscope`). The CLI embeds these files,
+applies only migrations whose database exists in the manifest, and records
+applied files in that database's `_migrations` table.
+
+## Reconciliation model
+
+The baseline schema in `pkg/database/sql/clickhouse/<db>.sql` is the cumulative
+current state at the latest release tag. Migrations advance the schema forward
+in subsequent releases.
+
+On a fresh install, `frameworks cluster init clickhouse`:
+
+1. Creates the configured databases.
+2. Applies the baseline schema (DDL is `IF NOT EXISTS`, safe to re-run).
+3. Runs every embedded migration up to the cluster's resolved channel version.
+   The migration SQL is idempotent (also `IF NOT EXISTS`), so DDL re-application
+   no-ops on objects already created by the baseline; the `_migrations` ledger
+   row is recorded by the same step.
+
+On upgrades, `frameworks cluster migrate` runs only the migrations whose
+ledger row is missing. There is no blind ledger pre-seed: every recorded
+migration was produced by an actual SQL apply.
+
 ## Upgrade procedure
 
-Until the runner exists:
-
-1. **For a new CLI-managed cluster**, create the databases and apply the baseline schema:
-
-```bash
-frameworks cluster init clickhouse
-clickhouse-client -h <host> < pkg/database/sql/clickhouse/periscope.sql
-```
-
-2. **For upgrades**, check release notes for required ClickHouse DDL and apply the DDL in order:
+1. **Check release notes** for required ClickHouse DDL.
+2. **Confirm the phase**. Routine rolling upgrades apply `expand` migrations
+   before deploying new binaries. `postdeploy` migrations cover heavy
+   `MODIFY COLUMN` rewrites or `ALTER TABLE … UPDATE/DELETE` mutations and run
+   after binaries are live. `contract` migrations are explicit cleanup with
+   `--yes` required.
+3. **Apply migrations** through the CLI:
 
 ```bash
-clickhouse-client -h <host> < pkg/database/sql/clickhouse/migrations/periscope/v1.1.0/expand/001_add_filename_to_artifacts.sql
+frameworks cluster migrate validate
+frameworks cluster migrate --phase expand
 ```
 
-3. **Verify** the changes:
+`validate` is fast and safe to run anywhere — it checks the embedded migration
+tree against the layout and per-phase safety rules.
+
+4. **Dry-run first** to see what will change:
 
 ```bash
-clickhouse-client --query "DESCRIBE TABLE periscope.artifact_events" | grep filename
+frameworks cluster migrate --phase expand --dry-run
 ```
 
-4. **Deploy** new service versions after the schema is in place:
+Dry-run runs the role under `ansible-playbook --check --diff`. The role
+explicitly skips every mutating step (ledger table create, SQL apply, ledger
+insert) and only reports pending migrations.
+
+5. **Apply** for real:
 
 ```bash
-frameworks cluster upgrade periscope-ingest --version v1.1.0
+frameworks cluster migrate --phase expand --to-version v0.5.0
 ```
 
-5. **Run any required analytics background data migration** documented in the release notes.
-   ClickHouse schema DDL does not automatically repopulate historical analytics
-   rows into new event fields, projections, or materialized views.
+`--to-version` is optional; when omitted the cluster's resolved channel
+version is used.
 
-## ON CLUSTER / Replicated setups
+6. **Deploy services** after expand migrations are in place:
 
-<Aside type="note">
-  For Replicated tables or multi-shard deployments, migrations must use `ON CLUSTER`:
-</Aside>
+```bash
+frameworks cluster upgrade --all
+```
+
+7. **Run any required postdeploy** documented in the release notes:
+
+```bash
+frameworks cluster migrate --phase postdeploy --to-version v0.5.0
+```
+
+## Ledger details
+
+The role creates `<db>._migrations` per ClickHouse database with this shape:
 
 ```sql
-ALTER TABLE periscope.artifact_events ON CLUSTER '{cluster}'
-  ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
+CREATE TABLE IF NOT EXISTS _migrations (
+  version       LowCardinality(String),
+  phase         LowCardinality(String),
+  seq           UInt32,
+  filename      String,
+  checksum      FixedString(64),
+  applied_at    DateTime64(3) DEFAULT now64()
+) ENGINE = ReplacingMergeTree(applied_at)
+ORDER BY (version, phase, seq);
 ```
 
-Consult your ClickHouse topology - some setups require applying DDL on each node directly.
+`ReplacingMergeTree` collapses retried-insert duplicates on merge. Reads use
+`argMax(checksum, applied_at)` and surface `uniqExact(checksum)` so a crashed
+mid-write that left two distinct checksums under the same key is flagged as a
+hard failure, not silently resolved.
+
+If a migration file's content changes after it has been applied, the role
+fails on checksum mismatch. Treat applied migrations as immutable.
 
 ## Writing migrations
 
 Guidelines for contributors:
 
-1. **Use `IF NOT EXISTS` guards** - migrations must be idempotent
-2. **Prefer expand-only changes** - add columns/tables, avoid drops
-3. **Use Nullable for new columns** - safe for rollback (old code ignores them)
-4. **Update bootstrap schema** - `pkg/database/sql/clickhouse/periscope.sql` must reflect final state
-5. **One migration per logical change** - easier to track and debug
-6. **Put the file in the correct phase directory** - `expand`, `postdeploy`, or
-   `contract`
-7. **Keep historical rewrites explicit** - large `ALTER ... UPDATE`,
-   materialized-view rebuilds, or replay-from-Kafka jobs should be release
-   steps with progress and verification, not incidental DDL
+1. **`IF NOT EXISTS` is mandatory** on every `CREATE TABLE / VIEW / DICTIONARY`.
+   This is what makes idempotent re-apply safe across both fresh installs (where
+   the baseline already created the object) and existing clusters. The validator
+   rejects migrations missing this guard.
+2. **Prefer expand-only changes** in routine upgrades — add columns/tables,
+   avoid drops, avoid type rewrites.
+3. **Use `Nullable` for new columns** — old binaries ignore them, rollback is
+   safe.
+4. **Update the baseline schema in the same release**: edit
+   `pkg/database/sql/clickhouse/<db>.sql` so a fresh install ends in the same
+   state as an upgraded one. The migration runs both on fresh installs (no-op
+   against the freshly applied baseline) and on upgrades (the actual schema
+   change).
+5. **One migration per logical change** — easier to track and debug.
+6. **Pick the correct phase**:
+   - `expand`: additive, safe alongside old + new binaries.
+   - `postdeploy`: heavy `MODIFY COLUMN` rewrites, `ALTER TABLE … UPDATE/DELETE`
+     mutations, materialized-view rebuilds.
+   - `contract`: drops, renames, post-cleanup.
+7. **Large historical rewrites** (long `ALTER … UPDATE`, MV rebuilds, replay
+   from Kafka) need release runbooks with progress and verification, not
+   incidental DDL inside a migration.
 
-Example migration file:
+Example expand migration:
 
 ```sql
 ALTER TABLE periscope.artifact_events
@@ -120,14 +177,30 @@ ALTER TABLE periscope.artifact_state_current
   ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
 ```
 
+## Single-node vs replicated
+
+The default schema is single-node. If you run a replicated topology, every
+migration that creates or alters a `Replicated*` table must use `ON CLUSTER
+'{cluster}'`:
+
+```sql
+ALTER TABLE periscope.artifact_events ON CLUSTER '{cluster}'
+  ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
+```
+
+The role is single-node aware today; replicated support is a future role var.
+Until then, replicated topologies need to apply migrations on each shard
+themselves.
+
 ## Rollback
 
-- **Nullable columns are safe to leave** - older service versions simply won't populate them
-- **Don't drop columns during rollback** unless explicitly required
-- Re-deploying an older service version is usually sufficient
-- **Do not rely on DDL rollback for normal recovery** - keep expand changes
+- **Nullable columns are safe to leave** — older service versions simply won't
+  populate them.
+- **Don't drop columns during rollback** unless explicitly required.
+- Re-deploying an older service version is usually sufficient.
+- **Do not rely on DDL rollback for normal recovery** — keep expand changes
   compatible, redeploy the previous binary, and leave extra columns in place
-  until the contract release
+  until the contract release.
 
 ## Troubleshooting
 
@@ -140,7 +213,16 @@ Code: 16. DB::Exception: Unknown column 'filename' in column list
 Cause: Service deployed before migration was applied.
 Fix: Apply the migration, then restart the service.
 
-**Check if column exists:**
+**Check ledger contents:**
+
+```sql
+SELECT version, phase, seq, filename, checksum, applied_at
+FROM periscope._migrations
+ORDER BY version, phase, seq
+FORMAT Vertical;
+```
+
+**Check if a column exists:**
 
 ```sql
 SELECT name, type FROM system.columns

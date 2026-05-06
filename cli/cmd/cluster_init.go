@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"time"
 
 	"frameworks/cli/internal/ux"
@@ -82,7 +83,7 @@ func runInit(cmd *cobra.Command, rc *resolvedCluster, service string) error {
 
 	switch service {
 	case "clickhouse", "all":
-		if err := initClickHouse(ctx, cmd, manifest, sshPool); err != nil {
+		if err := initClickHouse(ctx, cmd, rc, sshPool); err != nil {
 			return fmt.Errorf("failed to initialize clickhouse: %w", err)
 		}
 	}
@@ -133,7 +134,7 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 	config := provisioner.ServiceConfig{
 		Version: pg.Version,
 		Port:    pg.EffectivePort(),
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"platform_channel": manifest.ResolvedChannel(),
 			"databases":        databases,
 		},
@@ -270,9 +271,7 @@ func applyPostgresSchemasAndMigrations(
 
 func configWithMetadata(config provisioner.ServiceConfig) provisioner.ServiceConfig {
 	metadata := make(map[string]any, len(config.Metadata)+1)
-	for k, v := range config.Metadata {
-		metadata[k] = v
-	}
+	maps.Copy(metadata, config.Metadata)
 	config.Metadata = metadata
 	return config
 }
@@ -302,9 +301,9 @@ func initKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.Mani
 		return err
 	}
 
-	topicsConfig := []map[string]interface{}{}
+	topicsConfig := []map[string]any{}
 	for _, topic := range manifest.Infrastructure.Kafka.Topics {
-		topicCfg := map[string]interface{}{
+		topicCfg := map[string]any{
 			"name":               topic.Name,
 			"partitions":         topic.Partitions,
 			"replication_factor": topic.ReplicationFactor,
@@ -317,7 +316,7 @@ func initKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.Mani
 
 	config := provisioner.ServiceConfig{
 		Port: broker.Port,
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"topics": topicsConfig,
 		},
 	}
@@ -325,16 +324,22 @@ func initKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.Mani
 	return prov.Initialize(ctx, host, config)
 }
 
-// initClickHouse initializes ClickHouse databases and tables
-func initClickHouse(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
+// initClickHouse initializes ClickHouse databases, applies the embedded
+// baseline schema, and runs any embedded migrations up to the cluster's
+// resolved channel version. Reconciliation parallels initPostgres: schema
+// (idempotent IF NOT EXISTS DDL) followed by versioned migrations whose role
+// task records ledger rows. No blind ledger pre-seed — every migration is
+// applied through migrate.yml so the ledger only ever reflects executed SQL.
+func initClickHouse(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, pool *ssh.Pool) error {
+	manifest := rc.Manifest
+	out := cmd.OutOrStdout()
 	if manifest.Infrastructure.ClickHouse == nil || !manifest.Infrastructure.ClickHouse.Enabled {
-		fmt.Fprintln(cmd.OutOrStdout(), "ClickHouse not enabled, skipping...")
+		fmt.Fprintln(out, "ClickHouse not enabled, skipping...")
 		return nil
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), "Initializing ClickHouse databases and tables...")
+	fmt.Fprintln(out, "Initializing ClickHouse databases and tables...")
 
-	// Get host
 	host, ok := manifest.GetHost(manifest.Infrastructure.ClickHouse.Host)
 	if !ok {
 		return fmt.Errorf("clickhouse host %s not found", manifest.Infrastructure.ClickHouse.Host)
@@ -346,12 +351,76 @@ func initClickHouse(ctx context.Context, cmd *cobra.Command, manifest *inventory
 		return err
 	}
 
+	// Load the manifest's shared env once — both schema apply and migration
+	// apply reach the server via clickhouse-client and need the password.
+	chEnv, envErr := rc.SharedEnv()
+	if envErr != nil {
+		return fmt.Errorf("load manifest env_files: %w", envErr)
+	}
+	chPassword := chEnv["CLICKHOUSE_PASSWORD"]
+
 	config := provisioner.ServiceConfig{
 		Port: ch.Port,
 		Metadata: map[string]any{
-			"databases": ch.Databases,
+			"databases":           ch.Databases,
+			"clickhouse_password": chPassword,
 		},
 	}
 
-	return prov.Initialize(ctx, host, config)
+	if initErr := prov.Initialize(ctx, host, config); initErr != nil {
+		return initErr
+	}
+
+	if len(ch.Databases) == 0 {
+		return nil
+	}
+
+	schemaItems, schemaErr := provisioner.BuildClickHouseSchemaItems(ch.Databases)
+	if schemaErr != nil {
+		return fmt.Errorf("collect clickhouse baseline schemas: %w", schemaErr)
+	}
+	if len(schemaItems) > 0 {
+		applier, ok := prov.(provisioner.SchemaApplier)
+		if !ok {
+			return fmt.Errorf("clickhouse provisioner does not implement SchemaApplier")
+		}
+		schemaCfg := configWithMetadata(config)
+		schemaCfg.Metadata["clickhouse_schema_items"] = schemaItems
+		fmt.Fprintln(out, "Applying ClickHouse baseline schemas...")
+		if err := applier.ApplySchemas(ctx, host, schemaCfg); err != nil {
+			return fmt.Errorf("apply clickhouse baseline schemas: %w", err)
+		}
+		ux.Success(out, "ClickHouse baseline schemas applied")
+	}
+
+	hasMigrations, hasErr := provisioner.HasClickHouseMigrations(ch.Databases, "expand")
+	if hasErr != nil {
+		return hasErr
+	}
+	if !hasMigrations {
+		return nil
+	}
+	target, targetErr := resolveMigrationTarget(rc, "")
+	if targetErr != nil {
+		return fmt.Errorf("resolve init target version: %w", targetErr)
+	}
+	migrationItems, miErr := provisioner.BuildClickHouseMigrationItems(ch.Databases, "expand", target)
+	if miErr != nil {
+		return fmt.Errorf("collect clickhouse migrations: %w", miErr)
+	}
+	if len(migrationItems) == 0 {
+		return nil
+	}
+	migrator, ok := prov.(provisioner.Migrator)
+	if !ok {
+		return fmt.Errorf("clickhouse provisioner does not implement Migrator")
+	}
+	migCfg := configWithMetadata(config)
+	migCfg.Metadata["clickhouse_migrate_items"] = migrationItems
+	fmt.Fprintf(out, "Applying ClickHouse expand migrations up to %s...\n", target)
+	if err := migrator.ApplyMigrations(ctx, host, migCfg, false); err != nil {
+		return fmt.Errorf("apply clickhouse migrations: %w", err)
+	}
+	ux.Success(out, "ClickHouse migrations applied")
+	return nil
 }

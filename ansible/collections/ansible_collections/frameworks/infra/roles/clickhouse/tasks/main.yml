@@ -15,9 +15,17 @@
   ansible.builtin.import_tasks: init.yml
   tags: [init, never]
 
+- name: Clickhouse | schema
+  ansible.builtin.import_tasks: schema.yml
+  tags: [schema, never]
+
 - name: Clickhouse | seed
   ansible.builtin.import_tasks: seed.yml
   tags: [seed, never]
+
+- name: Clickhouse | migrate
+  ansible.builtin.import_tasks: migrate.yml
+  tags: [migrate, never]
 
 - name: Clickhouse | restart
   ansible.builtin.import_tasks: restart.yml

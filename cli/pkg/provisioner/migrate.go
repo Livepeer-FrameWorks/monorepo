@@ -86,23 +86,47 @@ func discoverMigrations(root string) ([]Migration, error) {
 	return discoverMigrationsInFS(dbsql.Content, root, knownDBs)
 }
 
-func ValidateEmbeddedMigrations() error {
-	migrations, err := discoverAllMigrationsForValidation()
+func ValidateEmbeddedPostgresMigrations() error {
+	migrations, err := discoverAllPostgresMigrationsForValidation()
 	if err != nil {
 		return err
 	}
-	return validateMigrationSet(migrations)
+	return validatePostgresMigrationSet(migrations)
 }
 
-// discoverAllMigrationsForValidation returns the full embedded set with no
-// target-version cap. Only the validator should consume this — runtime callers
-// must use BuildMigrationItems with a concrete targetVersion.
-func discoverAllMigrationsForValidation() ([]Migration, error) {
+// ValidateEmbeddedClickHouseMigrations validates the embedded
+// pkg/database/sql/clickhouse/migrations/ tree under CH-specific phase rules.
+// Called by `frameworks cluster migrate validate` alongside the Postgres
+// validator; combined issues surface to the operator.
+func ValidateEmbeddedClickHouseMigrations() error {
+	migrations, err := discoverAllClickHouseMigrationsForValidation()
+	if err != nil {
+		return err
+	}
+	return validateClickHouseMigrationSet(migrations)
+}
+
+// discoverAllPostgresMigrationsForValidation returns the full embedded set with
+// no target-version cap. Only the validator should consume this — runtime
+// callers must use BuildMigrationItems with a concrete targetVersion.
+func discoverAllPostgresMigrationsForValidation() ([]Migration, error) {
 	knownDBs, err := knownMigrationDatabases()
 	if err != nil {
 		return nil, err
 	}
 	return discoverMigrationsInFS(dbsql.Content, "migrations", knownDBs)
+}
+
+// discoverAllClickHouseMigrationsForValidation is the CH equivalent of the
+// Postgres discovery used for validation. It walks
+// pkg/database/sql/clickhouse/migrations under the same
+// <db>/<version>/<phase>/NNN_*.sql layout.
+func discoverAllClickHouseMigrationsForValidation() ([]Migration, error) {
+	knownDBs, err := knownClickHouseDatabases()
+	if err != nil {
+		return nil, err
+	}
+	return discoverMigrationsInFS(dbsql.Content, "clickhouse/migrations", knownDBs)
 }
 
 func discoverMigrationsInFS(fsys fs.FS, root string, knownDBs map[string]bool) ([]Migration, error) {
@@ -172,24 +196,9 @@ func discoverMigrationsInFS(fsys fs.FS, root string, knownDBs map[string]bool) (
 	return out, nil
 }
 
-func validateMigrationSet(migrations []Migration) error {
-	var issues []MigrationValidationIssue
-	seen := map[string]string{}
+func validatePostgresMigrationSet(migrations []Migration) error {
+	issues := validateSequenceCollisions(migrations)
 	for _, migration := range migrations {
-		key := strings.Join([]string{
-			migration.Database,
-			migration.Version,
-			migration.Phase,
-			strconv.Itoa(migration.Sequence),
-		}, ":")
-		if existing, ok := seen[key]; ok {
-			issues = append(issues, MigrationValidationIssue{
-				Path:    migration.Path,
-				Message: fmt.Sprintf("sequence collides with %s", existing),
-			})
-		}
-		seen[key] = migration.Path
-
 		content := migration.content
 		if migration.Phase == "expand" {
 			for _, pattern := range expandUnsafeSQLPatterns {
@@ -240,6 +249,109 @@ func validateMigrationSet(migrations []Migration) error {
 	return nil
 }
 
+// validateSequenceCollisions reports duplicate (database, version, phase,
+// sequence) keys. Shared between Postgres and ClickHouse validation since the
+// embed-tree layout is the same.
+func validateSequenceCollisions(migrations []Migration) []MigrationValidationIssue {
+	var issues []MigrationValidationIssue
+	seen := map[string]string{}
+	for _, migration := range migrations {
+		key := strings.Join([]string{
+			migration.Database,
+			migration.Version,
+			migration.Phase,
+			strconv.Itoa(migration.Sequence),
+		}, ":")
+		if existing, ok := seen[key]; ok {
+			issues = append(issues, MigrationValidationIssue{
+				Path:    migration.Path,
+				Message: fmt.Sprintf("sequence collides with %s", existing),
+			})
+		}
+		seen[key] = migration.Path
+	}
+	return issues
+}
+
+// ClickHouse-specific validation rules. Day-one rules:
+//   - DROP TABLE/COLUMN/VIEW/DICTIONARY → contract only
+//   - RENAME → contract only
+//   - ALTER TABLE … MODIFY COLUMN <name> <newtype> (type rewrites) → postdeploy only
+//   - ALTER TABLE … UPDATE/DELETE (mutations) → postdeploy/contract only
+//   - CREATE TABLE/VIEW/DICTIONARY without IF NOT EXISTS → reject (idempotent
+//     re-apply is the reconciliation contract; missing IF NOT EXISTS breaks it)
+var (
+	chDropPattern         = regexp.MustCompile(`(?is)\bDROP\s+(TABLE|COLUMN|VIEW|DICTIONARY|DATABASE)\b`)
+	chRenamePattern       = regexp.MustCompile(`(?is)\bRENAME\s+(TABLE|COLUMN|DICTIONARY)\b`)
+	chModifyTypePattern   = regexp.MustCompile(`(?is)\bALTER\s+TABLE\b[^;]*\bMODIFY\s+COLUMN\b`)
+	chMutationPattern     = regexp.MustCompile(`(?is)\bALTER\s+TABLE\b[^;]*\b(UPDATE|DELETE)\b`)
+	chCreateObjectPattern = regexp.MustCompile(`(?is)\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:MATERIALIZED\s+)?(?:TABLE|VIEW|DICTIONARY)\b`)
+	chIfNotExistsPattern  = regexp.MustCompile(`(?is)\bIF\s+NOT\s+EXISTS\b`)
+)
+
+func validateClickHouseMigrationSet(migrations []Migration) error {
+	issues := validateSequenceCollisions(migrations)
+	for _, migration := range migrations {
+		content := migration.content
+
+		switch migration.Phase {
+		case "expand":
+			if chDropPattern.MatchString(content) {
+				issues = append(issues, MigrationValidationIssue{
+					Path:    migration.Path,
+					Message: "DROP statements belong in contract migrations",
+				})
+			}
+			if chRenamePattern.MatchString(content) {
+				issues = append(issues, MigrationValidationIssue{
+					Path:    migration.Path,
+					Message: "RENAME statements belong in contract migrations",
+				})
+			}
+			if chModifyTypePattern.MatchString(content) {
+				issues = append(issues, MigrationValidationIssue{
+					Path:    migration.Path,
+					Message: "ALTER TABLE … MODIFY COLUMN type rewrites are heavy in ClickHouse and belong in postdeploy",
+				})
+			}
+			if chMutationPattern.MatchString(content) {
+				issues = append(issues, MigrationValidationIssue{
+					Path:    migration.Path,
+					Message: "ALTER TABLE UPDATE/DELETE mutations belong in postdeploy or contract",
+				})
+			}
+		case "postdeploy":
+			if chDropPattern.MatchString(content) {
+				issues = append(issues, MigrationValidationIssue{
+					Path:    migration.Path,
+					Message: "DROP statements belong in contract migrations",
+				})
+			}
+			if chRenamePattern.MatchString(content) {
+				issues = append(issues, MigrationValidationIssue{
+					Path:    migration.Path,
+					Message: "RENAME statements belong in contract migrations",
+				})
+			}
+		}
+
+		// Reconciliation requires IF NOT EXISTS on every CREATE so the same
+		// migration re-applies cleanly on a freshly-baselined cluster.
+		for _, stmt := range splitSQLStatements(content) {
+			if chCreateObjectPattern.MatchString(stmt) && !chIfNotExistsPattern.MatchString(stmt) {
+				issues = append(issues, MigrationValidationIssue{
+					Path:    migration.Path,
+					Message: "CREATE TABLE/VIEW/DICTIONARY must use IF NOT EXISTS for idempotent re-apply against an existing baseline",
+				})
+			}
+		}
+	}
+	if len(issues) > 0 {
+		return &MigrationValidationError{Issues: issues}
+	}
+	return nil
+}
+
 func IsMigrationValidationError(err error) bool {
 	var validationErr *MigrationValidationError
 	return errors.As(err, &validationErr)
@@ -250,6 +362,24 @@ func knownMigrationDatabases() (map[string]bool, error) {
 	entries, err := fs.ReadDir(dbsql.Content, "schema")
 	if err != nil {
 		return nil, fmt.Errorf("read schema databases: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		out[strings.TrimSuffix(entry.Name(), ".sql")] = true
+	}
+	return out, nil
+}
+
+// knownClickHouseDatabases discovers ClickHouse databases by listing
+// pkg/database/sql/clickhouse/<db>.sql baseline files. Used by both the
+// migration discovery and the validate subcommand.
+func knownClickHouseDatabases() (map[string]bool, error) {
+	out := map[string]bool{}
+	entries, err := fs.ReadDir(dbsql.Content, "clickhouse")
+	if err != nil {
+		return nil, fmt.Errorf("read clickhouse databases: %w", err)
 	}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {

@@ -1,0 +1,67 @@
+---
+# ClickHouse baseline schema items: each item is {name, database, sql}.
+# Mirrors seed.yml's staging pattern — write SQL to a tempfile on target then
+# stream through clickhouse-client via --queries-file (argv-size safety). The
+# baseline files themselves use CREATE … IF NOT EXISTS so re-running is a
+# no-op; this task is the bootstrap phase before any migrations apply.
+
+- name: Resolve a reachable local ClickHouse client host
+  ansible.builtin.include_tasks: _probe_client.yml
+  when: clickhouse_schema_items | default([]) | length > 0
+
+- name: Validate ClickHouse baseline schema identifiers
+  ansible.builtin.assert:
+    that:
+      - item.name is match('^[A-Za-z0-9_.-]+$')
+      - item.database is match('^[a-z][a-z0-9_]*$')
+    fail_msg: "ClickHouse schema item identifiers must be simple names"
+  loop: "{{ clickhouse_schema_items | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: clickhouse_schema_items | default([]) | length > 0
+
+- name: Stage ClickHouse baseline schema SQL on target
+  ansible.builtin.copy:
+    content: "{{ item.sql }}"
+    dest: "/tmp/frameworks-clickhouse-schema-{{ item.name }}.sql"
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ clickhouse_schema_items | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  when:
+    - clickhouse_schema_items | default([]) | length > 0
+    - not ansible_check_mode
+
+- name: Apply ClickHouse baseline schemas via clickhouse-client
+  ansible.builtin.command:
+    argv: >-
+      {{ ['clickhouse-client',
+          '--host=' ~ frameworks_clickhouse_client_host,
+          '--port=' ~ (clickhouse_port_tcp | string),
+          '--database=' ~ item.database,
+          '--multiquery',
+          '--queries-file=/tmp/frameworks-clickhouse-schema-' ~ item.name ~ '.sql']
+         + (['--password', clickhouse_default_password]
+            if clickhouse_default_password | length > 0 else []) }}
+  loop: "{{ clickhouse_schema_items | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: "{{ clickhouse_default_password | length > 0 }}"
+  changed_when: true
+  when:
+    - clickhouse_schema_items | default([]) | length > 0
+    - not ansible_check_mode
+
+- name: Remove staged ClickHouse baseline schema files
+  ansible.builtin.file:
+    path: "/tmp/frameworks-clickhouse-schema-{{ item.name }}.sql"
+    state: absent
+  loop: "{{ clickhouse_schema_items | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - clickhouse_schema_items | default([]) | length > 0
+    - not ansible_check_mode

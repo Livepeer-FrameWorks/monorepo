@@ -10,14 +10,9 @@
 -- v0.2.31 services start emitting; tables stay empty until the gateway begins
 -- sending SendGatewayTelemetry events.
 --
--- Until the ClickHouse migration runner lands (see
--- website_docs/.../clickhouse-migrations.mdx), apply manually:
---
---   clickhouse-client -h <host> --database periscope < \
---     pkg/database/sql/clickhouse/migrations/periscope/v0.2.31/expand/001_orchestrator_visibility.sql
---
 -- This migration is also baked into the baseline periscope.sql for fresh
--- installs.
+-- installs. The migration runner re-applies it idempotently to record the
+-- _migrations ledger row.
 
 CREATE TABLE IF NOT EXISTS orchestrator_state_current (
     tenant_id UUID,

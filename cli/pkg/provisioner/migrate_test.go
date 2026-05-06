@@ -95,12 +95,12 @@ func TestValidateMigrationSetRejectsUnsafeExpandSQL(t *testing.T) {
 		},
 	}
 
-	err := validateMigrationSet(migrations)
+	err := validatePostgresMigrationSet(migrations)
 	if err == nil {
-		t.Fatal("validateMigrationSet returned nil error")
+		t.Fatal("validatePostgresMigrationSet returned nil error")
 	}
 	if !IsMigrationValidationError(err) {
-		t.Fatalf("validateMigrationSet error type = %T, want MigrationValidationError", err)
+		t.Fatalf("validatePostgresMigrationSet error type = %T, want MigrationValidationError", err)
 	}
 }
 
@@ -135,14 +135,20 @@ func TestValidateMigrationSetAcceptsSafeExpandSQL(t *testing.T) {
 		},
 	}
 
-	if err := validateMigrationSet(migrations); err != nil {
-		t.Fatalf("validateMigrationSet returned error: %v", err)
+	if err := validatePostgresMigrationSet(migrations); err != nil {
+		t.Fatalf("validatePostgresMigrationSet returned error: %v", err)
 	}
 }
 
-func TestValidateEmbeddedMigrations(t *testing.T) {
-	if err := ValidateEmbeddedMigrations(); err != nil {
-		t.Fatalf("ValidateEmbeddedMigrations returned error: %v", err)
+func TestValidateEmbeddedPostgresMigrations(t *testing.T) {
+	if err := ValidateEmbeddedPostgresMigrations(); err != nil {
+		t.Fatalf("ValidateEmbeddedPostgresMigrations returned error: %v", err)
+	}
+}
+
+func TestValidateEmbeddedClickHouseMigrations(t *testing.T) {
+	if err := ValidateEmbeddedClickHouseMigrations(); err != nil {
+		t.Fatalf("ValidateEmbeddedClickHouseMigrations returned error: %v", err)
 	}
 }
 
@@ -158,7 +164,7 @@ func TestValidateMigrationSet_NotxRequiresIfNotExists(t *testing.T) {
 			content:       "CREATE INDEX CONCURRENTLY idx_x ON purser.t (col);",
 		},
 	}
-	err := validateMigrationSet(migrations)
+	err := validatePostgresMigrationSet(migrations)
 	if err == nil {
 		t.Fatal("expected validation error for notx CREATE INDEX CONCURRENTLY without IF NOT EXISTS")
 	}
@@ -179,8 +185,8 @@ func TestValidateMigrationSet_NotxWithIfNotExistsPasses(t *testing.T) {
 			content:       "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_x ON purser.t (col);",
 		},
 	}
-	if err := validateMigrationSet(migrations); err != nil {
-		t.Fatalf("validateMigrationSet returned error: %v", err)
+	if err := validatePostgresMigrationSet(migrations); err != nil {
+		t.Fatalf("validatePostgresMigrationSet returned error: %v", err)
 	}
 }
 
@@ -197,7 +203,7 @@ func TestValidateMigrationSet_NotxRequiresIfNotExistsForEveryConcurrentIndex(t *
 CREATE INDEX CONCURRENTLY idx_y ON purser.t (other_col);`,
 		},
 	}
-	err := validateMigrationSet(migrations)
+	err := validatePostgresMigrationSet(migrations)
 	if err == nil {
 		t.Fatal("expected validation error for mixed safe and unsafe concurrent indexes")
 	}
@@ -219,7 +225,7 @@ func TestValidateMigrationSet_AddConstraintRequiresNotValidPerStatement(t *testi
 ALTER TABLE purser.b ADD CONSTRAINT b_fk FOREIGN KEY (tenant_id) REFERENCES purser.tenants(id);`,
 		},
 	}
-	err := validateMigrationSet(migrations)
+	err := validatePostgresMigrationSet(migrations)
 	if err == nil {
 		t.Fatal("expected validation error for validated ADD CONSTRAINT in expand")
 	}
@@ -245,7 +251,7 @@ BEGIN
 END $$;`,
 		},
 	}
-	if err := validateMigrationSet(migrations); err != nil {
-		t.Fatalf("validateMigrationSet rejected a valid DO $$ block: %v", err)
+	if err := validatePostgresMigrationSet(migrations); err != nil {
+		t.Fatalf("validatePostgresMigrationSet rejected a valid DO $$ block: %v", err)
 	}
 }

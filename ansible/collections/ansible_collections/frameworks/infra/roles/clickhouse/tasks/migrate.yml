@@ -1,0 +1,234 @@
+---
+# ClickHouse migration items delivered by the CLI: list of
+# {db, version, phase, sequence, filename, checksum, sql}. The role validates
+# already-applied checksums, filters to pending, and records successful applies
+# in _migrations. ClickHouse has no DDL transactions, so:
+#   - migration files must use IF NOT EXISTS (validator-enforced)
+#   - the ledger uses ReplacingMergeTree(applied_at); reads use
+#     argMax(checksum, applied_at) and surface uniqExact(checksum) so a
+#     crashed mid-write (>1 distinct checksum per key) hard-fails instead
+#     of silently picking one
+#   - all mutations are gated `not ansible_check_mode` because
+#     ansible.builtin.command does not auto-skip under --check the way
+#     community.postgresql.postgresql_query does
+
+- name: Resolve a reachable local ClickHouse client host
+  ansible.builtin.include_tasks: _probe_client.yml
+  when: clickhouse_migrate_items | default([]) | length > 0
+
+- name: Validate ClickHouse migration item identifiers
+  ansible.builtin.assert:
+    that:
+      - item.db is match('^[a-z][a-z0-9_]*$')
+      - item.version is match('^v[0-9]+\.[0-9]+\.[0-9]+$')
+      - item.phase in ['expand', 'postdeploy', 'contract']
+      - (item.sequence | int) | string == (item.sequence | string)
+      - item.checksum is match('^[0-9a-f]{64}$')
+      - item.filename is match('^[0-9]{3}_[A-Za-z0-9_.-]+\.sql$')
+    fail_msg: "ClickHouse migration item identifiers fail invariant checks (tampered embed?)"
+  loop: "{{ clickhouse_migrate_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}/{{ item.version }}/{{ item.phase }}/{{ item.filename }}"
+  when: clickhouse_migrate_items | default([]) | length > 0
+
+- name: Ensure _migrations ledger table per ClickHouse database
+  ansible.builtin.command:
+    argv: >-
+      {{ ['clickhouse-client',
+          '--host=' ~ frameworks_clickhouse_client_host,
+          '--port=' ~ (clickhouse_port_tcp | string),
+          '--database=' ~ db_entry,
+          '-q',
+          'CREATE TABLE IF NOT EXISTS _migrations (
+             version       LowCardinality(String),
+             phase         LowCardinality(String),
+             seq           UInt32,
+             filename      String,
+             checksum      FixedString(64),
+             applied_at    DateTime64(3) DEFAULT now64()
+           ) ENGINE = ReplacingMergeTree(applied_at)
+           ORDER BY (version, phase, seq)']
+         + (['--password', clickhouse_default_password]
+            if clickhouse_default_password | length > 0 else []) }}
+  loop: "{{ clickhouse_migrate_items | default([]) | map(attribute='db') | unique | list }}"
+  loop_control:
+    loop_var: db_entry
+  no_log: "{{ clickhouse_default_password | length > 0 }}"
+  changed_when: true
+  when:
+    - clickhouse_migrate_items | default([]) | length > 0
+    - not ansible_check_mode
+
+- name: Read applied ClickHouse migrations per database
+  ansible.builtin.command:
+    argv: >-
+      {{ ['clickhouse-client',
+          '--host=' ~ frameworks_clickhouse_client_host,
+          '--port=' ~ (clickhouse_port_tcp | string),
+          '--database=' ~ db_entry,
+          '-q',
+          "SELECT concat(version, ':', phase, ':', toString(seq)) AS key,
+                  argMax(checksum, applied_at) AS checksum,
+                  uniqExact(checksum) AS distinct_checksums,
+                  count() AS row_count
+           FROM _migrations
+           GROUP BY version, phase, seq
+           FORMAT TSV"]
+         + (['--password', clickhouse_default_password]
+            if clickhouse_default_password | length > 0 else []) }}
+  register: clickhouse_applied_queries
+  loop: "{{ clickhouse_migrate_items | default([]) | map(attribute='db') | unique | list }}"
+  loop_control:
+    loop_var: db_entry
+  no_log: "{{ clickhouse_default_password | length > 0 }}"
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Fail on ClickHouse ledger read errors (other than missing table)
+  ansible.builtin.fail:
+    msg: >-
+      Read _migrations failed for {{ item.db_entry }}: rc={{ item.rc }}
+      stderr={{ item.stderr | default('') }}
+  loop: "{{ clickhouse_applied_queries.results | default([]) }}"
+  loop_control:
+    label: "{{ item.db_entry }}"
+  vars:
+    err: "{{ item.stderr | default('') }}"
+  when:
+    - item.rc | default(0) != 0
+    - "'UNKNOWN_TABLE' not in err"
+    - "'does not exist' not in err"
+
+- name: Initialize ClickHouse ledger map per database
+  ansible.builtin.set_fact:
+    clickhouse_ledger_by_db: "{{ clickhouse_ledger_by_db | default({}) | combine({ item.db_entry: {} }) }}"
+  loop: "{{ clickhouse_applied_queries.results | default([]) }}"
+  loop_control:
+    label: "{{ item.db_entry }}"
+
+- name: Populate ClickHouse ledger map from TSV rows
+  ansible.builtin.set_fact:
+    clickhouse_ledger_by_db: >-
+      {{ clickhouse_ledger_by_db | combine({
+           item.0.db_entry: (clickhouse_ledger_by_db[item.0.db_entry] | default({})) | combine({
+             (item.1.split('\t')[0]): {
+               'checksum': item.1.split('\t')[1],
+               'distinct_checksums': (item.1.split('\t')[2] | int),
+               'row_count': (item.1.split('\t')[3] | int)
+             }
+           })
+         }) }}
+  loop: "{{ (clickhouse_applied_queries.results | default([])) | subelements('stdout_lines', skip_missing=True) }}"
+  loop_control:
+    label: "{{ item.0.db_entry }}/{{ item.1.split('\t')[0] | default('?') }}"
+  when:
+    - item.1 is defined
+    - (item.1 | length) > 0
+    - "'\t' in item.1"
+
+- name: Fail on ambiguous ClickHouse ledger entries
+  ansible.builtin.fail:
+    msg: >-
+      Ambiguous _migrations entry in {{ item.0.db_entry }} key={{ fields[0] }}:
+      distinct_checksums={{ fields[2] }} row_count={{ fields[3] }}. A previous apply
+      crashed mid-write; resolve manually before re-running.
+  loop: "{{ (clickhouse_applied_queries.results | default([])) | subelements('stdout_lines', skip_missing=True) }}"
+  loop_control:
+    label: "{{ item.0.db_entry }}/{{ fields[0] | default('?') }}"
+  vars:
+    fields: "{{ item.1.split('\t') }}"
+  when:
+    - item.1 is defined
+    - (item.1 | length) > 0
+    - "'\t' in item.1"
+    - (fields[2] | int) > 1
+
+- name: Fail on edited applied ClickHouse migrations
+  ansible.builtin.fail:
+    msg: >-
+      ClickHouse migration checksum mismatch for
+      {{ item.db }}/{{ item.version }}/{{ item.phase }}/{{ item.filename }}:
+      ledger has {{ ledger_checksum }}, embedded file has {{ item.checksum }}.
+  loop: "{{ clickhouse_migrate_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}/{{ item.version }}/{{ item.phase }}/{{ item.filename }}"
+  vars:
+    migration_key: "{{ item.version ~ ':' ~ item.phase ~ ':' ~ (item.sequence | string) }}"
+    ledger_entry: "{{ ((clickhouse_ledger_by_db | default({}))[item.db] | default({}))[migration_key] | default({}) }}"
+    ledger_checksum: "{{ ledger_entry.checksum | default('') }}"
+  when:
+    - clickhouse_migrate_items | default([]) | length > 0
+    - ledger_checksum | length > 0
+    - ledger_checksum != item.checksum
+
+- name: Report pending ClickHouse migrations
+  ansible.builtin.debug:
+    msg: "Pending: {{ item.db }}/{{ item.version }}/{{ item.phase }}/{{ item.filename }}"
+  loop: "{{ clickhouse_migrate_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}/{{ item.version }}/{{ item.phase }}/{{ item.filename }}"
+  vars:
+    migration_key: "{{ item.version ~ ':' ~ item.phase ~ ':' ~ (item.sequence | string) }}"
+  when:
+    - clickhouse_migrate_items | default([]) | length > 0
+    - migration_key not in ((clickhouse_ledger_by_db | default({}))[item.db] | default({}))
+
+- name: Stage pending ClickHouse migration SQL on target
+  ansible.builtin.copy:
+    content: |
+      {{ item.sql }}
+      INSERT INTO _migrations (version, phase, seq, filename, checksum)
+      VALUES ('{{ item.version }}', '{{ item.phase }}', {{ item.sequence }},
+              '{{ item.filename }}', '{{ item.checksum }}');
+    dest: "/tmp/frameworks-clickhouse-migrate-{{ item.db }}-{{ item.version }}-{{ item.phase }}-{{ item.sequence }}.sql"
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ clickhouse_migrate_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}/{{ item.version }}/{{ item.phase }}/{{ item.filename }}"
+  no_log: true
+  vars:
+    migration_key: "{{ item.version ~ ':' ~ item.phase ~ ':' ~ (item.sequence | string) }}"
+  when:
+    - clickhouse_migrate_items | default([]) | length > 0
+    - migration_key not in ((clickhouse_ledger_by_db | default({}))[item.db] | default({}))
+    - not ansible_check_mode
+
+- name: Apply pending ClickHouse migrations via clickhouse-client
+  ansible.builtin.command:
+    argv: >-
+      {{ ['clickhouse-client',
+          '--host=' ~ frameworks_clickhouse_client_host,
+          '--port=' ~ (clickhouse_port_tcp | string),
+          '--database=' ~ item.db,
+          '--multiquery',
+          '--queries-file=/tmp/frameworks-clickhouse-migrate-' ~ item.db ~ '-' ~ item.version ~ '-' ~ item.phase ~ '-' ~ (item.sequence | string) ~ '.sql']
+         + (['--password', clickhouse_default_password]
+            if clickhouse_default_password | length > 0 else []) }}
+  loop: "{{ clickhouse_migrate_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}/{{ item.version }}/{{ item.phase }}/{{ item.filename }}"
+  no_log: "{{ clickhouse_default_password | length > 0 }}"
+  changed_when: true
+  vars:
+    migration_key: "{{ item.version ~ ':' ~ item.phase ~ ':' ~ (item.sequence | string) }}"
+  when:
+    - clickhouse_migrate_items | default([]) | length > 0
+    - migration_key not in ((clickhouse_ledger_by_db | default({}))[item.db] | default({}))
+    - not ansible_check_mode
+
+- name: Remove staged ClickHouse migration SQL
+  ansible.builtin.file:
+    path: "/tmp/frameworks-clickhouse-migrate-{{ item.db }}-{{ item.version }}-{{ item.phase }}-{{ item.sequence }}.sql"
+    state: absent
+  loop: "{{ clickhouse_migrate_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}/{{ item.version }}/{{ item.phase }}/{{ item.filename }}"
+  vars:
+    migration_key: "{{ item.version ~ ':' ~ item.phase ~ ':' ~ (item.sequence | string) }}"
+  when:
+    - clickhouse_migrate_items | default([]) | length > 0
+    - migration_key not in ((clickhouse_ledger_by_db | default({}))[item.db] | default({}))
+    - not ansible_check_mode
