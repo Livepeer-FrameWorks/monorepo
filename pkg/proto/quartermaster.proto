@@ -916,6 +916,12 @@ message InfrastructureNode {
   // that simulates apply (mesh doctor) needs the same filter to match
   // what Privateer would actually receive.
   string status = 25;                   // json:"status"
+  // Latest resource snapshot reported by Privateer via SyncMesh. Nil for
+  // nodes whose agent has never reported one (older clients, fresh rows,
+  // or collection failure on every sync since the row was created).
+  NodeResourceSnapshot resource_snapshot = 26;
+  // Owning tenant of the node's cluster, resolved by Quartermaster.
+  optional string owner_tenant_id = 27;  // json:"owner_tenant_id,omitempty"
 }
 
 message NodeResponse {
@@ -1312,6 +1318,29 @@ message InfrastructureSyncRequest {
   // response's mesh_revision). Empty on first sync after restart, before
   // any managed apply succeeds, or for older clients.
   string applied_mesh_revision = 4;     // json:"applied_mesh_revision,omitempty"
+  // Optional resource snapshot for nodes that don't run Helmsman (control
+  // plane, navigator, balancer, etc.). Populated by Privateer on every
+  // SyncMesh. Bridge synthesises InfrastructureNode.liveState from the
+  // latest snapshot when Periscope has no row for the node.
+  NodeResourceSnapshot resource_snapshot = 5;
+}
+
+// Lightweight node-level resource snapshot reported by Privateer.
+// Mirrors the subset of LiveNode (pkg/graphql/schema.graphql) that is
+// safe to collect on any host without running Helmsman. Network speeds,
+// active streams, capabilities, and operational mode are intentionally
+// out of scope — those belong to Helmsman/cluster manifest.
+message NodeResourceSnapshot {
+  float cpu_percent = 1;                // 0..100, sampled over a short window
+  uint64 ram_used_bytes = 2;
+  uint64 ram_total_bytes = 3;
+  uint64 disk_used_bytes = 4;
+  uint64 disk_total_bytes = 5;
+  uint64 uptime_seconds = 6;
+  // Quartermaster receipt time for the persisted snapshot. Privateer sets
+  // this on the wire, but Quartermaster normalizes stored snapshots to its
+  // own clock so freshness checks are not dependent on node clock skew.
+  google.protobuf.Timestamp collected_at = 7;
 }
 
 // Matches pkg/api/quartermaster/types.go:InfrastructurePeer (lines 447-453)

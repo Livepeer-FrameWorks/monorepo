@@ -670,6 +670,9 @@ func (a *Agent) sync() {
 	}
 
 	syncCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
+	if snap := collectResourceSnapshot(syncCtx, ""); snap != nil {
+		req.ResourceSnapshot = snap
+	}
 	resp, err := a.client.SyncMesh(syncCtx, req)
 	cancel()
 	if err != nil {

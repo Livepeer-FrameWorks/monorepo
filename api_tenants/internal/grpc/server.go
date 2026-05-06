@@ -3975,8 +3975,8 @@ func (s *QuartermasterServer) SetClusterReleaseTarget(ctx context.Context, req *
 		return nil, err
 	}
 	targetVersion := strings.TrimSpace(target.GetTargetVersion())
-	if err := s.ensureEdgeReleaseTargetExists(ctx, channel, targetVersion); err != nil {
-		return nil, err
+	if existsErr := s.ensureEdgeReleaseTargetExists(ctx, channel, targetVersion); existsErr != nil {
+		return nil, existsErr
 	}
 	row := s.db.QueryRowContext(ctx, `
 				INSERT INTO quartermaster.cluster_release_targets (cluster_id, channel, target_version, rollout_plan, paused, updated_at)
@@ -4341,12 +4341,12 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 		       wireguard_ip, wireguard_public_key, wireguard_listen_port, region, availability_zone,
 		       latitude, longitude,
 		       cpu_cores, memory_gb, disk_gb,
-		       last_heartbeat, enrollment_origin, applied_mesh_revision, status, created_at, updated_at
+		       last_heartbeat, enrollment_origin, applied_mesh_revision, status, created_at, updated_at%s%s
 		FROM quartermaster.infrastructure_nodes n
 		%s
 		%s
 		LIMIT $%d
-	`, where, builder.OrderBy(params), argIdx+len(args)-len(countArgs)) // Use next available index for limit
+	`, prefixedNodeOwnerColumn, prefixedNodeSnapshotColumns, where, builder.OrderBy(params), argIdx+len(args)-len(countArgs)) // Use next available index for limit
 
 	// Append limit
 	args = append(args, params.Limit+1)
@@ -4551,10 +4551,10 @@ func (s *QuartermasterServer) listHealthyEdgeNodes(ctx context.Context, baseWher
 		       n.wireguard_ip, n.wireguard_public_key, n.wireguard_listen_port, n.region, n.availability_zone,
 		       n.latitude, n.longitude,
 		       n.cpu_cores, n.memory_gb, n.disk_gb,
-		       n.last_heartbeat, n.enrollment_origin, n.applied_mesh_revision, n.status, n.created_at, n.updated_at
+		       n.last_heartbeat, n.enrollment_origin, n.applied_mesh_revision, n.status, n.created_at, n.updated_at%s%s
 		FROM quartermaster.infrastructure_nodes n
 		%s
-	`, healthWhere), healthArgs...)
+	`, prefixedNodeOwnerColumn, prefixedNodeSnapshotColumns, healthWhere), healthArgs...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -4623,12 +4623,12 @@ func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseW
 		       n.wireguard_ip, n.wireguard_public_key, n.wireguard_listen_port, n.region, n.availability_zone,
 		       n.latitude, n.longitude,
 		       n.cpu_cores, n.memory_gb, n.disk_gb,
-		       n.last_heartbeat, n.enrollment_origin, n.applied_mesh_revision, n.status, n.created_at, n.updated_at
+		       n.last_heartbeat, n.enrollment_origin, n.applied_mesh_revision, n.status, n.created_at, n.updated_at%s%s
 		FROM quartermaster.infrastructure_nodes n
 		%s
 		%s
 		%s
-	`, siJoin, servicesJoin, healthWhere), healthArgs...)
+	`, prefixedNodeOwnerColumn, prefixedNodeSnapshotColumns, siJoin, servicesJoin, healthWhere), healthArgs...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -4702,11 +4702,11 @@ func (s *QuartermasterServer) listHealthyAssignedServiceNodes(ctx context.Contex
 		       n.wireguard_ip, n.wireguard_public_key, n.wireguard_listen_port, n.region, n.availability_zone,
 		       n.latitude, n.longitude,
 		       n.cpu_cores, n.memory_gb, n.disk_gb,
-		       n.last_heartbeat, n.enrollment_origin, n.applied_mesh_revision, n.status, n.created_at, n.updated_at
-		FROM quartermaster.service_instances si
-		%s
-		%s
-	`, joins, healthWhere), healthArgs...)
+		       n.last_heartbeat, n.enrollment_origin, n.applied_mesh_revision, n.status, n.created_at, n.updated_at%s%s
+			FROM quartermaster.service_instances si
+			%s
+			%s
+		`, prefixedAssignedNodeOwnerColumn, prefixedNodeSnapshotColumns, joins, healthWhere), healthArgs...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -4830,7 +4830,9 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *p
 			  AND c.is_active = TRUE
 		`, machineIDSHA).Scan(&tenantID, &nodeID)
 		if err == nil {
-			_ = s.upsertSeenIP(ctx, nodeID, peerIP)
+			if upsertErr := s.upsertSeenIP(ctx, nodeID, peerIP); upsertErr != nil {
+				s.logger.WithError(upsertErr).WithField("node_id", nodeID).Warn("Failed to update fingerprint seen IP")
+			}
 			return &pb.ResolveNodeFingerprintResponse{
 				TenantId:        tenantID,
 				CanonicalNodeId: nodeID,
@@ -4850,7 +4852,9 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *p
 			  AND c.is_active = TRUE
 		`, macsSHA).Scan(&tenantID, &nodeID)
 		if err == nil {
-			_ = s.upsertSeenIP(ctx, nodeID, peerIP)
+			if upsertErr := s.upsertSeenIP(ctx, nodeID, peerIP); upsertErr != nil {
+				s.logger.WithError(upsertErr).WithField("node_id", nodeID).Warn("Failed to update fingerprint seen IP")
+			}
 			return &pb.ResolveNodeFingerprintResponse{
 				TenantId:        tenantID,
 				CanonicalNodeId: nodeID,
@@ -4870,7 +4874,9 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *p
 		LIMIT 1
 	`, peerIP).Scan(&tenantID, &nodeID)
 	if err == nil {
-		_ = s.upsertSeenIP(ctx, nodeID, peerIP)
+		if upsertErr := s.upsertSeenIP(ctx, nodeID, peerIP); upsertErr != nil {
+			s.logger.WithError(upsertErr).WithField("node_id", nodeID).Warn("Failed to update fingerprint seen IP")
+		}
 		return &pb.ResolveNodeFingerprintResponse{
 			TenantId:        tenantID,
 			CanonicalNodeId: nodeID,
@@ -5930,7 +5936,10 @@ func (s *QuartermasterServer) RevokeBootstrapToken(ctx context.Context, req *pb.
 		return nil, status.Errorf(codes.Internal, "failed to revoke token: %v", err)
 	}
 
-	rows, _ := result.RowsAffected()
+	rows, rowsErr := result.RowsAffected()
+	if rowsErr != nil {
+		return nil, status.Errorf(codes.Internal, "failed to inspect revoke result: %v", rowsErr)
+	}
 	if rows == 0 {
 		return nil, status.Error(codes.NotFound, "token not found")
 	}
@@ -6128,14 +6137,54 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 	if rev := strings.TrimSpace(req.GetAppliedMeshRevision()); rev != "" {
 		appliedRev = sql.NullString{String: rev, Valid: true}
 	}
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE quartermaster.infrastructure_nodes
-		SET last_heartbeat = NOW(),
-		    applied_mesh_revision = $2,
-		    status = 'active',
-		    updated_at = NOW()
-		WHERE node_id = $1
-	`, nodeID, appliedRev)
+	// Snapshot is conditionally written: old Privateer clients send no
+	// snapshot, and a single failed collection on a new client should not
+	// blank a previously-good row. Freshness is based on Quartermaster receipt
+	// time so node clock skew cannot make a stale node look healthy.
+	snap := req.GetResourceSnapshot()
+	var (
+		snapCPU                                 sql.NullFloat64
+		snapRamUsed, snapRamTotal               sql.NullInt64
+		snapDiskUsed, snapDiskTotal, snapUptime sql.NullInt64
+		snapAt                                  sql.NullTime
+		snapPresent                             bool
+	)
+	if resourceSnapshotComplete(snap) {
+		snapPresent = true
+		snapCPU = sql.NullFloat64{Float64: float64(snap.GetCpuPercent()), Valid: true}
+		snapRamUsed = sql.NullInt64{Int64: int64(snap.GetRamUsedBytes()), Valid: true}
+		snapRamTotal = sql.NullInt64{Int64: int64(snap.GetRamTotalBytes()), Valid: true}
+		snapDiskUsed = sql.NullInt64{Int64: int64(snap.GetDiskUsedBytes()), Valid: true}
+		snapDiskTotal = sql.NullInt64{Int64: int64(snap.GetDiskTotalBytes()), Valid: true}
+		snapUptime = sql.NullInt64{Int64: int64(snap.GetUptimeSeconds()), Valid: true}
+		snapAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
+	}
+	if snapPresent {
+		_, err = s.db.ExecContext(ctx, `
+			UPDATE quartermaster.infrastructure_nodes
+			SET last_heartbeat = NOW(),
+			    applied_mesh_revision = $2,
+			    status = 'active',
+			    snapshot_cpu_percent = $3,
+			    snapshot_ram_used_bytes = $4,
+			    snapshot_ram_total_bytes = $5,
+			    snapshot_disk_used_bytes = $6,
+			    snapshot_disk_total_bytes = $7,
+			    snapshot_uptime_seconds = $8,
+			    snapshot_at = $9,
+			    updated_at = NOW()
+			WHERE node_id = $1
+		`, nodeID, appliedRev, snapCPU, snapRamUsed, snapRamTotal, snapDiskUsed, snapDiskTotal, snapUptime, snapAt)
+	} else {
+		_, err = s.db.ExecContext(ctx, `
+			UPDATE quartermaster.infrastructure_nodes
+			SET last_heartbeat = NOW(),
+			    applied_mesh_revision = $2,
+			    status = 'active',
+			    updated_at = NOW()
+			WHERE node_id = $1
+		`, nodeID, appliedRev)
+	}
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to update node heartbeat")
 	}
@@ -7184,14 +7233,61 @@ func scanCluster(rows *sql.Rows) (*pb.InfrastructureCluster, error) {
 	return &cluster, nil
 }
 
+// prefixedNodeSnapshotColumns is the SELECT-list suffix for the latest resource
+// snapshot Privateer reports via SyncMesh. Append this after the existing
+// "...status, created_at, updated_at" tail of any SELECT that feeds scanNode /
+// queryNode so both the scan order and column count stay in sync.
+const prefixedNodeSnapshotColumns = ", n.snapshot_cpu_percent, n.snapshot_ram_used_bytes, n.snapshot_ram_total_bytes, n.snapshot_disk_used_bytes, n.snapshot_disk_total_bytes, n.snapshot_uptime_seconds, n.snapshot_at"
+const prefixedNodeOwnerColumn = ", (SELECT c.owner_tenant_id::text FROM quartermaster.infrastructure_clusters c WHERE c.cluster_id = n.cluster_id)"
+const prefixedAssignedNodeOwnerColumn = ", (SELECT c.owner_tenant_id::text FROM quartermaster.infrastructure_clusters c WHERE c.cluster_id = sca.cluster_id)"
+
+func resourceSnapshotComplete(snap *pb.NodeResourceSnapshot) bool {
+	return snap != nil &&
+		snap.GetRamTotalBytes() > 0 &&
+		snap.GetDiskTotalBytes() > 0 &&
+		snap.GetUptimeSeconds() > 0
+}
+
+// nodeSnapshotProto builds a NodeResourceSnapshot from the seven nullable
+// columns appended by nodeSnapshotColumns. Returns nil when no agent has
+// ever reported a snapshot for the row (snapshot_at IS NULL).
+func nodeSnapshotProto(cpu sql.NullFloat64, ramUsed, ramTotal, diskUsed, diskTotal, uptime sql.NullInt64, at sql.NullTime) *pb.NodeResourceSnapshot {
+	if !at.Valid {
+		return nil
+	}
+	snap := &pb.NodeResourceSnapshot{CollectedAt: timestamppb.New(at.Time)}
+	if cpu.Valid {
+		snap.CpuPercent = float32(cpu.Float64)
+	}
+	if ramUsed.Valid {
+		snap.RamUsedBytes = uint64(ramUsed.Int64)
+	}
+	if ramTotal.Valid {
+		snap.RamTotalBytes = uint64(ramTotal.Int64)
+	}
+	if diskUsed.Valid {
+		snap.DiskUsedBytes = uint64(diskUsed.Int64)
+	}
+	if diskTotal.Valid {
+		snap.DiskTotalBytes = uint64(diskTotal.Int64)
+	}
+	if uptime.Valid {
+		snap.UptimeSeconds = uint64(uptime.Int64)
+	}
+	return snap
+}
+
 func scanNode(rows *sql.Rows) (*pb.InfrastructureNode, error) {
 	var node pb.InfrastructureNode
-	var internalIP, externalIP, wireguardIP, wireguardPubKey, region, az, appliedRev sql.NullString
+	var internalIP, externalIP, wireguardIP, wireguardPubKey, region, az, appliedRev, ownerTenantID sql.NullString
 	var wgPort, cpuCores, memoryGB, diskGB sql.NullInt32
 	var lat, lon sql.NullFloat64
 	var lastHeartbeat sql.NullTime
 	var createdAt, updatedAt time.Time
 	var enrollmentOrigin, nodeStatus string
+	var snapCPU sql.NullFloat64
+	var snapRamUsed, snapRamTotal, snapDiskUsed, snapDiskTotal, snapUptime sql.NullInt64
+	var snapAt sql.NullTime
 
 	err := rows.Scan(
 		&node.Id, &node.NodeId, &node.ClusterId, &node.NodeName, &node.NodeType,
@@ -7199,14 +7295,20 @@ func scanNode(rows *sql.Rows) (*pb.InfrastructureNode, error) {
 		&lat, &lon,
 		&cpuCores, &memoryGB, &diskGB,
 		&lastHeartbeat, &enrollmentOrigin, &appliedRev, &nodeStatus, &createdAt, &updatedAt,
+		&ownerTenantID,
+		&snapCPU, &snapRamUsed, &snapRamTotal, &snapDiskUsed, &snapDiskTotal, &snapUptime, &snapAt,
 	)
 	if err != nil {
 		return nil, err
 	}
+	node.ResourceSnapshot = nodeSnapshotProto(snapCPU, snapRamUsed, snapRamTotal, snapDiskUsed, snapDiskTotal, snapUptime, snapAt)
 	node.EnrollmentOrigin = enrollmentOrigin
 	node.Status = nodeStatus
 	if appliedRev.Valid {
 		node.AppliedMeshRevision = &appliedRev.String
+	}
+	if ownerTenantID.Valid {
+		node.OwnerTenantId = &ownerTenantID.String
 	}
 	if wgPort.Valid {
 		node.WireguardPort = &wgPort.Int32
@@ -7362,22 +7464,28 @@ func subscriptionStatusStringToProto(s string) pb.ClusterSubscriptionStatus {
 
 func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb.InfrastructureNode, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, node_id, cluster_id, node_name, node_type, internal_ip, external_ip,
-		       wireguard_ip, wireguard_public_key, wireguard_listen_port, region, availability_zone,
-		       latitude, longitude,
-		       cpu_cores, memory_gb, disk_gb,
-		       last_heartbeat, enrollment_origin, applied_mesh_revision, status, created_at, updated_at
-		FROM quartermaster.infrastructure_nodes
-		WHERE node_id = $1 OR id::text = $1
-	`, nodeID)
+			SELECT n.id, n.node_id, n.cluster_id, n.node_name, n.node_type, n.internal_ip, n.external_ip,
+			       n.wireguard_ip, n.wireguard_public_key, n.wireguard_listen_port, n.region, n.availability_zone,
+			       n.latitude, n.longitude,
+			       n.cpu_cores, n.memory_gb, n.disk_gb,
+			       n.last_heartbeat, n.enrollment_origin, n.applied_mesh_revision, n.status, n.created_at, n.updated_at,
+			       (SELECT c.owner_tenant_id::text FROM quartermaster.infrastructure_clusters c WHERE c.cluster_id = n.cluster_id),
+			       n.snapshot_cpu_percent, n.snapshot_ram_used_bytes, n.snapshot_ram_total_bytes,
+			       n.snapshot_disk_used_bytes, n.snapshot_disk_total_bytes, n.snapshot_uptime_seconds, n.snapshot_at
+			FROM quartermaster.infrastructure_nodes n
+			WHERE n.node_id = $1 OR n.id::text = $1
+		`, nodeID)
 
 	var node pb.InfrastructureNode
-	var internalIP, externalIP, wireguardIP, wireguardPubKey, region, az, appliedRev sql.NullString
+	var internalIP, externalIP, wireguardIP, wireguardPubKey, region, az, appliedRev, ownerTenantID sql.NullString
 	var wgPort, cpuCores, memoryGB, diskGB sql.NullInt32
 	var lat, lon sql.NullFloat64
 	var lastHeartbeat sql.NullTime
 	var createdAt, updatedAt time.Time
 	var enrollmentOrigin, nodeStatus string
+	var snapCPU sql.NullFloat64
+	var snapRamUsed, snapRamTotal, snapDiskUsed, snapDiskTotal, snapUptime sql.NullInt64
+	var snapAt sql.NullTime
 
 	err := row.Scan(
 		&node.Id, &node.NodeId, &node.ClusterId, &node.NodeName, &node.NodeType,
@@ -7385,6 +7493,8 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 		&lat, &lon,
 		&cpuCores, &memoryGB, &diskGB,
 		&lastHeartbeat, &enrollmentOrigin, &appliedRev, &nodeStatus, &createdAt, &updatedAt,
+		&ownerTenantID,
+		&snapCPU, &snapRamUsed, &snapRamTotal, &snapDiskUsed, &snapDiskTotal, &snapUptime, &snapAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "node not found")
@@ -7437,8 +7547,12 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 	if appliedRev.Valid {
 		node.AppliedMeshRevision = &appliedRev.String
 	}
+	if ownerTenantID.Valid {
+		node.OwnerTenantId = &ownerTenantID.String
+	}
 	node.CreatedAt = timestamppb.New(createdAt)
 	node.UpdatedAt = timestamppb.New(updatedAt)
+	node.ResourceSnapshot = nodeSnapshotProto(snapCPU, snapRamUsed, snapRamTotal, snapDiskUsed, snapDiskTotal, snapUptime, snapAt)
 
 	return &node, nil
 }

@@ -1627,10 +1627,28 @@ func (r *infrastructureNodeResolver) LiveState(ctx context.Context, obj *proto.I
 	}
 
 	lds := loaders.FromContext(ctx)
+	var (
+		live *proto.LiveNode
+		err  error
+	)
 	if lds != nil && lds.LiveNodeState != nil {
-		return lds.LiveNodeState.Load(ctx, obj.NodeId)
+		live, err = lds.LiveNodeState.Load(ctx, obj.NodeId)
+	} else {
+		live, err = r.DoGetLiveNodeState(ctx, obj.NodeId)
 	}
-	return r.DoGetLiveNodeState(ctx, obj.NodeId)
+	if err != nil {
+		return nil, err
+	}
+	if live != nil {
+		return live, nil
+	}
+	// Periscope has no Foghorn/Helmsman live row for this node. Core
+	// infrastructure reports through Privateer into Quartermaster, so map
+	// Quartermaster's latest resource snapshot into the same GraphQL shape.
+	if obj.GetResourceSnapshot() != nil && obj.GetOwnerTenantId() == "" {
+		return nil, fmt.Errorf("node %q cluster %q has no owner tenant", obj.GetNodeId(), obj.GetClusterId())
+	}
+	return liveNodeFromSnapshot(obj), nil
 }
 
 // StreamID is the resolver for the streamId field.

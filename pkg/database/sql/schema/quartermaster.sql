@@ -229,6 +229,20 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_nodes (
     -- ===== HEARTBEAT =====
     last_heartbeat TIMESTAMP,
 
+    -- ===== LATEST RESOURCE SNAPSHOT =====
+    -- Reported by Privateer on every SyncMesh. snapshot_at is Quartermaster
+    -- receipt time so freshness does not depend on node clock skew. NULL means
+    -- the agent has never sent a complete snapshot (older client, fresh row, or
+    -- collection failure on every sync). Bridge synthesises
+    -- InfrastructureNode.liveState from these columns for core nodes.
+    snapshot_cpu_percent REAL,
+    snapshot_ram_used_bytes BIGINT,
+    snapshot_ram_total_bytes BIGINT,
+    snapshot_disk_used_bytes BIGINT,
+    snapshot_disk_total_bytes BIGINT,
+    snapshot_uptime_seconds BIGINT,
+    snapshot_at TIMESTAMPTZ,
+
     -- ===== APPLIED MESH REVISION =====
     -- Last mesh_revision the Privateer agent reported it had applied via
     -- SyncMesh. Used by 'mesh wg audit' / 'mesh status' to detect agents

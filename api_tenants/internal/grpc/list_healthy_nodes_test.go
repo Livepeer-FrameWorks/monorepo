@@ -16,24 +16,34 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+// nodeSnapshotTestColumns mirrors the snapshot columns the production
+// SELECTs append after `..., updated_at`. Tests append these to nodeColumns
+// / queryNodeColumns so the row width matches the production scanner.
+var nodeSnapshotTestColumns = []string{
+	"snapshot_cpu_percent", "snapshot_ram_used_bytes", "snapshot_ram_total_bytes",
+	"snapshot_disk_used_bytes", "snapshot_disk_total_bytes", "snapshot_uptime_seconds", "snapshot_at",
+}
+
 // nodeColumns matches the SELECT column order in scanNode.
-var nodeColumns = []string{
+var nodeColumns = append([]string{
 	"id", "node_id", "cluster_id", "node_name", "node_type",
 	"internal_ip", "external_ip", "wireguard_ip", "wireguard_public_key", "wireguard_listen_port",
 	"region", "availability_zone", "latitude", "longitude",
 	"cpu_cores", "memory_gb", "disk_gb",
 	"last_heartbeat", "enrollment_origin", "applied_mesh_revision", "status", "created_at", "updated_at",
-}
+	"owner_tenant_id",
+}, nodeSnapshotTestColumns...)
 
 // queryNodeColumns matches the SELECT column order in queryNode, which also
 // returns the node's stored WireGuard listen port.
-var queryNodeColumns = []string{
+var queryNodeColumns = append([]string{
 	"id", "node_id", "cluster_id", "node_name", "node_type",
 	"internal_ip", "external_ip", "wireguard_ip", "wireguard_public_key", "wireguard_listen_port",
 	"region", "availability_zone", "latitude", "longitude",
 	"cpu_cores", "memory_gb", "disk_gb",
 	"last_heartbeat", "enrollment_origin", "applied_mesh_revision", "status", "created_at", "updated_at",
-}
+	"owner_tenant_id",
+}, nodeSnapshotTestColumns...)
 
 func newNodeRow(id, nodeID, clusterID, nodeName, nodeType, externalIP string) []driver.Value {
 	now := time.Now()
@@ -57,6 +67,14 @@ func newNodeRow(id, nodeID, clusterID, nodeName, nodeType, externalIP string) []
 		"active",      // status (matches the healthWhere SQL filter applied by tests)
 		now,           // created_at
 		now,           // updated_at
+		"tenant-1",    // owner_tenant_id
+		nil,           // snapshot_cpu_percent
+		nil,           // snapshot_ram_used_bytes
+		nil,           // snapshot_ram_total_bytes
+		nil,           // snapshot_disk_used_bytes
+		nil,           // snapshot_disk_total_bytes
+		nil,           // snapshot_uptime_seconds
+		nil,           // snapshot_at
 	}
 }
 
@@ -165,7 +183,7 @@ func TestListHealthyNodesForDNS_ServiceTypeReturnsMatchingNodes(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
 	// Main query returning healthy nodes
-	mock.ExpectQuery(`SELECT DISTINCT n\.id, n\.node_id`).
+	mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, n\.cluster_id.*owner_tenant_id::text.*c\.cluster_id = n\.cluster_id`).
 		WithArgs(svcType, int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "cluster-1", "node-1", "core", "1.2.3.4")...))
 
@@ -402,7 +420,7 @@ func TestListHealthyNodesForDNS_EdgeSubtypeUsesServiceInstancePath(t *testing.T)
 		WithArgs(edgeEgress, int32(300)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
-	mock.ExpectQuery(`SELECT DISTINCT n\.id, n\.node_id, n\.cluster_id`).
+	mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, n\.cluster_id.*owner_tenant_id::text.*c\.cluster_id = n\.cluster_id`).
 		WithArgs(edgeEgress, int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", "cluster-1", "edge-node-1", "edge", "5.6.7.8")...))
 
@@ -447,7 +465,7 @@ func TestListHealthyNodesForDNS_PoolServiceUsesAssignmentClusterForDNS(t *testin
 				WithArgs(svcType, int32(300)).
 				WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
-			mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, sca\.cluster_id.*FROM quartermaster\.service_instances si.*JOIN quartermaster\.service_cluster_assignments sca`).
+			mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, sca\.cluster_id.*owner_tenant_id::text.*c\.cluster_id = sca\.cluster_id.*FROM quartermaster\.service_instances si.*JOIN quartermaster\.service_cluster_assignments sca`).
 				WithArgs(svcType, int32(300)).
 				WillReturnRows(sqlmock.NewRows(nodeColumns).
 					AddRow(newNodeRow("uuid-1", "core-node-1", "media-central-primary", "core-node-1", "core", "1.2.3.4")...))

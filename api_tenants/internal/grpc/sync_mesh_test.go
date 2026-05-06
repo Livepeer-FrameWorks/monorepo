@@ -2,8 +2,10 @@ package grpc
 
 import (
 	"bytes"
+	"database/sql/driver"
 	"strings"
 	"testing"
+	"time"
 
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
@@ -12,7 +14,18 @@ import (
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+type recentTimeArg struct {
+	earliest time.Time
+	latest   time.Time
+}
+
+func (a recentTimeArg) Match(v driver.Value) bool {
+	t, ok := v.(time.Time)
+	return ok && !t.Before(a.earliest) && !t.After(a.latest)
+}
 
 func TestSyncMeshRequiresStoredWireGuardIdentity(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
@@ -179,6 +192,103 @@ func TestSyncMeshMarksNodeActive(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"type", "wireguard_ip"}))
 
 	if _, err := server.SyncMesh(t.Context(), &pb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51820}); err != nil {
+		t.Fatalf("sync mesh: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestSyncMeshIgnoresIncompleteResourceSnapshot(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery(`SELECT host\(wireguard_ip\), wireguard_public_key, host\(external_ip\), host\(internal_ip\), wireguard_listen_port, cluster_id`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).
+			AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
+	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes.*SET last_heartbeat = NOW\(\),.*updated_at = NOW\(\).*WHERE node_id = \$1`).
+		WithArgs("node-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT n\.node_name, n\.wireguard_public_key`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
+	mock.ExpectQuery(`SELECT s\.type, host\(n\.wireguard_ip\)`).
+		WithArgs("cluster-1").
+		WillReturnRows(sqlmock.NewRows([]string{"type", "wireguard_ip"}))
+
+	_, err = server.SyncMesh(t.Context(), &pb.InfrastructureSyncRequest{
+		NodeId:     "node-1",
+		PublicKey:  "pub",
+		ListenPort: 51820,
+		ResourceSnapshot: &pb.NodeResourceSnapshot{
+			CpuPercent:    17,
+			RamTotalBytes: 1024,
+		},
+	})
+	if err != nil {
+		t.Fatalf("sync mesh: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestSyncMeshStoresSnapshotAtReceiptTime(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery(`SELECT host\(wireguard_ip\), wireguard_public_key, host\(external_ip\), host\(internal_ip\), wireguard_listen_port, cluster_id`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).
+			AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
+
+	before := time.Now().UTC()
+	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes.*snapshot_cpu_percent = \$3.*snapshot_at = \$9`).
+		WithArgs(
+			"node-1",
+			sqlmock.AnyArg(),
+			float64(17.5),
+			int64(512),
+			int64(1024),
+			int64(2048),
+			int64(4096),
+			int64(99),
+			recentTimeArg{earliest: before, latest: before.Add(5 * time.Second)},
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT n\.node_name, n\.wireguard_public_key`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
+	mock.ExpectQuery(`SELECT s\.type, host\(n\.wireguard_ip\)`).
+		WithArgs("cluster-1").
+		WillReturnRows(sqlmock.NewRows([]string{"type", "wireguard_ip"}))
+
+	_, err = server.SyncMesh(t.Context(), &pb.InfrastructureSyncRequest{
+		NodeId:     "node-1",
+		PublicKey:  "pub",
+		ListenPort: 51820,
+		ResourceSnapshot: &pb.NodeResourceSnapshot{
+			CpuPercent:     17.5,
+			RamUsedBytes:   512,
+			RamTotalBytes:  1024,
+			DiskUsedBytes:  2048,
+			DiskTotalBytes: 4096,
+			UptimeSeconds:  99,
+			CollectedAt:    timestamppb.New(time.Now().Add(24 * time.Hour)),
+		},
+	})
+	if err != nil {
 		t.Fatalf("sync mesh: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
