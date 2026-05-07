@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { SvelteMap } from "svelte/reactivity";
+  import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import { auth } from "$lib/stores/auth";
   import {
     GetNetworkStatusStore,
@@ -90,9 +90,9 @@
   // badge on the map pin. Real instance state comes from the side-panel
   // detail query.
   let instanceCountByOrch = $derived.by(() => {
-    const m = new Map<string, Set<string>>();
+    const m = new SvelteMap<string, SvelteSet<string>>();
     for (const v of orchestratorVantageRows as Array<{ orchAddr: string; resolvedIp: string }>) {
-      const set = m.get(v.orchAddr) ?? new Set();
+      const set = m.get(v.orchAddr) ?? new SvelteSet<string>();
       set.add(v.resolvedIp);
       m.set(v.orchAddr, set);
     }

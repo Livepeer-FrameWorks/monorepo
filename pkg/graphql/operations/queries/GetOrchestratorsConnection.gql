@@ -1,15 +1,8 @@
 # Fetch the orchestrator list for the federation map. Vantage-independent
 # state only; the map merges this with `orchestratorVantages` to render
 # multi-IP / multi-region observation.
-query GetOrchestratorsConnection(
-  $orchAddr: String
-  $first: Int = 200
-  $after: String
-) {
-  orchestratorsConnection(
-    orchAddr: $orchAddr
-    page: { first: $first, after: $after }
-  ) {
+query GetOrchestratorsConnection($orchAddr: String, $first: Int = 200, $after: String) {
+  orchestratorsConnection(orchAddr: $orchAddr, page: { first: $first, after: $after }) {
     nodes {
       ...OrchestratorListFields
     }

@@ -7,6 +7,7 @@ import (
 
 	"frameworks/cli/pkg/clusterderive"
 	"frameworks/cli/pkg/inventory"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
@@ -470,6 +471,22 @@ func Render(derived *Derived, overlay *Overlay, resolver Resolver) (*Rendered, e
 		r.Purser = merged
 	}
 
+	mergedCommodore := derived.Commodore
+	if overlay != nil {
+		merged, err := mergeCommodore(mergedCommodore, overlay.Commodore)
+		if err != nil {
+			return nil, fmt.Errorf("merge commodore: %w", err)
+		}
+		mergedCommodore = merged
+	}
+	for i, ps := range mergedCommodore.PullStreams {
+		rps, err := pullStreamToRendered(ps, resolver)
+		if err != nil {
+			return nil, fmt.Errorf("commodore.pull_streams[%d] (%s): %w", i, ps.PlaybackID, err)
+		}
+		r.Commodore.PullStreams = append(r.Commodore.PullStreams, rps)
+	}
+
 	mergedAccounts := derived.Accounts
 	if overlay != nil {
 		mergedAccounts = mergeAccounts(mergedAccounts, overlay.Accounts)
@@ -704,6 +721,76 @@ func mergeAccounts(derived, overlay []AccountDerived) []AccountDerived {
 	out := append([]AccountDerived(nil), derived...)
 	out = append(out, overlay...)
 	return out
+}
+
+// mergeCommodore overlays operator-owned pull streams. Stable key: PlaybackID.
+// Additive when keys differ; Override=true updates mutable fields; collision
+// without Override is a configuration error.
+func mergeCommodore(derived, overlay CommodoreSection) (CommodoreSection, error) {
+	out := derived
+	for _, ops := range overlay.PullStreams {
+		idx := indexPullStreamByPlaybackID(out.PullStreams, ops.PlaybackID)
+		switch {
+		case idx == -1:
+			ops.Override = false
+			out.PullStreams = append(out.PullStreams, ops)
+		case ops.Override:
+			ops.Override = false
+			out.PullStreams[idx] = ops
+		default:
+			return out, fmt.Errorf("pull_stream %q: overlay collides with derived without override=true", ops.PlaybackID)
+		}
+	}
+	return out, nil
+}
+
+func indexPullStreamByPlaybackID(ps []PullStream, id string) int {
+	for i, p := range ps {
+		if p.PlaybackID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// pullStreamToRendered resolves SourceURIRef → plaintext SourceURI and validates
+// the input shape. Exactly one of SourceURI / SourceURIRef must be set.
+func pullStreamToRendered(p PullStream, resolver Resolver) (PullStreamRendered, error) {
+	uri := p.SourceURI
+	hasInline := uri != ""
+	hasRef := !p.SourceURIRef.IsZero()
+	switch {
+	case hasInline && hasRef:
+		return PullStreamRendered{}, fmt.Errorf("source_uri and source_uri_ref are mutually exclusive")
+	case !hasInline && !hasRef:
+		return PullStreamRendered{}, fmt.Errorf("one of source_uri / source_uri_ref must be set")
+	case hasRef:
+		if resolver == nil {
+			return PullStreamRendered{}, fmt.Errorf("source_uri_ref present but no resolver supplied")
+		}
+		v, err := resolver.Resolve(p.SourceURIRef)
+		if err != nil {
+			return PullStreamRendered{}, fmt.Errorf("resolve source_uri_ref: %w", err)
+		}
+		uri = v
+	}
+	if p.PlaybackID == "" {
+		return PullStreamRendered{}, fmt.Errorf("playback_id is required")
+	}
+	if err := pullsource.ValidateURI(uri); err != nil {
+		return PullStreamRendered{}, fmt.Errorf("source_uri: %w", err)
+	}
+	if p.OwnerTenant.IsZero() {
+		return PullStreamRendered{}, fmt.Errorf("owner_tenant ref is required")
+	}
+	return PullStreamRendered{
+		PlaybackID:  p.PlaybackID,
+		OwnerTenant: p.OwnerTenant,
+		Title:       p.Title,
+		Description: p.Description,
+		SourceURI:   uri,
+		Enabled:     p.Enabled,
+	}, nil
 }
 
 func accountToRendered(a AccountDerived, resolver Resolver) (AccountRendered, error) {

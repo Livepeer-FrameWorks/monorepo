@@ -31,6 +31,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 
 	"github.com/gin-gonic/gin"
@@ -1325,6 +1326,93 @@ func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float6
 	return best.DtscUrl, originClusterID
 }
 
+// resolvePullUpstreamForSource looks up the configured upstream pull URI for a
+// pull+<internal_name> stream via Commodore. Returns "" on any failure or if
+// the source is disabled. This is the only source of an upstream URI used by
+// /source for pull streams; never use query.fallback.
+func resolvePullUpstreamForSource(ctx context.Context, streamName string) string {
+	internalName := strings.TrimPrefix(streamName, "pull+")
+	if internalName == "" {
+		return ""
+	}
+	if control.CommodoreClient == nil {
+		return ""
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	resp, err := control.CommodoreClient.ResolvePullSourceByInternalName(lookupCtx, internalName)
+	if err != nil || resp == nil || !resp.GetFound() || !resp.GetEnabled() {
+		return ""
+	}
+	return resp.GetSourceUri()
+}
+
+func pullUpstreamScore(upstream string, activeScore uint64) uint64 {
+	if !pullsource.Validate(upstream) {
+		return 0
+	}
+	if activeScore == 0 {
+		return 1
+	}
+	return 0
+}
+
+func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string, ctx context.Context, start time.Time) {
+	upstream := resolvePullUpstreamForSource(ctx, streamName)
+	if upstream == "" || !triggers.ValidatePullSourceURI(upstream) {
+		logger.WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI unavailable or invalid; refusing")
+		c.Status(http.StatusNotFound)
+		return
+	}
+
+	bestNode, score, nodeLat, nodeLon, nodeName, err := lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, clientIP, true)
+	activeDTSC := ""
+	activeSource := "local"
+	originClusterID := ""
+	if err == nil {
+		hostname := bestNode
+		if u, parseErr := url.Parse(bestNode); parseErr == nil && u.Hostname() != "" {
+			hostname = u.Hostname()
+		}
+		activeDTSC = "dtsc://" + hostname
+	} else if remoteDTSC, remoteCluster := resolveRemoteSource(ctx, streamName, lat, lon); remoteDTSC != "" {
+		activeDTSC = remoteDTSC
+		activeSource = "remote"
+		originClusterID = remoteCluster
+	}
+
+	upstreamScore := pullUpstreamScore(upstream, score)
+	if activeDTSC == "" || upstreamScore > score {
+		durationMs := float32(time.Since(start).Milliseconds())
+		if metrics != nil {
+			metrics.RoutingDecisions.WithLabelValues("source", "pull_upstream").Inc()
+			metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
+		}
+		logger.WithFields(logging.Fields{
+			"stream":         streamName,
+			"upstream_score": upstreamScore,
+			"active_score":   score,
+		}).Info("Source lookup: pull stream returning upstream origin")
+		go postBalancingEvent(c, streamName, "", 0, lat, lon, "pull_upstream", pullsource.Redact(upstream), 0, 0, "", durationMs)
+		c.String(http.StatusOK, upstream)
+		return
+	}
+
+	durationMs := float32(time.Since(start).Milliseconds())
+	if metrics != nil {
+		metrics.RoutingDecisions.WithLabelValues("source", activeSource).Inc()
+		metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
+	}
+	logger.WithFields(logging.Fields{
+		"stream":       streamName,
+		"dtsc_url":     activeDTSC,
+		"active_score": score,
+		"node_name":    nodeName,
+	}).Info("Source lookup: pull stream returning active DTSC origin")
+	go postBalancingEventEx(c, streamName, nodeName, score, lat, lon, "source_selection", activeDTSC, nodeLat, nodeLon, "", durationMs, originClusterID)
+	c.String(http.StatusOK, activeDTSC)
+}
+
 // handleGetSource implements /?source=<stream> (EXACT C++ implementation)
 func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	start := time.Now()
@@ -1349,6 +1437,10 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	}
 	if streamTenantID := getStreamTenantID(streamName); streamTenantID != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyClusterScope, streamTenantID)
+	}
+	if strings.HasPrefix(streamName, "pull+") {
+		handleGetPullSource(c, streamName, lat, lon, tagAdjust, clientIP, ctx, start)
+		return
 	}
 	// Source selection (Mist pull) -> isSourceSelection=true (exclude replicated)
 	bestNode, score, nodeLat, nodeLon, nodeName, err = lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, clientIP, true)
@@ -2826,7 +2918,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	// Resolve endpoint
 	var response *pb.ViewerEndpointResponse
 	if contentType == "live" {
-		response, err = resolveLiveViewerEndpoint(c.Request.Context(), req, lat, lon, internalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
+		response, err = resolveLiveViewerEndpoint(c.Request.Context(), req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
 	} else {
 		response, err = resolveArtifactViewerEndpoint(req, lat, lon)
 	}
@@ -2861,10 +2953,11 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	// This adds a bandwidth penalty immediately, before USER_NEW confirms the connection
 	viewerID := ""
 	if contentType == "live" && response.Primary != nil && response.Primary.NodeId != "" {
-		if internalName == "" {
-			internalName = contentID
+		viewerInternalName := resolution.RoutingInternalName()
+		if viewerInternalName == "" {
+			viewerInternalName = contentID
 		}
-		viewerID = state.DefaultManager().CreateVirtualViewer(response.Primary.NodeId, internalName, viewerIP)
+		viewerID = state.DefaultManager().CreateVirtualViewer(response.Primary.NodeId, viewerInternalName, viewerIP)
 	}
 
 	// If no protocol or "any", return full JSON response

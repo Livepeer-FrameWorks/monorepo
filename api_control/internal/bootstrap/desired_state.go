@@ -9,7 +9,27 @@ package bootstrap
 // Other top-level sections (quartermaster, purser, …) are ignored at decode
 // time so a single rendered file can be served to all three services.
 type DesiredState struct {
-	Accounts []Account `yaml:"accounts,omitempty"`
+	Accounts  []Account        `yaml:"accounts,omitempty"`
+	Commodore CommodoreSection `yaml:"commodore,omitempty"`
+}
+
+// CommodoreSection mirrors cli/pkg/bootstrap.CommodoreRenderedSection for
+// operator-owned Commodore resources reconciled by commodore bootstrap.
+type CommodoreSection struct {
+	PullStreams []PullStream `yaml:"pull_streams,omitempty"`
+}
+
+// PullStream mirrors cli/pkg/bootstrap.PullStreamRendered's wire format.
+// Stable key: PlaybackID. SourceURI is plaintext; the commodore bootstrap
+// subcommand encrypts via the same FieldEncryptor used by runtime CRUD before
+// inserting into commodore.stream_pull_sources.
+type PullStream struct {
+	PlaybackID  string    `yaml:"playback_id"`
+	OwnerTenant TenantRef `yaml:"owner_tenant"`
+	Title       string    `yaml:"title"`
+	Description string    `yaml:"description,omitempty"`
+	SourceURI   string    `yaml:"source_uri"`
+	Enabled     bool      `yaml:"enabled"`
 }
 
 // Account mirrors cli/pkg/bootstrap.AccountRendered's wire format. Field shapes

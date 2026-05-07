@@ -835,3 +835,53 @@ func TestRenderBillingTierOverlay(t *testing.T) {
 		t.Fatalf("billing_tiers overlay not applied: %+v", r.Purser.BillingTiers)
 	}
 }
+
+func TestRenderPullStreamValidatesSourceURI(t *testing.T) {
+	d, err := Derive(minimalManifest(), DeriveOptions{})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	overlay := &Overlay{
+		Commodore: CommodoreSection{
+			PullStreams: []PullStream{{
+				PlaybackID:  "frameworks-demo",
+				OwnerTenant: TenantRefSystem(),
+				Title:       "FrameWorks marketing demo",
+				SourceURI:   "https://ntv1.akamaized.net/hls/live/2014075/NASA-NTV1-HLS/master.m3u8",
+				Enabled:     true,
+			}},
+		},
+	}
+	r, err := Render(d, overlay, nil)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if got := len(r.Commodore.PullStreams); got != 1 {
+		t.Fatalf("pull streams = %d, want 1", got)
+	}
+	ps := r.Commodore.PullStreams[0]
+	if ps.SourceURI != "https://ntv1.akamaized.net/hls/live/2014075/NASA-NTV1-HLS/master.m3u8" {
+		t.Fatalf("SourceURI = %q", ps.SourceURI)
+	}
+}
+
+func TestRenderPullStreamRejectsUnsupportedSourceURI(t *testing.T) {
+	d, err := Derive(minimalManifest(), DeriveOptions{})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	overlay := &Overlay{
+		Commodore: CommodoreSection{
+			PullStreams: []PullStream{{
+				PlaybackID:  "bad-demo",
+				OwnerTenant: TenantRefSystem(),
+				Title:       "Bad demo",
+				SourceURI:   "https://example.com/live",
+				Enabled:     true,
+			}},
+		},
+	}
+	if _, err := Render(d, overlay, nil); err == nil || !strings.Contains(err.Error(), "source_uri") {
+		t.Fatalf("expected source_uri validation error, got %v", err)
+	}
+}

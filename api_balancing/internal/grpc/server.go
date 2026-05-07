@@ -1542,7 +1542,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 
 	switch resolvedType {
 	case "live":
-		response, err = s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
+		response, err = s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
 	case "dvr", "clip", "vod":
 		response, err = s.resolveArtifactViewerEndpoint(ctx, req, lat, lon)
 	default:
@@ -1559,7 +1559,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 
 	// Create virtual viewer for live streams (consistent with HTTP handlers)
 	if resolvedType == "live" && response.Primary != nil && response.Primary.NodeId != "" {
-		internalName := resolution.InternalName
+		internalName := resolution.RoutingInternalName()
 		if internalName == "" {
 			internalName = req.ContentId
 		}
@@ -1569,7 +1569,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 
 	// Enrich live metadata from unified state
 	if resolvedType == "live" && response.Metadata != nil {
-		stateKey := resolution.InternalName
+		stateKey := resolution.RoutingInternalName()
 		if stateKey == "" {
 			stateKey = req.ContentId
 		}

@@ -116,9 +116,13 @@ type CommodoreServer struct {
 	// Separate FieldEncryptor for playback webhook secrets so HKDF purpose
 	// isolation prevents cross-feature key reuse.
 	playbackWebhookEncryptor *fieldcrypt.FieldEncryptor
-	routeCache               map[string]*clusterRoute
-	routeCacheMu             sync.RWMutex
-	routeCacheTTL            time.Duration
+	// Separate FieldEncryptor for pull-input source URIs (purpose
+	// "pull-source-uri"). Used by ResolvePullSourceByInternalName and the
+	// commodore bootstrap reconciler when persisting stream_pull_sources.
+	pullSourceEncryptor *fieldcrypt.FieldEncryptor
+	routeCache          map[string]*clusterRoute
+	routeCacheMu        sync.RWMutex
+	routeCacheTTL       time.Duration
 }
 
 // clusterRoute caches the tenant -> cluster -> foghorn mapping.
@@ -372,6 +376,12 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 	if err != nil {
 		cfg.Logger.WithError(err).Fatal("Failed to derive playback webhook field encryption key")
 	}
+	// Separate purpose for pull-input source URIs (HKDF isolation as above).
+	// Bootstrap reconciler must derive with the SAME purpose string.
+	pse, err := fieldcrypt.DeriveFieldEncryptor(cfg.JWTSecret, "pull-source-uri")
+	if err != nil {
+		cfg.Logger.WithError(err).Fatal("Failed to derive pull source URI field encryption key")
+	}
 
 	return &CommodoreServer{
 		db:                       cfg.DB,
@@ -388,6 +398,7 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 		passwordResetSecret:      cfg.PasswordResetSecret,
 		fieldEncryptor:           fe,
 		playbackWebhookEncryptor: pwe,
+		pullSourceEncryptor:      pse,
 		routeCache:               make(map[string]*clusterRoute),
 		routeCacheTTL:            5 * time.Minute,
 	}
@@ -899,12 +910,12 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.Resolve
 	}
 
 	// playback_id is globally UNIQUE (commodore.sql), so no tenant_id filter needed
-	var streamID, internalName, tenantID string
+	var streamID, internalName, tenantID, ingestMode string
 	var requiresAuth bool
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, internal_name, tenant_id, requires_auth
+		SELECT id, internal_name, tenant_id, requires_auth, ingest_mode
 		FROM commodore.streams WHERE playback_id = $1
-	`, playbackID).Scan(&streamID, &internalName, &tenantID, &requiresAuth)
+	`, playbackID).Scan(&streamID, &internalName, &tenantID, &requiresAuth, &ingestMode)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "Stream not found")
@@ -924,6 +935,7 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.Resolve
 		PlaybackId:   playbackID,
 		StreamId:     streamID,
 		RequiresAuth: requiresAuth,
+		IngestMode:   ingestMode,
 	}
 
 	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
@@ -977,6 +989,61 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *pb.Resol
 		resp.OriginClusterId = route.clusterID
 	}
 	return resp, nil
+}
+
+// ResolvePullSourceByInternalName returns the configured upstream pull URI for a
+// pull-mode stream, decrypted. Foghorn calls this from STREAM_SOURCE handling
+// and /source origin selection for pull+<internal_name> streams.
+func (s *CommodoreServer) ResolvePullSourceByInternalName(ctx context.Context, req *pb.ResolvePullSourceByInternalNameRequest) (*pb.ResolvePullSourceByInternalNameResponse, error) {
+	internalName := req.GetInternalName()
+	if internalName == "" {
+		return nil, status.Error(codes.InvalidArgument, "internal_name required")
+	}
+
+	var (
+		streamID     string
+		tenantID     string
+		ingestMode   string
+		sourceURIEnc string
+		enabled      bool
+	)
+	err := s.db.QueryRowContext(ctx, `
+			SELECT s.id, s.tenant_id, s.ingest_mode,
+			       p.source_uri_enc, p.enabled
+			FROM commodore.streams s
+			JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
+			WHERE s.internal_name = $1
+		`, internalName).Scan(&streamID, &tenantID, &ingestMode, &sourceURIEnc, &enabled)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return &pb.ResolvePullSourceByInternalNameResponse{Found: false}, nil
+	}
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"internal_name": internalName,
+			"error":         err,
+		}).Error("Database error resolving pull source")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	if ingestMode != "pull" {
+		// Stream exists but isn't a pull stream — refuse to leak any URI.
+		return &pb.ResolvePullSourceByInternalNameResponse{Found: false}, nil
+	}
+
+	sourceURI, err := s.pullSourceEncryptor.Decrypt(sourceURIEnc)
+	if err != nil {
+		s.logger.WithError(err).WithField("internal_name", internalName).Warn("Failed to decrypt pull source_uri")
+		return nil, status.Error(codes.Internal, "failed to decrypt pull source")
+	}
+
+	return &pb.ResolvePullSourceByInternalNameResponse{
+		Found:     true,
+		SourceUri: sourceURI,
+		Enabled:   enabled,
+		TenantId:  tenantID,
+		StreamId:  streamID,
+	}, nil
 }
 
 // ValidateAPIToken validates a developer API token (called by Gateway middleware)

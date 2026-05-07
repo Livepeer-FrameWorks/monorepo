@@ -26,5 +26,13 @@ func Check(desired DesiredState) error {
 			}
 		}
 	}
+	for _, ps := range desired.Commodore.PullStreams {
+		if err := validatePullStream(ps); err != nil {
+			return err
+		}
+		if _, err := AliasFromRef(ps.OwnerTenant.Ref); err != nil {
+			return fmt.Errorf("pull_stream %q: %w", ps.PlaybackID, err)
+		}
+	}
 	return nil
 }

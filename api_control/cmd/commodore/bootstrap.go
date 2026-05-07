@@ -13,11 +13,20 @@ import (
 	"frameworks/api_control/internal/bootstrap"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"gopkg.in/yaml.v3"
 )
+
+// newSourceURIEncrypter derives the same FieldEncryptor the runtime Commodore
+// service uses for pull-input source URIs. Purpose string "pull-source-uri"
+// MUST match grpc/server.go; HKDF isolation depends on it.
+func newSourceURIEncrypter() (*fieldcrypt.FieldEncryptor, error) {
+	jwtSecret := config.RequireEnv("JWT_SECRET")
+	return fieldcrypt.DeriveFieldEncryptor([]byte(jwtSecret), "pull-source-uri")
+}
 
 // runBootstrapCommand handles `commodore bootstrap …` invocations. main()
 // dispatches here when argv[1] == "bootstrap"; the remaining argv is passed
@@ -100,6 +109,24 @@ func runBootstrapCommand(args []string) int {
 	}
 	fmt.Fprintf(os.Stdout, "commodore bootstrap accounts: created=%d updated=%d noop=%d\n",
 		len(res.Created), len(res.Updated), len(res.Noop))
+
+	if streams := desired.Commodore.PullStreams; len(streams) > 0 {
+		encrypter, err := newSourceURIEncrypter()
+		if err != nil {
+			_ = tx.Rollback() //nolint:errcheck // already in error path
+			fmt.Fprintf(os.Stderr, "commodore bootstrap: source URI encrypter: %v\n", err)
+			return 1
+		}
+		psRes, err := bootstrap.ReconcilePullStreams(ctx, tx, streams, resolver, encrypter)
+		if err != nil {
+			_ = tx.Rollback() //nolint:errcheck // already in error path
+			fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stdout, "commodore bootstrap pull_streams: created=%d updated=%d noop=%d\n",
+			len(psRes.Created), len(psRes.Updated), len(psRes.Noop))
+	}
+
 	if *dryRun {
 		if err := tx.Rollback(); err != nil {
 			fmt.Fprintf(os.Stderr, "commodore bootstrap [dry-run] rollback: %v\n", err)
@@ -163,7 +190,7 @@ func (r *grpcTenantResolver) Close() {
 
 // loadDesiredState reads + decodes the rendered bootstrap YAML for Commodore.
 // Two-pass decode: lenient on unknown top-level sections (quartermaster:, purser:),
-// strict (KnownFields(true)) inside accounts entries so typos fail parse.
+// strict (KnownFields(true)) inside accounts/commodore entries so typos fail parse.
 func loadDesiredState(path string) (*bootstrap.DesiredState, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -174,18 +201,30 @@ func loadDesiredState(path string) (*bootstrap.DesiredState, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	out := &bootstrap.DesiredState{}
-	accNode, ok := top["accounts"]
-	if !ok {
-		return out, nil
+
+	if accNode, ok := top["accounts"]; ok {
+		var buf bytes.Buffer
+		if err := yaml.NewEncoder(&buf).Encode(&accNode); err != nil {
+			return nil, fmt.Errorf("re-encode accounts section: %w", err)
+		}
+		dec := yaml.NewDecoder(&buf)
+		dec.KnownFields(true)
+		if err := dec.Decode(&out.Accounts); err != nil && !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("parse accounts section in %s: %w", path, err)
+		}
 	}
-	var buf bytes.Buffer
-	if err := yaml.NewEncoder(&buf).Encode(&accNode); err != nil {
-		return nil, fmt.Errorf("re-encode accounts section: %w", err)
+
+	if cmdNode, ok := top["commodore"]; ok {
+		var buf bytes.Buffer
+		if err := yaml.NewEncoder(&buf).Encode(&cmdNode); err != nil {
+			return nil, fmt.Errorf("re-encode commodore section: %w", err)
+		}
+		dec := yaml.NewDecoder(&buf)
+		dec.KnownFields(true)
+		if err := dec.Decode(&out.Commodore); err != nil && !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("parse commodore section in %s: %w", path, err)
+		}
 	}
-	dec := yaml.NewDecoder(&buf)
-	dec.KnownFields(true)
-	if err := dec.Decode(&out.Accounts); err != nil && !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("parse accounts section in %s: %w", path, err)
-	}
+
 	return out, nil
 }

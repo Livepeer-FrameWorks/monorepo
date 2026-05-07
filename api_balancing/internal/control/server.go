@@ -2562,6 +2562,12 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 			Roles: []string{"edge", "storage"},
 			Caps:  []string{"processing"},
 		},
+		{
+			Id:    "pull",
+			Def:   &pb.StreamDef{Name: "pull", Realtime: true, StopSessions: false, Tags: []string{"pull"}},
+			Roles: []string{"edge"},
+			Caps:  []string{"edge"},
+		},
 	}
 
 	var tlsBundle *pb.TLSCertBundle
@@ -2633,6 +2639,13 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		Telemetry:           telemetry,
 		FoghornBalancerBase: foghornBalancerBase(resolvedClusterID),
 	}
+}
+
+// FoghornBalancerBase is the exported entry-point for callers outside this
+// package (e.g. the trigger handler returning balance: URIs from STREAM_SOURCE
+// for pull+ streams).
+func FoghornBalancerBase(clusterID string) string {
+	return foghornBalancerBase(clusterID)
 }
 
 // foghornBalancerBase returns the public HTTP base URL Helmsman should use for

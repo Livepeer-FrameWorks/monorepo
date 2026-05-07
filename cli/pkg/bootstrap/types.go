@@ -259,6 +259,54 @@ type PurserSection struct {
 	CustomerBilling []CustomerBilling `yaml:"customer_billing,omitempty"`
 }
 
+// === Commodore section — operator-owned platform fixtures ===
+
+// CommodoreSection carries declarative state for resources Commodore owns at
+// bootstrap time.
+type CommodoreSection struct {
+	PullStreams []PullStream `yaml:"pull_streams,omitempty"`
+}
+
+// PullStream is an operator-owned pull-input stream provisioned at bootstrap.
+// Stable key: PlaybackID (chosen by the operator, surfaced into website config).
+//
+// Consumer obligation: `commodore bootstrap` must persist (playback_id, tenant_ref)
+// → real stream UUID so re-runs find the same row by playback_id. Without that,
+// bootstrap is non-idempotent.
+type PullStream struct {
+	PlaybackID  string    `yaml:"playback_id"`
+	OwnerTenant TenantRef `yaml:"owner_tenant"`
+	Title       string    `yaml:"title"`
+	Description string    `yaml:"description,omitempty"`
+
+	// SourceURI is the upstream URL Mist pulls from. May embed credentials in-URI
+	// for RTSP basic-auth; SecretRef is supported via SourceURIRef for cleaner
+	// rotation. Exactly one of SourceURI / SourceURIRef must be set.
+	SourceURI    string    `yaml:"source_uri,omitempty"`
+	SourceURIRef SecretRef `yaml:"source_uri_ref,omitempty"`
+
+	Enabled bool `yaml:"enabled"`
+
+	// Override = true on an Overlay item replaces the manifest-derived entry
+	// with the same PlaybackID. Ignored on Derived and Rendered.
+	Override bool `yaml:"override,omitempty"`
+}
+
+// PullStreamRendered is the resolved-secrets shape consumed by `commodore bootstrap`.
+type PullStreamRendered struct {
+	PlaybackID  string    `yaml:"playback_id"`
+	OwnerTenant TenantRef `yaml:"owner_tenant"`
+	Title       string    `yaml:"title"`
+	Description string    `yaml:"description,omitempty"`
+	SourceURI   string    `yaml:"source_uri"`
+	Enabled     bool      `yaml:"enabled"`
+}
+
+// CommodoreRenderedSection is the post-render counterpart to CommodoreSection.
+type CommodoreRenderedSection struct {
+	PullStreams []PullStreamRendered `yaml:"pull_streams,omitempty"`
+}
+
 // === Account types — these differ by layer because they carry secrets ===
 
 // AccountKind distinguishes operator/system accounts (skip Purser by design) from
@@ -352,6 +400,7 @@ type AccountRendered struct {
 type Derived struct {
 	Quartermaster QuartermasterSection `yaml:"quartermaster,omitempty"`
 	Purser        PurserSection        `yaml:"purser,omitempty"`
+	Commodore     CommodoreSection     `yaml:"commodore,omitempty"`
 	Accounts      []AccountDerived     `yaml:"accounts,omitempty"`
 }
 
@@ -361,6 +410,7 @@ type Derived struct {
 type Overlay struct {
 	Quartermaster QuartermasterSection `yaml:"quartermaster,omitempty"`
 	Purser        PurserSection        `yaml:"purser,omitempty"`
+	Commodore     CommodoreSection     `yaml:"commodore,omitempty"`
 	Accounts      []AccountDerived     `yaml:"accounts,omitempty"`
 }
 
@@ -368,7 +418,8 @@ type Overlay struct {
 // All secrets are resolved to plaintext. Render produces this; Validate exercises it;
 // service bootstrap subcommands consume it.
 type Rendered struct {
-	Quartermaster QuartermasterSection `yaml:"quartermaster,omitempty"`
-	Purser        PurserSection        `yaml:"purser,omitempty"`
-	Accounts      []AccountRendered    `yaml:"accounts,omitempty"`
+	Quartermaster QuartermasterSection     `yaml:"quartermaster,omitempty"`
+	Purser        PurserSection            `yaml:"purser,omitempty"`
+	Commodore     CommodoreRenderedSection `yaml:"commodore,omitempty"`
+	Accounts      []AccountRendered        `yaml:"accounts,omitempty"`
 }

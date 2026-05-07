@@ -158,7 +158,7 @@ func (m *Manager) reconcile() {
 		"LIVEPEER_SEGMENT_COMPLETE":           []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/livepeer_segment_complete"), "sync": false}},
 		"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/process_av_segment_complete"), "sync": false}},
 		"THUMBNAIL_UPDATED":                   []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/thumbnail_updated"), "sync": false}},
-		"STREAM_PROCESS":                      []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/stream_process"), "sync": true, "streams": []string{"live+", "processing+", "vod+"}}},
+		"STREAM_PROCESS":                      []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/stream_process"), "sync": true, "streams": []string{"live+", "processing+", "vod+", "pull+"}}},
 		"PROCESS_EXIT":                        []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/process_exit"), "sync": false, "streams": []string{"processing+"}}},
 	}
 	desiredConfig["triggers"] = triggers
@@ -664,13 +664,18 @@ func (m *Manager) ensureStreams(seed *pb.ConfigSeed) error {
 	if base == "" {
 		return fmt.Errorf("ConfigSeed missing foghorn_balancer_base; cannot wire MistServer balancer")
 	}
-	source := "balance:" + base + "?fallback=push://"
+	pushSource := "balance:" + base + "?fallback=push://"
+	pullSource := "balance:" + base
 
 	streams := map[string]map[string]interface{}{}
 	for _, t := range seed.GetTemplates() {
 		def := t.GetDef()
 		if def == nil || def.GetName() == "" {
 			continue
+		}
+		source := pushSource
+		if def.GetName() == "pull" {
+			source = pullSource
 		}
 		entry := map[string]interface{}{
 			"name":          def.GetName(),
@@ -680,7 +685,7 @@ func (m *Manager) ensureStreams(seed *pb.ConfigSeed) error {
 			"tags":          def.GetTags(),
 		}
 
-		// processing+ source is resolved dynamically via STREAM_SOURCE trigger
+		// processing+ sources are resolved dynamically via STREAM_SOURCE.
 		if strings.HasPrefix(def.GetName(), "processing+") {
 			entry["source"] = ""
 		}

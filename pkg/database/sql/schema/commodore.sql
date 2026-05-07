@@ -152,6 +152,11 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
     -- ===== DVR RECORDING =====
     is_recording_enabled BOOLEAN DEFAULT FALSE,
 
+    -- ===== INGEST MODE =====
+    -- 'push': encoder pushes via RTMP/WHIP/SRT (default).
+    -- 'pull': MistServer pulls from a configured upstream URI; see commodore.stream_pull_sources.
+    ingest_mode TEXT NOT NULL DEFAULT 'push',
+
     -- ===== CLUSTER TRACKING =====
     -- Set by ValidateStreamKey when Foghorn reports its cluster_id during ingest.
     -- Used by Commodore to route stream-scoped commands (CreateClip) to the correct cluster.
@@ -193,7 +198,29 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_streams_stream_key_ci
     ON commodore.streams((lower(stream_key::text)));
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_streams_playback_id_ci
     ON commodore.streams((lower(playback_id::text)));
+CREATE INDEX IF NOT EXISTS idx_commodore_streams_ingest_mode
+    ON commodore.streams(ingest_mode) WHERE ingest_mode <> 'push';
 CREATE INDEX IF NOT EXISTS idx_commodore_stream_keys_stream_id ON commodore.stream_keys(stream_id);
+
+-- ============================================================================
+-- PULL STREAMS — upstream source config for ingest_mode='pull' streams
+-- ============================================================================
+-- One row per pull stream. Foghorn's STREAM_SOURCE handler and /source resolver
+-- look this up via Commodore's ResolvePullSourceByInternalName RPC. source_uri_enc
+-- is application-encrypted (same convention as push_targets.target_uri /
+-- playback_webhook_secret_enc) because pull URIs may carry credentials in-URI
+-- (e.g. rtsp://user:pass@host).
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS commodore.stream_pull_sources (
+    stream_id UUID PRIMARY KEY REFERENCES commodore.streams(id) ON DELETE CASCADE,
+
+    source_uri_enc TEXT NOT NULL,                -- encrypted upstream URI
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
 
 -- ============================================================================
 -- MULTISTREAM PUSH TARGETS

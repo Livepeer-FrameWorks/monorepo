@@ -54,6 +54,11 @@ const LandingPage = () => {
   const [showPlayer, setShowPlayer] = useState(false);
   const [logoAnimationComplete, setLogoAnimationComplete] = useState(false);
   const [demoState, setDemoState] = useState("booting");
+  const demoFixtures =
+    config.demoFixtures && config.demoFixtures.length > 0
+      ? config.demoFixtures
+      : [{ id: config.demoStreamName, label: "Demo" }];
+  const [activeFixtureId, setActiveFixtureId] = useState(demoFixtures[0].id);
 
   const glitchStripData = useMemo(() => generateGlitchStrips(), []);
 
@@ -303,7 +308,8 @@ const LandingPage = () => {
                   <div className="hero-player-card__screen">
                     <div className="hero-player-card__stage">
                       <FrameworksPlayer
-                        contentId={config.demoStreamName}
+                        key={activeFixtureId}
+                        contentId={activeFixtureId}
                         contentType="live"
                         options={{
                           autoplay: true,
@@ -315,6 +321,22 @@ const LandingPage = () => {
                       />
                     </div>
                   </div>
+                  {demoFixtures.length > 1 && (
+                    <div className="hero-player-card__fixture-toggle">
+                      {demoFixtures.map((f) => (
+                        <button
+                          key={f.id}
+                          type="button"
+                          className={`hero-player-card__fixture-toggle-btn${
+                            f.id === activeFixtureId ? " is-active" : ""
+                          }`}
+                          onClick={() => setActiveFixtureId(f.id)}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 

@@ -20,29 +20,30 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	InternalService_ValidateStreamKey_FullMethodName           = "/commodore.InternalService/ValidateStreamKey"
-	InternalService_ResolvePlaybackID_FullMethodName           = "/commodore.InternalService/ResolvePlaybackID"
-	InternalService_ResolvePlaybackPolicy_FullMethodName       = "/commodore.InternalService/ResolvePlaybackPolicy"
-	InternalService_RecordSigningKeyUse_FullMethodName         = "/commodore.InternalService/RecordSigningKeyUse"
-	InternalService_ResolveInternalName_FullMethodName         = "/commodore.InternalService/ResolveInternalName"
-	InternalService_ValidateAPIToken_FullMethodName            = "/commodore.InternalService/ValidateAPIToken"
-	InternalService_StartDVR_FullMethodName                    = "/commodore.InternalService/StartDVR"
-	InternalService_RegisterClip_FullMethodName                = "/commodore.InternalService/RegisterClip"
-	InternalService_RegisterDVR_FullMethodName                 = "/commodore.InternalService/RegisterDVR"
-	InternalService_ResolveClipHash_FullMethodName             = "/commodore.InternalService/ResolveClipHash"
-	InternalService_ResolveDVRHash_FullMethodName              = "/commodore.InternalService/ResolveDVRHash"
-	InternalService_ResolveArtifactPlaybackID_FullMethodName   = "/commodore.InternalService/ResolveArtifactPlaybackID"
-	InternalService_ResolveArtifactInternalName_FullMethodName = "/commodore.InternalService/ResolveArtifactInternalName"
-	InternalService_ResolveIdentifier_FullMethodName           = "/commodore.InternalService/ResolveIdentifier"
-	InternalService_RegisterVod_FullMethodName                 = "/commodore.InternalService/RegisterVod"
-	InternalService_ResolveVodHash_FullMethodName              = "/commodore.InternalService/ResolveVodHash"
-	InternalService_ResolveVodID_FullMethodName                = "/commodore.InternalService/ResolveVodID"
-	InternalService_GetOrCreateWalletUser_FullMethodName       = "/commodore.InternalService/GetOrCreateWalletUser"
-	InternalService_TerminateTenantStreams_FullMethodName      = "/commodore.InternalService/TerminateTenantStreams"
-	InternalService_InvalidateTenantCache_FullMethodName       = "/commodore.InternalService/InvalidateTenantCache"
-	InternalService_GetTenantUserCount_FullMethodName          = "/commodore.InternalService/GetTenantUserCount"
-	InternalService_GetTenantPrimaryUser_FullMethodName        = "/commodore.InternalService/GetTenantPrimaryUser"
-	InternalService_CreateUserInTenant_FullMethodName          = "/commodore.InternalService/CreateUserInTenant"
+	InternalService_ValidateStreamKey_FullMethodName               = "/commodore.InternalService/ValidateStreamKey"
+	InternalService_ResolvePlaybackID_FullMethodName               = "/commodore.InternalService/ResolvePlaybackID"
+	InternalService_ResolvePullSourceByInternalName_FullMethodName = "/commodore.InternalService/ResolvePullSourceByInternalName"
+	InternalService_ResolvePlaybackPolicy_FullMethodName           = "/commodore.InternalService/ResolvePlaybackPolicy"
+	InternalService_RecordSigningKeyUse_FullMethodName             = "/commodore.InternalService/RecordSigningKeyUse"
+	InternalService_ResolveInternalName_FullMethodName             = "/commodore.InternalService/ResolveInternalName"
+	InternalService_ValidateAPIToken_FullMethodName                = "/commodore.InternalService/ValidateAPIToken"
+	InternalService_StartDVR_FullMethodName                        = "/commodore.InternalService/StartDVR"
+	InternalService_RegisterClip_FullMethodName                    = "/commodore.InternalService/RegisterClip"
+	InternalService_RegisterDVR_FullMethodName                     = "/commodore.InternalService/RegisterDVR"
+	InternalService_ResolveClipHash_FullMethodName                 = "/commodore.InternalService/ResolveClipHash"
+	InternalService_ResolveDVRHash_FullMethodName                  = "/commodore.InternalService/ResolveDVRHash"
+	InternalService_ResolveArtifactPlaybackID_FullMethodName       = "/commodore.InternalService/ResolveArtifactPlaybackID"
+	InternalService_ResolveArtifactInternalName_FullMethodName     = "/commodore.InternalService/ResolveArtifactInternalName"
+	InternalService_ResolveIdentifier_FullMethodName               = "/commodore.InternalService/ResolveIdentifier"
+	InternalService_RegisterVod_FullMethodName                     = "/commodore.InternalService/RegisterVod"
+	InternalService_ResolveVodHash_FullMethodName                  = "/commodore.InternalService/ResolveVodHash"
+	InternalService_ResolveVodID_FullMethodName                    = "/commodore.InternalService/ResolveVodID"
+	InternalService_GetOrCreateWalletUser_FullMethodName           = "/commodore.InternalService/GetOrCreateWalletUser"
+	InternalService_TerminateTenantStreams_FullMethodName          = "/commodore.InternalService/TerminateTenantStreams"
+	InternalService_InvalidateTenantCache_FullMethodName           = "/commodore.InternalService/InvalidateTenantCache"
+	InternalService_GetTenantUserCount_FullMethodName              = "/commodore.InternalService/GetTenantUserCount"
+	InternalService_GetTenantPrimaryUser_FullMethodName            = "/commodore.InternalService/GetTenantPrimaryUser"
+	InternalService_CreateUserInTenant_FullMethodName              = "/commodore.InternalService/CreateUserInTenant"
 )
 
 // InternalServiceClient is the client API for InternalService service.
@@ -57,6 +58,11 @@ type InternalServiceClient interface {
 	// Called by edge nodes to resolve playback ID to internal name
 	// Source: pkg/api/commodore/types.go:ResolvePlaybackIDResponse
 	ResolvePlaybackID(ctx context.Context, in *ResolvePlaybackIDRequest, opts ...grpc.CallOption) (*ResolvePlaybackIDResponse, error)
+	// Called by Foghorn's STREAM_SOURCE handler and /source origin selector for
+	// pull+<internal_name> streams. Returns the configured upstream pull URI.
+	// Decryption happens server-side; callers receive cleartext suitable for
+	// handing to MistServer's input modules.
+	ResolvePullSourceByInternalName(ctx context.Context, in *ResolvePullSourceByInternalNameRequest, opts ...grpc.CallOption) (*ResolvePullSourceByInternalNameResponse, error)
 	// Called by Foghorn's USER_NEW handler to fetch the full playback policy
 	// (signing keys + claim requirements OR webhook policy) when requires_auth
 	// is true on the resolved playback object. Enforcement callers must set
@@ -140,6 +146,16 @@ func (c *internalServiceClient) ResolvePlaybackID(ctx context.Context, in *Resol
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ResolvePlaybackIDResponse)
 	err := c.cc.Invoke(ctx, InternalService_ResolvePlaybackID_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ResolvePullSourceByInternalName(ctx context.Context, in *ResolvePullSourceByInternalNameRequest, opts ...grpc.CallOption) (*ResolvePullSourceByInternalNameResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolvePullSourceByInternalNameResponse)
+	err := c.cc.Invoke(ctx, InternalService_ResolvePullSourceByInternalName_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -368,6 +384,11 @@ type InternalServiceServer interface {
 	// Called by edge nodes to resolve playback ID to internal name
 	// Source: pkg/api/commodore/types.go:ResolvePlaybackIDResponse
 	ResolvePlaybackID(context.Context, *ResolvePlaybackIDRequest) (*ResolvePlaybackIDResponse, error)
+	// Called by Foghorn's STREAM_SOURCE handler and /source origin selector for
+	// pull+<internal_name> streams. Returns the configured upstream pull URI.
+	// Decryption happens server-side; callers receive cleartext suitable for
+	// handing to MistServer's input modules.
+	ResolvePullSourceByInternalName(context.Context, *ResolvePullSourceByInternalNameRequest) (*ResolvePullSourceByInternalNameResponse, error)
 	// Called by Foghorn's USER_NEW handler to fetch the full playback policy
 	// (signing keys + claim requirements OR webhook policy) when requires_auth
 	// is true on the resolved playback object. Enforcement callers must set
@@ -442,6 +463,9 @@ func (UnimplementedInternalServiceServer) ValidateStreamKey(context.Context, *Va
 }
 func (UnimplementedInternalServiceServer) ResolvePlaybackID(context.Context, *ResolvePlaybackIDRequest) (*ResolvePlaybackIDResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolvePlaybackID not implemented")
+}
+func (UnimplementedInternalServiceServer) ResolvePullSourceByInternalName(context.Context, *ResolvePullSourceByInternalNameRequest) (*ResolvePullSourceByInternalNameResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolvePullSourceByInternalName not implemented")
 }
 func (UnimplementedInternalServiceServer) ResolvePlaybackPolicy(context.Context, *ResolvePlaybackPolicyRequest) (*ResolvePlaybackPolicyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolvePlaybackPolicy not implemented")
@@ -559,6 +583,24 @@ func _InternalService_ResolvePlaybackID_Handler(srv interface{}, ctx context.Con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).ResolvePlaybackID(ctx, req.(*ResolvePlaybackIDRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ResolvePullSourceByInternalName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolvePullSourceByInternalNameRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ResolvePullSourceByInternalName(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ResolvePullSourceByInternalName_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ResolvePullSourceByInternalName(ctx, req.(*ResolvePullSourceByInternalNameRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -955,6 +997,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResolvePlaybackID",
 			Handler:    _InternalService_ResolvePlaybackID_Handler,
+		},
+		{
+			MethodName: "ResolvePullSourceByInternalName",
+			Handler:    _InternalService_ResolvePullSourceByInternalName_Handler,
 		},
 		{
 			MethodName: "ResolvePlaybackPolicy",

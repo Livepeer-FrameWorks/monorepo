@@ -353,18 +353,14 @@ type Query {
   price/capabilities/hardware — usually consistent across an orch's pool but
   not guaranteed. Use the optional `orchAddr` filter to scope to one orch.
   """
-  orchestratorInstances(
-    orchAddr: String
-  ): [OrchestratorInstance!]!
+  orchestratorInstances(orchAddr: String): [OrchestratorInstance!]!
 
   """
   List per-(gateway, instance) vantage observations. Multi-region observation
   surfaces here as multiple rows. Use the optional `orchAddr` filter to
   scope to one orchestrator.
   """
-  orchestratorVantages(
-    orchAddr: String
-  ): [OrchestratorVantage!]!
+  orchestratorVantages(orchAddr: String): [OrchestratorVantage!]!
 
   """
   Time-series performance points for an orchestrator from the discovery
@@ -1811,13 +1807,13 @@ union RevokeDeveloperTokenResult = DeleteSuccess | NotFoundError | AuthError
 
 # Playback access control result unions
 union CreateSigningKeyResult =
-    CreateSigningKeySuccess
+  | CreateSigningKeySuccess
   | ValidationError
   | RateLimitError
   | AuthError
 union RevokeSigningKeyResult = SigningKey | NotFoundError | AuthError
 union SetPlaybackPolicyResult =
-    Stream
+  | Stream
   | VodAsset
   | Clip
   | ValidationError

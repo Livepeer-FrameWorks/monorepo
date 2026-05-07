@@ -102,11 +102,16 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 		}
 	}
 
-	// 3. Live view keys (playback_id)
+	// 3. Live view keys (playback_id) — prefix is kind-aware.
+	// push streams → live+<internal>; pull streams → pull+<internal>.
 	if CommodoreClient != nil {
 		if resp, err := CommodoreClient.ResolvePlaybackID(ctx, input); err == nil {
+			prefix := "live+"
+			if resp.GetIngestMode() == "pull" {
+				prefix = "pull+"
+			}
 			return &StreamTarget{
-				InternalName:      "live+" + resp.InternalName,
+				InternalName:      prefix + resp.InternalName,
 				IsVod:             false,
 				TenantID:          resp.TenantId,
 				StreamID:          resp.StreamId,

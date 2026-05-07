@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { SvelteMap } from "svelte/reactivity";
+
   interface CapabilityPrice {
     capability: string;
     pricePerUnitEth: string;
@@ -79,7 +81,7 @@
   // genuinely the same instance, but the latency varies per gateway —
   // surface both.
   let vantagesByIp = $derived.by(() => {
-    const map = new Map<string, OrchestratorVantage[]>();
+    const map = new SvelteMap<string, OrchestratorVantage[]>();
     for (const v of vantages) {
       const list = map.get(v.resolvedIp) ?? [];
       list.push(v);

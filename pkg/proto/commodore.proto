@@ -33,6 +33,12 @@ service InternalService {
   // Source: pkg/api/commodore/types.go:ResolvePlaybackIDResponse
   rpc ResolvePlaybackID(ResolvePlaybackIDRequest) returns (ResolvePlaybackIDResponse);
 
+  // Called by Foghorn's STREAM_SOURCE handler and /source origin selector for
+  // pull+<internal_name> streams. Returns the configured upstream pull URI.
+  // Decryption happens server-side; callers receive cleartext suitable for
+  // handing to MistServer's input modules.
+  rpc ResolvePullSourceByInternalName(ResolvePullSourceByInternalNameRequest) returns (ResolvePullSourceByInternalNameResponse);
+
   // Called by Foghorn's USER_NEW handler to fetch the full playback policy
   // (signing keys + claim requirements OR webhook policy) when requires_auth
   // is true on the resolved playback object. Enforcement callers must set
@@ -210,6 +216,31 @@ message ResolvePlaybackIDResponse {
   // policy is set on this object (live stream / vod_asset / clip).
   // The full policy is fetched separately via ResolvePlaybackPolicy.
   bool requires_auth = 12;
+  // ingest_mode discriminates between push (encoder pushes RTMP/WHIP/SRT) and
+  // pull (Mist pulls from a configured upstream URI). Drives the prefix the
+  // resolver applies (live+ vs pull+) and the cold-start routing path.
+  // Source for pull streams: commodore.stream_pull_sources, fetched via
+  // ResolvePullSourceByInternalName.
+  string ingest_mode = 13;
+}
+
+// ============================================================================
+// PULL SOURCE RESOLUTION (Foghorn → Commodore)
+// Foghorn calls this from STREAM_SOURCE for pull+<internal_name> and from the
+// /source origin-selector. Foghorn must NOT trust query-param fallbacks for
+// pull streams — the upstream URI is server-side-resolved here.
+// ============================================================================
+
+message ResolvePullSourceByInternalNameRequest {
+  string internal_name = 1; // bare internal_name (the part after pull+)
+}
+
+message ResolvePullSourceByInternalNameResponse {
+  bool found = 1;
+  string source_uri = 2;   // decrypted upstream URI; empty if !found or !enabled
+  bool enabled = 3;        // tenant-controlled; false means honour the row but don't pull
+  string tenant_id = 4;    // for trigger-envelope attribution at the caller
+  string stream_id = 5;    // public stream UUID
 }
 
 // ============================================================================

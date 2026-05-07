@@ -7,6 +7,7 @@ import {
   DISCORD_URL,
   TWITTER_URL,
   DEMO_STREAM_NAME,
+  DEMO_FIXTURES,
 } from "@frameworks/site-config";
 
 function requireEnv(name) {
@@ -37,6 +38,7 @@ const config = {
   discordUrl: DISCORD_URL,
   twitterUrl: TWITTER_URL,
   demoStreamName: DEMO_STREAM_NAME,
+  demoFixtures: DEMO_FIXTURES,
   companyName: BRAND_NAME,
   domain,
 };

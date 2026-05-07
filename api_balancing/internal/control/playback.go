@@ -31,8 +31,21 @@ type ContentResolution struct {
 	TenantId     string
 	StreamId     string
 	InternalName string                  // Original stream internal name (for clips/DVR: the source stream)
+	IngestMode   string                  // "push" or "pull" for live streams
 	ClusterPeers []*pb.TenantClusterPeer // Tenant's cluster context from Commodore (free with every resolve)
 	RequiresAuth bool
+}
+
+func (r *ContentResolution) RoutingInternalName() string {
+	if r == nil {
+		return ""
+	}
+	internalName := strings.TrimSpace(r.InternalName)
+	if strings.EqualFold(r.IngestMode, "pull") && internalName != "" &&
+		!strings.HasPrefix(internalName, "pull+") && !strings.HasPrefix(internalName, "live+") {
+		return "pull+" + internalName
+	}
+	return internalName
 }
 
 // ResolveContent determines content type and resolution strategy for a public playback ID.
@@ -80,6 +93,7 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 				TenantId:     resp.TenantId,
 				StreamId:     resp.StreamId,
 				InternalName: resp.InternalName,
+				IngestMode:   resp.GetIngestMode(),
 				ClusterPeers: resp.ClusterPeers,
 				RequiresAuth: resp.GetRequiresAuth(),
 			}, nil
@@ -470,9 +484,16 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 	}
 
 	// Unified state tracks live streams by their bare internal_name (e.g. "demo_live_stream_001"),
-	// while MistServer uses wildcard names (e.g. "live+demo_live_stream_001").
-	// Normalize here so load balancing doesn't incorrectly filter out healthy nodes.
-	internalName = strings.TrimPrefix(strings.TrimSpace(internalName), "live+")
+	// while MistServer uses wildcard names (e.g. "live+demo_live_stream_001" or
+	// "pull+demo_live_stream_001"). Normalize here so load balancing doesn't
+	// incorrectly filter out healthy nodes. Detect pull cold-start before the
+	// strip so we can drop the active-stream-presence requirement when no node
+	// is pulling yet.
+	trimmed := strings.TrimSpace(internalName)
+	isPull := strings.HasPrefix(trimmed, "pull+")
+	trimmed = strings.TrimPrefix(trimmed, "live+")
+	trimmed = strings.TrimPrefix(trimmed, "pull+")
+	internalName = trimmed
 
 	// Use load balancer with internal name to find nodes that have the stream
 	lbctx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge")
@@ -480,6 +501,17 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 		lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterScope, tenantID)
 	}
 	nodes, err := deps.LB.GetTopNodesWithScores(lbctx, internalName, deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
+	if isPull && (err != nil || len(nodes) == 0) {
+		// Pull-stream cold start: no node has the stream active yet because no
+		// PUSH_REWRITE precedent fills the cache. Drop the active-stream-presence
+		// filter so we can pick an eligible edge by capacity/geo. The chosen
+		// edge starts the input via STREAM_SOURCE → /source on first viewer.
+		var coldErr error
+		nodes, coldErr = deps.LB.GetTopNodesWithScores(lbctx, "", deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
+		if coldErr == nil {
+			err = nil
+		}
+	}
 	if err != nil && len(deps.RemoteEdges) == 0 {
 		return nil, fmt.Errorf("no suitable edge nodes available: %w", err)
 	}

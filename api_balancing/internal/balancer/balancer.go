@@ -421,7 +421,7 @@ func (lb *LoadBalancer) rateNodeWithReason(snap state.EnhancedBalancerNodeSnapsh
 	}
 
 	// Check config streams
-	if len(snap.ConfigStreams) > 0 {
+	if streamName != "" && len(snap.ConfigStreams) > 0 {
 		allowed := false
 		for _, confStream := range snap.ConfigStreams {
 			if confStream == streamName || strings.HasPrefix(streamName, confStream+"+") || strings.HasPrefix(streamName, confStream+" ") {

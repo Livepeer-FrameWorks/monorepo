@@ -322,6 +322,16 @@ func (c *GRPCClient) ResolveArtifactInternalName(ctx context.Context, internalNa
 	})
 }
 
+// ResolvePullSourceByInternalName returns the configured upstream pull URI for a
+// pull-mode stream. Used by Foghorn STREAM_SOURCE handling and /source origin
+// selection. No tenant-scoped caching here — the value is tenant-attributed in
+// the response and Foghorn caches per process if needed.
+func (c *GRPCClient) ResolvePullSourceByInternalName(ctx context.Context, internalName string) (*pb.ResolvePullSourceByInternalNameResponse, error) {
+	return c.internal.ResolvePullSourceByInternalName(ctx, &pb.ResolvePullSourceByInternalNameRequest{
+		InternalName: internalName,
+	})
+}
+
 // ValidateAPIToken validates a developer API token
 func (c *GRPCClient) ValidateAPIToken(ctx context.Context, token string) (*pb.ValidateAPITokenResponse, error) {
 	return c.internal.ValidateAPIToken(ctx, &pb.ValidateAPITokenRequest{

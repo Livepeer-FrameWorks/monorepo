@@ -24,6 +24,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
@@ -1302,8 +1303,8 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		"node_id":     trigger.GetNodeId(),
 	}).Debug("Processing STREAM_SOURCE trigger")
 
-	// STREAM_SOURCE is for VOD/process artifacts only. Live streams have no static source -
-	// they're push streams that MistServer receives from encoders.
+	// Pushed live streams have no static source; MistServer receives them from
+	// encoders. Pull streams are handled below.
 	if strings.HasPrefix(streamName, "live+") {
 		p.logger.WithFields(logging.Fields{
 			"stream_name": streamName,
@@ -1316,6 +1317,14 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 	if strings.HasPrefix(streamName, "processing+") {
 		artifactHash := strings.TrimPrefix(streamName, "processing+")
 		return p.resolveProcessSource(artifactHash, trigger.GetNodeId())
+	}
+
+	// pull+ streams: return balance:<foghorn> so MistInBalancer asks /source for
+	// the chosen origin. The upstream URI itself stays server-side — we never
+	// embed it in the returned string (avoid trusting query-param fallbacks at
+	// /source). /source re-resolves via Commodore and scores upstream-vs-cluster.
+	if strings.HasPrefix(streamName, "pull+") {
+		return p.resolvePullSource(streamName, trigger)
 	}
 
 	// Extract artifact internal name (strips vod+ or any other prefix)
@@ -1437,6 +1446,81 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 
 	// Return empty to let MistServer use default source (will fail for VOD)
 	return "", true, nil
+}
+
+// ValidatePullSourceURI returns true when a URI maps to a supported MistServer
+// pull-input module and passes the shared host guard.
+func ValidatePullSourceURI(uri string) bool {
+	return pullsource.Validate(uri)
+}
+
+// resolvePullSource handles STREAM_SOURCE for pull+<internal_name> streams. We
+// return balance:<foghorn-base> so MistInBalancer calls /source on this Foghorn
+// to pick the actual origin (active in-cluster DTSC node vs the upstream URI).
+// The stored upstream URI is never embedded in the returned string — /source
+// re-resolves it server-side from Commodore.
+func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger) (string, bool, error) {
+	internalName := strings.TrimPrefix(streamName, "pull+")
+	if internalName == "" {
+		return "", true, nil
+	}
+
+	if control.CommodoreClient == nil {
+		p.logger.WithField("stream_name", streamName).Error("Commodore client unavailable for pull source resolution")
+		return "", true, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := control.CommodoreClient.ResolvePullSourceByInternalName(ctx, internalName)
+	if err != nil {
+		p.logger.WithFields(logging.Fields{
+			"stream_name":   streamName,
+			"internal_name": internalName,
+			"error":         err,
+		}).Warn("Failed to resolve pull source from Commodore")
+		return "", true, nil
+	}
+	if resp == nil || !resp.GetFound() {
+		p.logger.WithField("stream_name", streamName).Warn("Pull source not found")
+		return "", true, nil
+	}
+	if !resp.GetEnabled() {
+		p.logger.WithField("stream_name", streamName).Info("Pull source disabled by tenant; refusing to start input")
+		return "", true, nil
+	}
+	if err := pullsource.ValidateURI(resp.GetSourceUri()); err != nil {
+		p.logger.WithFields(logging.Fields{
+			"stream_name": streamName,
+			"error":       err,
+		}).Warn("Pull source URI is not supported; refusing")
+		return "", true, nil
+	}
+
+	if tid := resp.GetTenantId(); tid != "" {
+		trigger.TenantId = &tid
+	}
+	if sid := resp.GetStreamId(); sid != "" {
+		trigger.StreamId = &sid
+	}
+
+	clusterID := p.resolveNodeClusterID(trigger.GetNodeId())
+	base := control.FoghornBalancerBase(clusterID)
+	if base == "" {
+		p.logger.WithField("node_id", trigger.GetNodeId()).Error("Foghorn balancer base unresolved for pull source")
+		return "", true, nil
+	}
+
+	p.logger.WithFields(logging.Fields{
+		"stream_name":   streamName,
+		"internal_name": internalName,
+		"node_id":       trigger.GetNodeId(),
+		"cluster_id":    clusterID,
+	}).Info("Resolved pull+ source to balance: URI; /source will pick origin")
+
+	// No fallback param — /source resolves the upstream URI server-side from
+	// Commodore. Trusting a fallback param here would be a source-injection vector.
+	return "balance:" + base, false, nil
 }
 
 // resolveProcessSource returns a presigned HTTPS URL for a process+ stream's source.
