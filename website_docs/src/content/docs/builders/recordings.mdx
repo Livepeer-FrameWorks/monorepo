@@ -9,6 +9,13 @@ import { Aside } from "@astrojs/starlight/components";
 
 Record your live streams, extract clips, and upload pre-recorded content for on-demand playback.
 
+<Aside type="caution" title="Storage and retention costs">
+  Recordings, clips, and VOD assets consume storage until they expire or are deleted. Longer
+  retention windows can increase storage usage and cost depending on your billing tier and
+  deployment. Set retention deliberately, delete assets you no longer need, and treat always-on DVR
+  as a storage budget decision.
+</Aside>
+
 ## DVR (Live Recording)
 
 DVR records your live stream and preserves the broadcast for later playback. Crucially, DVR content is playable **while the stream is still live** — viewers can seek back through the buffer, pause, and catch up. This makes DVR ideal for live events, conferences, and sports where viewers join at different times or want to rewind key moments.
@@ -117,7 +124,10 @@ While a stream is live, the DVR buffer grows continuously. Viewers using the DVR
 - **Pause and resume** without losing their position
 - **Jump to live** to catch up to the real-time edge
 
-The trade-off is latency — DVR playback goes through HLS/DASH segments, so it's higher latency than a direct live WebRTC connection. But for live events, conferences, and always-on streams this is a feature: viewers can rewind a goal, replay a slide, or start watching hours late and catch up.
+The trade-off is latency — DVR playback goes through HLS or DASH segments, so it's higher latency
+than a direct live WebRTC connection. But for live events,
+conferences, and always-on streams this is a feature: viewers can rewind a goal, replay a slide, or
+start watching hours late and catch up.
 
 <Aside type="tip" title="Always-On Streams">
   DVR supports long-running streams. Runtime DVR starts default to a 30-day expiration when no
@@ -303,6 +313,17 @@ mutation {
 ## VOD Uploads
 
 Upload pre-recorded video files for on-demand playback. VOD uploads use S3-compatible multipart uploads for reliable handling of large files.
+
+<Aside type="caution" title="VOD uploads are beta">
+  User-uploaded VOD uses a separate S3 multipart upload, validation, and processing path from clips
+  and DVR, which are created from a live stream's recording buffer. Expect more operational rough
+  edges here during beta than on stream-derived clips and DVR.
+</Aside>
+
+<Aside type="note" title="VOD storage lifecycle">
+  VOD assets also count toward stored bytes while retained. The current upload registry defaults VOD
+  retention to 90 days unless your plan, operator policy, or a future API override changes it.
+</Aside>
 
 ### Upload Flow
 

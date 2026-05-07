@@ -24,7 +24,7 @@ manifest-driven. Treat these sources as authoritative for the current release:
 | Cluster shape, hosts, service placement, DNS inputs | [Cluster Manifest](/operators/cluster-manifest)                                                                |
 | Manifest resolution and provisioning behavior       | `cli/pkg/inventory/`, `cli/cmd/cluster_provision*.go`, `cli/pkg/orchestrator/`, `cli/pkg/provisioner/`         |
 | Ansible-backed infrastructure roles                 | [Ansible Provisioning](/operators/ansible-provisioning) and `ops/ansible/`                                     |
-| Public DNS service types and labels                 | [DNS Automation](/operators/dns) and `pkg/dns/public_services.go`                                              |
+| Public DNS service types and labels                 | [DNS and Cluster Routing](/operators/dns) and `pkg/dns/public_services.go`                                     |
 | Base environment inputs and derived runtime values  | [External Services](/operators/external-services), `config/env/base.env`, and `config/env/secrets.env.example` |
 | PostgreSQL/YugabyteDB schemas and migrations        | [Postgres Migrations](/operators/postgres-migrations) and `pkg/database/sql/`                                  |
 | ClickHouse schema and migrations                    | [ClickHouse Migrations](/operators/clickhouse-migrations) and `pkg/database/sql/clickhouse/`                   |
@@ -100,7 +100,7 @@ and systemd-resolved provide `.internal` resolution for managed mesh hosts.
 Navigator reconciles public DNS from the service type tables in
 `pkg/dns/public_services.go`. Media services are cluster-scoped; root API and
 web services live under the root public domain. Avoid copying DNS tables from a
-manual guide into automation. Use the manifest plus [DNS Automation](/operators/dns).
+manual guide into automation. Use the manifest plus [DNS and Cluster Routing](/operators/dns).
 
 ### Services
 

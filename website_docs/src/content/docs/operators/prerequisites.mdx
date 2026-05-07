@@ -86,11 +86,11 @@ brew install frameworks-cli
 
 For multi-host deployments, you need:
 
-1. **WireGuard Mesh Network** - Secure communication between backend infrastructure nodes (central/regional/database). See [WireGuard Mesh Setup](/operators/wireguard) for configuration.
+1. **WireGuard Mesh Network** - Secure communication between backend infrastructure nodes (central/regional/database). See [Mesh Networking](/operators/mesh-bootstrap) for the GitOps identity and Privateer bootstrap flow.
 
 2. **systemd-resolved** - Production backend hosts must run systemd-resolved so Privateer can route `.internal` names to the local DNS listener.
 
-3. **Firewall Rules** - See [WireGuard Mesh Setup](/operators/wireguard) for mesh port guidance.
+3. **Firewall Rules** - Open the manifest's WireGuard listen port between backend nodes and keep internal service ports private to the mesh.
 
 ## SSH Access
 

@@ -277,6 +277,9 @@ Available properties: `paused`, `playing`, `currentTime`, `duration`, `volume`, 
 | `vod`         | MP4/HLS/DASH → MP4/WS → WHEP/WebRTC        | Pre-recorded content  |
 | `auto`        | Balanced score-based                       | Default               |
 
+LL-HLS and DASH are served from MistServer's CMAF output (`/play/{id}/cmaf/index.m3u8` and
+`/play/{id}/cmaf/index.mpd`) on every helmsman-managed edge.
+
 ```ts
 const player = createPlayer({
   ...,

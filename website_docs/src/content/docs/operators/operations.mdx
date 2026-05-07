@@ -53,87 +53,47 @@ sudo chown -R frameworks:frameworks /opt/frameworks /etc/frameworks
 
 ## Service Startup Order
 
-Services must start in dependency order. The CLI handles this automatically, but for manual control:
+The CLI owns startup sequencing. At a high level, infrastructure starts first,
+then mesh/control-plane services, then application services, interfaces, and
+edge workloads. Do not maintain a separate hand-authored service order in docs:
+the dependency graph lives in the provisioner and service registry.
 
-1. **YugabyteDB + ClickHouse**
-2. **Kafka** (regional clusters)
-3. **Listmonk + Chatwoot + Redis** (central)
-4. **Quartermaster**
-5. **Purser**
-6. **Commodore**
-7. **Periscope Query**
-8. **Decklog** (per region)
-9. **Periscope Ingest** (per region)
-10. **Signalman** (per region)
-11. **Foghorn** (per region)
-12. **Bridge** (per region)
-13. **Deckhand** (central)
-14. **Forms** (central)
-15. **Helmsman** (edge)
+For break-glass work, inspect the generated unit/compose files on the host and
+use [Manual Deployment](/operators/deployment-manual) to find the current source
+of truth in code.
 
 ## Health Check Reference
 
-All services expose HTTP health endpoints on `/health`. Most services are **gRPC‑only** for their main APIs; HTTP is for health/metrics unless explicitly documented. For the complete list of service ports, see [Architecture Overview](/operators/architecture#core-services).
-
-**Quick health check:**
+Start with the CLI so checks use the current manifest, service registry, and
+context:
 
 ```bash
-# Central services (HTTP health endpoints)
-for port in 18002 18001 18003 18004 18015 18032; do
-    curl -sf http://localhost:$port/health && echo " :$port OK" || echo " :$port FAIL"
-done
-
-# Regional services (HTTP health endpoints)
-# Note: Decklog health is on 18026 (metrics port), not 18006 (gRPC)
-for port in 18008 18000 18005 18026 18009; do
-    curl -sf http://localhost:$port/health && echo " :$port OK" || echo " :$port FAIL"
-done
-
-# gRPC health (requires grpcurl)
-# Central gRPC services
-for port in 19002 19001 19003 19004 19006; do
-    grpcurl -plaintext localhost:$port grpc.health.v1.Health/Check 2>/dev/null && echo " :$port OK" || echo " :$port FAIL"
-done
-
-# Regional gRPC services
-for port in 18019 18006 19005; do
-    grpcurl -plaintext localhost:$port grpc.health.v1.Health/Check 2>/dev/null && echo " :$port OK" || echo " :$port FAIL"
-done
+frameworks cluster doctor --deep
+frameworks cluster status
+frameworks cluster diagnose ports
+frameworks cluster logs <service>
 ```
+
+For direct host inspection, use the generated service env files and the port
+diagnostics output from the same CLI version operating the cluster. Avoid
+copying port loops into runbooks; they drift as services move or split health,
+metrics, and gRPC listeners.
 
 ## Firewall Configuration
 
-Minimum required ports:
+Firewall policy should follow the manifest and service registry:
 
-```bash
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw allow ssh
-sudo ufw allow 80/tcp       # HTTP
-sudo ufw allow 443/tcp      # HTTPS
-sudo ufw allow 1935/tcp     # RTMP ingest
-sudo ufw allow 51820/udp    # WireGuard (backend nodes only)
-sudo ufw enable
-```
+- Public hosts expose only public ingress: HTTP/HTTPS and the media protocols
+  enabled for that edge or cluster.
+- Backend nodes expose SSH/bootstrap access and the manifest's WireGuard listen
+  port to other backend nodes.
+- Internal service ports stay private to the mesh or private network.
+- Edge nodes do not join the backend mesh.
 
-**Internal mesh** (backend nodes only; edge nodes do not join the mesh):
-
-```bash
-# Allow all traffic on WireGuard interface
-sudo ufw allow in on wg0
-```
-
-**Edge nodes (media ports):**
-
-```bash
-sudo ufw allow 8080/tcp     # HTTP (MistServer)
-sudo ufw allow 1935/tcp     # RTMP ingest
-sudo ufw allow 5554/tcp     # RTSP
-sudo ufw allow 4200/tcp     # DTSC
-sudo ufw allow 8889/udp     # SRT
-sudo ufw allow 18203/udp    # WebRTC
-sudo ufw allow 4242/tcp     # MistServer controller (optional; keep internal when possible)
-```
+Run `frameworks cluster preflight` before provisioning and
+`frameworks edge preflight` for BYO edge hosts. For exact ports, use
+`frameworks cluster diagnose ports` and the generated edge configuration rather
+than a Markdown table.
 
 ## Performance Tuning
 
@@ -211,147 +171,12 @@ kafka-consumer-groups.sh --bootstrap-server <broker>:9092 --describe --group per
 kafka-topics.sh --bootstrap-server <broker>:9092 --list
 ```
 
----
+## Manual Recovery Boundary
 
-<details>
-<summary><strong>Advanced: Manual Database Installation</strong></summary>
-
-For airgapped environments or custom setups where the CLI cannot install dependencies.
-
-### System Dependencies
-
-```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y build-essential curl wget git unzip
-
-# Go 1.21+
-wget https://go.dev/dl/go1.21.0.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz
-echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
-
-# Node.js 18+ (for frontends)
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs
-
-# Docker (useful for some components)
-curl -fsSL https://get.docker.com | sudo sh
-```
-
-### YugabyteDB (Postgres-compatible)
-
-Install YugabyteDB (or PostgreSQL) and create the `frameworks` database + `frameworks_user`.
-Use your configured DB port (YB default **5433**, Postgres default **5432**).
-Then initialize schemas using `psql` or `ysqlsh`:
-
-```bash
-# Schemas are in pkg/database/sql/schema/*.sql
-psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/quartermaster.sql
-psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/commodore.sql
-psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/purser.sql
-psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/foghorn.sql
-psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/periscope.sql
-psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/listmonk.sql
-psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/chatwoot.sql
-
-# Optional (Navigator)
-# psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/navigator.sql
-
-# Seed billing tiers (required)
-psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/seeds/static/purser_tiers.sql
-```
-
-### ClickHouse
-
-```bash
-sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv 8919F6BD2B48D754
-echo "deb https://packages.clickhouse.com/deb stable main" | sudo tee /etc/apt/sources.list.d/clickhouse.list
-sudo apt update && sudo apt install -y clickhouse-server clickhouse-client
-
-sudo systemctl enable clickhouse-server
-sudo systemctl start clickhouse-server
-
-# Initialize schema
-clickhouse-client < pkg/database/sql/clickhouse/periscope.sql
-```
-
-### Kafka
-
-```bash
-# Install Java runtime
-sudo apt install -y openjdk-17-jre-headless
-
-# Download Kafka
-cd /opt
-sudo wget https://downloads.apache.org/kafka/4.2.0/kafka_2.13-4.2.0.tgz
-sudo tar -xzf kafka_2.13-4.2.0.tgz
-sudo mv kafka_2.13-4.2.0 kafka
-
-# Start Kafka (KRaft mode, single-node)
-KAFKA_CLUSTER_ID=$(/opt/kafka/bin/kafka-storage.sh random-uuid)
-/opt/kafka/bin/kafka-storage.sh format -t "$KAFKA_CLUSTER_ID" -c /opt/kafka/config/kraft/server.properties
-/opt/kafka/bin/kafka-server-start.sh -daemon /opt/kafka/config/kraft/server.properties
-
-# Create required topics (shared cluster; run once from any broker)
-kafka-topics.sh --bootstrap-server <any-broker>:9092 --create \
-  --topic analytics_events --partitions 6 --replication-factor 1
-
-kafka-topics.sh --bootstrap-server <any-broker>:9092 --create \
-  --topic service_events --partitions 3 --replication-factor 1
-
-kafka-topics.sh --bootstrap-server <any-broker>:9092 --create \
-  --topic billing.usage_reports --partitions 3 --replication-factor 1
-
-kafka-topics.sh --bootstrap-server <any-broker>:9092 --create \
-  --topic decklog_events_dlq --partitions 3 --replication-factor 1
-```
-
-### Building Services
-
-```bash
-git clone https://github.com/Livepeer-FrameWorks/monorepo.git
-cd monorepo
-
-# Build all binaries
-make build
-
-# Or individually
-make build-bin-quartermaster
-make build-bin-commodore
-# etc.
-```
-
-Binaries are output to `bin/`.
-
-### Creating systemd Units
-
-Example for Quartermaster:
-
-```bash
-sudo tee /etc/systemd/system/quartermaster.service > /dev/null <<'EOF'
-[Unit]
-Description=FrameWorks Quartermaster
-After=network.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=frameworks
-WorkingDirectory=/opt/frameworks
-EnvironmentFile=/etc/frameworks/quartermaster.env
-ExecStart=/opt/frameworks/bin/quartermaster
-Restart=always
-RestartSec=10
-LimitNOFILE=65536
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable quartermaster
-sudo systemctl start quartermaster
-```
-
-Repeat for each service. CLI provisioners generate systemd units in native mode; Docker mode uses compose.
-
-</details>
+Manual dependency installation, schema bootstrapping, Kafka topic creation, and
+systemd unit generation are not documented as public procedures. They are
+generated by the provisioner and tested through the CLI. When you need to
+recover by hand, use the source-of-truth links in
+[Manual Deployment](/operators/deployment-manual), inspect the generated files
+on the affected host, and back-port fixes into the manifest/provisioner rather
+than into this page.

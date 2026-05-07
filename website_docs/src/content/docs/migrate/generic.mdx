@@ -110,8 +110,13 @@ RTMP, RTMPS, and SRT push destinations are all supported.
 The features that come up most often when teams move:
 
 - **SRT ingest** — for pro encoders, firewall-traversal, and low-latency contribution.
-- **Low-latency HLS** delivery on the HLS stack itself.
-- **DASH** delivery alongside HLS.
+- **Pull-input streams** — point FrameWorks at RTSP cameras, SRT/RIST feeds, HLS re-streams, or
+  MPEG-TS over UDP and we open the upstream connection. Self-hosted edges can pull from
+  RFC1918 / multicast sources via an explicit cluster opt-in — useful for IP cameras, on-prem
+  contribution, and venue feeds. See [Pull-input streams](/builders/pull-streams).
+  On the [roadmap](/roadmap#in-the-pipeline): an **AV Device Discovery** drop-in app for
+  auto-discovering ONVIF cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI capture.
+- **LL-HLS and DASH** — served from MistServer's CMAF output alongside HLS and WebRTC.
 - **AV1** in the codec list.
 - **Sprite-sheet seek previews** — generated for every recording (10×10 grid + WebVTT).
 - **Self-hosting and hybrid** — run the whole stack on your hardware, or mix BYO edge with our managed control plane.
@@ -126,13 +131,11 @@ Honest list, applies regardless of source:
 - AI Pipelines (text-to-image, image-to-video, ASR, live-video-to-video). Keep provider-specific
   AI calls on the source platform until FrameWorks exposes an equivalent surface.
 - Outbound HTTP webhooks. Replaced by subscriptions for now.
-- Pull-from-source ingest. Not exposed as a FrameWorks ingest mode today.
+- Self-service pull-from-source API. Operator-owned pull-input streams can be provisioned through
+  bootstrap config, but tenant-created pull streams are not exposed through GraphQL yet.
 - C2PA / creator-ID provenance signing on transcode. Not exposed as a public FrameWorks API today.
 - First-class Python and Go SDKs. Internal Go clients exist; use GraphQL codegen until first-party
   SDKs are published.
-- JWT/webhook playback access control. Public playback IDs and customer-managed ES256 signing
-  keys with per-object JWT or webhook policy all ship today — see
-  [Playback Access Control](/builders/playback-access-control).
 - DRM (Widevine / FairPlay / PlayReady). In progress with the MistServer team.
 - Multi-participant SFU rooms. Parlor is tracked as a separate RFC.
 - Per-target rendition selection on multistream.

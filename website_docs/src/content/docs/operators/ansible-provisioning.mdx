@@ -12,35 +12,21 @@ community.sops, Docker, and common modules) is pinned in
 `make ansible-galaxy-install`. Caddy is installed by the in-tree
 `frameworks.infra.caddy` role rather than an external Galaxy role.
 
-## Directory layout
+## Source Layout
 
-```
-ansible/
-├── requirements.yml         # pinned external collections + roles
-├── ansible.cfg              # collections_path, vars plugin, roles_path
-├── playbooks/               # one playbook per service
-└── collections/ansible_collections/frameworks/infra/
-    ├── galaxy.yml
-    └── roles/
-        ├── yugabyte/    (hand-written, artifact-pinned)
-        ├── kafka/       (hand-written, KRaft)
-        ├── zookeeper/   (hand-written)
-        ├── postgres/    (wraps geerlingguy.postgresql)
-        ├── redis/       (wraps geerlingguy.redis)
-        ├── clickhouse/  (wraps idealista.clickhouse)
-        ├── prometheus_stack/
-        ├── caddy/
-        ├── nginx/
-        ├── privateer/
-        ├── go_service/    (generic native Go service shape)
-        ├── compose_stack/ (generic; consumers: chatwoot, listmonk, edge)
-        ├── chatwoot/
-        ├── listmonk/
-        ├── mistserver/    (hand-written, edge media server)
-        ├── helmsman/      (hand-written, edge sidecar)
-        └── edge/          (meta-role; composes mistserver+helmsman+caddy
-                             native, or delegates to compose_stack in docker)
-```
+The role and playbook inventory changes as provisioning grows. Treat the tree as
+code-owned, not docs-owned:
+
+| Surface                          | Source of truth                                             |
+| -------------------------------- | ----------------------------------------------------------- |
+| External Ansible content         | `ansible/requirements.yml`                                  |
+| Ansible config paths             | `ansible/ansible.cfg`                                       |
+| Playbooks invoked by the CLI     | `ansible/playbooks/`                                        |
+| In-tree collection and roles     | `ansible/collections/ansible_collections/frameworks/infra/` |
+| CLI role selection and execution | `cli/pkg/provisioner/` and `cli/pkg/ansiblerun/`            |
+
+Use `make ansible-check` to verify playbook syntax and
+`make ansible-galaxy-install` to install pinned external content.
 
 ## Command mapping
 
@@ -84,67 +70,16 @@ in-Go decrypt before handoff.
 
 ## Gitops CI integration
 
-The CLI is the same binary locally and in CI. A typical gitops-repo workflow:
-
-```yaml
-# .github/workflows/cluster-apply.yml inside your gitops repo
-name: Cluster apply
-on:
-  pull_request:
-    paths: ["clusters/**"]
-  push:
-    branches: [main]
-    paths: ["clusters/**"]
-
-permissions:
-  contents: read
-  pull-requests: write # so --check runs can post a diff
-
+The CLI is the same binary locally and in CI. GitOps pipelines usually have two
 jobs:
-  plan:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install frameworks CLI
-        run: |
-          curl -sSfL https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/install.sh | sh
-      - name: Install Ansible runtime
-        run: pip install "ansible-core==2.17.*"
-      - name: Plan (check + diff)
-        env:
-          SOPS_AGE_KEY_FILE: ${{ secrets.SOPS_AGE_KEY_FILE_PATH }}
-        run: |
-          frameworks cluster provision \
-            --gitops-dir . --cluster ${{ vars.CLUSTER_NAME }} \
-            --dry-run 2>&1 | tee plan.txt
-      - uses: mshick/add-pr-comment@v2
-        with:
-          message-path: plan.txt
 
-  apply:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
-    environment: production # requires approval
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install frameworks CLI
-        run: |
-          curl -sSfL https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/install.sh | sh
-      - name: Install Ansible runtime
-        run: pip install "ansible-core==2.17.*"
-      - name: Cache Ansible collections
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/frameworks/ansible-collections
-          key: ansible-collections-${{ hashFiles('**/ansible/requirements.yml') }}
-      - name: Apply
-        env:
-          SOPS_AGE_KEY_FILE: ${{ secrets.SOPS_AGE_KEY_FILE_PATH }}
-        run: |
-          frameworks cluster provision \
-            --gitops-dir . --cluster ${{ vars.CLUSTER_NAME }}
-```
+- Pull requests run `frameworks cluster provision --gitops-dir . --cluster <name> --dry-run`.
+- Approved merges run `frameworks cluster provision --gitops-dir . --cluster <name>`.
+
+CI must provide SSH access, SOPS/age material when encrypted files are used, and
+the same manifest source operators use locally. Keep workflow YAML in the
+GitOps repo, where branch names, environments, approvals, and cache paths can
+match that repository's policy.
 
 The CLI's collection-install step is idempotent and keyed on
 `sha256(requirements.yml)` — unchanged inputs skip the `ansible-galaxy` call

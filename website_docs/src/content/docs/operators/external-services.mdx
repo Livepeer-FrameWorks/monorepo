@@ -161,32 +161,19 @@ During provisioning, the CLI decrypts the hosts file, merges IPs and SSH targets
 
 **Managed By:** Navigator (`api_dns`) - automates DNS record management based on node inventory
 
-**What You Need:**
+Keep DNS behavior, routing patterns, and certificate mechanics in
+[DNS and Cluster Routing](/operators/dns). This page only lists the credential
+inputs Navigator needs:
 
-- Cloudflare account
-- API token with permissions for DNS record management
-- Domain added to Cloudflare
-  - Required permissions: **Zone.DNS (Edit)** and **Account.Load Balancers (Edit)** (for multi-node)
+```bash
+CLOUDFLARE_API_TOKEN="your-token"
+CLOUDFLARE_ZONE_ID="your-zone-id"
+CLOUDFLARE_ACCOUNT_ID="your-account-id"
+BUNNY_API_KEY="your-bunny-api-key" # optional media-zone delegation
+```
 
-Navigator automates DNS record management based on inventory. Cloudflare remains the root/API/web/admin DNS provider, while Bunny DNS handles delegated media cluster zones. By default, Cloudflare proxying is enabled for `bridge`, `chartroom`, `chatwoot`, `foredeck`, `grafana`, `listmonk`, `logbook`, `metabase`, and `steward`; set `NAVIGATOR_PROXY_SERVICES` to a comma-separated list of service types if you need different proxy behavior. See [DNS Automation](/operators/dns) for details.
-
-**Manual Steps:**
-
-1. Create Cloudflare account
-2. Add your domain to Cloudflare
-3. Generate API token
-4. Set environment variables:
-   ```bash
-   export CLOUDFLARE_API_TOKEN="your-token"
-   export CLOUDFLARE_ZONE_ID="your-zone-id"
-   export CLOUDFLARE_ACCOUNT_ID="your-account-id"
-   ```
-5. Set your root domain in the manifest:
-   ```yaml
-   root_domain: example.com
-   ```
-
-**Future:** Self-hosted anycast DNS cluster (planned, requires ASN acquisition)
+Set `root_domain` in the manifest. Navigator uses manifest/service inventory to
+decide which records to reconcile.
 
 ---
 
@@ -196,14 +183,10 @@ Navigator automates DNS record management based on inventory. Cloudflare remains
 
 **Managed By:** Navigator (`api_dns`) - handles ACME certificate issuance and renewal
 
-Navigator handles ACME certificate issuance and renewal via DNS-01. See [DNS Automation](/operators/dns) for details.
-
-**Required Setup:** Navigator needs Cloudflare credentials plus `NAVIGATOR_CERT_ALLOWED_SUFFIXES` or the manifest `root_domain`. In dev, the allowlist can be left empty.
-
-**Alternative Options:**
-
-- **Caddy** (automatic HTTPS) - for simpler deployments
-- **nginx + certbot** (Let's Encrypt) - for manual management
+Navigator handles ACME certificate issuance and renewal via DNS-01. See
+[DNS and Cluster Routing](/operators/dns) for certificate routing and provider
+ownership. Set `NAVIGATOR_CERT_ALLOWED_SUFFIXES` when a deployment should
+restrict certificate requests beyond the manifest `root_domain`.
 
 ---
 

@@ -19,7 +19,7 @@ frameworks version
 
 ## One-Command Deploy (Recommended)
 
-If you have a logged-in FrameWorks account, `edge deploy` handles the entire pipeline end-to-end via Bridge — VPC/cluster creation, enrollment token issuance, preflight, tuning, template generation, stack boot, and HTTPS verification:
+If you have a logged-in FrameWorks account, `edge deploy` handles the entire pipeline end-to-end via Bridge — private edge cluster creation, Foghorn assignment, enrollment token issuance, preflight, tuning, template generation, stack boot, and HTTPS verification:
 
 ```bash
 # Mode A — logged-in tenant (Bridge auto-creates a private cluster + token)
@@ -30,7 +30,7 @@ frameworks edge deploy --ssh ubuntu@edge-1 --email ops@yourdomain.com
 frameworks edge deploy --ssh ubuntu@edge-1 --enrollment-token enroll_xxx
 ```
 
-When it finishes, `edge deploy` prints a result block (`vpc`, `enrollment`, `stack`, `https`, `node`, `domain`) and suggests `edge status` and `edge doctor` as next steps.
+When it finishes, `edge deploy` prints a result block (`vpc`, `enrollment`, `stack`, `https`, `node`, `domain`) and suggests `edge status` and `edge doctor` as next steps. The `vpc` label is the current CLI output name for the private edge cluster step.
 
 The rest of this page walks through the same workflow as individual commands when you need finer control.
 
@@ -40,7 +40,7 @@ The rest of this page walks through the same workflow as individual commands whe
 frameworks edge preflight --domain stream.yourdomain.com
 ```
 
-This checks:
+On Linux Docker targets, this checks:
 
 - Docker and Docker Compose installed
 - Ports 80/443 available for HTTPS
@@ -48,6 +48,8 @@ This checks:
 - Kernel parameters (sysctl) are sane
 - `/dev/shm` is mounted
 - File descriptor limits won’t choke under load
+
+Native Linux and macOS deployments use the same command surface, but the preflight checks are OS-aware: Linux checks systemd/sysctls/`/dev/shm`, while macOS checks launchd and skips Linux-only kernel checks.
 
 Note: if you plan to use direct ingest or non-HTTP protocols, open the MistServer ports you need:
 
@@ -85,7 +87,7 @@ frameworks edge init --dir /opt/frameworks-edge \
 
 When using `--enrollment-token`, the CLI sends the token to Bridge's public `bootstrapEdge` mutation. Bridge resolves the cluster, finds its Foghorn, and proxies the pre-registration. The response carries the assigned domain, node ID, cluster slug, the runtime Foghorn address, and the internal CA bundle for gRPC trust bootstrap. The operator only ever needs the token and the SSH target; Foghorn discovery happens server-side.
 
-If you already have a domain and don't need auto-assignment, use `--domain` instead:
+If you already have a domain and don't need auto-assignment, use `--domain` instead. This manual path still needs a reachable Foghorn address from the active CLI context or `--foghorn-addr`; the Bridge token path is the normal self-hosted flow because it resolves Foghorn server-side.
 
 ```bash
 frameworks edge init --dir /opt/frameworks-edge \
@@ -97,7 +99,7 @@ This creates:
 
 - Edge environment file - Environment configuration
 - Edge compose file - MistServer, Helmsman, and Caddy
-- Caddy config file - Reverse proxy with automatic HTTPS
+- Caddy config file - Bootstrap reverse proxy; production TLS and viewer routing are activated from ConfigSeed after enrollment
 
 ## Review the Config
 
@@ -114,7 +116,7 @@ ACME_EMAIL=ops@yourdomain.com
 DEPLOY_MODE=docker
 ```
 
-`NODE_ID` must be stable and unique per node. `EDGE_PUBLIC_URL` should include the `/view` path. `FOGHORN_CONTROL_ADDR` is the only Foghorn endpoint Helmsman needs at boot — the HTTP balancer base, TLS bundle, telemetry, and SiteConfig all arrive over the live gRPC `ConfigSeed` stream once Helmsman connects.
+`NODE_ID` must be stable and unique per node. `EDGE_PUBLIC_URL` should include the `/view` path. `FOGHORN_CONTROL_ADDR` is the Foghorn gRPC endpoint Helmsman needs at boot — the HTTP balancer base, TLS bundle, telemetry, and SiteConfig arrive over the live gRPC `ConfigSeed` stream once Helmsman connects.
 
 When using `--enrollment-token` with `edge init`, the CLI populates `NODE_ID`, `EDGE_DOMAIN`, and `FOGHORN_CONTROL_ADDR` from the PreRegisterEdge response. It also stages the internal CA bundle so Helmsman can trust Foghorn immediately; public wildcard TLS still arrives later through ConfigSeed.
 
@@ -135,7 +137,7 @@ HELMSMAN_STORAGE_LOCAL_PATH=/var/lib/mistserver/recordings
 frameworks edge enroll --dir /opt/frameworks-edge
 ```
 
-This starts the containers and enrolls the node if `EDGE_ENROLLMENT_TOKEN` is set.
+In Docker mode, this starts the containers and enrolls the node if `EDGE_ENROLLMENT_TOKEN` is set.
 
 Check status:
 
@@ -148,7 +150,7 @@ You should see:
 - `mistserver` - Running
 - `helmsman` - Running
 - `caddy` - Running
-- HTTPS - Valid certificate
+- HTTPS - `/health` responds on the configured edge domain
 
 ## What’s Running
 
@@ -157,7 +159,7 @@ You should see:
 The media server. Handles:
 
 - RTMP/SRT/WHIP ingest
-- HLS/DASH/WebRTC delivery
+- HLS, LL-HLS, DASH, WebRTC/WHEP, MP4/WebM, WebSocket, and direct playback protocols when exposed
 - Recording (if enabled)
 
 Web UI: `http://localhost:4242` (internal, not exposed by default). If you proxy it, add auth/IP restrictions so you don’t expose the controller API.
@@ -170,7 +172,7 @@ The sidecar. Does:
 - Collects client and node metrics for Foghorn
 - Reports node capacity and storage details
 
-Health check: `curl http://localhost:18007/health`
+Health check: `curl http://localhost:18007/health` when Helmsman's local HTTP API is reachable. In the default Docker template, the port is exposed only inside the compose network.
 
 ### Caddy
 
@@ -185,7 +187,7 @@ The generated Caddyfile starts in bootstrap mode with internal TLS and a 503 res
 ## Logs
 
 ```bash
-# All containers
+# All services
 frameworks edge logs --dir /opt/frameworks-edge
 
 # Specific container
@@ -214,6 +216,8 @@ sudo systemctl stop nginx
 ```
 
 **"Certificate failed"**
+
+In token-provisioned deployments, public TLS material is delivered by ConfigSeed after Helmsman enrolls. If the node is still serving the bootstrap internal certificate, check Helmsman enrollment and ConfigSeed logs first.
 
 ```bash
 frameworks edge cert --dir /opt/frameworks-edge

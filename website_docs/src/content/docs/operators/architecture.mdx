@@ -97,13 +97,13 @@ _Navigator and Privateer are in testing. Production rollout is controlled and ma
 
 ### Interfaces
 
-| Component      | Role                         | Path                  | Port              | Deploy Location |
-| -------------- | ---------------------------- | --------------------- | ----------------- | --------------- |
-| Web Console    | SvelteKit user dashboard     | `website_application` | 18030             | Regional        |
-| Marketing Site | Sales / Marketing website    | `website_marketing`   | 18031             | Regional        |
-| Documentation  | Astro Starlight docs site    | `website_docs`        | 18033             | Central         |
-| NPM Player     | Embeddable HLS/WebRTC player | `npm_player`          | N/A (npm package) | User websites   |
-| Android App    | Future mobile client         | `app_android`         | N/A               | Planned         |
+| Component      | Role                             | Path                  | Port              | Deploy Location |
+| -------------- | -------------------------------- | --------------------- | ----------------- | --------------- |
+| Web Console    | SvelteKit user dashboard         | `website_application` | 18030             | Regional        |
+| Marketing Site | Sales / Marketing website        | `website_marketing`   | 18031             | Regional        |
+| Documentation  | Astro Starlight docs site        | `website_docs`        | 18033             | Central         |
+| NPM Player     | Embeddable multi-protocol player | `npm_player`          | N/A (npm package) | User websites   |
+| Android App    | Future mobile client             | `app_android`         | N/A               | Planned         |
 
 _Note: The Android app is present in-tree as an early stub. It is not a supported production client
 yet._
@@ -205,7 +205,7 @@ graph LR
 graph LR
     IN[RTMP/SRT/WHIP] --> MS[MistServer]
     MS <--> LP[Livepeer<br/>transcoding/AI]
-    MS --> OUT[HLS/WebRTC/SRT]
+    MS --> OUT[Multi-protocol outputs<br/>HLS / LL-HLS / DASH / WebRTC]
     OUT --> V[Viewers]
     MS --> H[Helmsman]
     H --> F[Foghorn]
@@ -306,4 +306,4 @@ Internal communication between nodes uses a WireGuard mesh managed by the **Priv
 - Internal DNS resolution
 - Backend infrastructure isolation
 
-See [WireGuard Mesh Setup](/operators/wireguard) for configuration details.
+See [Mesh Networking](/operators/mesh-bootstrap) for bootstrap and runtime details.

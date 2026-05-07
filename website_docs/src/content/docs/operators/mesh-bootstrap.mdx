@@ -1,7 +1,12 @@
 ---
-title: WireGuard Mesh Bootstrap
-description: How Privateer brings up the internal WireGuard mesh — identity, seed peers, and Quartermaster-managed overlay.
+title: "Mesh Networking"
+description: "How Privateer brings up the internal WireGuard mesh: identity, seed peers, DNS, and Quartermaster-managed topology."
 ---
+
+FrameWorks backend hosts use a WireGuard mesh managed by Privateer. Operators
+generate GitOps-owned identity, then the CLI renders host config during
+provisioning. Do not maintain manual `wg0.conf` instructions in the public
+docs; the manifest, `hosts.enc.yaml`, and Privateer runtime own this layer.
 
 ## Why this exists
 

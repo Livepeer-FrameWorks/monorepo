@@ -7,6 +7,9 @@ import { Aside } from "@astrojs/starlight/components";
 
 Both the **Player** (playback) and **StreamCrafter** (ingest) offer four integration levels. This guide helps you choose the right one.
 
+If you are still deciding what to create first, start with [Streams](/builders/streams) for the
+basic object model: stream keys, playback IDs, push ingest, and pull-input streams.
+
 ## Decision Tree
 
 ### What framework are you using?
@@ -121,13 +124,13 @@ Best for: Custom renderers, audio-only, data extraction, automated testing.
 
 ## Player vs Studio
 
-|                  | Player                                  | StreamCrafter                                 |
-| ---------------- | --------------------------------------- | --------------------------------------------- |
-| **Direction**    | Playback (viewer)                       | Ingest (broadcaster)                          |
-| **Protocols**    | HLS, DASH, WebRTC (WHEP), WebSocket     | WebRTC (WHIP)                                 |
-| **Sources**      | Remote stream endpoints                 | Local camera, screen, custom MediaStream      |
-| **Key features** | ABR, multi-engine, protocol negotiation | Multi-source mixing, compositor, reconnection |
-| **Use case**     | Watching streams                        | Broadcasting streams                          |
+|                  | Player                                      | StreamCrafter                                 |
+| ---------------- | ------------------------------------------- | --------------------------------------------- |
+| **Direction**    | Playback (viewer)                           | Ingest (broadcaster)                          |
+| **Protocols**    | HLS, LL-HLS, DASH, WebRTC (WHEP), WebSocket | WebRTC (WHIP)                                 |
+| **Sources**      | Remote stream endpoints                     | Local camera, screen, custom MediaStream      |
+| **Key features** | ABR, multi-engine, protocol negotiation     | Multi-source mixing, compositor, reconnection |
+| **Use case**     | Watching streams                            | Broadcasting streams                          |
 
 ## Package Architecture
 

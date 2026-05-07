@@ -22,16 +22,17 @@ _Rotating highlight of recently shipped, production‑ready capabilities. For fu
 ### Video Engine
 
 - **Ingest**: RTMP, SRT, and WHIP support.
-- **Delivery**: Low-latency HLS, WebRTC, and DASH.
+- **Delivery**: Foghorn resolves HLS, WebRTC/WHEP, Mist WebRTC, MP4, WebM/MKV, AAC, TS, H264, Mist WebSocket outputs, and direct RTMP/RTSP/SRT/DTSC when exposed by the selected node.
 - **Stream Control**: Stream CRUD, multiple keys per stream, and playback IDs.
-- **Media**: DVR recording (with retention policies), server-side clipping, and VOD uploads.
+- **Media**: DVR recording (with retention policies), server-side clipping, VOD uploads, thumbnails, and sprite/VTT seek previews.
+- **Multistreaming**: RTMP, RTMPS, and SRT push targets with lifecycle status tracking.
 
 ### Core Platform
 
 - **Tenancy**: Native multi-tenant isolation.
-- **Auth**: JWT and API Token management.
-- **Billing**: Usage tracking, cost breakdowns, and invoice generation.
-- **Infrastructure**: Geo-aware load balancing, Cloudflare DNS automation, and ACME certificates.
+- **Auth**: JWT, API Token management, and viewer playback access control.
+- **Billing**: Usage tracking, cost breakdowns, and invoice draft/finalization paths. Payment reconciliation still needs deployment-specific validation.
+- **Infrastructure**: Geo-aware load balancing, Navigator-managed DNS automation (Cloudflare root/API/web/admin zones and Bunny media zones), and ACME certificates where enabled.
 - **Reliability**: Service health endpoints are internal only; a public status page is not yet implemented (tracked in GitHub Projects).
 
 ### Data & Analytics
@@ -76,6 +77,7 @@ _Active development. Core functionality is established; work is focused on full 
 
 - **Livepeer Gateway**: Transcoding is active. Work is focused on native integration and exposed controls.
 - **DRM**: FairPlay, Widevine, and PlayReady content protection, in development with the MistServer team.
+- **Pull-input streams**: Mist/Foghorn pull-source routing exists internally; product/API exposure and tenant-safe UX are still being finished.
 
 ---
 
@@ -89,7 +91,7 @@ _Design and prototype phase. Early access may be available._
 - **Stream Provenance**: Arweave-backed chain of custody for stream integrity and dispute resolution. <Badge text="Planned" variant="note" />
 - **Orchestration**: Unified processing for Live + VOD. [RFC: Processing Orchestration], [RFC: Stream Replication], [RFC: VOD Optimization]
 - **Marketplace**: Cluster capacity sharing. [RFC: Marketplace]
-- **AV Device Discovery**: Auto-detect IP cameras and HDMI inputs.
+- **AV Device Discovery**: Drop-in app that auto-discovers ONVIF IP cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI capture inputs.
 - **Compositing**: Server-side PiP, overlays, and mixing.
 - **Transcription**: Live speech-to-text for streams.
 - **Video Analysis**: Object detection, classification, automated clipping, and camera-driven automation.

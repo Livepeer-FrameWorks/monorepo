@@ -1,0 +1,149 @@
+---
+title: "Pull-input Streams"
+description: "Have FrameWorks fetch from an upstream RTSP, SRT, RIST, HLS, DTSC, or MPEG-TS source."
+sidebar:
+  order: 4
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+A normal stream is **push-in**: your encoder opens RTMP, SRT, or WHIP to FrameWorks and uploads
+media. A **pull-input stream** is the inverse: FrameWorks stores an upstream URL, then a media edge
+opens that source when playback needs it.
+
+Use pull-input streams when:
+
+- The source is an existing camera, encoder, or origin server that cannot push to FrameWorks.
+- A venue sends you an SRT/RIST contribution feed.
+- You need to restream an HLS or MPEG-TS source.
+- You run self-hosted edge nodes that can reach private cameras or LAN/VPC sources.
+
+<Aside type="caution" title="Current creation path">
+  Pull-input streams are currently operator-owned bootstrap resources declared in
+  `commodore.pull_streams`. The public GraphQL API creates push streams with `createStream`; it does
+  not expose `createPullStream` or tenant self-service pull-stream mutations yet.
+</Aside>
+
+## Supported Source Schemes
+
+| Scheme               | Mist input  | Notes                                                                                   |
+| -------------------- | ----------- | --------------------------------------------------------------------------------------- |
+| `rtsp://`            | RTSP        | Basic-auth in URI accepted; `rtsps://` is not supported yet.                            |
+| `srt://`             | SRT         | Stream ID and passphrase use standard SRT URL params.                                   |
+| `rist://`            | RIST        | MPEG-TS over RIST.                                                                      |
+| `dtsc://`            | DTSC        | Pull from another Mist node. Useful for bridging self-hosted media planes.              |
+| `https://.../*.m3u8` | HLS         | Matched by suffix.                                                                      |
+| `https://.../*.ts`   | TS          | Single-file TS pulls; for live TS-over-HTTP, prefer HLS or `tsudp://`.                  |
+| `https://.../*.mkv`  | EBML        | Includes WebM (`.webm`). Useful for VOD-as-live and some WHIP recordings.               |
+| `tsudp://host:port`  | TS over UDP | Unicast or multicast. Private and multicast destinations need an opted-in edge cluster. |
+
+**RTMP pull is not supported.** RTMP stays push-only. If you need to pull from an RTMP source, run a
+converter such as FFmpeg, MistServer, or `srt-live-transmit` and pull its SRT, RIST, RTSP, or HLS
+output instead.
+
+## Declare a Pull Stream
+
+Operators add pull streams to the rendered bootstrap desired state under `commodore.pull_streams`.
+The stable key is `playback_id`, which is also the public viewer identifier.
+
+```yaml
+commodore:
+  pull_streams:
+    - playback_id: lobby-camera
+      owner_tenant:
+        kind: customer
+        alias: acme
+      title: Lobby Camera
+      description: Main entrance RTSP camera
+      source_uri_ref:
+        provider: sops
+        path: gitops/secrets/production.env
+        key: LOBBY_CAMERA_RTSP_URI
+      enabled: true
+```
+
+For non-secret public sources, `source_uri` can be inline:
+
+```yaml
+commodore:
+  pull_streams:
+    - playback_id: event-restream
+      owner_tenant:
+        kind: customer
+        alias: acme
+      title: Event Restream
+      source_uri: https://origin.example/live/main.m3u8
+      enabled: true
+```
+
+During render, the CLI validates the source URI, resolves `source_uri_ref` when present, and checks
+that at least one media cluster can host the pull stream. During Commodore bootstrap, the source URI
+is encrypted at rest with a pull-source-specific encryption purpose before being stored.
+
+## Private Upstreams on Self-hosted Edges
+
+Private literals are allowed only on media clusters that explicitly opt in with
+`allow_private_pull_sources: true`.
+
+```yaml
+clusters:
+  warehouse-edge:
+    name: Warehouse Edge
+    type: edge
+    owner_tenant: acme
+    roles: [media]
+    allow_private_pull_sources: true
+```
+
+This protects platform-managed clusters from trying to reach sources they cannot access and keeps
+private-source placement constrained to edge nodes you operate.
+
+| Deployment shape                              | Result                                                               |
+| --------------------------------------------- | -------------------------------------------------------------------- |
+| Platform cluster, public source URI           | Allowed.                                                             |
+| Platform cluster, private literal source URI  | Rejected unless a media cluster opts in.                             |
+| Self-hosted edge with opt-in                  | Allowed and routed only to eligible media clusters.                  |
+| Hostname resolving to private IP from an edge | Treated as public at validation; DNS reachability is operator-owned. |
+
+<Aside type="caution" title="Hostname reachability is on you">
+  Private-vs-public classification uses literal IPs in the URI. A hostname that resolves to an
+  RFC1918 address from your edge is not resolved during validation, because DNS answers can differ
+  per cluster. Use cluster routing and DNS deliberately.
+</Aside>
+
+## Runtime Behavior
+
+Pull streams are on-demand:
+
+1. A viewer requests `/play/{playback_id}`.
+2. Foghorn routes the viewer to an eligible media edge, even if the stream is currently inactive.
+3. MistServer starts the `pull+` stream and asks Foghorn for the source.
+4. Foghorn ignores untrusted fallback query params and resolves the stored source URI from Commodore.
+5. The first edge pulls upstream media; later viewers prefer in-cluster DTSC fanout once available.
+6. When the last viewer leaves, MistServer drops the upstream after the standard grace period.
+
+Idle pull streams do not fetch from the upstream and do not accrue live processing or viewer costs.
+Once active, metering is the same as push streams: viewer minutes, egress, transcoding, recording,
+and storage apply normally.
+
+## Failure Modes
+
+- **Upstream unreachable** - The Mist input exits. The next viewer triggers a fresh pull attempt.
+- **Two viewers arrive at once** - More than one edge can briefly pull from the upstream before
+  fanout takes over.
+- **Source URI changed** - Re-run bootstrap with the new URI. Active sessions reconnect against the
+  new origin after the media plane sees the updated source.
+- **Source sends silence or black** - FrameWorks does not synthesize fallback media; viewers see
+  what the upstream sends.
+
+## Feature Parity
+
+Once media is active, pull streams behave like push streams:
+
+- [Playback access control](/builders/playback-access-control) can gate viewers with JWT or webhook policies.
+- [Recording and DVR](/builders/recordings) work with the same stream-level recording flag.
+- [Multistreaming](/builders/multistreaming) can push the pulled source onward to RTMP targets.
+- [Thumbnails and previews](/builders/thumbnails-and-previews) use the same generation pipeline.
+
+For a lower-level service map, see the architecture note in
+[`docs/architecture/pull-streams.md`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/docs/architecture/pull-streams.md).

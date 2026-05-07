@@ -1,0 +1,141 @@
+---
+title: "Streams"
+description: "Create live streams, understand stream keys and playback IDs, and choose push or pull ingest."
+sidebar:
+  order: 2
+---
+
+import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+A stream is the live object you broadcast into and viewers watch. It owns three things you will use
+in most integrations:
+
+| Field        | What it is                                      | Safe to expose? |
+| ------------ | ----------------------------------------------- | --------------- |
+| `id`         | GraphQL object ID for API mutations and queries | Backend only    |
+| `streamKey`  | Secret ingest credential for push streams       | No              |
+| `playbackId` | Public viewer identifier for `/play` and Player | Yes             |
+
+Use `streamKey` only where media is being uploaded. Use `playbackId` everywhere viewers need to
+watch.
+
+## Stream Types
+
+FrameWorks supports two ingest models:
+
+| Model | How media arrives                                         | Current creation path                       |
+| ----- | --------------------------------------------------------- | ------------------------------------------- |
+| Push  | Your encoder opens RTMP, SRT, or WHIP to FrameWorks       | Dashboard or GraphQL `createStream`         |
+| Pull  | FrameWorks opens RTSP, SRT, RIST, HLS, DTSC, or TS to you | Operator bootstrap `commodore.pull_streams` |
+
+Most builders start with push streams. Pull-input streams are useful for cameras, venue feeds, and
+upstream origins that cannot push into FrameWorks. Today they are provisioned by operators during
+cluster bootstrap; self-service GraphQL mutations for tenant-created pull streams are not exposed
+yet.
+
+On the [roadmap](/roadmap#in-the-pipeline): an **AV Device Discovery** drop-in app that
+auto-discovers ONVIF IP cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI capture
+inputs — for venues and studios that want device pickup without hand-wiring RTSP URLs.
+
+<Aside type="note" title="Pull streams are not push streams with a URL">
+  A pull stream has no usable `streamKey`, because nothing is allowed to push into it. Its upstream
+  URI is stored server-side, encrypted at rest, and resolved only by the media plane when a viewer
+  wakes the stream.
+</Aside>
+
+## Create a Push Stream in the Dashboard
+
+1. Open **Content -> Streams**.
+2. Click **Create Stream**.
+3. Give it a name and optional description.
+4. Copy the **Stream Key** for your encoder.
+5. Copy the **Playback ID** for players and embeds.
+
+For the fastest end-to-end setup, follow [Quick Start](/builders/quick-start).
+
+## Create a Push Stream with GraphQL
+
+Most mutations return a union. Always check `__typename`.
+
+```graphql
+mutation {
+  createStream(input: { name: "Main Stage", record: true }) {
+    __typename
+    ... on Stream {
+      id
+      name
+      streamKey
+      playbackId
+      record
+    }
+    ... on ValidationError {
+      field
+      message
+    }
+    ... on AuthError {
+      message
+    }
+  }
+}
+```
+
+`record: true` enables DVR/recording from the start. You can also toggle recording later with
+`updateStream`.
+
+## Go Live
+
+After creating a push stream, send media to one of the ingest endpoints shown on the stream detail
+page:
+
+| Protocol | Typical use                        | Guide                                                             |
+| -------- | ---------------------------------- | ----------------------------------------------------------------- |
+| RTMP     | OBS, hardware encoders, FFmpeg     | [Encoder Setup](/builders/encoder-setup)                          |
+| SRT      | Unreliable or long-haul networks   | [Encoder Setup](/builders/encoder-setup#srt-alternative-protocol) |
+| WHIP     | Browser or WebRTC-native broadcast | [StreamCrafter](/builders/ingest)                                 |
+
+The stream becomes live once the media edge accepts the input and MistServer reports an active
+session.
+
+## Watch the Stream
+
+Use `playbackId` with the FrameWorks Player or raw `/play` URLs:
+
+```tsx
+import { Player } from "@livepeer-frameworks/player-react";
+
+<Player
+  contentType="live"
+  contentId="<PLAYBACK_ID>"
+  options={{ gatewayUrl: "%GATEWAY_URL%/graphql", autoplay: true, muted: true }}
+/>;
+```
+
+```bash
+%PLAY_URL%/play/<PLAYBACK_ID>/hls/index.m3u8
+%PLAY_URL%/play/<PLAYBACK_ID>/webrtc
+```
+
+See [Playback & Embedding](/builders/playback) for protocols, players, and custom source
+resolution.
+
+## Lifecycle
+
+- **Offline** - The stream exists, but no encoder or pull input is currently active.
+- **Live** - The media edge is receiving or pulling source media.
+- **Recording** - If recording is enabled, DVR assets are produced while the stream is live.
+- **Idle pull input** - Pull streams do not fetch upstream media until a viewer requests playback.
+
+Playback access policies, multistream targets, recordings, thumbnails, and analytics attach to the
+stream regardless of whether the media arrives by push or pull. The difference is only how the
+source media gets into the platform.
+
+## Related Guides
+
+<CardGrid>
+  <LinkCard title="Quick Start" href="/builders/quick-start/" />
+  <LinkCard title="Encoder Setup" href="/builders/encoder-setup/" />
+  <LinkCard title="StreamCrafter" href="/builders/ingest/" />
+  <LinkCard title="Playback" href="/builders/playback/" />
+  <LinkCard title="Pull-input Streams" href="/builders/pull-streams/" />
+  <LinkCard title="API Reference" href="/builders/api-reference/" />
+</CardGrid>

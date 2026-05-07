@@ -40,7 +40,7 @@ graph LR
     FOG -->|gRPC| DL
 ```
 
-1. **MistServer** is the media engine: ingest, processing/transcoding (including Livepeer‑powered ABR when configured), and HLS/DASH/WebRTC delivery
+1. **MistServer** is the media engine: ingest, processing/transcoding (including Livepeer‑powered ABR when configured), broad playback/container outputs (HLS, LL-HLS, DASH, WebRTC, MP4, WebM, WebSocket), and direct protocols when exposed
 2. **Helmsman** (our sidecar) handles tight integration with Foghorn and forwards triggers/metrics via gRPC
 3. **Foghorn** enriches events (GeoIP, tenant context), validates stream keys via Commodore (gRPC), and forwards to Decklog
 4. **Decklog** receives enriched events from Foghorn and produces them to Kafka for analytics
@@ -49,9 +49,10 @@ graph LR
 
 Before you start:
 
-- A server with Docker and Docker Compose
-- Public IP (for viewers to reach you)
-- DNS record pointing to your server
+- A Linux server for the default Docker deployment, or a Linux/macOS host for native edge deployment
+- Docker and Docker Compose when using the Docker mode
+- Public IP or reachable public DNS name for viewer traffic
+- A DNS record for the assigned edge domain, unless the Bridge bootstrap flow assigns and syncs it for you
 - Ports available as needed (expose only what you use):
   - **80/443** (HTTP/HTTPS)
   - **1935** (RTMP ingest)
@@ -61,7 +62,7 @@ Before you start:
   - **18203/udp** (WebRTC)
   - **4200** (DTSC replication, Mist ↔ Mist)
   - **4242** (Mist controller; keep internal/local)
-- A paid FrameWorks account with self-hosted clusters enabled, plus a CLI enrollment token to connect the node
+- A FrameWorks account for one-command Bridge setup, or a valid `edge_node` enrollment token for token-based setup
 
 Hardware minimums:
 

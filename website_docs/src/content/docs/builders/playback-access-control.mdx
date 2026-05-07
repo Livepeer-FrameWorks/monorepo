@@ -281,12 +281,16 @@ play without a token (subject to a brief reconnect blip).
 - **Per-session enforcement.** The decision is made once per viewer
   session (~10 min default), then cached by MistServer. Subsequent segment
   fetches inherit the session decision without re-firing `USER_NEW`.
-- **Session invalidation is best-effort across the active edge set.**
-  Policy changes and key revokes ask Foghorn → Helmsman → MistServer to
-  invalidate sessions for affected streams. If a viewer session remains
-  active on an edge that does not receive that invalidation (for example a
-  cross-cluster pull edge that is temporarily unreachable), it will not
-  recheck until MistServer's session cache expires.
+- **Session invalidation is durable.** Policy changes and key revokes
+  enqueue an invalidation row inside the same database transaction as the
+  underlying mutation, then attempt a synchronous fanout
+  (Commodore → Foghorn → Helmsman → MistServer) across every cluster the
+  tenant uses. If any cluster's Foghorn or any node's Helmsman is
+  unreachable, the row stays pending and a worker retries with exponential
+  backoff until every cluster acknowledges. Effective propagation under a
+  healthy network is sub-second; a partitioned cluster catches up as soon
+  as it is reachable again. Sessions on the affected edges drop and
+  re-fire `USER_NEW` against the fresh policy.
 - **Distinct deny reasons.** Logs distinguish missing-token, bad-kid,
   wrong-alg, sig-fail, exp, claim-mismatch, webhook-deny-403,
   webhook-error-status, webhook-timeout, webhook-network, and

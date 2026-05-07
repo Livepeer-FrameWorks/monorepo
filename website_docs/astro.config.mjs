@@ -249,6 +249,7 @@ export default defineConfig({
           label: "For Builders",
           items: [
             { slug: "builders/quick-start" },
+            { slug: "builders/streams" },
             { slug: "builders/encoder-setup" },
             { slug: "builders/integration-guide" },
             {
@@ -276,6 +277,7 @@ export default defineConfig({
               ],
             },
             { slug: "builders/multistreaming" },
+            { slug: "builders/pull-streams" },
             { slug: "builders/thumbnails-and-previews" },
             { slug: "builders/recordings" },
             { slug: "builders/playback-access-control" },
@@ -294,7 +296,51 @@ export default defineConfig({
         },
         {
           label: "For Infrastructure Operators",
-          autogenerate: { directory: "operators" },
+          items: [
+            {
+              label: "Start Here",
+              items: [
+                { slug: "operators/deployment" },
+                { slug: "operators/prerequisites" },
+                { slug: "operators/cluster-manifest" },
+                { slug: "operators/cli-reference" },
+              ],
+            },
+            {
+              label: "Architecture",
+              items: [{ slug: "operators/architecture" }, { slug: "operators/data-models" }],
+            },
+            {
+              label: "Deployment & Lifecycle",
+              items: [
+                { slug: "operators/ansible-provisioning" },
+                { slug: "operators/deployment-manual" },
+                { slug: "operators/running-upgrades" },
+                { slug: "operators/postgres-migrations" },
+                { slug: "operators/clickhouse-migrations" },
+              ],
+            },
+            {
+              label: "Networking",
+              items: [
+                { slug: "operators/dns" },
+                { slug: "operators/mesh-bootstrap" },
+                { slug: "operators/multi-cluster" },
+              ],
+            },
+            {
+              label: "Operations",
+              items: [{ slug: "operators/operations" }, { slug: "operators/external-services" }],
+            },
+            {
+              label: "Integrations",
+              items: [
+                { slug: "operators/chatwoot-setup" },
+                { slug: "operators/listmonk-setup" },
+                { slug: "operators/skipper" },
+              ],
+            },
+          ],
         },
         {
           label: "Roadmap",

@@ -15,13 +15,13 @@ frameworks edge status --dir /opt/frameworks-edge
 
 Shows:
 
-- Container status (MistServer, Helmsman, Caddy)
+- Container status in Docker mode, or systemd/launchd status in native mode
 - HTTPS health check against your configured domain
 
 ## Logs
 
 ```bash
-# All containers, follow mode
+# All services, follow mode
 frameworks edge logs --follow --dir /opt/frameworks-edge
 
 # Specific container (positional argument)
@@ -47,19 +47,19 @@ frameworks update
 
 ### Updating Edge Services
 
-Pull the latest images and restart:
+Update/restart the deployed edge services:
 
 ```bash
 frameworks edge update --dir /opt/frameworks-edge
 ```
 
-This:
+In Docker mode this:
 
 1. Pulls new images from the registry
 2. Recreates containers with new images
 3. Preserves configuration and data
 
-For a specific version, pin the image tags in the edge compose file before running update.
+In native mode, `edge update` restarts the native services. Release-target convergence for native components is driven by the control plane, not by pulling Docker images.
 
 Check current version:
 
@@ -82,7 +82,26 @@ Shows certificate expiration and issuer. In token-provisioned edge deployments, 
 frameworks edge cert --reload --dir /opt/frameworks-edge
 ```
 
+## Operational Mode
+
+Use node mode when you want Foghorn to stop sending new traffic without fully stopping the services. This command talks to Helmsman's local HTTP API, so it works for native deployments and Docker deployments where you have made that API reachable from the host.
+
+```bash
+# Show current mode
+frameworks edge mode
+
+# Stop new sessions and let existing work drain
+frameworks edge mode draining --reason maintenance
+
+# Return to normal routing
+frameworks edge mode normal
+```
+
+Mode changes are requested through Helmsman and validated by Foghorn, which pushes the authoritative mode back through ConfigSeed.
+
 ## Restarting Services
+
+For Docker deployments:
 
 ```bash
 cd /opt/frameworks-edge
@@ -96,7 +115,7 @@ docker compose -f docker-compose.edge.yml restart helmsman
 
 ## Stopping the Node
 
-Stop the containers:
+For Docker deployments, stop the containers:
 
 ```bash
 docker compose -f docker-compose.edge.yml stop
@@ -125,7 +144,7 @@ frameworks edge doctor --dir /opt/frameworks-edge
 Runs:
 
 - Host checks (ports, DNS, sysctls)
-- Container status
+- Service status
 - HTTPS reachability
 - Remediation hints
 
@@ -141,7 +160,7 @@ frameworks edge logs helmsman --tail 100
 
 ## Resource Usage
 
-Check what your node is using:
+For Docker deployments, check what your node is using:
 
 ```bash
 docker stats mistserver helmsman edge-proxy
@@ -153,7 +172,7 @@ MistServer metrics are available on the MistServer control interface. In the def
 curl http://localhost:4242/api/stats
 ```
 
-Helmsman exposes Prometheus metrics:
+Helmsman exposes Prometheus metrics when its local HTTP API is reachable:
 
 ```bash
 curl http://localhost:18007/metrics
@@ -161,7 +180,7 @@ curl http://localhost:18007/metrics
 
 ## Configuration Changes
 
-Most config lives in `.edge.env`. After editing:
+Most config lives in `.edge.env`. After editing a Docker deployment:
 
 ```bash
 cd /opt/frameworks-edge
@@ -190,7 +209,7 @@ Changes that take effect immediately:
 
 **Recovery:**
 
-1. Install Docker on new host
+1. Install Docker on the new host when recovering a Docker deployment
 2. Run `frameworks edge preflight`
 3. Run `frameworks edge init --dir .` to generate compose/Caddyfile
 4. Copy your saved `.edge.env` into the directory

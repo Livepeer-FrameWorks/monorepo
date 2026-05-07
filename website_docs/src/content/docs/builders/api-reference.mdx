@@ -80,6 +80,7 @@ query {
 
 ### Create a Stream
 
+`createStream` creates a push-input live stream for RTMP, SRT, or WHIP ingest.
 Most mutations return a **union** result. Always check `__typename`.
 
 ```graphql
@@ -102,6 +103,12 @@ mutation {
   }
 }
 ```
+
+The returned `streamKey` is secret and is used only for ingest. The returned `playbackId` is the
+public viewer identifier used by `/play` URLs and the FrameWorks Player.
+
+Pull-input streams are not created by GraphQL today. Operators provision them through
+`commodore.pull_streams` during bootstrap; see [Pull-input Streams](/builders/pull-streams).
 
 ### Get Stream Details
 

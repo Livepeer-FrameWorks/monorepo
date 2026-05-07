@@ -5,7 +5,7 @@ description: "Share your stream with viewers using the FrameWorks player or stan
 
 import { Aside, LinkCard, CardGrid } from "@astrojs/starlight/components";
 
-Playback options: drop-in components across React, Svelte, and Web Components, or raw protocol URLs for HLS, DASH, and WebRTC.
+Playback options: drop-in components across React, Svelte, and Web Components, or raw protocol URLs for HLS, LL-HLS, DASH, WebRTC/WHEP, Mist WebRTC, MP4, WebM/MKV, AAC, TS, H264, WebSocket outputs, and direct RTMP/RTSP/SRT/DTSC when exposed.
 
 <Aside type="note" title="Self-hosted delivery">
   Self-hosted operators serve streams from their own edge nodes. The same protocols and player work
@@ -54,7 +54,7 @@ Your **Playback ID** is shown in the FrameWorks dashboard under **Playback Info*
 | URL Pattern                  | Protocol      | Description                                      |
 | ---------------------------- | ------------- | ------------------------------------------------ |
 | `/play/{id}/hls/index.m3u8`  | HLS (TS)      | Best compatibility — browsers, mobile, smart TVs |
-| `/play/{id}/cmaf/index.m3u8` | HLS (CMAF)    | Lower latency HLS variant                        |
+| `/play/{id}/cmaf/index.m3u8` | LL-HLS        | Lower latency HLS variant                        |
 | `/play/{id}/cmaf/index.mpd`  | DASH          | MPEG-DASH adaptive streaming                     |
 | `/play/{id}/webrtc`          | WebRTC (WHEP) | Ultra-low latency (~0.5s)                        |
 | `/play/{id}.mp4`             | MP4           | Progressive download                             |

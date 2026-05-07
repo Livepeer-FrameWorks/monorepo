@@ -1,24 +1,29 @@
 ---
-title: "DNS Automation"
-description: "Automated DNS management and certificate issuance with Navigator."
+title: "DNS and Cluster Routing"
+description: "Public DNS, cluster-scoped media domains, protocol routing, and certificate issuance."
 sidebar:
   order: 10
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-Navigator automates DNS record management and certificate issuance for your infrastructure.
+Navigator reconciles public DNS and certificates from Quartermaster inventory.
+This page owns both root service DNS and media-cluster routing; avoid keeping a
+separate GeoDNS table elsewhere.
 
 ---
 
 ## DNS Architecture
 
-FrameWorks uses a two-layer routing strategy:
+FrameWorks uses two routing layers:
 
-- **DNS layer (Cloudflare + Bunny)**: Infrastructure-level geo-routing to nearest region or media cluster
-- **Application layer (Foghorn)**: Capacity-aware routing to optimal edge node
+- **DNS layer**: Sends clients to the right public service or media cluster.
+- **Application layer**: Foghorn applies health, capacity, stream availability,
+  and cluster federation rules before returning or redirecting to a node.
 
-> **Note**: Cloudflare remains the root/API/web/admin DNS provider. Bunny DNS handles delegated media cluster zones so edge growth does not consume Cloudflare Load Balancing endpoints.
+Cloudflare remains authoritative for root/API/web/admin/support names. Media and
+edge traffic is cluster-scoped and may be delegated to Bunny DNS so edge growth
+does not consume root-domain load-balancing capacity.
 
 ### How Navigator Works
 
@@ -48,7 +53,7 @@ This checks:
 - Each subdomain resolves to expected IPs from inventory
 - Reports mismatches between public DNS and Quartermaster
 
-By default, the CLI assumes `frameworks.network` if `--domain` is not provided.
+Pass `--domain`; default domains are for development and platform-owned checks.
 
 ---
 
@@ -105,6 +110,26 @@ Navigator creates the Bunny zone, delegates `{cluster_slug}.{base_domain}` from 
 
 Media and edge names are cluster-scoped only. Navigator removes unsupported root-level media records such as `edge-ingest.example.com` and `foghorn.example.com` during reconciliation.
 
+### Protocol Routing
+
+HTTP-based protocols can go through Foghorn because Foghorn can return JSON or
+issue redirects. Non-HTTP protocols connect directly to edge pools because they
+cannot follow HTTP redirects.
+
+| Traffic class                                     | Domain                                     | Routing behavior              |
+| ------------------------------------------------- | ------------------------------------------ | ----------------------------- |
+| HLS, LL-HLS, DASH, WHEP/WebRTC, MP4, WebM/MKV, TS | `{slug}.{base}` or `foghorn.{slug}.{base}` | Foghorn resolves or redirects |
+| Livepeer gateway API                              | `livepeer.{slug}.{base}`                   | Direct to gateway endpoint    |
+| RTMP/SRT/WHIP ingest                              | `edge-ingest.{slug}.{base}`                | Direct to ingest edge pool    |
+| RTMP/SRT/RTSP/DTSC playback when exposed          | `edge-egress.{slug}.{base}`                | Direct to egress edge pool    |
+
+### DNS Health
+
+Quartermaster is the health source for desired DNS state. Navigator filters
+unhealthy or addressless nodes before reconciling records; provider-side health
+checks are an implementation detail of the authoritative provider integration.
+Use `frameworks dns doctor` to compare public DNS with Quartermaster inventory.
+
 ### Wildcard TLS Certificates
 
 Each cluster uses a wildcard certificate for its subdomain space:
@@ -127,14 +152,15 @@ tenant1.example.com  → CNAME → foghorn.{cluster_slug}.example.com
 
 ---
 
-## Cloudflare Configuration
+## Provider Configuration
 
-Navigator requires a Cloudflare API token with these permissions:
+Navigator needs credentials for the authoritative provider it is expected to
+manage. For Cloudflare-managed root names, use an API token with:
 
 - **Zone.DNS**: Edit
 - **Account.Load Balancers**: Edit (for multi-node setups)
 
-Environment variables for Navigator:
+Core environment variables:
 
 ```bash
 CLOUDFLARE_API_TOKEN="your-api-token"

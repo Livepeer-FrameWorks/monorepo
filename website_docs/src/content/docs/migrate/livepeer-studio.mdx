@@ -14,12 +14,11 @@ This guide covers what stays, what changes, what you gain, and exactly how to do
 ## TL;DR
 
 - **What stays:** RTMP/RTMPS and WHIP ingest, HLS and WebRTC playback, multistream targets, clips, recordings.
-- **What changes:** REST → GraphQL · API key → JWT or developer token · outbound webhooks → GraphQL subscriptions or polling · Studio playback access policies need a new plan · `@livepeer/react` → `@livepeer-frameworks/player-*`.
-- **Capabilities to evaluate:** SRT ingest · low-latency HLS · DASH delivery · sprite-sheet seek previews · AV1 in the codec list · self-hosting / hybrid options · MCP, wallet auth, and x402 for agents · Skipper.
-- **What's not yet at parity:** AI Pipelines, outbound webhooks, pull-from-source ingest, C2PA
-  signing, first-class Python/Go SDKs, JWT/webhook playback access control, full DRM, and
-  multi-participant rooms. See [the gap list](#whats-not-yet-at-parity-and-whats-coming) before
-  planning a production cutover.
+- **What changes:** REST → GraphQL · API key → JWT or developer token · outbound webhooks → GraphQL subscriptions or polling · playback access policies are recreated with FrameWorks signing keys or webhooks · `@livepeer/react` → `@livepeer-frameworks/player-*`.
+- **Capabilities to evaluate:** SRT ingest · LL-HLS/DASH delivery · sprite-sheet seek previews · AV1 in the codec list · self-hosting / hybrid options · MCP, wallet auth, and x402 for agents · Skipper · planned AV Device Discovery (ONVIF / VISCA-PTZ / NDI / HDMI capture).
+- **What's not yet at parity:** AI Pipelines, outbound webhooks, self-service pull-from-source API,
+  C2PA signing, first-class Python/Go SDKs, full DRM, and multi-participant rooms. See
+  [the gap list](#whats-not-yet-at-parity-and-whats-coming) before planning a production cutover.
 
 <Aside type="note">
   FrameWorks is in active beta. Billing rates, hybrid edge deployment, and the cluster marketplace
@@ -33,14 +32,15 @@ The shapes you know in Studio, mapped to FrameWorks:
 
 ### Streams
 
-| Studio                          | FrameWorks                                                                                |
-| ------------------------------- | ----------------------------------------------------------------------------------------- |
-| `POST /stream`                  | `createStream(input)` mutation                                                            |
-| `GET /stream/{id}`              | `stream(id)` query                                                                        |
-| `PATCH /stream/{id}`            | `updateStream(id, input)` mutation                                                        |
-| `DELETE /stream/{id}`           | `deleteStream(id)` mutation                                                               |
-| `DELETE /stream/{id}/terminate` | No direct equivalent today; stop the encoder, or delete the stream if you are retiring it |
-| `record: true` flag at create   | `record: true` at create, or `startDVR(streamId)` post-create                             |
+| Studio                                        | FrameWorks                                                                                                                                 |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /stream`                                | `createStream(input)` mutation                                                                                                             |
+| `GET /stream/{id}`                            | `stream(id)` query                                                                                                                         |
+| `PATCH /stream/{id}`                          | `updateStream(id, input)` mutation                                                                                                         |
+| `DELETE /stream/{id}`                         | `deleteStream(id)` mutation                                                                                                                |
+| `DELETE /stream/{id}/terminate`               | No direct equivalent today; stop the encoder, or delete the stream if you are retiring it                                                  |
+| `record: true` flag at create                 | `record: true` at create, or `startDVR(streamId)` post-create                                                                              |
+| `POST /stream` with `pull: { source }` config | Operator bootstrap `commodore.pull_streams` today; no self-service GraphQL mutation yet — see [Pull-input streams](/builders/pull-streams) |
 
 ### Recordings, clips, and VOD
 
@@ -85,7 +85,7 @@ Studio uses the term "access control" for two separate concerns: authenticating 
 | `playbackPolicy: { type: "jwt" }`     | `setPlaybackPolicy({ streamId, policy: { type: JWT, jwt: { allowedKids } } })`                         |
 | `playbackPolicy: { type: "webhook" }` | `setPlaybackPolicy({ ..., policy: { type: WEBHOOK, webhook: { url, secret, timeoutMs } } })`           |
 | `Livepeer-Jwt` header                 | `?jwt=<token>` (or `Authorization: Bearer` after the MistServer Bearer fix is pinned)                  |
-| `?jwt=` query (MP4 only on Studio)    | `?jwt=<token>` works for HLS, DASH, WebRTC/WHEP, and MP4 — single transport                            |
+| `?jwt=` query (MP4 only on Studio)    | `?jwt=<token>` works for HLS, LL-HLS, DASH, WebRTC/WHEP, and MP4 — single transport                    |
 | `playback.accessControl` webhook      | Webhook policy: HMAC-signed POST to your URL; return 200 to allow, anything else denies                |
 | DRM                                   | In progress with the MistServer team                                                                   |
 
@@ -226,7 +226,8 @@ If you use Studio signing keys, `playbackPolicy: { type: "jwt" }`, `Livepeer-Jwt
 
 - `POST /access-control/signing-key` → `createSigningKey` mutation (ES256, asymmetric, private PEM returned once).
 - `playbackPolicy: { type: "jwt" }` → `setPlaybackPolicy` with `type: JWT`.
-- `Livepeer-Jwt` header → `?jwt=<token>` query string (universal across HLS, DASH, WebRTC/WHEP, MP4). `Authorization: Bearer` will work after the MistServer Bearer fix is pinned.
+- `Livepeer-Jwt` header → `?jwt=<token>` query string (universal across HLS, LL-HLS, DASH,
+  WebRTC/WHEP, MP4). `Authorization: Bearer` will work after the MistServer Bearer fix is pinned.
 - `playback.accessControl` webhook → `setPlaybackPolicy` with `type: WEBHOOK`. FrameWorks POSTs an HMAC-signed body; your endpoint returns 200 to allow, 403 to deny.
 
 Note that signing keys do not transfer between platforms — reissue on FrameWorks. Migration concierge available via [in-app ticket](%APP_URL%/support) if you have a large library of pre-signed JWTs to roll over.
@@ -258,8 +259,15 @@ Run a low-traffic test stream through both platforms in parallel for a day. Watc
 ## What you gain on FrameWorks
 
 - **SRT ingest** — available for encoders and networks where SRT is the better fit.
-- **Low-latency HLS delivery** on the HLS stack itself, not only via WebRTC.
-- **DASH** alongside HLS for player flexibility.
+- **Pull-input streams** — point FrameWorks at an RTSP camera, an SRT/RIST contribution feed, an
+  HLS re-stream, or MPEG-TS over UDP and we open the upstream connection for you. Self-hosted
+  edges can pull from RFC1918 / multicast sources via an explicit `allow_private_pull_sources`
+  cluster flag — Studio doesn't have an equivalent. See [Pull-input streams](/builders/pull-streams).
+  On the [roadmap](/roadmap#in-the-pipeline): an **AV Device Discovery** drop-in app for
+  auto-discovering ONVIF cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI capture —
+  beyond Studio's RTMP/WHIP-only contribution surface.
+- **LL-HLS and DASH** — served from MistServer's CMAF output on every cluster, alongside HLS and
+  WebRTC.
 - **AV1** in the codec list where the selected cluster and process configuration support it.
 - **Sprite-sheet seek previews** — a 10×10 grid plus a WebVTT cue file, generated for every recording, ready for hover-scrub UIs.
 - **Self-hosting and hybrid hosting.** Run the whole stack on your hardware, or mix BYO edge with our managed control plane. Hybrid is experimental — see the beta flags below.
@@ -277,8 +285,6 @@ Current gaps to account for:
   FrameWorks exposes an equivalent surface.
 - **Outbound webhooks** — today we use GraphQL subscriptions. HTTP-callback delivery is tracked in
   the outbound-webhooks RFC.
-- **Pull-from-source ingest** — Studio supports `pull` config on stream create; FrameWorks does not
-  expose an equivalent ingest mode today.
 - **C2PA signing and creator-ID provenance on transcode** — not exposed as a public FrameWorks API
   today.
 - **First-class Python and Go SDKs** — internal Go clients exist; use GraphQL codegen against the
