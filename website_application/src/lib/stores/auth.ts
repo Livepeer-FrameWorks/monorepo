@@ -50,6 +50,7 @@ function createAuthStore() {
     error: null,
     initialized: false,
   });
+  let checkAuthPromise: Promise<void> | null = null;
 
   return {
     subscribe,
@@ -154,47 +155,35 @@ function createAuthStore() {
     },
 
     async checkAuth() {
-      const currentState: AuthState = {
-        isAuthenticated: false,
-        user: null,
-        loading: false,
-        error: null,
-        initialized: false,
-      };
-      const unsubscribe = subscribe((state) => {
-        Object.assign(currentState, state);
-      });
-      unsubscribe();
-
-      if (currentState.initialized && !currentState.loading) {
-        return;
+      if (checkAuthPromise) {
+        return checkAuthPromise;
       }
 
-      update((state) => ({ ...state, loading: true }));
-
-      try {
-        // Call /me endpoint - cookies sent automatically with withCredentials
-        const response = await authAPI.get<User>("/me");
-        const user = response.data;
-
-        // Update localStorage with fresh user data
-        localStorage.setItem("user", JSON.stringify(user));
-
-        set({
-          isAuthenticated: true,
-          user,
+      checkAuthPromise = (async () => {
+        const currentState: AuthState = {
+          isAuthenticated: false,
+          user: null,
           loading: false,
           error: null,
-          initialized: true,
+          initialized: false,
+        };
+        const unsubscribe = subscribe((state) => {
+          Object.assign(currentState, state);
         });
+        unsubscribe();
 
-        initializeWebSocket();
-      } catch {
-        // Not authenticated or token expired - try refresh
+        if (currentState.initialized && !currentState.loading) {
+          return;
+        }
+
+        update((state) => ({ ...state, loading: true }));
+
         try {
-          const refreshResponse = await authAPI.post<{ user: User }>("/refresh");
-          const { user } = refreshResponse.data;
+          // Call /me endpoint - cookies sent automatically with withCredentials
+          const response = await authAPI.get<User>("/me");
+          const user = response.data;
 
+          // Update localStorage with fresh user data
           localStorage.setItem("user", JSON.stringify(user));
 
           set({
@@ -207,17 +196,41 @@ function createAuthStore() {
 
           initializeWebSocket();
         } catch {
-          // Refresh failed - user is not authenticated
-          localStorage.removeItem("user");
+          // Not authenticated or token expired - try refresh
+          try {
+            const refreshResponse = await authAPI.post<{ user: User }>("/refresh");
+            const { user } = refreshResponse.data;
 
-          set({
-            isAuthenticated: false,
-            user: null,
-            loading: false,
-            error: null,
-            initialized: true,
-          });
+            localStorage.setItem("user", JSON.stringify(user));
+
+            set({
+              isAuthenticated: true,
+              user,
+              loading: false,
+              error: null,
+              initialized: true,
+            });
+
+            initializeWebSocket();
+          } catch {
+            // Refresh failed - user is not authenticated
+            localStorage.removeItem("user");
+
+            set({
+              isAuthenticated: false,
+              user: null,
+              loading: false,
+              error: null,
+              initialized: true,
+            });
+          }
         }
+      })();
+
+      try {
+        await checkAuthPromise;
+      } finally {
+        checkAuthPromise = null;
       }
     },
 

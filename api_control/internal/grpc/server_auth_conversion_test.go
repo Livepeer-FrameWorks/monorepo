@@ -2,9 +2,12 @@ package grpc
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/listmonk"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
@@ -112,10 +115,10 @@ func TestRefreshToken_MapsInlineUserStructToAuthResponse(t *testing.T) {
 
 	mock.ExpectQuery("FROM commodore.refresh_tokens").
 		WithArgs(hashToken(refreshToken)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "revoked"}).
-			AddRow("rt-1", "user-2", "tenant-2", false))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "revoked", "rotated_at"}).
+			AddRow("rt-1", "user-2", "tenant-2", false, nil))
 
-	mock.ExpectExec("UPDATE commodore.refresh_tokens SET revoked = true WHERE id = \\$1").
+	mock.ExpectExec("UPDATE commodore.refresh_tokens SET revoked = true, rotated_at = NOW\\(\\)").
 		WithArgs("rt-1").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -168,6 +171,67 @@ func TestRefreshToken_MapsInlineUserStructToAuthResponse(t *testing.T) {
 		t.Fatal("expected expires_at to be set")
 	}
 
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestRefreshToken_RecentRevokedTokenDoesNotRevokeSessionFamily(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	refreshToken := "refresh-token-raw"
+	mock.ExpectQuery("FROM commodore.refresh_tokens").
+		WithArgs(hashToken(refreshToken)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "revoked", "rotated_at"}).
+			AddRow("rt-1", "user-2", "tenant-2", true, time.Now().Add(-time.Minute)))
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	_, err = server.RefreshToken(context.Background(), &pb.RefreshTokenRequest{RefreshToken: refreshToken})
+	if err == nil {
+		t.Fatal("expected refresh token reuse to be rejected")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestGetNewsletterStatus_ListmonkErrorReturnsUnsubscribed(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	listmonkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer listmonkServer.Close()
+
+	mock.ExpectQuery("SELECT email FROM commodore.users WHERE id = \\$1 AND tenant_id = \\$2").
+		WithArgs("user-1", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"email"}).AddRow("user@example.com"))
+
+	server := &CommodoreServer{
+		db:                   db,
+		logger:               logrus.New(),
+		listmonkClient:       listmonk.NewClient(listmonkServer.URL, "user", "pass"),
+		defaultMailingListID: 1,
+	}
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyUserID, "user-1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-1")
+
+	resp, err := server.GetNewsletterStatus(ctx, &pb.GetNewsletterStatusRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.GetSubscribed() {
+		t.Fatal("expected unsubscribed when Listmonk status cannot be read")
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}

@@ -2693,10 +2693,11 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *pb.RefreshToken
 
 	var tokenID, userID, tenantID string
 	var revoked bool
+	var rotatedAt sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, user_id, tenant_id, revoked FROM commodore.refresh_tokens
+		SELECT id, user_id, tenant_id, revoked, rotated_at FROM commodore.refresh_tokens
 		WHERE token_hash = $1 AND expires_at > NOW()
-	`, tokenHash).Scan(&tokenID, &userID, &tenantID, &revoked)
+	`, tokenHash).Scan(&tokenID, &userID, &tenantID, &revoked, &rotatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid or expired refresh token")
@@ -2706,8 +2707,17 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *pb.RefreshToken
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	// Token reuse detection: if token was already revoked, revoke ALL user tokens (security)
+	// Near-simultaneous browser refreshes can reuse the just-rotated token.
+	// Treat older reuse as a stolen-token signal and revoke the session family.
 	if revoked {
+		if rotatedAt.Valid && time.Since(rotatedAt.Time) <= refreshTokenReuseGracePeriod {
+			s.logger.WithFields(logging.Fields{
+				"user_id":    userID,
+				"tenant_id":  tenantID,
+				"rotated_at": rotatedAt.Time,
+			}).Warn("Refresh token reuse detected during rotation grace period")
+			return nil, status.Error(codes.Unauthenticated, "invalid or expired refresh token")
+		}
 		s.logger.WithFields(logging.Fields{
 			"user_id":   userID,
 			"tenant_id": tenantID,
@@ -2720,9 +2730,21 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *pb.RefreshToken
 	}
 
 	// Revoke the old refresh token (don't delete - keep for reuse detection)
-	_, _ = s.db.ExecContext(ctx, `
-		UPDATE commodore.refresh_tokens SET revoked = true WHERE id = $1
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE commodore.refresh_tokens SET revoked = true, rotated_at = NOW()
+		WHERE id = $1 AND revoked = false
 	`, tokenID)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to rotate refresh token")
+		return nil, status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr == nil && rows == 0 {
+		s.logger.WithFields(logging.Fields{
+			"user_id":   userID,
+			"tenant_id": tenantID,
+		}).Warn("Refresh token was already rotated")
+		return nil, status.Error(codes.Unauthenticated, "invalid or expired refresh token")
+	}
 
 	// Look up user details
 	var user commodoreUserRecord
@@ -3172,8 +3194,8 @@ func (s *CommodoreServer) GetNewsletterStatus(ctx context.Context, req *pb.GetNe
 	// Query Listmonk for subscriber info
 	info, exists, err := s.listmonkClient.GetSubscriber(ctx, email.String)
 	if err != nil {
-		s.logger.WithError(err).WithField("email", email.String).Error("Failed to get subscriber from Listmonk")
-		return nil, status.Errorf(codes.Internal, "failed to get newsletter status: %v", err)
+		s.logger.WithError(err).WithField("email", email.String).Warn("Failed to get subscriber from Listmonk")
+		return &pb.GetNewsletterStatusResponse{Subscribed: false}, nil
 	}
 
 	// If subscriber doesn't exist in Listmonk, return unsubscribed
@@ -4974,6 +4996,8 @@ func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *pb.RevokeAPIT
 // ============================================================================
 
 const (
+	refreshTokenReuseGracePeriod = 2 * time.Minute
+
 	eventAuthLoginSucceeded = "auth_login_succeeded"
 	eventAuthLoginFailed    = "auth_login_failed"
 	eventAuthRegistered     = "auth_registered"

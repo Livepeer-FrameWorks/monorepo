@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS commodore.refresh_tokens (
     -- ===== LIFECYCLE =====
     expires_at TIMESTAMP NOT NULL,
     created_at TIMESTAMP DEFAULT NOW(),
+    rotated_at TIMESTAMP,
     revoked BOOLEAN DEFAULT FALSE
 );
 
