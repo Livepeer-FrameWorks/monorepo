@@ -30,6 +30,22 @@ func TestParseRolloutPlanRejectsUnsupportedCapacityFloor(t *testing.T) {
 	}
 }
 
+func TestParseRolloutPlanRejectsUnknownKey(t *testing.T) {
+	t.Parallel()
+
+	if _, err := parseRolloutPlan(`{"batch_size":2,"max_parallel":4}`); err == nil {
+		t.Fatal("parseRolloutPlan succeeded with unknown key")
+	}
+}
+
+func TestParseRolloutPlanRejectsCamelCaseTypo(t *testing.T) {
+	t.Parallel()
+
+	if _, err := parseRolloutPlan(`{"capacityFloor":2}`); err == nil {
+		t.Fatal("parseRolloutPlan succeeded with camelCase typo")
+	}
+}
+
 func TestParseRolloutPlanAppliesDefaults(t *testing.T) {
 	t.Parallel()
 

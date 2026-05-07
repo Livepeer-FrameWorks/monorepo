@@ -4131,8 +4131,10 @@ type rolloutPlanConfig struct {
 
 func validateRolloutPlanJSON(raw string) error {
 	var plan rolloutPlanConfig
-	if err := json.Unmarshal([]byte(raw), &plan); err != nil {
-		return status.Errorf(codes.InvalidArgument, "rollout_plan_json has invalid field types")
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&plan); err != nil {
+		return status.Errorf(codes.InvalidArgument, "rollout_plan_json invalid: %v", err)
 	}
 	if plan.CapacityFloor != 0 || plan.CapacityFloorPercent != 0 {
 		return status.Error(codes.InvalidArgument, "rollout_plan_json capacity_floor fields are not supported for edge release targets")

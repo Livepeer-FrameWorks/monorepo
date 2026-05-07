@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/internal/controlplane"
+	fwcredentials "frameworks/cli/internal/credentials"
+	"frameworks/cli/internal/platformauth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"net/http"
 	"net/url"
@@ -26,11 +29,27 @@ type checkResult struct {
 	Error    string `json:"error,omitempty"`
 }
 
+// personaResult is a single assertion in the persona/auth preflight section.
+// Distinct from checkResult so reachability and persona output stay separable
+// in JSON consumers.
+type personaResult struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// errPersonaPreflight signals that one or more persona/auth assertions failed.
+// RunE returns this so cobra produces a nonzero exit code suitable for CI gating.
+// Reachability failures don't propagate to exit (existing UX); a CI script
+// that needs strict reachability gating should consume the JSON output.
+var errPersonaPreflight = errors.New("persona/auth preflight failed")
+
 func newContextCheckCmd() *cobra.Command {
 	var timeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "check",
-		Short: "Check reachability of services in current context",
+		Short: "Check reachability and persona/auth invariants for the current context",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := fwcfg.Load()
 			if err != nil {
@@ -42,22 +61,52 @@ func newContextCheckCmd() *cobra.Command {
 				return err
 			}
 			results := runReachabilityChecks(cmd.Context(), ctx, timeout)
+			personas := runPersonaChecks(cmd.Context(), ctx, cfg, fwcfg.OSEnv{}, fwcredentials.DefaultStore())
+
 			if output == "json" {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
-				return enc.Encode(results)
-			}
-			// text output
-			fmt.Fprintln(cmd.OutOrStdout(), "Service Reachability:")
-			for _, r := range results {
-				mark := "✗"
-				if r.OK {
-					mark = "✓"
+				if err := enc.Encode(struct {
+					Reachability []checkResult   `json:"reachability"`
+					Persona      []personaResult `json:"persona"`
+				}{Reachability: results, Persona: personas}); err != nil {
+					return err
 				}
-				if r.Error != "" {
-					fmt.Fprintf(cmd.OutOrStdout(), " %s %-18s %-40s %s (%s)\n", mark, r.Service+":", r.Endpoint, r.Status, r.Error)
-				} else {
-					fmt.Fprintf(cmd.OutOrStdout(), " %s %-18s %-40s %s\n", mark, r.Service+":", r.Endpoint, r.Status)
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "Service Reachability:")
+				for _, r := range results {
+					mark := "✗"
+					if r.OK {
+						mark = "✓"
+					}
+					if r.Error != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), " %s %-18s %-40s %s (%s)\n", mark, r.Service+":", r.Endpoint, r.Status, r.Error)
+					} else {
+						fmt.Fprintf(cmd.OutOrStdout(), " %s %-18s %-40s %s\n", mark, r.Service+":", r.Endpoint, r.Status)
+					}
+				}
+				fmt.Fprintln(cmd.OutOrStdout())
+				fmt.Fprintln(cmd.OutOrStdout(), "Persona / Auth:")
+				for _, p := range personas {
+					mark := "✗"
+					if p.OK {
+						mark = "✓"
+					}
+					detail := p.Detail
+					if p.Error != "" {
+						if detail != "" {
+							detail = detail + " (" + p.Error + ")"
+						} else {
+							detail = p.Error
+						}
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), " %s %-20s %s\n", mark, p.Name+":", detail)
+				}
+			}
+
+			for _, p := range personas {
+				if !p.OK {
+					return errPersonaPreflight
 				}
 			}
 			return nil
@@ -65,6 +114,51 @@ func newContextCheckCmd() *cobra.Command {
 	}
 	cmd.Flags().DurationVar(&timeout, "timeout", 2*time.Second, "per-endpoint timeout")
 	return cmd
+}
+
+// runPersonaChecks asserts that the active context has the auth material its
+// persona requires. Field presence and resolvability only — no transport
+// security inferred from port (SSH/mesh access modes legitimately resolve to
+// plaintext targets and would false-positive any TLS-by-port rule).
+func runPersonaChecks(ctx context.Context, c fwcfg.Context, cfg fwcfg.Config, env fwcfg.Env, store fwcredentials.Store) []personaResult {
+	switch {
+	case c.Persona == fwcfg.PersonaPlatform:
+		return runPlatformPersonaChecks(ctx, c, cfg)
+	case c.Persona == fwcfg.PersonaSelfHosted:
+		return runJWTPersonaCheck("owner_jwt", env, store)
+	case c.Persona.IsUser():
+		return runJWTPersonaCheck("user_jwt", env, store)
+	case c.Persona == "":
+		return []personaResult{{Name: "persona", OK: false, Error: "no persona configured for this context (run 'frameworks setup')"}}
+	default:
+		return []personaResult{{Name: "persona", OK: false, Error: fmt.Sprintf("unknown persona %q", c.Persona)}}
+	}
+}
+
+func runPlatformPersonaChecks(ctx context.Context, c fwcfg.Context, cfg fwcfg.Config) []personaResult {
+	out := make([]personaResult, 0, 2)
+	if strings.TrimSpace(c.SystemTenantID) == "" {
+		out = append(out, personaResult{Name: "system_tenant_id", OK: false, Error: "platform context missing system_tenant_id (run 'frameworks setup' or 'cluster bootstrap')"})
+	} else {
+		out = append(out, personaResult{Name: "system_tenant_id", OK: true, Detail: c.SystemTenantID})
+	}
+	if _, err := platformauth.ResolveManifestServiceToken(ctx, c, cfg); err != nil {
+		out = append(out, personaResult{Name: "service_token", OK: false, Error: err.Error()})
+	} else {
+		out = append(out, personaResult{Name: "service_token", OK: true, Detail: "resolved from manifest"})
+	}
+	return out
+}
+
+func runJWTPersonaCheck(name string, env fwcfg.Env, store fwcredentials.Store) []personaResult {
+	jwt, err := fwcredentials.ResolveUserAuth(env, store)
+	if err != nil {
+		return []personaResult{{Name: name, OK: false, Error: err.Error()}}
+	}
+	if strings.TrimSpace(jwt) == "" {
+		return []personaResult{{Name: name, OK: false, Error: "no JWT found (run 'frameworks login')"}}
+	}
+	return []personaResult{{Name: name, OK: true, Detail: "present"}}
 }
 
 func runReachabilityChecks(parent context.Context, c fwcfg.Context, timeout time.Duration) []checkResult {

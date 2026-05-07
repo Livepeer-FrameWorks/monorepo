@@ -45,6 +45,24 @@ func TestValidateRolloutPlanJSONAcceptsValidPlan(t *testing.T) {
 	}
 }
 
+func TestValidateRolloutPlanJSONRejectsUnknownKey(t *testing.T) {
+	t.Parallel()
+
+	err := validateRolloutPlanJSON(`{"batch_size":2,"max_parallel":4}`)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("status code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
+func TestValidateRolloutPlanJSONRejectsCamelCaseTypo(t *testing.T) {
+	t.Parallel()
+
+	err := validateRolloutPlanJSON(`{"capacityFloor":2}`)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("status code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
 func TestNormalizeReleaseTargetChannelRejectsUnknownChannel(t *testing.T) {
 	t.Parallel()
 

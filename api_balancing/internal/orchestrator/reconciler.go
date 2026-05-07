@@ -118,48 +118,85 @@ func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *pb.Cl
 		return err
 	}
 	budget := rolloutBudget(ctx, clusterNodes, targetRelease, plan)
-	if budget <= 0 {
-		return nil
-	}
 	for _, node := range nodes {
 		progress, err := loadProgress(ctx, node.NodeID)
 		if err != nil {
 			return err
 		}
+		// Non-terminal phase for the same target: re-drive through the
+		// helper that owns that phase. Without this, a node whose apply
+		// outcome was lost wedges in `updating` (or cordoning/draining/
+		// drained/updating_restore) forever and consumes rollout budget.
+		// The helpers gate internally on phase + deadline; calling them
+		// is what advances or expires the state.
 		if progress.Phase != "" && progress.Phase != "idle" && progress.Phase != "failed" {
+			// Active rollout for a different release (e.g., operator changed
+			// the cluster target). The phase still counts against rollout
+			// budget via activeUpdateCount, so if its deadline has expired
+			// we mark it failed here to free the slot. Otherwise leave it
+			// alone and let the original target's helpers carry it.
+			if progress.TargetRelease != targetRelease {
+				if deadlineExpired(progress.Deadline) {
+					if err = persistPhase(ctx, node.NodeID, progress.TargetRelease, "failed", "abandoned: cluster target changed before previous update completed", progress.Deadline); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			if progress.Phase == "warming" || progress.Phase == "warming_restore" {
+				continue
+			}
+			var (
+				direct        []*pb.DesiredComponent
+				hasComponents bool
+			)
+			direct, hasComponents, err = buildComponentsForNode(ctx, components, nil, node, targetRelease)
+			if err != nil {
+				return err
+			}
+			if !hasComponents {
+				continue
+			}
+			switch progress.Phase {
+			case "updating":
+				if err = ApplyDirectUpdate(ctx, DirectUpdateRequest{
+					NodeID:        node.NodeID,
+					ClusterID:     target.GetClusterId(),
+					TargetRelease: targetRelease,
+					Components:    direct,
+				}); err != nil {
+					return err
+				}
+			case "updating_restore", "cordoning", "draining", "drained":
+				if err = ApplyMistUpdate(ctx, MistUpdateRequest{
+					NodeID:        node.NodeID,
+					ClusterID:     target.GetClusterId(),
+					TargetRelease: targetRelease,
+					Components:    direct,
+					DrainDeadline: rolloutDrainDeadlineFromPlan(plan),
+					Force:         plan.Force,
+				}); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if budget <= 0 {
 			continue
 		}
 		current, err := currentNodeComponents(ctx, node.NodeID)
 		if err != nil {
 			return err
 		}
-		var direct []*pb.DesiredComponent
-		for component, desired := range components {
-			if component == "config_schema" {
-				continue
-			}
-			if desired.Version == "" || current[component] == desired.Version {
-				continue
-			}
-			selected, ok := releaseComponentForNode(desired, node)
-			if !ok {
-				if err := persistPhase(ctx, node.NodeID, targetRelease, "failed", fmt.Sprintf("release artifact for %s is not available for %s", component, nodePlatformKey(node)), time.Now()); err != nil {
-					return err
-				}
-				continue
-			}
-			msg := desiredComponentMessage(component, selected)
-			if component == "mist" {
-				msg.SwapStrategy = "replace-all-usr1"
-			} else {
-				msg.SwapStrategy = "hot-reload"
-				if component == "helmsman" {
-					msg.SwapStrategy = "alongside-then-exec"
-				}
-			}
-			direct = append(direct, msg)
+		var (
+			direct        []*pb.DesiredComponent
+			hasComponents bool
+		)
+		direct, hasComponents, err = buildComponentsForNode(ctx, components, current, node, targetRelease)
+		if err != nil {
+			return err
 		}
-		if len(direct) == 0 {
+		if !hasComponents {
 			continue
 		}
 		if err := ApplyDirectUpdate(ctx, DirectUpdateRequest{
@@ -171,11 +208,48 @@ func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *pb.Cl
 			return err
 		}
 		budget--
-		if budget <= 0 {
-			return nil
-		}
 	}
 	return nil
+}
+
+// buildComponentsForNode resolves release components for a single node into
+// per-platform DesiredComponent messages. When `current` is non-nil, components
+// already at the desired version are skipped (no-op detection for fresh starts).
+// Pass `current=nil` for re-drives, where the goal is to provide a valid payload
+// for the in-flight rollout, not decide what to update. When platform artifact
+// resolution fails for a component, the node is persisted as `failed` and that
+// component is skipped, mirroring the prior fresh-path behavior.
+func buildComponentsForNode(ctx context.Context, components map[string]releaseComponent, current map[string]string, node *state.NodeState, targetRelease string) ([]*pb.DesiredComponent, bool, error) {
+	var direct []*pb.DesiredComponent
+	for component, desired := range components {
+		if component == "config_schema" {
+			continue
+		}
+		if desired.Version == "" {
+			continue
+		}
+		if current != nil && current[component] == desired.Version {
+			continue
+		}
+		selected, ok := releaseComponentForNode(desired, node)
+		if !ok {
+			if err := persistPhase(ctx, node.NodeID, targetRelease, "failed", fmt.Sprintf("release artifact for %s is not available for %s", component, nodePlatformKey(node)), time.Now()); err != nil {
+				return nil, false, err
+			}
+			continue
+		}
+		msg := desiredComponentMessage(component, selected)
+		switch component {
+		case "mist":
+			msg.SwapStrategy = "replace-all-usr1"
+		case "helmsman":
+			msg.SwapStrategy = "alongside-then-exec"
+		default:
+			msg.SwapStrategy = "hot-reload"
+		}
+		direct = append(direct, msg)
+	}
+	return direct, len(direct) > 0, nil
 }
 
 func reconcileWarmups(ctx context.Context, clusterID, targetRelease string, nodes []*state.NodeState, plan rolloutPlan) error {
@@ -326,7 +400,9 @@ func parseRolloutPlan(raw string) (rolloutPlan, error) {
 	plan := rolloutPlan{BatchSize: 1, CanaryCount: 1}
 	if strings.TrimSpace(raw) != "" {
 		var parsed rolloutPlan
-		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		dec := json.NewDecoder(strings.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&parsed); err != nil {
 			return rolloutPlan{}, fmt.Errorf("parse rollout plan: %w", err)
 		}
 		plan = parsed
