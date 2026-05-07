@@ -5,6 +5,8 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -84,14 +86,88 @@ func buildServerTLSConfig(cfg ServerTLSConfig) (*tls.Config, error) {
 		return nil, fmt.Errorf("server TLS requires CertFile/KeyFile or AllowInsecure=true")
 	}
 
-	cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load server tls key pair: %w", err)
+	reloader := &serverCertificateReloader{
+		certFile: cfg.CertFile,
+		keyFile:  cfg.KeyFile,
+	}
+	if _, err := reloader.current(); err != nil {
+		return nil, err
 	}
 	return &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		Certificates: []tls.Certificate{cert},
+		MinVersion:     tls.VersionTLS12,
+		GetCertificate: reloader.getCertificate,
 	}, nil
+}
+
+type serverCertificateReloader struct {
+	certFile string
+	keyFile  string
+
+	mu       sync.RWMutex
+	cert     *tls.Certificate
+	certStat fileStamp
+	keyStat  fileStamp
+}
+
+type fileStamp struct {
+	modTime time.Time
+	size    int64
+}
+
+func (r *serverCertificateReloader) getCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return r.current()
+}
+
+func (r *serverCertificateReloader) current() (*tls.Certificate, error) {
+	certStat, keyStat, err := statServerTLSFiles(r.certFile, r.keyFile)
+	if err != nil {
+		return nil, err
+	}
+
+	r.mu.RLock()
+	if r.cert != nil && r.certStat == certStat && r.keyStat == keyStat {
+		cert := r.cert
+		r.mu.RUnlock()
+		return cert, nil
+	}
+	r.mu.RUnlock()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	certStat, keyStat, err = statServerTLSFiles(r.certFile, r.keyFile)
+	if err != nil {
+		return nil, err
+	}
+	if r.cert != nil && r.certStat == certStat && r.keyStat == keyStat {
+		return r.cert, nil
+	}
+
+	cert, err := tls.LoadX509KeyPair(r.certFile, r.keyFile)
+	if err != nil {
+		if r.cert != nil {
+			return r.cert, nil
+		}
+		return nil, fmt.Errorf("load server tls key pair: %w", err)
+	}
+	r.cert = &cert
+	r.certStat = certStat
+	r.keyStat = keyStat
+	return r.cert, nil
+}
+
+func statServerTLSFiles(certFile, keyFile string) (fileStamp, fileStamp, error) {
+	certInfo, err := os.Stat(certFile)
+	if err != nil {
+		return fileStamp{}, fileStamp{}, fmt.Errorf("stat server TLS cert %q: %w", certFile, err)
+	}
+	keyInfo, err := os.Stat(keyFile)
+	if err != nil {
+		return fileStamp{}, fileStamp{}, fmt.Errorf("stat server TLS key %q: %w", keyFile, err)
+	}
+	return fileStamp{modTime: certInfo.ModTime(), size: certInfo.Size()},
+		fileStamp{modTime: keyInfo.ModTime(), size: keyInfo.Size()},
+		nil
 }
 
 func buildClientTLSConfig(cfg ClientTLSConfig) (*tls.Config, bool, error) {

@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -28,8 +29,98 @@ func TestBuildServerTLSConfig(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("buildServerTLSConfig returned nil config")
 	}
-	if len(cfg.Certificates) != 1 {
-		t.Fatalf("expected 1 certificate, got %d", len(cfg.Certificates))
+	if cfg.GetCertificate == nil {
+		t.Fatal("expected dynamic certificate loader")
+	}
+	if len(cfg.Certificates) != 0 {
+		t.Fatalf("expected no static certificates, got %d", len(cfg.Certificates))
+	}
+	cert, err := cfg.GetCertificate(&tls.ClientHelloInfo{})
+	if err != nil {
+		t.Fatalf("GetCertificate returned error: %v", err)
+	}
+	if got := certificateCommonName(t, cert); got != "server.local" {
+		t.Fatalf("certificate common name = %q, want server.local", got)
+	}
+}
+
+func TestBuildServerTLSConfigReloadsCertificateWhenFilesChange(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile := writeSelfSignedPair(t, dir, "server-v1.local")
+
+	cfg, err := buildServerTLSConfig(ServerTLSConfig{
+		CertFile: certFile,
+		KeyFile:  keyFile,
+	})
+	if err != nil {
+		t.Fatalf("buildServerTLSConfig returned error: %v", err)
+	}
+
+	cert, err := cfg.GetCertificate(&tls.ClientHelloInfo{})
+	if err != nil {
+		t.Fatalf("GetCertificate v1 returned error: %v", err)
+	}
+	if got := certificateCommonName(t, cert); got != "server-v1.local" {
+		t.Fatalf("certificate common name = %q, want server-v1.local", got)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	writeSelfSignedPairFiles(t, certFile, keyFile, "server-v2.local", 2)
+
+	cert, err = cfg.GetCertificate(&tls.ClientHelloInfo{})
+	if err != nil {
+		t.Fatalf("GetCertificate v2 returned error: %v", err)
+	}
+	if got := certificateCommonName(t, cert); got != "server-v2.local" {
+		t.Fatalf("certificate common name = %q, want server-v2.local", got)
+	}
+}
+
+func TestBuildServerTLSConfigKeepsCachedCertificateDuringPartialRotation(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile := writeSelfSignedPair(t, dir, "server-v1.local")
+
+	cfg, err := buildServerTLSConfig(ServerTLSConfig{
+		CertFile: certFile,
+		KeyFile:  keyFile,
+	})
+	if err != nil {
+		t.Fatalf("buildServerTLSConfig returned error: %v", err)
+	}
+
+	cert, err := cfg.GetCertificate(&tls.ClientHelloInfo{})
+	if err != nil {
+		t.Fatalf("GetCertificate v1 returned error: %v", err)
+	}
+	if got := certificateCommonName(t, cert); got != "server-v1.local" {
+		t.Fatalf("certificate common name = %q, want server-v1.local", got)
+	}
+
+	v2CertPEM, v2KeyPEM := selfSignedPairPEM(t, "server-v2.local", 2)
+	time.Sleep(10 * time.Millisecond)
+	if err := os.WriteFile(certFile, v2CertPEM, 0o600); err != nil {
+		t.Fatalf("WriteFile(cert v2): %v", err)
+	}
+
+	cert, err = cfg.GetCertificate(&tls.ClientHelloInfo{})
+	if err != nil {
+		t.Fatalf("GetCertificate during partial rotation returned error: %v", err)
+	}
+	if got := certificateCommonName(t, cert); got != "server-v1.local" {
+		t.Fatalf("certificate common name during partial rotation = %q, want cached server-v1.local", got)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	if err := os.WriteFile(keyFile, v2KeyPEM, 0o600); err != nil {
+		t.Fatalf("WriteFile(key v2): %v", err)
+	}
+
+	cert, err = cfg.GetCertificate(&tls.ClientHelloInfo{})
+	if err != nil {
+		t.Fatalf("GetCertificate after complete rotation returned error: %v", err)
+	}
+	if got := certificateCommonName(t, cert); got != "server-v2.local" {
+		t.Fatalf("certificate common name after complete rotation = %q, want server-v2.local", got)
 	}
 }
 
@@ -158,13 +249,33 @@ func TestBuildClientTLSConfigSystemPoolFallback(t *testing.T) {
 func writeSelfSignedPair(t *testing.T, dir, commonName string) (string, string) {
 	t.Helper()
 
+	certFile := filepath.Join(dir, "cert.pem")
+	keyFile := filepath.Join(dir, "key.pem")
+	writeSelfSignedPairFiles(t, certFile, keyFile, commonName, 1)
+	return certFile, keyFile
+}
+
+func writeSelfSignedPairFiles(t *testing.T, certFile, keyFile, commonName string, serial int64) {
+	t.Helper()
+	certPEM, keyPEM := selfSignedPairPEM(t, commonName, serial)
+	if err := os.WriteFile(certFile, certPEM, 0o600); err != nil {
+		t.Fatalf("WriteFile(cert): %v", err)
+	}
+	if err := os.WriteFile(keyFile, keyPEM, 0o600); err != nil {
+		t.Fatalf("WriteFile(key): %v", err)
+	}
+}
+
+func selfSignedPairPEM(t *testing.T, commonName string, serial int64) ([]byte, []byte) {
+	t.Helper()
+
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
 
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: big.NewInt(serial),
 		Subject: pkix.Name{
 			CommonName: commonName,
 		},
@@ -186,14 +297,18 @@ func writeSelfSignedPair(t *testing.T, dir, commonName string) (string, string) 
 		t.Fatalf("MarshalECPrivateKey: %v", err)
 	}
 
-	certFile := filepath.Join(dir, "cert.pem")
-	keyFile := filepath.Join(dir, "key.pem")
-	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
-		t.Fatalf("WriteFile(cert): %v", err)
-	}
-	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
-		t.Fatalf("WriteFile(key): %v", err)
-	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+}
 
-	return certFile, keyFile
+func certificateCommonName(t *testing.T, cert *tls.Certificate) string {
+	t.Helper()
+	if cert == nil || len(cert.Certificate) == 0 {
+		t.Fatal("missing certificate chain")
+	}
+	parsed, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+	return parsed.Subject.CommonName
 }
