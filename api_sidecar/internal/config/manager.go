@@ -119,11 +119,11 @@ func (m *Manager) reconcile() {
 		m.logger.WithError(err).Warn("ConfigBackup failed, skipping reconcile")
 		return
 	}
-	desiredConfig := map[string]interface{}{}
+	desiredConfig := map[string]any{}
 
 	// Location (from seed)
 	if seed.GetLatitude() != 0 || seed.GetLongitude() != 0 || seed.GetLocationName() != "" {
-		desiredConfig["location"] = map[string]interface{}{
+		desiredConfig["location"] = map[string]any{
 			"lat":  math.Round(seed.GetLatitude()*1e4) / 1e4,
 			"lon":  math.Round(seed.GetLongitude()*1e4) / 1e4,
 			"name": seed.GetLocationName(),
@@ -140,26 +140,26 @@ func (m *Manager) reconcile() {
 	if webhookBase == "" {
 		webhookBase = "http://localhost:18007"
 	}
-	triggers := map[string]interface{}{
-		"PUSH_REWRITE": []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/push_rewrite"), "sync": true}},
-		// "PLAY_REWRITE":      []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/play_rewrite"), "sync": true, "streams": []string{"vod+", "live+"}}},
-		"PLAY_REWRITE":      []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/play_rewrite"), "sync": true}},
-		"STREAM_SOURCE":     []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/stream_source"), "sync": true}},
-		"PUSH_OUT_START":    []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/push_out_start"), "sync": true}},
-		"PUSH_END":          []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/push_end"), "sync": false}},
-		"USER_NEW":          []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/user_new"), "sync": true, "default": "true"}},
-		"USER_END":          []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/user_end"), "sync": false}},
-		"STREAM_BUFFER":     []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/stream_buffer"), "sync": false}},
-		"STREAM_END":        []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/stream_end"), "sync": false}},
-		"LIVE_TRACK_LIST":   []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/live_track_list"), "sync": false}},
-		"RECORDING_END":     []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/recording_end"), "sync": false}},
-		"RECORDING_SEGMENT": []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/recording_segment"), "sync": false}},
+	triggers := map[string]any{
+		"PUSH_REWRITE": []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/push_rewrite"), "sync": true}},
+		// "PLAY_REWRITE":      []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/play_rewrite"), "sync": true, "streams": []string{"vod+", "live+"}}},
+		"PLAY_REWRITE":      []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/play_rewrite"), "sync": true}},
+		"STREAM_SOURCE":     []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/stream_source"), "sync": true}},
+		"PUSH_OUT_START":    []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/push_out_start"), "sync": true}},
+		"PUSH_END":          []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/push_end"), "sync": false}},
+		"USER_NEW":          []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/user_new"), "sync": true, "default": "true"}},
+		"USER_END":          []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/user_end"), "sync": false}},
+		"STREAM_BUFFER":     []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/stream_buffer"), "sync": false}},
+		"STREAM_END":        []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/stream_end"), "sync": false}},
+		"LIVE_TRACK_LIST":   []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/live_track_list"), "sync": false}},
+		"RECORDING_END":     []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/recording_end"), "sync": false}},
+		"RECORDING_SEGMENT": []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/recording_segment"), "sync": false}},
 		// Processing billing triggers (for tracking transcoding usage)
-		"LIVEPEER_SEGMENT_COMPLETE":           []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/livepeer_segment_complete"), "sync": false}},
-		"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/process_av_segment_complete"), "sync": false}},
-		"THUMBNAIL_UPDATED":                   []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/thumbnail_updated"), "sync": false}},
-		"STREAM_PROCESS":                      []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/stream_process"), "sync": true, "streams": []string{"live+", "processing+", "vod+", "pull+"}}},
-		"PROCESS_EXIT":                        []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/process_exit"), "sync": false, "streams": []string{"processing+"}}},
+		"LIVEPEER_SEGMENT_COMPLETE":           []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/livepeer_segment_complete"), "sync": false}},
+		"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/process_av_segment_complete"), "sync": false}},
+		"THUMBNAIL_UPDATED":                   []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/thumbnail_updated"), "sync": false}},
+		"STREAM_PROCESS":                      []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/stream_process"), "sync": true, "streams": []string{"live+", "processing+", "vod+", "pull+"}}},
+		"PROCESS_EXIT":                        []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/process_exit"), "sync": false, "streams": []string{"processing+"}}},
 	}
 	desiredConfig["triggers"] = triggers
 
@@ -490,7 +490,7 @@ func (m *Manager) reloadCaddy(content []byte) bool {
 	return false
 }
 
-func (m *Manager) ensureProtocols(current map[string]interface{}) error {
+func (m *Manager) ensureProtocols(current map[string]any) error {
 	// Get EDGE_PUBLIC_URL (full URL like http://localhost:18090/view)
 	edgeURL := os.Getenv("EDGE_PUBLIC_URL")
 
@@ -509,11 +509,11 @@ func (m *Manager) ensureProtocols(current map[string]interface{}) error {
 	}
 
 	// Build a map of currently configured connectors with their settings
-	existingProtos := map[string]map[string]interface{}{}
-	if cfg, ok := current["config"].(map[string]interface{}); ok {
-		if protos, ok := cfg["protocols"].([]interface{}); ok {
+	existingProtos := map[string]map[string]any{}
+	if cfg, ok := current["config"].(map[string]any); ok {
+		if protos, ok := cfg["protocols"].([]any); ok {
 			for _, p := range protos {
-				if pm, ok := p.(map[string]interface{}); ok {
+				if pm, ok := p.(map[string]any); ok {
 					if name, ok := pm["connector"].(string); ok && name != "" {
 						existingProtos[name] = pm
 					}
@@ -522,12 +522,12 @@ func (m *Manager) ensureProtocols(current map[string]interface{}) error {
 		}
 	}
 
-	need := []map[string]interface{}{}
+	need := []map[string]any{}
 	needsUpdate := false
 
 	// HTTP protocol - check if exists and has correct pubaddr
 	if existing, ok := existingProtos["HTTP"]; !ok {
-		entry := map[string]interface{}{"connector": "HTTP"}
+		entry := map[string]any{"connector": "HTTP"}
 		if httpPubURL != "" {
 			entry["pubaddr"] = []string{httpPubURL}
 		}
@@ -535,7 +535,7 @@ func (m *Manager) ensureProtocols(current map[string]interface{}) error {
 	} else if httpPubURL != "" {
 		// Check if pubaddr needs updating
 		currentPubaddr := ""
-		if pa, ok := existing["pubaddr"].([]interface{}); ok && len(pa) > 0 {
+		if pa, ok := existing["pubaddr"].([]any); ok && len(pa) > 0 {
 			if s, ok := pa[0].(string); ok {
 				currentPubaddr = s
 			}
@@ -551,7 +551,7 @@ func (m *Manager) ensureProtocols(current map[string]interface{}) error {
 
 	// WebRTC protocol - check if exists and has correct pubhost
 	if existing, ok := existingProtos["WebRTC"]; !ok {
-		entry := map[string]interface{}{"connector": "WebRTC", "bindhost": "0.0.0.0"}
+		entry := map[string]any{"connector": "WebRTC", "bindhost": "0.0.0.0"}
 		if webrtcPubHost != "" {
 			entry["pubhost"] = webrtcPubHost
 		}
@@ -573,28 +573,49 @@ func (m *Manager) ensureProtocols(current map[string]interface{}) error {
 
 	// DTSC - ensure exists for inter-node communication
 	if _, ok := existingProtos["DTSC"]; !ok {
-		entry := map[string]interface{}{"connector": "DTSC"}
+		entry := map[string]any{"connector": "DTSC"}
 		need = append(need, entry)
 	}
 
 	// WSRaw - ensure exists for WebCodecs playback
 	if _, ok := existingProtos["WSRaw"]; !ok {
-		entry := map[string]interface{}{"connector": "WSRaw"}
+		entry := map[string]any{"connector": "WSRaw"}
 		need = append(need, entry)
 	}
 
 	// ThumbVTT - ensure exists for thumbnail sprite VTT output
 	if _, ok := existingProtos["ThumbVTT"]; !ok {
-		entry := map[string]interface{}{"connector": "ThumbVTT"}
+		entry := map[string]any{"connector": "ThumbVTT"}
 		need = append(need, entry)
+	}
+
+	// CMAF - serves LL-HLS, DASH, and HSS over fMP4. nonchunked forces
+	// per-segment buffering so segment responses carry Content-Length, which
+	// is required for player compatibility across dash.js and hls.js LL-HLS.
+	cmafNeedsUpdate := false
+	if existing, ok := existingProtos["CMAF"]; !ok {
+		entry := map[string]any{"connector": "CMAF", "mergesessions": false, "nonchunked": true}
+		need = append(need, entry)
+	} else {
+		currentMergesessions, mok := existing["mergesessions"].(bool)
+		currentNonchunked, nok := existing["nonchunked"].(bool)
+		if !mok || !nok || currentMergesessions || !currentNonchunked {
+			m.logger.WithFields(logging.Fields{
+				"current_mergesessions": currentMergesessions,
+				"desired_mergesessions": false,
+				"current_nonchunked":    currentNonchunked,
+				"desired_nonchunked":    true,
+			}).Info("CMAF settings need update")
+			cmafNeedsUpdate = true
+		}
 	}
 
 	// Remove unwanted protocols (TSRIST is push-system-only, generates warnings)
 	unwanted := []string{"TSRIST"}
-	var toDelete []map[string]interface{}
+	var toDelete []map[string]any
 	for _, name := range unwanted {
 		if _, ok := existingProtos[name]; ok {
-			toDelete = append(toDelete, map[string]interface{}{"connector": name})
+			toDelete = append(toDelete, map[string]any{"connector": name})
 		}
 	}
 	if len(toDelete) > 0 {
@@ -610,21 +631,24 @@ func (m *Manager) ensureProtocols(current map[string]interface{}) error {
 		}
 	}
 
-	// Update existing protocols if pubaddr/pubhost is wrong
-	if needsUpdate && (httpPubURL != "" || webrtcPubHost != "") {
-		protocols := []map[string]interface{}{}
+	// Update existing protocols if pubaddr/pubhost or CMAF settings drifted
+	if (needsUpdate && (httpPubURL != "" || webrtcPubHost != "")) || cmafNeedsUpdate {
+		protocols := []map[string]any{}
 		if httpPubURL != "" {
-			protocols = append(protocols, map[string]interface{}{"connector": "HTTP", "pubaddr": []string{httpPubURL}})
+			protocols = append(protocols, map[string]any{"connector": "HTTP", "pubaddr": []string{httpPubURL}})
 		}
 		if webrtcPubHost != "" {
-			protocols = append(protocols, map[string]interface{}{"connector": "WebRTC", "bindhost": "0.0.0.0", "pubhost": webrtcPubHost})
+			protocols = append(protocols, map[string]any{"connector": "WebRTC", "bindhost": "0.0.0.0", "pubhost": webrtcPubHost})
+		}
+		if cmafNeedsUpdate {
+			protocols = append(protocols, map[string]any{"connector": "CMAF", "mergesessions": false, "nonchunked": true})
 		}
 
-		updateConfig := map[string]interface{}{"protocols": protocols}
+		updateConfig := map[string]any{"protocols": protocols}
 		if _, err := m.mistClient.UpdateConfig(updateConfig); err != nil {
-			m.logger.WithError(err).Warn("Failed to update protocol pubaddr/pubhost")
+			m.logger.WithError(err).Warn("Failed to update protocol settings")
 		} else {
-			m.logger.Info("Updated HTTP pubaddr and WebRTC pubhost")
+			m.logger.Info("Updated protocol settings")
 		}
 	}
 
@@ -667,7 +691,7 @@ func (m *Manager) ensureStreams(seed *pb.ConfigSeed) error {
 	pushSource := "balance:" + base + "?fallback=push://"
 	pullSource := "balance:" + base
 
-	streams := map[string]map[string]interface{}{}
+	streams := map[string]map[string]any{}
 	for _, t := range seed.GetTemplates() {
 		def := t.GetDef()
 		if def == nil || def.GetName() == "" {
@@ -677,7 +701,7 @@ func (m *Manager) ensureStreams(seed *pb.ConfigSeed) error {
 		if def.GetName() == "pull" {
 			source = pullSource
 		}
-		entry := map[string]interface{}{
+		entry := map[string]any{
 			"name":          def.GetName(),
 			"source":        source,
 			"realtime":      def.GetRealtime(),
