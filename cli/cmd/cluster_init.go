@@ -47,6 +47,9 @@ Existing databases/topics/tables will be skipped.`,
 				return err
 			}
 			defer rc.Cleanup()
+			if err := requirePlatformIfImplicitManifest(rc, cmd.OutOrStdout()); err != nil {
+				return err
+			}
 			return runInit(cmd, rc, service)
 		},
 	}

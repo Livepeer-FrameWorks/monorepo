@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -82,6 +83,13 @@ type resolvedCluster struct {
 	ReleaseRepos []string
 	Cleanup      func()
 
+	// Persona and ContextName describe the active CLI context (if any) at the
+	// time the manifest was resolved. Lifecycle commands gate on these so a
+	// non-platform context can't accidentally feed implicit manifest state
+	// into platform-only operations like provision/init/migrate.
+	Persona     fwcfg.Persona
+	ContextName string
+
 	sharedEnvOnce sync.Once
 	sharedEnv     map[string]string
 	sharedEnvErr  error
@@ -127,11 +135,13 @@ func resolveClusterManifest(cmd *cobra.Command) (*resolvedCluster, error) {
 	manifestFlag := stringFlag(cmd, "manifest")
 	gitopsDirFlag := stringFlag(cmd, "gitops-dir")
 	githubRepoFlag := stringFlag(cmd, "github-repo")
+	usedLastManifestPath := false
 	if !manifestFlag.Changed && !gitopsDirFlag.Changed && !githubRepoFlag.Changed &&
 		!manifestSourceInEnv() && ctxCfg.Gitops == nil && ctxCfg.LastManifestPath != "" {
 		if _, statErr := os.Stat(ctxCfg.LastManifestPath); statErr == nil {
 			ux.ContextNotice(cmd.OutOrStdout(), "manifest", ctxCfg.LastManifestPath)
 			manifestFlag = inventory.StringFlag{Value: ctxCfg.LastManifestPath, Changed: true}
+			usedLastManifestPath = true
 		}
 	}
 
@@ -169,15 +179,62 @@ func resolveClusterManifest(cmd *cobra.Command) (*resolvedCluster, error) {
 
 	maybePrintSetupHint(cmd, rm, ctxCfg, rt)
 
+	source := rm.Source
+	if usedLastManifestPath {
+		source = inventory.SourceContextLastManifest
+	}
+
 	return &resolvedCluster{
 		Manifest:     manifest,
 		ManifestPath: rm.Path,
 		AgeKey:       rm.AgeKey,
-		Source:       rm.Source,
+		Source:       source,
 		Cluster:      rm.Cluster,
 		ReleaseRepos: resolveReleaseRepositories(cmd, cfg, ctxCfg, rm, cwd),
 		Cleanup:      rm.Cleanup,
+		Persona:      ctxCfg.Persona,
+		ContextName:  ctxCfg.Name,
 	}, nil
+}
+
+// requirePlatformIfImplicitManifest gates lifecycle commands (provision, init,
+// migrate) on the manifest source. Explicit flag/env inputs are always
+// allowed so fresh-machine workflows still work; the cwd heuristic is allowed
+// with a warning; context-derived sources (ctx.Gitops, LastManifestPath) are
+// rejected for non-platform personas because those carry the active context's
+// implicit defaults into operations that mutate cluster-wide state.
+func requirePlatformIfImplicitManifest(rc *resolvedCluster, out io.Writer) error {
+	switch rc.Source {
+	case inventory.SourceManifestFlag, inventory.SourceManifestEnv,
+		inventory.SourceGitopsDirFlag, inventory.SourceGitopsDirEnv,
+		inventory.SourceGithubRepoFlag, inventory.SourceGithubRepoEnv:
+		return nil
+	case inventory.SourceCwdHeuristic:
+		if rc.Persona != "" && rc.Persona != fwcfg.PersonaPlatform {
+			fmt.Fprintf(out, "[warn] using cwd-resolved manifest %q under %s persona; explicit --manifest is recommended for non-platform contexts\n",
+				rc.ManifestPath, rc.Persona)
+		}
+		return nil
+	case inventory.SourceContext, inventory.SourceContextLastManifest:
+		if rc.Persona == fwcfg.PersonaPlatform {
+			return nil
+		}
+		ctxLabel := rc.ContextName
+		if ctxLabel == "" {
+			ctxLabel = "(unnamed)"
+		}
+		personaLabel := string(rc.Persona)
+		if personaLabel == "" {
+			personaLabel = "no active context"
+		}
+		return fmt.Errorf(
+			"refusing to use manifest from active context %q (persona=%s) for cluster lifecycle operations; "+
+				"pass --manifest, --gitops-dir, or --github-repo explicitly, or switch to a platform context",
+			ctxLabel, personaLabel,
+		)
+	default:
+		return nil
+	}
 }
 
 func manifestSourceInEnv() bool {

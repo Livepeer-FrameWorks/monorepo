@@ -96,6 +96,9 @@ save a default, or pass them explicitly.`,
 				return err
 			}
 			defer rc.Cleanup()
+			if err := requirePlatformIfImplicitManifest(rc, cmd.OutOrStdout()); err != nil {
+				return err
+			}
 			return runProvision(cmd, rc, only, dryRun, force, ignoreValidation)
 		},
 	}
@@ -3803,9 +3806,16 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
-	if manifest.GeoIP != nil && manifest.GeoIP.Enabled && (baseName == "foghorn" || baseName == "quartermaster" || baseName == "livepeer-gateway") {
-		if env["GEOIP_MMDB_PATH"] == "" {
-			env["GEOIP_MMDB_PATH"] = effectiveGeoIPRemotePath(manifest, "")
+	// Env-injection set must match the upload set: any service that receives
+	// GEOIP_MMDB_PATH here must also be a target of effectiveGeoIPServices,
+	// otherwise we configure a path whose MMDB never gets uploaded. Single
+	// source of truth — including for explicit manifest.GeoIP.Services
+	// overrides that omit livepeer-gateway.
+	if manifest.GeoIP != nil && manifest.GeoIP.Enabled {
+		if slices.Contains(effectiveGeoIPServices(manifest, nil), baseName) {
+			if env["GEOIP_MMDB_PATH"] == "" {
+				env["GEOIP_MMDB_PATH"] = effectiveGeoIPRemotePath(manifest, "")
+			}
 		}
 	}
 

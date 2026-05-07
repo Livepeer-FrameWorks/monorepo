@@ -1648,7 +1648,7 @@ func (r *infrastructureNodeResolver) LiveState(ctx context.Context, obj *proto.I
 		return nil, err
 	}
 	if live != nil {
-		return live, nil
+		return liveNodeWithMetadataSource(live, liveNodeSourcePeriscope), nil
 	}
 	// Periscope has no Foghorn/Helmsman live row for this node. Core
 	// infrastructure reports through Privateer into Quartermaster, so map

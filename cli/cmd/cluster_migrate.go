@@ -54,6 +54,9 @@ nothing is actually written.`,
 				return err
 			}
 			defer rc.Cleanup()
+			if err := requirePlatformIfImplicitManifest(rc, cmd.OutOrStdout()); err != nil {
+				return err
+			}
 			return runMigrate(cmd, rc, dryRun, phase, yes, toVersion, skipDataMigrationCheck)
 		},
 	}

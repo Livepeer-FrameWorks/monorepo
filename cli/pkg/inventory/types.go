@@ -52,7 +52,7 @@ type GeoIPConfig struct {
 	Source     string   `yaml:"source,omitempty"`      // maxmind | file
 	File       string   `yaml:"file,omitempty"`        // Local MMDB path when source=file
 	RemotePath string   `yaml:"remote_path,omitempty"` // Remote MMDB location
-	Services   []string `yaml:"services,omitempty"`    // Defaults to foghorn,quartermaster
+	Services   []string `yaml:"services,omitempty"`    // Defaults to foghorn,quartermaster,livepeer-gateway (filtered to those declared in this manifest)
 }
 
 type TLSBundleConfig struct {

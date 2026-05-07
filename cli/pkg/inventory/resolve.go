@@ -15,14 +15,15 @@ import (
 type ManifestSource string
 
 const (
-	SourceManifestFlag   ManifestSource = "manifest-flag"
-	SourceGitopsDirFlag  ManifestSource = "gitops-dir-flag"
-	SourceGithubRepoFlag ManifestSource = "github-repo-flag"
-	SourceManifestEnv    ManifestSource = "manifest-env"
-	SourceGitopsDirEnv   ManifestSource = "gitops-dir-env"
-	SourceGithubRepoEnv  ManifestSource = "github-repo-env"
-	SourceContext        ManifestSource = "context"
-	SourceCwdHeuristic   ManifestSource = "cwd"
+	SourceManifestFlag        ManifestSource = "manifest-flag"
+	SourceGitopsDirFlag       ManifestSource = "gitops-dir-flag"
+	SourceGithubRepoFlag      ManifestSource = "github-repo-flag"
+	SourceManifestEnv         ManifestSource = "manifest-env"
+	SourceGitopsDirEnv        ManifestSource = "gitops-dir-env"
+	SourceGithubRepoEnv       ManifestSource = "github-repo-env"
+	SourceContext             ManifestSource = "context"
+	SourceContextLastManifest ManifestSource = "context-last-manifest"
+	SourceCwdHeuristic        ManifestSource = "cwd"
 )
 
 // StringFlag carries a flag value plus cobra's Changed() bit so the

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -166,7 +167,23 @@ func effectiveGeoIPServices(manifest *inventory.Manifest, services []string) []s
 	if manifest != nil && manifest.GeoIP != nil && len(manifest.GeoIP.Services) > 0 {
 		return append([]string{}, manifest.GeoIP.Services...)
 	}
-	return []string{"foghorn", "quartermaster"}
+	// Default set must match the env-injection set in cluster_provision.go: any
+	// service that gets GEOIP_MMDB_PATH injected must also have its host in
+	// the upload target list, otherwise provision configures a path whose MMDB
+	// it never uploaded. Filter to services the manifest actually declares so
+	// clusters that don't run e.g. livepeer-gateway don't fail on
+	// geoIPTargetHosts' missing-service check.
+	candidates := []string{"foghorn", "quartermaster", "livepeer-gateway"}
+	if manifest == nil {
+		return candidates
+	}
+	out := make([]string, 0, len(candidates))
+	for _, name := range candidates {
+		if _, ok := manifest.Services[name]; ok {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 func resolveGeoIPMMDBPath(ctx context.Context, source, filePath, licenseKey string) (string, func(), error) {
@@ -334,7 +351,7 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 			if !ok || !svc.Enabled {
 				continue
 			}
-			if svc.Host == hostName || slicesContain(svc.Hosts, hostName) {
+			if svc.Host == hostName || slices.Contains(svc.Hosts, hostName) {
 				restartTargets = append(restartTargets, serviceName)
 			}
 		}
@@ -353,15 +370,6 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 
 	ux.Success(out, fmt.Sprintf("Uploaded GeoIP MMDB to %d host(s)", uploaded))
 	return uploaded, nil
-}
-
-func slicesContain(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 func geoIPTargetHosts(manifest *inventory.Manifest, services []string) ([]string, error) {
