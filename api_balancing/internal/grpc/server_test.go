@@ -23,6 +23,11 @@ func (m *mockCacheInvalidator) InvalidateTenantCache(tenantID string) int {
 	return m.entries
 }
 
+func (m *mockCacheInvalidator) InvalidatePlaybackAuthCache(tenantID string, internalNames []string) int {
+	m.lastTenant = tenantID
+	return m.entries
+}
+
 func (m *mockCacheInvalidator) GetBillingStatus(ctx context.Context, internalName, tenantID string) *triggers.BillingStatus {
 	return nil
 }

@@ -1,0 +1,6 @@
+---
+- name: Listmonk | restart via compose_stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ listmonk_project_dir }}"
+    state: restarted
+    wait: true

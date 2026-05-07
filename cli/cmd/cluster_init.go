@@ -380,8 +380,8 @@ func initClickHouse(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster
 		return fmt.Errorf("collect clickhouse baseline schemas: %w", schemaErr)
 	}
 	if len(schemaItems) > 0 {
-		applier, ok := prov.(provisioner.SchemaApplier)
-		if !ok {
+		applier, applierOK := prov.(provisioner.SchemaApplier)
+		if !applierOK {
 			return fmt.Errorf("clickhouse provisioner does not implement SchemaApplier")
 		}
 		schemaCfg := configWithMetadata(config)

@@ -102,7 +102,7 @@
 
 - name: Initialize ClickHouse ledger map per database
   ansible.builtin.set_fact:
-    clickhouse_ledger_by_db: "{{ clickhouse_ledger_by_db | default({}) | combine({ item.db_entry: {} }) }}"
+    clickhouse_ledger_by_db: "{{ clickhouse_ledger_by_db | default({}) | combine({item.db_entry: {}}) }}"
   loop: "{{ clickhouse_applied_queries.results | default([]) }}"
   loop_control:
     label: "{{ item.db_entry }}"
@@ -112,20 +112,20 @@
     clickhouse_ledger_by_db: >-
       {{ clickhouse_ledger_by_db | combine({
            item.0.db_entry: (clickhouse_ledger_by_db[item.0.db_entry] | default({})) | combine({
-             (item.1.split('\t')[0]): {
-               'checksum': item.1.split('\t')[1],
-               'distinct_checksums': (item.1.split('\t')[2] | int),
-               'row_count': (item.1.split('\t')[3] | int)
+             (item.1.split('\u0009')[0]): {
+               'checksum': item.1.split('\u0009')[1],
+               'distinct_checksums': (item.1.split('\u0009')[2] | int),
+               'row_count': (item.1.split('\u0009')[3] | int)
              }
            })
          }) }}
   loop: "{{ (clickhouse_applied_queries.results | default([])) | subelements('stdout_lines', skip_missing=True) }}"
   loop_control:
-    label: "{{ item.0.db_entry }}/{{ item.1.split('\t')[0] | default('?') }}"
+    label: "{{ item.0.db_entry }}/{{ item.1.split('\u0009')[0] | default('?') }}"
   when:
     - item.1 is defined
     - (item.1 | length) > 0
-    - "'\t' in item.1"
+    - "'\u0009' in item.1"
 
 - name: Fail on ambiguous ClickHouse ledger entries
   ansible.builtin.fail:
@@ -137,11 +137,11 @@
   loop_control:
     label: "{{ item.0.db_entry }}/{{ fields[0] | default('?') }}"
   vars:
-    fields: "{{ item.1.split('\t') }}"
+    fields: "{{ item.1.split('\u0009') }}"
   when:
     - item.1 is defined
     - (item.1 | length) > 0
-    - "'\t' in item.1"
+    - "'\u0009' in item.1"
     - (fields[2] | int) > 1
 
 - name: Fail on edited applied ClickHouse migrations

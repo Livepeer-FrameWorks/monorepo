@@ -102,20 +102,19 @@ func (s *PeriscopeServer) GetOrchestrator(ctx context.Context, req *pb.GetOrches
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
+	defer func() { _ = stateRows.Close() }()
 
 	var orch *pb.Orchestrator
 	if stateRows.Next() {
 		var o pb.Orchestrator
 		var lastSeen, updatedAt time.Time
 		if scanErr := stateRows.Scan(&o.TenantId, &o.OrchAddr, &lastSeen, &updatedAt); scanErr != nil {
-			_ = stateRows.Close()
 			return nil, wrapClickhouseError(scanErr, "scan orchestrator state")
 		}
 		o.LastSeen = timestamppb.New(lastSeen)
 		o.UpdatedAt = timestamppb.New(updatedAt)
 		orch = &o
 	}
-	_ = stateRows.Close()
 	if orch == nil {
 		return nil, status.Errorf(codes.NotFound, "orchestrator %q not found for tenant", orchAddr)
 	}

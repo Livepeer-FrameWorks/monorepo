@@ -316,10 +316,6 @@ func (c *authPositiveCache) get(manifestID string) *LivepeerAuthContext {
 	return e.ctx
 }
 
-func (c *authPositiveCache) has(manifestID string) bool {
-	return c.get(manifestID) != nil
-}
-
 func (c *authPositiveCache) add(manifestID string, authCtx *LivepeerAuthContext) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -81,7 +82,7 @@ expand-phase safety rules before migrations reach an operator cluster.`,
 			chErr := provisioner.ValidateEmbeddedClickHouseMigrations()
 			switch {
 			case pgErr != nil && chErr != nil:
-				return fmt.Errorf("postgres: %w; clickhouse: %v", pgErr, chErr)
+				return fmt.Errorf("migration validation failed: %w", errors.Join(pgErr, chErr))
 			case pgErr != nil:
 				return pgErr
 			case chErr != nil:

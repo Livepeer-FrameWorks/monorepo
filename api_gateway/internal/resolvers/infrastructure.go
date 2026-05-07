@@ -1455,12 +1455,6 @@ func (r *Resolver) DoBootstrapEdge(ctx context.Context, input model.BootstrapEdg
 	if v := preResp.GetPoolDomain(); v != "" {
 		out.PoolDomain = &v
 	}
-	if v := string(preResp.GetCertPem()); v != "" {
-		out.CertPem = &v
-	}
-	if v := string(preResp.GetKeyPem()); v != "" {
-		out.KeyPem = &v
-	}
 	if v := string(preResp.GetInternalCaBundle()); v != "" {
 		out.InternalCaBundle = &v
 	}
