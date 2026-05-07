@@ -97,7 +97,20 @@ type Processor struct {
 	gatewayMu         sync.RWMutex
 	gatewayURLs       map[string]gatewayCacheEntry // cluster_id -> resolved URL ("" = no gateway), 5min TTL each
 	gatewayDiscoverer livepeerGatewayDiscoverer    // override for tests; falls back to quartermasterClient when nil
+
+	// Hold-down so an in-flight ResolveIdentifier cannot repopulate stale
+	// stream-context entries between InvalidatePlaybackAuthCache and the
+	// next USER_NEW. Keyed by either full cache-key (tenant:internal) or
+	// tenant_id; the latter blocks any new key for that tenant.
+	streamCacheHoldsMu     sync.Mutex
+	streamCacheKeyHolds    map[string]time.Time
+	streamCacheTenantHolds map[string]time.Time
 }
+
+// streamCacheHoldDuration is how long writes to the stream-context cache are
+// suppressed after an invalidation. Picked to comfortably outlast an in-flight
+// gRPC call to Commodore (typical p99 ~200ms) without retaining stale state.
+const streamCacheHoldDuration = 2 * time.Second
 
 // gatewayCacheEntry caches a per-cluster Livepeer gateway URL with its resolution time.
 // Empty URL is a valid cached negative result.
@@ -130,6 +143,7 @@ func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, 
 		StaleWhileRevalidate: streamCacheSWR(),
 		NegativeTTL:          0,
 		MaxEntries:           50000,
+		SkipStore:            p.streamCacheHeld,
 	}, cache.MetricsHooks{
 		OnHit:  func(_ map[string]string) { atomic.AddUint64(&p.streamCacheHits, 1) },
 		OnMiss: func(_ map[string]string) { atomic.AddUint64(&p.streamCacheMisses, 1) },
@@ -497,6 +511,7 @@ func (p *Processor) InvalidateTenantCache(tenantID string) int {
 	for _, key := range keysToEvict {
 		p.streamCache.Delete(key)
 	}
+	p.holdStreamCacheTenant(tenantID)
 
 	if p.commodoreClient != nil {
 		p.commodoreClient.InvalidateTenantCacheKeys(tenantID)
@@ -510,6 +525,61 @@ func (p *Processor) InvalidateTenantCache(tenantID string) int {
 	}
 
 	return len(keysToEvict)
+}
+
+// holdStreamCacheKey suppresses repopulation of cacheKey for the hold window.
+// Caller passes the full "tenant:internal" cache key.
+func (p *Processor) holdStreamCacheKey(cacheKey string) {
+	if cacheKey == "" {
+		return
+	}
+	p.streamCacheHoldsMu.Lock()
+	defer p.streamCacheHoldsMu.Unlock()
+	if p.streamCacheKeyHolds == nil {
+		p.streamCacheKeyHolds = make(map[string]time.Time)
+	}
+	p.streamCacheKeyHolds[cacheKey] = time.Now().Add(streamCacheHoldDuration)
+}
+
+// holdStreamCacheTenant suppresses repopulation of every "tenant:..." key
+// for the hold window. Used by tenant-wide invalidation.
+func (p *Processor) holdStreamCacheTenant(tenantID string) {
+	if tenantID == "" {
+		return
+	}
+	p.streamCacheHoldsMu.Lock()
+	defer p.streamCacheHoldsMu.Unlock()
+	if p.streamCacheTenantHolds == nil {
+		p.streamCacheTenantHolds = make(map[string]time.Time)
+	}
+	p.streamCacheTenantHolds[tenantID] = time.Now().Add(streamCacheHoldDuration)
+}
+
+// streamCacheHeld reports whether cacheKey is currently held down. Prunes
+// expired entries opportunistically.
+func (p *Processor) streamCacheHeld(cacheKey string) bool {
+	if cacheKey == "" {
+		return false
+	}
+	now := time.Now()
+	p.streamCacheHoldsMu.Lock()
+	defer p.streamCacheHoldsMu.Unlock()
+	if t, ok := p.streamCacheKeyHolds[cacheKey]; ok {
+		if now.Before(t) {
+			return true
+		}
+		delete(p.streamCacheKeyHolds, cacheKey)
+	}
+	if i := strings.IndexByte(cacheKey, ':'); i > 0 {
+		tenantID := cacheKey[:i]
+		if t, ok := p.streamCacheTenantHolds[tenantID]; ok {
+			if now.Before(t) {
+				return true
+			}
+			delete(p.streamCacheTenantHolds, tenantID)
+		}
+	}
+	return false
 }
 
 // InvalidatePlaybackAuthCache evicts cached stream-context markers before
@@ -538,6 +608,7 @@ func (p *Processor) InvalidatePlaybackAuthCache(tenantID string, internalNames [
 	}
 	for _, key := range keysToEvict {
 		p.streamCache.Delete(key)
+		p.holdStreamCacheKey(key)
 	}
 	if p.commodoreClient != nil {
 		p.commodoreClient.InvalidateTenantCacheKeys(tenantID)
@@ -1448,10 +1519,14 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 	return "", true, nil
 }
 
-// ValidatePullSourceURI returns true when a URI maps to a supported MistServer
-// pull-input module and passes the shared host guard.
+// ValidatePullSourceURI returns true when a URI is parseable, uses a
+// supported MistServer pull-input scheme, and is not in the always-blocked
+// set (loopback, link-local, .internal, etc). It does NOT enforce per-
+// cluster allow_private_pull_sources — that decision needs the executing
+// node's logical media cluster, which the caller must look up via
+// Quartermaster (resolvePullSource does this defensively below).
 func ValidatePullSourceURI(uri string) bool {
-	return pullsource.Validate(uri)
+	return pullsource.IsValid(uri)
 }
 
 // resolvePullSource handles STREAM_SOURCE for pull+<internal_name> streams. We
@@ -1489,12 +1564,26 @@ func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger
 		p.logger.WithField("stream_name", streamName).Info("Pull source disabled by tenant; refusing to start input")
 		return "", true, nil
 	}
-	if err := pullsource.ValidateURI(resp.GetSourceUri()); err != nil {
+	class, classErr := pullsource.Classify(resp.GetSourceUri())
+	if class == pullsource.ClassBlocked {
 		p.logger.WithFields(logging.Fields{
 			"stream_name": streamName,
-			"error":       err,
+			"error":       classErr,
 		}).Warn("Pull source URI is not supported; refusing")
 		return "", true, nil
+	}
+	if class == pullsource.ClassPrivate {
+		// Defensive cluster check: the bootstrap/CLI layer should have
+		// rejected a private URI on a non-eligible cluster, but if a stale
+		// row + new cluster policy collide we deny rather than dial.
+		clusterID := p.resolveNodeClusterID(trigger.GetNodeId())
+		if !p.clusterAllowsPrivatePullSources(streamName, clusterID) {
+			p.logger.WithFields(logging.Fields{
+				"stream_name": streamName,
+				"cluster_id":  clusterID,
+			}).Warn("Pull source is private and the executing cluster does not allow private pull sources; refusing")
+			return "", true, nil
+		}
 	}
 
 	if tid := resp.GetTenantId(); tid != "" {
@@ -2511,6 +2600,33 @@ func (p *Processor) resolveNodeUUID(nodeID string) string {
 		return uuid
 	}
 	return ""
+}
+
+// clusterAllowsPrivatePullSources returns true iff Quartermaster reports
+// allow_private_pull_sources=true for clusterID. Empty clusterID, missing
+// Quartermaster client, or any lookup failure returns false (fail-closed)
+// so a defensive STREAM_SOURCE check refuses rather than dialing a private
+// upstream from a cluster whose policy we cannot confirm.
+//
+// streamName is logged on failure so an operator can correlate the deny.
+func (p *Processor) clusterAllowsPrivatePullSources(streamName, clusterID string) bool {
+	if clusterID == "" || p.quartermasterClient == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, err := p.quartermasterClient.GetCluster(ctx, clusterID)
+	if err != nil {
+		p.logger.WithError(err).WithFields(logging.Fields{
+			"stream_name": streamName,
+			"cluster_id":  clusterID,
+		}).Warn("clusterAllowsPrivatePullSources: GetCluster failed; failing closed")
+		return false
+	}
+	if resp == nil || resp.GetCluster() == nil {
+		return false
+	}
+	return resp.GetCluster().GetAllowPrivatePullSources()
 }
 
 // resolveNodeClusterID resolves a node's logical name to its cluster_id.

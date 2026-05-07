@@ -743,7 +743,10 @@ func (x *InvalidatePlaybackAuthRequest) GetReason() string {
 type InvalidatePlaybackAuthResponse struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	StreamsInvalidated int32                  `protobuf:"varint,1,opt,name=streams_invalidated,json=streamsInvalidated,proto3" json:"streams_invalidated,omitempty"` // Number of internal_names dispatched
-	NodesDispatched    int32                  `protobuf:"varint,2,opt,name=nodes_dispatched,json=nodesDispatched,proto3" json:"nodes_dispatched,omitempty"`          // Number of Helmsmen contacted
+	NodesDispatched    int32                  `protobuf:"varint,2,opt,name=nodes_dispatched,json=nodesDispatched,proto3" json:"nodes_dispatched,omitempty"`          // Number of Helmsmen successfully contacted
+	NodesAttempted     int32                  `protobuf:"varint,3,opt,name=nodes_attempted,json=nodesAttempted,proto3" json:"nodes_attempted,omitempty"`             // Total Helmsmen targeted (dispatched + failed)
+	NodesFailed        int32                  `protobuf:"varint,4,opt,name=nodes_failed,json=nodesFailed,proto3" json:"nodes_failed,omitempty"`                      // Helmsmen the dispatch could not reach; >0 means caller must retry
+	FailedNodeIds      []string               `protobuf:"bytes,5,rep,name=failed_node_ids,json=failedNodeIds,proto3" json:"failed_node_ids,omitempty"`               // Identifiers of unreachable Helmsmen, for diagnostic logging
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -790,6 +793,27 @@ func (x *InvalidatePlaybackAuthResponse) GetNodesDispatched() int32 {
 		return x.NodesDispatched
 	}
 	return 0
+}
+
+func (x *InvalidatePlaybackAuthResponse) GetNodesAttempted() int32 {
+	if x != nil {
+		return x.NodesAttempted
+	}
+	return 0
+}
+
+func (x *InvalidatePlaybackAuthResponse) GetNodesFailed() int32 {
+	if x != nil {
+		return x.NodesFailed
+	}
+	return 0
+}
+
+func (x *InvalidatePlaybackAuthResponse) GetFailedNodeIds() []string {
+	if x != nil {
+		return x.FailedNodeIds
+	}
+	return nil
 }
 
 // InvalidateTenantCacheRequest is sent when a tenant's suspension status changes
@@ -1075,10 +1099,13 @@ const file_foghorn_proto_rawDesc = "" +
 	"\x1dInvalidatePlaybackAuthRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12%\n" +
 	"\x0einternal_names\x18\x02 \x03(\tR\rinternalNames\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"|\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xf0\x01\n" +
 	"\x1eInvalidatePlaybackAuthResponse\x12/\n" +
 	"\x13streams_invalidated\x18\x01 \x01(\x05R\x12streamsInvalidated\x12)\n" +
-	"\x10nodes_dispatched\x18\x02 \x01(\x05R\x0fnodesDispatched\"S\n" +
+	"\x10nodes_dispatched\x18\x02 \x01(\x05R\x0fnodesDispatched\x12'\n" +
+	"\x0fnodes_attempted\x18\x03 \x01(\x05R\x0enodesAttempted\x12!\n" +
+	"\fnodes_failed\x18\x04 \x01(\x05R\vnodesFailed\x12&\n" +
+	"\x0ffailed_node_ids\x18\x05 \x03(\tR\rfailedNodeIds\"S\n" +
 	"\x1cInvalidateTenantCacheRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"P\n" +

@@ -1348,7 +1348,7 @@ func resolvePullUpstreamForSource(ctx context.Context, streamName string) string
 }
 
 func pullUpstreamScore(upstream string, activeScore uint64) uint64 {
-	if !pullsource.Validate(upstream) {
+	if !pullsource.IsValid(upstream) {
 		return 0
 	}
 	if activeScore == 0 {
@@ -1359,10 +1359,32 @@ func pullUpstreamScore(upstream string, activeScore uint64) uint64 {
 
 func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string, ctx context.Context, start time.Time) {
 	upstream := resolvePullUpstreamForSource(ctx, streamName)
-	if upstream == "" || !triggers.ValidatePullSourceURI(upstream) {
-		logger.WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI unavailable or invalid; refusing")
+	if upstream == "" {
+		logger.WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI unavailable; refusing")
 		c.Status(http.StatusNotFound)
 		return
+	}
+	class, classErr := pullsource.Classify(upstream)
+	if class == pullsource.ClassBlocked {
+		logger.WithError(classErr).WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI is in the always-blocked set; refusing")
+		c.Status(http.StatusNotFound)
+		return
+	}
+	if class == pullsource.ClassPrivate {
+		// /source runs on a specific Foghorn — which serves a specific media
+		// cluster. Reject the upstream here if this cluster is not opted
+		// into private pulls. Otherwise routing could send a viewer to a
+		// platform-cluster Foghorn that hands MistServer a private upstream
+		// it cannot reach.
+		localClusterID := config.GetEnv("CLUSTER_ID", "")
+		if !control.ClusterAllowsPrivatePulls(ctx, localClusterID) {
+			logger.WithFields(logging.Fields{
+				"stream":     streamName,
+				"cluster_id": localClusterID,
+			}).Warn("Source lookup: pull stream is private but the serving cluster does not allow private pull sources; refusing")
+			c.Status(http.StatusNotFound)
+			return
+		}
 	}
 
 	bestNode, score, nodeLat, nodeLon, nodeName, err := lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, clientIP, true)

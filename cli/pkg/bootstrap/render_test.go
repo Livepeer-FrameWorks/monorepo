@@ -836,8 +836,32 @@ func TestRenderBillingTierOverlay(t *testing.T) {
 	}
 }
 
+// manifestWithMedia returns minimalManifest plus an edge cluster, since
+// pull-stream validation requires at least one media-capable cluster.
+func manifestWithMedia(allowPrivate bool) *inventory.Manifest {
+	m := minimalManifest()
+	m.Clusters["media-edge-primary"] = inventory.ClusterConfig{
+		Name:                    "Media Edge Primary",
+		Type:                    "edge",
+		PlatformOfficial:        true,
+		OwnerTenant:             "frameworks",
+		Roles:                   []string{"media"},
+		AllowPrivatePullSources: allowPrivate,
+	}
+	m.Hosts["media-eu-1"] = inventory.Host{
+		Name:               "media-eu-1",
+		ExternalIP:         "203.0.113.20",
+		User:               "root",
+		WireguardIP:        "10.99.0.2",
+		WireguardPublicKey: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+		WireguardPort:      51820,
+		Cluster:            "media-edge-primary",
+	}
+	return m
+}
+
 func TestRenderPullStreamValidatesSourceURI(t *testing.T) {
-	d, err := Derive(minimalManifest(), DeriveOptions{})
+	d, err := Derive(manifestWithMedia(false), DeriveOptions{})
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -866,7 +890,7 @@ func TestRenderPullStreamValidatesSourceURI(t *testing.T) {
 }
 
 func TestRenderPullStreamRejectsUnsupportedSourceURI(t *testing.T) {
-	d, err := Derive(minimalManifest(), DeriveOptions{})
+	d, err := Derive(manifestWithMedia(false), DeriveOptions{})
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -883,5 +907,61 @@ func TestRenderPullStreamRejectsUnsupportedSourceURI(t *testing.T) {
 	}
 	if _, err := Render(d, overlay, nil); err == nil || !strings.Contains(err.Error(), "source_uri") {
 		t.Fatalf("expected source_uri validation error, got %v", err)
+	}
+}
+
+// TestRenderPullStreamRejectsPrivateSourceWithoutOptedInCluster locks the
+// architecture rule: a private URI requires at least one media cluster
+// with allow_private_pull_sources=true. Platform-only manifest must reject.
+func TestRenderPullStreamRejectsPrivateSourceWithoutOptedInCluster(t *testing.T) {
+	d, err := Derive(manifestWithMedia(false), DeriveOptions{})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	overlay := &Overlay{
+		Commodore: CommodoreSection{
+			PullStreams: []PullStream{{
+				PlaybackID:  "private-demo",
+				OwnerTenant: TenantRefSystem(),
+				Title:       "Private demo",
+				SourceURI:   "tsudp://10.0.0.5:9000",
+				Enabled:     true,
+			}},
+		},
+	}
+	_, err = Render(d, overlay, nil)
+	if err == nil {
+		t.Fatal("private URI on platform-only manifest must fail render")
+	}
+	if !strings.Contains(err.Error(), "allow_private_pull_sources") {
+		t.Fatalf("error %q does not name the missing flag", err)
+	}
+}
+
+// TestRenderPullStreamAcceptsPrivateSourceOnOptedInCluster confirms the
+// other side of the rule: a self-host manifest with the flag set lets the
+// same private URI through.
+func TestRenderPullStreamAcceptsPrivateSourceOnOptedInCluster(t *testing.T) {
+	d, err := Derive(manifestWithMedia(true), DeriveOptions{})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	overlay := &Overlay{
+		Commodore: CommodoreSection{
+			PullStreams: []PullStream{{
+				PlaybackID:  "private-demo",
+				OwnerTenant: TenantRefSystem(),
+				Title:       "Private demo",
+				SourceURI:   "tsudp://10.0.0.5:9000",
+				Enabled:     true,
+			}},
+		},
+	}
+	r, err := Render(d, overlay, nil)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(r.Commodore.PullStreams) != 1 {
+		t.Fatalf("pull streams = %d, want 1", len(r.Commodore.PullStreams))
 	}
 }

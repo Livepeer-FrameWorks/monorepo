@@ -44,15 +44,16 @@ type TenantRef struct {
 // Cluster reconciled into quartermaster.infrastructure_clusters. Stable keys: ID,
 // OwnerTenant, Mesh.CIDR (when the row exists). Drift = fail.
 type Cluster struct {
-	ID                 string      `yaml:"id"`
-	Name               string      `yaml:"name"`
-	Type               string      `yaml:"type"`
-	Region             string      `yaml:"region,omitempty"`
-	OwnerTenant        TenantRef   `yaml:"owner_tenant"`
-	IsDefault          bool        `yaml:"is_default,omitempty"`
-	IsPlatformOfficial bool        `yaml:"is_platform_official,omitempty"`
-	BaseURL            string      `yaml:"base_url,omitempty"`
-	Mesh               ClusterMesh `yaml:"mesh"`
+	ID                      string      `yaml:"id"`
+	Name                    string      `yaml:"name"`
+	Type                    string      `yaml:"type"`
+	Region                  string      `yaml:"region,omitempty"`
+	OwnerTenant             TenantRef   `yaml:"owner_tenant"`
+	IsDefault               bool        `yaml:"is_default,omitempty"`
+	IsPlatformOfficial      bool        `yaml:"is_platform_official,omitempty"`
+	AllowPrivatePullSources bool        `yaml:"allow_private_pull_sources,omitempty"`
+	BaseURL                 string      `yaml:"base_url,omitempty"`
+	Mesh                    ClusterMesh `yaml:"mesh"`
 }
 
 type ClusterMesh struct {

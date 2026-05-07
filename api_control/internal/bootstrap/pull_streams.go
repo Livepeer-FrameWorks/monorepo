@@ -17,6 +17,18 @@ type SourceURICipher interface {
 	Decrypt(stored string) (string, error)
 }
 
+// ClusterCapabilityResolver is the narrow Quartermaster surface ReconcilePullStreams
+// needs to enforce cluster eligibility. The cobra dispatcher wires this to a
+// real Quartermaster gRPC client; tests inject a static set.
+type ClusterCapabilityResolver interface {
+	// MediaClusterCapabilities returns the cluster_id + allow_private_pull_sources
+	// for every media-capable cluster the platform currently has registered.
+	// Pull streams in bootstrap are operator-owned (system_tenant), so all
+	// media clusters are candidates; tenant-scoped access lands when tenant
+	// pull streams ship via the API path.
+	MediaClusterCapabilities(ctx context.Context) ([]pullsource.ClusterCapability, error)
+}
+
 // ReconcilePullStreams provisions operator-owned pull-input streams declared in
 // the rendered bootstrap file into commodore.streams + commodore.stream_pull_sources.
 // Stable key: (tenant_id, playback_id). Idempotent semantics:
@@ -25,13 +37,19 @@ type SourceURICipher interface {
 //   - Stream present, all fields match ⇒ noop.
 //   - Stream present, mutable fields differ ⇒ update.
 //
-// SourceURICipher decrypts existing values for idempotent comparison and encrypts
-// plaintext SourceURI before INSERT/UPDATE.
+// SourceURICipher decrypts existing values for idempotent comparison and
+// encrypts plaintext SourceURI before INSERT/UPDATE.
+//
+// ClusterCapabilityResolver is the eligibility gate: a private URI is rejected
+// at apply time when no media cluster has allow_private_pull_sources=true.
+// Defense-in-depth — the CLI render path enforces the same rule earlier, but
+// stale rendered files / out-of-band callers must still fail closed here.
 func ReconcilePullStreams(
 	ctx context.Context,
 	exec DBTX,
 	streams []PullStream,
 	resolver TenantResolver,
+	clusters ClusterCapabilityResolver,
 	cipher SourceURICipher,
 ) (Result, error) {
 	if exec == nil {
@@ -40,14 +58,26 @@ func ReconcilePullStreams(
 	if resolver == nil {
 		return Result{}, errors.New("ReconcilePullStreams: nil tenant resolver")
 	}
+	if clusters == nil {
+		return Result{}, errors.New("ReconcilePullStreams: nil cluster resolver")
+	}
 	if cipher == nil {
 		return Result{}, errors.New("ReconcilePullStreams: nil cipher")
 	}
 
+	candidates, err := clusters.MediaClusterCapabilities(ctx)
+	if err != nil {
+		return Result{}, fmt.Errorf("list media clusters: %w", err)
+	}
+
 	res := Result{}
 	for _, ps := range streams {
-		if err := validatePullStream(ps); err != nil {
-			return Result{}, err
+		class, shapeErr := validatePullStreamShape(ps)
+		if shapeErr != nil {
+			return Result{}, shapeErr
+		}
+		if eligibilityErr := validatePullStreamEligibility(ps, class, candidates); eligibilityErr != nil {
+			return Result{}, eligibilityErr
 		}
 		alias, err := AliasFromRef(ps.OwnerTenant.Ref)
 		if err != nil {
@@ -74,21 +104,41 @@ func ReconcilePullStreams(
 	return res, nil
 }
 
-func validatePullStream(p PullStream) error {
+// validatePullStreamShape exercises the offline checks: required fields,
+// URI parseability, scheme + always-blocked host set. Returns the URI class
+// so the apply path can layer cluster eligibility on top.
+func validatePullStreamShape(p PullStream) (pullsource.Class, error) {
 	if p.PlaybackID == "" {
-		return errors.New("playback_id required")
+		return pullsource.ClassBlocked, errors.New("playback_id required")
 	}
 	if p.OwnerTenant.Ref == "" {
-		return fmt.Errorf("pull_stream %q: owner_tenant.ref required", p.PlaybackID)
+		return pullsource.ClassBlocked, fmt.Errorf("pull_stream %q: owner_tenant.ref required", p.PlaybackID)
 	}
 	if p.Title == "" {
-		return fmt.Errorf("pull_stream %q: title required", p.PlaybackID)
+		return pullsource.ClassBlocked, fmt.Errorf("pull_stream %q: title required", p.PlaybackID)
 	}
 	if p.SourceURI == "" {
-		return fmt.Errorf("pull_stream %q: source_uri required (resolver should have resolved any source_uri_ref)", p.PlaybackID)
+		return pullsource.ClassBlocked, fmt.Errorf("pull_stream %q: source_uri required (resolver should have resolved any source_uri_ref)", p.PlaybackID)
 	}
-	if err := pullsource.ValidateURI(p.SourceURI); err != nil {
-		return fmt.Errorf("pull_stream %q: source_uri: %w", p.PlaybackID, err)
+	class, classErr := pullsource.Classify(p.SourceURI)
+	if class == pullsource.ClassBlocked {
+		return pullsource.ClassBlocked, fmt.Errorf("pull_stream %q: source_uri: %w", p.PlaybackID, classErr)
+	}
+	return class, nil
+}
+
+// validatePullStreamEligibility layers cluster eligibility on top of shape
+// validation. Apply path only — `--check` skips this since it's offline and
+// has no Quartermaster access.
+func validatePullStreamEligibility(p PullStream, class pullsource.Class, candidates []pullsource.ClusterCapability) error {
+	eligible := pullsource.EligiblePullClusters(class, candidates)
+	if len(eligible) == 0 {
+		switch class {
+		case pullsource.ClassPrivate:
+			return fmt.Errorf("pull_stream %q: source_uri is private but no registered cluster has allow_private_pull_sources=true", p.PlaybackID)
+		default:
+			return fmt.Errorf("pull_stream %q: source_uri %s but no media cluster is registered", p.PlaybackID, class)
+		}
 	}
 	return nil
 }

@@ -15,12 +15,41 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func testPlaybackAuthProcessor() *Processor {
 	logger := logging.NewLogger()
 	logger.SetOutput(io.Discard)
 	return &Processor{logger: logger}
+}
+
+func TestLogPlaybackDenyEmitsCounters(t *testing.T) {
+	denyTotal := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_deny"}, []string{"reason"})
+	webhookErr := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_webhook"}, []string{"class"})
+
+	p := testPlaybackAuthProcessor()
+	p.metrics = &ProcessorMetrics{PlaybackDenyTotal: denyTotal, PlaybackWebhookErrors: webhookErr}
+
+	p.logPlaybackDeny("stream-a", &pb.ViewerConnectTrigger{}, "jwt-expired", "")
+	p.logPlaybackDeny("stream-a", &pb.ViewerConnectTrigger{}, "webhook-timeout", "")
+	p.logPlaybackDeny("stream-a", &pb.ViewerConnectTrigger{}, "webhook-blocked-ssrf", "")
+
+	if got := counterValue(t, denyTotal.WithLabelValues("jwt-expired")); got != 1 {
+		t.Fatalf("jwt-expired count = %v, want 1", got)
+	}
+	if got := counterValue(t, denyTotal.WithLabelValues("webhook-timeout")); got != 1 {
+		t.Fatalf("webhook-timeout deny count = %v, want 1", got)
+	}
+	if got := counterValue(t, webhookErr.WithLabelValues("timeout")); got != 1 {
+		t.Fatalf("webhook timeout class count = %v, want 1", got)
+	}
+	if got := counterValue(t, webhookErr.WithLabelValues("blocked-ssrf")); got != 1 {
+		t.Fatalf("webhook blocked-ssrf class count = %v, want 1", got)
+	}
+	if got := counterValue(t, webhookErr.WithLabelValues("expired")); got != 0 {
+		t.Fatalf("expired (jwt-only) leaked into webhook counter: %v", got)
+	}
 }
 
 func TestEnforcePlaybackPolicy_PublicMarkerAllowsWithoutCommodore(t *testing.T) {

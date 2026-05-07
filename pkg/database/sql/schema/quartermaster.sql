@@ -151,6 +151,13 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_clusters (
     is_active BOOLEAN DEFAULT TRUE,
     is_default_cluster BOOLEAN DEFAULT FALSE,
     is_platform_official BOOLEAN DEFAULT FALSE,
+    -- Pull-source private-network allowance: when TRUE, pull streams placed on
+    -- this cluster may resolve from RFC1918 / multicast literals. Defaults
+    -- FALSE so platform-official clusters reject tenant-private upstreams.
+    -- Set only on self-hosted clusters whose edges legitimately pull from
+    -- LAN/VPC sources reachable from those edges. Pulled by the CLI render
+    -- path when validating pull-stream placement.
+    allow_private_pull_sources BOOLEAN NOT NULL DEFAULT FALSE,
     health_status VARCHAR(50) DEFAULT 'healthy',
     last_seen TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),

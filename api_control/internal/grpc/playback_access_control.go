@@ -26,7 +26,7 @@ const activeSigningKeyCap = 10
 // CreateSigningKey generates a new ES256 keypair, stores the public key, and
 // returns the private PEM exactly once. The private key is never persisted.
 func (s *CommodoreServer) CreateSigningKey(ctx context.Context, req *pb.CreateSigningKeyRequest) (*pb.CreateSigningKeyResponse, error) {
-	_, tenantID, err := extractUserContext(ctx)
+	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -35,9 +35,30 @@ func (s *CommodoreServer) CreateSigningKey(ctx context.Context, req *pb.CreateSi
 		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
 
-	// Cap active keys per tenant.
+	privatePEM, publicPEM, kid, err := auth.GenerateES256Keypair()
+	if err != nil {
+		s.logger.WithError(err).Error("ES256 keypair generation failed")
+		return nil, status.Errorf(codes.Internal, "key generation failed")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		s.logger.WithError(err).Error("begin signing-key tx failed")
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+
+	// Serialize concurrent CreateSigningKey for this tenant so the cap check
+	// and INSERT are atomic. Released on commit/rollback.
+	if _, lockErr := tx.ExecContext(ctx, `
+		SELECT pg_advisory_xact_lock(hashtext('commodore_signing_keys'), hashtext($1::text))
+	`, tenantID); lockErr != nil {
+		s.logger.WithError(lockErr).Error("advisory lock for signing-key create failed")
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
+
 	var activeCount int
-	if cntErr := s.db.QueryRowContext(ctx, `
+	if cntErr := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM commodore.signing_keys
 		WHERE tenant_id = $1 AND status = 'active'
 	`, tenantID).Scan(&activeCount); cntErr != nil {
@@ -48,22 +69,25 @@ func (s *CommodoreServer) CreateSigningKey(ctx context.Context, req *pb.CreateSi
 		return nil, status.Errorf(codes.ResourceExhausted, "tenant has reached the active signing-key cap (%d); revoke an existing key first", activeSigningKeyCap)
 	}
 
-	privatePEM, publicPEM, kid, err := auth.GenerateES256Keypair()
-	if err != nil {
-		s.logger.WithError(err).Error("ES256 keypair generation failed")
-		return nil, status.Errorf(codes.Internal, "key generation failed")
-	}
-
 	var (
 		id        string
 		createdAt time.Time
 	)
-	if insErr := s.db.QueryRowContext(ctx, `
+	if insErr := tx.QueryRowContext(ctx, `
 		INSERT INTO commodore.signing_keys (tenant_id, kid, name, public_key_pem, algorithm, status)
 		VALUES ($1, $2, $3, $4, 'ES256', 'active')
 		RETURNING id, created_at
 	`, tenantID, kid, name, publicPEM).Scan(&id, &createdAt); insErr != nil {
 		s.logger.WithError(insErr).Error("insert signing key failed")
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
+
+	if auditErr := s.writeSigningKeyAudit(ctx, tx, tenantID, kid, "create", userID, name); auditErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		s.logger.WithError(commitErr).Error("commit signing-key tx failed")
 		return nil, status.Errorf(codes.Internal, "database error")
 	}
 
@@ -178,10 +202,12 @@ func (s *CommodoreServer) ListSigningKeys(ctx context.Context, req *pb.ListSigni
 	return resp, nil
 }
 
-// RevokeSigningKey marks the key revoked and triggers cache invalidation +
-// session re-evaluation across the tenant's protected playback objects.
+// RevokeSigningKey marks the key revoked and persists a durable invalidation
+// outbox row in the same transaction so the mutation cannot succeed without a
+// retry record. After commit, attempts a synchronous fanout; partial failure
+// leaves the row pending for the worker to replay.
 func (s *CommodoreServer) RevokeSigningKey(ctx context.Context, req *pb.RevokeSigningKeyRequest) (*pb.SigningKey, error) {
-	_, tenantID, err := extractUserContext(ctx)
+	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -190,8 +216,14 @@ func (s *CommodoreServer) RevokeSigningKey(ctx context.Context, req *pb.RevokeSi
 		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
 
-	// 1. Persist the revocation.
-	row := s.db.QueryRowContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		s.logger.WithError(err).Error("begin revoke signing-key tx failed")
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
+
+	row := tx.QueryRowContext(ctx, `
 		UPDATE commodore.signing_keys
 		SET status = 'revoked', revoked_at = NOW()
 		WHERE id = $1 AND tenant_id = $2 AND status = 'active'
@@ -200,7 +232,6 @@ func (s *CommodoreServer) RevokeSigningKey(ctx context.Context, req *pb.RevokeSi
 	`, id, tenantID)
 	sk, err := scanSigningKey(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Either not found or already revoked.
 		return nil, status.Error(codes.NotFound, "signing key not found or already revoked")
 	}
 	if err != nil {
@@ -208,10 +239,25 @@ func (s *CommodoreServer) RevokeSigningKey(ctx context.Context, req *pb.RevokeSi
 		return nil, status.Errorf(codes.Internal, "database error")
 	}
 
-	// 2 + 3. Drop Foghorn caches and run invalidate_sessions across all clusters
-	// the tenant has access to. Order matters: cache drop must happen before
-	// USER_NEW re-fires so the recheck reads fresh state.
-	s.fanoutPlaybackPolicyChange(ctx, tenantID, "key_revoked", protectedScopeAll())
+	// Empty internal_names = scope-all; Foghorn fans out across every protected
+	// stream the tenant currently owns. Snapshotting the list here would miss
+	// streams added between revoke and worker run, so we let Foghorn re-resolve.
+	outboxID, enqueueErr := s.enqueueInvalidationOutbox(ctx, tx, tenantID, "key_revoked", nil)
+	if enqueueErr != nil {
+		s.logger.WithError(enqueueErr).Error("enqueue invalidation outbox failed; aborting revoke")
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
+
+	if auditErr := s.writeSigningKeyAudit(ctx, tx, tenantID, sk.GetKid(), "revoke", userID, sk.GetName()); auditErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		s.logger.WithError(commitErr).Error("commit revoke signing-key tx failed")
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
+
+	s.tryDispatchInvalidationOutbox(ctx, outboxID, tenantID, "key_revoked", nil)
 
 	return sk, nil
 }
@@ -305,7 +351,15 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *pb.SetPlay
 		    updated_at = NOW()
 		WHERE %s AND tenant_id = $5
 	`, tableCol, whereCol)
-	res, err := s.db.ExecContext(ctx, q, requiresAuth, policyJSON, webhookSecretEnc, target.id, tenantID)
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		s.logger.WithError(err).Error("begin set-policy tx failed")
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
+
+	res, err := tx.ExecContext(ctx, q, requiresAuth, policyJSON, webhookSecretEnc, target.id, tenantID)
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"target": target.kind,
@@ -313,19 +367,30 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *pb.SetPlay
 		}).Error("update playback policy failed")
 		return nil, status.Errorf(codes.Internal, "database error")
 	}
-	rows, raErr := res.RowsAffected()
+	rowsAffected, raErr := res.RowsAffected()
 	if raErr != nil {
 		s.logger.WithError(raErr).Error("RowsAffected after policy update failed")
 		return nil, status.Errorf(codes.Internal, "database error")
 	}
-	if rows == 0 {
+	if rowsAffected == 0 {
 		return nil, status.Errorf(codes.NotFound, "%s not found", target.kind)
 	}
 
-	// Cache + session invalidation. Scope is the single object whose policy
-	// changed — narrower than a key revoke (which can affect any protected
-	// stream).
-	s.fanoutPlaybackPolicyChange(ctx, tenantID, "policy_change", protectedScopeForTarget(target))
+	// Snapshot the changed object's internal_name so the worker can replay an
+	// invalidation for exactly the affected stream/asset/clip.
+	scopedNames := s.scopeInternalNames(ctx, tenantID, protectedScopeForTarget(target))
+	outboxID, enqueueErr := s.enqueueInvalidationOutbox(ctx, tx, tenantID, "policy_change", scopedNames)
+	if enqueueErr != nil {
+		s.logger.WithError(enqueueErr).Error("enqueue invalidation outbox failed; aborting policy change")
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		s.logger.WithError(commitErr).Error("commit set-policy tx failed")
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
+
+	s.tryDispatchInvalidationOutbox(ctx, outboxID, tenantID, "policy_change", scopedNames)
 
 	responseID, err := s.canonicalPlaybackPolicyTargetID(ctx, tenantID, target)
 	if err != nil {
@@ -837,83 +902,19 @@ func (s *CommodoreServer) fetchActiveSigningKeys(ctx context.Context, tenantID s
 	return out, rows.Err()
 }
 
-// protectedScope tells the Foghorn fanout which streams/artifacts to invalidate.
-//   - protectedScopeAll: all protected playback objects for the tenant
-//     (used by key revoke; conservative scope since allowedKids may reference
-//     the revoked key on any object)
-//   - protectedScopeForTarget: only the changed object's internal_name(s)
+// protectedScope is the input shape scopeInternalNames understands. The
+// outbox stores the resolved name list directly, so this exists only to give
+// scopeInternalNames a typed boundary for the two interesting cases:
+//   - scope.all (key revoke) → empty list, Foghorn fans out across the
+//     tenant's currently-protected streams.
+//   - scope.target (single object whose policy changed) → that object's
+//     internal_name.
 type protectedScope struct {
 	all    bool
 	target *policyTarget
 }
 
-func protectedScopeAll() protectedScope                     { return protectedScope{all: true} }
 func protectedScopeForTarget(t policyTarget) protectedScope { return protectedScope{target: &t} }
-
-// fanoutPlaybackPolicyChange dispatches invalidate_sessions across every
-// cluster that may hold the affected live or artifact sessions.
-//
-// Mutation order (already enforced by caller):
-//  1. DB persisted (UPDATE / INSERT)
-//  2. Foghorn drops stream-context and Commodore client caches.
-//  3. Foghorn dispatches MistServer invalidate_sessions for the affected names.
-//
-// scope.target carries the changed object's internal_name so we can scope
-// the invalidate. scope.all (signing-key revoke) means "every protected
-// stream for the tenant" — Foghorn fans that out from its stream registry.
-func (s *CommodoreServer) fanoutPlaybackPolicyChange(ctx context.Context, tenantID, reason string, scope protectedScope) {
-	if tenantID == "" {
-		return
-	}
-	internalNames := s.scopeInternalNames(ctx, tenantID, scope)
-
-	// Resolve the tenant's cluster footprint and dispatch via every
-	// reachable Foghorn. Same pattern as TerminateTenantStreams.
-	route, err := s.resolveClusterRouteForTenant(ctx, tenantID)
-	if err != nil {
-		s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("playback-policy fanout: cluster route lookup failed")
-		return
-	}
-	targets := buildClusterFanoutTargets(route)
-	if len(targets) == 0 {
-		s.logger.WithField("tenant_id", tenantID).Warn("playback-policy fanout: no foghorn targets")
-		return
-	}
-
-	for _, target := range targets {
-		client, dialErr := s.foghornPool.GetOrCreate(foghornPoolKey(target.clusterID, target.addr), target.addr)
-		if dialErr != nil {
-			s.logger.WithError(dialErr).WithFields(logging.Fields{
-				"tenant_id":  tenantID,
-				"cluster_id": target.clusterID,
-			}).Warn("playback-policy fanout: failed to connect to cluster")
-			continue
-		}
-		if _, _, err := client.InvalidatePlaybackAuth(ctx, tenantID, reason, internalNames); err != nil {
-			s.logger.WithError(err).WithFields(logging.Fields{
-				"tenant_id":  tenantID,
-				"cluster_id": target.clusterID,
-				"reason":     reason,
-			}).Warn("playback-policy fanout: InvalidatePlaybackAuth failed")
-		}
-	}
-
-	scopeKindForLog := ""
-	scopeIDForLog := ""
-	if scope.target != nil {
-		scopeKindForLog = scope.target.kind
-		scopeIDForLog = scope.target.id
-	}
-	s.logger.WithFields(logging.Fields{
-		"tenant_id":      tenantID,
-		"reason":         reason,
-		"scope_all":      scope.all,
-		"scope_kind":     scopeKindForLog,
-		"scope_id":       scopeIDForLog,
-		"internal_names": internalNames,
-		"clusters":       len(targets),
-	}).Info("playback-policy fanout dispatched")
-}
 
 // scopeInternalNames returns MistServer session names to invalidate. Empty
 // result with scope.all=true lets Foghorn fan out across tenant live streams

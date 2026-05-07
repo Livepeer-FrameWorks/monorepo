@@ -279,6 +279,16 @@ func (p *Processor) enforceWebhookPolicy(ctx context.Context, internalName strin
 }
 
 func (p *Processor) logPlaybackDeny(internalName string, userNew *pb.ViewerConnectTrigger, reason, detail string) {
+	if p.metrics != nil {
+		if p.metrics.PlaybackDenyTotal != nil {
+			p.metrics.PlaybackDenyTotal.WithLabelValues(reason).Inc()
+		}
+		if p.metrics.PlaybackWebhookErrors != nil {
+			if class, ok := strings.CutPrefix(reason, "webhook-"); ok {
+				p.metrics.PlaybackWebhookErrors.WithLabelValues(class).Inc()
+			}
+		}
+	}
 	if p.logger == nil {
 		return
 	}

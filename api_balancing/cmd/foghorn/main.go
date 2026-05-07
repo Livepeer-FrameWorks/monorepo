@@ -674,6 +674,16 @@ func main() {
 			[]string{"trigger_type", "status"},
 		),
 		ServiceResolutionRejected: serviceResolutionRejected,
+		PlaybackDenyTotal: metricsCollector.NewCounter(
+			"playback_deny_total",
+			"USER_NEW denies bucketed by structured reason",
+			[]string{"reason"},
+		),
+		PlaybackWebhookErrors: metricsCollector.NewCounter(
+			"playback_webhook_errors_total",
+			"Customer-webhook failures during playback policy enforcement",
+			[]string{"class"},
+		),
 	})
 	if geoipReader != nil && geoipCache != nil {
 		triggerProcessor.SetGeoIPCache(geoipCache)

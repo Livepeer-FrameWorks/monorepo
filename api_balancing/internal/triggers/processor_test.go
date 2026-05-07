@@ -629,14 +629,95 @@ func (s *stubCommodoreInternalService) ResolveIdentifier(ctx context.Context, re
 
 func newTestProcessor(t *testing.T) *Processor {
 	t.Helper()
-	return &Processor{
+	p := &Processor{
 		logger: logging.Logger(logrus.New()),
-		streamCache: cache.New(cache.Options{
-			TTL:                  10 * time.Minute,
-			StaleWhileRevalidate: 0,
-			NegativeTTL:          0,
-			MaxEntries:           100,
-		}, cache.MetricsHooks{}),
+	}
+	p.streamCache = cache.New(cache.Options{
+		TTL:                  10 * time.Minute,
+		StaleWhileRevalidate: 0,
+		NegativeTTL:          0,
+		MaxEntries:           100,
+		SkipStore:            p.streamCacheHeld,
+	}, cache.MetricsHooks{})
+	return p
+}
+
+// TestInvalidatePlaybackAuthCacheHoldsDownPerKeyRepopulate confirms that an
+// in-flight loader cannot replace a freshly-evicted entry while the per-key
+// hold-down is active — the bug fix for the race between Commodore's
+// invalidation fanout and a concurrent ResolveIdentifier.
+func TestInvalidatePlaybackAuthCacheHoldsDownPerKeyRepopulate(t *testing.T) {
+	processor := newTestProcessor(t)
+	tenantID := "tenant-1"
+	internalName := "stream-x"
+	cacheKey := tenantID + ":" + internalName
+
+	processor.streamCache.Set(cacheKey, streamContext{TenantID: tenantID}, time.Minute)
+
+	processor.InvalidatePlaybackAuthCache(tenantID, []string{internalName})
+
+	processor.streamCache.Set(cacheKey, streamContext{TenantID: tenantID, UserID: "stale"}, time.Minute)
+	if _, ok := processor.streamCache.Peek(cacheKey); ok {
+		t.Fatal("Set repopulated a held-down key; hold-down failed")
+	}
+
+	loaderCalls := 0
+	val, ok, err := processor.streamCache.Get(context.Background(), cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+		loaderCalls++
+		return streamContext{TenantID: tenantID, UserID: "stale-via-loader"}, true, nil
+	})
+	if err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	if loaderCalls != 1 {
+		t.Fatalf("loader should have been called exactly once, got %d", loaderCalls)
+	}
+	if !ok || val == nil {
+		t.Fatal("loader returned ok but Get reported miss")
+	}
+	if _, ok := processor.streamCache.Peek(cacheKey); ok {
+		t.Fatal("Get(loader) repopulated a held-down key; hold-down failed")
+	}
+}
+
+// TestInvalidateTenantCacheHoldsDownTenantPrefix confirms that a tenant-wide
+// invalidation also blocks new keys arriving for that tenant during the hold
+// window, not just keys that already existed at eviction time.
+func TestInvalidateTenantCacheHoldsDownTenantPrefix(t *testing.T) {
+	processor := newTestProcessor(t)
+	tenantID := "tenant-1"
+
+	processor.InvalidateTenantCache(tenantID)
+
+	cacheKey := tenantID + ":new-stream-arriving-after-evict"
+	processor.streamCache.Set(cacheKey, streamContext{TenantID: tenantID}, time.Minute)
+	if _, ok := processor.streamCache.Peek(cacheKey); ok {
+		t.Fatal("tenant hold-down did not block a new key for the same tenant")
+	}
+
+	otherKey := "tenant-2:still-allowed"
+	processor.streamCache.Set(otherKey, streamContext{TenantID: "tenant-2"}, time.Minute)
+	if _, ok := processor.streamCache.Peek(otherKey); !ok {
+		t.Fatal("hold-down leaked across tenant boundary")
+	}
+}
+
+// TestStreamCacheHoldExpires confirms the hold-down releases after the window
+// elapses so legitimate writes resume.
+func TestStreamCacheHoldExpires(t *testing.T) {
+	processor := newTestProcessor(t)
+	tenantID := "tenant-1"
+	cacheKey := tenantID + ":stream-x"
+
+	processor.holdStreamCacheKey(cacheKey)
+
+	processor.streamCacheHoldsMu.Lock()
+	processor.streamCacheKeyHolds[cacheKey] = time.Now().Add(-time.Millisecond)
+	processor.streamCacheHoldsMu.Unlock()
+
+	processor.streamCache.Set(cacheKey, streamContext{TenantID: tenantID}, time.Minute)
+	if _, ok := processor.streamCache.Peek(cacheKey); !ok {
+		t.Fatal("expired hold-down still blocking writes")
 	}
 }
 

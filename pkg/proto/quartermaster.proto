@@ -548,6 +548,12 @@ message InfrastructureCluster {
   int32 monthly_price_cents = 22;       // Monthly price in cents (from Purser)
   bool requires_approval = 23;          // Subscription requires owner approval
   optional string short_description = 24; // Marketplace listing description
+
+  // Pull-source private-network allowance. When TRUE, pull streams placed on
+  // this cluster may resolve from RFC1918 / multicast literals. Defaults FALSE
+  // so platform-official clusters reject tenant-private upstreams. Sourced
+  // from cluster.yaml during bootstrap reconcile.
+  bool allow_private_pull_sources = 25;
 }
 
 message ClusterResponse {
@@ -587,6 +593,7 @@ message CreateClusterRequest {
   int32 foghorn_count = 22;             // Claim N idle Foghorn instances from pool (0 = skip)
   optional bool is_platform_official = 23; // Platform-operated cluster
   optional bool is_default_cluster = 24;   // Auto-subscribe new tenants to this cluster
+  optional bool allow_private_pull_sources = 25; // Cluster allows pulls from RFC1918 / multicast
 }
 
 // Matches pkg/api/quartermaster/types.go:UpdateClusterRequest (lines 378-392)
@@ -606,6 +613,7 @@ message UpdateClusterRequest {
   optional string deployment_model = 13; // json:"deployment_model,omitempty" - Change isolation level
   optional bool is_platform_official = 14; // json:"is_platform_official,omitempty" - Platform-operated cluster
   optional bool is_default_cluster = 15;   // json:"is_default_cluster,omitempty" - Set/clear default cluster flag
+  optional bool allow_private_pull_sources = 16; // Cluster allows pulls from RFC1918 / multicast
 }
 
 // Updates the cluster's WireGuard mesh parameters (CIDR + default listen

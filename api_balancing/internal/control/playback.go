@@ -18,6 +18,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -131,6 +132,99 @@ type RemoteArtifactInfo struct {
 }
 
 // PlaybackDependencies contains dependencies needed for playback resolution
+// filterPullCandidatesByEligibility constrains the candidate node set for a
+// pull+ cold-start to clusters that satisfy the URI's eligibility class.
+// This is the routing-side gate the user landed on: viewers should be sent
+// to a cluster that CAN run the pull, not denied later by STREAM_SOURCE on
+// a cluster that can't. Public URIs return the input unchanged; private
+// URIs filter to clusters whose Quartermaster row has
+// allow_private_pull_sources=true. Quartermaster lookup failures fail
+// closed (drop the node) — better to route nowhere than to the wrong
+// cluster.
+//
+// Local nodes (NodeWithScore.ClusterID == "") share deps.LocalClusterID;
+// remote edges carry their own ClusterID. The shared cluster lookup
+// guarantees a single GetCluster call per cluster_id seen.
+func filterPullCandidatesByEligibility(ctx context.Context, nodes []balancer.NodeWithScore, internalName string, deps *PlaybackDependencies) ([]balancer.NodeWithScore, error) {
+	if len(nodes) == 0 {
+		return nodes, nil
+	}
+	if CommodoreClient == nil {
+		// No Commodore = can't classify. Defensive trigger-time check still
+		// catches the bad case; let it through here.
+		return nodes, nil
+	}
+	src, lookupErr := CommodoreClient.ResolvePullSourceByInternalName(ctx, internalName)
+	if lookupErr != nil || src == nil || !src.GetFound() {
+		// No pull-source row → this isn't a managed pull stream we can
+		// classify. Let downstream paths (artifact resolution, etc) handle.
+		return nodes, nil //nolint:nilerr // lookupErr is "not a pull stream", not a failure
+	}
+	class, _ := pullsource.Classify(src.GetSourceUri()) //nolint:errcheck // class encodes the rejection
+	if class == pullsource.ClassPublic {
+		return nodes, nil
+	}
+	if class == pullsource.ClassBlocked {
+		return nil, fmt.Errorf("pull source for stream %q is in the always-blocked set; refusing to route", internalName)
+	}
+
+	// Private URI — collect the unique cluster set, look up each cluster's
+	// flag, then route through EligiblePullClusters so this path shares the
+	// same chokepoint as bootstrap render and Commodore reconcile. The map
+	// guarantees one Quartermaster lookup per cluster_id seen, even if
+	// multiple nodes belong to the same cluster.
+	clusterIDFor := func(n balancer.NodeWithScore) string {
+		if n.ClusterID != "" {
+			return n.ClusterID
+		}
+		return deps.LocalClusterID
+	}
+	seen := map[string]bool{}
+	candidates := make([]pullsource.ClusterCapability, 0)
+	for _, n := range nodes {
+		clusterID := clusterIDFor(n)
+		if clusterID == "" || seen[clusterID] {
+			continue
+		}
+		seen[clusterID] = true
+		candidates = append(candidates, pullsource.ClusterCapability{
+			ID:                      clusterID,
+			AllowPrivatePullSources: ClusterAllowsPrivatePulls(ctx, clusterID),
+		})
+	}
+	eligible := pullsource.EligiblePullClusters(class, candidates)
+	allow := make(map[string]bool, len(eligible))
+	for _, c := range eligible {
+		allow[c.ID] = true
+	}
+	out := make([]balancer.NodeWithScore, 0, len(nodes))
+	for _, n := range nodes {
+		if allow[clusterIDFor(n)] {
+			out = append(out, n)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("pull source for stream %q is private but no eligible media cluster (allow_private_pull_sources=true) is reachable", internalName)
+	}
+	return out, nil
+}
+
+// ClusterAllowsPrivatePulls returns Quartermaster's allow_private_pull_sources
+// flag for the cluster, fail-closed on lookup error or missing client.
+// Exported so the /source HTTP handler shares the same single source of truth.
+func ClusterAllowsPrivatePulls(ctx context.Context, clusterID string) bool {
+	if clusterID == "" || quartermasterClient == nil {
+		return false
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	resp, err := quartermasterClient.GetCluster(lookupCtx, clusterID)
+	if err != nil || resp == nil || resp.GetCluster() == nil {
+		return false
+	}
+	return resp.GetCluster().GetAllowPrivatePullSources()
+}
+
 type PlaybackDependencies struct {
 	DB              *sql.DB
 	LB              *balancer.LoadBalancer
@@ -511,6 +605,18 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 		if coldErr == nil {
 			err = nil
 		}
+	}
+	// Pull cold-start eligibility filter: a private source URI may only run
+	// on a media cluster with allow_private_pull_sources=true. Filter the
+	// candidate node set BEFORE returning endpoints so the viewer is routed
+	// to an eligible cluster, not denied later by STREAM_SOURCE on a
+	// non-eligible one.
+	if isPull && len(nodes) > 0 {
+		filtered, filterErr := filterPullCandidatesByEligibility(ctx, nodes, internalName, deps)
+		if filterErr != nil {
+			return nil, filterErr
+		}
+		nodes = filtered
 	}
 	if err != nil && len(deps.RemoteEdges) == 0 {
 		return nil, fmt.Errorf("no suitable edge nodes available: %w", err)

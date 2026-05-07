@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
@@ -240,6 +241,104 @@ func TestBuildPolicyJSON(t *testing.T) {
 	})
 }
 
+func TestCreateSigningKeyWrapsCountAndInsertInTransactionWithAdvisoryLock(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	tenantID := "tenant-1"
+
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").
+		WithArgs(tenantID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT COUNT").
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery("INSERT INTO commodore.signing_keys").
+		WithArgs(tenantID, sqlmock.AnyArg(), "key-name", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).
+			AddRow("00000000-0000-0000-0000-000000000001", time.Now().UTC()))
+	mock.ExpectExec("INSERT INTO commodore.signing_key_audit").
+		WithArgs(tenantID, sqlmock.AnyArg(), "create", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyUserID, "user-1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
+
+	resp, err := server.CreateSigningKey(ctx, &pb.CreateSigningKeyRequest{Name: "key-name"})
+	if err != nil {
+		t.Fatalf("CreateSigningKey: %v", err)
+	}
+	if resp.GetPrivateKeyPem() == "" {
+		t.Fatal("expected private key in response")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+// TestWriteSigningKeyAuditPropagatesErrorForTxRollback confirms the audit
+// write returns the underlying error so the caller can roll back its
+// transaction. Audit must be authoritative — either the mutation lands and is
+// audited, or neither happens.
+func TestWriteSigningKeyAuditPropagatesErrorForTxRollback(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec("INSERT INTO commodore.signing_key_audit").
+		WithArgs("tenant-1", "kid-1", "revoke", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnError(fmt.Errorf("simulated db outage"))
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	if err := server.writeSigningKeyAudit(context.Background(), db, "tenant-1", "kid-1", "revoke", "user-1", ""); err == nil {
+		t.Fatal("audit failure must propagate so caller can roll back the mutation")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestCreateSigningKeyAtCapRollsBackAndReturnsResourceExhausted(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	tenantID := "tenant-1"
+
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").
+		WithArgs(tenantID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT COUNT").
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(activeSigningKeyCap))
+	mock.ExpectRollback()
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyUserID, "user-1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
+
+	if _, err := server.CreateSigningKey(ctx, &pb.CreateSigningKeyRequest{Name: "key-name"}); err == nil {
+		t.Fatal("want ResourceExhausted, got nil")
+	} else if !strings.Contains(err.Error(), "active signing-key cap") {
+		t.Fatalf("want cap error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestListSigningKeysUsesAfterCursor(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -277,6 +376,110 @@ func TestListSigningKeysUsesAfterCursor(t *testing.T) {
 	if got := resp.GetSigningKeys()[0].GetKid(); got != "kid-1" {
 		t.Fatalf("got kid %q, want kid-1", got)
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestEnqueueInvalidationOutboxInsertsPendingRow(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery("INSERT INTO commodore.playback_policy_invalidation_outbox").
+		WithArgs("tenant-1", "key_revoked", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("00000000-0000-0000-0000-000000000001"))
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	id, err := server.enqueueInvalidationOutbox(context.Background(), db, "tenant-1", "key_revoked", []string{"stream-x"})
+	if err != nil {
+		t.Fatalf("enqueueInvalidationOutbox: %v", err)
+	}
+	if id != "00000000-0000-0000-0000-000000000001" {
+		t.Fatalf("got id %q", id)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+// TestEnqueueInvalidationOutboxAcceptsSlugClusterIDs confirms the schema
+// accepts operator-defined cluster IDs (the slugs used everywhere else in the
+// codebase) rather than UUID-only — the original review caught this.
+func TestEnqueueInvalidationOutboxAcceptsSlugClusterIDs(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	// In the per-mutation model, cluster slugs only appear in the failed-
+	// clusters JSON column on retry. Confirm the failure recorder accepts
+	// them verbatim.
+	mock.ExpectExec("UPDATE commodore.playback_policy_invalidation_outbox").
+		WithArgs(1, sqlmock.AnyArg(), "dial: connection refused", `["demo-media","peer-media"]`, "outbox-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	server.recordInvalidationOutboxFailure(
+		context.Background(),
+		"outbox-1",
+		0,
+		[]string{"demo-media", "peer-media"},
+		fmt.Errorf("dial: connection refused"),
+	)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+// TestRecordInvalidationOutboxFailureRetriesIndefinitely confirms the worker
+// has no terminal abandon path. Even after many attempts the row stays
+// pending with backoff capped at invalidationOutboxMaxBackoff so a
+// partitioned cluster catches up when it returns.
+func TestRecordInvalidationOutboxFailureRetriesIndefinitely(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	const veryHighAttempts = 100
+	mock.ExpectExec("UPDATE commodore.playback_policy_invalidation_outbox").
+		WithArgs(veryHighAttempts+1, invalidationOutboxMaxBackoff.Milliseconds(), "permanent failure", `null`, "outbox-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	server.recordInvalidationOutboxFailure(
+		context.Background(),
+		"outbox-1",
+		veryHighAttempts,
+		nil,
+		fmt.Errorf("permanent failure"),
+	)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestMarkInvalidationOutboxCompletedUpdatesRow(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec("UPDATE commodore.playback_policy_invalidation_outbox").
+		WithArgs("outbox-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	server.markInvalidationOutboxCompleted(context.Background(), "outbox-1")
+
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
 	}

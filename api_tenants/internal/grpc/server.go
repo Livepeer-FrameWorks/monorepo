@@ -2740,7 +2740,7 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 		SELECT c.id, c.cluster_id, c.cluster_name, c.cluster_type, c.owner_tenant_id, c.deployment_model,
 		       c.base_url, c.database_url, c.periscope_url, c.kafka_brokers,
 		       c.max_concurrent_streams, c.max_concurrent_viewers, c.max_bandwidth_mbps,
-		       c.health_status, c.is_active, c.is_default_cluster, c.is_platform_official, c.created_at, c.updated_at
+		       c.health_status, c.is_active, c.is_default_cluster, c.is_platform_official, c.allow_private_pull_sources, c.created_at, c.updated_at
 		FROM quartermaster.infrastructure_clusters c
 		%s %s
 		%s
@@ -2862,6 +2862,11 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 		isDefaultCluster = *req.IsDefaultCluster
 	}
 
+	allowPrivatePullSources := false
+	if req.AllowPrivatePullSources != nil {
+		allowPrivatePullSources = *req.AllowPrivatePullSources
+	}
+
 	// At most one cluster can be the default — clear existing before setting.
 	if isDefaultCluster {
 		if _, err := s.db.ExecContext(ctx, `UPDATE quartermaster.infrastructure_clusters SET is_default_cluster = false WHERE is_default_cluster = true`); err != nil {
@@ -2873,13 +2878,14 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 		INSERT INTO quartermaster.infrastructure_clusters (id, cluster_id, cluster_name, cluster_type, deployment_model,
 		                                                   owner_tenant_id, base_url, database_url, periscope_url, kafka_brokers,
 		                                                   max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
-		                                                   health_status, is_active, is_platform_official, is_default_cluster, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10, $11, $12, $13, 'healthy', true, $14, $15, $16, $16)
+		                                                   health_status, is_active, is_platform_official, is_default_cluster,
+		                                                   allow_private_pull_sources, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10, $11, $12, $13, 'healthy', true, $14, $15, $16, $17, $17)
 	`, id, clusterID, req.GetClusterName(), clusterType, deploymentModel,
 		ownerTenantID, req.GetBaseUrl(),
 		req.DatabaseUrl, req.PeriscopeUrl, pq.Array(req.GetKafkaBrokers()),
 		req.GetMaxConcurrentStreams(), req.GetMaxConcurrentViewers(), req.GetMaxBandwidthMbps(),
-		isPlatformOfficial, isDefaultCluster, now)
+		isPlatformOfficial, isDefaultCluster, allowPrivatePullSources, now)
 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
@@ -3009,6 +3015,11 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *pb.UpdateC
 		}
 		updates = append(updates, fmt.Sprintf("is_default_cluster = $%d", argIdx))
 		args = append(args, *req.IsDefaultCluster)
+		argIdx++
+	}
+	if req.AllowPrivatePullSources != nil {
+		updates = append(updates, fmt.Sprintf("allow_private_pull_sources = $%d", argIdx))
+		args = append(args, *req.AllowPrivatePullSources)
 		argIdx++
 	}
 
@@ -3523,7 +3534,7 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.L
 		SELECT c.id, c.cluster_id, c.cluster_name, c.cluster_type, c.owner_tenant_id, c.deployment_model,
 		       c.base_url, c.database_url, c.periscope_url, c.kafka_brokers,
 		       c.max_concurrent_streams, c.max_concurrent_viewers, c.max_bandwidth_mbps,
-		       c.health_status, c.is_active, c.is_default_cluster, c.is_platform_official, c.created_at, c.updated_at
+		       c.health_status, c.is_active, c.is_default_cluster, c.is_platform_official, c.allow_private_pull_sources, c.created_at, c.updated_at
 		FROM quartermaster.infrastructure_clusters c
 		%s
 		%s
@@ -7213,7 +7224,7 @@ func scanCluster(rows *sql.Rows) (*pb.InfrastructureCluster, error) {
 		&ownerTenantID, &cluster.DeploymentModel, &cluster.BaseUrl, &databaseURL, &periscopeURL,
 		pq.Array(&kafkaBrokers), &cluster.MaxConcurrentStreams, &cluster.MaxConcurrentViewers,
 		&cluster.MaxBandwidthMbps, &cluster.HealthStatus, &cluster.IsActive, &cluster.IsDefaultCluster,
-		&cluster.IsPlatformOfficial, &createdAt, &updatedAt,
+		&cluster.IsPlatformOfficial, &cluster.AllowPrivatePullSources, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, err

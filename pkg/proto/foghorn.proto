@@ -172,7 +172,10 @@ message InvalidatePlaybackAuthRequest {
 
 message InvalidatePlaybackAuthResponse {
   int32 streams_invalidated = 1; // Number of internal_names dispatched
-  int32 nodes_dispatched = 2;    // Number of Helmsmen contacted
+  int32 nodes_dispatched = 2;    // Number of Helmsmen successfully contacted
+  int32 nodes_attempted = 3;     // Total Helmsmen targeted (dispatched + failed)
+  int32 nodes_failed = 4;        // Helmsmen the dispatch could not reach; >0 means caller must retry
+  repeated string failed_node_ids = 5; // Identifiers of unreachable Helmsmen, for diagnostic logging
 }
 
 // InvalidateTenantCacheRequest is sent when a tenant's suspension status changes

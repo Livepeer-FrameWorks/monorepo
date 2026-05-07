@@ -93,6 +93,14 @@ type ClusterConfig struct {
 	PlatformOfficial bool                  `yaml:"platform_official,omitempty"` // is_platform_official — platform-operated cluster
 	OwnerTenant      string                `yaml:"owner_tenant,omitempty"`      // "frameworks" (system tenant) or bootstrap tenant alias
 	Pricing          *ClusterPricingConfig `yaml:"pricing,omitempty"`           // Purser cluster pricing (reconciled authoritatively when present)
+
+	// AllowPrivatePullSources opts the cluster's pull-source validator in to
+	// RFC1918/multicast literals. Default false (strict) so platform-official
+	// clusters reject tenant-private upstreams. Self-hosted clusters set this
+	// to true when their edges legitimately pull from LAN/VPC origins.
+	// Translated to FRAMEWORKS_ALLOW_PRIVATE_PULL_SOURCES on commodore + foghorn
+	// service envs by cluster_provision.
+	AllowPrivatePullSources bool `yaml:"allow_private_pull_sources,omitempty"`
 }
 
 // Host represents a target machine

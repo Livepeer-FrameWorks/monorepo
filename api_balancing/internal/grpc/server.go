@@ -3553,6 +3553,8 @@ func (s *FoghornGRPCServer) InvalidatePlaybackAuth(ctx context.Context, req *pb.
 	}
 
 	dispatched := int32(0)
+	attempted := int32(len(streamsByNode))
+	failedNodeIDs := make([]string, 0)
 	for nodeID, nodeStreams := range streamsByNode {
 		invReq := &pb.InvalidateSessionsRequest{
 			StreamNames: nodeStreams,
@@ -3566,6 +3568,7 @@ func (s *FoghornGRPCServer) InvalidatePlaybackAuth(ctx context.Context, req *pb.
 				"reason":    req.GetReason(),
 				"error":     err,
 			}).Warn("Failed to dispatch invalidate_sessions to node")
+			failedNodeIDs = append(failedNodeIDs, nodeID)
 			continue
 		}
 		dispatched++
@@ -3575,12 +3578,17 @@ func (s *FoghornGRPCServer) InvalidatePlaybackAuth(ctx context.Context, req *pb.
 		"tenant_id":           req.GetTenantId(),
 		"reason":              req.GetReason(),
 		"streams_invalidated": len(names),
+		"nodes_attempted":     attempted,
 		"nodes_dispatched":    dispatched,
+		"nodes_failed":        len(failedNodeIDs),
 	}).Info("Dispatched invalidate_sessions for playback-policy change")
 
 	return &pb.InvalidatePlaybackAuthResponse{
 		StreamsInvalidated: int32(len(names)),
 		NodesDispatched:    dispatched,
+		NodesAttempted:     attempted,
+		NodesFailed:        int32(len(failedNodeIDs)),
+		FailedNodeIds:      failedNodeIDs,
 	}, nil
 }
 

@@ -13,6 +13,10 @@ type Options struct {
 	StaleWhileRevalidate time.Duration
 	NegativeTTL          time.Duration
 	MaxEntries           int
+	// SkipStore, when non-nil and returning true for a key, suppresses both
+	// positive and negative writes to that key. Used to enforce a hold-down
+	// after invalidation so an in-flight loader cannot repopulate stale data.
+	SkipStore func(key string) bool
 }
 
 type MetricsHooks struct {
@@ -157,6 +161,9 @@ func (c *Cache) refresh(ctx context.Context, key string, loader Loader) {
 }
 
 func (c *Cache) store(key string, val interface{}, ok bool, err error) {
+	if c.opts.SkipStore != nil && c.opts.SkipStore(key) {
+		return
+	}
 	now := time.Now()
 	e := &entry{lastUsed: now}
 	if ok {
@@ -217,6 +224,9 @@ func (c *Cache) evictIfNeeded() {
 }
 
 func (c *Cache) Set(key string, val interface{}, ttl time.Duration) {
+	if c.opts.SkipStore != nil && c.opts.SkipStore(key) {
+		return
+	}
 	now := time.Now()
 	e := &entry{value: val, expiresAt: now.Add(ttl), staleAt: now.Add(ttl).Add(c.opts.StaleWhileRevalidate), lastUsed: now}
 	c.mu.Lock()

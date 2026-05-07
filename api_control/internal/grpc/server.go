@@ -6266,6 +6266,11 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 	server := grpc.NewServer(opts...)
 	commodoreServer := NewCommodoreServer(cfg)
 
+	// Background worker that replays per-cluster invalidation rows whose
+	// synchronous Foghorn dispatch failed or returned a partial-success
+	// response (NodesFailed > 0). Runs for the lifetime of the binary.
+	go commodoreServer.runInvalidationOutboxWorker(context.Background())
+
 	// Register all services
 	pb.RegisterInternalServiceServer(server, commodoreServer)
 	pb.RegisterUserServiceServer(server, commodoreServer)

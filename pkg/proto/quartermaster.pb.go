@@ -2000,8 +2000,13 @@ type InfrastructureCluster struct {
 	MonthlyPriceCents int32               `protobuf:"varint,22,opt,name=monthly_price_cents,json=monthlyPriceCents,proto3" json:"monthly_price_cents,omitempty"`                       // Monthly price in cents (from Purser)
 	RequiresApproval  bool                `protobuf:"varint,23,opt,name=requires_approval,json=requiresApproval,proto3" json:"requires_approval,omitempty"`                            // Subscription requires owner approval
 	ShortDescription  *string             `protobuf:"bytes,24,opt,name=short_description,json=shortDescription,proto3,oneof" json:"short_description,omitempty"`                       // Marketplace listing description
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Pull-source private-network allowance. When TRUE, pull streams placed on
+	// this cluster may resolve from RFC1918 / multicast literals. Defaults FALSE
+	// so platform-official clusters reject tenant-private upstreams. Sourced
+	// from cluster.yaml during bootstrap reconcile.
+	AllowPrivatePullSources bool `protobuf:"varint,25,opt,name=allow_private_pull_sources,json=allowPrivatePullSources,proto3" json:"allow_private_pull_sources,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *InfrastructureCluster) Reset() {
@@ -2200,6 +2205,13 @@ func (x *InfrastructureCluster) GetShortDescription() string {
 		return *x.ShortDescription
 	}
 	return ""
+}
+
+func (x *InfrastructureCluster) GetAllowPrivatePullSources() bool {
+	if x != nil {
+		return x.AllowPrivatePullSources
+	}
+	return false
 }
 
 type ClusterResponse struct {
@@ -2404,13 +2416,14 @@ type CreateClusterRequest struct {
 	MaxConcurrentViewers int32                  `protobuf:"varint,9,opt,name=max_concurrent_viewers,json=maxConcurrentViewers,proto3" json:"max_concurrent_viewers,omitempty"` // json:"max_concurrent_viewers"
 	MaxBandwidthMbps     int32                  `protobuf:"varint,10,opt,name=max_bandwidth_mbps,json=maxBandwidthMbps,proto3" json:"max_bandwidth_mbps,omitempty"`            // json:"max_bandwidth_mbps"
 	// Cluster ownership for dedicated B2B clusters
-	OwnerTenantId      *string `protobuf:"bytes,20,opt,name=owner_tenant_id,json=ownerTenantId,proto3,oneof" json:"owner_tenant_id,omitempty"`                 // json:"owner_tenant_id,omitempty" - UUID of owning tenant
-	DeploymentModel    string  `protobuf:"bytes,21,opt,name=deployment_model,json=deploymentModel,proto3" json:"deployment_model,omitempty"`                   // json:"deployment_model" - 'shared' or 'managed' (default: 'managed')
-	FoghornCount       int32   `protobuf:"varint,22,opt,name=foghorn_count,json=foghornCount,proto3" json:"foghorn_count,omitempty"`                           // Claim N idle Foghorn instances from pool (0 = skip)
-	IsPlatformOfficial *bool   `protobuf:"varint,23,opt,name=is_platform_official,json=isPlatformOfficial,proto3,oneof" json:"is_platform_official,omitempty"` // Platform-operated cluster
-	IsDefaultCluster   *bool   `protobuf:"varint,24,opt,name=is_default_cluster,json=isDefaultCluster,proto3,oneof" json:"is_default_cluster,omitempty"`       // Auto-subscribe new tenants to this cluster
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	OwnerTenantId           *string `protobuf:"bytes,20,opt,name=owner_tenant_id,json=ownerTenantId,proto3,oneof" json:"owner_tenant_id,omitempty"`                                  // json:"owner_tenant_id,omitempty" - UUID of owning tenant
+	DeploymentModel         string  `protobuf:"bytes,21,opt,name=deployment_model,json=deploymentModel,proto3" json:"deployment_model,omitempty"`                                    // json:"deployment_model" - 'shared' or 'managed' (default: 'managed')
+	FoghornCount            int32   `protobuf:"varint,22,opt,name=foghorn_count,json=foghornCount,proto3" json:"foghorn_count,omitempty"`                                            // Claim N idle Foghorn instances from pool (0 = skip)
+	IsPlatformOfficial      *bool   `protobuf:"varint,23,opt,name=is_platform_official,json=isPlatformOfficial,proto3,oneof" json:"is_platform_official,omitempty"`                  // Platform-operated cluster
+	IsDefaultCluster        *bool   `protobuf:"varint,24,opt,name=is_default_cluster,json=isDefaultCluster,proto3,oneof" json:"is_default_cluster,omitempty"`                        // Auto-subscribe new tenants to this cluster
+	AllowPrivatePullSources *bool   `protobuf:"varint,25,opt,name=allow_private_pull_sources,json=allowPrivatePullSources,proto3,oneof" json:"allow_private_pull_sources,omitempty"` // Cluster allows pulls from RFC1918 / multicast
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *CreateClusterRequest) Reset() {
@@ -2548,26 +2561,34 @@ func (x *CreateClusterRequest) GetIsDefaultCluster() bool {
 	return false
 }
 
+func (x *CreateClusterRequest) GetAllowPrivatePullSources() bool {
+	if x != nil && x.AllowPrivatePullSources != nil {
+		return *x.AllowPrivatePullSources
+	}
+	return false
+}
+
 // Matches pkg/api/quartermaster/types.go:UpdateClusterRequest (lines 378-392)
 type UpdateClusterRequest struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	ClusterId            string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`                                           // target cluster
-	ClusterName          *string                `protobuf:"bytes,2,opt,name=cluster_name,json=clusterName,proto3,oneof" json:"cluster_name,omitempty"`                               // json:"cluster_name,omitempty"
-	BaseUrl              *string                `protobuf:"bytes,3,opt,name=base_url,json=baseUrl,proto3,oneof" json:"base_url,omitempty"`                                           // json:"base_url,omitempty"
-	DatabaseUrl          *string                `protobuf:"bytes,4,opt,name=database_url,json=databaseUrl,proto3,oneof" json:"database_url,omitempty"`                               // json:"database_url,omitempty"
-	PeriscopeUrl         *string                `protobuf:"bytes,5,opt,name=periscope_url,json=periscopeUrl,proto3,oneof" json:"periscope_url,omitempty"`                            // json:"periscope_url,omitempty"
-	KafkaBrokers         []string               `protobuf:"bytes,6,rep,name=kafka_brokers,json=kafkaBrokers,proto3" json:"kafka_brokers,omitempty"`                                  // json:"kafka_brokers,omitempty"
-	MaxConcurrentStreams *int32                 `protobuf:"varint,7,opt,name=max_concurrent_streams,json=maxConcurrentStreams,proto3,oneof" json:"max_concurrent_streams,omitempty"` // json:"max_concurrent_streams,omitempty"
-	MaxConcurrentViewers *int32                 `protobuf:"varint,8,opt,name=max_concurrent_viewers,json=maxConcurrentViewers,proto3,oneof" json:"max_concurrent_viewers,omitempty"` // json:"max_concurrent_viewers,omitempty"
-	MaxBandwidthMbps     *int32                 `protobuf:"varint,9,opt,name=max_bandwidth_mbps,json=maxBandwidthMbps,proto3,oneof" json:"max_bandwidth_mbps,omitempty"`             // json:"max_bandwidth_mbps,omitempty"
-	HealthStatus         *string                `protobuf:"bytes,10,opt,name=health_status,json=healthStatus,proto3,oneof" json:"health_status,omitempty"`                           // json:"health_status,omitempty"
-	IsActive             *bool                  `protobuf:"varint,11,opt,name=is_active,json=isActive,proto3,oneof" json:"is_active,omitempty"`                                      // json:"is_active,omitempty"
-	OwnerTenantId        *string                `protobuf:"bytes,12,opt,name=owner_tenant_id,json=ownerTenantId,proto3,oneof" json:"owner_tenant_id,omitempty"`                      // json:"owner_tenant_id,omitempty" - Set/clear ownership (empty string clears)
-	DeploymentModel      *string                `protobuf:"bytes,13,opt,name=deployment_model,json=deploymentModel,proto3,oneof" json:"deployment_model,omitempty"`                  // json:"deployment_model,omitempty" - Change isolation level
-	IsPlatformOfficial   *bool                  `protobuf:"varint,14,opt,name=is_platform_official,json=isPlatformOfficial,proto3,oneof" json:"is_platform_official,omitempty"`      // json:"is_platform_official,omitempty" - Platform-operated cluster
-	IsDefaultCluster     *bool                  `protobuf:"varint,15,opt,name=is_default_cluster,json=isDefaultCluster,proto3,oneof" json:"is_default_cluster,omitempty"`            // json:"is_default_cluster,omitempty" - Set/clear default cluster flag
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId               string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`                                                       // target cluster
+	ClusterName             *string                `protobuf:"bytes,2,opt,name=cluster_name,json=clusterName,proto3,oneof" json:"cluster_name,omitempty"`                                           // json:"cluster_name,omitempty"
+	BaseUrl                 *string                `protobuf:"bytes,3,opt,name=base_url,json=baseUrl,proto3,oneof" json:"base_url,omitempty"`                                                       // json:"base_url,omitempty"
+	DatabaseUrl             *string                `protobuf:"bytes,4,opt,name=database_url,json=databaseUrl,proto3,oneof" json:"database_url,omitempty"`                                           // json:"database_url,omitempty"
+	PeriscopeUrl            *string                `protobuf:"bytes,5,opt,name=periscope_url,json=periscopeUrl,proto3,oneof" json:"periscope_url,omitempty"`                                        // json:"periscope_url,omitempty"
+	KafkaBrokers            []string               `protobuf:"bytes,6,rep,name=kafka_brokers,json=kafkaBrokers,proto3" json:"kafka_brokers,omitempty"`                                              // json:"kafka_brokers,omitempty"
+	MaxConcurrentStreams    *int32                 `protobuf:"varint,7,opt,name=max_concurrent_streams,json=maxConcurrentStreams,proto3,oneof" json:"max_concurrent_streams,omitempty"`             // json:"max_concurrent_streams,omitempty"
+	MaxConcurrentViewers    *int32                 `protobuf:"varint,8,opt,name=max_concurrent_viewers,json=maxConcurrentViewers,proto3,oneof" json:"max_concurrent_viewers,omitempty"`             // json:"max_concurrent_viewers,omitempty"
+	MaxBandwidthMbps        *int32                 `protobuf:"varint,9,opt,name=max_bandwidth_mbps,json=maxBandwidthMbps,proto3,oneof" json:"max_bandwidth_mbps,omitempty"`                         // json:"max_bandwidth_mbps,omitempty"
+	HealthStatus            *string                `protobuf:"bytes,10,opt,name=health_status,json=healthStatus,proto3,oneof" json:"health_status,omitempty"`                                       // json:"health_status,omitempty"
+	IsActive                *bool                  `protobuf:"varint,11,opt,name=is_active,json=isActive,proto3,oneof" json:"is_active,omitempty"`                                                  // json:"is_active,omitempty"
+	OwnerTenantId           *string                `protobuf:"bytes,12,opt,name=owner_tenant_id,json=ownerTenantId,proto3,oneof" json:"owner_tenant_id,omitempty"`                                  // json:"owner_tenant_id,omitempty" - Set/clear ownership (empty string clears)
+	DeploymentModel         *string                `protobuf:"bytes,13,opt,name=deployment_model,json=deploymentModel,proto3,oneof" json:"deployment_model,omitempty"`                              // json:"deployment_model,omitempty" - Change isolation level
+	IsPlatformOfficial      *bool                  `protobuf:"varint,14,opt,name=is_platform_official,json=isPlatformOfficial,proto3,oneof" json:"is_platform_official,omitempty"`                  // json:"is_platform_official,omitempty" - Platform-operated cluster
+	IsDefaultCluster        *bool                  `protobuf:"varint,15,opt,name=is_default_cluster,json=isDefaultCluster,proto3,oneof" json:"is_default_cluster,omitempty"`                        // json:"is_default_cluster,omitempty" - Set/clear default cluster flag
+	AllowPrivatePullSources *bool                  `protobuf:"varint,16,opt,name=allow_private_pull_sources,json=allowPrivatePullSources,proto3,oneof" json:"allow_private_pull_sources,omitempty"` // Cluster allows pulls from RFC1918 / multicast
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *UpdateClusterRequest) Reset() {
@@ -2701,6 +2722,13 @@ func (x *UpdateClusterRequest) GetIsPlatformOfficial() bool {
 func (x *UpdateClusterRequest) GetIsDefaultCluster() bool {
 	if x != nil && x.IsDefaultCluster != nil {
 		return *x.IsDefaultCluster
+	}
+	return false
+}
+
+func (x *UpdateClusterRequest) GetAllowPrivatePullSources() bool {
+	if x != nil && x.AllowPrivatePullSources != nil {
+		return *x.AllowPrivatePullSources
 	}
 	return false
 }
@@ -12063,7 +12091,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x16_official_cluster_name\"2\n" +
 	"\x11GetClusterRequest\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x01 \x01(\tR\tclusterId\"\x8f\t\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\"\xcc\t\n" +
 	"\x15InfrastructureCluster\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -12094,7 +12122,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\rpricing_model\x18\x15 \x01(\x0e2\".quartermaster.ClusterPricingModelR\fpricingModel\x12.\n" +
 	"\x13monthly_price_cents\x18\x16 \x01(\x05R\x11monthlyPriceCents\x12+\n" +
 	"\x11requires_approval\x18\x17 \x01(\bR\x10requiresApproval\x120\n" +
-	"\x11short_description\x18\x18 \x01(\tH\x03R\x10shortDescription\x88\x01\x01B\x12\n" +
+	"\x11short_description\x18\x18 \x01(\tH\x03R\x10shortDescription\x88\x01\x01\x12;\n" +
+	"\x1aallow_private_pull_sources\x18\x19 \x01(\bR\x17allowPrivatePullSourcesB\x12\n" +
 	"\x10_owner_tenant_idB\x0f\n" +
 	"\r_database_urlB\x10\n" +
 	"\x0e_periscope_urlB\x14\n" +
@@ -12118,7 +12147,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\bclusters\x18\x01 \x03(\v2$.quartermaster.InfrastructureClusterR\bclusters\x12@\n" +
 	"\n" +
 	"pagination\x18\x02 \x01(\v2 .common.CursorPaginationResponseR\n" +
-	"pagination\"\xf5\x05\n" +
+	"pagination\"\xd6\x06\n" +
 	"\x14CreateClusterRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12!\n" +
@@ -12136,12 +12165,14 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x10deployment_model\x18\x15 \x01(\tR\x0fdeploymentModel\x12#\n" +
 	"\rfoghorn_count\x18\x16 \x01(\x05R\ffoghornCount\x125\n" +
 	"\x14is_platform_official\x18\x17 \x01(\bH\x03R\x12isPlatformOfficial\x88\x01\x01\x121\n" +
-	"\x12is_default_cluster\x18\x18 \x01(\bH\x04R\x10isDefaultCluster\x88\x01\x01B\x0f\n" +
+	"\x12is_default_cluster\x18\x18 \x01(\bH\x04R\x10isDefaultCluster\x88\x01\x01\x12@\n" +
+	"\x1aallow_private_pull_sources\x18\x19 \x01(\bH\x05R\x17allowPrivatePullSources\x88\x01\x01B\x0f\n" +
 	"\r_database_urlB\x10\n" +
 	"\x0e_periscope_urlB\x12\n" +
 	"\x10_owner_tenant_idB\x17\n" +
 	"\x15_is_platform_officialB\x15\n" +
-	"\x13_is_default_cluster\"\xb7\a\n" +
+	"\x13_is_default_clusterB\x1d\n" +
+	"\x1b_allow_private_pull_sources\"\x98\b\n" +
 	"\x14UpdateClusterRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12&\n" +
@@ -12160,7 +12191,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x10deployment_model\x18\r \x01(\tH\n" +
 	"R\x0fdeploymentModel\x88\x01\x01\x125\n" +
 	"\x14is_platform_official\x18\x0e \x01(\bH\vR\x12isPlatformOfficial\x88\x01\x01\x121\n" +
-	"\x12is_default_cluster\x18\x0f \x01(\bH\fR\x10isDefaultCluster\x88\x01\x01B\x0f\n" +
+	"\x12is_default_cluster\x18\x0f \x01(\bH\fR\x10isDefaultCluster\x88\x01\x01\x12@\n" +
+	"\x1aallow_private_pull_sources\x18\x10 \x01(\bH\rR\x17allowPrivatePullSources\x88\x01\x01B\x0f\n" +
 	"\r_cluster_nameB\v\n" +
 	"\t_base_urlB\x0f\n" +
 	"\r_database_urlB\x10\n" +
@@ -12174,7 +12206,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x10_owner_tenant_idB\x13\n" +
 	"\x11_deployment_modelB\x17\n" +
 	"\x15_is_platform_officialB\x15\n" +
-	"\x13_is_default_cluster\"\x82\x01\n" +
+	"\x13_is_default_clusterB\x1d\n" +
+	"\x1b_allow_private_pull_sources\"\x82\x01\n" +
 	"\x1eUpdateClusterMeshConfigRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x1b\n" +

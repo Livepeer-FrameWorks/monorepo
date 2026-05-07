@@ -16,6 +16,7 @@ import (
 	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 
 	"gopkg.in/yaml.v3"
 )
@@ -117,7 +118,8 @@ func runBootstrapCommand(args []string) int {
 			fmt.Fprintf(os.Stderr, "commodore bootstrap: source URI encrypter: %v\n", err)
 			return 1
 		}
-		psRes, err := bootstrap.ReconcilePullStreams(ctx, tx, streams, resolver, encrypter)
+		clusterResolver := &grpcClusterResolver{client: resolver.client}
+		psRes, err := bootstrap.ReconcilePullStreams(ctx, tx, streams, resolver, clusterResolver, encrypter)
 		if err != nil {
 			_ = tx.Rollback() //nolint:errcheck // already in error path
 			fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", err)
@@ -186,6 +188,35 @@ func (r *grpcTenantResolver) Close() {
 	if r.client != nil {
 		_ = r.client.Close()
 	}
+}
+
+// grpcClusterResolver lists media-capable clusters from Quartermaster's
+// ClusterService. Implements bootstrap.ClusterCapabilityResolver.
+type grpcClusterResolver struct {
+	client *qmclient.GRPCClient
+}
+
+func (r *grpcClusterResolver) MediaClusterCapabilities(ctx context.Context) ([]pullsource.ClusterCapability, error) {
+	if r.client == nil {
+		return nil, fmt.Errorf("quartermaster client unavailable")
+	}
+	resp, err := r.client.ListClusters(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("ListClusters: %w", err)
+	}
+	out := make([]pullsource.ClusterCapability, 0, len(resp.GetClusters()))
+	for _, c := range resp.GetClusters() {
+		// "edge" type is the media-capable role in this codebase. Central
+		// clusters host control plane only.
+		if c.GetClusterType() != "edge" {
+			continue
+		}
+		out = append(out, pullsource.ClusterCapability{
+			ID:                      c.GetClusterId(),
+			AllowPrivatePullSources: c.GetAllowPrivatePullSources(),
+		})
+	}
+	return out, nil
 }
 
 // loadDesiredState reads + decodes the rendered bootstrap YAML for Commodore.

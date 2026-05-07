@@ -70,15 +70,20 @@ type Tenant struct {
 // Cluster is a Quartermaster-owned infrastructure cluster. Stable keys: ID,
 // OwnerTenant (as a ref), Mesh.CIDR (when the cluster already exists).
 type Cluster struct {
-	ID                 string      `yaml:"id"`
-	Name               string      `yaml:"name"`
-	Type               string      `yaml:"type"` // "central" | "edge"
-	Region             string      `yaml:"region,omitempty"`
-	OwnerTenant        TenantRef   `yaml:"owner_tenant"`
-	IsDefault          bool        `yaml:"is_default,omitempty"`
-	IsPlatformOfficial bool        `yaml:"is_platform_official,omitempty"`
-	BaseURL            string      `yaml:"base_url,omitempty"`
-	Mesh               ClusterMesh `yaml:"mesh"`
+	ID                 string    `yaml:"id"`
+	Name               string    `yaml:"name"`
+	Type               string    `yaml:"type"` // "central" | "edge"
+	Region             string    `yaml:"region,omitempty"`
+	OwnerTenant        TenantRef `yaml:"owner_tenant"`
+	IsDefault          bool      `yaml:"is_default,omitempty"`
+	IsPlatformOfficial bool      `yaml:"is_platform_official,omitempty"`
+	// AllowPrivatePullSources opts the cluster in to RFC1918/multicast pull
+	// origins (typical for self-hosted edges in a LAN/VPC). Default false:
+	// platform-official clusters reject private literals so a misconfigured
+	// operator manifest cannot land tenant-private upstreams there.
+	AllowPrivatePullSources bool        `yaml:"allow_private_pull_sources,omitempty"`
+	BaseURL                 string      `yaml:"base_url,omitempty"`
+	Mesh                    ClusterMesh `yaml:"mesh"`
 
 	// Override = true on an Overlay item replaces the manifest-derived entry with
 	// the same ID. Ignored on Derived and Rendered.

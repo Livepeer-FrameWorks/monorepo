@@ -548,3 +548,64 @@ CREATE INDEX IF NOT EXISTS idx_commodore_vod_assets_requires_auth
     ON commodore.vod_assets(requires_auth) WHERE requires_auth;
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_requires_auth
     ON commodore.clips(requires_auth) WHERE requires_auth;
+
+-- ============================================================================
+-- PLAYBACK POLICY INVALIDATION OUTBOX
+-- ============================================================================
+-- Durable per-mutation record. Commodore writes one row per signing-key revoke
+-- or policy mutation, inside the same transaction as the underlying UPDATE so
+-- the mutation cannot succeed without a retry record. A worker re-resolves the
+-- tenant's cluster footprint each pass and fans out to every cluster whose
+-- Foghorn has not yet acknowledged the invalidation. There is no terminal
+-- abandon state — backoff caps at invalidationOutboxMaxBackoff and a stuck
+-- row triggers an Error log line for alerting, but retry continues
+-- indefinitely so a long-partitioned cluster catches up when it returns.
+
+CREATE TABLE IF NOT EXISTS commodore.playback_policy_invalidation_outbox (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    reason TEXT NOT NULL,
+    internal_names JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    last_error TEXT,
+    -- Slugs (e.g. "demo-media", "peer-media"). Cluster IDs are VARCHAR(100)
+    -- strings everywhere else in this codebase, never UUIDs.
+    last_failed_clusters JSONB,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_commodore_invalidation_outbox_pending
+    ON commodore.playback_policy_invalidation_outbox(next_attempt_at)
+    WHERE status = 'pending';
+
+CREATE INDEX IF NOT EXISTS idx_commodore_invalidation_outbox_tenant
+    ON commodore.playback_policy_invalidation_outbox(tenant_id, status);
+
+-- ============================================================================
+-- SIGNING-KEY AUDIT LOG
+-- ============================================================================
+-- Per-action audit trail for customer signing-key lifecycle events.
+-- Holds metadata + actor identity only — no key material.
+-- Runtime JWT verification updates signing_keys.last_used_at only; it does not
+-- append per-viewer rows here. Per-use observability lives in the last_used_at
+-- timestamp + Foghorn metrics.
+
+CREATE TABLE IF NOT EXISTS commodore.signing_key_audit (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    kid VARCHAR(64) NOT NULL,
+    action TEXT NOT NULL,                 -- create | revoke
+    actor_user_id UUID,
+    actor_ip TEXT,
+    detail TEXT,
+    at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_commodore_signing_key_audit_tenant_at
+    ON commodore.signing_key_audit(tenant_id, at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_commodore_signing_key_audit_kid_at
+    ON commodore.signing_key_audit(kid, at DESC);

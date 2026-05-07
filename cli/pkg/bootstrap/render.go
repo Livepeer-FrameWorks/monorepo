@@ -70,6 +70,7 @@ func Derive(m *inventory.Manifest, opts DeriveOptions) (*Derived, error) {
 			c.Region = cc.Region
 			c.IsDefault = cc.Default
 			c.IsPlatformOfficial = cc.PlatformOfficial
+			c.AllowPrivatePullSources = cc.AllowPrivatePullSources
 		}
 		if c.Type == "" {
 			c.Type = m.Type
@@ -480,7 +481,7 @@ func Render(derived *Derived, overlay *Overlay, resolver Resolver) (*Rendered, e
 		mergedCommodore = merged
 	}
 	for i, ps := range mergedCommodore.PullStreams {
-		rps, err := pullStreamToRendered(ps, resolver)
+		rps, err := pullStreamToRendered(ps, resolver, r.Quartermaster.Clusters)
 		if err != nil {
 			return nil, fmt.Errorf("commodore.pull_streams[%d] (%s): %w", i, ps.PlaybackID, err)
 		}
@@ -753,9 +754,17 @@ func indexPullStreamByPlaybackID(ps []PullStream, id string) int {
 	return -1
 }
 
-// pullStreamToRendered resolves SourceURIRef → plaintext SourceURI and validates
-// the input shape. Exactly one of SourceURI / SourceURIRef must be set.
-func pullStreamToRendered(p PullStream, resolver Resolver) (PullStreamRendered, error) {
+// pullStreamToRendered resolves SourceURIRef → plaintext SourceURI and
+// validates URI shape + cluster eligibility against the manifest's rendered
+// media clusters. The manifest is the source of truth at render time;
+// Quartermaster may not exist yet or may be mid-reconcile, so we don't dial
+// it here — eligibility runs against the same cluster definitions the
+// reconciler will apply.
+//
+// A private URI (RFC1918 / multicast literal) requires at least one media
+// cluster in the manifest with allow_private_pull_sources=true. Public
+// URIs require any media cluster.
+func pullStreamToRendered(p PullStream, resolver Resolver, clusters []Cluster) (PullStreamRendered, error) {
 	uri := p.SourceURI
 	hasInline := uri != ""
 	hasRef := !p.SourceURIRef.IsZero()
@@ -777,12 +786,27 @@ func pullStreamToRendered(p PullStream, resolver Resolver) (PullStreamRendered, 
 	if p.PlaybackID == "" {
 		return PullStreamRendered{}, fmt.Errorf("playback_id is required")
 	}
-	if err := pullsource.ValidateURI(uri); err != nil {
-		return PullStreamRendered{}, fmt.Errorf("source_uri: %w", err)
-	}
 	if p.OwnerTenant.IsZero() {
 		return PullStreamRendered{}, fmt.Errorf("owner_tenant ref is required")
 	}
+
+	class, classErr := pullsource.Classify(uri)
+	if class == pullsource.ClassBlocked {
+		return PullStreamRendered{}, fmt.Errorf("source_uri: %w", classErr)
+	}
+	candidates := mediaClusterCapabilities(clusters)
+	eligible := pullsource.EligiblePullClusters(class, candidates)
+	if len(eligible) == 0 {
+		switch class {
+		case pullsource.ClassPrivate:
+			return PullStreamRendered{}, fmt.Errorf(
+				"source_uri %q is private but no manifest cluster has allow_private_pull_sources=true; "+
+					"set the flag on a media cluster or use a public source", pullsource.Redact(uri))
+		default:
+			return PullStreamRendered{}, fmt.Errorf("no media (edge) cluster is registered to host pull streams")
+		}
+	}
+
 	return PullStreamRendered{
 		PlaybackID:  p.PlaybackID,
 		OwnerTenant: p.OwnerTenant,
@@ -791,6 +815,23 @@ func pullStreamToRendered(p PullStream, resolver Resolver) (PullStreamRendered, 
 		SourceURI:   uri,
 		Enabled:     p.Enabled,
 	}, nil
+}
+
+// mediaClusterCapabilities maps the manifest's media-capable clusters to the
+// shape the eligibility helper consumes. "edge" type means media-capable in
+// this codebase; central clusters host control plane only.
+func mediaClusterCapabilities(clusters []Cluster) []pullsource.ClusterCapability {
+	out := make([]pullsource.ClusterCapability, 0, len(clusters))
+	for _, c := range clusters {
+		if c.Type != "edge" {
+			continue
+		}
+		out = append(out, pullsource.ClusterCapability{
+			ID:                      c.ID,
+			AllowPrivatePullSources: c.AllowPrivatePullSources,
+		})
+	}
+	return out
 }
 
 func accountToRendered(a AccountDerived, resolver Resolver) (AccountRendered, error) {

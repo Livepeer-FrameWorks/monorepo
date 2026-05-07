@@ -105,16 +105,16 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 			COALESCE(base_url, ''),
 			COALESCE(wg_mesh_cidr, ''),
 			COALESCE(wg_listen_port, 0),
-			is_default_cluster, is_platform_official
+			is_default_cluster, is_platform_official, allow_private_pull_sources
 		FROM quartermaster.infrastructure_clusters
 		WHERE cluster_id = $1`
 	var (
-		curName, curType, curOwner, curBaseURL, curCIDR string
-		curListenPort                                   int
-		curIsDefault, curIsPlatform                     bool
+		curName, curType, curOwner, curBaseURL, curCIDR  string
+		curListenPort                                    int
+		curIsDefault, curIsPlatform, curAllowPrivatePull bool
 	)
 	err := exec.QueryRowContext(ctx, probeSQL, c.ID).Scan(
-		&curName, &curType, &curOwner, &curBaseURL, &curCIDR, &curListenPort, &curIsDefault, &curIsPlatform,
+		&curName, &curType, &curOwner, &curBaseURL, &curCIDR, &curListenPort, &curIsDefault, &curIsPlatform, &curAllowPrivatePull,
 	)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -123,20 +123,20 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 				cluster_id, cluster_name, cluster_type,
 				owner_tenant_id, base_url,
 				wg_mesh_cidr, wg_listen_port,
-				is_default_cluster, is_platform_official,
+				is_default_cluster, is_platform_official, allow_private_pull_sources,
 				created_at, updated_at
 			) VALUES (
 				$1, $2, $3,
 				NULLIF($4, '')::uuid, NULLIF($5, ''),
 				NULLIF($6, ''), NULLIF($7, 0),
-				$8, $9,
+				$8, $9, $10,
 				NOW(), NOW()
 			)`
 		if _, insertErr := exec.ExecContext(ctx, insertSQL,
 			c.ID, c.Name, c.Type,
 			ownerID, c.BaseURL,
 			c.Mesh.CIDR, c.Mesh.ListenPort,
-			c.IsDefault, c.IsPlatformOfficial,
+			c.IsDefault, c.IsPlatformOfficial, c.AllowPrivatePullSources,
 		); insertErr != nil {
 			return "", fmt.Errorf("insert: %w", insertErr)
 		}
@@ -164,7 +164,8 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 		curCIDR == c.Mesh.CIDR &&
 		curListenPort == c.Mesh.ListenPort &&
 		curIsDefault == c.IsDefault &&
-		curIsPlatform == c.IsPlatformOfficial {
+		curIsPlatform == c.IsPlatformOfficial &&
+		curAllowPrivatePull == c.AllowPrivatePullSources {
 		return "noop", nil
 	}
 
@@ -176,12 +177,13 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 		    wg_listen_port = NULLIF($5, 0),
 		    is_default_cluster = $6,
 		    is_platform_official = $7,
+		    allow_private_pull_sources = $8,
 		    updated_at = NOW()
 		WHERE cluster_id = $1`
 	if _, err := exec.ExecContext(ctx, updateSQL,
 		c.ID, c.Name, c.BaseURL,
 		c.Mesh.CIDR, c.Mesh.ListenPort,
-		c.IsDefault, c.IsPlatformOfficial,
+		c.IsDefault, c.IsPlatformOfficial, c.AllowPrivatePullSources,
 	); err != nil {
 		return "", fmt.Errorf("update: %w", err)
 	}
