@@ -2251,10 +2251,11 @@ func resolveLiveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointReques
 	start := time.Now()
 	// Delegate to consolidated control package function
 	deps := &control.PlaybackDependencies{
-		DB:     db,
-		LB:     lb,
-		GeoLat: lat,
-		GeoLon: lon,
+		DB:             db,
+		LB:             lb,
+		GeoLat:         lat,
+		GeoLon:         lon,
+		LocalClusterID: clusterID,
 	}
 
 	if internalName == "" {

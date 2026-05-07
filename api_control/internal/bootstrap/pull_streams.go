@@ -88,7 +88,7 @@ func ReconcilePullStreams(
 			return Result{}, fmt.Errorf("pull_stream %q: %w", ps.PlaybackID, err)
 		}
 
-		action, err := reconcilePullStream(ctx, exec, tenantID, ps, cipher)
+		action, err := reconcilePullStream(ctx, exec, tenantID, alias, ps, cipher)
 		if err != nil {
 			return Result{}, fmt.Errorf("pull_stream %q: %w", ps.PlaybackID, err)
 		}
@@ -143,7 +143,7 @@ func validatePullStreamEligibility(p PullStream, class pullsource.Class, candida
 	return nil
 }
 
-func reconcilePullStream(ctx context.Context, exec DBTX, tenantID string, p PullStream, cipher SourceURICipher) (string, error) {
+func reconcilePullStream(ctx context.Context, exec DBTX, tenantID, alias string, p PullStream, cipher SourceURICipher) (string, error) {
 	const probeSQL = `
 			SELECT s.id::text, s.title, COALESCE(s.description, ''), s.ingest_mode,
 			       p.source_uri_enc, p.enabled
@@ -162,7 +162,7 @@ func reconcilePullStream(ctx context.Context, exec DBTX, tenantID string, p Pull
 	)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return createPullStream(ctx, exec, tenantID, p, cipher)
+		return createPullStream(ctx, exec, tenantID, alias, p, cipher)
 	case err != nil:
 		return "", fmt.Errorf("probe stream: %w", err)
 	}
@@ -217,7 +217,22 @@ func reconcilePullStream(ctx context.Context, exec DBTX, tenantID string, p Pull
 	return "updated", nil
 }
 
-func createPullStream(ctx context.Context, exec DBTX, tenantID string, p PullStream, cipher SourceURICipher) (string, error) {
+func createPullStream(ctx context.Context, exec DBTX, tenantID, alias string, p PullStream, cipher SourceURICipher) (string, error) {
+	// streams.user_id is NOT NULL with no FK to users. A pull stream needs an
+	// owner user in its tenant; resolve it before the INSERT so the missing-
+	// owner case fails with a tenant-named precondition error.
+	const ownerSQL = `
+		SELECT id::text FROM commodore.users
+		WHERE tenant_id = $1::uuid AND role = 'owner'
+		ORDER BY created_at LIMIT 1`
+	var ownerID string
+	switch err := exec.QueryRowContext(ctx, ownerSQL, tenantID).Scan(&ownerID); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", fmt.Errorf("tenant %s has no owner user — provision owners before pull streams", alias)
+	case err != nil:
+		return "", fmt.Errorf("lookup owner user: %w", err)
+	}
+
 	encURI, err := cipher.Encrypt(p.SourceURI)
 	if err != nil {
 		return "", fmt.Errorf("encrypt source_uri: %w", err)
@@ -231,16 +246,14 @@ func createPullStream(ctx context.Context, exec DBTX, tenantID string, p PullStr
 		INSERT INTO commodore.streams
 			(id, tenant_id, user_id, stream_key, playback_id, internal_name,
 			 title, description, ingest_mode, created_at, updated_at)
-		VALUES (gen_random_uuid(), $1::uuid,
-		        (SELECT id FROM commodore.users
-		         WHERE tenant_id = $1::uuid AND role = 'owner' ORDER BY created_at LIMIT 1),
+		VALUES (gen_random_uuid(), $1::uuid, $5::uuid,
 		        'pull-' || $2, $2,
 		        replace(gen_random_uuid()::text, '-', ''),
 		        $3, $4, 'pull', NOW(), NOW())
 		RETURNING id::text`
 	var streamID string
 	if err := exec.QueryRowContext(ctx, insertStreamSQL,
-		tenantID, p.PlaybackID, p.Title, p.Description,
+		tenantID, p.PlaybackID, p.Title, p.Description, ownerID,
 	).Scan(&streamID); err != nil {
 		return "", fmt.Errorf("insert stream: %w", err)
 	}

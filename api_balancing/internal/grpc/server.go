@@ -1618,10 +1618,11 @@ func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, re
 func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID string, clusterPeers []*pb.TenantClusterPeer) (*pb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
-		DB:     s.db,
-		LB:     s.lb,
-		GeoLat: lat,
-		GeoLon: lon,
+		DB:             s.db,
+		LB:             s.lb,
+		GeoLat:         lat,
+		GeoLon:         lon,
+		LocalClusterID: s.clusterID,
 	}
 
 	if internalName == "" {

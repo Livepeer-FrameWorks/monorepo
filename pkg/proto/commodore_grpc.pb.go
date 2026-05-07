@@ -3876,8 +3876,10 @@ type PlaybackAccessControlServiceClient interface {
 	RevokeSigningKey(ctx context.Context, in *RevokeSigningKeyRequest, opts ...grpc.CallOption) (*SigningKey, error)
 	// Set or clear the playback policy on a stream / vod_asset / clip.
 	// Exactly one of stream_id / vod_asset_id / clip_id must be set.
-	// Mutation order in the handler: persist DB → invalidate Foghorn caches
-	// → trigger MistServer invalidate_sessions.
+	// Mutation order in the handler: persist the DB row and enqueue a
+	// durable invalidation outbox entry in the same transaction; an
+	// immediate best-effort dispatch fans the invalidation out to Foghorn,
+	// and any clusters that fail are retried by the outbox worker.
 	SetPlaybackPolicy(ctx context.Context, in *SetPlaybackPolicyRequest, opts ...grpc.CallOption) (*SetPlaybackPolicyResponse, error)
 }
 
@@ -3952,8 +3954,10 @@ type PlaybackAccessControlServiceServer interface {
 	RevokeSigningKey(context.Context, *RevokeSigningKeyRequest) (*SigningKey, error)
 	// Set or clear the playback policy on a stream / vod_asset / clip.
 	// Exactly one of stream_id / vod_asset_id / clip_id must be set.
-	// Mutation order in the handler: persist DB → invalidate Foghorn caches
-	// → trigger MistServer invalidate_sessions.
+	// Mutation order in the handler: persist the DB row and enqueue a
+	// durable invalidation outbox entry in the same transaction; an
+	// immediate best-effort dispatch fans the invalidation out to Foghorn,
+	// and any clusters that fail are retried by the outbox worker.
 	SetPlaybackPolicy(context.Context, *SetPlaybackPolicyRequest) (*SetPlaybackPolicyResponse, error)
 	mustEmbedUnimplementedPlaybackAccessControlServiceServer()
 }

@@ -155,7 +155,8 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
     -- ===== INGEST MODE =====
     -- 'push': encoder pushes via RTMP/WHIP/SRT (default).
     -- 'pull': MistServer pulls from a configured upstream URI; see commodore.stream_pull_sources.
-    ingest_mode TEXT NOT NULL DEFAULT 'push',
+    ingest_mode TEXT NOT NULL DEFAULT 'push'
+        CONSTRAINT streams_ingest_mode_chk CHECK (ingest_mode IN ('push', 'pull')),
 
     -- ===== CLUSTER TRACKING =====
     -- Set by ValidateStreamKey when Foghorn reports its cluster_id during ingest.

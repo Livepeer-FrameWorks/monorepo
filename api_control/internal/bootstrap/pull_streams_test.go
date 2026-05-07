@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 
@@ -100,12 +101,53 @@ func TestReconcilePullStreamRefusesPushToPullConversion(t *testing.T) {
 		SourceURI:   "rtsp://example.com/live",
 		Enabled:     true,
 	}
-	_, err = reconcilePullStream(context.Background(), db, tenantID, ps, fakeCipher{})
+	_, err = reconcilePullStream(context.Background(), db, tenantID, "frameworks", ps, fakeCipher{})
 	if err == nil {
 		t.Fatal("expected refusal error, got nil")
 	}
 	if !strings.Contains(err.Error(), "refusing to convert") {
 		t.Fatalf("error %q does not contain refusal phrase", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+// TestCreatePullStreamFailsClearlyWithoutOwner locks the precondition that
+// streams.user_id requires an existing role='owner' user in the tenant.
+// The owner SELECT must run, return no rows, and produce a tenant-named
+// error before the INSERT is attempted.
+func TestCreatePullStreamFailsClearlyWithoutOwner(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	tenantID := "00000000-0000-0000-0000-000000000001"
+	mock.ExpectQuery("FROM commodore.streams s").
+		WithArgs(tenantID, "demo").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("FROM commodore.users").
+		WithArgs(tenantID).
+		WillReturnError(sql.ErrNoRows)
+
+	ps := PullStream{
+		PlaybackID:  "demo",
+		OwnerTenant: TenantRef{Ref: "quartermaster.tenants[acme]"},
+		Title:       "Demo",
+		SourceURI:   "rtsp://example.com/live",
+		Enabled:     true,
+	}
+	_, err = reconcilePullStream(context.Background(), db, tenantID, "acme", ps, fakeCipher{})
+	if err == nil {
+		t.Fatal("expected missing-owner error, got nil")
+	}
+	if !strings.Contains(err.Error(), "acme") {
+		t.Fatalf("error %q must name the tenant alias", err)
+	}
+	if !strings.Contains(err.Error(), "no owner user") {
+		t.Fatalf("error %q must mention the missing owner condition", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -139,7 +181,7 @@ func TestReconcilePullStreamEncryptsBeforeUpsert(t *testing.T) {
 		SourceURI:   plaintextURI,
 		Enabled:     true,
 	}
-	action, err := reconcilePullStream(context.Background(), db, tenantID, ps, fakeCipher{})
+	action, err := reconcilePullStream(context.Background(), db, tenantID, "frameworks", ps, fakeCipher{})
 	if err != nil {
 		t.Fatalf("reconcilePullStream: %v", err)
 	}
