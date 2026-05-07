@@ -467,3 +467,57 @@ CREATE TABLE IF NOT EXISTS commodore.tenant_processing_config (
     processes_vod JSONB,            -- Override for VOD processes (NULL = use tier default)
     updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- ============================================================================
+-- PLAYBACK ACCESS CONTROL
+-- ============================================================================
+-- Customer-managed signing keys + per-stream/asset/clip playback policies.
+-- Foghorn enforces in the USER_NEW (MistTrigger_ViewerConnect) handler.
+
+-- Customer-supplied ES256 public keys. Private key never stored.
+CREATE TABLE IF NOT EXISTS commodore.signing_keys (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    kid VARCHAR(64) NOT NULL,                    -- Short ID embedded in JWT header
+    name VARCHAR(255) NOT NULL,
+    public_key_pem TEXT NOT NULL,                -- ES256 public key, PEM-encoded
+    algorithm VARCHAR(16) NOT NULL DEFAULT 'ES256',
+    status VARCHAR(16) NOT NULL DEFAULT 'active', -- active | revoked
+    created_at TIMESTAMP DEFAULT NOW(),
+    last_used_at TIMESTAMP,
+    revoked_at TIMESTAMP,
+    UNIQUE (tenant_id, kid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_commodore_signing_keys_tenant_status
+    ON commodore.signing_keys(tenant_id, status);
+
+-- Per-playback-object policy + local-marker for fail-closed enforcement.
+-- requires_auth flips automatically with setPlaybackPolicy:
+--   public  -> false
+--   jwt     -> true
+--   webhook -> true
+-- Webhook secret is encrypted via pkg/crypto/fieldcrypt (not in JSONB).
+
+ALTER TABLE commodore.streams
+    ADD COLUMN IF NOT EXISTS requires_auth BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS playback_policy JSONB,
+    ADD COLUMN IF NOT EXISTS playback_webhook_secret_enc TEXT;
+
+ALTER TABLE commodore.vod_assets
+    ADD COLUMN IF NOT EXISTS requires_auth BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS playback_policy JSONB,
+    ADD COLUMN IF NOT EXISTS playback_webhook_secret_enc TEXT;
+
+-- Clips snapshot policy at creation; independent of source stream after.
+ALTER TABLE commodore.clips
+    ADD COLUMN IF NOT EXISTS requires_auth BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS playback_policy JSONB,
+    ADD COLUMN IF NOT EXISTS playback_webhook_secret_enc TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_commodore_streams_requires_auth
+    ON commodore.streams(requires_auth) WHERE requires_auth;
+CREATE INDEX IF NOT EXISTS idx_commodore_vod_assets_requires_auth
+    ON commodore.vod_assets(requires_auth) WHERE requires_auth;
+CREATE INDEX IF NOT EXISTS idx_commodore_clips_requires_auth
+    ON commodore.clips(requires_auth) WHERE requires_auth;

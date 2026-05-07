@@ -542,6 +542,20 @@ type Query {
   developerTokensConnection(page: ConnectionInput): DeveloperTokensConnection!
 
   """
+  Get a single playback signing key by ID. Tenant-scoped.
+  """
+  signingKey(id: ID!): SigningKey
+
+  """
+  List the tenant's playback signing keys with optional status filter.
+  """
+  signingKeysConnection(
+    "Filter by status: 'active' or 'revoked'. Empty = all."
+    status: String
+    page: ConnectionInput
+  ): SigningKeysConnection!
+
+  """
   List bootstrap tokens for node provisioning (service token required).
   """
   bootstrapTokensConnection(
@@ -1519,6 +1533,29 @@ type Mutation {
   ): RevokeDeveloperTokenResult!
 
   """
+  Generate a new ES256 playback signing keypair. The private key is returned
+  ONCE in the response and never stored or returned again — capture it.
+  Up to 10 active keys per tenant; revoke before re-creating.
+  """
+  createSigningKey(input: CreateSigningKeyInput!): CreateSigningKeyResult!
+
+  """
+  Mark an active signing key as revoked. Triggers session re-evaluation
+  across the tenant's protected playback objects: viewers with valid auth
+  continue (possibly with a brief reconnect), revoked viewers are denied.
+  """
+  revokeSigningKey(id: ID!): RevokeSigningKeyResult!
+
+  """
+  Set or clear the playback access policy on a stream, VOD asset, or clip.
+  Exactly one of streamId / vodAssetId / clipId must be set in the input.
+  Webhook secrets are write-only on input and never returned in queries.
+  Mutating a policy invalidates Foghorn caches and re-runs USER_NEW for
+  affected sessions; valid viewers continue, invalid ones are denied.
+  """
+  setPlaybackPolicy(input: SetPlaybackPolicyInput!): SetPlaybackPolicyResult!
+
+  """
   Create a bootstrap token for node provisioning (service token required).
   """
   createBootstrapToken(
@@ -1771,6 +1808,21 @@ union UpdateTenantResult = Tenant | ValidationError | AuthError
 
 union CreateDeveloperTokenResult = DeveloperToken | ValidationError | RateLimitError | AuthError
 union RevokeDeveloperTokenResult = DeleteSuccess | NotFoundError | AuthError
+
+# Playback access control result unions
+union CreateSigningKeyResult =
+    CreateSigningKeySuccess
+  | ValidationError
+  | RateLimitError
+  | AuthError
+union RevokeSigningKeyResult = SigningKey | NotFoundError | AuthError
+union SetPlaybackPolicyResult =
+    Stream
+  | VodAsset
+  | Clip
+  | ValidationError
+  | NotFoundError
+  | AuthError
 
 union CreateBootstrapTokenResult = BootstrapToken | ValidationError | AuthError
 union RevokeBootstrapTokenResult = DeleteSuccess | NotFoundError | AuthError
@@ -2311,6 +2363,9 @@ type VodAsset implements Node {
 
   "Error message if processing failed."
   errorMessage: String
+
+  "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
+  playbackPolicy: PlaybackPolicy
 }
 
 # VOD Assets Connection (cursor-paginated)
@@ -3074,6 +3129,8 @@ type Stream implements Node {
 
   "Configured multistream push targets for this stream."
   pushTargets: [PushTarget!]!
+  "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
+  playbackPolicy: PlaybackPolicy
 }
 
 """
@@ -5037,6 +5094,14 @@ type Clip implements Node {
   expiresAt: Time
   "Whether the clip has passed its retention date (expiresAt < now)."
   isExpired: Boolean!
+
+  """
+  Playback access policy snapshotted at clip creation. null/PUBLIC means
+  anyone with the playbackId can watch. Independent from the source stream's
+  policy after creation — flipping the source stream's policy does not affect
+  already-shared clip URLs.
+  """
+  playbackPolicy: PlaybackPolicy
 }
 
 """
@@ -6338,4 +6403,173 @@ Pagination wrapper for orchestrator listing.
 type OrchestratorsConnection {
   nodes: [Orchestrator!]!
   totalCount: Int!
+}
+
+# ============================================================================
+# PLAYBACK ACCESS CONTROL
+# ============================================================================
+# Customer-managed ES256 signing keys + per-stream/asset/clip playback policy.
+# Foghorn enforces in the USER_NEW (MistTrigger_ViewerConnect) handler.
+
+"Algorithm used to sign viewer playback JWTs. ES256 only for v1."
+enum SigningKeyAlgorithm {
+  ES256
+}
+
+"Lifecycle status of a signing key."
+enum SigningKeyStatus {
+  ACTIVE
+  REVOKED
+}
+
+"""
+A customer-managed signing key for issuing viewer playback JWTs. The private
+key is returned exactly once at creation time (in CreateSigningKeySuccess);
+FrameWorks stores only the public key. Up to 10 active keys per tenant.
+"""
+type SigningKey implements Node {
+  id: ID!
+  "Short ID embedded in JWT header (`kid`) for fast key lookup."
+  kid: String!
+  "Customer-supplied label."
+  name: String!
+  "Algorithm — ES256 only for v1."
+  algorithm: SigningKeyAlgorithm!
+  "Public key in PEM format. The private key is never stored."
+  publicKeyPem: String!
+  "Lifecycle status."
+  status: SigningKeyStatus!
+  createdAt: Time!
+  "Last time a JWT signed by this key successfully verified at playback."
+  lastUsedAt: Time
+  "When the key was revoked (null if active)."
+  revokedAt: Time
+}
+
+"""
+Returned exactly once on createSigningKey. Capture privateKeyPem before the
+response is discarded — FrameWorks does not store it and cannot return it
+again. Lose the private key, revoke and create a new one.
+"""
+type CreateSigningKeySuccess {
+  signingKey: SigningKey!
+  "ES256 private key in PEM format. Shown ONCE; never stored, never logged."
+  privateKeyPem: String!
+}
+
+type SigningKeyEdge {
+  cursor: String!
+  node: SigningKey!
+}
+
+type SigningKeysConnection {
+  edges: [SigningKeyEdge!]!
+  nodes: [SigningKey!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+"""
+Per-playback-object access policy. Foghorn reads this in the USER_NEW
+trigger handler; the requiresAuth marker (on the playback object itself)
+gates whether the full policy is fetched at all.
+"""
+type PlaybackPolicy {
+  type: PlaybackPolicyType!
+  "JWT-policy details, populated when type == JWT."
+  jwt: PlaybackJwtPolicy
+  "Webhook-policy details, populated when type == WEBHOOK. Secret is masked."
+  webhook: PlaybackWebhookPolicy
+}
+
+enum PlaybackPolicyType {
+  PUBLIC
+  JWT
+  WEBHOOK
+}
+
+"""
+JWT-gated playback policy. The viewer attaches a JWT minted with one of the
+allowed signing keys; FrameWorks verifies signature, alg=ES256, exp/iat/nbf,
+and any required audience / claim constraints.
+"""
+type PlaybackJwtPolicy {
+  "Allowed signing key IDs. Empty = any active tenant key."
+  allowedKids: [String!]!
+  "If set, the viewer JWT's `aud` claim must contain at least one of these."
+  requiredAudience: [String!]!
+  """
+  Required claim constraints. Each value is the JSON-encoded representation
+  of the expected claim value (so callers can require strings, numbers,
+  booleans, or arrays consistently). Empty = no claim check.
+  """
+  requiredClaimsJson: [PlaybackJwtClaimRequirement!]!
+}
+
+"One required-claim constraint, JSON-encoded for type-flexible matching."
+type PlaybackJwtClaimRequirement {
+  name: String!
+  "JSON-encoded expected value (e.g. `\"pro\"`, `true`, `42`, `[\"a\",\"b\"]`)."
+  jsonValue: String!
+}
+
+"""
+Webhook-callback playback policy. On every viewer connect, FrameWorks POSTs
+to the URL with an HMAC-signed body and reads allow/deny from the response.
+The secret is write-only on input and is never returned by queries.
+"""
+type PlaybackWebhookPolicy {
+  url: String!
+  "Outbound POST timeout in milliseconds. Capped server-side at 10000."
+  timeoutMs: Int!
+  "Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest."
+  secretMasked: String!
+}
+
+input CreateSigningKeyInput {
+  "Display label for the key (e.g. 'staging', 'rotation-2026-q2')."
+  name: String!
+}
+
+input SetPlaybackPolicyInput {
+  "Exactly one of streamId, vodAssetId, or clipId must be provided."
+  streamId: ID
+  vodAssetId: ID
+  clipId: ID
+  policy: PlaybackPolicyInput!
+}
+
+input PlaybackPolicyInput {
+  type: PlaybackPolicyType!
+  "Required when type == JWT."
+  jwt: PlaybackJwtPolicyInput
+  "Required when type == WEBHOOK."
+  webhook: PlaybackWebhookPolicyInput
+}
+
+input PlaybackJwtPolicyInput {
+  "Allowed signing key IDs. Empty = any active tenant key."
+  allowedKids: [String!]
+  "If set, the viewer JWT's `aud` claim must contain at least one of these."
+  requiredAudience: [String!]
+  "Required claim constraints. Each entry's value is JSON-encoded for type flexibility."
+  requiredClaimsJson: [PlaybackJwtClaimRequirementInput!]
+}
+
+input PlaybackJwtClaimRequirementInput {
+  name: String!
+  "JSON-encoded expected value (e.g. `\"pro\"`, `true`, `42`)."
+  jsonValue: String!
+}
+
+input PlaybackWebhookPolicyInput {
+  "https URL FrameWorks will POST to on each viewer connect."
+  url: String!
+  """
+  HMAC-SHA256 secret used to sign outbound webhook bodies. Write-only:
+  persisted via field-level encryption and never returned in queries.
+  """
+  secret: String!
+  "Outbound POST timeout in milliseconds. Server caps at 10000; default 5000."
+  timeoutMs: Int
 }

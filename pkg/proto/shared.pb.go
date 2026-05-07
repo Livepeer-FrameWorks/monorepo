@@ -1583,6 +1583,7 @@ type ViewerEndpointRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ContentId     string                 `protobuf:"bytes,2,opt,name=content_id,json=contentId,proto3" json:"content_id,omitempty"`
 	ViewerIp      *string                `protobuf:"bytes,3,opt,name=viewer_ip,json=viewerIp,proto3,oneof" json:"viewer_ip,omitempty"`
+	ViewerToken   *string                `protobuf:"bytes,4,opt,name=viewer_token,json=viewerToken,proto3,oneof" json:"viewer_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1627,6 +1628,13 @@ func (x *ViewerEndpointRequest) GetContentId() string {
 func (x *ViewerEndpointRequest) GetViewerIp() string {
 	if x != nil && x.ViewerIp != nil {
 		return *x.ViewerIp
+	}
+	return ""
+}
+
+func (x *ViewerEndpointRequest) GetViewerToken() string {
+	if x != nil && x.ViewerToken != nil {
+		return *x.ViewerToken
 	}
 	return ""
 }
@@ -4396,13 +4404,15 @@ const file_shared_proto_rawDesc = "" +
 	"\x0edvr_recordings\x18\x01 \x03(\v2\x0f.shared.DVRInfoR\rdvrRecordings\x12@\n" +
 	"\n" +
 	"pagination\x18\x02 \x01(\v2 .common.CursorPaginationResponseR\n" +
-	"pagination\"z\n" +
+	"pagination\"\xb3\x01\n" +
 	"\x15ViewerEndpointRequest\x12\x1d\n" +
 	"\n" +
 	"content_id\x18\x02 \x01(\tR\tcontentId\x12 \n" +
-	"\tviewer_ip\x18\x03 \x01(\tH\x00R\bviewerIp\x88\x01\x01B\f\n" +
+	"\tviewer_ip\x18\x03 \x01(\tH\x00R\bviewerIp\x88\x01\x01\x12&\n" +
+	"\fviewer_token\x18\x04 \x01(\tH\x01R\vviewerToken\x88\x01\x01B\f\n" +
 	"\n" +
-	"_viewer_ipJ\x04\b\x01\x10\x02R\fcontent_type\"\xe2\x01\n" +
+	"_viewer_ipB\x0f\n" +
+	"\r_viewer_tokenJ\x04\b\x01\x10\x02R\fcontent_type\"\xe2\x01\n" +
 	"\x10OutputCapability\x12#\n" +
 	"\rsupports_seek\x18\x01 \x01(\bR\fsupportsSeek\x126\n" +
 	"\x17supports_quality_switch\x18\x02 \x01(\bR\x15supportsQualitySwitch\x12\x1f\n" +

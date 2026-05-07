@@ -113,9 +113,12 @@ type CommodoreServer struct {
 	turnstileFailOpen    bool
 	passwordResetSecret  []byte
 	fieldEncryptor       *fieldcrypt.FieldEncryptor
-	routeCache           map[string]*clusterRoute
-	routeCacheMu         sync.RWMutex
-	routeCacheTTL        time.Duration
+	// Separate FieldEncryptor for playback webhook secrets so HKDF purpose
+	// isolation prevents cross-feature key reuse.
+	playbackWebhookEncryptor *fieldcrypt.FieldEncryptor
+	routeCache               map[string]*clusterRoute
+	routeCacheMu             sync.RWMutex
+	routeCacheTTL            time.Duration
 }
 
 // clusterRoute caches the tenant -> cluster -> foghorn mapping.
@@ -363,23 +366,30 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 	if err != nil {
 		cfg.Logger.WithError(err).Fatal("Failed to derive field encryption key")
 	}
+	// Separate purpose for playback webhook secrets so HKDF key isolation
+	// prevents cross-feature key reuse if one purpose is ever compromised.
+	pwe, err := fieldcrypt.DeriveFieldEncryptor(cfg.JWTSecret, "playback-webhook-secret")
+	if err != nil {
+		cfg.Logger.WithError(err).Fatal("Failed to derive playback webhook field encryption key")
+	}
 
 	return &CommodoreServer{
-		db:                   cfg.DB,
-		logger:               cfg.Logger,
-		foghornPool:          cfg.FoghornPool,
-		quartermasterClient:  cfg.QuartermasterClient,
-		purserClient:         cfg.PurserClient,
-		listmonkClient:       cfg.ListmonkClient,
-		decklogClient:        cfg.DecklogClient,
-		defaultMailingListID: cfg.DefaultMailingListID,
-		metrics:              cfg.Metrics,
-		turnstileValidator:   tv,
-		turnstileFailOpen:    cfg.TurnstileFailOpen,
-		passwordResetSecret:  cfg.PasswordResetSecret,
-		fieldEncryptor:       fe,
-		routeCache:           make(map[string]*clusterRoute),
-		routeCacheTTL:        5 * time.Minute,
+		db:                       cfg.DB,
+		logger:                   cfg.Logger,
+		foghornPool:              cfg.FoghornPool,
+		quartermasterClient:      cfg.QuartermasterClient,
+		purserClient:             cfg.PurserClient,
+		listmonkClient:           cfg.ListmonkClient,
+		decklogClient:            cfg.DecklogClient,
+		defaultMailingListID:     cfg.DefaultMailingListID,
+		metrics:                  cfg.Metrics,
+		turnstileValidator:       tv,
+		turnstileFailOpen:        cfg.TurnstileFailOpen,
+		passwordResetSecret:      cfg.PasswordResetSecret,
+		fieldEncryptor:           fe,
+		playbackWebhookEncryptor: pwe,
+		routeCache:               make(map[string]*clusterRoute),
+		routeCacheTTL:            5 * time.Minute,
 	}
 }
 
@@ -890,9 +900,11 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.Resolve
 
 	// playback_id is globally UNIQUE (commodore.sql), so no tenant_id filter needed
 	var streamID, internalName, tenantID string
+	var requiresAuth bool
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, internal_name, tenant_id FROM commodore.streams WHERE playback_id = $1
-	`, playbackID).Scan(&streamID, &internalName, &tenantID)
+		SELECT id, internal_name, tenant_id, requires_auth
+		FROM commodore.streams WHERE playback_id = $1
+	`, playbackID).Scan(&streamID, &internalName, &tenantID, &requiresAuth)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "Stream not found")
@@ -911,6 +923,7 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.Resolve
 		TenantId:     tenantID,
 		PlaybackId:   playbackID,
 		StreamId:     streamID,
+		RequiresAuth: requiresAuth,
 	}
 
 	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
@@ -934,9 +947,10 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *pb.Resol
 	// internal_name is globally UNIQUE (commodore.sql), so no tenant_id filter needed
 	var streamID, tenantID, userID string
 	var isRecordingEnabled bool
+	var requiresAuth bool
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, user_id, is_recording_enabled FROM commodore.streams WHERE internal_name = $1
-	`, internalName).Scan(&streamID, &tenantID, &userID, &isRecordingEnabled)
+		SELECT id, tenant_id, user_id, is_recording_enabled, requires_auth FROM commodore.streams WHERE internal_name = $1
+	`, internalName).Scan(&streamID, &tenantID, &userID, &isRecordingEnabled, &requiresAuth)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "Stream not found")
@@ -956,6 +970,7 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *pb.Resol
 		UserId:             userID,
 		IsRecordingEnabled: isRecordingEnabled,
 		StreamId:           streamID,
+		RequiresAuth:       requiresAuth,
 	}
 	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
 		resp.ClusterPeers = route.clusterPeers
@@ -1147,16 +1162,35 @@ func (s *CommodoreServer) RegisterClip(ctx context.Context, req *pb.RegisterClip
 		return nil, status.Errorf(codes.Internal, "failed to generate clip identifiers: %v", err)
 	}
 
+	var (
+		sourceRequiresAuth bool
+		sourcePolicyJSON   sql.NullString
+		sourceSecretEnc    sql.NullString
+	)
+	err = s.db.QueryRowContext(ctx, `
+		SELECT requires_auth, playback_policy::text, playback_webhook_secret_enc
+		FROM commodore.streams
+		WHERE id = $1 AND tenant_id = $2
+	`, streamID, tenantID).Scan(&sourceRequiresAuth, &sourcePolicyJSON, &sourceSecretEnc)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Error(codes.NotFound, "stream not found")
+		}
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
 	// Insert into business registry
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.clips (
 			id, tenant_id, user_id, stream_id, clip_hash, internal_name, playback_id,
 			title, description, start_time, duration, clip_mode, requested_params,
-			origin_cluster_id, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
+			origin_cluster_id, requires_auth, playback_policy, playback_webhook_secret_enc,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, NOW(), NOW())
 	`, clipID, tenantID, userID, streamID, clipHash, artifactInternalName, playbackID,
 		req.GetTitle(), req.GetDescription(), req.GetStartTime(), req.GetDuration(),
-		req.GetClipMode(), req.GetRequestedParams(), req.GetOriginClusterId())
+		req.GetClipMode(), req.GetRequestedParams(), req.GetOriginClusterId(),
+		sourceRequiresAuth, sourcePolicyJSON, sourceSecretEnc)
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
@@ -1535,12 +1569,13 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 		userID               string
 		streamID             sql.NullString
 		originClusterID      sql.NullString
+		requiresAuth         bool
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
+		SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id, requires_auth
 		FROM commodore.clips
 		WHERE playback_id = $1
-	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
+	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
 	if err == nil {
 		resp := &pb.ResolveArtifactPlaybackIDResponse{
 			Found:           true,
@@ -1551,6 +1586,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 			StreamId:        streamID.String,
 			ContentType:     "clip",
 			OriginClusterId: originClusterID.String,
+			RequiresAuth:    requiresAuth,
 		}
 		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
 		return resp, nil
@@ -1563,14 +1599,24 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	// 2. DVR
+	// 2. DVR — inherits requires_auth from the source stream at lookup time.
+	// dvr_recordings has no requires_auth column; we LEFT JOIN streams to read
+	// the source stream's marker. No row in streams (rare cleanup race) means
+	// we treat as protected (fail closed) for safety.
 	originClusterID = sql.NullString{}
+	requiresAuth = false
+	var dvrSourceRequiresAuth sql.NullBool
 	err = s.db.QueryRowContext(ctx, `
-		SELECT dvr_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
-		FROM commodore.dvr_recordings
-		WHERE playback_id = $1
-	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
+		SELECT d.dvr_hash, d.internal_name, d.tenant_id, d.user_id, d.stream_id::text,
+		       d.origin_cluster_id, s.requires_auth
+		FROM commodore.dvr_recordings d
+		LEFT JOIN commodore.streams s ON s.id = d.stream_id
+		WHERE d.playback_id = $1
+	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &dvrSourceRequiresAuth)
 	if err == nil {
+		// Missing source stream → treat as protected so a deleted-stream race
+		// does not silently expose what was once gated content.
+		requiresAuth = !dvrSourceRequiresAuth.Valid || dvrSourceRequiresAuth.Bool
 		resp := &pb.ResolveArtifactPlaybackIDResponse{
 			Found:           true,
 			ArtifactHash:    artifactHash,
@@ -1580,6 +1626,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 			StreamId:        streamID.String,
 			ContentType:     "dvr",
 			OriginClusterId: originClusterID.String,
+			RequiresAuth:    requiresAuth,
 		}
 		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
 		return resp, nil
@@ -1595,11 +1642,12 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 	// 3. VOD
 	streamID = sql.NullString{}
 	originClusterID = sql.NullString{}
+	requiresAuth = false
 	err = s.db.QueryRowContext(ctx, `
-		SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id
+		SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id, requires_auth
 		FROM commodore.vod_assets
 		WHERE playback_id = $1
-	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID)
+	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
 	if err == nil {
 		resp := &pb.ResolveArtifactPlaybackIDResponse{
 			Found:           true,
@@ -1609,6 +1657,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 			UserId:          userID,
 			ContentType:     "vod",
 			OriginClusterId: originClusterID.String,
+			RequiresAuth:    requiresAuth,
 		}
 		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
 		return resp, nil
@@ -1648,12 +1697,13 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 		userID               string
 		streamID             sql.NullString
 		originClusterID      sql.NullString
+		requiresAuth         bool
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
+		SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id, requires_auth
 		FROM commodore.clips
 		WHERE internal_name = $1
-	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
+	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
 	if err == nil {
 		resp := &pb.ResolveArtifactInternalNameResponse{
 			Found:           true,
@@ -1664,6 +1714,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 			StreamId:        streamID.String,
 			ContentType:     "clip",
 			OriginClusterId: originClusterID.String,
+			RequiresAuth:    requiresAuth,
 		}
 		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
 		return resp, nil
@@ -1678,11 +1729,14 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 
 	// 2. DVR
 	originClusterID = sql.NullString{}
+	var dvrSourceRequiresAuth sql.NullBool
 	err = s.db.QueryRowContext(ctx, `
-		SELECT dvr_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
-		FROM commodore.dvr_recordings
-		WHERE internal_name = $1
-	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
+		SELECT d.dvr_hash, d.internal_name, d.tenant_id, d.user_id, d.stream_id::text,
+		       d.origin_cluster_id, s.requires_auth
+		FROM commodore.dvr_recordings d
+		LEFT JOIN commodore.streams s ON s.id = d.stream_id
+		WHERE d.internal_name = $1
+	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &dvrSourceRequiresAuth)
 	if err == nil {
 		resp := &pb.ResolveArtifactInternalNameResponse{
 			Found:           true,
@@ -1693,6 +1747,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 			StreamId:        streamID.String,
 			ContentType:     "dvr",
 			OriginClusterId: originClusterID.String,
+			RequiresAuth:    !dvrSourceRequiresAuth.Valid || dvrSourceRequiresAuth.Bool,
 		}
 		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
 		return resp, nil
@@ -1709,10 +1764,10 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 	streamID = sql.NullString{}
 	originClusterID = sql.NullString{}
 	err = s.db.QueryRowContext(ctx, `
-		SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id
+		SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id, requires_auth
 		FROM commodore.vod_assets
 		WHERE internal_name = $1
-	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID)
+	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
 	if err == nil {
 		resp := &pb.ResolveArtifactInternalNameResponse{
 			Found:           true,
@@ -1722,6 +1777,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 			UserId:          userID,
 			ContentType:     "vod",
 			OriginClusterId: originClusterID.String,
+			RequiresAuth:    requiresAuth,
 		}
 		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
 		return resp, nil
@@ -1765,10 +1821,11 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 	if _, err := uuid.Parse(identifier); err == nil {
 		var streamID, tenantID, userID, internalName string
 		var isRecordingEnabled bool
+		var requiresAuth bool
 		err := s.db.QueryRowContext(ctx, `
-			SELECT id, tenant_id, user_id, internal_name, is_recording_enabled
+			SELECT id, tenant_id, user_id, internal_name, is_recording_enabled, requires_auth
 			FROM commodore.streams WHERE id = $1
-		`, identifier).Scan(&streamID, &tenantID, &userID, &internalName, &isRecordingEnabled)
+		`, identifier).Scan(&streamID, &tenantID, &userID, &internalName, &isRecordingEnabled, &requiresAuth)
 		if err == nil {
 			return &pb.ResolveIdentifierResponse{
 				Found:              true,
@@ -1778,6 +1835,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 				IdentifierType:     "stream_id",
 				IsRecordingEnabled: isRecordingEnabled,
 				StreamId:           streamID,
+				RequiresAuth:       requiresAuth,
 			}, nil
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			s.logger.WithError(err).Error("Database error checking streams by stream_id")
@@ -1785,15 +1843,16 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 
 		var vodTenantID, vodUserID string
 		err = s.db.QueryRowContext(ctx, `
-			SELECT tenant_id, user_id
+			SELECT tenant_id, user_id, requires_auth
 			FROM commodore.vod_assets WHERE id = $1
-		`, identifier).Scan(&vodTenantID, &vodUserID)
+		`, identifier).Scan(&vodTenantID, &vodUserID, &requiresAuth)
 		if err == nil {
 			return &pb.ResolveIdentifierResponse{
 				Found:          true,
 				TenantId:       vodTenantID,
 				UserId:         vodUserID,
 				IdentifierType: "vod_id",
+				RequiresAuth:   requiresAuth,
 			}, nil
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			s.logger.WithError(err).Error("Database error checking VOD by id")
@@ -1803,9 +1862,10 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 	// 1. Try streams by internal_name (most common for live stream events)
 	var streamID, tenantID, userID string
 	var isRecordingEnabled bool
+	var requiresAuth bool
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, user_id, is_recording_enabled FROM commodore.streams WHERE internal_name = $1
-	`, identifier).Scan(&streamID, &tenantID, &userID, &isRecordingEnabled)
+		SELECT id, tenant_id, user_id, is_recording_enabled, requires_auth FROM commodore.streams WHERE internal_name = $1
+	`, identifier).Scan(&streamID, &tenantID, &userID, &isRecordingEnabled, &requiresAuth)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
 			Found:              true,
@@ -1815,6 +1875,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 			IdentifierType:     "stream",
 			IsRecordingEnabled: isRecordingEnabled,
 			StreamId:           streamID,
+			RequiresAuth:       requiresAuth,
 		}, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking streams by internal_name")
@@ -1823,9 +1884,9 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 	// 2. Try streams by playback_id
 	var internalName string
 	err = s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, user_id, internal_name, is_recording_enabled
+		SELECT id, tenant_id, user_id, internal_name, is_recording_enabled, requires_auth
 		FROM commodore.streams WHERE playback_id = $1
-	`, identifier).Scan(&streamID, &tenantID, &userID, &internalName, &isRecordingEnabled)
+	`, identifier).Scan(&streamID, &tenantID, &userID, &internalName, &isRecordingEnabled, &requiresAuth)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
 			Found:              true,
@@ -1835,6 +1896,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 			IdentifierType:     "playback_id",
 			IsRecordingEnabled: isRecordingEnabled,
 			StreamId:           streamID,
+			RequiresAuth:       requiresAuth,
 		}, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking streams by playback_id")
@@ -1842,12 +1904,13 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 
 	// 2b. Try artifact playback_id (clip)
 	var parentInternalName sql.NullString
+	var clipRequiresAuth bool
 	err = s.db.QueryRowContext(ctx, `
-		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id
+		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id, c.requires_auth
 		FROM commodore.clips c
 		LEFT JOIN commodore.streams s ON c.stream_id = s.id
 		WHERE c.playback_id = $1
-	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID)
+	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
 			Found:          true,
@@ -1856,17 +1919,20 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 			InternalName:   parentInternalName.String,
 			IdentifierType: "clip_playback_id",
 			StreamId:       streamID,
+			RequiresAuth:   clipRequiresAuth,
 		}, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking clips by playback_id")
 	}
 
 	// 2c. Try artifact playback_id (DVR)
+	var dvrRequiresAuth sql.NullBool
 	err = s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, internal_name, stream_id
-		FROM commodore.dvr_recordings
-		WHERE playback_id = $1
-	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID)
+		SELECT d.tenant_id, d.user_id, d.internal_name, d.stream_id, s.requires_auth
+		FROM commodore.dvr_recordings d
+		LEFT JOIN commodore.streams s ON s.id = d.stream_id
+		WHERE d.playback_id = $1
+	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
 			Found:          true,
@@ -1875,6 +1941,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 			InternalName:   internalName,
 			IdentifierType: "dvr_playback_id",
 			StreamId:       streamID,
+			RequiresAuth:   !dvrRequiresAuth.Valid || dvrRequiresAuth.Bool,
 		}, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking DVR by playback_id")
@@ -1882,16 +1949,17 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 
 	// 2d. Try artifact playback_id (VOD)
 	err = s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id
+		SELECT tenant_id, user_id, requires_auth
 		FROM commodore.vod_assets
 		WHERE playback_id = $1
-	`, identifier).Scan(&tenantID, &userID)
+	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
 			Found:          true,
 			TenantId:       tenantID,
 			UserId:         userID,
 			IdentifierType: "vod_playback_id",
+			RequiresAuth:   requiresAuth,
 		}, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking VOD by playback_id")
@@ -1899,11 +1967,11 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 
 	// 2e. Try artifact internal_name (clip)
 	err = s.db.QueryRowContext(ctx, `
-		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id
+		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id, c.requires_auth
 		FROM commodore.clips c
 		LEFT JOIN commodore.streams s ON c.stream_id = s.id
 		WHERE c.internal_name = $1
-	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID)
+	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
 			Found:          true,
@@ -1912,17 +1980,20 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 			InternalName:   parentInternalName.String,
 			IdentifierType: "clip_internal_name",
 			StreamId:       streamID,
+			RequiresAuth:   clipRequiresAuth,
 		}, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking clips by internal_name")
 	}
 
 	// 2f. Try artifact internal_name (DVR)
+	dvrRequiresAuth = sql.NullBool{}
 	err = s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, internal_name, stream_id
-		FROM commodore.dvr_recordings
-		WHERE internal_name = $1
-	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID)
+		SELECT d.tenant_id, d.user_id, d.internal_name, d.stream_id, s.requires_auth
+		FROM commodore.dvr_recordings d
+		LEFT JOIN commodore.streams s ON s.id = d.stream_id
+		WHERE d.internal_name = $1
+	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
 			Found:          true,
@@ -1931,6 +2002,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 			InternalName:   internalName,
 			IdentifierType: "dvr_internal_name",
 			StreamId:       streamID,
+			RequiresAuth:   !dvrRequiresAuth.Valid || dvrRequiresAuth.Bool,
 		}, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking DVR by internal_name")
@@ -1938,16 +2010,17 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 
 	// 2g. Try artifact internal_name (VOD)
 	err = s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id
+		SELECT tenant_id, user_id, requires_auth
 		FROM commodore.vod_assets
 		WHERE internal_name = $1
-	`, identifier).Scan(&tenantID, &userID)
+	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
 			Found:          true,
 			TenantId:       tenantID,
 			UserId:         userID,
 			IdentifierType: "vod_internal_name",
+			RequiresAuth:   requiresAuth,
 		}, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking VOD by internal_name")
@@ -1955,11 +2028,11 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 
 	// 3. Try clips by clip_hash
 	err = s.db.QueryRowContext(ctx, `
-		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id
+		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id, c.requires_auth
 		FROM commodore.clips c
 		LEFT JOIN commodore.streams s ON c.stream_id = s.id
 		WHERE c.clip_hash = $1
-	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID)
+	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
 			Found:          true,
@@ -1968,15 +2041,20 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 			InternalName:   parentInternalName.String,
 			IdentifierType: "clip",
 			StreamId:       streamID,
+			RequiresAuth:   clipRequiresAuth,
 		}, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking clips")
 	}
 
 	// 4. Try DVR by dvr_hash
+	dvrRequiresAuth = sql.NullBool{}
 	err = s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, internal_name, stream_id FROM commodore.dvr_recordings WHERE dvr_hash = $1
-	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID)
+		SELECT d.tenant_id, d.user_id, d.internal_name, d.stream_id, s.requires_auth
+		FROM commodore.dvr_recordings d
+		LEFT JOIN commodore.streams s ON s.id = d.stream_id
+		WHERE d.dvr_hash = $1
+	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
 			Found:          true,
@@ -1985,6 +2063,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 			InternalName:   internalName,
 			IdentifierType: "dvr",
 			StreamId:       streamID,
+			RequiresAuth:   !dvrRequiresAuth.Valid || dvrRequiresAuth.Bool,
 		}, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking DVR")
@@ -1992,14 +2071,15 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 
 	// 5. Try VOD by vod_hash
 	err = s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id FROM commodore.vod_assets WHERE vod_hash = $1
-	`, identifier).Scan(&tenantID, &userID)
+		SELECT tenant_id, user_id, requires_auth FROM commodore.vod_assets WHERE vod_hash = $1
+	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
 			Found:          true,
 			TenantId:       tenantID,
 			UserId:         userID,
 			IdentifierType: "vod",
+			RequiresAuth:   requiresAuth,
 		}, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking VOD")
@@ -5222,11 +5302,18 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	var internalName string
 	var activeIngestClusterID sql.NullString
 	var activeIngestClusterUpdatedAt sql.NullTime
+	var sourceRequiresAuth bool
+	var sourcePolicyJSON sql.NullString
+	var sourceSecretEnc sql.NullString
 	err = s.db.QueryRowContext(ctx, `
-		SELECT internal_name, active_ingest_cluster_id, active_ingest_cluster_updated_at
+		SELECT internal_name, active_ingest_cluster_id, active_ingest_cluster_updated_at,
+		       requires_auth, playback_policy::text, playback_webhook_secret_enc
 		FROM commodore.streams
 		WHERE id = $1 AND tenant_id = $2
-	`, streamID, tenantID).Scan(&internalName, &activeIngestClusterID, &activeIngestClusterUpdatedAt)
+	`, streamID, tenantID).Scan(
+		&internalName, &activeIngestClusterID, &activeIngestClusterUpdatedAt,
+		&sourceRequiresAuth, &sourcePolicyJSON, &sourceSecretEnc,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
@@ -5317,11 +5404,12 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		INSERT INTO commodore.clips (
 			id, tenant_id, user_id, stream_id, clip_hash, internal_name, playback_id,
 			title, description, start_time, duration, clip_mode, requested_params,
-			origin_cluster_id, retention_until, created_at, updated_at
-		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())
+			origin_cluster_id, retention_until, requires_auth, playback_policy,
+			playback_webhook_secret_enc, created_at, updated_at
+		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18, NOW(), NOW())
 	`, clipID, tenantID, userID, streamID, clipHash, artifactInternalName, playbackID,
 		req.Title, req.Description, startTime, duration, req.Mode.String(), string(paramsJSON),
-		clipClusterID, retentionUntil)
+		clipClusterID, retentionUntil, sourceRequiresAuth, sourcePolicyJSON, sourceSecretEnc)
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
@@ -5895,7 +5983,7 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.Vie
 		}
 	}
 
-	resp, trailers, err := foghornClient.ResolveViewerEndpoint(outCtx, req.ContentId, req.ViewerIp)
+	resp, trailers, err := foghornClient.ResolveViewerEndpoint(outCtx, req.ContentId, req.ViewerIp, req.ViewerToken)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to resolve viewer endpoint from Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)

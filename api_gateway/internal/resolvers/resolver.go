@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"frameworks/api_gateway/internal/clients"
@@ -123,11 +124,29 @@ func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentID string
 	if viewerIP != nil {
 		ip = *viewerIP
 	}
-	resp, err := r.Clients.Commodore.ResolveViewerEndpoint(ctx, contentID, ip)
+	viewerToken := playbackViewerTokenFromRequest(httpReq)
+	resp, err := r.Clients.Commodore.ResolveViewerEndpoint(ctx, contentID, ip, viewerToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve viewer endpoints: %w", err)
 	}
 	return resp, nil
+}
+
+func playbackViewerTokenFromRequest(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	if token := strings.TrimSpace(req.Header.Get("X-Frameworks-Playback-JWT")); token != "" {
+		return token
+	}
+	if token := strings.TrimSpace(req.Header.Get("X-Playback-JWT")); token != "" {
+		return token
+	}
+	authz := strings.TrimSpace(req.Header.Get("X-Playback-Authorization"))
+	if strings.HasPrefix(strings.ToLower(authz), "bearer ") {
+		return strings.TrimSpace(authz[len("Bearer "):])
+	}
+	return ""
 }
 
 func (r *Resolver) DoResolveIngestEndpoint(ctx context.Context, streamKey string, viewerIP *string) (*pb.IngestEndpointResponse, error) {

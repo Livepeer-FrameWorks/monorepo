@@ -32,6 +32,7 @@ type ContentResolution struct {
 	StreamId     string
 	InternalName string                  // Original stream internal name (for clips/DVR: the source stream)
 	ClusterPeers []*pb.TenantClusterPeer // Tenant's cluster context from Commodore (free with every resolve)
+	RequiresAuth bool
 }
 
 // ResolveContent determines content type and resolution strategy for a public playback ID.
@@ -56,6 +57,7 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 				TenantId:     resp.TenantId,
 				StreamId:     resp.StreamId,
 				InternalName: resp.InternalName,
+				RequiresAuth: resp.GetRequiresAuth(),
 			}
 			if resp.ArtifactHash != "" {
 				if host, _ := state.DefaultManager().FindNodeByArtifactHash(resp.ArtifactHash); host != "" {
@@ -79,6 +81,7 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 				StreamId:     resp.StreamId,
 				InternalName: resp.InternalName,
 				ClusterPeers: resp.ClusterPeers,
+				RequiresAuth: resp.GetRequiresAuth(),
 			}, nil
 		}
 	}
@@ -576,12 +579,6 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 		// Live streams: Helmsman uploads thumbnails to Chandler whenever
 		// Mist's process_thumbs runs. The asset may 404 for streams that
 		// have never been live; the player's fallback chain handles that.
-		// Pick the Chandler whose S3 the thumbnail upload path actually
-		// targeted for this tenant — thumbnail upload uses the same
-		// resolveThumbnailStorageCluster chain. resolveLiveThumbnailChandlerBase
-		// runs the resolver with origin discovered via Commodore (cached)
-		// and falls back to the legacy local Chandler when no resolver
-		// factory is wired or the chain returns empty.
 		chandlerBase := resolveLiveThumbnailChandlerBase(ctx, tenantID, internalName)
 		metadata.ThumbnailAssets = buildThumbnailAssets(chandlerBase, streamID)
 	}

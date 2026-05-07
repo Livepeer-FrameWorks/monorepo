@@ -153,6 +153,26 @@ service TenantControlService {
   rpc TerminateTenantStreams(TerminateTenantStreamsRequest) returns (TerminateTenantStreamsResponse);
   // InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
   rpc InvalidateTenantCache(InvalidateTenantCacheRequest) returns (InvalidateTenantCacheResponse);
+  // InvalidatePlaybackAuth tells Foghorn to send invalidate_sessions to every
+  // Helmsman whose nodes hold the listed streams. Called by Commodore after
+  // a playback-policy or signing-key mutation. Does NOT disconnect viewers;
+  // valid auth survives, invalid auth gets denied on the re-fired USER_NEW.
+  rpc InvalidatePlaybackAuth(InvalidatePlaybackAuthRequest) returns (InvalidatePlaybackAuthResponse);
+}
+
+message InvalidatePlaybackAuthRequest {
+  string tenant_id = 1;
+  // internal_names is the list of MistServer internal stream names whose
+  // active sessions need re-evaluating. Empty means "every protected
+  // stream/artifact for the tenant" (used on signing-key revoke when the
+  // policy may reference the revoked kid on any object).
+  repeated string internal_names = 2;
+  string reason = 3; // e.g., "policy_change", "key_revoked", "webhook_rotated"
+}
+
+message InvalidatePlaybackAuthResponse {
+  int32 streams_invalidated = 1; // Number of internal_names dispatched
+  int32 nodes_dispatched = 2;    // Number of Helmsmen contacted
 }
 
 // InvalidateTenantCacheRequest is sent when a tenant's suspension status changes

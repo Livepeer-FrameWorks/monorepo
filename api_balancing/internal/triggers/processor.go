@@ -42,6 +42,8 @@ type streamContext struct {
 	OriginClusterID   string                  // cluster where stream was originally ingested (for federation attribution)
 	ClusterPeers      []*pb.TenantClusterPeer // tenant's full cluster context for demand-driven peering
 	ProcessesJSON     string                  // MistServer process config for STREAM_PROCESS trigger
+	RequiresAuth      bool                    // true when this playback object has a protected playback policy
+	RequiresAuthKnown bool                    // false means the local marker could not be resolved
 }
 
 // PeerNotifier is the single federation interface for the trigger processor.
@@ -506,6 +508,45 @@ func (p *Processor) InvalidateTenantCache(tenantID string) int {
 		}).Info("Invalidated tenant cache entries")
 	}
 
+	return len(keysToEvict)
+}
+
+// InvalidatePlaybackAuthCache evicts cached stream-context markers before
+// active sessions are rechecked by MistServer.
+func (p *Processor) InvalidatePlaybackAuthCache(tenantID string, internalNames []string) int {
+	if p.streamCache == nil || tenantID == "" {
+		return 0
+	}
+	if len(internalNames) == 0 {
+		return p.InvalidateTenantCache(tenantID)
+	}
+
+	seen := make(map[string]struct{}, len(internalNames))
+	keysToEvict := make([]string, 0, len(internalNames))
+	for _, name := range internalNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		key := tenantID + ":" + mist.ExtractInternalName(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keysToEvict = append(keysToEvict, key)
+	}
+	for _, key := range keysToEvict {
+		p.streamCache.Delete(key)
+	}
+	if p.commodoreClient != nil {
+		p.commodoreClient.InvalidateTenantCacheKeys(tenantID)
+	}
+	if len(keysToEvict) > 0 {
+		p.logger.WithFields(logging.Fields{
+			"tenant_id":           tenantID,
+			"entries_invalidated": len(keysToEvict),
+		}).Info("Invalidated playback auth cache entries")
+	}
 	return len(keysToEvict)
 }
 
@@ -1677,8 +1718,12 @@ func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error)
 		}).Debug("Attached Mist session to active playback viewer")
 	}
 
-	// Allow user connection by returning "true"
-	return "true", false, nil
+	decision, err := p.enforcePlaybackPolicy(context.Background(), internalName, info, userNew)
+	if err != nil {
+		p.logger.WithError(err).WithField("internal_name", internalName).Error("playback policy enforcement errored; denying")
+		return "false", false, nil
+	}
+	return decision, false, nil
 }
 
 // handleStreamBuffer processes STREAM_BUFFER trigger (non-blocking)
@@ -2656,6 +2701,8 @@ func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint 
 						UpdatedAt:         time.Now(),
 						OfficialClusterID: parentInfo.OfficialClusterID,
 						OriginClusterID:   parentInfo.OriginClusterID,
+						RequiresAuth:      parentInfo.RequiresAuth,
+						RequiresAuthKnown: parentInfo.RequiresAuthKnown,
 					}
 					p.streamCacheMetaMu.Lock()
 					p.streamCacheLastAt = info.UpdatedAt
@@ -2707,13 +2754,15 @@ func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint 
 	// Cache the result
 	now := time.Now()
 	info := streamContext{
-		TenantID:        resp.GetTenantId(),
-		UserID:          resp.GetUserId(),
-		StreamID:        resp.GetStreamId(),
-		Source:          "resolve_" + resp.GetIdentifierType(),
-		UpdatedAt:       now,
-		OriginClusterID: resp.GetOriginClusterId(),
-		ClusterPeers:    resp.GetClusterPeers(),
+		TenantID:          resp.GetTenantId(),
+		UserID:            resp.GetUserId(),
+		StreamID:          resp.GetStreamId(),
+		Source:            "resolve_" + resp.GetIdentifierType(),
+		UpdatedAt:         now,
+		OriginClusterID:   resp.GetOriginClusterId(),
+		ClusterPeers:      resp.GetClusterPeers(),
+		RequiresAuth:      resp.GetRequiresAuth(),
+		RequiresAuthKnown: true,
 	}
 
 	if resp.GetIdentifierType() == "playback_id" {

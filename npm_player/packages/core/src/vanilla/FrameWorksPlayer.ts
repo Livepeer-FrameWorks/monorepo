@@ -52,8 +52,10 @@ export interface FrameWorksPlayerOptions {
 
   /** Gateway URL (required if endpoints not provided) */
   gatewayUrl?: string;
-  /** Auth token for private streams */
+  /** Auth token for Gateway GraphQL resolution */
   authToken?: string;
+  /** Viewer-side playback auth (customer-minted JWT). See PlaybackAuth in types.ts. */
+  playbackAuth?: import("../types").PlaybackAuth;
 
   /** Playback options */
   autoplay?: boolean;
@@ -141,6 +143,7 @@ export class FrameWorksPlayer {
       endpoints: normalizedOptions.endpoints,
       gatewayUrl: normalizedOptions.gatewayUrl,
       authToken: normalizedOptions.authToken,
+      playbackAuth: normalizedOptions.playbackAuth,
       autoplay: normalizedOptions.autoplay ?? true,
       muted: normalizedOptions.muted ?? false,
       controls: normalizedOptions.controls ?? true,

@@ -19,20 +19,21 @@ import (
 
 // GRPCClient is the gRPC client for Commodore
 type GRPCClient struct {
-	conn       *grpc.ClientConn
-	internal   pb.InternalServiceClient
-	stream     pb.StreamServiceClient
-	streamKey  pb.StreamKeyServiceClient
-	user       pb.UserServiceClient
-	developer  pb.DeveloperServiceClient
-	clip       pb.ClipServiceClient
-	dvr        pb.DVRServiceClient
-	viewer     pb.ViewerServiceClient
-	vod        pb.VodServiceClient
-	nodeMgmt   pb.NodeManagementServiceClient
-	pushTarget pb.PushTargetServiceClient
-	logger     logging.Logger
-	cache      *cache.Cache
+	conn         *grpc.ClientConn
+	internal     pb.InternalServiceClient
+	stream       pb.StreamServiceClient
+	streamKey    pb.StreamKeyServiceClient
+	user         pb.UserServiceClient
+	developer    pb.DeveloperServiceClient
+	clip         pb.ClipServiceClient
+	dvr          pb.DVRServiceClient
+	viewer       pb.ViewerServiceClient
+	vod          pb.VodServiceClient
+	nodeMgmt     pb.NodeManagementServiceClient
+	pushTarget   pb.PushTargetServiceClient
+	playbackAuth pb.PlaybackAccessControlServiceClient
+	logger       logging.Logger
+	cache        *cache.Cache
 }
 
 // GRPCConfig represents the configuration for the gRPC client
@@ -127,20 +128,21 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 
 	return &GRPCClient{
-		conn:       conn,
-		internal:   pb.NewInternalServiceClient(conn),
-		stream:     pb.NewStreamServiceClient(conn),
-		streamKey:  pb.NewStreamKeyServiceClient(conn),
-		user:       pb.NewUserServiceClient(conn),
-		developer:  pb.NewDeveloperServiceClient(conn),
-		clip:       pb.NewClipServiceClient(conn),
-		dvr:        pb.NewDVRServiceClient(conn),
-		viewer:     pb.NewViewerServiceClient(conn),
-		vod:        pb.NewVodServiceClient(conn),
-		nodeMgmt:   pb.NewNodeManagementServiceClient(conn),
-		pushTarget: pb.NewPushTargetServiceClient(conn),
-		logger:     config.Logger,
-		cache:      config.Cache,
+		conn:         conn,
+		internal:     pb.NewInternalServiceClient(conn),
+		stream:       pb.NewStreamServiceClient(conn),
+		streamKey:    pb.NewStreamKeyServiceClient(conn),
+		user:         pb.NewUserServiceClient(conn),
+		developer:    pb.NewDeveloperServiceClient(conn),
+		clip:         pb.NewClipServiceClient(conn),
+		dvr:          pb.NewDVRServiceClient(conn),
+		viewer:       pb.NewViewerServiceClient(conn),
+		vod:          pb.NewVodServiceClient(conn),
+		nodeMgmt:     pb.NewNodeManagementServiceClient(conn),
+		pushTarget:   pb.NewPushTargetServiceClient(conn),
+		playbackAuth: pb.NewPlaybackAccessControlServiceClient(conn),
+		logger:       config.Logger,
+		cache:        config.Cache,
 	}, nil
 }
 
@@ -792,7 +794,7 @@ func (c *GRPCClient) ListDVRRequests(ctx context.Context, tenantID string, strea
 // ============================================================================
 
 // ResolveViewerEndpoint resolves the best endpoint for a viewer
-func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID, viewerIP string) (*pb.ViewerEndpointResponse, error) {
+func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID, viewerIP, viewerToken string) (*pb.ViewerEndpointResponse, error) {
 	if c == nil {
 		return nil, fmt.Errorf("CRITICAL: Commodore GRPCClient is nil")
 	}
@@ -804,6 +806,9 @@ func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID, viewe
 	}
 	if viewerIP != "" {
 		req.ViewerIp = &viewerIP
+	}
+	if viewerToken != "" {
+		req.ViewerToken = &viewerToken
 	}
 	return c.viewer.ResolveViewerEndpoint(ctx, req)
 }
@@ -987,4 +992,70 @@ func (c *GRPCClient) UpdatePushTarget(ctx context.Context, req *pb.UpdatePushTar
 // DeletePushTarget deletes a push target (Gateway → Commodore).
 func (c *GRPCClient) DeletePushTarget(ctx context.Context, id string) (*pb.DeletePushTargetResponse, error) {
 	return c.pushTarget.DeletePushTarget(ctx, &pb.DeletePushTargetRequest{Id: id})
+}
+
+// CreateSigningKey generates a new ES256 keypair. The private PEM in the
+// response is shown to the customer ONCE; FrameWorks stores only the public.
+func (c *GRPCClient) CreateSigningKey(ctx context.Context, name string) (*pb.CreateSigningKeyResponse, error) {
+	return c.playbackAuth.CreateSigningKey(ctx, &pb.CreateSigningKeyRequest{Name: name})
+}
+
+// GetSigningKey fetches a single signing key. Tenant-scoped.
+func (c *GRPCClient) GetSigningKey(ctx context.Context, id string) (*pb.SigningKey, error) {
+	return c.playbackAuth.GetSigningKey(ctx, &pb.GetSigningKeyRequest{Id: id})
+}
+
+// ListSigningKeys lists signing keys for the tenant with optional status filter.
+func (c *GRPCClient) ListSigningKeys(ctx context.Context, statusFilter string, limit int32, afterID string) (*pb.ListSigningKeysResponse, error) {
+	return c.playbackAuth.ListSigningKeys(ctx, &pb.ListSigningKeysRequest{
+		StatusFilter: statusFilter,
+		Limit:        limit,
+		AfterId:      afterID,
+	})
+}
+
+// RevokeSigningKey marks a signing key revoked. Triggers cache + session
+// invalidation across the tenant's protected playback objects.
+func (c *GRPCClient) RevokeSigningKey(ctx context.Context, id string) (*pb.SigningKey, error) {
+	return c.playbackAuth.RevokeSigningKey(ctx, &pb.RevokeSigningKeyRequest{Id: id})
+}
+
+// SetPlaybackPolicy persists a per-object playback access policy and triggers
+// the cache-invalidate + invalidate_sessions fanout.
+func (c *GRPCClient) SetPlaybackPolicy(ctx context.Context, req *pb.SetPlaybackPolicyRequest) (*pb.SetPlaybackPolicyResponse, error) {
+	return c.playbackAuth.SetPlaybackPolicy(ctx, req)
+}
+
+// ResolvePlaybackPolicy returns policy data for public reads. Webhook secrets
+// are intentionally omitted.
+func (c *GRPCClient) ResolvePlaybackPolicy(ctx context.Context, playbackID string) (*pb.ResolvePlaybackPolicyResponse, error) {
+	return c.internal.ResolvePlaybackPolicy(ctx, &pb.ResolvePlaybackPolicyRequest{PlaybackId: playbackID})
+}
+
+// ResolvePlaybackPolicyForEnforcement returns policy data needed to make an
+// allow/deny decision, including the decrypted webhook secret.
+func (c *GRPCClient) ResolvePlaybackPolicyForEnforcement(ctx context.Context, playbackID string) (*pb.ResolvePlaybackPolicyResponse, error) {
+	return c.internal.ResolvePlaybackPolicy(ctx, &pb.ResolvePlaybackPolicyRequest{
+		PlaybackId:           playbackID,
+		IncludeWebhookSecret: true,
+	})
+}
+
+// ResolvePlaybackPolicyByInternalName is the same RPC keyed by MistServer's
+// internal stream name — used by Foghorn's USER_NEW handler, which has the
+// internal_name from the trigger payload but not the public playback_id.
+func (c *GRPCClient) ResolvePlaybackPolicyByInternalName(ctx context.Context, internalName string) (*pb.ResolvePlaybackPolicyResponse, error) {
+	return c.internal.ResolvePlaybackPolicy(ctx, &pb.ResolvePlaybackPolicyRequest{
+		InternalName:         internalName,
+		IncludeWebhookSecret: true,
+	})
+}
+
+// RecordSigningKeyUse records successful JWT use for rotation/audit metadata.
+func (c *GRPCClient) RecordSigningKeyUse(ctx context.Context, tenantID, kid string) error {
+	_, err := c.internal.RecordSigningKeyUse(ctx, &pb.RecordSigningKeyUseRequest{
+		TenantId: tenantID,
+		Kid:      kid,
+	})
+	return err
 }

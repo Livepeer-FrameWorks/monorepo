@@ -292,6 +292,7 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
       gatewayUrl: configRef.current.gatewayUrl,
       mistUrl: configRef.current.mistUrl,
       authToken: configRef.current.authToken,
+      playbackAuth: configRef.current.playbackAuth,
       autoplay: configRef.current.autoplay,
       muted: configRef.current.muted,
       controls: configRef.current.controls,

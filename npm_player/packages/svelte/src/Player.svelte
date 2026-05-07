@@ -57,6 +57,7 @@
       gatewayUrl?: string;
       mistUrl?: string;
       authToken?: string;
+      playbackAuth?: import("@livepeer-frameworks/player-core").PlaybackAuth;
       autoplay?: boolean;
       muted?: boolean;
       controls?: boolean;
@@ -262,6 +263,7 @@
       gatewayUrl: options?.gatewayUrl,
       mistUrl: options?.mistUrl,
       authToken: options?.authToken,
+      playbackAuth: options?.playbackAuth,
       autoplay: options?.autoplay !== false,
       muted: options?.muted === true,
       controls: options?.stockControls === true,

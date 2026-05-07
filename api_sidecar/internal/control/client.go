@@ -886,6 +886,10 @@ func runClient(addr string, logger logging.Logger) error {
 			case *pb.ControlMessage_StopSessionsRequest:
 				// Handle stop sessions request from Foghorn (billing suspension)
 				go handleStopSessions(logger, x.StopSessionsRequest)
+			case *pb.ControlMessage_InvalidateSessionsRequest:
+				// Re-run USER_NEW for active sessions after a playback policy
+				// or signing-key change. Does NOT disconnect viewers.
+				go handleInvalidateSessions(logger, x.InvalidateSessionsRequest)
 			case *pb.ControlMessage_ActivatePushTargets:
 				go handleActivatePushTargets(logger, x.ActivatePushTargets)
 			case *pb.ControlMessage_DeactivatePushTargets:
@@ -1781,6 +1785,53 @@ func handleStopSessions(logger logging.Logger, req *pb.StopSessionsRequest) {
 		"tenant_id":    req.TenantId,
 		"stream_names": req.StreamNames,
 	}).Info("Successfully stopped sessions for suspended tenant")
+}
+
+// handleInvalidateSessions re-runs USER_NEW for active sessions on the listed
+// streams without disconnecting viewers. Used after a playback policy or
+// signing-key change so MistServer's per-session decision cache is rebuilt
+// against the fresh policy.
+//
+// Maps to MistServer's `invalidate_sessions` JSON API. Distinct from
+// handleStopSessions — stop disconnects, invalidate re-evaluates.
+func handleInvalidateSessions(logger logging.Logger, req *pb.InvalidateSessionsRequest) {
+	if req == nil || len(req.StreamNames) == 0 {
+		return
+	}
+
+	cfg := currentConfig
+	if cfg == nil {
+		logger.Warn("config not initialized; cannot invalidate sessions")
+		return
+	}
+
+	mistClient := mist.NewClient(logger)
+	if cfg.MistServerURL != "" {
+		mistClient.BaseURL = cfg.MistServerURL
+	}
+
+	logger.WithFields(logging.Fields{
+		"tenant_id":    req.TenantId,
+		"reason":       req.Reason,
+		"stream_count": len(req.StreamNames),
+		"stream_names": req.StreamNames,
+	}).Info("Invalidating sessions to re-run USER_NEW")
+
+	if err := mistClient.InvalidateSessionsMultiple(req.StreamNames); err != nil {
+		logger.WithFields(logging.Fields{
+			"tenant_id":    req.TenantId,
+			"reason":       req.Reason,
+			"stream_names": req.StreamNames,
+			"error":        err,
+		}).Error("Failed to invalidate sessions via MistServer API")
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"tenant_id":    req.TenantId,
+		"reason":       req.Reason,
+		"stream_names": req.StreamNames,
+	}).Info("Successfully invalidated sessions; viewers will renegotiate against fresh policy")
 }
 
 // activePushes tracks MistServer push IDs for multistream targets.

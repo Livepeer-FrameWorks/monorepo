@@ -33,6 +33,7 @@ message ForwardCommandRequest {
     helmsmancontrol.ProcessingJobRequest processing_job = 22;
     helmsmancontrol.FreezeRequest freeze = 23;
     helmsmancontrol.DesiredStateUpdate desired_state_update = 24;
+    helmsmancontrol.InvalidateSessionsRequest invalidate_sessions = 25;
   }
 }
 

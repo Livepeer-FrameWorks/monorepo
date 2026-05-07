@@ -215,6 +215,7 @@ message ViewerEndpointRequest {
   reserved "content_type";
   string content_id = 2;
   optional string viewer_ip = 3;
+  optional string viewer_token = 4;
 }
 
 // OutputCapability - capabilities of an output protocol

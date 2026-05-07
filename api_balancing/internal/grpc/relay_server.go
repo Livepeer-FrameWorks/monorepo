@@ -78,6 +78,8 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *pb.ForwardCommand
 		err = control.SendLocalDtshSyncRequest(req.TargetNodeId, cmd.DtshSync)
 	case *pb.ForwardCommandRequest_StopSessions:
 		err = control.SendLocalStopSessions(req.TargetNodeId, cmd.StopSessions)
+	case *pb.ForwardCommandRequest_InvalidateSessions:
+		err = control.SendLocalInvalidateSessions(req.TargetNodeId, cmd.InvalidateSessions)
 	case *pb.ForwardCommandRequest_ActivatePushTargets:
 		err = control.SendLocalActivatePushTargets(req.TargetNodeId, cmd.ActivatePushTargets)
 	case *pb.ForwardCommandRequest_DeactivatePushTargets:

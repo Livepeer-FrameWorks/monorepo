@@ -83,8 +83,10 @@ export interface CreatePlayerConfig {
   gatewayUrl?: string;
   /** Direct MistServer base URL */
   mistUrl?: string;
-  /** Auth token for private streams */
+  /** Auth token for Gateway GraphQL resolution */
   authToken?: string;
+  /** Viewer-side playback auth (customer-minted JWT). See PlaybackAuth in types.ts. */
+  playbackAuth?: import("../types").PlaybackAuth;
 
   /** Playback options */
   autoplay?: boolean;
@@ -334,6 +336,7 @@ export function createPlayer(config: CreatePlayerConfig): PlayerInstance {
     gatewayUrl: config.gatewayUrl,
     mistUrl: config.mistUrl,
     authToken: config.authToken,
+    playbackAuth: config.playbackAuth,
     autoplay: config.autoplay ?? true,
     muted: config.muted ?? false,
     controls: config.controls ?? true,

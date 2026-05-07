@@ -23,6 +23,8 @@ export interface StreamStateClientConfig {
   pollInterval?: number;
   /** Use WebSocket if available (default: true) */
   useWebSocket?: boolean;
+  /** Headers for MistServer HTTP polling requests. */
+  headers?: Record<string, string>;
 }
 
 type StreamStateClientResolvedConfig = Omit<
@@ -347,7 +349,7 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
       const url = `${mistBaseUrl.replace(/\/$/, "")}/json_${encodeURIComponent(streamName)}.js?metaeverywhere=1&inclzero=1`;
       const response = await fetch(url, {
         method: "GET",
-        headers: { Accept: "application/json" },
+        headers: { Accept: "application/json", ...this.config.headers },
       });
 
       if (!response.ok) {

@@ -658,6 +658,7 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 		"defrost":                 func() error { return SendDefrostRequest("node-1", &pb.DefrostRequest{}) },
 		"dtsh_sync":               func() error { return SendDtshSyncRequest("node-1", &pb.DtshSyncRequest{}) },
 		"stop_sessions":           func() error { return SendStopSessions("node-1", &pb.StopSessionsRequest{}) },
+		"invalidate_sessions":     func() error { return SendInvalidateSessions("node-1", &pb.InvalidateSessionsRequest{}) },
 		"activate_push_targets":   func() error { return SendActivatePushTargets("node-1", &pb.ActivatePushTargets{}) },
 		"deactivate_push_targets": func() error { return SendDeactivatePushTargets("node-1", &pb.DeactivatePushTargets{}) },
 		"processing_job":          func() error { return SendProcessingJob("node-1", &pb.ProcessingJobRequest{}) },

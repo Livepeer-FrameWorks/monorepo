@@ -10,11 +10,16 @@ import (
 )
 
 // Stream implements union interfaces
-func (*Stream) IsCreateStreamResult() {}
-func (*Stream) IsUpdateStreamResult() {}
+func (*Stream) IsCreateStreamResult()      {}
+func (*Stream) IsUpdateStreamResult()      {}
+func (*Stream) IsSetPlaybackPolicyResult() {}
 
 // ClipInfo (from shared.proto) implements union interfaces (GraphQL type: Clip)
-func (*ClipInfo) IsCreateClipResult() {}
+func (*ClipInfo) IsCreateClipResult()        {}
+func (*ClipInfo) IsSetPlaybackPolicyResult() {}
+
+// SigningKey implements union interfaces
+func (*SigningKey) IsRevokeSigningKeyResult() {}
 
 // StreamKey implements union interfaces
 func (*StreamKey) IsCreateStreamKeyResult() {}

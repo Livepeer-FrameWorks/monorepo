@@ -32,6 +32,8 @@ export class FwPlayer extends LitElement {
   @property({ attribute: "gateway-url" }) gatewayUrl?: string;
   @property({ attribute: "mist-url" }) mistUrl?: string;
   @property({ attribute: "auth-token" }) authToken?: string;
+  @property({ attribute: "playback-token" }) playbackToken?: string;
+  @property({ attribute: "playback-token-transport" }) playbackTokenTransport?: "query" | "header";
   @property({ type: Boolean }) autoplay = true;
   @property({ type: Boolean }) muted = false;
   // React/Svelte use `stockControls` for native controls. Keep `controls` as a
@@ -137,6 +139,8 @@ export class FwPlayer extends LitElement {
       changed.has("gatewayUrl") ||
       changed.has("mistUrl") ||
       changed.has("authToken") ||
+      changed.has("playbackToken") ||
+      changed.has("playbackTokenTransport") ||
       changed.has("autoplay") ||
       changed.has("muted") ||
       changed.has("stockControls") ||
@@ -152,6 +156,9 @@ export class FwPlayer extends LitElement {
         gatewayUrl: this.gatewayUrl,
         mistUrl: this.mistUrl,
         authToken: this.authToken,
+        playbackAuth: this.playbackToken
+          ? { token: this.playbackToken, transport: this.playbackTokenTransport }
+          : undefined,
         autoplay: this.autoplay,
         muted: this.muted,
         controls: this.stockControls || this.nativeControls,

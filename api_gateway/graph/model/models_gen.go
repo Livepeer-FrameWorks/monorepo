@@ -64,6 +64,10 @@ type CreatePrivateClusterResult interface {
 	IsCreatePrivateClusterResult()
 }
 
+type CreateSigningKeyResult interface {
+	IsCreateSigningKeyResult()
+}
+
 type CreateStreamKeyResult interface {
 	IsCreateStreamKeyResult()
 }
@@ -134,8 +138,16 @@ type RevokeDeveloperTokenResult interface {
 	IsRevokeDeveloperTokenResult()
 }
 
+type RevokeSigningKeyResult interface {
+	IsRevokeSigningKeyResult()
+}
+
 type SendMessageResult interface {
 	IsSendMessageResult()
+}
+
+type SetPlaybackPolicyResult interface {
+	IsSetPlaybackPolicyResult()
 }
 
 type SetPreferredClusterResult interface {
@@ -280,6 +292,12 @@ func (AuthError) IsUpdateTenantResult() {}
 func (AuthError) IsCreateDeveloperTokenResult() {}
 
 func (AuthError) IsRevokeDeveloperTokenResult() {}
+
+func (AuthError) IsCreateSigningKeyResult() {}
+
+func (AuthError) IsRevokeSigningKeyResult() {}
+
+func (AuthError) IsSetPlaybackPolicyResult() {}
 
 func (AuthError) IsCreateBootstrapTokenResult() {}
 
@@ -771,6 +789,22 @@ type CreatePushTargetInput struct {
 	TargetURI string `json:"targetUri"`
 }
 
+type CreateSigningKeyInput struct {
+	// Display label for the key (e.g. 'staging', 'rotation-2026-q2').
+	Name string `json:"name"`
+}
+
+// Returned exactly once on createSigningKey. Capture privateKeyPem before the
+// response is discarded — FrameWorks does not store it and cannot return it
+// again. Lose the private key, revoke and create a new one.
+type CreateSigningKeySuccess struct {
+	SigningKey *proto.SigningKey `json:"signingKey"`
+	// ES256 private key in PEM format. Shown ONCE; never stored, never logged.
+	PrivateKeyPem string `json:"privateKeyPem"`
+}
+
+func (CreateSigningKeySuccess) IsCreateSigningKeyResult() {}
+
 // Input for creating a new live stream.
 type CreateStreamInput struct {
 	// Human-readable name for the stream.
@@ -1227,6 +1261,10 @@ func (NotFoundError) IsMollieSubscriptionResult() {}
 
 func (NotFoundError) IsRevokeDeveloperTokenResult() {}
 
+func (NotFoundError) IsRevokeSigningKeyResult() {}
+
+func (NotFoundError) IsSetPlaybackPolicyResult() {}
+
 func (NotFoundError) IsRevokeBootstrapTokenResult() {}
 
 func (NotFoundError) IsUpdateClusterResult() {}
@@ -1263,6 +1301,57 @@ type PageInfo struct {
 	EndCursor       *string `json:"endCursor,omitempty"`
 	HasNextPage     bool    `json:"hasNextPage"`
 	HasPreviousPage bool    `json:"hasPreviousPage"`
+}
+
+// One required-claim constraint, JSON-encoded for type-flexible matching.
+type PlaybackJwtClaimRequirement struct {
+	Name string `json:"name"`
+	// JSON-encoded expected value (e.g. `"pro"`, `true`, `42`, `["a","b"]`).
+	JSONValue string `json:"jsonValue"`
+}
+
+type PlaybackJwtClaimRequirementInput struct {
+	Name string `json:"name"`
+	// JSON-encoded expected value (e.g. `"pro"`, `true`, `42`).
+	JSONValue string `json:"jsonValue"`
+}
+
+type PlaybackJwtPolicyInput struct {
+	// Allowed signing key IDs. Empty = any active tenant key.
+	AllowedKids []string `json:"allowedKids,omitempty"`
+	// If set, the viewer JWT's `aud` claim must contain at least one of these.
+	RequiredAudience []string `json:"requiredAudience,omitempty"`
+	// Required claim constraints. Each entry's value is JSON-encoded for type flexibility.
+	RequiredClaimsJSON []*PlaybackJwtClaimRequirementInput `json:"requiredClaimsJson,omitempty"`
+}
+
+// Per-playback-object access policy. Foghorn reads this in the USER_NEW
+// trigger handler; the requiresAuth marker (on the playback object itself)
+// gates whether the full policy is fetched at all.
+type PlaybackPolicy struct {
+	Type PlaybackPolicyType `json:"type"`
+	// JWT-policy details, populated when type == JWT.
+	Jwt *proto.PlaybackJwtPolicy `json:"jwt,omitempty"`
+	// Webhook-policy details, populated when type == WEBHOOK. Secret is masked.
+	Webhook *proto.PlaybackWebhookPolicy `json:"webhook,omitempty"`
+}
+
+type PlaybackPolicyInput struct {
+	Type PlaybackPolicyType `json:"type"`
+	// Required when type == JWT.
+	Jwt *PlaybackJwtPolicyInput `json:"jwt,omitempty"`
+	// Required when type == WEBHOOK.
+	Webhook *PlaybackWebhookPolicyInput `json:"webhook,omitempty"`
+}
+
+type PlaybackWebhookPolicyInput struct {
+	// https URL FrameWorks will POST to on each viewer connect.
+	URL string `json:"url"`
+	// HMAC-SHA256 secret used to sign outbound webhook bodies. Write-only:
+	// persisted via field-level encryption and never returned in queries.
+	Secret string `json:"secret"`
+	// Outbound POST timeout in milliseconds. Server caps at 10000; default 5000.
+	TimeoutMs *int `json:"timeoutMs,omitempty"`
 }
 
 // A pricing rule input — mirrors PricingRule output type.
@@ -1336,6 +1425,8 @@ func (this RateLimitError) GetCode() *string   { return this.Code }
 
 func (RateLimitError) IsCreateDeveloperTokenResult() {}
 
+func (RateLimitError) IsCreateSigningKeyResult() {}
+
 type RebufferingEventEdge struct {
 	Cursor string                  `json:"cursor"`
 	Node   *proto.RebufferingEvent `json:"node"`
@@ -1378,6 +1469,26 @@ type ServiceInstancesConnection struct {
 	Nodes      []*proto.ServiceInstance `json:"nodes"`
 	PageInfo   *PageInfo                `json:"pageInfo"`
 	TotalCount int                      `json:"totalCount"`
+}
+
+type SetPlaybackPolicyInput struct {
+	// Exactly one of streamId, vodAssetId, or clipId must be provided.
+	StreamID   *string              `json:"streamId,omitempty"`
+	VodAssetID *string              `json:"vodAssetId,omitempty"`
+	ClipID     *string              `json:"clipId,omitempty"`
+	Policy     *PlaybackPolicyInput `json:"policy"`
+}
+
+type SigningKeyEdge struct {
+	Cursor string            `json:"cursor"`
+	Node   *proto.SigningKey `json:"node"`
+}
+
+type SigningKeysConnection struct {
+	Edges      []*SigningKeyEdge   `json:"edges"`
+	Nodes      []*proto.SigningKey `json:"nodes"`
+	PageInfo   *PageInfo           `json:"pageInfo"`
+	TotalCount int                 `json:"totalCount"`
 }
 
 type SkipperReportsConnection struct {
@@ -1724,6 +1835,10 @@ func (ValidationError) IsUpdateTenantResult() {}
 
 func (ValidationError) IsCreateDeveloperTokenResult() {}
 
+func (ValidationError) IsCreateSigningKeyResult() {}
+
+func (ValidationError) IsSetPlaybackPolicyResult() {}
+
 func (ValidationError) IsCreateBootstrapTokenResult() {}
 
 func (ValidationError) IsCreatePrivateClusterResult() {}
@@ -1853,9 +1968,13 @@ type VodAsset struct {
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 	// Error message if processing failed.
 	ErrorMessage *string `json:"errorMessage,omitempty"`
+	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
+	PlaybackPolicy *PlaybackPolicy `json:"playbackPolicy,omitempty"`
 }
 
 func (VodAsset) IsCompleteVodUploadResult() {}
+
+func (VodAsset) IsSetPlaybackPolicyResult() {}
 
 func (VodAsset) IsNode() {}
 
@@ -2512,6 +2631,173 @@ func (e *PaymentStatus) UnmarshalJSON(b []byte) error {
 }
 
 func (e PaymentStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type PlaybackPolicyType string
+
+const (
+	PlaybackPolicyTypePublic  PlaybackPolicyType = "PUBLIC"
+	PlaybackPolicyTypeJwt     PlaybackPolicyType = "JWT"
+	PlaybackPolicyTypeWebhook PlaybackPolicyType = "WEBHOOK"
+)
+
+var AllPlaybackPolicyType = []PlaybackPolicyType{
+	PlaybackPolicyTypePublic,
+	PlaybackPolicyTypeJwt,
+	PlaybackPolicyTypeWebhook,
+}
+
+func (e PlaybackPolicyType) IsValid() bool {
+	switch e {
+	case PlaybackPolicyTypePublic, PlaybackPolicyTypeJwt, PlaybackPolicyTypeWebhook:
+		return true
+	}
+	return false
+}
+
+func (e PlaybackPolicyType) String() string {
+	return string(e)
+}
+
+func (e *PlaybackPolicyType) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = PlaybackPolicyType(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid PlaybackPolicyType", str)
+	}
+	return nil
+}
+
+func (e PlaybackPolicyType) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *PlaybackPolicyType) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e PlaybackPolicyType) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// Algorithm used to sign viewer playback JWTs. ES256 only for v1.
+type SigningKeyAlgorithm string
+
+const (
+	SigningKeyAlgorithmEs256 SigningKeyAlgorithm = "ES256"
+)
+
+var AllSigningKeyAlgorithm = []SigningKeyAlgorithm{
+	SigningKeyAlgorithmEs256,
+}
+
+func (e SigningKeyAlgorithm) IsValid() bool {
+	switch e {
+	case SigningKeyAlgorithmEs256:
+		return true
+	}
+	return false
+}
+
+func (e SigningKeyAlgorithm) String() string {
+	return string(e)
+}
+
+func (e *SigningKeyAlgorithm) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = SigningKeyAlgorithm(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid SigningKeyAlgorithm", str)
+	}
+	return nil
+}
+
+func (e SigningKeyAlgorithm) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *SigningKeyAlgorithm) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e SigningKeyAlgorithm) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// Lifecycle status of a signing key.
+type SigningKeyStatus string
+
+const (
+	SigningKeyStatusActive  SigningKeyStatus = "ACTIVE"
+	SigningKeyStatusRevoked SigningKeyStatus = "REVOKED"
+)
+
+var AllSigningKeyStatus = []SigningKeyStatus{
+	SigningKeyStatusActive,
+	SigningKeyStatusRevoked,
+}
+
+func (e SigningKeyStatus) IsValid() bool {
+	switch e {
+	case SigningKeyStatusActive, SigningKeyStatusRevoked:
+		return true
+	}
+	return false
+}
+
+func (e SigningKeyStatus) String() string {
+	return string(e)
+}
+
+func (e *SigningKeyStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = SigningKeyStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid SigningKeyStatus", str)
+	}
+	return nil
+}
+
+func (e SigningKeyStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *SigningKeyStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e SigningKeyStatus) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

@@ -718,3 +718,37 @@ func (c *Client) StopSessionsMultiple(streamNames []string) error {
 	_, err := c.makeAPIRequest(command)
 	return err
 }
+
+// InvalidateSessions tells MistServer to re-run USER_NEW for active sessions
+// on the given streams without disconnecting viewers. Used after a playback
+// policy or signing-key change so MistServer's per-session decision cache is
+// rebuilt against the fresh policy.
+//
+// Docs: https://docs.mistserver.org/mistserver/integration/api/calls/invalidate_sessions
+//
+// Single-stream form. Use InvalidateSessionsMultiple for batches.
+func (c *Client) InvalidateSessions(streamName string) error {
+	if strings.TrimSpace(streamName) == "" {
+		return nil
+	}
+	command := map[string]interface{}{
+		"invalidate_sessions": streamName,
+	}
+	_, err := c.makeAPIRequest(command)
+	return err
+}
+
+// InvalidateSessionsMultiple is the batch form of InvalidateSessions. Each
+// listed stream's active sessions get USER_NEW re-fired; viewers whose tokens
+// still pass continue, viewers who no longer satisfy the policy are denied.
+// Clients may observe a brief reconnect at the player layer.
+func (c *Client) InvalidateSessionsMultiple(streamNames []string) error {
+	if len(streamNames) == 0 {
+		return nil
+	}
+	command := map[string]interface{}{
+		"invalidate_sessions": streamNames,
+	}
+	_, err := c.makeAPIRequest(command)
+	return err
+}

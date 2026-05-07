@@ -278,13 +278,14 @@ func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string, tenantID *st
 
 // ResolveViewerEndpoint resolves the best endpoint(s) for a viewer.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID string, viewerIP *string) (*pb.ViewerEndpointResponse, metadata.MD, error) {
+func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID string, viewerIP, viewerToken *string) (*pb.ViewerEndpointResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	req := &pb.ViewerEndpointRequest{
-		ContentId: contentID,
-		ViewerIp:  viewerIP,
+		ContentId:   contentID,
+		ViewerIp:    viewerIP,
+		ViewerToken: viewerToken,
 	}
 	var trailers metadata.MD
 	resp, err := c.viewer.ResolveViewerEndpoint(ctx, req, grpc.Trailer(&trailers))
@@ -398,6 +399,23 @@ func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash 
 	resp, err := c.vod.DeleteVodAsset(ctx, &pb.DeleteVodAssetRequest{
 		TenantId:     tenantID,
 		ArtifactHash: artifactHash,
+	}, grpc.Trailer(&trailers))
+	return resp, trailers, err
+}
+
+// InvalidatePlaybackAuth tells Foghorn to dispatch invalidate_sessions to
+// Helmsman nodes that hold the listed live streams or artifacts. Empty
+// internalNames lets Foghorn fan out across the tenant's known live streams
+// and artifact sessions. The re-fired USER_NEW decides allow/deny per session.
+func (c *GRPCClient) InvalidatePlaybackAuth(ctx context.Context, tenantID, reason string, internalNames []string) (*pb.InvalidatePlaybackAuthResponse, metadata.MD, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	var trailers metadata.MD
+	resp, err := c.tenant.InvalidatePlaybackAuth(ctx, &pb.InvalidatePlaybackAuthRequest{
+		TenantId:      tenantID,
+		InternalNames: internalNames,
+		Reason:        reason,
 	}, grpc.Trailer(&trailers))
 	return resp, trailers, err
 }

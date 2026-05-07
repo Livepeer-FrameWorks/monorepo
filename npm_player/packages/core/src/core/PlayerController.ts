@@ -63,6 +63,28 @@ export {
 } from "./QualityLevels";
 export type { MistQualityLevel, MistQualityTrackInput } from "./QualityLevels";
 
+function withPlaybackJWT(rawUrl: string, token: string): string {
+  const hashIndex = rawUrl.indexOf("#");
+  const beforeHash = hashIndex === -1 ? rawUrl : rawUrl.slice(0, hashIndex);
+  const hash = hashIndex === -1 ? "" : rawUrl.slice(hashIndex);
+  const queryIndex = beforeHash.indexOf("?");
+  const base = queryIndex === -1 ? beforeHash : beforeHash.slice(0, queryIndex);
+  const query = queryIndex === -1 ? "" : beforeHash.slice(queryIndex + 1);
+  const params = new URLSearchParams(query);
+  params.set("jwt", token);
+  const encoded = params.toString();
+  return `${base}${encoded ? `?${encoded}` : ""}${hash}`;
+}
+
+function sourceCanCarryPlaybackHeaders(source: StreamSource): boolean {
+  return (
+    source.type === "whep" ||
+    source.type === "dash/video/mp4" ||
+    source.type === "html5/application/vnd.apple.mpegurl" ||
+    source.type === "html5/application/vnd.apple.mpegurl;version=7"
+  );
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -80,8 +102,12 @@ export interface PlayerControllerConfig {
   gatewayUrl?: string;
   /** Direct MistServer base URL (bypasses Gateway, fetches json_{contentId}.js directly) */
   mistUrl?: string;
-  /** Auth token for private streams */
+  /** Auth token for Gateway GraphQL resolution (NOT viewer playback auth) */
   authToken?: string;
+  /** Viewer-side playback auth — customer-minted JWT attached to every
+   *  playback URL so MistServer's USER_NEW handler can verify against the
+   *  stream's playback policy. See PlaybackAuth in types.ts. */
+  playbackAuth?: import("../types").PlaybackAuth;
 
   /** Playback options */
   autoplay?: boolean;
@@ -878,6 +904,62 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   /** Get content metadata (title, description, duration, etc.) */
   getMetadata(): ContentMetadata | null {
     return this.metadata ?? null;
+  }
+
+  // ============================================================================
+  // Playback auth — viewer-side JWT pass-through
+  // ============================================================================
+
+  /**
+   * applyPlaybackAuthToEndpoints walks the current resolved endpoints and
+   * appends the customer-supplied viewer JWT to every URL. Called after
+   * every `this.endpoints = ...` assignment so the token rides along on
+   * Gateway-resolved URLs, fallbacks, the outputs map, and any URLs
+   * hydrated from a direct MistServer poll.
+   *
+   * No-op when playbackAuth isn't configured. Query-mode (`?jwt=<token>`)
+   * works across HLS, DASH, WHEP/WebRTC, and MP4 progressive.
+   */
+  private applyPlaybackAuthToEndpoints(): void {
+    const auth = this.config.playbackAuth;
+    if (!auth || !auth.token || !this.endpoints) return;
+    if (auth.transport === "header") return;
+    const rewriteUrl = (u: string | undefined): string | undefined => {
+      if (!u) return u;
+      return withPlaybackJWT(u, auth.token);
+    };
+    const rewriteEndpoint = (e: EndpointInfo | undefined): void => {
+      if (!e) return;
+      const newUrl = rewriteUrl(e.url);
+      if (newUrl) e.url = newUrl;
+      if (e.outputs) {
+        for (const key of Object.keys(e.outputs)) {
+          const out = e.outputs[key];
+          const newOutUrl = rewriteUrl(out.url);
+          if (newOutUrl) out.url = newOutUrl;
+        }
+      }
+    };
+    rewriteEndpoint(this.endpoints.primary);
+    for (const fallback of this.endpoints.fallbacks ?? []) {
+      rewriteEndpoint(fallback);
+    }
+  }
+
+  private playbackAuthHeaders(): Record<string, string> | undefined {
+    const auth = this.config.playbackAuth;
+    if (!auth?.token || auth.transport !== "header") return undefined;
+    return { Authorization: `Bearer ${auth.token}` };
+  }
+
+  private applyPlaybackAuthToStreamInfo(info: StreamInfo | null): StreamInfo | null {
+    const headers = this.playbackAuthHeaders();
+    if (!headers || !info) return info;
+
+    const source = info.source
+      .filter(sourceCanCarryPlaybackHeaders)
+      .map((s) => ({ ...s, headers: { ...(s.headers ?? {}), ...headers } }));
+    return { ...info, source };
   }
 
   // ============================================================================
@@ -2634,6 +2716,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     // Priority 1: Use pre-resolved endpoints if provided
     if (endpoints?.primary) {
       this.endpoints = endpoints;
+      this.applyPlaybackAuthToEndpoints();
       this.setMetadataSeed(endpoints.metadata ?? null);
       this.detectThumbnailVttUrl();
       this.detectPreviewUrl();
@@ -2673,9 +2756,16 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
       const { sources, tracks } = this.applyMistStreamInfo(data, "resolveFromMistServer", mistUrl);
 
-      const httpSources = sources.filter((s) => !s.url.startsWith("ws://"));
+      const effectiveSources = this.streamInfo?.source ?? sources;
+      if (effectiveSources.length === 0) {
+        this.setState("error", {
+          error: "No playback sources support Authorization header transport",
+        });
+        return;
+      }
+      const httpSources = effectiveSources.filter((s) => !s.url.startsWith("ws://"));
       const primarySource =
-        httpSources.length > 0 ? this.selectBestSource(httpSources) : sources[0];
+        httpSources.length > 0 ? this.selectBestSource(httpSources) : effectiveSources[0];
 
       this.endpoints = {
         primary: {
@@ -2687,6 +2777,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         },
         fallbacks: [],
       };
+      this.applyPlaybackAuthToEndpoints();
       this.setMetadataSeed(null);
       this.detectThumbnailVttUrl();
       this.detectPreviewUrl();
@@ -2710,7 +2801,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     const jsonUrl = `${baseUrl}/json_${encodeURIComponent(contentId)}.js?metaeverywhere=1&inclzero=1`;
     this.log(`[${logScope}] Fetching ${jsonUrl}`);
 
-    const response = await fetch(jsonUrl, { cache: "no-store" });
+    const response = await fetch(jsonUrl, {
+      cache: "no-store",
+      headers: this.playbackAuthHeaders(),
+    });
     if (!response.ok) {
       throw new Error(`MistServer HTTP ${response.status}`);
     }
@@ -2757,11 +2851,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       tracks = [{ type: "video", codec: "H264", codecstring: "avc1.42E01E" }];
     }
 
-    this.streamInfo = {
+    this.streamInfo = this.applyPlaybackAuthToStreamInfo({
       source: sources,
       meta: { tracks },
       type: data.type === "vod" ? "vod" : "live",
-    };
+    });
 
     return { sources, tracks };
   }
@@ -2828,6 +2922,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       gatewayUrl,
       contentId,
       authToken,
+      playbackAuth: this.config.playbackAuth,
     });
 
     // Subscribe to status changes
@@ -2841,6 +2936,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     try {
       this.endpoints = await this.gatewayClient.resolve();
+      this.applyPlaybackAuthToEndpoints();
       this.setMetadataSeed(this.endpoints?.metadata ?? null);
       // Spin up Chandler-tier sprite + poster URLs as soon as metadata is known, so cold streams
       // (Mist not yet ingesting) still get a loading poster even if Mist hydration fails below.
@@ -2934,9 +3030,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     const streamName = this.getMistStreamName(contentId);
 
-    // For effectively live content, use WebSocket for real-time updates
-    // For completed VOD content, use HTTP polling only
-    const useWebSocket = this.isEffectivelyLive();
+    // Browser WebSocket cannot attach Authorization headers; header-mode
+    // playback auth uses HTTP polling for Mist JSON state.
+    const playbackHeaders = this.playbackAuthHeaders();
+    const useWebSocket = this.isEffectivelyLive() && !playbackHeaders;
     const pollInterval = this.isEffectivelyLive() ? 3000 : 5000;
 
     this.streamStateClient = new StreamStateClient({
@@ -2944,6 +3041,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       streamName,
       useWebSocket,
       pollInterval,
+      headers: playbackHeaders,
     });
 
     // Subscribe to state changes
@@ -2955,10 +3053,16 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       this._prevStreamIsOnline = isNowOnline;
 
       if (state.streamInfo?.source && Array.isArray(state.streamInfo.source) && this.streamInfo) {
-        this.streamInfo.source = normalizeMistSourceUrls(
+        const normalizedSources = normalizeMistSourceUrls(
           state.streamInfo.source as StreamSource[],
           mistBaseUrl
         ) as StreamSource[];
+        const headers = this.playbackAuthHeaders();
+        this.streamInfo.source = headers
+          ? normalizedSources
+              .filter(sourceCanCarryPlaybackHeaders)
+              .map((s) => ({ ...s, headers: { ...(s.headers ?? {}), ...headers } }))
+          : normalizedSources;
       }
 
       // Update track metadata if MistServer provides better data
@@ -3049,11 +3153,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         tracks = [{ type: "video", codec: "H264", codecstring: "avc1.42E01E" }];
       }
 
-      this.streamInfo = {
+      this.streamInfo = this.applyPlaybackAuthToStreamInfo({
         source: sources,
         meta: { tracks },
         type: streamInfo.type === "vod" ? "vod" : "live",
-      };
+      });
 
       const httpSources = sources.filter((s) => !s.url.startsWith("ws://"));
       const primarySource =
@@ -3069,6 +3173,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         },
         fallbacks: [],
       };
+      this.applyPlaybackAuthToEndpoints();
       this.setMetadataSeed(this.endpoints.metadata ?? null);
       this.detectThumbnailVttUrl();
       this.detectPreviewUrl();
@@ -3103,7 +3208,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       this.log(`[buildStreamInfo] Using ${this.mistTracks.length} tracks from MistServer`);
     }
 
-    return info;
+    return this.applyPlaybackAuthToStreamInfo(info);
   }
 
   /**
@@ -3507,6 +3612,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       controls: controls !== false,
       poster: poster,
       debug: this.config.debug,
+      playbackHeaders: this.playbackAuthHeaders(),
       onReady: (el) => {
         // Guard against zombie callbacks after destroy
         if (this.isDestroyed || !this.container) {

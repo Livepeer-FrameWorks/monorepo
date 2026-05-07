@@ -192,6 +192,9 @@ message ControlMessage {
     ProcessingJobProgress processing_job_progress = 65;
     // Session termination (Foghorn -> Helmsman for billing suspension)
     StopSessionsRequest stop_sessions_request = 70;
+    // Session invalidation (Foghorn -> Helmsman for re-running USER_NEW
+    // after a playback-policy or signing-key change). Does NOT disconnect viewers.
+    InvalidateSessionsRequest invalidate_sessions_request = 72;
     // Node mode change request (Helmsman -> Foghorn, from local agent/CLI)
     ModeChangeRequest mode_change_request = 71;
     // Multistream push target lifecycle (Foghorn <-> Helmsman)
@@ -261,6 +264,17 @@ message StopSessionsRequest {
   repeated string stream_names = 1; // Internal stream names to stop
   string tenant_id = 2;             // For logging/audit
   string reason = 3;                // e.g., "insufficient_balance", "suspended"
+}
+
+// InvalidateSessionsRequest tells Helmsman to re-run USER_NEW for active
+// sessions on the given streams without disconnecting them.
+// Used after a playback-policy or signing-key change so MistServer's
+// per-session cache is rebuilt against the fresh policy.
+// Maps to MistServer's `invalidate_sessions` JSON API.
+message InvalidateSessionsRequest {
+  repeated string stream_names = 1; // Internal stream names whose sessions need re-evaluating
+  string tenant_id = 2;             // For logging/audit
+  string reason = 3;                // e.g., "policy_change", "key_revoked", "webhook_rotated"
 }
 
 // ActivatePushTargets tells Helmsman to start pushing a stream to external targets.
@@ -830,7 +844,11 @@ message ViewerConnectTrigger {
   // Used for GeoIP enrichment; geographic data is preserved while
   // raw IP is redacted downstream for privacy.
   string host = 2;
-  string connection_id = 3;
+  // viewer_token is the bearer token MistServer extracted from the viewer
+  // request: ?jwt=, ?tkn=, ?sid=, ?sessId=, Cookie: jwt=/tkn=, or
+  // Authorization: Bearer. Source: MistServer session.cpp:272 (USER_NEW
+  // payload field 3). Used by Foghorn's playback-policy enforcer.
+  string viewer_token = 3;
   string connector = 4;
   string request_url = 5;
   string session_id = 6;

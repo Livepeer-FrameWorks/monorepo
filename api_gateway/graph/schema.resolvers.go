@@ -862,6 +862,14 @@ func (r *clipResolver) IsExpired(ctx context.Context, obj *proto.ClipInfo) (bool
 	return obj.ExpiresAt != nil && obj.ExpiresAt.AsTime().Before(time.Now()), nil
 }
 
+// PlaybackPolicy is the resolver for the playbackPolicy field.
+func (r *clipResolver) PlaybackPolicy(ctx context.Context, obj *proto.ClipInfo) (*model.PlaybackPolicy, error) {
+	if obj == nil || obj.GetPlaybackId() == "" {
+		return nil, nil
+	}
+	return r.DoGetPlaybackPolicyByPlaybackID(ctx, obj.GetPlaybackId())
+}
+
 // Stage is the resolver for the stage field.
 func (r *clipLifecycleResolver) Stage(ctx context.Context, obj *proto.ClipLifecycleData) (int, error) {
 	return int(obj.Stage), nil
@@ -2235,6 +2243,21 @@ func (r *mutationResolver) RevokeDeveloperToken(ctx context.Context, id string) 
 	return r.DoRevokeDeveloperToken(ctx, id)
 }
 
+// CreateSigningKey is the resolver for the createSigningKey field.
+func (r *mutationResolver) CreateSigningKey(ctx context.Context, input model.CreateSigningKeyInput) (model.CreateSigningKeyResult, error) {
+	return r.DoCreateSigningKey(ctx, input)
+}
+
+// RevokeSigningKey is the resolver for the revokeSigningKey field.
+func (r *mutationResolver) RevokeSigningKey(ctx context.Context, id string) (model.RevokeSigningKeyResult, error) {
+	return r.DoRevokeSigningKey(ctx, id)
+}
+
+// SetPlaybackPolicy is the resolver for the setPlaybackPolicy field.
+func (r *mutationResolver) SetPlaybackPolicy(ctx context.Context, input model.SetPlaybackPolicyInput) (model.SetPlaybackPolicyResult, error) {
+	return r.DoSetPlaybackPolicy(ctx, input)
+}
+
 // CreateBootstrapToken is the resolver for the createBootstrapToken field.
 func (r *mutationResolver) CreateBootstrapToken(ctx context.Context, input model.CreateBootstrapTokenInput) (model.CreateBootstrapTokenResult, error) {
 	return r.DoCreateBootstrapToken(ctx, input)
@@ -2851,6 +2874,14 @@ func (r *playbackInstanceResolver) LastUpdate(ctx context.Context, obj *proto.Pl
 	return &t, nil
 }
 
+// RequiredClaimsJSON is the resolver for the requiredClaimsJson field.
+func (r *playbackJwtPolicyResolver) RequiredClaimsJSON(ctx context.Context, obj *proto.PlaybackJwtPolicy) ([]*model.PlaybackJwtClaimRequirement, error) {
+	if obj == nil {
+		return nil, nil
+	}
+	return resolvers.ClaimReqsFromProto(obj.GetRequiredClaimsJson()), nil
+}
+
 // RecordingSizeBytes is the resolver for the recordingSizeBytes field.
 func (r *playbackMetadataResolver) RecordingSizeBytes(ctx context.Context, obj *proto.PlaybackMetadata) (*float64, error) {
 	if obj.RecordingSizeBytes == nil {
@@ -2867,6 +2898,11 @@ func (r *playbackMetadataResolver) CreatedAt(ctx context.Context, obj *proto.Pla
 	}
 	t := obj.CreatedAt.AsTime()
 	return &t, nil
+}
+
+// SecretMasked is the resolver for the secretMasked field.
+func (r *playbackWebhookPolicyResolver) SecretMasked(ctx context.Context, obj *proto.PlaybackWebhookPolicy) (string, error) {
+	return resolvers.WebhookSecretMask(), nil
 }
 
 // ProcessingUsageConnection is the resolver for the processingUsageConnection field.
@@ -3966,6 +4002,16 @@ func (r *queryResolver) DeveloperTokensConnection(ctx context.Context, page *mod
 	return r.DoGetDeveloperTokensConnection(ctx, first, after, last, before)
 }
 
+// SigningKey is the resolver for the signingKey field.
+func (r *queryResolver) SigningKey(ctx context.Context, id string) (*proto.SigningKey, error) {
+	return r.DoGetSigningKey(ctx, id)
+}
+
+// SigningKeysConnection is the resolver for the signingKeysConnection field.
+func (r *queryResolver) SigningKeysConnection(ctx context.Context, status *string, page *model.ConnectionInput) (*model.SigningKeysConnection, error) {
+	return r.DoListSigningKeys(ctx, status, page)
+}
+
 // BootstrapTokensConnection is the resolver for the bootstrapTokensConnection field.
 func (r *queryResolver) BootstrapTokensConnection(ctx context.Context, page *model.ConnectionInput, kind *string) (*model.BootstrapTokenConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
@@ -4315,6 +4361,36 @@ func (r *serviceInstanceHealthResolver) LastHealthCheck(ctx context.Context, obj
 	return &t, nil
 }
 
+// Algorithm is the resolver for the algorithm field.
+func (r *signingKeyResolver) Algorithm(ctx context.Context, obj *proto.SigningKey) (model.SigningKeyAlgorithm, error) {
+	return resolvers.ModelSigningKeyAlgorithm(obj.GetAlgorithm()), nil
+}
+
+// Status is the resolver for the status field.
+func (r *signingKeyResolver) Status(ctx context.Context, obj *proto.SigningKey) (model.SigningKeyStatus, error) {
+	return resolvers.ModelSigningKeyStatus(obj.GetStatus()), nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *signingKeyResolver) CreatedAt(ctx context.Context, obj *proto.SigningKey) (*time.Time, error) {
+	t := resolvers.ParseRFC3339OrNil(obj.GetCreatedAt())
+	if t == nil {
+		now := time.Now().UTC()
+		return &now, nil
+	}
+	return t, nil
+}
+
+// LastUsedAt is the resolver for the lastUsedAt field.
+func (r *signingKeyResolver) LastUsedAt(ctx context.Context, obj *proto.SigningKey) (*time.Time, error) {
+	return resolvers.ParseRFC3339OrNil(obj.GetLastUsedAt()), nil
+}
+
+// RevokedAt is the resolver for the revokedAt field.
+func (r *signingKeyResolver) RevokedAt(ctx context.Context, obj *proto.SigningKey) (*time.Time, error) {
+	return resolvers.ParseRFC3339OrNil(obj.GetRevokedAt()), nil
+}
+
 // Sources is the resolver for the sources field.
 func (r *skipperConfidenceBlockResolver) Sources(ctx context.Context, obj *proto.SkipperConfidenceBlock) ([]*model.SkipperCitation, error) {
 	sources := make([]*model.SkipperCitation, 0, len(obj.GetSources()))
@@ -4591,6 +4667,14 @@ func (r *streamResolver) Metrics(ctx context.Context, obj *proto.Stream) (*proto
 // PushTargets is the resolver for the pushTargets field.
 func (r *streamResolver) PushTargets(ctx context.Context, obj *proto.Stream) ([]*proto.PushTarget, error) {
 	return r.DoGetStreamPushTargets(ctx, obj.StreamId)
+}
+
+// PlaybackPolicy is the resolver for the playbackPolicy field.
+func (r *streamResolver) PlaybackPolicy(ctx context.Context, obj *proto.Stream) (*model.PlaybackPolicy, error) {
+	if obj == nil || obj.GetPlaybackId() == "" {
+		return nil, nil
+	}
+	return r.DoGetPlaybackPolicyByPlaybackID(ctx, obj.GetPlaybackId())
 }
 
 // ID is the resolver for the id field.
@@ -6104,6 +6188,14 @@ func (r *viewerSessionResolver) BufferHealth(ctx context.Context, obj *proto.Vie
 	return &v, nil
 }
 
+// PlaybackPolicy is the resolver for the playbackPolicy field.
+func (r *vodAssetResolver) PlaybackPolicy(ctx context.Context, obj *model.VodAsset) (*model.PlaybackPolicy, error) {
+	if obj == nil || obj.PlaybackID == "" {
+		return nil, nil
+	}
+	return r.DoGetPlaybackPolicyByPlaybackID(ctx, obj.PlaybackID)
+}
+
 // Status is the resolver for the status field.
 func (r *vodLifecycleResolver) Status(ctx context.Context, obj *proto.VodLifecycleData) (int, error) {
 	return int(obj.Status), nil
@@ -6372,9 +6464,19 @@ func (r *Resolver) PlaybackInstance() generated.PlaybackInstanceResolver {
 	return &playbackInstanceResolver{r}
 }
 
+// PlaybackJwtPolicy returns generated.PlaybackJwtPolicyResolver implementation.
+func (r *Resolver) PlaybackJwtPolicy() generated.PlaybackJwtPolicyResolver {
+	return &playbackJwtPolicyResolver{r}
+}
+
 // PlaybackMetadata returns generated.PlaybackMetadataResolver implementation.
 func (r *Resolver) PlaybackMetadata() generated.PlaybackMetadataResolver {
 	return &playbackMetadataResolver{r}
+}
+
+// PlaybackWebhookPolicy returns generated.PlaybackWebhookPolicyResolver implementation.
+func (r *Resolver) PlaybackWebhookPolicy() generated.PlaybackWebhookPolicyResolver {
+	return &playbackWebhookPolicyResolver{r}
 }
 
 // ProcessingUsage returns generated.ProcessingUsageResolver implementation.
@@ -6425,6 +6527,9 @@ func (r *Resolver) ServiceInstance() generated.ServiceInstanceResolver {
 func (r *Resolver) ServiceInstanceHealth() generated.ServiceInstanceHealthResolver {
 	return &serviceInstanceHealthResolver{r}
 }
+
+// SigningKey returns generated.SigningKeyResolver implementation.
+func (r *Resolver) SigningKey() generated.SigningKeyResolver { return &signingKeyResolver{r} }
 
 // SkipperConfidenceBlock returns generated.SkipperConfidenceBlockResolver implementation.
 func (r *Resolver) SkipperConfidenceBlock() generated.SkipperConfidenceBlockResolver {
@@ -6589,6 +6694,9 @@ func (r *Resolver) ViewerMetrics() generated.ViewerMetricsResolver { return &vie
 // ViewerSession returns generated.ViewerSessionResolver implementation.
 func (r *Resolver) ViewerSession() generated.ViewerSessionResolver { return &viewerSessionResolver{r} }
 
+// VodAsset returns generated.VodAssetResolver implementation.
+func (r *Resolver) VodAsset() generated.VodAssetResolver { return &vodAssetResolver{r} }
+
 // VodLifecycle returns generated.VodLifecycleResolver implementation.
 func (r *Resolver) VodLifecycle() generated.VodLifecycleResolver { return &vodLifecycleResolver{r} }
 
@@ -6650,7 +6758,9 @@ type orchestratorVantageResolver struct{ *Resolver }
 type paymentResolver struct{ *Resolver }
 type platformOverviewResolver struct{ *Resolver }
 type playbackInstanceResolver struct{ *Resolver }
+type playbackJwtPolicyResolver struct{ *Resolver }
 type playbackMetadataResolver struct{ *Resolver }
+type playbackWebhookPolicyResolver struct{ *Resolver }
 type processingUsageResolver struct{ *Resolver }
 type processingUsageRecordResolver struct{ *Resolver }
 type processingUsageSummaryResolver struct{ *Resolver }
@@ -6662,6 +6772,7 @@ type rebufferingEventResolver struct{ *Resolver }
 type routingEventResolver struct{ *Resolver }
 type serviceInstanceResolver struct{ *Resolver }
 type serviceInstanceHealthResolver struct{ *Resolver }
+type signingKeyResolver struct{ *Resolver }
 type skipperConfidenceBlockResolver struct{ *Resolver }
 type skipperMessageResolver struct{ *Resolver }
 type skipperMetaResolver struct{ *Resolver }
@@ -6701,5 +6812,6 @@ type viewerGeographicResolver struct{ *Resolver }
 type viewerHoursHourlyResolver struct{ *Resolver }
 type viewerMetricsResolver struct{ *Resolver }
 type viewerSessionResolver struct{ *Resolver }
+type vodAssetResolver struct{ *Resolver }
 type vodLifecycleResolver struct{ *Resolver }
 type vodUploadedPartResolver struct{ *Resolver }

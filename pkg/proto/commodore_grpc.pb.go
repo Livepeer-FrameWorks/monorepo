@@ -22,6 +22,8 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	InternalService_ValidateStreamKey_FullMethodName           = "/commodore.InternalService/ValidateStreamKey"
 	InternalService_ResolvePlaybackID_FullMethodName           = "/commodore.InternalService/ResolvePlaybackID"
+	InternalService_ResolvePlaybackPolicy_FullMethodName       = "/commodore.InternalService/ResolvePlaybackPolicy"
+	InternalService_RecordSigningKeyUse_FullMethodName         = "/commodore.InternalService/RecordSigningKeyUse"
 	InternalService_ResolveInternalName_FullMethodName         = "/commodore.InternalService/ResolveInternalName"
 	InternalService_ValidateAPIToken_FullMethodName            = "/commodore.InternalService/ValidateAPIToken"
 	InternalService_StartDVR_FullMethodName                    = "/commodore.InternalService/StartDVR"
@@ -55,6 +57,13 @@ type InternalServiceClient interface {
 	// Called by edge nodes to resolve playback ID to internal name
 	// Source: pkg/api/commodore/types.go:ResolvePlaybackIDResponse
 	ResolvePlaybackID(ctx context.Context, in *ResolvePlaybackIDRequest, opts ...grpc.CallOption) (*ResolvePlaybackIDResponse, error)
+	// Called by Foghorn's USER_NEW handler to fetch the full playback policy
+	// (signing keys + claim requirements OR webhook policy) when requires_auth
+	// is true on the resolved playback object. Enforcement callers must set
+	// include_webhook_secret when they need the plaintext HMAC secret.
+	ResolvePlaybackPolicy(ctx context.Context, in *ResolvePlaybackPolicyRequest, opts ...grpc.CallOption) (*ResolvePlaybackPolicyResponse, error)
+	// Called by Foghorn after a JWT policy successfully verifies.
+	RecordSigningKeyUse(ctx context.Context, in *RecordSigningKeyUseRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Called by Decklog/Foghorn to enrich events with tenant context
 	// Source: pkg/api/commodore/types.go:InternalNameResponse
 	ResolveInternalName(ctx context.Context, in *ResolveInternalNameRequest, opts ...grpc.CallOption) (*ResolveInternalNameResponse, error)
@@ -131,6 +140,26 @@ func (c *internalServiceClient) ResolvePlaybackID(ctx context.Context, in *Resol
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ResolvePlaybackIDResponse)
 	err := c.cc.Invoke(ctx, InternalService_ResolvePlaybackID_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ResolvePlaybackPolicy(ctx context.Context, in *ResolvePlaybackPolicyRequest, opts ...grpc.CallOption) (*ResolvePlaybackPolicyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolvePlaybackPolicyResponse)
+	err := c.cc.Invoke(ctx, InternalService_ResolvePlaybackPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) RecordSigningKeyUse(ctx context.Context, in *RecordSigningKeyUseRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, InternalService_RecordSigningKeyUse_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -339,6 +368,13 @@ type InternalServiceServer interface {
 	// Called by edge nodes to resolve playback ID to internal name
 	// Source: pkg/api/commodore/types.go:ResolvePlaybackIDResponse
 	ResolvePlaybackID(context.Context, *ResolvePlaybackIDRequest) (*ResolvePlaybackIDResponse, error)
+	// Called by Foghorn's USER_NEW handler to fetch the full playback policy
+	// (signing keys + claim requirements OR webhook policy) when requires_auth
+	// is true on the resolved playback object. Enforcement callers must set
+	// include_webhook_secret when they need the plaintext HMAC secret.
+	ResolvePlaybackPolicy(context.Context, *ResolvePlaybackPolicyRequest) (*ResolvePlaybackPolicyResponse, error)
+	// Called by Foghorn after a JWT policy successfully verifies.
+	RecordSigningKeyUse(context.Context, *RecordSigningKeyUseRequest) (*emptypb.Empty, error)
 	// Called by Decklog/Foghorn to enrich events with tenant context
 	// Source: pkg/api/commodore/types.go:InternalNameResponse
 	ResolveInternalName(context.Context, *ResolveInternalNameRequest) (*ResolveInternalNameResponse, error)
@@ -406,6 +442,12 @@ func (UnimplementedInternalServiceServer) ValidateStreamKey(context.Context, *Va
 }
 func (UnimplementedInternalServiceServer) ResolvePlaybackID(context.Context, *ResolvePlaybackIDRequest) (*ResolvePlaybackIDResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolvePlaybackID not implemented")
+}
+func (UnimplementedInternalServiceServer) ResolvePlaybackPolicy(context.Context, *ResolvePlaybackPolicyRequest) (*ResolvePlaybackPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolvePlaybackPolicy not implemented")
+}
+func (UnimplementedInternalServiceServer) RecordSigningKeyUse(context.Context, *RecordSigningKeyUseRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecordSigningKeyUse not implemented")
 }
 func (UnimplementedInternalServiceServer) ResolveInternalName(context.Context, *ResolveInternalNameRequest) (*ResolveInternalNameResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveInternalName not implemented")
@@ -517,6 +559,42 @@ func _InternalService_ResolvePlaybackID_Handler(srv interface{}, ctx context.Con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).ResolvePlaybackID(ctx, req.(*ResolvePlaybackIDRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ResolvePlaybackPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolvePlaybackPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ResolvePlaybackPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ResolvePlaybackPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ResolvePlaybackPolicy(ctx, req.(*ResolvePlaybackPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_RecordSigningKeyUse_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordSigningKeyUseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).RecordSigningKeyUse(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_RecordSigningKeyUse_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).RecordSigningKeyUse(ctx, req.(*RecordSigningKeyUseRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -877,6 +955,14 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResolvePlaybackID",
 			Handler:    _InternalService_ResolvePlaybackID_Handler,
+		},
+		{
+			MethodName: "ResolvePlaybackPolicy",
+			Handler:    _InternalService_ResolvePlaybackPolicy_Handler,
+		},
+		{
+			MethodName: "RecordSigningKeyUse",
+			Handler:    _InternalService_RecordSigningKeyUse_Handler,
 		},
 		{
 			MethodName: "ResolveInternalName",
@@ -3717,6 +3803,275 @@ var NodeManagementService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetNodeHealth",
 			Handler:    _NodeManagementService_GetNodeHealth_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "commodore.proto",
+}
+
+const (
+	PlaybackAccessControlService_CreateSigningKey_FullMethodName  = "/commodore.PlaybackAccessControlService/CreateSigningKey"
+	PlaybackAccessControlService_GetSigningKey_FullMethodName     = "/commodore.PlaybackAccessControlService/GetSigningKey"
+	PlaybackAccessControlService_ListSigningKeys_FullMethodName   = "/commodore.PlaybackAccessControlService/ListSigningKeys"
+	PlaybackAccessControlService_RevokeSigningKey_FullMethodName  = "/commodore.PlaybackAccessControlService/RevokeSigningKey"
+	PlaybackAccessControlService_SetPlaybackPolicy_FullMethodName = "/commodore.PlaybackAccessControlService/SetPlaybackPolicy"
+)
+
+// PlaybackAccessControlServiceClient is the client API for PlaybackAccessControlService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type PlaybackAccessControlServiceClient interface {
+	// Create a new ES256 signing keypair for the tenant. Generates the keypair
+	// server-side; returns the private PEM in the response ONCE (never stored,
+	// never logged, never returned again).
+	CreateSigningKey(ctx context.Context, in *CreateSigningKeyRequest, opts ...grpc.CallOption) (*CreateSigningKeyResponse, error)
+	GetSigningKey(ctx context.Context, in *GetSigningKeyRequest, opts ...grpc.CallOption) (*SigningKey, error)
+	ListSigningKeys(ctx context.Context, in *ListSigningKeysRequest, opts ...grpc.CallOption) (*ListSigningKeysResponse, error)
+	RevokeSigningKey(ctx context.Context, in *RevokeSigningKeyRequest, opts ...grpc.CallOption) (*SigningKey, error)
+	// Set or clear the playback policy on a stream / vod_asset / clip.
+	// Exactly one of stream_id / vod_asset_id / clip_id must be set.
+	// Mutation order in the handler: persist DB → invalidate Foghorn caches
+	// → trigger MistServer invalidate_sessions.
+	SetPlaybackPolicy(ctx context.Context, in *SetPlaybackPolicyRequest, opts ...grpc.CallOption) (*SetPlaybackPolicyResponse, error)
+}
+
+type playbackAccessControlServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewPlaybackAccessControlServiceClient(cc grpc.ClientConnInterface) PlaybackAccessControlServiceClient {
+	return &playbackAccessControlServiceClient{cc}
+}
+
+func (c *playbackAccessControlServiceClient) CreateSigningKey(ctx context.Context, in *CreateSigningKeyRequest, opts ...grpc.CallOption) (*CreateSigningKeyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateSigningKeyResponse)
+	err := c.cc.Invoke(ctx, PlaybackAccessControlService_CreateSigningKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *playbackAccessControlServiceClient) GetSigningKey(ctx context.Context, in *GetSigningKeyRequest, opts ...grpc.CallOption) (*SigningKey, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SigningKey)
+	err := c.cc.Invoke(ctx, PlaybackAccessControlService_GetSigningKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *playbackAccessControlServiceClient) ListSigningKeys(ctx context.Context, in *ListSigningKeysRequest, opts ...grpc.CallOption) (*ListSigningKeysResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSigningKeysResponse)
+	err := c.cc.Invoke(ctx, PlaybackAccessControlService_ListSigningKeys_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *playbackAccessControlServiceClient) RevokeSigningKey(ctx context.Context, in *RevokeSigningKeyRequest, opts ...grpc.CallOption) (*SigningKey, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SigningKey)
+	err := c.cc.Invoke(ctx, PlaybackAccessControlService_RevokeSigningKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *playbackAccessControlServiceClient) SetPlaybackPolicy(ctx context.Context, in *SetPlaybackPolicyRequest, opts ...grpc.CallOption) (*SetPlaybackPolicyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetPlaybackPolicyResponse)
+	err := c.cc.Invoke(ctx, PlaybackAccessControlService_SetPlaybackPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PlaybackAccessControlServiceServer is the server API for PlaybackAccessControlService service.
+// All implementations must embed UnimplementedPlaybackAccessControlServiceServer
+// for forward compatibility.
+type PlaybackAccessControlServiceServer interface {
+	// Create a new ES256 signing keypair for the tenant. Generates the keypair
+	// server-side; returns the private PEM in the response ONCE (never stored,
+	// never logged, never returned again).
+	CreateSigningKey(context.Context, *CreateSigningKeyRequest) (*CreateSigningKeyResponse, error)
+	GetSigningKey(context.Context, *GetSigningKeyRequest) (*SigningKey, error)
+	ListSigningKeys(context.Context, *ListSigningKeysRequest) (*ListSigningKeysResponse, error)
+	RevokeSigningKey(context.Context, *RevokeSigningKeyRequest) (*SigningKey, error)
+	// Set or clear the playback policy on a stream / vod_asset / clip.
+	// Exactly one of stream_id / vod_asset_id / clip_id must be set.
+	// Mutation order in the handler: persist DB → invalidate Foghorn caches
+	// → trigger MistServer invalidate_sessions.
+	SetPlaybackPolicy(context.Context, *SetPlaybackPolicyRequest) (*SetPlaybackPolicyResponse, error)
+	mustEmbedUnimplementedPlaybackAccessControlServiceServer()
+}
+
+// UnimplementedPlaybackAccessControlServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedPlaybackAccessControlServiceServer struct{}
+
+func (UnimplementedPlaybackAccessControlServiceServer) CreateSigningKey(context.Context, *CreateSigningKeyRequest) (*CreateSigningKeyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateSigningKey not implemented")
+}
+func (UnimplementedPlaybackAccessControlServiceServer) GetSigningKey(context.Context, *GetSigningKeyRequest) (*SigningKey, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSigningKey not implemented")
+}
+func (UnimplementedPlaybackAccessControlServiceServer) ListSigningKeys(context.Context, *ListSigningKeysRequest) (*ListSigningKeysResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSigningKeys not implemented")
+}
+func (UnimplementedPlaybackAccessControlServiceServer) RevokeSigningKey(context.Context, *RevokeSigningKeyRequest) (*SigningKey, error) {
+	return nil, status.Error(codes.Unimplemented, "method RevokeSigningKey not implemented")
+}
+func (UnimplementedPlaybackAccessControlServiceServer) SetPlaybackPolicy(context.Context, *SetPlaybackPolicyRequest) (*SetPlaybackPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetPlaybackPolicy not implemented")
+}
+func (UnimplementedPlaybackAccessControlServiceServer) mustEmbedUnimplementedPlaybackAccessControlServiceServer() {
+}
+func (UnimplementedPlaybackAccessControlServiceServer) testEmbeddedByValue() {}
+
+// UnsafePlaybackAccessControlServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to PlaybackAccessControlServiceServer will
+// result in compilation errors.
+type UnsafePlaybackAccessControlServiceServer interface {
+	mustEmbedUnimplementedPlaybackAccessControlServiceServer()
+}
+
+func RegisterPlaybackAccessControlServiceServer(s grpc.ServiceRegistrar, srv PlaybackAccessControlServiceServer) {
+	// If the following call panics, it indicates UnimplementedPlaybackAccessControlServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&PlaybackAccessControlService_ServiceDesc, srv)
+}
+
+func _PlaybackAccessControlService_CreateSigningKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateSigningKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlaybackAccessControlServiceServer).CreateSigningKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlaybackAccessControlService_CreateSigningKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlaybackAccessControlServiceServer).CreateSigningKey(ctx, req.(*CreateSigningKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PlaybackAccessControlService_GetSigningKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSigningKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlaybackAccessControlServiceServer).GetSigningKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlaybackAccessControlService_GetSigningKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlaybackAccessControlServiceServer).GetSigningKey(ctx, req.(*GetSigningKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PlaybackAccessControlService_ListSigningKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSigningKeysRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlaybackAccessControlServiceServer).ListSigningKeys(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlaybackAccessControlService_ListSigningKeys_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlaybackAccessControlServiceServer).ListSigningKeys(ctx, req.(*ListSigningKeysRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PlaybackAccessControlService_RevokeSigningKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeSigningKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlaybackAccessControlServiceServer).RevokeSigningKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlaybackAccessControlService_RevokeSigningKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlaybackAccessControlServiceServer).RevokeSigningKey(ctx, req.(*RevokeSigningKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PlaybackAccessControlService_SetPlaybackPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetPlaybackPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlaybackAccessControlServiceServer).SetPlaybackPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlaybackAccessControlService_SetPlaybackPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlaybackAccessControlServiceServer).SetPlaybackPolicy(ctx, req.(*SetPlaybackPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// PlaybackAccessControlService_ServiceDesc is the grpc.ServiceDesc for PlaybackAccessControlService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var PlaybackAccessControlService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "commodore.PlaybackAccessControlService",
+	HandlerType: (*PlaybackAccessControlServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateSigningKey",
+			Handler:    _PlaybackAccessControlService_CreateSigningKey_Handler,
+		},
+		{
+			MethodName: "GetSigningKey",
+			Handler:    _PlaybackAccessControlService_GetSigningKey_Handler,
+		},
+		{
+			MethodName: "ListSigningKeys",
+			Handler:    _PlaybackAccessControlService_ListSigningKeys_Handler,
+		},
+		{
+			MethodName: "RevokeSigningKey",
+			Handler:    _PlaybackAccessControlService_RevokeSigningKey_Handler,
+		},
+		{
+			MethodName: "SetPlaybackPolicy",
+			Handler:    _PlaybackAccessControlService_SetPlaybackPolicy_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

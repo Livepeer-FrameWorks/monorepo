@@ -83,6 +83,7 @@ const PlayerInner: React.FC<PlayerProps> = ({
     gatewayUrl: options?.gatewayUrl,
     mistUrl: options?.mistUrl,
     authToken: options?.authToken,
+    playbackAuth: options?.playbackAuth,
     autoplay: options?.autoplay !== false,
     muted: options?.muted !== false,
     controls: options?.stockControls === true,

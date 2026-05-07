@@ -21,7 +21,7 @@ map the source-specific differences with you.
 2. **Repoint your encoder.** RTMP, RTMPS, WHIP, and SRT are all supported on the ingest side. Your URL changes; the protocol doesn't.
 3. **Swap the player.** Use `@livepeer-frameworks/player-react`, `-svelte`, `-wc`, or `-core` depending on your stack. See [Player (Playback)](/builders/playback).
 4. **Rewire the API integration.** This is where most of the work is — see below.
-5. **Review playback access policies.** Public playback IDs migrate cleanly. JWT/webhook playback gating needs a separate plan because FrameWorks does not expose that surface today.
+5. **Re-create playback access policies.** Public playback IDs migrate cleanly. For JWT-gated or webhook-gated playback, see [Playback Access Control](/builders/playback-access-control) — customer-managed ES256 signing keys, per-object policy, and webhook callbacks all ship today. Signing keys do not transfer between platforms; reissue on FrameWorks.
 6. **Re-attach multistream targets.** They're stream-scoped on most platforms, including FrameWorks.
 7. **Validate side by side.** Don't cut over until your dashboards agree.
 
@@ -72,9 +72,16 @@ See [Agent Access](/agents/overview) for the wallet and x402 flows. Most migrati
 
 ### Playback access policies
 
-Treat viewer-side access control separately from API authentication. FrameWorks supports public playback IDs today. Customer-managed signing keys, JWT-gated playback, playback access webhooks, and DRM are not yet exposed as a public migration target.
+Treat viewer-side access control separately from API authentication. FrameWorks ships:
 
-If your current platform gates playback, keep that workload on the old platform until the FrameWorks policy surface lands, or scope the migration with us before moving production viewers.
+- **Public playback IDs** by default — anyone with the `playbackId` can watch.
+- **JWT-signed playback** — customer-managed ES256 signing keys, per-object policy, viewer JWT attached as `?jwt=<token>`. Mirrors Studio's `signing-key` + `playbackPolicy: { type: "jwt" }` model.
+- **Webhook-callback policies** — FrameWorks POSTs an HMAC-signed body to your URL on every viewer connect; you return 200 to allow, anything else to deny. Mirrors Studio's `playback.accessControl` webhook.
+- **DRM (Widevine / FairPlay / PlayReady)** — in progress with the MistServer team.
+
+See [Playback Access Control](/builders/playback-access-control) for the full model and code samples.
+
+Signing keys do not transfer between platforms — reissue on FrameWorks even if you have the same JWT-mint code on the source platform. The algorithm is ES256 (asymmetric); only the public key is stored on FrameWorks.
 
 ### Multistream targets
 
@@ -123,8 +130,9 @@ Honest list, applies regardless of source:
 - C2PA / creator-ID provenance signing on transcode. Not exposed as a public FrameWorks API today.
 - First-class Python and Go SDKs. Internal Go clients exist; use GraphQL codegen until first-party
   SDKs are published.
-- JWT/webhook playback access control. Public playback IDs are available today; policy-backed
-  playback gating is not.
+- JWT/webhook playback access control. Public playback IDs and customer-managed ES256 signing
+  keys with per-object JWT or webhook policy all ship today — see
+  [Playback Access Control](/builders/playback-access-control).
 - DRM (Widevine / FairPlay / PlayReady). In progress with the MistServer team.
 - Multi-participant SFU rooms. Parlor is tracked as a separate RFC.
 - Per-target rendition selection on multistream.

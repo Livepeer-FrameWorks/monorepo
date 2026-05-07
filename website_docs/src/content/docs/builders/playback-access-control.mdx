@@ -1,0 +1,331 @@
+---
+title: "Playback Access Control"
+description: "Gate viewer playback with JWT-signed access tokens or webhook callbacks."
+sidebar:
+  order: 6
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+By default, anyone with a stream's `playbackId` can watch it. To restrict
+playback to authenticated viewers (paid content, NFT-gated streams,
+region-locked corporate video), attach a **playback policy** to the stream,
+VOD asset, or clip. FrameWorks ships two policy types in v1:
+
+- **JWT** — viewers present an ES256-signed JWT minted by your backend with a
+  signing key you control. FrameWorks verifies the signature against the
+  matching public key.
+- **Webhook** — FrameWorks POSTs to a URL you specify on every viewer
+  connect. Your endpoint returns 200 to allow or anything else to deny.
+
+<Aside type="note">
+  Customer-managed signing keys + JWT-gated playback is the same conceptual model Livepeer Studio
+  offers. If you're migrating from Studio, see [Migrate from Livepeer
+  Studio](/migrate/livepeer-studio) for the API translation table.
+</Aside>
+
+## Quick start — JWT-signed playback
+
+### 1. Create a signing key
+
+```graphql
+mutation {
+  createSigningKey(input: { name: "primary" }) {
+    ... on CreateSigningKeySuccess {
+      signingKey {
+        id
+        kid
+        publicKeyPem
+      }
+      privateKeyPem
+    }
+  }
+}
+```
+
+`privateKeyPem` is returned **once** and never shown again. Capture it; if
+lost, revoke and re-create. FrameWorks stores only the public PEM.
+
+You can have up to 10 active signing keys per tenant. Use multiple keys for
+rotation — keep the old one active while clients update to the new one,
+then revoke.
+
+### 2. Set the policy on a stream
+
+```graphql
+mutation {
+  setPlaybackPolicy(
+    input: {
+      streamId: "stream_abc123"
+      policy: { type: JWT, jwt: { allowedKids: ["KID_FROM_STEP_1"] } }
+    }
+  ) {
+    ... on Stream {
+      id
+      playbackPolicy {
+        type
+      }
+    }
+  }
+}
+```
+
+`allowedKids` empty = any active tenant key. Restricting it to specific kids
+limits which keys can mint tokens for this object.
+
+Setting a policy automatically:
+
+- Flips the stream's `requiresAuth` marker to `true`.
+- Re-runs `USER_NEW` for every active viewer on that stream — viewers
+  whose tokens still pass continue (with a brief reconnect blip on most
+  protocols); viewers without valid tokens are denied.
+
+### 3. Mint a viewer JWT on your backend
+
+ES256 only. Header must include `kid` matching one of the policy's allowed
+kids. Standard claims: `exp` (required), `iat`, `nbf`, `aud` (if your policy
+requires it), plus any custom claims your policy specifies.
+
+**Node.js example** (`jsonwebtoken`):
+
+```js
+import jwt from "jsonwebtoken";
+
+const privateKey = process.env.FW_SIGNING_PRIVATE_KEY; // PEM from step 1
+const kid = process.env.FW_SIGNING_KID;
+
+const token = jwt.sign(
+  {
+    sub: viewerId, // your internal viewer ID
+    aud: "viewer", // optional, matches policy.requiredAudience
+    tier: "pro", // optional, matches policy.requiredClaims
+  },
+  privateKey,
+  {
+    algorithm: "ES256",
+    keyid: kid,
+    expiresIn: "5m",
+  }
+);
+```
+
+**Go example** (`golang-jwt/jwt/v5`):
+
+```go
+import (
+    "crypto/x509"
+    "encoding/pem"
+    "github.com/golang-jwt/jwt/v5"
+)
+
+block, _ := pem.Decode([]byte(privatePEM))
+priv, _ := x509.ParsePKCS8PrivateKey(block.Bytes)
+
+t := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
+    "sub": viewerID,
+    "exp": time.Now().Add(5 * time.Minute).Unix(),
+})
+t.Header["kid"] = kid
+signed, _ := t.SignedString(priv)
+```
+
+### 4. Attach the JWT to playback
+
+The viewer's player needs to send the JWT on the playback URL. FrameWorks
+players accept it via the `playbackAuth` prop:
+
+```jsx
+<Player
+  contentId="abc123"
+  options={{
+    gatewayUrl: "https://...",
+    playbackAuth: { token: viewerJwt },
+  }}
+/>
+```
+
+```html
+<fw-player content-id="abc123" gateway-url="https://..." playback-token="eyJ..."></fw-player>
+```
+
+By default the player appends `?jwt=<token>` to every resolved playback URL
+(HLS manifest, DASH manifest, WHEP offer, MP4 progressive). You can also set
+`playbackAuth: { token: viewerJwt, transport: "header" }` to send
+`Authorization: Bearer <token>` on player-controlled request paths: HLS.js,
+DASH.js, WHEP, and Mist JSON polling. Query-string delivery remains the
+universal browser transport because native `<video>`, MP4 progressive,
+native HLS, and WebSocket cannot attach arbitrary request headers.
+
+When the player resolves endpoints through FrameWorks Gateway, it also
+forwards the viewer JWT on the GraphQL resolve request. Protected objects are
+checked before endpoint URLs and metadata are returned, then checked again by
+MistServer's `USER_NEW` path before media delivery.
+
+If you're not using a FrameWorks player, append `?jwt=<token>` to the
+playback URL yourself, and include `X-Frameworks-Playback-JWT: <token>` on
+the `resolveViewerEndpoint` GraphQL request. `Authorization: Bearer <token>`
+is also accepted on HTTP playback requests where headers are available.
+
+## Webhook-callback policies
+
+For more dynamic gating (per-viewer NFT checks, account-state lookups,
+geographic decisions, A/B tests), use the webhook policy type. FrameWorks
+POSTs to your URL on every viewer connect; you return 200 to allow or
+anything else to deny.
+
+```graphql
+mutation {
+  setPlaybackPolicy(
+    input: {
+      streamId: "stream_abc123"
+      policy: {
+        type: WEBHOOK
+        webhook: {
+          url: "https://your-app.example/playback-access"
+          secret: "any-strong-random-secret"
+          timeoutMs: 3000
+        }
+      }
+    }
+  ) {
+    ... on Stream {
+      id
+    }
+  }
+}
+```
+
+Your endpoint receives:
+
+```json
+{
+  "streamName": "live+abc123",
+  "sessionId": "...",
+  "viewerIp": "203.0.113.42",
+  "requestUrl": "/abc123.m3u8?jwt=...",
+  "viewerToken": "<whatever the viewer attached, may be empty>",
+  "connector": "HLS",
+  "timestamp": "2026-05-07T08:30:00Z"
+}
+```
+
+Headers include `X-Frameworks-Signature: sha256=<hex>`, an HMAC-SHA256 of
+the raw request body using the secret you supplied. **Verify this before
+trusting the body** — anyone who guesses your URL could otherwise call
+your endpoint directly.
+
+**Node.js verification example:**
+
+```js
+import crypto from "crypto";
+
+app.post("/playback-access", express.raw({ type: "application/json" }), (req, res) => {
+  const sig = req.headers["x-frameworks-signature"]; // "sha256=<hex>"
+  const expected =
+    "sha256=" +
+    crypto.createHmac("sha256", process.env.FW_WEBHOOK_SECRET).update(req.body).digest("hex");
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+    return res.sendStatus(403);
+  }
+
+  const payload = JSON.parse(req.body);
+  // ... your access logic ...
+  if (allowed) return res.sendStatus(200);
+  return res.sendStatus(403);
+});
+```
+
+**SSRF protection:** `setPlaybackPolicy` rejects webhook URLs that resolve
+to private/loopback/link-local/CGNAT addresses, and re-validates on every
+dial to defeat DNS rebinding. Customer URLs must be public HTTPS endpoints.
+
+**Timeouts and limits:** server caps `timeoutMs` at 10000ms (10s).
+Response body is read up to 4 KiB only — return a status code, not a long
+explanation. Any non-200 response (including 5xx, timeouts, network
+errors, redirects) denies the viewer; only an explicit 200 allows.
+
+## Rotation
+
+Rotate signing keys periodically (we recommend quarterly):
+
+1. `createSigningKey` for the new key.
+2. Update your token-mint code to use the new private key + new kid.
+3. (Optional) update `setPlaybackPolicy` to add the new kid to
+   `allowedKids`. If `allowedKids` is empty, all active tenant keys are
+   accepted automatically.
+4. `revokeSigningKey` on the old key once all clients are minting under
+   the new one. FrameWorks asks MistServer to invalidate active sessions on
+   affected streams so `USER_NEW` re-runs and stale tokens are denied.
+
+## Removing a policy
+
+Set the policy type back to `PUBLIC`:
+
+```graphql
+mutation {
+  setPlaybackPolicy(input: { streamId: "stream_abc123", policy: { type: PUBLIC } }) {
+    __typename
+  }
+}
+```
+
+Active sessions are re-evaluated; viewers who were previously gated now
+play without a token (subject to a brief reconnect blip).
+
+## Behavior to expect
+
+- **Brief reconnect on policy change.** Mutating a policy re-runs
+  `USER_NEW` for every active viewer on the affected stream. Most player
+  stacks reconnect transparently; some may emit a one-time stall event.
+  Customer-facing dashboards may see a viewer-count blip.
+- **Per-session enforcement.** The decision is made once per viewer
+  session (~10 min default), then cached by MistServer. Subsequent segment
+  fetches inherit the session decision without re-firing `USER_NEW`.
+- **Session invalidation is best-effort across the active edge set.**
+  Policy changes and key revokes ask Foghorn → Helmsman → MistServer to
+  invalidate sessions for affected streams. If a viewer session remains
+  active on an edge that does not receive that invalidation (for example a
+  cross-cluster pull edge that is temporarily unreachable), it will not
+  recheck until MistServer's session cache expires.
+- **Distinct deny reasons.** Logs distinguish missing-token, bad-kid,
+  wrong-alg, sig-fail, exp, claim-mismatch, webhook-deny-403,
+  webhook-error-status, webhook-timeout, webhook-network, and
+  webhook-blocked-ssrf so you can tell customer-misconfigured from
+  attack-attempt from infrastructure-error.
+- **Derived asset boundary.** Authorized endpoint resolution may return
+  thumbnail metadata and Chandler thumbnail URLs. Media playback is enforced
+  at resolve time and `USER_NEW`; Chandler thumbnail URLs and already-shared
+  Mist metadata/preview URLs do not independently recheck viewer auth in v1.
+  Treat thumbnails as preview assets, not a DRM boundary.
+
+## Limitations (v1)
+
+- **ES256 only.** Asymmetric is strictly better than HMAC for this use
+  case (we never need your secret). HS256 is not supported.
+- **Webhook responses are 200/non-200.** No fine-grained error code
+  passthrough today — use the structured deny logs for diagnostics.
+- **Geo-block / IP allow-deny lists** are not exposed yet. Implement them
+  in your webhook callback in the meantime.
+- **DRM (Widevine / FairPlay / PlayReady)** is in progress with the
+  MistServer team — separate track from this signing-key model.
+- **Header transport on native browser paths.** FrameWorks players support
+  `Authorization: Bearer` on HLS.js, DASH.js, WHEP, and Mist JSON polling.
+  Native `<video>`, MP4 progressive, native HLS, and WebSocket paths still
+  require query-mode because browsers do not expose per-request headers there.
+- **No Chandler-level thumbnail enforcement yet.** Protecting derived assets
+  end-to-end requires media-server and Chandler auth on those asset requests.
+  v1 protects endpoint resolution and media sessions; derived asset
+  enforcement is a separate rollout.
+
+## API reference
+
+| GraphQL                               | Use                                               |
+| ------------------------------------- | ------------------------------------------------- |
+| `createSigningKey(input: { name })`   | Generate ES256 keypair, return private PEM once   |
+| `signingKey(id)`                      | Fetch one signing key (tenant-scoped)             |
+| `signingKeysConnection(status, page)` | Paginate keys; filter by `"active"` / `"revoked"` |
+| `revokeSigningKey(id)`                | Mark revoked; triggers session re-evaluation      |
+| `setPlaybackPolicy(input)`            | Set policy on stream / vodAsset / clip            |
+| `Stream.playbackPolicy`               | Read current policy (webhook secret masked)       |
+| `VodAsset.playbackPolicy`             | Read current policy (webhook secret masked)       |
+| `Clip.playbackPolicy`                 | Read snapshotted clip policy                      |

@@ -78,19 +78,22 @@ Studio uses the term "access control" for two separate concerns: authenticating 
 
 **Viewer-side playback access**
 
-| Studio                             | FrameWorks                           |
-| ---------------------------------- | ------------------------------------ |
-| Default public playback ID         | Default public playback ID           |
-| `POST /access-control/signing-key` | Not exposed today                    |
-| `playbackPolicy: { type: "jwt" }`  | Not exposed today                    |
-| `Livepeer-Jwt` header or `?jwt=`   | Not exposed today                    |
-| `playback.accessControl` webhook   | Not exposed today                    |
-| DRM                                | In progress with the MistServer team |
+| Studio                                | FrameWorks                                                                                             |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Default public playback ID            | Default public playback ID                                                                             |
+| `POST /access-control/signing-key`    | `createSigningKey(input: { name })` — see [Playback Access Control](/builders/playback-access-control) |
+| `playbackPolicy: { type: "jwt" }`     | `setPlaybackPolicy({ streamId, policy: { type: JWT, jwt: { allowedKids } } })`                         |
+| `playbackPolicy: { type: "webhook" }` | `setPlaybackPolicy({ ..., policy: { type: WEBHOOK, webhook: { url, secret, timeoutMs } } })`           |
+| `Livepeer-Jwt` header                 | `?jwt=<token>` (or `Authorization: Bearer` after the MistServer Bearer fix is pinned)                  |
+| `?jwt=` query (MP4 only on Studio)    | `?jwt=<token>` works for HLS, DASH, WebRTC/WHEP, and MP4 — single transport                            |
+| `playback.accessControl` webhook      | Webhook policy: HMAC-signed POST to your URL; return 200 to allow, anything else denies                |
+| DRM                                   | In progress with the MistServer team                                                                   |
 
-<Aside type="caution">
-  Stream keys are ingest secrets, not viewer authorization keys. If your Studio integration depends
-  on JWT-gated playback, webhook access checks, or DRM, do not treat FrameWorks playback IDs as a
-  drop-in replacement yet. Plan that part of the migration with us before you cut over.
+<Aside type="note">
+  Stream keys are ingest secrets, not viewer authorization keys. Signing keys are tenant-scoped and
+  do not transfer between platforms — reissue them on FrameWorks even if you have the same JWT-mint
+  code on Studio. Algorithm is ES256 (asymmetric, customer holds private key). See [Playback Access
+  Control](/builders/playback-access-control) for the full model and code samples.
 </Aside>
 
 ### Real-time events
@@ -219,7 +222,14 @@ If you can't keep a connection open (a serverless cron, for instance), poll `str
 
 If your Studio streams or assets are public, there is no extra work here: move to the new `playbackId` and update embeds.
 
-If you use Studio signing keys, `playbackPolicy: { type: "jwt" }`, `Livepeer-Jwt`, or `playback.accessControl` webhooks, this is a gap to handle explicitly. FrameWorks does not yet expose a customer-managed signing-key API or a playback policy field on streams/VOD assets. Keep that traffic on Studio until the feature lands, or talk to us about a scoped interim arrangement.
+If you use Studio signing keys, `playbackPolicy: { type: "jwt" }`, `Livepeer-Jwt`, or `playback.accessControl` webhooks, FrameWorks now ships an equivalent surface — see [Playback Access Control](/builders/playback-access-control). The translation:
+
+- `POST /access-control/signing-key` → `createSigningKey` mutation (ES256, asymmetric, private PEM returned once).
+- `playbackPolicy: { type: "jwt" }` → `setPlaybackPolicy` with `type: JWT`.
+- `Livepeer-Jwt` header → `?jwt=<token>` query string (universal across HLS, DASH, WebRTC/WHEP, MP4). `Authorization: Bearer` will work after the MistServer Bearer fix is pinned.
+- `playback.accessControl` webhook → `setPlaybackPolicy` with `type: WEBHOOK`. FrameWorks POSTs an HMAC-signed body; your endpoint returns 200 to allow, 403 to deny.
+
+Note that signing keys do not transfer between platforms — reissue on FrameWorks. Migration concierge available via [in-app ticket](%APP_URL%/support) if you have a large library of pre-signed JWTs to roll over.
 
 ### 7. Re-attach multistream targets
 
@@ -273,8 +283,9 @@ Current gaps to account for:
   today.
 - **First-class Python and Go SDKs** — internal Go clients exist; use GraphQL codegen against the
   schema until first-party SDKs are published.
-- **JWT and webhook-based playback access control** — public playback IDs are available today;
-  customer-managed signing keys and playback policies are not.
+- **Derived thumbnail asset enforcement** — playback access control protects endpoint resolution
+  and media sessions. Chandler thumbnail URLs are preview assets and are not a separate auth
+  boundary yet.
 - **DRM (Widevine / FairPlay / PlayReady)** — in progress with the MistServer team.
 - **Multi-participant rooms** — tracked in the Parlor RFC.
 - **VOD URL import and Studio library importer** — no direct `upload via URL` equivalent or one-shot Studio-asset importer today. If you have a sizeable library, [open an in-app ticket](%APP_URL%/support) or message us in [Discord](%DISCORD_URL%) so we can scope the migration.
@@ -291,7 +302,8 @@ Heads-up so nothing surprises you:
 - **Subscriptions are connection-oriented.** Polling fallback is fine if a long-lived connection is awkward in your stack.
 - **The player swap is not API-compatible.** Props and theming differ — budget a few hours to walk through [Player (Playback)](/builders/playback) examples.
 - **Stream keys, playback IDs, and asset IDs are not transferable.** Reissue stream keys and update embeds.
-- **Playback signing is not portable.** Studio's ECDSA signing keys, `Livepeer-Jwt`, and playback policies do not have a public FrameWorks equivalent yet.
+- **Playback signing is not key-portable.** Re-create signing keys in FrameWorks and update your
+  token transport from `Livepeer-Jwt` to `?jwt=` or `Authorization: Bearer`.
 - **No webhook history backfill.** Past Studio events stay on Studio; subscribe fresh on FrameWorks.
 
 ## Get help

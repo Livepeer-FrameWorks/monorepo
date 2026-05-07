@@ -19,6 +19,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/state"
+	"frameworks/api_balancing/internal/triggers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
@@ -1996,6 +1997,56 @@ func getStreamTenantID(streamName string) string {
 	return tenantID
 }
 
+func viewerPlaybackTokenFromHTTPRequest(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	if token := strings.TrimSpace(req.URL.Query().Get("jwt")); token != "" {
+		return token
+	}
+	if token := strings.TrimSpace(req.Header.Get("X-Frameworks-Playback-JWT")); token != "" {
+		return token
+	}
+	if token := strings.TrimSpace(req.Header.Get("X-Playback-JWT")); token != "" {
+		return token
+	}
+	authz := strings.TrimSpace(req.Header.Get("Authorization"))
+	if strings.HasPrefix(strings.ToLower(authz), "bearer ") {
+		return strings.TrimSpace(authz[len("Bearer "):])
+	}
+	if cookie, err := req.Cookie("jwt"); err == nil {
+		return strings.TrimSpace(cookie.Value)
+	}
+	return ""
+}
+
+func enforceHTTPResolvePlaybackPolicy(ctx context.Context, req *pb.ViewerEndpointRequest, internalName string) bool {
+	if commodoreClient == nil {
+		logger.WithFields(logging.Fields{
+			"content_id": req.GetContentId(),
+			"reason":     "policy-client-unavailable",
+		}).Warn("Rejecting protected HTTP resolve request")
+		return false
+	}
+	policy, err := commodoreClient.ResolvePlaybackPolicyForEnforcement(ctx, req.GetContentId())
+	if err != nil {
+		logger.WithError(err).WithFields(logging.Fields{
+			"content_id": req.GetContentId(),
+			"reason":     "policy-fetch-failed",
+		}).Warn("Rejecting protected HTTP resolve request")
+		return false
+	}
+	decision := triggers.EvaluatePlaybackPolicyWithRecorder(ctx, logger, internalName, &pb.ViewerConnectTrigger{
+		StreamName:  internalName,
+		SessionId:   "resolve:" + req.GetContentId(),
+		Host:        req.GetViewerIp(),
+		RequestUrl:  "viewer://" + req.GetContentId(),
+		ViewerToken: req.GetViewerToken(),
+		Connector:   "resolve-http",
+	}, policy, commodoreClient)
+	return decision == "true"
+}
+
 func getLatLon(c *gin.Context, query url.Values, queryKey, headerKey string) float64 {
 	// First check CloudFlare geographic headers (most accurate)
 	if queryKey == "lat" {
@@ -2752,6 +2803,15 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	req := &pb.ViewerEndpointRequest{
 		ContentId: contentID,
 		ViewerIp:  proto.String(viewerIP),
+	}
+	if token := viewerPlaybackTokenFromHTTPRequest(c.Request); token != "" {
+		req.ViewerToken = proto.String(token)
+	}
+	if resolution.RequiresAuth {
+		if !enforceHTTPResolvePlaybackPolicy(c.Request.Context(), req, internalName) {
+			respondPlaybackError(c, http.StatusForbidden, "PLAYBACK_ACCESS_DENIED", "Playback access denied", nil)
+			return
+		}
 	}
 
 	// Get geo location for viewer

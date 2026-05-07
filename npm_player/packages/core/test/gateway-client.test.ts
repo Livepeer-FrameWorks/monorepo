@@ -90,6 +90,22 @@ describe("GatewayClient", () => {
       client.destroy();
     });
 
+    it("forwards playbackAuth as resolve-time viewer token", async () => {
+      const primary = { nodeId: "n1" };
+      globalThis.fetch = mockFetchSuccess(makeGqlResponse(primary));
+
+      const client = new GatewayClient(makeConfig({ playbackAuth: { token: "viewer.jwt" } }));
+      await client.resolve();
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          headers: expect.objectContaining({ "X-Frameworks-Playback-JWT": "viewer.jwt" }),
+        })
+      );
+      client.destroy();
+    });
+
     it("returns parsed ContentEndpoints", async () => {
       const primary = { nodeId: "n1", baseUrl: "https://n1.example.com" };
       const fb = [{ nodeId: "n2", baseUrl: "https://n2.example.com" }];

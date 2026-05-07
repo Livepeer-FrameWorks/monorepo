@@ -233,12 +233,14 @@ export class ThumbnailSpriteManager {
       if (this.destroyed) return;
       const rawCues = parseThumbnailVtt(text);
       const cacheVersion = Date.now();
-      this.cues = rawCues.map((cue) => ({
-        ...cue,
-        url: this.options.isLive
-          ? this.cacheBustUrl(this.resolveUrl(cue.url), cacheVersion)
-          : this.resolveUrl(cue.url),
-      }));
+      const resolvedCues = rawCues.map((cue) => {
+        const resolved = this.resolveUrl(cue.url);
+        return {
+          ...cue,
+          url: this.options.isLive ? this.cacheBustUrl(resolved, cacheVersion) : resolved,
+        };
+      });
+      this.cues = resolvedCues;
       if (this.cues.length > 0) {
         this.stopSeedPolling();
       }

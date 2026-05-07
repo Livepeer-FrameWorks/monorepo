@@ -497,6 +497,8 @@ func RelayCommandType(req *pb.ForwardCommandRequest) string {
 		return "dtsh_sync"
 	case *pb.ForwardCommandRequest_StopSessions:
 		return "stop_sessions"
+	case *pb.ForwardCommandRequest_InvalidateSessions:
+		return "invalidate_sessions"
 	case *pb.ForwardCommandRequest_ProcessingJob:
 		return "processing_job"
 	case *pb.ForwardCommandRequest_Freeze:
@@ -4390,6 +4392,43 @@ func SendStopSessions(nodeID string, req *pb.StopSessionsRequest) error {
 	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_StopSessions{StopSessions: req},
+	}))
+}
+
+// SendLocalInvalidateSessions sends an InvalidateSessionsRequest to a Helmsman
+// that has its bidirectional stream attached to this Foghorn instance.
+//
+// invalidate_sessions does NOT disconnect viewers — it tells MistServer to
+// re-run USER_NEW for active sessions on the listed streams. Viewers whose
+// tokens still pass the (refreshed) policy continue with a brief reconnect
+// blip; viewers whose tokens are now invalid are denied.
+func SendLocalInvalidateSessions(nodeID string, req *pb.InvalidateSessionsRequest) error {
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	msg := &pb.ControlMessage{
+		Payload: &pb.ControlMessage_InvalidateSessionsRequest{InvalidateSessionsRequest: req},
+		SentAt:  timestamppb.Now(),
+	}
+	return c.stream.Send(msg)
+}
+
+// SendInvalidateSessions sends an InvalidateSessionsRequest to the given node,
+// relaying through Foghorn HA if the stream is held by a peer instance.
+func SendInvalidateSessions(nodeID string, req *pb.InvalidateSessionsRequest) error {
+	err := SendLocalInvalidateSessions(nodeID, req)
+	if !shouldRelay(nodeID, err) {
+		return err
+	}
+	if commandRelay == nil {
+		return ErrNotConnected
+	}
+	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_InvalidateSessions{InvalidateSessions: req},
 	}))
 }
 

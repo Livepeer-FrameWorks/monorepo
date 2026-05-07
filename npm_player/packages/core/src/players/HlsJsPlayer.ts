@@ -56,6 +56,9 @@ export class HlsJsPlayerImpl extends BasePlayer {
 
     // Check MediaSource support (required for HLS.js)
     if (!browser.supportsMediaSource) {
+      if (source.headers) {
+        return false;
+      }
       // Fall back to native if available
       const testVideo = document.createElement("video");
       if (testVideo.canPlayType("application/vnd.apple.mpegurl")) {
@@ -168,6 +171,14 @@ export class HlsJsPlayerImpl extends BasePlayer {
       console.log("[HLS.js] hls.js module imported, Hls.isSupported():", Hls.isSupported?.());
 
       if (Hls.isSupported()) {
+        const playbackHeaders = options.playbackHeaders;
+        const userXhrSetup = options.hlsConfig?.xhrSetup as
+          | ((xhr: XMLHttpRequest, url: string) => void | Promise<void>)
+          | undefined;
+        const userFetchSetup = options.hlsConfig?.fetchSetup as
+          | ((context: unknown, initParams: RequestInit) => Request | Promise<Request>)
+          | undefined;
+
         // Build optimized HLS.js config with user overrides
         const hlsConfig: HlsJsConfig = {
           // Worker disabled for lower latency (per HLS.js maintainer recommendation)
@@ -196,6 +207,24 @@ export class HlsJsPlayerImpl extends BasePlayer {
           // Allow user overrides
           ...options.hlsConfig,
         };
+        if (playbackHeaders) {
+          hlsConfig.xhrSetup = (xhr: XMLHttpRequest, url: string) => {
+            for (const [key, value] of Object.entries(playbackHeaders)) {
+              xhr.setRequestHeader(key, value);
+            }
+            return userXhrSetup?.(xhr, url);
+          };
+          hlsConfig.fetchSetup = async (context: unknown, initParams: RequestInit) => {
+            const headers = new Headers(initParams.headers);
+            for (const [key, value] of Object.entries(playbackHeaders)) {
+              headers.set(key, value);
+            }
+            const nextInit = { ...initParams, headers };
+            return userFetchSetup
+              ? userFetchSetup(context, nextInit)
+              : new Request((context as any).url, nextInit);
+          };
+        }
 
         this.hls = new Hls(hlsConfig);
 
@@ -238,6 +267,9 @@ export class HlsJsPlayerImpl extends BasePlayer {
           // no startunix URL rewriting needed (that's only for progressive formats).
         });
       } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        if (options.playbackHeaders) {
+          throw new Error("Native HLS cannot attach playback Authorization headers");
+        }
         // Use native HLS support
         video.src = source.url;
       } else {

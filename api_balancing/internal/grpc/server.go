@@ -35,6 +35,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
@@ -66,6 +67,7 @@ type S3ClientInterface interface {
 // CacheInvalidator is implemented by the trigger processor to invalidate and lookup cached tenant data
 type CacheInvalidator interface {
 	InvalidateTenantCache(tenantID string) int
+	InvalidatePlaybackAuthCache(tenantID string, internalNames []string) int
 	GetBillingStatus(ctx context.Context, internalName, tenantID string) *triggers.BillingStatus
 	GetClusterPeers(internalName, tenantID string) []*pb.TenantClusterPeer
 }
@@ -1518,6 +1520,12 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 		}
 	}
 
+	if resolution.RequiresAuth {
+		if authErr := s.enforceResolvePlaybackPolicy(ctx, req, resolution); authErr != nil {
+			return nil, authErr
+		}
+	}
+
 	// GeoIP resolution
 	// IMPORTANT: default to NaN so missing GeoIP does not look like a real (0,0) coordinate.
 	lat, lon := math.NaN(), math.NaN()
@@ -1575,6 +1583,36 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 	}
 
 	return response, nil
+}
+
+func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, req *pb.ViewerEndpointRequest, resolution *control.ContentResolution) error {
+	if control.CommodoreClient == nil {
+		s.logger.WithFields(logging.Fields{
+			"content_id": req.GetContentId(),
+			"reason":     "policy-client-unavailable",
+		}).Warn("Rejecting protected resolve request")
+		return status.Error(codes.PermissionDenied, "playback access denied")
+	}
+	policy, err := control.CommodoreClient.ResolvePlaybackPolicyForEnforcement(ctx, req.GetContentId())
+	if err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"content_id": req.GetContentId(),
+			"reason":     "policy-fetch-failed",
+		}).Warn("Rejecting protected resolve request")
+		return status.Error(codes.PermissionDenied, "playback access denied")
+	}
+	decision := triggers.EvaluatePlaybackPolicyWithRecorder(ctx, s.logger, resolution.InternalName, &pb.ViewerConnectTrigger{
+		StreamName:  resolution.InternalName,
+		SessionId:   "resolve:" + req.GetContentId(),
+		Host:        req.GetViewerIp(),
+		RequestUrl:  "viewer://" + req.GetContentId(),
+		ViewerToken: req.GetViewerToken(),
+		Connector:   "resolve",
+	}, policy, control.CommodoreClient)
+	if decision != "true" {
+		return status.Error(codes.PermissionDenied, "playback access denied")
+	}
+	return nil
 }
 
 func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID string, clusterPeers []*pb.TenantClusterPeer) (*pb.ViewerEndpointResponse, error) {
@@ -3481,6 +3519,200 @@ func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *pb.
 		SessionsTerminated: sessionsTerminated,
 		StreamNames:        allStreamNames,
 	}, nil
+}
+
+// InvalidatePlaybackAuth sends invalidate_sessions to Helmsman nodes holding
+// the listed live streams or artifacts. Called by Commodore after a playback
+// policy or signing-key mutation. The re-fired USER_NEW reads the fresh policy
+// and decides allow/deny per session. Empty internal_names fans out across the
+// tenant's known live streams and artifact sessions.
+func (s *FoghornGRPCServer) InvalidatePlaybackAuth(ctx context.Context, req *pb.InvalidatePlaybackAuthRequest) (*pb.InvalidatePlaybackAuthResponse, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	names := s.resolvePlaybackAuthInvalidationNames(ctx, req.GetTenantId(), req.GetInternalNames())
+	if len(names) == 0 {
+		return &pb.InvalidatePlaybackAuthResponse{}, nil
+	}
+
+	if s.cacheInvalidator != nil {
+		s.cacheInvalidator.InvalidatePlaybackAuthCache(req.GetTenantId(), names)
+	}
+
+	// Group by node so each Helmsman gets a single batched call.
+	streamsByNode := make(map[string][]string)
+	for _, name := range names {
+		instances := s.lb.GetStreamInstances(name)
+		for nodeID := range instances {
+			streamsByNode[nodeID] = append(streamsByNode[nodeID], name)
+		}
+		for nodeID := range s.artifactSessionNodes(ctx, req.GetTenantId(), name) {
+			streamsByNode[nodeID] = append(streamsByNode[nodeID], name)
+		}
+	}
+
+	dispatched := int32(0)
+	for nodeID, nodeStreams := range streamsByNode {
+		invReq := &pb.InvalidateSessionsRequest{
+			StreamNames: nodeStreams,
+			TenantId:    req.GetTenantId(),
+			Reason:      req.GetReason(),
+		}
+		if err := control.SendInvalidateSessions(nodeID, invReq); err != nil {
+			s.logger.WithFields(logging.Fields{
+				"node_id":   nodeID,
+				"tenant_id": req.GetTenantId(),
+				"reason":    req.GetReason(),
+				"error":     err,
+			}).Warn("Failed to dispatch invalidate_sessions to node")
+			continue
+		}
+		dispatched++
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id":           req.GetTenantId(),
+		"reason":              req.GetReason(),
+		"streams_invalidated": len(names),
+		"nodes_dispatched":    dispatched,
+	}).Info("Dispatched invalidate_sessions for playback-policy change")
+
+	return &pb.InvalidatePlaybackAuthResponse{
+		StreamsInvalidated: int32(len(names)),
+		NodesDispatched:    dispatched,
+	}, nil
+}
+
+func (s *FoghornGRPCServer) resolvePlaybackAuthInvalidationNames(ctx context.Context, tenantID string, requested []string) []string {
+	seen := map[string]struct{}{}
+	add := func(name string, out *[]string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		*out = append(*out, name)
+	}
+
+	var names []string
+	if len(requested) > 0 {
+		for _, name := range requested {
+			add(name, &names)
+		}
+		return names
+	}
+
+	for _, st := range s.lb.GetStreamsByTenant(tenantID) {
+		add(st.InternalName, &names)
+	}
+	for _, name := range s.tenantArtifactSessionNames(ctx, tenantID) {
+		add(name, &names)
+	}
+	return names
+}
+
+func (s *FoghornGRPCServer) tenantArtifactSessionNames(ctx context.Context, tenantID string) []string {
+	if s.db == nil || tenantID == "" {
+		return nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT internal_name
+		FROM foghorn.artifacts
+		WHERE tenant_id = $1
+		  AND status != 'deleted'
+		  AND COALESCE(internal_name, '') != ''
+	`, tenantID)
+	if err != nil {
+		s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("playback-auth invalidation: artifact lookup failed")
+		return nil
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			s.logger.WithError(err).Warn("playback-auth invalidation: artifact row scan failed")
+			return names
+		}
+		names = append(names, artifactSessionName(name))
+	}
+	return names
+}
+
+func (s *FoghornGRPCServer) artifactSessionNodes(ctx context.Context, tenantID, internalName string) map[string]struct{} {
+	nodes := map[string]struct{}{}
+	hash := s.artifactHashForSessionName(ctx, tenantID, internalName)
+	if hash == "" {
+		return nodes
+	}
+	for _, node := range state.DefaultManager().FindNodesByArtifactHash(hash) {
+		if node.NodeID != "" {
+			nodes[node.NodeID] = struct{}{}
+		}
+	}
+	if len(nodes) > 0 || s.db == nil {
+		return nodes
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT an.node_id
+		FROM foghorn.artifacts a
+		JOIN foghorn.artifact_nodes an ON an.artifact_hash = a.artifact_hash
+		WHERE a.artifact_hash = $1
+		  AND a.tenant_id = $2
+		  AND a.status != 'deleted'
+		  AND COALESCE(an.is_orphaned, false) = false
+	`, hash, tenantID)
+	if err != nil {
+		s.logger.WithError(err).WithField("artifact_hash", hash).Warn("playback-auth invalidation: artifact node lookup failed")
+		return nodes
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var nodeID string
+		if err := rows.Scan(&nodeID); err != nil {
+			s.logger.WithError(err).Warn("playback-auth invalidation: artifact node row scan failed")
+			return nodes
+		}
+		if nodeID != "" {
+			nodes[nodeID] = struct{}{}
+		}
+	}
+	return nodes
+}
+
+func (s *FoghornGRPCServer) artifactHashForSessionName(ctx context.Context, tenantID, internalName string) string {
+	if s.db == nil || tenantID == "" || internalName == "" {
+		return ""
+	}
+	bare := mist.ExtractInternalName(internalName)
+	var hash string
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT artifact_hash
+		FROM foghorn.artifacts
+		WHERE internal_name = $1
+		  AND tenant_id = $2
+		  AND status != 'deleted'
+		LIMIT 1
+	`, bare, tenantID).Scan(&hash); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			s.logger.WithError(err).WithField("internal_name", bare).Warn("playback-auth invalidation: artifact hash lookup failed")
+		}
+		return ""
+	}
+	return hash
+}
+
+func artifactSessionName(internalName string) string {
+	internalName = strings.TrimSpace(internalName)
+	if internalName == "" || strings.Contains(internalName, "+") {
+		return internalName
+	}
+	return "vod+" + internalName
 }
 
 // InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)

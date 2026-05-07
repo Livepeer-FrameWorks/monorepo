@@ -6,7 +6,7 @@
  */
 
 import { TypedEventEmitter } from "./EventEmitter";
-import type { ContentEndpoints, ContentType } from "../types";
+import type { ContentEndpoints, ContentType, PlaybackAuth } from "../types";
 
 // ============================================================================
 // Types
@@ -23,6 +23,8 @@ export interface GatewayClientConfig {
   contentType?: ContentType;
   /** Optional auth token for private streams */
   authToken?: string;
+  /** Viewer playback auth token forwarded to resolve-time access control. */
+  playbackAuth?: PlaybackAuth;
   /** Maximum retry attempts (default: 3) */
   maxRetries?: number;
   /** Initial retry delay in ms (default: 500) */
@@ -291,6 +293,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
       gatewayUrl,
       contentId,
       authToken,
+      playbackAuth,
       maxRetries = DEFAULT_MAX_RETRIES,
       initialDelayMs = DEFAULT_INITIAL_DELAY_MS,
     } = this.config;
@@ -317,6 +320,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
           headers: {
             "Content-Type": "application/json",
             ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+            ...(playbackAuth?.token ? { "X-Frameworks-Playback-JWT": playbackAuth.token } : {}),
           },
           body: JSON.stringify({
             query: RESOLVE_VIEWER_QUERY,

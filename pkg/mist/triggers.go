@@ -80,7 +80,7 @@ func IsPlaybackViewerRequest(connector, requestURL string) bool {
 	}
 	for _, marker := range []string{
 		"/json_", ".json", "info_json", "metaeverywhere=",
-		".jpg", ".jpeg", ".png", "poster", "sprite", ".thumbvtt", ".vtt", ".webvtt", ".srt",
+		".jpg", ".jpeg", ".png", "poster", "sprite", ".thumbvtt",
 	} {
 		if strings.Contains(req, marker) {
 			return false
@@ -89,7 +89,21 @@ func IsPlaybackViewerRequest(connector, requestURL string) bool {
 	if playbackConnector {
 		return true
 	}
+	if isNonPlaybackAssetConnector(connector) {
+		return false
+	}
 	return hasPlaybackRequestMarker(req)
+}
+
+func isNonPlaybackAssetConnector(connector string) bool {
+	parts := strings.Split(connector, ",")
+	for _, part := range parts {
+		switch strings.ToLower(strings.TrimSpace(part)) {
+		case "thumbvtt", "jpg", "jpeg", "png", "spritesheet", "sprite":
+			return true
+		}
+	}
+	return false
 }
 
 func hasPlaybackRequestMarker(req string) bool {
@@ -97,6 +111,7 @@ func hasPlaybackRequestMarker(req string) bool {
 		"/hls/", "/cmaf/", "/webrtc/",
 		".m3u8", ".mpd", ".mp4", ".m4s", ".webm", ".mkv", ".flv", ".ts",
 		".aac", ".mp3", ".flac", ".wav", ".ogg", ".opus", ".sdp", ".raw", ".h264",
+		".vtt", ".webvtt", ".srt",
 	} {
 		if strings.Contains(req, marker) {
 			return true
@@ -208,12 +223,12 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		}
 		mistTrigger.TriggerPayload = &pb.MistTrigger_ViewerConnect{
 			ViewerConnect: &pb.ViewerConnectTrigger{
-				StreamName:   params[0],
-				Host:         params[1],
-				ConnectionId: params[2],
-				Connector:    params[3],
-				RequestUrl:   params[4],
-				SessionId:    params[5],
+				StreamName:  params[0],
+				Host:        params[1],
+				ViewerToken: params[2],
+				Connector:   params[3],
+				RequestUrl:  params[4],
+				SessionId:   params[5],
 			},
 		}
 

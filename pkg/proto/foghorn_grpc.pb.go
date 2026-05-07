@@ -1118,6 +1118,7 @@ var NodeControlService_ServiceDesc = grpc.ServiceDesc{
 const (
 	TenantControlService_TerminateTenantStreams_FullMethodName = "/foghorn.TenantControlService/TerminateTenantStreams"
 	TenantControlService_InvalidateTenantCache_FullMethodName  = "/foghorn.TenantControlService/InvalidateTenantCache"
+	TenantControlService_InvalidatePlaybackAuth_FullMethodName = "/foghorn.TenantControlService/InvalidatePlaybackAuth"
 )
 
 // TenantControlServiceClient is the client API for TenantControlService service.
@@ -1130,6 +1131,11 @@ type TenantControlServiceClient interface {
 	TerminateTenantStreams(ctx context.Context, in *TerminateTenantStreamsRequest, opts ...grpc.CallOption) (*TerminateTenantStreamsResponse, error)
 	// InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
 	InvalidateTenantCache(ctx context.Context, in *InvalidateTenantCacheRequest, opts ...grpc.CallOption) (*InvalidateTenantCacheResponse, error)
+	// InvalidatePlaybackAuth tells Foghorn to send invalidate_sessions to every
+	// Helmsman whose nodes hold the listed streams. Called by Commodore after
+	// a playback-policy or signing-key mutation. Does NOT disconnect viewers;
+	// valid auth survives, invalid auth gets denied on the re-fired USER_NEW.
+	InvalidatePlaybackAuth(ctx context.Context, in *InvalidatePlaybackAuthRequest, opts ...grpc.CallOption) (*InvalidatePlaybackAuthResponse, error)
 }
 
 type tenantControlServiceClient struct {
@@ -1160,6 +1166,16 @@ func (c *tenantControlServiceClient) InvalidateTenantCache(ctx context.Context, 
 	return out, nil
 }
 
+func (c *tenantControlServiceClient) InvalidatePlaybackAuth(ctx context.Context, in *InvalidatePlaybackAuthRequest, opts ...grpc.CallOption) (*InvalidatePlaybackAuthResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InvalidatePlaybackAuthResponse)
+	err := c.cc.Invoke(ctx, TenantControlService_InvalidatePlaybackAuth_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TenantControlServiceServer is the server API for TenantControlService service.
 // All implementations must embed UnimplementedTenantControlServiceServer
 // for forward compatibility.
@@ -1170,6 +1186,11 @@ type TenantControlServiceServer interface {
 	TerminateTenantStreams(context.Context, *TerminateTenantStreamsRequest) (*TerminateTenantStreamsResponse, error)
 	// InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
 	InvalidateTenantCache(context.Context, *InvalidateTenantCacheRequest) (*InvalidateTenantCacheResponse, error)
+	// InvalidatePlaybackAuth tells Foghorn to send invalidate_sessions to every
+	// Helmsman whose nodes hold the listed streams. Called by Commodore after
+	// a playback-policy or signing-key mutation. Does NOT disconnect viewers;
+	// valid auth survives, invalid auth gets denied on the re-fired USER_NEW.
+	InvalidatePlaybackAuth(context.Context, *InvalidatePlaybackAuthRequest) (*InvalidatePlaybackAuthResponse, error)
 	mustEmbedUnimplementedTenantControlServiceServer()
 }
 
@@ -1185,6 +1206,9 @@ func (UnimplementedTenantControlServiceServer) TerminateTenantStreams(context.Co
 }
 func (UnimplementedTenantControlServiceServer) InvalidateTenantCache(context.Context, *InvalidateTenantCacheRequest) (*InvalidateTenantCacheResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InvalidateTenantCache not implemented")
+}
+func (UnimplementedTenantControlServiceServer) InvalidatePlaybackAuth(context.Context, *InvalidatePlaybackAuthRequest) (*InvalidatePlaybackAuthResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InvalidatePlaybackAuth not implemented")
 }
 func (UnimplementedTenantControlServiceServer) mustEmbedUnimplementedTenantControlServiceServer() {}
 func (UnimplementedTenantControlServiceServer) testEmbeddedByValue()                              {}
@@ -1243,6 +1267,24 @@ func _TenantControlService_InvalidateTenantCache_Handler(srv interface{}, ctx co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TenantControlService_InvalidatePlaybackAuth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InvalidatePlaybackAuthRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantControlServiceServer).InvalidatePlaybackAuth(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantControlService_InvalidatePlaybackAuth_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantControlServiceServer).InvalidatePlaybackAuth(ctx, req.(*InvalidatePlaybackAuthRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TenantControlService_ServiceDesc is the grpc.ServiceDesc for TenantControlService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1257,6 +1299,10 @@ var TenantControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "InvalidateTenantCache",
 			Handler:    _TenantControlService_InvalidateTenantCache_Handler,
+		},
+		{
+			MethodName: "InvalidatePlaybackAuth",
+			Handler:    _TenantControlService_InvalidatePlaybackAuth_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

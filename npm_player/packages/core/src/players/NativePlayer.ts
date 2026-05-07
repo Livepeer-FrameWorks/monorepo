@@ -98,6 +98,9 @@ export class NativePlayerImpl extends BasePlayer {
     source: StreamSource,
     streamInfo: StreamInfo
   ): boolean | string[] {
+    if (source.headers && mimetype !== "whep") {
+      return false;
+    }
     if (mimetype === "whep") {
       // Check basic WebRTC support
       if (!("RTCPeerConnection" in window) || !("fetch" in window)) return false;

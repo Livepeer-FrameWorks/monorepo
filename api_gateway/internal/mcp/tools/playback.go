@@ -70,7 +70,7 @@ func handleResolvePlayback(ctx context.Context, args ResolvePlaybackInput, clien
 	}
 
 	// Call Commodore to resolve viewer endpoint
-	resp, err := clients.Commodore.ResolveViewerEndpoint(ctx, contentID, args.ViewerIP)
+	resp, err := clients.Commodore.ResolveViewerEndpoint(ctx, contentID, args.ViewerIP, "")
 	if err != nil {
 		logger.WithError(err).Warn("Failed to resolve playback endpoint")
 		return toolError(fmt.Sprintf("Failed to resolve playback endpoint: %v", err))

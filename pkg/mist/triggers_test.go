@@ -65,6 +65,9 @@ func TestIsPlaybackViewerRequest(t *testing.T) {
 		{name: "poster request", connector: "HTTP", requestURL: "http://edge/assets/stream/poster.jpg", expected: false},
 		{name: "sprite request", connector: "HTTP", requestURL: "http://edge/assets/stream/sprite.jpg", expected: false},
 		{name: "thumb vtt request", connector: "ThumbVTT", requestURL: "http://edge/view/live+stream.thumbvtt", expected: false},
+		{name: "subtitle vtt request", connector: "HTTP", requestURL: "http://edge/view/live+stream/subtitles.vtt", expected: true},
+		{name: "subtitle webvtt request", connector: "HTTP", requestURL: "http://edge/view/live+stream/captions.webvtt", expected: true},
+		{name: "subtitle srt request", connector: "HTTP", requestURL: "http://edge/view/live+stream/captions.srt", expected: true},
 	}
 
 	for _, tc := range cases {

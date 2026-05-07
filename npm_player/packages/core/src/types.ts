@@ -93,6 +93,28 @@ export interface PlayerOptions {
 
   /** Custom keyboard shortcut bindings (merged over defaults). */
   keyMap?: Partial<PlayerKeyMap>;
+
+  /**
+   * Viewer-side playback auth (separate from `authToken`, which authenticates
+   * Gateway GraphQL resolution). Defaults to `?jwt=` query transport. Header
+   * transport is supported for player-controlled request paths such as HLS.js,
+   * DASH.js, and WHEP.
+   */
+  playbackAuth?: PlaybackAuth;
+}
+
+/**
+ * Viewer-side playback auth (Studio's signing-key + JWT model). The token is
+ * a customer-minted ES256 JWT carrying claims that match the stream's
+ * playback policy. See docs/builders/playback-access-control.mdx.
+ */
+export interface PlaybackAuth {
+  token: string;
+  /**
+   * Transport mechanism. Query mode works everywhere. Header mode uses
+   * `Authorization: Bearer` on request paths controlled by the player.
+   */
+  transport?: "query" | "header";
 }
 
 /** HLS.js configuration subset */

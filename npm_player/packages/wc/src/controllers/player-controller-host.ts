@@ -147,6 +147,7 @@ export class PlayerControllerHost implements ReactiveController {
       gatewayUrl: this.currentConfig.gatewayUrl,
       mistUrl: this.currentConfig.mistUrl,
       authToken: this.currentConfig.authToken,
+      playbackAuth: this.currentConfig.playbackAuth,
       autoplay: this.currentConfig.autoplay,
       muted: this.currentConfig.muted,
       controls: this.currentConfig.controls,

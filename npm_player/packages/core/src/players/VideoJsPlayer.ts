@@ -32,6 +32,10 @@ export class VideoJsPlayerImpl extends BasePlayer {
     source: StreamSource,
     streamInfo: StreamInfo
   ): boolean | string[] {
+    if (source.headers) {
+      return false;
+    }
+
     // VideoJS uses MSE (VHS) which requires http/https (not file://)
     if (isFileProtocol()) {
       return false;

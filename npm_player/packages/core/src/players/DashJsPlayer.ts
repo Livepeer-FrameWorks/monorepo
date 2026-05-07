@@ -289,6 +289,13 @@ export class DashJsPlayerImpl extends BasePlayer {
 
       this.dashPlayer = dashjs.MediaPlayer().create();
       console.debug("[DashJS] MediaPlayer created");
+      if (options.playbackHeaders && typeof this.dashPlayer.addRequestInterceptor === "function") {
+        const playbackHeaders = options.playbackHeaders;
+        this.dashPlayer.addRequestInterceptor((request: any) => {
+          request.headers = { ...(request.headers ?? {}), ...playbackHeaders };
+          return request;
+        });
+      }
 
       // Set up event logging (reference dashjs.js:152-160)
       this.setupEventLogging(dashjs);

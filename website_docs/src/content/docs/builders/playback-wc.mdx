@@ -151,24 +151,26 @@ import "@livepeer-frameworks/player-wc";
 
 ## Attributes Reference
 
-| Attribute         | Type      | Default     | Description                                                                   |
-| ----------------- | --------- | ----------- | ----------------------------------------------------------------------------- |
-| `content-id`      | `string`  | —           | Playback ID                                                                   |
-| `content-type`    | `string`  | `"live"`    | `live`, `dvr`, `clip`, or `vod`                                               |
-| `gateway-url`     | `string`  | —           | Gateway GraphQL endpoint                                                      |
-| `mist-url`        | `string`  | —           | Direct MistServer URL                                                         |
-| `auth-token`      | `string`  | —           | Bearer token for private playback                                             |
-| `thumbnail-url`   | `string`  | —           | Poster image before playback                                                  |
-| `autoplay`        | `boolean` | `true`      | Auto-start playback                                                           |
-| `muted`           | `boolean` | `false`     | Start muted                                                                   |
-| `controls`        | `boolean` | `false`     | Compatibility no-op                                                           |
-| `stock-controls`  | `boolean` | `false`     | Use browser-native video controls                                             |
-| `native-controls` | `boolean` | `false`     | Alias for `stock-controls`                                                    |
-| `theme`           | `string`  | `"default"` | Theme preset                                                                  |
-| `locale`          | `string`  | `"en"`      | Built-in UI locale                                                            |
-| `playback-mode`   | `string`  | `"auto"`    | Controls/dev-panel mode label; current WC initial selection does not apply it |
-| `dev-mode`        | `boolean` | `false`     | Show dev panel                                                                |
-| `debug`           | `boolean` | `false`     | Debug logging                                                                 |
+| Attribute                  | Type                  | Default     | Description                                                                                           |
+| -------------------------- | --------------------- | ----------- | ----------------------------------------------------------------------------------------------------- |
+| `content-id`               | `string`              | —           | Playback ID                                                                                           |
+| `content-type`             | `string`              | `"live"`    | `live`, `dvr`, `clip`, or `vod`                                                                       |
+| `gateway-url`              | `string`              | —           | Gateway GraphQL endpoint                                                                              |
+| `mist-url`                 | `string`              | —           | Direct MistServer URL                                                                                 |
+| `auth-token`               | `string`              | —           | Bearer token for Gateway GraphQL resolution                                                           |
+| `playback-token`           | `string`              | —           | Viewer JWT for playback access control                                                                |
+| `playback-token-transport` | `"query" \| "header"` | `"query"`   | Sends the viewer JWT as `?jwt=` or as `Authorization: Bearer` where player transports can set headers |
+| `thumbnail-url`            | `string`              | —           | Poster image before playback                                                                          |
+| `autoplay`                 | `boolean`             | `true`      | Auto-start playback                                                                                   |
+| `muted`                    | `boolean`             | `false`     | Start muted                                                                                           |
+| `controls`                 | `boolean`             | `false`     | Compatibility no-op                                                                                   |
+| `stock-controls`           | `boolean`             | `false`     | Use browser-native video controls                                                                     |
+| `native-controls`          | `boolean`             | `false`     | Alias for `stock-controls`                                                                            |
+| `theme`                    | `string`              | `"default"` | Theme preset                                                                                          |
+| `locale`                   | `string`              | `"en"`      | Built-in UI locale                                                                                    |
+| `playback-mode`            | `string`              | `"auto"`    | Controls/dev-panel mode label; current WC initial selection does not apply it                         |
+| `dev-mode`                 | `boolean`             | `false`     | Show dev panel                                                                                        |
+| `debug`                    | `boolean`             | `false`     | Debug logging                                                                                         |
 
 ## Theming
 

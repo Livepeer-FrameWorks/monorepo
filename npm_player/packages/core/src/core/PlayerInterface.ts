@@ -13,6 +13,7 @@ export interface StreamSource {
   index?: number;
   streamName?: string;
   mistPlayerUrl?: string;
+  headers?: Record<string, string>;
   /** MistServer capability hint for WebRTC datachannel control support (WHEP seeking). */
   mistDatachannels?: boolean;
 }
@@ -84,6 +85,8 @@ export interface PlayerOptions {
   dashConfig?: Record<string, unknown>;
   /** Video.js VHS configuration override (merged with defaults) */
   vhsConfig?: Record<string, unknown>;
+  /** Headers to apply to player-controlled playback requests. */
+  playbackHeaders?: Record<string, string>;
   /**
    * Enable MistServer live catch-up auto-speed near the live edge.
    * A number is interpreted as seconds from the live edge, matching Mist embed behavior.

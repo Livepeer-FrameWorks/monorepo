@@ -649,7 +649,11 @@ func TestHandlePlayRewriteStartsCorrelatedPlaybackViewer(t *testing.T) {
 	nodeID := "node-1"
 	internalName := "stream-count"
 	clientIP := "192.0.2.10"
-	processor.streamCache.Set(tenantID+":"+internalName, streamContext{TenantID: tenantID}, time.Minute)
+	processor.streamCache.Set(tenantID+":"+internalName, streamContext{
+		TenantID:          tenantID,
+		RequiresAuth:      false,
+		RequiresAuthKnown: true,
+	}, time.Minute)
 
 	viewerID := sm.CreateVirtualViewer(nodeID, internalName, clientIP)
 
@@ -744,7 +748,11 @@ func TestHandleUserNewDoesNotStartPlaybackViewer(t *testing.T) {
 	nodeID := "node-1"
 	internalName := "stream-user-new"
 	clientIP := "192.0.2.10"
-	processor.streamCache.Set(tenantID+":"+internalName, streamContext{TenantID: tenantID}, time.Minute)
+	processor.streamCache.Set(tenantID+":"+internalName, streamContext{
+		TenantID:          tenantID,
+		RequiresAuth:      false,
+		RequiresAuthKnown: true,
+	}, time.Minute)
 
 	resp, abort, err := processor.handleUserNew(&pb.MistTrigger{
 		NodeId:   nodeID,

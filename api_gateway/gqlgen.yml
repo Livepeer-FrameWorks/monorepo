@@ -564,6 +564,26 @@ models:
       # Viewer endpoint resolution types - bound to proto types
       stream:
         resolver: true
+  # VodAsset is fully gqlgen-generated; only the playbackPolicy field needs
+  # a resolver because it requires a Commodore round-trip.
+  VodAsset:
+    fields:
+      playbackPolicy:
+        resolver: true
+  # PlaybackJwtPolicy and PlaybackWebhookPolicy autobind to proto types, but
+  # two fields don't line up:
+  #   - jwt.requiredClaimsJson is a list-of-pairs in GraphQL vs map in proto
+  #   - webhook.secretMasked is rendered server-side (proto has secret_pt)
+  # gqlgen stubs resolvers for those mismatched fields; we implement them to
+  # do the conversion / redaction.
+  PlaybackJwtPolicy:
+    fields:
+      requiredClaimsJson:
+        resolver: true
+  PlaybackWebhookPolicy:
+    fields:
+      secretMasked:
+        resolver: true
   ViewerEndpointResponse:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ViewerEndpointResponse

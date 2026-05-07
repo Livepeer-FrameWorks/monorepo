@@ -33,6 +33,15 @@ service InternalService {
   // Source: pkg/api/commodore/types.go:ResolvePlaybackIDResponse
   rpc ResolvePlaybackID(ResolvePlaybackIDRequest) returns (ResolvePlaybackIDResponse);
 
+  // Called by Foghorn's USER_NEW handler to fetch the full playback policy
+  // (signing keys + claim requirements OR webhook policy) when requires_auth
+  // is true on the resolved playback object. Enforcement callers must set
+  // include_webhook_secret when they need the plaintext HMAC secret.
+  rpc ResolvePlaybackPolicy(ResolvePlaybackPolicyRequest) returns (ResolvePlaybackPolicyResponse);
+
+  // Called by Foghorn after a JWT policy successfully verifies.
+  rpc RecordSigningKeyUse(RecordSigningKeyUseRequest) returns (google.protobuf.Empty);
+
   // Called by Decklog/Foghorn to enrich events with tenant context
   // Source: pkg/api/commodore/types.go:InternalNameResponse
   rpc ResolveInternalName(ResolveInternalNameRequest) returns (ResolveInternalNameResponse);
@@ -196,6 +205,63 @@ message ResolvePlaybackIDResponse {
   optional string origin_cluster_id = 9; // Cluster where this stream ingests (for cross-cluster routing)
   optional string official_cluster_id = 10; // Billing-tier cluster providing geographic coverage
   repeated quartermaster.TenantClusterPeer cluster_peers = 11; // Tenant's full cluster context for demand-driven peering
+  // requires_auth is the local marker Foghorn uses for fail-closed playback
+  // enforcement during a Commodore outage. true if a non-public playback
+  // policy is set on this object (live stream / vod_asset / clip).
+  // The full policy is fetched separately via ResolvePlaybackPolicy.
+  bool requires_auth = 12;
+}
+
+// ============================================================================
+// PLAYBACK POLICY RESOLUTION
+// Public reads receive the policy shape without plaintext webhook secrets.
+// Enforcement callers set include_webhook_secret when evaluating USER_NEW or
+// Gateway resolve authorization.
+// ============================================================================
+
+message ResolvePlaybackPolicyRequest {
+  // Provide exactly one of:
+  string playback_id = 1;
+  string internal_name = 2; // MistServer internal stream name (USER_NEW trigger has this, not playback_id)
+  bool include_webhook_secret = 3; // enforcement-only; public reads leave false
+}
+
+message RecordSigningKeyUseRequest {
+  string tenant_id = 1;
+  string kid = 2;
+}
+
+message PlaybackSigningKey {
+  string kid = 1;
+  string algorithm = 2;       // ES256 only for v1
+  string public_key_pem = 3;  // PEM-encoded public key
+}
+
+message PlaybackJwtPolicy {
+  repeated string allowed_kids = 1;       // empty = any active tenant key
+  repeated string required_audience = 2;  // empty = no aud check
+  // required_claims is exact-match key/value(s). Repeated string per claim
+  // expressed as JSON-encoded values keeps proto schema simple.
+  map<string, string> required_claims_json = 3;
+  repeated PlaybackSigningKey active_keys = 4;
+}
+
+message PlaybackWebhookPolicy {
+  string url = 1;          // https://customer.example/access-control
+  int32 timeout_ms = 2;    // capped server-side
+  string secret_pt = 3;    // set only for enforcement callers
+}
+
+// type:
+//   "public"  -> requires_auth was false; full policy fetch was unnecessary
+//                (still returned for completeness if Foghorn calls anyway)
+//   "jwt"     -> jwt_policy populated
+//   "webhook" -> webhook_policy populated
+message ResolvePlaybackPolicyResponse {
+  string type = 1;
+  string tenant_id = 2;
+  PlaybackJwtPolicy jwt_policy = 3;
+  PlaybackWebhookPolicy webhook_policy = 4;
 }
 
 // ============================================================================
@@ -216,6 +282,7 @@ message ResolveInternalNameResponse {
   string stream_id = 5;                 // Public stream ID (UUID)
   repeated quartermaster.TenantClusterPeer cluster_peers = 6;
   string origin_cluster_id = 7;           // cluster that owns the stream (for federation source lookup)
+  bool requires_auth = 8;
 }
 
 // ============================================================================
@@ -341,6 +408,10 @@ message ResolveIdentifierResponse {
   string stream_id = 7;                 // Public stream ID (UUID) if applicable
   repeated quartermaster.TenantClusterPeer cluster_peers = 8;
   string origin_cluster_id = 9;         // Cluster where this stream ingests (for federation attribution)
+  // requires_auth marker for fail-closed playback enforcement.
+  // Source: streams.requires_auth, vod_assets.requires_auth, clips.requires_auth.
+  // For DVR (which has no own column) this reflects the source stream's marker.
+  bool requires_auth = 10;
 }
 
 // ============================================================================
@@ -416,6 +487,11 @@ message ResolveArtifactPlaybackIDResponse {
   string content_type = 7;              // "clip" | "dvr" | "vod"
   string origin_cluster_id = 8;         // Cluster that originally created this artifact
   repeated quartermaster.TenantClusterPeer cluster_peers = 9; // Tenant cluster access envelope
+  // requires_auth marker for fail-closed playback enforcement.
+  // Clip: from the clip's own playback_policy (snapshotted at creation).
+  // DVR: inherited from the source stream's requires_auth at lookup time.
+  // VOD: from the vod_asset's own playback_policy.
+  bool requires_auth = 10;
 }
 
 // Resolve artifact internal name to artifact identity
@@ -433,6 +509,7 @@ message ResolveArtifactInternalNameResponse {
   string content_type = 7;              // "clip" | "dvr" | "vod"
   string origin_cluster_id = 8;         // Cluster that originally created this artifact
   repeated quartermaster.TenantClusterPeer cluster_peers = 9; // Tenant cluster access envelope
+  bool requires_auth = 10;
 }
 
 // ============================================================================
@@ -1163,3 +1240,88 @@ service NodeManagementService {
   rpc GetNodeHealth(foghorn.GetNodeHealthRequest) returns (foghorn.GetNodeHealthResponse);
 }
 
+// ============================================================================
+// PLAYBACK ACCESS CONTROL SERVICE (Gateway → Commodore for signing keys + policy)
+// Customer-managed ES256 signing keys + per-playback-object policy storage.
+// Foghorn fetches enforcement data via InternalService.ResolvePlaybackPolicy.
+// ============================================================================
+
+service PlaybackAccessControlService {
+  // Create a new ES256 signing keypair for the tenant. Generates the keypair
+  // server-side; returns the private PEM in the response ONCE (never stored,
+  // never logged, never returned again).
+  rpc CreateSigningKey(CreateSigningKeyRequest) returns (CreateSigningKeyResponse);
+  rpc GetSigningKey(GetSigningKeyRequest) returns (SigningKey);
+  rpc ListSigningKeys(ListSigningKeysRequest) returns (ListSigningKeysResponse);
+  rpc RevokeSigningKey(RevokeSigningKeyRequest) returns (SigningKey);
+  // Set or clear the playback policy on a stream / vod_asset / clip.
+  // Exactly one of stream_id / vod_asset_id / clip_id must be set.
+  // Mutation order in the handler: persist DB → invalidate Foghorn caches
+  // → trigger MistServer invalidate_sessions.
+  rpc SetPlaybackPolicy(SetPlaybackPolicyRequest) returns (SetPlaybackPolicyResponse);
+}
+
+message SigningKey {
+  string id = 1;
+  string kid = 2;
+  string name = 3;
+  string algorithm = 4;       // ES256
+  string public_key_pem = 5;
+  string status = 6;          // active | revoked
+  string created_at = 7;      // RFC3339
+  string last_used_at = 8;    // RFC3339, empty if never
+  string revoked_at = 9;      // RFC3339, empty if active
+}
+
+// Tenant + user identity is extracted from the gRPC context for these
+// Gateway-called RPCs (matches CreateStream, CreatePushTarget, etc.).
+
+message CreateSigningKeyRequest {
+  string name = 1;
+}
+
+message CreateSigningKeyResponse {
+  SigningKey signing_key = 1;
+  string private_key_pem = 2; // shown ONCE, never stored, never logged
+}
+
+message GetSigningKeyRequest {
+  string id = 1;
+}
+
+message ListSigningKeysRequest {
+  string status_filter = 1;   // empty | "active" | "revoked"
+  int32 limit = 2;
+  string after_id = 3;
+}
+
+message ListSigningKeysResponse {
+  repeated SigningKey signing_keys = 1;
+  string next_after_id = 2;
+}
+
+message RevokeSigningKeyRequest {
+  string id = 1;
+}
+
+// SetPlaybackPolicyRequest carries the policy and (for webhook policies) the
+// plaintext webhook secret. Commodore encrypts the secret via fieldcrypt
+// before persisting and never returns it on read.
+message SetPlaybackPolicyRequest {
+  // Exactly one of:
+  string stream_id = 1;
+  string vod_asset_id = 2;
+  string clip_id = 3;
+  // Policy:
+  string type = 4;            // "public" | "jwt" | "webhook"
+  PlaybackJwtPolicy jwt = 5;  // populated when type == "jwt" (active_keys ignored on input)
+  PlaybackWebhookPolicy webhook = 6; // populated when type == "webhook"; secret_pt is the plaintext secret
+}
+
+message SetPlaybackPolicyResponse {
+  // Echoes back which object was updated.
+  string stream_id = 1;
+  string vod_asset_id = 2;
+  string clip_id = 3;
+  bool requires_auth = 4;
+}

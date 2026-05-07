@@ -246,8 +246,8 @@ func TestResolveArtifactPlaybackID_PopulatesClusterPeersFromCachedRoute(t *testi
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"clip_hash", "internal_name", "tenant_id", "user_id", "stream_id", "origin_cluster_id"}).
-		AddRow("clip-hash", "clip-internal", "tenant-1", "user-1", "stream-1", "cluster-origin")
+	rows := sqlmock.NewRows([]string{"clip_hash", "internal_name", "tenant_id", "user_id", "stream_id", "origin_cluster_id", "requires_auth"}).
+		AddRow("clip-hash", "clip-internal", "tenant-1", "user-1", "stream-1", "cluster-origin", false)
 	mock.ExpectQuery("FROM commodore.clips").WithArgs("playback-1").WillReturnRows(rows)
 
 	server := &CommodoreServer{

@@ -37,8 +37,10 @@ type StreamTarget struct {
 	// Caller should trigger defrost and return 202 Accepted with Retry-After.
 	NeedsDefrost bool
 	// S3URL is the S3 location if NeedsDefrost is true
-	S3URL        string
-	ClusterPeers []*pb.TenantClusterPeer // Tenant's cluster context from Commodore
+	S3URL             string
+	ClusterPeers      []*pb.TenantClusterPeer // Tenant's cluster context from Commodore
+	RequiresAuth      bool
+	RequiresAuthKnown bool
 }
 
 // ResolveStream determines the target stream name and node constraint for a given input.
@@ -57,6 +59,8 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 					target.StreamID = resp.StreamId
 					target.ContentType = "live"
 					target.ClusterPeers = resp.ClusterPeers
+					target.RequiresAuth = resp.GetRequiresAuth()
+					target.RequiresAuthKnown = true
 				}
 			}
 		}
@@ -72,6 +76,8 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 				target.StreamID = resp.StreamId
 				target.ContentType = resp.ContentType
 				target.ClusterPeers = resp.ClusterPeers
+				target.RequiresAuth = resp.GetRequiresAuth()
+				target.RequiresAuthKnown = true
 				applyArtifactPlacement(ctx, resp.ArtifactHash, target)
 			}
 		}
@@ -82,12 +88,14 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 	if CommodoreClient != nil {
 		if resp, err := CommodoreClient.ResolveArtifactPlaybackID(ctx, input); err == nil && resp.Found {
 			target := &StreamTarget{
-				InternalName: "vod+" + resp.InternalName,
-				IsVod:        true,
-				TenantID:     resp.TenantId,
-				StreamID:     resp.StreamId,
-				ContentType:  resp.ContentType,
-				ClusterPeers: resp.ClusterPeers,
+				InternalName:      "vod+" + resp.InternalName,
+				IsVod:             true,
+				TenantID:          resp.TenantId,
+				StreamID:          resp.StreamId,
+				ContentType:       resp.ContentType,
+				ClusterPeers:      resp.ClusterPeers,
+				RequiresAuth:      resp.GetRequiresAuth(),
+				RequiresAuthKnown: true,
 			}
 			applyArtifactPlacement(ctx, resp.ArtifactHash, target)
 			return target, nil
@@ -98,12 +106,14 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 	if CommodoreClient != nil {
 		if resp, err := CommodoreClient.ResolvePlaybackID(ctx, input); err == nil {
 			return &StreamTarget{
-				InternalName: "live+" + resp.InternalName,
-				IsVod:        false,
-				TenantID:     resp.TenantId,
-				StreamID:     resp.StreamId,
-				ContentType:  "live",
-				ClusterPeers: resp.ClusterPeers,
+				InternalName:      "live+" + resp.InternalName,
+				IsVod:             false,
+				TenantID:          resp.TenantId,
+				StreamID:          resp.StreamId,
+				ContentType:       "live",
+				ClusterPeers:      resp.ClusterPeers,
+				RequiresAuth:      resp.GetRequiresAuth(),
+				RequiresAuthKnown: true,
 			}, nil
 		}
 	}

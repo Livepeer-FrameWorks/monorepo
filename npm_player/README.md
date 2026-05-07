@@ -251,25 +251,26 @@ Available properties: `paused`, `playing`, `currentTime`, `duration`, `volume`, 
 
 Full `CreatePlayerConfig` accepted by `createPlayer()`:
 
-| Option           | Type                                | Default     | Description                                           |
-| ---------------- | ----------------------------------- | ----------- | ----------------------------------------------------- |
-| `target`         | `string \| HTMLElement`             | —           | Mount target (CSS selector or element)                |
-| `contentId`      | `string`                            | —           | Stream or asset identifier                            |
-| `contentType`    | `string`                            | `"live"`    | `live`, `dvr`, `clip`, or `vod`                       |
-| `gatewayUrl`     | `string`                            | —           | FrameWorks Gateway GraphQL URL                        |
-| `mistUrl`        | `string`                            | —           | Direct MistServer base URL                            |
-| `endpoints`      | `ContentEndpoints`                  | —           | Pre-resolved endpoints (skip gateway)                 |
-| `authToken`      | `string`                            | —           | Auth token for private streams                        |
-| `autoplay`       | `boolean`                           | `true`      | Auto-start playback                                   |
-| `muted`          | `boolean`                           | `true`      | Start muted                                           |
-| `controls`       | `boolean`                           | `true`      | Show built-in controls                                |
-| `poster`         | `string`                            | —           | Poster image URL                                      |
-| `theme`          | `FwThemePreset`                     | `"default"` | Theme preset name                                     |
-| `themeOverrides` | `FwThemeOverrides`                  | —           | CSS token overrides                                   |
-| `playbackMode`   | `string`                            | `"auto"`    | `auto`, `low-latency`, `quality`, `vod`               |
-| `locale`         | `string`                            | `"en"`      | UI language (`en`, `es`, `fr`, `de`, `nl`)            |
-| `skin`           | `string \| SkinDefinition \| false` | `"default"` | Skin name, inline definition, or `false` for headless |
-| `debug`          | `boolean`                           | `false`     | Debug logging                                         |
+| Option           | Type                                                 | Default     | Description                                           |
+| ---------------- | ---------------------------------------------------- | ----------- | ----------------------------------------------------- |
+| `target`         | `string \| HTMLElement`                              | —           | Mount target (CSS selector or element)                |
+| `contentId`      | `string`                                             | —           | Stream or asset identifier                            |
+| `contentType`    | `string`                                             | `"live"`    | `live`, `dvr`, `clip`, or `vod`                       |
+| `gatewayUrl`     | `string`                                             | —           | FrameWorks Gateway GraphQL URL                        |
+| `mistUrl`        | `string`                                             | —           | Direct MistServer base URL                            |
+| `endpoints`      | `ContentEndpoints`                                   | —           | Pre-resolved endpoints (skip gateway)                 |
+| `authToken`      | `string`                                             | —           | Bearer token for Gateway GraphQL resolution           |
+| `playbackAuth`   | `{ token: string; transport?: "query" \| "header" }` | —           | Viewer JWT for playback access control                |
+| `autoplay`       | `boolean`                                            | `true`      | Auto-start playback                                   |
+| `muted`          | `boolean`                                            | `true`      | Start muted                                           |
+| `controls`       | `boolean`                                            | `true`      | Show built-in controls                                |
+| `poster`         | `string`                                             | —           | Poster image URL                                      |
+| `theme`          | `FwThemePreset`                                      | `"default"` | Theme preset name                                     |
+| `themeOverrides` | `FwThemeOverrides`                                   | —           | CSS token overrides                                   |
+| `playbackMode`   | `string`                                             | `"auto"`    | `auto`, `low-latency`, `quality`, `vod`               |
+| `locale`         | `string`                                             | `"en"`      | UI language (`en`, `es`, `fr`, `de`, `nl`)            |
+| `skin`           | `string \| SkinDefinition \| false`                  | `"default"` | Skin name, inline definition, or `false` for headless |
+| `debug`          | `boolean`                                            | `false`     | Debug logging                                         |
 
 ### Source Resolution
 

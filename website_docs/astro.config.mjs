@@ -278,6 +278,7 @@ export default defineConfig({
             { slug: "builders/multistreaming" },
             { slug: "builders/thumbnails-and-previews" },
             { slug: "builders/recordings" },
+            { slug: "builders/playback-access-control" },
             { slug: "builders/api-reference" },
             { slug: "builders/billing" },
             { slug: "builders/troubleshooting" },

@@ -88,6 +88,57 @@ func TestInvalidateTenantCacheUsesInvalidator(t *testing.T) {
 	}
 }
 
+func TestPlaybackAuthInvalidationIncludesTenantArtifacts(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	server := NewFoghornGRPCServer(db, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery("SELECT internal_name\\s+FROM foghorn.artifacts").
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"internal_name"}).AddRow("asset-a"))
+
+	got := server.tenantArtifactSessionNames(context.Background(), "tenant-1")
+	if len(got) != 1 || got[0] != "vod+asset-a" {
+		t.Fatalf("tenant artifact session names = %#v, want [vod+asset-a]", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestArtifactSessionNodesFallsBackToArtifactPlacement(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	server := NewFoghornGRPCServer(db, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery("SELECT artifact_hash\\s+FROM foghorn.artifacts").
+		WithArgs("asset-a", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash"}).AddRow("hash-auth-test"))
+	mock.ExpectQuery("SELECT DISTINCT an.node_id").
+		WithArgs("hash-auth-test", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"node_id"}).AddRow("node-a"))
+
+	got := server.artifactSessionNodes(context.Background(), "tenant-1", "vod+asset-a")
+	if _, ok := got["node-a"]; !ok || len(got) != 1 {
+		t.Fatalf("artifact session nodes = %#v, want node-a", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLookupCompletedUploadAssetReturnsFailedAssetWhenPipelineFailed(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
