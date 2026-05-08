@@ -281,6 +281,6 @@ Free operations (reads, listing, health checks) skip preflight entirely.
 1. **Call** — `POST /mcp` or `POST /graphql` with the desired billable operation.
 2. **Pay if challenged** — On 402, sign one accepted x402 requirement and retry the same operation with `X-PAYMENT`.
 3. **Resolve blockers** — If the response asks for billing details, call `update_billing_details`; if it asks for balance, retry with x402 or use `topup_balance`.
-4. **Create & stream** — `create_stream` → capture `stream_key` + `rtmp_url`. Push RTMP: `rtmp://<ingest>/live/<stream_key>`.
+4. **Create & stream** — `create_stream` → capture `stream_key` + `rtmp_url`. Push RTMP/E-RTMP: `rtmp://<ingest>/live/<stream_key>`.
 5. **Monitor** — Read `streams://{id}/health` periodically. If issues: `diagnose_rebuffering`, `diagnose_buffer_health`.
 6. **Wrap up** — `delete_stream` or leave. Check `billing://balance` for cost.

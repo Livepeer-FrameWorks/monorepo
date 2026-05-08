@@ -7,7 +7,7 @@ How live streams and artifacts replicate from origin to edges, both within a sin
 ```
 Producer                            Cluster A                                Cluster B (peer)
    │
-   │ RTMP/SRT/WHIP push
+   │ RTMP/E-RTMP/SRT/WHIP push
    ▼
 ┌──────────┐
 │ Edge A1  │ ← origin (Inputs > 0, Replicated = false)
@@ -41,7 +41,7 @@ Producer                            Cluster A                                Clu
 ### Ingest: Producer → Origin Node
 
 ```
-Producer pushes RTMP/SRT/WHIP to edge-ingest.{cluster}.{base}:1935
+Producer pushes RTMP/E-RTMP/SRT/WHIP to edge-ingest.{cluster}.{base}:1935
   → DNS resolves to an edge node in the cluster
   → MistServer accepts the push
   → MistServer fires PUSH_REWRITE trigger → Helmsman → Foghorn

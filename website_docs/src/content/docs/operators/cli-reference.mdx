@@ -1327,12 +1327,12 @@ Edge node lifecycle operations. Most commands support `--ssh user@host` (and `--
 
 ### frameworks edge deploy
 
-Deploy an edge node in one command. Handles private cluster setup, enrollment token generation, pre-registration, and provisioning.
+Deploy an edge node in one command. Handles edge cluster setup, enrollment token generation, pre-registration, and provisioning.
 
-**Mode A — Logged-in tenant (automatic VPC setup):**
+**Mode A — Logged-in tenant (automatic cluster setup):**
 
 ```bash
-# Deploys to your private cluster (creates one if needed)
+# Deploys to your edge cluster (creates one if needed)
 frameworks edge deploy --ssh ubuntu@edge-1 --email ops@example.com
 
 # Deploy to a specific cluster
@@ -1352,9 +1352,8 @@ pre-registration. No Foghorn address required.
 **Flags:**
 
 - `--cluster-id` - Cluster to deploy to (auto-detected or auto-created if omitted)
-- `--cluster-name` - Name for new private cluster if one needs to be created
-- `--region` - Region for new private cluster
-- `--enrollment-token` - Pre-existing enrollment token (skips login/VPC setup)
+- `--cluster-name` - Name for new edge cluster if one needs to be created
+- `--enrollment-token` - Pre-existing enrollment token (skips login and cluster setup)
 - `--foghorn-addr` - Explicit Foghorn gRPC override; debug only. Bridge resolves the addr by default; use this when you need to talk to a specific Foghorn directly.
 - `--ssh` - SSH target (user@host) for remote deployment
 - `--ssh-key` - SSH private key path

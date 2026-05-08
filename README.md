@@ -160,7 +160,7 @@ Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Mak
 | Media    | Foghorn (control)        | 18019    | gRPC control API + FoghornFederation (cross-cluster peering)                                                   |
 | Media    | Foghorn Redis            | 6379     | Foghorn state sync (HA). Separate from Chatwoot Redis                                                          |
 | Media    | MistServer (control)     | 4242     | Control API                                                                                                    |
-| Media    | MistServer (RTMP)        | 1935     | Ingest                                                                                                         |
+| Media    | MistServer (RTMP/E-RTMP) | 1935     | Ingest                                                                                                         |
 | Media    | MistServer (HTTP)        | 8080     | HLS/WebRTC delivery                                                                                            |
 | Media    | MistServer (SRT)         | 8889/udp | SRT ingest                                                                                                     |
 | Media    | Livepeer Signer          | 18016    | ETH transaction signer for Livepeer Gateway (not in dev compose)                                               |

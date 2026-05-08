@@ -42,13 +42,13 @@ Keep this secret—anyone with your stream key can broadcast to your channel. St
 
 ## 4. Configure Your Encoder
 
-Open OBS Studio (or your preferred streaming software). For the quickest setup, we'll use RTMP. For advanced configurations like WHIP or specific optimizations (e.g., keyframe intervals, OBS profiles), refer to our [Encoder Setup Guide](/builders/encoder-setup).
+Open OBS Studio (or your preferred streaming software). For the quickest setup, we'll use RTMP. Enhanced RTMP (E-RTMP) works on the same ingest endpoint when your encoder supports it. For advanced configurations like WHIP or specific optimizations (e.g., keyframe intervals, OBS profiles), refer to our [Encoder Setup Guide](/builders/encoder-setup).
 
 **In OBS Studio:**
 
 1. Go to **Settings** → **Stream**.
 2. Set **Service:** `Custom`.
-3. For **Server:** Enter `%RTMP_URL%` (you can also copy the RTMP URL from the **Ingest** tab).
+3. For **Server:** Enter `%RTMP_URL%` (you can also copy the RTMP/E-RTMP URL from the **Ingest** tab).
 4. For **Stream Key:** Paste the stream key you copied from your FrameWorks dashboard.
 
 Once configured, hit **Start Streaming** in OBS.

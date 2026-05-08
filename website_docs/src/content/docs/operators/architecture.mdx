@@ -203,7 +203,7 @@ graph LR
 
 ```mermaid
 graph LR
-    IN[RTMP/SRT/WHIP] --> MS[MistServer]
+    IN[RTMP/E-RTMP/SRT/WHIP] --> MS[MistServer]
     MS <--> LP[Livepeer<br/>transcoding/AI]
     MS --> OUT[Multi-protocol outputs<br/>HLS / LL-HLS / DASH / WebRTC]
     OUT --> V[Viewers]

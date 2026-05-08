@@ -152,17 +152,17 @@ Your node will receive traffic when:
 
 ## Ingesting to Your Node
 
-Streamers can push directly to your node instead of the default ingest. Direct ingest requires MistServer ports to be exposed on the host. The default Docker edge template publishes only 80/443, so expose the non-HTTP ports in your deployment before using direct RTMP/SRT/RTSP ingest.
+Streamers can push directly to your node instead of the default ingest. Direct ingest requires MistServer ports to be exposed on the host. The default Docker edge template publishes only 80/443, so expose the non-HTTP ports in your deployment before using direct RTMP/E-RTMP/SRT/RTSP ingest.
 
 Open/forward as needed:
 
-- **1935/tcp** (RTMP ingest)
+- **1935/tcp** (RTMP/E-RTMP ingest)
 - **8889/udp** (SRT ingest)
 - **5554/tcp** (RTSP)
 
 Caddy listens on 80/443. After ConfigSeed activation, Helmsman rewrites Caddy so HTTP viewer traffic is proxied to MistServer on 8080.
 
-Direct RTMP ingest:
+Direct RTMP/E-RTMP ingest:
 
 ```
 rtmp://stream.yourdomain.com:1935/live/{stream-key}
@@ -182,7 +182,7 @@ Your node advertises what it can do. Set these in your edge environment file, an
 
 ```bash
 # In your edge environment file
-HELMSMAN_CAP_INGEST=true    # Can receive RTMP/SRT streams
+HELMSMAN_CAP_INGEST=true    # Can receive RTMP/E-RTMP/SRT streams
 HELMSMAN_CAP_EDGE=true      # Can serve viewers
 HELMSMAN_CAP_STORAGE=true   # Can store recordings
 HELMSMAN_CAP_PROCESSING=true # Can transcode

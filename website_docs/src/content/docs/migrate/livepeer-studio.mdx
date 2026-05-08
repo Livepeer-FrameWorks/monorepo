@@ -13,11 +13,11 @@ This guide covers what stays, what changes, what you gain, and exactly how to do
 
 ## TL;DR
 
-- **What stays:** RTMP/RTMPS and WHIP ingest, HLS and WebRTC playback, multistream targets, clips, recordings.
+- **What stays:** RTMP/RTMPS, E-RTMP, and WHIP ingest, HLS and WebRTC playback, multistream targets, clips, recordings.
 - **What changes:** REST → GraphQL · API key → JWT or developer token · outbound webhooks → GraphQL subscriptions or polling · playback access policies are recreated with FrameWorks signing keys or webhooks · `@livepeer/react` → `@livepeer-frameworks/player-*`.
 - **Capabilities to evaluate:** SRT ingest · LL-HLS/DASH delivery · sprite-sheet seek previews · AV1 in the codec list · self-hosting / hybrid options · MCP, wallet auth, and x402 for agents · Skipper · planned AV Device Discovery (ONVIF / VISCA-PTZ / NDI / HDMI capture).
-- **What's not yet at parity:** AI Pipelines, outbound webhooks, self-service pull-from-source API,
-  C2PA signing, first-class Python/Go SDKs, full DRM, and multi-participant rooms. See
+- **What's not yet at parity:** AI Pipelines, outbound HTTP webhooks, C2PA signing, and
+  first-class Python/Go SDKs. See
   [the gap list](#whats-not-yet-at-parity-and-whats-coming) before planning a production cutover.
 
 <Aside type="note">
@@ -66,7 +66,7 @@ The shapes you know in Studio, mapped to FrameWorks:
 
 ### Access control
 
-Studio uses the term "access control" for two separate concerns: authenticating your application to the API, and deciding whether a viewer can play a stream or asset. FrameWorks covers the first today. The second is not yet a public feature.
+Studio uses the term "access control" for two separate concerns: authenticating your application to the API, and deciding whether a viewer can play a stream or asset. FrameWorks covers both: developer tokens handle API access, and playback policies handle viewer-side authorization.
 
 **API and dashboard access**
 
@@ -84,10 +84,9 @@ Studio uses the term "access control" for two separate concerns: authenticating 
 | `POST /access-control/signing-key`    | `createSigningKey(input: { name })` — see [Playback Access Control](/builders/playback-access-control) |
 | `playbackPolicy: { type: "jwt" }`     | `setPlaybackPolicy({ streamId, policy: { type: JWT, jwt: { allowedKids } } })`                         |
 | `playbackPolicy: { type: "webhook" }` | `setPlaybackPolicy({ ..., policy: { type: WEBHOOK, webhook: { url, secret, timeoutMs } } })`           |
-| `Livepeer-Jwt` header                 | `?jwt=<token>` (or `Authorization: Bearer` after the MistServer Bearer fix is pinned)                  |
+| `Livepeer-Jwt` header                 | `?jwt=<token>` universally; `Authorization: Bearer` where playback requests can carry headers          |
 | `?jwt=` query (MP4 only on Studio)    | `?jwt=<token>` works for HLS, LL-HLS, DASH, WebRTC/WHEP, and MP4 — single transport                    |
 | `playback.accessControl` webhook      | Webhook policy: HMAC-signed POST to your URL; return 200 to allow, anything else denies                |
-| DRM                                   | In progress with the MistServer team                                                                   |
 
 <Aside type="note">
   Stream keys are ingest secrets, not viewer authorization keys. Signing keys are tenant-scoped and
@@ -138,7 +137,7 @@ You get back a `streamKey` (secret — for your encoder) and a `playbackId` (pub
 
 ### 2. Repoint your encoder
 
-Studio uses GeoDNS-routed `rtmp://rtmp.livepeer.com/live` and a WHIP endpoint at `https://playback.livepeer.studio/webrtc/{streamKey}`. FrameWorks publishes its equivalents via the dashboard or `resolveIngestEndpoint(streamKey)`. RTMP/RTMPS and WHIP remain the low-effort path; SRT is also available on FrameWorks ingest when your encoder supports it.
+Studio uses GeoDNS-routed `rtmp://rtmp.livepeer.com/live` and a WHIP endpoint at `https://playback.livepeer.studio/webrtc/{streamKey}`. FrameWorks publishes its equivalents via the dashboard or `resolveIngestEndpoint(streamKey)`. RTMP/RTMPS, E-RTMP, and WHIP remain the low-effort path; SRT is also available on FrameWorks ingest when your encoder supports it.
 
 OBS / FFmpeg / hardware encoder → swap the URL, keep the rest.
 
@@ -227,7 +226,7 @@ If you use Studio signing keys, `playbackPolicy: { type: "jwt" }`, `Livepeer-Jwt
 - `POST /access-control/signing-key` → `createSigningKey` mutation (ES256, asymmetric, private PEM returned once).
 - `playbackPolicy: { type: "jwt" }` → `setPlaybackPolicy` with `type: JWT`.
 - `Livepeer-Jwt` header → `?jwt=<token>` query string (universal across HLS, LL-HLS, DASH,
-  WebRTC/WHEP, MP4). `Authorization: Bearer` will work after the MistServer Bearer fix is pinned.
+  WebRTC/WHEP, MP4). `Authorization: Bearer` works on playback request paths where headers are available.
 - `playback.accessControl` webhook → `setPlaybackPolicy` with `type: WEBHOOK`. FrameWorks POSTs an HMAC-signed body; your endpoint returns 200 to allow, 403 to deny.
 
 Note that signing keys do not transfer between platforms — reissue on FrameWorks. Migration concierge available via [in-app ticket](%APP_URL%/support) if you have a large library of pre-signed JWTs to roll over.
@@ -292,10 +291,9 @@ Current gaps to account for:
 - **Derived thumbnail asset enforcement** — playback access control protects endpoint resolution
   and media sessions. Chandler thumbnail URLs are preview assets and are not a separate auth
   boundary yet.
-- **DRM (Widevine / FairPlay / PlayReady)** — in progress with the MistServer team.
-- **Multi-participant rooms** — tracked in the Parlor RFC.
 - **VOD URL import and Studio library importer** — no direct `upload via URL` equivalent or one-shot Studio-asset importer today. If you have a sizeable library, [open an in-app ticket](%APP_URL%/support) or message us in [Discord](%DISCORD_URL%) so we can scope the migration.
 - **Per-target rendition selection on multistream** — Studio lets you pick which rendition goes to each push target. We push the default output today.
+- **RTMP and FLV-over-HTTP pull sources** — our MistServer fork has no RTMP/FLV pull module, so a `pull: { source: "rtmp://…" }` or a Studio-style `https://.../*.flv` upstream won't work. Everything else Mist documents (RTSP, SRT, RIST, HLS, DTSC, MPEG-TS over UDP including multicast) does. If RTMP pull is on your critical path, [open a ticket](%APP_URL%/support) and we'll prioritize it.
 
 ## Beta and tricky bits
 

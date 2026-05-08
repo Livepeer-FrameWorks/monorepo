@@ -8,8 +8,9 @@ sidebar:
 import { Aside } from "@astrojs/starlight/components";
 
 Use this guide when FrameWorks does not have a dedicated migration page for your current platform.
-Most live-video APIs share the same shape: RTMP/WHIP in, HLS/WebRTC out, REST API on the side, and
-webhooks for events. That makes the migration path consistent even when the source platform changes.
+Most live-video APIs share the same shape: RTMP or WHIP in, HLS/WebRTC out, REST API on the side,
+and webhooks for events. FrameWorks also accepts Enhanced RTMP (E-RTMP) on the RTMP ingest endpoint.
+That makes the migration path consistent even when the source platform changes.
 
 For common platforms such as Wowza, Mux, Bunny Stream, Cloudflare Stream, AWS IVS, Vimeo, api.video,
 and Ant Media, open a forum post or in-app ticket before starting a production migration. We can
@@ -18,7 +19,7 @@ map the source-specific differences with you.
 ## The seven moves
 
 1. **Account and first stream.** Sign up at [%APP_URL%](%APP_URL%) or wallet-sign in. Create a stream via the dashboard or `createStream(input)`. You get a `streamKey` (secret) and a `playbackId` (public).
-2. **Repoint your encoder.** RTMP, RTMPS, WHIP, and SRT are all supported on the ingest side. Your URL changes; the protocol doesn't.
+2. **Repoint your encoder.** RTMP, RTMPS, E-RTMP, WHIP, and SRT are all supported on the ingest side. Your URL changes; the protocol doesn't.
 3. **Swap the player.** Use `@livepeer-frameworks/player-react`, `-svelte`, `-wc`, or `-core` depending on your stack. See [Player (Playback)](/builders/playback).
 4. **Rewire the API integration.** This is where most of the work is — see below.
 5. **Re-create playback access policies.** Public playback IDs migrate cleanly. For JWT-gated or webhook-gated playback, see [Playback Access Control](/builders/playback-access-control) — customer-managed ES256 signing keys, per-object policy, and webhook callbacks all ship today. Signing keys do not transfer between platforms; reissue on FrameWorks.
@@ -131,8 +132,10 @@ Honest list, applies regardless of source:
 - AI Pipelines (text-to-image, image-to-video, ASR, live-video-to-video). Keep provider-specific
   AI calls on the source platform until FrameWorks exposes an equivalent surface.
 - Outbound HTTP webhooks. Replaced by subscriptions for now.
-- Self-service pull-from-source API. Operator-owned pull-input streams can be provisioned through
-  bootstrap config, but tenant-created pull streams are not exposed through GraphQL yet.
+- RTMP and FLV-over-HTTP pull sources. Our MistServer fork has no RTMP/FLV pull module —
+  RTSP, SRT, RIST, HLS, DTSC, and MPEG-TS over UDP (incl. multicast) are all supported, but
+  a `pull: { source: "rtmp://…" }` or `https://.../*.flv` upstream won't work. If RTMP pull is on
+  your critical path, [open a ticket](%APP_URL%/support) and we'll prioritize it.
 - C2PA / creator-ID provenance signing on transcode. Not exposed as a public FrameWorks API today.
 - First-class Python and Go SDKs. Internal Go clients exist; use GraphQL codegen until first-party
   SDKs are published.

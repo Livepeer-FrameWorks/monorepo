@@ -29,7 +29,7 @@
       iconColor: "text-primary",
       title: "Create Your First Stream",
       getDescription: () =>
-        "Set up a stream to start broadcasting. You'll get RTMP, SRT, and WHIP ingest URLs.",
+        "Set up a stream to start broadcasting. You'll get RTMP/E-RTMP, SRT, and WHIP ingest URLs.",
       link: "/streams",
       linkText: "Create Stream",
       condition: () => !hasStreams,
@@ -42,7 +42,7 @@
       title: "OBS Setup",
       getDescription: () =>
         streamKey
-          ? `Use stream key: ${streamKey.slice(0, 8)}... with RTMP ingest.`
+          ? `Use stream key: ${streamKey.slice(0, 8)}... with RTMP/E-RTMP ingest.`
           : "Configure OBS or your preferred encoder with your stream key.",
       link: "/streams",
       linkText: "View Keys",

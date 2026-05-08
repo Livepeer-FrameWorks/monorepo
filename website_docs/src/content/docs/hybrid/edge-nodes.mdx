@@ -22,7 +22,7 @@ frameworks version
 If you have a logged-in FrameWorks account, `edge deploy` handles the entire pipeline end-to-end via Bridge — private edge cluster creation, Foghorn assignment, enrollment token issuance, preflight, tuning, template generation, stack boot, and HTTPS verification:
 
 ```bash
-# Mode A — logged-in tenant (Bridge auto-creates a private cluster + token)
+# Mode A — logged-in tenant (Bridge auto-creates an edge cluster + token)
 frameworks login
 frameworks edge deploy --ssh ubuntu@edge-1 --email ops@yourdomain.com
 
@@ -30,7 +30,7 @@ frameworks edge deploy --ssh ubuntu@edge-1 --email ops@yourdomain.com
 frameworks edge deploy --ssh ubuntu@edge-1 --enrollment-token enroll_xxx
 ```
 
-When it finishes, `edge deploy` prints a result block (`vpc`, `enrollment`, `stack`, `https`, `node`, `domain`) and suggests `edge status` and `edge doctor` as next steps. The `vpc` label is the current CLI output name for the private edge cluster step.
+When it finishes, `edge deploy` prints a result block (`cluster`, `enrollment`, `stack`, `https`, `node`, `domain`) and suggests `edge status` and `edge doctor` as next steps.
 
 The rest of this page walks through the same workflow as individual commands when you need finer control.
 
@@ -53,7 +53,7 @@ Native Linux and macOS deployments use the same command surface, but the preflig
 
 Note: if you plan to use direct ingest or non-HTTP protocols, open the MistServer ports you need:
 
-- **1935/tcp** (RTMP ingest)
+- **1935/tcp** (RTMP/E-RTMP ingest)
 - **8889/udp** (SRT ingest)
 - **5554/tcp** (RTSP)
 - **18203/udp** (WebRTC)
@@ -158,7 +158,7 @@ You should see:
 
 The media server. Handles:
 
-- RTMP/SRT/WHIP ingest
+- RTMP/E-RTMP/SRT/WHIP ingest
 - HLS, LL-HLS, DASH, WebRTC/WHEP, MP4/WebM, WebSocket, and direct playback protocols when exposed
 - Recording (if enabled)
 

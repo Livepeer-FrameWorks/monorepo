@@ -240,9 +240,22 @@ mutation {
 }
 ```
 
-<Aside type="note" title="DVR Required">
-  Clips are extracted from the DVR buffer. The stream must have recording enabled (`record: true`)
-  and be currently live or have a recent DVR recording available.
+<Aside type="note" title="Live and DVR are separate streams — clip against the right one">
+  How far back you can clip depends on which stream entity holds the segments:
+
+- **Live stream** — keeps roughly the last 50 seconds in shared memory by default. The
+  default is configurable (private deployments often want a longer ring) but every extra
+  second costs cluster RAM, so it stays tight by default. [Open an in-app ticket](%APP_URL%/support)
+  if you need a non-default size.
+- **DVR recording** — a separate stream entity started with `startDVR(streamId)` or by
+  setting `record: true` at stream creation. Segments are disk-backed and only paged into
+  memory when a viewer is reading that range, so the clippable window stretches across
+  the recording's retention without sitting in RAM.
+
+**To clip further back than the live ring**, target the DVR recording, not the live
+stream. Expect this distinction to fade — we plan to auto-map the two so `createClip`
+picks the right source automatically.
+
 </Aside>
 
 ### Clip Processing

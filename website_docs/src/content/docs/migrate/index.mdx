@@ -18,6 +18,11 @@ Moving to FrameWorks from another platform? This section is the home of our **mi
     description="Available now — REST → GraphQL, player swap, multistream, and playback access-control differences."
   />
   <LinkCard
+    title="MistServer"
+    href="/migrate/mistserver"
+    description="Available now — stay on raw MistServer, add FrameWorks edge capacity, or move to managed SaaS."
+  />
+  <LinkCard
     title="Any video API"
     href="/migrate/generic"
     description="Available now — universal checklist for platforms without a dedicated guide."
@@ -26,7 +31,6 @@ Moving to FrameWorks from another platform? This section is the home of our **mi
 
 ### In progress
 
-- **MistServer (self-hosted)** — for operators running their own MistServer who want our managed control plane on top.
 - **Bunny Stream**
 - **Mux**
 
@@ -62,7 +66,7 @@ encoder-config converter.
 Regardless of where you're coming from, the moves are the same:
 
 1. **Create a FrameWorks account and a first stream.** Wallet sign-in works if you'd rather skip email.
-2. **Repoint your encoder.** RTMP, RTMPS, WHIP, or SRT — the URL changes; the protocols stay.
+2. **Repoint your encoder.** RTMP, RTMPS, E-RTMP, WHIP, or SRT — the URL changes; the protocols stay.
 3. **Swap the player.** `@livepeer-frameworks/player-*` ships React, Svelte, Web Components, and a vanilla core.
 4. **Rewire your API integration.** Most platforms are REST; FrameWorks is GraphQL-first. See [Any video API](/migrate/generic) for the universals.
 5. **Review playback access policies.** Public playback IDs are straightforward; JWT/webhook gating needs a separate plan.

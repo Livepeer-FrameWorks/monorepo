@@ -195,6 +195,9 @@ mutation {
 }
 ```
 
+When updating an existing webhook policy, omit `secret` to keep the currently
+configured HMAC secret. Send a new non-empty `secret` only when rotating it.
+
 Your endpoint receives:
 
 ```json

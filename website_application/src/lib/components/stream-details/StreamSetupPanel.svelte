@@ -58,9 +58,9 @@
   const ingestProtocols = [
     {
       key: "rtmp",
-      name: "RTMP",
+      name: "RTMP / E-RTMP",
       icon: "Radio",
-      description: "Standard RTMP for OBS, Streamlabs, vMix",
+      description: "RTMP and Enhanced RTMP for OBS, Streamlabs, vMix",
       recommended: true,
       setup: "Server URL: Copy this into your streaming software's server field",
     },

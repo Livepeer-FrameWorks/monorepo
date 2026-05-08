@@ -34,7 +34,7 @@ StreamCrafter lets a browser user publish live video/audio to a **WHIP endpoint*
 
 ### Not supported / non-goals
 
-- RTMP ingest (StreamCrafter is WHIP-first; Gateway resolution may return RTMP/SRT URLs for display, but publishing is WHIP)
+- RTMP/E-RTMP ingest (StreamCrafter is WHIP-first; Gateway resolution may return RTMP/SRT URLs for display, but publishing is WHIP)
 - Server-side components (everything here is client-side)
 - Full “OBS replacement” feature set (no full scene editor UI; only the primitives + basic controls)
 

@@ -23,15 +23,15 @@ watch.
 
 FrameWorks supports two ingest models:
 
-| Model | How media arrives                                         | Current creation path                       |
-| ----- | --------------------------------------------------------- | ------------------------------------------- |
-| Push  | Your encoder opens RTMP, SRT, or WHIP to FrameWorks       | Dashboard or GraphQL `createStream`         |
-| Pull  | FrameWorks opens RTSP, SRT, RIST, HLS, DTSC, or TS to you | Operator bootstrap `commodore.pull_streams` |
+| Model | How media arrives                                          | Creation path                               |
+| ----- | ---------------------------------------------------------- | ------------------------------------------- |
+| Push  | Your encoder opens RTMP/E-RTMP, SRT, or WHIP to FrameWorks | Dashboard or GraphQL `createStream`         |
+| Pull  | FrameWorks opens RTSP, SRT, RIST, HLS, DTSC, or TS to you  | Operator bootstrap `commodore.pull_streams` |
 
 Most builders start with push streams. Pull-input streams are useful for cameras, venue feeds, and
-upstream origins that cannot push into FrameWorks. Today they are provisioned by operators during
-cluster bootstrap; self-service GraphQL mutations for tenant-created pull streams are not exposed
-yet.
+upstream origins that cannot push into FrameWorks. See [Pull-input streams](/builders/pull-streams)
+for supported source schemes and the operator bootstrap shape. Note that **RTMP and FLV-over-HTTP pull are
+not supported today** — [open a ticket](%APP_URL%/support) if you need them.
 
 On the [roadmap](/roadmap#in-the-pipeline): an **AV Device Discovery** drop-in app that
 auto-discovers ONVIF IP cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI capture
@@ -80,18 +80,43 @@ mutation {
 ```
 
 `record: true` enables DVR/recording from the start. You can also toggle recording later with
-`updateStream`.
+`updateStream`. See [Live and DVR Streams](#live-and-dvr-streams) for what that creates.
+
+## Live and DVR Streams
+
+Setting `record: true` at create time (or calling `startDVR(streamId)` later) creates a **separate
+stream entity** for the recording — with its own internal name and `playbackId`, distinct from the
+live stream:
+
+- **Live stream** — segments live in a shared-memory ring buffer of about 50 seconds. Right for
+  real-time playback and `CLIP_NOW` of recent moments.
+- **DVR stream** — segments are written to disk and only paged into memory when a viewer reaches
+  that range. Right for seek-back, longer clips, and post-event playback. The clippable window
+  matches the recording's retention without sitting in RAM.
+
+The live ring is configurable — private deployments often want a longer window — but every extra
+second costs cluster RAM, so the default stays tight. [Open an in-app ticket](%APP_URL%/support)
+if your deployment needs a non-default size.
+
+Practical consequences:
+
+- **Players** use the DVR `playbackId` (with `contentType="dvr"`) to seek back beyond the live
+  ring.
+- **Clip creation** runs against the entity that holds the moment you want — see
+  [Clips](/builders/recordings#clips). We plan to auto-map the two so `createClip` picks the
+  right source automatically.
+- **Access control, multistream targets, thumbnails, and analytics** attach per stream entity.
 
 ## Go Live
 
 After creating a push stream, send media to one of the ingest endpoints shown on the stream detail
 page:
 
-| Protocol | Typical use                        | Guide                                                             |
-| -------- | ---------------------------------- | ----------------------------------------------------------------- |
-| RTMP     | OBS, hardware encoders, FFmpeg     | [Encoder Setup](/builders/encoder-setup)                          |
-| SRT      | Unreliable or long-haul networks   | [Encoder Setup](/builders/encoder-setup#srt-alternative-protocol) |
-| WHIP     | Browser or WebRTC-native broadcast | [StreamCrafter](/builders/ingest)                                 |
+| Protocol    | Typical use                        | Guide                                                             |
+| ----------- | ---------------------------------- | ----------------------------------------------------------------- |
+| RTMP/E-RTMP | OBS, hardware encoders, FFmpeg     | [Encoder Setup](/builders/encoder-setup)                          |
+| SRT         | Unreliable or long-haul networks   | [Encoder Setup](/builders/encoder-setup#srt-alternative-protocol) |
+| WHIP        | Browser or WebRTC-native broadcast | [StreamCrafter](/builders/ingest)                                 |
 
 The stream becomes live once the media edge accepts the input and MistServer reports an active
 session.

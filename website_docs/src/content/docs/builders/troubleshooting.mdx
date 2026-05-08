@@ -17,9 +17,9 @@ The encoder can't reach our servers.
 
 **Check these first:**
 
-1. **RTMP URL:** Verify it is exactly `%RTMP_URL%`.
+1. **RTMP/E-RTMP URL:** Verify it is exactly `%RTMP_URL%`.
 2. **Stream Key:** Ensure you've copied the active key from the **Stream Key** card on your dashboard.
-3. **Port 1935:** Some corporate or school networks block RTMP. Try a different network (like a mobile hotspot) or use SRT.
+3. **Port 1935:** Some corporate or school networks block RTMP/E-RTMP. Try a different network (like a mobile hotspot) or use SRT.
 4. **Service Status:** Check our Discord community or **Support → Messages** for any ongoing maintenance or outages.
 
 ### "Authentication failed"
@@ -39,7 +39,7 @@ This typically indicates network instability or packet loss between your locatio
 
 - **Check Ping:** Run `ping` against your ingest hostname. Consistent times under 100ms are ideal.
 - **Check for Packet Loss:** Run `ping -c 100 <ingest-hostname>` and look for any percentage of loss. Even 1% loss can disrupt a stream.
-- **Try Alternative Protocols:** If your ISP throttles RTMP (port 1935), try switching to SRT or WHIP, which handle unstable networks better.
+- **Try Alternative Protocols:** If your ISP throttles RTMP/E-RTMP (port 1935), try switching to SRT or WHIP, which handle unstable networks better.
 
 ## Playback Problems
 

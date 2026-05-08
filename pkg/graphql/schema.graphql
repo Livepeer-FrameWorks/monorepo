@@ -618,7 +618,7 @@ type Query {
 
   """
   Resolve a stream key to ingest endpoints for StreamCrafter.
-  Returns RTMP/SRT/WHIP endpoints for the stream.
+  Returns RTMP/E-RTMP/SRT/WHIP endpoints for the stream.
   """
   resolveIngestEndpoint(
     """
@@ -2057,7 +2057,7 @@ type VodLifecycle {
 How source media enters a stream.
 """
 enum IngestMode {
-  "An encoder pushes RTMP, SRT, or WHIP into FrameWorks."
+  "An encoder pushes RTMP/E-RTMP, SRT, or WHIP into FrameWorks."
   PUSH
   "FrameWorks pulls from a configured upstream URI."
   PULL
@@ -5887,7 +5887,7 @@ type IngestEndpoint {
   nodeId: String!
   baseUrl: String!
   whipUrl: String # WHIP ingest URL
-  rtmpUrl: String # RTMP ingest URL
+  rtmpUrl: String # RTMP/E-RTMP ingest URL
   srtUrl: String # SRT ingest URL
   region: String
   loadScore: Float

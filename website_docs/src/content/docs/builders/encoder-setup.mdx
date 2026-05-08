@@ -1,13 +1,13 @@
 ---
 title: "Encoder Setup"
-description: "Configure OBS, FFmpeg, or any RTMP encoder for FrameWorks."
+description: "Configure OBS, FFmpeg, or any RTMP/E-RTMP encoder for FrameWorks."
 sidebar:
   order: 2
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-Configure your encoder for FrameWorks. Covers OBS Studio, FFmpeg, SRT, and WHIP.
+Configure your encoder for FrameWorks. Covers OBS Studio, FFmpeg, RTMP/E-RTMP, SRT, and WHIP.
 
 <Aside type="note" title="Works everywhere">
   These encoder settings are the same for managed and self‑hosted deployments. Ingest endpoints and
@@ -25,6 +25,9 @@ OBS is free and works on Windows, Mac, and Linux. [Download it here](https://obs
    - **Service:** Custom
    - **Server:** `%RTMP_URL%`
    - **Stream Key:** From your stream's **Stream Key** card in the dashboard
+
+FrameWorks accepts Enhanced RTMP (E-RTMP) on the same ingest endpoint. If your encoder exposes
+Enhanced RTMP options for newer codecs, keep the same server URL and stream key.
 
 ### Recommended Output Settings
 
@@ -66,7 +69,7 @@ To ensure high-quality audio, adjust these settings:
 
 ## FFmpeg
 
-FFmpeg is a powerful, open-source command-line tool ideal for automated or headless streaming setups. Here are common commands for streaming with FrameWorks:
+FFmpeg is a powerful, open-source command-line tool ideal for automated or headless streaming setups. Here are common RTMP commands for streaming with FrameWorks:
 
 ```bash
 ffmpeg -re -i input.mp4 \

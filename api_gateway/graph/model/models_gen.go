@@ -1337,7 +1337,9 @@ type PlaybackWebhookPolicyInput struct {
 	URL string `json:"url"`
 	// HMAC-SHA256 secret used to sign outbound webhook bodies. Write-only:
 	// persisted via field-level encryption and never returned in queries.
-	Secret string `json:"secret"`
+	// Required when creating a webhook policy. Omit when updating an existing
+	// webhook policy to keep the currently configured secret.
+	Secret *string `json:"secret,omitempty"`
 	// Outbound POST timeout in milliseconds. Server caps at 10000; default 5000.
 	TimeoutMs *int `json:"timeoutMs,omitempty"`
 }
@@ -2308,7 +2310,7 @@ func (e ClipCreationMode) MarshalJSON() ([]byte, error) {
 type IngestMode string
 
 const (
-	// An encoder pushes RTMP, SRT, or WHIP into FrameWorks.
+	// An encoder pushes RTMP/E-RTMP, SRT, or WHIP into FrameWorks.
 	IngestModePush IngestMode = "PUSH"
 	// FrameWorks pulls from a configured upstream URI.
 	IngestModePull IngestMode = "PULL"

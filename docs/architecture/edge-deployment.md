@@ -85,7 +85,7 @@ Foghorn should only enter cordon/drain/warm for Mist when the release manifest c
 | Component                | Role                                                                    | Data                                             |
 | ------------------------ | ----------------------------------------------------------------------- | ------------------------------------------------ |
 | Helmsman (`api_sidecar`) | Edge orchestrator, MistServer trigger forwarder, gRPC stream to Foghorn | Operational state, stream counts, trigger events |
-| MistServer               | Media server, RTMP ingest, HLS/DASH output, transcoding                 | Stream data, client connections, codec info      |
+| MistServer               | Media server, RTMP/E-RTMP ingest, HLS/DASH output, transcoding          | Stream data, client connections, codec info      |
 | Caddy                    | TLS termination, reverse proxy, ACME cert management                    | Certificates, access logs                        |
 
 ## Platform Differences

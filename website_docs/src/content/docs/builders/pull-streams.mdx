@@ -7,9 +7,9 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-A normal stream is **push-in**: your encoder opens RTMP, SRT, or WHIP to FrameWorks and uploads
-media. A **pull-input stream** is the inverse: FrameWorks stores an upstream URL, then a media edge
-opens that source when playback needs it.
+A normal stream is **push-in**: your encoder opens RTMP/E-RTMP, SRT, or WHIP to FrameWorks and
+uploads media. A **pull-input stream** is the inverse: FrameWorks stores an upstream URL, then a
+media edge opens that source when playback needs it.
 
 Use pull-input streams when:
 
@@ -17,12 +17,6 @@ Use pull-input streams when:
 - A venue sends you an SRT/RIST contribution feed.
 - You need to restream an HLS or MPEG-TS source.
 - You run self-hosted edge nodes that can reach private cameras or LAN/VPC sources.
-
-<Aside type="caution" title="Current creation path">
-  Pull-input streams are currently operator-owned bootstrap resources declared in
-  `commodore.pull_streams`. The public GraphQL API creates push streams with `createStream`; it does
-  not expose `createPullStream` or tenant self-service pull-stream mutations yet.
-</Aside>
 
 ## Supported Source Schemes
 
@@ -41,7 +35,47 @@ Use pull-input streams when:
 converter such as FFmpeg, MistServer, or `srt-live-transmit` and pull its SRT, RIST, RTSP, or HLS
 output instead.
 
-## Declare a Pull Stream
+## Create a Pull Stream
+
+In the dashboard, create a stream and choose **Pull** as the ingest mode. Provide the upstream
+source URI and keep the source enabled if it should start when viewers request playback.
+
+Through GraphQL, use `createStream` with `ingestMode: PULL` and `pullSource`:
+
+```graphql
+mutation CreatePullStream($input: CreateStreamInput!) {
+  createStream(input: $input) {
+    __typename
+    ... on Stream {
+      id
+      playbackId
+      ingestMode
+      pullSource {
+        sourceUriRedacted
+        enabled
+        class
+      }
+    }
+  }
+}
+```
+
+```json
+{
+  "input": {
+    "name": "Lobby Camera",
+    "ingestMode": "PULL",
+    "pullSource": {
+      "sourceUri": "rtsp://camera.example.net/live",
+      "enabled": true
+    }
+  }
+}
+```
+
+The source URI is stored encrypted and returned only in redacted form.
+
+## Operator Bootstrap
 
 Operators add pull streams to the rendered bootstrap desired state under `commodore.pull_streams`.
 The stable key is `playback_id`, which is also the public viewer identifier.
@@ -131,8 +165,9 @@ and storage apply normally.
 - **Upstream unreachable** - The Mist input exits. The next viewer triggers a fresh pull attempt.
 - **Two viewers arrive at once** - More than one edge can briefly pull from the upstream before
   fanout takes over.
-- **Source URI changed** - Re-run bootstrap with the new URI. Active sessions reconnect against the
-  new origin after the media plane sees the updated source.
+- **Source URI changed** - Update the pull source from the dashboard or GraphQL. Operator-managed
+  pull streams can also be updated by re-running bootstrap with the new URI. Active sessions
+  reconnect against the new origin after the media plane sees the updated source.
 - **Source sends silence or black** - FrameWorks does not synthesize fallback media; viewers see
   what the upstream sends.
 

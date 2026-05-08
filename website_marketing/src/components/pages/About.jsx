@@ -214,7 +214,7 @@ const About = () => {
       items: [
         { icon: "/mist.svg", label: "MistServer - media server" },
         { icon: "/livepeer-light.svg", label: "Livepeer Network - decentralized transcoding + AI" },
-        { icon: "/webrtc.svg", label: "WebRTC, RTMP, SRT, HLS, DASH - streaming protocols" },
+        { icon: "/webrtc.svg", label: "WebRTC, RTMP/E-RTMP, SRT, HLS, DASH - streaming protocols" },
       ],
     },
     {
