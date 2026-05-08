@@ -2,11 +2,52 @@ package provisioner
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 )
+
+func TestServiceVarsBuilderCleanupOnlySkipsInstallInputs(t *testing.T) {
+	builder := serviceVarsBuilderFor(ServiceRoleConfig{
+		ServiceName: "livepeer-gateway",
+		StateDirs:   []string{"/var/lib/frameworks/livepeer-gateway"},
+	})
+
+	vars, err := builder(context.Background(), inventory.Host{Name: "regional-eu-1"}, ServiceConfig{
+		Mode: "native",
+		EnvVars: map[string]string{
+			"LIVEPEER_ETH_KEYSTORE_B64": "not-base64",
+		},
+		Metadata: map[string]any{"_cleanup_only": true},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("cleanup-only native vars returned error: %v", err)
+	}
+	if !reflect.DeepEqual(vars, map[string]any{"go_service_name": "livepeer-gateway"}) {
+		t.Fatalf("cleanup-only native vars = %#v", vars)
+	}
+}
+
+func TestServiceVarsBuilderCleanupOnlyComposeVars(t *testing.T) {
+	builder := serviceVarsBuilderFor(ServiceRoleConfig{ServiceName: "metabase"})
+
+	vars, err := builder(context.Background(), inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+		Mode:     "docker",
+		Metadata: map[string]any{"_cleanup_only": true},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("cleanup-only docker vars returned error: %v", err)
+	}
+	want := map[string]any{
+		"compose_stack_name":        "metabase",
+		"compose_stack_project_dir": "/opt/frameworks/metabase",
+	}
+	if !reflect.DeepEqual(vars, want) {
+		t.Fatalf("cleanup-only docker vars = %#v, want %#v", vars, want)
+	}
+}
 
 func TestServiceComposeVarsUsesSeparateContainerPortAndHealthPath(t *testing.T) {
 	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{

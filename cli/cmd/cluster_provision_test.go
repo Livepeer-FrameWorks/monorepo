@@ -261,6 +261,151 @@ func TestReconcileServiceClusterAssignmentsWithClientDoesNotDrainBeforeValidatio
 	}
 }
 
+func TestReconcileRemovedServicePlacementsCleansStaleGatewayHost(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"central-eu-1":  {ExternalIP: "203.0.113.10"},
+			"regional-eu-1": {ExternalIP: "203.0.113.11"},
+			"regional-us-1": {ExternalIP: "203.0.113.12"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway": {
+				Enabled: true,
+				Hosts:   []string{"regional-eu-1", "regional-us-1"},
+			},
+		},
+	}
+	assigner := &fakeFoghornClusterAssigner{
+		services: fakePoolServices("livepeer-gateway"),
+		instances: map[string][]*pb.ServiceInstance{
+			"livepeer-gateway": {
+				fakeServiceInstance("gateway-central", "livepeer-gateway", "central-eu-1", "running"),
+				fakeServiceInstance("gateway-eu", "livepeer-gateway", "regional-eu-1", "running"),
+				fakeServiceInstance("gateway-us", "livepeer-gateway", "regional-us-1", "running"),
+			},
+		},
+	}
+
+	var cleaned []string
+	cleanup := func(_ context.Context, placement removedServicePlacement) error {
+		cleaned = append(cleaned, placement.serviceName+"@"+placement.nodeID)
+		return nil
+	}
+
+	if err := reconcileRemovedServicePlacementsWithClient(context.Background(), &bytes.Buffer{}, manifest, orchestrator.PhaseApplications, assigner, cleanup); err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	if got := strings.Join(cleaned, ","); got != "livepeer-gateway@central-eu-1" {
+		t.Fatalf("cleanup targets = %q, want stale central gateway only", got)
+	}
+	if len(assigner.drains) != 1 || assigner.drains[0].GetInstanceId() != "gateway-central" {
+		t.Fatalf("expected stale gateway assignment drain, got %+v", assigner.drains)
+	}
+}
+
+func TestReconcileRemovedServicePlacementsDisabledServiceCleansAllInstances(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"core-1": {ExternalIP: "203.0.113.10"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn": {Enabled: false},
+		},
+	}
+	assigner := &fakeFoghornClusterAssigner{
+		services: fakePoolServices("foghorn"),
+		instances: map[string][]*pb.ServiceInstance{
+			"foghorn": {fakeServiceInstance("foghorn-core-1", "foghorn", "core-1", "running")},
+		},
+	}
+
+	var cleaned []string
+	cleanup := func(_ context.Context, placement removedServicePlacement) error {
+		cleaned = append(cleaned, placement.serviceName+"@"+placement.nodeID)
+		return nil
+	}
+
+	if err := reconcileRemovedServicePlacementsWithClient(context.Background(), &bytes.Buffer{}, manifest, orchestrator.PhaseApplications, assigner, cleanup); err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	if got := strings.Join(cleaned, ","); got != "foghorn@core-1" {
+		t.Fatalf("cleanup targets = %q, want disabled foghorn", got)
+	}
+	if len(assigner.drains) != 1 || assigner.drains[0].GetInstanceId() != "foghorn-core-1" {
+		t.Fatalf("expected disabled service assignment drain, got %+v", assigner.drains)
+	}
+}
+
+func TestReconcileRemovedServicePlacementsCleansDeletedServiceOnKnownHosts(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"core-1": {ExternalIP: "203.0.113.10"},
+		},
+		Services: map[string]inventory.ServiceConfig{},
+	}
+	assigner := &fakeFoghornClusterAssigner{
+		services: fakePoolServices("livepeer-gateway"),
+		instances: map[string][]*pb.ServiceInstance{
+			"livepeer-gateway": {
+				fakeServiceInstance("gateway-core-1", "livepeer-gateway", "core-1", "running"),
+				fakeServiceInstance("gateway-other-cluster", "livepeer-gateway", "other-core-1", "running"),
+			},
+		},
+	}
+
+	var cleaned []string
+	cleanup := func(_ context.Context, placement removedServicePlacement) error {
+		cleaned = append(cleaned, placement.serviceName+"@"+placement.nodeID+":"+strings.Join(placement.cleanupModes, "+"))
+		return nil
+	}
+
+	if err := reconcileRemovedServicePlacementsWithClient(context.Background(), &bytes.Buffer{}, manifest, orchestrator.PhaseApplications, assigner, cleanup); err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	if got := strings.Join(cleaned, ","); got != "livepeer-gateway@core-1:native+docker" {
+		t.Fatalf("cleanup targets = %q, want deleted gateway on known host only", got)
+	}
+	if len(assigner.drains) != 1 || assigner.drains[0].GetInstanceId() != "gateway-core-1" {
+		t.Fatalf("expected deleted service assignment drain on known host, got %+v", assigner.drains)
+	}
+}
+
+func TestReconcileRemovedServicePlacementsSkipsUnknownHosts(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "203.0.113.11"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway": {Enabled: true, Hosts: []string{"regional-eu-1"}},
+		},
+	}
+	assigner := &fakeFoghornClusterAssigner{
+		services: fakePoolServices("livepeer-gateway"),
+		instances: map[string][]*pb.ServiceInstance{
+			"livepeer-gateway": {
+				fakeServiceInstance("gateway-missing", "livepeer-gateway", "central-eu-1", "running"),
+			},
+		},
+	}
+
+	if err := reconcileRemovedServicePlacementsWithClient(context.Background(), &bytes.Buffer{}, manifest, orchestrator.PhaseApplications, assigner, func(context.Context, removedServicePlacement) error {
+		t.Fatal("cleanup must not run for an unknown host")
+		return nil
+	}); err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if len(assigner.drains) != 0 {
+		t.Fatalf("unknown hosts must not drain, got %+v", assigner.drains)
+	}
+}
+
 func TestReconcileServiceClusterAssignmentsWithClientReturnsClusterError(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",

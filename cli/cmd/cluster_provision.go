@@ -227,7 +227,7 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 		return nil
 	}
 
-	if err := executeProvision(ctx, cmd, manifest, plan, force, ignoreValidation, manifestDir, sharedEnv, rc.ReleaseRepos); err != nil {
+	if err := executeProvision(ctx, cmd, manifest, plan, phase, force, ignoreValidation, manifestDir, sharedEnv, rc.ReleaseRepos); err != nil {
 		return fmt.Errorf("provisioning failed: %w", err)
 	}
 
@@ -493,7 +493,7 @@ type taskProvisionOutcome struct {
 }
 
 // executeProvision runs the provisioning tasks
-func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, force, ignoreValidation bool, manifestDir string, sharedEnv map[string]string, releaseRepos []string) error {
+func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, phase orchestrator.Phase, force, ignoreValidation bool, manifestDir string, sharedEnv map[string]string, releaseRepos []string) error {
 	sshKey := stringFlag(cmd, "ssh-key").Value
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
@@ -770,6 +770,10 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 		}
 
 		fmt.Fprintln(cmd.OutOrStdout(), "")
+	}
+
+	if err := reconcileRemovedServicePlacements(ctx, cmd, manifest, phase, runtimeData, raSession, sshPool); err != nil {
+		return fmt.Errorf("removed service placement reconciliation failed: %w", err)
 	}
 
 	// Post-provision: bootstrap Purser cluster pricing, admin user, control-plane validation
@@ -1712,6 +1716,244 @@ func desiredServiceInstanceIDs(serviceName string, svc inventory.ServiceConfig, 
 	}
 	sort.Strings(ids)
 	return ids, nil
+}
+
+type removedServicePlacement struct {
+	serviceName  string
+	deployName   string
+	serviceID    string
+	svc          inventory.ServiceConfig
+	instance     *pb.ServiceInstance
+	nodeID       string
+	cleanupModes []string
+}
+
+type removedPlacementCleanupFunc func(context.Context, removedServicePlacement) error
+
+func reconcileRemovedServicePlacements(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, phase orchestrator.Phase, runtimeData map[string]any, sess *remoteaccess.Session, sshPool *ssh.Pool) error {
+	if phase == orchestrator.PhaseInfrastructure {
+		return nil
+	}
+
+	client, err := newQuartermasterClient(ctx, manifest, runtimeData, sess)
+	if err != nil {
+		return fmt.Errorf("connect Quartermaster for removed-placement reconciliation: %w", err)
+	}
+	defer client.Close()
+
+	cleanup := func(cleanupCtx context.Context, placement removedServicePlacement) error {
+		host, ok := manifest.GetHost(placement.nodeID)
+		if !ok {
+			return fmt.Errorf("%s stale instance %s is on unknown host %q", placement.serviceName, placement.instance.GetId(), placement.nodeID)
+		}
+		prov, provErr := provisioner.GetProvisioner(placement.deployName, sshPool)
+		if provErr != nil {
+			return provErr
+		}
+		for _, mode := range placement.cleanupModes {
+			mode = strings.TrimSpace(mode)
+			if mode == "" {
+				continue
+			}
+			config := provisioner.ServiceConfig{
+				Mode:       mode,
+				DeployName: placement.deployName,
+				Port:       placement.svc.Port,
+				Metadata:   map[string]any{"_cleanup_only": true},
+			}
+			if err := prov.Cleanup(cleanupCtx, host, config); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	return reconcileRemovedServicePlacementsWithClient(ctx, cmd.OutOrStdout(), manifest, phase, client, cleanup)
+}
+
+func reconcileRemovedServicePlacementsWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, phase orchestrator.Phase, client serviceClusterAssignmentClient, cleanup removedPlacementCleanupFunc) error {
+	placements, err := removedServicePlacements(ctx, manifest, phase, client)
+	if err != nil {
+		return err
+	}
+	if len(placements) == 0 {
+		return nil
+	}
+	if cleanup == nil {
+		return fmt.Errorf("removed-placement cleanup function is required")
+	}
+
+	fmt.Fprintln(out, "  Reconciling removed service placements...")
+	for _, placement := range placements {
+		if pkgdns.IsPoolAssignedServiceType(placement.serviceName) {
+			drainCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			_, drainErr := client.DrainServiceInstance(drainCtx, &pb.DrainServiceInstanceRequest{
+				InstanceId:  placement.instance.GetId(),
+				ServiceType: placement.serviceName,
+			})
+			cancel()
+			if drainErr != nil && status.Code(drainErr) != codes.NotFound {
+				return fmt.Errorf("drain stale %s instance %s: %w", placement.serviceName, placement.instance.GetId(), drainErr)
+			}
+		}
+
+		if err := cleanup(ctx, placement); err != nil {
+			return fmt.Errorf("cleanup stale %s on %s: %w", placement.serviceName, placement.nodeID, err)
+		}
+		ux.Success(out, fmt.Sprintf("%s removed from %s", placement.serviceName, placement.nodeID))
+	}
+	return nil
+}
+
+func removedServicePlacements(ctx context.Context, manifest *inventory.Manifest, phase orchestrator.Phase, client serviceClusterAssignmentClient) ([]removedServicePlacement, error) {
+	serviceIDs, err := serviceIDsByType(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+
+	configs := serviceConfigsForPlacementPhase(manifest, phase, serviceIDs)
+	var placements []removedServicePlacement
+	for serviceName, svc := range configs {
+		serviceID := serviceIDs[serviceName]
+		if serviceID == "" {
+			continue
+		}
+		deployName, ok := servicedefs.DeployName(serviceName, svc.Deploy)
+		if !ok {
+			return nil, fmt.Errorf("unknown service id: %s", serviceName)
+		}
+		instances, err := serviceInstancesForService(ctx, client, serviceID)
+		if err != nil {
+			return nil, fmt.Errorf("list %s instances: %w", serviceName, err)
+		}
+		desired := desiredPlacementHosts(manifest, serviceName, svc)
+		for _, inst := range instances {
+			if !serviceInstanceShouldBePruned(inst, desired) {
+				continue
+			}
+			nodeID := strings.TrimSpace(inst.GetNodeId())
+			if _, ok := manifest.GetHost(nodeID); !ok {
+				continue
+			}
+			cleanupModes := removedPlacementCleanupModes(svc, inst)
+			if len(cleanupModes) == 0 {
+				continue
+			}
+			placements = append(placements, removedServicePlacement{
+				serviceName:  serviceName,
+				deployName:   deployName,
+				serviceID:    serviceID,
+				svc:          svc,
+				instance:     inst,
+				nodeID:       nodeID,
+				cleanupModes: cleanupModes,
+			})
+		}
+	}
+
+	sort.Slice(placements, func(i, j int) bool {
+		if placements[i].serviceName != placements[j].serviceName {
+			return placements[i].serviceName < placements[j].serviceName
+		}
+		return placements[i].nodeID < placements[j].nodeID
+	})
+	return placements, nil
+}
+
+func serviceConfigsForPlacementPhase(manifest *inventory.Manifest, phase orchestrator.Phase, serviceIDs map[string]string) map[string]inventory.ServiceConfig {
+	out := map[string]inventory.ServiceConfig{}
+	if manifest == nil {
+		return out
+	}
+	if phase == orchestrator.PhaseApplications || phase == orchestrator.PhaseAll {
+		for name, svc := range manifest.Services {
+			out[name] = svc
+		}
+	}
+	if phase == orchestrator.PhaseInterfaces || phase == orchestrator.PhaseAll {
+		for name, svc := range manifest.Interfaces {
+			out[name] = svc
+		}
+		for name, svc := range manifest.Observability {
+			out[name] = svc
+		}
+	}
+	for name := range serviceIDs {
+		if _, ok := out[name]; ok || !phaseIncludesDeletedService(phase, name) {
+			continue
+		}
+		out[name] = inventory.ServiceConfig{Enabled: false}
+	}
+	return out
+}
+
+func phaseIncludesDeletedService(phase orchestrator.Phase, serviceName string) bool {
+	if phase == orchestrator.PhaseAll {
+		return true
+	}
+	def, ok := servicedefs.Lookup(serviceName)
+	if !ok {
+		return false
+	}
+	switch phase {
+	case orchestrator.PhaseApplications:
+		return def.Role != "interface" && def.Role != "observability"
+	case orchestrator.PhaseInterfaces:
+		return def.Role == "interface" || def.Role == "observability"
+	default:
+		return false
+	}
+}
+
+func removedPlacementCleanupModes(svc inventory.ServiceConfig, inst *pb.ServiceInstance) []string {
+	mode := strings.TrimSpace(svc.Mode)
+	if mode != "" {
+		return []string{mode}
+	}
+	if strings.TrimSpace(inst.GetContainerId()) != "" {
+		return []string{"docker"}
+	}
+	return []string{"native", "docker"}
+}
+
+func desiredPlacementHosts(manifest *inventory.Manifest, serviceName string, svc inventory.ServiceConfig) map[string]struct{} {
+	desired := map[string]struct{}{}
+	if !svc.Enabled {
+		return desired
+	}
+	hosts := serviceHosts(svc)
+	if serviceName == "privateer" && len(hosts) == 0 {
+		hosts = orchestrator.EffectivePrivateerHosts(svc, manifest.Hosts)
+	}
+	if serviceName == "vmagent" && len(hosts) == 0 {
+		hosts = orchestrator.EffectiveVMAgentHosts(svc, manifest.Hosts)
+	}
+	for _, host := range hosts {
+		host = strings.TrimSpace(host)
+		if host != "" {
+			desired[host] = struct{}{}
+		}
+	}
+	return desired
+}
+
+func serviceInstanceShouldBePruned(inst *pb.ServiceInstance, desiredHosts map[string]struct{}) bool {
+	if inst == nil || strings.TrimSpace(inst.GetId()) == "" {
+		return false
+	}
+	nodeID := strings.TrimSpace(inst.GetNodeId())
+	if nodeID == "" {
+		return false
+	}
+	if _, ok := desiredHosts[nodeID]; ok {
+		return false
+	}
+	switch inst.GetStatus() {
+	case "running", "starting", "active", "unknown", "":
+		return true
+	default:
+		return false
+	}
 }
 
 // buildTaskConfig creates a ServiceConfig for a task.

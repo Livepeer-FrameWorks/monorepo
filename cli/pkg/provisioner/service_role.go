@@ -105,6 +105,9 @@ func serviceRolePlaybookSelector(config ServiceConfig) string {
 
 func serviceVarsBuilderFor(cfg ServiceRoleConfig) RoleVarsBuilder {
 	return func(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {
+		if metaBool(config.Metadata, "_cleanup_only", false) {
+			return serviceCleanupVars(cfg, config)
+		}
 		switch config.Mode {
 		case "docker":
 			return serviceComposeVars(ctx, cfg, host, config, helpers)
@@ -113,6 +116,22 @@ func serviceVarsBuilderFor(cfg ServiceRoleConfig) RoleVarsBuilder {
 		default:
 			return nil, fmt.Errorf("%s: unsupported mode %q (want docker|native)", cfg.ServiceName, config.Mode)
 		}
+	}
+}
+
+func serviceCleanupVars(cfg ServiceRoleConfig, config ServiceConfig) (map[string]any, error) {
+	switch config.Mode {
+	case "docker":
+		return map[string]any{
+			"compose_stack_name":        cfg.ServiceName,
+			"compose_stack_project_dir": "/opt/frameworks/" + cfg.ServiceName,
+		}, nil
+	case "native":
+		return map[string]any{
+			"go_service_name": cfg.ServiceName,
+		}, nil
+	default:
+		return nil, fmt.Errorf("%s: unsupported mode %q (want docker|native)", cfg.ServiceName, config.Mode)
 	}
 }
 
