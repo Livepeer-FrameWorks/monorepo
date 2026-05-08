@@ -23,9 +23,8 @@ type SourceURICipher interface {
 type ClusterCapabilityResolver interface {
 	// MediaClusterCapabilities returns the cluster_id + allow_private_pull_sources
 	// for every media-capable cluster the platform currently has registered.
-	// Pull streams in bootstrap are operator-owned (system_tenant), so all
-	// media clusters are candidates; tenant-scoped access lands when tenant
-	// pull streams ship via the API path.
+	// Pull streams declared through bootstrap are operator-owned, so every
+	// registered media cluster is a candidate for eligibility filtering.
 	MediaClusterCapabilities(ctx context.Context) ([]pullsource.ClusterCapability, error)
 }
 

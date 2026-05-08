@@ -146,9 +146,8 @@ type ClusterCapability struct {
 // ClassPrivate filters to AllowPrivatePullSources=true; ClassPublic returns
 // every candidate.
 //
-// This is the single eligibility chokepoint. Future cluster predicates
-// (capacity, billing entitlement, region) extend this function so callers
-// stay one-line; the per-call-site math never duplicates.
+// This is the single eligibility chokepoint. Additional cluster predicates
+// belong here so per-call-site filtering does not diverge.
 func EligiblePullClusters(class Class, candidates []ClusterCapability) []ClusterCapability {
 	if class == ClassBlocked {
 		return nil

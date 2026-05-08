@@ -11,7 +11,7 @@
     GetPendingSubscriptionsStore,
     UnsubscribeFromClusterStore,
     AcceptClusterInviteStore,
-    CreatePrivateClusterStore,
+    CreateEdgeClusterStore,
     SetPreferredClusterStore,
     ApproveClusterSubscriptionStore,
     RejectClusterSubscriptionStore,
@@ -51,7 +51,7 @@
   const invitesStore = new GetMyClusterInvitesStore();
   const unsubscribeMutation = new UnsubscribeFromClusterStore();
   const acceptInviteMutation = new AcceptClusterInviteStore();
-  const createClusterMutation = new CreatePrivateClusterStore();
+  const createClusterMutation = new CreateEdgeClusterStore();
   const setPreferredMutation = new SetPreferredClusterStore();
   const approveMutation = new ApproveClusterSubscriptionStore();
   const rejectMutation = new RejectClusterSubscriptionStore();
@@ -138,6 +138,7 @@
   let showCreateClusterModal = $state(false);
   let newClusterName = $state("");
   let createdBootstrapToken = $state<string | null>(null);
+  let createdFoghornAddr = $state<string | null>(null);
 
   let mapNodes = $derived(
     nodes
@@ -302,7 +303,7 @@
     }
   }
 
-  async function createPrivateCluster() {
+  async function createEdgeCluster() {
     if (!newClusterName.trim()) {
       toast.error("Cluster name is required");
       return;
@@ -311,10 +312,11 @@
       const result = await createClusterMutation.mutate({
         input: { clusterName: newClusterName.trim() },
       });
-      const data = result.data?.createPrivateCluster;
-      if (data?.__typename === "CreatePrivateClusterResponse") {
+      const data = result.data?.createEdgeCluster;
+      if (data?.__typename === "CreateEdgeClusterResponse") {
         const unmaskedToken = unmaskBootstrapToken(data.bootstrapToken);
         createdBootstrapToken = unmaskedToken?.token ?? null;
+        createdFoghornAddr = data.foghornAddr;
         toast.success(`Created cluster "${newClusterName}"`);
         await Promise.all([accessStore.fetch(), subscriptionsStore.fetch()]);
         await fetchPendingApprovals();
@@ -332,6 +334,7 @@
     showCreateClusterModal = false;
     newClusterName = "";
     createdBootstrapToken = null;
+    createdFoghornAddr = null;
   }
 
   function formatTimeAgo(dateStr: string | null | undefined) {
@@ -382,7 +385,7 @@
       </div>
       <Button onclick={() => (showCreateClusterModal = true)}>
         <PlusIcon class="w-4 h-4 mr-2" />
-        Create Private Cluster
+        Create Edge Cluster
       </Button>
     </div>
 
@@ -907,7 +910,7 @@
   </div>
 </div>
 
-<!-- Create Private Cluster Modal -->
+<!-- Create Edge Cluster Modal -->
 {#if showCreateClusterModal}
   <div class="fixed inset-0 z-50 flex items-center justify-center">
     <button
@@ -920,7 +923,7 @@
       class="relative bg-background border border-border rounded-lg shadow-xl max-w-md w-full mx-4 p-6"
     >
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">Create Private Cluster</h2>
+        <h2 class="text-lg font-semibold">Create Edge Cluster</h2>
         <button onclick={closeModal} class="text-muted-foreground hover:text-foreground">
           <XIcon class="w-5 h-5" />
         </button>
@@ -933,6 +936,27 @@
             <p class="text-xs text-muted-foreground mb-3">
               Copy the bootstrap token below. This is the only time it will be shown.
             </p>
+            {#if createdFoghornAddr}
+              <div class="mb-3">
+                <p class="text-xs text-muted-foreground mb-1">Foghorn address</p>
+                <div class="flex items-center gap-2">
+                  <code class="flex-1 p-2 bg-muted rounded text-xs font-mono break-all">
+                    {createdFoghornAddr}
+                  </code>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onclick={() => {
+                      navigator.clipboard.writeText(createdFoghornAddr!);
+                      toast.success("Foghorn address copied to clipboard");
+                    }}
+                  >
+                    <CopyIcon class="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            {/if}
+            <p class="text-xs text-muted-foreground mb-1">Bootstrap token</p>
             <div class="flex items-center gap-2">
               <code class="flex-1 p-2 bg-muted rounded text-xs font-mono break-all">
                 {createdBootstrapToken}
@@ -970,7 +994,7 @@
             <Button
               class="flex-1"
               disabled={!newClusterName.trim() || mutating}
-              onclick={createPrivateCluster}
+              onclick={createEdgeCluster}
             >
               {#if mutating}
                 Creating...

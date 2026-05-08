@@ -22,7 +22,7 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "create_stream",
-			Description: "Create a new live stream. Returns stream key and playback ID.",
+			Description: "Create a new push or pull live stream. Push streams return a usable stream key; pull streams return redacted source configuration and playback ID.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args CreateStreamInput) (*mcp.CallToolResult, any, error) {
 			return handleCreateStream(ctx, args, clients, checker, logger)
@@ -33,7 +33,7 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "update_stream",
-			Description: "Update stream settings (name, description, recording).",
+			Description: "Update stream settings, recording, or pull-source configuration.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args UpdateStreamInput) (*mcp.CallToolResult, any, error) {
 			return handleUpdateStream(ctx, args, clients, checker, logger)
@@ -65,20 +65,35 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 
 // CreateStreamInput represents input for create_stream tool.
 type CreateStreamInput struct {
-	Name        string `json:"name" jsonschema:"required" jsonschema_description:"Stream display name"`
-	Description string `json:"description,omitempty" jsonschema_description:"Stream description"`
-	Record      bool   `json:"record,omitempty" jsonschema_description:"Enable DVR recording"`
-	Public      bool   `json:"public,omitempty" jsonschema_description:"Make stream publicly discoverable"`
+	Name        string               `json:"name" jsonschema:"required" jsonschema_description:"Stream display name"`
+	Description string               `json:"description,omitempty" jsonschema_description:"Stream description"`
+	Record      bool                 `json:"record,omitempty" jsonschema_description:"Enable DVR recording"`
+	Public      bool                 `json:"public,omitempty" jsonschema_description:"Make stream publicly discoverable"`
+	IngestMode  string               `json:"ingest_mode,omitempty" jsonschema_description:"push or pull. Defaults to push."`
+	PullSource  *PullSourceToolInput `json:"pull_source,omitempty" jsonschema_description:"Required when ingest_mode is pull"`
+}
+
+type PullSourceToolInput struct {
+	SourceURI string `json:"source_uri" jsonschema:"required" jsonschema_description:"Upstream RTSP, SRT, RIST, HLS, DTSC, or TS source URI"`
+	Enabled   *bool  `json:"enabled,omitempty" jsonschema_description:"Whether the media plane may pull from the source. Defaults to true."`
+}
+
+type PullSourceToolResult struct {
+	SourceURIRedacted string `json:"source_uri_redacted"`
+	Enabled           bool   `json:"enabled"`
+	Class             string `json:"class"`
 }
 
 // CreateStreamResult represents the result of creating a stream.
 type CreateStreamResult struct {
-	ID         string `json:"id"`
-	StreamID   string `json:"stream_id"`
-	StreamKey  string `json:"stream_key"`
-	PlaybackID string `json:"playback_id"`
-	Name       string `json:"name"`
-	Message    string `json:"message"`
+	ID         string                `json:"id"`
+	StreamID   string                `json:"stream_id"`
+	StreamKey  string                `json:"stream_key,omitempty"`
+	PlaybackID string                `json:"playback_id"`
+	Name       string                `json:"name"`
+	IngestMode string                `json:"ingest_mode"`
+	PullSource *PullSourceToolResult `json:"pull_source,omitempty"`
+	Message    string                `json:"message"`
 }
 
 func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -105,19 +120,29 @@ func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *cl
 		Description: args.Description,
 		IsPublic:    args.Public,
 		IsRecording: args.Record,
+		IngestMode:  args.IngestMode,
+		PullSource:  toProtoPullSource(args.PullSource),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create stream")
 		return toolError(fmt.Sprintf("Failed to create stream: %v", err))
 	}
 
+	message := fmt.Sprintf("Push stream '%s' created. Use stream key to start broadcasting.", resp.Title)
+	streamKey := resp.StreamKey
+	if resp.GetIngestMode() == "pull" {
+		message = fmt.Sprintf("Pull stream '%s' created. FrameWorks will pull from the configured source when viewers request playback.", resp.Title)
+		streamKey = ""
+	}
 	result := CreateStreamResult{
 		ID:         globalid.Encode(globalid.TypeStream, resp.Id),
 		StreamID:   resp.Id,
-		StreamKey:  resp.StreamKey,
+		StreamKey:  streamKey,
 		PlaybackID: resp.PlaybackId,
 		Name:       resp.Title,
-		Message:    fmt.Sprintf("Stream '%s' created. Use stream key to start broadcasting.", resp.Title),
+		IngestMode: resp.IngestMode,
+		PullSource: fromProtoPullSource(resp.PullSource),
+		Message:    message,
 	}
 
 	return toolSuccess(result)
@@ -125,18 +150,22 @@ func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *cl
 
 // UpdateStreamInput represents input for update_stream tool.
 type UpdateStreamInput struct {
-	StreamID    string  `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to update"`
-	Name        *string `json:"name,omitempty" jsonschema_description:"New stream name"`
-	Description *string `json:"description,omitempty" jsonschema_description:"New description"`
-	Record      *bool   `json:"record,omitempty" jsonschema_description:"Enable/disable recording"`
+	StreamID    string               `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to update"`
+	Name        *string              `json:"name,omitempty" jsonschema_description:"New stream name"`
+	Description *string              `json:"description,omitempty" jsonschema_description:"New description"`
+	Record      *bool                `json:"record,omitempty" jsonschema_description:"Enable/disable recording"`
+	IngestMode  *string              `json:"ingest_mode,omitempty" jsonschema_description:"Existing ingest mode. A different value is rejected."`
+	PullSource  *PullSourceToolInput `json:"pull_source,omitempty" jsonschema_description:"Replacement pull-source configuration for pull streams"`
 }
 
 // UpdateStreamResult represents the result of updating a stream.
 type UpdateStreamResult struct {
-	ID       string `json:"id"`
-	StreamID string `json:"stream_id"`
-	Name     string `json:"name"`
-	Message  string `json:"message"`
+	ID         string                `json:"id"`
+	StreamID   string                `json:"stream_id"`
+	Name       string                `json:"name"`
+	IngestMode string                `json:"ingest_mode"`
+	PullSource *PullSourceToolResult `json:"pull_source,omitempty"`
+	Message    string                `json:"message"`
 }
 
 func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -166,6 +195,8 @@ func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *cl
 		Name:        args.Name,
 		Description: args.Description,
 		Record:      args.Record,
+		IngestMode:  args.IngestMode,
+		PullSource:  toProtoPullSource(args.PullSource),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to update stream")
@@ -173,13 +204,36 @@ func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *cl
 	}
 
 	result := UpdateStreamResult{
-		ID:       globalid.Encode(globalid.TypeStream, stream.StreamId),
-		StreamID: stream.StreamId,
-		Name:     stream.Title,
-		Message:  fmt.Sprintf("Stream '%s' updated.", stream.Title),
+		ID:         globalid.Encode(globalid.TypeStream, stream.StreamId),
+		StreamID:   stream.StreamId,
+		Name:       stream.Title,
+		IngestMode: stream.IngestMode,
+		PullSource: fromProtoPullSource(stream.PullSource),
+		Message:    fmt.Sprintf("Stream '%s' updated.", stream.Title),
 	}
 
 	return toolSuccess(result)
+}
+
+func toProtoPullSource(input *PullSourceToolInput) *pb.PullSourceInput {
+	if input == nil {
+		return nil
+	}
+	return &pb.PullSourceInput{
+		SourceUri: input.SourceURI,
+		Enabled:   input.Enabled,
+	}
+}
+
+func fromProtoPullSource(input *pb.PullSourceView) *PullSourceToolResult {
+	if input == nil {
+		return nil
+	}
+	return &PullSourceToolResult{
+		SourceURIRedacted: input.SourceUriRedacted,
+		Enabled:           input.Enabled,
+		Class:             input.Class,
+	}
 }
 
 // DeleteStreamInput represents input for delete_stream tool.

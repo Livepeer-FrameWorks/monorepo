@@ -2165,11 +2165,6 @@ func (r *mutationResolver) UnsubscribeFromCluster(ctx context.Context, clusterID
 	return r.DoUnsubscribeFromCluster(ctx, rawID)
 }
 
-// CreatePrivateCluster is the resolver for the createPrivateCluster field.
-func (r *mutationResolver) CreatePrivateCluster(ctx context.Context, input model.CreatePrivateClusterInput) (model.CreatePrivateClusterResult, error) {
-	return r.DoCreatePrivateCluster(ctx, input)
-}
-
 // CreateEdgeCluster is the resolver for the createEdgeCluster field.
 func (r *mutationResolver) CreateEdgeCluster(ctx context.Context, input model.CreateEdgeClusterInput) (model.CreateEdgeClusterResult, error) {
 	return r.DoCreateEdgeCluster(ctx, input)
@@ -4587,6 +4582,16 @@ func (r *streamResolver) Name(ctx context.Context, obj *proto.Stream) (string, e
 // Record is the resolver for the record field.
 func (r *streamResolver) Record(ctx context.Context, obj *proto.Stream) (bool, error) {
 	return obj.IsRecording, nil
+}
+
+// IngestMode is the resolver for the ingestMode field.
+func (r *streamResolver) IngestMode(ctx context.Context, obj *proto.Stream) (model.IngestMode, error) {
+	switch strings.ToUpper(strings.TrimSpace(obj.GetIngestMode())) {
+	case string(model.IngestModePull):
+		return model.IngestModePull, nil
+	default:
+		return model.IngestModePush, nil
+	}
 }
 
 // CreatedAt is the resolver for the createdAt field.

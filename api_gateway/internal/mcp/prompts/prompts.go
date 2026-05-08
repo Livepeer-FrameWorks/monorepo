@@ -677,7 +677,7 @@ func handleSelfHostingPrompt() (*mcp.GetPromptResult, error) {
 	parts = append(parts, "## Step 3: Subscribe to a Cluster")
 	parts = append(parts, "Use `subscribe_to_cluster(cluster_id)` to connect.")
 	parts = append(parts, "Some clusters allow instant connection. Others require approval from the operator — you'll see PENDING_APPROVAL status until approved.")
-	parts = append(parts, "Alternatively, use `create_private_cluster(cluster_name)` to create your own cluster and get a bootstrap token directly.\n")
+	parts = append(parts, "Alternatively, use `create_edge_cluster(cluster_name)` to create your own cluster and get a bootstrap token directly.\n")
 
 	parts = append(parts, "## Step 4: Set Preferred Cluster")
 	parts = append(parts, "Use `set_preferred_cluster(cluster_id)` to route your traffic there.")

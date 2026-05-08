@@ -290,6 +290,7 @@ function getDefaultForInputType(typeName: string): unknown {
         name: "example-live-stream",
         description: "Example stream description",
         record: false,
+        ingestMode: "PUSH",
       };
 
     case "UpdateStreamInput":
@@ -297,6 +298,13 @@ function getDefaultForInputType(typeName: string): unknown {
         name: "example-live-stream-updated",
         description: "Updated stream description",
         record: false,
+        ingestMode: "PUSH",
+      };
+
+    case "PullSourceInput":
+      return {
+        sourceUri: "rtsp://camera.example.net/live",
+        enabled: true,
       };
 
     case "CreateClipInput":
@@ -359,11 +367,10 @@ function getDefaultForInputType(typeName: string): unknown {
         method: "CARD",
       };
 
-    case "CreatePrivateClusterInput":
+    case "CreateEdgeClusterInput":
       return {
-        name: "My Private Cluster",
-        region: "us-east",
-        deploymentModel: "hybrid",
+        clusterName: "My Edge Cluster",
+        shortDescription: "Self-hosted edge cluster",
       };
 
     case "UpdateClusterMarketplaceInput":

@@ -32,6 +32,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/turnstile"
 
 	"github.com/google/uuid"
@@ -764,17 +765,17 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 	}
 
 	// Query stream info from commodore tables only (no cross-service DB access)
-	var streamID, userID, tenantID, internalName, playbackID string
+	var streamID, userID, tenantID, internalName, playbackID, ingestMode string
 	var isActive, isRecordingEnabled bool
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
 			s.id, s.user_id, s.tenant_id, s.internal_name,
-			u.is_active, s.is_recording_enabled, s.playback_id
+			u.is_active, s.is_recording_enabled, s.playback_id, s.ingest_mode
 		FROM commodore.streams s
 		JOIN commodore.users u ON s.user_id = u.id
 		WHERE s.stream_key = $1
-	`, streamKey).Scan(&streamID, &userID, &tenantID, &internalName, &isActive, &isRecordingEnabled, &playbackID)
+	`, streamKey).Scan(&streamID, &userID, &tenantID, &internalName, &isActive, &isRecordingEnabled, &playbackID, &ingestMode)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ValidateStreamKeyResponse{
@@ -795,6 +796,12 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 		return &pb.ValidateStreamKeyResponse{
 			Valid: false,
 			Error: "User account is inactive",
+		}, nil
+	}
+	if ingestMode == "pull" {
+		return &pb.ValidateStreamKeyResponse{
+			Valid: false,
+			Error: "Pull streams do not accept push ingest",
 		}, nil
 	}
 
@@ -1044,6 +1051,62 @@ func (s *CommodoreServer) ResolvePullSourceByInternalName(ctx context.Context, r
 		TenantId:  tenantID,
 		StreamId:  streamID,
 	}, nil
+}
+
+func normalizeIngestMode(mode string) string {
+	return strings.ToLower(strings.TrimSpace(mode))
+}
+
+func buildPullSourceView(rawURI string, enabled bool, class pullsource.Class) *pb.PullSourceView {
+	if rawURI == "" {
+		return nil
+	}
+	return &pb.PullSourceView{
+		SourceUriRedacted: pullsource.Redact(rawURI),
+		Enabled:           enabled,
+		Class:             class.String(),
+	}
+}
+
+func pullSourceEnabled(input *pb.PullSourceInput) bool {
+	if input == nil || input.Enabled == nil {
+		return true
+	}
+	return input.GetEnabled()
+}
+
+func (s *CommodoreServer) validatePullSourceEligibility(ctx context.Context, rawURI string) (pullsource.Class, error) {
+	class, err := pullsource.Classify(rawURI)
+	if class == pullsource.ClassBlocked {
+		if err == nil {
+			err = errors.New("source_uri rejected")
+		}
+		return class, status.Errorf(codes.InvalidArgument, "invalid pull source: %v", err)
+	}
+	if s.quartermasterClient == nil {
+		return class, status.Error(codes.FailedPrecondition, "cannot validate pull source eligibility: Quartermaster unavailable")
+	}
+	resp, err := s.quartermasterClient.ListClusters(ctx, nil)
+	if err != nil {
+		return class, status.Errorf(codes.FailedPrecondition, "cannot validate pull source eligibility: %v", err)
+	}
+	candidates := make([]pullsource.ClusterCapability, 0, len(resp.GetClusters()))
+	for _, c := range resp.GetClusters() {
+		if c.GetClusterType() != "edge" {
+			continue
+		}
+		candidates = append(candidates, pullsource.ClusterCapability{
+			ID:                      c.GetClusterId(),
+			AllowPrivatePullSources: c.GetAllowPrivatePullSources(),
+		})
+	}
+	if len(pullsource.EligiblePullClusters(class, candidates)) == 0 {
+		if class == pullsource.ClassPrivate {
+			return class, status.Error(codes.FailedPrecondition, "pull source is private but no eligible edge cluster allows private pull sources")
+		}
+		return class, status.Error(codes.FailedPrecondition, "no eligible edge cluster is registered for pull streams")
+	}
+	return class, nil
 }
 
 // ValidateAPIToken validates a developer API token (called by Gateway middleware)
@@ -3745,37 +3808,82 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *pb.CreateStream
 	if title == "" {
 		title = "Untitled Stream"
 	}
+	ingestMode := normalizeIngestMode(req.GetIngestMode())
+	if ingestMode == "" {
+		ingestMode = "push"
+	}
+	var pullClass pullsource.Class
+	if ingestMode == "pull" {
+		if req.GetPullSource() == nil || strings.TrimSpace(req.GetPullSource().GetSourceUri()) == "" {
+			return nil, status.Error(codes.InvalidArgument, "pull_source.source_uri required for pull streams")
+		}
+		pullClass, err = s.validatePullSourceEligibility(ctx, req.GetPullSource().GetSourceUri())
+		if err != nil {
+			return nil, err
+		}
+	} else if ingestMode != "push" {
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported ingest_mode %q", req.GetIngestMode())
+	}
 
-	// Use stored procedure to create stream
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
+
+	// Keep stream creation and requested initial state atomic. Pull streams
+	// must not leak as push streams if source persistence fails.
 	var streamID, streamKey, playbackID, internalName string
-	err = s.db.QueryRowContext(ctx, `
-		SELECT stream_id, stream_key, playback_id, internal_name
-		FROM commodore.create_user_stream($1, $2, $3)
-	`, tenantID, userID, title).Scan(&streamID, &streamKey, &playbackID, &internalName)
+	err = tx.QueryRowContext(ctx, `
+			SELECT stream_id, stream_key, playback_id, internal_name
+			FROM commodore.create_user_stream($1, $2, $3)
+		`, tenantID, userID, title).Scan(&streamID, &streamKey, &playbackID, &internalName)
 
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create stream")
 		return nil, status.Errorf(codes.Internal, "failed to create stream: %v", err)
 	}
+	if ingestMode == "pull" {
+		encURI, err := s.pullSourceEncryptor.Encrypt(strings.TrimSpace(req.GetPullSource().GetSourceUri()))
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to encrypt pull source: %v", err)
+		}
+		_, err = tx.ExecContext(ctx, `
+				UPDATE commodore.streams
+				SET ingest_mode = 'pull', updated_at = NOW()
+				WHERE id = $1::uuid AND tenant_id = $2::uuid;
+			INSERT INTO commodore.stream_pull_sources
+				(stream_id, source_uri_enc, enabled, created_at, updated_at)
+			VALUES ($1::uuid, $3, $4, NOW(), NOW())
+		`, streamID, tenantID, encURI, pullSourceEnabled(req.GetPullSource()))
+		if err != nil {
+			s.logger.WithError(err).WithField("stream_id", streamID).Error("Failed to persist pull source")
+			return nil, status.Errorf(codes.Internal, "failed to persist pull source: %v", err)
+		}
+	}
 
 	// Update description if provided
 	if req.GetDescription() != "" {
-		_, err = s.db.ExecContext(ctx, `
-			UPDATE commodore.streams SET description = $1 WHERE id = $2
-		`, req.GetDescription(), streamID)
+		_, err = tx.ExecContext(ctx, `
+				UPDATE commodore.streams SET description = $1 WHERE id = $2
+			`, req.GetDescription(), streamID)
 		if err != nil {
-			s.logger.WithError(err).Warn("Failed to update stream description")
+			return nil, status.Errorf(codes.Internal, "failed to update stream description: %v", err)
 		}
 	}
 
 	// Update recording setting if requested
 	if req.GetIsRecording() {
-		_, err = s.db.ExecContext(ctx, `
-			UPDATE commodore.streams SET is_recording_enabled = true WHERE id = $1
-		`, streamID)
+		_, err = tx.ExecContext(ctx, `
+				UPDATE commodore.streams SET is_recording_enabled = true WHERE id = $1
+			`, streamID)
 		if err != nil {
-			s.logger.WithError(err).Warn("Failed to enable recording")
+			return nil, status.Errorf(codes.Internal, "failed to enable recording: %v", err)
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to commit stream creation: %v", err)
 	}
 
 	changedFields := []string{"title"}
@@ -3784,6 +3892,9 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *pb.CreateStream
 	}
 	if req.GetIsRecording() {
 		changedFields = append(changedFields, "is_recording_enabled")
+	}
+	if ingestMode == "pull" {
+		changedFields = append(changedFields, "ingest_mode", "pull_source")
 	}
 	s.emitStreamChangeEvent(ctx, eventStreamCreated, tenantID, userID, streamID, changedFields)
 
@@ -3794,6 +3905,10 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *pb.CreateStream
 		Title:       title,
 		Description: req.GetDescription(),
 		Status:      "offline",
+		IngestMode:  ingestMode,
+	}
+	if ingestMode == "pull" {
+		resp.PullSource = buildPullSourceView(req.GetPullSource().GetSourceUri(), pullSourceEnabled(req.GetPullSource()), pullClass)
 	}
 
 	// Populate cluster-level base domains from Quartermaster routing data.
@@ -3865,16 +3980,18 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRe
 
 	// Build keyset pagination query
 	builder := &pagination.KeysetBuilder{
-		TimestampColumn: "created_at",
-		IDColumn:        "id",
+		TimestampColumn: "s.created_at",
+		IDColumn:        "s.id",
 	}
 
 	// Base query
 	query := `
-		SELECT id, internal_name, stream_key, playback_id, title, description,
-		       is_recording_enabled, created_at, updated_at
+		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
+		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
+		       p.source_uri_enc, p.enabled
 		FROM commodore.streams
-		WHERE user_id = $1 AND tenant_id = $2`
+		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
+		WHERE s.user_id = $1 AND s.tenant_id = $2`
 	args := []interface{}{userID, tenantID}
 	argIdx := 3
 
@@ -3896,7 +4013,7 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRe
 
 	var streams []*pb.Stream
 	for rows.Next() {
-		stream, err := scanStream(rows)
+		stream, err := s.scanStream(rows)
 		if err != nil {
 			s.logger.WithError(err).Warn("Error scanning stream")
 			continue
@@ -3962,16 +4079,48 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
 
-	// Verify ownership and fetch internal_name for internal ops
-	var internalName string
+	// Verify ownership and fetch immutable ingest mode for validation.
+	var internalName, currentIngestMode string
 	err = s.db.QueryRowContext(ctx, `
-		SELECT internal_name FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3
-	`, streamID, userID, tenantID).Scan(&internalName)
+		SELECT internal_name, ingest_mode FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3
+	`, streamID, userID, tenantID).Scan(&internalName, &currentIngestMode)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if req.IngestMode != nil {
+		requestedMode := normalizeIngestMode(req.GetIngestMode())
+		if requestedMode == "" {
+			requestedMode = "push"
+		}
+		if requestedMode != currentIngestMode {
+			return nil, status.Error(codes.InvalidArgument, "ingest_mode cannot be changed after stream creation")
+		}
+	}
+
+	pullSource := req.GetPullSource()
+	var pullSourceEncryptedURI string
+	pullSourceHasURI := false
+	pullSourceEnabledValue := false
+	if pullSource != nil {
+		if currentIngestMode != "pull" {
+			return nil, status.Error(codes.InvalidArgument, "pull_source can only be updated on pull streams")
+		}
+		pullSourceEnabledValue = pullSourceEnabled(pullSource)
+		rawSourceURI := strings.TrimSpace(pullSource.GetSourceUri())
+		if rawSourceURI != "" {
+			if _, err := s.validatePullSourceEligibility(ctx, rawSourceURI); err != nil {
+				return nil, err
+			}
+			encURI, err := s.pullSourceEncryptor.Encrypt(rawSourceURI)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to encrypt pull source: %v", err)
+			}
+			pullSourceEncryptedURI = encURI
+			pullSourceHasURI = true
+		}
 	}
 
 	// Build update query dynamically
@@ -3999,16 +4148,63 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 		changedFields = append(changedFields, "is_recording_enabled")
 	}
 
+	if len(updates) == 0 && pullSource == nil {
+		return s.queryStream(ctx, streamID, userID, tenantID)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
+
 	if len(updates) > 0 {
 		updates = append(updates, "updated_at = NOW()")
-		query := fmt.Sprintf("UPDATE commodore.streams SET %s WHERE id = $%d",
-			strings.Join(updates, ", "), argIdx)
-		args = append(args, streamID)
+		query := fmt.Sprintf("UPDATE commodore.streams SET %s WHERE id = $%d AND user_id = $%d AND tenant_id = $%d",
+			strings.Join(updates, ", "), argIdx, argIdx+1, argIdx+2)
+		args = append(args, streamID, userID, tenantID)
 
-		_, err = s.db.ExecContext(ctx, query, args...)
+		res, err := tx.ExecContext(ctx, query, args...)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to update stream: %v", err)
 		}
+		if rows, err := res.RowsAffected(); err == nil && rows == 0 {
+			return nil, status.Error(codes.NotFound, "stream not found")
+		}
+	}
+
+	if pullSource != nil {
+		if !pullSourceHasURI {
+			res, err := tx.ExecContext(ctx, `
+					UPDATE commodore.stream_pull_sources
+					SET enabled = $2, updated_at = NOW()
+					WHERE stream_id = $1::uuid
+				`, streamID, pullSourceEnabledValue)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to update pull source: %v", err)
+			}
+			if rows, err := res.RowsAffected(); err == nil && rows == 0 {
+				return nil, status.Error(codes.NotFound, "pull source not found")
+			}
+		} else {
+			_, err = tx.ExecContext(ctx, `
+					INSERT INTO commodore.stream_pull_sources
+						(stream_id, source_uri_enc, enabled, created_at, updated_at)
+					VALUES ($1::uuid, $2, $3, NOW(), NOW())
+					ON CONFLICT (stream_id) DO UPDATE
+						SET source_uri_enc = EXCLUDED.source_uri_enc,
+						    enabled = EXCLUDED.enabled,
+						    updated_at = NOW()
+				`, streamID, pullSourceEncryptedURI, pullSourceEnabledValue)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to update pull source: %v", err)
+			}
+		}
+		changedFields = append(changedFields, "pull_source")
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to commit stream update: %v", err)
 	}
 
 	if len(changedFields) > 0 {
@@ -5129,10 +5325,12 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStream
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, internal_name, stream_key, playback_id, title, description,
-		       is_recording_enabled, created_at, updated_at
+		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
+		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
+		       p.source_uri_enc, p.enabled
 		FROM commodore.streams
-		WHERE id = ANY($1) AND user_id = $2 AND tenant_id = $3
+		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
+		WHERE s.id = ANY($1) AND s.user_id = $2 AND s.tenant_id = $3
 	`, pq.Array(streamIDs), userID, tenantID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -5141,7 +5339,7 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStream
 
 	var streams []*pb.Stream
 	for rows.Next() {
-		stream, err := scanStream(rows)
+		stream, err := s.scanStream(rows)
 		if err != nil {
 			s.logger.WithError(err).Warn("Error scanning stream in batch")
 			continue
@@ -5154,17 +5352,21 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStream
 
 func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, tenantID string) (*pb.Stream, error) {
 	var stream pb.Stream
-	var description sql.NullString
+	var description, sourceURIEnc sql.NullString
+	var pullEnabled sql.NullBool
 	var createdAt, updatedAt time.Time
 
 	// Query config only - operational state (status, started_at, ended_at) comes from Periscope Data Plane
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, internal_name, stream_key, playback_id, title, description,
-		       is_recording_enabled, created_at, updated_at
+		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
+		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
+		       p.source_uri_enc, p.enabled
 		FROM commodore.streams
-		WHERE id = $1 AND user_id = $2 AND tenant_id = $3
+		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
+		WHERE s.id = $1 AND s.user_id = $2 AND s.tenant_id = $3
 	`, streamID, userID, tenantID).Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
-		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt)
+		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt,
+		&stream.IngestMode, &sourceURIEnc, &pullEnabled)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
@@ -5179,18 +5381,31 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 	stream.IsRecording = stream.IsRecordingEnabled
 	stream.CreatedAt = timestamppb.New(createdAt)
 	stream.UpdatedAt = timestamppb.New(updatedAt)
+	if stream.IngestMode == "" {
+		stream.IngestMode = "push"
+	}
+	if stream.IngestMode == "pull" && sourceURIEnc.Valid {
+		sourceURI, err := s.pullSourceEncryptor.Decrypt(sourceURIEnc.String)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to decrypt pull source: %v", err)
+		}
+		class, _ := pullsource.Classify(sourceURI)
+		stream.PullSource = buildPullSourceView(sourceURI, pullEnabled.Bool, class)
+	}
 
 	return &stream, nil
 }
 
 // scanStream scans config-only stream data; operational state comes from Periscope Data Plane
-func scanStream(rows *sql.Rows) (*pb.Stream, error) {
+func (s *CommodoreServer) scanStream(rows *sql.Rows) (*pb.Stream, error) {
 	var stream pb.Stream
-	var description sql.NullString
+	var description, sourceURIEnc sql.NullString
+	var pullEnabled sql.NullBool
 	var createdAt, updatedAt time.Time
 
 	err := rows.Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
-		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt)
+		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt,
+		&stream.IngestMode, &sourceURIEnc, &pullEnabled)
 	if err != nil {
 		return nil, err
 	}
@@ -5201,6 +5416,17 @@ func scanStream(rows *sql.Rows) (*pb.Stream, error) {
 	stream.IsRecording = stream.IsRecordingEnabled
 	stream.CreatedAt = timestamppb.New(createdAt)
 	stream.UpdatedAt = timestamppb.New(updatedAt)
+	if stream.IngestMode == "" {
+		stream.IngestMode = "push"
+	}
+	if stream.IngestMode == "pull" && sourceURIEnc.Valid {
+		sourceURI, err := s.pullSourceEncryptor.Decrypt(sourceURIEnc.String)
+		if err != nil {
+			return nil, err
+		}
+		class, _ := pullsource.Classify(sourceURI)
+		stream.PullSource = buildPullSourceView(sourceURI, pullEnabled.Bool, class)
+	}
 
 	return &stream, nil
 }

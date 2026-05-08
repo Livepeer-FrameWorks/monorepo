@@ -919,6 +919,7 @@ ${Object.entries(variables)
           name: "example-live-stream",
           description: "Example stream description",
           record: false,
+          ingestMode: "PUSH",
         };
 
       case "UpdateStreamInput":
@@ -926,6 +927,13 @@ ${Object.entries(variables)
           name: "example-live-stream-updated",
           description: "Updated stream description",
           record: false,
+          ingestMode: "PUSH",
+        };
+
+      case "PullSourceInput":
+        return {
+          sourceUri: "rtsp://camera.example.net/live",
+          enabled: true,
         };
 
       case "CreateClipInput":
@@ -988,11 +996,10 @@ ${Object.entries(variables)
           method: "CARD",
         };
 
-      case "CreatePrivateClusterInput":
+      case "CreateEdgeClusterInput":
         return {
-          name: "My Private Cluster",
-          region: "us-east",
-          deploymentModel: "hybrid",
+          clusterName: "My Edge Cluster",
+          shortDescription: "Self-hosted edge cluster",
         };
 
       case "UpdateClusterMarketplaceInput":

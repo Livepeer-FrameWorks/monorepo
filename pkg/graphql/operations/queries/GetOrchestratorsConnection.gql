@@ -4,7 +4,7 @@
 query GetOrchestratorsConnection($orchAddr: String, $first: Int = 200, $after: String) {
   orchestratorsConnection(orchAddr: $orchAddr, page: { first: $first, after: $after }) {
     nodes {
-      ...OrchestratorListFields
+      ...OrchestratorListFields @mask_disable
     }
     totalCount
   }

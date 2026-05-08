@@ -229,7 +229,7 @@ For stream diagnostics, collect data first, then interpret:
 
 Agents that provision their own edge infrastructure can manage node lifecycle:
 
-1. **Create cluster**: `create_private_cluster` — get bootstrap enrollment token
+1. **Create cluster**: `create_edge_cluster` — get bootstrap enrollment token and Foghorn address
 2. **Add nodes**: `create_enrollment_token` for additional edges in the same cluster
 3. **Provision**: `frameworks edge provision --enrollment-token <token> --ssh user@host`
 4. **Check health**: `get_node_info` for registration data, `get_node_health` for live metrics (CPU, RAM, bandwidth, active viewers)

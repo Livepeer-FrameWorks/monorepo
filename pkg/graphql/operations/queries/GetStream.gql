@@ -2,6 +2,9 @@
 query GetStream($id: ID!, $streamId: ID!, $timeRange: TimeRangeInput) {
   stream(id: $id) {
     ...StreamCoreFields
+    playbackPolicy {
+      ...PlaybackPolicyFields @mask_disable
+    }
     metrics {
       ...StreamMetricsFields
     }

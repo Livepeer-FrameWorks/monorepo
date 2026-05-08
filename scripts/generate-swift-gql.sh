@@ -34,7 +34,7 @@ OUT="$REPO_ROOT/app_mac/Sources/Gateway/GeneratedQueries.swift"
       echo "  static let $name = \"\"\""
       # Strip Houdini directives: @paginate(...) and @mask_disable
       # Indent content by 2 spaces to satisfy Swift multi-line string literal rules
-      sed -E 's/@paginate(\([^)]*\))?//g; s/@mask_disable//g' "$f" | sed 's/^/  /'
+      sed -E 's/[[:space:]]+@paginate(\([^)]*\))?//g; s/[[:space:]]+@mask_disable//g; s/[[:space:]]+$//g' "$f" | sed 's/^/  /'
       echo "  \"\"\""
     done
   done

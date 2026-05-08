@@ -58,7 +58,7 @@ Token payload:
 - `usage_limit` — how many nodes can consume this token (for bulk provisioning)
 
 Tokens are created through the dashboard/GraphQL and MCP cluster flows
-(`createPrivateCluster`, `createEnrollmentToken`, `create_private_cluster`,
+(`createEdgeCluster`, `createEnrollmentToken`, `create_edge_cluster`,
 `create_enrollment_token`), by `frameworks edge deploy` via Bridge, or by
 admin CLI commands such as `frameworks admin clusters create-edge`,
 `frameworks admin clusters enrollment-token`, and

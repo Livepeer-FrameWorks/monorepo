@@ -1,0 +1,16 @@
+fragment PlaybackPolicyFields on PlaybackPolicy {
+  type
+  jwt {
+    allowedKids
+    requiredAudience
+    requiredClaimsJson {
+      name
+      jsonValue
+    }
+  }
+  webhook {
+    url
+    timeoutMs
+    secretMasked
+  }
+}

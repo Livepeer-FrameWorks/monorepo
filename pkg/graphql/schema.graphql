@@ -1367,16 +1367,6 @@ type Mutation {
   ): Boolean!
 
   """
-  Create a new private cluster.
-  """
-  createPrivateCluster(
-    """
-    Cluster configuration.
-    """
-    input: CreatePrivateClusterInput!
-  ): CreatePrivateClusterResult!
-
-  """
   Create an edge cluster with automatic Foghorn assignment and enrollment token.
   """
   createEdgeCluster(
@@ -1824,7 +1814,6 @@ union CreateBootstrapTokenResult = BootstrapToken | ValidationError | AuthError
 union RevokeBootstrapTokenResult = DeleteSuccess | NotFoundError | AuthError
 
 # Cluster Marketplace Result Types
-union CreatePrivateClusterResult = CreatePrivateClusterResponse | ValidationError | AuthError
 union CreateEdgeClusterResult = CreateEdgeClusterResponse | ValidationError | AuthError
 union CreateEnrollmentTokenResult = CreateEnrollmentTokenResponse | ValidationError | AuthError
 union BootstrapEdgeResult = BootstrapEdgeResponse | ValidationError | AuthError
@@ -2065,6 +2054,39 @@ type VodLifecycle {
 # Input types
 
 """
+How source media enters a stream.
+"""
+enum IngestMode {
+  "An encoder pushes RTMP, SRT, or WHIP into FrameWorks."
+  PUSH
+  "FrameWorks pulls from a configured upstream URI."
+  PULL
+}
+
+"""
+Pull-input source configuration. The source URI is stored encrypted and is
+returned only in redacted form.
+"""
+input PullSourceInput {
+  "Upstream RTSP, SRT, RIST, HLS, DTSC, or TS source URI. Required when creating or replacing a pull source."
+  sourceUri: String
+  "Whether the media plane may pull from the source."
+  enabled: Boolean = true
+}
+
+"""
+Redacted pull-input source configuration.
+"""
+type PullSourceView {
+  "Redacted upstream URI with credentials removed."
+  sourceUriRedacted: String!
+  "Whether the media plane may pull from the source."
+  enabled: Boolean!
+  "Eligibility class: public or private."
+  class: String!
+}
+
+"""
 Input for creating a new live stream.
 """
 input CreateStreamInput {
@@ -2074,6 +2096,10 @@ input CreateStreamInput {
   description: String
   "Enable DVR recording (default: false)."
   record: Boolean = false
+  "Source ingest model. Defaults to PUSH."
+  ingestMode: IngestMode = PUSH
+  "Pull-source configuration. Required when ingestMode is PULL."
+  pullSource: PullSourceInput
 }
 
 """
@@ -2087,6 +2113,10 @@ input UpdateStreamInput {
   description: String
   "Enable or disable DVR recording."
   record: Boolean
+  "Ingest model cannot be changed after create; sending a different value returns a validation error."
+  ingestMode: IngestMode
+  "Update the pull-source configuration for an existing pull stream."
+  pullSource: PullSourceInput
 }
 
 """
@@ -2538,18 +2568,6 @@ type PromoteToPaidPayload {
   creditBalanceCents: Int!
   "The new subscription ID."
   subscriptionId: ID!
-}
-
-"""
-Input for creating a private streaming cluster.
-"""
-input CreatePrivateClusterInput {
-  "Human-readable cluster name."
-  clusterName: String!
-  "Geographic region for the cluster."
-  region: String
-  "Short description for marketplace listing."
-  shortDescription: String
 }
 
 input CreateEdgeClusterInput {
@@ -3111,6 +3129,10 @@ type Stream implements Node {
   playbackId: String!
   "Whether DVR recording is enabled for this stream."
   record: Boolean!
+  "How source media enters the stream."
+  ingestMode: IngestMode!
+  "Pull-source config for pull streams; null for push streams."
+  pullSource: PullSourceView
   "When this stream was created."
   createdAt: Time!
   "When this stream was last modified."
@@ -4937,12 +4959,6 @@ type ClusterInvite {
   clusterName: String
 }
 
-# Private cluster creation response
-type CreatePrivateClusterResponse {
-  cluster: Cluster!
-  bootstrapToken: BootstrapToken!
-}
-
 type CreateEdgeClusterResponse {
   cluster: Cluster!
   bootstrapToken: BootstrapToken!
@@ -6564,8 +6580,10 @@ input PlaybackWebhookPolicyInput {
   """
   HMAC-SHA256 secret used to sign outbound webhook bodies. Write-only:
   persisted via field-level encryption and never returned in queries.
+  Required when creating a webhook policy. Omit when updating an existing
+  webhook policy to keep the currently configured secret.
   """
-  secret: String!
+  secret: String
   "Outbound POST timeout in milliseconds. Server caps at 10000; default 5000."
   timeoutMs: Int
 }

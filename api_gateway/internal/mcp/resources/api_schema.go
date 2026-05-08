@@ -349,7 +349,7 @@ func curatedCatalogSections() []CatalogSection {
 				{ID: "start-dvr", Title: "Start DVR", Description: "Begin DVR recording for a stream", OperationType: "mutation", FieldPath: "startDVR", Tags: []string{"core"}},
 				{ID: "create-clip", Title: "Create Clip", Description: "Create a clip from a stream", OperationType: "mutation", FieldPath: "createClip", Tags: []string{"core"}},
 				{ID: "set-preferred-cluster", Title: "Set Preferred Cluster", Description: "Route traffic to a specific cluster", OperationType: "mutation", FieldPath: "setPreferredCluster", Tags: []string{"infra", "marketplace"}},
-				{ID: "create-private-cluster", Title: "Create Private Cluster", Description: "Create a self-hosted edge cluster", OperationType: "mutation", FieldPath: "createPrivateCluster", Tags: []string{"infra", "selfhost"}},
+				{ID: "create-edge-cluster", Title: "Create Edge Cluster", Description: "Create a self-hosted edge cluster with Foghorn assignment", OperationType: "mutation", FieldPath: "createEdgeCluster", Tags: []string{"infra", "selfhost"}},
 			},
 		},
 		{

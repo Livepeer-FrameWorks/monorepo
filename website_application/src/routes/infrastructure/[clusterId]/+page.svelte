@@ -12,6 +12,8 @@
     GetServiceInstancesConnectionStore,
     SystemHealthStore,
     NodeListFieldsStore,
+    CreateEnrollmentTokenStore,
+    BootstrapTokenFieldsStore,
   } from "$houdini";
   import type { SystemHealth$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
@@ -21,6 +23,7 @@
   import EmptyState from "$lib/components/EmptyState.svelte";
   import InfrastructureMetricCard from "$lib/components/shared/InfrastructureMetricCard.svelte";
   import { Badge } from "$lib/components/ui/badge";
+  import { Button } from "$lib/components/ui/button";
   import { getIconComponent } from "$lib/iconUtils";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import {
@@ -35,6 +38,9 @@
   const ActivityIcon = getIconComponent("Activity");
   const PackageIcon = getIconComponent("Package");
   const CalendarIcon = getIconComponent("Calendar");
+  const PlusIcon = getIconComponent("Plus");
+  const XIcon = getIconComponent("X");
+  const CopyIcon = getIconComponent("Copy");
 
   let clusterId = $derived(page.params.clusterId as string);
 
@@ -44,13 +50,21 @@
   const serviceInstancesStore = new GetServiceInstancesConnectionStore();
   const systemHealthSub = new SystemHealthStore();
   const nodeCoreStore = new NodeListFieldsStore();
+  const createEnrollmentTokenMutation = new CreateEnrollmentTokenStore();
+  const bootstrapTokenStore = new BootstrapTokenFieldsStore();
 
   let isAuthenticated = false;
   let loadSequence = 0;
   let lastLoadedClusterId = $state<string | null>(null);
+  let showEnrollmentModal = $state(false);
+  let newEnrollmentName = $state("");
+  let newEnrollmentTtl = $state("30d");
+  let createdEnrollmentToken = $state<string | null>(null);
+  let enrollmentSshTarget = $state("");
 
   let hasData = $derived(!!$infrastructureStore.data);
   let loading = $derived($infrastructureStore.fetching && !hasData);
+  let creatingEnrollmentToken = $derived($createEnrollmentTokenMutation.fetching);
 
   let cluster = $derived(
     $infrastructureStore.data?.clustersConnection?.edges
@@ -61,6 +75,13 @@
   let maskedNodes = $derived($nodesStore.data?.nodesConnection?.edges?.map((e) => e.node) ?? []);
   let nodes = $derived(maskedNodes.map((node) => get(fragment(node, nodeCoreStore))));
   let totalNodeCount = $derived($nodesStore.data?.nodesConnection?.totalCount ?? 0);
+
+  function unmaskBootstrapToken(
+    masked: { readonly " $fragments": { BootstrapTokenFields: object } } | null | undefined
+  ) {
+    if (!masked) return null;
+    return get(fragment(masked, bootstrapTokenStore));
+  }
 
   let serviceInstances = $derived(
     sortServiceInstancesForRender(
@@ -266,6 +287,43 @@
     loadClusterData();
   }
 
+  async function createEnrollmentToken() {
+    if (!clusterId) return;
+    try {
+      const result = await createEnrollmentTokenMutation.mutate({
+        clusterId,
+        name: newEnrollmentName.trim() || undefined,
+        ttl: newEnrollmentTtl.trim() || undefined,
+      });
+      const data = result.data?.createEnrollmentToken;
+      if (data?.__typename === "CreateEnrollmentTokenResponse") {
+        const unmaskedToken = unmaskBootstrapToken(data.bootstrapToken);
+        createdEnrollmentToken = unmaskedToken?.token ?? null;
+        toast.success("Enrollment token created");
+      } else if (data?.__typename === "ValidationError" || data?.__typename === "AuthError") {
+        toast.error(data.message);
+      } else {
+        toast.error("Failed to create enrollment token");
+      }
+    } catch {
+      toast.error("Failed to create enrollment token");
+    }
+  }
+
+  function closeEnrollmentModal() {
+    showEnrollmentModal = false;
+    newEnrollmentName = "";
+    newEnrollmentTtl = "30d";
+    createdEnrollmentToken = null;
+    enrollmentSshTarget = "";
+  }
+
+  let enrollmentDeployCommand = $derived(
+    createdEnrollmentToken
+      ? `frameworks edge deploy --ssh ${enrollmentSshTarget.trim() || "ubuntu@edge-1"} --enrollment-token ${createdEnrollmentToken}`
+      : ""
+  );
+
   function getStatusBadgeClass(status: string | null | undefined) {
     switch (status?.toLowerCase()) {
       case "healthy":
@@ -362,17 +420,28 @@
           <p class="text-sm text-muted-foreground font-mono">{clusterId}</p>
         </div>
       </div>
-      <Select value={timeRange} onValueChange={handleTimeRangeChange} type="single">
-        <SelectTrigger class="min-w-[150px]">
-          <CalendarIcon class="w-4 h-4 mr-2 text-muted-foreground" />
-          {currentRange.label}
-        </SelectTrigger>
-        <SelectContent>
-          {#each timeRangeOptions as option (option.value)}
-            <SelectItem value={option.value}>{option.label}</SelectItem>
-          {/each}
-        </SelectContent>
-      </Select>
+      <div class="flex items-center gap-2">
+        <Button
+          variant="outline"
+          class="gap-2"
+          disabled={!cluster}
+          onclick={() => (showEnrollmentModal = true)}
+        >
+          <PlusIcon class="w-4 h-4" />
+          Add Edge
+        </Button>
+        <Select value={timeRange} onValueChange={handleTimeRangeChange} type="single">
+          <SelectTrigger class="min-w-[150px]">
+            <CalendarIcon class="w-4 h-4 mr-2 text-muted-foreground" />
+            {currentRange.label}
+          </SelectTrigger>
+          <SelectContent>
+            {#each timeRangeOptions as option (option.value)}
+              <SelectItem value={option.value}>{option.label}</SelectItem>
+            {/each}
+          </SelectContent>
+        </Select>
+      </div>
     </div>
   </div>
 
@@ -665,3 +734,118 @@
     {/if}
   </div>
 </div>
+
+{#if showEnrollmentModal}
+  <div class="fixed inset-0 z-50 flex items-center justify-center">
+    <button
+      type="button"
+      class="absolute inset-0 bg-black/50 cursor-default"
+      onclick={closeEnrollmentModal}
+      aria-label="Close modal"
+    ></button>
+    <div
+      class="relative bg-background border border-border rounded-lg shadow-xl max-w-md w-full mx-4 p-6"
+    >
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold">Add Edge</h2>
+        <button onclick={closeEnrollmentModal} class="text-muted-foreground hover:text-foreground">
+          <XIcon class="w-5 h-5" />
+        </button>
+      </div>
+
+      {#if createdEnrollmentToken}
+        <div class="space-y-4">
+          <div class="p-4 bg-success/10 border border-success/20 rounded-lg">
+            <p class="text-sm text-success font-medium mb-2">Enrollment token created.</p>
+            <p class="text-xs text-muted-foreground mb-3">
+              Copy the bootstrap token below. This is the only time it will be shown.
+            </p>
+            <div class="flex items-center gap-2">
+              <code class="flex-1 p-2 bg-muted rounded text-xs font-mono break-all">
+                {createdEnrollmentToken}
+              </code>
+              <Button
+                variant="outline"
+                size="sm"
+                onclick={() => {
+                  navigator.clipboard.writeText(createdEnrollmentToken!);
+                  toast.success("Token copied to clipboard");
+                }}
+              >
+                <CopyIcon class="w-4 h-4" />
+              </Button>
+            </div>
+            <div class="mt-3">
+              <label for="enrollmentSsh" class="block text-xs text-muted-foreground mb-1">
+                SSH target
+              </label>
+              <input
+                id="enrollmentSsh"
+                type="text"
+                bind:value={enrollmentSshTarget}
+                placeholder="ubuntu@edge-1"
+                class="w-full px-3 py-2 bg-muted border border-border rounded-md text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
+            <div class="mt-3 flex items-center gap-2">
+              <code class="flex-1 p-2 bg-muted rounded text-xs font-mono break-all">
+                {enrollmentDeployCommand}
+              </code>
+              <Button
+                variant="outline"
+                size="sm"
+                onclick={() => {
+                  navigator.clipboard.writeText(enrollmentDeployCommand);
+                  toast.success("Deploy command copied to clipboard");
+                }}
+              >
+                <CopyIcon class="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+          <Button class="w-full" onclick={closeEnrollmentModal}>Done</Button>
+        </div>
+      {:else}
+        <div class="space-y-4">
+          <div>
+            <label for="enrollmentName" class="block text-sm font-medium text-foreground mb-1">
+              Token Name
+            </label>
+            <input
+              id="enrollmentName"
+              type="text"
+              bind:value={newEnrollmentName}
+              placeholder="e.g., Amsterdam edge 02"
+              class="w-full px-3 py-2 bg-muted border border-border rounded-md text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+          <div>
+            <label for="enrollmentTtl" class="block text-sm font-medium text-foreground mb-1">
+              TTL
+            </label>
+            <Select bind:value={newEnrollmentTtl} type="single">
+              <SelectTrigger id="enrollmentTtl" class="w-full">
+                {newEnrollmentTtl}
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="24h">24h</SelectItem>
+                <SelectItem value="7d">7d</SelectItem>
+                <SelectItem value="30d">30d</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div class="flex gap-3">
+            <Button variant="outline" class="flex-1" onclick={closeEnrollmentModal}>Cancel</Button>
+            <Button
+              class="flex-1"
+              disabled={creatingEnrollmentToken}
+              onclick={createEnrollmentToken}
+            >
+              {creatingEnrollmentToken ? "Creating..." : "Create Token"}
+            </Button>
+          </div>
+        </div>
+      {/if}
+    </div>
+  </div>
+{/if}

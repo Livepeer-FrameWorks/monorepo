@@ -7,7 +7,7 @@ The edge stack (Helmsman, MistServer, Caddy) supports Linux and macOS. Linux can
 ```
 frameworks edge deploy --ssh admin@target --mode docker
     │
-    ├─ Bridge creates or resolves the private cluster + enrollment token
+    ├─ Bridge creates or resolves the edge cluster + enrollment token
     ├─ PreRegisterEdge resolves node ID, edge domain, pool domain, Foghorn address
     ├─ SSH connect, detect OS/arch
     │   ├─ Linux + docker → compose path
@@ -21,7 +21,7 @@ frameworks edge deploy --ssh admin@target --mode docker
     └─ Helmsman enrolls with Foghorn through the control stream
 ```
 
-`frameworks edge deploy` is the operator-friendly path. It can either use the logged-in Bridge flow to create/reuse a private cluster and issue an enrollment token, or accept a pre-existing `--enrollment-token`. `frameworks edge provision` remains the lower-level/admin path for explicit domains, manifests, registration, and certificate fetches.
+`frameworks edge deploy` is the operator-friendly path. It can either use the logged-in Bridge flow to create/reuse an edge cluster and issue an enrollment token, or accept a pre-existing `--enrollment-token`. `frameworks edge provision` remains the lower-level/admin path for explicit domains, manifests, registration, and certificate fetches.
 
 ## Cluster Node Lifecycle
 

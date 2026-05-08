@@ -3,6 +3,6 @@
 # not guaranteed.
 query GetOrchestratorInstances($orchAddr: String) {
   orchestratorInstances(orchAddr: $orchAddr) {
-    ...OrchestratorInstanceFields
+    ...OrchestratorInstanceFields @mask_disable
   }
 }

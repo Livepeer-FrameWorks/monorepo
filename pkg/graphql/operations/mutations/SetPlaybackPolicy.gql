@@ -1,0 +1,34 @@
+# Set or clear the playback policy on a stream / vod_asset / clip.
+# Exactly one of streamId, vodAssetId, or clipId must be provided.
+mutation SetPlaybackPolicy($input: SetPlaybackPolicyInput!) {
+  setPlaybackPolicy(input: $input) {
+    __typename
+    ... on Stream {
+      id
+      playbackPolicy {
+        ...PlaybackPolicyFields @mask_disable
+      }
+    }
+    ... on VodAsset {
+      id
+      playbackPolicy {
+        ...PlaybackPolicyFields @mask_disable
+      }
+    }
+    ... on Clip {
+      id
+      playbackPolicy {
+        ...PlaybackPolicyFields @mask_disable
+      }
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

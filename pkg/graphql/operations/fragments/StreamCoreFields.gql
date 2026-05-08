@@ -6,6 +6,12 @@ fragment StreamCoreFields on Stream {
   streamKey
   playbackId
   record
+  ingestMode
+  pullSource {
+    sourceUriRedacted
+    enabled
+    class
+  }
   createdAt
   updatedAt
 }

@@ -14,3 +14,4 @@ export { default as StreamSetupPanel } from "./StreamSetupPanel.svelte";
 export { default as PushTargetsTabPanel } from "./PushTargetsTabPanel.svelte";
 export { default as PushTargetCreateModal } from "./PushTargetCreateModal.svelte";
 export { default as PushTargetEditModal } from "./PushTargetEditModal.svelte";
+export { default as PlaybackAuthTabPanel } from "./PlaybackAuthTabPanel.svelte";

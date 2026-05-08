@@ -154,6 +154,12 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 	if input.Record != nil {
 		req.IsRecording = *input.Record
 	}
+	if input.IngestMode != nil {
+		req.IngestMode = string(*input.IngestMode)
+	}
+	if input.PullSource != nil {
+		req.PullSource = input.PullSource
+	}
 
 	// Call Commodore gRPC (context metadata carries auth)
 	createResp, err := r.Clients.Commodore.CreateStream(ctx, req)
@@ -175,6 +181,12 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 	}
 	if input.Record != nil {
 		changedFields = append(changedFields, "is_recording")
+	}
+	if input.IngestMode != nil {
+		changedFields = append(changedFields, "ingest_mode")
+	}
+	if input.PullSource != nil {
+		changedFields = append(changedFields, "pull_source")
 	}
 	r.sendServiceEvent(ctx, &pb.ServiceEvent{
 		EventType:    apiEventStreamCreated,

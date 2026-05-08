@@ -24,7 +24,6 @@ func newEdgeDeployCmd() *cobra.Command {
 	var (
 		clusterID       string
 		clusterName     string
-		region          string
 		nodeName        string
 		enrollmentToken string
 		foghornAddr     string
@@ -47,7 +46,7 @@ func newEdgeDeployCmd() *cobra.Command {
 Mode A — Logged-in tenant (requires 'frameworks login'):
   frameworks edge deploy --ssh ubuntu@edge-1 --email ops@example.com
 
-  Bridge creates a private cluster (if needed), issues an enrollment
+  Bridge creates an edge cluster (if needed), issues an enrollment
   token, and the CLI runs the full provision pipeline. The operator
   never has to know cluster topology.
 
@@ -92,7 +91,6 @@ Mode B — Pre-existing token (no login needed):
 			deployCfg := deployConfig{
 				clusterID:          clusterID,
 				clusterName:        clusterName,
-				region:             region,
 				nodeName:           nodeName,
 				enrollmentToken:    enrollmentToken,
 				foghornAddr:        foghornAddr,
@@ -137,10 +135,9 @@ Mode B — Pre-existing token (no login needed):
 	}
 
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster to deploy to (auto-detected if omitted)")
-	cmd.Flags().StringVar(&clusterName, "cluster-name", "", "name for new private cluster if one needs to be created")
-	cmd.Flags().StringVar(&region, "region", "", "region for new private cluster")
+	cmd.Flags().StringVar(&clusterName, "cluster-name", "", "name for new edge cluster if one needs to be created")
 	cmd.Flags().StringVar(&nodeName, "node-name", "", "preferred node name/id for enrollment and DNS")
-	cmd.Flags().StringVar(&enrollmentToken, "enrollment-token", "", "pre-existing enrollment token (skips login/VPC setup)")
+	cmd.Flags().StringVar(&enrollmentToken, "enrollment-token", "", "pre-existing enrollment token (skips login and cluster setup)")
 	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "explicit Foghorn gRPC override (debug only; normally Bridge resolves it)")
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "SSH target (user@host) for remote deployment")
 	cmd.Flags().StringVar(&sshKey, "ssh-key", "", "SSH private key path")
@@ -157,7 +154,6 @@ Mode B — Pre-existing token (no login needed):
 type deployConfig struct {
 	clusterID          string
 	clusterName        string
-	region             string
 	nodeName           string
 	enrollmentToken    string
 	foghornAddr        string
@@ -185,7 +181,7 @@ func deployWithToken(ctx context.Context, cmd *cobra.Command, cfg deployConfig, 
 
 // deployAutomatic runs Mode A (Bridge auto-setup) and populates
 // the result out-vars. Returns whether a cluster was freshly created (for
-// the result block's "vpc" field).
+// the result block's "cluster" field).
 func deployAutomatic(ctx context.Context, cmd *cobra.Command, cfg *deployConfig, nodeID, domain, clusterSlug *string) (bool, error) {
 	cliCtx, err := loadActiveContextLax()
 	if err != nil {
@@ -214,9 +210,9 @@ func deployAutomatic(ctx context.Context, cmd *cobra.Command, cfg *deployConfig,
 	return created, runEdgeDeploy(ctx, cmd, cliCtx, *cfg, nodeID, domain, clusterSlug)
 }
 
-// resolveEnrollmentToken finds or creates a private cluster via Bridge and
+// resolveEnrollmentToken finds or creates an edge cluster via Bridge and
 // returns the issued bootstrap token plus whether a NEW cluster was created
-// (vs. reusing an existing one — used by the result block's "vpc" field).
+// (vs. reusing an existing one — used by the result block's "cluster" field).
 func resolveEnrollmentToken(ctx context.Context, cmd *cobra.Command, bc *bridge.Client, jwt string, cfg deployConfig) (string, bool, error) {
 	if cfg.clusterID != "" {
 		fmt.Fprintf(cmd.OutOrStdout(), "Creating enrollment token for cluster %s...\n", cfg.clusterID)
@@ -235,11 +231,8 @@ func resolveEnrollmentToken(ctx context.Context, cmd *cobra.Command, bc *bridge.
 	if name == "" {
 		name = "My Edge Network"
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Creating private cluster %q via Bridge...\n", name)
+	fmt.Fprintf(cmd.OutOrStdout(), "Creating edge cluster %q via Bridge...\n", name)
 	in := bridge.CreateEdgeClusterInput{ClusterName: name}
-	if cfg.region != "" {
-		in.ShortDescription = &cfg.region
-	}
 	created, err := bc.CreateEdgeCluster(ctx, jwt, in)
 	if err != nil {
 		return "", false, err
@@ -308,18 +301,18 @@ type edgeDeployResultFields struct {
 func renderEdgeDeployResult(cmd *cobra.Command, f edgeDeployResultFields) {
 	out := cmd.OutOrStdout()
 
-	vpcOK := true
-	vpcDetail := "using existing cluster"
+	clusterOK := true
+	clusterDetail := "using existing cluster"
 	if f.modeA {
 		if f.bridgeCreated {
-			vpcDetail = "created via Bridge"
+			clusterDetail = "created via Bridge"
 		}
-		vpcOK = f.clusterSlug != ""
-		if !vpcOK {
-			vpcDetail = "not created"
+		clusterOK = f.clusterSlug != ""
+		if !clusterOK {
+			clusterDetail = "not created"
 		}
 	} else {
-		vpcDetail = "N/A (token mode)"
+		clusterDetail = "N/A (token mode)"
 	}
 
 	enrollmentOK := f.nodeID != ""
@@ -341,7 +334,7 @@ func renderEdgeDeployResult(cmd *cobra.Command, f edgeDeployResultFields) {
 	}
 
 	ux.Result(out, []ux.ResultField{
-		{Key: "vpc", OK: vpcOK, Detail: vpcDetail},
+		{Key: "cluster", OK: clusterOK, Detail: clusterDetail},
 		{Key: "enrollment", OK: enrollmentOK, Detail: enrollmentDetail},
 		{Key: "stack", OK: stackOK, Detail: stackDetail},
 		{Key: "https", OK: httpsOK, Detail: httpsDetail},

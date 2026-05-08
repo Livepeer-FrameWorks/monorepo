@@ -1,0 +1,11 @@
+fragment SigningKeyFields on SigningKey {
+  id
+  kid
+  name
+  algorithm
+  publicKeyPem
+  status
+  createdAt
+  lastUsedAt
+  revokedAt
+}

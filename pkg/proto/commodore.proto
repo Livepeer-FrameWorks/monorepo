@@ -885,6 +885,8 @@ message CreateStreamRequest {
   string description = 2;               // json:"description"
   bool is_public = 3;                   // json:"is_public"
   bool is_recording = 4;                // json:"is_recording"
+  string ingest_mode = 5;               // "push" (default) or "pull"
+  PullSourceInput pull_source = 6;       // required when ingest_mode="pull"
 }
 
 // Matches pkg/api/commodore/types.go:CreateStreamResponse (lines 178-185)
@@ -913,6 +915,8 @@ message CreateStreamResponse {
   // Human-readable labels for UX (e.g. "My EU Cluster" vs "FrameWorks US-West")
   optional string preferred_cluster_label = 13;
   optional string official_cluster_label = 14;
+  string ingest_mode = 15;
+  PullSourceView pull_source = 16;
 }
 
 message GetStreamRequest {
@@ -949,6 +953,19 @@ message Stream {
   int32 peak_viewers = 17;              // json:"peak_viewers" - enriched from Periscope
   string stream_id = 18;                // public UUID
   reserved 19; // was thumbnail_url — thumbnails now resolved via deterministic Chandler URL
+  string ingest_mode = 20;              // "push" (default) or "pull"
+  PullSourceView pull_source = 21;      // redacted pull-source config for pull streams
+}
+
+message PullSourceInput {
+  string source_uri = 1;
+  optional bool enabled = 2;
+}
+
+message PullSourceView {
+  string source_uri_redacted = 1;
+  bool enabled = 2;
+  string class = 3;
 }
 
 message ListStreamsRequest {
@@ -967,6 +984,8 @@ message UpdateStreamRequest {
   optional string name = 2;             // json:"name,omitempty"
   optional string description = 3;      // json:"description,omitempty"
   optional bool record = 4;             // json:"record,omitempty"
+  optional string ingest_mode = 5;      // cannot be changed after create; used for explicit validation
+  PullSourceInput pull_source = 6;      // update pull source for existing pull streams
 }
 
 message DeleteStreamRequest {

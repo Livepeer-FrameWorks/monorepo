@@ -1,0 +1,21 @@
+# Create a new self-hosted edge cluster with bootstrap material.
+mutation CreateEdgeCluster($input: CreateEdgeClusterInput!) {
+  createEdgeCluster(input: $input) {
+    __typename
+    ... on CreateEdgeClusterResponse {
+      cluster {
+        ...ClusterFields
+      }
+      bootstrapToken {
+        ...BootstrapTokenFields
+      }
+      foghornAddr
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

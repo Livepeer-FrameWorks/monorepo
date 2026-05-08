@@ -29,8 +29,8 @@ func TestValidatePullStreamShapeChecksSourceURI(t *testing.T) {
 }
 
 // TestValidatePullStreamEligibility_PrivateRequiresOptedInCluster locks the
-// rule the user landed on: a private URI is only allowed when at least one
-// registered cluster has allow_private_pull_sources=true.
+// eligibility invariant: a private URI requires at least one registered cluster
+// with allow_private_pull_sources=true.
 func TestValidatePullStreamEligibility_PrivateRequiresOptedInCluster(t *testing.T) {
 	ps := PullStream{
 		PlaybackID:  "private-demo",

@@ -309,6 +309,100 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
     description: "Create streams, clips, DVR, and assets.",
     examples: [
       {
+        id: "create-stream",
+        title: "Create Push Stream",
+        description: "Create a standard encoder-pushed live stream.",
+        operationType: "mutation",
+        templatePath: "operations/mutations/CreateStream.gql",
+        variables: {
+          input: {
+            name: "Main Stage",
+            record: true,
+            ingestMode: "PUSH",
+          },
+        },
+        tags: ["core", "mutation", "stream"],
+      },
+      {
+        id: "create-pull-stream",
+        title: "Create Pull Stream",
+        description: "Create a live stream that pulls from an upstream source.",
+        operationType: "mutation",
+        templatePath: "operations/mutations/CreateStream.gql",
+        variables: {
+          input: {
+            name: "Venue Camera",
+            ingestMode: "PULL",
+            pullSource: {
+              sourceUri: "rtsp://camera.example.net/live",
+              enabled: true,
+            },
+          },
+        },
+        tags: ["advanced", "mutation", "stream"],
+      },
+      {
+        id: "create-edge-cluster",
+        title: "Create Edge Cluster",
+        description: "Create a self-hosted edge cluster and enrollment token.",
+        operationType: "mutation",
+        templatePath: "operations/mutations/CreateEdgeCluster.gql",
+        variables: {
+          input: {
+            clusterName: "Amsterdam Edge",
+            shortDescription: "Self-hosted edge cluster",
+          },
+        },
+        tags: ["advanced", "mutation", "infra"],
+      },
+      {
+        id: "create-enrollment-token",
+        title: "Create Enrollment Token",
+        description: "Issue a token for adding another edge to a cluster.",
+        operationType: "mutation",
+        templatePath: "operations/mutations/CreateEnrollmentToken.gql",
+        variables: {
+          clusterId: "cluster_id",
+          name: "Amsterdam edge 02",
+          ttl: "30d",
+        },
+        tags: ["advanced", "mutation", "infra"],
+      },
+      {
+        id: "create-signing-key",
+        title: "Create Signing Key",
+        description: "Create an ES256 key for JWT playback policies.",
+        operationType: "mutation",
+        templatePath: "operations/mutations/CreateSigningKey.gql",
+        variables: {
+          input: {
+            name: "production-player",
+          },
+        },
+        tags: ["core", "mutation", "auth"],
+      },
+      {
+        id: "set-playback-policy",
+        title: "Set Playback Policy",
+        description: "Require a signed viewer JWT for playback.",
+        operationType: "mutation",
+        templatePath: "operations/mutations/SetPlaybackPolicy.gql",
+        variables: {
+          input: {
+            streamId: "stream_global_id",
+            policy: {
+              type: "JWT",
+              jwt: {
+                allowedKids: ["kid_example"],
+                requiredAudience: ["web-player"],
+                requiredClaimsJson: [],
+              },
+            },
+          },
+        },
+        tags: ["core", "mutation", "auth"],
+      },
+      {
         id: "start-dvr",
         title: "Start DVR Recording",
         description: "Kick off DVR recording for a stream.",

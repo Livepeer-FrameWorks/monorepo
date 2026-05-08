@@ -60,10 +60,6 @@ type CreatePaymentResult interface {
 	IsCreatePaymentResult()
 }
 
-type CreatePrivateClusterResult interface {
-	IsCreatePrivateClusterResult()
-}
-
 type CreateSigningKeyResult interface {
 	IsCreateSigningKeyResult()
 }
@@ -302,8 +298,6 @@ func (AuthError) IsSetPlaybackPolicyResult() {}
 func (AuthError) IsCreateBootstrapTokenResult() {}
 
 func (AuthError) IsRevokeBootstrapTokenResult() {}
-
-func (AuthError) IsCreatePrivateClusterResult() {}
 
 func (AuthError) IsCreateEdgeClusterResult() {}
 
@@ -770,16 +764,6 @@ type CreatePaymentInput struct {
 	ReturnURL *string       `json:"returnUrl,omitempty"`
 }
 
-// Input for creating a private streaming cluster.
-type CreatePrivateClusterInput struct {
-	// Human-readable cluster name.
-	ClusterName string `json:"clusterName"`
-	// Geographic region for the cluster.
-	Region *string `json:"region,omitempty"`
-	// Short description for marketplace listing.
-	ShortDescription *string `json:"shortDescription,omitempty"`
-}
-
 type CreatePushTargetInput struct {
 	// Platform identifier (twitch, youtube, facebook, kick, x, custom).
 	Platform *string `json:"platform,omitempty"`
@@ -813,6 +797,10 @@ type CreateStreamInput struct {
 	Description *string `json:"description,omitempty"`
 	// Enable DVR recording (default: false).
 	Record *bool `json:"record,omitempty"`
+	// Source ingest model. Defaults to PUSH.
+	IngestMode *IngestMode `json:"ingestMode,omitempty"`
+	// Pull-source configuration. Required when ingestMode is PULL.
+	PullSource *proto.PullSourceInput `json:"pullSource,omitempty"`
 }
 
 // Input for creating an additional stream key.
@@ -1755,6 +1743,10 @@ type UpdateStreamInput struct {
 	Description *string `json:"description,omitempty"`
 	// Enable or disable DVR recording.
 	Record *bool `json:"record,omitempty"`
+	// Ingest model cannot be changed after create; sending a different value returns a validation error.
+	IngestMode *IngestMode `json:"ingestMode,omitempty"`
+	// Update the pull-source configuration for an existing pull stream.
+	PullSource *proto.PullSourceInput `json:"pullSource,omitempty"`
 }
 
 // Input for updating enterprise subscription custom terms.
@@ -1840,8 +1832,6 @@ func (ValidationError) IsCreateSigningKeyResult() {}
 func (ValidationError) IsSetPlaybackPolicyResult() {}
 
 func (ValidationError) IsCreateBootstrapTokenResult() {}
-
-func (ValidationError) IsCreatePrivateClusterResult() {}
 
 func (ValidationError) IsCreateEdgeClusterResult() {}
 
@@ -2309,6 +2299,64 @@ func (e *ClipCreationMode) UnmarshalJSON(b []byte) error {
 }
 
 func (e ClipCreationMode) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// How source media enters a stream.
+type IngestMode string
+
+const (
+	// An encoder pushes RTMP, SRT, or WHIP into FrameWorks.
+	IngestModePush IngestMode = "PUSH"
+	// FrameWorks pulls from a configured upstream URI.
+	IngestModePull IngestMode = "PULL"
+)
+
+var AllIngestMode = []IngestMode{
+	IngestModePush,
+	IngestModePull,
+}
+
+func (e IngestMode) IsValid() bool {
+	switch e {
+	case IngestModePush, IngestModePull:
+		return true
+	}
+	return false
+}
+
+func (e IngestMode) String() string {
+	return string(e)
+}
+
+func (e *IngestMode) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = IngestMode(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid IngestMode", str)
+	}
+	return nil
+}
+
+func (e IngestMode) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *IngestMode) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e IngestMode) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

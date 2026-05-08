@@ -2,8 +2,11 @@ package resolvers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"reflect"
 	"strings"
 	"time"
 
@@ -75,9 +78,8 @@ func (r *Resolver) DoRevokeSigningKey(ctx context.Context, id string) (model.Rev
 	return sk, nil
 }
 
-// DoSetPlaybackPolicy validates the input shape and forwards to Commodore,
-// which persists, drops Foghorn caches, and triggers MistServer
-// invalidate_sessions in the correct order.
+// DoSetPlaybackPolicy validates the input shape and forwards to Commodore.
+// Commodore owns persistence plus durable playback invalidation fanout.
 func (r *Resolver) DoSetPlaybackPolicy(ctx context.Context, input model.SetPlaybackPolicyInput) (model.SetPlaybackPolicyResult, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
@@ -112,19 +114,26 @@ func (r *Resolver) DoSetPlaybackPolicy(ctx context.Context, input model.SetPlayb
 
 	switch input.Policy.Type {
 	case model.PlaybackPolicyTypePublic:
-		// nothing else to send.
 	case model.PlaybackPolicyTypeJwt:
 		if input.Policy.Jwt == nil {
 			return &model.ValidationError{Message: "jwt block required when type is JWT"}, nil
 		}
+		requiredClaims, claimErr := claimReqsToProto(input.Policy.Jwt.RequiredClaimsJSON)
+		if claimErr != nil {
+			return claimErr, nil
+		}
 		req.Jwt = &pb.PlaybackJwtPolicy{
 			AllowedKids:        input.Policy.Jwt.AllowedKids,
 			RequiredAudience:   input.Policy.Jwt.RequiredAudience,
-			RequiredClaimsJson: claimReqsToProto(input.Policy.Jwt.RequiredClaimsJSON),
+			RequiredClaimsJson: requiredClaims,
 		}
 	case model.PlaybackPolicyTypeWebhook:
 		if input.Policy.Webhook == nil {
 			return &model.ValidationError{Message: "webhook block required when type is WEBHOOK"}, nil
+		}
+		secret, secretErr := playbackWebhookSecretInput(input.Policy.Webhook)
+		if secretErr != nil {
+			return secretErr, nil
 		}
 		timeout := int32(0)
 		if input.Policy.Webhook.TimeoutMs != nil {
@@ -133,7 +142,7 @@ func (r *Resolver) DoSetPlaybackPolicy(ctx context.Context, input model.SetPlayb
 		req.Webhook = &pb.PlaybackWebhookPolicy{
 			Url:       input.Policy.Webhook.URL,
 			TimeoutMs: timeout,
-			SecretPt:  input.Policy.Webhook.Secret,
+			SecretPt:  secret,
 		}
 	}
 
@@ -328,18 +337,84 @@ func protoPolicyType(t model.PlaybackPolicyType) (string, error) {
 	return "", errors.New("invalid policy type")
 }
 
-func claimReqsToProto(in []*model.PlaybackJwtClaimRequirementInput) map[string]string {
+func claimReqsToProto(in []*model.PlaybackJwtClaimRequirementInput) (map[string]string, *model.ValidationError) {
 	if len(in) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make(map[string]string, len(in))
 	for _, r := range in {
-		if r == nil || r.Name == "" {
+		if r == nil {
 			continue
 		}
-		out[r.Name] = r.JSONValue
+		name := strings.TrimSpace(r.Name)
+		if name == "" {
+			continue
+		}
+		rawValue := strings.TrimSpace(r.JSONValue)
+		canonical, err := canonicalJSONValue(rawValue)
+		if err != nil {
+			return nil, &model.ValidationError{Message: fmt.Sprintf("requiredClaimsJson.%s must be valid JSON", name)}
+		}
+		out[name] = canonical
 	}
-	return out
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+func playbackWebhookSecretInput(webhook any) (string, *model.ValidationError) {
+	v := reflect.ValueOf(webhook)
+	if !v.IsValid() || (v.Kind() == reflect.Ptr && v.IsNil()) {
+		return "", &model.ValidationError{Message: "webhook block required when type is WEBHOOK"}
+	}
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	secretField := v.FieldByName("Secret")
+	if !secretField.IsValid() {
+		return "", &model.ValidationError{Message: "webhook secret field missing"}
+	}
+
+	switch secretField.Kind() {
+	case reflect.Ptr:
+		if secretField.IsNil() {
+			return "", nil
+		}
+		if secretField.Elem().Kind() != reflect.String {
+			return "", &model.ValidationError{Message: "webhook secret must be a string"}
+		}
+		secret := strings.TrimSpace(secretField.Elem().String())
+		if secret == "" {
+			return "", &model.ValidationError{Message: "webhook secret cannot be empty"}
+		}
+		return secret, nil
+	case reflect.String:
+		return strings.TrimSpace(secretField.String()), nil
+	default:
+		return "", &model.ValidationError{Message: "webhook secret must be a string"}
+	}
+}
+
+func canonicalJSONValue(rawValue string) (string, error) {
+	if rawValue == "" {
+		return "", errors.New("empty JSON value")
+	}
+	dec := json.NewDecoder(strings.NewReader(rawValue))
+	dec.UseNumber()
+	var decoded any
+	if err := dec.Decode(&decoded); err != nil {
+		return "", err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return "", errors.New("multiple JSON values")
+	}
+	canonical, err := json.Marshal(decoded)
+	if err != nil {
+		return "", err
+	}
+	return string(canonical), nil
 }
 
 // policyToModel converts a Commodore policy response into the GraphQL model

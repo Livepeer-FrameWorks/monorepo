@@ -1,0 +1,15 @@
+# Revoke a playback signing key by ID
+mutation RevokeSigningKey($id: ID!) {
+  revokeSigningKey(id: $id) {
+    __typename
+    ... on SigningKey {
+      ...SigningKeyFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

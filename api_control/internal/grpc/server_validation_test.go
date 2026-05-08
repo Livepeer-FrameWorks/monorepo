@@ -58,8 +58,8 @@ func TestValidateStreamKey(t *testing.T) {
 			name: "inactive_user",
 			req:  &pb.ValidateStreamKeyRequest{StreamKey: "inactive-key"},
 			setupMock: func(mock sqlmock.Sqlmock) {
-				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id"}).
-					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "")
+				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
+					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "", "push")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("inactive-key").WillReturnRows(rows)
 			},
 			assert: func(t *testing.T, resp *pb.ValidateStreamKeyResponse, err error) {
@@ -75,11 +75,31 @@ func TestValidateStreamKey(t *testing.T) {
 			},
 		},
 		{
+			name: "pull_stream_rejects_push_ingest",
+			req:  &pb.ValidateStreamKeyRequest{StreamKey: "pull-key"},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
+					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "pull")
+				mock.ExpectQuery("FROM commodore.streams").WithArgs("pull-key").WillReturnRows(rows)
+			},
+			assert: func(t *testing.T, resp *pb.ValidateStreamKeyResponse, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if resp.Valid {
+					t.Fatalf("expected invalid response")
+				}
+				if resp.Error != "Pull streams do not accept push ingest" {
+					t.Fatalf("unexpected error message: %q", resp.Error)
+				}
+			},
+		},
+		{
 			name: "active_user",
 			req:  &pb.ValidateStreamKeyRequest{StreamKey: "good-key", ClusterId: "cluster-us"},
 			setupMock: func(mock sqlmock.Sqlmock) {
-				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id"}).
-					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123")
+				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
+					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
 				mock.ExpectExec("UPDATE commodore.streams").WithArgs("cluster-us", "good-key").WillReturnResult(sqlmock.NewResult(0, 1))
 			},
@@ -102,8 +122,8 @@ func TestValidateStreamKey(t *testing.T) {
 			name: "active_user_cluster_update_contended",
 			req:  &pb.ValidateStreamKeyRequest{StreamKey: "contended-key", ClusterId: "cluster-eu"},
 			setupMock: func(mock sqlmock.Sqlmock) {
-				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id"}).
-					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123")
+				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
+					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("contended-key").WillReturnRows(rows)
 				mock.ExpectExec("UPDATE commodore.streams").WithArgs("cluster-eu", "contended-key").WillReturnResult(sqlmock.NewResult(0, 0))
 			},
@@ -284,8 +304,8 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id"}).
-		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123")
+	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
+		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
 	mock.ExpectExec("UPDATE commodore.streams SET active_ingest_cluster_id").WithArgs("cluster-ingest", "good-key").WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -328,8 +348,8 @@ func TestValidateStreamKey_UsesMediaClusterWhenFoghornRunsOnPlatformCluster(t *t
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id"}).
-		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123")
+	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
+		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
 	mock.ExpectExec("UPDATE commodore.streams SET active_ingest_cluster_id").WithArgs("demo-media", "good-key").WillReturnResult(sqlmock.NewResult(0, 1))
 

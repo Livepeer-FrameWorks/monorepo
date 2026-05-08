@@ -9,7 +9,9 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 
+	"frameworks/api_balancing/internal/balancer"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 )
 
 func TestExtractPublicHostFromOutputs(t *testing.T) {
@@ -90,6 +92,34 @@ func TestBuildOutputsMapOmitsGenericHTTPForLive(t *testing.T) {
 	}
 	if outputs["HLS"].Url != "http://public.example.com:18090/view/hls/stream/index.m3u8" {
 		t.Fatalf("unexpected HLS url: %q", outputs["HLS"].Url)
+	}
+}
+
+func TestFilterPullCandidatesByClassFiltersRemoteClusters(t *testing.T) {
+	nodes := []balancer.NodeWithScore{
+		{NodeID: "local-a", Score: 90},
+		{NodeID: "remote-denied", ClusterID: "remote-denied", Score: 95},
+		{NodeID: "remote-allowed", ClusterID: "remote-allowed", Score: 80},
+	}
+	allowed, err := filterPullCandidatesByClass(
+		context.Background(),
+		nodes,
+		"pull-demo",
+		"local-allowed",
+		pullsource.ClassPrivate,
+		func(_ context.Context, clusterID string) bool {
+			return clusterID == "local-allowed" || clusterID == "remote-allowed"
+		},
+	)
+	if err != nil {
+		t.Fatalf("filterPullCandidatesByClass: %v", err)
+	}
+	got := make([]string, 0, len(allowed))
+	for _, n := range allowed {
+		got = append(got, n.NodeID)
+	}
+	if strings.Join(got, ",") != "local-a,remote-allowed" {
+		t.Fatalf("allowed nodes = %q, want local-a,remote-allowed", strings.Join(got, ","))
 	}
 }
 

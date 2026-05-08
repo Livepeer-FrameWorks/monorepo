@@ -1,0 +1,21 @@
+# Create a new playback signing key. Private key is returned exactly once.
+mutation CreateSigningKey($input: CreateSigningKeyInput!) {
+  createSigningKey(input: $input) {
+    __typename
+    ... on CreateSigningKeySuccess {
+      privateKeyPem
+      signingKey {
+        ...SigningKeyFields @mask_disable
+      }
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on RateLimitError {
+      ...RateLimitErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

@@ -43,7 +43,7 @@ Pricing models: FREE_UNMETERED (no cost), TIER_INHERIT (follows billing tier), M
 
 Some clusters allow instant connection; others require approval from the operator. If approval is required, the status will be PENDING_APPROVAL until the operator approves.
 
-After subscribing, use set_preferred_cluster to route your traffic to the new cluster. To provision self-hosted edges, use create_private_cluster or get an enrollment token from the cluster operator.`,
+After subscribing, use set_preferred_cluster to route your traffic to the new cluster. To create your own self-hosted edge cluster, use create_edge_cluster.`,
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args SubscribeToClusterInput) (*mcp.CallToolResult, any, error) {
 			return handleSubscribeToCluster(ctx, args, resolver, serviceClients, logger)
@@ -67,14 +67,14 @@ Your preferred cluster maintains an always-on peering connection with your offic
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name: "create_enrollment_token",
-			Description: `Generate an enrollment token for provisioning additional edge nodes into an existing private cluster.
+			Description: `Generate an enrollment token for provisioning additional edge nodes into an existing edge cluster.
 
 Returns a single-use token valid for the specified TTL. Use it with the CLI to provision an edge:
   frameworks edge provision --enrollment-token <token> --ssh user@host
 
 The token is shown once — save it securely. Each provisioned edge automatically gets a domain, TLS certificate, and joins the cluster's routing pool.
 
-Requires an active subscription to the target cluster. Use create_private_cluster first if you don't have a cluster yet.`,
+Requires an active subscription to the target cluster. Use create_edge_cluster first if you don't have a cluster yet.`,
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args CreateEnrollmentTokenInput) (*mcp.CallToolResult, any, error) {
 			return handleCreateEnrollmentToken(ctx, args, serviceClients, logger)
@@ -153,16 +153,16 @@ Unlike get_node_info (static registration data from Quartermaster), this returns
 
 	mcp.AddTool(server,
 		&mcp.Tool{
-			Name: "create_private_cluster",
-			Description: `Create a private cluster for self-hosted edge nodes.
+			Name: "create_edge_cluster",
+			Description: `Create a self-hosted edge cluster.
 
-Returns a bootstrap token for edge enrollment. Use it with the CLI:
+Returns the assigned Foghorn address and a bootstrap token for edge enrollment. Use them with the CLI:
   frameworks edge provision --enrollment-token <token> --ssh user@host
 
 The token is shown once — save it securely. Each edge you provision joins this cluster and is automatically assigned a domain and TLS certificate.`,
 		},
-		func(ctx context.Context, req *mcp.CallToolRequest, args CreatePrivateClusterInput) (*mcp.CallToolResult, any, error) {
-			return handleCreatePrivateCluster(ctx, args, resolver, logger)
+		func(ctx context.Context, req *mcp.CallToolRequest, args CreateEdgeClusterInput) (*mcp.CallToolResult, any, error) {
+			return handleCreateEdgeCluster(ctx, args, resolver, logger)
 		},
 	)
 }
@@ -182,9 +182,9 @@ type SetPreferredClusterInput struct {
 	ClusterID string `json:"cluster_id" jsonschema:"required" jsonschema_description:"The cluster ID to set as preferred. Must be a cluster you are subscribed to."`
 }
 
-type CreatePrivateClusterInput struct {
-	ClusterName string  `json:"cluster_name" jsonschema:"required" jsonschema_description:"Human-readable name for the new cluster."`
-	Region      *string `json:"region,omitempty" jsonschema_description:"Geographic region (e.g. us-east, eu-west). Affects DNS and default edge assignment."`
+type CreateEdgeClusterInput struct {
+	ClusterName      string  `json:"cluster_name" jsonschema:"required" jsonschema_description:"Human-readable name for the new cluster."`
+	ShortDescription *string `json:"short_description,omitempty" jsonschema_description:"Short description for the self-hosted edge cluster."`
 }
 
 type CreateEnrollmentTokenInput struct {
@@ -244,10 +244,11 @@ type PreferredClusterResult struct {
 	Message     string `json:"message"`
 }
 
-type PrivateClusterResult struct {
+type EdgeClusterResult struct {
 	ClusterID      string `json:"cluster_id"`
 	ClusterName    string `json:"cluster_name"`
 	BootstrapToken string `json:"bootstrap_token"`
+	FoghornAddr    string `json:"foghorn_addr"`
 	Message        string `json:"message"`
 }
 
@@ -410,24 +411,26 @@ func handleSetPreferredCluster(ctx context.Context, args SetPreferredClusterInpu
 	}
 }
 
-func handleCreatePrivateCluster(ctx context.Context, args CreatePrivateClusterInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+func handleCreateEdgeCluster(ctx context.Context, args CreateEdgeClusterInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return toolError("Authentication required")
 	}
 
-	input := model.CreatePrivateClusterInput{
+	input := model.CreateEdgeClusterInput{
 		ClusterName: args.ClusterName,
-		Region:      args.Region,
+	}
+	if args.ShortDescription != nil {
+		input.ShortDescription = args.ShortDescription
 	}
 
-	result, err := resolver.DoCreatePrivateCluster(ctx, input)
+	result, err := resolver.DoCreateEdgeCluster(ctx, input)
 	if err != nil {
 		return toolError(fmt.Sprintf("Failed to create cluster: %v", err))
 	}
 
 	switch v := result.(type) {
-	case *pb.CreatePrivateClusterResponse:
+	case *model.CreateEdgeClusterResponse:
 		clusterID := ""
 		clusterName := args.ClusterName
 		if v.Cluster != nil {
@@ -440,11 +443,12 @@ func handleCreatePrivateCluster(ctx context.Context, args CreatePrivateClusterIn
 		if v.BootstrapToken != nil {
 			token = v.BootstrapToken.Token
 		}
-		return infraToolSuccessJSON(PrivateClusterResult{
+		return infraToolSuccessJSON(EdgeClusterResult{
 			ClusterID:      clusterID,
 			ClusterName:    clusterName,
 			BootstrapToken: token,
-			Message:        fmt.Sprintf("Private cluster '%s' created. Save the bootstrap token — it is shown once. Provision edges with: frameworks edge provision --enrollment-token %s --ssh user@host", clusterName, token),
+			FoghornAddr:    v.FoghornAddr,
+			Message:        fmt.Sprintf("Edge cluster '%s' created. Save the bootstrap token — it is shown once. Foghorn address: %s. Provision edges with: frameworks edge provision --enrollment-token %s --ssh user@host", clusterName, v.FoghornAddr, token),
 		})
 	case *model.ValidationError:
 		return toolError(v.Message)

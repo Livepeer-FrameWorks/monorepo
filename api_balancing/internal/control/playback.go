@@ -134,9 +134,9 @@ type RemoteArtifactInfo struct {
 // PlaybackDependencies contains dependencies needed for playback resolution
 // filterPullCandidatesByEligibility constrains the candidate node set for a
 // pull+ cold-start to clusters that satisfy the URI's eligibility class.
-// This is the routing-side gate the user landed on: viewers should be sent
-// to a cluster that CAN run the pull, not denied later by STREAM_SOURCE on
-// a cluster that can't. Public URIs return the input unchanged; private
+// This routing-side gate sends viewers to a cluster that is eligible to run
+// the pull instead of letting STREAM_SOURCE reject the selected cluster later.
+// Public URIs return the input unchanged; private
 // URIs filter to clusters whose Quartermaster row has
 // allow_private_pull_sources=true. Quartermaster lookup failures fail
 // closed (drop the node) — better to route nowhere than to the wrong
@@ -164,8 +164,25 @@ func filterPullCandidatesByEligibility(ctx context.Context, nodes []balancer.Nod
 	if class == pullsource.ClassPublic {
 		return nodes, nil
 	}
+	localClusterID := ""
+	if deps != nil {
+		localClusterID = deps.LocalClusterID
+	}
+	return filterPullCandidatesByClass(ctx, nodes, internalName, localClusterID, class, ClusterAllowsPrivatePulls)
+}
+
+func filterPullCandidatesByClass(
+	ctx context.Context,
+	nodes []balancer.NodeWithScore,
+	internalName, localClusterID string,
+	class pullsource.Class,
+	allowsPrivatePulls func(context.Context, string) bool,
+) ([]balancer.NodeWithScore, error) {
 	if class == pullsource.ClassBlocked {
 		return nil, fmt.Errorf("pull source for stream %q is in the always-blocked set; refusing to route", internalName)
+	}
+	if class == pullsource.ClassPublic {
+		return nodes, nil
 	}
 
 	// Private URI — collect the unique cluster set, look up each cluster's
@@ -177,7 +194,7 @@ func filterPullCandidatesByEligibility(ctx context.Context, nodes []balancer.Nod
 		if n.ClusterID != "" {
 			return n.ClusterID
 		}
-		return deps.LocalClusterID
+		return localClusterID
 	}
 	seen := map[string]bool{}
 	candidates := make([]pullsource.ClusterCapability, 0)
@@ -187,9 +204,13 @@ func filterPullCandidatesByEligibility(ctx context.Context, nodes []balancer.Nod
 			continue
 		}
 		seen[clusterID] = true
+		allowPrivate := false
+		if allowsPrivatePulls != nil {
+			allowPrivate = allowsPrivatePulls(ctx, clusterID)
+		}
 		candidates = append(candidates, pullsource.ClusterCapability{
 			ID:                      clusterID,
-			AllowPrivatePullSources: ClusterAllowsPrivatePulls(ctx, clusterID),
+			AllowPrivatePullSources: allowPrivate,
 		})
 	}
 	eligible := pullsource.EligiblePullClusters(class, candidates)
@@ -606,18 +627,6 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 			err = nil
 		}
 	}
-	// Pull cold-start eligibility filter: a private source URI may only run
-	// on a media cluster with allow_private_pull_sources=true. Filter the
-	// candidate node set BEFORE returning endpoints so the viewer is routed
-	// to an eligible cluster, not denied later by STREAM_SOURCE on a
-	// non-eligible one.
-	if isPull && len(nodes) > 0 {
-		filtered, filterErr := filterPullCandidatesByEligibility(ctx, nodes, internalName, deps)
-		if filterErr != nil {
-			return nil, filterErr
-		}
-		nodes = filtered
-	}
 	if err != nil && len(deps.RemoteEdges) == 0 {
 		return nil, fmt.Errorf("no suitable edge nodes available: %w", err)
 	}
@@ -630,6 +639,16 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 		if len(nodes) > 5 {
 			nodes = nodes[:5]
 		}
+	}
+	// Pull cold-start eligibility applies after local and remote candidates are
+	// merged. A private source URI may only run on a media cluster with
+	// allow_private_pull_sources=true, including redirected peer clusters.
+	if isPull && len(nodes) > 0 {
+		filtered, filterErr := filterPullCandidatesByEligibility(ctx, nodes, internalName, deps)
+		if filterErr != nil {
+			return nil, filterErr
+		}
+		nodes = filtered
 	}
 
 	var endpoints []*pb.ViewerEndpoint

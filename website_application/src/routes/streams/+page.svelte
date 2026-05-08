@@ -108,6 +108,9 @@
   let newStreamTitle = $state("");
   let newStreamDescription = $state("");
   let newStreamRecord = $state(false);
+  let newStreamIngestMode = $state<"PUSH" | "PULL">("PUSH");
+  let newStreamPullSourceUri = $state("");
+  let newStreamPullSourceEnabled = $state(true);
 
   // Stream deletion
   let deletingStreamId = $state("");
@@ -275,15 +278,28 @@
       toast.warning("Please enter a stream title");
       return;
     }
+    if (newStreamIngestMode === "PULL" && !newStreamPullSourceUri.trim()) {
+      toast.warning("Please enter a pull source URI");
+      return;
+    }
 
     try {
       creatingStream = true;
+      const input = {
+        name: newStreamTitle.trim(),
+        description: newStreamDescription.trim() || undefined,
+        record: newStreamRecord,
+        ingestMode: newStreamIngestMode,
+        pullSource:
+          newStreamIngestMode === "PULL"
+            ? {
+                sourceUri: newStreamPullSourceUri.trim(),
+                enabled: newStreamPullSourceEnabled,
+              }
+            : undefined,
+      };
       const result = await createStreamMutation.mutate({
-        input: {
-          name: newStreamTitle.trim(),
-          description: newStreamDescription.trim() || undefined,
-          record: newStreamRecord,
-        },
+        input,
       });
 
       const createResult = result.data?.createStream;
@@ -300,6 +316,9 @@
         newStreamTitle = "";
         newStreamDescription = "";
         newStreamRecord = false;
+        newStreamIngestMode = "PUSH";
+        newStreamPullSourceUri = "";
+        newStreamPullSourceEnabled = true;
 
         toast.success("Stream created successfully!");
 
@@ -828,6 +847,9 @@
   bind:title={newStreamTitle}
   bind:description={newStreamDescription}
   bind:record={newStreamRecord}
+  bind:ingestMode={newStreamIngestMode}
+  bind:pullSourceUri={newStreamPullSourceUri}
+  bind:pullSourceEnabled={newStreamPullSourceEnabled}
   creating={creatingStream}
   onSubmit={createStream}
   onCancel={() => {
@@ -835,6 +857,9 @@
     newStreamTitle = "";
     newStreamDescription = "";
     newStreamRecord = false;
+    newStreamIngestMode = "PUSH";
+    newStreamPullSourceUri = "";
+    newStreamPullSourceEnabled = true;
   }}
 />
 

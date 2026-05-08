@@ -28,12 +28,12 @@ func TestRenderEdgeDeployResult_modeASuccess(t *testing.T) {
 		bridgeCreated: true,
 		nodeID:        "edge-1",
 		domain:        "edge.example.com",
-		clusterSlug:   "my-vpc",
+		clusterSlug:   "my-edge-cluster",
 		provisioned:   true,
 	})
 
 	out := buf.String()
-	for _, want := range []string{"Result:", "vpc", "created via Bridge", "enrollment", "issued", "stack", "https", "edge-1", "edge.example.com"} {
+	for _, want := range []string{"Result:", "cluster", "created via Bridge", "enrollment", "issued", "stack", "https", "edge-1", "edge.example.com"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in output:\n%s", want, out)
 		}
@@ -56,7 +56,7 @@ func TestRenderEdgeDeployResult_modeBUsesExistingCluster(t *testing.T) {
 
 	out := buf.String()
 	if !strings.Contains(out, "N/A (token mode)") {
-		t.Errorf("mode B should show N/A for vpc field, got:\n%s", out)
+		t.Errorf("mode B should show N/A for cluster field, got:\n%s", out)
 	}
 }
 

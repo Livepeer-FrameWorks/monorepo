@@ -308,6 +308,16 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *pb.SetPlay
 		return nil, err
 	}
 
+	tableCol := target.tableColumn()
+	whereCol := targetPolicyUpdateWhere(target)
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		s.logger.WithError(err).Error("begin set-policy tx failed")
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
+
 	// Encrypt webhook secret at validation time (and SSRF-validate the URL).
 	var webhookSecretEnc sql.NullString
 	if policyType == "webhook" {
@@ -320,44 +330,31 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *pb.SetPlay
 		}
 		secret := strings.TrimSpace(wh.GetSecretPt())
 		if secret == "" {
-			return nil, status.Error(codes.InvalidArgument, "webhook policy requires a non-empty secret")
+			existing, lookupErr := lookupExistingWebhookSecret(ctx, tx, tableCol, target, tenantID)
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			webhookSecretEnc = existing
+		} else {
+			enc, encErr := s.playbackWebhookEncryptor.Encrypt(secret)
+			if encErr != nil {
+				s.logger.WithError(encErr).Error("encrypt webhook secret failed")
+				return nil, status.Errorf(codes.Internal, "secret encryption failed")
+			}
+			webhookSecretEnc = sql.NullString{String: enc, Valid: true}
 		}
-		enc, encErr := s.playbackWebhookEncryptor.Encrypt(secret)
-		if encErr != nil {
-			s.logger.WithError(encErr).Error("encrypt webhook secret failed")
-			return nil, status.Errorf(codes.Internal, "secret encryption failed")
-		}
-		webhookSecretEnc = sql.NullString{String: enc, Valid: true}
 	}
 
 	requiresAuth := policyType != "public"
 
-	tableCol := target.tableColumn()
-	whereCol := "id::text"
-	switch target.kind {
-	case "vod_asset":
-		whereCol = "(id::text = $4 OR vod_hash = $4)"
-	case "clip":
-		whereCol = "(id::text = $4 OR clip_hash = $4)"
-	}
-	if whereCol == "id::text" {
-		whereCol = "id::text = $4"
-	}
 	q := fmt.Sprintf(`
-		UPDATE commodore.%s
-		SET requires_auth = $1,
-		    playback_policy = $2,
+			UPDATE commodore.%s
+			SET requires_auth = $1,
+			    playback_policy = $2,
 		    playback_webhook_secret_enc = $3,
 		    updated_at = NOW()
-		WHERE %s AND tenant_id = $5
-	`, tableCol, whereCol)
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		s.logger.WithError(err).Error("begin set-policy tx failed")
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
+			WHERE %s AND tenant_id = $5
+		`, tableCol, whereCol)
 
 	res, err := tx.ExecContext(ctx, q, requiresAuth, policyJSON, webhookSecretEnc, target.id, tenantID)
 	if err != nil {
@@ -517,6 +514,47 @@ func (t policyTarget) tableColumn() string {
 		return "clips"
 	}
 	return ""
+}
+
+func targetPolicyUpdateWhere(t policyTarget) string {
+	switch t.kind {
+	case "vod_asset":
+		return "(id::text = $4 OR vod_hash = $4)"
+	case "clip":
+		return "(id::text = $4 OR clip_hash = $4)"
+	default:
+		return "id::text = $4"
+	}
+}
+
+func targetPolicyLookupWhere(t policyTarget) string {
+	switch t.kind {
+	case "vod_asset":
+		return "(id::text = $1 OR vod_hash = $1)"
+	case "clip":
+		return "(id::text = $1 OR clip_hash = $1)"
+	default:
+		return "id::text = $1"
+	}
+}
+
+func lookupExistingWebhookSecret(ctx context.Context, tx *sql.Tx, tableName string, target policyTarget, tenantID string) (sql.NullString, error) {
+	var existing sql.NullString
+	q := fmt.Sprintf(`
+		SELECT playback_webhook_secret_enc
+		FROM commodore.%s
+		WHERE %s AND tenant_id = $2
+	`, tableName, targetPolicyLookupWhere(target))
+	if err := tx.QueryRowContext(ctx, q, target.id, tenantID).Scan(&existing); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return existing, status.Errorf(codes.NotFound, "%s not found", target.kind)
+		}
+		return existing, status.Error(codes.Internal, "database error")
+	}
+	if !existing.Valid || strings.TrimSpace(existing.String) == "" {
+		return existing, status.Error(codes.InvalidArgument, "webhook policy requires a non-empty secret")
+	}
+	return existing, nil
 }
 
 func (s *CommodoreServer) canonicalPlaybackPolicyTargetID(ctx context.Context, tenantID string, target policyTarget) (string, error) {

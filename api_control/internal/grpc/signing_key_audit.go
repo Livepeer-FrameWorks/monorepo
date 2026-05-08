@@ -22,9 +22,9 @@ type auditExecutor interface {
 // logged or neither happens.
 //
 // No key material lives in this table — by design, only kid + actor + action.
-// Used for create/revoke; per-use audit lives in signing_keys.last_used_at
-// since per-USER_NEW row writes would scale poorly without a batched Kafka
-// writer, which this codebase does not yet have.
+// Used for create/revoke; per-use audit is represented by
+// signing_keys.last_used_at to avoid one database write per playback
+// authorization request.
 func (s *CommodoreServer) writeSigningKeyAudit(
 	ctx context.Context,
 	exec auditExecutor,

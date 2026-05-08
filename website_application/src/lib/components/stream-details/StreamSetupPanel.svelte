@@ -10,6 +10,12 @@
 
   interface Stream {
     streamKey?: string | null;
+    ingestMode?: "PUSH" | "PULL" | string | null;
+    pullSource?: {
+      sourceUriRedacted: string;
+      enabled: boolean;
+      class: string;
+    } | null;
   }
 
   interface StreamKey {
@@ -92,157 +98,206 @@
   const PlusIcon = getIconComponent("Plus");
   const TrashIcon = getIconComponent("Trash2");
   const LoaderIcon = getIconComponent("Loader");
+  const LinkIcon = getIconComponent("Link");
 </script>
 
 <div class="dashboard-grid border-t border-[hsl(var(--tn-fg-gutter)/0.3)]">
-  <!-- Ingest Section -->
-  <div class="slab">
-    <div class="slab-header">
-      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
-        Ingest URLs
-      </h3>
-      <p class="text-xs text-muted-foreground/70 mt-1">
-        Configure your streaming software to broadcast to these endpoints
-      </p>
-    </div>
-    <div class="slab-body--flush">
-      {#each ingestProtocols as protocol (protocol.key)}
-        {@const ProtocolIcon = getIconComponent(protocol.icon)}
-        {@const url = ingestUrls[protocol.key as keyof typeof ingestUrls]}
-        <div class="p-6 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] last:border-0">
-          <div class="flex items-center justify-between mb-2">
-            <div class="flex items-center gap-2">
-              <ProtocolIcon class="w-4 h-4 text-info" />
-              <span class="font-medium text-foreground">{protocol.name}</span>
-              {#if protocol.recommended}
-                <span class="text-xs px-1.5 py-0.5 bg-success/20 text-success rounded-none"
-                  >Recommended</span
-                >
-              {/if}
-            </div>
-          </div>
-          <p class="text-xs text-muted-foreground mb-2">{protocol.description}</p>
-          <div class="flex items-center gap-2">
-            <Input
-              type="text"
-              value={url || "Stream key required"}
-              readonly
-              class="flex-1 font-mono text-xs"
-            />
-            <Button
-              variant="ghost"
-              size="sm"
-              onclick={() => copyToClipboard(url || "", `ingest-${protocol.key}`)}
-              disabled={!url}
-              class="border border-border/30"
-            >
-              {#if copiedField === `ingest-${protocol.key}`}
-                <CheckCircleIcon class="w-4 h-4" />
-              {:else}
-                <CopyIcon class="w-4 h-4" />
-              {/if}
-            </Button>
-          </div>
-          {#if protocol.setup}
-            <p class="text-xs text-muted-foreground/70 mt-1">{protocol.setup}</p>
-          {/if}
-        </div>
-      {/each}
-    </div>
-  </div>
-
-  <!-- Stream Keys Management Section -->
-  <div class="slab">
-    <div class="slab-header flex items-center justify-between">
-      <div>
+  {#if stream.ingestMode === "PULL"}
+    <div class="slab col-span-full">
+      <div class="slab-header">
         <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
-          Stream Keys Management
+          Pull Source
         </h3>
         <p class="text-xs text-muted-foreground/70 mt-1">
-          Manage multiple stream keys for key rotation and security
+          The media plane opens this upstream source when viewers request playback.
         </p>
       </div>
-      {#if onCreateKey}
-        <Button
-          variant="ghost"
-          class="gap-2 text-primary hover:text-primary/80"
-          onclick={onCreateKey}
-        >
-          <PlusIcon class="w-4 h-4" />
-          Create Key
-        </Button>
-      {/if}
-    </div>
-
-    {#if streamKeys.length > 0}
-      <div class="slab-body--flush">
-        {#each streamKeys as key (key.id ?? key.keyValue)}
-          <div class="p-6 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] last:border-0">
-            <div class="flex items-center justify-between">
-              <div class="flex-1">
-                <div class="flex items-center space-x-3 mb-2">
-                  <h5 class="font-medium text-foreground">
-                    {key.keyName}
-                  </h5>
-                  <Badge
-                    variant={key.isActive ? "default" : "secondary"}
-                    tone={key.isActive ? "green" : "default"}
-                  >
-                    {key.isActive ? "Active" : "Inactive"}
-                  </Badge>
-                </div>
-
-                <div class="flex items-center space-x-2 mb-2">
-                  <code class="flex-1 px-3 py-2 text-sm font-mono text-info bg-muted/20">
-                    {key.keyValue}
-                  </code>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    class="hover:bg-muted/50"
-                    onclick={() => onCopyKey?.(key.keyValue)}
-                  >
-                    <CopyIcon class="w-4 h-4" />
-                  </Button>
-                </div>
-
-                <div class="text-sm text-muted-foreground">
-                  Created: {formatDate(key.createdAt)}
-                  {#if key.lastUsedAt}
-                    • Last used: {formatDate(key.lastUsedAt)}
-                  {/if}
-                </div>
-              </div>
-
-              {#if onDeleteKey}
-                <Button
-                  variant="destructive"
-                  size="icon-sm"
-                  class="ml-4"
-                  onclick={() => onDeleteKey(key.id)}
-                  disabled={deleteLoading === key.id}
-                >
-                  {#if deleteLoading === key.id}
-                    <LoaderIcon class="w-4 h-4 animate-spin" />
-                  {:else}
-                    <TrashIcon class="w-4 h-4" />
-                  {/if}
-                </Button>
-              {/if}
+      <div class="slab-body--padded">
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2 mb-2">
+              <LinkIcon class="w-4 h-4 text-info" />
+              <Badge variant="outline" class="text-xs uppercase">{stream.pullSource?.class}</Badge>
+              <Badge variant={stream.pullSource?.enabled ? "default" : "secondary"}>
+                {stream.pullSource?.enabled ? "Enabled" : "Disabled"}
+              </Badge>
             </div>
+            <Input
+              type="text"
+              value={stream.pullSource?.sourceUriRedacted ?? "No pull source configured"}
+              readonly
+              class="w-full font-mono text-xs"
+            />
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onclick={() =>
+              copyToClipboard(stream.pullSource?.sourceUriRedacted ?? "", "pull-source")}
+            disabled={!stream.pullSource?.sourceUriRedacted}
+            class="border border-border/30"
+          >
+            {#if copiedField === "pull-source"}
+              <CheckCircleIcon class="w-4 h-4" />
+            {:else}
+              <CopyIcon class="w-4 h-4" />
+            {/if}
+          </Button>
+        </div>
+      </div>
+    </div>
+  {:else}
+    <!-- Ingest Section -->
+    <div class="slab">
+      <div class="slab-header">
+        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+          Ingest URLs
+        </h3>
+        <p class="text-xs text-muted-foreground/70 mt-1">
+          Configure your streaming software to broadcast to these endpoints
+        </p>
+      </div>
+      <div class="slab-body--flush">
+        {#each ingestProtocols as protocol (protocol.key)}
+          {@const ProtocolIcon = getIconComponent(protocol.icon)}
+          {@const url = ingestUrls[protocol.key as keyof typeof ingestUrls]}
+          <div class="p-6 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] last:border-0">
+            <div class="flex items-center justify-between mb-2">
+              <div class="flex items-center gap-2">
+                <ProtocolIcon class="w-4 h-4 text-info" />
+                <span class="font-medium text-foreground">{protocol.name}</span>
+                {#if protocol.recommended}
+                  <span class="text-xs px-1.5 py-0.5 bg-success/20 text-success rounded-none"
+                    >Recommended</span
+                  >
+                {/if}
+              </div>
+            </div>
+            <p class="text-xs text-muted-foreground mb-2">{protocol.description}</p>
+            <div class="flex items-center gap-2">
+              <Input
+                type="text"
+                value={url || "Stream key required"}
+                readonly
+                class="flex-1 font-mono text-xs"
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                onclick={() => copyToClipboard(url || "", `ingest-${protocol.key}`)}
+                disabled={!url}
+                class="border border-border/30"
+              >
+                {#if copiedField === `ingest-${protocol.key}`}
+                  <CheckCircleIcon class="w-4 h-4" />
+                {:else}
+                  <CopyIcon class="w-4 h-4" />
+                {/if}
+              </Button>
+            </div>
+            {#if protocol.setup}
+              <p class="text-xs text-muted-foreground/70 mt-1">{protocol.setup}</p>
+            {/if}
           </div>
         {/each}
       </div>
-    {:else}
-      <div class="slab-body--padded">
-        <EmptyState
-          iconName="Key"
-          title="No Stream Keys"
-          description="Create your first stream key to start broadcasting"
-          actionText="Create Stream Key"
-          onAction={onCreateKey}
-        />
+    </div>
+  {/if}
+
+  {#if stream.ingestMode !== "PULL"}
+    <!-- Stream Keys Management Section -->
+    <div class="slab">
+      <div class="slab-header flex items-center justify-between">
+        <div>
+          <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+            Stream Keys Management
+          </h3>
+          <p class="text-xs text-muted-foreground/70 mt-1">
+            Manage multiple stream keys for key rotation and security
+          </p>
+        </div>
+        {#if onCreateKey}
+          <Button
+            variant="ghost"
+            class="gap-2 text-primary hover:text-primary/80"
+            onclick={onCreateKey}
+          >
+            <PlusIcon class="w-4 h-4" />
+            Create Key
+          </Button>
+        {/if}
       </div>
-    {/if}
-  </div>
+
+      {#if streamKeys.length > 0}
+        <div class="slab-body--flush">
+          {#each streamKeys as key (key.id ?? key.keyValue)}
+            <div class="p-6 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] last:border-0">
+              <div class="flex items-center justify-between">
+                <div class="flex-1">
+                  <div class="flex items-center space-x-3 mb-2">
+                    <h5 class="font-medium text-foreground">
+                      {key.keyName}
+                    </h5>
+                    <Badge
+                      variant={key.isActive ? "default" : "secondary"}
+                      tone={key.isActive ? "green" : "default"}
+                    >
+                      {key.isActive ? "Active" : "Inactive"}
+                    </Badge>
+                  </div>
+
+                  <div class="flex items-center space-x-2 mb-2">
+                    <code class="flex-1 px-3 py-2 text-sm font-mono text-info bg-muted/20">
+                      {key.keyValue}
+                    </code>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      class="hover:bg-muted/50"
+                      onclick={() => onCopyKey?.(key.keyValue)}
+                    >
+                      <CopyIcon class="w-4 h-4" />
+                    </Button>
+                  </div>
+
+                  <div class="text-sm text-muted-foreground">
+                    Created: {formatDate(key.createdAt)}
+                    {#if key.lastUsedAt}
+                      • Last used: {formatDate(key.lastUsedAt)}
+                    {/if}
+                  </div>
+                </div>
+
+                {#if onDeleteKey}
+                  <Button
+                    variant="destructive"
+                    size="icon-sm"
+                    class="ml-4"
+                    onclick={() => onDeleteKey(key.id)}
+                    disabled={deleteLoading === key.id}
+                  >
+                    {#if deleteLoading === key.id}
+                      <LoaderIcon class="w-4 h-4 animate-spin" />
+                    {:else}
+                      <TrashIcon class="w-4 h-4" />
+                    {/if}
+                  </Button>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <div class="slab-body--padded">
+          <EmptyState
+            iconName="Key"
+            title="No Stream Keys"
+            description="Create your first stream key to start broadcasting"
+            actionText="Create Stream Key"
+            onAction={onCreateKey}
+          />
+        </div>
+      {/if}
+    </div>
+  {/if}
 </div>

@@ -309,12 +309,19 @@ export const navigationConfig: Record<string, NavigationItem> = {
     name: "Developer",
     icon: "Code2",
     children: {
-      api: {
-        name: "API",
-        href: "/developer/api",
+      credentials: {
+        name: "Credentials",
+        href: "/developer/api-keys",
         icon: "Key",
         active: true,
-        description: "Manage API keys for programmatic access",
+        description: "Manage API tokens and playback signing keys",
+      },
+      playground: {
+        name: "Playground",
+        href: "/developer/playground",
+        icon: "Code2",
+        active: true,
+        description: "Interactive GraphQL explorer with schema docs",
       },
       webhooks: {
         name: "Webhooks",
@@ -357,6 +364,18 @@ export const navigationConfig: Record<string, NavigationItem> = {
 };
 
 const hiddenRoutes: RouteInfo[] = [
+  {
+    path: "/developer",
+    name: "Credentials",
+    parent: "Developer",
+    description: "Manage API tokens and playback signing keys",
+  },
+  {
+    path: "/developer/signing-keys",
+    name: "Signing Keys",
+    parent: "Developer",
+    description: "Customer-managed ES256 keys for minting viewer playback JWTs",
+  },
   {
     path: "/infrastructure/marketplace",
     name: "Marketplace",

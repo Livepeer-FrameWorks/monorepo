@@ -21,6 +21,7 @@
   import ExplorerOverlay from "$lib/components/explorer/ExplorerOverlay.svelte";
   import {
     normalizeQueryHistory,
+    redactQueryHistoryItem,
     type QueryHistoryItem,
   } from "$lib/components/explorer/queryHistory";
   import type { IntrospectedSchema, SchemaField } from "$lib/graphql/services/schemaUtils";
@@ -253,7 +254,7 @@
       timestamp: new Date().toISOString(),
     };
 
-    queryHistory = [historyItem, ...queryHistory].slice(0, 10); // Keep last 10
+    queryHistory = [redactQueryHistoryItem(historyItem), ...queryHistory].slice(0, 10);
     saveQueryHistory();
   }
 
@@ -275,7 +276,8 @@
     try {
       const saved = localStorage.getItem("graphql_explorer_history");
       if (saved) {
-        queryHistory = normalizeQueryHistory(JSON.parse(saved));
+        queryHistory = normalizeQueryHistory(JSON.parse(saved)).map(redactQueryHistoryItem);
+        saveQueryHistory();
       }
     } catch (error) {
       console.error("Failed to load query history:", error);

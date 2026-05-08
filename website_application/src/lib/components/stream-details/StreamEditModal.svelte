@@ -21,6 +21,8 @@
     name: "",
     description: "",
     record: false,
+    pullSourceUri: "",
+    pullSourceEnabled: true,
   });
 
   // Sync form when stream changes
@@ -30,6 +32,8 @@
         name: stream.name || "",
         description: stream.description || "",
         record: stream.record || false,
+        pullSourceUri: "",
+        pullSourceEnabled: stream.pullSource?.enabled ?? true,
       };
     }
   });
@@ -86,6 +90,26 @@
         <Checkbox id="editRecord" bind:checked={formData.record} />
         <Label for="editRecord" class="text-sm text-foreground">Enable Recording</Label>
       </div>
+
+      {#if stream?.ingestMode === "PULL"}
+        <div class="space-y-2">
+          <label for="editPullSource" class="block text-sm font-medium text-foreground">
+            Replace Pull Source URI
+          </label>
+          <Input
+            id="editPullSource"
+            type="text"
+            bind:value={formData.pullSourceUri}
+            placeholder={stream.pullSource?.sourceUriRedacted ?? "rtsp://camera.example.net/live"}
+            class="font-mono text-xs transition-all focus:ring-2 focus:ring-primary"
+          />
+        </div>
+
+        <div class="flex items-start space-x-2">
+          <Checkbox id="editPullEnabled" bind:checked={formData.pullSourceEnabled} />
+          <Label for="editPullEnabled" class="text-sm text-foreground">Enable Pull Source</Label>
+        </div>
+      {/if}
     </form>
 
     <DialogFooter class="slab-actions slab-actions--row gap-0">

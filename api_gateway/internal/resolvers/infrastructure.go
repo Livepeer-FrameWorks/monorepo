@@ -582,6 +582,12 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 	if input.Record != nil {
 		req.Record = input.Record
 	}
+	if input.IngestMode != nil {
+		req.IngestMode = strPtr(string(*input.IngestMode))
+	}
+	if input.PullSource != nil {
+		req.PullSource = input.PullSource
+	}
 
 	// Call Commodore gRPC (context metadata carries auth)
 	stream, err := r.Clients.Commodore.UpdateStream(ctx, req)
@@ -599,6 +605,12 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 	}
 	if input.Record != nil {
 		changedFields = append(changedFields, "is_recording")
+	}
+	if input.IngestMode != nil {
+		changedFields = append(changedFields, "ingest_mode")
+	}
+	if input.PullSource != nil {
+		changedFields = append(changedFields, "pull_source")
 	}
 	r.sendServiceEvent(ctx, &pb.ServiceEvent{
 		EventType:    apiEventStreamUpdated,
@@ -1242,62 +1254,6 @@ func pricingModelProtoToString(p pb.ClusterPricingModel) string {
 	}
 }
 
-// DoCreatePrivateCluster creates a private cluster (self-hosted edge)
-func (r *Resolver) DoCreatePrivateCluster(ctx context.Context, input model.CreatePrivateClusterInput) (model.CreatePrivateClusterResult, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Demo mode: returning mock private cluster creation")
-		demoField := "demo"
-		return &model.ValidationError{
-			Message: "Cannot create clusters in demo mode",
-			Field:   &demoField,
-		}, nil
-	}
-
-	tenantID := ""
-	if user := middleware.GetUserFromContext(ctx); user != nil {
-		tenantID = user.TenantID
-	}
-	if tenantID == "" {
-		return &model.AuthError{Message: "Authentication required"}, nil
-	}
-
-	req := &pb.CreatePrivateClusterRequest{
-		TenantId:    tenantID,
-		ClusterName: input.ClusterName,
-	}
-	if input.Region != nil {
-		req.Region = input.Region
-	}
-
-	resp, err := r.Clients.Quartermaster.CreatePrivateCluster(ctx, req)
-	if err != nil {
-		r.Logger.WithError(err).Error("Failed to create private cluster")
-		return &model.ValidationError{
-			Message: fmt.Sprintf("Failed to create cluster: %v", err),
-		}, nil
-	}
-
-	if resp != nil && resp.Cluster != nil {
-		clusterID := resp.Cluster.ClusterId
-		if clusterID == "" {
-			clusterID = resp.Cluster.Id
-		}
-		r.sendServiceEvent(ctx, &pb.ServiceEvent{
-			EventType:    apiEventClusterCreated,
-			ResourceType: "cluster",
-			ResourceId:   clusterID,
-			Payload: &pb.ServiceEvent_ClusterEvent{
-				ClusterEvent: &pb.ClusterEvent{
-					ClusterId: clusterID,
-					TenantId:  tenantID,
-				},
-			},
-		})
-	}
-
-	return resp, nil
-}
-
 // DoCreateEdgeCluster creates an edge cluster with Foghorn assignment and enrollment token
 func (r *Resolver) DoCreateEdgeCluster(ctx context.Context, input model.CreateEdgeClusterInput) (model.CreateEdgeClusterResult, error) {
 	if middleware.IsDemoMode(ctx) {
@@ -1330,6 +1286,28 @@ func (r *Resolver) DoCreateEdgeCluster(ctx context.Context, input model.CreateEd
 		return &model.ValidationError{
 			Message: fmt.Sprintf("Failed to create edge cluster: %v", err),
 		}, nil
+	}
+	if resp == nil {
+		r.Logger.Error("Quartermaster returned empty edge cluster response")
+		return &model.ValidationError{Message: "Failed to create edge cluster"}, nil
+	}
+
+	if resp != nil && resp.Cluster != nil {
+		clusterID := resp.Cluster.ClusterId
+		if clusterID == "" {
+			clusterID = resp.Cluster.Id
+		}
+		r.sendServiceEvent(ctx, &pb.ServiceEvent{
+			EventType:    apiEventClusterCreated,
+			ResourceType: "cluster",
+			ResourceId:   clusterID,
+			Payload: &pb.ServiceEvent_ClusterEvent{
+				ClusterEvent: &pb.ClusterEvent{
+					ClusterId: clusterID,
+					TenantId:  tenantID,
+				},
+			},
+		})
 	}
 
 	return &model.CreateEdgeClusterResponse{

@@ -1,0 +1,17 @@
+# Issue a bootstrap token for adding another edge node to a cluster.
+mutation CreateEnrollmentToken($clusterId: ID!, $name: String, $ttl: String) {
+  createEnrollmentToken(clusterId: $clusterId, name: $name, ttl: $ttl) {
+    __typename
+    ... on CreateEnrollmentTokenResponse {
+      bootstrapToken {
+        ...BootstrapTokenFields
+      }
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

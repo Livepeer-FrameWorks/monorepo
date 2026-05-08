@@ -1,0 +1,18 @@
+# List the tenant's playback signing keys with optional status filter
+query GetSigningKeysConnection($status: String, $first: Int = 50, $after: String) {
+  signingKeysConnection(status: $status, page: { first: $first, after: $after }) @paginate {
+    edges {
+      cursor
+      node {
+        ...SigningKeyFields @mask_disable
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

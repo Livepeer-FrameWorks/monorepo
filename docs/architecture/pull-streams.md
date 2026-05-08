@@ -67,8 +67,10 @@ Operator (gitops):  bootstrap.yaml → commodore.pull_streams: [...]
                     → INSERT commodore.streams (ingest_mode='pull')
                     → INSERT commodore.stream_pull_sources (source_uri_enc, enabled, ...)
 
-Tenant (Phase 2):   GraphQL createStream(ingestMode: PULL, pullSource: {...})
-                    → same DB rows under the customer tenant.
+Tenant self-service: GraphQL createStream(ingestMode: PULL, pullSource: {...})
+                     → validates the source URI and eligible edge clusters
+                     → encrypts source_uri
+                     → same DB rows under the customer tenant.
 ```
 
 ## Cost Semantics

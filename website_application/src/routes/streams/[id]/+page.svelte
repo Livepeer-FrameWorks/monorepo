@@ -60,6 +60,7 @@
     PushTargetsTabPanel,
     PushTargetCreateModal,
     PushTargetEditModal,
+    PlaybackAuthTabPanel,
   } from "$lib/components/stream-details";
   import { SectionDivider } from "$lib/components/layout";
   import type { StreamEvent, EventType } from "$lib/components/stream-details/EventLog.svelte";
@@ -139,6 +140,7 @@
     streamCore
       ? {
           ...streamCore,
+          playbackPolicy: maskedStream?.playbackPolicy ?? null,
           metrics: streamMetrics,
         }
       : null
@@ -914,14 +916,31 @@
     name?: string;
     description?: string;
     record?: boolean;
+    pullSourceUri?: string;
+    pullSourceEnabled?: boolean;
   }) {
     if (!stream) return;
 
     try {
       actionLoading.editStream = true;
+      const input = {
+        name: formData.name,
+        description: formData.description,
+        record: formData.record,
+        ingestMode: stream.ingestMode,
+        pullSource:
+          stream.ingestMode === "PULL" &&
+          (formData.pullSourceUri?.trim() ||
+            formData.pullSourceEnabled !== stream.pullSource?.enabled)
+            ? {
+                sourceUri: formData.pullSourceUri?.trim() ?? "",
+                enabled: formData.pullSourceEnabled ?? true,
+              }
+            : undefined,
+      };
       const result = await updateStreamMutation.mutate({
         id: streamId,
-        input: formData,
+        input,
       });
       if (result.data?.updateStream?.__typename === "Stream") {
         showEditModal = false;
@@ -1119,6 +1138,7 @@
   const _KeyIcon = getIconComponent("Key");
   const VideoIcon = getIconComponent("Video");
   const PlayIcon = getIconComponent("Play");
+  const ShieldCheckIcon = getIconComponent("ShieldCheck");
   const CalendarIcon = getIconComponent("Calendar");
 </script>
 
@@ -1345,6 +1365,15 @@
                   <PlayIcon class="w-4 h-4" />
                   Playback
                 </TabsTrigger>
+                <TabsTrigger
+                  value="playback-auth"
+                  class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
+                >
+                  <ShieldCheckIcon class="w-4 h-4" />
+                  Playback Auth{#if stream?.playbackPolicy && stream.playbackPolicy.type !== "PUBLIC"}
+                    ·
+                    <span class="text-info">{stream.playbackPolicy.type}</span>{/if}
+                </TabsTrigger>
               </TabsList>
 
               <TabsContent value="overview" class="p-0 min-h-[20rem]">
@@ -1399,6 +1428,14 @@
 
               <TabsContent value="playback" class="p-0 min-h-[20rem]">
                 <PlaybackTabPanel playbackId={stream?.playbackId} />
+              </TabsContent>
+
+              <TabsContent value="playback-auth" class="p-0 min-h-[20rem]">
+                <PlaybackAuthTabPanel
+                  streamId={stream?.id ?? ""}
+                  playbackPolicy={stream?.playbackPolicy ?? null}
+                  onSaved={() => streamStore.fetch({ policy: "NetworkOnly" })}
+                />
               </TabsContent>
             </Tabs>
           </div>

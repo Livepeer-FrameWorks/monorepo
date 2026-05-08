@@ -25,7 +25,7 @@
 ## Self-Hosted Infrastructure
 
 - Cluster marketplace: discover and subscribe to regional clusters via MCP (browse_marketplace, subscribe_to_cluster)
-- Private clusters: create_private_cluster returns enrollment token for edge provisioning
+- Edge clusters: create_edge_cluster returns enrollment token and Foghorn address for edge provisioning
 - Edge provisioning: `frameworks edge provision --enrollment-token <token> --ssh user@host`
 - Peering: preferred ↔ official clusters always peered; other subscribed clusters peer on demand when streams trigger it
 - Node lifecycle: frameworks edge mode (draining/maintenance/normal), frameworks edge doctor, frameworks edge logs

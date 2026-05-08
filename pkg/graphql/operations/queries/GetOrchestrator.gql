@@ -5,13 +5,13 @@
 query GetOrchestrator($orchAddr: String!) {
   orchestrator(orchAddr: $orchAddr) {
     orchestrator {
-      ...OrchestratorListFields
+      ...OrchestratorListFields @mask_disable
     }
     instances {
-      ...OrchestratorInstanceFields
+      ...OrchestratorInstanceFields @mask_disable
     }
     vantages {
-      ...OrchestratorVantageFields
+      ...OrchestratorVantageFields @mask_disable
     }
   }
 }

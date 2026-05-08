@@ -411,6 +411,25 @@ enum GQL {
   }
   """
 
+  static let PlaybackPolicyFields = """
+  fragment PlaybackPolicyFields on PlaybackPolicy {
+    type
+    jwt {
+      allowedKids
+      requiredAudience
+      requiredClaimsJson {
+        name
+        jsonValue
+      }
+    }
+    webhook {
+      url
+      timeoutMs
+      secretMasked
+    }
+  }
+  """
+
   static let PushTargetFields = """
   fragment PushTargetFields on PushTarget {
     id
@@ -435,6 +454,20 @@ enum GQL {
   }
   """
 
+  static let SigningKeyFields = """
+  fragment SigningKeyFields on SigningKey {
+    id
+    kid
+    name
+    algorithm
+    publicKeyPem
+    status
+    createdAt
+    lastUsedAt
+    revokedAt
+  }
+  """
+
   static let StreamCoreFields = """
   fragment StreamCoreFields on Stream {
     id
@@ -444,6 +477,12 @@ enum GQL {
     streamKey
     playbackId
     record
+    ingestMode
+    pullSource {
+      sourceUriRedacted
+      enabled
+      class
+    }
     createdAt
     updatedAt
   }
@@ -606,7 +645,7 @@ enum GQL {
   static let GetAPITokensConnection = """
   # Fetch paginated list of developer API tokens with permissions and usage timestamps
   query GetAPITokensConnection($first: Int = 50, $after: String) {
-    developerTokensConnection(page: { first: $first, after: $after })  {
+    developerTokensConnection(page: { first: $first, after: $after }) {
       edges {
         cursor
         node {
@@ -712,7 +751,7 @@ enum GQL {
           stage: $stage
           timeRange: $timeRange
           page: { first: $first, after: $after }
-        )  {
+        ) {
           edges {
             cursor
             node {
@@ -753,7 +792,7 @@ enum GQL {
           contentType: $contentType
           stage: $stage
           page: { first: $first, after: $after }
-        )  {
+        ) {
           edges {
             cursor
             node {
@@ -977,7 +1016,7 @@ enum GQL {
   # Fetch paginated list of clips with metadata and lifecycle status
   # Returns clip metadata from Commodore (use artifactStatesConnection for live status)
   query GetClipsConnection($streamId: ID, $first: Int = 50, $after: String) {
-    clipsConnection(streamId: $streamId, page: { first: $first, after: $after })  {
+    clipsConnection(streamId: $streamId, page: { first: $first, after: $after }) {
       edges {
         cursor
         node {
@@ -1095,7 +1134,7 @@ enum GQL {
           timeRange: $timeRange
           noCache: $noCache
           page: { first: $first, after: $after }
-        )  {
+        ) {
           edges {
             cursor
             node {
@@ -1185,7 +1224,7 @@ enum GQL {
   # Fetch paginated list of DVR recordings with lifecycle status and storage paths
   # Returns DVR metadata from Commodore (use artifactStatesConnection for live status)
   query GetDVRRequests($streamId: ID, $first: Int = 50, $after: String) {
-    dvrRecordingsConnection(streamId: $streamId, page: { first: $first, after: $after })  {
+    dvrRecordingsConnection(streamId: $streamId, page: { first: $first, after: $after }) {
       edges {
         cursor
         node {
@@ -1449,7 +1488,7 @@ enum GQL {
   static let GetInvoices = """
   # Fetch paginated list of invoices with line items and payment status
   query GetInvoices($first: Int = 50, $after: String) {
-    invoicesConnection(page: { first: $first, after: $after })  {
+    invoicesConnection(page: { first: $first, after: $after }) {
       edges {
         cursor
         node {
@@ -1725,7 +1764,7 @@ enum GQL {
           timeRange: $timeRange
           noCache: $noCache
           page: { first: $first, after: $after }
-        )  {
+        ) {
           edges {
             cursor
             node {
@@ -1811,7 +1850,7 @@ enum GQL {
       status: $status
       type: $type
       page: { first: $first, after: $after }
-    )  {
+    ) {
       edges {
         cursor
         node {
@@ -1902,15 +1941,8 @@ enum GQL {
   # Fetch the orchestrator list for the federation map. Vantage-independent
   # state only; the map merges this with `orchestratorVantages` to render
   # multi-IP / multi-region observation.
-  query GetOrchestratorsConnection(
-    $orchAddr: String
-    $first: Int = 200
-    $after: String
-  ) {
-    orchestratorsConnection(
-      orchAddr: $orchAddr
-      page: { first: $first, after: $after }
-    ) {
+  query GetOrchestratorsConnection($orchAddr: String, $first: Int = 200, $after: String) {
+    orchestratorsConnection(orchAddr: $orchAddr, page: { first: $first, after: $after }) {
       nodes {
         ...OrchestratorListFields
       }
@@ -2084,7 +2116,7 @@ enum GQL {
     stream(id: $streamId) {
       id
       pushTargets {
-        ...PushTargetFields 
+        ...PushTargetFields
       }
     }
   }
@@ -2173,7 +2205,7 @@ enum GQL {
           timeRange: $timeRange
           noCache: $noCache
           page: { first: $first, after: $after }
-        )  {
+        ) {
           edges {
             cursor
             node {
@@ -2220,7 +2252,7 @@ enum GQL {
           timeRange: $timeRange
           noCache: $noCache
           page: { first: $first, after: $after }
-        )  {
+        ) {
           edges {
             cursor
             node {
@@ -2283,7 +2315,7 @@ enum GQL {
           nodeId: $nodeId
           status: $status
           page: { first: $first, after: $after }
-        )  {
+        ) {
           edges {
             cursor
             node {
@@ -2333,6 +2365,27 @@ enum GQL {
           lastHealthCheck
         }
       }
+    }
+  }
+  """
+
+  static let GetSigningKeysConnection = """
+  # List the tenant's playback signing keys with optional status filter
+  query GetSigningKeysConnection($status: String, $first: Int = 50, $after: String) {
+    signingKeysConnection(status: $status, page: { first: $first, after: $after }) {
+      edges {
+        cursor
+        node {
+          ...SigningKeyFields
+        }
+      }
+      pageInfo {
+        hasNextPage
+        hasPreviousPage
+        startCursor
+        endCursor
+      }
+      totalCount
     }
   }
   """
@@ -2431,7 +2484,7 @@ enum GQL {
           assetType: $assetType
           timeRange: $timeRange
           page: { first: $first, after: $after }
-        )  {
+        ) {
           edges {
             cursor
             node {
@@ -2510,6 +2563,9 @@ enum GQL {
   query GetStream($id: ID!, $streamId: ID!, $timeRange: TimeRangeInput) {
     stream(id: $id) {
       ...StreamCoreFields
+      playbackPolicy {
+        ...PlaybackPolicyFields
+      }
       metrics {
         ...StreamMetricsFields
       }
@@ -3246,7 +3302,7 @@ enum GQL {
   static let GetStreamsConnection = """
   # Fetch paginated list of streams with core fields and live status metrics
   query GetStreamsConnection($first: Int = 50, $after: String) {
-    streamsConnection(page: { first: $first, after: $after })  {
+    streamsConnection(page: { first: $first, after: $after }) {
       edges {
         cursor
         node {
@@ -3525,7 +3581,7 @@ enum GQL {
           streamId: $streamId
           timeRange: $timeRange
           page: { first: $first, after: $after }
-        )  {
+        ) {
           edges {
             cursor
             node {
@@ -3778,13 +3834,13 @@ enum GQL {
         createdAt
       }
       ... on ValidationError {
-        ...ValidationErrorFields 
+        ...ValidationErrorFields
       }
       ... on RateLimitError {
-        ...RateLimitErrorFields 
+        ...RateLimitErrorFields
       }
       ... on AuthError {
-        ...AuthErrorFields 
+        ...AuthErrorFields
       }
     }
   }
@@ -3809,13 +3865,13 @@ enum GQL {
         ...ClipFields
       }
       ... on ValidationError {
-        ...ValidationErrorFields 
+        ...ValidationErrorFields
       }
       ... on NotFoundError {
-        ...NotFoundErrorFields 
+        ...NotFoundErrorFields
       }
       ... on AuthError {
-        ...AuthErrorFields 
+        ...AuthErrorFields
       }
     }
   }
@@ -3859,6 +3915,50 @@ enum GQL {
   }
   """
 
+  static let CreateEdgeCluster = """
+  # Create a new self-hosted edge cluster with bootstrap material.
+  mutation CreateEdgeCluster($input: CreateEdgeClusterInput!) {
+    createEdgeCluster(input: $input) {
+      __typename
+      ... on CreateEdgeClusterResponse {
+        cluster {
+          ...ClusterFields
+        }
+        bootstrapToken {
+          ...BootstrapTokenFields
+        }
+        foghornAddr
+      }
+      ... on ValidationError {
+        ...ValidationErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
+  static let CreateEnrollmentToken = """
+  # Issue a bootstrap token for adding another edge node to a cluster.
+  mutation CreateEnrollmentToken($clusterId: ID!, $name: String, $ttl: String) {
+    createEnrollmentToken(clusterId: $clusterId, name: $name, ttl: $ttl) {
+      __typename
+      ... on CreateEnrollmentTokenResponse {
+        bootstrapToken {
+          ...BootstrapTokenFields
+        }
+      }
+      ... on ValidationError {
+        ...ValidationErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
   static let CreatePayment = """
   # Create a new payment transaction
   mutation CreatePayment($input: CreatePaymentInput!) {
@@ -3884,33 +3984,10 @@ enum GQL {
         createdAt
       }
       ... on ValidationError {
-        ...ValidationErrorFields 
+        ...ValidationErrorFields
       }
       ... on AuthError {
-        ...AuthErrorFields 
-      }
-    }
-  }
-  """
-
-  static let CreatePrivateCluster = """
-  # Create a new private cluster with bootstrap token
-  mutation CreatePrivateCluster($input: CreatePrivateClusterInput!) {
-    createPrivateCluster(input: $input) {
-      __typename
-      ... on CreatePrivateClusterResponse {
-        cluster {
-          ...ClusterFields
-        }
-        bootstrapToken {
-          ...BootstrapTokenFields
-        }
-      }
-      ... on ValidationError {
-        ...ValidationErrorFields 
-      }
-      ... on AuthError {
-        ...AuthErrorFields 
+        ...AuthErrorFields
       }
     }
   }
@@ -3920,7 +3997,31 @@ enum GQL {
   # Create a new multistream push target for a stream
   mutation CreatePushTarget($streamId: ID!, $input: CreatePushTargetInput!) {
     createPushTarget(streamId: $streamId, input: $input) {
-      ...PushTargetFields 
+      ...PushTargetFields
+    }
+  }
+  """
+
+  static let CreateSigningKey = """
+  # Create a new playback signing key. Private key is returned exactly once.
+  mutation CreateSigningKey($input: CreateSigningKeyInput!) {
+    createSigningKey(input: $input) {
+      __typename
+      ... on CreateSigningKeySuccess {
+        privateKeyPem
+        signingKey {
+          ...SigningKeyFields
+        }
+      }
+      ... on ValidationError {
+        ...ValidationErrorFields
+      }
+      ... on RateLimitError {
+        ...RateLimitErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
     }
   }
   """
@@ -3937,10 +4038,10 @@ enum GQL {
         }
       }
       ... on ValidationError {
-        ...ValidationErrorFields 
+        ...ValidationErrorFields
       }
       ... on AuthError {
-        ...AuthErrorFields 
+        ...AuthErrorFields
       }
     }
   }
@@ -3961,13 +4062,13 @@ enum GQL {
         createdAt
       }
       ... on ValidationError {
-        ...ValidationErrorFields 
+        ...ValidationErrorFields
       }
       ... on NotFoundError {
-        ...NotFoundErrorFields 
+        ...NotFoundErrorFields
       }
       ... on AuthError {
-        ...AuthErrorFields 
+        ...AuthErrorFields
       }
     }
   }
@@ -4007,13 +4108,13 @@ enum GQL {
     deleteClip(id: $id) {
       __typename
       ... on DeleteSuccess {
-        ...DeleteSuccessFields 
+        ...DeleteSuccessFields
       }
       ... on NotFoundError {
-        ...NotFoundErrorFields 
+        ...NotFoundErrorFields
       }
       ... on AuthError {
-        ...AuthErrorFields 
+        ...AuthErrorFields
       }
     }
   }
@@ -4024,13 +4125,13 @@ enum GQL {
   mutation DeleteDVR($dvrHash: ID!) {
     deleteDVR(dvrHash: $dvrHash) {
       ... on DeleteSuccess {
-        ...DeleteSuccessFields 
+        ...DeleteSuccessFields
       }
       ... on NotFoundError {
-        ...NotFoundErrorFields 
+        ...NotFoundErrorFields
       }
       ... on AuthError {
-        ...AuthErrorFields 
+        ...AuthErrorFields
       }
     }
   }
@@ -4040,7 +4141,7 @@ enum GQL {
   # Delete a multistream push target
   mutation DeletePushTarget($id: ID!) {
     deletePushTarget(id: $id) {
-      ...DeleteSuccessFields 
+      ...DeleteSuccessFields
     }
   }
   """
@@ -4057,13 +4158,13 @@ enum GQL {
     deleteStream(id: $id) {
       __typename
       ... on DeleteSuccess {
-        ...DeleteSuccessFields 
+        ...DeleteSuccessFields
       }
       ... on NotFoundError {
-        ...NotFoundErrorFields 
+        ...NotFoundErrorFields
       }
       ... on AuthError {
-        ...AuthErrorFields 
+        ...AuthErrorFields
       }
     }
   }
@@ -4075,13 +4176,13 @@ enum GQL {
     deleteStreamKey(streamId: $streamId, keyId: $keyId) {
       __typename
       ... on DeleteSuccess {
-        ...DeleteSuccessFields 
+        ...DeleteSuccessFields
       }
       ... on NotFoundError {
-        ...NotFoundErrorFields 
+        ...NotFoundErrorFields
       }
       ... on AuthError {
-        ...AuthErrorFields 
+        ...AuthErrorFields
       }
     }
   }
@@ -4221,13 +4322,13 @@ enum GQL {
         }
       }
       ... on ValidationError {
-        ...ValidationErrorFields 
+        ...ValidationErrorFields
       }
       ... on NotFoundError {
-        ...NotFoundErrorFields 
+        ...NotFoundErrorFields
       }
       ... on AuthError {
-        ...AuthErrorFields 
+        ...AuthErrorFields
       }
     }
   }
@@ -4296,13 +4397,31 @@ enum GQL {
     revokeDeveloperToken(id: $id) {
       __typename
       ... on DeleteSuccess {
-        ...DeleteSuccessFields 
+        ...DeleteSuccessFields
       }
       ... on NotFoundError {
-        ...NotFoundErrorFields 
+        ...NotFoundErrorFields
       }
       ... on AuthError {
-        ...AuthErrorFields 
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
+  static let RevokeSigningKey = """
+  # Revoke a playback signing key by ID
+  mutation RevokeSigningKey($id: ID!) {
+    revokeSigningKey(id: $id) {
+      __typename
+      ... on SigningKey {
+        ...SigningKeyFields
+      }
+      ... on NotFoundError {
+        ...NotFoundErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
       }
     }
   }
@@ -4327,6 +4446,43 @@ enum GQL {
         code
         resourceType
         resourceId
+      }
+    }
+  }
+  """
+
+  static let SetPlaybackPolicy = """
+  # Set or clear the playback policy on a stream / vod_asset / clip.
+  # Exactly one of streamId, vodAssetId, or clipId must be provided.
+  mutation SetPlaybackPolicy($input: SetPlaybackPolicyInput!) {
+    setPlaybackPolicy(input: $input) {
+      __typename
+      ... on Stream {
+        id
+        playbackPolicy {
+          ...PlaybackPolicyFields
+        }
+      }
+      ... on VodAsset {
+        id
+        playbackPolicy {
+          ...PlaybackPolicyFields
+        }
+      }
+      ... on Clip {
+        id
+        playbackPolicy {
+          ...PlaybackPolicyFields
+        }
+      }
+      ... on ValidationError {
+        ...ValidationErrorFields
+      }
+      ... on NotFoundError {
+        ...NotFoundErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
       }
     }
   }
@@ -4369,13 +4525,13 @@ enum GQL {
         ...DVRRequestFields
       }
       ... on ValidationError {
-        ...ValidationErrorFields 
+        ...ValidationErrorFields
       }
       ... on NotFoundError {
-        ...NotFoundErrorFields 
+        ...NotFoundErrorFields
       }
       ... on AuthError {
-        ...AuthErrorFields 
+        ...AuthErrorFields
       }
     }
   }
@@ -4436,7 +4592,7 @@ enum GQL {
   # Update a multistream push target
   mutation UpdatePushTarget($id: ID!, $input: UpdatePushTargetInput!) {
     updatePushTarget(id: $id, input: $input) {
-      ...PushTargetFields 
+      ...PushTargetFields
     }
   }
   """
@@ -4463,13 +4619,13 @@ enum GQL {
         }
       }
       ... on ValidationError {
-        ...ValidationErrorFields 
+        ...ValidationErrorFields
       }
       ... on NotFoundError {
-        ...NotFoundErrorFields 
+        ...NotFoundErrorFields
       }
       ... on AuthError {
-        ...AuthErrorFields 
+        ...AuthErrorFields
       }
     }
   }
