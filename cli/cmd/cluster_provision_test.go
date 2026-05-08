@@ -106,6 +106,9 @@ func (f *fakeIngressDesiredStateRegistrar) UpsertIngressSite(_ context.Context, 
 func TestReconcileServiceClusterAssignmentsWithClientAssignsMediaClusters(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"core-1": {ExternalIP: "203.0.113.10"},
+		},
 		Clusters: map[string]inventory.ClusterConfig{
 			"media-central-primary": {Type: "edge", Roles: []string{"media"}, Default: true},
 			"core-central-primary":  {Type: "central"},
@@ -159,6 +162,10 @@ func TestReconcileServiceClusterAssignmentsWithClientAssignsMediaClusters(t *tes
 func TestReconcileServiceClusterAssignmentsWithClientAssignsDeclaredPoolInstances(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"gateway-1": {ExternalIP: "203.0.113.10"},
+			"gateway-2": {ExternalIP: "203.0.113.11"},
+		},
 		Clusters: map[string]inventory.ClusterConfig{
 			"media-free-eu": {Type: "edge", Roles: []string{"media"}},
 			"media-paid-eu": {Type: "edge", Roles: []string{"media"}},
@@ -187,8 +194,13 @@ func TestReconcileServiceClusterAssignmentsWithClientAssignsDeclaredPoolInstance
 		t.Fatalf("reconcile returned error: %v", err)
 	}
 
-	if len(assigner.drains) != 3 {
-		t.Fatalf("expected all existing gateway assignments to be cleared, got %d drains", len(assigner.drains))
+	if len(assigner.drains) != 2 {
+		t.Fatalf("expected manifest-owned gateway assignments to be cleared, got %d drains", len(assigner.drains))
+	}
+	for _, drain := range assigner.drains {
+		if drain.GetInstanceId() == "old-gateway" {
+			t.Fatalf("must not drain service assignments outside the active manifest hosts: %+v", assigner.drains)
+		}
 	}
 	if len(assigner.calls) != 2 {
 		t.Fatalf("expected one assignment call per logical cluster, got %d", len(assigner.calls))
@@ -207,6 +219,9 @@ func TestReconcileServiceClusterAssignmentsWithClientAssignsDeclaredPoolInstance
 func TestReconcileServiceClusterAssignmentsWithClientDrainsRemovedService(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"core-1": {ExternalIP: "203.0.113.10"},
+		},
 		Services: map[string]inventory.ServiceConfig{
 			"foghorn": {Enabled: false},
 		},
@@ -233,6 +248,10 @@ func TestReconcileServiceClusterAssignmentsWithClientDrainsRemovedService(t *tes
 func TestReconcileServiceClusterAssignmentsWithClientDoesNotDrainBeforeValidation(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"core-1": {ExternalIP: "203.0.113.10"},
+			"core-2": {ExternalIP: "203.0.113.11"},
+		},
 		Clusters: map[string]inventory.ClusterConfig{
 			"media-central-primary": {Type: "edge", Roles: []string{"media"}, Default: true},
 		},
@@ -406,9 +425,41 @@ func TestReconcileRemovedServicePlacementsSkipsUnknownHosts(t *testing.T) {
 	}
 }
 
+func TestWriteRemovedServicePlacementDryRunPlanShowsCleanupActions(t *testing.T) {
+	placements := []removedServicePlacement{
+		{
+			serviceName:  "livepeer-gateway",
+			nodeID:       "central-eu-1",
+			cleanupModes: []string{"native", "docker"},
+		},
+		{
+			serviceName:  "metabase",
+			nodeID:       "core-1",
+			cleanupModes: []string{"docker"},
+		},
+	}
+
+	var out bytes.Buffer
+	writeRemovedServicePlacementDryRunPlan(&out, placements)
+
+	got := out.String()
+	for _, want := range []string{
+		"Removed service cleanup plan:",
+		"livepeer-gateway on central-eu-1: would drain pool assignment and cleanup (native+docker)",
+		"metabase on core-1: would cleanup (docker)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("dry-run cleanup plan missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 func TestReconcileServiceClusterAssignmentsWithClientReturnsClusterError(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"core-1": {ExternalIP: "203.0.113.10"},
+		},
 		Clusters: map[string]inventory.ClusterConfig{
 			"core-central-primary":  {Type: "central"},
 			"media-central-primary": {Type: "edge", Roles: []string{"media"}, Default: true},

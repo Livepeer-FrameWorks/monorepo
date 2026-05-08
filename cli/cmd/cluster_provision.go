@@ -223,6 +223,7 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 	fmt.Fprintf(cmd.OutOrStdout(), "\nTotal tasks: %d\n\n", len(plan.AllTasks))
 
 	if dryRun {
+		printDryRunRemovedServicePlacementPlan(ctx, cmd, manifest, phase, sharedEnv)
 		fmt.Fprintln(cmd.OutOrStdout(), "Dry-run complete. Use without --dry-run to execute.")
 		return nil
 	}
@@ -1584,6 +1585,7 @@ func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 		if err != nil {
 			return fmt.Errorf("list %s instances: %w", serviceName, err)
 		}
+		instances = serviceInstancesOnManifestHosts(manifest, instances)
 
 		svc, ok := manifest.Services[serviceName]
 		if !ok || !svc.Enabled {
@@ -1663,6 +1665,26 @@ func serviceInstancesForService(ctx context.Context, client serviceClusterAssign
 		return nil, err
 	}
 	return resp.GetInstances(), nil
+}
+
+func serviceInstancesOnManifestHosts(manifest *inventory.Manifest, instances []*pb.ServiceInstance) []*pb.ServiceInstance {
+	if manifest == nil || len(manifest.Hosts) == 0 || len(instances) == 0 {
+		return nil
+	}
+	filtered := make([]*pb.ServiceInstance, 0, len(instances))
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		nodeID := strings.TrimSpace(inst.GetNodeId())
+		if nodeID == "" {
+			continue
+		}
+		if _, ok := manifest.GetHost(nodeID); ok {
+			filtered = append(filtered, inst)
+		}
+	}
+	return filtered
 }
 
 func drainServiceAssignments(ctx context.Context, client serviceClusterAssignmentClient, serviceName string, instances []*pb.ServiceInstance) error {
@@ -1769,6 +1791,60 @@ func reconcileRemovedServicePlacements(ctx context.Context, cmd *cobra.Command, 
 	}
 
 	return reconcileRemovedServicePlacementsWithClient(ctx, cmd.OutOrStdout(), manifest, phase, client, cleanup)
+}
+
+func printDryRunRemovedServicePlacementPlan(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, phase orchestrator.Phase, sharedEnv map[string]string) {
+	if phase == orchestrator.PhaseInfrastructure {
+		return
+	}
+
+	runtimeData := map[string]any{}
+	if token := strings.TrimSpace(sharedEnv["SERVICE_TOKEN"]); token != "" {
+		runtimeData["service_token"] = token
+	}
+
+	sshKey := stringFlag(cmd, "ssh-key").Value
+	sess, err := remoteaccess.OpenSession(remoteaccess.Options{
+		Manifest:      manifest,
+		SSHKeyPath:    sshKey,
+		AllowInsecure: isDevProfile(manifest),
+	})
+	if err != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "Removed service cleanup plan: inconclusive: %v\n\n", err)
+		return
+	}
+	defer sess.Close()
+
+	client, err := newQuartermasterClient(ctx, manifest, runtimeData, sess)
+	if err != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "Removed service cleanup plan: inconclusive: %v\n\n", err)
+		return
+	}
+	defer client.Close()
+
+	placements, err := removedServicePlacements(ctx, manifest, phase, client)
+	if err != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "Removed service cleanup plan: inconclusive: %v\n\n", err)
+		return
+	}
+	writeRemovedServicePlacementDryRunPlan(cmd.OutOrStdout(), placements)
+}
+
+func writeRemovedServicePlacementDryRunPlan(out io.Writer, placements []removedServicePlacement) {
+	fmt.Fprintln(out, "Removed service cleanup plan:")
+	if len(placements) == 0 {
+		fmt.Fprintln(out, "  - no stale managed service placements detected")
+		fmt.Fprintln(out)
+		return
+	}
+	for _, placement := range placements {
+		action := "cleanup"
+		if pkgdns.IsPoolAssignedServiceType(placement.serviceName) {
+			action = "drain pool assignment and cleanup"
+		}
+		fmt.Fprintf(out, "  - %s on %s: would %s (%s)\n", placement.serviceName, placement.nodeID, action, strings.Join(placement.cleanupModes, "+"))
+	}
+	fmt.Fprintln(out)
 }
 
 func reconcileRemovedServicePlacementsWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, phase orchestrator.Phase, client serviceClusterAssignmentClient, cleanup removedPlacementCleanupFunc) error {
