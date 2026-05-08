@@ -98,8 +98,8 @@ func TestBuildServerTLSConfigKeepsCachedCertificateDuringPartialRotation(t *test
 
 	v2CertPEM, v2KeyPEM := selfSignedPairPEM(t, "server-v2.local", 2)
 	time.Sleep(10 * time.Millisecond)
-	if err := os.WriteFile(certFile, v2CertPEM, 0o600); err != nil {
-		t.Fatalf("WriteFile(cert v2): %v", err)
+	if writeErr := os.WriteFile(certFile, v2CertPEM, 0o600); writeErr != nil {
+		t.Fatalf("WriteFile(cert v2): %v", writeErr)
 	}
 
 	cert, err = cfg.GetCertificate(&tls.ClientHelloInfo{})
@@ -111,8 +111,8 @@ func TestBuildServerTLSConfigKeepsCachedCertificateDuringPartialRotation(t *test
 	}
 
 	time.Sleep(10 * time.Millisecond)
-	if err := os.WriteFile(keyFile, v2KeyPEM, 0o600); err != nil {
-		t.Fatalf("WriteFile(key v2): %v", err)
+	if writeErr := os.WriteFile(keyFile, v2KeyPEM, 0o600); writeErr != nil {
+		t.Fatalf("WriteFile(key v2): %v", writeErr)
 	}
 
 	cert, err = cfg.GetCertificate(&tls.ClientHelloInfo{})
