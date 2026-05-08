@@ -11,11 +11,13 @@ If you're running on [Livepeer Studio](https://livepeer.studio) today and consid
 
 This guide covers what stays, what changes, what you gain, and exactly how to do the swap.
 
+Livepeer Studio is the canonical Livepeer gateway: steward of the public transcoding pipeline, and the team that made building on the protocol easy. For most teams, "building on Livepeer" has meant building on Studio. FrameWorks is another gateway on the same network, with a different product shape around it. The rest of this page maps Studio's surface to FrameWorks: what's a clean swap, what changes shape, and where they diverge.
+
 ## TL;DR
 
-- **What stays:** RTMP/RTMPS, E-RTMP, and WHIP ingest, HLS and WebRTC playback, multistream targets, clips, recordings.
+- **What stays:** RTMP/RTMPS and WHIP ingest, HLS and WebRTC playback, multistream targets, clips, recordings.
 - **What changes:** REST → GraphQL · API key → JWT or developer token · outbound webhooks → GraphQL subscriptions or polling · playback access policies are recreated with FrameWorks signing keys or webhooks · `@livepeer/react` → `@livepeer-frameworks/player-*`.
-- **Capabilities to evaluate:** SRT ingest · LL-HLS/DASH delivery · sprite-sheet seek previews · AV1 in the codec list · self-hosting / hybrid options · MCP, wallet auth, and x402 for agents · Skipper · planned AV Device Discovery (ONVIF / VISCA-PTZ / NDI / HDMI capture).
+- **Capabilities to evaluate:** E-RTMP ingest (HEVC/AV1 contribution over RTMP) · SRT ingest · LL-HLS/DASH delivery · sprite-sheet seek previews · AV1 in the codec list · self-hosting / hybrid options · MCP, wallet auth, and x402 for agents · Skipper · planned AV Device Discovery (ONVIF / VISCA-PTZ / NDI / HDMI capture).
 - **What's not yet at parity:** AI Pipelines, outbound HTTP webhooks, C2PA signing, and
   first-class Python/Go SDKs. See
   [the gap list](#whats-not-yet-at-parity-and-whats-coming) before planning a production cutover.
@@ -137,7 +139,7 @@ You get back a `streamKey` (secret — for your encoder) and a `playbackId` (pub
 
 ### 2. Repoint your encoder
 
-Studio uses GeoDNS-routed `rtmp://rtmp.livepeer.com/live` and a WHIP endpoint at `https://playback.livepeer.studio/webrtc/{streamKey}`. FrameWorks publishes its equivalents via the dashboard or `resolveIngestEndpoint(streamKey)`. RTMP/RTMPS, E-RTMP, and WHIP remain the low-effort path; SRT is also available on FrameWorks ingest when your encoder supports it.
+Studio uses GeoDNS-routed `rtmp://rtmp.livepeer.com/live` and a WHIP endpoint at `https://playback.livepeer.studio/webrtc/{streamKey}`. FrameWorks publishes its equivalents via the dashboard or `resolveIngestEndpoint(streamKey)`. RTMP/RTMPS and WHIP remain the low-effort path; FrameWorks additionally accepts E-RTMP (HEVC/AV1 contribution over RTMP) and SRT when your encoder supports them.
 
 OBS / FFmpeg / hardware encoder → swap the URL, keep the rest.
 
@@ -280,8 +282,10 @@ Run a low-traffic test stream through both platforms in parallel for a day. Watc
 Current gaps to account for:
 
 - **AI Pipelines** (text-to-image, image-to-video, ASR, live-video-to-video, segmentation) — not
-  exposed as a FrameWorks API today. Keep managed Studio/Daydream AI calls on Livepeer until
-  FrameWorks exposes an equivalent surface.
+  exposed as a FrameWorks API today. The Livepeer team's productized AI offering is
+  [Daydream](https://daydream.live/) (real-time AI video, runs on the same Livepeer network);
+  keep AI workloads there or on existing managed Livepeer surfaces until FrameWorks exposes an
+  equivalent.
 - **Outbound webhooks** — today we use GraphQL subscriptions. HTTP-callback delivery is tracked in
   the outbound-webhooks RFC.
 - **C2PA signing and creator-ID provenance on transcode** — not exposed as a public FrameWorks API
