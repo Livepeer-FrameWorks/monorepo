@@ -10,6 +10,7 @@
 
 # Don't exit on error - some modules may have no tests
 set +e
+export GOFLAGS="${GOFLAGS:--tags=nomsgpack}"
 
 REPORT_DIR="reports"
 REPORT_FILE="$REPORT_DIR/coverage-report.txt"

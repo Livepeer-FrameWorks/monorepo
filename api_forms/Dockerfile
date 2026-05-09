@@ -2,6 +2,8 @@
 
 FROM golang:1.26.2-alpine AS builder
 
+ENV GOFLAGS="-tags=nomsgpack"
+
 WORKDIR /workspace
 
 RUN apk add --no-cache git ca-certificates

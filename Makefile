@@ -10,6 +10,8 @@
 VERSION ?= $(shell git describe --tags --match "v[0-9]*" --exact-match 2>/dev/null || git describe --tags --match "v[0-9]*" --dirty --always 2>/dev/null || echo "0.0.0-dev")
 GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+GO_BUILD_TAGS ?= nomsgpack
+GO_TAG_FLAGS = $(if $(strip $(GO_BUILD_TAGS)),-tags=$(GO_BUILD_TAGS),)
 
 # component_version(dir) returns the contents of <dir>/VERSION, failing the
 # make invocation loudly if the file is missing. Every buildable component
@@ -66,7 +68,7 @@ define run-go-tests
 	@echo "Running unit tests for $(1)..."
 	@(cd $(2) && \
 		go mod tidy && \
-		go test ./... -race -count=1)
+		go test $(GO_TAG_FLAGS) ./... -race -count=1)
 endef
 
 proto:
@@ -103,9 +105,9 @@ verify:
 		(cd $$service_dir && \
 			go mod tidy && \
 			go fmt ./... && \
-			go vet $$(go list ./... | grep -v '/graph/generated') && \
-			go test ./... -race -count=1 && \
-			go build ./...) || failed=1; \
+			go vet $(GO_TAG_FLAGS) $$(go list $(GO_TAG_FLAGS) ./... | grep -v '/graph/generated') && \
+			go test $(GO_TAG_FLAGS) ./... -race -count=1 && \
+			go build $(GO_TAG_FLAGS) ./...) || failed=1; \
 		if [ -f "$$service_dir/Dockerfile" ]; then \
 			echo "Building Docker image for $$service_name..."; \
 			docker build -t frameworks-$$service_name:test -f $$service_dir/Dockerfile . || failed=1; \
@@ -205,55 +207,55 @@ build-image-chandler:
 		-f api_assets/Dockerfile .
 
 build-bin-commodore:
-	cd api_control && go build $(call component_ldflags,commodore,api_control) -o ../bin/commodore ./cmd/commodore
+	cd api_control && go build $(GO_TAG_FLAGS) $(call component_ldflags,commodore,api_control) -o ../bin/commodore ./cmd/commodore
 
 build-bin-quartermaster:
-	cd api_tenants && go build $(call component_ldflags,quartermaster,api_tenants) -o ../bin/quartermaster ./cmd/quartermaster
+	cd api_tenants && go build $(GO_TAG_FLAGS) $(call component_ldflags,quartermaster,api_tenants) -o ../bin/quartermaster ./cmd/quartermaster
 
 build-bin-purser:
-	cd api_billing && go build $(call component_ldflags,purser,api_billing) -o ../bin/purser ./cmd/purser
+	cd api_billing && go build $(GO_TAG_FLAGS) $(call component_ldflags,purser,api_billing) -o ../bin/purser ./cmd/purser
 
 build-bin-decklog:
-	cd api_firehose && go build $(call component_ldflags,decklog,api_firehose) -o ../bin/decklog ./cmd/decklog
+	cd api_firehose && go build $(GO_TAG_FLAGS) $(call component_ldflags,decklog,api_firehose) -o ../bin/decklog ./cmd/decklog
 
 build-bin-foghorn:
-	cd api_balancing && go build $(call component_ldflags,foghorn,api_balancing) -o ../bin/foghorn ./cmd/foghorn
+	cd api_balancing && go build $(GO_TAG_FLAGS) $(call component_ldflags,foghorn,api_balancing) -o ../bin/foghorn ./cmd/foghorn
 
 build-bin-helmsman:
-	cd api_sidecar && go build $(call component_ldflags,helmsman,api_sidecar) -o ../bin/helmsman ./cmd/helmsman
+	cd api_sidecar && go build $(GO_TAG_FLAGS) $(call component_ldflags,helmsman,api_sidecar) -o ../bin/helmsman ./cmd/helmsman
 
 build-bin-periscope-ingest:
-	cd api_analytics_ingest && go build $(call component_ldflags,periscope-ingest,api_analytics_ingest) -o ../bin/periscope-ingest ./cmd/periscope
+	cd api_analytics_ingest && go build $(GO_TAG_FLAGS) $(call component_ldflags,periscope-ingest,api_analytics_ingest) -o ../bin/periscope-ingest ./cmd/periscope
 
 build-bin-periscope-query:
-	cd api_analytics_query && go build $(call component_ldflags,periscope-query,api_analytics_query) -o ../bin/periscope-query ./cmd/periscope
+	cd api_analytics_query && go build $(GO_TAG_FLAGS) $(call component_ldflags,periscope-query,api_analytics_query) -o ../bin/periscope-query ./cmd/periscope
 
 build-bin-signalman:
-	cd api_realtime && go build $(call component_ldflags,signalman,api_realtime) -o ../bin/signalman ./cmd/signalman
+	cd api_realtime && go build $(GO_TAG_FLAGS) $(call component_ldflags,signalman,api_realtime) -o ../bin/signalman ./cmd/signalman
 
 build-bin-bridge:
-	cd api_gateway && go build $(call component_ldflags,bridge,api_gateway) -o ../bin/bridge ./cmd/bridge
+	cd api_gateway && go build $(GO_TAG_FLAGS) $(call component_ldflags,bridge,api_gateway) -o ../bin/bridge ./cmd/bridge
 
 build-bin-navigator:
-	cd api_dns && go build $(call component_ldflags,navigator,api_dns) -o ../bin/navigator ./cmd/navigator
+	cd api_dns && go build $(GO_TAG_FLAGS) $(call component_ldflags,navigator,api_dns) -o ../bin/navigator ./cmd/navigator
 
 build-bin-privateer:
-	cd api_mesh && go build $(call component_ldflags,privateer,api_mesh) -o ../bin/privateer ./cmd/privateer
+	cd api_mesh && go build $(GO_TAG_FLAGS) $(call component_ldflags,privateer,api_mesh) -o ../bin/privateer ./cmd/privateer
 
 build-bin-deckhand:
-	cd api_ticketing && go build $(call component_ldflags,deckhand,api_ticketing) -o ../bin/deckhand ./cmd/deckhand
+	cd api_ticketing && go build $(GO_TAG_FLAGS) $(call component_ldflags,deckhand,api_ticketing) -o ../bin/deckhand ./cmd/deckhand
 
 build-bin-steward:
-	cd api_forms && go build $(call component_ldflags,steward,api_forms) -o ../bin/steward ./cmd/steward
+	cd api_forms && go build $(GO_TAG_FLAGS) $(call component_ldflags,steward,api_forms) -o ../bin/steward ./cmd/steward
 
 build-bin-skipper:
-	cd api_consultant && go build $(call component_ldflags,skipper,api_consultant) -o ../bin/skipper ./cmd/skipper
+	cd api_consultant && go build $(GO_TAG_FLAGS) $(call component_ldflags,skipper,api_consultant) -o ../bin/skipper ./cmd/skipper
 
 build-bin-chandler:
-	cd api_assets && go build $(call component_ldflags,chandler,api_assets) -o ../bin/chandler ./cmd/chandler
+	cd api_assets && go build $(GO_TAG_FLAGS) $(call component_ldflags,chandler,api_assets) -o ../bin/chandler ./cmd/chandler
 
 build-bin-cli:
-	cd cli && go build $(call component_ldflags,cli,cli) -o ../bin/cli .
+	cd cli && go build $(GO_TAG_FLAGS) $(call component_ldflags,cli,cli) -o ../bin/cli .
 
 clean:
 	rm -rf bin/
@@ -277,7 +279,7 @@ test:
 		echo "==> $$service_name"; \
 		(cd $$service_dir && \
 			go mod tidy && \
-			go test ./... -race -count=1) || failed=1; \
+			go test $(GO_TAG_FLAGS) ./... -race -count=1) || failed=1; \
 	done; \
 	if [ $$failed -eq 0 ]; then \
 		echo "✓ Unit tests passed"; \
@@ -350,7 +352,7 @@ test-junit:
 		echo "==> $$service_name"; \
 		(cd $$service_dir && \
 			go mod tidy && \
-			go test ./... -race -count=1 -v) > $(CURDIR)/test-results/$$service_name.out 2>&1; \
+			go test $(GO_TAG_FLAGS) ./... -race -count=1 -v) > $(CURDIR)/test-results/$$service_name.out 2>&1; \
 		test_exit=$$?; \
 		go-junit-report < $(CURDIR)/test-results/$$service_name.out >> $(CURDIR)/test-results/go-junit.xml 2>/dev/null; \
 		if [ $$test_exit -ne 0 ]; then \
@@ -380,7 +382,7 @@ coverage:
 		( cd $$service_dir && \
 			go mod tidy >/dev/null 2>&1 && \
 			tmpfile=$$(mktemp); \
-			if go test ./... -coverpkg=./... -coverprofile="$$tmpfile" -covermode=atomic -count=1 >/dev/null 2>&1; then \
+			if go test $(GO_TAG_FLAGS) ./... -coverpkg=./... -coverprofile="$$tmpfile" -covermode=atomic -count=1 >/dev/null 2>&1; then \
 				if [ -s "$$tmpfile" ]; then \
 					tail -n +2 "$$tmpfile" >> "$(CURDIR)/coverage/coverage.out"; \
 					cov=$$(go tool cover -func="$$tmpfile" | awk '/total:/ {print $$3}'); \

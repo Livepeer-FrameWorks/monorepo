@@ -1,6 +1,8 @@
 # Build stage
 FROM golang:1.26.2-alpine AS builder
 
+ENV GOFLAGS="-tags=nomsgpack"
+
 RUN apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /src/frameworks/api_assets
