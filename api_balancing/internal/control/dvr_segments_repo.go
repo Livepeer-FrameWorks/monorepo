@@ -1,0 +1,473 @@
+package control
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/lib/pq"
+)
+
+// DVR PER-SEGMENT LEDGER
+// foghorn.dvr_segments is the durable record of every recorded segment for
+// a DVR artifact. Foghorn is the source of truth; the sidecar reports
+// segments via the helmsman control stream and never queries this table.
+//
+// Chapter materialization reads bounded ranges from this table. Lost segments
+// (status='lost_local') render as #EXT-X-GAP in chapter playlists so timeline
+// duration is preserved without inventing reachable media.
+
+// DVRSegmentRow is a row from foghorn.dvr_segments.
+type DVRSegmentRow struct {
+	ArtifactHash   string
+	SegmentName    string
+	Sequence       int64
+	MediaStartMs   int64
+	MediaEndMs     int64
+	DurationMs     int64
+	SizeBytes      sql.NullInt64
+	S3Key          string
+	Status         string
+	DropReason     sql.NullString
+	CreatedAt      time.Time
+	UploadedAt     sql.NullTime
+	DeletedLocalAt sql.NullTime
+	DroppedAt      sql.NullTime
+}
+
+// ErrDVRSegmentTerminal is returned when the parent DVR artifact rejects
+// new segment rows. Callers should not retry; the sidecar drops the segment.
+var ErrDVRSegmentTerminal = errors.New("dvr artifact in terminal state; segment rejected")
+
+// rollbackQuiet rolls back a transaction, ignoring sql.ErrTxDone (which
+// fires when Commit already succeeded). Real rollback errors are silently
+// dropped; in this package the only callers commit-or-die so a failed
+// rollback after a failed commit means the work is gone either way.
+func rollbackQuiet(tx *sql.Tx) {
+	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+		// best-effort; nothing actionable for the caller
+		_ = err //nolint:errcheck
+	}
+}
+
+// dvrSegmentTerminalStatuses are statuses where new ledger inserts are
+// refused. Matches the manifest-permission rejection set so the two sides
+// stay aligned.
+var dvrSegmentTerminalStatuses = map[string]struct{}{
+	"finalizing":        {},
+	"completed":         {},
+	"completed_partial": {},
+	"failed":            {},
+	"deleted":           {},
+}
+
+// InsertDVRSegment inserts a new segment row in 'pending' status and assigns
+// a monotonic sequence per artifact. Returns the assigned sequence.
+//
+// Refuses inserts when the parent artifact is in a terminal state — that
+// path returns ErrDVRSegmentTerminal so the caller can emit
+// DVRSegmentDropped(was_uploaded=false) instead of looping a doomed retry.
+//
+// Sequence is computed as max(sequence)+1 inside the same transaction so
+// concurrent inserts on the same artifact stay monotonic. The unique index
+// idx_foghorn_dvr_segments_sequence enforces the invariant.
+func InsertDVRSegment(
+	ctx context.Context,
+	artifactHash, segmentName, s3Key string,
+	mediaStartMs, mediaEndMs, durationMs int64,
+) (int64, error) {
+	if db == nil {
+		return 0, sql.ErrConnDone
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer rollbackQuiet(tx)
+
+	var artifactStatus string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type = 'dvr' FOR UPDATE`,
+		artifactHash,
+	).Scan(&artifactStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("dvr artifact %s not found", artifactHash)
+		}
+		return 0, fmt.Errorf("lookup artifact: %w", err)
+	}
+	// If a segment by this name already exists (e.g. retry from sidecar),
+	// return its existing sequence without re-inserting. This check must run
+	// before the terminal-state guard for the 'finalizing' state: FinalizeDVR
+	// asks the sidecar to retry pending rows after claiming finalization, and
+	// those retries still need fresh presigned PUT URLs for already-ledgered
+	// segments. Fully terminal artifacts still reject retry attempts.
+	var existingSeq sql.NullInt64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT sequence FROM foghorn.dvr_segments WHERE artifact_hash = $1 AND segment_name = $2`,
+		artifactHash, segmentName,
+	).Scan(&existingSeq); err == nil && existingSeq.Valid {
+		if _, terminal := dvrSegmentTerminalStatuses[artifactStatus]; terminal && artifactStatus != "finalizing" {
+			return 0, ErrDVRSegmentTerminal
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return 0, commitErr
+		}
+		return existingSeq.Int64, nil
+	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("lookup existing segment: %w", err)
+	}
+
+	if _, terminal := dvrSegmentTerminalStatuses[artifactStatus]; terminal {
+		return 0, ErrDVRSegmentTerminal
+	}
+
+	var nextSeq int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(sequence), -1) + 1 FROM foghorn.dvr_segments WHERE artifact_hash = $1`,
+		artifactHash,
+	).Scan(&nextSeq); err != nil {
+		return 0, fmt.Errorf("assign sequence: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO foghorn.dvr_segments (
+			artifact_hash, segment_name, sequence,
+			media_start_ms, media_end_ms, duration_ms,
+			s3_key, status, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', NOW())
+	`, artifactHash, segmentName, nextSeq, mediaStartMs, mediaEndMs, durationMs, s3Key); err != nil {
+		return 0, fmt.Errorf("insert segment: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+	return nextSeq, nil
+}
+
+// MarkDVRSegmentUploaded transitions a segment row to 'uploaded' and stamps
+// the confirmed S3 size. No-op (no error) if the row is already uploaded —
+// the sidecar may resend the mark on retry.
+func MarkDVRSegmentUploaded(ctx context.Context, artifactHash, segmentName string, sizeBytes int64) error {
+	if db == nil {
+		return sql.ErrConnDone
+	}
+	_, err := db.ExecContext(ctx, `
+		UPDATE foghorn.dvr_segments
+		   SET status = 'uploaded',
+		       size_bytes = $3,
+		       uploaded_at = NOW()
+		 WHERE artifact_hash = $1
+		   AND segment_name = $2
+		   AND status IN ('pending', 'failed_upload')
+	`, artifactHash, segmentName, sizeBytes)
+	if err != nil {
+		return fmt.Errorf("mark uploaded: %w", err)
+	}
+	return nil
+}
+
+// MarkDVRSegmentDropped transitions a segment row to deleted_local (was
+// uploaded before eviction) or lost_local (lost before upload, renders as
+// #EXT-X-GAP in chapter manifests). drop_reason is recorded for ops
+// triage. Idempotent: a second call with the same (was_uploaded) classification
+// is a no-op.
+//
+// The mediaStart/mediaEnd/durationMs/sizeBytes args carry timing from the
+// sidecar's DVRSegmentDropped event. They are only used when the row does
+// not already exist — the terminal-rejection path emits DVRSegmentDropped
+// for a segment that was never registered via RecordDVRSegment, so there
+// is no row to UPDATE. Without those timing fields the chapter manifest
+// could not render an #EXT-X-GAP at the right place on the timeline. Pass
+// 0 for unknown/uninteresting timing (e.g. mid-stream eviction of a row
+// that already exists).
+func MarkDVRSegmentDropped(
+	ctx context.Context,
+	artifactHash, segmentName, reason string,
+	wasUploaded bool,
+	mediaStartMs, mediaEndMs, durationMs int64,
+	sizeBytes int64,
+) error {
+	if db == nil {
+		return sql.ErrConnDone
+	}
+	target := "lost_local"
+	if wasUploaded {
+		target = "deleted_local"
+	}
+	res, err := db.ExecContext(ctx, `
+		UPDATE foghorn.dvr_segments
+		   SET status = $3,
+		       drop_reason = $4,
+		       deleted_local_at = CASE WHEN $5 THEN NOW() ELSE deleted_local_at END,
+		       dropped_at = NOW()
+		 WHERE artifact_hash = $1
+		   AND segment_name = $2
+		   AND status NOT IN ('deleted_local', 'lost_local')
+	`, artifactHash, segmentName, target, reason, wasUploaded)
+	if err != nil {
+		return fmt.Errorf("mark dropped: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("mark dropped rows affected: %w", err)
+	}
+	if affected > 0 {
+		return nil
+	}
+	// No existing row. Only insert a placeholder for the lost_local case —
+	// "deleted_local with no row" is meaningless (the upload would have
+	// created the row), but "lost_local with no row" is the real terminal-
+	// rejection path (RecordDVRSegment refused → no row exists → DVRSegmentDropped
+	// fired), and we MUST persist the gap so chapter manifests render it.
+	if wasUploaded {
+		return nil
+	}
+	if mediaStartMs <= 0 || mediaEndMs <= mediaStartMs {
+		// No usable timing — log via caller; without timing we can't place
+		// the gap on the timeline, so we'd render a no-op row.
+		return fmt.Errorf("lost_local insert refused: missing media timing for %s/%s", artifactHash, segmentName)
+	}
+	// Insert under a tx so sequence assignment is monotonic against other
+	// writers (RecordDVRSegment can race here even though the artifact is
+	// terminal — Foghorn's terminal-state guard fires first, but in-flight
+	// writes may still arrive).
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx for lost_local insert: %w", err)
+	}
+	defer rollbackQuiet(tx)
+	var nextSeq int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(sequence), -1) + 1 FROM foghorn.dvr_segments WHERE artifact_hash = $1`,
+		artifactHash,
+	).Scan(&nextSeq); err != nil {
+		return fmt.Errorf("assign sequence for lost_local: %w", err)
+	}
+	var sizeArg interface{}
+	if sizeBytes > 0 {
+		sizeArg = sizeBytes
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO foghorn.dvr_segments (
+			artifact_hash, segment_name, sequence,
+			media_start_ms, media_end_ms, duration_ms,
+			size_bytes, s3_key, status, drop_reason,
+			created_at, dropped_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, '', 'lost_local', $8, NOW(), NOW())
+		ON CONFLICT (artifact_hash, segment_name) DO UPDATE SET
+			status      = 'lost_local',
+			drop_reason = EXCLUDED.drop_reason,
+			dropped_at  = NOW()
+	`, artifactHash, segmentName, nextSeq, mediaStartMs, mediaEndMs, durationMs, sizeArg, reason); err != nil {
+		return fmt.Errorf("insert lost_local row: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit lost_local: %w", err)
+	}
+	return nil
+}
+
+// ListEvictableDVRSegments returns segment names that are safe to delete
+// locally for the given DVR: status='uploaded' AND media_end_ms older than
+// (nowMs - windowSeconds*1000). maxCount caps the result; non-positive values
+// use the server default. The result is always capped.
+//
+// Used by the sidecar's storage-pressure path so eviction decisions are
+// authoritative against the ledger, not just the local uploaded cache.
+func ListEvictableDVRSegments(
+	ctx context.Context,
+	artifactHash string,
+	windowSeconds int,
+	maxCount int,
+) ([]string, error) {
+	if db == nil {
+		return nil, sql.ErrConnDone
+	}
+	if windowSeconds <= 0 {
+		return nil, nil
+	}
+	cutoffMs := time.Now().UnixMilli() - int64(windowSeconds)*1000
+	if maxCount <= 0 {
+		maxCount = 500
+	}
+	if maxCount > 1000 {
+		maxCount = 1000
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT segment_name
+		  FROM foghorn.dvr_segments
+		 WHERE artifact_hash = $1
+		   AND status = 'uploaded'
+		   AND media_end_ms < $2
+		 ORDER BY sequence ASC
+		 LIMIT $3
+	`, artifactHash, cutoffMs, maxCount)
+	if err != nil {
+		return nil, fmt.Errorf("list evictable: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
+}
+
+// ListPendingDVRSegments returns segments that are still pending or have
+// failed_upload, optionally older than a cutoff. Used during finalization
+// to drive RetryDVRSegmentUpload in bounded batches.
+func ListPendingDVRSegments(
+	ctx context.Context,
+	artifactHash string,
+	olderThan time.Duration,
+	limit int,
+) ([]DVRSegmentRow, error) {
+	if db == nil {
+		return nil, sql.ErrConnDone
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	cutoff := time.Now().Add(-olderThan)
+	rows, err := db.QueryContext(ctx, `
+		SELECT artifact_hash, segment_name, sequence,
+		       media_start_ms, media_end_ms, duration_ms,
+		       size_bytes, s3_key, status, drop_reason,
+		       created_at, uploaded_at, deleted_local_at, dropped_at
+		  FROM foghorn.dvr_segments
+		 WHERE artifact_hash = $1
+		   AND status IN ('pending', 'failed_upload')
+		   AND created_at <= $2
+		 ORDER BY sequence ASC
+		 LIMIT $3
+	`, artifactHash, cutoff, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list pending: %w", err)
+	}
+	defer rows.Close()
+	return scanDVRSegmentRows(rows)
+}
+
+// ListDVRSegmentsForRange returns segment rows whose media-time range
+// overlaps [startMs, endMs), ordered by (media_start_ms, sequence). When
+// both startMs and endMs are 0, returns all rows for the artifact (admin
+// only — chapter-aware callers always pass a bounded range, in keeping
+// with the bounded-operations invariant for unbounded artifact lifetime).
+//
+// Index-backed via idx_foghorn_dvr_segments_media_order.
+func ListDVRSegmentsForRange(ctx context.Context, artifactHash string, startMs, endMs int64) ([]DVRSegmentRow, error) {
+	if db == nil {
+		return nil, sql.ErrConnDone
+	}
+	var rows *sql.Rows
+	var err error
+	if startMs == 0 && endMs == 0 {
+		rows, err = db.QueryContext(ctx, `
+			SELECT artifact_hash, segment_name, sequence,
+			       media_start_ms, media_end_ms, duration_ms,
+			       size_bytes, s3_key, status, drop_reason,
+			       created_at, uploaded_at, deleted_local_at, dropped_at
+			  FROM foghorn.dvr_segments
+			 WHERE artifact_hash = $1
+			 ORDER BY media_start_ms ASC, sequence ASC
+		`, artifactHash)
+	} else {
+		rows, err = db.QueryContext(ctx, `
+			SELECT artifact_hash, segment_name, sequence,
+			       media_start_ms, media_end_ms, duration_ms,
+			       size_bytes, s3_key, status, drop_reason,
+			       created_at, uploaded_at, deleted_local_at, dropped_at
+			  FROM foghorn.dvr_segments
+			 WHERE artifact_hash = $1
+			   AND media_start_ms < $3
+			   AND media_end_ms > $2
+			 ORDER BY media_start_ms ASC, sequence ASC
+		`, artifactHash, startMs, endMs)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list segments for range: %w", err)
+	}
+	defer rows.Close()
+	return scanDVRSegmentRows(rows)
+}
+
+// LookupDVRSegmentsByName returns ledger rows matching (artifact_hash,
+// segment_name) IN (...). Bounded by the caller-supplied name list (caller
+// must page; current callers cap at ~500 names per call). Used by sidecar
+// restart reconciliation to repopulate its in-memory local cache from
+// what's actually on disk, without ever asking for "all segments for this
+// DVR" — preserves the bounded-operations invariant for unbounded artifact
+// lifetime.
+func LookupDVRSegmentsByName(ctx context.Context, artifactHash string, segmentNames []string) ([]DVRSegmentRow, error) {
+	if db == nil {
+		return nil, sql.ErrConnDone
+	}
+	if len(segmentNames) == 0 {
+		return nil, nil
+	}
+	// Use unnest($2::text[]) for the IN clause so the query plan stays a
+	// single index scan over (artifact_hash, segment_name) regardless of
+	// list size.
+	rows, err := db.QueryContext(ctx, `
+		SELECT artifact_hash, segment_name, sequence,
+		       media_start_ms, media_end_ms, duration_ms,
+		       size_bytes, s3_key, status, drop_reason,
+		       created_at, uploaded_at, deleted_local_at, dropped_at
+		  FROM foghorn.dvr_segments
+		 WHERE artifact_hash = $1
+		   AND segment_name = ANY($2::text[])
+	`, artifactHash, pq.StringArray(segmentNames))
+	if err != nil {
+		return nil, fmt.Errorf("lookup segments by name: %w", err)
+	}
+	defer rows.Close()
+	return scanDVRSegmentRows(rows)
+}
+
+// MarkRemainingDVRSegmentsLost reclassifies every pending/failed_upload row
+// for the artifact as lost_local with the given drop_reason. Used at the
+// end of finalization to draw a hard line under the bounded retry window.
+// Returns the number of rows reclassified.
+func MarkRemainingDVRSegmentsLost(ctx context.Context, artifactHash, reason string) (int64, error) {
+	if db == nil {
+		return 0, sql.ErrConnDone
+	}
+	res, err := db.ExecContext(ctx, `
+		UPDATE foghorn.dvr_segments
+		   SET status = 'lost_local',
+		       drop_reason = $2,
+		       dropped_at = NOW()
+		 WHERE artifact_hash = $1
+		   AND status IN ('pending', 'failed_upload')
+	`, artifactHash, reason)
+	if err != nil {
+		return 0, fmt.Errorf("mark remaining lost: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+func scanDVRSegmentRows(rows *sql.Rows) ([]DVRSegmentRow, error) {
+	var out []DVRSegmentRow
+	for rows.Next() {
+		var r DVRSegmentRow
+		if err := rows.Scan(
+			&r.ArtifactHash, &r.SegmentName, &r.Sequence,
+			&r.MediaStartMs, &r.MediaEndMs, &r.DurationMs,
+			&r.SizeBytes, &r.S3Key, &r.Status, &r.DropReason,
+			&r.CreatedAt, &r.UploadedAt, &r.DeletedLocalAt, &r.DroppedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

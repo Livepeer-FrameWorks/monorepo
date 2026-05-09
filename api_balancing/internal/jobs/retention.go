@@ -100,20 +100,26 @@ func (j *RetentionJob) scan() {
 
 	j.logger.Info("Starting retention scan")
 
-	// Mark expired artifacts as deleted
-	// Uses retention_until when set, falls back to created_at + default retention days
-	// This supports both new artifacts (with retention_until) and legacy artifacts (without)
+	// Retention only acts on terminal artifacts. An active DVR (recording /
+	// finalizing) is never killed by retention — that was the conflation
+	// that broke 24/7 streams. retention_until on a DVR is set by
+	// FinalizeDVR at end_at + dvr_retention_days*24h (post-end semantics);
+	// it never starts ticking on started_at.
+	//
+	// 'requested' and 'starting' are pre-terminal in the new state
+	// machine; they only show up briefly and are excluded so a stuck
+	// pre-recording artifact doesn't get silently cleaned up.
 	rows, err := j.db.QueryContext(ctx, `
 		UPDATE foghorn.artifacts
 		SET status = 'deleted', updated_at = NOW()
-		WHERE status NOT IN ('deleted', 'failed')
+		WHERE status IN ('completed', 'completed_partial', 'ready', 'failed')
 		  AND (
-			-- Use retention_until if set
-			(retention_until IS NOT NULL AND retention_until < NOW())
-			OR
-			-- Fallback to created_at + default retention for legacy artifacts
-			(retention_until IS NULL AND created_at < NOW() - make_interval(days => $1))
-		  )
+				(retention_until IS NOT NULL AND retention_until < NOW())
+				OR
+				-- Fallback for legacy artifacts (clip/vod) without retention_until.
+				-- DVR rows always have retention_until set by FinalizeDVR.
+				(artifact_type <> 'dvr' AND retention_until IS NULL AND created_at < NOW() - make_interval(days => $1))
+			  )
 		RETURNING artifact_hash, artifact_type, stream_internal_name, tenant_id, user_id, size_bytes,
 		          retention_until, started_at, ended_at, manifest_path
 	`, j.retentionDays)

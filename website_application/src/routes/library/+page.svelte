@@ -56,7 +56,7 @@
     TableCell,
   } from "$lib/components/ui/table";
   import { getIconComponent } from "$lib/iconUtils";
-  import { getAssetUrl, getContentDeliveryUrls, getShareUrl } from "$lib/config";
+  import { getAssetUrl, getContentDeliveryUrls } from "$lib/config";
   import SpriteThumbnail from "$lib/components/shared/SpriteThumbnail.svelte";
   import { formatBytes, formatExpiry, formatTimestamp, isExpired } from "$lib/utils/formatters.js";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
@@ -1000,7 +1000,12 @@
   }
 
   function canPlayArtifact(artifact: UnifiedArtifact): boolean {
-    if (!artifact.playbackId) return false;
+    if (artifact.type === "dvr") {
+      if (!artifact.hash) return false;
+      if (isExpired(artifact.expiresAt)) return false;
+      if (["failed", "deleted"].includes(artifact.status.toLowerCase())) return false;
+      return true;
+    } else if (!artifact.playbackId) return false;
     if (isExpired(artifact.expiresAt)) return false;
     if (artifact.status.toLowerCase() === "failed") return false;
     if (artifact.status.toLowerCase() === "deleted") return false;
@@ -1011,9 +1016,19 @@
     return true;
   }
 
+  function dvrViewUrl(hash: string) {
+    const params = new URLSearchParams({ type: "dvr", id: hash });
+    return `/view?${params.toString()}`;
+  }
+
   function playArtifact(artifact: UnifiedArtifact) {
+    if (artifact.type === "dvr" && artifact.hash) {
+      // eslint-disable-next-line svelte/no-navigation-without-resolve
+      goto(dvrViewUrl(artifact.hash));
+      return;
+    }
     if (artifact.playbackId) {
-      const url = getShareUrl(artifact.playbackId);
+      const url = `/view?id=${artifact.playbackId}`;
       // eslint-disable-next-line svelte/no-navigation-without-resolve
       if (url) goto(url);
     }
@@ -1366,31 +1381,29 @@
                                 <span class="text-[10px] text-muted-foreground px-2 italic"
                                   >Deleted</span
                                 >
-                              {:else if canPlayArtifact(artifact) && artifact.playbackId}
-                                {@const urls = getContentDeliveryUrls(
-                                  artifact.playbackId,
-                                  artifact.type === "clips"
-                                    ? "clip"
-                                    : artifact.type === "dvr"
-                                      ? "dvr"
-                                      : "vod"
-                                )}
-                                <Button
-                                  href={urls.primary.mp4}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  variant="ghost"
-                                  size="sm"
-                                  class="h-7 w-7 p-0 text-muted-foreground hover:text-primary"
-                                  title="Download MP4"
-                                >
-                                  <DownloadIcon class="w-3.5 h-3.5" />
-                                </Button>
+                              {:else if canPlayArtifact(artifact) && (artifact.type === "dvr" || artifact.playbackId)}
+                                {#if artifact.type !== "dvr" && artifact.playbackId}
+                                  {@const urls = getContentDeliveryUrls(
+                                    artifact.playbackId,
+                                    artifact.type === "clips" ? "clip" : "vod"
+                                  )}
+                                  <Button
+                                    href={urls.primary.mp4}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    variant="ghost"
+                                    size="sm"
+                                    class="h-7 w-7 p-0 text-muted-foreground hover:text-primary"
+                                    title="Download MP4"
+                                  >
+                                    <DownloadIcon class="w-3.5 h-3.5" />
+                                  </Button>
+                                {/if}
                                 <Button
                                   variant="ghost"
                                   size="sm"
                                   class="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
-                                  title={expandedArtifact === artifact.id ? "Hide" : "Share"}
+                                  title={expandedArtifact === artifact.id ? "Hide" : "Details"}
                                   onclick={() =>
                                     (expandedArtifact =
                                       expandedArtifact === artifact.id ? null : artifact.id)}
@@ -1528,7 +1541,7 @@
                         </TableRow>
 
                         <!-- Expanded Share Row -->
-                        {#if expandedArtifact === artifact.id && canPlayArtifact(artifact) && artifact.playbackId}
+                        {#if expandedArtifact === artifact.id && canPlayArtifact(artifact)}
                           <TableRow class="bg-muted/5 border-t-0">
                             <TableCell
                               colspan={9}
@@ -1536,16 +1549,29 @@
                               onclick={(e) => e.stopPropagation()}
                             >
                               <div class="pl-4 border-l-2 border-primary/20">
-                                <PlaybackProtocols
-                                  contentId={artifact.playbackId}
-                                  contentType={artifact.type === "clips"
-                                    ? "clip"
-                                    : artifact.type === "dvr"
-                                      ? "dvr"
-                                      : "vod"}
-                                  showPrimary={true}
-                                  showAdditional={true}
-                                />
+                                {#if artifact.type === "dvr"}
+                                  <div class="flex flex-col gap-2">
+                                    <p class="text-sm text-muted-foreground">
+                                      DVR replay uses chapter manifests generated from the recording
+                                      ledger.
+                                    </p>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      class="w-fit gap-2 border border-border/30"
+                                      onclick={() => playArtifact(artifact)}
+                                    >
+                                      Open chapters
+                                    </Button>
+                                  </div>
+                                {:else if artifact.playbackId}
+                                  <PlaybackProtocols
+                                    contentId={artifact.playbackId}
+                                    contentType={artifact.type === "clips" ? "clip" : "vod"}
+                                    showPrimary={true}
+                                    showAdditional={true}
+                                  />
+                                {/if}
                               </div>
                             </TableCell>
                           </TableRow>

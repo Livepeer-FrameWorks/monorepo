@@ -1128,17 +1128,16 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				}
 			}
 		case *pb.ControlMessage_DvrStartRequest:
-			// Handle DVR start requests from ingest Helmsman
-			go processDVRStartRequest(x.DvrStartRequest, nodeID, registry.log)
+			registry.log.WithFields(logging.Fields{
+				"node_id":       nodeID,
+				"internal_name": x.DvrStartRequest.GetInternalName(),
+			}).Error("Rejected DVRStartRequest from edge control stream; DVR starts must use Foghorn StartDVR")
 		case *pb.ControlMessage_DvrProgress:
 			// Handle DVR progress updates from storage Helmsman
 			go processDVRProgress(x.DvrProgress, nodeID, registry.log)
 		case *pb.ControlMessage_DvrStopped:
 			// Handle DVR completion from storage Helmsman
 			go processDVRStopped(x.DvrStopped, nodeID, registry.log)
-		case *pb.ControlMessage_DvrReadyRequest:
-			// Handle DVR readiness check from storage Helmsman
-			go processDVRReadyRequest(x.DvrReadyRequest, nodeID, stream, registry.log)
 		case *pb.ControlMessage_MistTrigger:
 			// Handle MistServer trigger forwarding from Helmsman
 			incMistTrigger(x.MistTrigger.GetTriggerType(), x.MistTrigger.GetBlocking(), "received")
@@ -1184,6 +1183,16 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			go processThumbnailUploadRequest(msg.GetRequestId(), x.ThumbnailUploadRequest, nodeID, stream, registry.log)
 		case *pb.ControlMessage_ThumbnailUploaded:
 			go processThumbnailUploaded(x.ThumbnailUploaded, nodeID, registry.log)
+		case *pb.ControlMessage_RecordDvrSegmentRequest:
+			go processRecordDVRSegment(x.RecordDvrSegmentRequest, nodeID, stream, registry.log)
+		case *pb.ControlMessage_MarkDvrSegmentUploaded:
+			go processMarkDVRSegmentUploaded(x.MarkDvrSegmentUploaded, nodeID, registry.log)
+		case *pb.ControlMessage_DvrSegmentDropped:
+			go processDVRSegmentDropped(x.DvrSegmentDropped, nodeID, registry.log)
+		case *pb.ControlMessage_EvictableSegmentsRequest:
+			go processEvictableSegmentsRequest(x.EvictableSegmentsRequest, nodeID, stream, registry.log)
+		case *pb.ControlMessage_RestoreLocalSegmentIndexRequest:
+			go processRestoreLocalSegmentIndexRequest(x.RestoreLocalSegmentIndexRequest, nodeID, stream, registry.log)
 		}
 	}
 	if nodeID != "" {
@@ -1499,36 +1508,6 @@ func StopDVRByInternalName(internalName string, logger logging.Logger) {
 	}
 }
 
-func emitIngestDVRFailure(dvrHash, streamID, errorMsg string, req *pb.DVRStartRequest, logger logging.Logger) {
-	if decklogClient == nil {
-		return
-	}
-
-	dvrData := &pb.DVRLifecycleData{
-		Status:  pb.DVRLifecycleData_STATUS_FAILED,
-		DvrHash: dvrHash,
-		Error:   &errorMsg,
-	}
-	if internalName := req.GetInternalName(); internalName != "" {
-		dvrData.StreamInternalName = &internalName
-	}
-	if tenantID := req.GetTenantId(); tenantID != "" {
-		dvrData.TenantId = &tenantID
-	}
-	if userID := req.GetUserId(); userID != "" {
-		dvrData.UserId = &userID
-	}
-	if streamID != "" {
-		dvrData.StreamId = &streamID
-	}
-
-	go func() {
-		if err := decklogClient.SendDVRLifecycle(dvrData); err != nil {
-			logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to emit DVR start failure event")
-		}
-	}()
-}
-
 // ServiceRegistrar is a function that registers additional gRPC services
 type ServiceRegistrar func(srv *grpc.Server)
 
@@ -1765,168 +1744,19 @@ func handleClipDone(done *pb.ClipDone, nodeID string, logger logging.Logger) {
 	_ = state.DefaultManager().ApplyClipDone(streamCtx(), requestID, status, filePath, sizeBytes, errorMsg, nodeID)
 }
 
-// handleArtifactDeleted processes artifact deletion notifications from Helmsman nodes
 func handleArtifactDeleted(deleted *pb.ArtifactDeleted, nodeID string, logger logging.Logger) {
-	clipHash := deleted.GetClipHash()
+	artifactHash := deleted.GetArtifactHash()
 	reason := deleted.GetReason()
 
 	logger.WithFields(logging.Fields{
-		"clip_hash": clipHash,
-		"reason":    reason,
-		"node_id":   nodeID,
+		"artifact_hash": artifactHash,
+		"reason":        reason,
+		"node_id":       nodeID,
 	}).Info("Artifact deleted on node")
 
-	// Update state manager
-	_ = state.DefaultManager().ApplyArtifactDeleted(streamCtx(), clipHash, nodeID)
-}
-
-// processDVRStartRequest handles DVR start requests from ingest Helmsman
-func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger logging.Logger) {
-	ctx := context.Background()
-	// Get DVR hash and stream_id from Commodore registration
-	dvrHash := req.GetDvrHash()
-	streamID := req.GetStreamId()
-	var artifactRoutingName string
-	if dvrHash == "" || streamID == "" {
-		if CommodoreClient == nil {
-			logger.Error("Commodore not available for DVR registration")
-			return
-		}
-		regCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		regReq := &pb.RegisterDVRRequest{
-			TenantId:           req.GetTenantId(),
-			UserId:             req.GetUserId(),
-			StreamInternalName: req.GetInternalName(),
-		}
-		// Pass retention from DVR config if available
-		if cfg := req.GetConfig(); cfg != nil && cfg.RetentionDays > 0 {
-			retentionTime := time.Now().AddDate(0, 0, int(cfg.RetentionDays))
-			regReq.RetentionUntil = timestamppb.New(retentionTime)
-		}
-		resp, err := CommodoreClient.RegisterDVR(regCtx, regReq)
-		if err != nil {
-			logger.WithError(err).Error("Failed to register DVR with Commodore")
-			return
-		}
-		dvrHash = resp.DvrHash
-		streamID = resp.GetStreamId()
-		artifactRoutingName = resp.GetInternalName()
+	if err := state.DefaultManager().ApplyArtifactDeleted(streamCtx(), artifactHash, nodeID); err != nil {
+		logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to apply artifact deletion to stream state")
 	}
-
-	logger.WithFields(logging.Fields{
-		"dvr_hash":      dvrHash,
-		"internal_name": req.GetInternalName(),
-		"node_id":       nodeID,
-	}).Info("Processing DVR start request")
-
-	// Tag ingest node stream instance with DVR requested
-	state.DefaultManager().UpdateStreamInstanceInfo(req.GetInternalName(), nodeID, map[string]any{
-		"dvr_status": "requested",
-		"dvr_hash":   dvrHash,
-	})
-
-	// Store artifact lifecycle state in foghorn.artifacts with context for Decklog events
-	_, err := db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifacts (
-			artifact_hash, artifact_type, stream_internal_name, internal_name, stream_id, tenant_id, user_id, status, request_id, format, created_at, updated_at
-		) VALUES ($1, 'dvr', $2, NULLIF($3,''), NULLIF($4,'')::uuid, NULLIF($5,'')::uuid, NULLIF($6,'')::uuid, 'requested', $7, 'm3u8', NOW(), NOW())
-		ON CONFLICT (artifact_hash) DO UPDATE SET
-			status = 'requested',
-			stream_internal_name = COALESCE(foghorn.artifacts.stream_internal_name, EXCLUDED.stream_internal_name),
-			internal_name = COALESCE(foghorn.artifacts.internal_name, EXCLUDED.internal_name),
-			stream_id = COALESCE(foghorn.artifacts.stream_id, EXCLUDED.stream_id),
-			tenant_id = COALESCE(foghorn.artifacts.tenant_id, EXCLUDED.tenant_id),
-			user_id = COALESCE(foghorn.artifacts.user_id, EXCLUDED.user_id),
-			format = COALESCE(foghorn.artifacts.format, EXCLUDED.format),
-			updated_at = NOW()`,
-		dvrHash, req.GetInternalName(), artifactRoutingName, streamID, req.GetTenantId(), req.GetUserId(), dvrHash)
-
-	if err != nil {
-		logger.WithFields(logging.Fields{
-			"dvr_hash": dvrHash,
-			"error":    err,
-		}).Error("Failed to store DVR artifact")
-		return
-	}
-
-	// Find available storage node with DVR capabilities
-	storageNodeID, storageNodeURL, err := findStorageNodeForDVR(req.GetTenantId(), logger)
-	if err != nil {
-		logger.WithFields(logging.Fields{
-			"dvr_hash": dvrHash,
-			"error":    err,
-		}).Error("Failed to find storage node for DVR")
-
-		// Update artifact as failed
-		if _, dbErr := db.ExecContext(ctx, `UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW() WHERE artifact_hash = $2`,
-			err.Error(), dvrHash); dbErr != nil {
-			logger.WithError(dbErr).Warn("Failed to update artifact status to failed")
-		}
-		emitIngestDVRFailure(dvrHash, streamID, err.Error(), req, logger)
-		return
-	}
-
-	// Construct source DTSC URL from ingest node outputs
-	sourceDTSCURL := BuildDTSCURI(nodeID, req.GetInternalName(), true, logger)
-
-	// Create enhanced DVR request for storage node
-	enhancedReq := &pb.DVRStartRequest{
-		DvrHash:       dvrHash,
-		InternalName:  req.GetInternalName(),
-		SourceBaseUrl: sourceDTSCURL,
-		RequestId:     req.GetRequestId(),
-		Config:        req.GetConfig(),
-		TenantId:      req.GetTenantId(),
-		UserId:        req.GetUserId(),
-		StreamId:      streamID,
-	}
-
-	// Store node assignment in foghorn.artifact_nodes
-	_, err = db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, base_url, cached_at)
-		VALUES ($1, $2, $3, NOW())
-		ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
-			base_url = $3,
-			last_seen_at = NOW()`,
-		dvrHash, storageNodeID, storageNodeURL)
-
-	if err != nil {
-		logger.WithFields(logging.Fields{
-			"dvr_hash": dvrHash,
-			"error":    err,
-		}).Error("Failed to store DVR node assignment")
-	}
-
-	// Forward enhanced request to storage node
-	if err := SendDVRStart(storageNodeID, enhancedReq); err != nil {
-		logger.WithFields(logging.Fields{
-			"dvr_hash":        dvrHash,
-			"storage_node_id": storageNodeID,
-			"error":           err,
-		}).Error("Failed to send DVR start to storage node")
-
-		// Update artifact as failed
-		if _, dbErr := db.ExecContext(ctx, `UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW() WHERE artifact_hash = $2`,
-			err.Error(), dvrHash); dbErr != nil {
-			logger.WithError(dbErr).Warn("Failed to update artifact status to failed")
-		}
-		emitIngestDVRFailure(dvrHash, streamID, err.Error(), req, logger)
-		return
-	}
-
-	logger.WithFields(logging.Fields{
-		"dvr_hash":        dvrHash,
-		"storage_node_id": storageNodeID,
-		"source_url":      sourceDTSCURL,
-	}).Info("DVR start request forwarded to storage node")
-
-	// Tag storage node stream instance with start info
-	state.DefaultManager().UpdateStreamInstanceInfo(req.GetInternalName(), storageNodeID, map[string]any{
-		"dvr_status":     "starting",
-		"dvr_hash":       dvrHash,
-		"dvr_source_uri": sourceDTSCURL,
-	})
 }
 
 // processDVRProgress handles DVR progress updates from storage Helmsman
@@ -1966,112 +1796,52 @@ func processDVRStopped(stopped *pb.DVRStopped, storageNodeID string, logger logg
 		"error":            errorMsg,
 	}).Info("DVR recording completed")
 
-	// Map Helmsman status to DB status
-	var finalStatus string
-	switch status {
-	case "success":
-		finalStatus = "completed"
-	case "stopped":
-		finalStatus = "stopped"
-	case "deleted":
-		finalStatus = "deleted"
-	default:
-		finalStatus = "failed"
-	}
-	_ = state.DefaultManager().ApplyDVRStopped(streamCtx(), dvrHash, finalStatus, int64(durationSeconds), uint64(sizeBytes), manifestPath, errorMsg, storageNodeID)
-
-	// Emit analytics for deletion (after Helmsman confirmation)
-	if finalStatus == "deleted" && dvrDeletedHandler != nil {
-		go dvrDeletedHandler(dvrHash, uint64(sizeBytes), storageNodeID)
-	}
-	if finalStatus != "deleted" && dvrStoppedHandler != nil {
-		go dvrStoppedHandler(dvrHash, finalStatus, storageNodeID, uint64(sizeBytes), manifestPath, errorMsg)
-	}
-}
-
-// findStorageNodeForDVR finds an available storage node with DVR capabilities for the given tenant
-func findStorageNodeForDVR(tenantID string, logger logging.Logger) (string, string, error) {
-	if loadBalancerInstance == nil {
-		return "", "", fmt.Errorf("load balancer not available")
+	// Sidecar reports its local view; Foghorn drives the canonical state
+	// machine through FinalizeDVR(). The "stopped" alias maps to "completed"
+	// for the new state machine; "deleted" passes through unchanged so the
+	// retention cleanup path still works.
+	if status == "deleted" {
+		if applyErr := state.DefaultManager().ApplyDVRStopped(streamCtx(), dvrHash, "deleted", int64(durationSeconds), uint64(sizeBytes), manifestPath, errorMsg, storageNodeID); applyErr != nil {
+			logger.WithError(applyErr).WithField("dvr_hash", dvrHash).Warn("ApplyDVRStopped(deleted) failed")
+		}
+		if dvrDeletedHandler != nil {
+			go dvrDeletedHandler(dvrHash, uint64(sizeBytes), storageNodeID)
+		}
+		return
 	}
 
-	nodes := loadBalancerInstance.GetNodes()
-
-	// Find nodes with storage capabilities
-	var bestNode *balancerNode
-	var bestScore uint64
-
-	for baseURL, node := range nodes {
-		// Skip non-storage nodes
-		if !node.CapStorage {
-			continue
-		}
-
-		// Skip inactive nodes
-		if !node.IsHealthy {
-			continue
-		}
-
-		// Calculate a simple score based on available resources
-		// Higher score is better (more available resources)
-		storageScore := uint64(0)
-
-		// Factor in available storage space
-		capacityBytes := node.StorageCapacityBytes
-		usedBytes := node.StorageUsedBytes
-
-		// Use real-time disk usage if available
-		if node.DiskTotalBytes > 0 {
-			capacityBytes = node.DiskTotalBytes
-			usedBytes = node.DiskUsedBytes
-		}
-
-		if capacityBytes > usedBytes {
-			availableStorage := capacityBytes - usedBytes
-			storageScore += availableStorage / (1024 * 1024 * 1024) // Convert to GB for scoring
-		}
-
-		// Factor in CPU availability (lower CPU usage = higher score)
-		cpu := uint64(node.CPU)
-		if cpu < 800 { // Less than 80% CPU usage (assuming tenths)
-			storageScore += (1000 - cpu) / 10 // 0-20 point bonus
-		}
-
-		// Factor in RAM availability
-		ramMax := uint64(node.RAMMax)
-		ramCurrent := uint64(node.RAMCurrent)
-		if ramMax > ramCurrent {
-			availableRAM := ramMax - ramCurrent
-			storageScore += availableRAM / 1024 // Convert MB to GB-ish for scoring
-		}
-
-		if storageScore > bestScore {
-			bestScore = storageScore
-			bestNode = &balancerNode{
-				BaseURL: baseURL,
-				NodeID:  node.NodeID,
+	// Drive the idempotent finalize transition. FinalizeDVR retries bounded
+	// pending uploads, classifies any remaining gaps, closes the current
+	// chapter as VOD, and transitions the artifact to a terminal state. The
+	// sidecar's status field here is advisory; Foghorn's classification is
+	// authoritative.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		final, err := FinalizeDVR(ctx, dvrHash, FinalizeOptions{
+			ReportedStatus:  status,
+			ReportedError:   errorMsg,
+			DurationSeconds: int64(durationSeconds),
+			SizeBytes:       uint64(sizeBytes),
+			StorageNodeID:   storageNodeID,
+		})
+		if err != nil {
+			if final.ArtifactStatus == "" {
+				logger.WithError(err).WithField("dvr_hash", dvrHash).Error("FinalizeDVR failed")
+				return
 			}
+			logger.WithError(err).WithFields(logging.Fields{
+				"dvr_hash":     dvrHash,
+				"final_status": final.ArtifactStatus,
+			}).Warn("FinalizeDVR completed with follow-up error")
 		}
-	}
-
-	if bestNode == nil {
-		return "", "", fmt.Errorf("no available storage nodes found")
-	}
-
-	logger.WithFields(logging.Fields{
-		"tenant_id": tenantID,
-		"node_id":   bestNode.NodeID,
-		"base_url":  bestNode.BaseURL,
-		"score":     bestScore,
-	}).Info("Selected storage node for DVR")
-
-	return bestNode.NodeID, bestNode.BaseURL, nil
-}
-
-// balancerNode is a helper struct for node selection
-type balancerNode struct {
-	BaseURL string
-	NodeID  string
+		if applyErr := state.DefaultManager().ApplyDVRStopped(streamCtx(), dvrHash, final.ArtifactStatus, int64(durationSeconds), uint64(sizeBytes), final.ManifestPath, errorMsg, storageNodeID); applyErr != nil {
+			logger.WithError(applyErr).WithField("dvr_hash", dvrHash).Warn("ApplyDVRStopped after FinalizeDVR failed")
+		}
+		if dvrStoppedHandler != nil {
+			go dvrStoppedHandler(dvrHash, final.ArtifactStatus, storageNodeID, uint64(sizeBytes), final.ManifestPath, errorMsg)
+		}
+	}()
 }
 
 // ResolveClipHash implements the ResolveClipHash RPC method
@@ -2109,174 +1879,6 @@ type LoadBalancerInterface interface {
 // SetLoadBalancer allows handlers package to inject the load balancer instance
 func SetLoadBalancer(lb LoadBalancerInterface) {
 	loadBalancerInstance = lb
-}
-
-// processDVRReadyRequest handles DVR readiness checks from storage Helmsman
-func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
-	dvrHash := req.GetDvrHash()
-
-	logger.WithFields(logging.Fields{
-		"dvr_hash":           dvrHash,
-		"requesting_node_id": requestingNodeID,
-	}).Info("Processing DVR readiness request")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	// Look up the DVR artifact in database to get source stream info
-	var internalName string
-	err := db.QueryRowContext(ctx, `
-		SELECT stream_internal_name
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr'`,
-		dvrHash).Scan(&internalName)
-
-	if err != nil {
-		logger.WithFields(logging.Fields{
-			"dvr_hash": dvrHash,
-			"error":    err,
-		}).Error("DVR request not found in database")
-
-		// Send not ready response
-		response := &pb.DVRReadyResponse{
-			DvrHash: dvrHash,
-			Ready:   false,
-			Reason:  "dvr_request_not_found",
-		}
-		sendDVRReadyResponse(stream, response, logger)
-		return
-	}
-
-	// Check stream health status
-	streamState := state.DefaultManager().GetStreamState(internalName)
-
-	if streamState == nil {
-		logger.WithFields(logging.Fields{
-			"dvr_hash":      dvrHash,
-			"internal_name": internalName,
-		}).Info("Stream health not tracked yet")
-
-		response := &pb.DVRReadyResponse{
-			DvrHash: dvrHash,
-			Ready:   false,
-			Reason:  "stream_not_tracked",
-		}
-		sendDVRReadyResponse(stream, response, logger)
-		return
-	}
-
-	// Check if stream is ready for DVR (healthy and buffer full/recovering)
-	isReady := !streamState.HasIssues &&
-		(streamState.BufferState == "FULL" || streamState.BufferState == "RECOVER") &&
-		streamState.Status == "live"
-
-	if !isReady {
-		var reason string
-		if streamState.HasIssues {
-			reason = "stream_unhealthy"
-		} else if streamState.Status != "live" {
-			reason = "stream_offline"
-		} else {
-			reason = "stream_booting"
-		}
-
-		logger.WithFields(logging.Fields{
-			"dvr_hash":      dvrHash,
-			"internal_name": internalName,
-			"has_issues":    streamState.HasIssues,
-			"buffer_state":  streamState.BufferState,
-			"status":        streamState.Status,
-			"reason":        reason,
-		}).Info("Stream not ready for DVR")
-
-		response := &pb.DVRReadyResponse{
-			DvrHash: dvrHash,
-			Ready:   false,
-			Reason:  reason,
-		}
-		sendDVRReadyResponse(stream, response, logger)
-		return
-	}
-
-	// Stream is ready! Build source URI and potentially mutate config
-	sourceNodeID, _, ok := GetStreamSource(internalName)
-	if !ok {
-		logger.WithFields(logging.Fields{
-			"dvr_hash":      dvrHash,
-			"internal_name": internalName,
-		}).Warn("Stream ready but no source node available for DVR")
-		response := &pb.DVRReadyResponse{
-			DvrHash: dvrHash,
-			Ready:   false,
-			Reason:  "stream_source_missing",
-		}
-		sendDVRReadyResponse(stream, response, logger)
-		return
-	}
-	sourceURI := BuildDTSCURI(sourceNodeID, internalName, true, logger)
-
-	// Tag storage node (requesting node) instance as ready with source URI
-	state.DefaultManager().UpdateStreamInstanceInfo(internalName, requestingNodeID, map[string]any{
-		"dvr_status":     "ready",
-		"dvr_source_uri": sourceURI,
-	})
-
-	// Default DVR config - recording_config would come from Commodore stream settings
-	// TODO: Fetch config from Commodore.GetStreamConfig if needed
-	config := &pb.DVRConfig{
-		Enabled:         true,
-		RetentionDays:   30,
-		Format:          "ts",
-		SegmentDuration: 6,
-	}
-
-	logger.WithFields(logging.Fields{
-		"dvr_hash":      dvrHash,
-		"internal_name": internalName,
-		"source_uri":    sourceURI,
-		"is_ready":      true,
-	}).Info("Stream ready for DVR recording")
-
-	response := &pb.DVRReadyResponse{
-		DvrHash:   dvrHash,
-		Ready:     true,
-		SourceUri: sourceURI,
-		Config:    config,
-		Reason:    "stream_ready",
-	}
-	sendDVRReadyResponse(stream, response, logger)
-
-	// Update artifact status to indicate storage node is starting recording
-	updateCtx, updateCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer updateCancel()
-
-	_, err = db.ExecContext(updateCtx, `
-		UPDATE foghorn.artifacts
-		SET status = 'starting', started_at = NOW(), updated_at = NOW()
-		WHERE artifact_hash = $1`,
-		dvrHash)
-
-	if err != nil {
-		logger.WithFields(logging.Fields{
-			"dvr_hash": dvrHash,
-			"error":    err,
-		}).Error("Failed to update DVR request status to starting")
-	}
-}
-
-// sendDVRReadyResponse sends a DVRReadyResponse back to the requesting storage node
-func sendDVRReadyResponse(stream pb.HelmsmanControl_ConnectServer, response *pb.DVRReadyResponse, logger logging.Logger) {
-	msg := &pb.ControlMessage{
-		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_DvrReadyResponse{DvrReadyResponse: response},
-	}
-
-	if err := stream.Send(msg); err != nil {
-		logger.WithFields(logging.Fields{
-			"dvr_hash": response.DvrHash,
-			"error":    err,
-		}).Error("Failed to send DVR ready response")
-	}
 }
 
 // getDTSCOutputURI constructs the DTSC output URI for a given node using MistServer outputs configuration
@@ -3343,6 +2945,7 @@ func updatePhaseAcceptsApplyResult(phase string) bool {
 type S3ClientInterface interface {
 	GeneratePresignedPUT(key string, expiry time.Duration) (string, error)
 	GeneratePresignedGET(key string, expiry time.Duration) (string, error)
+	PutObject(ctx context.Context, key string, body []byte, contentType string) error
 	ListPrefix(ctx context.Context, prefix string) ([]string, error)
 	Delete(ctx context.Context, key string) error
 	DeleteByURL(ctx context.Context, s3URL string) error
@@ -3481,7 +3084,7 @@ func thumbnailContentType(fileName string) string {
 // matches the local-mint code paths' S3 key shapes for each freeze asset
 // type. Returns nil for unsupported asset types so the caller can reject
 // with a clear reason.
-func buildFreezeMintRequest(assetType, assetHash, dvrHash, tenantID, requestingCluster, targetCluster, localPath string, filenames []string) *pb.MintStorageURLsRequest {
+func buildFreezeMintRequest(assetType, assetHash, tenantID, requestingCluster, targetCluster, localPath string) *pb.MintStorageURLsRequest {
 	base := &pb.MintStorageURLsRequest{
 		TenantId:          tenantID,
 		RequestingCluster: requestingCluster,
@@ -3497,32 +3100,6 @@ func buildFreezeMintRequest(assetType, assetHash, dvrHash, tenantID, requestingC
 		base.ArtifactKey = assetHash
 		base.Op = pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE
 		base.ContentType = "video/" + format
-		return base
-	case "dvr":
-		base.ArtifactType = "dvr"
-		base.ArtifactKey = assetHash
-		base.Op = pb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET
-		base.SegmentFilenames = filenames
-		return base
-	case "dvr_segment", "dvr_manifest":
-		filename := ""
-		if _, after, ok := strings.Cut(assetHash, "/"); ok {
-			filename = after
-		}
-		if filename == "" && len(filenames) > 0 {
-			filename = filenames[0]
-		}
-		if filename == "" {
-			return nil
-		}
-		base.ArtifactType = assetType
-		base.ArtifactKey = dvrHash + "/" + filename
-		base.Op = pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE
-		if assetType == "dvr_manifest" {
-			base.ContentType = "application/x-mpegURL"
-		} else {
-			base.ContentType = "video/mp2t"
-		}
 		return base
 	case "vod":
 		format := "mp4"
@@ -3670,17 +3247,18 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// For DVR segment/manifest incremental sync, resolve to the parent DVR artifact.
-	// The artifacts table stores one row per DVR with artifact_type='dvr', but Helmsman
-	// sends dvr_segment/dvr_manifest with compound hashes like "dvrHash/filename".
+	if assetType == "dvr" || assetType == "dvr_segment" || assetType == "dvr_manifest" {
+		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+			RequestId: requestID,
+			AssetHash: assetHash,
+			Approved:  false,
+			Reason:    "dvr_freeze_unsupported",
+		}, logger)
+		return
+	}
+
 	lookupHash := assetHash
 	lookupType := assetType
-	if assetType == "dvr_segment" || assetType == "dvr_manifest" {
-		lookupType = "dvr"
-		if before, _, ok := strings.Cut(assetHash, "/"); ok {
-			lookupHash = before
-		}
-	}
 
 	var streamName string
 	var originCluster sql.NullString
@@ -3690,14 +3268,6 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = $2`,
 		lookupHash, lookupType).Scan(&streamName, &originCluster, &syncStatus)
-
-	// For DVR segment/manifest incremental sync, assetHash is "{dvr_hash}/{filename}"
-	dvrHash := assetHash
-	if assetType == "dvr_segment" || assetType == "dvr_manifest" {
-		if before, _, ok := strings.Cut(assetHash, "/"); ok {
-			dvrHash = before
-		}
-	}
 
 	// Resolve tenant (and stream/origin if DB row was missing) via Commodore.
 	// origin_cluster_id is required by the storage resolver's origin-first
@@ -3711,14 +3281,6 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		switch assetType {
 		case "clip":
 			if resp, resolveErr := CommodoreClient.ResolveClipHash(resolveCtx, assetHash); resolveErr == nil && resp.Found {
-				tenantID = resp.TenantId
-				if streamName == "" {
-					streamName = resp.StreamInternalName
-				}
-				commodoreOrigin = resp.OriginClusterId
-			}
-		case "dvr", "dvr_segment", "dvr_manifest":
-			if resp, resolveErr := CommodoreClient.ResolveDVRHash(resolveCtx, dvrHash); resolveErr == nil && resp.Found {
 				tenantID = resp.TenantId
 				if streamName == "" {
 					streamName = resp.StreamInternalName
@@ -3877,7 +3439,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 			}, logger)
 			return
 		}
-		mintReq := buildFreezeMintRequest(assetType, assetHash, dvrHash, tenantID, localClusterID, storageCluster, localPath, req.GetFilenames())
+		mintReq := buildFreezeMintRequest(assetType, assetHash, tenantID, localClusterID, storageCluster, localPath)
 		if mintReq == nil {
 			sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
 				RequestId: requestID,
@@ -3917,10 +3479,8 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		return
 	}
 
-	// StorageMintLocal — proceed with the existing per-type code path
-	// against the local s3Client. The s3Client nil-check that used to
-	// fire at the top of the function lives here now: local-mint
-	// requires a configured client; federation does not.
+	// StorageMintLocal requires a configured local S3 client; federation
+	// minting above uses the origin cluster's storage surface instead.
 	if s3Client == nil {
 		logger.Warn("S3 client not configured, rejecting freeze request")
 		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
@@ -3932,7 +3492,8 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		return
 	}
 
-	if assetType == "clip" {
+	switch assetType {
+	case "clip":
 		// Single file - extract format from path
 		format := "mp4"
 		if idx := strings.LastIndex(localPath, "."); idx != -1 {
@@ -3951,64 +3512,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 			return
 		}
 		response.PresignedPutUrl = presignedURL
-	} else if assetType == "dvr" {
-		// DVR directory - need presigned URLs for all segments
-		s3Prefix := s3Client.BuildDVRS3Key(tenantID, streamName, assetHash)
-		response.SegmentUrls = make(map[string]string)
-
-		// Iterate over filenames provided by Helmsman
-		for _, filename := range req.GetFilenames() {
-			// Construct full S3 key for this file (relative to DVR prefix)
-			// filename is relative, e.g., "segments/0_0.ts" or "hash.m3u8"
-			s3Key := s3Prefix + "/" + filename
-
-			url, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
-			if err != nil {
-				logger.WithError(err).WithField("filename", filename).Error("Failed to generate presigned URL")
-				continue
-			}
-			response.SegmentUrls[filename] = url
-		}
-
-		logger.WithFields(logging.Fields{
-			"asset_hash": assetHash,
-			"s3_prefix":  s3Prefix,
-			"file_count": len(response.SegmentUrls),
-		}).Info("Generated presigned URLs for DVR freeze")
-	} else if assetType == "dvr_segment" || assetType == "dvr_manifest" {
-		// Incremental DVR sync - single segment or manifest file
-		// assetHash is "{dvr_hash}/{filename}", extract filename
-		filename := ""
-		if _, after, ok := strings.Cut(assetHash, "/"); ok {
-			filename = after
-		}
-		if filename == "" && len(req.GetFilenames()) > 0 {
-			filename = req.GetFilenames()[0]
-		}
-		s3Prefix := s3Client.BuildDVRS3Key(tenantID, streamName, dvrHash)
-		s3Key := s3Prefix + "/" + filename
-
-		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
-		if err != nil {
-			logger.WithError(err).Error("Failed to generate presigned PUT URL for DVR segment")
-			sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
-				RequestId: requestID,
-				AssetHash: assetHash,
-				Approved:  false,
-				Reason:    "presign_failed",
-			}, logger)
-			return
-		}
-		response.PresignedPutUrl = presignedURL
-		response.SegmentUrls = map[string]string{filename: presignedURL}
-
-		logger.WithFields(logging.Fields{
-			"asset_hash": assetHash,
-			"dvr_hash":   dvrHash,
-			"filename":   filename,
-			"s3_key":     s3Key,
-		}).Info("Generated presigned URL for DVR incremental sync")
-	} else if assetType == "vod" {
+	case "vod":
 		// VOD single file - extract format from path
 		format := "mp4"
 		if idx := strings.LastIndex(localPath, "."); idx != -1 {
@@ -4035,19 +3539,14 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		}).Info("Generated presigned URL for VOD freeze")
 	}
 
-	// Update artifact to mark as freezing (skip for incremental segment sync)
-	if assetType != "dvr_segment" && assetType != "dvr_manifest" {
-		if _, dbErr := db.ExecContext(context.Background(), `UPDATE foghorn.artifacts SET storage_location = 'freezing', sync_status = 'in_progress', updated_at = NOW() WHERE artifact_hash = $1`, assetHash); dbErr != nil {
-			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to mark artifact as freezing")
-		}
+	if _, dbErr := db.ExecContext(context.Background(), `UPDATE foghorn.artifacts SET storage_location = 'freezing', sync_status = 'in_progress', updated_at = NOW() WHERE artifact_hash = $1`, assetHash); dbErr != nil {
+		logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to mark artifact as freezing")
 	}
 
 	// Persist storage_cluster_id when the resolver picked a cluster other
 	// than origin so the read side can reconstruct the right Chandler /
-	// PrepareArtifact target. Skip for incremental DVR sync — those rows
-	// inherit the parent DVR's storage_cluster_id which was set on the
-	// initial freeze.
-	if assetType != "dvr_segment" && assetType != "dvr_manifest" && storageCluster != "" && storageCluster != originClusterID {
+	// PrepareArtifact target.
+	if storageCluster != "" && storageCluster != originClusterID {
 		persistFreezeStorageCluster(context.Background(), lookupHash, tenantID, storageCluster)
 	}
 
@@ -5008,6 +4507,10 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 		return "", NewDefrostingError(10, "defrost already in progress")
 	}
 
+	if artifactType == "dvr" {
+		return "", fmt.Errorf("DVR archive playback requires chapter context; use the chapter API (dvrChapter)")
+	}
+
 	result, err := db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
 		SET storage_location = 'defrosting',
@@ -5075,36 +4578,18 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 
 	if useRemoteURLs {
 		// Remote defrost: use presigned URLs supplied by the origin cluster
-		if artifactType == "dvr" {
-			req.SegmentUrls = remoteSegmentURLs
-			req.Streaming = true
-			dvrStreamID := ""
-			if CommodoreClient != nil {
-				if resp, err := CommodoreClient.ResolveDVRHash(ctx, assetHash); err == nil && resp.Found {
-					dvrStreamID = resp.StreamId
-				}
-			}
-			if dvrStreamID == "" && streamID.Valid && streamID.String != "" {
-				dvrStreamID = streamID.String
-			}
-			if dvrStreamID == "" {
-				return "", fmt.Errorf("could not resolve stream_id for DVR asset")
-			}
-			req.LocalPath = filepath.Join(storageBase, "dvr", dvrStreamID, assetHash)
-		} else {
-			req.PresignedGetUrl = remoteURL
-			f := format
-			if f == "" {
-				f = "mp4"
-			}
-			switch artifactType {
-			case "clip":
-				req.LocalPath = filepath.Join(storageBase, "clips", streamName, fmt.Sprintf("%s.%s", assetHash, f))
-			case "vod":
-				req.LocalPath = filepath.Join(storageBase, "vod", fmt.Sprintf("%s.%s", assetHash, f))
-			default:
-				return "", fmt.Errorf("unsupported asset type for remote defrost: %s", assetType)
-			}
+		req.PresignedGetUrl = remoteURL
+		f := format
+		if f == "" {
+			f = "mp4"
+		}
+		switch artifactType {
+		case "clip":
+			req.LocalPath = filepath.Join(storageBase, "clips", streamName, fmt.Sprintf("%s.%s", assetHash, f))
+		case "vod":
+			req.LocalPath = filepath.Join(storageBase, "vod", fmt.Sprintf("%s.%s", assetHash, f))
+		default:
+			return "", fmt.Errorf("unsupported asset type for remote defrost: %s", assetType)
 		}
 	} else if artifactType == "clip" {
 		// Single file defrost
@@ -5119,44 +4604,6 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 		}
 		req.PresignedGetUrl = presignedURL
 		req.LocalPath = filepath.Join(storageBase, "clips", streamName, fmt.Sprintf("%s.%s", assetHash, clipFormat))
-	} else if artifactType == "dvr" {
-		// DVR defrost - get segment list from S3 and generate URLs
-		// S3 key uses internal_name (stored in foghorn.artifacts)
-		s3Prefix := s3Client.BuildDVRS3Key(tenantID, streamName, assetHash)
-		segments, err := s3Client.ListPrefix(ctx, s3Prefix)
-		if err != nil {
-			return "", fmt.Errorf("failed to list DVR segments: %w", err)
-		}
-
-		req.SegmentUrls = make(map[string]string)
-		req.Streaming = true
-
-		for _, segKey := range segments {
-			presignedURL, err := s3Client.GeneratePresignedGET(segKey, expiry)
-			if err != nil {
-				logger.WithError(err).WithField("segment", segKey).Warn("Failed to generate presigned URL for segment")
-				continue
-			}
-			segName := segKey
-			if idx := strings.LastIndex(segKey, "/"); idx != -1 {
-				segName = segKey[idx+1:]
-			}
-			req.SegmentUrls[segName] = presignedURL
-		}
-
-		dvrStreamID := ""
-		if CommodoreClient != nil {
-			if resp, err := CommodoreClient.ResolveDVRHash(ctx, assetHash); err == nil && resp.Found {
-				dvrStreamID = resp.StreamId
-			}
-		}
-		if dvrStreamID == "" && streamID.Valid && streamID.String != "" {
-			dvrStreamID = streamID.String
-		}
-		if dvrStreamID == "" {
-			return "", fmt.Errorf("could not resolve stream_id for DVR asset")
-		}
-		req.LocalPath = filepath.Join(storageBase, "dvr", dvrStreamID, assetHash)
 	} else if artifactType == "vod" {
 		// VOD defrost - single file
 		if !s3Key.Valid || s3Key.String == "" {

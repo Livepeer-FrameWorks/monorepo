@@ -3,9 +3,6 @@ package handlers
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -111,68 +108,6 @@ segments/chunk001.ts`
 	}
 	if m.Segments[0].Name != "chunk000.ts" {
 		t.Fatalf("expected base name extracted, got %s", m.Segments[0].Name)
-	}
-}
-
-func TestCreateLiveManifest(t *testing.T) {
-	sm := &StorageManager{logger: logging.NewLogger()}
-	manifest := sm.createLiveManifest("test-hash", 8)
-
-	if !strings.Contains(manifest, "#EXTM3U") {
-		t.Fatal("missing EXTM3U tag")
-	}
-	if !strings.Contains(manifest, "#EXT-X-VERSION:3") {
-		t.Fatal("missing VERSION tag")
-	}
-	if !strings.Contains(manifest, "#EXT-X-TARGETDURATION:8") {
-		t.Fatal("missing or wrong TARGETDURATION")
-	}
-	if !strings.Contains(manifest, "#EXT-X-PLAYLIST-TYPE:EVENT") {
-		t.Fatal("missing PLAYLIST-TYPE")
-	}
-}
-
-func TestAppendSegmentToManifest(t *testing.T) {
-	tmpDir := t.TempDir()
-	manifestPath := filepath.Join(tmpDir, "test.m3u8")
-
-	if err := os.WriteFile(manifestPath, []byte("#EXTM3U\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	sm := &StorageManager{logger: logging.NewLogger()}
-	sm.appendSegmentToManifest(manifestPath, "chunk000.ts", 6.0)
-
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	content := string(data)
-	if !strings.Contains(content, "#EXTINF:6.000,") {
-		t.Fatalf("expected EXTINF tag, got:\n%s", content)
-	}
-	if !strings.Contains(content, "segments/chunk000.ts") {
-		t.Fatalf("expected segment path, got:\n%s", content)
-	}
-}
-
-func TestFinalizeManifest(t *testing.T) {
-	tmpDir := t.TempDir()
-	manifestPath := filepath.Join(tmpDir, "test.m3u8")
-
-	if err := os.WriteFile(manifestPath, []byte("#EXTM3U\n#EXTINF:6.000,\nseg0.ts\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	sm := &StorageManager{logger: logging.NewLogger()}
-	sm.finalizeManifest(manifestPath)
-
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), "#EXT-X-ENDLIST") {
-		t.Fatalf("expected ENDLIST tag, got:\n%s", string(data))
 	}
 }
 

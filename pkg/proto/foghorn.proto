@@ -7,11 +7,9 @@ option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto";
 import "common.proto";
 import "shared.proto";
 
-// =============================================================================
 // FOGHORN CONTROL PLANE SERVICES
 // These are control-plane operations exposed by Foghorn for Commodore to call.
 // Media-plane operations (MistServer control, stream state) remain in ipc.proto.
-// =============================================================================
 
 // ClipService handles clip creation and management
 service ClipControlService {
@@ -29,6 +27,89 @@ service DVRControlService {
   rpc StopDVR(shared.StopDVRRequest) returns (shared.StopDVRResponse);
   // DeleteDVR deletes a DVR recording and its files
   rpc DeleteDVR(shared.DeleteDVRRequest) returns (shared.DeleteDVRResponse);
+
+  // Chapters are virtual VOD-shaped views over foghorn.dvr_segments. The
+  // sweeper materializes the artifact's default chapter mode automatically;
+  // these RPCs cover ad-hoc retrieval (any mode), pagination for player UI,
+  // and policy changes from Gateway/Commodore.
+
+  // RetrieveDVRChapter materializes (cache-on-request) and returns the
+  // chapter manifest's S3 location. UTC-only — civil-time chapters submit
+  // mode=explicit_range with caller-resolved (start_ms, end_ms).
+  rpc RetrieveDVRChapter(RetrieveDVRChapterRequest) returns (RetrieveDVRChapterResponse);
+
+  // ListDVRChapters paginates chapter rows for player navigation. Bounded
+  // by page_size (default 200, max 1000) per the bounded-operations
+  // invariant for unbounded artifact lifetime.
+  rpc ListDVRChapters(ListDVRChaptersRequest) returns (ListDVRChaptersResponse);
+
+  // SetDVRChapterPolicy updates the artifact's default chapter mode (the
+  // one the sweeper materializes automatically). Changing policy mid-
+  // recording closes the in-flight current chapter as VOD with ENDLIST and
+  // starts the new current chapter under the new mode. Old chapter
+  // manifests remain readable until cache expiry / retention cleanup so
+  // in-flight viewers are not interrupted.
+  rpc SetDVRChapterPolicy(SetDVRChapterPolicyRequest) returns (SetDVRChapterPolicyResponse);
+}
+
+message RetrieveDVRChapterRequest {
+  string dvr_artifact_id = 1;
+  string mode = 2;                   // 'window_sized_chapters' | 'fixed_interval' | 'explicit_range'
+  int32 interval_seconds = 3;        // required for fixed_interval
+  int64 start_ms = 4;                // UTC epoch ms
+  int64 end_ms = 5;                  // UTC epoch ms
+  string tenant_id = 6;              // for tenant-isolation enforcement
+}
+
+message RetrieveDVRChapterResponse {
+  string chapter_id = 1;
+  string manifest_s3_key = 2;        // e.g. dvr/{tenant}/{stream}/{artifact}/chapters/{chapter_id}.m3u8
+  string manifest_url = 3;           // presigned GET, optional convenience for direct fetch
+  bool is_current = 4;               // EVENT-shaped (no ENDLIST) vs VOD-shaped
+  bool has_gaps = 5;
+  int32 segment_count = 6;
+  reserved 7;
+  reserved "error";
+}
+
+message ListDVRChaptersRequest {
+  string dvr_artifact_id = 1;
+  string mode = 2;                   // restrict to chapters of this mode; empty = all
+  int32 interval_seconds = 3;
+  int64 range_start_ms = 4;          // 0 = no lower bound
+  int64 range_end_ms = 5;            // 0 = no upper bound
+  int32 page_size = 6;               // default 200, max 1000
+  string page_token = 7;             // keyset cursor (start_ms as decimal text)
+  string tenant_id = 8;
+}
+
+message ChapterRef {
+  string chapter_id = 1;
+  string mode = 2;
+  int32 interval_seconds = 3;
+  int64 start_ms = 4;
+  int64 end_ms = 5;
+  bool is_current = 6;
+  string manifest_s3_key = 7;
+  bool has_gaps = 8;
+  int32 segment_count = 9;
+}
+
+message ListDVRChaptersResponse {
+  repeated ChapterRef chapters = 1;
+  string next_page_token = 2;        // empty when no more pages
+}
+
+message SetDVRChapterPolicyRequest {
+  string dvr_artifact_id = 1;
+  string mode = 2;                   // 'window_sized_chapters' | 'fixed_interval' | '' (clear)
+  int32 interval_seconds = 3;        // required for fixed_interval
+  string tenant_id = 4;
+}
+
+message SetDVRChapterPolicyResponse {
+  bool success = 1;
+  string message = 2;
 }
 
 // ViewerControlService handles viewer and ingest endpoint resolution

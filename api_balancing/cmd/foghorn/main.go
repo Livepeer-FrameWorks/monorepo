@@ -912,6 +912,18 @@ func main() {
 	retentionJob.Start()
 	defer retentionJob.Stop()
 
+	// DVR chapter sweeper. Materializes the active current-chapter manifest
+	// of every recording DVR every minute and rotates at boundary close.
+	// Foghorn-owned writes only — the sidecar never writes archive playlists.
+	chapterSweeper := jobs.NewChapterSweeper(jobs.ChapterSweeperConfig{
+		DB:                     db,
+		Logger:                 logger,
+		Interval:               1 * time.Minute,
+		RebuildIntervalSeconds: 60,
+	})
+	chapterSweeper.Start()
+	defer chapterSweeper.Stop()
+
 	// Start stale defrost cleanup job (resets stuck defrosting artifacts)
 	staleDefrostJob := jobs.NewStaleDefrostCleanupJob(jobs.StaleDefrostCleanupConfig{
 		DB:         db,

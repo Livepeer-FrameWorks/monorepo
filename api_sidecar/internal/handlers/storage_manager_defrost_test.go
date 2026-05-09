@@ -354,62 +354,7 @@ func TestDefrostVOD_HappyPath(t *testing.T) {
 
 // --- DefrostDVR ---
 
-func TestDefrostDVR_AlreadyLocal(t *testing.T) {
-	client := &configurablePresignedClient{}
-	sm := newDefrostTestSM(t, client)
-
-	// Create DVR directory with manifest
-	dvrDir := filepath.Join(sm.basePath, "dvr", "stream-1", "hash-dvr-local")
-	if err := os.MkdirAll(dvrDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	manifest := "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6.000,\nsegments/chunk000.ts\n#EXT-X-ENDLIST\n"
-	manifestPath := filepath.Join(dvrDir, "hash-dvr-local.m3u8")
-	if err := os.WriteFile(manifestPath, []byte(manifest), 0644); err != nil {
-		t.Fatal(err)
-	}
-	segDir := filepath.Join(dvrDir, "segments")
-	if err := os.MkdirAll(segDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(segDir, "chunk000.ts"), make([]byte, 5000), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	var completedStatus string
-	sm.sendDefrostComplete = func(_, _, status, _ string, _ uint64, _ string) error {
-		completedStatus = status
-		return nil
-	}
-
-	req := &pb.DefrostRequest{
-		RequestId: "req-dvr-local",
-		AssetHash: "hash-dvr-local",
-		AssetType: "dvr",
-		LocalPath: dvrDir,
-	}
-
-	result, err := sm.DefrostDVR(context.Background(), req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Status != "success" {
-		t.Fatalf("expected success, got %s", result.Status)
-	}
-	if completedStatus != "success" {
-		t.Fatalf("expected sendDefrostComplete with success, got %s", completedStatus)
-	}
-	// Should report total bytes from walk
-	if result.SizeBytes == 0 {
-		t.Fatal("expected non-zero size from walk")
-	}
-	// No download
-	if atomic.LoadInt64(&client.downloadFileCalls) != 0 {
-		t.Fatal("expected no download for already-local DVR")
-	}
-}
-
-func TestDefrostDVR_NoSegmentURLs(t *testing.T) {
+func TestDefrostDVR_RequiresChapterRefs(t *testing.T) {
 	client := &configurablePresignedClient{}
 	sm := newDefrostTestSM(t, client)
 
@@ -420,221 +365,24 @@ func TestDefrostDVR_NoSegmentURLs(t *testing.T) {
 	}
 
 	req := &pb.DefrostRequest{
-		RequestId:   "req-dvr-noseg",
-		AssetHash:   "hash-dvr-noseg",
-		AssetType:   "dvr",
-		LocalPath:   filepath.Join(sm.basePath, "dvr", "stream-1", "hash-dvr-noseg"),
-		SegmentUrls: map[string]string{}, // empty
+		RequestId: "req-dvr-no-chapter",
+		AssetHash: "hash-dvr-no-chapter",
+		AssetType: "dvr",
+		LocalPath: filepath.Join(sm.basePath, "dvr", "stream-1", "hash-dvr-no-chapter"),
 	}
 
 	_, err := sm.DefrostDVR(context.Background(), req)
 	if err == nil {
-		t.Fatal("expected error for empty segment URLs")
+		t.Fatal("expected error for DVR defrost without chapter refs")
 	}
-	if !strings.Contains(err.Error(), "no segment URLs") {
-		t.Fatalf("expected 'no segment URLs' error, got: %s", err.Error())
-	}
-	if completedStatus != "failed" {
-		t.Fatalf("expected failed status, got %s", completedStatus)
-	}
-}
-
-func TestDefrostDVR_NoManifestURL(t *testing.T) {
-	client := &configurablePresignedClient{}
-	sm := newDefrostTestSM(t, client)
-
-	var completedStatus string
-	sm.sendDefrostComplete = func(_, _, status, _ string, _ uint64, _ string) error {
-		completedStatus = status
-		return nil
-	}
-
-	req := &pb.DefrostRequest{
-		RequestId: "req-dvr-nomanifest",
-		AssetHash: "hash-dvr-nomanifest",
-		AssetType: "dvr",
-		LocalPath: filepath.Join(sm.basePath, "dvr", "stream-1", "hash-dvr-nomanifest"),
-		SegmentUrls: map[string]string{
-			"chunk000.ts": "https://s3.example.com/seg0",
-			// No manifest key (hash.m3u8)
-		},
-	}
-
-	_, err := sm.DefrostDVR(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error for missing manifest URL")
-	}
-	if !strings.Contains(err.Error(), "no manifest URL") {
-		t.Fatalf("expected 'no manifest URL' error, got: %s", err.Error())
+	if !strings.Contains(err.Error(), "requires chapter segment refs") {
+		t.Fatalf("expected chapter refs error, got: %s", err.Error())
 	}
 	if completedStatus != "failed" {
 		t.Fatalf("expected failed status, got %s", completedStatus)
 	}
-}
-
-func TestDefrostDVR_FullDownload(t *testing.T) {
-	manifestContent := "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n#EXTINF:6.000,\nchunk000.ts\n#EXTINF:5.500,\nchunk001.ts\n#EXT-X-ENDLIST\n"
-
-	client := &configurablePresignedClient{
-		downloadContent: []byte(manifestContent),
-	}
-	sm := newDefrostTestSM(t, client)
-
-	var completedStatus string
-	sm.sendDefrostComplete = func(_, _, status, _ string, _ uint64, _ string) error {
-		completedStatus = status
-		return nil
-	}
-
-	var mu sync.Mutex
-	var progressMessages []string
-	sm.sendDefrostProgress = func(_, _ string, _ uint32, _ uint64, _, _ int32, msg string) error {
-		mu.Lock()
-		progressMessages = append(progressMessages, msg)
-		mu.Unlock()
-		return nil
-	}
-
-	var lifecycleActions []pb.StorageLifecycleData_Action
-	sm.sendStorageLifecycle = func(data *pb.StorageLifecycleData) error {
-		lifecycleActions = append(lifecycleActions, data.Action)
-		return nil
-	}
-
-	dvrDir := filepath.Join(sm.basePath, "dvr", "stream-1", "hash-dvr-full")
-	req := &pb.DefrostRequest{
-		RequestId: "req-dvr-full",
-		AssetHash: "hash-dvr-full",
-		AssetType: "dvr",
-		LocalPath: dvrDir,
-		SegmentUrls: map[string]string{
-			"hash-dvr-full.m3u8": "https://s3.example.com/manifest",
-			"chunk000.ts":        "https://s3.example.com/seg0",
-			"chunk001.ts":        "https://s3.example.com/seg1",
-		},
-	}
-
-	result, err := sm.DefrostDVR(context.Background(), req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Status != "success" {
-		t.Fatalf("expected success, got %s", result.Status)
-	}
-	if completedStatus != "success" {
-		t.Fatalf("expected sendDefrostComplete with success, got %s", completedStatus)
-	}
-	// Downloaded: manifest (DownloadFromPresignedURL) + 2 segments (DownloadToFileFromPresignedURL)
-	if atomic.LoadInt64(&client.downloadCalls) != 1 {
-		t.Fatalf("expected 1 manifest download call, got %d", atomic.LoadInt64(&client.downloadCalls))
-	}
-	if atomic.LoadInt64(&client.downloadFileCalls) != 2 {
-		t.Fatalf("expected 2 segment download calls, got %d", atomic.LoadInt64(&client.downloadFileCalls))
-	}
-	// Progress: "ready" then 2x "downloading"
-	if len(progressMessages) < 2 {
-		t.Fatalf("expected at least 2 progress messages, got %d: %v", len(progressMessages), progressMessages)
-	}
-	if progressMessages[0] != "ready" {
-		t.Fatalf("expected first progress = 'ready', got %s", progressMessages[0])
-	}
-	// Lifecycle: CACHE_STARTED then CACHED
-	hasStarted := false
-	hasCached := false
-	for _, a := range lifecycleActions {
-		if a == pb.StorageLifecycleData_ACTION_CACHE_STARTED {
-			hasStarted = true
-		}
-		if a == pb.StorageLifecycleData_ACTION_CACHED {
-			hasCached = true
-		}
-	}
-	if !hasStarted {
-		t.Fatal("expected CACHE_STARTED lifecycle event")
-	}
-	if !hasCached {
-		t.Fatal("expected CACHED lifecycle event")
-	}
-	// Manifest should have been finalized with #EXT-X-ENDLIST
-	manifestPath := filepath.Join(dvrDir, "hash-dvr-full.m3u8")
-	content, err := os.ReadFile(manifestPath)
-	if err != nil {
-		t.Fatalf("failed to read manifest: %v", err)
-	}
-	if !strings.Contains(string(content), "#EXT-X-ENDLIST") {
-		t.Fatal("expected manifest to contain #EXT-X-ENDLIST after finalization")
-	}
-}
-
-func TestDefrostDVR_SegmentDownloadError(t *testing.T) {
-	manifestContent := "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n#EXTINF:6.000,\nchunk000.ts\n#EXT-X-ENDLIST\n"
-
-	client := &configurablePresignedClient{
-		downloadContent: []byte(manifestContent),
-		downloadFileErr: fmt.Errorf("segment download failed"),
-	}
-	sm := newDefrostTestSM(t, client)
-
-	var completedStatus string
-	sm.sendDefrostComplete = func(_, _, status, _ string, _ uint64, _ string) error {
-		completedStatus = status
-		return nil
-	}
-
-	dvrDir := filepath.Join(sm.basePath, "dvr", "stream-1", "hash-dvr-segfail")
-	req := &pb.DefrostRequest{
-		RequestId: "req-dvr-segfail",
-		AssetHash: "hash-dvr-segfail",
-		AssetType: "dvr",
-		LocalPath: dvrDir,
-		SegmentUrls: map[string]string{
-			"hash-dvr-segfail.m3u8": "https://s3.example.com/manifest",
-			"chunk000.ts":           "https://s3.example.com/seg0",
-		},
-	}
-
-	_, err := sm.DefrostDVR(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error for segment download failure")
-	}
-	if !strings.Contains(err.Error(), "segment download failed") {
-		t.Fatalf("expected segment download error, got: %s", err.Error())
-	}
-	if completedStatus != "failed" {
-		t.Fatalf("expected failed status, got %s", completedStatus)
-	}
-}
-
-func TestDefrostDVR_ManifestDownloadError(t *testing.T) {
-	client := &configurablePresignedClient{
-		downloadErr: fmt.Errorf("manifest download failed"),
-	}
-	sm := newDefrostTestSM(t, client)
-
-	var completedStatus string
-	sm.sendDefrostComplete = func(_, _, status, _ string, _ uint64, _ string) error {
-		completedStatus = status
-		return nil
-	}
-
-	dvrDir := filepath.Join(sm.basePath, "dvr", "stream-1", "hash-dvr-manfail")
-	req := &pb.DefrostRequest{
-		RequestId: "req-dvr-manfail",
-		AssetHash: "hash-dvr-manfail",
-		AssetType: "dvr",
-		LocalPath: dvrDir,
-		SegmentUrls: map[string]string{
-			"hash-dvr-manfail.m3u8": "https://s3.example.com/manifest",
-			"chunk000.ts":           "https://s3.example.com/seg0",
-		},
-	}
-
-	_, err := sm.DefrostDVR(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error for manifest download failure")
-	}
-	if completedStatus != "failed" {
-		t.Fatalf("expected failed status, got %s", completedStatus)
+	if atomic.LoadInt64(&client.downloadFileCalls) != 0 || atomic.LoadInt64(&client.downloadCalls) != 0 {
+		t.Fatal("expected no legacy DVR manifest or segment downloads")
 	}
 }
 
@@ -987,11 +735,12 @@ func TestFallbackCleanup_DVRDirectory(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// DVR directory should be removed
-	if _, err := os.Stat(recordingDir); !os.IsNotExist(err) {
-		t.Fatal("expected DVR directory to be removed")
+	// Whole-DVR directory cleanup is no longer a fallback path. Active and
+	// historical DVR pressure relief happens through ledger segment eviction.
+	if _, err := os.Stat(recordingDir); err != nil {
+		t.Fatalf("expected DVR directory to remain, got %v", err)
 	}
-	if deletedAssetType != "dvr" {
-		t.Fatalf("expected asset type 'dvr', got %s", deletedAssetType)
+	if deletedAssetType != "" {
+		t.Fatalf("expected no DVR delete event, got %s", deletedAssetType)
 	}
 }

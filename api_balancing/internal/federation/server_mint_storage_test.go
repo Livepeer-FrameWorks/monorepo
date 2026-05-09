@@ -43,9 +43,6 @@ func (f *fakeMintS3Client) GeneratePresignedPUT(key string, _ time.Duration) (st
 	}
 	return "https://s3.example.com/" + key + "?X-Amz-Signature=abc", nil
 }
-func (f *fakeMintS3Client) GeneratePresignedURLsForDVR(string, bool, time.Duration) (map[string]string, error) {
-	return nil, nil
-}
 func (f *fakeMintS3Client) BuildClipS3Key(tenantID, streamName, clipHash, format string) string {
 	return "clips/" + tenantID + "/" + streamName + "/" + clipHash + "." + format
 }

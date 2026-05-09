@@ -1,9 +1,7 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +17,7 @@ import (
 
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/storage"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/hls"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
@@ -71,15 +70,6 @@ type DefrostJob struct {
 	LocalPath string
 	SizeBytes uint64
 	Waiters   int32 // Number of concurrent requests waiting
-}
-
-// DefrostProgress tracks progress of a DVR streaming defrost
-type DefrostProgress struct {
-	DVRHash           string   `json:"dvr_hash"`
-	TotalSegments     int      `json:"total_segments"`
-	CompletedSegments []string `json:"completed_segments"`
-	StartedAt         int64    `json:"started_at"`
-	LastUpdated       int64    `json:"last_updated"`
 }
 
 // ParsedManifest holds data extracted from an HLS manifest
@@ -215,6 +205,67 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 		procHandler.Handle(req, send)
 	})
 
+	// DVR finalize-time retry: Foghorn pushes RetryDVRSegmentUpload listing
+	// segments still pending/failed. For each, look up the local file under
+	// the active DVR's segments directory, the local segment index, or the
+	// on-disk DVR tree; if present, request a fresh presigned URL via
+	// RecordDVRSegment and re-upload. If absent, emit
+	// DVRSegmentDropped(was_uploaded=false) so Foghorn classifies it as
+	// lost_local and the chapter manifest renders #EXT-X-GAP. Transient
+	// presign/upload failures are not classified here; FinalizeDVR owns the
+	// retry deadline and marks remaining pending rows lost after the budget.
+	control.SetRetryDVRSegmentHandler(func(req *pb.RetryDVRSegmentUpload) {
+		dvrHash := req.GetDvrHash()
+		dm := control.GetDVRManager()
+		if dm == nil {
+			return
+		}
+		job, ok := control.LookupActiveDVR(dvrHash)
+		var outputDir string
+		var jobLogger logging.Logger
+		if ok && job != nil {
+			outputDir = job.OutputDir
+			jobLogger = job.Logger
+		} else {
+			jobLogger = logger
+		}
+		for _, name := range req.GetSegmentNames() {
+			segPath := resolveRetryDVRSegmentPath(basePath, dvrHash, name, outputDir, logger)
+			info, statErr := os.Stat(segPath)
+			if statErr != nil {
+				if dropErr := control.SendDVRSegmentDropped(dvrHash, name, "upload_failed", segPath, 0, 0, 0, 0, false); dropErr != nil {
+					jobLogger.WithError(dropErr).WithField("segment", name).Debug("Failed to report missing-local-file as lost")
+				}
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			// Request a fresh presigned URL. RecordDVRSegment is idempotent
+			// on (artifact_hash, segment_name); media_start/end/duration are
+			// passed as 0 since the original ledger row already has them.
+			resp, recErr := control.RecordDVRSegment(ctx, dvrHash, name, segPath, 0, 0, 0)
+			if recErr != nil || resp == nil || !resp.GetAccepted() || resp.GetPresignedPutUrl() == "" {
+				cancel()
+				jobLogger.WithFields(logging.Fields{
+					"dvr_hash": dvrHash,
+					"segment":  name,
+				}).Debug("Retry presign unavailable; leaving segment pending for next finalize retry tick")
+				continue
+			}
+			if upErr := dm.UploadSegmentForRetry(ctx, segPath, resp.GetPresignedPutUrl()); upErr != nil {
+				cancel()
+				jobLogger.WithError(upErr).WithField("segment", name).Warn("Retry upload failed; leaving segment pending for next finalize retry tick")
+				continue
+			}
+			cancel()
+			if markErr := control.SendMarkDVRSegmentUploaded(dvrHash, name, uint64(info.Size())); markErr != nil {
+				jobLogger.WithError(markErr).WithField("segment", name).Warn("Failed to mark segment uploaded after retry")
+			}
+			if idx := control.LocalSegmentIndexInstance(logger); idx != nil {
+				idx.MarkUploaded(dvrHash, name, segPath, info.Size())
+			}
+		}
+	})
+
 	logger.WithFields(logging.Fields{
 		"base_path":        basePath,
 		"node_id":          nodeID,
@@ -238,6 +289,42 @@ func StopStorageManager() {
 		close(storageManager.stopCh)
 		storageLogger.Info("Storage manager stopped")
 	}
+}
+
+func resolveRetryDVRSegmentPath(basePath, dvrHash, segmentName, outputDir string, logger logging.Logger) string {
+	if outputDir != "" {
+		if p := filepath.Join(outputDir, "segments", segmentName); fileExists(p) {
+			return p
+		}
+	}
+	if idx := control.LocalSegmentIndexInstance(logger); idx != nil {
+		if p, ok := idx.LocalPath(dvrHash, segmentName); ok && fileExists(p) {
+			return p
+		}
+	}
+	dvrRoot := filepath.Join(basePath, "dvr")
+	streamDirs, err := os.ReadDir(dvrRoot)
+	if err != nil {
+		return ""
+	}
+	for _, streamDir := range streamDirs {
+		if !streamDir.IsDir() {
+			continue
+		}
+		p := filepath.Join(dvrRoot, streamDir.Name(), dvrHash, "segments", segmentName)
+		if fileExists(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+func fileExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info != nil && !info.IsDir()
 }
 
 // TriggerStorageCheck triggers an urgent storage check (debounced)
@@ -288,7 +375,6 @@ func (sm *StorageManager) start() {
 func (sm *StorageManager) checkAndManageStorage() error {
 	// Check clips directory
 	clipsDir := filepath.Join(sm.basePath, "clips")
-	dvrDir := filepath.Join(sm.basePath, "dvr")
 	vodDir := filepath.Join(sm.basePath, "vod")
 
 	// Get current storage usage
@@ -331,7 +417,9 @@ func (sm *StorageManager) checkAndManageStorage() error {
 	targetBytes := uint64(float64(totalBytes) * sm.targetThreshold)
 	bytesToFree := usedBytes - targetBytes
 
-	// Get freeze candidates from clips and DVR
+	// Get freeze candidates from clips and VOD. DVR uses ledger-backed
+	// per-segment eviction only; whole-directory DVR freeze would recreate an
+	// edge-authored archive manifest.
 	var candidates []FreezeCandidate
 
 	clipCandidates, err := sm.getFreezeCandidates(clipsDir, AssetTypeClip)
@@ -339,13 +427,6 @@ func (sm *StorageManager) checkAndManageStorage() error {
 		sm.logger.WithError(err).Warn("Failed to get clip freeze candidates")
 	} else {
 		candidates = append(candidates, clipCandidates...)
-	}
-
-	dvrCandidates, err := sm.getFreezeCandidates(dvrDir, AssetTypeDVR)
-	if err != nil {
-		sm.logger.WithError(err).Warn("Failed to get DVR freeze candidates")
-	} else {
-		candidates = append(candidates, dvrCandidates...)
 	}
 
 	vodCandidates, err := sm.getFreezeCandidates(vodDir, AssetTypeVOD)
@@ -400,6 +481,41 @@ func (sm *StorageManager) checkAndManageStorage() error {
 	return nil
 }
 
+// dropPressuredDVRSegments asks Foghorn for the authoritative list of
+// safe-to-evict segments for an active DVR and deletes the matching local
+// files. Used during storage-pressure passes so the choice respects the
+// effective live window even if the local uploaded cache has drifted.
+// Returns the number of files deleted.
+func (sm *StorageManager) dropPressuredDVRSegments(dvrHash string) int {
+	dm := control.GetDVRManager()
+	if dm == nil {
+		return 0
+	}
+	const batchSize int32 = 500
+	const maxBatches = 10
+	total := 0
+	for batch := 0; batch < maxBatches; batch++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		resp, err := control.RequestEvictableSegments(ctx, dvrHash, batchSize)
+		cancel()
+		if err != nil || resp == nil {
+			if err != nil {
+				sm.logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to query evictable segments")
+			}
+			break
+		}
+		if len(resp.GetSegmentNames()) == 0 {
+			break
+		}
+		evicted := dm.EvictUploadedSegments(dvrHash, resp.GetSegmentNames(), "disk_pressure")
+		total += evicted
+		if evicted == 0 || len(resp.GetSegmentNames()) < int(batchSize) {
+			break
+		}
+	}
+	return total
+}
+
 // getFreezeCandidates returns assets that are candidates for freezing
 func (sm *StorageManager) getFreezeCandidates(dir string, assetType AssetType) ([]FreezeCandidate, error) {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -438,54 +554,6 @@ func (sm *StorageManager) getFreezeCandidates(dir string, assetType AssetType) (
 		})
 		if err != nil {
 			return nil, err
-		}
-	} else if assetType == AssetTypeDVR {
-		// DVR directories are structured as dvr/{internal_name}/{dvr_hash}/
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return nil, nil //nolint:nilerr // directory missing = no candidates
-		}
-
-		for _, streamDir := range entries {
-			if !streamDir.IsDir() {
-				continue
-			}
-			streamPath := filepath.Join(dir, streamDir.Name())
-			dvrEntries, err := os.ReadDir(streamPath)
-			if err != nil {
-				continue
-			}
-
-			for _, dvrDir := range dvrEntries {
-				if !dvrDir.IsDir() {
-					continue
-				}
-				dvrPath := filepath.Join(streamPath, dvrDir.Name())
-				info, err := dvrDir.Info()
-				if err != nil {
-					continue
-				}
-
-				// Check minimum age
-				if info.ModTime().After(minAge) {
-					continue
-				}
-
-				// Calculate total size of DVR directory
-				dvrSize := sm.calculateDirSize(dvrPath)
-
-				candidate := FreezeCandidate{
-					AssetType:    AssetTypeDVR,
-					AssetHash:    dvrDir.Name(),
-					StreamID:     streamDir.Name(),
-					FilePath:     dvrPath,
-					SizeBytes:    dvrSize,
-					CreatedAt:    info.ModTime(),
-					LastAccessed: info.ModTime(),
-				}
-				candidate.Priority = sm.calculateFreezePriority(candidate)
-				candidates = append(candidates, candidate)
-			}
 		}
 	} else if assetType == AssetTypeVOD {
 		// VOD files are stored as vod/{assetHash}.{format}
@@ -534,11 +602,17 @@ func (sm *StorageManager) getFreezeCandidates(dir string, assetType AssetType) (
 
 // HandleFreezeRequest processes a proactive freeze command from Foghorn.
 // For clip/vod, Foghorn already generated presigned URLs so we upload directly.
-// For DVR without segment_urls, this is a "nudge" — we fall through to the
-// normal Helmsman-initiated flow which collects filenames and requests
-// permission (and segment URLs) from Foghorn.
 func (sm *StorageManager) HandleFreezeRequest(req *pb.FreezeRequest) {
 	ctx := context.Background()
+
+	if req.AssetType == "dvr" {
+		errMsg := "whole-DVR freeze is unsupported; use ledger segment eviction"
+		sm.logger.WithField("asset_hash", req.AssetHash).Warn(errMsg)
+		if err := sm.sendSyncComplete(req.RequestId, req.AssetHash, "failed", "", 0, errMsg, false); err != nil {
+			sm.logger.WithError(err).WithField("asset_hash", req.AssetHash).Warn("Failed to report rejected DVR freeze")
+		}
+		return
+	}
 
 	info, err := os.Stat(req.LocalPath)
 	if err != nil {
@@ -558,19 +632,8 @@ func (sm *StorageManager) HandleFreezeRequest(req *pb.FreezeRequest) {
 		AssetType: AssetType(req.AssetType),
 		AssetHash: req.AssetHash,
 		FilePath:  req.LocalPath,
-		StreamID:  req.InternalName, // needed for DVR path construction only
+		StreamID:  req.InternalName,
 		SizeBytes: sizeBytes,
-	}
-
-	// DVR without pre-generated segment URLs: Foghorn can't generate them
-	// without knowing the segment list, so this is a nudge to start the
-	// Helmsman-initiated flow (collect filenames → request permission → upload).
-	if req.AssetType == "dvr" && len(req.SegmentUrls) == 0 {
-		sm.logger.WithField("asset_hash", req.AssetHash).Info("DVR freeze nudge — initiating permission flow")
-		if err := sm.freezeAsset(ctx, asset); err != nil {
-			sm.logger.WithError(err).WithField("asset_hash", req.AssetHash).Error("DVR freeze via permission flow failed")
-		}
-		return
 	}
 
 	permResp := &pb.FreezePermissionResponse{
@@ -591,6 +654,10 @@ func (sm *StorageManager) HandleFreezeRequest(req *pb.FreezeRequest) {
 // permission from Foghorn, handles remote-artifact eviction, then delegates
 // the actual upload to uploadAsset.
 func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate) error {
+	if asset.AssetType == AssetTypeDVR {
+		return fmt.Errorf("whole-DVR freeze is unsupported; DVR cleanup is ledger segment eviction only")
+	}
+
 	// Mark as freezing
 	sm.freezeTracker.mu.Lock()
 	sm.freezeTracker.inFlight[asset.AssetHash] = true
@@ -605,40 +672,6 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 	// Collect filenames (needed for presigned URL generation)
 	var filenames []string
 	switch asset.AssetType {
-	case AssetTypeDVR:
-		manifestName := asset.AssetHash + ".m3u8"
-		filenames = append(filenames, manifestName)
-
-		// If the DB stores the full manifest path rather than the directory,
-		// strip the filename so we don't produce ".../hash.m3u8/hash.m3u8".
-		basePath := asset.FilePath
-		if strings.HasSuffix(basePath, ".m3u8") {
-			basePath = filepath.Dir(basePath)
-		}
-
-		// Parse manifest to get segment names
-		localManifestPath := filepath.Join(basePath, manifestName)
-		localManifestContent, err := os.ReadFile(localManifestPath)
-		if err == nil {
-			parsedManifest, parseErr := parseHLSManifest(string(localManifestContent))
-			if parseErr == nil {
-				for _, seg := range parsedManifest.Segments {
-					filenames = append(filenames, seg.Name)
-				}
-			} else {
-				sm.logger.WithError(parseErr).Warn("Failed to parse DVR manifest for freeze")
-			}
-		} else {
-			sm.logger.WithError(err).Warn("Failed to read DVR manifest for freeze")
-		}
-
-		// Also check for any .dtsh files in the DVR directory
-		entries, _ := os.ReadDir(basePath)
-		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".dtsh") {
-				filenames = append(filenames, entry.Name())
-			}
-		}
 	case AssetTypeClip, AssetTypeVOD:
 		// Clip and VOD are single-file uploads
 		filenames = append(filenames, filepath.Base(asset.FilePath))
@@ -685,7 +718,16 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 			if strings.HasSuffix(dvrDir, ".m3u8") {
 				dvrDir = filepath.Dir(dvrDir)
 			}
-			if err := os.RemoveAll(dvrDir); err != nil {
+			// Hard guard: never RemoveAll an active DVR directory, even on a
+			// remote skip_upload eviction. Active recordings are still writing
+			// segments to this tree; clobbering it loses unsynced segments
+			// without an explicit DVRSegmentDropped trail.
+			if control.IsActiveDVR(asset.AssetHash) {
+				sm.logger.WithFields(logging.Fields{
+					"asset_hash": asset.AssetHash,
+					"path":       dvrDir,
+				}).Warn("Refusing skip_upload directory eviction for active DVR")
+			} else if err := os.RemoveAll(dvrDir); err != nil {
 				sm.logger.WithError(err).Warn("Failed to delete local DVR directory of remote artifact")
 			}
 		}
@@ -706,6 +748,10 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 // permission response and reports completion/failure back to Foghorn.
 // Shared by both Helmsman-initiated (freezeAsset) and Foghorn-initiated (HandleFreezeRequest) paths.
 func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate, permResp *pb.FreezePermissionResponse) error {
+	if asset.AssetType == AssetTypeDVR {
+		return fmt.Errorf("whole-DVR upload is unsupported; DVR archive playlists are generated by Foghorn chapters")
+	}
+
 	// Track in-flight (idempotent if already tracked by freezeAsset)
 	sm.freezeTracker.mu.Lock()
 	sm.freezeTracker.inFlight[asset.AssetHash] = true
@@ -766,99 +812,6 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 				_ = sm.sendFreezeProgress(requestID, asset.AssetHash, percent, uint64(uploaded))
 			})
 		}
-	} else if asset.AssetType == AssetTypeDVR {
-		segmentURLs := permResp.SegmentUrls
-		if len(segmentURLs) == 0 {
-			return fmt.Errorf("no segment URLs provided for DVR freeze")
-		}
-
-		manifestName := asset.AssetHash + ".m3u8"
-		basePath := asset.FilePath
-		if strings.HasSuffix(basePath, ".m3u8") {
-			basePath = filepath.Dir(basePath)
-		}
-		localManifestPath := filepath.Join(basePath, manifestName)
-		localManifestContent, err := os.ReadFile(localManifestPath)
-		if err != nil {
-			return fmt.Errorf("failed to read local DVR manifest: %w", err)
-		}
-
-		parsedManifest, err := parseHLSManifest(string(localManifestContent))
-		if err != nil {
-			return fmt.Errorf("failed to parse local DVR manifest: %w", err)
-		}
-
-		manifestURL, hasManifestURL := segmentURLs[manifestName]
-		if !hasManifestURL {
-			return fmt.Errorf("no presigned URL for manifest")
-		}
-
-		initialManifest := sm.createLiveManifest(asset.AssetHash, parsedManifest.TargetDuration)
-		manifestBytes := []byte(initialManifest)
-		if err := sm.presignedClient.UploadToPresignedURL(ctx, manifestURL,
-			bytes.NewReader(manifestBytes), int64(len(manifestBytes)), nil); err != nil {
-			return fmt.Errorf("failed to upload initial manifest: %w", err)
-		}
-
-		var totalUploaded int64
-		var uploadedManifest strings.Builder
-		uploadedManifest.WriteString(initialManifest)
-
-		segmentsDir := filepath.Join(basePath, "segments")
-
-		for _, seg := range parsedManifest.Segments {
-			segPath := filepath.Join(segmentsDir, seg.Name)
-			presignedURL, ok := segmentURLs[seg.Name]
-			if !ok {
-				sm.logger.WithField("segment", seg.Name).Warn("No presigned URL for segment, skipping")
-				continue
-			}
-
-			if err := sm.presignedClient.UploadFileToPresignedURL(ctx, presignedURL, segPath, nil); err != nil {
-				uploadErr = fmt.Errorf("failed to upload segment %s: %w", seg.Name, err)
-				break
-			}
-
-			info, _ := os.Stat(segPath)
-			if info != nil {
-				totalUploaded += info.Size()
-			}
-
-			fmt.Fprintf(&uploadedManifest, "#EXTINF:%.3f,\nsegments/%s\n", seg.Duration, seg.Name)
-
-			manifestData := []byte(uploadedManifest.String())
-			if err := sm.presignedClient.UploadToPresignedURL(ctx, manifestURL,
-				bytes.NewReader(manifestData), int64(len(manifestData)), nil); err != nil {
-				sm.logger.WithError(err).Warn("Failed to update manifest during freeze")
-			}
-
-			percent := uint32((totalUploaded * 100) / int64(asset.SizeBytes))
-			_ = sm.sendFreezeProgress(requestID, asset.AssetHash, percent, uint64(totalUploaded))
-		}
-
-		if uploadErr == nil {
-			entries, _ := os.ReadDir(basePath)
-			for _, entry := range entries {
-				if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".dtsh") {
-					dtshName := entry.Name()
-					if url, ok := segmentURLs[dtshName]; ok {
-						dtshPath := filepath.Join(basePath, dtshName)
-						if err := sm.presignedClient.UploadFileToPresignedURL(ctx, url, dtshPath, nil); err != nil {
-							sm.logger.WithError(err).WithField("file", dtshName).Warn("Failed to upload DVR .dtsh file")
-						} else {
-							dtshIncluded = true
-						}
-					}
-				}
-			}
-		}
-
-		uploadedManifest.WriteString("#EXT-X-ENDLIST\n")
-		finalManifest := []byte(uploadedManifest.String())
-		if err := sm.presignedClient.UploadToPresignedURL(ctx, manifestURL,
-			bytes.NewReader(finalManifest), int64(len(finalManifest)), nil); err != nil {
-			sm.logger.WithError(err).Warn("Failed to finalize manifest")
-		}
 	} else {
 		return fmt.Errorf("unsupported asset type for freeze: %s", asset.AssetType)
 	}
@@ -885,12 +838,6 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 		if info, err := os.Stat(asset.FilePath); err == nil {
 			actualSizeBytes = uint64(info.Size())
 		}
-	case AssetTypeDVR:
-		dvrDir := asset.FilePath
-		if strings.HasSuffix(dvrDir, ".m3u8") {
-			dvrDir = filepath.Dir(dvrDir)
-		}
-		actualSizeBytes = sm.calculateDirSize(dvrDir)
 	}
 
 	durationMs := duration.Milliseconds()
@@ -1102,11 +1049,210 @@ func (sm *StorageManager) DefrostVOD(ctx context.Context, req *pb.DefrostRequest
 	return sm.defrostSingleFile(ctx, req, AssetTypeVOD)
 }
 
+// defrostDVRFromChapterRefs is the chapter-aware streaming defrost path.
+// Foghorn pre-populated req.ChapterSegments from foghorn.dvr_segments;
+// each ref carries (segment_name, s3_key, presigned_get_url, media times,
+// duration, status). We build the local manifest from those refs (gaps
+// rendered for lost_local rows; HLS v8 if any gap), download only the
+// uploaded segments, and write the manifest into the artifact's local
+// directory.
+//
+// Local layout matches S3:
+//
+//	{LocalPath}/segments/{name}            shared segments
+//	{LocalPath}/chapters/{chapter_id}.m3u8 per-chapter manifest with ../segments/ URIs
+//
+// The cache-key already keys on (asset_hash, chapter_id_or_range) so two
+// concurrent chapter requests for the same artifact don't collide.
+
+// emitChapterDefrostFailure emits the lifecycle + complete pair for a failed
+// chapter defrost. Send errors are logged and swallowed; control-stream
+// failures don't change the request's success/failure outcome.
+func (sm *StorageManager) emitChapterDefrostFailure(req *pb.DefrostRequest, defrostErr error) {
+	errStr := defrostErr.Error()
+	if err := sm.sendStorageLifecycle(&pb.StorageLifecycleData{
+		Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
+		AssetType: string(AssetTypeDVR),
+		AssetHash: req.AssetHash,
+		Error:     &errStr,
+	}); err != nil {
+		sm.logger.WithError(err).Warn("emit chapter defrost cache_failed lifecycle")
+	}
+	if err := sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr); err != nil {
+		sm.logger.WithError(err).Warn("emit chapter defrost failure complete")
+	}
+}
+
+// emitDefrostProgress wraps the progress send with logged-error handling.
+func (sm *StorageManager) emitDefrostProgress(req *pb.DefrostRequest, percent uint32, bytesDownloaded uint64, segmentsDownloaded, totalSegments int32, message string) {
+	if err := sm.sendDefrostProgress(req.RequestId, req.AssetHash, percent, bytesDownloaded, segmentsDownloaded, totalSegments, message); err != nil {
+		sm.logger.WithError(err).Warn("emit chapter defrost progress")
+	}
+}
+
+func (sm *StorageManager) defrostDVRFromChapterRefs(ctx context.Context, req *pb.DefrostRequest, jobKey string) (*pb.DefrostComplete, error) {
+	refs := req.GetChapterSegments()
+
+	// Local manifest path: chapter ID identifies the view. Fall back to
+	// a deterministic range hash when the caller didn't pass chapter_id
+	// (explicit_range case).
+	chapterID := req.GetChapterId()
+	if chapterID == "" {
+		chapterID = fmt.Sprintf("range-%d-%d", req.GetStartMs(), req.GetEndMs())
+	}
+	chaptersDir := filepath.Join(req.LocalPath, "chapters")
+	if err := os.MkdirAll(chaptersDir, 0755); err != nil {
+		sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
+		sm.emitChapterDefrostFailure(req, err)
+		return nil, fmt.Errorf("create chapters dir: %w", err)
+	}
+	segmentsDir := filepath.Join(req.LocalPath, "segments")
+	if err := os.MkdirAll(segmentsDir, 0755); err != nil {
+		sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
+		sm.emitChapterDefrostFailure(req, err)
+		return nil, fmt.Errorf("create segments dir: %w", err)
+	}
+
+	// Refcount each non-gap segment in the local index for the duration of
+	// the defrost. TrackCachedSegment creates entries for historical chapter
+	// downloads as well as active-recorder uploads, so post-playback eviction
+	// can reclaim them once ActiveViews returns to 0.
+	idx := control.LocalSegmentIndexInstance(sm.logger)
+	if idx != nil {
+		for _, r := range refs {
+			if r.GetStatus() == "lost_local" {
+				continue
+			}
+			segName := r.GetSegmentName()
+			localSegPath := filepath.Join(segmentsDir, segName)
+			idx.TrackCachedSegment(req.AssetHash, segName, localSegPath, 0, false)
+			idx.AcquireView(req.AssetHash, segName)
+		}
+		defer func() {
+			for _, r := range refs {
+				if r.GetStatus() == "lost_local" {
+					continue
+				}
+				idx.ReleaseView(req.AssetHash, r.GetSegmentName())
+			}
+		}()
+	}
+
+	// Build the local manifest from the ledger refs. ../segments/ matches
+	// the chapters/{id}.m3u8 to segments/{name} layout.
+	finalSegs := make([]hls.FinalSegment, 0, len(refs))
+	hasGaps := false
+	for _, r := range refs {
+		seg := hls.FinalSegment{
+			Name:              r.GetSegmentName(),
+			Sequence:          r.GetSequence(),
+			DurationMs:        r.GetDurationMs(),
+			MediaStartMs:      r.GetMediaStartMs(),
+			MediaEndMs:        r.GetMediaEndMs(),
+			ProgramDateTimeMs: r.GetMediaStartMs(),
+			Lost:              r.GetStatus() == "lost_local",
+		}
+		if seg.Lost {
+			hasGaps = true
+		}
+		finalSegs = append(finalSegs, seg)
+	}
+	manifestBody := hls.BuildVOD(finalSegs, hls.BuildVODOptions{
+		HasGaps:          hasGaps,
+		SegmentURIPrefix: "../segments/",
+	})
+	manifestPath := filepath.Join(chaptersDir, chapterID+".m3u8")
+	if err := os.WriteFile(manifestPath, []byte(manifestBody), 0644); err != nil {
+		sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
+		sm.emitChapterDefrostFailure(req, err)
+		return nil, fmt.Errorf("write chapter manifest: %w", err)
+	}
+
+	// Signal ready for playback (manifest exists; segment downloads
+	// stream into local cache as needed).
+	sm.emitDefrostProgress(req, 0, 0, 0, int32(len(refs)), "ready")
+
+	// Download segments. lost_local rows have no URL and are already rendered as
+	// #EXT-X-GAP. uploaded/deleted_local rows have presigned GETs unless
+	// minting failed (a Foghorn-side error worth surfacing).
+	var totalBytes uint64
+	var downloaded int32
+	for i, r := range refs {
+		if r.GetStatus() == "lost_local" {
+			continue
+		}
+		segName := r.GetSegmentName()
+		localSegPath := filepath.Join(segmentsDir, segName)
+		// Reuse-on-disk: if a sibling chapter view already pulled this
+		// segment, skip the download. Local segments are shared across
+		// chapter views by design.
+		if info, statErr := os.Stat(localSegPath); statErr == nil && info.Size() > 0 {
+			totalBytes += uint64(info.Size())
+			downloaded++
+			if idx != nil {
+				idx.TrackCachedSegment(req.AssetHash, segName, localSegPath, info.Size(), false)
+			}
+			percent := uint32(((i + 1) * 100) / len(refs))
+			sm.emitDefrostProgress(req, percent, totalBytes, downloaded, int32(len(refs)), "reusing_local")
+			continue
+		}
+		presignedURL := r.GetPresignedGetUrl()
+		if presignedURL == "" {
+			// status=uploaded with no presigned URL indicates a Foghorn-side bug.
+			err := fmt.Errorf("uploaded segment %s has no presigned URL; Foghorn bug", segName)
+			sm.logger.WithError(err).WithField("segment", segName).Error("Chapter defrost: missing presigned URL on uploaded row")
+			sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
+			sm.emitChapterDefrostFailure(req, err)
+			return nil, err
+		}
+		if err := sm.presignedClient.DownloadToFileFromPresignedURL(ctx, presignedURL, localSegPath, nil); err != nil {
+			sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
+			sm.emitChapterDefrostFailure(req, err)
+			return nil, fmt.Errorf("download segment %s: %w", segName, err)
+		}
+		if info, statErr := os.Stat(localSegPath); statErr == nil && info != nil {
+			totalBytes += uint64(info.Size())
+			if idx != nil {
+				idx.TrackCachedSegment(req.AssetHash, segName, localSegPath, info.Size(), false)
+			}
+		}
+		downloaded++
+		percent := uint32(((i + 1) * 100) / len(refs))
+		sm.emitDefrostProgress(req, percent, totalBytes, downloaded, int32(len(refs)), "downloading")
+	}
+
+	if err := sm.sendStorageLifecycle(&pb.StorageLifecycleData{
+		Action:    pb.StorageLifecycleData_ACTION_CACHED,
+		AssetType: string(AssetTypeDVR),
+		AssetHash: req.AssetHash,
+		SizeBytes: totalBytes,
+		LocalPath: &manifestPath,
+	}); err != nil {
+		sm.logger.WithError(err).Warn("emit chapter defrost cached lifecycle")
+	}
+	if err := sm.sendDefrostComplete(req.RequestId, req.AssetHash, "success", manifestPath, totalBytes, ""); err != nil {
+		sm.logger.WithError(err).Warn("emit chapter defrost success complete")
+	}
+	sm.markDefrostJobDoneKeyed(req.AssetHash, nil, manifestPath, totalBytes, jobKey)
+	return &pb.DefrostComplete{
+		RequestId: req.RequestId,
+		AssetHash: req.AssetHash,
+		Status:    "success",
+		LocalPath: manifestPath,
+		SizeBytes: totalBytes,
+	}, nil
+}
+
 // DefrostDVR downloads a DVR recording from S3 using streaming defrost (HLS live mode)
-// Uses presigned GET URLs provided by Foghorn for each segment
+// Uses presigned GET URLs provided by Foghorn for each segment.
+//
+// Cache-key scope: distinct chapter requests for the same DVR artifact get
+// distinct in-flight jobs (key = asset_hash + ":" + chapter_id_or_range).
+// DVR archive playback passes chapter refs; requests without chapter context
+// use the asset-hash-only slot and cannot serve normal chapter playback.
 func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest) (*pb.DefrostComplete, error) {
-	// Check if already defrosting
-	job, shouldInitiate := sm.getOrCreateDefrostJob(req.AssetHash, AssetTypeDVR, req.RequestId)
+	jobKey := defrostJobKey(req.AssetHash, req.GetChapterId(), req.GetStartMs(), req.GetEndMs())
+	job, shouldInitiate := sm.getOrCreateDefrostJobKeyed(req.AssetHash, AssetTypeDVR, req.RequestId, jobKey)
 	if !shouldInitiate {
 		select {
 		case <-job.Done:
@@ -1125,303 +1271,62 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 		}
 	}
 
-	defer sm.completeDefrostJob(req.AssetHash)
+	defer sm.completeDefrostJobKeyed(jobKey)
 
-	// Check if already local (manifest exists)
-	manifestPath := filepath.Join(req.LocalPath, req.AssetHash+".m3u8")
-	if _, err := os.Stat(manifestPath); err == nil {
-		var totalBytes uint64
-		_ = filepath.Walk(req.LocalPath, func(_ string, info os.FileInfo, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if info.IsDir() {
-				return nil
-			}
-			totalBytes += uint64(info.Size())
-			return nil
-		})
-		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:    pb.StorageLifecycleData_ACTION_CACHED,
-			AssetType: string(AssetTypeDVR),
-			AssetHash: req.AssetHash,
-			SizeBytes: totalBytes,
-			LocalPath: &manifestPath,
-		})
-		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "success", manifestPath, totalBytes, "")
-		sm.markDefrostJobDone(req.AssetHash, nil, manifestPath, totalBytes)
-		return &pb.DefrostComplete{
-			RequestId: req.RequestId,
-			AssetHash: req.AssetHash,
-			Status:    "success",
-			LocalPath: manifestPath,
-			SizeBytes: totalBytes,
-		}, nil
-	}
-
-	// Validate segment URLs provided by Foghorn
-	segmentURLs := req.SegmentUrls
-	if len(segmentURLs) == 0 {
-		err := fmt.Errorf("no segment URLs provided for DVR defrost")
-		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
-		errStr := err.Error()
-		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
-			AssetType: string(AssetTypeDVR),
-			AssetHash: req.AssetHash,
-			Error:     &errStr,
-		})
-		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
-		return nil, err
-	}
-
-	// Download and parse original manifest first to get correct segment durations
-	manifestKey := req.AssetHash + ".m3u8"
-	manifestURL, hasManifest := segmentURLs[manifestKey]
-	if !hasManifest {
-		err := fmt.Errorf("no manifest URL provided for DVR defrost")
-		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
-		errStr := err.Error()
-		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
-			AssetType: string(AssetTypeDVR),
-			AssetHash: req.AssetHash,
-			Error:     &errStr,
-		})
-		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
-		return nil, err
-	}
-
-	var manifestBuf bytes.Buffer
-	_, err := sm.presignedClient.DownloadFromPresignedURL(ctx, manifestURL, &manifestBuf, nil)
-	if err != nil {
-		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
-		errStr := err.Error()
-		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
-			AssetType: string(AssetTypeDVR),
-			AssetHash: req.AssetHash,
-			Error:     &errStr,
-		})
-		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
-		return nil, fmt.Errorf("failed to download original manifest: %w", err)
-	}
-
-	parsedManifest, err := parseHLSManifest(manifestBuf.String())
-	if err != nil {
-		sm.logger.WithError(err).Warn("Failed to parse manifest, using defaults")
-		parsedManifest = &ParsedManifest{TargetDuration: 6}
-	}
-
-	// Build duration lookup map for segment downloads
-	segmentDurations := make(map[string]float64)
-	for _, seg := range parsedManifest.Segments {
-		segmentDurations[seg.Name] = seg.Duration
-	}
-
-	// Notify cache refill started
-	_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-		Action:    pb.StorageLifecycleData_ACTION_CACHE_STARTED,
-		AssetType: string(AssetTypeDVR),
-		AssetHash: req.AssetHash,
-	})
-
-	startTime := time.Now()
-
-	// Create local directory
-	if err := os.MkdirAll(req.LocalPath, 0755); err != nil {
-		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
-		errStr := err.Error()
-		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
-			AssetType: string(AssetTypeDVR),
-			AssetHash: req.AssetHash,
-			Error:     &errStr,
-		})
-		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
-		return nil, fmt.Errorf("failed to create directory: %w", err)
-	}
-
-	// Use segments from parsed manifest for correct order (instead of sort.Strings)
-	// Fall back to URL keys if manifest parsing yielded no segments
-	var segments []string
-	if len(parsedManifest.Segments) > 0 {
-		for _, seg := range parsedManifest.Segments {
-			segments = append(segments, seg.Name)
+	if isChapterDefrostRequest(req) {
+		if len(req.GetChapterSegments()) == 0 {
+			err := fmt.Errorf("chapter DVR defrost requires chapter segment refs")
+			sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
+			sm.emitChapterDefrostFailure(req, err)
+			return nil, err
 		}
-	} else {
-		// Fallback: extract from URLs and sort
-		for segName := range segmentURLs {
-			if segName == manifestKey {
-				continue
-			}
-			segments = append(segments, segName)
-		}
-		sort.Strings(segments)
-	}
-	totalSegments := len(segments)
-
-	// Try to resume from progress file
-	progress, _ := sm.loadDefrostProgress(req.AssetHash, req.LocalPath)
-	completedSet := make(map[string]bool)
-	if progress != nil {
-		for _, seg := range progress.CompletedSegments {
-			completedSet[seg] = true
-		}
-	} else {
-		progress = &DefrostProgress{
-			DVRHash:       req.AssetHash,
-			TotalSegments: totalSegments,
-			StartedAt:     time.Now().Unix(),
-		}
+		return sm.defrostDVRFromChapterRefs(ctx, req, jobKey)
 	}
 
-	// Download .dtsh if available (often named stream.dtsh or similar, check URLs)
-	// For DVR, we check keys ending in .dtsh
-	for name, url := range segmentURLs {
-		if strings.HasSuffix(name, ".dtsh") {
-			dtshPath := filepath.Join(req.LocalPath, name)
-			if err := sm.presignedClient.DownloadToFileFromPresignedURL(ctx, url, dtshPath, nil); err != nil {
-				sm.logger.WithError(err).WithField("file", name).Warn("Failed to download DVR .dtsh file")
-			} else {
-				sm.logger.WithField("file", dtshPath).Info("Defrosted DVR .dtsh file")
-			}
-		}
-	}
+	err := fmt.Errorf("DVR defrost requires chapter segment refs")
+	sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
+	sm.emitChapterDefrostFailure(req, err)
+	return nil, err
+}
 
-	// Create initial manifest WITHOUT #EXT-X-ENDLIST (live DVR mode)
-	localSegmentsDir := filepath.Join(req.LocalPath, "segments")
-	if err := os.MkdirAll(localSegmentsDir, 0755); err != nil {
-		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
-		errStr := err.Error()
-		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
-			AssetType: string(AssetTypeDVR),
-			AssetHash: req.AssetHash,
-			Error:     &errStr,
-		})
-		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
-		return nil, err
-	}
-
-	// Write initial manifest header with correct target duration from original manifest
-	manifest := sm.createLiveManifest(req.AssetHash, parsedManifest.TargetDuration)
-	if err := os.WriteFile(manifestPath, []byte(manifest), 0644); err != nil {
-		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
-		errStr := err.Error()
-		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
-			AssetType: string(AssetTypeDVR),
-			AssetHash: req.AssetHash,
-			Error:     &errStr,
-		})
-		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
-		return nil, err
-	}
-
-	// Signal ready for playback (manifest exists)
-	_ = sm.sendDefrostProgress(req.RequestId, req.AssetHash, 0, 0, 0, int32(totalSegments), "ready")
-
-	// Download segments in order using presigned URLs, appending to manifest
-	var totalBytes uint64
-	for i, segName := range segments {
-		if completedSet[segName] {
-			continue // Already downloaded (resume)
-		}
-
-		presignedURL, ok := segmentURLs[segName]
-		if !ok {
-			sm.logger.WithField("segment", segName).Warn("No presigned URL for segment, skipping")
-			continue
-		}
-
-		localSegPath := filepath.Join(localSegmentsDir, segName)
-
-		err := sm.presignedClient.DownloadToFileFromPresignedURL(ctx, presignedURL, localSegPath, nil)
-		if err != nil {
-			// Save progress for resume
-			sm.saveDefrostProgress(progress, req.LocalPath)
-			sm.markDefrostJobDone(req.AssetHash, err, "", 0)
-			errStr := err.Error()
-			_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-				Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
-				AssetType: string(AssetTypeDVR),
-				AssetHash: req.AssetHash,
-				Error:     &errStr,
-			})
-			_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
-			return nil, fmt.Errorf("failed to download segment %s: %w", segName, err)
-		}
-
-		// Get segment size
-		info, _ := os.Stat(localSegPath)
-		if info != nil {
-			totalBytes += uint64(info.Size())
-		}
-
-		// Update manifest with new segment using duration from original manifest
-		segDuration := segmentDurations[segName]
-		if segDuration == 0 {
-			segDuration = 6.0 // fallback if not found
-		}
-		sm.appendSegmentToManifest(manifestPath, segName, segDuration)
-
-		// Update progress
-		progress.CompletedSegments = append(progress.CompletedSegments, segName)
-		progress.LastUpdated = time.Now().Unix()
-
-		// Send progress
-		percent := uint32(((i + 1) * 100) / totalSegments)
-		_ = sm.sendDefrostProgress(req.RequestId, req.AssetHash, percent, totalBytes, int32(i+1), int32(totalSegments), "downloading")
-	}
-
-	// Finalize manifest with #EXT-X-ENDLIST (becomes VOD)
-	sm.finalizeManifest(manifestPath)
-
-	// Remove progress file
-	sm.removeDefrostProgress(req.LocalPath)
-
-	duration := time.Since(startTime)
-	durationMs := duration.Milliseconds()
-
-	// Notify completion (DVR now cached locally from S3)
-	_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-		Action:     pb.StorageLifecycleData_ACTION_CACHED,
-		AssetType:  string(AssetTypeDVR),
-		AssetHash:  req.AssetHash,
-		SizeBytes:  totalBytes,
-		LocalPath:  &manifestPath,
-		DurationMs: &durationMs,
-	})
-
-	sm.markDefrostJobDone(req.AssetHash, nil, manifestPath, totalBytes)
-
-	// Send completion to Foghorn
-	_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "success", manifestPath, totalBytes, "")
-
-	sm.logger.WithFields(logging.Fields{
-		"asset_hash":     req.AssetHash,
-		"total_segments": totalSegments,
-		"size_mb":        float64(totalBytes) / (1024 * 1024),
-		"duration":       duration,
-	}).Info("DVR defrosted from S3")
-
-	return &pb.DefrostComplete{
-		RequestId: req.RequestId,
-		AssetHash: req.AssetHash,
-		Status:    "success",
-		LocalPath: manifestPath,
-		SizeBytes: totalBytes,
-	}, nil
+func isChapterDefrostRequest(req *pb.DefrostRequest) bool {
+	return len(req.GetChapterSegments()) > 0 ||
+		req.GetChapterId() != "" ||
+		req.GetStartMs() != 0 ||
+		req.GetEndMs() != 0 ||
+		req.GetDvrArtifactId() != "" ||
+		req.GetChapterMode() != ""
 }
 
 // Helper methods for defrost job tracking
 
+// defrostJobKey distinguishes concurrent chapter requests for the same DVR
+// artifact. Without this, two simultaneous chapter defrosts would collapse
+// onto one in-flight job and one would receive the other's result.
+//
+// Key shape: assetHash for clip/vod (no sub-resource concept); for DVR,
+// assetHash + ":" + chapter_id (or a hash of the explicit_range bounds
+// when no chapter_id is supplied). Callers without chapter context share the
+// asset-hash-only slot and should not be used for normal DVR playback.
+func defrostJobKey(assetHash, chapterID string, startMs, endMs int64) string {
+	if chapterID != "" {
+		return assetHash + ":" + chapterID
+	}
+	if startMs == 0 && endMs == 0 {
+		return assetHash
+	}
+	return fmt.Sprintf("%s:%d-%d", assetHash, startMs, endMs)
+}
+
 func (sm *StorageManager) getOrCreateDefrostJob(assetHash string, assetType AssetType, requestID string) (*DefrostJob, bool) {
+	return sm.getOrCreateDefrostJobKeyed(assetHash, assetType, requestID, assetHash)
+}
+
+func (sm *StorageManager) getOrCreateDefrostJobKeyed(assetHash string, assetType AssetType, requestID, key string) (*DefrostJob, bool) {
 	sm.defrostTracker.mu.Lock()
 	defer sm.defrostTracker.mu.Unlock()
 
-	if job, exists := sm.defrostTracker.inFlight[assetHash]; exists {
+	if job, exists := sm.defrostTracker.inFlight[key]; exists {
 		atomic.AddInt32(&job.Waiters, 1)
 		return job, false // Don't initiate, wait for existing
 	}
@@ -1434,15 +1339,19 @@ func (sm *StorageManager) getOrCreateDefrostJob(assetHash string, assetType Asse
 		Done:      make(chan struct{}),
 		Waiters:   1,
 	}
-	sm.defrostTracker.inFlight[assetHash] = job
+	sm.defrostTracker.inFlight[key] = job
 	return job, true // Should initiate
 }
 
 func (sm *StorageManager) markDefrostJobDone(assetHash string, err error, localPath string, sizeBytes uint64) {
+	sm.markDefrostJobDoneKeyed(assetHash, err, localPath, sizeBytes, assetHash)
+}
+
+func (sm *StorageManager) markDefrostJobDoneKeyed(_ string, err error, localPath string, sizeBytes uint64, key string) {
 	sm.defrostTracker.mu.Lock()
 	defer sm.defrostTracker.mu.Unlock()
 
-	if job, exists := sm.defrostTracker.inFlight[assetHash]; exists {
+	if job, exists := sm.defrostTracker.inFlight[key]; exists {
 		job.Err = err
 		job.LocalPath = localPath
 		job.SizeBytes = sizeBytes
@@ -1453,46 +1362,13 @@ func (sm *StorageManager) markDefrostJobDone(assetHash string, err error, localP
 }
 
 func (sm *StorageManager) completeDefrostJob(assetHash string) {
+	sm.completeDefrostJobKeyed(assetHash)
+}
+
+func (sm *StorageManager) completeDefrostJobKeyed(key string) {
 	sm.defrostTracker.mu.Lock()
 	defer sm.defrostTracker.mu.Unlock()
-	delete(sm.defrostTracker.inFlight, assetHash)
-}
-
-// HLS manifest helpers
-
-func (sm *StorageManager) createLiveManifest(_ string, targetDuration int) string {
-	return fmt.Sprintf(`#EXTM3U
-#EXT-X-VERSION:3
-#EXT-X-TARGETDURATION:%d
-#EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:EVENT
-`, targetDuration)
-}
-
-func (sm *StorageManager) appendSegmentToManifest(manifestPath, segmentName string, duration float64) {
-	f, err := os.OpenFile(manifestPath, os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		sm.logger.WithError(err).WithField("manifest", manifestPath).Warn("Failed to open manifest for append")
-		return
-	}
-	defer func() { _ = f.Close() }()
-
-	segment := fmt.Sprintf("#EXTINF:%.3f,\nsegments/%s\n", duration, segmentName)
-	if _, err := f.WriteString(segment); err != nil {
-		sm.logger.WithError(err).WithField("manifest", manifestPath).Warn("Failed to write segment to manifest")
-	}
-}
-
-func (sm *StorageManager) finalizeManifest(manifestPath string) {
-	f, err := os.OpenFile(manifestPath, os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		sm.logger.WithError(err).WithField("manifest", manifestPath).Warn("Failed to open manifest for finalization")
-		return
-	}
-	defer func() { _ = f.Close() }()
-	if _, err := f.WriteString("#EXT-X-ENDLIST\n"); err != nil {
-		sm.logger.WithError(err).WithField("manifest", manifestPath).Warn("Failed to write ENDLIST to manifest")
-	}
+	delete(sm.defrostTracker.inFlight, key)
 }
 
 // parseHLSManifest parses an HLS manifest to extract segment names and durations.
@@ -1536,36 +1412,6 @@ func parseHLSManifest(content string) (*ParsedManifest, error) {
 
 	return result, nil
 }
-
-// Progress file helpers for resume
-
-func (sm *StorageManager) loadDefrostProgress(_, localPath string) (*DefrostProgress, error) {
-	progressFile := filepath.Join(localPath, ".defrost.json")
-	data, err := os.ReadFile(progressFile)
-	if err != nil {
-		return nil, err
-	}
-	var progress DefrostProgress
-	if err := json.Unmarshal(data, &progress); err != nil {
-		return nil, err
-	}
-	return &progress, nil
-}
-
-func (sm *StorageManager) saveDefrostProgress(progress *DefrostProgress, localPath string) {
-	progressFile := filepath.Join(localPath, ".defrost.json")
-	data, _ := json.Marshal(progress)
-	if err := os.WriteFile(progressFile, data, 0644); err != nil {
-		sm.logger.WithError(err).Warn("Failed to save defrost progress file")
-	}
-}
-
-func (sm *StorageManager) removeDefrostProgress(localPath string) {
-	progressFile := filepath.Join(localPath, ".defrost.json")
-	_ = os.Remove(progressFile)
-}
-
-// Storage utility methods
 
 func (sm *StorageManager) getStorageUsage(path string) (float64, uint64, uint64, error) {
 	var stat syscall.Statfs_t
@@ -1635,16 +1481,25 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 	targetBytes := uint64(float64(totalBytes) * sm.targetThreshold)
 	bytesToFree := usedBytes - targetBytes
 
+	// Active-DVR-first pass. getFreezeCandidates skips active DVR hashes (so
+	// emergency cleanup never RemoveAlls an active recording's directory),
+	// which means any "evict from active DVR under pressure" decision must
+	// happen here, before the candidate loop. We ask Foghorn for the
+	// authoritative list of safe-to-evict segments per active DVR and let
+	// EvictUploadedSegments delete individual .ts files.
+	for activeHash := range control.GetActiveDVRHashes() {
+		evicted := sm.dropPressuredDVRSegments(activeHash)
+		if evicted > 0 {
+			sm.logger.WithFields(logging.Fields{
+				"dvr_hash":         activeHash,
+				"segments_evicted": evicted,
+			}).Info("Evicted segments from active DVR under storage pressure")
+		}
+	}
+
 	candidates, err := sm.getFreezeCandidates(clipsDir, AssetTypeClip)
 	if err != nil {
 		return err
-	}
-
-	// Also get DVR candidates
-	dvrDir := filepath.Join(sm.basePath, "dvr")
-	dvrCandidates, err := sm.getFreezeCandidates(dvrDir, AssetTypeDVR)
-	if err == nil {
-		candidates = append(candidates, dvrCandidates...)
 	}
 
 	// Also get VOD candidates
@@ -1688,7 +1543,22 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 					_ = os.Remove(candidate.FilePath + ".gop")
 				}
 			} else {
-				// DVR: remove entire directory
+				// DVR: never RemoveAll an active DVR directory. For inactive
+				// DVRs the whole tree may be reclaimed; for active ones, only
+				// individual uploaded segments outside the rolling window are
+				// safe to evict; drive that via the segment-level path.
+				if control.IsActiveDVR(candidate.AssetHash) {
+					evicted := sm.dropPressuredDVRSegments(candidate.AssetHash)
+					if evicted > 0 {
+						sm.logger.WithFields(logging.Fields{
+							"dvr_hash":         candidate.AssetHash,
+							"segments_evicted": evicted,
+						}).Info("Evicted DVR segments under storage pressure")
+					}
+					// Skip the directory-level delete and keep iterating. The
+					// freed-bytes accounting catches up via subsequent passes.
+					continue
+				}
 				deleteErr = os.RemoveAll(candidate.FilePath)
 			}
 

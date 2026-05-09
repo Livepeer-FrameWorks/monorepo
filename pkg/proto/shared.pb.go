@@ -151,8 +151,8 @@ type CreateClipRequest struct {
 	Description        string                 `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
 	StartUnix          *int64                 `protobuf:"varint,6,opt,name=start_unix,json=startUnix,proto3,oneof" json:"start_unix,omitempty"`          // Unix timestamp (seconds), negative for relative-to-now
 	StopUnix           *int64                 `protobuf:"varint,7,opt,name=stop_unix,json=stopUnix,proto3,oneof" json:"stop_unix,omitempty"`             // Unix timestamp (seconds)
-	StartMs            *int64                 `protobuf:"varint,8,opt,name=start_ms,json=startMs,proto3,oneof" json:"start_ms,omitempty"`                // Media time (seconds from stream start) - legacy name, actually seconds
-	StopMs             *int64                 `protobuf:"varint,9,opt,name=stop_ms,json=stopMs,proto3,oneof" json:"stop_ms,omitempty"`                   // Media time (seconds from stream start) - legacy name, actually seconds
+	StartMs            *int64                 `protobuf:"varint,8,opt,name=start_ms,json=startMs,proto3,oneof" json:"start_ms,omitempty"`                // Media time in seconds from stream start
+	StopMs             *int64                 `protobuf:"varint,9,opt,name=stop_ms,json=stopMs,proto3,oneof" json:"stop_ms,omitempty"`                   // Media time in seconds from stream start
 	DurationSec        *int64                 `protobuf:"varint,10,opt,name=duration_sec,json=durationSec,proto3,oneof" json:"duration_sec,omitempty"`   // Duration (seconds)
 	Mode               ClipMode               `protobuf:"varint,11,opt,name=mode,proto3,enum=shared.ClipMode" json:"mode,omitempty"`                     // How to interpret the time fields
 	ExpiresAt          *int64                 `protobuf:"varint,12,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`         // Unix timestamp (seconds) for auto-deletion
@@ -872,23 +872,138 @@ func (x *DeleteClipResponse) GetMessage() string {
 	return ""
 }
 
+// DVRPolicy bundles the resolved DVR window/segment policy that applies
+// to a tenant's recordings on a given cluster. Populated by Purser from
+// tier entitlements + cluster overrides; flows through Commodore
+// (ValidateStreamKey, StartDVR) and Foghorn into the sidecar DVRConfig.
+//
+// Three concepts that must NOT be conflated:
+//   - max_window_seconds:  rolling live seekback window (Mist targetAge)
+//   - default_window_seconds: live window default if caller didn't pick
+//   - recording_retention_days: how long the FINALIZED artifact is kept,
+//     ticking from ended_at — independent of the live window
+//
+// recording_retention_days is snapshotted onto foghorn.artifacts at DVR
+// start (dvr_retention_days column). FinalizeDVR computes
+// retention_until = ended_at + dvr_retention_days*24h. Live tier is never
+// re-resolved at end (the tenant's plan may have changed mid-stream).
+type DVRPolicy struct {
+	state                         protoimpl.MessageState `protogen:"open.v1"`
+	DefaultWindowSeconds          int32                  `protobuf:"varint,1,opt,name=default_window_seconds,json=defaultWindowSeconds,proto3" json:"default_window_seconds,omitempty"`                              // Tier default if caller doesn't specify a window
+	MaxWindowSeconds              int32                  `protobuf:"varint,2,opt,name=max_window_seconds,json=maxWindowSeconds,proto3" json:"max_window_seconds,omitempty"`                                          // Tier ceiling on live DVR window (Mist targetAge)
+	DefaultSegmentDurationSeconds int32                  `protobuf:"varint,3,opt,name=default_segment_duration_seconds,json=defaultSegmentDurationSeconds,proto3" json:"default_segment_duration_seconds,omitempty"` // Mist split for this tier (6/12/24)
+	MaxEntries                    int32                  `protobuf:"varint,4,opt,name=max_entries,json=maxEntries,proto3" json:"max_entries,omitempty"`                                                              // Max HLS playlist entries (manifest size cap)
+	AllowClusterExtension         bool                   `protobuf:"varint,5,opt,name=allow_cluster_extension,json=allowClusterExtension,proto3" json:"allow_cluster_extension,omitempty"`                           // Cluster may raise max_window for this tenant (Enterprise)
+	RecordingRetentionDays        int32                  `protobuf:"varint,6,opt,name=recording_retention_days,json=recordingRetentionDays,proto3" json:"recording_retention_days,omitempty"`                        // Post-end retention; 0 = system default 30
+	unknownFields                 protoimpl.UnknownFields
+	sizeCache                     protoimpl.SizeCache
+}
+
+func (x *DVRPolicy) Reset() {
+	*x = DVRPolicy{}
+	mi := &file_shared_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DVRPolicy) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DVRPolicy) ProtoMessage() {}
+
+func (x *DVRPolicy) ProtoReflect() protoreflect.Message {
+	mi := &file_shared_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DVRPolicy.ProtoReflect.Descriptor instead.
+func (*DVRPolicy) Descriptor() ([]byte, []int) {
+	return file_shared_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *DVRPolicy) GetDefaultWindowSeconds() int32 {
+	if x != nil {
+		return x.DefaultWindowSeconds
+	}
+	return 0
+}
+
+func (x *DVRPolicy) GetMaxWindowSeconds() int32 {
+	if x != nil {
+		return x.MaxWindowSeconds
+	}
+	return 0
+}
+
+func (x *DVRPolicy) GetDefaultSegmentDurationSeconds() int32 {
+	if x != nil {
+		return x.DefaultSegmentDurationSeconds
+	}
+	return 0
+}
+
+func (x *DVRPolicy) GetMaxEntries() int32 {
+	if x != nil {
+		return x.MaxEntries
+	}
+	return 0
+}
+
+func (x *DVRPolicy) GetAllowClusterExtension() bool {
+	if x != nil {
+		return x.AllowClusterExtension
+	}
+	return false
+}
+
+func (x *DVRPolicy) GetRecordingRetentionDays() int32 {
+	if x != nil {
+		return x.RecordingRetentionDays
+	}
+	return 0
+}
+
 // StartDVRRequest - request to start DVR recording
 // Source: pkg/api/foghorn/types.go:StartDVRRequest
 type StartDVRRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	InternalName  string                 `protobuf:"bytes,2,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
-	StreamId      *string                `protobuf:"bytes,3,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"`
-	UserId        *string                `protobuf:"bytes,4,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`
-	ExpiresAt     *int64                 `protobuf:"varint,5,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"` // Unix timestamp (seconds) for auto-deletion
-	ClusterId     string                 `protobuf:"bytes,6,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`        // Cluster this stream belongs to (set by caller)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	TenantId     string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	InternalName string                 `protobuf:"bytes,2,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
+	StreamId     *string                `protobuf:"bytes,3,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"`
+	UserId       *string                `protobuf:"bytes,4,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`
+	ExpiresAt    *int64                 `protobuf:"varint,5,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"` // ignored for DVR; retention is computed at finalization
+	ClusterId    string                 `protobuf:"bytes,6,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`        // Cluster this stream belongs to (set by caller)
+	// Caller-requested live DVR window (rolling Mist window, used for targetAge).
+	// 0 means "use tier default". Clamped server-side by tier_max / cluster_max;
+	// retention is post-end only and never clamps the live DVR window.
+	DvrWindowSeconds *int32 `protobuf:"varint,7,opt,name=dvr_window_seconds,json=dvrWindowSeconds,proto3,oneof" json:"dvr_window_seconds,omitempty"`
+	// Resolved DVR policy for the tenant (from Purser tier entitlements). Manual
+	// startDVR populates this from Commodore's GetTenantBillingStatus call so
+	// Foghorn does not need to re-fetch. Auto-record (record:true) populates it
+	// from Foghorn's streamCache (already cached during PUSH_REWRITE). When nil,
+	// pkg/dvrpolicy.Resolve uses zero-value defaults and a safe 1h fallback.
+	DvrPolicy *DVRPolicy `protobuf:"bytes,8,opt,name=dvr_policy,json=dvrPolicy,proto3" json:"dvr_policy,omitempty"`
+	// Default chapter mode for the chapter sweeper to materialize automatically.
+	// Empty string lets Foghorn use the default window_sized_chapters policy.
+	// Values: 'window_sized_chapters' | 'fixed_interval' | ” (none)
+	// For 'fixed_interval', dvr_chapter_interval_seconds is required.
+	DvrChapterMode            *string `protobuf:"bytes,9,opt,name=dvr_chapter_mode,json=dvrChapterMode,proto3,oneof" json:"dvr_chapter_mode,omitempty"`
+	DvrChapterIntervalSeconds *int32  `protobuf:"varint,10,opt,name=dvr_chapter_interval_seconds,json=dvrChapterIntervalSeconds,proto3,oneof" json:"dvr_chapter_interval_seconds,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *StartDVRRequest) Reset() {
 	*x = StartDVRRequest{}
-	mi := &file_shared_proto_msgTypes[8]
+	mi := &file_shared_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -900,7 +1015,7 @@ func (x *StartDVRRequest) String() string {
 func (*StartDVRRequest) ProtoMessage() {}
 
 func (x *StartDVRRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[8]
+	mi := &file_shared_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -913,7 +1028,7 @@ func (x *StartDVRRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartDVRRequest.ProtoReflect.Descriptor instead.
 func (*StartDVRRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{8}
+	return file_shared_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *StartDVRRequest) GetTenantId() string {
@@ -958,6 +1073,34 @@ func (x *StartDVRRequest) GetClusterId() string {
 	return ""
 }
 
+func (x *StartDVRRequest) GetDvrWindowSeconds() int32 {
+	if x != nil && x.DvrWindowSeconds != nil {
+		return *x.DvrWindowSeconds
+	}
+	return 0
+}
+
+func (x *StartDVRRequest) GetDvrPolicy() *DVRPolicy {
+	if x != nil {
+		return x.DvrPolicy
+	}
+	return nil
+}
+
+func (x *StartDVRRequest) GetDvrChapterMode() string {
+	if x != nil && x.DvrChapterMode != nil {
+		return *x.DvrChapterMode
+	}
+	return ""
+}
+
+func (x *StartDVRRequest) GetDvrChapterIntervalSeconds() int32 {
+	if x != nil && x.DvrChapterIntervalSeconds != nil {
+		return *x.DvrChapterIntervalSeconds
+	}
+	return 0
+}
+
 // StartDVRResponse - response from starting DVR
 // Source: pkg/api/foghorn/types.go:StartDVRResponse
 type StartDVRResponse struct {
@@ -974,7 +1117,7 @@ type StartDVRResponse struct {
 
 func (x *StartDVRResponse) Reset() {
 	*x = StartDVRResponse{}
-	mi := &file_shared_proto_msgTypes[9]
+	mi := &file_shared_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -986,7 +1129,7 @@ func (x *StartDVRResponse) String() string {
 func (*StartDVRResponse) ProtoMessage() {}
 
 func (x *StartDVRResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[9]
+	mi := &file_shared_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -999,7 +1142,7 @@ func (x *StartDVRResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartDVRResponse.ProtoReflect.Descriptor instead.
 func (*StartDVRResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{9}
+	return file_shared_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *StartDVRResponse) GetStatus() string {
@@ -1056,7 +1199,7 @@ type StopDVRRequest struct {
 
 func (x *StopDVRRequest) Reset() {
 	*x = StopDVRRequest{}
-	mi := &file_shared_proto_msgTypes[10]
+	mi := &file_shared_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1068,7 +1211,7 @@ func (x *StopDVRRequest) String() string {
 func (*StopDVRRequest) ProtoMessage() {}
 
 func (x *StopDVRRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[10]
+	mi := &file_shared_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1081,7 +1224,7 @@ func (x *StopDVRRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopDVRRequest.ProtoReflect.Descriptor instead.
 func (*StopDVRRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{10}
+	return file_shared_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *StopDVRRequest) GetDvrHash() string {
@@ -1116,7 +1259,7 @@ type StopDVRResponse struct {
 
 func (x *StopDVRResponse) Reset() {
 	*x = StopDVRResponse{}
-	mi := &file_shared_proto_msgTypes[11]
+	mi := &file_shared_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1128,7 +1271,7 @@ func (x *StopDVRResponse) String() string {
 func (*StopDVRResponse) ProtoMessage() {}
 
 func (x *StopDVRResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[11]
+	mi := &file_shared_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1141,7 +1284,7 @@ func (x *StopDVRResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopDVRResponse.ProtoReflect.Descriptor instead.
 func (*StopDVRResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{11}
+	return file_shared_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *StopDVRResponse) GetSuccess() bool {
@@ -1169,7 +1312,7 @@ type DeleteDVRRequest struct {
 
 func (x *DeleteDVRRequest) Reset() {
 	*x = DeleteDVRRequest{}
-	mi := &file_shared_proto_msgTypes[12]
+	mi := &file_shared_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1181,7 +1324,7 @@ func (x *DeleteDVRRequest) String() string {
 func (*DeleteDVRRequest) ProtoMessage() {}
 
 func (x *DeleteDVRRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[12]
+	mi := &file_shared_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1194,7 +1337,7 @@ func (x *DeleteDVRRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteDVRRequest.ProtoReflect.Descriptor instead.
 func (*DeleteDVRRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{12}
+	return file_shared_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *DeleteDVRRequest) GetDvrHash() string {
@@ -1222,7 +1365,7 @@ type DeleteDVRResponse struct {
 
 func (x *DeleteDVRResponse) Reset() {
 	*x = DeleteDVRResponse{}
-	mi := &file_shared_proto_msgTypes[13]
+	mi := &file_shared_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1234,7 +1377,7 @@ func (x *DeleteDVRResponse) String() string {
 func (*DeleteDVRResponse) ProtoMessage() {}
 
 func (x *DeleteDVRResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[13]
+	mi := &file_shared_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1247,7 +1390,7 @@ func (x *DeleteDVRResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteDVRResponse.ProtoReflect.Descriptor instead.
 func (*DeleteDVRResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{13}
+	return file_shared_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *DeleteDVRResponse) GetSuccess() bool {
@@ -1296,7 +1439,7 @@ type DVRInfo struct {
 
 func (x *DVRInfo) Reset() {
 	*x = DVRInfo{}
-	mi := &file_shared_proto_msgTypes[14]
+	mi := &file_shared_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1308,7 +1451,7 @@ func (x *DVRInfo) String() string {
 func (*DVRInfo) ProtoMessage() {}
 
 func (x *DVRInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[14]
+	mi := &file_shared_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1321,7 +1464,7 @@ func (x *DVRInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DVRInfo.ProtoReflect.Descriptor instead.
 func (*DVRInfo) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{14}
+	return file_shared_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *DVRInfo) GetDvrHash() string {
@@ -1476,7 +1619,7 @@ type ListDVRRecordingsRequest struct {
 
 func (x *ListDVRRecordingsRequest) Reset() {
 	*x = ListDVRRecordingsRequest{}
-	mi := &file_shared_proto_msgTypes[15]
+	mi := &file_shared_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1488,7 +1631,7 @@ func (x *ListDVRRecordingsRequest) String() string {
 func (*ListDVRRecordingsRequest) ProtoMessage() {}
 
 func (x *ListDVRRecordingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[15]
+	mi := &file_shared_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1501,7 +1644,7 @@ func (x *ListDVRRecordingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDVRRecordingsRequest.ProtoReflect.Descriptor instead.
 func (*ListDVRRecordingsRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{15}
+	return file_shared_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ListDVRRecordingsRequest) GetTenantId() string {
@@ -1536,7 +1679,7 @@ type ListDVRRecordingsResponse struct {
 
 func (x *ListDVRRecordingsResponse) Reset() {
 	*x = ListDVRRecordingsResponse{}
-	mi := &file_shared_proto_msgTypes[16]
+	mi := &file_shared_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1548,7 +1691,7 @@ func (x *ListDVRRecordingsResponse) String() string {
 func (*ListDVRRecordingsResponse) ProtoMessage() {}
 
 func (x *ListDVRRecordingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[16]
+	mi := &file_shared_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1561,7 +1704,7 @@ func (x *ListDVRRecordingsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDVRRecordingsResponse.ProtoReflect.Descriptor instead.
 func (*ListDVRRecordingsResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{16}
+	return file_shared_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ListDVRRecordingsResponse) GetDvrRecordings() []*DVRInfo {
@@ -1590,7 +1733,7 @@ type ViewerEndpointRequest struct {
 
 func (x *ViewerEndpointRequest) Reset() {
 	*x = ViewerEndpointRequest{}
-	mi := &file_shared_proto_msgTypes[17]
+	mi := &file_shared_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1602,7 +1745,7 @@ func (x *ViewerEndpointRequest) String() string {
 func (*ViewerEndpointRequest) ProtoMessage() {}
 
 func (x *ViewerEndpointRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[17]
+	mi := &file_shared_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1615,7 +1758,7 @@ func (x *ViewerEndpointRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewerEndpointRequest.ProtoReflect.Descriptor instead.
 func (*ViewerEndpointRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{17}
+	return file_shared_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ViewerEndpointRequest) GetContentId() string {
@@ -1654,7 +1797,7 @@ type OutputCapability struct {
 
 func (x *OutputCapability) Reset() {
 	*x = OutputCapability{}
-	mi := &file_shared_proto_msgTypes[18]
+	mi := &file_shared_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1666,7 +1809,7 @@ func (x *OutputCapability) String() string {
 func (*OutputCapability) ProtoMessage() {}
 
 func (x *OutputCapability) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[18]
+	mi := &file_shared_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1679,7 +1822,7 @@ func (x *OutputCapability) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OutputCapability.ProtoReflect.Descriptor instead.
 func (*OutputCapability) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{18}
+	return file_shared_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *OutputCapability) GetSupportsSeek() bool {
@@ -1736,7 +1879,7 @@ type OutputEndpoint struct {
 
 func (x *OutputEndpoint) Reset() {
 	*x = OutputEndpoint{}
-	mi := &file_shared_proto_msgTypes[19]
+	mi := &file_shared_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1748,7 +1891,7 @@ func (x *OutputEndpoint) String() string {
 func (*OutputEndpoint) ProtoMessage() {}
 
 func (x *OutputEndpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[19]
+	mi := &file_shared_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1761,7 +1904,7 @@ func (x *OutputEndpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OutputEndpoint.ProtoReflect.Descriptor instead.
 func (*OutputEndpoint) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{19}
+	return file_shared_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *OutputEndpoint) GetProtocol() string {
@@ -1803,7 +1946,7 @@ type ViewerEndpoint struct {
 
 func (x *ViewerEndpoint) Reset() {
 	*x = ViewerEndpoint{}
-	mi := &file_shared_proto_msgTypes[20]
+	mi := &file_shared_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1815,7 +1958,7 @@ func (x *ViewerEndpoint) String() string {
 func (*ViewerEndpoint) ProtoMessage() {}
 
 func (x *ViewerEndpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[20]
+	mi := &file_shared_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1828,7 +1971,7 @@ func (x *ViewerEndpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewerEndpoint.ProtoReflect.Descriptor instead.
 func (*ViewerEndpoint) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{20}
+	return file_shared_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ViewerEndpoint) GetNodeId() string {
@@ -1903,7 +2046,7 @@ type PlaybackTrack struct {
 
 func (x *PlaybackTrack) Reset() {
 	*x = PlaybackTrack{}
-	mi := &file_shared_proto_msgTypes[21]
+	mi := &file_shared_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1915,7 +2058,7 @@ func (x *PlaybackTrack) String() string {
 func (*PlaybackTrack) ProtoMessage() {}
 
 func (x *PlaybackTrack) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[21]
+	mi := &file_shared_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1928,7 +2071,7 @@ func (x *PlaybackTrack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlaybackTrack.ProtoReflect.Descriptor instead.
 func (*PlaybackTrack) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{21}
+	return file_shared_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *PlaybackTrack) GetType() string {
@@ -1997,7 +2140,7 @@ type PlaybackInstance struct {
 
 func (x *PlaybackInstance) Reset() {
 	*x = PlaybackInstance{}
-	mi := &file_shared_proto_msgTypes[22]
+	mi := &file_shared_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2009,7 +2152,7 @@ func (x *PlaybackInstance) String() string {
 func (*PlaybackInstance) ProtoMessage() {}
 
 func (x *PlaybackInstance) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[22]
+	mi := &file_shared_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2022,7 +2165,7 @@ func (x *PlaybackInstance) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlaybackInstance.ProtoReflect.Descriptor instead.
 func (*PlaybackInstance) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{22}
+	return file_shared_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *PlaybackInstance) GetNodeId() string {
@@ -2112,7 +2255,7 @@ type PlaybackMetadata struct {
 
 func (x *PlaybackMetadata) Reset() {
 	*x = PlaybackMetadata{}
-	mi := &file_shared_proto_msgTypes[23]
+	mi := &file_shared_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2124,7 +2267,7 @@ func (x *PlaybackMetadata) String() string {
 func (*PlaybackMetadata) ProtoMessage() {}
 
 func (x *PlaybackMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[23]
+	mi := &file_shared_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2137,7 +2280,7 @@ func (x *PlaybackMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlaybackMetadata.ProtoReflect.Descriptor instead.
 func (*PlaybackMetadata) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{23}
+	return file_shared_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *PlaybackMetadata) GetStatus() string {
@@ -2300,7 +2443,7 @@ type ThumbnailAssets struct {
 
 func (x *ThumbnailAssets) Reset() {
 	*x = ThumbnailAssets{}
-	mi := &file_shared_proto_msgTypes[24]
+	mi := &file_shared_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2312,7 +2455,7 @@ func (x *ThumbnailAssets) String() string {
 func (*ThumbnailAssets) ProtoMessage() {}
 
 func (x *ThumbnailAssets) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[24]
+	mi := &file_shared_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2325,7 +2468,7 @@ func (x *ThumbnailAssets) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThumbnailAssets.ProtoReflect.Descriptor instead.
 func (*ThumbnailAssets) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{24}
+	return file_shared_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ThumbnailAssets) GetPosterUrl() string {
@@ -2368,7 +2511,7 @@ type ViewerEndpointResponse struct {
 
 func (x *ViewerEndpointResponse) Reset() {
 	*x = ViewerEndpointResponse{}
-	mi := &file_shared_proto_msgTypes[25]
+	mi := &file_shared_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2380,7 +2523,7 @@ func (x *ViewerEndpointResponse) String() string {
 func (*ViewerEndpointResponse) ProtoMessage() {}
 
 func (x *ViewerEndpointResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[25]
+	mi := &file_shared_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2393,7 +2536,7 @@ func (x *ViewerEndpointResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewerEndpointResponse.ProtoReflect.Descriptor instead.
 func (*ViewerEndpointResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{25}
+	return file_shared_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ViewerEndpointResponse) GetPrimary() *ViewerEndpoint {
@@ -2428,7 +2571,7 @@ type IngestEndpointRequest struct {
 
 func (x *IngestEndpointRequest) Reset() {
 	*x = IngestEndpointRequest{}
-	mi := &file_shared_proto_msgTypes[26]
+	mi := &file_shared_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2440,7 +2583,7 @@ func (x *IngestEndpointRequest) String() string {
 func (*IngestEndpointRequest) ProtoMessage() {}
 
 func (x *IngestEndpointRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[26]
+	mi := &file_shared_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2453,7 +2596,7 @@ func (x *IngestEndpointRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestEndpointRequest.ProtoReflect.Descriptor instead.
 func (*IngestEndpointRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{26}
+	return file_shared_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *IngestEndpointRequest) GetStreamKey() string {
@@ -2486,7 +2629,7 @@ type IngestEndpoint struct {
 
 func (x *IngestEndpoint) Reset() {
 	*x = IngestEndpoint{}
-	mi := &file_shared_proto_msgTypes[27]
+	mi := &file_shared_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2498,7 +2641,7 @@ func (x *IngestEndpoint) String() string {
 func (*IngestEndpoint) ProtoMessage() {}
 
 func (x *IngestEndpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[27]
+	mi := &file_shared_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2511,7 +2654,7 @@ func (x *IngestEndpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestEndpoint.ProtoReflect.Descriptor instead.
 func (*IngestEndpoint) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{27}
+	return file_shared_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *IngestEndpoint) GetNodeId() string {
@@ -2578,7 +2721,7 @@ type IngestMetadata struct {
 
 func (x *IngestMetadata) Reset() {
 	*x = IngestMetadata{}
-	mi := &file_shared_proto_msgTypes[28]
+	mi := &file_shared_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2590,7 +2733,7 @@ func (x *IngestMetadata) String() string {
 func (*IngestMetadata) ProtoMessage() {}
 
 func (x *IngestMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[28]
+	mi := &file_shared_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2603,7 +2746,7 @@ func (x *IngestMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestMetadata.ProtoReflect.Descriptor instead.
 func (*IngestMetadata) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{28}
+	return file_shared_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *IngestMetadata) GetStreamId() string {
@@ -2660,7 +2803,7 @@ type IngestEndpointResponse struct {
 
 func (x *IngestEndpointResponse) Reset() {
 	*x = IngestEndpointResponse{}
-	mi := &file_shared_proto_msgTypes[29]
+	mi := &file_shared_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2672,7 +2815,7 @@ func (x *IngestEndpointResponse) String() string {
 func (*IngestEndpointResponse) ProtoMessage() {}
 
 func (x *IngestEndpointResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[29]
+	mi := &file_shared_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2685,7 +2828,7 @@ func (x *IngestEndpointResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestEndpointResponse.ProtoReflect.Descriptor instead.
 func (*IngestEndpointResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{29}
+	return file_shared_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *IngestEndpointResponse) GetPrimary() *IngestEndpoint {
@@ -2729,7 +2872,7 @@ type CreateVodUploadRequest struct {
 
 func (x *CreateVodUploadRequest) Reset() {
 	*x = CreateVodUploadRequest{}
-	mi := &file_shared_proto_msgTypes[30]
+	mi := &file_shared_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2741,7 +2884,7 @@ func (x *CreateVodUploadRequest) String() string {
 func (*CreateVodUploadRequest) ProtoMessage() {}
 
 func (x *CreateVodUploadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[30]
+	mi := &file_shared_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2754,7 +2897,7 @@ func (x *CreateVodUploadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateVodUploadRequest.ProtoReflect.Descriptor instead.
 func (*CreateVodUploadRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{30}
+	return file_shared_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *CreateVodUploadRequest) GetTenantId() string {
@@ -2850,7 +2993,7 @@ type CreateVodUploadResponse struct {
 
 func (x *CreateVodUploadResponse) Reset() {
 	*x = CreateVodUploadResponse{}
-	mi := &file_shared_proto_msgTypes[31]
+	mi := &file_shared_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2862,7 +3005,7 @@ func (x *CreateVodUploadResponse) String() string {
 func (*CreateVodUploadResponse) ProtoMessage() {}
 
 func (x *CreateVodUploadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[31]
+	mi := &file_shared_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2875,7 +3018,7 @@ func (x *CreateVodUploadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateVodUploadResponse.ProtoReflect.Descriptor instead.
 func (*CreateVodUploadResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{31}
+	return file_shared_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *CreateVodUploadResponse) GetUploadId() string {
@@ -2938,7 +3081,7 @@ type VodUploadPart struct {
 
 func (x *VodUploadPart) Reset() {
 	*x = VodUploadPart{}
-	mi := &file_shared_proto_msgTypes[32]
+	mi := &file_shared_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2950,7 +3093,7 @@ func (x *VodUploadPart) String() string {
 func (*VodUploadPart) ProtoMessage() {}
 
 func (x *VodUploadPart) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[32]
+	mi := &file_shared_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2963,7 +3106,7 @@ func (x *VodUploadPart) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VodUploadPart.ProtoReflect.Descriptor instead.
 func (*VodUploadPart) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{32}
+	return file_shared_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *VodUploadPart) GetPartNumber() int32 {
@@ -2993,7 +3136,7 @@ type CompleteVodUploadRequest struct {
 
 func (x *CompleteVodUploadRequest) Reset() {
 	*x = CompleteVodUploadRequest{}
-	mi := &file_shared_proto_msgTypes[33]
+	mi := &file_shared_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3005,7 +3148,7 @@ func (x *CompleteVodUploadRequest) String() string {
 func (*CompleteVodUploadRequest) ProtoMessage() {}
 
 func (x *CompleteVodUploadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[33]
+	mi := &file_shared_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3018,7 +3161,7 @@ func (x *CompleteVodUploadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteVodUploadRequest.ProtoReflect.Descriptor instead.
 func (*CompleteVodUploadRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{33}
+	return file_shared_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *CompleteVodUploadRequest) GetTenantId() string {
@@ -3060,7 +3203,7 @@ type VodCompletedPart struct {
 
 func (x *VodCompletedPart) Reset() {
 	*x = VodCompletedPart{}
-	mi := &file_shared_proto_msgTypes[34]
+	mi := &file_shared_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3072,7 +3215,7 @@ func (x *VodCompletedPart) String() string {
 func (*VodCompletedPart) ProtoMessage() {}
 
 func (x *VodCompletedPart) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[34]
+	mi := &file_shared_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3085,7 +3228,7 @@ func (x *VodCompletedPart) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VodCompletedPart.ProtoReflect.Descriptor instead.
 func (*VodCompletedPart) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{34}
+	return file_shared_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *VodCompletedPart) GetPartNumber() int32 {
@@ -3112,7 +3255,7 @@ type CompleteVodUploadResponse struct {
 
 func (x *CompleteVodUploadResponse) Reset() {
 	*x = CompleteVodUploadResponse{}
-	mi := &file_shared_proto_msgTypes[35]
+	mi := &file_shared_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3124,7 +3267,7 @@ func (x *CompleteVodUploadResponse) String() string {
 func (*CompleteVodUploadResponse) ProtoMessage() {}
 
 func (x *CompleteVodUploadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[35]
+	mi := &file_shared_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3137,7 +3280,7 @@ func (x *CompleteVodUploadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteVodUploadResponse.ProtoReflect.Descriptor instead.
 func (*CompleteVodUploadResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{35}
+	return file_shared_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *CompleteVodUploadResponse) GetAsset() *VodAssetInfo {
@@ -3158,7 +3301,7 @@ type GetVodUploadStatusRequest struct {
 
 func (x *GetVodUploadStatusRequest) Reset() {
 	*x = GetVodUploadStatusRequest{}
-	mi := &file_shared_proto_msgTypes[36]
+	mi := &file_shared_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3170,7 +3313,7 @@ func (x *GetVodUploadStatusRequest) String() string {
 func (*GetVodUploadStatusRequest) ProtoMessage() {}
 
 func (x *GetVodUploadStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[36]
+	mi := &file_shared_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3183,7 +3326,7 @@ func (x *GetVodUploadStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVodUploadStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetVodUploadStatusRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{36}
+	return file_shared_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *GetVodUploadStatusRequest) GetTenantId() string {
@@ -3213,7 +3356,7 @@ type VodUploadedPart struct {
 
 func (x *VodUploadedPart) Reset() {
 	*x = VodUploadedPart{}
-	mi := &file_shared_proto_msgTypes[37]
+	mi := &file_shared_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3225,7 +3368,7 @@ func (x *VodUploadedPart) String() string {
 func (*VodUploadedPart) ProtoMessage() {}
 
 func (x *VodUploadedPart) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[37]
+	mi := &file_shared_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3238,7 +3381,7 @@ func (x *VodUploadedPart) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VodUploadedPart.ProtoReflect.Descriptor instead.
 func (*VodUploadedPart) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{37}
+	return file_shared_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *VodUploadedPart) GetPartNumber() int32 {
@@ -3280,7 +3423,7 @@ type GetVodUploadStatusResponse struct {
 
 func (x *GetVodUploadStatusResponse) Reset() {
 	*x = GetVodUploadStatusResponse{}
-	mi := &file_shared_proto_msgTypes[38]
+	mi := &file_shared_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3292,7 +3435,7 @@ func (x *GetVodUploadStatusResponse) String() string {
 func (*GetVodUploadStatusResponse) ProtoMessage() {}
 
 func (x *GetVodUploadStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[38]
+	mi := &file_shared_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3305,7 +3448,7 @@ func (x *GetVodUploadStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVodUploadStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetVodUploadStatusResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{38}
+	return file_shared_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *GetVodUploadStatusResponse) GetUploadId() string {
@@ -3382,7 +3525,7 @@ type AbortVodUploadRequest struct {
 
 func (x *AbortVodUploadRequest) Reset() {
 	*x = AbortVodUploadRequest{}
-	mi := &file_shared_proto_msgTypes[39]
+	mi := &file_shared_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3394,7 +3537,7 @@ func (x *AbortVodUploadRequest) String() string {
 func (*AbortVodUploadRequest) ProtoMessage() {}
 
 func (x *AbortVodUploadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[39]
+	mi := &file_shared_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3407,7 +3550,7 @@ func (x *AbortVodUploadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AbortVodUploadRequest.ProtoReflect.Descriptor instead.
 func (*AbortVodUploadRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{39}
+	return file_shared_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *AbortVodUploadRequest) GetTenantId() string {
@@ -3435,7 +3578,7 @@ type AbortVodUploadResponse struct {
 
 func (x *AbortVodUploadResponse) Reset() {
 	*x = AbortVodUploadResponse{}
-	mi := &file_shared_proto_msgTypes[40]
+	mi := &file_shared_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3447,7 +3590,7 @@ func (x *AbortVodUploadResponse) String() string {
 func (*AbortVodUploadResponse) ProtoMessage() {}
 
 func (x *AbortVodUploadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[40]
+	mi := &file_shared_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3460,7 +3603,7 @@ func (x *AbortVodUploadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AbortVodUploadResponse.ProtoReflect.Descriptor instead.
 func (*AbortVodUploadResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{40}
+	return file_shared_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *AbortVodUploadResponse) GetSuccess() bool {
@@ -3488,7 +3631,7 @@ type DeleteVodAssetRequest struct {
 
 func (x *DeleteVodAssetRequest) Reset() {
 	*x = DeleteVodAssetRequest{}
-	mi := &file_shared_proto_msgTypes[41]
+	mi := &file_shared_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3500,7 +3643,7 @@ func (x *DeleteVodAssetRequest) String() string {
 func (*DeleteVodAssetRequest) ProtoMessage() {}
 
 func (x *DeleteVodAssetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[41]
+	mi := &file_shared_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3513,7 +3656,7 @@ func (x *DeleteVodAssetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteVodAssetRequest.ProtoReflect.Descriptor instead.
 func (*DeleteVodAssetRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{41}
+	return file_shared_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *DeleteVodAssetRequest) GetTenantId() string {
@@ -3541,7 +3684,7 @@ type DeleteVodAssetResponse struct {
 
 func (x *DeleteVodAssetResponse) Reset() {
 	*x = DeleteVodAssetResponse{}
-	mi := &file_shared_proto_msgTypes[42]
+	mi := &file_shared_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3553,7 +3696,7 @@ func (x *DeleteVodAssetResponse) String() string {
 func (*DeleteVodAssetResponse) ProtoMessage() {}
 
 func (x *DeleteVodAssetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[42]
+	mi := &file_shared_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3566,7 +3709,7 @@ func (x *DeleteVodAssetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteVodAssetResponse.ProtoReflect.Descriptor instead.
 func (*DeleteVodAssetResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{42}
+	return file_shared_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *DeleteVodAssetResponse) GetSuccess() bool {
@@ -3594,7 +3737,7 @@ type GetVodAssetRequest struct {
 
 func (x *GetVodAssetRequest) Reset() {
 	*x = GetVodAssetRequest{}
-	mi := &file_shared_proto_msgTypes[43]
+	mi := &file_shared_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3606,7 +3749,7 @@ func (x *GetVodAssetRequest) String() string {
 func (*GetVodAssetRequest) ProtoMessage() {}
 
 func (x *GetVodAssetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[43]
+	mi := &file_shared_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3619,7 +3762,7 @@ func (x *GetVodAssetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVodAssetRequest.ProtoReflect.Descriptor instead.
 func (*GetVodAssetRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{43}
+	return file_shared_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *GetVodAssetRequest) GetTenantId() string {
@@ -3647,7 +3790,7 @@ type ListVodAssetsRequest struct {
 
 func (x *ListVodAssetsRequest) Reset() {
 	*x = ListVodAssetsRequest{}
-	mi := &file_shared_proto_msgTypes[44]
+	mi := &file_shared_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3659,7 +3802,7 @@ func (x *ListVodAssetsRequest) String() string {
 func (*ListVodAssetsRequest) ProtoMessage() {}
 
 func (x *ListVodAssetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[44]
+	mi := &file_shared_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3672,7 +3815,7 @@ func (x *ListVodAssetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListVodAssetsRequest.ProtoReflect.Descriptor instead.
 func (*ListVodAssetsRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{44}
+	return file_shared_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *ListVodAssetsRequest) GetTenantId() string {
@@ -3700,7 +3843,7 @@ type ListVodAssetsResponse struct {
 
 func (x *ListVodAssetsResponse) Reset() {
 	*x = ListVodAssetsResponse{}
-	mi := &file_shared_proto_msgTypes[45]
+	mi := &file_shared_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3712,7 +3855,7 @@ func (x *ListVodAssetsResponse) String() string {
 func (*ListVodAssetsResponse) ProtoMessage() {}
 
 func (x *ListVodAssetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[45]
+	mi := &file_shared_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3725,7 +3868,7 @@ func (x *ListVodAssetsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListVodAssetsResponse.ProtoReflect.Descriptor instead.
 func (*ListVodAssetsResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{45}
+	return file_shared_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *ListVodAssetsResponse) GetAssets() []*VodAssetInfo {
@@ -3775,7 +3918,7 @@ type VodAssetInfo struct {
 
 func (x *VodAssetInfo) Reset() {
 	*x = VodAssetInfo{}
-	mi := &file_shared_proto_msgTypes[46]
+	mi := &file_shared_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3787,7 +3930,7 @@ func (x *VodAssetInfo) String() string {
 func (*VodAssetInfo) ProtoMessage() {}
 
 func (x *VodAssetInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[46]
+	mi := &file_shared_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3800,7 +3943,7 @@ func (x *VodAssetInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VodAssetInfo.ProtoReflect.Descriptor instead.
 func (*VodAssetInfo) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{46}
+	return file_shared_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *VodAssetInfo) GetId() string {
@@ -3962,7 +4105,7 @@ type VodMetadata struct {
 
 func (x *VodMetadata) Reset() {
 	*x = VodMetadata{}
-	mi := &file_shared_proto_msgTypes[47]
+	mi := &file_shared_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3974,7 +4117,7 @@ func (x *VodMetadata) String() string {
 func (*VodMetadata) ProtoMessage() {}
 
 func (x *VodMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[47]
+	mi := &file_shared_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3987,7 +4130,7 @@ func (x *VodMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VodMetadata.ProtoReflect.Descriptor instead.
 func (*VodMetadata) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{47}
+	return file_shared_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *VodMetadata) GetDurationMs() int32 {
@@ -4076,7 +4219,7 @@ type WebhookRequest struct {
 
 func (x *WebhookRequest) Reset() {
 	*x = WebhookRequest{}
-	mi := &file_shared_proto_msgTypes[48]
+	mi := &file_shared_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4088,7 +4231,7 @@ func (x *WebhookRequest) String() string {
 func (*WebhookRequest) ProtoMessage() {}
 
 func (x *WebhookRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[48]
+	mi := &file_shared_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4101,7 +4244,7 @@ func (x *WebhookRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WebhookRequest.ProtoReflect.Descriptor instead.
 func (*WebhookRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{48}
+	return file_shared_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *WebhookRequest) GetProvider() string {
@@ -4151,7 +4294,7 @@ type WebhookResponse struct {
 
 func (x *WebhookResponse) Reset() {
 	*x = WebhookResponse{}
-	mi := &file_shared_proto_msgTypes[49]
+	mi := &file_shared_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4163,7 +4306,7 @@ func (x *WebhookResponse) String() string {
 func (*WebhookResponse) ProtoMessage() {}
 
 func (x *WebhookResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[49]
+	mi := &file_shared_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4176,7 +4319,7 @@ func (x *WebhookResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WebhookResponse.ProtoReflect.Descriptor instead.
 func (*WebhookResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{49}
+	return file_shared_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *WebhookResponse) GetSuccess() bool {
@@ -4310,7 +4453,15 @@ const file_shared_proto_rawDesc = "" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\"H\n" +
 	"\x12DeleteClipResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xff\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xcb\x02\n" +
+	"\tDVRPolicy\x124\n" +
+	"\x16default_window_seconds\x18\x01 \x01(\x05R\x14defaultWindowSeconds\x12,\n" +
+	"\x12max_window_seconds\x18\x02 \x01(\x05R\x10maxWindowSeconds\x12G\n" +
+	" default_segment_duration_seconds\x18\x03 \x01(\x05R\x1ddefaultSegmentDurationSeconds\x12\x1f\n" +
+	"\vmax_entries\x18\x04 \x01(\x05R\n" +
+	"maxEntries\x126\n" +
+	"\x17allow_cluster_extension\x18\x05 \x01(\bR\x15allowClusterExtension\x128\n" +
+	"\x18recording_retention_days\x18\x06 \x01(\x05R\x16recordingRetentionDays\"\xa6\x04\n" +
 	"\x0fStartDVRRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12#\n" +
 	"\rinternal_name\x18\x02 \x01(\tR\finternalName\x12 \n" +
@@ -4319,12 +4470,21 @@ const file_shared_proto_rawDesc = "" +
 	"\n" +
 	"expires_at\x18\x05 \x01(\x03H\x02R\texpiresAt\x88\x01\x01\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x06 \x01(\tR\tclusterIdB\f\n" +
+	"cluster_id\x18\x06 \x01(\tR\tclusterId\x121\n" +
+	"\x12dvr_window_seconds\x18\a \x01(\x05H\x03R\x10dvrWindowSeconds\x88\x01\x01\x120\n" +
+	"\n" +
+	"dvr_policy\x18\b \x01(\v2\x11.shared.DVRPolicyR\tdvrPolicy\x12-\n" +
+	"\x10dvr_chapter_mode\x18\t \x01(\tH\x04R\x0edvrChapterMode\x88\x01\x01\x12D\n" +
+	"\x1cdvr_chapter_interval_seconds\x18\n" +
+	" \x01(\x05H\x05R\x19dvrChapterIntervalSeconds\x88\x01\x01B\f\n" +
 	"\n" +
 	"_stream_idB\n" +
 	"\n" +
 	"\b_user_idB\r\n" +
-	"\v_expires_at\"\xd2\x01\n" +
+	"\v_expires_atB\x15\n" +
+	"\x13_dvr_window_secondsB\x13\n" +
+	"\x11_dvr_chapter_modeB\x1f\n" +
+	"\x1d_dvr_chapter_interval_seconds\"\xd2\x01\n" +
 	"\x10StartDVRResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x19\n" +
 	"\bdvr_hash\x18\x02 \x01(\tR\advrHash\x12\x1f\n" +
@@ -4747,7 +4907,7 @@ func file_shared_proto_rawDescGZIP() []byte {
 }
 
 var file_shared_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_shared_proto_msgTypes = make([]protoimpl.MessageInfo, 52)
+var file_shared_proto_msgTypes = make([]protoimpl.MessageInfo, 53)
 var file_shared_proto_goTypes = []any{
 	(ClipMode)(0),                      // 0: shared.ClipMode
 	(VodStatus)(0),                     // 1: shared.VodStatus
@@ -4759,106 +4919,108 @@ var file_shared_proto_goTypes = []any{
 	(*GetClipRequest)(nil),             // 7: shared.GetClipRequest
 	(*DeleteClipRequest)(nil),          // 8: shared.DeleteClipRequest
 	(*DeleteClipResponse)(nil),         // 9: shared.DeleteClipResponse
-	(*StartDVRRequest)(nil),            // 10: shared.StartDVRRequest
-	(*StartDVRResponse)(nil),           // 11: shared.StartDVRResponse
-	(*StopDVRRequest)(nil),             // 12: shared.StopDVRRequest
-	(*StopDVRResponse)(nil),            // 13: shared.StopDVRResponse
-	(*DeleteDVRRequest)(nil),           // 14: shared.DeleteDVRRequest
-	(*DeleteDVRResponse)(nil),          // 15: shared.DeleteDVRResponse
-	(*DVRInfo)(nil),                    // 16: shared.DVRInfo
-	(*ListDVRRecordingsRequest)(nil),   // 17: shared.ListDVRRecordingsRequest
-	(*ListDVRRecordingsResponse)(nil),  // 18: shared.ListDVRRecordingsResponse
-	(*ViewerEndpointRequest)(nil),      // 19: shared.ViewerEndpointRequest
-	(*OutputCapability)(nil),           // 20: shared.OutputCapability
-	(*OutputEndpoint)(nil),             // 21: shared.OutputEndpoint
-	(*ViewerEndpoint)(nil),             // 22: shared.ViewerEndpoint
-	(*PlaybackTrack)(nil),              // 23: shared.PlaybackTrack
-	(*PlaybackInstance)(nil),           // 24: shared.PlaybackInstance
-	(*PlaybackMetadata)(nil),           // 25: shared.PlaybackMetadata
-	(*ThumbnailAssets)(nil),            // 26: shared.ThumbnailAssets
-	(*ViewerEndpointResponse)(nil),     // 27: shared.ViewerEndpointResponse
-	(*IngestEndpointRequest)(nil),      // 28: shared.IngestEndpointRequest
-	(*IngestEndpoint)(nil),             // 29: shared.IngestEndpoint
-	(*IngestMetadata)(nil),             // 30: shared.IngestMetadata
-	(*IngestEndpointResponse)(nil),     // 31: shared.IngestEndpointResponse
-	(*CreateVodUploadRequest)(nil),     // 32: shared.CreateVodUploadRequest
-	(*CreateVodUploadResponse)(nil),    // 33: shared.CreateVodUploadResponse
-	(*VodUploadPart)(nil),              // 34: shared.VodUploadPart
-	(*CompleteVodUploadRequest)(nil),   // 35: shared.CompleteVodUploadRequest
-	(*VodCompletedPart)(nil),           // 36: shared.VodCompletedPart
-	(*CompleteVodUploadResponse)(nil),  // 37: shared.CompleteVodUploadResponse
-	(*GetVodUploadStatusRequest)(nil),  // 38: shared.GetVodUploadStatusRequest
-	(*VodUploadedPart)(nil),            // 39: shared.VodUploadedPart
-	(*GetVodUploadStatusResponse)(nil), // 40: shared.GetVodUploadStatusResponse
-	(*AbortVodUploadRequest)(nil),      // 41: shared.AbortVodUploadRequest
-	(*AbortVodUploadResponse)(nil),     // 42: shared.AbortVodUploadResponse
-	(*DeleteVodAssetRequest)(nil),      // 43: shared.DeleteVodAssetRequest
-	(*DeleteVodAssetResponse)(nil),     // 44: shared.DeleteVodAssetResponse
-	(*GetVodAssetRequest)(nil),         // 45: shared.GetVodAssetRequest
-	(*ListVodAssetsRequest)(nil),       // 46: shared.ListVodAssetsRequest
-	(*ListVodAssetsResponse)(nil),      // 47: shared.ListVodAssetsResponse
-	(*VodAssetInfo)(nil),               // 48: shared.VodAssetInfo
-	(*VodMetadata)(nil),                // 49: shared.VodMetadata
-	(*WebhookRequest)(nil),             // 50: shared.WebhookRequest
-	(*WebhookResponse)(nil),            // 51: shared.WebhookResponse
-	nil,                                // 52: shared.ViewerEndpoint.OutputsEntry
-	nil,                                // 53: shared.WebhookRequest.HeadersEntry
-	(*timestamppb.Timestamp)(nil),      // 54: google.protobuf.Timestamp
-	(*CursorPaginationRequest)(nil),    // 55: common.CursorPaginationRequest
-	(*CursorPaginationResponse)(nil),   // 56: common.CursorPaginationResponse
+	(*DVRPolicy)(nil),                  // 10: shared.DVRPolicy
+	(*StartDVRRequest)(nil),            // 11: shared.StartDVRRequest
+	(*StartDVRResponse)(nil),           // 12: shared.StartDVRResponse
+	(*StopDVRRequest)(nil),             // 13: shared.StopDVRRequest
+	(*StopDVRResponse)(nil),            // 14: shared.StopDVRResponse
+	(*DeleteDVRRequest)(nil),           // 15: shared.DeleteDVRRequest
+	(*DeleteDVRResponse)(nil),          // 16: shared.DeleteDVRResponse
+	(*DVRInfo)(nil),                    // 17: shared.DVRInfo
+	(*ListDVRRecordingsRequest)(nil),   // 18: shared.ListDVRRecordingsRequest
+	(*ListDVRRecordingsResponse)(nil),  // 19: shared.ListDVRRecordingsResponse
+	(*ViewerEndpointRequest)(nil),      // 20: shared.ViewerEndpointRequest
+	(*OutputCapability)(nil),           // 21: shared.OutputCapability
+	(*OutputEndpoint)(nil),             // 22: shared.OutputEndpoint
+	(*ViewerEndpoint)(nil),             // 23: shared.ViewerEndpoint
+	(*PlaybackTrack)(nil),              // 24: shared.PlaybackTrack
+	(*PlaybackInstance)(nil),           // 25: shared.PlaybackInstance
+	(*PlaybackMetadata)(nil),           // 26: shared.PlaybackMetadata
+	(*ThumbnailAssets)(nil),            // 27: shared.ThumbnailAssets
+	(*ViewerEndpointResponse)(nil),     // 28: shared.ViewerEndpointResponse
+	(*IngestEndpointRequest)(nil),      // 29: shared.IngestEndpointRequest
+	(*IngestEndpoint)(nil),             // 30: shared.IngestEndpoint
+	(*IngestMetadata)(nil),             // 31: shared.IngestMetadata
+	(*IngestEndpointResponse)(nil),     // 32: shared.IngestEndpointResponse
+	(*CreateVodUploadRequest)(nil),     // 33: shared.CreateVodUploadRequest
+	(*CreateVodUploadResponse)(nil),    // 34: shared.CreateVodUploadResponse
+	(*VodUploadPart)(nil),              // 35: shared.VodUploadPart
+	(*CompleteVodUploadRequest)(nil),   // 36: shared.CompleteVodUploadRequest
+	(*VodCompletedPart)(nil),           // 37: shared.VodCompletedPart
+	(*CompleteVodUploadResponse)(nil),  // 38: shared.CompleteVodUploadResponse
+	(*GetVodUploadStatusRequest)(nil),  // 39: shared.GetVodUploadStatusRequest
+	(*VodUploadedPart)(nil),            // 40: shared.VodUploadedPart
+	(*GetVodUploadStatusResponse)(nil), // 41: shared.GetVodUploadStatusResponse
+	(*AbortVodUploadRequest)(nil),      // 42: shared.AbortVodUploadRequest
+	(*AbortVodUploadResponse)(nil),     // 43: shared.AbortVodUploadResponse
+	(*DeleteVodAssetRequest)(nil),      // 44: shared.DeleteVodAssetRequest
+	(*DeleteVodAssetResponse)(nil),     // 45: shared.DeleteVodAssetResponse
+	(*GetVodAssetRequest)(nil),         // 46: shared.GetVodAssetRequest
+	(*ListVodAssetsRequest)(nil),       // 47: shared.ListVodAssetsRequest
+	(*ListVodAssetsResponse)(nil),      // 48: shared.ListVodAssetsResponse
+	(*VodAssetInfo)(nil),               // 49: shared.VodAssetInfo
+	(*VodMetadata)(nil),                // 50: shared.VodMetadata
+	(*WebhookRequest)(nil),             // 51: shared.WebhookRequest
+	(*WebhookResponse)(nil),            // 52: shared.WebhookResponse
+	nil,                                // 53: shared.ViewerEndpoint.OutputsEntry
+	nil,                                // 54: shared.WebhookRequest.HeadersEntry
+	(*timestamppb.Timestamp)(nil),      // 55: google.protobuf.Timestamp
+	(*CursorPaginationRequest)(nil),    // 56: common.CursorPaginationRequest
+	(*CursorPaginationResponse)(nil),   // 57: common.CursorPaginationResponse
 }
 var file_shared_proto_depIdxs = []int32{
 	0,  // 0: shared.CreateClipRequest.mode:type_name -> shared.ClipMode
-	54, // 1: shared.ClipInfo.created_at:type_name -> google.protobuf.Timestamp
-	54, // 2: shared.ClipInfo.updated_at:type_name -> google.protobuf.Timestamp
-	54, // 3: shared.ClipInfo.expires_at:type_name -> google.protobuf.Timestamp
-	55, // 4: shared.GetClipsRequest.pagination:type_name -> common.CursorPaginationRequest
+	55, // 1: shared.ClipInfo.created_at:type_name -> google.protobuf.Timestamp
+	55, // 2: shared.ClipInfo.updated_at:type_name -> google.protobuf.Timestamp
+	55, // 3: shared.ClipInfo.expires_at:type_name -> google.protobuf.Timestamp
+	56, // 4: shared.GetClipsRequest.pagination:type_name -> common.CursorPaginationRequest
 	4,  // 5: shared.GetClipsResponse.clips:type_name -> shared.ClipInfo
-	56, // 6: shared.GetClipsResponse.pagination:type_name -> common.CursorPaginationResponse
-	54, // 7: shared.DVRInfo.started_at:type_name -> google.protobuf.Timestamp
-	54, // 8: shared.DVRInfo.ended_at:type_name -> google.protobuf.Timestamp
-	54, // 9: shared.DVRInfo.created_at:type_name -> google.protobuf.Timestamp
-	54, // 10: shared.DVRInfo.updated_at:type_name -> google.protobuf.Timestamp
-	54, // 11: shared.DVRInfo.frozen_at:type_name -> google.protobuf.Timestamp
-	54, // 12: shared.DVRInfo.expires_at:type_name -> google.protobuf.Timestamp
-	55, // 13: shared.ListDVRRecordingsRequest.pagination:type_name -> common.CursorPaginationRequest
-	16, // 14: shared.ListDVRRecordingsResponse.dvr_recordings:type_name -> shared.DVRInfo
-	56, // 15: shared.ListDVRRecordingsResponse.pagination:type_name -> common.CursorPaginationResponse
-	20, // 16: shared.OutputEndpoint.capabilities:type_name -> shared.OutputCapability
-	52, // 17: shared.ViewerEndpoint.outputs:type_name -> shared.ViewerEndpoint.OutputsEntry
-	54, // 18: shared.PlaybackInstance.last_update:type_name -> google.protobuf.Timestamp
-	23, // 19: shared.PlaybackMetadata.tracks:type_name -> shared.PlaybackTrack
-	24, // 20: shared.PlaybackMetadata.instances:type_name -> shared.PlaybackInstance
-	54, // 21: shared.PlaybackMetadata.created_at:type_name -> google.protobuf.Timestamp
-	26, // 22: shared.PlaybackMetadata.thumbnail_assets:type_name -> shared.ThumbnailAssets
-	22, // 23: shared.ViewerEndpointResponse.primary:type_name -> shared.ViewerEndpoint
-	22, // 24: shared.ViewerEndpointResponse.fallbacks:type_name -> shared.ViewerEndpoint
-	25, // 25: shared.ViewerEndpointResponse.metadata:type_name -> shared.PlaybackMetadata
-	29, // 26: shared.IngestEndpointResponse.primary:type_name -> shared.IngestEndpoint
-	29, // 27: shared.IngestEndpointResponse.fallbacks:type_name -> shared.IngestEndpoint
-	30, // 28: shared.IngestEndpointResponse.metadata:type_name -> shared.IngestMetadata
-	34, // 29: shared.CreateVodUploadResponse.parts:type_name -> shared.VodUploadPart
-	54, // 30: shared.CreateVodUploadResponse.expires_at:type_name -> google.protobuf.Timestamp
-	36, // 31: shared.CompleteVodUploadRequest.parts:type_name -> shared.VodCompletedPart
-	48, // 32: shared.CompleteVodUploadResponse.asset:type_name -> shared.VodAssetInfo
-	1,  // 33: shared.GetVodUploadStatusResponse.state:type_name -> shared.VodStatus
-	54, // 34: shared.GetVodUploadStatusResponse.expires_at:type_name -> google.protobuf.Timestamp
-	54, // 35: shared.GetVodUploadStatusResponse.retention_until:type_name -> google.protobuf.Timestamp
-	39, // 36: shared.GetVodUploadStatusResponse.uploaded_parts:type_name -> shared.VodUploadedPart
-	55, // 37: shared.ListVodAssetsRequest.pagination:type_name -> common.CursorPaginationRequest
-	48, // 38: shared.ListVodAssetsResponse.assets:type_name -> shared.VodAssetInfo
-	56, // 39: shared.ListVodAssetsResponse.pagination:type_name -> common.CursorPaginationResponse
-	1,  // 40: shared.VodAssetInfo.status:type_name -> shared.VodStatus
-	54, // 41: shared.VodAssetInfo.created_at:type_name -> google.protobuf.Timestamp
-	54, // 42: shared.VodAssetInfo.updated_at:type_name -> google.protobuf.Timestamp
-	54, // 43: shared.VodAssetInfo.expires_at:type_name -> google.protobuf.Timestamp
-	53, // 44: shared.WebhookRequest.headers:type_name -> shared.WebhookRequest.HeadersEntry
-	21, // 45: shared.ViewerEndpoint.OutputsEntry.value:type_name -> shared.OutputEndpoint
-	46, // [46:46] is the sub-list for method output_type
-	46, // [46:46] is the sub-list for method input_type
-	46, // [46:46] is the sub-list for extension type_name
-	46, // [46:46] is the sub-list for extension extendee
-	0,  // [0:46] is the sub-list for field type_name
+	57, // 6: shared.GetClipsResponse.pagination:type_name -> common.CursorPaginationResponse
+	10, // 7: shared.StartDVRRequest.dvr_policy:type_name -> shared.DVRPolicy
+	55, // 8: shared.DVRInfo.started_at:type_name -> google.protobuf.Timestamp
+	55, // 9: shared.DVRInfo.ended_at:type_name -> google.protobuf.Timestamp
+	55, // 10: shared.DVRInfo.created_at:type_name -> google.protobuf.Timestamp
+	55, // 11: shared.DVRInfo.updated_at:type_name -> google.protobuf.Timestamp
+	55, // 12: shared.DVRInfo.frozen_at:type_name -> google.protobuf.Timestamp
+	55, // 13: shared.DVRInfo.expires_at:type_name -> google.protobuf.Timestamp
+	56, // 14: shared.ListDVRRecordingsRequest.pagination:type_name -> common.CursorPaginationRequest
+	17, // 15: shared.ListDVRRecordingsResponse.dvr_recordings:type_name -> shared.DVRInfo
+	57, // 16: shared.ListDVRRecordingsResponse.pagination:type_name -> common.CursorPaginationResponse
+	21, // 17: shared.OutputEndpoint.capabilities:type_name -> shared.OutputCapability
+	53, // 18: shared.ViewerEndpoint.outputs:type_name -> shared.ViewerEndpoint.OutputsEntry
+	55, // 19: shared.PlaybackInstance.last_update:type_name -> google.protobuf.Timestamp
+	24, // 20: shared.PlaybackMetadata.tracks:type_name -> shared.PlaybackTrack
+	25, // 21: shared.PlaybackMetadata.instances:type_name -> shared.PlaybackInstance
+	55, // 22: shared.PlaybackMetadata.created_at:type_name -> google.protobuf.Timestamp
+	27, // 23: shared.PlaybackMetadata.thumbnail_assets:type_name -> shared.ThumbnailAssets
+	23, // 24: shared.ViewerEndpointResponse.primary:type_name -> shared.ViewerEndpoint
+	23, // 25: shared.ViewerEndpointResponse.fallbacks:type_name -> shared.ViewerEndpoint
+	26, // 26: shared.ViewerEndpointResponse.metadata:type_name -> shared.PlaybackMetadata
+	30, // 27: shared.IngestEndpointResponse.primary:type_name -> shared.IngestEndpoint
+	30, // 28: shared.IngestEndpointResponse.fallbacks:type_name -> shared.IngestEndpoint
+	31, // 29: shared.IngestEndpointResponse.metadata:type_name -> shared.IngestMetadata
+	35, // 30: shared.CreateVodUploadResponse.parts:type_name -> shared.VodUploadPart
+	55, // 31: shared.CreateVodUploadResponse.expires_at:type_name -> google.protobuf.Timestamp
+	37, // 32: shared.CompleteVodUploadRequest.parts:type_name -> shared.VodCompletedPart
+	49, // 33: shared.CompleteVodUploadResponse.asset:type_name -> shared.VodAssetInfo
+	1,  // 34: shared.GetVodUploadStatusResponse.state:type_name -> shared.VodStatus
+	55, // 35: shared.GetVodUploadStatusResponse.expires_at:type_name -> google.protobuf.Timestamp
+	55, // 36: shared.GetVodUploadStatusResponse.retention_until:type_name -> google.protobuf.Timestamp
+	40, // 37: shared.GetVodUploadStatusResponse.uploaded_parts:type_name -> shared.VodUploadedPart
+	56, // 38: shared.ListVodAssetsRequest.pagination:type_name -> common.CursorPaginationRequest
+	49, // 39: shared.ListVodAssetsResponse.assets:type_name -> shared.VodAssetInfo
+	57, // 40: shared.ListVodAssetsResponse.pagination:type_name -> common.CursorPaginationResponse
+	1,  // 41: shared.VodAssetInfo.status:type_name -> shared.VodStatus
+	55, // 42: shared.VodAssetInfo.created_at:type_name -> google.protobuf.Timestamp
+	55, // 43: shared.VodAssetInfo.updated_at:type_name -> google.protobuf.Timestamp
+	55, // 44: shared.VodAssetInfo.expires_at:type_name -> google.protobuf.Timestamp
+	54, // 45: shared.WebhookRequest.headers:type_name -> shared.WebhookRequest.HeadersEntry
+	22, // 46: shared.ViewerEndpoint.OutputsEntry.value:type_name -> shared.OutputEndpoint
+	47, // [47:47] is the sub-list for method output_type
+	47, // [47:47] is the sub-list for method input_type
+	47, // [47:47] is the sub-list for extension type_name
+	47, // [47:47] is the sub-list for extension extendee
+	0,  // [0:47] is the sub-list for field type_name
 }
 
 func init() { file_shared_proto_init() }
@@ -4870,27 +5032,27 @@ func file_shared_proto_init() {
 	file_shared_proto_msgTypes[0].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[2].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[3].OneofWrappers = []any{}
-	file_shared_proto_msgTypes[8].OneofWrappers = []any{}
-	file_shared_proto_msgTypes[10].OneofWrappers = []any{}
-	file_shared_proto_msgTypes[14].OneofWrappers = []any{}
+	file_shared_proto_msgTypes[9].OneofWrappers = []any{}
+	file_shared_proto_msgTypes[11].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[15].OneofWrappers = []any{}
-	file_shared_proto_msgTypes[17].OneofWrappers = []any{}
-	file_shared_proto_msgTypes[23].OneofWrappers = []any{}
-	file_shared_proto_msgTypes[25].OneofWrappers = []any{}
+	file_shared_proto_msgTypes[16].OneofWrappers = []any{}
+	file_shared_proto_msgTypes[18].OneofWrappers = []any{}
+	file_shared_proto_msgTypes[24].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[26].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[27].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[28].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[29].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[30].OneofWrappers = []any{}
-	file_shared_proto_msgTypes[46].OneofWrappers = []any{}
+	file_shared_proto_msgTypes[31].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[47].OneofWrappers = []any{}
+	file_shared_proto_msgTypes[48].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_shared_proto_rawDesc), len(file_shared_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   52,
+			NumMessages:   53,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

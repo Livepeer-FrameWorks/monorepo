@@ -362,6 +362,15 @@ func (c *GRPCClient) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRequest
 	return c.internal.RegisterDVR(ctx, req)
 }
 
+// UpdateDVRRetention back-fills retention_until on a finalized DVR.
+// Foghorn computes retention_until = ended_at + dvr_retention_days*24h
+// from the persisted policy snapshot at FinalizeDVR time and pushes it
+// here so commodore.dvr_recordings.retention_until reflects post-end
+// retention. Active recordings carry NULL until they finalize.
+func (c *GRPCClient) UpdateDVRRetention(ctx context.Context, req *pb.UpdateDVRRetentionRequest) (*pb.UpdateDVRRetentionResponse, error) {
+	return c.internal.UpdateDVRRetention(ctx, req)
+}
+
 // ResolveClipHash resolves a clip hash to tenant context
 // Used for analytics enrichment and playback authorization
 func (c *GRPCClient) ResolveClipHash(ctx context.Context, clipHash string) (*pb.ResolveClipHashResponse, error) {
@@ -785,6 +794,23 @@ func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string) error {
 		DvrHash: dvrHash,
 	})
 	return err
+}
+
+// RetrieveDVRChapter materializes (cache-on-request) and returns the
+// chapter manifest's S3 location. Customer-facing path:
+// api_gateway → Commodore → Foghorn.
+func (c *GRPCClient) RetrieveDVRChapter(ctx context.Context, req *pb.RetrieveDVRChapterRequest) (*pb.RetrieveDVRChapterResponse, error) {
+	return c.internal.RetrieveDVRChapter(ctx, req)
+}
+
+// ListDVRChapters paginates chapter rows for player navigation.
+func (c *GRPCClient) ListDVRChapters(ctx context.Context, req *pb.ListDVRChaptersRequest) (*pb.ListDVRChaptersResponse, error) {
+	return c.internal.ListDVRChapters(ctx, req)
+}
+
+// SetDVRChapterPolicy updates the artifact's default chapter mode.
+func (c *GRPCClient) SetDVRChapterPolicy(ctx context.Context, req *pb.SetDVRChapterPolicyRequest) (*pb.SetDVRChapterPolicyResponse, error) {
+	return c.internal.SetDVRChapterPolicy(ctx, req)
 }
 
 // ListDVRRequests lists DVR recordings with filters

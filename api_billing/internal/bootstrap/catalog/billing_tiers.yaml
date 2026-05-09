@@ -8,7 +8,12 @@
 # Schema notes (matches purser.billing_tiers + new normalized tables):
 #
 #   entitlements: non-billing grants. Examples:
-#     recording_retention_days: <int>  -- Foghorn lifecycle policy
+#     recording_retention_days: <int>  -- Foghorn post-end recording retention
+#     dvr_default_window_seconds: <int> -- live DVR seek window default (Mist targetAge)
+#     dvr_max_window_seconds: <int>     -- live DVR seek window ceiling
+#     dvr_default_segment_duration_seconds: <int> -- Mist split (6/12/24)
+#     dvr_max_entries: <int>            -- HLS playlist size cap
+#     dvr_allow_cluster_extension: <bool> -- cluster may raise window for tenant (Enterprise)
 #
 #   pricing_rules: rated meter behaviors. One per (meter, tier).
 #     model: tiered_graduated -- (qty - included_quantity) * unit_price
@@ -42,7 +47,8 @@ tiers:
     support_level: community
     sla_level: none
     metering_enabled: true
-    entitlements: {}
+    entitlements:
+      recording_retention_days: 30
     pricing_rules:
       - meter: delivered_minutes
         model: tiered_graduated
@@ -80,6 +86,11 @@ tiers:
     metering_enabled: false
     entitlements:
       recording_retention_days: 7
+      dvr_default_window_seconds: 1800 # 30m
+      dvr_max_window_seconds: 3600 # 1h
+      dvr_default_segment_duration_seconds: 6
+      dvr_max_entries: 600
+      dvr_allow_cluster_extension: false
     pricing_rules: []
     tier_level: 1
     is_enterprise: false
@@ -104,6 +115,11 @@ tiers:
     metering_enabled: true
     entitlements:
       recording_retention_days: 90
+      dvr_default_window_seconds: 7200 # 2h
+      dvr_max_window_seconds: 21600 # 6h
+      dvr_default_segment_duration_seconds: 6
+      dvr_max_entries: 3600
+      dvr_allow_cluster_extension: false
     pricing_rules:
       - meter: delivered_minutes
         model: tiered_graduated
@@ -139,6 +155,11 @@ tiers:
     metering_enabled: true
     entitlements:
       recording_retention_days: 180
+      dvr_default_window_seconds: 14400 # 4h
+      dvr_max_window_seconds: 43200 # 12h
+      dvr_default_segment_duration_seconds: 6
+      dvr_max_entries: 7200
+      dvr_allow_cluster_extension: false
     pricing_rules:
       - meter: delivered_minutes
         model: tiered_graduated
@@ -176,6 +197,11 @@ tiers:
     metering_enabled: true
     entitlements:
       recording_retention_days: 365
+      dvr_default_window_seconds: 14400 # 4h
+      dvr_max_window_seconds: 86400 # 1d
+      dvr_default_segment_duration_seconds: 12
+      dvr_max_entries: 7200
+      dvr_allow_cluster_extension: false
     pricing_rules:
       - meter: delivered_minutes
         model: tiered_graduated
@@ -212,7 +238,13 @@ tiers:
     support_level: dedicated
     sla_level: custom
     metering_enabled: true
-    entitlements: {}
+    entitlements:
+      recording_retention_days: 365
+      dvr_default_window_seconds: 14400 # 4h
+      dvr_max_window_seconds: 86400 # 1d, cluster opt-in extends up to 72h
+      dvr_default_segment_duration_seconds: 24
+      dvr_max_entries: 10800
+      dvr_allow_cluster_extension: true
     pricing_rules: []
     tier_level: 5
     is_enterprise: true

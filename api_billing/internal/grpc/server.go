@@ -499,19 +499,21 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 	var subscriptionStatus sql.NullString
 	var balanceCents sql.NullInt64
 	var retentionRaw sql.NullString
+	var dvrEntitlements sql.NullString
 
 	currency := billing.DefaultCurrency()
 
-	// Query subscription, prepaid balance, and the recording_retention_days
-	// entitlement in one round-trip. Commodore's StartDVR uses the retention
-	// value here to default expires_at, so this avoids per-DVR-start
-	// GetSubscription + GetBillingTier roundtrips.
+	// Query subscription, prepaid balance, the recording_retention_days
+	// entitlement, and the DVR-policy entitlement bundle in one round-trip.
+	// Commodore's StartDVR + ValidateStreamKey both need these so this
+	// avoids per-call GetSubscription + GetBillingTier roundtrips.
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
 			ts.billing_model,
 			ts.status,
 			pb.balance_cents,
-			te.value::text
+			te.value::text,
+			dvr.entitlements::text
 		FROM purser.tenant_subscriptions ts
 		LEFT JOIN purser.prepaid_balances pb
 			ON pb.tenant_id = ts.tenant_id AND pb.currency = $2
@@ -528,10 +530,34 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 			ORDER BY priority
 			LIMIT 1
 		) te ON TRUE
+		LEFT JOIN LATERAL (
+			-- DVR policy keys aggregated into a single JSON object. Subscription
+			-- overrides win per-key over tier entitlements.
+			SELECT jsonb_object_agg(key, value) AS entitlements
+			FROM (
+				SELECT DISTINCT ON (key) key, value
+				FROM (
+					SELECT key, value, 1 AS priority
+					FROM purser.subscription_entitlement_overrides
+					WHERE subscription_id = ts.id AND key = ANY($3)
+					UNION ALL
+					SELECT key, value, 2 AS priority
+					FROM purser.tier_entitlements
+					WHERE tier_id = ts.tier_id AND key = ANY($3)
+				) all_e
+				ORDER BY key, priority
+			) merged
+		) dvr ON TRUE
 		WHERE ts.tenant_id = $1 AND ts.status != 'cancelled'
 		ORDER BY ts.created_at DESC
 		LIMIT 1
-	`, tenantID, currency).Scan(&billingModel, &subscriptionStatus, &balanceCents, &retentionRaw)
+	`, tenantID, currency, pq.StringArray{
+		"dvr_default_window_seconds",
+		"dvr_max_window_seconds",
+		"dvr_default_segment_duration_seconds",
+		"dvr_max_entries",
+		"dvr_allow_cluster_extension",
+	}).Scan(&billingModel, &subscriptionStatus, &balanceCents, &retentionRaw, &dvrEntitlements)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// No subscription = assume postpaid, not suspended, not negative
@@ -570,13 +596,72 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 		}
 	}
 
+	retentionDays := parseRetentionDays(retentionRaw)
+	dvrPolicy := parseDVRPolicy(dvrEntitlements)
+	// Stamp recording_retention_days onto DVRPolicy so downstream callers
+	// (Commodore.ValidateStreamKey → Foghorn.StartDVR) carry the policy in
+	// one bundle. Foghorn snapshots this onto foghorn.artifacts.dvr_retention_days
+	// at start time; FinalizeDVR reads from the snapshot, never re-resolving.
+	if dvrPolicy == nil && retentionDays > 0 {
+		dvrPolicy = &pb.DVRPolicy{}
+	}
+	if dvrPolicy != nil {
+		dvrPolicy.RecordingRetentionDays = retentionDays
+	}
 	return &pb.GetTenantBillingStatusResponse{
 		BillingModel:           model,
 		IsSuspended:            isSuspended,
 		IsBalanceNegative:      isBalanceNegative,
 		BalanceCents:           balance,
-		RecordingRetentionDays: parseRetentionDays(retentionRaw),
+		RecordingRetentionDays: retentionDays,
+		DvrPolicy:              dvrPolicy,
 	}, nil
+}
+
+// parseDVRPolicy decodes the DVR-policy entitlement bundle into pb.DVRPolicy.
+// Each key is JSON-encoded in tier_entitlements.value (e.g. 86400, true). Missing
+// keys leave the corresponding field at its zero value; pkg/dvrpolicy.Resolve
+// then applies its safety fallback.
+func parseDVRPolicy(raw sql.NullString) *pb.DVRPolicy {
+	if !raw.Valid || raw.String == "" {
+		return nil
+	}
+	var entitlements map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw.String), &entitlements); err != nil {
+		return nil
+	}
+	out := &pb.DVRPolicy{}
+	if v, ok := entitlements["dvr_default_window_seconds"]; ok {
+		var n int32
+		if err := json.Unmarshal(v, &n); err == nil {
+			out.DefaultWindowSeconds = n
+		}
+	}
+	if v, ok := entitlements["dvr_max_window_seconds"]; ok {
+		var n int32
+		if err := json.Unmarshal(v, &n); err == nil {
+			out.MaxWindowSeconds = n
+		}
+	}
+	if v, ok := entitlements["dvr_default_segment_duration_seconds"]; ok {
+		var n int32
+		if err := json.Unmarshal(v, &n); err == nil {
+			out.DefaultSegmentDurationSeconds = n
+		}
+	}
+	if v, ok := entitlements["dvr_max_entries"]; ok {
+		var n int32
+		if err := json.Unmarshal(v, &n); err == nil {
+			out.MaxEntries = n
+		}
+	}
+	if v, ok := entitlements["dvr_allow_cluster_extension"]; ok {
+		var b bool
+		if err := json.Unmarshal(v, &b); err == nil {
+			out.AllowClusterExtension = b
+		}
+	}
+	return out
 }
 
 // parseRetentionDays decodes a tier_entitlements / subscription_entitlement_overrides

@@ -1212,6 +1212,9 @@ func isAuthorizedPeerCluster(clusterID string, peers []*pb.TenantClusterPeer) bo
 // PrepareArtifact on the origin cluster's Foghorn. If the artifact is ready,
 // it creates a local adoption record and triggers defrost from the presigned URLs.
 func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, artifactHash, originClusterID, contentType, tenantID string, clusterPeers []*pb.TenantClusterPeer) (*pb.ViewerEndpointResponse, error) {
+	if strings.EqualFold(contentType, "dvr") {
+		return nil, fmt.Errorf("DVR archive playback requires a bounded chapter request; use dvrChapter for cross-cluster DVR replay")
+	}
 	if deps.PeerResolver == nil {
 		return nil, fmt.Errorf("peer resolver not available for cross-cluster artifact")
 	}

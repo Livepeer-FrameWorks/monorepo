@@ -28,8 +28,12 @@ const (
 	InternalService_ResolveInternalName_FullMethodName             = "/commodore.InternalService/ResolveInternalName"
 	InternalService_ValidateAPIToken_FullMethodName                = "/commodore.InternalService/ValidateAPIToken"
 	InternalService_StartDVR_FullMethodName                        = "/commodore.InternalService/StartDVR"
+	InternalService_RetrieveDVRChapter_FullMethodName              = "/commodore.InternalService/RetrieveDVRChapter"
+	InternalService_ListDVRChapters_FullMethodName                 = "/commodore.InternalService/ListDVRChapters"
+	InternalService_SetDVRChapterPolicy_FullMethodName             = "/commodore.InternalService/SetDVRChapterPolicy"
 	InternalService_RegisterClip_FullMethodName                    = "/commodore.InternalService/RegisterClip"
 	InternalService_RegisterDVR_FullMethodName                     = "/commodore.InternalService/RegisterDVR"
+	InternalService_UpdateDVRRetention_FullMethodName              = "/commodore.InternalService/UpdateDVRRetention"
 	InternalService_ResolveClipHash_FullMethodName                 = "/commodore.InternalService/ResolveClipHash"
 	InternalService_ResolveDVRHash_FullMethodName                  = "/commodore.InternalService/ResolveDVRHash"
 	InternalService_ResolveArtifactPlaybackID_FullMethodName       = "/commodore.InternalService/ResolveArtifactPlaybackID"
@@ -78,10 +82,23 @@ type InternalServiceClient interface {
 	ValidateAPIToken(ctx context.Context, in *ValidateAPITokenRequest, opts ...grpc.CallOption) (*ValidateAPITokenResponse, error)
 	// Called by Foghorn to initiate DVR recording for a stream
 	StartDVR(ctx context.Context, in *StartDVRRequest, opts ...grpc.CallOption) (*StartDVRResponse, error)
+	// ===== DVR CHAPTERS (api_gateway -> Commodore -> Foghorn) =====
+	// Chapter retrieval, listing, and policy. Commodore is the customer-facing
+	// intermediary: validates tenant ownership of the DVR artifact, then
+	// forwards to Foghorn (which owns ledger + materialization).
+	RetrieveDVRChapter(ctx context.Context, in *RetrieveDVRChapterRequest, opts ...grpc.CallOption) (*RetrieveDVRChapterResponse, error)
+	ListDVRChapters(ctx context.Context, in *ListDVRChaptersRequest, opts ...grpc.CallOption) (*ListDVRChaptersResponse, error)
+	SetDVRChapterPolicy(ctx context.Context, in *SetDVRChapterPolicyRequest, opts ...grpc.CallOption) (*SetDVRChapterPolicyResponse, error)
 	// Register a new clip in the business registry (called by Foghorn during CreateClip)
 	RegisterClip(ctx context.Context, in *RegisterClipRequest, opts ...grpc.CallOption) (*RegisterClipResponse, error)
 	// Register a new DVR recording in the business registry (called by Foghorn during StartDVR)
 	RegisterDVR(ctx context.Context, in *RegisterDVRRequest, opts ...grpc.CallOption) (*RegisterDVRResponse, error)
+	// Back-fill retention_until on a DVR recording at finalize time.
+	// Foghorn computes retention_until = ended_at + dvr_retention_days*24h
+	// from the persisted policy snapshot and pushes it to Commodore so the
+	// business registry's expires_at reflects post-end retention. Active
+	// recordings carry NULL retention_until until they finalize.
+	UpdateDVRRetention(ctx context.Context, in *UpdateDVRRetentionRequest, opts ...grpc.CallOption) (*UpdateDVRRetentionResponse, error)
 	// Resolve clip hash to tenant context (for analytics enrichment and playback)
 	ResolveClipHash(ctx context.Context, in *ResolveClipHashRequest, opts ...grpc.CallOption) (*ResolveClipHashResponse, error)
 	// Resolve DVR hash to tenant context (for analytics enrichment and playback)
@@ -212,6 +229,36 @@ func (c *internalServiceClient) StartDVR(ctx context.Context, in *StartDVRReques
 	return out, nil
 }
 
+func (c *internalServiceClient) RetrieveDVRChapter(ctx context.Context, in *RetrieveDVRChapterRequest, opts ...grpc.CallOption) (*RetrieveDVRChapterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RetrieveDVRChapterResponse)
+	err := c.cc.Invoke(ctx, InternalService_RetrieveDVRChapter_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ListDVRChapters(ctx context.Context, in *ListDVRChaptersRequest, opts ...grpc.CallOption) (*ListDVRChaptersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListDVRChaptersResponse)
+	err := c.cc.Invoke(ctx, InternalService_ListDVRChapters_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) SetDVRChapterPolicy(ctx context.Context, in *SetDVRChapterPolicyRequest, opts ...grpc.CallOption) (*SetDVRChapterPolicyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetDVRChapterPolicyResponse)
+	err := c.cc.Invoke(ctx, InternalService_SetDVRChapterPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *internalServiceClient) RegisterClip(ctx context.Context, in *RegisterClipRequest, opts ...grpc.CallOption) (*RegisterClipResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegisterClipResponse)
@@ -226,6 +273,16 @@ func (c *internalServiceClient) RegisterDVR(ctx context.Context, in *RegisterDVR
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegisterDVRResponse)
 	err := c.cc.Invoke(ctx, InternalService_RegisterDVR_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) UpdateDVRRetention(ctx context.Context, in *UpdateDVRRetentionRequest, opts ...grpc.CallOption) (*UpdateDVRRetentionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateDVRRetentionResponse)
+	err := c.cc.Invoke(ctx, InternalService_UpdateDVRRetention_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -404,10 +461,23 @@ type InternalServiceServer interface {
 	ValidateAPIToken(context.Context, *ValidateAPITokenRequest) (*ValidateAPITokenResponse, error)
 	// Called by Foghorn to initiate DVR recording for a stream
 	StartDVR(context.Context, *StartDVRRequest) (*StartDVRResponse, error)
+	// ===== DVR CHAPTERS (api_gateway -> Commodore -> Foghorn) =====
+	// Chapter retrieval, listing, and policy. Commodore is the customer-facing
+	// intermediary: validates tenant ownership of the DVR artifact, then
+	// forwards to Foghorn (which owns ledger + materialization).
+	RetrieveDVRChapter(context.Context, *RetrieveDVRChapterRequest) (*RetrieveDVRChapterResponse, error)
+	ListDVRChapters(context.Context, *ListDVRChaptersRequest) (*ListDVRChaptersResponse, error)
+	SetDVRChapterPolicy(context.Context, *SetDVRChapterPolicyRequest) (*SetDVRChapterPolicyResponse, error)
 	// Register a new clip in the business registry (called by Foghorn during CreateClip)
 	RegisterClip(context.Context, *RegisterClipRequest) (*RegisterClipResponse, error)
 	// Register a new DVR recording in the business registry (called by Foghorn during StartDVR)
 	RegisterDVR(context.Context, *RegisterDVRRequest) (*RegisterDVRResponse, error)
+	// Back-fill retention_until on a DVR recording at finalize time.
+	// Foghorn computes retention_until = ended_at + dvr_retention_days*24h
+	// from the persisted policy snapshot and pushes it to Commodore so the
+	// business registry's expires_at reflects post-end retention. Active
+	// recordings carry NULL retention_until until they finalize.
+	UpdateDVRRetention(context.Context, *UpdateDVRRetentionRequest) (*UpdateDVRRetentionResponse, error)
 	// Resolve clip hash to tenant context (for analytics enrichment and playback)
 	ResolveClipHash(context.Context, *ResolveClipHashRequest) (*ResolveClipHashResponse, error)
 	// Resolve DVR hash to tenant context (for analytics enrichment and playback)
@@ -482,11 +552,23 @@ func (UnimplementedInternalServiceServer) ValidateAPIToken(context.Context, *Val
 func (UnimplementedInternalServiceServer) StartDVR(context.Context, *StartDVRRequest) (*StartDVRResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartDVR not implemented")
 }
+func (UnimplementedInternalServiceServer) RetrieveDVRChapter(context.Context, *RetrieveDVRChapterRequest) (*RetrieveDVRChapterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RetrieveDVRChapter not implemented")
+}
+func (UnimplementedInternalServiceServer) ListDVRChapters(context.Context, *ListDVRChaptersRequest) (*ListDVRChaptersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListDVRChapters not implemented")
+}
+func (UnimplementedInternalServiceServer) SetDVRChapterPolicy(context.Context, *SetDVRChapterPolicyRequest) (*SetDVRChapterPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetDVRChapterPolicy not implemented")
+}
 func (UnimplementedInternalServiceServer) RegisterClip(context.Context, *RegisterClipRequest) (*RegisterClipResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterClip not implemented")
 }
 func (UnimplementedInternalServiceServer) RegisterDVR(context.Context, *RegisterDVRRequest) (*RegisterDVRResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterDVR not implemented")
+}
+func (UnimplementedInternalServiceServer) UpdateDVRRetention(context.Context, *UpdateDVRRetentionRequest) (*UpdateDVRRetentionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateDVRRetention not implemented")
 }
 func (UnimplementedInternalServiceServer) ResolveClipHash(context.Context, *ResolveClipHashRequest) (*ResolveClipHashResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveClipHash not implemented")
@@ -695,6 +777,60 @@ func _InternalService_StartDVR_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InternalService_RetrieveDVRChapter_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RetrieveDVRChapterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).RetrieveDVRChapter(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_RetrieveDVRChapter_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).RetrieveDVRChapter(ctx, req.(*RetrieveDVRChapterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ListDVRChapters_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListDVRChaptersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ListDVRChapters(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ListDVRChapters_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ListDVRChapters(ctx, req.(*ListDVRChaptersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_SetDVRChapterPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetDVRChapterPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).SetDVRChapterPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_SetDVRChapterPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).SetDVRChapterPolicy(ctx, req.(*SetDVRChapterPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _InternalService_RegisterClip_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RegisterClipRequest)
 	if err := dec(in); err != nil {
@@ -727,6 +863,24 @@ func _InternalService_RegisterDVR_Handler(srv interface{}, ctx context.Context, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).RegisterDVR(ctx, req.(*RegisterDVRRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_UpdateDVRRetention_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateDVRRetentionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).UpdateDVRRetention(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_UpdateDVRRetention_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).UpdateDVRRetention(ctx, req.(*UpdateDVRRetentionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1023,12 +1177,28 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _InternalService_StartDVR_Handler,
 		},
 		{
+			MethodName: "RetrieveDVRChapter",
+			Handler:    _InternalService_RetrieveDVRChapter_Handler,
+		},
+		{
+			MethodName: "ListDVRChapters",
+			Handler:    _InternalService_ListDVRChapters_Handler,
+		},
+		{
+			MethodName: "SetDVRChapterPolicy",
+			Handler:    _InternalService_SetDVRChapterPolicy_Handler,
+		},
+		{
 			MethodName: "RegisterClip",
 			Handler:    _InternalService_RegisterClip_Handler,
 		},
 		{
 			MethodName: "RegisterDVR",
 			Handler:    _InternalService_RegisterDVR_Handler,
+		},
+		{
+			MethodName: "UpdateDVRRetention",
+			Handler:    _InternalService_UpdateDVRRetention_Handler,
 		},
 		{
 			MethodName: "ResolveClipHash",

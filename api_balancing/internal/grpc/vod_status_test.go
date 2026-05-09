@@ -58,6 +58,12 @@ func (f *fakeVodS3Client) BuildVodS3Key(string, string, string) string {
 }
 func (f *fakeVodS3Client) BuildS3URL(string) string             { return "s3://bucket/vod/t1/hash/video.mp4" }
 func (f *fakeVodS3Client) Delete(context.Context, string) error { panic("not used") }
+func (f *fakeVodS3Client) PutObject(context.Context, string, []byte, string) error {
+	panic("not used")
+}
+func (f *fakeVodS3Client) GeneratePresignedGET(string, time.Duration) (string, error) {
+	return "https://example.com/presigned", nil
+}
 
 func newStatusServer(t *testing.T, s3 *fakeVodS3Client) (*FoghornGRPCServer, sqlmock.Sqlmock, func()) {
 	t.Helper()

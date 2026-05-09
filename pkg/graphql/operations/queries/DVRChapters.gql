@@ -1,0 +1,33 @@
+# List chapters for a DVR recording, paginated for unbounded artifact lifetime.
+query DVRChapters(
+  $dvrId: ID!
+  $mode: DVRChapterMode
+  $intervalSeconds: Int
+  $rangeStartMs: Float
+  $rangeEndMs: Float
+  $pageSize: Int
+  $pageToken: String
+) {
+  dvrChapters(
+    dvrId: $dvrId
+    mode: $mode
+    intervalSeconds: $intervalSeconds
+    rangeStartMs: $rangeStartMs
+    rangeEndMs: $rangeEndMs
+    pageSize: $pageSize
+    pageToken: $pageToken
+  ) {
+    chapters {
+      chapterId
+      mode
+      intervalSeconds
+      startMs
+      endMs
+      isCurrent
+      manifestS3Key
+      hasGaps
+      segmentCount
+    }
+    nextPageToken
+  }
+}

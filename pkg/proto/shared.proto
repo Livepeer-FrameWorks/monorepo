@@ -7,10 +7,8 @@ option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto";
 import "google/protobuf/timestamp.proto";
 import "common.proto";
 
-// ============================================================================
 // SHARED MESSAGES FOR CLIPS AND DVR
 // Used by both Foghorn and Commodore services
-// ============================================================================
 
 // ClipMode - specifies how clip time boundaries are interpreted
 enum ClipMode {
@@ -31,8 +29,8 @@ message CreateClipRequest {
   string description = 5;
   optional int64 start_unix = 6;    // Unix timestamp (seconds), negative for relative-to-now
   optional int64 stop_unix = 7;     // Unix timestamp (seconds)
-  optional int64 start_ms = 8;      // Media time (seconds from stream start) - legacy name, actually seconds
-  optional int64 stop_ms = 9;       // Media time (seconds from stream start) - legacy name, actually seconds
+  optional int64 start_ms = 8;      // Media time in seconds from stream start
+  optional int64 stop_ms = 9;       // Media time in seconds from stream start
   optional int64 duration_sec = 10; // Duration (seconds)
   ClipMode mode = 11;               // How to interpret the time fields
   optional int64 expires_at = 12;   // Unix timestamp (seconds) for auto-deletion
@@ -113,9 +111,31 @@ message DeleteClipResponse {
   string message = 2;
 }
 
-// ============================================================================
 // DVR MESSAGES
-// ============================================================================
+
+// DVRPolicy bundles the resolved DVR window/segment policy that applies
+// to a tenant's recordings on a given cluster. Populated by Purser from
+// tier entitlements + cluster overrides; flows through Commodore
+// (ValidateStreamKey, StartDVR) and Foghorn into the sidecar DVRConfig.
+//
+// Three concepts that must NOT be conflated:
+//   - max_window_seconds:  rolling live seekback window (Mist targetAge)
+//   - default_window_seconds: live window default if caller didn't pick
+//   - recording_retention_days: how long the FINALIZED artifact is kept,
+//     ticking from ended_at — independent of the live window
+//
+// recording_retention_days is snapshotted onto foghorn.artifacts at DVR
+// start (dvr_retention_days column). FinalizeDVR computes
+// retention_until = ended_at + dvr_retention_days*24h. Live tier is never
+// re-resolved at end (the tenant's plan may have changed mid-stream).
+message DVRPolicy {
+  int32 default_window_seconds = 1;     // Tier default if caller doesn't specify a window
+  int32 max_window_seconds = 2;         // Tier ceiling on live DVR window (Mist targetAge)
+  int32 default_segment_duration_seconds = 3; // Mist split for this tier (6/12/24)
+  int32 max_entries = 4;                // Max HLS playlist entries (manifest size cap)
+  bool allow_cluster_extension = 5;     // Cluster may raise max_window for this tenant (Enterprise)
+  int32 recording_retention_days = 6;   // Post-end retention; 0 = system default 30
+}
 
 // StartDVRRequest - request to start DVR recording
 // Source: pkg/api/foghorn/types.go:StartDVRRequest
@@ -124,8 +144,24 @@ message StartDVRRequest {
   string internal_name = 2;
   optional string stream_id = 3;
   optional string user_id = 4;
-  optional int64 expires_at = 5;   // Unix timestamp (seconds) for auto-deletion
+  optional int64 expires_at = 5;   // ignored for DVR; retention is computed at finalization
   string cluster_id = 6;           // Cluster this stream belongs to (set by caller)
+  // Caller-requested live DVR window (rolling Mist window, used for targetAge).
+  // 0 means "use tier default". Clamped server-side by tier_max / cluster_max;
+  // retention is post-end only and never clamps the live DVR window.
+  optional int32 dvr_window_seconds = 7;
+  // Resolved DVR policy for the tenant (from Purser tier entitlements). Manual
+  // startDVR populates this from Commodore's GetTenantBillingStatus call so
+  // Foghorn does not need to re-fetch. Auto-record (record:true) populates it
+  // from Foghorn's streamCache (already cached during PUSH_REWRITE). When nil,
+  // pkg/dvrpolicy.Resolve uses zero-value defaults and a safe 1h fallback.
+  DVRPolicy dvr_policy = 8;
+  // Default chapter mode for the chapter sweeper to materialize automatically.
+  // Empty string lets Foghorn use the default window_sized_chapters policy.
+  // Values: 'window_sized_chapters' | 'fixed_interval' | '' (none)
+  // For 'fixed_interval', dvr_chapter_interval_seconds is required.
+  optional string dvr_chapter_mode = 9;
+  optional int32 dvr_chapter_interval_seconds = 10;
 }
 
 // StartDVRResponse - response from starting DVR
@@ -204,10 +240,8 @@ message ListDVRRecordingsResponse {
   common.CursorPaginationResponse pagination = 2;
 }
 
-// ============================================================================
 // VIEWER ENDPOINT MESSAGES
 // Used by both Foghorn and Commodore services
-// ============================================================================
 
 // ViewerEndpointRequest - request to resolve viewer endpoint
 message ViewerEndpointRequest {
@@ -313,10 +347,8 @@ message ViewerEndpointResponse {
   optional PlaybackMetadata metadata = 3;
 }
 
-// ============================================================================
 // INGEST ENDPOINT MESSAGES
 // Used by Foghorn for StreamCrafter ingest endpoint resolution
-// ============================================================================
 
 // IngestEndpointRequest - request to resolve ingest endpoint for streaming
 message IngestEndpointRequest {
@@ -352,10 +384,8 @@ message IngestEndpointResponse {
   optional IngestMetadata metadata = 3;
 }
 
-// ============================================================================
 // VOD UPLOAD MESSAGES
 // User-initiated video file uploads (distinct from clips/DVR which are derived)
-// ============================================================================
 
 // VodStatus - status of a VOD upload (named differently from GraphQL VodAssetStatus to avoid autobind)
 enum VodStatus {
@@ -535,11 +565,9 @@ message VodMetadata {
   optional int32 audio_sample_rate = 10;
 }
 
-// ============================================================================
 // WEBHOOK MESSAGES
 // Generic webhook envelope for routing external webhooks through the gateway
 // to internal services. Signature verification happens in the receiving service.
-// ============================================================================
 
 // WebhookRequest - envelope for routing webhooks from Gateway to internal services
 // The Gateway packages raw HTTP into this message and routes via gRPC.

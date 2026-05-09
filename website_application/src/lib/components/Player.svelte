@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Player } from "@livepeer-frameworks/player-svelte";
   import type {
+    ContentEndpoints,
     PlayerState,
     PlayerStateContext,
     PlayerOptions as CorePlayerOptions,
@@ -13,6 +14,7 @@
     contentId: string;
     contentType?: "live" | "clip" | "dvr" | "vod";
     thumbnailUrl?: string | null;
+    endpoints?: ContentEndpoints | null;
     options?: Partial<CorePlayerOptions>;
     onStateChange?: (state: PlayerState, context?: PlayerStateContext) => void;
     onMetadata?: (metadata: PlayerMetadata) => void;
@@ -22,6 +24,7 @@
     contentId,
     contentType,
     thumbnailUrl = null,
+    endpoints = null,
     options = {},
     onStateChange,
     onMetadata,
@@ -58,6 +61,7 @@
     stockControls: options.stockControls,
     forcePlayer: options.forcePlayer,
     forceType: options.forceType,
+    forceSource: options.forceSource,
     playbackMode: options.playbackMode,
     mistUrl: options.mistUrl,
   });
@@ -68,6 +72,7 @@
     {contentId}
     {contentType}
     {thumbnailUrl}
+    endpoints={endpoints ?? undefined}
     options={{
       ...playerOptions,
       theme: themeStore.playerTheme,

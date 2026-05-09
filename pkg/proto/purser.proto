@@ -146,6 +146,10 @@ message GetTenantBillingStatusResponse {
   // recording_retention_days = 0 means "use the system default"
   // (Foghorn / api_balancing fall back to 30 days).
   int32 recording_retention_days = 5;
+  // Resolved DVR live-window policy (rolling Mist window + segment shape).
+  // Distinct from recording_retention_days: that controls absolute artifact
+  // expiry, this controls the live HLS playlist size and seek depth.
+  shared.DVRPolicy dvr_policy = 6;
 }
 
 // ============================================================================

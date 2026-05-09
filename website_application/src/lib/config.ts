@@ -325,20 +325,14 @@ export function getShareUrl(contentId: string): string {
 }
 
 /**
- * Generate playback URLs for any content type using Foghorn's unified /play/ path.
- * Works for live streams, clips, DVR recordings, and VOD assets (playbackId).
- *
- * All URLs route through Foghorn which:
- * - Resolves content type automatically
- * - Load balances across edge nodes
- * - Returns 307 redirects to the correct edge node
- * - MistServer handles on-the-fly muxing for container formats
+ * Generate playback URLs for live streams, clips, and VOD assets that use a playbackId.
+ * DVR archive replay is chapter-based and resolves a chapter manifest through GraphQL.
  */
 export function getContentDeliveryUrls(
   contentId: string,
   contentType: ContentType
 ): ContentDeliveryUrls {
-  if (!contentId) {
+  if (!contentId || contentType === "dvr") {
     return {
       primary: {} as PrimaryProtocolUrls,
       additional: {} as AdditionalProtocolUrls,

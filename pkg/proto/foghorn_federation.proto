@@ -4,6 +4,8 @@ package foghorn_federation;
 
 option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto";
 
+import "ipc.proto";
+
 // FoghornFederation enables cross-cluster communication between Foghorn instances.
 // Unary RPCs (QueryStream, NotifyOriginPull, PrepareArtifact) are stateless and
 // load-balanced across all Foghorn instances via shared Redis state.
@@ -127,6 +129,10 @@ message PrepareArtifactRequest {
   string requesting_cluster = 3;
   string artifact_type = 4;     // "clip", "dvr", "vod"
   string tenant_id = 5;
+  // For DVR chapter-aware fetches: bound segment enumeration to a media
+  // range. DVR requests must pass a bounded range.
+  int64 dvr_start_ms = 6;
+  int64 dvr_end_ms = 7;
 }
 
 message PrepareArtifactResponse {
@@ -135,7 +141,12 @@ message PrepareArtifactResponse {
   bool ready = 3;              // True if artifact is immediately available
   uint32 est_ready_seconds = 4; // Estimated time until ready (for async prep)
   string error = 5;
-  map<string, string> segment_urls = 6; // DVR: segment filename -> presigned GET URL
+  // DEPRECATED for new DVR consumers: legacy filename → presigned GET URL.
+  // Kept populated for clip/backwards-compat callers and as a convenience
+  // shadow of `dvr_segments` for older sidecars; new chapter-aware consumers
+  // should read `dvr_segments` instead so they see status (lost_local rows
+  // surface with empty url so the local manifest writer renders #EXT-X-GAP).
+  map<string, string> segment_urls = 6;
   string format = 7;            // Container format (mp4, m3u8, etc.)
   string internal_name = 8;     // Artifact routing name (vod+{this})
   string stream_internal_name = 9; // Source stream routing name (for S3 key construction)
@@ -145,6 +156,11 @@ message PrepareArtifactResponse {
   // other fields on this response are ignored when redirect_cluster_id is
   // set. Single hop only — chained redirects fail closed at the consumer.
   string redirect_cluster_id = 10;
+
+  // For DVR chapter-aware fetches: per-segment metadata derived from
+  // foghorn.dvr_segments. Includes lost_local rows with empty
+  // presigned_get_url so the consumer renders #EXT-X-GAP markers.
+  repeated helmsmancontrol.DVRSegmentRef dvr_segments = 11;
 }
 
 message RemoteClipRequest {

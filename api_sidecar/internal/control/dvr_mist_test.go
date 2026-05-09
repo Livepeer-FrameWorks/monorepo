@@ -387,20 +387,23 @@ func TestMaintainPushStatus_ExhaustedRetries(t *testing.T) {
 	}
 }
 
-func TestMaintainPushStatus_StoppedJobSkipped(t *testing.T) {
+func TestMaintainPushStatus_FinalizingJobSkipped(t *testing.T) {
 	mc := &fakeMistClient{}
 	dm := newDVRManagerWithMist(t, mc)
 
+	// finalizing replaces stopped under the new state machine; either way
+	// maintainPushStatus must not poke MistServer for a job that's on its
+	// way out.
 	job := &DVRJob{
-		DVRHash: "hash-stopped",
-		Status:  "stopped",
+		DVRHash: "hash-finalizing",
+		Status:  "finalizing",
 		Logger:  logging.NewLogger(),
 	}
 
 	dm.maintainPushStatus(job)
 
 	if atomic.LoadInt64(&mc.pushListCalls) != 0 {
-		t.Fatal("expected no PushList calls for stopped job")
+		t.Fatal("expected no PushList calls for finalizing job")
 	}
 }
 

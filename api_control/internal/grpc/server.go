@@ -808,6 +808,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 	// Get billing status via Purser gRPC (not direct DB access)
 	billingModel := "postpaid"
 	var isSuspended, isBalanceNegative bool
+	var dvrPolicy *pb.DVRPolicy
 
 	if s.purserClient != nil {
 		billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
@@ -821,6 +822,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 			billingModel = billingStatus.BillingModel
 			isSuspended = billingStatus.IsSuspended
 			isBalanceNegative = billingStatus.IsBalanceNegative
+			dvrPolicy = billingStatus.DvrPolicy
 		}
 	}
 
@@ -835,6 +837,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 		IsSuspended:        isSuspended,
 		IsBalanceNegative:  isBalanceNegative,
 		PlaybackId:         playbackID,
+		DvrPolicy:          dvrPolicy,
 	}
 
 	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
@@ -1218,28 +1221,31 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 		}
 	}
 
-	// Default retention: tier-driven via Purser (already fetched above),
-	// falling back to 30 days when the tier has no recording_retention_days
-	// entitlement (e.g. PAYG / Enterprise) or Purser is unavailable.
-	// Caller-supplied expires_at always wins.
-	expiresAt := req.ExpiresAt
-	if expiresAt == nil || *expiresAt <= 0 {
-		retentionDays := int32(30)
-		if billingStatus != nil && billingStatus.RecordingRetentionDays > 0 {
-			retentionDays = billingStatus.RecordingRetentionDays
-		}
-		expiry := time.Now().Add(time.Duration(retentionDays) * 24 * time.Hour).Unix()
-		expiresAt = &expiry
-	}
+	// Retention is post-end semantics: the artifact's retention_until is
+	// computed at FinalizeDVR-time as ended_at + dvr_retention_days*24h
+	// (using the persisted snapshot from session start so the policy that
+	// was in force at start time is what applies, even if the tenant's
+	// plan has since changed). For 24/7 streams that may run for months,
+	// computing expires_at at start time would mark active recordings as
+	// expired while the stream is still live; we leave it nil here and
+	// Foghorn back-fills commodore.dvr_recordings.retention_until after
+	// FinalizeDVR.
 
 	foghornReq := &pb.StartDVRRequest{
 		TenantId:     tenantID,
 		InternalName: internalName,
-		ExpiresAt:    expiresAt,
 		UserId:       &userID,
 	}
 	if streamID != "" {
 		foghornReq.StreamId = &streamID
+	}
+	if billingStatus != nil && billingStatus.DvrPolicy != nil {
+		foghornReq.DvrPolicy = billingStatus.DvrPolicy
+	}
+	// Forward caller-supplied window so dvrpolicy.Resolve can clamp it
+	// against tier and cluster live-window bounds inside Foghorn.
+	if w := req.GetDvrWindowSeconds(); w > 0 {
+		foghornReq.DvrWindowSeconds = &w
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -1396,13 +1402,19 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 		return nil, status.Errorf(codes.Internal, "database error looking up stream: %v", err)
 	}
 
-	// Insert into business registry
+	// Insert into business registry. DVR callers normally leave
+	// retention_until NULL at start; Foghorn back-fills it at FinalizeDVR
+	// after the stream session ends.
+	var retentionUntilArg interface{}
+	if req.GetRetentionUntil() != nil {
+		retentionUntilArg = req.GetRetentionUntil().AsTime()
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.dvr_recordings (
 			id, tenant_id, user_id, stream_id, dvr_hash, internal_name, playback_id, stream_internal_name,
-			origin_cluster_id, created_at, updated_at
-		) VALUES ($1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, NOW(), NOW())
-	`, dvrID, tenantID, userID, streamID, dvrHash, artifactInternalName, playbackID, internalName, req.GetOriginClusterId())
+			origin_cluster_id, retention_until, created_at, updated_at
+		) VALUES ($1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+	`, dvrID, tenantID, userID, streamID, dvrHash, artifactInternalName, playbackID, internalName, req.GetOriginClusterId(), retentionUntilArg)
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
@@ -1434,6 +1446,41 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 		InternalName: artifactInternalName,
 		StreamId:     streamID,
 	}, nil
+}
+
+// UpdateDVRRetention back-fills commodore.dvr_recordings.retention_until from
+// Foghorn at finalize time. Foghorn computes the value from the persisted
+// dvr_retention_days snapshot (ended_at + days*24h), so the business
+// registry's expires_at reflects post-end retention rather than a synthetic
+// start-time projection. Active recordings carry NULL until they finalize.
+func (s *CommodoreServer) UpdateDVRRetention(ctx context.Context, req *pb.UpdateDVRRetentionRequest) (*pb.UpdateDVRRetentionResponse, error) {
+	dvrHash := req.GetDvrHash()
+	if dvrHash == "" {
+		return nil, status.Error(codes.InvalidArgument, "dvr_hash is required")
+	}
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	var retentionArg interface{}
+	if req.GetRetentionUntil() != nil {
+		retentionArg = req.GetRetentionUntil().AsTime()
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE commodore.dvr_recordings
+		   SET retention_until = $1,
+		       updated_at      = NOW()
+		 WHERE dvr_hash = $2
+		   AND tenant_id::text = $3
+	`, retentionArg, dvrHash, tenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "update retention failed: %v", err)
+	}
+	affected, rowsErr := res.RowsAffected()
+	if rowsErr != nil {
+		return nil, status.Errorf(codes.Internal, "update retention affected rows failed: %v", rowsErr)
+	}
+	return &pb.UpdateDVRRetentionResponse{Updated: affected > 0}, nil
 }
 
 // ResolveClipHash resolves a clip hash to tenant context
@@ -3844,7 +3891,8 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *pb.CreateStream
 		return nil, status.Errorf(codes.Internal, "failed to create stream: %v", err)
 	}
 	if ingestMode == "pull" {
-		encURI, err := s.pullSourceEncryptor.Encrypt(strings.TrimSpace(req.GetPullSource().GetSourceUri()))
+		var encURI string
+		encURI, err = s.pullSourceEncryptor.Encrypt(strings.TrimSpace(req.GetPullSource().GetSourceUri()))
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to encrypt pull source: %v", err)
 		}
@@ -4111,10 +4159,11 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 		pullSourceEnabledValue = pullSourceEnabled(pullSource)
 		rawSourceURI := strings.TrimSpace(pullSource.GetSourceUri())
 		if rawSourceURI != "" {
-			if _, err := s.validatePullSourceEligibility(ctx, rawSourceURI); err != nil {
-				return nil, err
+			if _, vErr := s.validatePullSourceEligibility(ctx, rawSourceURI); vErr != nil {
+				return nil, vErr
 			}
-			encURI, err := s.pullSourceEncryptor.Encrypt(rawSourceURI)
+			var encURI string
+			encURI, err = s.pullSourceEncryptor.Encrypt(rawSourceURI)
 			if err != nil {
 				return nil, status.Errorf(codes.Internal, "failed to encrypt pull source: %v", err)
 			}
@@ -4164,18 +4213,20 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 			strings.Join(updates, ", "), argIdx, argIdx+1, argIdx+2)
 		args = append(args, streamID, userID, tenantID)
 
-		res, err := tx.ExecContext(ctx, query, args...)
+		var res sql.Result
+		res, err = tx.ExecContext(ctx, query, args...)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to update stream: %v", err)
 		}
-		if rows, err := res.RowsAffected(); err == nil && rows == 0 {
+		if rows, rErr := res.RowsAffected(); rErr == nil && rows == 0 {
 			return nil, status.Error(codes.NotFound, "stream not found")
 		}
 	}
 
 	if pullSource != nil {
 		if !pullSourceHasURI {
-			res, err := tx.ExecContext(ctx, `
+			var res sql.Result
+			res, err = tx.ExecContext(ctx, `
 					UPDATE commodore.stream_pull_sources
 					SET enabled = $2, updated_at = NOW()
 					WHERE stream_id = $1::uuid
@@ -4183,7 +4234,7 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 			if err != nil {
 				return nil, status.Errorf(codes.Internal, "failed to update pull source: %v", err)
 			}
-			if rows, err := res.RowsAffected(); err == nil && rows == 0 {
+			if rows, rErr := res.RowsAffected(); rErr == nil && rows == 0 {
 				return nil, status.Error(codes.NotFound, "pull source not found")
 			}
 		} else {
@@ -5389,7 +5440,10 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to decrypt pull source: %v", err)
 		}
-		class, _ := pullsource.Classify(sourceURI)
+		class, classErr := pullsource.Classify(sourceURI)
+		if classErr != nil {
+			s.logger.WithError(classErr).WithField("stream_id", stream.StreamId).Debug("pull source classification failed")
+		}
 		stream.PullSource = buildPullSourceView(sourceURI, pullEnabled.Bool, class)
 	}
 
@@ -5424,7 +5478,10 @@ func (s *CommodoreServer) scanStream(rows *sql.Rows) (*pb.Stream, error) {
 		if err != nil {
 			return nil, err
 		}
-		class, _ := pullsource.Classify(sourceURI)
+		class, classErr := pullsource.Classify(sourceURI)
+		if classErr != nil {
+			s.logger.WithError(classErr).WithField("stream_id", stream.StreamId).Debug("pull source classification failed")
+		}
 		stream.PullSource = buildPullSourceView(sourceURI, pullEnabled.Bool, class)
 	}
 
@@ -6140,7 +6197,7 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 	}
 
 	// Build WHERE clause with optional stream filter
-	whereClause := "d.tenant_id = $1"
+	whereClause := "d.tenant_id = $1 AND (d.retention_until IS NULL OR d.retention_until > NOW())"
 	args := []interface{}{tenantID}
 	argIdx := 2
 

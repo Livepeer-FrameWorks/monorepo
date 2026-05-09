@@ -176,12 +176,17 @@ func (r *dvrRepositoryDB) UpdateDVRProgressByHash(ctx context.Context, dvrHash s
 	if db == nil {
 		return sql.ErrConnDone
 	}
+	// Progress writes are only meaningful before finalization. The first
+	// storage-node progress event is what promotes requested/starting DVRs into
+	// recording so the chapter sweeper can materialize the active EVENT view.
 	_, err := db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
 		SET status = $2,
 		    size_bytes = $3,
 		    updated_at = NOW()
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
+		WHERE artifact_hash = $1
+		  AND artifact_type = 'dvr'
+		  AND status IN ('requested', 'starting', 'recording')
 	`, dvrHash, status, sizeBytes)
 	return err
 }
@@ -190,6 +195,9 @@ func (r *dvrRepositoryDB) UpdateDVRCompletionByHash(ctx context.Context, dvrHash
 	if db == nil {
 		return sql.ErrConnDone
 	}
+	// Completion may legitimately race FinalizeDVR. Only overwrite when the
+	// row is still pre-terminal; FinalizeDVR's transition to a terminal
+	// status wins if it lands first.
 	_, err := db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
 		SET status = $1,
@@ -199,7 +207,9 @@ func (r *dvrRepositoryDB) UpdateDVRCompletionByHash(ctx context.Context, dvrHash
 		    manifest_path = $4,
 		    error_message = NULLIF($5, ''),
 		    updated_at = NOW()
-		WHERE artifact_hash = $6 AND artifact_type = 'dvr'
+		WHERE artifact_hash = $6
+		  AND artifact_type = 'dvr'
+		  AND status IN ('requested', 'starting', 'recording', 'finalizing')
 	`, finalStatus, durationSeconds, sizeBytes, manifestPath, errorMsg, dvrHash)
 	return err
 }

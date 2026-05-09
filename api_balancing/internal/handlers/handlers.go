@@ -408,14 +408,14 @@ func Init(
 			}()
 		},
 		func(ctx context.Context, del *pb.ArtifactDeleted) {
-			clipHash := del.GetClipHash()
+			artifactHash := del.GetArtifactHash()
 			nodeID := del.GetNodeId()
 			reason := del.GetReason()
 
 			// This message indicates node-local deletion/eviction. Remove the node cache record.
-			_, err := db.ExecContext(ctx, `DELETE FROM foghorn.artifact_nodes WHERE artifact_hash = $1 AND node_id = $2`, clipHash, nodeID)
+			_, err := db.ExecContext(ctx, `DELETE FROM foghorn.artifact_nodes WHERE artifact_hash = $1 AND node_id = $2`, artifactHash, nodeID)
 			if err != nil {
-				logger.WithError(err).WithField("clip_hash", clipHash).Error("Failed to remove artifact node assignment")
+				logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to remove artifact node assignment")
 			}
 
 			// If the artifact has no remaining cached nodes and is synced, reflect that it is now S3-only.
@@ -425,7 +425,7 @@ func Init(
 					SELECT 1 FROM foghorn.artifact_nodes
 					WHERE artifact_hash = $1 AND NOT is_orphaned
 				)
-			`, clipHash).Scan(&hasAnyNodes)
+				`, artifactHash).Scan(&hasAnyNodes)
 			if !hasAnyNodes {
 				_, _ = db.ExecContext(ctx, `
 					UPDATE foghorn.artifacts
@@ -435,14 +435,14 @@ func Init(
 					END,
 					updated_at = NOW()
 					WHERE artifact_hash = $1
-				`, clipHash)
+					`, artifactHash)
 			}
 
 			// Evictions must never be treated as global deletes.
 			if reason == "eviction" {
 				logger.WithFields(logging.Fields{
-					"clip_hash": clipHash,
-					"node_id":   nodeID,
+					"artifact_hash": artifactHash,
+					"node_id":       nodeID,
 				}).Info("Clip evicted from node cache")
 				return
 			}
@@ -450,15 +450,15 @@ func Init(
 			// Only emit DELETED when the artifact is already soft-deleted in foghorn.artifacts.
 			// This avoids conflating node-local cleanup with user-initiated deletion.
 			var artifactStatus string
-			if err := db.QueryRowContext(ctx, `SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1`, clipHash).Scan(&artifactStatus); err != nil {
-				logger.WithError(err).WithField("clip_hash", clipHash).Warn("Failed to read artifact status for deletion lifecycle")
+			if err := db.QueryRowContext(ctx, `SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1`, artifactHash).Scan(&artifactStatus); err != nil {
+				logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to read artifact status for deletion lifecycle")
 				return
 			}
 			if artifactStatus != "deleted" {
 				logger.WithFields(logging.Fields{
-					"clip_hash": clipHash,
-					"node_id":   nodeID,
-					"reason":    reason,
+					"artifact_hash": artifactHash,
+					"node_id":       nodeID,
+					"reason":        reason,
 				}).Info("Clip removed from node but not globally deleted")
 				return
 			}

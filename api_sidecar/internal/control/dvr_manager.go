@@ -14,6 +14,7 @@ import (
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/storage"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/hls"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -37,10 +38,12 @@ func newHTTPRequest(ctx context.Context, method, url string, body io.Reader) (*h
 
 // DVR push retry constants
 const (
-	MaxDVRRetries       = 10               // Maximum push recreation attempts
-	InitialRetryDelay   = 5 * time.Second  // Initial delay between retries
-	MaxRetryDelay       = 60 * time.Second // Maximum delay between retries
-	PushMonitorInterval = 5 * time.Second  // How often to check push status
+	MaxDVRRetries         = 10               // Maximum push recreation attempts
+	InitialRetryDelay     = 5 * time.Second  // Initial delay between retries
+	MaxRetryDelay         = 60 * time.Second // Maximum delay between retries
+	PushMonitorInterval   = 5 * time.Second  // How often to check push status
+	dvrEvictionBatchSize  = 500
+	maxDVREvictionBatches = 10
 )
 
 // DVRJob represents a running DVR recording session
@@ -142,8 +145,137 @@ func GetActiveDVRHashes() map[string]bool {
 	return hashes
 }
 
-// HandleNewSegment handles a RECORDING_SEGMENT trigger for immediate sync
-func (dm *DVRManager) HandleNewSegment(streamName, filePath string) {
+// IsActiveDVR reports whether the given DVR hash is currently recording on
+// this node. Required guard at every DVR cleanup site: an active DVR must
+// never have its directory or its rolling manifest deleted, and unsynced
+// segments may only be evicted with an explicit DVRSegmentDropped report.
+func IsActiveDVR(dvrHash string) bool {
+	if dvrManager == nil || dvrHash == "" {
+		return false
+	}
+	dvrManager.mutex.RLock()
+	defer dvrManager.mutex.RUnlock()
+	_, ok := dvrManager.jobs[dvrHash]
+	return ok
+}
+
+// LookupActiveDVR returns the active DVRJob for a hash, if any. Returns
+// (nil, false) when the DVR is not active on this node.
+func LookupActiveDVR(dvrHash string) (*DVRJob, bool) {
+	if dvrManager == nil || dvrHash == "" {
+		return nil, false
+	}
+	dvrManager.mutex.RLock()
+	defer dvrManager.mutex.RUnlock()
+	job, ok := dvrManager.jobs[dvrHash]
+	return job, ok
+}
+
+// SegmentInRollingManifest reports whether a segment file is referenced by
+// the active DVR's current rolling Mist manifest. Used as the third clause
+// of the eviction predicate so we never delete a file that the live
+// playlist still advertises.
+func SegmentInRollingManifest(job *DVRJob, segmentName string) bool {
+	if job == nil || job.ManifestPath == "" || segmentName == "" {
+		return false
+	}
+	data, err := os.ReadFile(job.ManifestPath)
+	if err != nil {
+		return false
+	}
+	// Cheap substring check; the manifest writes "segments/<name>" entries.
+	return strings.Contains(string(data), "/"+segmentName) || strings.Contains(string(data), segmentName+"\n")
+}
+
+// EvictUploadedSegments evicts segments from local disk for an active DVR.
+// Caller passes the candidate segment names (from the local uploaded cache
+// for routine post-upload eviction, or from RequestEvictableSegments for
+// pressure-driven eviction). Each candidate is checked for active
+// rolling-manifest membership before deletion; survivors emit a
+// DVRSegmentDropped(was_uploaded=true) so Foghorn marks deleted_local.
+//
+// Returns the number of files actually deleted.
+func (dm *DVRManager) EvictUploadedSegments(dvrHash string, candidates []string, reason string) int {
+	if len(candidates) == 0 {
+		return 0
+	}
+	job, ok := LookupActiveDVR(dvrHash)
+	if !ok {
+		return 0
+	}
+	deleted := 0
+	idx := localSegmentIndex
+	for _, name := range candidates {
+		if SegmentInRollingManifest(job, name) {
+			continue
+		}
+		// Refuse to evict a segment that's actively being read by a
+		// chapter playback / defrost. The index's ActiveViews refcount
+		// is the authoritative signal.
+		if idx != nil && !idx.EvictionEligible(dvrHash, name, 0) {
+			// Skip — caller will retry when ActiveViews drops to 0.
+			continue
+		}
+		segPath := filepath.Join(job.OutputDir, "segments", name)
+		info, statErr := os.Stat(segPath)
+		if statErr != nil {
+			// Already gone — still report the eviction so Foghorn's view
+			// matches reality.
+			if dropErr := SendDVRSegmentDropped(dvrHash, name, reason, segPath, 0, 0, 0, 0, true); dropErr != nil {
+				job.Logger.WithError(dropErr).WithField("segment", name).Debug("Failed to report missing segment as dropped")
+			}
+			if idx != nil {
+				idx.Forget(dvrHash, name)
+			}
+			continue
+		}
+		if err := os.Remove(segPath); err != nil {
+			job.Logger.WithError(err).WithField("segment", name).Warn("Failed to evict DVR segment")
+			continue
+		}
+		if dropErr := SendDVRSegmentDropped(dvrHash, name, reason, segPath, 0, 0, 0, uint64(info.Size()), true); dropErr != nil {
+			job.Logger.WithError(dropErr).WithField("segment", name).Debug("Failed to report segment eviction")
+		}
+		job.syncMutex.Lock()
+		delete(job.SyncedSegments, name)
+		job.syncMutex.Unlock()
+		if idx != nil {
+			idx.Forget(dvrHash, name)
+		}
+		deleted++
+	}
+	return deleted
+}
+
+// DropUnsyncedSegment force-evicts a single segment that has NOT been
+// uploaded to S3. This is the data-loss path: the segment is reported as
+// lost_local so chapter manifests can render an explicit #EXT-X-GAP. Use
+// only when no other option remains. Reason should be one of disk_pressure /
+// retention_expired / operator_cleanup.
+func (dm *DVRManager) DropUnsyncedSegment(dvrHash, segmentName, reason string) error {
+	job, ok := LookupActiveDVR(dvrHash)
+	if !ok {
+		return fmt.Errorf("dvr %s not active", dvrHash)
+	}
+	segPath := filepath.Join(job.OutputDir, "segments", segmentName)
+	var sizeBytes uint64
+	if info, err := os.Stat(segPath); err == nil {
+		sizeBytes = uint64(info.Size())
+	}
+	if err := os.Remove(segPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove unsynced segment: %w", err)
+	}
+	job.syncMutex.Lock()
+	delete(job.SyncedSegments, segmentName)
+	job.syncMutex.Unlock()
+	return SendDVRSegmentDropped(dvrHash, segmentName, reason, segPath, 0, 0, 0, sizeBytes, false)
+}
+
+// HandleNewSegment handles a RECORDING_SEGMENT trigger for immediate sync.
+// Mist's RecordingSegmentTrigger carries media-time bounds and duration; we
+// pass them to Foghorn so the per-segment ledger row records canonical
+// timing without re-deriving from filenames or wall-clock.
+func (dm *DVRManager) HandleNewSegment(streamName, filePath string, mediaStartMs, mediaEndMs, durationMs int64) {
 	dm.mutex.RLock()
 	defer dm.mutex.RUnlock()
 
@@ -172,11 +304,15 @@ func (dm *DVRManager) HandleNewSegment(streamName, filePath string) {
 	}
 
 	// Trigger sync for this specific segment
-	go dm.syncSpecificSegment(targetJob, filePath)
+	go dm.syncSpecificSegment(targetJob, filePath, mediaStartMs, mediaEndMs, durationMs)
 }
 
-// syncSpecificSegment syncs a single segment file to S3
-func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string) {
+// syncSpecificSegment records a 'pending' ledger row in Foghorn, uploads the
+// segment to S3 against the returned presigned URL, then reports the upload
+// to mark the row 'uploaded'. Foghorn's ledger is the source of truth; the
+// in-memory SyncedSegments map remains as a hot cache so eviction decisions
+// avoid a Foghorn round-trip per segment.
+func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string, mediaStartMs, mediaEndMs, durationMs int64) {
 	if !IsConnected() {
 		return
 	}
@@ -198,57 +334,109 @@ func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string) {
 		return
 	}
 
-	// Request sync permission
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Use relative path for hash construction to match polling logic: dvrHash/filename
-	resp, err := RequestFreezePermission(ctx, "dvr_segment", job.DVRHash+"/"+segName, filePath, uint64(info.Size()), []string{segName})
+	resp, err := RecordDVRSegment(
+		ctx,
+		job.DVRHash, segName, filePath,
+		mediaStartMs, mediaEndMs, durationMs,
+	)
 	if err != nil {
-		job.Logger.WithError(err).WithField("segment", segName).Warn("Failed to request segment sync permission")
+		job.Logger.WithError(err).WithField("segment", segName).Warn("Failed to record DVR segment with Foghorn")
 		return
 	}
-
-	if !resp.Approved {
-		if resp.Reason == "already_synced" {
-			job.syncMutex.Lock()
-			job.SyncedSegments[segName] = true
-			job.syncMutex.Unlock()
+	if !resp.GetAccepted() {
+		reason := resp.GetReason()
+		// Two rejection categories from Foghorn's RecordDVRSegment:
+		//   1. dvr_terminal — artifact is in a terminal state. Hard-stop the
+		//      Mist push: every subsequent segment hits the same rejection,
+		//      so emit DVRSegmentDropped(was_uploaded=false) for the gap and
+		//      then PushStop. This is the only terminal rejection.
+		//   2. Everything else (s3_client_unavailable, presign_failed,
+		//      insert_failed, dvr_artifact_not_found, missing metadata) —
+		//      transient or caller-side. Skip THIS segment and let the
+		//      next RECORDING_SEGMENT trigger try again. The reconciliation
+		//      backstop (syncNewSegments) will eventually catch up if the
+		//      transient condition resolves.
+		if reason == "dvr_terminal" {
+			job.Logger.WithFields(logging.Fields{
+				"segment":  segName,
+				"reason":   reason,
+				"dvr_hash": job.DVRHash,
+			}).Warn("DVR segment rejected as terminal; stopping local push")
+			if dropErr := SendDVRSegmentDropped(job.DVRHash, segName, "artifact_terminal", filePath, mediaStartMs, mediaEndMs, durationMs, uint64(info.Size()), false); dropErr != nil {
+				job.Logger.WithError(dropErr).WithField("segment", segName).Debug("Failed to report rejected segment as lost_local")
+			}
+			dm.stopJobAfterTerminalRejection(job)
+			return
 		}
+		job.Logger.WithFields(logging.Fields{
+			"segment":  segName,
+			"reason":   reason,
+			"dvr_hash": job.DVRHash,
+		}).Warn("DVR segment record rejected; will retry on next trigger")
+		return
+	}
+	if resp.GetPresignedPutUrl() == "" {
+		job.Logger.WithField("segment", segName).Warn("No presigned URL returned for DVR segment")
 		return
 	}
 
-	presignedURL := resp.SegmentUrls[segName]
-	if presignedURL == "" {
-		presignedURL = resp.PresignedPutUrl
-	}
-
-	if presignedURL == "" {
-		job.Logger.WithField("segment", segName).Warn("No presigned URL provided for segment sync")
-		return
-	}
-
-	// Upload
-	err = dm.uploadSegmentToS3(ctx, filePath, presignedURL)
-	if err != nil {
+	if err := dm.uploadSegmentToS3(ctx, filePath, resp.GetPresignedPutUrl()); err != nil {
 		job.Logger.WithError(err).WithField("segment", segName).Warn("Failed to upload segment to S3")
 		return
 	}
 
-	// Mark as synced
+	if err := SendMarkDVRSegmentUploaded(job.DVRHash, segName, uint64(info.Size())); err != nil {
+		job.Logger.WithError(err).WithField("segment", segName).Warn("Failed to mark DVR segment uploaded with Foghorn")
+		// Don't return — local cache below still records success; Foghorn
+		// will eventually reconcile via the finalize-time retry path.
+	}
+
 	job.syncMutex.Lock()
 	job.SyncedSegments[segName] = true
 	job.syncMutex.Unlock()
+
+	// Update the per-segment local cache index. Eviction (routine post-
+	// upload + pressure-driven) consults this index to decide what's safe
+	// to drop. Chapter playback bumps ActiveViews via AcquireView so a
+	// segment under active replay can't be evicted out from under the
+	// player.
+	if idx := localSegmentIndex; idx != nil {
+		idx.MarkUploaded(job.DVRHash, segName, filePath, info.Size())
+	}
 
 	job.Logger.WithFields(logging.Fields{
 		"segment":  segName,
 		"size_kb":  info.Size() / 1024,
 		"dvr_hash": job.DVRHash,
+		"sequence": resp.GetSequence(),
 		"trigger":  "RECORDING_SEGMENT",
 	}).Debug("DVR segment synced to S3 via trigger")
 
-	// Opportunistically sync manifest
-	dm.syncManifest(job)
+	// Routine post-upload eviction: any uploaded segment now outside the
+	// rolling-manifest window is safe to delete locally. We only consult
+	// the local uploaded cache here to avoid a Foghorn round-trip per
+	// segment; storage-pressure passes use RequestEvictableSegments for
+	// authoritative answers across the cluster.
+	dm.evictBeyondRollingManifest(job)
+}
+
+// evictBeyondRollingManifest deletes uploaded segment files absent from the
+// live rolling manifest. Cheap routine eviction so disk
+// stays bounded under nounlink=1 without per-segment Foghorn queries.
+func (dm *DVRManager) evictBeyondRollingManifest(job *DVRJob) {
+	job.syncMutex.Lock()
+	candidates := make([]string, 0, len(job.SyncedSegments))
+	for name := range job.SyncedSegments {
+		candidates = append(candidates, name)
+	}
+	job.syncMutex.Unlock()
+	if len(candidates) == 0 {
+		return
+	}
+	dm.EvictUploadedSegments(job.DVRHash, candidates, "rolling_window_passed")
 }
 
 // StartRecording starts a new DVR recording job
@@ -326,19 +514,19 @@ func (dm *DVRManager) StopRecording(dvrHash string) error {
 		}
 	}
 
-	job.Status = "stopped"
+	// Mark the job finalizing. Archive playback is chapter-only via Foghorn-
+	// generated manifests; the rolling Mist playlist stays local-only and is
+	// not uploaded to S3 at any point.
+	job.Status = "finalizing"
 	dm.mutex.Unlock()
 
-	// Final sync: flush remaining segments and manifest to S3.
-	// Mutex released during network I/O to avoid blocking other DVR operations.
-	// Safe: syncNewSegments/syncManifest use job.syncMutex internally and are
-	// idempotent (SyncedSegments tracks what's already uploaded). monitorJob may
-	// run concurrently but will exit once the job is deleted below.
+	// Final sync: flush remaining segments to S3. syncNewSegments uses
+	// job.syncMutex internally and is idempotent (SyncedSegments tracks
+	// what's already uploaded).
 	dm.syncNewSegments(job)
-	dm.syncManifest(job)
 
 	dm.mutex.Lock()
-	dm.sendCompletion(job, "stopped", "")
+	dm.sendCompletion(job, "completed", "")
 	delete(dm.jobs, dvrHash)
 	dm.mutex.Unlock()
 
@@ -354,20 +542,38 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 		segmentDuration = 6 // Default 6 seconds
 	}
 
-	retentionSeconds := 7200 // 2 hours default
-	if retention := int(job.Config.GetRetentionDays()); retention > 0 {
-		retentionSeconds = retention * 24 * 3600
+	// Live DVR window for Mist's targetAge. Foghorn resolves the effective
+	// window via pkg/dvrpolicy and stamps it into DVRConfig.dvr_window_seconds.
+	windowSeconds := int(job.Config.GetDvrWindowSeconds())
+	if windowSeconds <= 0 {
+		windowSeconds = 7200 // 2 hours default
+	}
+	// maxEntries caps manifest playlist size to avoid huge multi-day playlists
+	// breaking HLS parsers. Foghorn-resolved value already accounts for tier
+	// + cluster ceilings; fall back to ceil(window/segment) if not provided.
+	maxEntries := int(job.Config.GetMaxEntries())
+	if maxEntries <= 0 {
+		maxEntries = (windowSeconds + segmentDuration - 1) / segmentDuration
+		if maxEntries < 1 {
+			maxEntries = 1
+		}
 	}
 
 	// Build DVR target path
 	// Segments go to {outputDir}/segments/, manifest at {outputDir}/{hash}.m3u8
 	// From segments/, ../ goes to outputDir where manifest lives
-	targetURI := fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts?m3u8=../%s.m3u8&split=%d&targetAge=%d&append=1&noendlist=1",
+	// nounlink=1 stops Mist from deleting segment files when pruning the
+	// rolling playlist. Without it, archive integrity depends on S3 winning
+	// a race against Mist's targetAge cleanup. With ledger + segment-level
+	// eviction in place, the sidecar owns deletion and only after Foghorn
+	// confirms upload, so segments are never lost silently.
+	targetURI := fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts?m3u8=../%s.m3u8&split=%d&targetAge=%d&maxEntries=%d&append=1&noendlist=1&nounlink=1",
 		job.OutputDir,
 		"segments",
 		job.DVRHash,
 		segmentDuration,
-		retentionSeconds,
+		windowSeconds,
+		maxEntries,
 	)
 
 	// Store for recreation attempts
@@ -413,7 +619,45 @@ func (dm *DVRManager) monitorJob(job *DVRJob) {
 			}
 
 			if err := dm.hasSpaceFor(dm.storagePath, 0); err != nil {
-				job.Logger.WithError(err).Error("Stopping DVR recording due to insufficient disk space")
+				// Disk pressure under an active DVR: try to reclaim local
+				// space first by evicting uploaded-and-aged segments via
+				// Foghorn's authoritative evictable list. Only kill the
+				// push if pressure persists after the eviction pass.
+				var totalEvicted int
+				pressureRelieved := false
+				for batch := 0; batch < maxDVREvictionBatches; batch++ {
+					evictCtx, evictCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					resp, evictErr := RequestEvictableSegments(evictCtx, job.DVRHash, dvrEvictionBatchSize)
+					evictCancel()
+					if evictErr != nil || resp == nil || len(resp.GetSegmentNames()) == 0 {
+						break
+					}
+					evicted := dm.EvictUploadedSegments(job.DVRHash, resp.GetSegmentNames(), "disk_pressure")
+					totalEvicted += evicted
+					if evicted == 0 {
+						break
+					}
+					if reEvalErr := dm.hasSpaceFor(dm.storagePath, 0); reEvalErr == nil {
+						job.Logger.WithFields(logging.Fields{
+							"segments_evicted": totalEvicted,
+							"dvr_hash":         job.DVRHash,
+						}).Warn("Disk pressure under active DVR relieved by segment eviction")
+						pressureRelieved = true
+						break
+					}
+				}
+				if pressureRelieved {
+					continue
+				}
+				if totalEvicted > 0 {
+					job.Logger.WithFields(logging.Fields{
+						"segments_evicted": totalEvicted,
+						"dvr_hash":         job.DVRHash,
+					}).Warn("Disk pressure under active DVR; evicted uploaded-and-aged segments")
+				}
+				// Eviction didn't suffice (or there was nothing to evict).
+				// Stop cleanly so Foghorn can finalize what was uploaded.
+				job.Logger.WithError(err).Error("Stopping DVR recording: disk pressure persists after eviction pass")
 				if job.PushID > 0 {
 					if stopErr := dm.mistClient.PushStop(job.PushID); stopErr != nil {
 						job.Logger.WithError(stopErr).Warn("Failed to stop MistServer push during disk-full shutdown")
@@ -511,8 +755,9 @@ func (dm *DVRManager) updateProgress(job *DVRJob) {
 
 // maintainPushStatus intelligently maintains push status with retry logic
 func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
-	if job.Status == "stopped" || job.Status == "completed" || job.Status == "failed" {
-		return // Don't maintain completed/failed jobs
+	switch job.Status {
+	case "finalizing", "completed", "completed_partial", "failed":
+		return // Don't maintain finalizing/terminal jobs
 	}
 
 	// Check if push still exists in push list
@@ -695,110 +940,128 @@ func (dm *DVRManager) GetActiveJobs() map[string]string {
 	return jobs
 }
 
-// syncNewSegments performs incremental sync of DVR segments to S3
-// MistServer writes playlist BEFORE starting next segment, so segments in manifest are "sealed"
+// syncNewSegments is the reconciliation backstop for the rare case Mist's
+// RECORDING_SEGMENT trigger was missed (process restart mid-segment, hard
+// network blip between Mist and the trigger HTTP endpoint). RECORDING_SEGMENT
+// remains the primary writer; this path discovers segments present on disk
+// but absent from the in-memory uploaded cache and routes them through the
+// same ledger primitives — RecordDVRSegment + MarkDVRSegmentUploaded — so
+// they appear in foghorn.dvr_segments and, by extension, in chapter manifests.
+//
+// Media timing comes from #EXT-X-PROGRAM-DATE-TIME when Mist writes it; once
+// anchored, later entries in the same playlist advance by their EXTINF
+// duration. Without PDT the rolling playlist has no media-clock anchor for
+// segments before its first entry, so reconciliation must not fabricate
+// chapter placement.
 func (dm *DVRManager) syncNewSegments(job *DVRJob) {
 	if !IsConnected() {
-		return // No Foghorn connection, skip sync
+		return
 	}
 
-	// Read and parse manifest to get segment list
-	segments, err := dm.parseManifestSegments(job.ManifestPath)
+	manifestBody, err := os.ReadFile(job.ManifestPath)
 	if err != nil {
-		// Manifest may not exist yet during early recording
+		// Manifest may not exist yet in the first few seconds of a recording.
 		return
 	}
-
-	if len(segments) == 0 {
+	parsed, err := hls.Parse(string(manifestBody))
+	if err != nil || parsed == nil || len(parsed.Segments) == 0 {
 		return
 	}
-
-	// Check for new segments (not yet synced)
-	job.syncMutex.Lock()
-	var newSegments []string
-	for _, seg := range segments {
-		if !job.SyncedSegments[seg] {
-			newSegments = append(newSegments, seg)
-		}
-	}
-	job.syncMutex.Unlock()
-
-	if len(newSegments) == 0 {
-		return // All segments already synced
-	}
-
-	job.Logger.WithFields(logging.Fields{
-		"new_segments": len(newSegments),
-		"total_synced": len(job.SyncedSegments),
-	}).Debug("Syncing new DVR segments to S3")
-
-	// Request sync for each new segment
 	segmentsDir := filepath.Join(job.OutputDir, "segments")
-	for _, segName := range newSegments {
-		segPath := filepath.Join(segmentsDir, segName)
+	var newCount int
+	var skippedNoClock int
+	var nextClockMs int64
 
-		// Get segment size
+	for _, seg := range parsed.Segments {
+		durationMs := int64(seg.Duration * 1000.0)
+		mediaStartMs := seg.ProgramDateTimeMs
+		if mediaStartMs <= 0 && nextClockMs > 0 {
+			mediaStartMs = nextClockMs
+		}
+		if mediaStartMs > 0 {
+			nextClockMs = mediaStartMs + durationMs
+		}
+
+		job.syncMutex.Lock()
+		alreadySynced := job.SyncedSegments[seg.Name]
+		job.syncMutex.Unlock()
+		if alreadySynced {
+			continue
+		}
+
+		segPath := filepath.Join(segmentsDir, seg.Name)
 		info, err := os.Stat(segPath)
 		if err != nil {
-			job.Logger.WithError(err).WithField("segment", segName).Debug("Segment not ready, skipping")
+			// Segment file is gone (evicted) or not yet present. Don't
+			// fabricate a ledger row.
 			continue
 		}
+		if mediaStartMs <= 0 {
+			skippedNoClock++
+			continue
+		}
+		mediaEndMs := mediaStartMs + durationMs
 
-		// Request sync permission and presigned URL from Foghorn
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		resp, err := RequestFreezePermission(ctx, "dvr_segment", job.DVRHash+"/"+segName, segPath, uint64(info.Size()), []string{segName})
-		cancel()
-
-		if err != nil {
-			job.Logger.WithError(err).WithField("segment", segName).Warn("Failed to request segment sync permission")
-			continue
-		}
-
-		if !resp.Approved {
-			// Could be already synced or rate limited - check reason
-			if resp.Reason == "already_synced" {
-				job.syncMutex.Lock()
-				job.SyncedSegments[segName] = true
-				job.syncMutex.Unlock()
+		resp, err := RecordDVRSegment(ctx, job.DVRHash, seg.Name, segPath, mediaStartMs, mediaEndMs, durationMs)
+		if err != nil || resp == nil {
+			cancel()
+			if err != nil {
+				job.Logger.WithError(err).WithField("segment", seg.Name).Warn("Reconciliation: RecordDVRSegment failed")
 			}
 			continue
 		}
-
-		// Get presigned URL for segment
-		presignedURL := resp.SegmentUrls[segName]
-		if presignedURL == "" {
-			presignedURL = resp.PresignedPutUrl // Fallback for single file
-		}
-
-		if presignedURL == "" {
-			job.Logger.WithField("segment", segName).Warn("No presigned URL provided for segment sync")
+		if !resp.GetAccepted() {
+			cancel()
+			reason := resp.GetReason()
+			if reason == "dvr_terminal" {
+				if dropErr := SendDVRSegmentDropped(
+					job.DVRHash, seg.Name, "artifact_terminal", segPath,
+					mediaStartMs, mediaEndMs, durationMs, uint64(info.Size()), false,
+				); dropErr != nil {
+					job.Logger.WithError(dropErr).WithField("segment", seg.Name).Debug("Reconciliation: DVRSegmentDropped emit failed")
+				}
+			} else {
+				job.Logger.WithFields(logging.Fields{
+					"segment": seg.Name,
+					"reason":  reason,
+				}).Warn("Reconciliation: RecordDVRSegment rejected; leaving segment retryable")
+			}
 			continue
 		}
-
-		// Upload segment using presigned URL
-		// NOTE: We use the storage package's presigned client for actual upload
-		// For now, we mark intent to sync - actual upload delegated to storage manager
-		err = dm.uploadSegmentToS3(ctx, segPath, presignedURL)
-		if err != nil {
-			job.Logger.WithError(err).WithField("segment", segName).Warn("Failed to upload segment to S3")
+		if resp.GetPresignedPutUrl() == "" {
+			cancel()
 			continue
 		}
-
-		// Mark as synced
+		if upErr := dm.uploadSegmentToS3(ctx, segPath, resp.GetPresignedPutUrl()); upErr != nil {
+			cancel()
+			job.Logger.WithError(upErr).WithField("segment", seg.Name).Warn("Reconciliation: upload failed")
+			continue
+		}
+		cancel()
+		if markErr := SendMarkDVRSegmentUploaded(job.DVRHash, seg.Name, uint64(info.Size())); markErr != nil {
+			job.Logger.WithError(markErr).WithField("segment", seg.Name).Warn("Reconciliation: MarkDVRSegmentUploaded failed")
+		}
 		job.syncMutex.Lock()
-		job.SyncedSegments[segName] = true
+		job.SyncedSegments[seg.Name] = true
 		job.syncMutex.Unlock()
-
-		job.Logger.WithFields(logging.Fields{
-			"segment":  segName,
-			"size_kb":  info.Size() / 1024,
-			"dvr_hash": job.DVRHash,
-		}).Debug("DVR segment synced to S3")
+		if idx := localSegmentIndex; idx != nil {
+			idx.MarkUploaded(job.DVRHash, seg.Name, segPath, info.Size())
+		}
+		newCount++
 	}
 
-	// Also sync the manifest itself periodically (every 5 segments or so)
-	if len(job.SyncedSegments) > 0 && len(job.SyncedSegments)%5 == 0 {
-		dm.syncManifest(job)
+	if newCount > 0 {
+		job.Logger.WithFields(logging.Fields{
+			"reconciled": newCount,
+			"dvr_hash":   job.DVRHash,
+		}).Info("Reconciled DVR segments missed by RECORDING_SEGMENT trigger")
+	}
+	if skippedNoClock > 0 {
+		job.Logger.WithFields(logging.Fields{
+			"skipped":  skippedNoClock,
+			"dvr_hash": job.DVRHash,
+		}).Warn("Skipped DVR reconciliation segments without program-date-time")
 	}
 }
 
@@ -837,6 +1100,31 @@ func (dm *DVRManager) parseManifestSegments(manifestPath string) ([]string, erro
 	return segments, scanner.Err()
 }
 
+// UploadSegmentForRetry is the exported entrypoint used by the
+// finalize-time retry handler in handlers/storage_manager.go. It is a thin
+// wrapper around the internal upload primitive so the handler does not
+// need to import unexported package state.
+func (dm *DVRManager) UploadSegmentForRetry(ctx context.Context, filePath, presignedURL string) error {
+	return dm.uploadSegmentToS3(ctx, filePath, presignedURL)
+}
+
+// stopJobAfterTerminalRejection enforces the hard invariant that follows a
+// dvr_terminal RecordDVRSegment rejection. The Foghorn-side artifact is no
+// longer accepting segments; keeping Mist pushing locally just produces an
+// unbounded stream of rejected uploads with no archive trail. Stop the
+// push (best-effort; PushStop failures are logged but the job is removed
+// regardless) and drop the local DVRJob.
+func (dm *DVRManager) stopJobAfterTerminalRejection(job *DVRJob) {
+	if job.PushID > 0 && dm.mistClient != nil {
+		if err := dm.mistClient.PushStop(job.PushID); err != nil {
+			job.Logger.WithError(err).Warn("PushStop after terminal rejection failed; removing job anyway")
+		}
+	}
+	dm.mutex.Lock()
+	delete(dm.jobs, job.DVRHash)
+	dm.mutex.Unlock()
+}
+
 // uploadSegmentToS3 uploads a segment file using a presigned PUT URL
 func (dm *DVRManager) uploadSegmentToS3(ctx context.Context, filePath, presignedURL string) error {
 	// Use the storage package's presigned client
@@ -873,71 +1161,5 @@ func (dm *DVRManager) uploadSegmentToS3(ctx context.Context, filePath, presigned
 	return nil
 }
 
-// syncManifest uploads the current manifest to S3
-func (dm *DVRManager) syncManifest(job *DVRJob) {
-	if !IsConnected() {
-		return
-	}
-
-	// Request presigned URL for manifest
-	manifestName := job.DVRHash + ".m3u8"
-	info, err := os.Stat(job.ManifestPath)
-	if err != nil {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	resp, err := RequestFreezePermission(ctx, "dvr_manifest", job.DVRHash+"/"+manifestName, job.ManifestPath, uint64(info.Size()), []string{manifestName})
-	if err != nil || !resp.Approved {
-		return
-	}
-
-	presignedURL := resp.SegmentUrls[manifestName]
-	if presignedURL == "" {
-		presignedURL = resp.PresignedPutUrl
-	}
-
-	if presignedURL == "" {
-		return
-	}
-
-	// Upload manifest
-	if err := dm.uploadManifestToS3(ctx, job.ManifestPath, presignedURL); err != nil {
-		job.Logger.WithError(err).Debug("Failed to sync manifest to S3")
-	}
-}
-
-// uploadManifestToS3 uploads a manifest file using a presigned PUT URL
-func (dm *DVRManager) uploadManifestToS3(ctx context.Context, filePath, presignedURL string) error {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = file.Close() }()
-
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-
-	req, err := newHTTPRequest(ctx, "PUT", presignedURL, file)
-	if err != nil {
-		return err
-	}
-	req.ContentLength = info.Size()
-	req.Header.Set("Content-Type", "application/vnd.apple.mpegurl")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("manifest upload failed with status %d", resp.StatusCode)
-	}
-
-	return nil
-}
+// Rolling manifest is local-only. Archive playback uses Foghorn-generated
+// chapter manifests at chapters/{chapter_id}.m3u8.

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -124,6 +125,31 @@ func (c *S3Client) GeneratePresignedPUT(key string, expiry time.Duration) (strin
 	return req.URL, nil
 }
 
+// PutObject uploads bytes directly to S3 using the client's credentials.
+// Used by Foghorn-owned writes such as chapter manifests and playback
+// manifests. Edge nodes never call this — they use presigned URLs instead
+// so credentials stay server-side.
+func (c *S3Client) PutObject(ctx context.Context, key string, body []byte, contentType string) error {
+	fullKey := c.fullKey(key)
+	in := &s3.PutObjectInput{
+		Bucket: aws.String(c.config.Bucket),
+		Key:    aws.String(fullKey),
+		Body:   bytes.NewReader(body),
+	}
+	if contentType != "" {
+		in.ContentType = aws.String(contentType)
+	}
+	if _, err := c.client.PutObject(ctx, in); err != nil {
+		return fmt.Errorf("put object %s: %w", fullKey, err)
+	}
+	c.logger.WithFields(logging.Fields{
+		"bucket": c.config.Bucket,
+		"key":    fullKey,
+		"size":   len(body),
+	}).Debug("Uploaded object directly")
+	return nil
+}
+
 // GeneratePresignedGET generates a presigned URL for downloading an object.
 // The URL is time-limited and scoped to this specific object.
 // Send this URL to Helmsman for secure downloads without exposing credentials.
@@ -149,37 +175,6 @@ func (c *S3Client) GeneratePresignedGET(key string, expiry time.Duration) (strin
 	}).Info("Generated presigned GET URL")
 
 	return req.URL, nil
-}
-
-// GeneratePresignedURLsForDVR generates presigned URLs for all segments of a DVR recording.
-// Returns a map of segment key -> presigned URL for efficient batch operations.
-func (c *S3Client) GeneratePresignedURLsForDVR(dvrPrefix string, isUpload bool, expiry time.Duration) (map[string]string, error) {
-	if expiry == 0 {
-		expiry = 30 * time.Minute // Longer expiry for DVR operations
-	}
-
-	// List all objects under the DVR prefix
-	keys, err := c.ListPrefix(context.Background(), dvrPrefix)
-	if err != nil {
-		return nil, err
-	}
-
-	urls := make(map[string]string)
-	for _, key := range keys {
-		var url string
-		var err error
-		if isUpload {
-			url, err = c.GeneratePresignedPUT(key, expiry)
-		} else {
-			url, err = c.GeneratePresignedGET(key, expiry)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate presigned URL for %s: %w", key, err)
-		}
-		urls[key] = url
-	}
-
-	return urls, nil
 }
 
 // Delete removes an object from S3 (called from Foghorn, not edge nodes)

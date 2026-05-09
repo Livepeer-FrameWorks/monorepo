@@ -31,6 +31,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clips"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvrpolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -62,6 +63,9 @@ type S3ClientInterface interface {
 	BuildVodS3Key(tenantID, artifactHash, filename string) string
 	BuildS3URL(key string) string
 	Delete(ctx context.Context, key string) error
+	PutObject(ctx context.Context, key string, body []byte, contentType string) error
+	// Used by chapter retrieval to mint player-facing manifest and segment URLs.
+	GeneratePresignedGET(key string, expiry time.Duration) (string, error)
 }
 
 // CacheInvalidator is implemented by the trigger processor to invalidate and lookup cached tenant data
@@ -415,6 +419,90 @@ func (s *FoghornGRPCServer) emitDVRStartFailure(req *pb.StartDVRRequest, reason 
 	go func() { _ = s.decklogClient.SendDVRLifecycle(dvrData) }()
 }
 
+// resolveEffectiveDVRConfig clamps the caller-requested DVR window through
+// pkg/dvrpolicy. Inputs come from the caller (StartDVRRequest carries the
+// tier policy bundle and any caller-supplied window); cluster overrides
+// come from the local Foghorn process env (one Foghorn per cluster).
+//
+// The live DVR window is INDEPENDENT of retention. Retention is post-end-
+// only and computed at FinalizeDVR from the snapshotted dvr_retention_days
+// column; it does not clamp the rolling Mist window.
+func (s *FoghornGRPCServer) resolveEffectiveDVRConfig(req *pb.StartDVRRequest) dvrpolicy.Effective {
+	tier := dvrpolicy.Tier{}
+	if p := req.GetDvrPolicy(); p != nil {
+		tier.DefaultWindowSeconds = int(p.GetDefaultWindowSeconds())
+		tier.MaxWindowSeconds = int(p.GetMaxWindowSeconds())
+		tier.DefaultSegmentDurationSeconds = int(p.GetDefaultSegmentDurationSeconds())
+		tier.MaxEntries = int(p.GetMaxEntries())
+		tier.AllowClusterExtension = p.GetAllowClusterExtension()
+	}
+	cluster := dvrpolicy.Cluster{}
+	if cfg := s.dvrClusterPolicy(); cfg != nil {
+		cluster = *cfg
+	}
+	requested := int(req.GetDvrWindowSeconds())
+	effective := dvrpolicy.Resolve(
+		dvrpolicy.Request{DVRWindowSeconds: requested},
+		tier,
+		cluster,
+	)
+	// Surface clamps so operators can see tier/cluster ceilings biting in
+	// production. Two distinct cases worth flagging: caller asked for more
+	// than they got (request clamped) and tier asked for more than the
+	// cluster allows (cluster cap biting).
+	if requested > 0 && requested > effective.DVRWindowSeconds {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":           req.GetTenantId(),
+			"requested_seconds":   requested,
+			"effective_seconds":   effective.DVRWindowSeconds,
+			"tier_max_seconds":    tier.MaxWindowSeconds,
+			"cluster_max_seconds": cluster.MaxWindowSeconds,
+		}).Info("DVR window clamped below caller request")
+	}
+	if effective.UsedDefaultFallback {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":         req.GetTenantId(),
+			"effective_seconds": effective.DVRWindowSeconds,
+		}).Warn("DVR policy missing tier defaults; using platform fallback window")
+	}
+	return effective
+}
+
+// dvrRetentionDays returns the post-end retention days to snapshot onto
+// foghorn.artifacts.dvr_retention_days at DVR start. FinalizeDVR reads this
+// snapshot months later, never re-resolving a tenant tier that may have changed.
+func dvrRetentionDays(p *pb.DVRPolicy) int32 {
+	if p == nil {
+		return 30
+	}
+	if days := p.GetRecordingRetentionDays(); days > 0 {
+		return days
+	}
+	return 30
+}
+
+// dvrClusterPolicy returns the per-cluster DVR ceiling, if configured.
+// Operator surface: gitops env file sets DVR_CLUSTER_MAX_WINDOW_SECONDS
+// and DVR_CLUSTER_MAX_ENTRIES per cluster. Both default to 0 (no cluster
+// override; tier ceilings stand). When set, dvrpolicy.Resolve clamps every
+// resolved window through the cluster cap.
+//
+// Enterprise tenants whose tier flag AllowClusterExtension=true may have
+// their max window raised by the cluster setting (up to platform_max=72h);
+// non-enterprise tenants ignore the cluster window extension and only feel
+// the cluster cap as a ceiling, not a floor.
+func (s *FoghornGRPCServer) dvrClusterPolicy() *dvrpolicy.Cluster {
+	maxWindow := config.GetEnvInt("DVR_CLUSTER_MAX_WINDOW_SECONDS", 0)
+	maxEntries := config.GetEnvInt("DVR_CLUSTER_MAX_ENTRIES", 0)
+	if maxWindow <= 0 && maxEntries <= 0 {
+		return nil
+	}
+	return &dvrpolicy.Cluster{
+		MaxWindowSeconds: maxWindow,
+		MaxEntries:       maxEntries,
+	}
+}
+
 // emitRoutingEvent sends a routing decision event via the shared builder.
 // Delegates to handlers.SendRoutingEvent with the server's decklog client.
 func (s *FoghornGRPCServer) emitRoutingEvent(
@@ -524,9 +612,7 @@ func nodeControlAuthInterceptor(logger logging.Logger) grpc.UnaryServerIntercept
 	}
 }
 
-// =============================================================================
 // CLIP CONTROL SERVICE IMPLEMENTATION
-// =============================================================================
 
 // buildClipLifecycleData creates an enriched ClipLifecycleData with timing fields
 // CRITICAL: This function fixes the missing enrichment bug documented in ipc.proto lines 575-580
@@ -915,9 +1001,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 	}, nil
 }
 
-// =============================================================================
 // DVR CONTROL SERVICE IMPLEMENTATION
-// =============================================================================
 
 // StartDVR initiates DVR recording for a stream
 func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
@@ -930,11 +1014,17 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 
 	dvrCluster := s.enrichClusterID(req.GetClusterId(), req.InternalName, req.GetTenantId())
 
-	// Resolve retention policy (default 30 days) for cleanup jobs.
-	retentionUntil := time.Now().Add(30 * 24 * time.Hour)
-	if req.ExpiresAt != nil && *req.ExpiresAt > 0 {
-		retentionUntil = time.Unix(*req.ExpiresAt, 0)
-	}
+	// Resolve effective DVR live-window / segment / max-entries policy. The
+	// caller (Commodore manual path; Foghorn auto-record) supplies the tier
+	// policy bundle; pkg/dvrpolicy clamps it through tier_max + cluster_max
+	// + platform_max. Applied only at start time — Mist split cannot change
+	// mid-push, so tier upgrades affect the next session, not this one.
+	//
+	// Retention is intentionally NOT factored in: live window and retention
+	// are independent concepts. retention_until lands on the artifact at
+	// FinalizeDVR (ended_at + dvr_retention_days*24h, read from the
+	// snapshot column we set below).
+	effective := s.resolveEffectiveDVRConfig(req)
 
 	// Resolve actual source node for this stream
 	sourceNodeID, baseURL, ok := control.GetStreamSource(req.InternalName)
@@ -995,10 +1085,6 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 			StreamInternalName: req.InternalName,
 			OriginClusterId:    s.enrichClusterID(req.GetClusterId(), req.InternalName, req.GetTenantId()),
 		}
-		// Pass retention from request if provided
-		if req.GetExpiresAt() > 0 {
-			regReq.RetentionUntil = timestamppb.New(time.Unix(req.GetExpiresAt(), 0))
-		}
 		var regResp *pb.RegisterDVRResponse
 		regResp, err = control.CommodoreClient.RegisterDVR(ctx, regReq)
 		if err != nil {
@@ -1016,39 +1102,75 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	// Generate request_id for tracing (distinct from artifact hash)
 	requestID := uuid.New().String()
 
-	// Store artifact lifecycle state in foghorn.artifacts
-	// NOTE: Business registry (tenant, user, retention) is stored in commodore.dvr_recordings
-	// tenant_id is denormalized here for fallback when Commodore is unavailable
-	// retention_until defaults to 30 days (system default, not user-configured yet)
+	// Store artifact lifecycle state in foghorn.artifacts. The DVR-policy
+	// snapshot columns (dvr_window_seconds, dvr_chapter_mode, dvr_chapter_interval,
+	// dvr_retention_days) capture the resolved policy at start time so finalize
+	// months later applies the same policy even if the tenant's tier has changed
+	// during the recording. retention_until is left NULL here — FinalizeDVR
+	// computes it as ended_at + dvr_retention_days*24h (post-end semantics).
+	chapterMode := req.GetDvrChapterMode()
+	if chapterMode == "" {
+		chapterMode = "window_sized_chapters"
+	}
+	chapterInterval := req.GetDvrChapterIntervalSeconds()
+	retentionDays := dvrRetentionDays(req.GetDvrPolicy())
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (
 			artifact_hash, artifact_type, stream_internal_name, internal_name,
 			stream_id, tenant_id, user_id,
 			status, request_id, format, origin_cluster_id,
-			retention_until, created_at, updated_at
+			dvr_window_seconds, dvr_chapter_mode, dvr_chapter_interval, dvr_retention_days,
+			created_at, updated_at
 		)
 		VALUES ($1, 'dvr', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid,
-		        'requested', $7, 'm3u8', $8, $9, NOW(), NOW())
-	`, dvrHash, req.InternalName, artifactInternalName, streamID, req.TenantId, req.GetUserId(), requestID, dvrCluster, retentionUntil)
+		        'requested', $7, 'm3u8', $8, $9, NULLIF($10, '')::text, NULLIF($11, 0)::int, NULLIF($12, 0)::int,
+		        NOW(), NOW())
+	`,
+		dvrHash, req.InternalName, artifactInternalName, streamID, req.TenantId, req.GetUserId(), requestID, dvrCluster,
+		effective.DVRWindowSeconds, chapterMode, chapterInterval, retentionDays,
+	)
 
 	if err != nil {
-		// Commodore registration succeeded but Foghorn insert failed
-		// Accept eventual consistency - Commodore record remains for audit/billing
-		// RetentionJob will eventually clean up orphan artifacts
+		if control.CommodoreClient != nil {
+			if _, cleanupErr := control.CommodoreClient.UpdateDVRRetention(ctx, &pb.UpdateDVRRetentionRequest{
+				DvrHash:        dvrHash,
+				TenantId:       req.TenantId,
+				RetentionUntil: timestamppb.New(time.Now().UTC()),
+			}); cleanupErr != nil {
+				s.logger.WithError(cleanupErr).WithFields(logging.Fields{
+					"dvr_hash":  dvrHash,
+					"tenant_id": req.TenantId,
+				}).Warn("Failed to expire DVR registry row after Foghorn insert failure")
+			}
+		}
 		s.logger.WithFields(logging.Fields{
 			"dvr_hash":      dvrHash,
 			"internal_name": req.InternalName,
 			"error":         err,
-		}).Error("Failed to store DVR artifact in database (Commodore record persists)")
+		}).Error("Failed to store DVR artifact in database")
 		return nil, status.Error(codes.Internal, "failed to store DVR artifact")
 	}
 
 	if s.consumePendingDVRStop(req.InternalName) {
-		_, _ = s.db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET status = 'stopped', error_message = $1, ended_at = NOW(), updated_at = NOW()
-			WHERE artifact_hash = $2
-		`, "stream ended before DVR start", dvrHash)
+		final, finalErr := control.FinalizeDVR(ctx, dvrHash, control.FinalizeOptions{
+			ReportedStatus: "failed",
+			ReportedError:  "stream ended before DVR start",
+			StorageNodeID:  storageNodeID,
+		})
+		if finalErr != nil && final.ArtifactStatus == "" {
+			s.logger.WithError(finalErr).WithField("dvr_hash", dvrHash).Error("Failed to finalize DVR after pending stream stop")
+			return nil, status.Error(codes.Internal, "failed to finalize stopped DVR")
+		}
+		if finalErr != nil {
+			s.logger.WithError(finalErr).WithFields(logging.Fields{
+				"dvr_hash":     dvrHash,
+				"final_status": final.ArtifactStatus,
+			}).Warn("Pending-stop DVR finalized with follow-up error")
+		}
+		responseStatus := final.ArtifactStatus
+		if responseStatus == "" {
+			responseStatus = "failed"
+		}
 		if s.decklogClient != nil {
 			stoppedAt := time.Now().Unix()
 			errorMsg := "stream ended before DVR start"
@@ -1085,7 +1207,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 			go func() { _ = s.decklogClient.SendDVRLifecycle(dvrData) }()
 		}
 		return &pb.StartDVRResponse{
-			Status:        "stopped",
+			Status:        responseStatus,
 			DvrHash:       dvrHash,
 			IngestHost:    baseURL,
 			StorageHost:   storageHost,
@@ -1105,17 +1227,30 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 		// Don't fail the request, the artifact was created
 	}
 
-	// Default DVR configuration
+	// DVR configuration. Effective live-window / segment / max_entries are
+	// resolved by pkg/dvrpolicy above. The sidecar applies these values
+	// verbatim and never interprets tier or cluster context.
 	config := &pb.DVRConfig{
-		Enabled:         true,
-		RetentionDays:   30,
-		Format:          "ts",
-		SegmentDuration: 6,
+		Enabled:          true,
+		Format:           "ts",
+		SegmentDuration:  int32(effective.SegmentDurationSeconds),
+		DvrWindowSeconds: int32(effective.DVRWindowSeconds),
+		MaxEntries:       int32(effective.MaxEntries),
+		// The sidecar runs until Mist accepts a stop; FinalizeDVR computes
+		// retention_until after the stream session ends.
+		RetentionUntil: 0,
 	}
 
-	// Build DTSC full URL
 	fullDTSC := control.BuildDTSCURI(sourceNodeID, req.InternalName, true, s.logger)
 	if fullDTSC == "" {
+		final, finalErr := control.FinalizeDVR(ctx, dvrHash, control.FinalizeOptions{
+			ReportedStatus: "failed",
+			ReportedError:  "DTSC output not available on source node",
+			StorageNodeID:  storageNodeID,
+		})
+		if finalErr != nil && final.ArtifactStatus == "" {
+			s.logger.WithError(finalErr).WithField("dvr_hash", dvrHash).Error("Failed to finalize DVR after DTSC lookup failure")
+		}
 		return nil, status.Error(codes.Unavailable, "DTSC output not available on source node")
 	}
 
@@ -1130,11 +1265,14 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	}
 
 	if err := control.SendDVRStart(storageNodeID, dvrReq); err != nil {
-		// Mark artifact as failed since we couldn't send to Helmsman
-		_, _ = s.db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW()
-			WHERE artifact_hash = $2 AND tenant_id = $3
-		`, fmt.Sprintf("storage node unavailable: %v", err), dvrHash, req.TenantId)
+		final, finalErr := control.FinalizeDVR(ctx, dvrHash, control.FinalizeOptions{
+			ReportedStatus: "failed",
+			ReportedError:  fmt.Sprintf("storage node unavailable: %v", err),
+			StorageNodeID:  storageNodeID,
+		})
+		if finalErr != nil && final.ArtifactStatus == "" {
+			s.logger.WithError(finalErr).WithField("dvr_hash", dvrHash).Error("Failed to finalize DVR after storage start failure")
+		}
 
 		// Emit FAILED event to Decklog
 		if s.decklogClient != nil {
@@ -1215,9 +1353,6 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 				return nil
 			}(),
 		}
-		if req.ExpiresAt != nil {
-			dvrData.ExpiresAt = req.ExpiresAt
-		}
 		go func() { _ = s.decklogClient.SendDVRLifecycle(dvrData) }()
 	}
 
@@ -1275,7 +1410,8 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest)
 		return nil, status.Error(codes.Internal, "failed to fetch DVR artifact")
 	}
 
-	if dvrStatus == "completed" || dvrStatus == "failed" || dvrStatus == "ready" || dvrStatus == "stopped" {
+	switch dvrStatus {
+	case "completed", "completed_partial", "failed", "ready", "deleted", "finalizing":
 		return &pb.StopDVRResponse{
 			Success: false,
 			Message: fmt.Sprintf("DVR recording already finished with status: %s", dvrStatus),
@@ -1463,9 +1599,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 	}, nil
 }
 
-// =============================================================================
 // VIEWER CONTROL SERVICE IMPLEMENTATION
-// =============================================================================
 
 // ResolveViewerEndpoint resolves the best endpoint(s) for a viewer
 func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
@@ -2203,7 +2337,6 @@ func (s *FoghornGRPCServer) paymentFailedError(ctx context.Context, tenantID, re
 }
 
 // VOD CONTROL SERVICE IMPLEMENTATION
-// =============================================================================
 
 // generateVodHash creates a unique hash for a VOD upload
 func generateVodHash(tenantID, filename string, timestamp time.Time) string {
@@ -2449,7 +2582,7 @@ func (s *FoghornGRPCServer) GetVodUploadStatus(ctx context.Context, req *pb.GetV
 		resp.ExpiresAt = timestamppb.New(uploadExpiresAt.Time)
 	}
 
-	// Once multipart upload is complete, S3 ListParts is no longer part of status.
+	// Multipart-complete uploads report stored object metadata, not S3 part state.
 	switch resp.State {
 	case pb.VodStatus_VOD_STATUS_PROCESSING,
 		pb.VodStatus_VOD_STATUS_READY,

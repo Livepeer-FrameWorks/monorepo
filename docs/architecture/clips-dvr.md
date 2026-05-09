@@ -246,19 +246,32 @@ DEFROST (cold -> warm):
 
 ## Cross-Cluster Artifact Access
 
-When a viewer requests an artifact (clip/DVR/VOD) that lives on a remote cluster, Foghorn uses the `PrepareArtifact` FoghornFederation RPC to obtain time-limited presigned S3 URLs without sharing S3 credentials across clusters.
+When a viewer requests a clip or VOD that lives on a remote cluster, Foghorn uses the `PrepareArtifact` FoghornFederation RPC to obtain time-limited presigned S3 URLs without sharing S3 credentials across clusters. DVR archive playback is not a whole-artifact `PrepareArtifact` flow: public callers use the GraphQL DVR chapter API through Gateway → Commodore, Commodore routes to the DVR origin Foghorn, and Foghorn returns a bounded chapter/range manifest that preserves `DVRSegmentRef` gap metadata.
 
 ### Flow
 
 ```
-Viewer → Foghorn A (artifact not on local nodes, not in local S3)
+Viewer → Foghorn A (clip/VOD not on local nodes, not in local S3)
   → ArtifactAdvertisement from PeerChannel: Cluster B has the artifact
   → PrepareArtifact RPC → Foghorn B
       1. Lookup foghorn.artifacts by hash + tenant_id
       2. If not yet in S3: trigger async freeze, return Ready=false + est_ready_seconds
-      3. If in S3: generate presigned GET URL(s) (15-min expiry for clips/VOD, 30-min for DVR segments)
+      3. If in S3: generate presigned GET URL(s)
       4. Return PrepareArtifactResponse with URL(s), size, format
   → Foghorn A returns presigned URL to viewer via STREAM_SOURCE trigger chain
+
+DVR chapter playback follows a separate bounded path:
+
+```
+
+Viewer/Webapp → Gateway GraphQL dvrChapter/dvrChapters
+→ Commodore validates tenant ownership and resolves origin_cluster_id
+→ Origin Foghorn reads foghorn.dvr_segments for the requested chapter/range
+→ Origin Foghorn materializes/signs a chapter playlist with per-segment access
+→ Viewer player loads that chapter manifest
+
+```
+
 ```
 
 ### PrepareArtifact Request/Response
@@ -268,7 +281,7 @@ message PrepareArtifactRequest {
   string artifact_id = 1;        // Artifact hash
   string clip_hash = 2;          // Legacy alias
   string requesting_cluster = 3;
-  string artifact_type = 4;      // "clip", "dvr", "vod"
+  string artifact_type = 4;      // "clip" or "vod" for public playback; DVR requires bounded chapter/range context
   string tenant_id = 5;
 }
 
@@ -278,14 +291,14 @@ message PrepareArtifactResponse {
   bool ready = 3;                     // Immediately available?
   uint32 est_ready_seconds = 4;       // Async prep time estimate
   string error = 5;
-  map<string, string> segment_urls = 6; // DVR: segment filename → presigned GET URL
+  map<string, string> segment_urls = 6; // legacy non-DVR segmented artifacts
   string format = 7;                  // mp4, m3u8, etc.
   string internal_name = 8;           // Artifact routing name (vod+{this})
   string stream_internal_name = 9;   // Source stream routing name
 }
 ```
 
-Key design choice: artifacts must be S3-synced before cross-cluster access works. If an artifact is only on local disk (not yet frozen to S3), `PrepareArtifact` triggers an async freeze and returns `ready=false`. The requesting Foghorn can retry after `est_ready_seconds`.
+Key design choice: clips and VODs must be S3-synced before cross-cluster access works. If an artifact is only on local disk (not yet frozen to S3), `PrepareArtifact` triggers an async freeze and returns `ready=false`. The requesting Foghorn can retry after `est_ready_seconds`. DVR archive playback is already ledger-backed and bounded by chapter/range; the origin Foghorn signs the chapter view directly.
 
 See `docs/architecture/federation.md` for the broader FoghornFederation protocol and `docs/architecture/stream-replication-topology.md` for how STREAM_SOURCE routes to PrepareArtifact for VOD/artifacts.
 
@@ -340,7 +353,7 @@ Helmsman nodes manage local storage pressure independently to avoid disk exhaust
 | `minRetentionHours` | 1 hour  | Never evict artifacts younger than this                       |
 
 > **Important:** Local storage retention is **best-effort**. Under disk pressure,
-> artifacts may be evicted from edge nodes before the 30-day retention window.
+> artifacts may be evicted from edge nodes before central retention expires.
 > This does not change S3-backed copies or central database records.
 
 The cold-storage manager also has separate freeze thresholds: by default it starts
@@ -358,18 +371,23 @@ Three background jobs manage artifact lifecycle:
 
 ### RetentionJob
 
-Uses `retention_until` field (set to 30 days from creation by default). This
-controls when artifacts are soft-deleted in the registry, but does not prevent
-early eviction on edge nodes under disk pressure (see above):
+Uses `retention_until` to decide when terminal artifacts are soft-deleted.
+For DVR, `retention_until` is written by `FinalizeDVR` as
+`ended_at + dvr_retention_days*24h`; active DVR artifacts are invisible to
+retention and are not expired based on `started_at`. The full continuous
+archive model is documented in
+[`docs/architecture/dvr-continuous-archive.md`](./dvr-continuous-archive.md).
+For clips and VOD, callers may still set `retention_until` at creation time;
+rows without an explicit value use the retention job's fallback.
 
 ```sql
 UPDATE foghorn.artifacts
 SET status = 'deleted', updated_at = NOW()
-WHERE status NOT IN ('deleted', 'failed')
+WHERE status IN ('completed', 'completed_partial', 'ready', 'failed')
   AND (
     (retention_until IS NOT NULL AND retention_until < NOW())
     OR
-    (retention_until IS NULL AND created_at < NOW() - make_interval(days => 30))
+    (retention_until IS NULL AND created_at < NOW() - make_interval(days => $retention_days))
   )
 ```
 

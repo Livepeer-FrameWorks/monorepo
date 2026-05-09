@@ -581,6 +581,55 @@ type Query {
   ): DVRRecordingsConnection
 
   """
+  Retrieve a chapter manifest URL for a DVR recording.
+
+  Chapters are virtual VOD-shaped views over the recording's segment
+  timeline. Modes:
+    - WINDOW_SIZED: sequential fixed-length chapters of size
+      tier.MaxWindowSeconds since the recording's start.
+    - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at
+      unix epoch 0.
+    - EXPLICIT_RANGE: caller supplies (startMs, endMs) directly. Use
+      this for civil-time chapters — resolve "yesterday in
+      Europe/Amsterdam" → UTC range in your client (DST-correct via
+      a timezone library) before calling. The backend operates on UTC
+      epoch milliseconds only.
+  """
+  dvrChapter(
+    "DVR recording identifier — accepts either DVRRequest.id (UUID) or DVRRequest.dvrHash."
+    dvrId: ID!
+    "Chapter mode."
+    mode: DVRChapterMode!
+    "Required for FIXED_INTERVAL mode."
+    intervalSeconds: Int
+    "UTC epoch milliseconds (start of range)."
+    startMs: Float!
+    "UTC epoch milliseconds (end of range, exclusive)."
+    endMs: Float!
+  ): DVRChapter
+
+  """
+  List chapters for a DVR recording. Paginated for unbounded artifact
+  lifetime — default 200 per page, max 1000.
+  """
+  dvrChapters(
+    "DVR recording identifier — accepts either DVRRequest.id (UUID) or DVRRequest.dvrHash."
+    dvrId: ID!
+    "Restrict to chapters of this mode; null = all."
+    mode: DVRChapterMode
+    "Required when filtering by FIXED_INTERVAL."
+    intervalSeconds: Int
+    "UTC epoch ms lower bound; 0 = no lower bound."
+    rangeStartMs: Float
+    "UTC epoch ms upper bound; 0 = no upper bound."
+    rangeEndMs: Float
+    "Default 200. Max 1000."
+    pageSize: Int
+    "Keyset cursor from a previous page's nextPageToken."
+    pageToken: String
+  ): DVRChaptersPage
+
+  """
   Fetch a single VOD asset by ID.
   """
   vodAsset(
@@ -1118,17 +1167,14 @@ type Mutation {
 
   """
   Start DVR recording for a live stream.
-  DVR allows viewers to seek back in a live stream.
+  DVR creates one continuous archive session. Live seekback is bounded by
+  the resolved DVR policy; archive playback uses virtual chapters.
   """
   startDVR(
     """
     The stream ID to start DVR for (Stream.id, Relay global ID).
     """
     streamId: ID!
-    """
-    Optional expiration time (Unix timestamp).
-    """
-    expiresAt: Int
   ): StartDVRResult!
 
   """
@@ -1150,6 +1196,25 @@ type Mutation {
     """
     dvrHash: ID!
   ): DeleteDVRResult!
+
+  """
+  Set the artifact's default chapter mode. The chapter sweeper materializes
+  manifests under this mode automatically while the recording is active;
+  ad-hoc retrievals (via dvrChapter) work under any mode regardless.
+
+  Changing policy mid-recording closes the in-flight current chapter as
+  VOD with #EXT-X-ENDLIST and starts the new current chapter under the
+  new mode. Old chapter manifests remain readable in S3 — viewers
+  playing them see no interruption.
+  """
+  setDVRChapterPolicy(
+    "DVR recording identifier — accepts either DVRRequest.id (UUID) or DVRRequest.dvrHash."
+    dvrId: ID!
+    "New default mode. Pass NONE to clear (sweeper stops materializing)."
+    mode: DVRChapterMode!
+    "Required for FIXED_INTERVAL mode."
+    intervalSeconds: Int
+  ): SetDVRChapterPolicyResult!
 
   """
   Create a new VOD upload session.
@@ -2212,6 +2277,88 @@ type DVRRecordingsConnection {
 type DVRRecordingEdge {
   cursor: String!
   node: DVRRequest!
+}
+
+# ============================================================================
+# DVR CHAPTERS
+# ============================================================================
+# Chapters are virtual VOD-shaped views over the dvr_segments ledger.
+# Foghorn materializes chapter manifests in S3 under
+# dvr/{tenant}/{stream}/{artifact}/chapters/{chapter_id}.m3u8.
+# See: docs/architecture/dvr-continuous-archive.md
+# ============================================================================
+
+"""
+DVR chapter mode. Determines how (startMs, endMs) ranges are produced.
+
+UTC-only — civil-time chapters resolve at the edge.
+"""
+enum DVRChapterMode {
+  "Sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording's start."
+  WINDOW_SIZED
+  "UTC-only intervalSeconds buckets, anchored at unix epoch 0."
+  FIXED_INTERVAL
+  "Caller-supplied (startMs, endMs); no recurrence semantics. Use for civil-time chapters."
+  EXPLICIT_RANGE
+  "Sweeper does not materialize automatic chapters (only ad-hoc retrievals work)."
+  NONE
+}
+
+"""
+A single chapter view of a DVR recording.
+
+manifestUrl is a presigned GET URL for a player-facing manifest whose
+segment URLs are also presigned. TTL scales with the chapter duration
+and is clamped by the backend; use manifestS3Key as the stable cache key
+when re-fetching a fresh URL.
+
+isCurrent=true means the chapter is still being recorded into; the
+manifest is EVENT-shaped (no #EXT-X-ENDLIST) and the player should poll
+for updates. hasGaps=true means at least one segment in the chapter
+range was lost before upload; the manifest renders #EXT-X-GAP markers
+and the player will skip those segments while preserving the timeline.
+"""
+type DVRChapter {
+  chapterId: ID!
+  manifestS3Key: String!
+  manifestUrl: String!
+  isCurrent: Boolean!
+  hasGaps: Boolean!
+  segmentCount: Int!
+}
+
+"""
+A reference to a chapter without the manifest URL — used for chapter
+listing pages where the player only needs the chapter ID + range to
+build a navigation UI.
+"""
+type DVRChapterRef {
+  chapterId: ID!
+  mode: DVRChapterMode!
+  intervalSeconds: Int
+  startMs: Float!
+  endMs: Float!
+  isCurrent: Boolean!
+  manifestS3Key: String
+  hasGaps: Boolean!
+  segmentCount: Int!
+}
+
+"""
+A page of DVR chapter refs. Paginated for unbounded artifact lifetime:
+default page size is 200 and maximum page size is 1000.
+"""
+type DVRChaptersPage {
+  chapters: [DVRChapterRef!]!
+  nextPageToken: String
+}
+
+"""
+Result of setDVRChapterPolicy.
+"""
+type SetDVRChapterPolicyResult {
+  success: Boolean!
+  message: String
 }
 
 # ============================================================================

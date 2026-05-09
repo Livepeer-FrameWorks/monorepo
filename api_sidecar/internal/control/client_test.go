@@ -430,14 +430,6 @@ func TestApplyJitterBounds(t *testing.T) {
 	}
 }
 
-func TestSendDVRStartRequestDisconnected(t *testing.T) {
-	clearConn()
-	err := SendDVRStartRequest("tenant-1", "stream-1", "user-1", 7, "mp4", 10)
-	if err == nil {
-		t.Fatal("expected error for disconnected stream")
-	}
-}
-
 func TestSendArtifactDeletedDisconnected(t *testing.T) {
 	clearConn()
 	err := SendArtifactDeleted("hash-1", "/path/file", "manual", "clip", 1024)

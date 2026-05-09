@@ -45,6 +45,7 @@ type streamContext struct {
 	ProcessesJSON     string                  // MistServer process config for STREAM_PROCESS trigger
 	RequiresAuth      bool                    // true when this playback object has a protected playback policy
 	RequiresAuthKnown bool                    // false means the local marker could not be resolved
+	DVRPolicy         *pb.DVRPolicy           // tier DVR policy bundle (live window, segment, max entries)
 }
 
 // PeerNotifier is the single federation interface for the trigger processor.
@@ -1032,6 +1033,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			OriginClusterID:   streamValidation.GetOriginClusterId(),
 			ClusterPeers:      streamValidation.GetClusterPeers(),
 			ProcessesJSON:     streamValidation.GetProcessesJson(),
+			DVRPolicy:         streamValidation.GetDvrPolicy(),
 		}
 		if p.peerNotifier != nil && len(info.ClusterPeers) > 0 {
 			p.peerNotifier.NotifyPeers(info.ClusterPeers, streamValidation.TenantId)
@@ -1169,10 +1171,8 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			"internal_name": streamValidation.InternalName,
 		}).Info("DVR recording enabled for stream, starting DVR")
 
-		// Start DVR recording via Foghorn's internal orchestration.
-		// NOTE: We call Foghorn directly rather than proxying through Commodore.
-		// Stream validation already happened (ValidateStreamKey), and Foghorn owns DVR state.
-		// Future: If billing/quota checks are needed, add a pre-flight hook to Commodore/Purser here.
+		// Stream validation already resolved tenant DVR policy; Foghorn owns
+		// the recording session and chapter materialization state.
 		go func() {
 			if p.dvrService == nil {
 				p.logger.WithField("internal_name", streamValidation.InternalName).
@@ -1187,6 +1187,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 				InternalName: streamValidation.InternalName,
 				UserId:       &userID,
 				ClusterId:    streamValidation.GetOriginClusterId(),
+				DvrPolicy:    streamValidation.GetDvrPolicy(),
 			})
 			if err != nil {
 				p.logger.WithFields(logging.Fields{

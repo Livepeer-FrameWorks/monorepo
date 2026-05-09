@@ -1,6 +1,6 @@
-# Start DVR recording for a stream with optional expiration
-mutation StartDVR($streamId: ID!, $expiresAt: Int) {
-  startDVR(streamId: $streamId, expiresAt: $expiresAt) {
+# Start DVR recording for a stream.
+mutation StartDVR($streamId: ID!) {
+  startDVR(streamId: $streamId) {
     __typename
     ... on DVRRequest {
       ...DVRRequestFields

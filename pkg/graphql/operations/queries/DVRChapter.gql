@@ -1,0 +1,24 @@
+# Retrieve a single chapter manifest URL for a DVR recording.
+# UTC-only; civil-time chapters resolve at the edge with mode=EXPLICIT_RANGE.
+query DVRChapter(
+  $dvrId: ID!
+  $mode: DVRChapterMode!
+  $intervalSeconds: Int
+  $startMs: Float!
+  $endMs: Float!
+) {
+  dvrChapter(
+    dvrId: $dvrId
+    mode: $mode
+    intervalSeconds: $intervalSeconds
+    startMs: $startMs
+    endMs: $endMs
+  ) {
+    chapterId
+    manifestS3Key
+    manifestUrl
+    isCurrent
+    hasGaps
+    segmentCount
+  }
+}

@@ -142,7 +142,7 @@ Cross-cluster coordination is handled exclusively by the **FoghornFederation** g
 
 - **Peer discovery**: Quartermaster maintains a registry of all clusters. Foghorn queries `ListPeers` to find peers and opens `PeerChannel` bidirectional streams for real-time edge telemetry exchange.
 - **Cross-cluster viewer routing**: When a viewer's cluster doesn't have a stream, Foghorn uses `QueryStream` to find it on a peer, then either redirects the viewer or arranges a DTSC origin-pull to serve locally.
-- **Cross-cluster artifacts**: VOD clips and DVR recordings on remote clusters are accessed via `PrepareArtifact` (presigned S3 URLs).
+- **Cross-cluster artifacts**: VOD clips on remote clusters are accessed via `PrepareArtifact` (presigned S3 URLs). DVR archive replay uses the GraphQL chapter API, which routes through Commodore to the DVR origin Foghorn and returns bounded chapter manifests.
 - **Leader-only peering**: Each cluster elects one Foghorn instance (via Redis SET NX) to run PeerChannel connections, avoiding duplicate peer traffic.
 
 Quartermaster is the sole routing authority. Commodore resolves tenant-to-cluster routing dynamically via `GetClusterRouting` — no hardcoded Foghorn addresses between services.

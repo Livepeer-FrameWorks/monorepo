@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -102,6 +104,21 @@ func main() {
 			logger.WithError(err).Error("Failed to initialize storage manager")
 		}
 	}
+
+	var restoreMu sync.Mutex
+	control.SetOnControlConnected(func() {
+		if cfg.StorageLocalPath == "" {
+			return
+		}
+		restoreMu.Lock()
+		defer restoreMu.Unlock()
+		idx := control.LocalSegmentIndexInstance(logger)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if err := idx.RestoreFromDisk(ctx, cfg.StorageLocalPath); err != nil {
+			logger.WithError(err).Warn("Local segment index restore-from-disk failed")
+		}
+	})
 
 	// Start control client to Foghorn
 	control.Start(logger, cfg)

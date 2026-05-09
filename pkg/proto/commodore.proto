@@ -59,6 +59,14 @@ service InternalService {
   // Called by Foghorn to initiate DVR recording for a stream
   rpc StartDVR(shared.StartDVRRequest) returns (shared.StartDVRResponse);
 
+  // ===== DVR CHAPTERS (api_gateway -> Commodore -> Foghorn) =====
+  // Chapter retrieval, listing, and policy. Commodore is the customer-facing
+  // intermediary: validates tenant ownership of the DVR artifact, then
+  // forwards to Foghorn (which owns ledger + materialization).
+  rpc RetrieveDVRChapter(foghorn.RetrieveDVRChapterRequest) returns (foghorn.RetrieveDVRChapterResponse);
+  rpc ListDVRChapters(foghorn.ListDVRChaptersRequest) returns (foghorn.ListDVRChaptersResponse);
+  rpc SetDVRChapterPolicy(foghorn.SetDVRChapterPolicyRequest) returns (foghorn.SetDVRChapterPolicyResponse);
+
   // ============================================================================
   // CLIP/DVR REGISTRY (Foghorn → Commodore)
   // Business registry for clips and DVR recordings.
@@ -70,6 +78,13 @@ service InternalService {
 
   // Register a new DVR recording in the business registry (called by Foghorn during StartDVR)
   rpc RegisterDVR(RegisterDVRRequest) returns (RegisterDVRResponse);
+
+  // Back-fill retention_until on a DVR recording at finalize time.
+  // Foghorn computes retention_until = ended_at + dvr_retention_days*24h
+  // from the persisted policy snapshot and pushes it to Commodore so the
+  // business registry's expires_at reflects post-end retention. Active
+  // recordings carry NULL retention_until until they finalize.
+  rpc UpdateDVRRetention(UpdateDVRRetentionRequest) returns (UpdateDVRRetentionResponse);
 
   // Resolve clip hash to tenant context (for analytics enrichment and playback)
   rpc ResolveClipHash(ResolveClipHashRequest) returns (ResolveClipHashResponse);
@@ -187,6 +202,13 @@ message ValidateStreamKeyResponse {
   // MistServer process config JSON array for STREAM_PROCESS trigger.
   // Commodore determines this based on tenant's billing tier features.
   string processes_json = 16;
+
+  // ===== DVR POLICY =====
+  // Resolved DVR window/segment policy for this tenant (from billing tier +
+  // cluster overrides). Foghorn caches this with the stream context and
+  // applies it on auto-record (record:true) without an extra Commodore
+  // round-trip. Manual startDVR resolves the same policy in Commodore.
+  shared.DVRPolicy dvr_policy = 17;
 }
 
 // ============================================================================
@@ -381,6 +403,20 @@ message RegisterDVRResponse {
   string playback_id = 3;              // Public playback key
   string internal_name = 4;   // Artifact routing name (internal)
   string stream_id = 5;                // Source stream UUID for storage path
+}
+
+// Back-fill retention_until on a DVR recording at finalize time.
+message UpdateDVRRetentionRequest {
+  string tenant_id = 1;
+  string dvr_hash = 2;
+  // Absolute UTC timestamp when the recording becomes eligible for deletion.
+  // Foghorn computes this from the persisted dvr_retention_days snapshot.
+  // Pass null to leave it unchanged.
+  optional google.protobuf.Timestamp retention_until = 3;
+}
+
+message UpdateDVRRetentionResponse {
+  bool updated = 1;
 }
 
 // Resolve clip hash to tenant context

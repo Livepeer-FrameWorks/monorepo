@@ -82,7 +82,7 @@ PeerChannel is a bidirectional gRPC stream carrying 8 payload types via `oneof`:
 ### Cross-Cluster Artifact Access
 
 ```
-Viewer requests clip/DVR/VOD on Cluster A, artifact lives on Cluster B:
+Viewer requests clip/VOD on Cluster A, artifact lives on Cluster B:
 
 1. Foghorn A: PrepareArtifact(artifact_hash, tenant_id) → Foghorn B
 2. Foghorn B: queries foghorn.artifacts, verifies S3 sync
@@ -90,9 +90,21 @@ Viewer requests clip/DVR/VOD on Cluster A, artifact lives on Cluster B:
 4. If local-only: triggers async freeze, returns est_ready_seconds
 5. Foghorn A: redirects viewer to presigned URL (or retries after delay)
 
-For DVR: returns map of segment filename → presigned URL.
 For clip/VOD: returns single presigned URL.
 ```
+
+DVR archive playback does not use whole-artifact `PrepareArtifact`. A DVR can
+run for months, so playback must be bounded by a chapter or explicit UTC range:
+
+1. Gateway calls Commodore `RetrieveDVRChapter` / `ListDVRChapters`.
+2. Commodore validates tenant ownership and routes to the DVR artifact's
+   `origin_cluster_id`.
+3. The origin Foghorn materializes the bounded chapter from `foghorn.dvr_segments`
+   and returns a player-facing manifest URL. Segment URLs are minted from ledger
+   rows, and `lost_local` rows render as `#EXT-X-GAP`.
+
+Federation `PrepareArtifact` only accepts DVR requests that include
+`dvr_start_ms`/`dvr_end_ms`; unbounded DVR artifact retrieval is rejected.
 
 ### Cross-Cluster Artifact Command Routing
 

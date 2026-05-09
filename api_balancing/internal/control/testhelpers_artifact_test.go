@@ -95,6 +95,10 @@ func (m *mockS3Client) DeletePrefix(ctx context.Context, prefix string) (int, er
 	return 0, nil
 }
 
+func (m *mockS3Client) PutObject(ctx context.Context, key string, body []byte, contentType string) error {
+	return nil
+}
+
 func (m *mockS3Client) BuildClipS3Key(tenantID, streamName, clipHash, format string) string {
 	m.mu.Lock()
 	m.clipKeyCalls++

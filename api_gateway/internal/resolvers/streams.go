@@ -352,7 +352,6 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 		return nil, fmt.Errorf("streamId required")
 	}
 
-	// Determine mode (default to ABSOLUTE for backward compatibility)
 	mode := pb.ClipMode_CLIP_MODE_ABSOLUTE
 	if input.Mode != nil {
 		switch *input.Mode {
@@ -393,7 +392,6 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 				startTime = int64(*input.StartTime)
 			}
 		default:
-			// ABSOLUTE or legacy
 			if input.StartUnix != nil {
 				startTime = int64(*input.StartUnix)
 			} else if input.StartTime != nil {
@@ -434,10 +432,8 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 		req.Description = *input.Description
 	}
 
-	// Populate timing fields based on mode
 	switch mode {
 	case pb.ClipMode_CLIP_MODE_ABSOLUTE:
-		// Support legacy startTime/endTime or new startUnix/stopUnix
 		if input.StartUnix != nil {
 			startUnix := int64(*input.StartUnix)
 			req.StartUnix = &startUnix
@@ -562,8 +558,6 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 
 	return clipInfo, nil
 }
-
-// === STREAM KEYS MANAGEMENT ===
 
 // DoGetStreamKeys retrieves all stream keys for a specific stream
 func (r *Resolver) DoGetStreamKeys(ctx context.Context, streamID string) ([]*pb.StreamKey, error) {
@@ -837,8 +831,6 @@ func (r *Resolver) DoDeleteStreamKey(ctx context.Context, streamID, keyID string
 	return &model.DeleteSuccess{Success: true, DeletedID: keyID}, nil
 }
 
-// === CLIPS MANAGEMENT ===
-
 // DoGetClips retrieves all clips for the authenticated user
 func (r *Resolver) DoGetClips(ctx context.Context, streamID *string) ([]*pb.ClipInfo, error) {
 	if middleware.IsDemoMode(ctx) {
@@ -948,10 +940,8 @@ func stringPtr(s string) *string {
 	return &s
 }
 
-// === DVR & Recording Config ===
-
 // DoStartDVR starts a DVR recording
-func (r *Resolver) DoStartDVR(ctx context.Context, streamID string, expiresAt *int) (*pb.StartDVRResponse, error) {
+func (r *Resolver) DoStartDVR(ctx context.Context, streamID string) (*pb.StartDVRResponse, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
 	}
@@ -968,10 +958,6 @@ func (r *Resolver) DoStartDVR(ctx context.Context, streamID string, expiresAt *i
 
 	// Build gRPC request - StreamId is *string in proto
 	req := &pb.StartDVRRequest{StreamId: &streamID}
-	if expiresAt != nil {
-		exp := int64(*expiresAt)
-		req.ExpiresAt = &exp
-	}
 
 	// Call Commodore gRPC (context metadata carries auth)
 	res, err := r.Clients.Commodore.StartDVR(ctx, req)
@@ -1110,8 +1096,6 @@ func (r *Resolver) DoListDVRRequests(ctx context.Context, streamID *string, pagi
 	}
 	return out, nil
 }
-
-// === CONNECTION-BASED PAGINATION ===
 
 // DoGetStreamsConnection retrieves streams with Relay-style cursor pagination
 func (r *Resolver) DoGetStreamsConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.StreamsConnection, error) {

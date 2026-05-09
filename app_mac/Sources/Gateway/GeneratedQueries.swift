@@ -642,6 +642,69 @@ enum GQL {
 
   // MARK: - queries
 
+  static let DVRChapter = """
+  # Retrieve a single chapter manifest URL for a DVR recording.
+  # UTC-only; civil-time chapters resolve at the edge with mode=EXPLICIT_RANGE.
+  query DVRChapter(
+    $dvrId: ID!
+    $mode: DVRChapterMode!
+    $intervalSeconds: Int
+    $startMs: Float!
+    $endMs: Float!
+  ) {
+    dvrChapter(
+      dvrId: $dvrId
+      mode: $mode
+      intervalSeconds: $intervalSeconds
+      startMs: $startMs
+      endMs: $endMs
+    ) {
+      chapterId
+      manifestS3Key
+      manifestUrl
+      isCurrent
+      hasGaps
+      segmentCount
+    }
+  }
+  """
+
+  static let DVRChapters = """
+  # List chapters for a DVR recording, paginated for unbounded artifact lifetime.
+  query DVRChapters(
+    $dvrId: ID!
+    $mode: DVRChapterMode
+    $intervalSeconds: Int
+    $rangeStartMs: Float
+    $rangeEndMs: Float
+    $pageSize: Int
+    $pageToken: String
+  ) {
+    dvrChapters(
+      dvrId: $dvrId
+      mode: $mode
+      intervalSeconds: $intervalSeconds
+      rangeStartMs: $rangeStartMs
+      rangeEndMs: $rangeEndMs
+      pageSize: $pageSize
+      pageToken: $pageToken
+    ) {
+      chapters {
+        chapterId
+        mode
+        intervalSeconds
+        startMs
+        endMs
+        isCurrent
+        manifestS3Key
+        hasGaps
+        segmentCount
+      }
+      nextPageToken
+    }
+  }
+  """
+
   static let GetAPITokensConnection = """
   # Fetch paginated list of developer API tokens with permissions and usage timestamps
   query GetAPITokensConnection($first: Int = 50, $after: String) {
@@ -4451,6 +4514,19 @@ enum GQL {
   }
   """
 
+  static let SetDVRChapterPolicy = """
+  # Set the artifact's default chapter mode. Sweeper materializes manifests
+  # under this mode automatically while the recording is active. Pass NONE
+  # to clear (sweeper stops materializing; ad-hoc dvrChapter retrievals
+  # still work under any mode).
+  mutation SetDVRChapterPolicy($dvrId: ID!, $mode: DVRChapterMode!, $intervalSeconds: Int) {
+    setDVRChapterPolicy(dvrId: $dvrId, mode: $mode, intervalSeconds: $intervalSeconds) {
+      success
+      message
+    }
+  }
+  """
+
   static let SetPlaybackPolicy = """
   # Set or clear the playback policy on a stream / vod_asset / clip.
   # Exactly one of streamId, vodAssetId, or clipId must be provided.
@@ -4517,9 +4593,9 @@ enum GQL {
   """
 
   static let StartDVR = """
-  # Start DVR recording for a stream with optional expiration
-  mutation StartDVR($streamId: ID!, $expiresAt: Int) {
-    startDVR(streamId: $streamId, expiresAt: $expiresAt) {
+  # Start DVR recording for a stream.
+  mutation StartDVR($streamId: ID!) {
+    startDVR(streamId: $streamId) {
       __typename
       ... on DVRRequest {
         ...DVRRequestFields

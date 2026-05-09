@@ -42,7 +42,10 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     storage_cluster_id VARCHAR(100),        -- Which cluster's S3 actually holds the bytes; NULL = same as origin_cluster_id
 
     -- ===== LIFECYCLE STATE =====
-    status VARCHAR(50) DEFAULT 'requested', -- requested, processing, ready, failed, deleted
+    status VARCHAR(50) DEFAULT 'requested',
+        -- VOD/clip:  requested, processing, ready, failed, deleted
+        -- DVR:       requested, starting, recording, finalizing,
+        --            completed, completed_partial, failed, deleted
     error_message TEXT,
     request_id UUID,                        -- Original request tracking
 
@@ -84,7 +87,16 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     last_accessed_at TIMESTAMP,
 
     -- ===== RETENTION =====
-    retention_until TIMESTAMP,              -- When artifact should be soft-deleted (from Commodore)
+    retention_until TIMESTAMP,              -- When artifact should be soft-deleted; for DVR computed at FinalizeDVR as ended_at + dvr_retention_days*24h
+
+    -- ===== DVR POLICY SNAPSHOT (DVR rows only) =====
+    -- Captured at DVR start so finalize months later applies the same policy
+    -- even if the tenant's tier changed during a long-running stream.
+    dvr_window_seconds   INTEGER,           -- resolved live DVR window (Mist targetAge); also passed in DVRConfig
+    dvr_chapter_mode     VARCHAR(32),       -- default mode for the chapter sweeper to materialize
+    dvr_chapter_interval INTEGER,           -- interval_seconds for fixed_interval mode
+    dvr_retention_days   INTEGER,           -- tier retention policy snapshot
+    dvr_chapter_backfill_complete BOOLEAN NOT NULL DEFAULT false, -- terminal chapter index materialized through ended_at
 
     -- ===== TIMESTAMPS =====
     created_at TIMESTAMP DEFAULT NOW(),
@@ -102,6 +114,14 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_sync ON foghorn.artifacts(sync_
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_created ON foghorn.artifacts(created_at);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_request_id ON foghorn.artifacts(request_id);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_frozen ON foghorn.artifacts(frozen_at) WHERE frozen_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_dvr_backfill_pending
+    ON foghorn.artifacts(ended_at, artifact_hash)
+    WHERE artifact_type = 'dvr'
+      AND status IN ('completed', 'completed_partial', 'failed', 'ready')
+      AND ended_at IS NOT NULL
+      AND dvr_chapter_mode IS NOT NULL
+      AND dvr_chapter_mode != ''
+      AND dvr_chapter_backfill_complete = false;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_defrosting ON foghorn.artifacts(defrost_started_at) WHERE storage_location = 'defrosting';
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_stream_internal ON foghorn.artifacts(stream_internal_name);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_internal_name ON foghorn.artifacts(internal_name);
@@ -147,6 +167,90 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_node ON foghorn.artifact_n
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_orphaned ON foghorn.artifact_nodes(is_orphaned) WHERE is_orphaned = true;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_seen ON foghorn.artifact_nodes(last_seen_at);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_cached ON foghorn.artifact_nodes(cached_at);
+
+-- ============================================================================
+-- DVR PER-SEGMENT LEDGER
+-- ============================================================================
+-- Durable record of every recorded segment for DVR/always-on streams.
+-- Foghorn is the source of truth; sidecar reports segments via control stream.
+-- Chapter manifests are generated from bounded ranges in this ledger.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS foghorn.dvr_segments (
+    artifact_hash    VARCHAR(32) NOT NULL REFERENCES foghorn.artifacts(artifact_hash) ON DELETE CASCADE,
+    segment_name     TEXT NOT NULL,
+    sequence         BIGINT NOT NULL,            -- Foghorn-assigned monotonic per artifact
+    media_start_ms   BIGINT NOT NULL,
+    media_end_ms     BIGINT NOT NULL,
+    duration_ms      BIGINT NOT NULL,
+    size_bytes       BIGINT,
+    s3_key           TEXT NOT NULL,
+    status           VARCHAR(20) NOT NULL DEFAULT 'pending',
+        -- pending | uploaded | failed_upload | deleted_local | lost_local
+    drop_reason      VARCHAR(32),
+        -- disk_pressure | retention_expired | operator_cleanup | upload_failed
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    uploaded_at      TIMESTAMPTZ,
+    deleted_local_at TIMESTAMPTZ,
+    dropped_at       TIMESTAMPTZ,
+    PRIMARY KEY (artifact_hash, segment_name),
+    CONSTRAINT chk_foghorn_dvr_segments_status CHECK (status IN (
+        'pending', 'uploaded', 'failed_upload', 'deleted_local', 'lost_local'
+    ))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_foghorn_dvr_segments_sequence
+    ON foghorn.dvr_segments(artifact_hash, sequence);
+CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_segments_media_order
+    ON foghorn.dvr_segments(artifact_hash, media_start_ms, sequence);
+CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_segments_evictable
+    ON foghorn.dvr_segments(artifact_hash, status, media_end_ms)
+    WHERE status = 'uploaded';
+CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_segments_pending
+    ON foghorn.dvr_segments(artifact_hash, status, created_at)
+    WHERE status IN ('pending', 'failed_upload');
+
+-- ============================================================================
+-- DVR CHAPTERS - VIRTUAL VIEWS OVER THE PER-SEGMENT LEDGER
+-- ============================================================================
+-- A chapter is a (start_ms, end_ms) slice rendered as an HLS manifest.
+-- Foghorn owns chapter manifests; the sidecar never writes them.
+-- See: docs/architecture/dvr-continuous-archive.md
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS foghorn.dvr_chapters (
+    chapter_id        VARCHAR(32) PRIMARY KEY,
+    artifact_hash     VARCHAR(32) NOT NULL REFERENCES foghorn.artifacts(artifact_hash) ON DELETE CASCADE,
+    mode              VARCHAR(32) NOT NULL,
+        -- window_sized_chapters | fixed_interval | explicit_range
+    interval_seconds  INTEGER,
+    start_ms          BIGINT NOT NULL,
+    end_ms            BIGINT NOT NULL,
+    is_current        BOOLEAN NOT NULL DEFAULT false,
+    manifest_s3_key   TEXT,
+    materialized_at   TIMESTAMPTZ,
+    last_rebuilt_at   TIMESTAMPTZ,
+    segment_count     INTEGER NOT NULL DEFAULT 0,
+    has_gaps          BOOLEAN NOT NULL DEFAULT false,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_foghorn_dvr_chapters_mode CHECK (mode IN (
+        'window_sized_chapters', 'fixed_interval', 'explicit_range'
+    )),
+    CONSTRAINT chk_foghorn_dvr_chapters_range CHECK (end_ms > start_ms)
+);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_chapters_artifact
+    ON foghorn.dvr_chapters(artifact_hash, start_ms);
+CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_chapters_unmaterialized
+    ON foghorn.dvr_chapters(artifact_hash) WHERE manifest_s3_key IS NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_chapters_current
+    ON foghorn.dvr_chapters(artifact_hash) WHERE is_current = true;
+CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_chapters_overlap
+    ON foghorn.dvr_chapters(artifact_hash, end_ms, start_ms)
+    WHERE manifest_s3_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_chapters_dirty
+    ON foghorn.dvr_chapters(created_at, chapter_id)
+    WHERE manifest_s3_key IS NOT NULL AND last_rebuilt_at IS NULL;
 
 -- ============================================================================
 -- NODE OUTPUT CACHING & LOAD BALANCING

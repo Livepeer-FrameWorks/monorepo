@@ -78,11 +78,6 @@
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   }
 
-  function getRecordingUrls(playbackId: string | undefined | null) {
-    if (!playbackId) return null;
-    return getContentDeliveryUrls(playbackId, "dvr");
-  }
-
   function getClipUrls(playbackId: string | undefined | null) {
     if (!playbackId) return null;
     return getContentDeliveryUrls(playbackId, "clip");
@@ -91,6 +86,16 @@
   function playContent(playbackId: string) {
     // eslint-disable-next-line svelte/no-navigation-without-resolve
     goto(`/view?id=${playbackId}`);
+  }
+
+  function dvrViewUrl(recording: Recording) {
+    const params = new URLSearchParams({ type: "dvr", id: recording.dvrHash });
+    return `/view?${params.toString()}`;
+  }
+
+  function playDvrRecording(recording: Recording) {
+    // eslint-disable-next-line svelte/no-navigation-without-resolve
+    goto(dvrViewUrl(recording));
   }
 
   function getStatusClass(status: string | null | undefined): string {
@@ -209,10 +214,9 @@
     <div class="divide-y divide-[hsl(var(--tn-fg-gutter)/0.3)]">
       <!-- DVR Recordings -->
       {#each visibleRecordings as recording (recording.dvrHash)}
-        {@const urls = getRecordingUrls(recording.playbackId)}
         {@const isExpanded = expandedItem === `dvr-${recording.dvrHash}`}
         {@const expired = isExpired(recording.expiresAt)}
-        {@const canPlay = isPlayable(recording.status, recording.playbackId, expired)}
+        {@const canPlay = isPlayable(recording.status, recording.dvrHash, expired)}
         {@const displayId =
           recording.sourceStreamId ??
           recording.stream?.streamId ??
@@ -251,25 +255,15 @@
               </div>
 
               <div class="flex items-center gap-2">
-                {#if canPlay && urls?.primary.hls}
+                {#if canPlay}
                   <Button
                     variant="ghost"
                     size="sm"
-                    onclick={() => recording.playbackId && playContent(recording.playbackId)}
+                    onclick={() => playDvrRecording(recording)}
                     class="gap-2 border border-border/30"
                   >
                     <PlayIcon class="w-4 h-4" />
                     Play
-                  </Button>
-                  <Button
-                    href={urls.primary.mp4}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    variant="ghost"
-                    size="sm"
-                    class="gap-2 border border-border/30"
-                  >
-                    <DownloadIcon class="w-4 h-4" />
                   </Button>
                 {:else if expired}
                   <span class="text-xs text-muted-foreground italic">Expired</span>
@@ -298,12 +292,9 @@
 
           {#if isExpanded && canPlay}
             <div class="px-4 pb-4 border-t border-[hsl(var(--tn-fg-gutter)/0.2)] bg-muted/5">
-              <PlaybackProtocols
-                contentId={recording.playbackId ?? ""}
-                contentType="dvr"
-                showPrimary={true}
-                showAdditional={true}
-              />
+              <div class="pt-4 text-sm text-muted-foreground">
+                DVR replay is served through chapter manifests generated from the recording ledger.
+              </div>
             </div>
           {/if}
         </div>

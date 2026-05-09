@@ -2031,12 +2031,12 @@ func (r *mutationResolver) DeleteClip(ctx context.Context, id string) (model.Del
 }
 
 // StartDvr is the resolver for the startDVR field.
-func (r *mutationResolver) StartDvr(ctx context.Context, streamID string, expiresAt *int) (model.StartDVRResult, error) {
+func (r *mutationResolver) StartDvr(ctx context.Context, streamID string) (model.StartDVRResult, error) {
 	rawID, err := resolvers.NormalizeStreamID(streamID)
 	if err != nil {
 		return nil, err
 	}
-	res, err := r.DoStartDVR(ctx, rawID, expiresAt)
+	res, err := r.DoStartDVR(ctx, rawID)
 	if err != nil {
 		return nil, err
 	}
@@ -2061,6 +2061,19 @@ func (r *mutationResolver) StopDvr(ctx context.Context, dvrHash string) (model.S
 // DeleteDvr is the resolver for the deleteDVR field.
 func (r *mutationResolver) DeleteDvr(ctx context.Context, dvrHash string) (model.DeleteDVRResult, error) {
 	return r.DoDeleteDVR(ctx, dvrHash)
+}
+
+// SetDVRChapterPolicy is the resolver for the setDVRChapterPolicy field.
+func (r *mutationResolver) SetDVRChapterPolicy(ctx context.Context, dvrID string, mode model.DVRChapterMode, intervalSeconds *int) (*model.SetDVRChapterPolicyResult, error) {
+	dvrHash, err := resolvers.NormalizeDvrID(dvrID)
+	if err != nil {
+		return nil, err
+	}
+	interval := int32(0)
+	if intervalSeconds != nil {
+		interval = int32(*intervalSeconds)
+	}
+	return r.DoSetDVRChapterPolicy(ctx, dvrHash, mode, interval)
 }
 
 // CreateVodUpload is the resolver for the createVodUpload field.
@@ -4017,6 +4030,51 @@ func (r *queryResolver) BootstrapTokensConnection(ctx context.Context, page *mod
 func (r *queryResolver) DvrRecordingsConnection(ctx context.Context, page *model.ConnectionInput, streamID *string) (*model.DVRRecordingsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
 	return r.DoGetDVRRecordingsConnection(ctx, streamID, first, after, last, before)
+}
+
+// DvrChapter is the resolver for the dvrChapter field.
+func (r *queryResolver) DvrChapter(ctx context.Context, dvrID string, mode model.DVRChapterMode, intervalSeconds *int, startMs float64, endMs float64) (*model.DVRChapter, error) {
+	dvrHash, err := resolvers.NormalizeDvrID(dvrID)
+	if err != nil {
+		return nil, err
+	}
+	interval := int32(0)
+	if intervalSeconds != nil {
+		interval = int32(*intervalSeconds)
+	}
+	return r.DoRetrieveDVRChapter(ctx, dvrHash, mode, interval, int64(startMs), int64(endMs))
+}
+
+// DvrChapters is the resolver for the dvrChapters field.
+func (r *queryResolver) DvrChapters(ctx context.Context, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, rangeStartMs *float64, rangeEndMs *float64, pageSize *int, pageToken *string) (*model.DVRChaptersPage, error) {
+	dvrHash, err := resolvers.NormalizeDvrID(dvrID)
+	if err != nil {
+		return nil, err
+	}
+	var modeArg model.DVRChapterMode
+	if mode != nil {
+		modeArg = *mode
+	}
+	interval := int32(0)
+	if intervalSeconds != nil {
+		interval = int32(*intervalSeconds)
+	}
+	var startBound, endBound int64
+	if rangeStartMs != nil {
+		startBound = int64(*rangeStartMs)
+	}
+	if rangeEndMs != nil {
+		endBound = int64(*rangeEndMs)
+	}
+	pageSizeArg := int32(0)
+	if pageSize != nil {
+		pageSizeArg = int32(*pageSize)
+	}
+	tokenArg := ""
+	if pageToken != nil {
+		tokenArg = *pageToken
+	}
+	return r.DoListDVRChapters(ctx, dvrHash, modeArg, interval, startBound, endBound, pageSizeArg, tokenArg)
 }
 
 // VodAsset is the resolver for the vodAsset field.

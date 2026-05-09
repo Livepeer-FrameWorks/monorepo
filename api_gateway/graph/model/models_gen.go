@@ -892,6 +892,49 @@ type CryptoTopupStatus struct {
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 }
 
+// A single chapter view of a DVR recording.
+//
+// manifestUrl is a presigned GET URL valid for 30 minutes — embed it in a
+// <video> element or HLS player. manifestS3Key is the stable S3 location
+// suitable for caching client-side and re-fetching when the presigned URL
+// expires.
+//
+// isCurrent=true means the chapter is still being recorded into; the
+// manifest is EVENT-shaped (no #EXT-X-ENDLIST) and the player should poll
+// for updates. hasGaps=true means at least one segment in the chapter
+// range was lost before upload; the manifest renders #EXT-X-GAP markers
+// and the player will skip those segments while preserving the timeline.
+type DVRChapter struct {
+	ChapterID     string `json:"chapterId"`
+	ManifestS3Key string `json:"manifestS3Key"`
+	ManifestURL   string `json:"manifestUrl"`
+	IsCurrent     bool   `json:"isCurrent"`
+	HasGaps       bool   `json:"hasGaps"`
+	SegmentCount  int    `json:"segmentCount"`
+}
+
+// A reference to a chapter without the manifest URL — used for chapter
+// listing pages where the player only needs the chapter ID + range to
+// build a navigation UI.
+type DVRChapterRef struct {
+	ChapterID       string         `json:"chapterId"`
+	Mode            DVRChapterMode `json:"mode"`
+	IntervalSeconds *int           `json:"intervalSeconds,omitempty"`
+	StartMs         float64        `json:"startMs"`
+	EndMs           float64        `json:"endMs"`
+	IsCurrent       bool           `json:"isCurrent"`
+	ManifestS3Key   *string        `json:"manifestS3Key,omitempty"`
+	HasGaps         bool           `json:"hasGaps"`
+	SegmentCount    int            `json:"segmentCount"`
+}
+
+// A page of DVR chapter refs. Paginated for unbounded artifact lifetime:
+// default page size is 200 and maximum page size is 1000.
+type DVRChaptersPage struct {
+	Chapters      []*DVRChapterRef `json:"chapters"`
+	NextPageToken *string          `json:"nextPageToken,omitempty"`
+}
+
 type DVRRecordingEdge struct {
 	Cursor string         `json:"cursor"`
 	Node   *proto.DVRInfo `json:"node"`
@@ -1459,6 +1502,12 @@ type ServiceInstancesConnection struct {
 	Nodes      []*proto.ServiceInstance `json:"nodes"`
 	PageInfo   *PageInfo                `json:"pageInfo"`
 	TotalCount int                      `json:"totalCount"`
+}
+
+// Result of setDVRChapterPolicy.
+type SetDVRChapterPolicyResult struct {
+	Success bool    `json:"success"`
+	Message *string `json:"message,omitempty"`
 }
 
 type SetPlaybackPolicyInput struct {
@@ -2301,6 +2350,72 @@ func (e *ClipCreationMode) UnmarshalJSON(b []byte) error {
 }
 
 func (e ClipCreationMode) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// DVR chapter mode. Determines how (startMs, endMs) ranges are produced.
+//
+// UTC-only — civil-time chapters resolve at the edge.
+type DVRChapterMode string
+
+const (
+	// Sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording's start.
+	DVRChapterModeWindowSized DVRChapterMode = "WINDOW_SIZED"
+	// UTC-only intervalSeconds buckets, anchored at unix epoch 0.
+	DVRChapterModeFixedInterval DVRChapterMode = "FIXED_INTERVAL"
+	// Caller-supplied (startMs, endMs); no recurrence semantics. Use for civil-time chapters.
+	DVRChapterModeExplicitRange DVRChapterMode = "EXPLICIT_RANGE"
+	// Sweeper does not materialize automatic chapters (only ad-hoc retrievals work).
+	DVRChapterModeNone DVRChapterMode = "NONE"
+)
+
+var AllDVRChapterMode = []DVRChapterMode{
+	DVRChapterModeWindowSized,
+	DVRChapterModeFixedInterval,
+	DVRChapterModeExplicitRange,
+	DVRChapterModeNone,
+}
+
+func (e DVRChapterMode) IsValid() bool {
+	switch e {
+	case DVRChapterModeWindowSized, DVRChapterModeFixedInterval, DVRChapterModeExplicitRange, DVRChapterModeNone:
+		return true
+	}
+	return false
+}
+
+func (e DVRChapterMode) String() string {
+	return string(e)
+}
+
+func (e *DVRChapterMode) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = DVRChapterMode(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid DVRChapterMode", str)
+	}
+	return nil
+}
+
+func (e DVRChapterMode) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *DVRChapterMode) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e DVRChapterMode) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

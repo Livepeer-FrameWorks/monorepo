@@ -1237,7 +1237,13 @@ func HandleRecordingSegment(c *gin.Context) {
 	// Note: DVR billing is storage-based (via storage_snapshot), not process-based
 	if seg := mistTrigger.GetRecordingSegment(); seg != nil {
 		if dvrMgr := control.GetDVRManager(); dvrMgr != nil {
-			dvrMgr.HandleNewSegment(seg.StreamName, seg.FilePath)
+			dvrMgr.HandleNewSegment(
+				seg.GetStreamName(),
+				seg.GetFilePath(),
+				seg.GetTimeStarted(),
+				seg.GetTimeEnded(),
+				seg.GetDurationMs(),
+			)
 		}
 	}
 	TriggerStorageCheck()
