@@ -79,20 +79,20 @@ mutation {
 }
 ```
 
-`record: true` enables DVR/recording from the start. You can also toggle recording later with
+`record: true` enables DVR recording from the start. You can also toggle recording later with
 `updateStream`. See [Live and DVR Streams](#live-and-dvr-streams) for what that creates.
 
 ## Live and DVR Streams
 
 Setting `record: true` at create time (or calling `startDVR(streamId)` later) creates a **separate
-stream entity** for the recording — with its own internal name and `playbackId`, distinct from the
+stream entity** for the recording, with its own internal name and `playbackId`, distinct from the
 live stream:
 
 - **Live stream** — segments live in a shared-memory ring buffer of about 50 seconds. Right for
   real-time playback and `CLIP_NOW` of recent moments.
-- **DVR stream** — segments are written to disk and only paged into memory when a viewer reaches
-  that range. Right for seek-back, longer clips, and post-event playback. The clippable window
-  matches the recording's retention without sitting in RAM.
+- **DVR stream** — segments are written to disk and archived under one recording artifact. Right
+  for seek-back, longer clips, and post-event playback. The live DVR window is bounded for player
+  performance; historical replay uses virtual chapter playlists over the same segment archive.
 
 The live ring is configurable — private deployments often want a longer window — but every extra
 second costs cluster RAM, so the default stays tight. [Open an in-app ticket](%APP_URL%/support)
@@ -101,11 +101,15 @@ if your deployment needs a non-default size.
 Practical consequences:
 
 - **Players** use the DVR `playbackId` (with `contentType="dvr"`) to seek back beyond the live
-  ring.
+  ring within the live DVR window.
 - **Clip creation** runs against the entity that holds the moment you want — see
-  [Clips](/builders/recordings#clips). We plan to auto-map the two so `createClip` picks the
-  right source automatically.
+  [Clips](/builders/recordings#clips). Use the live stream for the live ring and the DVR
+  recording for archived ranges.
 - **Access control, multistream targets, thumbnails, and analytics** attach per stream entity.
+
+For 24/7-style streams, the recording can continue as one DVR artifact for the full stream session.
+Replay viewers navigate that archive through chapters or explicit time ranges. See
+[Recordings, Clips & VOD](/builders/recordings#archive-chapters).
 
 ## Go Live
 
@@ -162,5 +166,6 @@ source media gets into the platform.
   <LinkCard title="StreamCrafter" href="/builders/ingest/" />
   <LinkCard title="Playback" href="/builders/playback/" />
   <LinkCard title="Pull-input Streams" href="/builders/pull-streams/" />
+  <LinkCard title="Recordings" href="/builders/recordings/" />
   <LinkCard title="API Reference" href="/builders/api-reference/" />
 </CardGrid>

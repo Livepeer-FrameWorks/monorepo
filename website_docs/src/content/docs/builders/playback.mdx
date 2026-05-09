@@ -154,6 +154,16 @@ Returns all available protocols, primary and fallback nodes:
   compatibility.
 </Aside>
 
+## DVR Archive Playback
+
+Use the DVR `playbackId` with `contentType="dvr"` for the active live DVR window. For historical
+replay beyond that window, request a chapter manifest from the recording archive and give that HLS
+URL to your player. Chapters are bounded playlist views over the same DVR segment archive, so a
+90-day recording is navigated one chapter or explicit range at a time instead of as one giant
+playlist.
+
+See [Recordings, Clips & VOD](/builders/recordings#archive-chapters) for the 24/7 DVR model.
+
 ## Multi-Cluster Playback
 
 In multi-cluster deployments, Foghorn handles cross-cluster routing transparently. When a viewer requests a stream from a remote cluster, Foghorn arranges origin-pull replication or redirects via HTTP 307.

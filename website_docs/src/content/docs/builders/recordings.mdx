@@ -1,24 +1,33 @@
 ---
 title: "Recordings, Clips & VOD"
-description: "Record live streams, create clips, and upload video-on-demand content."
+description: "Record live streams, replay 24/7 DVR archives with chapters, create clips, and upload video-on-demand content."
 sidebar:
   order: 4
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-Record your live streams, extract clips, and upload pre-recorded content for on-demand playback.
+Record your live streams, replay long-running DVR archives, extract clips, and upload pre-recorded content for on-demand playback.
 
 <Aside type="caution" title="Storage and retention costs">
   Recordings, clips, and VOD assets consume storage until they expire or are deleted. Longer
-  retention windows can increase storage usage and cost depending on your billing tier and
+  retention periods can increase storage usage and cost depending on your billing tier and
   deployment. Set retention deliberately, delete assets you no longer need, and treat always-on DVR
   as a storage budget decision.
 </Aside>
 
-## DVR (Live Recording)
+## DVR Recording
 
-DVR records your live stream and preserves the broadcast for later playback. Crucially, DVR content is playable **while the stream is still live** — viewers can seek back through the buffer, pause, and catch up. This makes DVR ideal for live events, conferences, and sports where viewers join at different times or want to rewind key moments.
+DVR records your live stream and preserves the broadcast for later playback. DVR content is playable **while the stream is still live**: viewers can seek back through the live DVR window, pause, and catch up. After that window, the same recording remains available as a continuous archive, split into bounded chapter playlists for replay.
+
+That split matters:
+
+| Concept            | What it controls                                                                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Live DVR window    | How far back live viewers can seek while the stream is still recording. This is tier- and cluster-bounded so live playlists stay small.    |
+| Continuous archive | The full DVR segment timeline for one stream session. It can span hours, days, or months if the ingest stays live.                         |
+| Virtual chapters   | HLS playlist views over a time range in the archive. Chapters share the same segment files; they do not create separate media directories. |
+| Retention          | How long a completed recording is kept after the stream session ends. Retention is not the live seekback window.                           |
 
 ### Enabling Recording
 
@@ -93,10 +102,11 @@ mutation {
 
 ### Playback
 
-DVR recordings get their own `playbackId`, separate from the live stream's. This means the same stream supports two parallel viewing modes:
+DVR recordings get their own `playbackId`, separate from the live stream's. This means the same stream supports three viewing modes:
 
-- **Live** (`streamPlaybackId`) — real-time, no seeking
-- **DVR** (`dvrPlaybackId`) — seekable, growing buffer, slight latency cost
+- **Live** (`streamPlaybackId`) — real-time playback at the live edge.
+- **Live DVR window** (`dvrPlaybackId`) — seekable playback while the stream is recording, bounded by the tier/cluster DVR window.
+- **Archive chapters** — bounded HLS playlists generated from the recording timeline for historical replay.
 
 DVR playback URLs follow the same `/play/{playbackId}` pattern:
 
@@ -106,7 +116,7 @@ DASH:   %PLAY_URL%/play/{dvrPlaybackId}/cmaf/index.mpd
 MP4:    %PLAY_URL%/play/{dvrPlaybackId}.mp4
 ```
 
-With the Player SDK, use `contentType="dvr"`. The player enables full seeking, skip, and speed controls:
+With the Player SDK, use `contentType="dvr"` for the live DVR window. The player enables seeking, skip, and speed controls within the active window:
 
 ```tsx
 <Player
@@ -118,35 +128,97 @@ With the Player SDK, use `contentType="dvr"`. The player enables full seeking, s
 
 ### Live Time-Shift
 
-While a stream is live, the DVR buffer grows continuously. Viewers using the DVR playback ID can:
+While a stream is live, the DVR recording grows continuously. Viewers using the DVR playback ID can:
 
-- **Seek back** through the available buffer for the recording's configured retention window
+- **Seek back** through the tier-bounded live DVR window
 - **Pause and resume** without losing their position
 - **Jump to live** to catch up to the real-time edge
 
 The trade-off is latency — DVR playback goes through HLS or DASH segments, so it's higher latency
 than a direct live WebRTC connection. But for live events,
-conferences, and always-on streams this is a feature: viewers can rewind a goal, replay a slide, or
-start watching hours late and catch up.
+conferences, and always-on streams this is a feature: viewers can rewind a goal, replay a slide, or start watching late and catch up within the live DVR window.
 
 <Aside type="tip" title="Always-On Streams">
-  DVR supports long-running streams. Runtime DVR starts default to a 30-day expiration when no
-  explicit expiration is supplied, and cluster or plan policy can configure different retention
-  windows.
+  DVR supports 24/7-style streams without forcing a new recording artifact every few hours. The live
+  DVR window stays bounded for player performance, while the archive is replayed through chapter
+  playlists.
 </Aside>
+
+### Archive Chapters
+
+For historical replay, FrameWorks treats chapters as **virtual playlist overlays** on top of one DVR archive. The segment files stay under one artifact prefix; each chapter playlist references the shared segment set.
+
+Common chapter shapes:
+
+| Shape                 | Use                                                                                                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Window-sized chapters | Sequential chapters sized to the stream's DVR window. Useful default for long recordings.                                                                     |
+| Fixed UTC intervals   | Regular UTC buckets such as 6-hour or 24-hour spans. Automatic fixed intervals must be at least 1 hour; shorter views should use explicit ranges.             |
+| Explicit ranges       | Caller supplies `start_ms` and `end_ms`. Use this for civil-time views such as "yesterday in Europe/Amsterdam" after your app converts that local day to UTC. |
+
+All chapter time fields are UTC epoch milliseconds. The API does not store timezone names or offsets; clients that care about civil-day boundaries should resolve those boundaries before requesting the chapter.
+
+Chapter manifests can include `#EXT-X-GAP` markers if a segment was lost before upload under severe disk pressure. Players skip the missing media while preserving the timeline.
+
+#### Chapter API
+
+Retrieve a single chapter manifest URL — embed it in a `<video>` element or any HLS player:
+
+```graphql
+query {
+  dvrChapter(dvrId: "dvr-hash", mode: WINDOW_SIZED, startMs: 1715126400000, endMs: 1715212800000) {
+    chapterId
+    manifestUrl
+    isCurrent
+    hasGaps
+    segmentCount
+  }
+}
+```
+
+`manifestUrl` is a presigned GET URL for the chapter playback manifest. `isCurrent: true` means the chapter is still being recorded into and the manifest is `EVENT`-shaped (no `#EXT-X-ENDLIST`). For `FIXED_INTERVAL` mode pass `intervalSeconds`; for civil-day chapters resolve the local-day to a UTC range in your client and submit as `EXPLICIT_RANGE`.
+
+Build a chapter index for player navigation with paginated listing:
+
+```graphql
+query {
+  dvrChapters(
+    dvrId: "dvr-hash"
+    mode: WINDOW_SIZED
+    rangeStartMs: 1715040000000
+    rangeEndMs: 1715212800000
+    pageSize: 50
+  ) {
+    chapters {
+      chapterId
+      mode
+      startMs
+      endMs
+      isCurrent
+      hasGaps
+      segmentCount
+    }
+    nextPageToken
+  }
+}
+```
+
+Set the artifact's default chapter mode (the sweeper materializes chapters under this mode automatically while the recording is active):
+
+```graphql
+mutation {
+  setDVRChapterPolicy(dvrId: "dvr-hash", mode: FIXED_INTERVAL, intervalSeconds: 21600) {
+    success
+    message
+  }
+}
+```
 
 ### Retention
 
-Recording retention is driven by the tier `recording_retention_days` entitlement.
-Commodore reads it from Purser at DVR start, defaults `expiresAt` accordingly,
-and forwards `retention_until` to Foghorn. A caller-supplied `expiresAt` always
-wins. Tiers without a retention entitlement (PAYG, Enterprise) fall back to the
-30-day system default. Foghorn's hourly retention job marks expired artifacts
-as deleted; cleanup jobs then remove files and stale records.
+Recording retention is driven by the tier `recording_retention_days` entitlement. Retention starts after the DVR session ends; an active 24/7 recording is not deleted just because it has been live for longer than the retention period.
 
-Catalog defaults: Free 7 days, Supporter 90 days, Developer 180 days,
-Production 365 days, Enterprise custom (no entitlement set, falls through to
-the 30-day default unless overridden per request or per subscription).
+Catalog defaults: Free 7 days, Supporter 90 days, Developer 180 days, Production 365 days, Enterprise custom.
 
 ### Listing Recordings
 
@@ -249,12 +321,12 @@ mutation {
   if you need a non-default size.
 - **DVR recording** — a separate stream entity started with `startDVR(streamId)` or by
   setting `record: true` at stream creation. Segments are disk-backed and only paged into
-  memory when a viewer is reading that range, so the clippable window stretches across
-  the recording's retention without sitting in RAM.
+  memory when a viewer is reading that range. Live seekback is bounded by the DVR window;
+  historical replay uses archive chapters.
 
 **To clip further back than the live ring**, target the DVR recording, not the live
-stream. Expect this distinction to fade — we plan to auto-map the two so `createClip`
-picks the right source automatically.
+stream. The API keeps live and DVR entities explicit so clipping, access control, and playback
+state resolve against the source that actually holds the media.
 
 </Aside>
 

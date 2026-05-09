@@ -1,0 +1,146 @@
+---
+title: 24/7 DVR — Operations
+description: Operating FrameWorks DVR for always-on streams. Tier policy, cluster ceilings, chapter sweeper, retention, and triage runbook.
+---
+
+## What you're operating
+
+FrameWorks ships a continuous DVR archive: one DVR artifact per stream session, with no per-artifact lifetime cap. Live viewers seek across a tier-bounded rolling Mist window; replay viewers navigate the full archive sliced into chapter manifests Foghorn generates from the per-segment ledger (`foghorn.dvr_segments`).
+
+If you're triaging a DVR issue, the engineering reference is `docs/architecture/dvr-continuous-archive.md`. This page is the operator-facing surface.
+
+## Cluster ceilings — env vars
+
+The Foghorn process running in each cluster reads two env vars to ceiling the DVR window/manifest size for tenants on that cluster:
+
+| Env var                          | Meaning                                                                    | Default                                   |
+| -------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------- |
+| `DVR_CLUSTER_MAX_WINDOW_SECONDS` | Maximum live DVR window any tenant on this cluster can request, in seconds | `0` (no cluster cap; tier ceilings stand) |
+| `DVR_CLUSTER_MAX_ENTRIES`        | Maximum HLS playlist entries (rolling-window manifest size)                | `0` (no cap)                              |
+
+Set these in the cluster's gitops env file. Topology assumption: one Foghorn process per cluster, so process env IS the per-cluster surface.
+
+Enterprise tenants have `dvr_allow_cluster_extension=true` in their tier entitlements — for them the cluster setting can _raise_ their max DVR window up to the platform ceiling (72h). For non-enterprise tenants the cluster setting only acts as a ceiling.
+
+## Tier defaults
+
+Resolved at DVR start by `pkg/dvrpolicy.Resolve`. Snapshot stored on `foghorn.artifacts.dvr_window_seconds` so tier changes mid-stream don't affect the in-flight session.
+
+| Tier       | Default window | Max window           | Segment duration | Max manifest entries |
+| ---------- | -------------- | -------------------- | ---------------- | -------------------- |
+| Free       | 30 min         | 1 h                  | 6s               | 600                  |
+| Supporter  | 2 h            | 6 h                  | 6s               | 3,600                |
+| Developer  | 4 h            | 12 h                 | 6s               | 7,200                |
+| Production | 4 h            | 1 d                  | 12s              | 7,200                |
+| Enterprise | 4 h            | 3 d (cluster opt-in) | 24s              | 10,800               |
+
+Defined in `api_billing/internal/bootstrap/catalog/billing_tiers.yaml` as tier entitlements.
+
+## Chapter sweeper tuning
+
+The chapter sweeper (`api_balancing/internal/jobs/chapter_sweeper.go`) materializes chapter manifests for active DVRs. Two knobs:
+
+| Setting                  | Default | Effect                                                  |
+| ------------------------ | ------- | ------------------------------------------------------- |
+| `Interval`               | 60s     | How often the sweeper wakes                             |
+| `RebuildIntervalSeconds` | 60      | Min seconds between rebuilds of the same active chapter |
+
+Increase `RebuildIntervalSeconds` if S3 PUT cost is a concern at high stream concurrency; decrease if you need fresher current-chapter manifests for replay-while-live.
+
+## Artifact statuses (DVR state machine)
+
+```
+requested → starting → recording → finalizing
+              ↓             ↓
+              └────────────→ completed | completed_partial | failed → deleted
+```
+
+| Status                   | Meaning                                                                               |
+| ------------------------ | ------------------------------------------------------------------------------------- |
+| `requested` / `starting` | Sidecar accepting DVR start; transient                                                |
+| `recording`              | Active recording; Mist push running, segments writing to ledger                       |
+| `finalizing`             | Stream ended; Foghorn running bounded retry on pending segments before classification |
+| `completed`              | All segments uploaded; archive complete                                               |
+| `completed_partial`      | Some segments are `lost_local`; chapter manifests render `#EXT-X-GAP` for those       |
+| `failed`                 | No playable segments; recording produced nothing usable                               |
+| `deleted`                | Past retention; soft-deleted by the retention job                                     |
+
+## Triage: what `completed_partial` means
+
+A `completed_partial` artifact has at least one segment that was force-evicted from local disk before the sidecar could upload it (disk pressure or retention edge case during recording). The chapter manifests covering those time ranges include `#EXT-X-GAP` markers — players see the timeline duration preserved, but skip the missing media.
+
+To inspect:
+
+```sql
+SELECT segment_name, media_start_ms, media_end_ms, drop_reason, dropped_at
+  FROM foghorn.dvr_segments
+ WHERE artifact_hash = '<dvr_hash>'
+   AND status = 'lost_local'
+ ORDER BY media_start_ms;
+```
+
+Cross-reference with disk-pressure metrics on the recording sidecar (`storage_node_out_of_space` lifecycle events) to find root cause.
+
+## Triage: chapter not appearing for a viewer
+
+1. Confirm the artifact has a chapter mode set:
+
+   ```sql
+   SELECT dvr_chapter_mode, dvr_chapter_interval, dvr_window_seconds
+     FROM foghorn.artifacts
+    WHERE artifact_hash = '<dvr_hash>';
+   ```
+
+   If `dvr_chapter_mode` is NULL, the sweeper isn't materializing chapters for this DVR — call `SetDVRChapterPolicy` to set one.
+
+2. Check whether the chapter row exists:
+
+   ```sql
+   SELECT chapter_id, start_ms, end_ms, is_current, manifest_s3_key, has_gaps
+     FROM foghorn.dvr_chapters
+    WHERE artifact_hash = '<dvr_hash>'
+    ORDER BY start_ms DESC LIMIT 20;
+   ```
+
+3. If `manifest_s3_key` is NULL the chapter exists but materialization failed — sweeper logs in Foghorn will say why. Common causes: S3 client unconfigured, tenant/stream lookup failed, no segments in range.
+
+4. If the chapter row is missing, the sweeper hasn't reached it yet (debounced) or the artifact isn't active. `RetrieveDVRChapter` cache-on-request will materialize it on the next request.
+
+## Triage: storage node out of space during DVR
+
+1. `dropPressuredDVRSegments` on the recording sidecar will start evicting **uploaded-and-aged** segments first (safe local cleanup; chapter manifests unaffected).
+2. If pressure persists, the sidecar may be forced to evict **unsynced** segments — these emit `DVRSegmentDropped(was_uploaded=false)` and become `lost_local` ledger rows.
+3. Foghorn flags overlapping chapters as `has_gaps=true`; the next sweep tick re-materializes them with `#EXT-X-GAP` markers.
+4. If the sidecar can't keep up at all, it stops the push cleanly and emits `storage_node_out_of_space` — the artifact may end as `failed_storage_pressure` rather than `completed_partial`.
+
+Lifecycle event types to alert on:
+
+- `DVRSegmentDropped(was_uploaded=false)` — data loss event; investigate disk capacity
+- `storage_node_out_of_space` — push aborted; node needs attention
+- `dvr_terminal` rejection rate spiking — Foghorn-side state machine racing with sidecar; usually transient
+
+## S3 layout
+
+```
+s3://bucket/dvr/{tenant_id}/{stream_internal_name}/{dvr_artifact_id}/segments/{segment_name}
+s3://bucket/dvr/{tenant_id}/{stream_internal_name}/{dvr_artifact_id}/chapters/{chapter_id}.m3u8
+```
+
+Segment objects are shared across all chapter views — chapter manifests reference the same segment URIs, no duplication. Don't manually manipulate this prefix; use `RetrieveDVRChapter` and `SetDVRChapterPolicy` instead.
+
+## Retention
+
+Retention only acts on terminal artifacts. An active DVR (status `recording` / `finalizing`) is never deleted by the retention job, regardless of age.
+
+`retention_until` is computed at FinalizeDVR as `ended_at + dvr_retention_days*24h`, where `dvr_retention_days` is snapshotted on `foghorn.artifacts` at DVR start from the tier policy. The live tier is **never** re-resolved at end — the tenant's plan may have changed during a months-long stream; we apply the policy that was in effect when the recording began.
+
+If you need to extend retention on a specific terminal artifact, update `retention_until` directly:
+
+```sql
+UPDATE foghorn.artifacts
+   SET retention_until = NOW() + INTERVAL '90 days'
+ WHERE artifact_hash = '<dvr_hash>'
+   AND status IN ('completed', 'completed_partial');
+```
+
+The retention job picks up the new value on its next tick (default hourly).

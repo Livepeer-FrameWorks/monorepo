@@ -77,7 +77,9 @@ _Active development. Core functionality is established; work is focused on full 
 
 - **Livepeer Gateway**: Transcoding is active. Work is focused on native integration and exposed controls.
 - **DRM**: FairPlay, Widevine, and PlayReady content protection, in development with the MistServer team.
-- **Pull-input streams**: Mist/Foghorn pull-source routing exists internally; product/API exposure and tenant-safe UX are still being finished.
+- **Pull-input streams**: Dashboard and GraphQL surfaces are available for RTSP, SRT, RIST,
+  HLS, DTSC, and MPEG-TS sources; production hardening and edge-case UX continue for private,
+  multicast, and self-hosted deployments.
 
 ---
 
@@ -106,7 +108,8 @@ _Design and prototype phase. Early access may be available._
 
 ### Analytics
 
-- **QoE**: Comprehensive Quality of Experience metrics. [RFC: QoE Analytics]
+- **QoE**: View-level Quality of Experience analytics — rebuffering, startup time, error
+  attribution, and watch time tracked per view across player SDKs. [RFC: QoE Analytics]
 
 ---
 

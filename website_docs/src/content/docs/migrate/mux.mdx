@@ -1,0 +1,444 @@
+---
+title: "Migrate from Mux"
+description: "Move your Mux Video integration to FrameWorks: REST → GraphQL, signed playback (RS256 → ES256), simulcast targets, recordings, and where Mux Data fits in the migration."
+sidebar:
+  order: 4
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+If you ship live or on-demand video on [Mux](https://www.mux.com) today and are evaluating
+FrameWorks, this page is for you. Mux is the platform that made modern video infrastructure
+feel like a normal SaaS dev product, with the QoE analytics layer to match. The two products
+overlap on the live-streaming basics but the API shape, the playback codec/protocol surface,
+and a few access-control features differ enough that an endpoint-by-endpoint swap won't get
+you all the way there.
+
+This guide covers what stays, what changes, what you gain, and exactly how to do the swap —
+including the pieces of Mux (Mux Data, broad SDK coverage, productized DRM) that are still
+worth keeping during the cut-over.
+
+## TL;DR
+
+- **What stays:** RTMP/RTMPS and SRT ingest, HLS playback, signed JWT playback, simulcast
+  targets, live-to-VOD recording, clips.
+- **What changes:** REST → GraphQL · API access token (HTTP Basic) → developer token (Bearer)
+  or wallet sign-in · outbound HTTP webhooks → GraphQL subscriptions or polling · `?token=`
+  JWT → `?jwt=` JWT, **signed with ES256 instead of RS256** · `aud`-scoped tokens (per
+  asset type) → one signed URL gates HLS / LL-HLS / DASH / WHEP / MP4 · `@mux/mux-player-react`
+  → `@livepeer-frameworks/player-*` · built-in referrer/UA playback restrictions → webhook
+  playback policy.
+- **Capabilities to evaluate:** E-RTMP ingest (HEVC/AV1 contribution over RTMP) · WHIP ingest ·
+  LL-HLS / DASH / WebRTC-WHEP delivery alongside HLS · pull-input streams (RTSP / SRT / RIST /
+  HLS / DTSC / MKV / TS-over-UDP) · 24/7 streams with no 12-hour disconnect · AV1 in delivery ·
+  sprite-sheet seek previews (≈ Mux storyboard) · self-hosting and hybrid hosting · MCP, wallet
+  auth, and x402 for agents · Skipper · planned AV Device Discovery (ONVIF / VISCA-PTZ / NDI /
+  HDMI capture).
+- **What's not yet at parity:** Mux Data-class view-level QoE analytics · DRM (in development
+  with the MistServer team) · live auto-captions · productized custom-domain SKU · outbound HTTP
+  webhooks · breadth of first-class server-side SDKs (Mux ships Node/Python/Ruby/Go/PHP/Elixir/
+  Java/.NET) · built-in referrer/UA playback restrictions as a no-code policy · VOD URL ingest ·
+  Master Access download. See [the gap list](#whats-not-yet-at-parity-and-whats-coming) before
+  cutting over production traffic.
+
+<Aside type="note">
+  FrameWorks is in active beta. Billing rates, hybrid edge deployment, DRM, and the cluster
+  marketplace are all flagged below — read the [beta and tricky bits](#beta-and-tricky-bits) section
+  before you cut over production traffic.
+</Aside>
+
+## Translation table
+
+The Mux shapes you know, mapped to FrameWorks:
+
+### Streams
+
+| Mux                                                     | FrameWorks                                                                                                                                                                                          |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /video/v1/live-streams`                           | `createStream(input)` mutation                                                                                                                                                                      |
+| `GET /video/v1/live-streams/{id}`                       | `stream(id)` query                                                                                                                                                                                  |
+| `PATCH /video/v1/live-streams/{id}`                     | `updateStream(id, input)` mutation                                                                                                                                                                  |
+| `DELETE /video/v1/live-streams/{id}`                    | `deleteStream(id)` mutation                                                                                                                                                                         |
+| `PUT /video/v1/live-streams/{id}/disable` and `/enable` | No direct equivalent; manage at the encoder side                                                                                                                                                    |
+| `latency_mode: "standard" \| "reduced" \| "low"`        | Choose the protocol/profile at the player — HLS for VOD/standard, LL-HLS for reduced, WHEP for low — see [Player (Playback)](/builders/playback)                                                    |
+| `new_asset_settings` for live-to-VOD                    | `record: true` at create, or `startDVR(streamId)` post-create                                                                                                                                       |
+| 12-hour continuous-stream auto-disconnect               | No fixed cap; 24/7 streams supported, including continuous DVR archive replay through chapters                                                                                                      |
+| URL pull is VOD-only; no live pull-source ingest        | `createStream(input: { ingestMode: PULL, pullSource: { sourceUri } })` for live URL pull from RTSP / SRT / RIST / HLS / DTSC / MKV / TS-over-UDP — see [Pull-input streams](/builders/pull-streams) |
+| _(RTMP pull is unsupported on Mux)_                     | RTMP pull is not supported on FrameWorks either; bridge via FFmpeg, MistServer, or `srt-live-transmit` to SRT / RIST / RTSP / HLS                                                                   |
+
+### Recordings, clips, and VOD
+
+| Mux                                                                                            | FrameWorks                                                                     |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `POST /video/v1/assets` with `input: { url: "mux://assets/{asset_id}", start_time, end_time }` | `createClip(input)` mutation                                                   |
+| Instant clipping (segment-level) vs asset clips (frame-accurate)                               | FrameWorks clips are GOP-aligned today; frame-accurate trimming is not exposed |
+| `POST /video/v1/uploads` (one-shot HTTP PUT URL)                                               | `createVodUpload(input)` → S3 multipart upload                                 |
+| `POST /video/v1/assets` with `input.url: "https://..."` (URL ingest)                           | No direct equivalent today                                                     |
+| `GET /video/v1/assets/{id}`                                                                    | `vodAsset(id)` query                                                           |
+| `DELETE /video/v1/assets/{id}`                                                                 | `deleteVodAsset(id)` mutation                                                  |
+| Storyboard `.vtt` + JPG sprite                                                                 | Sprite-sheet (10×10) + WebVTT cue file, generated on every recording           |
+| `mp4_support: "standard" \| "high"` for static MP4 renditions                                  | `/play/{id}.mp4` progressive — always available, no gated tier                 |
+| Master Access (downloadable original)                                                          | Not exposed today                                                              |
+
+FrameWorks DVR is not just live-to-VOD asset creation. A long-running stream can keep one DVR
+archive for the full stream session: live viewers use the bounded DVR window, and replay viewers
+use virtual chapter manifests over the archive. See [Recordings, Clips & VOD](/builders/recordings#archive-chapters).
+
+### Simulcast / multistream
+
+| Mux                                                                                 | FrameWorks                                                                   |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `POST /video/v1/live-streams/{id}/simulcast-targets`                                | `createPushTarget(streamId, input)` mutation                                 |
+| `DELETE /video/v1/live-streams/{id}/simulcast-targets/{target_id}`                  | `deletePushTarget(id)` mutation                                              |
+| Up to 6 simultaneous targets per stream                                             | No documented hard cap; tested across Twitch / YouTube / Facebook / X / Kick |
+| Per-target rendition selection                                                      | Not exposed today (default output is pushed)                                 |
+| Simulcast events on webhooks (`.starting` / `.broadcasting` / `.errored` / `.idle`) | Poll `stream(id).pushTargets.status`; no dedicated subscription today        |
+
+### Access control
+
+Mux's "access control" covers two separate concerns: authenticating your application to the
+API, and gating viewer playback. FrameWorks splits the same way — developer tokens for the
+API, playback policies for viewers.
+
+**API and dashboard access**
+
+| Mux                                                           | FrameWorks                                                                                   |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| HTTP Basic with `<token_id>:<token_secret>` (per-environment) | Developer token (Bearer) — see [Agent Access](/agents/overview) for wallet/x402 alternatives |
+| Team login                                                    | Email/password login                                                                         |
+| —                                                             | Wallet sign-in (EIP-191)                                                                     |
+
+**Viewer-side playback access**
+
+| Mux                                                                                                        | FrameWorks                                                                                                                                                   |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `playback_policy: "public"`                                                                                | Default public playback ID                                                                                                                                   |
+| `playback_policy: "signed"`                                                                                | `setPlaybackPolicy({ streamId, policy: { type: JWT, jwt: { allowedKids } } })` — see [Playback Access Control](/builders/playback-access-control)            |
+| `POST /system/v1/signing-keys` — RSA-2048, **RS256**                                                       | `createSigningKey(input: { name })` — **ES256**, ECDSA P-256 (asymmetric, customer holds private key)                                                        |
+| JWT claims `sub` (playback ID) · `aud` (`v` / `t` / `g` / `s` / `d`) · `exp` · `kid`                       | JWT claims `sub` (playback ID) · `kid` · `exp`. One signed URL is the auth boundary across HLS, LL-HLS, DASH, WHEP, and MP4 — no per-asset-type `aud` switch |
+| `?token=<jwt>` query param                                                                                 | `?jwt=<token>` universally; `Authorization: Bearer` where playback paths can carry headers                                                                   |
+| Built-in playback restrictions (referrer-domain allowlist, user-agent rules) via `playback_restriction_id` | `WEBHOOK` policy: HMAC-signed POST to your URL; return 200 to allow, anything else denies. Implement referrer/UA logic in your endpoint                      |
+| DRM (Widevine + PlayReady + FairPlay)                                                                      | DRM in development with the MistServer team — not GA                                                                                                         |
+
+<Aside type="note">
+  Stream keys are ingest secrets, not viewer authorization keys. Signing keys are tenant-scoped and
+  do not transfer between platforms — reissue them on FrameWorks even if you have the same JWT-mint
+  code on Mux. The algorithm changes (RS256 → ES256) so your minting library and key pair both
+  change. See [Playback Access Control](/builders/playback-access-control) for the full model and
+  code samples.
+</Aside>
+
+### Real-time events
+
+| Mux webhook                                                                            | FrameWorks path                                                                                     |
+| -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `video.live_stream.connected` / `.recording` / `.active` / `.disconnected` / `.idle`   | `liveStreamEvents(streamId)`                                                                        |
+| `video.asset.created` / `.ready` / `.errored` / `.updated` / `.deleted`                | `liveVodLifecycle` for VOD; `liveStorageEvents(streamId)` for artifacts                             |
+| `video.upload.created` / `.asset_created` / `.errored` / `.cancelled`                  | `vodUploadStatus`, `liveVodLifecycle`                                                               |
+| `video.live_stream.simulcast_target.starting` / `.broadcasting` / `.errored` / `.idle` | Poll `stream(id).pushTargets.status`; no dedicated subscription today                               |
+| `video.asset.track.*` (subtitles/captions ready)                                       | Live captions / transcription not GA on FrameWorks                                                  |
+| Mux CLI webhook forwarding for local dev                                               | Subscribe to `wss://%GATEWAY_HOST%/graphql` directly from your dev machine — no port-forward needed |
+
+<Aside type="caution">
+  FrameWorks does not deliver outbound HTTP webhooks today — events flow over GraphQL subscriptions
+  (WebSocket). If your environment can't hold an open subscription, fall back to polling the
+  relevant query (`stream(id)`, `vodAsset(id)`) on a short interval. HTTP-callback delivery is
+  tracked in the outbound-webhooks RFC, but subscriptions are the supported event surface today.
+</Aside>
+
+## Step-by-step
+
+### 1. Create a FrameWorks account and a stream
+
+Sign up at [%APP_URL%](%APP_URL%) — email + password, or sign in with an EVM wallet if you'd
+rather skip email entirely. Then:
+
+```graphql
+mutation CreateStream {
+  createStream(input: { name: "my-first-stream" }) {
+    ... on Stream {
+      id
+      streamKey
+      playbackId
+    }
+  }
+}
+```
+
+You get back a `streamKey` (secret — for your encoder) and a `playbackId` (public — for
+viewers).
+
+### 2. Repoint your encoder
+
+Mux's RTMP ingest is on `rtmp://global-live.mux.com:5222/app` (note the non-standard port
+5222), RTMPS on `rtmps://global-live.mux.com:443/app`, and Mux also accepts SRT. FrameWorks
+publishes its equivalents via the dashboard or `resolveIngestEndpoint(streamKey)`. RTMP/RTMPS
+and SRT remain the low-effort path; FrameWorks additionally accepts **E-RTMP** (HEVC/AV1
+contribution over RTMP) and **WHIP** (WebRTC ingest) where your encoder supports them.
+
+OBS / FFmpeg / hardware encoder → swap the URL, keep the rest. Watch the port — Mux's `5222`
+won't carry over.
+
+### 3. Swap the player
+
+If you were using `@mux/mux-player-react`:
+
+```diff
+- import MuxPlayer from "@mux/mux-player-react";
+- <MuxPlayer playbackId={playbackId} streamType="on-demand" />
++ import { Player } from "@livepeer-frameworks/player-react";
++ <Player contentType="vod" contentId={playbackId} options={{ gatewayUrl: "%GATEWAY_URL%/graphql" }} />
+```
+
+Svelte and Web Components are first-class:
+
+- `@livepeer-frameworks/player-svelte`
+- `@livepeer-frameworks/player-wc` (`<fw-player>`)
+- `@livepeer-frameworks/player-core` (headless / vanilla)
+
+The component prop names and theming model differ — Mux uses kebab-case attributes
+(`playback-id`, `stream-type`) and a Media Chrome theming surface; the FrameWorks player uses
+camelCase props and its own theming primitives. See [Player (Playback)](/builders/playback)
+for the full surface.
+
+### 4. Rewire REST as GraphQL
+
+Pick your client:
+
+- **Houdini** (SvelteKit-native) — what we use internally
+- **urql** or **Apollo** for React
+- **graphql-request** for plain Node/Bun scripts
+
+Codegen against the schema gives you typed queries:
+
+```bash
+# example with graphql-codegen
+pnpm dlx graphql-codegen \
+  --schema %GATEWAY_URL%/graphql \
+  --documents 'src/**/*.graphql' \
+  --generates ./src/gql/generated.ts:typescript,typescript-operations
+```
+
+If you want to read the schema directly, it lives at
+[`pkg/graphql/schema.graphql`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql)
+on GitHub, and the playground is at
+[`%GATEWAY_URL%/graphql/playground`](%GATEWAY_URL%/graphql/playground).
+
+Mux's REST shape is the closer of the two big migrations to translate (Studio's REST is more
+ad-hoc); most Mux endpoints have a one-to-one GraphQL operation in the
+[Streams translation table](#streams) above.
+
+### 5. Replace webhooks with subscriptions
+
+Before (Mux):
+
+```js
+// Express endpoint receiving Mux webhooks
+app.post("/mux-webhook", verifyMuxSignature, (req, res) => {
+  if (req.body.type === "video.live_stream.active") {
+    notifyDashboard(req.body.data.id);
+  }
+  res.sendStatus(200);
+});
+```
+
+After (FrameWorks):
+
+```js
+import { createClient } from "graphql-ws";
+
+const ws = createClient({ url: "wss://%GATEWAY_HOST%/graphql", connectionParams: { authToken } });
+ws.subscribe(
+  {
+    query: `subscription { liveStreamEvents { streamId state } }`,
+  },
+  {
+    next: (msg) => {
+      const { streamId, state } = msg.data.liveStreamEvents;
+      if (state === "live") notifyDashboard(streamId);
+    },
+    error: console.error,
+    complete: () => {},
+  }
+);
+```
+
+If you can't keep a connection open (a serverless cron, for instance), poll `stream(id)`
+every few seconds instead — it's idempotent and cheap. The Mux CLI's local webhook-forwarding
+flow is unnecessary on FrameWorks: subscribe straight from your laptop.
+
+### 6. Plan playback access control
+
+If your Mux assets and streams are public, this step is short: move to the new `playbackId`
+and update embeds.
+
+If you use Mux signing keys, `playback_policy: "signed"`, or `playback_restriction_id` for
+referrer/UA gating, FrameWorks ships an equivalent surface — see
+[Playback Access Control](/builders/playback-access-control). The translation:
+
+- `POST /system/v1/signing-keys` → `createSigningKey` mutation. **The algorithm changes from
+  RS256 (RSA-2048) to ES256 (ECDSA P-256)** — re-mint with a new private key and update your
+  signing library.
+- `playback_policy: "signed"` → `setPlaybackPolicy` with `type: JWT`.
+- `?token=<jwt>` query param → `?jwt=<token>` query param. Universal across HLS, LL-HLS,
+  DASH, WHEP, and MP4 — no per-asset-type `aud` swap. `Authorization: Bearer` works on
+  playback request paths where headers are available.
+- Built-in referrer / user-agent restrictions (`playback_restriction_id` claim) → implement
+  via `WEBHOOK` policy. FrameWorks POSTs an HMAC-signed body; your endpoint inspects the
+  `Referer` and `User-Agent` headers and returns 200 to allow or 403 to deny.
+
+Signing keys do not transfer between platforms — reissue on FrameWorks. Migration concierge
+available via [in-app ticket](%APP_URL%/support) if you have a large library of pre-signed
+JWTs to roll over.
+
+### 7. Re-attach simulcast targets
+
+Targets are stream-scoped on both platforms — they don't carry over when a stream is recreated.
+After your stream is up:
+
+```graphql
+mutation Restream {
+  createPushTarget(
+    streamId: "stream_xxx"
+    input: {
+      platform: "twitch"
+      name: "Twitch — main channel"
+      targetUri: "rtmp://live.twitch.tv/app/live_xxxxxxxxxx_xxx"
+    }
+  ) {
+    id
+    status
+  }
+}
+```
+
+### 8. Validate side by side
+
+Run a low-traffic test stream through both platforms in parallel for a day. Watch the
+FrameWorks side via
+[`liveStreamEvents`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql)
+and `liveViewerMetrics`, compare against Mux's dashboard, and only point production traffic
+over once you trust the numbers.
+
+## What you gain on FrameWorks
+
+- **LL-HLS, DASH, and WebRTC/WHEP delivery** alongside HLS — Mux's live product is HLS-only.
+  WHEP gives you ~sub-second one-to-many playback (this is playback, not multi-publisher
+  conferencing).
+- **WHIP ingest** for sub-second contribution from browsers and OBS WebRTC out.
+- **E-RTMP** ingest — HEVC and AV1 contribution over RTMP, beyond H.264.
+- **SRT both directions** — Mux receives SRT but doesn't deliver it. FrameWorks does both.
+- **AV1 in delivery** where the selected cluster supports it.
+- **24/7 streams with DVR replay.** No 12-hour auto-disconnect; long-running broadcasts and
+  infinite live channels are supported natively. DVR archive replay is chapter-based: live
+  seekback stays bounded for performance, while historical viewers request bounded chapter
+  playlists over the same continuous archive.
+- **Pull-input streams** for live: `createStream(input: { ingestMode: PULL, pullSource })`
+  pulls from RTSP, SRT, RIST, HLS, DTSC, MKV/WebM, or TS-over-UDP (unicast or multicast).
+  Self-hosted edges can pull from RFC1918 / multicast sources via an explicit
+  `allow_private_pull_sources` cluster flag. Mux's URL pull is VOD-only. RTMP pull is not
+  supported on either platform — bridge through FFmpeg/MistServer/`srt-live-transmit` if you
+  need it. See [Pull-input streams](/builders/pull-streams). On the
+  [roadmap](/roadmap#in-the-pipeline): an **AV Device Discovery** drop-in app for
+  auto-discovering ONVIF cameras, VISCA-PTZ controls, NDI sources, USB webcams, and HDMI
+  capture.
+- **Sprite-sheet seek previews** (Mux's storyboard analogue) — a 10×10 grid plus a WebVTT
+  cue file, generated for every recording, ready for hover-scrub UIs.
+- **Self-hosting and hybrid hosting.** Run the whole stack on your own hardware, or mix BYO
+  edge with our managed control plane. Hybrid is experimental — see the beta flags below.
+- **Cross-cluster federation** — one viewer pool routed across clusters; the closer edge
+  wins automatically.
+- **Agent-first surface.** MCP server at
+  [`/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json), wallet auth (EIP-191), and
+  gasless USDC payments via x402 (EIP-3009). See [Agent Access](/agents/overview).
+- **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from
+  the dashboard, the docs (`⌘J`), or MCP.
+- **Player on Svelte and as Web Components**, not just React.
+
+## What's not yet at parity, and what's coming
+
+Mux ships several things FrameWorks doesn't have a one-for-one answer for yet. Be honest with
+your stack about which of these you depend on before cutting over.
+
+- **Mux Data-class view-level QoE analytics.** Mux Data is the platform's hardest-to-replace
+  surface and is genuinely best-in-class for QoE — view-level traces, rebuffering /
+  startup-time / error attribution, ad observability, and a player-agnostic SDK that spans
+  Video.js, hls.js, Shaka, native HTML5, Roku, Chromecast, and OTT surfaces. FrameWorks ships
+  **Periscope** for stream-side analytics today; the existing
+  [QoE roadmap entry](/roadmap#analytics) is where view-level cross-player observability
+  lives.
+
+  **For teams unwilling to give up Mux Data on day one:** Mux Data's SDK binds at the
+  underlying media-element / hls.js layer, which is the same surface our player uses. Drop-in
+  coexistence with `@livepeer-frameworks/player-*` is **expected to work**, but we haven't
+  shipped a tested wiring recipe yet. File an [in-app ticket](%APP_URL%/support) if you want
+  us to validate it for your stack and publish a `/builders/...` page.
+
+- **DRM** — Widevine, PlayReady, and FairPlay are in development with the MistServer team;
+  not GA. Mux ships productized DRM today.
+- **Live auto-captions / transcription** — on the roadmap, not shipping. Mux ships live
+  auto-captions today.
+- **Productized custom-domain SKU.** Mux offers productized custom-domain delivery.
+  FrameWorks doesn't gate custom domains as a separate per-tenant SKU today; self-hosted
+  operators can run their own domain however they like.
+- **Outbound HTTP webhooks** — FrameWorks uses GraphQL subscriptions today. HTTP-callback
+  delivery is tracked in the outbound-webhooks RFC.
+- **Breadth of first-class server-side SDKs.** Mux ships official SDKs for Node, Python,
+  Ruby, Go, PHP, Elixir, Java, and .NET, all covering both Mux Video and Mux Data. FrameWorks
+  ships the player suite (`@livepeer-frameworks/player-*`) and GraphQL codegen against the
+  public schema; first-class server-side SDKs in those languages aren't published yet.
+- **Built-in referrer / user-agent playback restrictions.** Mux exposes them as a no-code
+  policy. The webhook playback policy can express the same rules, but it's not a toggle.
+- **VOD URL ingest.** `POST /assets` with `input.url: "https://..."` (Mux pulling a VOD file
+  from your origin) has no direct equivalent today.
+- **Master Access** — the downloadable original of an asset.
+- **Frame-accurate clip trimming.** FrameWorks clips today are GOP-aligned; Mux offers both
+  asset-clips (frame-accurate) and instant clips (segment-level).
+- **Live captions / subtitle track lifecycle webhooks.** Tracked alongside the captions
+  feature.
+
+## Beta and tricky bits
+
+Heads-up so nothing surprises you:
+
+- **Billing is in beta.** Rates may adjust as we scale, but you keep the allowances you signed
+  up for through beta.
+- **Hybrid edge deployment** is highly experimental — fine for testing, not for production.
+- **Cluster marketplace** is in progress. Public clusters work; the operator-marketplace flow
+  is still being built.
+- **Encoder port gotcha.** Mux's RTMP endpoint uses non-standard port `5222`; FrameWorks uses
+  the conventional `1935`. Update any hard-coded encoder configs and firewall allowlists.
+- **JWT algorithm change: RS256 → ES256.** Re-mint your tokens with a new private key. Your
+  signing library import changes (e.g. `RS256` → `ES256` in `jsonwebtoken`).
+- **Single-token, single transport.** Mux scopes JWTs by `aud` (`v` for video, `t` for
+  thumbnail, `g` for GIF, `s` for storyboard, `d` for DRM). FrameWorks treats one signed URL
+  as the auth boundary across HLS / LL-HLS / DASH / WHEP / MP4 — no per-asset-type token swap
+  in your client.
+- **Mux Data co-existence is untested.** It is _expected_ to work on the FrameWorks player
+  given the SDK binds at the media-element/hls.js layer; we haven't shipped a recipe. Don't
+  treat it as a guaranteed drop-in until you've validated for your stack.
+- **GraphQL learning curve.** If you've never written a query, the
+  [docs playground](%GATEWAY_URL%/graphql/playground) is the quickest way to inspect available
+  fields. Skipper can also draft queries.
+- **Subscriptions are connection-oriented.** Polling fallback is fine if a long-lived
+  connection is awkward in your stack.
+- **The player swap is not API-compatible.** Props, attribute casing, and theming differ —
+  budget a few hours to walk through [Player (Playback)](/builders/playback) examples.
+- **Stream keys, playback IDs, and asset IDs are not transferable.** Reissue stream keys and
+  update embeds.
+- **Playback signing is not key-portable.** Re-create signing keys in FrameWorks and update
+  your token transport from `?token=` to `?jwt=` (or `Authorization: Bearer`).
+- **No webhook history backfill.** Past Mux events stay on Mux; subscribe fresh on
+  FrameWorks.
+
+## Get help
+
+Pick whichever channel fits.
+
+| Channel                     | Best for                                                                                    | Where                                                        |
+| --------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| **Skipper** (AI consultant) | Quick troubleshooting, API discovery, diagnostics, after-hours, non-human callers           | Dashboard `/skipper` · `⌘J` in docs · MCP at `/mcp`          |
+| **In-app ticketing**        | Account-specific issues, billing, anything tied to your tenant data, library-migration help | Dashboard `/support`                                         |
+| **Forum**                   | Long-form Q&A, recipes, searchable community knowledge                                      | [forum.frameworks.network](https://forum.frameworks.network) |
+| **Discord**                 | Real-time chat, casual questions                                                            | [Join](%DISCORD_URL%)                                        |
+| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](%GITHUB_URL%)                 |

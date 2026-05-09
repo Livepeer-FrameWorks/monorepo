@@ -330,7 +330,11 @@ export default defineConfig({
             },
             {
               label: "Operations",
-              items: [{ slug: "operators/operations" }, { slug: "operators/external-services" }],
+              items: [
+                { slug: "operators/operations" },
+                { slug: "operators/dvr" },
+                { slug: "operators/external-services" },
+              ],
             },
             {
               label: "Integrations",

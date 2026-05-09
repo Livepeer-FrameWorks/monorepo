@@ -1,0 +1,357 @@
+---
+title: "Migrate from Bunny Stream"
+description: "Move from Bunny Stream's VOD/CDN stack to FrameWorks: what carries over, what live capabilities you gain, and where Bunny's adjacent products (CDN, Storage, DNS) still fit."
+sidebar:
+  order: 5
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+If you're running on [Bunny Stream](https://bunny.net/stream/) today and considering FrameWorks, this page is for you. The platforms overlap on VOD basics (transcode, store, deliver HLS/DASH/MP4, sign URLs, embed a player), but their centers of gravity are different enough that a straight endpoint swap is not the right mental model.
+
+Bunny.net is, first and foremost, an excellent global CDN, storage, and DNS company — Bunny Stream is the VOD product that sits on top of that stack. If you chose Bunny, it was probably for a practical reason: strong edge delivery, simple VOD hosting, integrated security options, automated media tooling, useful video analytics, and a broader platform account that also covers non-video workloads.
+
+FrameWorks centers on **live streaming** — RTMP/RTMPS, E-RTMP, SRT, WHIP, and pull-input from RTSP/SRT/RIST/HLS/MPEG-TS — with DVR, clipping, multistream, LL-HLS, DASH, WHEP/WebRTC, and MP4 progressive delivery. Bunny Stream's public surface does not currently expose a first-class live-ingest product; the official Bunny support article still documents [RTMP as not supported](https://support.bunny.net/hc/en-us/articles/360012176700-Do-you-support-RTMP-streaming). The rest of this page maps Bunny Stream's surface to FrameWorks: what's a clean swap, what changes shape, where the live side opens up, and which Bunny products are worth **keeping** rather than replacing.
+
+## TL;DR
+
+- **What stays:** HLS and MPEG-DASH delivery · MP4 progressive download · resumable / direct-to-S3 uploads · token-style playback access control · custom player branding · webhook-style callbacks for access decisions.
+- **What changes:** REST → GraphQL · API key → developer token (or wallet/x402 for agents) · iframe embed → `<fw-player>` Web Component or framework packages · processing-status webhooks → GraphQL subscriptions or polling · Bunny signed URL tokens → ES256 JWT signing keys delivered via `?jwt=` · per-region replication knob → cluster placement.
+- **What you gain:** RTMP/RTMPS, E-RTMP, SRT, WHIP push ingest · pull-input from RTSP, SRT, RIST, HLS, DTSC, MPEG-TS · DVR with time-shift · clip API · multistream to Twitch, YouTube, Facebook, Kick, X, custom RTMP/SRT · LL-HLS, DASH, WHEP/WebRTC, MP4, WebSocket playback · sprite-sheet seek previews · cross-cluster federation · sovereign and hybrid hosting · agent-first surface (MCP, wallet auth, x402) · Skipper.
+- **What's not yet at parity:** DRM (FairPlay/Widevine/PlayReady in development) · automatic chapter generation and transcription/caption auto-generation · per-video heatmaps and retention curves · per-region replication knob · iframe-embed-as-a-product · first-class Python/PHP/C#/Java/Go SDKs · outbound HTTP webhooks · VOD URL-pull import · watermarking as a managed feature.
+- **What FrameWorks does not replace:** Bunny CDN (general HTTP CDN), Bunny Edge Storage (general object / block storage), Bunny DNS, Bunny Optimizer (image), Magic Containers (edge compute), Bunny Shield (DDoS / WAF). Those are Bunny's broader edge platform — keep them. FrameWorks has adjacent infrastructure work on the [roadmap](/roadmap), but this migration guide is about moving the video workload.
+
+<Aside type="note">
+  FrameWorks is in active beta. Billing rates, hybrid edge deployment, the cluster marketplace, and
+  DRM are all flagged below — read the [beta and tricky bits](#beta-and-tricky-bits) section before
+  you cut over production traffic.
+</Aside>
+
+<Aside type="tip">
+  If you use Bunny beyond Stream — CDN, Edge Storage, DNS, Optimizer, Magic Containers, or Shield —
+  keep those workloads on Bunny for now. FrameWorks has adjacent infrastructure work on the
+  [roadmap](/roadmap), including Generic CDN / Proxy, edge-cluster object storage, managed object /
+  block storage, self-hosted anycast DNS, and managed DNS. Those are future platform surfaces; the
+  migration path below is for the video workload.
+</Aside>
+
+## Translation table
+
+The shapes you know in Bunny, mapped to FrameWorks.
+
+### VOD assets
+
+Schema-verified mutations and queries: `createVodUpload`, `completeVodUpload`, `abortVodUpload`, `deleteVodAsset`, `vodAsset`, `vodAssetsConnection`, `vodUploadStatus`. There is no `updateVodAsset` mutation today — title and description are set at upload time via [`createVodUpload`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql).
+
+| Bunny Stream                                        | FrameWorks                                                               |
+| --------------------------------------------------- | ------------------------------------------------------------------------ |
+| `POST /library/{libraryId}/videos`                  | `createVodUpload(input)` → S3 multipart upload, then `completeVodUpload` |
+| `GET /library/{libraryId}/videos/{id}`              | `vodAsset(id)` query                                                     |
+| `PUT /library/{libraryId}/videos/{id}` (metadata)   | No direct equivalent today — set title/description on `createVodUpload`  |
+| `DELETE /library/{libraryId}/videos/{id}`           | `deleteVodAsset(id)` mutation                                            |
+| TUS resumable upload                                | S3 multipart presigned URLs (~2 h expiry)                                |
+| Pre-signed direct-upload URL                        | `createVodUpload` returns a session of presigned PUT URLs                |
+| `POST /library/{libraryId}/videos/fetch` (URL pull) | No URL-pull importer today — open a ticket for bulk migration            |
+| Library / collections                               | Tenant-scoped; no nested-library construct                               |
+
+### Live ingest and pull sources
+
+Bunny Stream does not currently expose a first-class live-ingest product, so this row is a **what you gain** zone rather than a translation. The FrameWorks side:
+
+| FrameWorks                                                                            |
+| ------------------------------------------------------------------------------------- |
+| Push ingest: RTMP, RTMPS, E-RTMP (HEVC/AV1 over RTMP), SRT, WHIP                      |
+| Pull-input: RTSP, SRT, RIST, DTSC, HLS, single-file TS, EBML/WebM, TS-over-UDP        |
+| DVR with time-shift on every recorded stream — see [Recordings](/builders/recordings) |
+| Clip API (`CLIP_NOW`, `DURATION`, `ABSOLUTE`, `RELATIVE`)                             |
+| Multistream / restream to Twitch, YouTube, Facebook, Kick, X, custom RTMP/RTMPS/SRT   |
+
+Pull-input streams use `createStream(input: { ingestMode: PULL, pullSource: { sourceUri } })` — see [Pull-input streams](/builders/pull-streams). Self-hosted edges can pull from RFC1918 / multicast sources via an explicit `allow_private_pull_sources` cluster flag.
+
+### Captions, chapters, transcription
+
+| Bunny Stream                                    | FrameWorks                                                                                  |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `AddCaption` (base64 sidecar)                   | Track upload not exposed today; planned alongside transcription                             |
+| Smart Chapters / auto-generated chapter markers | Not yet — see [roadmap](/roadmap)                                                           |
+| Transcribe AI                                   | Not yet — Live Transcription is on the roadmap                                              |
+| Watermarking                                    | Not exposed as a managed feature; possible via custom transcode profiles on dedicated edges |
+
+### Player and embed
+
+| Bunny Stream                                               | FrameWorks                                                                    |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `<iframe src="iframe.mediadelivery.net/embed/...">`        | `<fw-player content-id="..." content-type="vod">` Web Component               |
+| Player.js Playback Control API                             | `@livepeer-frameworks/player-core` exposes an equivalent imperative API       |
+| Native iOS (Swift) and Android (Kotlin) SDKs               | No first-party native SDKs today; HLS over native players works in WebView/RN |
+| Custom CSS, colors, language                               | CSS custom properties (`--fw-*`), 17 themes, en/es/fr/de/nl                   |
+| React, Vue, Svelte wrappers via 3rd-party (e.g. FV Player) | First-party `@livepeer-frameworks/player-{react,svelte,wc,core}`              |
+
+### Playback delivery
+
+| Bunny Stream                         | FrameWorks                                                                         |
+| ------------------------------------ | ---------------------------------------------------------------------------------- |
+| HLS, MPEG-DASH                       | HLS, LL-HLS (CMAF), MPEG-DASH, WHEP/WebRTC, MP4, WebM/MKV, WebSocket               |
+| MP4 progressive download             | MP4 progressive download                                                           |
+| Multi-audio tracks (single manifest) | Supported by the underlying media engine; not yet exposed as a managed surface     |
+| Large global CDN footprint           | Smaller managed footprint, plus sovereign / hybrid / marketplace cluster placement |
+
+### Access control
+
+| Bunny Stream                                               | FrameWorks                                                                |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Signed token URL (SHA-256, IP / country bound)             | ES256 JWT signing keys → `?jwt=<token>` (HLS, LL-HLS, DASH, WHEP, MP4)    |
+| Allowed / blocked referrers (hotlink protection)           | Implementable via `setPlaybackPolicy` with `type: WEBHOOK`                |
+| Allowed / blocked countries, IP allow-deny                 | Implement via `WEBHOOK` policy; managed geo / IP lists not exposed yet    |
+| MediaCage Basic (token-only)                               | Same target — JWT or webhook policy                                       |
+| MediaCage Enterprise Multi-DRM ($99/mo + per-license fees) | DRM (FairPlay / Widevine / PlayReady) is in development — not yet exposed |
+
+See [Playback Access Control](/builders/playback-access-control) for the FrameWorks model and ES256 JWT examples. Signing keys are tenant-scoped and do not transfer between platforms — reissue them on FrameWorks.
+
+### Real-time events
+
+Bunny Stream webhooks are processing-status callbacks, not named events. The payload is `{ VideoLibraryId, VideoGuid, Status }` with numeric `Status` codes, signed via `X-BunnyStream-Signature-Algorithm: hmac-sha256` plus `X-BunnyStream-Signature` (lowercase hex HMAC-SHA256). Playback view events ride the [Statistics API](https://docs.bunny.net/stream/statistics), not webhooks.
+
+| Bunny Stream `Status`                                    | FrameWorks                                                                 |
+| -------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `0` Queued · `1` Processing · `2` Encoding               | `liveVodLifecycle` (PROCESSING)                                            |
+| `3` Finished · `4` Resolution finished                   | `liveVodLifecycle` (READY)                                                 |
+| `5` Failed · `8` PresignedUploadFailed                   | `liveVodLifecycle` (FAILED)                                                |
+| `6` PresignedUploadStarted · `7` PresignedUploadFinished | `vodUploadStatus` query, or `liveVodLifecycle`                             |
+| `9` CaptionsGenerated · `10` TitleOrDescriptionGenerated | No equivalent — auto-captions and auto-titles are roadmap items            |
+| Playback / view events (Statistics API)                  | `liveConnectionEvents(streamId)` for live; `analytics` query for VOD       |
+| HMAC-SHA256 outbound POST                                | GraphQL subscriptions (WebSocket); polling fallback on `vodAsset(id)` etc. |
+
+<Aside type="caution">
+  FrameWorks does not deliver outbound HTTP webhooks today — events flow over GraphQL subscriptions
+  (WebSocket). If your environment can't hold an open subscription, fall back to polling the
+  relevant query (`vodAsset(id)`, `vodUploadStatus`) on a short interval. HTTP-callback delivery is
+  tracked in the outbound-webhooks RFC.
+</Aside>
+
+### Adjacent Bunny products — keep them
+
+These are Bunny's broader edge platform, not Stream features. FrameWorks is a video platform, not a general-purpose edge suite today, so these workloads should stay on Bunny while you move video:
+
+- **Bunny CDN** (general-purpose HTTP CDN) — Generic CDN / Proxy is on the FrameWorks [roadmap](/roadmap), not in product today.
+- **Bunny Edge Storage** (S3-compatible object storage) — FrameWorks has edge-cluster object storage in the pipeline and standalone managed object / block storage on the roadmap.
+- **Bunny DNS** (scriptable Anycast DNS) — self-hosted anycast DNS and managed DNS with health checks, latency-based routing, and geo routing are on the roadmap.
+- **Bunny Optimizer** (image optimization, WebP, minification) — out of scope for FrameWorks.
+- **Magic Containers** (edge compute) — out of scope for FrameWorks.
+- **Bunny Shield** (DDoS, rate limiting, WAF) — out of scope for FrameWorks.
+
+For everything else above, your Bunny account stays your Bunny account; FrameWorks billing is separate (PAYG, prepaid, or postpaid; ETH/USDC/x402 if you want it). If you want to track the non-video infrastructure pieces, watch the Platform & Infrastructure section of the [roadmap](/roadmap).
+
+## Step-by-step
+
+### 1. Create a FrameWorks account
+
+Sign up at [%APP_URL%](%APP_URL%) — email + password, or sign in with an EVM wallet if you'd rather skip email entirely.
+
+### 2. Decide your shape
+
+- **Pure VOD migration** — you only ever uploaded prerecorded files to Bunny Stream. Move the asset library and re-embed.
+- **Live-first cutover** — you've been doing OBS-record-then-upload because Bunny doesn't offer live ingest. This is the strongest fit; you switch to first-class RTMP/SRT/WHIP plus DVR.
+- **Hybrid: keep Bunny CDN/Storage/DNS** — only the video workload moves; non-video stays on Bunny's edge platform.
+
+### 3. Move VOD assets
+
+```graphql
+# Step 1 — open an upload session
+mutation {
+  createVodUpload(
+    input: { filename: "keynote.mp4", sizeBytes: 524288000, title: "Keynote Recording" }
+  ) {
+    ... on VodUploadSession {
+      id
+      playbackId
+      partSize
+      expiresAt
+      parts {
+        partNumber
+        presignedUrl
+      }
+    }
+  }
+}
+```
+
+PUT each part to its presigned URL, then call `completeVodUpload` with the returned ETags. Subscribe to `liveVodLifecycle` (or poll `vodUploadStatus`) for progress.
+
+For a sizeable Bunny library, FrameWorks doesn't ship a one-shot URL-pull importer today — [open an in-app ticket](%APP_URL%/support) or message us in [Discord](%DISCORD_URL%) so we can scope the migration.
+
+### 4. (Live customers) Repoint your encoder
+
+If you were running OBS / FFmpeg / a hardware encoder against your own infra and uploading recordings to Bunny, you can now skip that step entirely. Create a stream:
+
+```graphql
+mutation CreateStream {
+  createStream(input: { name: "my-first-stream" }) {
+    ... on Stream {
+      id
+      streamKey
+      playbackId
+    }
+  }
+}
+```
+
+Point your encoder at the FrameWorks RTMP/RTMPS, E-RTMP, SRT, or WHIP endpoint (resolved via the dashboard or `resolveIngestEndpoint(streamKey)`). DVR is a flag at create time (`record: true`) or post-create with `startDVR(streamId)`.
+
+### 5. Swap the embed
+
+If you were using Bunny's iframe embed:
+
+```diff
+- <iframe
+-   src="https://iframe.mediadelivery.net/embed/{libraryId}/{videoGuid}"
+-   allow="autoplay; encrypted-media"
+-   allowfullscreen>
+- </iframe>
++ <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/fw-player.js"></script>
++ <fw-player content-id="{playbackId}" content-type="vod" gateway-url="%GATEWAY_URL%/graphql"></fw-player>
+```
+
+React, Svelte, and headless options are first-class:
+
+- `@livepeer-frameworks/player-react`
+- `@livepeer-frameworks/player-svelte`
+- `@livepeer-frameworks/player-core` (vanilla / headless, with an imperative control API similar in spirit to Player.js)
+
+See [Player (Playback)](/builders/playback) for theming and the full prop surface.
+
+### 6. Rewire REST as GraphQL
+
+Pick your client:
+
+- **Houdini** (SvelteKit-native) — what we use internally
+- **urql** or **Apollo** for React
+- **graphql-request** for plain Node / Bun scripts
+
+Codegen against the schema gives you typed queries and mutations:
+
+```bash
+pnpm dlx graphql-codegen \
+  --schema %GATEWAY_URL%/graphql \
+  --documents 'src/**/*.graphql' \
+  --generates ./src/gql/generated.ts:typescript,typescript-operations
+```
+
+The schema lives at [`pkg/graphql/schema.graphql`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql); the playground is at [`%GATEWAY_URL%/graphql/playground`](%GATEWAY_URL%/graphql/playground).
+
+### 7. Translate access control
+
+If your Bunny videos are public, no extra work — move to the new `playbackId` and update embeds.
+
+If you used Bunny signed URLs, hotlink protection, country/IP rules, or MediaCage:
+
+- **Bunny signed URL** → `createSigningKey` mutation (ES256, asymmetric, private PEM returned once) plus `setPlaybackPolicy` with `type: JWT`. Tokens travel as `?jwt=<token>` (works across HLS, LL-HLS, DASH, WHEP, MP4) or `Authorization: Bearer` on request paths that can carry headers.
+- **Hotlink / referrer protection, country block, IP allow-deny** → `setPlaybackPolicy` with `type: WEBHOOK`. FrameWorks POSTs an HMAC-signed body; your endpoint returns 200 to allow, anything else to deny. Geo and IP rules are decisions you implement inside that callback today.
+- **MediaCage Enterprise Multi-DRM** → DRM (FairPlay / Widevine / PlayReady) is in development with the [MistServer](https://mistserver.org/) team; we co-maintain the upstream engine. Wait for DRM GA or stay on Bunny for that subset.
+
+```graphql
+mutation {
+  createSigningKey(input: { name: "primary" }) {
+    ... on CreateSigningKeySuccess {
+      signingKey {
+        id
+        kid
+        publicKeyPem
+      }
+      privateKeyPem
+    }
+  }
+}
+```
+
+See [Playback Access Control](/builders/playback-access-control) for the full model and code samples. Signing keys are tenant-scoped and do not transfer between platforms — reissue them.
+
+### 8. (Optional) Re-attach multistream targets
+
+If you had to push from Bunny → Twitch/YouTube via a side tool, push targets are first-class on FrameWorks:
+
+```graphql
+mutation Restream {
+  createPushTarget(
+    streamId: "stream_xxx"
+    input: {
+      platform: "twitch"
+      name: "Twitch — main channel"
+      targetUri: "rtmp://live.twitch.tv/app/live_xxxxxxxxxx_xxx"
+    }
+  ) {
+    id
+    status
+  }
+}
+```
+
+### 9. Validate side by side
+
+Run a low-traffic test through both platforms in parallel for a day. Watch the FrameWorks side via `liveStreamEvents` and `liveViewerMetrics`, compare against the Bunny dashboard, and only flip embeds once you trust the numbers.
+
+## What you gain on FrameWorks
+
+- **First-class live ingest** — RTMP/RTMPS, E-RTMP (HEVC/AV1 contribution over RTMP), SRT, and WHIP. Bunny customers who've been recording-then-uploading get the most leverage here.
+- **Pull-input streams** — point FrameWorks at an RTSP camera, an SRT/RIST contribution feed, an HLS or MPEG-TS source, or another Mist origin (DTSC). Self-hosted edges can also pull from private (RFC1918) or multicast sources via an explicit cluster flag. See [Pull-input streams](/builders/pull-streams). On the [roadmap](/roadmap): an **AV Device Discovery** drop-in app for ONVIF cameras, VISCA PTZ, NDI sources, USB webcams, and HDMI capture.
+- **DVR + clipping while live** — recording is on by default for streams that opt in; viewers can time-shift on the same playback ID, and you can mint clips from either the live ring or the persisted DVR via the clip API.
+- **LL-HLS, DASH, WHEP/WebRTC, MP4, WebSocket** — the underlying engine is [MistServer](https://mistserver.org/), which we co-maintain. CMAF output, sub-second WHEP, and a custom MSE WebSocket player are all there alongside HLS.
+- **Sprite-sheet seek previews** — a 10×10 grid plus a WebVTT cue file generated for every recording, ready for hover-scrub UIs.
+- **Multistream targets** — Twitch, YouTube, Facebook, Kick, X, and custom RTMP/RTMPS/SRT — see [Multistreaming](/builders/multistreaming).
+- **Cross-cluster federation** — one viewer pool routed across clusters; the closer edge wins automatically.
+- **Self-hosting and hybrid hosting** — run the whole stack on your hardware, or mix BYO edge with our managed control plane. Hybrid is experimental — see the beta flags below.
+- **Agent-first surface** — MCP server at [`/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json), wallet auth (EIP-191), gasless USDC payments via x402 (EIP-3009). See [Agent Access](/agents/overview).
+- **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from the dashboard, the docs (`⌘J`), or MCP.
+- **Player on Svelte and as Web Components**, not just React.
+
+## Where Bunny still wins
+
+Worth being honest about, especially if you don't actually need live:
+
+- **Edge footprint at the volume tier.** Bunny's CDN footprint is broad and mature, on the same network you may already be buying for non-video traffic.
+- **Standard encoding included.** FrameWorks meters delivered minutes inclusive of bandwidth + transcoding + ABR; Bunny's standard encoding is bundled in storage/bandwidth pricing. (Bunny's [Premium Encoding](https://bunny.net/stream/premium-encoding/) for HEVC/AV1 and instant playback is separately priced.)
+- **MediaCage Enterprise Multi-DRM is generally available today** — FairPlay and Widevine, $99/month + per-license fees. FrameWorks DRM is still in development.
+- **Smart Chapters and Transcribe AI** — auto-chaptering plus hosted transcription/translation.
+- **Per-video heatmaps and retention curves** in the analytics surface.
+- **Native iOS (Swift) and Android (Kotlin) SDKs** for app developers.
+- **Bundled adjacent products** — Storage, DNS, Optimizer, Shield, Magic Containers in one account.
+
+## What's not yet at parity, and what's coming
+
+- **DRM** (FairPlay / Widevine / PlayReady) — in development with the [MistServer](https://mistserver.org/) team.
+- **Outbound HTTP webhooks** — GraphQL subscriptions today; the outbound-webhook surface is tracked in an RFC.
+- **Automatic chapter generation, transcription, caption auto-generation** — Live Transcription, Compositing, and Video Analysis are on the [roadmap](/roadmap).
+- **Per-video heatmaps and retention curves** — QoE Analytics RFC.
+- **Per-region replication knob** — FrameWorks uses cluster placement instead of a 1-of-N replication slider; if you used Bunny's 1–9 region replication, plan which cluster (or set of hybrid edges) to anchor your assets to.
+- **Managed iframe-embed-as-a-product** — `<fw-player>` is the closest replacement.
+- **First-class Python, PHP, C#, Java, Go SDKs** — internal Go clients exist; use GraphQL codegen against the schema until first-party SDKs ship.
+- **VOD URL-pull import** — no `POST /fetch` equivalent or one-shot bulk Bunny → FrameWorks importer today. [Open an in-app ticket](%APP_URL%/support) for sizeable libraries.
+- **Watermarking as a managed feature** — possible via custom transcode profiles on dedicated / self-hosted clusters, not as a tenant-level toggle.
+- **VOD asset metadata-edit mutation** — title and description are set on `createVodUpload`; there's no `updateVodAsset` today.
+
+## Beta and tricky bits
+
+Heads-up so nothing surprises you:
+
+- **Billing is in beta.** Rates may adjust as we scale, but you keep the allowances you signed up for through beta.
+- **Hybrid edge deployment** is experimental — fine for testing, not for production-critical traffic.
+- **Cluster marketplace** is in progress. Public clusters work; the operator-marketplace flow is still being built.
+- **GraphQL learning curve.** If you've never written a query, the [docs playground](%GATEWAY_URL%/graphql/playground) is the quickest way to inspect available fields. Skipper can also draft queries.
+- **Subscriptions are connection-oriented.** Polling fallback is fine if a long-lived connection is awkward in your stack.
+- **The embed swap is not API-compatible.** `<iframe>` becomes `<fw-player>`; Player.js consumers can move to `@livepeer-frameworks/player-core`'s control API, but it's a port, not a drop-in.
+- **Per-region storage was a knob; now it's cluster placement.** We don't replicate to "5 of 9" zones the same way Bunny does.
+- **Playback IDs and asset IDs are not transferable.** Reissue and update embeds.
+- **Playback signing is not key-portable.** Re-create signing keys in FrameWorks and update token transport from Bunny query-string tokens to `?jwt=` or `Authorization: Bearer`.
+- **DRM-protected content cannot move yet.** Wait for DRM GA or keep that subset on Bunny.
+
+## Get help
+
+Pick whichever channel fits.
+
+| Channel                     | Best for                                                                                    | Where                                                        |
+| --------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| **Skipper** (AI consultant) | Quick troubleshooting, API discovery, diagnostics, after-hours, non-human callers           | Dashboard `/skipper` · `⌘J` in docs · MCP at `/mcp`          |
+| **In-app ticketing**        | Account-specific issues, billing, anything tied to your tenant data, library-migration help | Dashboard `/support`                                         |
+| **Forum**                   | Long-form Q&A, recipes, searchable community knowledge                                      | [forum.frameworks.network](https://forum.frameworks.network) |
+| **Discord**                 | Real-time chat, casual questions                                                            | [Join](%DISCORD_URL%)                                        |
+| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](%GITHUB_URL%)                 |
