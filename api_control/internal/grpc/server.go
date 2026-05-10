@@ -4037,7 +4037,7 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRe
 		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
 		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
 		       p.source_uri_enc, p.enabled
-		FROM commodore.streams
+		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.user_id = $1 AND s.tenant_id = $2`
 	args := []interface{}{userID, tenantID}
@@ -5379,7 +5379,7 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStream
 		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
 		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
 		       p.source_uri_enc, p.enabled
-		FROM commodore.streams
+		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.id = ANY($1) AND s.user_id = $2 AND s.tenant_id = $3
 	`, pq.Array(streamIDs), userID, tenantID)
@@ -5412,7 +5412,7 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
 		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
 		       p.source_uri_enc, p.enabled
-		FROM commodore.streams
+		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.id = $1 AND s.user_id = $2 AND s.tenant_id = $3
 	`, streamID, userID, tenantID).Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
