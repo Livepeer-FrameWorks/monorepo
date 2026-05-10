@@ -324,7 +324,7 @@ func TestRequestFreezePermission_Approved(t *testing.T) {
 		PresignedPutUrl: "https://s3.example.com/put?sig=abc",
 	})
 
-	<-done
+	waitForTestDone(t, done, "freeze permission request")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -406,7 +406,7 @@ func TestRequestCanDelete_Safe(t *testing.T) {
 		WarmDurationMs: 3600000,
 	})
 
-	<-done
+	waitForTestDone(t, done, "can-delete safe request")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestRequestCanDelete_NotSafe(t *testing.T) {
 		Reason:       "not_synced",
 	})
 
-	<-done
+	waitForTestDone(t, done, "can-delete unsafe request")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -523,7 +523,7 @@ func TestValidateEdgeToken_Fresh(t *testing.T) {
 		TenantId: "tenant-abc",
 	})
 
-	<-done
+	waitForTestDone(t, done, "edge token validation request")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

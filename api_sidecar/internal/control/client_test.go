@@ -67,6 +67,52 @@ func (f *fakeControlStream) RecvMsg(_ any) error {
 	return nil
 }
 
+func waitForTestDone(t *testing.T, ch <-chan struct{}, reason string) {
+	t.Helper()
+
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout waiting for %s", reason)
+	}
+}
+
+func waitForControlMessage(t *testing.T, ch <-chan *pb.ControlMessage, reason string) *pb.ControlMessage {
+	t.Helper()
+
+	select {
+	case msg := <-ch:
+		return msg
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout waiting for %s", reason)
+		return nil
+	}
+}
+
+func waitForMistTriggerResult(t *testing.T, ch <-chan *MistTriggerResult, reason string) *MistTriggerResult {
+	t.Helper()
+
+	select {
+	case result := <-ch:
+		return result
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout waiting for %s", reason)
+		return nil
+	}
+}
+
+func waitForError(t *testing.T, ch <-chan error, reason string) error {
+	t.Helper()
+
+	select {
+	case err := <-ch:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout waiting for %s", reason)
+		return nil
+	}
+}
+
 func TestSendDesiredStateResultPersistsBeforeSelfRestart(t *testing.T) {
 	resetTestOutbox(t)
 	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
@@ -380,15 +426,15 @@ func TestSendMistTriggerReconnectsAndReceivesResponse(t *testing.T) {
 		errCh <- e
 	}()
 
-	<-stream.sendCh
+	waitForControlMessage(t, stream.sendCh, "reconnected Mist trigger send")
 	waitForPendingTrigger(t, trigger.RequestId)
 	handleMistTriggerResponse(&pb.MistTriggerResponse{
 		RequestId: "req-reconnect",
 		Response:  "ok",
 	})
 
-	result := <-resultCh
-	err := <-errCh
+	result := waitForMistTriggerResult(t, resultCh, "Mist trigger result after reconnect")
+	err := waitForError(t, errCh, "Mist trigger error after reconnect")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -496,7 +542,7 @@ func TestSendMistTriggerRetriesAfterDisconnect(t *testing.T) {
 		errCh <- err
 	}()
 
-	<-stream1.sendCh
+	waitForControlMessage(t, stream1.sendCh, "initial Mist trigger send")
 	waitForPendingTrigger(t, trigger.RequestId)
 
 	select {
@@ -511,14 +557,14 @@ func TestSendMistTriggerRetriesAfterDisconnect(t *testing.T) {
 	storeConn(stream2, "")
 	signalReconnect()
 
-	<-stream2.sendCh
+	waitForControlMessage(t, stream2.sendCh, "retried Mist trigger send after reconnect")
 	handleMistTriggerResponse(&pb.MistTriggerResponse{
 		RequestId: trigger.RequestId,
 		Response:  "ack",
 	})
 
-	result := <-resultCh
-	err := <-errCh
+	result := waitForMistTriggerResult(t, resultCh, "Mist trigger retry result")
+	err := waitForError(t, errCh, "Mist trigger retry error")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
