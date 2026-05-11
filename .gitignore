@@ -109,6 +109,7 @@ api_sidecar/helmsman
 api_tenants/quartermaster
 api_ticketing/deckhand
 api_assets/chandler
+scripts/registry/registry
 
 # Security & Sensitive
 *.pem
