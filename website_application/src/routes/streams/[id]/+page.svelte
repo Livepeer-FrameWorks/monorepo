@@ -140,6 +140,7 @@
     streamCore
       ? {
           ...streamCore,
+          recentPullSourceEvents: maskedStream?.recentPullSourceEvents ?? [],
           playbackPolicy: maskedStream?.playbackPolicy ?? null,
           metrics: streamMetrics,
         }

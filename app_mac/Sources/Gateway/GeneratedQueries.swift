@@ -483,13 +483,6 @@ enum GQL {
       enabled
       class
     }
-    recentPullSourceEvents(limit: 10) {
-      id
-      internalName
-      eventKind
-      detail
-      createdAt
-    }
     createdAt
     updatedAt
   }
@@ -2638,6 +2631,13 @@ enum GQL {
   query GetStream($id: ID!, $streamId: ID!, $timeRange: TimeRangeInput) {
     stream(id: $id) {
       ...StreamCoreFields
+      recentPullSourceEvents(limit: 10) {
+        id
+        internalName
+        eventKind
+        detail
+        createdAt
+      }
       playbackPolicy {
         ...PlaybackPolicyFields
       }
