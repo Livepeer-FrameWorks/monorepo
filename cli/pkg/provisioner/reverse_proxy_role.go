@@ -301,6 +301,9 @@ func writeNginxProxyBlock(b *strings.Builder, site proxySite) {
         send_timeout %s;
         proxy_request_buffering %s;
         proxy_buffering %s;
+        proxy_buffer_size %s;
+        proxy_buffers %s;
+        proxy_busy_buffers_size %s;
         proxy_connect_timeout %s;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -313,6 +316,9 @@ func writeNginxProxyBlock(b *strings.Builder, site proxySite) {
 		firstNonEmpty(site.SendTimeout, profile.SendTimeout),
 		onOff(site.ProxyRequestBuffering.Or(profile.ProxyRequestBuffering)),
 		onOff(site.ProxyBuffering.Or(profile.ProxyBuffering)),
+		firstNonEmpty(site.ProxyBufferSize, profile.ProxyBufferSize),
+		firstNonEmpty(site.ProxyBuffers, profile.ProxyBuffers),
+		firstNonEmpty(site.ProxyBusyBuffersSize, profile.ProxyBusyBuffersSize),
 		firstNonEmpty(site.ProxyConnectTimeout, profile.ProxyConnectTimeout),
 	)
 	if site.Websocket.Or(profile.Websocket) {
@@ -360,6 +366,9 @@ type nginxProxyProfileConfig struct {
 	SendTimeout           string
 	ProxyRequestBuffering bool
 	ProxyBuffering        bool
+	ProxyBufferSize       string
+	ProxyBuffers          string
+	ProxyBusyBuffersSize  string
 	ProxyConnectTimeout   string
 	ProxyReadTimeout      string
 	ProxySendTimeout      string
@@ -375,6 +384,9 @@ func nginxProxyProfile(profile string) nginxProxyProfileConfig {
 			SendTimeout:           "60s",
 			ProxyRequestBuffering: true,
 			ProxyBuffering:        true,
+			ProxyBufferSize:       "32k",
+			ProxyBuffers:          "8 32k",
+			ProxyBusyBuffersSize:  "64k",
 			ProxyConnectTimeout:   "5s",
 			ProxyReadTimeout:      "300s",
 			ProxySendTimeout:      "300s",
@@ -387,6 +399,9 @@ func nginxProxyProfile(profile string) nginxProxyProfileConfig {
 			SendTimeout:           "900s",
 			ProxyRequestBuffering: false,
 			ProxyBuffering:        false,
+			ProxyBufferSize:       "32k",
+			ProxyBuffers:          "8 32k",
+			ProxyBusyBuffersSize:  "64k",
 			ProxyConnectTimeout:   "5s",
 			ProxyReadTimeout:      "900s",
 			ProxySendTimeout:      "900s",
@@ -399,6 +414,9 @@ func nginxProxyProfile(profile string) nginxProxyProfileConfig {
 			SendTimeout:           "300s",
 			ProxyRequestBuffering: false,
 			ProxyBuffering:        true,
+			ProxyBufferSize:       "32k",
+			ProxyBuffers:          "8 32k",
+			ProxyBusyBuffersSize:  "64k",
 			ProxyConnectTimeout:   "5s",
 			ProxyReadTimeout:      "300s",
 			ProxySendTimeout:      "300s",
@@ -411,6 +429,9 @@ func nginxProxyProfile(profile string) nginxProxyProfileConfig {
 			SendTimeout:           "60s",
 			ProxyRequestBuffering: true,
 			ProxyBuffering:        true,
+			ProxyBufferSize:       "32k",
+			ProxyBuffers:          "8 32k",
+			ProxyBusyBuffersSize:  "64k",
 			ProxyConnectTimeout:   "5s",
 			ProxyReadTimeout:      "300s",
 			ProxySendTimeout:      "300s",
@@ -466,6 +487,9 @@ type proxySite struct {
 	SendTimeout           string
 	ProxyRequestBuffering optionalBool
 	ProxyBuffering        optionalBool
+	ProxyBufferSize       string
+	ProxyBuffers          string
+	ProxyBusyBuffersSize  string
 	ProxyConnectTimeout   string
 	ProxyReadTimeout      string
 	ProxySendTimeout      string
@@ -518,6 +542,15 @@ func proxySiteMapsForMode(metadata map[string]any, mode string) []map[string]any
 		if site.ProxyBuffering.set {
 			item["proxy_buffering"] = site.ProxyBuffering.value
 		}
+		if site.ProxyBufferSize != "" {
+			item["proxy_buffer_size"] = site.ProxyBufferSize
+		}
+		if site.ProxyBuffers != "" {
+			item["proxy_buffers"] = site.ProxyBuffers
+		}
+		if site.ProxyBusyBuffersSize != "" {
+			item["proxy_busy_buffers_size"] = site.ProxyBusyBuffersSize
+		}
 		if site.ProxyConnectTimeout != "" {
 			item["proxy_connect_timeout"] = site.ProxyConnectTimeout
 		}
@@ -557,6 +590,9 @@ func normalizeProxySites(metadata map[string]any, mode string) []proxySite {
 			SendTimeout:           stringValue(raw["send_timeout"]),
 			ProxyRequestBuffering: boolValue(raw["proxy_request_buffering"]),
 			ProxyBuffering:        boolValue(raw["proxy_buffering"]),
+			ProxyBufferSize:       stringValue(raw["proxy_buffer_size"]),
+			ProxyBuffers:          stringValue(raw["proxy_buffers"]),
+			ProxyBusyBuffersSize:  stringValue(raw["proxy_busy_buffers_size"]),
 			ProxyConnectTimeout:   stringValue(raw["proxy_connect_timeout"]),
 			ProxyReadTimeout:      stringValue(raw["proxy_read_timeout"]),
 			ProxySendTimeout:      stringValue(raw["proxy_send_timeout"]),

@@ -1577,6 +1577,38 @@ func TestEnsureMonitor_CreatesNew(t *testing.T) {
 	}
 }
 
+func TestEnsureMonitor_RootIngressUsesCloudflareCompatibleExpectedCodes(t *testing.T) {
+	var created cloudflare.Monitor
+	cf := &fakeCloudflareClient{
+		listMonitors: func() ([]cloudflare.Monitor, error) {
+			return nil, nil
+		},
+		createMonitor: func(monitor cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			created = monitor
+			monitor.ID = "new-mon"
+			return &monitor, nil
+		},
+	}
+	m := newTestManager(cf)
+
+	id, err := m.ensureMonitor(rootIngressPoolServiceType)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "new-mon" {
+		t.Fatalf("expected new-mon, got %s", id)
+	}
+	if created.ExpectedCodes != "200-299" {
+		t.Fatalf("expected Cloudflare-compatible 2xx range, got %q", created.ExpectedCodes)
+	}
+	if !created.FollowRedirects {
+		t.Fatal("expected root ingress monitor to follow redirects")
+	}
+	if created.Path != "/" {
+		t.Fatalf("expected root ingress path /, got %q", created.Path)
+	}
+}
+
 func TestEnsureMonitor_ListError(t *testing.T) {
 	cf := &fakeCloudflareClient{
 		listMonitors: func() ([]cloudflare.Monitor, error) {

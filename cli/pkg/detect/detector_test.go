@@ -2,6 +2,7 @@ package detect
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
@@ -67,6 +68,33 @@ func TestDetect_InventoryMissServiceFoundInDocker(t *testing.T) {
 	}
 }
 
+func TestDetect_DockerRequiresExactContainerName(t *testing.T) {
+	t.Parallel()
+	r := &fakeRunner{
+		responses: []fakeResponse{
+			{matchPrefix: "cat /etc/frameworks/inventory.json", exitCode: 1, stderr: "No such file"},
+			{
+				matchPrefix: "docker ps -a --filter name=frameworks-chatwoot ",
+				exitCode:    0,
+				stdout:      "frameworks-chatwoot|running|chatwoot/chatwoot:v3.14.0\nframeworks-chatwoot-worker|running|chatwoot/chatwoot:v3.14.0",
+			},
+			{matchPrefix: "docker inspect", exitCode: 0, stdout: "true"},
+		},
+	}
+	d := newDetectorWithRunner(inventory.Host{ExternalIP: "1.2.3.4", User: "root"}, r)
+
+	state, err := d.Detect(context.Background(), "chatwoot")
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if state.Metadata["container_name"] != "frameworks-chatwoot" {
+		t.Fatalf("container_name=%q", state.Metadata["container_name"])
+	}
+	if state.Version != "v3.14.0" {
+		t.Fatalf("version=%q, want v3.14.0", state.Version)
+	}
+}
+
 // TestDetect_AllMethodsFailReturnsNotFound verifies that exhaustively failing
 // probes yield Exists=false rather than bubbling up an error.
 func TestDetect_AllMethodsFailReturnsNotFound(t *testing.T) {
@@ -110,5 +138,42 @@ func TestDetect_NonZeroExitIsNotHardFailure(t *testing.T) {
 	// Chain must have progressed past inventory and docker to systemd.
 	if len(r.calls) < 3 {
 		t.Fatalf("expected the detector to try multiple methods, got %d calls", len(r.calls))
+	}
+}
+
+func TestDetect_SystemdReadsNativePlatformVersion(t *testing.T) {
+	t.Parallel()
+	r := &fakeRunner{
+		responses: []fakeResponse{
+			{matchPrefix: "cat /etc/frameworks/inventory.json", exitCode: 1},
+			{matchPrefix: "docker ps -a", exitCode: 1},
+			{
+				matchPrefix: "systemctl show",
+				exitCode:    0,
+				stdout: strings.Join([]string{
+					"LoadState=loaded",
+					"ActiveState=active",
+					"SubState=running",
+					"ExecStart={ path=/opt/frameworks/quartermaster/quartermaster ; argv[]=/opt/frameworks/quartermaster/quartermaster serve ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }",
+				}, "\n"),
+			},
+			{
+				matchPrefix: "'/opt/frameworks/quartermaster/quartermaster' version --json",
+				exitCode:    0,
+				stdout:      `{"version":"v0.2.32","component_name":"quartermaster","component_version":"0.2.0"}`,
+			},
+		},
+	}
+	d := newDetectorWithRunner(inventory.Host{ExternalIP: "1.2.3.4", User: "root"}, r)
+
+	state, err := d.Detect(context.Background(), "quartermaster")
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if state.Version != "v0.2.32" {
+		t.Fatalf("version=%q, want v0.2.32", state.Version)
+	}
+	if state.Metadata["binary_path"] != "/opt/frameworks/quartermaster/quartermaster" {
+		t.Fatalf("binary_path=%q", state.Metadata["binary_path"])
 	}
 }

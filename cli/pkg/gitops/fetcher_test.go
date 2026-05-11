@@ -401,6 +401,23 @@ func TestGetServiceInfoPrefersURLOverFile(t *testing.T) {
 	}
 }
 
+func TestGetServiceInfoUsesPlatformVersionForLegacyComponentServiceVersion(t *testing.T) {
+	m := &Manifest{
+		PlatformVersion: "v0.2.32",
+		Services: []ServiceEntry{
+			{Name: "bridge", ServiceVersion: "0.2.0", Image: "img", Digest: "sha256:abc"},
+		},
+	}
+
+	info, err := m.GetServiceInfo("bridge")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Version != "v0.2.32" {
+		t.Fatalf("version=%q, want platform version v0.2.32", info.Version)
+	}
+}
+
 func TestFetchUsesNormalizedVersionCacheKey(t *testing.T) {
 	t.Parallel()
 

@@ -59,6 +59,9 @@ nginx_route_profiles:
     send_timeout: 60s
     proxy_request_buffering: true
     proxy_buffering: true
+    proxy_buffer_size: 32k
+    proxy_buffers: "8 32k"
+    proxy_busy_buffers_size: 64k
     proxy_connect_timeout: 5s
     proxy_read_timeout: 300s
     proxy_send_timeout: 300s
@@ -69,6 +72,9 @@ nginx_route_profiles:
     send_timeout: 60s
     proxy_request_buffering: true
     proxy_buffering: true
+    proxy_buffer_size: 32k
+    proxy_buffers: "8 32k"
+    proxy_busy_buffers_size: 64k
     proxy_connect_timeout: 5s
     proxy_read_timeout: 300s
     proxy_send_timeout: 300s
@@ -79,6 +85,9 @@ nginx_route_profiles:
     send_timeout: 900s
     proxy_request_buffering: false
     proxy_buffering: false
+    proxy_buffer_size: 32k
+    proxy_buffers: "8 32k"
+    proxy_busy_buffers_size: 64k
     proxy_connect_timeout: 5s
     proxy_read_timeout: 900s
     proxy_send_timeout: 900s
@@ -89,6 +98,9 @@ nginx_route_profiles:
     send_timeout: 300s
     proxy_request_buffering: false
     proxy_buffering: true
+    proxy_buffer_size: 32k
+    proxy_buffers: "8 32k"
+    proxy_busy_buffers_size: 64k
     proxy_connect_timeout: 5s
     proxy_read_timeout: 300s
     proxy_send_timeout: 300s

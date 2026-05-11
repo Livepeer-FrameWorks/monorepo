@@ -666,8 +666,8 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			// downstream bootstrap-admin user creation need it. Alias→UUID is
 			// QM-owned data and never read directly from the CLI.
 			systemTenantID, idErr := resolveSystemTenantIDViaQM(bootstrapCtx, manifest, runtimeData, raSession)
-			bootstrapCancel()
 			if idErr != nil {
+				bootstrapCancel()
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Resolve system tenant: %v", idErr))
 				fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
 				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
@@ -689,6 +689,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			// warning would turn a configuration error into invisible data
 			// loss. Clusters without livepeer-gateway can degrade gracefully.
 			ownerMap, ownerErr := resolveClusterOwnerTenantIDs(bootstrapCtx, manifest, runtimeData, raSession)
+			bootstrapCancel()
 			if ownerErr != nil {
 				if anyClusterRunsLivepeerGateway(manifest) {
 					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Resolve cluster owner tenants: %v", ownerErr))
@@ -1896,7 +1897,7 @@ func removedServicePlacements(ctx context.Context, manifest *inventory.Manifest,
 		}
 		deployName, ok := servicedefs.DeployName(serviceName, svc.Deploy)
 		if !ok {
-			return nil, fmt.Errorf("unknown service id: %s", serviceName)
+			continue
 		}
 		instances, err := serviceInstancesForService(ctx, client, serviceID)
 		if err != nil {

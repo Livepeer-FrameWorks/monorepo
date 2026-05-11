@@ -59,7 +59,6 @@ Existing databases/topics/tables will be skipped.`,
 
 // runInit executes the init command against an already-loaded manifest.
 func runInit(cmd *cobra.Command, rc *resolvedCluster, service string) error {
-	manifest := rc.Manifest
 	out := cmd.OutOrStdout()
 	ux.Heading(out, fmt.Sprintf("Initializing %s from manifest: %s", service, rc.ManifestPath))
 
@@ -79,7 +78,7 @@ func runInit(cmd *cobra.Command, rc *resolvedCluster, service string) error {
 
 	switch service {
 	case "kafka", "all":
-		if err := initKafka(ctx, cmd, manifest, sshPool); err != nil {
+		if err := initKafka(ctx, cmd, rc, sshPool); err != nil {
 			return fmt.Errorf("failed to initialize kafka: %w", err)
 		}
 	}
@@ -280,7 +279,8 @@ func configWithMetadata(config provisioner.ServiceConfig) provisioner.ServiceCon
 }
 
 // initKafka initializes Kafka topics
-func initKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
+func initKafka(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, pool *ssh.Pool) error {
+	manifest := rc.Manifest
 	if manifest.Infrastructure.Kafka == nil || !manifest.Infrastructure.Kafka.Enabled {
 		fmt.Fprintln(cmd.OutOrStdout(), "Kafka not enabled, skipping...")
 		return nil
@@ -320,9 +320,11 @@ func initKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.Mani
 	config := provisioner.ServiceConfig{
 		Port: broker.Port,
 		Metadata: map[string]any{
-			"topics": topicsConfig,
+			"platform_channel": manifest.ResolvedChannel(),
+			"topics":           topicsConfig,
 		},
 	}
+	rc.applyReleaseMetadata(config.Metadata)
 
 	return prov.Initialize(ctx, host, config)
 }

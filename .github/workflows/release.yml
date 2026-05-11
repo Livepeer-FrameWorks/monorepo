@@ -108,7 +108,7 @@ jobs:
           {
             "name": "${{ matrix.service.name }}",
             "digest": "${{ steps.build.outputs.digest }}",
-            "service_version": "${{ steps.svcver.outputs.version }}"
+            "service_version": "${{ github.ref_name }}"
           }
           JSON
 
@@ -191,7 +191,7 @@ jobs:
           {
             "name": "${{ matrix.service.name }}",
             "digest": "${{ steps.build.outputs.digest }}",
-            "service_version": "${{ steps.svcver.outputs.version }}"
+            "service_version": "${{ github.ref_name }}"
           }
           JSON
 

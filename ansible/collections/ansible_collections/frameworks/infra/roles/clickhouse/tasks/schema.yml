@@ -20,6 +20,36 @@
     label: "{{ item.name }}"
   when: clickhouse_schema_items | default([]) | length > 0
 
+- name: Probe ClickHouse baseline schema state
+  ansible.builtin.command:
+    argv: >-
+      {{ ['clickhouse-client',
+          '--host=' ~ frameworks_clickhouse_client_host,
+          '--port=' ~ (clickhouse_port_tcp | string),
+          '--database=' ~ item.database,
+          '-q',
+          "SELECT count() FROM system.tables WHERE database = '" ~ item.database ~ "' AND name != '_migrations' AND engine NOT LIKE '%View'"]
+         + (['--password', clickhouse_default_password]
+            if clickhouse_default_password | length > 0 else []) }}
+  register: clickhouse_schema_state_queries
+  changed_when: false
+  check_mode: false
+  loop: "{{ clickhouse_schema_items | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: "{{ clickhouse_default_password | length > 0 }}"
+  when: clickhouse_schema_items | default([]) | length > 0
+
+- name: Index ClickHouse baseline schema state by database
+  ansible.builtin.set_fact:
+    clickhouse_schema_has_tables_by_db: >-
+      {{ clickhouse_schema_has_tables_by_db | default({})
+         | combine({ item.item.database: ((item.stdout | default('0') | trim | int) > 0) }) }}
+  loop: "{{ clickhouse_schema_state_queries.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  no_log: true
+
 - name: Stage ClickHouse baseline schema SQL on target
   ansible.builtin.copy:
     content: "{{ item.sql }}"
@@ -34,6 +64,7 @@
   when:
     - clickhouse_schema_items | default([]) | length > 0
     - not ansible_check_mode
+    - not (clickhouse_schema_has_tables_by_db[item.database] | default(false))
 
 - name: Apply ClickHouse baseline schemas via clickhouse-client
   ansible.builtin.command:
@@ -54,6 +85,7 @@
   when:
     - clickhouse_schema_items | default([]) | length > 0
     - not ansible_check_mode
+    - not (clickhouse_schema_has_tables_by_db[item.database] | default(false))
 
 - name: Remove staged ClickHouse baseline schema files
   ansible.builtin.file:

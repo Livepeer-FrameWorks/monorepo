@@ -425,6 +425,50 @@ func TestReconcileRemovedServicePlacementsSkipsUnknownHosts(t *testing.T) {
 	}
 }
 
+func TestReconcileRemovedServicePlacementsSkipsNonDeployableRegistryServices(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"central-eu-1":  {ExternalIP: "203.0.113.10"},
+			"regional-eu-1": {ExternalIP: "203.0.113.11"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway": {Enabled: true, Hosts: []string{"regional-eu-1"}},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"telemetry": {Enabled: true, Host: "central-eu-1"},
+		},
+	}
+	assigner := &fakeFoghornClusterAssigner{
+		services: fakePoolServices("livepeer-gateway", "telemetry"),
+		instances: map[string][]*pb.ServiceInstance{
+			"livepeer-gateway": {
+				fakeServiceInstance("gateway-central", "livepeer-gateway", "central-eu-1", "running"),
+			},
+			"telemetry": {
+				fakeServiceInstance("telemetry-central", "telemetry", "central-eu-1", "running"),
+			},
+		},
+	}
+
+	var cleaned []string
+	cleanup := func(_ context.Context, placement removedServicePlacement) error {
+		cleaned = append(cleaned, placement.serviceName+"@"+placement.nodeID)
+		return nil
+	}
+
+	if err := reconcileRemovedServicePlacementsWithClient(context.Background(), &bytes.Buffer{}, manifest, orchestrator.PhaseAll, assigner, cleanup); err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	if got := strings.Join(cleaned, ","); got != "livepeer-gateway@central-eu-1" {
+		t.Fatalf("cleanup targets = %q, want stale deployable gateway only", got)
+	}
+	if len(assigner.drains) != 1 || assigner.drains[0].GetInstanceId() != "gateway-central" {
+		t.Fatalf("expected stale gateway assignment drain only, got %+v", assigner.drains)
+	}
+}
+
 func TestWriteRemovedServicePlacementDryRunPlanShowsCleanupActions(t *testing.T) {
 	placements := []removedServicePlacement{
 		{

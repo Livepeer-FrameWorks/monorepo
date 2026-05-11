@@ -154,8 +154,9 @@ func (d *Detector) detectFromDocker(ctx context.Context, serviceName string, sta
 			continue
 		}
 
-		// Parse output: name|status|image
-		parts := strings.Split(strings.TrimSpace(stdout), "|")
+		// Parse output: name|status|image. Docker's name filter is substring-
+		// based, so require an exact container name before accepting a row.
+		parts := exactDockerContainerRow(stdout, containerName)
 		if len(parts) < 3 {
 			continue
 		}
@@ -181,6 +182,16 @@ func (d *Detector) detectFromDocker(ctx context.Context, serviceName string, sta
 	return &DetectionResult{Method: "docker", Success: false}, nil
 }
 
+func exactDockerContainerRow(stdout, containerName string) []string {
+	for _, line := range strings.Split(stdout, "\n") {
+		parts := strings.Split(strings.TrimSpace(line), "|")
+		if len(parts) >= 3 && parts[0] == containerName {
+			return parts
+		}
+	}
+	return nil
+}
+
 // detectFromSystemd checks for systemd service
 func (d *Detector) detectFromSystemd(ctx context.Context, serviceName string, state *ServiceState) (*DetectionResult, error) {
 	serviceNames := []string{
@@ -189,7 +200,7 @@ func (d *Detector) detectFromSystemd(ctx context.Context, serviceName string, st
 	}
 
 	for _, svcName := range serviceNames {
-		cmd := fmt.Sprintf("systemctl show %s --property=LoadState,ActiveState,SubState", svcName)
+		cmd := fmt.Sprintf("systemctl show %s --property=LoadState,ActiveState,SubState,ExecStart", svcName)
 		exitCode, stdout, _ := d.runSSH(ctx, cmd)
 
 		if exitCode != 0 {
@@ -216,6 +227,15 @@ func (d *Detector) detectFromSystemd(ctx context.Context, serviceName string, st
 		state.Metadata["systemd_service"] = svcName
 		state.Metadata["active_state"] = props["ActiveState"]
 		state.Metadata["sub_state"] = props["SubState"]
+		if props["ExecStart"] != "" {
+			state.Metadata["exec_start"] = props["ExecStart"]
+			if bin := systemdExecPath(props["ExecStart"]); bin != "" {
+				state.Metadata["binary_path"] = bin
+				if version := d.readNativePlatformVersion(ctx, bin); version != "" {
+					state.Version = version
+				}
+			}
+		}
 
 		return &DetectionResult{Method: "systemd", Success: true, State: state}, nil
 	}
@@ -265,6 +285,56 @@ func (d *Detector) checkSystemdRunning(ctx context.Context, serviceName string, 
 	if exitCode == 0 {
 		state.Running = strings.TrimSpace(stdout) == "active"
 	}
+}
+
+func (d *Detector) readNativePlatformVersion(ctx context.Context, binaryPath string) string {
+	quoted := shellQuote(binaryPath)
+	cmd := fmt.Sprintf("%s version --json 2>/dev/null || %s version 2>/dev/null", quoted, quoted)
+	exitCode, stdout, _ := d.runSSH(ctx, cmd)
+	if exitCode != 0 {
+		return ""
+	}
+	out := strings.TrimSpace(stdout)
+	if out == "" {
+		return ""
+	}
+
+	var payload struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err == nil && strings.TrimSpace(payload.Version) != "" {
+		return strings.TrimSpace(payload.Version)
+	}
+
+	for _, line := range strings.Split(out, "\n") {
+		if before, after, ok := strings.Cut(line, ":"); ok && strings.TrimSpace(before) == "platform version" {
+			return strings.TrimSpace(after)
+		}
+	}
+	return ""
+}
+
+func systemdExecPath(execStart string) string {
+	for _, token := range strings.Fields(execStart) {
+		if strings.HasPrefix(token, "path=") {
+			return strings.Trim(strings.TrimPrefix(token, "path="), " ;")
+		}
+		if strings.HasPrefix(token, "argv[]=") {
+			argv := strings.TrimPrefix(token, "argv[]=")
+			if first, _, ok := strings.Cut(argv, " "); ok {
+				return strings.Trim(first, " ;")
+			}
+			return strings.Trim(argv, " ;")
+		}
+	}
+	return ""
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // getDefaultPort returns the default port for a service
