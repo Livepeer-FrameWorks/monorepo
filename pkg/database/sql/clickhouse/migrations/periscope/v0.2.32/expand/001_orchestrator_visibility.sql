@@ -1,4 +1,4 @@
--- v0.2.31 expand: orchestrator visibility tables
+-- v0.2.32 expand: orchestrator visibility tables
 --
 -- Adds per-orchestrator state, per-vantage observation, raw discovery samples,
 -- 5m/1h discovery rollups, transcode outcomes (raw + hourly rollup), and AI
@@ -7,7 +7,7 @@
 -- (one per gateway/orch_addr/resolved_ip), not collapsed.
 --
 -- Apply order: this is an expand-only migration. Safe to apply before the
--- v0.2.31 services start emitting; tables stay empty until the gateway begins
+-- v0.2.32 services start emitting; tables stay empty until the gateway begins
 -- sending SendGatewayTelemetry events.
 --
 -- This migration is also baked into the baseline periscope.sql for fresh
