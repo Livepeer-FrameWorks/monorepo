@@ -68,7 +68,7 @@
           '--database=' ~ db_entry,
           '-q',
           "SELECT concat(version, ':', phase, ':', toString(seq)) AS key,
-                  argMax(checksum, applied_at) AS checksum,
+                  argMax(checksum, applied_at) AS latest_checksum,
                   uniqExact(checksum) AS distinct_checksums,
                   count() AS row_count
            FROM _migrations
