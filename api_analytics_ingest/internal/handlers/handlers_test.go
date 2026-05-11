@@ -233,6 +233,24 @@ func TestRoutingClusterHourlyMVCoalescesNullableMeasures(t *testing.T) {
 	}
 }
 
+func TestFederationHourlyMVCoalescesNullableMeasures(t *testing.T) {
+	content, err := dbsql.Content.ReadFile("clickhouse/periscope.sql")
+	if err != nil {
+		t.Fatalf("read ClickHouse schema: %v", err)
+	}
+
+	schema := string(content)
+	required := []string{
+		"sum(ifNull(latency_ms, 0)) AS sum_latency_ms",
+		"sum(ifNull(time_to_live_ms, 0)) AS sum_time_to_live_ms",
+	}
+	for _, expr := range required {
+		if !strings.Contains(schema, expr) {
+			t.Fatalf("federation_hourly_mv missing null-safe expression %q", expr)
+		}
+	}
+}
+
 func TestValueOrNilUint64Ptr(t *testing.T) {
 	zero := uint64(0)
 	value := uint64(21)

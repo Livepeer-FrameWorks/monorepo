@@ -845,8 +845,8 @@ SELECT
     remote_cluster,
     event_type,
     count() AS event_count,
-    sum(latency_ms) AS sum_latency_ms,
-    sum(time_to_live_ms) AS sum_time_to_live_ms,
+    sum(ifNull(latency_ms, 0)) AS sum_latency_ms,
+    sum(ifNull(time_to_live_ms, 0)) AS sum_time_to_live_ms,
     countIf(failure_reason != '' AND failure_reason IS NOT NULL) AS failure_count
 FROM federation_events
 GROUP BY hour, tenant_id, local_cluster, remote_cluster, event_type;
