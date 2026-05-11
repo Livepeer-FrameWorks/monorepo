@@ -1210,6 +1210,11 @@ func (r *dVRRequestResolver) IsExpired(ctx context.Context, obj *proto.DVRInfo) 
 	return obj.ExpiresAt != nil && obj.ExpiresAt.AsTime().Before(time.Now()), nil
 }
 
+// EffectiveRetention is the resolver for the effectiveRetention field.
+func (r *dVRRequestResolver) EffectiveRetention(ctx context.Context, obj *proto.DVRInfo) (*model.EffectiveRetention, error) {
+	return r.DoDVRRequestEffectiveRetention(ctx, obj)
+}
+
 // StorageNodeID is the resolver for the storageNodeId field.
 // Lifecycle data - from Periscope.
 func (r *dVRRequestResolver) StorageNodeID(ctx context.Context, obj *proto.DVRInfo) (*string, error) {
@@ -1657,6 +1662,16 @@ func (r *infrastructureNodeResolver) LiveState(ctx context.Context, obj *proto.I
 		return nil, fmt.Errorf("node %q cluster %q has no owner tenant", obj.GetNodeId(), obj.GetClusterId())
 	}
 	return liveNodeFromSnapshot(obj), nil
+}
+
+// EffectiveMode is the resolver for the effectiveMode field.
+func (r *infrastructureNodeResolver) EffectiveMode(ctx context.Context, obj *proto.InfrastructureNode) (model.NodeOperationalMode, error) {
+	return r.DoNodeEffectiveMode(ctx, obj)
+}
+
+// RoutingImpactPreview is the resolver for the routingImpactPreview field.
+func (r *infrastructureNodeResolver) RoutingImpactPreview(ctx context.Context, obj *proto.InfrastructureNode) (*model.RoutingImpactPreview, error) {
+	return r.DoNodeRoutingImpactPreview(ctx, obj)
 }
 
 // StreamID is the resolver for the streamId field.
@@ -2371,6 +2386,31 @@ func (r *mutationResolver) SendMessage(ctx context.Context, input model.SendMess
 	return resolver.SendMessage(ctx, input)
 }
 
+// SetNodeMode is the resolver for the setNodeMode field.
+func (r *mutationResolver) SetNodeMode(ctx context.Context, input model.SetNodeModeInput) (model.SetNodeModeResult, error) {
+	return r.DoSetNodeMode(ctx, input)
+}
+
+// TestPlaybackAccess is the resolver for the testPlaybackAccess field.
+func (r *mutationResolver) TestPlaybackAccess(ctx context.Context, input model.TestPlaybackAccessInput) (model.TestPlaybackAccessResult, error) {
+	return r.DoTestPlaybackAccess(ctx, input)
+}
+
+// SetMediaRetentionPolicy is the resolver for the setMediaRetentionPolicy field.
+func (r *mutationResolver) SetMediaRetentionPolicy(ctx context.Context, input model.SetMediaRetentionPolicyInput) (model.SetMediaRetentionPolicyResult, error) {
+	return r.DoSetMediaRetentionPolicy(ctx, input)
+}
+
+// UpdateMediaRetention is the resolver for the updateMediaRetention field.
+func (r *mutationResolver) UpdateMediaRetention(ctx context.Context, input model.UpdateMediaRetentionInput) (model.UpdateMediaRetentionResult, error) {
+	return r.DoUpdateMediaRetention(ctx, input)
+}
+
+// ResetMediaRetentionOverride is the resolver for the resetMediaRetentionOverride field.
+func (r *mutationResolver) ResetMediaRetentionOverride(ctx context.Context, input model.ResetMediaRetentionOverrideInput) (model.UpdateMediaRetentionResult, error) {
+	return r.DoResetMediaRetentionOverride(ctx, input)
+}
+
 // ID is the resolver for the id field.
 func (r *nodeMetricResolver) ID(ctx context.Context, obj *proto.NodeMetric) (string, error) {
 	tsPart := encodeProtoTimestampPart(obj.Timestamp)
@@ -3007,6 +3047,15 @@ func (r *processingUsageSummaryResolver) NativeAvSegmentCount(ctx context.Contex
 // NativeAvUniqueStreams is the resolver for the nativeAvUniqueStreams field.
 func (r *processingUsageSummaryResolver) NativeAvUniqueStreams(ctx context.Context, obj *proto.ProcessingUsageSummary) (int, error) {
 	return int(obj.NativeAvUniqueStreams), nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *pullSourceEventResolver) CreatedAt(ctx context.Context, obj *proto.PullSourceEvent) (*time.Time, error) {
+	if obj == nil || obj.GetCreatedAt() == nil {
+		return nil, nil
+	}
+	t := obj.GetCreatedAt().AsTime()
+	return &t, nil
 }
 
 // ID is the resolver for the id field.
@@ -4234,6 +4283,11 @@ func (r *queryResolver) MessagesConnection(ctx context.Context, conversationID s
 	return resolver.MessagesConnection(ctx, conversationID, page)
 }
 
+// MediaRetentionPolicy is the resolver for the mediaRetentionPolicy field.
+func (r *queryResolver) MediaRetentionPolicy(ctx context.Context) (*model.MediaRetentionPolicy, error) {
+	return r.DoMediaRetentionPolicy(ctx)
+}
+
 // Timestamp is the resolver for the timestamp field.
 func (r *rebufferingEventResolver) Timestamp(ctx context.Context, obj *proto.RebufferingEvent) (*time.Time, error) {
 	if obj.Timestamp == nil {
@@ -4738,6 +4792,11 @@ func (r *streamResolver) PlaybackPolicy(ctx context.Context, obj *proto.Stream) 
 		return nil, nil
 	}
 	return r.DoGetPlaybackPolicyByPlaybackID(ctx, obj.GetPlaybackId())
+}
+
+// RecentPullSourceEvents is the resolver for the recentPullSourceEvents field.
+func (r *streamResolver) RecentPullSourceEvents(ctx context.Context, obj *proto.Stream, limit *int) ([]*proto.PullSourceEvent, error) {
+	return r.DoStreamRecentPullSourceEvents(ctx, obj, limit)
 }
 
 // ID is the resolver for the id field.
@@ -6557,6 +6616,11 @@ func (r *Resolver) ProcessingUsageSummary() generated.ProcessingUsageSummaryReso
 	return &processingUsageSummaryResolver{r}
 }
 
+// PullSourceEvent returns generated.PullSourceEventResolver implementation.
+func (r *Resolver) PullSourceEvent() generated.PullSourceEventResolver {
+	return &pullSourceEventResolver{r}
+}
+
 // PushTarget returns generated.PushTargetResolver implementation.
 func (r *Resolver) PushTarget() generated.PushTargetResolver { return &pushTargetResolver{r} }
 
@@ -6827,6 +6891,7 @@ type playbackWebhookPolicyResolver struct{ *Resolver }
 type processingUsageResolver struct{ *Resolver }
 type processingUsageRecordResolver struct{ *Resolver }
 type processingUsageSummaryResolver struct{ *Resolver }
+type pullSourceEventResolver struct{ *Resolver }
 type pushTargetResolver struct{ *Resolver }
 type qualityTierDailyResolver struct{ *Resolver }
 type qualityTierSummaryResolver struct{ *Resolver }

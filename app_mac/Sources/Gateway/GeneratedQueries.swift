@@ -483,6 +483,13 @@ enum GQL {
       enabled
       class
     }
+    recentPullSourceEvents(limit: 10) {
+      id
+      internalName
+      eventKind
+      detail
+      createdAt
+    }
     createdAt
     updatedAt
   }
@@ -1497,6 +1504,11 @@ enum GQL {
         diskGb
         lastHeartbeat
         tags
+        effectiveMode
+        routingImpactPreview {
+          activeStreams
+          activeViewers
+        }
         liveState {
           cpuPercent
           ramUsedBytes
@@ -3191,67 +3203,12 @@ enum GQL {
   """
 
   static let GetStreamOverviewCharts = """
-  # Stream overview charts: hourly connections, quality tier breakdown, and health time-series
-  # Deferred load on the stream detail page
-  query GetStreamOverviewCharts(
-    $streamId: ID!
-    $timeRange: TimeRangeInput
-    $first: Int = 50
-    $qualityFirst: Int = 30
-    $healthFirst: Int = 24
-  ) {
+  # Stream overview charts: latest health snapshot for the sidebar/overview tile.
+  # Deferred load on the stream detail page.
+  # The overview page does NOT consume hourly connection / quality tier daily here
+  # (those live on the analytics page via GetStreamAnalyticsSummary).
+  query GetStreamOverviewCharts($streamId: ID!, $timeRange: TimeRangeInput, $healthFirst: Int = 24) {
     analytics {
-      usage {
-        streaming {
-          streamConnectionHourlyConnection(
-            streamId: $streamId
-            timeRange: $timeRange
-            page: { first: $first }
-          ) {
-            edges {
-              cursor
-              node {
-                hour
-                streamId
-                totalBytes
-                uniqueViewers
-                totalSessions
-              }
-            }
-            pageInfo {
-              ...PageInfoFields
-            }
-            totalCount
-          }
-          qualityTierDailyConnection(
-            streamId: $streamId
-            timeRange: $timeRange
-            page: { first: $qualityFirst }
-          ) {
-            edges {
-              cursor
-              node {
-                day
-                streamId
-                tier2160pMinutes
-                tier1440pMinutes
-                tier1080pMinutes
-                tier720pMinutes
-                tier480pMinutes
-                tierSdMinutes
-                codecH264Minutes
-                codecH265Minutes
-                avgBitrate
-                avgFps
-              }
-            }
-            pageInfo {
-              ...PageInfoFields
-            }
-            totalCount
-          }
-        }
-      }
       health {
         streamHealthConnection(
           streamId: $streamId
@@ -3261,22 +3218,14 @@ enum GQL {
           edges {
             node {
               timestamp
-              streamId
-              nodeId
               hasIssues
               issuesDescription
               bitrate
               fps
-              width
-              height
-              codec
               qualityTier
               bufferState
               bufferHealth
             }
-          }
-          pageInfo {
-            ...PageInfoFields
           }
         }
       }
@@ -3737,6 +3686,23 @@ enum GQL {
         message
         code
       }
+    }
+  }
+  """
+
+  static let MediaRetentionPolicy = """
+  # Tenant-default retention policy + entitlement bounds + the value the
+  # cascade resolves to today. Used by the webapp's "Storage retention
+  # defaults" panel.
+  query MediaRetentionPolicy {
+    mediaRetentionPolicy {
+      recordingRetentionDays
+      effectiveRecordingRetentionDays
+      bounds {
+        maxRecordingRetentionDays
+      }
+      updatedBy
+      updatedAt
     }
   }
   """
@@ -4454,6 +4420,31 @@ enum GQL {
   }
   """
 
+  static let ResetMediaRetentionOverride = """
+  # Clear a per-asset retention override. Recomputes the horizon from the
+  # tenant default (or tier entitlement when no tenant default is set) and
+  # pushes the new horizon into Foghorn.
+  mutation ResetMediaRetentionOverride($input: ResetMediaRetentionOverrideInput!) {
+    resetMediaRetentionOverride(input: $input) {
+      ... on EffectiveRetention {
+        retentionDays
+        retentionUntil
+        source
+      }
+      ... on ValidationError {
+        message
+        field
+      }
+      ... on NotFoundError {
+        message
+      }
+      ... on AuthError {
+        message
+      }
+    }
+  }
+  """
+
   static let RevokeAPIToken = """
   # Revoke a developer API token by its ID
   mutation RevokeAPIToken($id: ID!) {
@@ -4523,6 +4514,61 @@ enum GQL {
     setDVRChapterPolicy(dvrId: $dvrId, mode: $mode, intervalSeconds: $intervalSeconds) {
       success
       message
+    }
+  }
+  """
+
+  static let SetMediaRetentionPolicy = """
+  # Set the tenant-default retention policy. Passing the current tier bound
+  # clears the tenant override so future tier changes flow through.
+  mutation SetMediaRetentionPolicy($input: SetMediaRetentionPolicyInput!) {
+    setMediaRetentionPolicy(input: $input) {
+      ... on MediaRetentionPolicy {
+        recordingRetentionDays
+        effectiveRecordingRetentionDays
+        bounds {
+          maxRecordingRetentionDays
+        }
+        updatedBy
+        updatedAt
+      }
+      ... on ValidationError {
+        message
+        field
+      }
+      ... on AuthError {
+        message
+      }
+    }
+  }
+  """
+
+  static let SetNodeMode = """
+  # Set a node's operational mode. Drains/maintenance bleed traffic away;
+  # NORMAL re-admits the node to routing. Reason is recorded in Foghorn's
+  # audit trail and defaults to the calling user when omitted.
+  mutation SetNodeMode($input: SetNodeModeInput!) {
+    setNodeMode(input: $input) {
+      ... on InfrastructureNode {
+        id
+        nodeId
+        nodeName
+        effectiveMode
+        routingImpactPreview {
+          activeStreams
+          activeViewers
+        }
+      }
+      ... on ValidationError {
+        message
+        field
+      }
+      ... on NotFoundError {
+        message
+      }
+      ... on AuthError {
+        message
+      }
     }
   }
   """
@@ -4620,6 +4666,38 @@ enum GQL {
   }
   """
 
+  static let TestPlaybackAccess = """
+  # Dry-run the playback policy evaluator. Mutation (not query) because webhook
+  # policies fire a real outbound HTTPS request to the customer URL when
+  # fireWebhook=true; customer endpoints may log, rate-limit, or trigger side
+  # effects from that request.
+  mutation TestPlaybackAccess($input: TestPlaybackAccessInput!) {
+    testPlaybackAccess(input: $input) {
+      ... on PlaybackAccessDecision {
+        allowed
+        policyType
+        reason
+        detail
+        kid
+        claimsJson
+        webhookStatus
+        webhookLatencyMs
+        resolvedInternalName
+      }
+      ... on ValidationError {
+        message
+        field
+      }
+      ... on NotFoundError {
+        message
+      }
+      ... on AuthError {
+        message
+      }
+    }
+  }
+  """
+
   static let UnlinkWallet = """
   mutation UnlinkWallet($walletId: ID!) {
     unlinkWallet(walletId: $walletId) {
@@ -4660,6 +4738,31 @@ enum GQL {
       }
       isComplete
       updatedAt
+    }
+  }
+  """
+
+  static let UpdateMediaRetention = """
+  # Apply a per-asset retention override on a finalized DVR / clip / VOD asset.
+  # Set targetType to DVR | CLIP | VOD; either retentionDays (relative to NOW)
+  # or retentionUntil must be set.
+  mutation UpdateMediaRetention($input: UpdateMediaRetentionInput!) {
+    updateMediaRetention(input: $input) {
+      ... on EffectiveRetention {
+        retentionDays
+        retentionUntil
+        source
+      }
+      ... on ValidationError {
+        message
+        field
+      }
+      ... on NotFoundError {
+        message
+      }
+      ... on AuthError {
+        message
+      }
     }
   }
   """

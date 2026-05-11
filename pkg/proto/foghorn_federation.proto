@@ -17,7 +17,8 @@ service FoghornFederation {
   // NotifyOriginPull tells the origin cluster that a peer intends to pull a stream via DTSC.
   rpc NotifyOriginPull(OriginPullNotification) returns (OriginPullAck);
 
-  // PrepareArtifact requests an artifact (clip/DVR/VOD) be made available for cross-cluster access.
+  // PrepareArtifact requests a clip or VOD be made available for cross-cluster access.
+  // DVR replay uses dvr+ chapter routing and chapter-bounded edge defrost.
   rpc PrepareArtifact(PrepareArtifactRequest) returns (PrepareArtifactResponse);
 
   // CreateRemoteClip requests the origin cluster to create a clip on behalf of a remote cluster.
@@ -124,13 +125,13 @@ message OriginPullAck {
 }
 
 message PrepareArtifactRequest {
-  string artifact_id = 1;       // Artifact hash (clip/dvr/vod)
-  string clip_hash = 2;         // Legacy: clip hash alias
+  string artifact_id = 1;       // Artifact hash (clip/vod)
+  string clip_hash = 2;         // Clip hash fallback alias
   string requesting_cluster = 3;
-  string artifact_type = 4;     // "clip", "dvr", "vod"
+  string artifact_type = 4;     // "clip" or "vod"; DVR is rejected by PrepareArtifact
   string tenant_id = 5;
-  // For DVR chapter-aware fetches: bound segment enumeration to a media
-  // range. DVR requests must pass a bounded range.
+  // Reserved wire surface from the DVR chapter prototype. Current DVR
+  // playback uses RetrieveDVRChapter plus the returned dvr+ playback ID.
   int64 dvr_start_ms = 6;
   int64 dvr_end_ms = 7;
 }
@@ -141,11 +142,8 @@ message PrepareArtifactResponse {
   bool ready = 3;              // True if artifact is immediately available
   uint32 est_ready_seconds = 4; // Estimated time until ready (for async prep)
   string error = 5;
-  // DEPRECATED for new DVR consumers: legacy filename → presigned GET URL.
-  // Kept populated for clip/backwards-compat callers and as a convenience
-  // shadow of `dvr_segments` for older sidecars; new chapter-aware consumers
-  // should read `dvr_segments` instead so they see status (lost_local rows
-  // surface with empty url so the local manifest writer renders #EXT-X-GAP).
+  // Filename -> presigned GET URL for segmented non-DVR artifacts.
+  // DVR chapter playback uses dvr+ routing and does not consume this field.
   map<string, string> segment_urls = 6;
   string format = 7;            // Container format (mp4, m3u8, etc.)
   string internal_name = 8;     // Artifact routing name (vod+{this})
@@ -157,9 +155,8 @@ message PrepareArtifactResponse {
   // set. Single hop only — chained redirects fail closed at the consumer.
   string redirect_cluster_id = 10;
 
-  // For DVR chapter-aware fetches: per-segment metadata derived from
-  // foghorn.dvr_segments. Includes lost_local rows with empty
-  // presigned_get_url so the consumer renders #EXT-X-GAP markers.
+  // Reserved wire surface from the DVR chapter prototype. Current DVR
+  // playback defrosts through the selected edge using the chapter ID.
   repeated helmsmancontrol.DVRSegmentRef dvr_segments = 11;
 }
 

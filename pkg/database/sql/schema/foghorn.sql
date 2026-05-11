@@ -68,9 +68,11 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
         -- pending: not synced
         -- in_progress: syncing
         -- synced: on S3
-        -- failed: sync error
+        -- failed: sync error (retryable)
+        -- lost_local: local source gone before any sync; terminal tombstone, never retried
     sync_error TEXT,
     last_sync_attempt TIMESTAMP,
+    failure_count INT NOT NULL DEFAULT 0,
     frozen_at TIMESTAMP,
     dtsh_synced BOOLEAN DEFAULT FALSE,      -- True if .dtsh index was synced
 

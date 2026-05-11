@@ -1,0 +1,22 @@
+# Set the tenant-default retention policy. Passing the current tier bound
+# clears the tenant override so future tier changes flow through.
+mutation SetMediaRetentionPolicy($input: SetMediaRetentionPolicyInput!) {
+  setMediaRetentionPolicy(input: $input) {
+    ... on MediaRetentionPolicy {
+      recordingRetentionDays
+      effectiveRecordingRetentionDays
+      bounds {
+        maxRecordingRetentionDays
+      }
+      updatedBy
+      updatedAt
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on AuthError {
+      message
+    }
+  }
+}

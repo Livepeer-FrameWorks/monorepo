@@ -6,6 +6,7 @@ option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto";
 
 import "common.proto";
 import "shared.proto";
+import "google/protobuf/timestamp.proto";
 
 // FOGHORN CONTROL PLANE SERVICES
 // These are control-plane operations exposed by Foghorn for Commodore to call.
@@ -50,6 +51,26 @@ service DVRControlService {
   // manifests remain readable until cache expiry / retention cleanup so
   // in-flight viewers are not interrupted.
   rpc SetDVRChapterPolicy(SetDVRChapterPolicyRequest) returns (SetDVRChapterPolicyResponse);
+
+  // OverrideArtifactRetention pushes a per-asset retention horizon into
+  // foghorn.artifacts so the existing RetentionJob picks up the new value
+  // on its next tick. Called by Commodore.UpdateAssetRetention /
+  // ResetAssetRetention after the customer-facing override mutation lands.
+  // Tenant ownership is verified upstream (Commodore-side query); this RPC
+  // trusts the (tenant_id, dvr_hash) pair.
+  rpc OverrideArtifactRetention(OverrideArtifactRetentionRequest) returns (OverrideArtifactRetentionResponse);
+
+  // TestPlaybackAccess runs the same policy evaluator the live USER_NEW
+  // path uses, but against a caller-supplied JWT (or a webhook test
+  // request) without registering a viewer session. Returns the structured
+  // PlaybackDecision so the operator sees Allow/Deny + reason + kid +
+  // claims (JWT) or HTTP status + latency (webhook).
+  //
+  // Webhook mode fires a real outbound HTTPS request to the customer URL
+  // — Commodore enforces tenant ownership of the playback target before
+  // routing the call here so unauthenticated callers can't use this to
+  // probe arbitrary endpoints.
+  rpc TestPlaybackAccess(TestPlaybackAccessRequest) returns (TestPlaybackAccessResponse);
 }
 
 message RetrieveDVRChapterRequest {
@@ -64,7 +85,7 @@ message RetrieveDVRChapterRequest {
 message RetrieveDVRChapterResponse {
   string chapter_id = 1;
   string manifest_s3_key = 2;        // e.g. dvr/{tenant}/{stream}/{artifact}/chapters/{chapter_id}.m3u8
-  string manifest_url = 3;           // presigned GET, optional convenience for direct fetch
+  string manifest_url = 3;           // Mist playback ID (dvr+{chapter_id}); field name retained for API stability
   bool is_current = 4;               // EVENT-shaped (no ENDLIST) vs VOD-shaped
   bool has_gaps = 5;
   int32 segment_count = 6;
@@ -281,4 +302,67 @@ message TerminateTenantStreamsResponse {
   int32 streams_terminated = 1;   // Number of streams that were stopped
   int32 sessions_terminated = 2;  // Total number of sessions stopped
   repeated string stream_names = 3; // Names of streams that were stopped
+}
+
+// OverrideArtifactRetentionRequest pushes a new retention horizon onto a
+// foghorn.artifacts row. Used by Commodore.UpdateAssetRetention after a
+// customer adjusts retention on a finalized DVR / clip / VOD. Active
+// artifacts are rejected (retention applies post-finalize only).
+//
+message OverrideArtifactRetentionRequest {
+  string tenant_id = 1;
+  string dvr_hash = 2;       // dvr_hash | clip_hash | vod_hash; matched against foghorn.artifacts.artifact_hash
+  google.protobuf.Timestamp retention_until = 3;
+  // Empty string defaults to "dvr"; callers that handle clips or VOD set this
+  // explicitly so Foghorn filters the matching artifact type.
+  string artifact_type = 4;  // 'dvr' | 'clip' | 'vod'
+  int32 retention_days = 5;  // used with anchor_to_ended_at
+  bool anchor_to_ended_at = 6;
+  int32 max_retention_days = 7; // tier entitlement bound, enforced against ended_at
+}
+
+message OverrideArtifactRetentionResponse {
+  bool applied = 1;
+  google.protobuf.Timestamp retention_until = 2;
+}
+
+// TestPlaybackAccessRequest carries the policy target plus the variant the
+// caller wants to test. tenant_id is set by Commodore after ownership
+// validation; this RPC trusts it.
+message TestPlaybackAccessRequest {
+  string tenant_id = 1;
+  // Exactly one of playback_id / internal_name must be set. internal_name
+  // is what the live USER_NEW path keys on; playback_id is the public
+  // identifier customers use everywhere else.
+  string playback_id = 2;
+  string internal_name = 3;
+  // JWT mode: caller-supplied token + optional viewer context that the
+  // evaluator would ordinarily get from the MistServer trigger payload.
+  // viewer_token must be set; the rest are optional and surface only in
+  // the deny detail / webhook payload path.
+  string viewer_token = 4;
+  string viewer_ip = 5;
+  string request_url = 6;
+  string connector = 7;
+  string session_id = 8;
+  // Webhook mode: when true and the resolved policy is type=webhook, the
+  // evaluator fires a real outbound request to the customer URL. Caller
+  // is responsible for showing a confirmation in the UI before setting
+  // this — webhooks have side effects.
+  bool fire_webhook = 9;
+}
+
+message TestPlaybackAccessResponse {
+  bool allowed = 1;
+  string policy_type = 2;          // "public" | "jwt" | "webhook" | ""
+  string reason = 3;               // empty on allow; deny reason token otherwise
+  string detail = 4;               // free-form context (verifier error, status code as text)
+  string kid = 5;                  // JWT key ID claimed by the token (if any)
+  string claims_json = 6;          // JSON-encoded claims map (verified or not)
+  int32 webhook_status = 7;        // HTTP status from the customer URL (webhook mode)
+  int32 webhook_latency_ms = 8;    // RTT for the webhook call
+  // Echo of which policy target the evaluator resolved against. Useful
+  // when Commodore mapped a public playback_id to an internal_name for
+  // the caller.
+  string resolved_internal_name = 9;
 }

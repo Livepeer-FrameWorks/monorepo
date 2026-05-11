@@ -383,30 +383,32 @@ type StorageLifecycleData_Action int32
 
 const (
 	StorageLifecycleData_ACTION_UNSPECIFIED   StorageLifecycleData_Action = 0
-	StorageLifecycleData_ACTION_SYNC_STARTED  StorageLifecycleData_Action = 1 // Upload to S3 started (local copy retained)
-	StorageLifecycleData_ACTION_SYNCED        StorageLifecycleData_Action = 2 // Upload to S3 completed (local copy retained)
-	StorageLifecycleData_ACTION_EVICTED       StorageLifecycleData_Action = 3 // Local copy deleted (S3 has authoritative copy)
-	StorageLifecycleData_ACTION_CACHE_STARTED StorageLifecycleData_Action = 4 // Download from S3 started (refilling local cache)
-	StorageLifecycleData_ACTION_CACHED        StorageLifecycleData_Action = 5 // Downloaded from S3 to local cache (S3 copy retained)
-	StorageLifecycleData_ACTION_DELETED       StorageLifecycleData_Action = 6 // Asset deleted from both S3 and local (permanent removal)
-	StorageLifecycleData_ACTION_SYNC_FAILED   StorageLifecycleData_Action = 7 // Upload to S3 failed (local copy retained)
-	StorageLifecycleData_ACTION_EVICT_FAILED  StorageLifecycleData_Action = 8 // Local cache eviction failed
-	StorageLifecycleData_ACTION_CACHE_FAILED  StorageLifecycleData_Action = 9 // Download from S3 failed (defrost failure)
+	StorageLifecycleData_ACTION_SYNC_STARTED  StorageLifecycleData_Action = 1  // Upload to S3 started (local copy retained)
+	StorageLifecycleData_ACTION_SYNCED        StorageLifecycleData_Action = 2  // Upload to S3 completed (local copy retained)
+	StorageLifecycleData_ACTION_EVICTED       StorageLifecycleData_Action = 3  // Local copy deleted (S3 has authoritative copy)
+	StorageLifecycleData_ACTION_CACHE_STARTED StorageLifecycleData_Action = 4  // Download from S3 started (refilling local cache)
+	StorageLifecycleData_ACTION_CACHED        StorageLifecycleData_Action = 5  // Downloaded from S3 to local cache (S3 copy retained)
+	StorageLifecycleData_ACTION_DELETED       StorageLifecycleData_Action = 6  // Asset deleted from both S3 and local (permanent removal)
+	StorageLifecycleData_ACTION_SYNC_FAILED   StorageLifecycleData_Action = 7  // Upload to S3 failed (local copy retained)
+	StorageLifecycleData_ACTION_EVICT_FAILED  StorageLifecycleData_Action = 8  // Local cache eviction failed
+	StorageLifecycleData_ACTION_CACHE_FAILED  StorageLifecycleData_Action = 9  // Download from S3 failed (defrost failure)
+	StorageLifecycleData_ACTION_LOCAL_MISSING StorageLifecycleData_Action = 10 // Local source file is gone before any sync; terminal.
 )
 
 // Enum value maps for StorageLifecycleData_Action.
 var (
 	StorageLifecycleData_Action_name = map[int32]string{
-		0: "ACTION_UNSPECIFIED",
-		1: "ACTION_SYNC_STARTED",
-		2: "ACTION_SYNCED",
-		3: "ACTION_EVICTED",
-		4: "ACTION_CACHE_STARTED",
-		5: "ACTION_CACHED",
-		6: "ACTION_DELETED",
-		7: "ACTION_SYNC_FAILED",
-		8: "ACTION_EVICT_FAILED",
-		9: "ACTION_CACHE_FAILED",
+		0:  "ACTION_UNSPECIFIED",
+		1:  "ACTION_SYNC_STARTED",
+		2:  "ACTION_SYNCED",
+		3:  "ACTION_EVICTED",
+		4:  "ACTION_CACHE_STARTED",
+		5:  "ACTION_CACHED",
+		6:  "ACTION_DELETED",
+		7:  "ACTION_SYNC_FAILED",
+		8:  "ACTION_EVICT_FAILED",
+		9:  "ACTION_CACHE_FAILED",
+		10: "ACTION_LOCAL_MISSING",
 	}
 	StorageLifecycleData_Action_value = map[string]int32{
 		"ACTION_UNSPECIFIED":   0,
@@ -419,6 +421,7 @@ var (
 		"ACTION_SYNC_FAILED":   7,
 		"ACTION_EVICT_FAILED":  8,
 		"ACTION_CACHE_FAILED":  9,
+		"ACTION_LOCAL_MISSING": 10,
 	}
 )
 
@@ -5396,17 +5399,21 @@ func (x *DVRStopRequest) GetInternalName() string {
 
 // Sidecar -> Foghorn: report a new segment from RECORDING_SEGMENT.
 type RecordDVRSegmentRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	DvrHash       string                 `protobuf:"bytes,2,opt,name=dvr_hash,json=dvrHash,proto3" json:"dvr_hash,omitempty"`                   // = artifact_hash
-	SegmentName   string                 `protobuf:"bytes,3,opt,name=segment_name,json=segmentName,proto3" json:"segment_name,omitempty"`       // e.g. "0001.ts"
-	MediaStartMs  int64                  `protobuf:"varint,4,opt,name=media_start_ms,json=mediaStartMs,proto3" json:"media_start_ms,omitempty"` // RECORDING_SEGMENT time_started
-	MediaEndMs    int64                  `protobuf:"varint,5,opt,name=media_end_ms,json=mediaEndMs,proto3" json:"media_end_ms,omitempty"`       // RECORDING_SEGMENT time_ended
-	DurationMs    int64                  `protobuf:"varint,6,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`         // RECORDING_SEGMENT duration_ms
-	LocalPath     string                 `protobuf:"bytes,7,opt,name=local_path,json=localPath,proto3" json:"local_path,omitempty"`             // Absolute local file path (for retry/upload)
-	NodeId        string                 `protobuf:"bytes,8,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	RequestId    string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	DvrHash      string                 `protobuf:"bytes,2,opt,name=dvr_hash,json=dvrHash,proto3" json:"dvr_hash,omitempty"`                   // = artifact_hash
+	SegmentName  string                 `protobuf:"bytes,3,opt,name=segment_name,json=segmentName,proto3" json:"segment_name,omitempty"`       // e.g. "0001.ts"
+	MediaStartMs int64                  `protobuf:"varint,4,opt,name=media_start_ms,json=mediaStartMs,proto3" json:"media_start_ms,omitempty"` // RECORDING_SEGMENT time_started
+	MediaEndMs   int64                  `protobuf:"varint,5,opt,name=media_end_ms,json=mediaEndMs,proto3" json:"media_end_ms,omitempty"`       // RECORDING_SEGMENT time_ended
+	DurationMs   int64                  `protobuf:"varint,6,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`         // RECORDING_SEGMENT duration_ms
+	LocalPath    string                 `protobuf:"bytes,7,opt,name=local_path,json=localPath,proto3" json:"local_path,omitempty"`             // Absolute local file path (for retry/upload)
+	NodeId       string                 `protobuf:"bytes,8,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	// True only for sidecar startup reconciliation rebuilding rows from a local
+	// DVR manifest with trusted PDT timing. Live RECORDING_SEGMENT writes leave
+	// this false so terminal artifacts still reject new media.
+	RecoveryInsert bool `protobuf:"varint,9,opt,name=recovery_insert,json=recoveryInsert,proto3" json:"recovery_insert,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RecordDVRSegmentRequest) Reset() {
@@ -5493,6 +5500,13 @@ func (x *RecordDVRSegmentRequest) GetNodeId() string {
 		return x.NodeId
 	}
 	return ""
+}
+
+func (x *RecordDVRSegmentRequest) GetRecoveryInsert() bool {
+	if x != nil {
+		return x.RecoveryInsert
+	}
+	return false
 }
 
 // Foghorn -> sidecar: ledger row inserted, here is the upload URL.
@@ -5676,8 +5690,8 @@ func (x *MarkDVRSegmentUploaded) GetSizeBytes() uint64 {
 
 // Sidecar -> Foghorn: a segment has been evicted from local disk. Foghorn
 // updates the ledger row to deleted_local (was_uploaded=true) or lost_local
-// (was_uploaded=false). lost_local rows render as #EXT-X-GAP in the final
-// manifest; the artifact ends as completed_partial.
+// (was_uploaded=false). lost_local rows render as #EXT-X-GAP in affected
+// chapter manifests and bounded DVR views.
 type DVRSegmentDropped struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
@@ -5928,16 +5942,16 @@ func (x *EvictableSegmentsResponse) GetSegmentNames() []string {
 }
 
 // Foghorn -> sidecar: during finalization, ask the recording node to retry
-// upload for specific pending/failed_upload segments. If the local file still
-// exists, the sidecar uploads it (using its existing record_dvr_segment_response
-// presigned URL or by re-requesting one) and emits MarkDVRSegmentUploaded on
-// success; otherwise it emits DVRSegmentDropped(was_uploaded=false). Foghorn
-// cannot read the sidecar's disk; this is how it asks.
+// upload for specific pending/failed_upload segments. `segments` carries the
+// authoritative ledger timing so RecordDVRSegment's strict timing match still
+// protects chapter placement. `segment_names` is accepted from older callers
+// only when no refs are present.
 type RetryDVRSegmentUpload struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	DvrHash       string                 `protobuf:"bytes,2,opt,name=dvr_hash,json=dvrHash,proto3" json:"dvr_hash,omitempty"`
 	SegmentNames  []string               `protobuf:"bytes,3,rep,name=segment_names,json=segmentNames,proto3" json:"segment_names,omitempty"`
+	Segments      []*DVRSegmentRef       `protobuf:"bytes,4,rep,name=segments,proto3" json:"segments,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5989,6 +6003,13 @@ func (x *RetryDVRSegmentUpload) GetDvrHash() string {
 func (x *RetryDVRSegmentUpload) GetSegmentNames() []string {
 	if x != nil {
 		return x.SegmentNames
+	}
+	return nil
+}
+
+func (x *RetryDVRSegmentUpload) GetSegments() []*DVRSegmentRef {
+	if x != nil {
+		return x.Segments
 	}
 	return nil
 }
@@ -6681,13 +6702,17 @@ func (x *FreezeProgress) GetMessage() string {
 
 // FreezeComplete indicates freeze operation has finished
 type FreezeComplete struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	AssetHash     string                 `protobuf:"bytes,2,opt,name=asset_hash,json=assetHash,proto3" json:"asset_hash,omitempty"`
-	Status        string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`            // "success" or "failed"
-	S3Url         string                 `protobuf:"bytes,4,opt,name=s3_url,json=s3Url,proto3" json:"s3_url,omitempty"` // Full S3 URL (s3://bucket/key)
-	SizeBytes     uint64                 `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	Error         string                 `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"` // Error message if failed
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	RequestId string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	AssetHash string                 `protobuf:"bytes,2,opt,name=asset_hash,json=assetHash,proto3" json:"asset_hash,omitempty"`
+	Status    string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`            // "success" or "failed"
+	S3Url     string                 `protobuf:"bytes,4,opt,name=s3_url,json=s3Url,proto3" json:"s3_url,omitempty"` // Full S3 URL (s3://bucket/key)
+	SizeBytes uint64                 `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	Error     string                 `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"` // Error message if failed
+	// local_missing=true signals the local source file is gone (ENOENT) before
+	// any S3 sync. Foghorn transitions sync_status='lost_local' (terminal) and
+	// stops retries. status will be "failed" in this case.
+	LocalMissing  bool `protobuf:"varint,7,opt,name=local_missing,json=localMissing,proto3" json:"local_missing,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6762,6 +6787,13 @@ func (x *FreezeComplete) GetError() string {
 		return x.Error
 	}
 	return ""
+}
+
+func (x *FreezeComplete) GetLocalMissing() bool {
+	if x != nil {
+		return x.LocalMissing
+	}
+	return false
 }
 
 // DefrostRequest tells Helmsman to download an asset from S3 cold storage.
@@ -7383,15 +7415,19 @@ func (x *CanDeleteResponse) GetWarmDurationMs() int64 {
 // SyncComplete indicates a sync (upload to S3 while keeping local) has finished.
 // Semantically different from FreezeComplete: sync keeps local copy.
 type SyncComplete struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	AssetHash     string                 `protobuf:"bytes,2,opt,name=asset_hash,json=assetHash,proto3" json:"asset_hash,omitempty"`
-	Status        string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`            // "success" or "failed"
-	S3Url         string                 `protobuf:"bytes,4,opt,name=s3_url,json=s3Url,proto3" json:"s3_url,omitempty"` // Full S3 URL (s3://bucket/key)
-	SizeBytes     uint64                 `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	Error         string                 `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`                                    // Error message if failed
-	NodeId        string                 `protobuf:"bytes,7,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`                    // Node that initiated the sync
-	DtshIncluded  bool                   `protobuf:"varint,8,opt,name=dtsh_included,json=dtshIncluded,proto3" json:"dtsh_included,omitempty"` // True if .dtsh index file was included in sync
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	RequestId    string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	AssetHash    string                 `protobuf:"bytes,2,opt,name=asset_hash,json=assetHash,proto3" json:"asset_hash,omitempty"`
+	Status       string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`            // "success" or "failed"
+	S3Url        string                 `protobuf:"bytes,4,opt,name=s3_url,json=s3Url,proto3" json:"s3_url,omitempty"` // Full S3 URL (s3://bucket/key)
+	SizeBytes    uint64                 `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	Error        string                 `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`                                    // Error message if failed
+	NodeId       string                 `protobuf:"bytes,7,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`                    // Node that initiated the sync
+	DtshIncluded bool                   `protobuf:"varint,8,opt,name=dtsh_included,json=dtshIncluded,proto3" json:"dtsh_included,omitempty"` // True if .dtsh index file was included in sync
+	// local_missing=true signals the local source file is gone (ENOENT). Foghorn
+	// transitions sync_status='lost_local' (terminal) and stops retries. status
+	// will be "failed" in this case.
+	LocalMissing  bool `protobuf:"varint,9,opt,name=local_missing,json=localMissing,proto3" json:"local_missing,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7478,6 +7514,13 @@ func (x *SyncComplete) GetNodeId() string {
 func (x *SyncComplete) GetDtshIncluded() bool {
 	if x != nil {
 		return x.DtshIncluded
+	}
+	return false
+}
+
+func (x *SyncComplete) GetLocalMissing() bool {
+	if x != nil {
+		return x.LocalMissing
 	}
 	return false
 }
@@ -15580,7 +15623,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x02 \x01(\tR\trequestId\x12(\n" +
 	"\rinternal_name\x18\x03 \x01(\tH\x00R\finternalName\x88\x01\x01B\x10\n" +
-	"\x0e_internal_name\"\x97\x02\n" +
+	"\x0e_internal_name\"\xc0\x02\n" +
 	"\x17RecordDVRSegmentRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x19\n" +
@@ -15593,7 +15636,8 @@ const file_ipc_proto_rawDesc = "" +
 	"durationMs\x12\x1d\n" +
 	"\n" +
 	"local_path\x18\a \x01(\tR\tlocalPath\x12\x17\n" +
-	"\anode_id\x18\b \x01(\tR\x06nodeId\"\xb8\x02\n" +
+	"\anode_id\x18\b \x01(\tR\x06nodeId\x12'\n" +
+	"\x0frecovery_insert\x18\t \x01(\bR\x0erecoveryInsert\"\xb8\x02\n" +
 	"\x18RecordDVRSegmentResponse\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x19\n" +
@@ -15640,12 +15684,13 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x19\n" +
 	"\bdvr_hash\x18\x02 \x01(\tR\advrHash\x12#\n" +
-	"\rsegment_names\x18\x03 \x03(\tR\fsegmentNames\"v\n" +
+	"\rsegment_names\x18\x03 \x03(\tR\fsegmentNames\"\xb2\x01\n" +
 	"\x15RetryDVRSegmentUpload\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x19\n" +
 	"\bdvr_hash\x18\x02 \x01(\tR\advrHash\x12#\n" +
-	"\rsegment_names\x18\x03 \x03(\tR\fsegmentNames\"\x99\x01\n" +
+	"\rsegment_names\x18\x03 \x03(\tR\fsegmentNames\x12:\n" +
+	"\bsegments\x18\x04 \x03(\v2\x1e.helmsmancontrol.DVRSegmentRefR\bsegments\"\x99\x01\n" +
 	"\x1fRestoreLocalSegmentIndexRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x19\n" +
@@ -15724,7 +15769,7 @@ const file_ipc_proto_rawDesc = "" +
 	"asset_hash\x18\x02 \x01(\tR\tassetHash\x12\x18\n" +
 	"\apercent\x18\x03 \x01(\rR\apercent\x12%\n" +
 	"\x0ebytes_uploaded\x18\x04 \x01(\x04R\rbytesUploaded\x12\x18\n" +
-	"\amessage\x18\x05 \x01(\tR\amessage\"\xb2\x01\n" +
+	"\amessage\x18\x05 \x01(\tR\amessage\"\xd7\x01\n" +
 	"\x0eFreezeComplete\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1d\n" +
@@ -15734,7 +15779,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x06s3_url\x18\x04 \x01(\tR\x05s3Url\x12\x1d\n" +
 	"\n" +
 	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes\x12\x14\n" +
-	"\x05error\x18\x06 \x01(\tR\x05error\"\xd7\x06\n" +
+	"\x05error\x18\x06 \x01(\tR\x05error\x12#\n" +
+	"\rlocal_missing\x18\a \x01(\bR\flocalMissing\"\xd7\x06\n" +
 	"\x0eDefrostRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1d\n" +
@@ -15806,7 +15852,7 @@ const file_ipc_proto_rawDesc = "" +
 	"asset_hash\x18\x01 \x01(\tR\tassetHash\x12$\n" +
 	"\x0esafe_to_delete\x18\x02 \x01(\bR\fsafeToDelete\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12(\n" +
-	"\x10warm_duration_ms\x18\x04 \x01(\x03R\x0ewarmDurationMs\"\xee\x01\n" +
+	"\x10warm_duration_ms\x18\x04 \x01(\x03R\x0ewarmDurationMs\"\x93\x02\n" +
 	"\fSyncComplete\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1d\n" +
@@ -15818,7 +15864,8 @@ const file_ipc_proto_rawDesc = "" +
 	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes\x12\x14\n" +
 	"\x05error\x18\x06 \x01(\tR\x05error\x12\x17\n" +
 	"\anode_id\x18\a \x01(\tR\x06nodeId\x12#\n" +
-	"\rdtsh_included\x18\b \x01(\bR\fdtshIncluded\"\xf1\x02\n" +
+	"\rdtsh_included\x18\b \x01(\bR\fdtshIncluded\x12#\n" +
+	"\rlocal_missing\x18\t \x01(\bR\flocalMissing\"\xf1\x02\n" +
 	"\x0fDtshSyncRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1d\n" +
@@ -15833,7 +15880,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\tdtsh_urls\x18\a \x03(\v2..helmsmancontrol.DtshSyncRequest.DtshUrlsEntryR\bdtshUrls\x1a;\n" +
 	"\rDtshUrlsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe0\a\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xfa\a\n" +
 	"\x14StorageLifecycleData\x12D\n" +
 	"\x06action\x18\x01 \x01(\x0e2,.helmsmancontrol.StorageLifecycleData.ActionR\x06action\x12\x1d\n" +
 	"\n" +
@@ -15857,7 +15904,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"cluster_id\x18\x0e \x01(\tH\tR\tclusterId\x88\x01\x01\x12/\n" +
 	"\x11origin_cluster_id\x18\x0f \x01(\tH\n" +
-	"R\x0foriginClusterId\x88\x01\x01\"\xeb\x01\n" +
+	"R\x0foriginClusterId\x88\x01\x01\"\x85\x02\n" +
 	"\x06Action\x12\x16\n" +
 	"\x12ACTION_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13ACTION_SYNC_STARTED\x10\x01\x12\x11\n" +
@@ -15868,7 +15915,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\x0eACTION_DELETED\x10\x06\x12\x16\n" +
 	"\x12ACTION_SYNC_FAILED\x10\a\x12\x17\n" +
 	"\x13ACTION_EVICT_FAILED\x10\b\x12\x17\n" +
-	"\x13ACTION_CACHE_FAILED\x10\tB\f\n" +
+	"\x13ACTION_CACHE_FAILED\x10\t\x12\x18\n" +
+	"\x14ACTION_LOCAL_MISSING\x10\n" +
+	"B\f\n" +
 	"\n" +
 	"_tenant_idB\x10\n" +
 	"\x0e_internal_nameB\f\n" +
@@ -17486,77 +17535,78 @@ var file_ipc_proto_depIdxs = []int32{
 	100, // 105: helmsmancontrol.StorageSnapshot.capabilities:type_name -> helmsmancontrol.NodeCapabilities
 	44,  // 106: helmsmancontrol.StorageSnapshot.usage:type_name -> helmsmancontrol.TenantStorageUsage
 	48,  // 107: helmsmancontrol.DVRStartRequest.config:type_name -> helmsmancontrol.DVRConfig
-	70,  // 108: helmsmancontrol.RestoreLocalSegmentIndexResponse.segments:type_name -> helmsmancontrol.DVRSegmentRef
-	135, // 109: helmsmancontrol.FreezePermissionResponse.segment_urls:type_name -> helmsmancontrol.FreezePermissionResponse.SegmentUrlsEntry
-	136, // 110: helmsmancontrol.FreezeRequest.segment_urls:type_name -> helmsmancontrol.FreezeRequest.SegmentUrlsEntry
-	137, // 111: helmsmancontrol.DefrostRequest.segment_urls:type_name -> helmsmancontrol.DefrostRequest.SegmentUrlsEntry
-	70,  // 112: helmsmancontrol.DefrostRequest.chapter_segments:type_name -> helmsmancontrol.DVRSegmentRef
-	138, // 113: helmsmancontrol.DtshSyncRequest.dtsh_urls:type_name -> helmsmancontrol.DtshSyncRequest.DtshUrlsEntry
-	6,   // 114: helmsmancontrol.StorageLifecycleData.action:type_name -> helmsmancontrol.StorageLifecycleData.Action
-	11,  // 115: helmsmancontrol.PushRewriteTrigger.publisher_bucket:type_name -> helmsmancontrol.GeoBucket
-	11,  // 116: helmsmancontrol.PushRewriteTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	11,  // 117: helmsmancontrol.ViewerResolveTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	11,  // 118: helmsmancontrol.ViewerResolveTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	11,  // 119: helmsmancontrol.ViewerConnectTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	11,  // 120: helmsmancontrol.ViewerConnectTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	11,  // 121: helmsmancontrol.ViewerDisconnectTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	11,  // 122: helmsmancontrol.ViewerDisconnectTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	106, // 123: helmsmancontrol.StreamBufferTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
-	106, // 124: helmsmancontrol.StreamTrackListTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
-	100, // 125: helmsmancontrol.NodeLifecycleUpdate.capabilities:type_name -> helmsmancontrol.NodeCapabilities
-	103, // 126: helmsmancontrol.NodeLifecycleUpdate.storage:type_name -> helmsmancontrol.StorageInfo
-	104, // 127: helmsmancontrol.NodeLifecycleUpdate.limits:type_name -> helmsmancontrol.NodeLimits
-	139, // 128: helmsmancontrol.NodeLifecycleUpdate.streams:type_name -> helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
-	107, // 129: helmsmancontrol.NodeLifecycleUpdate.artifacts:type_name -> helmsmancontrol.StoredArtifact
-	22,  // 130: helmsmancontrol.NodeLifecycleUpdate.component_versions:type_name -> helmsmancontrol.EdgeComponentVersion
-	3,   // 131: helmsmancontrol.NodeLifecycleUpdate.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
-	11,  // 132: helmsmancontrol.LoadBalancingData.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	11,  // 133: helmsmancontrol.LoadBalancingData.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	7,   // 134: helmsmancontrol.ClipLifecycleData.stage:type_name -> helmsmancontrol.ClipLifecycleData.Stage
-	8,   // 135: helmsmancontrol.DVRLifecycleData.status:type_name -> helmsmancontrol.DVRLifecycleData.Status
-	9,   // 136: helmsmancontrol.VodLifecycleData.status:type_name -> helmsmancontrol.VodLifecycleData.Status
-	10,  // 137: helmsmancontrol.MessageLifecycleData.event_type:type_name -> helmsmancontrol.MessageLifecycleData.EventType
-	4,   // 138: helmsmancontrol.FederationEventData.event_type:type_name -> helmsmancontrol.FederationEventType
-	5,   // 139: helmsmancontrol.StoredArtifact.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
-	140, // 140: helmsmancontrol.StreamProcess.extra:type_name -> helmsmancontrol.StreamProcess.ExtraEntry
-	108, // 141: helmsmancontrol.StreamDef.processes:type_name -> helmsmancontrol.StreamProcess
-	109, // 142: helmsmancontrol.StreamTemplate.def:type_name -> helmsmancontrol.StreamDef
-	110, // 143: helmsmancontrol.ConfigSeed.templates:type_name -> helmsmancontrol.StreamTemplate
-	101, // 144: helmsmancontrol.ConfigSeed.processing:type_name -> helmsmancontrol.ProcessingConfig
-	3,   // 145: helmsmancontrol.ConfigSeed.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
-	111, // 146: helmsmancontrol.ConfigSeed.tls:type_name -> helmsmancontrol.TLSCertBundle
-	113, // 147: helmsmancontrol.ConfigSeed.site:type_name -> helmsmancontrol.SiteConfig
-	146, // 148: helmsmancontrol.ConfigSeed.telemetry:type_name -> common.EdgeTelemetryConfig
-	114, // 149: helmsmancontrol.TranscodeJobRequest.profiles:type_name -> helmsmancontrol.TranscodeProfile
-	141, // 150: helmsmancontrol.ProcessingJobRequest.params:type_name -> helmsmancontrol.ProcessingJobRequest.ParamsEntry
-	142, // 151: helmsmancontrol.ProcessingJobResult.outputs:type_name -> helmsmancontrol.ProcessingJobResult.OutputsEntry
-	122, // 152: helmsmancontrol.APIRequestBatch.aggregates:type_name -> helmsmancontrol.APIRequestAggregate
-	143, // 153: helmsmancontrol.ThumbnailUploadResponse.uploads:type_name -> helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
-	144, // 154: helmsmancontrol.GatewayTelemetryEvent.timestamp:type_name -> google.protobuf.Timestamp
-	130, // 155: helmsmancontrol.GatewayTelemetryEvent.discovery:type_name -> helmsmancontrol.OrchestratorDiscoveryObserved
-	131, // 156: helmsmancontrol.GatewayTelemetryEvent.state:type_name -> helmsmancontrol.OrchestratorStateUpdate
-	133, // 157: helmsmancontrol.GatewayTelemetryEvent.transcode:type_name -> helmsmancontrol.OrchestratorTranscodeOutcome
-	134, // 158: helmsmancontrol.GatewayTelemetryEvent.ai:type_name -> helmsmancontrol.OrchestratorAIOutcome
-	144, // 159: helmsmancontrol.OrchestratorVantageGeo.geo_resolved_at:type_name -> google.protobuf.Timestamp
-	129, // 160: helmsmancontrol.OrchestratorDiscoveryObserved.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
-	129, // 161: helmsmancontrol.OrchestratorStateUpdate.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
-	132, // 162: helmsmancontrol.OrchestratorStateUpdate.capability_price_entries:type_name -> helmsmancontrol.OrchestratorCapabilityPriceEntry
-	105, // 163: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
-	20,  // 164: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
-	45,  // 165: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
-	41,  // 166: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
-	12,  // 167: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
-	128, // 168: helmsmancontrol.DecklogService.SendGatewayTelemetry:input_type -> helmsmancontrol.GatewayTelemetryEvent
-	20,  // 169: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
-	46,  // 170: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
-	147, // 171: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
-	147, // 172: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
-	147, // 173: helmsmancontrol.DecklogService.SendGatewayTelemetry:output_type -> google.protobuf.Empty
-	169, // [169:174] is the sub-list for method output_type
-	164, // [164:169] is the sub-list for method input_type
-	164, // [164:164] is the sub-list for extension type_name
-	164, // [164:164] is the sub-list for extension extendee
-	0,   // [0:164] is the sub-list for field type_name
+	70,  // 108: helmsmancontrol.RetryDVRSegmentUpload.segments:type_name -> helmsmancontrol.DVRSegmentRef
+	70,  // 109: helmsmancontrol.RestoreLocalSegmentIndexResponse.segments:type_name -> helmsmancontrol.DVRSegmentRef
+	135, // 110: helmsmancontrol.FreezePermissionResponse.segment_urls:type_name -> helmsmancontrol.FreezePermissionResponse.SegmentUrlsEntry
+	136, // 111: helmsmancontrol.FreezeRequest.segment_urls:type_name -> helmsmancontrol.FreezeRequest.SegmentUrlsEntry
+	137, // 112: helmsmancontrol.DefrostRequest.segment_urls:type_name -> helmsmancontrol.DefrostRequest.SegmentUrlsEntry
+	70,  // 113: helmsmancontrol.DefrostRequest.chapter_segments:type_name -> helmsmancontrol.DVRSegmentRef
+	138, // 114: helmsmancontrol.DtshSyncRequest.dtsh_urls:type_name -> helmsmancontrol.DtshSyncRequest.DtshUrlsEntry
+	6,   // 115: helmsmancontrol.StorageLifecycleData.action:type_name -> helmsmancontrol.StorageLifecycleData.Action
+	11,  // 116: helmsmancontrol.PushRewriteTrigger.publisher_bucket:type_name -> helmsmancontrol.GeoBucket
+	11,  // 117: helmsmancontrol.PushRewriteTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	11,  // 118: helmsmancontrol.ViewerResolveTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	11,  // 119: helmsmancontrol.ViewerResolveTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	11,  // 120: helmsmancontrol.ViewerConnectTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	11,  // 121: helmsmancontrol.ViewerConnectTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	11,  // 122: helmsmancontrol.ViewerDisconnectTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	11,  // 123: helmsmancontrol.ViewerDisconnectTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	106, // 124: helmsmancontrol.StreamBufferTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
+	106, // 125: helmsmancontrol.StreamTrackListTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
+	100, // 126: helmsmancontrol.NodeLifecycleUpdate.capabilities:type_name -> helmsmancontrol.NodeCapabilities
+	103, // 127: helmsmancontrol.NodeLifecycleUpdate.storage:type_name -> helmsmancontrol.StorageInfo
+	104, // 128: helmsmancontrol.NodeLifecycleUpdate.limits:type_name -> helmsmancontrol.NodeLimits
+	139, // 129: helmsmancontrol.NodeLifecycleUpdate.streams:type_name -> helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
+	107, // 130: helmsmancontrol.NodeLifecycleUpdate.artifacts:type_name -> helmsmancontrol.StoredArtifact
+	22,  // 131: helmsmancontrol.NodeLifecycleUpdate.component_versions:type_name -> helmsmancontrol.EdgeComponentVersion
+	3,   // 132: helmsmancontrol.NodeLifecycleUpdate.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
+	11,  // 133: helmsmancontrol.LoadBalancingData.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	11,  // 134: helmsmancontrol.LoadBalancingData.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	7,   // 135: helmsmancontrol.ClipLifecycleData.stage:type_name -> helmsmancontrol.ClipLifecycleData.Stage
+	8,   // 136: helmsmancontrol.DVRLifecycleData.status:type_name -> helmsmancontrol.DVRLifecycleData.Status
+	9,   // 137: helmsmancontrol.VodLifecycleData.status:type_name -> helmsmancontrol.VodLifecycleData.Status
+	10,  // 138: helmsmancontrol.MessageLifecycleData.event_type:type_name -> helmsmancontrol.MessageLifecycleData.EventType
+	4,   // 139: helmsmancontrol.FederationEventData.event_type:type_name -> helmsmancontrol.FederationEventType
+	5,   // 140: helmsmancontrol.StoredArtifact.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
+	140, // 141: helmsmancontrol.StreamProcess.extra:type_name -> helmsmancontrol.StreamProcess.ExtraEntry
+	108, // 142: helmsmancontrol.StreamDef.processes:type_name -> helmsmancontrol.StreamProcess
+	109, // 143: helmsmancontrol.StreamTemplate.def:type_name -> helmsmancontrol.StreamDef
+	110, // 144: helmsmancontrol.ConfigSeed.templates:type_name -> helmsmancontrol.StreamTemplate
+	101, // 145: helmsmancontrol.ConfigSeed.processing:type_name -> helmsmancontrol.ProcessingConfig
+	3,   // 146: helmsmancontrol.ConfigSeed.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
+	111, // 147: helmsmancontrol.ConfigSeed.tls:type_name -> helmsmancontrol.TLSCertBundle
+	113, // 148: helmsmancontrol.ConfigSeed.site:type_name -> helmsmancontrol.SiteConfig
+	146, // 149: helmsmancontrol.ConfigSeed.telemetry:type_name -> common.EdgeTelemetryConfig
+	114, // 150: helmsmancontrol.TranscodeJobRequest.profiles:type_name -> helmsmancontrol.TranscodeProfile
+	141, // 151: helmsmancontrol.ProcessingJobRequest.params:type_name -> helmsmancontrol.ProcessingJobRequest.ParamsEntry
+	142, // 152: helmsmancontrol.ProcessingJobResult.outputs:type_name -> helmsmancontrol.ProcessingJobResult.OutputsEntry
+	122, // 153: helmsmancontrol.APIRequestBatch.aggregates:type_name -> helmsmancontrol.APIRequestAggregate
+	143, // 154: helmsmancontrol.ThumbnailUploadResponse.uploads:type_name -> helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
+	144, // 155: helmsmancontrol.GatewayTelemetryEvent.timestamp:type_name -> google.protobuf.Timestamp
+	130, // 156: helmsmancontrol.GatewayTelemetryEvent.discovery:type_name -> helmsmancontrol.OrchestratorDiscoveryObserved
+	131, // 157: helmsmancontrol.GatewayTelemetryEvent.state:type_name -> helmsmancontrol.OrchestratorStateUpdate
+	133, // 158: helmsmancontrol.GatewayTelemetryEvent.transcode:type_name -> helmsmancontrol.OrchestratorTranscodeOutcome
+	134, // 159: helmsmancontrol.GatewayTelemetryEvent.ai:type_name -> helmsmancontrol.OrchestratorAIOutcome
+	144, // 160: helmsmancontrol.OrchestratorVantageGeo.geo_resolved_at:type_name -> google.protobuf.Timestamp
+	129, // 161: helmsmancontrol.OrchestratorDiscoveryObserved.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
+	129, // 162: helmsmancontrol.OrchestratorStateUpdate.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
+	132, // 163: helmsmancontrol.OrchestratorStateUpdate.capability_price_entries:type_name -> helmsmancontrol.OrchestratorCapabilityPriceEntry
+	105, // 164: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
+	20,  // 165: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
+	45,  // 166: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
+	41,  // 167: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
+	12,  // 168: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
+	128, // 169: helmsmancontrol.DecklogService.SendGatewayTelemetry:input_type -> helmsmancontrol.GatewayTelemetryEvent
+	20,  // 170: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
+	46,  // 171: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
+	147, // 172: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
+	147, // 173: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
+	147, // 174: helmsmancontrol.DecklogService.SendGatewayTelemetry:output_type -> google.protobuf.Empty
+	170, // [170:175] is the sub-list for method output_type
+	165, // [165:170] is the sub-list for method input_type
+	165, // [165:165] is the sub-list for extension type_name
+	165, // [165:165] is the sub-list for extension extendee
+	0,   // [0:165] is the sub-list for field type_name
 }
 
 func init() { file_ipc_proto_init() }

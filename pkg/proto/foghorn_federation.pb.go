@@ -500,13 +500,13 @@ func (x *OriginPullAck) GetDtscUrl() string {
 
 type PrepareArtifactRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
-	ArtifactId        string                 `protobuf:"bytes,1,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"` // Artifact hash (clip/dvr/vod)
-	ClipHash          string                 `protobuf:"bytes,2,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`       // Legacy: clip hash alias
+	ArtifactId        string                 `protobuf:"bytes,1,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"` // Artifact hash (clip/vod)
+	ClipHash          string                 `protobuf:"bytes,2,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`       // Clip hash fallback alias
 	RequestingCluster string                 `protobuf:"bytes,3,opt,name=requesting_cluster,json=requestingCluster,proto3" json:"requesting_cluster,omitempty"`
-	ArtifactType      string                 `protobuf:"bytes,4,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"` // "clip", "dvr", "vod"
+	ArtifactType      string                 `protobuf:"bytes,4,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"` // "clip" or "vod"; DVR is rejected by PrepareArtifact
 	TenantId          string                 `protobuf:"bytes,5,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	// For DVR chapter-aware fetches: bound segment enumeration to a media
-	// range. DVR requests must pass a bounded range.
+	// Reserved wire surface from the DVR chapter prototype. Current DVR
+	// playback uses RetrieveDVRChapter plus the returned dvr+ playback ID.
 	DvrStartMs    int64 `protobuf:"varint,6,opt,name=dvr_start_ms,json=dvrStartMs,proto3" json:"dvr_start_ms,omitempty"`
 	DvrEndMs      int64 `protobuf:"varint,7,opt,name=dvr_end_ms,json=dvrEndMs,proto3" json:"dvr_end_ms,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -599,11 +599,8 @@ type PrepareArtifactResponse struct {
 	Ready           bool                   `protobuf:"varint,3,opt,name=ready,proto3" json:"ready,omitempty"`                                              // True if artifact is immediately available
 	EstReadySeconds uint32                 `protobuf:"varint,4,opt,name=est_ready_seconds,json=estReadySeconds,proto3" json:"est_ready_seconds,omitempty"` // Estimated time until ready (for async prep)
 	Error           string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
-	// DEPRECATED for new DVR consumers: legacy filename → presigned GET URL.
-	// Kept populated for clip/backwards-compat callers and as a convenience
-	// shadow of `dvr_segments` for older sidecars; new chapter-aware consumers
-	// should read `dvr_segments` instead so they see status (lost_local rows
-	// surface with empty url so the local manifest writer renders #EXT-X-GAP).
+	// Filename -> presigned GET URL for segmented non-DVR artifacts.
+	// DVR chapter playback uses dvr+ routing and does not consume this field.
 	SegmentUrls        map[string]string `protobuf:"bytes,6,rep,name=segment_urls,json=segmentUrls,proto3" json:"segment_urls,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Format             string            `protobuf:"bytes,7,opt,name=format,proto3" json:"format,omitempty"`                                                     // Container format (mp4, m3u8, etc.)
 	InternalName       string            `protobuf:"bytes,8,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                     // Artifact routing name (vod+{this})
@@ -613,9 +610,8 @@ type PrepareArtifactResponse struct {
 	// other fields on this response are ignored when redirect_cluster_id is
 	// set. Single hop only — chained redirects fail closed at the consumer.
 	RedirectClusterId string `protobuf:"bytes,10,opt,name=redirect_cluster_id,json=redirectClusterId,proto3" json:"redirect_cluster_id,omitempty"`
-	// For DVR chapter-aware fetches: per-segment metadata derived from
-	// foghorn.dvr_segments. Includes lost_local rows with empty
-	// presigned_get_url so the consumer renders #EXT-X-GAP markers.
+	// Reserved wire surface from the DVR chapter prototype. Current DVR
+	// playback defrosts through the selected edge using the chapter ID.
 	DvrSegments   []*DVRSegmentRef `protobuf:"bytes,11,rep,name=dvr_segments,json=dvrSegments,proto3" json:"dvr_segments,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

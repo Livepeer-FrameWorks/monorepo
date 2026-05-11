@@ -153,6 +153,28 @@ service InternalService {
   // Create a user in an existing tenant (bootstrap/admin provisioning)
   // Requires SERVICE_TOKEN auth. Skips tenant creation and verification.
   rpc CreateUserInTenant(CreateUserInTenantRequest) returns (CreateUserInTenantResponse);
+
+  // Customer-tunable retention defaults + per-asset overrides. Cascade order
+  // at StartDVR is: per-asset override → tenant default → Purser entitlement.
+  // The resolved value is snapshotted onto foghorn.artifacts at start; the
+  // existing RetentionJob in Foghorn enforces it. Per-asset overrides applied
+  // after finalize push a new retention_until into Foghorn via
+  // foghorn.DVRControlService.OverrideArtifactRetention.
+  rpc GetMediaRetentionPolicy(GetMediaRetentionPolicyRequest) returns (GetMediaRetentionPolicyResponse);
+  rpc SetMediaRetentionPolicy(SetMediaRetentionPolicyRequest) returns (SetMediaRetentionPolicyResponse);
+  rpc UpdateAssetRetention(UpdateAssetRetentionRequest) returns (UpdateAssetRetentionResponse);
+  rpc ResetAssetRetention(ResetAssetRetentionRequest) returns (UpdateAssetRetentionResponse);
+
+  // Dry-run policy evaluation against a caller-supplied JWT or webhook test.
+  // Commodore validates tenant ownership of the playback target and forwards
+  // to the owning Foghorn — auth logic is NOT reimplemented here.
+  rpc TestPlaybackAccess(foghorn.TestPlaybackAccessRequest) returns (foghorn.TestPlaybackAccessResponse);
+
+  // Foghorn writes one pull_source_events row per STREAM_SOURCE resolution
+  // against a pull+ stream. The list query feeds the webapp's "pull source
+  // health" view.
+  rpc RecordPullSourceEvent(RecordPullSourceEventRequest) returns (google.protobuf.Empty);
+  rpc ListPullSourceEvents(ListPullSourceEventsRequest) returns (ListPullSourceEventsResponse);
 }
 
 // ============================================================================
@@ -1295,8 +1317,6 @@ service ViewerService {
 // VOD SERVICE (Gateway → Commodore → Foghorn proxy)
 // User-initiated video uploads (distinct from clips/DVR which are stream-derived)
 // Uses shared types from shared.proto
-// ============================================================================
-
 service VodService {
   // Initiate multipart upload - returns presigned URLs for direct S3 upload
   rpc CreateVodUpload(shared.CreateVodUploadRequest) returns (shared.CreateVodUploadResponse);
@@ -1314,23 +1334,12 @@ service VodService {
   rpc DeleteVodAsset(shared.DeleteVodAssetRequest) returns (shared.DeleteVodAssetResponse);
 }
 
-// ============================================================================
-// NODE MANAGEMENT SERVICE (Gateway → Commodore → Foghorn proxy)
-// Proxies node lifecycle operations to the Foghorn that owns the node's cluster.
-// ============================================================================
-
 service NodeManagementService {
   // Set a node's operational mode (normal, draining, maintenance)
   rpc SetNodeOperationalMode(foghorn.SetNodeModeRequest) returns (foghorn.SetNodeModeResponse);
   // Get real-time health and routing state for a node
   rpc GetNodeHealth(foghorn.GetNodeHealthRequest) returns (foghorn.GetNodeHealthResponse);
 }
-
-// ============================================================================
-// PLAYBACK ACCESS CONTROL SERVICE (Gateway → Commodore for signing keys + policy)
-// Customer-managed ES256 signing keys + per-playback-object policy storage.
-// Foghorn fetches enforcement data via InternalService.ResolvePlaybackPolicy.
-// ============================================================================
 
 service PlaybackAccessControlService {
   // Create a new ES256 signing keypair for the tenant. Generates the keypair
@@ -1412,4 +1421,99 @@ message SetPlaybackPolicyResponse {
   string vod_asset_id = 2;
   string clip_id = 3;
   bool requires_auth = 4;
+}
+
+message RecordPullSourceEventRequest {
+  string tenant_id = 1;
+  string stream_id = 2;            // optional — empty when resolution couldn't reach a tenant
+  string internal_name = 3;
+  // 'resolved' | 'not_found' | 'disabled' | 'blocked_uri' | 'private_not_allowed' | 'commodore_error' | 'foghorn_base_unresolved'
+  string event_kind = 4;
+  string detail = 5;
+}
+
+message ListPullSourceEventsRequest {
+  string stream_id = 1;            // either stream_id or internal_name required
+  string internal_name = 2;
+  int32 limit = 3;                 // default 50, max 200
+}
+
+message PullSourceEvent {
+  string id = 1;
+  string stream_id = 2;
+  string internal_name = 3;
+  string event_kind = 4;
+  string detail = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message ListPullSourceEventsResponse {
+  repeated PullSourceEvent events = 1;
+}
+
+message MediaRetentionBounds {
+  // Tier entitlement upper bound for recording retention (days). Read from
+  // Purser at request time; tenant policy / per-asset overrides must be ≤
+  // this value. 0 = use system default 30.
+  int32 max_recording_retention_days = 1;
+}
+
+message GetMediaRetentionPolicyRequest {
+  string tenant_id = 1;
+}
+
+message GetMediaRetentionPolicyResponse {
+  // Tenant default override. If recording_retention_days_set is false, the
+  // tenant has not set a custom default and Purser's entitlement applies.
+  bool recording_retention_days_set = 1;
+  int32 recording_retention_days = 2;
+  // Effective value the cascade would resolve to today (override → tenant → entitlement).
+  int32 effective_recording_retention_days = 3;
+  MediaRetentionBounds bounds = 4;
+  string updated_by = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message SetMediaRetentionPolicyRequest {
+  string tenant_id = 1;
+  string updated_by = 2;
+  // Required; must satisfy 1 ≤ value ≤ bounds.max_recording_retention_days.
+  int32 recording_retention_days = 3;
+}
+
+message SetMediaRetentionPolicyResponse {
+  GetMediaRetentionPolicyResponse policy = 1;
+}
+
+enum MediaRetentionTarget {
+  MEDIA_RETENTION_TARGET_UNSPECIFIED = 0;
+  MEDIA_RETENTION_TARGET_DVR = 1;
+  MEDIA_RETENTION_TARGET_CLIP = 2;
+  MEDIA_RETENTION_TARGET_VOD = 3;
+}
+
+message UpdateAssetRetentionRequest {
+  string tenant_id = 1;
+  MediaRetentionTarget target_type = 2;
+  // Canonical asset ID: dvr_id (UUID) or dvr_hash for DVR targets. Either is
+  // accepted; resolver picks the right column.
+  string target_id = 3;
+  // Exactly one of retention_days (relative to NOW) or retention_until
+  // (absolute) must be set.
+  int32 retention_days = 4;
+  google.protobuf.Timestamp retention_until = 5;
+}
+
+message ResetAssetRetentionRequest {
+  string tenant_id = 1;
+  MediaRetentionTarget target_type = 2;
+  string target_id = 3;
+}
+
+message UpdateAssetRetentionResponse {
+  string target_id = 1;
+  int32 retention_days = 2;            // Effective horizon in days from now (informational)
+  google.protobuf.Timestamp retention_until = 3;
+  // 'tenant_default' | 'per_asset_override' | 'tier_entitlement'
+  string source = 4;
 }

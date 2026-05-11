@@ -343,11 +343,19 @@ CREATE TABLE IF NOT EXISTS commodore.clips (
 
     -- ===== LIFECYCLE =====
     retention_until TIMESTAMP,
+    -- Per-asset retention overrides resolved at UpdateAssetRetention before
+    -- the value is propagated into foghorn.artifacts.retention_until.
+    retention_override_days INTEGER,
+    retention_override_until TIMESTAMP,
+    retention_source VARCHAR(32),       -- 'tenant_default' | 'per_asset_override' | NULL
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_tenant ON commodore.clips(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_commodore_clips_retention_override
+    ON commodore.clips(tenant_id, retention_override_until)
+    WHERE retention_override_until IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_stream ON commodore.clips(stream_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_user ON commodore.clips(user_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_hash ON commodore.clips(clip_hash);
@@ -375,11 +383,19 @@ CREATE TABLE IF NOT EXISTS commodore.dvr_recordings (
 
     -- ===== LIFECYCLE =====
     retention_until TIMESTAMP,
+    -- Per-asset retention overrides resolved at Commodore.StartDVR before
+    -- the value is snapshotted into foghorn.artifacts.dvr_retention_days.
+    retention_override_days INTEGER,
+    retention_override_until TIMESTAMP,
+    retention_source VARCHAR(32),       -- 'tenant_default' | 'per_asset_override' | NULL
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_tenant ON commodore.dvr_recordings(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_commodore_dvr_retention_override
+    ON commodore.dvr_recordings(tenant_id, retention_override_until)
+    WHERE retention_override_until IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_stream ON commodore.dvr_recordings(stream_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_user ON commodore.dvr_recordings(user_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_hash ON commodore.dvr_recordings(dvr_hash);
@@ -388,6 +404,25 @@ CREATE INDEX IF NOT EXISTS idx_commodore_dvr_internal ON commodore.dvr_recording
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_dvr_playback_ci
     ON commodore.dvr_recordings((lower(playback_id::text)));
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_created ON commodore.dvr_recordings(created_at);
+
+CREATE TABLE IF NOT EXISTS commodore.dvr_chapter_aliases (
+    chapter_id VARCHAR(64) PRIMARY KEY,
+    dvr_hash VARCHAR(32) NOT NULL,
+    tenant_id UUID NOT NULL,
+    stream_id UUID,
+    origin_cluster_id VARCHAR(100) NOT NULL,
+    mode VARCHAR(32) NOT NULL,
+    interval_seconds INTEGER,
+    start_ms BIGINT NOT NULL,
+    end_ms BIGINT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_commodore_dvr_chapter_alias_dvr
+    ON commodore.dvr_chapter_aliases(dvr_hash, start_ms, end_ms);
+CREATE INDEX IF NOT EXISTS idx_commodore_dvr_chapter_alias_tenant
+    ON commodore.dvr_chapter_aliases(tenant_id, created_at DESC);
 
 -- Generate clip hash (deterministic based on stream + timing)
 CREATE OR REPLACE FUNCTION commodore.generate_clip_hash(
@@ -454,9 +489,16 @@ CREATE TABLE IF NOT EXISTS commodore.vod_assets (
 
     -- ===== LIFECYCLE =====
     retention_until TIMESTAMP,
+    retention_override_days INTEGER,
+    retention_override_until TIMESTAMP,
+    retention_source VARCHAR(32),
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_commodore_vod_retention_override
+    ON commodore.vod_assets(tenant_id, retention_override_until)
+    WHERE retention_override_until IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_tenant ON commodore.vod_assets(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_user ON commodore.vod_assets(user_id);
@@ -496,6 +538,47 @@ CREATE TABLE IF NOT EXISTS commodore.tenant_processing_config (
     processes_vod JSONB,            -- Override for VOD processes (NULL = use tier default)
     updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- ============================================================================
+-- TENANT MEDIA RETENTION POLICY (Customer-Tunable Storage Cost Control)
+-- ============================================================================
+-- Tenant-wide retention default. NULL columns fall back to the Purser
+-- recording_retention_days entitlement for the tenant's tier. Cascade order
+-- at Commodore.StartDVR is:
+--   per-asset override → this tenant default → Purser entitlement.
+-- The resolved value is snapshotted onto the artifact (foghorn) at start; the
+-- enforcement loop in Foghorn is unchanged.
+
+CREATE TABLE IF NOT EXISTS commodore.tenant_media_retention_policies (
+    tenant_id UUID PRIMARY KEY,
+    recording_retention_days INTEGER,    -- NULL = use Purser tier entitlement
+    updated_by UUID,                     -- User who last touched the policy
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- ============================================================================
+-- PULL SOURCE LIFECYCLE EVENTS (Resolution stage)
+-- ============================================================================
+-- Append-only audit of Foghorn STREAM_SOURCE resolutions against pull+
+-- streams. Captures the customer-facing resolution outcome — Mist's
+-- downstream dial result is NOT yet captured here (separate trigger work).
+
+CREATE TABLE IF NOT EXISTS commodore.pull_source_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    stream_id UUID,
+    internal_name VARCHAR(255) NOT NULL,
+    event_kind VARCHAR(32) NOT NULL,
+    detail TEXT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_commodore_pull_source_events_tenant
+    ON commodore.pull_source_events(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_commodore_pull_source_events_stream
+    ON commodore.pull_source_events(stream_id, created_at DESC)
+    WHERE stream_id IS NOT NULL;
 
 -- ============================================================================
 -- PLAYBACK ACCESS CONTROL

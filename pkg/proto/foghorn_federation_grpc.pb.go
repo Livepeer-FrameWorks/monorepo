@@ -45,7 +45,8 @@ type FoghornFederationClient interface {
 	QueryStream(ctx context.Context, in *QueryStreamRequest, opts ...grpc.CallOption) (*QueryStreamResponse, error)
 	// NotifyOriginPull tells the origin cluster that a peer intends to pull a stream via DTSC.
 	NotifyOriginPull(ctx context.Context, in *OriginPullNotification, opts ...grpc.CallOption) (*OriginPullAck, error)
-	// PrepareArtifact requests an artifact (clip/DVR/VOD) be made available for cross-cluster access.
+	// PrepareArtifact requests a clip or VOD be made available for cross-cluster access.
+	// DVR replay uses dvr+ chapter routing and chapter-bounded edge defrost.
 	PrepareArtifact(ctx context.Context, in *PrepareArtifactRequest, opts ...grpc.CallOption) (*PrepareArtifactResponse, error)
 	// CreateRemoteClip requests the origin cluster to create a clip on behalf of a remote cluster.
 	CreateRemoteClip(ctx context.Context, in *RemoteClipRequest, opts ...grpc.CallOption) (*RemoteClipResponse, error)
@@ -231,7 +232,8 @@ type FoghornFederationServer interface {
 	QueryStream(context.Context, *QueryStreamRequest) (*QueryStreamResponse, error)
 	// NotifyOriginPull tells the origin cluster that a peer intends to pull a stream via DTSC.
 	NotifyOriginPull(context.Context, *OriginPullNotification) (*OriginPullAck, error)
-	// PrepareArtifact requests an artifact (clip/DVR/VOD) be made available for cross-cluster access.
+	// PrepareArtifact requests a clip or VOD be made available for cross-cluster access.
+	// DVR replay uses dvr+ chapter routing and chapter-bounded edge defrost.
 	PrepareArtifact(context.Context, *PrepareArtifactRequest) (*PrepareArtifactResponse, error)
 	// CreateRemoteClip requests the origin cluster to create a clip on behalf of a remote cluster.
 	CreateRemoteClip(context.Context, *RemoteClipRequest) (*RemoteClipResponse, error)

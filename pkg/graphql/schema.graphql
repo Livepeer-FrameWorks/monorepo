@@ -742,6 +742,14 @@ type Query {
     """
     page: ConnectionInput
   ): MessagesConnection!
+
+  """
+  Tenant-default retention policy + entitlement bounds + the value the
+  cascade (per-asset override → tenant default → tier entitlement) would
+  resolve to today. Used by the webapp's "Storage retention defaults"
+  panel to size sliders and explain the allowed range.
+  """
+  mediaRetentionPolicy: MediaRetentionPolicy!
 }
 
 """
@@ -1784,6 +1792,44 @@ type Mutation {
     """
     input: SendMessageInput!
   ): SendMessageResult!
+
+  """
+  Set a node's operational mode. Drains/maintenance bleed traffic away from
+  the node; restoring with NORMAL re-admits it to routing. Reason is
+  recorded in Foghorn's audit trail.
+  """
+  setNodeMode(input: SetNodeModeInput!): SetNodeModeResult!
+
+  """
+  Run the same evaluator the live USER_NEW path uses against a caller-
+  supplied JWT (or webhook test request) without registering a viewer
+  session. Mutation, not query, because webhook mode (fireWebhook=true)
+  fires a real outbound HTTPS request to the customer URL.
+  Tenant ownership of the playback target is validated server-side.
+  """
+  testPlaybackAccess(input: TestPlaybackAccessInput!): TestPlaybackAccessResult!
+
+  """
+  Set the tenant-default retention policy for finalized DVR recordings.
+  The proposed value must satisfy 1 ≤ value ≤ tier entitlement bound; the
+  bound is exposed via the `mediaRetentionPolicy` query. Passing the current
+  tier bound clears the tenant override so future tier changes flow through.
+  """
+  setMediaRetentionPolicy(input: SetMediaRetentionPolicyInput!): SetMediaRetentionPolicyResult!
+
+  """
+  Apply a per-asset retention override on a finalized DVR recording, clip,
+  or VOD asset (set targetType accordingly). Override beats tenant default
+  beats tier entitlement. Active assets are rejected — retention applies
+  post-finalize.
+  """
+  updateMediaRetention(input: UpdateMediaRetentionInput!): UpdateMediaRetentionResult!
+
+  """
+  Clear a per-asset retention override and recompute the horizon from the
+  tenant default (or tier entitlement when no tenant default is set).
+  """
+  resetMediaRetentionOverride(input: ResetMediaRetentionOverrideInput!): UpdateMediaRetentionResult!
 }
 
 # Error interface and types for mutation results
@@ -1844,6 +1890,17 @@ union CompleteVodUploadResult = VodAsset | ValidationError | NotFoundError | Aut
 union AbortVodUploadResult = DeleteSuccess | NotFoundError | AuthError
 union DeleteVodAssetResult = DeleteSuccess | NotFoundError | AuthError
 union VodUploadStatusResult = VodUploadStatus | ValidationError | NotFoundError | AuthError
+
+union SetMediaRetentionPolicyResult = MediaRetentionPolicy | ValidationError | AuthError
+union UpdateMediaRetentionResult = EffectiveRetention | ValidationError | NotFoundError | AuthError
+
+union SetNodeModeResult = InfrastructureNode | ValidationError | NotFoundError | AuthError
+
+union TestPlaybackAccessResult =
+  | PlaybackAccessDecision
+  | ValidationError
+  | NotFoundError
+  | AuthError
 
 union CreatePaymentResult = Payment | ValidationError | AuthError
 union SubmitX402PaymentResult = X402PaymentResult | ValidationError | NotFoundError | AuthError
@@ -2250,6 +2307,13 @@ type DVRRequest {
   expiresAt: Time
   "Whether the DVR has passed its retention date (expiresAt < now)."
   isExpired: Boolean!
+  """
+  Resolved retention horizon for this recording with the source of the
+  decision (per-asset override → tenant default → tier entitlement).
+  Available on finalized recordings; null while the recording is active
+  (retention applies post-finalize).
+  """
+  effectiveRetention: EffectiveRetention
   # Lifecycle data (from Periscope via artifactStatesConnection)
   storageNodeId: String
   status: String
@@ -2307,16 +2371,16 @@ enum DVRChapterMode {
 """
 A single chapter view of a DVR recording.
 
-manifestUrl is a presigned GET URL for a player-facing manifest whose
-segment URLs are also presigned. TTL scales with the chapter duration
-and is clamped by the backend; use manifestS3Key as the stable cache key
-when re-fetching a fresh URL.
+manifestUrl carries the Mist playback ID for this chapter
+(`dvr+{chapterId}`). Resolve it through resolveViewerEndpoint and let
+the selected edge defrost the bounded chapter into its local segment
+bucket. Use manifestS3Key as the stable canonical chapter manifest key.
 
 isCurrent=true means the chapter is still being recorded into; the
-manifest is EVENT-shaped (no #EXT-X-ENDLIST) and the player should poll
-for updates. hasGaps=true means at least one segment in the chapter
-range was lost before upload; the manifest renders #EXT-X-GAP markers
-and the player will skip those segments while preserving the timeline.
+edge manifest is EVENT-shaped while defrost is filling segments.
+hasGaps=true means at least one segment in the chapter range was lost
+before upload; the manifest renders #EXT-X-GAP markers and the player
+will skip those segments while preserving the timeline.
 """
 type DVRChapter {
   chapterId: ID!
@@ -3046,6 +3110,20 @@ enum NodeStatus {
   UNHEALTHY
 }
 
+"""
+Operational mode controlling whether a node accepts new sessions. The mode
+is set via setNodeMode and snapshotted onto the node's heartbeat; routing
+inspects it via GetNodeHealth and steers around drained / maintenance nodes.
+"""
+enum NodeOperationalMode {
+  "Accepts new viewers and ingest. Default."
+  NORMAL
+  "Existing viewers continue; new viewers are routed elsewhere. Use before maintenance to bleed load gracefully."
+  DRAINING
+  "Hard out — node is removed from routing entirely. Existing sessions terminate."
+  MAINTENANCE
+}
+
 enum BootstrapTokenType {
   EDGE_NODE
   SERVICE
@@ -3296,6 +3374,27 @@ type Stream implements Node {
   pushTargets: [PushTarget!]!
   "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
   playbackPolicy: PlaybackPolicy
+  """
+  Recent pull-source resolution events for pull streams. Captures the
+  customer-facing resolution outcome (resolved, not_found, disabled,
+  blocked_uri, private_not_allowed, commodore_error,
+  foghorn_base_unresolved). Null for push streams.
+  """
+  recentPullSourceEvents(limit: Int = 50): [PullSourceEvent!]
+}
+
+"""
+A single pull-source resolution outcome from Foghorn's STREAM_SOURCE
+handler. Append-only; written every time a pull+ stream's source is
+re-evaluated (typically on each Mist input start).
+"""
+type PullSourceEvent {
+  id: ID!
+  internalName: String!
+  "'resolved' | 'not_found' | 'disabled' | 'blocked_uri' | 'private_not_allowed' | 'commodore_error' | 'foghorn_base_unresolved'"
+  eventKind: String!
+  detail: String
+  createdAt: Time!
 }
 
 """
@@ -5203,6 +5302,25 @@ type InfrastructureNode implements Node {
   metrics1hConnection(page: ConnectionInput, timeRange: TimeRangeInput): NodeMetrics1hConnection!
   "Real-time state from the analytics data plane."
   liveState: LiveNode
+  """
+  Current operational mode (normal / draining / maintenance). Read from
+  Foghorn's per-node heartbeat. Changes via setNodeMode.
+  """
+  effectiveMode: NodeOperationalMode!
+  """
+  Current traffic on this node. Operators use these counts to understand
+  how much live traffic is affected before draining or entering maintenance.
+  Counts come from Foghorn's GetNodeHealth.
+  """
+  routingImpactPreview: RoutingImpactPreview!
+}
+
+"""
+Snapshot of how much traffic a node is currently serving.
+"""
+type RoutingImpactPreview {
+  activeStreams: Int!
+  activeViewers: Int!
 }
 
 """
@@ -6564,12 +6682,6 @@ type OrchestratorsConnection {
   totalCount: Int!
 }
 
-# ============================================================================
-# PLAYBACK ACCESS CONTROL
-# ============================================================================
-# Customer-managed ES256 signing keys + per-stream/asset/clip playback policy.
-# Foghorn enforces in the USER_NEW (MistTrigger_ViewerConnect) handler.
-
 "Algorithm used to sign viewer playback JWTs. ES256 only for v1."
 enum SigningKeyAlgorithm {
   ES256
@@ -6733,4 +6845,158 @@ input PlaybackWebhookPolicyInput {
   secret: String
   "Outbound POST timeout in milliseconds. Server caps at 10000; default 5000."
   timeoutMs: Int
+}
+
+# Customer-tunable storage retention. Cascade order at StartDVR-time and
+# at per-asset override application is:
+#   per-asset override → tenant default → tier entitlement.
+#
+# The tier entitlement (recordingRetentionDays) is the upper bound — tenant
+# defaults and per-asset overrides must satisfy 1 ≤ value ≤ entitlement.
+# Reducing retention is a destructive-adjacent operation: shortening the
+# horizon schedules the artifact for deletion at the new horizon during
+# Foghorn's next RetentionJob tick.
+
+"""
+Tenant-default retention policy plus the entitlement bounds and the
+value the cascade would resolve to today.
+"""
+type MediaRetentionPolicy {
+  """
+  Tenant override in days. Null when no tenant default has been set;
+  the cascade falls through to the tier entitlement.
+  """
+  recordingRetentionDays: Int
+  "Value the cascade would resolve to today (override → tenant → tier)."
+  effectiveRecordingRetentionDays: Int!
+  bounds: MediaRetentionBounds!
+  "User who last touched the policy. Null when no tenant override is set."
+  updatedBy: String
+  updatedAt: Time
+}
+
+"""
+Upper bounds for media retention, derived from the tenant's tier
+entitlement at request time.
+"""
+type MediaRetentionBounds {
+  "Maximum recording retention days the tenant's tier permits."
+  maxRecordingRetentionDays: Int!
+}
+
+"""
+Resolved retention horizon for a single asset (DVR, clip, or VOD).
+Returned by the override / reset mutations and embedded on DVRRequest.
+"""
+type EffectiveRetention {
+  "Days from now until the artifact is scheduled for deletion."
+  retentionDays: Int!
+  retentionUntil: Time!
+  source: RetentionSource!
+}
+
+"""
+Source of an effective retention horizon.
+"""
+enum RetentionSource {
+  TENANT_DEFAULT
+  PER_ASSET_OVERRIDE
+  TIER_ENTITLEMENT
+}
+
+"""
+Asset class targeted by an override / reset operation. Cascade order is
+identical for all three (per-asset override → tenant default → tier
+entitlement); the only thing that changes is which Commodore table the
+override is written to and which artifact_type Foghorn matches against.
+"""
+enum MediaRetentionTarget {
+  DVR
+  CLIP
+  VOD
+}
+
+input SetMediaRetentionPolicyInput {
+  "Days to retain finalized DVR recordings. Must be 1 ≤ value ≤ tier bound. The tier-bound value resets to tier default."
+  recordingRetentionDays: Int!
+}
+
+input UpdateMediaRetentionInput {
+  targetType: MediaRetentionTarget!
+  "Canonical asset ID — accepts either the asset's UUID or its hash."
+  targetId: ID!
+  "Either retentionDays (relative to NOW) or retentionUntil must be set."
+  retentionDays: Int
+  retentionUntil: Time
+}
+
+input ResetMediaRetentionOverrideInput {
+  targetType: MediaRetentionTarget!
+  targetId: ID!
+}
+
+input SetNodeModeInput {
+  "Node identifier — accepts the InfrastructureNode.id (Relay global) or nodeId (raw UUID)."
+  nodeId: ID!
+  mode: NodeOperationalMode!
+  "Free-text reason recorded in Foghorn's audit trail. Defaults to the calling user/agent identity."
+  reason: String
+}
+
+"""
+Inputs for testPlaybackAccess. Exactly one of playbackId / internalName must
+be set (the server rejects both-set and neither-set). viewerToken is
+required for JWT policies and is forwarded to the webhook payload for
+webhook policies. fireWebhook gates a real outbound HTTPS call to the
+customer URL. That call uses the same SSRF-hardened evaluator path as live
+viewer admission, and customer endpoints may log, rate-limit, or trigger
+side effects from the test request. When playbackId is supplied, the server resolves the
+canonical internalName before invoking the evaluator so webhook payloads
+carry the same streamName the live USER_NEW path would.
+"""
+input TestPlaybackAccessInput {
+  playbackId: String
+  internalName: String
+  "JWT to test (required for type=jwt; passed through in the webhook payload for type=webhook)."
+  viewerToken: String
+  viewerIp: String
+  requestUrl: String
+  connector: String
+  sessionId: String
+  """
+  Webhook policies only: when true, Foghorn will POST to the configured
+  customer URL with an HMAC-signed payload (same path the live evaluator
+  uses). When false, the evaluator returns reason="webhook-test-skipped"
+  without making the call so operators can inspect the resolved policy
+  without side effects.
+  """
+  fireWebhook: Boolean
+}
+
+"""
+Structured result of a dry-run policy evaluation. Mirrors Foghorn's
+PlaybackDecision struct.
+"""
+type PlaybackAccessDecision {
+  allowed: Boolean!
+  "Resolved policy type: 'public' | 'jwt' | 'webhook' | '' when no policy was found."
+  policyType: String!
+  "Empty on allow; deny reason token (e.g. 'jwt-expired', 'webhook-deny-403') otherwise."
+  reason: String
+  "Free-form context for the operator (verifier error string, HTTP status as text)."
+  detail: String
+  "JWT key ID claimed by the token (extracted before verification)."
+  kid: String
+  """
+  JSON-encoded JWT claims map. On allow, the verified claims. On deny, an
+  unverified parse of the payload — useful for diagnosing aud / required-
+  claim mismatches but never trustworthy as an auth signal.
+  """
+  claimsJson: String
+  "HTTP status code from the customer webhook (0 if no call was made)."
+  webhookStatus: Int
+  "End-to-end RTT for the webhook call in milliseconds (0 if no call was made)."
+  webhookLatencyMs: Int
+  "Internal MistServer name the evaluator resolved against. Always populated when a target was found."
+  resolvedInternalName: String
 }

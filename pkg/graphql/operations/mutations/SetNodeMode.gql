@@ -1,0 +1,27 @@
+# Set a node's operational mode. Drains/maintenance bleed traffic away;
+# NORMAL re-admits the node to routing. Reason is recorded in Foghorn's
+# audit trail and defaults to the calling user when omitted.
+mutation SetNodeMode($input: SetNodeModeInput!) {
+  setNodeMode(input: $input) {
+    ... on InfrastructureNode {
+      id
+      nodeId
+      nodeName
+      effectiveMode
+      routingImpactPreview {
+        activeStreams
+        activeViewers
+      }
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
+    }
+  }
+}

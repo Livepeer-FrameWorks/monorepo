@@ -1429,12 +1429,13 @@ type DVRInfo struct {
 	FrozenAt        *timestamppb.Timestamp `protobuf:"bytes,15,opt,name=frozen_at,json=frozenAt,proto3,oneof" json:"frozen_at,omitempty"`
 	ExpiresAt       *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`
 	// Business metadata (from Commodore registry)
-	Id            *string `protobuf:"bytes,17,opt,name=id,proto3,oneof" json:"id,omitempty"`                                   // UUID from commodore.dvr_recordings
-	Title         *string `protobuf:"bytes,18,opt,name=title,proto3,oneof" json:"title,omitempty"`                             // Stream title or custom title
-	StreamId      *string `protobuf:"bytes,19,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"`       // Public stream ID (UUID)
-	PlaybackId    *string `protobuf:"bytes,20,opt,name=playback_id,json=playbackId,proto3,oneof" json:"playback_id,omitempty"` // Public playback key (artifact playback ID)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Id              *string `protobuf:"bytes,17,opt,name=id,proto3,oneof" json:"id,omitempty"`                                                  // UUID from commodore.dvr_recordings
+	Title           *string `protobuf:"bytes,18,opt,name=title,proto3,oneof" json:"title,omitempty"`                                            // Stream title or custom title
+	StreamId        *string `protobuf:"bytes,19,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"`                      // Public stream ID (UUID)
+	PlaybackId      *string `protobuf:"bytes,20,opt,name=playback_id,json=playbackId,proto3,oneof" json:"playback_id,omitempty"`                // Public playback key (artifact playback ID)
+	RetentionSource *string `protobuf:"bytes,21,opt,name=retention_source,json=retentionSource,proto3,oneof" json:"retention_source,omitempty"` // tenant_default | per_asset_override | tier_entitlement
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *DVRInfo) Reset() {
@@ -1603,6 +1604,13 @@ func (x *DVRInfo) GetStreamId() string {
 func (x *DVRInfo) GetPlaybackId() string {
 	if x != nil && x.PlaybackId != nil {
 		return *x.PlaybackId
+	}
+	return ""
+}
+
+func (x *DVRInfo) GetRetentionSource() string {
+	if x != nil && x.RetentionSource != nil {
+		return *x.RetentionSource
 	}
 	return ""
 }
@@ -4508,7 +4516,7 @@ const file_shared_proto_rawDesc = "" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\"G\n" +
 	"\x11DeleteDVRResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\x87\b\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xcc\b\n" +
 	"\aDVRInfo\x12\x19\n" +
 	"\bdvr_hash\x18\x01 \x01(\tR\advrHash\x12#\n" +
 	"\rinternal_name\x18\x02 \x01(\tR\finternalName\x12&\n" +
@@ -4537,7 +4545,8 @@ const file_shared_proto_rawDesc = "" +
 	"\tstream_id\x18\x13 \x01(\tH\n" +
 	"R\bstreamId\x88\x01\x01\x12$\n" +
 	"\vplayback_id\x18\x14 \x01(\tH\vR\n" +
-	"playbackId\x88\x01\x01B\r\n" +
+	"playbackId\x88\x01\x01\x12.\n" +
+	"\x10retention_source\x18\x15 \x01(\tH\fR\x0fretentionSource\x88\x01\x01B\r\n" +
 	"\v_started_atB\v\n" +
 	"\t_ended_atB\x13\n" +
 	"\x11_duration_secondsB\r\n" +
@@ -4551,7 +4560,8 @@ const file_shared_proto_rawDesc = "" +
 	"\x06_titleB\f\n" +
 	"\n" +
 	"_stream_idB\x0e\n" +
-	"\f_playback_id\"\xa8\x01\n" +
+	"\f_playback_idB\x13\n" +
+	"\x11_retention_source\"\xa8\x01\n" +
 	"\x18ListDVRRecordingsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12 \n" +
 	"\tstream_id\x18\x02 \x01(\tH\x00R\bstreamId\x88\x01\x01\x12?\n" +

@@ -1,0 +1,29 @@
+# Dry-run the playback policy evaluator. Mutation (not query) because webhook
+# policies fire a real outbound HTTPS request to the customer URL when
+# fireWebhook=true; customer endpoints may log, rate-limit, or trigger side
+# effects from that request.
+mutation TestPlaybackAccess($input: TestPlaybackAccessInput!) {
+  testPlaybackAccess(input: $input) {
+    ... on PlaybackAccessDecision {
+      allowed
+      policyType
+      reason
+      detail
+      kid
+      claimsJson
+      webhookStatus
+      webhookLatencyMs
+      resolvedInternalName
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
+    }
+  }
+}

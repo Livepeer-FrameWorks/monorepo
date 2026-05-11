@@ -1,0 +1,22 @@
+# Apply a per-asset retention override on a finalized DVR / clip / VOD asset.
+# Set targetType to DVR | CLIP | VOD; either retentionDays (relative to NOW)
+# or retentionUntil must be set.
+mutation UpdateMediaRetention($input: UpdateMediaRetentionInput!) {
+  updateMediaRetention(input: $input) {
+    ... on EffectiveRetention {
+      retentionDays
+      retentionUntil
+      source
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
+    }
+  }
+}

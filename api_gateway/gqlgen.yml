@@ -822,5 +822,21 @@ models:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.MessageSender
 
+  # Media retention enum: proto's MediaRetentionTarget is an int32 enum,
+  # which gqlgen can't autobind as a string GraphQL enum. Force a generated
+  # model.MediaRetentionTarget (string-based) for the GraphQL surface; the
+  # resolver translates to/from the proto enum at the wire boundary.
+  MediaRetentionTarget:
+    model:
+      - frameworks/api_gateway/graph/model.MediaRetentionTarget
+  # MediaRetentionBounds is a plain proto message — autobind picks it up.
+
+  # NodeOperationalMode is a GraphQL-only enum (the proto wire uses a string).
+  # Bind to a hand-defined model enum so gqlgen has something concrete to
+  # marshal; the resolver maps to/from the wire string.
+  NodeOperationalMode:
+    model:
+      - frameworks/api_gateway/graph/model.NodeOperationalMode
+
 # Skip generation for these types (we'll implement them manually)
 skip_validation: true

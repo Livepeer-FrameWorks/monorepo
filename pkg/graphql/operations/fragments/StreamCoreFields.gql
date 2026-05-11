@@ -12,6 +12,13 @@ fragment StreamCoreFields on Stream {
     enabled
     class
   }
+  recentPullSourceEvents(limit: 10) {
+    id
+    internalName
+    eventKind
+    detail
+    createdAt
+  }
   createdAt
   updatedAt
 }

@@ -16,6 +16,11 @@ query GetInfrastructureNode($id: ID!) {
       diskGb
       lastHeartbeat
       tags
+      effectiveMode
+      routingImpactPreview {
+        activeStreams
+        activeViewers
+      }
       liveState {
         cpuPercent
         ramUsedBytes

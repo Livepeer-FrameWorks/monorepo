@@ -48,6 +48,13 @@ const (
 	InternalService_GetTenantUserCount_FullMethodName              = "/commodore.InternalService/GetTenantUserCount"
 	InternalService_GetTenantPrimaryUser_FullMethodName            = "/commodore.InternalService/GetTenantPrimaryUser"
 	InternalService_CreateUserInTenant_FullMethodName              = "/commodore.InternalService/CreateUserInTenant"
+	InternalService_GetMediaRetentionPolicy_FullMethodName         = "/commodore.InternalService/GetMediaRetentionPolicy"
+	InternalService_SetMediaRetentionPolicy_FullMethodName         = "/commodore.InternalService/SetMediaRetentionPolicy"
+	InternalService_UpdateAssetRetention_FullMethodName            = "/commodore.InternalService/UpdateAssetRetention"
+	InternalService_ResetAssetRetention_FullMethodName             = "/commodore.InternalService/ResetAssetRetention"
+	InternalService_TestPlaybackAccess_FullMethodName              = "/commodore.InternalService/TestPlaybackAccess"
+	InternalService_RecordPullSourceEvent_FullMethodName           = "/commodore.InternalService/RecordPullSourceEvent"
+	InternalService_ListPullSourceEvents_FullMethodName            = "/commodore.InternalService/ListPullSourceEvents"
 )
 
 // InternalServiceClient is the client API for InternalService service.
@@ -139,6 +146,25 @@ type InternalServiceClient interface {
 	// Create a user in an existing tenant (bootstrap/admin provisioning)
 	// Requires SERVICE_TOKEN auth. Skips tenant creation and verification.
 	CreateUserInTenant(ctx context.Context, in *CreateUserInTenantRequest, opts ...grpc.CallOption) (*CreateUserInTenantResponse, error)
+	// Customer-tunable retention defaults + per-asset overrides. Cascade order
+	// at StartDVR is: per-asset override → tenant default → Purser entitlement.
+	// The resolved value is snapshotted onto foghorn.artifacts at start; the
+	// existing RetentionJob in Foghorn enforces it. Per-asset overrides applied
+	// after finalize push a new retention_until into Foghorn via
+	// foghorn.DVRControlService.OverrideArtifactRetention.
+	GetMediaRetentionPolicy(ctx context.Context, in *GetMediaRetentionPolicyRequest, opts ...grpc.CallOption) (*GetMediaRetentionPolicyResponse, error)
+	SetMediaRetentionPolicy(ctx context.Context, in *SetMediaRetentionPolicyRequest, opts ...grpc.CallOption) (*SetMediaRetentionPolicyResponse, error)
+	UpdateAssetRetention(ctx context.Context, in *UpdateAssetRetentionRequest, opts ...grpc.CallOption) (*UpdateAssetRetentionResponse, error)
+	ResetAssetRetention(ctx context.Context, in *ResetAssetRetentionRequest, opts ...grpc.CallOption) (*UpdateAssetRetentionResponse, error)
+	// Dry-run policy evaluation against a caller-supplied JWT or webhook test.
+	// Commodore validates tenant ownership of the playback target and forwards
+	// to the owning Foghorn — auth logic is NOT reimplemented here.
+	TestPlaybackAccess(ctx context.Context, in *TestPlaybackAccessRequest, opts ...grpc.CallOption) (*TestPlaybackAccessResponse, error)
+	// Foghorn writes one pull_source_events row per STREAM_SOURCE resolution
+	// against a pull+ stream. The list query feeds the webapp's "pull source
+	// health" view.
+	RecordPullSourceEvent(ctx context.Context, in *RecordPullSourceEventRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	ListPullSourceEvents(ctx context.Context, in *ListPullSourceEventsRequest, opts ...grpc.CallOption) (*ListPullSourceEventsResponse, error)
 }
 
 type internalServiceClient struct {
@@ -429,6 +455,76 @@ func (c *internalServiceClient) CreateUserInTenant(ctx context.Context, in *Crea
 	return out, nil
 }
 
+func (c *internalServiceClient) GetMediaRetentionPolicy(ctx context.Context, in *GetMediaRetentionPolicyRequest, opts ...grpc.CallOption) (*GetMediaRetentionPolicyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetMediaRetentionPolicyResponse)
+	err := c.cc.Invoke(ctx, InternalService_GetMediaRetentionPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) SetMediaRetentionPolicy(ctx context.Context, in *SetMediaRetentionPolicyRequest, opts ...grpc.CallOption) (*SetMediaRetentionPolicyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetMediaRetentionPolicyResponse)
+	err := c.cc.Invoke(ctx, InternalService_SetMediaRetentionPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) UpdateAssetRetention(ctx context.Context, in *UpdateAssetRetentionRequest, opts ...grpc.CallOption) (*UpdateAssetRetentionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateAssetRetentionResponse)
+	err := c.cc.Invoke(ctx, InternalService_UpdateAssetRetention_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ResetAssetRetention(ctx context.Context, in *ResetAssetRetentionRequest, opts ...grpc.CallOption) (*UpdateAssetRetentionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateAssetRetentionResponse)
+	err := c.cc.Invoke(ctx, InternalService_ResetAssetRetention_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) TestPlaybackAccess(ctx context.Context, in *TestPlaybackAccessRequest, opts ...grpc.CallOption) (*TestPlaybackAccessResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TestPlaybackAccessResponse)
+	err := c.cc.Invoke(ctx, InternalService_TestPlaybackAccess_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) RecordPullSourceEvent(ctx context.Context, in *RecordPullSourceEventRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, InternalService_RecordPullSourceEvent_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ListPullSourceEvents(ctx context.Context, in *ListPullSourceEventsRequest, opts ...grpc.CallOption) (*ListPullSourceEventsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPullSourceEventsResponse)
+	err := c.cc.Invoke(ctx, InternalService_ListPullSourceEvents_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InternalServiceServer is the server API for InternalService service.
 // All implementations must embed UnimplementedInternalServiceServer
 // for forward compatibility.
@@ -518,6 +614,25 @@ type InternalServiceServer interface {
 	// Create a user in an existing tenant (bootstrap/admin provisioning)
 	// Requires SERVICE_TOKEN auth. Skips tenant creation and verification.
 	CreateUserInTenant(context.Context, *CreateUserInTenantRequest) (*CreateUserInTenantResponse, error)
+	// Customer-tunable retention defaults + per-asset overrides. Cascade order
+	// at StartDVR is: per-asset override → tenant default → Purser entitlement.
+	// The resolved value is snapshotted onto foghorn.artifacts at start; the
+	// existing RetentionJob in Foghorn enforces it. Per-asset overrides applied
+	// after finalize push a new retention_until into Foghorn via
+	// foghorn.DVRControlService.OverrideArtifactRetention.
+	GetMediaRetentionPolicy(context.Context, *GetMediaRetentionPolicyRequest) (*GetMediaRetentionPolicyResponse, error)
+	SetMediaRetentionPolicy(context.Context, *SetMediaRetentionPolicyRequest) (*SetMediaRetentionPolicyResponse, error)
+	UpdateAssetRetention(context.Context, *UpdateAssetRetentionRequest) (*UpdateAssetRetentionResponse, error)
+	ResetAssetRetention(context.Context, *ResetAssetRetentionRequest) (*UpdateAssetRetentionResponse, error)
+	// Dry-run policy evaluation against a caller-supplied JWT or webhook test.
+	// Commodore validates tenant ownership of the playback target and forwards
+	// to the owning Foghorn — auth logic is NOT reimplemented here.
+	TestPlaybackAccess(context.Context, *TestPlaybackAccessRequest) (*TestPlaybackAccessResponse, error)
+	// Foghorn writes one pull_source_events row per STREAM_SOURCE resolution
+	// against a pull+ stream. The list query feeds the webapp's "pull source
+	// health" view.
+	RecordPullSourceEvent(context.Context, *RecordPullSourceEventRequest) (*emptypb.Empty, error)
+	ListPullSourceEvents(context.Context, *ListPullSourceEventsRequest) (*ListPullSourceEventsResponse, error)
 	mustEmbedUnimplementedInternalServiceServer()
 }
 
@@ -611,6 +726,27 @@ func (UnimplementedInternalServiceServer) GetTenantPrimaryUser(context.Context, 
 }
 func (UnimplementedInternalServiceServer) CreateUserInTenant(context.Context, *CreateUserInTenantRequest) (*CreateUserInTenantResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateUserInTenant not implemented")
+}
+func (UnimplementedInternalServiceServer) GetMediaRetentionPolicy(context.Context, *GetMediaRetentionPolicyRequest) (*GetMediaRetentionPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMediaRetentionPolicy not implemented")
+}
+func (UnimplementedInternalServiceServer) SetMediaRetentionPolicy(context.Context, *SetMediaRetentionPolicyRequest) (*SetMediaRetentionPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetMediaRetentionPolicy not implemented")
+}
+func (UnimplementedInternalServiceServer) UpdateAssetRetention(context.Context, *UpdateAssetRetentionRequest) (*UpdateAssetRetentionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateAssetRetention not implemented")
+}
+func (UnimplementedInternalServiceServer) ResetAssetRetention(context.Context, *ResetAssetRetentionRequest) (*UpdateAssetRetentionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResetAssetRetention not implemented")
+}
+func (UnimplementedInternalServiceServer) TestPlaybackAccess(context.Context, *TestPlaybackAccessRequest) (*TestPlaybackAccessResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method TestPlaybackAccess not implemented")
+}
+func (UnimplementedInternalServiceServer) RecordPullSourceEvent(context.Context, *RecordPullSourceEventRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecordPullSourceEvent not implemented")
+}
+func (UnimplementedInternalServiceServer) ListPullSourceEvents(context.Context, *ListPullSourceEventsRequest) (*ListPullSourceEventsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPullSourceEvents not implemented")
 }
 func (UnimplementedInternalServiceServer) mustEmbedUnimplementedInternalServiceServer() {}
 func (UnimplementedInternalServiceServer) testEmbeddedByValue()                         {}
@@ -1137,6 +1273,132 @@ func _InternalService_CreateUserInTenant_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InternalService_GetMediaRetentionPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMediaRetentionPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).GetMediaRetentionPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_GetMediaRetentionPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).GetMediaRetentionPolicy(ctx, req.(*GetMediaRetentionPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_SetMediaRetentionPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetMediaRetentionPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).SetMediaRetentionPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_SetMediaRetentionPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).SetMediaRetentionPolicy(ctx, req.(*SetMediaRetentionPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_UpdateAssetRetention_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateAssetRetentionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).UpdateAssetRetention(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_UpdateAssetRetention_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).UpdateAssetRetention(ctx, req.(*UpdateAssetRetentionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ResetAssetRetention_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResetAssetRetentionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ResetAssetRetention(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ResetAssetRetention_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ResetAssetRetention(ctx, req.(*ResetAssetRetentionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_TestPlaybackAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TestPlaybackAccessRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).TestPlaybackAccess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_TestPlaybackAccess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).TestPlaybackAccess(ctx, req.(*TestPlaybackAccessRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_RecordPullSourceEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordPullSourceEventRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).RecordPullSourceEvent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_RecordPullSourceEvent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).RecordPullSourceEvent(ctx, req.(*RecordPullSourceEventRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ListPullSourceEvents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPullSourceEventsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ListPullSourceEvents(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ListPullSourceEvents_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ListPullSourceEvents(ctx, req.(*ListPullSourceEventsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // InternalService_ServiceDesc is the grpc.ServiceDesc for InternalService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1255,6 +1517,34 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateUserInTenant",
 			Handler:    _InternalService_CreateUserInTenant_Handler,
+		},
+		{
+			MethodName: "GetMediaRetentionPolicy",
+			Handler:    _InternalService_GetMediaRetentionPolicy_Handler,
+		},
+		{
+			MethodName: "SetMediaRetentionPolicy",
+			Handler:    _InternalService_SetMediaRetentionPolicy_Handler,
+		},
+		{
+			MethodName: "UpdateAssetRetention",
+			Handler:    _InternalService_UpdateAssetRetention_Handler,
+		},
+		{
+			MethodName: "ResetAssetRetention",
+			Handler:    _InternalService_ResetAssetRetention_Handler,
+		},
+		{
+			MethodName: "TestPlaybackAccess",
+			Handler:    _InternalService_TestPlaybackAccess_Handler,
+		},
+		{
+			MethodName: "RecordPullSourceEvent",
+			Handler:    _InternalService_RecordPullSourceEvent_Handler,
+		},
+		{
+			MethodName: "ListPullSourceEvents",
+			Handler:    _InternalService_ListPullSourceEvents_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -3550,6 +3840,11 @@ const (
 // VodServiceClient is the client API for VodService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// ============================================================================
+// VOD SERVICE (Gateway → Commodore → Foghorn proxy)
+// User-initiated video uploads (distinct from clips/DVR which are stream-derived)
+// Uses shared types from shared.proto
 type VodServiceClient interface {
 	// Initiate multipart upload - returns presigned URLs for direct S3 upload
 	CreateVodUpload(ctx context.Context, in *CreateVodUploadRequest, opts ...grpc.CallOption) (*CreateVodUploadResponse, error)
@@ -3648,6 +3943,11 @@ func (c *vodServiceClient) DeleteVodAsset(ctx context.Context, in *DeleteVodAsse
 // VodServiceServer is the server API for VodService service.
 // All implementations must embed UnimplementedVodServiceServer
 // for forward compatibility.
+//
+// ============================================================================
+// VOD SERVICE (Gateway → Commodore → Foghorn proxy)
+// User-initiated video uploads (distinct from clips/DVR which are stream-derived)
+// Uses shared types from shared.proto
 type VodServiceServer interface {
 	// Initiate multipart upload - returns presigned URLs for direct S3 upload
 	CreateVodUpload(context.Context, *CreateVodUploadRequest) (*CreateVodUploadResponse, error)

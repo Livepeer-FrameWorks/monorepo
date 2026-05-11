@@ -1,0 +1,22 @@
+# Clear a per-asset retention override. Recomputes the horizon from the
+# tenant default (or tier entitlement when no tenant default is set) and
+# pushes the new horizon into Foghorn.
+mutation ResetMediaRetentionOverride($input: ResetMediaRetentionOverrideInput!) {
+  resetMediaRetentionOverride(input: $input) {
+    ... on EffectiveRetention {
+      retentionDays
+      retentionUntil
+      source
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
+    }
+  }
+}

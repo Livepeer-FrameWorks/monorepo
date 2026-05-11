@@ -225,6 +225,7 @@ message DVRInfo {
   optional string title = 18;  // Stream title or custom title
   optional string stream_id = 19; // Public stream ID (UUID)
   optional string playback_id = 20; // Public playback key (artifact playback ID)
+  optional string retention_source = 21; // tenant_default | per_asset_override | tier_entitlement
 }
 
 // ListDVRRecordingsRequest - request to list DVR recordings

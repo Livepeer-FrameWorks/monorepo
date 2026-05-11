@@ -576,7 +576,7 @@ message DVRStopRequest {
 // a presigned PUT URL. After upload, sidecar marks the row uploaded. If a
 // segment must be evicted before upload (disk pressure, retention expiry),
 // the sidecar emits DVRSegmentDropped(was_uploaded=false) so Foghorn can
-// render an explicit gap in affected chapter manifests.
+// render an explicit gap in affected chapter manifests and bounded DVR views.
 
 // Sidecar -> Foghorn: report a new segment from RECORDING_SEGMENT.
 message RecordDVRSegmentRequest {
@@ -588,6 +588,10 @@ message RecordDVRSegmentRequest {
   int64 duration_ms = 6;          // RECORDING_SEGMENT duration_ms
   string local_path = 7;          // Absolute local file path (for retry/upload)
   string node_id = 8;
+  // True only for sidecar startup reconciliation rebuilding rows from a local
+  // DVR manifest with trusted PDT timing. Live RECORDING_SEGMENT writes leave
+  // this false so terminal artifacts still reject new media.
+  bool recovery_insert = 9;
 }
 
 // Foghorn -> sidecar: ledger row inserted, here is the upload URL.
@@ -614,8 +618,8 @@ message MarkDVRSegmentUploaded {
 
 // Sidecar -> Foghorn: a segment has been evicted from local disk. Foghorn
 // updates the ledger row to deleted_local (was_uploaded=true) or lost_local
-// (was_uploaded=false). lost_local rows render as #EXT-X-GAP in the final
-// manifest; the artifact ends as completed_partial.
+// (was_uploaded=false). lost_local rows render as #EXT-X-GAP in affected
+// chapter manifests and bounded DVR views.
 message DVRSegmentDropped {
   string request_id = 1;
   string dvr_hash = 2;
@@ -648,15 +652,15 @@ message EvictableSegmentsResponse {
 }
 
 // Foghorn -> sidecar: during finalization, ask the recording node to retry
-// upload for specific pending/failed_upload segments. If the local file still
-// exists, the sidecar uploads it (using its existing record_dvr_segment_response
-// presigned URL or by re-requesting one) and emits MarkDVRSegmentUploaded on
-// success; otherwise it emits DVRSegmentDropped(was_uploaded=false). Foghorn
-// cannot read the sidecar's disk; this is how it asks.
+// upload for specific pending/failed_upload segments. `segments` carries the
+// authoritative ledger timing so RecordDVRSegment's strict timing match still
+// protects chapter placement. `segment_names` is accepted from older callers
+// only when no refs are present.
 message RetryDVRSegmentUpload {
   string request_id = 1;
   string dvr_hash = 2;
   repeated string segment_names = 3;
+  repeated DVRSegmentRef segments = 4;
 }
 
 // Sidecar -> Foghorn: restart reconciliation. After a sidecar restart, the
@@ -764,6 +768,10 @@ message FreezeComplete {
   string s3_url = 4;             // Full S3 URL (s3://bucket/key)
   uint64 size_bytes = 5;
   string error = 6;              // Error message if failed
+  // local_missing=true signals the local source file is gone (ENOENT) before
+  // any S3 sync. Foghorn transitions sync_status='lost_local' (terminal) and
+  // stops retries. status will be "failed" in this case.
+  bool local_missing = 7;
 }
 
 // DefrostRequest tells Helmsman to download an asset from S3 cold storage.
@@ -866,6 +874,10 @@ message SyncComplete {
   string error = 6;              // Error message if failed
   string node_id = 7;            // Node that initiated the sync
   bool dtsh_included = 8;        // True if .dtsh index file was included in sync
+  // local_missing=true signals the local source file is gone (ENOENT). Foghorn
+  // transitions sync_status='lost_local' (terminal) and stops retries. status
+  // will be "failed" in this case.
+  bool local_missing = 9;
 }
 
 // DtshSyncRequest is sent by Foghorn to Helmsman to request uploading just the .dtsh file.
@@ -895,6 +907,8 @@ message StorageLifecycleData {
     ACTION_SYNC_FAILED = 7;   // Upload to S3 failed (local copy retained)
     ACTION_EVICT_FAILED = 8;  // Local cache eviction failed
     ACTION_CACHE_FAILED = 9;  // Download from S3 failed (defrost failure)
+    ACTION_LOCAL_MISSING = 10; // Local source file is gone before any sync; terminal.
+                               // Foghorn transitions sync_status='lost_local' and stops retries.
   }
   Action action = 1;
   string asset_type = 2;         // "clip" or "dvr"

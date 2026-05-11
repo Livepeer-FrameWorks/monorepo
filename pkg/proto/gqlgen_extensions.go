@@ -54,6 +54,9 @@ func (*ClusterInvite) IsCreateClusterInviteResult() {}
 // ClusterSubscription implements union interfaces
 func (*ClusterSubscription) IsClusterSubscriptionResult() {}
 
+// InfrastructureNode (GraphQL type: InfrastructureNode) implements union interfaces
+func (*InfrastructureNode) IsSetNodeModeResult() {}
+
 // ============================================================================
 // GraphQL ENUM MARSHALING
 // ============================================================================

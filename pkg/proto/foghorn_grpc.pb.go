@@ -167,12 +167,14 @@ var ClipControlService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	DVRControlService_StartDVR_FullMethodName            = "/foghorn.DVRControlService/StartDVR"
-	DVRControlService_StopDVR_FullMethodName             = "/foghorn.DVRControlService/StopDVR"
-	DVRControlService_DeleteDVR_FullMethodName           = "/foghorn.DVRControlService/DeleteDVR"
-	DVRControlService_RetrieveDVRChapter_FullMethodName  = "/foghorn.DVRControlService/RetrieveDVRChapter"
-	DVRControlService_ListDVRChapters_FullMethodName     = "/foghorn.DVRControlService/ListDVRChapters"
-	DVRControlService_SetDVRChapterPolicy_FullMethodName = "/foghorn.DVRControlService/SetDVRChapterPolicy"
+	DVRControlService_StartDVR_FullMethodName                  = "/foghorn.DVRControlService/StartDVR"
+	DVRControlService_StopDVR_FullMethodName                   = "/foghorn.DVRControlService/StopDVR"
+	DVRControlService_DeleteDVR_FullMethodName                 = "/foghorn.DVRControlService/DeleteDVR"
+	DVRControlService_RetrieveDVRChapter_FullMethodName        = "/foghorn.DVRControlService/RetrieveDVRChapter"
+	DVRControlService_ListDVRChapters_FullMethodName           = "/foghorn.DVRControlService/ListDVRChapters"
+	DVRControlService_SetDVRChapterPolicy_FullMethodName       = "/foghorn.DVRControlService/SetDVRChapterPolicy"
+	DVRControlService_OverrideArtifactRetention_FullMethodName = "/foghorn.DVRControlService/OverrideArtifactRetention"
+	DVRControlService_TestPlaybackAccess_FullMethodName        = "/foghorn.DVRControlService/TestPlaybackAccess"
 )
 
 // DVRControlServiceClient is the client API for DVRControlService service.
@@ -202,6 +204,24 @@ type DVRControlServiceClient interface {
 	// manifests remain readable until cache expiry / retention cleanup so
 	// in-flight viewers are not interrupted.
 	SetDVRChapterPolicy(ctx context.Context, in *SetDVRChapterPolicyRequest, opts ...grpc.CallOption) (*SetDVRChapterPolicyResponse, error)
+	// OverrideArtifactRetention pushes a per-asset retention horizon into
+	// foghorn.artifacts so the existing RetentionJob picks up the new value
+	// on its next tick. Called by Commodore.UpdateAssetRetention /
+	// ResetAssetRetention after the customer-facing override mutation lands.
+	// Tenant ownership is verified upstream (Commodore-side query); this RPC
+	// trusts the (tenant_id, dvr_hash) pair.
+	OverrideArtifactRetention(ctx context.Context, in *OverrideArtifactRetentionRequest, opts ...grpc.CallOption) (*OverrideArtifactRetentionResponse, error)
+	// TestPlaybackAccess runs the same policy evaluator the live USER_NEW
+	// path uses, but against a caller-supplied JWT (or a webhook test
+	// request) without registering a viewer session. Returns the structured
+	// PlaybackDecision so the operator sees Allow/Deny + reason + kid +
+	// claims (JWT) or HTTP status + latency (webhook).
+	//
+	// Webhook mode fires a real outbound HTTPS request to the customer URL
+	// — Commodore enforces tenant ownership of the playback target before
+	// routing the call here so unauthenticated callers can't use this to
+	// probe arbitrary endpoints.
+	TestPlaybackAccess(ctx context.Context, in *TestPlaybackAccessRequest, opts ...grpc.CallOption) (*TestPlaybackAccessResponse, error)
 }
 
 type dVRControlServiceClient struct {
@@ -272,6 +292,26 @@ func (c *dVRControlServiceClient) SetDVRChapterPolicy(ctx context.Context, in *S
 	return out, nil
 }
 
+func (c *dVRControlServiceClient) OverrideArtifactRetention(ctx context.Context, in *OverrideArtifactRetentionRequest, opts ...grpc.CallOption) (*OverrideArtifactRetentionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OverrideArtifactRetentionResponse)
+	err := c.cc.Invoke(ctx, DVRControlService_OverrideArtifactRetention_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dVRControlServiceClient) TestPlaybackAccess(ctx context.Context, in *TestPlaybackAccessRequest, opts ...grpc.CallOption) (*TestPlaybackAccessResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TestPlaybackAccessResponse)
+	err := c.cc.Invoke(ctx, DVRControlService_TestPlaybackAccess_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DVRControlServiceServer is the server API for DVRControlService service.
 // All implementations must embed UnimplementedDVRControlServiceServer
 // for forward compatibility.
@@ -299,6 +339,24 @@ type DVRControlServiceServer interface {
 	// manifests remain readable until cache expiry / retention cleanup so
 	// in-flight viewers are not interrupted.
 	SetDVRChapterPolicy(context.Context, *SetDVRChapterPolicyRequest) (*SetDVRChapterPolicyResponse, error)
+	// OverrideArtifactRetention pushes a per-asset retention horizon into
+	// foghorn.artifacts so the existing RetentionJob picks up the new value
+	// on its next tick. Called by Commodore.UpdateAssetRetention /
+	// ResetAssetRetention after the customer-facing override mutation lands.
+	// Tenant ownership is verified upstream (Commodore-side query); this RPC
+	// trusts the (tenant_id, dvr_hash) pair.
+	OverrideArtifactRetention(context.Context, *OverrideArtifactRetentionRequest) (*OverrideArtifactRetentionResponse, error)
+	// TestPlaybackAccess runs the same policy evaluator the live USER_NEW
+	// path uses, but against a caller-supplied JWT (or a webhook test
+	// request) without registering a viewer session. Returns the structured
+	// PlaybackDecision so the operator sees Allow/Deny + reason + kid +
+	// claims (JWT) or HTTP status + latency (webhook).
+	//
+	// Webhook mode fires a real outbound HTTPS request to the customer URL
+	// — Commodore enforces tenant ownership of the playback target before
+	// routing the call here so unauthenticated callers can't use this to
+	// probe arbitrary endpoints.
+	TestPlaybackAccess(context.Context, *TestPlaybackAccessRequest) (*TestPlaybackAccessResponse, error)
 	mustEmbedUnimplementedDVRControlServiceServer()
 }
 
@@ -326,6 +384,12 @@ func (UnimplementedDVRControlServiceServer) ListDVRChapters(context.Context, *Li
 }
 func (UnimplementedDVRControlServiceServer) SetDVRChapterPolicy(context.Context, *SetDVRChapterPolicyRequest) (*SetDVRChapterPolicyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetDVRChapterPolicy not implemented")
+}
+func (UnimplementedDVRControlServiceServer) OverrideArtifactRetention(context.Context, *OverrideArtifactRetentionRequest) (*OverrideArtifactRetentionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method OverrideArtifactRetention not implemented")
+}
+func (UnimplementedDVRControlServiceServer) TestPlaybackAccess(context.Context, *TestPlaybackAccessRequest) (*TestPlaybackAccessResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method TestPlaybackAccess not implemented")
 }
 func (UnimplementedDVRControlServiceServer) mustEmbedUnimplementedDVRControlServiceServer() {}
 func (UnimplementedDVRControlServiceServer) testEmbeddedByValue()                           {}
@@ -456,6 +520,42 @@ func _DVRControlService_SetDVRChapterPolicy_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DVRControlService_OverrideArtifactRetention_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(OverrideArtifactRetentionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DVRControlServiceServer).OverrideArtifactRetention(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DVRControlService_OverrideArtifactRetention_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DVRControlServiceServer).OverrideArtifactRetention(ctx, req.(*OverrideArtifactRetentionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DVRControlService_TestPlaybackAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TestPlaybackAccessRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DVRControlServiceServer).TestPlaybackAccess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DVRControlService_TestPlaybackAccess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DVRControlServiceServer).TestPlaybackAccess(ctx, req.(*TestPlaybackAccessRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DVRControlService_ServiceDesc is the grpc.ServiceDesc for DVRControlService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -486,6 +586,14 @@ var DVRControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetDVRChapterPolicy",
 			Handler:    _DVRControlService_SetDVRChapterPolicy_Handler,
+		},
+		{
+			MethodName: "OverrideArtifactRetention",
+			Handler:    _DVRControlService_OverrideArtifactRetention_Handler,
+		},
+		{
+			MethodName: "TestPlaybackAccess",
+			Handler:    _DVRControlService_TestPlaybackAccess_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

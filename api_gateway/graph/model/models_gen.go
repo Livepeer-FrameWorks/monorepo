@@ -142,6 +142,14 @@ type SendMessageResult interface {
 	IsSendMessageResult()
 }
 
+type SetMediaRetentionPolicyResult interface {
+	IsSetMediaRetentionPolicyResult()
+}
+
+type SetNodeModeResult interface {
+	IsSetNodeModeResult()
+}
+
 type SetPlaybackPolicyResult interface {
 	IsSetPlaybackPolicyResult()
 }
@@ -170,12 +178,20 @@ type SubmitX402PaymentResult interface {
 	IsSubmitX402PaymentResult()
 }
 
+type TestPlaybackAccessResult interface {
+	IsTestPlaybackAccessResult()
+}
+
 type UnlinkWalletResult interface {
 	IsUnlinkWalletResult()
 }
 
 type UpdateClusterResult interface {
 	IsUpdateClusterResult()
+}
+
+type UpdateMediaRetentionResult interface {
+	IsUpdateMediaRetentionResult()
 }
 
 type UpdateStreamResult interface {
@@ -270,6 +286,14 @@ func (AuthError) IsAbortVodUploadResult() {}
 func (AuthError) IsDeleteVodAssetResult() {}
 
 func (AuthError) IsVodUploadStatusResult() {}
+
+func (AuthError) IsSetMediaRetentionPolicyResult() {}
+
+func (AuthError) IsUpdateMediaRetentionResult() {}
+
+func (AuthError) IsSetNodeModeResult() {}
+
+func (AuthError) IsTestPlaybackAccessResult() {}
 
 func (AuthError) IsCreatePaymentResult() {}
 
@@ -894,16 +918,16 @@ type CryptoTopupStatus struct {
 
 // A single chapter view of a DVR recording.
 //
-// manifestUrl is a presigned GET URL valid for 30 minutes — embed it in a
-// <video> element or HLS player. manifestS3Key is the stable S3 location
-// suitable for caching client-side and re-fetching when the presigned URL
-// expires.
+// manifestUrl carries the Mist playback ID for this chapter
+// (`dvr+{chapterId}`). Resolve it through resolveViewerEndpoint and let
+// the selected edge defrost the bounded chapter into its local segment
+// bucket. Use manifestS3Key as the stable canonical chapter manifest key.
 //
 // isCurrent=true means the chapter is still being recorded into; the
-// manifest is EVENT-shaped (no #EXT-X-ENDLIST) and the player should poll
-// for updates. hasGaps=true means at least one segment in the chapter
-// range was lost before upload; the manifest renders #EXT-X-GAP markers
-// and the player will skip those segments while preserving the timeline.
+// edge manifest is EVENT-shaped while defrost is filling segments.
+// hasGaps=true means at least one segment in the chapter range was lost
+// before upload; the manifest renders #EXT-X-GAP markers and the player
+// will skip those segments while preserving the timeline.
 type DVRChapter struct {
 	ChapterID     string `json:"chapterId"`
 	ManifestS3Key string `json:"manifestS3Key"`
@@ -992,6 +1016,17 @@ type EdgeTelemetrySetup struct {
 	BearerToken *string `json:"bearerToken,omitempty"`
 }
 
+// Resolved retention horizon for a single asset (DVR, clip, or VOD).
+// Returned by the override / reset mutations and embedded on DVRRequest.
+type EffectiveRetention struct {
+	// Days from now until the artifact is scheduled for deletion.
+	RetentionDays  int             `json:"retentionDays"`
+	RetentionUntil time.Time       `json:"retentionUntil"`
+	Source         RetentionSource `json:"source"`
+}
+
+func (EffectiveRetention) IsUpdateMediaRetentionResult() {}
+
 // A key-value entitlement entry. Values are JSON-encoded for type flexibility.
 type EntitlementEntry struct {
 	Key   string `json:"key"`
@@ -1058,6 +1093,22 @@ type MarketplaceClusterEdge struct {
 	Cursor string                         `json:"cursor"`
 	Node   *proto.MarketplaceClusterEntry `json:"node"`
 }
+
+// Tenant-default retention policy plus the entitlement bounds and the
+// value the cascade would resolve to today.
+type MediaRetentionPolicy struct {
+	// Tenant override in days. Null when no tenant default has been set;
+	// the cascade falls through to the tier entitlement.
+	RecordingRetentionDays *int `json:"recordingRetentionDays,omitempty"`
+	// Value the cascade would resolve to today (override → tenant → tier).
+	EffectiveRecordingRetentionDays int                         `json:"effectiveRecordingRetentionDays"`
+	Bounds                          *proto.MediaRetentionBounds `json:"bounds"`
+	// User who last touched the policy. Null when no tenant override is set.
+	UpdatedBy *string    `json:"updatedBy,omitempty"`
+	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
+}
+
+func (MediaRetentionPolicy) IsSetMediaRetentionPolicyResult() {}
 
 // A message within a support conversation.
 type Message struct {
@@ -1280,6 +1331,12 @@ func (NotFoundError) IsDeleteVodAssetResult() {}
 
 func (NotFoundError) IsVodUploadStatusResult() {}
 
+func (NotFoundError) IsUpdateMediaRetentionResult() {}
+
+func (NotFoundError) IsSetNodeModeResult() {}
+
+func (NotFoundError) IsTestPlaybackAccessResult() {}
+
 func (NotFoundError) IsSubmitX402PaymentResult() {}
 
 func (NotFoundError) IsStripeCheckoutResult() {}
@@ -1333,6 +1390,32 @@ type PageInfo struct {
 	HasNextPage     bool    `json:"hasNextPage"`
 	HasPreviousPage bool    `json:"hasPreviousPage"`
 }
+
+// Structured result of a dry-run policy evaluation. Mirrors Foghorn's
+// PlaybackDecision struct.
+type PlaybackAccessDecision struct {
+	Allowed bool `json:"allowed"`
+	// Resolved policy type: 'public' | 'jwt' | 'webhook' | '' when no policy was found.
+	PolicyType string `json:"policyType"`
+	// Empty on allow; deny reason token (e.g. 'jwt-expired', 'webhook-deny-403') otherwise.
+	Reason *string `json:"reason,omitempty"`
+	// Free-form context for the operator (verifier error string, HTTP status as text).
+	Detail *string `json:"detail,omitempty"`
+	// JWT key ID claimed by the token (extracted before verification).
+	Kid *string `json:"kid,omitempty"`
+	// JSON-encoded JWT claims map. On allow, the verified claims. On deny, an
+	// unverified parse of the payload — useful for diagnosing aud / required-
+	// claim mismatches but never trustworthy as an auth signal.
+	ClaimsJSON *string `json:"claimsJson,omitempty"`
+	// HTTP status code from the customer webhook (0 if no call was made).
+	WebhookStatus *int `json:"webhookStatus,omitempty"`
+	// End-to-end RTT for the webhook call in milliseconds (0 if no call was made).
+	WebhookLatencyMs *int `json:"webhookLatencyMs,omitempty"`
+	// Internal MistServer name the evaluator resolved against. Always populated when a target was found.
+	ResolvedInternalName *string `json:"resolvedInternalName,omitempty"`
+}
+
+func (PlaybackAccessDecision) IsTestPlaybackAccessResult() {}
 
 // One required-claim constraint, JSON-encoded for type-flexible matching.
 type PlaybackJwtClaimRequirement struct {
@@ -1472,6 +1555,11 @@ type RebufferingEventsConnection struct {
 	TotalCount int                       `json:"totalCount"`
 }
 
+type ResetMediaRetentionOverrideInput struct {
+	TargetType MediaRetentionTarget `json:"targetType"`
+	TargetID   string               `json:"targetId"`
+}
+
 type RoutingEventEdge struct {
 	Cursor string              `json:"cursor"`
 	Node   *proto.RoutingEvent `json:"node"`
@@ -1482,6 +1570,12 @@ type RoutingEventsConnection struct {
 	Nodes      []*proto.RoutingEvent `json:"nodes"`
 	PageInfo   *PageInfo             `json:"pageInfo"`
 	TotalCount int                   `json:"totalCount"`
+}
+
+// Snapshot of how much traffic a node is currently serving.
+type RoutingImpactPreview struct {
+	ActiveStreams int `json:"activeStreams"`
+	ActiveViewers int `json:"activeViewers"`
 }
 
 // Input for sending a message.
@@ -1508,6 +1602,19 @@ type ServiceInstancesConnection struct {
 type SetDVRChapterPolicyResult struct {
 	Success bool    `json:"success"`
 	Message *string `json:"message,omitempty"`
+}
+
+type SetMediaRetentionPolicyInput struct {
+	// Days to retain finalized DVR recordings. Must be 1 ≤ value ≤ tier bound. The tier-bound value resets to tier default.
+	RecordingRetentionDays int `json:"recordingRetentionDays"`
+}
+
+type SetNodeModeInput struct {
+	// Node identifier — accepts the InfrastructureNode.id (Relay global) or nodeId (raw UUID).
+	NodeID string              `json:"nodeId"`
+	Mode   NodeOperationalMode `json:"mode"`
+	// Free-text reason recorded in Foghorn's audit trail. Defaults to the calling user/agent identity.
+	Reason *string `json:"reason,omitempty"`
 }
 
 type SetPlaybackPolicyInput struct {
@@ -1730,6 +1837,32 @@ type TenantUsage struct {
 	UsageAmount string `json:"usageAmount"`
 }
 
+// Inputs for testPlaybackAccess. Exactly one of playbackId / internalName must
+// be set (the server rejects both-set and neither-set). viewerToken is
+// required for JWT policies and is forwarded to the webhook payload for
+// webhook policies. fireWebhook gates a real outbound HTTPS call to the
+// customer URL. That call uses the same SSRF-hardened evaluator path as live
+// viewer admission, and customer endpoints may log, rate-limit, or trigger
+// side effects from the test request. When playbackId is supplied, the server resolves the
+// canonical internalName before invoking the evaluator so webhook payloads
+// carry the same streamName the live USER_NEW path would.
+type TestPlaybackAccessInput struct {
+	PlaybackID   *string `json:"playbackId,omitempty"`
+	InternalName *string `json:"internalName,omitempty"`
+	// JWT to test (required for type=jwt; passed through in the webhook payload for type=webhook).
+	ViewerToken *string `json:"viewerToken,omitempty"`
+	ViewerIP    *string `json:"viewerIp,omitempty"`
+	RequestURL  *string `json:"requestUrl,omitempty"`
+	Connector   *string `json:"connector,omitempty"`
+	SessionID   *string `json:"sessionId,omitempty"`
+	// Webhook policies only: when true, Foghorn will POST to the configured
+	// customer URL with an HMAC-signed payload (same path the live evaluator
+	// uses). When false, the evaluator returns reason="webhook-test-skipped"
+	// without making the call so operators can inspect the resolved policy
+	// without side effects.
+	FireWebhook *bool `json:"fireWebhook,omitempty"`
+}
+
 // Time range for filtering time-series data.
 type TimeRangeInput struct {
 	// Start of the time range.
@@ -1774,6 +1907,15 @@ type UpdateClusterMarketplaceInput struct {
 	RequiresApproval *bool `json:"requiresApproval,omitempty"`
 	// Short marketplace description.
 	ShortDescription *string `json:"shortDescription,omitempty"`
+}
+
+type UpdateMediaRetentionInput struct {
+	TargetType MediaRetentionTarget `json:"targetType"`
+	// Canonical asset ID — accepts either the asset's UUID or its hash.
+	TargetID string `json:"targetId"`
+	// Either retentionDays (relative to NOW) or retentionUntil must be set.
+	RetentionDays  *int       `json:"retentionDays,omitempty"`
+	RetentionUntil *time.Time `json:"retentionUntil,omitempty"`
 }
 
 type UpdatePushTargetInput struct {
@@ -1861,6 +2003,14 @@ func (ValidationError) IsCreateVodUploadResult() {}
 func (ValidationError) IsCompleteVodUploadResult() {}
 
 func (ValidationError) IsVodUploadStatusResult() {}
+
+func (ValidationError) IsSetMediaRetentionPolicyResult() {}
+
+func (ValidationError) IsUpdateMediaRetentionResult() {}
+
+func (ValidationError) IsSetNodeModeResult() {}
+
+func (ValidationError) IsTestPlaybackAccessResult() {}
 
 func (ValidationError) IsCreatePaymentResult() {}
 
@@ -2853,6 +3003,64 @@ func (e *PlaybackPolicyType) UnmarshalJSON(b []byte) error {
 }
 
 func (e PlaybackPolicyType) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// Source of an effective retention horizon.
+type RetentionSource string
+
+const (
+	RetentionSourceTenantDefault    RetentionSource = "TENANT_DEFAULT"
+	RetentionSourcePerAssetOverride RetentionSource = "PER_ASSET_OVERRIDE"
+	RetentionSourceTierEntitlement  RetentionSource = "TIER_ENTITLEMENT"
+)
+
+var AllRetentionSource = []RetentionSource{
+	RetentionSourceTenantDefault,
+	RetentionSourcePerAssetOverride,
+	RetentionSourceTierEntitlement,
+}
+
+func (e RetentionSource) IsValid() bool {
+	switch e {
+	case RetentionSourceTenantDefault, RetentionSourcePerAssetOverride, RetentionSourceTierEntitlement:
+		return true
+	}
+	return false
+}
+
+func (e RetentionSource) String() string {
+	return string(e)
+}
+
+func (e *RetentionSource) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = RetentionSource(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid RetentionSource", str)
+	}
+	return nil
+}
+
+func (e RetentionSource) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *RetentionSource) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e RetentionSource) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil
