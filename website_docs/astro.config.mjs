@@ -40,6 +40,9 @@ function parseStreamingUrl(url) {
 const ingestUrl = env.VITE_STREAMING_INGEST_URL || "http://localhost:8080";
 const edgeUrl = env.VITE_STREAMING_EDGE_URL || "http://localhost:8080";
 const playUrl = env.VITE_STREAMING_PLAY_URL || "http://localhost:18008";
+const gatewayUrl = env.VITE_GATEWAY_URL || "http://localhost:18000";
+const gatewayWsUrl =
+  env.VITE_GRAPHQL_WS_URL || `${gatewayUrl.replace(/^http/, "ws").replace(/\/$/, "")}/graphql/ws`;
 const ingest = parseStreamingUrl(ingestUrl);
 const edge = parseStreamingUrl(edgeUrl);
 
@@ -61,8 +64,9 @@ const ingestPortPart = ingest.port ? `:${ingest.port}` : "";
 const envVarMap = {
   APP_URL: env.VITE_APP_URL,
   MARKETING_URL: env.VITE_MARKETING_SITE_URL,
-  GATEWAY_URL: env.VITE_GATEWAY_URL,
-  API_URL: env.VITE_GATEWAY_URL,
+  GATEWAY_URL: gatewayUrl,
+  GATEWAY_WS_URL: gatewayWsUrl,
+  API_URL: gatewayUrl,
   // Streaming - constructed URLs for protocol-specific examples
   RTMP_URL: `${rtmpProto}://${ingest.hostname}:${rtmpPort}${rtmpPath}`,
   SRT_HOST: `${ingest.hostname}:${srtPort}`,

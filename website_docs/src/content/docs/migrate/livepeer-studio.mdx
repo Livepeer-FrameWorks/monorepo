@@ -201,7 +201,7 @@ After (FrameWorks):
 ```js
 import { createClient } from "graphql-ws";
 
-const ws = createClient({ url: "wss://%GATEWAY_HOST%/graphql", connectionParams: { authToken } });
+const ws = createClient({ url: "%GATEWAY_WS_URL%", connectionParams: { authToken } });
 ws.subscribe(
   {
     query: `subscription { liveStreamEvents { streamId state } }`,
