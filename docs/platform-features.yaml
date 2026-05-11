@@ -1054,11 +1054,11 @@ features:
       docs: { required: true }
 
   - slug: composer-ai
-    name: Composer / AI workflows
+    name: Processing and composition
     area: streaming
-    description: AI-driven scene composition / inference workflows on live streams.
+    description: Server-side processing in the media engine — MistServer-native blitter for overlays, logos, and lower-thirds; Composer for server-side ad insertion (SSAI) and raw-pixel composition; transcription, object detection, picture-in-picture, and automated clipping on top.
     status: roadmap
-    gap_reason: Not shipped. Requires product/API design for scene graph control, model execution boundaries, billing meters, agent permissions, and stream-composition UI.
+    gap_reason: Not shipped. Requires product/API design for overlay placement and lifecycle, SSAI ad-decision integration, model execution boundaries for AI detection and transcription, billing meters, agent permissions, and dashboard/MCP surfaces for configuring composition.
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }
@@ -1072,6 +1072,31 @@ features:
     status: roadmap
     gap_reason: |
       Purser data-availability check (2026-05-11): GetUsageAggregates exists and serves hourly/daily/monthly rollups by usage_type, so the read path is real. What's missing is two pieces of engineering: (1) a retention-aware cost projection model (assumptions about steady-state growth, finalization rate, per-tier storage pricing) — naive "% delta" is misleading; (2) alert delivery infrastructure (event dedupe, notification channels, threshold-crossed semantics). Both are real engineering projects beyond a single PR. Tracked here so the roadmap is honest rather than buried in a phase that pretends to ship them.
+    required_surfaces:
+      graphql: { required: true }
+      mcp: { required: true }
+      webapp: { required: true }
+      docs: { required: true }
+
+  - slug: scheduled-recordings
+    name: Scheduled recordings
+    area: storage
+    description: Calendar-driven DVR captures that start and stop on schedule, so streams record themselves on a fixed cadence.
+    status: roadmap
+    gap_reason: DVR recording is shipped (start_dvr / stop_dvr exist); scheduling is the gap. Requires a schedule store, a sweeper that triggers DVR start/stop at window boundaries, GraphQL mutation + query surface, MCP tools, and a calendar UI. Primary use cases include places of worship, lectures, periodic events, and any scheduled programming.
+    required_surfaces:
+      graphql: { required: true }
+      mcp: { required: true }
+      webapp: { required: true }
+      docs: { required: true }
+
+  - slug: incidents-and-alerts
+    name: Incidents and alerts
+    area: infrastructure
+    description: Tenant-scoped incident feed aggregating node-health, certificate, DNS, capacity, and cluster alerts with acknowledge/resolve and realtime delivery.
+    status: roadmap
+    gap_reason: |
+      Not shipped. Prometheus and Grafana cover internal monitoring. The customer-facing gap is a tenant incident feed — Alertmanager webhook ingestion, dedup/fingerprinting, an incident store, GraphQL queries + acknowledge/resolve mutations, realtime delivery via Signalman, and MCP tools so agents can triage. Self-hosted operators get visibility into their own clusters (cert expiry, port reachability, DNS resolution, CPU/memory thresholds) without standing up a separate monitoring stack.
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }

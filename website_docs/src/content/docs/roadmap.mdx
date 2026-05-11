@@ -19,11 +19,11 @@ The [Platform capabilities](/platform/feature-matrix) page is the source of trut
 
 ## Expanding Now
 
-### Hybrid and Federated Delivery
+### Self-host, Hybrid, and Federated Delivery
 
-We are continuing to harden self-hosted edge enrollment, cluster federation, tenant subdomains, and production routing for teams that mix managed regions with their own infrastructure.
+We are continuing to harden the self-host path: bring your own MistServer nodes and let FrameWorks handle DNS, TLS, geo-balanced routing, cluster federation, tenant subdomains, analytics, playback access control, and the rest of the operations layer around them. The same plane supports teams running fully self-hosted clusters, teams that mix their own infrastructure with managed FrameWorks regions, and teams that want to list spare capacity to others.
 
-**Outcome:** use your own edge capacity without giving up one control plane for routing, analytics, playback auth, and operations.
+**Outcome:** stand up a production-grade MistServer cluster without gluing together ten separate services for DNS, certificates, routing, observability, billing, and access control.
 
 ### Pull-Input Streams
 
@@ -50,6 +50,12 @@ FairPlay, Widevine, and PlayReady support is in development.
 We are expanding agent-facing workflows around operational diagnostics, billing preflight, and safe platform changes through MCP and GraphQL.
 
 **Outcome:** let agents operate FrameWorks with the same controls humans use, while preserving confirmation gates for sensitive or billable actions.
+
+### Scheduled Recordings
+
+Calendar-driven DVR captures for places of worship, periodic events, classes, scheduled programming, and any workflow where a stream goes live on a known schedule. Recording starts and stops automatically against a stream that may already be live 24/7, and the operator does not need to be at the desk when the window opens.
+
+**Outcome:** a weekly service, lecture, or event records itself on its own schedule, with the resulting DVR/clip/VOD assets dropping into the library without manual intervention.
 
 ### Team Accounts and Permissions
 
@@ -83,7 +89,7 @@ clusters without hand-built local glue.
 
 ### Processing and Composition
 
-Server-side processing, overlays, PiP, transcription, object detection, and automated clipping remain longer-term platform themes.
+Server-side processing remains a longer-term platform theme. The intent is to keep media work inside the media engine: a MistServer-native blitter for logos, watermarks, and lower-third overlays; MistServer's Composer reused for server-side ad insertion (SSAI) and raw-pixel composition; transcription, object detection, picture-in-picture, and automated clipping layered on top.
 
 **Outcome:** move more production work into the same control plane that already handles ingest, delivery, assets, and analytics.
 
