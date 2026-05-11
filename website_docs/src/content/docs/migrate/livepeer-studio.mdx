@@ -17,15 +17,15 @@ Livepeer Studio is the canonical Livepeer gateway: steward of the public transco
 
 - **What stays:** RTMP/RTMPS and WHIP ingest, HLS and WebRTC playback, multistream targets, clips, recordings.
 - **What changes:** REST → GraphQL · API key → JWT or developer token · outbound webhooks → GraphQL subscriptions or polling · playback access policies are recreated with FrameWorks signing keys or webhooks · `@livepeer/react` → `@livepeer-frameworks/player-*`.
-- **Capabilities to evaluate:** E-RTMP ingest (HEVC/AV1 contribution over RTMP) · SRT ingest · LL-HLS/DASH delivery · sprite-sheet seek previews · AV1 in the codec list · self-hosting / hybrid options · MCP, wallet auth, and x402 for agents · Skipper · planned AV Device Discovery (ONVIF / VISCA-PTZ / NDI / HDMI capture).
+- **Capabilities to evaluate:** E-RTMP ingest (HEVC/AV1 contribution over RTMP) · SRT ingest · LL-HLS/DASH delivery · sprite-sheet seek previews · AV1 in the codec list · self-hosting / hybrid options · MCP, wallet auth, and x402 for agents · Skipper · experimental device-discovery productization.
 - **What's not yet at parity:** AI Pipelines, outbound HTTP webhooks, C2PA signing, and
   first-class Python/Go SDKs. See
   [the gap list](#whats-not-yet-at-parity-and-whats-coming) before planning a production cutover.
 
 <Aside type="note">
-  FrameWorks is in active beta. Billing rates, hybrid edge deployment, and the cluster marketplace
-  are all flagged below — read the [beta and tricky bits](#beta-and-tricky-bits) section before you
-  cut over production traffic.
+  FrameWorks is still maturing in a few product areas. Billing rates, production self-hosting
+  runbooks, DRM, and provider-specific migration gaps are flagged below — read the [beta and tricky
+  bits](#beta-and-tricky-bits) section before you cut over production traffic.
 </Aside>
 
 ## Translation table
@@ -34,15 +34,15 @@ The shapes you know in Studio, mapped to FrameWorks:
 
 ### Streams
 
-| Studio                                        | FrameWorks                                                                                                                                 |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /stream`                                | `createStream(input)` mutation                                                                                                             |
-| `GET /stream/{id}`                            | `stream(id)` query                                                                                                                         |
-| `PATCH /stream/{id}`                          | `updateStream(id, input)` mutation                                                                                                         |
-| `DELETE /stream/{id}`                         | `deleteStream(id)` mutation                                                                                                                |
-| `DELETE /stream/{id}/terminate`               | No direct equivalent today; stop the encoder, or delete the stream if you are retiring it                                                  |
-| `record: true` flag at create                 | `record: true` at create, or `startDVR(streamId)` post-create                                                                              |
-| `POST /stream` with `pull: { source }` config | Operator bootstrap `commodore.pull_streams` today; no self-service GraphQL mutation yet — see [Pull-input streams](/builders/pull-streams) |
+| Studio                                        | FrameWorks                                                                                                                |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `POST /stream`                                | `createStream(input)` mutation                                                                                            |
+| `GET /stream/{id}`                            | `stream(id)` query                                                                                                        |
+| `PATCH /stream/{id}`                          | `updateStream(id, input)` mutation                                                                                        |
+| `DELETE /stream/{id}`                         | `deleteStream(id)` mutation                                                                                               |
+| `DELETE /stream/{id}/terminate`               | No direct equivalent today; stop the encoder, or delete the stream if you are retiring it                                 |
+| `record: true` flag at create                 | `record: true` at create, or `startDVR(streamId)` post-create                                                             |
+| `POST /stream` with `pull: { source }` config | `createStream(input: { ingestMode: PULL, pullSource: { sourceUri } })` — see [Pull-input streams](/builders/pull-streams) |
 
 ### Recordings, clips, and VOD
 
@@ -113,8 +113,8 @@ Studio uses the term "access control" for two separate concerns: authenticating 
 <Aside type="caution">
   FrameWorks does not deliver outbound HTTP webhooks today — events flow over GraphQL subscriptions
   (WebSocket). If your environment can't hold an open subscription, fall back to polling the
-  relevant query (`stream(id)`, `vodAsset(id)`) on a short interval. HTTP-callback delivery is
-  tracked in the outbound-webhooks RFC, but subscriptions are the supported event surface today.
+  relevant query (`stream(id)`, `vodAsset(id)`) on a short interval. HTTP-callback delivery is on
+  the roadmap, but subscriptions are the supported event surface today.
 </Aside>
 
 ## Step-by-step
@@ -166,7 +166,7 @@ The component prop names and theming model differ — see [Player (Playback)](/b
 
 Pick your client:
 
-- **Houdini** (SvelteKit-native) — what we use internally
+- **Houdini** (SvelteKit-native GraphQL codegen)
 - **urql** or **Apollo** for React
 - **graphql-request** for plain Node/Bun scripts
 
@@ -264,14 +264,14 @@ Run a low-traffic test stream through both platforms in parallel for a day. Watc
   HLS re-stream, or MPEG-TS over UDP and we open the upstream connection for you. Self-hosted
   edges can pull from RFC1918 / multicast sources via an explicit `allow_private_pull_sources`
   cluster flag — Studio doesn't have an equivalent. See [Pull-input streams](/builders/pull-streams).
-  On the [roadmap](/roadmap#in-the-pipeline): an **AV Device Discovery** drop-in app for
-  auto-discovering ONVIF cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI capture —
-  beyond Studio's RTMP/WHIP-only contribution surface.
+  Experimental media-engine discovery exists locally today; FrameWorks packaging through Edge,
+  Tray, CLI, API, and dashboard workflows is tracked on the
+  [roadmap](/roadmap#device-discovery-and-contribution-inputs).
 - **LL-HLS and DASH** — served from MistServer's CMAF output on every cluster, alongside HLS and
   WebRTC.
 - **AV1** in the codec list where the selected cluster and process configuration support it.
 - **Sprite-sheet seek previews** — a 10×10 grid plus a WebVTT cue file, generated for every recording, ready for hover-scrub UIs.
-- **Self-hosting and hybrid hosting.** Run the whole stack on your hardware, or mix BYO edge with our managed control plane. Hybrid is experimental — see the beta flags below.
+- **Self-hosting and hybrid hosting.** Run the whole stack on your hardware, or mix BYO edge with our managed control plane. Production rollouts need the same capacity, DNS, TLS, and monitoring validation as any operator-owned infrastructure.
 - **Cross-cluster federation** — one viewer pool routed across clusters; the closer edge wins automatically.
 - **Agent-first surface.** MCP server at [`/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json), wallet auth (EIP-191), and gasless USDC payments via x402 (EIP-3009). See [Agent Access](/agents/overview).
 - **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from the dashboard, the docs (`⌘J`), or MCP.
@@ -287,11 +287,11 @@ Current gaps to account for:
   keep AI workloads there or on existing managed Livepeer surfaces until FrameWorks exposes an
   equivalent.
 - **Outbound webhooks** — today we use GraphQL subscriptions. HTTP-callback delivery is tracked in
-  the outbound-webhooks RFC.
+  the roadmap.
 - **C2PA signing and creator-ID provenance on transcode** — not exposed as a public FrameWorks API
   today.
-- **First-class Python and Go SDKs** — internal Go clients exist; use GraphQL codegen against the
-  schema until first-party SDKs are published.
+- **First-class Python and Go SDKs** — use GraphQL codegen against the public schema until
+  first-party SDKs are published.
 - **Derived thumbnail asset enforcement** — playback access control protects endpoint resolution
   and media sessions. Chandler thumbnail URLs are preview assets and are not a separate auth
   boundary yet.
@@ -303,9 +303,14 @@ Current gaps to account for:
 
 Heads-up so nothing surprises you:
 
-- **Billing is in beta.** Rates may adjust as we scale, but you keep the allowances you signed up for through beta.
-- **Hybrid edge deployment** is highly experimental — fine for testing, not for production.
-- **Cluster marketplace** is in progress. Public clusters work; the operator-marketplace flow is still being built.
+- **Billing rates are still maturing.** Rates may adjust as we scale, but you keep the allowances
+  you signed up for.
+- **Self-hosted and hybrid production cutovers need operator validation.** Test DNS, TLS,
+  firewall policy, capacity, node enrollment, and upgrade runbooks before moving production
+  traffic.
+- **Marketplace primitives exist, but the public marketplace program is still being built.**
+  Validate operator vetting, pricing, approval flow, and support boundaries before relying on
+  third-party clusters for production traffic.
 - **GraphQL learning curve.** If you've never written a query, the [docs playground](%GATEWAY_URL%/graphql/playground) is the quickest way to inspect available fields. Skipper can also draft queries.
 - **Subscriptions are connection-oriented.** Polling fallback is fine if a long-lived connection is awkward in your stack.
 - **The player swap is not API-compatible.** Props and theming differ — budget a few hours to walk through [Player (Playback)](/builders/playback) examples.

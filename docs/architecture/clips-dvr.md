@@ -241,12 +241,13 @@ DEFROST (cold -> warm):
 ## Service Events Audit (service_events)
 
 - **Commodore** emits `artifact_registered` ServiceEvents when clip/DVR/VOD registry records are created.
+- **Commodore** emits `media.retention_policy.changed`, `media.retention.override_applied`, and `media.retention.override_reset` ServiceEvents for retention policy changes and per-asset override changes.
 - **Foghorn** emits clip/DVR/VOD lifecycle analytics events (MistTrigger) **and** an `artifact_lifecycle` ServiceEvent (via Decklog client) for audit visibility.
 - ServiceEvents are metadata-only; lifecycle analytics flow through Periscope.
 
 ## Cross-Cluster Artifact Access
 
-When a viewer requests a clip or VOD that lives on a remote cluster, Foghorn uses the `PrepareArtifact` FoghornFederation RPC to obtain time-limited presigned S3 URLs without sharing S3 credentials across clusters. DVR archive playback is not a whole-artifact `PrepareArtifact` flow: public callers use the GraphQL DVR chapter API through Gateway → Commodore, Commodore routes to the DVR origin Foghorn, and Foghorn returns a bounded chapter/range manifest that preserves `DVRSegmentRef` gap metadata.
+When a viewer requests a clip or VOD that lives on a remote cluster, Foghorn uses the `PrepareArtifact` FoghornFederation RPC to obtain time-limited presigned S3 URLs without sharing S3 credentials across clusters. DVR archive playback is not a whole-artifact `PrepareArtifact` flow: public callers use the GraphQL DVR chapter API through Gateway → Commodore, Commodore routes to the DVR origin Foghorn, and Foghorn returns a `dvr+{chapter_id}` playback ID whose selected edge defrosts the bounded chapter while preserving `DVRSegmentRef` gap metadata.
 
 ### Flow
 
@@ -279,9 +280,9 @@ Viewer/Webapp → Gateway GraphQL dvrChapter/dvrChapters
 ```protobuf
 message PrepareArtifactRequest {
   string artifact_id = 1;        // Artifact hash
-  string clip_hash = 2;          // Legacy alias
+  string clip_hash = 2;          // Clip hash fallback alias
   string requesting_cluster = 3;
-  string artifact_type = 4;      // "clip" or "vod" for public playback; DVR requires bounded chapter/range context
+  string artifact_type = 4;      // "clip" or "vod" for public playback; DVR uses dvr+ chapter routing
   string tenant_id = 5;
 }
 
@@ -291,14 +292,14 @@ message PrepareArtifactResponse {
   bool ready = 3;                     // Immediately available?
   uint32 est_ready_seconds = 4;       // Async prep time estimate
   string error = 5;
-  map<string, string> segment_urls = 6; // legacy non-DVR segmented artifacts
+  map<string, string> segment_urls = 6; // segmented non-DVR artifacts
   string format = 7;                  // mp4, m3u8, etc.
   string internal_name = 8;           // Artifact routing name (vod+{this})
   string stream_internal_name = 9;   // Source stream routing name
 }
 ```
 
-Key design choice: clips and VODs must be S3-synced before cross-cluster access works. If an artifact is only on local disk (not yet frozen to S3), `PrepareArtifact` triggers an async freeze and returns `ready=false`. The requesting Foghorn can retry after `est_ready_seconds`. DVR archive playback is already ledger-backed and bounded by chapter/range; the origin Foghorn signs the chapter view directly.
+Key design choice: clips and VODs must be S3-synced before cross-cluster access works. If an artifact is only on local disk (not yet frozen to S3), `PrepareArtifact` triggers an async freeze and returns `ready=false`. The requesting Foghorn can retry after `est_ready_seconds`. DVR archive playback is ledger-backed and bounded by chapter/range: Commodore resolves the chapter to the origin Foghorn, the origin returns a `dvr+{chapter_id}` Mist playback ID, and the selected edge defrosts only that chapter.
 
 See `docs/architecture/federation.md` for the broader FoghornFederation protocol and `docs/architecture/stream-replication-topology.md` for how STREAM_SOURCE routes to PrepareArtifact for VOD/artifacts.
 

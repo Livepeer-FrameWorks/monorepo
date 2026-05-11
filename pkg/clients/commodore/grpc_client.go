@@ -371,6 +371,47 @@ func (c *GRPCClient) UpdateDVRRetention(ctx context.Context, req *pb.UpdateDVRRe
 	return c.internal.UpdateDVRRetention(ctx, req)
 }
 
+// ============================================================================
+// MEDIA RETENTION POLICY (Bridge → Commodore)
+// Customer-tunable retention defaults + per-asset overrides.
+// ============================================================================
+
+func (c *GRPCClient) GetMediaRetentionPolicy(ctx context.Context, req *pb.GetMediaRetentionPolicyRequest) (*pb.GetMediaRetentionPolicyResponse, error) {
+	return c.internal.GetMediaRetentionPolicy(ctx, req)
+}
+
+func (c *GRPCClient) SetMediaRetentionPolicy(ctx context.Context, req *pb.SetMediaRetentionPolicyRequest) (*pb.SetMediaRetentionPolicyResponse, error) {
+	return c.internal.SetMediaRetentionPolicy(ctx, req)
+}
+
+func (c *GRPCClient) UpdateAssetRetention(ctx context.Context, req *pb.UpdateAssetRetentionRequest) (*pb.UpdateAssetRetentionResponse, error) {
+	return c.internal.UpdateAssetRetention(ctx, req)
+}
+
+func (c *GRPCClient) ResetAssetRetention(ctx context.Context, req *pb.ResetAssetRetentionRequest) (*pb.UpdateAssetRetentionResponse, error) {
+	return c.internal.ResetAssetRetention(ctx, req)
+}
+
+// TestPlaybackAccess facades Foghorn's dry-run evaluator. Webhook mode can
+// take up to ~10s for the customer endpoint to respond — keep timeouts
+// generous on the caller side.
+func (c *GRPCClient) TestPlaybackAccess(ctx context.Context, req *pb.TestPlaybackAccessRequest) (*pb.TestPlaybackAccessResponse, error) {
+	return c.internal.TestPlaybackAccess(ctx, req)
+}
+
+// RecordPullSourceEvent appends a row to commodore.pull_source_events. Used
+// by Foghorn's STREAM_SOURCE handler to audit pull resolution outcomes.
+func (c *GRPCClient) RecordPullSourceEvent(ctx context.Context, req *pb.RecordPullSourceEventRequest) error {
+	_, err := c.internal.RecordPullSourceEvent(ctx, req)
+	return err
+}
+
+// ListPullSourceEvents returns the most recent N pull-source resolution
+// events for a stream. Tenant-scoped via the JWT.
+func (c *GRPCClient) ListPullSourceEvents(ctx context.Context, req *pb.ListPullSourceEventsRequest) (*pb.ListPullSourceEventsResponse, error) {
+	return c.internal.ListPullSourceEvents(ctx, req)
+}
+
 // ResolveClipHash resolves a clip hash to tenant context
 // Used for analytics enrichment and playback authorization
 func (c *GRPCClient) ResolveClipHash(ctx context.Context, clipHash string) (*pb.ResolveClipHashResponse, error) {

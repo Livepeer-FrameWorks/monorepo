@@ -1563,6 +1563,27 @@ func RecordDVRSegment(
 	dvrHash, segmentName, localPath string,
 	mediaStartMs, mediaEndMs, durationMs int64,
 ) (*pb.RecordDVRSegmentResponse, error) {
+	return recordDVRSegment(ctx, dvrHash, segmentName, localPath, mediaStartMs, mediaEndMs, durationMs, false)
+}
+
+// RecordRecoveredDVRSegment is used only by startup reconciliation after
+// reading a local DVR manifest with PDT timing. It lets Foghorn rebuild
+// missing ledger rows for finalized artifacts without weakening live
+// RECORDING_SEGMENT terminal rejection.
+func RecordRecoveredDVRSegment(
+	ctx context.Context,
+	dvrHash, segmentName, localPath string,
+	mediaStartMs, mediaEndMs, durationMs int64,
+) (*pb.RecordDVRSegmentResponse, error) {
+	return recordDVRSegment(ctx, dvrHash, segmentName, localPath, mediaStartMs, mediaEndMs, durationMs, true)
+}
+
+func recordDVRSegment(
+	ctx context.Context,
+	dvrHash, segmentName, localPath string,
+	mediaStartMs, mediaEndMs, durationMs int64,
+	recoveryInsert bool,
+) (*pb.RecordDVRSegmentResponse, error) {
 	stream := getStream()
 	if stream == nil {
 		return nil, fmt.Errorf("gRPC control stream not connected")
@@ -1581,14 +1602,15 @@ func RecordDVRSegment(
 	}
 
 	req := &pb.RecordDVRSegmentRequest{
-		RequestId:    requestID,
-		DvrHash:      dvrHash,
-		SegmentName:  segmentName,
-		MediaStartMs: mediaStartMs,
-		MediaEndMs:   mediaEndMs,
-		DurationMs:   durationMs,
-		LocalPath:    localPath,
-		NodeId:       getNodeID(),
+		RequestId:      requestID,
+		DvrHash:        dvrHash,
+		SegmentName:    segmentName,
+		MediaStartMs:   mediaStartMs,
+		MediaEndMs:     mediaEndMs,
+		DurationMs:     durationMs,
+		LocalPath:      localPath,
+		NodeId:         getNodeID(),
+		RecoveryInsert: recoveryInsert,
 	}
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_RecordDvrSegmentRequest{RecordDvrSegmentRequest: req}}
 	if err := stream.Send(msg); err != nil {
@@ -1806,15 +1828,18 @@ func SendFreezeProgress(requestID, assetHash string, percent uint32, bytesUpload
 	return stream.Send(msg)
 }
 
-// SendFreezeComplete sends freeze completion status to Foghorn
-func SendFreezeComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string) error {
+// SendFreezeComplete sends freeze completion status to Foghorn.
+// Set localMissing=true when the local source file is gone (ENOENT) so Foghorn
+// can transition the row to sync_status='lost_local' and stop retrying.
+func SendFreezeComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, localMissing bool) error {
 	complete := &pb.FreezeComplete{
-		RequestId: requestID,
-		AssetHash: assetHash,
-		Status:    status,
-		S3Url:     s3URL,
-		SizeBytes: sizeBytes,
-		Error:     errMsg,
+		RequestId:    requestID,
+		AssetHash:    assetHash,
+		Status:       status,
+		S3Url:        s3URL,
+		SizeBytes:    sizeBytes,
+		Error:        errMsg,
+		LocalMissing: localMissing,
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_FreezeComplete{FreezeComplete: complete}}
@@ -1982,7 +2007,9 @@ func handleCanDeleteResponse(response *pb.CanDeleteResponse) {
 // SendSyncComplete notifies Foghorn that a sync operation has completed.
 // Called after successfully uploading an artifact to S3 (while keeping the local copy).
 // dtshIncluded indicates whether the .dtsh index file was included in the sync.
-func SendSyncComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool) error {
+// localMissing=true signals the local source file is gone (ENOENT) before sync;
+// Foghorn marks the row sync_status='lost_local' (terminal) and stops retries.
+func SendSyncComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool, localMissing bool) error {
 	complete := &pb.SyncComplete{
 		RequestId:    requestID,
 		AssetHash:    assetHash,
@@ -1992,6 +2019,7 @@ func SendSyncComplete(requestID, assetHash, status, s3URL string, sizeBytes uint
 		Error:        errMsg,
 		NodeId:       getNodeID(),
 		DtshIncluded: dtshIncluded,
+		LocalMissing: localMissing,
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_SyncComplete{SyncComplete: complete}}

@@ -64,7 +64,6 @@ type S3ClientInterface interface {
 	BuildS3URL(key string) string
 	Delete(ctx context.Context, key string) error
 	PutObject(ctx context.Context, key string, body []byte, contentType string) error
-	// Used by chapter retrieval to mint player-facing manifest and segment URLs.
 	GeneratePresignedGET(key string, expiry time.Duration) (string, error)
 }
 
@@ -1633,7 +1632,9 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 
 	// Check billing status for the content owner
 	if s.cacheInvalidator != nil && resolution.TenantId != "" {
-		billing := s.cacheInvalidator.GetBillingStatus(ctx, resolution.InternalName, resolution.TenantId)
+		billingTarget := control.ResolvePlaybackPolicyTarget(ctx, req.GetContentId(), resolution.InternalName)
+		billingInternalName := billingTarget.InternalName
+		billing := s.cacheInvalidator.GetBillingStatus(ctx, billingInternalName, resolution.TenantId)
 		if billing != nil {
 			// Hard block: tenant suspended (balance < -$10)
 			if billing.IsSuspended && !x402Paid {
@@ -1727,7 +1728,8 @@ func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, re
 		}).Warn("Rejecting protected resolve request")
 		return status.Error(codes.PermissionDenied, "playback access denied")
 	}
-	policy, err := control.CommodoreClient.ResolvePlaybackPolicyForEnforcement(ctx, req.GetContentId())
+	target := control.ResolvePlaybackPolicyTarget(ctx, req.GetContentId(), resolution.InternalName)
+	policy, err := control.CommodoreClient.ResolvePlaybackPolicyForEnforcement(ctx, target.ContentID)
 	if err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"content_id": req.GetContentId(),
@@ -1735,8 +1737,12 @@ func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, re
 		}).Warn("Rejecting protected resolve request")
 		return status.Error(codes.PermissionDenied, "playback access denied")
 	}
-	decision := triggers.EvaluatePlaybackPolicyWithRecorder(ctx, s.logger, resolution.InternalName, &pb.ViewerConnectTrigger{
-		StreamName:  resolution.InternalName,
+	policyInternalName := mist.ExtractInternalName(target.InternalName)
+	if policyInternalName == "" {
+		policyInternalName = resolution.InternalName
+	}
+	decision := triggers.EvaluatePlaybackPolicyWithRecorder(ctx, s.logger, policyInternalName, &pb.ViewerConnectTrigger{
+		StreamName:  policyInternalName,
 		SessionId:   "resolve:" + req.GetContentId(),
 		Host:        req.GetViewerIp(),
 		RequestUrl:  "viewer://" + req.GetContentId(),

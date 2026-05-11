@@ -26,6 +26,7 @@
   } from "$lib/utils/infrastructure-data";
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import { formatBytes } from "$lib/utils/formatters.js";
+  import NodeModePanel from "$lib/components/nodes/NodeModePanel.svelte";
 
   const ArrowLeftIcon = getIconComponent("ArrowLeft");
   const HardDriveIcon = getIconComponent("HardDrive");
@@ -441,6 +442,22 @@
             </div>
           </div>
         </div>
+
+        <!-- Operational mode controls -->
+        {#if node.effectiveMode}
+          <div class="slab col-span-full">
+            <NodeModePanel
+              relayId={node.id}
+              nodeName={node.nodeName}
+              effectiveMode={node.effectiveMode}
+              activeStreams={node.routingImpactPreview?.activeStreams ?? 0}
+              activeViewers={node.routingImpactPreview?.activeViewers ?? 0}
+              onModeChanged={async () => {
+                await nodeStore.fetch({ policy: "NetworkOnly", variables: { id: nodeRelayId } });
+              }}
+            />
+          </div>
+        {/if}
 
         <!-- Node Info -->
         <div class="slab col-span-full">

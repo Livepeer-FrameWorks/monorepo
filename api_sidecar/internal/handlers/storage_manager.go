@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -97,8 +99,8 @@ type StorageManager struct {
 
 	// Control IPC — function fields so tests can inject fakes
 	requestFreezePermission func(ctx context.Context, assetType, assetHash, localPath string, sizeBytes uint64, filenames []string) (*pb.FreezePermissionResponse, error)
-	sendSyncComplete        func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool) error
-	sendFreezeComplete      func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string) error
+	sendSyncComplete        func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool, localMissing bool) error
+	sendFreezeComplete      func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, localMissing bool) error
 	sendFreezeProgress      func(requestID, assetHash string, percent uint32, bytesUploaded uint64) error
 	sendStorageLifecycle    func(data *pb.StorageLifecycleData) error
 	sendDefrostComplete     func(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string) error
@@ -229,20 +231,38 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 		} else {
 			jobLogger = logger
 		}
-		for _, name := range req.GetSegmentNames() {
+		refs := req.GetSegments()
+		if len(refs) == 0 && len(req.GetSegmentNames()) > 0 {
+			restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			resp, restoreErr := control.SendRestoreLocalSegmentIndex(restoreCtx, dvrHash, req.GetSegmentNames())
+			restoreCancel()
+			if restoreErr != nil {
+				jobLogger.WithError(restoreErr).WithField("dvr_hash", dvrHash).Debug("Retry ledger lookup unavailable; leaving segments pending")
+				return
+			}
+			refs = resp.GetSegments()
+		}
+		for _, ref := range refs {
+			name := ref.GetSegmentName()
+			if name == "" {
+				continue
+			}
 			segPath := resolveRetryDVRSegmentPath(basePath, dvrHash, name, outputDir, logger)
 			info, statErr := os.Stat(segPath)
 			if statErr != nil {
-				if dropErr := control.SendDVRSegmentDropped(dvrHash, name, "upload_failed", segPath, 0, 0, 0, 0, false); dropErr != nil {
+				if dropErr := control.SendDVRSegmentDropped(dvrHash, name, "upload_failed", segPath,
+					ref.GetMediaStartMs(), ref.GetMediaEndMs(), ref.GetDurationMs(), 0, false); dropErr != nil {
 					jobLogger.WithError(dropErr).WithField("segment", name).Debug("Failed to report missing-local-file as lost")
 				}
 				continue
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			// Request a fresh presigned URL. RecordDVRSegment is idempotent
-			// on (artifact_hash, segment_name); media_start/end/duration are
-			// passed as 0 since the original ledger row already has them.
-			resp, recErr := control.RecordDVRSegment(ctx, dvrHash, name, segPath, 0, 0, 0)
+			// on (artifact_hash, segment_name) but still requires exact
+			// ledger timing so a wrong file with the same name cannot heal a
+			// gap or claim another segment's sequence.
+			resp, recErr := control.RecordDVRSegment(ctx, dvrHash, name, segPath,
+				ref.GetMediaStartMs(), ref.GetMediaEndMs(), ref.GetDurationMs())
 			if recErr != nil || resp == nil || !resp.GetAccepted() || resp.GetPresignedPutUrl() == "" {
 				cancel()
 				jobLogger.WithFields(logging.Fields{
@@ -608,7 +628,7 @@ func (sm *StorageManager) HandleFreezeRequest(req *pb.FreezeRequest) {
 	if req.AssetType == "dvr" {
 		errMsg := "whole-DVR freeze is unsupported; use ledger segment eviction"
 		sm.logger.WithField("asset_hash", req.AssetHash).Warn(errMsg)
-		if err := sm.sendSyncComplete(req.RequestId, req.AssetHash, "failed", "", 0, errMsg, false); err != nil {
+		if err := sm.sendSyncComplete(req.RequestId, req.AssetHash, "failed", "", 0, errMsg, false, false); err != nil {
 			sm.logger.WithError(err).WithField("asset_hash", req.AssetHash).Warn("Failed to report rejected DVR freeze")
 		}
 		return
@@ -617,7 +637,9 @@ func (sm *StorageManager) HandleFreezeRequest(req *pb.FreezeRequest) {
 	info, err := os.Stat(req.LocalPath)
 	if err != nil {
 		sm.logger.WithError(err).WithField("path", req.LocalPath).Error("Freeze request: local path not found")
-		_ = sm.sendSyncComplete(req.RequestId, req.AssetHash, "failed", "", 0, "local file not found: "+err.Error(), false)
+		// ENOENT here is the same terminal lost_local condition as inside the
+		// upload path: caller asked us to freeze a file that's gone.
+		_ = sm.sendSyncComplete(req.RequestId, req.AssetHash, "failed", "", 0, "local file not found: "+err.Error(), false, errors.Is(err, fs.ErrNotExist)) //nolint:errcheck // best-effort report; reconnect retries on stream loss
 		return
 	}
 
@@ -737,7 +759,7 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 			AssetHash: asset.AssetHash,
 			SizeBytes: asset.SizeBytes,
 		})
-		_ = sm.sendSyncComplete(permResp.RequestId, asset.AssetHash, "evicted_remote", "", asset.SizeBytes, "", false)
+		_ = sm.sendSyncComplete(permResp.RequestId, asset.AssetHash, "evicted_remote", "", asset.SizeBytes, "", false, false) //nolint:errcheck // best-effort report
 		return nil
 	}
 
@@ -821,14 +843,25 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 	if uploadErr != nil {
 		durationMs := duration.Milliseconds()
 		errStr := uploadErr.Error()
+		// Distinguish "local source file is gone" (terminal: no S3 copy, no
+		// local copy, retries cannot recover) from a transient sync failure.
+		// Foghorn maps ACTION_LOCAL_MISSING to sync_status='lost_local' and
+		// stops the retry loop.
+		action := pb.StorageLifecycleData_ACTION_SYNC_FAILED
+		localMissing := errors.Is(uploadErr, fs.ErrNotExist)
+		if localMissing {
+			action = pb.StorageLifecycleData_ACTION_LOCAL_MISSING
+		}
+		localPath := asset.FilePath
 		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:     pb.StorageLifecycleData_ACTION_SYNC_FAILED,
+			Action:     action,
 			AssetType:  string(asset.AssetType),
 			AssetHash:  asset.AssetHash,
+			LocalPath:  &localPath,
 			Error:      &errStr,
 			DurationMs: &durationMs,
 		})
-		_ = sm.sendFreezeComplete(requestID, asset.AssetHash, "failed", "", 0, uploadErr.Error())
+		_ = sm.sendFreezeComplete(requestID, asset.AssetHash, "failed", "", 0, uploadErr.Error(), localMissing) //nolint:errcheck // best-effort report
 		return fmt.Errorf("failed to upload to S3: %w", uploadErr)
 	}
 
@@ -849,7 +882,7 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 		DurationMs: &durationMs,
 	})
 
-	_ = sm.sendSyncComplete(requestID, asset.AssetHash, "success", "", actualSizeBytes, "", dtshIncluded)
+	_ = sm.sendSyncComplete(requestID, asset.AssetHash, "success", "", actualSizeBytes, "", dtshIncluded, false) //nolint:errcheck // best-effort report
 
 	sm.logger.WithFields(logging.Fields{
 		"asset_hash": asset.AssetHash,
@@ -1068,8 +1101,12 @@ func (sm *StorageManager) DefrostVOD(ctx context.Context, req *pb.DefrostRequest
 // emitChapterDefrostFailure emits the lifecycle + complete pair for a failed
 // chapter defrost. Send errors are logged and swallowed; control-stream
 // failures don't change the request's success/failure outcome.
-func (sm *StorageManager) emitChapterDefrostFailure(req *pb.DefrostRequest, defrostErr error) {
+func (sm *StorageManager) emitChapterDefrostFailure(req *pb.DefrostRequest, defrostErr error, localPath ...string) {
 	errStr := defrostErr.Error()
+	path := ""
+	if len(localPath) > 0 {
+		path = localPath[0]
+	}
 	if err := sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 		Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
 		AssetType: string(AssetTypeDVR),
@@ -1078,7 +1115,7 @@ func (sm *StorageManager) emitChapterDefrostFailure(req *pb.DefrostRequest, defr
 	}); err != nil {
 		sm.logger.WithError(err).Warn("emit chapter defrost cache_failed lifecycle")
 	}
-	if err := sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr); err != nil {
+	if err := sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", path, 0, errStr); err != nil {
 		sm.logger.WithError(err).Warn("emit chapter defrost failure complete")
 	}
 }
@@ -1113,11 +1150,11 @@ func (sm *StorageManager) defrostDVRFromChapterRefs(ctx context.Context, req *pb
 		return nil, fmt.Errorf("create segments dir: %w", err)
 	}
 
-	// Refcount each non-gap segment in the local index for the duration of
-	// the defrost. TrackCachedSegment creates entries for historical chapter
-	// downloads as well as active-recorder uploads, so post-playback eviction
-	// can reclaim them once ActiveViews returns to 0.
+	// Refcount each non-gap segment for the defrost and refresh its local
+	// cache timestamp. Eviction keeps recently warmed chapter segments on
+	// disk long enough for the playback session that requested them.
 	idx := control.LocalSegmentIndexInstance(sm.logger)
+	pinUntil := chapterPlaybackCacheUntil(req.GetStartMs(), req.GetEndMs())
 	if idx != nil {
 		for _, r := range refs {
 			if r.GetStatus() == "lost_local" {
@@ -1126,6 +1163,7 @@ func (sm *StorageManager) defrostDVRFromChapterRefs(ctx context.Context, req *pb
 			segName := r.GetSegmentName()
 			localSegPath := filepath.Join(segmentsDir, segName)
 			idx.TrackCachedSegment(req.AssetHash, segName, localSegPath, 0, false)
+			idx.PinCachedSegment(req.AssetHash, segName, pinUntil)
 			idx.AcquireView(req.AssetHash, segName)
 		}
 		defer func() {
@@ -1157,12 +1195,16 @@ func (sm *StorageManager) defrostDVRFromChapterRefs(ctx context.Context, req *pb
 		}
 		finalSegs = append(finalSegs, seg)
 	}
-	manifestBody := hls.BuildVOD(finalSegs, hls.BuildVODOptions{
-		HasGaps:          hasGaps,
-		SegmentURIPrefix: "../segments/",
-	})
 	manifestPath := filepath.Join(chaptersDir, chapterID+".m3u8")
-	if err := os.WriteFile(manifestPath, []byte(manifestBody), 0644); err != nil {
+	writeManifest := func(event bool) error {
+		manifestBody := hls.BuildVOD(finalSegs, hls.BuildVODOptions{
+			HasGaps:          hasGaps,
+			SegmentURIPrefix: "../segments/",
+			Event:            event,
+		})
+		return os.WriteFile(manifestPath, []byte(manifestBody), 0644)
+	}
+	if err := writeManifest(true); err != nil {
 		sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
 		sm.emitChapterDefrostFailure(req, err)
 		return nil, fmt.Errorf("write chapter manifest: %w", err)
@@ -1171,6 +1213,9 @@ func (sm *StorageManager) defrostDVRFromChapterRefs(ctx context.Context, req *pb
 	// Signal ready for playback (manifest exists; segment downloads
 	// stream into local cache as needed).
 	sm.emitDefrostProgress(req, 0, 0, 0, int32(len(refs)), "ready")
+	if err := sm.sendDefrostComplete(req.RequestId, req.AssetHash, "ready", manifestPath, 0, ""); err != nil {
+		sm.logger.WithError(err).Warn("emit chapter defrost ready complete")
+	}
 
 	// Download segments. lost_local rows have no URL and are already rendered as
 	// #EXT-X-GAP. uploaded/deleted_local rows have presigned GETs unless
@@ -1191,6 +1236,7 @@ func (sm *StorageManager) defrostDVRFromChapterRefs(ctx context.Context, req *pb
 			downloaded++
 			if idx != nil {
 				idx.TrackCachedSegment(req.AssetHash, segName, localSegPath, info.Size(), false)
+				idx.PinCachedSegment(req.AssetHash, segName, pinUntil)
 			}
 			percent := uint32(((i + 1) * 100) / len(refs))
 			sm.emitDefrostProgress(req, percent, totalBytes, downloaded, int32(len(refs)), "reusing_local")
@@ -1202,23 +1248,33 @@ func (sm *StorageManager) defrostDVRFromChapterRefs(ctx context.Context, req *pb
 			err := fmt.Errorf("uploaded segment %s has no presigned URL; Foghorn bug", segName)
 			sm.logger.WithError(err).WithField("segment", segName).Error("Chapter defrost: missing presigned URL on uploaded row")
 			sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
-			sm.emitChapterDefrostFailure(req, err)
+			sm.emitChapterDefrostFailure(req, err, manifestPath)
 			return nil, err
 		}
 		if err := sm.presignedClient.DownloadToFileFromPresignedURL(ctx, presignedURL, localSegPath, nil); err != nil {
 			sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
-			sm.emitChapterDefrostFailure(req, err)
+			sm.emitChapterDefrostFailure(req, err, manifestPath)
 			return nil, fmt.Errorf("download segment %s: %w", segName, err)
 		}
 		if info, statErr := os.Stat(localSegPath); statErr == nil && info != nil {
 			totalBytes += uint64(info.Size())
 			if idx != nil {
 				idx.TrackCachedSegment(req.AssetHash, segName, localSegPath, info.Size(), false)
+				idx.PinCachedSegment(req.AssetHash, segName, pinUntil)
 			}
 		}
 		downloaded++
 		percent := uint32(((i + 1) * 100) / len(refs))
 		sm.emitDefrostProgress(req, percent, totalBytes, downloaded, int32(len(refs)), "downloading")
+	}
+
+	finalEvent := req.GetStreaming() && req.GetEndMs() > time.Now().UnixMilli()
+	if !finalEvent {
+		if err := writeManifest(false); err != nil {
+			sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
+			sm.emitChapterDefrostFailure(req, err, manifestPath)
+			return nil, fmt.Errorf("finalize chapter manifest: %w", err)
+		}
 	}
 
 	if err := sm.sendStorageLifecycle(&pb.StorageLifecycleData{
@@ -1241,6 +1297,21 @@ func (sm *StorageManager) defrostDVRFromChapterRefs(ctx context.Context, req *pb
 		LocalPath: manifestPath,
 		SizeBytes: totalBytes,
 	}, nil
+}
+
+func chapterPlaybackCacheUntil(startMs, endMs int64) time.Time {
+	durationMs := endMs - startMs
+	if durationMs < 0 {
+		durationMs = 0
+	}
+	ttl := time.Duration(durationMs)*time.Millisecond + time.Hour
+	if ttl < 30*time.Minute {
+		ttl = 30 * time.Minute
+	}
+	if ttl > 7*24*time.Hour {
+		ttl = 7 * 24 * time.Hour
+	}
+	return time.Now().Add(ttl)
 }
 
 // DefrostDVR downloads a DVR recording from S3 using streaming defrost (HLS live mode)
@@ -1709,13 +1780,13 @@ func (sm *StorageManager) SyncDtshOnly(ctx context.Context, req *pb.DtshSyncRequ
 	}
 
 	if uploadErr != nil {
-		// Send failure notification
-		_ = sm.sendSyncComplete(requestID, assetHash, "failed", "", 0, uploadErr.Error(), false)
+		// .dtsh sync — if the source file is gone, surface as local_missing.
+		_ = sm.sendSyncComplete(requestID, assetHash, "failed", "", 0, uploadErr.Error(), false, errors.Is(uploadErr, fs.ErrNotExist)) //nolint:errcheck // best-effort report
 		return uploadErr
 	}
 
 	// Send success notification with dtsh_included=true
-	_ = sm.sendSyncComplete(requestID, assetHash, "success", "", 0, "", dtshUploaded)
+	_ = sm.sendSyncComplete(requestID, assetHash, "success", "", 0, "", dtshUploaded, false) //nolint:errcheck // best-effort report
 
 	sm.logger.WithFields(logging.Fields{
 		"request_id": requestID,

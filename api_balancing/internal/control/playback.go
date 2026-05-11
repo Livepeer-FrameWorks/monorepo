@@ -37,6 +37,79 @@ type ContentResolution struct {
 	RequiresAuth bool
 }
 
+const dvrChapterPlaybackPrefix = "dvr+"
+
+func DVRChapterPlaybackID(chapterID string) string {
+	chapterID = strings.TrimSpace(chapterID)
+	if chapterID == "" {
+		return ""
+	}
+	return dvrChapterPlaybackPrefix + chapterID
+}
+
+func ParseDVRChapterPlaybackID(input string) (string, bool) {
+	input = strings.TrimSpace(input)
+	if !strings.HasPrefix(input, dvrChapterPlaybackPrefix) {
+		return "", false
+	}
+	chapterID := strings.TrimSpace(strings.TrimPrefix(input, dvrChapterPlaybackPrefix))
+	if chapterID == "" {
+		return "", false
+	}
+	return chapterID, true
+}
+
+func DVRChapterPolicyPlaybackID(ctx context.Context, contentID string) string {
+	chapterID, ok := ParseDVRChapterPlaybackID(contentID)
+	if !ok || CommodoreClient == nil {
+		return contentID
+	}
+	chapter, err := GetChapter(ctx, chapterID)
+	if err != nil {
+		return contentID
+	}
+	dvr, err := CommodoreClient.ResolveDVRHash(ctx, chapter.ArtifactHash)
+	if err != nil || !dvr.GetFound() || dvr.GetPlaybackId() == "" {
+		return contentID
+	}
+	return dvr.GetPlaybackId()
+}
+
+func DVRChapterPolicyInternalName(ctx context.Context, internalName string) string {
+	chapterID, ok := ParseDVRChapterPlaybackID(internalName)
+	if !ok || CommodoreClient == nil {
+		return internalName
+	}
+	chapter, err := GetChapter(ctx, chapterID)
+	if err != nil {
+		return internalName
+	}
+	dvr, err := CommodoreClient.ResolveDVRHash(ctx, chapter.ArtifactHash)
+	if err != nil || !dvr.GetFound() || dvr.GetInternalName() == "" {
+		return internalName
+	}
+	return dvr.GetInternalName()
+}
+
+type PlaybackPolicyTarget struct {
+	ContentID    string
+	InternalName string
+}
+
+func ResolvePlaybackPolicyTarget(ctx context.Context, contentID, internalName string) PlaybackPolicyTarget {
+	target := PlaybackPolicyTarget{
+		ContentID:    strings.TrimSpace(contentID),
+		InternalName: strings.TrimSpace(internalName),
+	}
+	if policyContentID := DVRChapterPolicyPlaybackID(ctx, target.ContentID); policyContentID != "" {
+		target.ContentID = policyContentID
+	}
+	if policyInternalName := DVRChapterPolicyInternalName(ctx, target.InternalName); policyInternalName != "" {
+		target.InternalName = policyInternalName
+	}
+	return target
+}
+
 func (r *ContentResolution) RoutingInternalName() string {
 	if r == nil {
 		return ""
@@ -54,6 +127,10 @@ func (r *ContentResolution) RoutingInternalName() string {
 func ResolveContent(ctx context.Context, input string) (*ContentResolution, error) {
 	if input == "" {
 		return nil, fmt.Errorf("empty input")
+	}
+
+	if chapterID, ok := ParseDVRChapterPlaybackID(input); ok {
+		return resolveDVRChapterContent(ctx, chapterID, input)
 	}
 
 	// 1. Artifact playback_id (clip/dvr/vod)
@@ -102,6 +179,41 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 	}
 
 	return nil, fmt.Errorf("content not found")
+}
+
+func resolveDVRChapterContent(ctx context.Context, chapterID, playbackID string) (*ContentResolution, error) {
+	if CommodoreClient == nil {
+		return nil, fmt.Errorf("commodore client not available")
+	}
+	chapter, err := GetChapter(ctx, chapterID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("content not found")
+		}
+		return nil, fmt.Errorf("resolve DVR chapter: %w", err)
+	}
+	dvr, err := CommodoreClient.ResolveDVRHash(ctx, chapter.ArtifactHash)
+	if err != nil || dvr == nil || !dvr.GetFound() {
+		return nil, fmt.Errorf("content not found")
+	}
+	res := &ContentResolution{
+		ContentType:  "dvr",
+		ContentId:    playbackID,
+		TenantId:     dvr.GetTenantId(),
+		StreamId:     dvr.GetStreamId(),
+		InternalName: playbackID,
+	}
+	if dvr.GetPlaybackId() != "" {
+		if art, artErr := CommodoreClient.ResolveArtifactPlaybackID(ctx, dvr.GetPlaybackId()); artErr == nil && art != nil && art.GetFound() {
+			res.RequiresAuth = art.GetRequiresAuth()
+			res.ClusterPeers = art.GetClusterPeers()
+		} else {
+			res.RequiresAuth = true
+		}
+	} else {
+		res.RequiresAuth = true
+	}
+	return res, nil
 }
 
 // ArtifactFederationClient is the subset of federation.FederationClient needed for cross-cluster artifact resolution.
@@ -265,6 +377,9 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	}
 	if playbackID == "" {
 		return nil, fmt.Errorf("playback_id is required")
+	}
+	if chapterID, ok := ParseDVRChapterPlaybackID(playbackID); ok {
+		return ResolveDVRChapterPlayback(ctx, deps, chapterID, playbackID)
 	}
 	if CommodoreClient == nil {
 		return nil, fmt.Errorf("commodore client not available")
@@ -531,6 +646,123 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	}, nil
 }
 
+func ResolveDVRChapterPlayback(ctx context.Context, deps *PlaybackDependencies, chapterID, playbackID string) (*pb.ViewerEndpointResponse, error) {
+	if deps == nil || deps.LB == nil {
+		return nil, fmt.Errorf("load balancer not available")
+	}
+	if CommodoreClient == nil {
+		return nil, fmt.Errorf("commodore client not available")
+	}
+	chapter, err := GetChapter(ctx, chapterID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("DVR chapter not found")
+		}
+		return nil, fmt.Errorf("failed to query DVR chapter: %w", err)
+	}
+	dvr, err := CommodoreClient.ResolveDVRHash(ctx, chapter.ArtifactHash)
+	if err != nil || dvr == nil || !dvr.GetFound() {
+		return nil, fmt.Errorf("DVR artifact not found")
+	}
+	if playbackID == "" {
+		playbackID = DVRChapterPlaybackID(chapterID)
+	}
+
+	var endpoints []*pb.ViewerEndpoint
+	if warmNodes := state.DefaultManager().FindNodesByArtifactHash(playbackID); len(warmNodes) > 0 {
+		for _, node := range rankArtifactNodes(warmNodes, deps.GeoLat, deps.GeoLon, 5) {
+			endpoint := dvrChapterEndpointFromNode(node.NodeID, node.Host, float64(node.Score), node.GeoLatitude, node.GeoLongitude, deps.GeoLat, deps.GeoLon, playbackID, chapter.IsCurrent)
+			if endpoint != nil {
+				endpoints = append(endpoints, endpoint)
+			}
+		}
+	}
+
+	if len(endpoints) == 0 {
+		lbctx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge,storage")
+		if tenantID := dvr.GetTenantId(); tenantID != "" {
+			lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterScope, tenantID)
+		}
+		nodes, err := deps.LB.GetTopNodesWithScores(lbctx, "", deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
+		if err != nil {
+			return nil, fmt.Errorf("no suitable DVR chapter playback nodes available: %w", err)
+		}
+		for _, node := range nodes {
+			if node.ClusterID != "" {
+				continue
+			}
+			endpoint := dvrChapterEndpointFromNode(node.NodeID, node.Host, float64(node.Score), node.GeoLatitude, node.GeoLongitude, deps.GeoLat, deps.GeoLon, playbackID, chapter.IsCurrent)
+			if endpoint != nil {
+				endpoints = append(endpoints, endpoint)
+			}
+		}
+	}
+	if len(endpoints) == 0 {
+		return nil, fmt.Errorf("no DVR chapter playback outputs available")
+	}
+
+	status := "available"
+	if chapter.IsCurrent {
+		status = "recording"
+	}
+	duration := int32(0)
+	if chapter.EndMs > chapter.StartMs {
+		duration = int32((chapter.EndMs - chapter.StartMs) / 1000)
+	}
+	metadata := &pb.PlaybackMetadata{
+		Status:          status,
+		IsLive:          chapter.IsCurrent,
+		TenantId:        dvr.GetTenantId(),
+		ContentId:       playbackID,
+		ContentType:     "dvr",
+		DvrStatus:       status,
+		DurationSeconds: &duration,
+	}
+	if streamID := dvr.GetStreamId(); streamID != "" {
+		metadata.StreamId = &streamID
+	}
+	if len(endpoints) > 0 && endpoints[0].Outputs != nil {
+		for proto := range endpoints[0].Outputs {
+			metadata.ProtocolHints = append(metadata.ProtocolHints, proto)
+		}
+	}
+
+	return &pb.ViewerEndpointResponse{
+		Primary:   endpoints[0],
+		Fallbacks: endpoints[1:],
+		Metadata:  metadata,
+	}, nil
+}
+
+func dvrChapterEndpointFromNode(nodeID, host string, score float64, nodeLat, nodeLon, viewerLat, viewerLon float64, playbackID string, isActive bool) *pb.ViewerEndpoint {
+	nodeOutputs, exists := GetNodeOutputs(nodeID)
+	if !exists || nodeOutputs.Outputs == nil {
+		return nil
+	}
+	baseURL := nodeOutputs.BaseURL
+	if baseURL == "" {
+		baseURL = host
+	}
+	protocol, endpointURL := selectPrimaryArtifactOutput(nodeOutputs.Outputs, baseURL, playbackID, "m3u8")
+	if endpointURL == "" {
+		endpointURL = EnsureTrailingSlash(baseURL) + "hls/" + playbackID + "/index.m3u8"
+		protocol = "hls"
+	}
+	geoDistance := 0.0
+	if geo.IsValidLatLon(viewerLat, viewerLon) && geo.IsValidLatLon(nodeLat, nodeLon) {
+		geoDistance = CalculateGeoDistance(viewerLat, viewerLon, nodeLat, nodeLon)
+	}
+	return &pb.ViewerEndpoint{
+		NodeId:      nodeID,
+		BaseUrl:     baseURL,
+		Protocol:    protocol,
+		Url:         endpointURL,
+		GeoDistance: geoDistance,
+		LoadScore:   score,
+		Outputs:     BuildOutputsMap(baseURL, nodeOutputs.Outputs, playbackID, isActive),
+	}
+}
+
 func rankArtifactNodes(nodes []state.ArtifactNodeInfo, viewerLat, viewerLon float64, maxNodes int) []state.ArtifactNodeInfo {
 	if len(nodes) == 0 {
 		return nil
@@ -767,9 +999,9 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 // the thumbnail upload path will write to for this stream. Mirrors the
 // chain processThumbnailUploadRequest uses — origin from Commodore plus
 // official from cached Quartermaster routing — so write and read end up
-// at the same cluster's Chandler. Falls back to the legacy local
-// getChandlerBaseURL() when cluster context is unresolvable so existing
-// single-cluster deployments behave exactly as before.
+// at the same cluster's Chandler. Uses the local Chandler base URL when
+// cluster context is unavailable so single-cluster deployments keep serving
+// thumbnails.
 func resolveLiveThumbnailChandlerBase(ctx context.Context, tenantID, internalName string) string {
 	originCluster := ""
 	if CommodoreClient != nil && internalName != "" {
@@ -842,11 +1074,7 @@ func AppendCorrelationID(rawURL, viewerID string) string {
 	return parsedURL.String()
 }
 
-// =============================================================================
-// HELPER FUNCTIONS (consolidated from grpc/server.go and handlers/handlers.go)
-// =============================================================================
-
-// EnsureTrailingSlash adds a trailing slash if not present
+// EnsureTrailingSlash adds a trailing slash if not present.
 func EnsureTrailingSlash(s string) string {
 	if !strings.HasSuffix(s, "/") {
 		return s + "/"

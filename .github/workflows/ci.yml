@@ -21,6 +21,7 @@ jobs:
     outputs:
       go: ${{ steps.filter.outputs.go }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      registry: ${{ steps.filter.outputs.registry }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -44,6 +45,15 @@ jobs:
               - '**/*.js'
               - '**/*.json'
               - 'pnpm-lock.yaml'
+            registry:
+              - 'docs/platform-features.yaml'
+              - 'scripts/registry/**'
+              - 'pkg/graphql/schema.graphql'
+              - 'api_gateway/internal/mcp/tools/**'
+              - 'website_application/src/routes/**'
+              - 'website_application/src/lib/features/registry.json'
+              - 'website_docs/src/content/docs/**'
+              - 'Makefile'
 
   go-build:
     name: Go build
@@ -264,6 +274,20 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+  feature-registry:
+    name: Feature registry
+    needs: changes
+    if: needs.changes.outputs.registry == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+        env:
+          GOTOOLCHAIN: local
+      - run: make verify-feature-registry
+
   codecov-notify:
     name: Codecov notify
     needs: [go-test, frontend-test, frontend-build]
@@ -278,7 +302,17 @@ jobs:
 
   ci-passed:
     name: CI passed
-    needs: [changes, go-build, go-test, go-lint, frontend-lint, frontend-test, frontend-build]
+    needs:
+      [
+        changes,
+        go-build,
+        go-test,
+        go-lint,
+        frontend-lint,
+        frontend-test,
+        frontend-build,
+        feature-registry,
+      ]
     if: always()
     runs-on: ubuntu-latest
     steps:

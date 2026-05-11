@@ -103,6 +103,8 @@ export interface CreatePlayerConfig {
 
   /** Locale for i18n (default: "en") */
   locale?: FwLocale;
+  /** Custom translation overrides applied on top of the locale pack. */
+  translations?: Partial<TranslationStrings>;
 
   /**
    * Skin: controls rendering mode.
@@ -343,6 +345,8 @@ export function createPlayer(config: CreatePlayerConfig): PlayerInstance {
     poster: config.poster,
     debug: config.debug,
     playbackMode: config.playbackMode,
+    locale: config.locale,
+    translations: config.translations,
   };
 
   const ctrl = new PlayerController(controllerConfig);
@@ -399,7 +403,7 @@ export function createPlayer(config: CreatePlayerConfig): PlayerInstance {
       // Build skin UI via blueprints
       if (resolvedSkin && shouldRenderSkin) {
         const locale = config.locale ?? "en";
-        const t = createTranslator({ locale });
+        const t = createTranslator({ locale, translations: config.translations });
         const blueprintCtx: BlueprintContext = {
           get video() {
             return ctrl.getVideoElement();

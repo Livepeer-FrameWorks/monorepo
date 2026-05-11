@@ -267,6 +267,36 @@ func (c *GRPCClient) SetDVRChapterPolicy(ctx context.Context, req *pb.SetDVRChap
 	return resp, trailers, err
 }
 
+// OverrideArtifactRetention pushes a per-asset retention horizon onto an
+// existing foghorn.artifacts row so the next RetentionJob tick uses the new
+// value. Called by Commodore.UpdateAssetRetention / ResetAssetRetention.
+func (c *GRPCClient) OverrideArtifactRetention(ctx context.Context, req *pb.OverrideArtifactRetentionRequest) (*pb.OverrideArtifactRetentionResponse, metadata.MD, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	var trailers metadata.MD
+	resp, err := c.dvr.OverrideArtifactRetention(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
+}
+
+// TestPlaybackAccess runs the dry-run policy evaluator against a caller-
+// supplied JWT (or webhook test). Webhook mode (req.FireWebhook=true) makes
+// a real outbound HTTPS call to the customer URL — Commodore validates
+// tenant ownership upstream before forwarding here.
+func (c *GRPCClient) TestPlaybackAccess(ctx context.Context, req *pb.TestPlaybackAccessRequest) (*pb.TestPlaybackAccessResponse, metadata.MD, error) {
+	// Webhook mode can take up to ~10s if the customer endpoint is slow;
+	// give the call its own headroom rather than tripping the default
+	// client timeout.
+	timeout := c.timeout
+	if req.GetFireWebhook() && timeout < 15*time.Second {
+		timeout = 15 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var trailers metadata.MD
+	resp, err := c.dvr.TestPlaybackAccess(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
+}
+
 // StopDVR stops an active DVR recording.
 // Returns any trailers emitted by the downstream service.
 func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string, tenantID *string, streamID *string) (*pb.StopDVRResponse, metadata.MD, error) {

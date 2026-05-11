@@ -7,7 +7,9 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-Record your live streams, replay long-running DVR archives, extract clips, and upload pre-recorded content for on-demand playback.
+FrameWorks treats recording as a first-class live workflow, not just a post-stream export. You can run a channel all day, keep one continuous DVR archive for the full session, let live viewers seek back through a bounded window, then expose historical replay through chapter playlists without creating a new asset every few hours.
+
+That model is useful for always-on venues, sports, conferences, classrooms, public meetings, and monitoring feeds where the live moment and the archive both matter.
 
 <Aside type="caution" title="Storage and retention costs">
   Recordings, clips, and VOD assets consume storage until they expire or are deleted. Longer
@@ -19,6 +21,13 @@ Record your live streams, replay long-running DVR archives, extract clips, and u
 ## DVR Recording
 
 DVR records your live stream and preserves the broadcast for later playback. DVR content is playable **while the stream is still live**: viewers can seek back through the live DVR window, pause, and catch up. After that window, the same recording remains available as a continuous archive, split into bounded chapter playlists for replay.
+
+The value prop is the split between capture, live UX, and replay UX:
+
+- **24/7 capture** — one stream session can keep recording continuously instead of rolling into arbitrary fixed-length assets.
+- **Fast live playlists** — the live DVR window stays bounded so viewers get seekback without enormous manifests.
+- **Archive replay** — chapters turn a long recording into navigable HLS views over the same segment archive.
+- **Cost control** — retention policies decide how long completed DVR, clips, and VOD assets stay in storage.
 
 That split matters:
 
@@ -148,6 +157,8 @@ conferences, and always-on streams this is a feature: viewers can rewind a goal,
 
 For historical replay, FrameWorks treats chapters as **virtual playlist overlays** on top of one DVR archive. The segment files stay under one artifact prefix; each chapter playlist references the shared segment set.
 
+For the full chapter-policy story (modes, defaults, resolution semantics) see [DVR Chapters](/builders/dvr-chapters). Storage cost behavior is covered in [Storage & retention](/builders/storage-and-retention).
+
 Common chapter shapes:
 
 | Shape                 | Use                                                                                                                                                           |
@@ -162,7 +173,7 @@ Chapter manifests can include `#EXT-X-GAP` markers if a segment was lost before 
 
 #### Chapter API
 
-Retrieve a single chapter manifest URL — embed it in a `<video>` element or any HLS player:
+Retrieve a single chapter playback ID, then resolve it through the normal viewer endpoint API:
 
 ```graphql
 query {
@@ -176,7 +187,7 @@ query {
 }
 ```
 
-`manifestUrl` is a presigned GET URL for the chapter playback manifest. `isCurrent: true` means the chapter is still being recorded into and the manifest is `EVENT`-shaped (no `#EXT-X-ENDLIST`). For `FIXED_INTERVAL` mode pass `intervalSeconds`; for civil-day chapters resolve the local-day to a UTC range in your client and submit as `EXPLICIT_RANGE`.
+`manifestUrl` carries the Mist playback ID for the chapter (`dvr+{chapterId}`). Resolve it with `resolveViewerEndpoint` and use the returned edge URL in the player. The selected edge defrosts the bounded chapter into a local manifest and shared segment bucket, so chapter playback uses the same auth, routing, analytics, and billing path as live, clip, and VOD playback. For `FIXED_INTERVAL` mode pass `intervalSeconds`; for civil-day chapters resolve the local-day to a UTC range in your client and submit as `EXPLICIT_RANGE`.
 
 Build a chapter index for player navigation with paginated listing:
 
@@ -406,8 +417,9 @@ Upload pre-recorded video files for on-demand playback. VOD uploads use S3-compa
 </Aside>
 
 <Aside type="note" title="VOD storage lifecycle">
-  VOD assets also count toward stored bytes while retained. The current upload registry defaults VOD
-  retention to 90 days unless your plan, operator policy, or a future API override changes it.
+  VOD assets also count toward stored bytes while retained. Use storage retention defaults for your
+  tenant-wide policy, then apply a per-asset override when a specific upload needs a shorter or
+  longer horizon.
 </Aside>
 
 ### Upload Flow

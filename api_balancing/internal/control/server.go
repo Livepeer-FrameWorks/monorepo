@@ -2148,25 +2148,25 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 	templates := []*pb.StreamTemplate{
 		{
 			Id:    "live",
-			Def:   &pb.StreamDef{Name: "live+$", Realtime: true, StopSessions: false, Tags: []string{"live"}},
+			Def:   &pb.StreamDef{Name: "live", Realtime: false, StopSessions: false, Tags: []string{"live"}},
 			Roles: []string{"ingest", "edge"},
 			Caps:  []string{"ingest", "edge"},
 		},
 		{
 			Id:    "vod",
-			Def:   &pb.StreamDef{Name: "vod+$", Realtime: false, StopSessions: false, Tags: []string{"vod"}},
+			Def:   &pb.StreamDef{Name: "vod", Realtime: false, StopSessions: false, Tags: []string{"vod"}},
 			Roles: []string{"edge", "storage"},
 			Caps:  []string{"edge", "storage"},
 		},
 		{
 			Id:    "processing",
-			Def:   &pb.StreamDef{Name: "processing+$", Realtime: true, StopSessions: false, Tags: []string{"processing"}},
+			Def:   &pb.StreamDef{Name: "processing", Realtime: true, StopSessions: false, Tags: []string{"processing"}},
 			Roles: []string{"edge", "storage"},
 			Caps:  []string{"processing"},
 		},
 		{
 			Id:    "pull",
-			Def:   &pb.StreamDef{Name: "pull", Realtime: true, StopSessions: false, Tags: []string{"pull"}},
+			Def:   &pb.StreamDef{Name: "pull", Realtime: false, StopSessions: false, Tags: []string{"pull"}},
 			Roles: []string{"edge"},
 			Caps:  []string{"edge"},
 		},
@@ -2255,6 +2255,17 @@ func FoghornBalancerBase(clusterID string) string {
 // their cluster-scoped Foghorn DNS name. Env overrides are fallback escape
 // hatches for non-managed deployments.
 func foghornBalancerBase(clusterID string) string {
+	if v := strings.TrimSpace(os.Getenv("FOGHORN_PUBLIC_BASE")); v != "" {
+		return v
+	}
+	if isLocalBuildEnv() {
+		if v := strings.TrimSpace(os.Getenv("FOGHORN_URL")); v != "" {
+			return v
+		}
+		if h := strings.TrimSpace(os.Getenv("FOGHORN_HOST")); h != "" {
+			return fmt.Sprintf("http://%s:18008", h)
+		}
+	}
 	if clusterID != "" {
 		rootDomain := platformRootDomain()
 		clusterSlug := pkgdns.SanitizeLabel(clusterID)
@@ -2264,13 +2275,22 @@ func foghornBalancerBase(clusterID string) string {
 			}
 		}
 	}
-	if v := strings.TrimSpace(os.Getenv("FOGHORN_PUBLIC_BASE")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("FOGHORN_URL")); v != "" {
 		return v
 	}
 	if h := strings.TrimSpace(os.Getenv("FOGHORN_HOST")); h != "" {
 		return fmt.Sprintf("https://%s:18008", h)
 	}
 	return "http://foghorn:18008"
+}
+
+func isLocalBuildEnv() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BUILD_ENV"))) {
+	case "dev", "development", "local", "test":
+		return true
+	default:
+		return false
+	}
 }
 
 type edgeTelemetryClaims struct {
@@ -2939,9 +2959,8 @@ func updatePhaseAcceptsApplyResult(phase string) bool {
 	}
 }
 
-// ==================== Cold Storage (Freeze/Defrost) Handlers ====================
-
-// S3ClientInterface defines the interface for S3 operations (for dependency injection)
+// S3ClientInterface defines the storage operations used by freeze, defrost,
+// sync, cleanup, and DVR chapter materialization.
 type S3ClientInterface interface {
 	GeneratePresignedPUT(key string, expiry time.Duration) (string, error)
 	GeneratePresignedGET(key string, expiry time.Duration) (string, error)
@@ -2958,7 +2977,7 @@ type S3ClientInterface interface {
 
 var s3Client S3ClientInterface
 
-// SetS3Client sets the S3 client for cold storage operations
+// SetS3Client sets the S3 client for cold storage operations.
 func SetS3Client(client S3ClientInterface) {
 	s3Client = client
 }
@@ -2987,7 +3006,7 @@ type StorageMintDelegate func(ctx context.Context, targetClusterID string, req *
 type StorageDeleteDelegate func(ctx context.Context, targetClusterID string, req *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error)
 
 // SetStorageResolverFactory wires the per-request storage cluster resolver
-// factory (origin → official → legacy chain). Called once at startup.
+// factory. Called once at startup.
 func SetStorageResolverFactory(f func(ctx context.Context, tenantID string) *storage.ClusterResolver) {
 	storageResolverFactory = f
 }
@@ -3356,8 +3375,8 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 	}
 
 	// Resolve the storage cluster for this asset using the same chain
-	// CreateVodUpload uses: origin (artifact row) → official (tenant
-	// routing) → legacy (this Foghorn's process cluster). The chosen
+	// CreateVodUpload uses: origin artifact row, tenant routing, then this
+	// Foghorn's process cluster. The chosen
 	// cluster decides local-mint vs federated-mint vs reject; it also
 	// drives the storage_cluster_id we persist below for read-side
 	// reconstruction.
@@ -3369,9 +3388,9 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 
 	// Remote artifact: storage cluster is authoritative — skip upload,
 	// just evict. Replaces the prior origin_cluster_id-only check so a
-	// row with delegated storage routes to the storage cluster, not
-	// origin. NULL storage_cluster_id falls back to origin via the
-	// resolver's behaviour, preserving prior semantics for legacy rows.
+	// row with delegated storage routes to the storage cluster, not origin.
+	// NULL storage_cluster_id falls back to origin via the resolver's
+	// behaviour for rows created before storage_cluster_id was populated.
 	if storageCluster != "" && storageCluster != localClusterID && !isServedCluster(storageCluster) {
 		logger.WithFields(logging.Fields{
 			"asset_hash":      assetHash,
@@ -3605,7 +3624,8 @@ func processFreezeComplete(ctx context.Context, complete *pb.FreezeComplete, nod
 	}).Info("Freeze operation completed")
 
 	if status == "success" {
-		// Update artifact storage location in database
+		// Update artifact storage location in database. Reset failure_count
+		// so a later eviction + restore can use the full retry budget again.
 		if _, dbErr := db.ExecContext(ctx, `
 				UPDATE foghorn.artifacts
 				SET storage_location = 'local',
@@ -3614,23 +3634,47 @@ func processFreezeComplete(ctx context.Context, complete *pb.FreezeComplete, nod
 				    frozen_at = NOW(),
 			    last_sync_attempt = NOW(),
 			    sync_error = NULL,
+			    failure_count = 0,
 			    updated_at = NOW()
 			WHERE artifact_hash = $2`,
 			s3URL, assetHash); dbErr != nil {
 			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to update artifact after successful freeze")
 		}
 	} else {
-		// Revert storage location on failure
+		// Distinguish "local file is gone" (terminal lost_local — no retry, no
+		// S3 cleanup needed) from a transient failure that should be retried.
+		newSyncStatus := "failed"
+		if complete.GetLocalMissing() {
+			newSyncStatus = "lost_local"
+		}
+		// failure_count drives the retry-budget + exponential-backoff in
+		// retryFailed. We only increment for transient failures — lost_local
+		// is terminal, so leaving the counter alone is fine.
+		// status='failed' on lost_local pairs with sync_status='lost_local' as
+		// the tombstone marker: playback / billing / cleanup-pressure paths
+		// already exclude status='failed', so the row is discoverable in admin
+		// listings without being treated as a usable asset.
 		if _, dbErr := db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 'local',
-			    sync_status = 'failed',
+			    sync_status = $3,
+			    status = CASE WHEN $3 = 'lost_local' THEN 'failed' ELSE status END,
 			    sync_error = NULLIF($1,''),
 			    last_sync_attempt = NOW(),
+			    failure_count = CASE WHEN $3 = 'failed' THEN failure_count + 1 ELSE failure_count END,
 			    updated_at = NOW()
 			WHERE artifact_hash = $2
-		`, errorMsg, assetHash); dbErr != nil {
+		`, errorMsg, assetHash, newSyncStatus); dbErr != nil {
 			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to revert artifact after freeze failure")
+		}
+		// lost_local is terminal — skip the partial-S3-cleanup branch since
+		// nothing was uploaded.
+		if complete.GetLocalMissing() {
+			logger.WithFields(logging.Fields{
+				"asset_hash": assetHash,
+				"node_id":    nodeID,
+			}).Warn("Artifact marked lost_local: local source file is gone before sync; will not retry")
+			return
 		}
 
 		// Clean up partial S3 uploads to avoid storage garbage
@@ -3708,6 +3752,45 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 		"error":      errorMsg,
 		"node_id":    nodeID,
 	}).Info("Defrost operation completed")
+
+	if (status == "ready" || status == "success") && localPath != "" {
+		reportingNodeID := complete.GetNodeId()
+		if reportingNodeID == "" {
+			reportingNodeID = nodeID
+		}
+		if chapterID, ok := dvrChapterIDFromManifestPath(localPath); ok {
+			playbackID := DVRChapterPlaybackID(chapterID)
+			state.DefaultManager().AddNodeArtifact(reportingNodeID, &pb.StoredArtifact{
+				ClipHash:     playbackID,
+				StreamName:   playbackID,
+				FilePath:     localPath,
+				SizeBytes:    sizeBytes,
+				CreatedAt:    time.Now().Unix(),
+				Format:       "m3u8",
+				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_DVR,
+			})
+			notifyDefrostComplete(playbackID, true, localPath)
+			return
+		}
+	}
+
+	if status != "ready" && status != "success" && localPath != "" {
+		reportingNodeID := complete.GetNodeId()
+		if reportingNodeID == "" {
+			reportingNodeID = nodeID
+		}
+		if chapterID, ok := dvrChapterIDFromManifestPath(localPath); ok {
+			playbackID := DVRChapterPlaybackID(chapterID)
+			state.DefaultManager().RemoveNodeArtifact(reportingNodeID, playbackID)
+			notifyDefrostComplete(playbackID, false, "")
+			logger.WithFields(logging.Fields{
+				"chapter_id":  chapterID,
+				"playback_id": playbackID,
+				"node_id":     reportingNodeID,
+			}).Warn("Removed failed DVR chapter warm state")
+			return
+		}
+	}
 
 	if status == "success" {
 		// Update storage location back to local in database
@@ -3788,6 +3871,17 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 
 	// Notify any waiting defrost requests
 	notifyDefrostComplete(assetHash, status == "success", localPath)
+}
+
+func dvrChapterIDFromManifestPath(localPath string) (string, bool) {
+	if localPath == "" || filepath.Ext(localPath) != ".m3u8" {
+		return "", false
+	}
+	if filepath.Base(filepath.Dir(localPath)) != "chapters" {
+		return "", false
+	}
+	chapterID := strings.TrimSuffix(filepath.Base(localPath), ".m3u8")
+	return chapterID, chapterID != ""
 }
 
 func SendLocalDefrostRequest(nodeID string, req *pb.DefrostRequest) error {
@@ -4435,6 +4529,132 @@ func StartRemoteDefrost(ctx context.Context, assetType, assetHash, nodeID string
 	return requestDefrost(ctx, assetType, assetHash, nodeID, timeout, logger, false, remoteURL, remoteSegmentURLs)
 }
 
+func LocalDVRChapterManifestPath(chapterID, nodeID string) (string, bool) {
+	playbackID := DVRChapterPlaybackID(chapterID)
+	if playbackID == "" || nodeID == "" {
+		return "", false
+	}
+	for _, node := range state.DefaultManager().FindNodesByArtifactHash(playbackID) {
+		if node.NodeID == nodeID && node.Artifact != nil && node.Artifact.GetFilePath() != "" {
+			return node.Artifact.GetFilePath(), true
+		}
+	}
+	return "", false
+}
+
+func RefreshWarmDVRChapterEdges(ctx context.Context, chapterID string, logger logging.Logger) {
+	playbackID := DVRChapterPlaybackID(chapterID)
+	if playbackID == "" {
+		return
+	}
+	nodes := state.DefaultManager().FindNodesByArtifactHash(playbackID)
+	for _, node := range nodes {
+		nodeID := node.NodeID
+		if nodeID == "" || node.Artifact == nil || node.Artifact.GetFilePath() == "" {
+			continue
+		}
+		go func(nodeID string) {
+			refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			if _, err := StartDVRChapterDefrost(refreshCtx, chapterID, nodeID, 30*time.Second, logger); err != nil {
+				logger.WithError(err).WithFields(logging.Fields{
+					"chapter_id": chapterID,
+					"node_id":    nodeID,
+				}).Warn("Failed to refresh warm DVR chapter edge")
+			}
+		}(nodeID)
+	}
+}
+
+func StartDVRChapterDefrost(ctx context.Context, chapterID, nodeID string, timeout time.Duration, logger logging.Logger) (string, error) {
+	if s3Client == nil {
+		return "", fmt.Errorf("s3 client not configured")
+	}
+	if db == nil {
+		return "", fmt.Errorf("database not available")
+	}
+	chapter, err := GetChapter(ctx, chapterID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("DVR chapter not found")
+		}
+		return "", fmt.Errorf("read DVR chapter: %w", err)
+	}
+	if chapter == nil || chapter.ArtifactHash == "" {
+		return "", fmt.Errorf("DVR chapter has no artifact")
+	}
+	tenantID, streamName, ok := resolveDVRTenantAndStream(ctx, chapter.ArtifactHash, logger)
+	if !ok {
+		return "", fmt.Errorf("could not resolve tenant/stream for DVR chapter")
+	}
+	rows, err := ListDVRSegmentsForRange(ctx, chapter.ArtifactHash, chapter.StartMs, chapter.EndMs)
+	if err != nil {
+		return "", fmt.Errorf("list DVR chapter segments: %w", err)
+	}
+	refs := make([]*pb.DVRSegmentRef, 0, len(rows))
+	urlTTL := dvrChapterDefrostURLTTL(chapter.StartMs, chapter.EndMs)
+	for _, r := range rows {
+		ref := &pb.DVRSegmentRef{
+			SegmentName:  r.SegmentName,
+			S3Key:        r.S3Key,
+			MediaStartMs: r.MediaStartMs,
+			MediaEndMs:   r.MediaEndMs,
+			DurationMs:   r.DurationMs,
+			Status:       r.Status,
+			Sequence:     r.Sequence,
+		}
+		if r.Status == "uploaded" || r.Status == "deleted_local" {
+			url, mintErr := s3Client.GeneratePresignedGET(r.S3Key, urlTTL)
+			if mintErr != nil {
+				return "", fmt.Errorf("mint DVR chapter segment %s: %w", r.SegmentName, mintErr)
+			}
+			ref.PresignedGetUrl = url
+		}
+		refs = append(refs, ref)
+	}
+	storageBase := storageBasePathForNode(nodeID)
+	localRoot := filepath.Join(storageBase, "dvr", streamName, chapter.ArtifactHash)
+	localManifest := filepath.Join(localRoot, "chapters", chapterID+".m3u8")
+	requestID := fmt.Sprintf("dvr-chapter-defrost-%s-%d", chapterID, time.Now().UnixNano())
+	req := &pb.DefrostRequest{
+		RequestId:              requestID,
+		AssetType:              "dvr",
+		AssetHash:              chapter.ArtifactHash,
+		TenantId:               tenantID,
+		StreamInternalName:     streamName,
+		LocalPath:              localRoot,
+		TimeoutSeconds:         int32(timeout.Seconds()),
+		Streaming:              true,
+		UrlExpirySeconds:       int64(urlTTL.Seconds()),
+		DvrArtifactId:          chapter.ArtifactHash,
+		ChapterId:              chapterID,
+		StartMs:                chapter.StartMs,
+		EndMs:                  chapter.EndMs,
+		ChapterMode:            chapter.Mode,
+		ChapterIntervalSeconds: chapter.IntervalSeconds.Int32,
+		ChapterSegments:        refs,
+	}
+	if err := SendDefrostRequest(nodeID, req); err != nil {
+		return "", fmt.Errorf("send DVR chapter defrost: %w", err)
+	}
+	return localManifest, nil
+}
+
+func dvrChapterDefrostURLTTL(startMs, endMs int64) time.Duration {
+	durationMs := endMs - startMs
+	if durationMs < 0 {
+		durationMs = 0
+	}
+	ttl := time.Duration(durationMs)*time.Millisecond + time.Hour
+	if ttl < 30*time.Minute {
+		return 30 * time.Minute
+	}
+	if ttl > 7*24*time.Hour {
+		return 7 * 24 * time.Hour
+	}
+	return ttl
+}
+
 func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, timeout time.Duration, logger logging.Logger, wait bool, remoteURL string, remoteSegmentURLs map[string]string) (string, error) {
 	useRemoteURLs := remoteURL != "" || len(remoteSegmentURLs) > 0
 	if !useRemoteURLs && s3Client == nil {
@@ -4489,6 +4709,10 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 		}
 	}
 
+	if artifactType == "dvr" {
+		return "", fmt.Errorf("DVR archive playback requires chapter context; use the chapter API (dvrChapter)")
+	}
+
 	// Check if already local
 	if storageLocation == "local" {
 		return "", nil // Already local, no defrost needed
@@ -4505,10 +4729,6 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 			return path, nil
 		}
 		return "", NewDefrostingError(10, "defrost already in progress")
-	}
-
-	if artifactType == "dvr" {
-		return "", fmt.Errorf("DVR archive playback requires chapter context; use the chapter API (dvrChapter)")
 	}
 
 	result, err := db.ExecContext(ctx, `
@@ -4661,18 +4881,16 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 	return req.LocalPath, nil
 }
 
-// ==================== Dual-Storage (Sync/CanDelete) Handlers ====================
-
-// artifactRepo provides database access for dual-storage sync tracking
+// artifactRepo provides database access for dual-storage sync tracking.
 var artifactRepo state.ArtifactRepository
 
-// SetArtifactRepository sets the artifact repository for sync tracking
+// SetArtifactRepository sets the artifact repository for sync tracking.
 func SetArtifactRepository(repo state.ArtifactRepository) {
 	artifactRepo = repo
 }
 
-// processCanDeleteRequest handles can-delete checks from Helmsman
-// Before deleting a local asset copy, Helmsman asks Foghorn if it's safe
+// processCanDeleteRequest handles can-delete checks from Helmsman. Before
+// deleting a local asset copy, Helmsman asks Foghorn if it's safe.
 func processCanDeleteRequest(req *pb.CanDeleteRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
 	assetHash := req.GetAssetHash()
 	requestingNodeID := req.GetNodeId()
@@ -4934,20 +5152,27 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 		}).Info("Remote artifact evicted locally, marked as S3-resident")
 
 	default:
-		// Sync failed
-		if err := artifactRepo.SetSyncStatus(ctx, assetHash, "failed", ""); err != nil {
-			logger.WithError(err).Error("Failed to update sync status to failed")
+		// Sync failed. local_missing=true is terminal lost_local; transient
+		// failures stay 'failed' and are retried with backoff/cap.
+		newSyncStatus := "failed"
+		if complete.GetLocalMissing() {
+			newSyncStatus = "lost_local"
+		}
+		if err := artifactRepo.SetSyncStatus(ctx, assetHash, newSyncStatus, ""); err != nil {
+			logger.WithError(err).Error("Failed to update sync status to " + newSyncStatus)
 		}
 
 		if _, dbErr := db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 'local',
-			    sync_status = 'failed',
+			    sync_status = $3,
+			    status = CASE WHEN $3 = 'lost_local' THEN 'failed' ELSE status END,
 			    sync_error = NULLIF($1,''),
 			    last_sync_attempt = NOW(),
+			    failure_count = CASE WHEN $3 = 'failed' THEN failure_count + 1 ELSE failure_count END,
 			    updated_at = NOW()
 			WHERE artifact_hash = $2`,
-			errorMsg, assetHash); dbErr != nil {
+			errorMsg, assetHash, newSyncStatus); dbErr != nil {
 			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to record sync failure")
 		}
 
@@ -4957,8 +5182,6 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 		}).Warn("Asset sync to S3 failed")
 	}
 }
-
-// ==================== Cert Refresh Loop ====================
 
 const tlsStateNoCert = "<no-cert>"
 
@@ -5244,8 +5467,6 @@ func readConfiguredCABundle() []byte {
 	return caBundle
 }
 
-// ==================== Edge Provisioning (PreRegisterEdge) ====================
-
 type EdgeProvisioningServer struct {
 	pb.UnimplementedEdgeProvisioningServiceServer
 }
@@ -5498,10 +5719,9 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 		return
 	}
 
-	// Run the storage resolver — same chain freeze and CreateVodUpload use.
-	// Without a tenant we can't resolve an official cluster, so the
-	// resolver falls back to legacy local mint via thumbOriginCluster /
-	// localClusterID alone.
+	// Run the same storage resolver used by freeze and CreateVodUpload.
+	// Without a tenant, thumbOriginCluster/localClusterID are the only
+	// available storage ownership signals.
 	storageCluster, mintMode := resolveThumbnailStorageCluster(context.Background(), thumbTenantID, thumbOriginCluster)
 
 	expiry := 15 * time.Minute
@@ -5824,9 +6044,9 @@ const chandlerPerClusterTTL = 5 * time.Minute
 // getChandlerBaseURLForCluster returns the Chandler base URL for the named
 // cluster — `https://chandler.<cluster-slug>.<cluster-base-domain>` derived
 // from Quartermaster cluster metadata. Per-cluster cache with a 5-minute TTL
-// per entry; cache state is independent of the legacy `resolvedChandlerBaseURL`
-// global used by `getChandlerBaseURL()`, so a per-cluster lookup never mutates
-// the platform-level Chandler URL that other callers depend on.
+// per entry; cache state is independent of `resolvedChandlerBaseURL`, so a
+// per-cluster lookup never mutates the platform-level Chandler URL that other
+// callers depend on.
 //
 // Returns "" if the cluster ID is empty, no cluster lookup is configured, the
 // Quartermaster lookup fails, or the cluster has no slug/base-domain.

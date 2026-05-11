@@ -843,7 +843,7 @@ func HandleNodesOverview(c *gin.Context) {
 		out = out[start:end]
 	}
 
-	// If not full state, return just the nodes array (backwards compatible)
+	// Full state is opt-in; the compact response is the public default.
 	if !fullState {
 		c.JSON(http.StatusOK, out)
 		return
@@ -1922,8 +1922,7 @@ func emitFederationEvent(data *pb.FederationEventData) {
 }
 
 // sendRoutingEvent builds a LoadBalancingData proto from a RoutingEvent and
-// sends it to Decklog. Shared by all routing emission paths (legacy balance,
-// viewer playback HTTP, gRPC).
+// sends it to Decklog. Shared by HTTP and gRPC routing emission paths.
 func sendRoutingEvent(e *RoutingEvent) {
 	if decklogClient == nil {
 		logger.Error("Decklog gRPC client not initialized")
@@ -1973,7 +1972,7 @@ func SendRoutingEvent(client *decklog.BatchedClient, e *RoutingEvent) {
 
 // postBalancingEvent enriches a routing decision with gin request context
 // (client IP, country, GeoIP fallback, Commodore tenant resolution) and
-// sends it to Decklog. Used by the legacy /balance HTTP endpoint.
+// sends it to Decklog for the /balance HTTP endpoint.
 func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string, nodeLat, nodeLon float64, nodeName string, durationMs float32) {
 	postBalancingEventEx(c, streamName, selectedNode, score, lat, lon, status, details, nodeLat, nodeLon, nodeName, durationMs, "")
 }
@@ -2142,7 +2141,8 @@ func enforceHTTPResolvePlaybackPolicy(ctx context.Context, req *pb.ViewerEndpoin
 		}).Warn("Rejecting protected HTTP resolve request")
 		return false
 	}
-	policy, err := commodoreClient.ResolvePlaybackPolicyForEnforcement(ctx, req.GetContentId())
+	target := control.ResolvePlaybackPolicyTarget(ctx, req.GetContentId(), internalName)
+	policy, err := commodoreClient.ResolvePlaybackPolicyForEnforcement(ctx, target.ContentID)
 	if err != nil {
 		logger.WithError(err).WithFields(logging.Fields{
 			"content_id": req.GetContentId(),
@@ -2150,8 +2150,12 @@ func enforceHTTPResolvePlaybackPolicy(ctx context.Context, req *pb.ViewerEndpoin
 		}).Warn("Rejecting protected HTTP resolve request")
 		return false
 	}
-	decision := triggers.EvaluatePlaybackPolicyWithRecorder(ctx, logger, internalName, &pb.ViewerConnectTrigger{
-		StreamName:  internalName,
+	policyInternalName := mist.ExtractInternalName(target.InternalName)
+	if policyInternalName == "" {
+		policyInternalName = internalName
+	}
+	decision := triggers.EvaluatePlaybackPolicyWithRecorder(ctx, logger, policyInternalName, &pb.ViewerConnectTrigger{
+		StreamName:  policyInternalName,
 		SessionId:   "resolve:" + req.GetContentId(),
 		Host:        req.GetViewerIp(),
 		RequestUrl:  "viewer://" + req.GetContentId(),
@@ -2869,6 +2873,9 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	ctx := context.Background()
 	resolution, err := control.ResolveContent(ctx, viewKey)
 	if err != nil {
+		if _, ok := control.ParseDVRChapterPlaybackID(viewKey); ok && handleDVRChapterCommodoreFallback(c, viewKey, protocol, manifestPath) {
+			return
+		}
 		logger.WithError(err).WithField("view_key", viewKey).Warn("Failed to resolve content")
 		respondPlaybackError(c, http.StatusNotFound, "VIEW_KEY_NOT_FOUND", "Invalid or expired view key", nil)
 		return
@@ -2890,7 +2897,12 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// Prepaid billing check (402)
 	if resolution.TenantId != "" {
-		billing := getBillingStatus(c.Request.Context(), internalName, resolution.TenantId)
+		billingTarget := control.ResolvePlaybackPolicyTarget(c.Request.Context(), contentID, resolution.InternalName)
+		billingInternalName := mist.ExtractInternalName(billingTarget.InternalName)
+		if billingInternalName == "" {
+			billingInternalName = internalName
+		}
+		billing := getBillingStatus(c.Request.Context(), billingInternalName, resolution.TenantId)
 		if billing != nil && billing.BillingModel == "prepaid" && (billing.IsSuspended || billing.IsBalanceNegative) {
 			paymentHeader := x402.GetPaymentHeaderFromRequest(c.Request)
 			resourcePath := c.Request.URL.Path
@@ -3055,6 +3067,64 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// Return 307 Temporary Redirect
 	c.Redirect(http.StatusTemporaryRedirect, redirectURL)
+}
+
+func handleDVRChapterCommodoreFallback(c *gin.Context, playbackID, protocol, manifestPath string) bool {
+	if commodoreClient == nil {
+		return false
+	}
+	viewerIP := c.ClientIP()
+	viewerToken := viewerPlaybackTokenFromHTTPRequest(c.Request)
+	ctx := c.Request.Context()
+	if paymentHeader := x402.GetPaymentHeaderFromRequest(c.Request); paymentHeader != "" {
+		ctx = context.WithValue(ctx, ctxkeys.KeyXPayment, paymentHeader)
+	}
+	response, err := commodoreClient.ResolveViewerEndpoint(ctx, playbackID, viewerIP, viewerToken)
+	if err != nil || response == nil || response.Primary == nil {
+		logger.WithError(err).WithField("playback_id", playbackID).Warn("DVR chapter fallback through Commodore failed")
+		return false
+	}
+
+	protocol = normalizeProtocol(protocol)
+	if protocol == "" || protocol == "any" {
+		jsonBytes, marshalErr := protojson.Marshal(response)
+		if marshalErr != nil {
+			respondPlaybackError(c, http.StatusInternalServerError, "SERIALIZATION_FAILED", "Failed to serialize response", nil)
+			return true
+		}
+		logger.WithFields(logging.Fields{
+			"playback_id": playbackID,
+			"node_id":     response.Primary.NodeId,
+		}).Info("Resolved DVR chapter through Commodore fallback")
+		c.Data(http.StatusOK, "application/json", jsonBytes)
+		return true
+	}
+
+	redirectURL := ""
+	if response.Primary.Outputs != nil {
+		redirectURL = findProtocolURL(response.Primary.Outputs, protocol)
+	}
+	if redirectURL == "" {
+		redirectURL = response.Primary.Url
+	}
+	if redirectURL == "" {
+		respondPlaybackError(c, http.StatusNotFound, "PROTOCOL_NOT_AVAILABLE", fmt.Sprintf("Protocol '%s' not available for this DVR chapter", protocol), nil)
+		return true
+	}
+	if manifestPath != "" {
+		if !strings.HasSuffix(redirectURL, "/") && !strings.HasPrefix(manifestPath, "/") {
+			redirectURL += "/"
+		}
+		redirectURL += manifestPath
+	}
+	logger.WithFields(logging.Fields{
+		"playback_id":   playbackID,
+		"protocol":      protocol,
+		"redirect_url":  redirectURL,
+		"selected_node": response.Primary.NodeId,
+	}).Info("Redirecting DVR chapter through Commodore fallback")
+	c.Redirect(http.StatusTemporaryRedirect, redirectURL)
+	return true
 }
 
 func appendCorrelationID(redirectURL, viewerID string) string {

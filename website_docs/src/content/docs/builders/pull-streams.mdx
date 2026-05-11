@@ -11,6 +11,11 @@ A normal stream is **push-in**: your encoder opens RTMP/E-RTMP, SRT, or WHIP to 
 uploads media. A **pull-input stream** is the inverse: FrameWorks stores an upstream URL, then a
 media edge opens that source when playback needs it.
 
+The payoff is operational: you can onboard venue cameras, contribution feeds, and existing origins
+without asking every source to become a FrameWorks encoder. Pull input also composes with the rest
+of the platform — playback access control, DVR, clips, thumbnails, analytics, and multistreaming all
+attach to the stream once media is active.
+
 Use pull-input streams when:
 
 - The source is an existing camera, encoder, or origin server that cannot push to FrameWorks.
@@ -75,45 +80,6 @@ mutation CreatePullStream($input: CreateStreamInput!) {
 
 The source URI is stored encrypted and returned only in redacted form.
 
-## Operator Bootstrap
-
-Operators add pull streams to the rendered bootstrap desired state under `commodore.pull_streams`.
-The stable key is `playback_id`, which is also the public viewer identifier.
-
-```yaml
-commodore:
-  pull_streams:
-    - playback_id: lobby-camera
-      owner_tenant:
-        kind: customer
-        alias: acme
-      title: Lobby Camera
-      description: Main entrance RTSP camera
-      source_uri_ref:
-        provider: sops
-        path: gitops/secrets/production.env
-        key: LOBBY_CAMERA_RTSP_URI
-      enabled: true
-```
-
-For non-secret public sources, `source_uri` can be inline:
-
-```yaml
-commodore:
-  pull_streams:
-    - playback_id: event-restream
-      owner_tenant:
-        kind: customer
-        alias: acme
-      title: Event Restream
-      source_uri: https://origin.example/live/main.m3u8
-      enabled: true
-```
-
-During render, the CLI validates the source URI, resolves `source_uri_ref` when present, and checks
-that at least one media cluster can host the pull stream. During Commodore bootstrap, the source URI
-is encrypted at rest with a pull-source-specific encryption purpose before being stored.
-
 ## Private Upstreams on Self-hosted Edges
 
 Private literals are allowed only on media clusters that explicitly opt in with
@@ -159,6 +125,31 @@ Pull streams are on-demand:
 Idle pull streams do not fetch from the upstream and do not accrue live processing or viewer costs.
 Once active, metering is the same as push streams: viewer minutes, egress, transcoding, recording,
 and storage apply normally.
+
+## Resolution Events
+
+Every `STREAM_SOURCE` evaluation records the resolution outcome. The dashboard shows the latest
+events on the stream setup panel, and GraphQL exposes the same feed:
+
+```graphql
+query PullSourceEvents($id: ID!) {
+  stream(id: $id) {
+    ... on Stream {
+      ingestMode
+      recentPullSourceEvents(limit: 10) {
+        eventKind
+        detail
+        createdAt
+      }
+    }
+  }
+}
+```
+
+`eventKind` is one of `resolved`, `not_found`, `disabled`, `blocked_uri`,
+`private_not_allowed`, `commodore_error`, or `foghorn_base_unresolved`. These are source
+resolution events: they explain whether Foghorn handed MistServer a source. Upstream
+connect/disconnect/retry telemetry depends on MistServer emitting additional trigger types.
 
 ## Failure Modes
 

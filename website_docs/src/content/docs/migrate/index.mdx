@@ -9,6 +9,13 @@ import { Aside, LinkCard, CardGrid } from "@astrojs/starlight/components";
 
 Moving to FrameWorks from another platform? This section is the home of our **migration program**: dedicated guides for the platforms we see most often, a generic guide for the ones we haven't written up yet, and a standing offer to help you 1:1 if your case doesn't fit a template.
 
+## Why teams move
+
+- **Always-on DVR without arbitrary rollover.** Run long-lived live channels, keep one continuous archive, and replay historical windows through chapter playlists.
+- **API and agent parity.** The dashboard, GraphQL API, and MCP tools expose the same platform controls, so human operators and autonomous agents can use the same workflows.
+- **Hybrid edge options.** Use managed regions, your own edge clusters, or both, while keeping routing, analytics, and playback access control in one control plane.
+- **Deep routing and QoE visibility.** Debug viewer routing, buffering, quality tiers, geography, stream health, and node performance without treating delivery as a black box.
+
 ## Available guides
 
 <CardGrid>
@@ -82,17 +89,18 @@ Regardless of where you're coming from, the moves are the same:
 
 A few things differ from most peers, so we surface them once here instead of repeating them in every guide:
 
-- **GraphQL-first API.** REST is used for auth, webhook ingress, and playback URLs only. The application surface is GraphQL — query, mutation, and subscription. Codegen against `pkg/graphql/schema.graphql` is the recommended path; Houdini, urql, and Apollo all work.
+- **GraphQL-first API.** REST is used for auth, webhook ingress, and playback URLs only. The application surface is GraphQL — query, mutation, and subscription. Codegen against the public schema is the recommended path; Houdini, urql, and Apollo all work.
 - **Subscriptions instead of outbound webhooks.** Real-time events flow over GraphQL subscriptions
-  today. HTTP-callback delivery is tracked in an outbound-webhooks RFC, but subscriptions are the
-  supported event surface for current migrations.
+  today. Outbound HTTP callbacks are on the roadmap, but subscriptions are the supported event
+  surface for current migrations.
 - **Wallet auth + x402 for agents.** Autonomous callers don't need an account. Sign with an EVM wallet (EIP-191) or attach a gasless USDC payment (EIP-3009) and go. See [Agent Access](/agents/overview).
 - **Sovereign and hybrid hosting.** You can run the entire stack on your own hardware, or mix BYO edge nodes with our managed control plane.
 - **Skipper.** The in-product AI consultant runs diagnostics (rebuffering, packet loss, routing), explains the API, and is reachable from the dashboard, the docs (`⌘J`), or via MCP. Treat it as a first-line support channel.
 
 <Aside type="note">
-  Some FrameWorks features are still in beta — billing rates, hybrid edge deployment, the cluster
-  marketplace, DRM. Each per-source guide flags the ones relevant to that migration.
+  Some FrameWorks areas are still maturing: billing rates, production self-hosting runbooks, the
+  vetted public marketplace program, DRM, and provider-specific migration gaps. Each per-source
+  guide flags the ones relevant to that migration.
 </Aside>
 
 ## Get help

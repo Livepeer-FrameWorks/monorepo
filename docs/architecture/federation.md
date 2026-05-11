@@ -100,11 +100,12 @@ run for months, so playback must be bounded by a chapter or explicit UTC range:
 2. Commodore validates tenant ownership and routes to the DVR artifact's
    `origin_cluster_id`.
 3. The origin Foghorn materializes the bounded chapter from `foghorn.dvr_segments`
-   and returns a player-facing manifest URL. Segment URLs are minted from ledger
-   rows, and `lost_local` rows render as `#EXT-X-GAP`.
+   and returns the Mist playback ID `dvr+{chapter_id}`. The selected edge
+   defrosts that bounded chapter into a local manifest and shared segment bucket;
+   `lost_local` rows render as `#EXT-X-GAP`.
 
-Federation `PrepareArtifact` only accepts DVR requests that include
-`dvr_start_ms`/`dvr_end_ms`; unbounded DVR artifact retrieval is rejected.
+Federation `PrepareArtifact` rejects DVR. DVR replay uses the chapter API,
+then normal Mist playback and chapter-bounded defrost on the selected edge.
 
 ### Cross-Cluster Artifact Command Routing
 

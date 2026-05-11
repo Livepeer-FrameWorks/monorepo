@@ -120,46 +120,66 @@ If `blockers` is non-empty, resolve them before billable operations.
 
 Actions the agent can perform.
 
-| Tool                        | Description                                       | Requires       |
-| --------------------------- | ------------------------------------------------- | -------------- |
-| `update_billing_details`    | Set billing address                               | Auth           |
-| `get_payment_options`       | Get x402 payment options                          | None           |
-| `submit_payment`            | Submit an x402 top-up payment                     | None           |
-| `topup_balance`             | Request ETH or USDC deposit address (locked rate) | Auth           |
-| `check_topup`               | Check crypto payment status                       | Auth           |
-| `create_stream`             | Create a new stream                               | Auth + Balance |
-| `update_stream`             | Update stream settings                            | Auth + Balance |
-| `delete_stream`             | Delete a stream                                   | Auth + Balance |
-| `refresh_stream_key`        | Generate new stream key                           | Auth           |
-| `create_clip`               | Create clip from stream                           | Auth + Balance |
-| `delete_clip`               | Delete a clip                                     | Auth           |
-| `start_dvr`                 | Start DVR recording                               | Auth + Balance |
-| `stop_dvr`                  | Stop DVR recording                                | Auth           |
-| `create_vod_upload`         | Start a VOD upload                                | Auth + Balance |
-| `complete_vod_upload`       | Finalize a VOD upload                             | Auth + Balance |
-| `abort_vod_upload`          | Cancel an upload                                  | Auth           |
-| `delete_vod_asset`          | Delete a VOD asset                                | Auth + Balance |
-| `resolve_playback_endpoint` | Get viewer playback URLs                          | None           |
-| `diagnose_rebuffering`      | Analyze rebuffering events                        | Auth           |
-| `diagnose_buffer_health`    | Analyze buffer health and dry events              | Auth           |
-| `diagnose_packet_loss`      | Analyze packet loss (protocol-aware)              | Auth           |
-| `diagnose_routing`          | Analyze CDN routing decisions                     | Auth           |
-| `get_stream_health_summary` | Aggregated stream health metrics                  | Auth           |
-| `get_anomaly_report`        | Detect anomalies vs baseline                      | Auth           |
-| `search_support_history`    | Search support conversations                      | Auth           |
-| `introspect_schema`         | Explore the GraphQL schema                        | Auth           |
-| `generate_query`            | Generate a GraphQL query from templates           | Auth           |
-| `execute_query`             | Execute a GraphQL query                           | Auth           |
-| `ask_consultant`            | Full Skipper pipeline with confidence tagging     | Auth           |
-| `browse_marketplace`        | Browse available infrastructure clusters          | None           |
-| `subscribe_to_cluster`      | Subscribe to a cluster                            | Auth           |
-| `set_preferred_cluster`     | Set preferred cluster for DNS steering            | Auth           |
-| `create_enrollment_token`   | Create an enrollment token for edge bootstrap     | Auth           |
-| `get_node_info`             | Fetch node details                                | Auth           |
-| `manage_node`               | Activate/deactivate/drain/restart a node          | Auth           |
-| `set_node_mode`             | Set node mode (production/standby/maintenance)    | Auth           |
-| `get_node_health`           | Node health and metrics summary                   | Auth           |
-| `create_edge_cluster`       | Create edge cluster (returns token and Foghorn)   | Auth           |
+| Tool                         | Description                                       | Requires       |
+| ---------------------------- | ------------------------------------------------- | -------------- |
+| `get_tenant_settings`        | Read tenant identity and routing settings         | Auth           |
+| `update_tenant_settings`     | Update tenant name, primary cluster, or model     | Auth           |
+| `update_billing_details`     | Set billing address                               | Auth           |
+| `get_payment_options`        | Get x402 payment options                          | None           |
+| `submit_payment`             | Submit an x402 top-up payment                     | None           |
+| `topup_balance`              | Request ETH or USDC deposit address (locked rate) | Auth           |
+| `check_topup`                | Check crypto payment status                       | Auth           |
+| `create_stream`              | Create a push or pull stream                      | Auth + Balance |
+| `update_stream`              | Update stream settings or pull-source config      | Auth + Balance |
+| `delete_stream`              | Delete a stream                                   | Auth + Balance |
+| `list_stream_keys`           | List stream ingest keys                           | Auth           |
+| `create_stream_key`          | Create an additional ingest key                   | Auth + Confirm |
+| `delete_stream_key`          | Deactivate an ingest key                          | Auth + Confirm |
+| `refresh_stream_key`         | Rotate the primary stream key                     | Auth + Confirm |
+| `validate_stream_key`        | Validate an ingest key                            | Auth           |
+| `create_clip`                | Create clip from stream                           | Auth + Balance |
+| `delete_clip`                | Delete a clip                                     | Auth           |
+| `start_dvr`                  | Start DVR recording                               | Auth + Balance |
+| `stop_dvr`                   | Stop DVR recording                                | Auth           |
+| `delete_dvr`                 | Delete a DVR recording and stored media           | Auth + Confirm |
+| `set_dvr_chapter_policy`     | Configure DVR replay chapter materialization      | Auth           |
+| `get_retention_policy`       | Read tenant media-retention defaults and bounds   | Auth           |
+| `set_retention_policy`       | Set tenant media-retention defaults               | Auth + Balance |
+| `update_asset_retention`     | Override retention for DVR, clip, or VOD          | Auth + Balance |
+| `reset_asset_retention`      | Reset asset retention to the cascade default      | Auth + Balance |
+| `create_vod_upload`          | Start a VOD upload                                | Auth + Balance |
+| `complete_vod_upload`        | Finalize a VOD upload                             | Auth + Balance |
+| `abort_vod_upload`           | Cancel an upload                                  | Auth           |
+| `delete_vod_asset`           | Delete a VOD asset                                | Auth + Balance |
+| `resolve_playback_endpoint`  | Get viewer playback URLs                          | None           |
+| `list_signing_keys`          | List playback signing keys                        | Auth           |
+| `create_signing_key`         | Create a one-shot ES256 private key               | Auth + Confirm |
+| `revoke_signing_key`         | Revoke a playback signing key                     | Auth + Confirm |
+| `set_playback_policy`        | Set JWT or webhook playback policy                | Auth + Confirm |
+| `clear_playback_policy`      | Clear playback policy                             | Auth + Confirm |
+| `test_playback_access`       | Test JWT/webhook playback policy behavior         | Auth           |
+| `diagnose_rebuffering`       | Analyze rebuffering events                        | Auth           |
+| `diagnose_buffer_health`     | Analyze buffer health and dry events              | Auth           |
+| `diagnose_packet_loss`       | Analyze packet loss (protocol-aware)              | Auth           |
+| `diagnose_routing`           | Analyze CDN routing decisions                     | Auth           |
+| `get_stream_health_summary`  | Aggregated stream health metrics                  | Auth           |
+| `get_anomaly_report`         | Detect anomalies vs baseline                      | Auth           |
+| `search_support_history`     | Search support conversations                      | Auth           |
+| `introspect_schema`          | Explore the GraphQL schema                        | Auth           |
+| `generate_query`             | Generate a GraphQL query from templates           | Auth           |
+| `execute_query`              | Execute a GraphQL query                           | Auth           |
+| `ask_consultant`             | Full Skipper pipeline with confidence tagging     | Auth           |
+| `browse_marketplace`         | Browse available infrastructure clusters          | None           |
+| `subscribe_to_cluster`       | Subscribe to a cluster                            | Auth           |
+| `unsubscribe_from_cluster`   | Remove a cluster subscription                     | Auth + Confirm |
+| `set_preferred_cluster`      | Set preferred cluster for DNS steering            | Auth           |
+| `update_cluster_marketplace` | Update cluster visibility, approval, or pricing   | Auth + Confirm |
+| `create_enrollment_token`    | Create an enrollment token for edge bootstrap     | Auth           |
+| `get_node_info`              | Fetch node details                                | Auth           |
+| `manage_node`                | Activate/deactivate/drain/restart a node          | Auth           |
+| `set_node_mode`              | Set node mode (normal/draining/maintenance)       | Auth           |
+| `get_node_health`            | Node health and metrics summary                   | Auth           |
+| `create_edge_cluster`        | Create edge cluster (returns token and Foghorn)   | Auth           |
 
 <Aside type="tip" title="CLI Alternative">
   For operators who prefer the CLI over MCP, `frameworks edge deploy` combines `create_edge_cluster`
@@ -181,6 +201,15 @@ QoE tool responses use a consistent status enum: `healthy | warning | critical |
 - `postal_code` (required): Postal/ZIP code
 - `country` (required): ISO 3166-1 alpha-2 code
 - `email`, `company`, `vat_number`, `address_line2`: Optional
+
+**update_tenant_settings**
+
+- `name`: Tenant display name.
+- `primary_cluster_id`: Preferred primary cluster for ingest and routing decisions.
+- `deployment_model`: Deployment model, for example `shared`, `dedicated`, or `self_hosted`.
+
+Agents can create wallet-provisioned tenants with x402 auth and then use this tool to finish account
+identity and routing setup without switching to the dashboard.
 
 **topup_balance**
 
@@ -212,6 +241,7 @@ plus `tx_hash`, `confirmations`, and on completion `credited_cents` /
 
 - `content_id` (required): playback_id, stream_id, or Relay ID
 - `viewer_ip`: Optional geo-routing hint
+- Returns thumbnail preview URLs in `thumbnail_assets` when poster and sprite assets are available.
 
 **create_vod_upload**
 

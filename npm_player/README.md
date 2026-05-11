@@ -269,6 +269,7 @@ Full `CreatePlayerConfig` accepted by `createPlayer()`:
 | `themeOverrides` | `FwThemeOverrides`                                   | —           | CSS token overrides                                   |
 | `playbackMode`   | `string`                                             | `"auto"`    | `auto`, `low-latency`, `quality`, `vod`               |
 | `locale`         | `string`                                             | `"en"`      | UI language (`en`, `es`, `fr`, `de`, `nl`)            |
+| `translations`   | `Partial<TranslationStrings>`                        | —           | Custom UI string overrides layered over the locale    |
 | `skin`           | `string \| SkinDefinition \| false`                  | `"default"` | Skin name, inline definition, or `false` for headless |
 | `debug`          | `boolean`                                            | `false`     | Debug logging                                         |
 

@@ -835,7 +835,7 @@ INSERT INTO commodore.clips (
     id, tenant_id, user_id, stream_id, clip_hash, internal_name, playback_id,
     title, description,
     start_time, duration, clip_mode,
-    retention_until, created_at, updated_at
+    origin_cluster_id, retention_until, created_at, updated_at
 ) VALUES
 -- Demo clip (ready) - matches foghorn.artifacts entry
 (
@@ -851,6 +851,7 @@ INSERT INTO commodore.clips (
     1640995200000,  -- Unix timestamp (ms): Jan 1, 2022 00:00:00 UTC
     600000,         -- Duration (ms): 10 minutes
     'absolute',
+    'central-primary',
     NOW() + INTERVAL '7 days',   -- 7-day rolling retention for demo fixtures
     NOW() - INTERVAL '2 hours',
     NOW() - INTERVAL '2 hours'
@@ -869,12 +870,14 @@ INSERT INTO commodore.clips (
     1641081600000,  -- Jan 2, 2022 00:00:00 UTC
     300000,         -- 5 minutes
     'absolute',
+    'central-primary',
     NOW() - INTERVAL '1 day',   -- Already expired (retention passed)
     NOW() - INTERVAL '2 days',
     NOW() - INTERVAL '1 day'
 )
 ON CONFLICT (clip_hash) DO UPDATE SET
     title = EXCLUDED.title,
+    origin_cluster_id = EXCLUDED.origin_cluster_id,
     updated_at = NOW();
 
 -- ============================================================================
@@ -886,7 +889,7 @@ ON CONFLICT (clip_hash) DO UPDATE SET
 INSERT INTO commodore.dvr_recordings (
     id, tenant_id, user_id, stream_id, dvr_hash, internal_name, playback_id,
     stream_internal_name,
-    retention_until, created_at, updated_at
+    origin_cluster_id, retention_until, created_at, updated_at
 ) VALUES
 -- Demo DVR recording (completed) - matches foghorn.artifacts entry
 (
@@ -898,6 +901,7 @@ INSERT INTO commodore.dvr_recordings (
     'dvr_int_001',
     'dvr1a2b3c4d5e6fg',
     'demo_live_stream_001',
+    'central-primary',
     NOW() + INTERVAL '7 days',   -- 7-day rolling retention for demo fixtures
     NOW() - INTERVAL '4 hours',
     NOW() - INTERVAL '4 hours'
@@ -912,12 +916,14 @@ INSERT INTO commodore.dvr_recordings (
     'dvr_int_002',
     'dvr2a2b3c4d5e6fh',
     'demo_live_stream_001',
+    'central-primary',
     NOW() - INTERVAL '1 day',   -- Already expired (retention passed)
     NOW() - INTERVAL '2 days',
     NOW() - INTERVAL '1 day'
 )
 ON CONFLICT (dvr_hash) DO UPDATE SET
     internal_name = EXCLUDED.internal_name,
+    origin_cluster_id = EXCLUDED.origin_cluster_id,
     updated_at = NOW();
 
 -- ============================================================================
@@ -929,7 +935,7 @@ ON CONFLICT (dvr_hash) DO UPDATE SET
 INSERT INTO commodore.vod_assets (
     id, tenant_id, user_id, vod_hash, internal_name, playback_id,
     title, description, filename, content_type,
-    size_bytes, retention_until, created_at, updated_at
+    size_bytes, origin_cluster_id, retention_until, created_at, updated_at
 ) VALUES
 -- Demo VOD (ready) - WebM sample
 (
@@ -944,6 +950,7 @@ INSERT INTO commodore.vod_assets (
     'product_demo_2024.webm',
     'video/webm',
     149099,
+    'central-primary',
     NOW() + INTERVAL '30 days',
     NOW() - INTERVAL '1 day',
     NOW() - INTERVAL '1 day'
@@ -961,6 +968,7 @@ INSERT INTO commodore.vod_assets (
     'webinar_recording.mp4',
     'video/mp4',
     104857600,
+    'central-primary',
     NOW() + INTERVAL '30 days',
     NOW() - INTERVAL '30 minutes',
     NOW() - INTERVAL '30 minutes'
@@ -978,12 +986,14 @@ INSERT INTO commodore.vod_assets (
     'corrupted_file.avi',
     'video/x-msvideo',
     15728640,
+    'central-primary',
     NOW() - INTERVAL '1 day',
     NOW() - INTERVAL '2 days',
     NOW() - INTERVAL '2 days'
 )
 ON CONFLICT (vod_hash) DO UPDATE SET
     title = EXCLUDED.title,
+    origin_cluster_id = EXCLUDED.origin_cluster_id,
     updated_at = NOW();
 
 -- ============================================================================
@@ -1175,6 +1185,68 @@ INSERT INTO foghorn.artifacts (
 ON CONFLICT (artifact_hash) DO UPDATE SET
     status = EXCLUDED.status,
     updated_at = NOW();
+
+-- ============================================================================
+-- FOGHORN: DVR segment ledger (per-segment source of truth)
+-- ============================================================================
+-- Seed rows match the on-disk media at
+-- infrastructure/demo-recordings/dvr/<tenant>/<hash>/segments/segment_*.ts
+-- which is bind-mounted into MistServer at /var/lib/mistserver/recordings.
+-- status='pending' is honest: the sidecar startup reconciliation will upload
+-- these to S3 (in dev environments with S3 creds) and flip them to 'uploaded'.
+-- Until then chapter playback will gap them — never fake 'uploaded' with a
+-- placeholder s3_key, since chapter playback presigns and serves that URL.
+
+INSERT INTO foghorn.dvr_segments (
+    artifact_hash, segment_name, sequence,
+    media_start_ms, media_end_ms, duration_ms,
+    size_bytes, s3_key, status, created_at
+) VALUES
+(
+    'fedcba98765432109876543210fedcba',
+    'segment_0.ts', 0,
+    0, 10417, 10417,
+    NULL,
+    'dvr/5eed517e-ba5e-da7a-517e-ba5eda7a0001/demo_live_stream_001/fedcba98765432109876543210fedcba/segments/segment_0.ts',
+    'pending', NOW() - INTERVAL '4 hours'
+),
+(
+    'fedcba98765432109876543210fedcba',
+    'segment_1.ts', 1,
+    10417, 18000, 7583,
+    NULL,
+    'dvr/5eed517e-ba5e-da7a-517e-ba5eda7a0001/demo_live_stream_001/fedcba98765432109876543210fedcba/segments/segment_1.ts',
+    'pending', NOW() - INTERVAL '4 hours'
+)
+ON CONFLICT (artifact_hash, segment_name) DO NOTHING;
+
+-- ============================================================================
+-- FOGHORN: DVR chapter window (virtual view over the segment ledger)
+-- ============================================================================
+-- One explicit-range chapter spans the entire seeded recording. has_gaps
+-- starts false; the startup reconciliation flips it to true (via
+-- FlagChaptersOverlappingSegment) if any segment turns lost_local.
+
+-- chapter_id is the canonical BuildChapterID(artifact_hash, mode,
+-- intervalSeconds=0, start_ms, end_ms) so chapter-sweeper / direct lookups
+-- find this row instead of regenerating a sibling:
+--   sha256("fedcba98765432109876543210fedcba|explicit_range|0|0|18000")[:32]
+--   = 7b7144a4cdc7b787449107f93b4c66c5
+INSERT INTO foghorn.dvr_chapters (
+    chapter_id, artifact_hash, mode,
+    start_ms, end_ms, is_current,
+    manifest_s3_key, materialized_at, last_rebuilt_at,
+    segment_count, has_gaps, created_at
+) VALUES (
+    '7b7144a4cdc7b787449107f93b4c66c5',
+    'fedcba98765432109876543210fedcba',
+    'explicit_range',
+    0, 18000, false,
+    NULL, NULL, NULL,
+    2, false,
+    NOW() - INTERVAL '4 hours'
+)
+ON CONFLICT (chapter_id) DO NOTHING;
 
 -- ============================================================================
 -- FOGHORN: VOD Metadata (User-Uploaded Video Details)

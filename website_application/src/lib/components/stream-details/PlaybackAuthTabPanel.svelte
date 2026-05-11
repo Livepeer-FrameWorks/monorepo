@@ -13,6 +13,7 @@
   import { Alert, AlertDescription } from "$lib/components/ui/alert";
   import { Select, SelectTrigger, SelectContent, SelectItem } from "$lib/components/ui/select";
   import { ShieldCheck, Globe, Key as KeyIcon, Webhook, Trash2, Plus } from "lucide-svelte";
+  import PlaybackAccessTestPanel from "./PlaybackAccessTestPanel.svelte";
 
   type PolicyType = "PUBLIC" | "JWT" | "WEBHOOK";
 
@@ -23,10 +24,12 @@
 
   let {
     streamId,
+    playbackId = "",
     playbackPolicy = null,
     onSaved,
   }: {
     streamId: string;
+    playbackId?: string;
     playbackPolicy?: PlaybackPolicyFields$data | null;
     onSaved?: () => void;
   } = $props();
@@ -465,4 +468,8 @@
       {saving ? "Saving..." : "Save policy"}
     </Button>
   </div>
+
+  {#if playbackId}
+    <PlaybackAccessTestPanel {playbackId} {policyType} />
+  {/if}
 </div>

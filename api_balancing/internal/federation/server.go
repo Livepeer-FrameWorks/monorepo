@@ -572,78 +572,7 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 		}, nil
 
 	case "dvr":
-		// Ledger-driven DVR enumeration. Chapter-aware playback always
-		// passes a bounded range. Replaces the prior S3 list-prefix path so:
-		//   (a) lost_local rows surface with empty presigned URL and the
-		//       consumer can render #EXT-X-GAP markers,
-		//   (b) the response respects bounded operations on long-running
-		//       24/7 artifacts (no full-bucket listing for one stream).
-		if req.GetDvrStartMs() == 0 && req.GetDvrEndMs() == 0 {
-			return &pb.PrepareArtifactResponse{Error: "DVR federation requires a bounded chapter range"}, nil
-		}
-		if req.GetDvrEndMs() <= req.GetDvrStartMs() {
-			return &pb.PrepareArtifactResponse{Error: "DVR federation range end must be greater than start"}, nil
-		}
-		maxRangeMs, rangeErr := control.DVRChapterMaxRangeMs(ctx, s.db, hash, tenantID)
-		if rangeErr != nil {
-			log.WithError(rangeErr).Error("Failed to read DVR federation range limit")
-			return &pb.PrepareArtifactResponse{Error: "failed to validate DVR range"}, nil
-		}
-		if req.GetDvrEndMs()-req.GetDvrStartMs() > maxRangeMs {
-			return &pb.PrepareArtifactResponse{Error: "DVR federation range exceeds maximum chapter window"}, nil
-		}
-		rows, err := control.ListDVRSegmentsForRange(ctx, hash, req.GetDvrStartMs(), req.GetDvrEndMs())
-		if err != nil {
-			log.WithError(err).Error("Failed to enumerate DVR segments from ledger")
-			return &pb.PrepareArtifactResponse{Error: "failed to enumerate DVR segments"}, nil
-		}
-		if len(rows) == 0 {
-			return &pb.PrepareArtifactResponse{Error: "no DVR segments in ledger for requested range"}, nil
-		}
-		segmentURLs := make(map[string]string, len(rows))
-		segments := make([]*pb.DVRSegmentRef, 0, len(rows))
-		for _, r := range rows {
-			ref := &pb.DVRSegmentRef{
-				SegmentName:  r.SegmentName,
-				S3Key:        r.S3Key,
-				MediaStartMs: r.MediaStartMs,
-				MediaEndMs:   r.MediaEndMs,
-				DurationMs:   r.DurationMs,
-				Status:       r.Status,
-				Sequence:     r.Sequence,
-			}
-			// Mint a presigned GET only for rows whose bytes are reachable
-			// in S3. lost_local rows surface with empty presigned URL so
-			// the consumer renders #EXT-X-GAP rather than a 404 fetch.
-			if r.Status == "uploaded" || r.Status == "deleted_local" {
-				url, mintErr := s.s3Client.GeneratePresignedGET(r.S3Key, 30*time.Minute)
-				if mintErr != nil {
-					log.WithError(mintErr).WithField("segment", r.SegmentName).Warn("Failed to mint presigned GET for segment")
-					continue
-				}
-				ref.PresignedGetUrl = url
-				segmentURLs[r.SegmentName] = url
-			}
-			segments = append(segments, ref)
-		}
-		var size uint64
-		if sizeBytes.Valid && sizeBytes.Int64 > 0 {
-			size = uint64(sizeBytes.Int64)
-		}
-		log.WithFields(map[string]interface{}{
-			"segment_count": len(segments),
-			"start_ms":      req.GetDvrStartMs(),
-			"end_ms":        req.GetDvrEndMs(),
-		}).Info("PrepareArtifact: DVR segment URLs generated from ledger")
-		return &pb.PrepareArtifactResponse{
-			SegmentUrls:        segmentURLs,
-			DvrSegments:        segments,
-			SizeBytes:          size,
-			Ready:              true,
-			Format:             format,
-			InternalName:       internalName,
-			StreamInternalName: streamInternalName,
-		}, nil
+		return &pb.PrepareArtifactResponse{Error: "DVR playback uses dvrChapter and dvr+ chapter routing; PrepareArtifact is not a DVR playback surface"}, nil
 
 	default:
 		return &pb.PrepareArtifactResponse{Error: "unknown artifact type: " + artType}, nil

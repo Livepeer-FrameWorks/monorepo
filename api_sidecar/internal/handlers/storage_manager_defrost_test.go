@@ -82,8 +82,8 @@ func newDefrostTestSM(t *testing.T, client *configurablePresignedClient) *Storag
 		requestFreezePermission: func(_ context.Context, _, _, _ string, _ uint64, _ []string) (*pb.FreezePermissionResponse, error) {
 			return nil, fmt.Errorf("not connected")
 		},
-		sendSyncComplete:     func(_, _, _, _ string, _ uint64, _ string, _ bool) error { return nil },
-		sendFreezeComplete:   func(_, _, _, _ string, _ uint64, _ string) error { return nil },
+		sendSyncComplete:     func(_, _, _, _ string, _ uint64, _ string, _ bool, _ bool) error { return nil },
+		sendFreezeComplete:   func(_, _, _, _ string, _ uint64, _ string, _ bool) error { return nil },
 		sendFreezeProgress:   func(_, _ string, _ uint32, _ uint64) error { return nil },
 		sendStorageLifecycle: func(_ *pb.StorageLifecycleData) error { return nil },
 		sendDefrostComplete:  func(_, _, _, _ string, _ uint64, _ string) error { return nil },

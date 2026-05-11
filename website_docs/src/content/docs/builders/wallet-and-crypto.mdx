@@ -1,0 +1,126 @@
+---
+title: "Wallet & on-chain identity"
+description: "Link wallets to a tenant, sign in with a wallet, and pay for usage with x402 micropayments."
+sidebar:
+  order: 12
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+FrameWorks supports wallet-based identity and on-chain payments alongside traditional email login and card / Mollie billing. This page covers the GraphQL surface; for the agent-facing flows see [agents/wallet-auth](/agents/wallet-auth) and [agents/payments](/agents/payments).
+
+<Aside type="caution">
+  Wallet operations and x402 payments authorize on-chain activity and balance movements. Treat them
+  with the same care as billing actions — the API surface is small, but the side-effects are real
+  money.
+</Aside>
+
+## Linking a wallet
+
+A tenant can link one or more wallets. Linking requires a signed challenge from the wallet to prove ownership.
+
+```graphql
+mutation LinkWallet {
+  linkWallet(input: { address: "0x...", signature: "0x...", message: "<challenge>" }) {
+    __typename
+    ... on Wallet {
+      id
+      address
+      linkedAt
+    }
+    ... on ValidationError {
+      field
+      message
+    }
+  }
+}
+```
+
+To remove a wallet:
+
+```graphql
+mutation UnlinkWallet {
+  unlinkWallet(walletId: "<wallet global id>") {
+    __typename
+    ... on UnlinkWalletResult {
+      unlinked
+    }
+  }
+}
+```
+
+## Signing in with a wallet
+
+`walletLogin` exchanges a signed challenge for a developer/session token. Use it to bootstrap a fresh tenant from an agent or wallet-only client.
+
+```graphql
+mutation WalletLogin {
+  walletLogin(input: { address: "0x...", signature: "0x...", message: "<challenge>" }) {
+    __typename
+    ... on WalletLoginResult {
+      token
+      tenantId
+    }
+  }
+}
+```
+
+If the wallet isn't yet linked to a tenant, the mutation creates one. To bind an email address to an existing wallet-only tenant later, use `linkEmail`.
+
+## x402 micropayments
+
+x402 (HTTP 402 Payment Required) is the agent-friendly payment protocol used for per-request usage on FrameWorks. The platform issues a 402 response with a payment requirement; the caller submits a signed payment proof; the server replays the original request with the receipt.
+
+The user-facing entry point is `submitX402Payment`:
+
+```graphql
+mutation Pay {
+  submitX402Payment(input: { paymentToken: "<x402 payment payload>" }) {
+    __typename
+    ... on X402PaymentReceipt {
+      receiptId
+      amount
+      currency
+      creditedTopupId
+    }
+  }
+}
+```
+
+Most clients won't call this directly — the SDK and MCP server handle it transparently. See [agents/payments](/agents/payments) for the full request/replay flow.
+
+## Top-ups and balances
+
+Wallet-funded crypto top-ups follow the standard prepaid-balance model. Initiate one via `createCryptoTopup`, then poll `cryptoTopupStatus` for confirmation count and the credited balance:
+
+```graphql
+mutation Topup {
+  createCryptoTopup(input: { amount: "100.00", currency: "USDC" }) {
+    __typename
+    ... on CryptoTopupResult {
+      topupId
+      depositAddress
+      requiredConfirmations
+    }
+  }
+}
+
+mutation CheckStatus {
+  cryptoTopupStatus(topupId: "<topup id>") {
+    __typename
+    ... on CryptoTopupStatus {
+      status
+      confirmations
+      creditedAmount
+    }
+  }
+}
+```
+
+Once credited, the funds appear in your prepaid balance (`prepaidBalance` query) and are spent against usage like any other top-up.
+
+## Related
+
+- [Agents — wallet auth](/agents/wallet-auth) — sign-in flow, challenge construction
+- [Agents — payments](/agents/payments) — full x402 request lifecycle
+- [Billing](/builders/billing) — invoices, prepaid model, fiat top-ups

@@ -34,7 +34,7 @@ Most live-video platforms expose a resource-oriented REST API. FrameWorks is Gra
 
 If you've never written a GraphQL client, codegen is the smoothest path:
 
-- **Houdini** — what we use internally (SvelteKit-native).
+- **Houdini** — SvelteKit-native GraphQL codegen.
 - **graphql-codegen + urql / Apollo** — the React standard.
 - **graphql-request** — minimal, good for scripts.
 
@@ -57,7 +57,7 @@ Most platforms ship outbound HTTP webhooks for stream lifecycle, recording readi
 <Aside type="caution">
   If your environment can't hold a long-lived subscription (a serverless cron, a webhook-driven
   Lambda), poll the relevant query (`stream(id)`, `vodAsset(id)`) on a short interval. Outbound HTTP
-  callbacks are tracked in an RFC, but GraphQL subscriptions are the supported event surface today.
+  callbacks are on the roadmap, but GraphQL subscriptions are the supported event surface today.
 </Aside>
 
 ### Bearer API key → JWT, developer token, or wallet
@@ -78,7 +78,7 @@ Treat viewer-side access control separately from API authentication. FrameWorks 
 - **Public playback IDs** by default — anyone with the `playbackId` can watch.
 - **JWT-signed playback** — customer-managed ES256 signing keys, per-object policy, viewer JWT attached as `?jwt=<token>`. Mirrors Studio's `signing-key` + `playbackPolicy: { type: "jwt" }` model.
 - **Webhook-callback policies** — FrameWorks POSTs an HMAC-signed body to your URL on every viewer connect; you return 200 to allow, anything else to deny. Mirrors Studio's `playback.accessControl` webhook.
-- **DRM (Widevine / FairPlay / PlayReady)** — in progress with the MistServer team.
+- **DRM (Widevine / FairPlay / PlayReady)** — in development.
 
 See [Playback Access Control](/builders/playback-access-control) for the full model and code samples.
 
@@ -110,13 +110,16 @@ RTMP, RTMPS, and SRT push destinations are all supported.
 
 The features that come up most often when teams move:
 
+- **24/7 DVR archives** — keep one continuous recording for long-running channels, let live viewers seek back through a bounded DVR window, and replay historical ranges through chapter playlists instead of creating a new asset every few hours.
+- **Retention controls** — set tenant defaults and per-asset overrides for DVR, clips, and VOD so archive length matches your storage budget.
 - **SRT ingest** — for pro encoders, firewall-traversal, and low-latency contribution.
 - **Pull-input streams** — point FrameWorks at RTSP cameras, SRT/RIST feeds, HLS re-streams, or
   MPEG-TS over UDP and we open the upstream connection. Self-hosted edges can pull from
   RFC1918 / multicast sources via an explicit cluster opt-in — useful for IP cameras, on-prem
   contribution, and venue feeds. See [Pull-input streams](/builders/pull-streams).
-  On the [roadmap](/roadmap#in-the-pipeline): an **AV Device Discovery** drop-in app for
-  auto-discovering ONVIF cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI capture.
+  Experimental media-engine discovery exists locally today; FrameWorks packaging through Edge,
+  Tray, CLI, API, and dashboard workflows is tracked on the
+  [roadmap](/roadmap#device-discovery-and-contribution-inputs).
 - **LL-HLS and DASH** — served from MistServer's CMAF output alongside HLS and WebRTC.
 - **AV1** in the codec list.
 - **Sprite-sheet seek previews** — generated for every recording (10×10 grid + WebVTT).
@@ -137,18 +140,22 @@ Honest list, applies regardless of source:
   a `pull: { source: "rtmp://…" }` or `https://.../*.flv` upstream won't work. If RTMP pull is on
   your critical path, [open a ticket](%APP_URL%/support) and we'll prioritize it.
 - C2PA / creator-ID provenance signing on transcode. Not exposed as a public FrameWorks API today.
-- First-class Python and Go SDKs. Internal Go clients exist; use GraphQL codegen until first-party
+- First-class Python and Go SDKs. Use GraphQL codegen against the public schema until first-party
   SDKs are published.
-- DRM (Widevine / FairPlay / PlayReady). In progress with the MistServer team.
-- Multi-participant SFU rooms. Parlor is tracked as a separate RFC.
+- DRM (Widevine / FairPlay / PlayReady). In development.
+- Multi-participant SFU rooms. These are not exposed as a FrameWorks product surface today.
 - Per-target rendition selection on multistream.
 - VOD library import tooling. Concierge-only today — reach out.
 
 ## Beta flags worth knowing
 
-- **Billing is in beta.** Rates may adjust; allowances at signup are honored throughout beta.
-- **Hybrid edge deployment** is experimental.
-- **Cluster marketplace** is in progress.
+- **Billing rates are still maturing.** Rates may adjust; allowances at signup are honored.
+- **Self-hosted and hybrid production cutovers need operator validation.** Test DNS, TLS,
+  firewall policy, capacity, node enrollment, and upgrade runbooks before moving production
+  traffic.
+- **Marketplace primitives exist, but the public marketplace program is still being built.**
+  Validate operator vetting, pricing, approval flow, and support boundaries before relying on
+  third-party clusters for production traffic.
 - **Mobile apps** exist in-tree but are not yet polished consumer releases.
 
 ## Get help

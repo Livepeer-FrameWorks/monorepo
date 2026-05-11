@@ -19,7 +19,7 @@ import {
   createTranslator,
   buildQualityLevelsFromMistTracks,
 } from "@livepeer-frameworks/player-core";
-import type { FwLocale } from "@livepeer-frameworks/player-core";
+import type { FwLocale, TranslationStrings } from "@livepeer-frameworks/player-core";
 import { Slider } from "../ui/slider";
 import SeekBar from "./SeekBar";
 import {
@@ -92,6 +92,8 @@ interface PlayerControlsProps {
   onJumpToLive?: () => void;
   /** Current active locale */
   activeLocale?: FwLocale;
+  /** Custom translation overrides applied on top of the locale pack. */
+  translations?: Partial<TranslationStrings>;
   /** Callback when locale is changed */
   onLocaleChange?: (locale: FwLocale) => void;
   /** Thumbnail sprite cues for seek bar preview */
@@ -125,10 +127,14 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   onToggleLoop: _onToggleLoop,
   onJumpToLive,
   activeLocale,
+  translations,
   onLocaleChange,
   thumbnailCues,
 }) => {
-  const t = useMemo(() => createTranslator({ locale: activeLocale ?? "en" }), [activeLocale]);
+  const t = useMemo(
+    () => createTranslator({ locale: activeLocale ?? "en", translations }),
+    [activeLocale, translations]
+  );
 
   // Context fallback - prefer props passed from parent over context
   // Context provides UsePlayerControllerReturn which has state.videoElement and controller

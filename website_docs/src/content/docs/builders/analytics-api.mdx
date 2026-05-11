@@ -1,0 +1,178 @@
+---
+title: "Analytics API"
+description: "Map the webapp's analytics views to the GraphQL queries that power them — stream health, viewers, geographic, QoE, quality tiers, federation, node metrics."
+sidebar:
+  order: 11
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+The webapp's `/analytics`, `/analytics/audience`, `/analytics/usage`, and `/streams/:id/analytics` pages are all built on the same GraphQL surface you can query directly. This page maps each view to the operations that drive it so you can replicate or extend them in your own dashboards.
+
+<Aside type="note">
+  All analytics queries are tenant-scoped via the JWT — you don't need to pass a tenant ID, and you
+  can't query across tenants. Bounded time ranges and pagination are enforced server-side; see field
+  definitions in the [GraphQL playground](/developer/playground).
+</Aside>
+
+<Aside type="caution" title="QoE analytics is expanding">
+  Stream health, routing, geographic, usage, and current client QoE summaries are available today.
+  View-level QoE analytics across player SDKs — TTFF, rebuffering, playback failures, rendition
+  changes, and non-npm player telemetry — is still being productized. See [View-Level QoE
+  Analytics](/roadmap#view-level-qoe-analytics).
+</Aside>
+
+## Per-stream analytics
+
+The `/streams/:id/analytics` and `/streams/:id/health` views are powered by a single `analytics` query that aggregates current state and recent rollups for one stream.
+
+```graphql
+query StreamAnalytics($streamId: ID!, $rangeStartMs: Int!, $rangeEndMs: Int!) {
+  analytics(streamId: $streamId, rangeStartMs: $rangeStartMs, rangeEndMs: $rangeEndMs) {
+    streamHealth {
+      bitrateKbps
+      framerate
+      packetLossPct
+      bufferHealth
+    }
+    viewerMetrics {
+      currentViewers
+      peakViewers
+      bandwidthMbps
+    }
+    qualityTiers {
+      tier
+      currentViewers
+    }
+  }
+}
+```
+
+For real-time updates, subscribe instead of polling:
+
+```graphql
+subscription LiveHealth($streamId: ID!) {
+  liveSystemHealth(streamId: $streamId) {
+    timestamp
+    bitrateKbps
+    framerate
+    packetLossPct
+  }
+}
+
+subscription LiveViewers($streamId: ID!) {
+  liveViewerMetrics(streamId: $streamId) {
+    timestamp
+    currentViewers
+    bandwidthMbps
+  }
+}
+```
+
+## Tenant-wide audience
+
+`/analytics/audience` aggregates viewer counts, geographic distribution, and per-stream rankings across the whole tenant.
+
+```graphql
+query Audience($rangeStartMs: Int!, $rangeEndMs: Int!) {
+  analytics(rangeStartMs: $rangeStartMs, rangeEndMs: $rangeEndMs) {
+    aggregateViewers {
+      currentViewers
+      peakViewers
+      uniqueViewers
+    }
+    geographicBreakdown {
+      country
+      currentViewers
+      bandwidthMbps
+    }
+  }
+}
+```
+
+## Tenant usage and billing
+
+`/analytics/usage` and `/account/billing` share the usage surface. Use `usageAggregates` for the rolled-up summary or `usageRecordsConnection` for paginated raw records.
+
+```graphql
+query Usage($rangeStartMs: Int!, $rangeEndMs: Int!) {
+  usageAggregates(rangeStartMs: $rangeStartMs, rangeEndMs: $rangeEndMs) {
+    transcodeMinutes
+    deliveredMinutes
+    storageGbDays
+    bandwidthGb
+  }
+  tenantUsage {
+    currentPeriod {
+      transcodeMinutes
+      deliveredMinutes
+      storageGbDays
+    }
+  }
+}
+
+query DetailedUsage($page: ConnectionInput) {
+  usageRecordsConnection(page: $page) {
+    edges {
+      node {
+        timestamp
+        usageType
+        quantity
+        unit
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}
+```
+
+## Network and federation
+
+`/network` and `/infrastructure/network` show cluster-level health and orchestrator vantage points across the federation.
+
+```graphql
+query NetworkStatus {
+  networkStatus {
+    clusters {
+      clusterId
+      region
+      activeStreams
+      activeViewers
+      capacityUtilization
+    }
+  }
+  orchestratorVantages {
+    orchestratorAddress
+    vantagePoints {
+      cluster
+      latencyMs
+    }
+  }
+}
+```
+
+## Live event firehose
+
+For dashboards that want the raw event stream (every viewer connect/disconnect, every track change, every storage event), subscribe to the firehose. Be deliberate — this is high-volume.
+
+```graphql
+subscription Firehose {
+  liveFirehose {
+    timestamp
+    eventType
+    payload
+  }
+}
+```
+
+## Agents (MCP)
+
+Agents call analytics through diagnostic tools rather than direct GraphQL — see [agents/mcp](/agents/mcp) for `get_stream_health_summary`, `get_anomaly_report`, `diagnose_buffer_health`, `diagnose_packet_loss`, `diagnose_rebuffering`, and `diagnose_routing`. Each wraps one or more of the queries above with summarization tuned for agent consumption.
+
+## Related
+
+- [GraphQL playground](/developer/playground) — try these queries against your own tenant
+- [Platform capabilities](/platform/feature-matrix) — where analytics is exposed

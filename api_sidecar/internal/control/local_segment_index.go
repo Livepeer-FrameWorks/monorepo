@@ -37,6 +37,7 @@ type LocalSegmentRef struct {
 	ActiveRecording bool      // belongs to an active DVRJob on this node
 	ActiveViews     int       // refcount of in-flight defrosts/playbacks holding this segment
 	LastAccessed    time.Time // bumped on view acquire
+	PinnedUntil     time.Time // chapter playback cache lease
 	LedgerStatus    string    // pending|uploaded|failed_upload|deleted_local|lost_local
 }
 
@@ -106,6 +107,19 @@ func (idx *LocalSegmentIndex) TrackCachedSegment(dvrHash, segmentName, localPath
 	ref.Uploaded = true
 	ref.LedgerStatus = "uploaded"
 	ref.ActiveRecording = activeRecording
+}
+
+func (idx *LocalSegmentIndex) PinCachedSegment(dvrHash, segmentName string, until time.Time) {
+	if idx == nil || until.IsZero() {
+		return
+	}
+	key := localSegmentKey{dvrHash, segmentName}
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if ref, ok := idx.entries[key]; ok && until.After(ref.PinnedUntil) {
+		ref.PinnedUntil = until
+		ref.LastAccessed = time.Now()
+	}
 }
 
 // MarkRollingWindow updates the InRollingWindow flag for a segment. The
@@ -194,6 +208,9 @@ func (idx *LocalSegmentIndex) EvictionEligible(dvrHash, segmentName string, cach
 		return false
 	}
 	if !ref.Uploaded || ref.InRollingWindow || ref.ActiveViews > 0 {
+		return false
+	}
+	if !ref.PinnedUntil.IsZero() && time.Now().Before(ref.PinnedUntil) {
 		return false
 	}
 	if cacheTTL > 0 && !ref.LastAccessed.IsZero() && time.Since(ref.LastAccessed) < cacheTTL {

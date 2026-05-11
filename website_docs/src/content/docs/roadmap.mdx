@@ -1,141 +1,100 @@
 ---
 title: "Roadmap"
-description: "What works, what's in progress, and what's planned."
+description: "What FrameWorks is expanding next."
 sidebar:
   order: 100
 ---
 
-import { Aside, Badge } from "@astrojs/starlight/components";
+import { Aside } from "@astrojs/starlight/components";
 
-For full context and status updates, see [GitHub Projects](https://github.com/orgs/Livepeer-FrameWorks/projects). Priorities evolve based on feedback and technical discovery.
+The [Platform capabilities](/platform/feature-matrix) page is the source of truth for what you can use today. This roadmap is intentionally narrower: it shows the product areas we are expanding next and the customer outcome each one is meant to unlock.
 
-<Aside type="note" title="Status Key">
-  - **Done**: Implemented in the current platform; availability can still depend on deployment and
-  configuration. - **In Progress**: Work is underway; may have rough edges. - **In the Pipeline**:
-  In design or early prototype. - **Planned**: On the backlog.
+<Aside type="note" title="How to read this page">
+
+- **Expanding now:** shipped foundations with active product hardening or surface-area expansion.
+- **Next:** designed work that is not yet a complete public workflow.
+- **Later:** backlog themes we expect to revisit after higher-priority platform work.
+
 </Aside>
 
-## Done
+## Expanding Now
 
-_Rotating highlight of recently shipped, production‑ready capabilities. For full history, use GitHub Projects._
+### Hybrid and Federated Delivery
 
-### Video Engine
+We are continuing to harden self-hosted edge enrollment, cluster federation, tenant subdomains, and production routing for teams that mix managed regions with their own infrastructure.
 
-- **Ingest**: RTMP, Enhanced RTMP (E-RTMP), SRT, and WHIP support.
-- **Delivery**: Foghorn resolves HLS, WebRTC/WHEP, Mist WebRTC, MP4, WebM/MKV, AAC, TS, H264, Mist WebSocket outputs, and direct RTMP/RTSP/SRT/DTSC when exposed by the selected node.
-- **Stream Control**: Stream CRUD, multiple keys per stream, and playback IDs.
-- **Media**: DVR recording (with retention policies), server-side clipping, VOD uploads, thumbnails, and sprite/VTT seek previews.
-- **Multistreaming**: RTMP, RTMPS, and SRT push targets with lifecycle status tracking.
+**Outcome:** use your own edge capacity without giving up one control plane for routing, analytics, playback auth, and operations.
 
-### Core Platform
+### Pull-Input Streams
 
-- **Tenancy**: Native multi-tenant isolation.
-- **Auth**: JWT, API Token management, and viewer playback access control.
-- **Billing**: Usage tracking, cost breakdowns, and invoice draft/finalization paths. Payment reconciliation still needs deployment-specific validation.
-- **Infrastructure**: Geo-aware load balancing, Navigator-managed DNS automation (Cloudflare root/API/web/admin zones and Bunny media zones), and ACME certificates where enabled.
-- **Reliability**: Service health endpoints are internal only; a public status page is not yet implemented (tracked in GitHub Projects).
+Pull streams are available through the dashboard, API, and agents. The remaining work is deeper operational visibility for upstream connection attempts, retries, private-source edge cases, and self-hosted deployment diagnostics.
 
-### Data & Analytics
+**Outcome:** bring RTSP cameras, SRT/RIST feeds, HLS origins, MPEG-TS sources, and Mist/DTSC sources into FrameWorks with clearer failure states.
 
-- **Real-time**: Viewer counts and stream health metrics (buffer, packet loss).
-- **Insights**: Geographic breakdowns (Country/City).
-- **Pipeline**: Kafka → ClickHouse analytics pipeline.
-- **System**: Node performance metrics.
+### Gateway-Backed Transcoding
 
-### Developer Experience
+Livepeer Gateway integration is active. We are expanding native controls, plan-aware defaults, and dashboard/API workflows for adaptive renditions.
 
-- **API**: GraphQL API with subscriptions and dashboard Explorer.
-- **Components**: Web Player (NPM) and StreamCrafter (Broadcasting) SDKs.
-- **MCP Server**: AI agent integration via Model Context Protocol.
-  - Account, billing, stream, and analytics resources
-  - Stream management tools (create, configure, playback)
-  - Onboarding and troubleshooting prompts
-- **Skipper AI Video Consultant**: RAG-grounded streaming expert with Gateway-backed tool orchestration where configured. [User Guide](/agents/skipper), [Operator Guide](/operators/skipper)
-  - Knowledge base: 10+ curated documentation domains (FrameWorks, MistServer, FFmpeg, OBS, SRT, HLS, nginx-rtmp, Livepeer, WebRTC, DASH) with pgvector semantic search
-  - QoE diagnostic tools (rebuffering, buffer health, packet loss, routing, anomaly detection)
-  - Stream management, billing, and GraphQL introspection via tool orchestration
-  - Confidence tagging (verified / sourced / best_guess / unknown) with source citations
-  - Optional web search fallback (Tavily, Brave, SearXNG)
-  - Background heartbeat monitoring with proactive alerts and notifications
-  - Billing and metering integration for deployments that enable usage reporting
-  - Available in the dashboard, authenticated docs site widget, standalone WebUI, and via MCP for external agents
-- **Support Messaging**: Deckhand integration with Chatwoot for in-app support.
-- **Protocols**: x402 for machine-to-machine payments.
+**Outcome:** enable ABR when source bitrate or viewer networks make a single rendition impractical.
 
----
+### DRM
 
-## In Progress
+FairPlay, Widevine, and PlayReady support is in development.
 
-_Active development. Core functionality is established; work is focused on full integration, UI exposure, and production hardening._
+**Outcome:** protect premium playback workflows without moving video delivery out of the FrameWorks control plane.
 
-### Platform & Infrastructure
+## Next
 
-- **Cloud Federation**: Hardening edge node connectivity and production-grade subdomain routing.
-- **Cluster Provisioning**: Finalizing end-to-end validation for CLI-based deployment workflows, including on-demand control-plane services (Foghorn).
+### Agent and Automation Workflows
 
-### Product & Services
+We are expanding agent-facing workflows around operational diagnostics, billing preflight, and safe platform changes through MCP and GraphQL.
 
-- **Livepeer Gateway**: Transcoding is active. Work is focused on native integration and exposed controls.
-- **DRM**: FairPlay, Widevine, and PlayReady content protection, in development with the MistServer team.
-- **Pull-input streams**: Dashboard and GraphQL surfaces are available for RTSP, SRT, RIST,
-  HLS, DTSC, and MPEG-TS sources; production hardening and edge-case UX continue for private,
-  multicast, and self-hosted deployments.
+**Outcome:** let agents operate FrameWorks with the same controls humans use, while preserving confirmation gates for sensitive or billable actions.
 
----
+### Team Accounts and Permissions
 
-## In the Pipeline
+Multi-user accounts, role-based permissions, and audit visibility are planned for tenants that need shared operations.
 
-_Design and prototype phase. Early access may be available._
+**Outcome:** separate owners, operators, developers, and finance workflows without sharing a single account credential.
 
-### Product
+### Event Webhooks
 
-- **Interactive (Parlor)**: XMTP-based chat rooms. <Badge text="Planned" variant="note" /> [RFC: Parlor], [RFC: XMPT Chattins]
-- **Stream Provenance**: Arweave-backed chain of custody for stream integrity and dispute resolution. <Badge text="Planned" variant="note" />
-- **Orchestration**: Unified processing for Live + VOD. [RFC: Processing Orchestration], [RFC: Stream Replication], [RFC: VOD Optimization]
-- **Marketplace**: Cluster capacity sharing. [RFC: Marketplace]
-- **AV Device Discovery**: Drop-in app that auto-discovers ONVIF IP cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI capture inputs.
-- **Compositing**: Server-side PiP, overlays, and mixing.
-- **Transcription**: Live speech-to-text for streams.
-- **Video Analysis**: Object detection, classification, automated clipping, and camera-driven automation.
-- **Live Daydream V2V**: Real-time video-to-video processing.
+Outbound webhooks are planned for platform events such as stream lifecycle changes, asset readiness, billing events, and operational alerts.
 
-### Platform & Infrastructure
+**Outcome:** connect FrameWorks events to your own systems without polling.
 
-- **Mesh Networking** (RFC phase): WireGuard mesh with per-tenant isolation, OSPF routing, and gRPC TLS. [RFC: Mesh Isolation], [RFC: WireGuard OSPF], [RFC: Service Identity], [RFC: gRPC TLS Mesh]
-- **Scaling & HA** (RFC phase): Horizontal scaling strategies and node maintenance (drain) workflows. [RFC: Horizontal Scaling], [RFC: Node Drain]
-- **Tenant Subdomains (Platform‑Managed)** (RFC phase): Subdomain provisioning and SSL automation for self‑hosted edge clusters (no BYO domains yet).
-- **Object Storage**: S3-compatible storage for edge clusters. [RFC: S3 Storage]
+### View-Level QoE Analytics
 
-### Analytics
+Stream and routing analytics already exist. The next analytics layer is per-view quality-of-experience reporting across player SDKs.
 
-- **QoE**: View-level Quality of Experience analytics — rebuffering, startup time, error
-  attribution, and watch time tracked per view across player SDKs. [RFC: QoE Analytics]
+**Outcome:** answer which viewers buffered, why they buffered, and which route or rendition they used.
 
----
+### Device Discovery and Contribution Inputs
 
-## Planned
+The media engine already has experimental local discovery and local-source creation paths. The
+FrameWorks work is productizing that capability around an Edge node: packaging it into the edge
+runtime, exposing it through the API and dashboard, and making it usable from the Tray app and CLI.
 
-_Backlog items for future development cycles._
+**Outcome:** let an on-prem FrameWorks Edge discover cameras, PTZ devices, NDI sources, USB capture,
+and HDMI contribution paths, then ingest them into managed FrameWorks streams or self-hosted
+clusters without hand-built local glue.
 
-### Product
+## Later
 
-- **Advanced Controls**: User-facing controls for per-stream processing overrides; default
-  tier-level live/VOD process ladders and enterprise tenant overrides already exist.
-- **Teams**: Multi-user accounts, role-based permissions (RBAC), and audit logs.
-- **Help Center**: Integrated documentation and support hub.
-- **Mobile Apps**: Native iOS and Android applications.
+### Processing and Composition
 
-### Platform & Infrastructure
+Server-side processing, overlays, PiP, transcription, object detection, and automated clipping remain longer-term platform themes.
 
-- **DNS**: Self-hosted anycast DNS. [RFC: Anycast DNS]
-- **Managed Object Storage**: Standalone S3-compatible block storage as a customer-facing service. Distinct from the in-pipeline edge-cluster storage, which is internal infrastructure.
-- **Managed DNS**: DNS-as-a-service for customers with health checks, latency-based, and geo routing. Distinct from the self-hosted anycast DNS work, which removes a third-party dependency for our own platform.
-- **Generic CDN / Proxy**: Image, asset, and generic HTTP proxying for non-streaming traffic.
-- **Security**: Vault secrets management. [RFC: Vault Secrets Management]
-- **Refactoring**: Large-file strategy to reduce repo churn. [RFC: Large File Refactor]
+**Outcome:** move more production work into the same control plane that already handles ingest, delivery, assets, and analytics.
 
-### Developer Experience
+### Managed DNS, Proxying, and Storage Services
 
-- **Webhooks**: Outbound event notifications.
-- **SDKs**: Official JS/TS clients.
-- **Status Page**: Public incident tracking (Lookout). [RFC: Lookout Incidents]
+Managed DNS, generic CDN/proxying, and standalone object/block storage are backlog items adjacent to video delivery. FrameWorks already runs DNS automation, service proxying, and media storage internally for operated deployments; the roadmap work is turning the right parts into customer-facing products with domains, origins, storage resources, policies, billing, and support boundaries.
+
+**Outcome:** cover more of the infrastructure teams already wire around their video workloads without pretending internal operator plumbing is a self-serve product.
+
+### Mobile Apps and Help Center
+
+Native mobile apps and an integrated help center are planned, but they come after the core platform surfaces are complete.
+
+**Outcome:** make FrameWorks easier to operate from more places without splitting the product experience.

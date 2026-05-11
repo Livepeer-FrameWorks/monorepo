@@ -286,7 +286,7 @@ func (s *CommodoreServer) RecordSigningKeyUse(ctx context.Context, req *pb.Recor
 // cache-invalidate + invalidate_sessions fanout. Validates exactly one of
 // stream_id / vod_asset_id / clip_id.
 func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *pb.SetPlaybackPolicyRequest) (*pb.SetPlaybackPolicyResponse, error) {
-	_, tenantID, err := extractUserContext(ctx)
+	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -398,10 +398,13 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *pb.SetPlay
 	switch target.kind {
 	case "stream":
 		resp.StreamId = responseID
+		s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, responseID, []string{"playback_policy"})
 	case "vod_asset":
 		resp.VodAssetId = responseID
+		s.emitArtifactEvent(ctx, eventPlaybackPolicyChanged, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_VOD, responseID, "", policyType, nil)
 	case "clip":
 		resp.ClipId = responseID
+		s.emitArtifactEvent(ctx, eventPlaybackPolicyChanged, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, responseID, "", policyType, nil)
 	}
 	return resp, nil
 }

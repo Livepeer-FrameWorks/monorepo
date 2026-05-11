@@ -25,6 +25,11 @@ type ReconcilerS3Client interface {
 // FreezeRequestSender sends a FreezeRequest to a specific node.
 type FreezeRequestSender func(nodeID string, req *pb.FreezeRequest) error
 
+// maxArtifactRetries caps the number of generic-freeze retries for a single
+// artifact before it is left in sync_status='failed' as a terminal-by-budget
+// tombstone. Operators can manually re-enqueue by resetting failure_count.
+const maxArtifactRetries = 8
+
 // ReconcilerCommodoreClient defines Commodore operations needed by the reconciler.
 type ReconcilerCommodoreClient interface {
 	ResolveClipHash(ctx context.Context, hash string) (*pb.ResolveClipHashResponse, error)
@@ -158,18 +163,28 @@ func (r *ArtifactReconciler) reconcile() {
 
 // retryFailed re-sends FreezeRequests for artifacts with sync_status='failed'.
 func (r *ArtifactReconciler) retryFailed(ctx context.Context) int {
+	// sync_status='failed' is retryable with an exponential backoff schedule
+	// keyed off failure_count. After maxRetries the row stays 'failed' but is
+	// excluded from future retry scans — operator-visible terminal-by-budget.
+	// lost_local is already terminal (separate filter via sync_status='failed').
+	// DVR rows use the segment ledger and are excluded from generic freeze.
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT a.artifact_hash, a.artifact_type, COALESCE(a.stream_internal_name,''), a.tenant_id, a.format,
 		       an.node_id, an.file_path
 		FROM foghorn.artifacts a
 		JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
 		WHERE a.sync_status = 'failed'
-		  AND a.updated_at < NOW() - INTERVAL '5 minutes'
+		  AND a.artifact_type != 'dvr'
+		  AND a.failure_count < $2
+		  AND a.updated_at < NOW() - LEAST(
+		      INTERVAL '5 minutes' * (1 << LEAST(a.failure_count, 4)),
+		      INTERVAL '1 hour'
+		    )
 		  AND a.status != 'deleted'
 		  AND an.is_orphaned = false
 		ORDER BY a.updated_at ASC
 		LIMIT $1
-	`, r.batchSize)
+	`, r.batchSize, maxArtifactRetries)
 	if err != nil {
 		r.logger.WithError(err).Warn("Failed to query failed artifacts for retry")
 		return 0
@@ -202,6 +217,7 @@ func (r *ArtifactReconciler) advancePending(ctx context.Context) int {
 		FROM foghorn.artifacts a
 		JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
 		WHERE a.sync_status = 'pending'
+		  AND a.artifact_type != 'dvr'
 		  AND a.storage_location = 'local'
 		  AND a.status != 'deleted'
 		  AND an.is_orphaned = false
@@ -306,6 +322,19 @@ func (r *ArtifactReconciler) reconcileOrphaned(ctx context.Context) int {
 			continue
 		}
 
+		// DVR uses the segment ledger (foghorn.dvr_segments) as the source of
+		// truth. Generic-freeze sync is for clips/VOD only. Sidecar startup
+		// reconciles its local DVR directory against the ledger; Foghorn does
+		// not have a playlist or PDT timing, so it cannot reconstruct the
+		// ledger from this orphan-discovery context.
+		if c.assetType == "dvr" {
+			r.logger.WithFields(logging.Fields{
+				"artifact_hash": c.hash,
+				"node_id":       c.nodeID,
+			}).Warn("Skipping DVR orphan in generic discovery; ledger reconstruction is sidecar-owned")
+			continue
+		}
+
 		tenantID, internalName, err := r.resolveArtifactContext(ctx, c.hash, c.assetType)
 		if err != nil {
 			r.logger.WithFields(logging.Fields{
@@ -385,7 +414,7 @@ func (r *ArtifactReconciler) sendFreezeForArtifact(ctx context.Context, hash, as
 		RequestId:        requestID,
 		AssetType:        assetType,
 		AssetHash:        hash,
-		InternalName:     streamName, // needed for DVR path construction on Helmsman
+		InternalName:     streamName,
 		LocalPath:        filePath,
 		UrlExpirySeconds: int64(expiry.Seconds()),
 	}
@@ -415,18 +444,6 @@ func (r *ArtifactReconciler) sendFreezeForArtifact(ctx context.Context, hash, as
 			return fmt.Errorf("presign vod: %w", err)
 		}
 		req.PresignedPutUrl = url
-
-	case "dvr":
-		if streamName == "" {
-			return fmt.Errorf("dvr %s missing stream_internal_name", hash)
-		}
-		if _, dbErr := r.db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET sync_status = 'in_progress', updated_at = NOW()
-			WHERE artifact_hash = $1`, hash); dbErr != nil {
-			r.logger.WithError(dbErr).WithField("artifact_hash", hash).Warn("Failed to mark DVR as in_progress")
-		}
-		req.SegmentUrls = nil
 
 	default:
 		return fmt.Errorf("unsupported asset type: %s", assetType)

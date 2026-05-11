@@ -19,6 +19,7 @@
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import PrepaidBalanceWidget from "$lib/components/PrepaidBalanceWidget.svelte";
+  import MediaRetentionPanel from "$lib/components/account/MediaRetentionPanel.svelte";
   import { getIconComponent } from "$lib/iconUtils";
   import { PaymentMethod, type PaymentMethod$options } from "$houdini";
 
@@ -706,6 +707,11 @@
                 View Usage & Costs
               </Button>
             </div>
+          </div>
+
+          <!-- Storage retention defaults — tenant-wide DVR retention policy -->
+          <div class="col-span-full">
+            <MediaRetentionPanel />
           </div>
 
           <!-- Recent Invoices Slab -->

@@ -10,7 +10,10 @@ import { Aside } from "@astrojs/starlight/components";
 By default, anyone with a stream's `playbackId` can watch it. To restrict
 playback to authenticated viewers (paid content, NFT-gated streams,
 region-locked corporate video), attach a **playback policy** to the stream,
-VOD asset, or clip. FrameWorks ships two policy types in v1:
+VOD asset, or clip. The policy follows the media: the same access model can
+protect live streams, 24/7 DVR replay, clips, and uploaded VOD.
+
+FrameWorks ships two policy types in v1:
 
 - **JWT** — viewers present an ES256-signed JWT minted by your backend with a
   signing key you control. FrameWorks verifies the signature against the
@@ -305,16 +308,16 @@ play without a token (subject to a brief reconnect blip).
   Mist metadata/preview URLs do not independently recheck viewer auth in v1.
   Treat thumbnails as preview assets, not a DRM boundary.
 
-## Limitations (v1)
+## Current Boundaries
 
 - **ES256 only.** Asymmetric is strictly better than HMAC for this use
   case (we never need your secret). HS256 is not supported.
 - **Webhook responses are 200/non-200.** No fine-grained error code
   passthrough today — use the structured deny logs for diagnostics.
-- **Geo-block / IP allow-deny lists** are not exposed yet. Implement them
-  in your webhook callback in the meantime.
-- **DRM (Widevine / FairPlay / PlayReady)** is in progress with the
-  MistServer team — separate track from this signing-key model.
+- **Geo-block / IP allow-deny lists** belong in your webhook callback when
+  you need region or network-specific authorization.
+- **DRM (Widevine / FairPlay / PlayReady)** is separate from signing-key
+  access control and tracked on the product roadmap.
 - **Header transport on native browser paths.** FrameWorks players support
   `Authorization: Bearer` on HLS.js, DASH.js, WHEP, and Mist JSON polling.
   Native `<video>`, MP4 progressive, native HLS, and WebSocket paths still
@@ -323,6 +326,89 @@ play without a token (subject to a brief reconnect blip).
   end-to-end requires media-server and Chandler auth on those asset requests.
   v1 protects endpoint resolution and media sessions; derived asset
   enforcement is a separate rollout.
+
+## Testing a policy
+
+`testPlaybackAccess` runs the same evaluator that the live USER_NEW path uses, against a token (or webhook test request) you supply, **without** registering a viewer session. Use it to confirm "this token would be accepted right now" or "my webhook endpoint is signing things correctly" before you ship a client change.
+
+Mutation, not query — webhook mode (`fireWebhook: true`) makes a real outbound HTTPS request to your configured endpoint.
+
+### Test a JWT
+
+```graphql
+mutation TestJWT {
+  testPlaybackAccess(
+    input: {
+      playbackId: "<your playback id>"
+      viewerToken: "eyJhbGciOiJFUzI1NiIs..."
+      viewerIp: "203.0.113.42"
+      connector: "hls"
+    }
+  ) {
+    ... on PlaybackAccessDecision {
+      allowed
+      policyType
+      reason # e.g. "jwt-expired", "jwt-aud-mismatch"; empty on allow
+      detail # full verifier error string
+      kid # key id the token claimed
+      # On allow: verified claims. On deny: unverified parse of the payload
+      # — useful for diagnosing aud / required-claim mismatches, never
+      # trustworthy as an auth signal.
+      claimsJson
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}
+```
+
+Common deny reasons map 1:1 with what's logged on real denies:
+
+| Reason               | Meaning                                                                |
+| -------------------- | ---------------------------------------------------------------------- |
+| `missing-token`      | Policy is JWT but no token was provided                                |
+| `jwt-not-a-jws`      | String isn't a valid JOSE compact serialization                        |
+| `jwt-missing-kid`    | Header has no `kid` claim                                              |
+| `jwt-unknown-kid`    | `kid` doesn't match any active signing key                             |
+| `jwt-wrong-alg`      | Algorithm header isn't ES256                                           |
+| `jwt-sig-fail`       | Signature didn't verify against the matching public key                |
+| `jwt-expired`        | `exp` is in the past (60s skew tolerance)                              |
+| `jwt-not-yet-valid`  | `nbf` is in the future                                                 |
+| `jwt-aud-mismatch`   | `aud` claim doesn't match `requiredAudience`                           |
+| `jwt-claim-mismatch` | A `requiredClaims` entry didn't match the token's claim value          |
+| `no-active-keys`     | Policy is JWT but no active signing keys are configured for the tenant |
+
+### Test a webhook
+
+```graphql
+mutation TestWebhook {
+  testPlaybackAccess(
+    input: {
+      playbackId: "<your playback id>"
+      viewerIp: "203.0.113.42"
+      connector: "hls"
+      fireWebhook: true # explicit opt-in; without this, returns "webhook-test-skipped"
+    }
+  ) {
+    ... on PlaybackAccessDecision {
+      allowed
+      policyType
+      reason # "webhook-deny-403" | "webhook-timeout" | "webhook-blocked-ssrf" | ...
+      webhookStatus # HTTP status returned by your endpoint
+      webhookLatencyMs # end-to-end RTT
+    }
+  }
+}
+```
+
+`fireWebhook: false` returns the resolved policy shape with `reason: "webhook-test-skipped"` so you can confirm what URL would be called without actually firing it. `fireWebhook: true` makes the same SSRF-hardened request the live evaluator uses — private/loopback/CGNAT IPs are blocked at dial time.
+
+The webapp exposes both flows under the **Playback Auth** tab on a stream's detail page.
 
 ## API reference
 
@@ -333,6 +419,7 @@ play without a token (subject to a brief reconnect blip).
 | `signingKeysConnection(status, page)` | Paginate keys; filter by `"active"` / `"revoked"` |
 | `revokeSigningKey(id)`                | Mark revoked; triggers session re-evaluation      |
 | `setPlaybackPolicy(input)`            | Set policy on stream / vodAsset / clip            |
+| `testPlaybackAccess(input)`           | Dry-run the evaluator against a token / webhook   |
 | `Stream.playbackPolicy`               | Read current policy (webhook secret masked)       |
 | `VodAsset.playbackPolicy`             | Read current policy (webhook secret masked)       |
 | `Clip.playbackPolicy`                 | Read snapshotted clip policy                      |

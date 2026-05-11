@@ -209,11 +209,10 @@ func (dm *DVRManager) EvictUploadedSegments(dvrHash string, candidates []string,
 		if SegmentInRollingManifest(job, name) {
 			continue
 		}
-		// Refuse to evict a segment that's actively being read by a
-		// chapter playback / defrost. The index's ActiveViews refcount
-		// is the authoritative signal.
+		// Refuse to evict a segment currently under defrost or pinned by a
+		// warmed chapter playback cache.
 		if idx != nil && !idx.EvictionEligible(dvrHash, name, 0) {
-			// Skip — caller will retry when ActiveViews drops to 0.
+			// Skip — caller will retry after the active view or pin clears.
 			continue
 		}
 		segPath := filepath.Join(job.OutputDir, "segments", name)
@@ -398,11 +397,9 @@ func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string, mediaSta
 	job.SyncedSegments[segName] = true
 	job.syncMutex.Unlock()
 
-	// Update the per-segment local cache index. Eviction (routine post-
-	// upload + pressure-driven) consults this index to decide what's safe
-	// to drop. Chapter playback bumps ActiveViews via AcquireView so a
-	// segment under active replay can't be evicted out from under the
-	// player.
+	// Update the per-segment local cache index. Eviction consults this
+	// index to keep active defrosts and recently warmed chapter playback
+	// segments out of the deletion set.
 	if idx := localSegmentIndex; idx != nil {
 		idx.MarkUploaded(job.DVRHash, segName, filePath, info.Size())
 	}

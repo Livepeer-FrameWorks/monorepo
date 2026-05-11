@@ -104,7 +104,7 @@ func TestRetryFailed_QueriesFailedArtifacts(t *testing.T) {
 		AddRow("hash1", "clip", "stream1", "tenant1", "mp4", "node-1", "/data/hash1.mp4")
 
 	mock.ExpectQuery("SELECT.*FROM foghorn.artifacts.*sync_status = 'failed'").
-		WithArgs(50).
+		WithArgs(50, 8).
 		WillReturnRows(rows)
 
 	// sendFreezeForArtifact will presign + mark freezing
@@ -158,7 +158,7 @@ func TestRetryFailed_RespectsBatchLimit(t *testing.T) {
 	r.batchSize = 3
 
 	mock.ExpectQuery("SELECT.*FROM foghorn.artifacts.*sync_status = 'failed'").
-		WithArgs(3).
+		WithArgs(3, 8).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path"}))
 
 	r.retryFailed(context.Background())
@@ -280,43 +280,6 @@ func TestSendFreezeForArtifact_ClipDefaultFormat(t *testing.T) {
 	}
 }
 
-func TestSendFreezeForArtifact_DVR(t *testing.T) {
-	mockDB, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mockDB.Close()
-
-	s3 := &mockReconcilerS3Client{}
-	fc := &freezeCapture{}
-	r := newTestReconciler(t, mockDB, s3, nil, fc.send)
-
-	// DVR marks in_progress first
-	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'in_progress'").
-		WithArgs("dvr-hash").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	// Then marks freezing
-	mock.ExpectExec("UPDATE foghorn.artifacts.*storage_location = 'freezing'").
-		WithArgs("dvr-hash").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	err = r.sendFreezeForArtifact(context.Background(), "dvr-hash", "dvr", "stream1", "tenant1", "", "node-1", "/data/dvr-hash")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(s3.presignedPUTCalls) != 0 {
-		t.Fatal("DVR should not generate presigned URLs")
-	}
-	call := fc.last()
-	if call.Req.SegmentUrls != nil {
-		t.Fatal("DVR request should have nil SegmentUrls")
-	}
-	if call.Req.AssetType != "dvr" {
-		t.Fatalf("expected asset_type=dvr, got %s", call.Req.AssetType)
-	}
-}
-
 func TestSendFreezeForArtifact_Vod(t *testing.T) {
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -388,6 +351,27 @@ func TestSendFreezeForArtifact_UnsupportedType(t *testing.T) {
 	err = r.sendFreezeForArtifact(context.Background(), "hash", "unknown_type", "s", "t", "", "n", "/p")
 	if err == nil {
 		t.Fatal("expected error for unsupported asset type")
+	}
+	if !strings.Contains(err.Error(), "unsupported asset type") {
+		t.Fatalf("expected 'unsupported asset type' error, got: %v", err)
+	}
+}
+
+func TestSendFreezeForArtifact_DVRUnsupported(t *testing.T) {
+	mockDB, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *pb.FreezeRequest) error {
+		t.Fatal("should not be called")
+		return nil
+	})
+
+	err = r.sendFreezeForArtifact(context.Background(), "hash", "dvr", "s", "t", "", "n", "/p")
+	if err == nil {
+		t.Fatal("expected error for DVR asset type")
 	}
 	if !strings.Contains(err.Error(), "unsupported asset type") {
 		t.Fatalf("expected 'unsupported asset type' error, got: %v", err)
@@ -541,6 +525,79 @@ func TestReconcileOrphaned_CreatesLifecycleRow(t *testing.T) {
 	if len(commodore.clipCalls) != 1 {
 		t.Fatalf("expected 1 Commodore call, got %d", len(commodore.clipCalls))
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReconcileOrphaned_DVROrphanSkipped(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+
+	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+		{ClipHash: "dvr-hash", FilePath: "/data/dvr/abc", SizeBytes: 1024, ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_DVR},
+	})
+
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+
+	commodore := &mockCommodoreClient{}
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, commodore, func(string, *pb.FreezeRequest) error { return nil })
+
+	// Batch check returns no existing rows; DVR candidate should be skipped
+	// before any INSERT into foghorn.artifacts.
+	mock.ExpectQuery("SELECT artifact_hash FROM foghorn.artifacts").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash"}))
+
+	count := r.reconcileOrphaned(context.Background())
+	if count != 0 {
+		t.Fatalf("expected 0 (DVR skipped), got %d", count)
+	}
+	if len(commodore.clipCalls) != 0 {
+		t.Fatalf("commodore must not be called for DVR orphans; got %d calls", len(commodore.clipCalls))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRetryFailed_SQLExcludesDVR(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *pb.FreezeRequest) error { return nil })
+
+	// Match SQL containing the DVR filter clause; sqlmock uses regex.
+	mock.ExpectQuery(`artifact_type != 'dvr'`).
+		WithArgs(50, 8).
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path"}))
+
+	r.retryFailed(context.Background())
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdvancePending_SQLExcludesDVR(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *pb.FreezeRequest) error { return nil })
+
+	mock.ExpectQuery(`artifact_type != 'dvr'`).
+		WithArgs(50).
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path"}))
+
+	r.advancePending(context.Background())
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}

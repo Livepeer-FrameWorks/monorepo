@@ -3,7 +3,6 @@ package federation
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"fmt"
 	"testing"
 	"time"
@@ -12,7 +11,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -308,68 +306,21 @@ func TestPrepareArtifact_VodSynced_PresignError(t *testing.T) {
 	}
 }
 
-// dvrSegmentRowCols matches the 14 columns ListDVRSegmentsForRange selects.
-var dvrSegmentRowCols = []string{
-	"artifact_hash", "segment_name", "sequence",
-	"media_start_ms", "media_end_ms", "duration_ms",
-	"size_bytes", "s3_key", "status", "drop_reason",
-	"created_at", "uploaded_at", "deleted_local_at", "dropped_at",
-}
-
-func mockDVRLedgerQuery(mock sqlmock.Sqlmock, rows ...[]driver.Value) {
-	r := sqlmock.NewRows(dvrSegmentRowCols)
-	for _, row := range rows {
-		r.AddRow(row...)
-	}
-	mock.ExpectQuery("FROM foghorn.dvr_segments").WillReturnRows(r)
-}
-
-func mockDVRWindowQuery(mock sqlmock.Sqlmock, windowSeconds int64) {
-	mock.ExpectQuery("SELECT dvr_window_seconds").
-		WillReturnRows(sqlmock.NewRows([]string{"dvr_window_seconds"}).AddRow(windowSeconds))
-}
-
-// shareDBWithControlPackage swaps control.db to point at the same sqlmock
-// db this test owns. The DVR-on-PrepareArtifact path now calls
-// control.ListDVRSegmentsForRange which uses that package-level db, so
-// federation tests need to share the connection or the call returns
-// sql.ErrConnDone (control's db is nil in test isolation).
-func shareDBWithControlPackage(t *testing.T, db *sql.DB) {
-	t.Helper()
-	prev := control.GetDB()
-	control.SetDB(db)
-	t.Cleanup(func() { control.SetDB(prev) })
-}
-
-func TestPrepareArtifact_DVRSynced_HappyPath(t *testing.T) {
+func TestPrepareArtifact_DVRRejected(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
 	defer db.Close()
-	shareDBWithControlPackage(t, db)
 
 	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster"}).
 		AddRow("dvr-b", "stream-b", "dvr", "m3u8", "s3", "synced", 20480, nil)
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
-	mockDVRWindowQuery(mock, 3600)
-
-	// Ledger-driven path now derives segment URLs from foghorn.dvr_segments
-	// rather than S3 listing. Two uploaded rows + one lost_local row.
-	now := time.Now()
-	uploaded := sql.NullTime{Time: now, Valid: true}
-	mockDVRLedgerQuery(mock,
-		[]driver.Value{"hash-dvr-ok", "chunk000.ts", int64(0), int64(0), int64(6000), int64(6000), int64(1024), "dvr/t/s/h/segments/chunk000.ts", "uploaded", nil, now, uploaded, nil, nil},
-		[]driver.Value{"hash-dvr-ok", "chunk001.ts", int64(1), int64(6000), int64(12000), int64(6000), int64(1024), "dvr/t/s/h/segments/chunk001.ts", "uploaded", nil, now, uploaded, nil, nil},
-		[]driver.Value{"hash-dvr-ok", "chunk002.ts", int64(2), int64(12000), int64(18000), int64(6000), nil, "dvr/t/s/h/segments/chunk002.ts", "lost_local", "disk_pressure", now, nil, nil, now},
-	)
-
-	fake := &fakeS3Client{presignedGETResult: "https://s3.example.com/segment?sig=ok"}
 
 	srv := NewFederationServer(FederationServerConfig{
 		Logger:   logging.NewLogger(),
 		DB:       db,
-		S3Client: fake,
+		S3Client: &fakeS3Client{},
 	})
 
 	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
@@ -381,130 +332,8 @@ func TestPrepareArtifact_DVRSynced_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareArtifact() err = %v", err)
 	}
-	if !resp.GetReady() {
-		t.Fatal("expected Ready=true for synced DVR")
-	}
-	// Two uploaded segments produce presigned URLs; lost_local does not.
-	if len(resp.GetSegmentUrls()) != 2 {
-		t.Fatalf("expected 2 segment URLs (uploaded only), got %d", len(resp.GetSegmentUrls()))
-	}
-	// All three segments surface in DvrSegments so the consumer can render
-	// #EXT-X-GAP for the lost_local row.
-	if len(resp.GetDvrSegments()) != 3 {
-		t.Fatalf("expected 3 DvrSegments (incl. lost_local), got %d", len(resp.GetDvrSegments()))
-	}
-	if resp.GetSizeBytes() != 20480 {
-		t.Fatalf("expected 20480, got %d", resp.GetSizeBytes())
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("sql expectations: %v", err)
-	}
-}
-
-func TestPrepareArtifact_DVRSynced_PresignError(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock.New: %v", err)
-	}
-	defer db.Close()
-	shareDBWithControlPackage(t, db)
-
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster"}).
-		AddRow("dvr-c", "stream-c", "dvr", "m3u8", "s3", "synced", 1024, nil)
-	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
-	mockDVRWindowQuery(mock, 3600)
-
-	// Ledger query returns an error path. Mock the dvr_segments query as
-	// failing so the new ledger-driven minting path returns its error.
-	mock.ExpectQuery("FROM foghorn.dvr_segments").WillReturnError(fmt.Errorf("ledger unavailable"))
-
-	fake := &fakeS3Client{}
-
-	srv := NewFederationServer(FederationServerConfig{
-		Logger:   logging.NewLogger(),
-		DB:       db,
-		S3Client: fake,
-	})
-
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
-		ArtifactId: "hash-dvr-err",
-		TenantId:   "tenant-a",
-		DvrStartMs: 0,
-		DvrEndMs:   18000,
-	})
-	if err != nil {
-		t.Fatalf("PrepareArtifact() err = %v", err)
-	}
-	if resp.GetError() != "failed to enumerate DVR segments" {
-		t.Fatalf("expected ledger enumeration error, got %q", resp.GetError())
-	}
-}
-
-func TestPrepareArtifact_DVRRejectsInvalidRange(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock.New: %v", err)
-	}
-	defer db.Close()
-
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster"}).
-		AddRow("dvr-range", "stream-range", "dvr", "m3u8", "s3", "synced", 1024, nil)
-	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
-
-	srv := NewFederationServer(FederationServerConfig{
-		Logger:   logging.NewLogger(),
-		DB:       db,
-		S3Client: &fakeS3Client{},
-	})
-
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
-		ArtifactId:   "hash-dvr-range",
-		TenantId:     "tenant-a",
-		DvrStartMs:   12000,
-		DvrEndMs:     6000,
-		ArtifactType: "dvr",
-	})
-	if err != nil {
-		t.Fatalf("PrepareArtifact() err = %v", err)
-	}
-	if resp.GetError() != "DVR federation range end must be greater than start" {
-		t.Fatalf("expected invalid range error, got %q", resp.GetError())
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("sql expectations: %v", err)
-	}
-}
-
-func TestPrepareArtifact_DVRRejectsRangeBeyondWindow(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock.New: %v", err)
-	}
-	defer db.Close()
-
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster"}).
-		AddRow("dvr-wide", "stream-wide", "dvr", "m3u8", "s3", "synced", 1024, nil)
-	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
-	mockDVRWindowQuery(mock, 60)
-
-	srv := NewFederationServer(FederationServerConfig{
-		Logger:   logging.NewLogger(),
-		DB:       db,
-		S3Client: &fakeS3Client{},
-	})
-
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
-		ArtifactId:   "hash-dvr-wide",
-		TenantId:     "tenant-a",
-		DvrStartMs:   0,
-		DvrEndMs:     120000,
-		ArtifactType: "dvr",
-	})
-	if err != nil {
-		t.Fatalf("PrepareArtifact() err = %v", err)
-	}
-	if resp.GetError() != "DVR federation range exceeds maximum chapter window" {
-		t.Fatalf("expected range cap error, got %q", resp.GetError())
+	if resp.GetError() != "DVR playback uses dvrChapter and dvr+ chapter routing; PrepareArtifact is not a DVR playback surface" {
+		t.Fatalf("expected DVR rejection, got %q", resp.GetError())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -543,7 +372,7 @@ func TestPrepareArtifact_FreezingState(t *testing.T) {
 	}
 }
 
-func TestPrepareArtifact_LegacyClipHash(t *testing.T) {
+func TestPrepareArtifact_ClipHashFallback(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
@@ -551,10 +380,10 @@ func TestPrepareArtifact_LegacyClipHash(t *testing.T) {
 	defer db.Close()
 
 	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster"}).
-		AddRow("clip-legacy", "stream-l", "clip", "mp4", "s3", "synced", 2048, nil)
+		AddRow("clip-fallback", "stream-l", "clip", "mp4", "s3", "synced", 2048, nil)
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
-	fake := &fakeS3Client{presignedGETResult: "https://s3.example.com/legacy.mp4?sig=legacy"}
+	fake := &fakeS3Client{presignedGETResult: "https://s3.example.com/fallback.mp4?sig=fallback"}
 
 	srv := NewFederationServer(FederationServerConfig{
 		Logger:   logging.NewLogger(),
@@ -562,16 +391,15 @@ func TestPrepareArtifact_LegacyClipHash(t *testing.T) {
 		S3Client: fake,
 	})
 
-	// Use ClipHash instead of ArtifactId
 	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
-		ClipHash: "hash-legacy",
+		ClipHash: "hash-fallback",
 		TenantId: "tenant-a",
 	})
 	if err != nil {
 		t.Fatalf("PrepareArtifact() err = %v", err)
 	}
 	if !resp.GetReady() {
-		t.Fatal("expected Ready=true for legacy clip hash")
+		t.Fatal("expected Ready=true for clip hash fallback")
 	}
 }
 
@@ -704,46 +532,5 @@ func TestPrepareArtifact_NilDBAndS3(t *testing.T) {
 	}
 	if resp.GetError() != "origin storage not configured" {
 		t.Fatalf("expected 'origin storage not configured', got %q", resp.GetError())
-	}
-}
-
-func TestPrepareArtifact_EmptyDVRSegments(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock.New: %v", err)
-	}
-	defer db.Close()
-	shareDBWithControlPackage(t, db)
-
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster"}).
-		AddRow("dvr-a", "stream-a", "dvr", "m3u8", "s3", "synced", 10240, nil)
-	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
-	mockDVRWindowQuery(mock, 3600)
-
-	// Ledger returns zero rows; new error message reflects ledger semantics.
-	mockDVRLedgerQuery(mock)
-
-	fake := &fakeS3Client{}
-
-	srv := NewFederationServer(FederationServerConfig{
-		Logger:   logging.NewLogger(),
-		DB:       db,
-		S3Client: fake,
-	})
-
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
-		ArtifactId: "hash-4",
-		TenantId:   "tenant-a",
-		DvrStartMs: 0,
-		DvrEndMs:   18000,
-	})
-	if err != nil {
-		t.Fatalf("PrepareArtifact() err = %v", err)
-	}
-	if resp.GetError() != "no DVR segments in ledger for requested range" {
-		t.Fatalf("expected 'no DVR segments in ledger for requested range', got %q", resp.GetError())
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("sql expectations: %v", err)
 	}
 }

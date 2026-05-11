@@ -54,8 +54,8 @@ func TestProcessFreezeComplete_Failure_RevertsToLocal(t *testing.T) {
 	mock, s3Mock, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	mock.ExpectExec("UPDATE foghorn.artifacts.*SET storage_location = 'local'.*sync_status = 'failed'").
-		WithArgs("upload timed out", "hash-2").
+	mock.ExpectExec("UPDATE foghorn.artifacts.*SET storage_location = 'local'.*sync_status = ").
+		WithArgs("upload timed out", "hash-2", "failed").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Lookup artifact type for S3 cleanup
@@ -87,8 +87,8 @@ func TestProcessFreezeComplete_Failure_DVR_CleanupPrefix(t *testing.T) {
 	mock, s3Mock, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'failed'").
-		WithArgs("", "dvr-hash").
+	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = ").
+		WithArgs("", "dvr-hash", "failed").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	mock.ExpectQuery("SELECT artifact_type").
@@ -118,7 +118,7 @@ func TestProcessFreezeComplete_Failure_NoTenant_SkipsCleanup(t *testing.T) {
 	logger := logging.NewLogger()
 
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("err", "hash-3").
+		WithArgs("err", "hash-3", "failed").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	mock.ExpectQuery("SELECT artifact_type").
@@ -146,7 +146,7 @@ func TestProcessFreezeComplete_Failure_NilS3Client_SkipsCleanup(t *testing.T) {
 	logger := logging.NewLogger()
 
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("err", "hash-4").
+		WithArgs("err", "hash-4", "failed").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processFreezeComplete(context.Background(), &pb.FreezeComplete{

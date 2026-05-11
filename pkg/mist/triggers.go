@@ -9,6 +9,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/google/uuid"
 )
 
 // TriggerType represents the type of MistServer trigger
@@ -96,8 +97,7 @@ func IsPlaybackViewerRequest(connector, requestURL string) bool {
 }
 
 func isNonPlaybackAssetConnector(connector string) bool {
-	parts := strings.Split(connector, ",")
-	for _, part := range parts {
+	for part := range strings.SplitSeq(connector, ",") {
 		switch strings.ToLower(strings.TrimSpace(part)) {
 		case "thumbvtt", "jpg", "jpeg", "png", "spritesheet", "sprite":
 			return true
@@ -137,6 +137,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		NodeId:      nodeID,
 		Timestamp:   time.Now().Unix(),
 		Blocking:    triggerType.IsBlocking(),
+		RequestId:   uuid.NewString(),
 	}
 
 	switch triggerType {
@@ -278,7 +279,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		// Parse JSON health data if present (params[2])
 		// Mist sends: {"health": {buffer, jitter, issues, maxkeepaway, tracks[], video_..., audio_...}}
 		if len(params) > 2 && params[2] != "" {
-			var healthData map[string]interface{}
+			var healthData map[string]any
 			if err := json.Unmarshal([]byte(params[2]), &healthData); err != nil {
 				logger.WithFields(logging.Fields{
 					"error": err.Error(),
@@ -286,7 +287,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 				}).Warn("Failed to parse STREAM_BUFFER health JSON")
 			} else {
 				// Check if wrapped in "health" key (Mist sends {"health": {...}})
-				if health, ok := healthData["health"].(map[string]interface{}); ok {
+				if health, ok := healthData["health"].(map[string]any); ok {
 					healthData = health
 				}
 
@@ -358,7 +359,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 
 		// Parse JSON track list if present (params[1])
 		if len(params) > 1 && params[1] != "" {
-			var tracksData map[string]interface{}
+			var tracksData map[string]any
 			if err := json.Unmarshal([]byte(params[1]), &tracksData); err != nil {
 				logger.WithFields(logging.Fields{
 					"error": err.Error(),
@@ -465,8 +466,8 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 // ExtractInternalName extracts internal name from stream name (handles wildcard format)
 func ExtractInternalName(streamName string) string {
 	for _, prefix := range []string{"live+", "vod+", "processing+"} {
-		if strings.HasPrefix(streamName, prefix) {
-			return strings.TrimPrefix(streamName, prefix)
+		if rest, ok := strings.CutPrefix(streamName, prefix); ok {
+			return rest
 		}
 	}
 	// For non-wildcard streams, use the stream name as-is
@@ -484,11 +485,11 @@ func (t TriggerType) IsBlocking() bool {
 }
 
 // parseTracksFromJSON converts MistServer track JSON data to protobuf StreamTrack messages
-func parseTracksFromJSON(tracksData map[string]interface{}) []*pb.StreamTrack {
+func parseTracksFromJSON(tracksData map[string]any) []*pb.StreamTrack {
 	var tracks []*pb.StreamTrack
 
 	for trackName, trackData := range tracksData {
-		trackMap, ok := trackData.(map[string]interface{})
+		trackMap, ok := trackData.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -569,7 +570,7 @@ func parseTracksFromJSON(tracksData map[string]interface{}) []*pb.StreamTrack {
 		}
 
 		// Extract frame timing info from keys if available
-		if keys, ok := trackMap["keys"].(map[string]interface{}); ok {
+		if keys, ok := trackMap["keys"].(map[string]any); ok {
 			if frameMax, ok := keys["frames_max"].(float64); ok {
 				framesMax := int32(frameMax)
 				track.FramesMax = &framesMax

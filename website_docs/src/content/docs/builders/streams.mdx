@@ -23,19 +23,20 @@ watch.
 
 FrameWorks supports two ingest models:
 
-| Model | How media arrives                                          | Creation path                               |
-| ----- | ---------------------------------------------------------- | ------------------------------------------- |
-| Push  | Your encoder opens RTMP/E-RTMP, SRT, or WHIP to FrameWorks | Dashboard or GraphQL `createStream`         |
-| Pull  | FrameWorks opens RTSP, SRT, RIST, HLS, DTSC, or TS to you  | Operator bootstrap `commodore.pull_streams` |
+| Model | How media arrives                                          | Creation path                       |
+| ----- | ---------------------------------------------------------- | ----------------------------------- |
+| Push  | Your encoder opens RTMP/E-RTMP, SRT, or WHIP to FrameWorks | Dashboard or GraphQL `createStream` |
+| Pull  | FrameWorks opens RTSP, SRT, RIST, HLS, DTSC, or TS to you  | Dashboard or GraphQL `createStream` |
 
 Most builders start with push streams. Pull-input streams are useful for cameras, venue feeds, and
 upstream origins that cannot push into FrameWorks. See [Pull-input streams](/builders/pull-streams)
-for supported source schemes and the operator bootstrap shape. Note that **RTMP and FLV-over-HTTP pull are
-not supported today** — [open a ticket](%APP_URL%/support) if you need them.
+for supported source schemes, private-source rules, and lifecycle visibility. Note that **RTMP and
+FLV-over-HTTP pull are not supported today** — [open a ticket](%APP_URL%/support) if you need them.
 
-On the [roadmap](/roadmap#in-the-pipeline): an **AV Device Discovery** drop-in app that
-auto-discovers ONVIF IP cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI capture
-inputs — for venues and studios that want device pickup without hand-wiring RTSP URLs.
+Experimental media-engine discovery exists locally today. On the
+[roadmap](/roadmap#device-discovery-and-contribution-inputs): packaging that into FrameWorks Edge,
+Tray, CLI, API, and dashboard workflows for venues and studios that want camera pickup without
+hand-wiring RTSP URLs.
 
 <Aside type="note" title="Pull streams are not push streams with a URL">
   A pull stream has no usable `streamKey`, because nothing is allowed to push into it. Its upstream
@@ -79,8 +80,10 @@ mutation {
 }
 ```
 
-`record: true` enables DVR recording from the start. You can also toggle recording later with
-`updateStream`. See [Live and DVR Streams](#live-and-dvr-streams) for what that creates.
+`record: true` enables DVR recording from the start. For event channels, this gives late viewers
+seekback while the stream is live. For 24/7 channels, it builds one continuous archive that can be
+replayed later through chapters instead of chopped into fixed-duration assets. You can also toggle
+recording later with `updateStream`. See [Live and DVR Streams](#live-and-dvr-streams) for what that creates.
 
 ## Live and DVR Streams
 
@@ -108,8 +111,8 @@ Practical consequences:
 - **Access control, multistream targets, thumbnails, and analytics** attach per stream entity.
 
 For 24/7-style streams, the recording can continue as one DVR artifact for the full stream session.
-Replay viewers navigate that archive through chapters or explicit time ranges. See
-[Recordings, Clips & VOD](/builders/recordings#archive-chapters).
+Replay viewers navigate that archive through chapters or explicit time ranges, while the live
+player still receives a bounded seekback window. See [Recordings, Clips & VOD](/builders/recordings#archive-chapters).
 
 ## Go Live
 

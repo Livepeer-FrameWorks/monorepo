@@ -19,7 +19,7 @@ func RegisterPlaybackTools(server *mcp.Server, clients *clients.ServiceClients, 
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "resolve_playback_endpoint",
-			Description: "Resolve playback URLs for a stream or VOD content. Returns primary and fallback endpoints.",
+			Description: "Resolve playback URLs for a stream or VOD content. Returns primary and fallback endpoints, plus thumbnail and sprite preview URLs when available.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args ResolvePlaybackInput) (*mcp.CallToolResult, any, error) {
 			return handleResolvePlayback(ctx, args, clients, logger)
@@ -41,11 +41,19 @@ type PlaybackEndpoint struct {
 	Distance float64 `json:"geo_distance,omitempty"`
 }
 
+type PlaybackThumbnailAssets struct {
+	PosterURL    string `json:"poster_url,omitempty"`
+	SpriteVTTURL string `json:"sprite_vtt_url,omitempty"`
+	SpriteJPGURL string `json:"sprite_jpg_url,omitempty"`
+	AssetKey     string `json:"asset_key,omitempty"`
+}
+
 // ResolvePlaybackResult represents the result of resolving playback.
 type ResolvePlaybackResult struct {
-	Primary   PlaybackEndpoint   `json:"primary"`
-	Fallbacks []PlaybackEndpoint `json:"fallbacks,omitempty"`
-	Message   string             `json:"message"`
+	Primary         PlaybackEndpoint         `json:"primary"`
+	Fallbacks       []PlaybackEndpoint       `json:"fallbacks,omitempty"`
+	ThumbnailAssets *PlaybackThumbnailAssets `json:"thumbnail_assets,omitempty"`
+	Message         string                   `json:"message"`
 }
 
 func handleResolvePlayback(ctx context.Context, args ResolvePlaybackInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -98,6 +106,15 @@ func handleResolvePlayback(ctx context.Context, args ResolvePlaybackInput, clien
 			Protocol: fb.Protocol,
 			Distance: fb.GeoDistance,
 		})
+	}
+
+	if assets := resp.GetMetadata().GetThumbnailAssets(); assets != nil {
+		result.ThumbnailAssets = &PlaybackThumbnailAssets{
+			PosterURL:    assets.GetPosterUrl(),
+			SpriteVTTURL: assets.GetSpriteVttUrl(),
+			SpriteJPGURL: assets.GetSpriteJpgUrl(),
+			AssetKey:     assets.GetAssetKey(),
+		}
 	}
 
 	return toolSuccess(result)

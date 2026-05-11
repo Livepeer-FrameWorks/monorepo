@@ -2,7 +2,7 @@
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
 		proto graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
-		validate-migrations \
+		validate-migrations verify-feature-registry \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
 		ansible-galaxy-install ansible-lint ansible-yamllint ansible-test ansible-check ansible-molecule ansible-molecule-run ansible-molecule-all provision-hello
 
@@ -504,7 +504,7 @@ lint-go:
 lint-frontend:
 	@echo "Running frontend lint checks (pnpm lint + pnpm format:check)..."
 	pnpm lint
-	pnpm format:check
+	pnpm run format:check
 
 # No baseline: reports every violation, including pre-existing ones. For cleanup work.
 lint-all:
@@ -537,6 +537,17 @@ validate-migrations:
 	@echo "Validating embedded SQL migrations..."
 	@cd cli && go run . cluster migrate validate
 
+verify-feature-registry:
+	@echo "Validating docs/platform-features.yaml and regenerating renderers..."
+	@cd scripts/registry && go run .
+	@if ! git diff --quiet website_application/src/lib/features/registry.json website_docs/src/content/docs/platform/feature-matrix.mdx 2>/dev/null; then \
+		echo "✗ Generated feature artifacts are out of date."; \
+		echo "  Run 'make verify-feature-registry' locally and commit the result."; \
+		git diff --stat website_application/src/lib/features/registry.json website_docs/src/content/docs/platform/feature-matrix.mdx; \
+		exit 1; \
+	fi
+	@echo "✓ Feature registry verified"
+
 ci-local:
 	@failed=0; \
 	$(MAKE) ci-local-go || failed=1; \
@@ -553,7 +564,7 @@ ci-local-go:
 ci-local-frontend:
 	@echo "Running local frontend CI checks..."
 	pnpm lint
-	pnpm format:check
+	pnpm run format:check
 	pnpm test:coverage
 	pnpm build
 

@@ -5,8 +5,8 @@ description: "How Privateer brings up the internal WireGuard mesh: identity, see
 
 FrameWorks backend hosts use a WireGuard mesh managed by Privateer. Operators
 generate GitOps-owned identity, then the CLI renders host config during
-provisioning. Do not maintain manual `wg0.conf` instructions in the public
-docs; the manifest, `hosts.enc.yaml`, and Privateer runtime own this layer.
+provisioning. The manifest, `hosts.enc.yaml`, and Privateer runtime own this
+layer; hand-written `wg0.conf` files are not the supported operating path.
 
 ## Why this exists
 

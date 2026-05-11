@@ -142,7 +142,7 @@ Cross-cluster coordination is handled exclusively by the **FoghornFederation** g
 
 - **Peer discovery**: Quartermaster maintains a registry of all clusters. Foghorn queries `ListPeers` to find peers and opens `PeerChannel` bidirectional streams for real-time edge telemetry exchange.
 - **Cross-cluster viewer routing**: When a viewer's cluster doesn't have a stream, Foghorn uses `QueryStream` to find it on a peer, then either redirects the viewer or arranges a DTSC origin-pull to serve locally.
-- **Cross-cluster artifacts**: VOD clips on remote clusters are accessed via `PrepareArtifact` (presigned S3 URLs). DVR archive replay uses the GraphQL chapter API, which routes through Commodore to the DVR origin Foghorn and returns bounded chapter manifests.
+- **Cross-cluster artifacts**: VOD clips on remote clusters are accessed via `PrepareArtifact` (presigned S3 URLs). DVR archive replay uses the GraphQL chapter API, which routes through Commodore to the DVR origin Foghorn and returns `dvr+{chapter_id}` playback IDs that edges defrost as bounded chapters.
 - **Leader-only peering**: Each cluster elects one Foghorn instance (via Redis SET NX) to run PeerChannel connections, avoiding duplicate peer traffic.
 
 Quartermaster is the sole routing authority. Commodore resolves tenant-to-cluster routing dynamically via `GetClusterRouting` — no hardcoded Foghorn addresses between services.
@@ -154,7 +154,7 @@ Quartermaster is the sole routing authority. Commodore resolves tenant-to-cluste
 | **Shared**           | Free shared capacity is currently unmetered; premium shared tiers are seeded for later enforcement. All tenants share the same cluster, edges, and services.                                                                                               |
 | **Dedicated**        | Enterprise tier. Isolated cluster with dedicated Foghorn, edges, and capacity — operated by FrameWorks or self-hosted on-premise via the [CLI](/operators/cli-reference), with [Manual Deployment](/operators/deployment-manual) as an advanced reference. |
 | **Hybrid**           | Tenant runs self-hosted edges that fall back to the primary shared cluster. Edges federate via Foghorn; control/data plane remains shared.                                                                                                                 |
-| **Open Marketplace** | Third-party operators publish clusters with pricing and access controls. Tenants subscribe to clusters via the marketplace. _(In progress)_                                                                                                                |
+| **Open Marketplace** | Operators can publish listed clusters with access controls, invites, subscription requests, and pricing metadata. A vetted public marketplace program is still being built.                                                                                |
 
 ---
 

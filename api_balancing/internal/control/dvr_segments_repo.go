@@ -41,6 +41,13 @@ type DVRSegmentRow struct {
 // new segment rows. Callers should not retry; the sidecar drops the segment.
 var ErrDVRSegmentTerminal = errors.New("dvr artifact in terminal state; segment rejected")
 
+// ErrDVRSegmentTimingMismatch is returned when a RecordDVRSegment retry (or
+// heal-from-lost_local attempt) supplies timing that does not match the
+// ledger row's recorded (media_start_ms, media_end_ms, duration_ms). A wrong
+// file with the same name must never claim an existing sequence — accepting
+// it would corrupt chapter placement.
+var ErrDVRSegmentTimingMismatch = errors.New("dvr segment timing mismatch; refusing to reuse sequence")
+
 // rollbackQuiet rolls back a transaction, ignoring sql.ErrTxDone (which
 // fires when Commit already succeeded). Real rollback errors are silently
 // dropped; in this package the only callers commit-or-die so a failed
@@ -63,12 +70,20 @@ var dvrSegmentTerminalStatuses = map[string]struct{}{
 	"deleted":           {},
 }
 
+var dvrSegmentRecoveryInsertStatuses = map[string]struct{}{
+	"completed":         {},
+	"completed_partial": {},
+	"failed":            {},
+}
+
 // InsertDVRSegment inserts a new segment row in 'pending' status and assigns
 // a monotonic sequence per artifact. Returns the assigned sequence.
 //
 // Refuses inserts when the parent artifact is in a terminal state — that
 // path returns ErrDVRSegmentTerminal so the caller can emit
 // DVRSegmentDropped(was_uploaded=false) instead of looping a doomed retry.
+// Startup recovery can opt in to inserting missing rows for finalized
+// artifacts after it has recovered timing from a local DVR manifest.
 //
 // Sequence is computed as max(sequence)+1 inside the same transaction so
 // concurrent inserts on the same artifact stay monotonic. The unique index
@@ -77,6 +92,7 @@ func InsertDVRSegment(
 	ctx context.Context,
 	artifactHash, segmentName, s3Key string,
 	mediaStartMs, mediaEndMs, durationMs int64,
+	allowRecoveryInsert bool,
 ) (int64, error) {
 	if db == nil {
 		return 0, sql.ErrConnDone
@@ -88,38 +104,92 @@ func InsertDVRSegment(
 	defer rollbackQuiet(tx)
 
 	var artifactStatus string
-	if err := tx.QueryRowContext(ctx,
+	if scanErr := tx.QueryRowContext(ctx,
 		`SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type = 'dvr' FOR UPDATE`,
 		artifactHash,
-	).Scan(&artifactStatus); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+	).Scan(&artifactStatus); scanErr != nil {
+		if errors.Is(scanErr, sql.ErrNoRows) {
 			return 0, fmt.Errorf("dvr artifact %s not found", artifactHash)
 		}
-		return 0, fmt.Errorf("lookup artifact: %w", err)
+		return 0, fmt.Errorf("lookup artifact: %w", scanErr)
 	}
-	// If a segment by this name already exists (e.g. retry from sidecar),
-	// return its existing sequence without re-inserting. This check must run
-	// before the terminal-state guard for the 'finalizing' state: FinalizeDVR
-	// asks the sidecar to retry pending rows after claiming finalization, and
-	// those retries still need fresh presigned PUT URLs for already-ledgered
-	// segments. Fully terminal artifacts still reject retry attempts.
-	var existingSeq sql.NullInt64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT sequence FROM foghorn.dvr_segments WHERE artifact_hash = $1 AND segment_name = $2`,
+	// If a segment by this name already exists (e.g. retry from sidecar OR a
+	// reappearance after lost_local), validate timing before reusing the
+	// sequence. The strict (media_start_ms, media_end_ms, duration_ms)
+	// equality is the safety check: a wrong file with the same name must not
+	// heal a gap or claim a sequence belonging to a different segment.
+	//
+	// For lost_local rows with matching timing, transition back to 'pending'
+	// (heal) and reuse the sequence. The sidecar can then upload normally and
+	// MarkDVRSegmentUploaded will succeed from 'pending'.
+	//
+	// The 'finalizing' state still needs retry support — FinalizeDVR asks the
+	// sidecar to retry pending rows after claiming finalization. Fully
+	// terminal artifacts still reject retry attempts.
+	var existing struct {
+		sequence     sql.NullInt64
+		status       sql.NullString
+		mediaStartMs sql.NullInt64
+		mediaEndMs   sql.NullInt64
+		durationMs   sql.NullInt64
+	}
+	err = tx.QueryRowContext(ctx,
+		`SELECT sequence, status, media_start_ms, media_end_ms, duration_ms
+		   FROM foghorn.dvr_segments
+		  WHERE artifact_hash = $1 AND segment_name = $2`,
 		artifactHash, segmentName,
-	).Scan(&existingSeq); err == nil && existingSeq.Valid {
-		if _, terminal := dvrSegmentTerminalStatuses[artifactStatus]; terminal && artifactStatus != "finalizing" {
-			return 0, ErrDVRSegmentTerminal
+	).Scan(&existing.sequence, &existing.status, &existing.mediaStartMs, &existing.mediaEndMs, &existing.durationMs)
+	if err == nil && existing.sequence.Valid {
+		// Strict timing match guards against wrong-file-same-name corruption.
+		if existing.mediaStartMs.Int64 != mediaStartMs ||
+			existing.mediaEndMs.Int64 != mediaEndMs ||
+			existing.durationMs.Int64 != durationMs {
+			return 0, ErrDVRSegmentTimingMismatch
+		}
+		// The parent-terminal check only rejects retries for rows that are
+		// already settled — uploaded (S3 has it) or deleted_local (already
+		// evicted). Rows in pending / failed_upload / lost_local are NOT
+		// settled even when the parent has reached completed/failed: the
+		// recording finished but this segment never made it to S3. Allowing
+		// the retry lets the seeded-completed-DVR + pending-segments case
+		// (and any post-finalize race) actually upload.
+		switch existing.status.String {
+		case "lost_local":
+			// Timing already validated above. Transition back to pending so
+			// the sidecar can upload and MarkDVRSegmentUploaded can succeed.
+			if _, healErr := tx.ExecContext(ctx, `
+				UPDATE foghorn.dvr_segments
+				   SET status = 'pending'
+				 WHERE artifact_hash = $1 AND segment_name = $2 AND status = 'lost_local'
+			`, artifactHash, segmentName); healErr != nil {
+				return 0, fmt.Errorf("heal lost_local: %w", healErr)
+			}
+		case "pending", "failed_upload":
+			// Pre-upload state — retry is always permitted, parent state
+			// doesn't matter. Caller mints a fresh presigned URL.
+		case "uploaded", "deleted_local":
+			// Settled. Only block when the parent is also terminal — for
+			// 'finalizing' the upload is still in-flight and the sidecar
+			// may retry.
+			if _, terminal := dvrSegmentTerminalStatuses[artifactStatus]; terminal && artifactStatus != "finalizing" {
+				return 0, ErrDVRSegmentTerminal
+			}
 		}
 		if commitErr := tx.Commit(); commitErr != nil {
 			return 0, commitErr
 		}
-		return existingSeq.Int64, nil
+		return existing.sequence.Int64, nil
 	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("lookup existing segment: %w", err)
 	}
 
 	if _, terminal := dvrSegmentTerminalStatuses[artifactStatus]; terminal {
+		if _, recoverable := dvrSegmentRecoveryInsertStatuses[artifactStatus]; !allowRecoveryInsert || !recoverable {
+			return 0, ErrDVRSegmentTerminal
+		}
+	}
+
+	if allowRecoveryInsert && s3Key == "" {
 		return 0, ErrDVRSegmentTerminal
 	}
 
@@ -148,7 +218,10 @@ func InsertDVRSegment(
 
 // MarkDVRSegmentUploaded transitions a segment row to 'uploaded' and stamps
 // the confirmed S3 size. No-op (no error) if the row is already uploaded —
-// the sidecar may resend the mark on retry.
+// the sidecar may resend the mark on retry. lost_local is NOT a permitted
+// source state for this transition: a wrong file with the same name must not
+// heal a gap. Startup recovery uses RecordDVRSegment's strict timing match to
+// take the row back to 'pending' before this can succeed.
 func MarkDVRSegmentUploaded(ctx context.Context, artifactHash, segmentName string, sizeBytes int64) error {
 	if db == nil {
 		return sql.ErrConnDone

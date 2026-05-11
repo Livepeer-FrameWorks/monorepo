@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -136,6 +137,24 @@ func withClickhouseTimeout(ctx context.Context) (context.Context, context.Cancel
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, clickhouseDefaultTimeout)
+}
+
+// sanitizeFloat32 zeroes out NaN/Inf so the value can be marshaled via the
+// non-null GraphQL contract. ClickHouse avg() over an empty window returns
+// NaN; degenerate divisions can produce Inf.
+func sanitizeFloat32(v float64) float32 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return float32(v)
+}
+
+// sanitizeFloat64 is the float64 variant of sanitizeFloat32.
+func sanitizeFloat64(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return v
 }
 
 func wrapClickhouseError(err error, message string) error {
@@ -875,12 +894,17 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStrea
 		return &pb.StreamsStatusResponse{Statuses: make(map[string]*pb.StreamStatusResponse)}, nil
 	}
 
-	// Initialize response with defaults
+	// Initialize response with defaults. UpdatedAt is set to the snapshot time
+	// so the non-null GraphQL field has a value for streams that have never had
+	// analytics events (Periscope reads ClickHouse stream_state_current and has
+	// no access to commodore.streams.created_at).
+	now := timestamppb.Now()
 	statuses := make(map[string]*pb.StreamStatusResponse, len(streamIDs))
 	for _, id := range streamIDs {
 		statuses[id] = &pb.StreamStatusResponse{
-			StreamId: id,
-			Status:   "offline",
+			StreamId:  id,
+			Status:    "offline",
+			UpdatedAt: now,
 		}
 	}
 
@@ -939,6 +963,7 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStrea
 		}
 		if updatedAt != nil && !updatedAt.IsZero() {
 			resp.LastEventAt = timestamppb.New(*updatedAt)
+			resp.UpdatedAt = timestamppb.New(*updatedAt)
 		}
 
 		// Quality metrics
@@ -2492,11 +2517,11 @@ func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *pb.GetFe
 			evt.DtscUrl = &dtscURL.String
 		}
 		if latencyMs.Valid {
-			v := float32(latencyMs.Float64)
+			v := sanitizeFloat32(latencyMs.Float64)
 			evt.LatencyMs = &v
 		}
 		if timeToLiveMs.Valid {
-			v := float32(timeToLiveMs.Float64)
+			v := sanitizeFloat32(timeToLiveMs.Float64)
 			evt.TimeToLiveMs = &v
 		}
 		if failureReason.Valid && failureReason.String != "" {
@@ -3412,12 +3437,12 @@ func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetCli
 			StreamId:          streamIDStr,
 			NodeId:            nodeIDStr,
 			ActiveSessions:    activeSessions,
-			AvgBandwidthIn:    avgBwIn,
-			AvgBandwidthOut:   avgBwOut,
-			AvgConnectionTime: avgConnTime,
+			AvgBandwidthIn:    sanitizeFloat64(avgBwIn),
+			AvgBandwidthOut:   sanitizeFloat64(avgBwOut),
+			AvgConnectionTime: sanitizeFloat32(float64(avgConnTime)),
 		}
 		if pktLossRate.Valid {
-			v := float32(pktLossRate.Float64)
+			v := sanitizeFloat32(pktLossRate.Float64)
 			record.PacketLossRate = &v
 		}
 		records = append(records, record)
@@ -3614,7 +3639,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pb
 		`, tenantID, streamID, startTime, endTime).Scan(&avgViewers, &peakViewers)
 		if err == nil {
 			if avgViewers.Valid {
-				summary.RangeAvgViewers = float32(avgViewers.Float64)
+				summary.RangeAvgViewers = sanitizeFloat32(avgViewers.Float64)
 			}
 			if peakViewers.Valid {
 				summary.RangePeakConcurrentViewers = uint32(peakViewers.Int64)
@@ -3635,13 +3660,17 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pb
 		`, tenantID, streamID, startTime, endTime).Scan(&avgBufferHealth, &avgBitrate, &avgFps, &rebufferCount, &issueCount, &bufferDryCount)
 		if err == nil {
 			if avgBufferHealth.Valid {
-				summary.RangeAvgBufferHealth = float32(avgBufferHealth.Float64)
+				summary.RangeAvgBufferHealth = sanitizeFloat32(avgBufferHealth.Float64)
 			}
 			if avgBitrate.Valid {
-				summary.RangeAvgBitrate = uint32(avgBitrate.Float64)
+				safe := sanitizeFloat64(avgBitrate.Float64)
+				if safe < 0 {
+					safe = 0
+				}
+				summary.RangeAvgBitrate = uint32(safe)
 			}
 			if avgFps.Valid {
-				summary.RangeAvgFps = float32(avgFps.Float64)
+				summary.RangeAvgFps = sanitizeFloat32(avgFps.Float64)
 			}
 			if rebufferCount.Valid {
 				summary.RangeRebufferCount = rebufferCount.Int64
@@ -3665,10 +3694,10 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pb
 		`, tenantID, streamID, startTime, endTime).Scan(&pktLossRate, &avgConnTime)
 		if err == nil {
 			if pktLossRate.Valid {
-				summary.RangePacketLossRate = float32(pktLossRate.Float64)
+				summary.RangePacketLossRate = sanitizeFloat32(pktLossRate.Float64)
 			}
 			if avgConnTime.Valid {
-				summary.RangeAvgConnectionTime = float32(avgConnTime.Float64)
+				summary.RangeAvgConnectionTime = sanitizeFloat32(avgConnTime.Float64)
 			}
 		}
 	}
@@ -3935,21 +3964,21 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *
 		}
 
 		if egressGb.Valid {
-			summary.RangeEgressGb = float32(egressGb.Float64)
+			summary.RangeEgressGb = sanitizeFloat32(egressGb.Float64)
 		}
 		if viewerHours.Valid {
-			summary.RangeViewerHours = float32(viewerHours.Float64)
+			summary.RangeViewerHours = sanitizeFloat32(viewerHours.Float64)
 		}
 		if egressSharePct.Valid {
-			val := float32(egressSharePct.Float64)
+			val := sanitizeFloat32(egressSharePct.Float64)
 			summary.RangeEgressSharePercent = &val
 		}
 		if viewersSharePct.Valid {
-			val := float32(viewersSharePct.Float64)
+			val := sanitizeFloat32(viewersSharePct.Float64)
 			summary.RangeViewerSharePercent = &val
 		}
 		if viewerHoursSharePct.Valid {
-			val := float32(viewerHoursSharePct.Float64)
+			val := sanitizeFloat32(viewerHoursSharePct.Float64)
 			summary.RangeViewerHoursSharePercent = &val
 		}
 
@@ -4373,11 +4402,11 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStre
 			record.SampleIssues = sampleIssues.String
 		}
 		if avgFrameJitterMs.Valid {
-			v := float32(avgFrameJitterMs.Float64)
+			v := sanitizeFloat32(avgFrameJitterMs.Float64)
 			record.AvgFrameJitterMs = &v
 		}
 		if maxFrameJitterMs.Valid {
-			v := float32(maxFrameJitterMs.Float64)
+			v := sanitizeFloat32(maxFrameJitterMs.Float64)
 			record.MaxFrameJitterMs = &v
 		}
 
@@ -4503,17 +4532,17 @@ func (s *PeriscopeServer) GetClientQoeSummary(ctx context.Context, req *pb.GetCl
 	}
 
 	summary := &pb.ClientQoeSummary{
-		AvgBandwidthIn:      avgBwIn,
-		AvgBandwidthOut:     avgBwOut,
-		AvgConnectionTime:   avgConnTime,
+		AvgBandwidthIn:      sanitizeFloat64(avgBwIn),
+		AvgBandwidthOut:     sanitizeFloat64(avgBwOut),
+		AvgConnectionTime:   sanitizeFloat64(avgConnTime),
 		TotalActiveSessions: totalSessions,
 	}
 	if avgPktLoss.Valid {
-		v := avgPktLoss.Float64
+		v := sanitizeFloat64(avgPktLoss.Float64)
 		summary.AvgPacketLossRate = &v
 	}
 	if peakPktLoss.Valid {
-		v := peakPktLoss.Float64
+		v := sanitizeFloat64(peakPktLoss.Float64)
 		summary.PeakPacketLossRate = &v
 	}
 

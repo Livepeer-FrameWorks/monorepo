@@ -1,0 +1,144 @@
+---
+title: "Clips"
+description: "Extract time-range clips from live streams and DVR recordings, then play them back through the standard player."
+sidebar:
+  order: 5
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+A clip is a bounded time range from a live stream or DVR recording, materialized as an independently playable HLS asset. Clips share their source stream's playback infrastructure — the same player, the same access policy — but get their own playback ID so you can share, embed, or reference them without exposing the parent stream.
+
+For always-on streams, clips are the lightweight publishing layer on top of the 24/7 DVR archive: keep the full timeline for compliance or replay, then carve out the moments worth sharing.
+
+<Aside type="note">
+  Clips are billed as part of your storage usage and respect retention policy alongside DVR
+  recordings and VOD assets. See [storage-and-retention](/builders/storage-and-retention) for
+  retention semantics.
+</Aside>
+
+## Creating a clip
+
+Clips are created against a live or recently-completed stream. You provide a time range (typically expressed as `startMs` / `endMs` epoch ms) and a name.
+
+```graphql
+mutation CreateClip {
+  createClip(
+    input: {
+      streamId: "<stream global id>"
+      name: "Highlight reel"
+      startMs: 1700000000000
+      endMs: 1700000060000
+    }
+  ) {
+    __typename
+    ... on Clip {
+      id
+      clipId
+      name
+      playbackId
+      startMs
+      endMs
+      createdAt
+    }
+    ... on ValidationError {
+      field
+      message
+    }
+  }
+}
+```
+
+The returned `playbackId` is what you hand to the player or pass to `resolveViewerEndpoint`. Clip materialization runs asynchronously — the resource exists immediately but the playable manifest may take a few seconds to appear depending on segment availability.
+
+### Lifecycle subscription
+
+Subscribe to `liveClipLifecycle` for real-time creation / readiness / failure events on clips you own:
+
+```graphql
+subscription {
+  liveClipLifecycle {
+    clipId
+    status
+    error
+  }
+}
+```
+
+## Listing clips
+
+Clips paginate via the standard Relay-style `clipsConnection`. Filter by `streamId` to scope to a single source stream, or omit it to list all clips for the tenant.
+
+```graphql
+query MyClips {
+  clipsConnection(page: { first: 20 }) {
+    edges {
+      node {
+        id
+        clipId
+        name
+        playbackId
+        startMs
+        endMs
+        createdAt
+        expiresAt
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
+  }
+}
+```
+
+Use `clip(id: ID!)` to fetch a single clip by global ID.
+
+## Playing back a clip
+
+Clips share the playback resolution path with streams and VOD assets. Hand the clip's `playbackId` to the [Player SDK](/builders/playback) or call `resolveViewerEndpoint` directly:
+
+```graphql
+query ResolveClip {
+  resolveViewerEndpoint(input: { playbackId: "<clip playback id>" }) {
+    __typename
+    ... on PlaybackEndpoint {
+      hlsUrl
+      lowLatencyHlsUrl
+      protocol
+    }
+  }
+}
+```
+
+Access policy attached to the parent stream (public / JWT / webhook — see [playback-access-control](/builders/playback-access-control)) carries through to clips by default.
+
+## Deleting a clip
+
+```graphql
+mutation {
+  deleteClip(id: "<clip global id>") {
+    __typename
+    ... on DeleteClipResult {
+      deleted
+    }
+    ... on ValidationError {
+      field
+      message
+    }
+  }
+}
+```
+
+Deletion is immediate and irreversible. The clip's segments are removed from storage; the `Clip` row stays in your account briefly for audit before being garbage-collected.
+
+## Agents (MCP)
+
+Agents manage clips through the MCP server using `create_clip` and `delete_clip` tools. See [agents/mcp](/agents/mcp) for the tool catalog.
+
+## Related
+
+- [Recordings, Clips & VOD](/builders/recordings) — DVR and VOD context
+- [Playback access control](/builders/playback-access-control) — how clip access policy works
+- [Storage & retention](/builders/storage-and-retention) — retention behavior across DVR / clip / VOD

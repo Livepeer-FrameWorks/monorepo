@@ -700,63 +700,6 @@ await controller.stopStreaming();`,
           </div>
         </div>
 
-        <!-- Platform Features -->
-        <div class="slab col-span-full">
-          <div class="slab-header">
-            <div class="flex items-center gap-2">
-              <ZapIcon class="w-4 h-4 text-info" />
-              <h3>Platform Features</h3>
-            </div>
-          </div>
-          <div class="slab-body--padded">
-            <p class="text-sm text-muted-foreground mb-4">
-              Built-in features available without an extra SDK — exposed via the GraphQL API and the
-              Player SDK.
-            </p>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Button
-                variant="ghost"
-                href={`${docsBaseUrl}/builders/multistreaming`}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="h-auto w-full justify-start whitespace-normal flex items-start gap-3 p-4 border border-border/50 rounded-lg hover:border-primary/50 hover:bg-muted/30 transition-colors group"
-              >
-                <RadioIcon class="w-5 h-5 text-muted-foreground group-hover:text-primary mt-0.5" />
-                <div class="flex-1">
-                  <div class="font-medium text-foreground group-hover:text-primary">
-                    Multistreaming
-                  </div>
-                  <div class="text-xs text-muted-foreground mt-1">
-                    Push one stream to YouTube, Twitch, or any RTMP target.
-                  </div>
-                </div>
-                <ExternalLinkIcon class="w-4 h-4 text-muted-foreground" />
-              </Button>
-
-              <Button
-                variant="ghost"
-                href={`${docsBaseUrl}/builders/thumbnails-and-previews`}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="h-auto w-full justify-start whitespace-normal flex items-start gap-3 p-4 border border-border/50 rounded-lg hover:border-primary/50 hover:bg-muted/30 transition-colors group"
-              >
-                <PackageIcon
-                  class="w-5 h-5 text-muted-foreground group-hover:text-primary mt-0.5"
-                />
-                <div class="flex-1">
-                  <div class="font-medium text-foreground group-hover:text-primary">
-                    Thumbnails &amp; Previews
-                  </div>
-                  <div class="text-xs text-muted-foreground mt-1">
-                    Animated sprite previews and poster frames, auto-detected by the player.
-                  </div>
-                </div>
-                <ExternalLinkIcon class="w-4 h-4 text-muted-foreground" />
-              </Button>
-            </div>
-          </div>
-        </div>
-
         <!-- Resources -->
         <div class="slab col-span-full">
           <div class="slab-header">

@@ -54,8 +54,8 @@ func newTestStorageManager(t *testing.T) *StorageManager {
 		requestFreezePermission: func(_ context.Context, _, _, _ string, _ uint64, _ []string) (*pb.FreezePermissionResponse, error) {
 			return nil, fmt.Errorf("not connected")
 		},
-		sendSyncComplete:     func(_, _, _, _ string, _ uint64, _ string, _ bool) error { return nil },
-		sendFreezeComplete:   func(_, _, _, _ string, _ uint64, _ string) error { return nil },
+		sendSyncComplete:     func(_, _, _, _ string, _ uint64, _ string, _ bool, _ bool) error { return nil },
+		sendFreezeComplete:   func(_, _, _, _ string, _ uint64, _ string, _ bool) error { return nil },
 		sendFreezeProgress:   func(_, _ string, _ uint32, _ uint64) error { return nil },
 		sendStorageLifecycle: func(_ *pb.StorageLifecycleData) error { return nil },
 		sendDefrostComplete:  func(_, _, _, _ string, _ uint64, _ string) error { return nil },
@@ -291,7 +291,7 @@ func TestHandleFreezeRequest_ClipUpload(t *testing.T) {
 	sm.presignedClient = fake
 
 	var syncStatus string
-	sm.sendSyncComplete = func(_, _, status, _ string, _ uint64, _ string, _ bool) error {
+	sm.sendSyncComplete = func(_, _, status, _ string, _ uint64, _ string, _ bool, _ bool) error {
 		syncStatus = status
 		return nil
 	}
@@ -325,7 +325,7 @@ func TestHandleFreezeRequest_DVRWithSegments(t *testing.T) {
 	sm.presignedClient = fake
 
 	var syncStatus string
-	sm.sendSyncComplete = func(_, _, status, _ string, _ uint64, _ string, _ bool) error {
+	sm.sendSyncComplete = func(_, _, status, _ string, _ uint64, _ string, _ bool, _ bool) error {
 		syncStatus = status
 		return nil
 	}
@@ -391,7 +391,7 @@ func TestFreezeAsset_SkipUpload(t *testing.T) {
 			SkipUpload: true,
 		}, nil
 	}
-	sm.sendSyncComplete = func(_, _, status, _ string, _ uint64, _ string, _ bool) error {
+	sm.sendSyncComplete = func(_, _, status, _ string, _ uint64, _ string, _ bool, _ bool) error {
 		syncStatus = status
 		return nil
 	}
@@ -457,7 +457,7 @@ func TestUploadAsset_ClipWithDtsh(t *testing.T) {
 	sm.presignedClient = fake
 
 	var dtshIncluded bool
-	sm.sendSyncComplete = func(_, _, _, _ string, _ uint64, _ string, dtsh bool) error {
+	sm.sendSyncComplete = func(_, _, _, _ string, _ uint64, _ string, dtsh bool, _ bool) error {
 		dtshIncluded = dtsh
 		return nil
 	}

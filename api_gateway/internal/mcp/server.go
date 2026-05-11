@@ -157,6 +157,21 @@ func (s *Server) registerTools() {
 	// DVR tools (require billing + balance)
 	tools.RegisterDVRTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
 
+	// Media retention tools (cost-affecting; storage policy + per-asset overrides)
+	tools.RegisterRetentionTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
+
+	// Playback access tester (sensitive; accepts JWTs, may fire webhooks)
+	tools.RegisterPlaybackAccessTestTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
+
+	// Playback auth management (sensitive; create_signing_key returns one-shot private material)
+	tools.RegisterPlaybackAuthTools(s.mcpServer, s.serviceClients, s.resolver, s.logger)
+
+	// Multistream push targets (cost-affecting)
+	tools.RegisterMultistreamTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
+
+	// Cluster invite + subscription request flows
+	tools.RegisterClusterSubscriptionTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
+
 	// Playback tools (free)
 	tools.RegisterPlaybackTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
 

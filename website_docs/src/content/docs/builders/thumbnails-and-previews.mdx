@@ -5,7 +5,7 @@ description: Poster frames and animated sprite previews for live streams, DVR re
 
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-FrameWorks generates two thumbnail assets for every stream and recording: a high-resolution **poster frame** and a low-resolution **sprite sheet** with synchronized VTT cues. Both are served by **Chandler**, the regional static-asset cache, and are exposed in the GraphQL playback metadata.
+FrameWorks generates preview assets for streams, DVR recordings, clips, and VOD: a high-resolution **poster frame** and a low-resolution **sprite sheet** with synchronized VTT cues. Both are served by **Chandler**, the regional static-asset cache, and are exposed in playback metadata so your own app can use the same assets as the FrameWorks player.
 
 ## What you get
 
@@ -43,6 +43,46 @@ https://chandler.example.com/assets/abc123def456/sprite.vtt
 
 The Chandler hostname for your environment is returned by the GraphQL playback resolver — you don't need to hardcode it.
 
+For grid or library views, fetch the Chandler host once from `streamingConfig`, then combine it with the asset IDs returned by your list queries:
+
+```graphql
+query LibraryPreviewInputs {
+  streamingConfig {
+    chandlerDomain
+  }
+  streamsConnection(page: { first: 50 }) {
+    nodes {
+      streamId
+      playbackId
+      name
+    }
+  }
+  clipsConnection(page: { first: 50 }) {
+    nodes {
+      clipHash
+      playbackId
+      title
+    }
+  }
+  dvrRecordingsConnection(page: { first: 50 }) {
+    nodes {
+      dvrHash
+      playbackId
+      title
+    }
+  }
+  vodAssetsConnection(page: { first: 50 }) {
+    nodes {
+      artifactHash
+      playbackId
+      title
+    }
+  }
+}
+```
+
+Use `https://{chandlerDomain}/assets/{assetId}/poster.jpg`, `sprite.jpg`, and `sprite.vtt`. `assetId` is `streamId` for live streams, `clipHash` for clips, `dvrHash` for DVR recordings, and `artifactHash` for VOD.
+
 ## In the FrameWorks Player
 
 Sprite hover-scrub is **automatic**. When the stream has thumbnail processing enabled, the player auto-detects the sprite track from MistServer metadata and shows tiles on the seek bar during hover. No configuration needed for live or VOD content.
@@ -61,24 +101,47 @@ See [Playback Advanced — Thumbnails](/builders/playback-advanced/#thumbnails) 
 
 ## In the GraphQL API
 
-The playback metadata returned by the gateway includes a `thumbnailAssets` field:
+Resolve playback metadata for any playable asset and read the Chandler URLs from `thumbnailAssets`:
 
 ```graphql
-{
-  poster_url # Full-resolution single-frame JPEG
-  sprite_jpg_url # Sprite sheet JPEG (10×10 grid)
-  sprite_vtt_url # VTT cues with #xywh= fragments
-  asset_key # streamId for live, artifactHash for DVR/clip
+query PreviewAssets($contentId: String!) {
+  resolveViewerEndpoint(contentId: $contentId) {
+    metadata {
+      thumbnailAssets {
+        posterUrl
+        spriteJpgUrl
+        spriteVttUrl
+        assetKey
+      }
+    }
+  }
 }
 ```
 
 These URLs are pre-resolved against the regional Chandler — use them directly without further construction.
 
+The single-asset resolver is best when you are about to play one item. For large library pages, use the list-query pattern above so you do not issue one playback-resolution request per card.
+
+## Agent tools
+
+Agents can call `resolve_playback_endpoint` with the same playback ID, stream ID, or Relay ID they use for viewer playback. The result includes `thumbnail_assets` when poster and sprite previews are available:
+
+```json
+{
+  "thumbnail_assets": {
+    "poster_url": "https://chandler.example.com/assets/abc123/poster.jpg",
+    "sprite_jpg_url": "https://chandler.example.com/assets/abc123/sprite.jpg",
+    "sprite_vtt_url": "https://chandler.example.com/assets/abc123/sprite.vtt",
+    "asset_key": "abc123"
+  }
+}
+```
+
 ## Building your own hover-scrub UI
 
 If you're not using the FrameWorks Player, you can render hover-scrub previews yourself by parsing `sprite.vtt`. Each cue points into `sprite.jpg` with a `#xywh=x,y,width,height` fragment:
 
-```vtt
+```text
 WEBVTT
 
 00:00:00.000 --> 00:00:10.000

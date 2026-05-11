@@ -3,8 +3,11 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 
+	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/mcp/preflight"
@@ -19,6 +22,26 @@ import (
 
 // RegisterAccountTools registers account-related MCP tools.
 func RegisterAccountTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        "get_tenant_settings",
+			Description: "Read the current tenant's account identity and routing settings. Agents can use this to inspect wallet-provisioned accounts before changing streams, billing, or edge routing.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, args GetTenantSettingsInput) (*mcp.CallToolResult, any, error) {
+			return handleGetTenantSettings(ctx, resolver, logger)
+		},
+	)
+
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        "update_tenant_settings",
+			Description: "Update the current tenant's account identity and routing settings. Supports tenant name, preferred primary cluster, and deployment model.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, args UpdateTenantSettingsInput) (*mcp.CallToolResult, any, error) {
+			return handleUpdateTenantSettings(ctx, args, resolver, logger)
+		},
+	)
+
 	// update_billing_details - Always allowed
 	mcp.AddTool(server,
 		&mcp.Tool{
@@ -30,6 +53,8 @@ func RegisterAccountTools(server *mcp.Server, clients *clients.ServiceClients, r
 		},
 	)
 }
+
+type GetTenantSettingsInput struct{}
 
 // UpdateBillingDetailsInput represents input for update_billing_details tool.
 type UpdateBillingDetailsInput struct {
@@ -43,11 +68,104 @@ type UpdateBillingDetailsInput struct {
 	Country    string `json:"country" jsonschema:"required" jsonschema_description:"Country code (ISO 3166-1 alpha-2)"`
 }
 
+type UpdateTenantSettingsInput struct {
+	Name             string `json:"name,omitempty" jsonschema_description:"Tenant display name"`
+	PrimaryClusterID string `json:"primary_cluster_id,omitempty" jsonschema_description:"Preferred primary cluster for ingest/routing decisions"`
+	DeploymentModel  string `json:"deployment_model,omitempty" jsonschema_description:"Deployment model, for example shared, dedicated, or self_hosted"`
+}
+
 // BillingDetailsResult represents the result of updating billing details.
 type BillingDetailsResult struct {
 	Success         bool   `json:"success"`
 	DetailsComplete bool   `json:"details_complete"`
 	Message         string `json:"message"`
+}
+
+type TenantSettingsResult struct {
+	TenantID              string `json:"tenant_id"`
+	Name                  string `json:"name"`
+	DeploymentModel       string `json:"deployment_model"`
+	DeploymentTier        string `json:"deployment_tier"`
+	PrimaryDeploymentTier string `json:"primary_deployment_tier"`
+	PrimaryClusterID      string `json:"primary_cluster_id,omitempty"`
+	OfficialClusterID     string `json:"official_cluster_id,omitempty"`
+	IsActive              bool   `json:"is_active"`
+	Message               string `json:"message"`
+}
+
+func (r TenantSettingsResult) String() string {
+	if r.Message != "" {
+		return r.Message
+	}
+	return fmt.Sprintf("Tenant %s (%s)", r.Name, r.TenantID)
+}
+
+func handleGetTenantSettings(ctx context.Context, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+	if ctxkeys.GetTenantID(ctx) == "" {
+		return nil, nil, mcperrors.AuthRequired()
+	}
+	tenant, err := resolver.DoGetTenant(ctx)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to read tenant settings")
+		return toolError(fmt.Sprintf("Failed to read tenant settings: %v", err))
+	}
+	return toolSuccess(tenantSettingsResult(tenant, "Tenant settings loaded."))
+}
+
+func handleUpdateTenantSettings(ctx context.Context, args UpdateTenantSettingsInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+	if ctxkeys.GetTenantID(ctx) == "" {
+		return nil, nil, mcperrors.AuthRequired()
+	}
+
+	name := strings.TrimSpace(args.Name)
+	primaryClusterID := strings.TrimSpace(args.PrimaryClusterID)
+	deploymentModel := strings.TrimSpace(args.DeploymentModel)
+	if name == "" && primaryClusterID == "" && deploymentModel == "" {
+		return toolError("Provide at least one of name, primary_cluster_id, or deployment_model")
+	}
+
+	input := model.UpdateTenantInput{}
+	if name != "" {
+		input.Name = &name
+	}
+	settings := map[string]string{}
+	if primaryClusterID != "" {
+		settings["primaryClusterId"] = primaryClusterID
+	}
+	if deploymentModel != "" {
+		settings["deploymentModel"] = deploymentModel
+	}
+	if len(settings) > 0 {
+		raw, err := json.Marshal(settings)
+		if err != nil {
+			return toolError(fmt.Sprintf("Failed to encode tenant settings: %v", err))
+		}
+		settingsJSON := string(raw)
+		input.Settings = &settingsJSON
+	}
+
+	tenant, err := resolver.DoUpdateTenant(ctx, input)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to update tenant settings")
+		return toolError(fmt.Sprintf("Failed to update tenant settings: %v", err))
+	}
+	return toolSuccess(tenantSettingsResult(tenant, "Tenant settings updated."))
+}
+
+func tenantSettingsResult(tenant *pb.Tenant, message string) TenantSettingsResult {
+	result := TenantSettingsResult{Message: message}
+	if tenant == nil {
+		return result
+	}
+	result.TenantID = tenant.GetId()
+	result.Name = tenant.GetName()
+	result.DeploymentModel = tenant.GetDeploymentModel()
+	result.DeploymentTier = tenant.GetDeploymentTier()
+	result.PrimaryDeploymentTier = tenant.GetPrimaryDeploymentTier()
+	result.PrimaryClusterID = tenant.GetPrimaryClusterId()
+	result.OfficialClusterID = tenant.GetOfficialClusterId()
+	result.IsActive = tenant.GetIsActive()
+	return result
 }
 
 func handleUpdateBillingDetails(ctx context.Context, args UpdateBillingDetailsInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {

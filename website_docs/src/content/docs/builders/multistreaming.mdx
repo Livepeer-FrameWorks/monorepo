@@ -9,6 +9,9 @@ import { Aside, LinkCard, CardGrid } from "@astrojs/starlight/components";
 
 Multistreaming lets you push a single live broadcast to multiple external platforms at once. When your stream goes live, FrameWorks automatically pushes to every enabled target — no third-party restreaming service required.
 
+That keeps the operational source of truth in one place: one ingest, one set of playback policies,
+one DVR archive, one analytics surface, and multiple distribution endpoints.
+
 <Aside type="tip">
   Multistreaming uses native MistServer push, so FrameWorks does not add a re-encoding step. Each
   target receives the source bitstream from the origin node. Destination platforms can still add

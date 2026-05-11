@@ -72,9 +72,11 @@ The active shape exists so a viewer who joins a 24/7 stream replay _while it's s
 
 Foghorn owns three triggers:
 
-1. **Active current-chapter rolling update** (chapter sweeper, every 60s). For each active DVR with a chapter mode set on the artifact, identify the current chapter and re-materialize its EVENT-shaped canonical manifest plus the player-facing `.playback.m3u8` manifest from the ledger. Debounced — skip if `last_rebuilt_at` is younger than `RebuildIntervalSeconds`.
-2. **Boundary close** (chapter sweeper, policy change, or `FinalizeDVR`). When the current chapter closes, Foghorn writes one final VOD manifest with `#EXT-X-ENDLIST`, writes the corresponding playback manifest, flips `is_current=false`, then the sweeper materializes the next current chapter as EVENT if the DVR is still recording.
+1. **Active current-chapter rolling update** (chapter sweeper, every 60s). For each active DVR with a chapter mode set on the artifact, identify the current chapter and re-materialize its EVENT-shaped canonical manifest from the ledger. Debounced — skip if `last_rebuilt_at` is younger than `RebuildIntervalSeconds`.
+2. **Boundary close** (chapter sweeper, policy change, or `FinalizeDVR`). When the current chapter closes, Foghorn writes one final VOD manifest with `#EXT-X-ENDLIST`, flips `is_current=false`, then the sweeper materializes the next current chapter as EVENT if the DVR is still recording.
 3. **Backfill / cache-on-request** (chapter retrieval RPC). Policy change or chapter request for a historical range that isn't in `foghorn.dvr_chapters` triggers materialization on demand.
+
+Viewer playback resolves `dvr+{chapter_id}` through the normal viewer endpoint path. The selected edge defrosts the bounded chapter into `{artifact}/chapters/{chapter_id}.m3u8` and the shared `{artifact}/segments/` bucket, then MistServer serves the chapter through the same auth, routing, analytics, and billing path as other playback.
 
 `has_gaps` invalidation: when a `lost_local` row arrives late (sidecar reports `DVRSegmentDropped(was_uploaded=false)` after the chapter was already finalized), Foghorn flips `has_gaps=true` and drops `last_rebuilt_at`; the sweeper rebuilds dirty materialized chapters in bounded batches so the cached manifest gets `#EXT-X-GAP` markers (HLS v8). Bounded via `idx_foghorn_dvr_chapters_overlap`.
 
@@ -84,16 +86,16 @@ A DVR artifact may run indefinitely. **All operational paths must be bounded.** 
 
 Concrete checks:
 
-| Path                                 | Bound                                                                                                               |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| Foghorn ledger queries               | always `WHERE artifact_hash = $1 AND media_start_ms < $end AND media_end_ms > $start`, index-backed                 |
-| Chapter materialization              | per-chapter range query                                                                                             |
-| Federation `PrepareArtifact` for DVR | callers pass `dvr_start_ms`/`dvr_end_ms`                                                                            |
-| Sidecar restart reconciliation       | bounded by _local disk inventory_: walks `dvr/` tree, batches names into pages of 500 to `RestoreLocalSegmentIndex` |
-| `FinalizeDVR`                        | bounded retry of pending/failed_upload via keyset cursor; classification via `COUNT(*) FILTER` aggregates only      |
-| Retention soft-delete                | acts on terminal artifacts only                                                                                     |
-| Chapter listing for player UI        | paginated; default page size 200                                                                                    |
-| Webapp/UI                            | "play full DVR" defaults to a chapter index, not a full-archive manifest                                            |
+| Path                           | Bound                                                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| Foghorn ledger queries         | always `WHERE artifact_hash = $1 AND media_start_ms < $end AND media_end_ms > $start`, index-backed                 |
+| Chapter materialization        | per-chapter range query                                                                                             |
+| Federation for DVR playback    | Commodore routes `dvrChapter` to the origin Foghorn; edges play `dvr+{chapter_id}` through chapter-bounded defrost  |
+| Sidecar restart reconciliation | bounded by _local disk inventory_: walks `dvr/` tree, batches names into pages of 500 to `RestoreLocalSegmentIndex` |
+| `FinalizeDVR`                  | bounded retry of pending/failed_upload via keyset cursor; classification via `COUNT(*) FILTER` aggregates only      |
+| Retention soft-delete          | acts on terminal artifacts only                                                                                     |
+| Chapter listing for player UI  | paginated; default page size 200                                                                                    |
+| Webapp/UI                      | "play full DVR" defaults to a chapter index, not a full-archive manifest                                            |
 
 `dvr_segments` table sizing: 1 year × 6s segments × 1 stream ≈ 5.26M rows. At 100 concurrent always-on streams, ~526M rows. Postgres handles it with the existing indexes (`(artifact_hash, sequence)` unique; `(artifact_hash, media_start_ms, sequence)` for manifest order; partial on `(artifact_hash, status, media_end_ms) WHERE status='uploaded'` for eviction). Partitioning is not required for this implementation; if table bloat or vacuum cost becomes material, use hash partitioning by `artifact_hash`. The schema is partition-compatible.
 
@@ -110,9 +112,9 @@ Concrete checks:
 
 - Owns `foghorn.dvr_segments` (per-segment ledger) and `foghorn.dvr_chapters` (chapter materialization metadata).
 - Mints presigned PUT URLs for segment uploads (`RecordDVRSegment` ControlMessage).
-- Generates and uploads canonical chapter manifests and player-facing playback manifests (the chapter generator + sweeper).
+- Generates and uploads canonical chapter manifests (the chapter generator + sweeper).
 - Drives `FinalizeDVR`: bounded retry of pending uploads, classification via aggregate counts, retention computation from the persisted `dvr_retention_days` column, close the active current chapter.
-- Federation: `PrepareArtifact` for DVR requires a bounded range, enumerates segments via `ListDVRSegmentsForRange` (ledger-driven), and surfaces `lost_local` rows with empty presigned URLs so the consumer renders `#EXT-X-GAP`. Public replay goes through the GraphQL chapter API, which routes to the DVR's origin Foghorn.
+- Federation: public DVR replay goes through the GraphQL chapter API. Commodore validates tenant ownership, routes the request to the DVR's origin Foghorn, and returns `dvr+{chapter_id}`. The selected playback edge asks the origin Foghorn to defrost only that bounded chapter; whole-DVR `PrepareArtifact` is rejected.
 
 ## Stream session semantics
 
@@ -142,7 +144,7 @@ Mist's `append=1 + noendlist=1` keeps the local rolling playlist appendable acro
 | 10  | Chapter manifest URIs resolve to 404                 | **Fixed.** `BuildVODOptions.SegmentURIPrefix` lets the chapter generator emit `../segments/{name}` (chapter playlists live at `chapters/{chapter_id}.m3u8`). Default `segments/` keeps non-chapter manifests unchanged.                                             |
 | 11  | DefrostDVR ignores `chapter_segments`                | **Fixed.** `defrostDVRFromChapterRefs` is the chapter-aware path; reads per-segment metadata from the request, builds the local manifest with gaps rendered, downloads only `uploaded` segments, refcounts via `LocalSegmentIndex.AcquireView`/`ReleaseView`.       |
 | 12  | Retention still start-time + hardcoded 30d           | **Fixed.** `Foghorn.StartDVR` no longer computes `retentionUntil` at start. Live window resolved without retention clamp. `dvr_retention_days` snapshotted from `DVRPolicy.recording_retention_days` (Purser tier entitlement). FinalizeDVR sets `retention_until`. |
-| 13  | Local PrepareArtifact DVR path still S3-lists        | **Fixed.** Whole-archive DVR defrost is rejected; bounded chapter playback goes through `dvrChapter`. Federation `PrepareArtifact` accepts DVR only when a bounded range is present and uses the ledger.                                                            |
+| 13  | Local PrepareArtifact DVR path still S3-lists        | **Fixed.** Whole-archive DVR defrost is rejected; bounded chapter playback goes through `dvrChapter` and `dvr+{chapter_id}` edge routing. Federation `PrepareArtifact` rejects DVR rather than exposing a second DVR playback surface.                              |
 | 14  | LocalSegmentIndex unused for eviction                | **Fixed.** `MarkUploaded` called on every successful upload (RECORDING_SEGMENT + reconciliation paths); `EvictionEligible` consulted before deletion; chapter playback brackets segments with `AcquireView`/`ReleaseView`; `Forget` on eviction.                    |
 | 15  | No HTTP/gateway routes for chapter RPCs              | **Fixed.** Public path: api_gateway (GraphQL) → Commodore (validates tenant ownership) → Foghorn (owns ledger + materialization). Three GraphQL ops: `dvrChapter`, `dvrChapters`, `setDVRChapterPolicy`. Houdini operations included for the webapp.                |
 

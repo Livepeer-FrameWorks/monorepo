@@ -1,0 +1,84 @@
+---
+title: "Node mode"
+description: "Drain, maintain, and restore edge nodes without stopping the whole stack."
+sidebar:
+  order: 5
+---
+
+Node mode is the operator switch for taking an edge node out of routing while keeping the node enrolled and observable. Use it before maintenance, kernel tuning, local network work, or hardware moves.
+
+## Modes
+
+| Mode          | Routing behavior                                                                    | Use when                                             |
+| ------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `NORMAL`      | The node accepts new eligible sessions.                                             | The node is healthy and should receive traffic.      |
+| `DRAINING`    | Foghorn steers new sessions away from the node. Existing work can finish naturally. | You want to bleed load before maintenance.           |
+| `MAINTENANCE` | Foghorn treats the node as unavailable for routing.                                 | The node should be removed from service immediately. |
+
+The authoritative mode lives in Foghorn's node-health snapshot. Bridge exposes it through GraphQL as `InfrastructureNode.effectiveMode`, and the webapp shows the same value on `/nodes/:id`.
+
+## Change Mode
+
+```graphql
+mutation DrainNode {
+  setNodeMode(input: { nodeId: "<node-id>", mode: DRAINING, reason: "router replacement" }) {
+    ... on InfrastructureNode {
+      nodeId
+      effectiveMode
+      routingImpactPreview {
+        activeStreams
+        activeViewers
+      }
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
+    }
+  }
+}
+```
+
+Set `mode: NORMAL` to restore the node after the work is complete.
+
+## Current Traffic Snapshot
+
+`routingImpactPreview` returns the current number of live streams and viewers served by the node. It is not a redistribution simulation; it is the operator-facing load snapshot you should check before draining or entering maintenance.
+
+```graphql
+query NodeMode {
+  node(id: "<node-id>") {
+    ... on InfrastructureNode {
+      nodeId
+      effectiveMode
+      routingImpactPreview {
+        activeStreams
+        activeViewers
+      }
+    }
+  }
+}
+```
+
+## CLI
+
+The edge CLI exposes the same operational mode locally:
+
+```bash
+frameworks edge mode
+frameworks edge mode draining --reason maintenance
+frameworks edge mode normal
+```
+
+Use the webapp or GraphQL when you are operating from the control plane. Use the CLI when you are already on the edge host.
+
+## Audit Trail
+
+Always pass a specific `reason` for planned work. When omitted, Bridge records the calling user identity so the change is still attributable, but an explicit maintenance reason is more useful during incident review.
+
+See also: [Node CLI](/hybrid/node-cli) and [Running edge nodes](/hybrid/edge-nodes).

@@ -80,19 +80,34 @@ func processRecordDVRSegment(
 	s3Key := s3Prefix + "/segments/" + segmentName
 
 	// Insert ledger row first so eviction-decision queries see the segment
-	// even if the upload itself stalls or fails. ErrDVRSegmentTerminal is
-	// the only refusal: a DVR in finalizing/completed/failed state must
-	// not accept new segments.
+	// even if the upload itself stalls or fails. Live trigger writes reject
+	// terminal DVRs; startup reconciliation can opt in only after recovering
+	// timing from a local DVR manifest.
 	sequence, err := InsertDVRSegment(
 		ctx,
 		dvrHash, segmentName, s3Key,
 		req.GetMediaStartMs(), req.GetMediaEndMs(), req.GetDurationMs(),
+		req.GetRecoveryInsert(),
 	)
 	if err != nil {
 		reason := "insert_failed"
-		if errors.Is(err, ErrDVRSegmentTerminal) {
+		switch {
+		case errors.Is(err, ErrDVRSegmentTerminal):
 			reason = "dvr_terminal"
-		} else {
+		case errors.Is(err, ErrDVRSegmentTimingMismatch):
+			// Wrong file with the same name. Refuse to corrupt chapter
+			// placement. Sidecar logs unreconciliable and leaves the ledger
+			// alone.
+			reason = "timing_mismatch"
+			logger.WithFields(logging.Fields{
+				"dvr_hash":       dvrHash,
+				"segment_name":   segmentName,
+				"node_id":        nodeID,
+				"media_start_ms": req.GetMediaStartMs(),
+				"media_end_ms":   req.GetMediaEndMs(),
+				"duration_ms":    req.GetDurationMs(),
+			}).Warn("Refused DVR segment record: timing does not match ledger row")
+		default:
 			logger.WithError(err).WithFields(logging.Fields{
 				"dvr_hash":     dvrHash,
 				"segment_name": segmentName,

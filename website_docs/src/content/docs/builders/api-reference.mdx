@@ -107,8 +107,8 @@ mutation {
 The returned `streamKey` is secret and is used only for ingest. The returned `playbackId` is the
 public viewer identifier used by `/play` URLs and the FrameWorks Player.
 
-Pull-input streams are not created by GraphQL today. Operators provision them through
-`commodore.pull_streams` during bootstrap; see [Pull-input Streams](/builders/pull-streams).
+For pull-input streams, set `ingestMode: PULL` and provide `pullSource.sourceUri` in
+`CreateStreamInput`; see [Pull-input Streams](/builders/pull-streams).
 
 ### Get Stream Details
 

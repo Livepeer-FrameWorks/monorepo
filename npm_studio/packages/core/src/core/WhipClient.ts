@@ -819,16 +819,18 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
       }
 
       const candidates: Array<{ path: string | URL; label: string }> = [];
+      const sourceWorkerURL = (filename: string) =>
+        new URL(`../workers/${filename}`, import.meta.url);
 
       try {
-        const sourceModUrl = new URL("../workers/rtcTransform.worker.mod.js", import.meta.url);
+        const sourceModUrl = sourceWorkerURL("rtcTransform.worker.mod.js");
         candidates.push({ path: sourceModUrl, label: "import.meta.url source (.mod.js)" });
       } catch {
         // URL construction failed, continue.
       }
 
       try {
-        const sourceUrl = new URL("../workers/rtcTransform.worker.ts", import.meta.url);
+        const sourceUrl = sourceWorkerURL("rtcTransform.worker.ts");
         candidates.push({ path: sourceUrl, label: "import.meta.url source (.ts fallback)" });
       } catch {
         // URL construction failed, continue.

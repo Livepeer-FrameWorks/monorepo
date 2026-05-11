@@ -182,10 +182,12 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     // First-pass candidates relative to the current module URL.
     // Keep these as plain href strings so downstream app bundlers don't require static
     // worker-module graph resolution for the streamcrafter-core package internals.
+    const sourceWorkerURL = (filename: string) =>
+      new URL(`../workers/${filename}`, import.meta.url);
     const moduleRelativeCandidates = [
-      new URL("../workers/compositor.worker.mod.js", import.meta.url).href,
-      new URL("../workers/compositor.worker.js", import.meta.url).href,
-      new URL("../workers/compositor.worker.ts", import.meta.url).href,
+      sourceWorkerURL("compositor.worker.mod.js").href,
+      sourceWorkerURL("compositor.worker.js").href,
+      sourceWorkerURL("compositor.worker.ts").href,
       new URL("../../workers/compositor.worker.js", import.meta.url).href,
     ];
 

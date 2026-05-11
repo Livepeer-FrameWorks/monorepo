@@ -53,7 +53,10 @@ const PlayerInner: React.FC<PlayerProps> = ({
   const [skipDirection, setSkipDirection] = useState<SkipDirection>(null);
   const [activeTheme, setActiveTheme] = useState<FwThemePreset>(options?.theme ?? "default");
   const [activeLocale, setActiveLocale] = useState<FwLocale>(options?.locale ?? "en");
-  const t = useMemo(() => createTranslator({ locale: activeLocale }), [activeLocale]);
+  const t = useMemo(
+    () => createTranslator({ locale: activeLocale, translations: options?.translations }),
+    [activeLocale, options?.translations]
+  );
 
   // Error fade-out: keep showing the overlay briefly while it animates out
   const [displayedError, setDisplayedError] = useState<string | null>(null);
@@ -84,6 +87,8 @@ const PlayerInner: React.FC<PlayerProps> = ({
     mistUrl: options?.mistUrl,
     authToken: options?.authToken,
     playbackAuth: options?.playbackAuth,
+    locale: options?.locale,
+    translations: options?.translations,
     autoplay: options?.autoplay !== false,
     muted: options?.muted !== false,
     controls: options?.stockControls === true,
@@ -230,7 +235,7 @@ const PlayerInner: React.FC<PlayerProps> = ({
   // Render
   // ============================================================================
   return (
-    <I18nProvider locale={activeLocale}>
+    <I18nProvider locale={activeLocale} translations={options?.translations}>
       <PlayerProvider value={playerHook}>
         <ContextMenu>
           <ContextMenuTrigger asChild>
@@ -521,6 +526,7 @@ const PlayerInner: React.FC<PlayerProps> = ({
                         onToggleLoop={toggleLoop}
                         onJumpToLive={jumpToLive}
                         activeLocale={activeLocale}
+                        translations={options?.translations}
                         onLocaleChange={setActiveLocale}
                         thumbnailCues={state.thumbnailCues}
                       />

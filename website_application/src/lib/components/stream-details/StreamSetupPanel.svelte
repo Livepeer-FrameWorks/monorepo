@@ -16,6 +16,13 @@
       enabled: boolean;
       class: string;
     } | null;
+    recentPullSourceEvents?: Array<{
+      id: string;
+      internalName: string;
+      eventKind: string;
+      detail?: string | null;
+      createdAt?: string | null;
+    }> | null;
   }
 
   interface StreamKey {
@@ -99,6 +106,7 @@
   const TrashIcon = getIconComponent("Trash2");
   const LoaderIcon = getIconComponent("Loader");
   const LinkIcon = getIconComponent("Link");
+  const ActivityIcon = getIconComponent("Activity");
 </script>
 
 <div class="dashboard-grid border-t border-[hsl(var(--tn-fg-gutter)/0.3)]">
@@ -143,6 +151,36 @@
               <CopyIcon class="w-4 h-4" />
             {/if}
           </Button>
+        </div>
+        <div class="mt-4 border-t border-border/30 pt-4">
+          <div class="flex items-center gap-2 mb-2">
+            <ActivityIcon class="w-4 h-4 text-info" />
+            <h4 class="font-medium text-sm">Recent source resolution</h4>
+          </div>
+          {#if stream.recentPullSourceEvents?.length}
+            <div class="space-y-2">
+              {#each stream.recentPullSourceEvents as event (event.id)}
+                <div class="rounded-md border border-border/30 p-3 text-xs">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <Badge variant={event.eventKind === "resolved" ? "default" : "secondary"}>
+                      {event.eventKind}
+                    </Badge>
+                    <span class="text-muted-foreground">
+                      {event.createdAt ? formatDate(event.createdAt) : "Unknown time"}
+                    </span>
+                  </div>
+                  {#if event.detail}
+                    <p class="mt-2 text-muted-foreground break-all">{event.detail}</p>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="text-xs text-muted-foreground">
+              No resolution events yet. The next input start records whether the source resolved,
+              was disabled, or was blocked by policy.
+            </p>
+          {/if}
         </div>
       </div>
     </div>

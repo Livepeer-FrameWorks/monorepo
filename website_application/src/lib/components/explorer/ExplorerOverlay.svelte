@@ -111,13 +111,11 @@
   // Schema section collapse state (all expanded by default)
   let collapsedSections: SvelteSet<string> = new SvelteSet();
   function toggleSection(section: string) {
-    const newSet = new SvelteSet(collapsedSections);
-    if (newSet.has(section)) {
-      newSet.delete(section);
+    if (collapsedSections.has(section)) {
+      collapsedSections.delete(section);
     } else {
-      newSet.add(section);
+      collapsedSections.add(section);
     }
-    collapsedSections = newSet;
   }
 
   // Filter templates based on search

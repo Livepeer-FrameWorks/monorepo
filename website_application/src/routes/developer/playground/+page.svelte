@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { page } from "$app/stores";
   import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
@@ -9,9 +10,10 @@
   import { Button } from "$lib/components/ui/button";
 
   let isAuthenticated = $state(false);
-  // Placeholder for code examples - users should use their Developer API Token
   const authToken = "YOUR_API_TOKEN";
   let booted = $state(false);
+
+  const initialQuery = $derived($page.url.searchParams.get("query") ?? "");
 
   const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
@@ -100,7 +102,7 @@
     </div>
   {:else}
     <div class="flex-1 overflow-hidden">
-      <GraphQLExplorer {authToken} />
+      <GraphQLExplorer {authToken} {initialQuery} />
     </div>
   {/if}
 </div>

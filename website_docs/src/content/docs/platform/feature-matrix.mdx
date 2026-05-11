@@ -1,0 +1,99 @@
+---
+title: Platform capabilities
+description: What FrameWorks exposes across APIs, agents, dashboard workflows, and docs.
+---
+
+FrameWorks is built as a platform, not only a dashboard. The matrix shows which capabilities are available today and where you can use them: GraphQL API, MCP tools for agents, dashboard workflows, and developer/operator docs.
+
+## Why teams pick FrameWorks
+
+- **Sovereign deployment options** — run FrameWorks as SaaS, add your own edge clusters, or self-host the full stack without changing platforms.
+- **Complete live-video workflow** — ingest, playback, multistreaming, playback access control, 24/7 DVR, chapters, clips, VOD, thumbnails, and analytics in one control plane.
+- **Deep routing and QoE visibility** — see viewer routing, stream health, geography, quality, and node performance instead of treating delivery as a black box.
+- **Agent-native operations** — the dashboard, GraphQL API, and MCP tools expose the same platform controls for humans, automation, and AI agents.
+
+## Availability key
+
+- **Available** — ready to use today; availability can still depend on account tier, deployment, and configuration.
+- **Expanding** — the core capability is live and a specific surface or workflow is still being rounded out.
+- **Planned** — tracked on the [Roadmap](/roadmap), not represented as a shipped capability in this matrix.
+
+## Capability matrix
+
+### Account
+
+| Capability | Availability | Surfaces | What it unlocks |
+| --- | --- | --- | --- |
+| **Tenant settings** | Expanding | API, Agents (MCP), Dashboard, Docs | Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle. |
+
+### Agents
+
+| Capability | Availability | Surfaces | What it unlocks |
+| --- | --- | --- | --- |
+| **Skipper (in-app consultant agent)** | Expanding | API, Agents (MCP), Dashboard, Docs | Conversational platform agent for support and investigations. |
+
+### Analytics
+
+| Capability | Availability | Surfaces | What it unlocks |
+| --- | --- | --- | --- |
+| **Analytics** | Expanding | API, Agents (MCP), Dashboard, Docs | Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and expanding QoE diagnostics. |
+
+### Billing
+
+| Capability | Availability | Surfaces | What it unlocks |
+| --- | --- | --- | --- |
+| **Billing & prepaid balance** | Available | API, Agents (MCP), Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
+
+### Developer
+
+| Capability | Availability | Surfaces | What it unlocks |
+| --- | --- | --- | --- |
+| **Agents (MCP server)** | Available | Agents (MCP), Dashboard, Docs | Model Context Protocol server exposing FrameWorks operations to agents. |
+| **Developer API tokens** | Available | API, Dashboard, Docs | Long-lived API tokens for SDK / CI use. |
+| **GraphQL playground** | Available | Dashboard, Docs | Interactive GraphQL explorer wired to the live schema. |
+| **Signing keys** | Available | API, Agents (MCP), Dashboard, Docs | ES256 keypairs for signing playback JWTs. Private material returned once on creation. |
+| **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. |
+
+### Infrastructure
+
+| Capability | Availability | Surfaces | What it unlocks |
+| --- | --- | --- | --- |
+| **Cluster invites** | Available | API, Agents (MCP), Dashboard, Docs | Direct invites granting another tenant access to a cluster. |
+| **Cluster subscription requests** | Available | API, Agents (MCP), Dashboard, Docs | Tenant-requested subscription to a cluster, requiring operator approval. |
+| **Edge clusters** | Available | API, Agents (MCP), Dashboard, Docs | Tenant-owned edge clusters with bootstrap and node enrollment. |
+| **Enrollment / bootstrap tokens** | Available | API, Agents (MCP), Dashboard, Docs | One-shot tokens used to enroll new edge nodes into a cluster. |
+| **Federated network status** | Available | API, Dashboard, Docs | Cross-cluster routing visibility and orchestrator vantage points. |
+| **Node mode (drain / maintenance)** | Available | API, Agents (MCP), Dashboard, Docs | Operator controls to drain a node, put it in maintenance, or restore it to active service. |
+| **Nodes (edge / ingest / playback)** | Available | API, Agents (MCP), Dashboard, Docs | Per-node health, info, and discovery. |
+| **Cluster marketplace** | Expanding | API, Agents (MCP), Dashboard, Docs | Browse listed clusters and manage subscriptions; vetted third-party marketplace operations are still being rounded out. |
+| **Managed DNS and cluster domains** | Expanding | API, Docs | Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery. |
+
+### Playback
+
+| Capability | Availability | Surfaces | What it unlocks |
+| --- | --- | --- | --- |
+| **Playback** | Available | API, Agents (MCP), Dashboard, Docs | Resolve a viewer or ingest endpoint for a stream / VOD / clip. |
+| **Playback access control** | Available | API, Agents (MCP), Dashboard, Docs | Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with a dry-run tester and full agent management surface. |
+
+### Storage
+
+| Capability | Availability | Surfaces | What it unlocks |
+| --- | --- | --- | --- |
+| **Clips** | Available | API, Agents (MCP), Dashboard, Docs | Time-range clips extracted from streams or recordings. |
+| **DVR recordings** | Available | API, Agents (MCP), Dashboard, Docs | 24/7-capable DVR recording with bounded live seekback, continuous archive storage, chapter replay, and VOD-style playback. |
+| **Media retention** | Available | API, Agents (MCP), Dashboard, Docs | Tenant-controlled storage policy for 24/7 DVR archives, clips, and VOD assets, with per-asset overrides and entitlement bounds. |
+| **VOD assets** | Available | API, Agents (MCP), Dashboard, Docs | Multipart VOD upload and lifecycle. |
+| **DVR chapters** | Expanding | API, Agents (MCP), Dashboard, Docs | Virtual playlist views over long-running DVR archives, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without duplicating media. |
+
+### Streaming
+
+| Capability | Availability | Surfaces | What it unlocks |
+| --- | --- | --- | --- |
+| **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push and pull live streams with stream keys and ingest configuration. |
+| **Multistream push targets** | Available | API, Agents (MCP), Dashboard, Docs | Forward live streams to additional RTMP/SRT destinations. |
+| **Stream keys** | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
+| **Gateway-backed transcoding** | Expanding | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. |
+| **Pull streams** | Expanding | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. |
+| **Thumbnails and sprite previews** | Expanding | API, Agents (MCP), Dashboard, Docs | Auto-generated poster frames and sprite-tile preview strips for live streams, clips, VOD, and DVR playback. |
+
+Planned product work lives on the [Roadmap](/roadmap). This page stays focused on capabilities that are already usable or actively expanding across shipped surfaces.

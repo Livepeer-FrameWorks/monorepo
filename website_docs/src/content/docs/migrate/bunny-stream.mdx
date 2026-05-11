@@ -22,9 +22,9 @@ FrameWorks centers on **live streaming** — RTMP/RTMPS, E-RTMP, SRT, WHIP, and 
 - **What FrameWorks does not replace:** Bunny CDN (general HTTP CDN), Bunny Edge Storage (general object / block storage), Bunny DNS, Bunny Optimizer (image), Magic Containers (edge compute), Bunny Shield (DDoS / WAF). Those are Bunny's broader edge platform — keep them. FrameWorks has adjacent infrastructure work on the [roadmap](/roadmap), but this migration guide is about moving the video workload.
 
 <Aside type="note">
-  FrameWorks is in active beta. Billing rates, hybrid edge deployment, the cluster marketplace, and
-  DRM are all flagged below — read the [beta and tricky bits](#beta-and-tricky-bits) section before
-  you cut over production traffic.
+  FrameWorks is still maturing in a few product areas. Billing rates, production self-hosting
+  runbooks, DRM, and provider-specific migration gaps are flagged below — read the [beta and tricky
+  bits](#beta-and-tricky-bits) section before you cut over production traffic.
 </Aside>
 
 <Aside type="tip">
@@ -126,7 +126,7 @@ Bunny Stream webhooks are processing-status callbacks, not named events. The pay
   FrameWorks does not deliver outbound HTTP webhooks today — events flow over GraphQL subscriptions
   (WebSocket). If your environment can't hold an open subscription, fall back to polling the
   relevant query (`vodAsset(id)`, `vodUploadStatus`) on a short interval. HTTP-callback delivery is
-  tracked in the outbound-webhooks RFC.
+  on the roadmap.
 </Aside>
 
 ### Adjacent Bunny products — keep them
@@ -224,7 +224,7 @@ See [Player (Playback)](/builders/playback) for theming and the full prop surfac
 
 Pick your client:
 
-- **Houdini** (SvelteKit-native) — what we use internally
+- **Houdini** (SvelteKit-native GraphQL codegen)
 - **urql** or **Apollo** for React
 - **graphql-request** for plain Node / Bun scripts
 
@@ -247,7 +247,7 @@ If you used Bunny signed URLs, hotlink protection, country/IP rules, or MediaCag
 
 - **Bunny signed URL** → `createSigningKey` mutation (ES256, asymmetric, private PEM returned once) plus `setPlaybackPolicy` with `type: JWT`. Tokens travel as `?jwt=<token>` (works across HLS, LL-HLS, DASH, WHEP, MP4) or `Authorization: Bearer` on request paths that can carry headers.
 - **Hotlink / referrer protection, country block, IP allow-deny** → `setPlaybackPolicy` with `type: WEBHOOK`. FrameWorks POSTs an HMAC-signed body; your endpoint returns 200 to allow, anything else to deny. Geo and IP rules are decisions you implement inside that callback today.
-- **MediaCage Enterprise Multi-DRM** → DRM (FairPlay / Widevine / PlayReady) is in development with the [MistServer](https://mistserver.org/) team; we co-maintain the upstream engine. Wait for DRM GA or stay on Bunny for that subset.
+- **MediaCage Enterprise Multi-DRM** → DRM (FairPlay / Widevine / PlayReady) is in development. Wait for DRM GA or stay on Bunny for that subset.
 
 ```graphql
 mutation {
@@ -293,13 +293,13 @@ Run a low-traffic test through both platforms in parallel for a day. Watch the F
 ## What you gain on FrameWorks
 
 - **First-class live ingest** — RTMP/RTMPS, E-RTMP (HEVC/AV1 contribution over RTMP), SRT, and WHIP. Bunny customers who've been recording-then-uploading get the most leverage here.
-- **Pull-input streams** — point FrameWorks at an RTSP camera, an SRT/RIST contribution feed, an HLS or MPEG-TS source, or another Mist origin (DTSC). Self-hosted edges can also pull from private (RFC1918) or multicast sources via an explicit cluster flag. See [Pull-input streams](/builders/pull-streams). On the [roadmap](/roadmap): an **AV Device Discovery** drop-in app for ONVIF cameras, VISCA PTZ, NDI sources, USB webcams, and HDMI capture.
+- **Pull-input streams** — point FrameWorks at an RTSP camera, an SRT/RIST contribution feed, an HLS or MPEG-TS source, or another Mist origin (DTSC). Self-hosted edges can also pull from private (RFC1918) or multicast sources via an explicit cluster flag. See [Pull-input streams](/builders/pull-streams). Experimental media-engine discovery exists locally today; FrameWorks packaging through Edge, Tray, CLI, API, and dashboard workflows is tracked on the [roadmap](/roadmap#device-discovery-and-contribution-inputs).
 - **DVR + clipping while live** — recording is on by default for streams that opt in; viewers can time-shift on the same playback ID, and you can mint clips from either the live ring or the persisted DVR via the clip API.
 - **LL-HLS, DASH, WHEP/WebRTC, MP4, WebSocket** — the underlying engine is [MistServer](https://mistserver.org/), which we co-maintain. CMAF output, sub-second WHEP, and a custom MSE WebSocket player are all there alongside HLS.
 - **Sprite-sheet seek previews** — a 10×10 grid plus a WebVTT cue file generated for every recording, ready for hover-scrub UIs.
 - **Multistream targets** — Twitch, YouTube, Facebook, Kick, X, and custom RTMP/RTMPS/SRT — see [Multistreaming](/builders/multistreaming).
 - **Cross-cluster federation** — one viewer pool routed across clusters; the closer edge wins automatically.
-- **Self-hosting and hybrid hosting** — run the whole stack on your hardware, or mix BYO edge with our managed control plane. Hybrid is experimental — see the beta flags below.
+- **Self-hosting and hybrid hosting** — run the whole stack on your hardware, or mix BYO edge with our managed control plane. Production rollouts need the same capacity, DNS, TLS, and monitoring validation as any operator-owned infrastructure.
 - **Agent-first surface** — MCP server at [`/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json), wallet auth (EIP-191), gasless USDC payments via x402 (EIP-3009). See [Agent Access](/agents/overview).
 - **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from the dashboard, the docs (`⌘J`), or MCP.
 - **Player on Svelte and as Web Components**, not just React.
@@ -318,13 +318,13 @@ Worth being honest about, especially if you don't actually need live:
 
 ## What's not yet at parity, and what's coming
 
-- **DRM** (FairPlay / Widevine / PlayReady) — in development with the [MistServer](https://mistserver.org/) team.
-- **Outbound HTTP webhooks** — GraphQL subscriptions today; the outbound-webhook surface is tracked in an RFC.
+- **DRM** (FairPlay / Widevine / PlayReady) — in development.
+- **Outbound HTTP webhooks** — GraphQL subscriptions today; HTTP-callback delivery is on the roadmap.
 - **Automatic chapter generation, transcription, caption auto-generation** — Live Transcription, Compositing, and Video Analysis are on the [roadmap](/roadmap).
-- **Per-video heatmaps and retention curves** — QoE Analytics RFC.
+- **Per-video heatmaps and retention curves** — view-level QoE analytics are on the roadmap.
 - **Per-region replication knob** — FrameWorks uses cluster placement instead of a 1-of-N replication slider; if you used Bunny's 1–9 region replication, plan which cluster (or set of hybrid edges) to anchor your assets to.
 - **Managed iframe-embed-as-a-product** — `<fw-player>` is the closest replacement.
-- **First-class Python, PHP, C#, Java, Go SDKs** — internal Go clients exist; use GraphQL codegen against the schema until first-party SDKs ship.
+- **First-class Python, PHP, C#, Java, Go SDKs** — use GraphQL codegen against the public schema until first-party SDKs ship.
 - **VOD URL-pull import** — no `POST /fetch` equivalent or one-shot bulk Bunny → FrameWorks importer today. [Open an in-app ticket](%APP_URL%/support) for sizeable libraries.
 - **Watermarking as a managed feature** — possible via custom transcode profiles on dedicated / self-hosted clusters, not as a tenant-level toggle.
 - **VOD asset metadata-edit mutation** — title and description are set on `createVodUpload`; there's no `updateVodAsset` today.
@@ -333,9 +333,13 @@ Worth being honest about, especially if you don't actually need live:
 
 Heads-up so nothing surprises you:
 
-- **Billing is in beta.** Rates may adjust as we scale, but you keep the allowances you signed up for through beta.
-- **Hybrid edge deployment** is experimental — fine for testing, not for production-critical traffic.
-- **Cluster marketplace** is in progress. Public clusters work; the operator-marketplace flow is still being built.
+- **Billing rates are still maturing.** Rates may adjust as we scale, but you keep the allowances you signed up for.
+- **Self-hosted and hybrid production cutovers need operator validation.** Test DNS, TLS,
+  firewall policy, capacity, node enrollment, and upgrade runbooks before moving production
+  traffic.
+- **Marketplace primitives exist, but the public marketplace program is still being built.**
+  Validate operator vetting, pricing, approval flow, and support boundaries before relying on
+  third-party clusters for production traffic.
 - **GraphQL learning curve.** If you've never written a query, the [docs playground](%GATEWAY_URL%/graphql/playground) is the quickest way to inspect available fields. Skipper can also draft queries.
 - **Subscriptions are connection-oriented.** Polling fallback is fine if a long-lived connection is awkward in your stack.
 - **The embed swap is not API-compatible.** `<iframe>` becomes `<fw-player>`; Player.js consumers can move to `@livepeer-frameworks/player-core`'s control API, but it's a port, not a drop-in.

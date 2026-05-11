@@ -21,6 +21,7 @@ import type {
   FwThemePreset,
   FwThemeOverrides,
   FwLocale,
+  TranslationStrings,
 } from "@livepeer-frameworks/player-core";
 import { applyTheme, applyThemeOverrides, clearTheme } from "@livepeer-frameworks/player-core";
 
@@ -50,6 +51,7 @@ export class FwPlayer extends LitElement {
   @property({ attribute: "theme" }) theme?: FwThemePreset;
   @property({ attribute: false }) themeOverrides?: FwThemeOverrides;
   @property({ attribute: "locale" }) locale?: FwLocale;
+  @property({ attribute: false }) translations?: Partial<TranslationStrings>;
 
   // ---- JS-only properties (not reflected) ----
   @property({ attribute: false }) endpoints?: ContentEndpoints;
@@ -109,8 +111,8 @@ export class FwPlayer extends LitElement {
   // ---- Lifecycle ----
 
   protected willUpdate(changed: PropertyValues) {
-    if (changed.has("locale")) {
-      this.pc.updateTranslator({ locale: this.locale ?? "en" });
+    if (changed.has("locale") || changed.has("translations")) {
+      this.pc.updateTranslator({ locale: this.locale ?? "en", translations: this.translations });
     }
 
     // Error fade-out: sync displayed error from controller state
@@ -147,7 +149,9 @@ export class FwPlayer extends LitElement {
       changed.has("nativeControls") ||
       changed.has("debug") ||
       changed.has("thumbnailUrl") ||
-      changed.has("endpoints")
+      changed.has("endpoints") ||
+      changed.has("locale") ||
+      changed.has("translations")
     ) {
       this.pc.configure({
         contentId: this.contentId,
@@ -164,6 +168,8 @@ export class FwPlayer extends LitElement {
         controls: this.stockControls || this.nativeControls,
         poster: this.thumbnailUrl,
         debug: this.debug,
+        locale: this.locale,
+        translations: this.translations,
       });
     }
   }

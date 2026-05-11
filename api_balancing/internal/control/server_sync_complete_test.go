@@ -245,8 +245,8 @@ func TestProcessSyncComplete_Failed(t *testing.T) {
 	mock, _, repo := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'failed'").
-		WithArgs("connection reset", "hash-fail").
+	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = ").
+		WithArgs("connection reset", "hash-fail", "failed").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processSyncComplete(&pb.SyncComplete{

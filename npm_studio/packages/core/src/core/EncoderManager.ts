@@ -317,10 +317,12 @@ export class EncoderManager extends TypedEventEmitter<EncoderManagerEvents> {
 
     // Build list of URLs to try
     const urlsToTry: Array<{ url: string | URL; description: string }> = [];
+    const sourceWorkerURL = (filename: string) =>
+      new URL(`../workers/${filename}`, import.meta.url);
 
     // Priority 3: Try loading relative to source module (bundler/dev)
     try {
-      const workerUrl = new URL("../workers/encoder.worker.mod.js", import.meta.url);
+      const workerUrl = sourceWorkerURL("encoder.worker.mod.js");
       urlsToTry.push({ url: workerUrl, description: "import.meta.url source (.mod.js)" });
     } catch {
       // URL construction failed, skip
@@ -328,7 +330,7 @@ export class EncoderManager extends TypedEventEmitter<EncoderManagerEvents> {
 
     // Priority 4: Try loading relative to source module (.ts fallback)
     try {
-      const workerUrl = new URL("../workers/encoder.worker.ts", import.meta.url);
+      const workerUrl = sourceWorkerURL("encoder.worker.ts");
       urlsToTry.push({ url: workerUrl, description: "import.meta.url source (.ts fallback)" });
     } catch {
       // URL construction failed, skip
@@ -402,7 +404,7 @@ export class EncoderManager extends TypedEventEmitter<EncoderManagerEvents> {
 
     // Source .ts fallback
     try {
-      const workerUrl = new URL("../workers/encoder.worker.ts", import.meta.url);
+      const workerUrl = new URL(`../workers/${"encoder.worker.ts"}`, import.meta.url);
       return new Worker(workerUrl, { type: "module" });
     } catch {
       // Fall through

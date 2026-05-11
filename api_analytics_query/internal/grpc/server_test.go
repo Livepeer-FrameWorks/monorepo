@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -846,6 +847,48 @@ func TestNullInt64Value(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := nullInt64Value(tc.input); got != tc.expected {
 				t.Fatalf("nullInt64Value(%+v) = %d, want %d", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestSanitizeFloat32(t *testing.T) {
+	cases := []struct {
+		name string
+		in   float64
+		want float32
+	}{
+		{name: "NaN", in: math.NaN(), want: 0},
+		{name: "+Inf", in: math.Inf(1), want: 0},
+		{name: "-Inf", in: math.Inf(-1), want: 0},
+		{name: "zero", in: 0, want: 0},
+		{name: "positive", in: 3.5, want: 3.5},
+		{name: "negative", in: -2.25, want: -2.25},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sanitizeFloat32(tc.in); got != tc.want {
+				t.Fatalf("sanitizeFloat32(%v) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeFloat64(t *testing.T) {
+	cases := []struct {
+		name string
+		in   float64
+		want float64
+	}{
+		{name: "NaN", in: math.NaN(), want: 0},
+		{name: "+Inf", in: math.Inf(1), want: 0},
+		{name: "-Inf", in: math.Inf(-1), want: 0},
+		{name: "finite", in: 1.5, want: 1.5},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sanitizeFloat64(tc.in); got != tc.want {
+				t.Fatalf("sanitizeFloat64(%v) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
 	}

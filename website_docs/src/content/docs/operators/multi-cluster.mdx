@@ -7,9 +7,11 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-<Aside type="note" title="Evolving Feature">
-  Multi-cluster operations are implemented for shared and dedicated clusters. The open marketplace
-  is still in active development.
+<Aside type="note" title="Marketplace status">
+  Cluster listing, invites, subscription requests, approvals, preferred-cluster routing, and pricing
+  model fields are implemented. A vetted public marketplace program still needs operator onboarding,
+  published commercial terms, and support-boundary processes before third-party capacity should be
+  treated as generally available.
 </Aside>
 
 ## What Is a Cluster?
@@ -29,7 +31,7 @@ Cross-cluster coordination is handled exclusively by the **FoghornFederation** g
 | **Shared**           | Free shared capacity is currently unmetered; premium shared tiers are seeded for later enforcement. All tenants share the same cluster, edges, and services.                                                                                               |
 | **Dedicated**        | Enterprise tier. Isolated cluster with dedicated Foghorn, edges, and capacity — operated by FrameWorks or self-hosted on-premise via the [CLI](/operators/cli-reference), with [Manual Deployment](/operators/deployment-manual) as an advanced reference. |
 | **Hybrid**           | Tenant runs self-hosted edges that fall back to the primary shared cluster. Edges federate via Foghorn; control/data plane remains shared.                                                                                                                 |
-| **Open Marketplace** | Third-party operators publish clusters with pricing and access controls. Tenants subscribe to clusters via the marketplace. _(In progress)_                                                                                                                |
+| **Open Marketplace** | Operators can publish listed clusters with access controls, invites, subscription requests, and pricing metadata. A vetted public marketplace program is still being built.                                                                                |
 
 ---
 

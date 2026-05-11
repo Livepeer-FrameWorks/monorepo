@@ -11,6 +11,7 @@
   import {
     listDvrChapters,
     retrieveDvrChapter,
+    resolveDvrChapterPlayback,
     type DVRChapter,
     type DVRChapterMode,
     type DVRChapterRef,
@@ -120,26 +121,6 @@
     return [...existing, ...incoming.filter((chapter) => !seen.has(chapter.chapterId))];
   }
 
-  function buildDvrEndpoints(chapter: DVRChapter, ref: DVRChapterRef): ContentEndpoints {
-    return {
-      primary: {
-        nodeId: "dvr-chapter",
-        protocol: "html5/application/vnd.apple.mpegurl",
-        url: chapter.manifestUrl,
-      },
-      fallbacks: [],
-      metadata: {
-        title: formatDvrChapterLabel(ref),
-        contentId: chapter.chapterId,
-        contentType: "dvr",
-        isLive: chapter.isCurrent,
-        status: chapter.isCurrent ? "ONLINE" : "AVAILABLE",
-        dvrStatus: chapter.isCurrent ? "recording" : "completed",
-        durationSeconds: Math.max(0, Math.round((ref.endMs - ref.startMs) / 1000)),
-      },
-    };
-  }
-
   async function selectDvrChapter(chapterRef: DVRChapterRef) {
     const chapter = await retrieveDvrChapter({
       dvrId: contentId,
@@ -151,10 +132,11 @@
 
     selectedDvrChapter = chapter;
     selectedDvrChapterRef = chapterRef;
+    const playback = await resolveDvrChapterPlayback(chapter.manifestUrl);
     playerConfig = {
       contentType: "dvr",
-      contentId: chapter.chapterId,
-      endpoints: buildDvrEndpoints(chapter, chapterRef),
+      contentId: playback.contentId,
+      endpoints: playback.endpoints,
       options: {
         autoplay: true,
         muted: true,

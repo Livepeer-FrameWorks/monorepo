@@ -26,6 +26,7 @@ import (
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 )
 
 // streamContext holds cached tenant and user information for a stream
@@ -1268,7 +1269,8 @@ func (p *Processor) handlePlayRewrite(trigger *pb.MistTrigger) (string, bool, er
 
 	// Check stream owner's billing status from cache (set during PUSH_REWRITE).
 	// Falls back to Quartermaster when cache misses.
-	billing := p.GetBillingStatus(context.Background(), target.InternalName, target.TenantID)
+	billingInternalName := control.DVRChapterPolicyInternalName(context.Background(), target.InternalName)
+	billing := p.GetBillingStatus(context.Background(), billingInternalName, target.TenantID)
 	if billing != nil {
 		if billing.IsSuspended {
 			p.logger.WithFields(logging.Fields{
@@ -1397,6 +1399,35 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 	// /source). /source re-resolves via Commodore and scores upstream-vs-cluster.
 	if strings.HasPrefix(streamName, "pull+") {
 		return p.resolvePullSource(streamName, trigger)
+	}
+
+	if chapterID, ok := control.ParseDVRChapterPlaybackID(streamName); ok {
+		if localPath, ready := control.LocalDVRChapterManifestPath(chapterID, trigger.GetNodeId()); ready {
+			p.logger.WithFields(logging.Fields{
+				"stream_name": streamName,
+				"chapter_id":  chapterID,
+				"local_path":  localPath,
+				"node_id":     trigger.GetNodeId(),
+			}).Debug("STREAM_SOURCE: DVR chapter resolved from warm edge cache")
+			return localPath, false, nil
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if _, err := control.StartDVRChapterDefrost(ctx, chapterID, trigger.GetNodeId(), 30*time.Second, p.logger); err != nil {
+				p.logger.WithError(err).WithFields(logging.Fields{
+					"stream_name": streamName,
+					"chapter_id":  chapterID,
+					"node_id":     trigger.GetNodeId(),
+				}).Warn("STREAM_SOURCE: DVR chapter defrost trigger failed")
+			}
+		}()
+		p.logger.WithFields(logging.Fields{
+			"stream_name": streamName,
+			"chapter_id":  chapterID,
+			"node_id":     trigger.GetNodeId(),
+		}).Debug("STREAM_SOURCE: DVR chapter defrost started, MistServer will retry")
+		return "", true, nil
 	}
 
 	// Extract artifact internal name (strips vod+ or any other prefix)
@@ -1555,14 +1586,17 @@ func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger
 			"internal_name": internalName,
 			"error":         err,
 		}).Warn("Failed to resolve pull source from Commodore")
+		p.recordPullSourceEvent(nil, internalName, "commodore_error", err.Error())
 		return "", true, nil
 	}
 	if resp == nil || !resp.GetFound() {
 		p.logger.WithField("stream_name", streamName).Warn("Pull source not found")
+		p.recordPullSourceEvent(resp, internalName, "not_found", "")
 		return "", true, nil
 	}
 	if !resp.GetEnabled() {
 		p.logger.WithField("stream_name", streamName).Info("Pull source disabled by tenant; refusing to start input")
+		p.recordPullSourceEvent(resp, internalName, "disabled", "")
 		return "", true, nil
 	}
 	class, classErr := pullsource.Classify(resp.GetSourceUri())
@@ -1571,6 +1605,11 @@ func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger
 			"stream_name": streamName,
 			"error":       classErr,
 		}).Warn("Pull source URI is not supported; refusing")
+		detail := ""
+		if classErr != nil {
+			detail = classErr.Error()
+		}
+		p.recordPullSourceEvent(resp, internalName, "blocked_uri", detail)
 		return "", true, nil
 	}
 	if class == pullsource.ClassPrivate {
@@ -1583,6 +1622,7 @@ func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger
 				"stream_name": streamName,
 				"cluster_id":  clusterID,
 			}).Warn("Pull source is private and the executing cluster does not allow private pull sources; refusing")
+			p.recordPullSourceEvent(resp, internalName, "private_not_allowed", clusterID)
 			return "", true, nil
 		}
 	}
@@ -1598,6 +1638,7 @@ func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger
 	base := control.FoghornBalancerBase(clusterID)
 	if base == "" {
 		p.logger.WithField("node_id", trigger.GetNodeId()).Error("Foghorn balancer base unresolved for pull source")
+		p.recordPullSourceEvent(resp, internalName, "foghorn_base_unresolved", trigger.GetNodeId())
 		return "", true, nil
 	}
 
@@ -1610,7 +1651,38 @@ func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger
 
 	// No fallback param — /source resolves the upstream URI server-side from
 	// Commodore. Trusting a fallback param here would be a source-injection vector.
+	p.recordPullSourceEvent(resp, internalName, "resolved", clusterID)
 	return "balance:" + base, false, nil
+}
+
+func (p *Processor) recordPullSourceEvent(resp *pb.ResolvePullSourceByInternalNameResponse, internalName, kind, detail string) {
+	if control.CommodoreClient == nil || internalName == "" || kind == "" {
+		return
+	}
+	tenantID := tenants.SystemTenantID.String()
+	streamID := ""
+	if resp != nil {
+		if resp.GetTenantId() != "" {
+			tenantID = resp.GetTenantId()
+		}
+		streamID = resp.GetStreamId()
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := control.CommodoreClient.RecordPullSourceEvent(ctx, &pb.RecordPullSourceEventRequest{
+			TenantId:     tenantID,
+			StreamId:     streamID,
+			InternalName: internalName,
+			EventKind:    kind,
+			Detail:       detail,
+		}); err != nil {
+			p.logger.WithError(err).WithFields(logging.Fields{
+				"internal_name": internalName,
+				"event_kind":    kind,
+			}).Debug("Failed to record pull-source lifecycle event")
+		}
+	}()
 }
 
 // resolveProcessSource returns a presigned HTTPS URL for a process+ stream's source.

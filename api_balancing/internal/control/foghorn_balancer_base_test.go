@@ -4,7 +4,6 @@ import "testing"
 
 func TestFoghornBalancerBaseUsesClusterScopedDNS(t *testing.T) {
 	t.Setenv("BRAND_DOMAIN", "frameworks.network")
-	t.Setenv("FOGHORN_PUBLIC_BASE", "https://foghorn.frameworks.network")
 
 	got := foghornBalancerBase("core-central-primary")
 	want := "https://foghorn.core-central-primary.frameworks.network"
@@ -13,12 +12,45 @@ func TestFoghornBalancerBaseUsesClusterScopedDNS(t *testing.T) {
 	}
 }
 
-func TestFoghornBalancerBaseFallsBackToEnv(t *testing.T) {
+func TestFoghornBalancerBaseUsesExplicitPublicBase(t *testing.T) {
 	t.Setenv("FOGHORN_PUBLIC_BASE", "https://foghorn.example")
 
-	got := foghornBalancerBase("")
+	got := foghornBalancerBase("core-central-primary")
 	want := "https://foghorn.example"
 	if got != want {
 		t.Fatalf("foghornBalancerBase() = %q, want %q", got, want)
+	}
+}
+
+func TestFoghornBalancerBaseUsesLocalComposeURL(t *testing.T) {
+	t.Setenv("BUILD_ENV", "development")
+	t.Setenv("FOGHORN_URL", "http://foghorn:18008")
+
+	got := foghornBalancerBase("central-primary")
+	want := "http://foghorn:18008"
+	if got != want {
+		t.Fatalf("foghornBalancerBase() = %q, want %q", got, want)
+	}
+}
+
+func TestComposeConfigSeedScopesRealtimeToProcessing(t *testing.T) {
+	seed := composeConfigSeed("node-1", nil, "", 0, "")
+
+	realtimeByName := map[string]bool{}
+	for _, template := range seed.GetTemplates() {
+		def := template.GetDef()
+		realtimeByName[def.GetName()] = def.GetRealtime()
+	}
+
+	want := map[string]bool{
+		"live":       false,
+		"vod":        false,
+		"processing": true,
+		"pull":       false,
+	}
+	for name, realtime := range want {
+		if realtimeByName[name] != realtime {
+			t.Fatalf("template %q realtime = %v, want %v", name, realtimeByName[name], realtime)
+		}
 	}
 }

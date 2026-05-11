@@ -55,6 +55,7 @@ import type {
   IPlayer,
   PlayerOptions as CorePlayerOptions,
 } from "./PlayerInterface";
+import type { FwLocale, TranslationStrings } from "./I18n";
 import { isLiveStreamType } from "./PlayerInterface";
 import { buildQualityLevelsFromStreamTracks } from "./QualityLevels";
 export {
@@ -130,6 +131,10 @@ export interface PlayerControllerConfig {
   forceSource?: number;
   /** Playback mode preference */
   playbackMode?: "auto" | "low-latency" | "quality" | "vod";
+  /** Built-in locale for wrapper UI strings. */
+  locale?: FwLocale;
+  /** Custom translation overrides applied on top of the locale pack. */
+  translations?: Partial<TranslationStrings>;
 }
 
 export interface PlayerControllerEvents {

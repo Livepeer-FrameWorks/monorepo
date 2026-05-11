@@ -101,6 +101,7 @@ type CommodoreServer struct {
 	pb.UnimplementedVodServiceServer
 	pb.UnimplementedNodeManagementServiceServer
 	pb.UnimplementedPushTargetServiceServer
+	pb.UnimplementedPlaybackAccessControlServiceServer
 	db                   *sql.DB
 	logger               logging.Logger
 	foghornPool          *foghornclient.FoghornPool
@@ -615,6 +616,10 @@ func (s *CommodoreServer) resolveFoghornForContent(ctx context.Context, contentI
 		return nil, nil, status.Error(codes.InvalidArgument, "content_id required")
 	}
 
+	if chapterID, ok := parseDVRChapterPlaybackID(contentID); ok {
+		return s.resolveFoghornForDVRChapterAlias(ctx, chapterID)
+	}
+
 	var tenantID, activeClusterID sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 		SELECT tenant_id, active_ingest_cluster_id
@@ -658,6 +663,29 @@ func (s *CommodoreServer) resolveFoghornForContent(ctx context.Context, contentI
 		return nil, nil, err
 	}
 	return client, route, nil
+}
+
+func (s *CommodoreServer) resolveFoghornForDVRChapterAlias(ctx context.Context, chapterID string) (*foghornclient.GRPCClient, *clusterRoute, error) {
+	var tenantID, originClusterID string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT tenant_id::text, origin_cluster_id
+		  FROM commodore.dvr_chapter_aliases
+		 WHERE chapter_id = $1
+	`, chapterID).Scan(&tenantID, &originClusterID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, status.Errorf(codes.NotFound, "DVR chapter %q not found", chapterID)
+	}
+	if err != nil {
+		return nil, nil, status.Errorf(codes.Internal, "database error resolving DVR chapter: %v", err)
+	}
+	if tenantID == "" || originClusterID == "" {
+		return nil, nil, status.Error(codes.FailedPrecondition, "DVR chapter alias is missing routing context")
+	}
+	client, err := s.resolveFoghornForCluster(ctx, originClusterID, tenantID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return client, &clusterRoute{clusterID: originClusterID}, nil
 }
 
 // resolveFoghornForStreamKey resolves a Foghorn client using the ingest stream key.
@@ -1241,6 +1269,21 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 	}
 	if billingStatus != nil && billingStatus.DvrPolicy != nil {
 		foghornReq.DvrPolicy = billingStatus.DvrPolicy
+	}
+	// Apply tenant-default retention override on top of the Purser
+	// entitlement before Foghorn snapshots it onto the artifact. Per-asset
+	// override doesn't apply at start (artifact doesn't exist yet); it
+	// kicks in via UpdateAssetRetention after finalize.
+	if foghornReq.DvrPolicy != nil {
+		if set, days, _, _, perr := s.readTenantPolicy(ctx, tenantID); perr == nil && set && days > 0 {
+			bound := foghornReq.DvrPolicy.GetRecordingRetentionDays()
+			if bound == 0 {
+				bound = defaultRetentionDays
+			}
+			if days < bound {
+				foghornReq.DvrPolicy.RecordingRetentionDays = days
+			}
+		}
 	}
 	// Forward caller-supplied window so dvrpolicy.Resolve can clamp it
 	// against tier and cluster live-window bounds inside Foghorn.
@@ -4736,6 +4779,7 @@ func (s *CommodoreServer) CreatePushTarget(ctx context.Context, req *pb.CreatePu
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create push target: %v", err)
 	}
+	s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, streamID, []string{"push_targets"})
 
 	return &pb.PushTarget{
 		Id:        id,
@@ -4806,7 +4850,7 @@ func (s *CommodoreServer) ListPushTargets(ctx context.Context, req *pb.ListPushT
 }
 
 func (s *CommodoreServer) UpdatePushTarget(ctx context.Context, req *pb.UpdatePushTargetRequest) (*pb.PushTarget, error) {
-	_, tenantID, err := extractUserContext(ctx)
+	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -4883,11 +4927,13 @@ func (s *CommodoreServer) UpdatePushTarget(ctx context.Context, req *pb.UpdatePu
 	t.CreatedAt = timestamppb.New(createdAt)
 	t.UpdatedAt = timestamppb.New(updatedAt)
 
+	s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, t.GetStreamId(), []string{"push_targets"})
+
 	return &t, nil
 }
 
 func (s *CommodoreServer) DeletePushTarget(ctx context.Context, req *pb.DeletePushTargetRequest) (*pb.DeletePushTargetResponse, error) {
-	_, tenantID, err := extractUserContext(ctx)
+	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -4897,17 +4943,19 @@ func (s *CommodoreServer) DeletePushTarget(ctx context.Context, req *pb.DeletePu
 		return nil, status.Error(codes.InvalidArgument, "id required")
 	}
 
-	result, err := s.db.ExecContext(ctx, `
-		DELETE FROM commodore.push_targets WHERE id = $1 AND tenant_id = $2
-	`, id, tenantID)
+	var streamID string
+	err = s.db.QueryRowContext(ctx, `
+		DELETE FROM commodore.push_targets
+		WHERE id = $1 AND tenant_id = $2
+		RETURNING stream_id
+	`, id, tenantID).Scan(&streamID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Error(codes.NotFound, "push target not found")
+		}
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return nil, status.Error(codes.NotFound, "push target not found")
-	}
+	s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, streamID, []string{"push_targets"})
 
 	return &pb.DeletePushTargetResponse{
 		Message:   "Push target deleted",
@@ -5245,21 +5293,22 @@ func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *pb.RevokeAPIT
 const (
 	refreshTokenReuseGracePeriod = 2 * time.Minute
 
-	eventAuthLoginSucceeded = "auth_login_succeeded"
-	eventAuthLoginFailed    = "auth_login_failed"
-	eventAuthRegistered     = "auth_registered"
-	eventAuthTokenRefreshed = "auth_token_refreshed"
-	eventTokenCreated       = "token_created"
-	eventTokenRevoked       = "token_revoked"
-	eventWalletLinked       = "wallet_linked"
-	eventWalletUnlinked     = "wallet_unlinked"
-	eventStreamCreated      = "stream_created"
-	eventStreamUpdated      = "stream_updated"
-	eventStreamDeleted      = "stream_deleted"
-	eventStreamKeyCreated   = "stream_key_created"
-	eventStreamKeyDeleted   = "stream_key_deleted"
-	eventArtifactRegistered = "artifact_registered"
-	eventArtifactDeleted    = "artifact_deleted"
+	eventAuthLoginSucceeded    = "auth_login_succeeded"
+	eventAuthLoginFailed       = "auth_login_failed"
+	eventAuthRegistered        = "auth_registered"
+	eventAuthTokenRefreshed    = "auth_token_refreshed"
+	eventTokenCreated          = "token_created"
+	eventTokenRevoked          = "token_revoked"
+	eventWalletLinked          = "wallet_linked"
+	eventWalletUnlinked        = "wallet_unlinked"
+	eventStreamCreated         = "stream_created"
+	eventStreamUpdated         = "stream_updated"
+	eventStreamDeleted         = "stream_deleted"
+	eventStreamKeyCreated      = "stream_key_created"
+	eventStreamKeyDeleted      = "stream_key_deleted"
+	eventArtifactRegistered    = "artifact_registered"
+	eventArtifactDeleted       = "artifact_deleted"
+	eventPlaybackPolicyChanged = "playback_policy_changed"
 )
 
 func (s *CommodoreServer) emitServiceEvent(ctx context.Context, event *pb.ServiceEvent) {
@@ -6222,11 +6271,11 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 
 	// Base query - join with streams to get title
 	query := fmt.Sprintf(`
-		SELECT d.id, d.dvr_hash, d.playback_id, d.internal_name, d.stream_id::text, COALESCE(st.title, d.internal_name),
-		       d.retention_until, d.created_at, d.updated_at
-		FROM commodore.dvr_recordings d
-		LEFT JOIN commodore.streams st ON d.stream_id = st.id
-		WHERE %s`, whereClause)
+			SELECT d.id, d.dvr_hash, d.playback_id, d.internal_name, d.stream_id::text, COALESCE(st.title, d.internal_name),
+			       d.retention_until, COALESCE(d.retention_source, ''), d.created_at, d.updated_at
+			FROM commodore.dvr_recordings d
+			LEFT JOIN commodore.streams st ON d.stream_id = st.id
+			WHERE %s`, whereClause)
 
 	// Add keyset condition if cursor provided
 	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
@@ -6248,24 +6297,26 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 	for rows.Next() {
 		var (
 			id, dvrHash, playbackID, internalName, streamID, title string
+			retentionSource                                        string
 			retentionUntil                                         sql.NullTime
 			createdAt, updatedAt                                   time.Time
 		)
 		if err := rows.Scan(&id, &dvrHash, &playbackID, &internalName, &streamID, &title,
-			&retentionUntil, &createdAt, &updatedAt); err != nil {
+			&retentionUntil, &retentionSource, &createdAt, &updatedAt); err != nil {
 			s.logger.WithError(err).Warn("Error scanning DVR recording")
 			continue
 		}
 
 		recording := &pb.DVRInfo{
-			Id:           &id,
-			DvrHash:      dvrHash,
-			PlaybackId:   &playbackID,
-			InternalName: internalName,
-			StreamId:     &streamID,
-			Title:        &title,
-			CreatedAt:    timestamppb.New(createdAt),
-			UpdatedAt:    timestamppb.New(updatedAt),
+			Id:              &id,
+			DvrHash:         dvrHash,
+			PlaybackId:      &playbackID,
+			InternalName:    internalName,
+			StreamId:        &streamID,
+			Title:           &title,
+			RetentionSource: &retentionSource,
+			CreatedAt:       timestamppb.New(createdAt),
+			UpdatedAt:       timestamppb.New(updatedAt),
 		}
 		if retentionUntil.Valid {
 			expiresAt := timestamppb.New(retentionUntil.Time)
@@ -6321,10 +6372,6 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 	return resp, nil
 }
 
-// ============================================================================
-// VIEWER SERVICE (Commodore → Foghorn proxy with enrichment)
-// ============================================================================
-
 // ResolveViewerEndpoint proxies viewer endpoint resolution to Foghorn
 // and enriches the response with stream metadata from Commodore's database
 func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
@@ -6332,7 +6379,9 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.Vie
 
 	var foghornClient *foghornclient.GRPCClient
 	var err error
-	if tenantID == "" {
+	if _, ok := parseDVRChapterPlaybackID(req.ContentId); ok {
+		foghornClient, _, err = s.resolveFoghornForContent(ctx, req.ContentId)
+	} else if tenantID == "" {
 		foghornClient, _, err = s.resolveFoghornForContent(ctx, req.ContentId)
 	} else {
 		foghornClient, _, err = s.resolveFoghornForTenant(ctx, tenantID)
@@ -6591,6 +6640,7 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 	pb.RegisterVodServiceServer(server, commodoreServer)
 	pb.RegisterNodeManagementServiceServer(server, commodoreServer)
 	pb.RegisterPushTargetServiceServer(server, commodoreServer)
+	pb.RegisterPlaybackAccessControlServiceServer(server, commodoreServer)
 
 	// Register gRPC health checking service
 	hs := health.NewServer()

@@ -453,9 +453,11 @@
 
           <Alert variant="info">
             <AlertDescription>
-              FrameWorks generates an ES256 keypair, returns the private key once, and stores only
-              the public key. Use the private key in your backend to mint viewer JWTs; reference the
-              returned <code>kid</code> in the JWT header.
+              <p>
+                FrameWorks generates an ES256 keypair, returns the private key once, and stores only
+                the public key. Use the private key in your backend to mint viewer JWTs; reference
+                the returned <code>kid</code> in the JWT header.
+              </p>
             </AlertDescription>
           </Alert>
         </div>

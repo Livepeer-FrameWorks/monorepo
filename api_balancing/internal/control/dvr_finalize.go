@@ -264,12 +264,22 @@ func waitForOutstandingUploads(ctx context.Context, dvrHash, preferNodeID string
 			return nil
 		}
 		names := make([]string, 0, len(pending))
+		refs := make([]*pb.DVRSegmentRef, 0, len(pending))
 		for _, r := range pending {
 			names = append(names, r.SegmentName)
+			refs = append(refs, &pb.DVRSegmentRef{
+				SegmentName:  r.SegmentName,
+				Sequence:     r.Sequence,
+				MediaStartMs: r.MediaStartMs,
+				MediaEndMs:   r.MediaEndMs,
+				DurationMs:   r.DurationMs,
+				Status:       r.Status,
+			})
 		}
 		if err := SendRetryDVRSegmentUpload(preferNodeID, &pb.RetryDVRSegmentUpload{
 			DvrHash:      dvrHash,
 			SegmentNames: names,
+			Segments:     refs,
 		}); err != nil {
 			logger.WithError(err).Debug("retry-upload push failed (will retry on next tick)")
 		}

@@ -323,6 +323,14 @@ export const navigationConfig: Record<string, NavigationItem> = {
         active: true,
         description: "Interactive GraphQL explorer with schema docs",
       },
+      features: {
+        name: "Features",
+        href: "/developer/features",
+        icon: "LayoutGrid",
+        active: true,
+        description:
+          "Browse every platform feature with API / MCP / webapp / docs coverage and try queries in the playground",
+      },
       webhooks: {
         name: "Webhooks",
         href: "/developer/webhooks",

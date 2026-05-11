@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/mcperrors"
@@ -55,10 +56,50 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "refresh_stream_key",
-			Description: "Generate a new stream key. The old key will stop working immediately.",
+			Description: "Rotate the primary stream key. The old key stops working immediately. Requires confirm=\"ROTATE STREAM KEY\".",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args RefreshStreamKeyInput) (*mcp.CallToolResult, any, error) {
 			return handleRefreshStreamKey(ctx, args, clients, logger)
+		},
+	)
+
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        "list_stream_keys",
+			Description: "List stream keys for a stream, including active state and last-used timestamps.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, args ListStreamKeysInput) (*mcp.CallToolResult, any, error) {
+			return handleListStreamKeys(ctx, args, clients, logger)
+		},
+	)
+
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        "create_stream_key",
+			Description: "Create an additional ingest key for a stream. The key value is returned in the response. Requires confirm=\"CREATE STREAM KEY\".",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, args CreateStreamKeyInput) (*mcp.CallToolResult, any, error) {
+			return handleCreateStreamKey(ctx, args, clients, logger)
+		},
+	)
+
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        "delete_stream_key",
+			Description: "Deactivate a stream key. Active encoders using it will fail ingest. Requires confirm=\"DELETE STREAM KEY\".",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, args DeleteStreamKeyInput) (*mcp.CallToolResult, any, error) {
+			return handleDeleteStreamKey(ctx, args, clients, logger)
+		},
+	)
+
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        "validate_stream_key",
+			Description: "Validate an ingest stream key and return whether it can authenticate an ingest session.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, args ValidateStreamKeyInput) (*mcp.CallToolResult, any, error) {
+			return handleValidateStreamKey(ctx, args, clients, logger)
 		},
 	)
 }
@@ -290,6 +331,7 @@ func handleDeleteStream(ctx context.Context, args DeleteStreamInput, clients *cl
 // RefreshStreamKeyInput represents input for refresh_stream_key tool.
 type RefreshStreamKeyInput struct {
 	StreamID string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to refresh key for"`
+	Confirm  string `json:"confirm" jsonschema:"required" jsonschema_description:"Must be exactly 'ROTATE STREAM KEY'."`
 }
 
 // RefreshStreamKeyResult represents the result of refreshing a stream key.
@@ -305,6 +347,9 @@ func handleRefreshStreamKey(ctx context.Context, args RefreshStreamKeyInput, cli
 		return nil, nil, mcperrors.AuthRequired()
 	}
 
+	if result, meta, err := requireConfirmation(args.Confirm, "ROTATE STREAM KEY"); result != nil || meta != nil || err != nil {
+		return result, meta, err
+	}
 	if args.StreamID == "" {
 		return toolError("stream_id is required")
 	}
@@ -328,4 +373,157 @@ func handleRefreshStreamKey(ctx context.Context, args RefreshStreamKeyInput, cli
 	}
 
 	return toolSuccess(result)
+}
+
+type ListStreamKeysInput struct {
+	StreamID string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to list keys for"`
+}
+
+type CreateStreamKeyInput struct {
+	StreamID string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to create a key for"`
+	Name     string `json:"name" jsonschema:"required" jsonschema_description:"Human-readable key name"`
+	Confirm  string `json:"confirm" jsonschema:"required" jsonschema_description:"Must be exactly 'CREATE STREAM KEY'."`
+}
+
+type DeleteStreamKeyInput struct {
+	StreamID string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id that owns the key"`
+	KeyID    string `json:"key_id" jsonschema:"required" jsonschema_description:"Stream key UUID"`
+	Confirm  string `json:"confirm" jsonschema:"required" jsonschema_description:"Must be exactly 'DELETE STREAM KEY'."`
+}
+
+type ValidateStreamKeyInput struct {
+	StreamKey string `json:"stream_key" jsonschema:"required" jsonschema_description:"Raw ingest stream key to validate"`
+}
+
+type StreamKeyToolResult struct {
+	ID         string `json:"id"`
+	StreamID   string `json:"stream_id"`
+	KeyValue   string `json:"key_value,omitempty"`
+	KeyName    string `json:"key_name,omitempty"`
+	IsActive   bool   `json:"is_active"`
+	LastUsedAt string `json:"last_used_at,omitempty"`
+	CreatedAt  string `json:"created_at,omitempty"`
+}
+
+type ListStreamKeysResult struct {
+	Keys []StreamKeyToolResult `json:"keys"`
+}
+
+type CreateStreamKeyResult struct {
+	Key     StreamKeyToolResult `json:"key"`
+	Warning string              `json:"warning"`
+}
+
+type ValidateStreamKeyResult struct {
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+func handleListStreamKeys(ctx context.Context, args ListStreamKeysInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+	if ctxkeys.GetTenantID(ctx) == "" {
+		return nil, nil, mcperrors.AuthRequired()
+	}
+	if args.StreamID == "" {
+		return toolError("stream_id is required")
+	}
+	streamID, err := decodeStreamID(args.StreamID)
+	if err != nil {
+		return toolError(err.Error())
+	}
+	resp, err := clients.Commodore.ListStreamKeys(ctx, streamID, nil)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to list stream keys")
+		return toolError(fmt.Sprintf("Failed to list stream keys: %v", err))
+	}
+	out := ListStreamKeysResult{Keys: make([]StreamKeyToolResult, 0, len(resp.GetStreamKeys()))}
+	for _, k := range resp.GetStreamKeys() {
+		out.Keys = append(out.Keys, streamKeyToToolResult(k, false))
+	}
+	return toolSuccess(out)
+}
+
+func handleCreateStreamKey(ctx context.Context, args CreateStreamKeyInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+	if ctxkeys.GetTenantID(ctx) == "" {
+		return nil, nil, mcperrors.AuthRequired()
+	}
+	if result, meta, err := requireConfirmation(args.Confirm, "CREATE STREAM KEY"); result != nil || meta != nil || err != nil {
+		return result, meta, err
+	}
+	if args.StreamID == "" || args.Name == "" {
+		return toolError("stream_id and name are required")
+	}
+	streamID, err := decodeStreamID(args.StreamID)
+	if err != nil {
+		return toolError(err.Error())
+	}
+	resp, err := clients.Commodore.CreateStreamKey(ctx, streamID, args.Name)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create stream key")
+		return toolError(fmt.Sprintf("Failed to create stream key: %v", err))
+	}
+	return toolSuccess(CreateStreamKeyResult{
+		Key:     streamKeyToToolResult(resp.GetStreamKey(), true),
+		Warning: "STREAM KEY IS RETURNED IN THIS RESPONSE. Store it in your encoder or secret manager before discarding the response.",
+	})
+}
+
+func handleDeleteStreamKey(ctx context.Context, args DeleteStreamKeyInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+	if ctxkeys.GetTenantID(ctx) == "" {
+		return nil, nil, mcperrors.AuthRequired()
+	}
+	if result, meta, err := requireConfirmation(args.Confirm, "DELETE STREAM KEY"); result != nil || meta != nil || err != nil {
+		return result, meta, err
+	}
+	if args.StreamID == "" || args.KeyID == "" {
+		return toolError("stream_id and key_id are required")
+	}
+	streamID, err := decodeStreamID(args.StreamID)
+	if err != nil {
+		return toolError(err.Error())
+	}
+	if err := clients.Commodore.DeactivateStreamKey(ctx, streamID, args.KeyID); err != nil {
+		logger.WithError(err).Warn("Failed to delete stream key")
+		return toolError(fmt.Sprintf("Failed to delete stream key: %v", err))
+	}
+	return toolSuccess(map[string]any{"stream_id": streamID, "key_id": args.KeyID, "deleted": true})
+}
+
+func handleValidateStreamKey(ctx context.Context, args ValidateStreamKeyInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+	if ctxkeys.GetTenantID(ctx) == "" {
+		return nil, nil, mcperrors.AuthRequired()
+	}
+	if args.StreamKey == "" {
+		return toolError("stream_key is required")
+	}
+	resp, err := clients.Commodore.ValidateStreamKey(ctx, args.StreamKey)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to validate stream key")
+		return toolSuccess(ValidateStreamKeyResult{Status: "ERROR", Error: err.Error()})
+	}
+	if !resp.GetValid() {
+		return toolSuccess(ValidateStreamKeyResult{Status: "INVALID", Error: resp.GetError()})
+	}
+	return toolSuccess(ValidateStreamKeyResult{Status: "VALID"})
+}
+
+func streamKeyToToolResult(k *pb.StreamKey, includeSecret bool) StreamKeyToolResult {
+	if k == nil {
+		return StreamKeyToolResult{}
+	}
+	out := StreamKeyToolResult{
+		ID:       k.GetId(),
+		StreamID: k.GetStreamId(),
+		KeyName:  k.GetKeyName(),
+		IsActive: k.GetIsActive(),
+	}
+	if includeSecret {
+		out.KeyValue = k.GetKeyValue()
+	}
+	if ts := k.GetLastUsedAt(); ts != nil {
+		out.LastUsedAt = ts.AsTime().Format(time.RFC3339)
+	}
+	if ts := k.GetCreatedAt(); ts != nil {
+		out.CreatedAt = ts.AsTime().Format(time.RFC3339)
+	}
+	return out
 }

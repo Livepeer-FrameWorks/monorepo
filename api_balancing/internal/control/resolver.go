@@ -84,6 +84,30 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 		return target, nil
 	}
 
+	if chapterID, ok := ParseDVRChapterPlaybackID(input); ok {
+		target := &StreamTarget{
+			InternalName: input,
+			IsVod:        true,
+			ContentType:  "dvr",
+		}
+		if CommodoreClient != nil {
+			if chapter, err := GetChapter(ctx, chapterID); err == nil {
+				if dvr, derr := CommodoreClient.ResolveDVRHash(ctx, chapter.ArtifactHash); derr == nil && dvr.GetFound() {
+					target.TenantID = dvr.GetTenantId()
+					target.StreamID = dvr.GetStreamId()
+					if dvr.GetPlaybackId() != "" {
+						if policy, perr := CommodoreClient.ResolveArtifactPlaybackID(ctx, dvr.GetPlaybackId()); perr == nil && policy.GetFound() {
+							target.ClusterPeers = policy.GetClusterPeers()
+							target.RequiresAuth = policy.GetRequiresAuth()
+							target.RequiresAuthKnown = true
+						}
+					}
+				}
+			}
+		}
+		return target, nil
+	}
+
 	// 2. Artifact playback ID (clip/dvr/vod)
 	if CommodoreClient != nil {
 		if resp, err := CommodoreClient.ResolveArtifactPlaybackID(ctx, input); err == nil && resp.Found {

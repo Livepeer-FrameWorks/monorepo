@@ -199,6 +199,27 @@ func ViewerJWTKid(tokenString string) (string, error) {
 	return kid, nil
 }
 
+// ViewerJWTClaimsUnverified base64-decodes the payload segment of a
+// structurally valid JWS without verifying the signature, audience, or any
+// required claims. ONLY for operator diagnostics (e.g. surfacing the claim
+// payload alongside a deny so the operator sees why the verified path
+// rejected the token). Never use as a source of truth for auth decisions.
+func ViewerJWTClaimsUnverified(tokenString string) (map[string]any, error) {
+	if !looksLikeJWS(tokenString) {
+		return nil, ErrTokenNotJWS
+	}
+	parts := strings.Split(tokenString, ".")
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, ErrTokenNotJWS
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
+		return nil, ErrTokenNotJWS
+	}
+	return claims, nil
+}
+
 // looksLikeJWS does a cheap structural check before handing to the parser.
 // Three base64url segments separated by dots, with a JSON header in the first
 // segment. Catches Mist-minted session tokens (random opaque strings) before

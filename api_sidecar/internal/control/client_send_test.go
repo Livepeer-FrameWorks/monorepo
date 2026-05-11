@@ -15,7 +15,7 @@ func TestSendFreezeComplete_Connected(t *testing.T) {
 	storeConn(stream, "test-node")
 	t.Cleanup(clearConn)
 
-	err := SendFreezeComplete("req-1", "hash-abc", "completed", "s3://bucket/key", 4096, "")
+	err := SendFreezeComplete("req-1", "hash-abc", "completed", "s3://bucket/key", 4096, "", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestSendFreezeComplete_WithError(t *testing.T) {
 	storeConn(stream, "test-node")
 	t.Cleanup(clearConn)
 
-	err := SendFreezeComplete("req-2", "hash-xyz", "failed", "", 0, "upload failed")
+	err := SendFreezeComplete("req-2", "hash-xyz", "failed", "", 0, "upload failed", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -65,6 +65,24 @@ func TestSendFreezeComplete_WithError(t *testing.T) {
 	if fc.Error != "upload failed" {
 		t.Fatalf("expected error msg, got %q", fc.Error)
 	}
+	if fc.LocalMissing {
+		t.Fatalf("expected LocalMissing=false for transient error")
+	}
+}
+
+func TestSendFreezeComplete_LocalMissingPropagates(t *testing.T) {
+	stream := &fakeControlStream{}
+	storeConn(stream, "test-node")
+	t.Cleanup(clearConn)
+
+	err := SendFreezeComplete("req-3", "hash-gone", "failed", "", 0, "open: no such file", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	fc := stream.sent[0].GetFreezeComplete()
+	if !fc.LocalMissing {
+		t.Fatalf("expected LocalMissing=true to propagate to wire")
+	}
 }
 
 // --- SendSyncComplete ---
@@ -74,7 +92,7 @@ func TestSendSyncComplete_Connected(t *testing.T) {
 	storeConn(stream, "test-node")
 	t.Cleanup(clearConn)
 
-	err := SendSyncComplete("req-3", "hash-sync", "synced", "s3://bucket/synced", 8192, "", true)
+	err := SendSyncComplete("req-3", "hash-sync", "synced", "s3://bucket/synced", 8192, "", true, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -105,7 +123,7 @@ func TestSendSyncComplete_DtshFalse(t *testing.T) {
 	storeConn(stream, "test-node")
 	t.Cleanup(clearConn)
 
-	_ = SendSyncComplete("req-4", "hash-no-dtsh", "synced", "s3://k", 1024, "", false)
+	_ = SendSyncComplete("req-4", "hash-no-dtsh", "synced", "s3://k", 1024, "", false, false)
 
 	sc := stream.sent[0].GetSyncComplete()
 	if sc.DtshIncluded {

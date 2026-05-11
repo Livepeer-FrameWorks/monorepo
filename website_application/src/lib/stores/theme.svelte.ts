@@ -163,10 +163,10 @@ function createThemeStore() {
   if (browser) {
     const prefs = loadFromStorage();
     themeId = prefs.themeId;
-    // Validate mode is available for this theme
     const available = getModesForTheme(prefs.themeId);
-    mode = available.includes(prefs.mode) ? prefs.mode : available[0];
-    applyToDocument(themeId, mode);
+    const initialMode = available.includes(prefs.mode) ? prefs.mode : available[0];
+    mode = initialMode;
+    applyToDocument(prefs.themeId, initialMode);
     initialized = true;
   }
 

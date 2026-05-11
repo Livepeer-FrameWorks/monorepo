@@ -161,27 +161,65 @@ Five built-in locale packs: `en`, `es`, `fr`, `de`, `nl`.
 ### Player i18n
 
 ```tsx
-// React — use built-in locale
-<Player contentId="pk_..." contentType="live" options={{ locale: "de" }} />
+// React
+<Player
+  contentId="pk_..."
+  contentType="live"
+  options={{
+    locale: "de",
+    translations: {
+      play: "Starten",
+      pause: "Pausieren",
+    },
+  }}
+/>
 ```
 
 ```ts
-// Vanilla — built-in locale
+// Vanilla
 import { getLocalePack } from "@livepeer-frameworks/player-core";
+import { createPlayer } from "@livepeer-frameworks/player-core/vanilla";
 
 const player = createPlayer({
   ...,
   locale: "de",
+  translations: {
+    play: "Starten",
+    pause: "Pausieren",
+  },
 });
 
 // Or fetch specific translation strings
 const deTranslations = getLocalePack("de");
 ```
 
-<Aside type="note" title="Custom player translations">
-  The player translation engine supports custom translation overrides internally, but the current
-  React, Svelte, and vanilla public facades only wire built-in locale selection.
-</Aside>
+```svelte
+<!-- Svelte -->
+<Player
+  contentId="pk_..."
+  contentType="live"
+  options={{
+    locale: "de",
+    translations: {
+      play: "Starten",
+      pause: "Pausieren",
+    },
+  }}
+/>
+```
+
+```ts
+// Web component
+const player = document.querySelector("fw-player");
+player.locale = "de";
+player.translations = {
+  play: "Starten",
+  pause: "Pausieren",
+};
+```
+
+Translation overrides are layered over the selected locale pack, so you only need to provide the
+strings you want to rename for your product.
 
 ### Studio i18n
 

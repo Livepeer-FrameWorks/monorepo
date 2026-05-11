@@ -1,0 +1,182 @@
+---
+title: "Storage & retention"
+description: "How DVR, clips, and VOD assets are stored, when they expire, and what controls customers have over the cost trade-off."
+sidebar:
+  order: 6
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Storage is one of the larger billing line items for live-streaming workloads, especially when you use the 24/7 DVR model. FrameWorks lets you keep the archive value without giving up cost control: live DVR can run continuously, completed assets can expire on a tenant default, and individual DVR / clip / VOD assets can be kept longer or shorter when they matter.
+
+This page explains the underlying model so you can make informed retention decisions.
+
+<Aside type="caution">
+  Retention reduces cost but it also deletes data. Shortening a tenant default or per-asset override
+  schedules data for deletion at the new horizon — there is no "soft-delete" intermediate state
+  today.
+</Aside>
+
+## What gets stored, when
+
+| Asset type | Created when                                        | Storage starts at            |
+| ---------- | --------------------------------------------------- | ---------------------------- |
+| DVR        | A `record: true` stream goes live (or `startDVR`)   | First segment is written     |
+| Clip       | `createClip` against a live stream or DVR recording | Asynchronous materialization |
+| VOD asset  | `createVodUpload` → `completeVodUpload`             | Multipart upload completes   |
+
+DVR is the largest contributor for most accounts because a single 24/7 ingest can produce many hours of media per day.
+
+## Live DVR window vs retention
+
+These are separate concepts and they're often conflated:
+
+- **Live DVR window** is how far back a _live_ viewer can seek while the stream is still recording. It's bounded by your tier and cluster so live HLS playlists stay small. This is **not** retention — the segments behind the window are still written to storage.
+- **Continuous archive** is the full segment timeline of a stream session. It can be hours, days, or months long if the ingest stays live.
+- **Retention** is how long a _completed_ recording is kept after the session ends. Retention is what controls long-term storage cost.
+- **Active DVR is not deleted by retention.** Retention starts after the recording finalizes (the stream session ends).
+
+## Cascade
+
+Effective retention for a finalized DVR, clip, or VOD asset is resolved in this order (identical for all three):
+
+1. **Per-asset override** (set via `updateMediaRetention`)
+2. **Tenant default** (set via `setMediaRetentionPolicy`)
+3. **Tier entitlement** (`recordingRetentionDays` from your billing tier)
+
+The resolved value is snapshotted onto the artifact at finalization. Subsequent overrides update the artifact directly. Resetting an override re-anchors to the asset's `ended_at` (not "now"), so a 60-day-old clip reset to a 30-day default goes back to the same horizon it would have had under the cascade — not 30 days from today.
+
+## Tenant default policy
+
+Read the tenant default plus tier bounds plus the value the cascade resolves to today:
+
+```graphql
+query MediaRetentionPolicy {
+  mediaRetentionPolicy {
+    recordingRetentionDays # tenant override; null = use tier
+    effectiveRecordingRetentionDays
+    bounds {
+      maxRecordingRetentionDays
+    }
+    updatedBy
+    updatedAt
+  }
+}
+```
+
+Set the tenant default. Validated server-side against tier bounds — `1 ≤ value ≤ tier max`. Passing the current tier max clears the tenant override so future tier upgrades flow through automatically:
+
+```graphql
+mutation SetMediaRetentionPolicy($input: SetMediaRetentionPolicyInput!) {
+  setMediaRetentionPolicy(input: $input) {
+    ... on MediaRetentionPolicy {
+      effectiveRecordingRetentionDays
+      bounds {
+        maxRecordingRetentionDays
+      }
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+  }
+}
+```
+
+Variables: `{ "input": { "recordingRetentionDays": 14 } }`.
+
+The webapp surfaces this on `/account/billing` under "Storage retention defaults".
+
+## Per-asset override
+
+Apply an override to a single finalized DVR, clip, or VOD asset. Override beats tenant default beats tier entitlement. The cascade is identical for all three asset types — only the target type changes. Set `targetType` to `DVR`, `CLIP`, or `VOD`:
+
+```graphql
+mutation UpdateRetention($input: UpdateMediaRetentionInput!) {
+  updateMediaRetention(input: $input) {
+    ... on EffectiveRetention {
+      retentionDays
+      retentionUntil
+      source
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}
+```
+
+Variables (DVR, relative): `{ "input": { "targetType": "DVR", "targetId": "<dvr id or hash>", "retentionDays": 90 } }`
+
+Variables (clip, relative): `{ "input": { "targetType": "CLIP", "targetId": "<clip id or hash>", "retentionDays": 30 } }`
+
+Variables (VOD, absolute): `{ "input": { "targetType": "VOD", "targetId": "<vod id or hash>", "retentionUntil": "2026-12-31T23:59:59Z" } }`
+
+Active recordings / in-flight uploads are rejected — overrides apply only to finalized assets.
+
+Clear the override and recompute from the cascade:
+
+```graphql
+mutation ResetRetention($input: ResetMediaRetentionOverrideInput!) {
+  resetMediaRetentionOverride(input: $input) {
+    ... on EffectiveRetention {
+      retentionDays
+      retentionUntil
+      source
+    }
+  }
+}
+```
+
+## Effective retention on a recording
+
+`DVRRequest.effectiveRetention` returns the resolved horizon for a finalized recording (null while active):
+
+```graphql
+query DVRRetention($id: ID!) {
+  dvrRecordingsConnection(streamId: $id) {
+    edges {
+      node {
+        dvrHash
+        expiresAt
+        effectiveRetention {
+          retentionDays
+          retentionUntil
+          source
+        }
+      }
+    }
+  }
+}
+```
+
+## Agent / MCP
+
+Agents manage retention via four MCP tools (cost-affecting; destructive-adjacent for `update_asset_retention`):
+
+| Tool                     | Effect                                                                                |
+| ------------------------ | ------------------------------------------------------------------------------------- |
+| `get_retention_policy`   | Reads tenant default + bounds + effective value.                                      |
+| `set_retention_policy`   | Sets the tenant-wide default. Validated against tier bounds.                          |
+| `update_asset_retention` | Per-asset override on a finalized DVR / clip / VOD (`target_type` + `target_id`).     |
+| `reset_asset_retention`  | Clears a per-asset override and re-anchors to the asset's `ended_at` via the cascade. |
+
+See [agents/mcp](/agents/mcp) for the full tool catalog.
+
+## Cost Awareness
+
+Retention is the main storage-cost control for always-on DVR, clips, and VOD. Shorter retention reduces stored bytes sooner; longer retention keeps more archive available for viewers and operators. Use the billing page to review current usage and adjust defaults before enabling long-running 24/7 DVR at scale.
+
+## Audit
+
+Tenant policy changes emit `media.retention_policy.changed`. Per-asset changes emit `media.retention.override_applied` and `media.retention.override_reset` with the asset hash and new retention horizon.
+
+## Related
+
+- [Recordings, Clips & VOD](/builders/recordings) — DVR / clip / VOD lifecycle
+- [Billing](/builders/billing) — tier pricing and storage line items
+- [Platform capabilities](/platform/feature-matrix) — where retention is exposed

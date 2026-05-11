@@ -13,7 +13,7 @@ import (
 )
 
 // Caller surface for chapter-aware playback:
-//   - RetrieveDVRChapter: materialize-on-request, returns S3 manifest URL.
+//   - RetrieveDVRChapter: materialize-on-request, returns chapter metadata.
 //   - ListDVRChapters:    paginated chapter index for player UI.
 //   - SetDVRChapterPolicy: change the artifact's default chapter mode.
 //
@@ -23,8 +23,9 @@ import (
 
 const minAutomaticChapterIntervalSeconds int32 = 3600
 
-// RetrieveDVRChapter materializes (cache-on-request) and returns the
-// chapter manifest's S3 location.
+// RetrieveDVRChapter materializes cache-on-request chapter metadata. Playback
+// routes through MistServer using dvr+{chapter_id}; the response does not
+// expose object-store URLs.
 func (s *FoghornGRPCServer) RetrieveDVRChapter(ctx context.Context, req *pb.RetrieveDVRChapterRequest) (*pb.RetrieveDVRChapterResponse, error) {
 	if req.GetDvrArtifactId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "dvr_artifact_id is required")
@@ -125,23 +126,13 @@ func (s *FoghornGRPCServer) RetrieveDVRChapter(ctx context.Context, req *pb.Retr
 		s.logger.WithError(err).WithField("chapter_id", chapterID).Warn("Chapter row missing after materialization")
 		return nil, status.Error(codes.Internal, "chapter row missing after materialization")
 	}
-	isActive = row.IsCurrent && control.DVRArtifactStillRecording(ctx, req.GetDvrArtifactId())
-
 	resp := &pb.RetrieveDVRChapterResponse{
 		ChapterId:     row.ChapterID,
 		ManifestS3Key: row.ManifestS3Key.String,
+		ManifestUrl:   control.DVRChapterPlaybackID(row.ChapterID),
 		IsCurrent:     row.IsCurrent,
 		HasGaps:       row.HasGaps,
 		SegmentCount:  row.SegmentCount,
-	}
-	if s.s3Client == nil {
-		return nil, status.Error(codes.Internal, "s3 client unavailable")
-	}
-	if url, mintErr := control.WriteChapterPlaybackManifest(ctx, row, isActive, 0); mintErr == nil {
-		resp.ManifestUrl = url
-	} else {
-		s.logger.WithError(mintErr).WithField("chapter_id", row.ChapterID).Warn("Failed to write signed playback manifest")
-		return nil, status.Error(codes.Internal, "failed to write playback manifest")
 	}
 	return resp, nil
 }

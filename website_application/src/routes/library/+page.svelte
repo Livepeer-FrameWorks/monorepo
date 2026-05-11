@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { SvelteSet } from "svelte/reactivity";
+  import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import { get } from "svelte/store";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
@@ -35,6 +35,8 @@
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import DeleteClipModal from "$lib/components/clips/DeleteClipModal.svelte";
   import DeleteRecordingModal from "$lib/components/recordings/DeleteRecordingModal.svelte";
+  import AssetRetentionDialog from "$lib/components/library/AssetRetentionDialog.svelte";
+  import type { MediaRetentionTarget$options } from "$houdini";
   import {
     Dialog,
     DialogContent,
@@ -177,8 +179,23 @@
       ...e.node,
     })) ?? []
   );
+  let artifactStatesByPlaybackId = $derived.by(() => {
+    const byID = new SvelteMap<string, (typeof artifactStates)[number]>();
+    for (const state of artifactStates) {
+      if (!state.playbackId) continue;
+      const current = byID.get(state.playbackId);
+      if (
+        !current ||
+        new Date(state.completedAt ?? state.startedAt ?? state.requestedAt ?? 0).getTime() >
+          new Date(current.completedAt ?? current.startedAt ?? current.requestedAt ?? 0).getTime()
+      ) {
+        byID.set(state.playbackId, state);
+      }
+    }
+    return byID;
+  });
   let inProgressArtifacts = $derived(
-    artifactStates.filter((s) => s.stage !== "completed" && s.stage !== "error")
+    artifactStates.filter((s) => !isTerminalArtifactStage(s.stage))
   );
 
   // Storage events (freeze/defrost) — deduplicate by id to avoid keyed-each errors
@@ -217,6 +234,7 @@
 
     // Add clips
     for (const clip of clips) {
+      const lifecycle = lifecycleStateForPlaybackId(clip.playbackId);
       unified.push({
         id: clip.id,
         type: "clips",
@@ -225,9 +243,9 @@
         playbackId: clip.playbackId,
         streamId: clip.streamId,
         displayStreamId: clip.sourceStreamId ?? null,
-        status: clip.status || "unknown",
+        status: displayArtifactStage(lifecycle?.stage || clip.status || "unknown"),
         duration: clip.duration,
-        sizeBytes: clip.sizeBytes,
+        sizeBytes: lifecycle?.sizeBytes ?? clip.sizeBytes,
         createdAt: clip.createdAt,
         expiresAt: clip.expiresAt,
         rawData: clip,
@@ -236,27 +254,31 @@
 
     // Add DVR recordings
     for (const dvr of dvrRecordings) {
+      const lifecycle = lifecycleStateForPlaybackId(dvr.playbackId);
       unified.push({
         id: dvr.dvrHash,
         type: "dvr",
-        title: dvr.manifestPath || dvr.dvrHash,
+        title: dvr.title || dvr.manifestPath || dvr.dvrHash,
         hash: dvr.dvrHash,
         playbackId: dvr.playbackId,
         streamId: dvr.streamId,
         displayStreamId: dvr.sourceStreamId ?? null,
-        status: dvr.status || "unknown",
+        status: displayArtifactStage(
+          lifecycle?.stage || dvr.status || (dvr.expiresAt ? "completed" : "unknown")
+        ),
         duration: dvr.durationSeconds,
-        sizeBytes: dvr.sizeBytes,
+        sizeBytes: lifecycle?.sizeBytes ?? dvr.sizeBytes,
         createdAt: dvr.createdAt,
         expiresAt: dvr.expiresAt,
         isFrozen: dvr.isFrozen ?? undefined,
-        storageLocation: dvr.storageLocation ?? undefined,
+        storageLocation: lifecycle?.s3Url ? "s3" : (dvr.storageLocation ?? undefined),
         rawData: dvr,
       });
     }
 
     // Add VOD assets
     for (const vod of vodAssets) {
+      const lifecycle = lifecycleStateForPlaybackId(vod.playbackId);
       unified.push({
         id: vod.id,
         type: "vod",
@@ -265,9 +287,9 @@
         playbackId: vod.playbackId,
         streamId: null,
         displayStreamId: null,
-        status: vod.status || "unknown",
+        status: displayArtifactStage(lifecycle?.stage || vod.status || "unknown"),
         duration: vod.durationMs ? Math.floor(vod.durationMs / 1000) : null,
-        sizeBytes: vod.sizeBytes,
+        sizeBytes: lifecycle?.sizeBytes ?? vod.sizeBytes,
         createdAt: vod.createdAt,
         expiresAt: vod.expiresAt,
         rawData: vod,
@@ -339,7 +361,7 @@
       eventKey: e.node.id ?? e.cursor,
       timestamp: e.node.timestamp,
       stage: e.node.stage,
-      type: ((e.node as { contentType?: string }).contentType as ArtifactType) || "clips",
+      type: normalizeArtifactType((e.node as { contentType?: string }).contentType),
       message: e.node.message,
       percent: e.node.percent,
     })) ?? []
@@ -373,6 +395,51 @@
   let showDeleteVodModal = $state(false);
   let vodToDelete = $state<VodData | null>(null);
   let deletingVodId = $state("");
+
+  // Retention editor — one dialog instance driven by the selected artifact.
+  let showRetentionDialog = $state(false);
+  let retentionTarget = $state<{
+    type: MediaRetentionTarget$options;
+    id: string;
+    name: string;
+    expiresAt: string | null;
+  } | null>(null);
+
+  function artifactRetentionType(t: ArtifactType): MediaRetentionTarget$options | null {
+    switch (t) {
+      case "dvr":
+        return "DVR";
+      case "clips":
+        return "CLIP";
+      case "vod":
+        return "VOD";
+      default:
+        return null;
+    }
+  }
+
+  function openRetentionEditor(a: UnifiedArtifact) {
+    const tt = artifactRetentionType(a.type);
+    if (!tt) return;
+    retentionTarget = {
+      type: tt,
+      id: a.hash || a.id,
+      name: a.title || a.hash || a.id,
+      expiresAt: a.expiresAt,
+    };
+    showRetentionDialog = true;
+  }
+
+  async function refetchLibraryAfterRetention() {
+    // After a retention change, the row's expiresAt is stale. Refetch the
+    // relevant connection (covers all three asset types — simpler than
+    // tracking which list backed the row).
+    await Promise.all([
+      clipsStore.fetch({ policy: "NetworkOnly" }),
+      dvrStore.fetch({ policy: "NetworkOnly" }),
+      vodStore.fetch({ policy: "NetworkOnly" }),
+    ]);
+  }
 
   // Create clip modal
   let showCreateClipModal = $state(false);
@@ -974,6 +1041,42 @@
     return new Date(dateString).toLocaleDateString();
   }
 
+  function lifecycleStateForPlaybackId(playbackId: string | null | undefined) {
+    return playbackId ? artifactStatesByPlaybackId.get(playbackId) : undefined;
+  }
+
+  function normalizeArtifactType(type: string | null | undefined): ArtifactType {
+    const t = type?.toLowerCase();
+    if (t === "clip" || t === "clips") return "clips";
+    if (t === "dvr") return "dvr";
+    if (t === "vod") return "vod";
+    return "clips";
+  }
+
+  function isTerminalArtifactStage(stage: string | null | undefined): boolean {
+    const s = stage?.toLowerCase();
+    return [
+      "completed",
+      "complete",
+      "done",
+      "ready",
+      "synced",
+      "deleted",
+      "evicted",
+      "failed",
+      "failed_terminal",
+      "error",
+      "lost_local",
+    ].includes(s || "");
+  }
+
+  function displayArtifactStage(stage: string): string {
+    const s = stage.toLowerCase();
+    if (s === "done" || s === "complete" || s === "synced") return "completed";
+    if (s === "failed_terminal" || s === "error" || s === "lost_local") return "failed";
+    return s;
+  }
+
   function getStatusColor(status: string): string {
     const s = status.toLowerCase();
     if (["available", "completed", "ready"].includes(s))
@@ -1536,7 +1639,17 @@
 
                           <!-- Expires -->
                           <TableCell class="px-4 py-2 text-sm text-foreground">
-                            {formatExpiry(artifact.expiresAt)}
+                            <button
+                              type="button"
+                              class="text-left hover:text-primary hover:underline"
+                              title="Edit retention"
+                              onclick={(e) => {
+                                e.stopPropagation();
+                                openRetentionEditor(artifact);
+                              }}
+                            >
+                              {formatExpiry(artifact.expiresAt)}
+                            </button>
                           </TableCell>
                         </TableRow>
 
@@ -1871,6 +1984,21 @@
     </DialogFooter>
   </DialogContent>
 </Dialog>
+
+{#if retentionTarget}
+  <AssetRetentionDialog
+    bind:open={showRetentionDialog}
+    assetType={retentionTarget.type}
+    assetId={retentionTarget.id}
+    assetName={retentionTarget.name}
+    currentExpiresAt={retentionTarget.expiresAt}
+    onClose={() => {
+      showRetentionDialog = false;
+      retentionTarget = null;
+    }}
+    onSaved={refetchLibraryAfterRetention}
+  />
+{/if}
 
 <!-- Create Clip Modal -->
 <Dialog open={showCreateClipModal} onOpenChange={(v) => (showCreateClipModal = v)}>

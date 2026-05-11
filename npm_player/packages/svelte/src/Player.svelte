@@ -36,6 +36,7 @@
     type FwThemePreset,
     type FwThemeOverrides,
     type FwLocale,
+    type TranslationStrings,
     type ThumbnailCue,
     type LoadingPosterInfo,
     type StreamInfo,
@@ -44,7 +45,7 @@
     createPlayerControllerStore,
     type PlayerControllerStore,
   } from "./stores/playerController";
-  import { localeStore, translatorStore } from "./stores/i18n";
+  import { localeStore, translationsStore, translatorStore } from "./stores/i18n";
   import type { SkipDirection } from "./SkipIndicator.svelte";
 
   // Props - aligned with React Player
@@ -71,6 +72,7 @@
       theme?: FwThemePreset;
       themeOverrides?: FwThemeOverrides;
       locale?: FwLocale;
+      translations?: Partial<TranslationStrings>;
     };
     onStateChange?: (state: PlayerState, context?: PlayerStateContext) => void;
     onMetadata?: (metadata: PlayerMetadata) => void;
@@ -105,6 +107,7 @@
   // Sync locale state to i18n store and provide translator context
   $effect(() => {
     localeStore.set(activeLocale);
+    translationsStore.set(options.translations);
   });
   setContext("fw-translator", translatorStore);
 
@@ -264,6 +267,8 @@
       mistUrl: options?.mistUrl,
       authToken: options?.authToken,
       playbackAuth: options?.playbackAuth,
+      locale: options?.locale,
+      translations: options?.translations,
       autoplay: options?.autoplay !== false,
       muted: options?.muted === true,
       controls: options?.stockControls === true,

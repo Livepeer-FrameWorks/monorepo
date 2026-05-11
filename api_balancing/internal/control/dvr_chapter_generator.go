@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/hls"
@@ -19,22 +18,20 @@ import (
 //   closed (is_current=false): VOD-typed, has #EXT-X-ENDLIST, fixed bounded playlist
 //
 // Canonical chapter manifests use relative ../segments/{segment_name} URIs
-// because chapter playlists live under chapters/. Player-facing playback
-// manifests use absolute presigned segment URLs because S3 objects are
-// private.
+// because chapter playlists live under chapters/. Viewer playback resolves
+// dvr+{chapter_id} through MistServer; the edge defrosts this bounded chapter
+// and serves the same canonical shape from local disk.
 //
 // Bounded operations: every call queries dvr_segments with start_ms/end_ms.
 
 // GenerateChapterOptions controls a chapter generation pass.
 type GenerateChapterOptions struct {
-	ArtifactHash          string
-	Mode                  string
-	IntervalSeconds       int32
-	StartMs               int64
-	EndMs                 int64
-	IsActive              bool // true = EVENT manifest, no ENDLIST; false = VOD with ENDLIST
-	WritePlaybackManifest bool
-	PlaybackTTL           time.Duration
+	ArtifactHash    string
+	Mode            string
+	IntervalSeconds int32
+	StartMs         int64
+	EndMs           int64
+	IsActive        bool // true = EVENT manifest, no ENDLIST; false = VOD with ENDLIST
 }
 
 const (
@@ -138,14 +135,8 @@ func GenerateChapter(ctx context.Context, opts GenerateChapterOptions, logger lo
 	if err := UpsertChapter(ctx, row); err != nil {
 		return chapterID, manifestKey, fmt.Errorf("upsert chapter row: %w", err)
 	}
-	if opts.WritePlaybackManifest {
-		ttl := opts.PlaybackTTL
-		if ttl <= 0 {
-			ttl = ChapterPlaybackTTL(opts.StartMs, opts.EndMs)
-		}
-		if _, err := writePlaybackManifestForRows(ctx, manifestKey, rows, opts.IsActive, ttl); err != nil {
-			return chapterID, manifestKey, fmt.Errorf("write playback manifest: %w", err)
-		}
+	if opts.IsActive {
+		RefreshWarmDVRChapterEdges(ctx, chapterID, logger)
 	}
 	return chapterID, manifestKey, nil
 }
@@ -196,13 +187,12 @@ func FinalizeDVRChapters(ctx context.Context, artifactHash string, logger loggin
 			closeEndMs = terminalAtMs
 		}
 		_, _, err = GenerateChapter(ctx, GenerateChapterOptions{
-			ArtifactHash:          prev.ArtifactHash,
-			Mode:                  prev.Mode,
-			IntervalSeconds:       prev.IntervalSeconds.Int32,
-			StartMs:               prev.StartMs,
-			EndMs:                 closeEndMs,
-			IsActive:              false,
-			WritePlaybackManifest: true,
+			ArtifactHash:    prev.ArtifactHash,
+			Mode:            prev.Mode,
+			IntervalSeconds: prev.IntervalSeconds.Int32,
+			StartMs:         prev.StartMs,
+			EndMs:           closeEndMs,
+			IsActive:        false,
 		}, logger)
 		if err != nil {
 			return err
@@ -272,13 +262,12 @@ func FinalizeDVRChapters(ctx context.Context, artifactHash string, logger loggin
 		return nil
 	}
 	_, _, err = GenerateChapter(ctx, GenerateChapterOptions{
-		ArtifactHash:          artifactHash,
-		Mode:                  policy.Mode,
-		IntervalSeconds:       effInterval,
-		StartMs:               tailStartMs,
-		EndMs:                 tailEndMs,
-		IsActive:              false,
-		WritePlaybackManifest: true,
+		ArtifactHash:    artifactHash,
+		Mode:            policy.Mode,
+		IntervalSeconds: effInterval,
+		StartMs:         tailStartMs,
+		EndMs:           tailEndMs,
+		IsActive:        false,
 	}, logger)
 	if err != nil {
 		return err
@@ -345,13 +334,12 @@ func BackfillClosedChapters(
 		}
 		if existing == nil || !existing.MaterializedAt.Valid || !existing.LastRebuiltAt.Valid || existing.IsCurrent {
 			if _, _, err := GenerateChapter(ctx, GenerateChapterOptions{
-				ArtifactHash:          artifactHash,
-				Mode:                  mode,
-				IntervalSeconds:       intervalSeconds,
-				StartMs:               startMs,
-				EndMs:                 endMs,
-				IsActive:              false,
-				WritePlaybackManifest: true,
+				ArtifactHash:    artifactHash,
+				Mode:            mode,
+				IntervalSeconds: intervalSeconds,
+				StartMs:         startMs,
+				EndMs:           endMs,
+				IsActive:        false,
 			}, logger); err != nil {
 				return result, err
 			}
@@ -364,91 +352,13 @@ func BackfillClosedChapters(
 	return result, nil
 }
 
-func WriteChapterPlaybackManifest(ctx context.Context, row *DVRChapterRow, isActive bool, ttl time.Duration) (string, error) {
-	if row == nil || row.ChapterID == "" {
-		return "", errors.New("chapter row missing")
-	}
-	if ttl <= 0 {
-		ttl = ChapterPlaybackTTL(row.StartMs, row.EndMs)
-	}
-	rows, err := ListDVRSegmentsForRange(ctx, row.ArtifactHash, row.StartMs, row.EndMs)
-	if err != nil {
-		return "", fmt.Errorf("list chapter segments: %w", err)
-	}
-	baseKey := row.ManifestS3Key.String
-	if baseKey == "" {
-		return "", errors.New("chapter manifest key missing")
-	}
-	return writePlaybackManifestForRows(ctx, baseKey, rows, isActive, ttl)
-}
-
 func deleteChapterManifestObjects(ctx context.Context, row *DVRChapterRow, logger logging.Logger) {
 	if s3Client == nil || row == nil || !row.ManifestS3Key.Valid || row.ManifestS3Key.String == "" {
 		return
 	}
-	keys := []string{
-		row.ManifestS3Key.String,
-		strings.TrimSuffix(row.ManifestS3Key.String, ".m3u8") + ".playback.m3u8",
+	if err := s3Client.Delete(ctx, row.ManifestS3Key.String); err != nil {
+		logger.WithError(err).WithField("s3_key", row.ManifestS3Key.String).Warn("Failed to delete superseded DVR chapter manifest")
 	}
-	for _, key := range keys {
-		if err := s3Client.Delete(ctx, key); err != nil {
-			logger.WithError(err).WithField("s3_key", key).Warn("Failed to delete superseded DVR chapter manifest")
-		}
-	}
-}
-
-func ChapterPlaybackTTL(startMs, endMs int64) time.Duration {
-	durationMs := endMs - startMs
-	if durationMs < 0 {
-		durationMs = 0
-	}
-	ttl := time.Duration(durationMs)*time.Millisecond + time.Hour
-	// Short chapters get enough time for client startup and retries; very long
-	// chapters cap at S3's practical presign limit so players refetch safely.
-	if ttl < 30*time.Minute {
-		return 30 * time.Minute
-	}
-	if ttl > 7*24*time.Hour {
-		return 7 * 24 * time.Hour
-	}
-	return ttl
-}
-
-func writePlaybackManifestForRows(ctx context.Context, baseKey string, rows []DVRSegmentRow, isActive bool, ttl time.Duration) (string, error) {
-	if s3Client == nil {
-		return "", errors.New("s3 client not configured")
-	}
-	finalSegs := make([]hls.FinalSegment, 0, len(rows))
-	var hasGaps bool
-	for _, r := range rows {
-		seg := hls.FinalSegment{
-			Name:              r.SegmentName,
-			Sequence:          r.Sequence,
-			DurationMs:        r.DurationMs,
-			MediaStartMs:      r.MediaStartMs,
-			MediaEndMs:        r.MediaEndMs,
-			ProgramDateTimeMs: r.MediaStartMs,
-			Lost:              r.Status == "lost_local",
-		}
-		if seg.Lost {
-			hasGaps = true
-		} else if r.Status == "uploaded" || r.Status == "deleted_local" {
-			url, mintErr := s3Client.GeneratePresignedGET(r.S3Key, ttl)
-			if mintErr != nil {
-				return "", fmt.Errorf("mint segment %s: %w", r.SegmentName, mintErr)
-			}
-			seg.URI = url
-		} else {
-			continue
-		}
-		finalSegs = append(finalSegs, seg)
-	}
-	manifestBody := hls.BuildVOD(finalSegs, hls.BuildVODOptions{HasGaps: hasGaps, Event: isActive})
-	playbackKey := strings.TrimSuffix(baseKey, ".m3u8") + ".playback.m3u8"
-	if err := s3Client.PutObject(ctx, playbackKey, []byte(manifestBody), "application/vnd.apple.mpegurl"); err != nil {
-		return "", fmt.Errorf("upload playback manifest: %w", err)
-	}
-	return s3Client.GeneratePresignedGET(playbackKey, ttl)
 }
 
 type DVRChapterPolicy struct {

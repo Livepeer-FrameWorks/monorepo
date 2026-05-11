@@ -225,7 +225,7 @@ See [Playback Access Control](/builders/playback-access-control).
 
 Use this path when you want to keep your hardware and network position, but add FrameWorks control, routing, and analytics. This is the Mist-native route: the edge still runs MistServer, the engine you already know and that we co-maintain. Helmsman wraps it for config sync and trigger forwarding, while Foghorn handles validation, routing, federation, and telemetry.
 
-Hybrid edges are experimental today. They are less flexible than raw MistServer because Helmsman syncs managed config from FrameWorks, but that boundary can be loosened for real operator needs through account-level overrides or custom config extension points. If you need SDI workflows, UDP hole punching, custom trigger behavior, or direct Mist overrides, talk to us before treating the managed surface as a hard no.
+Hybrid edges are available through the FrameWorks edge workflow, but they are more opinionated than raw MistServer because Helmsman syncs managed config from FrameWorks. If you need SDI workflows, UDP hole punching, custom trigger behavior, or direct Mist overrides, talk to us before treating the managed surface as a hard no.
 
 ### Edge walkthrough
 
@@ -346,15 +346,19 @@ Use this path when you want to stop running the media engine and accept the mana
 - Skipper diagnostics for API questions, routing, rebuffering, and ingest issues.
 - Agent surfaces: MCP, wallet auth, and x402.
 - Cross-cluster artifact access through federation.
-- Future operator marketplace: once public cluster publishing is ready, operators with spare compute or bandwidth should be able to sell that capacity instead of only using it for their own traffic.
+- Cluster marketplace: publish cluster capacity, manage subscriptions, and route tenants through the same control plane.
 
 ## Beta and tricky bits
 
-- **Hybrid edge deployment is experimental.** It is useful for testing and early operators, but it is not the same maturity level as running raw MistServer yourself. We can extend it around concrete customer needs; do not assume the current Helmsman config boundary is final.
+- **Hybrid and self-hosted production cutovers need operator validation.** Test DNS, TLS,
+  firewall policy, capacity, node enrollment, and upgrade runbooks before moving production
+  traffic.
 - **Full self-hosting is materially heavier than one Mist binary.** If you want sovereignty plus FrameWorks, budget for the platform services and operational footprint.
 - **Sovereign installs are still opinionated.** Purser does not yet act as a generic adapter for external billing/invoicing, and crypto-oriented surfaces such as wallet auth and x402 are not fully removable product modules today.
-- **The operator marketplace is still in progress.** You do not lose anything today; the upside is future public cluster publishing, where operators can sell excess compute and bandwidth through FrameWorks instead of keeping every edge private.
-- **Billing is in beta.** Rates and allowances may change as the platform matures.
+- **Marketplace primitives exist, but the public marketplace program is still being built.**
+  Validate operator vetting, pricing, approval flow, and support boundaries before relying on
+  third-party clusters for production traffic.
+- **Billing rates are still maturing.** Rates and allowances may change as the platform matures.
 
 ## Get help
 

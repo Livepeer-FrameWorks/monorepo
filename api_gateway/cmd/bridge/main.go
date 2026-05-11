@@ -160,6 +160,10 @@ func main() {
 		return errors.New("internal error")
 	})
 
+	gqlHandler.AroundOperations(func(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
+		return next(resolvers.WithNodeHealthCache(ctx))
+	})
+
 	// Enable introspection for developer API explorer
 	gqlHandler.Use(extension.Introspection{})
 

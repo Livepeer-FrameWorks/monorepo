@@ -191,16 +191,29 @@ func (s *ChapterSweeper) processDirtyChapters(ctx context.Context) {
 		return
 	}
 	for _, ch := range chapters {
-		isActive := ch.IsCurrent && control.DVRArtifactStillRecording(ctx, ch.ArtifactHash)
-		if _, _, err := control.GenerateChapter(ctx, control.GenerateChapterOptions{
-			ArtifactHash:          ch.ArtifactHash,
-			Mode:                  ch.Mode,
-			IntervalSeconds:       ch.IntervalSeconds.Int32,
-			StartMs:               ch.StartMs,
-			EndMs:                 ch.EndMs,
-			IsActive:              isActive,
-			WritePlaybackManifest: true,
-		}, s.logger); err != nil {
+		err := control.WithDVRChapterMutationLock(ctx, ch.ArtifactHash, func() error {
+			locked, getErr := control.GetChapter(ctx, ch.ChapterID)
+			if getErr != nil {
+				if errors.Is(getErr, sql.ErrNoRows) {
+					return nil
+				}
+				return getErr
+			}
+			if locked == nil || locked.LastRebuiltAt.Valid {
+				return nil
+			}
+			isActive := locked.IsCurrent && control.DVRArtifactStillRecording(ctx, locked.ArtifactHash)
+			_, _, genErr := control.GenerateChapter(ctx, control.GenerateChapterOptions{
+				ArtifactHash:    locked.ArtifactHash,
+				Mode:            locked.Mode,
+				IntervalSeconds: locked.IntervalSeconds.Int32,
+				StartMs:         locked.StartMs,
+				EndMs:           locked.EndMs,
+				IsActive:        isActive,
+			}, s.logger)
+			return genErr
+		})
+		if err != nil {
 			s.logger.WithError(err).WithFields(logging.Fields{
 				"artifact_hash": ch.ArtifactHash,
 				"chapter_id":    ch.ChapterID,
@@ -364,13 +377,12 @@ func (s *ChapterSweeper) processArtifact(
 	var backfillFromMs int64
 	if prev != nil && (prev.StartMs != startMs || prev.EndMs != endMs) {
 		if _, _, closeErr := control.GenerateChapter(ctx, control.GenerateChapterOptions{
-			ArtifactHash:          prev.ArtifactHash,
-			Mode:                  prev.Mode,
-			IntervalSeconds:       prev.IntervalSeconds.Int32,
-			StartMs:               prev.StartMs,
-			EndMs:                 prev.EndMs,
-			IsActive:              false,
-			WritePlaybackManifest: true,
+			ArtifactHash:    prev.ArtifactHash,
+			Mode:            prev.Mode,
+			IntervalSeconds: prev.IntervalSeconds.Int32,
+			StartMs:         prev.StartMs,
+			EndMs:           prev.EndMs,
+			IsActive:        false,
 		}, s.logger); closeErr != nil {
 			s.logger.WithError(closeErr).WithFields(logFields).Warn("Chapter sweep: failed to write closed previous chapter")
 			return
@@ -415,13 +427,12 @@ func (s *ChapterSweeper) processArtifact(
 	}
 
 	if _, _, err := control.GenerateChapter(ctx, control.GenerateChapterOptions{
-		ArtifactHash:          artifactHash,
-		Mode:                  mode,
-		IntervalSeconds:       effInterval,
-		StartMs:               startMs,
-		EndMs:                 endMs,
-		IsActive:              true,
-		WritePlaybackManifest: true,
+		ArtifactHash:    artifactHash,
+		Mode:            mode,
+		IntervalSeconds: effInterval,
+		StartMs:         startMs,
+		EndMs:           endMs,
+		IsActive:        true,
 	}, s.logger); err != nil {
 		s.logger.WithError(err).WithFields(logFields).Warn("Chapter sweep: failed to materialize current chapter")
 	}

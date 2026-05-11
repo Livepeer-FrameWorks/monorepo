@@ -1,6 +1,10 @@
 package mist
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+)
 
 func TestExtractInternalName(t *testing.T) {
 	cases := []struct {
@@ -74,5 +78,26 @@ func TestIsPlaybackViewerRequest(t *testing.T) {
 		if got := IsPlaybackViewerRequest(tc.connector, tc.requestURL); got != tc.expected {
 			t.Fatalf("%s: expected %v, got %v", tc.name, tc.expected, got)
 		}
+	}
+}
+
+func TestParseTriggerToProtobufRequestIdUnique(t *testing.T) {
+	logger := logging.NewLogger()
+	payload := []byte("rtmp://example/app/stream\nexample.com\nlive+stream_id\n")
+
+	a, err := ParseTriggerToProtobuf(TriggerPushRewrite, payload, "node-1", logger)
+	if err != nil {
+		t.Fatalf("first parse failed: %v", err)
+	}
+	b, err := ParseTriggerToProtobuf(TriggerPushRewrite, payload, "node-1", logger)
+	if err != nil {
+		t.Fatalf("second parse failed: %v", err)
+	}
+
+	if a.RequestId == "" {
+		t.Fatalf("RequestId must be non-empty")
+	}
+	if a.RequestId == b.RequestId {
+		t.Fatalf("RequestId collision: both triggers got %q", a.RequestId)
 	}
 }

@@ -116,14 +116,14 @@ Event types are string constants emitted by services. The list below reflects cu
 
 ## 5. Producers & Payloads
 
-| Producer      | Payloads                                                                                                             | Source                              |
-| ------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| Bridge        | `APIRequestBatch`, `StreamChangeEvent`, `StreamKeyEvent`, `AuthEvent`, `TenantEvent`, `ClusterEvent`, `BillingEvent` | GraphQL mutations + usage tracker   |
-| Commodore     | `AuthEvent`, `StreamChangeEvent`, `StreamKeyEvent`, `ArtifactEvent`                                                  | Auth + stream + artifact registry   |
-| Quartermaster | `TenantEvent`, `ClusterEvent`                                                                                        | Tenant + cluster lifecycle          |
-| Purser        | `BillingEvent`                                                                                                       | Billing lifecycle (webhooks + gRPC) |
-| Deckhand      | `MessageLifecycleData`                                                                                               | Messaging lifecycle                 |
-| Foghorn       | `ArtifactEvent`                                                                                                      | Artifact lifecycle (clip/DVR/VOD)   |
+| Producer      | Payloads                                                                                                             | Source                                        |
+| ------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| Bridge        | `APIRequestBatch`, `StreamChangeEvent`, `StreamKeyEvent`, `AuthEvent`, `TenantEvent`, `ClusterEvent`, `BillingEvent` | GraphQL mutations + usage tracker             |
+| Commodore     | `AuthEvent`, `StreamChangeEvent`, `StreamKeyEvent`, `TenantEvent`, `ArtifactEvent`                                   | Auth + stream + retention + artifact registry |
+| Quartermaster | `TenantEvent`, `ClusterEvent`                                                                                        | Tenant + cluster lifecycle                    |
+| Purser        | `BillingEvent`                                                                                                       | Billing lifecycle (webhooks + gRPC)           |
+| Deckhand      | `MessageLifecycleData`                                                                                               | Messaging lifecycle                           |
+| Foghorn       | `ArtifactEvent`                                                                                                      | Artifact lifecycle (clip/DVR/VOD)             |
 
 **Notes**
 
@@ -131,6 +131,8 @@ Event types are string constants emitted by services. The list below reflects cu
 - Only **metadata** is stored and broadcast for support events; message content is excluded.
 - API usage aggregates include **HMAC-hashed** user/token identifiers for unique counts (no raw IDs stored).
 - Foghorn emits `artifact_lifecycle` service events via the Decklog client when sending clip/DVR/VOD lifecycle analytics.
+- Commodore emits `media.retention_policy.changed`, `media.retention.override_applied`, and `media.retention.override_reset` for customer-tunable storage retention changes.
+- Commodore emits `stream_updated` with `push_targets` or `playback_policy` in `changed_fields` when those stream-level controls change, and `playback_policy_changed` ArtifactEvents for clip/VOD playback policy changes.
 - Usage tracking reserves system tenant UUIDs (including an anonymous usage bucket) to avoid dropping unauthenticated traffic from rollups.
 
 ---

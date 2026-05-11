@@ -46,7 +46,17 @@ Some clusters allow instant connection; others require approval from the operato
 After subscribing, use set_preferred_cluster to route your traffic to the new cluster. To create your own self-hosted edge cluster, use create_edge_cluster.`,
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args SubscribeToClusterInput) (*mcp.CallToolResult, any, error) {
-			return handleSubscribeToCluster(ctx, args, resolver, serviceClients, logger)
+			return handleSubscribeToCluster(ctx, args, resolver, logger)
+		},
+	)
+
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        "unsubscribe_from_cluster",
+			Description: `Unsubscribe from a marketplace cluster. Requires confirm="UNSUBSCRIBE FROM CLUSTER".`,
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, args UnsubscribeFromClusterInput) (*mcp.CallToolResult, any, error) {
+			return handleUnsubscribeFromCluster(ctx, args, resolver, logger)
 		},
 	)
 
@@ -61,6 +71,16 @@ Your preferred cluster maintains an always-on peering connection with your offic
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args SetPreferredClusterInput) (*mcp.CallToolResult, any, error) {
 			return handleSetPreferredCluster(ctx, args, resolver, logger)
+		},
+	)
+
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        "update_cluster_marketplace",
+			Description: `Update marketplace visibility, approval, description, or pricing for a cluster you own. Pricing changes can affect subscribers. Requires confirm="UPDATE CLUSTER MARKETPLACE".`,
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, args UpdateClusterMarketplaceInput) (*mcp.CallToolResult, any, error) {
+			return handleUpdateClusterMarketplace(ctx, args, resolver, logger)
 		},
 	)
 
@@ -178,8 +198,23 @@ type SubscribeToClusterInput struct {
 	InviteToken *string `json:"invite_token,omitempty" jsonschema_description:"Optional invite token if the cluster requires one."`
 }
 
+type UnsubscribeFromClusterInput struct {
+	ClusterID string `json:"cluster_id" jsonschema:"required" jsonschema_description:"The cluster ID to unsubscribe from."`
+	Confirm   string `json:"confirm" jsonschema:"required" jsonschema_description:"Must be exactly 'UNSUBSCRIBE FROM CLUSTER'."`
+}
+
 type SetPreferredClusterInput struct {
 	ClusterID string `json:"cluster_id" jsonschema:"required" jsonschema_description:"The cluster ID to set as preferred. Must be a cluster you are subscribed to."`
+}
+
+type UpdateClusterMarketplaceInput struct {
+	ClusterID         string  `json:"cluster_id" jsonschema:"required" jsonschema_description:"The cluster ID to update. Must be owned by the caller."`
+	Visibility        *string `json:"visibility,omitempty" jsonschema_description:"Marketplace visibility: PUBLIC, UNLISTED, or PRIVATE."`
+	PricingModel      *string `json:"pricing_model,omitempty" jsonschema_description:"Pricing model: FREE_UNMETERED, METERED, MONTHLY, TIER_INHERIT, or CUSTOM."`
+	MonthlyPriceCents *int    `json:"monthly_price_cents,omitempty" jsonschema_description:"Monthly price in cents when pricing_model is MONTHLY."`
+	RequiresApproval  *bool   `json:"requires_approval,omitempty" jsonschema_description:"Whether subscriptions require cluster-owner approval."`
+	ShortDescription  *string `json:"short_description,omitempty" jsonschema_description:"Short marketplace description."`
+	Confirm           string  `json:"confirm" jsonschema:"required" jsonschema_description:"Must be exactly 'UPDATE CLUSTER MARKETPLACE'."`
 }
 
 type CreateEdgeClusterInput struct {
@@ -242,6 +277,16 @@ type PreferredClusterResult struct {
 	ClusterID   string `json:"cluster_id"`
 	ClusterName string `json:"cluster_name"`
 	Message     string `json:"message"`
+}
+
+type ClusterMarketplaceUpdateResult struct {
+	ClusterID         string `json:"cluster_id"`
+	ClusterName       string `json:"cluster_name"`
+	Visibility        string `json:"visibility"`
+	PricingModel      string `json:"pricing_model"`
+	MonthlyPriceCents int32  `json:"monthly_price_cents,omitempty"`
+	RequiresApproval  bool   `json:"requires_approval"`
+	ShortDescription  string `json:"short_description,omitempty"`
 }
 
 type EdgeClusterResult struct {
@@ -348,7 +393,7 @@ func handleBrowseMarketplace(ctx context.Context, args BrowseMarketplaceInput, r
 	})
 }
 
-func handleSubscribeToCluster(ctx context.Context, args SubscribeToClusterInput, resolver *resolvers.Resolver, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+func handleSubscribeToCluster(ctx context.Context, args SubscribeToClusterInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return toolError("Authentication required")
@@ -382,6 +427,32 @@ func handleSubscribeToCluster(ctx context.Context, args SubscribeToClusterInput,
 	}
 }
 
+func handleUnsubscribeFromCluster(ctx context.Context, args UnsubscribeFromClusterInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return toolError("Authentication required")
+	}
+	if result, meta, err := requireConfirmation(args.Confirm, "UNSUBSCRIBE FROM CLUSTER"); result != nil || meta != nil || err != nil {
+		return result, meta, err
+	}
+	if strings.TrimSpace(args.ClusterID) == "" {
+		return toolError("cluster_id is required")
+	}
+	ok, err := resolver.DoUnsubscribeFromCluster(ctx, args.ClusterID)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to unsubscribe from cluster")
+		return toolError(fmt.Sprintf("Failed to unsubscribe from cluster: %v", err))
+	}
+	if !ok {
+		return toolError("unsubscribe request was rejected")
+	}
+	return infraToolSuccessJSON(SubscriptionResult{
+		Status:    "UNSUBSCRIBED",
+		Message:   "Cluster subscription removed.",
+		ClusterID: args.ClusterID,
+	})
+}
+
 func handleSetPreferredCluster(ctx context.Context, args SetPreferredClusterInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
@@ -400,6 +471,57 @@ func handleSetPreferredCluster(ctx context.Context, args SetPreferredClusterInpu
 			ClusterName: v.ClusterName,
 			Message:     fmt.Sprintf("Preferred cluster set to %s. DNS steering will route traffic to this cluster's edges. Your official cluster maintains always-on peering with this cluster.", v.ClusterName),
 		})
+	case *model.ValidationError:
+		return toolError(v.Message)
+	case *model.AuthError:
+		return toolError(v.Message)
+	case *model.NotFoundError:
+		return toolError(v.Message)
+	default:
+		return toolError("Unexpected response")
+	}
+}
+
+func handleUpdateClusterMarketplace(ctx context.Context, args UpdateClusterMarketplaceInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return toolError("Authentication required")
+	}
+	if result, meta, err := requireConfirmation(args.Confirm, "UPDATE CLUSTER MARKETPLACE"); result != nil || meta != nil || err != nil {
+		return result, meta, err
+	}
+	if strings.TrimSpace(args.ClusterID) == "" {
+		return toolError("cluster_id is required")
+	}
+
+	input := model.UpdateClusterMarketplaceInput{
+		MonthlyPriceCents: args.MonthlyPriceCents,
+		RequiresApproval:  args.RequiresApproval,
+		ShortDescription:  args.ShortDescription,
+	}
+	if args.Visibility != nil {
+		visibility, err := parseClusterVisibility(*args.Visibility)
+		if err != nil {
+			return toolError(err.Error())
+		}
+		input.Visibility = &visibility
+	}
+	if args.PricingModel != nil {
+		pricingModel, err := parseClusterPricingModel(*args.PricingModel)
+		if err != nil {
+			return toolError(err.Error())
+		}
+		input.PricingModel = &pricingModel
+	}
+
+	result, err := resolver.DoUpdateClusterMarketplace(ctx, args.ClusterID, input)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to update cluster marketplace")
+		return toolError(fmt.Sprintf("Failed to update cluster marketplace: %v", err))
+	}
+	switch v := result.(type) {
+	case *pb.InfrastructureCluster:
+		return infraToolSuccessJSON(clusterMarketplaceUpdateToResult(v))
 	case *model.ValidationError:
 		return toolError(v.Message)
 	case *model.AuthError:
@@ -681,6 +803,54 @@ func handleGetNodeHealth(ctx context.Context, args GetNodeHealthInput, serviceCl
 		result.Longitude = &lon
 	}
 	return infraToolSuccessJSON(result)
+}
+
+func parseClusterVisibility(value string) (pb.ClusterVisibility, error) {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "PUBLIC":
+		return pb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC, nil
+	case "UNLISTED":
+		return pb.ClusterVisibility_CLUSTER_VISIBILITY_UNLISTED, nil
+	case "PRIVATE":
+		return pb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE, nil
+	default:
+		return pb.ClusterVisibility_CLUSTER_VISIBILITY_UNSPECIFIED, fmt.Errorf("invalid visibility %q; expected PUBLIC, UNLISTED, or PRIVATE", value)
+	}
+}
+
+func parseClusterPricingModel(value string) (pb.ClusterPricingModel, error) {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "FREE_UNMETERED":
+		return pb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED, nil
+	case "METERED":
+		return pb.ClusterPricingModel_CLUSTER_PRICING_METERED, nil
+	case "MONTHLY":
+		return pb.ClusterPricingModel_CLUSTER_PRICING_MONTHLY, nil
+	case "TIER_INHERIT":
+		return pb.ClusterPricingModel_CLUSTER_PRICING_TIER_INHERIT, nil
+	case "CUSTOM":
+		return pb.ClusterPricingModel_CLUSTER_PRICING_CUSTOM, nil
+	default:
+		return pb.ClusterPricingModel_CLUSTER_PRICING_UNSPECIFIED, fmt.Errorf("invalid pricing_model %q; expected FREE_UNMETERED, METERED, MONTHLY, TIER_INHERIT, or CUSTOM", value)
+	}
+}
+
+func clusterMarketplaceUpdateToResult(cluster *pb.InfrastructureCluster) ClusterMarketplaceUpdateResult {
+	if cluster == nil {
+		return ClusterMarketplaceUpdateResult{}
+	}
+	out := ClusterMarketplaceUpdateResult{
+		ClusterID:         cluster.GetClusterId(),
+		ClusterName:       cluster.GetClusterName(),
+		Visibility:        strings.TrimPrefix(cluster.GetVisibility().String(), "CLUSTER_VISIBILITY_"),
+		PricingModel:      strings.TrimPrefix(cluster.GetPricingModel().String(), "CLUSTER_PRICING_"),
+		MonthlyPriceCents: cluster.GetMonthlyPriceCents(),
+		RequiresApproval:  cluster.GetRequiresApproval(),
+	}
+	if cluster.ShortDescription != nil {
+		out.ShortDescription = cluster.GetShortDescription()
+	}
+	return out
 }
 
 func infraToolSuccessJSON(result interface{}) (*mcp.CallToolResult, any, error) {

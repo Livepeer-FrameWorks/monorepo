@@ -242,6 +242,10 @@ export default defineConfig({
       ],
       sidebar: [
         {
+          label: "Platform",
+          items: [{ label: "Capabilities", slug: "platform/feature-matrix" }, { slug: "roadmap" }],
+        },
+        {
           label: "Migrate",
           autogenerate: { directory: "migrate" },
         },
@@ -280,9 +284,14 @@ export default defineConfig({
             { slug: "builders/pull-streams" },
             { slug: "builders/thumbnails-and-previews" },
             { slug: "builders/recordings" },
+            { slug: "builders/clips" },
+            { slug: "builders/dvr-chapters" },
+            { slug: "builders/storage-and-retention" },
             { slug: "builders/playback-access-control" },
             { slug: "builders/api-reference" },
+            { slug: "builders/analytics-api" },
             { slug: "builders/billing" },
+            { slug: "builders/wallet-and-crypto" },
             { slug: "builders/troubleshooting" },
           ],
         },
@@ -345,10 +354,6 @@ export default defineConfig({
               ],
             },
           ],
-        },
-        {
-          label: "Roadmap",
-          slug: "roadmap",
         },
       ],
     }),

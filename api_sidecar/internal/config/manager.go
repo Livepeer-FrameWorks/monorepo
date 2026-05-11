@@ -29,9 +29,16 @@ type Manager struct {
 	logger         logging.Logger
 	lastSeed       *pb.ConfigSeed
 	lastAppliedSum string
+	retryTimer     *time.Timer
+	retryAttempt   int
 	lastCaddyHash  string
 	caddyActivated bool
 }
+
+const (
+	maxReconcileRetryDelay = 30 * time.Second
+	inertMistSource        = "/tmp/none"
+)
 
 var manager *Manager
 
@@ -53,6 +60,7 @@ func ApplySeed(seed *pb.ConfigSeed) {
 	}
 	manager.mu.Lock()
 	manager.lastSeed = seed
+	manager.cancelRetryLocked()
 	manager.mu.Unlock()
 	go manager.reconcile()
 }
@@ -116,7 +124,8 @@ func (m *Manager) reconcile() {
 	}
 	current, err := m.mistClient.ConfigBackup()
 	if err != nil {
-		m.logger.WithError(err).Warn("ConfigBackup failed, skipping reconcile")
+		m.logger.WithError(err).Warn("ConfigBackup failed, retrying Mist config reconcile")
+		m.scheduleRetry()
 		return
 	}
 	desiredConfig := map[string]any{}
@@ -165,27 +174,71 @@ func (m *Manager) reconcile() {
 
 	if err := m.ensureProtocols(current); err != nil {
 		m.logger.WithError(err).Warn("ensureProtocols failed")
+		m.scheduleRetry()
+		return
 	}
 	if err := m.ensureStreams(seed); err != nil {
 		m.logger.WithError(err).Warn("ensureStreams failed")
+		m.scheduleRetry()
+		return
 	}
 
 	if len(desiredConfig) > 0 {
 		if _, err := m.mistClient.UpdateConfig(desiredConfig); err != nil {
 			m.logger.WithError(err).Warn("UpdateConfig failed")
+			m.scheduleRetry()
+			return
 		}
 	}
 
 	if err := m.mistClient.Save(); err != nil {
 		m.logger.WithError(err).Warn("Mist config save failed")
+		m.scheduleRetry()
+		return
 	}
 
 	// Record applied signature
 	if sum := hashSeed(seed); sum != "" {
 		m.mu.Lock()
 		m.lastAppliedSum = sum
+		m.retryAttempt = 0
 		m.mu.Unlock()
 	}
+}
+
+func (m *Manager) scheduleRetry() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.lastSeed == nil || m.retryTimer != nil {
+		return
+	}
+
+	m.retryAttempt++
+	delay := time.Second << min(m.retryAttempt-1, 5)
+	if delay > maxReconcileRetryDelay {
+		delay = maxReconcileRetryDelay
+	}
+
+	m.logger.WithFields(logging.Fields{
+		"attempt":  m.retryAttempt,
+		"delay_ms": delay.Milliseconds(),
+	}).Info("Scheduled Mist config reconcile retry")
+
+	m.retryTimer = time.AfterFunc(delay, func() {
+		m.mu.Lock()
+		m.retryTimer = nil
+		m.mu.Unlock()
+		m.reconcile()
+	})
+}
+
+func (m *Manager) cancelRetryLocked() {
+	if m.retryTimer != nil {
+		m.retryTimer.Stop()
+		m.retryTimer = nil
+	}
+	m.retryAttempt = 0
 }
 
 func grpcCABundlePath() string {
@@ -523,7 +576,7 @@ func (m *Manager) ensureProtocols(current map[string]any) error {
 	}
 
 	need := []map[string]any{}
-	needsUpdate := false
+	var protocolUpdates []protocolUpdate
 
 	// HTTP protocol - check if exists and has correct pubaddr
 	if existing, ok := existingProtos["HTTP"]; !ok {
@@ -545,7 +598,9 @@ func (m *Manager) ensureProtocols(current map[string]any) error {
 				"current": currentPubaddr,
 				"desired": httpPubURL,
 			}).Info("HTTP pubaddr needs update")
-			needsUpdate = true
+			updated := cloneStringAnyMap(existing)
+			updated["pubaddr"] = []string{httpPubURL}
+			protocolUpdates = append(protocolUpdates, protocolUpdate{old: existing, new: updated})
 		}
 	}
 
@@ -567,7 +622,10 @@ func (m *Manager) ensureProtocols(current map[string]any) error {
 				"current": currentPubhost,
 				"desired": webrtcPubHost,
 			}).Info("WebRTC pubhost needs update")
-			needsUpdate = true
+			updated := cloneStringAnyMap(existing)
+			updated["bindhost"] = "0.0.0.0"
+			updated["pubhost"] = webrtcPubHost
+			protocolUpdates = append(protocolUpdates, protocolUpdate{old: existing, new: updated})
 		}
 	}
 
@@ -594,19 +652,25 @@ func (m *Manager) ensureProtocols(current map[string]any) error {
 	// is required for player compatibility across dash.js and hls.js LL-HLS.
 	cmafNeedsUpdate := false
 	if existing, ok := existingProtos["CMAF"]; !ok {
-		entry := map[string]any{"connector": "CMAF", "mergesessions": false, "nonchunked": true}
+		entry := map[string]any{"connector": "CMAF", "mergesessions": true, "nonchunked": true}
 		need = append(need, entry)
 	} else {
-		currentMergesessions, mok := existing["mergesessions"].(bool)
+		currentMergesessions, hasMergesessions := existing["mergesessions"].(bool)
 		currentNonchunked, nok := existing["nonchunked"].(bool)
-		if !mok || !nok || currentMergesessions || !currentNonchunked {
+		if !hasMergesessions || !currentMergesessions || !nok || !currentNonchunked {
 			m.logger.WithFields(logging.Fields{
 				"current_mergesessions": currentMergesessions,
-				"desired_mergesessions": false,
+				"desired_mergesessions": true,
 				"current_nonchunked":    currentNonchunked,
 				"desired_nonchunked":    true,
 			}).Info("CMAF settings need update")
 			cmafNeedsUpdate = true
+		}
+		if cmafNeedsUpdate {
+			updated := cloneStringAnyMap(existing)
+			updated["mergesessions"] = true
+			updated["nonchunked"] = true
+			protocolUpdates = append(protocolUpdates, protocolUpdate{old: existing, new: updated})
 		}
 	}
 
@@ -631,28 +695,29 @@ func (m *Manager) ensureProtocols(current map[string]any) error {
 		}
 	}
 
-	// Update existing protocols if pubaddr/pubhost or CMAF settings drifted
-	if (needsUpdate && (httpPubURL != "" || webrtcPubHost != "")) || cmafNeedsUpdate {
-		protocols := []map[string]any{}
-		if httpPubURL != "" {
-			protocols = append(protocols, map[string]any{"connector": "HTTP", "pubaddr": []string{httpPubURL}})
+	for _, update := range protocolUpdates {
+		if err := m.mistClient.UpdateProtocol(update.old, update.new); err != nil {
+			return err
 		}
-		if webrtcPubHost != "" {
-			protocols = append(protocols, map[string]any{"connector": "WebRTC", "bindhost": "0.0.0.0", "pubhost": webrtcPubHost})
-		}
-		if cmafNeedsUpdate {
-			protocols = append(protocols, map[string]any{"connector": "CMAF", "mergesessions": false, "nonchunked": true})
-		}
-
-		updateConfig := map[string]any{"protocols": protocols}
-		if _, err := m.mistClient.UpdateConfig(updateConfig); err != nil {
-			m.logger.WithError(err).Warn("Failed to update protocol settings")
-		} else {
-			m.logger.Info("Updated protocol settings")
-		}
+	}
+	if len(protocolUpdates) > 0 {
+		m.logger.WithField("count", len(protocolUpdates)).Info("Updated protocol settings")
 	}
 
 	return nil
+}
+
+type protocolUpdate struct {
+	old map[string]any
+	new map[string]any
+}
+
+func cloneStringAnyMap(src map[string]any) map[string]any {
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func hostnameFromPublicURL(edgePublicURL string) string {
@@ -709,9 +774,10 @@ func (m *Manager) ensureStreams(seed *pb.ConfigSeed) error {
 			"tags":          def.GetTags(),
 		}
 
-		// processing+ sources are resolved dynamically via STREAM_SOURCE.
-		if strings.HasPrefix(def.GetName(), "processing+") {
-			entry["source"] = ""
+		// processing+ sources are resolved dynamically via STREAM_SOURCE, but
+		// Mist still requires a syntactically valid configured source.
+		if def.GetName() == "processing" || strings.HasPrefix(def.GetName(), "processing+") {
+			entry["source"] = inertMistSource
 		}
 
 		// All stream types use STREAM_PROCESS trigger for per-instance process config.

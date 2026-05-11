@@ -1,4 +1,5 @@
 import { getGraphqlHttpUrl } from "$lib/config";
+import type { ContentEndpoints, PlayerMetadata } from "@livepeer-frameworks/player-svelte";
 
 export type DVRChapterMode = "WINDOW_SIZED" | "FIXED_INTERVAL" | "EXPLICIT_RANGE" | "NONE";
 
@@ -21,6 +22,16 @@ export interface DVRChapter {
   isCurrent: boolean;
   hasGaps: boolean;
   segmentCount: number;
+}
+
+interface ViewerEndpoint {
+  nodeId: string;
+  baseUrl?: string | null;
+  protocol: string;
+  url: string;
+  geoDistance?: number | null;
+  loadScore?: number | null;
+  outputs?: Record<string, unknown> | null;
 }
 
 interface GraphQLResponse<T> {
@@ -141,4 +152,75 @@ export async function retrieveDvrChapter(options: {
     throw new Error("DVR chapter was not found");
   }
   return data.dvrChapter;
+}
+
+export async function resolveDvrChapterPlayback(playbackId: string): Promise<{
+  contentId: string;
+  endpoints: ContentEndpoints;
+  metadata?: PlayerMetadata | null;
+}> {
+  const contentId = playbackId;
+  const data = await graphqlRequest<{
+    resolveViewerEndpoint: {
+      primary: ViewerEndpoint;
+      fallbacks: ViewerEndpoint[];
+      metadata?: PlayerMetadata | null;
+    } | null;
+  }>(
+    `
+      query WebDVRChapterPlayback($contentId: String!) {
+        resolveViewerEndpoint(contentId: $contentId) {
+          primary {
+            nodeId
+            baseUrl
+            protocol
+            url
+            geoDistance
+            loadScore
+            outputs
+          }
+          fallbacks {
+            nodeId
+            baseUrl
+            protocol
+            url
+            geoDistance
+            loadScore
+            outputs
+          }
+          metadata {
+            status
+            isLive
+            viewers
+            bufferState
+            protocolHints
+            dvrStatus
+            dvrSourceUri
+            contentId
+            contentType
+            title
+            description
+            durationSeconds
+            recordingSizeBytes
+            clipSource
+            createdAt
+          }
+        }
+      }
+    `,
+    { contentId }
+  );
+
+  if (!data.resolveViewerEndpoint?.primary) {
+    throw new Error("DVR chapter playback endpoint was not available");
+  }
+  return {
+    contentId,
+    endpoints: {
+      primary: data.resolveViewerEndpoint.primary,
+      fallbacks: data.resolveViewerEndpoint.fallbacks || [],
+      metadata: data.resolveViewerEndpoint.metadata ?? undefined,
+    } as ContentEndpoints,
+    metadata: data.resolveViewerEndpoint.metadata ?? null,
+  };
 }

@@ -1,0 +1,2208 @@
+{
+  "features": [
+    {
+      "slug": "streams",
+      "name": "Live streams",
+      "area": "streaming",
+      "description": "Push and pull live streams with stream keys and ingest configuration.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "createStream",
+            "updateStream",
+            "deleteStream",
+            "refreshStreamKey"
+          ],
+          "queries": [
+            "stream",
+            "streamsConnection",
+            "streamingConfig"
+          ],
+          "subscriptions": [
+            "liveStreamEvents",
+            "liveTrackListUpdates"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "create_stream",
+            "update_stream",
+            "delete_stream",
+            "refresh_stream_key"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/streams",
+            "/streams/:id"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/streams.mdx",
+            "builders/quick-start.mdx",
+            "builders/ingest.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "pull-streams",
+      "name": "Pull streams",
+      "area": "streaming",
+      "description": "Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit.",
+      "status": "partial",
+      "gap_reason": "Resolution-stage lifecycle events ship: Foghorn writes pull_source_events rows for STREAM_SOURCE evaluations (resolved / not_found / disabled / blocked_uri / private_not_allowed / commodore_error / foghorn_base_unresolved), exposed via Stream.recentPullSourceEvents and shown on the stream setup panel. Downstream MistServer dial telemetry needs new upstream connect/disconnect/retry trigger types before FrameWorks can show dial-stage health.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "createStream",
+            "updateStream"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "create_stream",
+            "update_stream"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/streams/:id"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/pull-streams.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "stream-keys",
+      "name": "Stream keys",
+      "area": "streaming",
+      "description": "Per-stream ingest credentials with rotation.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true,
+          "sensitive": true,
+          "returns_secret_material": true,
+          "requires_confirmation": true,
+          "audit_events": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "createStreamKey",
+            "deleteStreamKey",
+            "refreshStreamKey"
+          ],
+          "queries": [
+            "streamKeysConnection",
+            "validateStreamKey"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "list_stream_keys",
+            "create_stream_key",
+            "delete_stream_key",
+            "refresh_stream_key",
+            "validate_stream_key"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/streams/:id"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/ingest.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "playback",
+      "name": "Playback",
+      "area": "playback",
+      "description": "Resolve a viewer or ingest endpoint for a stream / VOD / clip.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "queries": [
+            "resolveViewerEndpoint",
+            "resolveIngestEndpoint"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "resolve_playback_endpoint"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/view"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/playback.mdx",
+            "builders/playback-advanced.mdx",
+            "builders/playback-theming.mdx",
+            "builders/playback-react.mdx",
+            "builders/playback-svelte.mdx",
+            "builders/playback-vanilla.mdx",
+            "builders/playback-wc.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "playback-access-control",
+      "name": "Playback access control",
+      "area": "playback",
+      "description": "Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with a dry-run tester and full agent management surface.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "configurability": {
+        "security_affecting": true,
+        "tenant_default": "false",
+        "per_resource_override": "present",
+        "effective_value_visible": "present",
+        "audit_events": "present",
+        "undo": "present"
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "setPlaybackPolicy",
+            "testPlaybackAccess"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "test_playback_access",
+            "set_playback_policy",
+            "clear_playback_policy"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/streams/:id"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/playback-access-control.mdx"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "title": "Test a JWT against the live policy",
+          "query": "mutation TestJWT {\n  testPlaybackAccess(input: {\n    playbackId: \"\u003cplayback-id\u003e\"\n    viewerToken: \"eyJhbGciOiJFUzI1NiIs...\"\n    connector: \"hls\"\n  }) {\n    ... on PlaybackAccessDecision {\n      allowed\n      reason\n      kid\n      claimsJson\n    }\n    ... on ValidationError { message field }\n  }\n}\n"
+        },
+        {
+          "title": "Inspect webhook policy without firing",
+          "query": "mutation Inspect {\n  testPlaybackAccess(input: {\n    playbackId: \"\u003cplayback-id\u003e\"\n    fireWebhook: false\n  }) {\n    ... on PlaybackAccessDecision { policyType reason detail }\n  }\n}\n"
+        },
+        {
+          "title": "Fire a real webhook test",
+          "query": "mutation Fire {\n  testPlaybackAccess(input: {\n    playbackId: \"\u003cplayback-id\u003e\"\n    viewerIp: \"203.0.113.42\"\n    connector: \"hls\"\n    fireWebhook: true\n  }) {\n    ... on PlaybackAccessDecision {\n      allowed reason webhookStatus webhookLatencyMs\n    }\n  }\n}\n"
+        }
+      ],
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "signing-keys",
+      "name": "Signing keys",
+      "area": "developer",
+      "description": "ES256 keypairs for signing playback JWTs. Private material returned once on creation.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true,
+          "sensitive": true,
+          "returns_secret_material": true,
+          "requires_confirmation": true,
+          "audit_events": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "createSigningKey",
+            "revokeSigningKey"
+          ],
+          "queries": [
+            "signingKey",
+            "signingKeysConnection"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "list_signing_keys",
+            "create_signing_key",
+            "revoke_signing_key"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/developer/signing-keys"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/playback-access-control.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "multistream-targets",
+      "name": "Multistream push targets",
+      "area": "streaming",
+      "description": "Forward live streams to additional RTMP/SRT destinations.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "configurability": {
+        "cost_affecting": true,
+        "per_resource_override": "present",
+        "effective_value_visible": "present",
+        "audit_events": "present",
+        "undo": "present"
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "createPushTarget",
+            "updatePushTarget",
+            "deletePushTarget"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "list_push_targets",
+            "create_push_target",
+            "update_push_target",
+            "delete_push_target"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/streams/:id"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/multistreaming.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "dvr-recordings",
+      "name": "DVR recordings",
+      "area": "storage",
+      "description": "24/7-capable DVR recording with bounded live seekback, continuous archive storage, chapter replay, and VOD-style playback.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "startDVR",
+            "stopDVR",
+            "deleteDVR"
+          ],
+          "queries": [
+            "dvrRecordingsConnection"
+          ],
+          "subscriptions": [
+            "liveDvrLifecycle"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "start_dvr",
+            "stop_dvr",
+            "delete_dvr"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/library"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/recordings.mdx",
+            "operators/dvr.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "dvr-chapters",
+      "name": "DVR chapters",
+      "area": "storage",
+      "description": "Virtual playlist views over long-running DVR archives, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without duplicating media.",
+      "status": "partial",
+      "gap_reason": "Chapter playback and policy controls are present in the dashboard; audit-event coverage for chapter-policy changes still needs verification.",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "configurability": {
+        "per_resource_override": "present",
+        "effective_value_visible": "partial",
+        "audit_events": "unverified",
+        "undo": "present"
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "setDVRChapterPolicy"
+          ],
+          "queries": [
+            "dvrChapter",
+            "dvrChapters"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "set_dvr_chapter_policy"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/streams/:id",
+            "/view"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/dvr-chapters.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "clips",
+      "name": "Clips",
+      "area": "storage",
+      "description": "Time-range clips extracted from streams or recordings.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "createClip",
+            "deleteClip"
+          ],
+          "queries": [
+            "clip",
+            "clipsConnection"
+          ],
+          "subscriptions": [
+            "liveClipLifecycle"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "create_clip",
+            "delete_clip"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/library"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/clips.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "vod",
+      "name": "VOD assets",
+      "area": "storage",
+      "description": "Multipart VOD upload and lifecycle.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "createVodUpload",
+            "completeVodUpload",
+            "abortVodUpload",
+            "deleteVodAsset"
+          ],
+          "queries": [
+            "vodAsset",
+            "vodAssetsConnection",
+            "vodUploadStatus"
+          ],
+          "subscriptions": [
+            "liveVodLifecycle"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "create_vod_upload",
+            "complete_vod_upload",
+            "abort_vod_upload",
+            "get_vod_upload_status",
+            "delete_vod_asset"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/library"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/recordings.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "media-retention",
+      "name": "Media retention",
+      "area": "storage",
+      "description": "Tenant-controlled storage policy for 24/7 DVR archives, clips, and VOD assets, with per-asset overrides and entitlement bounds.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "configurability": {
+        "cost_affecting": true,
+        "tenant_default": "present",
+        "per_resource_override": "present",
+        "effective_value_visible": "present",
+        "entitlement_bounds": "present",
+        "audit_events": "present",
+        "undo": "present"
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "setMediaRetentionPolicy",
+            "updateMediaRetention",
+            "resetMediaRetentionOverride"
+          ],
+          "queries": [
+            "mediaRetentionPolicy"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "get_retention_policy",
+            "set_retention_policy",
+            "update_asset_retention",
+            "reset_asset_retention"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/account/billing"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/storage-and-retention.mdx"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "title": "Read tenant default + tier bounds",
+          "query": "query MediaRetentionPolicy {\n  mediaRetentionPolicy {\n    recordingRetentionDays\n    effectiveRecordingRetentionDays\n    bounds { maxRecordingRetentionDays }\n  }\n}\n"
+        },
+        {
+          "title": "Set tenant default to 14 days",
+          "query": "mutation Set { setMediaRetentionPolicy(input: { recordingRetentionDays: 14 }) {\n  ... on MediaRetentionPolicy { effectiveRecordingRetentionDays }\n  ... on ValidationError { message field }\n} }\n"
+        },
+        {
+          "title": "Override one DVR to 90 days",
+          "query": "mutation Update {\n  updateMediaRetention(input: { targetType: DVR, targetId: \"\u003cdvr-hash\u003e\", retentionDays: 90 }) {\n    ... on EffectiveRetention { retentionDays retentionUntil source }\n    ... on ValidationError { message field }\n  }\n}\n"
+        }
+      ],
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "thumbnails-and-previews",
+      "name": "Thumbnails and sprite previews",
+      "area": "streaming",
+      "description": "Auto-generated poster frames and sprite-tile preview strips for live streams, clips, VOD, and DVR playback.",
+      "status": "partial",
+      "gap_reason": "Apps can read Chandler poster, sprite JPG, and sprite VTT URLs through resolveViewerEndpoint metadata and the resolve_playback_endpoint MCP tool. The webapp builds bulk library thumbnails by combining streamingConfig.chandlerDomain with stream IDs and artifact hashes from list queries. The remaining gap is a first-class bulk asset URL surface for external apps and agents: streams/clips/DVR/VOD list queries should return ready-to-use preview asset URLs or a shared helper contract, without requiring one resolveViewerEndpoint call per asset. Generation status, regeneration, and troubleshooting remain follow-on operational controls.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "queries": [
+            "resolveViewerEndpoint"
+          ],
+          "fields": [
+            "PlaybackMetadata.thumbnailAssets",
+            "ThumbnailAssets.posterUrl",
+            "ThumbnailAssets.spriteVttUrl",
+            "ThumbnailAssets.spriteJpgUrl",
+            "ThumbnailAssets.assetKey"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "resolve_playback_endpoint"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/library",
+            "/view"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/thumbnails-and-previews.mdx"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "title": "Fetch poster and sprite URLs",
+          "query": "query PreviewAssets($contentId: String!) {\n  resolveViewerEndpoint(contentId: $contentId) {\n    metadata {\n      thumbnailAssets {\n        posterUrl\n        spriteVttUrl\n        spriteJpgUrl\n        assetKey\n      }\n    }\n  }\n}\n"
+        },
+        {
+          "title": "Fetch the Chandler host for a library grid",
+          "query": "query LibraryPreviewHost {\n  streamingConfig {\n    chandlerDomain\n  }\n}\n"
+        }
+      ],
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "gateway-backed-transcoding",
+      "name": "Gateway-backed transcoding",
+      "area": "streaming",
+      "description": "Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry.",
+      "status": "partial",
+      "gap_reason": "The media plane can use Livepeer Gateway-backed processing and the analytics API exposes processing/orchestrator telemetry.\nWhat is still missing is a tenant-facing control surface for rendition ladders, plan-aware defaults, per-stream overrides,\nand agent/dashboard workflows for choosing when Gateway-backed ABR is enabled.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "queries": [
+            "analytics"
+          ],
+          "fields": [
+            "ProcessingUsage.processingUsageConnection",
+            "ProcessingUsageRecord.renditionCount",
+            "ProcessingUsageRecord.renditionsJson",
+            "ProcessingUsageSummary.livepeerSeconds",
+            "OrchestratorPerformancePoint.transcodeAttempts",
+            "OrchestratorPerformancePoint.transcodeSuccesses",
+            "OrchestratorPerformancePoint.transcodeFailures"
+          ]
+        },
+        "mcp": {},
+        "webapp": {
+          "routes": [
+            "/analytics/usage"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/encoder-setup.mdx",
+            "operators/architecture.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": false,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "analytics",
+      "name": "Analytics",
+      "area": "analytics",
+      "description": "Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and expanding QoE diagnostics.",
+      "status": "partial",
+      "gap_reason": "Stream, routing, server-side QoS, and current client QoE summaries are live across API, dashboard, MCP, and docs.\nThe QoE Analytics RFC is still active: public SDK-to-platform telemetry ingest, TTFF/rebuffering/failure/quality-change capture,\nnon-npm player support, sampling/retention policy, and view-level dashboards are not fully productized yet.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "queries": [
+            "analytics",
+            "usageAggregates",
+            "usageRecordsConnection",
+            "tenantUsage",
+            "networkStatus"
+          ],
+          "subscriptions": [
+            "liveViewerMetrics",
+            "liveSystemHealth",
+            "liveProcessingEvents",
+            "liveStorageEvents",
+            "liveConnectionEvents",
+            "liveFirehose"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "get_anomaly_report",
+            "get_stream_health_summary",
+            "diagnose_buffer_health",
+            "diagnose_packet_loss",
+            "diagnose_rebuffering",
+            "diagnose_routing"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/analytics",
+            "/analytics/audience",
+            "/analytics/usage",
+            "/streams/:id/analytics",
+            "/streams/:id/health"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/analytics-api.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "cluster-marketplace",
+      "name": "Cluster marketplace",
+      "area": "infrastructure",
+      "description": "Browse listed clusters and manage subscriptions; vetted third-party marketplace operations are still being rounded out.",
+      "status": "partial",
+      "gap_reason": "Marketplace primitives ship across the API, MCP, dashboard, and docs: listing, preferred cluster selection, invites, subscription requests, approval, pricing models, monthly checkout, and metered/custom rating paths. What is still missing is the full public marketplace operating model: operator vetting, published commercial terms, support boundaries, and production onboarding workflow for third-party capacity.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "subscribeToCluster",
+            "unsubscribeFromCluster",
+            "updateClusterMarketplace",
+            "setPreferredCluster"
+          ],
+          "queries": [
+            "marketplaceCluster",
+            "marketplaceClusters",
+            "marketplaceClustersConnection",
+            "clustersAvailable",
+            "clustersAvailableConnection",
+            "mySubscriptions",
+            "mySubscriptionsConnection",
+            "clustersAccess",
+            "clustersAccessConnection"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "browse_marketplace",
+            "subscribe_to_cluster",
+            "unsubscribe_from_cluster",
+            "set_preferred_cluster",
+            "update_cluster_marketplace"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/infrastructure/marketplace",
+            "/infrastructure/clusters"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "hybrid/overview.mdx",
+            "operators/multi-cluster.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "edge-clusters",
+      "name": "Edge clusters",
+      "area": "infrastructure",
+      "description": "Tenant-owned edge clusters with bootstrap and node enrollment.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "createEdgeCluster",
+            "bootstrapEdge"
+          ],
+          "queries": [
+            "cluster",
+            "clustersConnection"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "create_edge_cluster"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/infrastructure/clusters",
+            "/infrastructure/:clusterId"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "hybrid/edge-nodes.mdx",
+            "hybrid/connecting.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "enrollment-tokens",
+      "name": "Enrollment / bootstrap tokens",
+      "area": "infrastructure",
+      "description": "One-shot tokens used to enroll new edge nodes into a cluster.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true,
+          "sensitive": true,
+          "returns_secret_material": true,
+          "audit_events": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "createBootstrapToken",
+            "revokeBootstrapToken",
+            "createEnrollmentToken"
+          ],
+          "queries": [
+            "bootstrapTokensConnection"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "create_enrollment_token"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/infrastructure/:clusterId"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "hybrid/connecting.mdx",
+            "hybrid/node-cli.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "cluster-invites",
+      "name": "Cluster invites",
+      "area": "infrastructure",
+      "description": "Direct invites granting another tenant access to a cluster.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "createClusterInvite",
+            "revokeClusterInvite",
+            "acceptClusterInvite"
+          ],
+          "queries": [
+            "clusterInvites",
+            "clusterInvitesConnection",
+            "myClusterInvites",
+            "myClusterInvitesConnection"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "create_cluster_invite",
+            "revoke_cluster_invite",
+            "accept_cluster_invite"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/infrastructure/:clusterId"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "hybrid/overview.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "cluster-subscription-requests",
+      "name": "Cluster subscription requests",
+      "area": "infrastructure",
+      "description": "Tenant-requested subscription to a cluster, requiring operator approval.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "requestClusterSubscription",
+            "approveClusterSubscription",
+            "rejectClusterSubscription"
+          ],
+          "queries": [
+            "pendingSubscriptions",
+            "pendingSubscriptionsConnection"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "request_cluster_subscription",
+            "approve_subscription_request",
+            "reject_subscription_request"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/infrastructure/:clusterId"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "hybrid/overview.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "nodes",
+      "name": "Nodes (edge / ingest / playback)",
+      "area": "infrastructure",
+      "description": "Per-node health, info, and discovery.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "queries": [
+            "node",
+            "nodesConnection",
+            "serviceInstancesHealth",
+            "discoverServicesConnection"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "get_node_health",
+            "get_node_info"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/nodes",
+            "/nodes/:id"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "hybrid/edge-nodes.mdx",
+            "hybrid/node-cli.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "node-mode",
+      "name": "Node mode (drain / maintenance)",
+      "area": "infrastructure",
+      "description": "Operator controls to drain a node, put it in maintenance, or restore it to active service.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "configurability": {
+        "tenant_default": "not_applicable",
+        "per_resource_override": "present",
+        "effective_value_visible": "present",
+        "entitlement_bounds": "not_applicable",
+        "audit_events": "present",
+        "undo": "present"
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "setNodeMode"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "manage_node",
+            "set_node_mode"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/nodes/:id"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "hybrid/node-mode.mdx",
+            "hybrid/node-cli.mdx",
+            "hybrid/edge-nodes.mdx"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "title": "Drain a node",
+          "query": "mutation Drain { setNodeMode(input: { nodeId: \"\u003cnode-id\u003e\", mode: DRAINING, reason: \"monthly maintenance\" }) {\n  ... on InfrastructureNode {\n    nodeId\n    effectiveMode\n    routingImpactPreview { activeStreams activeViewers }\n  }\n  ... on ValidationError { message field }\n  ... on NotFoundError { message }\n} }\n"
+        },
+        {
+          "title": "Restore a node",
+          "query": "mutation Restore { setNodeMode(input: { nodeId: \"\u003cnode-id\u003e\", mode: NORMAL }) {\n  ... on InfrastructureNode { effectiveMode }\n  ... on ValidationError { message field }\n} }\n"
+        }
+      ],
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "federation-network",
+      "name": "Federated network status",
+      "area": "infrastructure",
+      "description": "Cross-cluster routing visibility and orchestrator vantage points.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": false,
+          "reason": "Diagnostic surface; covered by analytics MCP tools."
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "queries": [
+            "networkStatus",
+            "orchestrator",
+            "orchestratorInstances",
+            "orchestratorPerformanceSeries",
+            "orchestratorVantages",
+            "orchestratorsConnection"
+          ]
+        },
+        "mcp": {},
+        "webapp": {
+          "routes": [
+            "/network",
+            "/infrastructure/federation",
+            "/infrastructure/network"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "operators/multi-cluster.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": false,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "managed-dns-routing",
+      "name": "Managed DNS and cluster domains",
+      "area": "infrastructure",
+      "description": "Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery.",
+      "status": "partial",
+      "gap_reason": "Navigator reconciles platform and media-cluster DNS for operated deployments, and the API exposes tenant streaming domains\nthrough streamingConfig. The missing product surface is customer-controlled DNS: custom domain onboarding, verification,\ncertificate status, proxy policy, and self-serve dashboard/MCP workflows.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "queries": [
+            "streamingConfig"
+          ],
+          "fields": [
+            "StreamingConfig.ingestDomain",
+            "StreamingConfig.edgeDomain",
+            "StreamingConfig.playDomain",
+            "StreamingConfig.chandlerDomain",
+            "StreamingConfig.officialIngestDomain",
+            "StreamingConfig.officialEdgeDomain",
+            "StreamingConfig.officialPlayDomain",
+            "StreamingConfig.officialChandlerDomain"
+          ]
+        },
+        "mcp": {},
+        "webapp": {},
+        "docs": {
+          "pages": [
+            "operators/dns.mdx",
+            "operators/deployment.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
+      "slug": "billing",
+      "name": "Billing \u0026 prepaid balance",
+      "area": "billing",
+      "description": "Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true,
+          "requires_confirmation": true,
+          "audit_events": true,
+          "payment_authority": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "createPayment",
+            "createCardTopup",
+            "createCryptoTopup",
+            "createMollieFirstPayment",
+            "createMollieSubscription",
+            "createStripeCheckout",
+            "createStripeBillingPortal",
+            "cryptoTopupStatus",
+            "promoteToPaid",
+            "updateBillingDetails",
+            "updateSubscriptionCustomTerms",
+            "submitX402Payment"
+          ],
+          "queries": [
+            "billingDetails",
+            "billingStatus",
+            "billingTiers",
+            "prepaidBalance",
+            "balanceTransactionsConnection",
+            "invoice",
+            "invoicesConnection",
+            "mollieMandates"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "get_payment_options",
+            "submit_payment",
+            "topup_balance",
+            "check_topup",
+            "update_billing_details"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/account/balance",
+            "/account/billing"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/billing.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "wallet",
+      "name": "Wallet \u0026 on-chain identity",
+      "area": "developer",
+      "description": "Wallet sign-in, linked-wallet account identity, and x402 micropayments.",
+      "status": "partial",
+      "gap_reason": "Agent wallet auth and x402 settlement are exposed through get_payment_options and submit_payment.\nFirst-class MCP wallet-management tools for listing, linking, and unlinking additional wallets are still missing.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true,
+          "sensitive": true,
+          "requires_confirmation": true,
+          "audit_events": true,
+          "payment_authority": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "linkWallet",
+            "unlinkWallet",
+            "walletLogin",
+            "linkEmail",
+            "submitX402Payment"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "get_payment_options",
+            "submit_payment"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/account/balance"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/wallet-and-crypto.mdx",
+            "agents/wallet-auth.mdx",
+            "agents/payments.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "developer-tokens",
+      "name": "Developer API tokens",
+      "area": "developer",
+      "description": "Long-lived API tokens for SDK / CI use.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": false,
+          "reason": "API tokens authorize MCP itself; tools managing them would be circular."
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "createDeveloperToken",
+            "revokeDeveloperToken"
+          ],
+          "queries": [
+            "developerTokensConnection"
+          ]
+        },
+        "mcp": {},
+        "webapp": {
+          "routes": [
+            "/developer/api-keys"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/api-reference.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": false,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "graphql-playground",
+      "name": "GraphQL playground",
+      "area": "developer",
+      "description": "Interactive GraphQL explorer wired to the live schema.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": false,
+          "reason": "The playground IS a graphql client; nothing to expose."
+        },
+        "mcp": {
+          "required": false,
+          "reason": "Agents use introspect_schema / generate_query / execute_query directly."
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "webapp": {
+          "routes": [
+            "/developer/playground"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "builders/api-reference.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": false,
+        "mcp": false,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "agents-mcp",
+      "name": "Agents (MCP server)",
+      "area": "developer",
+      "description": "Model Context Protocol server exposing FrameWorks operations to agents.",
+      "status": "shipped",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": false,
+          "reason": "MCP exposes GraphQL via execute_query; nothing additional to mutate."
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {
+          "tools": [
+            "introspect_schema",
+            "generate_query",
+            "execute_query"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/developer/features",
+            "/developer/features/:slug",
+            "/developer/playground"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "agents/overview.mdx",
+            "agents/mcp.mdx",
+            "agents/payments.mdx",
+            "agents/skipper.mdx",
+            "agents/wallet-auth.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": false,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "skipper",
+      "name": "Skipper (in-app consultant agent)",
+      "area": "agents",
+      "description": "Conversational platform agent for support and investigations.",
+      "status": "partial",
+      "gap_reason": "MCP exposes ask_consultant only; conversation management (list/get/send/archive) is not exposed.",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "createConversation",
+            "sendMessage",
+            "updateSkipperConversation",
+            "deleteSkipperConversation",
+            "markSkipperReportsRead"
+          ],
+          "queries": [
+            "conversation",
+            "conversationsConnection",
+            "messagesConnection",
+            "skipperConversation",
+            "skipperConversations",
+            "skipperReport",
+            "skipperReports",
+            "skipperUnreadReportCount"
+          ],
+          "subscriptions": [
+            "liveConversationUpdates",
+            "liveMessageReceived",
+            "skipperChat"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "ask_consultant",
+            "search_support_history"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/skipper",
+            "/skipper/investigations",
+            "/messages",
+            "/messages/:id"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "agents/skipper.mdx",
+            "operators/skipper.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "tenant",
+      "name": "Tenant settings",
+      "area": "account",
+      "description": "Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle.",
+      "status": "partial",
+      "gap_reason": "Core tenant account setup is live: wallet-provisioned accounts, tenant name, billing details, billing tier/balance, storage retention defaults,\nand preferred cluster/routing settings are exposed. Broader tenant administration is still expanding: team/RBAC, notification preferences,\ncustom domains/branding, security controls, and account lifecycle controls are not yet complete across API, dashboard, MCP, and docs.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "updateTenant"
+          ],
+          "queries": [
+            "tenant"
+          ]
+        },
+        "mcp": {
+          "tools": [
+            "get_tenant_settings",
+            "update_tenant_settings"
+          ]
+        },
+        "webapp": {
+          "routes": [
+            "/settings",
+            "/account/billing"
+          ]
+        },
+        "docs": {
+          "pages": [
+            "agents/wallet-auth.mdx",
+            "agents/mcp.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      }
+    },
+    {
+      "slug": "outbound-webhooks",
+      "name": "Outbound event webhooks",
+      "area": "developer",
+      "description": "Tenant-configured outbound webhooks for stream / clip / VOD lifecycle events.",
+      "status": "roadmap",
+      "gap_reason": "Not shipped. Inbound playback-auth webhook exists (covered by playback-access-control); outbound delivery is future work.",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "actual_surfaces": {
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
+      "slug": "team-rbac",
+      "name": "Teams \u0026 RBAC",
+      "area": "account",
+      "description": "Multi-user tenants with role-based access control.",
+      "status": "roadmap",
+      "gap_reason": "Not shipped. Requires tenant membership model, role grants, invitation flow, GraphQL policy checks, MCP permission scoping, and webapp team administration.",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "actual_surfaces": {
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
+      "slug": "composer-ai",
+      "name": "Composer / AI workflows",
+      "area": "streaming",
+      "description": "AI-driven scene composition / inference workflows on live streams.",
+      "status": "roadmap",
+      "gap_reason": "Not shipped. Requires product/API design for scene graph control, model execution boundaries, billing meters, agent permissions, and stream-composition UI.",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "actual_surfaces": {
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
+      "slug": "usage-caps",
+      "name": "Usage caps, alerts, retention cost preview",
+      "area": "billing",
+      "description": "Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes.",
+      "status": "roadmap",
+      "gap_reason": "Purser data-availability check (2026-05-11): GetUsageAggregates exists and serves hourly/daily/monthly rollups by usage_type, so the read path is real. What's missing is two pieces of engineering: (1) a retention-aware cost projection model (assumptions about steady-state growth, finalization rate, per-tier storage pricing) — naive \"% delta\" is misleading; (2) alert delivery infrastructure (event dedupe, notification channels, threshold-crossed semantics). Both are real engineering projects beyond a single PR. Tracked here so the roadmap is honest rather than buried in a phase that pretends to ship them.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "actual_surfaces": {
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
+      "slug": "drm",
+      "name": "DRM",
+      "area": "playback",
+      "description": "FairPlay, Widevine, and PlayReady protection for premium playback workflows.",
+      "status": "roadmap",
+      "gap_reason": "Not shipped. Playback signing keys and webhook/JWT access control are available today, but multi-DRM license packaging and player enforcement are separate work.",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "actual_surfaces": {
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
+      "slug": "device-discovery-contribution-inputs",
+      "name": "Device discovery and contribution inputs",
+      "area": "streaming",
+      "description": "Edge-local discovery for cameras, PTZ devices, NDI sources, USB capture, HDMI inputs, and local contribution paths.",
+      "status": "roadmap",
+      "gap_reason": "Experimental media-engine discovery and local-source creation exist below the FrameWorks product layer. The missing work is\npackaging that capability into FrameWorks Edge, then exposing it through API, dashboard, Tray, CLI, and MCP workflows for managed\nstreams and self-hosted clusters.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "actual_surfaces": {
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
+      "slug": "standalone-storage-services",
+      "name": "Standalone object and block storage",
+      "area": "storage",
+      "description": "Customer-facing storage buckets, volumes, policies, and lifecycle controls outside the video-asset workflow.",
+      "status": "roadmap",
+      "gap_reason": "FrameWorks already has media storage, cold-storage lifecycle, and cross-cluster S3 delegation for DVR, clips, VOD, thumbnails,\nand preview assets. A standalone object/block storage product is not shipped: it needs resource provisioning, quota/billing,\naccess credentials, policy management, dashboard/API/MCP controls, and operator support boundaries.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "actual_surfaces": {
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
+      "slug": "generic-proxying-cdn",
+      "name": "Generic proxying and CDN services",
+      "area": "infrastructure",
+      "description": "Customer-configured proxy/CDN front doors for non-video services and adjacent workloads.",
+      "status": "roadmap",
+      "gap_reason": "Navigator can proxy selected platform services for operated deployments. A customer-facing generic proxy/CDN product is not shipped:\nit needs origin onboarding, routing policy, TLS/domain validation, caching controls, abuse controls, billing, and dashboard/API/MCP\nworkflows.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "actual_surfaces": {
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
+      "slug": "mobile-apps-help-center",
+      "name": "Mobile apps and integrated help center",
+      "area": "account",
+      "description": "Native mobile operations and an in-product help center for support, incidents, and account workflows.",
+      "status": "roadmap",
+      "gap_reason": "Not shipped as a product surface. Support and messaging infrastructure exists, but native mobile workflows and integrated help-center UX are planned after core platform surfaces.",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "actual_surfaces": {
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    }
+  ]
+}

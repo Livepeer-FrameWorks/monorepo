@@ -265,22 +265,11 @@
     const timeSeriesEdges =
       $streamOverviewCoreStore.data?.analytics?.usage?.streaming?.viewerTimeSeriesConnection
         ?.edges ?? [];
-    if (timeSeriesEdges.length > 0) {
-      return timeSeriesEdges.map((e) => ({
-        timestamp: e.node.timestamp,
-        viewerCount: e.node.viewerCount,
-        stream: e.node.streamId,
-      }));
-    }
-    return (
-      $streamOverviewChartsStore.data?.analytics?.usage?.streaming?.streamConnectionHourlyConnection?.edges?.map(
-        (e) => ({
-          timestamp: e.node.hour,
-          viewerCount: e.node.uniqueViewers,
-          stream: e.node.streamId,
-        })
-      ) ?? []
-    );
+    return timeSeriesEdges.map((e) => ({
+      timestamp: e.node.timestamp,
+      viewerCount: e.node.viewerCount,
+      stream: e.node.streamId,
+    }));
   });
 
   // Quality tier + codec distribution (range aggregates)
@@ -366,8 +355,6 @@
     }
     return { viewerInterval: "1h", viewerFirst: 168 };
   };
-
-  const getQualityFirst = (range: { days: number }) => Math.min(range.days, 60);
 
   // Auto-refresh interval for live data (fallback)
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
@@ -516,9 +503,7 @@
         const range = resolveTimeRange(timeRange);
         currentRange = range;
         const timeRangeInput = { start: range.start, end: range.end };
-        const overviewFirst = range.days <= 7 ? range.days * 24 : 168;
         const { viewerInterval, viewerFirst } = getViewerSeriesConfig(range);
-        const qualityFirst = getQualityFirst(range);
         await Promise.all([
           streamOverviewCoreStore.fetch({
             variables: {
@@ -533,8 +518,6 @@
             variables: {
               streamId: operationalStreamId,
               timeRange: timeRangeInput,
-              first: overviewFirst,
-              qualityFirst,
             },
           }),
         ]);
@@ -787,9 +770,7 @@
       const range = resolveTimeRange(timeRange);
       currentRange = range;
       const timeRangeInput = { start: range.start, end: range.end };
-      const overviewFirst = range.days <= 7 ? range.days * 24 : 168;
       const { viewerInterval, viewerFirst } = getViewerSeriesConfig(range);
-      const qualityFirst = getQualityFirst(range);
       await Promise.all([
         streamKeysStore.fetch({ variables: { streamId: resolvedStreamId } }),
         pushTargetsStore.fetch({ variables: { streamId } }),
@@ -811,8 +792,6 @@
             variables: {
               streamId: resolvedStreamId,
               timeRange: timeRangeInput,
-              first: overviewFirst,
-              qualityFirst,
             },
           })
           .catch(() => null),
@@ -1433,6 +1412,7 @@
               <TabsContent value="playback-auth" class="p-0 min-h-[20rem]">
                 <PlaybackAuthTabPanel
                   streamId={stream?.id ?? ""}
+                  playbackId={stream?.playbackId ?? ""}
                   playbackPolicy={stream?.playbackPolicy ?? null}
                   onSaved={() => streamStore.fetch({ policy: "NetworkOnly" })}
                 />

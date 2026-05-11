@@ -1,8 +1,96 @@
 ---
-title: DVR Chapters
-description: Moved into the Recordings guide.
+title: "DVR Chapters"
+description: "Replay long-running and 24/7 DVR archives as bounded HLS chapter playlists."
+sidebar:
+  order: 6
 ---
 
-Chapter playback is documented as part of DVR recording, not as a separate product surface.
+import { Aside } from "@astrojs/starlight/components";
 
-See [Recordings, Clips & VOD](/builders/recordings#archive-chapters).
+DVR chapters turn one continuous recording into smaller playback windows. You keep the operational simplicity of a single 24/7 archive, while viewers and apps request bounded HLS playlists for a match, class, meeting, daypart, or custom time range.
+
+<Aside type="tip" title="Why chapters matter">
+  Chapters let always-on streams behave like an archive library without splitting the source into
+  dozens of separate recordings. The live DVR window stays fast for viewers, and historical replay
+  stays addressable through chapter URLs.
+</Aside>
+
+## Chapter Shapes
+
+| Shape                 | Best for                                                                                      |
+| --------------------- | --------------------------------------------------------------------------------------------- |
+| Window-sized chapters | Default replay buckets sized to the stream's DVR window.                                      |
+| Fixed UTC intervals   | Regular buckets such as hourly, 6-hour, or 24-hour playlists.                                 |
+| Explicit ranges       | Civil-time or product-defined windows after your app converts them to UTC epoch milliseconds. |
+
+All chapter boundaries use UTC epoch milliseconds. If your product cares about local calendar days, resolve the local start/end time in your application first, then send the UTC values to FrameWorks.
+
+## Retrieve a Chapter
+
+```graphql
+query DVRChapter {
+  dvrChapter(
+    dvrId: "dvr-hash"
+    mode: EXPLICIT_RANGE
+    startMs: 1715126400000
+    endMs: 1715212800000
+  ) {
+    chapterId
+    manifestUrl
+    isCurrent
+    hasGaps
+    segmentCount
+  }
+}
+```
+
+`manifestUrl` carries the Mist playback ID for the chapter (`dvr+{chapterId}`). Resolve that ID through the normal viewer endpoint API and play the returned edge URL. The edge defrosts the bounded chapter into its local chapter manifest and shared segment bucket, so DVR chapter playback uses the same auth, routing, analytics, and billing path as live, clip, and VOD playback. `isCurrent: true` means the chapter is still being recorded into, so the edge manifest is event-shaped while segments continue to arrive.
+
+## List Chapters
+
+```graphql
+query DVRChapters {
+  dvrChapters(dvrId: "dvr-hash", mode: WINDOW_SIZED) {
+    chapterId
+    startMs
+    endMs
+    segmentCount
+    hasGaps
+  }
+}
+```
+
+Use this when your UI needs a chapter picker, timeline markers, or quick links into a long archive.
+
+## Chapter Policy
+
+Chapter policy controls how FrameWorks materializes replay windows for a DVR archive:
+
+```graphql
+mutation SetChapterPolicy {
+  setDVRChapterPolicy(input: { dvrId: "dvr-hash", mode: FIXED_INTERVAL, intervalSeconds: 21600 }) {
+    ... on DVRRecording {
+      dvrHash
+      chapterPolicy {
+        mode
+        intervalSeconds
+      }
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+  }
+}
+```
+
+Use fixed intervals for predictable archive navigation, and explicit ranges when your app owns the editorial boundaries.
+
+## Gaps and Lost Segments
+
+Under severe storage pressure, a recording can have missing local segments before upload completes. Chapter manifests preserve the timeline with `#EXT-X-GAP` markers, so players skip missing media while keeping the correct clock position.
+
+## Related Guides
+
+- [Recordings, Clips & VOD](/builders/recordings) covers the full recording lifecycle.
+- [Storage & retention](/builders/storage-and-retention) covers retention policy, per-asset overrides, and storage-cost control.

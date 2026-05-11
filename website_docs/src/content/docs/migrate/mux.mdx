@@ -32,19 +32,17 @@ worth keeping during the cut-over.
   LL-HLS / DASH / WebRTC-WHEP delivery alongside HLS · pull-input streams (RTSP / SRT / RIST /
   HLS / DTSC / MKV / TS-over-UDP) · 24/7 streams with no 12-hour disconnect · AV1 in delivery ·
   sprite-sheet seek previews (≈ Mux storyboard) · self-hosting and hybrid hosting · MCP, wallet
-  auth, and x402 for agents · Skipper · planned AV Device Discovery (ONVIF / VISCA-PTZ / NDI /
-  HDMI capture).
-- **What's not yet at parity:** Mux Data-class view-level QoE analytics · DRM (in development
-  with the MistServer team) · live auto-captions · productized custom-domain SKU · outbound HTTP
+  auth, and x402 for agents · Skipper · experimental device-discovery productization.
+- **What's not yet at parity:** Mux Data-class view-level QoE analytics · DRM · live auto-captions · productized custom-domain SKU · outbound HTTP
   webhooks · breadth of first-class server-side SDKs (Mux ships Node/Python/Ruby/Go/PHP/Elixir/
   Java/.NET) · built-in referrer/UA playback restrictions as a no-code policy · VOD URL ingest ·
   Master Access download. See [the gap list](#whats-not-yet-at-parity-and-whats-coming) before
   cutting over production traffic.
 
 <Aside type="note">
-  FrameWorks is in active beta. Billing rates, hybrid edge deployment, DRM, and the cluster
-  marketplace are all flagged below — read the [beta and tricky bits](#beta-and-tricky-bits) section
-  before you cut over production traffic.
+  FrameWorks is still maturing in a few product areas. Billing rates, production self-hosting
+  runbooks, DRM, and provider-specific migration gaps are flagged below — read the [beta and tricky
+  bits](#beta-and-tricky-bits) section before you cut over production traffic.
 </Aside>
 
 ## Translation table
@@ -118,7 +116,7 @@ API, playback policies for viewers.
 | JWT claims `sub` (playback ID) · `aud` (`v` / `t` / `g` / `s` / `d`) · `exp` · `kid`                       | JWT claims `sub` (playback ID) · `kid` · `exp`. One signed URL is the auth boundary across HLS, LL-HLS, DASH, WHEP, and MP4 — no per-asset-type `aud` switch |
 | `?token=<jwt>` query param                                                                                 | `?jwt=<token>` universally; `Authorization: Bearer` where playback paths can carry headers                                                                   |
 | Built-in playback restrictions (referrer-domain allowlist, user-agent rules) via `playback_restriction_id` | `WEBHOOK` policy: HMAC-signed POST to your URL; return 200 to allow, anything else denies. Implement referrer/UA logic in your endpoint                      |
-| DRM (Widevine + PlayReady + FairPlay)                                                                      | DRM in development with the MistServer team — not GA                                                                                                         |
+| DRM (Widevine + PlayReady + FairPlay)                                                                      | DRM in development — not GA                                                                                                                                  |
 
 <Aside type="note">
   Stream keys are ingest secrets, not viewer authorization keys. Signing keys are tenant-scoped and
@@ -142,8 +140,8 @@ API, playback policies for viewers.
 <Aside type="caution">
   FrameWorks does not deliver outbound HTTP webhooks today — events flow over GraphQL subscriptions
   (WebSocket). If your environment can't hold an open subscription, fall back to polling the
-  relevant query (`stream(id)`, `vodAsset(id)`) on a short interval. HTTP-callback delivery is
-  tracked in the outbound-webhooks RFC, but subscriptions are the supported event surface today.
+  relevant query (`stream(id)`, `vodAsset(id)`) on a short interval. HTTP-callback delivery is on
+  the roadmap, but subscriptions are the supported event surface today.
 </Aside>
 
 ## Step-by-step
@@ -205,7 +203,7 @@ for the full surface.
 
 Pick your client:
 
-- **Houdini** (SvelteKit-native) — what we use internally
+- **Houdini** (SvelteKit-native GraphQL codegen)
 - **urql** or **Apollo** for React
 - **graphql-request** for plain Node/Bun scripts
 
@@ -338,14 +336,14 @@ over once you trust the numbers.
   Self-hosted edges can pull from RFC1918 / multicast sources via an explicit
   `allow_private_pull_sources` cluster flag. Mux's URL pull is VOD-only. RTMP pull is not
   supported on either platform — bridge through FFmpeg/MistServer/`srt-live-transmit` if you
-  need it. See [Pull-input streams](/builders/pull-streams). On the
-  [roadmap](/roadmap#in-the-pipeline): an **AV Device Discovery** drop-in app for
-  auto-discovering ONVIF cameras, VISCA-PTZ controls, NDI sources, USB webcams, and HDMI
-  capture.
+  need it. See [Pull-input streams](/builders/pull-streams). Experimental media-engine discovery
+  exists locally today; FrameWorks packaging through Edge, Tray, CLI, API, and dashboard workflows
+  is tracked on the [roadmap](/roadmap#device-discovery-and-contribution-inputs).
 - **Sprite-sheet seek previews** (Mux's storyboard analogue) — a 10×10 grid plus a WebVTT
   cue file, generated for every recording, ready for hover-scrub UIs.
 - **Self-hosting and hybrid hosting.** Run the whole stack on your own hardware, or mix BYO
-  edge with our managed control plane. Hybrid is experimental — see the beta flags below.
+  edge with our managed control plane. Production rollouts need the same capacity, DNS, TLS,
+  and monitoring validation as any operator-owned infrastructure.
 - **Cross-cluster federation** — one viewer pool routed across clusters; the closer edge
   wins automatically.
 - **Agent-first surface.** MCP server at
@@ -364,9 +362,8 @@ your stack about which of these you depend on before cutting over.
   surface and is genuinely best-in-class for QoE — view-level traces, rebuffering /
   startup-time / error attribution, ad observability, and a player-agnostic SDK that spans
   Video.js, hls.js, Shaka, native HTML5, Roku, Chromecast, and OTT surfaces. FrameWorks ships
-  **Periscope** for stream-side analytics today; the existing
-  [QoE roadmap entry](/roadmap#analytics) is where view-level cross-player observability
-  lives.
+  stream-side analytics today; view-level cross-player observability is tracked on the
+  [roadmap](/roadmap#view-level-qoe-analytics).
 
   **For teams unwilling to give up Mux Data on day one:** Mux Data's SDK binds at the
   underlying media-element / hls.js layer, which is the same surface our player uses. Drop-in
@@ -374,15 +371,15 @@ your stack about which of these you depend on before cutting over.
   shipped a tested wiring recipe yet. File an [in-app ticket](%APP_URL%/support) if you want
   us to validate it for your stack and publish a `/builders/...` page.
 
-- **DRM** — Widevine, PlayReady, and FairPlay are in development with the MistServer team;
-  not GA. Mux ships productized DRM today.
+- **DRM** — Widevine, PlayReady, and FairPlay are in development; not GA. Mux ships productized
+  DRM today.
 - **Live auto-captions / transcription** — on the roadmap, not shipping. Mux ships live
   auto-captions today.
 - **Productized custom-domain SKU.** Mux offers productized custom-domain delivery.
   FrameWorks doesn't gate custom domains as a separate per-tenant SKU today; self-hosted
   operators can run their own domain however they like.
 - **Outbound HTTP webhooks** — FrameWorks uses GraphQL subscriptions today. HTTP-callback
-  delivery is tracked in the outbound-webhooks RFC.
+  delivery is on the roadmap.
 - **Breadth of first-class server-side SDKs.** Mux ships official SDKs for Node, Python,
   Ruby, Go, PHP, Elixir, Java, and .NET, all covering both Mux Video and Mux Data. FrameWorks
   ships the player suite (`@livepeer-frameworks/player-*`) and GraphQL codegen against the
@@ -401,11 +398,14 @@ your stack about which of these you depend on before cutting over.
 
 Heads-up so nothing surprises you:
 
-- **Billing is in beta.** Rates may adjust as we scale, but you keep the allowances you signed
-  up for through beta.
-- **Hybrid edge deployment** is highly experimental — fine for testing, not for production.
-- **Cluster marketplace** is in progress. Public clusters work; the operator-marketplace flow
-  is still being built.
+- **Billing rates are still maturing.** Rates may adjust as we scale, but you keep the allowances
+  you signed up for.
+- **Self-hosted and hybrid production cutovers need operator validation.** Test DNS, TLS,
+  firewall policy, capacity, node enrollment, and upgrade runbooks before moving production
+  traffic.
+- **Marketplace primitives exist, but the public marketplace program is still being built.**
+  Validate operator vetting, pricing, approval flow, and support boundaries before relying on
+  third-party clusters for production traffic.
 - **Encoder port gotcha.** Mux's RTMP endpoint uses non-standard port `5222`; FrameWorks uses
   the conventional `1935`. Update any hard-coded encoder configs and firewall allowlists.
 - **JWT algorithm change: RS256 → ES256.** Re-mint your tokens with a new private key. Your
