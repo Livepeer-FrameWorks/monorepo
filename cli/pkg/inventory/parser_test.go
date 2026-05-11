@@ -255,6 +255,47 @@ func TestMergeEdgeHosts(t *testing.T) {
 	}
 }
 
+func TestLoadEdgeWithHostsAcceptsTypeField(t *testing.T) {
+	dir := t.TempDir()
+
+	hostsYAML := `edge_nodes:
+  edge-eu-1:
+    ssh: root@edge-eu-1.example.com
+`
+	if err := os.WriteFile(filepath.Join(dir, "hosts.yaml"), []byte(hostsYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manifestYAML := `version: v1
+type: edge
+root_domain: frameworks.network
+pool_domain: edge.frameworks.network
+email: ops@frameworks.network
+cluster_id: media-central-primary
+hosts_file: hosts.yaml
+nodes:
+  - name: edge-eu-1
+    subdomain: edge-eu-1
+    region: eu-west
+    register_qm: true
+`
+	manifestPath := filepath.Join(dir, "edge.yaml")
+	if err := os.WriteFile(manifestPath, []byte(manifestYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := LoadEdgeWithHosts(manifestPath, "")
+	if err != nil {
+		t.Fatalf("LoadEdgeWithHosts rejected type field: %v", err)
+	}
+	if manifest.Type != "edge" {
+		t.Fatalf("Type = %q, want edge", manifest.Type)
+	}
+	if manifest.Nodes[0].SSH != "root@edge-eu-1.example.com" {
+		t.Fatalf("SSH = %q, want host inventory value", manifest.Nodes[0].SSH)
+	}
+}
+
 func TestLoadWithHostsFile(t *testing.T) {
 	dir := t.TempDir()
 
