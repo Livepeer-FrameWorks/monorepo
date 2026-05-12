@@ -526,23 +526,22 @@ func buildMeta(result OrchestratorResult) sseMeta {
 	citations := make([]citation, 0)
 	external := make([]citation, 0)
 	for _, source := range result.Sources {
-		if source.URL == "" {
+		label, sourceURL, ok := sourceCitationParts(source)
+		if !ok {
 			continue
 		}
-		item := citation{Label: source.Title, URL: source.URL}
+		item := citation{Label: label, URL: sourceURL}
 		switch source.Type {
 		case SourceTypeKnowledgeBase:
 			citations = append(citations, item)
 		case SourceTypeWeb:
-			external = append(external, item)
-		}
-	}
-	if len(citations) == 0 && len(external) == 0 {
-		for _, source := range result.Sources {
-			if source.URL == "" {
-				continue
+			if sourceURL != "" {
+				external = append(external, item)
+			} else {
+				citations = append(citations, item)
 			}
-			citations = append(citations, citation{Label: source.Title, URL: source.URL})
+		default:
+			citations = append(citations, item)
 		}
 	}
 	meta := sseMeta{
@@ -560,8 +559,9 @@ func buildMeta(result OrchestratorResult) sseMeta {
 				Confidence: string(b.Confidence),
 			}
 			for _, s := range b.Sources {
-				if s.URL != "" {
-					block.Sources = append(block.Sources, citation{Label: s.Title, URL: s.URL})
+				label, sourceURL, ok := sourceCitationParts(s)
+				if ok {
+					block.Sources = append(block.Sources, citation{Label: label, URL: sourceURL})
 				}
 			}
 			meta.Blocks = append(meta.Blocks, block)

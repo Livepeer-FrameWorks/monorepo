@@ -52,6 +52,22 @@
     unknown: "Could not validate against available data",
   };
 
+  function isAbsoluteHttpUrl(value: string) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "http:" || url.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
+
+  const citations = $derived(
+    (message.citations ?? []).filter((item) => item.label || isAbsoluteHttpUrl(item.url))
+  );
+  const externalLinks = $derived(
+    (message.externalLinks ?? []).filter((item) => isAbsoluteHttpUrl(item.url))
+  );
+
   function escapeHtml(value: string) {
     return value
       .replaceAll("&", "&amp;")
@@ -245,7 +261,7 @@
     {/if}
   </div>
 
-  {#if message.role === "assistant" && message.citations?.length}
+  {#if message.role === "assistant" && citations.length}
     <details
       class="rounded-md border border-border bg-muted/30 text-xs text-muted-foreground [&[open]>summary>.skipper-chevron]:rotate-90"
     >
@@ -265,27 +281,31 @@
         <span
           class="rounded-full border border-border bg-muted/60 px-1.5 py-0.5 text-[9px] font-normal normal-case tracking-normal"
         >
-          {message.citations.length}
+          {citations.length}
         </span>
       </summary>
       <ul class="space-y-1 px-3 pb-2">
-        {#each message.citations as citation (citation.url)}
+        {#each citations as citation, i (`${citation.url}-${i}`)}
           <li>
-            <a
-              class="text-primary underline underline-offset-4"
-              href={citation.url}
-              target="_blank"
-              rel="external noreferrer"
-            >
-              {citation.label}
-            </a>
+            {#if isAbsoluteHttpUrl(citation.url)}
+              <a
+                class="text-primary underline underline-offset-4"
+                href={citation.url}
+                target="_blank"
+                rel="external noreferrer"
+              >
+                {citation.label || citation.url}
+              </a>
+            {:else}
+              <span>{citation.label}</span>
+            {/if}
           </li>
         {/each}
       </ul>
     </details>
   {/if}
 
-  {#if message.role === "assistant" && message.externalLinks?.length}
+  {#if message.role === "assistant" && externalLinks.length}
     <details
       class="rounded-md border border-border bg-muted/30 text-xs text-muted-foreground [&[open]>summary>.skipper-chevron]:rotate-90"
     >
@@ -305,11 +325,11 @@
         <span
           class="rounded-full border border-border bg-muted/60 px-1.5 py-0.5 text-[9px] font-normal normal-case tracking-normal"
         >
-          {message.externalLinks.length}
+          {externalLinks.length}
         </span>
       </summary>
       <ul class="space-y-1 px-3 pb-2">
-        {#each message.externalLinks as link (link.url)}
+        {#each externalLinks as link, i (`${link.url}-${i}`)}
           <li>
             <a
               class="text-primary underline underline-offset-4"

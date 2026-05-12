@@ -411,23 +411,22 @@ func buildGRPCMeta(result OrchestratorResult) *pb.SkipperChatMeta {
 	citations := make([]*pb.SkipperCitation, 0)
 	external := make([]*pb.SkipperCitation, 0)
 	for _, source := range result.Sources {
-		if source.URL == "" {
+		label, sourceURL, ok := sourceCitationParts(source)
+		if !ok {
 			continue
 		}
-		item := &pb.SkipperCitation{Label: source.Title, Url: source.URL}
+		item := &pb.SkipperCitation{Label: label, Url: sourceURL}
 		switch source.Type {
 		case SourceTypeKnowledgeBase:
 			citations = append(citations, item)
 		case SourceTypeWeb:
-			external = append(external, item)
-		}
-	}
-	if len(citations) == 0 && len(external) == 0 {
-		for _, source := range result.Sources {
-			if source.URL == "" {
-				continue
+			if sourceURL != "" {
+				external = append(external, item)
+			} else {
+				citations = append(citations, item)
 			}
-			citations = append(citations, &pb.SkipperCitation{Label: source.Title, Url: source.URL})
+		default:
+			citations = append(citations, item)
 		}
 	}
 
@@ -456,9 +455,10 @@ func buildGRPCMeta(result OrchestratorResult) *pb.SkipperChatMeta {
 				Confidence: string(b.Confidence),
 			}
 			for _, s := range b.Sources {
-				if s.URL != "" {
+				label, sourceURL, ok := sourceCitationParts(s)
+				if ok {
 					pbBlock.Sources = append(pbBlock.Sources, &pb.SkipperCitation{
-						Label: s.Title, Url: s.URL,
+						Label: label, Url: sourceURL,
 					})
 				}
 			}

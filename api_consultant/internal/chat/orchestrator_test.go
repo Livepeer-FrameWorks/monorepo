@@ -168,6 +168,29 @@ func TestMergeToolCalls_PreservesOrderWithOutOfOrderChunks(t *testing.T) {
 	}
 }
 
+func TestParseSourcesBlockKeepsNonURLSourcesAsText(t *testing.T) {
+	sources := parseSourcesBlock(`
+- Docs — https://docs.example.com/skipper
+- Intranet — http://internal.example.com/runbook
+- General knowledge — geen specifieke bron nodig voor deze grappige vraag
+- Relative — /docs/skipper
+- Unsupported — ftp://example.com/file
+`)
+
+	if len(sources) != 5 {
+		t.Fatalf("expected 5 sources, got %d: %#v", len(sources), sources)
+	}
+	if sources[0].Title != "Docs" || sources[0].URL != "https://docs.example.com/skipper" {
+		t.Fatalf("unexpected first source: %#v", sources[0])
+	}
+	if sources[1].Title != "Intranet" || sources[1].URL != "http://internal.example.com/runbook" {
+		t.Fatalf("unexpected second source: %#v", sources[1])
+	}
+	if sources[2].Title != "General knowledge — geen specifieke bron nodig voor deze grappige vraag" || sources[2].URL != "" {
+		t.Fatalf("expected non-URL source to be preserved as text, got %#v", sources[2])
+	}
+}
+
 func TestParseDiagnosticMetrics(t *testing.T) {
 	tests := []struct {
 		name    string

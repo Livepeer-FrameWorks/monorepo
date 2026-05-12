@@ -35,6 +35,15 @@
   let chatSub: SkipperChatStore | null = null;
   let chatUnsubscribe: (() => void) | null = null;
 
+  function isAbsoluteHttpUrl(value: string) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "http:" || url.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
+
   let isAuthenticated = false;
   let destroyed = false;
 
@@ -242,9 +251,13 @@
         label: (rec.Title as string) || (rec.title as string) || "",
         url: (rec.URL as string) || (rec.url as string) || "",
       };
-      if (!item.url) continue;
+      if (!item.label && !isAbsoluteHttpUrl(item.url)) continue;
       if (rec.Type === "web" || rec.type === "web") {
-        externalLinks.push(item);
+        if (isAbsoluteHttpUrl(item.url)) {
+          externalLinks.push(item);
+        } else {
+          citations.push(item);
+        }
       } else {
         citations.push(item);
       }

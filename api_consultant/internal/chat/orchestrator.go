@@ -1351,6 +1351,10 @@ func parseSourcesBlock(block string) []Source {
 			continue
 		}
 		title, url := splitSourceLine(line)
+		if !isHTTPURL(url) {
+			title = line
+			url = ""
+		}
 		sources = append(sources, Source{
 			Title: title,
 			URL:   url,

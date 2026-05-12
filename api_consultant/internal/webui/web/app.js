@@ -315,10 +315,12 @@
 
     // Citations
     if (!isUser && msg.citations && msg.citations.length > 0) {
-      body.appendChild(renderCitationBlock("Citations", msg.citations));
+      var citations = renderCitationBlock("Citations", msg.citations);
+      if (citations) body.appendChild(citations);
     }
     if (!isUser && msg.externalLinks && msg.externalLinks.length > 0) {
-      body.appendChild(renderCitationBlock("External sources", msg.externalLinks));
+      var externalLinks = renderCitationBlock("External sources", msg.externalLinks);
+      if (externalLinks) body.appendChild(externalLinks);
     }
 
     // Details
@@ -351,6 +353,11 @@
   }
 
   function renderCitationBlock(label, items) {
+    var validItems = items.filter(function (c) {
+      return c.label || isAbsoluteHttpUrl(c.url);
+    });
+    if (validItems.length === 0) return null;
+
     var wrap = document.createElement("div");
     wrap.className = "msg-citations";
     var lbl = document.createElement("div");
@@ -359,18 +366,33 @@
     wrap.appendChild(lbl);
     var ul = document.createElement("ul");
     ul.className = "citation-list";
-    items.forEach(function (c) {
+    validItems.forEach(function (c) {
       var li = document.createElement("li");
-      var a = document.createElement("a");
-      a.href = c.url;
-      a.target = "_blank";
-      a.rel = "noreferrer";
-      a.textContent = c.label || c.url;
-      li.appendChild(a);
+      if (isAbsoluteHttpUrl(c.url)) {
+        var a = document.createElement("a");
+        a.href = c.url;
+        a.target = "_blank";
+        a.rel = "noreferrer";
+        a.textContent = c.label || c.url;
+        li.appendChild(a);
+      } else {
+        var text = document.createElement("span");
+        text.textContent = c.label;
+        li.appendChild(text);
+      }
       ul.appendChild(li);
     });
     wrap.appendChild(ul);
     return wrap;
+  }
+
+  function isAbsoluteHttpUrl(value) {
+    try {
+      var url = new URL(value);
+      return url.protocol === "http:" || url.protocol === "https:";
+    } catch {
+      return false;
+    }
   }
 
   // --- Conversation sidebar ---
@@ -551,10 +573,14 @@
       var externalLinks = [];
       arr.forEach(function (s) {
         var url = s.URL || s.url;
-        if (!url) return;
         var item = { label: s.Title || s.title || s.Label || s.label || "", url: url };
+        if (!item.label && !isAbsoluteHttpUrl(url)) return;
         if (s.Type === "web" || s.type === "web") {
-          externalLinks.push(item);
+          if (isAbsoluteHttpUrl(url)) {
+            externalLinks.push(item);
+          } else {
+            citations.push(item);
+          }
         } else {
           citations.push(item);
         }
