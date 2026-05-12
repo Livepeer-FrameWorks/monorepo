@@ -1027,13 +1027,23 @@ CREATE TABLE IF NOT EXISTS purser.x402_nonces (
     payer_address VARCHAR(42) NOT NULL,           -- 0x-prefixed address that signed
     nonce VARCHAR(78) NOT NULL,                   -- uint256 as hex string
 
-    -- Settlement details
-    tx_hash VARCHAR(66) NOT NULL,                 -- Transaction hash (0x + 64 hex)
+    -- Settlement details. tx_hash is NULL while status='submitting'; it is
+    -- populated once eth_sendRawTransaction returns and the row advances to
+    -- status='pending'.
+    tx_hash VARCHAR(66),                          -- Transaction hash (0x + 64 hex)
     tenant_id UUID NOT NULL,                      -- Tenant that received credit
     amount_cents BIGINT NOT NULL,                 -- Amount credited in cents
-    settled_at TIMESTAMPTZ DEFAULT NOW(),
+    settled_at TIMESTAMPTZ DEFAULT NOW(),         -- Row created at; pre-dates broadcast for 'submitting'
+    submitted_at TIMESTAMPTZ,                     -- Set when eth_sendRawTransaction returns ok
+    last_submit_attempt_at TIMESTAMPTZ,           -- Lease/timestamp for submit or resubmit attempts
+
+    -- Durable signed payload (X402PaymentPayload as JSON). Used to verify
+    -- idempotent retries and to resubmit a still-unused authorization if an
+    -- earlier broadcast attempt failed before tx_hash was recorded.
+    auth_payload JSONB,
 
     -- Reconciliation: track on-chain confirmation
+    -- submitting: durable intent written; chain broadcast not yet acknowledged
     -- pending: tx submitted, balance credited optimistically
     -- confirmed: tx confirmed on-chain (receipt.status = 1)
     -- failed: tx reverted or timed out, balance debited
@@ -1049,6 +1059,7 @@ CREATE TABLE IF NOT EXISTS purser.x402_nonces (
 CREATE INDEX IF NOT EXISTS idx_x402_nonces_tenant ON purser.x402_nonces(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_x402_nonces_payer ON purser.x402_nonces(payer_address, network);
 CREATE INDEX IF NOT EXISTS idx_x402_nonces_pending ON purser.x402_nonces(status, settled_at) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_x402_nonces_submitting ON purser.x402_nonces(settled_at) WHERE status = 'submitting';
 
 -- ============================================================================
 -- SIMPLIFIED INVOICES (EU VAT COMPLIANCE)

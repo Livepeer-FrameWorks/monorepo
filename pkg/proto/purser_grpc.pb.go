@@ -1749,6 +1749,7 @@ const (
 	PrepaidService_CreateCryptoTopup_FullMethodName         = "/purser.PrepaidService/CreateCryptoTopup"
 	PrepaidService_GetCryptoTopup_FullMethodName            = "/purser.PrepaidService/GetCryptoTopup"
 	PrepaidService_PromoteToPaid_FullMethodName             = "/purser.PrepaidService/PromoteToPaid"
+	PrepaidService_ChangeBillingTier_FullMethodName         = "/purser.PrepaidService/ChangeBillingTier"
 )
 
 // PrepaidServiceClient is the client API for PrepaidService service.
@@ -1791,9 +1792,15 @@ type PrepaidServiceClient interface {
 	GetCryptoTopup(ctx context.Context, in *GetCryptoTopupRequest, opts ...grpc.CallOption) (*CryptoTopup, error)
 	// ===== PROMOTION FLOW =====
 	// Upgrade from prepaid to postpaid billing after email verification.
-	// Always resolves to the default postpaid tier; re-evaluates cluster access.
-	// Existing prepaid balance is carried forward as credit.
+	// Honors the requested tier_id (must be active, tier_level >= 1, not the
+	// default prepaid tier); falls back to is_default_postpaid when empty.
+	// Re-evaluates cluster access. Existing prepaid balance is carried forward.
 	PromoteToPaid(ctx context.Context, in *PromoteToPaidRequest, opts ...grpc.CallOption) (*PromoteToPaidResponse, error)
+	// Change the postpaid billing tier. Upgrades apply immediately and reconcile
+	// cluster access; downgrades stage pending_tier_id/pending_effective_at and
+	// are applied by the billing-close job after the current invoice clears.
+	// Prepaid → postpaid transition stays on PromoteToPaid.
+	ChangeBillingTier(ctx context.Context, in *ChangeBillingTierRequest, opts ...grpc.CallOption) (*ChangeBillingTierResponse, error)
 }
 
 type prepaidServiceClient struct {
@@ -1944,6 +1951,16 @@ func (c *prepaidServiceClient) PromoteToPaid(ctx context.Context, in *PromoteToP
 	return out, nil
 }
 
+func (c *prepaidServiceClient) ChangeBillingTier(ctx context.Context, in *ChangeBillingTierRequest, opts ...grpc.CallOption) (*ChangeBillingTierResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ChangeBillingTierResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_ChangeBillingTier_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PrepaidServiceServer is the server API for PrepaidService service.
 // All implementations must embed UnimplementedPrepaidServiceServer
 // for forward compatibility.
@@ -1984,9 +2001,15 @@ type PrepaidServiceServer interface {
 	GetCryptoTopup(context.Context, *GetCryptoTopupRequest) (*CryptoTopup, error)
 	// ===== PROMOTION FLOW =====
 	// Upgrade from prepaid to postpaid billing after email verification.
-	// Always resolves to the default postpaid tier; re-evaluates cluster access.
-	// Existing prepaid balance is carried forward as credit.
+	// Honors the requested tier_id (must be active, tier_level >= 1, not the
+	// default prepaid tier); falls back to is_default_postpaid when empty.
+	// Re-evaluates cluster access. Existing prepaid balance is carried forward.
 	PromoteToPaid(context.Context, *PromoteToPaidRequest) (*PromoteToPaidResponse, error)
+	// Change the postpaid billing tier. Upgrades apply immediately and reconcile
+	// cluster access; downgrades stage pending_tier_id/pending_effective_at and
+	// are applied by the billing-close job after the current invoice clears.
+	// Prepaid → postpaid transition stays on PromoteToPaid.
+	ChangeBillingTier(context.Context, *ChangeBillingTierRequest) (*ChangeBillingTierResponse, error)
 	mustEmbedUnimplementedPrepaidServiceServer()
 }
 
@@ -2038,6 +2061,9 @@ func (UnimplementedPrepaidServiceServer) GetCryptoTopup(context.Context, *GetCry
 }
 func (UnimplementedPrepaidServiceServer) PromoteToPaid(context.Context, *PromoteToPaidRequest) (*PromoteToPaidResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PromoteToPaid not implemented")
+}
+func (UnimplementedPrepaidServiceServer) ChangeBillingTier(context.Context, *ChangeBillingTierRequest) (*ChangeBillingTierResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ChangeBillingTier not implemented")
 }
 func (UnimplementedPrepaidServiceServer) mustEmbedUnimplementedPrepaidServiceServer() {}
 func (UnimplementedPrepaidServiceServer) testEmbeddedByValue()                        {}
@@ -2312,6 +2338,24 @@ func _PrepaidService_PromoteToPaid_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PrepaidService_ChangeBillingTier_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ChangeBillingTierRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).ChangeBillingTier(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_ChangeBillingTier_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).ChangeBillingTier(ctx, req.(*ChangeBillingTierRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PrepaidService_ServiceDesc is the grpc.ServiceDesc for PrepaidService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2374,6 +2418,10 @@ var PrepaidService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PromoteToPaid",
 			Handler:    _PrepaidService_PromoteToPaid_Handler,
+		},
+		{
+			MethodName: "ChangeBillingTier",
+			Handler:    _PrepaidService_ChangeBillingTier_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

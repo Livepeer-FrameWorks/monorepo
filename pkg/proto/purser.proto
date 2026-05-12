@@ -1035,9 +1035,16 @@ service PrepaidService {
 
   // ===== PROMOTION FLOW =====
   // Upgrade from prepaid to postpaid billing after email verification.
-  // Always resolves to the default postpaid tier; re-evaluates cluster access.
-  // Existing prepaid balance is carried forward as credit.
+  // Honors the requested tier_id (must be active, tier_level >= 1, not the
+  // default prepaid tier); falls back to is_default_postpaid when empty.
+  // Re-evaluates cluster access. Existing prepaid balance is carried forward.
   rpc PromoteToPaid(PromoteToPaidRequest) returns (PromoteToPaidResponse);
+
+  // Change the postpaid billing tier. Upgrades apply immediately and reconcile
+  // cluster access; downgrades stage pending_tier_id/pending_effective_at and
+  // are applied by the billing-close job after the current invoice clears.
+  // Prepaid → postpaid transition stays on PromoteToPaid.
+  rpc ChangeBillingTier(ChangeBillingTierRequest) returns (ChangeBillingTierResponse);
 }
 
 // ============================================================================
@@ -1292,10 +1299,11 @@ message CryptoTopup {
 // ============================================================================
 
 // Request to upgrade from prepaid to postpaid billing.
-// Server always resolves the default postpaid tier; tier_id is reserved/ignored.
+// tier_id selects the target postpaid tier (active, tier_level >= 1, not the
+// default prepaid tier). When empty, the server resolves is_default_postpaid.
 message PromoteToPaidRequest {
   string tenant_id = 1;
-  string tier_id = 2;                  // Reserved — server resolves default postpaid tier
+  string tier_id = 2;
 }
 
 // Response confirming promotion was successful
@@ -1308,6 +1316,28 @@ message PromoteToPaidResponse {
   int32 tier_level = 6;
   repeated string eligible_cluster_ids = 7;
   string primary_cluster_id = 8;
+}
+
+// Request to change the postpaid billing tier (upgrade or downgrade).
+// Rejects prepaid-default and inactive tiers.
+message ChangeBillingTierRequest {
+  string tenant_id = 1;
+  string tier_id = 2;
+}
+
+// Response describes whether the change applied immediately (upgrade) or was
+// scheduled for the current period end (downgrade).
+message ChangeBillingTierResponse {
+  bool success = 1;
+  string message = 2;
+  // Set when the change applied immediately (upgrade path).
+  string applied_tier_id = 3;
+  // Set when the change was scheduled (downgrade path).
+  string pending_tier_id = 4;
+  google.protobuf.Timestamp effective_at = 5;
+  // Populated on immediate apply.
+  repeated string eligible_cluster_ids = 6;
+  string primary_cluster_id = 7;
 }
 
 // ============================================================================

@@ -401,6 +401,18 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 // For auth-only payments (value=0), no transaction is submitted - just returns success
 // to indicate the wallet signature was verified.
 func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payload *X402PaymentPayload, clientIP string) (*SettleResult, error) {
+	existing, err := h.existingSettlementForPayload(ctx, tenantID, payload)
+	if err != nil {
+		var conflict x402SettlementConflictError
+		if errors.As(err, &conflict) {
+			return &SettleResult{Success: false, Error: err.Error()}, nil
+		}
+		return nil, err
+	}
+	if existing != nil {
+		return h.buildIdempotentSettleResult(ctx, tenantID, existing)
+	}
+
 	// First verify
 	verifyResult, err := h.VerifyPayment(ctx, tenantID, payload, clientIP)
 	if err != nil {
@@ -441,25 +453,50 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 
 	auth := payload.Payload.Authorization
 
-	// Build and submit the transferWithAuthorization transaction
+	// Durable intent first so a chain-broadcast failure or post-broadcast DB
+	// failure is recoverable by the reconciler via authorizationState.
+	nonceID, inserted, existing, err := h.recordSettlementIntent(ctx, payload.Network, auth.From, auth.Nonce, tenantID, verifyResult.AmountCents, payload)
+	if err != nil {
+		return &SettleResult{
+			Success: false,
+			Error:   fmt.Sprintf("failed to record settlement intent: %v", err),
+		}, nil
+	}
+	if !inserted {
+		return h.buildIdempotentSettleResult(ctx, tenantID, existing)
+	}
+
 	txHash, err := h.submitTransferWithAuthorization(ctx, payload, network)
 	if err != nil {
+		// Row stays in 'submitting'; reconciler will resolve via authorizationState.
 		return &SettleResult{
 			Success: false,
-			Error:   fmt.Sprintf("settlement failed: %v", err),
+			Error:   fmt.Sprintf("settlement broadcast failed: %v", err),
 		}, nil
 	}
 
-	newBalance, storedAmount, inserted, nonceStatus, storedTxHash, err := h.recordNonceAndCredit(ctx, payload.Network, auth.From, auth.Nonce, txHash, tenantID, verifyResult.AmountCents)
+	if mErr := h.markSettlementSubmitted(ctx, nonceID, txHash); mErr != nil {
+		h.logger.WithError(mErr).WithFields(logging.Fields{
+			"nonce_id": nonceID,
+			"tx_hash":  txHash,
+		}).Error("Chain broadcast succeeded but DB update failed; reconciler will recover")
+		return &SettleResult{
+			Success: false,
+			Error:   fmt.Sprintf("failed to record submission: %v", mErr),
+		}, nil
+	}
+
+	newBalance, err := h.creditAfterSettlement(ctx, tenantID, verifyResult.AmountCents, nonceID, txHash)
 	if err != nil {
+		// Row is 'pending'; reconciler's late-recovery path will credit on confirmation.
+		h.logger.WithError(err).WithFields(logging.Fields{
+			"nonce_id": nonceID,
+			"tx_hash":  txHash,
+		}).Error("Failed to credit balance after submission; reconciler will recover")
 		return &SettleResult{
 			Success: false,
-			Error:   fmt.Sprintf("failed to record settlement: %v", err),
+			Error:   fmt.Sprintf("failed to credit balance: %v", err),
 		}, nil
-	}
-
-	if !inserted {
-		return h.buildIdempotentSettleResult(ctx, tenantID, storedAmount, storedTxHash, nonceStatus)
 	}
 
 	// Generate simplified invoice
@@ -511,66 +548,214 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 	}, nil
 }
 
-func (h *X402Handler) recordNonceAndCredit(ctx context.Context, network, payerAddress, nonce, txHash, tenantID string, amountCents int64) (int64, int64, bool, string, string, error) {
-	tx, err := h.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, 0, false, "", "", err
+// SettlementRow describes an existing x402_nonces row returned when an
+// idempotent settle hits a row already inserted by an earlier request.
+type SettlementRow struct {
+	ID          string
+	TxHash      string
+	AmountCents int64
+	Status      string
+}
+
+type x402SettlementConflictError struct {
+	msg string
+}
+
+func (e x402SettlementConflictError) Error() string {
+	return e.msg
+}
+
+func newX402SettlementConflict(msg string) error {
+	return x402SettlementConflictError{msg: msg}
+}
+
+func (h *X402Handler) existingSettlementForPayload(ctx context.Context, tenantID string, payload *X402PaymentPayload) (*SettlementRow, error) {
+	if payload == nil || payload.Payload == nil || payload.Payload.Authorization == nil {
+		return nil, nil
 	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	auth := payload.Payload.Authorization
+	if strings.TrimSpace(auth.Value) == "" {
+		return nil, nil
+	}
+	amount, ok := new(big.Int).SetString(auth.Value, 10)
+	if !ok || amount.Sign() == 0 {
+		return nil, nil
+	}
 
 	var (
-		inserted     bool
-		nonceStatus  string
-		storedTxHash string
+		row          SettlementRow
+		storedHash   sql.NullString
+		storedPay    sql.NullString
+		storedTenant string
+	)
+	err := h.db.QueryRowContext(ctx, `
+		SELECT id, tx_hash, tenant_id, amount_cents, status, auth_payload::text
+		FROM purser.x402_nonces
+		WHERE network = $1 AND payer_address = $2 AND nonce = $3
+	`, payload.Network, strings.ToLower(auth.From), auth.Nonce).
+		Scan(&row.ID, &storedHash, &storedTenant, &row.AmountCents, &row.Status, &storedPay)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("check existing settlement: %w", err)
+	}
+	if storedTenant != tenantID {
+		return nil, newX402SettlementConflict("nonce already used by another tenant")
+	}
+	if storedPay.Valid && storedPay.String != "" && !sameX402Payload(storedPay.String, payload) {
+		return nil, newX402SettlementConflict("nonce already used for a different authorization")
+	}
+	row.TxHash = storedHash.String
+	return &row, nil
+}
+
+func sameX402Payload(stored string, current *X402PaymentPayload) bool {
+	var prev X402PaymentPayload
+	if err := json.Unmarshal([]byte(stored), &prev); err != nil {
+		return false
+	}
+	if current == nil || current.Payload == nil || current.Payload.Authorization == nil ||
+		prev.Payload == nil || prev.Payload.Authorization == nil {
+		return false
+	}
+	a, b := prev.Payload.Authorization, current.Payload.Authorization
+	return prev.X402Version == current.X402Version &&
+		prev.Scheme == current.Scheme &&
+		prev.Network == current.Network &&
+		prev.Payload.Signature == current.Payload.Signature &&
+		a.From == b.From &&
+		a.To == b.To &&
+		a.Value == b.Value &&
+		a.ValidAfter == b.ValidAfter &&
+		a.ValidBefore == b.ValidBefore &&
+		a.Nonce == b.Nonce
+}
+
+// recordSettlementIntent writes the durable pre-submit record. If a row for
+// (network, payer, nonce) already exists, returns inserted=false and the
+// existing row. The auth payload is stored as JSONB so the reconciler can
+// replay the authorization on submit failure.
+func (h *X402Handler) recordSettlementIntent(ctx context.Context, network, payerAddress, nonce, tenantID string, amountCents int64, payload *X402PaymentPayload) (string, bool, *SettlementRow, error) {
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return "", false, nil, fmt.Errorf("marshal auth payload: %w", err)
+	}
+
+	var (
+		nonceID      string
+		storedTxHash sql.NullString
+		storedPay    sql.NullString
 		storedTenant string
 		storedAmount int64
-		newBalance   int64
+		storedStatus string
+		inserted     bool
 	)
-
-	err = tx.QueryRowContext(ctx, `
+	err = h.db.QueryRowContext(ctx, `
 		INSERT INTO purser.x402_nonces (
-			network, payer_address, nonce, tx_hash, tenant_id, amount_cents, status, settled_at
-		) VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW())
+			network, payer_address, nonce, tenant_id, amount_cents,
+			auth_payload, status, settled_at, last_submit_attempt_at
+		) VALUES ($1, $2, $3, $4, $5, $6, 'submitting', NOW(), NOW())
 		ON CONFLICT (network, payer_address, nonce) DO UPDATE
-		SET tx_hash = purser.x402_nonces.tx_hash
-		RETURNING tx_hash, tenant_id, amount_cents, status, (xmax = 0) AS inserted
-	`, network, strings.ToLower(payerAddress), nonce, txHash, tenantID, amountCents).Scan(&storedTxHash, &storedTenant, &storedAmount, &nonceStatus, &inserted)
+		SET tenant_id = purser.x402_nonces.tenant_id
+		RETURNING id, tx_hash, tenant_id, amount_cents, status, auth_payload::text, (xmax = 0) AS inserted
+	`, network, strings.ToLower(payerAddress), nonce, tenantID, amountCents, payloadJSON).
+		Scan(&nonceID, &storedTxHash, &storedTenant, &storedAmount, &storedStatus, &storedPay, &inserted)
 	if err != nil {
-		return 0, 0, false, "", "", err
+		return "", false, nil, err
 	}
 
 	if storedTenant != tenantID {
-		return 0, 0, false, "", "", fmt.Errorf("nonce already used by another tenant")
+		return "", false, nil, newX402SettlementConflict("nonce already used by another tenant")
 	}
 	if storedAmount != amountCents {
-		return 0, 0, false, "", "", fmt.Errorf("nonce already used for a different amount")
+		return "", false, nil, newX402SettlementConflict("nonce already used for a different amount")
+	}
+	if !inserted && storedPay.Valid && storedPay.String != "" && !sameX402Payload(storedPay.String, payload) {
+		return "", false, nil, newX402SettlementConflict("nonce already used for a different authorization")
 	}
 
-	if !inserted {
-		if err = tx.Commit(); err != nil {
-			return 0, 0, false, "", "", err
-		}
-		return 0, storedAmount, false, nonceStatus, storedTxHash, nil
+	if inserted {
+		return nonceID, true, nil, nil
 	}
-
-	newBalance, err = h.creditPrepaidBalanceTx(ctx, tx, tenantID, amountCents, txHash, "x402 USDC payment")
-	if err != nil {
-		return 0, 0, false, "", "", err
-	}
-
-	if err = tx.Commit(); err != nil {
-		return 0, 0, false, "", "", err
-	}
-
-	return newBalance, amountCents, true, "pending", txHash, nil
+	return nonceID, false, &SettlementRow{
+		ID:          nonceID,
+		TxHash:      storedTxHash.String,
+		AmountCents: storedAmount,
+		Status:      storedStatus,
+	}, nil
 }
 
-func (h *X402Handler) buildIdempotentSettleResult(ctx context.Context, tenantID string, amountCents int64, txHash, status string) (*SettleResult, error) {
-	if status == "failed" {
+// markSettlementSubmitted promotes a 'submitting' row to 'pending' once the
+// on-chain transferWithAuthorization broadcast has returned a tx hash.
+func (h *X402Handler) markSettlementSubmitted(ctx context.Context, nonceID, txHash string) error {
+	res, err := h.db.ExecContext(ctx, `
+		UPDATE purser.x402_nonces
+		SET tx_hash = $2, submitted_at = NOW(), status = 'pending'
+		WHERE id = $1 AND status = 'submitting'
+	`, nonceID, txHash)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("intent %s not in submitting state", nonceID)
+	}
+	return nil
+}
+
+// creditAfterSettlement credits the tenant's prepaid balance and records the
+// audit row. Runs in its own transaction; a failure here leaves the row in
+// 'pending' for the reconciler's late-recovery path to credit on confirmation.
+func (h *X402Handler) creditAfterSettlement(ctx context.Context, tenantID string, amountCents int64, nonceID, txHash string) (int64, error) {
+	tx, err := h.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+
+	newBalance, err := h.creditPrepaidBalanceTx(ctx, tx, tenantID, amountCents, nonceID, txHash, "x402 USDC payment")
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return newBalance, nil
+}
+
+func (h *X402Handler) buildIdempotentSettleResult(ctx context.Context, tenantID string, row *SettlementRow) (*SettleResult, error) {
+	if row == nil {
+		return &SettleResult{Success: false, Error: "settlement unavailable"}, nil
+	}
+	if row.Status == "failed" {
 		return &SettleResult{
 			Success: false,
 			Error:   "nonce already used",
 		}, nil
+	}
+	if row.Status == "submitting" {
+		// Concurrent settle: the first call is mid-flight and the chain
+		// broadcast outcome is not yet known. Let the caller retry.
+		return &SettleResult{
+			Success: false,
+			Error:   "settlement in progress",
+		}, nil
+	}
+
+	if row.TxHash != "" {
+		creditExists, err := h.x402BalanceTransactionExists(ctx, tenantID, row.ID, "x402_payment", "topup")
+		if err != nil {
+			return nil, err
+		}
+		if !creditExists {
+			if _, err := h.creditAfterSettlement(ctx, tenantID, row.AmountCents, row.ID, row.TxHash); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	currentBalance, err := h.getCurrentBalance(ctx, tenantID, billing.DefaultCurrency())
@@ -580,8 +765,8 @@ func (h *X402Handler) buildIdempotentSettleResult(ctx context.Context, tenantID 
 
 	return &SettleResult{
 		Success:         true,
-		TxHash:          txHash,
-		CreditedCents:   amountCents,
+		TxHash:          row.TxHash,
+		CreditedCents:   row.AmountCents,
 		Currency:        billing.DefaultCurrency(),
 		NewBalanceCents: currentBalance,
 	}, nil
@@ -794,35 +979,53 @@ func (h *X402Handler) sendRawTransaction(ctx context.Context, network NetworkCon
 	return txHash, nil
 }
 
-func (h *X402Handler) creditPrepaidBalanceTx(ctx context.Context, tx *sql.Tx, tenantID string, amountCents int64, txHash string, description string) (int64, error) {
+func (h *X402Handler) creditPrepaidBalanceTx(ctx context.Context, tx *sql.Tx, tenantID string, amountCents int64, nonceID string, txHash string, description string) (int64, error) {
 	currency := billing.DefaultCurrency()
 
-	// Get current balance
-	var currentBalance int64
+	var existingBalanceAfter int64
 	err := tx.QueryRowContext(ctx, `
+		SELECT balance_after_cents FROM purser.balance_transactions
+		WHERE tenant_id = $1 AND reference_type = 'x402_payment' AND reference_id = $2
+	`, tenantID, nonceID).Scan(&existingBalanceAfter)
+	if err == nil {
+		return existingBalanceAfter, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, updated_at)
+		VALUES ($1, 0, $2, NOW())
+		ON CONFLICT (tenant_id, currency) DO NOTHING
+	`, tenantID, currency)
+	if err != nil {
+		return 0, err
+	}
+
+	var currentBalance int64
+	err = tx.QueryRowContext(ctx, `
 		SELECT balance_cents FROM purser.prepaid_balances
 		WHERE tenant_id = $1 AND currency = $2
+		FOR UPDATE
 	`, tenantID, currency).Scan(&currentBalance)
-	if errors.Is(err, sql.ErrNoRows) {
-		currentBalance = 0
-	} else if err != nil {
+	if err != nil {
 		return 0, err
 	}
 
 	newBalance := currentBalance + amountCents
 
-	// Upsert balance
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, updated_at)
-		VALUES ($1, $2, $3, NOW())
-		ON CONFLICT (tenant_id, currency)
-		DO UPDATE SET balance_cents = $2, updated_at = NOW()
-	`, tenantID, newBalance, currency)
+		UPDATE purser.prepaid_balances
+		SET balance_cents = $1, updated_at = NOW()
+		WHERE tenant_id = $2 AND currency = $3
+	`, newBalance, tenantID, currency)
 	if err != nil {
 		return 0, err
 	}
 
-	// Record transaction
+	// reference_id is UUID; link to the x402_nonces row that owns this settlement.
+	// The txHash is preserved in the description for human inspection.
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO purser.balance_transactions (
 			id, tenant_id, amount_cents, balance_after_cents,
@@ -834,13 +1037,24 @@ func (h *X402Handler) creditPrepaidBalanceTx(ctx context.Context, tx *sql.Tx, te
 		amountCents,
 		newBalance,
 		fmt.Sprintf("%s (%s...)", description, txHash[:16]),
-		txHash,
+		nonceID,
 	)
 	if err != nil {
 		return 0, err
 	}
 
 	return newBalance, nil
+}
+
+func (h *X402Handler) x402BalanceTransactionExists(ctx context.Context, tenantID, nonceID, referenceType, transactionType string) (bool, error) {
+	var exists bool
+	err := h.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM purser.balance_transactions
+			WHERE tenant_id = $1 AND reference_id = $2 AND reference_type = $3 AND transaction_type = $4
+		)
+	`, tenantID, nonceID, referenceType, transactionType).Scan(&exists)
+	return exists, err
 }
 
 func (h *X402Handler) getCurrentBalance(ctx context.Context, tenantID, currency string) (int64, error) {

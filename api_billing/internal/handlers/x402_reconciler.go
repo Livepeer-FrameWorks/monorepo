@@ -29,6 +29,7 @@ type X402Reconciler struct {
 	logger              logging.Logger
 	stopCh              chan struct{}
 	includeTestnets     bool
+	submitTransfer      func(context.Context, *X402PaymentPayload, NetworkConfig) (string, error)
 	recoveryWindowHours int
 	reorgDepthBlocks    int
 	rpcErrorLimit       int
@@ -55,12 +56,17 @@ type TransactionReceipt struct {
 }
 
 // NewX402Reconciler creates a new x402 settlement reconciler
-func NewX402Reconciler(database *sql.DB, log logging.Logger, includeTestnets bool) *X402Reconciler {
+func NewX402Reconciler(database *sql.DB, log logging.Logger, includeTestnets bool, submitter ...func(context.Context, *X402PaymentPayload, NetworkConfig) (string, error)) *X402Reconciler {
+	var submitTransfer func(context.Context, *X402PaymentPayload, NetworkConfig) (string, error)
+	if len(submitter) > 0 {
+		submitTransfer = submitter[0]
+	}
 	return &X402Reconciler{
 		db:                  database,
 		logger:              log,
 		stopCh:              make(chan struct{}),
 		includeTestnets:     includeTestnets,
+		submitTransfer:      submitTransfer,
 		recoveryWindowHours: readEnvInt("X402_RECOVERY_WINDOW_HOURS", 168),
 		reorgDepthBlocks:    readEnvInt("X402_REORG_DEPTH_BLOCKS", 50),
 		rpcErrorLimit:       readEnvInt("X402_RPC_ERROR_LIMIT", 5),
@@ -84,6 +90,7 @@ func (r *X402Reconciler) Start(ctx context.Context) {
 			r.logger.Info("X402 reconciler stopping")
 			return
 		case <-ticker.C:
+			r.reconcileSubmittingIntents(ctx)
 			r.reconcilePendingSettlements(ctx)
 			r.reconcileFailedTimeouts(ctx)
 			r.reconcileConfirmedSettlements(ctx)
@@ -94,6 +101,233 @@ func (r *X402Reconciler) Start(ctx context.Context) {
 // Stop stops the reconciler
 func (r *X402Reconciler) Stop() {
 	close(r.stopCh)
+}
+
+// reconcileSubmittingIntents handles rows stuck in 'submitting': either the
+// chain broadcast failed before recording, or it succeeded but the DB update
+// for tx_hash did not land. authorizationState on the USDC contract is the
+// oracle: unused = nothing on-chain, used = an unrecorded tx settled it.
+func (r *X402Reconciler) reconcileSubmittingIntents(ctx context.Context) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, network, payer_address, nonce, tenant_id, amount_cents, settled_at, auth_payload
+		FROM purser.x402_nonces
+		WHERE status = 'submitting'
+		AND settled_at < NOW() - INTERVAL '30 seconds'
+		ORDER BY settled_at ASC
+		LIMIT 50
+	`)
+	if err != nil {
+		r.logger.WithError(err).Error("Failed to query submitting x402 intents")
+		return
+	}
+	defer func() { _ = rows.Close() }()
+
+	type intent struct {
+		ID           string
+		Network      string
+		PayerAddress string
+		Nonce        string
+		TenantID     string
+		AmountCents  int64
+		SettledAt    time.Time
+		AuthPayload  sql.NullString
+	}
+	var intents []intent
+	for rows.Next() {
+		var it intent
+		if err := rows.Scan(&it.ID, &it.Network, &it.PayerAddress, &it.Nonce, &it.TenantID, &it.AmountCents, &it.SettledAt, &it.AuthPayload); err != nil {
+			r.logger.WithError(err).Error("Failed to scan submitting intent")
+			continue
+		}
+		intents = append(intents, it)
+	}
+
+	for _, it := range intents {
+		network, ok := Networks[it.Network]
+		if !ok {
+			r.markFailed(ctx, it.ID, "unknown network")
+			continue
+		}
+		if network.IsTestnet && !r.includeTestnets {
+			continue
+		}
+
+		validBefore := r.parseAuthValidBefore(it.AuthPayload.String)
+		expired := validBefore > 0 && time.Now().Unix() > validBefore
+
+		used, callErr := r.callAuthorizationState(ctx, network, it.PayerAddress, it.Nonce)
+		if callErr != nil {
+			r.trackRPCError(it.Network, callErr, "", it.TenantID)
+			r.logger.WithError(callErr).WithFields(logging.Fields{
+				"nonce_id":  it.ID,
+				"tenant_id": it.TenantID,
+				"network":   it.Network,
+			}).Warn("Failed to read authorizationState for submitting intent")
+			continue
+		}
+		r.clearRPCError(it.Network)
+
+		switch {
+		case used:
+			// The authorization was consumed on-chain but no tx_hash made it
+			// to the row. USDC's authorizationState is a bool, so the txHash
+			// is not deterministically recoverable from this signal alone.
+			// Flag for manual reconciliation.
+			r.markFailed(ctx, it.ID, "manual reconciliation required: authorization consumed without recorded tx_hash")
+			emitBillingEvent(eventX402AccountingAnomaly, it.TenantID, "x402_nonce", it.ID, &pb.BillingEvent{
+				Amount:   float64(it.AmountCents) / 100,
+				Currency: billing.DefaultCurrency(),
+				Status:   "authorization consumed without recorded tx_hash",
+				Provider: it.Network,
+			})
+		case expired:
+			// Authorization window passed without a successful broadcast;
+			// safe to fail because no balance was credited.
+			r.markFailed(ctx, it.ID, "authorization expired before broadcast")
+		default:
+			if r.submitTransfer == nil {
+				r.logger.WithFields(logging.Fields{
+					"nonce_id":  it.ID,
+					"tenant_id": it.TenantID,
+					"network":   it.Network,
+					"age":       time.Since(it.SettledAt).String(),
+				}).Warn("x402 intent stuck in submitting; no submitter configured")
+				continue
+			}
+			acquired, err := r.claimSubmittingIntent(ctx, it.ID)
+			if err != nil {
+				r.logger.WithError(err).WithField("nonce_id", it.ID).Warn("Failed to claim x402 submit retry")
+				continue
+			}
+			if !acquired {
+				continue
+			}
+			var payload X402PaymentPayload
+			if unmarshalErr := json.Unmarshal([]byte(it.AuthPayload.String), &payload); unmarshalErr != nil {
+				r.markFailed(ctx, it.ID, "invalid stored x402 authorization payload")
+				continue
+			}
+			txHash, err := r.submitTransfer(ctx, &payload, network)
+			if err != nil {
+				r.logger.WithError(err).WithFields(logging.Fields{
+					"nonce_id":  it.ID,
+					"tenant_id": it.TenantID,
+					"network":   it.Network,
+				}).Warn("Failed to resubmit x402 authorization")
+				continue
+			}
+			if err := r.markSubmitted(ctx, it.ID, txHash); err != nil {
+				r.logger.WithError(err).WithFields(logging.Fields{
+					"nonce_id": it.ID,
+					"tx_hash":  txHash,
+				}).Error("Resubmitted x402 authorization but failed to record tx hash")
+				continue
+			}
+			if err := r.creditBalance(ctx, it.TenantID, it.AmountCents, it.ID, txHash); err != nil {
+				r.logger.WithError(err).WithFields(logging.Fields{
+					"nonce_id":  it.ID,
+					"tenant_id": it.TenantID,
+					"tx_hash":   txHash,
+				}).Error("Resubmitted x402 authorization but failed to credit tenant")
+			}
+		}
+	}
+}
+
+func (r *X402Reconciler) claimSubmittingIntent(ctx context.Context, id string) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE purser.x402_nonces
+		SET last_submit_attempt_at = NOW()
+		WHERE id = $1
+		  AND status = 'submitting'
+		  AND (last_submit_attempt_at IS NULL OR last_submit_attempt_at < NOW() - INTERVAL '2 minutes')
+	`, id)
+	if err != nil {
+		return false, err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows > 0, nil
+}
+
+func (r *X402Reconciler) parseAuthValidBefore(rawJSON string) int64 {
+	if rawJSON == "" {
+		return 0
+	}
+	var p struct {
+		Payload struct {
+			Authorization struct {
+				ValidBefore string `json:"validBefore"`
+			} `json:"authorization"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal([]byte(rawJSON), &p); err != nil {
+		return 0
+	}
+	v, err := strconv.ParseInt(p.Payload.Authorization.ValidBefore, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+func (r *X402Reconciler) callAuthorizationState(ctx context.Context, network NetworkConfig, payer, nonce string) (bool, error) {
+	rpcEndpoint := network.GetRPCEndpointWithDefault()
+	if rpcEndpoint == "" {
+		return false, fmt.Errorf("no RPC endpoint for network %s", network.Name)
+	}
+
+	methodID := keccak256([]byte("authorizationState(address,bytes32)"))[0:4]
+	callData := methodID
+	callData = append(callData, padAddress(payer)...)
+	callData = append(callData, padBytes32(nonce)...)
+
+	reqBody := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "eth_call",
+		"params": []any{
+			map[string]string{
+				"to":   network.USDCContract,
+				"data": "0x" + hex.EncodeToString(callData),
+			},
+			"latest",
+		},
+		"id": 1,
+	}
+	reqJSON, err := json.Marshal(reqBody)
+	if err != nil {
+		return false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", rpcEndpoint, strings.NewReader(string(reqJSON)))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, err
+	}
+
+	var rpcResp struct {
+		Result string           `json:"result"`
+		Error  *json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(body, &rpcResp); err != nil {
+		return false, err
+	}
+	if rpcResp.Error != nil {
+		return false, fmt.Errorf("RPC error: %s", string(*rpcResp.Error))
+	}
+	return rpcResp.Result != "0x0000000000000000000000000000000000000000000000000000000000000000", nil
 }
 
 // reconcilePendingSettlements checks all pending settlements and confirms or fails them
@@ -164,7 +398,7 @@ func (r *X402Reconciler) reconcileSettlement(ctx context.Context, s PendingSettl
 				"age":       time.Since(s.SettledAt).String(),
 			}).Error("X402 settlement timed out - transaction not mined")
 			r.markFailed(ctx, s.ID, "timeout - transaction not mined within 2 minutes")
-			r.debitBalance(ctx, s.TenantID, s.AmountCents, s.TxHash)
+			r.debitBalance(ctx, s.TenantID, s.AmountCents, s.ID, s.TxHash)
 		}
 		return
 	}
@@ -179,7 +413,7 @@ func (r *X402Reconciler) reconcileSettlement(ctx context.Context, s PendingSettl
 				"tenant_id": s.TenantID,
 			}).Error("X402 settlement timed out - no receipt after 2 minutes")
 			r.markFailed(ctx, s.ID, "timeout - no receipt after 2 minutes")
-			r.debitBalance(ctx, s.TenantID, s.AmountCents, s.TxHash)
+			r.debitBalance(ctx, s.TenantID, s.AmountCents, s.ID, s.TxHash)
 		}
 		return
 	}
@@ -202,6 +436,14 @@ func (r *X402Reconciler) reconcileSettlement(ctx context.Context, s PendingSettl
 			return
 		}
 
+		if err := r.creditBalance(ctx, s.TenantID, s.AmountCents, s.ID, s.TxHash); err != nil {
+			r.logger.WithError(err).WithFields(logging.Fields{
+				"tx_hash":   s.TxHash,
+				"tenant_id": s.TenantID,
+				"nonce_id":  s.ID,
+			}).Error("Failed to ensure x402 credit before confirming settlement")
+			return
+		}
 		r.markConfirmed(ctx, s.ID, blockNum, gasUsed)
 		r.logger.WithFields(logging.Fields{
 			"tx_hash":      s.TxHash,
@@ -223,7 +465,7 @@ func (r *X402Reconciler) reconcileSettlement(ctx context.Context, s PendingSettl
 			"status":    receipt.Status,
 		}).Error("X402 settlement reverted on-chain")
 		r.markFailed(ctx, s.ID, "transaction reverted on-chain")
-		r.debitBalance(ctx, s.TenantID, s.AmountCents, s.TxHash)
+		r.debitBalance(ctx, s.TenantID, s.AmountCents, s.ID, s.TxHash)
 	}
 }
 
@@ -285,7 +527,7 @@ func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
 				  AND reference_type = 'x402_failed'
 				  AND transaction_type = 'reversal'
 			)
-		`, s.TenantID, s.TxHash).Scan(&reversalExists)
+		`, s.TenantID, s.ID).Scan(&reversalExists)
 		if err != nil {
 			r.logger.WithError(err).WithField("tenant_id", s.TenantID).Error("Failed to check timeout reversal before re-credit")
 			continue
@@ -303,7 +545,7 @@ func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
 			})
 			continue
 		}
-		if err := r.creditBalance(ctx, s.TenantID, s.AmountCents, s.TxHash); err != nil {
+		if err := r.creditBalance(ctx, s.TenantID, s.AmountCents, s.ID, s.TxHash); err != nil {
 			r.logger.WithError(err).WithField("tenant_id", s.TenantID).Error("Failed to re-credit balance after late settlement")
 			continue
 		}
@@ -387,7 +629,7 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 					  AND reference_type = 'x402_payment'
 					  AND transaction_type = 'topup'
 				)
-			`, s.TenantID, s.TxHash).Scan(&creditExists)
+			`, s.TenantID, s.ID).Scan(&creditExists)
 			if qErr != nil {
 				r.logger.WithError(qErr).WithFields(logging.Fields{
 					"tenant_id": s.TenantID,
@@ -406,7 +648,7 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 				continue
 			}
 
-			r.debitBalance(ctx, s.TenantID, s.AmountCents, s.TxHash)
+			r.debitBalance(ctx, s.TenantID, s.AmountCents, s.ID, s.TxHash)
 			emitBillingEvent(eventX402ReorgDetected, s.TenantID, "x402_nonce", s.TxHash, &pb.BillingEvent{
 				Amount:   float64(s.AmountCents) / 100,
 				Currency: "EUR",
@@ -427,7 +669,7 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 					  AND reference_type = 'x402_payment'
 					  AND transaction_type = 'topup'
 				)
-			`, s.TenantID, s.TxHash).Scan(&creditExists)
+			`, s.TenantID, s.ID).Scan(&creditExists)
 			if qErr != nil {
 				r.logger.WithError(qErr).WithFields(logging.Fields{
 					"tenant_id": s.TenantID,
@@ -446,7 +688,7 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 				continue
 			}
 
-			r.debitBalance(ctx, s.TenantID, s.AmountCents, s.TxHash)
+			r.debitBalance(ctx, s.TenantID, s.AmountCents, s.ID, s.TxHash)
 			emitBillingEvent(eventX402ReorgDetected, s.TenantID, "x402_nonce", s.TxHash, &pb.BillingEvent{
 				Amount:   float64(s.AmountCents) / 100,
 				Currency: "EUR",
@@ -480,10 +722,10 @@ func (r *X402Reconciler) getLatestBlockNumber(ctx context.Context, network Netwo
 		return 0, fmt.Errorf("no RPC endpoint for network %s", network.Name)
 	}
 
-	reqBody := map[string]interface{}{
+	reqBody := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  "eth_blockNumber",
-		"params":  []interface{}{},
+		"params":  []any{},
 		"id":      1,
 	}
 
@@ -534,31 +776,72 @@ func (r *X402Reconciler) updatePendingReceipt(ctx context.Context, id string, bl
 	}
 }
 
-func (r *X402Reconciler) creditBalance(ctx context.Context, tenantID string, amountCents int64, txHash string) error {
+func (r *X402Reconciler) markSubmitted(ctx context.Context, id, txHash string) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE purser.x402_nonces
+		SET tx_hash = $2, submitted_at = NOW(), status = 'pending'
+		WHERE id = $1 AND status = 'submitting'
+	`, id, txHash)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("intent %s not in submitting state", id)
+	}
+	return nil
+}
+
+func (r *X402Reconciler) creditBalance(ctx context.Context, tenantID string, amountCents int64, nonceID, txHash string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	var balance int64
 	currency := billing.DefaultCurrency()
+
+	var existingBalanceAfter int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT balance_after_cents FROM purser.balance_transactions
+		WHERE tenant_id = $1 AND reference_type = 'x402_payment' AND reference_id = $2
+	`, tenantID, nonceID).Scan(&existingBalanceAfter)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, updated_at)
+		VALUES ($1, 0, $2, NOW())
+		ON CONFLICT (tenant_id, currency) DO NOTHING
+	`, tenantID, currency)
+	if err != nil {
+		return err
+	}
+
+	var balance int64
 	err = tx.QueryRowContext(ctx, `
 		SELECT balance_cents FROM purser.prepaid_balances
 		WHERE tenant_id = $1 AND currency = $2
+		FOR UPDATE
 	`, tenantID, currency).Scan(&balance)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil {
 		return err
 	}
 
 	newBalance := balance + amountCents
 
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, updated_at)
-		VALUES ($1, $2, $3, NOW())
-		ON CONFLICT (tenant_id, currency)
-		DO UPDATE SET balance_cents = $2, updated_at = NOW()
-	`, tenantID, newBalance, currency)
+		UPDATE purser.prepaid_balances
+		SET balance_cents = $1, updated_at = NOW()
+		WHERE tenant_id = $2 AND currency = $3
+	`, newBalance, tenantID, currency)
 	if err != nil {
 		return err
 	}
@@ -569,7 +852,7 @@ func (r *X402Reconciler) creditBalance(ctx context.Context, tenantID string, amo
 			transaction_type, description, reference_id, reference_type, created_at
 		) VALUES ($1, $2, $3, $4, 'topup', $5, $6, 'x402_payment', NOW())
 	`, uuid.New().String(), tenantID, amountCents, newBalance,
-		fmt.Sprintf("x402 settlement recovered (%s)", truncateTxHash(txHash)), txHash)
+		fmt.Sprintf("x402 settlement recovered (%s)", truncateTxHash(txHash)), nonceID)
 	if err != nil {
 		return err
 	}
@@ -584,7 +867,7 @@ func (r *X402Reconciler) getTransactionReceipt(ctx context.Context, network Netw
 		return nil, fmt.Errorf("no RPC endpoint for network %s", network.Name)
 	}
 
-	reqBody := map[string]interface{}{
+	reqBody := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  "eth_getTransactionReceipt",
 		"params":  []string{txHash},
@@ -654,7 +937,7 @@ func (r *X402Reconciler) markFailed(ctx context.Context, id, reason string) {
 }
 
 // debitBalance reverses the balance credit for a failed settlement
-func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amountCents int64, txHash string) {
+func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amountCents int64, nonceID, txHash string) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to begin transaction for balance debit")
@@ -664,13 +947,50 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 
 	currency := billing.DefaultCurrency()
 
-	// Get current balance
+	var creditExists bool
+	err = tx.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM purser.balance_transactions
+			WHERE tenant_id = $1 AND reference_id = $2
+			  AND reference_type = 'x402_payment' AND transaction_type = 'topup'
+		)
+	`, tenantID, nonceID).Scan(&creditExists)
+	if err != nil {
+		r.logger.WithError(err).Error("Failed to check original x402 credit before debit")
+		return
+	}
+	if !creditExists {
+		r.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"nonce_id":  nonceID,
+			"tx_hash":   txHash,
+		}).Warn("Skipping x402 debit: no original credit found")
+		return
+	}
+
+	var reversalExists bool
+	err = tx.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM purser.balance_transactions
+			WHERE tenant_id = $1 AND reference_id = $2
+			  AND reference_type = 'x402_failed' AND transaction_type = 'reversal'
+		)
+	`, tenantID, nonceID).Scan(&reversalExists)
+	if err != nil {
+		r.logger.WithError(err).Error("Failed to check existing x402 reversal before debit")
+		return
+	}
+	if reversalExists {
+		return
+	}
+
 	var balance int64
 	err = tx.QueryRowContext(ctx, `
 		SELECT balance_cents FROM purser.prepaid_balances
 		WHERE tenant_id = $1 AND currency = $2
+		FOR UPDATE
 	`, tenantID, currency).Scan(&balance)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil {
 		r.logger.WithError(err).Error("Failed to get current balance for debit")
 		return
 	}
@@ -680,11 +1000,10 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 
 	// Update balance
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, updated_at)
-		VALUES ($1, $2, $3, NOW())
-		ON CONFLICT (tenant_id, currency)
-		DO UPDATE SET balance_cents = $2, updated_at = NOW()
-	`, tenantID, newBalance, currency)
+		UPDATE purser.prepaid_balances
+		SET balance_cents = $1, updated_at = NOW()
+		WHERE tenant_id = $2 AND currency = $3
+	`, newBalance, tenantID, currency)
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to update balance for debit")
 		return
@@ -697,7 +1016,7 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 			transaction_type, description, reference_id, reference_type, created_at
 		) VALUES ($1, $2, $3, $4, 'reversal', $5, $6, 'x402_failed', NOW())
 	`, uuid.New().String(), tenantID, -amountCents, newBalance,
-		fmt.Sprintf("x402 settlement failed: %s", truncateTxHash(txHash)), txHash)
+		fmt.Sprintf("x402 settlement failed: %s", truncateTxHash(txHash)), nonceID)
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to record reversal transaction")
 		return

@@ -168,6 +168,7 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 
 	includeTestnets := config.X402IncludeTestnetsEnabled()
 	emailSvc := NewEmailService(log)
+	x402Submitter := NewX402Handler(database, log, NewHDWallet(database, log), NewRPCClient(), commodoreClient)
 
 	return &JobManager{
 		db:                database,
@@ -175,7 +176,7 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 		emailService:      emailSvc,
 		cryptoMonitor:     NewCryptoMonitor(database, log, decklogSvc),
 		gasWalletMonitor:  NewGasWalletMonitor(log),
-		x402Reconciler:    NewX402Reconciler(database, log, includeTestnets),
+		x402Reconciler:    NewX402Reconciler(database, log, includeTestnets, x402Submitter.submitTransferWithAuthorization),
 		kafkaConsumer:     consumer,
 		stopCh:            make(chan struct{}),
 		billingTopic:      billingTopic,
