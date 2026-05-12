@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -22,9 +23,14 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+
+	"github.com/VictorAvelar/mollie-api-go/v4/mollie"
 )
 
-var errMollieResourceNotFound = errors.New("mollie resource not found")
+// errMollieUnknownPayment is returned when Mollie reports the payment id does
+// not exist. Treat it as a bad webhook id rather than a transient processing
+// failure.
+var errMollieUnknownPayment = errors.New("mollie payment not found")
 
 // Stripe webhook payload structure
 // Flexible struct to handle multiple event types (payment_intent, subscription, invoice, checkout)
@@ -829,58 +835,62 @@ func updateClusterSubscriptionFromStripe(obj StripeSubscriptionObject, ourStatus
 
 // ProcessMollieWebhookGRPC processes a Mollie webhook received via gRPC from the Gateway.
 // Returns (success, error_message, http_status_code).
+//
+// Mollie webhooks are application/x-www-form-urlencoded with a single `id`
+// parameter; the integrator fetches details via the API. JSON is accepted only
+// when the caller explicitly sends application/json.
 func ProcessMollieWebhookGRPC(body []byte, headers map[string]string) (bool, string, int) {
 	if mollieClient == nil {
 		logger.Warn("Mollie client not configured; rejecting webhook")
 		return false, "Mollie not configured", 503
 	}
 
-	var payload MollieWebhookPayload
-	if err := json.Unmarshal(body, &payload); err != nil {
-		logger.WithFields(logging.Fields{
-			"error": err.Error(),
-		}).Warn("Invalid Mollie webhook payload")
+	paymentID, err := parseMollieWebhookID(body, headerValue(headers, "Content-Type"))
+	if err != nil {
+		logger.WithError(err).Warn("Invalid Mollie webhook payload")
 		return false, "Invalid payload", 400
 	}
-
-	logger.WithFields(logging.Fields{
-		"payload": payload,
-	}).Info("Received Mollie webhook via gRPC")
-
-	if payload.ID == "" {
+	if paymentID == "" {
 		logger.Warn("Mollie webhook payload missing id")
 		return false, "Invalid payload", 400
 	}
 
-	resource := strings.ToLower(payload.Resource)
-	var eventID string
-	var err error
+	logger.WithField("payment_id", paymentID).Info("Received Mollie webhook via gRPC")
 
-	switch resource {
-	case "subscription":
-		eventID, err = handleMollieSubscriptionWebhook(payload.ID)
-	case "", "payment":
-		eventID, err = handleMolliePaymentWebhook(payload.ID)
-		if errors.Is(err, errMollieResourceNotFound) {
-			eventID, err = handleMollieSubscriptionWebhook(payload.ID)
-		}
-	default:
-		eventID, err = handleMolliePaymentWebhook(payload.ID)
-		if errors.Is(err, errMollieResourceNotFound) {
-			eventID, err = handleMollieSubscriptionWebhook(payload.ID)
-		}
+	eventID, err := handleMolliePaymentWebhook(paymentID)
+	if errors.Is(err, errMollieUnknownPayment) {
+		logger.WithField("payment_id", paymentID).Warn("Mollie webhook references unknown payment id")
+		return false, "Payment not found", 404
 	}
-
 	if err != nil {
 		logger.WithError(err).Error("Failed to process Mollie webhook")
 		return false, "Failed to process webhook", 500
 	}
 
 	if eventID != "" {
-		markWebhookProcessed("mollie", eventID, resource)
+		markWebhookProcessed("mollie", eventID, "payment")
 	}
 
 	return true, "", 200
+}
+
+// parseMollieWebhookID extracts the `id` parameter from a Mollie webhook body.
+// Real Mollie webhooks are application/x-www-form-urlencoded; JSON is only
+// parsed when the content type says the body is JSON.
+func parseMollieWebhookID(body []byte, contentType string) (string, error) {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0]))
+	if mediaType == "application/json" {
+		var payload MollieWebhookPayload
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return "", fmt.Errorf("invalid json: %w", err)
+		}
+		return payload.ID, nil
+	}
+	values, err := url.ParseQuery(string(body))
+	if err != nil {
+		return "", fmt.Errorf("invalid form body: %w", err)
+	}
+	return values.Get("id"), nil
 }
 
 func headerValue(headers map[string]string, key string) string {
@@ -905,7 +915,7 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 
 	payment, err := mollieClient.GetPayment(ctx, paymentID)
 	if err != nil {
-		return "", errMollieResourceNotFound
+		return "", errMollieUnknownPayment
 	}
 
 	status := strings.ToLower(payment.Status)
@@ -932,6 +942,7 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 	paymentType := mollieMetadataString(payment.Metadata, "payment_type")
 	referenceID := mollieMetadataString(payment.Metadata, "reference_id")
 	invoiceID := mollieMetadataString(payment.Metadata, "invoice_id")
+	billingPaymentID := mollieMetadataString(payment.Metadata, "billing_payment_id")
 	topupID := mollieMetadataString(payment.Metadata, "topup_id")
 	if topupID == "" {
 		topupID = referenceID
@@ -987,8 +998,68 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 		return eventID, nil
 	}
 
+	// Subscription installments: Mollie auto-creates a payment per period and
+	// fires this webhook with payment.SubscriptionID set. We reconcile by
+	// locating the local tenant_subscription, finding the matching invoice
+	// for the period that contains payment.CreatedAt, inserting a pending
+	// billing_payments row keyed by the Mollie payment id, then falling
+	// through to updateInvoicePaymentStatus which will confirm it and flip
+	// the invoice paid. metadata.invoice_id is set when the on-demand charge
+	// helper (overage collection) creates the payment; in that case we skip
+	// the subscription-period lookup.
+	if payment.SubscriptionID != "" && invoiceID == "" {
+		resolvedInvoiceID, resolveErr := resolveMollieSubscriptionInvoice(ctx, payment.SubscriptionID, payment)
+		if resolveErr != nil {
+			return "", resolveErr
+		}
+		if resolvedInvoiceID == "" {
+			return "", fmt.Errorf("no pending invoice found for Mollie subscription payment %s", payment.ID)
+		}
+		invoiceID = resolvedInvoiceID
+		if tenantID == "" {
+			if scanErr := db.QueryRowContext(ctx, `
+				SELECT tenant_id FROM purser.tenant_subscriptions WHERE mollie_subscription_id = $1
+			`, payment.SubscriptionID).Scan(&tenantID); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+				logger.WithError(scanErr).WithField("mollie_subscription_id", payment.SubscriptionID).Warn("Failed to resolve tenant_id from subscription")
+			}
+		}
+		if invoiceID != "" && payment.Amount != nil {
+			amountCents, _, amtErr := mollieAmountToCents(payment.Amount.Value, payment.Amount.Currency)
+			if amtErr == nil {
+				amountDec := float64(amountCents) / 100.0
+				if _, insertErr := db.ExecContext(ctx, `
+					INSERT INTO purser.billing_payments (invoice_id, method, amount, currency, tx_id, status, created_at, updated_at)
+					VALUES ($1, 'card', $2, $3, $4, 'pending', NOW(), NOW())
+					ON CONFLICT DO NOTHING
+				`, invoiceID, amountDec, payment.Amount.Currency, payment.ID); insertErr != nil {
+					logger.WithError(insertErr).WithField("mollie_payment_id", payment.ID).Warn("Failed to insert subscription-installment billing_payment")
+				}
+			}
+		}
+		if sub, subErr := mollieClient.GetSubscription(ctx, payment.CustomerID, payment.SubscriptionID); subErr == nil && sub.NextPaymentDate != nil {
+			if _, persistErr := db.ExecContext(ctx, `
+				UPDATE purser.tenant_subscriptions
+				SET mollie_next_payment_date = $1, updated_at = NOW()
+				WHERE mollie_subscription_id = $2
+			`, sub.NextPaymentDate.String(), payment.SubscriptionID); persistErr != nil {
+				logger.WithError(persistErr).WithField("mollie_subscription_id", payment.SubscriptionID).Warn("Failed to persist next_payment_date")
+			}
+		}
+	}
+
 	if invoiceID == "" {
 		invoiceID = referenceID
+	}
+	if billingPaymentID != "" {
+		if _, attachErr := db.ExecContext(ctx, `
+			UPDATE purser.billing_payments
+			SET tx_id = $1, updated_at = NOW()
+			WHERE id = $2
+			  AND status = 'pending'
+			  AND (tx_id IS NULL OR tx_id = $1 OR tx_id LIKE 'mollie-overage-intent:%')
+		`, payment.ID, billingPaymentID); attachErr != nil {
+			return "", fmt.Errorf("attach Mollie payment id to billing payment: %w", attachErr)
+		}
 	}
 	paymentUpdated, err := updateInvoicePaymentStatus("mollie", payment.ID, invoiceID, newStatus)
 	if err != nil {
@@ -1026,80 +1097,38 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 	return eventID, nil
 }
 
-func handleMollieSubscriptionWebhook(subscriptionID string) (string, error) {
-	if subscriptionID == "" {
-		return "", fmt.Errorf("missing Mollie subscription ID")
-	}
-
-	var tenantID string
-	err := db.QueryRowContext(context.Background(), `
-		SELECT tenant_id FROM purser.tenant_subscriptions WHERE mollie_subscription_id = $1
-	`, subscriptionID).Scan(&tenantID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", errMollieResourceNotFound
-	}
-	if err != nil {
-		return "", fmt.Errorf("failed to lookup tenant for Mollie subscription: %w", err)
-	}
-
-	var mollieCustomerID string
-	err = db.QueryRowContext(context.Background(), `
-		SELECT mollie_customer_id FROM purser.mollie_customers WHERE tenant_id = $1
-	`, tenantID).Scan(&mollieCustomerID)
-	if err != nil {
-		return "", fmt.Errorf("failed to lookup Mollie customer: %w", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	sub, err := mollieClient.GetSubscription(ctx, mollieCustomerID, subscriptionID)
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch Mollie subscription: %w", err)
-	}
-
-	info := mollieClient.ExtractSubscriptionInfo(sub, mollieCustomerID)
-	eventID := mollieEventID("subscription", subscriptionID, info.Status)
-	if isWebhookAlreadyProcessed("mollie", eventID) {
-		return eventID, nil
-	}
-
-	ourStatus := mapMollieSubscriptionStatus(info.Status)
-	_, err = db.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET mollie_subscription_id = $1,
-		    status = $2,
-		    payment_method = 'mollie',
-		    cancelled_at = CASE WHEN $2 = 'cancelled' THEN NOW() ELSE cancelled_at END,
-		    updated_at = NOW()
-		WHERE tenant_id = $3
-	`, subscriptionID, ourStatus, tenantID)
-	if err != nil {
-		return "", fmt.Errorf("failed to update subscription from Mollie: %w", err)
-	}
-
-	logger.WithFields(logging.Fields{
-		"tenant_id":       tenantID,
-		"subscription_id": subscriptionID,
-		"mollie_status":   info.Status,
-		"our_status":      ourStatus,
-	}).Info("Updated subscription status from Mollie webhook")
-
-	eventType := eventSubscriptionUpdated
-	if ourStatus == "cancelled" {
-		eventType = eventSubscriptionCanceled
-	}
-	emitBillingEvent(eventType, tenantID, "subscription", subscriptionID, &pb.BillingEvent{
-		SubscriptionId: subscriptionID,
-		Provider:       "mollie",
-		Status:         ourStatus,
-	})
-
-	return eventID, nil
-}
-
 func mollieEventID(resource, id, status string) string {
 	return fmt.Sprintf("%s:%s:%s", resource, id, status)
+}
+
+// resolveMollieSubscriptionInvoice finds the local invoice that the given
+// Mollie subscription installment payment should reconcile against. It
+// matches by tenant + period containing payment.CreatedAt. Only payable
+// invoices are returned; draft/manual_review invoices must not consume a real
+// payment webhook before they can be finalized.
+func resolveMollieSubscriptionInvoice(ctx context.Context, mollieSubscriptionID string, payment *mollie.Payment) (string, error) {
+	if payment == nil || payment.CreatedAt == nil {
+		return "", nil
+	}
+	var invoiceID string
+	err := db.QueryRowContext(ctx, `
+		SELECT bi.id
+		FROM purser.billing_invoices bi
+		JOIN purser.tenant_subscriptions ts ON ts.tenant_id = bi.tenant_id
+		WHERE ts.mollie_subscription_id = $1
+		  AND ($2::timestamptz)::date >= bi.period_start::date
+		  AND ($2::timestamptz)::date <= bi.period_end::date
+		  AND bi.status IN ('pending', 'overdue')
+		ORDER BY bi.created_at DESC
+		LIMIT 1
+	`, mollieSubscriptionID, *payment.CreatedAt).Scan(&invoiceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("lookup subscription invoice: %w", err)
+	}
+	return invoiceID, nil
 }
 
 func mollieMetadataString(meta any, key string) string {
@@ -1147,21 +1176,6 @@ func mapMolliePaymentStatus(status string) (string, bool) {
 	}
 }
 
-func mapMollieSubscriptionStatus(status string) string {
-	switch strings.ToLower(status) {
-	case "active":
-		return "active"
-	case "pending":
-		return "pending"
-	case "suspended":
-		return "suspended"
-	case "canceled", "cancelled", "completed":
-		return "cancelled"
-	default:
-		return status
-	}
-}
-
 func updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) (bool, error) {
 	var paymentID string
 	var foundInvoiceID string
@@ -1191,7 +1205,7 @@ func updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) (bo
 		}
 		err = tx.QueryRowContext(ctx, `
 			SELECT id, invoice_id FROM purser.billing_payments
-			WHERE invoice_id = $1 AND method = $2 AND status = 'pending'
+			WHERE invoice_id = $1 AND method = $2 AND status = 'pending' AND tx_id IS NULL
 			ORDER BY created_at DESC
 			LIMIT 1
 		`, invoiceID, method).Scan(&paymentID, &foundInvoiceID)
@@ -1233,7 +1247,13 @@ func updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) (bo
 		result, updateErr := tx.ExecContext(ctx, `
 			UPDATE purser.billing_invoices
 			SET status = 'paid', paid_at = $1, updated_at = NOW()
-			WHERE id = $2 AND status IN ('pending', 'overdue')
+			WHERE id = $2
+			  AND status IN ('pending', 'overdue')
+			  AND (
+			      SELECT COALESCE(SUM(amount), 0)
+			      FROM purser.billing_payments
+			      WHERE invoice_id = $2 AND status = 'confirmed'
+			  ) >= amount
 		`, now, invoiceID)
 		if updateErr != nil {
 			logger.WithFields(logging.Fields{
@@ -1242,12 +1262,8 @@ func updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) (bo
 			}).Error("Failed to update invoice status")
 			return false, fmt.Errorf("failed to update invoice status: %w", updateErr)
 		}
-		rows, rowsErr := result.RowsAffected()
-		if rowsErr != nil {
+		if _, rowsErr := result.RowsAffected(); rowsErr != nil {
 			return false, fmt.Errorf("check invoice update rows: %w", rowsErr)
-		}
-		if rows == 0 {
-			return false, nil
 		}
 	}
 

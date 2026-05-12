@@ -15,6 +15,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	billingpkg "frameworks/api_billing/internal/billing"
+	billingmollie "frameworks/api_billing/internal/mollie"
 	"frameworks/api_billing/internal/operator"
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
@@ -30,14 +31,19 @@ import (
 )
 
 func loadSubscriptionPeriod(ctx context.Context, db *sql.DB, tenantID string, now time.Time) (time.Time, time.Time, error) {
-	var start, end sql.NullTime
+	var start, end, mollieNext sql.NullTime
 	err := db.QueryRowContext(ctx, `
-		SELECT billing_period_start, billing_period_end
+		SELECT billing_period_start, billing_period_end, mollie_next_payment_date
 		FROM purser.tenant_subscriptions
 		WHERE tenant_id = $1 AND status = 'active'
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, tenantID).Scan(&start, &end)
+	`, tenantID).Scan(&start, &end, &mollieNext)
+	if err == nil && mollieNext.Valid {
+		periodEnd := time.Date(mollieNext.Time.Year(), mollieNext.Time.Month(), mollieNext.Time.Day(), 0, 0, 0, 0, time.UTC)
+		periodStart := periodEnd.AddDate(0, -1, 0)
+		return periodStart, periodEnd, nil
+	}
 	if err == nil && start.Valid && end.Valid && end.Time.After(start.Time) {
 		return start.Time, end.Time, nil
 	}
@@ -966,13 +972,15 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 	// per-tenant via LoadEffectiveTier so this query stays narrow.
 	rows, err := jm.db.QueryContext(ctx, `
 		SELECT ts.tenant_id, ts.billing_email, ts.tier_id, ts.status,
-		       ts.billing_period_start, ts.billing_period_end,
+		       ts.billing_period_start, ts.billing_period_end, ts.mollie_next_payment_date,
 		       bt.tier_name, bt.display_name, bt.billing_period
 		FROM purser.tenant_subscriptions ts
 		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 		WHERE ts.status = 'active'
 		  AND bt.is_active = true
 		  AND (
+			  (ts.mollie_next_payment_date IS NOT NULL AND ts.mollie_next_payment_date <= $1::date)
+			  OR
 			  (ts.billing_period_end IS NOT NULL AND ts.billing_period_end <= $1)
 			  OR (ts.billing_period_end IS NULL AND (ts.next_billing_date IS NULL OR ts.next_billing_date <= $1))
 		  )
@@ -991,10 +999,10 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		var tenantID, tierID, subscriptionStatus string
 		var billingEmail sql.NullString
 		var tierName, displayName, billingPeriod string
-		var billingPeriodStart, billingPeriodEnd sql.NullTime
+		var billingPeriodStart, billingPeriodEnd, mollieNextPaymentDate sql.NullTime
 
 		err = rows.Scan(&tenantID, &billingEmail, &tierID, &subscriptionStatus,
-			&billingPeriodStart, &billingPeriodEnd,
+			&billingPeriodStart, &billingPeriodEnd, &mollieNextPaymentDate,
 			&tierName, &displayName, &billingPeriod)
 		if err != nil {
 			jm.logger.WithFields(logging.Fields{
@@ -1013,7 +1021,10 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		meteringEnabled := tier.MeteringEnabled
 
 		var periodStart, periodEnd time.Time
-		if billingPeriodStart.Valid && billingPeriodEnd.Valid && billingPeriodEnd.Time.After(billingPeriodStart.Time) {
+		if mollieNextPaymentDate.Valid {
+			periodEnd = time.Date(mollieNextPaymentDate.Time.Year(), mollieNextPaymentDate.Time.Month(), mollieNextPaymentDate.Time.Day(), 0, 0, 0, 0, time.UTC)
+			periodStart = periodEnd.AddDate(0, -1, 0)
+		} else if billingPeriodStart.Valid && billingPeriodEnd.Valid && billingPeriodEnd.Time.After(billingPeriodStart.Time) {
 			periodStart = billingPeriodStart.Time
 			periodEnd = billingPeriodEnd.Time
 		} else {
@@ -1259,6 +1270,10 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 					SET next_billing_date = $1,
 					    billing_period_start = $2,
 					    billing_period_end = $3,
+					    mollie_next_payment_date = CASE
+					        WHEN mollie_next_payment_date IS NOT NULL THEN $3::date
+					        ELSE mollie_next_payment_date
+					    END,
 					    updated_at = NOW()
 					WHERE tenant_id = $4
 				`, nextBillingDate, nextPeriodStart, nextPeriodEnd, tenantID)
@@ -1293,6 +1308,20 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			"due_date":         dueDate,
 			"metering_enabled": meteringEnabled,
 		}).Info("Generated monthly invoice")
+
+		// Overage collection for Mollie tenants. The Mollie subscription
+		// auto-charges the base; metered overage has no native collector
+		// and must be billed via an on-demand recurring-sequence charge
+		// against the stored mandate. We trigger only the overage portion
+		// here; the webhook then reconciles via updateInvoicePaymentStatus.
+		if status == "pending" && meteredDec.GreaterThan(decimal.Zero) {
+			if chargeErr := jm.chargeMollieOverage(ctx, tenantID, invoiceID, meteredDec, currency); chargeErr != nil {
+				jm.logger.WithError(chargeErr).WithFields(logging.Fields{
+					"tenant_id":  tenantID,
+					"invoice_id": invoiceID,
+				}).Warn("Failed to trigger Mollie overage charge")
+			}
+		}
 
 		// Send invoice created email notification. Read line items from
 		// the canonical surface (purser.invoice_line_items); usage_details
@@ -1365,6 +1394,101 @@ func (jm *JobManager) applyDuePendingDowngrades(ctx context.Context, now time.Ti
 	}
 }
 
+// chargeMollieOverage triggers an on-demand recurring-sequence charge against
+// the tenant's stored Mollie mandate for the metered (overage) portion of an
+// invoice. The Mollie subscription auto-collects the base; only the overage
+// needs explicit collection. A pending billing_payments row is inserted up
+// front so updateInvoicePaymentStatus can flip it confirmed when the webhook
+// arrives.
+func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoiceID string, overageAmount decimal.Decimal, currency string) error {
+	rounded := overageAmount.Round(2)
+	if !rounded.GreaterThan(decimal.Zero) {
+		return nil
+	}
+
+	var mollieCustomerID string
+	var mandateID sql.NullString
+	err := jm.db.QueryRowContext(ctx, `
+		SELECT mc.mollie_customer_id,
+			(SELECT mm.mollie_mandate_id
+			 FROM purser.mollie_mandates mm
+			 WHERE mm.tenant_id = $1 AND mm.status = 'valid'
+			 ORDER BY mm.created_at DESC
+			 LIMIT 1)
+		FROM purser.mollie_customers mc
+		JOIN purser.tenant_subscriptions ts ON ts.tenant_id = mc.tenant_id
+		WHERE mc.tenant_id = $1
+		  AND ts.status = 'active'
+		  AND ts.mollie_subscription_id IS NOT NULL
+	`, tenantID).Scan(&mollieCustomerID, &mandateID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lookup mollie customer/mandate: %w", err)
+	}
+	if !mandateID.Valid || mandateID.String == "" {
+		return nil
+	}
+	if mollieClient == nil {
+		return fmt.Errorf("mollie client not configured for active Mollie subscription")
+	}
+
+	paymentID := uuid.New().String()
+	intentID := "mollie-overage-intent:" + paymentID
+	amountStr := rounded.StringFixed(2)
+
+	if _, insertErr := jm.db.ExecContext(ctx, `
+		INSERT INTO purser.billing_payments (id, invoice_id, method, amount, currency, tx_id, status, created_at, updated_at)
+		VALUES ($1, $2, 'card', $3::numeric, $4, $5, 'pending', NOW(), NOW())
+	`, paymentID, invoiceID, amountStr, currency, intentID); insertErr != nil {
+		return fmt.Errorf("insert pending billing_payment: %w", insertErr)
+	}
+
+	webhookURL := ""
+	if base := config.GetGatewayPublicURL(); base != "" {
+		webhookURL = base + "/webhooks/billing/mollie"
+	}
+
+	payment, err := mollieClient.ChargeOnMandate(ctx, billingmollie.OnDemandChargeParams{
+		CustomerID:  mollieCustomerID,
+		MandateID:   mandateID.String,
+		TenantID:    tenantID,
+		InvoiceID:   invoiceID,
+		PaymentID:   paymentID,
+		Amount:      billingmollie.Amount(amountStr, currency),
+		Description: fmt.Sprintf("Usage overage for invoice %s", invoiceID),
+		WebhookURL:  webhookURL,
+	})
+	if err != nil {
+		if _, markErr := jm.db.ExecContext(ctx, `
+			UPDATE purser.billing_payments
+			SET status = 'failed', updated_at = NOW()
+			WHERE id = $1 AND status = 'pending'
+		`, paymentID); markErr != nil {
+			jm.logger.WithError(markErr).WithField("payment_id", paymentID).Warn("mark Mollie overage payment failed")
+		}
+		return fmt.Errorf("mollie on-demand charge: %w", err)
+	}
+
+	if _, updateErr := jm.db.ExecContext(ctx, `
+		UPDATE purser.billing_payments
+		SET tx_id = $1, updated_at = NOW()
+		WHERE id = $2 AND status = 'pending'
+	`, payment.ID, paymentID); updateErr != nil {
+		return fmt.Errorf("attach Mollie payment id: %w", updateErr)
+	}
+
+	jm.logger.WithFields(logging.Fields{
+		"tenant_id":  tenantID,
+		"invoice_id": invoiceID,
+		"amount":     amountStr,
+		"payment_id": payment.ID,
+	}).Info("Triggered Mollie on-demand overage charge")
+
+	return nil
+}
+
 // applyPendingDowngrade flips a tenant's tier_id to its staged pending_tier_id,
 // reconciles cluster access, and clears the pending columns. Called after the
 // period's invoice has committed and is not held. Idempotent — safe to re-run
@@ -1433,7 +1557,12 @@ func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string
 		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("flip tier_id for pending downgrade")
 		return
 	}
-	if rows, _ := result.RowsAffected(); rows == 0 {
+	rows, rowsErr := result.RowsAffected()
+	if rowsErr != nil {
+		jm.logger.WithError(rowsErr).WithField("tenant_id", tenantID).Warn("rows affected for pending downgrade flip")
+		return
+	}
+	if rows == 0 {
 		// Race: pending_tier_id changed since we read it. Next tick handles
 		// the new state.
 		return

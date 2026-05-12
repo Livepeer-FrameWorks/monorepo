@@ -565,11 +565,12 @@ func handlePrepaidCheckoutCompleted(ctx context.Context, sessionID, tenantID, to
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	// 1. Update pending_topup status
+	// 1. Lock the pending_topup row so concurrent webhook deliveries serialize
+	//    on the idempotency check below.
 	var currentStatus string
 	var storedTenantID string
 	err = tx.QueryRowContext(ctx, `
-		SELECT status, tenant_id FROM purser.pending_topups WHERE id = $1
+		SELECT status, tenant_id FROM purser.pending_topups WHERE id = $1 FOR UPDATE
 	`, topupID).Scan(&currentStatus, &storedTenantID)
 	if err != nil {
 		return fmt.Errorf("failed to find pending topup: %w", err)
@@ -627,13 +628,15 @@ func handlePrepaidCheckoutCompleted(ctx context.Context, sessionID, tenantID, to
 		currentBalance = newBalance
 	}
 
-	// 3. Create balance transaction
+	// 3. Create balance transaction. reference_type='topup' activates the
+	//    partial unique index at purser.sql:idx_balance_transactions_idempotency
+	//    so replayed webhooks cannot double-credit.
 	var txID string
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO purser.balance_transactions (
 			tenant_id, amount_cents, balance_after_cents,
-			transaction_type, description, reference_id
-		) VALUES ($1, $2, $3, 'topup', $4, $5)
+			transaction_type, description, reference_id, reference_type
+		) VALUES ($1, $2, $3, 'topup', $4, $5, 'topup')
 		RETURNING id
 	`, tenantID, amountCents, currentBalance,
 		fmt.Sprintf("Card top-up via %s", provider), topupID).Scan(&txID)

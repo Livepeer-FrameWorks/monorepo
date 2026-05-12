@@ -3,16 +3,27 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/shopspring/decimal"
 
+	billingmollie "frameworks/api_billing/internal/mollie"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
+
+type sqlArgFunc func(driver.Value) bool
+
+func (f sqlArgFunc) Match(v driver.Value) bool {
+	return f(v)
+}
 
 func TestCollectInvoiceUsageAggregatesRows(t *testing.T) {
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
@@ -116,8 +127,8 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT billing_period_start, billing_period_end`).
 		WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"billing_period_start", "billing_period_end"}).
-			AddRow(periodStart, periodEnd))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_period_start", "billing_period_end", "mollie_next_payment_date"}).
+			AddRow(periodStart, periodEnd, nil))
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM purser\.billing_invoices`).
 		WithArgs(tenantID, periodStart).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
@@ -194,8 +205,8 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT billing_period_start, billing_period_end`).
 		WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"billing_period_start", "billing_period_end"}).
-			AddRow(periodStart, periodEnd))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_period_start", "billing_period_end", "mollie_next_payment_date"}).
+			AddRow(periodStart, periodEnd, nil))
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM purser\.billing_invoices`).
 		WithArgs(tenantID, periodStart).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
@@ -226,5 +237,104 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func TestChargeMollieOverageCreatesLocalPaymentBeforeProviderCharge(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	mc, err := billingmollie.NewClient(billingmollie.Config{APIKey: "test_unused", Logger: logging.NewLogger()})
+	if err != nil {
+		t.Fatalf("mollie client: %v", err)
+	}
+	mollieClient = mc
+	t.Cleanup(func() { mollieClient = nil })
+
+	var inserted bool
+	var localPaymentID string
+	withDefaultTransport(t, testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if !inserted {
+			t.Fatal("provider charge happened before local billing_payment insert")
+		}
+		if req.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", req.Method)
+		}
+		if !strings.Contains(req.URL.Path, "/v2/customers/cst_123/payments") {
+			t.Fatalf("unexpected path: %s", req.URL.Path)
+		}
+
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		if got := body["sequenceType"]; got != "recurring" {
+			t.Fatalf("sequenceType = %v, want recurring", got)
+		}
+		if got := body["mandateId"]; got != "mdt_123" {
+			t.Fatalf("mandateId = %v, want mdt_123", got)
+		}
+		metadata, ok := body["metadata"].(map[string]any)
+		if !ok {
+			t.Fatalf("metadata missing or wrong type: %#v", body["metadata"])
+		}
+		if got := metadata["invoice_id"]; got != "invoice-1" {
+			t.Fatalf("invoice_id = %v, want invoice-1", got)
+		}
+		if got := metadata["billing_payment_id"]; got != localPaymentID {
+			t.Fatalf("billing_payment_id = %v, want %s", got, localPaymentID)
+		}
+
+		return newJSONResponse(http.StatusCreated, `{
+			"resource":"payment",
+			"id":"tr_overage",
+			"mode":"test",
+			"createdAt":"2026-05-12T10:00:00+00:00",
+			"amount":{"value":"12.34","currency":"EUR"},
+			"description":"Usage overage for invoice invoice-1",
+			"method":"creditcard",
+			"metadata":{},
+			"status":"open",
+			"sequenceType":"recurring",
+			"_links":{"self":{"href":"https://api.mollie.com/v2/payments/tr_overage","type":"application/hal+json"}}
+		}`), nil
+	}))
+
+	mock.ExpectQuery(`SELECT mc\.mollie_customer_id`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"mollie_customer_id", "mollie_mandate_id"}).
+			AddRow("cst_123", "mdt_123"))
+	mock.ExpectExec(`INSERT INTO purser\.billing_payments`).
+		WithArgs(
+			sqlArgFunc(func(v driver.Value) bool {
+				localPaymentID, _ = v.(string)
+				return localPaymentID != ""
+			}),
+			"invoice-1",
+			"12.34",
+			"EUR",
+			sqlArgFunc(func(v driver.Value) bool {
+				inserted = true
+				intentID, _ := v.(string)
+				return intentID == "mollie-overage-intent:"+localPaymentID
+			}),
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.billing_payments\s+SET tx_id`).
+		WithArgs("tr_overage", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := jm.chargeMollieOverage(context.Background(), "tenant-1", "invoice-1", decimal.NewFromFloat(12.34), "EUR"); err != nil {
+		t.Fatalf("chargeMollieOverage: %v", err)
+	}
+	if !inserted {
+		t.Fatal("billing_payment insert did not run")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
 	}
 }

@@ -3,6 +3,7 @@ package handlers
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -63,6 +64,82 @@ func TestProcessStripeWebhookGRPCIdempotent(t *testing.T) {
 		t.Fatalf("expected empty message, got %q", msg)
 	}
 
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestUpdateInvoicePaymentStatusDoesNotMarkPartiallyPaidInvoicePaid(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	db = mockDB
+	logger = logrus.New()
+	t.Cleanup(func() { db = nil })
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id, invoice_id FROM purser\.billing_payments`).
+		WithArgs("tr_partial", "card").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id"}).AddRow("payment-1", "invoice-1"))
+	mock.ExpectExec(`UPDATE purser\.billing_payments`).
+		WithArgs("confirmed", sqlmock.AnyArg(), "payment-1", "tr_partial").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.billing_invoices[\s\S]*COALESCE\(SUM\(amount\), 0\)[\s\S]*>= amount`).
+		WithArgs(sqlmock.AnyArg(), "invoice-1").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+	mock.ExpectQuery(`SELECT bi\.tenant_id, bi\.amount, bi\.currency, ts\.billing_email`).
+		WithArgs("invoice-1").
+		WillReturnError(sql.ErrNoRows)
+
+	updated, err := updateInvoicePaymentStatus("mollie", "tr_partial", "invoice-1", "confirmed")
+	if err != nil {
+		t.Fatalf("updateInvoicePaymentStatus: %v", err)
+	}
+	if !updated {
+		t.Fatal("expected payment row to update")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestUpdateInvoicePaymentStatusMarksInvoicePaidWhenConfirmedPaymentsCoverAmount(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	db = mockDB
+	logger = logrus.New()
+	t.Cleanup(func() { db = nil })
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id, invoice_id FROM purser\.billing_payments`).
+		WithArgs("tr_full", "card").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id"}).AddRow("payment-2", "invoice-2"))
+	mock.ExpectExec(`UPDATE purser\.billing_payments`).
+		WithArgs("confirmed", sqlmock.AnyArg(), "payment-2", "tr_full").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.billing_invoices[\s\S]*COALESCE\(SUM\(amount\), 0\)[\s\S]*>= amount`).
+		WithArgs(sqlmock.AnyArg(), "invoice-2").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery(`SELECT bi\.tenant_id, bi\.amount, bi\.currency, ts\.billing_email`).
+		WithArgs("invoice-2").
+		WillReturnError(sql.ErrNoRows)
+
+	updated, err := updateInvoicePaymentStatus("mollie", "tr_full", "invoice-2", "confirmed")
+	if err != nil {
+		t.Fatalf("updateInvoicePaymentStatus: %v", err)
+	}
+	if !updated {
+		t.Fatal("expected payment row to update")
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}

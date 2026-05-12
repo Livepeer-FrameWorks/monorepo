@@ -364,6 +364,9 @@ CREATE TABLE IF NOT EXISTS purser.tenant_subscriptions (
 
     -- ===== MOLLIE INTEGRATION =====
     mollie_subscription_id VARCHAR(50),
+    -- Mollie's authoritative next-payment date; the invoice job uses this as
+    -- the period anchor so internal billing periods do not drift from Mollie.
+    mollie_next_payment_date DATE,
 
     -- ===== X402 PROTOCOL =====
     x402_address_index INTEGER,
@@ -766,7 +769,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_billing_payments_tx_unique
     WHERE tx_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_billing_payments_pending_invoice_method
     ON purser.billing_payments(invoice_id, method)
-    WHERE status = 'pending';
+    WHERE status = 'pending' AND tx_id IS NULL;
 
 -- ============================================================================
 -- BILLING & SUBSCRIPTION INDEXES

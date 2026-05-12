@@ -25,7 +25,7 @@ func TestHandlePrepaidCheckoutCompletedRejectsTenantMismatch(t *testing.T) {
 	})
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT status, tenant_id FROM purser.pending_topups").
+	mock.ExpectQuery("SELECT status, tenant_id FROM purser.pending_topups WHERE id = \\$1 FOR UPDATE").
 		WithArgs("topup-123").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("pending", "tenant-a"))
 	mock.ExpectRollback()
@@ -53,13 +53,55 @@ func TestHandlePrepaidCheckoutCompletedSkipsAlreadyProcessed(t *testing.T) {
 	})
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT status, tenant_id FROM purser.pending_topups").
+	mock.ExpectQuery("SELECT status, tenant_id FROM purser.pending_topups WHERE id = \\$1 FOR UPDATE").
 		WithArgs("topup-456").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("completed", "tenant-a"))
 	mock.ExpectRollback()
 
 	if err := handlePrepaidCheckoutCompleted(context.Background(), "sess-2", "tenant-a", "topup-456", 1500, "USD", ProviderStripe); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestHandlePrepaidCheckoutCompletedCreditsBalanceWithIdempotencyKey(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	db = mockDB
+	logger = logrus.New()
+	t.Cleanup(func() {
+		db = nil
+	})
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT status, tenant_id FROM purser.pending_topups WHERE id = \\$1 FOR UPDATE").
+		WithArgs("topup-789").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("pending", "tenant-a"))
+	mock.ExpectQuery("SELECT id, balance_cents FROM purser.prepaid_balances").
+		WithArgs("tenant-a", "EUR").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "balance_cents"}).AddRow("balance-1", int64(500)))
+	mock.ExpectExec("UPDATE purser.prepaid_balances").
+		WithArgs(int64(2000), "balance-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`INSERT INTO purser.balance_transactions .*reference_type.*VALUES \(\$1, \$2, \$3, 'topup', \$4, \$5, 'topup'\)`).
+		WithArgs("tenant-a", int64(1500), int64(2000), "Card top-up via mollie", "topup-789").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("tx-1"))
+	mock.ExpectExec("UPDATE purser.pending_topups").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE purser.tenant_subscriptions").
+		WithArgs("tenant-a").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	if err := handlePrepaidCheckoutCompleted(context.Background(), "sess-3", "tenant-a", "topup-789", 1500, "EUR", ProviderMollie); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

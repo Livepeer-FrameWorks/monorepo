@@ -42,6 +42,7 @@ func TestGetSubscription_LoadsOverrides(t *testing.T) {
 			"stripe_customer_id", "stripe_subscription_id",
 			"stripe_subscription_status", "stripe_current_period_end", "dunning_attempts",
 			"mollie_subscription_id",
+			"pending_tier_id", "pending_effective_at", "pending_reason",
 			"created_at", "updated_at",
 		}).AddRow(
 			subID, tenantID, "tier-supporter", "active", "demo@example.com",
@@ -51,6 +52,7 @@ func TestGetSubscription_LoadsOverrides(t *testing.T) {
 			"postpaid",
 			nil, nil, nil, nil, nil,
 			nil,
+			nil, nil, nil,
 			testTime(), testTime(),
 		))
 
@@ -108,6 +110,7 @@ func TestGetSubscription_AllowsNullBillingEmail(t *testing.T) {
 			"stripe_customer_id", "stripe_subscription_id",
 			"stripe_subscription_status", "stripe_current_period_end", "dunning_attempts",
 			"mollie_subscription_id",
+			"pending_tier_id", "pending_effective_at", "pending_reason",
 			"created_at", "updated_at",
 		}).AddRow(
 			subID, tenantID, "tier-free", "active", nil,
@@ -117,6 +120,7 @@ func TestGetSubscription_AllowsNullBillingEmail(t *testing.T) {
 			"postpaid",
 			nil, nil, nil, nil, nil,
 			nil,
+			nil, nil, nil,
 			testTime(), testTime(),
 		))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT meter, COALESCE(model, ''), COALESCE(currency, '')`)).

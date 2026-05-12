@@ -73,7 +73,7 @@ func (c *Client) CreateOrGetCustomer(ctx context.Context, info CustomerInfo) (*m
 		return nil, fmt.Errorf("failed to create Mollie customer: %w", err)
 	}
 
-	c.logger.WithFields(map[string]interface{}{
+	c.logger.WithFields(map[string]any{
 		"customer_id": customer.ID,
 		"tenant_id":   info.TenantID,
 	}).Info("Created Mollie customer")
@@ -112,7 +112,7 @@ func (c *Client) CreateFirstPayment(ctx context.Context, params FirstPaymentPara
 		RedirectURL: params.RedirectURL,
 		WebhookURL:  params.WebhookURL,
 		Method:      []mollie.PaymentMethod{params.Method},
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"purpose":      "mandate_setup",
 			"tenant_id":    params.TenantID,
 			"tier_id":      params.TierID,
@@ -130,7 +130,7 @@ func (c *Client) CreateFirstPayment(ctx context.Context, params FirstPaymentPara
 		return nil, fmt.Errorf("failed to create first payment: %w", err)
 	}
 
-	c.logger.WithFields(map[string]interface{}{
+	c.logger.WithFields(map[string]any{
 		"payment_id":  payment.ID,
 		"customer_id": params.CustomerID,
 		"tenant_id":   params.TenantID,
@@ -172,6 +172,7 @@ type SubscriptionParams struct {
 	CustomerID  string
 	TenantID    string
 	TierID      string
+	MandateID   string // explicit mandate to charge; empty lets Mollie pick any valid one
 	Amount      *mollie.Amount
 	Interval    string // 1 month, 1 year
 	Description string
@@ -185,8 +186,9 @@ func (c *Client) CreateSubscription(ctx context.Context, params SubscriptionPara
 		Amount:      params.Amount,
 		Interval:    params.Interval,
 		Description: params.Description,
+		MandateID:   params.MandateID,
 		WebhookURL:  params.WebhookURL,
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"purpose":      "subscription",
 			"tenant_id":    params.TenantID,
 			"tier_id":      params.TierID,
@@ -206,7 +208,7 @@ func (c *Client) CreateSubscription(ctx context.Context, params SubscriptionPara
 		return nil, fmt.Errorf("failed to create subscription: %w", err)
 	}
 
-	c.logger.WithFields(map[string]interface{}{
+	c.logger.WithFields(map[string]any{
 		"subscription_id": sub.ID,
 		"customer_id":     params.CustomerID,
 		"tenant_id":       params.TenantID,
@@ -214,6 +216,55 @@ func (c *Client) CreateSubscription(ctx context.Context, params SubscriptionPara
 	}).Info("Created Mollie subscription")
 
 	return sub, nil
+}
+
+// OnDemandChargeParams for charging an existing mandate on-demand (e.g. for
+// invoice/overage collection on Mollie subscribers).
+type OnDemandChargeParams struct {
+	CustomerID  string
+	MandateID   string
+	TenantID    string
+	InvoiceID   string
+	PaymentID   string
+	Amount      *mollie.Amount
+	Description string
+	WebhookURL  string
+}
+
+// ChargeOnMandate creates a recurring-sequence payment against an existing
+// mandate. The resulting payment fires the same webhook flow as subscription
+// installments; reconciliation routes by metadata.invoice_id.
+func (c *Client) ChargeOnMandate(ctx context.Context, params OnDemandChargeParams) (*mollie.Payment, error) {
+	paymentParams := mollie.CreatePayment{
+		Amount:      params.Amount,
+		Description: params.Description,
+		WebhookURL:  params.WebhookURL,
+		Metadata: map[string]any{
+			"purpose":            "invoice",
+			"tenant_id":          params.TenantID,
+			"invoice_id":         params.InvoiceID,
+			"billing_payment_id": params.PaymentID,
+			"reference_id":       params.InvoiceID,
+		},
+		CreateRecurrentPaymentFields: mollie.CreateRecurrentPaymentFields{
+			SequenceType: mollie.RecurringSequence,
+			MandateID:    params.MandateID,
+		},
+	}
+
+	_, payment, err := c.client.Customers.CreatePayment(ctx, params.CustomerID, paymentParams)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create on-demand payment: %w", err)
+	}
+
+	c.logger.WithFields(map[string]any{
+		"payment_id":  payment.ID,
+		"customer_id": params.CustomerID,
+		"mandate_id":  params.MandateID,
+		"invoice_id":  params.InvoiceID,
+	}).Info("Created Mollie on-demand payment")
+
+	return payment, nil
 }
 
 // GetSubscription retrieves a subscription
@@ -232,7 +283,7 @@ func (c *Client) CancelSubscription(ctx context.Context, customerID, subscriptio
 		return fmt.Errorf("failed to cancel subscription: %w", err)
 	}
 
-	c.logger.WithFields(map[string]interface{}{
+	c.logger.WithFields(map[string]any{
 		"subscription_id": subscriptionID,
 		"customer_id":     customerID,
 	}).Info("Cancelled Mollie subscription")
@@ -246,13 +297,13 @@ type MandateInfo struct {
 	MollieCustomerID string
 	Status           string // valid, pending, invalid
 	Method           string // directdebit, creditcard
-	Details          map[string]interface{}
+	Details          map[string]any
 	CreatedAt        time.Time
 }
 
 // ExtractMandateInfo extracts relevant fields from a Mollie mandate
 func (c *Client) ExtractMandateInfo(mandate *mollie.Mandate, customerID string) MandateInfo {
-	details := make(map[string]interface{})
+	details := make(map[string]any)
 
 	if mandate.Details.ConsumerName != "" {
 		details["consumer_name"] = mandate.Details.ConsumerName
@@ -319,7 +370,7 @@ func (c *Client) ExtractSubscriptionInfo(sub *mollie.Subscription, customerID st
 		info.NextPaymentDate = sub.NextPaymentDate.String()
 	}
 
-	if metadata, ok := sub.Metadata.(map[string]interface{}); ok {
+	if metadata, ok := sub.Metadata.(map[string]any); ok {
 		if tenantID, ok := metadata["tenant_id"].(string); ok {
 			info.TenantID = tenantID
 		}

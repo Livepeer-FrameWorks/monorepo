@@ -25,14 +25,14 @@ func (s *stubTierReconciler) Reconcile(_ context.Context, tenantID string, level
 }
 
 func TestApplyPendingDowngrade_NotDue_NoOp(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mockDB.Close()
 
 	reconciler := &stubTierReconciler{}
-	jm := &JobManager{db: db, logger: logging.NewLogger(), tierReconciler: reconciler}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), tierReconciler: reconciler}
 
 	tenantID := "tenant-1"
 	currentTier := "tier-A"
@@ -55,14 +55,14 @@ func TestApplyPendingDowngrade_NotDue_NoOp(t *testing.T) {
 }
 
 func TestApplyPendingDowngrade_NoPending_NoOp(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mockDB.Close()
 
 	reconciler := &stubTierReconciler{}
-	jm := &JobManager{db: db, logger: logging.NewLogger(), tierReconciler: reconciler}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), tierReconciler: reconciler}
 
 	tenantID := "tenant-1"
 	rows := sqlmock.NewRows([]string{"tier_id", "pending_tier_id", "pending_effective_at", "tier_level"}).
@@ -82,14 +82,14 @@ func TestApplyPendingDowngrade_NoPending_NoOp(t *testing.T) {
 }
 
 func TestApplyPendingDowngrade_Happy_FlipsThenReconcilesThenClears(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mockDB.Close()
 
 	reconciler := &stubTierReconciler{}
-	jm := &JobManager{db: db, logger: logging.NewLogger(), tierReconciler: reconciler}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), tierReconciler: reconciler}
 
 	tenantID := "tenant-1"
 	pending := "tier-B"
@@ -123,14 +123,14 @@ func TestApplyPendingDowngrade_Happy_FlipsThenReconcilesThenClears(t *testing.T)
 }
 
 func TestApplyPendingDowngrade_ReconcileFailLeavesPending(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mockDB.Close()
 
 	reconciler := &stubTierReconciler{err: errStubReconcile}
-	jm := &JobManager{db: db, logger: logging.NewLogger(), tierReconciler: reconciler}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), tierReconciler: reconciler}
 
 	tenantID := "tenant-1"
 	pending := "tier-B"

@@ -2335,7 +2335,7 @@ func (s *PurserServer) ensurePendingCardPayment(ctx context.Context, paymentID, 
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO purser.billing_payments (id, invoice_id, method, amount, currency, status, created_at, updated_at)
 		VALUES ($1, $2, $3, $4::numeric, $5, 'pending', NOW(), NOW())
-		ON CONFLICT (invoice_id, method) WHERE status = 'pending'
+		ON CONFLICT (invoice_id, method) WHERE status = 'pending' AND tx_id IS NULL
 		DO UPDATE SET updated_at = purser.billing_payments.updated_at
 		RETURNING id, payment_url, created_at
 	`, paymentID, invoiceID, method, amount.Round(2).String(), currency).Scan(&storedID, &paymentURL, &createdAt)
@@ -5247,32 +5247,12 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 	}
 
 	userID := middleware.GetUserID(ctx)
-	// Create pending_topup record first
 	topupID := uuid.New().String()
-	expiresAt := time.Now().Add(24 * time.Hour) // Will be updated after checkout creation
 
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO purser.pending_topups (
-			id, tenant_id, provider, checkout_id, amount_cents, currency,
-			status, expires_at, billing_email, billing_name, billing_company, billing_vat_number
-		) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11)
-	`, topupID, tenantID, provider, "", amountCents, currency, expiresAt,
-		sqlNullString(req.BillingEmail), sqlNullString(req.BillingName),
-		sqlNullString(req.BillingCompany), sqlNullString(req.BillingVatNumber))
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to create pending topup")
-		return nil, status.Error(codes.Internal, "failed to create topup record")
-	}
-
-	s.emitBillingEvent(ctx, eventTopupCreated, tenantID, userID, "topup", topupID, &pb.BillingEvent{
-		TopupId:  topupID,
-		Amount:   float64(amountCents) / 100.0,
-		Currency: currency,
-		Provider: provider,
-		Status:   "pending",
-	})
-
-	// Create checkout session using unified CheckoutService
+	// Create the provider checkout session first so we can insert
+	// pending_topups with the real checkout_id. Inserting an empty-string
+	// placeholder collides on UNIQUE(provider, checkout_id) and can park
+	// orphan rows that block future top-ups for the same provider.
 	checkoutSvc := handlers.NewCheckoutService(s.db, s.logger)
 	result, err := checkoutSvc.CreateCheckout(ctx, handlers.CheckoutRequest{
 		Purpose:        handlers.PurposePrepaid,
@@ -5290,10 +5270,6 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create checkout session")
-		// Mark topup as failed
-		if _, dbErr := s.db.ExecContext(ctx, `UPDATE purser.pending_topups SET status = 'failed', updated_at = NOW() WHERE id = $1`, topupID); dbErr != nil {
-			s.logger.WithError(dbErr).Warn("Failed to update topup status to failed")
-		}
 		s.emitBillingEvent(ctx, eventTopupFailed, tenantID, userID, "topup", topupID, &pb.BillingEvent{
 			TopupId:  topupID,
 			Amount:   float64(amountCents) / 100.0,
@@ -5304,15 +5280,26 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 		return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
 	}
 
-	// Update pending_topup with checkout details
 	_, err = s.db.ExecContext(ctx, `
-		UPDATE purser.pending_topups
-		SET checkout_id = $1, expires_at = $2, updated_at = NOW()
-		WHERE id = $3
-	`, result.SessionID, result.ExpiresAt, topupID)
+		INSERT INTO purser.pending_topups (
+			id, tenant_id, provider, checkout_id, amount_cents, currency,
+			status, expires_at, billing_email, billing_name, billing_company, billing_vat_number
+		) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11)
+	`, topupID, tenantID, provider, result.SessionID, amountCents, currency, result.ExpiresAt,
+		sqlNullString(req.BillingEmail), sqlNullString(req.BillingName),
+		sqlNullString(req.BillingCompany), sqlNullString(req.BillingVatNumber))
 	if err != nil {
-		s.logger.WithError(err).Warn("Failed to update pending topup with checkout_id")
+		s.logger.WithError(err).WithField("checkout_id", result.SessionID).Error("Failed to create pending topup; provider session is orphaned")
+		return nil, status.Error(codes.Internal, "failed to create topup record")
 	}
+
+	s.emitBillingEvent(ctx, eventTopupCreated, tenantID, userID, "topup", topupID, &pb.BillingEvent{
+		TopupId:  topupID,
+		Amount:   float64(amountCents) / 100.0,
+		Currency: currency,
+		Provider: provider,
+		Status:   "pending",
+	})
 
 	return &pb.CreateCardTopupResponse{
 		TopupId:     topupID,
@@ -6460,14 +6447,25 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.Cre
 		webhookURL = webhookBaseURL + "/webhooks/billing/mollie"
 	}
 
+	// Policy: the first payment covers period 1. The subscription's first
+	// recurring charge therefore starts one interval (1 month) later, so we
+	// do not double-charge the same period. Use the customer's local date
+	// (UTC is fine — Mollie billing uses calendar dates, not timestamps).
+	startAt := time.Now().UTC().AddDate(0, 1, 0)
+	periodEnd := time.Date(startAt.Year(), startAt.Month(), startAt.Day(), 0, 0, 0, 0, time.UTC)
+	periodStart := periodEnd.AddDate(0, -1, 0)
+	startDate := periodEnd.Format("2006-01-02")
+
 	// Create subscription
 	sub, err := s.mollieClient.CreateSubscription(ctx, mollie.SubscriptionParams{
 		CustomerID:  mollieCustomerID,
 		TenantID:    tenantID,
 		TierID:      tierID,
+		MandateID:   mandateID,
 		Amount:      mollie.Amount(basePrice.Round(2).StringFixed(2), currency),
 		Interval:    "1 month",
 		Description: fmt.Sprintf("Subscription: %s", tierName),
+		StartDate:   startDate,
 		WebhookURL:  webhookURL,
 	})
 	if err != nil {
@@ -6475,12 +6473,24 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.Cre
 		return nil, status.Error(codes.Internal, "failed to create subscription")
 	}
 
-	// Update tenant subscription with Mollie subscription ID
+	nextPayment := startDate
+	var nextPaymentArg any = startDate
+	if sub.NextPaymentDate != nil {
+		nextPayment = sub.NextPaymentDate.String()
+		nextPaymentArg = nextPayment
+	}
+
+	// Persist Mollie's authoritative next-payment date as the period anchor.
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE purser.tenant_subscriptions
-		SET mollie_subscription_id = $1, updated_at = NOW()
-		WHERE tenant_id = $2
-	`, sub.ID, tenantID)
+		SET mollie_subscription_id = $1,
+		    mollie_next_payment_date = $2,
+		    next_billing_date = $2,
+		    billing_period_start = $4,
+		    billing_period_end = $5,
+		    updated_at = NOW()
+		WHERE tenant_id = $3
+	`, sub.ID, nextPaymentArg, tenantID, periodStart, periodEnd)
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to store Mollie subscription ID")
 	}
@@ -6489,12 +6499,8 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.Cre
 		"tenant_id":       tenantID,
 		"tier_id":         tierID,
 		"subscription_id": sub.ID,
+		"next_payment":    nextPayment,
 	}).Info("Created Mollie subscription")
-
-	nextPayment := ""
-	if sub.NextPaymentDate != nil {
-		nextPayment = sub.NextPaymentDate.String()
-	}
 
 	return &pb.CreateMollieSubscriptionResponse{
 		SubscriptionId:  sub.ID,
