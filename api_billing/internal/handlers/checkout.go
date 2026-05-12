@@ -359,11 +359,12 @@ func (c *httpClient) doRequest(ctx context.Context, method, url string, body *st
 // appropriate handler based on the purpose in metadata.
 func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) error {
 	var sess struct {
-		ID           string `json:"id"`
-		CustomerID   string `json:"customer"`
-		Subscription string `json:"subscription"`
-		Mode         string `json:"mode"`
-		Metadata     struct {
+		ID            string `json:"id"`
+		CustomerID    string `json:"customer"`
+		Subscription  string `json:"subscription"`
+		PaymentIntent string `json:"payment_intent"`
+		Mode          string `json:"mode"`
+		Metadata      struct {
 			Purpose     string `json:"purpose"`
 			TenantID    string `json:"tenant_id"`
 			ReferenceID string `json:"reference_id"`
@@ -404,6 +405,7 @@ func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) er
 		return handleInvoiceCheckoutCompleted(
 			ctx,
 			sess.ID,
+			sess.PaymentIntent,
 			sess.Metadata.TenantID,
 			sess.Metadata.ReferenceID,
 		)
@@ -411,6 +413,7 @@ func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) er
 		return handlePrepaidCheckoutCompleted(
 			ctx,
 			sess.ID,
+			sess.PaymentIntent,
 			sess.Metadata.TenantID,
 			sess.Metadata.ReferenceID,
 			sess.AmountTotal,
@@ -436,25 +439,58 @@ func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) er
 	}
 }
 
-// handleSubscriptionCheckoutCompleted handles tier subscription activation
+// handleSubscriptionCheckoutCompleted handles tier subscription activation.
+// Session metadata is authoritative for the completed checkout. Staged pending
+// fields are cleared only while they still describe this checkout, so a later
+// downgrade or newer checkout cannot be erased by an older webhook delivery.
 func handleSubscriptionCheckoutCompleted(ctx context.Context, sessionID, tenantID, tierID, customerID, subscriptionID string) error {
 	if tenantID == "" {
 		logger.WithField("session_id", sessionID).Warn("No tenant_id in subscription checkout metadata")
 		return nil
 	}
 
-	// Update tenant subscription with Stripe IDs
-	_, err := db.ExecContext(ctx, `
+	result, err := db.ExecContext(ctx, `
 		UPDATE purser.tenant_subscriptions
 		SET stripe_customer_id = $1,
 		    stripe_subscription_id = $2,
 		    stripe_subscription_status = 'active',
 		    status = 'active',
+		    tier_id = COALESCE(
+		        NULLIF($3, '')::uuid,
+		        CASE WHEN pending_reason = 'stripe_checkout' THEN pending_tier_id END,
+		        tier_id
+		    ),
+		    payment_method = 'stripe',
+		    pending_tier_id = CASE
+		        WHEN pending_reason = 'stripe_checkout'
+		         AND (NULLIF($3, '') IS NULL OR pending_tier_id = NULLIF($3, '')::uuid)
+		        THEN NULL
+		        ELSE pending_tier_id
+		    END,
+		    pending_effective_at = CASE
+		        WHEN pending_reason = 'stripe_checkout'
+		         AND (NULLIF($3, '') IS NULL OR pending_tier_id = NULLIF($3, '')::uuid)
+		        THEN NULL
+		        ELSE pending_effective_at
+		    END,
+		    pending_reason = CASE
+		        WHEN pending_reason = 'stripe_checkout'
+		         AND (NULLIF($3, '') IS NULL OR pending_tier_id = NULLIF($3, '')::uuid)
+		        THEN NULL
+		        ELSE pending_reason
+		    END,
 		    updated_at = NOW()
-		WHERE tenant_id = $3
-	`, customerID, subscriptionID, tenantID)
+		WHERE tenant_id = $4
+	`, customerID, subscriptionID, tierID, tenantID)
 	if err != nil {
 		return fmt.Errorf("failed to update tenant subscription: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("subscription update rows: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("no tenant_subscriptions row for tenant %s; cannot activate Stripe subscription %s", tenantID, subscriptionID)
 	}
 
 	logger.WithFields(logging.Fields{
@@ -519,12 +555,26 @@ func handleClusterSubscriptionCheckoutCompleted(ctx context.Context, sessionID, 
 }
 
 // handleInvoiceCheckoutCompleted handles invoice payment completion
-func handleInvoiceCheckoutCompleted(ctx context.Context, sessionID, tenantID, invoiceID string) error {
+func handleInvoiceCheckoutCompleted(ctx context.Context, sessionID, paymentIntentID, tenantID, invoiceID string) error {
 	if invoiceID == "" {
 		logger.WithField("session_id", sessionID).Debug("No invoice_id in checkout metadata, skipping")
 		return nil
 	}
-	updated, err := updateInvoicePaymentStatus("stripe", sessionID, invoiceID, "confirmed")
+	txID := sessionID
+	if paymentIntentID != "" {
+		txID = paymentIntentID
+		if _, err := db.ExecContext(ctx, `
+			UPDATE purser.billing_payments
+			SET tx_id = $1, updated_at = NOW()
+			WHERE invoice_id = $2
+			  AND method = 'card'
+			  AND status = 'pending'
+			  AND tx_id = $3
+		`, paymentIntentID, invoiceID, sessionID); err != nil {
+			return fmt.Errorf("attach stripe payment_intent to invoice payment: %w", err)
+		}
+	}
+	updated, err := updateInvoicePaymentStatus("stripe", txID, invoiceID, "confirmed")
 	if err != nil {
 		return err
 	}
@@ -546,7 +596,7 @@ func handleInvoiceCheckoutCompleted(ctx context.Context, sessionID, tenantID, in
 }
 
 // handlePrepaidCheckoutCompleted handles prepaid balance top-up completion
-func handlePrepaidCheckoutCompleted(ctx context.Context, sessionID, tenantID, topupID string, amountCents int64, currency string, provider CheckoutProvider) error {
+func handlePrepaidCheckoutCompleted(ctx context.Context, sessionID, providerPaymentID, tenantID, topupID string, amountCents int64, currency string, provider CheckoutProvider) error {
 	if topupID == "" || tenantID == "" {
 		logger.WithFields(logging.Fields{
 			"session_id": sessionID,
@@ -592,6 +642,16 @@ func handlePrepaidCheckoutCompleted(ctx context.Context, sessionID, tenantID, to
 		return nil
 	}
 
+	if _, attachErr := tx.ExecContext(ctx, `
+		UPDATE purser.pending_topups
+		SET provider_payment_id = COALESCE(provider_payment_id, NULLIF($1, '')),
+		    checkout_id = COALESCE(checkout_id, NULLIF($2, '')),
+		    updated_at = NOW()
+		WHERE id = $3
+	`, providerPaymentID, sessionID, topupID); attachErr != nil {
+		return fmt.Errorf("failed to attach provider payment to topup: %w", attachErr)
+	}
+
 	// 2. Credit prepaid balance
 	var balanceID string
 	var currentBalance int64
@@ -635,11 +695,13 @@ func handlePrepaidCheckoutCompleted(ctx context.Context, sessionID, tenantID, to
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO purser.balance_transactions (
 			tenant_id, amount_cents, balance_after_cents,
-			transaction_type, description, reference_id, reference_type
-		) VALUES ($1, $2, $3, 'topup', $4, $5, 'topup')
+			transaction_type, description, reference_id, reference_type,
+			actor_kind, reason, evidence_ref
+		) VALUES ($1, $2, $3, 'topup', $4, $5, 'topup', 'webhook', $6, $7)
 		RETURNING id
 	`, tenantID, amountCents, currentBalance,
-		fmt.Sprintf("Card top-up via %s", provider), topupID).Scan(&txID)
+		fmt.Sprintf("Card top-up via %s", provider), topupID,
+		fmt.Sprintf("%s checkout completed", provider), sessionID).Scan(&txID)
 	if err != nil {
 		return fmt.Errorf("failed to create balance transaction: %w", err)
 	}
@@ -653,6 +715,19 @@ func handlePrepaidCheckoutCompleted(ctx context.Context, sessionID, tenantID, to
 	`, now, txID, topupID)
 	if err != nil {
 		return fmt.Errorf("failed to update pending topup: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `
+		UPDATE purser.payment_provider_intents ppi
+		SET provider_payment_id = COALESCE(provider_payment_id, NULLIF($1, '')),
+		    provider_session_id = COALESCE(provider_session_id, NULLIF($2, '')),
+		    status = 'succeeded',
+		    succeeded_at = COALESCE(succeeded_at, $3),
+		    updated_at = NOW()
+		FROM purser.pending_topups pt
+		WHERE pt.intent_id = ppi.id
+		  AND pt.id = $4
+	`, providerPaymentID, sessionID, now, topupID); err != nil {
+		return fmt.Errorf("failed to update topup provider intent: %w", err)
 	}
 
 	// 5. If tenant was suspended due to balance, unsuspend

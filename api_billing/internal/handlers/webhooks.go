@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"net/url"
 	"os"
 	"strconv"
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	billingmollie "frameworks/api_billing/internal/mollie"
 	"frameworks/api_billing/internal/operator"
@@ -32,6 +32,13 @@ import (
 // failure.
 var errMollieUnknownPayment = errors.New("mollie payment not found")
 
+// errWebhookMissingLocalReference signals that the provider event references
+// a local row (invoice, payment, top-up) that does not exist yet. The caller
+// translates this into a 'blocked' webhook_events row so the provider's retry
+// drives reconciliation once the local row appears, instead of silently
+// no-oping and marking the event processed.
+var errWebhookMissingLocalReference = errors.New("webhook references local row that does not exist yet")
+
 // Stripe webhook payload structure
 // Flexible struct to handle multiple event types (payment_intent, subscription, invoice, checkout)
 type StripeWebhookPayload struct {
@@ -44,9 +51,10 @@ type StripeWebhookPayload struct {
 
 // StripePaymentIntentObject for payment_intent events
 type StripePaymentIntentObject struct {
-	ID       string `json:"id"`
-	Status   string `json:"status"`
-	Metadata struct {
+	ID           string `json:"id"`
+	Status       string `json:"status"`
+	LatestCharge string `json:"latest_charge"`
+	Metadata     struct {
 		InvoiceID string `json:"invoice_id"`
 		TenantID  string `json:"tenant_id"`
 	} `json:"metadata"`
@@ -334,9 +342,17 @@ func ProcessStripeWebhookGRPC(body []byte, headers map[string]string) (bool, str
 		"event_type": payload.Type,
 	}).Info("Received Stripe webhook via gRPC")
 
-	// Check idempotency - skip if already processed
-	if isWebhookAlreadyProcessed("stripe", payload.ID) {
-		logger.WithField("event_id", payload.ID).Debug("Stripe webhook already processed, skipping")
+	ctx := context.Background()
+	claim, claimErr := claimWebhookEvent(ctx, "stripe", payload.ID, payload.Type, signature, body)
+	if claimErr != nil {
+		logger.WithError(claimErr).Error("Failed to claim Stripe webhook event")
+		return false, "Failed to claim webhook", 500
+	}
+	if !claim.claimed {
+		logger.WithFields(logging.Fields{
+			"event_id": payload.ID,
+			"status":   claim.previous,
+		}).Debug("Stripe webhook already claimed or terminal, skipping")
 		return true, "", 200
 	}
 
@@ -345,55 +361,167 @@ func ProcessStripeWebhookGRPC(body []byte, headers map[string]string) (bool, str
 	case payload.Type == "payment_intent.succeeded" || payload.Type == "payment_intent.payment_failed":
 		err = handleStripePaymentIntentGRPC(payload)
 	case payload.Type == "checkout.session.completed":
-		err = DispatchStripeCheckoutCompleted(context.Background(), payload.Data.Object)
+		err = DispatchStripeCheckoutCompleted(ctx, payload.Data.Object)
 	case strings.HasPrefix(payload.Type, "customer.subscription."):
 		err = handleStripeSubscriptionEvent(payload)
 	case payload.Type == "invoice.paid":
 		err = handleStripeInvoicePaid(payload)
 	case payload.Type == "invoice.payment_failed":
 		err = handleStripeInvoiceFailed(payload)
+	case payload.Type == "charge.refunded":
+		err = handleStripeChargeRefunded(payload)
+	case strings.HasPrefix(payload.Type, "charge.dispute."):
+		err = handleStripeChargeDispute(payload)
 	default:
 		logger.WithField("event_type", payload.Type).Debug("Ignoring unhandled Stripe event type")
 	}
 
 	if err != nil {
+		blocked := errors.Is(err, errWebhookMissingLocalReference)
+		if markErr := markWebhookFailed(ctx, "stripe", payload.ID, err.Error(), blocked, false); markErr != nil {
+			logger.WithError(markErr).Warn("Failed to mark Stripe webhook failed")
+		}
 		logger.WithError(err).WithField("event_type", payload.Type).Error("Failed to process Stripe webhook")
 		return false, "Failed to process webhook", 500
 	}
 
-	// Mark as processed
-	markWebhookProcessed("stripe", payload.ID, payload.Type)
+	if markErr := markWebhookSucceeded(ctx, "stripe", payload.ID, ""); markErr != nil {
+		logger.WithError(markErr).Error("Failed to mark Stripe webhook processed")
+		return false, "Failed to record webhook completion", 500
+	}
 	return true, "", 200
 }
 
-// isWebhookAlreadyProcessed checks if a webhook event was already processed
-func isWebhookAlreadyProcessed(provider, eventID string) bool {
-	if db == nil {
-		return false
-	}
-	var exists bool
-	err := db.QueryRowContext(context.Background(), `
-		SELECT EXISTS(SELECT 1 FROM purser.webhook_events WHERE provider = $1 AND event_id = $2)
-	`, provider, eventID).Scan(&exists)
-	return err == nil && exists
+// webhookClaim is the outcome of attempting to claim a provider event for
+// processing. claimed=true means this caller owns the work; on commit it must
+// call markWebhookSucceeded or markWebhookFailed. claimed=false means the
+// event row exists in a terminal state and the caller must not reprocess.
+// The blocked state covers events that were durably accepted but cannot
+// reconcile yet (out-of-order: provider sent us a payment-succeeded event
+// before the matching invoice was created locally) and must be retried.
+type webhookClaim struct {
+	claimed  bool
+	terminal bool // already processed/failed_terminal
+	blocked  bool // failed_retryable or blocked, requires retry
+	previous string
 }
 
-// markWebhookProcessed marks a webhook event as processed
-func markWebhookProcessed(provider, eventID, eventType string) {
+// claimWebhookEvent inserts a 'claimed' row for (provider, event_id), or
+// atomically reclaims a previous retryable/blocked row. Rows already in
+// claimed/processed/failed_terminal are returned as not claimed, so duplicate
+// deliveries cannot run reconciliation concurrently.
+func claimWebhookEvent(ctx context.Context, provider, eventID, eventType, signatureHeader string, rawPayload []byte) (*webhookClaim, error) {
 	if db == nil {
-		return
+		return nil, fmt.Errorf("db not initialized")
 	}
-	_, err := db.ExecContext(context.Background(), `
-		INSERT INTO purser.webhook_events (provider, event_id, event_type)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (provider, event_id) DO NOTHING
-	`, provider, eventID, eventType)
+	if eventID == "" {
+		return nil, fmt.Errorf("missing event_id for %s webhook", provider)
+	}
+	var (
+		status   string
+		acquired bool
+	)
+	err := db.QueryRowContext(ctx, `
+		WITH claimed AS (
+			INSERT INTO purser.webhook_events
+				(provider, event_id, event_type, status, signature_header, raw_payload, received_at)
+			VALUES ($1, $2, $3, 'claimed', NULLIF($4, ''), $5, NOW())
+			ON CONFLICT (provider, event_id) DO UPDATE
+				SET status = 'claimed',
+				    retry_count = purser.webhook_events.retry_count + 1,
+				    received_at = NOW(),
+				    event_type = COALESCE(NULLIF(EXCLUDED.event_type, ''), purser.webhook_events.event_type),
+				    signature_header = COALESCE(EXCLUDED.signature_header, purser.webhook_events.signature_header),
+				    raw_payload = COALESCE(EXCLUDED.raw_payload, purser.webhook_events.raw_payload),
+				    last_error = NULL
+				WHERE purser.webhook_events.status IN ('failed_retryable', 'blocked')
+			RETURNING status
+		)
+		SELECT status, TRUE FROM claimed
+		UNION ALL
+		SELECT status, FALSE
+		FROM purser.webhook_events
+		WHERE provider = $1 AND event_id = $2
+		  AND NOT EXISTS (SELECT 1 FROM claimed)
+		LIMIT 1
+	`, provider, eventID, eventType, signatureHeader, rawPayload).Scan(&status, &acquired)
 	if err != nil {
-		logger.WithError(err).Warn("Failed to mark webhook as processed")
+		return nil, fmt.Errorf("claim webhook event: %w", err)
+	}
+	if acquired && status == "claimed" {
+		return &webhookClaim{claimed: true, previous: status}, nil
+	}
+	switch status {
+	case "processed", "failed_terminal":
+		return &webhookClaim{terminal: true, previous: status}, nil
+	case "claimed":
+		return &webhookClaim{previous: status}, nil
+	case "failed_retryable", "blocked":
+		return &webhookClaim{blocked: status == "blocked", previous: status}, nil
+	default:
+		return &webhookClaim{previous: status}, nil
 	}
 }
 
-// handleStripePaymentIntentGRPC handles payment_intent events
+// markWebhookSucceeded advances a claimed webhook event to 'processed'.
+// Errors are returned so the gRPC handler can surface them to the Gateway;
+// the previous silent log-and-swallow behavior allowed the same event to
+// reprocess indefinitely without the operator noticing.
+func markWebhookSucceeded(ctx context.Context, provider, eventID, providerObjectID string) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := db.ExecContext(ctx, `
+		UPDATE purser.webhook_events
+		SET status = 'processed',
+		    processed_at = NOW(),
+		    last_error = NULL,
+		    provider_object_id = COALESCE(provider_object_id, NULLIF($3, ''))
+		WHERE provider = $1 AND event_id = $2
+	`, provider, eventID, providerObjectID)
+	if err != nil {
+		return fmt.Errorf("mark webhook processed: %w", err)
+	}
+	return nil
+}
+
+// markWebhookFailed records a processing failure. blocked=true means the
+// failure is a missing local reference that should clear on a future retry
+// once the local invoice/payment row exists; blocked=false means a generic
+// transient failure (DB error, downstream call timeout). terminal=true
+// retires the event from further retries (signature mismatch caught after
+// claim, malformed body that survived initial parse, etc.).
+func markWebhookFailed(ctx context.Context, provider, eventID, errMsg string, blocked, terminal bool) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	target := "failed_retryable"
+	if terminal {
+		target = "failed_terminal"
+	} else if blocked {
+		target = "blocked"
+	}
+	_, err := db.ExecContext(ctx, `
+		UPDATE purser.webhook_events
+		SET status = $3,
+		    last_error = $4,
+		    processed_at = CASE WHEN $3 IN ('failed_terminal') THEN NOW() ELSE processed_at END
+		WHERE provider = $1 AND event_id = $2
+	`, provider, eventID, target, errMsg)
+	if err != nil {
+		return fmt.Errorf("mark webhook failed: %w", err)
+	}
+	return nil
+}
+
+// handleStripePaymentIntentGRPC handles payment_intent events. A missing
+// metadata.invoice_id is logged at debug rather than treated as failure
+// because Stripe-initiated PaymentIntents (subscription base) do not flow
+// through this code path. A successful PaymentIntent whose local
+// billing_payments row is missing is surfaced as a blocked-retry instead of
+// a silent no-op, so the next provider retry drives reconciliation once the
+// local row exists. Settlement runs through the shared partial-payment-aware
+// helper, never a direct invoice UPDATE.
 func handleStripePaymentIntentGRPC(payload StripeWebhookPayload) error {
 	var obj StripePaymentIntentObject
 	if err := json.Unmarshal(payload.Data.Object, &obj); err != nil {
@@ -412,52 +540,18 @@ func handleStripePaymentIntentGRPC(payload StripeWebhookPayload) error {
 		status = "failed"
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
+	updated, err := updateInvoicePaymentStatus("stripe", obj.ID, invoiceID, status)
 	if err != nil {
-		return fmt.Errorf("begin payment intent transaction: %w", err)
+		return err
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				logger.WithError(rollbackErr).Warn("Failed to roll back Stripe payment intent transaction")
-			}
-		}
-	}()
-
-	result, err := tx.ExecContext(ctx, `
-		UPDATE purser.billing_payments
-		SET status = $1, updated_at = NOW(), confirmed_at = CASE WHEN $3 = 'confirmed' THEN NOW() ELSE confirmed_at END
-		WHERE invoice_id = $2 AND method = 'card' AND tx_id = $4
-	`, status, invoiceID, status, obj.ID)
-	if err != nil {
-		return fmt.Errorf("failed to update payment status: %w", err)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("check updated payment rows: %w", err)
-	}
-	if rowsAffected == 0 {
+	if !updated {
 		logger.WithFields(logging.Fields{
 			"payment_intent_id": obj.ID,
 			"invoice_id":        invoiceID,
 			"status":            status,
-		}).Warn("Stripe webhook did not match an invoice payment")
-		return nil
+		}).Warn("Stripe webhook did not match a local invoice payment; blocking for retry")
+		return fmt.Errorf("invoice %s has no pending card payment for %s: %w", invoiceID, obj.ID, errWebhookMissingLocalReference)
 	}
-	if status == "confirmed" {
-		if _, err = tx.ExecContext(ctx, `
-			UPDATE purser.billing_invoices
-			SET status = 'paid', paid_at = NOW(), updated_at = NOW()
-			WHERE id = $1 AND status IN ('pending', 'overdue')
-		`, invoiceID); err != nil {
-			return fmt.Errorf("failed to update invoice status: %w", err)
-		}
-	}
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("commit payment intent transaction: %w", err)
-	}
-	committed = true
 
 	logger.WithFields(logging.Fields{
 		"payment_intent_id": obj.ID,
@@ -465,18 +559,45 @@ func handleStripePaymentIntentGRPC(payload StripeWebhookPayload) error {
 		"status":            status,
 	}).Info("Updated payment status from Stripe webhook")
 
-	go sendPaymentStatusEmail(invoiceID, "stripe", status)
-
 	var paymentID, tenantID, currency string
-	var amount float64
+	var amountCents int64
 	if err := db.QueryRowContext(ctx, `
-		SELECT p.id, i.tenant_id, p.amount, p.currency
+		SELECT p.id, i.tenant_id, (p.amount * 100)::bigint, p.currency
 		FROM purser.billing_payments p
 		JOIN purser.billing_invoices i ON p.invoice_id = i.id
 		WHERE p.invoice_id = $1 AND p.method = 'card' AND p.tx_id = $2
 		ORDER BY p.created_at DESC
 		LIMIT 1
-	`, invoiceID, obj.ID).Scan(&paymentID, &tenantID, &amount, &currency); err == nil && tenantID != "" {
+	`, invoiceID, obj.ID).Scan(&paymentID, &tenantID, &amountCents, &currency); err == nil && tenantID != "" {
+		if mapErr := upsertProviderPaymentObject(ctx, providerPaymentObjectInput{
+			provider:         "stripe",
+			objectType:       "payment_intent",
+			providerObjectID: obj.ID,
+			tenantID:         tenantID,
+			localRefType:     "payment",
+			localRefID:       paymentID,
+			metadata: map[string]any{
+				"invoice_id": invoiceID,
+			},
+		}); mapErr != nil {
+			logger.WithError(mapErr).WithField("payment_intent_id", obj.ID).Warn("Failed to record Stripe payment_intent mapping")
+		}
+		if obj.LatestCharge != "" {
+			if mapErr := upsertProviderPaymentObject(ctx, providerPaymentObjectInput{
+				provider:         "stripe",
+				objectType:       "charge",
+				providerObjectID: obj.LatestCharge,
+				tenantID:         tenantID,
+				localRefType:     "payment",
+				localRefID:       paymentID,
+				metadata: map[string]any{
+					"invoice_id":        invoiceID,
+					"payment_intent_id": obj.ID,
+				},
+			}); mapErr != nil {
+				logger.WithError(mapErr).WithField("charge_id", obj.LatestCharge).Warn("Failed to record Stripe charge mapping")
+			}
+		}
 		eventType := eventPaymentSucceeded
 		if status == "failed" {
 			eventType = eventPaymentFailed
@@ -484,7 +605,7 @@ func handleStripePaymentIntentGRPC(payload StripeWebhookPayload) error {
 		emitBillingEvent(eventType, tenantID, "payment", paymentID, &pb.BillingEvent{
 			PaymentId: paymentID,
 			InvoiceId: invoiceID,
-			Amount:    amount,
+			Amount:    float64(amountCents) / float64(intPow10(currencyMinorUnitExponent(currency))),
 			Currency:  currency,
 			Provider:  "stripe",
 			Status:    status,
@@ -494,8 +615,17 @@ func handleStripePaymentIntentGRPC(payload StripeWebhookPayload) error {
 	return nil
 }
 
-// handleStripeCheckoutCompleted is now handled by DispatchStripeCheckoutCompleted in checkout.go
-// The new dispatcher routes based on metadata.purpose (subscription, invoice, prepaid)
+// intPow10 returns 10^n for small n. Used to derive the integer divisor
+// when rendering integer minor units into the BillingEvent presentation
+// amount (proto-defined float64). The conversion lives at the wire boundary
+// only; ledger math is integer cents throughout.
+func intPow10(n int) int64 {
+	out := int64(1)
+	for range n {
+		out *= 10
+	}
+	return out
+}
 
 // handleStripeSubscriptionEvent handles customer.subscription.* events
 func handleStripeSubscriptionEvent(payload StripeWebhookPayload) error {
@@ -627,6 +757,12 @@ func handleStripeInvoicePaid(payload StripeWebhookPayload) error {
 	if err := recordMonthlyClusterCredit(ctx, &obj); err != nil {
 		return fmt.Errorf("record monthly cluster credit: %w", err)
 	}
+
+	// Tenant-subscription invariant: provider-managed tenant_subscriptions
+	// produce Purser invoices with base_amount = 0 (the base is represented
+	// as an included_subscription line because the provider's recurring
+	// charge owns it). So there is nothing for invoice.paid to reconcile on
+	// the base; metered overage collection lives elsewhere.
 
 	emitBillingEvent(eventInvoicePaid, tenantID, "invoice", obj.ID, &pb.BillingEvent{
 		InvoiceId: obj.ID,
@@ -857,18 +993,37 @@ func ProcessMollieWebhookGRPC(body []byte, headers map[string]string) (bool, str
 
 	logger.WithField("payment_id", paymentID).Info("Received Mollie webhook via gRPC")
 
-	eventID, err := handleMolliePaymentWebhook(paymentID)
+	ctx := context.Background()
+	// Mollie does not sign its webhook bodies, so the only safe pattern is
+	// to fetch the payment authoritatively from the Mollie API and
+	// reconcile on (mollie_payment_id, status). The synthesized event id
+	// claim/lock pattern collapses concurrent deliveries for the same
+	// payment-state transition; subsequent transitions get distinct event
+	// ids and are processed in order.
+	eventID, err := handleMolliePaymentWebhook(ctx, paymentID, body)
 	if errors.Is(err, errMollieUnknownPayment) {
 		logger.WithField("payment_id", paymentID).Warn("Mollie webhook references unknown payment id")
 		return false, "Payment not found", 404
 	}
 	if err != nil {
+		// eventID may be empty when the failure occurred before we could
+		// derive a status (and therefore an event id); in that case the
+		// next provider retry re-runs the lookup.
+		if eventID != "" {
+			blocked := errors.Is(err, errWebhookMissingLocalReference)
+			if markErr := markWebhookFailed(ctx, "mollie", eventID, err.Error(), blocked, false); markErr != nil {
+				logger.WithError(markErr).Warn("Failed to mark Mollie webhook failed")
+			}
+		}
 		logger.WithError(err).Error("Failed to process Mollie webhook")
 		return false, "Failed to process webhook", 500
 	}
 
 	if eventID != "" {
-		markWebhookProcessed("mollie", eventID, "payment")
+		if markErr := markWebhookSucceeded(ctx, "mollie", eventID, paymentID); markErr != nil {
+			logger.WithError(markErr).Error("Failed to mark Mollie webhook processed")
+			return false, "Failed to record webhook completion", 500
+		}
 	}
 
 	return true, "", 200
@@ -909,8 +1064,8 @@ func recordWebhookSignatureFailure(provider string) {
 	metrics.WebhookSignatureFailures.WithLabelValues(provider).Inc()
 }
 
-func handleMolliePaymentWebhook(paymentID string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+func handleMolliePaymentWebhook(parentCtx context.Context, paymentID string, rawBody []byte) (string, error) {
+	ctx, cancel := context.WithTimeout(parentCtx, 15*time.Second)
 	defer cancel()
 
 	payment, err := mollieClient.GetPayment(ctx, paymentID)
@@ -924,7 +1079,23 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 	}
 
 	eventID := mollieEventID("payment", payment.ID, status)
-	if isWebhookAlreadyProcessed("mollie", eventID) {
+	claim, claimErr := claimWebhookEvent(ctx, "mollie", eventID, "payment", "", rawBody)
+	if claimErr != nil {
+		return eventID, claimErr
+	}
+	if !claim.claimed {
+		return eventID, nil
+	}
+
+	// Mollie reports refund/chargeback movement on the original payment
+	// rather than firing a separate event. Apply the reversal ledger
+	// movement before mapping the status; the reversal is idempotent on
+	// the Mollie refund id.
+	if applied, refundErr := applyMolliePaymentReversalsIfAny(ctx, payment); refundErr != nil {
+		return eventID, refundErr
+	} else if applied {
+		// Reversal was the noteworthy event on this webhook delivery;
+		// no further status mapping required.
 		return eventID, nil
 	}
 
@@ -992,7 +1163,7 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if err := handlePrepaidCheckoutCompleted(ctx, payment.ID, tenantID, topupID, amountCents, currency, ProviderMollie); err != nil {
+		if err := handlePrepaidCheckoutCompleted(ctx, payment.ID, payment.ID, tenantID, topupID, amountCents, currency, ProviderMollie); err != nil {
 			return "", err
 		}
 		return eventID, nil
@@ -1008,14 +1179,6 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 	// helper (overage collection) creates the payment; in that case we skip
 	// the subscription-period lookup.
 	if payment.SubscriptionID != "" && invoiceID == "" {
-		resolvedInvoiceID, resolveErr := resolveMollieSubscriptionInvoice(ctx, payment.SubscriptionID, payment)
-		if resolveErr != nil {
-			return "", resolveErr
-		}
-		if resolvedInvoiceID == "" {
-			return "", fmt.Errorf("no pending invoice found for Mollie subscription payment %s", payment.ID)
-		}
-		invoiceID = resolvedInvoiceID
 		if tenantID == "" {
 			if scanErr := db.QueryRowContext(ctx, `
 				SELECT tenant_id FROM purser.tenant_subscriptions WHERE mollie_subscription_id = $1
@@ -1023,15 +1186,35 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 				logger.WithError(scanErr).WithField("mollie_subscription_id", payment.SubscriptionID).Warn("Failed to resolve tenant_id from subscription")
 			}
 		}
+		resolvedInvoiceID, resolveErr := resolveMollieSubscriptionInvoice(ctx, payment.SubscriptionID, payment)
+		if resolveErr != nil {
+			return eventID, resolveErr
+		}
+		if resolvedInvoiceID == "" {
+			// Out-of-order: Mollie fired the subscription-installment webhook
+			// before the local invoice for the period was finalized. Persist
+			// the observation so invoice finalization drains it; do not
+			// silently no-op, do not return an error that retries forever.
+			if obsErr := upsertMolliePaymentObservation(ctx, tenantID, payment, rawBody); obsErr != nil {
+				return eventID, fmt.Errorf("persist mollie observation: %w", obsErr)
+			}
+			logger.WithFields(logging.Fields{
+				"mollie_payment_id":      payment.ID,
+				"mollie_subscription_id": payment.SubscriptionID,
+				"tenant_id":              tenantID,
+			}).Info("Mollie subscription payment observed before local invoice; awaiting finalize drain")
+			return eventID, nil
+		}
+		invoiceID = resolvedInvoiceID
 		if invoiceID != "" && payment.Amount != nil {
 			amountCents, _, amtErr := mollieAmountToCents(payment.Amount.Value, payment.Amount.Currency)
 			if amtErr == nil {
-				amountDec := float64(amountCents) / 100.0
+				amountStr := centsToDecimalString(amountCents, payment.Amount.Currency)
 				if _, insertErr := db.ExecContext(ctx, `
 					INSERT INTO purser.billing_payments (invoice_id, method, amount, currency, tx_id, status, created_at, updated_at)
-					VALUES ($1, 'card', $2, $3, $4, 'pending', NOW(), NOW())
+					VALUES ($1, 'card', $2::numeric, $3, $4, 'pending', NOW(), NOW())
 					ON CONFLICT DO NOTHING
-				`, invoiceID, amountDec, payment.Amount.Currency, payment.ID); insertErr != nil {
+				`, invoiceID, amountStr, payment.Amount.Currency, payment.ID); insertErr != nil {
 					logger.WithError(insertErr).WithField("mollie_payment_id", payment.ID).Warn("Failed to insert subscription-installment billing_payment")
 				}
 			}
@@ -1085,7 +1268,7 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 				emitBillingEvent(eventType, tenantID, "payment", payment.ID, &pb.BillingEvent{
 					PaymentId: payment.ID,
 					InvoiceId: invoiceID,
-					Amount:    float64(amountCents) / 100.0,
+					Amount:    float64(amountCents) / float64(intPow10(currencyMinorUnitExponent(currency))),
 					Currency:  currency,
 					Provider:  "mollie",
 					Status:    newStatus,
@@ -1099,6 +1282,856 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 
 func mollieEventID(resource, id, status string) string {
 	return fmt.Sprintf("%s:%s:%s", resource, id, status)
+}
+
+// upsertMolliePaymentObservation records an out-of-order Mollie subscription
+// payment webhook when the local invoice has not been finalized yet. The
+// drain at invoice finalization time looks rows up by (tenant_id,
+// mollie_subscription_id) and attaches them to the new invoice. The unique
+// index on mollie_payment_id collapses concurrent webhook retries to a
+// single observation row.
+// StripeChargeObject minimally describes a Stripe charge as it appears on
+// charge.refunded and charge.dispute.* events. We only consume what the
+// reversal pipeline needs.
+type StripeChargeObject struct {
+	ID             string `json:"id"`
+	PaymentIntent  string `json:"payment_intent"`
+	Amount         int64  `json:"amount"`
+	AmountRefunded int64  `json:"amount_refunded"`
+	AmountCaptured int64  `json:"amount_captured"`
+	Currency       string `json:"currency"`
+	Status         string `json:"status"`
+	Refunded       bool   `json:"refunded"`
+	DisputeID      string `json:"dispute"`
+	BalanceTxn     string `json:"balance_transaction"`
+	Refunds        struct {
+		Data []struct {
+			ID       string `json:"id"`
+			Amount   int64  `json:"amount"`
+			Currency string `json:"currency"`
+			Reason   string `json:"reason"`
+			Status   string `json:"status"`
+		} `json:"data"`
+	} `json:"refunds"`
+}
+
+// StripeDisputeObject is the slim shape we consume from charge.dispute.*
+// events. Funds-withdrawn / funds-reinstated transitions tweak the same
+// payment_reversals row keyed on the dispute id.
+type StripeDisputeObject struct {
+	ID       string `json:"id"`
+	Charge   string `json:"charge"`
+	Amount   int64  `json:"amount"`
+	Currency string `json:"currency"`
+	Reason   string `json:"reason"`
+	Status   string `json:"status"`
+}
+
+// handleStripeChargeRefunded processes a charge.refunded webhook by writing
+// payment_reversals rows for each new refund and applying their effect to
+// billing_payments + invoice net-paid state. Idempotent on provider refund
+// ids: replays do not double-credit.
+func handleStripeChargeRefunded(payload StripeWebhookPayload) error {
+	var charge StripeChargeObject
+	if err := json.Unmarshal(payload.Data.Object, &charge); err != nil {
+		return fmt.Errorf("failed to parse charge: %w", err)
+	}
+	if charge.PaymentIntent == "" {
+		// Refund on a charge that was not created through a PaymentIntent.
+		// All FrameWorks-side flows use PaymentIntents, so the absence
+		// means this is not our charge; do not error.
+		logger.WithField("charge_id", charge.ID).Debug("Ignoring Stripe charge.refunded without payment_intent")
+		return nil
+	}
+	ctx := context.Background()
+	if charge.PaymentIntent != "" {
+		var tenantID, paymentID sql.NullString
+		if scanErr := db.QueryRowContext(ctx, `
+			SELECT i.tenant_id, p.id
+			FROM purser.billing_payments p
+			JOIN purser.billing_invoices i ON i.id = p.invoice_id
+			WHERE p.tx_id = $1 AND p.method = 'card'
+			ORDER BY p.created_at DESC
+			LIMIT 1
+		`, charge.PaymentIntent).Scan(&tenantID, &paymentID); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+			logger.WithError(scanErr).WithField("payment_intent_id", charge.PaymentIntent).Debug("Stripe charge mapping payment lookup failed")
+		}
+		if tenantID.Valid && paymentID.Valid {
+			if mapErr := upsertProviderPaymentObject(ctx, providerPaymentObjectInput{
+				provider:         "stripe",
+				objectType:       "charge",
+				providerObjectID: charge.ID,
+				tenantID:         tenantID.String,
+				localRefType:     "payment",
+				localRefID:       paymentID.String,
+				metadata: map[string]any{
+					"payment_intent_id": charge.PaymentIntent,
+				},
+			}); mapErr != nil {
+				logger.WithError(mapErr).WithField("charge_id", charge.ID).Warn("Failed to record Stripe charge mapping")
+			}
+		}
+	}
+	for _, r := range charge.Refunds.Data {
+		if r.ID == "" || r.Amount <= 0 {
+			continue
+		}
+		if r.Status != "succeeded" {
+			// Pending/failed refunds are not money movement yet; skip.
+			continue
+		}
+		applied, applyErr := applyProviderReversal(ctx, providerReversalInput{
+			provider:           "stripe",
+			reversalType:       "refund",
+			providerReversalID: r.ID,
+			providerChargeID:   charge.ID,
+			providerPaymentID:  charge.PaymentIntent,
+			amountCents:        r.Amount,
+			currency:           strings.ToUpper(r.Currency),
+			reason:             r.Reason,
+		})
+		if applyErr != nil {
+			return applyErr
+		}
+		if !applied {
+			logger.WithFields(logging.Fields{
+				"refund_id":   r.ID,
+				"payment_int": charge.PaymentIntent,
+			}).Debug("Stripe refund already applied; webhook replay")
+		}
+	}
+	return nil
+}
+
+// handleStripeChargeDispute applies dispute money movement to the reversal
+// ledger. charge.dispute.funds_withdrawn is the cash-out event; we treat the
+// creation event as informational, the funds_withdrawn as the reversal,
+// and funds_reinstated as a reversal of the reversal (status=needs_review
+// so ops decide whether to clean up automatically or by hand).
+func handleStripeChargeDispute(payload StripeWebhookPayload) error {
+	var dispute StripeDisputeObject
+	if err := json.Unmarshal(payload.Data.Object, &dispute); err != nil {
+		return fmt.Errorf("failed to parse dispute: %w", err)
+	}
+	if dispute.Charge == "" {
+		return nil
+	}
+	ctx := context.Background()
+	// Look up the original Stripe charge to find the payment_intent (and
+	// thus our local billing_payments row). The dispute event itself does
+	// not always carry payment_intent directly; provider_payment_objects
+	// would be used if populated, otherwise we fall back to the charge id.
+	var providerPaymentID sql.NullString
+	if scanErr := db.QueryRowContext(ctx, `
+			SELECT MAX(metadata->>'payment_intent_id')
+			FROM purser.provider_payment_objects
+			WHERE provider = 'stripe' AND object_type = 'charge' AND provider_object_id = $1
+		`, dispute.Charge).Scan(&providerPaymentID); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+		logger.WithError(scanErr).WithField("charge_id", dispute.Charge).Debug("provider_payment_objects lookup failed for dispute")
+	}
+
+	switch payload.Type {
+	case "charge.dispute.created":
+		// Informational: persist a pending reversal row but do not move
+		// money until funds_withdrawn.
+		_, err := db.ExecContext(ctx, `
+			INSERT INTO purser.payment_reversals (
+				tenant_id, payment_id, provider, reversal_type,
+				provider_reversal_id, provider_charge_id,
+				amount_cents, currency, status, reason
+			)
+			SELECT i.tenant_id, p.id, 'stripe', 'dispute',
+			       $1, $2, $3, $4, 'pending', $5
+			FROM purser.billing_payments p
+			JOIN purser.billing_invoices i ON p.invoice_id = i.id
+			WHERE p.tx_id = COALESCE(NULLIF($6, ''), p.tx_id)
+			  AND p.method = 'card'
+			ORDER BY p.created_at DESC
+			LIMIT 1
+			ON CONFLICT (provider, provider_reversal_id) DO NOTHING
+		`, dispute.ID, dispute.Charge, dispute.Amount, strings.ToUpper(dispute.Currency), dispute.Reason, providerPaymentID.String)
+		if err != nil {
+			return fmt.Errorf("record dispute creation: %w", err)
+		}
+		return nil
+	case "charge.dispute.funds_withdrawn", "charge.dispute.closed":
+		applied, applyErr := applyProviderReversal(ctx, providerReversalInput{
+			provider:           "stripe",
+			reversalType:       "dispute",
+			providerReversalID: dispute.ID,
+			providerChargeID:   dispute.Charge,
+			providerPaymentID:  providerPaymentID.String,
+			amountCents:        dispute.Amount,
+			currency:           strings.ToUpper(dispute.Currency),
+			reason:             dispute.Reason,
+		})
+		if applyErr != nil {
+			return applyErr
+		}
+		_ = applied
+		return nil
+	case "charge.dispute.funds_reinstated":
+		// Reversed dispute: flag for operator review rather than silently
+		// reversing automatically; the negative balance / clawback may have
+		// already paid out.
+		_, err := db.ExecContext(ctx, `
+			UPDATE purser.payment_reversals
+			SET status = 'needs_review', operator_review_required = TRUE, updated_at = NOW()
+			WHERE provider = 'stripe' AND provider_reversal_id = $1
+		`, dispute.ID)
+		if err != nil {
+			return fmt.Errorf("flag dispute reinstatement: %w", err)
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+// providerReversalInput is the normalized input the central reversal helper
+// accepts. Stripe refund, Stripe dispute funds_withdrawn, Mollie refund, and
+// Mollie chargeback all map onto this shape.
+type providerReversalInput struct {
+	provider           string
+	reversalType       string
+	providerReversalID string
+	providerChargeID   string
+	providerPaymentID  string // Stripe PaymentIntent id or Mollie payment id
+	amountCents        int64
+	currency           string
+	reason             string
+}
+
+// applyProviderReversal writes the reversal ledger row, credits the
+// originating billing_payments.reversed_amount_cents, and reopens the
+// invoice if net confirmed payments are now below the invoice amount.
+// Returns (applied, error) — applied=false means we found an existing
+// terminal reversal row (replay).
+func applyProviderReversal(parentCtx context.Context, in providerReversalInput) (bool, error) {
+	if in.providerReversalID == "" || in.amountCents <= 0 {
+		return false, fmt.Errorf("invalid provider reversal input")
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, 15*time.Second)
+	defer cancel()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin reversal tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+				logger.WithError(rbErr).Warn("Failed to roll back reversal tx")
+			}
+		}
+	}()
+
+	// Locate the originating billing_payments row by tx_id. For Stripe
+	// we match on the PaymentIntent id; for Mollie on the payment id.
+	var paymentID, invoiceID, tenantID, paymentCurrency string
+	var pendingTopupID sql.NullString
+	err = tx.QueryRowContext(ctx, `
+		SELECT p.id, p.invoice_id, i.tenant_id, p.currency
+		FROM purser.billing_payments p
+		JOIN purser.billing_invoices i ON p.invoice_id = i.id
+		WHERE p.method = 'card'
+		  AND p.tx_id = $1
+		ORDER BY p.created_at DESC
+		LIMIT 1
+	`, in.providerPaymentID).Scan(&paymentID, &invoiceID, &tenantID, &paymentCurrency)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Maybe it was a prepaid top-up rather than an invoice payment.
+		err = tx.QueryRowContext(ctx, `
+			SELECT id, tenant_id, currency
+			FROM purser.pending_topups
+			WHERE (provider_payment_id = $1 OR checkout_id = $1)
+			ORDER BY created_at DESC
+			LIMIT 1
+		`, in.providerPaymentID).Scan(&pendingTopupID, &tenantID, &paymentCurrency)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, fmt.Errorf("reversal %s references unknown provider payment %s: %w",
+				in.providerReversalID, in.providerPaymentID, errWebhookMissingLocalReference)
+		}
+		if err != nil {
+			return false, fmt.Errorf("lookup topup for reversal: %w", err)
+		}
+	} else if err != nil {
+		return false, fmt.Errorf("lookup payment for reversal: %w", err)
+	}
+
+	// Sanity: provider may report the reversal in a different currency
+	// than the original payment. Refuse to reconcile rather than mixing.
+	if paymentCurrency != "" && in.currency != "" && paymentCurrency != in.currency {
+		return false, fmt.Errorf("reversal currency %s != payment currency %s", in.currency, paymentCurrency)
+	}
+
+	// Idempotent reversal-ledger insert. ON CONFLICT keeps the original
+	// row and we treat the duplicate as a replay (applied=false).
+	var reversalID string
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO purser.payment_reversals (
+			tenant_id, payment_id, pending_topup_id, invoice_id,
+			provider, reversal_type, provider_reversal_id, provider_charge_id,
+			amount_cents, currency, status, reason
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'succeeded', $11)
+		ON CONFLICT (provider, provider_reversal_id) DO NOTHING
+		RETURNING id
+	`, tenantID, nullableString(paymentID), pendingTopupID, nullableString(invoiceID),
+		in.provider, in.reversalType, in.providerReversalID, nullableString(in.providerChargeID),
+		in.amountCents, in.currency, nullableString(in.reason)).Scan(&reversalID)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Replay: row already existed, nothing more to do.
+		if commitErr := tx.Commit(); commitErr != nil {
+			return false, commitErr
+		}
+		committed = true
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("insert reversal: %w", err)
+	}
+
+	// Apply money movement based on which side the reversal hits.
+	if paymentID != "" && invoiceID != "" {
+		if err := applyInvoicePaymentReversalTx(ctx, tx, paymentID, invoiceID, in.amountCents, in.currency); err != nil {
+			return false, err
+		}
+		// Operator credit clawback: marketplace cluster lines on this
+		// invoice need a reverses_ledger_id row pointing at the original
+		// accrual. The clawback runs in the same transaction as the
+		// invoice-side reversal so the ledger never disagrees with the
+		// invoice state.
+		if err := applyOperatorCreditClawbackTx(ctx, tx, invoiceID, reversalID, in.amountCents); err != nil {
+			return false, err
+		}
+	}
+	if pendingTopupID.Valid && tenantID != "" {
+		if err := applyPrepaidTopupReversalTx(ctx, tx, tenantID, pendingTopupID.String, reversalID, in.amountCents, in.currency, in.reason); err != nil {
+			return false, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit reversal tx: %w", err)
+	}
+	committed = true
+	return true, nil
+}
+
+// applyInvoicePaymentReversalTx credits reversed_amount_cents on the
+// originating billing_payments row, denormalizes the invoice's
+// reversed_paid_cents, and reopens the invoice (status pending,
+// reopened_at = NOW(), paid_at preserved) if net confirmed payments now
+// fall below the invoice amount.
+func applyInvoicePaymentReversalTx(ctx context.Context, tx *sql.Tx, paymentID, invoiceID string, amountCents int64, currency string) error {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE purser.billing_payments
+		SET reversed_amount_cents = reversed_amount_cents + $1, updated_at = NOW()
+		WHERE id = $2
+	`, amountCents, paymentID); err != nil {
+		return fmt.Errorf("credit reversed_amount_cents: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE purser.billing_invoices
+		SET reversed_paid_cents = reversed_paid_cents + $1, updated_at = NOW()
+		WHERE id = $2
+	`, amountCents, invoiceID); err != nil {
+		return fmt.Errorf("credit invoice reversed_paid_cents: %w", err)
+	}
+	// Reopen if net confirmed payments now fall below the invoice amount.
+	// paid_at is preserved as the first-paid timestamp; reopened_at records
+	// the most recent transition out of paid.
+	_, err := tx.ExecContext(ctx, `
+		UPDATE purser.billing_invoices i
+		SET status = 'pending',
+		    reopened_at = NOW(),
+		    updated_at = NOW()
+		WHERE i.id = $1
+		  AND i.status = 'paid'
+		  AND i.currency = $2
+		  AND (
+		      SELECT COALESCE(SUM(p.amount - COALESCE(p.reversed_amount_cents, 0)::numeric / 100), 0)
+		      FROM purser.billing_payments p
+		      WHERE p.invoice_id = i.id
+		        AND p.status = 'confirmed'
+		        AND p.currency = i.currency
+		  ) < i.amount
+	`, invoiceID, currency)
+	if err != nil {
+		return fmt.Errorf("reopen invoice on reversal: %w", err)
+	}
+	return nil
+}
+
+// applyOperatorCreditClawbackTx writes operator_credit_ledger clawback
+// rows for each open accrual on the invoice, prorated by the reversed
+// amount over the invoice total. The clawback inherits the accrual's
+// cluster/period/currency so payout reporting nets cleanly. Idempotent on
+// the original-accrual id: a second reversal that would clawback the same
+// accrual upserts the amount delta rather than inserting a duplicate.
+func applyOperatorCreditClawbackTx(ctx context.Context, tx *sql.Tx, invoiceID, reversalID string, reversedCents int64) error {
+	if invoiceID == "" || reversedCents <= 0 {
+		return nil
+	}
+	// Read invoice total in cents (NUMERIC(10,2) → bigint via × 100).
+	var invoiceCents int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT (amount * 100)::bigint FROM purser.billing_invoices WHERE id = $1
+	`, invoiceID).Scan(&invoiceCents); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("read invoice amount for clawback: %w", err)
+	}
+	if invoiceCents <= 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, cluster_owner_tenant_id, cluster_id, currency, gross_cents, platform_fee_cents, payable_cents, period_start, period_end
+		FROM purser.operator_credit_ledger
+		WHERE invoice_id = $1
+		  AND entry_type = 'accrual'
+		  AND source_type = 'invoice_line'
+	`, invoiceID)
+	if err != nil {
+		return fmt.Errorf("list operator accruals: %w", err)
+	}
+	defer rows.Close()
+	type accrual struct {
+		id, ownerTenant, clusterID, currency string
+		gross, fee, payable                  int64
+		periodStart, periodEnd               time.Time
+	}
+	var todo []accrual
+	for rows.Next() {
+		var a accrual
+		if scanErr := rows.Scan(&a.id, &a.ownerTenant, &a.clusterID, &a.currency, &a.gross, &a.fee, &a.payable, &a.periodStart, &a.periodEnd); scanErr != nil {
+			return fmt.Errorf("scan operator accrual: %w", scanErr)
+		}
+		todo = append(todo, a)
+	}
+	if rErr := rows.Err(); rErr != nil {
+		return fmt.Errorf("iterate operator accruals: %w", rErr)
+	}
+	if len(todo) == 0 {
+		return nil
+	}
+	// Proration factor: reversedCents / invoiceCents. We compute each
+	// clawback in cents by (accrual.x * reversedCents / invoiceCents)
+	// using integer math so totals stay exact for typical refunds.
+	for _, a := range todo {
+		clawGross := (a.gross * reversedCents) / invoiceCents
+		clawFee := (a.fee * reversedCents) / invoiceCents
+		clawPayable := (a.payable * reversedCents) / invoiceCents
+		if clawGross == 0 && clawFee == 0 && clawPayable == 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO purser.operator_credit_ledger (
+				source_type, invoice_line_item_id, entry_type, reverses_ledger_id,
+				cluster_owner_tenant_id, cluster_id, invoice_id, period_start, period_end,
+				currency, gross_cents, platform_fee_cents, payable_cents, status, notes
+			)
+			SELECT 'invoice_line', ol.invoice_line_item_id, 'clawback', ol.id,
+			       ol.cluster_owner_tenant_id, ol.cluster_id, ol.invoice_id,
+			       ol.period_start, ol.period_end, ol.currency,
+			       -$2, -$3, -$4, 'clawed_back',
+			       jsonb_build_object('payment_reversal_id', $5::text)
+			FROM purser.operator_credit_ledger ol
+			WHERE ol.id = $1
+		`, a.id, clawGross, clawFee, clawPayable, reversalID); err != nil {
+			return fmt.Errorf("insert clawback for accrual %s: %w", a.id, err)
+		}
+		// Mark the original accrual clawed_back if the clawback fully
+		// covers the payable amount; otherwise leave at its current state.
+		if clawPayable >= a.payable {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE purser.operator_credit_ledger
+				SET status = 'clawed_back', updated_at = NOW()
+				WHERE id = $1 AND status IN ('held', 'accruing', 'eligible')
+			`, a.id); err != nil {
+				return fmt.Errorf("mark accrual clawed_back: %w", err)
+			}
+		}
+	}
+	// Tie the operator-credit ledger movement to the reversal row for
+	// audit lookups.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE purser.payment_reversals
+		SET operator_credit_ledger_id = (
+		    SELECT id FROM purser.operator_credit_ledger
+		    WHERE invoice_id = $1 AND entry_type = 'clawback'
+		    ORDER BY created_at DESC LIMIT 1
+		),
+		updated_at = NOW()
+		WHERE id = $2
+	`, invoiceID, reversalID); err != nil {
+		return fmt.Errorf("link reversal to clawback ledger row: %w", err)
+	}
+	return nil
+}
+
+// applyPrepaidTopupReversalTx writes the negative balance_transactions row
+// for a refunded prepaid top-up. If the refund would drop the prepaid
+// balance below zero, operator_review_required is flipped TRUE on the
+// reversal row so ops can decide whether to recollect or write off.
+func applyPrepaidTopupReversalTx(ctx context.Context, tx *sql.Tx, tenantID, topupID, reversalID string, amountCents int64, currency, reason string) error {
+	// Increment the refunded marker on pending_topups.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE purser.pending_topups
+		SET refunded_amount_cents = refunded_amount_cents + $1, updated_at = NOW()
+		WHERE id = $2
+	`, amountCents, topupID); err != nil {
+		return fmt.Errorf("credit pending_topups refunded_amount_cents: %w", err)
+	}
+
+	// Look at the current balance before debiting so we can flag negative.
+	var currentBalance int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT balance_cents FROM purser.prepaid_balances
+		WHERE tenant_id = $1 AND currency = $2
+	`, tenantID, currency).Scan(&currentBalance); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("read prepaid balance: %w", err)
+	}
+	willGoNegative := currentBalance < amountCents
+
+	// Negative balance transaction. Idempotent on (tenant_id, reference_type,
+	// reference_id) where reference_id is the reversal row id.
+	reversalUUID, err := uuid.Parse(reversalID)
+	if err != nil {
+		return fmt.Errorf("parse reversal id: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO purser.balance_transactions (
+			tenant_id, amount_cents, balance_after_cents, transaction_type,
+			description, reference_id, reference_type, actor_kind, reason
+		)
+		SELECT $1,
+		       -$2,
+		       COALESCE((SELECT balance_cents FROM purser.prepaid_balances WHERE tenant_id = $1 AND currency = $3), 0) - $2,
+		       'refund', $4, $5, 'payment_reversal', 'webhook', $6
+		ON CONFLICT (tenant_id, reference_type, reference_id) DO NOTHING
+	`, tenantID, amountCents, currency, fmt.Sprintf("Refund/chargeback %s", reason), reversalUUID, reason); err != nil {
+		return fmt.Errorf("insert reversal balance_transaction: %w", err)
+	}
+
+	// Apply to the live balance.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE purser.prepaid_balances
+		SET balance_cents = balance_cents - $1, updated_at = NOW()
+		WHERE tenant_id = $2 AND currency = $3
+	`, amountCents, tenantID, currency); err != nil {
+		return fmt.Errorf("debit prepaid balance: %w", err)
+	}
+
+	if willGoNegative {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE purser.payment_reversals
+			SET operator_review_required = TRUE, updated_at = NOW()
+			WHERE id = $1
+		`, reversalUUID); err != nil {
+			return fmt.Errorf("flag reversal for operator review: %w", err)
+		}
+		logger.WithFields(logging.Fields{
+			"tenant_id":    tenantID,
+			"reversal_id":  reversalID,
+			"amount_cents": amountCents,
+			"currency":     currency,
+		}).Warn("Prepaid balance reversal would go negative; flagged for operator review")
+	}
+
+	return nil
+}
+
+func nullableString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func nullableUUIDString(s string) any {
+	if s == "" {
+		return nil
+	}
+	if _, err := uuid.Parse(s); err != nil {
+		return nil
+	}
+	return s
+}
+
+type providerPaymentObjectInput struct {
+	provider         string
+	objectType       string
+	providerObjectID string
+	tenantID         string
+	localRefType     string
+	localRefID       string
+	intentID         string
+	metadata         map[string]any
+}
+
+func upsertProviderPaymentObject(ctx context.Context, in providerPaymentObjectInput) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	if in.provider == "" || in.objectType == "" || in.providerObjectID == "" {
+		return fmt.Errorf("missing provider object identity")
+	}
+	metadata := []byte(`{}`)
+	if in.metadata != nil {
+		b, err := json.Marshal(in.metadata)
+		if err != nil {
+			return fmt.Errorf("marshal provider object metadata: %w", err)
+		}
+		metadata = b
+	}
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO purser.provider_payment_objects (
+			provider, object_type, provider_object_id, tenant_id,
+			local_reference_type, local_reference_id, intent_id, metadata,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, NOW(), NOW())
+		ON CONFLICT (provider, object_type, provider_object_id) DO UPDATE SET
+			tenant_id = COALESCE(EXCLUDED.tenant_id, purser.provider_payment_objects.tenant_id),
+			local_reference_type = COALESCE(EXCLUDED.local_reference_type, purser.provider_payment_objects.local_reference_type),
+			local_reference_id = COALESCE(EXCLUDED.local_reference_id, purser.provider_payment_objects.local_reference_id),
+			intent_id = COALESCE(EXCLUDED.intent_id, purser.provider_payment_objects.intent_id),
+			metadata = purser.provider_payment_objects.metadata || EXCLUDED.metadata,
+			updated_at = NOW()
+	`, in.provider, in.objectType, in.providerObjectID,
+		nullableUUIDString(in.tenantID), nullableString(in.localRefType),
+		nullableUUIDString(in.localRefID), nullableUUIDString(in.intentID),
+		string(metadata))
+	if err != nil {
+		return fmt.Errorf("upsert provider payment object: %w", err)
+	}
+	return nil
+}
+
+// applyMolliePaymentReversalsIfAny reconciles Mollie's cumulative refunded /
+// charged-back totals by applying only the not-yet-recorded delta.
+func applyMolliePaymentReversalsIfAny(ctx context.Context, payment *mollie.Payment) (bool, error) {
+	if payment == nil {
+		return false, nil
+	}
+	applied := false
+	if payment.AmountRefunded != nil {
+		cents, _, err := mollieAmountToCents(payment.AmountRefunded.Value, payment.AmountRefunded.Currency)
+		if err != nil {
+			return applied, err
+		}
+		delta, err := mollieReversalDelta(ctx, "refund", payment.ID, cents)
+		if err != nil {
+			return applied, err
+		}
+		if delta > 0 {
+			didApply, applyErr := applyProviderReversal(ctx, providerReversalInput{
+				provider:           "mollie",
+				reversalType:       "refund",
+				providerReversalID: fmt.Sprintf("mollie-refund:%s:%d", payment.ID, cents),
+				providerChargeID:   payment.ID,
+				providerPaymentID:  payment.ID,
+				amountCents:        delta,
+				currency:           strings.ToUpper(payment.AmountRefunded.Currency),
+				reason:             "refund",
+			})
+			if applyErr != nil {
+				return applied, applyErr
+			}
+			if didApply {
+				applied = true
+			}
+		}
+	}
+	if payment.AmountChargedBack != nil {
+		cents, _, err := mollieAmountToCents(payment.AmountChargedBack.Value, payment.AmountChargedBack.Currency)
+		if err != nil {
+			return applied, err
+		}
+		delta, err := mollieReversalDelta(ctx, "chargeback", payment.ID, cents)
+		if err != nil {
+			return applied, err
+		}
+		if delta > 0 {
+			didApply, applyErr := applyProviderReversal(ctx, providerReversalInput{
+				provider:           "mollie",
+				reversalType:       "chargeback",
+				providerReversalID: fmt.Sprintf("mollie-chargeback:%s:%d", payment.ID, cents),
+				providerChargeID:   payment.ID,
+				providerPaymentID:  payment.ID,
+				amountCents:        delta,
+				currency:           strings.ToUpper(payment.AmountChargedBack.Currency),
+				reason:             "chargeback",
+			})
+			if applyErr != nil {
+				return applied, applyErr
+			}
+			if didApply {
+				applied = true
+			}
+		}
+	}
+	return applied, nil
+}
+
+func mollieReversalDelta(ctx context.Context, reversalType, paymentID string, cumulativeCents int64) (int64, error) {
+	prefix := fmt.Sprintf("mollie-%s:%s:", reversalType, paymentID)
+	var alreadyApplied int64
+	if err := db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(amount_cents), 0)
+		FROM purser.payment_reversals
+		WHERE provider = 'mollie'
+		  AND reversal_type = $1
+		  AND provider_reversal_id LIKE $2
+		  AND status = 'succeeded'
+	`, reversalType, prefix+"%").Scan(&alreadyApplied); err != nil {
+		return 0, fmt.Errorf("lookup Mollie reversal delta: %w", err)
+	}
+	if cumulativeCents <= alreadyApplied {
+		return 0, nil
+	}
+	return cumulativeCents - alreadyApplied, nil
+}
+
+func upsertMolliePaymentObservation(ctx context.Context, tenantID string, payment *mollie.Payment, rawBody []byte) error {
+	if tenantID == "" {
+		return fmt.Errorf("missing tenant_id for Mollie payment observation")
+	}
+	if payment == nil || payment.ID == "" {
+		return fmt.Errorf("missing Mollie payment for observation")
+	}
+	if payment.Amount == nil {
+		return fmt.Errorf("missing Mollie payment amount for observation")
+	}
+	amountCents, _, err := mollieAmountToCents(payment.Amount.Value, payment.Amount.Currency)
+	if err != nil {
+		return err
+	}
+	var paidAt *time.Time
+	if payment.PaidAt != nil {
+		t := *payment.PaidAt
+		paidAt = &t
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO purser.mollie_payment_observations (
+			tenant_id, mollie_payment_id, mollie_subscription_id, mollie_mandate_id,
+			sequence_type, status, amount_cents, currency, paid_at, raw_payload
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		ON CONFLICT (mollie_payment_id) DO UPDATE SET
+			status = EXCLUDED.status,
+			amount_cents = EXCLUDED.amount_cents,
+			currency = EXCLUDED.currency,
+			paid_at = EXCLUDED.paid_at,
+			attempt_count = purser.mollie_payment_observations.attempt_count + 1,
+			updated_at = NOW()
+	`, tenantID, payment.ID, payment.SubscriptionID, payment.MandateID,
+		string(payment.SequenceType), strings.ToLower(payment.Status),
+		amountCents, payment.Amount.Currency, paidAt, rawBody)
+	return err
+}
+
+// drainMolliePaymentObservationsForInvoice attaches any unresolved Mollie
+// subscription payment observations that belong to the given invoice's
+// tenant and subscription, inserting billing_payments rows and routing them
+// through the partial-payment-aware settlement helper. Called after invoice
+// finalization commits so the newly-finalized invoice can consume observations
+// the webhook handler parked earlier.
+func drainMolliePaymentObservationsForInvoice(ctx context.Context, invoiceID string) error {
+	if db == nil || invoiceID == "" {
+		return nil
+	}
+	var tenantID, subscriptionID, invoiceCurrency string
+	var periodStart, periodEnd sql.NullTime
+	err := db.QueryRowContext(ctx, `
+		SELECT bi.tenant_id, COALESCE(ts.mollie_subscription_id, ''), bi.currency,
+		       bi.period_start, bi.period_end
+		FROM purser.billing_invoices bi
+		JOIN purser.tenant_subscriptions ts ON ts.tenant_id = bi.tenant_id
+		WHERE bi.id = $1
+	`, invoiceID).Scan(&tenantID, &subscriptionID, &invoiceCurrency, &periodStart, &periodEnd)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lookup invoice for observation drain: %w", err)
+	}
+	if subscriptionID == "" {
+		return nil
+	}
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT mollie_payment_id, status, amount_cents, currency, paid_at
+		FROM purser.mollie_payment_observations
+		WHERE tenant_id = $1
+		  AND mollie_subscription_id = $2
+		  AND resolved_at IS NULL
+		  AND ($3::timestamptz IS NULL OR paid_at IS NULL OR paid_at >= $3)
+		  AND ($4::timestamptz IS NULL OR paid_at IS NULL OR paid_at <= $4)
+		ORDER BY created_at ASC
+	`, tenantID, subscriptionID, periodStart, periodEnd)
+	if err != nil {
+		return fmt.Errorf("list mollie observations: %w", err)
+	}
+	defer rows.Close()
+
+	type pending struct {
+		paymentID string
+		status    string
+		cents     int64
+		currency  string
+	}
+	var todo []pending
+	for rows.Next() {
+		var p pending
+		var paidAt sql.NullTime
+		if scanErr := rows.Scan(&p.paymentID, &p.status, &p.cents, &p.currency, &paidAt); scanErr != nil {
+			return fmt.Errorf("scan mollie observation: %w", scanErr)
+		}
+		todo = append(todo, p)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("iterate mollie observations: %w", rowsErr)
+	}
+
+	for _, p := range todo {
+		mapped, ok := mapMolliePaymentStatus(p.status)
+		if !ok {
+			continue
+		}
+		if p.currency != invoiceCurrency {
+			// Currency mismatch: refuse to settle against this invoice.
+			// The observation stays unresolved for operator review rather
+			// than being silently dropped.
+			logger.WithFields(logging.Fields{
+				"mollie_payment_id": p.paymentID,
+				"invoice_id":        invoiceID,
+				"observed_currency": p.currency,
+				"invoice_currency":  invoiceCurrency,
+			}).Warn("Mollie observation currency does not match invoice; leaving unresolved")
+			continue
+		}
+		amountStr := centsToDecimalString(p.cents, p.currency)
+		if _, insertErr := db.ExecContext(ctx, `
+			INSERT INTO purser.billing_payments (invoice_id, method, amount, currency, tx_id, status, created_at, updated_at)
+			VALUES ($1, 'card', $2::numeric, $3, $4, 'pending', NOW(), NOW())
+			ON CONFLICT DO NOTHING
+		`, invoiceID, amountStr, p.currency, p.paymentID); insertErr != nil {
+			return fmt.Errorf("insert drained mollie payment %s: %w", p.paymentID, insertErr)
+		}
+		if _, settleErr := updateInvoicePaymentStatus("mollie", p.paymentID, invoiceID, mapped); settleErr != nil {
+			return fmt.Errorf("settle drained mollie payment %s: %w", p.paymentID, settleErr)
+		}
+		if _, resErr := db.ExecContext(ctx, `
+			UPDATE purser.mollie_payment_observations
+			SET resolved_at = NOW(), resolution = 'attached', invoice_id = $1, updated_at = NOW()
+			WHERE mollie_payment_id = $2
+		`, invoiceID, p.paymentID); resErr != nil {
+			return fmt.Errorf("mark mollie observation resolved %s: %w", p.paymentID, resErr)
+		}
+	}
+	return nil
 }
 
 // resolveMollieSubscriptionInvoice finds the local invoice that the given
@@ -1152,15 +2185,48 @@ func mollieMetadataString(meta any, key string) string {
 	return ""
 }
 
+// mollieAmountToCents converts a Mollie amount string (e.g. "9.95") to integer
+// minor units using exact decimal parsing. Float intermediates are not used
+// because they round at fractional cents. The exponent comes from the
+// currency: Mollie's two-decimal currencies (EUR, USD, GBP, etc.) use ×100;
+// zero-decimal currencies (JPY, ISK) use ×1; three-decimal (BHD, KWD, OMR)
+// use ×1000.
 func mollieAmountToCents(value, currency string) (int64, string, error) {
 	if value == "" || currency == "" {
 		return 0, "", fmt.Errorf("missing Mollie amount")
 	}
-	parsed, err := strconv.ParseFloat(value, 64)
+	exponent := currencyMinorUnitExponent(currency)
+	d, err := decimal.NewFromString(value)
 	if err != nil {
-		return 0, "", fmt.Errorf("invalid Mollie amount: %w", err)
+		return 0, "", fmt.Errorf("invalid Mollie amount %q: %w", value, err)
 	}
-	return int64(math.Round(parsed * 100)), currency, nil
+	scaled := d.Shift(int32(exponent))
+	if !scaled.Equal(scaled.Truncate(0)) {
+		return 0, "", fmt.Errorf("mollie amount %q has more precision than %s allows", value, currency)
+	}
+	cents := scaled.IntPart()
+	return cents, currency, nil
+}
+
+// currencyMinorUnitExponent returns the number of decimal places used by the
+// currency's minor unit. Stripe and Mollie agree on these exponents.
+func currencyMinorUnitExponent(currency string) int {
+	switch strings.ToUpper(currency) {
+	case "JPY", "ISK", "KRW", "VND", "CLP", "PYG", "RWF", "UGX", "XAF", "XOF":
+		return 0
+	case "BHD", "KWD", "OMR", "JOD", "TND":
+		return 3
+	default:
+		return 2
+	}
+}
+
+// centsToDecimalString renders integer minor units as a fixed-point decimal
+// string ("995" with exponent 2 -> "9.95") for binding to NUMERIC columns.
+// Avoids any float intermediate so values round-trip exactly.
+func centsToDecimalString(cents int64, currency string) string {
+	exponent := currencyMinorUnitExponent(currency)
+	return decimal.New(cents, int32(-exponent)).StringFixed(int32(exponent))
 }
 
 func mapMolliePaymentStatus(status string) (string, bool) {
@@ -1218,6 +2284,8 @@ func updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) (bo
 	}
 	if invoiceID == "" {
 		invoiceID = foundInvoiceID
+	} else if foundInvoiceID != "" && foundInvoiceID != invoiceID {
+		return false, fmt.Errorf("provider payment %s is linked to invoice %s, not webhook invoice %s", txID, foundInvoiceID, invoiceID)
 	}
 
 	var confirmedAt *time.Time
@@ -1234,6 +2302,23 @@ func updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) (bo
 	if err != nil {
 		return false, fmt.Errorf("failed to update payment status: %w", err)
 	}
+	attemptStatus := newStatus
+	switch newStatus {
+	case "confirmed":
+		attemptStatus = "succeeded"
+	case "failed":
+		attemptStatus = "failed"
+	}
+	if _, err = tx.ExecContext(ctx, `
+		UPDATE purser.billing_payment_attempts
+		SET status = $1,
+		    provider_payment_id = COALESCE(provider_payment_id, NULLIF($2, '')),
+		    next_retry_at = NULL,
+		    updated_at = NOW()
+		WHERE payment_id = $3 AND provider = $4
+	`, attemptStatus, txID, paymentID, provider); err != nil {
+		return false, fmt.Errorf("failed to update payment attempt status: %w", err)
+	}
 
 	if invoiceID == "" {
 		if err = tx.Commit(); err != nil {
@@ -1244,16 +2329,26 @@ func updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) (bo
 	}
 
 	if newStatus == "confirmed" {
+		// Settlement is partial-payment-aware and same-currency only. Sum
+		// confirmed payments in the invoice's currency minus reversed
+		// amounts; the invoice flips to paid only when net confirmed
+		// payments cover the invoice amount. paid_at is set to the first
+		// time the invoice reaches fully-paid and preserved if a later
+		// refund reopens the invoice.
 		result, updateErr := tx.ExecContext(ctx, `
-			UPDATE purser.billing_invoices
-			SET status = 'paid', paid_at = $1, updated_at = NOW()
-			WHERE id = $2
-			  AND status IN ('pending', 'overdue')
+			UPDATE purser.billing_invoices i
+			SET status = 'paid',
+			    paid_at = COALESCE(i.paid_at, $1),
+			    updated_at = NOW()
+			WHERE i.id = $2
+			  AND i.status IN ('pending', 'overdue')
 			  AND (
-			      SELECT COALESCE(SUM(amount), 0)
-			      FROM purser.billing_payments
-			      WHERE invoice_id = $2 AND status = 'confirmed'
-			  ) >= amount
+			      SELECT COALESCE(SUM(p.amount - COALESCE(p.reversed_amount_cents, 0)::numeric / 100), 0)
+			      FROM purser.billing_payments p
+			      WHERE p.invoice_id = i.id
+			        AND p.status = 'confirmed'
+			        AND p.currency = i.currency
+			  ) >= i.amount
 		`, now, invoiceID)
 		if updateErr != nil {
 			logger.WithFields(logging.Fields{

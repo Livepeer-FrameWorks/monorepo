@@ -129,12 +129,19 @@ func flattenUsageAcrossClusters(perCluster map[string]map[string]float64) map[st
 //
 // Returns ManualReviewReasons set when any cluster's pricing fails
 // resolvably. The caller halts finalization in that case.
+// baseProviderManaged signals that the tier base fee is collected by an
+// external recurring subscription (Stripe / Mollie) rather than by Purser.
+// When true, rateInvoiceForTenant still emits a base line but priced at zero
+// and stamped with pricing_source = 'included_subscription' so the line
+// appears in the invoice ledger as an informational row without being charged
+// twice. Self-managed (free / prepaid-only / wire-transfer) subs pass false.
 func (jm *JobManager) rateInvoiceForTenant(
 	ctx context.Context,
 	tenantID string,
 	periodStart, periodEnd time.Time,
 	tier *billingpkg.EffectiveTier,
 	includeBasePrice bool,
+	baseProviderManaged bool,
 	perClusterUsage map[string]map[string]float64,
 ) (*clusterRatingResult, error) {
 	if tier == nil {
@@ -158,14 +165,25 @@ func (jm *JobManager) rateInvoiceForTenant(
 	}
 
 	// 1. Base subscription line — rated once, tenant-scoped (no cluster_id).
+	// For provider-managed subs the external provider (Stripe / Mollie) owns
+	// the recurring base charge, so the Purser invoice records a $0
+	// informational line tagged 'included_subscription' instead of double-
+	// billing the tenant. Description stays neutral because provider-managed
+	// subscriptions can be card, mandate, or bank-backed.
 	basePrice := decimal.Zero
-	if includeBasePrice && (tier.MeteringEnabled || !tier.BasePrice.IsZero()) {
+	if includeBasePrice && !baseProviderManaged && (tier.MeteringEnabled || !tier.BasePrice.IsZero()) {
 		basePrice = tier.BasePrice
+	}
+	baseDescription := "Base subscription"
+	basePricingSource := pricing.SourceTier
+	if baseProviderManaged {
+		baseDescription = "Base subscription (paid through your subscription)"
+		basePricingSource = pricing.SourceIncludedSubscription
 	}
 	out.BaseLine = pricedLine{
 		LineItem: rating.LineItem{
 			LineKey:          rating.LineKeyBaseSubscription,
-			Description:      "Base subscription",
+			Description:      baseDescription,
 			Quantity:         decimal.NewFromInt(1),
 			IncludedQuantity: decimal.Zero,
 			BillableQuantity: decimal.NewFromInt(1),
@@ -173,7 +191,7 @@ func (jm *JobManager) rateInvoiceForTenant(
 			Amount:           basePrice,
 			Currency:         tier.Currency,
 		},
-		PricingSource: pricing.SourceTier,
+		PricingSource: basePricingSource,
 	}
 	out.BaseAmount = basePrice
 

@@ -5,8 +5,6 @@
 -- payment exists.
 -- Schema source of truth: pkg/database/sql/schema/purser.sql
 
-DROP INDEX IF EXISTS purser.idx_purser_billing_payments_pending_invoice_method;
-
 CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_billing_payments_pending_invoice_method
     ON purser.billing_payments(invoice_id, method)
     WHERE status = 'pending' AND tx_id IS NULL;

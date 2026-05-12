@@ -34,7 +34,10 @@ func TestRecordBalanceTransaction_DuplicateReferenceReturnsExisting(t *testing.T
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO purser.balance_transactions").
-		WithArgs(sqlmock.AnyArg(), tenantID, amountCents, txType, description, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(
+			sqlmock.AnyArg(), tenantID, amountCents, txType, description,
+			sqlmock.AnyArg(), sqlmock.AnyArg(), "system", nil, description, referenceID, sqlmock.AnyArg(),
+		).
 		WillReturnError(sql.ErrNoRows)
 
 	createdAt := time.Now().Add(-1 * time.Minute)

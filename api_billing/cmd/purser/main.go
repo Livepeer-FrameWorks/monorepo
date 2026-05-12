@@ -203,7 +203,7 @@ func main() {
 	}
 
 	// Initialize handlers
-	handlers.Init(db, logger, handlerMetrics, qmGRPCClient, mollieClient, decklogClient)
+	handlers.Init(db, logger, handlerMetrics, qmGRPCClient, mollieClient, stripeClient, decklogClient)
 
 	// Shared tier reconciler — used by PurserServer.ChangeBillingTier and
 	// by JobManager's downgrade applier so both apply the same grant/suspend

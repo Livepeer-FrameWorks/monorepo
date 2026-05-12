@@ -2,6 +2,7 @@ package stripe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -14,10 +15,10 @@ import (
 	"github.com/stripe/stripe-go/v82/billingportal/session"
 	checkoutsession "github.com/stripe/stripe-go/v82/checkout/session"
 	"github.com/stripe/stripe-go/v82/customer"
+	"github.com/stripe/stripe-go/v82/paymentintent"
 	stripeprice "github.com/stripe/stripe-go/v82/price"
 	stripeproduct "github.com/stripe/stripe-go/v82/product"
 	"github.com/stripe/stripe-go/v82/subscription"
-	"github.com/stripe/stripe-go/v82/webhook"
 )
 
 // Client wraps Stripe API operations for subscription management.
@@ -96,20 +97,24 @@ func (c *Client) CreateOrGetCustomer(ctx context.Context, info CustomerInfo) (*s
 
 // CheckoutSessionParams for creating a checkout session
 type CheckoutSessionParams struct {
-	CustomerID  string // Stripe customer ID
-	TenantID    string // For metadata
-	TierID      string // For metadata
-	Purpose     string // subscription, cluster_subscription, etc.
-	ReferenceID string // tier_id, cluster_id, etc.
-	ClusterID   string // For cluster subscriptions
-	PriceID     string // Stripe Price ID (monthly or yearly)
-	SuccessURL  string
-	CancelURL   string
-	TrialDays   int64 // Optional trial period
+	CustomerID     string // Stripe customer ID
+	TenantID       string // For metadata
+	TierID         string // For metadata
+	Purpose        string // subscription, cluster_subscription, etc.
+	ReferenceID    string // tier_id, cluster_id, etc.
+	ClusterID      string // For cluster subscriptions
+	PriceID        string // Stripe Price ID (monthly or yearly)
+	SuccessURL     string
+	CancelURL      string
+	TrialDays      int64 // Optional trial period
+	IdempotencyKey string
 }
 
 // CreateCheckoutSession creates a Stripe Checkout Session for subscription
 func (c *Client) CreateCheckoutSession(ctx context.Context, params CheckoutSessionParams) (*stripe.CheckoutSession, error) {
+	if params.IdempotencyKey == "" {
+		return nil, fmt.Errorf("CreateCheckoutSession requires a deterministic IdempotencyKey")
+	}
 	metadata := map[string]string{
 		"tenant_id": params.TenantID,
 	}
@@ -148,6 +153,7 @@ func (c *Client) CreateCheckoutSession(ctx context.Context, params CheckoutSessi
 		subscriptionData.TrialPeriodDays = stripe.Int64(params.TrialDays)
 	}
 	sessionParams.SubscriptionData = subscriptionData
+	sessionParams.SetIdempotencyKey(params.IdempotencyKey)
 
 	sess, err := checkoutsession.New(sessionParams)
 	if err != nil {
@@ -161,6 +167,150 @@ func (c *Client) CreateCheckoutSession(ctx context.Context, params CheckoutSessi
 	}).Info("Created Stripe checkout session")
 
 	return sess, nil
+}
+
+// OffSessionChargeParams describes a Purser-owned off-session charge for
+// metered overage on a finalized invoice. The PaymentMethodID is the
+// customer's saved card; if empty, Stripe falls back to the customer's
+// default payment method. IdempotencyKey is required and must be
+// deterministic on (invoice, attempt) so retries collapse to one charge.
+type OffSessionChargeParams struct {
+	CustomerID       string
+	PaymentMethodID  string
+	TenantID         string
+	InvoiceID        string
+	BillingPaymentID string
+	AmountCents      int64
+	Currency         string
+	IdempotencyKey   string
+	Description      string
+}
+
+// OffSessionChargeResult is the slim shape callers consume. SCARequired
+// distinguishes the "needs customer action" outcome from generic
+// success/failure so the caller can park the local intent and notify the
+// customer instead of retrying. NextAction.HostedURL holds Stripe's
+// authentication URL when set.
+type OffSessionChargeResult struct {
+	PaymentIntentID string
+	Status          string
+	SCARequired     bool
+	NextActionURL   string
+	FailureCode     string
+	FailureMessage  string
+	AmountReceived  int64
+}
+
+// ChargeOffSession creates a Stripe PaymentIntent for the customer's saved
+// payment method and confirms it off-session. Success means Stripe captured
+// the charge synchronously; the corresponding payment_intent.succeeded
+// webhook still flows through the partial-payment-aware settlement so
+// retries and out-of-order events stay consistent. SCA-required is
+// surfaced as SCARequired=true so the caller does NOT mark the attempt
+// failed — the customer must complete authentication via NextActionURL.
+func (c *Client) ChargeOffSession(ctx context.Context, params OffSessionChargeParams) (*OffSessionChargeResult, error) {
+	if params.IdempotencyKey == "" {
+		return nil, fmt.Errorf("ChargeOffSession requires a deterministic IdempotencyKey")
+	}
+	if params.CustomerID == "" {
+		return nil, fmt.Errorf("ChargeOffSession requires a Stripe customer id")
+	}
+	if params.AmountCents <= 0 {
+		return nil, fmt.Errorf("ChargeOffSession amount must be positive, got %d", params.AmountCents)
+	}
+	if params.Currency == "" {
+		return nil, fmt.Errorf("ChargeOffSession requires a currency")
+	}
+
+	piParams := &stripe.PaymentIntentParams{
+		Amount:     stripe.Int64(params.AmountCents),
+		Currency:   stripe.String(strings.ToLower(params.Currency)),
+		Customer:   stripe.String(params.CustomerID),
+		Confirm:    stripe.Bool(true),
+		OffSession: stripe.Bool(true),
+	}
+	if params.PaymentMethodID != "" {
+		piParams.PaymentMethod = stripe.String(params.PaymentMethodID)
+	}
+	if params.Description != "" {
+		piParams.Description = stripe.String(params.Description)
+	}
+	piParams.Metadata = map[string]string{
+		"tenant_id":          params.TenantID,
+		"invoice_id":         params.InvoiceID,
+		"billing_payment_id": params.BillingPaymentID,
+		"purpose":            "overage",
+	}
+	piParams.IdempotencyKey = stripe.String(params.IdempotencyKey)
+
+	pi, err := paymentintent.New(piParams)
+	if err != nil {
+		// Stripe surfaces SCA-required as an API error with
+		// code="authentication_required". Treat that distinctly.
+		var apiErr *stripe.Error
+		if errors.As(err, &apiErr) {
+			if apiErr.Code == stripe.ErrorCodeAuthenticationRequired {
+				return &OffSessionChargeResult{
+					PaymentIntentID: extractStripePaymentIntentID(apiErr),
+					Status:          "requires_action",
+					SCARequired:     true,
+					FailureCode:     string(apiErr.Code),
+					FailureMessage:  apiErr.Msg,
+				}, nil
+			}
+			// Generic API errors (card_declined, expired_card, etc.)
+			// become failed attempts the caller can retry with backoff.
+			return &OffSessionChargeResult{
+				PaymentIntentID: extractStripePaymentIntentID(apiErr),
+				Status:          "failed",
+				FailureCode:     string(apiErr.Code),
+				FailureMessage:  apiErr.Msg,
+			}, nil
+		}
+		return nil, fmt.Errorf("failed to create off-session PaymentIntent: %w", err)
+	}
+
+	result := &OffSessionChargeResult{
+		PaymentIntentID: pi.ID,
+		Status:          string(pi.Status),
+		AmountReceived:  pi.AmountReceived,
+	}
+	if pi.Status == stripe.PaymentIntentStatusRequiresAction {
+		result.SCARequired = true
+		if pi.NextAction != nil && pi.NextAction.RedirectToURL != nil {
+			result.NextActionURL = pi.NextAction.RedirectToURL.URL
+		}
+	}
+	c.logger.WithFields(map[string]any{
+		"payment_intent_id": pi.ID,
+		"status":            pi.Status,
+		"customer_id":       params.CustomerID,
+		"invoice_id":        params.InvoiceID,
+	}).Info("Created Stripe off-session PaymentIntent")
+	return result, nil
+}
+
+// extractStripePaymentIntentID pulls the PaymentIntent id from a Stripe
+// API error when present. Stripe attaches the partially-created intent
+// id to authentication_required errors so the customer reauthorization
+// flow can resume against the same intent.
+func extractStripePaymentIntentID(err *stripe.Error) string {
+	if err == nil || err.PaymentIntent == nil {
+		return ""
+	}
+	return err.PaymentIntent.ID
+}
+
+// ExpireCheckoutSession expires an open Checkout Session so it cannot be paid.
+func (c *Client) ExpireCheckoutSession(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return nil
+	}
+	if _, err := checkoutsession.Expire(sessionID, nil); err != nil {
+		return fmt.Errorf("failed to expire checkout session: %w", err)
+	}
+	c.logger.WithField("session_id", sessionID).Info("Expired Stripe checkout session")
+	return nil
 }
 
 // CreateBillingPortalSession creates a session for customers to manage their subscription
@@ -247,68 +397,6 @@ func (c *Client) UpdateSubscription(ctx context.Context, subscriptionID, newPric
 	}).Info("Subscription updated")
 
 	return updatedSub, nil
-}
-
-// WebhookEvent represents a parsed and verified Stripe webhook event
-type WebhookEvent struct {
-	Type     string
-	ID       string
-	Data     map[string]any
-	RawEvent *stripe.Event
-}
-
-// VerifyAndParseWebhook verifies the webhook signature and parses the event
-func (c *Client) VerifyAndParseWebhook(payload []byte, signature string) (*stripe.Event, error) {
-	event, err := webhook.ConstructEvent(payload, signature, c.webhookSecret)
-	if err != nil {
-		return nil, fmt.Errorf("webhook signature verification failed: %w", err)
-	}
-	return &event, nil
-}
-
-// SubscriptionFromEvent extracts subscription data from a webhook event
-func (c *Client) SubscriptionFromEvent(event *stripe.Event) (*stripe.Subscription, error) {
-	switch event.Type {
-	case "customer.subscription.created",
-		"customer.subscription.updated",
-		"customer.subscription.deleted",
-		"customer.subscription.paused",
-		"customer.subscription.resumed":
-		var sub stripe.Subscription
-		if err := sub.UnmarshalJSON(event.Data.Raw); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal subscription: %w", err)
-		}
-		return &sub, nil
-	default:
-		return nil, fmt.Errorf("event type %s does not contain subscription data", event.Type)
-	}
-}
-
-// CheckoutSessionFromEvent extracts checkout session from a webhook event
-func (c *Client) CheckoutSessionFromEvent(event *stripe.Event) (*stripe.CheckoutSession, error) {
-	if event.Type != "checkout.session.completed" {
-		return nil, fmt.Errorf("event type %s is not checkout.session.completed", event.Type)
-	}
-
-	var sess stripe.CheckoutSession
-	if err := sess.UnmarshalJSON(event.Data.Raw); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal checkout session: %w", err)
-	}
-	return &sess, nil
-}
-
-// InvoiceFromEvent extracts invoice from a webhook event
-func (c *Client) InvoiceFromEvent(event *stripe.Event) (*stripe.Invoice, error) {
-	switch event.Type {
-	case "invoice.paid", "invoice.payment_failed", "invoice.created", "invoice.finalized":
-		var inv stripe.Invoice
-		if err := inv.UnmarshalJSON(event.Data.Raw); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal invoice: %w", err)
-		}
-		return &inv, nil
-	default:
-		return nil, fmt.Errorf("event type %s does not contain invoice data", event.Type)
-	}
 }
 
 // SubscriptionInfo contains extracted subscription details for database updates

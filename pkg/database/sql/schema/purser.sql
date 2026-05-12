@@ -681,7 +681,7 @@ CREATE TABLE IF NOT EXISTS purser.pending_topups (
     -- Provider-specific checkout/payment session ID
     -- Stripe: checkout session ID (cs_xxx)
     -- Mollie: payment ID (tr_xxx)
-    checkout_id VARCHAR(255) NOT NULL,
+    checkout_id VARCHAR(255),
 
     -- ===== AMOUNT =====
     amount_cents BIGINT NOT NULL,                 -- Amount to credit on success
@@ -1162,3 +1162,380 @@ CREATE INDEX IF NOT EXISTS idx_tenant_balance_rollups_last_topup ON purser.tenan
 ALTER TABLE purser.billing_tiers
   ADD COLUMN IF NOT EXISTS processes_live JSONB DEFAULT '[]',
   ADD COLUMN IF NOT EXISTS processes_vod JSONB DEFAULT '[]';
+
+-- ============================================================================
+-- PAYMENT PROVIDER INTENTS & RECONCILIATION
+-- ============================================================================
+-- Durable pre-provider-call intent rows, attempt history, provider object
+-- mapping, and reversal ledger that underpin Stripe/Mollie correctness.
+-- Inserted before every external side effect so a crash never leaves an
+-- orphan provider object.
+
+CREATE TABLE IF NOT EXISTS purser.payment_provider_intents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    provider VARCHAR(20) NOT NULL,
+    purpose VARCHAR(40) NOT NULL,
+    local_reference_type VARCHAR(40),
+    local_reference_id UUID,
+    provider_customer_id VARCHAR(255),
+    provider_session_id VARCHAR(255),
+    provider_subscription_id VARCHAR(255),
+    provider_payment_id VARCHAR(255),
+    status VARCHAR(40) NOT NULL DEFAULT 'pending',
+    currency CHAR(3) NOT NULL,
+    amount_cents BIGINT NOT NULL DEFAULT 0,
+    idempotency_key VARCHAR(128) NOT NULL,
+    last_error TEXT,
+    attempt_count INT NOT NULL DEFAULT 0,
+    succeeded_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_payment_intent_provider CHECK (provider IN ('stripe', 'mollie')),
+    CONSTRAINT chk_payment_intent_purpose CHECK (purpose IN (
+        'tenant_subscription_checkout',
+        'cluster_subscription_checkout',
+        'mollie_first_payment',
+        'mollie_subscription_create',
+        'stripe_overage_charge',
+        'mollie_overage_charge',
+        'prepaid_topup'
+    )),
+    CONSTRAINT chk_payment_intent_status CHECK (status IN (
+        'pending', 'provider_open', 'sca_required',
+        'succeeded', 'expired', 'cancelled',
+        'provider_call_failed', 'terminal_failed'
+    ))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_provider_intents_idem
+    ON purser.payment_provider_intents(provider, idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_payment_provider_intents_tenant
+    ON purser.payment_provider_intents(tenant_id, purpose, status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_provider_intents_session
+    ON purser.payment_provider_intents(provider, provider_session_id)
+    WHERE provider_session_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_provider_intents_payment
+    ON purser.payment_provider_intents(provider, provider_payment_id)
+    WHERE provider_payment_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_provider_intents_subscription
+    ON purser.payment_provider_intents(provider, provider_subscription_id)
+    WHERE provider_subscription_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_payment_provider_intents_local_ref
+    ON purser.payment_provider_intents(local_reference_type, local_reference_id)
+    WHERE local_reference_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS purser.provider_payment_objects (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider VARCHAR(20) NOT NULL,
+    object_type VARCHAR(40) NOT NULL,
+    provider_object_id VARCHAR(255) NOT NULL,
+    tenant_id UUID,
+    local_reference_type VARCHAR(40),
+    local_reference_id UUID,
+    intent_id UUID REFERENCES purser.payment_provider_intents(id),
+    metadata JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_provider_payment_object_provider CHECK (provider IN ('stripe', 'mollie')),
+    CONSTRAINT chk_provider_payment_object_type CHECK (object_type IN (
+        'customer', 'subscription', 'invoice',
+        'payment_intent', 'charge', 'refund', 'dispute',
+        'payment', 'mandate', 'chargeback'
+    ))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_payment_objects
+    ON purser.provider_payment_objects(provider, object_type, provider_object_id);
+CREATE INDEX IF NOT EXISTS idx_provider_payment_objects_tenant
+    ON purser.provider_payment_objects(tenant_id, object_type)
+    WHERE tenant_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_provider_payment_objects_local_ref
+    ON purser.provider_payment_objects(local_reference_type, local_reference_id)
+    WHERE local_reference_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_provider_payment_objects_intent
+    ON purser.provider_payment_objects(intent_id)
+    WHERE intent_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS purser.billing_payment_attempts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    payment_id UUID NOT NULL REFERENCES purser.billing_payments(id) ON DELETE CASCADE,
+    intent_id UUID REFERENCES purser.payment_provider_intents(id),
+    attempt_number INT NOT NULL,
+    idempotency_key VARCHAR(128) NOT NULL,
+    provider VARCHAR(20) NOT NULL,
+    provider_payment_id VARCHAR(255),
+    status VARCHAR(40) NOT NULL DEFAULT 'pending',
+    failure_code VARCHAR(100),
+    failure_message TEXT,
+    next_retry_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_billing_payment_attempt_provider CHECK (provider IN ('stripe', 'mollie')),
+    CONSTRAINT chk_billing_payment_attempt_status CHECK (status IN (
+        'pending', 'provider_open', 'sca_required',
+        'succeeded', 'failed', 'expired', 'cancelled',
+        'provider_call_failed'
+    ))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_payment_attempts_seq
+    ON purser.billing_payment_attempts(payment_id, attempt_number);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_payment_attempts_idem
+    ON purser.billing_payment_attempts(provider, idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_billing_payment_attempts_next_retry
+    ON purser.billing_payment_attempts(next_retry_at, status)
+    WHERE next_retry_at IS NOT NULL AND status = 'provider_call_failed';
+CREATE INDEX IF NOT EXISTS idx_billing_payment_attempts_provider_id
+    ON purser.billing_payment_attempts(provider, provider_payment_id)
+    WHERE provider_payment_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS purser.payment_reversals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    payment_id UUID REFERENCES purser.billing_payments(id) ON DELETE SET NULL,
+    pending_topup_id UUID REFERENCES purser.pending_topups(id) ON DELETE SET NULL,
+    invoice_id UUID REFERENCES purser.billing_invoices(id) ON DELETE SET NULL,
+    balance_transaction_id UUID REFERENCES purser.balance_transactions(id) ON DELETE SET NULL,
+    operator_credit_ledger_id UUID REFERENCES purser.operator_credit_ledger(id) ON DELETE SET NULL,
+    provider VARCHAR(20) NOT NULL,
+    reversal_type VARCHAR(20) NOT NULL,
+    provider_reversal_id VARCHAR(255) NOT NULL,
+    provider_charge_id VARCHAR(255),
+    amount_cents BIGINT NOT NULL,
+    currency CHAR(3) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    reason TEXT,
+    operator_review_required BOOLEAN NOT NULL DEFAULT FALSE,
+    actor_id UUID,
+    actor_kind VARCHAR(20),
+    evidence_ref TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_payment_reversal_provider CHECK (provider IN ('stripe', 'mollie', 'manual')),
+    CONSTRAINT chk_payment_reversal_type CHECK (reversal_type IN ('refund', 'dispute', 'chargeback', 'manual')),
+    CONSTRAINT chk_payment_reversal_status CHECK (status IN ('pending', 'succeeded', 'failed', 'needs_review'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_reversals_provider_id
+    ON purser.payment_reversals(provider, provider_reversal_id);
+CREATE INDEX IF NOT EXISTS idx_payment_reversals_tenant
+    ON purser.payment_reversals(tenant_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payment_reversals_invoice
+    ON purser.payment_reversals(invoice_id) WHERE invoice_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_payment_reversals_review
+    ON purser.payment_reversals(tenant_id) WHERE operator_review_required;
+
+CREATE TABLE IF NOT EXISTS purser.mollie_payment_observations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    mollie_payment_id VARCHAR(50) NOT NULL,
+    mollie_subscription_id VARCHAR(50),
+    mollie_mandate_id VARCHAR(50),
+    sequence_type VARCHAR(20),
+    status VARCHAR(20) NOT NULL,
+    amount_cents BIGINT NOT NULL,
+    currency CHAR(3) NOT NULL,
+    paid_at TIMESTAMPTZ,
+    invoice_id UUID REFERENCES purser.billing_invoices(id),
+    payment_id UUID REFERENCES purser.billing_payments(id),
+    resolved_at TIMESTAMPTZ,
+    resolution VARCHAR(40),
+    attempt_count INT NOT NULL DEFAULT 0,
+    last_error TEXT,
+    raw_payload BYTEA,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_mollie_obs_status CHECK (status IN (
+        'open', 'pending', 'paid', 'failed', 'expired', 'cancelled', 'authorized'
+    )),
+    CONSTRAINT chk_mollie_obs_resolution CHECK (resolution IS NULL OR resolution IN (
+        'attached', 'no_local_invoice', 'mandate_revoked', 'ignored', 'failed'
+    ))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mollie_observations_payment
+    ON purser.mollie_payment_observations(mollie_payment_id);
+CREATE INDEX IF NOT EXISTS idx_mollie_observations_unresolved
+    ON purser.mollie_payment_observations(tenant_id, mollie_subscription_id)
+    WHERE resolved_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_mollie_observations_invoice
+    ON purser.mollie_payment_observations(invoice_id)
+    WHERE invoice_id IS NOT NULL;
+
+-- ============================================================================
+-- IDEMPOTENT EXTENSIONS for existing payment tables
+-- ============================================================================
+
+ALTER TABLE purser.webhook_events
+    ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'processed',
+    ADD COLUMN IF NOT EXISTS raw_payload BYTEA,
+    ADD COLUMN IF NOT EXISTS signature_header TEXT,
+    ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS retry_count INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS last_error TEXT,
+    ADD COLUMN IF NOT EXISTS provider_object_id VARCHAR(255);
+
+ALTER TABLE purser.webhook_events
+    ADD CONSTRAINT chk_webhook_events_status CHECK (status IN (
+        'claimed', 'processed', 'failed_retryable', 'failed_terminal', 'blocked'
+    )) NOT VALID;
+
+CREATE INDEX IF NOT EXISTS idx_webhook_events_status_received
+    ON purser.webhook_events(status, received_at)
+    WHERE status IN ('claimed', 'failed_retryable', 'blocked');
+CREATE INDEX IF NOT EXISTS idx_webhook_events_provider_object
+    ON purser.webhook_events(provider, provider_object_id)
+    WHERE provider_object_id IS NOT NULL;
+
+ALTER TABLE purser.billing_invoices
+    ADD COLUMN IF NOT EXISTS reopened_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS confirmed_paid_cents BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS reversed_paid_cents BIGINT NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_billing_invoices_reopened
+    ON purser.billing_invoices(tenant_id, reopened_at)
+    WHERE reopened_at IS NOT NULL;
+
+ALTER TABLE purser.billing_payments
+    ADD COLUMN IF NOT EXISTS intent_id UUID REFERENCES purser.payment_provider_intents(id),
+    ADD COLUMN IF NOT EXISTS reversed_amount_cents BIGINT NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_billing_payments_intent
+    ON purser.billing_payments(intent_id)
+    WHERE intent_id IS NOT NULL;
+
+ALTER TABLE purser.balance_transactions
+    ADD COLUMN IF NOT EXISTS actor_id UUID,
+    ADD COLUMN IF NOT EXISTS actor_kind VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS reason TEXT,
+    ADD COLUMN IF NOT EXISTS evidence_ref TEXT,
+    ADD COLUMN IF NOT EXISTS reverses_transaction_id UUID REFERENCES purser.balance_transactions(id);
+
+ALTER TABLE purser.balance_transactions
+    ADD CONSTRAINT chk_balance_transactions_actor_kind CHECK (
+        actor_kind IS NULL OR actor_kind IN ('user', 'system', 'webhook', 'job')
+    ) NOT VALID;
+
+CREATE INDEX IF NOT EXISTS idx_balance_transactions_reverses
+    ON purser.balance_transactions(reverses_transaction_id)
+    WHERE reverses_transaction_id IS NOT NULL;
+
+ALTER TABLE purser.pending_topups
+    ADD COLUMN IF NOT EXISTS provider_payment_id VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS provider_charge_id VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS refunded_amount_cents BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS intent_id UUID REFERENCES purser.payment_provider_intents(id);
+
+ALTER TABLE purser.pending_topups
+    ALTER COLUMN checkout_id DROP NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pending_topups_provider_payment
+    ON purser.pending_topups(provider, provider_payment_id)
+    WHERE provider_payment_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pending_topups_intent
+    ON purser.pending_topups(intent_id)
+    WHERE intent_id IS NOT NULL;
+
+ALTER TABLE purser.tenant_subscriptions
+    ADD COLUMN IF NOT EXISTS pending_intent_id UUID REFERENCES purser.payment_provider_intents(id);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_subscriptions_pending_intent
+    ON purser.tenant_subscriptions(pending_intent_id)
+    WHERE pending_intent_id IS NOT NULL;
+
+ALTER TABLE purser.cluster_subscriptions
+    ADD COLUMN IF NOT EXISTS intent_id UUID REFERENCES purser.payment_provider_intents(id);
+
+CREATE INDEX IF NOT EXISTS idx_cluster_subscriptions_intent
+    ON purser.cluster_subscriptions(intent_id)
+    WHERE intent_id IS NOT NULL;
+
+-- Read-only reconciliation views for payment-state drift checks.
+CREATE OR REPLACE VIEW purser.payment_report_provider_objects_without_local_rows AS
+SELECT ppo.*
+FROM purser.provider_payment_objects ppo
+LEFT JOIN purser.billing_payments bp
+    ON ppo.local_reference_type = 'payment'
+   AND ppo.local_reference_id = bp.id
+LEFT JOIN purser.pending_topups pt
+    ON ppo.local_reference_type = 'topup'
+   AND ppo.local_reference_id = pt.id
+LEFT JOIN purser.payment_provider_intents ppi
+    ON ppo.local_reference_type = 'intent'
+   AND ppo.local_reference_id = ppi.id
+WHERE ppo.local_reference_id IS NOT NULL
+  AND (
+      (ppo.local_reference_type = 'payment' AND bp.id IS NULL)
+      OR (ppo.local_reference_type = 'topup' AND pt.id IS NULL)
+      OR (ppo.local_reference_type = 'intent' AND ppi.id IS NULL)
+      OR (ppo.local_reference_type NOT IN ('payment', 'topup', 'intent'))
+  );
+
+CREATE OR REPLACE VIEW purser.payment_report_pending_failed_intents AS
+SELECT *
+FROM purser.payment_provider_intents
+WHERE status IN ('pending', 'provider_open', 'sca_required', 'provider_call_failed', 'terminal_failed')
+  AND updated_at < NOW() - INTERVAL '15 minutes';
+
+CREATE OR REPLACE VIEW purser.payment_report_paid_invoice_amount_mismatch AS
+WITH confirmed AS (
+    SELECT invoice_id,
+           currency,
+           SUM((amount * 100)::bigint) AS confirmed_payment_cents
+    FROM purser.billing_payments
+    WHERE status = 'confirmed'
+    GROUP BY invoice_id, currency
+),
+reversed AS (
+    SELECT invoice_id,
+           currency,
+           SUM(amount_cents) AS reversed_payment_cents
+    FROM purser.payment_reversals
+    WHERE status = 'succeeded'
+    GROUP BY invoice_id, currency
+)
+SELECT bi.id AS invoice_id,
+       bi.tenant_id,
+       bi.currency,
+       (bi.amount * 100)::bigint AS invoice_amount_cents,
+       COALESCE(c.confirmed_payment_cents, 0) AS confirmed_payment_cents,
+       COALESCE(r.reversed_payment_cents, 0) AS reversed_payment_cents
+FROM purser.billing_invoices bi
+LEFT JOIN confirmed c ON c.invoice_id = bi.id AND c.currency = bi.currency
+LEFT JOIN reversed r ON r.invoice_id = bi.id AND r.currency = bi.currency
+WHERE bi.status = 'paid'
+  AND COALESCE(c.confirmed_payment_cents, 0) - COALESCE(r.reversed_payment_cents, 0) <> (bi.amount * 100)::bigint;
+
+CREATE OR REPLACE VIEW purser.payment_report_reversals_without_payment_rows AS
+SELECT pr.*
+FROM purser.payment_reversals pr
+LEFT JOIN purser.billing_payments bp ON pr.payment_id = bp.id
+LEFT JOIN purser.pending_topups pt ON pr.pending_topup_id = pt.id
+WHERE (pr.payment_id IS NOT NULL AND bp.id IS NULL)
+   OR (pr.pending_topup_id IS NOT NULL AND pt.id IS NULL)
+   OR (pr.payment_id IS NULL AND pr.pending_topup_id IS NULL);
+
+CREATE OR REPLACE VIEW purser.payment_report_prepaid_negative_balances AS
+SELECT *
+FROM purser.prepaid_balances
+WHERE balance_cents < 0;
+
+CREATE OR REPLACE VIEW purser.payment_report_operator_credits_without_clawback AS
+SELECT accrual.*
+FROM purser.operator_credit_ledger accrual
+JOIN purser.payment_reversals pr
+    ON pr.invoice_id = accrual.invoice_id
+   AND pr.status = 'succeeded'
+LEFT JOIN purser.operator_credit_ledger clawback
+    ON clawback.reverses_ledger_id = accrual.id
+   AND clawback.entry_type = 'clawback'
+WHERE accrual.entry_type IN ('accrual', 'hold')
+  AND clawback.id IS NULL;
+
+CREATE OR REPLACE VIEW purser.payment_report_stripe_meter_outbox_stuck AS
+SELECT *
+FROM purser.stripe_meter_events_outbox
+WHERE sent_at IS NULL
+  AND attempt_count >= 5;

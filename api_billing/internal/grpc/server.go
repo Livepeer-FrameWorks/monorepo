@@ -35,6 +35,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/shopspring/decimal"
+	stripelib "github.com/stripe/stripe-go/v82"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -221,6 +222,27 @@ type ServerMetrics struct {
 	GRPCDuration           *prometheus.HistogramVec
 }
 
+type stripeBillingClient interface {
+	CreateOrGetCustomer(ctx context.Context, info stripe.CustomerInfo) (*stripelib.Customer, error)
+	CreateCheckoutSession(ctx context.Context, params stripe.CheckoutSessionParams) (*stripelib.CheckoutSession, error)
+	ExpireCheckoutSession(ctx context.Context, sessionID string) error
+	CreateBillingPortalSession(ctx context.Context, customerID, returnURL string) (*stripelib.BillingPortalSession, error)
+	GetSubscription(ctx context.Context, subscriptionID string) (*stripelib.Subscription, error)
+	CancelSubscription(ctx context.Context, subscriptionID string) (*stripelib.Subscription, error)
+	ExtractSubscriptionInfo(sub *stripelib.Subscription) stripe.SubscriptionInfo
+}
+
+type mollieBillingClient interface {
+	CreateOrGetCustomer(ctx context.Context, info mollie.CustomerInfo) (*mollielib.Customer, error)
+	CreateFirstPayment(ctx context.Context, params mollie.FirstPaymentParams) (*mollielib.Payment, error)
+	ListMandates(ctx context.Context, customerID string) ([]*mollielib.Mandate, error)
+	CreateSubscription(ctx context.Context, params mollie.SubscriptionParams) (*mollielib.Subscription, error)
+	CancelSubscription(ctx context.Context, customerID, subscriptionID string) error
+	GetSubscription(ctx context.Context, customerID, subscriptionID string) (*mollielib.Subscription, error)
+	ExtractSubscriptionInfo(sub *mollielib.Subscription, customerID string) mollie.SubscriptionInfo
+	ExtractMandateInfo(mandate *mollielib.Mandate, customerID string) mollie.MandateInfo
+}
+
 // PurserServer implements the Purser gRPC services
 type PurserServer struct {
 	pb.UnimplementedBillingServiceServer
@@ -238,8 +260,8 @@ type PurserServer struct {
 	db                  *sql.DB
 	logger              logging.Logger
 	metrics             *ServerMetrics
-	stripeClient        *stripe.Client
-	mollieClient        *mollie.Client
+	stripeClient        stripeBillingClient
+	mollieClient        mollieBillingClient
 	quartermasterClient *qmclient.GRPCClient
 	commodoreClient     handlers.CommodoreClient
 	hdwallet            *handlers.HDWallet
@@ -276,6 +298,29 @@ func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, 
 		decklogClient:       decklogClient,
 		thresholdEnforcer:   handlers.NewThresholdEnforcer(db, logger, commodoreClient, nil),
 		tierReconciler:      tieraccess.NewReconciler(db, qmClient, logger),
+	}
+}
+
+// markProviderIntentFailed advances a payment_provider_intents row to
+// 'provider_call_failed' and records the error. The intent row stays in
+// the table for ops audit; subsequent retries with the same idempotency
+// key bump attempt_count via ON CONFLICT. Errors are logged internally
+// and not propagated: the originating provider error is the user-facing
+// failure; the intent-marker write is best-effort audit.
+func (s *PurserServer) markProviderIntentFailed(ctx context.Context, intentID, code string, cause error) {
+	if intentID == "" {
+		return
+	}
+	errMsg := code
+	if cause != nil {
+		errMsg = code + ": " + cause.Error()
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE purser.payment_provider_intents
+		SET status = 'provider_call_failed', last_error = $1, updated_at = NOW()
+		WHERE id = $2
+	`, errMsg, intentID); err != nil {
+		s.logger.WithError(err).WithField("intent_id", intentID).Warn("Failed to mark payment_provider_intents failed")
 	}
 }
 
@@ -4136,6 +4181,26 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.Cr
 			return nil, status.Error(codes.FailedPrecondition, "cluster pricing not configured in Stripe")
 		}
 
+		// Durable intent before any Stripe side effect. Idempotency key is
+		// deterministic on (tenant, cluster); repeated calls for the same
+		// cluster collapse to one intent row.
+		intentKey := fmt.Sprintf("stripe-cluster-checkout:%s:%s", tenantID, clusterID)
+		var clusterIntentID string
+		if intentErr := s.db.QueryRowContext(ctx, `
+			INSERT INTO purser.payment_provider_intents (
+				tenant_id, provider, purpose, local_reference_type, local_reference_id,
+				status, currency, idempotency_key
+			) VALUES ($1, 'stripe', 'cluster_subscription_checkout', 'cluster', NULL,
+			          'pending', 'EUR', $2)
+			ON CONFLICT (provider, idempotency_key) DO UPDATE SET
+				attempt_count = purser.payment_provider_intents.attempt_count + 1,
+				updated_at = NOW()
+			RETURNING id
+		`, tenantID, intentKey).Scan(&clusterIntentID); intentErr != nil {
+			s.logger.WithError(intentErr).Error("Failed to record Stripe cluster checkout intent")
+			return nil, status.Error(codes.Internal, "failed to record checkout intent")
+		}
+
 		// Get/create Stripe customer for this tenant
 		billingEmail := req.GetBillingEmail()
 		if billingEmail == "" {
@@ -4151,7 +4216,17 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.Cr
 		})
 		if err != nil {
 			s.logger.Error("Failed to create Stripe customer", "error", err)
+			s.markProviderIntentFailed(ctx, clusterIntentID, "customer_create_failed", err)
 			return nil, status.Errorf(codes.Internal, "failed to setup payment: %v", err)
+		}
+		if cust.ID != "" {
+			if _, updateErr := s.db.ExecContext(ctx, `
+				UPDATE purser.payment_provider_intents
+				SET provider_customer_id = $1, updated_at = NOW()
+				WHERE id = $2
+			`, cust.ID, clusterIntentID); updateErr != nil {
+				s.logger.WithError(updateErr).WithField("intent_id", clusterIntentID).Warn("Failed to record provider_customer_id")
+			}
 		}
 
 		// Create checkout session
@@ -4173,34 +4248,50 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.Cr
 		}
 
 		sess, err := s.stripeClient.CreateCheckoutSession(ctx, stripe.CheckoutSessionParams{
-			CustomerID:  cust.ID,
-			TenantID:    tenantID,
-			Purpose:     "cluster_subscription",
-			ReferenceID: clusterID,
-			ClusterID:   clusterID,
-			PriceID:     priceID,
-			SuccessURL:  successURL,
-			CancelURL:   cancelURL,
+			CustomerID:     cust.ID,
+			TenantID:       tenantID,
+			Purpose:        "cluster_subscription",
+			ReferenceID:    clusterID,
+			ClusterID:      clusterID,
+			PriceID:        priceID,
+			SuccessURL:     successURL,
+			CancelURL:      cancelURL,
+			IdempotencyKey: intentKey,
 		})
 		if err != nil {
 			s.logger.Error("Failed to create Stripe checkout session", "error", err)
+			s.markProviderIntentFailed(ctx, clusterIntentID, "checkout_session_create_failed", err)
 			return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
+		}
+		if sess != nil && sess.ID != "" {
+			if _, updateErr := s.db.ExecContext(ctx, `
+				UPDATE purser.payment_provider_intents
+				SET provider_session_id = $1, status = 'provider_open', updated_at = NOW()
+				WHERE id = $2
+			`, sess.ID, clusterIntentID); updateErr != nil {
+				s.logger.WithError(updateErr).WithField("intent_id", clusterIntentID).Warn("Failed to record provider_session_id")
+			}
 		}
 
 		var subscriptionID string
 		err = s.db.QueryRowContext(ctx, `
 			INSERT INTO purser.cluster_subscriptions (
-				tenant_id, cluster_id, status, stripe_customer_id, checkout_session_id, created_at, updated_at
-			) VALUES ($1, $2, 'pending_payment', $3, $4, NOW(), NOW())
+				tenant_id, cluster_id, status, stripe_customer_id, checkout_session_id, intent_id, created_at, updated_at
+			) VALUES ($1, $2, 'pending_payment', $3, $4, $5, NOW(), NOW())
 			ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
 				status = EXCLUDED.status,
 				stripe_customer_id = EXCLUDED.stripe_customer_id,
 				checkout_session_id = EXCLUDED.checkout_session_id,
+				intent_id = EXCLUDED.intent_id,
 				updated_at = NOW()
 			RETURNING id
-		`, tenantID, clusterID, cust.ID, sess.ID).Scan(&subscriptionID)
+		`, tenantID, clusterID, cust.ID, sess.ID, clusterIntentID).Scan(&subscriptionID)
 		if err != nil {
-			s.logger.WithError(err).Error("Failed to record cluster subscription checkout")
+			s.logger.WithError(err).WithField("session_id", sess.ID).Error("Failed to record cluster subscription checkout")
+			if expireErr := s.stripeClient.ExpireCheckoutSession(ctx, sess.ID); expireErr != nil {
+				s.logger.WithError(expireErr).WithField("session_id", sess.ID).Error("Failed to expire Stripe checkout session after local persist failure")
+			}
+			s.markProviderIntentFailed(ctx, clusterIntentID, "cluster_subscription_persist_failed", err)
 			return nil, status.Error(codes.Internal, "failed to record cluster subscription")
 		}
 
@@ -4955,6 +5046,18 @@ func (s *PurserServer) recordBalanceTransaction(
 	referenceID, referenceType *string,
 ) (*pb.BalanceTransaction, error) {
 	userID := middleware.GetUserID(ctx)
+	actorKind := "system"
+	var actorID any
+	if userID != "" {
+		actorKind = "user"
+		if _, parseErr := uuid.Parse(userID); parseErr == nil {
+			actorID = userID
+		}
+	}
+	var evidenceRef any
+	if referenceID != nil && *referenceID != "" {
+		evidenceRef = *referenceID
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to begin transaction")
@@ -4971,11 +5074,13 @@ func (s *PurserServer) recordBalanceTransaction(
 		var insertedID string
 		insertErr := tx.QueryRowContext(ctx, `
 			INSERT INTO purser.balance_transactions
-			(id, tenant_id, amount_cents, balance_after_cents, transaction_type, description, reference_id, reference_type, created_at)
-			VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8)
+			(id, tenant_id, amount_cents, balance_after_cents, transaction_type, description,
+			 reference_id, reference_type, actor_kind, actor_id, reason, evidence_ref, created_at)
+			VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			ON CONFLICT (tenant_id, reference_type, reference_id) DO NOTHING
 			RETURNING id
-		`, txID, tenantID, amountCents, txType, description, referenceID, referenceType, now).Scan(&insertedID)
+		`, txID, tenantID, amountCents, txType, description, referenceID, referenceType,
+			actorKind, actorID, description, evidenceRef, now).Scan(&insertedID)
 		if insertErr != nil {
 			if !errors.Is(insertErr, sql.ErrNoRows) {
 				s.logger.WithError(insertErr).Error("Failed to insert balance transaction")
@@ -5055,9 +5160,11 @@ func (s *PurserServer) recordBalanceTransaction(
 	} else {
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO purser.balance_transactions
-			(id, tenant_id, amount_cents, balance_after_cents, transaction_type, description, reference_id, reference_type, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		`, txID, tenantID, amountCents, newBalance, txType, description, referenceID, referenceType, now)
+			(id, tenant_id, amount_cents, balance_after_cents, transaction_type, description,
+			 reference_id, reference_type, actor_kind, actor_id, reason, evidence_ref, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		`, txID, tenantID, amountCents, newBalance, txType, description, referenceID, referenceType,
+			actorKind, actorID, description, evidenceRef, now)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to insert transaction")
 			return nil, status.Error(codes.Internal, "failed to record transaction")
@@ -5248,11 +5355,38 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 
 	userID := middleware.GetUserID(ctx)
 	topupID := uuid.New().String()
+	intentKey := fmt.Sprintf("prepaid-topup:%s", topupID)
+	provisionalExpiresAt := time.Now().Add(24 * time.Hour)
+	var providerIntentID string
 
-	// Create the provider checkout session first so we can insert
-	// pending_topups with the real checkout_id. Inserting an empty-string
-	// placeholder collides on UNIQUE(provider, checkout_id) and can park
-	// orphan rows that block future top-ups for the same provider.
+	if err := s.db.QueryRowContext(ctx, `
+		INSERT INTO purser.payment_provider_intents (
+			tenant_id, provider, purpose, local_reference_type, local_reference_id,
+			status, currency, amount_cents, idempotency_key, expires_at
+		) VALUES ($1, $2, 'prepaid_topup', 'pending_topups', $3::uuid,
+		          'pending', $4, $5, $6, $7)
+		ON CONFLICT (provider, idempotency_key) DO UPDATE SET
+			attempt_count = purser.payment_provider_intents.attempt_count + 1,
+			updated_at = NOW()
+		RETURNING id
+	`, tenantID, provider, topupID, currency, amountCents, intentKey, provisionalExpiresAt).Scan(&providerIntentID); err != nil {
+		s.logger.WithError(err).Error("Failed to record prepaid top-up intent")
+		return nil, status.Error(codes.Internal, "failed to record top-up intent")
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO purser.pending_topups (
+			id, tenant_id, provider, checkout_id, amount_cents, currency,
+			status, expires_at, billing_email, billing_name, billing_company, billing_vat_number, intent_id
+		) VALUES ($1, $2, $3, NULL, $4, $5, 'pending', $6, $7, $8, $9, $10, $11)
+	`, topupID, tenantID, provider, amountCents, currency, provisionalExpiresAt,
+		sqlNullString(req.BillingEmail), sqlNullString(req.BillingName),
+		sqlNullString(req.BillingCompany), sqlNullString(req.BillingVatNumber), providerIntentID)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to create pending topup")
+		return nil, status.Error(codes.Internal, "failed to create topup record")
+	}
+
 	checkoutSvc := handlers.NewCheckoutService(s.db, s.logger)
 	result, err := checkoutSvc.CreateCheckout(ctx, handlers.CheckoutRequest{
 		Purpose:        handlers.PurposePrepaid,
@@ -5267,9 +5401,18 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 		BillingEmail:   derefString(req.BillingEmail),
 		BillingName:    derefString(req.BillingName),
 		BillingCompany: derefString(req.BillingCompany),
+		IdempotencyKey: intentKey,
 	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create checkout session")
+		s.markProviderIntentFailed(ctx, providerIntentID, "checkout_session_create_failed", err)
+		if _, markErr := s.db.ExecContext(ctx, `
+			UPDATE purser.pending_topups
+			SET status = 'failed', updated_at = NOW()
+			WHERE id = $1 AND status = 'pending'
+		`, topupID); markErr != nil {
+			s.logger.WithError(markErr).WithField("topup_id", topupID).Warn("Failed to mark prepaid top-up failed")
+		}
 		s.emitBillingEvent(ctx, eventTopupFailed, tenantID, userID, "topup", topupID, &pb.BillingEvent{
 			TopupId:  topupID,
 			Amount:   float64(amountCents) / 100.0,
@@ -5280,17 +5423,21 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 		return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
 	}
 
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO purser.pending_topups (
-			id, tenant_id, provider, checkout_id, amount_cents, currency,
-			status, expires_at, billing_email, billing_name, billing_company, billing_vat_number
-		) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11)
-	`, topupID, tenantID, provider, result.SessionID, amountCents, currency, result.ExpiresAt,
-		sqlNullString(req.BillingEmail), sqlNullString(req.BillingName),
-		sqlNullString(req.BillingCompany), sqlNullString(req.BillingVatNumber))
-	if err != nil {
-		s.logger.WithError(err).WithField("checkout_id", result.SessionID).Error("Failed to create pending topup; provider session is orphaned")
-		return nil, status.Error(codes.Internal, "failed to create topup record")
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE purser.payment_provider_intents
+		SET provider_session_id = $1, expires_at = $2, status = 'provider_open', updated_at = NOW()
+		WHERE id = $3
+	`, result.SessionID, result.ExpiresAt, providerIntentID); err != nil {
+		s.logger.WithError(err).WithField("intent_id", providerIntentID).Error("Failed to attach provider session to top-up intent")
+		return nil, status.Error(codes.Internal, "failed to attach checkout to payment intent")
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE purser.pending_topups
+		SET checkout_id = $1, expires_at = $2, updated_at = NOW()
+		WHERE id = $3 AND status = 'pending'
+	`, result.SessionID, result.ExpiresAt, topupID); err != nil {
+		s.logger.WithError(err).WithField("checkout_id", result.SessionID).Error("Failed to attach provider checkout to topup")
+		return nil, status.Error(codes.Internal, "failed to attach checkout to topup")
 	}
 
 	s.emitBillingEvent(ctx, eventTopupCreated, tenantID, userID, "topup", topupID, &pb.BillingEvent{
@@ -6090,6 +6237,31 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *pb.Create
 		return nil, status.Errorf(codes.FailedPrecondition, "tier %s has no Stripe %s price configured", tierName, billingPeriod)
 	}
 
+	// Preflight: confirm a tenant_subscriptions row exists and isn't holding
+	// an unrelated staged tier change. Read-only so a Commodore / Stripe
+	// failure later cannot leak a pending_tier_id write. The actual stage
+	// happens after the Stripe session is accepted.
+	var existingReason sql.NullString
+	var existingTier sql.NullString
+	preflightErr := s.db.QueryRowContext(ctx, `
+		SELECT pending_reason, pending_tier_id::text
+		FROM purser.tenant_subscriptions
+		WHERE tenant_id = $1
+	`, tenantID).Scan(&existingReason, &existingTier)
+	if errors.Is(preflightErr, sql.ErrNoRows) {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"no tenant_subscriptions row for tenant %s; bootstrap must seed one before checkout", tenantID)
+	}
+	if preflightErr != nil {
+		s.logger.WithError(preflightErr).Error("Failed to read pending tier state")
+		return nil, status.Error(codes.Internal, "failed to read pending tier state")
+	}
+	if existingTier.Valid && existingReason.String != "" && existingReason.String != "stripe_checkout" {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"a %s is already staged for this tenant (pending_tier_id=%s); cancel it before starting a new checkout",
+			existingReason.String, existingTier.String)
+	}
+
 	// Get tenant primary user info via Commodore gRPC (not direct DB access)
 	primaryUser, err := s.commodoreClient.GetTenantPrimaryUser(ctx, tenantID)
 	if err != nil {
@@ -6108,6 +6280,28 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *pb.Create
 		name = email
 	}
 
+	// Insert a durable payment_provider_intents row before any external
+	// side effect so a crash or timeout between provider calls never leaves
+	// a Stripe customer/session without local audit trail. The
+	// idempotency_key is deterministic on (tenant, tier) so repeated calls
+	// for the same target tier collapse to one intent row.
+	intentKey := fmt.Sprintf("stripe-tenant-checkout:%s:%s", tenantID, tierID)
+	var intentID string
+	if intentErr := s.db.QueryRowContext(ctx, `
+		INSERT INTO purser.payment_provider_intents (
+			tenant_id, provider, purpose, local_reference_type, local_reference_id,
+			status, currency, idempotency_key
+		) VALUES ($1, 'stripe', 'tenant_subscription_checkout', 'billing_tiers', $2::uuid,
+		          'pending', $3, $4)
+		ON CONFLICT (provider, idempotency_key) DO UPDATE SET
+			attempt_count = purser.payment_provider_intents.attempt_count + 1,
+			updated_at = NOW()
+		RETURNING id
+	`, tenantID, tierID, "EUR", intentKey).Scan(&intentID); intentErr != nil {
+		s.logger.WithError(intentErr).Error("Failed to record Stripe tenant checkout intent")
+		return nil, status.Error(codes.Internal, "failed to record checkout intent")
+	}
+
 	// Get or create Stripe customer
 	customer, err := s.stripeClient.CreateOrGetCustomer(ctx, stripe.CustomerInfo{
 		TenantID: tenantID,
@@ -6116,23 +6310,87 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *pb.Create
 	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create/get Stripe customer")
+		s.markProviderIntentFailed(ctx, intentID, "customer_create_failed", err)
 		return nil, status.Error(codes.Internal, "failed to create Stripe customer")
+	}
+	if customer.ID != "" {
+		if _, updateErr := s.db.ExecContext(ctx, `
+			UPDATE purser.payment_provider_intents
+			SET provider_customer_id = $1, updated_at = NOW()
+			WHERE id = $2 AND (provider_customer_id IS NULL OR provider_customer_id = $1)
+		`, customer.ID, intentID); updateErr != nil {
+			s.logger.WithError(updateErr).WithField("intent_id", intentID).Warn("Failed to record provider_customer_id")
+		}
 	}
 
 	// Create checkout session
 	sess, err := s.stripeClient.CreateCheckoutSession(ctx, stripe.CheckoutSessionParams{
-		CustomerID:  customer.ID,
-		TenantID:    tenantID,
-		TierID:      tierID,
-		Purpose:     "subscription",
-		ReferenceID: tierID,
-		PriceID:     priceID.String,
-		SuccessURL:  successURL,
-		CancelURL:   cancelURL,
+		CustomerID:     customer.ID,
+		TenantID:       tenantID,
+		TierID:         tierID,
+		Purpose:        "subscription",
+		ReferenceID:    tierID,
+		PriceID:        priceID.String,
+		SuccessURL:     successURL,
+		CancelURL:      cancelURL,
+		IdempotencyKey: intentKey,
 	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create Stripe checkout session")
+		s.markProviderIntentFailed(ctx, intentID, "checkout_session_create_failed", err)
 		return nil, status.Error(codes.Internal, "failed to create checkout session")
+	}
+	if sess != nil && sess.ID != "" {
+		if _, updateErr := s.db.ExecContext(ctx, `
+			UPDATE purser.payment_provider_intents
+			SET provider_session_id = $1, status = 'provider_open', updated_at = NOW()
+			WHERE id = $2
+		`, sess.ID, intentID); updateErr != nil {
+			s.logger.WithError(updateErr).WithField("intent_id", intentID).Warn("Failed to record provider_session_id")
+		}
+	}
+
+	// Stage the target tier only after Stripe accepts the session so a
+	// failed preflight call earlier in this RPC doesn't leak a half-staged
+	// tier. The WHERE guard still refuses to overwrite a non-Stripe pending
+	// change in case a race opened a downgrade since the preflight read.
+	stageResult, stageErr := s.db.ExecContext(ctx, `
+		UPDATE purser.tenant_subscriptions
+		SET pending_tier_id = $1::uuid,
+		    pending_reason = 'stripe_checkout',
+		    pending_effective_at = NULL,
+		    updated_at = NOW()
+		WHERE tenant_id = $2
+		  AND (pending_tier_id IS NULL OR pending_reason = 'stripe_checkout')
+	`, tierID, tenantID)
+	if stageErr != nil {
+		s.logger.WithError(stageErr).WithField("session_id", sess.ID).Error("Failed to stage pending tier after Stripe checkout creation")
+		if expireErr := s.stripeClient.ExpireCheckoutSession(ctx, sess.ID); expireErr != nil {
+			s.logger.WithError(expireErr).WithField("session_id", sess.ID).Error("Failed to expire Stripe checkout session after local staging failure")
+			return nil, status.Errorf(codes.Internal, "failed to stage pending tier and failed to expire Stripe checkout session %s: %v", sess.ID, expireErr)
+		}
+		return nil, status.Error(codes.Internal, "failed to stage pending tier")
+	}
+	if stageRows, raErr := stageResult.RowsAffected(); raErr != nil {
+		s.logger.WithError(raErr).WithField("session_id", sess.ID).Error("Failed to check pending tier stage rows")
+		if expireErr := s.stripeClient.ExpireCheckoutSession(ctx, sess.ID); expireErr != nil {
+			s.logger.WithError(expireErr).WithField("session_id", sess.ID).Error("Failed to expire Stripe checkout session after local staging verification failure")
+			return nil, status.Errorf(codes.Internal, "failed to verify pending tier stage and failed to expire Stripe checkout session %s: %v", sess.ID, expireErr)
+		}
+		return nil, status.Error(codes.Internal, "failed to stage pending tier")
+	} else if stageRows == 0 {
+		// Race: a non-Stripe pending change appeared between preflight and
+		// stage. Expire the live Stripe session so external checkout state
+		// cannot advance while Purser refuses to stage the local target tier.
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":  tenantID,
+			"session_id": sess.ID,
+		}).Warn("Stripe checkout session created but pending_tier_id stage skipped due to race; expiring session")
+		if expireErr := s.stripeClient.ExpireCheckoutSession(ctx, sess.ID); expireErr != nil {
+			s.logger.WithError(expireErr).WithField("session_id", sess.ID).Error("Failed to expire Stripe checkout session after pending-tier race")
+			return nil, status.Errorf(codes.Internal, "pending tier changed during checkout and failed to expire Stripe checkout session %s: %v", sess.ID, expireErr)
+		}
+		return nil, status.Error(codes.FailedPrecondition, "pending tier changed during checkout; start a new checkout after resolving the pending change")
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -6346,20 +6604,52 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 		webhookURL = webhookBaseURL + "/webhooks/billing/mollie"
 	}
 
+	// Durable intent before the Mollie first-payment call. Idempotency key
+	// is deterministic on (tenant, tier) so retried setup attempts collapse
+	// to one row and provider_payment_id can be linked back after the
+	// webhook confirms.
+	firstPaymentIntentKey := fmt.Sprintf("mollie-first-payment:%s:%s", tenantID, tierID)
+	var firstPaymentIntentID string
+	if intentErr := s.db.QueryRowContext(ctx, `
+		INSERT INTO purser.payment_provider_intents (
+			tenant_id, provider, purpose, local_reference_type, local_reference_id,
+			provider_customer_id, status, currency, amount_cents, idempotency_key
+		) VALUES ($1, 'mollie', 'mollie_first_payment', 'billing_tiers', $2::uuid,
+		          $3, 'pending', $4, $5, $6)
+		ON CONFLICT (provider, idempotency_key) DO UPDATE SET
+			attempt_count = purser.payment_provider_intents.attempt_count + 1,
+			updated_at = NOW()
+		RETURNING id
+	`, tenantID, tierID, mollieCustomerID, currency, basePrice.Round(2).Shift(2).IntPart(), firstPaymentIntentKey).Scan(&firstPaymentIntentID); intentErr != nil {
+		s.logger.WithError(intentErr).Error("Failed to record Mollie first-payment intent")
+		return nil, status.Error(codes.Internal, "failed to record first-payment intent")
+	}
+
 	// Create first payment
 	payment, err := s.mollieClient.CreateFirstPayment(ctx, mollie.FirstPaymentParams{
-		CustomerID:  mollieCustomerID,
-		TenantID:    tenantID,
-		TierID:      tierID,
-		Amount:      mollie.Amount(basePrice.Round(2).StringFixed(2), currency),
-		Description: fmt.Sprintf("Subscription setup: %s", tierName),
-		Method:      getMolliePaymentMethod(method),
-		RedirectURL: redirectURL,
-		WebhookURL:  webhookURL,
+		CustomerID:     mollieCustomerID,
+		TenantID:       tenantID,
+		TierID:         tierID,
+		Amount:         mollie.Amount(basePrice.Round(2).StringFixed(2), currency),
+		Description:    fmt.Sprintf("Subscription setup: %s", tierName),
+		Method:         getMolliePaymentMethod(method),
+		RedirectURL:    redirectURL,
+		WebhookURL:     webhookURL,
+		IdempotencyKey: firstPaymentIntentKey,
 	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create Mollie first payment")
+		s.markProviderIntentFailed(ctx, firstPaymentIntentID, "first_payment_create_failed", err)
 		return nil, status.Error(codes.Internal, "failed to create first payment")
+	}
+	if payment != nil && payment.ID != "" {
+		if _, updateErr := s.db.ExecContext(ctx, `
+			UPDATE purser.payment_provider_intents
+			SET provider_payment_id = $1, status = 'provider_open', updated_at = NOW()
+			WHERE id = $2
+		`, payment.ID, firstPaymentIntentID); updateErr != nil {
+			s.logger.WithError(updateErr).WithField("intent_id", firstPaymentIntentID).Warn("Failed to record first-payment provider_payment_id")
+		}
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -6388,6 +6678,22 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.Cre
 
 	if tenantID == "" || tierID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id and tier_id are required")
+	}
+
+	// Precondition: a tenant_subscriptions row must exist before we ask
+	// Mollie to create a live subscription. The post-Mollie UPDATE later
+	// requires this row; if it's missing, Mollie would charge a customer
+	// while Purser stayed unaware. Fail closed here so no external state
+	// gets ahead of internal state.
+	var tenantSubExists int
+	if preflightErr := s.db.QueryRowContext(ctx, `
+		SELECT 1 FROM purser.tenant_subscriptions WHERE tenant_id = $1
+	`, tenantID).Scan(&tenantSubExists); errors.Is(preflightErr, sql.ErrNoRows) {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"no tenant_subscriptions row for tenant %s; bootstrap must seed one before subscribing", tenantID)
+	} else if preflightErr != nil {
+		s.logger.WithError(preflightErr).Error("Failed to preflight tenant_subscriptions row")
+		return nil, status.Error(codes.Internal, "failed to preflight tenant subscription")
 	}
 
 	// Get Mollie customer ID
@@ -6456,21 +6762,53 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.Cre
 	periodStart := periodEnd.AddDate(0, -1, 0)
 	startDate := periodEnd.Format("2006-01-02")
 
+	// Durable intent before Mollie subscription creation. Idempotency key
+	// is deterministic on (tenant, tier, mandate); a compensating cancel
+	// still runs on local-persist failure, but the intent row provides
+	// the audit trail to identify orphan subscriptions if both halves fail.
+	subscriptionIntentKey := fmt.Sprintf("mollie-subscription:%s:%s:%s", tenantID, tierID, mandateID)
+	var subscriptionIntentID string
+	if intentErr := s.db.QueryRowContext(ctx, `
+		INSERT INTO purser.payment_provider_intents (
+			tenant_id, provider, purpose, local_reference_type, local_reference_id,
+			provider_customer_id, status, currency, amount_cents, idempotency_key
+		) VALUES ($1, 'mollie', 'mollie_subscription_create', 'billing_tiers', $2::uuid,
+		          $3, 'pending', $4, $5, $6)
+		ON CONFLICT (provider, idempotency_key) DO UPDATE SET
+			attempt_count = purser.payment_provider_intents.attempt_count + 1,
+			updated_at = NOW()
+		RETURNING id
+	`, tenantID, tierID, mollieCustomerID, currency, basePrice.Round(2).Shift(2).IntPart(), subscriptionIntentKey).Scan(&subscriptionIntentID); intentErr != nil {
+		s.logger.WithError(intentErr).Error("Failed to record Mollie subscription intent")
+		return nil, status.Error(codes.Internal, "failed to record subscription intent")
+	}
+
 	// Create subscription
 	sub, err := s.mollieClient.CreateSubscription(ctx, mollie.SubscriptionParams{
-		CustomerID:  mollieCustomerID,
-		TenantID:    tenantID,
-		TierID:      tierID,
-		MandateID:   mandateID,
-		Amount:      mollie.Amount(basePrice.Round(2).StringFixed(2), currency),
-		Interval:    "1 month",
-		Description: fmt.Sprintf("Subscription: %s", tierName),
-		StartDate:   startDate,
-		WebhookURL:  webhookURL,
+		CustomerID:     mollieCustomerID,
+		TenantID:       tenantID,
+		TierID:         tierID,
+		MandateID:      mandateID,
+		Amount:         mollie.Amount(basePrice.Round(2).StringFixed(2), currency),
+		Interval:       "1 month",
+		Description:    fmt.Sprintf("Subscription: %s", tierName),
+		StartDate:      startDate,
+		WebhookURL:     webhookURL,
+		IdempotencyKey: subscriptionIntentKey,
 	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create Mollie subscription")
+		s.markProviderIntentFailed(ctx, subscriptionIntentID, "subscription_create_failed", err)
 		return nil, status.Error(codes.Internal, "failed to create subscription")
+	}
+	if sub != nil && sub.ID != "" {
+		if _, updateErr := s.db.ExecContext(ctx, `
+			UPDATE purser.payment_provider_intents
+			SET provider_subscription_id = $1, status = 'provider_open', updated_at = NOW()
+			WHERE id = $2
+		`, sub.ID, subscriptionIntentID); updateErr != nil {
+			s.logger.WithError(updateErr).WithField("intent_id", subscriptionIntentID).Warn("Failed to record provider_subscription_id")
+		}
 	}
 
 	nextPayment := startDate
@@ -6480,19 +6818,61 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.Cre
 		nextPaymentArg = nextPayment
 	}
 
-	// Persist Mollie's authoritative next-payment date as the period anchor.
-	_, err = s.db.ExecContext(ctx, `
+	// Persist the Mollie subscription state on the existing tenant_subscriptions
+	// row. Sets tier_id + payment_method so downstream entitlement / invoicing
+	// readers see a coherent state immediately, and clears any staged
+	// pending_tier_id (since this activation supersedes a pending change).
+	// Mollie's authoritative next-payment date anchors the invoice period.
+	//
+	// If the persist fails (DB error or row vanished post-preflight), we
+	// have to compensate by cancelling the Mollie subscription so the
+	// customer isn't charged for a sub Purser doesn't know about. The
+	// preflight earlier in the RPC catches the no-row case; this guard
+	// covers transient DB failures and concurrent deletes.
+	result, err := s.db.ExecContext(ctx, `
 		UPDATE purser.tenant_subscriptions
 		SET mollie_subscription_id = $1,
 		    mollie_next_payment_date = $2,
 		    next_billing_date = $2,
 		    billing_period_start = $4,
 		    billing_period_end = $5,
+		    tier_id = $6::uuid,
+		    payment_method = 'mollie',
+		    status = 'active',
+		    pending_tier_id = NULL,
+		    pending_effective_at = NULL,
+		    pending_reason = NULL,
 		    updated_at = NOW()
 		WHERE tenant_id = $3
-	`, sub.ID, nextPaymentArg, tenantID, periodStart, periodEnd)
+	`, sub.ID, nextPaymentArg, tenantID, periodStart, periodEnd, tierID)
 	if err != nil {
-		s.logger.WithError(err).Warn("Failed to store Mollie subscription ID")
+		s.logger.WithError(err).WithField("subscription_id", sub.ID).Error("Failed to persist Mollie subscription state; compensating cancel")
+		if cancelErr := s.mollieClient.CancelSubscription(ctx, mollieCustomerID, sub.ID); cancelErr != nil {
+			s.logger.WithError(cancelErr).WithField("subscription_id", sub.ID).Error("Compensating Mollie subscription cancel failed; orphan needs ops cleanup")
+			return nil, status.Errorf(codes.Internal, "created Mollie subscription %s but failed to persist it locally and failed to cancel it: %v", sub.ID, cancelErr)
+		}
+		return nil, status.Error(codes.Internal, "failed to persist Mollie subscription state")
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		s.logger.WithError(err).WithField("subscription_id", sub.ID).Error("Failed to check Mollie subscription update rows; compensating cancel")
+		if cancelErr := s.mollieClient.CancelSubscription(ctx, mollieCustomerID, sub.ID); cancelErr != nil {
+			s.logger.WithError(cancelErr).WithField("subscription_id", sub.ID).Error("Compensating Mollie subscription cancel failed; orphan needs ops cleanup")
+			return nil, status.Errorf(codes.Internal, "created Mollie subscription %s but failed to verify local persistence and failed to cancel it: %v", sub.ID, cancelErr)
+		}
+		return nil, status.Error(codes.Internal, "failed to check subscription update")
+	}
+	if rows == 0 {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":       tenantID,
+			"subscription_id": sub.ID,
+		}).Error("tenant_subscriptions row disappeared between preflight and persist; compensating cancel")
+		if cancelErr := s.mollieClient.CancelSubscription(ctx, mollieCustomerID, sub.ID); cancelErr != nil {
+			s.logger.WithError(cancelErr).WithField("subscription_id", sub.ID).Error("Compensating Mollie subscription cancel failed; orphan needs ops cleanup")
+			return nil, status.Errorf(codes.Internal, "created Mollie subscription %s but local subscription row disappeared and compensating cancel failed: %v", sub.ID, cancelErr)
+		}
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"tenant_subscriptions row missing for tenant %s; Mollie subscription was cancelled to avoid an orphan", tenantID)
 	}
 
 	s.logger.WithFields(logging.Fields{

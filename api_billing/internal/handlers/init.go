@@ -6,6 +6,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"frameworks/api_billing/internal/mollie"
+	billingstripe "frameworks/api_billing/internal/stripe"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -17,6 +18,7 @@ var (
 	emailService  *EmailService
 	qmClient      *qmclient.GRPCClient
 	mollieClient  *mollie.Client
+	stripeClient  *billingstripe.Client
 	decklogClient *decklogclient.BatchedClient
 )
 
@@ -34,12 +36,13 @@ type PurserMetrics struct {
 var metrics *PurserMetrics
 
 // Init initializes the handlers with database, logger, and service clients
-func Init(database *sql.DB, log logging.Logger, purserMetrics *PurserMetrics, quartermasterClient *qmclient.GRPCClient, mollieSvc *mollie.Client, decklogSvc *decklogclient.BatchedClient) {
+func Init(database *sql.DB, log logging.Logger, purserMetrics *PurserMetrics, quartermasterClient *qmclient.GRPCClient, mollieSvc *mollie.Client, stripeSvc *billingstripe.Client, decklogSvc *decklogclient.BatchedClient) {
 	db = database
 	logger = log
 	metrics = purserMetrics
 	emailService = NewEmailService(log)
 	qmClient = quartermasterClient
 	mollieClient = mollieSvc
+	stripeClient = stripeSvc
 	decklogClient = decklogSvc
 }

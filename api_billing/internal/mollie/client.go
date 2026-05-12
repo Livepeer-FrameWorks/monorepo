@@ -1,8 +1,13 @@
 package mollie
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -15,6 +20,7 @@ import (
 type Client struct {
 	client *mollie.Client
 	logger logging.Logger
+	apiKey string
 }
 
 // Config for creating a new Mollie client
@@ -43,6 +49,7 @@ func NewClient(config Config) (*Client, error) {
 	return &Client{
 		client: client,
 		logger: config.Logger,
+		apiKey: config.APIKey,
 	}, nil
 }
 
@@ -56,8 +63,8 @@ type CustomerInfo struct {
 
 // CreateOrGetCustomer finds existing customer by tenant ID metadata or creates a new one
 func (c *Client) CreateOrGetCustomer(ctx context.Context, info CustomerInfo) (*mollie.Customer, error) {
-	// Mollie doesn't support metadata search, so we store mapping in our DB
-	// For now, just create a new customer - caller should check DB first
+	// Mollie customer lookup is keyed by Purser's local mollie_customers
+	// table; callers must check that mapping before creating a customer.
 
 	locale := mollie.Locale(info.Locale)
 	if info.Locale == "" {
@@ -92,42 +99,53 @@ func (c *Client) GetCustomer(ctx context.Context, customerID string) (*mollie.Cu
 
 // FirstPaymentParams for creating the initial payment that establishes a mandate
 type FirstPaymentParams struct {
-	CustomerID  string               // Mollie customer ID
-	TenantID    string               // For metadata/logging
-	TierID      string               // For price lookup
-	Amount      *mollie.Amount       // Payment amount
-	Description string               // Payment description
-	Method      mollie.PaymentMethod // ideal, creditcard, bancontact
-	RedirectURL string               // Where to redirect after payment
-	WebhookURL  string               // Webhook for payment status updates
+	CustomerID     string               // Mollie customer ID
+	TenantID       string               // For metadata/logging
+	TierID         string               // For price lookup
+	Amount         *mollie.Amount       // Payment amount
+	Description    string               // Payment description
+	Method         mollie.PaymentMethod // ideal, creditcard, bancontact
+	RedirectURL    string               // Where to redirect after payment
+	WebhookURL     string               // Webhook for payment status updates
+	IdempotencyKey string
 }
 
 // CreateFirstPayment creates the initial payment to establish a mandate.
 // For iDEAL: User pays via bank → Creates SEPA Direct Debit mandate
 // For card: User enters card → Creates card mandate
 func (c *Client) CreateFirstPayment(ctx context.Context, params FirstPaymentParams) (*mollie.Payment, error) {
-	paymentParams := mollie.CreatePayment{
-		Amount:      params.Amount,
-		Description: params.Description,
-		RedirectURL: params.RedirectURL,
-		WebhookURL:  params.WebhookURL,
-		Method:      []mollie.PaymentMethod{params.Method},
-		Metadata: map[string]any{
+	if params.IdempotencyKey == "" {
+		return nil, fmt.Errorf("CreateFirstPayment requires a deterministic IdempotencyKey")
+	}
+	body, err := json.Marshal(map[string]any{
+		"amount":      params.Amount,
+		"description": params.Description,
+		"redirectUrl": params.RedirectURL,
+		"webhookUrl":  params.WebhookURL,
+		"method":      []mollie.PaymentMethod{params.Method},
+		"metadata": map[string]any{
 			"purpose":      "mandate_setup",
 			"tenant_id":    params.TenantID,
 			"tier_id":      params.TierID,
 			"reference_id": params.TierID,
 			"payment_type": "first_payment",
 		},
-		CreateRecurrentPaymentFields: mollie.CreateRecurrentPaymentFields{
-			SequenceType: mollie.FirstSequence,
-		},
+		"sequenceType": mollie.FirstSequence,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal first payment: %w", err)
 	}
-
-	// Create payment for this customer
-	_, payment, err := c.client.Customers.CreatePayment(ctx, params.CustomerID, paymentParams)
+	u, err := c.mollieURL(fmt.Sprintf("v2/customers/%s/payments", url.PathEscape(params.CustomerID)))
+	if err != nil {
+		return nil, fmt.Errorf("build Mollie first payment URL: %w", err)
+	}
+	respBody, err := c.postJSON(ctx, u.String(), body, params.IdempotencyKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create first payment: %w", err)
+	}
+	var payment mollie.Payment
+	if err := json.Unmarshal(respBody, &payment); err != nil {
+		return nil, fmt.Errorf("decode Mollie first payment response: %w", err)
 	}
 
 	c.logger.WithFields(map[string]any{
@@ -137,7 +155,7 @@ func (c *Client) CreateFirstPayment(ctx context.Context, params FirstPaymentPara
 		"method":      params.Method,
 	}).Info("Created Mollie first payment")
 
-	return payment, nil
+	return &payment, nil
 }
 
 // GetPayment retrieves a payment by ID
@@ -169,26 +187,30 @@ func (c *Client) GetMandate(ctx context.Context, customerID, mandateID string) (
 
 // SubscriptionParams for creating a subscription
 type SubscriptionParams struct {
-	CustomerID  string
-	TenantID    string
-	TierID      string
-	MandateID   string // explicit mandate to charge; empty lets Mollie pick any valid one
-	Amount      *mollie.Amount
-	Interval    string // 1 month, 1 year
-	Description string
-	StartDate   string // YYYY-MM-DD format, or empty for immediate
-	WebhookURL  string
+	CustomerID     string
+	TenantID       string
+	TierID         string
+	MandateID      string // explicit mandate to charge; empty lets Mollie pick any valid one
+	Amount         *mollie.Amount
+	Interval       string // 1 month, 1 year
+	Description    string
+	StartDate      string // YYYY-MM-DD format, or empty for immediate
+	WebhookURL     string
+	IdempotencyKey string
 }
 
 // CreateSubscription creates a recurring subscription using an existing mandate
 func (c *Client) CreateSubscription(ctx context.Context, params SubscriptionParams) (*mollie.Subscription, error) {
-	subParams := mollie.CreateSubscription{
-		Amount:      params.Amount,
-		Interval:    params.Interval,
-		Description: params.Description,
-		MandateID:   params.MandateID,
-		WebhookURL:  params.WebhookURL,
-		Metadata: map[string]any{
+	if params.IdempotencyKey == "" {
+		return nil, fmt.Errorf("CreateSubscription requires a deterministic IdempotencyKey")
+	}
+	bodyMap := map[string]any{
+		"amount":      params.Amount,
+		"interval":    params.Interval,
+		"description": params.Description,
+		"mandateId":   params.MandateID,
+		"webhookUrl":  params.WebhookURL,
+		"metadata": map[string]any{
 			"purpose":      "subscription",
 			"tenant_id":    params.TenantID,
 			"tier_id":      params.TierID,
@@ -197,15 +219,24 @@ func (c *Client) CreateSubscription(ctx context.Context, params SubscriptionPara
 	}
 
 	if params.StartDate != "" {
-		sd := &mollie.ShortDate{}
-		if err := sd.UnmarshalJSON([]byte(`"` + params.StartDate + `"`)); err == nil {
-			subParams.StartDate = sd
-		}
+		bodyMap["startDate"] = params.StartDate
 	}
 
-	_, sub, err := c.client.Subscriptions.Create(ctx, params.CustomerID, subParams)
+	body, err := json.Marshal(bodyMap)
+	if err != nil {
+		return nil, fmt.Errorf("marshal subscription: %w", err)
+	}
+	u, err := c.mollieURL(fmt.Sprintf("v2/customers/%s/subscriptions", url.PathEscape(params.CustomerID)))
+	if err != nil {
+		return nil, fmt.Errorf("build Mollie subscription URL: %w", err)
+	}
+	respBody, err := c.postJSON(ctx, u.String(), body, params.IdempotencyKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create subscription: %w", err)
+	}
+	var sub mollie.Subscription
+	if err := json.Unmarshal(respBody, &sub); err != nil {
+		return nil, fmt.Errorf("decode Mollie subscription response: %w", err)
 	}
 
 	c.logger.WithFields(map[string]any{
@@ -215,46 +246,110 @@ func (c *Client) CreateSubscription(ctx context.Context, params SubscriptionPara
 		"interval":        params.Interval,
 	}).Info("Created Mollie subscription")
 
-	return sub, nil
+	return &sub, nil
+}
+
+func (c *Client) mollieURL(path string) (*url.URL, error) {
+	if c.client == nil || c.client.BaseURL == nil {
+		return nil, fmt.Errorf("mollie client not initialized")
+	}
+	return c.client.BaseURL.Parse(path)
+}
+
+func (c *Client) postJSON(ctx context.Context, rawURL string, body []byte, idempotencyKey string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build Mollie request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Idempotency-Key", idempotencyKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	respBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("read Mollie response: %w", readErr)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("mollie status %d: %s", resp.StatusCode, string(respBody))
+	}
+	return respBody, nil
 }
 
 // OnDemandChargeParams for charging an existing mandate on-demand (e.g. for
 // invoice/overage collection on Mollie subscribers).
 type OnDemandChargeParams struct {
-	CustomerID  string
-	MandateID   string
-	TenantID    string
-	InvoiceID   string
-	PaymentID   string
-	Amount      *mollie.Amount
-	Description string
-	WebhookURL  string
+	CustomerID     string
+	MandateID      string
+	TenantID       string
+	InvoiceID      string
+	PaymentID      string
+	Amount         *mollie.Amount
+	Description    string
+	WebhookURL     string
+	IdempotencyKey string
 }
 
 // ChargeOnMandate creates a recurring-sequence payment against an existing
 // mandate. The resulting payment fires the same webhook flow as subscription
 // installments; reconciliation routes by metadata.invoice_id.
 func (c *Client) ChargeOnMandate(ctx context.Context, params OnDemandChargeParams) (*mollie.Payment, error) {
-	paymentParams := mollie.CreatePayment{
-		Amount:      params.Amount,
-		Description: params.Description,
-		WebhookURL:  params.WebhookURL,
-		Metadata: map[string]any{
+	if params.IdempotencyKey == "" {
+		return nil, fmt.Errorf("ChargeOnMandate requires a deterministic IdempotencyKey")
+	}
+	if c.client == nil || c.client.BaseURL == nil {
+		return nil, fmt.Errorf("mollie client not initialized")
+	}
+	body, err := json.Marshal(map[string]any{
+		"amount":      params.Amount,
+		"description": params.Description,
+		"webhookUrl":  params.WebhookURL,
+		"metadata": map[string]any{
 			"purpose":            "invoice",
 			"tenant_id":          params.TenantID,
 			"invoice_id":         params.InvoiceID,
 			"billing_payment_id": params.PaymentID,
 			"reference_id":       params.InvoiceID,
 		},
-		CreateRecurrentPaymentFields: mollie.CreateRecurrentPaymentFields{
-			SequenceType: mollie.RecurringSequence,
-			MandateID:    params.MandateID,
-		},
+		"sequenceType": mollie.RecurringSequence,
+		"mandateId":    params.MandateID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal on-demand payment: %w", err)
 	}
+	u, err := c.client.BaseURL.Parse(fmt.Sprintf("v2/customers/%s/payments", url.PathEscape(params.CustomerID)))
+	if err != nil {
+		return nil, fmt.Errorf("build Mollie on-demand payment URL: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build Mollie on-demand payment request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Idempotency-Key", params.IdempotencyKey)
 
-	_, payment, err := c.client.Customers.CreatePayment(ctx, params.CustomerID, paymentParams)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create on-demand payment: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("read Mollie on-demand payment response: %w", readErr)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("failed to create on-demand payment: mollie status %d: %s", resp.StatusCode, string(respBody))
+	}
+	var payment mollie.Payment
+	if err := json.Unmarshal(respBody, &payment); err != nil {
+		return nil, fmt.Errorf("decode Mollie on-demand payment response: %w", err)
 	}
 
 	c.logger.WithFields(map[string]any{
@@ -264,7 +359,7 @@ func (c *Client) ChargeOnMandate(ctx context.Context, params OnDemandChargeParam
 		"invoice_id":  params.InvoiceID,
 	}).Info("Created Mollie on-demand payment")
 
-	return payment, nil
+	return &payment, nil
 }
 
 // GetSubscription retrieves a subscription

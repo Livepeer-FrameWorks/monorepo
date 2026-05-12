@@ -132,12 +132,16 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM purser\.billing_invoices`).
 		WithArgs(tenantID, periodStart).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	// New per-cluster shape: rows now carry cluster_id. Empty cluster_id
-	// keeps the legacy platform-official path.
+		// New per-cluster shape: rows now carry cluster_id. Empty cluster_id
+		// keeps the legacy platform-official path.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
 		WithArgs(tenantID, periodStart, periodEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
 			AddRow("", "average_storage_gb", 2.0))
+	mock.ExpectQuery(`SELECT stripe_subscription_id, mollie_subscription_id\s+FROM purser\.tenant_subscriptions`).
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"stripe_subscription_id", "mollie_subscription_id"}).
+			AddRow(nil, nil))
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT amount_cents FROM purser\.balance_transactions`).
 		WithArgs(tenantID, sqlmock.AnyArg()).
@@ -214,6 +218,10 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 		WithArgs(tenantID, periodStart, periodEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
 			AddRow("", "average_storage_gb", 2.0))
+	mock.ExpectQuery(`SELECT stripe_subscription_id, mollie_subscription_id\s+FROM purser\.tenant_subscriptions`).
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"stripe_subscription_id", "mollie_subscription_id"}).
+			AddRow(nil, nil))
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT amount_cents FROM purser\.balance_transactions`).
 		WithArgs(tenantID, sqlmock.AnyArg()).
@@ -267,6 +275,9 @@ func TestChargeMollieOverageCreatesLocalPaymentBeforeProviderCharge(t *testing.T
 		if !strings.Contains(req.URL.Path, "/v2/customers/cst_123/payments") {
 			t.Fatalf("unexpected path: %s", req.URL.Path)
 		}
+		if got := req.Header.Get("Idempotency-Key"); got != "mollie-overage:invoice-1:1" {
+			t.Fatalf("idempotency key = %q, want mollie-overage:invoice-1:1", got)
+		}
 
 		var body map[string]any
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
@@ -306,9 +317,9 @@ func TestChargeMollieOverageCreatesLocalPaymentBeforeProviderCharge(t *testing.T
 
 	mock.ExpectQuery(`SELECT mc\.mollie_customer_id`).
 		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"mollie_customer_id", "mollie_mandate_id"}).
-			AddRow("cst_123", "mdt_123"))
-	mock.ExpectExec(`INSERT INTO purser\.billing_payments`).
+		WillReturnRows(sqlmock.NewRows([]string{"mollie_customer_id", "mollie_mandate_id", "mollie_mandate_status"}).
+			AddRow("cst_123", "mdt_123", "valid"))
+	mock.ExpectQuery(`INSERT INTO purser\.billing_payments`).
 		WithArgs(
 			sqlArgFunc(func(v driver.Value) bool {
 				localPaymentID, _ = v.(string)
@@ -323,9 +334,27 @@ func TestChargeMollieOverageCreatesLocalPaymentBeforeProviderCharge(t *testing.T
 				return intentID == "mollie-overage-intent:"+localPaymentID
 			}),
 		).
+		WillReturnRows(sqlmock.NewRows([]string{"tx_id", "status"}).AddRow("", "pending"))
+	mock.ExpectQuery(`INSERT INTO purser\.payment_provider_intents`).
+		WithArgs("tenant-1", "invoice-1", "cst_123", "EUR", int64(1234), "mollie-overage:invoice-1:1").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("00000000-0000-0000-0000-000000000111"))
+	mock.ExpectExec(`UPDATE purser\.billing_payments SET intent_id`).
+		WithArgs("00000000-0000-0000-0000-000000000111", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO purser\.billing_payment_attempts`).
+		WithArgs(sqlmock.AnyArg(), "00000000-0000-0000-0000-000000000111", 1, "mollie-overage:invoice-1:1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.billing_payment_attempts`).
+		WithArgs(sqlmock.AnyArg(), 1).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`UPDATE purser\.billing_payments\s+SET tx_id`).
 		WithArgs("tr_overage", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.payment_provider_intents`).
+		WithArgs("tr_overage", "00000000-0000-0000-0000-000000000111").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.billing_payment_attempts`).
+		WithArgs("tr_overage", sqlmock.AnyArg(), 1).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := jm.chargeMollieOverage(context.Background(), "tenant-1", "invoice-1", decimal.NewFromFloat(12.34), "EUR"); err != nil {
