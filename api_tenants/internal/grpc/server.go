@@ -3389,6 +3389,69 @@ func (s *QuartermasterServer) BootstrapClusterAccess(ctx context.Context, req *p
 	return &emptypb.Empty{}, nil
 }
 
+// DeactivateClusterAccess soft-suspends a tenant_cluster_access row.
+// Service-token only. Idempotent — a no-op if the row is already inactive or
+// absent. Purser calls this from tier downgrade reconciliation; the row is
+// retained so a future upgrade can re-activate it without losing any
+// resource_limits override or audit history.
+func (s *QuartermasterServer) DeactivateClusterAccess(ctx context.Context, req *pb.DeactivateClusterAccessRequest) (*emptypb.Empty, error) {
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "DeactivateClusterAccess requires service token auth")
+	}
+	tenantID := req.GetTenantId()
+	clusterID := req.GetClusterId()
+	if tenantID == "" || clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id and cluster_id required")
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE quartermaster.tenant_cluster_access
+		SET is_active = false,
+		    subscription_status = 'suspended',
+		    updated_at = NOW()
+		WHERE tenant_id = $1::uuid AND cluster_id = $2 AND is_active = true
+	`, tenantID, clusterID); err != nil {
+		return nil, status.Errorf(codes.Internal, "deactivate tenant_cluster_access: %v", err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
+// ListTenantClusterAccess returns every tenant_cluster_access row joined with
+// infrastructure_clusters.is_platform_official. Service-token only. Distinct
+// from ListClustersForTenant, which is a user-facing RPC with a minimal entry
+// shape and does not surface the is_active / subscription_status fields needed
+// for tier reconciliation diffs.
+func (s *QuartermasterServer) ListTenantClusterAccess(ctx context.Context, req *pb.ListTenantClusterAccessRequest) (*pb.ListTenantClusterAccessResponse, error) {
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "ListTenantClusterAccess requires service token auth")
+	}
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT tca.cluster_id, tca.is_active, tca.subscription_status, COALESCE(ic.is_platform_official, false)
+		FROM quartermaster.tenant_cluster_access tca
+		LEFT JOIN quartermaster.infrastructure_clusters ic ON ic.cluster_id = tca.cluster_id
+		WHERE tca.tenant_id = $1::uuid
+	`, tenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list tenant_cluster_access: %v", err)
+	}
+	defer rows.Close()
+	out := &pb.ListTenantClusterAccessResponse{}
+	for rows.Next() {
+		var r pb.TenantClusterAccessRow
+		if err := rows.Scan(&r.ClusterId, &r.IsActive, &r.SubscriptionStatus, &r.IsPlatformOfficial); err != nil {
+			return nil, status.Errorf(codes.Internal, "scan tenant_cluster_access: %v", err)
+		}
+		out.Rows = append(out.Rows, &r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate tenant_cluster_access: %v", err)
+	}
+	return out, nil
+}
+
 // SubscribeToCluster subscribes a tenant to a public/shared cluster
 func (s *QuartermasterServer) SubscribeToCluster(ctx context.Context, req *pb.SubscribeToClusterRequest) (*emptypb.Empty, error) {
 	tenantID := middleware.GetTenantID(ctx)

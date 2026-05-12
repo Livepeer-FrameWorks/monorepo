@@ -102,6 +102,17 @@ service ClusterService {
   // bootstrap reconcile only. The server enforces is_platform_official.
   rpc BootstrapClusterAccess(BootstrapClusterAccessRequest) returns (google.protobuf.Empty);
 
+  // DeactivateClusterAccess soft-suspends a tenant_cluster_access row
+  // (is_active=false, subscription_status='suspended'). Service-token only;
+  // Purser calls this from reconcileTierClusterAccess on downgrade. Idempotent.
+  rpc DeactivateClusterAccess(DeactivateClusterAccessRequest) returns (google.protobuf.Empty);
+
+  // ListTenantClusterAccess returns every tenant_cluster_access row with the
+  // is_active / subscription_status / is_platform_official fields needed for
+  // tier reconciliation. Service-token only; distinct from the user-facing
+  // ListClustersForTenant which exposes a minimal ClusterAccessEntry.
+  rpc ListTenantClusterAccess(ListTenantClusterAccessRequest) returns (ListTenantClusterAccessResponse);
+
   // Unsubscribe from a cluster
   rpc UnsubscribeFromCluster(UnsubscribeFromClusterRequest) returns (google.protobuf.Empty);
 
@@ -683,6 +694,27 @@ message BootstrapClusterAccessRequest {
   string tenant_id = 1;
   string cluster_id = 2;
   optional TenantResourceLimits resource_limits = 3;
+}
+
+message DeactivateClusterAccessRequest {
+  string tenant_id = 1;
+  string cluster_id = 2;
+  string reason = 3;       // e.g. "tier_downgrade"
+}
+
+message ListTenantClusterAccessRequest {
+  string tenant_id = 1;
+}
+
+message TenantClusterAccessRow {
+  string cluster_id = 1;
+  bool is_active = 2;
+  string subscription_status = 3;
+  bool is_platform_official = 4;   // joined from infrastructure_clusters
+}
+
+message ListTenantClusterAccessResponse {
+  repeated TenantClusterAccessRow rows = 1;
 }
 
 // TenantResourceLimits is the per-tenant runtime cap used by Foghorn admission.

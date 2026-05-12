@@ -381,6 +381,11 @@ message TenantSubscription {
 
   // ===== BILLING DETAILS =====
   optional string billing_company = 29;            // Company name for invoices
+
+  // ===== SCHEDULED TIER CHANGE =====
+  optional string pending_tier_id = 32;
+  optional google.protobuf.Timestamp pending_effective_at = 33;
+  optional string pending_reason = 34;
 }
 
 message BillingAddress {

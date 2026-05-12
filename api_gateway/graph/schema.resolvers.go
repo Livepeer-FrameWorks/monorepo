@@ -2353,6 +2353,11 @@ func (r *mutationResolver) PromoteToPaid(ctx context.Context, tierID string) (mo
 	return r.DoPromoteToPaid(ctx, tierID)
 }
 
+// ChangeBillingTier is the resolver for the changeBillingTier field.
+func (r *mutationResolver) ChangeBillingTier(ctx context.Context, tierID string) (model.ChangeBillingTierResult, error) {
+	return r.DoChangeBillingTier(ctx, tierID)
+}
+
 // DeleteSkipperConversation is the resolver for the deleteSkipperConversation field.
 func (r *mutationResolver) DeleteSkipperConversation(ctx context.Context, id string) (bool, error) {
 	return r.Resolver.DoDeleteSkipperConversation(ctx, id)
@@ -5710,6 +5715,23 @@ func (r *tenantSubscriptionResolver) CancelledAt(ctx context.Context, obj *proto
 // EntitlementOverrides is the resolver for the entitlementOverrides field.
 func (r *tenantSubscriptionResolver) EntitlementOverrides(ctx context.Context, obj *proto.TenantSubscription) ([]*model.EntitlementEntry, error) {
 	return entitlementMapToEntries(obj.GetEntitlementOverrides()), nil
+}
+
+// PendingTier is the resolver for the pendingTier field.
+func (r *tenantSubscriptionResolver) PendingTier(ctx context.Context, obj *proto.TenantSubscription) (*proto.BillingTier, error) {
+	if obj.GetPendingTierId() == "" {
+		return nil, nil
+	}
+	return r.Clients.Purser.GetBillingTier(ctx, obj.GetPendingTierId())
+}
+
+// PendingEffectiveAt is the resolver for the pendingEffectiveAt field.
+func (r *tenantSubscriptionResolver) PendingEffectiveAt(ctx context.Context, obj *proto.TenantSubscription) (*time.Time, error) {
+	if obj.GetPendingEffectiveAt() == nil || !obj.GetPendingEffectiveAt().IsValid() {
+		return nil, nil
+	}
+	t := obj.GetPendingEffectiveAt().AsTime()
+	return &t, nil
 }
 
 // CreatedAt is the resolver for the createdAt field.

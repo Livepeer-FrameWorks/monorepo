@@ -11,6 +11,7 @@
     GetInvoicesStore,
     CreatePaymentStore,
     PromoteToPaidStore,
+    ChangeBillingTierStore,
     BillingTierFieldsStore,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
@@ -29,6 +30,7 @@
   const invoicesStore = new GetInvoicesStore();
   const createPaymentMutation = new CreatePaymentStore();
   const promoteMutation = new PromoteToPaidStore();
+  const changeTierMutation = new ChangeBillingTierStore();
 
   // Fragment stores for unmasking nested data
   const tierFragmentStore = new BillingTierFieldsStore();
@@ -37,6 +39,7 @@
   let error = $state<string | null>(null);
   let selectedTierId = $state("");
   let promoteLoading = $state(false);
+  let changeTierLoadingId = $state<string | null>(null);
   let paymentLoadingInvoiceId = $state<string | null>(null);
   let invoiceCryptoPayment = $state<{
     invoiceId: string;
@@ -198,6 +201,54 @@
     }
   }
 
+  async function handleChangeBillingTier(tier: {
+    id?: string | null;
+    displayName?: string | null;
+    tierLevel?: number | null;
+  }) {
+    if (!tier.id) {
+      toast.error("Billing tier unavailable");
+      return;
+    }
+    if (!currentTier?.tierLevel || tier.tierLevel == null) {
+      toast.error("Current billing tier unavailable");
+      return;
+    }
+    const isDowngrade = tier.tierLevel < currentTier.tierLevel;
+    if (isDowngrade) {
+      const ok = window.confirm(
+        `Downgrade to ${tier.displayName ?? "this tier"} at the end of the current billing period?`
+      );
+      if (!ok) return;
+    }
+
+    changeTierLoadingId = tier.id;
+    try {
+      const result = await changeTierMutation.mutate({ tierId: tier.id });
+      const data = result.data?.changeBillingTier;
+      if (data?.__typename === "ChangeBillingTierPayload") {
+        if (data.pendingTier) {
+          const effective = data.effectiveAt ? formatDate(data.effectiveAt) : "period end";
+          toast.success(`Downgrade scheduled for ${effective}`);
+        } else {
+          toast.success(
+            data.message || `Upgraded to ${data.appliedTier?.displayName ?? "new tier"}`
+          );
+        }
+        await loadBillingData();
+        return;
+      }
+      if (data && "message" in data) {
+        throw new Error(data.message);
+      }
+      throw new Error("Failed to change billing tier");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to change billing tier");
+    } finally {
+      changeTierLoadingId = null;
+    }
+  }
+
   function moneyNumber(value: unknown): number {
     if (typeof value === "number") return Number.isFinite(value) ? value : 0;
     if (typeof value === "string") {
@@ -354,6 +405,8 @@
 
   // Derived: is this a prepaid account that can upgrade?
   const isPrepaid = $derived(billingStatus?.subscription?.billingModel === "prepaid");
+  const pendingTier = $derived(billingStatus?.subscription?.pendingTier ?? null);
+  const pendingEffectiveAt = $derived(billingStatus?.subscription?.pendingEffectiveAt ?? null);
 </script>
 
 <svelte:head>
@@ -635,6 +688,32 @@
                         >
                           Current Plan
                         </div>
+                        {#if pendingTier}
+                          <div
+                            class="mt-3 border border-warning/50 bg-warning/10 px-3 py-2 text-xs text-warning"
+                          >
+                            Downgrading to {pendingTier.displayName} on {pendingEffectiveAt
+                              ? formatDate(pendingEffectiveAt)
+                              : "period end"}
+                          </div>
+                        {/if}
+                      {:else if !isPrepaid && (tier.tierLevel ?? 0) >= 1}
+                        <Button
+                          class="w-full mt-4"
+                          variant={(tier.tierLevel ?? 0) > (currentTier?.tierLevel ?? 0)
+                            ? "default"
+                            : "outline"}
+                          disabled={changeTierLoadingId === tier.id}
+                          onclick={() => handleChangeBillingTier(tier)}
+                        >
+                          {#if changeTierLoadingId === tier.id}
+                            Updating...
+                          {:else if (tier.tierLevel ?? 0) > (currentTier?.tierLevel ?? 0)}
+                            Upgrade
+                          {:else}
+                            Downgrade
+                          {/if}
+                        </Button>
                       {/if}
                     </div>
                   {/each}

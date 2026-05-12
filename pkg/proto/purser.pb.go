@@ -1537,8 +1537,12 @@ type TenantSubscription struct {
 	MollieSubscriptionId *string `protobuf:"bytes,28,opt,name=mollie_subscription_id,json=mollieSubscriptionId,proto3,oneof" json:"mollie_subscription_id,omitempty"` // Mollie Subscription ID (sub_xxx)
 	// ===== BILLING DETAILS =====
 	BillingCompany *string `protobuf:"bytes,29,opt,name=billing_company,json=billingCompany,proto3,oneof" json:"billing_company,omitempty"` // Company name for invoices
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// ===== SCHEDULED TIER CHANGE =====
+	PendingTierId      *string                `protobuf:"bytes,32,opt,name=pending_tier_id,json=pendingTierId,proto3,oneof" json:"pending_tier_id,omitempty"`
+	PendingEffectiveAt *timestamppb.Timestamp `protobuf:"bytes,33,opt,name=pending_effective_at,json=pendingEffectiveAt,proto3,oneof" json:"pending_effective_at,omitempty"`
+	PendingReason      *string                `protobuf:"bytes,34,opt,name=pending_reason,json=pendingReason,proto3,oneof" json:"pending_reason,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *TenantSubscription) Reset() {
@@ -1770,6 +1774,27 @@ func (x *TenantSubscription) GetMollieSubscriptionId() string {
 func (x *TenantSubscription) GetBillingCompany() string {
 	if x != nil && x.BillingCompany != nil {
 		return *x.BillingCompany
+	}
+	return ""
+}
+
+func (x *TenantSubscription) GetPendingTierId() string {
+	if x != nil && x.PendingTierId != nil {
+		return *x.PendingTierId
+	}
+	return ""
+}
+
+func (x *TenantSubscription) GetPendingEffectiveAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.PendingEffectiveAt
+	}
+	return nil
+}
+
+func (x *TenantSubscription) GetPendingReason() string {
+	if x != nil && x.PendingReason != nil {
+		return *x.PendingReason
 	}
 	return ""
 }
@@ -10404,7 +10429,7 @@ const file_purser_proto_rawDesc = "" +
 	"\vis_complete\x18\x06 \x01(\bR\n" +
 	"isComplete\x129\n" +
 	"\n" +
-	"updated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x91\x10\n" +
+	"updated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xfd\x11\n" +
 	"\x12TenantSubscription\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
@@ -10438,7 +10463,10 @@ const file_purser_proto_rawDesc = "" +
 	"\x19stripe_current_period_end\x18\x1a \x01(\v2\x1a.google.protobuf.TimestampH\fR\x16stripeCurrentPeriodEnd\x88\x01\x01\x12)\n" +
 	"\x10dunning_attempts\x18\x1b \x01(\x05R\x0fdunningAttempts\x129\n" +
 	"\x16mollie_subscription_id\x18\x1c \x01(\tH\rR\x14mollieSubscriptionId\x88\x01\x01\x12,\n" +
-	"\x0fbilling_company\x18\x1d \x01(\tH\x0eR\x0ebillingCompany\x88\x01\x01\x1aG\n" +
+	"\x0fbilling_company\x18\x1d \x01(\tH\x0eR\x0ebillingCompany\x88\x01\x01\x12+\n" +
+	"\x0fpending_tier_id\x18  \x01(\tH\x0fR\rpendingTierId\x88\x01\x01\x12Q\n" +
+	"\x14pending_effective_at\x18! \x01(\v2\x1a.google.protobuf.TimestampH\x10R\x12pendingEffectiveAt\x88\x01\x01\x12*\n" +
+	"\x0epending_reason\x18\" \x01(\tH\x11R\rpendingReason\x88\x01\x01\x1aG\n" +
 	"\x19EntitlementOverridesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x10\n" +
@@ -10456,7 +10484,10 @@ const file_purser_proto_rawDesc = "" +
 	"\x1b_stripe_subscription_statusB\x1c\n" +
 	"\x1a_stripe_current_period_endB\x19\n" +
 	"\x17_mollie_subscription_idB\x12\n" +
-	"\x10_billing_companyJ\x04\b\n" +
+	"\x10_billing_companyB\x12\n" +
+	"\x10_pending_tier_idB\x17\n" +
+	"\x15_pending_effective_atB\x11\n" +
+	"\x0f_pending_reasonJ\x04\b\n" +
 	"\x10\vJ\x04\b\f\x10\rR\x0ecustom_pricingR\x12custom_allocations\"\x8d\x01\n" +
 	"\x0eBillingAddress\x12\x16\n" +
 	"\x06street\x18\x01 \x01(\tR\x06street\x12\x12\n" +
@@ -11613,240 +11644,241 @@ var file_purser_proto_depIdxs = []int32{
 	135, // 27: purser.TenantSubscription.billing_period_start:type_name -> google.protobuf.Timestamp
 	135, // 28: purser.TenantSubscription.billing_period_end:type_name -> google.protobuf.Timestamp
 	135, // 29: purser.TenantSubscription.stripe_current_period_end:type_name -> google.protobuf.Timestamp
-	135, // 30: purser.CreateSubscriptionRequest.trial_ends_at:type_name -> google.protobuf.Timestamp
-	9,   // 31: purser.CreateSubscriptionRequest.custom_features:type_name -> purser.BillingFeatures
-	135, // 32: purser.CreateSubscriptionRequest.billing_period_start:type_name -> google.protobuf.Timestamp
-	135, // 33: purser.CreateSubscriptionRequest.billing_period_end:type_name -> google.protobuf.Timestamp
-	9,   // 34: purser.UpdateSubscriptionRequest.custom_features:type_name -> purser.BillingFeatures
-	135, // 35: purser.UpdateSubscriptionRequest.billing_period_start:type_name -> google.protobuf.Timestamp
-	135, // 36: purser.UpdateSubscriptionRequest.billing_period_end:type_name -> google.protobuf.Timestamp
-	8,   // 37: purser.UpdateSubscriptionRequest.pricing_overrides:type_name -> purser.PricingRule
-	127, // 38: purser.UpdateSubscriptionRequest.entitlement_overrides:type_name -> purser.UpdateSubscriptionRequest.EntitlementOverridesEntry
-	135, // 39: purser.GetOperatorRevenueRequest.range_start:type_name -> google.protobuf.Timestamp
-	135, // 40: purser.GetOperatorRevenueRequest.range_end:type_name -> google.protobuf.Timestamp
-	23,  // 41: purser.GetOperatorRevenueResponse.clusters:type_name -> purser.OperatorRevenueByCluster
-	23,  // 42: purser.ListOperatorClustersResponse.clusters:type_name -> purser.OperatorRevenueByCluster
-	135, // 43: purser.GetOperatorPayoutsRequest.range_start:type_name -> google.protobuf.Timestamp
-	135, // 44: purser.GetOperatorPayoutsRequest.range_end:type_name -> google.protobuf.Timestamp
-	135, // 45: purser.OperatorPayout.created_at:type_name -> google.protobuf.Timestamp
-	135, // 46: purser.OperatorPayout.paid_at:type_name -> google.protobuf.Timestamp
-	28,  // 47: purser.GetOperatorPayoutsResponse.payouts:type_name -> purser.OperatorPayout
-	33,  // 48: purser.GetInvoiceResponse.invoice:type_name -> purser.Invoice
-	7,   // 49: purser.GetInvoiceResponse.tier:type_name -> purser.BillingTier
-	135, // 50: purser.Invoice.due_date:type_name -> google.protobuf.Timestamp
-	135, // 51: purser.Invoice.paid_at:type_name -> google.protobuf.Timestamp
-	136, // 52: purser.Invoice.usage_details:type_name -> google.protobuf.Struct
-	135, // 53: purser.Invoice.created_at:type_name -> google.protobuf.Timestamp
-	135, // 54: purser.Invoice.updated_at:type_name -> google.protobuf.Timestamp
-	135, // 55: purser.Invoice.period_start:type_name -> google.protobuf.Timestamp
-	135, // 56: purser.Invoice.period_end:type_name -> google.protobuf.Timestamp
-	45,  // 57: purser.Invoice.usage_summary:type_name -> purser.UsageSummary
-	32,  // 58: purser.Invoice.line_items:type_name -> purser.LineItem
-	133, // 59: purser.ListInvoicesRequest.pagination:type_name -> common.CursorPaginationRequest
-	33,  // 60: purser.ListInvoicesResponse.invoices:type_name -> purser.Invoice
-	134, // 61: purser.ListInvoicesResponse.pagination:type_name -> common.CursorPaginationResponse
-	135, // 62: purser.PaymentResponse.expires_at:type_name -> google.protobuf.Timestamp
-	135, // 63: purser.PaymentResponse.created_at:type_name -> google.protobuf.Timestamp
-	135, // 64: purser.PaymentResponse.quoted_at:type_name -> google.protobuf.Timestamp
-	17,  // 65: purser.BillingStatusResponse.subscription:type_name -> purser.TenantSubscription
-	7,   // 66: purser.BillingStatusResponse.tier:type_name -> purser.BillingTier
-	135, // 67: purser.BillingStatusResponse.next_billing_date:type_name -> google.protobuf.Timestamp
-	33,  // 68: purser.BillingStatusResponse.pending_invoices:type_name -> purser.Invoice
-	42,  // 69: purser.BillingStatusResponse.recent_payments:type_name -> purser.Payment
-	45,  // 70: purser.BillingStatusResponse.usage_summary:type_name -> purser.UsageSummary
-	135, // 71: purser.Payment.confirmed_at:type_name -> google.protobuf.Timestamp
-	135, // 72: purser.Payment.created_at:type_name -> google.protobuf.Timestamp
-	135, // 73: purser.Payment.updated_at:type_name -> google.protobuf.Timestamp
-	45,  // 74: purser.UsageIngestRequest.usage_summaries:type_name -> purser.UsageSummary
-	135, // 75: purser.UsageSummary.timestamp:type_name -> google.protobuf.Timestamp
-	44,  // 76: purser.UsageSummary.geo_breakdown:type_name -> purser.CountryMetrics
-	137, // 77: purser.GetUsageRecordsRequest.time_range:type_name -> common.TimeRange
-	133, // 78: purser.GetUsageRecordsRequest.pagination:type_name -> common.CursorPaginationRequest
-	136, // 79: purser.UsageRecord.usage_details:type_name -> google.protobuf.Struct
-	135, // 80: purser.UsageRecord.created_at:type_name -> google.protobuf.Timestamp
-	135, // 81: purser.UsageRecord.period_start:type_name -> google.protobuf.Timestamp
-	135, // 82: purser.UsageRecord.period_end:type_name -> google.protobuf.Timestamp
-	48,  // 83: purser.UsageRecordsResponse.usage_records:type_name -> purser.UsageRecord
-	53,  // 84: purser.UsageRecordsResponse.filters:type_name -> purser.UsageFilters
-	134, // 85: purser.UsageRecordsResponse.pagination:type_name -> common.CursorPaginationResponse
-	137, // 86: purser.GetUsageAggregatesRequest.time_range:type_name -> common.TimeRange
-	135, // 87: purser.UsageAggregate.period_start:type_name -> google.protobuf.Timestamp
-	135, // 88: purser.UsageAggregate.period_end:type_name -> google.protobuf.Timestamp
-	51,  // 89: purser.GetUsageAggregatesResponse.aggregates:type_name -> purser.UsageAggregate
-	137, // 90: purser.UsageFilters.time_range:type_name -> common.TimeRange
-	128, // 91: purser.TenantUsageResponse.usage:type_name -> purser.TenantUsageResponse.UsageEntry
-	129, // 92: purser.TenantUsageResponse.costs:type_name -> purser.TenantUsageResponse.CostsEntry
-	32,  // 93: purser.TenantUsageResponse.line_items:type_name -> purser.LineItem
-	136, // 94: purser.ClusterPricing.metered_rates:type_name -> google.protobuf.Struct
-	136, // 95: purser.ClusterPricing.default_quotas:type_name -> google.protobuf.Struct
-	135, // 96: purser.ClusterPricing.created_at:type_name -> google.protobuf.Timestamp
-	135, // 97: purser.ClusterPricing.updated_at:type_name -> google.protobuf.Timestamp
-	130, // 98: purser.GetClustersPricingBatchResponse.pricings:type_name -> purser.GetClustersPricingBatchResponse.PricingsEntry
-	136, // 99: purser.SetClusterPricingRequest.metered_rates:type_name -> google.protobuf.Struct
-	136, // 100: purser.SetClusterPricingRequest.default_quotas:type_name -> google.protobuf.Struct
-	133, // 101: purser.ListClusterPricingsRequest.pagination:type_name -> common.CursorPaginationRequest
-	58,  // 102: purser.ListClusterPricingsResponse.pricings:type_name -> purser.ClusterPricing
-	134, // 103: purser.ListClusterPricingsResponse.pagination:type_name -> common.CursorPaginationResponse
-	133, // 104: purser.ListMarketplaceClusterPricingsRequest.pagination:type_name -> common.CursorPaginationRequest
-	72,  // 105: purser.ListMarketplaceClusterPricingsResponse.pricings:type_name -> purser.MarketplaceClusterPricing
-	134, // 106: purser.ListMarketplaceClusterPricingsResponse.pagination:type_name -> common.CursorPaginationResponse
-	135, // 107: purser.MarketplaceClusterPricing.created_at:type_name -> google.protobuf.Timestamp
-	135, // 108: purser.PrepaidBalance.created_at:type_name -> google.protobuf.Timestamp
-	135, // 109: purser.PrepaidBalance.updated_at:type_name -> google.protobuf.Timestamp
-	135, // 110: purser.BalanceTransaction.created_at:type_name -> google.protobuf.Timestamp
-	137, // 111: purser.ListBalanceTransactionsRequest.time_range:type_name -> common.TimeRange
-	133, // 112: purser.ListBalanceTransactionsRequest.pagination:type_name -> common.CursorPaginationRequest
-	74,  // 113: purser.ListBalanceTransactionsResponse.transactions:type_name -> purser.BalanceTransaction
-	134, // 114: purser.ListBalanceTransactionsResponse.pagination:type_name -> common.CursorPaginationResponse
-	18,  // 115: purser.CreateCardTopupRequest.billing_address:type_name -> purser.BillingAddress
-	135, // 116: purser.CreateCardTopupResponse.expires_at:type_name -> google.protobuf.Timestamp
-	135, // 117: purser.PendingTopup.expires_at:type_name -> google.protobuf.Timestamp
-	135, // 118: purser.PendingTopup.completed_at:type_name -> google.protobuf.Timestamp
-	135, // 119: purser.PendingTopup.created_at:type_name -> google.protobuf.Timestamp
-	135, // 120: purser.PendingTopup.updated_at:type_name -> google.protobuf.Timestamp
-	133, // 121: purser.ListPendingTopupsRequest.pagination:type_name -> common.CursorPaginationRequest
-	88,  // 122: purser.ListPendingTopupsResponse.topups:type_name -> purser.PendingTopup
-	134, // 123: purser.ListPendingTopupsResponse.pagination:type_name -> common.CursorPaginationResponse
-	0,   // 124: purser.CreateCryptoTopupRequest.asset:type_name -> purser.CryptoAsset
-	0,   // 125: purser.CreateCryptoTopupResponse.asset:type_name -> purser.CryptoAsset
-	135, // 126: purser.CreateCryptoTopupResponse.expires_at:type_name -> google.protobuf.Timestamp
-	135, // 127: purser.CreateCryptoTopupResponse.quoted_at:type_name -> google.protobuf.Timestamp
-	0,   // 128: purser.CryptoTopup.asset:type_name -> purser.CryptoAsset
-	135, // 129: purser.CryptoTopup.expires_at:type_name -> google.protobuf.Timestamp
-	135, // 130: purser.CryptoTopup.detected_at:type_name -> google.protobuf.Timestamp
-	135, // 131: purser.CryptoTopup.completed_at:type_name -> google.protobuf.Timestamp
-	135, // 132: purser.CryptoTopup.created_at:type_name -> google.protobuf.Timestamp
-	135, // 133: purser.ChangeBillingTierResponse.effective_at:type_name -> google.protobuf.Timestamp
-	136, // 134: purser.MollieMandate.details:type_name -> google.protobuf.Struct
-	135, // 135: purser.MollieMandate.created_at:type_name -> google.protobuf.Timestamp
-	110, // 136: purser.ListMollieMandatesResponse.mandates:type_name -> purser.MollieMandate
-	115, // 137: purser.PaymentRequirements.accepts:type_name -> purser.PaymentRequirement
-	117, // 138: purser.X402PaymentPayload.payload:type_name -> purser.X402ExactPayload
-	118, // 139: purser.X402ExactPayload.authorization:type_name -> purser.X402Authorization
-	116, // 140: purser.VerifyX402PaymentRequest.payment:type_name -> purser.X402PaymentPayload
-	116, // 141: purser.SettleX402PaymentRequest.payment:type_name -> purser.X402PaymentPayload
-	58,  // 142: purser.GetClustersPricingBatchResponse.PricingsEntry.value:type_name -> purser.ClusterPricing
-	4,   // 143: purser.BillingService.GetBillingTiers:input_type -> purser.GetBillingTiersRequest
-	6,   // 144: purser.BillingService.GetBillingTier:input_type -> purser.GetBillingTierRequest
-	10,  // 145: purser.BillingService.CreateBillingTier:input_type -> purser.CreateBillingTierRequest
-	11,  // 146: purser.BillingService.UpdateBillingTier:input_type -> purser.UpdateBillingTierRequest
-	1,   // 147: purser.BillingService.GetTenantBillingStatus:input_type -> purser.GetTenantBillingStatusRequest
-	12,  // 148: purser.SubscriptionService.GetSubscription:input_type -> purser.GetSubscriptionRequest
-	19,  // 149: purser.SubscriptionService.CreateSubscription:input_type -> purser.CreateSubscriptionRequest
-	20,  // 150: purser.SubscriptionService.UpdateSubscription:input_type -> purser.UpdateSubscriptionRequest
-	21,  // 151: purser.SubscriptionService.CancelSubscription:input_type -> purser.CancelSubscriptionRequest
-	14,  // 152: purser.SubscriptionService.GetBillingDetails:input_type -> purser.GetBillingDetailsRequest
-	15,  // 153: purser.SubscriptionService.UpdateBillingDetails:input_type -> purser.UpdateBillingDetailsRequest
-	30,  // 154: purser.InvoiceService.GetInvoice:input_type -> purser.GetInvoiceRequest
-	34,  // 155: purser.InvoiceService.ListInvoices:input_type -> purser.ListInvoicesRequest
-	22,  // 156: purser.OperatorRevenueService.GetOperatorRevenue:input_type -> purser.GetOperatorRevenueRequest
-	25,  // 157: purser.OperatorRevenueService.ListOperatorClusters:input_type -> purser.ListOperatorClustersRequest
-	27,  // 158: purser.OperatorRevenueService.GetOperatorPayouts:input_type -> purser.GetOperatorPayoutsRequest
-	36,  // 159: purser.PaymentService.CreatePayment:input_type -> purser.PaymentRequest
-	38,  // 160: purser.PaymentService.GetPaymentMethods:input_type -> purser.GetPaymentMethodsRequest
-	40,  // 161: purser.PaymentService.GetBillingStatus:input_type -> purser.GetBillingStatusRequest
-	47,  // 162: purser.UsageService.GetUsageRecords:input_type -> purser.GetUsageRecordsRequest
-	56,  // 163: purser.UsageService.GetTenantUsage:input_type -> purser.TenantUsageRequest
-	50,  // 164: purser.UsageService.GetUsageAggregates:input_type -> purser.GetUsageAggregatesRequest
-	54,  // 165: purser.UsageService.CheckUserLimit:input_type -> purser.CheckUserLimitRequest
-	59,  // 166: purser.ClusterPricingService.GetClusterPricing:input_type -> purser.GetClusterPricingRequest
-	60,  // 167: purser.ClusterPricingService.GetClustersPricingBatch:input_type -> purser.GetClustersPricingBatchRequest
-	62,  // 168: purser.ClusterPricingService.SetClusterPricing:input_type -> purser.SetClusterPricingRequest
-	63,  // 169: purser.ClusterPricingService.ListClusterPricings:input_type -> purser.ListClusterPricingsRequest
-	65,  // 170: purser.ClusterPricingService.CheckClusterAccess:input_type -> purser.CheckClusterAccessRequest
-	67,  // 171: purser.ClusterPricingService.CreateClusterSubscription:input_type -> purser.CreateClusterSubscriptionRequest
-	69,  // 172: purser.ClusterPricingService.CancelClusterSubscription:input_type -> purser.CancelClusterSubscriptionRequest
-	70,  // 173: purser.ClusterPricingService.ListMarketplaceClusterPricings:input_type -> purser.ListMarketplaceClusterPricingsRequest
-	75,  // 174: purser.PrepaidService.GetPrepaidBalance:input_type -> purser.GetPrepaidBalanceRequest
-	76,  // 175: purser.PrepaidService.TopupBalance:input_type -> purser.TopupBalanceRequest
-	77,  // 176: purser.PrepaidService.DeductBalance:input_type -> purser.DeductBalanceRequest
-	78,  // 177: purser.PrepaidService.AdjustBalance:input_type -> purser.AdjustBalanceRequest
-	79,  // 178: purser.PrepaidService.ListBalanceTransactions:input_type -> purser.ListBalanceTransactionsRequest
-	81,  // 179: purser.PrepaidService.InitializePrepaidBalance:input_type -> purser.InitializePrepaidBalanceRequest
-	82,  // 180: purser.PrepaidService.InitializePrepaidAccount:input_type -> purser.InitializePrepaidAccountRequest
-	84,  // 181: purser.PrepaidService.InitializePostpaidAccount:input_type -> purser.InitializePostpaidAccountRequest
-	86,  // 182: purser.PrepaidService.CreateCardTopup:input_type -> purser.CreateCardTopupRequest
-	89,  // 183: purser.PrepaidService.GetPendingTopup:input_type -> purser.GetPendingTopupRequest
-	90,  // 184: purser.PrepaidService.ListPendingTopups:input_type -> purser.ListPendingTopupsRequest
-	92,  // 185: purser.PrepaidService.CreateCryptoTopup:input_type -> purser.CreateCryptoTopupRequest
-	94,  // 186: purser.PrepaidService.GetCryptoTopup:input_type -> purser.GetCryptoTopupRequest
-	96,  // 187: purser.PrepaidService.PromoteToPaid:input_type -> purser.PromoteToPaidRequest
-	98,  // 188: purser.PrepaidService.ChangeBillingTier:input_type -> purser.ChangeBillingTierRequest
-	138, // 189: purser.WebhookService.ProcessWebhook:input_type -> shared.WebhookRequest
-	100, // 190: purser.StripeService.CreateCheckoutSession:input_type -> purser.CreateStripeCheckoutRequest
-	102, // 191: purser.StripeService.CreateBillingPortalSession:input_type -> purser.CreateBillingPortalRequest
-	104, // 192: purser.StripeService.SyncSubscription:input_type -> purser.SyncStripeSubscriptionRequest
-	105, // 193: purser.MollieService.CreateFirstPayment:input_type -> purser.CreateMollieFirstPaymentRequest
-	107, // 194: purser.MollieService.CreateMollieSubscription:input_type -> purser.CreateMollieSubscriptionRequest
-	109, // 195: purser.MollieService.ListMandates:input_type -> purser.ListMollieMandatesRequest
-	112, // 196: purser.MollieService.CancelMollieSubscription:input_type -> purser.CancelMollieSubscriptionRequest
-	113, // 197: purser.X402Service.GetPaymentRequirements:input_type -> purser.GetPaymentRequirementsRequest
-	119, // 198: purser.X402Service.VerifyX402Payment:input_type -> purser.VerifyX402PaymentRequest
-	121, // 199: purser.X402Service.SettleX402Payment:input_type -> purser.SettleX402PaymentRequest
-	123, // 200: purser.X402Service.GetTenantX402Address:input_type -> purser.GetTenantX402AddressRequest
-	5,   // 201: purser.BillingService.GetBillingTiers:output_type -> purser.GetBillingTiersResponse
-	7,   // 202: purser.BillingService.GetBillingTier:output_type -> purser.BillingTier
-	7,   // 203: purser.BillingService.CreateBillingTier:output_type -> purser.BillingTier
-	7,   // 204: purser.BillingService.UpdateBillingTier:output_type -> purser.BillingTier
-	3,   // 205: purser.BillingService.GetTenantBillingStatus:output_type -> purser.GetTenantBillingStatusResponse
-	13,  // 206: purser.SubscriptionService.GetSubscription:output_type -> purser.GetSubscriptionResponse
-	17,  // 207: purser.SubscriptionService.CreateSubscription:output_type -> purser.TenantSubscription
-	17,  // 208: purser.SubscriptionService.UpdateSubscription:output_type -> purser.TenantSubscription
-	139, // 209: purser.SubscriptionService.CancelSubscription:output_type -> google.protobuf.Empty
-	16,  // 210: purser.SubscriptionService.GetBillingDetails:output_type -> purser.BillingDetails
-	16,  // 211: purser.SubscriptionService.UpdateBillingDetails:output_type -> purser.BillingDetails
-	31,  // 212: purser.InvoiceService.GetInvoice:output_type -> purser.GetInvoiceResponse
-	35,  // 213: purser.InvoiceService.ListInvoices:output_type -> purser.ListInvoicesResponse
-	24,  // 214: purser.OperatorRevenueService.GetOperatorRevenue:output_type -> purser.GetOperatorRevenueResponse
-	26,  // 215: purser.OperatorRevenueService.ListOperatorClusters:output_type -> purser.ListOperatorClustersResponse
-	29,  // 216: purser.OperatorRevenueService.GetOperatorPayouts:output_type -> purser.GetOperatorPayoutsResponse
-	37,  // 217: purser.PaymentService.CreatePayment:output_type -> purser.PaymentResponse
-	39,  // 218: purser.PaymentService.GetPaymentMethods:output_type -> purser.PaymentMethodResponse
-	41,  // 219: purser.PaymentService.GetBillingStatus:output_type -> purser.BillingStatusResponse
-	49,  // 220: purser.UsageService.GetUsageRecords:output_type -> purser.UsageRecordsResponse
-	57,  // 221: purser.UsageService.GetTenantUsage:output_type -> purser.TenantUsageResponse
-	52,  // 222: purser.UsageService.GetUsageAggregates:output_type -> purser.GetUsageAggregatesResponse
-	55,  // 223: purser.UsageService.CheckUserLimit:output_type -> purser.CheckUserLimitResponse
-	58,  // 224: purser.ClusterPricingService.GetClusterPricing:output_type -> purser.ClusterPricing
-	61,  // 225: purser.ClusterPricingService.GetClustersPricingBatch:output_type -> purser.GetClustersPricingBatchResponse
-	58,  // 226: purser.ClusterPricingService.SetClusterPricing:output_type -> purser.ClusterPricing
-	64,  // 227: purser.ClusterPricingService.ListClusterPricings:output_type -> purser.ListClusterPricingsResponse
-	66,  // 228: purser.ClusterPricingService.CheckClusterAccess:output_type -> purser.CheckClusterAccessResponse
-	68,  // 229: purser.ClusterPricingService.CreateClusterSubscription:output_type -> purser.ClusterSubscriptionResponse
-	139, // 230: purser.ClusterPricingService.CancelClusterSubscription:output_type -> google.protobuf.Empty
-	71,  // 231: purser.ClusterPricingService.ListMarketplaceClusterPricings:output_type -> purser.ListMarketplaceClusterPricingsResponse
-	73,  // 232: purser.PrepaidService.GetPrepaidBalance:output_type -> purser.PrepaidBalance
-	74,  // 233: purser.PrepaidService.TopupBalance:output_type -> purser.BalanceTransaction
-	74,  // 234: purser.PrepaidService.DeductBalance:output_type -> purser.BalanceTransaction
-	74,  // 235: purser.PrepaidService.AdjustBalance:output_type -> purser.BalanceTransaction
-	80,  // 236: purser.PrepaidService.ListBalanceTransactions:output_type -> purser.ListBalanceTransactionsResponse
-	73,  // 237: purser.PrepaidService.InitializePrepaidBalance:output_type -> purser.PrepaidBalance
-	83,  // 238: purser.PrepaidService.InitializePrepaidAccount:output_type -> purser.InitializePrepaidAccountResponse
-	85,  // 239: purser.PrepaidService.InitializePostpaidAccount:output_type -> purser.InitializePostpaidAccountResponse
-	87,  // 240: purser.PrepaidService.CreateCardTopup:output_type -> purser.CreateCardTopupResponse
-	88,  // 241: purser.PrepaidService.GetPendingTopup:output_type -> purser.PendingTopup
-	91,  // 242: purser.PrepaidService.ListPendingTopups:output_type -> purser.ListPendingTopupsResponse
-	93,  // 243: purser.PrepaidService.CreateCryptoTopup:output_type -> purser.CreateCryptoTopupResponse
-	95,  // 244: purser.PrepaidService.GetCryptoTopup:output_type -> purser.CryptoTopup
-	97,  // 245: purser.PrepaidService.PromoteToPaid:output_type -> purser.PromoteToPaidResponse
-	99,  // 246: purser.PrepaidService.ChangeBillingTier:output_type -> purser.ChangeBillingTierResponse
-	140, // 247: purser.WebhookService.ProcessWebhook:output_type -> shared.WebhookResponse
-	101, // 248: purser.StripeService.CreateCheckoutSession:output_type -> purser.CreateStripeCheckoutResponse
-	103, // 249: purser.StripeService.CreateBillingPortalSession:output_type -> purser.CreateBillingPortalResponse
-	17,  // 250: purser.StripeService.SyncSubscription:output_type -> purser.TenantSubscription
-	106, // 251: purser.MollieService.CreateFirstPayment:output_type -> purser.CreateMollieFirstPaymentResponse
-	108, // 252: purser.MollieService.CreateMollieSubscription:output_type -> purser.CreateMollieSubscriptionResponse
-	111, // 253: purser.MollieService.ListMandates:output_type -> purser.ListMollieMandatesResponse
-	139, // 254: purser.MollieService.CancelMollieSubscription:output_type -> google.protobuf.Empty
-	114, // 255: purser.X402Service.GetPaymentRequirements:output_type -> purser.PaymentRequirements
-	120, // 256: purser.X402Service.VerifyX402Payment:output_type -> purser.VerifyX402PaymentResponse
-	122, // 257: purser.X402Service.SettleX402Payment:output_type -> purser.SettleX402PaymentResponse
-	124, // 258: purser.X402Service.GetTenantX402Address:output_type -> purser.GetTenantX402AddressResponse
-	201, // [201:259] is the sub-list for method output_type
-	143, // [143:201] is the sub-list for method input_type
-	143, // [143:143] is the sub-list for extension type_name
-	143, // [143:143] is the sub-list for extension extendee
-	0,   // [0:143] is the sub-list for field type_name
+	135, // 30: purser.TenantSubscription.pending_effective_at:type_name -> google.protobuf.Timestamp
+	135, // 31: purser.CreateSubscriptionRequest.trial_ends_at:type_name -> google.protobuf.Timestamp
+	9,   // 32: purser.CreateSubscriptionRequest.custom_features:type_name -> purser.BillingFeatures
+	135, // 33: purser.CreateSubscriptionRequest.billing_period_start:type_name -> google.protobuf.Timestamp
+	135, // 34: purser.CreateSubscriptionRequest.billing_period_end:type_name -> google.protobuf.Timestamp
+	9,   // 35: purser.UpdateSubscriptionRequest.custom_features:type_name -> purser.BillingFeatures
+	135, // 36: purser.UpdateSubscriptionRequest.billing_period_start:type_name -> google.protobuf.Timestamp
+	135, // 37: purser.UpdateSubscriptionRequest.billing_period_end:type_name -> google.protobuf.Timestamp
+	8,   // 38: purser.UpdateSubscriptionRequest.pricing_overrides:type_name -> purser.PricingRule
+	127, // 39: purser.UpdateSubscriptionRequest.entitlement_overrides:type_name -> purser.UpdateSubscriptionRequest.EntitlementOverridesEntry
+	135, // 40: purser.GetOperatorRevenueRequest.range_start:type_name -> google.protobuf.Timestamp
+	135, // 41: purser.GetOperatorRevenueRequest.range_end:type_name -> google.protobuf.Timestamp
+	23,  // 42: purser.GetOperatorRevenueResponse.clusters:type_name -> purser.OperatorRevenueByCluster
+	23,  // 43: purser.ListOperatorClustersResponse.clusters:type_name -> purser.OperatorRevenueByCluster
+	135, // 44: purser.GetOperatorPayoutsRequest.range_start:type_name -> google.protobuf.Timestamp
+	135, // 45: purser.GetOperatorPayoutsRequest.range_end:type_name -> google.protobuf.Timestamp
+	135, // 46: purser.OperatorPayout.created_at:type_name -> google.protobuf.Timestamp
+	135, // 47: purser.OperatorPayout.paid_at:type_name -> google.protobuf.Timestamp
+	28,  // 48: purser.GetOperatorPayoutsResponse.payouts:type_name -> purser.OperatorPayout
+	33,  // 49: purser.GetInvoiceResponse.invoice:type_name -> purser.Invoice
+	7,   // 50: purser.GetInvoiceResponse.tier:type_name -> purser.BillingTier
+	135, // 51: purser.Invoice.due_date:type_name -> google.protobuf.Timestamp
+	135, // 52: purser.Invoice.paid_at:type_name -> google.protobuf.Timestamp
+	136, // 53: purser.Invoice.usage_details:type_name -> google.protobuf.Struct
+	135, // 54: purser.Invoice.created_at:type_name -> google.protobuf.Timestamp
+	135, // 55: purser.Invoice.updated_at:type_name -> google.protobuf.Timestamp
+	135, // 56: purser.Invoice.period_start:type_name -> google.protobuf.Timestamp
+	135, // 57: purser.Invoice.period_end:type_name -> google.protobuf.Timestamp
+	45,  // 58: purser.Invoice.usage_summary:type_name -> purser.UsageSummary
+	32,  // 59: purser.Invoice.line_items:type_name -> purser.LineItem
+	133, // 60: purser.ListInvoicesRequest.pagination:type_name -> common.CursorPaginationRequest
+	33,  // 61: purser.ListInvoicesResponse.invoices:type_name -> purser.Invoice
+	134, // 62: purser.ListInvoicesResponse.pagination:type_name -> common.CursorPaginationResponse
+	135, // 63: purser.PaymentResponse.expires_at:type_name -> google.protobuf.Timestamp
+	135, // 64: purser.PaymentResponse.created_at:type_name -> google.protobuf.Timestamp
+	135, // 65: purser.PaymentResponse.quoted_at:type_name -> google.protobuf.Timestamp
+	17,  // 66: purser.BillingStatusResponse.subscription:type_name -> purser.TenantSubscription
+	7,   // 67: purser.BillingStatusResponse.tier:type_name -> purser.BillingTier
+	135, // 68: purser.BillingStatusResponse.next_billing_date:type_name -> google.protobuf.Timestamp
+	33,  // 69: purser.BillingStatusResponse.pending_invoices:type_name -> purser.Invoice
+	42,  // 70: purser.BillingStatusResponse.recent_payments:type_name -> purser.Payment
+	45,  // 71: purser.BillingStatusResponse.usage_summary:type_name -> purser.UsageSummary
+	135, // 72: purser.Payment.confirmed_at:type_name -> google.protobuf.Timestamp
+	135, // 73: purser.Payment.created_at:type_name -> google.protobuf.Timestamp
+	135, // 74: purser.Payment.updated_at:type_name -> google.protobuf.Timestamp
+	45,  // 75: purser.UsageIngestRequest.usage_summaries:type_name -> purser.UsageSummary
+	135, // 76: purser.UsageSummary.timestamp:type_name -> google.protobuf.Timestamp
+	44,  // 77: purser.UsageSummary.geo_breakdown:type_name -> purser.CountryMetrics
+	137, // 78: purser.GetUsageRecordsRequest.time_range:type_name -> common.TimeRange
+	133, // 79: purser.GetUsageRecordsRequest.pagination:type_name -> common.CursorPaginationRequest
+	136, // 80: purser.UsageRecord.usage_details:type_name -> google.protobuf.Struct
+	135, // 81: purser.UsageRecord.created_at:type_name -> google.protobuf.Timestamp
+	135, // 82: purser.UsageRecord.period_start:type_name -> google.protobuf.Timestamp
+	135, // 83: purser.UsageRecord.period_end:type_name -> google.protobuf.Timestamp
+	48,  // 84: purser.UsageRecordsResponse.usage_records:type_name -> purser.UsageRecord
+	53,  // 85: purser.UsageRecordsResponse.filters:type_name -> purser.UsageFilters
+	134, // 86: purser.UsageRecordsResponse.pagination:type_name -> common.CursorPaginationResponse
+	137, // 87: purser.GetUsageAggregatesRequest.time_range:type_name -> common.TimeRange
+	135, // 88: purser.UsageAggregate.period_start:type_name -> google.protobuf.Timestamp
+	135, // 89: purser.UsageAggregate.period_end:type_name -> google.protobuf.Timestamp
+	51,  // 90: purser.GetUsageAggregatesResponse.aggregates:type_name -> purser.UsageAggregate
+	137, // 91: purser.UsageFilters.time_range:type_name -> common.TimeRange
+	128, // 92: purser.TenantUsageResponse.usage:type_name -> purser.TenantUsageResponse.UsageEntry
+	129, // 93: purser.TenantUsageResponse.costs:type_name -> purser.TenantUsageResponse.CostsEntry
+	32,  // 94: purser.TenantUsageResponse.line_items:type_name -> purser.LineItem
+	136, // 95: purser.ClusterPricing.metered_rates:type_name -> google.protobuf.Struct
+	136, // 96: purser.ClusterPricing.default_quotas:type_name -> google.protobuf.Struct
+	135, // 97: purser.ClusterPricing.created_at:type_name -> google.protobuf.Timestamp
+	135, // 98: purser.ClusterPricing.updated_at:type_name -> google.protobuf.Timestamp
+	130, // 99: purser.GetClustersPricingBatchResponse.pricings:type_name -> purser.GetClustersPricingBatchResponse.PricingsEntry
+	136, // 100: purser.SetClusterPricingRequest.metered_rates:type_name -> google.protobuf.Struct
+	136, // 101: purser.SetClusterPricingRequest.default_quotas:type_name -> google.protobuf.Struct
+	133, // 102: purser.ListClusterPricingsRequest.pagination:type_name -> common.CursorPaginationRequest
+	58,  // 103: purser.ListClusterPricingsResponse.pricings:type_name -> purser.ClusterPricing
+	134, // 104: purser.ListClusterPricingsResponse.pagination:type_name -> common.CursorPaginationResponse
+	133, // 105: purser.ListMarketplaceClusterPricingsRequest.pagination:type_name -> common.CursorPaginationRequest
+	72,  // 106: purser.ListMarketplaceClusterPricingsResponse.pricings:type_name -> purser.MarketplaceClusterPricing
+	134, // 107: purser.ListMarketplaceClusterPricingsResponse.pagination:type_name -> common.CursorPaginationResponse
+	135, // 108: purser.MarketplaceClusterPricing.created_at:type_name -> google.protobuf.Timestamp
+	135, // 109: purser.PrepaidBalance.created_at:type_name -> google.protobuf.Timestamp
+	135, // 110: purser.PrepaidBalance.updated_at:type_name -> google.protobuf.Timestamp
+	135, // 111: purser.BalanceTransaction.created_at:type_name -> google.protobuf.Timestamp
+	137, // 112: purser.ListBalanceTransactionsRequest.time_range:type_name -> common.TimeRange
+	133, // 113: purser.ListBalanceTransactionsRequest.pagination:type_name -> common.CursorPaginationRequest
+	74,  // 114: purser.ListBalanceTransactionsResponse.transactions:type_name -> purser.BalanceTransaction
+	134, // 115: purser.ListBalanceTransactionsResponse.pagination:type_name -> common.CursorPaginationResponse
+	18,  // 116: purser.CreateCardTopupRequest.billing_address:type_name -> purser.BillingAddress
+	135, // 117: purser.CreateCardTopupResponse.expires_at:type_name -> google.protobuf.Timestamp
+	135, // 118: purser.PendingTopup.expires_at:type_name -> google.protobuf.Timestamp
+	135, // 119: purser.PendingTopup.completed_at:type_name -> google.protobuf.Timestamp
+	135, // 120: purser.PendingTopup.created_at:type_name -> google.protobuf.Timestamp
+	135, // 121: purser.PendingTopup.updated_at:type_name -> google.protobuf.Timestamp
+	133, // 122: purser.ListPendingTopupsRequest.pagination:type_name -> common.CursorPaginationRequest
+	88,  // 123: purser.ListPendingTopupsResponse.topups:type_name -> purser.PendingTopup
+	134, // 124: purser.ListPendingTopupsResponse.pagination:type_name -> common.CursorPaginationResponse
+	0,   // 125: purser.CreateCryptoTopupRequest.asset:type_name -> purser.CryptoAsset
+	0,   // 126: purser.CreateCryptoTopupResponse.asset:type_name -> purser.CryptoAsset
+	135, // 127: purser.CreateCryptoTopupResponse.expires_at:type_name -> google.protobuf.Timestamp
+	135, // 128: purser.CreateCryptoTopupResponse.quoted_at:type_name -> google.protobuf.Timestamp
+	0,   // 129: purser.CryptoTopup.asset:type_name -> purser.CryptoAsset
+	135, // 130: purser.CryptoTopup.expires_at:type_name -> google.protobuf.Timestamp
+	135, // 131: purser.CryptoTopup.detected_at:type_name -> google.protobuf.Timestamp
+	135, // 132: purser.CryptoTopup.completed_at:type_name -> google.protobuf.Timestamp
+	135, // 133: purser.CryptoTopup.created_at:type_name -> google.protobuf.Timestamp
+	135, // 134: purser.ChangeBillingTierResponse.effective_at:type_name -> google.protobuf.Timestamp
+	136, // 135: purser.MollieMandate.details:type_name -> google.protobuf.Struct
+	135, // 136: purser.MollieMandate.created_at:type_name -> google.protobuf.Timestamp
+	110, // 137: purser.ListMollieMandatesResponse.mandates:type_name -> purser.MollieMandate
+	115, // 138: purser.PaymentRequirements.accepts:type_name -> purser.PaymentRequirement
+	117, // 139: purser.X402PaymentPayload.payload:type_name -> purser.X402ExactPayload
+	118, // 140: purser.X402ExactPayload.authorization:type_name -> purser.X402Authorization
+	116, // 141: purser.VerifyX402PaymentRequest.payment:type_name -> purser.X402PaymentPayload
+	116, // 142: purser.SettleX402PaymentRequest.payment:type_name -> purser.X402PaymentPayload
+	58,  // 143: purser.GetClustersPricingBatchResponse.PricingsEntry.value:type_name -> purser.ClusterPricing
+	4,   // 144: purser.BillingService.GetBillingTiers:input_type -> purser.GetBillingTiersRequest
+	6,   // 145: purser.BillingService.GetBillingTier:input_type -> purser.GetBillingTierRequest
+	10,  // 146: purser.BillingService.CreateBillingTier:input_type -> purser.CreateBillingTierRequest
+	11,  // 147: purser.BillingService.UpdateBillingTier:input_type -> purser.UpdateBillingTierRequest
+	1,   // 148: purser.BillingService.GetTenantBillingStatus:input_type -> purser.GetTenantBillingStatusRequest
+	12,  // 149: purser.SubscriptionService.GetSubscription:input_type -> purser.GetSubscriptionRequest
+	19,  // 150: purser.SubscriptionService.CreateSubscription:input_type -> purser.CreateSubscriptionRequest
+	20,  // 151: purser.SubscriptionService.UpdateSubscription:input_type -> purser.UpdateSubscriptionRequest
+	21,  // 152: purser.SubscriptionService.CancelSubscription:input_type -> purser.CancelSubscriptionRequest
+	14,  // 153: purser.SubscriptionService.GetBillingDetails:input_type -> purser.GetBillingDetailsRequest
+	15,  // 154: purser.SubscriptionService.UpdateBillingDetails:input_type -> purser.UpdateBillingDetailsRequest
+	30,  // 155: purser.InvoiceService.GetInvoice:input_type -> purser.GetInvoiceRequest
+	34,  // 156: purser.InvoiceService.ListInvoices:input_type -> purser.ListInvoicesRequest
+	22,  // 157: purser.OperatorRevenueService.GetOperatorRevenue:input_type -> purser.GetOperatorRevenueRequest
+	25,  // 158: purser.OperatorRevenueService.ListOperatorClusters:input_type -> purser.ListOperatorClustersRequest
+	27,  // 159: purser.OperatorRevenueService.GetOperatorPayouts:input_type -> purser.GetOperatorPayoutsRequest
+	36,  // 160: purser.PaymentService.CreatePayment:input_type -> purser.PaymentRequest
+	38,  // 161: purser.PaymentService.GetPaymentMethods:input_type -> purser.GetPaymentMethodsRequest
+	40,  // 162: purser.PaymentService.GetBillingStatus:input_type -> purser.GetBillingStatusRequest
+	47,  // 163: purser.UsageService.GetUsageRecords:input_type -> purser.GetUsageRecordsRequest
+	56,  // 164: purser.UsageService.GetTenantUsage:input_type -> purser.TenantUsageRequest
+	50,  // 165: purser.UsageService.GetUsageAggregates:input_type -> purser.GetUsageAggregatesRequest
+	54,  // 166: purser.UsageService.CheckUserLimit:input_type -> purser.CheckUserLimitRequest
+	59,  // 167: purser.ClusterPricingService.GetClusterPricing:input_type -> purser.GetClusterPricingRequest
+	60,  // 168: purser.ClusterPricingService.GetClustersPricingBatch:input_type -> purser.GetClustersPricingBatchRequest
+	62,  // 169: purser.ClusterPricingService.SetClusterPricing:input_type -> purser.SetClusterPricingRequest
+	63,  // 170: purser.ClusterPricingService.ListClusterPricings:input_type -> purser.ListClusterPricingsRequest
+	65,  // 171: purser.ClusterPricingService.CheckClusterAccess:input_type -> purser.CheckClusterAccessRequest
+	67,  // 172: purser.ClusterPricingService.CreateClusterSubscription:input_type -> purser.CreateClusterSubscriptionRequest
+	69,  // 173: purser.ClusterPricingService.CancelClusterSubscription:input_type -> purser.CancelClusterSubscriptionRequest
+	70,  // 174: purser.ClusterPricingService.ListMarketplaceClusterPricings:input_type -> purser.ListMarketplaceClusterPricingsRequest
+	75,  // 175: purser.PrepaidService.GetPrepaidBalance:input_type -> purser.GetPrepaidBalanceRequest
+	76,  // 176: purser.PrepaidService.TopupBalance:input_type -> purser.TopupBalanceRequest
+	77,  // 177: purser.PrepaidService.DeductBalance:input_type -> purser.DeductBalanceRequest
+	78,  // 178: purser.PrepaidService.AdjustBalance:input_type -> purser.AdjustBalanceRequest
+	79,  // 179: purser.PrepaidService.ListBalanceTransactions:input_type -> purser.ListBalanceTransactionsRequest
+	81,  // 180: purser.PrepaidService.InitializePrepaidBalance:input_type -> purser.InitializePrepaidBalanceRequest
+	82,  // 181: purser.PrepaidService.InitializePrepaidAccount:input_type -> purser.InitializePrepaidAccountRequest
+	84,  // 182: purser.PrepaidService.InitializePostpaidAccount:input_type -> purser.InitializePostpaidAccountRequest
+	86,  // 183: purser.PrepaidService.CreateCardTopup:input_type -> purser.CreateCardTopupRequest
+	89,  // 184: purser.PrepaidService.GetPendingTopup:input_type -> purser.GetPendingTopupRequest
+	90,  // 185: purser.PrepaidService.ListPendingTopups:input_type -> purser.ListPendingTopupsRequest
+	92,  // 186: purser.PrepaidService.CreateCryptoTopup:input_type -> purser.CreateCryptoTopupRequest
+	94,  // 187: purser.PrepaidService.GetCryptoTopup:input_type -> purser.GetCryptoTopupRequest
+	96,  // 188: purser.PrepaidService.PromoteToPaid:input_type -> purser.PromoteToPaidRequest
+	98,  // 189: purser.PrepaidService.ChangeBillingTier:input_type -> purser.ChangeBillingTierRequest
+	138, // 190: purser.WebhookService.ProcessWebhook:input_type -> shared.WebhookRequest
+	100, // 191: purser.StripeService.CreateCheckoutSession:input_type -> purser.CreateStripeCheckoutRequest
+	102, // 192: purser.StripeService.CreateBillingPortalSession:input_type -> purser.CreateBillingPortalRequest
+	104, // 193: purser.StripeService.SyncSubscription:input_type -> purser.SyncStripeSubscriptionRequest
+	105, // 194: purser.MollieService.CreateFirstPayment:input_type -> purser.CreateMollieFirstPaymentRequest
+	107, // 195: purser.MollieService.CreateMollieSubscription:input_type -> purser.CreateMollieSubscriptionRequest
+	109, // 196: purser.MollieService.ListMandates:input_type -> purser.ListMollieMandatesRequest
+	112, // 197: purser.MollieService.CancelMollieSubscription:input_type -> purser.CancelMollieSubscriptionRequest
+	113, // 198: purser.X402Service.GetPaymentRequirements:input_type -> purser.GetPaymentRequirementsRequest
+	119, // 199: purser.X402Service.VerifyX402Payment:input_type -> purser.VerifyX402PaymentRequest
+	121, // 200: purser.X402Service.SettleX402Payment:input_type -> purser.SettleX402PaymentRequest
+	123, // 201: purser.X402Service.GetTenantX402Address:input_type -> purser.GetTenantX402AddressRequest
+	5,   // 202: purser.BillingService.GetBillingTiers:output_type -> purser.GetBillingTiersResponse
+	7,   // 203: purser.BillingService.GetBillingTier:output_type -> purser.BillingTier
+	7,   // 204: purser.BillingService.CreateBillingTier:output_type -> purser.BillingTier
+	7,   // 205: purser.BillingService.UpdateBillingTier:output_type -> purser.BillingTier
+	3,   // 206: purser.BillingService.GetTenantBillingStatus:output_type -> purser.GetTenantBillingStatusResponse
+	13,  // 207: purser.SubscriptionService.GetSubscription:output_type -> purser.GetSubscriptionResponse
+	17,  // 208: purser.SubscriptionService.CreateSubscription:output_type -> purser.TenantSubscription
+	17,  // 209: purser.SubscriptionService.UpdateSubscription:output_type -> purser.TenantSubscription
+	139, // 210: purser.SubscriptionService.CancelSubscription:output_type -> google.protobuf.Empty
+	16,  // 211: purser.SubscriptionService.GetBillingDetails:output_type -> purser.BillingDetails
+	16,  // 212: purser.SubscriptionService.UpdateBillingDetails:output_type -> purser.BillingDetails
+	31,  // 213: purser.InvoiceService.GetInvoice:output_type -> purser.GetInvoiceResponse
+	35,  // 214: purser.InvoiceService.ListInvoices:output_type -> purser.ListInvoicesResponse
+	24,  // 215: purser.OperatorRevenueService.GetOperatorRevenue:output_type -> purser.GetOperatorRevenueResponse
+	26,  // 216: purser.OperatorRevenueService.ListOperatorClusters:output_type -> purser.ListOperatorClustersResponse
+	29,  // 217: purser.OperatorRevenueService.GetOperatorPayouts:output_type -> purser.GetOperatorPayoutsResponse
+	37,  // 218: purser.PaymentService.CreatePayment:output_type -> purser.PaymentResponse
+	39,  // 219: purser.PaymentService.GetPaymentMethods:output_type -> purser.PaymentMethodResponse
+	41,  // 220: purser.PaymentService.GetBillingStatus:output_type -> purser.BillingStatusResponse
+	49,  // 221: purser.UsageService.GetUsageRecords:output_type -> purser.UsageRecordsResponse
+	57,  // 222: purser.UsageService.GetTenantUsage:output_type -> purser.TenantUsageResponse
+	52,  // 223: purser.UsageService.GetUsageAggregates:output_type -> purser.GetUsageAggregatesResponse
+	55,  // 224: purser.UsageService.CheckUserLimit:output_type -> purser.CheckUserLimitResponse
+	58,  // 225: purser.ClusterPricingService.GetClusterPricing:output_type -> purser.ClusterPricing
+	61,  // 226: purser.ClusterPricingService.GetClustersPricingBatch:output_type -> purser.GetClustersPricingBatchResponse
+	58,  // 227: purser.ClusterPricingService.SetClusterPricing:output_type -> purser.ClusterPricing
+	64,  // 228: purser.ClusterPricingService.ListClusterPricings:output_type -> purser.ListClusterPricingsResponse
+	66,  // 229: purser.ClusterPricingService.CheckClusterAccess:output_type -> purser.CheckClusterAccessResponse
+	68,  // 230: purser.ClusterPricingService.CreateClusterSubscription:output_type -> purser.ClusterSubscriptionResponse
+	139, // 231: purser.ClusterPricingService.CancelClusterSubscription:output_type -> google.protobuf.Empty
+	71,  // 232: purser.ClusterPricingService.ListMarketplaceClusterPricings:output_type -> purser.ListMarketplaceClusterPricingsResponse
+	73,  // 233: purser.PrepaidService.GetPrepaidBalance:output_type -> purser.PrepaidBalance
+	74,  // 234: purser.PrepaidService.TopupBalance:output_type -> purser.BalanceTransaction
+	74,  // 235: purser.PrepaidService.DeductBalance:output_type -> purser.BalanceTransaction
+	74,  // 236: purser.PrepaidService.AdjustBalance:output_type -> purser.BalanceTransaction
+	80,  // 237: purser.PrepaidService.ListBalanceTransactions:output_type -> purser.ListBalanceTransactionsResponse
+	73,  // 238: purser.PrepaidService.InitializePrepaidBalance:output_type -> purser.PrepaidBalance
+	83,  // 239: purser.PrepaidService.InitializePrepaidAccount:output_type -> purser.InitializePrepaidAccountResponse
+	85,  // 240: purser.PrepaidService.InitializePostpaidAccount:output_type -> purser.InitializePostpaidAccountResponse
+	87,  // 241: purser.PrepaidService.CreateCardTopup:output_type -> purser.CreateCardTopupResponse
+	88,  // 242: purser.PrepaidService.GetPendingTopup:output_type -> purser.PendingTopup
+	91,  // 243: purser.PrepaidService.ListPendingTopups:output_type -> purser.ListPendingTopupsResponse
+	93,  // 244: purser.PrepaidService.CreateCryptoTopup:output_type -> purser.CreateCryptoTopupResponse
+	95,  // 245: purser.PrepaidService.GetCryptoTopup:output_type -> purser.CryptoTopup
+	97,  // 246: purser.PrepaidService.PromoteToPaid:output_type -> purser.PromoteToPaidResponse
+	99,  // 247: purser.PrepaidService.ChangeBillingTier:output_type -> purser.ChangeBillingTierResponse
+	140, // 248: purser.WebhookService.ProcessWebhook:output_type -> shared.WebhookResponse
+	101, // 249: purser.StripeService.CreateCheckoutSession:output_type -> purser.CreateStripeCheckoutResponse
+	103, // 250: purser.StripeService.CreateBillingPortalSession:output_type -> purser.CreateBillingPortalResponse
+	17,  // 251: purser.StripeService.SyncSubscription:output_type -> purser.TenantSubscription
+	106, // 252: purser.MollieService.CreateFirstPayment:output_type -> purser.CreateMollieFirstPaymentResponse
+	108, // 253: purser.MollieService.CreateMollieSubscription:output_type -> purser.CreateMollieSubscriptionResponse
+	111, // 254: purser.MollieService.ListMandates:output_type -> purser.ListMollieMandatesResponse
+	139, // 255: purser.MollieService.CancelMollieSubscription:output_type -> google.protobuf.Empty
+	114, // 256: purser.X402Service.GetPaymentRequirements:output_type -> purser.PaymentRequirements
+	120, // 257: purser.X402Service.VerifyX402Payment:output_type -> purser.VerifyX402PaymentResponse
+	122, // 258: purser.X402Service.SettleX402Payment:output_type -> purser.SettleX402PaymentResponse
+	124, // 259: purser.X402Service.GetTenantX402Address:output_type -> purser.GetTenantX402AddressResponse
+	202, // [202:260] is the sub-list for method output_type
+	144, // [144:202] is the sub-list for method input_type
+	144, // [144:144] is the sub-list for extension type_name
+	144, // [144:144] is the sub-list for extension extendee
+	0,   // [0:144] is the sub-list for field type_name
 }
 
 func init() { file_purser_proto_init() }

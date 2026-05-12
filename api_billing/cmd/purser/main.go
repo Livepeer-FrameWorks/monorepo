@@ -13,6 +13,7 @@ import (
 	"frameworks/api_billing/internal/handlers"
 	"frameworks/api_billing/internal/mollie"
 	"frameworks/api_billing/internal/stripe"
+	"frameworks/api_billing/internal/tieraccess"
 	commodoreclnt "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	periscopeclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
@@ -204,8 +205,13 @@ func main() {
 	// Initialize handlers
 	handlers.Init(db, logger, handlerMetrics, qmGRPCClient, mollieClient, decklogClient)
 
+	// Shared tier reconciler — used by PurserServer.ChangeBillingTier and
+	// by JobManager's downgrade applier so both apply the same grant/suspend
+	// logic against tenant_cluster_access.
+	tierReconciler := tieraccess.NewReconciler(db, qmGRPCClient, logger)
+
 	// Initialize and start JobManager for background billing tasks
-	jobManager := handlers.NewJobManager(db, logger, commodoreClient, decklogClient, periscopeClient)
+	jobManager := handlers.NewJobManager(db, logger, commodoreClient, decklogClient, periscopeClient, tierReconciler)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

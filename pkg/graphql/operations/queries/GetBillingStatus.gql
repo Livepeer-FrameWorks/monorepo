@@ -42,6 +42,14 @@ query GetBillingStatus {
         value
       }
       paymentMethod
+      pendingTier {
+        id
+        tierName
+        displayName
+        tierLevel
+      }
+      pendingEffectiveAt
+      pendingReason
       createdAt
       updatedAt
     }

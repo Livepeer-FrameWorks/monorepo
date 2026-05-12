@@ -1750,6 +1750,18 @@ type Mutation {
     tierId: ID!
   ): PromoteToPaidResult!
 
+  """
+  Change the postpaid billing tier. Upgrades apply immediately and reconcile
+  cluster access; downgrades are scheduled for the current billing period end
+  so the tenant keeps paid entitlements until the period closes.
+  """
+  changeBillingTier(
+    """
+    The target billing tier. Must be an active postpaid tier (tier_level >= 1).
+    """
+    tierId: ID!
+  ): ChangeBillingTierResult!
+
   # ==================== AI Consultant (Skipper) ====================
 
   """
@@ -1951,6 +1963,7 @@ union LinkWalletResult = WalletIdentity | ValidationError | AuthError
 union UnlinkWalletResult = DeleteSuccess | NotFoundError | AuthError
 union LinkEmailResult = LinkEmailPayload | ValidationError | AuthError
 union PromoteToPaidResult = PromoteToPaidPayload | ValidationError | AuthError
+union ChangeBillingTierResult = ChangeBillingTierPayload | ValidationError | AuthError
 
 # Support messaging result types
 union CreateConversationResult = Conversation | ValidationError | AuthError
@@ -2779,6 +2792,23 @@ type PromoteToPaidPayload {
   creditBalanceCents: Int!
   "The new subscription ID."
   subscriptionId: ID!
+}
+
+"""
+Result of a postpaid tier change. Either appliedTier is set (immediate upgrade)
+or pendingTier + effectiveAt are set (scheduled downgrade at period end).
+"""
+type ChangeBillingTierPayload {
+  "Whether the request was accepted."
+  success: Boolean!
+  "Human-readable status message."
+  message: String!
+  "Set on immediate upgrade — the new active tier."
+  appliedTier: BillingTier
+  "Set on scheduled downgrade — the staged target tier."
+  pendingTier: BillingTier
+  "When a scheduled downgrade will take effect."
+  effectiveAt: Time
 }
 
 input CreateEdgeClusterInput {
@@ -4439,6 +4469,8 @@ type BillingTier {
   id: ID!
   "Internal tier name (payg, free, supporter, developer, production, enterprise)."
   tierName: String!
+  "Numeric ordering of tiers; 0 = payg (prepaid), 1 = free, 5 = enterprise. Used to compare upgrade vs downgrade direction."
+  tierLevel: Int!
   "User-facing tier name."
   displayName: String!
   "Tier description for marketing."
@@ -4614,6 +4646,11 @@ type TenantSubscription {
   # Payment
   paymentMethod: String
   billingModel: String!
+  # Scheduled tier change (typically a downgrade) staged via changeBillingTier,
+  # applied by the billing close job after the current period's invoice clears.
+  pendingTier: BillingTier
+  pendingEffectiveAt: Time
+  pendingReason: String
   createdAt: Time!
   updatedAt: Time!
 }

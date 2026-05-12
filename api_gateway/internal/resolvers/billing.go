@@ -1761,6 +1761,71 @@ func (r *Resolver) DoPromoteToPaid(ctx context.Context, tierID string) (model.Pr
 	}, nil
 }
 
+// DoChangeBillingTier changes a postpaid tenant's billing tier. Purser owns
+// the immediate-vs-scheduled semantics and cluster-access reconciliation.
+func (r *Resolver) DoChangeBillingTier(ctx context.Context, tierID string) (model.ChangeBillingTierResult, error) {
+	if middleware.IsDemoMode(ctx) {
+		now := time.Now()
+		return &model.ChangeBillingTierPayload{
+			Success:     true,
+			Message:     "Billing tier change accepted (demo mode)",
+			EffectiveAt: &now,
+		}, nil
+	}
+
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return &model.ValidationError{
+			Message: "Tenant context required",
+			Code:    ptrStr("TENANT_REQUIRED"),
+			Field:   ptrStr("tenant_id"),
+		}, nil
+	}
+	if strings.TrimSpace(tierID) == "" {
+		return &model.ValidationError{
+			Message: "Billing tier is required",
+			Code:    ptrStr("TIER_REQUIRED"),
+			Field:   ptrStr("tier_id"),
+		}, nil
+	}
+
+	resp, err := r.Clients.Purser.ChangeBillingTier(ctx, tenantID, tierID)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).WithField("tier_id", tierID).Error("Failed to change billing tier")
+		return &model.ValidationError{
+			Message: err.Error(),
+			Code:    ptrStr("TIER_CHANGE_FAILED"),
+			Field:   ptrStr("tier_id"),
+		}, nil
+	}
+
+	payload := &model.ChangeBillingTierPayload{
+		Success: resp.GetSuccess(),
+		Message: resp.GetMessage(),
+	}
+	if resp.GetEffectiveAt() != nil && resp.GetEffectiveAt().IsValid() {
+		t := resp.GetEffectiveAt().AsTime()
+		payload.EffectiveAt = &t
+	}
+	if appliedID := resp.GetAppliedTierId(); appliedID != "" {
+		tier, tierErr := r.Clients.Purser.GetBillingTier(ctx, appliedID)
+		if tierErr != nil {
+			r.Logger.WithError(tierErr).WithField("tier_id", appliedID).Error("Failed to load applied billing tier")
+			return nil, fmt.Errorf("load applied tier: %w", tierErr)
+		}
+		payload.AppliedTier = tier
+	}
+	if pendingID := resp.GetPendingTierId(); pendingID != "" {
+		tier, tierErr := r.Clients.Purser.GetBillingTier(ctx, pendingID)
+		if tierErr != nil {
+			r.Logger.WithError(tierErr).WithField("tier_id", pendingID).Error("Failed to load pending billing tier")
+			return nil, fmt.Errorf("load pending tier: %w", tierErr)
+		}
+		payload.PendingTier = tier
+	}
+	return payload, nil
+}
+
 // ============================================================================
 // BILLING DETAILS RESOLVERS
 // ============================================================================

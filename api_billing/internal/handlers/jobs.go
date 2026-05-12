@@ -146,10 +146,18 @@ type JobManager struct {
 	commodoreClient   CommodoreClient
 	periscopeClient   *periscope.GRPCClient
 	thresholdEnforcer *ThresholdEnforcer
+	tierReconciler    TierReconciler
+}
+
+// TierReconciler is the subset of tieraccess.Reconciler used by the downgrade
+// applier. Defined as an interface so JobManager tests can stub it without
+// pulling in the Quartermaster client.
+type TierReconciler interface {
+	Reconcile(ctx context.Context, tenantID string, tierLevel int32) ([]string, string, error)
 }
 
 // NewJobManager creates a new job manager
-func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient CommodoreClient, decklogSvc *decklog.BatchedClient, periscopeSvc *periscope.GRPCClient) *JobManager {
+func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient CommodoreClient, decklogSvc *decklog.BatchedClient, periscopeSvc *periscope.GRPCClient, tierReconciler TierReconciler) *JobManager {
 	// Initialize Kafka consumer
 	brokers := strings.Split(config.GetEnv("KAFKA_BROKERS", "kafka:9092"), ",")
 	clusterID := config.GetEnv("KAFKA_CLUSTER_ID", "local")
@@ -183,6 +191,7 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 		commodoreClient:   commodoreClient,
 		periscopeClient:   periscopeSvc,
 		thresholdEnforcer: NewThresholdEnforcer(database, log, commodoreClient, emailSvc),
+		tierReconciler:    tierReconciler,
 	}
 }
 
@@ -951,6 +960,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 	jm.logger.Info("Running monthly invoice generation")
 
 	now := time.Now()
+	defer jm.applyDuePendingDowngrades(ctx, now)
 
 	// Identify tenants due for billing. Pricing rules / entitlements are loaded
 	// per-tenant via LoadEffectiveTier so this query stays narrow.
@@ -1301,6 +1311,15 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 				}).Error("Failed to send invoice created email")
 			}
 		}
+
+		// Apply any scheduled tier downgrade now that the period's invoice has
+		// committed in a non-held state. Three-step ordering favors the user
+		// on partial failure: flip tier first, reconcile cluster access second,
+		// clear pending_* last. Pending stays set on any error so the next
+		// cron tick retries.
+		if status != "manual_review" {
+			jm.applyPendingDowngrade(ctx, tenantID)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		jm.logger.WithError(err).Error("Invoice subscription cursor failed")
@@ -1309,6 +1328,152 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 	jm.logger.WithFields(logging.Fields{
 		"invoices_generated": invoicesGenerated,
 	}).Info("Monthly invoice generation completed")
+}
+
+func (jm *JobManager) applyDuePendingDowngrades(ctx context.Context, now time.Time) {
+	rows, err := jm.db.QueryContext(ctx, `
+		SELECT ts.tenant_id
+		FROM purser.tenant_subscriptions ts
+		WHERE ts.status = 'active'
+		  AND ts.pending_tier_id IS NOT NULL
+		  AND ts.pending_effective_at <= $1
+		  AND EXISTS (
+		      SELECT 1
+		      FROM purser.billing_invoices bi
+		      WHERE bi.tenant_id = ts.tenant_id
+		        AND bi.period_end = ts.pending_effective_at
+		        AND bi.status NOT IN ('draft', 'manual_review')
+		  )
+		ORDER BY ts.pending_effective_at ASC, ts.tenant_id ASC
+	`, now)
+	if err != nil {
+		jm.logger.WithError(err).Warn("scan due pending tier downgrades")
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var tenantID string
+		if err := rows.Scan(&tenantID); err != nil {
+			jm.logger.WithError(err).Warn("scan pending downgrade tenant")
+			continue
+		}
+		jm.applyPendingDowngrade(ctx, tenantID)
+	}
+	if err := rows.Err(); err != nil {
+		jm.logger.WithError(err).Warn("iterate due pending tier downgrades")
+	}
+}
+
+// applyPendingDowngrade flips a tenant's tier_id to its staged pending_tier_id,
+// reconciles cluster access, and clears the pending columns. Called after the
+// period's invoice has committed and is not held. Idempotent — safe to re-run
+// on every cron tick.
+//
+// Ordering favors the user on partial failure: tier flip first (so we never
+// bill at the old paid rate after charging downstream consequences), then
+// reconcile + cache invalidation, then clear the pending marker. If reconcile
+// fails after the tier flips, the tenant temporarily has extra cluster access
+// while already on the cheaper tier — preferable to losing paid entitlements.
+func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string) {
+	var (
+		pendingTierID    sql.NullString
+		pendingDue       sql.NullTime
+		currentTierID    string
+		pendingTierLevel sql.NullInt32
+	)
+	err := jm.db.QueryRowContext(ctx, `
+		SELECT ts.tier_id,
+		       ts.pending_tier_id,
+		       ts.pending_effective_at,
+		       bt.tier_level
+		FROM purser.tenant_subscriptions ts
+		LEFT JOIN purser.billing_tiers bt ON bt.id = ts.pending_tier_id
+		WHERE ts.tenant_id = $1
+	`, tenantID).Scan(&currentTierID, &pendingTierID, &pendingDue, &pendingTierLevel)
+	if errors.Is(err, sql.ErrNoRows) {
+		return
+	}
+	if err != nil {
+		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("load pending tier for downgrade applier")
+		return
+	}
+	if !pendingTierID.Valid || pendingTierID.String == "" {
+		return
+	}
+	if !pendingDue.Valid || pendingDue.Time.After(time.Now()) {
+		return
+	}
+	if !pendingTierLevel.Valid {
+		jm.logger.WithFields(logging.Fields{
+			"tenant_id":       tenantID,
+			"pending_tier_id": pendingTierID.String,
+		}).Warn("pending tier id references missing billing_tiers row")
+		return
+	}
+	if jm.tierReconciler == nil {
+		jm.logger.WithField("tenant_id", tenantID).Warn("downgrade applier has no tier reconciler configured")
+		return
+	}
+
+	stagedTarget := pendingTierID.String
+	targetLevel := pendingTierLevel.Int32
+
+	// Step 1: flip tier_id in its own short transaction, but keep pending_*
+	// set as the "reconcile-not-yet-applied" marker. Conditional on the
+	// staged target so a racing ChangeBillingTier that re-pointed the
+	// pending is not clobbered.
+	result, err := jm.db.ExecContext(ctx, `
+		UPDATE purser.tenant_subscriptions
+		SET tier_id = $1,
+		    updated_at = NOW()
+		WHERE tenant_id = $2 AND pending_tier_id = $1
+	`, stagedTarget, tenantID)
+	if err != nil {
+		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("flip tier_id for pending downgrade")
+		return
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		// Race: pending_tier_id changed since we read it. Next tick handles
+		// the new state.
+		return
+	}
+
+	// Step 2: reconcile cluster access + invalidate Commodore cache. Idempotent.
+	if _, _, err := jm.tierReconciler.Reconcile(ctx, tenantID, targetLevel); err != nil {
+		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("reconcile cluster access for pending downgrade; will retry next tick")
+		return
+	}
+	if jm.commodoreClient != nil {
+		invalidateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if _, invErr := jm.commodoreClient.InvalidateTenantCache(invalidateCtx, tenantID, "tier_changed"); invErr != nil {
+			jm.logger.WithError(invErr).WithField("tenant_id", tenantID).Warn("invalidate tenant cache after pending downgrade; will retry next tick")
+			cancel()
+			return
+		}
+		cancel()
+	}
+
+	// Step 3: clear the pending marker. Conditional on the tier already
+	// matching the staged target so a concurrent re-stage is not erased.
+	if _, err := jm.db.ExecContext(ctx, `
+		UPDATE purser.tenant_subscriptions
+		SET pending_tier_id = NULL,
+		    pending_effective_at = NULL,
+		    pending_reason = NULL,
+		    updated_at = NOW()
+		WHERE tenant_id = $1 AND tier_id = $2 AND pending_tier_id = $2
+	`, tenantID, stagedTarget); err != nil {
+		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("clear pending downgrade marker; will retry next tick")
+		return
+	}
+
+	jm.logger.WithFields(logging.Fields{
+		"tenant_id":  tenantID,
+		"from_tier":  currentTierID,
+		"to_tier":    stagedTarget,
+		"tier_level": targetLevel,
+	}).Info("Pending tier downgrade applied")
 }
 
 func (jm *JobManager) runUsageRollups(ctx context.Context) {

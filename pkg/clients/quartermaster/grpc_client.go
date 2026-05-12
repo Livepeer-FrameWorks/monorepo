@@ -50,7 +50,7 @@ type GRPCConfig struct {
 // and adds them to outgoing gRPC metadata for downstream services.
 // If no user JWT is available, it falls back to the service token for service-to-service calls.
 func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
-	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		// Extract user context from Go context and add to gRPC metadata
 		md := metadata.MD{}
 
@@ -182,6 +182,26 @@ func (c *GRPCClient) BootstrapClusterAccess(ctx context.Context, tenantID, clust
 		ResourceLimits: resourceLimits,
 	})
 	return err
+}
+
+// DeactivateClusterAccess soft-suspends a tenant_cluster_access row. Used by
+// Purser's tier reconciliation on downgrade. Idempotent.
+func (c *GRPCClient) DeactivateClusterAccess(ctx context.Context, tenantID, clusterID, reason string) error {
+	_, err := c.cluster.DeactivateClusterAccess(ctx, &pb.DeactivateClusterAccessRequest{
+		TenantId:  tenantID,
+		ClusterId: clusterID,
+		Reason:    reason,
+	})
+	return err
+}
+
+// ListTenantClusterAccess returns every tenant_cluster_access row with the
+// fields needed for tier reconciliation diffs. Service-token only; distinct
+// from ListClustersForTenant which is a user-facing minimal-entry RPC.
+func (c *GRPCClient) ListTenantClusterAccess(ctx context.Context, tenantID string) (*pb.ListTenantClusterAccessResponse, error) {
+	return c.cluster.ListTenantClusterAccess(ctx, &pb.ListTenantClusterAccessRequest{
+		TenantId: tenantID,
+	})
 }
 
 // ListTenants lists tenants with cursor pagination

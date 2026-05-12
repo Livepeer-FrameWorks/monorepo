@@ -1,0 +1,29 @@
+mutation ChangeBillingTier($tierId: ID!) {
+  changeBillingTier(tierId: $tierId) {
+    ... on ChangeBillingTierPayload {
+      success
+      message
+      appliedTier {
+        id
+        tierName
+        displayName
+        tierLevel
+      }
+      pendingTier {
+        id
+        tierName
+        displayName
+        tierLevel
+      }
+      effectiveAt
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

@@ -977,6 +977,14 @@ enum GQL {
           value
         }
         paymentMethod
+        pendingTier {
+          id
+          tierName
+          displayName
+          tierLevel
+        }
+        pendingEffectiveAt
+        pendingReason
         createdAt
         updatedAt
       }
@@ -3796,6 +3804,38 @@ enum GQL {
         code
         resourceType
         resourceId
+      }
+      ... on AuthError {
+        message
+        code
+      }
+    }
+  }
+  """
+
+  static let ChangeBillingTier = """
+  mutation ChangeBillingTier($tierId: ID!) {
+    changeBillingTier(tierId: $tierId) {
+      ... on ChangeBillingTierPayload {
+        success
+        message
+        appliedTier {
+          id
+          tierName
+          displayName
+          tierLevel
+        }
+        pendingTier {
+          id
+          tierName
+          displayName
+          tierLevel
+        }
+        effectiveAt
+      }
+      ... on ValidationError {
+        message
+        field
       }
       ... on AuthError {
         message

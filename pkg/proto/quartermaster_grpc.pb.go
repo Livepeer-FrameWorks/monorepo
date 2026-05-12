@@ -676,6 +676,8 @@ const (
 	ClusterService_GrantClusterAccess_FullMethodName         = "/quartermaster.ClusterService/GrantClusterAccess"
 	ClusterService_SubscribeToCluster_FullMethodName         = "/quartermaster.ClusterService/SubscribeToCluster"
 	ClusterService_BootstrapClusterAccess_FullMethodName     = "/quartermaster.ClusterService/BootstrapClusterAccess"
+	ClusterService_DeactivateClusterAccess_FullMethodName    = "/quartermaster.ClusterService/DeactivateClusterAccess"
+	ClusterService_ListTenantClusterAccess_FullMethodName    = "/quartermaster.ClusterService/ListTenantClusterAccess"
 	ClusterService_UnsubscribeFromCluster_FullMethodName     = "/quartermaster.ClusterService/UnsubscribeFromCluster"
 	ClusterService_ListMySubscriptions_FullMethodName        = "/quartermaster.ClusterService/ListMySubscriptions"
 	ClusterService_ListMarketplaceClusters_FullMethodName    = "/quartermaster.ClusterService/ListMarketplaceClusters"
@@ -730,6 +732,15 @@ type ClusterServiceClient interface {
 	// this RPC takes the tenant_id directly and is intended for declarative
 	// bootstrap reconcile only. The server enforces is_platform_official.
 	BootstrapClusterAccess(ctx context.Context, in *BootstrapClusterAccessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// DeactivateClusterAccess soft-suspends a tenant_cluster_access row
+	// (is_active=false, subscription_status='suspended'). Service-token only;
+	// Purser calls this from reconcileTierClusterAccess on downgrade. Idempotent.
+	DeactivateClusterAccess(ctx context.Context, in *DeactivateClusterAccessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// ListTenantClusterAccess returns every tenant_cluster_access row with the
+	// is_active / subscription_status / is_platform_official fields needed for
+	// tier reconciliation. Service-token only; distinct from the user-facing
+	// ListClustersForTenant which exposes a minimal ClusterAccessEntry.
+	ListTenantClusterAccess(ctx context.Context, in *ListTenantClusterAccessRequest, opts ...grpc.CallOption) (*ListTenantClusterAccessResponse, error)
 	// Unsubscribe from a cluster
 	UnsubscribeFromCluster(ctx context.Context, in *UnsubscribeFromClusterRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// List clusters the tenant is subscribed to
@@ -880,6 +891,26 @@ func (c *clusterServiceClient) BootstrapClusterAccess(ctx context.Context, in *B
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, ClusterService_BootstrapClusterAccess_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) DeactivateClusterAccess(ctx context.Context, in *DeactivateClusterAccessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, ClusterService_DeactivateClusterAccess_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) ListTenantClusterAccess(ctx context.Context, in *ListTenantClusterAccessRequest, opts ...grpc.CallOption) (*ListTenantClusterAccessResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTenantClusterAccessResponse)
+	err := c.cc.Invoke(ctx, ClusterService_ListTenantClusterAccess_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1172,6 +1203,15 @@ type ClusterServiceServer interface {
 	// this RPC takes the tenant_id directly and is intended for declarative
 	// bootstrap reconcile only. The server enforces is_platform_official.
 	BootstrapClusterAccess(context.Context, *BootstrapClusterAccessRequest) (*emptypb.Empty, error)
+	// DeactivateClusterAccess soft-suspends a tenant_cluster_access row
+	// (is_active=false, subscription_status='suspended'). Service-token only;
+	// Purser calls this from reconcileTierClusterAccess on downgrade. Idempotent.
+	DeactivateClusterAccess(context.Context, *DeactivateClusterAccessRequest) (*emptypb.Empty, error)
+	// ListTenantClusterAccess returns every tenant_cluster_access row with the
+	// is_active / subscription_status / is_platform_official fields needed for
+	// tier reconciliation. Service-token only; distinct from the user-facing
+	// ListClustersForTenant which exposes a minimal ClusterAccessEntry.
+	ListTenantClusterAccess(context.Context, *ListTenantClusterAccessRequest) (*ListTenantClusterAccessResponse, error)
 	// Unsubscribe from a cluster
 	UnsubscribeFromCluster(context.Context, *UnsubscribeFromClusterRequest) (*emptypb.Empty, error)
 	// List clusters the tenant is subscribed to
@@ -1257,6 +1297,12 @@ func (UnimplementedClusterServiceServer) SubscribeToCluster(context.Context, *Su
 }
 func (UnimplementedClusterServiceServer) BootstrapClusterAccess(context.Context, *BootstrapClusterAccessRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method BootstrapClusterAccess not implemented")
+}
+func (UnimplementedClusterServiceServer) DeactivateClusterAccess(context.Context, *DeactivateClusterAccessRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeactivateClusterAccess not implemented")
+}
+func (UnimplementedClusterServiceServer) ListTenantClusterAccess(context.Context, *ListTenantClusterAccessRequest) (*ListTenantClusterAccessResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTenantClusterAccess not implemented")
 }
 func (UnimplementedClusterServiceServer) UnsubscribeFromCluster(context.Context, *UnsubscribeFromClusterRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method UnsubscribeFromCluster not implemented")
@@ -1533,6 +1579,42 @@ func _ClusterService_BootstrapClusterAccess_Handler(srv interface{}, ctx context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ClusterServiceServer).BootstrapClusterAccess(ctx, req.(*BootstrapClusterAccessRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_DeactivateClusterAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeactivateClusterAccessRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).DeactivateClusterAccess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_DeactivateClusterAccess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).DeactivateClusterAccess(ctx, req.(*DeactivateClusterAccessRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_ListTenantClusterAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTenantClusterAccessRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).ListTenantClusterAccess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_ListTenantClusterAccess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).ListTenantClusterAccess(ctx, req.(*ListTenantClusterAccessRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2051,6 +2133,14 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BootstrapClusterAccess",
 			Handler:    _ClusterService_BootstrapClusterAccess_Handler,
+		},
+		{
+			MethodName: "DeactivateClusterAccess",
+			Handler:    _ClusterService_DeactivateClusterAccess_Handler,
+		},
+		{
+			MethodName: "ListTenantClusterAccess",
+			Handler:    _ClusterService_ListTenantClusterAccess_Handler,
 		},
 		{
 			MethodName: "UnsubscribeFromCluster",

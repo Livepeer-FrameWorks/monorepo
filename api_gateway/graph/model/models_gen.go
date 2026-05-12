@@ -20,6 +20,10 @@ type BootstrapEdgeResult interface {
 	IsBootstrapEdgeResult()
 }
 
+type ChangeBillingTierResult interface {
+	IsChangeBillingTierResult()
+}
+
 type ClusterSubscriptionResult interface {
 	IsClusterSubscriptionResult()
 }
@@ -347,6 +351,8 @@ func (AuthError) IsLinkEmailResult() {}
 
 func (AuthError) IsPromoteToPaidResult() {}
 
+func (AuthError) IsChangeBillingTierResult() {}
+
 func (AuthError) IsCreateConversationResult() {}
 
 func (AuthError) IsSendMessageResult() {}
@@ -474,6 +480,23 @@ type CardTopupResult struct {
 	// When the checkout session expires.
 	ExpiresAt time.Time `json:"expiresAt"`
 }
+
+// Result of a postpaid tier change. Either appliedTier is set (immediate upgrade)
+// or pendingTier + effectiveAt are set (scheduled downgrade at period end).
+type ChangeBillingTierPayload struct {
+	// Whether the request was accepted.
+	Success bool `json:"success"`
+	// Human-readable status message.
+	Message string `json:"message"`
+	// Set on immediate upgrade — the new active tier.
+	AppliedTier *proto.BillingTier `json:"appliedTier,omitempty"`
+	// Set on scheduled downgrade — the staged target tier.
+	PendingTier *proto.BillingTier `json:"pendingTier,omitempty"`
+	// When a scheduled downgrade will take effect.
+	EffectiveAt *time.Time `json:"effectiveAt,omitempty"`
+}
+
+func (ChangeBillingTierPayload) IsChangeBillingTierResult() {}
 
 type ClientMetrics5mConnection struct {
 	Edges      []*ClientMetrics5mEdge   `json:"edges"`
@@ -2055,6 +2078,8 @@ func (ValidationError) IsLinkWalletResult() {}
 func (ValidationError) IsLinkEmailResult() {}
 
 func (ValidationError) IsPromoteToPaidResult() {}
+
+func (ValidationError) IsChangeBillingTierResult() {}
 
 func (ValidationError) IsCreateConversationResult() {}
 

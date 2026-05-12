@@ -11,12 +11,12 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"frameworks/api_billing/internal/handlers"
 	"frameworks/api_billing/internal/mollie"
 	"frameworks/api_billing/internal/stripe"
+	"frameworks/api_billing/internal/tieraccess"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
@@ -248,10 +248,7 @@ type PurserServer struct {
 	x402handler         *handlers.X402Handler
 	decklogClient       *decklogclient.BatchedClient
 	thresholdEnforcer   *handlers.ThresholdEnforcer
-
-	officialClustersMu    sync.RWMutex
-	officialClusterIDs    map[string]bool
-	officialClustersStale time.Time
+	tierReconciler      *tieraccess.Reconciler
 }
 
 // NewPurserServer creates a new Purser gRPC server
@@ -278,6 +275,7 @@ func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, 
 		x402handler:         handlers.NewX402Handler(db, logger, hdwallet, rpcClient, commodoreClient),
 		decklogClient:       decklogClient,
 		thresholdEnforcer:   handlers.NewThresholdEnforcer(db, logger, commodoreClient, nil),
+		tierReconciler:      tieraccess.NewReconciler(db, qmClient, logger),
 	}
 }
 
@@ -1228,6 +1226,8 @@ func (s *PurserServer) GetSubscription(ctx context.Context, req *pb.GetSubscript
 	var stripeCustomerID, stripeSubscriptionID, stripeSubscriptionStatus, mollieSubscriptionID sql.NullString
 	var stripePeriodEnd sql.NullTime
 	var dunningAttempts sql.NullInt32
+	var pendingTierID, pendingReason sql.NullString
+	var pendingEffectiveAt sql.NullTime
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, tier_id, status, billing_email, started_at,
@@ -1237,6 +1237,7 @@ func (s *PurserServer) GetSubscription(ctx context.Context, req *pb.GetSubscript
 		       billing_model,
 		       stripe_customer_id, stripe_subscription_id, stripe_subscription_status, stripe_current_period_end, dunning_attempts,
 		       mollie_subscription_id,
+		       pending_tier_id, pending_effective_at, pending_reason,
 		       created_at, updated_at
 		FROM purser.tenant_subscriptions
 		WHERE tenant_id = $1 AND status != 'cancelled'
@@ -1249,6 +1250,7 @@ func (s *PurserServer) GetSubscription(ctx context.Context, req *pb.GetSubscript
 		&billingModel,
 		&stripeCustomerID, &stripeSubscriptionID, &stripeSubscriptionStatus, &stripePeriodEnd, &dunningAttempts,
 		&mollieSubscriptionID,
+		&pendingTierID, &pendingEffectiveAt, &pendingReason,
 		&createdAt, &updatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1311,6 +1313,15 @@ func (s *PurserServer) GetSubscription(ctx context.Context, req *pb.GetSubscript
 	}
 	if mollieSubscriptionID.Valid {
 		sub.MollieSubscriptionId = &mollieSubscriptionID.String
+	}
+	if pendingTierID.Valid {
+		sub.PendingTierId = &pendingTierID.String
+	}
+	if pendingEffectiveAt.Valid {
+		sub.PendingEffectiveAt = timestamppb.New(pendingEffectiveAt.Time)
+	}
+	if pendingReason.Valid {
+		sub.PendingReason = &pendingReason.String
 	}
 
 	// Per-tenant override rows live in their own tables; load them so the
@@ -1444,6 +1455,26 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSub
 	}
 
 	userID := middleware.GetUserID(ctx)
+
+	// Tier changes go through ChangeBillingTier so cluster access is reconciled
+	// and downgrades are deferred to period end. Accept the field only when it
+	// matches the current tier_id (idempotent re-state from callers); reject
+	// any mismatch.
+	if req.TierId != nil && *req.TierId != "" {
+		var currentTierID string
+		if scanErr := s.db.QueryRowContext(ctx,
+			`SELECT tier_id FROM purser.tenant_subscriptions WHERE tenant_id = $1`,
+			tenantID,
+		).Scan(&currentTierID); scanErr != nil {
+			if errors.Is(scanErr, sql.ErrNoRows) {
+				return nil, status.Error(codes.NotFound, "subscription not found")
+			}
+			return nil, status.Errorf(codes.Internal, "load current tier: %v", scanErr)
+		}
+		if *req.TierId != currentTierID {
+			return nil, status.Error(codes.FailedPrecondition, "tier_id changes go through ChangeBillingTier")
+		}
+	}
 
 	// Build dynamic update
 	updates := []string{"updated_at = NOW()"}
@@ -2740,6 +2771,8 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 	var stripeCustomerID, stripeSubscriptionID, stripeSubscriptionStatus, mollieSubscriptionID sql.NullString
 	var stripePeriodEnd sql.NullTime
 	var dunningAttempts sql.NullInt32
+	var pendingTierID, pendingReason sql.NullString
+	var pendingEffectiveAt sql.NullTime
 
 	// JSONB fields
 	var customFeatures, billingAddress, features []byte
@@ -2754,9 +2787,10 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 			ts.payment_method, ts.payment_reference, ts.billing_address,
 			ts.tax_id, ts.tax_rate,
 			ts.billing_model,
-			ts.stripe_customer_id, ts.stripe_subscription_id, ts.stripe_subscription_status, ts.stripe_current_period_end, ts.dunning_attempts,
-			ts.mollie_subscription_id,
-			ts.created_at, ts.updated_at,
+				ts.stripe_customer_id, ts.stripe_subscription_id, ts.stripe_subscription_status, ts.stripe_current_period_end, ts.dunning_attempts,
+				ts.mollie_subscription_id,
+				ts.pending_tier_id, ts.pending_effective_at, ts.pending_reason,
+				ts.created_at, ts.updated_at,
 			bt.id, bt.tier_name, bt.display_name, bt.description,
 			bt.base_price, bt.currency, bt.billing_period,
 			bt.features, bt.support_level, bt.sla_level,
@@ -2778,6 +2812,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 		&billingModel,
 		&stripeCustomerID, &stripeSubscriptionID, &stripeSubscriptionStatus, &stripePeriodEnd, &dunningAttempts,
 		&mollieSubscriptionID,
+		&pendingTierID, &pendingEffectiveAt, &pendingReason,
 		&subCreatedAt, &subUpdatedAt,
 		&tier.Id, &tier.TierName, &tier.DisplayName, &tier.Description,
 		&tier.BasePrice, &tier.Currency, &tier.BillingPeriod,
@@ -2857,6 +2892,15 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 	}
 	if mollieSubscriptionID.Valid {
 		subscription.MollieSubscriptionId = &mollieSubscriptionID.String
+	}
+	if pendingTierID.Valid {
+		subscription.PendingTierId = &pendingTierID.String
+	}
+	if pendingEffectiveAt.Valid {
+		subscription.PendingEffectiveAt = timestamppb.New(pendingEffectiveAt.Time)
+	}
+	if pendingReason.Valid {
+		subscription.PendingReason = &pendingReason.String
 	}
 
 	// Parse JSONB fields for subscription
@@ -4642,107 +4686,35 @@ func (s *PurserServer) InitializePrepaidBalance(ctx context.Context, req *pb.Ini
 
 // InitializePrepaidAccount creates subscription + prepaid balance for wallet provisioning.
 // getOfficialClusterIDs returns the set of platform-official cluster IDs,
-// cached for 5 minutes since this flag changes very rarely.
+// cached for 5 minutes via the shared tieraccess.Reconciler. Returns nil when
+// no reconciler is configured (test wiring or local dev without Quartermaster).
 func (s *PurserServer) getOfficialClusterIDs(ctx context.Context) (map[string]bool, error) {
-	s.officialClustersMu.RLock()
-	if s.officialClusterIDs != nil && time.Now().Before(s.officialClustersStale) {
-		ids := s.officialClusterIDs
-		s.officialClustersMu.RUnlock()
-		return ids, nil
-	}
-	s.officialClustersMu.RUnlock()
-
-	if s.quartermasterClient == nil {
+	if s.tierReconciler == nil {
 		return nil, nil
 	}
-
-	resp, err := s.quartermasterClient.ListOfficialClusters(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list official clusters: %w", err)
-	}
-
-	ids := make(map[string]bool, len(resp.GetClusters()))
-	for _, c := range resp.GetClusters() {
-		ids[c.ClusterId] = true
-	}
-
-	s.officialClustersMu.Lock()
-	s.officialClusterIDs = ids
-	s.officialClustersStale = time.Now().Add(5 * time.Minute)
-	s.officialClustersMu.Unlock()
-
-	return ids, nil
+	return s.tierReconciler.OfficialClusterIDs(ctx)
 }
 
-// Called by Commodore during GetOrCreateWalletUser to avoid cross-service DB inserts.
-// This is atomic - creates both subscription (billing_model=prepaid) and balance in one transaction.
-// ensureTierClusterAccess subscribes the tenant to all platform clusters
-// eligible at the given tier level and sets the best one as primary.
-func (s *PurserServer) ensureTierClusterAccess(ctx context.Context, tenantID string, tierLevel int32) (eligibleClusterIDs []string, primaryClusterID string, err error) {
-	officialIDs, err := s.getOfficialClusterIDs(ctx)
-	if err != nil {
-		return nil, "", err
-	}
-	if len(officialIDs) == 0 {
+// reconcileTierClusterAccess delegates to the shared tieraccess.Reconciler.
+// See package tieraccess for the bidirectional grant/suspend logic. Returns
+// empty values when no reconciler is configured (test wiring).
+func (s *PurserServer) reconcileTierClusterAccess(ctx context.Context, tenantID string, tierLevel int32) ([]string, string, error) {
+	if s.tierReconciler == nil {
 		return nil, "", nil
 	}
+	return s.tierReconciler.Reconcile(ctx, tenantID, tierLevel)
+}
 
-	idSlice := make([]string, 0, len(officialIDs))
-	for id := range officialIDs {
-		idSlice = append(idSlice, id)
+func (s *PurserServer) invalidateTenantCache(ctx context.Context, tenantID, reason string) error {
+	if s.commodoreClient == nil {
+		return nil
 	}
-
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT cluster_id, required_tier_level
-		FROM purser.cluster_pricing
-		WHERE cluster_id = ANY($1)
-		  AND required_tier_level <= $2
-		  AND (allow_free_tier = true OR $2 > 0)
-		ORDER BY required_tier_level DESC
-	`, pq.Array(idSlice), tierLevel)
-	if err != nil {
-		return nil, "", fmt.Errorf("query eligible clusters: %w", err)
+	invalidateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := s.commodoreClient.InvalidateTenantCache(invalidateCtx, tenantID, reason); err != nil {
+		return err
 	}
-	defer rows.Close()
-
-	var bestLevel int32 = -1
-	for rows.Next() {
-		var clusterID string
-		var reqLevel int32
-		if err := rows.Scan(&clusterID, &reqLevel); err != nil {
-			return nil, "", fmt.Errorf("scan cluster row: %w", err)
-		}
-		eligibleClusterIDs = append(eligibleClusterIDs, clusterID)
-
-		if subErr := s.quartermasterClient.BootstrapClusterAccess(ctx, tenantID, clusterID, nil); subErr != nil {
-			s.logger.WithError(subErr).WithFields(logging.Fields{
-				"tenant_id":  tenantID,
-				"cluster_id": clusterID,
-			}).Warn("Failed to subscribe tenant to eligible cluster")
-		}
-
-		if reqLevel > bestLevel {
-			bestLevel = reqLevel
-			primaryClusterID = clusterID
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("iterate cluster rows: %w", err)
-	}
-
-	if primaryClusterID != "" {
-		if _, err := s.quartermasterClient.UpdateTenant(ctx, &pb.UpdateTenantRequest{
-			TenantId:         tenantID,
-			PrimaryClusterId: &primaryClusterID,
-		}); err != nil {
-			s.logger.WithError(err).WithFields(logging.Fields{
-				"tenant_id":          tenantID,
-				"primary_cluster_id": primaryClusterID,
-			}).Warn("Failed to set primary cluster")
-		}
-	}
-
-	return eligibleClusterIDs, primaryClusterID, nil
+	return nil
 }
 
 func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *pb.InitializePrepaidAccountRequest) (*pb.InitializePrepaidAccountResponse, error) {
@@ -4815,7 +4787,7 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *pb.Ini
 	_ = s.db.QueryRowContext(ctx, `SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1`, tenantID).Scan(&actualSubID)
 	_ = s.db.QueryRowContext(ctx, `SELECT id FROM purser.prepaid_balances WHERE tenant_id = $1 AND currency = $2`, tenantID, currency).Scan(&actualBalID)
 
-	eligibleClusters, primaryCluster, clusterErr := s.ensureTierClusterAccess(ctx, tenantID, tierLevel)
+	eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, tierLevel)
 	if clusterErr != nil {
 		s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Warn("Failed to provision cluster access for prepaid account")
 	}
@@ -4889,7 +4861,7 @@ func (s *PurserServer) InitializePostpaidAccount(ctx context.Context, req *pb.In
 	var actualSubID string
 	_ = s.db.QueryRowContext(ctx, `SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1`, tenantID).Scan(&actualSubID)
 
-	eligibleClusters, primaryCluster, clusterErr := s.ensureTierClusterAccess(ctx, tenantID, tierLevel)
+	eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, tierLevel)
 	if clusterErr != nil {
 		s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Warn("Failed to provision cluster access for postpaid account")
 	}
@@ -5737,9 +5709,10 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *pb.GetCryptoTopu
 	return &topup, nil
 }
 
-// PromoteToPaid upgrades a prepaid account to postpaid on the free tier.
-// The tier_id parameter is ignored — promotion always targets the free tier
-// (same default tier that new email accounts receive).
+// PromoteToPaid upgrades a prepaid account to postpaid. When req.tier_id is
+// provided it must reference an active postpaid tier (tier_level >= 1, not
+// is_default_prepaid); empty selects is_default_postpaid as the floor.
+// Prepaid balance is carried forward as credit.
 func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidRequest) (*pb.PromoteToPaidResponse, error) {
 	tenantID := req.GetTenantId()
 
@@ -5763,19 +5736,41 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidR
 		return nil, status.Error(codes.FailedPrecondition, "already on postpaid billing")
 	}
 
-	// Resolve the default postpaid tier
+	// Resolve the target tier. Honor req.tier_id when provided; otherwise fall
+	// back to is_default_postpaid.
 	var tierID string
 	var tierLevel int32
-	err = s.db.QueryRowContext(ctx, `
-		SELECT id, tier_level FROM purser.billing_tiers
-		WHERE is_default_postpaid = true AND is_active = true
-		LIMIT 1
-	`).Scan(&tierID, &tierLevel)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.FailedPrecondition, "no default postpaid billing tier configured")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to resolve default postpaid tier: %v", err)
+	var isDefaultPrepaid, isActive bool
+	if reqTierID := req.GetTierId(); reqTierID != "" {
+		err = s.db.QueryRowContext(ctx, `
+			SELECT id, tier_level, is_default_prepaid, is_active
+			FROM purser.billing_tiers
+			WHERE id = $1
+		`, reqTierID).Scan(&tierID, &tierLevel, &isDefaultPrepaid, &isActive)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Error(codes.NotFound, "tier not found")
+		}
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to resolve tier: %v", err)
+		}
+		if !isActive {
+			return nil, status.Error(codes.FailedPrecondition, "tier is inactive")
+		}
+		if isDefaultPrepaid || tierLevel < 1 {
+			return nil, status.Error(codes.FailedPrecondition, "tier is not postpaid-eligible")
+		}
+	} else {
+		err = s.db.QueryRowContext(ctx, `
+			SELECT id, tier_level FROM purser.billing_tiers
+			WHERE is_default_postpaid = true AND is_active = true
+			LIMIT 1
+		`).Scan(&tierID, &tierLevel)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Error(codes.FailedPrecondition, "no default postpaid billing tier configured")
+		}
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to resolve default postpaid tier: %v", err)
+		}
 	}
 
 	// Get current prepaid balance (to carry forward as credit)
@@ -5813,20 +5808,18 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidR
 	}
 
 	// Re-evaluate cluster access for the new tier
-	eligibleClusters, primaryCluster, clusterErr := s.ensureTierClusterAccess(ctx, tenantID, tierLevel)
+	eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, tierLevel)
 	if clusterErr != nil {
-		s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Warn("Failed to re-evaluate cluster access after promotion")
+		s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Error("Failed to re-evaluate cluster access after promotion")
+		return nil, status.Errorf(codes.Internal, "promoted to postpaid but failed to reconcile cluster access: %v", clusterErr)
 	}
 
 	// Invalidate downstream caches so the new tier's caps + allowance state
 	// propagate to Foghorn's streamContext on the next admission. Same
 	// mechanism as UpdateSubscription / balance-change paths.
-	if s.commodoreClient != nil {
-		invalidateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if _, invErr := s.commodoreClient.InvalidateTenantCache(invalidateCtx, tenantID, "tier_changed"); invErr != nil {
-			s.logger.WithError(invErr).WithField("tenant_id", tenantID).Warn("Failed to invalidate tenant cache on promote-to-paid")
-		}
+	if invErr := s.invalidateTenantCache(ctx, tenantID, "tier_changed"); invErr != nil {
+		s.logger.WithError(invErr).WithField("tenant_id", tenantID).Error("Failed to invalidate tenant cache on promote-to-paid")
+		return nil, status.Errorf(codes.Internal, "promoted to postpaid but failed to invalidate tenant cache: %v", invErr)
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -5845,6 +5838,162 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidR
 		TierLevel:          tierLevel,
 		EligibleClusterIds: eligibleClusters,
 		PrimaryClusterId:   primaryCluster,
+	}, nil
+}
+
+// ChangeBillingTier swaps a postpaid tenant's tier. Upgrades apply
+// immediately and reconcile cluster access. Downgrades stage
+// pending_tier_id/pending_effective_at and are applied by the billing-close
+// job after the current invoice clears — this avoids cutting paid
+// entitlements mid-period.
+//
+// Prepaid → postpaid transitions belong on PromoteToPaid (which carries the
+// prepaid balance forward as credit). Returning to prepaid is not supported.
+func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *pb.ChangeBillingTierRequest) (*pb.ChangeBillingTierResponse, error) {
+	tenantID := req.GetTenantId()
+	targetTierID := req.GetTierId()
+	if tenantID == "" || targetTierID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id and tier_id are required")
+	}
+
+	var (
+		currentTierID    string
+		currentTierLevel int32
+		billingModel     string
+		billingPeriodEnd sql.NullTime
+		stripePeriodEnd  sql.NullTime
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT ts.tier_id, bt.tier_level, ts.billing_model, ts.billing_period_end, ts.stripe_current_period_end
+		FROM purser.tenant_subscriptions ts
+		JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
+		WHERE ts.tenant_id = $1
+	`, tenantID).Scan(&currentTierID, &currentTierLevel, &billingModel, &billingPeriodEnd, &stripePeriodEnd)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "no subscription found for tenant")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "load subscription: %v", err)
+	}
+	if billingModel != "postpaid" {
+		return nil, status.Error(codes.FailedPrecondition, "ChangeBillingTier requires postpaid billing; use PromoteToPaid for prepaid → postpaid")
+	}
+
+	var targetTierLevel int32
+	var isDefaultPrepaid, isActive bool
+	err = s.db.QueryRowContext(ctx, `
+		SELECT tier_level, is_default_prepaid, is_active
+		FROM purser.billing_tiers
+		WHERE id = $1
+	`, targetTierID).Scan(&targetTierLevel, &isDefaultPrepaid, &isActive)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "target tier not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "load target tier: %v", err)
+	}
+	if !isActive {
+		return nil, status.Error(codes.FailedPrecondition, "target tier is inactive")
+	}
+	if isDefaultPrepaid || targetTierLevel < 1 {
+		return nil, status.Error(codes.FailedPrecondition, "target tier is not postpaid-eligible")
+	}
+
+	if targetTierID == currentTierID {
+		eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, targetTierLevel)
+		if clusterErr != nil {
+			s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Error("reconcile cluster access for unchanged tier")
+			return nil, status.Errorf(codes.Internal, "failed to reconcile cluster access for current tier: %v", clusterErr)
+		}
+		if invErr := s.invalidateTenantCache(ctx, tenantID, "tier_changed"); invErr != nil {
+			s.logger.WithError(invErr).WithField("tenant_id", tenantID).Error("invalidate tenant cache for unchanged tier")
+			return nil, status.Errorf(codes.Internal, "failed to invalidate tenant cache: %v", invErr)
+		}
+		return &pb.ChangeBillingTierResponse{
+			Success:            true,
+			Message:            "Already on requested tier",
+			AppliedTierId:      currentTierID,
+			EligibleClusterIds: eligibleClusters,
+			PrimaryClusterId:   primaryCluster,
+		}, nil
+	}
+
+	if targetTierLevel >= currentTierLevel {
+		// UPGRADE — apply immediately. Cluster reconcile + cache invalidation
+		// happen after the DB transaction commits.
+		if _, err := s.db.ExecContext(ctx, `
+			UPDATE purser.tenant_subscriptions
+			SET tier_id = $1,
+			    pending_tier_id = NULL,
+			    pending_effective_at = NULL,
+			    pending_reason = NULL,
+			    updated_at = NOW()
+			WHERE tenant_id = $2
+		`, targetTierID, tenantID); err != nil {
+			return nil, status.Errorf(codes.Internal, "update subscription tier: %v", err)
+		}
+
+		eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, targetTierLevel)
+		if clusterErr != nil {
+			s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Error("reconcile cluster access after tier change")
+			return nil, status.Errorf(codes.Internal, "tier changed but failed to reconcile cluster access: %v", clusterErr)
+		}
+		if invErr := s.invalidateTenantCache(ctx, tenantID, "tier_changed"); invErr != nil {
+			s.logger.WithError(invErr).WithField("tenant_id", tenantID).Error("invalidate tenant cache after tier change")
+			return nil, status.Errorf(codes.Internal, "tier changed but failed to invalidate tenant cache: %v", invErr)
+		}
+
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":  tenantID,
+			"from_tier":  currentTierID,
+			"to_tier":    targetTierID,
+			"tier_level": targetTierLevel,
+		}).Info("Billing tier upgraded")
+
+		return &pb.ChangeBillingTierResponse{
+			Success:            true,
+			Message:            "Tier upgrade applied",
+			AppliedTierId:      targetTierID,
+			EligibleClusterIds: eligibleClusters,
+			PrimaryClusterId:   primaryCluster,
+		}, nil
+	}
+
+	// DOWNGRADE — stage for end of period. The post-commit applier in
+	// jobs.go flips tier_id and reconciles after the period's invoice clears.
+	effective := time.Time{}
+	if stripePeriodEnd.Valid {
+		effective = stripePeriodEnd.Time
+	} else if billingPeriodEnd.Valid {
+		effective = billingPeriodEnd.Time
+	}
+	if effective.IsZero() {
+		return nil, status.Error(codes.FailedPrecondition, "subscription has no billing_period_end; cannot schedule downgrade")
+	}
+
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE purser.tenant_subscriptions
+		SET pending_tier_id = $1,
+		    pending_effective_at = $2,
+		    pending_reason = 'downgrade',
+		    updated_at = NOW()
+		WHERE tenant_id = $3
+	`, targetTierID, effective, tenantID); err != nil {
+		return nil, status.Errorf(codes.Internal, "schedule downgrade: %v", err)
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id":    tenantID,
+		"from_tier":    currentTierID,
+		"to_tier":      targetTierID,
+		"effective_at": effective,
+	}).Info("Billing tier downgrade scheduled")
+
+	return &pb.ChangeBillingTierResponse{
+		Success:       true,
+		Message:       "Downgrade scheduled for end of current billing period",
+		PendingTierId: targetTierID,
+		EffectiveAt:   timestamppb.New(effective),
 	}, nil
 }
 

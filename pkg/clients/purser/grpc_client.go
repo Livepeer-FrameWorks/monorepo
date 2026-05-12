@@ -483,6 +483,15 @@ func (c *GRPCClient) PromoteToPaid(ctx context.Context, tenantID, tierID string)
 	})
 }
 
+// ChangeBillingTier changes a postpaid tenant's tier. Upgrades apply
+// immediately; downgrades are scheduled by Purser for period close.
+func (c *GRPCClient) ChangeBillingTier(ctx context.Context, tenantID, tierID string) (*pb.ChangeBillingTierResponse, error) {
+	return c.prepaid.ChangeBillingTier(ctx, &pb.ChangeBillingTierRequest{
+		TenantId: tenantID,
+		TierId:   tierID,
+	})
+}
+
 // ============================================================================
 // WEBHOOK OPERATIONS
 // ============================================================================

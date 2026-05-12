@@ -338,6 +338,15 @@ CREATE TABLE IF NOT EXISTS purser.tenant_subscriptions (
     -- purser.subscription_entitlement_overrides.
     custom_features JSONB DEFAULT '{}',      -- Custom feature flags
 
+    -- ===== SCHEDULED TIER CHANGE =====
+    -- Set by ChangeBillingTier when a downgrade is requested; the post-commit
+    -- applier in api_billing/internal/handlers/jobs.go flips tier_id after the
+    -- current invoice closes (status NOT IN ('draft','manual_review')) and
+    -- clears these columns once cluster-access reconciliation succeeds.
+    pending_tier_id UUID REFERENCES purser.billing_tiers(id),
+    pending_effective_at TIMESTAMPTZ,
+    pending_reason VARCHAR(50),
+
     -- ===== PAYMENT & BILLING =====
     payment_method VARCHAR(50),
     payment_reference VARCHAR(255),
@@ -365,6 +374,10 @@ CREATE TABLE IF NOT EXISTS purser.tenant_subscriptions (
     CONSTRAINT chk_billing_model CHECK (billing_model IN ('postpaid', 'prepaid')),
     UNIQUE(tenant_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_tenant_subscriptions_pending_due
+    ON purser.tenant_subscriptions(pending_effective_at)
+    WHERE pending_tier_id IS NOT NULL;
 
 -- ============================================================================
 -- SUBSCRIPTION OVERRIDES
