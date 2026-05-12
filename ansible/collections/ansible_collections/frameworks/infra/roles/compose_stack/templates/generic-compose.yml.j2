@@ -8,6 +8,12 @@ services:
     ports:
       - "{{ compose_stack_service.port }}:{{ container_port }}"
 {% endif %}
+{% if compose_stack_service.volumes | default([]) | length > 0 %}
+    volumes:
+{% for volume in compose_stack_service.volumes %}
+      - "{{ volume }}"
+{% endfor %}
+{% endif %}
     networks:
       - frameworks
 networks:

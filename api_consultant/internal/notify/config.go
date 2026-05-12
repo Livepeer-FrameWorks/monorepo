@@ -8,6 +8,7 @@ import (
 type Config struct {
 	SMTP               email.Config
 	DefaultPreferences PreferenceDefaults
+	DefaultRecipient   string
 	WebAppURL          string
 }
 
@@ -29,6 +30,7 @@ func LoadConfig() Config {
 			Websocket: config.GetEnvBool("SKIPPER_NOTIFY_WEBSOCKET", true),
 			MCP:       config.GetEnvBool("SKIPPER_NOTIFY_MCP", true),
 		},
-		WebAppURL: config.GetEnv("WEBAPP_PUBLIC_URL", ""),
+		DefaultRecipient: config.GetEnv("TO_EMAIL", ""),
+		WebAppURL:        config.GetEnv("WEBAPP_PUBLIC_URL", ""),
 	}
 }

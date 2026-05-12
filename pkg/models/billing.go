@@ -8,7 +8,7 @@ import (
 
 // BillingFeatures represents the feature flags available in a billing tier.
 // NOTE: Enforcement limits (max_streams, max_viewers, bandwidth caps) belong
-// in quartermaster.tenant_cluster_assignments, not here. This is billing only.
+// in Quartermaster tenant cluster access, not here. This is billing only.
 type BillingFeatures struct {
 	Recording              bool   `json:"recording"`
 	Analytics              bool   `json:"analytics"`

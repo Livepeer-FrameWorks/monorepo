@@ -304,10 +304,11 @@ func TestKindClassification(t *testing.T) {
 		want         ClusterKind
 		wantErr      error
 	}{
-		{"platform_official always wins", &consumingTenant, true, KindPlatformOfficial, nil},
+		{"owner == consuming tenant wins even when platform official", &consumingTenant, true, KindTenantPrivate, nil},
 		{"no owner with no platform flag fails closed", nil, false, "", ErrAmbiguousClusterOwnership},
 		{"owner == consuming tenant → tenant_private", &consumingTenant, false, KindTenantPrivate, nil},
 		{"owner != consuming tenant → third_party_marketplace", &otherTenant, false, KindThirdPartyMarketplace, nil},
+		{"platform official without self-owner → platform_official", &otherTenant, true, KindPlatformOfficial, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -433,6 +434,58 @@ func TestMetered_ThirdPartyMarketplace(t *testing.T) {
 	}
 	if !got.MeteredRules[0].UnitPrice.Equal(dec("0.00050")) {
 		t.Errorf("UnitPrice = %s, want 0.00050", got.MeteredRules[0].UnitPrice)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMeteredClusterUsedByOwnerIsSelfHostedZero(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	ownerTenant := uuid.New()
+	clusterID := "operator-edge-own-use"
+	ownerStr := ownerTenant.String()
+
+	qm := &fakeQM{clusters: map[string]*pb.InfrastructureCluster{
+		clusterID: {ClusterId: clusterID, OwnerTenantId: &ownerStr},
+	}}
+	versionID := expectHistoryRow(mock, clusterID, "metered", "EUR", "0.00",
+		`{"delivered_minutes":{"unit_price":"0.00050","model":"all_usage"}}`)
+
+	got, err := ResolveClusterPricing(context.Background(), ResolveInputs{
+		DB: db, QM: qm,
+		ConsumingTenantID: ownerTenant.String(),
+		ClusterID:         clusterID,
+		AsOf:              time.Now(),
+		TierRules:         tierRulesEUR(),
+		TierCurrency:      "EUR",
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if got.Kind != KindTenantPrivate {
+		t.Fatalf("Kind = %s, want tenant_private", got.Kind)
+	}
+	if got.PricingSource != SourceSelfHosted {
+		t.Fatalf("PricingSource = %s, want self_hosted", got.PricingSource)
+	}
+	if got.PriceVersionID != versionID {
+		t.Fatalf("PriceVersionID = %s, want %s", got.PriceVersionID, versionID)
+	}
+	if len(got.MeteredRules) == 0 {
+		t.Fatal("expected zero-priced informational rules for owner usage")
+	}
+	for _, r := range got.MeteredRules {
+		if !r.UnitPrice.IsZero() {
+			t.Fatalf("rule %s UnitPrice = %s, want 0", r.Meter, r.UnitPrice)
+		}
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

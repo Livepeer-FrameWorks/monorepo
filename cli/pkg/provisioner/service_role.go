@@ -150,6 +150,15 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 		return nil, err
 	}
 	envMap := buildServiceEnvMap(config)
+	composeFiles := map[string]string{}
+	composeVolumes := []string{}
+	if cfg.ServiceName == "skipper" {
+		var err error
+		composeFiles, composeVolumes, err = skipperComposeSourceFiles(envMap)
+		if err != nil {
+			return nil, err
+		}
+	}
 	envAny := make(map[string]any, len(envMap))
 	for k, v := range envMap {
 		envAny[k] = v
@@ -163,11 +172,13 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 			image,
 		),
 		"compose_stack_require_registry_auth": composeRegistryAuthRequired(image),
+		"compose_stack_files":                 composeFiles,
 		"compose_stack_service": map[string]any{
 			"image":          image,
 			"port":           port,
 			"container_port": containerPort,
 			"health_path":    healthPath,
+			"volumes":        composeVolumes,
 		},
 		"compose_stack_env":                    envAny,
 		"compose_stack_data_migrations_marker": dataMigrationsMarker(cfg, config),
@@ -265,6 +276,13 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 			return nil, err
 		}
 	}
+	if cfg.ServiceName == "skipper" {
+		skipperFiles, err := skipperNativeSourceFiles(envMap)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, skipperFiles...)
+	}
 	envAny := make(map[string]any, len(envMap))
 	for k, v := range envMap {
 		envAny[k] = v
@@ -308,6 +326,107 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		vars["go_service_internal_tls_key_pem"] = key
 	}
 	return vars, nil
+}
+
+const (
+	skipperSourceMountPath = "/etc/skipper"
+	skipperSourceLocalPath = "skipper"
+)
+
+func skipperNativeSourceFiles(env map[string]string) ([]map[string]string, error) {
+	files, err := readSkipperSourceFiles(func(rel, content string) map[string]string {
+		return map[string]string{
+			"path":    filepath.Join(skipperSourceMountPath, rel),
+			"content": content,
+			"mode":    "0644",
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(files) > 0 && env["SKIPPER_SITEMAPS_DIR"] == "" {
+		env["SKIPPER_SITEMAPS_DIR"] = filepath.Join(skipperSourceMountPath, "sitemaps")
+	}
+	return files, nil
+}
+
+func skipperComposeSourceFiles(env map[string]string) (map[string]string, []string, error) {
+	files, err := readSkipperSourceFiles(func(rel, content string) map[string]string {
+		return map[string]string{
+			"path":    filepath.Join(skipperSourceLocalPath, rel),
+			"content": content,
+		}
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make(map[string]string, len(files))
+	for _, file := range files {
+		out[file["path"]] = file["content"]
+	}
+	if len(out) == 0 {
+		return out, nil, nil
+	}
+	if env["SKIPPER_SITEMAPS_DIR"] == "" {
+		env["SKIPPER_SITEMAPS_DIR"] = filepath.Join(skipperSourceMountPath, "sitemaps")
+	}
+	return out, []string{"./" + skipperSourceLocalPath + ":" + skipperSourceMountPath + ":ro"}, nil
+}
+
+func readSkipperSourceFiles(mapFile func(rel, content string) map[string]string) ([]map[string]string, error) {
+	root, err := findRepoRoot()
+	if err != nil {
+		return nil, fmt.Errorf("skipper source files: %w", err)
+	}
+	base := filepath.Join(root, "config", "skipper")
+	var files []map[string]string
+	for _, dir := range []string{"sitemaps", "faq"} {
+		absDir := filepath.Join(base, dir)
+		if _, err := os.Stat(absDir); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("stat %s: %w", absDir, err)
+		}
+		if err := filepath.WalkDir(absDir, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			rel, err := filepath.Rel(base, path)
+			if err != nil {
+				return err
+			}
+			files = append(files, mapFile(filepath.ToSlash(rel), string(content)))
+			return nil
+		}); err != nil {
+			return nil, fmt.Errorf("read %s: %w", absDir, err)
+		}
+	}
+	return files, nil
+}
+
+func findRepoRoot() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(wd, "config", "skipper")); err == nil {
+			return wd, nil
+		}
+		parent := filepath.Dir(wd)
+		if parent == wd {
+			return "", fmt.Errorf("could not find config/skipper from %s", wd)
+		}
+		wd = parent
+	}
 }
 
 func dataMigrationsMarker(cfg ServiceRoleConfig, config ServiceConfig) string {

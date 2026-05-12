@@ -355,6 +355,7 @@ frameworks cluster init postgres --manifest production.yaml
 | `frameworks cluster data-migrate verify <service>.<id>` | Run the migration's read-only verification on the service host.                                                                                                                                                                             |
 | `frameworks cluster data-migrate pause <service>.<id>`  | Mark a data migration paused.                                                                                                                                                                                                               |
 | `frameworks cluster data-migrate resume <service>.<id>` | Mark a paused data migration runnable again.                                                                                                                                                                                                |
+| `frameworks cluster skipper posts`                      | Query recent Skipper social post drafts from the skipper database over the manifest-selected SSH/database path.                                                                                                                             |
 | `frameworks cluster sync-geoip`                         | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                              |
 | `frameworks cluster set-channel <channel>`              | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster upgrade` uses this when no explicit version is given.                                                                                                      |
 
@@ -376,6 +377,9 @@ frameworks cluster migrate validate
 # Apply expand-compatible schema migrations
 frameworks cluster migrate --phase expand
 
+# Inspect recent Skipper social drafts
+frameworks cluster skipper posts --status draft --limit 25
+
 # Distribute a local GeoIP database and restart target services
 frameworks cluster sync-geoip \
   --source file \
@@ -390,6 +394,32 @@ frameworks cluster set-channel rc
 ---
 
 ## Operations Commands
+
+### frameworks cluster skipper
+
+Inspect Skipper operational state.
+
+### frameworks cluster skipper posts
+
+List recent Skipper social posts from `skipper.skipper_posts`.
+
+**Usage:**
+
+```bash
+frameworks cluster skipper posts [flags]
+```
+
+**Flags:**
+
+- `--limit int` - Maximum rows to show (default: 50, max: 500)
+- `--status string` - Filter by post status, for example `draft` or `sent`
+
+**Examples:**
+
+```bash
+frameworks cluster skipper posts
+frameworks cluster skipper posts --status draft --limit 25
+```
 
 ### frameworks cluster logs
 

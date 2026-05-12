@@ -146,14 +146,14 @@ func (s *CrawlScheduler) loadSources() []crawlSource {
 			return
 		}
 
-		direct := strings.HasPrefix(raw, directPagePrefix)
-		if direct {
-			raw = strings.TrimPrefix(raw, directPagePrefix)
-			raw = strings.TrimSpace(raw)
-		}
 		render := strings.HasPrefix(raw, renderPrefix)
 		if render {
 			raw = strings.TrimPrefix(raw, renderPrefix)
+			raw = strings.TrimSpace(raw)
+		}
+		direct := render || strings.HasPrefix(raw, directPagePrefix)
+		if !render && direct {
+			raw = strings.TrimPrefix(raw, directPagePrefix)
 			raw = strings.TrimSpace(raw)
 		}
 		if raw != "" && !seen[raw] {

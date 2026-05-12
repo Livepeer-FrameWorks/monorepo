@@ -7439,7 +7439,7 @@ func (s *CommodoreServer) GetTenantUserCount(ctx context.Context, req *pb.GetTen
 
 // GetTenantPrimaryUser returns the primary user info for a tenant.
 // Called by Purser billing job for billing notifications and invoices.
-// Returns the first admin user, or the first user if no admin exists.
+// Returns the first owner/admin user, or the first user if no privileged user exists.
 func (s *CommodoreServer) GetTenantPrimaryUser(ctx context.Context, req *pb.GetTenantPrimaryUserRequest) (*pb.GetTenantPrimaryUserResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
@@ -7455,7 +7455,7 @@ func (s *CommodoreServer) GetTenantPrimaryUser(ctx context.Context, req *pb.GetT
 		FROM commodore.users
 		WHERE tenant_id = $1 AND is_active = true AND email IS NOT NULL AND email <> ''
 		ORDER BY
-			CASE WHEN role = 'admin' THEN 0 ELSE 1 END,
+			CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
 			created_at ASC
 		LIMIT 1
 	`, tenantID).Scan(&userID, &email, &firstName, &lastName)

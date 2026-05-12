@@ -186,6 +186,44 @@ func TestServiceComposeVarsInstallsDataMigrationsMarkerAtDeployName(t *testing.T
 	}
 }
 
+func TestServiceComposeVarsInstallsSkipperSources(t *testing.T) {
+	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
+		ServiceName:  "skipper",
+		DefaultPort:  18018,
+		DefaultImage: "example/skipper:test",
+	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+		Mode:     "docker",
+		Metadata: map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceComposeVars: %v", err)
+	}
+
+	files, ok := vars["compose_stack_files"].(map[string]string)
+	if !ok {
+		t.Fatalf("compose_stack_files got %T, want map[string]string", vars["compose_stack_files"])
+	}
+	if _, ok := files["skipper/sitemaps/frameworks.txt"]; !ok {
+		t.Fatalf("expected frameworks sitemap source file, got keys %v", reflect.ValueOf(files).MapKeys())
+	}
+	if _, ok := files["skipper/faq/protocol-selection.md"]; !ok {
+		t.Fatalf("expected local FAQ source file, got keys %v", reflect.ValueOf(files).MapKeys())
+	}
+
+	service, ok := vars["compose_stack_service"].(map[string]any)
+	if !ok {
+		t.Fatalf("compose_stack_service got %T, want map[string]any", vars["compose_stack_service"])
+	}
+	assertStringSlice(t, service["volumes"], []string{"./skipper:/etc/skipper:ro"})
+	env, ok := vars["compose_stack_env"].(map[string]any)
+	if !ok {
+		t.Fatalf("compose_stack_env got %T, want map[string]any", vars["compose_stack_env"])
+	}
+	if got := env["SKIPPER_SITEMAPS_DIR"]; got != "/etc/skipper/sitemaps" {
+		t.Fatalf("SKIPPER_SITEMAPS_DIR = %v, want /etc/skipper/sitemaps", got)
+	}
+}
+
 func TestServiceComposeVarsAcceptsCommonGHCRPATNames(t *testing.T) {
 	clearRegistryAuthEnv(t)
 
@@ -431,6 +469,43 @@ func TestServiceNativeVarsMaterializesLivepeerKeystoreFiles(t *testing.T) {
 	}
 	if got := vars["go_service_livepeer_expected_keystore_dir"]; got != "/var/lib/frameworks/livepeer-gateway/keystore" {
 		t.Fatalf("unexpected expected keystore dir: %v", got)
+	}
+}
+
+func TestServiceNativeVarsInstallsSkipperSources(t *testing.T) {
+	vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
+		ServiceName: "skipper",
+		DefaultPort: 18018,
+	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+		Mode:      "native",
+		Version:   "vtest",
+		BinaryURL: "https://example.test/skipper.tar.gz",
+		Metadata:  map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceNativeVars: %v", err)
+	}
+
+	files, ok := vars["go_service_files"].([]map[string]string)
+	if !ok {
+		t.Fatalf("go_service_files got %T, want []map[string]string", vars["go_service_files"])
+	}
+	paths := map[string]bool{}
+	for _, file := range files {
+		paths[file["path"]] = true
+	}
+	if !paths["/etc/skipper/sitemaps/frameworks.txt"] {
+		t.Fatalf("expected /etc/skipper/sitemaps/frameworks.txt in %v", paths)
+	}
+	if !paths["/etc/skipper/faq/protocol-selection.md"] {
+		t.Fatalf("expected /etc/skipper/faq/protocol-selection.md in %v", paths)
+	}
+	env, ok := vars["go_service_env"].(map[string]any)
+	if !ok {
+		t.Fatalf("go_service_env got %T, want map[string]any", vars["go_service_env"])
+	}
+	if got := env["SKIPPER_SITEMAPS_DIR"]; got != "/etc/skipper/sitemaps" {
+		t.Fatalf("SKIPPER_SITEMAPS_DIR = %v, want /etc/skipper/sitemaps", got)
 	}
 }
 

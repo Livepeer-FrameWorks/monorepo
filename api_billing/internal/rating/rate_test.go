@@ -364,16 +364,28 @@ func TestRate_Determinism(t *testing.T) {
 	}
 }
 
-func TestRate_FreeTier_ZeroAllUsage(t *testing.T) {
-	// Free tier: metering disabled equivalent — no rules. Only base.
+func TestRate_FreeTier_ZeroPricedUsageLine(t *testing.T) {
 	res, err := Rate(Input{
 		Currency:  "EUR",
 		BasePrice: dec("0"),
-		Rules:     nil,
-		Usage:     map[Meter]decimal.Decimal{MeterDeliveredMinutes: dec("5000")},
+		Rules: []Rule{{
+			Meter:            MeterDeliveredMinutes,
+			Model:            ModelTieredGraduated,
+			Currency:         "EUR",
+			IncludedQuantity: decimal.Zero,
+			UnitPrice:        decimal.Zero,
+		}},
+		Usage: map[Meter]decimal.Decimal{MeterDeliveredMinutes: dec("5000")},
 	})
 	if err != nil {
 		t.Fatalf("Rate: %v", err)
+	}
+	line := findLine(t, res.UsageLines, "meter:delivered_minutes")
+	if !line.Quantity.Equal(dec("5000")) {
+		t.Errorf("quantity = %s, want 5000", line.Quantity)
+	}
+	if !line.Amount.IsZero() {
+		t.Errorf("line amount = %s, want 0", line.Amount)
 	}
 	if !res.UsageAmount.IsZero() {
 		t.Errorf("UsageAmount = %s, want 0", res.UsageAmount)

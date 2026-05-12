@@ -57,14 +57,36 @@ func (f *fakeInfraClusterClient) GetNodeOwner(_ context.Context, nodeID string) 
 
 type fakeBillingClient struct {
 	billingEmail string
+	err          error
+	tierLevel    int32
 }
 
 func (f *fakeBillingClient) GetBillingStatus(_ context.Context, _ string) (*pb.BillingStatusResponse, error) {
-	return &pb.BillingStatusResponse{
+	if f.err != nil {
+		return nil, f.err
+	}
+	resp := &pb.BillingStatusResponse{
 		Subscription: &pb.TenantSubscription{
 			BillingEmail: f.billingEmail,
 		},
-	}, nil
+	}
+	if f.tierLevel > 0 {
+		resp.Tier = &pb.BillingTier{TierLevel: f.tierLevel}
+	}
+	return resp, nil
+}
+
+type fakeTenantContactClient struct {
+	email string
+	name  string
+	err   error
+}
+
+func (f *fakeTenantContactClient) GetTenantPrimaryUser(_ context.Context, _ string) (*pb.GetTenantPrimaryUserResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &pb.GetTenantPrimaryUserResponse{Email: f.email, Name: f.name}, nil
 }
 
 type emailCapture struct {
@@ -568,6 +590,43 @@ func TestResolveOwnerEmail_NoBillingReturnsEmpty(t *testing.T) {
 	email := m.resolveOwnerEmail(context.Background(), "node-1", "tenant-a")
 	if email != "" {
 		t.Errorf("resolveOwnerEmail = %q, want empty", email)
+	}
+}
+
+func TestResolveOwnerEmail_UsesPrimaryUserWhenBillingEmailEmpty(t *testing.T) {
+	billing := &fakeBillingClient{}
+	clusters := &fakeInfraClusterClient{}
+	m := NewInfraMonitor(&InfraMonitorConfig{
+		Nodes:    &fakeInfraNodeClient{},
+		Clusters: clusters,
+		Billing:  billing,
+		Contacts: &fakeTenantContactClient{email: "owner-account@test.com"},
+		SMTP:     email.Config{Host: "smtp.test", From: "test@frameworks.network"},
+		Logger:   testLogger(),
+	})
+
+	email := m.resolveOwnerEmail(context.Background(), "node-1", "tenant-a")
+	if email != "owner-account@test.com" {
+		t.Errorf("resolveOwnerEmail = %q, want primary user email", email)
+	}
+}
+
+func TestResolveOwnerEmail_UsesDefaultRecipientLast(t *testing.T) {
+	billing := &fakeBillingClient{}
+	clusters := &fakeInfraClusterClient{}
+	m := NewInfraMonitor(&InfraMonitorConfig{
+		Nodes:            &fakeInfraNodeClient{},
+		Clusters:         clusters,
+		Billing:          billing,
+		Contacts:         &fakeTenantContactClient{},
+		SMTP:             email.Config{Host: "smtp.test", From: "test@frameworks.network"},
+		Logger:           testLogger(),
+		DefaultRecipient: "ops@test.com",
+	})
+
+	email := m.resolveOwnerEmail(context.Background(), "node-1", "tenant-a")
+	if email != "ops@test.com" {
+		t.Errorf("resolveOwnerEmail = %q, want default recipient", email)
 	}
 }
 

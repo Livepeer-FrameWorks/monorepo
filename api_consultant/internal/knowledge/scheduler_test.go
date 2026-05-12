@@ -354,6 +354,25 @@ func TestSchedulerLoadSourcesPagePrefixEnvExpansion(t *testing.T) {
 	}
 }
 
+func TestSchedulerLoadSourcesRenderPrefixIsDirect(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "spa.txt"), []byte("render:https://docs.example.com/app\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &CrawlScheduler{
+		sitemapsDir: dir,
+		logger:      logging.NewLoggerWithService("test"),
+	}
+	result := s.loadSources()
+	if len(result) != 1 {
+		t.Fatalf("expected 1 source, got %d", len(result))
+	}
+	if result[0].url != "https://docs.example.com/app" || !result[0].direct || !result[0].render {
+		t.Fatalf("expected force-rendered direct page, got %+v", result[0])
+	}
+}
+
 func TestSchedulerLoadSourcesLocalPrefix(t *testing.T) {
 	dir := t.TempDir()
 	content := "https://example.com/sitemap.xml\nlocal:../faq/bitrate.md\nlocal:../faq/codec.md\n"

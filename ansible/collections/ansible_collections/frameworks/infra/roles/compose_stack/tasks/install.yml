@@ -7,6 +7,18 @@
     group: root
     mode: "0755"
 
+- name: Ensure additional stack file directories
+  ansible.builtin.file:
+    path: "{{ compose_stack_project_dir }}/{{ item.key | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ compose_stack_files | dict2items }}"
+  loop_control:
+    label: "{{ item.key | dirname }}"
+  when: compose_stack_files | length > 0
+
 - name: Render additional stack files
   ansible.builtin.copy:
     dest: "{{ compose_stack_project_dir }}/{{ item.key }}"

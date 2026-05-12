@@ -26,6 +26,7 @@ import (
 	"frameworks/api_consultant/internal/social"
 	"frameworks/api_consultant/internal/webui"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	periscopeclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
@@ -161,6 +162,31 @@ func main() {
 		purserClient = nil
 	} else {
 		defer func() { _ = purserClient.Close() }()
+	}
+
+	commodoreGRPCAddr := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
+	commodoreClient, err := commodoreclient.NewGRPCClient(commodoreclient.GRPCConfig{
+		GRPCAddr:      commodoreGRPCAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Commodore gRPC client - primary-user notification fallback unavailable")
+		commodoreClient = nil
+	} else {
+		defer func() { _ = commodoreClient.Close() }()
+	}
+	var billingClient heartbeat.BillingClient
+	if purserClient != nil {
+		billingClient = purserClient
+	}
+	var tenantContacts heartbeat.TenantContactClient
+	if commodoreClient != nil {
+		tenantContacts = commodoreClient
 	}
 
 	// Create Decklog gRPC client for usage metering
@@ -385,11 +411,13 @@ func main() {
 	})
 	reportStore := heartbeat.NewReportStore(db)
 	heartbeatReporter := &heartbeat.Reporter{
-		Store:      reportStore,
-		Billing:    purserClient,
-		Dispatcher: dispatcher,
-		Logger:     logger,
-		WebAppURL:  notifyConfig.WebAppURL,
+		Store:            reportStore,
+		Billing:          billingClient,
+		Contacts:         tenantContacts,
+		Dispatcher:       dispatcher,
+		Logger:           logger,
+		WebAppURL:        notifyConfig.WebAppURL,
+		DefaultRecipient: notifyConfig.DefaultRecipient,
 	}
 	// Create the social event collector early so heartbeat callbacks can
 	// push signals into it. The collector is nil when social is disabled.
@@ -402,7 +430,7 @@ func main() {
 		Interval:          heartbeatDuration,
 		Orchestrator:      orchestrator,
 		Periscope:         periscopeClient,
-		Purser:            purserClient,
+		Purser:            billingClient,
 		Quartermaster:     qmClient,
 		Decklog:           decklogClient,
 		Reporter:          heartbeatReporter,
@@ -410,12 +438,14 @@ func main() {
 		Logger:            logger,
 		RequiredTierLevel: cfg.RequiredTierLevel,
 		InfraMonitor: &heartbeat.InfraMonitorConfig{
-			Nodes:     periscopeClient,
-			Clusters:  qmClient,
-			Billing:   purserClient,
-			Baselines: baselineEvaluator,
-			SMTP:      notifyConfig.SMTP,
-			Logger:    logger,
+			Nodes:            periscopeClient,
+			Clusters:         qmClient,
+			Billing:          billingClient,
+			Contacts:         tenantContacts,
+			Baselines:        baselineEvaluator,
+			SMTP:             notifyConfig.SMTP,
+			Logger:           logger,
+			DefaultRecipient: notifyConfig.DefaultRecipient,
 			OnNetworkStats: func(stats *pb.GetNetworkLiveStatsResponse) {
 				if socialCollector == nil {
 					return
@@ -568,7 +598,7 @@ func main() {
 	apiGroup.Use(auth.JWTAuthMiddleware([]byte(jwtSecret)))
 	apiGroup.Use(skipperContextBridge())
 	apiGroup.Use(metering.AccessMiddleware(metering.AccessMiddlewareConfig{
-		Purser:            purserClient,
+		Purser:            billingClient,
 		RequiredTierLevel: cfg.RequiredTierLevel,
 		RateLimiter:       rateLimiter,
 		Tracker:           usageTracker,

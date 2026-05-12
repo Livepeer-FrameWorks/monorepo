@@ -83,10 +83,27 @@ func ResolveClusterPricing(ctx context.Context, in ResolveInputs) (*ClusterPrici
 		IsPlatformOfficial: ownership.IsPlatformOfficial,
 	}
 
+	// A tenant consuming its own cluster is self-hosted/private usage,
+	// regardless of whether that cluster also has marketplace pricing history
+	// for other tenants. Keep the line items visible, but price them at zero
+	// and never create operator credits for the tenant paying itself.
+	if kind == KindTenantPrivate {
+		out.Model = ModelFreeUnmetered
+		out.Currency = in.TierCurrency
+		if row != nil {
+			out.PriceVersionID = row.VersionID
+			if row.Currency != "" {
+				out.Currency = row.Currency
+			}
+		}
+		out.MeteredRules = zeroPricedRulesFromTier(in.TierRules, out.Currency)
+		out.PricingSource = SourceSelfHosted
+		return out, nil
+	}
+
 	// No history row → cluster has never had an explicit pricing config.
-	// Preserve legacy behavior for platform clusters, treat tenant-owned
-	// infrastructure as self-hosted/free, and fail closed for marketplace
-	// clusters because operator pricing must be explicit.
+	// Preserve legacy behavior for platform clusters and fail closed for
+	// marketplace clusters because operator pricing must be explicit.
 	if row == nil {
 		switch kind {
 		case KindPlatformOfficial:
@@ -94,11 +111,6 @@ func ResolveClusterPricing(ctx context.Context, in ResolveInputs) (*ClusterPrici
 			out.Currency = in.TierCurrency
 			out.MeteredRules = in.TierRules
 			out.PricingSource = SourceTier
-		case KindTenantPrivate:
-			out.Model = ModelFreeUnmetered
-			out.Currency = in.TierCurrency
-			out.MeteredRules = zeroPricedRulesFromTier(in.TierRules, in.TierCurrency)
-			out.PricingSource = SourceSelfHosted
 		case KindThirdPartyMarketplace:
 			return nil, ErrThirdPartyPricingMissing
 		default:
@@ -191,6 +203,9 @@ func loadOwnership(ctx context.Context, qm QuartermasterClient, clusterID string
 }
 
 func classify(o ownership, consumingTenantID string) (ClusterKind, error) {
+	if o.OwnerTenantID != nil && o.OwnerTenantID.String() == consumingTenantID {
+		return KindTenantPrivate, nil
+	}
 	if o.IsPlatformOfficial {
 		return KindPlatformOfficial, nil
 	}
@@ -200,9 +215,6 @@ func classify(o ownership, consumingTenantID string) (ClusterKind, error) {
 		// credit, hiding marketplace revenue. Fail closed: callers route
 		// to manual_review.
 		return "", ErrAmbiguousClusterOwnership
-	}
-	if o.OwnerTenantID.String() == consumingTenantID {
-		return KindTenantPrivate, nil
 	}
 	return KindThirdPartyMarketplace, nil
 }

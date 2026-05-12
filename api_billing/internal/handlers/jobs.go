@@ -977,7 +977,8 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 
 	var invoicesGenerated int
 	for rows.Next() {
-		var tenantID, billingEmail, tierID, subscriptionStatus string
+		var tenantID, tierID, subscriptionStatus string
+		var billingEmail sql.NullString
 		var tierName, displayName, billingPeriod string
 		var billingPeriodStart, billingPeriodEnd sql.NullTime
 
@@ -1285,16 +1286,16 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		// Send invoice created email notification. Read line items from
 		// the canonical surface (purser.invoice_line_items); usage_details
 		// is raw/debug JSON only, never rendered to customers.
-		if billingEmail != "" {
+		if billingEmail.Valid && billingEmail.String != "" {
 			emailTotal, _ := totalDec.Round(2).Float64()
 			emailLines, emailErr := jm.loadEmailLineItems(ctx, invoiceID, tenantID)
 			if emailErr != nil {
 				jm.logger.WithError(emailErr).WithField("invoice_id", invoiceID).Warn("Failed to load invoice line items for email; sending without breakdown")
 			}
-			err = jm.emailService.SendInvoiceCreatedEmail(billingEmail, "", invoiceID, emailTotal, currency, dueDate, emailLines)
+			err = jm.emailService.SendInvoiceCreatedEmail(billingEmail.String, "", invoiceID, emailTotal, currency, dueDate, emailLines)
 			if err != nil {
 				jm.logger.WithError(err).WithFields(logging.Fields{
-					"billing_email": billingEmail,
+					"billing_email": billingEmail.String,
 					"invoice_id":    invoiceID,
 				}).Error("Failed to send invoice created email")
 			}

@@ -24,12 +24,14 @@ type Report struct {
 }
 
 type Reporter struct {
-	Store       ReportStore
-	Billing     BillingClient
-	Dispatcher  NotificationDispatcher
-	Logger      logging.Logger
-	WebAppURL   string
-	Preferences *notify.NotificationPreferences
+	Store            ReportStore
+	Billing          BillingClient
+	Contacts         TenantContactClient
+	Dispatcher       NotificationDispatcher
+	Logger           logging.Logger
+	WebAppURL        string
+	Preferences      *notify.NotificationPreferences
+	DefaultRecipient string
 }
 
 func (r Report) FormatMarkdown() string {
@@ -107,17 +109,7 @@ func (r *Reporter) Send(ctx context.Context, tenantID string, report Report) err
 }
 
 func (r *Reporter) buildNotification(ctx context.Context, record ReportRecord, report Report) notify.Report {
-	recipientEmail := ""
-	tenantName := ""
-	if r.Billing != nil {
-		if status, err := r.Billing.GetBillingStatus(ctx, record.TenantID); err == nil && status != nil {
-			subscription := status.GetSubscription()
-			if subscription != nil {
-				recipientEmail = subscription.GetBillingEmail()
-				tenantName = subscription.GetBillingCompany()
-			}
-		}
-	}
+	recipientEmail, tenantName := resolveTenantNotificationContact(ctx, record.TenantID, r.Billing, r.Contacts, r.DefaultRecipient, r.Logger)
 
 	metrics := make([]notify.Metric, 0, len(report.MetricsReviewed))
 	for _, metric := range report.MetricsReviewed {

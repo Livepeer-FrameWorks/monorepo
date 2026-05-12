@@ -1031,7 +1031,7 @@ func (s *PurserServer) GetSubscription(ctx context.Context, req *pb.GetSubscript
 	var startedAt, createdAt, updatedAt time.Time
 	var trialEndsAt, nextBillingDate, cancelledAt sql.NullTime
 	var billingPeriodStart, billingPeriodEnd sql.NullTime
-	var paymentMethod, paymentReference, taxID sql.NullString
+	var billingEmail, paymentMethod, paymentReference, taxID sql.NullString
 	var taxRate sql.NullFloat64
 	var billingModel string
 	var stripeCustomerID, stripeSubscriptionID, stripeSubscriptionStatus, mollieSubscriptionID sql.NullString
@@ -1051,7 +1051,7 @@ func (s *PurserServer) GetSubscription(ctx context.Context, req *pb.GetSubscript
 		WHERE tenant_id = $1 AND status != 'cancelled'
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, tenantID).Scan(&sub.Id, &sub.TenantId, &sub.TierId, &sub.Status, &sub.BillingEmail,
+	`, tenantID).Scan(&sub.Id, &sub.TenantId, &sub.TierId, &sub.Status, &billingEmail,
 		&startedAt, &trialEndsAt, &nextBillingDate, &cancelledAt,
 		&billingPeriodStart, &billingPeriodEnd,
 		&paymentMethod, &paymentReference, &taxID, &taxRate,
@@ -1073,6 +1073,9 @@ func (s *PurserServer) GetSubscription(ctx context.Context, req *pb.GetSubscript
 	sub.CreatedAt = timestamppb.New(createdAt)
 	sub.UpdatedAt = timestamppb.New(updatedAt)
 	sub.BillingModel = billingModel
+	if billingEmail.Valid {
+		sub.BillingEmail = billingEmail.String
+	}
 	if trialEndsAt.Valid {
 		sub.TrialEndsAt = timestamppb.New(trialEndsAt.Time)
 	}
@@ -2529,7 +2532,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 	var tier pb.BillingTier
 
 	// Nullable fields
-	var paymentMethod, paymentReference, taxID sql.NullString
+	var billingEmail, paymentMethod, paymentReference, taxID sql.NullString
 	var taxRate sql.NullFloat64
 	var trialEndsAt, nextBillingDate, cancelledAt sql.NullTime
 	var billingPeriodStart, billingPeriodEnd sql.NullTime
@@ -2568,7 +2571,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 		ORDER BY ts.created_at DESC
 		LIMIT 1
 	`, tenantID).Scan(
-		&subscription.Id, &subscription.TenantId, &subscription.TierId, &subscription.Status, &subscription.BillingEmail,
+		&subscription.Id, &subscription.TenantId, &subscription.TierId, &subscription.Status, &billingEmail,
 		&subStartedAt, &trialEndsAt, &nextBillingDate, &cancelledAt,
 		&billingPeriodStart, &billingPeriodEnd,
 		&customFeatures,
@@ -2607,6 +2610,9 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 	subscription.CreatedAt = timestamppb.New(subCreatedAt)
 	subscription.UpdatedAt = timestamppb.New(subUpdatedAt)
 	subscription.BillingModel = billingModel
+	if billingEmail.Valid {
+		subscription.BillingEmail = billingEmail.String
+	}
 	if trialEndsAt.Valid {
 		subscription.TrialEndsAt = timestamppb.New(trialEndsAt.Time)
 	}

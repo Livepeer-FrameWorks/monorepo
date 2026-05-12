@@ -71,12 +71,14 @@ type InfraClusterClient interface {
 }
 
 type InfraMonitorConfig struct {
-	Nodes     InfraNodeClient
-	Clusters  InfraClusterClient
-	Billing   BillingClient
-	Baselines *diagnostics.BaselineEvaluator
-	SMTP      email.Config
-	Logger    logging.Logger
+	Nodes            InfraNodeClient
+	Clusters         InfraClusterClient
+	Billing          BillingClient
+	Contacts         TenantContactClient
+	Baselines        *diagnostics.BaselineEvaluator
+	SMTP             email.Config
+	Logger           logging.Logger
+	DefaultRecipient string
 
 	// Callbacks for external consumers (e.g. social posting agent).
 	OnNetworkStats      func(*pb.GetNetworkLiveStatsResponse)
@@ -84,14 +86,16 @@ type InfraMonitorConfig struct {
 }
 
 type InfraMonitor struct {
-	nodes     InfraNodeClient
-	clusters  InfraClusterClient
-	billing   BillingClient
-	baselines *diagnostics.BaselineEvaluator
-	emailer   *email.Sender
-	smtp      email.Config
-	cooldown  *diagnostics.TriageCooldown
-	logger    logging.Logger
+	nodes            InfraNodeClient
+	clusters         InfraClusterClient
+	billing          BillingClient
+	contacts         TenantContactClient
+	baselines        *diagnostics.BaselineEvaluator
+	emailer          *email.Sender
+	smtp             email.Config
+	defaultRecipient string
+	cooldown         *diagnostics.TriageCooldown
+	logger           logging.Logger
 
 	onNetworkStats      func(*pb.GetNetworkLiveStatsResponse)
 	onFederationSummary func(string, *pb.GetFederationSummaryResponse)
@@ -105,9 +109,11 @@ func NewInfraMonitor(cfg *InfraMonitorConfig) *InfraMonitor {
 		nodes:               cfg.Nodes,
 		clusters:            cfg.Clusters,
 		billing:             cfg.Billing,
+		contacts:            cfg.Contacts,
 		baselines:           cfg.Baselines,
 		emailer:             email.NewSender(cfg.SMTP),
 		smtp:                cfg.SMTP,
+		defaultRecipient:    cfg.DefaultRecipient,
 		cooldown:            diagnostics.NewTriageCooldown(infraCooldownDuration),
 		logger:              cfg.Logger,
 		onNetworkStats:      cfg.OnNetworkStats,
@@ -439,17 +445,6 @@ func (m *InfraMonitor) resolveOwnerEmail(ctx context.Context, nodeID, fallbackTe
 			ownerTenantID = owner.GetOwnerTenantId()
 		}
 	}
-	if ownerTenantID == "" || m.billing == nil {
-		return ""
-	}
-	status, err := m.billing.GetBillingStatus(ctx, ownerTenantID)
-	if err != nil {
-		m.logger.WithError(err).WithField("tenant_id", ownerTenantID).Warn("Infra monitor: billing status lookup failed")
-		return ""
-	}
-	sub := status.GetSubscription()
-	if sub == nil {
-		return ""
-	}
-	return sub.GetBillingEmail()
+	email, _ := resolveTenantNotificationContact(ctx, ownerTenantID, m.billing, m.contacts, m.defaultRecipient, m.logger)
+	return email
 }

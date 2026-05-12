@@ -28,7 +28,7 @@
 #     time from its local cluster's Livepeer gateway.
 #
 # Enforcement limits (max_streams, max_viewers, bandwidth caps) live in
-# quartermaster.tenant_cluster_assignments — NOT here. This file is BILLING only.
+# Quartermaster tenant cluster access — NOT here. This file is BILLING only.
 # Stripe IDs (stripe_product_id, stripe_price_id_*) are filled by Purser's
 # startup Stripe sync; the reconciler leaves them alone if already populated.
 
@@ -83,7 +83,7 @@ tiers:
       support_level: community
     support_level: community
     sla_level: none
-    metering_enabled: false
+    metering_enabled: true
     entitlements:
       recording_retention_days: 7
       dvr_default_window_seconds: 1800 # 30m
@@ -91,7 +91,18 @@ tiers:
       dvr_default_segment_duration_seconds: 6
       dvr_max_entries: 600
       dvr_allow_cluster_extension: false
-    pricing_rules: []
+    pricing_rules:
+      - meter: delivered_minutes
+        model: tiered_graduated
+        included_quantity: 10000
+        unit_price: "0"
+      - meter: average_storage_gb
+        model: all_usage
+        unit_price: "0"
+      - meter: ai_gpu_hours
+        model: tiered_graduated
+        included_quantity: 0
+        unit_price: "0"
     tier_level: 1
     is_enterprise: false
     is_default_prepaid: false

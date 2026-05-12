@@ -51,6 +51,18 @@
     mode: "0644"
   when: go_service_data_migrations_marker | length > 0
 
+- name: Ensure service file directories
+  ansible.builtin.file:
+    path: "{{ item.path | dirname }}"
+    state: directory
+    owner: "{{ omit if ansible_check_mode else go_service_user }}"
+    group: "{{ omit if ansible_check_mode else go_service_group }}"
+    mode: "0755"
+  loop: "{{ go_service_files }}"
+  loop_control:
+    label: "{{ item.path | dirname }}"
+  when: go_service_files | length > 0
+
 - name: Render service files
   ansible.builtin.copy:
     dest: "{{ item.path }}"

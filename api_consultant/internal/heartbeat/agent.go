@@ -16,6 +16,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -190,9 +191,6 @@ func (a *Agent) fetchEligibleTenants(ctx context.Context) ([]string, error) {
 		if tenantID == "" {
 			continue
 		}
-		if !a.isSkipperEnabled(ctx, tenantID) {
-			continue
-		}
 		activeStreams, err := a.countActiveStreams(ctx, tenantID)
 		if err != nil {
 			a.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Heartbeat stream scan failed")
@@ -201,25 +199,35 @@ func (a *Agent) fetchEligibleTenants(ctx context.Context) ([]string, error) {
 		if activeStreams == 0 {
 			continue
 		}
+		if !a.isSkipperEnabled(ctx, tenantID) {
+			continue
+		}
 		eligible = append(eligible, tenantID)
 	}
 	return eligible, nil
 }
 
 func (a *Agent) isSkipperEnabled(ctx context.Context, tenantID string) bool {
+	if a.requiredTierLevel <= 0 {
+		return true
+	}
+	if tenantID == tenants.SystemTenantID.String() {
+		return true
+	}
 	if a.purser == nil {
-		a.logger.WithField("tenant_id", tenantID).Warn("Purser unavailable; skipping Skipper heartbeat")
-		return false
+		a.logger.WithField("tenant_id", tenantID).Warn("Purser unavailable; allowing Skipper heartbeat")
+		return true
 	}
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
 	status, err := a.purser.GetBillingStatus(ctx, tenantID)
 	if err != nil {
-		a.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to fetch billing status")
-		return false
+		a.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to fetch billing status; allowing Skipper heartbeat")
+		return true
 	}
 	tier := status.GetTier()
 	if tier == nil {
-		return false
+		a.logger.WithField("tenant_id", tenantID).Warn("Billing status missing tier; allowing Skipper heartbeat")
+		return true
 	}
 	return int(tier.TierLevel) >= a.requiredTierLevel
 }

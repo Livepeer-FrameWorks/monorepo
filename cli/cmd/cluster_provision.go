@@ -112,8 +112,8 @@ save a default, or pass them explicitly.`,
 	cmd.Flags().String("bootstrap-admin-password", "", "Plaintext password for bootstrap admin (prefer --bootstrap-admin-password-env or --bootstrap-admin-password-file)")
 	cmd.Flags().String("bootstrap-admin-password-env", "", "Read bootstrap admin password from this environment variable")
 	cmd.Flags().String("bootstrap-admin-password-file", "", "Read bootstrap admin password from this file")
-	cmd.Flags().String("bootstrap-admin-first-name", "Admin", "First name for bootstrap admin")
-	cmd.Flags().String("bootstrap-admin-last-name", "User", "Last name for bootstrap admin")
+	cmd.Flags().String("bootstrap-admin-first-name", "FrameWorks", "First name for bootstrap admin")
+	cmd.Flags().String("bootstrap-admin-last-name", "Operator", "Last name for bootstrap admin")
 	cmd.Flags().Bool("bootstrap-reset-credentials", false, "Allow bootstrap account entries with reset_credentials=true to update existing password hashes")
 
 	cmd.Flags().Bool("strict-control-plane", false, "Fail (exit 1) if post-provision control-plane validation has warnings")

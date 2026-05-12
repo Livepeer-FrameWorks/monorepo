@@ -2,6 +2,7 @@ package heartbeat
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 )
 
 type fakeOrchestrator struct {
@@ -154,6 +156,72 @@ func TestProcessTenantDegradedInvestigates(t *testing.T) {
 	}
 	if store.last.TenantID != "tenant-degraded" {
 		t.Fatalf("expected report for tenant-degraded, got %s", store.last.TenantID)
+	}
+}
+
+func TestIsSkipperEnabledAllowsHeartbeatOnBillingError(t *testing.T) {
+	agent := NewAgent(AgentConfig{
+		Purser:            &fakeBillingClient{err: errors.New("billing unavailable")},
+		Logger:            testLogger(),
+		RequiredTierLevel: 3,
+	})
+
+	if !agent.isSkipperEnabled(context.Background(), "tenant-billing-error") {
+		t.Fatal("expected billing lookup errors to fail open for heartbeat")
+	}
+}
+
+func TestIsSkipperEnabledStillHonorsKnownLowTier(t *testing.T) {
+	agent := NewAgent(AgentConfig{
+		Purser:            &fakeBillingClient{tierLevel: 1},
+		Logger:            testLogger(),
+		RequiredTierLevel: 3,
+	})
+
+	if agent.isSkipperEnabled(context.Background(), "tenant-low-tier") {
+		t.Fatal("expected known low tier to remain ineligible")
+	}
+}
+
+func TestIsSkipperEnabledAllowsSystemTenant(t *testing.T) {
+	agent := NewAgent(AgentConfig{
+		Purser:            &fakeBillingClient{tierLevel: 1},
+		Logger:            testLogger(),
+		RequiredTierLevel: 3,
+	})
+
+	if !agent.isSkipperEnabled(context.Background(), tenants.SystemTenantID.String()) {
+		t.Fatal("expected system tenant to bypass commercial tier gate")
+	}
+}
+
+func TestReporterBuildNotificationUsesPrimaryUserWhenBillingEmailEmpty(t *testing.T) {
+	reporter := &Reporter{
+		Billing:  &fakeBillingClient{},
+		Contacts: &fakeTenantContactClient{email: "owner-account@test.com", name: "Owner Account"},
+	}
+	notification := reporter.buildNotification(context.Background(), ReportRecord{TenantID: "tenant-a"}, Report{
+		Summary: "test",
+	})
+	if notification.RecipientEmail != "owner-account@test.com" {
+		t.Fatalf("RecipientEmail = %q, want primary user email", notification.RecipientEmail)
+	}
+	if notification.TenantName != "Owner Account" {
+		t.Fatalf("TenantName = %q, want primary user name", notification.TenantName)
+	}
+}
+
+func TestReporterBuildNotificationUsesDefaultRecipientLast(t *testing.T) {
+	reporter := &Reporter{
+		Billing:          &fakeBillingClient{},
+		Contacts:         &fakeTenantContactClient{},
+		DefaultRecipient: "ops@test.com",
+	}
+	notification := reporter.buildNotification(context.Background(), ReportRecord{TenantID: "tenant-a"}, Report{
+		Summary: "test",
+	})
+	if notification.RecipientEmail != "ops@test.com" {
+		t.Fatalf("RecipientEmail = %q, want default recipient", notification.RecipientEmail)
 	}
 }
 

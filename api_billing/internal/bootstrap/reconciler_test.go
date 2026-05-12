@@ -37,18 +37,22 @@ func twoTierFixture() []CatalogTier {
 			ProcessesVOD:     `[{"process":"Thumbs"}]`,
 		},
 		{
-			TierName:          "free",
-			DisplayName:       "Free",
-			Description:       "Self-hosted, no SLA.",
-			BasePrice:         0,
-			Currency:          "EUR",
-			BillingPeriod:     "monthly",
-			Features:          map[string]any{"recording": false, "support_level": "community"},
-			SupportLevel:      "community",
-			SLALevel:          "none",
-			MeteringEnabled:   false,
-			Entitlements:      map[string]any{"recording_retention_days": 7},
-			PricingRules:      nil,
+			TierName:        "free",
+			DisplayName:     "Free",
+			Description:     "Self-hosted, no SLA.",
+			BasePrice:       0,
+			Currency:        "EUR",
+			BillingPeriod:   "monthly",
+			Features:        map[string]any{"recording": false, "support_level": "community"},
+			SupportLevel:    "community",
+			SLALevel:        "none",
+			MeteringEnabled: true,
+			Entitlements:    map[string]any{"recording_retention_days": 7},
+			PricingRules: []CatalogPricingRule{
+				{Meter: "delivered_minutes", Model: "tiered_graduated", UnitPrice: "0"},
+				{Meter: "average_storage_gb", Model: "all_usage", UnitPrice: "0"},
+				{Meter: "ai_gpu_hours", Model: "tiered_graduated", UnitPrice: "0"},
+			},
 			TierLevel:         1,
 			IsDefaultPostpaid: true,
 			ProcessesLive:     `[{"process":"AV"}]`,
@@ -109,6 +113,25 @@ func TestEmbeddedCatalogShape(t *testing.T) {
 		}
 		if rule.Meter == "ai_gpu_hours" && rule.IncludedQuantity != 10 {
 			t.Errorf("supporter GPU included = %v, want 10", rule.IncludedQuantity)
+		}
+	}
+
+	free, ok := byName["free"]
+	if !ok {
+		t.Fatal("free tier missing")
+	}
+	if !free.MeteringEnabled {
+		t.Error("free tier must be metered at zero so invoices include usage lines")
+	}
+	if got, want := len(free.PricingRules), 3; got != want {
+		t.Fatalf("free pricing rules = %d, want %d", got, want)
+	}
+	for _, rule := range free.PricingRules {
+		if rule.UnitPrice != "0" {
+			t.Errorf("free %s unit_price = %q, want 0", rule.Meter, rule.UnitPrice)
+		}
+		if rule.Meter == "delivered_minutes" && rule.IncludedQuantity != 10000 {
+			t.Errorf("free delivered minutes included = %v, want 10000", rule.IncludedQuantity)
 		}
 	}
 }

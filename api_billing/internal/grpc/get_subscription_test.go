@@ -84,3 +84,59 @@ func TestGetSubscription_LoadsOverrides(t *testing.T) {
 		t.Errorf("unmet sqlmock expectations: %v", err)
 	}
 }
+
+func TestGetSubscription_AllowsNullBillingEmail(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	server := &PurserServer{db: mockDB, logger: logging.NewLogger()}
+	tenantID := "tenant-1"
+	subID := "sub-1"
+
+	mock.ExpectQuery(`SELECT id, tenant_id, tier_id, status, billing_email`).
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "tenant_id", "tier_id", "status", "billing_email",
+			"started_at",
+			"trial_ends_at", "next_billing_date", "cancelled_at",
+			"billing_period_start", "billing_period_end",
+			"payment_method", "payment_reference", "tax_id", "tax_rate",
+			"billing_model",
+			"stripe_customer_id", "stripe_subscription_id",
+			"stripe_subscription_status", "stripe_current_period_end", "dunning_attempts",
+			"mollie_subscription_id",
+			"created_at", "updated_at",
+		}).AddRow(
+			subID, tenantID, "tier-free", "active", nil,
+			testTime(), nil, nil, nil,
+			nil, nil,
+			nil, nil, nil, nil,
+			"postpaid",
+			nil, nil, nil, nil, nil,
+			nil,
+			testTime(), testTime(),
+		))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT meter, COALESCE(model, ''), COALESCE(currency, '')`)).
+		WithArgs(subID).
+		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}))
+	mock.ExpectQuery(`SELECT key, value::text FROM purser\.subscription_entitlement_overrides`).
+		WithArgs(subID).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+
+	resp, err := server.GetSubscription(context.Background(), &pb.GetSubscriptionRequest{TenantId: tenantID})
+	if err != nil {
+		t.Fatalf("GetSubscription: %v", err)
+	}
+	if resp.Subscription == nil {
+		t.Fatal("nil subscription")
+	}
+	if resp.Subscription.BillingEmail != "" {
+		t.Fatalf("BillingEmail = %q, want empty string for NULL", resp.Subscription.BillingEmail)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
+}
