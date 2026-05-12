@@ -192,7 +192,7 @@ For detailed architecture documentation including service tables, ports, deploym
 
 - Multi-tenant isolation at application layer
 - User roles exist, but API tokens are currently full-access; RBAC and finer permissions are planned.
-- The Gateway has tenant-aware rate-limit middleware, but current free-tier product limits are not commercially enforced yet.
+- The Gateway has tenant-aware rate-limit middleware. Free-tier product limits are enforced at Foghorn admission with a three-tier cluster-load policy: under 50% load all free traffic admitted; 50–95% load rejects new ingest from over-allowance free streams; at the 95% redline all new free ingest is rejected. Viewer admission follows the same shape with a higher first threshold (80% / 95%). Free tenants are also capped at 3 concurrent live streams and 200 concurrent viewers. Active sessions are never killed mid-stream. Recordings, VOD uploads, and clip exports are rejected at the per-tenant 10 GB storage cap.
 - SSH key-based authentication for deployments
 
 For monitoring, operations, and CLI commands, see [CLI Reference](/operators/cli-reference) and [Operations](/operators/operations).

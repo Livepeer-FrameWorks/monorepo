@@ -57,7 +57,10 @@ const freeTier = {
     "Basic analytics",
   ],
   limitations: [
-    "10,000 delivered minutes/month included",
+    "10,000 delivered minutes/month included (zero-priced overage — Free never charges)",
+    "10 GB of stored content (new recordings/uploads rejected at cap)",
+    "Fair-use admission: free over-allowance accepted while the cluster is idle; rejected from 50% load; all free traffic rejected at 95% redline",
+    "3 concurrent live streams / 200 concurrent viewers",
     "7-day recording retention",
     "Self-host only (no SLA)",
     "No GPU hours for AI workloads",

@@ -240,7 +240,7 @@ clusters:
   - `model` (required) - `free_unmetered`, `metered`, `monthly`, `tier_inherit`, or `custom`
   - `required_tier_level` (optional) - Minimum billing tier level (0-5)
   - `allow_free_tier` (optional) - Allow free-tier tenants
-  - `default_quotas` (optional) - Map of quota limits (`max_streams`, `max_viewers`, `max_bandwidth_mbps`, `retention_days`)
+  - `default_quotas` (optional) - Cluster pricing metadata for marketplace/self-host offers. Platform Free-tier stream/viewer caps are billing-tier entitlements, not static cluster capacity.
 
 **Role-based resolution:** When a service doesn't specify `cluster`, the CLI matches the service's role (from the built-in service registry) against each cluster's `roles` list. For example, `foghorn` has role `media`, so it resolves to whichever cluster lists `media` in its roles. Available roles: `control`, `data`, `analytics`, `media`, `support`, `infra`, `mesh`, `interface`, `observability`.
 

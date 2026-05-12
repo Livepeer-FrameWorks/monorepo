@@ -37,26 +37,30 @@ Access to the shared Free service with the included allowances below. API reques
 
 **Included:**
 
-- 10,000 delivered minutes/month
+- 10,000 delivered minutes/month (zero-priced overage — Free never produces a bill)
+- 10 GB of stored content (durable writes rejected at cap)
 - 7-day recording retention
 - Shared cluster access
 - Livepeer-backed transcoding
 - Analytics dashboard
 - API access
 
+**Fair-use enforcement (three-tier cluster-load policy):**
+
+- **Below 50% load.** All ingest admitted, including over-allowance free traffic. Idle capacity is yours to use.
+- **50–95% load.** Free streams past their 10,000-minute allowance are rejected at new-ingest. Within-allowance free and all paying streams continue to be admitted.
+- **At redline (≥ 95%).** All new free-tier ingest is rejected to preserve capacity for paying tenants. Existing live sessions are never killed mid-stream.
+- **Viewer-side gate.** Below 80% load, all viewers admitted. 80–95%, new viewers of over-allowance free streams are rejected. At redline, all new free-stream viewers are rejected. Paying broadcasters' viewers are always admitted.
+- **Fair-use caps.** Free tenants are capped at 3 concurrent live streams and 200 concurrent viewers.
+- **Storage cap.** At the 10 GB durable limit, new recordings, VOD uploads, and clip exports are rejected. Existing artifacts age out via the 7-day retention sweeper.
+- Load is computed per media cluster as `max(avg(CPU%), uplink utilization %)` across healthy edge nodes.
+
 **Seeded limitations:**
 
-- Recording is not included on the seeded Free tier
 - No GPU hours (no AI workloads)
 - Watermarked player
 - Community support only
 - No SLA
-
-<Aside type="note">
-  The Free tier's seeded feature set marks recording as unavailable, but billing-tier feature gates
-  are not fully enforced across the current beta runtime. Treat recording on Free as not part of the
-  plan, not as a guaranteed hard failure at every entry point.
-</Aside>
 
 ## Pay-As-You-Go (Current)
 
