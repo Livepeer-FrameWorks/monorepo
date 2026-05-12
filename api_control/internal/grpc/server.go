@@ -140,7 +140,8 @@ type clusterRoute struct {
 	officialBaseURL         string
 	officialClusterName     string
 	officialFoghornGrpcAddr string
-	clusterPeers            []*pb.TenantClusterPeer // full tenant cluster context (includes per-peer foghorn addrs)
+	clusterPeers            []*pb.TenantClusterPeer  // full tenant cluster context (includes per-peer foghorn addrs)
+	tenantResourceLimits    *pb.TenantResourceLimits // access-specific cap override; nil = use Purser tier entitlement
 	resolvedAt              time.Time
 }
 
@@ -438,6 +439,7 @@ func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tena
 		officialClusterName:     resp.GetOfficialClusterName(),
 		officialFoghornGrpcAddr: resp.GetOfficialFoghornGrpcAddr(),
 		clusterPeers:            resp.GetClusterPeers(),
+		tenantResourceLimits:    resp.GetTenantResourceLimits(),
 		resolvedAt:              time.Now(),
 	}
 	normalizeClusterRoute(route)
@@ -768,6 +770,30 @@ func resolveLiveIngestClusterID(route *clusterRoute, requestedClusterID string) 
 	return resolvedClusterID
 }
 
+func hasTenantResourceLimits(limits *pb.TenantResourceLimits) bool {
+	return limits != nil && (limits.GetMaxStreams() > 0 || limits.GetMaxViewers() > 0)
+}
+
+func mergeTenantResourceLimits(base, override *pb.TenantResourceLimits) *pb.TenantResourceLimits {
+	if !hasTenantResourceLimits(base) {
+		if hasTenantResourceLimits(override) {
+			return override
+		}
+		return nil
+	}
+	merged := &pb.TenantResourceLimits{
+		MaxStreams: base.GetMaxStreams(),
+		MaxViewers: base.GetMaxViewers(),
+	}
+	if override.GetMaxStreams() > 0 {
+		merged.MaxStreams = override.GetMaxStreams()
+	}
+	if override.GetMaxViewers() > 0 {
+		merged.MaxViewers = override.GetMaxViewers()
+	}
+	return merged
+}
+
 // resolveFoghornForArtifact returns a Foghorn client routed to the artifact's
 // origin cluster, or the tenant's primary cluster when the origin is unknown.
 func (s *CommodoreServer) resolveFoghornForArtifact(ctx context.Context, tenantID, originClusterID string) (*foghornclient.GRPCClient, error) {
@@ -837,6 +863,8 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 	billingModel := "postpaid"
 	var isSuspended, isBalanceNegative bool
 	var dvrPolicy *pb.DVRPolicy
+	var allowances []*pb.MeterAllowance
+	var tenantResourceLimits *pb.TenantResourceLimits
 
 	if s.purserClient != nil {
 		billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
@@ -851,21 +879,25 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 			isSuspended = billingStatus.IsSuspended
 			isBalanceNegative = billingStatus.IsBalanceNegative
 			dvrPolicy = billingStatus.DvrPolicy
+			allowances = billingStatus.Allowances
+			tenantResourceLimits = billingStatus.GetTenantResourceLimits()
 		}
 	}
 
 	resp := &pb.ValidateStreamKeyResponse{
-		Valid:              true,
-		UserId:             userID,
-		TenantId:           tenantID,
-		InternalName:       internalName,
-		IsRecordingEnabled: isRecordingEnabled,
-		StreamId:           streamID,
-		BillingModel:       billingModel,
-		IsSuspended:        isSuspended,
-		IsBalanceNegative:  isBalanceNegative,
-		PlaybackId:         playbackID,
-		DvrPolicy:          dvrPolicy,
+		Valid:                true,
+		UserId:               userID,
+		TenantId:             tenantID,
+		InternalName:         internalName,
+		IsRecordingEnabled:   isRecordingEnabled,
+		StreamId:             streamID,
+		BillingModel:         billingModel,
+		IsSuspended:          isSuspended,
+		IsBalanceNegative:    isBalanceNegative,
+		PlaybackId:           playbackID,
+		DvrPolicy:            dvrPolicy,
+		Allowances:           allowances,
+		TenantResourceLimits: tenantResourceLimits,
 	}
 
 	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
@@ -875,6 +907,9 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 			resp.OfficialClusterId = &route.officialClusterID
 		}
 		resp.ClusterPeers = route.clusterPeers
+		if hasTenantResourceLimits(route.tenantResourceLimits) {
+			resp.TenantResourceLimits = mergeTenantResourceLimits(resp.TenantResourceLimits, route.tenantResourceLimits)
+		}
 	}
 
 	// Load enabled push targets for multistreaming

@@ -150,6 +150,10 @@ func main() {
 		if err := state.DefaultManager().EnableRedisSync(context.Background(), redisStore, instanceID, logger); err != nil {
 			logger.WithError(err).Warn("Failed to enable redis state synchronization")
 		}
+		// Mirror tenant_capacity counters to Redis so HA Foghorn instances
+		// agree on cluster-wide stream/viewer counts at the same cluster_id
+		// keyspace as the existing state store.
+		state.DefaultTenantCapacity().EnableRedisSync(redisClient, foghornCfg.ClusterID)
 	}
 
 	// Set weights from environment variables

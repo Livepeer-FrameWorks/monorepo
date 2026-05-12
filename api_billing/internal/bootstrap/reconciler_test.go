@@ -50,7 +50,7 @@ func twoTierFixture() []CatalogTier {
 			Entitlements:    map[string]any{"recording_retention_days": 7},
 			PricingRules: []CatalogPricingRule{
 				{Meter: "delivered_minutes", Model: "tiered_graduated", UnitPrice: "0"},
-				{Meter: "average_storage_gb", Model: "all_usage", UnitPrice: "0"},
+				{Meter: "average_storage_gb", Model: "tiered_graduated", UnitPrice: "0"},
 				{Meter: "ai_gpu_hours", Model: "tiered_graduated", UnitPrice: "0"},
 			},
 			TierLevel:         1,
@@ -123,6 +123,15 @@ func TestEmbeddedCatalogShape(t *testing.T) {
 	if !free.MeteringEnabled {
 		t.Error("free tier must be metered at zero so invoices include usage lines")
 	}
+	if got := free.Features["recording"]; got != true {
+		t.Errorf("free recording feature = %v, want true so 7-day retention/storage cap docs match runtime policy", got)
+	}
+	if got := free.Entitlements["max_concurrent_streams"]; got != 3 {
+		t.Errorf("free max_concurrent_streams entitlement = %v, want 3", got)
+	}
+	if got := free.Entitlements["max_concurrent_viewers"]; got != 200 {
+		t.Errorf("free max_concurrent_viewers entitlement = %v, want 200", got)
+	}
 	if got, want := len(free.PricingRules), 3; got != want {
 		t.Fatalf("free pricing rules = %d, want %d", got, want)
 	}
@@ -132,6 +141,14 @@ func TestEmbeddedCatalogShape(t *testing.T) {
 		}
 		if rule.Meter == "delivered_minutes" && rule.IncludedQuantity != 10000 {
 			t.Errorf("free delivered minutes included = %v, want 10000", rule.IncludedQuantity)
+		}
+		if rule.Meter == "average_storage_gb" {
+			if rule.Model != "tiered_graduated" {
+				t.Errorf("free storage model = %q, want tiered_graduated (visibility line with included quantity)", rule.Model)
+			}
+			if rule.IncludedQuantity != 10 {
+				t.Errorf("free storage included = %v, want 10 (GB-month invoice allowance; runtime cap is separate storage_limit_gb entitlement)", rule.IncludedQuantity)
+			}
 		}
 	}
 }

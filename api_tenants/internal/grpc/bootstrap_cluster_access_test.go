@@ -139,7 +139,7 @@ func TestBootstrapClusterAccess_UpsertsOnHappyPath(t *testing.T) {
 		WithArgs("core-1").
 		WillReturnRows(sqlmock.NewRows([]string{"is_platform_official", "is_active"}).AddRow(true, true))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO quartermaster.tenant_cluster_access")).
-		WithArgs("00000000-0000-0000-0000-000000000001", "core-1").
+		WithArgs("00000000-0000-0000-0000-000000000001", "core-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if _, err := server.BootstrapClusterAccess(serviceCtx(), &pb.BootstrapClusterAccessRequest{

@@ -481,6 +481,14 @@ message ClusterRoutingResponse {
   // Full tenant cluster context: all clusters this tenant has access to.
   // Foghorn uses this for demand-driven peer discovery and remote edge scoring.
   repeated TenantClusterPeer cluster_peers = 19;
+
+  // Access-specific runtime cap override for this cluster, sourced from
+  // tenant_cluster_access.resource_limits. Purser tier entitlements are the
+  // product source of truth for Free-plan caps; this field only carries an
+  // override when one exists. Foghorn enforces caps at trigger time
+  // (PUSH_REWRITE for max_streams, USER_NEW for max_viewers). nil or zero-valued
+  // fields = unlimited.
+  optional TenantResourceLimits tenant_resource_limits = 20;
 }
 
 // ============================================================================
@@ -667,9 +675,23 @@ message SubscribeToClusterRequest {
 // BootstrapClusterAccessRequest is the service-token bootstrap entitlement
 // shape (see TenantService.BootstrapClusterAccess). tenant_id is required;
 // cluster_id is required and must be platform-official.
+//
+// resource_limits is optional: when present, Quartermaster seeds an
+// access-specific override onto tenant_cluster_access.resource_limits via
+// COALESCE so an existing per-tenant override is not overwritten.
 message BootstrapClusterAccessRequest {
   string tenant_id = 1;
   string cluster_id = 2;
+  optional TenantResourceLimits resource_limits = 3;
+}
+
+// TenantResourceLimits is the per-tenant runtime cap used by Foghorn admission.
+// Purser resolves plan-level caps from billing tier entitlements; Quartermaster
+// may also surface access-specific overrides from tenant_cluster_access.
+// 0 in a field means "unlimited" for that dimension.
+message TenantResourceLimits {
+  int32 max_streams = 1;          // concurrent live streams cap
+  int32 max_viewers = 2;          // concurrent viewers cap (sum across streams)
 }
 
 message UnsubscribeFromClusterRequest {

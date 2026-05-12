@@ -95,6 +95,14 @@ const (
 	IngestErrorCode_INGEST_ERROR_INTERNAL           IngestErrorCode = 4
 	IngestErrorCode_INGEST_ERROR_TIMEOUT            IngestErrorCode = 5
 	IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST   IngestErrorCode = 6
+	// Free-tier billing allowance exhausted AND cluster is at load — admission
+	// gated to preserve capacity for paying tenants. Tenant should upgrade or
+	// retry off-peak; existing live streams are not killed.
+	IngestErrorCode_INGEST_ERROR_FREE_TIER_EXHAUSTED IngestErrorCode = 7
+	// Tenant is at their per-tenant concurrent-stream cap. Plan defaults come
+	// from Purser tier entitlements; Quartermaster cluster access may override.
+	// Distinct from FREE_TIER_EXHAUSTED — this fires regardless of cluster load.
+	IngestErrorCode_INGEST_ERROR_TENANT_STREAM_CAP IngestErrorCode = 8
 )
 
 // Enum value maps for IngestErrorCode.
@@ -107,15 +115,19 @@ var (
 		4: "INGEST_ERROR_INTERNAL",
 		5: "INGEST_ERROR_TIMEOUT",
 		6: "INGEST_ERROR_DUPLICATE_INGEST",
+		7: "INGEST_ERROR_FREE_TIER_EXHAUSTED",
+		8: "INGEST_ERROR_TENANT_STREAM_CAP",
 	}
 	IngestErrorCode_value = map[string]int32{
-		"INGEST_ERROR_NONE":               0,
-		"INGEST_ERROR_INVALID_STREAM_KEY": 1,
-		"INGEST_ERROR_ACCOUNT_SUSPENDED":  2,
-		"INGEST_ERROR_PAYMENT_REQUIRED":   3,
-		"INGEST_ERROR_INTERNAL":           4,
-		"INGEST_ERROR_TIMEOUT":            5,
-		"INGEST_ERROR_DUPLICATE_INGEST":   6,
+		"INGEST_ERROR_NONE":                0,
+		"INGEST_ERROR_INVALID_STREAM_KEY":  1,
+		"INGEST_ERROR_ACCOUNT_SUSPENDED":   2,
+		"INGEST_ERROR_PAYMENT_REQUIRED":    3,
+		"INGEST_ERROR_INTERNAL":            4,
+		"INGEST_ERROR_TIMEOUT":             5,
+		"INGEST_ERROR_DUPLICATE_INGEST":    6,
+		"INGEST_ERROR_FREE_TIER_EXHAUSTED": 7,
+		"INGEST_ERROR_TENANT_STREAM_CAP":   8,
 	}
 )
 
@@ -17223,7 +17235,7 @@ const file_ipc_proto_rawDesc = "" +
 	"!CLUSTER_REJECT_REASON_ELIGIBILITY\x10\x03\x12#\n" +
 	"\x1fCLUSTER_REJECT_REASON_DUPLICATE\x10\x04\x12#\n" +
 	"\x1fCLUSTER_REJECT_REASON_WITHDRAWN\x10\x05\x12\x1f\n" +
-	"\x1bCLUSTER_REJECT_REASON_OTHER\x10c*\xec\x01\n" +
+	"\x1bCLUSTER_REJECT_REASON_OTHER\x10c*\xb6\x02\n" +
 	"\x0fIngestErrorCode\x12\x15\n" +
 	"\x11INGEST_ERROR_NONE\x10\x00\x12#\n" +
 	"\x1fINGEST_ERROR_INVALID_STREAM_KEY\x10\x01\x12\"\n" +
@@ -17231,7 +17243,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\x1dINGEST_ERROR_PAYMENT_REQUIRED\x10\x03\x12\x19\n" +
 	"\x15INGEST_ERROR_INTERNAL\x10\x04\x12\x18\n" +
 	"\x14INGEST_ERROR_TIMEOUT\x10\x05\x12!\n" +
-	"\x1dINGEST_ERROR_DUPLICATE_INGEST\x10\x06*\xa8\x01\n" +
+	"\x1dINGEST_ERROR_DUPLICATE_INGEST\x10\x06\x12$\n" +
+	" INGEST_ERROR_FREE_TIER_EXHAUSTED\x10\a\x12\"\n" +
+	"\x1eINGEST_ERROR_TENANT_STREAM_CAP\x10\b*\xa8\x01\n" +
 	"\x0fStorageLocation\x12 \n" +
 	"\x1cSTORAGE_LOCATION_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16STORAGE_LOCATION_LOCAL\x10\x01\x12\x17\n" +

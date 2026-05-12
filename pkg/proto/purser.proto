@@ -9,6 +9,7 @@ import "google/protobuf/empty.proto";
 import "google/protobuf/struct.proto";
 import "common.proto";
 import "shared.proto";
+import "quartermaster.proto";
 
 // ============================================================================
 // PURSER CONTROL PLANE - BILLING & SUBSCRIPTION MANAGEMENT
@@ -135,6 +136,19 @@ message GetTenantBillingStatusRequest {
   string tenant_id = 1;
 }
 
+// Per-meter allowance snapshot for the tenant's current billing period.
+// Surfaced through GetTenantBillingStatusResponse so admission paths (Foghorn
+// PUSH_REWRITE via Commodore ValidateStreamKey) can apply load-aware policy
+// without a second RPC. v1 scope: delivered_minutes only.
+message MeterAllowance {
+  string meter = 1;          // e.g. "delivered_minutes"
+  double included = 2;       // included_quantity from the tier rule
+  double used = 3;           // current-period accumulated usage
+  double remaining = 4;      // max(0, included - used)
+  bool exhausted = 5;        // used >= included
+  bool is_free_tier = 6;     // unit_price == 0 in this rule (free or zero-priced overage)
+}
+
 // Minimal billing status for gating decisions.
 // This is NOT the full BillingStatusResponse - that's for user-facing dashboards.
 message GetTenantBillingStatusResponse {
@@ -150,6 +164,19 @@ message GetTenantBillingStatusResponse {
   // Distinct from recording_retention_days: that controls absolute artifact
   // expiry, this controls the live HLS playlist size and seek depth.
   shared.DVRPolicy dvr_policy = 6;
+  // Per-meter allowance snapshots for load-aware admission decisions.
+  // Empty when no metered rules apply to the tenant's tier.
+  repeated MeterAllowance allowances = 7;
+  // Hard runtime cap on the tenant's current durable artifact bytes.
+  // 0 = unlimited (paid tier or entitlement unset). Foghorn rejects new
+  // durable writes (DVR start, clip export, VOD upload) once the tenant's
+  // current artifact bytes meet this cap. Distinct from average_storage_gb
+  // billing meter — that drives invoice lines, this drives admission.
+  int64 storage_limit_bytes = 8;
+  // Tenant-plan fair-use caps resolved from tier entitlements. These are not
+  // media-cluster capacity; Foghorn still computes cluster load dynamically
+  // from edge state. nil/zero fields mean unlimited.
+  quartermaster.TenantResourceLimits tenant_resource_limits = 9;
 }
 
 // ============================================================================
@@ -835,8 +862,9 @@ message ClusterPricing {
   bool is_platform_official = 11;       // Platform-operated cluster
   bool allow_free_tier = 12;            // Allow free tier subscribers
 
-  // Quotas
-  google.protobuf.Struct default_quotas = 13; // Default resource quotas
+  // Cluster pricing metadata for marketplace/self-host offers. Platform
+  // Free-tier stream/viewer caps are plan entitlements, not cluster capacity.
+  google.protobuf.Struct default_quotas = 13;
 
   // Timestamps
   google.protobuf.Timestamp created_at = 14;

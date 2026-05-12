@@ -199,8 +199,8 @@ func marshalBillingFeatures(bf *pb.BillingFeatures) ([]byte, error) {
 	return json.Marshal(raw)
 }
 
-// mapToProtoStruct converts a map[string]interface{} to protobuf Struct
-func mapToProtoStruct(m map[string]interface{}) *structpb.Struct {
+// mapToProtoStruct converts a map[string]any to protobuf Struct
+func mapToProtoStruct(m map[string]any) *structpb.Struct {
 	if m == nil {
 		return nil
 	}
@@ -291,7 +291,7 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 
 	// Build query based on include_inactive
 	whereClause := "WHERE is_active = true"
-	args := []interface{}{}
+	args := []any{}
 	argIdx := 1
 	if req.GetIncludeInactive() {
 		whereClause = ""
@@ -500,11 +500,16 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 	var balanceCents sql.NullInt64
 	var retentionRaw sql.NullString
 	var dvrEntitlements sql.NullString
+	var tierID sql.NullString
+	var billingPeriodStart sql.NullTime
+	var billingPeriodEnd sql.NullTime
+	var storageLimitRaw sql.NullString
+	var resourceLimitsRaw sql.NullString
 
 	currency := billing.DefaultCurrency()
 
-	// Query subscription, prepaid balance, the recording_retention_days
-	// entitlement, and the DVR-policy entitlement bundle in one round-trip.
+	// Query subscription, prepaid balance, recording/DVR entitlements, storage
+	// cap, and Free-plan concurrent caps in one round-trip.
 	// Commodore's StartDVR + ValidateStreamKey both need these so this
 	// avoids per-call GetSubscription + GetBillingTier roundtrips.
 	err := s.db.QueryRowContext(ctx, `
@@ -513,7 +518,12 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 			ts.status,
 			pb.balance_cents,
 			te.value::text,
-			dvr.entitlements::text
+			dvr.entitlements::text,
+			ts.tier_id,
+			ts.billing_period_start,
+				ts.billing_period_end,
+				slg.value::text,
+				caps.entitlements::text
 		FROM purser.tenant_subscriptions ts
 		LEFT JOIN purser.prepaid_balances pb
 			ON pb.tenant_id = ts.tenant_id AND pb.currency = $2
@@ -548,16 +558,51 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 				ORDER BY key, priority
 			) merged
 		) dvr ON TRUE
-		WHERE ts.tenant_id = $1 AND ts.status != 'cancelled'
-		ORDER BY ts.created_at DESC
-		LIMIT 1
-	`, tenantID, currency, pq.StringArray{
+		LEFT JOIN LATERAL (
+			-- storage_limit_gb is the hard runtime cap on durable artifact bytes.
+			-- Same precedence as retention_days: subscription override beats tier.
+			SELECT value FROM (
+				SELECT value, 1 AS priority FROM purser.subscription_entitlement_overrides
+				WHERE subscription_id = ts.id AND key = 'storage_limit_gb'
+				UNION ALL
+				SELECT value, 2 AS priority FROM purser.tier_entitlements
+				WHERE tier_id = ts.tier_id AND key = 'storage_limit_gb'
+			) src
+			ORDER BY priority
+			LIMIT 1
+			) slg ON TRUE
+			LEFT JOIN LATERAL (
+				-- Free-plan concurrent caps are tenant-plan entitlements, not
+				-- media-cluster capacity. Subscription overrides can raise/lower
+				-- them per tenant; paid tiers omit the keys for unlimited.
+				SELECT jsonb_object_agg(key, value) AS entitlements
+				FROM (
+					SELECT DISTINCT ON (key) key, value
+					FROM (
+						SELECT key, value, 1 AS priority
+						FROM purser.subscription_entitlement_overrides
+						WHERE subscription_id = ts.id AND key = ANY($4)
+						UNION ALL
+						SELECT key, value, 2 AS priority
+						FROM purser.tier_entitlements
+						WHERE tier_id = ts.tier_id AND key = ANY($4)
+					) all_e
+					ORDER BY key, priority
+				) merged
+			) caps ON TRUE
+			WHERE ts.tenant_id = $1 AND ts.status != 'cancelled'
+			ORDER BY ts.created_at DESC
+			LIMIT 1
+		`, tenantID, currency, pq.StringArray{
 		"dvr_default_window_seconds",
 		"dvr_max_window_seconds",
 		"dvr_default_segment_duration_seconds",
 		"dvr_max_entries",
 		"dvr_allow_cluster_extension",
-	}).Scan(&billingModel, &subscriptionStatus, &balanceCents, &retentionRaw, &dvrEntitlements)
+	}, pq.StringArray{
+		"max_concurrent_streams",
+		"max_concurrent_viewers",
+	}).Scan(&billingModel, &subscriptionStatus, &balanceCents, &retentionRaw, &dvrEntitlements, &tierID, &billingPeriodStart, &billingPeriodEnd, &storageLimitRaw, &resourceLimitsRaw)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// No subscription = assume postpaid, not suspended, not negative
@@ -608,6 +653,12 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 	if dvrPolicy != nil {
 		dvrPolicy.RecordingRetentionDays = retentionDays
 	}
+	var allowances []*pb.MeterAllowance
+	if tierID.Valid && tierID.String != "" {
+		periodStart, periodEnd := resolveCurrentPeriod(billingPeriodStart, billingPeriodEnd, time.Now().UTC())
+		allowances = s.computeAllowances(ctx, tenantID, tierID.String, periodStart, periodEnd)
+	}
+
 	return &pb.GetTenantBillingStatusResponse{
 		BillingModel:           model,
 		IsSuspended:            isSuspended,
@@ -615,7 +666,147 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 		BalanceCents:           balance,
 		RecordingRetentionDays: retentionDays,
 		DvrPolicy:              dvrPolicy,
+		Allowances:             allowances,
+		StorageLimitBytes:      parseStorageLimitBytes(storageLimitRaw),
+		TenantResourceLimits:   parseTenantResourceLimits(resourceLimitsRaw),
 	}, nil
+}
+
+// parseStorageLimitBytes decodes the storage_limit_gb entitlement (a bare JSON
+// integer, in GB) into bytes for the wire response. Returns 0 ("unlimited")
+// for unset, zero, or unparseable values — paid tiers without this entitlement
+// fall through here. 1 GB = 1<<30 bytes (binary GiB) to match how operators
+// reason about storage allocation.
+func parseStorageLimitBytes(raw sql.NullString) int64 {
+	if !raw.Valid || raw.String == "" {
+		return 0
+	}
+	var gb int64
+	if err := json.Unmarshal([]byte(raw.String), &gb); err != nil || gb <= 0 {
+		return 0
+	}
+	return gb * (1 << 30)
+}
+
+// parseTenantResourceLimits decodes Free-plan fair-use entitlements into the
+// wire shape Foghorn already consumes. These values are tenant-plan policy, not
+// cluster capacity; paid tiers normally omit the keys and therefore return nil.
+func parseTenantResourceLimits(raw sql.NullString) *pb.TenantResourceLimits {
+	if !raw.Valid || raw.String == "" {
+		return nil
+	}
+	var entitlements map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw.String), &entitlements); err != nil {
+		return nil
+	}
+	limits := &pb.TenantResourceLimits{
+		MaxStreams: parsePositiveInt32(entitlements["max_concurrent_streams"]),
+		MaxViewers: parsePositiveInt32(entitlements["max_concurrent_viewers"]),
+	}
+	if limits.MaxStreams == 0 && limits.MaxViewers == 0 {
+		return nil
+	}
+	return limits
+}
+
+func parsePositiveInt32(raw json.RawMessage) int32 {
+	if len(raw) == 0 {
+		return 0
+	}
+	var v int64
+	if err := json.Unmarshal(raw, &v); err != nil || v <= 0 || v > int64(^uint32(0)>>1) {
+		return 0
+	}
+	return int32(v)
+}
+
+// resolveCurrentPeriod returns the billing period bounds, falling back to the
+// current calendar month when the subscription has no period set (e.g. brand
+// new free-tier signups before the first invoice cycle).
+func resolveCurrentPeriod(start, end sql.NullTime, now time.Time) (time.Time, time.Time) {
+	if start.Valid && end.Valid && end.Time.After(start.Time) {
+		return start.Time, end.Time
+	}
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	monthEnd := monthStart.AddDate(0, 1, 0)
+	return monthStart, monthEnd
+}
+
+// computeAllowances loads the tenant's tier pricing rule for delivered_minutes
+// and the corresponding current-period viewer_hours usage, returning a single
+// allowance snapshot. delivered_minutes is a derived meter: usage_records
+// stores viewer_hours, and the rating engine multiplies by 60 at rate time
+// (see api_billing/internal/handlers/rating_inputs.go and cluster_rating.go).
+// The allowance check must read from the same source — querying
+// usage_type='delivered_minutes' always returns zero.
+//
+// is_free_tier is set from the tier identity (tier_name == 'free'), not from
+// the meter's unit_price. A paid tier with a coincidentally zero-priced meter
+// is not "free" for admission purposes.
+//
+// v1 scope: delivered_minutes only — surfaced via
+// GetTenantBillingStatusResponse.Allowances so Foghorn PUSH_REWRITE can apply
+// load-aware admission without a second RPC.
+func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID string, periodStart, periodEnd time.Time) []*pb.MeterAllowance {
+	const meter = "delivered_minutes"
+
+	var included, unitPrice float64
+	var tierName string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+		    tpr.included_quantity::double precision,
+		    tpr.unit_price::double precision,
+		    bt.tier_name
+		FROM purser.tier_pricing_rules tpr
+		JOIN purser.billing_tiers bt ON bt.id = tpr.tier_id
+		WHERE tpr.tier_id = $1 AND tpr.meter = $2
+	`, tierID, meter).Scan(&included, &unitPrice, &tierName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"tier_id":   tierID,
+			"meter":     meter,
+			"error":     err,
+		}).Warn("Failed to load pricing rule for allowance")
+		return nil
+	}
+
+	var viewerHours float64
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(usage_value), 0)::double precision
+		FROM purser.usage_records
+		WHERE tenant_id = $1
+		  AND usage_type = 'viewer_hours'
+		  AND period_start < $3
+		  AND period_end > $2
+	`, tenantID, periodStart, periodEnd).Scan(&viewerHours); err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"meter":     meter,
+			"error":     err,
+		}).Warn("Failed to sum current-period viewer_hours for delivered-minute allowance")
+		return nil
+	}
+
+	used := viewerHours * 60
+	remaining := included - used
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	return []*pb.MeterAllowance{
+		{
+			Meter:      meter,
+			Included:   included,
+			Used:       used,
+			Remaining:  remaining,
+			Exhausted:  used >= included,
+			IsFreeTier: tierName == "free",
+		},
+	}
 }
 
 // parseDVRPolicy decodes the DVR-policy entitlement bundle into pb.DVRPolicy.
@@ -715,7 +906,7 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *pb.GetUsageReco
 	}
 
 	// Build WHERE clause
-	args := []interface{}{tenantID}
+	args := []any{tenantID}
 	whereClause := "WHERE tenant_id = $1"
 	argIdx := 2
 
@@ -803,7 +994,7 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *pb.GetUsageReco
 
 		// Convert usage_details JSONB to protobuf Struct
 		if len(usageDetailsBytes) > 0 {
-			var detailsMap map[string]interface{}
+			var detailsMap map[string]any
 			if json.Unmarshal(usageDetailsBytes, &detailsMap) == nil {
 				rec.UsageDetails = mapToProtoStruct(detailsMap)
 			}
@@ -890,7 +1081,7 @@ func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *pb.GetUsageA
 	end := req.GetTimeRange().GetEnd().AsTime()
 
 	whereClause := "WHERE tenant_id = $1 AND period_start < $3 AND period_end > $2 AND granularity = $4"
-	args := []interface{}{tenantID, start, end, granularity}
+	args := []any{tenantID, start, end, granularity}
 	argIdx := 5
 
 	if len(req.GetUsageTypes()) > 0 {
@@ -1325,6 +1516,21 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSub
 		return nil, status.Errorf(codes.Internal, "commit subscription update: %v", commitErr)
 	}
 
+	// When tier_id changes (upgrade / downgrade), invalidate downstream caches
+	// so per-tenant runtime caps + allowance state (cached in Foghorn's
+	// streamContext via Commodore.ValidateStreamKey) are re-fetched on the
+	// next admission. Mirrors the same pattern used for balance changes at
+	// server.go:5117. Best-effort fan-out — failure is logged but does not
+	// abort the subscription update; cache TTL (10 min postpaid / 1 min
+	// prepaid) provides the eventual-consistency backstop.
+	if req.TierId != nil && s.commodoreClient != nil {
+		invalidateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, invErr := s.commodoreClient.InvalidateTenantCache(invalidateCtx, tenantID, "tier_changed"); invErr != nil {
+			s.logger.WithError(invErr).WithField("tenant_id", tenantID).Warn("Failed to invalidate tenant cache on tier change")
+		}
+	}
+
 	// Return updated subscription
 	resp, err := s.GetSubscription(ctx, &pb.GetSubscriptionRequest{TenantId: tenantID})
 	if err != nil {
@@ -1536,7 +1742,7 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *pb.GetInvoiceRequest
 		FROM purser.billing_invoices i
 		LEFT JOIN purser.tenant_subscriptions s ON i.tenant_id = s.tenant_id AND s.status != 'cancelled'
 		WHERE i.id = $1`
-	args := []interface{}{invoiceID}
+	args := []any{invoiceID}
 
 	if !isServiceCall {
 		query += " AND i.tenant_id = $2"
@@ -1571,7 +1777,7 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *pb.GetInvoiceRequest
 
 	// Convert usage_details JSONB to protobuf Struct and typed fields
 	if len(usageDetailsBytes) > 0 {
-		var detailsMap map[string]interface{}
+		var detailsMap map[string]any
 		if json.Unmarshal(usageDetailsBytes, &detailsMap) == nil {
 			invoice.UsageDetails = mapToProtoStruct(detailsMap)
 			invoice.UsageSummary = parseUsageDetailsToSummary(detailsMap, invoice.TenantId, invoice.PeriodStart, invoice.PeriodEnd)
@@ -1623,7 +1829,7 @@ func (s *PurserServer) ListInvoices(ctx context.Context, req *pb.ListInvoicesReq
 
 	// Build query
 	whereClause := "WHERE tenant_id = $1"
-	args := []interface{}{tenantID}
+	args := []any{tenantID}
 	argIdx := 2
 
 	if req.Status != nil && *req.Status != "" {
@@ -1696,7 +1902,7 @@ func (s *PurserServer) ListInvoices(ctx context.Context, req *pb.ListInvoicesReq
 		}
 		// Convert usage_details JSONB to protobuf Struct and typed fields
 		if len(usageDetails) > 0 {
-			var details map[string]interface{}
+			var details map[string]any
 			if json.Unmarshal(usageDetails, &details) == nil {
 				inv.UsageDetails = mapToProtoStruct(details)
 				inv.UsageSummary = parseUsageDetailsToSummary(details, inv.TenantId, inv.PeriodStart, inv.PeriodEnd)
@@ -1805,14 +2011,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 
 	// Validate payment method is available
 	availableMethods := s.getAvailablePaymentMethods(ctx)
-	methodAvailable := false
-	for _, m := range availableMethods {
-		if m == method {
-			methodAvailable = true
-			break
-		}
-	}
-	if !methodAvailable {
+	if !slices.Contains(availableMethods, method) {
 		return nil, status.Errorf(codes.InvalidArgument, "payment method %s not available", method)
 	}
 
@@ -1835,8 +2034,8 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 	}
 	invoiceAmount, _ := invoiceAmountDec.Float64()
 
-	if strings.HasPrefix(method, "crypto_") {
-		asset := strings.ToUpper(strings.TrimPrefix(method, "crypto_"))
+	if rawAsset, ok := strings.CutPrefix(method, "crypto_"); ok {
+		asset := strings.ToUpper(rawAsset)
 		if expireErr := s.expireStaleInvoiceCryptoPayments(ctx, invoiceID, invoiceTenantID, asset, method); expireErr != nil {
 			return nil, status.Errorf(codes.Internal, "expire stale crypto payments: %v", expireErr)
 		}
@@ -1863,8 +2062,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 			Method:    method,
 			CreatedAt: timestamppb.New(existingCreatedAt),
 		}
-		if strings.HasPrefix(method, "crypto_") {
-			asset := strings.TrimPrefix(method, "crypto_")
+		if asset, ok := strings.CutPrefix(method, "crypto_"); ok {
 			details, detailsErr := s.loadInvoiceCryptoPaymentQuote(ctx, invoiceID, invoiceTenantID, strings.ToUpper(asset))
 			if detailsErr != nil {
 				return nil, status.Errorf(codes.Internal, "load crypto payment quote: %v", detailsErr)
@@ -2374,7 +2572,7 @@ func (s *PurserServer) createCryptoPaymentTx(ctx context.Context, dbTx *sql.Tx, 
 		invoiceID = *plan.Params.InvoiceID
 	}
 
-	s.logger.WithFields(map[string]interface{}{
+	s.logger.WithFields(map[string]any{
 		"wallet_id":   walletID,
 		"invoice_id":  invoiceID,
 		"tenant_id":   plan.Params.TenantID,
@@ -2597,7 +2795,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 		return nil, nil, err
 	}
 
-	s.logger.WithFields(map[string]interface{}{
+	s.logger.WithFields(map[string]any{
 		"tenant_id":    tenantID,
 		"tier_name":    tier.TierName,
 		"display_name": tier.DisplayName,
@@ -2754,7 +2952,7 @@ func (s *PurserServer) getPendingInvoices(ctx context.Context, tenantID string) 
 			inv.PeriodEnd = timestamppb.New(periodEnd.Time)
 		}
 		if len(usageDetails) > 0 {
-			var details map[string]interface{}
+			var details map[string]any
 			if json.Unmarshal(usageDetails, &details) == nil {
 				inv.UsageDetails = mapToProtoStruct(details)
 			}
@@ -3186,7 +3384,7 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 
 	// Build placeholder string for IN clause
 	placeholders := make([]string, len(clusterIDs))
-	args := make([]interface{}, len(clusterIDs))
+	args := make([]any, len(clusterIDs))
 	for i, id := range clusterIDs {
 		placeholders[i] = fmt.Sprintf("$%d", i+1)
 		args[i] = id
@@ -3425,7 +3623,7 @@ func (s *PurserServer) grantClusterAccessForKind(ctx context.Context, tenantID, 
 		return status.Error(codes.FailedPrecondition, "quartermaster client not configured")
 	}
 	if kind == commercialKindPlatformOfficial {
-		if err := s.quartermasterClient.BootstrapClusterAccess(ctx, tenantID, clusterID); err != nil {
+		if err := s.quartermasterClient.BootstrapClusterAccess(ctx, tenantID, clusterID, nil); err != nil {
 			return status.Errorf(codes.Internal, "grant platform cluster access: %v", err)
 		}
 		return nil
@@ -3598,7 +3796,7 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 		       default_quotas, created_at, updated_at
 		FROM purser.cluster_pricing
 	`
-	var args []interface{}
+	var args []any
 	if ownerTenantID != "" {
 		// Get cluster IDs owned by this tenant via Quartermaster gRPC (not direct DB access)
 		if s.quartermasterClient == nil {
@@ -4083,7 +4281,7 @@ func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *
 
 	// Base query with tier filter
 	baseWhere := "WHERE required_tier_level <= $1"
-	args := []interface{}{tenantTierLevel}
+	args := []any{tenantTierLevel}
 	argIdx := 2
 
 	// Get total count
@@ -4192,10 +4390,10 @@ func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *
 }
 
 // jsonToMap is a helper to convert JSON bytes to map for structpb
-func jsonToMap(data []byte) map[string]interface{} {
-	var m map[string]interface{}
+func jsonToMap(data []byte) map[string]any {
+	var m map[string]any
 	if err := json.Unmarshal(data, &m); err != nil {
-		return make(map[string]interface{})
+		return make(map[string]any)
 	}
 	return m
 }
@@ -4330,7 +4528,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 
 // unaryInterceptor logs gRPC requests
 func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		start := time.Now()
 		resp, err := handler(ctx, req)
 		logger.WithFields(logging.Fields{
@@ -4516,7 +4714,7 @@ func (s *PurserServer) ensureTierClusterAccess(ctx context.Context, tenantID str
 		}
 		eligibleClusterIDs = append(eligibleClusterIDs, clusterID)
 
-		if subErr := s.quartermasterClient.BootstrapClusterAccess(ctx, tenantID, clusterID); subErr != nil {
+		if subErr := s.quartermasterClient.BootstrapClusterAccess(ctx, tenantID, clusterID, nil); subErr != nil {
 			s.logger.WithError(subErr).WithFields(logging.Fields{
 				"tenant_id":  tenantID,
 				"cluster_id": clusterID,
@@ -4927,7 +5125,7 @@ func (s *PurserServer) recordBalanceTransaction(
 		if err != nil {
 			s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to check/reactivate suspended subscription")
 		} else if rowsAffected, _ := result.RowsAffected(); rowsAffected > 0 {
-			s.logger.WithFields(map[string]interface{}{
+			s.logger.WithFields(map[string]any{
 				"tenant_id":        tenantID,
 				"new_balance":      newBalance,
 				"transaction_type": txType,
@@ -4942,7 +5140,7 @@ func (s *PurserServer) recordBalanceTransaction(
 					if err != nil {
 						s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to invalidate tenant cache after reactivation")
 					} else {
-						s.logger.WithFields(map[string]interface{}{
+						s.logger.WithFields(map[string]any{
 							"tenant_id":           tenantID,
 							"entries_invalidated": resp.EntriesInvalidated,
 						}).Info("Invalidated media plane cache after reactivation")
@@ -4978,7 +5176,7 @@ func (s *PurserServer) ListBalanceTransactions(ctx context.Context, req *pb.List
 		FROM purser.balance_transactions
 		WHERE tenant_id = $1
 	`
-	args := []interface{}{tenantID}
+	args := []any{tenantID}
 	argIdx := 2
 
 	if req.TransactionType != nil && *req.TransactionType != "" {
@@ -5158,18 +5356,18 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 // GetPendingTopup returns the status of a pending top-up
 func (s *PurserServer) GetPendingTopup(ctx context.Context, req *pb.GetPendingTopupRequest) (*pb.PendingTopup, error) {
 	var query string
-	var args []interface{}
+	var args []any
 
 	if req.GetTopupId() != "" {
 		query = `SELECT id, tenant_id, provider, checkout_id, amount_cents, currency,
 		         status, expires_at, completed_at, balance_transaction_id, created_at, updated_at
 		         FROM purser.pending_topups WHERE id = $1`
-		args = []interface{}{req.GetTopupId()}
+		args = []any{req.GetTopupId()}
 	} else if req.GetCheckoutId() != "" && req.GetProvider() != "" {
 		query = `SELECT id, tenant_id, provider, checkout_id, amount_cents, currency,
 		         status, expires_at, completed_at, balance_transaction_id, created_at, updated_at
 		         FROM purser.pending_topups WHERE provider = $1 AND checkout_id = $2`
-		args = []interface{}{req.GetProvider(), req.GetCheckoutId()}
+		args = []any{req.GetProvider(), req.GetCheckoutId()}
 	} else {
 		return nil, status.Error(codes.InvalidArgument, "topup_id or (provider + checkout_id) required")
 	}
@@ -5214,7 +5412,7 @@ func (s *PurserServer) ListPendingTopups(ctx context.Context, req *pb.ListPendin
 	query := `SELECT id, tenant_id, provider, checkout_id, amount_cents, currency,
 	          status, expires_at, completed_at, balance_transaction_id, created_at, updated_at
 	          FROM purser.pending_topups WHERE tenant_id = $1`
-	args := []interface{}{tenantID}
+	args := []any{tenantID}
 
 	if req.Status != nil && *req.Status != "" {
 		query += " AND status = $2"
@@ -5618,6 +5816,17 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidR
 	eligibleClusters, primaryCluster, clusterErr := s.ensureTierClusterAccess(ctx, tenantID, tierLevel)
 	if clusterErr != nil {
 		s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Warn("Failed to re-evaluate cluster access after promotion")
+	}
+
+	// Invalidate downstream caches so the new tier's caps + allowance state
+	// propagate to Foghorn's streamContext on the next admission. Same
+	// mechanism as UpdateSubscription / balance-change paths.
+	if s.commodoreClient != nil {
+		invalidateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, invErr := s.commodoreClient.InvalidateTenantCache(invalidateCtx, tenantID, "tier_changed"); invErr != nil {
+			s.logger.WithError(invErr).WithField("tenant_id", tenantID).Warn("Failed to invalidate tenant cache on promote-to-paid")
+		}
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -6317,7 +6526,7 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *pb.UpdateB
 
 	// Build dynamic update query based on provided fields
 	updates := []string{}
-	args := []interface{}{}
+	args := []any{}
 	argIdx := 1
 
 	if req.Email != nil {
@@ -6545,7 +6754,7 @@ func (s *PurserServer) SettleX402Payment(ctx context.Context, req *pb.SettleX402
 		if err != nil {
 			s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to check/reactivate suspended subscription after x402 top-up")
 		} else if rowsAffected, _ := res.RowsAffected(); rowsAffected > 0 {
-			s.logger.WithFields(map[string]interface{}{
+			s.logger.WithFields(map[string]any{
 				"tenant_id":   tenantID,
 				"new_balance": result.NewBalanceCents,
 			}).Info("Reactivated suspended tenant after x402 top-up")
@@ -6558,7 +6767,7 @@ func (s *PurserServer) SettleX402Payment(ctx context.Context, req *pb.SettleX402
 					if err != nil {
 						s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to invalidate tenant cache after x402 reactivation")
 					} else {
-						s.logger.WithFields(map[string]interface{}{
+						s.logger.WithFields(map[string]any{
 							"tenant_id":           tenantID,
 							"entries_invalidated": resp.EntriesInvalidated,
 						}).Info("Invalidated media plane cache after x402 reactivation")
@@ -6605,7 +6814,7 @@ func (s *PurserServer) GetTenantX402Address(ctx context.Context, req *pb.GetTena
 // ============================================================================
 
 // parseUsageDetailsToSummary extracts typed UsageSummary from usage_details JSON
-func parseUsageDetailsToSummary(usageDetails map[string]interface{}, tenantID string, periodStart, periodEnd *timestamppb.Timestamp) *pb.UsageSummary {
+func parseUsageDetailsToSummary(usageDetails map[string]any, tenantID string, periodStart, periodEnd *timestamppb.Timestamp) *pb.UsageSummary {
 	if usageDetails == nil {
 		return nil
 	}
@@ -6748,20 +6957,20 @@ func pricingLabelFor(pricingSource, clusterKind string) string {
 }
 
 // parseGeoBreakdown extracts CountryMetrics from usage_details
-func parseGeoBreakdown(usageDetails map[string]interface{}) []*pb.CountryMetrics {
+func parseGeoBreakdown(usageDetails map[string]any) []*pb.CountryMetrics {
 	geoRaw, ok := usageDetails["geo_breakdown"]
 	if !ok {
 		return nil
 	}
 
-	geoList, ok := geoRaw.([]interface{})
+	geoList, ok := geoRaw.([]any)
 	if !ok {
 		return nil
 	}
 
 	var result []*pb.CountryMetrics
 	for _, item := range geoList {
-		geoMap, ok := item.(map[string]interface{})
+		geoMap, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -6775,7 +6984,7 @@ func parseGeoBreakdown(usageDetails map[string]interface{}) []*pb.CountryMetrics
 	return result
 }
 
-func floatFromUsage(m map[string]interface{}, key string) float64 {
+func floatFromUsage(m map[string]any, key string) float64 {
 	if m == nil {
 		return 0
 	}
@@ -6802,7 +7011,7 @@ func floatFromUsage(m map[string]interface{}, key string) float64 {
 	}
 }
 
-func stringFromUsage(m map[string]interface{}, key string) string {
+func stringFromUsage(m map[string]any, key string) string {
 	if m == nil {
 		return ""
 	}

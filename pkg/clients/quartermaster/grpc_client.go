@@ -170,10 +170,16 @@ func (c *GRPCClient) ResolveTenantAliases(ctx context.Context, aliases []string)
 // from a service-token caller. Used by sibling services' bootstrap subcommands
 // (Purser today) instead of SubscribeToCluster, which is tenant-context-only.
 // Idempotent at the server: re-running upserts the same row.
-func (c *GRPCClient) BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string) error {
+//
+// resourceLimits is optional; when non-nil, Quartermaster seeds an
+// access-specific override onto tenant_cluster_access.resource_limits via
+// COALESCE. Plan-level Free caps are resolved by Purser tier entitlements, so
+// normal platform bootstrap passes nil.
+func (c *GRPCClient) BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *pb.TenantResourceLimits) error {
 	_, err := c.cluster.BootstrapClusterAccess(ctx, &pb.BootstrapClusterAccessRequest{
-		TenantId:  tenantID,
-		ClusterId: clusterID,
+		TenantId:       tenantID,
+		ClusterId:      clusterID,
+		ResourceLimits: resourceLimits,
 	})
 	return err
 }

@@ -166,7 +166,11 @@ func runBootstrapApply(args []string) int {
 func applyPostCommitOp(ctx context.Context, client *qmclient.GRPCClient, op bootstrap.PostCommitOp) error {
 	switch op.Kind {
 	case bootstrap.PostCommitGrantClusterAccess:
-		return client.BootstrapClusterAccess(ctx, op.TenantID, op.ClusterID)
+		// Bootstrap CLI runs admin/system-tenant grants; per-tenant runtime
+		// caps come from Purser tier entitlements during admission, not from
+		// tenant_cluster_access. Passing nil keeps that access row empty unless
+		// an operator later adds a tenant/cluster-specific override.
+		return client.BootstrapClusterAccess(ctx, op.TenantID, op.ClusterID, nil)
 	case bootstrap.PostCommitSetPrimaryCluster:
 		clusterID := op.ClusterID
 		_, err := client.UpdateTenant(ctx, &pb.UpdateTenantRequest{

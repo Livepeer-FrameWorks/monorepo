@@ -165,6 +165,25 @@ func TestValidateStreamKey(t *testing.T) {
 	}
 }
 
+func TestMergeTenantResourceLimitsPreservesPlanCapsWhenOverrideIsPartial(t *testing.T) {
+	merged := mergeTenantResourceLimits(
+		&pb.TenantResourceLimits{MaxStreams: 3, MaxViewers: 200},
+		&pb.TenantResourceLimits{MaxStreams: 5},
+	)
+	if merged.GetMaxStreams() != 5 || merged.GetMaxViewers() != 200 {
+		t.Fatalf("merged limits = streams:%d viewers:%d, want streams:5 viewers:200",
+			merged.GetMaxStreams(), merged.GetMaxViewers())
+	}
+}
+
+func TestMergeTenantResourceLimitsAllowsOverrideOnly(t *testing.T) {
+	merged := mergeTenantResourceLimits(nil, &pb.TenantResourceLimits{MaxViewers: 50})
+	if merged.GetMaxStreams() != 0 || merged.GetMaxViewers() != 50 {
+		t.Fatalf("merged limits = streams:%d viewers:%d, want streams:0 viewers:50",
+			merged.GetMaxStreams(), merged.GetMaxViewers())
+	}
+}
+
 func TestValidateAPIToken(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {

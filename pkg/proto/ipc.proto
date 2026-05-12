@@ -476,6 +476,14 @@ enum IngestErrorCode {
   INGEST_ERROR_INTERNAL = 4;
   INGEST_ERROR_TIMEOUT = 5;
   INGEST_ERROR_DUPLICATE_INGEST = 6;
+  // Free-tier billing allowance exhausted AND cluster is at load — admission
+  // gated to preserve capacity for paying tenants. Tenant should upgrade or
+  // retry off-peak; existing live streams are not killed.
+  INGEST_ERROR_FREE_TIER_EXHAUSTED = 7;
+  // Tenant is at their per-tenant concurrent-stream cap. Plan defaults come
+  // from Purser tier entitlements; Quartermaster cluster access may override.
+  // Distinct from FREE_TIER_EXHAUSTED — this fires regardless of cluster load.
+  INGEST_ERROR_TENANT_STREAM_CAP = 8;
 }
 
 message StorageSnapshot {

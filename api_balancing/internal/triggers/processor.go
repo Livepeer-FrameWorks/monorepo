@@ -47,6 +47,18 @@ type streamContext struct {
 	RequiresAuth      bool                    // true when this playback object has a protected playback policy
 	RequiresAuthKnown bool                    // false means the local marker could not be resolved
 	DVRPolicy         *pb.DVRPolicy           // tier DVR policy bundle (live window, segment, max entries)
+	// Broadcaster billing-allowance state, cached at PUSH_REWRITE so USER_NEW
+	// can apply the viewer-side load gate without a fresh Commodore round-trip.
+	// IsFreeTier is the tier-identity flag from Purser (tier_name == 'free'),
+	// not derived from per-meter unit_price. AllowanceExhausted is true when
+	// any free-tier metered allowance is past its included_quantity.
+	IsFreeTier         bool
+	AllowanceExhausted bool
+	// Per-tenant runtime caps from Quartermaster, cached so USER_NEW can
+	// enforce max_viewers without re-fetching. 0 means "unlimited" for that
+	// dimension.
+	MaxStreams int32
+	MaxViewers int32
 }
 
 // PeerNotifier is the single federation interface for the trigger processor.
@@ -1008,6 +1020,49 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		return "", true, ingesterrors.New(pb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED, "payment required - please top up your balance")
 	}
 
+	// Load-aware free-tier admission: if the tenant has exhausted a free-tier
+	// allowance (delivered_minutes today) AND the cluster is under load, deny
+	// new ingest so paying tenants keep capacity. Idle clusters keep admitting
+	// over-allowance free tenants — exhaustion alone is not a hard cap.
+	// Active streams are never killed here; only new PUSH_REWRITE is gated.
+	if reason, blocked := p.evaluateFreeTierAdmission(streamValidation, ingestClusterID); blocked {
+		p.logger.WithFields(logging.Fields{
+			"stream_key": pushRewrite.GetStreamName(),
+			"tenant_id":  streamValidation.TenantId,
+			"reason":     reason,
+		}).Warn("Rejecting ingest: free-tier allowance exhausted under cluster load")
+		return "", true, ingesterrors.New(pb.IngestErrorCode_INGEST_ERROR_FREE_TIER_EXHAUSTED, reason)
+	}
+
+	// Per-tenant concurrent-stream cap. Hard limit independent of cluster
+	// load — once a tenant has max_streams active, the next PUSH_REWRITE is
+	// rejected regardless of load. Counters live in Foghorn's tenant_capacity
+	// state; cap value comes from Purser tier entitlements, optionally
+	// overridden by Quartermaster cluster access, then forwarded through
+	// Commodore.ValidateStreamKey. A re-fire of an already-tracked stream is
+	// admitted (the count doesn't change).
+	registerTenantStream := false
+	if caps := streamValidation.GetTenantResourceLimits(); caps.GetMaxStreams() > 0 {
+		tc := state.DefaultTenantCapacity()
+		internalName := streamValidation.GetInternalName()
+		tc.ReconcileStreams(streamValidation.TenantId, liveInternalNamesForTenant(streamValidation.TenantId))
+		current := tc.CountStreams(streamValidation.TenantId)
+		alreadyTracked := tc.HasStream(streamValidation.TenantId, internalName)
+		if !alreadyTracked && int32(current) >= caps.GetMaxStreams() {
+			p.logger.WithFields(logging.Fields{
+				"stream_key":  pushRewrite.GetStreamName(),
+				"tenant_id":   streamValidation.TenantId,
+				"current":     current,
+				"max_streams": caps.GetMaxStreams(),
+			}).Warn("Rejecting ingest: tenant concurrent-stream cap reached")
+			return "", true, ingesterrors.New(
+				pb.IngestErrorCode_INGEST_ERROR_TENANT_STREAM_CAP,
+				fmt.Sprintf("concurrent stream cap reached (%d/%d) — close another stream or upgrade", current, caps.GetMaxStreams()),
+			)
+		}
+		registerTenantStream = true
+	}
+
 	// Cross-cluster dedup: reject if stream is already live on a peer cluster
 	if p.peerNotifier != nil {
 		if remoteCluster, ok := p.peerNotifier.IsStreamLiveOnPeer(context.Background(), streamValidation.InternalName, streamValidation.TenantId); ok {
@@ -1019,22 +1074,32 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		}
 	}
 
+	if registerTenantStream {
+		state.DefaultTenantCapacity().RegisterStream(streamValidation.TenantId, streamValidation.GetInternalName())
+	}
+
 	// Cache stream context (tenant + user + billing info)
 	if p.streamCache != nil {
+		isFree, exhausted := freeTierAllowanceState(streamValidation.GetAllowances())
+		caps := streamValidation.GetTenantResourceLimits()
 		info := streamContext{
-			TenantID:          streamValidation.TenantId,
-			UserID:            streamValidation.UserId,
-			StreamID:          streamValidation.StreamId,
-			Source:            "validate_stream_key",
-			UpdatedAt:         time.Now(),
-			BillingModel:      streamValidation.BillingModel,
-			IsSuspended:       streamValidation.IsSuspended,
-			IsBalanceNegative: streamValidation.IsBalanceNegative,
-			OfficialClusterID: streamValidation.GetOfficialClusterId(),
-			OriginClusterID:   streamValidation.GetOriginClusterId(),
-			ClusterPeers:      streamValidation.GetClusterPeers(),
-			ProcessesJSON:     streamValidation.GetProcessesJson(),
-			DVRPolicy:         streamValidation.GetDvrPolicy(),
+			TenantID:           streamValidation.TenantId,
+			UserID:             streamValidation.UserId,
+			StreamID:           streamValidation.StreamId,
+			Source:             "validate_stream_key",
+			UpdatedAt:          time.Now(),
+			BillingModel:       streamValidation.BillingModel,
+			IsSuspended:        streamValidation.IsSuspended,
+			IsBalanceNegative:  streamValidation.IsBalanceNegative,
+			OfficialClusterID:  streamValidation.GetOfficialClusterId(),
+			OriginClusterID:    streamValidation.GetOriginClusterId(),
+			ClusterPeers:       streamValidation.GetClusterPeers(),
+			ProcessesJSON:      streamValidation.GetProcessesJson(),
+			DVRPolicy:          streamValidation.GetDvrPolicy(),
+			MaxStreams:         caps.GetMaxStreams(),
+			MaxViewers:         caps.GetMaxViewers(),
+			IsFreeTier:         isFree,
+			AllowanceExhausted: exhausted,
 		}
 		if p.peerNotifier != nil && len(info.ClusterPeers) > 0 {
 			p.peerNotifier.NotifyPeers(info.ClusterPeers, streamValidation.TenantId)
@@ -1906,6 +1971,58 @@ func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error)
 		trigger.OriginClusterId = &info.OriginClusterID
 	}
 
+	// Viewer-side load gate: when the broadcaster is on free tier and the
+	// serving cluster is under load, deny new viewers. Over-allowance free
+	// streams are gated sooner (80%) than within-allowance free streams
+	// (95% redline). Paying broadcasters' viewers are always admitted. The
+	// broadcaster's allowance state was cached in streamContext at
+	// PUSH_REWRITE time so no Commodore round-trip is needed here.
+	//
+	// Load is evaluated on the serving cluster (where the viewer hits an
+	// edge) — that's where the egress bandwidth and CPU live. trigger
+	// ClusterId is set by the firing edge; fall back to the local Foghorn
+	// instance's cluster, then to the stream's origin cluster.
+	viewerCluster := strings.TrimSpace(trigger.GetClusterId())
+	if viewerCluster == "" {
+		viewerCluster = strings.TrimSpace(p.clusterID)
+	}
+	if viewerCluster == "" {
+		viewerCluster = info.OriginClusterID
+	}
+	if reason, blocked := p.evaluateViewerAdmission(info, viewerCluster); blocked {
+		p.logger.WithFields(logging.Fields{
+			"session_id":    userNew.GetSessionId(),
+			"internal_name": internalName,
+			"tenant_id":     info.TenantID,
+			"cluster_id":    viewerCluster,
+			"reason":        reason,
+		}).Warn("Rejecting viewer: free-tier under cluster load")
+		return "false", false, nil
+	}
+
+	// Per-tenant concurrent-viewer cap. Hard limit, independent of cluster
+	// load. Set semantics on session_id makes re-fires (USER_NEW after
+	// reconnect with the same session_id) idempotent — already-tracked
+	// sessions are admitted without consuming a fresh slot. Cap value is the
+	// broadcaster's tenant max_viewers, cached in streamContext at
+	// PUSH_REWRITE.
+	if info.TenantID != "" && info.MaxViewers > 0 {
+		tc := state.DefaultTenantCapacity()
+		sessionID := userNew.GetSessionId()
+		current := tc.CountViewers(info.TenantID)
+		alreadyTracked := tc.HasViewer(info.TenantID, sessionID)
+		if !alreadyTracked && int32(current) >= info.MaxViewers {
+			p.logger.WithFields(logging.Fields{
+				"session_id":  sessionID,
+				"tenant_id":   info.TenantID,
+				"current":     current,
+				"max_viewers": info.MaxViewers,
+			}).Warn("Rejecting viewer: tenant concurrent-viewer cap reached")
+			return "false", false, nil
+		}
+		tc.RegisterViewer(info.TenantID, sessionID)
+	}
+
 	// Enrich ViewerConnect payload directly
 	userNew.NodeId = func() *string { s := trigger.GetNodeId(); return &s }()
 
@@ -2062,6 +2179,13 @@ func (p *Processor) handleStreamEnd(trigger *pb.MistTrigger) (string, bool, erro
 	// Update state offline
 	state.DefaultManager().SetOffline(internalName, nodeID)
 
+	// Decrement the broadcaster's concurrent-stream count. Idempotent: a
+	// stream not in the set is a no-op, so duplicate STREAM_END fires are
+	// safe. TenantID may be empty when streamContext is missing (e.g. cache
+	// expired before STREAM_END arrived); the helper short-circuits in that
+	// case.
+	state.DefaultTenantCapacity().UnregisterStream(trigger.GetTenantId(), internalName)
+
 	// Broadcast stream-offline to federated peers + clean up stream-scoped peers
 	if p.peerNotifier != nil {
 		p.peerNotifier.BroadcastStreamLifecycle(internalName, trigger.GetTenantId(), false)
@@ -2114,6 +2238,10 @@ func (p *Processor) handleUserEnd(trigger *pb.MistTrigger) (string, bool, error)
 	if info.OriginClusterID != "" {
 		trigger.OriginClusterId = &info.OriginClusterID
 	}
+
+	// Decrement the broadcaster's concurrent-viewer count. Set semantics
+	// make duplicate USER_END fires safe (no-op for unknown sessions).
+	state.DefaultTenantCapacity().UnregisterViewer(info.TenantID, userEnd.GetSessionId())
 
 	userEnd.NodeId = func() *string { s := trigger.GetNodeId(); return &s }()
 
@@ -3284,4 +3412,209 @@ func (p *Processor) updatePushTargetStatus(streamName, targetURI, status string,
 			"error":       err,
 		}).Warn("Failed to update push target status in Commodore")
 	}
+}
+
+// admissionDecision is the load-aware outcome for free-tier traffic.
+type admissionDecision int
+
+const (
+	admissionAdmit admissionDecision = iota
+	admissionRejectOverAllowance
+	admissionRejectRedline
+)
+
+// loadThresholds parameterizes the three-tier free-tier admission policy.
+//   - rejectOverAllowance: load fraction at which free tenants over their
+//     allowance are denied new traffic. Lower = sooner to reject.
+//   - rejectAnyFree: load fraction at which any free traffic is denied (even
+//     within allowance). The redline above which paying tenants take priority.
+type loadThresholds struct {
+	rejectOverAllowance float64
+	rejectAnyFree       float64
+}
+
+// freeTierAllowanceState reduces the per-meter allowance list to two flags
+// used by the load gate: is the tenant on the free tier, and have they
+// exhausted any free-tier allowance. IsFreeTier comes from tier-identity in
+// Purser (tier_name == 'free'); a paid tenant with a zero-priced meter is
+// not "free" for admission purposes.
+func freeTierAllowanceState(allowances []*pb.MeterAllowance) (isFreeTier, exhausted bool) {
+	for _, a := range allowances {
+		if a == nil {
+			continue
+		}
+		if a.GetIsFreeTier() {
+			isFreeTier = true
+			if a.GetExhausted() {
+				exhausted = true
+				return
+			}
+		}
+	}
+	return
+}
+
+func liveInternalNamesForTenant(tenantID string) []string {
+	streams := state.DefaultManager().GetStreamsByTenant(tenantID)
+	names := make([]string, 0, len(streams))
+	for _, stream := range streams {
+		if stream != nil && stream.InternalName != "" {
+			names = append(names, stream.InternalName)
+		}
+	}
+	return names
+}
+
+func envFloatInRange(key string, fallback, min, max float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil || parsed <= min || parsed >= max {
+		return fallback
+	}
+	return parsed
+}
+
+// ingestLoadThresholds returns the broadcaster-admission policy. Defaults:
+//   - over-allowance free is rejected at 50% cluster load
+//   - any free (incl. within-allowance) is rejected at 95% (redline)
+//
+// Configurable via FOGHORN_INGEST_REJECT_OVER_ALLOWANCE_LOAD and
+// FOGHORN_INGEST_REJECT_FREE_LOAD.
+func ingestLoadThresholds() loadThresholds {
+	return loadThresholds{
+		rejectOverAllowance: envFloatInRange("FOGHORN_INGEST_REJECT_OVER_ALLOWANCE_LOAD", 0.5, 0, 1),
+		rejectAnyFree:       envFloatInRange("FOGHORN_INGEST_REJECT_FREE_LOAD", 0.95, 0, 1),
+	}
+}
+
+// viewerLoadThresholds returns the viewer-admission policy. Defaults:
+//   - over-allowance broadcaster's viewers rejected at 80%
+//   - any viewer of a free broadcaster rejected at 95% (redline)
+//
+// Viewers are cheaper individually but multiply faster than ingest, so the
+// over-allowance reject point is higher than ingest's 50%.
+func viewerLoadThresholds() loadThresholds {
+	return loadThresholds{
+		rejectOverAllowance: envFloatInRange("FOGHORN_VIEWER_REJECT_OVER_ALLOWANCE_LOAD", 0.8, 0, 1),
+		rejectAnyFree:       envFloatInRange("FOGHORN_VIEWER_REJECT_FREE_LOAD", 0.95, 0, 1),
+	}
+}
+
+// applyLoadGate evaluates the three-tier policy. Paying tenants are always
+// admitted. Free tenants over their allowance are rejected once load crosses
+// rejectOverAllowance. At the redline (rejectAnyFree), all free traffic is
+// rejected regardless of allowance state.
+func applyLoadGate(loadFrac float64, isFreeTier, exhausted bool, thresh loadThresholds) admissionDecision {
+	if !isFreeTier {
+		return admissionAdmit
+	}
+	if loadFrac >= thresh.rejectAnyFree {
+		return admissionRejectRedline
+	}
+	if exhausted && loadFrac >= thresh.rejectOverAllowance {
+		return admissionRejectOverAllowance
+	}
+	return admissionAdmit
+}
+
+// clusterLoadFraction returns the cluster's load (0.0–1.0) and whether a
+// signal is present. Wraps ClusterLoad so callers don't have to convert the
+// percent and check the sample count themselves.
+func clusterLoadFraction(clusterID string) (frac float64, ok bool) {
+	if strings.TrimSpace(clusterID) == "" {
+		return 0, false
+	}
+	pct, samples := state.DefaultManager().ClusterLoad(clusterID)
+	if samples == 0 {
+		return 0, false
+	}
+	return pct / 100.0, true
+}
+
+// evaluateFreeTierAdmission applies the three-tier ingest gate. Free tenants
+// past their allowance are rejected at 50% cluster load; all free tenants are
+// rejected at the 95% redline. Existing live streams are never killed —
+// rejection applies only to new PUSH_REWRITE admissions.
+func (p *Processor) evaluateFreeTierAdmission(streamValidation *pb.ValidateStreamKeyResponse, clusterID string) (string, bool) {
+	if streamValidation == nil {
+		return "", false
+	}
+	isFree, exhausted := freeTierAllowanceState(streamValidation.GetAllowances())
+	if !isFree {
+		return "", false
+	}
+
+	loadFrac, ok := clusterLoadFraction(clusterID)
+	if !ok {
+		// No cluster context or no load signal — admit and log. Caller can
+		// distinguish in audit but the policy treats both the same: fail-open.
+		p.logger.WithFields(logging.Fields{
+			"tenant_id":  streamValidation.GetTenantId(),
+			"cluster_id": clusterID,
+			"exhausted":  exhausted,
+		}).Info("Admitted free-tier ingest: no cluster load signal")
+		return "", false
+	}
+
+	thresh := ingestLoadThresholds()
+	switch applyLoadGate(loadFrac, isFree, exhausted, thresh) {
+	case admissionAdmit:
+		p.logger.WithFields(logging.Fields{
+			"tenant_id":  streamValidation.GetTenantId(),
+			"cluster_id": clusterID,
+			"load_frac":  loadFrac,
+			"exhausted":  exhausted,
+			"thresholds": fmt.Sprintf("over=%.2f redline=%.2f", thresh.rejectOverAllowance, thresh.rejectAnyFree),
+		}).Info("Admitted free-tier ingest: cluster has spare capacity")
+		return "", false
+	case admissionRejectOverAllowance:
+		return fmt.Sprintf(
+			"free-tier allowance exhausted and cluster is at load (%.0f%%, threshold %.0f%%) — upgrade or retry off-peak",
+			loadFrac*100,
+			thresh.rejectOverAllowance*100,
+		), true
+	case admissionRejectRedline:
+		return fmt.Sprintf(
+			"cluster at redline (%.0f%%, threshold %.0f%%); free-tier ingest denied to preserve capacity for paying tenants — upgrade or retry off-peak",
+			loadFrac*100,
+			thresh.rejectAnyFree*100,
+		), true
+	}
+	return "", false
+}
+
+// evaluateViewerAdmission applies the viewer-side three-tier gate. The
+// broadcaster's tenant identity governs the decision (a viewer connecting to
+// a free-tier stream is what consumes free-tier delivered minutes).
+// Broadcaster state lives in the stream context cache populated at
+// PUSH_REWRITE; clusterID is the cluster serving this viewer.
+func (p *Processor) evaluateViewerAdmission(ctx streamContext, clusterID string) (string, bool) {
+	if !ctx.IsFreeTier {
+		return "", false
+	}
+	loadFrac, ok := clusterLoadFraction(clusterID)
+	if !ok {
+		return "", false
+	}
+	thresh := viewerLoadThresholds()
+	switch applyLoadGate(loadFrac, ctx.IsFreeTier, ctx.AllowanceExhausted, thresh) {
+	case admissionAdmit:
+		return "", false
+	case admissionRejectOverAllowance:
+		return fmt.Sprintf(
+			"viewer denied: stream's free-tier allowance is exhausted and cluster is at load (%.0f%%, threshold %.0f%%)",
+			loadFrac*100,
+			thresh.rejectOverAllowance*100,
+		), true
+	case admissionRejectRedline:
+		return fmt.Sprintf(
+			"viewer denied: cluster at redline (%.0f%%, threshold %.0f%%); free-tier viewers denied to preserve capacity for paying tenants",
+			loadFrac*100,
+			thresh.rejectAnyFree*100,
+		), true
+	}
+	return "", false
 }

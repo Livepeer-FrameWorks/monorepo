@@ -27,8 +27,8 @@
 #     {{gateway_url}} placeholders that Foghorn substitutes at cache/dispatch
 #     time from its local cluster's Livepeer gateway.
 #
-# Enforcement limits (max_streams, max_viewers, bandwidth caps) live in
-# Quartermaster tenant cluster access — NOT here. This file is BILLING only.
+# Tenant fair-use limits live in entitlements because they follow the plan, not
+# the media cluster. Cluster capacity itself remains dynamic Foghorn edge state.
 # Stripe IDs (stripe_product_id, stripe_price_id_*) are filled by Purser's
 # startup Stripe sync; the reconciler leaves them alone if already populated.
 
@@ -77,7 +77,7 @@ tiers:
     currency: EUR
     billing_period: monthly
     features:
-      recording: false
+      recording: true
       analytics: true
       api_access: true
       support_level: community
@@ -91,13 +91,25 @@ tiers:
       dvr_default_segment_duration_seconds: 6
       dvr_max_entries: 600
       dvr_allow_cluster_extension: false
+      # storage_limit_gb is the hard runtime cap on current durable bytes.
+      # The matching pricing rule (average_storage_gb included_quantity: 10)
+      # is for invoice-line visibility only — billing is time-averaged, this
+      # entitlement is point-in-time. New durable writes (recordings, VOD
+      # uploads, clip exports) are rejected once a tenant's current artifact
+      # bytes meet this cap. Retention sweeper drains old content naturally.
+      storage_limit_gb: 10
+      # Hard per-tenant fair-use caps for Free. Paid tiers omit these
+      # entitlements unless a tenant-specific override is needed.
+      max_concurrent_streams: 3
+      max_concurrent_viewers: 200
     pricing_rules:
       - meter: delivered_minutes
         model: tiered_graduated
         included_quantity: 10000
         unit_price: "0"
       - meter: average_storage_gb
-        model: all_usage
+        model: tiered_graduated
+        included_quantity: 10
         unit_price: "0"
       - meter: ai_gpu_hours
         model: tiered_graduated

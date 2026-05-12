@@ -203,10 +203,10 @@ func TestServiceComposeVarsInstallsSkipperSources(t *testing.T) {
 	if !ok {
 		t.Fatalf("compose_stack_files got %T, want map[string]string", vars["compose_stack_files"])
 	}
-	if _, ok := files["skipper/sitemaps/frameworks.txt"]; !ok {
+	if _, present := files["skipper/sitemaps/frameworks.txt"]; !present {
 		t.Fatalf("expected frameworks sitemap source file, got keys %v", reflect.ValueOf(files).MapKeys())
 	}
-	if _, ok := files["skipper/faq/protocol-selection.md"]; !ok {
+	if _, present := files["skipper/faq/protocol-selection.md"]; !present {
 		t.Fatalf("expected local FAQ source file, got keys %v", reflect.ValueOf(files).MapKeys())
 	}
 

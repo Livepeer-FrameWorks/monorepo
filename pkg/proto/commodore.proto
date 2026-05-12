@@ -231,6 +231,19 @@ message ValidateStreamKeyResponse {
   // applies it on auto-record (record:true) without an extra Commodore
   // round-trip. Manual startDVR resolves the same policy in Commodore.
   shared.DVRPolicy dvr_policy = 17;
+
+  // ===== BILLING ALLOWANCES =====
+  // Per-meter current-period allowance snapshots forwarded from Purser
+  // GetTenantBillingStatus. Foghorn uses these for load-aware admission
+  // (free-tier over-allowance rejected only when cluster is under load).
+  repeated purser.MeterAllowance allowances = 18;
+
+  // ===== RUNTIME RESOURCE CAPS =====
+  // Per-tenant concurrent-stream/viewer caps resolved from Purser tier
+  // entitlements, optionally overridden by Quartermaster cluster access
+  // resource_limits. Forwarded so Foghorn can apply them at trigger time
+  // without another RPC. nil or zero-valued fields mean unlimited.
+  optional quartermaster.TenantResourceLimits tenant_resource_limits = 19;
 }
 
 // ============================================================================

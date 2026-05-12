@@ -674,6 +674,12 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		return nil, status.Error(codes.InvalidArgument, "internal_name is required")
 	}
 
+	// Clip size is not known until export completes; reject only when the
+	// tenant is already at cap. See checkStorageEntitlement docs.
+	if err := s.checkStorageEntitlement(ctx, req.TenantId, 0); err != nil {
+		return nil, err
+	}
+
 	format := req.GetFormat()
 	if format == "" {
 		format = "mp4"
@@ -1009,6 +1015,14 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	}
 	if req.TenantId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	// DVR length is unknown at start time; reject only when the tenant is
+	// already at cap. Active recordings finish on their own (no mid-session
+	// kill). See checkStorageEntitlement docs.
+	if err := s.checkStorageEntitlement(ctx, req.TenantId, 0); err != nil {
+		s.emitDVRStartFailure(req, err.Error())
+		return nil, err
 	}
 
 	dvrCluster := s.enrichClusterID(req.GetClusterId(), req.InternalName, req.GetTenantId())
@@ -2364,6 +2378,12 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 	}
 	if req.GetInternalName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "internal_name is required")
+	}
+
+	// Upload size is known up-front; reject when the upload would push the
+	// tenant over their storage cap. See checkStorageEntitlement docs.
+	if err := s.checkStorageEntitlement(ctx, req.TenantId, req.SizeBytes); err != nil {
+		return nil, err
 	}
 
 	// VOD multipart upload is local-mint only: when the resolver picks a
@@ -4012,4 +4032,73 @@ func authorizeNodeLifecycle(ctx context.Context, ns *state.NodeState) error {
 		return status.Error(codes.PermissionDenied, "node is not owned by this tenant")
 	}
 	return nil
+}
+
+// checkStorageEntitlement rejects new durable artifact writes when the
+// tenant's current artifact bytes (plus any known additionalBytes) would
+// meet or exceed their storage_limit_bytes entitlement. Returns a gRPC
+// ResourceExhausted error on cap breach; nil otherwise.
+//
+// Fails open on Purser/DB errors — admission should not break on infra
+// blips. The cap is per-tenant, point-in-time, and orthogonal to the
+// average_storage_gb billing meter (which is time-averaged and drives
+// invoice lines, not admission).
+func (s *FoghornGRPCServer) checkStorageEntitlement(ctx context.Context, tenantID string, additionalBytes int64) error {
+	if s.purserClient == nil || tenantID == "" {
+		return nil
+	}
+	billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
+	if err != nil || billingStatus == nil {
+		// Fail-open: log and admit. Misbehaving Purser must not block writes.
+		if err != nil {
+			s.logger.WithFields(logging.Fields{
+				"tenant_id": tenantID,
+				"error":     err,
+			}).Warn("Storage entitlement check skipped: failed to resolve billing status")
+		}
+		return nil
+	}
+	limit := billingStatus.GetStorageLimitBytes()
+	if limit <= 0 {
+		return nil
+	}
+
+	var current int64
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(size_bytes), 0)
+		FROM foghorn.artifacts
+		WHERE tenant_id = $1::uuid
+		  AND status NOT IN ('failed', 'expired', 'deleted', 'aborted')
+	`, tenantID).Scan(&current); err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"error":     err,
+		}).Warn("Storage entitlement check skipped: failed to sum tenant artifact bytes")
+		return nil //nolint:nilerr // fail-open: DB outage must not block durable writes
+	}
+
+	return storageCapDecision(current, additionalBytes, limit)
+}
+
+// storageCapDecision returns ResourceExhausted when (current + additional)
+// would breach the cap, or when current already meets it. additionalBytes=0
+// means the caller cannot pre-declare a size (DVR start, clip export) — in
+// that case only the at-or-over-cap rule applies, allowing best-effort writes
+// while the tenant still has headroom. Extracted from checkStorageEntitlement
+// so the policy is unit-testable without Purser/DB mocks.
+func storageCapDecision(currentBytes, additionalBytes, limitBytes int64) error {
+	if limitBytes <= 0 {
+		return nil
+	}
+	overCap := currentBytes >= limitBytes
+	wouldOverCap := additionalBytes > 0 && currentBytes+additionalBytes > limitBytes
+	if !overCap && !wouldOverCap {
+		return nil
+	}
+	return status.Errorf(
+		codes.ResourceExhausted,
+		"storage cap reached: %.2f GB used of %.2f GB limit — delete content or upgrade",
+		float64(currentBytes)/float64(1<<30),
+		float64(limitBytes)/float64(1<<30),
+	)
 }

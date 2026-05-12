@@ -373,8 +373,6 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	estimatedMbps := req.GetEstimatedMbps()
-
 	// Get cluster info with capacity validation
 	// max_streams = 0 means unlimited
 	// max_bandwidth_mbps = 0 means unlimited
@@ -421,55 +419,29 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		resp.PeriscopeUrl = &periscopeURL.String
 	}
 
-	// Check tenant-specific resource limits from tenant_cluster_access
+	// Surface access-specific runtime cap overrides so Foghorn can enforce
+	// them at trigger time. Plan-level Free caps come from Purser tier
+	// entitlements; an empty tenant_cluster_access.resource_limits column
+	// means "no cluster override". Bandwidth caps (max_bandwidth_mbps) are
+	// not enforced runtime today and intentionally not surfaced on the typed
+	// response — they live in the JSONB column as a future hook.
 	var tenantResourceLimits []byte
-	err = s.db.QueryRowContext(ctx, `
+	if err := s.db.QueryRowContext(ctx, `
 		SELECT resource_limits
 		FROM quartermaster.tenant_cluster_access
 		WHERE tenant_id = $1 AND cluster_id = $2 AND is_active = TRUE
-	`, tenantID, primaryClusterID).Scan(&tenantResourceLimits)
-
-	if err == nil && len(tenantResourceLimits) > 0 {
+	`, tenantID, primaryClusterID).Scan(&tenantResourceLimits); err == nil && len(tenantResourceLimits) > 0 {
 		var limits map[string]any
 		if json.Unmarshal(tenantResourceLimits, &limits) == nil {
-			// Check max_streams tenant limit
-			if maxStreams, ok := limits["max_streams"].(float64); ok && maxStreams > 0 {
-				// Count tenant's current streams on this cluster
-				var currentTenantStreams int
-				if err := s.db.QueryRowContext(ctx, `
-					SELECT COUNT(*) FROM quartermaster.service_instances
-					WHERE cluster_id = $1
-					  AND service_id = 'stream'
-					  AND status = 'running'
-					  AND node_id IN (
-					    SELECT node_id FROM quartermaster.infrastructure_nodes WHERE cluster_id = $1
-					  )
-				`, primaryClusterID).Scan(&currentTenantStreams); err != nil {
-					s.logger.WithError(err).Warn("Failed to get current stream count for limit check")
-				}
-
-				// Note: This is a simplified check. In production, you'd want to track
-				// streams per tenant, not total streams on cluster.
-				// For now, we'll just log a warning if limits are configured.
-				if currentTenantStreams >= int(maxStreams) {
-					s.logger.WithFields(logging.Fields{
-						"tenant_id":       tenantID,
-						"cluster_id":      primaryClusterID,
-						"max_streams":     maxStreams,
-						"current_streams": currentTenantStreams,
-					}).Warn("Tenant approaching stream limit")
-				}
+			caps := &pb.TenantResourceLimits{}
+			if v, ok := limits["max_streams"].(float64); ok && v > 0 {
+				caps.MaxStreams = int32(v)
 			}
-
-			// Check max_bandwidth_mbps tenant limit
-			if maxBandwidth, ok := limits["max_bandwidth_mbps"].(float64); ok && maxBandwidth > 0 && estimatedMbps > 0 {
-				// If tenant has bandwidth limit and would exceed it, warn
-				// Full enforcement would require tracking per-tenant bandwidth usage
-				s.logger.WithFields(logging.Fields{
-					"tenant_id":      tenantID,
-					"max_bandwidth":  maxBandwidth,
-					"estimated_mbps": estimatedMbps,
-				}).Debug("Tenant has bandwidth limit configured")
+			if v, ok := limits["max_viewers"].(float64); ok && v > 0 {
+				caps.MaxViewers = int32(v)
+			}
+			if caps.MaxStreams > 0 || caps.MaxViewers > 0 {
+				resp.TenantResourceLimits = caps
 			}
 		}
 	}
@@ -3379,15 +3351,39 @@ func (s *QuartermasterServer) BootstrapClusterAccess(ctx context.Context, req *p
 		return nil, status.Errorf(codes.FailedPrecondition, "cluster %q is not active", clusterID)
 	}
 
+	// resource_limits is only for tenant/cluster-specific overrides. Plan
+	// defaults are resolved by Purser tier entitlements during admission.
+	// COALESCE preserves any prior override on re-bootstrap.
+	var resourceLimitsJSON []byte
+	if lim := req.GetResourceLimits(); lim != nil {
+		// Only encode when at least one cap is set; an all-zero struct means
+		// "no caps configured" — leave the column at its default.
+		if lim.GetMaxStreams() > 0 || lim.GetMaxViewers() > 0 {
+			payload := map[string]int32{}
+			if v := lim.GetMaxStreams(); v > 0 {
+				payload["max_streams"] = v
+			}
+			if v := lim.GetMaxViewers(); v > 0 {
+				payload["max_viewers"] = v
+			}
+			b, err := json.Marshal(payload)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "marshal resource_limits: %v", err)
+			}
+			resourceLimitsJSON = b
+		}
+	}
+
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO quartermaster.tenant_cluster_access
-			(tenant_id, cluster_id, access_level, subscription_status, is_active, granted_at, created_at, updated_at)
-		VALUES ($1::uuid, $2, 'shared', 'active', true, NOW(), NOW(), NOW())
+			(tenant_id, cluster_id, access_level, subscription_status, resource_limits, is_active, granted_at, created_at, updated_at)
+		VALUES ($1::uuid, $2, 'shared', 'active', COALESCE($3::jsonb, '{}'::jsonb), true, NOW(), NOW(), NOW())
 		ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
 			subscription_status = 'active',
 			is_active = true,
+			resource_limits = COALESCE(NULLIF(quartermaster.tenant_cluster_access.resource_limits, '{}'::jsonb), EXCLUDED.resource_limits),
 			updated_at = NOW()
-	`, tenantID, clusterID); err != nil {
+	`, tenantID, clusterID, resourceLimitsJSON); err != nil {
 		return nil, status.Errorf(codes.Internal, "upsert tenant_cluster_access: %v", err)
 	}
 	return &emptypb.Empty{}, nil

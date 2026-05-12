@@ -220,7 +220,7 @@ FROM (VALUES
 '{"recording": true, "analytics": true, "api_access": true, "support_level": "community"}',
 'community', 'none', true, 0, false, true, false),
 ('free', 'Free', 'Self-hosted with Livepeer transcoding. Watermarked player, no SLA.', 0.00, 'EUR',
-'{"recording": false, "analytics": true, "api_access": true, "support_level": "community"}',
+'{"recording": true, "analytics": true, "api_access": true, "support_level": "community"}',
 'community', 'none', true, 1, false, false, true),
 ('supporter', 'Supporter', '120K delivered mins, 10 GPU-hrs, hosted LB, custom subdomain. ~100-300 viewers.', 79.00, 'EUR',
 '{"recording": true, "analytics": true, "api_access": true, "support_level": "basic"}',
@@ -262,6 +262,29 @@ JOIN (VALUES
 ) AS v(tier_name, days) ON v.tier_name = bt.tier_name
 ON CONFLICT (tier_id, key) DO UPDATE SET value = EXCLUDED.value;
 
+-- storage_limit_gb is the hard runtime cap on current durable artifact bytes
+-- (point-in-time, distinct from the average_storage_gb billing meter which is
+-- time-averaged). Foghorn rejects new durable writes when a tenant is at cap.
+-- Free tier only; paid tiers have no point-in-time cap (storage is metered).
+INSERT INTO purser.tier_entitlements (tier_id, key, value)
+SELECT bt.id, 'storage_limit_gb', to_jsonb(v.gb)
+FROM purser.billing_tiers bt
+JOIN (VALUES
+    ('free', 10)
+) AS v(tier_name, gb) ON v.tier_name = bt.tier_name
+ON CONFLICT (tier_id, key) DO UPDATE SET value = EXCLUDED.value;
+
+-- Free-plan concurrent fair-use caps. These are tenant-plan policy, not static
+-- media-cluster capacity; cluster capacity is reported dynamically by edges.
+INSERT INTO purser.tier_entitlements (tier_id, key, value)
+SELECT bt.id, v.key, to_jsonb(v.value)
+FROM purser.billing_tiers bt
+JOIN (VALUES
+    ('free', 'max_concurrent_streams', 3),
+    ('free', 'max_concurrent_viewers', 200)
+) AS v(tier_name, key, value) ON v.tier_name = bt.tier_name
+ON CONFLICT (tier_id, key) DO UPDATE SET value = EXCLUDED.value;
+
 -- Tier pricing rules (one row per tier x meter).
 INSERT INTO purser.tier_pricing_rules (tier_id, meter, model, currency, included_quantity, unit_price, config)
 SELECT bt.id, r.meter, r.model, 'EUR', r.included_quantity, r.unit_price, '{}'::jsonb
@@ -271,7 +294,7 @@ JOIN (VALUES
     ('payg', 'average_storage_gb', 'all_usage', 0, 0.035),
     ('payg', 'ai_gpu_hours', 'tiered_graduated', 0, 1.50),
     ('free', 'delivered_minutes', 'tiered_graduated', 10000, 0),
-    ('free', 'average_storage_gb', 'all_usage', 0, 0),
+    ('free', 'average_storage_gb', 'tiered_graduated', 10, 0),
     ('free', 'ai_gpu_hours', 'tiered_graduated', 0, 0),
     ('supporter', 'delivered_minutes', 'tiered_graduated', 120000, 0.00055),
     ('supporter', 'average_storage_gb', 'all_usage', 0, 0.035),

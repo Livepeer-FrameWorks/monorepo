@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"strings"
 	"sync"
@@ -58,43 +59,43 @@ type StreamTrack struct {
 
 // StreamState represents the current state of a stream
 type StreamState struct {
-	StreamName       string                 `json:"stream_name"`
-	InternalName     string                 `json:"internal_name"`
-	PlaybackID       string                 `json:"playback_id,omitempty"`
-	StreamID         string                 `json:"stream_id,omitempty"`
-	NodeID           string                 `json:"node_id"`
-	TenantID         string                 `json:"tenant_id"`
-	Status           string                 `json:"status"`       // "live", "offline", etc.
-	BufferState      string                 `json:"buffer_state"` // "FULL", "EMPTY", "DRY", "RECOVER"
-	Tracks           []StreamTrack          `json:"tracks"`
-	Issues           string                 `json:"issues,omitempty"`
-	HasIssues        bool                   `json:"has_issues"`
-	StartedAt        *time.Time             `json:"started_at,omitempty"` // When stream first went live
-	LastUpdate       time.Time              `json:"last_update"`
-	RawDetails       map[string]interface{} `json:"raw_details,omitempty"` // Raw MistServer data
-	Viewers          int                    `json:"viewers"`
-	LastTrackList    string                 `json:"last_track_list,omitempty"`
-	TotalConnections int                    `json:"total_connections,omitempty"`
-	Inputs           int                    `json:"inputs,omitempty"`
-	BytesUp          int64                  `json:"bytes_up,omitempty"`
-	BytesDown        int64                  `json:"bytes_down,omitempty"`
+	StreamName       string         `json:"stream_name"`
+	InternalName     string         `json:"internal_name"`
+	PlaybackID       string         `json:"playback_id,omitempty"`
+	StreamID         string         `json:"stream_id,omitempty"`
+	NodeID           string         `json:"node_id"`
+	TenantID         string         `json:"tenant_id"`
+	Status           string         `json:"status"`       // "live", "offline", etc.
+	BufferState      string         `json:"buffer_state"` // "FULL", "EMPTY", "DRY", "RECOVER"
+	Tracks           []StreamTrack  `json:"tracks"`
+	Issues           string         `json:"issues,omitempty"`
+	HasIssues        bool           `json:"has_issues"`
+	StartedAt        *time.Time     `json:"started_at,omitempty"` // When stream first went live
+	LastUpdate       time.Time      `json:"last_update"`
+	RawDetails       map[string]any `json:"raw_details,omitempty"` // Raw MistServer data
+	Viewers          int            `json:"viewers"`
+	LastTrackList    string         `json:"last_track_list,omitempty"`
+	TotalConnections int            `json:"total_connections,omitempty"`
+	Inputs           int            `json:"inputs,omitempty"`
+	BytesUp          int64          `json:"bytes_up,omitempty"`
+	BytesDown        int64          `json:"bytes_down,omitempty"`
 }
 
 // StreamInstanceState represents per-node state for a specific stream
 type StreamInstanceState struct {
-	NodeID           string                 `json:"node_id"`
-	TenantID         string                 `json:"tenant_id"`
-	Status           string                 `json:"status"`
-	BufferState      string                 `json:"buffer_state"`
-	LastTrackList    string                 `json:"last_track_list,omitempty"`
-	Viewers          int                    `json:"viewers"`
-	BytesUp          int64                  `json:"bytes_up,omitempty"`
-	BytesDown        int64                  `json:"bytes_down,omitempty"`
-	TotalConnections int                    `json:"total_connections,omitempty"`
-	Inputs           int                    `json:"inputs,omitempty"`
-	Replicated       bool                   `json:"replicated,omitempty"` // True if this is a replicated (pull) stream
-	LastUpdate       time.Time              `json:"last_update"`
-	RawDetails       map[string]interface{} `json:"raw_details,omitempty"`
+	NodeID           string         `json:"node_id"`
+	TenantID         string         `json:"tenant_id"`
+	Status           string         `json:"status"`
+	BufferState      string         `json:"buffer_state"`
+	LastTrackList    string         `json:"last_track_list,omitempty"`
+	Viewers          int            `json:"viewers"`
+	BytesUp          int64          `json:"bytes_up,omitempty"`
+	BytesDown        int64          `json:"bytes_down,omitempty"`
+	TotalConnections int            `json:"total_connections,omitempty"`
+	Inputs           int            `json:"inputs,omitempty"`
+	Replicated       bool           `json:"replicated,omitempty"` // True if this is a replicated (pull) stream
+	LastUpdate       time.Time      `json:"last_update"`
+	RawDetails       map[string]any `json:"raw_details,omitempty"`
 }
 
 // VirtualViewerState represents the lifecycle state of a virtual viewer
@@ -124,40 +125,40 @@ type VirtualViewer struct {
 
 // NodeState captures per-node state
 type NodeState struct {
-	NodeID               string                 `json:"node_id"`
-	BaseURL              string                 `json:"base_url"`
-	IsHealthy            bool                   `json:"is_healthy"`
-	IsStale              bool                   `json:"is_stale"` // Node hasn't reported recently
-	OperationalMode      NodeOperationalMode    `json:"operational_mode,omitempty"`
-	TenantID             string                 `json:"tenant_id,omitempty"`  // Tenant owning this dedicated node
-	ClusterID            string                 `json:"cluster_id,omitempty"` // Virtual cluster this node belongs to
-	DeployMode           string                 `json:"deploy_mode,omitempty"`
-	OS                   string                 `json:"os,omitempty"`
-	Arch                 string                 `json:"arch,omitempty"`
-	Latitude             *float64               `json:"latitude,omitempty"`
-	Longitude            *float64               `json:"longitude,omitempty"`
-	Location             string                 `json:"location,omitempty"`
-	Outputs              map[string]interface{} `json:"outputs,omitempty"`
-	OutputsRaw           string                 `json:"outputs_raw,omitempty"`
-	CPU                  float64                `json:"cpu,omitempty"`
-	RAMMax               float64                `json:"ram_max,omitempty"`
-	RAMCurrent           float64                `json:"ram_current,omitempty"`
-	UpSpeed              float64                `json:"up_speed,omitempty"`
-	DownSpeed            float64                `json:"down_speed,omitempty"`
-	BWLimit              float64                `json:"bw_limit,omitempty"`
-	CapIngest            bool                   `json:"cap_ingest,omitempty"`
-	CapEdge              bool                   `json:"cap_edge,omitempty"`
-	CapStorage           bool                   `json:"cap_storage,omitempty"`
-	CapProcessing        bool                   `json:"cap_processing,omitempty"`
-	Roles                []string               `json:"roles,omitempty"`
-	StorageCapacityBytes uint64                 `json:"storage_capacity_bytes,omitempty"`
-	StorageUsedBytes     uint64                 `json:"storage_used_bytes,omitempty"`
-	MaxTranscodes        int                    `json:"max_transcodes,omitempty"`
-	CurrentTranscodes    int                    `json:"current_transcodes,omitempty"`
-	DiskTotalBytes       uint64                 `json:"disk_total_bytes,omitempty"`
-	DiskUsedBytes        uint64                 `json:"disk_used_bytes,omitempty"`
-	LastUpdate           time.Time              `json:"last_update"`
-	LastHeartbeat        time.Time              `json:"last_heartbeat"`
+	NodeID               string              `json:"node_id"`
+	BaseURL              string              `json:"base_url"`
+	IsHealthy            bool                `json:"is_healthy"`
+	IsStale              bool                `json:"is_stale"` // Node hasn't reported recently
+	OperationalMode      NodeOperationalMode `json:"operational_mode,omitempty"`
+	TenantID             string              `json:"tenant_id,omitempty"`  // Tenant owning this dedicated node
+	ClusterID            string              `json:"cluster_id,omitempty"` // Virtual cluster this node belongs to
+	DeployMode           string              `json:"deploy_mode,omitempty"`
+	OS                   string              `json:"os,omitempty"`
+	Arch                 string              `json:"arch,omitempty"`
+	Latitude             *float64            `json:"latitude,omitempty"`
+	Longitude            *float64            `json:"longitude,omitempty"`
+	Location             string              `json:"location,omitempty"`
+	Outputs              map[string]any      `json:"outputs,omitempty"`
+	OutputsRaw           string              `json:"outputs_raw,omitempty"`
+	CPU                  float64             `json:"cpu,omitempty"`
+	RAMMax               float64             `json:"ram_max,omitempty"`
+	RAMCurrent           float64             `json:"ram_current,omitempty"`
+	UpSpeed              float64             `json:"up_speed,omitempty"`
+	DownSpeed            float64             `json:"down_speed,omitempty"`
+	BWLimit              float64             `json:"bw_limit,omitempty"`
+	CapIngest            bool                `json:"cap_ingest,omitempty"`
+	CapEdge              bool                `json:"cap_edge,omitempty"`
+	CapStorage           bool                `json:"cap_storage,omitempty"`
+	CapProcessing        bool                `json:"cap_processing,omitempty"`
+	Roles                []string            `json:"roles,omitempty"`
+	StorageCapacityBytes uint64              `json:"storage_capacity_bytes,omitempty"`
+	StorageUsedBytes     uint64              `json:"storage_used_bytes,omitempty"`
+	MaxTranscodes        int                 `json:"max_transcodes,omitempty"`
+	CurrentTranscodes    int                 `json:"current_transcodes,omitempty"`
+	DiskTotalBytes       uint64              `json:"disk_total_bytes,omitempty"`
+	DiskUsedBytes        uint64              `json:"disk_used_bytes,omitempty"`
+	LastUpdate           time.Time           `json:"last_update"`
+	LastHeartbeat        time.Time           `json:"last_heartbeat"`
 
 	// GPU information
 	GPUVendor string `json:"gpu_vendor,omitempty"`
@@ -358,7 +359,7 @@ func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, n
 
 	// Parse stream details if provided
 	if streamDetailsJSON != "" {
-		var details map[string]interface{}
+		var details map[string]any
 		if err := json.Unmarshal([]byte(streamDetailsJSON), &details); err != nil {
 			sm.mu.Unlock()
 			return err
@@ -484,7 +485,7 @@ func (sm *StreamStateManager) CleanupStaleStreams(maxAge time.Duration) {
 }
 
 // extractTracksFromDetails parses MistServer stream details to extract track info
-func extractTracksFromDetails(details map[string]interface{}) []StreamTrack {
+func extractTracksFromDetails(details map[string]any) []StreamTrack {
 	var tracks []StreamTrack
 
 	// Process each track to extract codec, quality, and metrics
@@ -493,7 +494,7 @@ func extractTracksFromDetails(details map[string]interface{}) []StreamTrack {
 			continue // Skip issues field
 		}
 
-		if track, ok := trackData.(map[string]interface{}); ok {
+		if track, ok := trackData.(map[string]any); ok {
 			streamTrack := StreamTrack{
 				TrackID: trackID,
 			}
@@ -623,7 +624,7 @@ func (sm *StreamStateManager) persistStreamInstanceWriteThrough(internalName, no
 	}
 	if err := sm.redisStore.setJSONRaw(context.Background(), sm.redisStore.keyStreamInstance(internalName, nodeID), payload); err != nil {
 		if stateLogger != nil {
-			stateLogger.WithError(err).WithFields(map[string]interface{}{"stream": internalName, "node_id": nodeID}).Warn("Failed to write stream instance to redis")
+			stateLogger.WithError(err).WithFields(map[string]any{"stream": internalName, "node_id": nodeID}).Warn("Failed to write stream instance to redis")
 		}
 		return
 	}
@@ -853,7 +854,7 @@ func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total
 }
 
 // UpdateStreamInstanceInfo merges arbitrary info into the per-node instance RawDetails
-func (sm *StreamStateManager) UpdateStreamInstanceInfo(internalName, nodeID string, info map[string]interface{}) {
+func (sm *StreamStateManager) UpdateStreamInstanceInfo(internalName, nodeID string, info map[string]any) {
 	sm.mu.Lock()
 	if sm.streamInstances[internalName] == nil {
 		sm.streamInstances[internalName] = make(map[string]*StreamInstanceState)
@@ -864,11 +865,9 @@ func (sm *StreamStateManager) UpdateStreamInstanceInfo(internalName, nodeID stri
 		sm.streamInstances[internalName][nodeID] = inst
 	}
 	if inst.RawDetails == nil {
-		inst.RawDetails = make(map[string]interface{})
+		inst.RawDetails = make(map[string]any)
 	}
-	for k, v := range info {
-		inst.RawDetails[k] = v
-	}
+	maps.Copy(inst.RawDetails, info)
 	inst.LastUpdate = time.Now()
 	instPayload, _ := json.Marshal(inst)
 	sm.mu.Unlock()
@@ -930,7 +929,7 @@ func (sm *StreamStateManager) SetProbeVerified(nodeID string, verified bool) {
 }
 
 // SetNodeInfo updates per-node info
-func (sm *StreamStateManager) SetNodeInfo(nodeID, baseURL string, isHealthy bool, lat, lon *float64, location string, outputsRaw string, outputs map[string]interface{}) {
+func (sm *StreamStateManager) SetNodeInfo(nodeID, baseURL string, isHealthy bool, lat, lon *float64, location string, outputsRaw string, outputs map[string]any) {
 	sm.mu.Lock()
 	n := sm.nodes[nodeID]
 	isNew := false
@@ -956,7 +955,7 @@ func (sm *StreamStateManager) SetNodeInfo(nodeID, baseURL string, isHealthy bool
 		n.Outputs = outputs
 	} else if outputsRaw != "" {
 		// Try to parse raw JSON if map not provided (e.g. rehydration)
-		var parsed map[string]interface{}
+		var parsed map[string]any
 		if err := json.Unmarshal([]byte(outputsRaw), &parsed); err == nil {
 			n.Outputs = parsed
 		}
@@ -1122,6 +1121,49 @@ func (sm *StreamStateManager) GetNodeActiveStreams(nodeID string) int {
 	return total
 }
 
+// ClusterLoad returns a 0–100 percent capacity pressure signal across healthy,
+// non-stale nodes in the given cluster. The signal is max(avg_cpu_pct,
+// uplink_utilization_pct) — whichever resource is more constrained governs
+// the decision. Returns (0, 0) when no nodes report metrics, which callers
+// must treat as "no signal" rather than "idle." Used by Foghorn admission to
+// decide whether to gate free-tier over-allowance ingest.
+//
+// Bandwidth utilization is sum(UpSpeed) / sum(BWLimit) across nodes that
+// declare a non-zero BWLimit. Nodes without BWLimit contribute only to the
+// CPU average. If no node declares BWLimit, the bandwidth term is treated as
+// zero (CPU alone gates the decision).
+func (sm *StreamStateManager) ClusterLoad(clusterID string) (loadPercent float64, sampleCount int) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	var cpuSum, upSum, bwSum float64
+	for _, n := range sm.nodes {
+		if n == nil || n.ClusterID != clusterID {
+			continue
+		}
+		if !n.IsHealthy || n.IsStale {
+			continue
+		}
+		cpuSum += n.CPU
+		if n.BWLimit > 0 {
+			upSum += n.UpSpeed
+			bwSum += n.BWLimit
+		}
+		sampleCount++
+	}
+	if sampleCount == 0 {
+		return 0, 0
+	}
+	avgCPU := cpuSum / float64(sampleCount)
+	bwPercent := 0.0
+	if bwSum > 0 {
+		bwPercent = (upSum / bwSum) * 100
+	}
+	if bwPercent > avgCPU {
+		return bwPercent, sampleCount
+	}
+	return avgCPU, sampleCount
+}
+
 // SetNodeGPUInfo updates GPU information for a node
 func (sm *StreamStateManager) SetNodeGPUInfo(nodeID string, gpuVendor string, gpuCount int, gpuMemMB int, gpuCC string) {
 	sm.mu.Lock()
@@ -1284,10 +1326,8 @@ func (sm *StreamStateManager) GetStreamInstances(internalName string) map[string
 		}
 		c := *inst
 		if inst.RawDetails != nil {
-			copied := make(map[string]interface{}, len(inst.RawDetails))
-			for k, v := range inst.RawDetails {
-				copied[k] = v
-			}
+			copied := make(map[string]any, len(inst.RawDetails))
+			maps.Copy(copied, inst.RawDetails)
 			c.RawDetails = copied
 		}
 		out[nodeID] = c
@@ -1309,10 +1349,8 @@ func (sm *StreamStateManager) GetAllStreamInstances() map[string]map[string]Stre
 			}
 			c := *inst
 			if inst.RawDetails != nil {
-				copied := make(map[string]interface{}, len(inst.RawDetails))
-				for k, v := range inst.RawDetails {
-					copied[k] = v
-				}
+				copied := make(map[string]any, len(inst.RawDetails))
+				maps.Copy(copied, inst.RawDetails)
 				c.RawDetails = copied
 			}
 			nodeMap[nodeID] = c
@@ -1334,10 +1372,8 @@ func (sm *StreamStateManager) GetNodeState(nodeID string) *NodeState {
 	}
 	c := *n
 	if n.Outputs != nil {
-		copied := make(map[string]interface{}, len(n.Outputs))
-		for k, v := range n.Outputs {
-			copied[k] = v
-		}
+		copied := make(map[string]any, len(n.Outputs))
+		maps.Copy(copied, n.Outputs)
 		c.Outputs = copied
 	}
 	return &c
@@ -1356,10 +1392,8 @@ func (sm *StreamStateManager) GetClusterSnapshot() (streams []*StreamState, node
 	for _, n := range sm.nodes {
 		c := *n
 		if n.Outputs != nil {
-			copied := make(map[string]interface{}, len(n.Outputs))
-			for k, v := range n.Outputs {
-				copied[k] = v
-			}
+			copied := make(map[string]any, len(n.Outputs))
+			maps.Copy(copied, n.Outputs)
 			c.Outputs = copied
 		}
 		nodes = append(nodes, &c)
@@ -1487,8 +1521,7 @@ func (sm *StreamStateManager) FindNodeByArtifactInternalName(internalName string
 			continue
 		}
 		for _, artifact := range node.Artifacts {
-			sn := artifact.GetStreamName()
-			if idx := strings.IndexByte(sn, '+'); idx >= 0 && sn[idx+1:] == internalName {
+			if _, after, found := strings.Cut(artifact.GetStreamName(), "+"); found && after == internalName {
 				score := int64(node.CPUScore + node.RAMScore)
 				if score < bestScore {
 					bestScore = score
@@ -2449,7 +2482,7 @@ func (sm *StreamStateManager) Rehydrate(ctx context.Context) error {
 				if r.InternalName == "" || r.StorageNodeID == "" {
 					continue
 				}
-				sm.UpdateStreamInstanceInfo(r.InternalName, r.StorageNodeID, map[string]interface{}{
+				sm.UpdateStreamInstanceInfo(r.InternalName, r.StorageNodeID, map[string]any{
 					"dvr_status":           r.Status,
 					"dvr_hash":             r.Hash,
 					"dvr_manifest_path":    r.ManifestPath,
@@ -2475,7 +2508,7 @@ func (sm *StreamStateManager) Rehydrate(ctx context.Context) error {
 				if r.InternalName == "" || r.NodeID == "" {
 					continue
 				}
-				sm.UpdateStreamInstanceInfo(r.InternalName, r.NodeID, map[string]interface{}{
+				sm.UpdateStreamInstanceInfo(r.InternalName, r.NodeID, map[string]any{
 					"clip_status": r.Status,
 					"clip_path":   r.StoragePath,
 					"clip_size":   r.SizeBytes,
@@ -2545,7 +2578,7 @@ func (sm *StreamStateManager) ApplyClipProgress(ctx context.Context, requestID s
 	}
 	if sm.repos.Clips != nil {
 		if internal, err := sm.repos.Clips.ResolveInternalNameByRequestID(ctx, requestID); err == nil && internal != "" {
-			sm.UpdateStreamInstanceInfo(internal, nodeID, map[string]interface{}{
+			sm.UpdateStreamInstanceInfo(internal, nodeID, map[string]any{
 				"clip_status":   "processing",
 				"clip_progress": percent,
 				"clip_message":  message,
@@ -2565,7 +2598,7 @@ func (sm *StreamStateManager) ApplyClipDone(ctx context.Context, requestID strin
 	}
 	if sm.repos.Clips != nil {
 		if internal, err := sm.repos.Clips.ResolveInternalNameByRequestID(ctx, requestID); err == nil && internal != "" {
-			sm.UpdateStreamInstanceInfo(internal, nodeID, map[string]interface{}{
+			sm.UpdateStreamInstanceInfo(internal, nodeID, map[string]any{
 				"clip_status": status,
 				"clip_path":   filePath,
 				"clip_size":   sizeBytes,
@@ -2586,7 +2619,7 @@ func (sm *StreamStateManager) ApplyDVRProgress(ctx context.Context, dvrHash stri
 	}
 	if sm.repos.DVR != nil {
 		if internal, err := sm.repos.DVR.ResolveInternalNameByHash(ctx, dvrHash); err == nil && internal != "" {
-			sm.UpdateStreamInstanceInfo(internal, nodeID, map[string]interface{}{
+			sm.UpdateStreamInstanceInfo(internal, nodeID, map[string]any{
 				"dvr_status":        status,
 				"dvr_segment_count": segmentCount,
 				"dvr_size_bytes":    sizeBytes,
@@ -2606,7 +2639,7 @@ func (sm *StreamStateManager) ApplyDVRStopped(ctx context.Context, dvrHash strin
 	}
 	if sm.repos.DVR != nil {
 		if internal, err := sm.repos.DVR.ResolveInternalNameByHash(ctx, dvrHash); err == nil && internal != "" {
-			sm.UpdateStreamInstanceInfo(internal, nodeID, map[string]interface{}{
+			sm.UpdateStreamInstanceInfo(internal, nodeID, map[string]any{
 				"dvr_status":           finalStatus,
 				"dvr_manifest_path":    manifestPath,
 				"dvr_duration_seconds": durationSeconds,
@@ -3443,11 +3476,11 @@ func (sm *StreamStateManager) clampBandwidth(bw uint64) uint64 {
 }
 
 // GetVirtualViewerStats returns statistics about virtual viewers for observability
-func (sm *StreamStateManager) GetVirtualViewerStats() map[string]interface{} {
+func (sm *StreamStateManager) GetVirtualViewerStats() map[string]any {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	stats := map[string]interface{}{
+	stats := map[string]any{
 		"total_viewers": len(sm.virtualViewers),
 	}
 
