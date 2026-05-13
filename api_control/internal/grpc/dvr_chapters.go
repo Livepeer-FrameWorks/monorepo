@@ -73,6 +73,47 @@ func (s *CommodoreServer) ListDVRChapters(ctx context.Context, req *pb.ListDVRCh
 	return resp, nil
 }
 
+// ResolveDVRChapter resolves a chapter_id to the chapter alias row,
+// returning origin_cluster_id + range + stream_internal_name. Called by
+// a non-origin Foghorn that received a dvr+chapter_id playback request
+// and needs to route a federation PrepareDVRChapter call.
+func (s *CommodoreServer) ResolveDVRChapter(ctx context.Context, req *pb.ResolveDVRChapterRequest) (*pb.ResolveDVRChapterResponse, error) {
+	chapterID := strings.TrimSpace(req.GetChapterId())
+	if chapterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "chapter_id is required")
+	}
+	var (
+		tenantID, originClusterID, dvrHash, mode, streamInternalName string
+		intervalSeconds                                              sql.NullInt32
+		startMs, endMs                                               int64
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT a.tenant_id::text, a.origin_cluster_id, a.dvr_hash, a.mode,
+		       COALESCE(a.interval_seconds, 0), a.start_ms, a.end_ms,
+		       COALESCE(r.stream_internal_name, '')
+		  FROM commodore.dvr_chapter_aliases a
+		  LEFT JOIN commodore.dvr_recordings r ON r.dvr_hash = a.dvr_hash
+		 WHERE a.chapter_id = $1
+	`, chapterID).Scan(&tenantID, &originClusterID, &dvrHash, &mode, &intervalSeconds, &startMs, &endMs, &streamInternalName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return &pb.ResolveDVRChapterResponse{Found: false}, nil
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	return &pb.ResolveDVRChapterResponse{
+		Found:              true,
+		TenantId:           tenantID,
+		OriginClusterId:    originClusterID,
+		DvrHash:            dvrHash,
+		Mode:               mode,
+		IntervalSeconds:    intervalSeconds.Int32,
+		StartMs:            startMs,
+		EndMs:              endMs,
+		StreamInternalName: streamInternalName,
+	}, nil
+}
+
 // SetDVRChapterPolicy validates tenant ownership then forwards to the DVR's
 // origin Foghorn.
 func (s *CommodoreServer) SetDVRChapterPolicy(ctx context.Context, req *pb.SetDVRChapterPolicyRequest) (*pb.SetDVRChapterPolicyResponse, error) {

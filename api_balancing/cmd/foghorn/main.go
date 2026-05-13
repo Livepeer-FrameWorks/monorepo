@@ -807,10 +807,12 @@ func main() {
 	if fedClient != nil {
 		handlers.SetFederationClient(fedClient)
 		foghornServer.SetFederationClient(fedClient)
+		control.SetDVRChapterFederationClient(fedClient)
 	}
 	if peerManager != nil {
 		handlers.SetPeerManager(peerManager)
 		foghornServer.SetPeerManager(peerManager)
+		control.SetDVRChapterPeerResolver(peerManager)
 	}
 
 	// Wire the storage resolver factory + federated mint delegate into the
@@ -880,6 +882,7 @@ func main() {
 		federationServer.SetClipCreator(foghornServer)
 		federationServer.SetDVRCreator(foghornServer)
 		federationServer.SetArtifactCommandHandler(foghornServer)
+		federationServer.SetDVRChapterMaterializer(foghornServer)
 		if commodoreClient != nil {
 			federationServer.SetMintArtifactResolver(commodoreClient)
 		}

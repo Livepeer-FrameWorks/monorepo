@@ -4745,22 +4745,119 @@ func RefreshWarmDVRChapterEdges(ctx context.Context, chapterID string, logger lo
 }
 
 func StartDVRChapterDefrost(ctx context.Context, chapterID, nodeID string, timeout time.Duration, logger logging.Logger) (string, error) {
-	if s3Client == nil {
-		return "", fmt.Errorf("s3 client not configured")
-	}
 	if db == nil {
 		return "", fmt.Errorf("database not available")
 	}
+
+	// Try local lookup first. A local chapter row means this Foghorn is the
+	// chapter's origin (origin is the sole writer of chapter rows). When
+	// present and the S3 client can mint, use the local fast path.
 	chapter, err := GetChapter(ctx, chapterID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", fmt.Errorf("DVR chapter not found")
-		}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("read DVR chapter: %w", err)
 	}
-	if chapter == nil || chapter.ArtifactHash == "" {
-		return "", fmt.Errorf("DVR chapter has no artifact")
+	if chapter != nil && chapter.ArtifactHash != "" && s3Client != nil {
+		return startDVRChapterDefrostLocal(ctx, chapter, chapterID, nodeID, timeout, logger)
 	}
+
+	// Local row missing — route to the chapter's origin cluster.
+	if CommodoreClient == nil {
+		return "", fmt.Errorf("DVR chapter not found locally and Commodore client unavailable")
+	}
+	resolveCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	resolved, err := CommodoreClient.ResolveDVRChapter(resolveCtx, chapterID)
+	cancel()
+	if err != nil {
+		return "", fmt.Errorf("resolve DVR chapter origin via Commodore: %w", err)
+	}
+	if !resolved.GetFound() {
+		return "", fmt.Errorf("DVR chapter not found")
+	}
+	originCluster := strings.TrimSpace(resolved.GetOriginClusterId())
+	if originCluster == "" {
+		return "", fmt.Errorf("DVR chapter has no origin cluster")
+	}
+	if originCluster == localClusterID {
+		// Origin says it's us but we have no local row — chapter row was
+		// evicted. Fall back to local materialization-on-demand via
+		// segment ledger; bail loudly if that path isn't viable.
+		return "", fmt.Errorf("DVR chapter %s missing locally but origin cluster matches; expected materialization", chapterID)
+	}
+	if dvrChapterFedClient == nil || dvrChapterPeerResolver == nil {
+		return "", fmt.Errorf("federation client not configured for DVR chapter defrost")
+	}
+	addr := dvrChapterPeerResolver.GetPeerAddr(originCluster)
+	if addr == "" {
+		return "", fmt.Errorf("origin cluster %s has no peer address", originCluster)
+	}
+	urlTTL := dvrChapterDefrostURLTTL(resolved.GetStartMs(), resolved.GetEndMs())
+	prepCtx, prepCancel := context.WithTimeout(ctx, 30*time.Second)
+	prepResp, prepErr := dvrChapterFedClient.PrepareDVRChapter(prepCtx, originCluster, addr, &pb.PrepareDVRChapterRequest{
+		RequestingCluster: localClusterID,
+		TenantId:          resolved.GetTenantId(),
+		DvrArtifactId:     resolved.GetDvrHash(),
+		ChapterId:         chapterID,
+		Mode:              resolved.GetMode(),
+		IntervalSeconds:   resolved.GetIntervalSeconds(),
+		StartMs:           resolved.GetStartMs(),
+		EndMs:             resolved.GetEndMs(),
+		UrlExpirySeconds:  uint32(urlTTL / time.Second),
+	})
+	prepCancel()
+	if prepErr != nil {
+		return "", fmt.Errorf("PrepareDVRChapter against origin %s: %w", originCluster, prepErr)
+	}
+	if errStr := strings.TrimSpace(prepResp.GetError()); errStr != "" {
+		return "", fmt.Errorf("origin cluster %s rejected PrepareDVRChapter: %s", originCluster, errStr)
+	}
+	if len(prepResp.GetSegments()) == 0 {
+		return "", fmt.Errorf("origin cluster %s returned no segments for chapter %s", originCluster, chapterID)
+	}
+
+	streamName := prepResp.GetStreamInternalName()
+	if streamName == "" {
+		streamName = resolved.GetStreamInternalName()
+	}
+	if ttlSec := prepResp.GetUrlTtlSeconds(); ttlSec > 0 {
+		urlTTL = time.Duration(ttlSec) * time.Second
+	}
+
+	storageBase := storageBasePathForNode(nodeID)
+	localRoot := filepath.Join(storageBase, "dvr", streamName, resolved.GetDvrHash())
+	localManifest := filepath.Join(localRoot, "chapters", chapterID+".m3u8")
+	requestID := fmt.Sprintf("dvr-chapter-defrost-%s-%d", chapterID, time.Now().UnixNano())
+	req := &pb.DefrostRequest{
+		RequestId:              requestID,
+		AssetType:              "dvr",
+		AssetHash:              resolved.GetDvrHash(),
+		TenantId:               resolved.GetTenantId(),
+		StreamInternalName:     streamName,
+		LocalPath:              localRoot,
+		TimeoutSeconds:         int32(timeout.Seconds()),
+		Streaming:              true,
+		UrlExpirySeconds:       int64(urlTTL.Seconds()),
+		DvrArtifactId:          resolved.GetDvrHash(),
+		ChapterId:              chapterID,
+		StartMs:                prepResp.GetStartMs(),
+		EndMs:                  prepResp.GetEndMs(),
+		ChapterMode:            prepResp.GetMode(),
+		ChapterIntervalSeconds: prepResp.GetIntervalSeconds(),
+		ChapterSegments:        prepResp.GetSegments(),
+	}
+	if err := SendDefrostRequest(nodeID, req); err != nil {
+		return "", fmt.Errorf("send DVR chapter defrost: %w", err)
+	}
+	logger.WithFields(logging.Fields{
+		"chapter_id":     chapterID,
+		"origin_cluster": originCluster,
+		"segment_count":  len(prepResp.GetSegments()),
+	}).Info("Started DVR chapter defrost via origin federation")
+	return localManifest, nil
+}
+
+// startDVRChapterDefrostLocal is the fast path used when this Foghorn is
+// the chapter's origin and can mint segment GET URLs against its own S3.
+func startDVRChapterDefrostLocal(ctx context.Context, chapter *DVRChapterRow, chapterID, nodeID string, timeout time.Duration, logger logging.Logger) (string, error) {
 	tenantID, streamName, ok := resolveDVRTenantAndStream(ctx, chapter.ArtifactHash, logger)
 	if !ok {
 		return "", fmt.Errorf("could not resolve tenant/stream for DVR chapter")
@@ -4816,6 +4913,44 @@ func StartDVRChapterDefrost(ctx context.Context, chapterID, nodeID string, timeo
 		return "", fmt.Errorf("send DVR chapter defrost: %w", err)
 	}
 	return localManifest, nil
+}
+
+// DVRChapterDefrostURLTTL is the exported form of dvrChapterDefrostURLTTL
+// for cross-package callers (e.g. federation.PrepareDVRChapter) that need
+// to mint segment GET URLs with the same TTL math as local defrost.
+func DVRChapterDefrostURLTTL(startMs, endMs int64) time.Duration {
+	return dvrChapterDefrostURLTTL(startMs, endMs)
+}
+
+// DVRChapterFederationClient is the subset of federation.FederationClient
+// needed by StartDVRChapterDefrost when the chapter's origin is a peer
+// cluster. Wired from main.go via SetDVRChapterFederationClient.
+type DVRChapterFederationClient interface {
+	PrepareDVRChapter(ctx context.Context, clusterID, addr string, req *pb.PrepareDVRChapterRequest) (*pb.PrepareDVRChapterResponse, error)
+}
+
+// DVRChapterPeerResolver resolves a cluster_id to its peer dial address.
+// Mirrors federation.PeerAddrResolver to keep the control package free of
+// federation imports.
+type DVRChapterPeerResolver interface {
+	GetPeerAddr(clusterID string) string
+}
+
+var (
+	dvrChapterFedClient    DVRChapterFederationClient
+	dvrChapterPeerResolver DVRChapterPeerResolver
+)
+
+// SetDVRChapterFederationClient wires the federation client used by
+// StartDVRChapterDefrost when the chapter's origin is a peer cluster.
+func SetDVRChapterFederationClient(c DVRChapterFederationClient) {
+	dvrChapterFedClient = c
+}
+
+// SetDVRChapterPeerResolver wires the peer-address resolver used by
+// StartDVRChapterDefrost when the chapter's origin is a peer cluster.
+func SetDVRChapterPeerResolver(r DVRChapterPeerResolver) {
+	dvrChapterPeerResolver = r
 }
 
 func dvrChapterDefrostURLTTL(startMs, endMs int64) time.Duration {

@@ -41,6 +41,14 @@ type ArtifactCommandHandler interface {
 	DeleteVodAsset(ctx context.Context, req *pb.DeleteVodAssetRequest) (*pb.DeleteVodAssetResponse, error)
 }
 
+// DVRChapterMaterializer materializes or refreshes a chapter row on the
+// origin cluster. Implemented by FoghornGRPCServer.RetrieveDVRChapter.
+// PrepareDVRChapter delegates here when the caller supplies range fields
+// or when a chapter_id has no matching local row.
+type DVRChapterMaterializer interface {
+	RetrieveDVRChapter(ctx context.Context, req *pb.RetrieveDVRChapterRequest) (*pb.RetrieveDVRChapterResponse, error)
+}
+
 // FederationS3Client abstracts S3 operations used by federation so tests
 // can inject fakes without real AWS credentials.
 type FederationS3Client interface {
@@ -67,6 +75,7 @@ type FederationServer struct {
 	clipCreator     ClipCreator
 	dvrCreator      DVRCreator
 	artifactHandler ArtifactCommandHandler
+	chapterMater    DVRChapterMaterializer
 	peerManager     PeerAddrResolver
 	fedClient       *FederationClient
 
@@ -233,6 +242,13 @@ func (s *FederationServer) SetDVRCreator(dc DVRCreator) { s.dvrCreator = dc }
 // SetArtifactCommandHandler wires the artifact command delegate (set after FoghornGRPCServer is created).
 func (s *FederationServer) SetArtifactCommandHandler(h ArtifactCommandHandler) {
 	s.artifactHandler = h
+}
+
+// SetDVRChapterMaterializer wires the chapter materializer (set after FoghornGRPCServer is created).
+// Used by PrepareDVRChapter when a chapter_id has no local row or the caller
+// supplied range fields instead of a chapter_id.
+func (s *FederationServer) SetDVRChapterMaterializer(m DVRChapterMaterializer) {
+	s.chapterMater = m
 }
 
 // RegisterServices registers the FoghornFederation service on the gRPC server.
@@ -577,6 +593,150 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 	default:
 		return &pb.PrepareArtifactResponse{Error: "unknown artifact type: " + artType}, nil
 	}
+}
+
+// PrepareDVRChapter is the DVR equivalent of PrepareArtifact, scoped to a
+// single chapter. Origin Foghorn assembles segment refs + presigned GETs
+// against its own S3 so the requesting cluster can locally defrost without
+// holding origin's S3 credentials. First-pass scope: storage_cluster_id
+// must equal origin_cluster_id; split-write DVR returns
+// unsupported_split_write_dvr.
+func (s *FederationServer) PrepareDVRChapter(ctx context.Context, req *pb.PrepareDVRChapterRequest) (*pb.PrepareDVRChapterResponse, error) {
+	if err := requireFederationServiceAuth(ctx); err != nil {
+		return nil, err
+	}
+	tenantID := strings.TrimSpace(req.GetTenantId())
+	dvrHash := strings.TrimSpace(req.GetDvrArtifactId())
+	if tenantID == "" || dvrHash == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id and dvr_artifact_id required")
+	}
+	if s.db == nil || s.s3Client == nil {
+		return &pb.PrepareDVRChapterResponse{Error: "origin storage not configured"}, nil
+	}
+
+	log := s.logger.WithFields(logging.Fields{
+		"dvr_artifact_id":    dvrHash,
+		"tenant_id":          tenantID,
+		"requesting_cluster": req.GetRequestingCluster(),
+		"chapter_id":         req.GetChapterId(),
+	})
+
+	// Verify this Foghorn is the DVR's origin and that storage owner == origin.
+	// A missing local artifact row means we are not the origin (or the row
+	// has been purged) — the caller must route to the actual origin.
+	var artifactType, originCluster, streamInternalName string
+	var storageCluster sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT artifact_type,
+		       COALESCE(origin_cluster_id, ''),
+		       storage_cluster_id,
+		       COALESCE(stream_internal_name, '')
+		FROM foghorn.artifacts
+		WHERE artifact_hash = $1 AND tenant_id = $2 AND status != 'deleted'
+	`, dvrHash, tenantID).Scan(&artifactType, &originCluster, &storageCluster, &streamInternalName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return &pb.PrepareDVRChapterResponse{Error: "not_dvr_origin"}, nil
+	}
+	if err != nil {
+		log.WithError(err).Error("PrepareDVRChapter: artifact lookup failed")
+		return nil, status.Error(codes.Internal, "failed to query DVR artifact")
+	}
+	if strings.ToLower(strings.TrimSpace(artifactType)) != "dvr" {
+		return &pb.PrepareDVRChapterResponse{Error: "artifact is not a DVR recording"}, nil
+	}
+	if s.clusterID != "" && originCluster != "" && s.clusterID != originCluster {
+		return &pb.PrepareDVRChapterResponse{Error: "not_dvr_origin"}, nil
+	}
+	if storageCluster.Valid && storageCluster.String != "" && storageCluster.String != originCluster {
+		return &pb.PrepareDVRChapterResponse{Error: "unsupported_split_write_dvr"}, nil
+	}
+
+	// Resolve the chapter. If chapter_id is present and we have a local row,
+	// use it directly. Otherwise call the materializer with the range fields
+	// (or the chapter's own range, when supplied). Origin remains the sole
+	// writer of chapter rows.
+	chapterID := strings.TrimSpace(req.GetChapterId())
+	var chapter *control.DVRChapterRow
+	if chapterID != "" {
+		row, getErr := control.GetChapter(ctx, chapterID)
+		if getErr != nil && !errors.Is(getErr, sql.ErrNoRows) {
+			log.WithError(getErr).Error("PrepareDVRChapter: GetChapter failed")
+			return nil, status.Error(codes.Internal, "failed to read DVR chapter")
+		}
+		chapter = row
+	}
+	if chapter == nil {
+		if s.chapterMater == nil {
+			return &pb.PrepareDVRChapterResponse{Error: "chapter_not_found"}, nil
+		}
+		mode := strings.TrimSpace(req.GetMode())
+		if mode == "" || req.GetEndMs() <= req.GetStartMs() {
+			return &pb.PrepareDVRChapterResponse{Error: "chapter_not_found"}, nil
+		}
+		materReq := &pb.RetrieveDVRChapterRequest{
+			DvrArtifactId:   dvrHash,
+			TenantId:        tenantID,
+			Mode:            mode,
+			IntervalSeconds: req.GetIntervalSeconds(),
+			StartMs:         req.GetStartMs(),
+			EndMs:           req.GetEndMs(),
+		}
+		materResp, materErr := s.chapterMater.RetrieveDVRChapter(ctx, materReq)
+		if materErr != nil {
+			log.WithError(materErr).Error("PrepareDVRChapter: chapter materialization failed")
+			return nil, status.Error(codes.Internal, "failed to materialize chapter")
+		}
+		row, getErr := control.GetChapter(ctx, materResp.GetChapterId())
+		if getErr != nil || row == nil {
+			log.WithError(getErr).Warn("PrepareDVRChapter: chapter missing after materialization")
+			return &pb.PrepareDVRChapterResponse{Error: "chapter_not_found"}, nil
+		}
+		chapter = row
+	}
+
+	// List segments from the local ledger and mint presigned GETs.
+	rows, err := control.ListDVRSegmentsForRange(ctx, chapter.ArtifactHash, chapter.StartMs, chapter.EndMs)
+	if err != nil {
+		log.WithError(err).Error("PrepareDVRChapter: ListDVRSegmentsForRange failed")
+		return nil, status.Error(codes.Internal, "failed to list DVR segments")
+	}
+	ttl := control.DVRChapterDefrostURLTTL(chapter.StartMs, chapter.EndMs)
+	if requested := time.Duration(req.GetUrlExpirySeconds()) * time.Second; requested > 0 && requested < ttl {
+		ttl = requested
+	}
+	refs := make([]*pb.DVRSegmentRef, 0, len(rows))
+	for _, r := range rows {
+		ref := &pb.DVRSegmentRef{
+			SegmentName:  r.SegmentName,
+			S3Key:        r.S3Key,
+			MediaStartMs: r.MediaStartMs,
+			MediaEndMs:   r.MediaEndMs,
+			DurationMs:   r.DurationMs,
+			Status:       r.Status,
+			Sequence:     r.Sequence,
+		}
+		if r.Status == "uploaded" || r.Status == "deleted_local" {
+			url, mintErr := s.s3Client.GeneratePresignedGET(r.S3Key, ttl)
+			if mintErr != nil {
+				log.WithError(mintErr).WithField("segment_name", r.SegmentName).Error("PrepareDVRChapter: mint segment GET failed")
+				return nil, status.Error(codes.Internal, "failed to mint segment URL")
+			}
+			ref.PresignedGetUrl = url
+		}
+		refs = append(refs, ref)
+	}
+
+	log.WithField("segment_count", len(refs)).Info("PrepareDVRChapter: assembled chapter")
+	return &pb.PrepareDVRChapterResponse{
+		ChapterId:          chapter.ChapterID,
+		Segments:           refs,
+		StartMs:            chapter.StartMs,
+		EndMs:              chapter.EndMs,
+		Mode:               chapter.Mode,
+		IntervalSeconds:    chapter.IntervalSeconds.Int32,
+		StreamInternalName: streamInternalName,
+		UrlTtlSeconds:      uint32(ttl / time.Second),
+	}, nil
 }
 
 func (s *FederationServer) buildArtifactS3Key(artType, tenantID, internalName, hash, format string) string {

@@ -44,7 +44,7 @@ func (s *CommodoreServer) MarkArtifactThumbnailsReady(ctx context.Context, req *
 		}).Error("MarkArtifactThumbnailsReady failed")
 		return nil, status.Errorf(codes.Internal, "update failed: %v", execErr)
 	}
-	rows, _ := res.RowsAffected()
+	rows, _ := res.RowsAffected() //nolint:errcheck // pq always populates RowsAffected on UPDATE
 	return &pb.MarkArtifactThumbnailsReadyResponse{Updated: rows > 0}, nil
 }
 
@@ -80,7 +80,7 @@ func (s *CommodoreServer) UpdateArtifactStorageCluster(ctx context.Context, req 
 		}).Error("UpdateArtifactStorageCluster failed")
 		return nil, status.Errorf(codes.Internal, "update failed: %v", execErr)
 	}
-	rows, _ := res.RowsAffected()
+	rows, _ := res.RowsAffected() //nolint:errcheck // pq always populates RowsAffected on UPDATE
 	return &pb.UpdateArtifactStorageClusterResponse{Updated: rows > 0}, nil
 }
 

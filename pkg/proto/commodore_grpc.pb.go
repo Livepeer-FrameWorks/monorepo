@@ -39,6 +39,7 @@ const (
 	InternalService_UpdateArtifactStorageCluster_FullMethodName    = "/commodore.InternalService/UpdateArtifactStorageCluster"
 	InternalService_ResolveClipHash_FullMethodName                 = "/commodore.InternalService/ResolveClipHash"
 	InternalService_ResolveDVRHash_FullMethodName                  = "/commodore.InternalService/ResolveDVRHash"
+	InternalService_ResolveDVRChapter_FullMethodName               = "/commodore.InternalService/ResolveDVRChapter"
 	InternalService_ResolveArtifactPlaybackID_FullMethodName       = "/commodore.InternalService/ResolveArtifactPlaybackID"
 	InternalService_ResolveArtifactInternalName_FullMethodName     = "/commodore.InternalService/ResolveArtifactInternalName"
 	InternalService_ResolveIdentifier_FullMethodName               = "/commodore.InternalService/ResolveIdentifier"
@@ -135,6 +136,12 @@ type InternalServiceClient interface {
 	ResolveClipHash(ctx context.Context, in *ResolveClipHashRequest, opts ...grpc.CallOption) (*ResolveClipHashResponse, error)
 	// Resolve DVR hash to tenant context (for analytics enrichment and playback)
 	ResolveDVRHash(ctx context.Context, in *ResolveDVRHashRequest, opts ...grpc.CallOption) (*ResolveDVRHashResponse, error)
+	// ResolveDVRChapter resolves a chapter_id to its origin cluster + range
+	// via commodore.dvr_chapter_aliases. Used by a non-origin Foghorn that
+	// receives a dvr+chapter_id playback request and lacks the chapter row
+	// locally; the resolved origin is the target of FoghornFederation
+	// .PrepareDVRChapter.
+	ResolveDVRChapter(ctx context.Context, in *ResolveDVRChapterRequest, opts ...grpc.CallOption) (*ResolveDVRChapterResponse, error)
 	// Resolve artifact playback ID to artifact identity (clip/dvr/vod)
 	ResolveArtifactPlaybackID(ctx context.Context, in *ResolveArtifactPlaybackIDRequest, opts ...grpc.CallOption) (*ResolveArtifactPlaybackIDResponse, error)
 	// Resolve artifact internal routing name to artifact identity (clip/dvr/vod)
@@ -384,6 +391,16 @@ func (c *internalServiceClient) ResolveDVRHash(ctx context.Context, in *ResolveD
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ResolveDVRHashResponse)
 	err := c.cc.Invoke(ctx, InternalService_ResolveDVRHash_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ResolveDVRChapter(ctx context.Context, in *ResolveDVRChapterRequest, opts ...grpc.CallOption) (*ResolveDVRChapterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveDVRChapterResponse)
+	err := c.cc.Invoke(ctx, InternalService_ResolveDVRChapter_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -655,6 +672,12 @@ type InternalServiceServer interface {
 	ResolveClipHash(context.Context, *ResolveClipHashRequest) (*ResolveClipHashResponse, error)
 	// Resolve DVR hash to tenant context (for analytics enrichment and playback)
 	ResolveDVRHash(context.Context, *ResolveDVRHashRequest) (*ResolveDVRHashResponse, error)
+	// ResolveDVRChapter resolves a chapter_id to its origin cluster + range
+	// via commodore.dvr_chapter_aliases. Used by a non-origin Foghorn that
+	// receives a dvr+chapter_id playback request and lacks the chapter row
+	// locally; the resolved origin is the target of FoghornFederation
+	// .PrepareDVRChapter.
+	ResolveDVRChapter(context.Context, *ResolveDVRChapterRequest) (*ResolveDVRChapterResponse, error)
 	// Resolve artifact playback ID to artifact identity (clip/dvr/vod)
 	ResolveArtifactPlaybackID(context.Context, *ResolveArtifactPlaybackIDRequest) (*ResolveArtifactPlaybackIDResponse, error)
 	// Resolve artifact internal routing name to artifact identity (clip/dvr/vod)
@@ -776,6 +799,9 @@ func (UnimplementedInternalServiceServer) ResolveClipHash(context.Context, *Reso
 }
 func (UnimplementedInternalServiceServer) ResolveDVRHash(context.Context, *ResolveDVRHashRequest) (*ResolveDVRHashResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveDVRHash not implemented")
+}
+func (UnimplementedInternalServiceServer) ResolveDVRChapter(context.Context, *ResolveDVRChapterRequest) (*ResolveDVRChapterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolveDVRChapter not implemented")
 }
 func (UnimplementedInternalServiceServer) ResolveArtifactPlaybackID(context.Context, *ResolveArtifactPlaybackIDRequest) (*ResolveArtifactPlaybackIDResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveArtifactPlaybackID not implemented")
@@ -1193,6 +1219,24 @@ func _InternalService_ResolveDVRHash_Handler(srv interface{}, ctx context.Contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).ResolveDVRHash(ctx, req.(*ResolveDVRHashRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ResolveDVRChapter_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveDVRChapterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ResolveDVRChapter(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ResolveDVRChapter_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ResolveDVRChapter(ctx, req.(*ResolveDVRChapterRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1621,6 +1665,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResolveDVRHash",
 			Handler:    _InternalService_ResolveDVRHash_Handler,
+		},
+		{
+			MethodName: "ResolveDVRChapter",
+			Handler:    _InternalService_ResolveDVRChapter_Handler,
 		},
 		{
 			MethodName: "ResolveArtifactPlaybackID",

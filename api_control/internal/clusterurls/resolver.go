@@ -96,8 +96,8 @@ func (r *Resolver) refresh(ctx context.Context) error {
 	next := map[string]string{}
 	var after *string
 	for {
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		resp, err := r.qm.ListClusters(ctx, &pb.CursorPaginationRequest{
+		pageCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		resp, err := r.qm.ListClusters(pageCtx, &pb.CursorPaginationRequest{
 			First: listPageLimit,
 			After: after,
 		})

@@ -117,6 +117,13 @@ service InternalService {
   // Resolve DVR hash to tenant context (for analytics enrichment and playback)
   rpc ResolveDVRHash(ResolveDVRHashRequest) returns (ResolveDVRHashResponse);
 
+  // ResolveDVRChapter resolves a chapter_id to its origin cluster + range
+  // via commodore.dvr_chapter_aliases. Used by a non-origin Foghorn that
+  // receives a dvr+chapter_id playback request and lacks the chapter row
+  // locally; the resolved origin is the target of FoghornFederation
+  // .PrepareDVRChapter.
+  rpc ResolveDVRChapter(ResolveDVRChapterRequest) returns (ResolveDVRChapterResponse);
+
   // Resolve artifact playback ID to artifact identity (clip/dvr/vod)
   rpc ResolveArtifactPlaybackID(ResolveArtifactPlaybackIDRequest) returns (ResolveArtifactPlaybackIDResponse);
 
@@ -608,6 +615,27 @@ message ResolveDVRHashResponse {
   string playback_id = 6;               // Public playback key
   string internal_name = 7;             // Artifact routing name
   string origin_cluster_id = 8;         // Cluster that originally created this DVR
+}
+
+// ResolveDVRChapter reads commodore.dvr_chapter_aliases. The alias is
+// upserted by RetrieveDVRChapter at materialization time and carries the
+// origin_cluster_id authoritatively. stream_internal_name is JOINed in
+// from commodore.dvr_recordings for local-path construction in
+// StartDVRChapterDefrost.
+message ResolveDVRChapterRequest {
+  string chapter_id = 1;
+}
+
+message ResolveDVRChapterResponse {
+  bool found = 1;
+  string tenant_id = 2;
+  string origin_cluster_id = 3;
+  string dvr_hash = 4;
+  string mode = 5;                      // explicit_range | fixed_interval | window_sized
+  int32 interval_seconds = 6;
+  int64 start_ms = 7;
+  int64 end_ms = 8;
+  string stream_internal_name = 9;
 }
 
 // Unified identifier resolution - single call to check all Commodore registries

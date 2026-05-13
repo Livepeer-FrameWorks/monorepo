@@ -21,6 +21,17 @@ service FoghornFederation {
   // DVR replay uses dvr+ chapter routing and chapter-bounded edge defrost.
   rpc PrepareArtifact(PrepareArtifactRequest) returns (PrepareArtifactResponse);
 
+  // PrepareDVRChapter is the DVR equivalent of PrepareArtifact, scoped to a
+  // single chapter. The non-origin Foghorn calls the chapter's origin cluster
+  // to obtain presigned GETs for the chapter's segment ledger and chapter
+  // metadata, then locally defrosts the chapter without holding the
+  // storage-cluster's S3 credentials. Origin is the only writer of chapter
+  // rows; if the caller supplies range fields with no matching chapter row,
+  // origin materializes it via the same path Commodore.RetrieveDVRChapter
+  // uses. First-pass scope: storage_cluster_id must equal origin_cluster_id;
+  // split-write DVR returns unsupported_split_write_dvr.
+  rpc PrepareDVRChapter(PrepareDVRChapterRequest) returns (PrepareDVRChapterResponse);
+
   // CreateRemoteClip requests the origin cluster to create a clip on behalf of a remote cluster.
   rpc CreateRemoteClip(RemoteClipRequest) returns (RemoteClipResponse);
 
@@ -158,6 +169,38 @@ message PrepareArtifactResponse {
   // Reserved wire surface from the DVR chapter prototype. Current DVR
   // playback defrosts through the selected edge using the chapter ID.
   repeated helmsmancontrol.DVRSegmentRef dvr_segments = 11;
+}
+
+message PrepareDVRChapterRequest {
+  string requesting_cluster = 1;
+  string tenant_id = 2;
+  string dvr_artifact_id = 3;          // dvr_hash; required
+
+  // Caller specifies either chapter_id (fast path) OR the range fields.
+  // Range support lets origin re-materialize when a stale alias points at
+  // a chapter row that has been evicted. Origin remains the only writer
+  // of chapter rows. Range fields mirror RetrieveDVRChapterRequest.
+  string chapter_id = 4;
+  string mode = 5;                      // explicit_range | fixed_interval | window_sized
+  int32 interval_seconds = 6;
+  int64 start_ms = 7;
+  int64 end_ms = 8;
+
+  uint32 url_expiry_seconds = 9;        // advisory; origin clamps
+}
+
+message PrepareDVRChapterResponse {
+  string chapter_id = 1;
+  repeated helmsmancontrol.DVRSegmentRef segments = 2;
+  int64 start_ms = 3;
+  int64 end_ms = 4;
+  string mode = 5;
+  int32 interval_seconds = 6;
+  string stream_internal_name = 7;
+  uint32 url_ttl_seconds = 8;
+  // Error sentinels: not_dvr_origin, unsupported_split_write_dvr,
+  // tenancy_mismatch, chapter_not_found. Empty string on success.
+  string error = 9;
 }
 
 message RemoteClipRequest {

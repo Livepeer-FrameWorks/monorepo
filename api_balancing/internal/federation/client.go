@@ -83,6 +83,21 @@ func (c *FederationClient) PrepareArtifact(ctx context.Context, clusterID, addr 
 	return client.Federation().PrepareArtifact(ctx, req)
 }
 
+// PrepareDVRChapter asks the chapter's origin Foghorn for assembled segment
+// refs + presigned GET URLs. Used by StartDVRChapterDefrost when the local
+// chapter row is absent — see control.SetDVRChapterFederationClient.
+func (c *FederationClient) PrepareDVRChapter(ctx context.Context, clusterID, addr string, req *pb.PrepareDVRChapterRequest) (*pb.PrepareDVRChapterResponse, error) {
+	client, err := c.pool.GetOrCreate(clusterID, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
+	defer cancel()
+
+	return client.Federation().PrepareDVRChapter(ctx, req)
+}
+
 // MintStorageURLs asks the storage-cluster Foghorn pool to issue presigned
 // PUT URLs against its S3 backing for an upload that this cluster cannot
 // mint locally.

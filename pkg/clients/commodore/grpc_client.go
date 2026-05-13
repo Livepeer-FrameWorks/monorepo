@@ -485,6 +485,16 @@ func (c *GRPCClient) ResolveDVRHash(ctx context.Context, dvrHash string) (*pb.Re
 	})
 }
 
+// ResolveDVRChapter resolves a chapter_id to origin_cluster_id + range
+// via commodore.dvr_chapter_aliases. Used by a non-origin Foghorn when
+// StartDVRChapterDefrost lacks a local chapter row and needs to route to
+// the origin via FoghornFederation.PrepareDVRChapter.
+func (c *GRPCClient) ResolveDVRChapter(ctx context.Context, chapterID string) (*pb.ResolveDVRChapterResponse, error) {
+	return c.internal.ResolveDVRChapter(ctx, &pb.ResolveDVRChapterRequest{
+		ChapterId: chapterID,
+	})
+}
+
 // ResolveIdentifier provides unified resolution across all Commodore registries
 // Checks: streams (internal_name), streams (playback_id), clips, DVR, VOD
 // Used by Foghorn for analytics enrichment when local state cache misses
