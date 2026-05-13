@@ -63,7 +63,8 @@ import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
   There is **no default gateway**. Pass either `whipUrl` or (`gatewayUrl` + `streamKey`). If both
   are provided, `whipUrl` takes priority. The `gatewayUrl` path calls the public
   `resolveIngestEndpoint` GraphQL field; use direct `whipUrl` unless that resolver is enabled in
-  your environment.
+  your environment. Call Gateway resolution from the publisher's browser so ingest routing uses the
+  publisher's location; backend-side resolution routes from the backend's IP.
 </Aside>
 
 The drop-in component includes video preview, camera/screen share controls, quality selection, Go Live button, source management, and auto-reconnection.
@@ -78,6 +79,9 @@ WHIP: %INGEST_URL%/webrtc/your-stream-key
 
 FrameWorks uses MistServer's `/webrtc/{streamKey}` path for WHIP ingest. Gateway resolution can hide
 the node URL when the ingest resolver is available; otherwise use the dashboard WHIP URL directly.
+For custom encoders or server-side publishing, use the DNS ingest name directly instead of resolving
+through your backend: `edge-ingest.{tenant}.cdn.{base}` when available, then the global root or
+cluster-concrete ingest domain shown in the dashboard.
 
 <Aside type="caution" title="Stream Key is Secret">
   Your stream key grants permission to broadcast to your stream. Never share it publicly.

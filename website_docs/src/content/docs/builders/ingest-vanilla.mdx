@@ -50,6 +50,9 @@ const unsub = studio.reactiveState.on("streaming", (isLive) => {
 studio.destroy();
 ```
 
+Use `gatewayUrl` + `streamKey` only when the resolve request runs in the publisher's browser or
+device. For backend or encoder-side publishing, prefer the dashboard DNS ingest URL directly.
+
 ## Queries (Read State)
 
 All queries are synchronous getters on the instance.

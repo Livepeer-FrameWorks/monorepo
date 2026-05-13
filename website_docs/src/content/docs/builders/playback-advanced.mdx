@@ -500,6 +500,8 @@ The player resolves playback sources through one of three modes, evaluated in pr
 ### `gatewayUrl` (recommended for production)
 
 The Gateway resolves the best edge node for the viewer, returns structured endpoints, and handles failover across clusters.
+Resolve through Gateway from the viewer's browser or playback device. If your backend calls Gateway,
+Foghorn routes using the backend or proxy IP, not the final viewer's location.
 
 ```ts
 createPlayer({

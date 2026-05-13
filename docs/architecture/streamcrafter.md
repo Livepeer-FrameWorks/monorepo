@@ -194,6 +194,11 @@ When consumers pass `gatewayUrl` + `streamKey` (instead of a direct `whipUrl`):
 - Resolution happens in the wrappers/hooks/stores; `IngestControllerV2` still requires a `whipUrl` (direct or resolved)
 - There is **no default gateway**; resolution only happens when `gatewayUrl` + `streamKey` are provided (and `whipUrl` overrides when set)
 
+Gateway resolution must run from the publisher's browser/device when geo routing
+should reflect the publisher location. Backend-side resolution scores the
+backend/proxy IP instead. Server-side publishers and external encoders should
+use the tenant/global/cluster `edge-ingest` DNS name directly.
+
 ## Development workflow (local)
 
 ### Local WHIP endpoint (FrameWorks dev stack)

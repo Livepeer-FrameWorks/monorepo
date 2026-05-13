@@ -137,6 +137,11 @@ When enabled, the resolver can choose an ingest node based on:
 - Node load and capacity
 - Stream configuration
 
+Run Gateway resolution from the publisher's browser or device. If your application backend resolves
+the ingest endpoint, Foghorn scores the backend or proxy IP instead of the publisher location. For
+OBS, hardware encoders, or server-side publishing, prefer the dashboard DNS ingest URL
+(`edge-ingest.{tenant}.cdn.{base}` when present, then global or cluster-concrete fallback).
+
 ### Manual Gateway Resolution
 
 For custom UIs that need to resolve a WHIP URL before initializing in resolver-backed environments:

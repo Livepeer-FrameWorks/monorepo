@@ -30,6 +30,12 @@ For operator-level documentation, see `website_docs/.../operators/architecture.m
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
+GraphQL resolution is viewer-local only when the caller is the viewer's browser
+or playback device. If an application backend calls `resolveViewerEndpoint`,
+Gateway forwards the backend/proxy IP and Foghorn scores against that location.
+Custom players that do not call Gateway from the viewer should use the
+tenant/global/cluster playback DNS name and `/play` URL directly.
+
 ## Scoring Algorithm
 
 Foghorn ranks eligible nodes using a weighted scoring system. **Higher score = better node.**
@@ -115,14 +121,31 @@ If no node has the stream:
 
 ## npm_player Integration
 
-The player SDK uses Gateway GraphQL to resolve endpoints:
+The player SDK uses Gateway GraphQL to resolve endpoints from the viewer's browser:
 
 ```graphql
-query ResolveViewerEndpoint($playbackId: String!, $contentType: ContentType) {
-  resolveViewerEndpoint(playbackId: $playbackId, contentType: $contentType) {
-    primary { host port protocol ... }
-    fallbacks { host port protocol ... }
-    outputs { hls whep dash ... }
+query ResolveViewer($contentId: String!) {
+  resolveViewerEndpoint(contentId: $contentId) {
+    primary {
+      nodeId
+      baseUrl
+      protocol
+      url
+      outputs
+    }
+    fallbacks {
+      nodeId
+      baseUrl
+      protocol
+      url
+      outputs
+    }
+    metadata {
+      contentType
+      contentId
+      status
+      isLive
+    }
   }
 }
 ```

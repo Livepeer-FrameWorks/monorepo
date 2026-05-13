@@ -45,8 +45,9 @@ function BroadcastPage() {
 }
 ```
 
-Gateway resolution calls the public `resolveIngestEndpoint` GraphQL field. Use direct `whipUrl`
-unless that resolver is enabled in your environment.
+Gateway resolution calls the public `resolveIngestEndpoint` GraphQL field from the publisher's
+browser. Use direct `whipUrl` unless that resolver is enabled in your environment, and prefer the
+dashboard DNS ingest URL for backend or encoder-side publishing.
 
 ## Composable Components
 
@@ -147,7 +148,8 @@ function FullyCustomBroadcaster() {
 <Aside type="note" title="Gateway in custom UI">
   `useStreamCrafterV2` accepts `whipUrl` directly. If your environment supports
   `resolveIngestEndpoint`, resolve a WHIP URL first with `IngestClient` from
-  `@livepeer-frameworks/streamcrafter-core`, then pass `whipUrl`.
+  `@livepeer-frameworks/streamcrafter-core`, then pass `whipUrl`. Do this in the publisher client
+  when you want geo routing based on the publisher location.
 </Aside>
 
 ### Hook Return Reference

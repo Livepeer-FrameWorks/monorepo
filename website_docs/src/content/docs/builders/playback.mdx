@@ -99,6 +99,27 @@ import { Player } from "@livepeer-frameworks/player-react";
   Modes](/builders/playback-advanced/#source-resolution-modes) for when to use each option.
 </Aside>
 
+## Where to Resolve From
+
+Call `resolveViewerEndpoint` from the viewer's browser or playback device when you want geographic
+routing to reflect that viewer. The FrameWorks player does this for you when you provide
+`gatewayUrl`: the browser calls Gateway GraphQL, Gateway forwards the request IP to Foghorn, and
+Foghorn uses that IP for GeoIP and edge scoring.
+
+Do not call `resolveViewerEndpoint` from your application backend unless you intentionally want
+routing based on the backend's IP address. Backend-side resolution cannot know where the final
+viewer is unless your infrastructure preserves and trusts the viewer IP all the way to Gateway.
+
+For custom players that do not use the FrameWorks player, use the playback DNS name directly:
+
+```bash
+https://foghorn.{tenant}.cdn.{base}/play/{playback-id}/hls/index.m3u8
+```
+
+If a tenant alias is not available, use the global root playback domain, then the cluster-concrete
+Foghorn domain shown in the dashboard. HTTP playback URLs can go through `/play` because Foghorn can
+return JSON or issue a 307 redirect from the viewer's request.
+
 ## Universal Playback URLs (`/play`)
 
 `/play` is a **redirect + resolver** endpoint for direct protocol URLs and CLI tools. It returns **307 redirects** to edge nodes.
@@ -168,7 +189,8 @@ See [Recordings, Clips & VOD](/builders/recordings#archive-chapters) for the 24/
 
 In multi-cluster deployments, Foghorn handles cross-cluster routing transparently. When a viewer requests a stream from a remote cluster, Foghorn arranges origin-pull replication or redirects via HTTP 307.
 
-The player SDK handles this automatically — `gatewayUrl` resolves to the correct Foghorn for the viewer's region.
+The player SDK handles this automatically when it runs in the viewer's browser or playback device:
+`gatewayUrl` resolves to the correct Foghorn for that viewer's region.
 
 ## Using Other Players
 

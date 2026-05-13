@@ -36,6 +36,10 @@ function LiveStream() {
 }
 ```
 
+The `gatewayUrl` request runs in the viewer's browser, so Foghorn routes from that viewer's IP. For
+backend-generated playback URLs or custom players that do not use this component, use the dashboard
+playback DNS URL directly.
+
 ### Direct MistServer Node
 
 ```tsx

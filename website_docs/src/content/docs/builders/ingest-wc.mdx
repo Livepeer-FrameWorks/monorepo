@@ -47,8 +47,9 @@ Shadow DOM encapsulates all CSS — host page styles won't break controls.
 ></fw-streamcrafter>
 ```
 
-Gateway resolution calls the public `resolveIngestEndpoint` GraphQL field. Use direct `whip-url`
-unless that resolver is enabled in your environment.
+Gateway resolution calls the public `resolveIngestEndpoint` GraphQL field from the publisher's
+browser. Use direct `whip-url` unless that resolver is enabled in your environment, and prefer the
+dashboard DNS ingest URL for backend or encoder-side publishing.
 
 The element includes the same full UI as the React/Svelte versions: video preview, camera/screen controls, quality selection, and connection status.
 

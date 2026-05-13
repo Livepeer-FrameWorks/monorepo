@@ -40,6 +40,10 @@ Shadow DOM encapsulates all CSS — host page styles won't break controls.
 ></fw-player>
 ```
 
+The `gateway-url` request runs in the viewer's browser, so Foghorn routes from that viewer's IP. For
+backend-generated playback URLs or custom players that do not use this element, use the dashboard
+playback DNS URL directly.
+
 ### Direct MistServer Node
 
 ```html
