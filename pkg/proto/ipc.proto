@@ -163,6 +163,9 @@ message ControlMessage {
     MistTrigger mist_trigger = 24;
     MistTriggerResponse mist_trigger_response = 25;
     ConfigSeed config_seed = 29;
+    // Helmsman to Foghorn: per-seed apply result for TLS/Caddy activation.
+    // Gates Navigator's DNS membership decisions.
+    ConfigSeedApplyResult config_seed_apply_result = 34;
     ArtifactDeleted artifact_deleted = 30;
     ClipDeleteRequest clip_delete = 31;
     DVRDeleteRequest dvr_delete = 32;
@@ -1741,6 +1744,19 @@ message TLSCertBundle {
   string key_pem = 2;
   string domain = 3;
   int64 expires_at = 4;
+  // Stable identity used by Helmsman to key cert/key files on disk and
+  // by Foghorn to track per-edge apply state. Examples:
+  //   "cluster:media-us-1"
+  //   "tenant:acme"
+  //   "platform:edge-multi"
+  //   "platform:pool-multi"
+  string bundle_id = 5;
+  // Hostnames this bundle's cert should serve via Caddy SNI. Helmsman
+  // renders one Caddy site block per bundle covering these addresses.
+  // Examples:
+  //   ["*.media-us-1.frameworks.network"]
+  //   ["acme.cdn.frameworks.network", "*.acme.cdn.frameworks.network"]
+  repeated string site_addresses = 6;
 }
 
 message ConfigSeed {
@@ -1755,6 +1771,8 @@ message ConfigSeed {
   ProcessingConfig processing = 11;
   // Authoritative operational mode set by Foghorn. Helmsman must apply this.
   NodeOperationalMode operational_mode = 12;
+  // Single cluster wildcard bundle. Kept populated with the cluster
+  // wildcard while tls_bundles carries the full SNI set.
   TLSCertBundle tls = 20;
   // Public site configuration for Helmsman Caddyfile rendering (populated by Foghorn)
   SiteConfig site = 21;
@@ -1766,6 +1784,32 @@ message ConfigSeed {
   // or "http://foghorn:18008" in-cluster). Helmsman uses this to wire the
   // MistServer "balance:<base>?fallback=push://" source on stream templates.
   string foghorn_balancer_base = 24;
+  // Monotonic version assigned by Foghorn per (node, generation). Helmsman
+  // echoes this in ConfigSeedApplyResult so Foghorn can correlate ACKs.
+  uint64 seed_version = 25;
+  // Multi-cert SNI bundle set. Each entry has a stable bundle_id used to
+  // key cert files on disk and track per-edge apply state. Helmsman
+  // renders one Caddy site block per bundle.
+  repeated TLSCertBundle tls_bundles = 26;
+}
+
+// ConfigSeedApplyResult is sent by Helmsman after attempting to apply a
+// ConfigSeed (write cert files + reload Caddy). Foghorn uses this to gate
+// DNS publishing: Navigator only adds an edge to a tenant's smart record
+// set after the edge has acked applying that tenant's bundle.
+message ConfigSeedApplyResult {
+  string node_id = 1;
+  // Echoes ConfigSeed.seed_version so Foghorn knows which seed this acks.
+  uint64 seed_version = 2;
+  // Bundle IDs that loaded successfully and are serving via Caddy.
+  repeated string applied_bundle_ids = 3;
+  // Bundle IDs that failed to load (e.g. malformed PEM, key mismatch).
+  repeated string failed_bundle_ids = 4;
+  // Overall success: true iff all bundles loaded AND Caddy reload succeeded.
+  bool success = 5;
+  // Populated on failure: error message describing what went wrong.
+  string error = 6;
+  google.protobuf.Timestamp applied_at = 7;
 }
 
 // SiteConfig carries the public-facing site parameters that Helmsman uses to

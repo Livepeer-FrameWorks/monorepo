@@ -168,6 +168,7 @@ type conn struct {
 	last        time.Time
 	peerAddr    string
 	canonicalID string // node ID after fingerprint/enrollment resolution (may differ from registry key)
+	clusterID   string
 }
 
 var registry *Registry
@@ -960,6 +961,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				registry.mu.Lock()
 				if c, ok := registry.conns[nodeID]; ok {
 					c.canonicalID = canonicalNodeID
+					c.clusterID = clusterID
 					registry.conns[canonicalNodeID] = c
 				}
 				registry.mu.Unlock()
@@ -970,6 +972,14 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 					}
 				}
 			}
+			registry.mu.Lock()
+			if c, ok := registry.conns[nodeID]; ok {
+				c.clusterID = clusterID
+			}
+			if c, ok := registry.conns[canonicalNodeID]; ok {
+				c.clusterID = clusterID
+			}
+			registry.mu.Unlock()
 
 			// Determine operational mode: DB-persisted wins over Helmsman's request
 			operationalMode := resolveOperationalMode(canonicalNodeID, x.Register.GetRequestedMode())
@@ -1193,6 +1203,31 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			go processEvictableSegmentsRequest(x.EvictableSegmentsRequest, nodeID, stream, registry.log)
 		case *pb.ControlMessage_RestoreLocalSegmentIndexRequest:
 			go processRestoreLocalSegmentIndexRequest(x.RestoreLocalSegmentIndexRequest, nodeID, stream, registry.log)
+		case *pb.ControlMessage_ConfigSeedApplyResult:
+			if x.ConfigSeedApplyResult != nil {
+				ack := x.ConfigSeedApplyResult
+				canonicalID := nodeID
+				clusterID := ""
+				registry.mu.RLock()
+				if c := registry.conns[nodeID]; c != nil {
+					if c.canonicalID != "" {
+						canonicalID = c.canonicalID
+					}
+					clusterID = c.clusterID
+				}
+				registry.mu.RUnlock()
+				go func(a *pb.ConfigSeedApplyResult, canonical, resolvedClusterID string) {
+					ackClusterID := resolvedClusterID
+					if ackClusterID == "" && quartermasterClient != nil && canonical != "" {
+						lookupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+						defer cancel()
+						if resp, err := quartermasterClient.GetNode(lookupCtx, canonical); err == nil && resp.GetNode() != nil {
+							ackClusterID = resp.GetNode().GetClusterId()
+						}
+					}
+					reportApplyResultToNavigator(a, canonical, ackClusterID, registry.log)
+				}(ack, canonicalID, clusterID)
+			}
 		}
 	}
 	if nodeID != "" {
@@ -2197,6 +2232,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 			}
 		}
 	}
+	var isPlatformOfficial bool
 	if resolvedClusterID != "" {
 		rootDomain := platformRootDomain()
 		slug := pkgdns.SanitizeLabel(resolvedClusterID)
@@ -2215,11 +2251,26 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 			certCancel()
 			if certErr == nil && certResp != nil && certResp.GetFound() {
 				tlsBundle = &pb.TLSCertBundle{
-					CertPem:   certResp.GetCertPem(),
-					KeyPem:    certResp.GetKeyPem(),
-					Domain:    certResp.GetDomain(),
-					ExpiresAt: certResp.GetExpiresAt(),
+					CertPem:       certResp.GetCertPem(),
+					KeyPem:        certResp.GetKeyPem(),
+					Domain:        certResp.GetDomain(),
+					ExpiresAt:     certResp.GetExpiresAt(),
+					BundleId:      "cluster:" + slug,
+					SiteAddresses: []string{wildcardDomain},
 				}
+			}
+		}
+
+		// Resolve cluster kind to decide whether to distribute the
+		// platform-edge multi-SAN cert. Only platform_official clusters
+		// receive it; third-party / marketplace / tenant-private edges
+		// are excluded for trust-boundary reasons.
+		if quartermasterClient != nil {
+			cCtx, cCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			resp, cErr := quartermasterClient.GetCluster(cCtx, resolvedClusterID)
+			cCancel()
+			if cErr == nil && resp != nil && resp.GetCluster() != nil {
+				isPlatformOfficial = resp.GetCluster().GetIsPlatformOfficial()
 			}
 		}
 	}
@@ -2227,7 +2278,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 	caBundle := readConfiguredCABundle()
 	telemetry := buildEdgeTelemetryConfig(nodeID, resolvedClusterID, ownerTenantID)
 
-	return &pb.ConfigSeed{
+	seed := &pb.ConfigSeed{
 		NodeId:              nodeID,
 		Latitude:            lat,
 		Longitude:           lon,
@@ -2240,6 +2291,100 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		TenantId:            ownerTenantID,
 		Telemetry:           telemetry,
 		FoghornBalancerBase: foghornBalancerBase(resolvedClusterID),
+		SeedVersion:         nextSeedVersion(nodeID),
+	}
+	if tlsBundle != nil {
+		seed.TlsBundles = []*pb.TLSCertBundle{tlsBundle}
+	}
+	if isPlatformOfficial {
+		if extra := fetchPlatformEdgeBundle(); extra != nil {
+			seed.TlsBundles = append(seed.TlsBundles, extra)
+		}
+	}
+	// Per-tenant TLS bundles: for every paying tenant subscribed to this
+	// cluster, include their *.{tenant}.cdn.{root} cert. Best-effort;
+	// missing certs (still pending issuance) are skipped silently and
+	// reconciled on the next cycle.
+	seed.TlsBundles = append(seed.TlsBundles, fetchTenantBundles(resolvedClusterID)...)
+	return seed
+}
+
+// fetchTenantBundles queries Quartermaster for the paying tenants
+// subscribed to clusterID, then pulls each tenant's TLS bundle from
+// Navigator. Returns only bundles that exist (cert issuance complete).
+// Bundles for tenants still in cert_issuing state are skipped.
+func fetchTenantBundles(clusterID string) []*pb.TLSCertBundle {
+	if clusterID == "" || quartermasterClient == nil || navigatorClient == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := quartermasterClient.ListAliasedTenantsForCluster(ctx, clusterID)
+	if err != nil || resp == nil || len(resp.GetTenants()) == 0 {
+		return nil
+	}
+	rootDomain := platformRootDomain()
+	tenantZoneLabel := pkgdns.TenantAliasZoneLabel
+
+	out := make([]*pb.TLSCertBundle, 0, len(resp.GetTenants()))
+	for _, ref := range resp.GetTenants() {
+		bundleID := "tenant:" + ref.GetTenantId()
+		certCtx, certCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		certResp, certErr := navigatorClient.GetTLSBundle(certCtx, &pb.GetTLSBundleRequest{BundleId: bundleID})
+		certCancel()
+		if certErr != nil || certResp == nil || !certResp.GetFound() {
+			continue
+		}
+		apex := ref.GetSubdomain() + "." + tenantZoneLabel + "." + rootDomain
+		out = append(out, &pb.TLSCertBundle{
+			CertPem:       certResp.GetCertPem(),
+			KeyPem:        certResp.GetKeyPem(),
+			Domain:        apex,
+			ExpiresAt:     certResp.GetExpiresAt(),
+			BundleId:      bundleID,
+			SiteAddresses: []string{apex, "*." + apex},
+		})
+	}
+	return out
+}
+
+// fetchPlatformEdgeBundle pulls the platform-edge multi-SAN cert from
+// Navigator. Returns nil if Navigator is unavailable or the cert hasn't
+// been issued yet. Caller is responsible for deciding which nodes
+// receive this bundle (only platform_official cluster edges).
+func fetchPlatformEdgeBundle() *pb.TLSCertBundle {
+	if navigatorClient == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := navigatorClient.GetTLSBundle(ctx, &pb.GetTLSBundleRequest{
+		BundleId: "platform:edge-multi",
+	})
+	if err != nil || resp == nil || !resp.GetFound() {
+		return nil
+	}
+	rootDomain := platformRootDomain()
+	return &pb.TLSCertBundle{
+		CertPem:       resp.GetCertPem(),
+		KeyPem:        resp.GetKeyPem(),
+		Domain:        strings.Join(resp.GetDomains(), ","),
+		ExpiresAt:     resp.GetExpiresAt(),
+		BundleId:      "platform:edge-multi",
+		SiteAddresses: platformEdgeSiteAddresses(rootDomain),
+	}
+}
+
+// platformEdgeSiteAddresses returns the 5 hostnames the platform-edge
+// multi-SAN cert covers. Helmsman renders one Caddy site block bound
+// to these names.
+func platformEdgeSiteAddresses(rootDomain string) []string {
+	return []string{
+		"edge." + rootDomain,
+		"edge-ingest." + rootDomain,
+		"edge-egress." + rootDomain,
+		"edge-storage." + rootDomain,
+		"edge-processing." + rootDomain,
 	}
 }
 
@@ -5246,47 +5391,51 @@ func refreshTLSBundles(log logging.Logger) {
 	seedCaBundle := readConfiguredCABundle()
 
 	for _, n := range nodes {
-		bundle, _, err := fetchClusterTLSBundle(n.canonicalID)
-		if err != nil {
-			log.WithError(err).WithField("node_id", n.canonicalID).Warn("Failed to resolve TLS bundle for node")
-			continue
-		}
+		// composeConfigSeed resolves the FULL bundle set:
+		//   - cluster wildcard (from fetchClusterTLSBundle internally)
+		//   - platform-edge / pool-assigned multi-SAN (when applicable)
+		//   - per-tenant *.{tenant}.cdn.{root} bundles (from
+		//     fetchTenantBundles)
+		// Fingerprinting on JUST the cluster wildcard would mask tenant
+		// bundle changes; adding/removing a paying tenant's cluster
+		// subscription would never trigger a push until the cluster
+		// wildcard itself rotated. Fingerprint the full set instead.
+		mode := resolveOperationalMode(n.canonicalID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED)
+		seed := composeConfigSeed(n.canonicalID, nil, n.peerAddr, mode, "")
+		stripWildcardSiteWithoutTLS(seed)
 
-		nextState := tlsMaterialState(bundle, seedCaBundle)
+		nextState := tlsBundleSetState(seed.GetTlsBundles(), seedCaBundle)
 
 		prev, ok := lastPushedTLSState.Load(n.connID)
 		if prevState, isString := prev.(string); ok && isString && prevState == nextState {
 			continue
 		}
 
-		mode := resolveOperationalMode(n.canonicalID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED)
-		seed := composeConfigSeed(n.canonicalID, nil, n.peerAddr, mode, "")
-		// Override TLS with the bundle we already resolved above.
-		// composeConfigSeed resolves TLS internally, which can fail
-		// transiently on a second call; using the pre-resolved bundle
-		// avoids pushing a seed that silently drops TLS.
-		seed.Tls = bundle
-		stripWildcardSiteWithoutTLS(seed)
 		if err := SendConfigSeed(n.connID, seed); err != nil {
-			log.WithError(err).WithField("node_id", n.canonicalID).Warn("Failed to push renewed TLS certificate")
+			log.WithError(err).WithField("node_id", n.canonicalID).Warn("Failed to push renewed TLS bundles")
 			continue
 		}
 
 		lastPushedTLSState.Store(n.connID, nextState)
-		if bundle == nil {
+		bundleCount := len(seed.GetTlsBundles())
+		clusterDomain := ""
+		if seed.GetTls() != nil {
+			clusterDomain = seed.GetTls().GetDomain()
+		}
+		if bundleCount == 0 {
 			log.WithFields(logging.Fields{
 				"node_id": n.canonicalID,
 				"conn_id": n.connID,
-			}).Info("Removed TLS certificate from edge after navigator reported no certificate")
+			}).Info("Removed TLS bundles from edge after navigator reported no certificates")
 			continue
 		}
 
 		log.WithFields(logging.Fields{
-			"node_id":    n.canonicalID,
-			"conn_id":    n.connID,
-			"domain":     bundle.GetDomain(),
-			"expires_at": bundle.GetExpiresAt(),
-		}).Info("Pushed renewed TLS certificate to edge")
+			"node_id":        n.canonicalID,
+			"conn_id":        n.connID,
+			"bundle_count":   bundleCount,
+			"cluster_domain": clusterDomain,
+		}).Info("Pushed refreshed TLS bundle set to edge")
 	}
 }
 
@@ -5420,16 +5569,50 @@ func fetchClusterTLSBundle(nodeID string) (*pb.TLSCertBundle, bool, error) {
 		return nil, false, nil
 	}
 
+	slug := pkgdns.SanitizeLabel(node.GetClusterId())
+	wildcardDomain := fmt.Sprintf("*.%s.%s", slug, rootDomain)
 	return &pb.TLSCertBundle{
-		CertPem:   certResp.GetCertPem(),
-		KeyPem:    certResp.GetKeyPem(),
-		Domain:    certResp.GetDomain(),
-		ExpiresAt: certResp.GetExpiresAt(),
+		CertPem:       certResp.GetCertPem(),
+		KeyPem:        certResp.GetKeyPem(),
+		Domain:        certResp.GetDomain(),
+		ExpiresAt:     certResp.GetExpiresAt(),
+		BundleId:      "cluster:" + slug,
+		SiteAddresses: []string{wildcardDomain},
 	}, true, nil
 }
 
 func tlsBundleState(bundle *pb.TLSCertBundle) string {
 	return tlsMaterialState(bundle, nil)
+}
+
+// tlsBundleSetState fingerprints the full ordered set of TLS bundles
+// plus the CA bundle. Used by the refresh loop to dedup pushes: a
+// change in any tenant or platform bundle (added, removed, or rotated)
+// produces a different fingerprint, which guarantees the next refresh
+// pushes a fresh ConfigSeed instead of stalling on the cluster bundle's
+// fingerprint alone.
+func tlsBundleSetState(bundles []*pb.TLSCertBundle, caBundle []byte) string {
+	if len(bundles) == 0 && len(caBundle) == 0 {
+		return tlsStateNoCert
+	}
+	payload := make([]byte, 0, len(caBundle)+512)
+	for _, b := range bundles {
+		if b == nil {
+			continue
+		}
+		payload = append(payload, b.GetBundleId()...)
+		payload = append(payload, '\x00')
+		payload = append(payload, b.GetCertPem()...)
+		payload = append(payload, '\x00')
+		payload = append(payload, b.GetKeyPem()...)
+		payload = append(payload, '\x00')
+		payload = append(payload, b.GetDomain()...)
+		payload = fmt.Appendf(payload, "\x00%d", b.GetExpiresAt())
+		payload = append(payload, '\x00')
+	}
+	payload = append(payload, caBundle...)
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
 }
 
 func tlsMaterialState(bundle *pb.TLSCertBundle, caBundle []byte) string {

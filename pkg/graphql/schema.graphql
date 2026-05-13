@@ -5822,19 +5822,18 @@ type StreamingConfig {
   officialEdgeDomain: String
   officialPlayDomain: String
   officialChandlerDomain: String
-  # Global root entrypoints (Slice 3). Default user-facing URL surface
-  # for free / platform-official tenants. Bunny smart DNS does geo
-  # routing from one record per service. Webapp/SDK should prefer
-  # these over cluster-concrete URLs when no tenant alias is active.
+  # Global root entrypoints. Default user-facing URL surface for free
+  # and platform-official tenants. Bunny smart DNS does geo routing from
+  # one record per service. Webapp/SDK should prefer these over
+  # cluster-concrete URLs when no tenant alias is active.
   globalIngestDomain: String
   globalEdgeDomain: String
   globalPlayDomain: String
   globalChandlerDomain: String
   globalLivepeerDomain: String
-  # Tenant alias entrypoints (Slice 3). Populated only when the tenant
-  # has an active paid alias (Navigator status=cert_issued). Spans every
-  # cluster the tenant subscribes to. When populated these should be
-  # the primary URLs surfaced to end users.
+  # Tenant alias entrypoints. Populated only when Navigator has
+  # published at least one DNS member for the tenant alias. When
+  # populated, these are the primary URLs surfaced to end users.
   tenantIngestDomain: String
   tenantEdgeDomain: String
   tenantPlayDomain: String

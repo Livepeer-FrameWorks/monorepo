@@ -247,6 +247,16 @@ func (c *GRPCClient) GetCluster(ctx context.Context, clusterID string) (*pb.Clus
 	})
 }
 
+// ListAliasedTenantsForCluster returns paid-tier tenants with active
+// access + a subdomain in this cluster. Used by Foghorn to know which
+// per-tenant TLS bundles to include in ConfigSeed for edges in the
+// cluster.
+func (c *GRPCClient) ListAliasedTenantsForCluster(ctx context.Context, clusterID string) (*pb.ListAliasedTenantsForClusterResponse, error) {
+	return c.tenant.ListAliasedTenantsForCluster(ctx, &pb.ListAliasedTenantsForClusterRequest{
+		ClusterId: clusterID,
+	})
+}
+
 // ListClusters lists clusters with cursor pagination
 func (c *GRPCClient) ListClusters(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListClustersResponse, error) {
 	return c.cluster.ListClusters(ctx, &pb.ListClustersRequest{

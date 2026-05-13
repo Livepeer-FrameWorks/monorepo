@@ -7,6 +7,7 @@ require (
 	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/failsafe-go/failsafe-go v0.9.6
 	github.com/gin-gonic/gin v1.12.0
+	github.com/lib/pq v1.12.3
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.80.0
 )
@@ -27,7 +28,6 @@ require (
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
-	github.com/lib/pq v1.12.3 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nrdcg/bunny-go v0.1.0 // indirect
 	github.com/paulmach/orb v0.13.0 // indirect

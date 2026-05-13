@@ -108,7 +108,7 @@ In multi-cluster deployments, each media cluster gets a delegated Bunny DNS zone
 
 Navigator creates the Bunny zone, delegates `{cluster_slug}.{base_domain}` from Cloudflare with NS records, and reconciles each media service as a Bunny A-record set. The zone apex and `foghorn.{slug}.{base}` both point at the cluster's assigned virtual Foghorn instance(s), so callers can use the cluster domain as the default playback/routing entrypoint. Records use Bunny geolocation Smart Routing when Quartermaster has node coordinates. Quartermaster remains the health source; Navigator removes unhealthy nodes from the desired record set instead of enabling provider-side health checks.
 
-Media and edge names are cluster-scoped only. Navigator removes unsupported root-level media records such as `edge-ingest.example.com` and `foghorn.example.com` during reconciliation.
+Media and edge names ALSO publish at global root entrypoints (see Tier-Based URL Surface below). Cluster-concrete records remain as operator-pin / debug surfaces.
 
 ### Protocol Routing
 
@@ -142,13 +142,105 @@ Certificates are issued via ACME DNS-01 challenges through the provider authorit
 
 Once issued, certificates are distributed to edge nodes via **ConfigSeed** — Foghorn pushes TLS bundles to Helmsman over the existing gRPC control stream. Edges do not need direct access to the ACME provider.
 
-### Tenant Subdomains
+### Tier-Based URL Surface
 
-Tenant-specific subdomains CNAME to the shared infrastructure:
+FrameWorks exposes three URL tiers per service. The webapp and SDKs pick
+the right one for each tenant; operators see all three in the dashboard.
 
-```
-tenant1.example.com  → CNAME → foghorn.{cluster_slug}.example.com
-```
+**1. Global root entrypoints — default UX for free / platform-official tenants**
+
+Each tenant-aliasable service has a single global record under
+`{base_domain}`:
+
+| Pattern                                         | Purpose                                                           |
+| ----------------------------------------------- | ----------------------------------------------------------------- |
+| `foghorn.{base}`                                | Global HTTP playback (geo-routed to nearest platform Foghorn)     |
+| `edge-ingest.{base}`                            | Global RTMP/SRT/WHIP ingest (geo-routed to nearest platform edge) |
+| `edge-egress.{base}`                            | Global viewer egress                                              |
+| `edge.{base}`                                   | Global edge pool                                                  |
+| `edge-storage.{base}`, `edge-processing.{base}` | Storage / processing variants                                     |
+| `chandler.{base}`                               | Global control helper                                             |
+| `livepeer.{base}`                               | Global Livepeer gateway                                           |
+
+These live as Bunny smart records and resolve to `platform_official`
+cluster nodes only (third-party / marketplace / tenant-private edges
+are excluded from global pools — see "Self-hosted trust boundary"
+below). Certificates: one pool-assigned multi-SAN cert for
+foghorn/chandler/livepeer; one platform-edge multi-SAN cert for the
+five edge-\* names. Both distributed via ConfigSeed only to
+platform-operated nodes.
+
+**2. Cluster-concrete URLs — operator pin / debug**
+
+Per-cluster names as documented in "Media Cluster DNS" above:
+`{service}.{cluster_slug}.{base}`. Always available regardless of
+tier. Used by self-hosted operators on free tier, by operators
+wanting to pin traffic to a specific cluster, and by diagnostics.
+
+**3. Tenant aliases — paid-tier branded URLs that span subscribed clusters**
+
+Paying tenants get a per-tenant alias under the shared Bunny zone
+`cdn.{base}`:
+
+| Pattern                                                                   | Purpose                                                               |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `{tenant}.cdn.{base}`                                                     | Tenant apex                                                           |
+| `foghorn.{tenant}.cdn.{base}`                                             | Tenant playback (geo-balances across subscribed clusters of any kind) |
+| `edge-ingest.{tenant}.cdn.{base}`                                         | Tenant ingest (RTMP/SRT/WHIP)                                         |
+| `edge-egress.{tenant}.cdn.{base}`                                         | Tenant egress                                                         |
+| `edge-storage.{tenant}.cdn.{base}`, `edge-processing.{tenant}.cdn.{base}` | Tenant storage / processing                                           |
+| `chandler.{tenant}.cdn.{base}`, `livepeer.{tenant}.cdn.{base}`            | Tenant control helpers                                                |
+
+A single per-tenant wildcard cert (`*.{tenant}.cdn.{base}` plus the
+apex) covers every service. The cert is distributed via ConfigSeed
+to every edge in clusters the tenant subscribes to — regardless of
+cluster kind (platform-official, tenant-private, third-party
+marketplace). Caddy SNI on each edge presents the right cert per
+Host header. Bunny smart records under `cdn.{base}` resolve to the
+union of edges across the tenant's subscribed clusters.
+
+This is the marketplace-spanning feature: one URL that geo-balances
+across whatever capacity the tenant has subscribed to. No competitor
+spans operator trust boundaries this way.
+
+#### Tenant alias lifecycle
+
+| Status         | Meaning                                                                                                      |
+| -------------- | ------------------------------------------------------------------------------------------------------------ |
+| `cert_issuing` | Quartermaster signaled intent on paid-tier activation; Navigator is running ACME (LE primary, GTS fallback). |
+| `cert_issued`  | Cert exists; tenant URLs become visible once Navigator has at least one ACK-gated DNS member.                |
+| `cert_failed`  | ACME error; check `last_error`. The worker retries on the next reconciliation pass.                          |
+| `tearing_down` | Tenant downgraded / cancelled; Navigator is clearing DNS records and per-edge cert distribution.             |
+
+Additions are ACK-gated: Helmsman applies the ConfigSeed, Foghorn reports
+the ACK to Navigator, and Navigator adds only successfully applied edges to
+Bunny DNS. Removals are DNS-first: Navigator removes the cluster's edges
+from Bunny before later ConfigSeeds drop the tenant cert from those edges.
+
+#### Self-hosted trust boundary
+
+- Cluster wildcards (`*.{cluster_slug}.{base}`) and per-tenant
+  wildcards (`*.{tenant}.cdn.{base}`) are distributed to all edges
+  in the relevant cluster regardless of operator kind. Trust math:
+  the operator only ever sees certs scoped to their own cluster's
+  namespace or to tenants who explicitly subscribed to them.
+- Global service entrypoints and the platform-edge multi-SAN cert
+  are ONLY distributed to `platform_official` cluster edges.
+  Third-party / marketplace / tenant-private edges cannot impersonate
+  the global names.
+
+#### Tier mapping
+
+| Tenant state                  | Primary URL      | Diagnostic / fallback              |
+| ----------------------------- | ---------------- | ---------------------------------- |
+| Free + platform-official only | Global root      | Cluster-concrete                   |
+| Free + self-hosted            | Cluster-concrete | —                                  |
+| Paid (any sub mix)            | Tenant alias     | Global root, then cluster-concrete |
+
+The Commodore `CreateStreamResponse` and GraphQL `StreamingConfig`
+surface all three tiers (`{service}_domain`, `global_{service}_domain`,
+`tenant_{service}_domain`). SDK/webapp prefer tenant > global >
+cluster-concrete.
 
 ---
 
@@ -167,6 +259,8 @@ CLOUDFLARE_API_TOKEN="your-api-token"
 CLOUDFLARE_ZONE_ID="your-zone-id"
 CLOUDFLARE_ACCOUNT_ID="your-account-id"
 BUNNY_API_KEY="your-bunny-api-key"
+NAVIGATOR_GOOGLE_TRUST_EAB_KID="your-gts-eab-key-id"
+NAVIGATOR_GOOGLE_TRUST_EAB_HMAC_KEY="your-gts-eab-hmac-key"
 ```
 
 Optional environment variables:
@@ -178,4 +272,5 @@ NAVIGATOR_PROXY_SERVICES="bridge,chartroom,chatwoot,foredeck,grafana,listmonk,lo
 # Certificate issuance
 ACME_ENV="production"              # or "staging"
 NAVIGATOR_CERT_ALLOWED_SUFFIXES="example.com"
+NAVIGATOR_ACME_CA_ORDER="letsencrypt,google-trust" # override only
 ```

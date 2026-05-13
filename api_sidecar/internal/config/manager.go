@@ -20,20 +20,28 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Manager maintains desired vs current MistServer configuration and reconciles them via the Mist API.
 type Manager struct {
-	mu             sync.Mutex
-	mistClient     *mist.Client
-	logger         logging.Logger
-	lastSeed       *pb.ConfigSeed
-	lastAppliedSum string
-	retryTimer     *time.Timer
-	retryAttempt   int
-	lastCaddyHash  string
-	caddyActivated bool
+	mu               sync.Mutex
+	mistClient       *mist.Client
+	logger           logging.Logger
+	lastSeed         *pb.ConfigSeed
+	lastAppliedSum   string
+	retryTimer       *time.Timer
+	retryAttempt     int
+	lastCaddyHash    string
+	caddyActivated   bool
+	ackSender        func(*pb.ControlMessage)
+	lastAckedSeedVer uint64
 }
+
+// ApplySeedSender is the signature for the function Helmsman uses to send
+// ConfigSeedApplyResult back to Foghorn over the existing bidi control
+// stream.
+type ApplySeedSender func(*pb.ControlMessage)
 
 const (
 	maxReconcileRetryDelay = 30 * time.Second
@@ -53,13 +61,19 @@ func InitManager(logger logging.Logger) {
 	}
 }
 
-// ApplySeed stores the latest ConfigSeed and triggers reconcile.
-func ApplySeed(seed *pb.ConfigSeed) {
+// ApplySeed stores the latest ConfigSeed and triggers reconcile. The
+// optional sender is invoked with a ConfigSeedApplyResult after Helmsman
+// has applied the seed's TLS bundles and reloaded Caddy. Pass nil to
+// skip ACK (e.g. tests).
+func ApplySeed(seed *pb.ConfigSeed, sender ApplySeedSender) {
 	if manager == nil || seed == nil {
 		return
 	}
 	manager.mu.Lock()
 	manager.lastSeed = seed
+	if sender != nil {
+		manager.ackSender = sender
+	}
 	manager.cancelRetryLocked()
 	manager.mu.Unlock()
 	go manager.reconcile()
@@ -100,6 +114,7 @@ func GetOperationalMode() pb.NodeOperationalMode {
 func (m *Manager) reconcile() {
 	m.mu.Lock()
 	seed := m.lastSeed
+	ackSender := m.ackSender
 	m.mu.Unlock()
 	if seed == nil {
 		return
@@ -111,16 +126,30 @@ func (m *Manager) reconcile() {
 	m.applyTelemetryConfig(seed.GetTelemetry())
 
 	certChanged := false
-	if tls := seed.GetTls(); tls != nil {
+	var bundleResults []bundleApplyResult
+
+	// New path: multi-bundle TLS. Used when Foghorn sends ConfigSeed v2.
+	if bundles := seed.GetTlsBundles(); len(bundles) > 0 {
+		certChanged, bundleResults = m.applyTLSBundles(bundles)
+	} else if tls := seed.GetTls(); tls != nil {
+		// Legacy path: single TLS bundle. Old-style ConfigSeed.
 		certChanged = m.applyTLSBundle(tls)
 	} else {
 		m.removeTLSBundle()
+		m.removeAllBundleFiles()
 	}
 
-	if site := seed.GetSite(); site != nil {
-		m.activateCaddy(seed, certChanged)
+	caddyReloadOK := true
+	if site := seed.GetSite(); site != nil || len(seed.GetTlsBundles()) > 0 {
+		caddyReloadOK = m.activateCaddy(seed, certChanged)
 	} else if certChanged {
-		m.reloadCaddy(nil)
+		caddyReloadOK = m.reloadCaddy(nil)
+	}
+
+	// Send ConfigSeedApplyResult ACK when this seed carries the
+	// multi-bundle set that DNS publishing depends on.
+	if ackSender != nil && seed.GetSeedVersion() > 0 && len(seed.GetTlsBundles()) > 0 {
+		m.sendApplyResultLocked(seed, bundleResults, caddyReloadOK, ackSender)
 	}
 	current, err := m.mistClient.ConfigBackup()
 	if err != nil {
@@ -260,6 +289,45 @@ func edgeTLSPaths() (string, string) {
 	return certPath, keyPath
 }
 
+// edgeBundleDir returns the directory where per-bundle cert/key files
+// are written. Each bundle gets two files in this directory keyed by a
+// sanitized bundle_id.
+func edgeBundleDir() string {
+	if dir := strings.TrimSpace(os.Getenv("HELMSMAN_TLS_BUNDLE_DIR")); dir != "" {
+		return dir
+	}
+	return "/etc/frameworks/certs/bundles"
+}
+
+// sanitizeBundleID maps an arbitrary bundle identity (e.g. "tenant:acme",
+// "cluster:media-us-1") to a filesystem-safe filename stem.
+func sanitizeBundleID(id string) string {
+	var sb strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '.', r == '_', r == '-':
+			sb.WriteRune(r)
+		default:
+			sb.WriteRune('_')
+		}
+	}
+	s := sb.String()
+	if s == "" {
+		return "bundle"
+	}
+	return s
+}
+
+// edgeBundleTLSPaths returns the cert/key file paths for a given bundle_id.
+func edgeBundleTLSPaths(bundleID string) (string, string) {
+	stem := sanitizeBundleID(bundleID)
+	dir := edgeBundleDir()
+	return filepath.Join(dir, stem+".crt"), filepath.Join(dir, stem+".key")
+}
+
 func edgeTelemetryTokenPath() string {
 	return "/etc/frameworks/telemetry/token"
 }
@@ -306,6 +374,208 @@ func (m *Manager) applyCABundle(bundle []byte) bool {
 	}
 	m.logger.WithField("path", caPath).Info("Applied gRPC CA bundle from ConfigSeed")
 	return true
+}
+
+// bundleApplyResult records the per-bundle outcome of applyTLSBundles.
+type bundleApplyResult struct {
+	BundleID string
+	Success  bool
+	Err      string
+}
+
+// applyTLSBundles writes cert/key files for every bundle into the
+// per-bundle directory, removes files for bundle_ids no longer in the
+// set, and returns per-bundle apply results plus whether any file on
+// disk changed.
+func (m *Manager) applyTLSBundles(bundles []*pb.TLSCertBundle) (bool, []bundleApplyResult) {
+	results := make([]bundleApplyResult, 0, len(bundles))
+	anyChanged := false
+
+	dir := edgeBundleDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		m.logger.WithError(err).Warn("Failed to create TLS bundle directory")
+		// Surface the failure per-bundle so Foghorn ACK reflects it.
+		for _, b := range bundles {
+			results = append(results, bundleApplyResult{
+				BundleID: b.GetBundleId(),
+				Success:  false,
+				Err:      "create bundle dir: " + err.Error(),
+			})
+		}
+		return false, results
+	}
+
+	keepFiles := make(map[string]struct{}, len(bundles)*2)
+	for _, bundle := range bundles {
+		bundleID := bundle.GetBundleId()
+		if bundleID == "" {
+			results = append(results, bundleApplyResult{
+				BundleID: "",
+				Success:  false,
+				Err:      "empty bundle_id",
+			})
+			continue
+		}
+		certPath, keyPath := edgeBundleTLSPaths(bundleID)
+		keepFiles[filepath.Base(certPath)] = struct{}{}
+		keepFiles[filepath.Base(keyPath)] = struct{}{}
+
+		changed, err := writeBundleFiles(certPath, keyPath, bundle)
+		if err != nil {
+			results = append(results, bundleApplyResult{
+				BundleID: bundleID,
+				Success:  false,
+				Err:      err.Error(),
+			})
+			continue
+		}
+		if changed {
+			anyChanged = true
+			m.logger.WithFields(logging.Fields{
+				"bundle_id":  bundleID,
+				"domain":     bundle.GetDomain(),
+				"expires_at": bundle.GetExpiresAt(),
+			}).Info("Applied TLS bundle from ConfigSeed")
+		}
+		results = append(results, bundleApplyResult{BundleID: bundleID, Success: true})
+	}
+
+	// Clean up files for bundles no longer in the seed.
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			name := e.Name()
+			if !strings.HasSuffix(name, ".crt") && !strings.HasSuffix(name, ".key") {
+				continue
+			}
+			if _, ok := keepFiles[name]; ok {
+				continue
+			}
+			if err := os.Remove(filepath.Join(dir, name)); err == nil {
+				anyChanged = true
+				m.logger.WithField("file", name).Info("Removed stale TLS bundle file")
+			}
+		}
+	}
+
+	return anyChanged, results
+}
+
+// writeBundleFiles atomically writes cert + key for one bundle. Returns
+// true if either file content changed.
+func writeBundleFiles(certPath, keyPath string, bundle *pb.TLSCertBundle) (bool, error) {
+	certBytes := []byte(bundle.GetCertPem())
+	keyBytes := []byte(bundle.GetKeyPem())
+	if len(certBytes) == 0 || len(keyBytes) == 0 {
+		return false, fmt.Errorf("empty cert or key")
+	}
+
+	certSame := false
+	if existing, err := os.ReadFile(certPath); err == nil && bytes.Equal(existing, certBytes) {
+		certSame = true
+	}
+	keySame := false
+	if existing, err := os.ReadFile(keyPath); err == nil && bytes.Equal(existing, keyBytes) {
+		keySame = true
+	}
+	if certSame && keySame {
+		return false, nil
+	}
+
+	certTmp, err := writeManagedFileTemp(certPath, certBytes, 0o644)
+	if err != nil {
+		return false, fmt.Errorf("stage cert: %w", err)
+	}
+	defer func() { removeIfNotEmpty(certTmp) }()
+
+	keyTmp, err := writeManagedFileTemp(keyPath, keyBytes, 0o640)
+	if err != nil {
+		return false, fmt.Errorf("stage key: %w", err)
+	}
+	defer func() { removeIfNotEmpty(keyTmp) }()
+
+	if err := os.Rename(keyTmp, keyPath); err != nil {
+		return false, fmt.Errorf("install key: %w", err)
+	}
+	keyTmp = ""
+	if err := os.Rename(certTmp, certPath); err != nil {
+		return false, fmt.Errorf("install cert: %w", err)
+	}
+	certTmp = ""
+	return true, nil
+}
+
+// removeAllBundleFiles deletes everything in the per-bundle dir. Used
+// when the seed has no bundles at all.
+func (m *Manager) removeAllBundleFiles() {
+	dir := edgeBundleDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		_ = os.Remove(filepath.Join(dir, e.Name()))
+	}
+}
+
+// sendApplyResultLocked composes a ConfigSeedApplyResult from per-bundle
+// results and the Caddy reload outcome, and dispatches via the sender.
+// Only sends once per seed_version (idempotent on retries).
+func (m *Manager) sendApplyResultLocked(seed *pb.ConfigSeed, results []bundleApplyResult, caddyOK bool, sender func(*pb.ControlMessage)) {
+	if sender == nil {
+		return
+	}
+	m.mu.Lock()
+	if seed.GetSeedVersion() <= m.lastAckedSeedVer {
+		m.mu.Unlock()
+		return
+	}
+	m.lastAckedSeedVer = seed.GetSeedVersion()
+	m.mu.Unlock()
+
+	applied := make([]string, 0, len(results))
+	failed := make([]string, 0)
+	var firstErr string
+	allOK := true
+	for _, r := range results {
+		if r.Success {
+			applied = append(applied, r.BundleID)
+		} else {
+			failed = append(failed, r.BundleID)
+			if firstErr == "" {
+				firstErr = r.Err
+			}
+			allOK = false
+		}
+	}
+	if !caddyOK {
+		// Reload did not happen; files are on disk but Caddy is still
+		// serving the old config. No bundle is actually "applied" from
+		// the perspective of TLS termination, so demote the per-file
+		// successes to failures. Foghorn's DNS gate must see this as
+		// a non-ready state.
+		allOK = false
+		if firstErr == "" {
+			firstErr = "caddy reload failed"
+		}
+		failed = append(failed, applied...)
+		applied = applied[:0]
+	}
+
+	ack := &pb.ConfigSeedApplyResult{
+		NodeId:           seed.GetNodeId(),
+		SeedVersion:      seed.GetSeedVersion(),
+		AppliedBundleIds: applied,
+		FailedBundleIds:  failed,
+		Success:          allOK,
+		Error:            firstErr,
+		AppliedAt:        timestamppb.Now(),
+	}
+	sender(&pb.ControlMessage{
+		SentAt: timestamppb.Now(),
+		Payload: &pb.ControlMessage_ConfigSeedApplyResult{
+			ConfigSeedApplyResult: ack,
+		},
+	})
 }
 
 // applyTLSBundle writes cert/key files to disk. Returns true if files were changed.
@@ -420,47 +690,85 @@ func removeIfNotEmpty(path string) {
 }
 
 // activateCaddy renders the production Caddyfile from ConfigSeed and pushes it to Caddy.
-func (m *Manager) activateCaddy(seed *pb.ConfigSeed, certChanged bool) {
-	site := seed.GetSite()
-	if site == nil || site.GetSiteAddress() == "" {
+// Returns true on a successful reload (or no-op when config is unchanged
+// and no cert change was detected). Returns false if rendering or reload
+// failed; callers ACK accordingly.
+func (m *Manager) activateCaddy(seed *pb.ConfigSeed, certChanged bool) bool {
+	bundles := composeCaddyBundles(seed)
+	if len(bundles) == 0 {
+		// Nothing to render: no bundles AND no legacy site address.
 		if certChanged {
-			m.reloadCaddy(nil)
+			return m.reloadCaddy(nil)
 		}
-		return
+		return true
 	}
 
 	params := CaddyfileParams{
-		SiteAddress:      site.GetSiteAddress(),
-		AcmeEmail:        site.GetAcmeEmail(),
+		Bundles:          bundles,
 		CaddyAdminAddr:   caddyAdminAddr(),
 		HelmsmanUpstream: envDefault("HELMSMAN_WEBHOOK_URL", "http://localhost:18007"),
 		ChandlerUpstream: envDefault("CHANDLER_URL", "chandler:18020"),
 		MistUpstream:     envDefault("MISTSERVER_URL", "http://mistserver:8080"),
 	}
+	if site := seed.GetSite(); site != nil {
+		params.AcmeEmail = site.GetAcmeEmail()
+	}
 	// Strip http:// prefix for Caddy reverse_proxy upstream
 	params.HelmsmanUpstream = strings.TrimPrefix(params.HelmsmanUpstream, "http://")
 	params.MistUpstream = strings.TrimPrefix(params.MistUpstream, "http://")
 
-	if seed.GetTls() != nil {
-		params.TLSCertPath, params.TLSKeyPath = edgeTLSPaths()
-	}
-
 	rendered, err := RenderCaddyfile(params)
 	if err != nil {
 		m.logger.WithError(err).Warn("Failed to render production Caddyfile")
-		return
+		return false
 	}
 
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(rendered)))
 	if hash == m.lastCaddyHash && !certChanged {
-		return
+		return true
 	}
 
 	if m.reloadCaddy([]byte(rendered)) {
 		m.lastCaddyHash = hash
 		m.caddyActivated = true
-		m.logger.WithField("site_address", site.GetSiteAddress()).Info("Activated production Caddyfile via ConfigSeed")
+		m.logger.WithField("bundle_count", len(bundles)).Info("Activated production Caddyfile via ConfigSeed")
+		return true
 	}
+	return false
+}
+
+// composeCaddyBundles builds the list of CaddyfileBundle entries from a
+// ConfigSeed. Multi-bundle TLS is authoritative when present; otherwise
+// a single SiteConfig/Tls pair renders one site block.
+func composeCaddyBundles(seed *pb.ConfigSeed) []CaddyfileBundle {
+	if bundles := seed.GetTlsBundles(); len(bundles) > 0 {
+		out := make([]CaddyfileBundle, 0, len(bundles))
+		for _, b := range bundles {
+			addrs := b.GetSiteAddresses()
+			if len(addrs) == 0 {
+				// Bundle without explicit site addresses: skip; cannot
+				// render a Caddy block without a hostname.
+				continue
+			}
+			cert, key := edgeBundleTLSPaths(b.GetBundleId())
+			out = append(out, CaddyfileBundle{
+				SiteAddress: strings.Join(addrs, " "),
+				TLSCertPath: cert,
+				TLSKeyPath:  key,
+			})
+		}
+		return out
+	}
+	// Single-bundle seed: one site block from SiteConfig + Tls.
+	site := seed.GetSite()
+	if site == nil || site.GetSiteAddress() == "" {
+		return nil
+	}
+	b := CaddyfileBundle{SiteAddress: site.GetSiteAddress()}
+	if seed.GetTls() != nil {
+		b.TLSCertPath, b.TLSKeyPath = edgeTLSPaths()
+	}
+	return []CaddyfileBundle{b}
 }
 
 func caddyAdminAddr() string {

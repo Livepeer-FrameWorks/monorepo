@@ -4179,7 +4179,7 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *pb.CreateStream
 		}
 	}
 
-	// Slice 3: populate global root + tenant alias domain fields.
+	// Add global root and tenant alias domain fields.
 	s.populateTieredDomains(ctx, tenantID, resp)
 
 	return resp, nil
@@ -4210,16 +4210,16 @@ func (s *CommodoreServer) populateTieredDomains(ctx context.Context, tenantID st
 	resp.GlobalChandlerDomain = &gChandler
 	resp.GlobalLivepeerDomain = &gLivepeer
 
-	// Tenant alias entrypoints: only when Navigator reports the alias
-	// as cert_issued. Otherwise leave the fields unset so clients fall
-	// back to global / cluster.
+	// Tenant alias entrypoints are only safe once Navigator has at
+	// least one DNS member published for the alias. A cert_issued row
+	// alone only means ACME finished.
 	if s.navigatorClient == nil {
 		return
 	}
 	aliasCtx, aliasCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer aliasCancel()
 	aliasResp, aliasErr := s.navigatorClient.GetTenantAliasStatus(aliasCtx, &pb.GetTenantAliasStatusRequest{TenantId: tenantID})
-	if aliasErr != nil || aliasResp == nil || !aliasResp.GetFound() || aliasResp.GetStatus() != "cert_issued" {
+	if aliasErr != nil || aliasResp == nil || !aliasResp.GetFound() || aliasResp.GetStatus() != "cert_issued" || !aliasResp.GetDnsReady() {
 		return
 	}
 	tenantZone := pkgdns.TenantAliasZoneLabel + "." + rootDomain

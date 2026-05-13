@@ -995,7 +995,7 @@ message CreateStreamResponse {
   string ingest_mode = 15;
   PullSourceView pull_source = 16;
 
-  // Global root entrypoints (NEW). Default user-facing surface for the
+  // Global root entrypoints. Default user-facing surface for the
   // free + platform-official tier. Bunny smart DNS does geo routing
   // from a single global record per service. Populated only when the
   // global zones are live in this environment.
@@ -1005,8 +1005,8 @@ message CreateStreamResponse {
   optional string global_chandler_domain = 20;
   optional string global_livepeer_domain = 21;
 
-  // Tenant alias entrypoints (NEW). Populated only when the tenant has
-  // an active paid alias (Navigator status='cert_issued'). Spans every
+  // Tenant alias entrypoints. Populated only when Navigator has
+  // published at least one DNS member for the tenant alias. Spans every
   // cluster the tenant subscribes to, regardless of cluster kind.
   // Webapp/SDK should prefer these when present.
   optional string tenant_ingest_domain   = 22;

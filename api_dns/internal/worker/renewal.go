@@ -108,20 +108,20 @@ func (w *RenewalWorker) renewCertificates(ctx context.Context) {
 		// Attempt renewal with tenant context
 		var lastErr error
 		for attempt := 1; attempt <= 3; attempt++ {
-			_, _, _, err := w.certManager.IssueCertificate(ctx, tenantID, cert.Domain, email)
-			if err == nil {
+			_, _, _, issueErr := w.certManager.IssueCertificate(ctx, tenantID, cert.Domain, email)
+			if issueErr == nil {
 				lastErr = nil
 				break
 			}
 
-			lastErr = err
-			if !isRetryableACMEError(err) {
+			lastErr = issueErr
+			if !isRetryableACMEError(issueErr) {
 				break
 			}
 
 			backoff := time.Duration(30<<uint(attempt-1)) * time.Second
-			if err := w.sleep(ctx, backoff); err != nil {
-				log.WithError(err).Warn("Renewal interrupted")
+			if sleepErr := w.sleep(ctx, backoff); sleepErr != nil {
+				log.WithError(sleepErr).Warn("Renewal interrupted")
 				return
 			}
 		}

@@ -26,7 +26,7 @@ type fakeStore struct {
 	saveCertFunc      func(ctx context.Context, tenantID string, cert *store.Certificate) error
 	getTLSBundleFunc  func(ctx context.Context, bundleID string) (*store.TLSBundle, error)
 	saveTLSBundleFunc func(ctx context.Context, bundle *store.TLSBundle) error
-	getAccountFunc    func(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error)
+	getAccountFunc    func(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error)
 	saveAccountFunc   func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error
 	saveCertCalled    int
 	saveBundleCalled  int
@@ -51,13 +51,50 @@ func (f *fakeStore) SaveTLSBundle(ctx context.Context, bundle *store.TLSBundle) 
 	return f.saveTLSBundleFunc(ctx, bundle)
 }
 
-func (f *fakeStore) GetACMEAccount(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error) {
-	return f.getAccountFunc(ctx, tenantID, email)
+func (f *fakeStore) GetACMEAccount(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error) {
+	return f.getAccountFunc(ctx, tenantID, email, ca)
 }
 
 func (f *fakeStore) SaveACMEAccount(ctx context.Context, tenantID string, acc *store.ACMEAccount) error {
 	f.saveAccountCalled++
 	return f.saveAccountFunc(ctx, tenantID, acc)
+}
+
+// Tenant alias methods are outside these cert-focused test paths.
+func (f *fakeStore) EnsureTenantAlias(_ context.Context, tenantID, subdomain string) (*store.TenantAlias, error) {
+	return &store.TenantAlias{TenantID: tenantID, Subdomain: subdomain, Status: "cert_issuing"}, nil
+}
+
+func (f *fakeStore) GetTenantAlias(_ context.Context, _ string) (*store.TenantAlias, error) {
+	return nil, store.ErrNotFound
+}
+
+func (f *fakeStore) ListPendingTenantAliases(_ context.Context) ([]store.TenantAlias, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) SetTenantAliasStatus(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
+func (f *fakeStore) DeleteTenantAlias(_ context.Context, _ string) error {
+	return nil
+}
+
+func (f *fakeStore) UpsertTenantEdgeApplyState(_ context.Context, _ *store.TenantEdgeApplyState) error {
+	return nil
+}
+
+func (f *fakeStore) TenantAliasHasDNS(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+
+func (f *fakeStore) DeleteTenantEdgeApplyState(_ context.Context, _ string) error {
+	return nil
+}
+
+func (f *fakeStore) DeleteTenantEdgeApplyStateForCluster(_ context.Context, _, _ string) error {
+	return nil
 }
 
 type fakeDNSProvider struct {
@@ -97,6 +134,14 @@ func (f *fakeACMEClient) Register() (*registration.Resource, error) {
 		return nil, f.registerErr
 	}
 	return &registration.Resource{URI: "acct-1"}, nil
+}
+
+func (f *fakeACMEClient) RegisterWithEAB(_ registration.RegisterEABOptions) (*registration.Resource, error) {
+	f.registerCalled++
+	if f.registerErr != nil {
+		return nil, f.registerErr
+	}
+	return &registration.Resource{URI: "acct-1-eab"}, nil
 }
 
 func (f *fakeACMEClient) Obtain(request certificate.ObtainRequest) (*certificate.Resource, error) {
@@ -146,7 +191,7 @@ func TestIssueCertificateSetsUpAndCleansUpChallenges(t *testing.T) {
 		saveTLSBundleFunc: func(ctx context.Context, bundle *store.TLSBundle) error {
 			return nil
 		},
-		getAccountFunc: func(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error) {
+		getAccountFunc: func(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error) {
 			return nil, store.ErrNotFound
 		},
 		saveAccountFunc: func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error {
@@ -194,7 +239,7 @@ func TestIssueCertificateFailureDoesNotPersistCertificate(t *testing.T) {
 		saveTLSBundleFunc: func(ctx context.Context, bundle *store.TLSBundle) error {
 			return nil
 		},
-		getAccountFunc: func(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error) {
+		getAccountFunc: func(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error) {
 			return nil, store.ErrNotFound
 		},
 		saveAccountFunc: func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error {
@@ -244,7 +289,7 @@ func TestIssueCertificateToleratesExistingCloudflareChallengeRecord(t *testing.T
 		saveTLSBundleFunc: func(ctx context.Context, bundle *store.TLSBundle) error {
 			return nil
 		},
-		getAccountFunc: func(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error) {
+		getAccountFunc: func(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error) {
 			return nil, store.ErrNotFound
 		},
 		saveAccountFunc: func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error {
@@ -301,7 +346,7 @@ func TestEnsureTLSBundleObtainsAndPersistsBundle(t *testing.T) {
 		saveTLSBundleFunc: func(ctx context.Context, bundle *store.TLSBundle) error {
 			return nil
 		},
-		getAccountFunc: func(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error) {
+		getAccountFunc: func(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error) {
 			return nil, store.ErrNotFound
 		},
 		saveAccountFunc: func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error {
@@ -338,8 +383,17 @@ func TestCertificateNeedsBunnyProvider(t *testing.T) {
 		{name: "media service name under cluster zone", domains: []string{"livepeer.media-eu.frameworks.network"}, want: true},
 		{name: "root wildcard stays cloudflare", domains: []string{"*.frameworks.network"}, want: false},
 		{name: "root apex stays cloudflare", domains: []string{"frameworks.network"}, want: false},
-		{name: "single root service stays cloudflare", domains: []string{"bridge.frameworks.network"}, want: false},
+		{name: "operator service stays cloudflare", domains: []string{"bridge.frameworks.network"}, want: false},
+		{name: "operator grafana stays cloudflare", domains: []string{"grafana.frameworks.network"}, want: false},
 		{name: "nested wildcard under media cluster zone", domains: []string{"*.edge.media-eu.frameworks.network"}, want: true},
+		{name: "pool-assigned global foghorn", domains: []string{"foghorn.frameworks.network"}, want: true},
+		{name: "pool-assigned global chandler", domains: []string{"chandler.frameworks.network"}, want: true},
+		{name: "pool-assigned global livepeer", domains: []string{"livepeer.frameworks.network"}, want: true},
+		{name: "platform-edge global edge", domains: []string{"edge.frameworks.network"}, want: true},
+		{name: "platform-edge global edge-ingest", domains: []string{"edge-ingest.frameworks.network"}, want: true},
+		{name: "platform-edge multi-SAN", domains: []string{"edge.frameworks.network", "edge-ingest.frameworks.network", "edge-egress.frameworks.network"}, want: true},
+		{name: "tenant cdn wildcard", domains: []string{"*.cdn.frameworks.network"}, want: true},
+		{name: "tenant cdn apex", domains: []string{"acme.cdn.frameworks.network", "*.acme.cdn.frameworks.network"}, want: true},
 	}
 
 	for _, tt := range tests {
@@ -376,7 +430,7 @@ func TestUseBunnyForClusterZonesSelectsProviderByDelegatedZone(t *testing.T) {
 		saveTLSBundleFunc: func(ctx context.Context, bundle *store.TLSBundle) error {
 			return nil
 		},
-		getAccountFunc: func(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error) {
+		getAccountFunc: func(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error) {
 			return nil, store.ErrNotFound
 		},
 		saveAccountFunc: func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error {

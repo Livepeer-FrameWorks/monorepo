@@ -8,6 +8,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/deckhand"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
+	navclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
@@ -22,6 +23,7 @@ type ServiceClients struct {
 	Commodore     *commodore.GRPCClient
 	Deckhand      *deckhand.GRPCClient
 	Decklog       *decklog.BatchedClient
+	Navigator     *navclient.Client
 	Periscope     *periscope.GRPCClient
 	Purser        *purser.GRPCClient
 	Quartermaster *quartermaster.GRPCClient
@@ -109,6 +111,22 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		return nil, fmt.Errorf("failed to create Quartermaster gRPC client: %w", err)
 	}
 
+	var navigatorClient *navclient.Client
+	if navigatorAddr := config.GetEnv("NAVIGATOR_GRPC_ADDR", ""); navigatorAddr != "" {
+		navigatorClient, err = navclient.NewClient(navclient.Config{
+			Addr:          navigatorAddr,
+			Timeout:       cfg.Timeout,
+			Logger:        cfg.Logger,
+			ServiceToken:  cfg.ServiceToken,
+			AllowInsecure: grpcAllowInsecure,
+			CACertFile:    grpcCACertFile,
+			ServerName:    grpcServerName,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Navigator gRPC client: %w", err)
+		}
+	}
+
 	// Initialize Signalman gRPC client
 	signalmanClient, err := signalman.NewGRPCClient(signalman.GRPCConfig{
 		GRPCAddr:      config.RequireEnv("SIGNALMAN_GRPC_ADDR"),
@@ -177,6 +195,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		Commodore:     commodoreClient,
 		Deckhand:      deckhandClient,
 		Decklog:       decklogClient,
+		Navigator:     navigatorClient,
 		Periscope:     periscopeClient,
 		Purser:        purserClient,
 		Quartermaster: quartermasterClient,
@@ -202,6 +221,11 @@ func (c *ServiceClients) Close() error {
 	if c.Decklog != nil {
 		if err := c.Decklog.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("decklog: %w", err))
+		}
+	}
+	if c.Navigator != nil {
+		if err := c.Navigator.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("navigator: %w", err))
 		}
 	}
 	if c.Periscope != nil {

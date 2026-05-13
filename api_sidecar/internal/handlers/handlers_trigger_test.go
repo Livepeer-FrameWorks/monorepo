@@ -20,7 +20,7 @@ func setupTriggerTest(t *testing.T, tenantID string) {
 	logger = logging.NewLoggerWithService("handlers-test")
 	metrics = nil
 	config.InitManager(logger)
-	config.ApplySeed(&pb.ConfigSeed{TenantId: tenantID})
+	config.ApplySeed(&pb.ConfigSeed{TenantId: tenantID}, nil)
 }
 
 func newWebhookContext(body string) (*gin.Context, *httptest.ResponseRecorder) {

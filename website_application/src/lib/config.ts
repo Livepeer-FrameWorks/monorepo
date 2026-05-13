@@ -73,19 +73,27 @@ interface ResolvedEndpoints {
 
 function resolveEndpoints(): ResolvedEndpoints {
   const sc = getStreamingConfig();
-  if (sc?.ingestDomain && !preferLocalStreamingEnv()) {
-    return {
-      ingestHostname: sc.ingestDomain,
-      ingestUseTls: true,
-      playHostname: sc.playDomain ?? config.playHostname,
-      playUseTls: true,
-      edgeHostname: sc.edgeDomain ?? config.edgeHostname,
-      edgeUseTls: true,
-      chandlerHostname: sc.chandlerDomain ?? "",
-      chandlerUseTls: true,
-      srtPort: sc.srtPort != null ? String(sc.srtPort) : config.srtPort,
-      rtmpPort: sc.rtmpPort != null ? String(sc.rtmpPort) : config.rtmpPort,
-    };
+  if (sc && !preferLocalStreamingEnv()) {
+    // Prefer tenant aliases after Navigator publishes DNS, then global
+    // root entrypoints, then cluster-concrete domains for explicit pinning.
+    const ingest = sc.tenantIngestDomain ?? sc.globalIngestDomain ?? sc.ingestDomain;
+    if (ingest) {
+      return {
+        ingestHostname: ingest,
+        ingestUseTls: true,
+        playHostname:
+          sc.tenantPlayDomain ?? sc.globalPlayDomain ?? sc.playDomain ?? config.playHostname,
+        playUseTls: true,
+        edgeHostname:
+          sc.tenantEdgeDomain ?? sc.globalEdgeDomain ?? sc.edgeDomain ?? config.edgeHostname,
+        edgeUseTls: true,
+        chandlerHostname:
+          sc.tenantChandlerDomain ?? sc.globalChandlerDomain ?? sc.chandlerDomain ?? "",
+        chandlerUseTls: true,
+        srtPort: sc.srtPort != null ? String(sc.srtPort) : config.srtPort,
+        rtmpPort: sc.rtmpPort != null ? String(sc.rtmpPort) : config.rtmpPort,
+      };
+    }
   }
   return {
     ingestHostname: config.ingestHostname,

@@ -67,6 +67,12 @@ service TenantService {
 
   // Get tenants assigned to a cluster
   rpc GetTenantsByCluster(GetTenantsByClusterRequest) returns (GetTenantsByClusterResponse);
+  // ListAliasedTenantsForCluster returns the tenants that should
+  // receive a per-tenant TLS bundle on edges in the given cluster.
+  // Used by Foghorn's cert refresh loop to compose ConfigSeed bundles.
+  // Returns paid tenants with active access to the cluster and a
+  // tenant subdomain. Foghorn asks Navigator separately for cert state.
+  rpc ListAliasedTenantsForCluster(ListAliasedTenantsForClusterRequest) returns (ListAliasedTenantsForClusterResponse);
 
   // ===== CROSS-SERVICE: BILLING BATCH PROCESSING =====
   // List all active tenant IDs for billing job iteration.
@@ -435,6 +441,23 @@ message GetTenantsByClusterResponse {
   string cluster_id = 1;
   repeated Tenant tenants = 2;
   common.CursorPaginationResponse pagination = 3;
+}
+
+message ListAliasedTenantsForClusterRequest {
+  string cluster_id = 1;
+}
+
+message AliasedTenantRef {
+  string tenant_id = 1;
+  // The tenant's subdomain label inside the platform tenant zone
+  // (cdn.{root}). Used by Foghorn when composing per-tenant bundle
+  // site_addresses in ConfigSeed.
+  string subdomain = 2;
+}
+
+message ListAliasedTenantsForClusterResponse {
+  string cluster_id = 1;
+  repeated AliasedTenantRef tenants = 2;
 }
 
 // ============================================================================

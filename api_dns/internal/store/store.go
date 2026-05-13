@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
@@ -23,15 +24,22 @@ type Certificate struct {
 	ExpiresAt time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// IssuerCA records which ACME CA signed this cert ('letsencrypt' or
+	// 'google-trust'). Renewals must route to the same CA so ARI works.
+	IssuerCA string
 }
 
 type ACMEAccount struct {
 	ID            string
 	TenantID      sql.NullString // NULL for platform accounts, set for tenant-specific accounts
 	Email         string
-	Registration  string // JSON blob
+	Registration  string // JSON blob (CA-specific account URL)
 	PrivateKeyPEM string
 	CreatedAt     time.Time
+	// CA identifies the ACME directory this account is registered with
+	// ('letsencrypt' | 'google-trust'). Account keys are CA-specific;
+	// the same email at a different CA is a separate registration.
+	CA string
 }
 
 type TLSBundle struct {
@@ -43,6 +51,11 @@ type TLSBundle struct {
 	ExpiresAt time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// IssuerCA tracks which ACME CA signed this bundle ('letsencrypt' |
+	// 'google-trust'). Renewals must route to the same CA so the ACME
+	// account, ARI hints and rate-limit pool stay consistent. Matches
+	// store.Certificate.IssuerCA.
+	IssuerCA string
 }
 
 type InternalCA struct {
@@ -64,6 +77,32 @@ type InternalCertificate struct {
 	ExpiresAt   time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+// TenantAlias persists per-tenant alias intent + ACME lifecycle state.
+// One row per paying tenant. Driven by Quartermaster.EnsureTenantAlias.
+type TenantAlias struct {
+	TenantID     string
+	Subdomain    string
+	Status       string // cert_issuing | cert_issued | cert_failed | tearing_down
+	CertIssuedAt sql.NullTime
+	LastError    sql.NullString
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// TenantEdgeApplyState records per-(tenant, edge, bundle) state. Drives
+// DNS membership decisions for tenant smart record sets in cdn.{root}.
+type TenantEdgeApplyState struct {
+	TenantID        string
+	ClusterID       string
+	NodeID          string
+	BundleID        string
+	State           string // pending_distribute | pending_apply | applied | in_dns
+	LastSeedVersion sql.NullInt64
+	LastAckAt       sql.NullTime
+	InDNSAt         sql.NullTime
+	UpdatedAt       time.Time
 }
 
 type Store struct {
@@ -117,14 +156,14 @@ func (s *Store) GetCertificate(ctx context.Context, tenantID, domain string) (*C
 
 	if tenantID == "" {
 		query = `
-			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at
+			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
 			FROM navigator.certificates
 			WHERE tenant_id IS NULL AND domain = $1
 		`
 		args = []interface{}{domain}
 	} else {
 		query = `
-			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at
+			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
 			FROM navigator.certificates
 			WHERE tenant_id = $1 AND domain = $2
 		`
@@ -134,7 +173,7 @@ func (s *Store) GetCertificate(ctx context.Context, tenantID, domain string) (*C
 	var cert Certificate
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(
 		&cert.ID, &cert.TenantID, &cert.Domain, &cert.CertPEM, &cert.KeyPEM,
-		&cert.ExpiresAt, &cert.CreatedAt, &cert.UpdatedAt,
+		&cert.ExpiresAt, &cert.CreatedAt, &cert.UpdatedAt, &cert.IssuerCA,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -155,62 +194,74 @@ func (s *Store) SaveCertificate(ctx context.Context, tenantID string, cert *Cert
 	if err != nil {
 		return fmt.Errorf("encrypt certificate key: %w", err)
 	}
+	issuer := cert.IssuerCA
+	if issuer == "" {
+		issuer = "letsencrypt"
+	}
 	if tenantID == "" {
 		query := `
-			INSERT INTO navigator.certificates (tenant_id, domain, cert_pem, key_pem, expires_at, updated_at)
-			VALUES (NULL, $1, $2, $3, $4, NOW())
+			INSERT INTO navigator.certificates (tenant_id, domain, cert_pem, key_pem, expires_at, updated_at, issuer_ca)
+			VALUES (NULL, $1, $2, $3, $4, NOW(), $5)
 			ON CONFLICT (domain) WHERE tenant_id IS NULL DO UPDATE SET
 				cert_pem = EXCLUDED.cert_pem,
 				key_pem = EXCLUDED.key_pem,
 				expires_at = EXCLUDED.expires_at,
-				updated_at = NOW()
+				updated_at = NOW(),
+				issuer_ca = EXCLUDED.issuer_ca
 			RETURNING id, tenant_id, created_at
 		`
 		return s.db.QueryRowContext(ctx, query,
-			cert.Domain, cert.CertPEM, encryptedKey, cert.ExpiresAt,
+			cert.Domain, cert.CertPEM, encryptedKey, cert.ExpiresAt, issuer,
 		).Scan(&cert.ID, &cert.TenantID, &cert.CreatedAt)
 	}
 
 	query := `
-		INSERT INTO navigator.certificates (tenant_id, domain, cert_pem, key_pem, expires_at, updated_at)
-		VALUES ($1::uuid, $2, $3, $4, $5, NOW())
+		INSERT INTO navigator.certificates (tenant_id, domain, cert_pem, key_pem, expires_at, updated_at, issuer_ca)
+		VALUES ($1::uuid, $2, $3, $4, $5, NOW(), $6)
 		ON CONFLICT (tenant_id, domain) DO UPDATE SET
 			cert_pem = EXCLUDED.cert_pem,
 			key_pem = EXCLUDED.key_pem,
 			expires_at = EXCLUDED.expires_at,
-			updated_at = NOW()
+			updated_at = NOW(),
+			issuer_ca = EXCLUDED.issuer_ca
 		RETURNING id, tenant_id, created_at
 	`
 	return s.db.QueryRowContext(ctx, query,
-		tenantID, cert.Domain, cert.CertPEM, encryptedKey, cert.ExpiresAt,
+		tenantID, cert.Domain, cert.CertPEM, encryptedKey, cert.ExpiresAt, issuer,
 	).Scan(&cert.ID, &cert.TenantID, &cert.CreatedAt)
 }
 
-// GetACMEAccount retrieves an ACME account by email within a tenant context.
-// If tenantID is empty, retrieves platform-wide account.
-func (s *Store) GetACMEAccount(ctx context.Context, tenantID, email string) (*ACMEAccount, error) {
+// GetACMEAccount retrieves an ACME account scoped to (tenant, email, ca).
+// If tenantID is empty, retrieves the platform-wide account for that CA.
+// ca should be a non-empty value like "letsencrypt" or "google-trust";
+// callers that pass "" are migrated to "letsencrypt" for back-compat
+// with rows that pre-date per-CA scoping.
+func (s *Store) GetACMEAccount(ctx context.Context, tenantID, email, ca string) (*ACMEAccount, error) {
+	if ca == "" {
+		ca = "letsencrypt"
+	}
 	var query string
 	var args []interface{}
 
 	if tenantID == "" {
 		query = `
-			SELECT id, tenant_id, email, registration_json, private_key_pem, created_at
+			SELECT id, tenant_id, email, registration_json, private_key_pem, created_at, ca
 			FROM navigator.acme_accounts
-			WHERE tenant_id IS NULL AND email = $1
+			WHERE tenant_id IS NULL AND email = $1 AND ca = $2
 		`
-		args = []interface{}{email}
+		args = []interface{}{email, ca}
 	} else {
 		query = `
-			SELECT id, tenant_id, email, registration_json, private_key_pem, created_at
+			SELECT id, tenant_id, email, registration_json, private_key_pem, created_at, ca
 			FROM navigator.acme_accounts
-			WHERE tenant_id = $1 AND email = $2
+			WHERE tenant_id = $1 AND email = $2 AND ca = $3
 		`
-		args = []interface{}{tenantID, email}
+		args = []interface{}{tenantID, email, ca}
 	}
 
 	var acc ACMEAccount
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(
-		&acc.ID, &acc.TenantID, &acc.Email, &acc.Registration, &acc.PrivateKeyPEM, &acc.CreatedAt,
+		&acc.ID, &acc.TenantID, &acc.Email, &acc.Registration, &acc.PrivateKeyPEM, &acc.CreatedAt, &acc.CA,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -224,37 +275,41 @@ func (s *Store) GetACMEAccount(ctx context.Context, tenantID, email string) (*AC
 	return &acc, nil
 }
 
-// SaveACMEAccount saves a new ACME account for a tenant.
-// If tenantID is empty, saves as a platform-wide account.
+// SaveACMEAccount upserts an ACME account scoped to (tenant, email, ca).
+// If acc.CA is unset, defaults to 'letsencrypt'. If tenantID is empty,
+// saves as a platform-wide account.
 func (s *Store) SaveACMEAccount(ctx context.Context, tenantID string, acc *ACMEAccount) error {
+	if acc.CA == "" {
+		acc.CA = "letsencrypt"
+	}
 	encryptedKey, err := s.encryptField(acc.PrivateKeyPEM)
 	if err != nil {
 		return fmt.Errorf("encrypt ACME private key: %w", err)
 	}
 	if tenantID == "" {
 		query := `
-			INSERT INTO navigator.acme_accounts (tenant_id, email, registration_json, private_key_pem)
-			VALUES (NULL, $1, $2, $3)
-			ON CONFLICT (email) WHERE tenant_id IS NULL DO UPDATE SET
+			INSERT INTO navigator.acme_accounts (tenant_id, email, registration_json, private_key_pem, ca)
+			VALUES (NULL, $1, $2, $3, $4)
+			ON CONFLICT (email, ca) WHERE tenant_id IS NULL DO UPDATE SET
 				registration_json = EXCLUDED.registration_json,
 				private_key_pem = EXCLUDED.private_key_pem
 			RETURNING id, tenant_id, created_at
 		`
 		return s.db.QueryRowContext(ctx, query,
-			acc.Email, acc.Registration, encryptedKey,
+			acc.Email, acc.Registration, encryptedKey, acc.CA,
 		).Scan(&acc.ID, &acc.TenantID, &acc.CreatedAt)
 	}
 
 	query := `
-		INSERT INTO navigator.acme_accounts (tenant_id, email, registration_json, private_key_pem)
-		VALUES ($1::uuid, $2, $3, $4)
-		ON CONFLICT (tenant_id, email) DO UPDATE SET
+		INSERT INTO navigator.acme_accounts (tenant_id, email, registration_json, private_key_pem, ca)
+		VALUES ($1::uuid, $2, $3, $4, $5)
+		ON CONFLICT (tenant_id, email, ca) DO UPDATE SET
 			registration_json = EXCLUDED.registration_json,
 			private_key_pem = EXCLUDED.private_key_pem
 		RETURNING id, tenant_id, created_at
 	`
 	return s.db.QueryRowContext(ctx, query,
-		tenantID, acc.Email, acc.Registration, encryptedKey,
+		tenantID, acc.Email, acc.Registration, encryptedKey, acc.CA,
 	).Scan(&acc.ID, &acc.TenantID, &acc.CreatedAt)
 }
 
@@ -263,7 +318,7 @@ func (s *Store) SaveACMEAccount(ctx context.Context, tenantID string, acc *ACMEA
 func (s *Store) ListExpiringCertificates(ctx context.Context, threshold time.Duration) ([]Certificate, error) {
 	expiryLimit := time.Now().Add(threshold)
 	query := `
-		SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at
+		SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
 		FROM navigator.certificates
 		WHERE expires_at < $1
 		ORDER BY expires_at ASC
@@ -277,7 +332,7 @@ func (s *Store) ListExpiringCertificates(ctx context.Context, threshold time.Dur
 	var certs []Certificate
 	for rows.Next() {
 		var c Certificate
-		if scanErr := rows.Scan(&c.ID, &c.TenantID, &c.Domain, &c.CertPEM, &c.KeyPEM, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt); scanErr != nil {
+		if scanErr := rows.Scan(&c.ID, &c.TenantID, &c.Domain, &c.CertPEM, &c.KeyPEM, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt, &c.IssuerCA); scanErr != nil {
 			return nil, scanErr
 		}
 		if c.KeyPEM, err = s.decryptField(c.KeyPEM); err != nil {
@@ -295,14 +350,14 @@ func (s *Store) ListCertificatesForTenant(ctx context.Context, tenantID string) 
 
 	if tenantID == "" {
 		query = `
-			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at
+			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
 			FROM navigator.certificates
 			WHERE tenant_id IS NULL
 			ORDER BY domain
 		`
 	} else {
 		query = `
-			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at
+			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
 			FROM navigator.certificates
 			WHERE tenant_id = $1
 			ORDER BY domain
@@ -319,7 +374,7 @@ func (s *Store) ListCertificatesForTenant(ctx context.Context, tenantID string) 
 	var certs []Certificate
 	for rows.Next() {
 		var c Certificate
-		if scanErr := rows.Scan(&c.ID, &c.TenantID, &c.Domain, &c.CertPEM, &c.KeyPEM, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt); scanErr != nil {
+		if scanErr := rows.Scan(&c.ID, &c.TenantID, &c.Domain, &c.CertPEM, &c.KeyPEM, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt, &c.IssuerCA); scanErr != nil {
 			return nil, scanErr
 		}
 		if c.KeyPEM, err = s.decryptField(c.KeyPEM); err != nil {
@@ -332,7 +387,7 @@ func (s *Store) ListCertificatesForTenant(ctx context.Context, tenantID string) 
 
 func (s *Store) GetTLSBundle(ctx context.Context, bundleID string) (*TLSBundle, error) {
 	query := `
-		SELECT id, bundle_id, domains, cert_pem, key_pem, expires_at, created_at, updated_at
+		SELECT id, bundle_id, domains, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
 		FROM navigator.tls_bundles
 		WHERE bundle_id = $1
 	`
@@ -341,7 +396,7 @@ func (s *Store) GetTLSBundle(ctx context.Context, bundleID string) (*TLSBundle, 
 	var domainsJSON []byte
 	err := s.db.QueryRowContext(ctx, query, bundleID).Scan(
 		&bundle.ID, &bundle.BundleID, &domainsJSON, &bundle.CertPEM, &bundle.KeyPEM,
-		&bundle.ExpiresAt, &bundle.CreatedAt, &bundle.UpdatedAt,
+		&bundle.ExpiresAt, &bundle.CreatedAt, &bundle.UpdatedAt, &bundle.IssuerCA,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -369,26 +424,31 @@ func (s *Store) SaveTLSBundle(ctx context.Context, bundle *TLSBundle) error {
 		return fmt.Errorf("encode tls bundle domains: %w", err)
 	}
 
+	issuer := strings.TrimSpace(bundle.IssuerCA)
+	if issuer == "" {
+		issuer = "letsencrypt"
+	}
 	query := `
-		INSERT INTO navigator.tls_bundles (bundle_id, domains, cert_pem, key_pem, expires_at, updated_at)
-		VALUES ($1, $2::jsonb, $3, $4, $5, NOW())
+		INSERT INTO navigator.tls_bundles (bundle_id, domains, cert_pem, key_pem, expires_at, issuer_ca, updated_at)
+		VALUES ($1, $2::jsonb, $3, $4, $5, $6, NOW())
 		ON CONFLICT (bundle_id) DO UPDATE SET
 			domains = EXCLUDED.domains,
 			cert_pem = EXCLUDED.cert_pem,
 			key_pem = EXCLUDED.key_pem,
 			expires_at = EXCLUDED.expires_at,
+			issuer_ca = EXCLUDED.issuer_ca,
 			updated_at = NOW()
 		RETURNING id, created_at
 	`
 	return s.db.QueryRowContext(ctx, query,
-		bundle.BundleID, string(domainsJSON), bundle.CertPEM, encryptedKey, bundle.ExpiresAt,
+		bundle.BundleID, string(domainsJSON), bundle.CertPEM, encryptedKey, bundle.ExpiresAt, issuer,
 	).Scan(&bundle.ID, &bundle.CreatedAt)
 }
 
 func (s *Store) ListExpiringTLSBundles(ctx context.Context, threshold time.Duration) ([]TLSBundle, error) {
 	expiryLimit := time.Now().Add(threshold)
 	query := `
-		SELECT id, bundle_id, domains, cert_pem, key_pem, expires_at, created_at, updated_at
+		SELECT id, bundle_id, domains, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
 		FROM navigator.tls_bundles
 		WHERE expires_at < $1
 		ORDER BY expires_at ASC
@@ -405,7 +465,7 @@ func (s *Store) ListExpiringTLSBundles(ctx context.Context, threshold time.Durat
 		var domainsJSON []byte
 		if scanErr := rows.Scan(
 			&bundle.ID, &bundle.BundleID, &domainsJSON, &bundle.CertPEM, &bundle.KeyPEM,
-			&bundle.ExpiresAt, &bundle.CreatedAt, &bundle.UpdatedAt,
+			&bundle.ExpiresAt, &bundle.CreatedAt, &bundle.UpdatedAt, &bundle.IssuerCA,
 		); scanErr != nil {
 			return nil, scanErr
 		}

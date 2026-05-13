@@ -16,6 +16,7 @@ import (
 	fhclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -2694,14 +2695,44 @@ func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingCo
 		}
 	}
 
-	// TODO(slice-3): after `make graphql` regenerates the GraphQL model
-	// (adding Global*Domain and Tenant*Domain fields to
-	// model.StreamingConfig), uncomment populateTieredStreamingDomains
-	// below and remove this comment. The schema already exposes the
-	// new fields in pkg/graphql/schema.graphql.
-	// r.populateTieredStreamingDomains(ctx, cfg)
+	r.populateTieredStreamingDomains(ctx, cfg, baseURL)
 
 	return cfg, nil
+}
+
+func (r *Resolver) populateTieredStreamingDomains(ctx context.Context, cfg *model.StreamingConfig, baseURL string) {
+	rootDomain := normalizeStreamingBaseDomain(baseURL)
+	if rootDomain == "" {
+		rootDomain = strings.TrimSpace(config.GetEnv("BRAND_DOMAIN", ""))
+	}
+	if rootDomain == "" {
+		return
+	}
+	cfg.GlobalIngestDomain = strPtr("edge-ingest." + rootDomain)
+	cfg.GlobalEdgeDomain = strPtr("edge-egress." + rootDomain)
+	cfg.GlobalPlayDomain = strPtr("foghorn." + rootDomain)
+	cfg.GlobalChandlerDomain = strPtr("chandler." + rootDomain)
+	cfg.GlobalLivepeerDomain = strPtr("livepeer." + rootDomain)
+
+	if r == nil || r.Clients == nil || r.Clients.Navigator == nil {
+		return
+	}
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return
+	}
+	aliasCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	alias, err := r.Clients.Navigator.GetTenantAliasStatus(aliasCtx, &pb.GetTenantAliasStatusRequest{TenantId: tenantID})
+	if err != nil || alias == nil || !alias.GetFound() || alias.GetStatus() != "cert_issued" || !alias.GetDnsReady() {
+		return
+	}
+	apex := alias.GetSubdomain() + "." + pkgdns.TenantAliasZoneLabel + "." + rootDomain
+	cfg.TenantIngestDomain = strPtr("edge-ingest." + apex)
+	cfg.TenantEdgeDomain = strPtr("edge-egress." + apex)
+	cfg.TenantPlayDomain = strPtr("foghorn." + apex)
+	cfg.TenantChandlerDomain = strPtr("chandler." + apex)
+	cfg.TenantLivepeerDomain = strPtr("livepeer." + apex)
 }
 
 func streamingConfigDomain(prefix, slug, baseURL string) string {

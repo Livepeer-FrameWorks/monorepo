@@ -61,3 +61,135 @@ func fileMode(t *testing.T, path string) os.FileMode {
 	}
 	return info.Mode().Perm()
 }
+
+func TestApplyTLSBundlesWritesPerBundleFiles(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HELMSMAN_TLS_BUNDLE_DIR", dir)
+
+	m := &Manager{logger: logging.NewLogger()}
+	bundles := []*pb.TLSCertBundle{
+		{
+			BundleId:      "cluster:media-us-1",
+			CertPem:       "cluster-cert",
+			KeyPem:        "cluster-key",
+			Domain:        "*.media-us-1.frameworks.network",
+			SiteAddresses: []string{"*.media-us-1.frameworks.network"},
+		},
+		{
+			BundleId:      "tenant:acme",
+			CertPem:       "tenant-cert",
+			KeyPem:        "tenant-key",
+			Domain:        "*.acme.cdn.frameworks.network",
+			SiteAddresses: []string{"acme.cdn.frameworks.network", "*.acme.cdn.frameworks.network"},
+		},
+	}
+
+	changed, results := m.applyTLSBundles(bundles)
+	if !changed {
+		t.Fatal("expected changed=true on first apply")
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	for _, r := range results {
+		if !r.Success {
+			t.Fatalf("bundle %s failed: %s", r.BundleID, r.Err)
+		}
+	}
+
+	// Verify per-bundle files written with sanitized stems.
+	if got := readFileString(t, filepath.Join(dir, "cluster_media-us-1.crt")); got != "cluster-cert" {
+		t.Fatalf("cluster cert = %q", got)
+	}
+	if got := readFileString(t, filepath.Join(dir, "tenant_acme.crt")); got != "tenant-cert" {
+		t.Fatalf("tenant cert = %q", got)
+	}
+}
+
+func TestApplyTLSBundlesRemovesStaleFiles(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HELMSMAN_TLS_BUNDLE_DIR", dir)
+
+	m := &Manager{logger: logging.NewLogger()}
+
+	// Seed two bundles.
+	first := []*pb.TLSCertBundle{
+		{BundleId: "cluster:media-us-1", CertPem: "c1", KeyPem: "k1", SiteAddresses: []string{"*.media-us-1.frameworks.network"}},
+		{BundleId: "tenant:acme", CertPem: "c2", KeyPem: "k2", SiteAddresses: []string{"acme.cdn.frameworks.network"}},
+	}
+	m.applyTLSBundles(first)
+	if _, err := os.Stat(filepath.Join(dir, "tenant_acme.crt")); err != nil {
+		t.Fatalf("tenant cert missing after first apply: %v", err)
+	}
+
+	// Re-apply only the cluster bundle — tenant files should be cleaned up.
+	second := []*pb.TLSCertBundle{first[0]}
+	m.applyTLSBundles(second)
+	if _, err := os.Stat(filepath.Join(dir, "tenant_acme.crt")); !os.IsNotExist(err) {
+		t.Fatalf("expected tenant cert removed, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tenant_acme.key")); !os.IsNotExist(err) {
+		t.Fatalf("expected tenant key removed, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "cluster_media-us-1.crt")); err != nil {
+		t.Fatalf("cluster cert wrongly removed: %v", err)
+	}
+}
+
+func TestRenderCaddyfileMultiBundle(t *testing.T) {
+	out, err := RenderCaddyfile(CaddyfileParams{
+		Bundles: []CaddyfileBundle{
+			{
+				SiteAddress: "*.media-us-1.frameworks.network",
+				TLSCertPath: "/etc/frameworks/certs/bundles/cluster_media-us-1.crt",
+				TLSKeyPath:  "/etc/frameworks/certs/bundles/cluster_media-us-1.key",
+			},
+			{
+				SiteAddress: "acme.cdn.frameworks.network *.acme.cdn.frameworks.network",
+				TLSCertPath: "/etc/frameworks/certs/bundles/tenant_acme.crt",
+				TLSKeyPath:  "/etc/frameworks/certs/bundles/tenant_acme.key",
+			},
+		},
+		CaddyAdminAddr:   "localhost:2019",
+		HelmsmanUpstream: "helmsman:18007",
+		ChandlerUpstream: "chandler:18020",
+		MistUpstream:     "mistserver:8080",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	mustContain := []string{
+		"(common_handlers)",
+		"*.media-us-1.frameworks.network {",
+		"acme.cdn.frameworks.network *.acme.cdn.frameworks.network {",
+		"tls /etc/frameworks/certs/bundles/cluster_media-us-1.crt /etc/frameworks/certs/bundles/cluster_media-us-1.key",
+		"tls /etc/frameworks/certs/bundles/tenant_acme.crt /etc/frameworks/certs/bundles/tenant_acme.key",
+		"import common_handlers",
+		"reverse_proxy mistserver:8080",
+	}
+	for _, want := range mustContain {
+		if !contains(out, want) {
+			t.Errorf("rendered Caddyfile missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderCaddyfileEmptyBundlesFails(t *testing.T) {
+	if _, err := RenderCaddyfile(CaddyfileParams{}); err == nil {
+		t.Fatal("expected error for empty bundles")
+	}
+}
+
+func contains(haystack, needle string) bool {
+	return len(haystack) >= len(needle) && indexOf(haystack, needle) >= 0
+}
+
+func indexOf(s, substr string) int {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
+}

@@ -20,8 +20,8 @@ func TestStoreGetCertificateTenantScoping(t *testing.T) {
 		}
 		defer db.Close()
 
-		rows := sqlmock.NewRows([]string{"id", "tenant_id", "domain", "cert_pem", "key_pem", "expires_at", "created_at", "updated_at"}).
-			AddRow("cert-1", nil, "platform.example.com", "cert", "key", now, now, now)
+		rows := sqlmock.NewRows([]string{"id", "tenant_id", "domain", "cert_pem", "key_pem", "expires_at", "created_at", "updated_at", "issuer_ca"}).
+			AddRow("cert-1", nil, "platform.example.com", "cert", "key", now, now, now, "letsencrypt")
 
 		mock.ExpectQuery(`FROM navigator\.certificates\s+WHERE tenant_id IS NULL AND domain = \$1`).
 			WithArgs("platform.example.com").
@@ -51,8 +51,8 @@ func TestStoreGetCertificateTenantScoping(t *testing.T) {
 		}
 		defer db.Close()
 
-		rows := sqlmock.NewRows([]string{"id", "tenant_id", "domain", "cert_pem", "key_pem", "expires_at", "created_at", "updated_at"}).
-			AddRow("cert-2", "tenant-123", "tenant.example.com", "cert", "key", now, now, now)
+		rows := sqlmock.NewRows([]string{"id", "tenant_id", "domain", "cert_pem", "key_pem", "expires_at", "created_at", "updated_at", "issuer_ca"}).
+			AddRow("cert-2", "tenant-123", "tenant.example.com", "cert", "key", now, now, now, "letsencrypt")
 
 		mock.ExpectQuery(`FROM navigator\.certificates\s+WHERE tenant_id = \$1 AND domain = \$2`).
 			WithArgs("tenant-123", "tenant.example.com").
@@ -84,9 +84,9 @@ func TestListExpiringCertificates(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"id", "tenant_id", "domain", "cert_pem", "key_pem", "expires_at", "created_at", "updated_at"}).
-		AddRow("cert-1", nil, "example.com", "cert", "key", now.Add(12*time.Hour), now, now).
-		AddRow("cert-2", "tenant-1", "t1.example.com", "cert2", "key2", now.Add(23*time.Hour), now, now)
+	rows := sqlmock.NewRows([]string{"id", "tenant_id", "domain", "cert_pem", "key_pem", "expires_at", "created_at", "updated_at", "issuer_ca"}).
+		AddRow("cert-1", nil, "example.com", "cert", "key", now.Add(12*time.Hour), now, now, "letsencrypt").
+		AddRow("cert-2", "tenant-1", "t1.example.com", "cert2", "key2", now.Add(23*time.Hour), now, now, "letsencrypt")
 
 	mock.ExpectQuery(`FROM navigator\.certificates\s+WHERE expires_at < \$1\s+ORDER BY expires_at ASC`).
 		WithArgs(sqlmock.AnyArg()).
@@ -147,8 +147,8 @@ func TestListCertificatesForTenantPlatform(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"id", "tenant_id", "domain", "cert_pem", "key_pem", "expires_at", "created_at", "updated_at"}).
-		AddRow("cert-1", nil, "platform.example.com", "cert", "key", now, now, now)
+	rows := sqlmock.NewRows([]string{"id", "tenant_id", "domain", "cert_pem", "key_pem", "expires_at", "created_at", "updated_at", "issuer_ca"}).
+		AddRow("cert-1", nil, "platform.example.com", "cert", "key", now, now, now, "letsencrypt")
 
 	mock.ExpectQuery(`FROM navigator\.certificates\s+WHERE tenant_id IS NULL\s+ORDER BY domain`).
 		WillReturnRows(rows)
@@ -178,8 +178,8 @@ func TestListCertificatesForTenantSpecific(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"id", "tenant_id", "domain", "cert_pem", "key_pem", "expires_at", "created_at", "updated_at"}).
-		AddRow("cert-2", "t1", "t1.example.com", "cert", "key", now, now, now)
+	rows := sqlmock.NewRows([]string{"id", "tenant_id", "domain", "cert_pem", "key_pem", "expires_at", "created_at", "updated_at", "issuer_ca"}).
+		AddRow("cert-2", "t1", "t1.example.com", "cert", "key", now, now, now, "letsencrypt")
 
 	mock.ExpectQuery(`FROM navigator\.certificates\s+WHERE tenant_id = \$1\s+ORDER BY domain`).
 		WithArgs("t1").
@@ -209,12 +209,12 @@ func TestGetACMEAccountNotFound(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectQuery(`FROM navigator\.acme_accounts\s+WHERE tenant_id IS NULL AND email = \$1`).
-		WithArgs("admin@example.com").
+	mock.ExpectQuery(`FROM navigator\.acme_accounts\s+WHERE tenant_id IS NULL AND email = \$1 AND ca = \$2`).
+		WithArgs("admin@example.com", "letsencrypt").
 		WillReturnError(sql.ErrNoRows)
 
 	store := NewStore(db, nil)
-	_, err = store.GetACMEAccount(context.Background(), "", "admin@example.com")
+	_, err = store.GetACMEAccount(context.Background(), "", "admin@example.com", "letsencrypt")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -239,10 +239,11 @@ func TestSaveACMEAccount(t *testing.T) {
 		Email:         "admin@example.com",
 		Registration:  `{"status":"valid"}`,
 		PrivateKeyPEM: "private-key-pem",
+		CA:            "letsencrypt",
 	}
 
-	mock.ExpectQuery(`INSERT INTO navigator\.acme_accounts \(tenant_id, email, registration_json, private_key_pem\)`).
-		WithArgs("t1", acc.Email, acc.Registration, acc.PrivateKeyPEM).
+	mock.ExpectQuery(`INSERT INTO navigator\.acme_accounts \(tenant_id, email, registration_json, private_key_pem, ca\)`).
+		WithArgs("t1", acc.Email, acc.Registration, acc.PrivateKeyPEM, "letsencrypt").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "created_at"}).AddRow("acme-1", sql.NullString{String: "t1", Valid: true}, now))
 
 	store := NewStore(db, nil)
@@ -270,10 +271,11 @@ func TestSaveACMEAccountPlatformUsesPartialUniqueUpsert(t *testing.T) {
 		Email:         "admin@example.com",
 		Registration:  `{"status":"valid"}`,
 		PrivateKeyPEM: "private-key-pem",
+		CA:            "letsencrypt",
 	}
 
-	mock.ExpectQuery(`ON CONFLICT \(email\) WHERE tenant_id IS NULL DO UPDATE`).
-		WithArgs(acc.Email, acc.Registration, acc.PrivateKeyPEM).
+	mock.ExpectQuery(`ON CONFLICT \(email, ca\) WHERE tenant_id IS NULL DO UPDATE`).
+		WithArgs(acc.Email, acc.Registration, acc.PrivateKeyPEM, "letsencrypt").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "created_at"}).AddRow("acme-1", nil, now))
 
 	store := NewStore(db, nil)
@@ -304,8 +306,8 @@ func TestStoreSaveCertificateUpsert(t *testing.T) {
 		ExpiresAt: now,
 	}
 
-	mock.ExpectQuery(`INSERT INTO navigator\.certificates \(tenant_id, domain, cert_pem, key_pem, expires_at, updated_at\)`).
-		WithArgs("tenant-123", cert.Domain, cert.CertPEM, cert.KeyPEM, cert.ExpiresAt).
+	mock.ExpectQuery(`INSERT INTO navigator\.certificates \(tenant_id, domain, cert_pem, key_pem, expires_at, updated_at, issuer_ca\)`).
+		WithArgs("tenant-123", cert.Domain, cert.CertPEM, cert.KeyPEM, cert.ExpiresAt, "letsencrypt").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "created_at"}).AddRow("cert-1", sql.NullString{String: "tenant-123", Valid: true}, now))
 
 	store := NewStore(db, nil)
@@ -337,7 +339,7 @@ func TestStoreSavePlatformCertificateUsesPartialUniqueUpsert(t *testing.T) {
 	}
 
 	mock.ExpectQuery(`ON CONFLICT \(domain\) WHERE tenant_id IS NULL DO UPDATE`).
-		WithArgs(cert.Domain, cert.CertPEM, cert.KeyPEM, cert.ExpiresAt).
+		WithArgs(cert.Domain, cert.CertPEM, cert.KeyPEM, cert.ExpiresAt, "letsencrypt").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "created_at"}).AddRow("cert-1", nil, now))
 
 	store := NewStore(db, nil)

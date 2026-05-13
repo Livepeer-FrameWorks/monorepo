@@ -5673,7 +5673,7 @@ type CreateStreamResponse struct {
 	OfficialClusterLabel  *string         `protobuf:"bytes,14,opt,name=official_cluster_label,json=officialClusterLabel,proto3,oneof" json:"official_cluster_label,omitempty"`
 	IngestMode            string          `protobuf:"bytes,15,opt,name=ingest_mode,json=ingestMode,proto3" json:"ingest_mode,omitempty"`
 	PullSource            *PullSourceView `protobuf:"bytes,16,opt,name=pull_source,json=pullSource,proto3" json:"pull_source,omitempty"`
-	// Global root entrypoints (NEW). Default user-facing surface for the
+	// Global root entrypoints. Default user-facing surface for the
 	// free + platform-official tier. Bunny smart DNS does geo routing
 	// from a single global record per service. Populated only when the
 	// global zones are live in this environment.
@@ -5682,8 +5682,8 @@ type CreateStreamResponse struct {
 	GlobalPlayDomain     *string `protobuf:"bytes,19,opt,name=global_play_domain,json=globalPlayDomain,proto3,oneof" json:"global_play_domain,omitempty"`
 	GlobalChandlerDomain *string `protobuf:"bytes,20,opt,name=global_chandler_domain,json=globalChandlerDomain,proto3,oneof" json:"global_chandler_domain,omitempty"`
 	GlobalLivepeerDomain *string `protobuf:"bytes,21,opt,name=global_livepeer_domain,json=globalLivepeerDomain,proto3,oneof" json:"global_livepeer_domain,omitempty"`
-	// Tenant alias entrypoints (NEW). Populated only when the tenant has
-	// an active paid alias (Navigator status='cert_issued'). Spans every
+	// Tenant alias entrypoints. Populated only when Navigator has
+	// published at least one DNS member for the tenant alias. Spans every
 	// cluster the tenant subscribes to, regardless of cluster kind.
 	// Webapp/SDK should prefer these when present.
 	TenantIngestDomain   *string `protobuf:"bytes,22,opt,name=tenant_ingest_domain,json=tenantIngestDomain,proto3,oneof" json:"tenant_ingest_domain,omitempty"`

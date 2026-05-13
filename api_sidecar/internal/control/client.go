@@ -844,9 +844,17 @@ func runClient(addr string, logger logging.Logger) error {
 					}
 				}
 			case *pb.ControlMessage_ConfigSeed:
-				// Receive desired config seed and trigger reconcile
+				// Receive desired config seed and trigger reconcile.
+				// The sender callback lets Helmsman ACK back over the
+				// existing bidi stream after TLS bundles are applied and
+				// Caddy is reloaded; Foghorn gates DNS publishing on this.
 				if x.ConfigSeed != nil {
-					sidecarcfg.ApplySeed(x.ConfigSeed)
+					ackSender := func(m *pb.ControlMessage) {
+						if sendErr := stream.Send(m); sendErr != nil {
+							logger.WithError(sendErr).Debug("Failed to send ConfigSeedApplyResult ACK")
+						}
+					}
+					sidecarcfg.ApplySeed(x.ConfigSeed, ackSender)
 					// Adopt canonical node_id from seed if provided
 					if nid := x.ConfigSeed.GetNodeId(); nid != "" {
 						storeConn(getStream(), nid)

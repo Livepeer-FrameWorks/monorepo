@@ -18,6 +18,92 @@ service NavigatorService {
   rpc GetCABundle(GetCABundleRequest) returns (GetCABundleResponse);
   // IssueInternalCert issues or renews a node-scoped internal gRPC certificate.
   rpc IssueInternalCert(IssueInternalCertRequest) returns (IssueInternalCertResponse);
+  // EnsureTenantAlias signals Navigator that a paying tenant should have
+  // a public alias under the configured tenant zone (cdn.{root}). Idempotent.
+  // Quartermaster calls this on paid tier activation. Returns immediately;
+  // Navigator persists intent and queues ACME work asynchronously. Check
+  // status via GetTenantAliasStatus.
+  rpc EnsureTenantAlias(EnsureTenantAliasRequest) returns (EnsureTenantAliasResponse);
+  // RemoveTenantAlias signals Navigator that a tenant alias should be
+  // torn down (tenant downgraded/cancelled). Idempotent. DNS records are
+  // removed first; cert files on edges are dropped on the next
+  // ConfigSeed cycle.
+  rpc RemoveTenantAlias(RemoveTenantAliasRequest) returns (RemoveTenantAliasResponse);
+  // GetTenantAliasStatus returns the current lifecycle state for a
+  // tenant alias. Used by webapp status display and Commodore gating
+  // tenant_* domain fields in CreateStreamResponse.
+  rpc GetTenantAliasStatus(GetTenantAliasStatusRequest) returns (GetTenantAliasStatusResponse);
+  // ReportConfigSeedApplyResult records Helmsman's ConfigSeed apply ACK
+  // as observed by Foghorn. Navigator owns durable per-edge cert readiness
+  // because DNS membership is derived from it.
+  rpc ReportConfigSeedApplyResult(ReportConfigSeedApplyResultRequest) returns (ReportConfigSeedApplyResultResponse);
+  // RemoveTenantAliasCluster removes one cluster's edges from a tenant
+  // alias DNS pool before Foghorn drops that tenant's cert from future
+  // ConfigSeeds.
+  rpc RemoveTenantAliasCluster(RemoveTenantAliasClusterRequest) returns (RemoveTenantAliasClusterResponse);
+}
+
+// EnsureTenantAliasRequest signals an intent. Navigator persists the
+// row and runs ACME asynchronously.
+message EnsureTenantAliasRequest {
+  string tenant_id = 1;
+  // DNS-safe label for the tenant inside the tenant alias zone, e.g.
+  // "acme" becomes acme.cdn.frameworks.network. Must pass tenant slug
+  // validation in pkg/dns.ReservedTenantSlugs.
+  string subdomain = 2;
+}
+
+message EnsureTenantAliasResponse {
+  bool accepted = 1;
+  string status = 2;  // cert_issuing | cert_issued | cert_failed | tearing_down
+  string error = 3;
+}
+
+message RemoveTenantAliasRequest {
+  string tenant_id = 1;
+}
+
+message RemoveTenantAliasResponse {
+  bool accepted = 1;
+}
+
+message GetTenantAliasStatusRequest {
+  string tenant_id = 1;
+}
+
+message GetTenantAliasStatusResponse {
+  bool found = 1;
+  string tenant_id = 2;
+  string subdomain = 3;
+  string status = 4;
+  int64 cert_issued_at = 5;
+  string last_error = 6;
+  bool dns_ready = 7;
+}
+
+message ReportConfigSeedApplyResultRequest {
+  string node_id = 1;
+  string cluster_id = 2;
+  uint64 seed_version = 3;
+  repeated string applied_bundle_ids = 4;
+  repeated string failed_bundle_ids = 5;
+  bool success = 6;
+  string error = 7;
+  int64 applied_at = 8;
+}
+
+message ReportConfigSeedApplyResultResponse {
+  bool accepted = 1;
+  repeated string affected_tenant_ids = 2;
+}
+
+message RemoveTenantAliasClusterRequest {
+  string tenant_id = 1;
+  string cluster_id = 2;
+}
+
+message RemoveTenantAliasClusterResponse {
+  bool accepted = 1;
 }
 
 // SyncDNSRequest is sent by Quartermaster to trigger DNS synchronization.

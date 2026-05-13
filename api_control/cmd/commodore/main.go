@@ -11,6 +11,7 @@ import (
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/listmonk"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
@@ -99,6 +100,31 @@ func main() {
 		logger.WithField("addr", quartermasterGRPCAddr).Info("Connected to Quartermaster gRPC")
 	}
 
+	// Optional Navigator gRPC client. Used for GetTenantAliasStatus when
+	// populating CreateStreamResponse.tenant_*_domain fields. Without
+	// Navigator, those fields stay unset and clients fall back to
+	// global / cluster-concrete URLs.
+	navigatorGRPCAddr := config.GetEnv("NAVIGATOR_GRPC_ADDR", "")
+	var navigatorGRPCClient *navigator.Client
+	if navigatorGRPCAddr != "" {
+		navigatorGRPCClient, err = navigator.NewClient(navigator.Config{
+			Addr:          navigatorGRPCAddr,
+			Timeout:       5 * time.Second,
+			Logger:        logger,
+			ServiceToken:  serviceToken,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		})
+		if err != nil {
+			logger.WithError(err).Warn("Failed to create Navigator gRPC client - tenant alias status lookups disabled")
+			navigatorGRPCClient = nil
+		} else {
+			defer func() { _ = navigatorGRPCClient.Close() }()
+			logger.WithField("addr", navigatorGRPCAddr).Info("Connected to Navigator gRPC")
+		}
+	}
+
 	// Create Purser gRPC client for user limit checking during registration
 	purserGRPCAddr := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	purserGRPCClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
@@ -167,6 +193,7 @@ func main() {
 			Logger:               logger,
 			FoghornPool:          foghornPool,
 			QuartermasterClient:  quartermasterGRPCClient,
+			NavigatorClient:      navigatorGRPCClient,
 			PurserClient:         purserGRPCClient,
 			ListmonkClient:       listmonkClient,
 			DecklogClient:        decklogClient,

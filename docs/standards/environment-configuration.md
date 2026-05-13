@@ -160,6 +160,9 @@ These are real operator-owned inputs that should stay covered by env examples an
 - `GRPC_TLS_PKI_DIR`
 - `ACME_ENV`
 - `CERT_ISSUANCE_TOKEN`
+- `BUNNY_API_KEY`
+- `NAVIGATOR_GOOGLE_TRUST_EAB_KID`
+- `NAVIGATOR_GOOGLE_TRUST_EAB_HMAC_KEY`
 - `FEDERATION_ENABLED`
 - `RERANKER_API_URL`
 - `TURNSTILE_FAIL_OPEN`

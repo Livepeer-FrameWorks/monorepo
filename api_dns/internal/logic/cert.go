@@ -18,6 +18,7 @@ import (
 
 	"frameworks/api_dns/internal/store"
 
+	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/challenge"
@@ -35,13 +36,27 @@ type certStore interface {
 	SaveCertificate(ctx context.Context, tenantID string, cert *store.Certificate) error
 	GetTLSBundle(ctx context.Context, bundleID string) (*store.TLSBundle, error)
 	SaveTLSBundle(ctx context.Context, bundle *store.TLSBundle) error
-	GetACMEAccount(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error)
+	GetACMEAccount(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error)
 	SaveACMEAccount(ctx context.Context, tenantID string, acc *store.ACMEAccount) error
+	// Tenant alias intent and DNS readiness state.
+	EnsureTenantAlias(ctx context.Context, tenantID, subdomain string) (*store.TenantAlias, error)
+	GetTenantAlias(ctx context.Context, tenantID string) (*store.TenantAlias, error)
+	ListPendingTenantAliases(ctx context.Context) ([]store.TenantAlias, error)
+	SetTenantAliasStatus(ctx context.Context, tenantID, status, errMsg string) error
+	DeleteTenantAlias(ctx context.Context, tenantID string) error
+	UpsertTenantEdgeApplyState(ctx context.Context, st *store.TenantEdgeApplyState) error
+	TenantAliasHasDNS(ctx context.Context, tenantID string) (bool, error)
+	DeleteTenantEdgeApplyState(ctx context.Context, tenantID string) error
+	DeleteTenantEdgeApplyStateForCluster(ctx context.Context, tenantID, clusterID string) error
 }
 
 type acmeClient interface {
 	SetDNS01Provider(provider challenge.Provider) error
 	Register() (*registration.Resource, error)
+	// RegisterWithEAB is used by CAs that require External Account
+	// Binding (Google Trust Services). Let's Encrypt clients can leave
+	// this returning an error; it will not be called.
+	RegisterWithEAB(opts registration.RegisterEABOptions) (*registration.Resource, error)
 	Obtain(request certificate.ObtainRequest) (*certificate.Resource, error)
 }
 
@@ -67,7 +82,15 @@ func NewCertManager(s certStore) *CertManager {
 	}
 }
 
-func (m *CertManager) UseBunnyForClusterZones(rootDomain string) {
+// UseBunnyForMediaZones wires the DNS-01 provider selector: any domain
+// whose authoritative zone is Bunny-delegated (cluster zones, per-service
+// global zones like foghorn.{root}, and the tenant cdn.{root} zone) gets
+// the Bunny provider; everything else (root operator services in
+// Cloudflare) uses Cloudflare.
+//
+// UseBunnyForClusterZones preserves the older method name used by
+// existing Navigator initialization code.
+func (m *CertManager) UseBunnyForMediaZones(rootDomain string) {
 	rootDomain = strings.TrimSuffix(strings.TrimSpace(strings.ToLower(rootDomain)), ".")
 	if rootDomain == "" {
 		return
@@ -79,6 +102,35 @@ func (m *CertManager) UseBunnyForClusterZones(rootDomain string) {
 		return m.dnsProviderFactory()
 	}
 }
+
+// UseBunnyForClusterZones delegates to UseBunnyForMediaZones.
+func (m *CertManager) UseBunnyForClusterZones(rootDomain string) {
+	m.UseBunnyForMediaZones(rootDomain)
+}
+
+// bunnyDelegatedLabels returns the root child zones Navigator owns in Bunny:
+// the shared tenant alias zone and the global media entrypoint zones.
+func bunnyDelegatedLabels() map[string]struct{} {
+	out := map[string]struct{}{
+		TenantAliasZoneLabel: {},
+	}
+	for _, label := range GlobalServiceZoneLabels() {
+		out[label] = struct{}{}
+	}
+	return out
+}
+
+// GlobalServiceZoneLabels returns the per-service Bunny zone labels that
+// receive global smart records, e.g. foghorn.frameworks.network. The list is
+// code-owned because these are first-class product URLs, not deploy-time knobs.
+func GlobalServiceZoneLabels() []string {
+	return pkgdns.GlobalRootServiceZoneLabels()
+}
+
+// TenantAliasZoneLabel is the single shared zone label under the root
+// that holds all per-paying-tenant DNS records
+// (acme.cdn.frameworks.network, foghorn.acme.cdn.frameworks.network, ...).
+const TenantAliasZoneLabel = pkgdns.TenantAliasZoneLabel
 
 // ACMEUser implements lego.User
 type ACMEUser struct {
@@ -114,8 +166,14 @@ func normalizeDomains(domains []string) []string {
 }
 
 // IssueCertificate requests a certificate using the DNS-01 provider
-// authoritative for the requested domain.
-// It implements "Cache-First" logic.
+// authoritative for the requested domain. Cache-first: returns the
+// existing cert if not expiring within 30 days. On miss/expiry, issues
+// via the configured CA order with rate-limit fallback.
+//
+// Renewal correctness: when renewing an existing cert, IssueCertificate
+// pins to the same CA that originally issued (store.Certificate.IssuerCA)
+// so ARI works. Brand-new certs use the resolved CA order.
+//
 // tenantID is optional - empty string means platform-wide certificate.
 func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, email string) (certPEM, keyPEM string, expiresAt time.Time, err error) {
 	if domain == "" || email == "" {
@@ -127,28 +185,57 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 	}
 
 	// 1. Check Cache (DB) - with tenant context
+	var existingIssuer CAProvider
 	cert, err := m.store.GetCertificate(ctx, tenantID, domain)
 	if err == nil {
 		// Check expiry (renew if < 30 days remaining)
 		if time.Until(cert.ExpiresAt) > 30*24*time.Hour {
 			return cert.CertPEM, cert.KeyPEM, cert.ExpiresAt, nil
 		}
-		// If expiring soon, proceed to renewal logic (below)
+		// If expiring soon, proceed to renewal logic below, pinned to
+		// the same CA so ARI continuity holds.
+		if cert.IssuerCA != "" {
+			existingIssuer = CAProvider(cert.IssuerCA)
+		}
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return "", "", time.Time{}, fmt.Errorf("failed to check certificate cache: %w", err)
 	}
 
-	certificatePEM, privateKeyPEM, expiry, err := m.obtainCertificate(ctx, tenantID, []string{domain}, email)
-	if err != nil {
-		return "", "", time.Time{}, err
+	cas := caOrder()
+	if existingIssuer != "" {
+		// Renewal: pin to the original CA. No fallback: if the CA is
+		// down, we want to fail visibly rather than silently switching
+		// keys mid-renewal.
+		cas = []CAProvider{existingIssuer}
 	}
 
-	// 9. Save to DB (with tenant context)
+	var certificatePEM, privateKeyPEM string
+	var expiry time.Time
+	var issuedBy CAProvider
+	var lastErr error
+	for _, ca := range cas {
+		certificatePEM, privateKeyPEM, expiry, lastErr = m.obtainCertificate(ctx, tenantID, []string{domain}, email, ca)
+		if lastErr == nil {
+			issuedBy = ca
+			break
+		}
+		if !isRateLimitError(lastErr) {
+			break
+		}
+		// Rate-limited: try next CA in the order.
+	}
+	if lastErr != nil {
+		return "", "", time.Time{}, lastErr
+	}
+
+	// 9. Save to DB with tenant context. Record which CA signed it
+	// so renewals route correctly.
 	newCert := &store.Certificate{
 		Domain:    domain,
 		CertPEM:   certificatePEM,
 		KeyPEM:    privateKeyPEM,
 		ExpiresAt: expiry,
+		IssuerCA:  string(issuedBy),
 	}
 	if err := m.store.SaveCertificate(ctx, tenantID, newCert); err != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to save certificate: %w", err)
@@ -170,19 +257,55 @@ func (m *CertManager) EnsureTLSBundle(ctx context.Context, bundleID string, doma
 		}
 	}
 
+	var pinnedCA CAProvider
 	existing, err := m.store.GetTLSBundle(ctx, bundleID)
 	switch {
 	case err == nil:
 		if slices.Equal(existing.Domains, domains) && time.Until(existing.ExpiresAt) > 30*24*time.Hour {
 			return existing, nil
 		}
+		// Pin renewals to the original issuing CA so the ACME account,
+		// ARI hints, and rate-limit pool stay consistent across rotations.
+		// Without this, a renewal would re-resolve via the current CA
+		// order and could silently migrate a bundle off the CA that
+		// originally issued it.
+		if existing.IssuerCA != "" {
+			pinnedCA = CAProvider(existing.IssuerCA)
+		}
 	case !errors.Is(err, store.ErrNotFound):
 		return nil, fmt.Errorf("failed to check tls bundle cache: %w", err)
 	}
 
-	certificatePEM, privateKeyPEM, expiry, err := m.obtainCertificate(ctx, platformCertTenantID, domains, email)
-	if err != nil {
-		return nil, err
+	// Pinned CA short-circuits the order list; go straight to the
+	// original issuer with one fallback only if it rate-limits.
+	var cas []CAProvider
+	if pinnedCA != "" {
+		cas = []CAProvider{pinnedCA}
+		for _, other := range caOrder() {
+			if other != pinnedCA {
+				cas = append(cas, other)
+				break
+			}
+		}
+	} else {
+		cas = caOrder()
+	}
+	var certificatePEM, privateKeyPEM string
+	var expiry time.Time
+	var issuingCA CAProvider
+	var lastErr error
+	for _, ca := range cas {
+		certificatePEM, privateKeyPEM, expiry, lastErr = m.obtainCertificate(ctx, platformCertTenantID, domains, email, ca)
+		if lastErr == nil {
+			issuingCA = ca
+			break
+		}
+		if !isRateLimitError(lastErr) {
+			break
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
 	}
 
 	bundle := &store.TLSBundle{
@@ -191,6 +314,7 @@ func (m *CertManager) EnsureTLSBundle(ctx context.Context, bundleID string, doma
 		CertPEM:   certificatePEM,
 		KeyPEM:    privateKeyPEM,
 		ExpiresAt: expiry,
+		IssuerCA:  string(issuingCA),
 	}
 	if err := m.store.SaveTLSBundle(ctx, bundle); err != nil {
 		return nil, fmt.Errorf("failed to save tls bundle: %w", err)
@@ -202,19 +326,22 @@ func (m *CertManager) GetTLSBundle(ctx context.Context, bundleID string) (*store
 	return m.store.GetTLSBundle(ctx, bundleID)
 }
 
-func (m *CertManager) obtainCertificate(ctx context.Context, tenantID string, domains []string, email string) (certPEM, keyPEM string, expiresAt time.Time, err error) {
-	user, err := m.getOrCreateUser(ctx, tenantID, email)
+func (m *CertManager) obtainCertificate(ctx context.Context, tenantID string, domains []string, email string, ca CAProvider) (certPEM, keyPEM string, expiresAt time.Time, err error) {
+	if ca == "" {
+		ca = CADefaultIssuer
+	}
+	caCfg, caErr := resolveCAConfig(ca)
+	if caErr != nil {
+		return "", "", time.Time{}, fmt.Errorf("resolve CA %s: %w", ca, caErr)
+	}
+
+	user, err := m.getOrCreateUser(ctx, tenantID, email, ca)
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to load ACME user: %w", err)
 	}
 
 	config := lego.NewConfig(user)
-	switch strings.ToLower(os.Getenv("ACME_ENV")) {
-	case "staging":
-		config.CADirURL = lego.LEDirectoryStaging
-	default:
-		config.CADirURL = lego.LEDirectoryProduction
-	}
+	config.CADirURL = caCfg.DirectoryURL
 	config.Certificate.KeyType = certcrypto.EC256
 
 	client, err := m.acmeClientFactory(config)
@@ -238,12 +365,12 @@ func (m *CertManager) obtainCertificate(ctx context.Context, tenantID string, do
 	}
 
 	if user.Registration == nil {
-		reg, regErr := client.Register()
+		reg, regErr := registerACMEUser(client, caCfg)
 		if regErr != nil {
-			return "", "", time.Time{}, fmt.Errorf("registration failed: %w", regErr)
+			return "", "", time.Time{}, fmt.Errorf("registration failed (%s): %w", ca, regErr)
 		}
 		user.Registration = reg
-		if saveErr := m.saveUser(ctx, tenantID, user); saveErr != nil {
+		if saveErr := m.saveUser(ctx, tenantID, user, ca); saveErr != nil {
 			return "", "", time.Time{}, fmt.Errorf("failed to save user registration: %w", saveErr)
 		}
 	}
@@ -305,6 +432,7 @@ func isCloudflareUnknownRecordCleanupError(err error) bool {
 
 func certificateNeedsBunnyProvider(domains []string, rootDomain string) bool {
 	rootDomain = strings.TrimSuffix(strings.TrimSpace(strings.ToLower(rootDomain)), ".")
+	delegated := bunnyDelegatedLabels()
 	for _, domain := range domains {
 		normalized := strings.TrimSuffix(strings.TrimSpace(strings.ToLower(domain)), ".")
 		isWildcard := strings.HasPrefix(normalized, "*.")
@@ -317,9 +445,23 @@ func certificateNeedsBunnyProvider(domains []string, rootDomain string) bool {
 		}
 		prefix := strings.TrimSuffix(base, "."+rootDomain)
 		labels := strings.Split(prefix, ".")
+		// Wildcard one-label under root: cluster wildcard or future
+		// per-tenant zone wildcard. Always Bunny.
 		if len(labels) == 1 && labels[0] != "" && isWildcard {
 			return true
 		}
+		// Exact (non-wildcard) one-label under root: Bunny only when
+		// that label is explicitly NS-delegated (the 8 per-service
+		// global zones and the cdn tenant zone). Cloudflare keeps the
+		// operator services (bridge, grafana, etc.).
+		if len(labels) == 1 && labels[0] != "" && !isWildcard {
+			if _, ok := delegated[labels[0]]; ok {
+				return true
+			}
+			continue
+		}
+		// Anything two-or-more labels deep is definitely a Bunny zone.
+		// (cluster-scoped or tenant-scoped sub-records).
 		if len(labels) >= 2 {
 			return true
 		}
@@ -345,6 +487,10 @@ func (l *legoClient) SetDNS01Provider(provider challenge.Provider) error {
 
 func (l *legoClient) Register() (*registration.Resource, error) {
 	return l.client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+}
+
+func (l *legoClient) RegisterWithEAB(opts registration.RegisterEABOptions) (*registration.Resource, error) {
+	return l.client.Registration.RegisterWithExternalAccountBinding(opts)
 }
 
 func (l *legoClient) Obtain(request certificate.ObtainRequest) (*certificate.Resource, error) {
@@ -399,6 +545,71 @@ func (m *CertManager) HasClusterWildcardCert(ctx context.Context, clusterSlug, r
 	return err == nil && cert != nil && cert.ExpiresAt.After(time.Now())
 }
 
+// Bundle IDs for the global platform multi-SAN certs. These match the
+// bundle_id values Foghorn tags when distributing the certs to nodes via
+// ConfigSeed.
+const (
+	BundleIDPoolAssignedGlobal = "platform:pool-multi"
+	BundleIDPlatformEdgeGlobal = "platform:edge-multi"
+)
+
+// EnsureTenantWildcardCertificate issues the per-tenant wildcard cert
+// covering *.{subdomain}.{tenantZone}.{root} plus the apex
+// {subdomain}.{tenantZone}.{root}. Bundle ID matches what Foghorn
+// distributes ("tenant:{tenantID}").
+//
+// tenantZone is the shared tenant alias label ("cdn"). rootDomain is e.g.
+// "frameworks.network". DNS-01 runs against the shared cdn.{root} Bunny zone
+// via the existing media-zone predicate.
+func (m *CertManager) EnsureTenantWildcardCertificate(ctx context.Context, tenantID, subdomain, tenantZone, rootDomain, email string) (*store.TLSBundle, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	subdomain = strings.TrimSpace(strings.ToLower(subdomain))
+	tenantZone = strings.TrimSpace(strings.ToLower(strings.TrimSuffix(tenantZone, ".")))
+	rootDomain = strings.TrimSpace(strings.ToLower(strings.TrimSuffix(rootDomain, ".")))
+	if tenantID == "" || subdomain == "" || tenantZone == "" || rootDomain == "" {
+		return nil, fmt.Errorf("tenantID, subdomain, tenantZone, and rootDomain are required")
+	}
+	apex := subdomain + "." + tenantZone + "." + rootDomain
+	wildcard := "*." + apex
+	bundleID := "tenant:" + tenantID
+	return m.EnsureTLSBundle(ctx, bundleID, []string{apex, wildcard}, email)
+}
+
+// EnsurePoolAssignedGlobalCertificate issues a single multi-SAN cert
+// covering foghorn.{root}, chandler.{root}, livepeer.{root}. Distributed
+// only to platform-operated foghorn/chandler/livepeer pool nodes.
+func (m *CertManager) EnsurePoolAssignedGlobalCertificate(ctx context.Context, rootDomain, email string) (*store.TLSBundle, error) {
+	rootDomain = strings.TrimSpace(rootDomain)
+	if rootDomain == "" {
+		return nil, fmt.Errorf("root domain is required")
+	}
+	domains := []string{
+		"foghorn." + rootDomain,
+		"chandler." + rootDomain,
+		"livepeer." + rootDomain,
+	}
+	return m.EnsureTLSBundle(ctx, BundleIDPoolAssignedGlobal, domains, email)
+}
+
+// EnsurePlatformEdgeGlobalCertificate issues a single multi-SAN cert
+// covering edge.{root}, edge-ingest.{root}, edge-egress.{root},
+// edge-storage.{root}, edge-processing.{root}. Distributed only to
+// `platform_official` cluster edges. Never to third-party operators.
+func (m *CertManager) EnsurePlatformEdgeGlobalCertificate(ctx context.Context, rootDomain, email string) (*store.TLSBundle, error) {
+	rootDomain = strings.TrimSpace(rootDomain)
+	if rootDomain == "" {
+		return nil, fmt.Errorf("root domain is required")
+	}
+	domains := []string{
+		"edge." + rootDomain,
+		"edge-ingest." + rootDomain,
+		"edge-egress." + rootDomain,
+		"edge-storage." + rootDomain,
+		"edge-processing." + rootDomain,
+	}
+	return m.EnsureTLSBundle(ctx, BundleIDPlatformEdgeGlobal, domains, email)
+}
+
 func (m *CertManager) EnsureClusterWildcardCertificate(ctx context.Context, clusterSlug, rootDomain, email string) (*store.Certificate, error) {
 	clusterSlug = strings.TrimSpace(clusterSlug)
 	rootDomain = strings.TrimSpace(rootDomain)
@@ -414,9 +625,9 @@ func (m *CertManager) EnsureClusterWildcardCertificate(ctx context.Context, clus
 	return m.GetCertificate(ctx, platformCertTenantID, domain)
 }
 
-func (m *CertManager) getOrCreateUser(ctx context.Context, tenantID, email string) (*ACMEUser, error) {
-	// Try DB (with tenant context)
-	acc, err := m.store.GetACMEAccount(ctx, tenantID, email)
+func (m *CertManager) getOrCreateUser(ctx context.Context, tenantID, email string, ca CAProvider) (*ACMEUser, error) {
+	// Try DB with tenant + CA context; registrations are CA-specific.
+	acc, err := m.store.GetACMEAccount(ctx, tenantID, email, string(ca))
 	if err == nil {
 		// Parse Private Key
 		block, _ := pem.Decode([]byte(acc.PrivateKeyPEM))
@@ -452,7 +663,7 @@ func (m *CertManager) getOrCreateUser(ctx context.Context, tenantID, email strin
 	}, nil
 }
 
-func (m *CertManager) saveUser(ctx context.Context, tenantID string, user *ACMEUser) error {
+func (m *CertManager) saveUser(ctx context.Context, tenantID string, user *ACMEUser, ca CAProvider) error {
 	// Serialize Key
 	ecKey, ok := user.key.(*ecdsa.PrivateKey)
 	if !ok {
@@ -474,6 +685,7 @@ func (m *CertManager) saveUser(ctx context.Context, tenantID string, user *ACMEU
 		Email:         user.Email,
 		Registration:  string(regJSON),
 		PrivateKeyPEM: string(keyPEM),
+		CA:            string(ca),
 	}
 	return m.store.SaveACMEAccount(ctx, tenantID, acc)
 }

@@ -20,20 +20,21 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TenantService_GetTenant_FullMethodName            = "/quartermaster.TenantService/GetTenant"
-	TenantService_ValidateTenant_FullMethodName       = "/quartermaster.TenantService/ValidateTenant"
-	TenantService_ResolveTenant_FullMethodName        = "/quartermaster.TenantService/ResolveTenant"
-	TenantService_ResolveTenantAliases_FullMethodName = "/quartermaster.TenantService/ResolveTenantAliases"
-	TenantService_GetClusterRouting_FullMethodName    = "/quartermaster.TenantService/GetClusterRouting"
-	TenantService_ListTenants_FullMethodName          = "/quartermaster.TenantService/ListTenants"
-	TenantService_CreateTenant_FullMethodName         = "/quartermaster.TenantService/CreateTenant"
-	TenantService_UpdateTenant_FullMethodName         = "/quartermaster.TenantService/UpdateTenant"
-	TenantService_DeleteTenant_FullMethodName         = "/quartermaster.TenantService/DeleteTenant"
-	TenantService_GetTenantCluster_FullMethodName     = "/quartermaster.TenantService/GetTenantCluster"
-	TenantService_UpdateTenantCluster_FullMethodName  = "/quartermaster.TenantService/UpdateTenantCluster"
-	TenantService_GetTenantsBatch_FullMethodName      = "/quartermaster.TenantService/GetTenantsBatch"
-	TenantService_GetTenantsByCluster_FullMethodName  = "/quartermaster.TenantService/GetTenantsByCluster"
-	TenantService_ListActiveTenants_FullMethodName    = "/quartermaster.TenantService/ListActiveTenants"
+	TenantService_GetTenant_FullMethodName                    = "/quartermaster.TenantService/GetTenant"
+	TenantService_ValidateTenant_FullMethodName               = "/quartermaster.TenantService/ValidateTenant"
+	TenantService_ResolveTenant_FullMethodName                = "/quartermaster.TenantService/ResolveTenant"
+	TenantService_ResolveTenantAliases_FullMethodName         = "/quartermaster.TenantService/ResolveTenantAliases"
+	TenantService_GetClusterRouting_FullMethodName            = "/quartermaster.TenantService/GetClusterRouting"
+	TenantService_ListTenants_FullMethodName                  = "/quartermaster.TenantService/ListTenants"
+	TenantService_CreateTenant_FullMethodName                 = "/quartermaster.TenantService/CreateTenant"
+	TenantService_UpdateTenant_FullMethodName                 = "/quartermaster.TenantService/UpdateTenant"
+	TenantService_DeleteTenant_FullMethodName                 = "/quartermaster.TenantService/DeleteTenant"
+	TenantService_GetTenantCluster_FullMethodName             = "/quartermaster.TenantService/GetTenantCluster"
+	TenantService_UpdateTenantCluster_FullMethodName          = "/quartermaster.TenantService/UpdateTenantCluster"
+	TenantService_GetTenantsBatch_FullMethodName              = "/quartermaster.TenantService/GetTenantsBatch"
+	TenantService_GetTenantsByCluster_FullMethodName          = "/quartermaster.TenantService/GetTenantsByCluster"
+	TenantService_ListAliasedTenantsForCluster_FullMethodName = "/quartermaster.TenantService/ListAliasedTenantsForCluster"
+	TenantService_ListActiveTenants_FullMethodName            = "/quartermaster.TenantService/ListActiveTenants"
 )
 
 // TenantServiceClient is the client API for TenantService service.
@@ -75,6 +76,12 @@ type TenantServiceClient interface {
 	GetTenantsBatch(ctx context.Context, in *GetTenantsBatchRequest, opts ...grpc.CallOption) (*ListTenantsResponse, error)
 	// Get tenants assigned to a cluster
 	GetTenantsByCluster(ctx context.Context, in *GetTenantsByClusterRequest, opts ...grpc.CallOption) (*GetTenantsByClusterResponse, error)
+	// ListAliasedTenantsForCluster returns the tenants that should
+	// receive a per-tenant TLS bundle on edges in the given cluster.
+	// Used by Foghorn's cert refresh loop to compose ConfigSeed bundles.
+	// Returns paid tenants with active access to the cluster and a
+	// tenant subdomain. Foghorn asks Navigator separately for cert state.
+	ListAliasedTenantsForCluster(ctx context.Context, in *ListAliasedTenantsForClusterRequest, opts ...grpc.CallOption) (*ListAliasedTenantsForClusterResponse, error)
 	// ===== CROSS-SERVICE: BILLING BATCH PROCESSING =====
 	// List all active tenant IDs for billing job iteration.
 	// Called by Purser billing job to avoid cross-service DB access.
@@ -219,6 +226,16 @@ func (c *tenantServiceClient) GetTenantsByCluster(ctx context.Context, in *GetTe
 	return out, nil
 }
 
+func (c *tenantServiceClient) ListAliasedTenantsForCluster(ctx context.Context, in *ListAliasedTenantsForClusterRequest, opts ...grpc.CallOption) (*ListAliasedTenantsForClusterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListAliasedTenantsForClusterResponse)
+	err := c.cc.Invoke(ctx, TenantService_ListAliasedTenantsForCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *tenantServiceClient) ListActiveTenants(ctx context.Context, in *ListActiveTenantsRequest, opts ...grpc.CallOption) (*ListActiveTenantsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListActiveTenantsResponse)
@@ -268,6 +285,12 @@ type TenantServiceServer interface {
 	GetTenantsBatch(context.Context, *GetTenantsBatchRequest) (*ListTenantsResponse, error)
 	// Get tenants assigned to a cluster
 	GetTenantsByCluster(context.Context, *GetTenantsByClusterRequest) (*GetTenantsByClusterResponse, error)
+	// ListAliasedTenantsForCluster returns the tenants that should
+	// receive a per-tenant TLS bundle on edges in the given cluster.
+	// Used by Foghorn's cert refresh loop to compose ConfigSeed bundles.
+	// Returns paid tenants with active access to the cluster and a
+	// tenant subdomain. Foghorn asks Navigator separately for cert state.
+	ListAliasedTenantsForCluster(context.Context, *ListAliasedTenantsForClusterRequest) (*ListAliasedTenantsForClusterResponse, error)
 	// ===== CROSS-SERVICE: BILLING BATCH PROCESSING =====
 	// List all active tenant IDs for billing job iteration.
 	// Called by Purser billing job to avoid cross-service DB access.
@@ -320,6 +343,9 @@ func (UnimplementedTenantServiceServer) GetTenantsBatch(context.Context, *GetTen
 }
 func (UnimplementedTenantServiceServer) GetTenantsByCluster(context.Context, *GetTenantsByClusterRequest) (*GetTenantsByClusterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTenantsByCluster not implemented")
+}
+func (UnimplementedTenantServiceServer) ListAliasedTenantsForCluster(context.Context, *ListAliasedTenantsForClusterRequest) (*ListAliasedTenantsForClusterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListAliasedTenantsForCluster not implemented")
 }
 func (UnimplementedTenantServiceServer) ListActiveTenants(context.Context, *ListActiveTenantsRequest) (*ListActiveTenantsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListActiveTenants not implemented")
@@ -579,6 +605,24 @@ func _TenantService_GetTenantsByCluster_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TenantService_ListAliasedTenantsForCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListAliasedTenantsForClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantServiceServer).ListAliasedTenantsForCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantService_ListAliasedTenantsForCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantServiceServer).ListAliasedTenantsForCluster(ctx, req.(*ListAliasedTenantsForClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TenantService_ListActiveTenants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListActiveTenantsRequest)
 	if err := dec(in); err != nil {
@@ -655,6 +699,10 @@ var TenantService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTenantsByCluster",
 			Handler:    _TenantService_GetTenantsByCluster_Handler,
+		},
+		{
+			MethodName: "ListAliasedTenantsForCluster",
+			Handler:    _TenantService_ListAliasedTenantsForCluster_Handler,
 		},
 		{
 			MethodName: "ListActiveTenants",

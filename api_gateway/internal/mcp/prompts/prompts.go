@@ -697,8 +697,11 @@ func handleSelfHostingPrompt() (*mcp.GetPromptResult, error) {
 	parts = append(parts, "The edge should show as healthy with the correct cluster assignment.\n")
 
 	parts = append(parts, "## Step 7: Go Live")
-	parts = append(parts, "Your streams now route through your cluster's edges. Ingest URL: `edge-ingest.{cluster}.frameworks.network`.")
-	parts = append(parts, "Viewers connect to `foghorn.{cluster}.frameworks.network` and get routed to the best edge.\n")
+	parts = append(parts, "FrameWorks exposes three URL tiers — pick the right one for the tenant:")
+	parts = append(parts, "1. **Tenant aliases** (paid tier with active alias): `edge-ingest.{tenant}.cdn.frameworks.network`, `foghorn.{tenant}.cdn.frameworks.network`. Geo-balances across every subscribed cluster (platform, self-hosted, marketplace).")
+	parts = append(parts, "2. **Global root entrypoints** (default UX for free / platform-official paying tenants): `edge-ingest.frameworks.network`, `foghorn.frameworks.network`. Bunny smart DNS routes to the nearest platform-operated instance.")
+	parts = append(parts, "3. **Cluster-concrete** (operator pin / debug): `edge-ingest.{cluster}.frameworks.network`, `foghorn.{cluster}.frameworks.network`. Resolves to one cluster's edges.")
+	parts = append(parts, "When `CreateStreamResponse.tenant_*_domain` is populated, prefer those URLs in your application; otherwise fall back to `global_*_domain`, then cluster-concrete.\n")
 
 	parts = append(parts, "## Peering Model")
 	parts = append(parts, "- **Preferred ↔ official cluster**: Always-on peering. Edge data exchanged every 30s. Seamless failover.")

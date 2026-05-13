@@ -158,6 +158,57 @@ func (c *Client) GetCABundle(ctx context.Context, req *pb.GetCABundleRequest) (*
 }
 
 // IssueInternalCert requests an internal certificate for a node-scoped service identity.
+// EnsureTenantAlias signals Navigator that a paying tenant should have
+// an alias under the configured tenant zone. Idempotent. Returns
+// immediately; Navigator queues ACME work async.
+func (c *Client) EnsureTenantAlias(ctx context.Context, req *pb.EnsureTenantAliasRequest) (*pb.EnsureTenantAliasResponse, error) {
+	resp, err := c.service.EnsureTenantAlias(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure tenant alias: %w", err)
+	}
+	return resp, nil
+}
+
+// RemoveTenantAlias signals Navigator to tear down a tenant alias.
+// Idempotent.
+func (c *Client) RemoveTenantAlias(ctx context.Context, req *pb.RemoveTenantAliasRequest) (*pb.RemoveTenantAliasResponse, error) {
+	resp, err := c.service.RemoveTenantAlias(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to remove tenant alias: %w", err)
+	}
+	return resp, nil
+}
+
+// GetTenantAliasStatus returns the current alias lifecycle state for a
+// tenant.
+func (c *Client) GetTenantAliasStatus(ctx context.Context, req *pb.GetTenantAliasStatusRequest) (*pb.GetTenantAliasStatusResponse, error) {
+	resp, err := c.service.GetTenantAliasStatus(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tenant alias status: %w", err)
+	}
+	return resp, nil
+}
+
+// ReportConfigSeedApplyResult reports Helmsman's ConfigSeed apply ACK as
+// observed by Foghorn. Navigator persists this as DNS readiness state.
+func (c *Client) ReportConfigSeedApplyResult(ctx context.Context, req *pb.ReportConfigSeedApplyResultRequest) (*pb.ReportConfigSeedApplyResultResponse, error) {
+	resp, err := c.service.ReportConfigSeedApplyResult(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to report config seed apply result: %w", err)
+	}
+	return resp, nil
+}
+
+// RemoveTenantAliasCluster removes one cluster's edges from a tenant
+// alias DNS pool.
+func (c *Client) RemoveTenantAliasCluster(ctx context.Context, req *pb.RemoveTenantAliasClusterRequest) (*pb.RemoveTenantAliasClusterResponse, error) {
+	resp, err := c.service.RemoveTenantAliasCluster(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to remove tenant alias cluster: %w", err)
+	}
+	return resp, nil
+}
+
 func (c *Client) IssueInternalCert(ctx context.Context, req *pb.IssueInternalCertRequest) (*pb.IssueInternalCertResponse, error) {
 	resp, err := c.service.IssueInternalCert(ctx, req)
 	if err != nil {

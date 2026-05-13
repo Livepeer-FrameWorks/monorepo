@@ -1,5 +1,7 @@
 package dns
 
+import "slices"
+
 type Provider string
 
 const (
@@ -73,6 +75,8 @@ var poolAssignedServiceTypeSet = map[string]struct{}{
 	"chandler":         {},
 	"livepeer-gateway": {},
 }
+
+const TenantAliasZoneLabel = "cdn"
 
 var publicSubdomains = map[string]string{
 	"chandler":         "chandler",
@@ -168,13 +172,65 @@ func PublicSubdomain(serviceType string) (string, bool) {
 	return subdomain, ok
 }
 
-// RootServiceFQDN resolves root/API/web/admin service names. Media services are
-// only published under media cluster scopes.
+// RootServiceFQDN resolves the Cloudflare-served root operator services
+// (bridge, grafana, listmonk, ...). Bunny-managed services return false
+// because they are reconciled in per-service Bunny zones, not in
+// Cloudflare. Use BunnyRootServiceFQDN for those.
 func RootServiceFQDN(serviceType, rootDomain string) (string, bool) {
 	if ProviderForServiceType(serviceType) == ProviderBunny {
 		return "", false
 	}
 	return ServiceFQDN(serviceType, rootDomain)
+}
+
+// BunnyRootServiceFQDN resolves the global root entrypoint for a
+// Bunny-managed service (e.g. "foghorn.frameworks.network"). These are
+// user-facing geo-routed records served from a per-service Bunny zone
+// separate from per-cluster scope and per-tenant aliases. Returns
+// false for services that are not Bunny-managed.
+//
+// Caller MUST ensure the service zone has been delegated to Bunny first
+// (DNSManager.EnsureBunnyZone). Issuing records into a non-existent
+// Bunny zone fails.
+func BunnyRootServiceFQDN(serviceType, rootDomain string) (string, bool) {
+	if ProviderForServiceType(serviceType) != ProviderBunny {
+		return "", false
+	}
+	return ServiceFQDN(serviceType, rootDomain)
+}
+
+// TenantAliasableServiceTypes returns the public service types that get a
+// per-tenant DNS alias under {tenant}.cdn.frameworks.network. This is the
+// set of services a paid-tier tenant sees branded URLs for. Excludes
+// telemetry (operator-internal) and bridge/decklog (root-scope only).
+func TenantAliasableServiceTypes() []string {
+	return []string{
+		"edge",
+		"edge-egress",
+		"edge-ingest",
+		"edge-storage",
+		"edge-processing",
+		"chandler",
+		"foghorn",
+		"livepeer-gateway",
+	}
+}
+
+// GlobalRootServiceZoneLabels returns the Bunny-delegated root labels used for
+// global media entrypoints. This is product surface, not deployment config:
+// free/default traffic uses these names, and the tenant alias feature layers on
+// top of the same service set.
+func GlobalRootServiceZoneLabels() []string {
+	out := make([]string, 0, len(TenantAliasableServiceTypes()))
+	for _, serviceType := range TenantAliasableServiceTypes() {
+		label, ok := PublicSubdomain(serviceType)
+		if !ok || label == "" {
+			continue
+		}
+		out = append(out, label)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // ServiceFQDN resolves the service label under the supplied DNS scope. For media
@@ -197,4 +253,81 @@ func ClusterSlug(clusterID, clusterName string) string {
 		return v
 	}
 	return SanitizeLabel(clusterName)
+}
+
+// reservedPlatformLabels are labels that can never be used as tenant
+// subdomain slugs regardless of dynamic state. Kept here as a static
+// list to avoid an env round-trip on every signup validation.
+var reservedPlatformLabels = []string{
+	"www", "api", "mcp", "app", "admin", "status",
+	"mail", "docs", "help", "support", "blog",
+	"cdn", "static", "assets", "auth", "login",
+}
+
+// reservedPrefixes are subdomain prefixes that collide with reserved
+// DNS shapes elsewhere in the system. Tenant slugs starting with any
+// of these are rejected.
+var reservedPrefixes = []string{
+	"edge-", // collides with {node_label}.{cluster}.{root}
+}
+
+// ReservedTenantSlugs returns the union of labels that must not be
+// used as tenant subdomains:
+//   - all managedServiceTypes
+//   - all values in publicSubdomains
+//   - reservedPlatformLabels (www, api, mcp, cdn, ...)
+//   - extra labels passed in (typically active cluster_slug values
+//     from infrastructure_clusters)
+//
+// Validation against this list happens BEFORE writing tenants.subdomain
+// in Quartermaster. Reject (not silently sanitize) on collision.
+func ReservedTenantSlugs(extraClusterSlugs []string) []string {
+	seen := make(map[string]struct{})
+	add := func(s string) {
+		s = SanitizeLabel(s)
+		if s != "" && s != "default" {
+			seen[s] = struct{}{}
+		}
+	}
+	for _, t := range managedServiceTypes {
+		add(t)
+	}
+	for _, s := range publicSubdomains {
+		add(s)
+	}
+	for _, l := range reservedPlatformLabels {
+		add(l)
+	}
+	for _, c := range extraClusterSlugs {
+		add(c)
+	}
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	return out
+}
+
+// ReservedTenantSlugPrefixes returns prefixes that disqualify a tenant
+// slug (e.g. "edge-" collides with edge node labels).
+func ReservedTenantSlugPrefixes() []string {
+	out := make([]string, len(reservedPrefixes))
+	copy(out, reservedPrefixes)
+	return out
+}
+
+// IsReservedTenantSlug reports whether a candidate slug collides with
+// the reserved set. Caller is expected to have already sanitized the
+// label (lowercase, DNS-safe).
+func IsReservedTenantSlug(slug string, extraClusterSlugs []string) bool {
+	slug = SanitizeLabel(slug)
+	if slug == "" || slug == "default" {
+		return true
+	}
+	for _, p := range reservedPrefixes {
+		if len(slug) >= len(p) && slug[:len(p)] == p {
+			return true
+		}
+	}
+	return slices.Contains(ReservedTenantSlugs(extraClusterSlugs), slug)
 }

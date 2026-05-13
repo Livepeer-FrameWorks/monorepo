@@ -19,12 +19,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NavigatorService_SyncDNS_FullMethodName           = "/navigator.NavigatorService/SyncDNS"
-	NavigatorService_IssueCertificate_FullMethodName  = "/navigator.NavigatorService/IssueCertificate"
-	NavigatorService_GetCertificate_FullMethodName    = "/navigator.NavigatorService/GetCertificate"
-	NavigatorService_GetTLSBundle_FullMethodName      = "/navigator.NavigatorService/GetTLSBundle"
-	NavigatorService_GetCABundle_FullMethodName       = "/navigator.NavigatorService/GetCABundle"
-	NavigatorService_IssueInternalCert_FullMethodName = "/navigator.NavigatorService/IssueInternalCert"
+	NavigatorService_SyncDNS_FullMethodName                     = "/navigator.NavigatorService/SyncDNS"
+	NavigatorService_IssueCertificate_FullMethodName            = "/navigator.NavigatorService/IssueCertificate"
+	NavigatorService_GetCertificate_FullMethodName              = "/navigator.NavigatorService/GetCertificate"
+	NavigatorService_GetTLSBundle_FullMethodName                = "/navigator.NavigatorService/GetTLSBundle"
+	NavigatorService_GetCABundle_FullMethodName                 = "/navigator.NavigatorService/GetCABundle"
+	NavigatorService_IssueInternalCert_FullMethodName           = "/navigator.NavigatorService/IssueInternalCert"
+	NavigatorService_EnsureTenantAlias_FullMethodName           = "/navigator.NavigatorService/EnsureTenantAlias"
+	NavigatorService_RemoveTenantAlias_FullMethodName           = "/navigator.NavigatorService/RemoveTenantAlias"
+	NavigatorService_GetTenantAliasStatus_FullMethodName        = "/navigator.NavigatorService/GetTenantAliasStatus"
+	NavigatorService_ReportConfigSeedApplyResult_FullMethodName = "/navigator.NavigatorService/ReportConfigSeedApplyResult"
+	NavigatorService_RemoveTenantAliasCluster_FullMethodName    = "/navigator.NavigatorService/RemoveTenantAliasCluster"
 )
 
 // NavigatorServiceClient is the client API for NavigatorService service.
@@ -45,6 +50,29 @@ type NavigatorServiceClient interface {
 	GetCABundle(ctx context.Context, in *GetCABundleRequest, opts ...grpc.CallOption) (*GetCABundleResponse, error)
 	// IssueInternalCert issues or renews a node-scoped internal gRPC certificate.
 	IssueInternalCert(ctx context.Context, in *IssueInternalCertRequest, opts ...grpc.CallOption) (*IssueInternalCertResponse, error)
+	// EnsureTenantAlias signals Navigator that a paying tenant should have
+	// a public alias under the configured tenant zone (cdn.{root}). Idempotent.
+	// Quartermaster calls this on paid tier activation. Returns immediately;
+	// Navigator persists intent and queues ACME work asynchronously. Check
+	// status via GetTenantAliasStatus.
+	EnsureTenantAlias(ctx context.Context, in *EnsureTenantAliasRequest, opts ...grpc.CallOption) (*EnsureTenantAliasResponse, error)
+	// RemoveTenantAlias signals Navigator that a tenant alias should be
+	// torn down (tenant downgraded/cancelled). Idempotent. DNS records are
+	// removed first; cert files on edges are dropped on the next
+	// ConfigSeed cycle.
+	RemoveTenantAlias(ctx context.Context, in *RemoveTenantAliasRequest, opts ...grpc.CallOption) (*RemoveTenantAliasResponse, error)
+	// GetTenantAliasStatus returns the current lifecycle state for a
+	// tenant alias. Used by webapp status display and Commodore gating
+	// tenant_* domain fields in CreateStreamResponse.
+	GetTenantAliasStatus(ctx context.Context, in *GetTenantAliasStatusRequest, opts ...grpc.CallOption) (*GetTenantAliasStatusResponse, error)
+	// ReportConfigSeedApplyResult records Helmsman's ConfigSeed apply ACK
+	// as observed by Foghorn. Navigator owns durable per-edge cert readiness
+	// because DNS membership is derived from it.
+	ReportConfigSeedApplyResult(ctx context.Context, in *ReportConfigSeedApplyResultRequest, opts ...grpc.CallOption) (*ReportConfigSeedApplyResultResponse, error)
+	// RemoveTenantAliasCluster removes one cluster's edges from a tenant
+	// alias DNS pool before Foghorn drops that tenant's cert from future
+	// ConfigSeeds.
+	RemoveTenantAliasCluster(ctx context.Context, in *RemoveTenantAliasClusterRequest, opts ...grpc.CallOption) (*RemoveTenantAliasClusterResponse, error)
 }
 
 type navigatorServiceClient struct {
@@ -115,6 +143,56 @@ func (c *navigatorServiceClient) IssueInternalCert(ctx context.Context, in *Issu
 	return out, nil
 }
 
+func (c *navigatorServiceClient) EnsureTenantAlias(ctx context.Context, in *EnsureTenantAliasRequest, opts ...grpc.CallOption) (*EnsureTenantAliasResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EnsureTenantAliasResponse)
+	err := c.cc.Invoke(ctx, NavigatorService_EnsureTenantAlias_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *navigatorServiceClient) RemoveTenantAlias(ctx context.Context, in *RemoveTenantAliasRequest, opts ...grpc.CallOption) (*RemoveTenantAliasResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveTenantAliasResponse)
+	err := c.cc.Invoke(ctx, NavigatorService_RemoveTenantAlias_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *navigatorServiceClient) GetTenantAliasStatus(ctx context.Context, in *GetTenantAliasStatusRequest, opts ...grpc.CallOption) (*GetTenantAliasStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTenantAliasStatusResponse)
+	err := c.cc.Invoke(ctx, NavigatorService_GetTenantAliasStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *navigatorServiceClient) ReportConfigSeedApplyResult(ctx context.Context, in *ReportConfigSeedApplyResultRequest, opts ...grpc.CallOption) (*ReportConfigSeedApplyResultResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportConfigSeedApplyResultResponse)
+	err := c.cc.Invoke(ctx, NavigatorService_ReportConfigSeedApplyResult_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *navigatorServiceClient) RemoveTenantAliasCluster(ctx context.Context, in *RemoveTenantAliasClusterRequest, opts ...grpc.CallOption) (*RemoveTenantAliasClusterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveTenantAliasClusterResponse)
+	err := c.cc.Invoke(ctx, NavigatorService_RemoveTenantAliasCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NavigatorServiceServer is the server API for NavigatorService service.
 // All implementations must embed UnimplementedNavigatorServiceServer
 // for forward compatibility.
@@ -133,6 +211,29 @@ type NavigatorServiceServer interface {
 	GetCABundle(context.Context, *GetCABundleRequest) (*GetCABundleResponse, error)
 	// IssueInternalCert issues or renews a node-scoped internal gRPC certificate.
 	IssueInternalCert(context.Context, *IssueInternalCertRequest) (*IssueInternalCertResponse, error)
+	// EnsureTenantAlias signals Navigator that a paying tenant should have
+	// a public alias under the configured tenant zone (cdn.{root}). Idempotent.
+	// Quartermaster calls this on paid tier activation. Returns immediately;
+	// Navigator persists intent and queues ACME work asynchronously. Check
+	// status via GetTenantAliasStatus.
+	EnsureTenantAlias(context.Context, *EnsureTenantAliasRequest) (*EnsureTenantAliasResponse, error)
+	// RemoveTenantAlias signals Navigator that a tenant alias should be
+	// torn down (tenant downgraded/cancelled). Idempotent. DNS records are
+	// removed first; cert files on edges are dropped on the next
+	// ConfigSeed cycle.
+	RemoveTenantAlias(context.Context, *RemoveTenantAliasRequest) (*RemoveTenantAliasResponse, error)
+	// GetTenantAliasStatus returns the current lifecycle state for a
+	// tenant alias. Used by webapp status display and Commodore gating
+	// tenant_* domain fields in CreateStreamResponse.
+	GetTenantAliasStatus(context.Context, *GetTenantAliasStatusRequest) (*GetTenantAliasStatusResponse, error)
+	// ReportConfigSeedApplyResult records Helmsman's ConfigSeed apply ACK
+	// as observed by Foghorn. Navigator owns durable per-edge cert readiness
+	// because DNS membership is derived from it.
+	ReportConfigSeedApplyResult(context.Context, *ReportConfigSeedApplyResultRequest) (*ReportConfigSeedApplyResultResponse, error)
+	// RemoveTenantAliasCluster removes one cluster's edges from a tenant
+	// alias DNS pool before Foghorn drops that tenant's cert from future
+	// ConfigSeeds.
+	RemoveTenantAliasCluster(context.Context, *RemoveTenantAliasClusterRequest) (*RemoveTenantAliasClusterResponse, error)
 	mustEmbedUnimplementedNavigatorServiceServer()
 }
 
@@ -160,6 +261,21 @@ func (UnimplementedNavigatorServiceServer) GetCABundle(context.Context, *GetCABu
 }
 func (UnimplementedNavigatorServiceServer) IssueInternalCert(context.Context, *IssueInternalCertRequest) (*IssueInternalCertResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method IssueInternalCert not implemented")
+}
+func (UnimplementedNavigatorServiceServer) EnsureTenantAlias(context.Context, *EnsureTenantAliasRequest) (*EnsureTenantAliasResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method EnsureTenantAlias not implemented")
+}
+func (UnimplementedNavigatorServiceServer) RemoveTenantAlias(context.Context, *RemoveTenantAliasRequest) (*RemoveTenantAliasResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveTenantAlias not implemented")
+}
+func (UnimplementedNavigatorServiceServer) GetTenantAliasStatus(context.Context, *GetTenantAliasStatusRequest) (*GetTenantAliasStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTenantAliasStatus not implemented")
+}
+func (UnimplementedNavigatorServiceServer) ReportConfigSeedApplyResult(context.Context, *ReportConfigSeedApplyResultRequest) (*ReportConfigSeedApplyResultResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportConfigSeedApplyResult not implemented")
+}
+func (UnimplementedNavigatorServiceServer) RemoveTenantAliasCluster(context.Context, *RemoveTenantAliasClusterRequest) (*RemoveTenantAliasClusterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveTenantAliasCluster not implemented")
 }
 func (UnimplementedNavigatorServiceServer) mustEmbedUnimplementedNavigatorServiceServer() {}
 func (UnimplementedNavigatorServiceServer) testEmbeddedByValue()                          {}
@@ -290,6 +406,96 @@ func _NavigatorService_IssueInternalCert_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NavigatorService_EnsureTenantAlias_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EnsureTenantAliasRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NavigatorServiceServer).EnsureTenantAlias(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NavigatorService_EnsureTenantAlias_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NavigatorServiceServer).EnsureTenantAlias(ctx, req.(*EnsureTenantAliasRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NavigatorService_RemoveTenantAlias_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveTenantAliasRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NavigatorServiceServer).RemoveTenantAlias(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NavigatorService_RemoveTenantAlias_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NavigatorServiceServer).RemoveTenantAlias(ctx, req.(*RemoveTenantAliasRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NavigatorService_GetTenantAliasStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTenantAliasStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NavigatorServiceServer).GetTenantAliasStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NavigatorService_GetTenantAliasStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NavigatorServiceServer).GetTenantAliasStatus(ctx, req.(*GetTenantAliasStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NavigatorService_ReportConfigSeedApplyResult_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportConfigSeedApplyResultRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NavigatorServiceServer).ReportConfigSeedApplyResult(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NavigatorService_ReportConfigSeedApplyResult_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NavigatorServiceServer).ReportConfigSeedApplyResult(ctx, req.(*ReportConfigSeedApplyResultRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NavigatorService_RemoveTenantAliasCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveTenantAliasClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NavigatorServiceServer).RemoveTenantAliasCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NavigatorService_RemoveTenantAliasCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NavigatorServiceServer).RemoveTenantAliasCluster(ctx, req.(*RemoveTenantAliasClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NavigatorService_ServiceDesc is the grpc.ServiceDesc for NavigatorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -320,6 +526,26 @@ var NavigatorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "IssueInternalCert",
 			Handler:    _NavigatorService_IssueInternalCert_Handler,
+		},
+		{
+			MethodName: "EnsureTenantAlias",
+			Handler:    _NavigatorService_EnsureTenantAlias_Handler,
+		},
+		{
+			MethodName: "RemoveTenantAlias",
+			Handler:    _NavigatorService_RemoveTenantAlias_Handler,
+		},
+		{
+			MethodName: "GetTenantAliasStatus",
+			Handler:    _NavigatorService_GetTenantAliasStatus_Handler,
+		},
+		{
+			MethodName: "ReportConfigSeedApplyResult",
+			Handler:    _NavigatorService_ReportConfigSeedApplyResult_Handler,
+		},
+		{
+			MethodName: "RemoveTenantAliasCluster",
+			Handler:    _NavigatorService_RemoveTenantAliasCluster_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

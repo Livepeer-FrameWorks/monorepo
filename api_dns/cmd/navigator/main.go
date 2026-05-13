@@ -32,9 +32,11 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
+	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -57,6 +59,8 @@ type NavigatorServer struct {
 	DNSManager        *logic.DNSManager
 	CertManager       *logic.CertManager
 	InternalCAManager *logic.InternalCAManager
+	AliasPublisher    *worker.AliasApplyStateWorker
+	Quartermaster     *quartermaster.GRPCClient
 	Logger            logging.Logger
 	Metrics           *ServerMetrics
 }
@@ -154,6 +158,21 @@ func main() {
 	reconciler := worker.NewDNSReconciler(dnsManager, certManager, qmClient, logger, time.Duration(reconcileIntervalSeconds)*time.Second, rootDomain, acmeEmail, pkgdns.ManagedServiceTypes())
 	go reconciler.Start(context.Background())
 
+	// Tenant alias worker reconciles DNS from Navigator's durable
+	// per-edge ACK state. Foghorn reports ACKs through Navigator gRPC.
+	tenantZoneLabel := logic.TenantAliasZoneLabel
+	aliasWorkerIntervalSeconds := config.GetEnvInt("NAVIGATOR_ALIAS_APPLY_STATE_INTERVAL_SECONDS", 15)
+	aliasWorker := worker.NewAliasApplyStateWorker(
+		certStore,
+		bunnyClient,
+		quartermasterEdgeResolver{qm: qmClient},
+		logger,
+		time.Duration(aliasWorkerIntervalSeconds)*time.Second,
+		rootDomain,
+		tenantZoneLabel,
+	)
+	go aliasWorker.Start(context.Background())
+
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("navigator", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("navigator", version.Version, version.GitCommit)
@@ -171,6 +190,8 @@ func main() {
 		DNSManager:        dnsManager,
 		CertManager:       certManager,
 		InternalCAManager: internalCAManager,
+		AliasPublisher:    aliasWorker,
+		Quartermaster:     qmClient,
 		Logger:            logger,
 		Metrics:           serverMetrics,
 	}
@@ -524,6 +545,159 @@ func (s *NavigatorServer) GetCABundle(ctx context.Context, _ *pb.GetCABundleRequ
 	}, nil
 }
 
+// EnsureTenantAlias implements the gRPC EnsureTenantAlias method.
+// Idempotent: persists alias intent and queues async ACME work.
+func (s *NavigatorServer) EnsureTenantAlias(ctx context.Context, req *pb.EnsureTenantAliasRequest) (*pb.EnsureTenantAliasResponse, error) {
+	tenantID := req.GetTenantId()
+	subdomain := req.GetSubdomain()
+	log := s.Logger.WithField("tenant_id", tenantID).WithField("subdomain", subdomain)
+	log.Info("Received EnsureTenantAlias request")
+
+	alias, err := s.CertManager.EnsureTenantAlias(ctx, tenantID, subdomain)
+	if err != nil {
+		log.WithError(err).Warn("Failed to persist tenant alias intent")
+		return &pb.EnsureTenantAliasResponse{Error: err.Error()}, nil
+	}
+	return &pb.EnsureTenantAliasResponse{
+		Accepted: true,
+		Status:   alias.Status,
+	}, nil
+}
+
+// RemoveTenantAlias implements the gRPC RemoveTenantAlias method.
+// Idempotent: marks alias for teardown; worker cleans up DNS + state.
+func (s *NavigatorServer) RemoveTenantAlias(ctx context.Context, req *pb.RemoveTenantAliasRequest) (*pb.RemoveTenantAliasResponse, error) {
+	if err := s.CertManager.RemoveTenantAlias(ctx, req.GetTenantId()); err != nil {
+		s.Logger.WithError(err).WithField("tenant_id", req.GetTenantId()).Warn("Failed to mark tenant alias for teardown")
+		return &pb.RemoveTenantAliasResponse{}, nil
+	}
+	return &pb.RemoveTenantAliasResponse{Accepted: true}, nil
+}
+
+// GetTenantAliasStatus implements the gRPC GetTenantAliasStatus method.
+// Returns found=false for tenants without an alias intent (the
+// not-found case is treated as a normal "no row" response, not an
+// error; callers like the webapp check Found to decide what to show).
+func (s *NavigatorServer) GetTenantAliasStatus(ctx context.Context, req *pb.GetTenantAliasStatusRequest) (*pb.GetTenantAliasStatusResponse, error) {
+	alias, err := s.CertManager.GetTenantAlias(ctx, req.GetTenantId())
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return &pb.GetTenantAliasStatusResponse{Found: false}, nil
+		}
+		s.Logger.WithError(err).WithField("tenant_id", req.GetTenantId()).Warn("GetTenantAliasStatus lookup failed")
+		return nil, status.Errorf(codes.Internal, "lookup failed: %v", err)
+	}
+	resp := &pb.GetTenantAliasStatusResponse{
+		Found:     true,
+		TenantId:  alias.TenantID,
+		Subdomain: alias.Subdomain,
+		Status:    alias.Status,
+	}
+	dnsReady, readyErr := s.CertManager.TenantAliasDNSReady(ctx, req.GetTenantId())
+	if readyErr != nil {
+		s.Logger.WithError(readyErr).WithField("tenant_id", req.GetTenantId()).Debug("Tenant alias DNS readiness lookup failed")
+	}
+	resp.DnsReady = dnsReady
+	if alias.CertIssuedAt.Valid {
+		resp.CertIssuedAt = alias.CertIssuedAt.Time.Unix()
+	}
+	if alias.LastError.Valid {
+		resp.LastError = alias.LastError.String
+	}
+	return resp, nil
+}
+
+// ReportConfigSeedApplyResult persists edge cert readiness ACKs observed
+// by Foghorn, then reconciles affected tenant DNS immediately.
+func (s *NavigatorServer) ReportConfigSeedApplyResult(ctx context.Context, req *pb.ReportConfigSeedApplyResultRequest) (*pb.ReportConfigSeedApplyResultResponse, error) {
+	appliedAt := time.Unix(req.GetAppliedAt(), 0).UTC()
+	appliedBundleIDs, failedBundleIDs := s.filterTenantBundlesForCluster(ctx, req.GetClusterId(), req.GetAppliedBundleIds(), req.GetFailedBundleIds())
+	affected, err := s.CertManager.RecordConfigSeedApplyResult(ctx,
+		req.GetNodeId(),
+		req.GetClusterId(),
+		req.GetSeedVersion(),
+		appliedBundleIDs,
+		failedBundleIDs,
+		appliedAt,
+	)
+	if err != nil {
+		s.Logger.WithError(err).WithField("node_id", req.GetNodeId()).Warn("Failed to record ConfigSeed apply result")
+		return nil, status.Errorf(codes.Internal, "record apply result: %v", err)
+	}
+	if s.AliasPublisher != nil {
+		for _, tenantID := range affected {
+			if pubErr := s.AliasPublisher.PublishTenantAlias(ctx, tenantID); pubErr != nil {
+				s.Logger.WithError(pubErr).WithField("tenant_id", tenantID).Warn("Failed to publish tenant alias after apply ACK")
+			}
+		}
+	}
+	return &pb.ReportConfigSeedApplyResultResponse{
+		Accepted:          true,
+		AffectedTenantIds: affected,
+	}, nil
+}
+
+func (s *NavigatorServer) filterTenantBundlesForCluster(ctx context.Context, clusterID string, applied, failed []string) ([]string, []string) {
+	if s.Quartermaster == nil || strings.TrimSpace(clusterID) == "" {
+		return filterNonTenantBundles(applied), filterNonTenantBundles(failed)
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	resp, err := s.Quartermaster.ListAliasedTenantsForCluster(lookupCtx, clusterID)
+	if err != nil {
+		s.Logger.WithError(err).WithField("cluster_id", clusterID).Debug("Skipping tenant ACKs because active tenant lookup failed")
+		return filterNonTenantBundles(applied), filterNonTenantBundles(failed)
+	}
+	allowed := map[string]struct{}{}
+	for _, ref := range resp.GetTenants() {
+		allowed[ref.GetTenantId()] = struct{}{}
+	}
+	return filterBundlesForAllowedTenants(applied, allowed), filterBundlesForAllowedTenants(failed, allowed)
+}
+
+func filterBundlesForAllowedTenants(bundleIDs []string, allowed map[string]struct{}) []string {
+	out := make([]string, 0, len(bundleIDs))
+	for _, bundleID := range bundleIDs {
+		tenantID, ok := strings.CutPrefix(bundleID, "tenant:")
+		if ok {
+			if _, allowedTenant := allowed[tenantID]; !allowedTenant {
+				continue
+			}
+		}
+		out = append(out, bundleID)
+	}
+	return out
+}
+
+func filterNonTenantBundles(bundleIDs []string) []string {
+	out := make([]string, 0, len(bundleIDs))
+	for _, bundleID := range bundleIDs {
+		if strings.HasPrefix(bundleID, "tenant:") {
+			continue
+		}
+		out = append(out, bundleID)
+	}
+	return out
+}
+
+// RemoveTenantAliasCluster drops one cluster's edges from a tenant's DNS
+// eligibility before future ConfigSeeds omit that tenant cert.
+func (s *NavigatorServer) RemoveTenantAliasCluster(ctx context.Context, req *pb.RemoveTenantAliasClusterRequest) (*pb.RemoveTenantAliasClusterResponse, error) {
+	if err := s.CertManager.RemoveTenantAliasCluster(ctx, req.GetTenantId(), req.GetClusterId()); err != nil {
+		s.Logger.WithError(err).WithFields(logging.Fields{
+			"tenant_id":  req.GetTenantId(),
+			"cluster_id": req.GetClusterId(),
+		}).Warn("Failed to remove tenant alias cluster state")
+		return nil, status.Errorf(codes.Internal, "remove tenant alias cluster: %v", err)
+	}
+	if s.AliasPublisher != nil {
+		if err := s.AliasPublisher.PublishTenantAlias(ctx, req.GetTenantId()); err != nil {
+			s.Logger.WithError(err).WithField("tenant_id", req.GetTenantId()).Warn("Failed to republish tenant alias after cluster removal")
+		}
+	}
+	return &pb.RemoveTenantAliasClusterResponse{Accepted: true}, nil
+}
+
 func (s *NavigatorServer) IssueInternalCert(ctx context.Context, req *pb.IssueInternalCertRequest) (*pb.IssueInternalCertResponse, error) {
 	log := s.Logger.WithFields(logging.Fields{
 		"node_id":      req.GetNodeId(),
@@ -548,4 +722,47 @@ func (s *NavigatorServer) IssueInternalCert(ctx context.Context, req *pb.IssueIn
 		KeyPem:      cert.KeyPEM,
 		ExpiresAt:   cert.ExpiresAt.Unix(),
 	}, nil
+}
+
+// quartermasterEdgeResolver implements worker.EdgeAddressResolver by
+// asking Quartermaster for a node's external IPv4. The alias apply-state
+// worker uses this to populate Bunny smart record sets with the actual
+// public IPs of edges that have ACKed the tenant's TLS bundle.
+type quartermasterEdgeResolver struct {
+	qm *quartermaster.GRPCClient
+}
+
+func (r quartermasterEdgeResolver) ResolveEdgeAddresses(ctx context.Context, nodeID string) ([]string, []string, error) {
+	if r.qm == nil || strings.TrimSpace(nodeID) == "" {
+		return nil, nil, nil
+	}
+	resp, err := r.qm.GetNode(ctx, nodeID)
+	if err != nil {
+		return nil, nil, err
+	}
+	node := resp.GetNode()
+	if node == nil {
+		return nil, nil, nil
+	}
+	var ipv4 []string
+	if v := strings.TrimSpace(node.GetExternalIp()); v != "" {
+		ipv4 = []string{v}
+	}
+	return ipv4, nil, nil
+}
+
+func (r quartermasterEdgeResolver) TenantActiveInCluster(ctx context.Context, tenantID, clusterID string) (bool, error) {
+	if r.qm == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(clusterID) == "" {
+		return false, nil
+	}
+	resp, err := r.qm.ListAliasedTenantsForCluster(ctx, clusterID)
+	if err != nil {
+		return false, err
+	}
+	for _, ref := range resp.GetTenants() {
+		if ref.GetTenantId() == tenantID {
+			return true, nil
+		}
+	}
+	return false, nil
 }

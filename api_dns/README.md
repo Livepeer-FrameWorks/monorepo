@@ -4,14 +4,14 @@ Automates public DNS records, TLS certificate issuance, and internal service cer
 
 ## Why Navigator?
 
-- **Provider boundary**: Cloudflare remains the root provider; Bunny owns cluster-scoped media/edge zones such as `media-eu.example.com`
+- **Provider boundary**: Cloudflare remains the root provider; Bunny owns cluster-scoped media/edge zones such as `media-eu.example.com`, global media entrypoint zones such as `edge-ingest.example.com`, and the shared tenant alias zone `cdn.example.com`
 - **Self-hosted path**: Media cluster DNS is delegated by cluster, so edge growth does not consume Cloudflare Load Balancing endpoints
 - **Managed service automation**: Public service records, cluster-scoped media records, load balancer health checks, and TLS material are reconciled from control-plane inventory
 
 ## What it does
 
 - Syncs root/API/web/admin records in Cloudflare from Quartermaster node/service inventory
-- Syncs cluster-scoped media/edge records in Bunny DNS from Quartermaster node/service inventory
+- Syncs cluster-scoped media/edge records, global media entrypoints, and paid tenant aliases in Bunny DNS from Quartermaster node/service inventory
 - Cloudflare root/global load balancers are split into one pool per Quartermaster cluster and use proximity steering when at least two pools have coordinates
 - Bunny media records are A-record sets under `<cluster>.<root>` zones with geolocation Smart Routing when node coordinates are available
 - Foghorn is published at both `foghorn.<cluster>.<root>` and the zone apex `<cluster>.<root>` so the cluster domain remains the default playback/routing entrypoint
@@ -29,8 +29,11 @@ Configuration comes from the top-level `config/env` stack. Generate `.env` with 
 ## Optional env vars
 
 - `ACME_ENV` (`production` or `staging`, default: `production`)
-- `BUNNY_API_KEY` (required for Bunny-managed media cluster DNS; when unset, Navigator logs an explicit warning and uses Cloudflare cluster-scoped fallback)
+- `BUNNY_API_KEY` (required for Bunny-managed media cluster DNS, global media entrypoints, and tenant aliases; when unset, Navigator logs an explicit warning and uses Cloudflare cluster-scoped fallback where possible)
 - `BUNNY_API_BASE_URL` (optional Bunny API override for tests)
+- `NAVIGATOR_GOOGLE_TRUST_EAB_KID` / `NAVIGATOR_GOOGLE_TRUST_EAB_HMAC_KEY` (enables Google Trust Services ACME fallback for rate-limit headroom; when unset, Navigator uses Let's Encrypt only)
+- `NAVIGATOR_ACME_CA_ORDER` (optional override for CA order; default is Let's Encrypt, with Google Trust added automatically when EAB secrets are present)
+- `NAVIGATOR_GOOGLE_TRUST_DIRECTORY_URL` (optional override; defaults to Google Trust Services production ACME)
 - `NAVIGATOR_PROXY_SERVICES` (comma-separated service types to proxy via Cloudflare; default: `bridge,chartroom,chatwoot,foredeck,grafana,listmonk,logbook,metabase,steward`)
 - `NAVIGATOR_CERT_ALLOWED_SUFFIXES` (comma-separated domain suffix allowlist; default: `BRAND_DOMAIN`)
 - `NAVIGATOR_DNS_RECONCILE_INTERVAL_SECONDS` (default: `60`)

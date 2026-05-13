@@ -24,7 +24,7 @@ type MonitorConfig struct {
 }
 
 // CertChecker tests whether a cluster has a valid wildcard TLS certificate.
-// Used to gate granular edge service subdomains — without a wildcard cert,
+// Used to gate granular edge service subdomains. Without a wildcard cert,
 // edge nodes can't terminate TLS for service-specific domains.
 type CertChecker interface {
 	HasClusterWildcardCert(ctx context.Context, clusterSlug, rootDomain string) bool
@@ -137,6 +137,29 @@ func (m *DNSManager) EnsureBunnyClusterZone(ctx context.Context, clusterSlug str
 	}
 	zoneDomain := fmt.Sprintf("%s.%s", clusterSlug, m.domain)
 	_, _, err := m.ensureBunnyZoneDelegation(ctx, zoneDomain, logging.Fields{"cluster": clusterSlug})
+	return err
+}
+
+// EnsureBunnyZone creates the Bunny zone at "{label}.{root}" if it
+// does not already exist and (re)publishes the Cloudflare NS delegation
+// records pointing at Bunny's nameservers. This is the generic helper
+// for new zones added by the DNS namespace model (per-service global
+// zones like foghorn.frameworks.network, the shared cdn.frameworks.network
+// for tenant aliases, etc.).
+//
+// Calling this is idempotent and safe to invoke before every cert
+// issuance against a zone; it short-circuits when both the Bunny
+// zone and the NS records are already in place.
+func (m *DNSManager) EnsureBunnyZone(ctx context.Context, label string) error {
+	if m.bunnyClient == nil {
+		return nil
+	}
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return fmt.Errorf("zone label is required")
+	}
+	zoneDomain := fmt.Sprintf("%s.%s", label, m.domain)
+	_, _, err := m.ensureBunnyZoneDelegation(ctx, zoneDomain, logging.Fields{"zone_label": label})
 	return err
 }
 
@@ -467,6 +490,75 @@ func (m *DNSManager) clearBunnyClusterService(ctx context.Context, fqdn, service
 		}
 	}
 	return nil
+}
+
+// SyncBunnyRootService publishes the global root entrypoint smart record
+// set for a Bunny-managed service. Example: serviceType="foghorn",
+// rootDomain="frameworks.network" → publishes the smart-routed A record
+// set at the apex of zone "foghorn.frameworks.network".
+//
+// Membership rule: only nodes in platform_official clusters are included.
+// Third-party / tenant-private edges are NEVER members of the global root
+// entrypoint; they appear under their own cluster scope and (for paid
+// tenants) under the tenant alias zone.
+//
+// Caller must have already delegated the per-service zone via
+// EnsureBunnyZone(serviceType). No-ops cleanly if Bunny is not configured.
+func (m *DNSManager) SyncBunnyRootService(ctx context.Context, serviceType string) (map[string]string, error) {
+	if m.bunnyClient == nil {
+		return nil, nil
+	}
+	if pkgdns.ProviderForServiceType(serviceType) != pkgdns.ProviderBunny {
+		return nil, fmt.Errorf("%s is not a Bunny-managed service", serviceType)
+	}
+	label, ok := pkgdns.PublicSubdomain(serviceType)
+	if !ok || label == "" {
+		return nil, fmt.Errorf("service %s has no public subdomain", serviceType)
+	}
+	zoneDomain := label + "." + m.domain
+
+	zone, _, err := m.ensureBunnyZoneDelegation(ctx, zoneDomain, logging.Fields{
+		"service_type": serviceType,
+		"scope":        "global_root",
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	clustersResp, err := m.qmClient.ListClusters(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("list clusters: %w", err)
+	}
+	platformClusters := map[string]struct{}{}
+	for _, c := range clustersResp.GetClusters() {
+		if !c.GetIsActive() {
+			continue
+		}
+		if c.GetIsPlatformOfficial() {
+			platformClusters[c.GetClusterId()] = struct{}{}
+		}
+	}
+
+	nodesResp, err := m.qmClient.ListHealthyNodesForDNS(ctx, int(m.staleAge.Seconds()), serviceType)
+	if err != nil {
+		return nil, fmt.Errorf("list healthy nodes: %w", err)
+	}
+	var filtered []*proto.InfrastructureNode
+	for _, n := range nodesResp.GetNodes() {
+		if _, ok := platformClusters[n.GetClusterId()]; ok {
+			filtered = append(filtered, n)
+		}
+	}
+	nodes := dnsNodesFromProto(filtered)
+
+	// Global root records live at the apex of {label}.{root}; record name
+	// is empty (apex).
+	records := m.bunnyRecordsForNodes(nodes, "", zoneDomain)
+	if err := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, "", bunny.RecordTypeA, records); err != nil {
+		return nil, fmt.Errorf("reconcile root record set: %w", err)
+	}
+
+	return nil, nil
 }
 
 func (m *DNSManager) syncBunnyClusterService(ctx context.Context, fqdn, serviceType, zoneDomain string, nodes []dnsNode) (map[string]string, error) {
@@ -1122,7 +1214,7 @@ func poolIDsFromLoadBalancer(lb cloudflare.LoadBalancer) []string {
 
 // ClearServiceDNS is the explicit decommission path for removing all DNS
 // configuration for a service FQDN. Call this when a service is intentionally
-// drained — the periodic sync paths preserve existing records on empty
+// drained; the periodic sync paths preserve existing records on empty
 // inventory to avoid accidental deletions during transient outages.
 func (m *DNSManager) ClearServiceDNS(ctx context.Context, fqdn string) (map[string]string, error) {
 	m.logger.WithField("fqdn", fqdn).Info("Explicit DNS teardown requested")

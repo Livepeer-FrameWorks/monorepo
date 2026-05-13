@@ -62,16 +62,22 @@ func (r *DNSReconciler) reconcile(ctx context.Context) {
 	for _, serviceType := range r.serviceTypes {
 		switch pkgdns.ProviderForServiceType(serviceType) {
 		case pkgdns.ProviderBunny:
-			if !pkgdns.IsClusterScopedServiceType(serviceType) {
-				r.logger.WithField("service_type", serviceType).Warn("Bunny-managed service is not cluster-scoped; skipping root DNS reconciliation")
-				continue
+			if pkgdns.IsClusterScopedServiceType(serviceType) {
+				clusterPartialErrors, clusterErr := r.dnsManager.SyncServiceByCluster(ctx, serviceType)
+				if clusterErr != nil {
+					r.logger.WithError(clusterErr).WithField("service_type", serviceType).Error("Cluster DNS reconciliation failed")
+				}
+				if len(clusterPartialErrors) > 0 {
+					r.logger.WithField("service_type", serviceType).WithField("partial_errors", clusterPartialErrors).Warn("Cluster DNS reconciliation completed with partial errors")
+				}
 			}
-			clusterPartialErrors, clusterErr := r.dnsManager.SyncServiceByCluster(ctx, serviceType)
-			if clusterErr != nil {
-				r.logger.WithError(clusterErr).WithField("service_type", serviceType).Error("Cluster DNS reconciliation failed")
-			}
-			if len(clusterPartialErrors) > 0 {
-				r.logger.WithField("service_type", serviceType).WithField("partial_errors", clusterPartialErrors).Warn("Cluster DNS reconciliation completed with partial errors")
+			// Global root entrypoint publish: code-owned media labels
+			// get smart record sets at {label}.{root} populated from
+			// platform_official cluster nodes.
+			if isGlobalServiceZone(serviceType) {
+				if _, err := r.dnsManager.SyncBunnyRootService(ctx, serviceType); err != nil {
+					r.logger.WithError(err).WithField("service_type", serviceType).Warn("Global root DNS reconciliation failed")
+				}
 			}
 		case pkgdns.ProviderCloudflare:
 			partialErrors, err := r.dnsManager.SyncService(ctx, serviceType, "")
@@ -87,7 +93,62 @@ func (r *DNSReconciler) reconcile(ctx context.Context) {
 	}
 
 	r.ensureClusterWildcardCerts(ctx)
+	r.ensureGlobalPlatformCerts(ctx)
 	r.ensureTLSBundles(ctx)
+	r.processPendingTenantAliases(ctx)
+}
+
+// processPendingTenantAliases runs the per-tick worker pass for tenant
+// alias intent rows. Each cycle, Navigator looks at tenant_aliases for
+// rows in cert_issuing or cert_failed status, runs ACME issuance, and
+// transitions to cert_issued or back to cert_failed with the error.
+func (r *DNSReconciler) processPendingTenantAliases(ctx context.Context) {
+	if r.certManager == nil || strings.TrimSpace(r.acmeEmail) == "" || strings.TrimSpace(r.rootDomain) == "" {
+		return
+	}
+	if err := r.dnsManager.EnsureBunnyZone(ctx, logic.TenantAliasZoneLabel); err != nil {
+		r.logger.WithError(err).WithField("zone_label", logic.TenantAliasZoneLabel).Warn("Failed to ensure tenant alias Bunny zone")
+		return
+	}
+	processed, err := r.certManager.ProcessPendingTenantAliases(ctx, r.rootDomain, r.acmeEmail)
+	if err != nil {
+		r.logger.WithError(err).Warn("Tenant alias intent worker failed")
+		return
+	}
+	if processed > 0 {
+		r.logger.WithField("count", processed).Debug("Processed tenant alias intents")
+	}
+}
+
+// ensureGlobalPlatformCerts issues two multi-SAN platform certs covering
+// the 8 per-service global zones under root:
+//   - pool-assigned multi-SAN: foghorn/chandler/livepeer.{root}
+//   - platform-edge multi-SAN:  edge*.{root}
+//
+// Foghorn fetches these from Navigator and distributes them via
+// ConfigSeed only to platform-operated nodes (pool nodes / platform_official
+// edges respectively). The DNS smart record sets that resolve these
+// hostnames are managed separately — see ensureTLSBundles for the
+// bundle pattern, and pkg/dns for the per-service zone reconciliation.
+func (r *DNSReconciler) ensureGlobalPlatformCerts(ctx context.Context) {
+	if r.certManager == nil || strings.TrimSpace(r.acmeEmail) == "" || strings.TrimSpace(r.rootDomain) == "" {
+		return
+	}
+
+	for _, label := range logic.GlobalServiceZoneLabels() {
+		if err := r.dnsManager.EnsureBunnyZone(ctx, label); err != nil {
+			r.logger.WithError(err).WithField("zone_label", label).Warn("Failed to ensure global service Bunny zone")
+			return
+		}
+	}
+
+	if _, err := r.certManager.EnsurePoolAssignedGlobalCertificate(ctx, r.rootDomain, r.acmeEmail); err != nil {
+		r.logger.WithError(err).Warn("Failed to ensure pool-assigned global multi-SAN certificate")
+	}
+
+	if _, err := r.certManager.EnsurePlatformEdgeGlobalCertificate(ctx, r.rootDomain, r.acmeEmail); err != nil {
+		r.logger.WithError(err).Warn("Failed to ensure platform-edge global multi-SAN certificate")
+	}
 }
 
 func (r *DNSReconciler) ensureClusterWildcardCerts(ctx context.Context) {
@@ -131,6 +192,21 @@ func (r *DNSReconciler) ensureClusterWildcardCerts(ctx context.Context) {
 
 func usesBunnyClusterDNS(cluster *proto.InfrastructureCluster) bool {
 	return pkgdns.UsesBunnyClusterDNS(strings.TrimSpace(cluster.GetClusterType()))
+}
+
+// isGlobalServiceZone reports whether a serviceType's public subdomain is
+// one of the code-owned Bunny global media labels.
+func isGlobalServiceZone(serviceType string) bool {
+	label, ok := pkgdns.PublicSubdomain(serviceType)
+	if !ok || label == "" {
+		return false
+	}
+	for _, configured := range logic.GlobalServiceZoneLabels() {
+		if configured == label {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *DNSReconciler) ensureTLSBundles(ctx context.Context) {

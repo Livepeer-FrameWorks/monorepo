@@ -6,11 +6,26 @@ import (
 	"text/template"
 )
 
+// CaddyfileBundle describes one TLS site block to render. Each bundle gets
+// its own site block with its own cert/key paths; the body of the block is
+// shared via the `common_handlers` snippet so behavior stays identical
+// across bundles.
+type CaddyfileBundle struct {
+	// SiteAddress can be one host or a space-separated list of hosts.
+	// Examples:
+	//   "*.media-us-1.frameworks.network"
+	//   "acme.cdn.frameworks.network *.acme.cdn.frameworks.network"
+	SiteAddress string
+	// Empty paths leave the site to Caddy's automatic ACME (rare; we
+	// always populate these from ConfigSeed in production).
+	TLSCertPath string
+	TLSKeyPath  string
+}
+
 // CaddyfileParams holds the values needed to render a production Caddyfile.
 type CaddyfileParams struct {
-	SiteAddress      string // e.g. "*.us-west-1.frameworks.network"
-	TLSCertPath      string // e.g. "/etc/frameworks/certs/cert.pem" (empty = auto-ACME)
-	TLSKeyPath       string
+	// One site block is rendered per bundle. Order is deterministic.
+	Bundles          []CaddyfileBundle
 	CaddyAdminAddr   string // e.g. "unix//run/caddy/admin.sock" or "localhost:2019"
 	AcmeEmail        string
 	HelmsmanUpstream string // e.g. "helmsman:18007" or "localhost:18007"
@@ -28,11 +43,7 @@ const caddyfileTmpl = `{
   }
 }
 
-{{.SiteAddress}} {
-{{- if and .TLSCertPath .TLSKeyPath}}
-  tls {{.TLSCertPath}} {{.TLSKeyPath}}
-{{- end}}
-
+(common_handlers) {
   @compressible {
     not path *.ts *.m4s *.mp4 *.webm
   }
@@ -83,14 +94,28 @@ const caddyfileTmpl = `{
     format json
   }
 }
-`
+
+{{range .Bundles}}
+{{.SiteAddress}} {
+{{- if and .TLSCertPath .TLSKeyPath}}
+  tls {{.TLSCertPath}} {{.TLSKeyPath}}
+{{- end}}
+  import common_handlers
+}
+{{end}}`
 
 var parsedCaddyfileTmpl = template.Must(template.New("caddyfile").Parse(caddyfileTmpl))
 
 // RenderCaddyfile renders a production Caddyfile from the given parameters.
+// Requires at least one bundle.
 func RenderCaddyfile(params CaddyfileParams) (string, error) {
-	if params.SiteAddress == "" {
-		return "", fmt.Errorf("SiteAddress is required")
+	if len(params.Bundles) == 0 {
+		return "", fmt.Errorf("at least one bundle is required")
+	}
+	for i, b := range params.Bundles {
+		if b.SiteAddress == "" {
+			return "", fmt.Errorf("bundle[%d]: SiteAddress is required", i)
+		}
 	}
 	var buf strings.Builder
 	if err := parsedCaddyfileTmpl.Execute(&buf, params); err != nil {

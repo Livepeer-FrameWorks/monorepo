@@ -1574,6 +1574,157 @@ func (x *GetTenantsByClusterResponse) GetPagination() *CursorPaginationResponse 
 	return nil
 }
 
+type ListAliasedTenantsForClusterRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAliasedTenantsForClusterRequest) Reset() {
+	*x = ListAliasedTenantsForClusterRequest{}
+	mi := &file_quartermaster_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAliasedTenantsForClusterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAliasedTenantsForClusterRequest) ProtoMessage() {}
+
+func (x *ListAliasedTenantsForClusterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_quartermaster_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAliasedTenantsForClusterRequest.ProtoReflect.Descriptor instead.
+func (*ListAliasedTenantsForClusterRequest) Descriptor() ([]byte, []int) {
+	return file_quartermaster_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ListAliasedTenantsForClusterRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+type AliasedTenantRef struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	TenantId string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	// The tenant's subdomain label inside the platform tenant zone
+	// (cdn.{root}). Used by Foghorn when composing per-tenant bundle
+	// site_addresses in ConfigSeed.
+	Subdomain     string `protobuf:"bytes,2,opt,name=subdomain,proto3" json:"subdomain,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AliasedTenantRef) Reset() {
+	*x = AliasedTenantRef{}
+	mi := &file_quartermaster_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AliasedTenantRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AliasedTenantRef) ProtoMessage() {}
+
+func (x *AliasedTenantRef) ProtoReflect() protoreflect.Message {
+	mi := &file_quartermaster_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AliasedTenantRef.ProtoReflect.Descriptor instead.
+func (*AliasedTenantRef) Descriptor() ([]byte, []int) {
+	return file_quartermaster_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *AliasedTenantRef) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *AliasedTenantRef) GetSubdomain() string {
+	if x != nil {
+		return x.Subdomain
+	}
+	return ""
+}
+
+type ListAliasedTenantsForClusterResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	Tenants       []*AliasedTenantRef    `protobuf:"bytes,2,rep,name=tenants,proto3" json:"tenants,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAliasedTenantsForClusterResponse) Reset() {
+	*x = ListAliasedTenantsForClusterResponse{}
+	mi := &file_quartermaster_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAliasedTenantsForClusterResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAliasedTenantsForClusterResponse) ProtoMessage() {}
+
+func (x *ListAliasedTenantsForClusterResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_quartermaster_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAliasedTenantsForClusterResponse.ProtoReflect.Descriptor instead.
+func (*ListAliasedTenantsForClusterResponse) Descriptor() ([]byte, []int) {
+	return file_quartermaster_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *ListAliasedTenantsForClusterResponse) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *ListAliasedTenantsForClusterResponse) GetTenants() []*AliasedTenantRef {
+	if x != nil {
+		return x.Tenants
+	}
+	return nil
+}
+
 // Request to list all active tenant IDs (for billing job iteration)
 type ListActiveTenantsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1583,7 +1734,7 @@ type ListActiveTenantsRequest struct {
 
 func (x *ListActiveTenantsRequest) Reset() {
 	*x = ListActiveTenantsRequest{}
-	mi := &file_quartermaster_proto_msgTypes[19]
+	mi := &file_quartermaster_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1595,7 +1746,7 @@ func (x *ListActiveTenantsRequest) String() string {
 func (*ListActiveTenantsRequest) ProtoMessage() {}
 
 func (x *ListActiveTenantsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[19]
+	mi := &file_quartermaster_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1608,7 +1759,7 @@ func (x *ListActiveTenantsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListActiveTenantsRequest.ProtoReflect.Descriptor instead.
 func (*ListActiveTenantsRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{19}
+	return file_quartermaster_proto_rawDescGZIP(), []int{22}
 }
 
 // Response with tenant IDs for batch processing
@@ -1621,7 +1772,7 @@ type ListActiveTenantsResponse struct {
 
 func (x *ListActiveTenantsResponse) Reset() {
 	*x = ListActiveTenantsResponse{}
-	mi := &file_quartermaster_proto_msgTypes[20]
+	mi := &file_quartermaster_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1633,7 +1784,7 @@ func (x *ListActiveTenantsResponse) String() string {
 func (*ListActiveTenantsResponse) ProtoMessage() {}
 
 func (x *ListActiveTenantsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[20]
+	mi := &file_quartermaster_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1646,7 +1797,7 @@ func (x *ListActiveTenantsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListActiveTenantsResponse.ProtoReflect.Descriptor instead.
 func (*ListActiveTenantsResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{20}
+	return file_quartermaster_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ListActiveTenantsResponse) GetTenantIds() []string {
@@ -1670,7 +1821,7 @@ type GetClusterRoutingRequest struct {
 
 func (x *GetClusterRoutingRequest) Reset() {
 	*x = GetClusterRoutingRequest{}
-	mi := &file_quartermaster_proto_msgTypes[21]
+	mi := &file_quartermaster_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1682,7 +1833,7 @@ func (x *GetClusterRoutingRequest) String() string {
 func (*GetClusterRoutingRequest) ProtoMessage() {}
 
 func (x *GetClusterRoutingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[21]
+	mi := &file_quartermaster_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1695,7 +1846,7 @@ func (x *GetClusterRoutingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClusterRoutingRequest.ProtoReflect.Descriptor instead.
 func (*GetClusterRoutingRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{21}
+	return file_quartermaster_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *GetClusterRoutingRequest) GetTenantId() string {
@@ -1773,7 +1924,7 @@ type ClusterRoutingResponse struct {
 
 func (x *ClusterRoutingResponse) Reset() {
 	*x = ClusterRoutingResponse{}
-	mi := &file_quartermaster_proto_msgTypes[22]
+	mi := &file_quartermaster_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1785,7 +1936,7 @@ func (x *ClusterRoutingResponse) String() string {
 func (*ClusterRoutingResponse) ProtoMessage() {}
 
 func (x *ClusterRoutingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[22]
+	mi := &file_quartermaster_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1798,7 +1949,7 @@ func (x *ClusterRoutingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterRoutingResponse.ProtoReflect.Descriptor instead.
 func (*ClusterRoutingResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{22}
+	return file_quartermaster_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ClusterRoutingResponse) GetClusterId() string {
@@ -1950,7 +2101,7 @@ type GetClusterRequest struct {
 
 func (x *GetClusterRequest) Reset() {
 	*x = GetClusterRequest{}
-	mi := &file_quartermaster_proto_msgTypes[23]
+	mi := &file_quartermaster_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1962,7 +2113,7 @@ func (x *GetClusterRequest) String() string {
 func (*GetClusterRequest) ProtoMessage() {}
 
 func (x *GetClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[23]
+	mi := &file_quartermaster_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1975,7 +2126,7 @@ func (x *GetClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClusterRequest.ProtoReflect.Descriptor instead.
 func (*GetClusterRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{23}
+	return file_quartermaster_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *GetClusterRequest) GetClusterId() string {
@@ -2025,7 +2176,7 @@ type InfrastructureCluster struct {
 
 func (x *InfrastructureCluster) Reset() {
 	*x = InfrastructureCluster{}
-	mi := &file_quartermaster_proto_msgTypes[24]
+	mi := &file_quartermaster_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2037,7 +2188,7 @@ func (x *InfrastructureCluster) String() string {
 func (*InfrastructureCluster) ProtoMessage() {}
 
 func (x *InfrastructureCluster) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[24]
+	mi := &file_quartermaster_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2050,7 +2201,7 @@ func (x *InfrastructureCluster) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InfrastructureCluster.ProtoReflect.Descriptor instead.
 func (*InfrastructureCluster) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{24}
+	return file_quartermaster_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *InfrastructureCluster) GetId() string {
@@ -2237,7 +2388,7 @@ type ClusterResponse struct {
 
 func (x *ClusterResponse) Reset() {
 	*x = ClusterResponse{}
-	mi := &file_quartermaster_proto_msgTypes[25]
+	mi := &file_quartermaster_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2249,7 +2400,7 @@ func (x *ClusterResponse) String() string {
 func (*ClusterResponse) ProtoMessage() {}
 
 func (x *ClusterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[25]
+	mi := &file_quartermaster_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2262,7 +2413,7 @@ func (x *ClusterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterResponse.ProtoReflect.Descriptor instead.
 func (*ClusterResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{25}
+	return file_quartermaster_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ClusterResponse) GetCluster() *InfrastructureCluster {
@@ -2287,7 +2438,7 @@ type ListClustersRequest struct {
 
 func (x *ListClustersRequest) Reset() {
 	*x = ListClustersRequest{}
-	mi := &file_quartermaster_proto_msgTypes[26]
+	mi := &file_quartermaster_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2299,7 +2450,7 @@ func (x *ListClustersRequest) String() string {
 func (*ListClustersRequest) ProtoMessage() {}
 
 func (x *ListClustersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[26]
+	mi := &file_quartermaster_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2312,7 +2463,7 @@ func (x *ListClustersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListClustersRequest.ProtoReflect.Descriptor instead.
 func (*ListClustersRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{26}
+	return file_quartermaster_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ListClustersRequest) GetPagination() *CursorPaginationRequest {
@@ -2374,7 +2525,7 @@ type ListClustersResponse struct {
 
 func (x *ListClustersResponse) Reset() {
 	*x = ListClustersResponse{}
-	mi := &file_quartermaster_proto_msgTypes[27]
+	mi := &file_quartermaster_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2386,7 +2537,7 @@ func (x *ListClustersResponse) String() string {
 func (*ListClustersResponse) ProtoMessage() {}
 
 func (x *ListClustersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[27]
+	mi := &file_quartermaster_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2399,7 +2550,7 @@ func (x *ListClustersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListClustersResponse.ProtoReflect.Descriptor instead.
 func (*ListClustersResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{27}
+	return file_quartermaster_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ListClustersResponse) GetClusters() []*InfrastructureCluster {
@@ -2442,7 +2593,7 @@ type CreateClusterRequest struct {
 
 func (x *CreateClusterRequest) Reset() {
 	*x = CreateClusterRequest{}
-	mi := &file_quartermaster_proto_msgTypes[28]
+	mi := &file_quartermaster_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2454,7 +2605,7 @@ func (x *CreateClusterRequest) String() string {
 func (*CreateClusterRequest) ProtoMessage() {}
 
 func (x *CreateClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[28]
+	mi := &file_quartermaster_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2467,7 +2618,7 @@ func (x *CreateClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateClusterRequest.ProtoReflect.Descriptor instead.
 func (*CreateClusterRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{28}
+	return file_quartermaster_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *CreateClusterRequest) GetClusterId() string {
@@ -2607,7 +2758,7 @@ type UpdateClusterRequest struct {
 
 func (x *UpdateClusterRequest) Reset() {
 	*x = UpdateClusterRequest{}
-	mi := &file_quartermaster_proto_msgTypes[29]
+	mi := &file_quartermaster_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2619,7 +2770,7 @@ func (x *UpdateClusterRequest) String() string {
 func (*UpdateClusterRequest) ProtoMessage() {}
 
 func (x *UpdateClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[29]
+	mi := &file_quartermaster_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2632,7 +2783,7 @@ func (x *UpdateClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateClusterRequest.ProtoReflect.Descriptor instead.
 func (*UpdateClusterRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{29}
+	return file_quartermaster_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *UpdateClusterRequest) GetClusterId() string {
@@ -2762,7 +2913,7 @@ type UpdateClusterMeshConfigRequest struct {
 
 func (x *UpdateClusterMeshConfigRequest) Reset() {
 	*x = UpdateClusterMeshConfigRequest{}
-	mi := &file_quartermaster_proto_msgTypes[30]
+	mi := &file_quartermaster_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2774,7 +2925,7 @@ func (x *UpdateClusterMeshConfigRequest) String() string {
 func (*UpdateClusterMeshConfigRequest) ProtoMessage() {}
 
 func (x *UpdateClusterMeshConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[30]
+	mi := &file_quartermaster_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2787,7 +2938,7 @@ func (x *UpdateClusterMeshConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateClusterMeshConfigRequest.ProtoReflect.Descriptor instead.
 func (*UpdateClusterMeshConfigRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{30}
+	return file_quartermaster_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *UpdateClusterMeshConfigRequest) GetClusterId() string {
@@ -2822,7 +2973,7 @@ type UpdateClusterMeshConfigResponse struct {
 
 func (x *UpdateClusterMeshConfigResponse) Reset() {
 	*x = UpdateClusterMeshConfigResponse{}
-	mi := &file_quartermaster_proto_msgTypes[31]
+	mi := &file_quartermaster_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2834,7 +2985,7 @@ func (x *UpdateClusterMeshConfigResponse) String() string {
 func (*UpdateClusterMeshConfigResponse) ProtoMessage() {}
 
 func (x *UpdateClusterMeshConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[31]
+	mi := &file_quartermaster_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2847,7 +2998,7 @@ func (x *UpdateClusterMeshConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateClusterMeshConfigResponse.ProtoReflect.Descriptor instead.
 func (*UpdateClusterMeshConfigResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{31}
+	return file_quartermaster_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *UpdateClusterMeshConfigResponse) GetClusterId() string {
@@ -2881,7 +3032,7 @@ type ListClustersForTenantRequest struct {
 
 func (x *ListClustersForTenantRequest) Reset() {
 	*x = ListClustersForTenantRequest{}
-	mi := &file_quartermaster_proto_msgTypes[32]
+	mi := &file_quartermaster_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2893,7 +3044,7 @@ func (x *ListClustersForTenantRequest) String() string {
 func (*ListClustersForTenantRequest) ProtoMessage() {}
 
 func (x *ListClustersForTenantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[32]
+	mi := &file_quartermaster_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2906,7 +3057,7 @@ func (x *ListClustersForTenantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListClustersForTenantRequest.ProtoReflect.Descriptor instead.
 func (*ListClustersForTenantRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{32}
+	return file_quartermaster_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ListClustersForTenantRequest) GetTenantId() string {
@@ -2936,7 +3087,7 @@ type ClusterAccessEntry struct {
 
 func (x *ClusterAccessEntry) Reset() {
 	*x = ClusterAccessEntry{}
-	mi := &file_quartermaster_proto_msgTypes[33]
+	mi := &file_quartermaster_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2948,7 +3099,7 @@ func (x *ClusterAccessEntry) String() string {
 func (*ClusterAccessEntry) ProtoMessage() {}
 
 func (x *ClusterAccessEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[33]
+	mi := &file_quartermaster_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2961,7 +3112,7 @@ func (x *ClusterAccessEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterAccessEntry.ProtoReflect.Descriptor instead.
 func (*ClusterAccessEntry) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{33}
+	return file_quartermaster_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ClusterAccessEntry) GetClusterId() string {
@@ -3002,7 +3153,7 @@ type ClustersAccessResponse struct {
 
 func (x *ClustersAccessResponse) Reset() {
 	*x = ClustersAccessResponse{}
-	mi := &file_quartermaster_proto_msgTypes[34]
+	mi := &file_quartermaster_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3014,7 +3165,7 @@ func (x *ClustersAccessResponse) String() string {
 func (*ClustersAccessResponse) ProtoMessage() {}
 
 func (x *ClustersAccessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[34]
+	mi := &file_quartermaster_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3027,7 +3178,7 @@ func (x *ClustersAccessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClustersAccessResponse.ProtoReflect.Descriptor instead.
 func (*ClustersAccessResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{34}
+	return file_quartermaster_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ClustersAccessResponse) GetClusters() []*ClusterAccessEntry {
@@ -3058,7 +3209,7 @@ type GrantClusterAccessRequest struct {
 
 func (x *GrantClusterAccessRequest) Reset() {
 	*x = GrantClusterAccessRequest{}
-	mi := &file_quartermaster_proto_msgTypes[35]
+	mi := &file_quartermaster_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3070,7 +3221,7 @@ func (x *GrantClusterAccessRequest) String() string {
 func (*GrantClusterAccessRequest) ProtoMessage() {}
 
 func (x *GrantClusterAccessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[35]
+	mi := &file_quartermaster_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3083,7 +3234,7 @@ func (x *GrantClusterAccessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GrantClusterAccessRequest.ProtoReflect.Descriptor instead.
 func (*GrantClusterAccessRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{35}
+	return file_quartermaster_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *GrantClusterAccessRequest) GetTenantId() string {
@@ -3131,7 +3282,7 @@ type SubscribeToClusterRequest struct {
 
 func (x *SubscribeToClusterRequest) Reset() {
 	*x = SubscribeToClusterRequest{}
-	mi := &file_quartermaster_proto_msgTypes[36]
+	mi := &file_quartermaster_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3143,7 +3294,7 @@ func (x *SubscribeToClusterRequest) String() string {
 func (*SubscribeToClusterRequest) ProtoMessage() {}
 
 func (x *SubscribeToClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[36]
+	mi := &file_quartermaster_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3156,7 +3307,7 @@ func (x *SubscribeToClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeToClusterRequest.ProtoReflect.Descriptor instead.
 func (*SubscribeToClusterRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{36}
+	return file_quartermaster_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *SubscribeToClusterRequest) GetTenantId() string {
@@ -3191,7 +3342,7 @@ type BootstrapClusterAccessRequest struct {
 
 func (x *BootstrapClusterAccessRequest) Reset() {
 	*x = BootstrapClusterAccessRequest{}
-	mi := &file_quartermaster_proto_msgTypes[37]
+	mi := &file_quartermaster_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3203,7 +3354,7 @@ func (x *BootstrapClusterAccessRequest) String() string {
 func (*BootstrapClusterAccessRequest) ProtoMessage() {}
 
 func (x *BootstrapClusterAccessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[37]
+	mi := &file_quartermaster_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3216,7 +3367,7 @@ func (x *BootstrapClusterAccessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BootstrapClusterAccessRequest.ProtoReflect.Descriptor instead.
 func (*BootstrapClusterAccessRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{37}
+	return file_quartermaster_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *BootstrapClusterAccessRequest) GetTenantId() string {
@@ -3251,7 +3402,7 @@ type DeactivateClusterAccessRequest struct {
 
 func (x *DeactivateClusterAccessRequest) Reset() {
 	*x = DeactivateClusterAccessRequest{}
-	mi := &file_quartermaster_proto_msgTypes[38]
+	mi := &file_quartermaster_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3263,7 +3414,7 @@ func (x *DeactivateClusterAccessRequest) String() string {
 func (*DeactivateClusterAccessRequest) ProtoMessage() {}
 
 func (x *DeactivateClusterAccessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[38]
+	mi := &file_quartermaster_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3276,7 +3427,7 @@ func (x *DeactivateClusterAccessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeactivateClusterAccessRequest.ProtoReflect.Descriptor instead.
 func (*DeactivateClusterAccessRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{38}
+	return file_quartermaster_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *DeactivateClusterAccessRequest) GetTenantId() string {
@@ -3309,7 +3460,7 @@ type ListTenantClusterAccessRequest struct {
 
 func (x *ListTenantClusterAccessRequest) Reset() {
 	*x = ListTenantClusterAccessRequest{}
-	mi := &file_quartermaster_proto_msgTypes[39]
+	mi := &file_quartermaster_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3321,7 +3472,7 @@ func (x *ListTenantClusterAccessRequest) String() string {
 func (*ListTenantClusterAccessRequest) ProtoMessage() {}
 
 func (x *ListTenantClusterAccessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[39]
+	mi := &file_quartermaster_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3334,7 +3485,7 @@ func (x *ListTenantClusterAccessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTenantClusterAccessRequest.ProtoReflect.Descriptor instead.
 func (*ListTenantClusterAccessRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{39}
+	return file_quartermaster_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *ListTenantClusterAccessRequest) GetTenantId() string {
@@ -3356,7 +3507,7 @@ type TenantClusterAccessRow struct {
 
 func (x *TenantClusterAccessRow) Reset() {
 	*x = TenantClusterAccessRow{}
-	mi := &file_quartermaster_proto_msgTypes[40]
+	mi := &file_quartermaster_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3368,7 +3519,7 @@ func (x *TenantClusterAccessRow) String() string {
 func (*TenantClusterAccessRow) ProtoMessage() {}
 
 func (x *TenantClusterAccessRow) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[40]
+	mi := &file_quartermaster_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3381,7 +3532,7 @@ func (x *TenantClusterAccessRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantClusterAccessRow.ProtoReflect.Descriptor instead.
 func (*TenantClusterAccessRow) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{40}
+	return file_quartermaster_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *TenantClusterAccessRow) GetClusterId() string {
@@ -3421,7 +3572,7 @@ type ListTenantClusterAccessResponse struct {
 
 func (x *ListTenantClusterAccessResponse) Reset() {
 	*x = ListTenantClusterAccessResponse{}
-	mi := &file_quartermaster_proto_msgTypes[41]
+	mi := &file_quartermaster_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3433,7 +3584,7 @@ func (x *ListTenantClusterAccessResponse) String() string {
 func (*ListTenantClusterAccessResponse) ProtoMessage() {}
 
 func (x *ListTenantClusterAccessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[41]
+	mi := &file_quartermaster_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3446,7 +3597,7 @@ func (x *ListTenantClusterAccessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTenantClusterAccessResponse.ProtoReflect.Descriptor instead.
 func (*ListTenantClusterAccessResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{41}
+	return file_quartermaster_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *ListTenantClusterAccessResponse) GetRows() []*TenantClusterAccessRow {
@@ -3470,7 +3621,7 @@ type TenantResourceLimits struct {
 
 func (x *TenantResourceLimits) Reset() {
 	*x = TenantResourceLimits{}
-	mi := &file_quartermaster_proto_msgTypes[42]
+	mi := &file_quartermaster_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3482,7 +3633,7 @@ func (x *TenantResourceLimits) String() string {
 func (*TenantResourceLimits) ProtoMessage() {}
 
 func (x *TenantResourceLimits) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[42]
+	mi := &file_quartermaster_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3495,7 +3646,7 @@ func (x *TenantResourceLimits) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantResourceLimits.ProtoReflect.Descriptor instead.
 func (*TenantResourceLimits) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{42}
+	return file_quartermaster_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *TenantResourceLimits) GetMaxStreams() int32 {
@@ -3522,7 +3673,7 @@ type UnsubscribeFromClusterRequest struct {
 
 func (x *UnsubscribeFromClusterRequest) Reset() {
 	*x = UnsubscribeFromClusterRequest{}
-	mi := &file_quartermaster_proto_msgTypes[43]
+	mi := &file_quartermaster_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3534,7 +3685,7 @@ func (x *UnsubscribeFromClusterRequest) String() string {
 func (*UnsubscribeFromClusterRequest) ProtoMessage() {}
 
 func (x *UnsubscribeFromClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[43]
+	mi := &file_quartermaster_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3547,7 +3698,7 @@ func (x *UnsubscribeFromClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnsubscribeFromClusterRequest.ProtoReflect.Descriptor instead.
 func (*UnsubscribeFromClusterRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{43}
+	return file_quartermaster_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *UnsubscribeFromClusterRequest) GetTenantId() string {
@@ -3574,7 +3725,7 @@ type ListMySubscriptionsRequest struct {
 
 func (x *ListMySubscriptionsRequest) Reset() {
 	*x = ListMySubscriptionsRequest{}
-	mi := &file_quartermaster_proto_msgTypes[44]
+	mi := &file_quartermaster_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3586,7 +3737,7 @@ func (x *ListMySubscriptionsRequest) String() string {
 func (*ListMySubscriptionsRequest) ProtoMessage() {}
 
 func (x *ListMySubscriptionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[44]
+	mi := &file_quartermaster_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3599,7 +3750,7 @@ func (x *ListMySubscriptionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMySubscriptionsRequest.ProtoReflect.Descriptor instead.
 func (*ListMySubscriptionsRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{44}
+	return file_quartermaster_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *ListMySubscriptionsRequest) GetTenantId() string {
@@ -3645,7 +3796,7 @@ type MarketplaceClusterEntry struct {
 
 func (x *MarketplaceClusterEntry) Reset() {
 	*x = MarketplaceClusterEntry{}
-	mi := &file_quartermaster_proto_msgTypes[45]
+	mi := &file_quartermaster_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3657,7 +3808,7 @@ func (x *MarketplaceClusterEntry) String() string {
 func (*MarketplaceClusterEntry) ProtoMessage() {}
 
 func (x *MarketplaceClusterEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[45]
+	mi := &file_quartermaster_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3670,7 +3821,7 @@ func (x *MarketplaceClusterEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarketplaceClusterEntry.ProtoReflect.Descriptor instead.
 func (*MarketplaceClusterEntry) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{45}
+	return file_quartermaster_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *MarketplaceClusterEntry) GetClusterId() string {
@@ -3795,7 +3946,7 @@ type ListMarketplaceClustersRequest struct {
 
 func (x *ListMarketplaceClustersRequest) Reset() {
 	*x = ListMarketplaceClustersRequest{}
-	mi := &file_quartermaster_proto_msgTypes[46]
+	mi := &file_quartermaster_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3807,7 +3958,7 @@ func (x *ListMarketplaceClustersRequest) String() string {
 func (*ListMarketplaceClustersRequest) ProtoMessage() {}
 
 func (x *ListMarketplaceClustersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[46]
+	mi := &file_quartermaster_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3820,7 +3971,7 @@ func (x *ListMarketplaceClustersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMarketplaceClustersRequest.ProtoReflect.Descriptor instead.
 func (*ListMarketplaceClustersRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{46}
+	return file_quartermaster_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *ListMarketplaceClustersRequest) GetTenantId() string {
@@ -3847,7 +3998,7 @@ type ListMarketplaceClustersResponse struct {
 
 func (x *ListMarketplaceClustersResponse) Reset() {
 	*x = ListMarketplaceClustersResponse{}
-	mi := &file_quartermaster_proto_msgTypes[47]
+	mi := &file_quartermaster_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3859,7 +4010,7 @@ func (x *ListMarketplaceClustersResponse) String() string {
 func (*ListMarketplaceClustersResponse) ProtoMessage() {}
 
 func (x *ListMarketplaceClustersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[47]
+	mi := &file_quartermaster_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3872,7 +4023,7 @@ func (x *ListMarketplaceClustersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMarketplaceClustersResponse.ProtoReflect.Descriptor instead.
 func (*ListMarketplaceClustersResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{47}
+	return file_quartermaster_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *ListMarketplaceClustersResponse) GetClusters() []*MarketplaceClusterEntry {
@@ -3900,7 +4051,7 @@ type GetMarketplaceClusterRequest struct {
 
 func (x *GetMarketplaceClusterRequest) Reset() {
 	*x = GetMarketplaceClusterRequest{}
-	mi := &file_quartermaster_proto_msgTypes[48]
+	mi := &file_quartermaster_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3912,7 +4063,7 @@ func (x *GetMarketplaceClusterRequest) String() string {
 func (*GetMarketplaceClusterRequest) ProtoMessage() {}
 
 func (x *GetMarketplaceClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[48]
+	mi := &file_quartermaster_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3925,7 +4076,7 @@ func (x *GetMarketplaceClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMarketplaceClusterRequest.ProtoReflect.Descriptor instead.
 func (*GetMarketplaceClusterRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{48}
+	return file_quartermaster_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *GetMarketplaceClusterRequest) GetClusterId() string {
@@ -3968,7 +4119,7 @@ type UpdateClusterMarketplaceRequest struct {
 
 func (x *UpdateClusterMarketplaceRequest) Reset() {
 	*x = UpdateClusterMarketplaceRequest{}
-	mi := &file_quartermaster_proto_msgTypes[49]
+	mi := &file_quartermaster_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3980,7 +4131,7 @@ func (x *UpdateClusterMarketplaceRequest) String() string {
 func (*UpdateClusterMarketplaceRequest) ProtoMessage() {}
 
 func (x *UpdateClusterMarketplaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[49]
+	mi := &file_quartermaster_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3993,7 +4144,7 @@ func (x *UpdateClusterMarketplaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateClusterMarketplaceRequest.ProtoReflect.Descriptor instead.
 func (*UpdateClusterMarketplaceRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{49}
+	return file_quartermaster_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *UpdateClusterMarketplaceRequest) GetClusterId() string {
@@ -4058,7 +4209,7 @@ type GetClusterMetadataBatchRequest struct {
 
 func (x *GetClusterMetadataBatchRequest) Reset() {
 	*x = GetClusterMetadataBatchRequest{}
-	mi := &file_quartermaster_proto_msgTypes[50]
+	mi := &file_quartermaster_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4070,7 +4221,7 @@ func (x *GetClusterMetadataBatchRequest) String() string {
 func (*GetClusterMetadataBatchRequest) ProtoMessage() {}
 
 func (x *GetClusterMetadataBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[50]
+	mi := &file_quartermaster_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4083,7 +4234,7 @@ func (x *GetClusterMetadataBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClusterMetadataBatchRequest.ProtoReflect.Descriptor instead.
 func (*GetClusterMetadataBatchRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{50}
+	return file_quartermaster_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *GetClusterMetadataBatchRequest) GetClusterIds() []string {
@@ -4109,7 +4260,7 @@ type GetClusterMetadataBatchResponse struct {
 
 func (x *GetClusterMetadataBatchResponse) Reset() {
 	*x = GetClusterMetadataBatchResponse{}
-	mi := &file_quartermaster_proto_msgTypes[51]
+	mi := &file_quartermaster_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4121,7 +4272,7 @@ func (x *GetClusterMetadataBatchResponse) String() string {
 func (*GetClusterMetadataBatchResponse) ProtoMessage() {}
 
 func (x *GetClusterMetadataBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[51]
+	mi := &file_quartermaster_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4134,7 +4285,7 @@ func (x *GetClusterMetadataBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClusterMetadataBatchResponse.ProtoReflect.Descriptor instead.
 func (*GetClusterMetadataBatchResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{51}
+	return file_quartermaster_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *GetClusterMetadataBatchResponse) GetClusters() map[string]*ClusterMetadata {
@@ -4164,7 +4315,7 @@ type ClusterMetadata struct {
 
 func (x *ClusterMetadata) Reset() {
 	*x = ClusterMetadata{}
-	mi := &file_quartermaster_proto_msgTypes[52]
+	mi := &file_quartermaster_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4176,7 +4327,7 @@ func (x *ClusterMetadata) String() string {
 func (*ClusterMetadata) ProtoMessage() {}
 
 func (x *ClusterMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[52]
+	mi := &file_quartermaster_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4189,7 +4340,7 @@ func (x *ClusterMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterMetadata.ProtoReflect.Descriptor instead.
 func (*ClusterMetadata) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{52}
+	return file_quartermaster_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *ClusterMetadata) GetClusterId() string {
@@ -4289,7 +4440,7 @@ type CreatePrivateClusterRequest struct {
 
 func (x *CreatePrivateClusterRequest) Reset() {
 	*x = CreatePrivateClusterRequest{}
-	mi := &file_quartermaster_proto_msgTypes[53]
+	mi := &file_quartermaster_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4301,7 +4452,7 @@ func (x *CreatePrivateClusterRequest) String() string {
 func (*CreatePrivateClusterRequest) ProtoMessage() {}
 
 func (x *CreatePrivateClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[53]
+	mi := &file_quartermaster_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4314,7 +4465,7 @@ func (x *CreatePrivateClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePrivateClusterRequest.ProtoReflect.Descriptor instead.
 func (*CreatePrivateClusterRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{53}
+	return file_quartermaster_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *CreatePrivateClusterRequest) GetTenantId() string {
@@ -4355,7 +4506,7 @@ type CreatePrivateClusterResponse struct {
 
 func (x *CreatePrivateClusterResponse) Reset() {
 	*x = CreatePrivateClusterResponse{}
-	mi := &file_quartermaster_proto_msgTypes[54]
+	mi := &file_quartermaster_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4367,7 +4518,7 @@ func (x *CreatePrivateClusterResponse) String() string {
 func (*CreatePrivateClusterResponse) ProtoMessage() {}
 
 func (x *CreatePrivateClusterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[54]
+	mi := &file_quartermaster_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4380,7 +4531,7 @@ func (x *CreatePrivateClusterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePrivateClusterResponse.ProtoReflect.Descriptor instead.
 func (*CreatePrivateClusterResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{54}
+	return file_quartermaster_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *CreatePrivateClusterResponse) GetCluster() *InfrastructureCluster {
@@ -4420,7 +4571,7 @@ type ClusterInvite struct {
 
 func (x *ClusterInvite) Reset() {
 	*x = ClusterInvite{}
-	mi := &file_quartermaster_proto_msgTypes[55]
+	mi := &file_quartermaster_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4432,7 +4583,7 @@ func (x *ClusterInvite) String() string {
 func (*ClusterInvite) ProtoMessage() {}
 
 func (x *ClusterInvite) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[55]
+	mi := &file_quartermaster_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4445,7 +4596,7 @@ func (x *ClusterInvite) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterInvite.ProtoReflect.Descriptor instead.
 func (*ClusterInvite) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{55}
+	return file_quartermaster_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *ClusterInvite) GetId() string {
@@ -4553,7 +4704,7 @@ type CreateClusterInviteRequest struct {
 
 func (x *CreateClusterInviteRequest) Reset() {
 	*x = CreateClusterInviteRequest{}
-	mi := &file_quartermaster_proto_msgTypes[56]
+	mi := &file_quartermaster_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4565,7 +4716,7 @@ func (x *CreateClusterInviteRequest) String() string {
 func (*CreateClusterInviteRequest) ProtoMessage() {}
 
 func (x *CreateClusterInviteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[56]
+	mi := &file_quartermaster_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4578,7 +4729,7 @@ func (x *CreateClusterInviteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateClusterInviteRequest.ProtoReflect.Descriptor instead.
 func (*CreateClusterInviteRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{56}
+	return file_quartermaster_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *CreateClusterInviteRequest) GetClusterId() string {
@@ -4633,7 +4784,7 @@ type RevokeClusterInviteRequest struct {
 
 func (x *RevokeClusterInviteRequest) Reset() {
 	*x = RevokeClusterInviteRequest{}
-	mi := &file_quartermaster_proto_msgTypes[57]
+	mi := &file_quartermaster_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4645,7 +4796,7 @@ func (x *RevokeClusterInviteRequest) String() string {
 func (*RevokeClusterInviteRequest) ProtoMessage() {}
 
 func (x *RevokeClusterInviteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[57]
+	mi := &file_quartermaster_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4658,7 +4809,7 @@ func (x *RevokeClusterInviteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeClusterInviteRequest.ProtoReflect.Descriptor instead.
 func (*RevokeClusterInviteRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{57}
+	return file_quartermaster_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *RevokeClusterInviteRequest) GetInviteId() string {
@@ -4686,7 +4837,7 @@ type ListClusterInvitesRequest struct {
 
 func (x *ListClusterInvitesRequest) Reset() {
 	*x = ListClusterInvitesRequest{}
-	mi := &file_quartermaster_proto_msgTypes[58]
+	mi := &file_quartermaster_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4698,7 +4849,7 @@ func (x *ListClusterInvitesRequest) String() string {
 func (*ListClusterInvitesRequest) ProtoMessage() {}
 
 func (x *ListClusterInvitesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[58]
+	mi := &file_quartermaster_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4711,7 +4862,7 @@ func (x *ListClusterInvitesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListClusterInvitesRequest.ProtoReflect.Descriptor instead.
 func (*ListClusterInvitesRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{58}
+	return file_quartermaster_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ListClusterInvitesRequest) GetClusterId() string {
@@ -4745,7 +4896,7 @@ type ListMyClusterInvitesRequest struct {
 
 func (x *ListMyClusterInvitesRequest) Reset() {
 	*x = ListMyClusterInvitesRequest{}
-	mi := &file_quartermaster_proto_msgTypes[59]
+	mi := &file_quartermaster_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4757,7 +4908,7 @@ func (x *ListMyClusterInvitesRequest) String() string {
 func (*ListMyClusterInvitesRequest) ProtoMessage() {}
 
 func (x *ListMyClusterInvitesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[59]
+	mi := &file_quartermaster_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4770,7 +4921,7 @@ func (x *ListMyClusterInvitesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMyClusterInvitesRequest.ProtoReflect.Descriptor instead.
 func (*ListMyClusterInvitesRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{59}
+	return file_quartermaster_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *ListMyClusterInvitesRequest) GetTenantId() string {
@@ -4797,7 +4948,7 @@ type ListClusterInvitesResponse struct {
 
 func (x *ListClusterInvitesResponse) Reset() {
 	*x = ListClusterInvitesResponse{}
-	mi := &file_quartermaster_proto_msgTypes[60]
+	mi := &file_quartermaster_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4809,7 +4960,7 @@ func (x *ListClusterInvitesResponse) String() string {
 func (*ListClusterInvitesResponse) ProtoMessage() {}
 
 func (x *ListClusterInvitesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[60]
+	mi := &file_quartermaster_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4822,7 +4973,7 @@ func (x *ListClusterInvitesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListClusterInvitesResponse.ProtoReflect.Descriptor instead.
 func (*ListClusterInvitesResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{60}
+	return file_quartermaster_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *ListClusterInvitesResponse) GetInvites() []*ClusterInvite {
@@ -4864,7 +5015,7 @@ type ClusterSubscription struct {
 
 func (x *ClusterSubscription) Reset() {
 	*x = ClusterSubscription{}
-	mi := &file_quartermaster_proto_msgTypes[61]
+	mi := &file_quartermaster_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4876,7 +5027,7 @@ func (x *ClusterSubscription) String() string {
 func (*ClusterSubscription) ProtoMessage() {}
 
 func (x *ClusterSubscription) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[61]
+	mi := &file_quartermaster_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4889,7 +5040,7 @@ func (x *ClusterSubscription) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterSubscription.ProtoReflect.Descriptor instead.
 func (*ClusterSubscription) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{61}
+	return file_quartermaster_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *ClusterSubscription) GetId() string {
@@ -5008,7 +5159,7 @@ type RequestClusterSubscriptionRequest struct {
 
 func (x *RequestClusterSubscriptionRequest) Reset() {
 	*x = RequestClusterSubscriptionRequest{}
-	mi := &file_quartermaster_proto_msgTypes[62]
+	mi := &file_quartermaster_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5020,7 +5171,7 @@ func (x *RequestClusterSubscriptionRequest) String() string {
 func (*RequestClusterSubscriptionRequest) ProtoMessage() {}
 
 func (x *RequestClusterSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[62]
+	mi := &file_quartermaster_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5033,7 +5184,7 @@ func (x *RequestClusterSubscriptionRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use RequestClusterSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*RequestClusterSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{62}
+	return file_quartermaster_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *RequestClusterSubscriptionRequest) GetTenantId() string {
@@ -5067,7 +5218,7 @@ type AcceptClusterInviteRequest struct {
 
 func (x *AcceptClusterInviteRequest) Reset() {
 	*x = AcceptClusterInviteRequest{}
-	mi := &file_quartermaster_proto_msgTypes[63]
+	mi := &file_quartermaster_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5079,7 +5230,7 @@ func (x *AcceptClusterInviteRequest) String() string {
 func (*AcceptClusterInviteRequest) ProtoMessage() {}
 
 func (x *AcceptClusterInviteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[63]
+	mi := &file_quartermaster_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5092,7 +5243,7 @@ func (x *AcceptClusterInviteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcceptClusterInviteRequest.ProtoReflect.Descriptor instead.
 func (*AcceptClusterInviteRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{63}
+	return file_quartermaster_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *AcceptClusterInviteRequest) GetTenantId() string {
@@ -5120,7 +5271,7 @@ type ListPendingSubscriptionsRequest struct {
 
 func (x *ListPendingSubscriptionsRequest) Reset() {
 	*x = ListPendingSubscriptionsRequest{}
-	mi := &file_quartermaster_proto_msgTypes[64]
+	mi := &file_quartermaster_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5132,7 +5283,7 @@ func (x *ListPendingSubscriptionsRequest) String() string {
 func (*ListPendingSubscriptionsRequest) ProtoMessage() {}
 
 func (x *ListPendingSubscriptionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[64]
+	mi := &file_quartermaster_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5145,7 +5296,7 @@ func (x *ListPendingSubscriptionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPendingSubscriptionsRequest.ProtoReflect.Descriptor instead.
 func (*ListPendingSubscriptionsRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{64}
+	return file_quartermaster_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *ListPendingSubscriptionsRequest) GetClusterId() string {
@@ -5179,7 +5330,7 @@ type ListPendingSubscriptionsResponse struct {
 
 func (x *ListPendingSubscriptionsResponse) Reset() {
 	*x = ListPendingSubscriptionsResponse{}
-	mi := &file_quartermaster_proto_msgTypes[65]
+	mi := &file_quartermaster_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5191,7 +5342,7 @@ func (x *ListPendingSubscriptionsResponse) String() string {
 func (*ListPendingSubscriptionsResponse) ProtoMessage() {}
 
 func (x *ListPendingSubscriptionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[65]
+	mi := &file_quartermaster_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5204,7 +5355,7 @@ func (x *ListPendingSubscriptionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPendingSubscriptionsResponse.ProtoReflect.Descriptor instead.
 func (*ListPendingSubscriptionsResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{65}
+	return file_quartermaster_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *ListPendingSubscriptionsResponse) GetSubscriptions() []*ClusterSubscription {
@@ -5231,7 +5382,7 @@ type ApproveClusterSubscriptionRequest struct {
 
 func (x *ApproveClusterSubscriptionRequest) Reset() {
 	*x = ApproveClusterSubscriptionRequest{}
-	mi := &file_quartermaster_proto_msgTypes[66]
+	mi := &file_quartermaster_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5243,7 +5394,7 @@ func (x *ApproveClusterSubscriptionRequest) String() string {
 func (*ApproveClusterSubscriptionRequest) ProtoMessage() {}
 
 func (x *ApproveClusterSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[66]
+	mi := &file_quartermaster_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5256,7 +5407,7 @@ func (x *ApproveClusterSubscriptionRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ApproveClusterSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*ApproveClusterSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{66}
+	return file_quartermaster_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *ApproveClusterSubscriptionRequest) GetSubscriptionId() string {
@@ -5284,7 +5435,7 @@ type RejectClusterSubscriptionRequest struct {
 
 func (x *RejectClusterSubscriptionRequest) Reset() {
 	*x = RejectClusterSubscriptionRequest{}
-	mi := &file_quartermaster_proto_msgTypes[67]
+	mi := &file_quartermaster_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5296,7 +5447,7 @@ func (x *RejectClusterSubscriptionRequest) String() string {
 func (*RejectClusterSubscriptionRequest) ProtoMessage() {}
 
 func (x *RejectClusterSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[67]
+	mi := &file_quartermaster_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5309,7 +5460,7 @@ func (x *RejectClusterSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RejectClusterSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*RejectClusterSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{67}
+	return file_quartermaster_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *RejectClusterSubscriptionRequest) GetSubscriptionId() string {
@@ -5342,7 +5493,7 @@ type GetNodeRequest struct {
 
 func (x *GetNodeRequest) Reset() {
 	*x = GetNodeRequest{}
-	mi := &file_quartermaster_proto_msgTypes[68]
+	mi := &file_quartermaster_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5354,7 +5505,7 @@ func (x *GetNodeRequest) String() string {
 func (*GetNodeRequest) ProtoMessage() {}
 
 func (x *GetNodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[68]
+	mi := &file_quartermaster_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5367,7 +5518,7 @@ func (x *GetNodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodeRequest.ProtoReflect.Descriptor instead.
 func (*GetNodeRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{68}
+	return file_quartermaster_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *GetNodeRequest) GetNodeId() string {
@@ -5424,7 +5575,7 @@ type InfrastructureNode struct {
 
 func (x *InfrastructureNode) Reset() {
 	*x = InfrastructureNode{}
-	mi := &file_quartermaster_proto_msgTypes[69]
+	mi := &file_quartermaster_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5436,7 +5587,7 @@ func (x *InfrastructureNode) String() string {
 func (*InfrastructureNode) ProtoMessage() {}
 
 func (x *InfrastructureNode) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[69]
+	mi := &file_quartermaster_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5449,7 +5600,7 @@ func (x *InfrastructureNode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InfrastructureNode.ProtoReflect.Descriptor instead.
 func (*InfrastructureNode) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{69}
+	return file_quartermaster_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *InfrastructureNode) GetId() string {
@@ -5650,7 +5801,7 @@ type NodeResponse struct {
 
 func (x *NodeResponse) Reset() {
 	*x = NodeResponse{}
-	mi := &file_quartermaster_proto_msgTypes[70]
+	mi := &file_quartermaster_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5662,7 +5813,7 @@ func (x *NodeResponse) String() string {
 func (*NodeResponse) ProtoMessage() {}
 
 func (x *NodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[70]
+	mi := &file_quartermaster_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5675,7 +5826,7 @@ func (x *NodeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeResponse.ProtoReflect.Descriptor instead.
 func (*NodeResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{70}
+	return file_quartermaster_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *NodeResponse) GetNode() *InfrastructureNode {
@@ -5697,7 +5848,7 @@ type ListNodesRequest struct {
 
 func (x *ListNodesRequest) Reset() {
 	*x = ListNodesRequest{}
-	mi := &file_quartermaster_proto_msgTypes[71]
+	mi := &file_quartermaster_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5709,7 +5860,7 @@ func (x *ListNodesRequest) String() string {
 func (*ListNodesRequest) ProtoMessage() {}
 
 func (x *ListNodesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[71]
+	mi := &file_quartermaster_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5722,7 +5873,7 @@ func (x *ListNodesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNodesRequest.ProtoReflect.Descriptor instead.
 func (*ListNodesRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{71}
+	return file_quartermaster_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *ListNodesRequest) GetClusterId() string {
@@ -5766,7 +5917,7 @@ type ListNodesResponse struct {
 
 func (x *ListNodesResponse) Reset() {
 	*x = ListNodesResponse{}
-	mi := &file_quartermaster_proto_msgTypes[72]
+	mi := &file_quartermaster_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5778,7 +5929,7 @@ func (x *ListNodesResponse) String() string {
 func (*ListNodesResponse) ProtoMessage() {}
 
 func (x *ListNodesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[72]
+	mi := &file_quartermaster_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5791,7 +5942,7 @@ func (x *ListNodesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNodesResponse.ProtoReflect.Descriptor instead.
 func (*ListNodesResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{72}
+	return file_quartermaster_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *ListNodesResponse) GetNodes() []*InfrastructureNode {
@@ -5840,7 +5991,7 @@ type ListHealthyNodesForDNSRequest struct {
 
 func (x *ListHealthyNodesForDNSRequest) Reset() {
 	*x = ListHealthyNodesForDNSRequest{}
-	mi := &file_quartermaster_proto_msgTypes[73]
+	mi := &file_quartermaster_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5852,7 +6003,7 @@ func (x *ListHealthyNodesForDNSRequest) String() string {
 func (*ListHealthyNodesForDNSRequest) ProtoMessage() {}
 
 func (x *ListHealthyNodesForDNSRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[73]
+	mi := &file_quartermaster_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5865,7 +6016,7 @@ func (x *ListHealthyNodesForDNSRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListHealthyNodesForDNSRequest.ProtoReflect.Descriptor instead.
 func (*ListHealthyNodesForDNSRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{73}
+	return file_quartermaster_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *ListHealthyNodesForDNSRequest) GetNodeType() string {
@@ -5900,7 +6051,7 @@ type ListHealthyNodesForDNSResponse struct {
 
 func (x *ListHealthyNodesForDNSResponse) Reset() {
 	*x = ListHealthyNodesForDNSResponse{}
-	mi := &file_quartermaster_proto_msgTypes[74]
+	mi := &file_quartermaster_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5912,7 +6063,7 @@ func (x *ListHealthyNodesForDNSResponse) String() string {
 func (*ListHealthyNodesForDNSResponse) ProtoMessage() {}
 
 func (x *ListHealthyNodesForDNSResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[74]
+	mi := &file_quartermaster_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5925,7 +6076,7 @@ func (x *ListHealthyNodesForDNSResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListHealthyNodesForDNSResponse.ProtoReflect.Descriptor instead.
 func (*ListHealthyNodesForDNSResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{74}
+	return file_quartermaster_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *ListHealthyNodesForDNSResponse) GetNodes() []*InfrastructureNode {
@@ -5974,7 +6125,7 @@ type CreateNodeRequest struct {
 
 func (x *CreateNodeRequest) Reset() {
 	*x = CreateNodeRequest{}
-	mi := &file_quartermaster_proto_msgTypes[75]
+	mi := &file_quartermaster_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5986,7 +6137,7 @@ func (x *CreateNodeRequest) String() string {
 func (*CreateNodeRequest) ProtoMessage() {}
 
 func (x *CreateNodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[75]
+	mi := &file_quartermaster_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5999,7 +6150,7 @@ func (x *CreateNodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateNodeRequest.ProtoReflect.Descriptor instead.
 func (*CreateNodeRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{75}
+	return file_quartermaster_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *CreateNodeRequest) GetNodeId() string {
@@ -6125,7 +6276,7 @@ type UpdateNodeStatusRequest struct {
 
 func (x *UpdateNodeStatusRequest) Reset() {
 	*x = UpdateNodeStatusRequest{}
-	mi := &file_quartermaster_proto_msgTypes[76]
+	mi := &file_quartermaster_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6137,7 +6288,7 @@ func (x *UpdateNodeStatusRequest) String() string {
 func (*UpdateNodeStatusRequest) ProtoMessage() {}
 
 func (x *UpdateNodeStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[76]
+	mi := &file_quartermaster_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6150,7 +6301,7 @@ func (x *UpdateNodeStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateNodeStatusRequest.ProtoReflect.Descriptor instead.
 func (*UpdateNodeStatusRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{76}
+	return file_quartermaster_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *UpdateNodeStatusRequest) GetNodeId() string {
@@ -6186,7 +6337,7 @@ type EdgeRelease struct {
 
 func (x *EdgeRelease) Reset() {
 	*x = EdgeRelease{}
-	mi := &file_quartermaster_proto_msgTypes[77]
+	mi := &file_quartermaster_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6198,7 +6349,7 @@ func (x *EdgeRelease) String() string {
 func (*EdgeRelease) ProtoMessage() {}
 
 func (x *EdgeRelease) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[77]
+	mi := &file_quartermaster_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6211,7 +6362,7 @@ func (x *EdgeRelease) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EdgeRelease.ProtoReflect.Descriptor instead.
 func (*EdgeRelease) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{77}
+	return file_quartermaster_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *EdgeRelease) GetChannel() string {
@@ -6252,7 +6403,7 @@ type ListEdgeReleasesRequest struct {
 
 func (x *ListEdgeReleasesRequest) Reset() {
 	*x = ListEdgeReleasesRequest{}
-	mi := &file_quartermaster_proto_msgTypes[78]
+	mi := &file_quartermaster_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6264,7 +6415,7 @@ func (x *ListEdgeReleasesRequest) String() string {
 func (*ListEdgeReleasesRequest) ProtoMessage() {}
 
 func (x *ListEdgeReleasesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[78]
+	mi := &file_quartermaster_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6277,7 +6428,7 @@ func (x *ListEdgeReleasesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEdgeReleasesRequest.ProtoReflect.Descriptor instead.
 func (*ListEdgeReleasesRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{78}
+	return file_quartermaster_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *ListEdgeReleasesRequest) GetChannel() string {
@@ -6303,7 +6454,7 @@ type ListEdgeReleasesResponse struct {
 
 func (x *ListEdgeReleasesResponse) Reset() {
 	*x = ListEdgeReleasesResponse{}
-	mi := &file_quartermaster_proto_msgTypes[79]
+	mi := &file_quartermaster_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6315,7 +6466,7 @@ func (x *ListEdgeReleasesResponse) String() string {
 func (*ListEdgeReleasesResponse) ProtoMessage() {}
 
 func (x *ListEdgeReleasesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[79]
+	mi := &file_quartermaster_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6328,7 +6479,7 @@ func (x *ListEdgeReleasesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEdgeReleasesResponse.ProtoReflect.Descriptor instead.
 func (*ListEdgeReleasesResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{79}
+	return file_quartermaster_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *ListEdgeReleasesResponse) GetReleases() []*EdgeRelease {
@@ -6347,7 +6498,7 @@ type UpsertEdgeReleaseRequest struct {
 
 func (x *UpsertEdgeReleaseRequest) Reset() {
 	*x = UpsertEdgeReleaseRequest{}
-	mi := &file_quartermaster_proto_msgTypes[80]
+	mi := &file_quartermaster_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6359,7 +6510,7 @@ func (x *UpsertEdgeReleaseRequest) String() string {
 func (*UpsertEdgeReleaseRequest) ProtoMessage() {}
 
 func (x *UpsertEdgeReleaseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[80]
+	mi := &file_quartermaster_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6372,7 +6523,7 @@ func (x *UpsertEdgeReleaseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpsertEdgeReleaseRequest.ProtoReflect.Descriptor instead.
 func (*UpsertEdgeReleaseRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{80}
+	return file_quartermaster_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *UpsertEdgeReleaseRequest) GetRelease() *EdgeRelease {
@@ -6391,7 +6542,7 @@ type EdgeReleaseResponse struct {
 
 func (x *EdgeReleaseResponse) Reset() {
 	*x = EdgeReleaseResponse{}
-	mi := &file_quartermaster_proto_msgTypes[81]
+	mi := &file_quartermaster_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6403,7 +6554,7 @@ func (x *EdgeReleaseResponse) String() string {
 func (*EdgeReleaseResponse) ProtoMessage() {}
 
 func (x *EdgeReleaseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[81]
+	mi := &file_quartermaster_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6416,7 +6567,7 @@ func (x *EdgeReleaseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EdgeReleaseResponse.ProtoReflect.Descriptor instead.
 func (*EdgeReleaseResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{81}
+	return file_quartermaster_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *EdgeReleaseResponse) GetRelease() *EdgeRelease {
@@ -6440,7 +6591,7 @@ type ClusterReleaseTarget struct {
 
 func (x *ClusterReleaseTarget) Reset() {
 	*x = ClusterReleaseTarget{}
-	mi := &file_quartermaster_proto_msgTypes[82]
+	mi := &file_quartermaster_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6452,7 +6603,7 @@ func (x *ClusterReleaseTarget) String() string {
 func (*ClusterReleaseTarget) ProtoMessage() {}
 
 func (x *ClusterReleaseTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[82]
+	mi := &file_quartermaster_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6465,7 +6616,7 @@ func (x *ClusterReleaseTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterReleaseTarget.ProtoReflect.Descriptor instead.
 func (*ClusterReleaseTarget) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{82}
+	return file_quartermaster_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *ClusterReleaseTarget) GetClusterId() string {
@@ -6519,7 +6670,7 @@ type GetClusterReleaseTargetRequest struct {
 
 func (x *GetClusterReleaseTargetRequest) Reset() {
 	*x = GetClusterReleaseTargetRequest{}
-	mi := &file_quartermaster_proto_msgTypes[83]
+	mi := &file_quartermaster_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6531,7 +6682,7 @@ func (x *GetClusterReleaseTargetRequest) String() string {
 func (*GetClusterReleaseTargetRequest) ProtoMessage() {}
 
 func (x *GetClusterReleaseTargetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[83]
+	mi := &file_quartermaster_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6544,7 +6695,7 @@ func (x *GetClusterReleaseTargetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClusterReleaseTargetRequest.ProtoReflect.Descriptor instead.
 func (*GetClusterReleaseTargetRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{83}
+	return file_quartermaster_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *GetClusterReleaseTargetRequest) GetClusterId() string {
@@ -6563,7 +6714,7 @@ type ListClusterReleaseTargetsRequest struct {
 
 func (x *ListClusterReleaseTargetsRequest) Reset() {
 	*x = ListClusterReleaseTargetsRequest{}
-	mi := &file_quartermaster_proto_msgTypes[84]
+	mi := &file_quartermaster_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6575,7 +6726,7 @@ func (x *ListClusterReleaseTargetsRequest) String() string {
 func (*ListClusterReleaseTargetsRequest) ProtoMessage() {}
 
 func (x *ListClusterReleaseTargetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[84]
+	mi := &file_quartermaster_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6588,7 +6739,7 @@ func (x *ListClusterReleaseTargetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListClusterReleaseTargetsRequest.ProtoReflect.Descriptor instead.
 func (*ListClusterReleaseTargetsRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{84}
+	return file_quartermaster_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *ListClusterReleaseTargetsRequest) GetClusterId() string {
@@ -6607,7 +6758,7 @@ type ListClusterReleaseTargetsResponse struct {
 
 func (x *ListClusterReleaseTargetsResponse) Reset() {
 	*x = ListClusterReleaseTargetsResponse{}
-	mi := &file_quartermaster_proto_msgTypes[85]
+	mi := &file_quartermaster_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6619,7 +6770,7 @@ func (x *ListClusterReleaseTargetsResponse) String() string {
 func (*ListClusterReleaseTargetsResponse) ProtoMessage() {}
 
 func (x *ListClusterReleaseTargetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[85]
+	mi := &file_quartermaster_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6632,7 +6783,7 @@ func (x *ListClusterReleaseTargetsResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ListClusterReleaseTargetsResponse.ProtoReflect.Descriptor instead.
 func (*ListClusterReleaseTargetsResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{85}
+	return file_quartermaster_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *ListClusterReleaseTargetsResponse) GetTargets() []*ClusterReleaseTarget {
@@ -6651,7 +6802,7 @@ type SetClusterReleaseTargetRequest struct {
 
 func (x *SetClusterReleaseTargetRequest) Reset() {
 	*x = SetClusterReleaseTargetRequest{}
-	mi := &file_quartermaster_proto_msgTypes[86]
+	mi := &file_quartermaster_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6663,7 +6814,7 @@ func (x *SetClusterReleaseTargetRequest) String() string {
 func (*SetClusterReleaseTargetRequest) ProtoMessage() {}
 
 func (x *SetClusterReleaseTargetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[86]
+	mi := &file_quartermaster_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6676,7 +6827,7 @@ func (x *SetClusterReleaseTargetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetClusterReleaseTargetRequest.ProtoReflect.Descriptor instead.
 func (*SetClusterReleaseTargetRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{86}
+	return file_quartermaster_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *SetClusterReleaseTargetRequest) GetTarget() *ClusterReleaseTarget {
@@ -6695,7 +6846,7 @@ type ClusterReleaseTargetResponse struct {
 
 func (x *ClusterReleaseTargetResponse) Reset() {
 	*x = ClusterReleaseTargetResponse{}
-	mi := &file_quartermaster_proto_msgTypes[87]
+	mi := &file_quartermaster_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6707,7 +6858,7 @@ func (x *ClusterReleaseTargetResponse) String() string {
 func (*ClusterReleaseTargetResponse) ProtoMessage() {}
 
 func (x *ClusterReleaseTargetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[87]
+	mi := &file_quartermaster_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6720,7 +6871,7 @@ func (x *ClusterReleaseTargetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterReleaseTargetResponse.ProtoReflect.Descriptor instead.
 func (*ClusterReleaseTargetResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{87}
+	return file_quartermaster_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *ClusterReleaseTargetResponse) GetTarget() *ClusterReleaseTarget {
@@ -6744,7 +6895,7 @@ type ResolveNodeFingerprintRequest struct {
 
 func (x *ResolveNodeFingerprintRequest) Reset() {
 	*x = ResolveNodeFingerprintRequest{}
-	mi := &file_quartermaster_proto_msgTypes[88]
+	mi := &file_quartermaster_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6756,7 +6907,7 @@ func (x *ResolveNodeFingerprintRequest) String() string {
 func (*ResolveNodeFingerprintRequest) ProtoMessage() {}
 
 func (x *ResolveNodeFingerprintRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[88]
+	mi := &file_quartermaster_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6769,7 +6920,7 @@ func (x *ResolveNodeFingerprintRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveNodeFingerprintRequest.ProtoReflect.Descriptor instead.
 func (*ResolveNodeFingerprintRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{88}
+	return file_quartermaster_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *ResolveNodeFingerprintRequest) GetPeerIp() string {
@@ -6818,7 +6969,7 @@ type ResolveNodeFingerprintResponse struct {
 
 func (x *ResolveNodeFingerprintResponse) Reset() {
 	*x = ResolveNodeFingerprintResponse{}
-	mi := &file_quartermaster_proto_msgTypes[89]
+	mi := &file_quartermaster_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6830,7 +6981,7 @@ func (x *ResolveNodeFingerprintResponse) String() string {
 func (*ResolveNodeFingerprintResponse) ProtoMessage() {}
 
 func (x *ResolveNodeFingerprintResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[89]
+	mi := &file_quartermaster_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6843,7 +6994,7 @@ func (x *ResolveNodeFingerprintResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveNodeFingerprintResponse.ProtoReflect.Descriptor instead.
 func (*ResolveNodeFingerprintResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{89}
+	return file_quartermaster_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *ResolveNodeFingerprintResponse) GetTenantId() string {
@@ -6869,7 +7020,7 @@ type GetNodeOwnerRequest struct {
 
 func (x *GetNodeOwnerRequest) Reset() {
 	*x = GetNodeOwnerRequest{}
-	mi := &file_quartermaster_proto_msgTypes[90]
+	mi := &file_quartermaster_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6881,7 +7032,7 @@ func (x *GetNodeOwnerRequest) String() string {
 func (*GetNodeOwnerRequest) ProtoMessage() {}
 
 func (x *GetNodeOwnerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[90]
+	mi := &file_quartermaster_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6894,7 +7045,7 @@ func (x *GetNodeOwnerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodeOwnerRequest.ProtoReflect.Descriptor instead.
 func (*GetNodeOwnerRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{90}
+	return file_quartermaster_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *GetNodeOwnerRequest) GetNodeId() string {
@@ -6915,7 +7066,7 @@ type GetNodeByLogicalNameRequest struct {
 
 func (x *GetNodeByLogicalNameRequest) Reset() {
 	*x = GetNodeByLogicalNameRequest{}
-	mi := &file_quartermaster_proto_msgTypes[91]
+	mi := &file_quartermaster_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6927,7 +7078,7 @@ func (x *GetNodeByLogicalNameRequest) String() string {
 func (*GetNodeByLogicalNameRequest) ProtoMessage() {}
 
 func (x *GetNodeByLogicalNameRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[91]
+	mi := &file_quartermaster_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6940,7 +7091,7 @@ func (x *GetNodeByLogicalNameRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodeByLogicalNameRequest.ProtoReflect.Descriptor instead.
 func (*GetNodeByLogicalNameRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{91}
+	return file_quartermaster_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *GetNodeByLogicalNameRequest) GetNodeId() string {
@@ -6964,7 +7115,7 @@ type UpdateNodeHardwareRequest struct {
 
 func (x *UpdateNodeHardwareRequest) Reset() {
 	*x = UpdateNodeHardwareRequest{}
-	mi := &file_quartermaster_proto_msgTypes[92]
+	mi := &file_quartermaster_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6976,7 +7127,7 @@ func (x *UpdateNodeHardwareRequest) String() string {
 func (*UpdateNodeHardwareRequest) ProtoMessage() {}
 
 func (x *UpdateNodeHardwareRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[92]
+	mi := &file_quartermaster_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6989,7 +7140,7 @@ func (x *UpdateNodeHardwareRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateNodeHardwareRequest.ProtoReflect.Descriptor instead.
 func (*UpdateNodeHardwareRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{92}
+	return file_quartermaster_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *UpdateNodeHardwareRequest) GetNodeId() string {
@@ -7029,7 +7180,7 @@ type ReportAliveNodesRequest struct {
 
 func (x *ReportAliveNodesRequest) Reset() {
 	*x = ReportAliveNodesRequest{}
-	mi := &file_quartermaster_proto_msgTypes[93]
+	mi := &file_quartermaster_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7041,7 +7192,7 @@ func (x *ReportAliveNodesRequest) String() string {
 func (*ReportAliveNodesRequest) ProtoMessage() {}
 
 func (x *ReportAliveNodesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[93]
+	mi := &file_quartermaster_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7054,7 +7205,7 @@ func (x *ReportAliveNodesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportAliveNodesRequest.ProtoReflect.Descriptor instead.
 func (*ReportAliveNodesRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{93}
+	return file_quartermaster_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *ReportAliveNodesRequest) GetNodeIds() []string {
@@ -7079,7 +7230,7 @@ type NodeOwnerResponse struct {
 
 func (x *NodeOwnerResponse) Reset() {
 	*x = NodeOwnerResponse{}
-	mi := &file_quartermaster_proto_msgTypes[94]
+	mi := &file_quartermaster_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7091,7 +7242,7 @@ func (x *NodeOwnerResponse) String() string {
 func (*NodeOwnerResponse) ProtoMessage() {}
 
 func (x *NodeOwnerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[94]
+	mi := &file_quartermaster_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7104,7 +7255,7 @@ func (x *NodeOwnerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeOwnerResponse.ProtoReflect.Descriptor instead.
 func (*NodeOwnerResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{94}
+	return file_quartermaster_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *NodeOwnerResponse) GetNodeId() string {
@@ -7168,7 +7319,7 @@ type BootstrapEdgeNodeRequest struct {
 
 func (x *BootstrapEdgeNodeRequest) Reset() {
 	*x = BootstrapEdgeNodeRequest{}
-	mi := &file_quartermaster_proto_msgTypes[95]
+	mi := &file_quartermaster_proto_msgTypes[98]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7180,7 +7331,7 @@ func (x *BootstrapEdgeNodeRequest) String() string {
 func (*BootstrapEdgeNodeRequest) ProtoMessage() {}
 
 func (x *BootstrapEdgeNodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[95]
+	mi := &file_quartermaster_proto_msgTypes[98]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7193,7 +7344,7 @@ func (x *BootstrapEdgeNodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BootstrapEdgeNodeRequest.ProtoReflect.Descriptor instead.
 func (*BootstrapEdgeNodeRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{95}
+	return file_quartermaster_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *BootstrapEdgeNodeRequest) GetToken() string {
@@ -7278,7 +7429,7 @@ type BootstrapEdgeNodeResponse struct {
 
 func (x *BootstrapEdgeNodeResponse) Reset() {
 	*x = BootstrapEdgeNodeResponse{}
-	mi := &file_quartermaster_proto_msgTypes[96]
+	mi := &file_quartermaster_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7290,7 +7441,7 @@ func (x *BootstrapEdgeNodeResponse) String() string {
 func (*BootstrapEdgeNodeResponse) ProtoMessage() {}
 
 func (x *BootstrapEdgeNodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[96]
+	mi := &file_quartermaster_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7303,7 +7454,7 @@ func (x *BootstrapEdgeNodeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BootstrapEdgeNodeResponse.ProtoReflect.Descriptor instead.
 func (*BootstrapEdgeNodeResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{96}
+	return file_quartermaster_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *BootstrapEdgeNodeResponse) GetNodeId() string {
@@ -7350,7 +7501,7 @@ type BootstrapInfrastructureNodeRequest struct {
 
 func (x *BootstrapInfrastructureNodeRequest) Reset() {
 	*x = BootstrapInfrastructureNodeRequest{}
-	mi := &file_quartermaster_proto_msgTypes[97]
+	mi := &file_quartermaster_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7362,7 +7513,7 @@ func (x *BootstrapInfrastructureNodeRequest) String() string {
 func (*BootstrapInfrastructureNodeRequest) ProtoMessage() {}
 
 func (x *BootstrapInfrastructureNodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[97]
+	mi := &file_quartermaster_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7375,7 +7526,7 @@ func (x *BootstrapInfrastructureNodeRequest) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use BootstrapInfrastructureNodeRequest.ProtoReflect.Descriptor instead.
 func (*BootstrapInfrastructureNodeRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{97}
+	return file_quartermaster_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *BootstrapInfrastructureNodeRequest) GetToken() string {
@@ -7477,7 +7628,7 @@ type BootstrapInfrastructureNodeResponse struct {
 
 func (x *BootstrapInfrastructureNodeResponse) Reset() {
 	*x = BootstrapInfrastructureNodeResponse{}
-	mi := &file_quartermaster_proto_msgTypes[98]
+	mi := &file_quartermaster_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7489,7 +7640,7 @@ func (x *BootstrapInfrastructureNodeResponse) String() string {
 func (*BootstrapInfrastructureNodeResponse) ProtoMessage() {}
 
 func (x *BootstrapInfrastructureNodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[98]
+	mi := &file_quartermaster_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7502,7 +7653,7 @@ func (x *BootstrapInfrastructureNodeResponse) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use BootstrapInfrastructureNodeResponse.ProtoReflect.Descriptor instead.
 func (*BootstrapInfrastructureNodeResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{98}
+	return file_quartermaster_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *BootstrapInfrastructureNodeResponse) GetNodeId() string {
@@ -7600,7 +7751,7 @@ type BootstrapServiceRequest struct {
 
 func (x *BootstrapServiceRequest) Reset() {
 	*x = BootstrapServiceRequest{}
-	mi := &file_quartermaster_proto_msgTypes[99]
+	mi := &file_quartermaster_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7612,7 +7763,7 @@ func (x *BootstrapServiceRequest) String() string {
 func (*BootstrapServiceRequest) ProtoMessage() {}
 
 func (x *BootstrapServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[99]
+	mi := &file_quartermaster_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7625,7 +7776,7 @@ func (x *BootstrapServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BootstrapServiceRequest.ProtoReflect.Descriptor instead.
 func (*BootstrapServiceRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{99}
+	return file_quartermaster_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *BootstrapServiceRequest) GetToken() string {
@@ -7742,7 +7893,7 @@ type BootstrapServiceResponse struct {
 
 func (x *BootstrapServiceResponse) Reset() {
 	*x = BootstrapServiceResponse{}
-	mi := &file_quartermaster_proto_msgTypes[100]
+	mi := &file_quartermaster_proto_msgTypes[103]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7754,7 +7905,7 @@ func (x *BootstrapServiceResponse) String() string {
 func (*BootstrapServiceResponse) ProtoMessage() {}
 
 func (x *BootstrapServiceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[100]
+	mi := &file_quartermaster_proto_msgTypes[103]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7767,7 +7918,7 @@ func (x *BootstrapServiceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BootstrapServiceResponse.ProtoReflect.Descriptor instead.
 func (*BootstrapServiceResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{100}
+	return file_quartermaster_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *BootstrapServiceResponse) GetServiceId() string {
@@ -7830,7 +7981,7 @@ type ServiceDiscoveryRequest struct {
 
 func (x *ServiceDiscoveryRequest) Reset() {
 	*x = ServiceDiscoveryRequest{}
-	mi := &file_quartermaster_proto_msgTypes[101]
+	mi := &file_quartermaster_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7842,7 +7993,7 @@ func (x *ServiceDiscoveryRequest) String() string {
 func (*ServiceDiscoveryRequest) ProtoMessage() {}
 
 func (x *ServiceDiscoveryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[101]
+	mi := &file_quartermaster_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7855,7 +8006,7 @@ func (x *ServiceDiscoveryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceDiscoveryRequest.ProtoReflect.Descriptor instead.
 func (*ServiceDiscoveryRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{101}
+	return file_quartermaster_proto_rawDescGZIP(), []int{104}
 }
 
 func (x *ServiceDiscoveryRequest) GetServiceType() string {
@@ -7890,7 +8041,7 @@ type ServiceDiscoveryResponse struct {
 
 func (x *ServiceDiscoveryResponse) Reset() {
 	*x = ServiceDiscoveryResponse{}
-	mi := &file_quartermaster_proto_msgTypes[102]
+	mi := &file_quartermaster_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7902,7 +8053,7 @@ func (x *ServiceDiscoveryResponse) String() string {
 func (*ServiceDiscoveryResponse) ProtoMessage() {}
 
 func (x *ServiceDiscoveryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[102]
+	mi := &file_quartermaster_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7915,7 +8066,7 @@ func (x *ServiceDiscoveryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceDiscoveryResponse.ProtoReflect.Descriptor instead.
 func (*ServiceDiscoveryResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{102}
+	return file_quartermaster_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *ServiceDiscoveryResponse) GetInstances() []*ServiceInstance {
@@ -7963,7 +8114,7 @@ type ServiceInstance struct {
 
 func (x *ServiceInstance) Reset() {
 	*x = ServiceInstance{}
-	mi := &file_quartermaster_proto_msgTypes[103]
+	mi := &file_quartermaster_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7975,7 +8126,7 @@ func (x *ServiceInstance) String() string {
 func (*ServiceInstance) ProtoMessage() {}
 
 func (x *ServiceInstance) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[103]
+	mi := &file_quartermaster_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7988,7 +8139,7 @@ func (x *ServiceInstance) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceInstance.ProtoReflect.Descriptor instead.
 func (*ServiceInstance) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{103}
+	return file_quartermaster_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *ServiceInstance) GetId() string {
@@ -8148,7 +8299,7 @@ type CreateBootstrapTokenRequest struct {
 
 func (x *CreateBootstrapTokenRequest) Reset() {
 	*x = CreateBootstrapTokenRequest{}
-	mi := &file_quartermaster_proto_msgTypes[104]
+	mi := &file_quartermaster_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8160,7 +8311,7 @@ func (x *CreateBootstrapTokenRequest) String() string {
 func (*CreateBootstrapTokenRequest) ProtoMessage() {}
 
 func (x *CreateBootstrapTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[104]
+	mi := &file_quartermaster_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8173,7 +8324,7 @@ func (x *CreateBootstrapTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBootstrapTokenRequest.ProtoReflect.Descriptor instead.
 func (*CreateBootstrapTokenRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{104}
+	return file_quartermaster_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *CreateBootstrapTokenRequest) GetName() string {
@@ -8255,7 +8406,7 @@ type BootstrapToken struct {
 
 func (x *BootstrapToken) Reset() {
 	*x = BootstrapToken{}
-	mi := &file_quartermaster_proto_msgTypes[105]
+	mi := &file_quartermaster_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8267,7 +8418,7 @@ func (x *BootstrapToken) String() string {
 func (*BootstrapToken) ProtoMessage() {}
 
 func (x *BootstrapToken) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[105]
+	mi := &file_quartermaster_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8280,7 +8431,7 @@ func (x *BootstrapToken) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BootstrapToken.ProtoReflect.Descriptor instead.
 func (*BootstrapToken) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{105}
+	return file_quartermaster_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *BootstrapToken) GetId() string {
@@ -8390,7 +8541,7 @@ type CreateBootstrapTokenResponse struct {
 
 func (x *CreateBootstrapTokenResponse) Reset() {
 	*x = CreateBootstrapTokenResponse{}
-	mi := &file_quartermaster_proto_msgTypes[106]
+	mi := &file_quartermaster_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8402,7 +8553,7 @@ func (x *CreateBootstrapTokenResponse) String() string {
 func (*CreateBootstrapTokenResponse) ProtoMessage() {}
 
 func (x *CreateBootstrapTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[106]
+	mi := &file_quartermaster_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8415,7 +8566,7 @@ func (x *CreateBootstrapTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBootstrapTokenResponse.ProtoReflect.Descriptor instead.
 func (*CreateBootstrapTokenResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{106}
+	return file_quartermaster_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *CreateBootstrapTokenResponse) GetToken() *BootstrapToken {
@@ -8436,7 +8587,7 @@ type ListBootstrapTokensRequest struct {
 
 func (x *ListBootstrapTokensRequest) Reset() {
 	*x = ListBootstrapTokensRequest{}
-	mi := &file_quartermaster_proto_msgTypes[107]
+	mi := &file_quartermaster_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8448,7 +8599,7 @@ func (x *ListBootstrapTokensRequest) String() string {
 func (*ListBootstrapTokensRequest) ProtoMessage() {}
 
 func (x *ListBootstrapTokensRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[107]
+	mi := &file_quartermaster_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8461,7 +8612,7 @@ func (x *ListBootstrapTokensRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBootstrapTokensRequest.ProtoReflect.Descriptor instead.
 func (*ListBootstrapTokensRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{107}
+	return file_quartermaster_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *ListBootstrapTokensRequest) GetKind() string {
@@ -8495,7 +8646,7 @@ type ListBootstrapTokensResponse struct {
 
 func (x *ListBootstrapTokensResponse) Reset() {
 	*x = ListBootstrapTokensResponse{}
-	mi := &file_quartermaster_proto_msgTypes[108]
+	mi := &file_quartermaster_proto_msgTypes[111]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8507,7 +8658,7 @@ func (x *ListBootstrapTokensResponse) String() string {
 func (*ListBootstrapTokensResponse) ProtoMessage() {}
 
 func (x *ListBootstrapTokensResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[108]
+	mi := &file_quartermaster_proto_msgTypes[111]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8520,7 +8671,7 @@ func (x *ListBootstrapTokensResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBootstrapTokensResponse.ProtoReflect.Descriptor instead.
 func (*ListBootstrapTokensResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{108}
+	return file_quartermaster_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *ListBootstrapTokensResponse) GetTokens() []*BootstrapToken {
@@ -8546,7 +8697,7 @@ type RevokeBootstrapTokenRequest struct {
 
 func (x *RevokeBootstrapTokenRequest) Reset() {
 	*x = RevokeBootstrapTokenRequest{}
-	mi := &file_quartermaster_proto_msgTypes[109]
+	mi := &file_quartermaster_proto_msgTypes[112]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8558,7 +8709,7 @@ func (x *RevokeBootstrapTokenRequest) String() string {
 func (*RevokeBootstrapTokenRequest) ProtoMessage() {}
 
 func (x *RevokeBootstrapTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[109]
+	mi := &file_quartermaster_proto_msgTypes[112]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8571,7 +8722,7 @@ func (x *RevokeBootstrapTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeBootstrapTokenRequest.ProtoReflect.Descriptor instead.
 func (*RevokeBootstrapTokenRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{109}
+	return file_quartermaster_proto_rawDescGZIP(), []int{112}
 }
 
 func (x *RevokeBootstrapTokenRequest) GetTokenId() string {
@@ -8592,7 +8743,7 @@ type ValidateBootstrapTokenRequest struct {
 
 func (x *ValidateBootstrapTokenRequest) Reset() {
 	*x = ValidateBootstrapTokenRequest{}
-	mi := &file_quartermaster_proto_msgTypes[110]
+	mi := &file_quartermaster_proto_msgTypes[113]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8604,7 +8755,7 @@ func (x *ValidateBootstrapTokenRequest) String() string {
 func (*ValidateBootstrapTokenRequest) ProtoMessage() {}
 
 func (x *ValidateBootstrapTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[110]
+	mi := &file_quartermaster_proto_msgTypes[113]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8617,7 +8768,7 @@ func (x *ValidateBootstrapTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateBootstrapTokenRequest.ProtoReflect.Descriptor instead.
 func (*ValidateBootstrapTokenRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{110}
+	return file_quartermaster_proto_rawDescGZIP(), []int{113}
 }
 
 func (x *ValidateBootstrapTokenRequest) GetToken() string {
@@ -8659,7 +8810,7 @@ type ValidateBootstrapTokenResponse struct {
 
 func (x *ValidateBootstrapTokenResponse) Reset() {
 	*x = ValidateBootstrapTokenResponse{}
-	mi := &file_quartermaster_proto_msgTypes[111]
+	mi := &file_quartermaster_proto_msgTypes[114]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8671,7 +8822,7 @@ func (x *ValidateBootstrapTokenResponse) String() string {
 func (*ValidateBootstrapTokenResponse) ProtoMessage() {}
 
 func (x *ValidateBootstrapTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[111]
+	mi := &file_quartermaster_proto_msgTypes[114]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8684,7 +8835,7 @@ func (x *ValidateBootstrapTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateBootstrapTokenResponse.ProtoReflect.Descriptor instead.
 func (*ValidateBootstrapTokenResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{111}
+	return file_quartermaster_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *ValidateBootstrapTokenResponse) GetValid() bool {
@@ -8757,7 +8908,7 @@ type InfrastructureSyncRequest struct {
 
 func (x *InfrastructureSyncRequest) Reset() {
 	*x = InfrastructureSyncRequest{}
-	mi := &file_quartermaster_proto_msgTypes[112]
+	mi := &file_quartermaster_proto_msgTypes[115]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8769,7 +8920,7 @@ func (x *InfrastructureSyncRequest) String() string {
 func (*InfrastructureSyncRequest) ProtoMessage() {}
 
 func (x *InfrastructureSyncRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[112]
+	mi := &file_quartermaster_proto_msgTypes[115]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8782,7 +8933,7 @@ func (x *InfrastructureSyncRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InfrastructureSyncRequest.ProtoReflect.Descriptor instead.
 func (*InfrastructureSyncRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{112}
+	return file_quartermaster_proto_rawDescGZIP(), []int{115}
 }
 
 func (x *InfrastructureSyncRequest) GetNodeId() string {
@@ -8843,7 +8994,7 @@ type NodeResourceSnapshot struct {
 
 func (x *NodeResourceSnapshot) Reset() {
 	*x = NodeResourceSnapshot{}
-	mi := &file_quartermaster_proto_msgTypes[113]
+	mi := &file_quartermaster_proto_msgTypes[116]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8855,7 +9006,7 @@ func (x *NodeResourceSnapshot) String() string {
 func (*NodeResourceSnapshot) ProtoMessage() {}
 
 func (x *NodeResourceSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[113]
+	mi := &file_quartermaster_proto_msgTypes[116]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8868,7 +9019,7 @@ func (x *NodeResourceSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeResourceSnapshot.ProtoReflect.Descriptor instead.
 func (*NodeResourceSnapshot) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{113}
+	return file_quartermaster_proto_rawDescGZIP(), []int{116}
 }
 
 func (x *NodeResourceSnapshot) GetCpuPercent() float32 {
@@ -8934,7 +9085,7 @@ type InfrastructurePeer struct {
 
 func (x *InfrastructurePeer) Reset() {
 	*x = InfrastructurePeer{}
-	mi := &file_quartermaster_proto_msgTypes[114]
+	mi := &file_quartermaster_proto_msgTypes[117]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8946,7 +9097,7 @@ func (x *InfrastructurePeer) String() string {
 func (*InfrastructurePeer) ProtoMessage() {}
 
 func (x *InfrastructurePeer) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[114]
+	mi := &file_quartermaster_proto_msgTypes[117]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8959,7 +9110,7 @@ func (x *InfrastructurePeer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InfrastructurePeer.ProtoReflect.Descriptor instead.
 func (*InfrastructurePeer) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{114}
+	return file_quartermaster_proto_rawDescGZIP(), []int{117}
 }
 
 func (x *InfrastructurePeer) GetNodeName() string {
@@ -9013,7 +9164,7 @@ type InfrastructureSyncResponse struct {
 
 func (x *InfrastructureSyncResponse) Reset() {
 	*x = InfrastructureSyncResponse{}
-	mi := &file_quartermaster_proto_msgTypes[115]
+	mi := &file_quartermaster_proto_msgTypes[118]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9025,7 +9176,7 @@ func (x *InfrastructureSyncResponse) String() string {
 func (*InfrastructureSyncResponse) ProtoMessage() {}
 
 func (x *InfrastructureSyncResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[115]
+	mi := &file_quartermaster_proto_msgTypes[118]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9038,7 +9189,7 @@ func (x *InfrastructureSyncResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InfrastructureSyncResponse.ProtoReflect.Descriptor instead.
 func (*InfrastructureSyncResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{115}
+	return file_quartermaster_proto_rawDescGZIP(), []int{118}
 }
 
 func (x *InfrastructureSyncResponse) GetWireguardIp() string {
@@ -9086,7 +9237,7 @@ type ServiceEndpoints struct {
 
 func (x *ServiceEndpoints) Reset() {
 	*x = ServiceEndpoints{}
-	mi := &file_quartermaster_proto_msgTypes[116]
+	mi := &file_quartermaster_proto_msgTypes[119]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9098,7 +9249,7 @@ func (x *ServiceEndpoints) String() string {
 func (*ServiceEndpoints) ProtoMessage() {}
 
 func (x *ServiceEndpoints) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[116]
+	mi := &file_quartermaster_proto_msgTypes[119]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9111,7 +9262,7 @@ func (x *ServiceEndpoints) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceEndpoints.ProtoReflect.Descriptor instead.
 func (*ServiceEndpoints) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{116}
+	return file_quartermaster_proto_rawDescGZIP(), []int{119}
 }
 
 func (x *ServiceEndpoints) GetIps() []string {
@@ -9132,7 +9283,7 @@ type ResolveTenantRequest struct {
 
 func (x *ResolveTenantRequest) Reset() {
 	*x = ResolveTenantRequest{}
-	mi := &file_quartermaster_proto_msgTypes[117]
+	mi := &file_quartermaster_proto_msgTypes[120]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9144,7 +9295,7 @@ func (x *ResolveTenantRequest) String() string {
 func (*ResolveTenantRequest) ProtoMessage() {}
 
 func (x *ResolveTenantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[117]
+	mi := &file_quartermaster_proto_msgTypes[120]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9157,7 +9308,7 @@ func (x *ResolveTenantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveTenantRequest.ProtoReflect.Descriptor instead.
 func (*ResolveTenantRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{117}
+	return file_quartermaster_proto_rawDescGZIP(), []int{120}
 }
 
 func (x *ResolveTenantRequest) GetSubdomain() string {
@@ -9185,7 +9336,7 @@ type ResolveTenantAliasesRequest struct {
 
 func (x *ResolveTenantAliasesRequest) Reset() {
 	*x = ResolveTenantAliasesRequest{}
-	mi := &file_quartermaster_proto_msgTypes[118]
+	mi := &file_quartermaster_proto_msgTypes[121]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9197,7 +9348,7 @@ func (x *ResolveTenantAliasesRequest) String() string {
 func (*ResolveTenantAliasesRequest) ProtoMessage() {}
 
 func (x *ResolveTenantAliasesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[118]
+	mi := &file_quartermaster_proto_msgTypes[121]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9210,7 +9361,7 @@ func (x *ResolveTenantAliasesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveTenantAliasesRequest.ProtoReflect.Descriptor instead.
 func (*ResolveTenantAliasesRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{118}
+	return file_quartermaster_proto_rawDescGZIP(), []int{121}
 }
 
 func (x *ResolveTenantAliasesRequest) GetAliases() []string {
@@ -9232,7 +9383,7 @@ type ResolveTenantAliasesResponse struct {
 
 func (x *ResolveTenantAliasesResponse) Reset() {
 	*x = ResolveTenantAliasesResponse{}
-	mi := &file_quartermaster_proto_msgTypes[119]
+	mi := &file_quartermaster_proto_msgTypes[122]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9244,7 +9395,7 @@ func (x *ResolveTenantAliasesResponse) String() string {
 func (*ResolveTenantAliasesResponse) ProtoMessage() {}
 
 func (x *ResolveTenantAliasesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[119]
+	mi := &file_quartermaster_proto_msgTypes[122]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9257,7 +9408,7 @@ func (x *ResolveTenantAliasesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveTenantAliasesResponse.ProtoReflect.Descriptor instead.
 func (*ResolveTenantAliasesResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{119}
+	return file_quartermaster_proto_rawDescGZIP(), []int{122}
 }
 
 func (x *ResolveTenantAliasesResponse) GetMapping() map[string]string {
@@ -9288,7 +9439,7 @@ type ResolveTenantResponse struct {
 
 func (x *ResolveTenantResponse) Reset() {
 	*x = ResolveTenantResponse{}
-	mi := &file_quartermaster_proto_msgTypes[120]
+	mi := &file_quartermaster_proto_msgTypes[123]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9300,7 +9451,7 @@ func (x *ResolveTenantResponse) String() string {
 func (*ResolveTenantResponse) ProtoMessage() {}
 
 func (x *ResolveTenantResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[120]
+	mi := &file_quartermaster_proto_msgTypes[123]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9313,7 +9464,7 @@ func (x *ResolveTenantResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveTenantResponse.ProtoReflect.Descriptor instead.
 func (*ResolveTenantResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{120}
+	return file_quartermaster_proto_rawDescGZIP(), []int{123}
 }
 
 func (x *ResolveTenantResponse) GetFound() bool {
@@ -9360,7 +9511,7 @@ type ListClustersAvailableRequest struct {
 
 func (x *ListClustersAvailableRequest) Reset() {
 	*x = ListClustersAvailableRequest{}
-	mi := &file_quartermaster_proto_msgTypes[121]
+	mi := &file_quartermaster_proto_msgTypes[124]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9372,7 +9523,7 @@ func (x *ListClustersAvailableRequest) String() string {
 func (*ListClustersAvailableRequest) ProtoMessage() {}
 
 func (x *ListClustersAvailableRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[121]
+	mi := &file_quartermaster_proto_msgTypes[124]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9385,7 +9536,7 @@ func (x *ListClustersAvailableRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListClustersAvailableRequest.ProtoReflect.Descriptor instead.
 func (*ListClustersAvailableRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{121}
+	return file_quartermaster_proto_rawDescGZIP(), []int{124}
 }
 
 func (x *ListClustersAvailableRequest) GetPagination() *CursorPaginationRequest {
@@ -9408,7 +9559,7 @@ type AvailableClusterEntry struct {
 
 func (x *AvailableClusterEntry) Reset() {
 	*x = AvailableClusterEntry{}
-	mi := &file_quartermaster_proto_msgTypes[122]
+	mi := &file_quartermaster_proto_msgTypes[125]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9420,7 +9571,7 @@ func (x *AvailableClusterEntry) String() string {
 func (*AvailableClusterEntry) ProtoMessage() {}
 
 func (x *AvailableClusterEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[122]
+	mi := &file_quartermaster_proto_msgTypes[125]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9433,7 +9584,7 @@ func (x *AvailableClusterEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AvailableClusterEntry.ProtoReflect.Descriptor instead.
 func (*AvailableClusterEntry) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{122}
+	return file_quartermaster_proto_rawDescGZIP(), []int{125}
 }
 
 func (x *AvailableClusterEntry) GetClusterId() string {
@@ -9475,7 +9626,7 @@ type ClustersAvailableResponse struct {
 
 func (x *ClustersAvailableResponse) Reset() {
 	*x = ClustersAvailableResponse{}
-	mi := &file_quartermaster_proto_msgTypes[123]
+	mi := &file_quartermaster_proto_msgTypes[126]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9487,7 +9638,7 @@ func (x *ClustersAvailableResponse) String() string {
 func (*ClustersAvailableResponse) ProtoMessage() {}
 
 func (x *ClustersAvailableResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[123]
+	mi := &file_quartermaster_proto_msgTypes[126]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9500,7 +9651,7 @@ func (x *ClustersAvailableResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClustersAvailableResponse.ProtoReflect.Descriptor instead.
 func (*ClustersAvailableResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{123}
+	return file_quartermaster_proto_rawDescGZIP(), []int{126}
 }
 
 func (x *ClustersAvailableResponse) GetClusters() []*AvailableClusterEntry {
@@ -9526,7 +9677,7 @@ type ListServicesRequest struct {
 
 func (x *ListServicesRequest) Reset() {
 	*x = ListServicesRequest{}
-	mi := &file_quartermaster_proto_msgTypes[124]
+	mi := &file_quartermaster_proto_msgTypes[127]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9538,7 +9689,7 @@ func (x *ListServicesRequest) String() string {
 func (*ListServicesRequest) ProtoMessage() {}
 
 func (x *ListServicesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[124]
+	mi := &file_quartermaster_proto_msgTypes[127]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9551,7 +9702,7 @@ func (x *ListServicesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListServicesRequest.ProtoReflect.Descriptor instead.
 func (*ListServicesRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{124}
+	return file_quartermaster_proto_rawDescGZIP(), []int{127}
 }
 
 func (x *ListServicesRequest) GetPagination() *CursorPaginationRequest {
@@ -9587,7 +9738,7 @@ type Service struct {
 
 func (x *Service) Reset() {
 	*x = Service{}
-	mi := &file_quartermaster_proto_msgTypes[125]
+	mi := &file_quartermaster_proto_msgTypes[128]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9599,7 +9750,7 @@ func (x *Service) String() string {
 func (*Service) ProtoMessage() {}
 
 func (x *Service) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[125]
+	mi := &file_quartermaster_proto_msgTypes[128]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9612,7 +9763,7 @@ func (x *Service) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Service.ProtoReflect.Descriptor instead.
 func (*Service) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{125}
+	return file_quartermaster_proto_rawDescGZIP(), []int{128}
 }
 
 func (x *Service) GetId() string {
@@ -9738,7 +9889,7 @@ type ListServicesResponse struct {
 
 func (x *ListServicesResponse) Reset() {
 	*x = ListServicesResponse{}
-	mi := &file_quartermaster_proto_msgTypes[126]
+	mi := &file_quartermaster_proto_msgTypes[129]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9750,7 +9901,7 @@ func (x *ListServicesResponse) String() string {
 func (*ListServicesResponse) ProtoMessage() {}
 
 func (x *ListServicesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[126]
+	mi := &file_quartermaster_proto_msgTypes[129]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9763,7 +9914,7 @@ func (x *ListServicesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListServicesResponse.ProtoReflect.Descriptor instead.
 func (*ListServicesResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{126}
+	return file_quartermaster_proto_rawDescGZIP(), []int{129}
 }
 
 func (x *ListServicesResponse) GetServices() []*Service {
@@ -9790,7 +9941,7 @@ type ListClusterServicesRequest struct {
 
 func (x *ListClusterServicesRequest) Reset() {
 	*x = ListClusterServicesRequest{}
-	mi := &file_quartermaster_proto_msgTypes[127]
+	mi := &file_quartermaster_proto_msgTypes[130]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9802,7 +9953,7 @@ func (x *ListClusterServicesRequest) String() string {
 func (*ListClusterServicesRequest) ProtoMessage() {}
 
 func (x *ListClusterServicesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[127]
+	mi := &file_quartermaster_proto_msgTypes[130]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9815,7 +9966,7 @@ func (x *ListClusterServicesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListClusterServicesRequest.ProtoReflect.Descriptor instead.
 func (*ListClusterServicesRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{127}
+	return file_quartermaster_proto_rawDescGZIP(), []int{130}
 }
 
 func (x *ListClusterServicesRequest) GetClusterId() string {
@@ -9858,7 +10009,7 @@ type ClusterServiceAssignment struct {
 
 func (x *ClusterServiceAssignment) Reset() {
 	*x = ClusterServiceAssignment{}
-	mi := &file_quartermaster_proto_msgTypes[128]
+	mi := &file_quartermaster_proto_msgTypes[131]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9870,7 +10021,7 @@ func (x *ClusterServiceAssignment) String() string {
 func (*ClusterServiceAssignment) ProtoMessage() {}
 
 func (x *ClusterServiceAssignment) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[128]
+	mi := &file_quartermaster_proto_msgTypes[131]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9883,7 +10034,7 @@ func (x *ClusterServiceAssignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterServiceAssignment.ProtoReflect.Descriptor instead.
 func (*ClusterServiceAssignment) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{128}
+	return file_quartermaster_proto_rawDescGZIP(), []int{131}
 }
 
 func (x *ClusterServiceAssignment) GetId() string {
@@ -10010,7 +10161,7 @@ type ListClusterServicesResponse struct {
 
 func (x *ListClusterServicesResponse) Reset() {
 	*x = ListClusterServicesResponse{}
-	mi := &file_quartermaster_proto_msgTypes[129]
+	mi := &file_quartermaster_proto_msgTypes[132]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10022,7 +10173,7 @@ func (x *ListClusterServicesResponse) String() string {
 func (*ListClusterServicesResponse) ProtoMessage() {}
 
 func (x *ListClusterServicesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[129]
+	mi := &file_quartermaster_proto_msgTypes[132]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10035,7 +10186,7 @@ func (x *ListClusterServicesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListClusterServicesResponse.ProtoReflect.Descriptor instead.
 func (*ListClusterServicesResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{129}
+	return file_quartermaster_proto_rawDescGZIP(), []int{132}
 }
 
 func (x *ListClusterServicesResponse) GetClusterId() string {
@@ -10071,7 +10222,7 @@ type ListServiceInstancesRequest struct {
 
 func (x *ListServiceInstancesRequest) Reset() {
 	*x = ListServiceInstancesRequest{}
-	mi := &file_quartermaster_proto_msgTypes[130]
+	mi := &file_quartermaster_proto_msgTypes[133]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10083,7 +10234,7 @@ func (x *ListServiceInstancesRequest) String() string {
 func (*ListServiceInstancesRequest) ProtoMessage() {}
 
 func (x *ListServiceInstancesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[130]
+	mi := &file_quartermaster_proto_msgTypes[133]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10096,7 +10247,7 @@ func (x *ListServiceInstancesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListServiceInstancesRequest.ProtoReflect.Descriptor instead.
 func (*ListServiceInstancesRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{130}
+	return file_quartermaster_proto_rawDescGZIP(), []int{133}
 }
 
 func (x *ListServiceInstancesRequest) GetClusterId() string {
@@ -10141,7 +10292,7 @@ type ListServiceInstancesResponse struct {
 
 func (x *ListServiceInstancesResponse) Reset() {
 	*x = ListServiceInstancesResponse{}
-	mi := &file_quartermaster_proto_msgTypes[131]
+	mi := &file_quartermaster_proto_msgTypes[134]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10153,7 +10304,7 @@ func (x *ListServiceInstancesResponse) String() string {
 func (*ListServiceInstancesResponse) ProtoMessage() {}
 
 func (x *ListServiceInstancesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[131]
+	mi := &file_quartermaster_proto_msgTypes[134]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10166,7 +10317,7 @@ func (x *ListServiceInstancesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListServiceInstancesResponse.ProtoReflect.Descriptor instead.
 func (*ListServiceInstancesResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{131}
+	return file_quartermaster_proto_rawDescGZIP(), []int{134}
 }
 
 func (x *ListServiceInstancesResponse) GetInstances() []*ServiceInstance {
@@ -10213,7 +10364,7 @@ type ListServicesHealthRequest struct {
 
 func (x *ListServicesHealthRequest) Reset() {
 	*x = ListServicesHealthRequest{}
-	mi := &file_quartermaster_proto_msgTypes[132]
+	mi := &file_quartermaster_proto_msgTypes[135]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10225,7 +10376,7 @@ func (x *ListServicesHealthRequest) String() string {
 func (*ListServicesHealthRequest) ProtoMessage() {}
 
 func (x *ListServicesHealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[132]
+	mi := &file_quartermaster_proto_msgTypes[135]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10238,7 +10389,7 @@ func (x *ListServicesHealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListServicesHealthRequest.ProtoReflect.Descriptor instead.
 func (*ListServicesHealthRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{132}
+	return file_quartermaster_proto_rawDescGZIP(), []int{135}
 }
 
 func (x *ListServicesHealthRequest) GetPagination() *CursorPaginationRequest {
@@ -10257,7 +10408,7 @@ type GetServiceHealthRequest struct {
 
 func (x *GetServiceHealthRequest) Reset() {
 	*x = GetServiceHealthRequest{}
-	mi := &file_quartermaster_proto_msgTypes[133]
+	mi := &file_quartermaster_proto_msgTypes[136]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10269,7 +10420,7 @@ func (x *GetServiceHealthRequest) String() string {
 func (*GetServiceHealthRequest) ProtoMessage() {}
 
 func (x *GetServiceHealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[133]
+	mi := &file_quartermaster_proto_msgTypes[136]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10282,7 +10433,7 @@ func (x *GetServiceHealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetServiceHealthRequest.ProtoReflect.Descriptor instead.
 func (*GetServiceHealthRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{133}
+	return file_quartermaster_proto_rawDescGZIP(), []int{136}
 }
 
 func (x *GetServiceHealthRequest) GetServiceId() string {
@@ -10310,7 +10461,7 @@ type ServiceInstanceHealth struct {
 
 func (x *ServiceInstanceHealth) Reset() {
 	*x = ServiceInstanceHealth{}
-	mi := &file_quartermaster_proto_msgTypes[134]
+	mi := &file_quartermaster_proto_msgTypes[137]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10322,7 +10473,7 @@ func (x *ServiceInstanceHealth) String() string {
 func (*ServiceInstanceHealth) ProtoMessage() {}
 
 func (x *ServiceInstanceHealth) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[134]
+	mi := &file_quartermaster_proto_msgTypes[137]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10335,7 +10486,7 @@ func (x *ServiceInstanceHealth) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceInstanceHealth.ProtoReflect.Descriptor instead.
 func (*ServiceInstanceHealth) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{134}
+	return file_quartermaster_proto_rawDescGZIP(), []int{137}
 }
 
 func (x *ServiceInstanceHealth) GetInstanceId() string {
@@ -10412,7 +10563,7 @@ type ListServicesHealthResponse struct {
 
 func (x *ListServicesHealthResponse) Reset() {
 	*x = ListServicesHealthResponse{}
-	mi := &file_quartermaster_proto_msgTypes[135]
+	mi := &file_quartermaster_proto_msgTypes[138]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10424,7 +10575,7 @@ func (x *ListServicesHealthResponse) String() string {
 func (*ListServicesHealthResponse) ProtoMessage() {}
 
 func (x *ListServicesHealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[135]
+	mi := &file_quartermaster_proto_msgTypes[138]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10437,7 +10588,7 @@ func (x *ListServicesHealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListServicesHealthResponse.ProtoReflect.Descriptor instead.
 func (*ListServicesHealthResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{135}
+	return file_quartermaster_proto_rawDescGZIP(), []int{138}
 }
 
 func (x *ListServicesHealthResponse) GetInstances() []*ServiceInstanceHealth {
@@ -10471,7 +10622,7 @@ type TLSBundle struct {
 
 func (x *TLSBundle) Reset() {
 	*x = TLSBundle{}
-	mi := &file_quartermaster_proto_msgTypes[136]
+	mi := &file_quartermaster_proto_msgTypes[139]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10483,7 +10634,7 @@ func (x *TLSBundle) String() string {
 func (*TLSBundle) ProtoMessage() {}
 
 func (x *TLSBundle) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[136]
+	mi := &file_quartermaster_proto_msgTypes[139]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10496,7 +10647,7 @@ func (x *TLSBundle) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TLSBundle.ProtoReflect.Descriptor instead.
 func (*TLSBundle) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{136}
+	return file_quartermaster_proto_rawDescGZIP(), []int{139}
 }
 
 func (x *TLSBundle) GetId() string {
@@ -10571,7 +10722,7 @@ type UpsertTLSBundleRequest struct {
 
 func (x *UpsertTLSBundleRequest) Reset() {
 	*x = UpsertTLSBundleRequest{}
-	mi := &file_quartermaster_proto_msgTypes[137]
+	mi := &file_quartermaster_proto_msgTypes[140]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10583,7 +10734,7 @@ func (x *UpsertTLSBundleRequest) String() string {
 func (*UpsertTLSBundleRequest) ProtoMessage() {}
 
 func (x *UpsertTLSBundleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[137]
+	mi := &file_quartermaster_proto_msgTypes[140]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10596,7 +10747,7 @@ func (x *UpsertTLSBundleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpsertTLSBundleRequest.ProtoReflect.Descriptor instead.
 func (*UpsertTLSBundleRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{137}
+	return file_quartermaster_proto_rawDescGZIP(), []int{140}
 }
 
 func (x *UpsertTLSBundleRequest) GetBundle() *TLSBundle {
@@ -10616,7 +10767,7 @@ type TLSBundleResponse struct {
 
 func (x *TLSBundleResponse) Reset() {
 	*x = TLSBundleResponse{}
-	mi := &file_quartermaster_proto_msgTypes[138]
+	mi := &file_quartermaster_proto_msgTypes[141]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10628,7 +10779,7 @@ func (x *TLSBundleResponse) String() string {
 func (*TLSBundleResponse) ProtoMessage() {}
 
 func (x *TLSBundleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[138]
+	mi := &file_quartermaster_proto_msgTypes[141]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10641,7 +10792,7 @@ func (x *TLSBundleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TLSBundleResponse.ProtoReflect.Descriptor instead.
 func (*TLSBundleResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{138}
+	return file_quartermaster_proto_rawDescGZIP(), []int{141}
 }
 
 func (x *TLSBundleResponse) GetBundle() *TLSBundle {
@@ -10668,7 +10819,7 @@ type ListTLSBundlesRequest struct {
 
 func (x *ListTLSBundlesRequest) Reset() {
 	*x = ListTLSBundlesRequest{}
-	mi := &file_quartermaster_proto_msgTypes[139]
+	mi := &file_quartermaster_proto_msgTypes[142]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10680,7 +10831,7 @@ func (x *ListTLSBundlesRequest) String() string {
 func (*ListTLSBundlesRequest) ProtoMessage() {}
 
 func (x *ListTLSBundlesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[139]
+	mi := &file_quartermaster_proto_msgTypes[142]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10693,7 +10844,7 @@ func (x *ListTLSBundlesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTLSBundlesRequest.ProtoReflect.Descriptor instead.
 func (*ListTLSBundlesRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{139}
+	return file_quartermaster_proto_rawDescGZIP(), []int{142}
 }
 
 func (x *ListTLSBundlesRequest) GetClusterId() string {
@@ -10721,7 +10872,7 @@ type ListTLSBundlesResponse struct {
 
 func (x *ListTLSBundlesResponse) Reset() {
 	*x = ListTLSBundlesResponse{}
-	mi := &file_quartermaster_proto_msgTypes[140]
+	mi := &file_quartermaster_proto_msgTypes[143]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10733,7 +10884,7 @@ func (x *ListTLSBundlesResponse) String() string {
 func (*ListTLSBundlesResponse) ProtoMessage() {}
 
 func (x *ListTLSBundlesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[140]
+	mi := &file_quartermaster_proto_msgTypes[143]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10746,7 +10897,7 @@ func (x *ListTLSBundlesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTLSBundlesResponse.ProtoReflect.Descriptor instead.
 func (*ListTLSBundlesResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{140}
+	return file_quartermaster_proto_rawDescGZIP(), []int{143}
 }
 
 func (x *ListTLSBundlesResponse) GetBundles() []*TLSBundle {
@@ -10789,7 +10940,7 @@ type IngressSite struct {
 
 func (x *IngressSite) Reset() {
 	*x = IngressSite{}
-	mi := &file_quartermaster_proto_msgTypes[141]
+	mi := &file_quartermaster_proto_msgTypes[144]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10801,7 +10952,7 @@ func (x *IngressSite) String() string {
 func (*IngressSite) ProtoMessage() {}
 
 func (x *IngressSite) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[141]
+	mi := &file_quartermaster_proto_msgTypes[144]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10814,7 +10965,7 @@ func (x *IngressSite) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngressSite.ProtoReflect.Descriptor instead.
 func (*IngressSite) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{141}
+	return file_quartermaster_proto_rawDescGZIP(), []int{144}
 }
 
 func (x *IngressSite) GetId() string {
@@ -10903,7 +11054,7 @@ type UpsertIngressSiteRequest struct {
 
 func (x *UpsertIngressSiteRequest) Reset() {
 	*x = UpsertIngressSiteRequest{}
-	mi := &file_quartermaster_proto_msgTypes[142]
+	mi := &file_quartermaster_proto_msgTypes[145]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10915,7 +11066,7 @@ func (x *UpsertIngressSiteRequest) String() string {
 func (*UpsertIngressSiteRequest) ProtoMessage() {}
 
 func (x *UpsertIngressSiteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[142]
+	mi := &file_quartermaster_proto_msgTypes[145]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10928,7 +11079,7 @@ func (x *UpsertIngressSiteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpsertIngressSiteRequest.ProtoReflect.Descriptor instead.
 func (*UpsertIngressSiteRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{142}
+	return file_quartermaster_proto_rawDescGZIP(), []int{145}
 }
 
 func (x *UpsertIngressSiteRequest) GetSite() *IngressSite {
@@ -10948,7 +11099,7 @@ type IngressSiteResponse struct {
 
 func (x *IngressSiteResponse) Reset() {
 	*x = IngressSiteResponse{}
-	mi := &file_quartermaster_proto_msgTypes[143]
+	mi := &file_quartermaster_proto_msgTypes[146]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10960,7 +11111,7 @@ func (x *IngressSiteResponse) String() string {
 func (*IngressSiteResponse) ProtoMessage() {}
 
 func (x *IngressSiteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[143]
+	mi := &file_quartermaster_proto_msgTypes[146]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10973,7 +11124,7 @@ func (x *IngressSiteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngressSiteResponse.ProtoReflect.Descriptor instead.
 func (*IngressSiteResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{143}
+	return file_quartermaster_proto_rawDescGZIP(), []int{146}
 }
 
 func (x *IngressSiteResponse) GetSite() *IngressSite {
@@ -11001,7 +11152,7 @@ type ListIngressSitesRequest struct {
 
 func (x *ListIngressSitesRequest) Reset() {
 	*x = ListIngressSitesRequest{}
-	mi := &file_quartermaster_proto_msgTypes[144]
+	mi := &file_quartermaster_proto_msgTypes[147]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11013,7 +11164,7 @@ func (x *ListIngressSitesRequest) String() string {
 func (*ListIngressSitesRequest) ProtoMessage() {}
 
 func (x *ListIngressSitesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[144]
+	mi := &file_quartermaster_proto_msgTypes[147]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11026,7 +11177,7 @@ func (x *ListIngressSitesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListIngressSitesRequest.ProtoReflect.Descriptor instead.
 func (*ListIngressSitesRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{144}
+	return file_quartermaster_proto_rawDescGZIP(), []int{147}
 }
 
 func (x *ListIngressSitesRequest) GetClusterId() string {
@@ -11062,7 +11213,7 @@ type ListIngressSitesResponse struct {
 
 func (x *ListIngressSitesResponse) Reset() {
 	*x = ListIngressSitesResponse{}
-	mi := &file_quartermaster_proto_msgTypes[145]
+	mi := &file_quartermaster_proto_msgTypes[148]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11074,7 +11225,7 @@ func (x *ListIngressSitesResponse) String() string {
 func (*ListIngressSitesResponse) ProtoMessage() {}
 
 func (x *ListIngressSitesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[145]
+	mi := &file_quartermaster_proto_msgTypes[148]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11087,7 +11238,7 @@ func (x *ListIngressSitesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListIngressSitesResponse.ProtoReflect.Descriptor instead.
 func (*ListIngressSitesResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{145}
+	return file_quartermaster_proto_rawDescGZIP(), []int{148}
 }
 
 func (x *ListIngressSitesResponse) GetSites() []*IngressSite {
@@ -11129,7 +11280,7 @@ type GetServicePoolStatusRequest struct {
 
 func (x *GetServicePoolStatusRequest) Reset() {
 	*x = GetServicePoolStatusRequest{}
-	mi := &file_quartermaster_proto_msgTypes[146]
+	mi := &file_quartermaster_proto_msgTypes[149]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11141,7 +11292,7 @@ func (x *GetServicePoolStatusRequest) String() string {
 func (*GetServicePoolStatusRequest) ProtoMessage() {}
 
 func (x *GetServicePoolStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[146]
+	mi := &file_quartermaster_proto_msgTypes[149]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11154,7 +11305,7 @@ func (x *GetServicePoolStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetServicePoolStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetServicePoolStatusRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{146}
+	return file_quartermaster_proto_rawDescGZIP(), []int{149}
 }
 
 func (x *GetServicePoolStatusRequest) GetServiceType() string {
@@ -11175,7 +11326,7 @@ type ServicePoolClusterEntry struct {
 
 func (x *ServicePoolClusterEntry) Reset() {
 	*x = ServicePoolClusterEntry{}
-	mi := &file_quartermaster_proto_msgTypes[147]
+	mi := &file_quartermaster_proto_msgTypes[150]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11187,7 +11338,7 @@ func (x *ServicePoolClusterEntry) String() string {
 func (*ServicePoolClusterEntry) ProtoMessage() {}
 
 func (x *ServicePoolClusterEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[147]
+	mi := &file_quartermaster_proto_msgTypes[150]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11200,7 +11351,7 @@ func (x *ServicePoolClusterEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServicePoolClusterEntry.ProtoReflect.Descriptor instead.
 func (*ServicePoolClusterEntry) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{147}
+	return file_quartermaster_proto_rawDescGZIP(), []int{150}
 }
 
 func (x *ServicePoolClusterEntry) GetClusterId() string {
@@ -11236,7 +11387,7 @@ type ServiceInstanceAssignment struct {
 
 func (x *ServiceInstanceAssignment) Reset() {
 	*x = ServiceInstanceAssignment{}
-	mi := &file_quartermaster_proto_msgTypes[148]
+	mi := &file_quartermaster_proto_msgTypes[151]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11248,7 +11399,7 @@ func (x *ServiceInstanceAssignment) String() string {
 func (*ServiceInstanceAssignment) ProtoMessage() {}
 
 func (x *ServiceInstanceAssignment) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[148]
+	mi := &file_quartermaster_proto_msgTypes[151]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11261,7 +11412,7 @@ func (x *ServiceInstanceAssignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceInstanceAssignment.ProtoReflect.Descriptor instead.
 func (*ServiceInstanceAssignment) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{148}
+	return file_quartermaster_proto_rawDescGZIP(), []int{151}
 }
 
 func (x *ServiceInstanceAssignment) GetInstanceId() string {
@@ -11305,7 +11456,7 @@ type GetServicePoolStatusResponse struct {
 
 func (x *GetServicePoolStatusResponse) Reset() {
 	*x = GetServicePoolStatusResponse{}
-	mi := &file_quartermaster_proto_msgTypes[149]
+	mi := &file_quartermaster_proto_msgTypes[152]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11317,7 +11468,7 @@ func (x *GetServicePoolStatusResponse) String() string {
 func (*GetServicePoolStatusResponse) ProtoMessage() {}
 
 func (x *GetServicePoolStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[149]
+	mi := &file_quartermaster_proto_msgTypes[152]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11330,7 +11481,7 @@ func (x *GetServicePoolStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetServicePoolStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetServicePoolStatusResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{149}
+	return file_quartermaster_proto_rawDescGZIP(), []int{152}
 }
 
 func (x *GetServicePoolStatusResponse) GetTotal() int32 {
@@ -11382,7 +11533,7 @@ type AddToServicePoolRequest struct {
 
 func (x *AddToServicePoolRequest) Reset() {
 	*x = AddToServicePoolRequest{}
-	mi := &file_quartermaster_proto_msgTypes[150]
+	mi := &file_quartermaster_proto_msgTypes[153]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11394,7 +11545,7 @@ func (x *AddToServicePoolRequest) String() string {
 func (*AddToServicePoolRequest) ProtoMessage() {}
 
 func (x *AddToServicePoolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[150]
+	mi := &file_quartermaster_proto_msgTypes[153]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11407,7 +11558,7 @@ func (x *AddToServicePoolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddToServicePoolRequest.ProtoReflect.Descriptor instead.
 func (*AddToServicePoolRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{150}
+	return file_quartermaster_proto_rawDescGZIP(), []int{153}
 }
 
 func (x *AddToServicePoolRequest) GetInstanceIds() []string {
@@ -11447,7 +11598,7 @@ type AddToServicePoolResponse struct {
 
 func (x *AddToServicePoolResponse) Reset() {
 	*x = AddToServicePoolResponse{}
-	mi := &file_quartermaster_proto_msgTypes[151]
+	mi := &file_quartermaster_proto_msgTypes[154]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11459,7 +11610,7 @@ func (x *AddToServicePoolResponse) String() string {
 func (*AddToServicePoolResponse) ProtoMessage() {}
 
 func (x *AddToServicePoolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[151]
+	mi := &file_quartermaster_proto_msgTypes[154]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11472,7 +11623,7 @@ func (x *AddToServicePoolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddToServicePoolResponse.ProtoReflect.Descriptor instead.
 func (*AddToServicePoolResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{151}
+	return file_quartermaster_proto_rawDescGZIP(), []int{154}
 }
 
 func (x *AddToServicePoolResponse) GetReleased() int32 {
@@ -11494,7 +11645,7 @@ type DrainServiceInstanceRequest struct {
 
 func (x *DrainServiceInstanceRequest) Reset() {
 	*x = DrainServiceInstanceRequest{}
-	mi := &file_quartermaster_proto_msgTypes[152]
+	mi := &file_quartermaster_proto_msgTypes[155]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11506,7 +11657,7 @@ func (x *DrainServiceInstanceRequest) String() string {
 func (*DrainServiceInstanceRequest) ProtoMessage() {}
 
 func (x *DrainServiceInstanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[152]
+	mi := &file_quartermaster_proto_msgTypes[155]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11519,7 +11670,7 @@ func (x *DrainServiceInstanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainServiceInstanceRequest.ProtoReflect.Descriptor instead.
 func (*DrainServiceInstanceRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{152}
+	return file_quartermaster_proto_rawDescGZIP(), []int{155}
 }
 
 func (x *DrainServiceInstanceRequest) GetInstanceId() string {
@@ -11545,7 +11696,7 @@ type DrainServiceInstanceResponse struct {
 
 func (x *DrainServiceInstanceResponse) Reset() {
 	*x = DrainServiceInstanceResponse{}
-	mi := &file_quartermaster_proto_msgTypes[153]
+	mi := &file_quartermaster_proto_msgTypes[156]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11557,7 +11708,7 @@ func (x *DrainServiceInstanceResponse) String() string {
 func (*DrainServiceInstanceResponse) ProtoMessage() {}
 
 func (x *DrainServiceInstanceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[153]
+	mi := &file_quartermaster_proto_msgTypes[156]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11570,7 +11721,7 @@ func (x *DrainServiceInstanceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainServiceInstanceResponse.ProtoReflect.Descriptor instead.
 func (*DrainServiceInstanceResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{153}
+	return file_quartermaster_proto_rawDescGZIP(), []int{156}
 }
 
 func (x *DrainServiceInstanceResponse) GetPreviousClusterId() string {
@@ -11589,7 +11740,7 @@ type ListPeersRequest struct {
 
 func (x *ListPeersRequest) Reset() {
 	*x = ListPeersRequest{}
-	mi := &file_quartermaster_proto_msgTypes[154]
+	mi := &file_quartermaster_proto_msgTypes[157]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11601,7 +11752,7 @@ func (x *ListPeersRequest) String() string {
 func (*ListPeersRequest) ProtoMessage() {}
 
 func (x *ListPeersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[154]
+	mi := &file_quartermaster_proto_msgTypes[157]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11614,7 +11765,7 @@ func (x *ListPeersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPeersRequest.ProtoReflect.Descriptor instead.
 func (*ListPeersRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{154}
+	return file_quartermaster_proto_rawDescGZIP(), []int{157}
 }
 
 func (x *ListPeersRequest) GetClusterId() string {
@@ -11638,7 +11789,7 @@ type PeerCluster struct {
 
 func (x *PeerCluster) Reset() {
 	*x = PeerCluster{}
-	mi := &file_quartermaster_proto_msgTypes[155]
+	mi := &file_quartermaster_proto_msgTypes[158]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11650,7 +11801,7 @@ func (x *PeerCluster) String() string {
 func (*PeerCluster) ProtoMessage() {}
 
 func (x *PeerCluster) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[155]
+	mi := &file_quartermaster_proto_msgTypes[158]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11663,7 +11814,7 @@ func (x *PeerCluster) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerCluster.ProtoReflect.Descriptor instead.
 func (*PeerCluster) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{155}
+	return file_quartermaster_proto_rawDescGZIP(), []int{158}
 }
 
 func (x *PeerCluster) GetClusterId() string {
@@ -11710,7 +11861,7 @@ type ListPeersResponse struct {
 
 func (x *ListPeersResponse) Reset() {
 	*x = ListPeersResponse{}
-	mi := &file_quartermaster_proto_msgTypes[156]
+	mi := &file_quartermaster_proto_msgTypes[159]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11722,7 +11873,7 @@ func (x *ListPeersResponse) String() string {
 func (*ListPeersResponse) ProtoMessage() {}
 
 func (x *ListPeersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[156]
+	mi := &file_quartermaster_proto_msgTypes[159]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11735,7 +11886,7 @@ func (x *ListPeersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPeersResponse.ProtoReflect.Descriptor instead.
 func (*ListPeersResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{156}
+	return file_quartermaster_proto_rawDescGZIP(), []int{159}
 }
 
 func (x *ListPeersResponse) GetPeers() []*PeerCluster {
@@ -11765,7 +11916,7 @@ type TenantClusterPeer struct {
 
 func (x *TenantClusterPeer) Reset() {
 	*x = TenantClusterPeer{}
-	mi := &file_quartermaster_proto_msgTypes[157]
+	mi := &file_quartermaster_proto_msgTypes[160]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11777,7 +11928,7 @@ func (x *TenantClusterPeer) String() string {
 func (*TenantClusterPeer) ProtoMessage() {}
 
 func (x *TenantClusterPeer) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[157]
+	mi := &file_quartermaster_proto_msgTypes[160]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11790,7 +11941,7 @@ func (x *TenantClusterPeer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantClusterPeer.ProtoReflect.Descriptor instead.
 func (*TenantClusterPeer) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{157}
+	return file_quartermaster_proto_rawDescGZIP(), []int{160}
 }
 
 func (x *TenantClusterPeer) GetClusterId() string {
@@ -11880,7 +12031,7 @@ type AssignServiceToClusterRequest struct {
 
 func (x *AssignServiceToClusterRequest) Reset() {
 	*x = AssignServiceToClusterRequest{}
-	mi := &file_quartermaster_proto_msgTypes[158]
+	mi := &file_quartermaster_proto_msgTypes[161]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11892,7 +12043,7 @@ func (x *AssignServiceToClusterRequest) String() string {
 func (*AssignServiceToClusterRequest) ProtoMessage() {}
 
 func (x *AssignServiceToClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[158]
+	mi := &file_quartermaster_proto_msgTypes[161]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11905,7 +12056,7 @@ func (x *AssignServiceToClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignServiceToClusterRequest.ProtoReflect.Descriptor instead.
 func (*AssignServiceToClusterRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{158}
+	return file_quartermaster_proto_rawDescGZIP(), []int{161}
 }
 
 func (x *AssignServiceToClusterRequest) GetClusterId() string {
@@ -11948,7 +12099,7 @@ type UnassignServiceFromClusterRequest struct {
 
 func (x *UnassignServiceFromClusterRequest) Reset() {
 	*x = UnassignServiceFromClusterRequest{}
-	mi := &file_quartermaster_proto_msgTypes[159]
+	mi := &file_quartermaster_proto_msgTypes[162]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11960,7 +12111,7 @@ func (x *UnassignServiceFromClusterRequest) String() string {
 func (*UnassignServiceFromClusterRequest) ProtoMessage() {}
 
 func (x *UnassignServiceFromClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[159]
+	mi := &file_quartermaster_proto_msgTypes[162]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11973,7 +12124,7 @@ func (x *UnassignServiceFromClusterRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use UnassignServiceFromClusterRequest.ProtoReflect.Descriptor instead.
 func (*UnassignServiceFromClusterRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{159}
+	return file_quartermaster_proto_rawDescGZIP(), []int{162}
 }
 
 func (x *UnassignServiceFromClusterRequest) GetClusterId() string {
@@ -12010,7 +12161,7 @@ type EnableSelfHostingRequest struct {
 
 func (x *EnableSelfHostingRequest) Reset() {
 	*x = EnableSelfHostingRequest{}
-	mi := &file_quartermaster_proto_msgTypes[160]
+	mi := &file_quartermaster_proto_msgTypes[163]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12022,7 +12173,7 @@ func (x *EnableSelfHostingRequest) String() string {
 func (*EnableSelfHostingRequest) ProtoMessage() {}
 
 func (x *EnableSelfHostingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[160]
+	mi := &file_quartermaster_proto_msgTypes[163]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12035,7 +12186,7 @@ func (x *EnableSelfHostingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnableSelfHostingRequest.ProtoReflect.Descriptor instead.
 func (*EnableSelfHostingRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{160}
+	return file_quartermaster_proto_rawDescGZIP(), []int{163}
 }
 
 func (x *EnableSelfHostingRequest) GetTenantId() string {
@@ -12070,7 +12221,7 @@ type EnableSelfHostingResponse struct {
 
 func (x *EnableSelfHostingResponse) Reset() {
 	*x = EnableSelfHostingResponse{}
-	mi := &file_quartermaster_proto_msgTypes[161]
+	mi := &file_quartermaster_proto_msgTypes[164]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12082,7 +12233,7 @@ func (x *EnableSelfHostingResponse) String() string {
 func (*EnableSelfHostingResponse) ProtoMessage() {}
 
 func (x *EnableSelfHostingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[161]
+	mi := &file_quartermaster_proto_msgTypes[164]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12095,7 +12246,7 @@ func (x *EnableSelfHostingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnableSelfHostingResponse.ProtoReflect.Descriptor instead.
 func (*EnableSelfHostingResponse) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{161}
+	return file_quartermaster_proto_rawDescGZIP(), []int{164}
 }
 
 func (x *EnableSelfHostingResponse) GetCluster() *InfrastructureCluster {
@@ -12132,7 +12283,7 @@ type CreateEnrollmentTokenRequest struct {
 
 func (x *CreateEnrollmentTokenRequest) Reset() {
 	*x = CreateEnrollmentTokenRequest{}
-	mi := &file_quartermaster_proto_msgTypes[162]
+	mi := &file_quartermaster_proto_msgTypes[165]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12144,7 +12295,7 @@ func (x *CreateEnrollmentTokenRequest) String() string {
 func (*CreateEnrollmentTokenRequest) ProtoMessage() {}
 
 func (x *CreateEnrollmentTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_quartermaster_proto_msgTypes[162]
+	mi := &file_quartermaster_proto_msgTypes[165]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12157,7 +12308,7 @@ func (x *CreateEnrollmentTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateEnrollmentTokenRequest.ProtoReflect.Descriptor instead.
 func (*CreateEnrollmentTokenRequest) Descriptor() ([]byte, []int) {
-	return file_quartermaster_proto_rawDescGZIP(), []int{162}
+	return file_quartermaster_proto_rawDescGZIP(), []int{165}
 }
 
 func (x *CreateEnrollmentTokenRequest) GetClusterId() string {
@@ -12344,7 +12495,17 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\atenants\x18\x02 \x03(\v2\x15.quartermaster.TenantR\atenants\x12@\n" +
 	"\n" +
 	"pagination\x18\x03 \x01(\v2 .common.CursorPaginationResponseR\n" +
-	"pagination\"\x1a\n" +
+	"pagination\"D\n" +
+	"#ListAliasedTenantsForClusterRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\"M\n" +
+	"\x10AliasedTenantRef\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1c\n" +
+	"\tsubdomain\x18\x02 \x01(\tR\tsubdomain\"\x80\x01\n" +
+	"$ListAliasedTenantsForClusterResponse\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x129\n" +
+	"\atenants\x18\x02 \x03(\v2\x1f.quartermaster.AliasedTenantRefR\atenants\"\x1a\n" +
 	"\x18ListActiveTenantsRequest\":\n" +
 	"\x19ListActiveTenantsResponse\x12\x1d\n" +
 	"\n" +
@@ -13605,8 +13766,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"$SUBSCRIPTION_STATUS_PENDING_APPROVAL\x10\x01\x12\x1e\n" +
 	"\x1aSUBSCRIPTION_STATUS_ACTIVE\x10\x02\x12!\n" +
 	"\x1dSUBSCRIPTION_STATUS_SUSPENDED\x10\x03\x12 \n" +
-	"\x1cSUBSCRIPTION_STATUS_REJECTED\x10\x042\xa2\n" +
-	"\n" +
+	"\x1cSUBSCRIPTION_STATUS_REJECTED\x10\x042\xac\v\n" +
 	"\rTenantService\x12N\n" +
 	"\tGetTenant\x12\x1f.quartermaster.GetTenantRequest\x1a .quartermaster.GetTenantResponse\x12]\n" +
 	"\x0eValidateTenant\x12$.quartermaster.ValidateTenantRequest\x1a%.quartermaster.ValidateTenantResponse\x12Z\n" +
@@ -13620,7 +13780,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x10GetTenantCluster\x12&.quartermaster.GetTenantClusterRequest\x1a .quartermaster.GetTenantResponse\x12X\n" +
 	"\x13UpdateTenantCluster\x12).quartermaster.UpdateTenantClusterRequest\x1a\x16.google.protobuf.Empty\x12\\\n" +
 	"\x0fGetTenantsBatch\x12%.quartermaster.GetTenantsBatchRequest\x1a\".quartermaster.ListTenantsResponse\x12l\n" +
-	"\x13GetTenantsByCluster\x12).quartermaster.GetTenantsByClusterRequest\x1a*.quartermaster.GetTenantsByClusterResponse\x12f\n" +
+	"\x13GetTenantsByCluster\x12).quartermaster.GetTenantsByClusterRequest\x1a*.quartermaster.GetTenantsByClusterResponse\x12\x87\x01\n" +
+	"\x1cListAliasedTenantsForCluster\x122.quartermaster.ListAliasedTenantsForClusterRequest\x1a3.quartermaster.ListAliasedTenantsForClusterResponse\x12f\n" +
 	"\x11ListActiveTenants\x12'.quartermaster.ListActiveTenantsRequest\x1a(.quartermaster.ListActiveTenantsResponse2\xa7\x1f\n" +
 	"\x0eClusterService\x12N\n" +
 	"\n" +
@@ -13714,522 +13875,528 @@ func file_quartermaster_proto_rawDescGZIP() []byte {
 }
 
 var file_quartermaster_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_quartermaster_proto_msgTypes = make([]protoimpl.MessageInfo, 169)
+var file_quartermaster_proto_msgTypes = make([]protoimpl.MessageInfo, 172)
 var file_quartermaster_proto_goTypes = []any{
-	(ClusterVisibility)(0),                      // 0: quartermaster.ClusterVisibility
-	(ClusterPricingModel)(0),                    // 1: quartermaster.ClusterPricingModel
-	(ClusterSubscriptionStatus)(0),              // 2: quartermaster.ClusterSubscriptionStatus
-	(*SetNodeEnrollmentOriginRequest)(nil),      // 3: quartermaster.SetNodeEnrollmentOriginRequest
-	(*SetNodeEnrollmentOriginResponse)(nil),     // 4: quartermaster.SetNodeEnrollmentOriginResponse
-	(*GetTenantRequest)(nil),                    // 5: quartermaster.GetTenantRequest
-	(*GetTenantResponse)(nil),                   // 6: quartermaster.GetTenantResponse
-	(*ValidateTenantRequest)(nil),               // 7: quartermaster.ValidateTenantRequest
-	(*ValidateTenantResponse)(nil),              // 8: quartermaster.ValidateTenantResponse
-	(*TenantInfo)(nil),                          // 9: quartermaster.TenantInfo
-	(*Tenant)(nil),                              // 10: quartermaster.Tenant
-	(*ListTenantsRequest)(nil),                  // 11: quartermaster.ListTenantsRequest
-	(*ListTenantsResponse)(nil),                 // 12: quartermaster.ListTenantsResponse
-	(*CreateTenantRequest)(nil),                 // 13: quartermaster.CreateTenantRequest
-	(*CreateTenantResponse)(nil),                // 14: quartermaster.CreateTenantResponse
-	(*UpdateTenantRequest)(nil),                 // 15: quartermaster.UpdateTenantRequest
-	(*DeleteTenantRequest)(nil),                 // 16: quartermaster.DeleteTenantRequest
-	(*GetTenantClusterRequest)(nil),             // 17: quartermaster.GetTenantClusterRequest
-	(*UpdateTenantClusterRequest)(nil),          // 18: quartermaster.UpdateTenantClusterRequest
-	(*GetTenantsBatchRequest)(nil),              // 19: quartermaster.GetTenantsBatchRequest
-	(*GetTenantsByClusterRequest)(nil),          // 20: quartermaster.GetTenantsByClusterRequest
-	(*GetTenantsByClusterResponse)(nil),         // 21: quartermaster.GetTenantsByClusterResponse
-	(*ListActiveTenantsRequest)(nil),            // 22: quartermaster.ListActiveTenantsRequest
-	(*ListActiveTenantsResponse)(nil),           // 23: quartermaster.ListActiveTenantsResponse
-	(*GetClusterRoutingRequest)(nil),            // 24: quartermaster.GetClusterRoutingRequest
-	(*ClusterRoutingResponse)(nil),              // 25: quartermaster.ClusterRoutingResponse
-	(*GetClusterRequest)(nil),                   // 26: quartermaster.GetClusterRequest
-	(*InfrastructureCluster)(nil),               // 27: quartermaster.InfrastructureCluster
-	(*ClusterResponse)(nil),                     // 28: quartermaster.ClusterResponse
-	(*ListClustersRequest)(nil),                 // 29: quartermaster.ListClustersRequest
-	(*ListClustersResponse)(nil),                // 30: quartermaster.ListClustersResponse
-	(*CreateClusterRequest)(nil),                // 31: quartermaster.CreateClusterRequest
-	(*UpdateClusterRequest)(nil),                // 32: quartermaster.UpdateClusterRequest
-	(*UpdateClusterMeshConfigRequest)(nil),      // 33: quartermaster.UpdateClusterMeshConfigRequest
-	(*UpdateClusterMeshConfigResponse)(nil),     // 34: quartermaster.UpdateClusterMeshConfigResponse
-	(*ListClustersForTenantRequest)(nil),        // 35: quartermaster.ListClustersForTenantRequest
-	(*ClusterAccessEntry)(nil),                  // 36: quartermaster.ClusterAccessEntry
-	(*ClustersAccessResponse)(nil),              // 37: quartermaster.ClustersAccessResponse
-	(*GrantClusterAccessRequest)(nil),           // 38: quartermaster.GrantClusterAccessRequest
-	(*SubscribeToClusterRequest)(nil),           // 39: quartermaster.SubscribeToClusterRequest
-	(*BootstrapClusterAccessRequest)(nil),       // 40: quartermaster.BootstrapClusterAccessRequest
-	(*DeactivateClusterAccessRequest)(nil),      // 41: quartermaster.DeactivateClusterAccessRequest
-	(*ListTenantClusterAccessRequest)(nil),      // 42: quartermaster.ListTenantClusterAccessRequest
-	(*TenantClusterAccessRow)(nil),              // 43: quartermaster.TenantClusterAccessRow
-	(*ListTenantClusterAccessResponse)(nil),     // 44: quartermaster.ListTenantClusterAccessResponse
-	(*TenantResourceLimits)(nil),                // 45: quartermaster.TenantResourceLimits
-	(*UnsubscribeFromClusterRequest)(nil),       // 46: quartermaster.UnsubscribeFromClusterRequest
-	(*ListMySubscriptionsRequest)(nil),          // 47: quartermaster.ListMySubscriptionsRequest
-	(*MarketplaceClusterEntry)(nil),             // 48: quartermaster.MarketplaceClusterEntry
-	(*ListMarketplaceClustersRequest)(nil),      // 49: quartermaster.ListMarketplaceClustersRequest
-	(*ListMarketplaceClustersResponse)(nil),     // 50: quartermaster.ListMarketplaceClustersResponse
-	(*GetMarketplaceClusterRequest)(nil),        // 51: quartermaster.GetMarketplaceClusterRequest
-	(*UpdateClusterMarketplaceRequest)(nil),     // 52: quartermaster.UpdateClusterMarketplaceRequest
-	(*GetClusterMetadataBatchRequest)(nil),      // 53: quartermaster.GetClusterMetadataBatchRequest
-	(*GetClusterMetadataBatchResponse)(nil),     // 54: quartermaster.GetClusterMetadataBatchResponse
-	(*ClusterMetadata)(nil),                     // 55: quartermaster.ClusterMetadata
-	(*CreatePrivateClusterRequest)(nil),         // 56: quartermaster.CreatePrivateClusterRequest
-	(*CreatePrivateClusterResponse)(nil),        // 57: quartermaster.CreatePrivateClusterResponse
-	(*ClusterInvite)(nil),                       // 58: quartermaster.ClusterInvite
-	(*CreateClusterInviteRequest)(nil),          // 59: quartermaster.CreateClusterInviteRequest
-	(*RevokeClusterInviteRequest)(nil),          // 60: quartermaster.RevokeClusterInviteRequest
-	(*ListClusterInvitesRequest)(nil),           // 61: quartermaster.ListClusterInvitesRequest
-	(*ListMyClusterInvitesRequest)(nil),         // 62: quartermaster.ListMyClusterInvitesRequest
-	(*ListClusterInvitesResponse)(nil),          // 63: quartermaster.ListClusterInvitesResponse
-	(*ClusterSubscription)(nil),                 // 64: quartermaster.ClusterSubscription
-	(*RequestClusterSubscriptionRequest)(nil),   // 65: quartermaster.RequestClusterSubscriptionRequest
-	(*AcceptClusterInviteRequest)(nil),          // 66: quartermaster.AcceptClusterInviteRequest
-	(*ListPendingSubscriptionsRequest)(nil),     // 67: quartermaster.ListPendingSubscriptionsRequest
-	(*ListPendingSubscriptionsResponse)(nil),    // 68: quartermaster.ListPendingSubscriptionsResponse
-	(*ApproveClusterSubscriptionRequest)(nil),   // 69: quartermaster.ApproveClusterSubscriptionRequest
-	(*RejectClusterSubscriptionRequest)(nil),    // 70: quartermaster.RejectClusterSubscriptionRequest
-	(*GetNodeRequest)(nil),                      // 71: quartermaster.GetNodeRequest
-	(*InfrastructureNode)(nil),                  // 72: quartermaster.InfrastructureNode
-	(*NodeResponse)(nil),                        // 73: quartermaster.NodeResponse
-	(*ListNodesRequest)(nil),                    // 74: quartermaster.ListNodesRequest
-	(*ListNodesResponse)(nil),                   // 75: quartermaster.ListNodesResponse
-	(*ListHealthyNodesForDNSRequest)(nil),       // 76: quartermaster.ListHealthyNodesForDNSRequest
-	(*ListHealthyNodesForDNSResponse)(nil),      // 77: quartermaster.ListHealthyNodesForDNSResponse
-	(*CreateNodeRequest)(nil),                   // 78: quartermaster.CreateNodeRequest
-	(*UpdateNodeStatusRequest)(nil),             // 79: quartermaster.UpdateNodeStatusRequest
-	(*EdgeRelease)(nil),                         // 80: quartermaster.EdgeRelease
-	(*ListEdgeReleasesRequest)(nil),             // 81: quartermaster.ListEdgeReleasesRequest
-	(*ListEdgeReleasesResponse)(nil),            // 82: quartermaster.ListEdgeReleasesResponse
-	(*UpsertEdgeReleaseRequest)(nil),            // 83: quartermaster.UpsertEdgeReleaseRequest
-	(*EdgeReleaseResponse)(nil),                 // 84: quartermaster.EdgeReleaseResponse
-	(*ClusterReleaseTarget)(nil),                // 85: quartermaster.ClusterReleaseTarget
-	(*GetClusterReleaseTargetRequest)(nil),      // 86: quartermaster.GetClusterReleaseTargetRequest
-	(*ListClusterReleaseTargetsRequest)(nil),    // 87: quartermaster.ListClusterReleaseTargetsRequest
-	(*ListClusterReleaseTargetsResponse)(nil),   // 88: quartermaster.ListClusterReleaseTargetsResponse
-	(*SetClusterReleaseTargetRequest)(nil),      // 89: quartermaster.SetClusterReleaseTargetRequest
-	(*ClusterReleaseTargetResponse)(nil),        // 90: quartermaster.ClusterReleaseTargetResponse
-	(*ResolveNodeFingerprintRequest)(nil),       // 91: quartermaster.ResolveNodeFingerprintRequest
-	(*ResolveNodeFingerprintResponse)(nil),      // 92: quartermaster.ResolveNodeFingerprintResponse
-	(*GetNodeOwnerRequest)(nil),                 // 93: quartermaster.GetNodeOwnerRequest
-	(*GetNodeByLogicalNameRequest)(nil),         // 94: quartermaster.GetNodeByLogicalNameRequest
-	(*UpdateNodeHardwareRequest)(nil),           // 95: quartermaster.UpdateNodeHardwareRequest
-	(*ReportAliveNodesRequest)(nil),             // 96: quartermaster.ReportAliveNodesRequest
-	(*NodeOwnerResponse)(nil),                   // 97: quartermaster.NodeOwnerResponse
-	(*BootstrapEdgeNodeRequest)(nil),            // 98: quartermaster.BootstrapEdgeNodeRequest
-	(*BootstrapEdgeNodeResponse)(nil),           // 99: quartermaster.BootstrapEdgeNodeResponse
-	(*BootstrapInfrastructureNodeRequest)(nil),  // 100: quartermaster.BootstrapInfrastructureNodeRequest
-	(*BootstrapInfrastructureNodeResponse)(nil), // 101: quartermaster.BootstrapInfrastructureNodeResponse
-	(*BootstrapServiceRequest)(nil),             // 102: quartermaster.BootstrapServiceRequest
-	(*BootstrapServiceResponse)(nil),            // 103: quartermaster.BootstrapServiceResponse
-	(*ServiceDiscoveryRequest)(nil),             // 104: quartermaster.ServiceDiscoveryRequest
-	(*ServiceDiscoveryResponse)(nil),            // 105: quartermaster.ServiceDiscoveryResponse
-	(*ServiceInstance)(nil),                     // 106: quartermaster.ServiceInstance
-	(*CreateBootstrapTokenRequest)(nil),         // 107: quartermaster.CreateBootstrapTokenRequest
-	(*BootstrapToken)(nil),                      // 108: quartermaster.BootstrapToken
-	(*CreateBootstrapTokenResponse)(nil),        // 109: quartermaster.CreateBootstrapTokenResponse
-	(*ListBootstrapTokensRequest)(nil),          // 110: quartermaster.ListBootstrapTokensRequest
-	(*ListBootstrapTokensResponse)(nil),         // 111: quartermaster.ListBootstrapTokensResponse
-	(*RevokeBootstrapTokenRequest)(nil),         // 112: quartermaster.RevokeBootstrapTokenRequest
-	(*ValidateBootstrapTokenRequest)(nil),       // 113: quartermaster.ValidateBootstrapTokenRequest
-	(*ValidateBootstrapTokenResponse)(nil),      // 114: quartermaster.ValidateBootstrapTokenResponse
-	(*InfrastructureSyncRequest)(nil),           // 115: quartermaster.InfrastructureSyncRequest
-	(*NodeResourceSnapshot)(nil),                // 116: quartermaster.NodeResourceSnapshot
-	(*InfrastructurePeer)(nil),                  // 117: quartermaster.InfrastructurePeer
-	(*InfrastructureSyncResponse)(nil),          // 118: quartermaster.InfrastructureSyncResponse
-	(*ServiceEndpoints)(nil),                    // 119: quartermaster.ServiceEndpoints
-	(*ResolveTenantRequest)(nil),                // 120: quartermaster.ResolveTenantRequest
-	(*ResolveTenantAliasesRequest)(nil),         // 121: quartermaster.ResolveTenantAliasesRequest
-	(*ResolveTenantAliasesResponse)(nil),        // 122: quartermaster.ResolveTenantAliasesResponse
-	(*ResolveTenantResponse)(nil),               // 123: quartermaster.ResolveTenantResponse
-	(*ListClustersAvailableRequest)(nil),        // 124: quartermaster.ListClustersAvailableRequest
-	(*AvailableClusterEntry)(nil),               // 125: quartermaster.AvailableClusterEntry
-	(*ClustersAvailableResponse)(nil),           // 126: quartermaster.ClustersAvailableResponse
-	(*ListServicesRequest)(nil),                 // 127: quartermaster.ListServicesRequest
-	(*Service)(nil),                             // 128: quartermaster.Service
-	(*ListServicesResponse)(nil),                // 129: quartermaster.ListServicesResponse
-	(*ListClusterServicesRequest)(nil),          // 130: quartermaster.ListClusterServicesRequest
-	(*ClusterServiceAssignment)(nil),            // 131: quartermaster.ClusterServiceAssignment
-	(*ListClusterServicesResponse)(nil),         // 132: quartermaster.ListClusterServicesResponse
-	(*ListServiceInstancesRequest)(nil),         // 133: quartermaster.ListServiceInstancesRequest
-	(*ListServiceInstancesResponse)(nil),        // 134: quartermaster.ListServiceInstancesResponse
-	(*ListServicesHealthRequest)(nil),           // 135: quartermaster.ListServicesHealthRequest
-	(*GetServiceHealthRequest)(nil),             // 136: quartermaster.GetServiceHealthRequest
-	(*ServiceInstanceHealth)(nil),               // 137: quartermaster.ServiceInstanceHealth
-	(*ListServicesHealthResponse)(nil),          // 138: quartermaster.ListServicesHealthResponse
-	(*TLSBundle)(nil),                           // 139: quartermaster.TLSBundle
-	(*UpsertTLSBundleRequest)(nil),              // 140: quartermaster.UpsertTLSBundleRequest
-	(*TLSBundleResponse)(nil),                   // 141: quartermaster.TLSBundleResponse
-	(*ListTLSBundlesRequest)(nil),               // 142: quartermaster.ListTLSBundlesRequest
-	(*ListTLSBundlesResponse)(nil),              // 143: quartermaster.ListTLSBundlesResponse
-	(*IngressSite)(nil),                         // 144: quartermaster.IngressSite
-	(*UpsertIngressSiteRequest)(nil),            // 145: quartermaster.UpsertIngressSiteRequest
-	(*IngressSiteResponse)(nil),                 // 146: quartermaster.IngressSiteResponse
-	(*ListIngressSitesRequest)(nil),             // 147: quartermaster.ListIngressSitesRequest
-	(*ListIngressSitesResponse)(nil),            // 148: quartermaster.ListIngressSitesResponse
-	(*GetServicePoolStatusRequest)(nil),         // 149: quartermaster.GetServicePoolStatusRequest
-	(*ServicePoolClusterEntry)(nil),             // 150: quartermaster.ServicePoolClusterEntry
-	(*ServiceInstanceAssignment)(nil),           // 151: quartermaster.ServiceInstanceAssignment
-	(*GetServicePoolStatusResponse)(nil),        // 152: quartermaster.GetServicePoolStatusResponse
-	(*AddToServicePoolRequest)(nil),             // 153: quartermaster.AddToServicePoolRequest
-	(*AddToServicePoolResponse)(nil),            // 154: quartermaster.AddToServicePoolResponse
-	(*DrainServiceInstanceRequest)(nil),         // 155: quartermaster.DrainServiceInstanceRequest
-	(*DrainServiceInstanceResponse)(nil),        // 156: quartermaster.DrainServiceInstanceResponse
-	(*ListPeersRequest)(nil),                    // 157: quartermaster.ListPeersRequest
-	(*PeerCluster)(nil),                         // 158: quartermaster.PeerCluster
-	(*ListPeersResponse)(nil),                   // 159: quartermaster.ListPeersResponse
-	(*TenantClusterPeer)(nil),                   // 160: quartermaster.TenantClusterPeer
-	(*AssignServiceToClusterRequest)(nil),       // 161: quartermaster.AssignServiceToClusterRequest
-	(*UnassignServiceFromClusterRequest)(nil),   // 162: quartermaster.UnassignServiceFromClusterRequest
-	(*EnableSelfHostingRequest)(nil),            // 163: quartermaster.EnableSelfHostingRequest
-	(*EnableSelfHostingResponse)(nil),           // 164: quartermaster.EnableSelfHostingResponse
-	(*CreateEnrollmentTokenRequest)(nil),        // 165: quartermaster.CreateEnrollmentTokenRequest
-	nil,                                         // 166: quartermaster.GetClusterMetadataBatchResponse.ClustersEntry
-	nil,                                         // 167: quartermaster.BootstrapInfrastructureNodeResponse.SeedServiceEndpointsEntry
-	nil,                                         // 168: quartermaster.BootstrapServiceRequest.MetadataEntry
-	nil,                                         // 169: quartermaster.ServiceInstance.MetadataEntry
-	nil,                                         // 170: quartermaster.InfrastructureSyncResponse.ServiceEndpointsEntry
-	nil,                                         // 171: quartermaster.ResolveTenantAliasesResponse.MappingEntry
-	(*timestamppb.Timestamp)(nil),               // 172: google.protobuf.Timestamp
-	(*CursorPaginationRequest)(nil),             // 173: common.CursorPaginationRequest
-	(*CursorPaginationResponse)(nil),            // 174: common.CursorPaginationResponse
-	(*SignupAttribution)(nil),                   // 175: common.SignupAttribution
-	(*structpb.Struct)(nil),                     // 176: google.protobuf.Struct
-	(*emptypb.Empty)(nil),                       // 177: google.protobuf.Empty
+	(ClusterVisibility)(0),                       // 0: quartermaster.ClusterVisibility
+	(ClusterPricingModel)(0),                     // 1: quartermaster.ClusterPricingModel
+	(ClusterSubscriptionStatus)(0),               // 2: quartermaster.ClusterSubscriptionStatus
+	(*SetNodeEnrollmentOriginRequest)(nil),       // 3: quartermaster.SetNodeEnrollmentOriginRequest
+	(*SetNodeEnrollmentOriginResponse)(nil),      // 4: quartermaster.SetNodeEnrollmentOriginResponse
+	(*GetTenantRequest)(nil),                     // 5: quartermaster.GetTenantRequest
+	(*GetTenantResponse)(nil),                    // 6: quartermaster.GetTenantResponse
+	(*ValidateTenantRequest)(nil),                // 7: quartermaster.ValidateTenantRequest
+	(*ValidateTenantResponse)(nil),               // 8: quartermaster.ValidateTenantResponse
+	(*TenantInfo)(nil),                           // 9: quartermaster.TenantInfo
+	(*Tenant)(nil),                               // 10: quartermaster.Tenant
+	(*ListTenantsRequest)(nil),                   // 11: quartermaster.ListTenantsRequest
+	(*ListTenantsResponse)(nil),                  // 12: quartermaster.ListTenantsResponse
+	(*CreateTenantRequest)(nil),                  // 13: quartermaster.CreateTenantRequest
+	(*CreateTenantResponse)(nil),                 // 14: quartermaster.CreateTenantResponse
+	(*UpdateTenantRequest)(nil),                  // 15: quartermaster.UpdateTenantRequest
+	(*DeleteTenantRequest)(nil),                  // 16: quartermaster.DeleteTenantRequest
+	(*GetTenantClusterRequest)(nil),              // 17: quartermaster.GetTenantClusterRequest
+	(*UpdateTenantClusterRequest)(nil),           // 18: quartermaster.UpdateTenantClusterRequest
+	(*GetTenantsBatchRequest)(nil),               // 19: quartermaster.GetTenantsBatchRequest
+	(*GetTenantsByClusterRequest)(nil),           // 20: quartermaster.GetTenantsByClusterRequest
+	(*GetTenantsByClusterResponse)(nil),          // 21: quartermaster.GetTenantsByClusterResponse
+	(*ListAliasedTenantsForClusterRequest)(nil),  // 22: quartermaster.ListAliasedTenantsForClusterRequest
+	(*AliasedTenantRef)(nil),                     // 23: quartermaster.AliasedTenantRef
+	(*ListAliasedTenantsForClusterResponse)(nil), // 24: quartermaster.ListAliasedTenantsForClusterResponse
+	(*ListActiveTenantsRequest)(nil),             // 25: quartermaster.ListActiveTenantsRequest
+	(*ListActiveTenantsResponse)(nil),            // 26: quartermaster.ListActiveTenantsResponse
+	(*GetClusterRoutingRequest)(nil),             // 27: quartermaster.GetClusterRoutingRequest
+	(*ClusterRoutingResponse)(nil),               // 28: quartermaster.ClusterRoutingResponse
+	(*GetClusterRequest)(nil),                    // 29: quartermaster.GetClusterRequest
+	(*InfrastructureCluster)(nil),                // 30: quartermaster.InfrastructureCluster
+	(*ClusterResponse)(nil),                      // 31: quartermaster.ClusterResponse
+	(*ListClustersRequest)(nil),                  // 32: quartermaster.ListClustersRequest
+	(*ListClustersResponse)(nil),                 // 33: quartermaster.ListClustersResponse
+	(*CreateClusterRequest)(nil),                 // 34: quartermaster.CreateClusterRequest
+	(*UpdateClusterRequest)(nil),                 // 35: quartermaster.UpdateClusterRequest
+	(*UpdateClusterMeshConfigRequest)(nil),       // 36: quartermaster.UpdateClusterMeshConfigRequest
+	(*UpdateClusterMeshConfigResponse)(nil),      // 37: quartermaster.UpdateClusterMeshConfigResponse
+	(*ListClustersForTenantRequest)(nil),         // 38: quartermaster.ListClustersForTenantRequest
+	(*ClusterAccessEntry)(nil),                   // 39: quartermaster.ClusterAccessEntry
+	(*ClustersAccessResponse)(nil),               // 40: quartermaster.ClustersAccessResponse
+	(*GrantClusterAccessRequest)(nil),            // 41: quartermaster.GrantClusterAccessRequest
+	(*SubscribeToClusterRequest)(nil),            // 42: quartermaster.SubscribeToClusterRequest
+	(*BootstrapClusterAccessRequest)(nil),        // 43: quartermaster.BootstrapClusterAccessRequest
+	(*DeactivateClusterAccessRequest)(nil),       // 44: quartermaster.DeactivateClusterAccessRequest
+	(*ListTenantClusterAccessRequest)(nil),       // 45: quartermaster.ListTenantClusterAccessRequest
+	(*TenantClusterAccessRow)(nil),               // 46: quartermaster.TenantClusterAccessRow
+	(*ListTenantClusterAccessResponse)(nil),      // 47: quartermaster.ListTenantClusterAccessResponse
+	(*TenantResourceLimits)(nil),                 // 48: quartermaster.TenantResourceLimits
+	(*UnsubscribeFromClusterRequest)(nil),        // 49: quartermaster.UnsubscribeFromClusterRequest
+	(*ListMySubscriptionsRequest)(nil),           // 50: quartermaster.ListMySubscriptionsRequest
+	(*MarketplaceClusterEntry)(nil),              // 51: quartermaster.MarketplaceClusterEntry
+	(*ListMarketplaceClustersRequest)(nil),       // 52: quartermaster.ListMarketplaceClustersRequest
+	(*ListMarketplaceClustersResponse)(nil),      // 53: quartermaster.ListMarketplaceClustersResponse
+	(*GetMarketplaceClusterRequest)(nil),         // 54: quartermaster.GetMarketplaceClusterRequest
+	(*UpdateClusterMarketplaceRequest)(nil),      // 55: quartermaster.UpdateClusterMarketplaceRequest
+	(*GetClusterMetadataBatchRequest)(nil),       // 56: quartermaster.GetClusterMetadataBatchRequest
+	(*GetClusterMetadataBatchResponse)(nil),      // 57: quartermaster.GetClusterMetadataBatchResponse
+	(*ClusterMetadata)(nil),                      // 58: quartermaster.ClusterMetadata
+	(*CreatePrivateClusterRequest)(nil),          // 59: quartermaster.CreatePrivateClusterRequest
+	(*CreatePrivateClusterResponse)(nil),         // 60: quartermaster.CreatePrivateClusterResponse
+	(*ClusterInvite)(nil),                        // 61: quartermaster.ClusterInvite
+	(*CreateClusterInviteRequest)(nil),           // 62: quartermaster.CreateClusterInviteRequest
+	(*RevokeClusterInviteRequest)(nil),           // 63: quartermaster.RevokeClusterInviteRequest
+	(*ListClusterInvitesRequest)(nil),            // 64: quartermaster.ListClusterInvitesRequest
+	(*ListMyClusterInvitesRequest)(nil),          // 65: quartermaster.ListMyClusterInvitesRequest
+	(*ListClusterInvitesResponse)(nil),           // 66: quartermaster.ListClusterInvitesResponse
+	(*ClusterSubscription)(nil),                  // 67: quartermaster.ClusterSubscription
+	(*RequestClusterSubscriptionRequest)(nil),    // 68: quartermaster.RequestClusterSubscriptionRequest
+	(*AcceptClusterInviteRequest)(nil),           // 69: quartermaster.AcceptClusterInviteRequest
+	(*ListPendingSubscriptionsRequest)(nil),      // 70: quartermaster.ListPendingSubscriptionsRequest
+	(*ListPendingSubscriptionsResponse)(nil),     // 71: quartermaster.ListPendingSubscriptionsResponse
+	(*ApproveClusterSubscriptionRequest)(nil),    // 72: quartermaster.ApproveClusterSubscriptionRequest
+	(*RejectClusterSubscriptionRequest)(nil),     // 73: quartermaster.RejectClusterSubscriptionRequest
+	(*GetNodeRequest)(nil),                       // 74: quartermaster.GetNodeRequest
+	(*InfrastructureNode)(nil),                   // 75: quartermaster.InfrastructureNode
+	(*NodeResponse)(nil),                         // 76: quartermaster.NodeResponse
+	(*ListNodesRequest)(nil),                     // 77: quartermaster.ListNodesRequest
+	(*ListNodesResponse)(nil),                    // 78: quartermaster.ListNodesResponse
+	(*ListHealthyNodesForDNSRequest)(nil),        // 79: quartermaster.ListHealthyNodesForDNSRequest
+	(*ListHealthyNodesForDNSResponse)(nil),       // 80: quartermaster.ListHealthyNodesForDNSResponse
+	(*CreateNodeRequest)(nil),                    // 81: quartermaster.CreateNodeRequest
+	(*UpdateNodeStatusRequest)(nil),              // 82: quartermaster.UpdateNodeStatusRequest
+	(*EdgeRelease)(nil),                          // 83: quartermaster.EdgeRelease
+	(*ListEdgeReleasesRequest)(nil),              // 84: quartermaster.ListEdgeReleasesRequest
+	(*ListEdgeReleasesResponse)(nil),             // 85: quartermaster.ListEdgeReleasesResponse
+	(*UpsertEdgeReleaseRequest)(nil),             // 86: quartermaster.UpsertEdgeReleaseRequest
+	(*EdgeReleaseResponse)(nil),                  // 87: quartermaster.EdgeReleaseResponse
+	(*ClusterReleaseTarget)(nil),                 // 88: quartermaster.ClusterReleaseTarget
+	(*GetClusterReleaseTargetRequest)(nil),       // 89: quartermaster.GetClusterReleaseTargetRequest
+	(*ListClusterReleaseTargetsRequest)(nil),     // 90: quartermaster.ListClusterReleaseTargetsRequest
+	(*ListClusterReleaseTargetsResponse)(nil),    // 91: quartermaster.ListClusterReleaseTargetsResponse
+	(*SetClusterReleaseTargetRequest)(nil),       // 92: quartermaster.SetClusterReleaseTargetRequest
+	(*ClusterReleaseTargetResponse)(nil),         // 93: quartermaster.ClusterReleaseTargetResponse
+	(*ResolveNodeFingerprintRequest)(nil),        // 94: quartermaster.ResolveNodeFingerprintRequest
+	(*ResolveNodeFingerprintResponse)(nil),       // 95: quartermaster.ResolveNodeFingerprintResponse
+	(*GetNodeOwnerRequest)(nil),                  // 96: quartermaster.GetNodeOwnerRequest
+	(*GetNodeByLogicalNameRequest)(nil),          // 97: quartermaster.GetNodeByLogicalNameRequest
+	(*UpdateNodeHardwareRequest)(nil),            // 98: quartermaster.UpdateNodeHardwareRequest
+	(*ReportAliveNodesRequest)(nil),              // 99: quartermaster.ReportAliveNodesRequest
+	(*NodeOwnerResponse)(nil),                    // 100: quartermaster.NodeOwnerResponse
+	(*BootstrapEdgeNodeRequest)(nil),             // 101: quartermaster.BootstrapEdgeNodeRequest
+	(*BootstrapEdgeNodeResponse)(nil),            // 102: quartermaster.BootstrapEdgeNodeResponse
+	(*BootstrapInfrastructureNodeRequest)(nil),   // 103: quartermaster.BootstrapInfrastructureNodeRequest
+	(*BootstrapInfrastructureNodeResponse)(nil),  // 104: quartermaster.BootstrapInfrastructureNodeResponse
+	(*BootstrapServiceRequest)(nil),              // 105: quartermaster.BootstrapServiceRequest
+	(*BootstrapServiceResponse)(nil),             // 106: quartermaster.BootstrapServiceResponse
+	(*ServiceDiscoveryRequest)(nil),              // 107: quartermaster.ServiceDiscoveryRequest
+	(*ServiceDiscoveryResponse)(nil),             // 108: quartermaster.ServiceDiscoveryResponse
+	(*ServiceInstance)(nil),                      // 109: quartermaster.ServiceInstance
+	(*CreateBootstrapTokenRequest)(nil),          // 110: quartermaster.CreateBootstrapTokenRequest
+	(*BootstrapToken)(nil),                       // 111: quartermaster.BootstrapToken
+	(*CreateBootstrapTokenResponse)(nil),         // 112: quartermaster.CreateBootstrapTokenResponse
+	(*ListBootstrapTokensRequest)(nil),           // 113: quartermaster.ListBootstrapTokensRequest
+	(*ListBootstrapTokensResponse)(nil),          // 114: quartermaster.ListBootstrapTokensResponse
+	(*RevokeBootstrapTokenRequest)(nil),          // 115: quartermaster.RevokeBootstrapTokenRequest
+	(*ValidateBootstrapTokenRequest)(nil),        // 116: quartermaster.ValidateBootstrapTokenRequest
+	(*ValidateBootstrapTokenResponse)(nil),       // 117: quartermaster.ValidateBootstrapTokenResponse
+	(*InfrastructureSyncRequest)(nil),            // 118: quartermaster.InfrastructureSyncRequest
+	(*NodeResourceSnapshot)(nil),                 // 119: quartermaster.NodeResourceSnapshot
+	(*InfrastructurePeer)(nil),                   // 120: quartermaster.InfrastructurePeer
+	(*InfrastructureSyncResponse)(nil),           // 121: quartermaster.InfrastructureSyncResponse
+	(*ServiceEndpoints)(nil),                     // 122: quartermaster.ServiceEndpoints
+	(*ResolveTenantRequest)(nil),                 // 123: quartermaster.ResolveTenantRequest
+	(*ResolveTenantAliasesRequest)(nil),          // 124: quartermaster.ResolveTenantAliasesRequest
+	(*ResolveTenantAliasesResponse)(nil),         // 125: quartermaster.ResolveTenantAliasesResponse
+	(*ResolveTenantResponse)(nil),                // 126: quartermaster.ResolveTenantResponse
+	(*ListClustersAvailableRequest)(nil),         // 127: quartermaster.ListClustersAvailableRequest
+	(*AvailableClusterEntry)(nil),                // 128: quartermaster.AvailableClusterEntry
+	(*ClustersAvailableResponse)(nil),            // 129: quartermaster.ClustersAvailableResponse
+	(*ListServicesRequest)(nil),                  // 130: quartermaster.ListServicesRequest
+	(*Service)(nil),                              // 131: quartermaster.Service
+	(*ListServicesResponse)(nil),                 // 132: quartermaster.ListServicesResponse
+	(*ListClusterServicesRequest)(nil),           // 133: quartermaster.ListClusterServicesRequest
+	(*ClusterServiceAssignment)(nil),             // 134: quartermaster.ClusterServiceAssignment
+	(*ListClusterServicesResponse)(nil),          // 135: quartermaster.ListClusterServicesResponse
+	(*ListServiceInstancesRequest)(nil),          // 136: quartermaster.ListServiceInstancesRequest
+	(*ListServiceInstancesResponse)(nil),         // 137: quartermaster.ListServiceInstancesResponse
+	(*ListServicesHealthRequest)(nil),            // 138: quartermaster.ListServicesHealthRequest
+	(*GetServiceHealthRequest)(nil),              // 139: quartermaster.GetServiceHealthRequest
+	(*ServiceInstanceHealth)(nil),                // 140: quartermaster.ServiceInstanceHealth
+	(*ListServicesHealthResponse)(nil),           // 141: quartermaster.ListServicesHealthResponse
+	(*TLSBundle)(nil),                            // 142: quartermaster.TLSBundle
+	(*UpsertTLSBundleRequest)(nil),               // 143: quartermaster.UpsertTLSBundleRequest
+	(*TLSBundleResponse)(nil),                    // 144: quartermaster.TLSBundleResponse
+	(*ListTLSBundlesRequest)(nil),                // 145: quartermaster.ListTLSBundlesRequest
+	(*ListTLSBundlesResponse)(nil),               // 146: quartermaster.ListTLSBundlesResponse
+	(*IngressSite)(nil),                          // 147: quartermaster.IngressSite
+	(*UpsertIngressSiteRequest)(nil),             // 148: quartermaster.UpsertIngressSiteRequest
+	(*IngressSiteResponse)(nil),                  // 149: quartermaster.IngressSiteResponse
+	(*ListIngressSitesRequest)(nil),              // 150: quartermaster.ListIngressSitesRequest
+	(*ListIngressSitesResponse)(nil),             // 151: quartermaster.ListIngressSitesResponse
+	(*GetServicePoolStatusRequest)(nil),          // 152: quartermaster.GetServicePoolStatusRequest
+	(*ServicePoolClusterEntry)(nil),              // 153: quartermaster.ServicePoolClusterEntry
+	(*ServiceInstanceAssignment)(nil),            // 154: quartermaster.ServiceInstanceAssignment
+	(*GetServicePoolStatusResponse)(nil),         // 155: quartermaster.GetServicePoolStatusResponse
+	(*AddToServicePoolRequest)(nil),              // 156: quartermaster.AddToServicePoolRequest
+	(*AddToServicePoolResponse)(nil),             // 157: quartermaster.AddToServicePoolResponse
+	(*DrainServiceInstanceRequest)(nil),          // 158: quartermaster.DrainServiceInstanceRequest
+	(*DrainServiceInstanceResponse)(nil),         // 159: quartermaster.DrainServiceInstanceResponse
+	(*ListPeersRequest)(nil),                     // 160: quartermaster.ListPeersRequest
+	(*PeerCluster)(nil),                          // 161: quartermaster.PeerCluster
+	(*ListPeersResponse)(nil),                    // 162: quartermaster.ListPeersResponse
+	(*TenantClusterPeer)(nil),                    // 163: quartermaster.TenantClusterPeer
+	(*AssignServiceToClusterRequest)(nil),        // 164: quartermaster.AssignServiceToClusterRequest
+	(*UnassignServiceFromClusterRequest)(nil),    // 165: quartermaster.UnassignServiceFromClusterRequest
+	(*EnableSelfHostingRequest)(nil),             // 166: quartermaster.EnableSelfHostingRequest
+	(*EnableSelfHostingResponse)(nil),            // 167: quartermaster.EnableSelfHostingResponse
+	(*CreateEnrollmentTokenRequest)(nil),         // 168: quartermaster.CreateEnrollmentTokenRequest
+	nil,                                          // 169: quartermaster.GetClusterMetadataBatchResponse.ClustersEntry
+	nil,                                          // 170: quartermaster.BootstrapInfrastructureNodeResponse.SeedServiceEndpointsEntry
+	nil,                                          // 171: quartermaster.BootstrapServiceRequest.MetadataEntry
+	nil,                                          // 172: quartermaster.ServiceInstance.MetadataEntry
+	nil,                                          // 173: quartermaster.InfrastructureSyncResponse.ServiceEndpointsEntry
+	nil,                                          // 174: quartermaster.ResolveTenantAliasesResponse.MappingEntry
+	(*timestamppb.Timestamp)(nil),                // 175: google.protobuf.Timestamp
+	(*CursorPaginationRequest)(nil),              // 176: common.CursorPaginationRequest
+	(*CursorPaginationResponse)(nil),             // 177: common.CursorPaginationResponse
+	(*SignupAttribution)(nil),                    // 178: common.SignupAttribution
+	(*structpb.Struct)(nil),                      // 179: google.protobuf.Struct
+	(*emptypb.Empty)(nil),                        // 180: google.protobuf.Empty
 }
 var file_quartermaster_proto_depIdxs = []int32{
 	10,  // 0: quartermaster.GetTenantResponse.tenant:type_name -> quartermaster.Tenant
-	172, // 1: quartermaster.Tenant.created_at:type_name -> google.protobuf.Timestamp
-	172, // 2: quartermaster.Tenant.updated_at:type_name -> google.protobuf.Timestamp
-	173, // 3: quartermaster.ListTenantsRequest.pagination:type_name -> common.CursorPaginationRequest
+	175, // 1: quartermaster.Tenant.created_at:type_name -> google.protobuf.Timestamp
+	175, // 2: quartermaster.Tenant.updated_at:type_name -> google.protobuf.Timestamp
+	176, // 3: quartermaster.ListTenantsRequest.pagination:type_name -> common.CursorPaginationRequest
 	10,  // 4: quartermaster.ListTenantsResponse.tenants:type_name -> quartermaster.Tenant
-	174, // 5: quartermaster.ListTenantsResponse.pagination:type_name -> common.CursorPaginationResponse
-	175, // 6: quartermaster.CreateTenantRequest.attribution:type_name -> common.SignupAttribution
+	177, // 5: quartermaster.ListTenantsResponse.pagination:type_name -> common.CursorPaginationResponse
+	178, // 6: quartermaster.CreateTenantRequest.attribution:type_name -> common.SignupAttribution
 	10,  // 7: quartermaster.CreateTenantResponse.tenant:type_name -> quartermaster.Tenant
-	173, // 8: quartermaster.GetTenantsByClusterRequest.pagination:type_name -> common.CursorPaginationRequest
+	176, // 8: quartermaster.GetTenantsByClusterRequest.pagination:type_name -> common.CursorPaginationRequest
 	10,  // 9: quartermaster.GetTenantsByClusterResponse.tenants:type_name -> quartermaster.Tenant
-	174, // 10: quartermaster.GetTenantsByClusterResponse.pagination:type_name -> common.CursorPaginationResponse
-	160, // 11: quartermaster.ClusterRoutingResponse.cluster_peers:type_name -> quartermaster.TenantClusterPeer
-	45,  // 12: quartermaster.ClusterRoutingResponse.tenant_resource_limits:type_name -> quartermaster.TenantResourceLimits
-	172, // 13: quartermaster.InfrastructureCluster.created_at:type_name -> google.protobuf.Timestamp
-	172, // 14: quartermaster.InfrastructureCluster.updated_at:type_name -> google.protobuf.Timestamp
-	0,   // 15: quartermaster.InfrastructureCluster.visibility:type_name -> quartermaster.ClusterVisibility
-	1,   // 16: quartermaster.InfrastructureCluster.pricing_model:type_name -> quartermaster.ClusterPricingModel
-	27,  // 17: quartermaster.ClusterResponse.cluster:type_name -> quartermaster.InfrastructureCluster
-	173, // 18: quartermaster.ListClustersRequest.pagination:type_name -> common.CursorPaginationRequest
-	27,  // 19: quartermaster.ListClustersResponse.clusters:type_name -> quartermaster.InfrastructureCluster
-	174, // 20: quartermaster.ListClustersResponse.pagination:type_name -> common.CursorPaginationResponse
-	173, // 21: quartermaster.ListClustersForTenantRequest.pagination:type_name -> common.CursorPaginationRequest
-	176, // 22: quartermaster.ClusterAccessEntry.resource_limits:type_name -> google.protobuf.Struct
-	36,  // 23: quartermaster.ClustersAccessResponse.clusters:type_name -> quartermaster.ClusterAccessEntry
-	174, // 24: quartermaster.ClustersAccessResponse.pagination:type_name -> common.CursorPaginationResponse
-	176, // 25: quartermaster.GrantClusterAccessRequest.resource_limits:type_name -> google.protobuf.Struct
-	172, // 26: quartermaster.GrantClusterAccessRequest.expires_at:type_name -> google.protobuf.Timestamp
-	45,  // 27: quartermaster.BootstrapClusterAccessRequest.resource_limits:type_name -> quartermaster.TenantResourceLimits
-	43,  // 28: quartermaster.ListTenantClusterAccessResponse.rows:type_name -> quartermaster.TenantClusterAccessRow
-	173, // 29: quartermaster.ListMySubscriptionsRequest.pagination:type_name -> common.CursorPaginationRequest
-	0,   // 30: quartermaster.MarketplaceClusterEntry.visibility:type_name -> quartermaster.ClusterVisibility
-	1,   // 31: quartermaster.MarketplaceClusterEntry.pricing_model:type_name -> quartermaster.ClusterPricingModel
-	2,   // 32: quartermaster.MarketplaceClusterEntry.subscription_status:type_name -> quartermaster.ClusterSubscriptionStatus
-	172, // 33: quartermaster.MarketplaceClusterEntry.created_at:type_name -> google.protobuf.Timestamp
-	173, // 34: quartermaster.ListMarketplaceClustersRequest.pagination:type_name -> common.CursorPaginationRequest
-	48,  // 35: quartermaster.ListMarketplaceClustersResponse.clusters:type_name -> quartermaster.MarketplaceClusterEntry
-	174, // 36: quartermaster.ListMarketplaceClustersResponse.pagination:type_name -> common.CursorPaginationResponse
-	0,   // 37: quartermaster.UpdateClusterMarketplaceRequest.visibility:type_name -> quartermaster.ClusterVisibility
-	1,   // 38: quartermaster.UpdateClusterMarketplaceRequest.pricing_model:type_name -> quartermaster.ClusterPricingModel
-	166, // 39: quartermaster.GetClusterMetadataBatchResponse.clusters:type_name -> quartermaster.GetClusterMetadataBatchResponse.ClustersEntry
-	27,  // 40: quartermaster.CreatePrivateClusterResponse.cluster:type_name -> quartermaster.InfrastructureCluster
-	108, // 41: quartermaster.CreatePrivateClusterResponse.bootstrap_token:type_name -> quartermaster.BootstrapToken
-	176, // 42: quartermaster.ClusterInvite.resource_limits:type_name -> google.protobuf.Struct
-	172, // 43: quartermaster.ClusterInvite.created_at:type_name -> google.protobuf.Timestamp
-	172, // 44: quartermaster.ClusterInvite.expires_at:type_name -> google.protobuf.Timestamp
-	172, // 45: quartermaster.ClusterInvite.accepted_at:type_name -> google.protobuf.Timestamp
-	176, // 46: quartermaster.CreateClusterInviteRequest.resource_limits:type_name -> google.protobuf.Struct
-	173, // 47: quartermaster.ListClusterInvitesRequest.pagination:type_name -> common.CursorPaginationRequest
-	173, // 48: quartermaster.ListMyClusterInvitesRequest.pagination:type_name -> common.CursorPaginationRequest
-	58,  // 49: quartermaster.ListClusterInvitesResponse.invites:type_name -> quartermaster.ClusterInvite
-	174, // 50: quartermaster.ListClusterInvitesResponse.pagination:type_name -> common.CursorPaginationResponse
-	2,   // 51: quartermaster.ClusterSubscription.subscription_status:type_name -> quartermaster.ClusterSubscriptionStatus
-	176, // 52: quartermaster.ClusterSubscription.resource_limits:type_name -> google.protobuf.Struct
-	172, // 53: quartermaster.ClusterSubscription.requested_at:type_name -> google.protobuf.Timestamp
-	172, // 54: quartermaster.ClusterSubscription.approved_at:type_name -> google.protobuf.Timestamp
-	172, // 55: quartermaster.ClusterSubscription.expires_at:type_name -> google.protobuf.Timestamp
-	172, // 56: quartermaster.ClusterSubscription.created_at:type_name -> google.protobuf.Timestamp
-	172, // 57: quartermaster.ClusterSubscription.updated_at:type_name -> google.protobuf.Timestamp
-	173, // 58: quartermaster.ListPendingSubscriptionsRequest.pagination:type_name -> common.CursorPaginationRequest
-	64,  // 59: quartermaster.ListPendingSubscriptionsResponse.subscriptions:type_name -> quartermaster.ClusterSubscription
-	174, // 60: quartermaster.ListPendingSubscriptionsResponse.pagination:type_name -> common.CursorPaginationResponse
-	172, // 61: quartermaster.InfrastructureNode.last_heartbeat:type_name -> google.protobuf.Timestamp
-	176, // 62: quartermaster.InfrastructureNode.tags:type_name -> google.protobuf.Struct
-	176, // 63: quartermaster.InfrastructureNode.metadata:type_name -> google.protobuf.Struct
-	172, // 64: quartermaster.InfrastructureNode.created_at:type_name -> google.protobuf.Timestamp
-	172, // 65: quartermaster.InfrastructureNode.updated_at:type_name -> google.protobuf.Timestamp
-	116, // 66: quartermaster.InfrastructureNode.resource_snapshot:type_name -> quartermaster.NodeResourceSnapshot
-	72,  // 67: quartermaster.NodeResponse.node:type_name -> quartermaster.InfrastructureNode
-	173, // 68: quartermaster.ListNodesRequest.pagination:type_name -> common.CursorPaginationRequest
-	72,  // 69: quartermaster.ListNodesResponse.nodes:type_name -> quartermaster.InfrastructureNode
-	174, // 70: quartermaster.ListNodesResponse.pagination:type_name -> common.CursorPaginationResponse
-	72,  // 71: quartermaster.ListHealthyNodesForDNSResponse.nodes:type_name -> quartermaster.InfrastructureNode
-	176, // 72: quartermaster.CreateNodeRequest.tags:type_name -> google.protobuf.Struct
-	176, // 73: quartermaster.CreateNodeRequest.metadata:type_name -> google.protobuf.Struct
-	172, // 74: quartermaster.EdgeRelease.published_at:type_name -> google.protobuf.Timestamp
-	80,  // 75: quartermaster.ListEdgeReleasesResponse.releases:type_name -> quartermaster.EdgeRelease
-	80,  // 76: quartermaster.UpsertEdgeReleaseRequest.release:type_name -> quartermaster.EdgeRelease
-	80,  // 77: quartermaster.EdgeReleaseResponse.release:type_name -> quartermaster.EdgeRelease
-	172, // 78: quartermaster.ClusterReleaseTarget.updated_at:type_name -> google.protobuf.Timestamp
-	85,  // 79: quartermaster.ListClusterReleaseTargetsResponse.targets:type_name -> quartermaster.ClusterReleaseTarget
-	85,  // 80: quartermaster.SetClusterReleaseTargetRequest.target:type_name -> quartermaster.ClusterReleaseTarget
-	85,  // 81: quartermaster.ClusterReleaseTargetResponse.target:type_name -> quartermaster.ClusterReleaseTarget
-	176, // 82: quartermaster.BootstrapEdgeNodeRequest.labels:type_name -> google.protobuf.Struct
-	117, // 83: quartermaster.BootstrapInfrastructureNodeResponse.seed_peers:type_name -> quartermaster.InfrastructurePeer
-	167, // 84: quartermaster.BootstrapInfrastructureNodeResponse.seed_service_endpoints:type_name -> quartermaster.BootstrapInfrastructureNodeResponse.SeedServiceEndpointsEntry
-	168, // 85: quartermaster.BootstrapServiceRequest.metadata:type_name -> quartermaster.BootstrapServiceRequest.MetadataEntry
-	72,  // 86: quartermaster.BootstrapServiceResponse.node:type_name -> quartermaster.InfrastructureNode
-	173, // 87: quartermaster.ServiceDiscoveryRequest.pagination:type_name -> common.CursorPaginationRequest
-	106, // 88: quartermaster.ServiceDiscoveryResponse.instances:type_name -> quartermaster.ServiceInstance
-	174, // 89: quartermaster.ServiceDiscoveryResponse.pagination:type_name -> common.CursorPaginationResponse
-	172, // 90: quartermaster.ServiceInstance.started_at:type_name -> google.protobuf.Timestamp
-	172, // 91: quartermaster.ServiceInstance.stopped_at:type_name -> google.protobuf.Timestamp
-	172, // 92: quartermaster.ServiceInstance.last_health_check:type_name -> google.protobuf.Timestamp
-	172, // 93: quartermaster.ServiceInstance.created_at:type_name -> google.protobuf.Timestamp
-	172, // 94: quartermaster.ServiceInstance.updated_at:type_name -> google.protobuf.Timestamp
-	169, // 95: quartermaster.ServiceInstance.metadata:type_name -> quartermaster.ServiceInstance.MetadataEntry
-	176, // 96: quartermaster.CreateBootstrapTokenRequest.metadata:type_name -> google.protobuf.Struct
-	176, // 97: quartermaster.BootstrapToken.metadata:type_name -> google.protobuf.Struct
-	172, // 98: quartermaster.BootstrapToken.expires_at:type_name -> google.protobuf.Timestamp
-	172, // 99: quartermaster.BootstrapToken.used_at:type_name -> google.protobuf.Timestamp
-	172, // 100: quartermaster.BootstrapToken.created_at:type_name -> google.protobuf.Timestamp
-	108, // 101: quartermaster.CreateBootstrapTokenResponse.token:type_name -> quartermaster.BootstrapToken
-	173, // 102: quartermaster.ListBootstrapTokensRequest.pagination:type_name -> common.CursorPaginationRequest
-	108, // 103: quartermaster.ListBootstrapTokensResponse.tokens:type_name -> quartermaster.BootstrapToken
-	174, // 104: quartermaster.ListBootstrapTokensResponse.pagination:type_name -> common.CursorPaginationResponse
-	176, // 105: quartermaster.ValidateBootstrapTokenResponse.metadata:type_name -> google.protobuf.Struct
-	116, // 106: quartermaster.InfrastructureSyncRequest.resource_snapshot:type_name -> quartermaster.NodeResourceSnapshot
-	172, // 107: quartermaster.NodeResourceSnapshot.collected_at:type_name -> google.protobuf.Timestamp
-	117, // 108: quartermaster.InfrastructureSyncResponse.peers:type_name -> quartermaster.InfrastructurePeer
-	170, // 109: quartermaster.InfrastructureSyncResponse.service_endpoints:type_name -> quartermaster.InfrastructureSyncResponse.ServiceEndpointsEntry
-	171, // 110: quartermaster.ResolveTenantAliasesResponse.mapping:type_name -> quartermaster.ResolveTenantAliasesResponse.MappingEntry
-	173, // 111: quartermaster.ListClustersAvailableRequest.pagination:type_name -> common.CursorPaginationRequest
-	125, // 112: quartermaster.ClustersAvailableResponse.clusters:type_name -> quartermaster.AvailableClusterEntry
-	174, // 113: quartermaster.ClustersAvailableResponse.pagination:type_name -> common.CursorPaginationResponse
-	173, // 114: quartermaster.ListServicesRequest.pagination:type_name -> common.CursorPaginationRequest
-	176, // 115: quartermaster.Service.tags:type_name -> google.protobuf.Struct
-	172, // 116: quartermaster.Service.created_at:type_name -> google.protobuf.Timestamp
-	172, // 117: quartermaster.Service.updated_at:type_name -> google.protobuf.Timestamp
-	128, // 118: quartermaster.ListServicesResponse.services:type_name -> quartermaster.Service
-	174, // 119: quartermaster.ListServicesResponse.pagination:type_name -> common.CursorPaginationResponse
-	173, // 120: quartermaster.ListClusterServicesRequest.pagination:type_name -> common.CursorPaginationRequest
-	176, // 121: quartermaster.ClusterServiceAssignment.config_blob:type_name -> google.protobuf.Struct
-	176, // 122: quartermaster.ClusterServiceAssignment.environment_vars:type_name -> google.protobuf.Struct
-	172, // 123: quartermaster.ClusterServiceAssignment.last_deployed:type_name -> google.protobuf.Timestamp
-	172, // 124: quartermaster.ClusterServiceAssignment.created_at:type_name -> google.protobuf.Timestamp
-	172, // 125: quartermaster.ClusterServiceAssignment.updated_at:type_name -> google.protobuf.Timestamp
-	131, // 126: quartermaster.ListClusterServicesResponse.services:type_name -> quartermaster.ClusterServiceAssignment
-	174, // 127: quartermaster.ListClusterServicesResponse.pagination:type_name -> common.CursorPaginationResponse
-	173, // 128: quartermaster.ListServiceInstancesRequest.pagination:type_name -> common.CursorPaginationRequest
-	106, // 129: quartermaster.ListServiceInstancesResponse.instances:type_name -> quartermaster.ServiceInstance
-	174, // 130: quartermaster.ListServiceInstancesResponse.pagination:type_name -> common.CursorPaginationResponse
-	173, // 131: quartermaster.ListServicesHealthRequest.pagination:type_name -> common.CursorPaginationRequest
-	172, // 132: quartermaster.ServiceInstanceHealth.last_health_check:type_name -> google.protobuf.Timestamp
-	137, // 133: quartermaster.ListServicesHealthResponse.instances:type_name -> quartermaster.ServiceInstanceHealth
-	174, // 134: quartermaster.ListServicesHealthResponse.pagination:type_name -> common.CursorPaginationResponse
-	176, // 135: quartermaster.TLSBundle.metadata:type_name -> google.protobuf.Struct
-	172, // 136: quartermaster.TLSBundle.created_at:type_name -> google.protobuf.Timestamp
-	172, // 137: quartermaster.TLSBundle.updated_at:type_name -> google.protobuf.Timestamp
-	139, // 138: quartermaster.UpsertTLSBundleRequest.bundle:type_name -> quartermaster.TLSBundle
-	139, // 139: quartermaster.TLSBundleResponse.bundle:type_name -> quartermaster.TLSBundle
-	173, // 140: quartermaster.ListTLSBundlesRequest.pagination:type_name -> common.CursorPaginationRequest
-	139, // 141: quartermaster.ListTLSBundlesResponse.bundles:type_name -> quartermaster.TLSBundle
-	174, // 142: quartermaster.ListTLSBundlesResponse.pagination:type_name -> common.CursorPaginationResponse
-	176, // 143: quartermaster.IngressSite.metadata:type_name -> google.protobuf.Struct
-	172, // 144: quartermaster.IngressSite.created_at:type_name -> google.protobuf.Timestamp
-	172, // 145: quartermaster.IngressSite.updated_at:type_name -> google.protobuf.Timestamp
-	144, // 146: quartermaster.UpsertIngressSiteRequest.site:type_name -> quartermaster.IngressSite
-	144, // 147: quartermaster.IngressSiteResponse.site:type_name -> quartermaster.IngressSite
-	173, // 148: quartermaster.ListIngressSitesRequest.pagination:type_name -> common.CursorPaginationRequest
-	144, // 149: quartermaster.ListIngressSitesResponse.sites:type_name -> quartermaster.IngressSite
-	174, // 150: quartermaster.ListIngressSitesResponse.pagination:type_name -> common.CursorPaginationResponse
-	106, // 151: quartermaster.ServicePoolClusterEntry.instances:type_name -> quartermaster.ServiceInstance
-	172, // 152: quartermaster.ServiceInstanceAssignment.created_at:type_name -> google.protobuf.Timestamp
-	150, // 153: quartermaster.GetServicePoolStatusResponse.clusters:type_name -> quartermaster.ServicePoolClusterEntry
-	151, // 154: quartermaster.GetServicePoolStatusResponse.assignments:type_name -> quartermaster.ServiceInstanceAssignment
-	158, // 155: quartermaster.ListPeersResponse.peers:type_name -> quartermaster.PeerCluster
-	27,  // 156: quartermaster.EnableSelfHostingResponse.cluster:type_name -> quartermaster.InfrastructureCluster
-	108, // 157: quartermaster.EnableSelfHostingResponse.bootstrap_token:type_name -> quartermaster.BootstrapToken
-	55,  // 158: quartermaster.GetClusterMetadataBatchResponse.ClustersEntry.value:type_name -> quartermaster.ClusterMetadata
-	119, // 159: quartermaster.BootstrapInfrastructureNodeResponse.SeedServiceEndpointsEntry.value:type_name -> quartermaster.ServiceEndpoints
-	119, // 160: quartermaster.InfrastructureSyncResponse.ServiceEndpointsEntry.value:type_name -> quartermaster.ServiceEndpoints
-	5,   // 161: quartermaster.TenantService.GetTenant:input_type -> quartermaster.GetTenantRequest
-	7,   // 162: quartermaster.TenantService.ValidateTenant:input_type -> quartermaster.ValidateTenantRequest
-	120, // 163: quartermaster.TenantService.ResolveTenant:input_type -> quartermaster.ResolveTenantRequest
-	121, // 164: quartermaster.TenantService.ResolveTenantAliases:input_type -> quartermaster.ResolveTenantAliasesRequest
-	24,  // 165: quartermaster.TenantService.GetClusterRouting:input_type -> quartermaster.GetClusterRoutingRequest
-	11,  // 166: quartermaster.TenantService.ListTenants:input_type -> quartermaster.ListTenantsRequest
-	13,  // 167: quartermaster.TenantService.CreateTenant:input_type -> quartermaster.CreateTenantRequest
-	15,  // 168: quartermaster.TenantService.UpdateTenant:input_type -> quartermaster.UpdateTenantRequest
-	16,  // 169: quartermaster.TenantService.DeleteTenant:input_type -> quartermaster.DeleteTenantRequest
-	17,  // 170: quartermaster.TenantService.GetTenantCluster:input_type -> quartermaster.GetTenantClusterRequest
-	18,  // 171: quartermaster.TenantService.UpdateTenantCluster:input_type -> quartermaster.UpdateTenantClusterRequest
-	19,  // 172: quartermaster.TenantService.GetTenantsBatch:input_type -> quartermaster.GetTenantsBatchRequest
-	20,  // 173: quartermaster.TenantService.GetTenantsByCluster:input_type -> quartermaster.GetTenantsByClusterRequest
-	22,  // 174: quartermaster.TenantService.ListActiveTenants:input_type -> quartermaster.ListActiveTenantsRequest
-	26,  // 175: quartermaster.ClusterService.GetCluster:input_type -> quartermaster.GetClusterRequest
-	29,  // 176: quartermaster.ClusterService.ListClusters:input_type -> quartermaster.ListClustersRequest
-	31,  // 177: quartermaster.ClusterService.CreateCluster:input_type -> quartermaster.CreateClusterRequest
-	32,  // 178: quartermaster.ClusterService.UpdateCluster:input_type -> quartermaster.UpdateClusterRequest
-	33,  // 179: quartermaster.ClusterService.UpdateClusterMeshConfig:input_type -> quartermaster.UpdateClusterMeshConfigRequest
-	35,  // 180: quartermaster.ClusterService.ListClustersForTenant:input_type -> quartermaster.ListClustersForTenantRequest
-	124, // 181: quartermaster.ClusterService.ListClustersAvailable:input_type -> quartermaster.ListClustersAvailableRequest
-	38,  // 182: quartermaster.ClusterService.GrantClusterAccess:input_type -> quartermaster.GrantClusterAccessRequest
-	39,  // 183: quartermaster.ClusterService.SubscribeToCluster:input_type -> quartermaster.SubscribeToClusterRequest
-	40,  // 184: quartermaster.ClusterService.BootstrapClusterAccess:input_type -> quartermaster.BootstrapClusterAccessRequest
-	41,  // 185: quartermaster.ClusterService.DeactivateClusterAccess:input_type -> quartermaster.DeactivateClusterAccessRequest
-	42,  // 186: quartermaster.ClusterService.ListTenantClusterAccess:input_type -> quartermaster.ListTenantClusterAccessRequest
-	46,  // 187: quartermaster.ClusterService.UnsubscribeFromCluster:input_type -> quartermaster.UnsubscribeFromClusterRequest
-	47,  // 188: quartermaster.ClusterService.ListMySubscriptions:input_type -> quartermaster.ListMySubscriptionsRequest
-	49,  // 189: quartermaster.ClusterService.ListMarketplaceClusters:input_type -> quartermaster.ListMarketplaceClustersRequest
-	51,  // 190: quartermaster.ClusterService.GetMarketplaceCluster:input_type -> quartermaster.GetMarketplaceClusterRequest
-	52,  // 191: quartermaster.ClusterService.UpdateClusterMarketplace:input_type -> quartermaster.UpdateClusterMarketplaceRequest
-	56,  // 192: quartermaster.ClusterService.CreatePrivateCluster:input_type -> quartermaster.CreatePrivateClusterRequest
-	59,  // 193: quartermaster.ClusterService.CreateClusterInvite:input_type -> quartermaster.CreateClusterInviteRequest
-	60,  // 194: quartermaster.ClusterService.RevokeClusterInvite:input_type -> quartermaster.RevokeClusterInviteRequest
-	61,  // 195: quartermaster.ClusterService.ListClusterInvites:input_type -> quartermaster.ListClusterInvitesRequest
-	62,  // 196: quartermaster.ClusterService.ListMyClusterInvites:input_type -> quartermaster.ListMyClusterInvitesRequest
-	65,  // 197: quartermaster.ClusterService.RequestClusterSubscription:input_type -> quartermaster.RequestClusterSubscriptionRequest
-	66,  // 198: quartermaster.ClusterService.AcceptClusterInvite:input_type -> quartermaster.AcceptClusterInviteRequest
-	67,  // 199: quartermaster.ClusterService.ListPendingSubscriptions:input_type -> quartermaster.ListPendingSubscriptionsRequest
-	69,  // 200: quartermaster.ClusterService.ApproveClusterSubscription:input_type -> quartermaster.ApproveClusterSubscriptionRequest
-	70,  // 201: quartermaster.ClusterService.RejectClusterSubscription:input_type -> quartermaster.RejectClusterSubscriptionRequest
-	53,  // 202: quartermaster.ClusterService.GetClusterMetadataBatch:input_type -> quartermaster.GetClusterMetadataBatchRequest
-	157, // 203: quartermaster.ClusterService.ListPeers:input_type -> quartermaster.ListPeersRequest
-	161, // 204: quartermaster.ClusterService.AssignServiceToCluster:input_type -> quartermaster.AssignServiceToClusterRequest
-	162, // 205: quartermaster.ClusterService.UnassignServiceFromCluster:input_type -> quartermaster.UnassignServiceFromClusterRequest
-	163, // 206: quartermaster.ClusterService.EnableSelfHosting:input_type -> quartermaster.EnableSelfHostingRequest
-	165, // 207: quartermaster.ClusterService.CreateEnrollmentToken:input_type -> quartermaster.CreateEnrollmentTokenRequest
-	81,  // 208: quartermaster.ClusterService.ListEdgeReleases:input_type -> quartermaster.ListEdgeReleasesRequest
-	83,  // 209: quartermaster.ClusterService.UpsertEdgeRelease:input_type -> quartermaster.UpsertEdgeReleaseRequest
-	86,  // 210: quartermaster.ClusterService.GetClusterReleaseTarget:input_type -> quartermaster.GetClusterReleaseTargetRequest
-	87,  // 211: quartermaster.ClusterService.ListClusterReleaseTargets:input_type -> quartermaster.ListClusterReleaseTargetsRequest
-	89,  // 212: quartermaster.ClusterService.SetClusterReleaseTarget:input_type -> quartermaster.SetClusterReleaseTargetRequest
-	71,  // 213: quartermaster.NodeService.GetNode:input_type -> quartermaster.GetNodeRequest
-	74,  // 214: quartermaster.NodeService.ListNodes:input_type -> quartermaster.ListNodesRequest
-	76,  // 215: quartermaster.NodeService.ListHealthyNodesForDNS:input_type -> quartermaster.ListHealthyNodesForDNSRequest
-	78,  // 216: quartermaster.NodeService.CreateNode:input_type -> quartermaster.CreateNodeRequest
-	79,  // 217: quartermaster.NodeService.UpdateNodeStatus:input_type -> quartermaster.UpdateNodeStatusRequest
-	3,   // 218: quartermaster.NodeService.SetNodeEnrollmentOrigin:input_type -> quartermaster.SetNodeEnrollmentOriginRequest
-	91,  // 219: quartermaster.NodeService.ResolveNodeFingerprint:input_type -> quartermaster.ResolveNodeFingerprintRequest
-	93,  // 220: quartermaster.NodeService.GetNodeOwner:input_type -> quartermaster.GetNodeOwnerRequest
-	94,  // 221: quartermaster.NodeService.GetNodeByLogicalName:input_type -> quartermaster.GetNodeByLogicalNameRequest
-	95,  // 222: quartermaster.NodeService.UpdateNodeHardware:input_type -> quartermaster.UpdateNodeHardwareRequest
-	96,  // 223: quartermaster.NodeService.ReportAliveNodes:input_type -> quartermaster.ReportAliveNodesRequest
-	98,  // 224: quartermaster.BootstrapService.BootstrapEdgeNode:input_type -> quartermaster.BootstrapEdgeNodeRequest
-	100, // 225: quartermaster.BootstrapService.BootstrapInfrastructureNode:input_type -> quartermaster.BootstrapInfrastructureNodeRequest
-	102, // 226: quartermaster.BootstrapService.BootstrapService:input_type -> quartermaster.BootstrapServiceRequest
-	104, // 227: quartermaster.BootstrapService.DiscoverServices:input_type -> quartermaster.ServiceDiscoveryRequest
-	149, // 228: quartermaster.BootstrapService.GetServicePoolStatus:input_type -> quartermaster.GetServicePoolStatusRequest
-	153, // 229: quartermaster.BootstrapService.AddToServicePool:input_type -> quartermaster.AddToServicePoolRequest
-	155, // 230: quartermaster.BootstrapService.DrainServiceInstance:input_type -> quartermaster.DrainServiceInstanceRequest
-	107, // 231: quartermaster.BootstrapService.CreateBootstrapToken:input_type -> quartermaster.CreateBootstrapTokenRequest
-	110, // 232: quartermaster.BootstrapService.ListBootstrapTokens:input_type -> quartermaster.ListBootstrapTokensRequest
-	112, // 233: quartermaster.BootstrapService.RevokeBootstrapToken:input_type -> quartermaster.RevokeBootstrapTokenRequest
-	113, // 234: quartermaster.BootstrapService.ValidateBootstrapToken:input_type -> quartermaster.ValidateBootstrapTokenRequest
-	115, // 235: quartermaster.MeshService.SyncMesh:input_type -> quartermaster.InfrastructureSyncRequest
-	127, // 236: quartermaster.ServiceRegistryService.ListServices:input_type -> quartermaster.ListServicesRequest
-	130, // 237: quartermaster.ServiceRegistryService.ListClusterServices:input_type -> quartermaster.ListClusterServicesRequest
-	133, // 238: quartermaster.ServiceRegistryService.ListServiceInstances:input_type -> quartermaster.ListServiceInstancesRequest
-	135, // 239: quartermaster.ServiceRegistryService.ListServicesHealth:input_type -> quartermaster.ListServicesHealthRequest
-	136, // 240: quartermaster.ServiceRegistryService.GetServiceHealth:input_type -> quartermaster.GetServiceHealthRequest
-	140, // 241: quartermaster.IngressService.UpsertTLSBundle:input_type -> quartermaster.UpsertTLSBundleRequest
-	142, // 242: quartermaster.IngressService.ListTLSBundles:input_type -> quartermaster.ListTLSBundlesRequest
-	145, // 243: quartermaster.IngressService.UpsertIngressSite:input_type -> quartermaster.UpsertIngressSiteRequest
-	147, // 244: quartermaster.IngressService.ListIngressSites:input_type -> quartermaster.ListIngressSitesRequest
-	6,   // 245: quartermaster.TenantService.GetTenant:output_type -> quartermaster.GetTenantResponse
-	8,   // 246: quartermaster.TenantService.ValidateTenant:output_type -> quartermaster.ValidateTenantResponse
-	123, // 247: quartermaster.TenantService.ResolveTenant:output_type -> quartermaster.ResolveTenantResponse
-	122, // 248: quartermaster.TenantService.ResolveTenantAliases:output_type -> quartermaster.ResolveTenantAliasesResponse
-	25,  // 249: quartermaster.TenantService.GetClusterRouting:output_type -> quartermaster.ClusterRoutingResponse
-	12,  // 250: quartermaster.TenantService.ListTenants:output_type -> quartermaster.ListTenantsResponse
-	14,  // 251: quartermaster.TenantService.CreateTenant:output_type -> quartermaster.CreateTenantResponse
-	10,  // 252: quartermaster.TenantService.UpdateTenant:output_type -> quartermaster.Tenant
-	177, // 253: quartermaster.TenantService.DeleteTenant:output_type -> google.protobuf.Empty
-	6,   // 254: quartermaster.TenantService.GetTenantCluster:output_type -> quartermaster.GetTenantResponse
-	177, // 255: quartermaster.TenantService.UpdateTenantCluster:output_type -> google.protobuf.Empty
-	12,  // 256: quartermaster.TenantService.GetTenantsBatch:output_type -> quartermaster.ListTenantsResponse
-	21,  // 257: quartermaster.TenantService.GetTenantsByCluster:output_type -> quartermaster.GetTenantsByClusterResponse
-	23,  // 258: quartermaster.TenantService.ListActiveTenants:output_type -> quartermaster.ListActiveTenantsResponse
-	28,  // 259: quartermaster.ClusterService.GetCluster:output_type -> quartermaster.ClusterResponse
-	30,  // 260: quartermaster.ClusterService.ListClusters:output_type -> quartermaster.ListClustersResponse
-	28,  // 261: quartermaster.ClusterService.CreateCluster:output_type -> quartermaster.ClusterResponse
-	28,  // 262: quartermaster.ClusterService.UpdateCluster:output_type -> quartermaster.ClusterResponse
-	34,  // 263: quartermaster.ClusterService.UpdateClusterMeshConfig:output_type -> quartermaster.UpdateClusterMeshConfigResponse
-	37,  // 264: quartermaster.ClusterService.ListClustersForTenant:output_type -> quartermaster.ClustersAccessResponse
-	126, // 265: quartermaster.ClusterService.ListClustersAvailable:output_type -> quartermaster.ClustersAvailableResponse
-	177, // 266: quartermaster.ClusterService.GrantClusterAccess:output_type -> google.protobuf.Empty
-	177, // 267: quartermaster.ClusterService.SubscribeToCluster:output_type -> google.protobuf.Empty
-	177, // 268: quartermaster.ClusterService.BootstrapClusterAccess:output_type -> google.protobuf.Empty
-	177, // 269: quartermaster.ClusterService.DeactivateClusterAccess:output_type -> google.protobuf.Empty
-	44,  // 270: quartermaster.ClusterService.ListTenantClusterAccess:output_type -> quartermaster.ListTenantClusterAccessResponse
-	177, // 271: quartermaster.ClusterService.UnsubscribeFromCluster:output_type -> google.protobuf.Empty
-	30,  // 272: quartermaster.ClusterService.ListMySubscriptions:output_type -> quartermaster.ListClustersResponse
-	50,  // 273: quartermaster.ClusterService.ListMarketplaceClusters:output_type -> quartermaster.ListMarketplaceClustersResponse
-	48,  // 274: quartermaster.ClusterService.GetMarketplaceCluster:output_type -> quartermaster.MarketplaceClusterEntry
-	28,  // 275: quartermaster.ClusterService.UpdateClusterMarketplace:output_type -> quartermaster.ClusterResponse
-	57,  // 276: quartermaster.ClusterService.CreatePrivateCluster:output_type -> quartermaster.CreatePrivateClusterResponse
-	58,  // 277: quartermaster.ClusterService.CreateClusterInvite:output_type -> quartermaster.ClusterInvite
-	177, // 278: quartermaster.ClusterService.RevokeClusterInvite:output_type -> google.protobuf.Empty
-	63,  // 279: quartermaster.ClusterService.ListClusterInvites:output_type -> quartermaster.ListClusterInvitesResponse
-	63,  // 280: quartermaster.ClusterService.ListMyClusterInvites:output_type -> quartermaster.ListClusterInvitesResponse
-	64,  // 281: quartermaster.ClusterService.RequestClusterSubscription:output_type -> quartermaster.ClusterSubscription
-	64,  // 282: quartermaster.ClusterService.AcceptClusterInvite:output_type -> quartermaster.ClusterSubscription
-	68,  // 283: quartermaster.ClusterService.ListPendingSubscriptions:output_type -> quartermaster.ListPendingSubscriptionsResponse
-	64,  // 284: quartermaster.ClusterService.ApproveClusterSubscription:output_type -> quartermaster.ClusterSubscription
-	64,  // 285: quartermaster.ClusterService.RejectClusterSubscription:output_type -> quartermaster.ClusterSubscription
-	54,  // 286: quartermaster.ClusterService.GetClusterMetadataBatch:output_type -> quartermaster.GetClusterMetadataBatchResponse
-	159, // 287: quartermaster.ClusterService.ListPeers:output_type -> quartermaster.ListPeersResponse
-	177, // 288: quartermaster.ClusterService.AssignServiceToCluster:output_type -> google.protobuf.Empty
-	177, // 289: quartermaster.ClusterService.UnassignServiceFromCluster:output_type -> google.protobuf.Empty
-	164, // 290: quartermaster.ClusterService.EnableSelfHosting:output_type -> quartermaster.EnableSelfHostingResponse
-	109, // 291: quartermaster.ClusterService.CreateEnrollmentToken:output_type -> quartermaster.CreateBootstrapTokenResponse
-	82,  // 292: quartermaster.ClusterService.ListEdgeReleases:output_type -> quartermaster.ListEdgeReleasesResponse
-	84,  // 293: quartermaster.ClusterService.UpsertEdgeRelease:output_type -> quartermaster.EdgeReleaseResponse
-	90,  // 294: quartermaster.ClusterService.GetClusterReleaseTarget:output_type -> quartermaster.ClusterReleaseTargetResponse
-	88,  // 295: quartermaster.ClusterService.ListClusterReleaseTargets:output_type -> quartermaster.ListClusterReleaseTargetsResponse
-	90,  // 296: quartermaster.ClusterService.SetClusterReleaseTarget:output_type -> quartermaster.ClusterReleaseTargetResponse
-	73,  // 297: quartermaster.NodeService.GetNode:output_type -> quartermaster.NodeResponse
-	75,  // 298: quartermaster.NodeService.ListNodes:output_type -> quartermaster.ListNodesResponse
-	77,  // 299: quartermaster.NodeService.ListHealthyNodesForDNS:output_type -> quartermaster.ListHealthyNodesForDNSResponse
-	73,  // 300: quartermaster.NodeService.CreateNode:output_type -> quartermaster.NodeResponse
-	73,  // 301: quartermaster.NodeService.UpdateNodeStatus:output_type -> quartermaster.NodeResponse
-	4,   // 302: quartermaster.NodeService.SetNodeEnrollmentOrigin:output_type -> quartermaster.SetNodeEnrollmentOriginResponse
-	92,  // 303: quartermaster.NodeService.ResolveNodeFingerprint:output_type -> quartermaster.ResolveNodeFingerprintResponse
-	97,  // 304: quartermaster.NodeService.GetNodeOwner:output_type -> quartermaster.NodeOwnerResponse
-	73,  // 305: quartermaster.NodeService.GetNodeByLogicalName:output_type -> quartermaster.NodeResponse
-	177, // 306: quartermaster.NodeService.UpdateNodeHardware:output_type -> google.protobuf.Empty
-	177, // 307: quartermaster.NodeService.ReportAliveNodes:output_type -> google.protobuf.Empty
-	99,  // 308: quartermaster.BootstrapService.BootstrapEdgeNode:output_type -> quartermaster.BootstrapEdgeNodeResponse
-	101, // 309: quartermaster.BootstrapService.BootstrapInfrastructureNode:output_type -> quartermaster.BootstrapInfrastructureNodeResponse
-	103, // 310: quartermaster.BootstrapService.BootstrapService:output_type -> quartermaster.BootstrapServiceResponse
-	105, // 311: quartermaster.BootstrapService.DiscoverServices:output_type -> quartermaster.ServiceDiscoveryResponse
-	152, // 312: quartermaster.BootstrapService.GetServicePoolStatus:output_type -> quartermaster.GetServicePoolStatusResponse
-	154, // 313: quartermaster.BootstrapService.AddToServicePool:output_type -> quartermaster.AddToServicePoolResponse
-	156, // 314: quartermaster.BootstrapService.DrainServiceInstance:output_type -> quartermaster.DrainServiceInstanceResponse
-	109, // 315: quartermaster.BootstrapService.CreateBootstrapToken:output_type -> quartermaster.CreateBootstrapTokenResponse
-	111, // 316: quartermaster.BootstrapService.ListBootstrapTokens:output_type -> quartermaster.ListBootstrapTokensResponse
-	177, // 317: quartermaster.BootstrapService.RevokeBootstrapToken:output_type -> google.protobuf.Empty
-	114, // 318: quartermaster.BootstrapService.ValidateBootstrapToken:output_type -> quartermaster.ValidateBootstrapTokenResponse
-	118, // 319: quartermaster.MeshService.SyncMesh:output_type -> quartermaster.InfrastructureSyncResponse
-	129, // 320: quartermaster.ServiceRegistryService.ListServices:output_type -> quartermaster.ListServicesResponse
-	132, // 321: quartermaster.ServiceRegistryService.ListClusterServices:output_type -> quartermaster.ListClusterServicesResponse
-	134, // 322: quartermaster.ServiceRegistryService.ListServiceInstances:output_type -> quartermaster.ListServiceInstancesResponse
-	138, // 323: quartermaster.ServiceRegistryService.ListServicesHealth:output_type -> quartermaster.ListServicesHealthResponse
-	138, // 324: quartermaster.ServiceRegistryService.GetServiceHealth:output_type -> quartermaster.ListServicesHealthResponse
-	141, // 325: quartermaster.IngressService.UpsertTLSBundle:output_type -> quartermaster.TLSBundleResponse
-	143, // 326: quartermaster.IngressService.ListTLSBundles:output_type -> quartermaster.ListTLSBundlesResponse
-	146, // 327: quartermaster.IngressService.UpsertIngressSite:output_type -> quartermaster.IngressSiteResponse
-	148, // 328: quartermaster.IngressService.ListIngressSites:output_type -> quartermaster.ListIngressSitesResponse
-	245, // [245:329] is the sub-list for method output_type
-	161, // [161:245] is the sub-list for method input_type
-	161, // [161:161] is the sub-list for extension type_name
-	161, // [161:161] is the sub-list for extension extendee
-	0,   // [0:161] is the sub-list for field type_name
+	177, // 10: quartermaster.GetTenantsByClusterResponse.pagination:type_name -> common.CursorPaginationResponse
+	23,  // 11: quartermaster.ListAliasedTenantsForClusterResponse.tenants:type_name -> quartermaster.AliasedTenantRef
+	163, // 12: quartermaster.ClusterRoutingResponse.cluster_peers:type_name -> quartermaster.TenantClusterPeer
+	48,  // 13: quartermaster.ClusterRoutingResponse.tenant_resource_limits:type_name -> quartermaster.TenantResourceLimits
+	175, // 14: quartermaster.InfrastructureCluster.created_at:type_name -> google.protobuf.Timestamp
+	175, // 15: quartermaster.InfrastructureCluster.updated_at:type_name -> google.protobuf.Timestamp
+	0,   // 16: quartermaster.InfrastructureCluster.visibility:type_name -> quartermaster.ClusterVisibility
+	1,   // 17: quartermaster.InfrastructureCluster.pricing_model:type_name -> quartermaster.ClusterPricingModel
+	30,  // 18: quartermaster.ClusterResponse.cluster:type_name -> quartermaster.InfrastructureCluster
+	176, // 19: quartermaster.ListClustersRequest.pagination:type_name -> common.CursorPaginationRequest
+	30,  // 20: quartermaster.ListClustersResponse.clusters:type_name -> quartermaster.InfrastructureCluster
+	177, // 21: quartermaster.ListClustersResponse.pagination:type_name -> common.CursorPaginationResponse
+	176, // 22: quartermaster.ListClustersForTenantRequest.pagination:type_name -> common.CursorPaginationRequest
+	179, // 23: quartermaster.ClusterAccessEntry.resource_limits:type_name -> google.protobuf.Struct
+	39,  // 24: quartermaster.ClustersAccessResponse.clusters:type_name -> quartermaster.ClusterAccessEntry
+	177, // 25: quartermaster.ClustersAccessResponse.pagination:type_name -> common.CursorPaginationResponse
+	179, // 26: quartermaster.GrantClusterAccessRequest.resource_limits:type_name -> google.protobuf.Struct
+	175, // 27: quartermaster.GrantClusterAccessRequest.expires_at:type_name -> google.protobuf.Timestamp
+	48,  // 28: quartermaster.BootstrapClusterAccessRequest.resource_limits:type_name -> quartermaster.TenantResourceLimits
+	46,  // 29: quartermaster.ListTenantClusterAccessResponse.rows:type_name -> quartermaster.TenantClusterAccessRow
+	176, // 30: quartermaster.ListMySubscriptionsRequest.pagination:type_name -> common.CursorPaginationRequest
+	0,   // 31: quartermaster.MarketplaceClusterEntry.visibility:type_name -> quartermaster.ClusterVisibility
+	1,   // 32: quartermaster.MarketplaceClusterEntry.pricing_model:type_name -> quartermaster.ClusterPricingModel
+	2,   // 33: quartermaster.MarketplaceClusterEntry.subscription_status:type_name -> quartermaster.ClusterSubscriptionStatus
+	175, // 34: quartermaster.MarketplaceClusterEntry.created_at:type_name -> google.protobuf.Timestamp
+	176, // 35: quartermaster.ListMarketplaceClustersRequest.pagination:type_name -> common.CursorPaginationRequest
+	51,  // 36: quartermaster.ListMarketplaceClustersResponse.clusters:type_name -> quartermaster.MarketplaceClusterEntry
+	177, // 37: quartermaster.ListMarketplaceClustersResponse.pagination:type_name -> common.CursorPaginationResponse
+	0,   // 38: quartermaster.UpdateClusterMarketplaceRequest.visibility:type_name -> quartermaster.ClusterVisibility
+	1,   // 39: quartermaster.UpdateClusterMarketplaceRequest.pricing_model:type_name -> quartermaster.ClusterPricingModel
+	169, // 40: quartermaster.GetClusterMetadataBatchResponse.clusters:type_name -> quartermaster.GetClusterMetadataBatchResponse.ClustersEntry
+	30,  // 41: quartermaster.CreatePrivateClusterResponse.cluster:type_name -> quartermaster.InfrastructureCluster
+	111, // 42: quartermaster.CreatePrivateClusterResponse.bootstrap_token:type_name -> quartermaster.BootstrapToken
+	179, // 43: quartermaster.ClusterInvite.resource_limits:type_name -> google.protobuf.Struct
+	175, // 44: quartermaster.ClusterInvite.created_at:type_name -> google.protobuf.Timestamp
+	175, // 45: quartermaster.ClusterInvite.expires_at:type_name -> google.protobuf.Timestamp
+	175, // 46: quartermaster.ClusterInvite.accepted_at:type_name -> google.protobuf.Timestamp
+	179, // 47: quartermaster.CreateClusterInviteRequest.resource_limits:type_name -> google.protobuf.Struct
+	176, // 48: quartermaster.ListClusterInvitesRequest.pagination:type_name -> common.CursorPaginationRequest
+	176, // 49: quartermaster.ListMyClusterInvitesRequest.pagination:type_name -> common.CursorPaginationRequest
+	61,  // 50: quartermaster.ListClusterInvitesResponse.invites:type_name -> quartermaster.ClusterInvite
+	177, // 51: quartermaster.ListClusterInvitesResponse.pagination:type_name -> common.CursorPaginationResponse
+	2,   // 52: quartermaster.ClusterSubscription.subscription_status:type_name -> quartermaster.ClusterSubscriptionStatus
+	179, // 53: quartermaster.ClusterSubscription.resource_limits:type_name -> google.protobuf.Struct
+	175, // 54: quartermaster.ClusterSubscription.requested_at:type_name -> google.protobuf.Timestamp
+	175, // 55: quartermaster.ClusterSubscription.approved_at:type_name -> google.protobuf.Timestamp
+	175, // 56: quartermaster.ClusterSubscription.expires_at:type_name -> google.protobuf.Timestamp
+	175, // 57: quartermaster.ClusterSubscription.created_at:type_name -> google.protobuf.Timestamp
+	175, // 58: quartermaster.ClusterSubscription.updated_at:type_name -> google.protobuf.Timestamp
+	176, // 59: quartermaster.ListPendingSubscriptionsRequest.pagination:type_name -> common.CursorPaginationRequest
+	67,  // 60: quartermaster.ListPendingSubscriptionsResponse.subscriptions:type_name -> quartermaster.ClusterSubscription
+	177, // 61: quartermaster.ListPendingSubscriptionsResponse.pagination:type_name -> common.CursorPaginationResponse
+	175, // 62: quartermaster.InfrastructureNode.last_heartbeat:type_name -> google.protobuf.Timestamp
+	179, // 63: quartermaster.InfrastructureNode.tags:type_name -> google.protobuf.Struct
+	179, // 64: quartermaster.InfrastructureNode.metadata:type_name -> google.protobuf.Struct
+	175, // 65: quartermaster.InfrastructureNode.created_at:type_name -> google.protobuf.Timestamp
+	175, // 66: quartermaster.InfrastructureNode.updated_at:type_name -> google.protobuf.Timestamp
+	119, // 67: quartermaster.InfrastructureNode.resource_snapshot:type_name -> quartermaster.NodeResourceSnapshot
+	75,  // 68: quartermaster.NodeResponse.node:type_name -> quartermaster.InfrastructureNode
+	176, // 69: quartermaster.ListNodesRequest.pagination:type_name -> common.CursorPaginationRequest
+	75,  // 70: quartermaster.ListNodesResponse.nodes:type_name -> quartermaster.InfrastructureNode
+	177, // 71: quartermaster.ListNodesResponse.pagination:type_name -> common.CursorPaginationResponse
+	75,  // 72: quartermaster.ListHealthyNodesForDNSResponse.nodes:type_name -> quartermaster.InfrastructureNode
+	179, // 73: quartermaster.CreateNodeRequest.tags:type_name -> google.protobuf.Struct
+	179, // 74: quartermaster.CreateNodeRequest.metadata:type_name -> google.protobuf.Struct
+	175, // 75: quartermaster.EdgeRelease.published_at:type_name -> google.protobuf.Timestamp
+	83,  // 76: quartermaster.ListEdgeReleasesResponse.releases:type_name -> quartermaster.EdgeRelease
+	83,  // 77: quartermaster.UpsertEdgeReleaseRequest.release:type_name -> quartermaster.EdgeRelease
+	83,  // 78: quartermaster.EdgeReleaseResponse.release:type_name -> quartermaster.EdgeRelease
+	175, // 79: quartermaster.ClusterReleaseTarget.updated_at:type_name -> google.protobuf.Timestamp
+	88,  // 80: quartermaster.ListClusterReleaseTargetsResponse.targets:type_name -> quartermaster.ClusterReleaseTarget
+	88,  // 81: quartermaster.SetClusterReleaseTargetRequest.target:type_name -> quartermaster.ClusterReleaseTarget
+	88,  // 82: quartermaster.ClusterReleaseTargetResponse.target:type_name -> quartermaster.ClusterReleaseTarget
+	179, // 83: quartermaster.BootstrapEdgeNodeRequest.labels:type_name -> google.protobuf.Struct
+	120, // 84: quartermaster.BootstrapInfrastructureNodeResponse.seed_peers:type_name -> quartermaster.InfrastructurePeer
+	170, // 85: quartermaster.BootstrapInfrastructureNodeResponse.seed_service_endpoints:type_name -> quartermaster.BootstrapInfrastructureNodeResponse.SeedServiceEndpointsEntry
+	171, // 86: quartermaster.BootstrapServiceRequest.metadata:type_name -> quartermaster.BootstrapServiceRequest.MetadataEntry
+	75,  // 87: quartermaster.BootstrapServiceResponse.node:type_name -> quartermaster.InfrastructureNode
+	176, // 88: quartermaster.ServiceDiscoveryRequest.pagination:type_name -> common.CursorPaginationRequest
+	109, // 89: quartermaster.ServiceDiscoveryResponse.instances:type_name -> quartermaster.ServiceInstance
+	177, // 90: quartermaster.ServiceDiscoveryResponse.pagination:type_name -> common.CursorPaginationResponse
+	175, // 91: quartermaster.ServiceInstance.started_at:type_name -> google.protobuf.Timestamp
+	175, // 92: quartermaster.ServiceInstance.stopped_at:type_name -> google.protobuf.Timestamp
+	175, // 93: quartermaster.ServiceInstance.last_health_check:type_name -> google.protobuf.Timestamp
+	175, // 94: quartermaster.ServiceInstance.created_at:type_name -> google.protobuf.Timestamp
+	175, // 95: quartermaster.ServiceInstance.updated_at:type_name -> google.protobuf.Timestamp
+	172, // 96: quartermaster.ServiceInstance.metadata:type_name -> quartermaster.ServiceInstance.MetadataEntry
+	179, // 97: quartermaster.CreateBootstrapTokenRequest.metadata:type_name -> google.protobuf.Struct
+	179, // 98: quartermaster.BootstrapToken.metadata:type_name -> google.protobuf.Struct
+	175, // 99: quartermaster.BootstrapToken.expires_at:type_name -> google.protobuf.Timestamp
+	175, // 100: quartermaster.BootstrapToken.used_at:type_name -> google.protobuf.Timestamp
+	175, // 101: quartermaster.BootstrapToken.created_at:type_name -> google.protobuf.Timestamp
+	111, // 102: quartermaster.CreateBootstrapTokenResponse.token:type_name -> quartermaster.BootstrapToken
+	176, // 103: quartermaster.ListBootstrapTokensRequest.pagination:type_name -> common.CursorPaginationRequest
+	111, // 104: quartermaster.ListBootstrapTokensResponse.tokens:type_name -> quartermaster.BootstrapToken
+	177, // 105: quartermaster.ListBootstrapTokensResponse.pagination:type_name -> common.CursorPaginationResponse
+	179, // 106: quartermaster.ValidateBootstrapTokenResponse.metadata:type_name -> google.protobuf.Struct
+	119, // 107: quartermaster.InfrastructureSyncRequest.resource_snapshot:type_name -> quartermaster.NodeResourceSnapshot
+	175, // 108: quartermaster.NodeResourceSnapshot.collected_at:type_name -> google.protobuf.Timestamp
+	120, // 109: quartermaster.InfrastructureSyncResponse.peers:type_name -> quartermaster.InfrastructurePeer
+	173, // 110: quartermaster.InfrastructureSyncResponse.service_endpoints:type_name -> quartermaster.InfrastructureSyncResponse.ServiceEndpointsEntry
+	174, // 111: quartermaster.ResolveTenantAliasesResponse.mapping:type_name -> quartermaster.ResolveTenantAliasesResponse.MappingEntry
+	176, // 112: quartermaster.ListClustersAvailableRequest.pagination:type_name -> common.CursorPaginationRequest
+	128, // 113: quartermaster.ClustersAvailableResponse.clusters:type_name -> quartermaster.AvailableClusterEntry
+	177, // 114: quartermaster.ClustersAvailableResponse.pagination:type_name -> common.CursorPaginationResponse
+	176, // 115: quartermaster.ListServicesRequest.pagination:type_name -> common.CursorPaginationRequest
+	179, // 116: quartermaster.Service.tags:type_name -> google.protobuf.Struct
+	175, // 117: quartermaster.Service.created_at:type_name -> google.protobuf.Timestamp
+	175, // 118: quartermaster.Service.updated_at:type_name -> google.protobuf.Timestamp
+	131, // 119: quartermaster.ListServicesResponse.services:type_name -> quartermaster.Service
+	177, // 120: quartermaster.ListServicesResponse.pagination:type_name -> common.CursorPaginationResponse
+	176, // 121: quartermaster.ListClusterServicesRequest.pagination:type_name -> common.CursorPaginationRequest
+	179, // 122: quartermaster.ClusterServiceAssignment.config_blob:type_name -> google.protobuf.Struct
+	179, // 123: quartermaster.ClusterServiceAssignment.environment_vars:type_name -> google.protobuf.Struct
+	175, // 124: quartermaster.ClusterServiceAssignment.last_deployed:type_name -> google.protobuf.Timestamp
+	175, // 125: quartermaster.ClusterServiceAssignment.created_at:type_name -> google.protobuf.Timestamp
+	175, // 126: quartermaster.ClusterServiceAssignment.updated_at:type_name -> google.protobuf.Timestamp
+	134, // 127: quartermaster.ListClusterServicesResponse.services:type_name -> quartermaster.ClusterServiceAssignment
+	177, // 128: quartermaster.ListClusterServicesResponse.pagination:type_name -> common.CursorPaginationResponse
+	176, // 129: quartermaster.ListServiceInstancesRequest.pagination:type_name -> common.CursorPaginationRequest
+	109, // 130: quartermaster.ListServiceInstancesResponse.instances:type_name -> quartermaster.ServiceInstance
+	177, // 131: quartermaster.ListServiceInstancesResponse.pagination:type_name -> common.CursorPaginationResponse
+	176, // 132: quartermaster.ListServicesHealthRequest.pagination:type_name -> common.CursorPaginationRequest
+	175, // 133: quartermaster.ServiceInstanceHealth.last_health_check:type_name -> google.protobuf.Timestamp
+	140, // 134: quartermaster.ListServicesHealthResponse.instances:type_name -> quartermaster.ServiceInstanceHealth
+	177, // 135: quartermaster.ListServicesHealthResponse.pagination:type_name -> common.CursorPaginationResponse
+	179, // 136: quartermaster.TLSBundle.metadata:type_name -> google.protobuf.Struct
+	175, // 137: quartermaster.TLSBundle.created_at:type_name -> google.protobuf.Timestamp
+	175, // 138: quartermaster.TLSBundle.updated_at:type_name -> google.protobuf.Timestamp
+	142, // 139: quartermaster.UpsertTLSBundleRequest.bundle:type_name -> quartermaster.TLSBundle
+	142, // 140: quartermaster.TLSBundleResponse.bundle:type_name -> quartermaster.TLSBundle
+	176, // 141: quartermaster.ListTLSBundlesRequest.pagination:type_name -> common.CursorPaginationRequest
+	142, // 142: quartermaster.ListTLSBundlesResponse.bundles:type_name -> quartermaster.TLSBundle
+	177, // 143: quartermaster.ListTLSBundlesResponse.pagination:type_name -> common.CursorPaginationResponse
+	179, // 144: quartermaster.IngressSite.metadata:type_name -> google.protobuf.Struct
+	175, // 145: quartermaster.IngressSite.created_at:type_name -> google.protobuf.Timestamp
+	175, // 146: quartermaster.IngressSite.updated_at:type_name -> google.protobuf.Timestamp
+	147, // 147: quartermaster.UpsertIngressSiteRequest.site:type_name -> quartermaster.IngressSite
+	147, // 148: quartermaster.IngressSiteResponse.site:type_name -> quartermaster.IngressSite
+	176, // 149: quartermaster.ListIngressSitesRequest.pagination:type_name -> common.CursorPaginationRequest
+	147, // 150: quartermaster.ListIngressSitesResponse.sites:type_name -> quartermaster.IngressSite
+	177, // 151: quartermaster.ListIngressSitesResponse.pagination:type_name -> common.CursorPaginationResponse
+	109, // 152: quartermaster.ServicePoolClusterEntry.instances:type_name -> quartermaster.ServiceInstance
+	175, // 153: quartermaster.ServiceInstanceAssignment.created_at:type_name -> google.protobuf.Timestamp
+	153, // 154: quartermaster.GetServicePoolStatusResponse.clusters:type_name -> quartermaster.ServicePoolClusterEntry
+	154, // 155: quartermaster.GetServicePoolStatusResponse.assignments:type_name -> quartermaster.ServiceInstanceAssignment
+	161, // 156: quartermaster.ListPeersResponse.peers:type_name -> quartermaster.PeerCluster
+	30,  // 157: quartermaster.EnableSelfHostingResponse.cluster:type_name -> quartermaster.InfrastructureCluster
+	111, // 158: quartermaster.EnableSelfHostingResponse.bootstrap_token:type_name -> quartermaster.BootstrapToken
+	58,  // 159: quartermaster.GetClusterMetadataBatchResponse.ClustersEntry.value:type_name -> quartermaster.ClusterMetadata
+	122, // 160: quartermaster.BootstrapInfrastructureNodeResponse.SeedServiceEndpointsEntry.value:type_name -> quartermaster.ServiceEndpoints
+	122, // 161: quartermaster.InfrastructureSyncResponse.ServiceEndpointsEntry.value:type_name -> quartermaster.ServiceEndpoints
+	5,   // 162: quartermaster.TenantService.GetTenant:input_type -> quartermaster.GetTenantRequest
+	7,   // 163: quartermaster.TenantService.ValidateTenant:input_type -> quartermaster.ValidateTenantRequest
+	123, // 164: quartermaster.TenantService.ResolveTenant:input_type -> quartermaster.ResolveTenantRequest
+	124, // 165: quartermaster.TenantService.ResolveTenantAliases:input_type -> quartermaster.ResolveTenantAliasesRequest
+	27,  // 166: quartermaster.TenantService.GetClusterRouting:input_type -> quartermaster.GetClusterRoutingRequest
+	11,  // 167: quartermaster.TenantService.ListTenants:input_type -> quartermaster.ListTenantsRequest
+	13,  // 168: quartermaster.TenantService.CreateTenant:input_type -> quartermaster.CreateTenantRequest
+	15,  // 169: quartermaster.TenantService.UpdateTenant:input_type -> quartermaster.UpdateTenantRequest
+	16,  // 170: quartermaster.TenantService.DeleteTenant:input_type -> quartermaster.DeleteTenantRequest
+	17,  // 171: quartermaster.TenantService.GetTenantCluster:input_type -> quartermaster.GetTenantClusterRequest
+	18,  // 172: quartermaster.TenantService.UpdateTenantCluster:input_type -> quartermaster.UpdateTenantClusterRequest
+	19,  // 173: quartermaster.TenantService.GetTenantsBatch:input_type -> quartermaster.GetTenantsBatchRequest
+	20,  // 174: quartermaster.TenantService.GetTenantsByCluster:input_type -> quartermaster.GetTenantsByClusterRequest
+	22,  // 175: quartermaster.TenantService.ListAliasedTenantsForCluster:input_type -> quartermaster.ListAliasedTenantsForClusterRequest
+	25,  // 176: quartermaster.TenantService.ListActiveTenants:input_type -> quartermaster.ListActiveTenantsRequest
+	29,  // 177: quartermaster.ClusterService.GetCluster:input_type -> quartermaster.GetClusterRequest
+	32,  // 178: quartermaster.ClusterService.ListClusters:input_type -> quartermaster.ListClustersRequest
+	34,  // 179: quartermaster.ClusterService.CreateCluster:input_type -> quartermaster.CreateClusterRequest
+	35,  // 180: quartermaster.ClusterService.UpdateCluster:input_type -> quartermaster.UpdateClusterRequest
+	36,  // 181: quartermaster.ClusterService.UpdateClusterMeshConfig:input_type -> quartermaster.UpdateClusterMeshConfigRequest
+	38,  // 182: quartermaster.ClusterService.ListClustersForTenant:input_type -> quartermaster.ListClustersForTenantRequest
+	127, // 183: quartermaster.ClusterService.ListClustersAvailable:input_type -> quartermaster.ListClustersAvailableRequest
+	41,  // 184: quartermaster.ClusterService.GrantClusterAccess:input_type -> quartermaster.GrantClusterAccessRequest
+	42,  // 185: quartermaster.ClusterService.SubscribeToCluster:input_type -> quartermaster.SubscribeToClusterRequest
+	43,  // 186: quartermaster.ClusterService.BootstrapClusterAccess:input_type -> quartermaster.BootstrapClusterAccessRequest
+	44,  // 187: quartermaster.ClusterService.DeactivateClusterAccess:input_type -> quartermaster.DeactivateClusterAccessRequest
+	45,  // 188: quartermaster.ClusterService.ListTenantClusterAccess:input_type -> quartermaster.ListTenantClusterAccessRequest
+	49,  // 189: quartermaster.ClusterService.UnsubscribeFromCluster:input_type -> quartermaster.UnsubscribeFromClusterRequest
+	50,  // 190: quartermaster.ClusterService.ListMySubscriptions:input_type -> quartermaster.ListMySubscriptionsRequest
+	52,  // 191: quartermaster.ClusterService.ListMarketplaceClusters:input_type -> quartermaster.ListMarketplaceClustersRequest
+	54,  // 192: quartermaster.ClusterService.GetMarketplaceCluster:input_type -> quartermaster.GetMarketplaceClusterRequest
+	55,  // 193: quartermaster.ClusterService.UpdateClusterMarketplace:input_type -> quartermaster.UpdateClusterMarketplaceRequest
+	59,  // 194: quartermaster.ClusterService.CreatePrivateCluster:input_type -> quartermaster.CreatePrivateClusterRequest
+	62,  // 195: quartermaster.ClusterService.CreateClusterInvite:input_type -> quartermaster.CreateClusterInviteRequest
+	63,  // 196: quartermaster.ClusterService.RevokeClusterInvite:input_type -> quartermaster.RevokeClusterInviteRequest
+	64,  // 197: quartermaster.ClusterService.ListClusterInvites:input_type -> quartermaster.ListClusterInvitesRequest
+	65,  // 198: quartermaster.ClusterService.ListMyClusterInvites:input_type -> quartermaster.ListMyClusterInvitesRequest
+	68,  // 199: quartermaster.ClusterService.RequestClusterSubscription:input_type -> quartermaster.RequestClusterSubscriptionRequest
+	69,  // 200: quartermaster.ClusterService.AcceptClusterInvite:input_type -> quartermaster.AcceptClusterInviteRequest
+	70,  // 201: quartermaster.ClusterService.ListPendingSubscriptions:input_type -> quartermaster.ListPendingSubscriptionsRequest
+	72,  // 202: quartermaster.ClusterService.ApproveClusterSubscription:input_type -> quartermaster.ApproveClusterSubscriptionRequest
+	73,  // 203: quartermaster.ClusterService.RejectClusterSubscription:input_type -> quartermaster.RejectClusterSubscriptionRequest
+	56,  // 204: quartermaster.ClusterService.GetClusterMetadataBatch:input_type -> quartermaster.GetClusterMetadataBatchRequest
+	160, // 205: quartermaster.ClusterService.ListPeers:input_type -> quartermaster.ListPeersRequest
+	164, // 206: quartermaster.ClusterService.AssignServiceToCluster:input_type -> quartermaster.AssignServiceToClusterRequest
+	165, // 207: quartermaster.ClusterService.UnassignServiceFromCluster:input_type -> quartermaster.UnassignServiceFromClusterRequest
+	166, // 208: quartermaster.ClusterService.EnableSelfHosting:input_type -> quartermaster.EnableSelfHostingRequest
+	168, // 209: quartermaster.ClusterService.CreateEnrollmentToken:input_type -> quartermaster.CreateEnrollmentTokenRequest
+	84,  // 210: quartermaster.ClusterService.ListEdgeReleases:input_type -> quartermaster.ListEdgeReleasesRequest
+	86,  // 211: quartermaster.ClusterService.UpsertEdgeRelease:input_type -> quartermaster.UpsertEdgeReleaseRequest
+	89,  // 212: quartermaster.ClusterService.GetClusterReleaseTarget:input_type -> quartermaster.GetClusterReleaseTargetRequest
+	90,  // 213: quartermaster.ClusterService.ListClusterReleaseTargets:input_type -> quartermaster.ListClusterReleaseTargetsRequest
+	92,  // 214: quartermaster.ClusterService.SetClusterReleaseTarget:input_type -> quartermaster.SetClusterReleaseTargetRequest
+	74,  // 215: quartermaster.NodeService.GetNode:input_type -> quartermaster.GetNodeRequest
+	77,  // 216: quartermaster.NodeService.ListNodes:input_type -> quartermaster.ListNodesRequest
+	79,  // 217: quartermaster.NodeService.ListHealthyNodesForDNS:input_type -> quartermaster.ListHealthyNodesForDNSRequest
+	81,  // 218: quartermaster.NodeService.CreateNode:input_type -> quartermaster.CreateNodeRequest
+	82,  // 219: quartermaster.NodeService.UpdateNodeStatus:input_type -> quartermaster.UpdateNodeStatusRequest
+	3,   // 220: quartermaster.NodeService.SetNodeEnrollmentOrigin:input_type -> quartermaster.SetNodeEnrollmentOriginRequest
+	94,  // 221: quartermaster.NodeService.ResolveNodeFingerprint:input_type -> quartermaster.ResolveNodeFingerprintRequest
+	96,  // 222: quartermaster.NodeService.GetNodeOwner:input_type -> quartermaster.GetNodeOwnerRequest
+	97,  // 223: quartermaster.NodeService.GetNodeByLogicalName:input_type -> quartermaster.GetNodeByLogicalNameRequest
+	98,  // 224: quartermaster.NodeService.UpdateNodeHardware:input_type -> quartermaster.UpdateNodeHardwareRequest
+	99,  // 225: quartermaster.NodeService.ReportAliveNodes:input_type -> quartermaster.ReportAliveNodesRequest
+	101, // 226: quartermaster.BootstrapService.BootstrapEdgeNode:input_type -> quartermaster.BootstrapEdgeNodeRequest
+	103, // 227: quartermaster.BootstrapService.BootstrapInfrastructureNode:input_type -> quartermaster.BootstrapInfrastructureNodeRequest
+	105, // 228: quartermaster.BootstrapService.BootstrapService:input_type -> quartermaster.BootstrapServiceRequest
+	107, // 229: quartermaster.BootstrapService.DiscoverServices:input_type -> quartermaster.ServiceDiscoveryRequest
+	152, // 230: quartermaster.BootstrapService.GetServicePoolStatus:input_type -> quartermaster.GetServicePoolStatusRequest
+	156, // 231: quartermaster.BootstrapService.AddToServicePool:input_type -> quartermaster.AddToServicePoolRequest
+	158, // 232: quartermaster.BootstrapService.DrainServiceInstance:input_type -> quartermaster.DrainServiceInstanceRequest
+	110, // 233: quartermaster.BootstrapService.CreateBootstrapToken:input_type -> quartermaster.CreateBootstrapTokenRequest
+	113, // 234: quartermaster.BootstrapService.ListBootstrapTokens:input_type -> quartermaster.ListBootstrapTokensRequest
+	115, // 235: quartermaster.BootstrapService.RevokeBootstrapToken:input_type -> quartermaster.RevokeBootstrapTokenRequest
+	116, // 236: quartermaster.BootstrapService.ValidateBootstrapToken:input_type -> quartermaster.ValidateBootstrapTokenRequest
+	118, // 237: quartermaster.MeshService.SyncMesh:input_type -> quartermaster.InfrastructureSyncRequest
+	130, // 238: quartermaster.ServiceRegistryService.ListServices:input_type -> quartermaster.ListServicesRequest
+	133, // 239: quartermaster.ServiceRegistryService.ListClusterServices:input_type -> quartermaster.ListClusterServicesRequest
+	136, // 240: quartermaster.ServiceRegistryService.ListServiceInstances:input_type -> quartermaster.ListServiceInstancesRequest
+	138, // 241: quartermaster.ServiceRegistryService.ListServicesHealth:input_type -> quartermaster.ListServicesHealthRequest
+	139, // 242: quartermaster.ServiceRegistryService.GetServiceHealth:input_type -> quartermaster.GetServiceHealthRequest
+	143, // 243: quartermaster.IngressService.UpsertTLSBundle:input_type -> quartermaster.UpsertTLSBundleRequest
+	145, // 244: quartermaster.IngressService.ListTLSBundles:input_type -> quartermaster.ListTLSBundlesRequest
+	148, // 245: quartermaster.IngressService.UpsertIngressSite:input_type -> quartermaster.UpsertIngressSiteRequest
+	150, // 246: quartermaster.IngressService.ListIngressSites:input_type -> quartermaster.ListIngressSitesRequest
+	6,   // 247: quartermaster.TenantService.GetTenant:output_type -> quartermaster.GetTenantResponse
+	8,   // 248: quartermaster.TenantService.ValidateTenant:output_type -> quartermaster.ValidateTenantResponse
+	126, // 249: quartermaster.TenantService.ResolveTenant:output_type -> quartermaster.ResolveTenantResponse
+	125, // 250: quartermaster.TenantService.ResolveTenantAliases:output_type -> quartermaster.ResolveTenantAliasesResponse
+	28,  // 251: quartermaster.TenantService.GetClusterRouting:output_type -> quartermaster.ClusterRoutingResponse
+	12,  // 252: quartermaster.TenantService.ListTenants:output_type -> quartermaster.ListTenantsResponse
+	14,  // 253: quartermaster.TenantService.CreateTenant:output_type -> quartermaster.CreateTenantResponse
+	10,  // 254: quartermaster.TenantService.UpdateTenant:output_type -> quartermaster.Tenant
+	180, // 255: quartermaster.TenantService.DeleteTenant:output_type -> google.protobuf.Empty
+	6,   // 256: quartermaster.TenantService.GetTenantCluster:output_type -> quartermaster.GetTenantResponse
+	180, // 257: quartermaster.TenantService.UpdateTenantCluster:output_type -> google.protobuf.Empty
+	12,  // 258: quartermaster.TenantService.GetTenantsBatch:output_type -> quartermaster.ListTenantsResponse
+	21,  // 259: quartermaster.TenantService.GetTenantsByCluster:output_type -> quartermaster.GetTenantsByClusterResponse
+	24,  // 260: quartermaster.TenantService.ListAliasedTenantsForCluster:output_type -> quartermaster.ListAliasedTenantsForClusterResponse
+	26,  // 261: quartermaster.TenantService.ListActiveTenants:output_type -> quartermaster.ListActiveTenantsResponse
+	31,  // 262: quartermaster.ClusterService.GetCluster:output_type -> quartermaster.ClusterResponse
+	33,  // 263: quartermaster.ClusterService.ListClusters:output_type -> quartermaster.ListClustersResponse
+	31,  // 264: quartermaster.ClusterService.CreateCluster:output_type -> quartermaster.ClusterResponse
+	31,  // 265: quartermaster.ClusterService.UpdateCluster:output_type -> quartermaster.ClusterResponse
+	37,  // 266: quartermaster.ClusterService.UpdateClusterMeshConfig:output_type -> quartermaster.UpdateClusterMeshConfigResponse
+	40,  // 267: quartermaster.ClusterService.ListClustersForTenant:output_type -> quartermaster.ClustersAccessResponse
+	129, // 268: quartermaster.ClusterService.ListClustersAvailable:output_type -> quartermaster.ClustersAvailableResponse
+	180, // 269: quartermaster.ClusterService.GrantClusterAccess:output_type -> google.protobuf.Empty
+	180, // 270: quartermaster.ClusterService.SubscribeToCluster:output_type -> google.protobuf.Empty
+	180, // 271: quartermaster.ClusterService.BootstrapClusterAccess:output_type -> google.protobuf.Empty
+	180, // 272: quartermaster.ClusterService.DeactivateClusterAccess:output_type -> google.protobuf.Empty
+	47,  // 273: quartermaster.ClusterService.ListTenantClusterAccess:output_type -> quartermaster.ListTenantClusterAccessResponse
+	180, // 274: quartermaster.ClusterService.UnsubscribeFromCluster:output_type -> google.protobuf.Empty
+	33,  // 275: quartermaster.ClusterService.ListMySubscriptions:output_type -> quartermaster.ListClustersResponse
+	53,  // 276: quartermaster.ClusterService.ListMarketplaceClusters:output_type -> quartermaster.ListMarketplaceClustersResponse
+	51,  // 277: quartermaster.ClusterService.GetMarketplaceCluster:output_type -> quartermaster.MarketplaceClusterEntry
+	31,  // 278: quartermaster.ClusterService.UpdateClusterMarketplace:output_type -> quartermaster.ClusterResponse
+	60,  // 279: quartermaster.ClusterService.CreatePrivateCluster:output_type -> quartermaster.CreatePrivateClusterResponse
+	61,  // 280: quartermaster.ClusterService.CreateClusterInvite:output_type -> quartermaster.ClusterInvite
+	180, // 281: quartermaster.ClusterService.RevokeClusterInvite:output_type -> google.protobuf.Empty
+	66,  // 282: quartermaster.ClusterService.ListClusterInvites:output_type -> quartermaster.ListClusterInvitesResponse
+	66,  // 283: quartermaster.ClusterService.ListMyClusterInvites:output_type -> quartermaster.ListClusterInvitesResponse
+	67,  // 284: quartermaster.ClusterService.RequestClusterSubscription:output_type -> quartermaster.ClusterSubscription
+	67,  // 285: quartermaster.ClusterService.AcceptClusterInvite:output_type -> quartermaster.ClusterSubscription
+	71,  // 286: quartermaster.ClusterService.ListPendingSubscriptions:output_type -> quartermaster.ListPendingSubscriptionsResponse
+	67,  // 287: quartermaster.ClusterService.ApproveClusterSubscription:output_type -> quartermaster.ClusterSubscription
+	67,  // 288: quartermaster.ClusterService.RejectClusterSubscription:output_type -> quartermaster.ClusterSubscription
+	57,  // 289: quartermaster.ClusterService.GetClusterMetadataBatch:output_type -> quartermaster.GetClusterMetadataBatchResponse
+	162, // 290: quartermaster.ClusterService.ListPeers:output_type -> quartermaster.ListPeersResponse
+	180, // 291: quartermaster.ClusterService.AssignServiceToCluster:output_type -> google.protobuf.Empty
+	180, // 292: quartermaster.ClusterService.UnassignServiceFromCluster:output_type -> google.protobuf.Empty
+	167, // 293: quartermaster.ClusterService.EnableSelfHosting:output_type -> quartermaster.EnableSelfHostingResponse
+	112, // 294: quartermaster.ClusterService.CreateEnrollmentToken:output_type -> quartermaster.CreateBootstrapTokenResponse
+	85,  // 295: quartermaster.ClusterService.ListEdgeReleases:output_type -> quartermaster.ListEdgeReleasesResponse
+	87,  // 296: quartermaster.ClusterService.UpsertEdgeRelease:output_type -> quartermaster.EdgeReleaseResponse
+	93,  // 297: quartermaster.ClusterService.GetClusterReleaseTarget:output_type -> quartermaster.ClusterReleaseTargetResponse
+	91,  // 298: quartermaster.ClusterService.ListClusterReleaseTargets:output_type -> quartermaster.ListClusterReleaseTargetsResponse
+	93,  // 299: quartermaster.ClusterService.SetClusterReleaseTarget:output_type -> quartermaster.ClusterReleaseTargetResponse
+	76,  // 300: quartermaster.NodeService.GetNode:output_type -> quartermaster.NodeResponse
+	78,  // 301: quartermaster.NodeService.ListNodes:output_type -> quartermaster.ListNodesResponse
+	80,  // 302: quartermaster.NodeService.ListHealthyNodesForDNS:output_type -> quartermaster.ListHealthyNodesForDNSResponse
+	76,  // 303: quartermaster.NodeService.CreateNode:output_type -> quartermaster.NodeResponse
+	76,  // 304: quartermaster.NodeService.UpdateNodeStatus:output_type -> quartermaster.NodeResponse
+	4,   // 305: quartermaster.NodeService.SetNodeEnrollmentOrigin:output_type -> quartermaster.SetNodeEnrollmentOriginResponse
+	95,  // 306: quartermaster.NodeService.ResolveNodeFingerprint:output_type -> quartermaster.ResolveNodeFingerprintResponse
+	100, // 307: quartermaster.NodeService.GetNodeOwner:output_type -> quartermaster.NodeOwnerResponse
+	76,  // 308: quartermaster.NodeService.GetNodeByLogicalName:output_type -> quartermaster.NodeResponse
+	180, // 309: quartermaster.NodeService.UpdateNodeHardware:output_type -> google.protobuf.Empty
+	180, // 310: quartermaster.NodeService.ReportAliveNodes:output_type -> google.protobuf.Empty
+	102, // 311: quartermaster.BootstrapService.BootstrapEdgeNode:output_type -> quartermaster.BootstrapEdgeNodeResponse
+	104, // 312: quartermaster.BootstrapService.BootstrapInfrastructureNode:output_type -> quartermaster.BootstrapInfrastructureNodeResponse
+	106, // 313: quartermaster.BootstrapService.BootstrapService:output_type -> quartermaster.BootstrapServiceResponse
+	108, // 314: quartermaster.BootstrapService.DiscoverServices:output_type -> quartermaster.ServiceDiscoveryResponse
+	155, // 315: quartermaster.BootstrapService.GetServicePoolStatus:output_type -> quartermaster.GetServicePoolStatusResponse
+	157, // 316: quartermaster.BootstrapService.AddToServicePool:output_type -> quartermaster.AddToServicePoolResponse
+	159, // 317: quartermaster.BootstrapService.DrainServiceInstance:output_type -> quartermaster.DrainServiceInstanceResponse
+	112, // 318: quartermaster.BootstrapService.CreateBootstrapToken:output_type -> quartermaster.CreateBootstrapTokenResponse
+	114, // 319: quartermaster.BootstrapService.ListBootstrapTokens:output_type -> quartermaster.ListBootstrapTokensResponse
+	180, // 320: quartermaster.BootstrapService.RevokeBootstrapToken:output_type -> google.protobuf.Empty
+	117, // 321: quartermaster.BootstrapService.ValidateBootstrapToken:output_type -> quartermaster.ValidateBootstrapTokenResponse
+	121, // 322: quartermaster.MeshService.SyncMesh:output_type -> quartermaster.InfrastructureSyncResponse
+	132, // 323: quartermaster.ServiceRegistryService.ListServices:output_type -> quartermaster.ListServicesResponse
+	135, // 324: quartermaster.ServiceRegistryService.ListClusterServices:output_type -> quartermaster.ListClusterServicesResponse
+	137, // 325: quartermaster.ServiceRegistryService.ListServiceInstances:output_type -> quartermaster.ListServiceInstancesResponse
+	141, // 326: quartermaster.ServiceRegistryService.ListServicesHealth:output_type -> quartermaster.ListServicesHealthResponse
+	141, // 327: quartermaster.ServiceRegistryService.GetServiceHealth:output_type -> quartermaster.ListServicesHealthResponse
+	144, // 328: quartermaster.IngressService.UpsertTLSBundle:output_type -> quartermaster.TLSBundleResponse
+	146, // 329: quartermaster.IngressService.ListTLSBundles:output_type -> quartermaster.ListTLSBundlesResponse
+	149, // 330: quartermaster.IngressService.UpsertIngressSite:output_type -> quartermaster.IngressSiteResponse
+	151, // 331: quartermaster.IngressService.ListIngressSites:output_type -> quartermaster.ListIngressSitesResponse
+	247, // [247:332] is the sub-list for method output_type
+	162, // [162:247] is the sub-list for method input_type
+	162, // [162:162] is the sub-list for extension type_name
+	162, // [162:162] is the sub-list for extension extendee
+	0,   // [0:162] is the sub-list for field type_name
 }
 
 func init() { file_quartermaster_proto_init() }
@@ -14243,49 +14410,49 @@ func file_quartermaster_proto_init() {
 	file_quartermaster_proto_msgTypes[10].OneofWrappers = []any{}
 	file_quartermaster_proto_msgTypes[12].OneofWrappers = []any{}
 	file_quartermaster_proto_msgTypes[15].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[22].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[24].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[26].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[28].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[25].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[27].OneofWrappers = []any{}
 	file_quartermaster_proto_msgTypes[29].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[35].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[37].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[45].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[31].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[32].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[38].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[40].OneofWrappers = []any{}
 	file_quartermaster_proto_msgTypes[48].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[49].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[51].OneofWrappers = []any{}
 	file_quartermaster_proto_msgTypes[52].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[53].OneofWrappers = []any{}
 	file_quartermaster_proto_msgTypes[55].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[61].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[62].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[67].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[69].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[73].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[75].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[56].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[58].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[64].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[65].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[70].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[72].OneofWrappers = []any{}
 	file_quartermaster_proto_msgTypes[76].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[88].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[92].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[94].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[78].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[79].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[91].OneofWrappers = []any{}
 	file_quartermaster_proto_msgTypes[95].OneofWrappers = []any{}
 	file_quartermaster_proto_msgTypes[97].OneofWrappers = []any{}
 	file_quartermaster_proto_msgTypes[98].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[99].OneofWrappers = []any{}
 	file_quartermaster_proto_msgTypes[100].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[101].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[102].OneofWrappers = []any{}
 	file_quartermaster_proto_msgTypes[103].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[104].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[105].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[125].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[106].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[107].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[108].OneofWrappers = []any{}
 	file_quartermaster_proto_msgTypes[128].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[134].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[160].OneofWrappers = []any{}
-	file_quartermaster_proto_msgTypes[162].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[131].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[137].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[163].OneofWrappers = []any{}
+	file_quartermaster_proto_msgTypes[165].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_quartermaster_proto_rawDesc), len(file_quartermaster_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   169,
+			NumMessages:   172,
 			NumExtensions: 0,
 			NumServices:   7,
 		},

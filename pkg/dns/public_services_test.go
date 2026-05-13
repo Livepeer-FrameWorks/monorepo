@@ -170,3 +170,53 @@ func TestClusterSlug(t *testing.T) {
 		})
 	}
 }
+
+func TestIsReservedTenantSlug(t *testing.T) {
+	clusters := []string{"media-us-1", "media-eu-1"}
+	cases := []struct {
+		name string
+		slug string
+		want bool
+	}{
+		{"empty rejected", "", true},
+		{"default rejected", "default", true},
+		{"www reserved", "www", true},
+		{"cdn reserved (the tenant zone label)", "cdn", true},
+		{"api reserved", "api", true},
+		{"mcp reserved", "mcp", true},
+		{"managed service foghorn", "foghorn", true},
+		{"managed service edge-ingest", "edge-ingest", true},
+		{"public subdomain livepeer (label != service name)", "livepeer", true},
+		{"operator service bridge", "bridge", true},
+		{"active cluster slug", "media-us-1", true},
+		{"prefix edge- reserved", "edge-mysite", true},
+		{"normal tenant", "acme", false},
+		{"normal tenant with dash", "bobs-streams", false},
+		{"numeric ok", "tenant42", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsReservedTenantSlug(tc.slug, clusters); got != tc.want {
+				t.Errorf("IsReservedTenantSlug(%q) = %v, want %v", tc.slug, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReservedTenantSlugsIncludesEverything(t *testing.T) {
+	got := ReservedTenantSlugs([]string{"media-us-1"})
+	mustHave := []string{
+		"foghorn", "chandler", "edge-ingest", "edge-egress", "livepeer",
+		"bridge", "grafana", "logbook", "cdn", "www", "api", "mcp",
+		"media-us-1",
+	}
+	gotSet := make(map[string]bool)
+	for _, s := range got {
+		gotSet[s] = true
+	}
+	for _, want := range mustHave {
+		if !gotSet[want] {
+			t.Errorf("ReservedTenantSlugs missing %q", want)
+		}
+	}
+}

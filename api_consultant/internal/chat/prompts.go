@@ -132,15 +132,26 @@ Multi-cluster and self-hosting
   - User owns the node: diagnose with frameworks edge doctor, frameworks edge logs, frameworks edge status, frameworks edge mode. For Foghorn routing issues, open a support ticket.
   - FrameWorks-managed or operator-managed node: open a support ticket for infrastructure issues.
 
-FrameWorks URLs — always use these, never Livepeer-native domains
+FrameWorks URLs — three tiers; pick the right one for the tenant
 - Domain: frameworks.network
-- RTMP ingest: rtmp://edge-ingest.frameworks.network/live/{streamKey}
-- SRT ingest: srt://edge-ingest.frameworks.network:8889?streamid={streamKey}
-- WHIP ingest: https://edge-ingest.frameworks.network/webrtc/{streamKey}
-- HLS playback: https://foghorn.frameworks.network/hls/{playbackId}/index.m3u8
-- WebRTC (WHEP) playback: https://foghorn.frameworks.network/webrtc/{playbackId}
-- Embed player: https://foghorn.frameworks.network/{playbackId}
-- When you create a stream via create_stream, construct the above URLs using the returned stream_key and playback_id. Never output livepeer.com, livepeer.studio, or livepeer.org URLs as ingest/playback endpoints.
+- Three URL surfaces in priority order:
+  1. Tenant aliases (paid tier with active alias): {service}.{tenant}.cdn.frameworks.network. Geo-balances across every cluster the tenant subscribes to (platform, self-hosted, marketplace). Always prefer when present in the CreateStreamResponse tenant_*_domain fields.
+  2. Global root entrypoints (default for free / platform-official paying tenants): {service}.frameworks.network. Bunny smart DNS geo-routes to the nearest platform-operated instance.
+  3. Cluster-concrete (operator pin / debugging): {service}.{cluster_slug}.frameworks.network. Resolves to that specific cluster's edges. Use for diagnostics or when a customer explicitly wants to pin to one cluster.
+- Examples by tier:
+  - Paid tenant "acme":
+    - RTMP ingest:  rtmp://edge-ingest.acme.cdn.frameworks.network/live/{streamKey}
+    - SRT ingest:   srt://edge-ingest.acme.cdn.frameworks.network:8889?streamid={streamKey}
+    - WHIP ingest:  https://edge-ingest.acme.cdn.frameworks.network/webrtc/{streamKey}
+    - HLS playback: https://foghorn.acme.cdn.frameworks.network/hls/{playbackId}/index.m3u8
+    - WHEP playback: https://foghorn.acme.cdn.frameworks.network/webrtc/{playbackId}
+  - Free tier / unaliased:
+    - RTMP ingest:  rtmp://edge-ingest.frameworks.network/live/{streamKey}
+    - SRT ingest:   srt://edge-ingest.frameworks.network:8889?streamid={streamKey}
+    - WHIP ingest:  https://edge-ingest.frameworks.network/webrtc/{streamKey}
+    - HLS playback: https://foghorn.frameworks.network/hls/{playbackId}/index.m3u8
+    - WHEP playback: https://foghorn.frameworks.network/webrtc/{playbackId}
+- After create_stream, the response surfaces all three tiers; prefer tenant_*_domain when populated, else global_*_domain, else the cluster-pinned *_domain fields. Never output livepeer.com, livepeer.studio, or livepeer.org URLs as ingest/playback endpoints.
 
 SDKs and tools — recommend these for ingest and playback
 - Player SDK: @livepeer-frameworks/player-react, @livepeer-frameworks/player-svelte, @livepeer-frameworks/player-core. Recommend for web playback integration. Multi-engine (hls.js, dash.js, Video.js, native WebSocket) with gateway-aware geo-routing.
