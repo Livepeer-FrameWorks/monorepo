@@ -225,18 +225,32 @@ func (s *QuartermasterServer) dispatchNavOutboxRow(ctx context.Context, row navO
 	}
 	switch row.action {
 	case "ensure":
-		if _, err := s.navigatorClient.EnsureCustomDomain(ctx, &pb.EnsureCustomDomainRequest{
+		resp, err := s.navigatorClient.EnsureCustomDomain(ctx, &pb.EnsureCustomDomainRequest{
 			TenantId: row.tenantID,
 			Domain:   row.domain,
-		}); err != nil {
+		})
+		if err != nil {
 			return []string{"navigator"}, err
 		}
+		if resp == nil {
+			return []string{"navigator"}, errors.New("navigator ensure custom domain returned nil response")
+		}
+		if !resp.GetAccepted() || resp.GetError() != "" {
+			return []string{"navigator"}, fmt.Errorf("navigator ensure custom domain rejected: %s", resp.GetError())
+		}
 	case "remove":
-		if _, err := s.navigatorClient.RemoveCustomDomain(ctx, &pb.RemoveCustomDomainRequest{
+		resp, err := s.navigatorClient.RemoveCustomDomain(ctx, &pb.RemoveCustomDomainRequest{
 			TenantId: row.tenantID,
 			Domain:   row.domain,
-		}); err != nil {
+		})
+		if err != nil {
 			return []string{"navigator"}, err
+		}
+		if resp == nil {
+			return []string{"navigator"}, errors.New("navigator remove custom domain returned nil response")
+		}
+		if !resp.GetAccepted() {
+			return []string{"navigator"}, errors.New("navigator remove custom domain rejected")
 		}
 	default:
 		return []string{"navigator"}, fmt.Errorf("unsupported action %q", row.action)

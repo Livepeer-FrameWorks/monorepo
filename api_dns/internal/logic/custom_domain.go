@@ -120,42 +120,46 @@ func setVerifyFailure(ctx context.Context, st customDomainStore, row store.Tenan
 	return fmt.Errorf("%s", msg)
 }
 
-// IssueCustomDomainCertificate runs ACME DNS-01 for a verified customer
-// domain. The customer CNAMEs `_acme-challenge.<domain>` into the
-// Navigator-owned acme-dns.{root} subzone; lego writes the TXT there
-// through Bunny (the provider that owns the subzone), regardless of who
-// hosts DNS for the customer's apex. Issuer + cert_expires_at land on
-// the lifecycle row; the cert + key live in navigator.certificates via
-// SaveCertificate.
-func (m *CertManager) IssueCustomDomainCertificate(ctx context.Context, row store.TenantCustomDomain, email string) error {
+func (m *CertManager) IssueCustomDomainCertificate(ctx context.Context, row store.TenantCustomDomain, rootDomain, email string) error {
 	if email = strings.TrimSpace(email); email == "" {
 		return fmt.Errorf("email required for ACME issuance")
 	}
 	if err := m.store.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, "cert_issuing", ""); err != nil {
 		return fmt.Errorf("status cert_issuing: %w", err)
 	}
-	_, _, expiresAt, issuer, err := m.IssueCertificateViaBunnyWithIssuer(ctx, row.TenantID, row.Domain, email)
+	alias, err := m.store.GetTenantAlias(ctx, row.TenantID)
 	if err != nil {
-		if statusErr := m.store.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, "cert_failed", err.Error()); statusErr != nil {
-			return fmt.Errorf("acme + status update: %w (status: %w)", err, statusErr)
-		}
-		return err
+		return m.failCustomDomainIssue(ctx, row, fmt.Errorf("tenant alias lookup: %w", err))
+	}
+	bundle, err := m.EnsureTenantWildcardCertificate(ctx, row.TenantID, alias.Subdomain, TenantAliasZoneLabel, rootDomain, email)
+	if err != nil {
+		return m.failCustomDomainIssue(ctx, row, err)
 	}
 	expSQL := sql.NullTime{}
-	if !expiresAt.IsZero() {
-		expSQL = sql.NullTime{Valid: true, Time: expiresAt}
+	if !bundle.ExpiresAt.IsZero() {
+		expSQL = sql.NullTime{Valid: true, Time: bundle.ExpiresAt}
 	}
-	if err := m.store.SetTenantCustomDomainCertMetadata(ctx, row.TenantID, row.Domain, issuer, expSQL); err != nil {
+	if err := m.store.SetTenantCustomDomainCertMetadata(ctx, row.TenantID, row.Domain, bundle.IssuerCA, expSQL); err != nil {
 		return fmt.Errorf("cert metadata: %w", err)
 	}
 	return m.store.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, "cert_issued", "")
 }
 
-// FinalizeCustomDomainRemoval drops the cert material from
-// navigator.certificates and then deletes the tenant_custom_domains row.
-// Cert deletion runs first; the lifecycle row is the operator-facing
-// breadcrumb and stays until cert cleanup succeeds.
-func (m *CertManager) FinalizeCustomDomainRemoval(ctx context.Context, tenantID, domain string) error {
+func (m *CertManager) failCustomDomainIssue(ctx context.Context, row store.TenantCustomDomain, cause error) error {
+	if statusErr := m.store.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, "cert_failed", cause.Error()); statusErr != nil {
+		return fmt.Errorf("cert issue + status update: %w (status: %w)", cause, statusErr)
+	}
+	return cause
+}
+
+func (m *CertManager) FinalizeCustomDomainRemoval(ctx context.Context, tenantID, domain, rootDomain, email string) error {
+	if alias, err := m.store.GetTenantAlias(ctx, tenantID); err == nil && alias != nil {
+		if _, bundleErr := m.EnsureTenantWildcardCertificate(ctx, tenantID, alias.Subdomain, TenantAliasZoneLabel, rootDomain, email); bundleErr != nil {
+			return fmt.Errorf("refresh tenant tls bundle: %w", bundleErr)
+		}
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("tenant alias lookup: %w", err)
+	}
 	if err := m.store.DeleteCertificate(ctx, tenantID, domain); err != nil {
 		return fmt.Errorf("delete cert material: %w", err)
 	}
@@ -212,15 +216,15 @@ func (m *CertManager) ProcessPendingCustomDomains(ctx context.Context, rootDomai
 				continue
 			}
 			processed++
-			// Fall through to issuance on the next tick to avoid blocking
-			// the worker on a slow ACME order.
+		// Fall through to issuance on the next tick to avoid blocking
+		// the worker on a slow ACME order.
 		case "verified":
-			if err := m.IssueCustomDomainCertificate(ctx, row, email); err != nil {
+			if err := m.IssueCustomDomainCertificate(ctx, row, rootDomain, email); err != nil {
 				continue
 			}
 			processed++
 		case "tearing_down":
-			if err := m.FinalizeCustomDomainRemoval(ctx, row.TenantID, row.Domain); err != nil {
+			if err := m.FinalizeCustomDomainRemoval(ctx, row.TenantID, row.Domain, rootDomain, email); err != nil {
 				continue
 			}
 			processed++

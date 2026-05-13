@@ -181,6 +181,27 @@ func TestManifestValidateKafkaControllerHostExists(t *testing.T) {
 	}
 }
 
+func TestManifestValidateAllowsServiceAliasWithKnownDeploy(t *testing.T) {
+	manifest := &Manifest{
+		Version: "1",
+		Type:    "cluster",
+		Hosts: map[string]Host{
+			"regional-us-1": {ExternalIP: "10.0.0.1", User: "root", WireguardIP: "10.88.0.1"},
+		},
+		Services: map[string]ServiceConfig{
+			"chandler-us": {
+				Enabled: true,
+				Deploy:  "chandler",
+				Host:    "regional-us-1",
+			},
+		},
+	}
+
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("service alias with known deploy should validate: %v", err)
+	}
+}
+
 func TestMergeHostInventory(t *testing.T) {
 	manifest := &Manifest{
 		Hosts: map[string]Host{

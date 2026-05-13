@@ -23,15 +23,18 @@ import (
 )
 
 type fakeStore struct {
-	getCertFunc       func(ctx context.Context, tenantID, domain string) (*store.Certificate, error)
-	saveCertFunc      func(ctx context.Context, tenantID string, cert *store.Certificate) error
-	getTLSBundleFunc  func(ctx context.Context, bundleID string) (*store.TLSBundle, error)
-	saveTLSBundleFunc func(ctx context.Context, bundle *store.TLSBundle) error
-	getAccountFunc    func(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error)
-	saveAccountFunc   func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error
-	saveCertCalled    int
-	saveBundleCalled  int
-	saveAccountCalled int
+	getCertFunc                         func(ctx context.Context, tenantID, domain string) (*store.Certificate, error)
+	saveCertFunc                        func(ctx context.Context, tenantID string, cert *store.Certificate) error
+	getTLSBundleFunc                    func(ctx context.Context, bundleID string) (*store.TLSBundle, error)
+	saveTLSBundleFunc                   func(ctx context.Context, bundle *store.TLSBundle) error
+	getAccountFunc                      func(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error)
+	saveAccountFunc                     func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error
+	listTenantCustomDomainsFunc         func(ctx context.Context, tenantID string) ([]store.TenantCustomDomain, error)
+	setTenantCustomDomainCertMetadataFn func(ctx context.Context, tenantID, domain, issuerID string, certExpiresAt sql.NullTime) error
+	saveCertCalled                      int
+	saveBundleCalled                    int
+	saveAccountCalled                   int
+	setCustomDomainMetadataCalled       int
 }
 
 func (f *fakeStore) GetCertificate(ctx context.Context, tenantID, domain string) (*store.Certificate, error) {
@@ -114,7 +117,10 @@ func (f *fakeStore) ListTenantCustomDomainsByStatus(_ context.Context, _ []strin
 	return nil, nil
 }
 
-func (f *fakeStore) ListTenantCustomDomains(_ context.Context, _ string) ([]store.TenantCustomDomain, error) {
+func (f *fakeStore) ListTenantCustomDomains(ctx context.Context, tenantID string) ([]store.TenantCustomDomain, error) {
+	if f.listTenantCustomDomainsFunc != nil {
+		return f.listTenantCustomDomainsFunc(ctx, tenantID)
+	}
 	return nil, nil
 }
 
@@ -122,7 +128,11 @@ func (f *fakeStore) SetTenantCustomDomainStatus(_ context.Context, _, _, _, _ st
 	return nil
 }
 
-func (f *fakeStore) SetTenantCustomDomainCertMetadata(_ context.Context, _, _, _ string, _ sql.NullTime) error {
+func (f *fakeStore) SetTenantCustomDomainCertMetadata(ctx context.Context, tenantID, domain, issuerID string, certExpiresAt sql.NullTime) error {
+	f.setCustomDomainMetadataCalled++
+	if f.setTenantCustomDomainCertMetadataFn != nil {
+		return f.setTenantCustomDomainCertMetadataFn(ctx, tenantID, domain, issuerID, certExpiresAt)
+	}
 	return nil
 }
 
@@ -403,6 +413,75 @@ func TestEnsureTLSBundleObtainsAndPersistsBundle(t *testing.T) {
 	require.Equal(t, 1, fakeStore.saveBundleCalled)
 	require.Equal(t, 1, provider.presentCalls)
 	require.Equal(t, 1, provider.cleanupCalls)
+}
+
+func TestEnsureTLSBundleRenewsTenantCustomDomainBundleWithBunnyProvider(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("NAVIGATOR_CERT_ALLOWED_SUFFIXES", "frameworks.network")
+	notAfter := time.Now().Add(48 * time.Hour)
+	certPEM, keyPEM := buildTestCert(t, notAfter)
+
+	standardProvider := &fakeDNSProvider{}
+	bunnyProvider := &fakeDNSProvider{}
+	acme := &fakeACMEClient{
+		resource: &certificate.Resource{
+			Certificate: certPEM,
+			PrivateKey:  keyPEM,
+		},
+	}
+	fakeStore := &fakeStore{
+		getCertFunc: func(ctx context.Context, tenantID, domain string) (*store.Certificate, error) {
+			return nil, store.ErrNotFound
+		},
+		saveCertFunc: func(ctx context.Context, tenantID string, cert *store.Certificate) error {
+			return nil
+		},
+		getTLSBundleFunc: func(ctx context.Context, bundleID string) (*store.TLSBundle, error) {
+			return nil, store.ErrNotFound
+		},
+		saveTLSBundleFunc: func(ctx context.Context, bundle *store.TLSBundle) error {
+			return nil
+		},
+		getAccountFunc: func(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error) {
+			return nil, store.ErrNotFound
+		},
+		saveAccountFunc: func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error {
+			return nil
+		},
+		listTenantCustomDomainsFunc: func(ctx context.Context, tenantID string) ([]store.TenantCustomDomain, error) {
+			require.Equal(t, "tenant-123", tenantID)
+			return []store.TenantCustomDomain{{TenantID: tenantID, Domain: "media.example.com", Status: "cert_issued"}}, nil
+		},
+		setTenantCustomDomainCertMetadataFn: func(ctx context.Context, tenantID, domain, issuerID string, certExpiresAt sql.NullTime) error {
+			require.Equal(t, "tenant-123", tenantID)
+			require.Equal(t, "media.example.com", domain)
+			require.NotEmpty(t, issuerID)
+			require.True(t, certExpiresAt.Valid)
+			return nil
+		},
+	}
+
+	manager := NewCertManager(fakeStore)
+	manager.acmeClientFactory = func(config *lego.Config) (acmeClient, error) {
+		return acme, nil
+	}
+	manager.dnsProviderFactory = func() (challenge.Provider, error) {
+		return standardProvider, nil
+	}
+	manager.bunnyDNSProviderFactory = func() (challenge.Provider, error) {
+		return bunnyProvider, nil
+	}
+
+	bundle, err := manager.EnsureTLSBundle(ctx, "tenant:tenant-123", []string{
+		"acme.cdn.frameworks.network",
+		"*.acme.cdn.frameworks.network",
+		"media.example.com",
+	}, "ops@frameworks.network")
+	require.NoError(t, err)
+	require.Equal(t, "tenant:tenant-123", bundle.BundleID)
+	require.Equal(t, 0, standardProvider.presentCalls)
+	require.Equal(t, 1, bunnyProvider.presentCalls)
+	require.Equal(t, 1, fakeStore.setCustomDomainMetadataCalled)
 }
 
 func TestCertificateNeedsBunnyProvider(t *testing.T) {

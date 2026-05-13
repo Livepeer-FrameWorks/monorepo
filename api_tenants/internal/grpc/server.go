@@ -621,7 +621,7 @@ func (s *QuartermasterServer) ensureServiceExists(ctx context.Context, serviceTy
 	if err != nil {
 		return "", status.Errorf(codes.Internal, "failed to begin service lookup transaction: %v", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer tx.Rollback() //nolint:errcheck
 
 	// Advisory lock keyed on service type — second caller blocks until first commits
 	_, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, serviceType)
@@ -1659,7 +1659,7 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+	defer tx.Rollback() //nolint:errcheck
 
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO quartermaster.infrastructure_clusters (
@@ -2176,6 +2176,12 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 		}
 	}
 
+	if domain := strings.TrimSpace(req.GetCustomDomain()); domain != "" {
+		if enqErr := s.enqueueCustomDomainTransition(ctx, tx, tenantID, "", domain); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue navigator custom-domain transition: %v", enqErr)
+		}
+	}
+
 	// Commit the transaction
 	if err := tx.Commit(); err != nil {
 		s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to commit transaction for tenant creation and auto-subscription")
@@ -2320,7 +2326,7 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+	defer tx.Rollback() //nolint:errcheck
 
 	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -2422,7 +2428,26 @@ func (s *QuartermasterServer) DeleteTenant(ctx context.Context, req *pb.DeleteTe
 	}
 
 	userID := middleware.GetUserID(ctx)
-	result, err := s.db.ExecContext(ctx, `
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var previousCustomDomain sql.NullString
+	if scanErr := tx.QueryRowContext(ctx, `
+		SELECT custom_domain
+		FROM quartermaster.tenants
+		WHERE id = $1 AND is_active = TRUE
+	`, tenantID).Scan(&previousCustomDomain); scanErr != nil {
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			return nil, status.Error(codes.NotFound, "tenant not found")
+		}
+		return nil, status.Errorf(codes.Internal, "lookup tenant custom domain: %v", scanErr)
+	}
+
+	result, err := tx.ExecContext(ctx, `
 		UPDATE quartermaster.tenants SET is_active = FALSE, updated_at = NOW()
 		WHERE id = $1 AND is_active = TRUE
 	`, tenantID)
@@ -2439,8 +2464,20 @@ func (s *QuartermasterServer) DeleteTenant(ctx context.Context, req *pb.DeleteTe
 		return nil, status.Error(codes.NotFound, "tenant not found")
 	}
 
+	if previousCustomDomain.Valid && strings.TrimSpace(previousCustomDomain.String) != "" {
+		if _, enqErr := s.EnqueueNavigatorCustomDomainTx(ctx, tx, tenantID, previousCustomDomain.String, "remove"); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue navigator custom-domain removal: %v", enqErr)
+		}
+	}
+	if enqErr := s.emitTenantEventTx(ctx, tx, eventTenantDeleted, tenantID, userID, nil, nil); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant_deleted: %v", enqErr)
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "commit tenant delete: %v", commitErr)
+	}
+
 	s.logger.WithField("tenant_id", tenantID).Info("Deleted tenant successfully")
-	s.emitTenantEvent(ctx, eventTenantDeleted, tenantID, userID, nil, nil)
 	return &emptypb.Empty{}, nil
 }
 
@@ -2579,7 +2616,7 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *pb.U
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+	defer tx.Rollback() //nolint:errcheck
 
 	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -8451,7 +8488,7 @@ func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+	defer tx.Rollback() //nolint:errcheck
 
 	if _, err = tx.ExecContext(ctx, query, args...); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update cluster: %v", err)
@@ -8648,7 +8685,7 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+	defer tx.Rollback() //nolint:errcheck
 
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO quartermaster.infrastructure_clusters (

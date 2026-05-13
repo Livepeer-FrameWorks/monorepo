@@ -88,15 +88,19 @@ func (c *Cache) Get(ctx context.Context, tenantID, streamID string, fetch FetchF
 
 	c.mu.RLock()
 	row, ok := c.entries[key]
+	var cached cacheRow
+	if ok && row != nil {
+		cached = *row
+	}
 	c.mu.RUnlock()
 
-	if ok && row.entry.BundleVersion >= row.watermark && now.Before(row.entry.ExpiresAt) {
-		if now.Before(row.entry.SoftExpiresAt) {
-			return row.entry, nil
+	if ok && cached.entry.BundleVersion >= cached.watermark && now.Before(cached.entry.ExpiresAt) {
+		if now.Before(cached.entry.SoftExpiresAt) {
+			return cached.entry, nil
 		}
 		// Soft-expired: serve cached, background-refresh.
-		c.triggerBackgroundRefresh(ctx, tenantID, streamID, fetch)
-		return row.entry, nil
+		c.triggerBackgroundRefresh(tenantID, streamID, fetch)
+		return cached.entry, nil
 	}
 
 	// Cold path: synchronous fetch.
@@ -166,7 +170,7 @@ func (c *Cache) putEntry(key string, e Entry) {
 	row.entry = e
 }
 
-func (c *Cache) triggerBackgroundRefresh(parent context.Context, tenantID, streamID string, fetch FetchFunc) {
+func (c *Cache) triggerBackgroundRefresh(tenantID, streamID string, fetch FetchFunc) {
 	key := cacheKey(tenantID, streamID)
 	flag, _ := c.inflight.LoadOrStore(key, &atomic.Bool{})
 	bf := flag.(*atomic.Bool) //nolint:errcheck // we just stored it
@@ -184,7 +188,6 @@ func (c *Cache) triggerBackgroundRefresh(parent context.Context, tenantID, strea
 		if err != nil {
 			return
 		}
-		_ = parent // parent retained for future tracing propagation
 		c.putEntry(key, fresh)
 	}()
 }

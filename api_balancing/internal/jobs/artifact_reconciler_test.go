@@ -673,6 +673,50 @@ func TestReconcileOrphaned_RespectsBatchSize(t *testing.T) {
 	}
 }
 
+func TestProjectCommodoreArtifactStateRepairsStorageAndThumbnailProjection(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+
+	commodore := &mockCommodoreClient{}
+	r := newTestReconciler(t, mockDB, nil, commodore, nil)
+	r.batchSize = 10
+
+	rows := sqlmock.NewRows([]string{
+		"artifact_hash", "artifact_type", "tenant_id", "storage_cluster_id", "origin_cluster_id", "has_thumbnails",
+	}).AddRow("vod-hash", "vod", "tenant-1", "media-us-1", "media-eu-1", true).
+		AddRow("clip-hash", "clip", "tenant-1", "", "media-eu-1", true)
+
+	mock.ExpectQuery("FROM foghorn.artifacts").
+		WithArgs(10).
+		WillReturnRows(rows)
+
+	count := r.projectCommodoreArtifactState(context.Background())
+	if count != 3 {
+		t.Fatalf("expected 3 projection calls, got %d", count)
+	}
+	if len(commodore.storageProjection) != 1 {
+		t.Fatalf("expected 1 storage projection, got %d", len(commodore.storageProjection))
+	}
+	if len(commodore.thumbnailProjection) != 2 {
+		t.Fatalf("expected 2 thumbnail projections, got %d", len(commodore.thumbnailProjection))
+	}
+	if commodore.storageProjection[0] != "tenant-1|ARTIFACT_ASSET_TYPE_VOD|vod-hash|media-us-1" {
+		t.Fatalf("unexpected storage projection: %q", commodore.storageProjection[0])
+	}
+	if commodore.thumbnailProjection[0] != "tenant-1|ARTIFACT_ASSET_TYPE_VOD|vod-hash|media-us-1" {
+		t.Fatalf("unexpected vod thumbnail projection: %q", commodore.thumbnailProjection[0])
+	}
+	if commodore.thumbnailProjection[1] != "tenant-1|ARTIFACT_ASSET_TYPE_CLIP|clip-hash|media-eu-1" {
+		t.Fatalf("unexpected clip thumbnail projection: %q", commodore.thumbnailProjection[1])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // --- resolveArtifactContext ---
 
 func TestResolveArtifactContext_Clip(t *testing.T) {

@@ -1738,6 +1738,178 @@ func TestBuildTaskConfigKafkaUsesMeshControllerQuorumAddresses(t *testing.T) {
 	}
 }
 
+func TestBuildTaskConfigKafkaMirrorMakerRendersHubAndSpokeLinks(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {WireguardIP: "10.88.0.11", Labels: map[string]string{"region": "eu-west"}},
+			"regional-eu-2": {WireguardIP: "10.88.0.12", Labels: map[string]string{"region": "eu-west"}},
+			"regional-eu-3": {WireguardIP: "10.88.0.13", Labels: map[string]string{"region": "eu-west"}},
+			"regional-us-1": {WireguardIP: "10.88.1.11", Labels: map[string]string{"region": "us-east"}},
+			"regional-us-2": {WireguardIP: "10.88.1.12", Labels: map[string]string{"region": "us-east"}},
+			"regional-us-3": {WireguardIP: "10.88.1.13", Labels: map[string]string{"region": "us-east"}},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Kafka: &inventory.KafkaConfig{
+				Enabled: true,
+				Version: "4.2.0",
+				Brokers: []inventory.KafkaBroker{
+					{Host: "regional-eu-1", ID: 1, Port: 9092},
+					{Host: "regional-eu-2", ID: 2, Port: 9092},
+					{Host: "regional-eu-3", ID: 3, Port: 9092},
+				},
+				Regional: []inventory.RegionalKafkaCluster{
+					{
+						RegionID: "us-east",
+						Brokers: []inventory.KafkaBroker{
+							{Host: "regional-us-1", ID: 11, Port: 9092},
+							{Host: "regional-us-2", ID: 12, Port: 9092},
+							{Host: "regional-us-3", ID: 13, Port: 9092},
+						},
+						MirrorTopics: []string{"analytics_events", "service_events"},
+					},
+				},
+				MirrorMaker: &inventory.KafkaMirrorMakerConfig{
+					Enabled:   true,
+					Host:      "regional-eu-1",
+					TaskCount: 2,
+				},
+			},
+		},
+	}
+	task := &orchestrator.Task{
+		Name:      "kafka-mirrormaker",
+		Type:      "kafka-mirrormaker",
+		ServiceID: "kafka-mirrormaker",
+		Host:      "regional-eu-1",
+		Phase:     orchestrator.PhaseInfrastructure,
+	}
+
+	config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig returned error: %v", err)
+	}
+
+	target := config.Metadata["target"].(map[string]any)
+	if target["alias"] != "eu-west" {
+		t.Fatalf("target alias = %v, want eu-west", target["alias"])
+	}
+
+	sources := config.Metadata["sources"].([]map[string]any)
+	if len(sources) != 1 || sources[0]["alias"] != "us-east" {
+		t.Fatalf("sources = %#v, want one us-east source", sources)
+	}
+	if sources[0]["bootstrap_servers"] != "10.88.1.11:9092,10.88.1.12:9092,10.88.1.13:9092" {
+		t.Fatalf("source bootstrap_servers = %v", sources[0]["bootstrap_servers"])
+	}
+
+	if _, ok := config.Metadata["fanout_targets"]; ok {
+		t.Fatalf("MM2 config must not mirror aggregate analytics back to regional Signalman")
+	}
+}
+
+func TestBuildServiceEnvVarsSetsMirrorPrefixesForAggregatorPeriscopeOnly(t *testing.T) {
+	manifest := &inventory.Manifest{
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {WireguardIP: "10.88.0.11", Labels: map[string]string{"region": "eu-west"}},
+			"regional-us-1": {WireguardIP: "10.88.1.11", Labels: map[string]string{"region": "us-east"}},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-eu-1": {Region: "eu-west"},
+			"media-us-1": {Region: "us-east"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Kafka: &inventory.KafkaConfig{
+				Enabled:   true,
+				ClusterID: "eu-kafka",
+				Brokers:   []inventory.KafkaBroker{{Host: "regional-eu-1", ID: 1, Port: 9092}},
+				Regional: []inventory.RegionalKafkaCluster{
+					{
+						RegionID:  "us-east",
+						ClusterID: "us-kafka",
+						Brokers:   []inventory.KafkaBroker{{Host: "regional-us-1", ID: 11, Port: 9092}},
+					},
+				},
+			},
+		},
+	}
+
+	euPeriscope := &orchestrator.Task{Type: "periscope-ingest", ServiceID: "periscope-ingest", Host: "regional-eu-1", ClusterID: "media-eu-1"}
+	euEnv, err := buildServiceEnvVars(euPeriscope, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars eu periscope: %v", err)
+	}
+	if euEnv["MIRROR_REGION_PREFIXES"] != "us-east" {
+		t.Fatalf("eu periscope MIRROR_REGION_PREFIXES = %q, want us-east", euEnv["MIRROR_REGION_PREFIXES"])
+	}
+
+	usSignalman := &orchestrator.Task{Type: "signalman", ServiceID: "signalman", Host: "regional-us-1", ClusterID: "media-us-1"}
+	usEnv, err := buildServiceEnvVars(usSignalman, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars us signalman: %v", err)
+	}
+	if usEnv["MIRROR_REGION_PREFIXES"] != "" {
+		t.Fatalf("us signalman MIRROR_REGION_PREFIXES = %q, want empty", usEnv["MIRROR_REGION_PREFIXES"])
+	}
+
+	usPeriscope := &orchestrator.Task{Type: "periscope-ingest", ServiceID: "periscope-ingest", Host: "regional-us-1", ClusterID: "media-us-1"}
+	periscopeEnv, err := buildServiceEnvVars(usPeriscope, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars us periscope: %v", err)
+	}
+	if periscopeEnv["MIRROR_REGION_PREFIXES"] != "" {
+		t.Fatalf("regional periscope MIRROR_REGION_PREFIXES = %q, want empty", periscopeEnv["MIRROR_REGION_PREFIXES"])
+	}
+}
+
+func TestBuildServiceEnvVarsSelectsKafkaFromHostRegionForGenericRegionalService(t *testing.T) {
+	manifest := &inventory.Manifest{
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {WireguardIP: "10.88.0.11", Labels: map[string]string{"region": "eu-west"}},
+			"regional-us-1": {WireguardIP: "10.88.1.11", Labels: map[string]string{"region": "us-east"}},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Kafka: &inventory.KafkaConfig{
+				Enabled:   true,
+				ClusterID: "eu-kafka",
+				Brokers:   []inventory.KafkaBroker{{Host: "regional-eu-1", ID: 1, Port: 9092}},
+				Regional: []inventory.RegionalKafkaCluster{
+					{
+						RegionID:  "us-east",
+						ClusterID: "us-kafka",
+						Brokers:   []inventory.KafkaBroker{{Host: "regional-us-1", ID: 11, Port: 9092}},
+					},
+				},
+			},
+		},
+	}
+
+	usDecklog := &orchestrator.Task{Type: "decklog", ServiceID: "decklog", Host: "regional-us-1"}
+	usEnv, err := buildServiceEnvVars(usDecklog, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars us decklog: %v", err)
+	}
+	if usEnv["KAFKA_BROKERS"] != "regional-us-1.internal:9092" {
+		t.Fatalf("us KAFKA_BROKERS = %q, want regional US broker", usEnv["KAFKA_BROKERS"])
+	}
+	if usEnv["KAFKA_CLUSTER_ID"] != "us-kafka" {
+		t.Fatalf("us KAFKA_CLUSTER_ID = %q, want us-kafka", usEnv["KAFKA_CLUSTER_ID"])
+	}
+
+	euDecklog := &orchestrator.Task{Type: "decklog", ServiceID: "decklog", Host: "regional-eu-1"}
+	euEnv, err := buildServiceEnvVars(euDecklog, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars eu decklog: %v", err)
+	}
+	if euEnv["KAFKA_BROKERS"] != "regional-eu-1.internal:9092" {
+		t.Fatalf("eu KAFKA_BROKERS = %q, want regional EU broker", euEnv["KAFKA_BROKERS"])
+	}
+	if euEnv["KAFKA_CLUSTER_ID"] != "eu-kafka" {
+		t.Fatalf("eu KAFKA_CLUSTER_ID = %q, want eu-kafka", euEnv["KAFKA_CLUSTER_ID"])
+	}
+}
+
 func TestBuildTaskConfigSetsObservabilityComponent(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",

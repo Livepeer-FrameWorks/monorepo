@@ -720,12 +720,13 @@ func (s *NavigatorServer) EnsureCustomDomain(ctx context.Context, req *pb.Ensure
 		return &pb.EnsureCustomDomainResponse{Error: err.Error()}, nil
 	}
 	alias, aliasErr := s.CertManager.GetTenantAlias(ctx, tenantID)
-	if aliasErr != nil || alias == nil || alias.Subdomain == "" {
-		// Soft failure reported to the caller via the response Error field;
-		// the RPC itself succeeds so callers can distinguish "lookup error"
-		// from "tenant alias not configured" without retrying.
-		return &pb.EnsureCustomDomainResponse{ //nolint:nilerr // soft error returned via Error field
-			Accepted: true,
+	if aliasErr != nil && !errors.Is(aliasErr, store.ErrNotFound) {
+		log.WithError(aliasErr).Warn("Failed to look up tenant alias for custom domain")
+		return nil, status.Errorf(codes.Internal, "tenant alias lookup: %v", aliasErr)
+	}
+	if alias == nil || alias.Subdomain == "" {
+		return &pb.EnsureCustomDomainResponse{
+			Accepted: false,
 			Status:   row.Status,
 			Error:    "tenant alias not provisioned; configure the paid tenant alias first",
 		}, nil
@@ -747,7 +748,7 @@ func (s *NavigatorServer) RemoveCustomDomain(ctx context.Context, req *pb.Remove
 			"tenant_id": req.GetTenantId(),
 			"domain":    req.GetDomain(),
 		}).Warn("Failed to mark custom domain for teardown")
-		return &pb.RemoveCustomDomainResponse{}, nil
+		return nil, status.Errorf(codes.Internal, "remove custom domain: %v", err)
 	}
 	return &pb.RemoveCustomDomainResponse{Accepted: true}, nil
 }

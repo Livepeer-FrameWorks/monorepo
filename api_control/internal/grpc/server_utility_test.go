@@ -326,6 +326,31 @@ func TestBuildClusterFanoutTargets_DistinctOfficial(t *testing.T) {
 	}
 }
 
+func TestFilterPeersByPolicy_AllowsSelfHostedGrantRegardlessOfPlanClass(t *testing.T) {
+	peers := []*pb.TenantClusterPeer{
+		{ClusterId: "official", ClusterClass: "platform_official", ClusterType: "shared-lb"},
+		{ClusterId: "self-hosted", ClusterClass: "tenant_private", ClusterType: "self-hosted"},
+		{ClusterId: "private", ClusterClass: "tenant_private", ClusterType: "dedicated"},
+	}
+	filtered := filterPeersByPolicy(peers, map[string]struct{}{"platform_official": {}})
+	if len(filtered) != 2 {
+		t.Fatalf("expected official and self-hosted peers, got %d", len(filtered))
+	}
+	if filtered[0].GetClusterId() != "official" || filtered[1].GetClusterId() != "self-hosted" {
+		t.Fatalf("unexpected peers: %q, %q", filtered[0].GetClusterId(), filtered[1].GetClusterId())
+	}
+}
+
+func TestFilterPeersByPolicy_DropsUnhealthySelfHostedPeer(t *testing.T) {
+	peers := []*pb.TenantClusterPeer{
+		{ClusterId: "self-hosted", ClusterClass: "tenant_private", ClusterType: "self-hosted", HealthStatus: "offline"},
+	}
+	filtered := filterPeersByPolicy(peers, map[string]struct{}{"platform_official": {}})
+	if len(filtered) != 0 {
+		t.Fatalf("expected no peers, got %d", len(filtered))
+	}
+}
+
 func TestFoghornPoolKey_WithClusterID(t *testing.T) {
 	if foghornPoolKey("c1", "addr1") != "c1" {
 		t.Fatal("should prefer clusterID")

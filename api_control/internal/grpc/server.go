@@ -421,16 +421,6 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 	}
 }
 
-// resolveClusterRouteForTenant returns cached or fresh cluster routing data
-// from Quartermaster. Never dials Foghorn. Safe to call from handlers that
-// only need cluster metadata (origin_cluster_id, cluster_peers, domain slugs).
-//
-// Plan-aware filtering: each peer is checked against the tenant's
-// plan-tier-allowed cluster_class set. Peers with missing class metadata
-// pass through; peers whose class isn't allowed by the tier are dropped.
-// Health filter excludes non-healthy peers. Tier lookup is cached on the
-// route row (5min TTL), so the Purser round-trip happens at most once
-// per tenant per cache cycle.
 func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tenantID string) (*clusterRoute, error) {
 	s.routeCacheMu.RLock()
 	if route, ok := s.routeCache[tenantID]; ok && time.Since(route.resolvedAt) < s.routeCacheTTL {
@@ -475,18 +465,6 @@ func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tena
 	return route, nil
 }
 
-// allowedClusterClassesForTenant returns the cluster_class set that the
-// tenant's plan tier may admit. Sourced from Purser's GetBillingTier
-// tier_level. Failure modes (no Purser client, RPC error, missing tier)
-// fall back to platform_official only — fail-closed on the safest class.
-//
-//	tier_level 0/1 (no sub / free) → platform_official only
-//	tier_level 2-3 (supporter / developer) → + third_party_marketplace
-//	tier_level 4+ (production / enterprise) → + tenant_private
-//
-// Self-hosted clusters carry no fixed class; they're entitled per-tenant
-// via tenant_cluster_access grants regardless of plan, and pass this
-// filter unchanged when their class is missing.
 func (s *CommodoreServer) allowedClusterClassesForTenant(ctx context.Context, tenantID string) map[string]struct{} {
 	free := map[string]struct{}{"platform_official": {}}
 	if s.purserClient == nil {
@@ -511,9 +489,6 @@ func (s *CommodoreServer) allowedClusterClassesForTenant(ctx context.Context, te
 	return out
 }
 
-// findPeerByClusterID returns the matching peer or nil. Admission uses
-// this to verify the requested ingest cluster survived the plan-aware
-// filter applied at route fetch time.
 func findPeerByClusterID(peers []*pb.TenantClusterPeer, clusterID string) *pb.TenantClusterPeer {
 	for _, p := range peers {
 		if p != nil && p.GetClusterId() == clusterID {
@@ -523,10 +498,6 @@ func findPeerByClusterID(peers []*pb.TenantClusterPeer, clusterID string) *pb.Te
 	return nil
 }
 
-// filterPeersByPolicy drops peers whose cluster_class is non-empty and
-// not in the tenant's allowed set, and drops peers whose health_status
-// is explicitly degraded/offline. Peers with empty class or health pass
-// through.
 func filterPeersByPolicy(peers []*pb.TenantClusterPeer, allowedClasses map[string]struct{}) []*pb.TenantClusterPeer {
 	if len(peers) == 0 {
 		return peers
@@ -537,7 +508,7 @@ func filterPeersByPolicy(peers []*pb.TenantClusterPeer, allowedClasses map[strin
 			continue
 		}
 		class := peer.GetClusterClass()
-		if class != "" {
+		if class != "" && !isSelfHostedPeer(peer) {
 			if _, ok := allowedClasses[class]; !ok {
 				continue
 			}
@@ -549,6 +520,13 @@ func filterPeersByPolicy(peers []*pb.TenantClusterPeer, allowedClasses map[strin
 		out = append(out, peer)
 	}
 	return out
+}
+
+func isSelfHostedPeer(peer *pb.TenantClusterPeer) bool {
+	if peer == nil {
+		return false
+	}
+	return strings.EqualFold(peer.GetClusterType(), "self-hosted")
 }
 
 // resolveProcessesJSON returns the MistServer process config JSON for a tenant.

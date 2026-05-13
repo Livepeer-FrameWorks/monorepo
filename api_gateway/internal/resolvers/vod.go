@@ -673,6 +673,9 @@ func protoToVodAsset(p *pb.VodAssetInfo) *model.VodAsset {
 	if p.ErrorMessage != nil {
 		asset.ErrorMessage = p.ErrorMessage
 	}
+	if p.ThumbnailAssets != nil {
+		asset.ThumbnailAssets = p.ThumbnailAssets
+	}
 
 	return asset
 }

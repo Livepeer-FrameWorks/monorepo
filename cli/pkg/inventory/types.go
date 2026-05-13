@@ -329,6 +329,8 @@ type KafkaConfig struct {
 	Mode                                 string            `yaml:"mode"` // native
 	Version                              string            `yaml:"version"`
 	ClusterID                            string            `yaml:"cluster_id"`                // KRaft cluster UUID (required)
+	RegionID                             string            `yaml:"region_id,omitempty"`       // e.g. "eu-west". Empty = infer from broker host labels.
+	Role                                 string            `yaml:"role,omitempty"`            // "aggregator" | "regional". Empty top-level = aggregator.
 	ControllerPort                       int               `yaml:"controller_port,omitempty"` // Combined mode: controller port (default 9093)
 	Controllers                          []KafkaController `yaml:"controllers,omitempty"`     // Dedicated controllers (if absent → combined mode)
 	Brokers                              []KafkaBroker     `yaml:"brokers,omitempty"`

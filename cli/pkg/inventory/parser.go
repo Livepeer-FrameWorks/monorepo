@@ -359,6 +359,45 @@ func (m *Manifest) Validate() error {
 				}
 			}
 		}
+
+		// Exactly one Kafka cluster owns aggregate mirrored topics.
+		validKafkaRole := func(r string) bool { return r == "" || r == "aggregator" || r == "regional" }
+		if !validKafkaRole(m.Infrastructure.Kafka.Role) {
+			return fmt.Errorf("kafka.role must be 'aggregator' or 'regional', got %q", m.Infrastructure.Kafka.Role)
+		}
+		aggregatorCount := 0
+		topLevelRole := m.Infrastructure.Kafka.Role
+		if topLevelRole == "" {
+			topLevelRole = "aggregator"
+		}
+		if topLevelRole == "aggregator" {
+			aggregatorCount++
+		}
+		seenRegionIDs := map[string]bool{}
+		if m.Infrastructure.Kafka.RegionID != "" {
+			seenRegionIDs[m.Infrastructure.Kafka.RegionID] = true
+		}
+		for i, rc := range m.Infrastructure.Kafka.Regional {
+			if rc.RegionID == "" {
+				return fmt.Errorf("kafka.regional[%d]: region_id is required", i)
+			}
+			if seenRegionIDs[rc.RegionID] {
+				return fmt.Errorf("kafka.regional[%d]: duplicate region_id %q", i, rc.RegionID)
+			}
+			seenRegionIDs[rc.RegionID] = true
+			if !validKafkaRole(rc.Role) {
+				return fmt.Errorf("kafka.regional[%d] (%s): role must be 'aggregator' or 'regional', got %q", i, rc.RegionID, rc.Role)
+			}
+			if rc.Role == "aggregator" {
+				aggregatorCount++
+			}
+		}
+		if aggregatorCount > 1 {
+			return fmt.Errorf("kafka: at most one cluster may have role 'aggregator' (found %d)", aggregatorCount)
+		}
+		if aggregatorCount == 0 {
+			return fmt.Errorf("kafka: exactly one cluster must have role 'aggregator' (top-level defaults to aggregator when role is unset)")
+		}
 	}
 
 	// Validate clusters
@@ -409,7 +448,8 @@ func (m *Manifest) Validate() error {
 
 	// Validate service host references
 	for name, svc := range m.Services {
-		if _, ok := servicedefs.Lookup(name); !ok {
+		deployName, ok := servicedefs.DeployName(name, svc.Deploy)
+		if !ok {
 			return fmt.Errorf("unknown service '%s' (not in service registry)", name)
 		}
 		if _, ok := m.Interfaces[name]; ok {
@@ -418,7 +458,7 @@ func (m *Manifest) Validate() error {
 		if _, ok := m.Observability[name]; ok {
 			return fmt.Errorf("service '%s' also defined in observability (duplicate name)", name)
 		}
-		if svc.Enabled && svc.Host == "" && len(svc.Hosts) == 0 && !autoScopedServices[name] {
+		if svc.Enabled && svc.Host == "" && len(svc.Hosts) == 0 && !autoScopedServices[deployName] {
 			return fmt.Errorf("service '%s' is enabled but has no host or hosts defined", name)
 		}
 		if svc.Cluster != "" && len(svc.Clusters) > 0 {

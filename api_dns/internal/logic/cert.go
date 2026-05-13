@@ -360,15 +360,32 @@ func (m *CertManager) RenewCertificate(ctx context.Context, tenantID, domain, em
 }
 
 func (m *CertManager) EnsureTLSBundle(ctx context.Context, bundleID string, domains []string, email string) (*store.TLSBundle, error) {
+	if strings.HasPrefix(strings.TrimSpace(bundleID), "tenant:") && hasDomainOutsidePlatformAllowlist(domains) {
+		return m.ensureTLSBundle(ctx, bundleID, domains, email, m.bunnyDNSProviderFactory, false)
+	}
+	return m.ensureTLSBundle(ctx, bundleID, domains, email, nil, true)
+}
+
+func (m *CertManager) ensureTLSBundle(ctx context.Context, bundleID string, domains []string, email string, providerFactory func() (challenge.Provider, error), enforceAllowlist bool) (*store.TLSBundle, error) {
 	bundleID = strings.TrimSpace(bundleID)
 	domains = normalizeDomains(domains)
 	if bundleID == "" || len(domains) == 0 || strings.TrimSpace(email) == "" {
 		return nil, fmt.Errorf("bundle_id, domains, and email are required")
 	}
 
-	for _, domain := range domains {
-		if !isDomainAllowed(domain) {
-			return nil, fmt.Errorf("domain %q is not allowed for certificate issuance", domain)
+	if enforceAllowlist {
+		for _, domain := range domains {
+			if !isDomainAllowed(domain) {
+				return nil, fmt.Errorf("domain %q is not allowed for certificate issuance", domain)
+			}
+		}
+	}
+	if providerFactory == nil {
+		providerFactory = m.dnsProviderFactory
+		if m.dnsProviderForDomainsFactory != nil {
+			providerFactory = func() (challenge.Provider, error) {
+				return m.dnsProviderForDomainsFactory(domains)
+			}
 		}
 	}
 
@@ -391,8 +408,6 @@ func (m *CertManager) EnsureTLSBundle(ctx context.Context, bundleID string, doma
 		return nil, fmt.Errorf("failed to check tls bundle cache: %w", err)
 	}
 
-	// Pinned CA short-circuits the order list; go straight to the
-	// original issuer with one fallback only if it rate-limits.
 	var cas []CAProvider
 	if pinnedCA != "" {
 		cas = []CAProvider{pinnedCA}
@@ -410,7 +425,7 @@ func (m *CertManager) EnsureTLSBundle(ctx context.Context, bundleID string, doma
 	var issuingCA CAProvider
 	var lastErr error
 	for _, ca := range cas {
-		certificatePEM, privateKeyPEM, expiry, lastErr = m.obtainCertificate(ctx, platformCertTenantID, domains, email, ca)
+		certificatePEM, privateKeyPEM, expiry, lastErr = m.obtainCertificateWith(ctx, platformCertTenantID, domains, email, ca, providerFactory)
 		if lastErr == nil {
 			issuingCA = ca
 			break
@@ -434,7 +449,45 @@ func (m *CertManager) EnsureTLSBundle(ctx context.Context, bundleID string, doma
 	if err := m.store.SaveTLSBundle(ctx, bundle); err != nil {
 		return nil, fmt.Errorf("failed to save tls bundle: %w", err)
 	}
+	if strings.HasPrefix(bundleID, "tenant:") {
+		if err := m.updateCustomDomainBundleMetadata(ctx, strings.TrimPrefix(bundleID, "tenant:"), bundle); err != nil {
+			return nil, err
+		}
+	}
 	return bundle, nil
+}
+
+func hasDomainOutsidePlatformAllowlist(domains []string) bool {
+	for _, domain := range normalizeDomains(domains) {
+		if !isDomainAllowed(domain) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *CertManager) updateCustomDomainBundleMetadata(ctx context.Context, tenantID string, bundle *store.TLSBundle) error {
+	rows, err := m.store.ListTenantCustomDomains(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("list tenant custom domains: %w", err)
+	}
+	domainSet := make(map[string]struct{}, len(bundle.Domains))
+	for _, domain := range bundle.Domains {
+		domainSet[domain] = struct{}{}
+	}
+	expSQL := sql.NullTime{}
+	if !bundle.ExpiresAt.IsZero() {
+		expSQL = sql.NullTime{Valid: true, Time: bundle.ExpiresAt}
+	}
+	for _, row := range rows {
+		if _, ok := domainSet[row.Domain]; !ok {
+			continue
+		}
+		if err := m.store.SetTenantCustomDomainCertMetadata(ctx, tenantID, row.Domain, bundle.IssuerCA, expSQL); err != nil {
+			return fmt.Errorf("custom-domain cert metadata: %w", err)
+		}
+	}
+	return nil
 }
 
 func (m *CertManager) GetTLSBundle(ctx context.Context, bundleID string) (*store.TLSBundle, error) {
@@ -698,7 +751,31 @@ func (m *CertManager) EnsureTenantWildcardCertificate(ctx context.Context, tenan
 	apex := subdomain + "." + tenantZone + "." + rootDomain
 	wildcard := "*." + apex
 	bundleID := "tenant:" + tenantID
-	return m.EnsureTLSBundle(ctx, bundleID, []string{apex, wildcard}, email)
+	domains := []string{apex, wildcard}
+	customDomains, err := m.verifiedCustomDomainsForTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	domains = append(domains, customDomains...)
+	if len(customDomains) == 0 {
+		return m.EnsureTLSBundle(ctx, bundleID, domains, email)
+	}
+	return m.ensureTLSBundle(ctx, bundleID, domains, email, m.bunnyDNSProviderFactory, false)
+}
+
+func (m *CertManager) verifiedCustomDomainsForTenant(ctx context.Context, tenantID string) ([]string, error) {
+	rows, err := m.store.ListTenantCustomDomains(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list tenant custom domains: %w", err)
+	}
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		switch row.Status {
+		case "verified", "cert_issuing", "cert_issued":
+			out = append(out, row.Domain)
+		}
+	}
+	return out, nil
 }
 
 // EnsurePoolAssignedGlobalCertificate issues a single multi-SAN cert

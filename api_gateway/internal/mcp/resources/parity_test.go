@@ -43,6 +43,12 @@ func TestProtoToVODAssetInfo_ParityWithGraphQLMapper(t *testing.T) {
 		ExpiresAt:       timestamppb.New(expiresAt),
 		ErrorMessage:    &errorMessage,
 		PlaybackId:      &playbackID,
+		ThumbnailAssets: &pb.ThumbnailAssets{
+			PosterUrl:    "https://chandler.us.example/poster.jpg",
+			SpriteVttUrl: "https://chandler.us.example/sprite.vtt",
+			SpriteJpgUrl: "https://chandler.us.example/sprite.jpg",
+			AssetKey:     "tenant/vod/thumbs",
+		},
 	}
 
 	mcpMapped := protoToVODAssetInfo(input)
@@ -89,6 +95,9 @@ func TestProtoToVODAssetInfo_ParityWithGraphQLMapper(t *testing.T) {
 	}
 	if mcpMapped.ExpiresAt == nil || gqlMapped.ExpiresAt == nil || *mcpMapped.ExpiresAt != gqlMapped.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z") {
 		t.Fatalf("ExpiresAt mismatch: MCP=%v GraphQL=%v", mcpMapped.ExpiresAt, gqlMapped.ExpiresAt)
+	}
+	if gqlMapped.ThumbnailAssets == nil || gqlMapped.ThumbnailAssets.GetPosterUrl() != input.GetThumbnailAssets().GetPosterUrl() {
+		t.Fatalf("ThumbnailAssets mismatch: GraphQL=%v", gqlMapped.ThumbnailAssets)
 	}
 }
 

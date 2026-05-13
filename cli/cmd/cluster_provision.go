@@ -2289,21 +2289,11 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					config.Metadata["task_count"] = mm.TaskCount
 				}
 				views := allKafkaClusters(manifest)
-				var target *kafkaClusterView
-				for i := range views {
-					if views[i].RegionID == "" {
-						v := views[i]
-						target = &v
-						break
-					}
-				}
-				if target == nil && len(views) > 0 {
-					v := views[0]
-					target = &v
-				}
+				target := aggregatorKafkaClusterView(manifest)
 				if target != nil {
+					targetAlias := kafkaClusterAlias(manifest, target)
 					config.Metadata["target"] = map[string]any{
-						"alias":             "central",
+						"alias":             targetAlias,
 						"region_id":         target.RegionID,
 						"bootstrap_servers": kafkaBrokersBootstrap(manifest, target),
 						"replicas":          replicasForCluster(target, mm.Replicas),
@@ -2312,10 +2302,10 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				sources := make([]map[string]any, 0, len(views))
 				for i := range views {
 					v := views[i]
-					if v.RegionID == "" {
+					if isAggregatorKafkaClusterView(manifest, &v) {
 						continue
 					}
-					alias := v.RegionID
+					alias := kafkaClusterAlias(manifest, &v)
 					sources = append(sources, map[string]any{
 						"alias":             alias,
 						"region_id":         v.RegionID,
@@ -3432,7 +3422,8 @@ func stringMapToAnyMap(values map[string]string) map[string]any {
 // into one view — the rest of the kafka plumbing reads only this view and is
 // unaware whether it's looking at the primary or a regional entry.
 type kafkaClusterView struct {
-	RegionID                             string // "" for the primary cluster
+	RegionID                             string // explicit region_id from manifest; empty falls back to inference from broker host labels
+	Role                                 string // "aggregator" | "regional"; resolved (never empty after allKafkaClusters)
 	ClusterID                            string
 	ControllerPort                       int
 	Controllers                          []inventory.KafkaController
@@ -3445,26 +3436,44 @@ type kafkaClusterView struct {
 	TransactionStateLogMinISR            int
 }
 
-// serviceKafkaCluster picks the kafka cluster view for a service task. The
-// task carries the media cluster ID (e.g. media-eu-1); we look up its
-// region and match against the regional kafka entries, falling back to the
-// primary cluster when no match exists. The primary is also returned for
-// non-cluster-scoped tasks (empty mediaClusterID).
-func serviceKafkaCluster(manifest *inventory.Manifest, mediaClusterID string) *kafkaClusterView {
+// isAggregatorPinnedService reports whether the named service must always
+// bind the aggregator Kafka cluster, regardless of which region its host
+// happens to be in. Central writers/consumers belong here:
+//
+//   - periscope-ingest: writes central ClickHouse; a regional replica reading
+//     mirrored topics would dual-write rows.
+//   - purser / periscope-query: central billing producer and consumer.
+//   - commodore: central control-plane Kafka producer.
+//
+// Region-local services (decklog, signalman) and cluster-scoped services
+// (foghorn) are NOT pinned — they pick Kafka via serviceKafkaCluster's
+// region resolution. See docs/architecture/service-events.md.
+func isAggregatorPinnedService(serviceType string) bool {
+	switch serviceType {
+	case "periscope-ingest", "purser", "periscope-query", "commodore":
+		return true
+	default:
+		return false
+	}
+}
+
+func serviceKafkaCluster(manifest *inventory.Manifest, mediaClusterID, taskRegion string) *kafkaClusterView {
 	views := allKafkaClusters(manifest)
 	if len(views) == 0 {
 		return &kafkaClusterView{}
 	}
 	primary := views[0]
-	if mediaClusterID == "" {
-		return &primary
+	region := strings.TrimSpace(taskRegion)
+	if mediaClusterID != "" {
+		if cluster, ok := manifest.Clusters[mediaClusterID]; ok && strings.TrimSpace(cluster.Region) != "" {
+			region = strings.TrimSpace(cluster.Region)
+		}
 	}
-	cluster, ok := manifest.Clusters[mediaClusterID]
-	if !ok || cluster.Region == "" {
+	if region == "" {
 		return &primary
 	}
 	for i := range views {
-		if views[i].RegionID == cluster.Region {
+		if views[i].RegionID == region || (views[i].RegionID == "" && singleKafkaBrokerRegion(manifest, &views[i]) == region) {
 			return &views[i]
 		}
 	}
@@ -3482,7 +3491,13 @@ func allKafkaClusters(manifest *inventory.Manifest) []kafkaClusterView {
 	k := manifest.Infrastructure.Kafka
 	views := make([]kafkaClusterView, 0, 1+len(k.Regional))
 	if k.ClusterID != "" || len(k.Brokers) > 0 || len(k.Controllers) > 0 {
+		topRole := k.Role
+		if topRole == "" {
+			topRole = "aggregator"
+		}
 		views = append(views, kafkaClusterView{
+			RegionID:                             k.RegionID,
+			Role:                                 topRole,
 			ClusterID:                            k.ClusterID,
 			ControllerPort:                       k.ControllerPort,
 			Controllers:                          k.Controllers,
@@ -3496,8 +3511,13 @@ func allKafkaClusters(manifest *inventory.Manifest) []kafkaClusterView {
 		})
 	}
 	for _, rc := range k.Regional {
+		role := rc.Role
+		if role == "" {
+			role = "regional"
+		}
 		views = append(views, kafkaClusterView{
 			RegionID:                             rc.RegionID,
+			Role:                                 role,
 			ClusterID:                            rc.ClusterID,
 			ControllerPort:                       rc.ControllerPort,
 			Controllers:                          rc.Controllers,
@@ -3594,18 +3614,80 @@ func kafkaControllersToMetadata(manifest *inventory.Manifest, c *kafkaClusterVie
 }
 
 // isAggregatorKafkaRegion reports whether the given region_id designates the
-// aggregator-side Kafka cluster. Primary (empty regionID) is the aggregator
-// unless a RegionalKafkaCluster is explicitly marked Role="aggregator".
+// aggregator-side Kafka cluster.
 func isAggregatorKafkaRegion(manifest *inventory.Manifest, regionID string) bool {
 	if manifest == nil || manifest.Infrastructure.Kafka == nil {
 		return false
 	}
-	for _, rc := range manifest.Infrastructure.Kafka.Regional {
-		if rc.Role == "aggregator" {
-			return rc.RegionID == regionID
+	for _, v := range allKafkaClusters(manifest) {
+		if v.Role == "aggregator" {
+			if v.RegionID != "" {
+				return v.RegionID == regionID
+			}
+			if regionID == "" {
+				return true
+			}
+			return singleKafkaBrokerRegion(manifest, &v) == regionID
 		}
 	}
-	return regionID == ""
+	return false
+}
+
+func aggregatorKafkaClusterView(manifest *inventory.Manifest) *kafkaClusterView {
+	if manifest == nil {
+		return nil
+	}
+	for _, v := range allKafkaClusters(manifest) {
+		if v.Role == "aggregator" {
+			return &v
+		}
+	}
+	return nil
+}
+
+func isAggregatorKafkaClusterView(_ *inventory.Manifest, cluster *kafkaClusterView) bool {
+	if cluster == nil {
+		return false
+	}
+	return cluster.Role == "aggregator"
+}
+
+func kafkaClusterAlias(manifest *inventory.Manifest, cluster *kafkaClusterView) string {
+	if cluster == nil {
+		return ""
+	}
+	if cluster.RegionID != "" {
+		return cluster.RegionID
+	}
+	if region := singleKafkaBrokerRegion(manifest, cluster); region != "" {
+		return region
+	}
+	return "central"
+}
+
+func singleKafkaBrokerRegion(manifest *inventory.Manifest, cluster *kafkaClusterView) string {
+	if manifest == nil || cluster == nil {
+		return ""
+	}
+	var region string
+	for _, broker := range cluster.Brokers {
+		host, ok := manifest.GetHost(broker.Host)
+		if !ok {
+			return ""
+		}
+		hostRegion := strings.TrimSpace(host.Labels["region"])
+		if hostRegion == "" {
+			return ""
+		}
+		if region == "" {
+			region = hostRegion
+			continue
+		}
+		if region != hostRegion {
+			return ""
+		}
+	}
+	return region
 }
 
 // nonAggregatorKafkaRegionIDs returns the region_id of every regional Kafka
@@ -4159,11 +4241,20 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 
 	if kafka := manifest.Infrastructure.Kafka; kafka != nil && kafka.Enabled {
-		// Pick the kafka cluster whose region matches this task's media
-		// cluster (when set). Cluster-scoped services consume their
-		// region's brokers; falls back to the primary cluster when the
-		// service isn't cluster-scoped or no regional match exists.
-		kc := serviceKafkaCluster(manifest, task.ClusterID)
+		var kc *kafkaClusterView
+		if isAggregatorPinnedService(task.Type) {
+			// Central-only consumers/producers (analytics ingest, billing,
+			// federation control) bind aggregator Kafka regardless of where
+			// the binary happens to run. Pinning here prevents a regional
+			// host placement from silently routing them at the local cluster
+			// (which would dual-write ClickHouse or miss billing rows).
+			kc = aggregatorKafkaClusterView(manifest)
+			if kc == nil {
+				kc = &kafkaClusterView{}
+			}
+		} else {
+			kc = serviceKafkaCluster(manifest, task.ClusterID, manifestTaskRegion(manifest, task))
+		}
 		var brokers []string
 		for _, b := range kc.Brokers {
 			brokerHost := manifestMeshHostname(manifest, b.Host)
@@ -4178,8 +4269,6 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if len(brokers) > 0 {
 			env["KAFKA_BROKERS"] = strings.Join(brokers, ",")
 		}
-		// Kafka cluster ID = the KRaft cluster UUID, used by signalman /
-		// decklog / periscope-ingest for consumer group prefixing.
 		if kc.ClusterID != "" {
 			env["KAFKA_CLUSTER_ID"] = kc.ClusterID
 		}
@@ -4368,23 +4457,37 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 		// Per-region Signalman dial: the bridge running in region X should
 		// terminate subscriptions on Signalman in region X by default and
-		// only cross regions when a stream originates elsewhere.
+		// only cross regions when a stream originates elsewhere. With N
+		// replicas per region, the client picks one from the local list and
+		// fails over within the list on disconnect.
 		if signalmanSvc, ok := manifest.Services["signalman"]; ok && signalmanSvc.Enabled {
 			region := manifestTaskRegion(manifest, task)
-			if host := pickServiceHostInRegion(manifest, signalmanSvc, region); host != "" {
-				port := signalmanSvc.GRPCPort
-				if port == 0 {
-					port = defaultGRPCPort("signalman")
-				}
-				env["SIGNALMAN_GRPC_ADDR"] = fmt.Sprintf("%s:%d", manifestMeshHostname(manifest, host), port)
+			byRegionMulti := signalmanAddrsByRegionMulti(manifest)
+
+			if addrs := byRegionMulti[region]; len(addrs) > 0 {
+				env["SIGNALMAN_GRPC_ADDR"] = addrs[0]
+				env["SIGNALMAN_GRPC_ADDRS"] = strings.Join(addrs, ",")
 			}
-			if byRegion := signalmanAddrsByRegion(manifest); len(byRegion) > 0 {
-				pairs := make([]string, 0, len(byRegion))
-				for region, addr := range byRegion {
-					pairs = append(pairs, fmt.Sprintf("%s=%s", region, addr))
+
+			if len(byRegionMulti) > 0 {
+				regions := make([]string, 0, len(byRegionMulti))
+				for r := range byRegionMulti {
+					regions = append(regions, r)
 				}
-				sort.Strings(pairs)
-				env["SIGNALMAN_GRPC_ADDR_BY_REGION"] = strings.Join(pairs, ",")
+				sort.Strings(regions)
+
+				singlePairs := make([]string, 0, len(regions))
+				multiPairs := make([]string, 0, len(regions))
+				for _, r := range regions {
+					addrs := byRegionMulti[r]
+					if len(addrs) == 0 {
+						continue
+					}
+					singlePairs = append(singlePairs, fmt.Sprintf("%s=%s", r, addrs[0]))
+					multiPairs = append(multiPairs, fmt.Sprintf("%s=%s", r, strings.Join(addrs, ",")))
+				}
+				env["SIGNALMAN_GRPC_ADDR_BY_REGION"] = strings.Join(singlePairs, ",")
+				env["SIGNALMAN_GRPC_ADDRS_BY_REGION"] = strings.Join(multiPairs, ";")
 			}
 		}
 	}
@@ -4442,16 +4545,33 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
-	// Aggregator-side consumers subscribe to mirrored topics from every
-	// regional Kafka cluster. RegionID prefix matches MM2's default rename
-	// (source-cluster alias added as topic prefix).
-	if (baseName == "periscope-ingest" || baseName == "signalman") && env["MIRROR_REGION_PREFIXES"] == "" {
+	// Aggregator-side analytics consumers subscribe to mirrored topics from
+	// every regional Kafka cluster. RegionID prefix matches MM2's default
+	// rename (source-cluster alias added as topic prefix).
+	if baseName == "periscope-ingest" && env["MIRROR_REGION_PREFIXES"] == "" {
 		hostRegion := manifestTaskRegion(manifest, task)
 		if isAggregatorKafkaRegion(manifest, hostRegion) {
 			prefixes := nonAggregatorKafkaRegionIDs(manifest)
 			if len(prefixes) > 0 {
 				env["MIRROR_REGION_PREFIXES"] = strings.Join(prefixes, ",")
 			}
+		}
+	}
+
+	// Signalman is a broadcast consumer: N replicas per region, each receiving
+	// every event. The provisioner owns the per-instance identity. Group is
+	// keyed by host so a fresh replica gets a fresh group. reset=latest
+	// prevents backlog replay to currently connected clients.
+	if baseName == "signalman" && task.Host != "" {
+		instance := "signalman-" + task.Host
+		if env["KAFKA_GROUP_ID"] == "" {
+			env["KAFKA_GROUP_ID"] = instance
+		}
+		if env["KAFKA_CLIENT_ID"] == "" {
+			env["KAFKA_CLIENT_ID"] = instance
+		}
+		if env["KAFKA_CONSUME_RESET_OFFSET"] == "" {
+			env["KAFKA_CONSUME_RESET_OFFSET"] = "latest"
 		}
 	}
 
@@ -5017,10 +5137,27 @@ func pickServiceHostInRegion(manifest *inventory.Manifest, svc inventory.Service
 	return ""
 }
 
-// signalmanAddrsByRegion builds a region→mesh-addr map covering every region
-// that has at least one Signalman host. Used to emit
-// SIGNALMAN_GRPC_ADDR_BY_REGION on consumers that route per-stream-origin.
+// signalmanAddrsByRegion builds a region→first-mesh-addr map covering every
+// region that has at least one Signalman host.
 func signalmanAddrsByRegion(manifest *inventory.Manifest) map[string]string {
+	multi := signalmanAddrsByRegionMulti(manifest)
+	if len(multi) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(multi))
+	for region, addrs := range multi {
+		if len(addrs) > 0 {
+			out[region] = addrs[0]
+		}
+	}
+	return out
+}
+
+// signalmanAddrsByRegionMulti builds region→list-of-mesh-addrs covering every
+// Signalman replica per region. The bridge picks one from its own region's
+// list and fails over within the list when the chosen replica disconnects.
+// Each list is sorted for stable env output across reruns.
+func signalmanAddrsByRegionMulti(manifest *inventory.Manifest) map[string][]string {
 	if manifest == nil {
 		return nil
 	}
@@ -5036,7 +5173,7 @@ func signalmanAddrsByRegion(manifest *inventory.Manifest) map[string]string {
 	if len(hosts) == 0 && svc.Host != "" {
 		hosts = []string{svc.Host}
 	}
-	out := map[string]string{}
+	out := map[string][]string{}
 	for _, hostName := range hosts {
 		host, ok := manifest.Hosts[hostName]
 		if !ok {
@@ -5053,10 +5190,11 @@ func signalmanAddrsByRegion(manifest *inventory.Manifest) map[string]string {
 		if region == "" {
 			continue
 		}
-		if _, set := out[region]; set {
-			continue
-		}
-		out[region] = fmt.Sprintf("%s:%d", manifestMeshHostname(manifest, hostName), port)
+		addr := fmt.Sprintf("%s:%d", manifestMeshHostname(manifest, hostName), port)
+		out[region] = append(out[region], addr)
+	}
+	for region := range out {
+		sort.Strings(out[region])
 	}
 	return out
 }
@@ -5108,9 +5246,15 @@ func foghornForCluster(manifest *inventory.Manifest, clusterID string) (inventor
 // chandlerForCluster returns the Chandler service entry assigned to the
 // given media cluster, or false when none matches.
 func chandlerForCluster(manifest *inventory.Manifest, clusterID string) (inventory.ServiceConfig, bool) {
+	var fallback inventory.ServiceConfig
+	hasFallback := false
 	for _, svc := range servicesByDeploy(manifest, "chandler") {
 		if !svc.Enabled {
 			continue
+		}
+		if svc.Cluster == "" && len(svc.Clusters) == 0 && !hasFallback {
+			fallback = svc
+			hasFallback = true
 		}
 		if svc.Cluster == clusterID {
 			return svc, true
@@ -5120,6 +5264,9 @@ func chandlerForCluster(manifest *inventory.Manifest, clusterID string) (invento
 				return svc, true
 			}
 		}
+	}
+	if hasFallback {
+		return fallback, true
 	}
 	return inventory.ServiceConfig{}, false
 }

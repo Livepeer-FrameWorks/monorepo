@@ -85,9 +85,13 @@ type mockCommodoreClient struct {
 	resolveDVRHashFn  func(ctx context.Context, hash string) (*pb.ResolveDVRHashResponse, error)
 	resolveVodHashFn  func(ctx context.Context, hash string) (*pb.ResolveVodHashResponse, error)
 
-	clipCalls []string
-	dvrCalls  []string
-	vodCalls  []string
+	clipCalls           []string
+	dvrCalls            []string
+	vodCalls            []string
+	storageProjection   []string
+	thumbnailProjection []string
+	updateStorageErr    error
+	markThumbnailsErr   error
 }
 
 func (m *mockCommodoreClient) ResolveClipHash(ctx context.Context, hash string) (*pb.ResolveClipHashResponse, error) {
@@ -118,6 +122,26 @@ func (m *mockCommodoreClient) ResolveVodHash(ctx context.Context, hash string) (
 		return m.resolveVodHashFn(ctx, hash)
 	}
 	return &pb.ResolveVodHashResponse{Found: false}, nil
+}
+
+func (m *mockCommodoreClient) UpdateArtifactStorageCluster(_ context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey, storageClusterID string) (*pb.UpdateArtifactStorageClusterResponse, error) {
+	m.mu.Lock()
+	m.storageProjection = append(m.storageProjection, tenantID+"|"+assetType.String()+"|"+assetKey+"|"+storageClusterID)
+	m.mu.Unlock()
+	if m.updateStorageErr != nil {
+		return nil, m.updateStorageErr
+	}
+	return &pb.UpdateArtifactStorageClusterResponse{Updated: true}, nil
+}
+
+func (m *mockCommodoreClient) MarkArtifactThumbnailsReady(_ context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey, storageClusterID string) (*pb.MarkArtifactThumbnailsReadyResponse, error) {
+	m.mu.Lock()
+	m.thumbnailProjection = append(m.thumbnailProjection, tenantID+"|"+assetType.String()+"|"+assetKey+"|"+storageClusterID)
+	m.mu.Unlock()
+	if m.markThumbnailsErr != nil {
+		return nil, m.markThumbnailsErr
+	}
+	return &pb.MarkArtifactThumbnailsReadyResponse{Updated: true}, nil
 }
 
 // freezeCapture records calls to SendFreeze for assertion.

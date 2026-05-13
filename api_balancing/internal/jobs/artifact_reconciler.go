@@ -35,6 +35,8 @@ type ReconcilerCommodoreClient interface {
 	ResolveClipHash(ctx context.Context, hash string) (*pb.ResolveClipHashResponse, error)
 	ResolveDVRHash(ctx context.Context, hash string) (*pb.ResolveDVRHashResponse, error)
 	ResolveVodHash(ctx context.Context, hash string) (*pb.ResolveVodHashResponse, error)
+	MarkArtifactThumbnailsReady(ctx context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey, storageClusterID string) (*pb.MarkArtifactThumbnailsReadyResponse, error)
+	UpdateArtifactStorageCluster(ctx context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey, storageClusterID string) (*pb.UpdateArtifactStorageClusterResponse, error)
 }
 
 // ArtifactReconcilerConfig holds configuration for the reconciler job.
@@ -127,7 +129,7 @@ func (r *ArtifactReconciler) run() {
 }
 
 func (r *ArtifactReconciler) reconcile() {
-	if r.s3Client == nil || r.sendFreeze == nil {
+	if r.db == nil {
 		return
 	}
 
@@ -148,17 +150,80 @@ func (r *ArtifactReconciler) reconcile() {
 	}
 	defer conn.ExecContext(ctx, "SELECT pg_advisory_unlock(hashtext('artifact_reconciler'))") //nolint:errcheck
 
+	projected := r.projectCommodoreArtifactState(ctx)
+	if r.s3Client == nil || r.sendFreeze == nil {
+		if projected > 0 {
+			r.logger.WithField("projected", projected).Info("Artifact projection repair pass complete")
+		}
+		return
+	}
 	reconciled := r.reconcileOrphaned(ctx)
 	retried := r.retryFailed(ctx)
 	advanced := r.advancePending(ctx)
 
-	if retried+advanced+reconciled > 0 {
+	if retried+advanced+reconciled+projected > 0 {
 		r.logger.WithFields(logging.Fields{
 			"retried":    retried,
 			"advanced":   advanced,
 			"reconciled": reconciled,
+			"projected":  projected,
 		}).Info("Artifact reconciliation pass complete")
 	}
+}
+
+func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) int {
+	if r.commodore == nil {
+		return 0
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT artifact_hash, artifact_type, tenant_id::text,
+		       COALESCE(storage_cluster_id, ''), COALESCE(origin_cluster_id, ''),
+		       COALESCE(has_thumbnails, false)
+		FROM foghorn.artifacts
+		WHERE status != 'deleted'
+		  AND tenant_id IS NOT NULL
+		  AND (COALESCE(storage_cluster_id, '') <> '' OR COALESCE(has_thumbnails, false) = TRUE)
+		ORDER BY updated_at DESC
+		LIMIT $1
+	`, r.batchSize)
+	if err != nil {
+		r.logger.WithError(err).Warn("Failed to query artifacts for Commodore projection repair")
+		return 0
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		var hash, artifactType, tenantID, storageCluster, originCluster string
+		var hasThumbnails bool
+		if err := rows.Scan(&hash, &artifactType, &tenantID, &storageCluster, &originCluster, &hasThumbnails); err != nil {
+			r.logger.WithError(err).Warn("Failed to scan artifact projection row")
+			continue
+		}
+		assetType, ok := artifactAssetTypeFromString(artifactType)
+		if !ok {
+			continue
+		}
+		if storageCluster != "" {
+			if _, err := r.commodore.UpdateArtifactStorageCluster(ctx, tenantID, assetType, hash, storageCluster); err != nil {
+				r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to repair Commodore artifact storage projection")
+				continue
+			}
+			count++
+		}
+		thumbnailCluster := storageCluster
+		if thumbnailCluster == "" {
+			thumbnailCluster = originCluster
+		}
+		if hasThumbnails && thumbnailCluster != "" {
+			if _, err := r.commodore.MarkArtifactThumbnailsReady(ctx, tenantID, assetType, hash, thumbnailCluster); err != nil {
+				r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to repair Commodore artifact thumbnail projection")
+				continue
+			}
+			count++
+		}
+	}
+	return count
 }
 
 // retryFailed re-sends FreezeRequests for artifacts with sync_status='failed'.
@@ -498,6 +563,19 @@ func (r *ArtifactReconciler) resolveArtifactContext(ctx context.Context, hash, a
 
 	default:
 		return "", "", fmt.Errorf("cannot resolve asset type: %s", assetType)
+	}
+}
+
+func artifactAssetTypeFromString(t string) (pb.ArtifactAssetType, bool) {
+	switch t {
+	case "clip":
+		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_CLIP, true
+	case "dvr", "dvr_segment", "dvr_manifest":
+		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_DVR, true
+	case "vod":
+		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD, true
+	default:
+		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_UNSPECIFIED, false
 	}
 }
 
