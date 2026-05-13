@@ -23,7 +23,7 @@ Consumes analytics and service-plane events from Kafka and writes time-series da
 - `stream_track_list` → `track_list_events`
 - `stream_lifecycle_update` → `stream_state_current` + `stream_event_log`
 - `node_lifecycle_update` → `node_state_current` + `node_metrics_samples`
-- `client_lifecycle_update` → `client_qoe_samples`
+- `client_lifecycle_batch` → `client_qoe_samples`
 - `load_balancing` → `routing_decisions`
 - `clip_lifecycle`, `dvr_lifecycle`, `vod_lifecycle`, `storage_lifecycle` → `artifact_state_current` + `artifact_events`
 - `storage_snapshot` → `storage_snapshots`

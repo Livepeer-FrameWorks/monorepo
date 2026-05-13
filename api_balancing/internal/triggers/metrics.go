@@ -22,4 +22,11 @@ type ProcessorMetrics struct {
 	// JWT/policy denials. Bumped only when the deny reason starts with "webhook-".
 	// Labels: class (suffix after "webhook-": timeout, blocked-ssrf, deny-403, ...).
 	PlaybackWebhookErrors *prometheus.CounterVec
+
+	// ClientLifecycleBatchDrops counts CLIENT_LIFECYCLE_BATCH outcomes for the
+	// per-(tenant, stream, node) batcher. QoE samples are lossy by contract — a
+	// failed batch send is logged and dropped after one retry rather than
+	// blocking the trigger processor.
+	// Labels: reason ("send_failed", "retry_succeeded").
+	ClientLifecycleBatchDrops *prometheus.CounterVec
 }

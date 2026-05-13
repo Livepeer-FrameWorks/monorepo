@@ -472,6 +472,7 @@ message MistTrigger {
     MessageLifecycleData message_lifecycle_data = 35;
     FederationEventData federation_event_data = 36;
     StreamProcessTrigger stream_process = 38;
+    ClientLifecycleBatch client_lifecycle_batch = 39;
   }
 
   optional string cluster_id = 33; // Emitting cluster identifier (source_cluster_id in envelope v2 terms)
@@ -1272,6 +1273,21 @@ message ClientLifecycleUpdate {
   optional double client_latitude = 21; // GeoIP enriched latitude
   optional double client_longitude = 22;// GeoIP enriched longitude
   optional string stream_id = 23;       // Enriched by Foghorn (UUID); REQUIRED for analytics joins
+  optional string event_id = 24;        // Helmsman-generated UUID per sample; row-level dedup key
+}
+
+// ClientLifecycleBatch carries N enriched ClientLifecycleUpdate samples for a
+// single (tenant_id, stream_id, node_id) key. Foghorn coalesces enriched
+// samples and forwards as one MistTrigger so Decklog/Kafka/ClickHouse handle
+// one record per batch instead of one per sample.
+message ClientLifecycleBatch {
+  optional string tenant_id = 1;
+  optional string stream_id = 2;
+  string internal_name = 3;
+  string node_id = 4;
+  int64 window_start = 5;
+  int64 window_end = 6;
+  repeated ClientLifecycleUpdate samples = 7;
 }
 
 enum NodeOperationalMode {

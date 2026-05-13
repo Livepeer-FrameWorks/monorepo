@@ -143,8 +143,8 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 		err = h.processStreamLifecycle(ctx, event)
 	case "node_lifecycle_update":
 		err = h.processNodeLifecycle(ctx, event)
-	case "client_lifecycle_update":
-		err = h.processClientLifecycle(ctx, event)
+	case "client_lifecycle_batch":
+		err = h.processClientLifecycleBatch(ctx, event)
 	case "load_balancing":
 		err = h.processLoadBalancing(ctx, event)
 	case "clip_lifecycle":
@@ -1293,34 +1293,36 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 	return nil
 }
 
-// processClientLifecycle handles per-client bandwidth and connection metrics
-func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
-	h.logger.Infof("Processing client lifecycle event: %s", event.EventID)
+// processClientLifecycleBatch handles per-client QoE samples coalesced by Foghorn
+// into a single ClientLifecycleBatch trigger. Each batch becomes one ClickHouse
+// INSERT into client_qoe_samples — collapsing what was previously one insert per
+// active viewer per Helmsman poll into one insert per (tenant, stream, node) per
+// flush window.
+//
+// Viewer-count and billing semantics live on the USER_NEW / USER_END trigger
+// path (viewer_connection_events); these QoE samples are diagnostic-only.
+func (h *AnalyticsHandler) processClientLifecycleBatch(ctx context.Context, event kafka.AnalyticsEvent) error {
+	h.logger.Infof("Processing client lifecycle batch event: %s", event.EventID)
 
-	// Parse MistTrigger envelope -> ClientLifecycleUpdate
 	var mt pb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_ClientLifecycleUpdate)
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_ClientLifecycleBatch)
 	if !ok || tp == nil {
-		return fmt.Errorf("unexpected payload for client_lifecycle_update")
+		return fmt.Errorf("unexpected payload for client_lifecycle_batch")
 	}
-	clientLifecycle := tp.ClientLifecycleUpdate
-	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
-	internalName := mist.ExtractInternalName(clientLifecycle.GetInternalName())
-
-	// Calculate connection quality if packets were sent
-	var connectionQuality *float32
-	if clientLifecycle.GetPacketsSent() > 0 {
-		quality := float32(1.0 - (float64(clientLifecycle.GetPacketsLost()) / float64(clientLifecycle.GetPacketsSent())))
-		connectionQuality = &quality
+	batchPayload := tp.ClientLifecycleBatch
+	samples := batchPayload.GetSamples()
+	if len(samples) == 0 {
+		return nil
 	}
 
-	// Write to client_metrics table (not stream_health_metrics)
+	batchStreamID := parseUUID(batchPayload.GetStreamId())
+
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO client_qoe_samples (
-			timestamp, tenant_id, stream_id, internal_name, session_id, node_id, protocol, host,
+			timestamp, event_id, tenant_id, stream_id, internal_name, session_id, node_id, protocol, host,
 			connection_time, position, bandwidth_in, bandwidth_out, bytes_downloaded, bytes_uploaded,
 			packets_sent, packets_lost, packets_retransmitted, connection_quality
 		)`)
@@ -1329,39 +1331,54 @@ func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event kaf
 		return err
 	}
 
-	if appendErr := batch.Append(
-		event.Timestamp,
-		event.TenantID,
-		parseUUID(mt.GetStreamId()),
-		internalName,
-		clientLifecycle.GetSessionId(),
-		mt.GetNodeId(),
-		clientLifecycle.GetProtocol(),
-		clientLifecycle.GetHost(),
-		clientLifecycle.GetConnectionTime(),
-		clientLifecycle.GetPosition(),
-		uint64(clientLifecycle.GetBandwidthInBps()),
-		uint64(clientLifecycle.GetBandwidthOutBps()),
-		uint64(clientLifecycle.GetBytesDownloaded()),
-		uint64(clientLifecycle.GetBytesUploaded()),
-		uint64(clientLifecycle.GetPacketsSent()),
-		uint64(clientLifecycle.GetPacketsLost()),
-		uint64(clientLifecycle.GetPacketsRetransmitted()),
-		connectionQuality,
-	); appendErr != nil {
-		h.logger.Errorf("Failed to append to ClickHouse batch: %v", appendErr)
-		return appendErr
+	for _, sample := range samples {
+		// Normalize internal name (strip live+/vod+ prefix).
+		internalName := mist.ExtractInternalName(sample.GetInternalName())
+
+		// Per-sample connection quality only when MistServer reported packets sent.
+		var connectionQuality *float32
+		if sample.GetPacketsSent() > 0 {
+			quality := float32(1.0 - (float64(sample.GetPacketsLost()) / float64(sample.GetPacketsSent())))
+			connectionQuality = &quality
+		}
+
+		// Prefer the per-sample stream_id (Foghorn enrichment) but fall back to
+		// the batch-level one for samples that lost it in transit.
+		sampleStreamID := batchStreamID
+		if sid := sample.GetStreamId(); sid != "" {
+			sampleStreamID = parseUUID(sid)
+		}
+
+		if appendErr := batch.Append(
+			event.Timestamp,
+			parseUUIDOrNil(sample.GetEventId()),
+			event.TenantID,
+			sampleStreamID,
+			internalName,
+			sample.GetSessionId(),
+			sample.GetNodeId(),
+			sample.GetProtocol(),
+			sample.GetHost(),
+			sample.GetConnectionTime(),
+			sample.GetPosition(),
+			uint64(sample.GetBandwidthInBps()),
+			uint64(sample.GetBandwidthOutBps()),
+			uint64(sample.GetBytesDownloaded()),
+			uint64(sample.GetBytesUploaded()),
+			uint64(sample.GetPacketsSent()),
+			uint64(sample.GetPacketsLost()),
+			uint64(sample.GetPacketsRetransmitted()),
+			connectionQuality,
+		); appendErr != nil {
+			h.logger.Errorf("Failed to append client QoE sample to ClickHouse batch: %v", appendErr)
+			return appendErr
+		}
 	}
 
 	if err := batch.Send(); err != nil {
-		h.logger.Errorf("Failed to send ClickHouse batch: %v", err)
+		h.logger.Errorf("Failed to send ClickHouse client QoE batch: %v", err)
 		return err
 	}
-
-	// Note: viewer_metrics are NOT created from client-lifecycle events
-	// Client-lifecycle tracks per-client performance, not viewers
-	// Viewer counts come from USER_NEW/USER_END (connection_events)
-
 	return nil
 }
 

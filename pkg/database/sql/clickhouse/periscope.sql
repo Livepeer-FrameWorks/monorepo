@@ -429,8 +429,13 @@ FROM viewer_connection_events
 WHERE event_type = 'disconnect' AND session_id != '';
 
 -- Client QoE samples
+-- event_id is populated per-sample by Helmsman and propagated through Foghorn's
+-- ClientLifecycleBatch. Nullable + DEFAULT NULL on purpose: a server-side
+-- generateUUIDv4() default would defeat replay dedup by minting a fresh UUID
+-- for every replayed row.
 CREATE TABLE IF NOT EXISTS client_qoe_samples (
     timestamp DateTime,
+    event_id Nullable(UUID) DEFAULT NULL,
     tenant_id UUID,
     stream_id UUID,
     internal_name String,

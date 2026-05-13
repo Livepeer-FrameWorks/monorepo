@@ -509,30 +509,30 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 			wantTenantID:  outerTenant,
 		},
 		{
-			name: "ClientLifecycleUpdate overrides with inner tenant",
+			name: "ClientLifecycleBatch overrides with inner tenant",
 			trigger: &pb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_ClientLifecycleUpdate{
-					ClientLifecycleUpdate: &pb.ClientLifecycleUpdate{
+				TriggerPayload: &pb.MistTrigger_ClientLifecycleBatch{
+					ClientLifecycleBatch: &pb.ClientLifecycleBatch{
 						NodeId:   "node-1",
 						TenantId: proto.String(innerTenant),
 					},
 				},
 			},
-			wantEventType: "client_lifecycle_update",
+			wantEventType: "client_lifecycle_batch",
 			wantTenantID:  innerTenant,
 		},
 		{
-			name: "ClientLifecycleUpdate falls back to outer when inner is nil",
+			name: "ClientLifecycleBatch falls back to outer when inner is nil",
 			trigger: &pb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_ClientLifecycleUpdate{
-					ClientLifecycleUpdate: &pb.ClientLifecycleUpdate{
+				TriggerPayload: &pb.MistTrigger_ClientLifecycleBatch{
+					ClientLifecycleBatch: &pb.ClientLifecycleBatch{
 						NodeId: "node-1",
 					},
 				},
 			},
-			wantEventType: "client_lifecycle_update",
+			wantEventType: "client_lifecycle_batch",
 			wantTenantID:  outerTenant,
 		},
 		{

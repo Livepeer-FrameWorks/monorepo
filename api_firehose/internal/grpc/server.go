@@ -353,10 +353,10 @@ func (s *DecklogServer) unwrapMistTrigger(trigger *pb.MistTrigger) (proto.Messag
 		if payload.StreamLifecycleUpdate.TenantId != nil {
 			tenantID = *payload.StreamLifecycleUpdate.TenantId
 		}
-	case *pb.MistTrigger_ClientLifecycleUpdate:
-		eventType = "client_lifecycle_update"
-		if payload.ClientLifecycleUpdate.TenantId != nil {
-			tenantID = *payload.ClientLifecycleUpdate.TenantId
+	case *pb.MistTrigger_ClientLifecycleBatch:
+		eventType = "client_lifecycle_batch"
+		if payload.ClientLifecycleBatch.TenantId != nil {
+			tenantID = *payload.ClientLifecycleBatch.TenantId
 		}
 	case *pb.MistTrigger_NodeLifecycleUpdate:
 		eventType = "node_lifecycle_update"

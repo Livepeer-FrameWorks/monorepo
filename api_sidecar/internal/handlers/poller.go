@@ -25,9 +25,16 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+// clientLifecycleTickStride spaces client-lifecycle emissions across monitorNodes ticks.
+// monitorNodes ticks every 10s; stride 6 yields a 60s client-QoE cadence while keeping
+// node and stream lifecycle on the 10s cadence. The clients API is QoE/diagnostic only;
+// USER_NEW/USER_END remain authoritative for connect/disconnect and billing.
+const clientLifecycleTickStride = 6
 
 // ClipInfo represents local clip metadata for VOD serving
 type ClipInfo struct {
@@ -309,6 +316,8 @@ func (pm *PrometheusMonitor) monitorNodes() {
 	artifactTicker := time.NewTicker(60 * time.Second)
 	defer artifactTicker.Stop()
 
+	var clientTickCount uint64
+
 	for {
 		select {
 		case <-Ticker.C:
@@ -320,7 +329,10 @@ func (pm *PrometheusMonitor) monitorNodes() {
 
 				go pm.emitNodeLifecycle(nodeID, baseURL)
 				go pm.emitStreamLifecycle(nodeID, baseURL)
-				go pm.emitClientLifecycle(nodeID, baseURL) //nolint:errcheck // goroutine; errors logged internally
+				if clientTickCount%clientLifecycleTickStride == 0 {
+					go pm.emitClientLifecycle(nodeID, baseURL) //nolint:errcheck // goroutine; errors logged internally
+				}
+				clientTickCount++
 			} else {
 				pm.mutex.RUnlock()
 			}
@@ -2220,6 +2232,9 @@ func convertClientAPIToMistTrigger(nodeID, _streamName, internalName, protocol, 
 	clientLifecycleUpdate.PacketsLost = &packetsLostUint64
 	packetsRetransmittedUint64 := uint64(packetsRetransmitted)
 	clientLifecycleUpdate.PacketsRetransmitted = &packetsRetransmittedUint64
+
+	eventID := uuid.NewString()
+	clientLifecycleUpdate.EventId = &eventID
 
 	return &pb.MistTrigger{
 		TriggerType: "CLIENT_LIFECYCLE_UPDATE",

@@ -166,6 +166,20 @@ func main() {
 			}
 		}
 
+		if event.EventType == "client_lifecycle_batch" {
+			if event.TenantID == "" {
+				logger.WithFields(logging.Fields{
+					"event_type": event.EventType,
+					"channel":    pb.Channel_CHANNEL_ANALYTICS,
+				}).Warn("Dropping event without tenant_id for non-system channel")
+				return nil
+			}
+			for _, data := range clientLifecycleBatchToProtoData(event.Data, logger) {
+				grpcHub.BroadcastToTenant(event.TenantID, pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE, pb.Channel_CHANNEL_ANALYTICS, data)
+			}
+			return nil
+		}
+
 		// Route event to gRPC hub
 		channel := mapEventTypeToChannel(event.EventType)
 		eventType := mapEventTypeToProto(event.EventType)
@@ -453,7 +467,7 @@ func mapEventTypeToProto(eventType string) pb.EventType {
 		return pb.EventType_EVENT_TYPE_VIEWER_CONNECT
 	case "viewer_disconnect":
 		return pb.EventType_EVENT_TYPE_VIEWER_DISCONNECT
-	case "client_lifecycle_update":
+	case "client_lifecycle_update", "client_lifecycle_batch":
 		return pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE
 	case "clip_lifecycle":
 		return pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE
@@ -490,20 +504,8 @@ func mapEventTypeToProto(eventType string) pb.EventType {
 // Data comes as a MistTrigger envelope from Kafka
 func eventToProtoData(data map[string]interface{}, logger logging.Logger) *pb.EventData {
 	eventData := &pb.EventData{}
-	if data == nil {
-		return eventData
-	}
-
-	// Marshal to JSON then unmarshal to MistTrigger protobuf
-	b, err := json.Marshal(data)
-	if err != nil {
-		logger.WithError(err).Debug("Failed to marshal event data")
-		return eventData
-	}
-
-	var mt pb.MistTrigger
-	if err := protojson.Unmarshal(b, &mt); err != nil {
-		logger.WithError(err).Debug("Failed to unmarshal MistTrigger from event data")
+	mt, ok := mistTriggerFromEventData(data, logger)
+	if !ok {
 		return eventData
 	}
 
@@ -556,6 +558,47 @@ func eventToProtoData(data map[string]interface{}, logger logging.Logger) *pb.Ev
 	}
 
 	return eventData
+}
+
+func clientLifecycleBatchToProtoData(data map[string]interface{}, logger logging.Logger) []*pb.EventData {
+	mt, ok := mistTriggerFromEventData(data, logger)
+	if !ok {
+		return nil
+	}
+	batch := mt.GetClientLifecycleBatch()
+	if batch == nil {
+		return nil
+	}
+	out := make([]*pb.EventData, 0, len(batch.GetSamples()))
+	for _, sample := range batch.GetSamples() {
+		if sample == nil {
+			continue
+		}
+		out = append(out, &pb.EventData{
+			Payload: &pb.EventData_ClientLifecycle{ClientLifecycle: sample},
+		})
+	}
+	return out
+}
+
+func mistTriggerFromEventData(data map[string]interface{}, logger logging.Logger) (*pb.MistTrigger, bool) {
+	if data == nil {
+		return nil, false
+	}
+
+	b, err := json.Marshal(data)
+	if err != nil {
+		logger.WithError(err).Debug("Failed to marshal event data")
+		return nil, false
+	}
+
+	var mt pb.MistTrigger
+	if err := protojson.Unmarshal(b, &mt); err != nil {
+		logger.WithError(err).Debug("Failed to unmarshal MistTrigger from event data")
+		return nil, false
+	}
+
+	return &mt, true
 }
 
 func serviceEventToProtoData(event kafka.ServiceEvent, logger logging.Logger) *pb.EventData {

@@ -344,6 +344,26 @@ func TestPayloadTypeAssertions(t *testing.T) {
 	}
 }
 
+func TestHandleClientLifecycleDropsMissingStreamID(t *testing.T) {
+	tenantID := "tenant-1"
+	p := &Processor{logger: logging.NewLogger()}
+
+	_, _, err := p.handleClientLifecycleUpdate(&pb.MistTrigger{
+		TriggerType: "CLIENT_LIFECYCLE_UPDATE",
+		TriggerPayload: &pb.MistTrigger_ClientLifecycleUpdate{
+			ClientLifecycleUpdate: &pb.ClientLifecycleUpdate{
+				TenantId: &tenantID,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected missing stream_id to drop without error, got %v", err)
+	}
+	if p.clientBatcher != nil {
+		t.Fatal("expected missing stream_id sample not to initialize client lifecycle batcher")
+	}
+}
+
 func TestHandleNodeLifecycleUpdate_TriggersImmediateReconcileOnlyOnArtifactMapChange(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)

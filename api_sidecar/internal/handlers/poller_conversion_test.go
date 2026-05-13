@@ -289,6 +289,29 @@ func TestConvertClientAPI_FullPayload(t *testing.T) {
 	}
 }
 
+func TestConvertClientAPI_GeneratesUniqueEventID(t *testing.T) {
+	// Each sample produced by Helmsman must carry a distinct event_id so
+	// downstream replay-dedup audits (count() - uniqExact(event_id)) work.
+	const n = 100
+	seen := make(map[string]struct{}, n)
+	for i := range n {
+		trigger := convertClientAPIToMistTrigger(
+			"node-1", "live+s", "s", "HLS", "1.2.3.4", "sess",
+			0, 0, 0, 0, 0, 0, 0, 0, 0,
+			logging.NewLogger(),
+		)
+		clu := trigger.GetClientLifecycleUpdate()
+		id := clu.GetEventId()
+		if id == "" {
+			t.Fatalf("sample %d: empty event_id; replay dedup needs a stable identifier per sample", i)
+		}
+		if _, dup := seen[id]; dup {
+			t.Fatalf("sample %d: duplicate event_id %q from converter — every sample must be unique", i, id)
+		}
+		seen[id] = struct{}{}
+	}
+}
+
 func TestConvertClientAPI_ZeroValues(t *testing.T) {
 	trigger := convertClientAPIToMistTrigger(
 		"node-1", "live+s", "s",

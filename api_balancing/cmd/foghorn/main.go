@@ -698,6 +698,11 @@ func main() {
 			"Customer-webhook failures during playback policy enforcement",
 			[]string{"class"},
 		),
+		ClientLifecycleBatchDrops: metricsCollector.NewCounter(
+			"foghorn_client_lifecycle_batch_drops_total",
+			"CLIENT_LIFECYCLE batcher outcomes (send_failed/retry_succeeded)",
+			[]string{"reason"},
+		),
 	})
 	if geoipReader != nil && geoipCache != nil {
 		triggerProcessor.SetGeoIPCache(geoipCache)
@@ -1093,6 +1098,9 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	control.CleanupLocalConnOwners(shutdownCtx)
+	if err := triggerProcessor.Shutdown(shutdownCtx); err != nil {
+		logger.WithError(err).Warn("Trigger processor shutdown did not finish cleanly; some client lifecycle batches may have been lost")
+	}
 
 	done := make(chan struct{})
 	go func() {

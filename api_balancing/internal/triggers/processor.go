@@ -27,6 +27,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // streamContext holds cached tenant and user information for a stream
@@ -119,6 +120,13 @@ type Processor struct {
 	streamCacheHoldsMu     sync.Mutex
 	streamCacheKeyHolds    map[string]time.Time
 	streamCacheTenantHolds map[string]time.Time
+
+	// clientBatcher coalesces enriched ClientLifecycleUpdate samples per
+	// (tenant, stream, node) before forwarding to Decklog as
+	// CLIENT_LIFECYCLE_BATCH triggers. Lazily started on first use after
+	// SetMetrics so the drop counter is available to the batcher.
+	clientBatcher   *clientLifecycleBatcher
+	clientBatcherMu sync.Mutex
 }
 
 // streamCacheHoldDuration is how long writes to the stream-context cache are
@@ -666,6 +674,35 @@ func (p *Processor) SetMetrics(m *ProcessorMetrics) {
 	p.metrics = m
 }
 
+// getClientBatcher returns the lazily-initialised CLIENT_LIFECYCLE batcher.
+// Construction is deferred so the drop-counter metric configured via
+// SetMetrics is available to the batcher's send-failure path.
+func (p *Processor) getClientBatcher() *clientLifecycleBatcher {
+	p.clientBatcherMu.Lock()
+	defer p.clientBatcherMu.Unlock()
+	if p.clientBatcher != nil {
+		return p.clientBatcher
+	}
+	var drops *prometheus.CounterVec
+	if p.metrics != nil {
+		drops = p.metrics.ClientLifecycleBatchDrops
+	}
+	p.clientBatcher = newClientLifecycleBatcher(p.sendClientLifecycleBatchToDecklog, p.logger, drops)
+	return p.clientBatcher
+}
+
+// Shutdown drains any in-flight client-lifecycle batches before the process
+// exits. Safe to call multiple times; further calls are no-ops.
+func (p *Processor) Shutdown(ctx context.Context) error {
+	p.clientBatcherMu.Lock()
+	b := p.clientBatcher
+	p.clientBatcherMu.Unlock()
+	if b == nil {
+		return nil
+	}
+	return b.Shutdown(ctx)
+}
+
 // SetClusterID sets the emitting cluster identifier for trigger enrichment.
 func (p *Processor) SetClusterID(clusterID string) {
 	if strings.TrimSpace(clusterID) == "" {
@@ -739,6 +776,16 @@ func (p *Processor) ensureTriggerTenantID(trigger *pb.MistTrigger) string {
 }
 
 func (p *Processor) sendTriggerToDecklog(trigger *pb.MistTrigger) error {
+	return p.sendTriggerToDecklogContext(context.Background(), trigger)
+}
+
+func (p *Processor) sendClientLifecycleBatchToDecklog(trigger *pb.MistTrigger) error {
+	ctx, cancel := context.WithTimeout(context.Background(), clientBatchSendTimeout)
+	defer cancel()
+	return p.sendTriggerToDecklogContext(ctx, trigger)
+}
+
+func (p *Processor) sendTriggerToDecklogContext(ctx context.Context, trigger *pb.MistTrigger) error {
 	if trigger == nil {
 		return fmt.Errorf("nil trigger")
 	}
@@ -765,7 +812,7 @@ func (p *Processor) sendTriggerToDecklog(trigger *pb.MistTrigger) error {
 		return fmt.Errorf("decklog client not configured")
 	}
 
-	if err := p.decklogClient.SendTrigger(trigger); err != nil {
+	if err := p.decklogClient.SendTriggerContext(ctx, trigger); err != nil {
 		if p.metrics != nil && p.metrics.DecklogTriggerSends != nil {
 			p.metrics.DecklogTriggerSends.WithLabelValues(trigger.GetTriggerType(), "error").Inc()
 		}
@@ -2521,7 +2568,8 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *pb.MistTrigger) (string
 	return "", false, nil
 }
 
-// handleClientLifecycleUpdate forwards ClientLifecycleUpdate to Decklog
+// handleClientLifecycleUpdate enriches ClientLifecycleUpdate and queues it for
+// batched forwarding to Decklog.
 func (p *Processor) handleClientLifecycleUpdate(trigger *pb.MistTrigger) (string, bool, error) {
 	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_ClientLifecycleUpdate)
 	if !ok {
@@ -2544,17 +2592,26 @@ func (p *Processor) handleClientLifecycleUpdate(trigger *pb.MistTrigger) (string
 		p.logger.WithFields(logging.Fields{
 			"internal_name": internal,
 			"trigger_type":  trigger.GetTriggerType(),
-		}).Warn("ClientLifecycleUpdate missing stream_id")
+		}).Warn("Dropping client lifecycle update without stream_id")
+		return "", false, nil
 	}
 
-	// Forward the enriched ClientLifecycleUpdate to Decklog
-	if err := p.sendTriggerToDecklog(trigger); err != nil {
+	// Refuse to batch samples that failed tenant enrichment; tenant_id is the
+	// authoritative scoping field and missing it would silently pollute another
+	// tenant's QoE rollup. This preserves the prior single-event drop semantics.
+	if clu.GetTenantId() == "" {
 		p.logger.WithFields(logging.Fields{
 			"internal_name": internal,
 			"trigger_type":  trigger.GetTriggerType(),
-			"error":         err,
-		}).Error("Failed to send client lifecycle update to Decklog")
+		}).Warn("Dropping client lifecycle update without tenant_id")
+		return "", false, nil
 	}
+
+	// Buffer the enriched sample. The batcher flushes per (tenant, stream, node)
+	// on size or age. Add() never blocks the processor; send failures are
+	// dropped as lossy QoE telemetry rather than back-pressuring MistServer
+	// triggers.
+	p.getClientBatcher().Add(clu)
 	return "", false, nil
 }
 

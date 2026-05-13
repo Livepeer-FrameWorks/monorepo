@@ -131,30 +131,30 @@ It also consumes `service_events` for API usage/audit events (notably `api_reque
 
 Periscope Ingest routes on Kafka `event_type` (the canonical strings emitted by Decklog):
 
-| Kafka `event_type`                     | Ingest handler            | Primary ClickHouse writes                                                    |
-| -------------------------------------- | ------------------------- | ---------------------------------------------------------------------------- |
-| `viewer_connect` / `viewer_disconnect` | `processViewerConnection` | `viewer_connection_events` (`event_type` stored as `connect` / `disconnect`) |
-| `stream_buffer`                        | `processStreamBuffer`     | `stream_event_log` + `stream_health_samples`                                 |
-| `stream_end`                           | `processStreamEnd`        | `stream_event_log`                                                           |
-| `push_rewrite`                         | `processPushRewrite`      | `stream_event_log`                                                           |
-| `play_rewrite`                         | `skipEvent`               | _(no ClickHouse write; non-canonical)_                                       |
-| `stream_source`                        | `skipEvent`               | _(no ClickHouse write; non-canonical)_                                       |
-| `push_end` / `push_out_start`          | `skipEvent`               | _(no ClickHouse write; non-canonical)_                                       |
-| `stream_track_list`                    | `processTrackList`        | `track_list_events`                                                          |
-| `recording_complete`                   | `skipEvent`               | _(no ClickHouse write; non-canonical)_                                       |
-| `recording_segment`                    | `skipEvent`               | _(no ClickHouse write; non-canonical)_                                       |
-| `stream_lifecycle_update`              | `processStreamLifecycle`  | `stream_state_current` (current state) + `stream_event_log` (history)        |
-| `node_lifecycle_update`                | `processNodeLifecycle`    | `node_state_current` (current state) + `node_metrics_samples` (history)      |
-| `client_lifecycle_update`              | `processClientLifecycle`  | `client_qoe_samples`                                                         |
-| `load_balancing`                       | `processLoadBalancing`    | `routing_decisions`                                                          |
-| `clip_lifecycle`                       | `processClipLifecycle`    | `artifact_state_current` (current state) + `artifact_events` (history)       |
-| `dvr_lifecycle`                        | `processDVRLifecycle`     | `artifact_state_current` (current state) + `artifact_events` (history)       |
-| `storage_lifecycle`                    | `processStorageLifecycle` | `storage_events`                                                             |
-| `storage_snapshot`                     | `processStorageSnapshot`  | `storage_snapshots`                                                          |
-| `process_billing`                      | `processProcessBilling`   | `processing_events`                                                          |
-| `vod_lifecycle`                        | `processVodLifecycle`     | `artifact_state_current` + `artifact_events` (`content_type='vod'`)          |
-| `federation_event`                     | `processFederationEvent`  | `federation_events`                                                          |
-| `api_request_batch`                    | `processAPIRequestBatch`  | `api_requests`                                                               |
+| Kafka `event_type`                     | Ingest handler                | Primary ClickHouse writes                                                               |
+| -------------------------------------- | ----------------------------- | --------------------------------------------------------------------------------------- |
+| `viewer_connect` / `viewer_disconnect` | `processViewerConnection`     | `viewer_connection_events` (`event_type` stored as `connect` / `disconnect`)            |
+| `stream_buffer`                        | `processStreamBuffer`         | `stream_event_log` + `stream_health_samples`                                            |
+| `stream_end`                           | `processStreamEnd`            | `stream_event_log`                                                                      |
+| `push_rewrite`                         | `processPushRewrite`          | `stream_event_log`                                                                      |
+| `play_rewrite`                         | `skipEvent`                   | _(no ClickHouse write; non-canonical)_                                                  |
+| `stream_source`                        | `skipEvent`                   | _(no ClickHouse write; non-canonical)_                                                  |
+| `push_end` / `push_out_start`          | `skipEvent`                   | _(no ClickHouse write; non-canonical)_                                                  |
+| `stream_track_list`                    | `processTrackList`            | `track_list_events`                                                                     |
+| `recording_complete`                   | `skipEvent`                   | _(no ClickHouse write; non-canonical)_                                                  |
+| `recording_segment`                    | `skipEvent`                   | _(no ClickHouse write; non-canonical)_                                                  |
+| `stream_lifecycle_update`              | `processStreamLifecycle`      | `stream_state_current` (current state) + `stream_event_log` (history)                   |
+| `node_lifecycle_update`                | `processNodeLifecycle`        | `node_state_current` (current state) + `node_metrics_samples` (history)                 |
+| `client_lifecycle_batch`               | `processClientLifecycleBatch` | `client_qoe_samples` (one ClickHouse insert per batch; see "Client QoE sampling" below) |
+| `load_balancing`                       | `processLoadBalancing`        | `routing_decisions`                                                                     |
+| `clip_lifecycle`                       | `processClipLifecycle`        | `artifact_state_current` (current state) + `artifact_events` (history)                  |
+| `dvr_lifecycle`                        | `processDVRLifecycle`         | `artifact_state_current` (current state) + `artifact_events` (history)                  |
+| `storage_lifecycle`                    | `processStorageLifecycle`     | `storage_events`                                                                        |
+| `storage_snapshot`                     | `processStorageSnapshot`      | `storage_snapshots`                                                                     |
+| `process_billing`                      | `processProcessBilling`       | `processing_events`                                                                     |
+| `vod_lifecycle`                        | `processVodLifecycle`         | `artifact_state_current` + `artifact_events` (`content_type='vod'`)                     |
+| `federation_event`                     | `processFederationEvent`      | `federation_events`                                                                     |
+| `api_request_batch`                    | `processAPIRequestBatch`      | `api_requests`                                                                          |
 
 _Note: `api_request_batch` also arrives via `service_events` and is written to `api_requests` (with audit rows in `api_events`)._
 
@@ -167,7 +167,7 @@ The exact schema is in `pkg/database/sql/clickhouse`, but conceptually:
 - `viewer_connection_events`: Viewer connect/disconnect session events (billing source of truth).
 - `stream_event_log`: Stream lifecycle + notable stream events (start/end/errors, etc.).
 - `stream_health_samples`: QoE / buffer health samples (bitrate/fps/codec/buffer state, issues).
-- `client_qoe_samples`: Client lifecycle samples; input for rollups like `client_qoe_5m`.
+- `client_qoe_samples`: Client lifecycle samples; input for rollups like `client_qoe_5m`. Diagnostic-only — see "Client QoE sampling" below for cadence and the explicit non-authority over viewer counts / billing.
 - `node_metrics_samples` and `node_state_current`: Node telemetry and “current state” snapshots.
 - `stream_state_current`: Current per-stream snapshot (including derived fields like `current_viewers`).
 - `artifact_events` and `artifact_state_current`: Clip/DVR lifecycle events + current artifact state.
@@ -206,6 +206,18 @@ Realtime-like derived data:
 Operational rollups:
 
 - `client_qoe_5m`, `stream_health_5m`, and other \*\_5m MVs for fast dashboard queries.
+
+### Client QoE sampling
+
+The client-side QoE pipeline is rate-shaped at two points:
+
+- **Helmsman polls MistServer's clients API every 60 seconds**, not every 10s. The 10s monitor tick still drives node and stream lifecycle, but `emitClientLifecycle` runs once per 6 ticks. Helmsman generates a UUID per sample so `client_qoe_samples.event_id` is a stable replay-dedup key.
+- **Foghorn batches enriched `ClientLifecycleUpdate`s per `(tenant_id, stream_id, node_id)`** into `ClientLifecycleBatch` triggers (flushed at 1 s or 1000 samples). Decklog publishes one Kafka record per batch; Periscope does one ClickHouse `INSERT INTO client_qoe_samples` per batch. A batch flush failure is logged + counted on `foghorn_client_lifecycle_batch_drops_total` and dropped after one retry — QoE telemetry is intentionally lossy at the edge to keep the trigger processor unblocked.
+
+This makes `client_qoe_samples` (and the derived `client_qoe_5m` MV) **diagnostic-only**, not the source of truth for viewer counts or billing:
+
+- `client_qoe_5m.active_sessions = count(DISTINCT session_id)` per 5-minute bucket is a _sampled_ metric. A session whose entire lifetime falls between two 60s polls produces no QoE rows and is invisible to this rollup.
+- For viewer counts and billing, read `viewer_connection_events` instead — that table is driven by `USER_NEW` / `USER_END` triggers from MistServer in real time and is authoritative.
 
 ## 6) Query: Periscope Query (gRPC API)
 

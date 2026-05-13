@@ -204,9 +204,15 @@ func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedC
 	return client, nil
 }
 
-// authContext returns a context with service token authorization metadata
+// authContext returns a context with service token authorization metadata.
 func (c *BatchedClient) authContext() context.Context {
-	ctx := context.Background()
+	return c.authContextFrom(context.Background())
+}
+
+func (c *BatchedClient) authContextFrom(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if c.serviceToken != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.serviceToken)
 	}
@@ -277,8 +283,15 @@ func (c *BatchedClient) stampGatewayEnvelope(event *pb.GatewayTelemetryEvent) {
 
 // SendTrigger sends an enriched MistTrigger to Decklog
 func (c *BatchedClient) SendTrigger(trigger *pb.MistTrigger) error {
+	return c.SendTriggerContext(context.Background(), trigger)
+}
+
+// SendTriggerContext sends an enriched MistTrigger to Decklog with caller-owned
+// cancellation/deadline. Batch flushers use this so a stuck Decklog call cannot
+// stall their drain loop indefinitely.
+func (c *BatchedClient) SendTriggerContext(ctx context.Context, trigger *pb.MistTrigger) error {
 	c.stampTriggerEnvelope(trigger)
-	ctx := c.authContext()
+	ctx = c.authContextFrom(ctx)
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
 		c.logger.WithFields(logging.Fields{
