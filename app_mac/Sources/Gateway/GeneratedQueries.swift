@@ -92,6 +92,12 @@ enum GQL {
     storageLocation
     isFrozen
     expiresAt
+    thumbnailAssets {
+      posterUrl
+      spriteVttUrl
+      spriteJpgUrl
+      assetKey
+    }
   }
   """
 
@@ -155,6 +161,12 @@ enum GQL {
     errorMessage
     storageLocation
     isFrozen
+    thumbnailAssets {
+      posterUrl
+      spriteVttUrl
+      spriteJpgUrl
+      assetKey
+    }
   }
   """
 
@@ -483,6 +495,12 @@ enum GQL {
       enabled
       class
       allowedClusterIds
+    }
+    thumbnailAssets {
+      posterUrl
+      spriteVttUrl
+      spriteJpgUrl
+      assetKey
     }
     createdAt
     updatedAt
@@ -3661,6 +3679,12 @@ enum GQL {
           updatedAt
           expiresAt
           errorMessage
+          thumbnailAssets {
+            posterUrl
+            spriteVttUrl
+            spriteJpgUrl
+            assetKey
+          }
         }
       }
       pageInfo {

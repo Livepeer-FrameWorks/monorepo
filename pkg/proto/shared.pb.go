@@ -506,8 +506,11 @@ type ClipInfo struct {
 	// and serves its thumbnails through that cluster's Chandler. Empty when
 	// the artifact is still on the origin node's local disk.
 	StorageClusterId string `protobuf:"bytes,21,opt,name=storage_cluster_id,json=storageClusterId,proto3" json:"storage_cluster_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// thumbnail_assets is populated server-side from Commodore's registry
+	// projection. Null until processThumbnailUploaded confirms the upload.
+	ThumbnailAssets *ThumbnailAssets `protobuf:"bytes,22,opt,name=thumbnail_assets,json=thumbnailAssets,proto3,oneof" json:"thumbnail_assets,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ClipInfo) Reset() {
@@ -671,6 +674,13 @@ func (x *ClipInfo) GetStorageClusterId() string {
 		return x.StorageClusterId
 	}
 	return ""
+}
+
+func (x *ClipInfo) GetThumbnailAssets() *ThumbnailAssets {
+	if x != nil {
+		return x.ThumbnailAssets
+	}
+	return nil
 }
 
 // GetClipsRequest - request to list clips
@@ -1511,8 +1521,11 @@ type DVRInfo struct {
 	// storage_cluster_id is the cluster that owns the recording's S3 bucket
 	// and serves its thumbnails through that cluster's Chandler.
 	StorageClusterId string `protobuf:"bytes,22,opt,name=storage_cluster_id,json=storageClusterId,proto3" json:"storage_cluster_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// thumbnail_assets is populated server-side from Commodore's registry
+	// projection. Null until processThumbnailUploaded confirms the upload.
+	ThumbnailAssets *ThumbnailAssets `protobuf:"bytes,23,opt,name=thumbnail_assets,json=thumbnailAssets,proto3,oneof" json:"thumbnail_assets,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *DVRInfo) Reset() {
@@ -1697,6 +1710,13 @@ func (x *DVRInfo) GetStorageClusterId() string {
 		return x.StorageClusterId
 	}
 	return ""
+}
+
+func (x *DVRInfo) GetThumbnailAssets() *ThumbnailAssets {
+	if x != nil {
+		return x.ThumbnailAssets
+	}
+	return nil
 }
 
 // ListDVRRecordingsRequest - request to list DVR recordings
@@ -4023,8 +4043,11 @@ type VodAssetInfo struct {
 	// storage_cluster_id is the cluster whose Chandler serves the VOD's
 	// thumbnails. Tracks the per-cluster S3 backend the upload landed in.
 	StorageClusterId string `protobuf:"bytes,21,opt,name=storage_cluster_id,json=storageClusterId,proto3" json:"storage_cluster_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// thumbnail_assets is populated server-side from Commodore's registry
+	// projection. Null until processThumbnailUploaded confirms the upload.
+	ThumbnailAssets *ThumbnailAssets `protobuf:"bytes,22,opt,name=thumbnail_assets,json=thumbnailAssets,proto3,oneof" json:"thumbnail_assets,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *VodAssetInfo) Reset() {
@@ -4202,6 +4225,13 @@ func (x *VodAssetInfo) GetStorageClusterId() string {
 		return x.StorageClusterId
 	}
 	return ""
+}
+
+func (x *VodAssetInfo) GetThumbnailAssets() *ThumbnailAssets {
+	if x != nil {
+		return x.ThumbnailAssets
+	}
+	return nil
 }
 
 // VodMetadata - metadata extracted from video file (returned by validation)
@@ -4517,7 +4547,7 @@ const file_shared_proto_rawDesc = "" +
 	"request_id\x18\x05 \x01(\tR\trequestId\x12\x1b\n" +
 	"\tclip_hash\x18\x06 \x01(\tR\bclipHash\x12\x1f\n" +
 	"\vplayback_id\x18\a \x01(\tR\n" +
-	"playbackId\"\xc5\x06\n" +
+	"playbackId\"\xa3\a\n" +
 	"\bClipInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tclip_hash\x18\x02 \x01(\tR\bclipHash\x12\x1b\n" +
@@ -4544,13 +4574,15 @@ const file_shared_proto_rawDesc = "" +
 	"expires_at\x18\x12 \x01(\v2\x1a.google.protobuf.TimestampH\x04R\texpiresAt\x88\x01\x01\x12\x1f\n" +
 	"\vplayback_id\x18\x14 \x01(\tR\n" +
 	"playbackId\x12,\n" +
-	"\x12storage_cluster_id\x18\x15 \x01(\tR\x10storageClusterIdB\r\n" +
+	"\x12storage_cluster_id\x18\x15 \x01(\tR\x10storageClusterId\x12G\n" +
+	"\x10thumbnail_assets\x18\x16 \x01(\v2\x17.shared.ThumbnailAssetsH\x05R\x0fthumbnailAssets\x88\x01\x01B\r\n" +
 	"\v_size_bytesB\f\n" +
 	"\n" +
 	"_clip_modeB\x13\n" +
 	"\x11_requested_paramsB\x13\n" +
 	"\x11_storage_locationB\r\n" +
-	"\v_expires_atJ\x04\b\f\x10\rJ\x04\b\x13\x10\x14R\faccess_countR\rlast_accessed\"\x9f\x01\n" +
+	"\v_expires_atB\x13\n" +
+	"\x11_thumbnail_assetsJ\x04\b\f\x10\rJ\x04\b\x13\x10\x14R\faccess_countR\rlast_accessed\"\x9f\x01\n" +
 	"\x0fGetClipsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12 \n" +
 	"\tstream_id\x18\x02 \x01(\tH\x00R\bstreamId\x88\x01\x01\x12?\n" +
@@ -4627,7 +4659,7 @@ const file_shared_proto_rawDesc = "" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\"G\n" +
 	"\x11DeleteDVRResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xfa\b\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xd8\t\n" +
 	"\aDVRInfo\x12\x19\n" +
 	"\bdvr_hash\x18\x01 \x01(\tR\advrHash\x12#\n" +
 	"\rinternal_name\x18\x02 \x01(\tR\finternalName\x12&\n" +
@@ -4658,7 +4690,8 @@ const file_shared_proto_rawDesc = "" +
 	"\vplayback_id\x18\x14 \x01(\tH\vR\n" +
 	"playbackId\x88\x01\x01\x12.\n" +
 	"\x10retention_source\x18\x15 \x01(\tH\fR\x0fretentionSource\x88\x01\x01\x12,\n" +
-	"\x12storage_cluster_id\x18\x16 \x01(\tR\x10storageClusterIdB\r\n" +
+	"\x12storage_cluster_id\x18\x16 \x01(\tR\x10storageClusterId\x12G\n" +
+	"\x10thumbnail_assets\x18\x17 \x01(\v2\x17.shared.ThumbnailAssetsH\rR\x0fthumbnailAssets\x88\x01\x01B\r\n" +
 	"\v_started_atB\v\n" +
 	"\t_ended_atB\x13\n" +
 	"\x11_duration_secondsB\r\n" +
@@ -4673,7 +4706,8 @@ const file_shared_proto_rawDesc = "" +
 	"\n" +
 	"_stream_idB\x0e\n" +
 	"\f_playback_idB\x13\n" +
-	"\x11_retention_source\"\xa8\x01\n" +
+	"\x11_retention_sourceB\x13\n" +
+	"\x11_thumbnail_assets\"\xa8\x01\n" +
 	"\x18ListDVRRecordingsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12 \n" +
 	"\tstream_id\x18\x02 \x01(\tH\x00R\bstreamId\x88\x01\x01\x12?\n" +
@@ -4921,7 +4955,7 @@ const file_shared_proto_rawDesc = "" +
 	"\x06assets\x18\x01 \x03(\v2\x14.shared.VodAssetInfoR\x06assets\x12@\n" +
 	"\n" +
 	"pagination\x18\x02 \x01(\v2 .common.CursorPaginationResponseR\n" +
-	"pagination\"\xf3\a\n" +
+	"pagination\"\xd1\b\n" +
 	"\fVodAssetInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12\x14\n" +
@@ -4956,7 +4990,8 @@ const file_shared_proto_rawDesc = "" +
 	"\vplayback_id\x18\x14 \x01(\tH\n" +
 	"R\n" +
 	"playbackId\x88\x01\x01\x12,\n" +
-	"\x12storage_cluster_id\x18\x15 \x01(\tR\x10storageClusterIdB\r\n" +
+	"\x12storage_cluster_id\x18\x15 \x01(\tR\x10storageClusterId\x12G\n" +
+	"\x10thumbnail_assets\x18\x16 \x01(\v2\x17.shared.ThumbnailAssetsH\vR\x0fthumbnailAssets\x88\x01\x01B\r\n" +
 	"\v_size_bytesB\x0e\n" +
 	"\f_duration_msB\r\n" +
 	"\v_resolutionB\x0e\n" +
@@ -4967,7 +5002,8 @@ const file_shared_proto_rawDesc = "" +
 	"\a_s3_keyB\r\n" +
 	"\v_expires_atB\x10\n" +
 	"\x0e_error_messageB\x0e\n" +
-	"\f_playback_id\"\xa5\x03\n" +
+	"\f_playback_idB\x13\n" +
+	"\x11_thumbnail_assets\"\xa5\x03\n" +
 	"\vVodMetadata\x12\x1f\n" +
 	"\vduration_ms\x18\x01 \x01(\x05R\n" +
 	"durationMs\x12\x1e\n" +
@@ -5106,55 +5142,58 @@ var file_shared_proto_depIdxs = []int32{
 	56, // 1: shared.ClipInfo.created_at:type_name -> google.protobuf.Timestamp
 	56, // 2: shared.ClipInfo.updated_at:type_name -> google.protobuf.Timestamp
 	56, // 3: shared.ClipInfo.expires_at:type_name -> google.protobuf.Timestamp
-	57, // 4: shared.GetClipsRequest.pagination:type_name -> common.CursorPaginationRequest
-	5,  // 5: shared.GetClipsResponse.clips:type_name -> shared.ClipInfo
-	58, // 6: shared.GetClipsResponse.pagination:type_name -> common.CursorPaginationResponse
-	11, // 7: shared.StartDVRRequest.dvr_policy:type_name -> shared.DVRPolicy
-	56, // 8: shared.DVRInfo.started_at:type_name -> google.protobuf.Timestamp
-	56, // 9: shared.DVRInfo.ended_at:type_name -> google.protobuf.Timestamp
-	56, // 10: shared.DVRInfo.created_at:type_name -> google.protobuf.Timestamp
-	56, // 11: shared.DVRInfo.updated_at:type_name -> google.protobuf.Timestamp
-	56, // 12: shared.DVRInfo.frozen_at:type_name -> google.protobuf.Timestamp
-	56, // 13: shared.DVRInfo.expires_at:type_name -> google.protobuf.Timestamp
-	57, // 14: shared.ListDVRRecordingsRequest.pagination:type_name -> common.CursorPaginationRequest
-	18, // 15: shared.ListDVRRecordingsResponse.dvr_recordings:type_name -> shared.DVRInfo
-	58, // 16: shared.ListDVRRecordingsResponse.pagination:type_name -> common.CursorPaginationResponse
-	22, // 17: shared.OutputEndpoint.capabilities:type_name -> shared.OutputCapability
-	54, // 18: shared.ViewerEndpoint.outputs:type_name -> shared.ViewerEndpoint.OutputsEntry
-	56, // 19: shared.PlaybackInstance.last_update:type_name -> google.protobuf.Timestamp
-	25, // 20: shared.PlaybackMetadata.tracks:type_name -> shared.PlaybackTrack
-	26, // 21: shared.PlaybackMetadata.instances:type_name -> shared.PlaybackInstance
-	56, // 22: shared.PlaybackMetadata.created_at:type_name -> google.protobuf.Timestamp
-	28, // 23: shared.PlaybackMetadata.thumbnail_assets:type_name -> shared.ThumbnailAssets
-	24, // 24: shared.ViewerEndpointResponse.primary:type_name -> shared.ViewerEndpoint
-	24, // 25: shared.ViewerEndpointResponse.fallbacks:type_name -> shared.ViewerEndpoint
-	27, // 26: shared.ViewerEndpointResponse.metadata:type_name -> shared.PlaybackMetadata
-	1,  // 27: shared.IngestEndpoint.kind:type_name -> shared.IngestEndpointKind
-	31, // 28: shared.IngestEndpointResponse.primary:type_name -> shared.IngestEndpoint
-	31, // 29: shared.IngestEndpointResponse.fallbacks:type_name -> shared.IngestEndpoint
-	32, // 30: shared.IngestEndpointResponse.metadata:type_name -> shared.IngestMetadata
-	36, // 31: shared.CreateVodUploadResponse.parts:type_name -> shared.VodUploadPart
-	56, // 32: shared.CreateVodUploadResponse.expires_at:type_name -> google.protobuf.Timestamp
-	38, // 33: shared.CompleteVodUploadRequest.parts:type_name -> shared.VodCompletedPart
-	50, // 34: shared.CompleteVodUploadResponse.asset:type_name -> shared.VodAssetInfo
-	2,  // 35: shared.GetVodUploadStatusResponse.state:type_name -> shared.VodStatus
-	56, // 36: shared.GetVodUploadStatusResponse.expires_at:type_name -> google.protobuf.Timestamp
-	56, // 37: shared.GetVodUploadStatusResponse.retention_until:type_name -> google.protobuf.Timestamp
-	41, // 38: shared.GetVodUploadStatusResponse.uploaded_parts:type_name -> shared.VodUploadedPart
-	57, // 39: shared.ListVodAssetsRequest.pagination:type_name -> common.CursorPaginationRequest
-	50, // 40: shared.ListVodAssetsResponse.assets:type_name -> shared.VodAssetInfo
-	58, // 41: shared.ListVodAssetsResponse.pagination:type_name -> common.CursorPaginationResponse
-	2,  // 42: shared.VodAssetInfo.status:type_name -> shared.VodStatus
-	56, // 43: shared.VodAssetInfo.created_at:type_name -> google.protobuf.Timestamp
-	56, // 44: shared.VodAssetInfo.updated_at:type_name -> google.protobuf.Timestamp
-	56, // 45: shared.VodAssetInfo.expires_at:type_name -> google.protobuf.Timestamp
-	55, // 46: shared.WebhookRequest.headers:type_name -> shared.WebhookRequest.HeadersEntry
-	23, // 47: shared.ViewerEndpoint.OutputsEntry.value:type_name -> shared.OutputEndpoint
-	48, // [48:48] is the sub-list for method output_type
-	48, // [48:48] is the sub-list for method input_type
-	48, // [48:48] is the sub-list for extension type_name
-	48, // [48:48] is the sub-list for extension extendee
-	0,  // [0:48] is the sub-list for field type_name
+	28, // 4: shared.ClipInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
+	57, // 5: shared.GetClipsRequest.pagination:type_name -> common.CursorPaginationRequest
+	5,  // 6: shared.GetClipsResponse.clips:type_name -> shared.ClipInfo
+	58, // 7: shared.GetClipsResponse.pagination:type_name -> common.CursorPaginationResponse
+	11, // 8: shared.StartDVRRequest.dvr_policy:type_name -> shared.DVRPolicy
+	56, // 9: shared.DVRInfo.started_at:type_name -> google.protobuf.Timestamp
+	56, // 10: shared.DVRInfo.ended_at:type_name -> google.protobuf.Timestamp
+	56, // 11: shared.DVRInfo.created_at:type_name -> google.protobuf.Timestamp
+	56, // 12: shared.DVRInfo.updated_at:type_name -> google.protobuf.Timestamp
+	56, // 13: shared.DVRInfo.frozen_at:type_name -> google.protobuf.Timestamp
+	56, // 14: shared.DVRInfo.expires_at:type_name -> google.protobuf.Timestamp
+	28, // 15: shared.DVRInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
+	57, // 16: shared.ListDVRRecordingsRequest.pagination:type_name -> common.CursorPaginationRequest
+	18, // 17: shared.ListDVRRecordingsResponse.dvr_recordings:type_name -> shared.DVRInfo
+	58, // 18: shared.ListDVRRecordingsResponse.pagination:type_name -> common.CursorPaginationResponse
+	22, // 19: shared.OutputEndpoint.capabilities:type_name -> shared.OutputCapability
+	54, // 20: shared.ViewerEndpoint.outputs:type_name -> shared.ViewerEndpoint.OutputsEntry
+	56, // 21: shared.PlaybackInstance.last_update:type_name -> google.protobuf.Timestamp
+	25, // 22: shared.PlaybackMetadata.tracks:type_name -> shared.PlaybackTrack
+	26, // 23: shared.PlaybackMetadata.instances:type_name -> shared.PlaybackInstance
+	56, // 24: shared.PlaybackMetadata.created_at:type_name -> google.protobuf.Timestamp
+	28, // 25: shared.PlaybackMetadata.thumbnail_assets:type_name -> shared.ThumbnailAssets
+	24, // 26: shared.ViewerEndpointResponse.primary:type_name -> shared.ViewerEndpoint
+	24, // 27: shared.ViewerEndpointResponse.fallbacks:type_name -> shared.ViewerEndpoint
+	27, // 28: shared.ViewerEndpointResponse.metadata:type_name -> shared.PlaybackMetadata
+	1,  // 29: shared.IngestEndpoint.kind:type_name -> shared.IngestEndpointKind
+	31, // 30: shared.IngestEndpointResponse.primary:type_name -> shared.IngestEndpoint
+	31, // 31: shared.IngestEndpointResponse.fallbacks:type_name -> shared.IngestEndpoint
+	32, // 32: shared.IngestEndpointResponse.metadata:type_name -> shared.IngestMetadata
+	36, // 33: shared.CreateVodUploadResponse.parts:type_name -> shared.VodUploadPart
+	56, // 34: shared.CreateVodUploadResponse.expires_at:type_name -> google.protobuf.Timestamp
+	38, // 35: shared.CompleteVodUploadRequest.parts:type_name -> shared.VodCompletedPart
+	50, // 36: shared.CompleteVodUploadResponse.asset:type_name -> shared.VodAssetInfo
+	2,  // 37: shared.GetVodUploadStatusResponse.state:type_name -> shared.VodStatus
+	56, // 38: shared.GetVodUploadStatusResponse.expires_at:type_name -> google.protobuf.Timestamp
+	56, // 39: shared.GetVodUploadStatusResponse.retention_until:type_name -> google.protobuf.Timestamp
+	41, // 40: shared.GetVodUploadStatusResponse.uploaded_parts:type_name -> shared.VodUploadedPart
+	57, // 41: shared.ListVodAssetsRequest.pagination:type_name -> common.CursorPaginationRequest
+	50, // 42: shared.ListVodAssetsResponse.assets:type_name -> shared.VodAssetInfo
+	58, // 43: shared.ListVodAssetsResponse.pagination:type_name -> common.CursorPaginationResponse
+	2,  // 44: shared.VodAssetInfo.status:type_name -> shared.VodStatus
+	56, // 45: shared.VodAssetInfo.created_at:type_name -> google.protobuf.Timestamp
+	56, // 46: shared.VodAssetInfo.updated_at:type_name -> google.protobuf.Timestamp
+	56, // 47: shared.VodAssetInfo.expires_at:type_name -> google.protobuf.Timestamp
+	28, // 48: shared.VodAssetInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
+	55, // 49: shared.WebhookRequest.headers:type_name -> shared.WebhookRequest.HeadersEntry
+	23, // 50: shared.ViewerEndpoint.OutputsEntry.value:type_name -> shared.OutputEndpoint
+	51, // [51:51] is the sub-list for method output_type
+	51, // [51:51] is the sub-list for method input_type
+	51, // [51:51] is the sub-list for extension type_name
+	51, // [51:51] is the sub-list for extension extendee
+	0,  // [0:51] is the sub-list for field type_name
 }
 
 func init() { file_shared_proto_init() }

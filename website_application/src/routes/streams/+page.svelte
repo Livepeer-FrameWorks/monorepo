@@ -37,7 +37,6 @@
   import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import SpriteThumbnail from "$lib/components/shared/SpriteThumbnail.svelte";
-  import { getAssetUrl } from "$lib/config";
 
   // Houdini stores
   const streamsConnectionStore = new GetStreamsConnectionStore();
@@ -730,7 +729,9 @@
                             <div class="flex items-center gap-3">
                               <SpriteThumbnail
                                 assetId={stream.streamId}
-                                posterUrl={getAssetUrl(stream.streamId, "poster.jpg")}
+                                posterUrl={stream.thumbnailAssets?.posterUrl ?? undefined}
+                                spriteVttUrl={stream.thumbnailAssets?.spriteVttUrl ?? undefined}
+                                spriteJpgUrl={stream.thumbnailAssets?.spriteJpgUrl ?? undefined}
                               />
                               <div class="flex flex-col min-w-0">
                                 <div

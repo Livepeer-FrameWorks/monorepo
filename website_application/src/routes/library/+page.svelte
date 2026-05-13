@@ -58,7 +58,7 @@
     TableCell,
   } from "$lib/components/ui/table";
   import { getIconComponent } from "$lib/iconUtils";
-  import { getAssetUrl, getContentDeliveryUrls } from "$lib/config";
+  import { getContentDeliveryUrls } from "$lib/config";
   import SpriteThumbnail from "$lib/components/shared/SpriteThumbnail.svelte";
   import { formatBytes, formatExpiry, formatTimestamp, isExpired } from "$lib/utils/formatters.js";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
@@ -78,6 +78,13 @@
   // Type definitions
   type ArtifactType = "all" | "clips" | "dvr" | "vod";
 
+  interface ThumbnailAssetsView {
+    posterUrl: string;
+    spriteVttUrl: string;
+    spriteJpgUrl: string;
+    assetKey: string;
+  }
+
   interface UnifiedArtifact {
     id: string;
     type: ArtifactType;
@@ -93,6 +100,7 @@
     expiresAt: string | null;
     isFrozen?: boolean;
     storageLocation?: string;
+    thumbnailAssets: ThumbnailAssetsView | null;
     rawData: ClipData | DvrData | VodData;
   }
 
@@ -248,6 +256,7 @@
         sizeBytes: lifecycle?.sizeBytes ?? clip.sizeBytes,
         createdAt: clip.createdAt,
         expiresAt: clip.expiresAt,
+        thumbnailAssets: clip.thumbnailAssets ?? null,
         rawData: clip,
       });
     }
@@ -272,6 +281,7 @@
         expiresAt: dvr.expiresAt,
         isFrozen: dvr.isFrozen ?? undefined,
         storageLocation: lifecycle?.s3Url ? "s3" : (dvr.storageLocation ?? undefined),
+        thumbnailAssets: dvr.thumbnailAssets ?? null,
         rawData: dvr,
       });
     }
@@ -292,6 +302,7 @@
         sizeBytes: lifecycle?.sizeBytes ?? vod.sizeBytes,
         createdAt: vod.createdAt,
         expiresAt: vod.expiresAt,
+        thumbnailAssets: vod.thumbnailAssets ?? null,
         rawData: vod,
       });
     }
@@ -1557,9 +1568,9 @@
                             <div class="flex items-center gap-3">
                               <SpriteThumbnail
                                 assetId={artifact.hash}
-                                posterUrl={artifact.hash
-                                  ? getAssetUrl(artifact.hash, "poster.jpg")
-                                  : null}
+                                posterUrl={artifact.thumbnailAssets?.posterUrl ?? null}
+                                spriteVttUrl={artifact.thumbnailAssets?.spriteVttUrl ?? undefined}
+                                spriteJpgUrl={artifact.thumbnailAssets?.spriteJpgUrl ?? undefined}
                               />
                               <div class="flex flex-col min-w-0">
                                 <div

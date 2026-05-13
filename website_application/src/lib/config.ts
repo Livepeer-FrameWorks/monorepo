@@ -205,21 +205,6 @@ interface DeliveryUrls {
   embed: string;
 }
 
-/**
- * Build a public Chandler URL for a thumbnail asset.
- * In dev, falls back to relative /assets/ path (proxied by Vite).
- */
-export function getAssetUrl(assetId: string, file: string): string {
-  if (!assetId) return "";
-  const ep = resolveEndpoints();
-  if (ep.chandlerHostname) {
-    const proto = ep.chandlerUseTls ? "https" : "http";
-    return `${proto}://${ep.chandlerHostname}/assets/${assetId}/${file}`;
-  }
-  if (isDev || isLocalRuntimeOrigin()) return `/assets/${assetId}/${file}`;
-  return "";
-}
-
 export function getIngestUrls(streamKey: string): Partial<IngestUrls> {
   if (!streamKey) return {};
 

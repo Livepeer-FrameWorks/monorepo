@@ -2225,6 +2225,9 @@ type VodAsset struct {
 	ErrorMessage *string `json:"errorMessage,omitempty"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *PlaybackPolicy `json:"playbackPolicy,omitempty"`
+	// Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails.
+	// Null until processThumbnailUploaded confirms the upload.
+	ThumbnailAssets *proto.ThumbnailAssets `json:"thumbnailAssets,omitempty"`
 }
 
 func (VodAsset) IsCompleteVodUploadResult() {}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 
+	"frameworks/api_control/internal/clusterurls"
 	commodoregrpc "frameworks/api_control/internal/grpc"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
@@ -181,6 +182,11 @@ func main() {
 	// Expose health and metrics over HTTP; product APIs are served over gRPC.
 	app := server.SetupServiceRouter(logger, "commodore", healthChecker, metricsCollector)
 
+	// Cluster routing snapshot: read paths derive Chandler URLs from cluster_id
+	// without a per-row network call. Refreshes from Quartermaster every 60s.
+	clusterURLsResolver := clusterurls.NewResolver(quartermasterGRPCClient, logger)
+	clusterURLsResolver.Start(context.Background(), 60*time.Second)
+
 	// Start gRPC server in a goroutine
 	grpcPort := config.GetEnv("GRPC_PORT", "19001")
 	go func() {
@@ -199,6 +205,7 @@ func main() {
 			PurserClient:         purserGRPCClient,
 			ListmonkClient:       listmonkClient,
 			DecklogClient:        decklogClient,
+			ClusterURLs:          clusterURLsResolver,
 			DefaultMailingListID: defaultMailingListID,
 			Metrics:              serverMetrics,
 			ServiceToken:         serviceToken,

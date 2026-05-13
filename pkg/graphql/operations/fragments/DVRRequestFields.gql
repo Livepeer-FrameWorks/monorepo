@@ -19,4 +19,10 @@ fragment DVRRequestFields on DVRRequest {
   errorMessage
   storageLocation
   isFrozen
+  thumbnailAssets {
+    posterUrl
+    spriteVttUrl
+    spriteJpgUrl
+    assetKey
+  }
 }

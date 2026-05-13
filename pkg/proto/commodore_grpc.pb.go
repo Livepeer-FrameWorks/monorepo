@@ -35,6 +35,8 @@ const (
 	InternalService_RegisterClip_FullMethodName                    = "/commodore.InternalService/RegisterClip"
 	InternalService_RegisterDVR_FullMethodName                     = "/commodore.InternalService/RegisterDVR"
 	InternalService_UpdateDVRRetention_FullMethodName              = "/commodore.InternalService/UpdateDVRRetention"
+	InternalService_MarkArtifactThumbnailsReady_FullMethodName     = "/commodore.InternalService/MarkArtifactThumbnailsReady"
+	InternalService_UpdateArtifactStorageCluster_FullMethodName    = "/commodore.InternalService/UpdateArtifactStorageCluster"
 	InternalService_ResolveClipHash_FullMethodName                 = "/commodore.InternalService/ResolveClipHash"
 	InternalService_ResolveDVRHash_FullMethodName                  = "/commodore.InternalService/ResolveDVRHash"
 	InternalService_ResolveArtifactPlaybackID_FullMethodName       = "/commodore.InternalService/ResolveArtifactPlaybackID"
@@ -118,6 +120,17 @@ type InternalServiceClient interface {
 	// business registry's expires_at reflects post-end retention. Active
 	// recordings carry NULL retention_until until they finalize.
 	UpdateDVRRetention(ctx context.Context, in *UpdateDVRRetentionRequest, opts ...grpc.CallOption) (*UpdateDVRRetentionResponse, error)
+	// MarkArtifactThumbnailsReady flips has_thumbnails to TRUE and stamps the
+	// authoritative storage_cluster_id. Called by Foghorn's
+	// processThumbnailUploaded confirmation site (NOT the mint-URL request
+	// site). Idempotent; repeated calls with the same payload are no-ops.
+	// Live streams are excluded — they derive URLs from active_ingest_cluster_id.
+	MarkArtifactThumbnailsReady(ctx context.Context, in *MarkArtifactThumbnailsReadyRequest, opts ...grpc.CallOption) (*MarkArtifactThumbnailsReadyResponse, error)
+	// UpdateArtifactStorageCluster updates storage_cluster_id only. It never
+	// touches has_thumbnails — a storage move on a thumbnail-less artifact must
+	// not falsely flip readiness. Called whenever Foghorn mutates
+	// foghorn.artifacts.storage_cluster_id.
+	UpdateArtifactStorageCluster(ctx context.Context, in *UpdateArtifactStorageClusterRequest, opts ...grpc.CallOption) (*UpdateArtifactStorageClusterResponse, error)
 	// Resolve clip hash to tenant context (for analytics enrichment and playback)
 	ResolveClipHash(ctx context.Context, in *ResolveClipHashRequest, opts ...grpc.CallOption) (*ResolveClipHashResponse, error)
 	// Resolve DVR hash to tenant context (for analytics enrichment and playback)
@@ -331,6 +344,26 @@ func (c *internalServiceClient) UpdateDVRRetention(ctx context.Context, in *Upda
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpdateDVRRetentionResponse)
 	err := c.cc.Invoke(ctx, InternalService_UpdateDVRRetention_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) MarkArtifactThumbnailsReady(ctx context.Context, in *MarkArtifactThumbnailsReadyRequest, opts ...grpc.CallOption) (*MarkArtifactThumbnailsReadyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MarkArtifactThumbnailsReadyResponse)
+	err := c.cc.Invoke(ctx, InternalService_MarkArtifactThumbnailsReady_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) UpdateArtifactStorageCluster(ctx context.Context, in *UpdateArtifactStorageClusterRequest, opts ...grpc.CallOption) (*UpdateArtifactStorageClusterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateArtifactStorageClusterResponse)
+	err := c.cc.Invoke(ctx, InternalService_UpdateArtifactStorageCluster_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -607,6 +640,17 @@ type InternalServiceServer interface {
 	// business registry's expires_at reflects post-end retention. Active
 	// recordings carry NULL retention_until until they finalize.
 	UpdateDVRRetention(context.Context, *UpdateDVRRetentionRequest) (*UpdateDVRRetentionResponse, error)
+	// MarkArtifactThumbnailsReady flips has_thumbnails to TRUE and stamps the
+	// authoritative storage_cluster_id. Called by Foghorn's
+	// processThumbnailUploaded confirmation site (NOT the mint-URL request
+	// site). Idempotent; repeated calls with the same payload are no-ops.
+	// Live streams are excluded — they derive URLs from active_ingest_cluster_id.
+	MarkArtifactThumbnailsReady(context.Context, *MarkArtifactThumbnailsReadyRequest) (*MarkArtifactThumbnailsReadyResponse, error)
+	// UpdateArtifactStorageCluster updates storage_cluster_id only. It never
+	// touches has_thumbnails — a storage move on a thumbnail-less artifact must
+	// not falsely flip readiness. Called whenever Foghorn mutates
+	// foghorn.artifacts.storage_cluster_id.
+	UpdateArtifactStorageCluster(context.Context, *UpdateArtifactStorageClusterRequest) (*UpdateArtifactStorageClusterResponse, error)
 	// Resolve clip hash to tenant context (for analytics enrichment and playback)
 	ResolveClipHash(context.Context, *ResolveClipHashRequest) (*ResolveClipHashResponse, error)
 	// Resolve DVR hash to tenant context (for analytics enrichment and playback)
@@ -720,6 +764,12 @@ func (UnimplementedInternalServiceServer) RegisterDVR(context.Context, *Register
 }
 func (UnimplementedInternalServiceServer) UpdateDVRRetention(context.Context, *UpdateDVRRetentionRequest) (*UpdateDVRRetentionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateDVRRetention not implemented")
+}
+func (UnimplementedInternalServiceServer) MarkArtifactThumbnailsReady(context.Context, *MarkArtifactThumbnailsReadyRequest) (*MarkArtifactThumbnailsReadyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MarkArtifactThumbnailsReady not implemented")
+}
+func (UnimplementedInternalServiceServer) UpdateArtifactStorageCluster(context.Context, *UpdateArtifactStorageClusterRequest) (*UpdateArtifactStorageClusterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateArtifactStorageCluster not implemented")
 }
 func (UnimplementedInternalServiceServer) ResolveClipHash(context.Context, *ResolveClipHashRequest) (*ResolveClipHashResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveClipHash not implemented")
@@ -1071,6 +1121,42 @@ func _InternalService_UpdateDVRRetention_Handler(srv interface{}, ctx context.Co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).UpdateDVRRetention(ctx, req.(*UpdateDVRRetentionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_MarkArtifactThumbnailsReady_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkArtifactThumbnailsReadyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).MarkArtifactThumbnailsReady(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_MarkArtifactThumbnailsReady_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).MarkArtifactThumbnailsReady(ctx, req.(*MarkArtifactThumbnailsReadyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_UpdateArtifactStorageCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateArtifactStorageClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).UpdateArtifactStorageCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_UpdateArtifactStorageCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).UpdateArtifactStorageCluster(ctx, req.(*UpdateArtifactStorageClusterRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1519,6 +1605,14 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateDVRRetention",
 			Handler:    _InternalService_UpdateDVRRetention_Handler,
+		},
+		{
+			MethodName: "MarkArtifactThumbnailsReady",
+			Handler:    _InternalService_MarkArtifactThumbnailsReady_Handler,
+		},
+		{
+			MethodName: "UpdateArtifactStorageCluster",
+			Handler:    _InternalService_UpdateArtifactStorageCluster_Handler,
 		},
 		{
 			MethodName: "ResolveClipHash",

@@ -98,6 +98,19 @@ service InternalService {
   // recordings carry NULL retention_until until they finalize.
   rpc UpdateDVRRetention(UpdateDVRRetentionRequest) returns (UpdateDVRRetentionResponse);
 
+  // MarkArtifactThumbnailsReady flips has_thumbnails to TRUE and stamps the
+  // authoritative storage_cluster_id. Called by Foghorn's
+  // processThumbnailUploaded confirmation site (NOT the mint-URL request
+  // site). Idempotent; repeated calls with the same payload are no-ops.
+  // Live streams are excluded — they derive URLs from active_ingest_cluster_id.
+  rpc MarkArtifactThumbnailsReady(MarkArtifactThumbnailsReadyRequest) returns (MarkArtifactThumbnailsReadyResponse);
+
+  // UpdateArtifactStorageCluster updates storage_cluster_id only. It never
+  // touches has_thumbnails — a storage move on a thumbnail-less artifact must
+  // not falsely flip readiness. Called whenever Foghorn mutates
+  // foghorn.artifacts.storage_cluster_id.
+  rpc UpdateArtifactStorageCluster(UpdateArtifactStorageClusterRequest) returns (UpdateArtifactStorageClusterResponse);
+
   // Resolve clip hash to tenant context (for analytics enrichment and playback)
   rpc ResolveClipHash(ResolveClipHashRequest) returns (ResolveClipHashResponse);
 
@@ -477,6 +490,7 @@ message RegisterClipRequest {
   string requested_params = 9;          // Original request JSON for audit
   optional google.protobuf.Timestamp retention_until = 10; // Artifact expiration
   string origin_cluster_id = 11;        // Cluster where clip was created
+  string storage_cluster_id = 12;       // Cluster owning S3 backing (empty when same as origin)
 }
 
 message RegisterClipResponse {
@@ -495,6 +509,7 @@ message RegisterDVRRequest {
   string stream_internal_name = 4;       // Source stream's MistServer routing name (for stream_id lookup)
   optional google.protobuf.Timestamp retention_until = 5; // Recording expiration
   string origin_cluster_id = 6;         // Cluster where DVR recording started
+  string storage_cluster_id = 7;        // Cluster owning S3 backing (empty when same as origin)
 }
 
 message RegisterDVRResponse {
@@ -516,6 +531,43 @@ message UpdateDVRRetentionRequest {
 }
 
 message UpdateDVRRetentionResponse {
+  bool updated = 1;
+}
+
+// asset_type values for the thumbnail/storage projection RPCs.
+enum ArtifactAssetType {
+  ARTIFACT_ASSET_TYPE_UNSPECIFIED = 0;
+  ARTIFACT_ASSET_TYPE_CLIP = 1;
+  ARTIFACT_ASSET_TYPE_DVR = 2;
+  ARTIFACT_ASSET_TYPE_VOD = 3;
+}
+
+// MarkArtifactThumbnailsReady flips has_thumbnails=TRUE and stamps
+// storage_cluster_id on the matching artifact row in commodore.{clips,
+// dvr_recordings, vod_assets}. asset_key is the row's hash column
+// (clip_hash, dvr_hash, vod_hash/artifact_hash).
+message MarkArtifactThumbnailsReadyRequest {
+  string tenant_id = 1;
+  ArtifactAssetType asset_type = 2;
+  string asset_key = 3;
+  string storage_cluster_id = 4;
+}
+
+message MarkArtifactThumbnailsReadyResponse {
+  bool updated = 1;
+}
+
+// UpdateArtifactStorageCluster updates storage_cluster_id only; never flips
+// has_thumbnails. Called whenever Foghorn mutates
+// foghorn.artifacts.storage_cluster_id.
+message UpdateArtifactStorageClusterRequest {
+  string tenant_id = 1;
+  ArtifactAssetType asset_type = 2;
+  string asset_key = 3;
+  string storage_cluster_id = 4;
+}
+
+message UpdateArtifactStorageClusterResponse {
   bool updated = 1;
 }
 
@@ -598,6 +650,7 @@ message RegisterVodRequest {
   optional string content_type = 6;
   optional int64 size_bytes = 7;
   string origin_cluster_id = 8;         // Cluster where VOD was uploaded
+  string storage_cluster_id = 9;        // Cluster owning S3 backing (empty when same as origin)
 }
 
 message RegisterVodResponse {
@@ -1118,6 +1171,10 @@ message Stream {
   // stream_origin_region is the region_id of active_ingest_cluster_id. Used
   // by realtime subscriptions to attach to the stream-origin Signalman.
   string stream_origin_region = 23;
+  // thumbnail_assets is populated by Commodore at SELECT time from
+  // active_ingest_cluster_id + stream_id. Null until the stream first ingests;
+  // the underlying poster.jpg 404s until Helmsman uploads its first frame.
+  optional shared.ThumbnailAssets thumbnail_assets = 24;
 }
 
 // PullSourceAllowedClustersInput wraps the placement-pin list so callers can

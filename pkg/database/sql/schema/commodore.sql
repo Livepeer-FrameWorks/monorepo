@@ -346,8 +346,12 @@ CREATE TABLE IF NOT EXISTS commodore.clips (
     clip_mode VARCHAR(20) DEFAULT 'absolute', -- absolute, relative, duration, clip_now
     requested_params JSONB,                 -- Original request for audit
 
-    -- ===== CLUSTER ORIGIN =====
+    -- ===== CLUSTER ORIGIN / STORAGE =====
     origin_cluster_id VARCHAR(100),
+    storage_cluster_id VARCHAR(100),
+
+    -- ===== THUMBNAIL PROJECTION =====
+    has_thumbnails BOOLEAN NOT NULL DEFAULT FALSE,
 
     -- ===== LIFECYCLE =====
     retention_until TIMESTAMP,
@@ -386,8 +390,12 @@ CREATE TABLE IF NOT EXISTS commodore.dvr_recordings (
     -- ===== METADATA =====
     stream_internal_name VARCHAR(255) NOT NULL, -- Source stream's MistServer routing name
 
-    -- ===== CLUSTER ORIGIN =====
+    -- ===== CLUSTER ORIGIN / STORAGE =====
     origin_cluster_id VARCHAR(100),
+    storage_cluster_id VARCHAR(100),
+
+    -- ===== THUMBNAIL PROJECTION =====
+    has_thumbnails BOOLEAN NOT NULL DEFAULT FALSE,
 
     -- ===== LIFECYCLE =====
     retention_until TIMESTAMP,
@@ -492,8 +500,12 @@ CREATE TABLE IF NOT EXISTS commodore.vod_assets (
     -- ===== SIZE =====
     size_bytes BIGINT,                      -- Expected file size
 
-    -- ===== CLUSTER ORIGIN =====
+    -- ===== CLUSTER ORIGIN / STORAGE =====
     origin_cluster_id VARCHAR(100),
+    storage_cluster_id VARCHAR(100),
+
+    -- ===== THUMBNAIL PROJECTION =====
+    has_thumbnails BOOLEAN NOT NULL DEFAULT FALSE,
 
     -- ===== LIFECYCLE =====
     retention_until TIMESTAMP,

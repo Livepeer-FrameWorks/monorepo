@@ -2363,6 +2363,11 @@ type DVRRequest {
   isFrozen: Boolean
   frozenAt: Time
   s3Url: String
+  """
+  Server-resolved Chandler URLs for the DVR's poster and sprite thumbnails.
+  Null until processThumbnailUploaded confirms the upload.
+  """
+  thumbnailAssets: ThumbnailAssets
 }
 
 # DVR Recordings Connection (cursor-paginated)
@@ -2638,6 +2643,11 @@ type VodAsset implements Node {
 
   "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
   playbackPolicy: PlaybackPolicy
+  """
+  Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails.
+  Null until processThumbnailUploaded confirms the upload.
+  """
+  thumbnailAssets: ThumbnailAssets
 }
 
 # VOD Assets Connection (cursor-paginated)
@@ -3480,6 +3490,14 @@ type Stream implements Node {
   foghorn_base_unresolved). Null for push streams.
   """
   recentPullSourceEvents(limit: Int = 50): [PullSourceEvent!]
+  """
+  Server-resolved Chandler URLs for the stream's poster and sprite
+  thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT
+  time. Null when the stream has never been live; the poster.jpg 404s
+  until Helmsman uploads its first frame, which the player's fallback
+  chain handles.
+  """
+  thumbnailAssets: ThumbnailAssets
 }
 
 """
@@ -5485,6 +5503,11 @@ type Clip implements Node {
   already-shared clip URLs.
   """
   playbackPolicy: PlaybackPolicy
+  """
+  Server-resolved Chandler URLs for the clip's poster and sprite thumbnails.
+  Null until processThumbnailUploaded confirms the upload.
+  """
+  thumbnailAssets: ThumbnailAssets
 }
 
 """
@@ -6336,7 +6359,15 @@ type PlaybackMetadata {
   thumbnailAssets: ThumbnailAssets
 }
 
-# Chandler-served thumbnail asset URLs (poster, sprite, VTT cues)
+"""
+Chandler-served thumbnail asset URLs (poster, sprite, VTT cues). URL shape
+is `{chandlerBase}/assets/{assetKey}/poster.jpg`,
+`/assets/{assetKey}/sprite.jpg`, `/assets/{assetKey}/sprite.vtt`. assetKey
+is stream_id for live streams; clip_hash / dvr_hash / vod_hash
+(= artifact_hash) for artifacts. URL shape is single-sourced with
+Foghorn's `buildThumbnailAssets` in
+api_balancing/internal/control/playback.go.
+"""
 type ThumbnailAssets {
   posterUrl: String!
   spriteVttUrl: String!

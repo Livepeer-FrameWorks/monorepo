@@ -21,6 +21,12 @@ query GetVodAssetsConnection($first: Int = 50, $after: String, $last: Int, $befo
         updatedAt
         expiresAt
         errorMessage
+        thumbnailAssets {
+          posterUrl
+          spriteVttUrl
+          spriteJpgUrl
+          assetKey
+        }
       }
     }
     pageInfo {

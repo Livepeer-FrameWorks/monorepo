@@ -3342,14 +3342,21 @@ func persistFreezeStorageCluster(ctx context.Context, artifactHash, tenantID, st
 	if db == nil || strings.TrimSpace(artifactHash) == "" || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(storageCluster) == "" {
 		return
 	}
-	if _, err := db.ExecContext(ctx, `
+	var artifactType string
+	err := db.QueryRowContext(ctx, `
 		UPDATE foghorn.artifacts
 		SET storage_cluster_id = $3,
 		    updated_at = NOW()
 		WHERE artifact_hash = $1
 		  AND tenant_id = $2
 		  AND COALESCE(storage_cluster_id, '') <> $3
-	`, artifactHash, tenantID, storageCluster); err != nil {
+		RETURNING artifact_type
+	`, artifactHash, tenantID, storageCluster).Scan(&artifactType)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// Row already at this cluster — no work, no notify needed.
+			return
+		}
 		// Soft failure — the upload still works, the read side just
 		// can't reconstruct the storage cluster from the row.
 		controlLogger().WithError(err).WithFields(logging.Fields{
@@ -3357,6 +3364,31 @@ func persistFreezeStorageCluster(ctx context.Context, artifactHash, tenantID, st
 			"tenant_id":       tenantID,
 			"storage_cluster": storageCluster,
 		}).Warn("persistFreezeStorageCluster: UPDATE failed; storage cluster may be stale on read side")
+		return
+	}
+	notifyCommodoreStorageCluster(ctx, artifactHash, tenantID, artifactType, storageCluster)
+}
+
+// notifyCommodoreStorageCluster pushes a storage cluster ownership change
+// to Commodore's registry projection. UpdateArtifactStorageCluster never
+// flips has_thumbnails — that's the readiness RPC.
+func notifyCommodoreStorageCluster(ctx context.Context, artifactHash, tenantID, artifactType, storageCluster string) {
+	if CommodoreClient == nil || tenantID == "" {
+		return
+	}
+	assetType, ok := artifactAssetTypeFromString(artifactType)
+	if !ok {
+		return
+	}
+	notifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, err := CommodoreClient.UpdateArtifactStorageCluster(notifyCtx, tenantID, assetType, artifactHash, storageCluster); err != nil {
+		controlLogger().WithError(err).WithFields(logging.Fields{
+			"artifact_hash":   artifactHash,
+			"tenant_id":       tenantID,
+			"storage_cluster": storageCluster,
+			"asset_type":      artifactType,
+		}).Warn("Failed to notify Commodore of artifact storage cluster change")
 	}
 }
 
@@ -6161,7 +6193,11 @@ func isArtifactThumbnail(thumbnailKey string) bool {
 	return true
 }
 
-// markArtifactHasThumbnails sets has_thumbnails=true on the artifact after sprite upload.
+// markArtifactHasThumbnails sets has_thumbnails=true on the artifact after
+// sprite upload and notifies Commodore so its registry projection
+// (commodore.{clips,dvr_recordings,vod_assets}) flips has_thumbnails too.
+// Idempotent at both sides: the Commodore call uses an IS DISTINCT FROM
+// guard so repeated calls with the same payload are no-ops.
 func markArtifactHasThumbnails(artifactHash string, logger logging.Logger) {
 	conn := GetDB()
 	if conn == nil {
@@ -6170,7 +6206,22 @@ func markArtifactHasThumbnails(artifactHash string, logger logging.Logger) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := conn.ExecContext(ctx, `UPDATE foghorn.artifacts SET has_thumbnails = true, updated_at = NOW() WHERE artifact_hash = $1`, artifactHash)
+
+	// Read tenant + type + authoritative storage cluster in the same
+	// transaction as the flip so the Commodore notify carries the values
+	// Foghorn actually committed.
+	var (
+		tenantID         sql.NullString
+		artifactType     string
+		storageClusterID sql.NullString
+		originClusterID  sql.NullString
+	)
+	err := conn.QueryRowContext(ctx, `
+		UPDATE foghorn.artifacts
+		   SET has_thumbnails = true, updated_at = NOW()
+		 WHERE artifact_hash = $1
+		RETURNING tenant_id::text, artifact_type, storage_cluster_id, origin_cluster_id
+	`, artifactHash).Scan(&tenantID, &artifactType, &storageClusterID, &originClusterID)
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"artifact_hash": artifactHash,
@@ -6179,6 +6230,53 @@ func markArtifactHasThumbnails(artifactHash string, logger logging.Logger) {
 		return
 	}
 	logger.WithField("artifact_hash", artifactHash).Info("Artifact thumbnails marked as uploaded")
+
+	if CommodoreClient == nil || !tenantID.Valid || tenantID.String == "" {
+		return
+	}
+	cluster := storageClusterID.String
+	if cluster == "" {
+		cluster = originClusterID.String
+	}
+	if cluster == "" {
+		// No cluster context to project. Commodore would reject the call;
+		// skip silently. The artifact row already records has_thumbnails on
+		// Foghorn side, so playback still works; only the list projection
+		// stays empty until a storage move fills cluster.
+		return
+	}
+	assetType, ok := artifactAssetTypeFromString(artifactType)
+	if !ok {
+		logger.WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"artifact_type": artifactType,
+		}).Warn("Unknown artifact_type; skipping Commodore thumbnail notify")
+		return
+	}
+	notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer notifyCancel()
+	if _, err := CommodoreClient.MarkArtifactThumbnailsReady(notifyCtx, tenantID.String, assetType, artifactHash, cluster); err != nil {
+		logger.WithError(err).WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"asset_type":    artifactType,
+		}).Warn("Failed to notify Commodore of artifact thumbnail readiness")
+	}
+}
+
+// artifactAssetTypeFromString maps foghorn.artifacts.artifact_type values to
+// the proto enum used by MarkArtifactThumbnailsReady /
+// UpdateArtifactStorageCluster.
+func artifactAssetTypeFromString(t string) (pb.ArtifactAssetType, bool) {
+	switch t {
+	case "clip":
+		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_CLIP, true
+	case "dvr":
+		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_DVR, true
+	case "vod":
+		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD, true
+	default:
+		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_UNSPECIFIED, false
+	}
 }
 
 // getChandlerBaseURL returns the Chandler base URL from environment.

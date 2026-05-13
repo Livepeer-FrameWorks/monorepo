@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_control/internal/clusterurls"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
@@ -129,6 +130,11 @@ type CommodoreServer struct {
 	routeCache          map[string]*clusterRoute
 	routeCacheMu        sync.RWMutex
 	routeCacheTTL       time.Duration
+	// clusterURLs resolves cluster_id → Chandler base URL from an in-process
+	// snapshot refreshed off Quartermaster. Used by list/get handlers to
+	// project thumbnailAssets onto Stream/Clip/DVR/VOD rows without per-row
+	// network calls.
+	clusterURLs *clusterurls.Resolver
 }
 
 // clusterRoute caches the tenant -> cluster -> foghorn mapping.
@@ -350,6 +356,7 @@ type CommodoreServerConfig struct {
 	PurserClient         *purserclient.GRPCClient
 	ListmonkClient       *listmonk.Client
 	DecklogClient        *decklogclient.BatchedClient
+	ClusterURLs          *clusterurls.Resolver
 	DefaultMailingListID int
 	Metrics              *ServerMetrics
 	// Auth config for gRPC interceptor
@@ -400,6 +407,7 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 		purserClient:             cfg.PurserClient,
 		listmonkClient:           cfg.ListmonkClient,
 		decklogClient:            cfg.DecklogClient,
+		clusterURLs:              cfg.ClusterURLs,
 		defaultMailingListID:     cfg.DefaultMailingListID,
 		metrics:                  cfg.Metrics,
 		turnstileValidator:       tv,
@@ -1650,16 +1658,17 @@ func (s *CommodoreServer) RegisterClip(ctx context.Context, req *pb.RegisterClip
 	}
 
 	// Insert into business registry
+	storageClusterID := sql.NullString{String: req.GetStorageClusterId(), Valid: req.GetStorageClusterId() != ""}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.clips (
 			id, tenant_id, user_id, stream_id, clip_hash, internal_name, playback_id,
 			title, description, start_time, duration, clip_mode, requested_params,
-			origin_cluster_id, requires_auth, playback_policy, playback_webhook_secret_enc,
+			origin_cluster_id, storage_cluster_id, requires_auth, playback_policy, playback_webhook_secret_enc,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, NOW(), NOW())
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18, NOW(), NOW())
 	`, clipID, tenantID, userID, streamID, clipHash, artifactInternalName, playbackID,
 		req.GetTitle(), req.GetDescription(), req.GetStartTime(), req.GetDuration(),
-		req.GetClipMode(), req.GetRequestedParams(), req.GetOriginClusterId(),
+		req.GetClipMode(), req.GetRequestedParams(), req.GetOriginClusterId(), storageClusterID,
 		sourceRequiresAuth, sourcePolicyJSON, sourceSecretEnc)
 
 	if err != nil {
@@ -1739,16 +1748,17 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 	// Insert into business registry. DVR callers normally leave
 	// retention_until NULL at start; Foghorn back-fills it at FinalizeDVR
 	// after the stream session ends.
-	var retentionUntilArg interface{}
+	var retentionUntilArg any
 	if req.GetRetentionUntil() != nil {
 		retentionUntilArg = req.GetRetentionUntil().AsTime()
 	}
+	storageClusterID := sql.NullString{String: req.GetStorageClusterId(), Valid: req.GetStorageClusterId() != ""}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.dvr_recordings (
 			id, tenant_id, user_id, stream_id, dvr_hash, internal_name, playback_id, stream_internal_name,
-			origin_cluster_id, retention_until, created_at, updated_at
-		) VALUES ($1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, $10, NOW(), NOW())
-	`, dvrID, tenantID, userID, streamID, dvrHash, artifactInternalName, playbackID, internalName, req.GetOriginClusterId(), retentionUntilArg)
+			origin_cluster_id, storage_cluster_id, retention_until, created_at, updated_at
+		) VALUES ($1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+	`, dvrID, tenantID, userID, streamID, dvrHash, artifactInternalName, playbackID, internalName, req.GetOriginClusterId(), storageClusterID, retentionUntilArg)
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
@@ -1946,15 +1956,16 @@ func (s *CommodoreServer) RegisterVod(ctx context.Context, req *pb.RegisterVodRe
 	retentionUntil := time.Now().Add(90 * 24 * time.Hour)
 
 	// Insert into business registry
+	storageClusterID := sql.NullString{String: req.GetStorageClusterId(), Valid: req.GetStorageClusterId() != ""}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.vod_assets (
 			id, tenant_id, user_id, vod_hash, internal_name, playback_id,
 			title, description, filename, content_type, size_bytes,
-			origin_cluster_id, retention_until, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+			origin_cluster_id, storage_cluster_id, retention_until, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
 	`, vodID, tenantID, userID, vodHash, artifactInternalName, playbackID,
 		req.GetTitle(), req.GetDescription(), filename, req.GetContentType(), req.GetSizeBytes(),
-		req.GetOriginClusterId(), retentionUntil)
+		req.GetOriginClusterId(), storageClusterID, retentionUntil)
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
@@ -4431,7 +4442,8 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRe
 	query := `
 		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
 		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
-		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}')
+		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}'),
+		       s.active_ingest_cluster_id
 		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.user_id = $1 AND s.tenant_id = $2`
@@ -5842,7 +5854,8 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStream
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
 		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
-		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}')
+		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}'),
+		       s.active_ingest_cluster_id
 		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.id = ANY($1) AND s.user_id = $2 AND s.tenant_id = $3
@@ -5923,26 +5936,53 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 		stream.PullSource = buildPullSourceView(sourceURI, pullEnabled.Bool, class, []string(pullAllowedClusters))
 	}
 
+	stream.ThumbnailAssets = s.buildStreamThumbnailAssets(activeIngest, stream.StreamId)
+
 	return &stream, nil
+}
+
+// buildStreamThumbnailAssets projects ThumbnailAssets for a live stream from
+// (active_ingest_cluster_id, stream_id) via the in-process clusterurls
+// resolver. Returns nil when the stream has never been live or the cluster
+// is unknown to the resolver. No I/O: the resolver is a map lookup.
+func (s *CommodoreServer) buildStreamThumbnailAssets(activeIngest sql.NullString, streamID string) *pb.ThumbnailAssets {
+	if s.clusterURLs == nil || !activeIngest.Valid || activeIngest.String == "" || streamID == "" {
+		return nil
+	}
+	return s.clusterURLs.BuildThumbnailAssets(activeIngest.String, streamID)
+}
+
+// buildArtifactThumbnailAssets projects ThumbnailAssets for a clip/DVR/VOD
+// artifact. Returns nil unless has_thumbnails is TRUE and a cluster is
+// known. Caller supplies COALESCE(storage_cluster_id, origin_cluster_id)
+// as the authoritative thumbnail cluster.
+func (s *CommodoreServer) buildArtifactThumbnailAssets(hasThumbnails bool, cluster sql.NullString, assetKey string) *pb.ThumbnailAssets {
+	if !hasThumbnails || s.clusterURLs == nil || !cluster.Valid || cluster.String == "" || assetKey == "" {
+		return nil
+	}
+	return s.clusterURLs.BuildThumbnailAssets(cluster.String, assetKey)
 }
 
 // scanStream scans config-only stream data; operational state comes from Periscope Data Plane
 func (s *CommodoreServer) scanStream(rows *sql.Rows) (*pb.Stream, error) {
 	var stream pb.Stream
-	var description, sourceURIEnc sql.NullString
+	var description, sourceURIEnc, activeIngest sql.NullString
 	var pullEnabled sql.NullBool
 	var pullAllowedClusters pq.StringArray
 	var createdAt, updatedAt time.Time
 
 	err := rows.Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
 		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt,
-		&stream.IngestMode, &sourceURIEnc, &pullEnabled, &pullAllowedClusters)
+		&stream.IngestMode, &sourceURIEnc, &pullEnabled, &pullAllowedClusters, &activeIngest)
 	if err != nil {
 		return nil, err
 	}
 
 	if description.Valid {
 		stream.Description = description.String
+	}
+	if activeIngest.Valid {
+		stream.ActiveIngestClusterId = activeIngest.String
 	}
 	stream.IsRecording = stream.IsRecordingEnabled
 	stream.CreatedAt = timestamppb.New(createdAt)
@@ -5961,6 +6001,8 @@ func (s *CommodoreServer) scanStream(rows *sql.Rows) (*pb.Stream, error) {
 		}
 		stream.PullSource = buildPullSourceView(sourceURI, pullEnabled.Bool, class, []string(pullAllowedClusters))
 	}
+
+	stream.ThumbnailAssets = s.buildStreamThumbnailAssets(activeIngest, stream.StreamId)
 
 	return &stream, nil
 }
@@ -6349,11 +6391,13 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 		IDColumn:        "c.clip_hash",
 	}
 
-	// Base query
+	// Base query. COALESCE(storage_cluster_id, origin_cluster_id) is the
+	// authoritative thumbnail cluster — see [[project_thumbnail_asset_keys]].
 	query := fmt.Sprintf(`
 		SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.description,
 		       c.start_time, c.duration, c.clip_mode, c.requested_params,
-		       c.retention_until, c.created_at, c.updated_at
+		       c.retention_until, c.created_at, c.updated_at,
+		       COALESCE(c.storage_cluster_id, c.origin_cluster_id), c.has_thumbnails
 		FROM commodore.clips c
 		WHERE %s`, whereClause)
 
@@ -6383,10 +6427,13 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 			requestedParams                    sql.NullString
 			retentionUntil                     sql.NullTime
 			createdAt, updatedAt               time.Time
+			thumbnailCluster                   sql.NullString
+			hasThumbnails                      bool
 		)
 		if err := rows.Scan(&id, &clipHash, &playbackID, &streamID, &title, &description,
 			&startTime, &duration, &clipMode, &requestedParams,
-			&retentionUntil, &createdAt, &updatedAt); err != nil {
+			&retentionUntil, &createdAt, &updatedAt,
+			&thumbnailCluster, &hasThumbnails); err != nil {
 			s.logger.WithError(err).Warn("Error scanning clip")
 			continue
 		}
@@ -6418,6 +6465,7 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 			expiresAt := timestamppb.New(retentionUntil.Time)
 			clip.ExpiresAt = expiresAt
 		}
+		clip.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, thumbnailCluster, clipHash)
 
 		clips = append(clips, clip)
 	}
@@ -6483,7 +6531,8 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 	query := `
 		SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.description,
 		       c.start_time, c.duration, c.clip_mode, c.requested_params,
-		       c.retention_until, c.created_at, c.updated_at
+		       c.retention_until, c.created_at, c.updated_at,
+		       COALESCE(c.storage_cluster_id, c.origin_cluster_id), c.has_thumbnails
 		FROM commodore.clips c
 		WHERE c.tenant_id = $1 AND c.clip_hash = $2
 	`
@@ -6496,12 +6545,15 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 		requestedParams          sql.NullString
 		retentionUntil           sql.NullTime
 		createdAt, updatedAt     time.Time
+		thumbnailCluster         sql.NullString
+		hasThumbnails            bool
 	)
 
 	err = s.db.QueryRowContext(ctx, query, tenantID, clipHash).Scan(
 		&id, &clipHash, &playbackID, &streamID, &title, &description,
 		&startTime, &duration, &clipMode, &requestedParams,
 		&retentionUntil, &createdAt, &updatedAt,
+		&thumbnailCluster, &hasThumbnails,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "clip not found")
@@ -6536,6 +6588,7 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 		expiresAt := timestamppb.New(retentionUntil.Time)
 		clip.ExpiresAt = expiresAt
 	}
+	clip.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, thumbnailCluster, clipHash)
 
 	return clip, nil
 }
@@ -6700,7 +6753,8 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 	// Base query - join with streams to get title
 	query := fmt.Sprintf(`
 			SELECT d.id, d.dvr_hash, d.playback_id, d.internal_name, d.stream_id::text, COALESCE(st.title, d.internal_name),
-			       d.retention_until, COALESCE(d.retention_source, ''), d.created_at, d.updated_at
+			       d.retention_until, COALESCE(d.retention_source, ''), d.created_at, d.updated_at,
+			       COALESCE(d.storage_cluster_id, d.origin_cluster_id), d.has_thumbnails
 			FROM commodore.dvr_recordings d
 			LEFT JOIN commodore.streams st ON d.stream_id = st.id
 			WHERE %s`, whereClause)
@@ -6728,9 +6782,12 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 			retentionSource                                        string
 			retentionUntil                                         sql.NullTime
 			createdAt, updatedAt                                   time.Time
+			thumbnailCluster                                       sql.NullString
+			hasThumbnails                                          bool
 		)
 		if err := rows.Scan(&id, &dvrHash, &playbackID, &internalName, &streamID, &title,
-			&retentionUntil, &retentionSource, &createdAt, &updatedAt); err != nil {
+			&retentionUntil, &retentionSource, &createdAt, &updatedAt,
+			&thumbnailCluster, &hasThumbnails); err != nil {
 			s.logger.WithError(err).Warn("Error scanning DVR recording")
 			continue
 		}
@@ -6750,6 +6807,7 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 			expiresAt := timestamppb.New(retentionUntil.Time)
 			recording.ExpiresAt = expiresAt
 		}
+		recording.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, thumbnailCluster, dvrHash)
 
 		recordings = append(recordings, recording)
 	}
@@ -7451,14 +7509,20 @@ func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRe
 		retentionUntil       sql.NullTime
 		createdAt, updatedAt time.Time
 	)
+	var (
+		thumbnailCluster sql.NullString
+		hasThumbnails    bool
+	)
 	err = s.db.QueryRowContext(ctx, `
 		SELECT id, vod_hash, playback_id, title, description, filename, content_type,
-		       size_bytes, retention_until, created_at, updated_at
+		       size_bytes, retention_until, created_at, updated_at,
+		       COALESCE(storage_cluster_id, origin_cluster_id), has_thumbnails
 		FROM commodore.vod_assets
 		WHERE vod_hash = $1 AND tenant_id = $2
 	`, req.ArtifactHash, tenantID).Scan(
 		&id, &vodHash, &playbackID, &title, &description, &filename, &contentType,
 		&sizeBytes, &retentionUntil, &createdAt, &updatedAt,
+		&thumbnailCluster, &hasThumbnails,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -7492,6 +7556,7 @@ func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRe
 	if retentionUntil.Valid {
 		asset.ExpiresAt = timestamppb.New(retentionUntil.Time)
 	}
+	asset.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, thumbnailCluster, vodHash)
 
 	return asset, nil
 }
@@ -7526,7 +7591,8 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 	// Base query
 	query := `
 		SELECT id, vod_hash, playback_id, title, description, filename, content_type,
-		       size_bytes, retention_until, created_at, updated_at
+		       size_bytes, retention_until, created_at, updated_at,
+		       COALESCE(storage_cluster_id, origin_cluster_id), has_thumbnails
 		FROM commodore.vod_assets
 		WHERE tenant_id = $1`
 	args := []interface{}{tenantID}
@@ -7560,9 +7626,12 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 			sizeBytes            sql.NullInt64
 			retentionUntil       sql.NullTime
 			createdAt, updatedAt time.Time
+			thumbnailCluster     sql.NullString
+			hasThumbnails        bool
 		)
 		if err := rows.Scan(&id, &vodHash, &playbackID, &title, &description, &filename, &contentType,
-			&sizeBytes, &retentionUntil, &createdAt, &updatedAt); err != nil {
+			&sizeBytes, &retentionUntil, &createdAt, &updatedAt,
+			&thumbnailCluster, &hasThumbnails); err != nil {
 			s.logger.WithError(err).Warn("Error scanning VOD asset")
 			continue
 		}
@@ -7591,6 +7660,7 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 		if retentionUntil.Valid {
 			asset.ExpiresAt = timestamppb.New(retentionUntil.Time)
 		}
+		asset.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, thumbnailCluster, vodHash)
 
 		assets = append(assets, asset)
 	}

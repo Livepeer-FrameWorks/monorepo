@@ -20,4 +20,10 @@ fragment ClipFields on Clip {
   storageLocation
   isFrozen
   expiresAt
+  thumbnailAssets {
+    posterUrl
+    spriteVttUrl
+    spriteJpgUrl
+    assetKey
+  }
 }

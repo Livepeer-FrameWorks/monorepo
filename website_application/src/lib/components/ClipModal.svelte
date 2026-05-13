@@ -11,7 +11,7 @@
   import { Input } from "$lib/components/ui/input";
   import Player from "./Player.svelte";
   import { getIconComponent } from "$lib/iconUtils";
-  import { getContentDeliveryUrls, getAssetUrl, type PrimaryProtocolUrls } from "$lib/config";
+  import { getContentDeliveryUrls, type PrimaryProtocolUrls } from "$lib/config";
   import { toast } from "$lib/stores/toast";
 
   // Clip type matching Houdini schema
@@ -32,6 +32,12 @@
     stream?: {
       streamId: string;
     } | null;
+    thumbnailAssets?: {
+      posterUrl: string;
+      spriteVttUrl: string;
+      spriteJpgUrl: string;
+      assetKey: string;
+    } | null;
   }
 
   interface Props {
@@ -49,8 +55,8 @@
     clip?.playbackId ? getContentDeliveryUrls(clip.playbackId, "clip") : null
   );
 
-  // Poster from Chandler — artifacts are keyed by clipHash (artifact_hash), not playbackId
-  let posterUrl = $derived(clip?.clipHash ? getAssetUrl(clip.clipHash, "poster.jpg") : undefined);
+  // Poster from Chandler — server-supplied via Commodore registry projection.
+  let posterUrl = $derived(clip?.thumbnailAssets?.posterUrl ?? undefined);
 
   // Primary protocols to show for clips
   const clipProtocols: Array<{

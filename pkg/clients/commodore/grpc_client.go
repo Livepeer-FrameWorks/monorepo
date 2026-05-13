@@ -362,6 +362,31 @@ func (c *GRPCClient) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRequest
 	return c.internal.RegisterDVR(ctx, req)
 }
 
+// MarkArtifactThumbnailsReady flips has_thumbnails=TRUE and stamps
+// storage_cluster_id on the commodore.{clips, dvr_recordings, vod_assets}
+// row matching (tenant_id, asset_key). Idempotent. Called from Foghorn's
+// processThumbnailUploaded confirmation site.
+func (c *GRPCClient) MarkArtifactThumbnailsReady(ctx context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey, storageClusterID string) (*pb.MarkArtifactThumbnailsReadyResponse, error) {
+	return c.internal.MarkArtifactThumbnailsReady(ctx, &pb.MarkArtifactThumbnailsReadyRequest{
+		TenantId:         tenantID,
+		AssetType:        assetType,
+		AssetKey:         assetKey,
+		StorageClusterId: storageClusterID,
+	})
+}
+
+// UpdateArtifactStorageCluster updates storage_cluster_id only — never
+// touches has_thumbnails. Called whenever Foghorn mutates
+// foghorn.artifacts.storage_cluster_id.
+func (c *GRPCClient) UpdateArtifactStorageCluster(ctx context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey, storageClusterID string) (*pb.UpdateArtifactStorageClusterResponse, error) {
+	return c.internal.UpdateArtifactStorageCluster(ctx, &pb.UpdateArtifactStorageClusterRequest{
+		TenantId:         tenantID,
+		AssetType:        assetType,
+		AssetKey:         assetKey,
+		StorageClusterId: storageClusterID,
+	})
+}
+
 // UpdateDVRRetention back-fills retention_until on a finalized DVR.
 // Foghorn computes retention_until = ended_at + dvr_retention_days*24h
 // from the persisted policy snapshot at FinalizeDVR time and pushes it

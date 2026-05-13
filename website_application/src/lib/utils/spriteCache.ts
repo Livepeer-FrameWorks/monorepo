@@ -1,5 +1,4 @@
 import { parseThumbnailVtt, type ThumbnailCue } from "@livepeer-frameworks/player-core";
-import { getAssetUrl } from "$lib/config";
 
 interface SpriteData {
   cues: ThumbnailCue[];
@@ -9,8 +8,12 @@ interface SpriteData {
 const cache = new Map<string, SpriteData>();
 const inflight = new Map<string, Promise<SpriteData | null>>();
 
-export async function getSpriteCues(assetId: string): Promise<SpriteData | null> {
-  if (!assetId) return null;
+export async function getSpriteCues(
+  assetId: string,
+  spriteVttUrl: string,
+  spriteJpgUrl: string
+): Promise<SpriteData | null> {
+  if (!assetId || !spriteVttUrl || !spriteJpgUrl) return null;
 
   const cached = cache.get(assetId);
   if (cached) return cached;
@@ -19,16 +22,13 @@ export async function getSpriteCues(assetId: string): Promise<SpriteData | null>
   if (existing) return existing;
 
   const promise = (async (): Promise<SpriteData | null> => {
-    const vttUrl = getAssetUrl(assetId, "sprite.vtt");
-    if (!vttUrl) return null;
     try {
-      const resp = await fetch(vttUrl);
+      const resp = await fetch(spriteVttUrl);
       if (!resp.ok) return null;
       const text = await resp.text();
       const cues = parseThumbnailVtt(text);
       if (cues.length === 0) return null;
-      const spriteUrl = getAssetUrl(assetId, "sprite.jpg");
-      const data: SpriteData = { cues, spriteUrl };
+      const data: SpriteData = { cues, spriteUrl: spriteJpgUrl };
       cache.set(assetId, data);
       return data;
     } catch {

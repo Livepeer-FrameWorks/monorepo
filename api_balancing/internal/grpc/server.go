@@ -2530,6 +2530,23 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 		"part_size":     partSize,
 	}).Info("Created VOD multipart upload")
 
+	// Project the storage cluster onto Commodore's registry row when the
+	// resolver chose a non-origin cluster, so list/get APIs can derive
+	// thumbnail URLs from the authoritative cluster. Fire-and-forget;
+	// idempotent on the Commodore side.
+	if storageClusterArg.Valid && storageClusterArg.String != "" && control.CommodoreClient != nil {
+		go func(artifactHash, tenantID, cluster string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, err := control.CommodoreClient.UpdateArtifactStorageCluster(ctx, tenantID, pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD, artifactHash, cluster); err != nil {
+				s.logger.WithError(err).WithFields(logging.Fields{
+					"artifact_hash":   artifactHash,
+					"storage_cluster": cluster,
+				}).Warn("Failed to notify Commodore of VOD storage cluster")
+			}
+		}(artifactHash, req.TenantId, storageClusterArg.String)
+	}
+
 	// Emit VOD lifecycle event to Decklog (STATUS_REQUESTED)
 	if s.decklogClient != nil {
 		vodData := &pb.VodLifecycleData{

@@ -7,11 +7,20 @@
   interface Props {
     assetId: string | null;
     posterUrl?: string | null;
+    spriteVttUrl?: string | null;
+    spriteJpgUrl?: string | null;
     width?: number;
     height?: number;
   }
 
-  let { assetId = null, posterUrl = null, width = 64, height = 36 }: Props = $props();
+  let {
+    assetId = null,
+    posterUrl = null,
+    spriteVttUrl = null,
+    spriteJpgUrl = null,
+    width = 64,
+    height = 36,
+  }: Props = $props();
 
   const VideoIcon = getIconComponent("Video");
 
@@ -32,8 +41,8 @@
 
   function startAnimation() {
     hovering = true;
-    if (!assetId) return;
-    getSpriteCues(assetId).then((data) => {
+    if (!assetId || !spriteVttUrl || !spriteJpgUrl) return;
+    getSpriteCues(assetId, spriteVttUrl, spriteJpgUrl).then((data) => {
       if (!data || !hovering) return;
       cues = data.cues;
       spriteUrl = data.spriteUrl;
