@@ -753,6 +753,14 @@ func (x *GeoBucket) GetResolution() uint32 {
 }
 
 // ServiceEvent represents service-level telemetry emitted by core services.
+//
+// Envelope v2 fields (50-56) stamp event provenance for multi-region
+// MirrorMaker fan-in: source_region/source_cluster_id identify where the
+// event was produced; stream_origin_region/stream_origin_cluster_id identify
+// the originating region/cluster of the stream this event references (empty
+// for non-stream-scoped events). event_id should be a UUIDv7 so dedupe at
+// the aggregate consumer side is time-ordered. Decklog backfills any
+// envelope field a legacy producer left empty.
 type ServiceEvent struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	EventId      string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
@@ -774,9 +782,17 @@ type ServiceEvent struct {
 	//	*ServiceEvent_BillingEvent
 	//	*ServiceEvent_SupportEvent
 	//	*ServiceEvent_ArtifactEvent
-	Payload       isServiceEvent_Payload `protobuf_oneof:"payload"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Payload isServiceEvent_Payload `protobuf_oneof:"payload"`
+	// ===== Envelope v2 =====
+	SourceRegion          string `protobuf:"bytes,50,opt,name=source_region,json=sourceRegion,proto3" json:"source_region,omitempty"`
+	SourceClusterId       string `protobuf:"bytes,51,opt,name=source_cluster_id,json=sourceClusterId,proto3" json:"source_cluster_id,omitempty"`
+	StreamOriginRegion    string `protobuf:"bytes,52,opt,name=stream_origin_region,json=streamOriginRegion,proto3" json:"stream_origin_region,omitempty"`
+	StreamOriginClusterId string `protobuf:"bytes,53,opt,name=stream_origin_cluster_id,json=streamOriginClusterId,proto3" json:"stream_origin_cluster_id,omitempty"`
+	SchemaVersion         int32  `protobuf:"varint,54,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	CorrelationId         string `protobuf:"bytes,55,opt,name=correlation_id,json=correlationId,proto3" json:"correlation_id,omitempty"`
+	CausationId           string `protobuf:"bytes,56,opt,name=causation_id,json=causationId,proto3" json:"causation_id,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *ServiceEvent) Reset() {
@@ -951,6 +967,55 @@ func (x *ServiceEvent) GetArtifactEvent() *ArtifactEvent {
 		}
 	}
 	return nil
+}
+
+func (x *ServiceEvent) GetSourceRegion() string {
+	if x != nil {
+		return x.SourceRegion
+	}
+	return ""
+}
+
+func (x *ServiceEvent) GetSourceClusterId() string {
+	if x != nil {
+		return x.SourceClusterId
+	}
+	return ""
+}
+
+func (x *ServiceEvent) GetStreamOriginRegion() string {
+	if x != nil {
+		return x.StreamOriginRegion
+	}
+	return ""
+}
+
+func (x *ServiceEvent) GetStreamOriginClusterId() string {
+	if x != nil {
+		return x.StreamOriginClusterId
+	}
+	return ""
+}
+
+func (x *ServiceEvent) GetSchemaVersion() int32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *ServiceEvent) GetCorrelationId() string {
+	if x != nil {
+		return x.CorrelationId
+	}
+	return ""
+}
+
+func (x *ServiceEvent) GetCausationId() string {
+	if x != nil {
+		return x.CausationId
+	}
+	return ""
 }
 
 type isServiceEvent_Payload interface {
@@ -4093,10 +4158,25 @@ type MistTrigger struct {
 	//	*MistTrigger_FederationEventData
 	//	*MistTrigger_StreamProcess
 	TriggerPayload  isMistTrigger_TriggerPayload `protobuf_oneof:"trigger_payload"`
-	ClusterId       *string                      `protobuf:"bytes,33,opt,name=cluster_id,json=clusterId,proto3,oneof" json:"cluster_id,omitempty"`                     // Emitting cluster identifier
-	OriginClusterId *string                      `protobuf:"bytes,37,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"` // Cluster where stream was originally ingested (for federation attribution)
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	ClusterId       *string                      `protobuf:"bytes,33,opt,name=cluster_id,json=clusterId,proto3,oneof" json:"cluster_id,omitempty"`                     // Emitting cluster identifier (source_cluster_id in envelope v2 terms)
+	OriginClusterId *string                      `protobuf:"bytes,37,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"` // Cluster where stream was originally ingested (stream_origin_cluster_id in envelope v2 terms)
+	// ===== Envelope v2 (region pair + schema/version + correlation) =====
+	// cluster_id (33) and origin_cluster_id (37) already play the
+	// source_cluster_id / stream_origin_cluster_id roles. These fields add the
+	// region pair plus schema/correlation metadata so MirrorMaker fan-in can
+	// dedupe and route without inspecting payload JSON.
+	SourceRegion       string `protobuf:"bytes,50,opt,name=source_region,json=sourceRegion,proto3" json:"source_region,omitempty"`
+	StreamOriginRegion string `protobuf:"bytes,52,opt,name=stream_origin_region,json=streamOriginRegion,proto3" json:"stream_origin_region,omitempty"`
+	SchemaVersion      int32  `protobuf:"varint,54,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	CorrelationId      string `protobuf:"bytes,55,opt,name=correlation_id,json=correlationId,proto3" json:"correlation_id,omitempty"`
+	CausationId        string `protobuf:"bytes,56,opt,name=causation_id,json=causationId,proto3" json:"causation_id,omitempty"`
+	// event_id: UUIDv7 producer-stamped event identifier — the dedup key
+	// downstream consumers (Periscope, MirrorMaker peers) use to drop
+	// duplicates after at-least-once replication. Producers stamp at emit;
+	// Decklog backfills on ingest for backward compat.
+	EventId       string `protobuf:"bytes,57,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MistTrigger) Reset() {
@@ -4436,6 +4516,48 @@ func (x *MistTrigger) GetClusterId() string {
 func (x *MistTrigger) GetOriginClusterId() string {
 	if x != nil && x.OriginClusterId != nil {
 		return *x.OriginClusterId
+	}
+	return ""
+}
+
+func (x *MistTrigger) GetSourceRegion() string {
+	if x != nil {
+		return x.SourceRegion
+	}
+	return ""
+}
+
+func (x *MistTrigger) GetStreamOriginRegion() string {
+	if x != nil {
+		return x.StreamOriginRegion
+	}
+	return ""
+}
+
+func (x *MistTrigger) GetSchemaVersion() int32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *MistTrigger) GetCorrelationId() string {
+	if x != nil {
+		return x.CorrelationId
+	}
+	return ""
+}
+
+func (x *MistTrigger) GetCausationId() string {
+	if x != nil {
+		return x.CausationId
+	}
+	return ""
+}
+
+func (x *MistTrigger) GetEventId() string {
+	if x != nil {
+		return x.EventId
 	}
 	return ""
 }
@@ -14432,9 +14554,20 @@ type GatewayTelemetryEvent struct {
 	//	*GatewayTelemetryEvent_State
 	//	*GatewayTelemetryEvent_Transcode
 	//	*GatewayTelemetryEvent_Ai
-	Payload       isGatewayTelemetryEvent_Payload `protobuf_oneof:"payload"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Payload isGatewayTelemetryEvent_Payload `protobuf_oneof:"payload"`
+	// ===== Envelope v2 =====
+	// gateway_region (2) plays source_region's role for the gateway-instance
+	// attribution; cluster_id (3) plays source_cluster_id. These fields cover
+	// the stream-origin pair (empty for cluster-scoped events) plus schema
+	// versioning and correlation.
+	StreamOriginRegion    string `protobuf:"bytes,52,opt,name=stream_origin_region,json=streamOriginRegion,proto3" json:"stream_origin_region,omitempty"`
+	StreamOriginClusterId string `protobuf:"bytes,53,opt,name=stream_origin_cluster_id,json=streamOriginClusterId,proto3" json:"stream_origin_cluster_id,omitempty"`
+	SchemaVersion         int32  `protobuf:"varint,54,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	CorrelationId         string `protobuf:"bytes,55,opt,name=correlation_id,json=correlationId,proto3" json:"correlation_id,omitempty"`
+	CausationId           string `protobuf:"bytes,56,opt,name=causation_id,json=causationId,proto3" json:"causation_id,omitempty"`
+	EventId               string `protobuf:"bytes,57,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"` // UUIDv7 producer-stamped event identifier (dedupe key)
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *GatewayTelemetryEvent) Reset() {
@@ -14550,6 +14683,48 @@ func (x *GatewayTelemetryEvent) GetAi() *OrchestratorAIOutcome {
 		}
 	}
 	return nil
+}
+
+func (x *GatewayTelemetryEvent) GetStreamOriginRegion() string {
+	if x != nil {
+		return x.StreamOriginRegion
+	}
+	return ""
+}
+
+func (x *GatewayTelemetryEvent) GetStreamOriginClusterId() string {
+	if x != nil {
+		return x.StreamOriginClusterId
+	}
+	return ""
+}
+
+func (x *GatewayTelemetryEvent) GetSchemaVersion() int32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *GatewayTelemetryEvent) GetCorrelationId() string {
+	if x != nil {
+		return x.CorrelationId
+	}
+	return ""
+}
+
+func (x *GatewayTelemetryEvent) GetCausationId() string {
+	if x != nil {
+		return x.CausationId
+	}
+	return ""
+}
+
+func (x *GatewayTelemetryEvent) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
 }
 
 type isGatewayTelemetryEvent_Payload interface {
@@ -15367,7 +15542,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\bh3_index\x18\x01 \x01(\x04R\ah3Index\x12\x1e\n" +
 	"\n" +
 	"resolution\x18\x02 \x01(\rR\n" +
-	"resolution\"\xb7\a\n" +
+	"resolution\"\xe4\t\n" +
 	"\fServiceEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1d\n" +
 	"\n" +
@@ -15388,7 +15563,14 @@ const file_ipc_proto_rawDesc = "" +
 	"\x10stream_key_event\x18\x19 \x01(\v2\x1f.helmsmancontrol.StreamKeyEventH\x00R\x0estreamKeyEvent\x12D\n" +
 	"\rbilling_event\x18\x1a \x01(\v2\x1d.helmsmancontrol.BillingEventH\x00R\fbillingEvent\x12L\n" +
 	"\rsupport_event\x18\x1b \x01(\v2%.helmsmancontrol.MessageLifecycleDataH\x00R\fsupportEvent\x12G\n" +
-	"\x0eartifact_event\x18\x1c \x01(\v2\x1e.helmsmancontrol.ArtifactEventH\x00R\rartifactEventB\t\n" +
+	"\x0eartifact_event\x18\x1c \x01(\v2\x1e.helmsmancontrol.ArtifactEventH\x00R\rartifactEvent\x12#\n" +
+	"\rsource_region\x182 \x01(\tR\fsourceRegion\x12*\n" +
+	"\x11source_cluster_id\x183 \x01(\tR\x0fsourceClusterId\x120\n" +
+	"\x14stream_origin_region\x184 \x01(\tR\x12streamOriginRegion\x127\n" +
+	"\x18stream_origin_cluster_id\x185 \x01(\tR\x15streamOriginClusterId\x12%\n" +
+	"\x0eschema_version\x186 \x01(\x05R\rschemaVersion\x12%\n" +
+	"\x0ecorrelation_id\x187 \x01(\tR\rcorrelationId\x12!\n" +
+	"\fcausation_id\x188 \x01(\tR\vcausationIdB\t\n" +
 	"\apayload\"\xc9\x01\n" +
 	"\tAuthEvent\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x1b\n" +
@@ -15667,7 +15849,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"$\n" +
 	"\tHeartbeat\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\xc5\x14\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\xa8\x16\n" +
 	"\vMistTrigger\x12!\n" +
 	"\ftrigger_type\x18\x01 \x01(\tR\vtriggerType\x12\x17\n" +
 	"\anode_id\x18\x03 \x01(\tR\x06nodeId\x12\x1c\n" +
@@ -15709,7 +15891,13 @@ const file_ipc_proto_rawDesc = "" +
 	"\x0estream_process\x18& \x01(\v2%.helmsmancontrol.StreamProcessTriggerH\x00R\rstreamProcess\x12\"\n" +
 	"\n" +
 	"cluster_id\x18! \x01(\tH\x04R\tclusterId\x88\x01\x01\x12/\n" +
-	"\x11origin_cluster_id\x18% \x01(\tH\x05R\x0foriginClusterId\x88\x01\x01B\x11\n" +
+	"\x11origin_cluster_id\x18% \x01(\tH\x05R\x0foriginClusterId\x88\x01\x01\x12#\n" +
+	"\rsource_region\x182 \x01(\tR\fsourceRegion\x120\n" +
+	"\x14stream_origin_region\x184 \x01(\tR\x12streamOriginRegion\x12%\n" +
+	"\x0eschema_version\x186 \x01(\x05R\rschemaVersion\x12%\n" +
+	"\x0ecorrelation_id\x187 \x01(\tR\rcorrelationId\x12!\n" +
+	"\fcausation_id\x188 \x01(\tR\vcausationId\x12\x19\n" +
+	"\bevent_id\x189 \x01(\tR\aeventIdB\x11\n" +
 	"\x0ftrigger_payloadB\f\n" +
 	"\n" +
 	"_tenant_idB\n" +
@@ -17313,7 +17501,7 @@ const file_ipc_proto_rawDesc = "" +
 	"local_path\x18\x04 \x01(\tR\tlocalPath\"Q\n" +
 	"\x11ThumbnailUploaded\x12#\n" +
 	"\rthumbnail_key\x18\x01 \x01(\tR\fthumbnailKey\x12\x17\n" +
-	"\as3_keys\x18\x02 \x03(\tR\x06s3Keys\"\xbd\x04\n" +
+	"\as3_keys\x18\x02 \x03(\tR\x06s3Keys\"\xb4\x06\n" +
 	"\x15GatewayTelemetryEvent\x12\x1d\n" +
 	"\n" +
 	"gateway_id\x18\x01 \x01(\tR\tgatewayId\x12%\n" +
@@ -17327,7 +17515,13 @@ const file_ipc_proto_rawDesc = "" +
 	" \x01(\v2..helmsmancontrol.OrchestratorDiscoveryObservedH\x00R\tdiscovery\x12@\n" +
 	"\x05state\x18\v \x01(\v2(.helmsmancontrol.OrchestratorStateUpdateH\x00R\x05state\x12M\n" +
 	"\ttranscode\x18\f \x01(\v2-.helmsmancontrol.OrchestratorTranscodeOutcomeH\x00R\ttranscode\x128\n" +
-	"\x02ai\x18\r \x01(\v2&.helmsmancontrol.OrchestratorAIOutcomeH\x00R\x02aiB\t\n" +
+	"\x02ai\x18\r \x01(\v2&.helmsmancontrol.OrchestratorAIOutcomeH\x00R\x02ai\x120\n" +
+	"\x14stream_origin_region\x184 \x01(\tR\x12streamOriginRegion\x127\n" +
+	"\x18stream_origin_cluster_id\x185 \x01(\tR\x15streamOriginClusterId\x12%\n" +
+	"\x0eschema_version\x186 \x01(\x05R\rschemaVersion\x12%\n" +
+	"\x0ecorrelation_id\x187 \x01(\tR\rcorrelationId\x12!\n" +
+	"\fcausation_id\x188 \x01(\tR\vcausationId\x12\x19\n" +
+	"\bevent_id\x189 \x01(\tR\aeventIdB\t\n" +
 	"\apayload\"\xa5\x02\n" +
 	"\x16OrchestratorVantageGeo\x12\x1f\n" +
 	"\vresolved_ip\x18\x01 \x01(\tR\n" +

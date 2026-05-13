@@ -54,6 +54,20 @@ type Cluster struct {
 	AllowPrivatePullSources bool        `yaml:"allow_private_pull_sources,omitempty"`
 	BaseURL                 string      `yaml:"base_url,omitempty"`
 	Mesh                    ClusterMesh `yaml:"mesh"`
+
+	// Cell membership + class + control assignment. Defaults applied at
+	// render time in cli/pkg/bootstrap/render.go — Cell falls back to ID,
+	// Class derives from IsPlatformOfficial, ControlCell falls back to
+	// Cell, EligibleServingCells falls back to [ControlCell].
+	Cell                 string   `yaml:"cell,omitempty"`
+	Class                string   `yaml:"class,omitempty"`
+	ControlCell          string   `yaml:"control_cell,omitempty"`
+	EligibleServingCells []string `yaml:"eligible_serving_cells,omitempty"`
+
+	// S3 storage backend on the cluster row (credentials stay env-only).
+	S3Bucket   string `yaml:"s3_bucket,omitempty"`
+	S3Endpoint string `yaml:"s3_endpoint,omitempty"`
+	S3Region   string `yaml:"s3_region,omitempty"`
 }
 
 type ClusterMesh struct {

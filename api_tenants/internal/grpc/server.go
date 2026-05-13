@@ -511,11 +511,17 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		}
 	}
 
-	// Build cluster_peers: all clusters this tenant has access to (best-effort)
-	// Resolves Foghorn gRPC address per peer so Commodore can route commands to any cluster.
+	// Build cluster_peers: all clusters this tenant has access to (best-effort).
+	// Resolves Foghorn gRPC address per peer so Commodore can route commands to
+	// any cluster. region_id / cell_id / cluster_class / health_status ride
+	// along so Commodore's plan-aware route filter can reject ineligible peers
+	// without a second round-trip.
 	peerRows, peerErr := s.db.QueryContext(ctx, `
 		SELECT ic.cluster_id, ic.cluster_name, ic.cluster_type, ic.base_url,
 		       COALESCE(ic.s3_bucket, ''), COALESCE(ic.s3_endpoint, ''), COALESCE(ic.s3_region, ''),
+		       COALESCE(ic.region_id, ''), COALESCE(ic.cell_id, ''),
+		       COALESCE(ic.cluster_class, ''),
+		       COALESCE(ic.health_status, ''),
 		       COALESCE(
 		           (SELECT si.advertise_host
 		            FROM quartermaster.service_cluster_assignments sca
@@ -562,9 +568,16 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		}
 		for peerRows.Next() {
 			var cID, cName, cType, cBaseURL, s3Bucket, s3Endpoint, s3Region string
+			var regionID, cellID, clusterClass, healthStatus string
 			var foghornHost sql.NullString
 			var foghornPort sql.NullInt32
-			if err := peerRows.Scan(&cID, &cName, &cType, &cBaseURL, &s3Bucket, &s3Endpoint, &s3Region, &foghornHost, &foghornPort); err != nil {
+			if err := peerRows.Scan(
+				&cID, &cName, &cType, &cBaseURL,
+				&s3Bucket, &s3Endpoint, &s3Region,
+				&regionID, &cellID, &clusterClass,
+				&healthStatus,
+				&foghornHost, &foghornPort,
+			); err != nil {
 				continue
 			}
 			foghornGrpcAddr, _ := buildAdvertiseAddr(foghornHost, foghornPort)
@@ -588,6 +601,10 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 				S3Bucket:        s3Bucket,
 				S3Endpoint:      s3Endpoint,
 				S3Region:        s3Region,
+				RegionId:        regionID,
+				CellId:          cellID,
+				ClusterClass:    clusterClass,
+				HealthStatus:    healthStatus,
 			})
 		}
 	}
@@ -1578,70 +1595,108 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 	id := uuid.New().String()
 	now := time.Now()
 
-	// Create the private cluster
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO quartermaster.infrastructure_clusters (
-			id, cluster_id, cluster_name, cluster_type, deployment_model,
-			owner_tenant_id, base_url,
-			max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
-			visibility, pricing_model, short_description,
-			health_status, is_active, created_at, updated_at
-		) VALUES (
-			$1, $2, $3, 'edge', 'self-hosted',
-			$4, '',
-			100, 10000, 1000,
-			'private', 'free_unmetered', $5,
-			'unknown', true, $6, $6
-		)
-	`, id, clusterID, clusterName, tenantID, req.ShortDescription, now)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
-	}
-
-	// Auto-subscribe the owner
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO quartermaster.tenant_cluster_access (
-			tenant_id, cluster_id, access_level, subscription_status, is_active, created_at, updated_at
-		) VALUES ($1, $2, 'owner', 'active', true, NOW(), NOW())
-	`, tenantID, clusterID)
-	if err != nil {
-		s.logger.WithFields(logging.Fields{
-			"tenant_id":  tenantID,
-			"cluster_id": clusterID,
-		}).WithError(err).Error("Failed to auto-subscribe owner to cluster")
-	}
-
-	// Assign the least-loaded running Foghorn to this cluster
-	var foghornInstanceID string
-	var foghornAddr string
+	// Pick the least-loaded running Foghorn instance whose primary serving
+	// cluster is in the requested region (when supplied) and read that
+	// platform-official cluster as the control cell for this new tenant-
+	// private cluster. Tenant-private clusters don't run their own Foghorn;
+	// ConfigSeed delivery + tenant-alias bundle + edge apply-state ACK
+	// ownership all live on the assigned cell. requested_region empty falls
+	// back to least-loaded across regions; supplied region with no match is
+	// a hard Unavailable so we don't silently put a Mumbai self-hosted edge
+	// under EU control.
+	requestedRegion := strings.TrimSpace(req.GetRegion())
+	var (
+		foghornInstanceID string
+		foghornAddr       string
+		controlCellID     sql.NullString
+		controlCellRegion sql.NullString
+	)
 	err = s.db.QueryRowContext(ctx, `
-		SELECT si.id::text, si.advertise_host || ':' || si.port
-		FROM quartermaster.service_instances si
-		JOIN quartermaster.services svc ON svc.service_id = si.service_id
-		LEFT JOIN quartermaster.service_cluster_assignments sca
-		  ON sca.service_instance_id = si.id AND sca.is_active = true
-		WHERE svc.type = 'foghorn' AND si.status = 'running' AND si.protocol = 'grpc'
-		GROUP BY si.id, si.advertise_host, si.port
-		ORDER BY COUNT(sca.id) ASC, si.started_at ASC, si.id ASC
-		LIMIT 1
-	`).Scan(&foghornInstanceID, &foghornAddr)
+		WITH ranked AS (
+			SELECT si.id::text AS instance_id,
+			       si.advertise_host || ':' || si.port AS addr,
+			       ic.cluster_id  AS control_cell,
+			       ic.region_id   AS control_region,
+			       COUNT(sca.id)  AS load
+			FROM quartermaster.service_instances si
+			JOIN quartermaster.services svc ON svc.service_id = si.service_id
+			JOIN quartermaster.service_cluster_assignments primary_sca
+			  ON primary_sca.service_instance_id = si.id AND primary_sca.is_active = true
+			JOIN quartermaster.infrastructure_clusters ic
+			  ON ic.cluster_id = primary_sca.cluster_id
+			  AND ic.cluster_class = 'platform_official'
+			  AND ic.is_active = true
+			LEFT JOIN quartermaster.service_cluster_assignments sca
+			  ON sca.service_instance_id = si.id AND sca.is_active = true
+			WHERE svc.type = 'foghorn' AND si.status = 'running' AND si.protocol = 'grpc'
+			GROUP BY si.id, si.advertise_host, si.port, ic.cluster_id, ic.region_id, si.started_at
+			ORDER BY (CASE WHEN NULLIF($1, '') IS NOT NULL AND ic.region_id = $1 THEN 0 ELSE 1 END),
+			         COUNT(sca.id) ASC, si.started_at ASC, si.id ASC
+		)
+		SELECT instance_id, addr, control_cell, control_region FROM ranked LIMIT 1
+	`, requestedRegion).Scan(&foghornInstanceID, &foghornAddr, &controlCellID, &controlCellRegion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unavailable, "no running Foghorn instances available")
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to find Foghorn: %v", err)
 	}
+	if !controlCellID.Valid || strings.TrimSpace(controlCellID.String) == "" {
+		return nil, status.Error(codes.Unavailable, "no platform-official cluster carries the assigned Foghorn; cannot assign control cell")
+	}
+	regionForRow := strings.TrimSpace(controlCellRegion.String)
+	if requestedRegion != "" && regionForRow != requestedRegion {
+		return nil, status.Errorf(codes.Unavailable, "no running Foghorn in region %q; refusing cross-region control assignment", requestedRegion)
+	}
 
-	// Create junction table entry
-	_, err = s.db.ExecContext(ctx, `
+	// One transaction wraps every write that makes up a self-hosted cluster:
+	// the cluster row, the owner's tenant_cluster_access grant, the Foghorn
+	// service_cluster_assignments junction, the bootstrap token, and the
+	// service-event outbox emits. A failure on any of these rolls the whole
+	// thing back so we never publish a tenant_private cluster without owner
+	// access or without a Foghorn assignment.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO quartermaster.infrastructure_clusters (
+			id, cluster_id, cluster_name, cluster_type, deployment_model,
+			owner_tenant_id, base_url,
+			max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
+			visibility, pricing_model, short_description,
+			region_id, cell_id, cluster_class, control_cell_id, eligible_serving_cell_ids,
+			health_status, is_active, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, 'edge', 'self-hosted',
+			$4, '',
+			100, 10000, 1000,
+			'private', 'free_unmetered', $5,
+			NULLIF($8, ''), $2, 'tenant_private', $7, ARRAY[$7]::TEXT[],
+			'unknown', true, $6, $6
+		)
+	`, id, clusterID, clusterName, tenantID, req.ShortDescription, now, controlCellID.String, regionForRow); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
+	}
+
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO quartermaster.tenant_cluster_access (
+			tenant_id, cluster_id, access_level, subscription_status, is_active, created_at, updated_at
+		) VALUES ($1, $2, 'owner', 'active', true, NOW(), NOW())
+	`, tenantID, clusterID); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to auto-subscribe owner to cluster: %v", err)
+	}
+
+	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id)
 		SELECT si.id, $2
 		FROM quartermaster.service_instances si
 		JOIN quartermaster.services svc ON svc.service_id = si.service_id
 		WHERE si.id = $1::uuid AND svc.type = 'foghorn'
 		ON CONFLICT (service_instance_id, cluster_id) DO UPDATE SET is_active = true, updated_at = NOW()
-	`, foghornInstanceID, clusterID)
-	if err != nil {
+	`, foghornInstanceID, clusterID); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to assign Foghorn to cluster: %v", err)
 	}
 
@@ -1653,22 +1708,29 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 	}
 	expiresAt := now.Add(30 * 24 * time.Hour)
 
-	_, err = s.db.ExecContext(ctx, `
+	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO quartermaster.bootstrap_tokens (
 			id, token_hash, token_prefix, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
 		) VALUES ($1, $2, $3, 'edge_node', $4, $5, $6, $7, $5, NOW())
-	`, tokenID, hashBootstrapToken(token), tokenPrefix(token), fmt.Sprintf("Bootstrap token for %s", clusterName), tenantID, clusterID, expiresAt)
-	if err != nil {
+	`, tokenID, hashBootstrapToken(token), tokenPrefix(token), fmt.Sprintf("Bootstrap token for %s", clusterName), tenantID, clusterID, expiresAt); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create bootstrap token: %v", err)
+	}
+
+	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterCreated, tenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue cluster_created: %v", enqErr)
+	}
+	if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, tenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_assigned: %v", enqErr)
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "commit self-hosting enable: %v", commitErr)
 	}
 
 	cluster, err := s.queryCluster(ctx, clusterID)
 	if err != nil {
 		return nil, err
 	}
-
-	s.emitClusterEvent(ctx, eventClusterCreated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
-	s.emitClusterEvent(ctx, eventTenantClusterAssigned, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
 
 	return &pb.EnableSelfHostingResponse{
 		Cluster: cluster,
@@ -2180,8 +2242,15 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 	argIdx := 1
 	changedFields := []string{}
 	var previousClusterID sql.NullString
-	if req.PrimaryClusterId != nil {
-		_ = s.db.QueryRowContext(ctx, `SELECT primary_cluster_id FROM quartermaster.tenants WHERE id = $1`, tenantID).Scan(&previousClusterID)
+	var previousCustomDomain sql.NullString
+	if req.PrimaryClusterId != nil || req.CustomDomain != nil {
+		if scanErr := s.db.QueryRowContext(ctx, `
+			SELECT primary_cluster_id, custom_domain
+			FROM quartermaster.tenants
+			WHERE id = $1
+		`, tenantID).Scan(&previousClusterID, &previousCustomDomain); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+			s.logger.WithError(scanErr).WithField("tenant_id", tenantID).Warn("UpdateTenant: previous-value lookup failed")
+		}
 	}
 
 	if req.Name != nil {
@@ -2244,7 +2313,16 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 	query := fmt.Sprintf("UPDATE quartermaster.tenants SET %s WHERE id = $%d", strings.Join(updates, ", "), argIdx)
 	args = append(args, tenantID)
 
-	result, err := s.db.ExecContext(ctx, query, args...)
+	// Wrap the tenant UPDATE and its outbox emits in one transaction so a
+	// crash between mutation and emit can't leave the row updated without
+	// the corresponding service-event durable.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+
+	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update tenant: %v", err)
 	}
@@ -2258,15 +2336,37 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 	}
 
 	if len(changedFields) > 0 {
-		s.emitTenantEvent(ctx, eventTenantUpdated, tenantID, userID, changedFields, nil)
+		if enqErr := s.emitTenantEventTx(ctx, tx, eventTenantUpdated, tenantID, userID, changedFields, nil); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue tenant_updated: %v", enqErr)
+		}
 	}
 	if req.PrimaryClusterId != nil {
 		newCluster := strings.TrimSpace(*req.PrimaryClusterId)
 		if newCluster != "" && (!previousClusterID.Valid || previousClusterID.String != newCluster) {
-			s.emitClusterEvent(ctx, eventTenantClusterAssigned, tenantID, userID, newCluster, "cluster", newCluster, "", "", "")
+			if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, tenantID, userID, newCluster, "cluster", newCluster, "", "", ""); enqErr != nil {
+				return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_assigned: %v", enqErr)
+			}
 		} else if newCluster == "" && previousClusterID.Valid {
-			s.emitClusterEvent(ctx, eventTenantClusterUnassigned, tenantID, userID, previousClusterID.String, "cluster", previousClusterID.String, "", "", "")
+			if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterUnassigned, tenantID, userID, previousClusterID.String, "cluster", previousClusterID.String, "", "", ""); enqErr != nil {
+				return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_unassigned: %v", enqErr)
+			}
 		}
+	}
+	// Custom-domain lifecycle hand-off is durable: enqueue the desired
+	// Navigator action inside the same tx as the tenants UPDATE so a
+	// Navigator outage cannot leave QM saying the tenant has a custom
+	// domain while Navigator has no verification/cert lifecycle row. Free
+	// tenants still skip; the drain worker will replay until Navigator
+	// accepts. Tear-down of an old domain rides the outbox too so it never
+	// stays mounted on Navigator after QM clears it.
+	if req.CustomDomain != nil {
+		if enqErr := s.enqueueCustomDomainTransition(ctx, tx, tenantID, previousCustomDomain.String, strings.TrimSpace(*req.CustomDomain)); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue navigator custom-domain transition: %v", enqErr)
+		}
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "commit tenant update: %v", commitErr)
 	}
 
 	// Fetch updated tenant
@@ -2275,6 +2375,43 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 		return nil, err
 	}
 	return resp.Tenant, nil
+}
+
+// enqueueCustomDomainTransition writes the desired Navigator action(s) into
+// quartermaster.navigator_custom_domain_outbox inside the caller's
+// transaction. Tear-down of the previous domain runs whenever the value
+// changes, independent of plan tier (so an expired-to-free tenant still
+// gets the old Navigator state unwound). Ensure runs only when the new
+// domain is non-empty AND the tenant is paid + active — the drain worker
+// double-checks plan/state at dispatch time so a plan change between
+// enqueue and dispatch can't escape.
+func (s *QuartermasterServer) enqueueCustomDomainTransition(ctx context.Context, tx *sql.Tx, tenantID, previousDomain, newDomain string) error {
+	previousDomain = strings.TrimSpace(previousDomain)
+	newDomain = strings.TrimSpace(newDomain)
+	if previousDomain != "" && previousDomain != newDomain {
+		if _, err := s.EnqueueNavigatorCustomDomainTx(ctx, tx, tenantID, previousDomain, "remove"); err != nil {
+			return fmt.Errorf("enqueue remove: %w", err)
+		}
+	}
+	if newDomain == "" {
+		return nil
+	}
+	var tier string
+	var isActive bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT deployment_tier, is_active
+		FROM quartermaster.tenants
+		WHERE id = $1::uuid
+	`, tenantID).Scan(&tier, &isActive); err != nil {
+		return fmt.Errorf("lookup tier: %w", err)
+	}
+	if !isActive || tier == "" || tier == "free" {
+		return nil
+	}
+	if _, err := s.EnqueueNavigatorCustomDomainTx(ctx, tx, tenantID, newDomain, "ensure"); err != nil {
+		return fmt.Errorf("enqueue ensure: %w", err)
+	}
+	return nil
 }
 
 // DeleteTenant soft deletes a tenant
@@ -2436,7 +2573,15 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *pb.U
 	query := fmt.Sprintf("UPDATE quartermaster.tenants SET %s WHERE id = $%d AND is_active = TRUE", strings.Join(updates, ", "), argIdx)
 	args = append(args, tenantID)
 
-	result, err := s.db.ExecContext(ctx, query, args...)
+	// Mutation + outbox emits ride in one tx so a crash between them can't
+	// leave the cluster assignment durable without the corresponding event.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+
+	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update tenant cluster: %v", err)
 	}
@@ -2449,18 +2594,28 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *pb.U
 		return nil, status.Error(codes.NotFound, "tenant not found")
 	}
 
-	s.logger.WithField("tenant_id", tenantID).Info("Updated tenant cluster successfully")
 	if len(changedFields) > 0 {
-		s.emitTenantEvent(ctx, eventTenantUpdated, tenantID, userID, changedFields, nil)
+		if enqErr := s.emitTenantEventTx(ctx, tx, eventTenantUpdated, tenantID, userID, changedFields, nil); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue tenant_updated: %v", enqErr)
+		}
 	}
 	if req.PrimaryClusterId != nil {
 		newCluster := strings.TrimSpace(*req.PrimaryClusterId)
 		if newCluster != "" && (!previousClusterID.Valid || previousClusterID.String != newCluster) {
-			s.emitClusterEvent(ctx, eventTenantClusterAssigned, tenantID, userID, newCluster, "cluster", newCluster, "", "", "")
+			if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, tenantID, userID, newCluster, "cluster", newCluster, "", "", ""); enqErr != nil {
+				return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_assigned: %v", enqErr)
+			}
 		} else if newCluster == "" && previousClusterID.Valid {
-			s.emitClusterEvent(ctx, eventTenantClusterUnassigned, tenantID, userID, previousClusterID.String, "cluster", previousClusterID.String, "", "", "")
+			if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterUnassigned, tenantID, userID, previousClusterID.String, "cluster", previousClusterID.String, "", "", ""); enqErr != nil {
+				return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_unassigned: %v", enqErr)
+			}
 		}
 	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "commit tenant cluster update: %v", commitErr)
+	}
+
+	s.logger.WithField("tenant_id", tenantID).Info("Updated tenant cluster successfully")
 	return &emptypb.Empty{}, nil
 }
 
@@ -6592,6 +6747,27 @@ func computeMeshRevision(peers []*pb.InfrastructurePeer, serviceEndpoints map[st
 // SERVICE REGISTRY SERVICE
 // ============================================================================
 
+// EnqueueServiceEvent persists a service event from a stateless emitter
+// (e.g. Deckhand) into quartermaster.service_event_outbox so the drain
+// worker can dispatch it to Decklog with exponential backoff. event.source
+// stays as the originating service's name; the dispatcher routes by
+// payload, not by which service wrote the row. Returns NotFound when the
+// event is nil, InvalidArgument when event.tenant_id is empty.
+func (s *QuartermasterServer) EnqueueServiceEvent(ctx context.Context, req *pb.EnqueueServiceEventRequest) (*pb.EnqueueServiceEventResponse, error) {
+	event := req.GetEvent()
+	if event == nil {
+		return nil, status.Error(codes.InvalidArgument, "event is required")
+	}
+	if event.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "event.tenant_id is required")
+	}
+	id, err := s.EnqueueServiceEventTx(ctx, s.db, event)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue service event: %v", err)
+	}
+	return &pb.EnqueueServiceEventResponse{OutboxId: id}, nil
+}
+
 // ListServices returns all services in the catalog
 func (s *QuartermasterServer) ListServices(ctx context.Context, req *pb.ListServicesRequest) (*pb.ListServicesResponse, error) {
 	rows, err := s.db.QueryContext(ctx, `
@@ -7367,28 +7543,29 @@ const (
 	eventClusterSubscriptionRejected  = "cluster_subscription_rejected"
 )
 
+// emitServiceEvent enqueues a service event into
+// quartermaster.service_event_outbox. The drain worker (started in
+// NewGRPCServer) dispatches pending rows to Decklog with exponential
+// backoff. Replaces the previous async fire-and-forget SendServiceEvent
+// path so Decklog outage no longer drops tenant/cluster mutation events.
+// Best-effort durability: helper uses its own short tx for the INSERT
+// (not strictly atomic with upstream state mutation). For strict
+// atomicity, callers that hold a tx can switch to
+// EnqueueServiceEventTx(ctx, tx, event).
 func (s *QuartermasterServer) emitServiceEvent(ctx context.Context, event *pb.ServiceEvent) {
-	if s.decklogClient == nil || event == nil {
-		return
-	}
 	if ctxkeys.IsDemoMode(ctx) {
 		return
 	}
-
-	go func(ev *pb.ServiceEvent) {
-		if err := s.decklogClient.SendServiceEvent(ev); err != nil {
-			s.logger.WithError(err).WithField("event_type", ev.EventType).Warn("Failed to emit service event")
-		}
-	}(event)
+	s.enqueueServiceEvent(ctx, event)
 }
 
-func (s *QuartermasterServer) emitTenantEvent(ctx context.Context, eventType, tenantID, userID string, changedFields []string, attribution *pb.SignupAttribution) {
+func (s *QuartermasterServer) buildTenantEvent(eventType, tenantID, userID string, changedFields []string, attribution *pb.SignupAttribution) *pb.ServiceEvent {
 	payload := &pb.TenantEvent{
 		TenantId:      tenantID,
 		ChangedFields: changedFields,
 		Attribution:   attribution,
 	}
-	event := &pb.ServiceEvent{
+	return &pb.ServiceEvent{
 		EventType:    eventType,
 		Timestamp:    timestamppb.Now(),
 		Source:       "quartermaster",
@@ -7398,10 +7575,30 @@ func (s *QuartermasterServer) emitTenantEvent(ctx context.Context, eventType, te
 		ResourceId:   tenantID,
 		Payload:      &pb.ServiceEvent_TenantEvent{TenantEvent: payload},
 	}
-	s.emitServiceEvent(ctx, event)
 }
 
-func (s *QuartermasterServer) emitClusterEvent(ctx context.Context, eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason string) {
+func (s *QuartermasterServer) emitTenantEvent(ctx context.Context, eventType, tenantID, userID string, changedFields []string, attribution *pb.SignupAttribution) {
+	s.emitServiceEvent(ctx, s.buildTenantEvent(eventType, tenantID, userID, changedFields, attribution))
+}
+
+// emitTenantEventTx writes the tenant-event outbox row inside the caller's
+// transaction. Use when the state mutation that justifies the event runs in
+// the same tx — guarantees the mutation and the event become durable
+// atomically. Falls back to the short-tx variant on tx==nil.
+func (s *QuartermasterServer) emitTenantEventTx(ctx context.Context, tx *sql.Tx, eventType, tenantID, userID string, changedFields []string, attribution *pb.SignupAttribution) error {
+	event := s.buildTenantEvent(eventType, tenantID, userID, changedFields, attribution)
+	if tx == nil {
+		s.emitServiceEvent(ctx, event)
+		return nil
+	}
+	if ctxkeys.IsDemoMode(ctx) || event.GetTenantId() == "" {
+		return nil
+	}
+	_, err := s.EnqueueServiceEventTx(ctx, tx, event)
+	return err
+}
+
+func (s *QuartermasterServer) buildClusterEvent(eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason string) *pb.ServiceEvent {
 	payload := &pb.ClusterEvent{
 		ClusterId:      clusterID,
 		TenantId:       tenantID,
@@ -7409,7 +7606,7 @@ func (s *QuartermasterServer) emitClusterEvent(ctx context.Context, eventType, t
 		SubscriptionId: subscriptionID,
 		Reason:         reason,
 	}
-	event := &pb.ServiceEvent{
+	return &pb.ServiceEvent{
 		EventType:    eventType,
 		Timestamp:    timestamppb.Now(),
 		Source:       "quartermaster",
@@ -7419,7 +7616,25 @@ func (s *QuartermasterServer) emitClusterEvent(ctx context.Context, eventType, t
 		ResourceId:   resourceID,
 		Payload:      &pb.ServiceEvent_ClusterEvent{ClusterEvent: payload},
 	}
-	s.emitServiceEvent(ctx, event)
+}
+
+func (s *QuartermasterServer) emitClusterEvent(ctx context.Context, eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason string) {
+	s.emitServiceEvent(ctx, s.buildClusterEvent(eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason))
+}
+
+// emitClusterEventTx writes the cluster-event outbox row inside the
+// caller's transaction. See emitTenantEventTx for semantics.
+func (s *QuartermasterServer) emitClusterEventTx(ctx context.Context, tx *sql.Tx, eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason string) error {
+	event := s.buildClusterEvent(eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason)
+	if tx == nil {
+		s.emitServiceEvent(ctx, event)
+		return nil
+	}
+	if ctxkeys.IsDemoMode(ctx) || event.GetTenantId() == "" {
+		return nil
+	}
+	_, err := s.EnqueueServiceEventTx(ctx, tx, event)
+	return err
 }
 
 func scanTenant(rows *sql.Rows) (*pb.Tenant, error) {
@@ -7624,14 +7839,15 @@ func scanNode(rows *sql.Rows) (*pb.InfrastructureNode, error) {
 }
 
 func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
-	// Note: pricing_model, monthly_price_cents, required_billing_tier now in Purser
-	// Column order must match the Scan() call below!
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, cluster_id, cluster_name, cluster_type, owner_tenant_id, deployment_model,
 		       base_url, database_url, periscope_url, kafka_brokers,
 		       max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
 		       health_status, is_active, is_default_cluster, is_platform_official, created_at, updated_at,
-		       visibility, requires_approval, short_description
+		       visibility, requires_approval, short_description,
+		       COALESCE(s3_bucket, ''), COALESCE(s3_endpoint, ''), COALESCE(s3_region, ''),
+		       COALESCE(region_id, ''), COALESCE(cell_id, ''), COALESCE(cluster_class, ''),
+		       COALESCE(control_cell_id, ''), COALESCE(eligible_serving_cell_ids, ARRAY[]::TEXT[])
 		FROM quartermaster.infrastructure_clusters
 		WHERE cluster_id = $1
 	`, clusterID)
@@ -7640,10 +7856,10 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 	var ownerTenantID, databaseURL, periscopeURL sql.NullString
 	var kafkaBrokers []string
 	var createdAt, updatedAt time.Time
-	// Marketplace fields (pricing now in Purser)
 	var visibility string
 	var shortDescription sql.NullString
 	var requiresApproval bool
+	var eligibleCells []string
 
 	err := row.Scan(
 		&cluster.Id, &cluster.ClusterId, &cluster.ClusterName, &cluster.ClusterType,
@@ -7652,6 +7868,9 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 		&cluster.MaxBandwidthMbps, &cluster.HealthStatus, &cluster.IsActive, &cluster.IsDefaultCluster,
 		&cluster.IsPlatformOfficial, &createdAt, &updatedAt,
 		&visibility, &requiresApproval, &shortDescription,
+		&cluster.S3Bucket, &cluster.S3Endpoint, &cluster.S3Region,
+		&cluster.RegionId, &cluster.CellId, &cluster.ClusterClass,
+		&cluster.ControlCellId, pq.Array(&eligibleCells),
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "cluster not found")
@@ -7679,6 +7898,7 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 	if shortDescription.Valid {
 		cluster.ShortDescription = &shortDescription.String
 	}
+	cluster.EligibleServingCellIds = eligibleCells
 
 	return &cluster, nil
 }
@@ -8176,9 +8396,32 @@ func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req 
 		if !isProvider && *req.Visibility != pb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE {
 			return nil, status.Error(codes.PermissionDenied, "only providers can set public/unlisted visibility")
 		}
+		newVisibility := visibilityProtoToString(*req.Visibility)
 		updates = append(updates, fmt.Sprintf("visibility = $%d", argIdx))
-		args = append(args, visibilityProtoToString(*req.Visibility))
+		args = append(args, newVisibility)
 		argIdx++
+		// Keep cluster_class aligned with the new visibility. Platform-
+		// official capacity never changes class through this surface. For
+		// owner-owned clusters: private → tenant_private; public/unlisted →
+		// third_party_marketplace. Plan-tier admission keys off cluster_class
+		// (free→platform_official, premium→+marketplace, enterprise→+private)
+		// so a class that drifts from visibility silently mis-routes a paid
+		// cluster onto the wrong plan bucket. Per the three-cluster-kinds
+		// invariant in pkg/database/sql/schema/quartermaster.sql.
+		var newClass string
+		switch newVisibility {
+		case "private":
+			newClass = "tenant_private"
+		case "public", "unlisted":
+			newClass = "third_party_marketplace"
+		}
+		if newClass != "" {
+			updates = append(updates, fmt.Sprintf(
+				"cluster_class = CASE WHEN cluster_class = 'platform_official' THEN cluster_class ELSE $%d END",
+				argIdx))
+			args = append(args, newClass)
+			argIdx++
+		}
 	}
 	// Note: Pricing fields are managed via Purser, not Quartermaster
 	if req.RequiresApproval != nil {
@@ -8201,17 +8444,31 @@ func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req 
 		strings.Join(updates, ", "), argIdx)
 	args = append(args, clusterID)
 
-	_, err = s.db.ExecContext(ctx, query, args...)
+	// Marketplace UPDATE + cluster_updated outbox emit ride one tx so the
+	// dashboard view and downstream consumers can't see a divergent state
+	// after a crash between mutation and emit.
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+
+	if _, err = tx.ExecContext(ctx, query, args...); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update cluster: %v", err)
+	}
+
+	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterUpdated, tenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue cluster_updated: %v", enqErr)
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "commit cluster update: %v", commitErr)
 	}
 
 	cluster, err := s.queryCluster(ctx, clusterID)
 	if err != nil {
 		return nil, err
 	}
-
-	s.emitClusterEvent(ctx, eventClusterUpdated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
 
 	return &pb.ClusterResponse{Cluster: cluster}, nil
 }
@@ -8328,39 +8585,107 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 
 	id := uuid.New().String()
 	now := time.Now()
+	requestedRegion := strings.TrimSpace(req.GetRegion())
 
-	// Create the cluster with private visibility
-	_, err = s.db.ExecContext(ctx, `
+	// Resolve the control cell from the least-loaded running Foghorn whose
+	// primary serving cluster is in the requested region (when provided);
+	// fall back to any region when no region is requested or no Foghorn
+	// matches. Returns the Foghorn's service_instance_id alongside so the
+	// junction row + bootstrap token can be created consistently with
+	// EnableSelfHosting.
+	var (
+		foghornInstanceID string
+		controlCellID     sql.NullString
+		controlCellRegion sql.NullString
+	)
+	err = s.db.QueryRowContext(ctx, `
+		WITH ranked AS (
+			SELECT si.id::text AS instance_id,
+			       ic.cluster_id  AS control_cell,
+			       ic.region_id   AS control_region,
+			       COUNT(sca.id)  AS load
+			FROM quartermaster.service_instances si
+			JOIN quartermaster.services svc ON svc.service_id = si.service_id
+			JOIN quartermaster.service_cluster_assignments primary_sca
+			  ON primary_sca.service_instance_id = si.id AND primary_sca.is_active = true
+			JOIN quartermaster.infrastructure_clusters ic
+			  ON ic.cluster_id = primary_sca.cluster_id
+			  AND ic.cluster_class = 'platform_official'
+			  AND ic.is_active = true
+			LEFT JOIN quartermaster.service_cluster_assignments sca
+			  ON sca.service_instance_id = si.id AND sca.is_active = true
+			WHERE svc.type = 'foghorn' AND si.status = 'running' AND si.protocol = 'grpc'
+			GROUP BY si.id, ic.cluster_id, ic.region_id, si.started_at
+			ORDER BY (CASE WHEN NULLIF($1, '') IS NOT NULL AND ic.region_id = $1 THEN 0 ELSE 1 END),
+			         COUNT(sca.id) ASC, si.started_at ASC, si.id ASC
+		)
+		SELECT instance_id, control_cell, control_region FROM ranked LIMIT 1
+	`, requestedRegion).Scan(&foghornInstanceID, &controlCellID, &controlCellRegion)
+	if errors.Is(err, sql.ErrNoRows) || !controlCellID.Valid || strings.TrimSpace(controlCellID.String) == "" {
+		return nil, status.Error(codes.Unavailable, "no platform-official Foghorn cell available to control this private cluster")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to find control cell: %v", err)
+	}
+	// region_id on the new cluster mirrors the control cell's region. When the
+	// caller named a region we refuse a cross-region fallback — the CTE will
+	// return a Foghorn from another region as the second-rank candidate, but
+	// silently controlling a US-private cluster from EU Foghorn breaks the
+	// reconcile-latency invariants tenant-private clusters depend on.
+	regionForRow := strings.TrimSpace(controlCellRegion.String)
+	if requestedRegion != "" && regionForRow != requestedRegion {
+		return nil, status.Errorf(codes.Unavailable, "no platform-official Foghorn cell in region %q to control this private cluster", requestedRegion)
+	}
+
+	// Atomicity contract: every row that makes a private cluster usable —
+	// the cluster row itself, the owner's tenant_cluster_access grant, the
+	// Foghorn assignment, and the bootstrap token — must commit together.
+	// Otherwise a Foghorn-assignment failure leaves a tenant_private cluster
+	// the owner can't actually use, or a token failure leaves a cluster
+	// without enrollment material. The service-event outbox emits ride in
+	// the same tx so the downstream cache invalidations also can't drop.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+
+	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO quartermaster.infrastructure_clusters (
 			id, cluster_id, cluster_name, cluster_type, deployment_model,
 			owner_tenant_id, base_url,
 			max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
 			visibility, pricing_model, short_description,
+			region_id, cell_id, cluster_class, control_cell_id, eligible_serving_cell_ids,
 			health_status, is_active, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, 'edge', 'self-hosted',
 			$4, '',
 			100, 10000, 1000,
 			'private', 'free_unmetered', $5,
+			NULLIF($8, ''), $2, 'tenant_private', $7, ARRAY[$7]::TEXT[],
 			'unknown', true, $6, $6
 		)
-	`, id, clusterID, clusterName, tenantID, req.ShortDescription, now)
-	if err != nil {
+	`, id, clusterID, clusterName, tenantID, req.ShortDescription, now, controlCellID.String, regionForRow); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
 	}
 
-	// Auto-subscribe the owner
-	_, err = s.db.ExecContext(ctx, `
+	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO quartermaster.tenant_cluster_access (
 			tenant_id, cluster_id, access_level, subscription_status, is_active, created_at, updated_at
 		) VALUES ($1, $2, 'owner', 'active', true, NOW(), NOW())
-	`, tenantID, clusterID)
-	if err != nil {
-		s.logger.WithFields(logging.Fields{
-			"tenant_id":  tenantID,
-			"cluster_id": clusterID,
-			"error":      err,
-		}).Error("Failed to auto-subscribe owner to cluster")
+	`, tenantID, clusterID); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to auto-subscribe owner to cluster: %v", err)
+	}
+
+	// Junction row binding the chosen Foghorn to this private cluster.
+	// Without it, ConfigSeed delivery has no service_instance to dial.
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id)
+		VALUES ($1::uuid, $2)
+		ON CONFLICT (service_instance_id, cluster_id) DO UPDATE SET is_active = true, updated_at = NOW()
+	`, foghornInstanceID, clusterID); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to assign Foghorn to cluster: %v", err)
 	}
 
 	// Create a bootstrap token for edge node registration
@@ -8371,26 +8696,29 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 	}
 	expiresAt := now.Add(30 * 24 * time.Hour) // 30 days
 
-	_, err = s.db.ExecContext(ctx, `
+	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO quartermaster.bootstrap_tokens (
 			id, token_hash, token_prefix, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
 		) VALUES ($1, $2, $3, 'edge_node', $4, $5, $6, $7, $5, NOW())
-	`, tokenID, hashBootstrapToken(token), tokenPrefix(token), fmt.Sprintf("Bootstrap token for %s", clusterName), tenantID, clusterID, expiresAt)
-	if err != nil {
-		s.logger.WithFields(logging.Fields{
-			"tenant_id":  tenantID,
-			"cluster_id": clusterID,
-			"error":      err,
-		}).Error("Failed to create bootstrap token for new cluster")
+	`, tokenID, hashBootstrapToken(token), tokenPrefix(token), fmt.Sprintf("Bootstrap token for %s", clusterName), tenantID, clusterID, expiresAt); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create bootstrap token: %v", err)
+	}
+
+	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterCreated, tenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue cluster_created: %v", enqErr)
+	}
+	if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, tenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_assigned: %v", enqErr)
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "commit private cluster create: %v", commitErr)
 	}
 
 	cluster, err := s.queryCluster(ctx, clusterID)
 	if err != nil {
 		return nil, err
 	}
-
-	s.emitClusterEvent(ctx, eventClusterCreated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
-	s.emitClusterEvent(ctx, eventTenantClusterAssigned, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
 
 	return &pb.CreatePrivateClusterResponse{
 		Cluster: cluster,
@@ -9536,6 +9864,15 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	server := grpc.NewServer(opts...)
 	qmServer := NewQuartermasterServer(cfg.DB, cfg.Logger, cfg.NavigatorClient, cfg.DecklogClient, cfg.PurserClient, cfg.GeoIPReader, cfg.Metrics)
 	qmServer.SetQuartermasterGRPCAddr(cfg.AdvertiseGRPCAddr)
+
+	// Drain worker for quartermaster.service_event_outbox. SKIP LOCKED +
+	// lease let this run safely on every Quartermaster replica.
+	go qmServer.runServiceEventOutboxWorker(context.Background())
+	// Drain the Navigator custom-domain outbox so a Navigator outage at the
+	// moment UpdateTenant lands can't leave QM saying the tenant has a
+	// custom_domain while Navigator never spun up the verification + cert
+	// lifecycle row.
+	go qmServer.runNavigatorCustomDomainOutboxWorker(context.Background())
 
 	// Register all services
 	pb.RegisterTenantServiceServer(server, qmServer)

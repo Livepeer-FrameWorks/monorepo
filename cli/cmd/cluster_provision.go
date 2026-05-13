@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"maps"
 	"math/big"
 	"net"
 	"net/url"
@@ -179,6 +180,10 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 	if err != nil {
 		return fmt.Errorf("load manifest env_files: %w", err)
 	}
+	clusterEnvs, err := rc.ClusterEnvs()
+	if err != nil {
+		return fmt.Errorf("load cluster env_files: %w", err)
+	}
 	if isDevProfile(manifest) {
 		if _, genErr := credentials.GenerateIfMissing(sharedEnv); genErr != nil {
 			return fmt.Errorf("auto-generate dev secrets: %w", genErr)
@@ -228,7 +233,7 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 		return nil
 	}
 
-	if err := executeProvision(ctx, cmd, manifest, plan, phase, force, ignoreValidation, manifestDir, sharedEnv, rc.ReleaseRepos); err != nil {
+	if err := executeProvision(ctx, cmd, manifest, plan, phase, force, ignoreValidation, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos); err != nil {
 		return fmt.Errorf("provisioning failed: %w", err)
 	}
 
@@ -494,7 +499,7 @@ type taskProvisionOutcome struct {
 }
 
 // executeProvision runs the provisioning tasks
-func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, phase orchestrator.Phase, force, ignoreValidation bool, manifestDir string, sharedEnv map[string]string, releaseRepos []string) error {
+func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, phase orchestrator.Phase, force, ignoreValidation bool, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string) error {
 	sshKey := stringFlag(cmd, "ssh-key").Value
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
@@ -580,7 +585,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			g.Go(func() error {
 				fmt.Fprintf(cmd.OutOrStdout(), "  Provisioning %s on %s...\n", task.Name, task.Host)
 				stopProgress := startTaskProgressLogger(cmd, task, 15*time.Second)
-				outcome, err := provisionTask(gCtx, task, host, sshPool, manifest, force, ignoreValidation, taskRD, manifestDir, sharedEnv, releaseRepos)
+				outcome, err := provisionTask(gCtx, task, host, sshPool, manifest, force, ignoreValidation, taskRD, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
 				stopProgress()
 				if err != nil {
 					if task.Type == "privateer" {
@@ -2034,7 +2039,7 @@ func serviceInstanceShouldBePruned(inst *pb.ServiceInstance, desiredHosts map[st
 }
 
 // buildTaskConfig creates a ServiceConfig for a task.
-func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, force bool, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (provisioner.ServiceConfig, error) {
+func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, force bool, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string) (provisioner.ServiceConfig, error) {
 	config := provisioner.ServiceConfig{
 		Mode:     "docker",
 		Version:  "stable",
@@ -2209,6 +2214,10 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			}
 		case "kafka":
 			if manifest.Infrastructure.Kafka != nil {
+				cluster := findKafkaClusterView(manifest, task.ClusterID)
+				if cluster == nil {
+					return config, fmt.Errorf("kafka task %s: no cluster view for region %q", task.Name, task.ClusterID)
+				}
 				if manifest.Infrastructure.Kafka.Mode != "" {
 					config.Mode = manifest.Infrastructure.Kafka.Mode
 				}
@@ -2220,50 +2229,109 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 						config.Metadata["node_id"] = brokerID
 					}
 				}
-				config.Metadata["cluster_id"] = manifest.Infrastructure.Kafka.ClusterID
+				config.Metadata["cluster_id"] = cluster.ClusterID
+				if cluster.RegionID != "" {
+					config.Metadata["region_id"] = cluster.RegionID
+				}
 
-				if len(manifest.Infrastructure.Kafka.Controllers) > 0 {
+				if len(cluster.Controllers) > 0 {
 					// Dedicated mode: broker-only
 					config.Metadata["role"] = "broker"
-					config.Metadata["controllers"] = kafkaControllersToMetadata(manifest)
-					config.Metadata["controller_quorum_voters"] = buildDedicatedControllerQuorum(manifest)
-					config.Metadata["brokers"] = kafkaBrokersToMetadata(manifest)
-					config.Metadata["bootstrap_servers"] = buildBootstrapServers(manifest)
+					config.Metadata["controllers"] = kafkaControllersToMetadata(manifest, cluster)
+					config.Metadata["controller_quorum_voters"] = buildDedicatedControllerQuorum(manifest, cluster)
+					config.Metadata["brokers"] = kafkaBrokersToMetadata(manifest, cluster)
+					config.Metadata["bootstrap_servers"] = buildBootstrapServers(manifest, cluster)
 				} else {
 					// Combined mode
-					config.Metadata["controller_quorum_voters"] = buildControllerQuorum(manifest)
-					controllerPort := manifest.Infrastructure.Kafka.ControllerPort
+					config.Metadata["controller_quorum_voters"] = buildControllerQuorum(manifest, cluster)
+					controllerPort := cluster.ControllerPort
 					if controllerPort == 0 {
 						controllerPort = 9093
 					}
 					config.Metadata["controller_port"] = controllerPort
 				}
 
-				if len(manifest.Infrastructure.Kafka.Topics) > 0 {
-					config.Metadata["topics"] = kafkaTopicsToMetadata(manifest.Infrastructure.Kafka.Topics)
+				if len(cluster.Topics) > 0 {
+					config.Metadata["topics"] = kafkaTopicsToMetadata(cluster.Topics)
 				}
-				brokerCount := len(manifest.Infrastructure.Kafka.Brokers)
-				if brokerCount > 0 {
+				if brokerCount := len(cluster.Brokers); brokerCount > 0 {
 					config.Metadata["broker_count"] = brokerCount
 				}
-				if manifest.Infrastructure.Kafka.DeleteTopicEnable != nil {
-					config.Metadata["delete_topic_enable"] = *manifest.Infrastructure.Kafka.DeleteTopicEnable
+				if cluster.DeleteTopicEnable != nil {
+					config.Metadata["delete_topic_enable"] = *cluster.DeleteTopicEnable
 				}
-				if manifest.Infrastructure.Kafka.MinInSyncReplicas > 0 {
-					config.Metadata["min_insync_replicas"] = manifest.Infrastructure.Kafka.MinInSyncReplicas
+				if cluster.MinInSyncReplicas > 0 {
+					config.Metadata["min_insync_replicas"] = cluster.MinInSyncReplicas
 				}
-				if manifest.Infrastructure.Kafka.OffsetsTopicReplicationFactor > 0 {
-					config.Metadata["offsets_topic_replication_factor"] = manifest.Infrastructure.Kafka.OffsetsTopicReplicationFactor
+				if cluster.OffsetsTopicReplicationFactor > 0 {
+					config.Metadata["offsets_topic_replication_factor"] = cluster.OffsetsTopicReplicationFactor
 				}
-				if manifest.Infrastructure.Kafka.TransactionStateLogReplicationFactor > 0 {
-					config.Metadata["transaction_state_log_replication_factor"] = manifest.Infrastructure.Kafka.TransactionStateLogReplicationFactor
+				if cluster.TransactionStateLogReplicationFactor > 0 {
+					config.Metadata["transaction_state_log_replication_factor"] = cluster.TransactionStateLogReplicationFactor
 				}
-				if manifest.Infrastructure.Kafka.TransactionStateLogMinISR > 0 {
-					config.Metadata["transaction_state_log_min_isr"] = manifest.Infrastructure.Kafka.TransactionStateLogMinISR
+				if cluster.TransactionStateLogMinISR > 0 {
+					config.Metadata["transaction_state_log_min_isr"] = cluster.TransactionStateLogMinISR
 				}
+			}
+		case "kafka-mirrormaker":
+			if manifest.Infrastructure.Kafka != nil && manifest.Infrastructure.Kafka.MirrorMaker != nil {
+				mm := manifest.Infrastructure.Kafka.MirrorMaker
+				if manifest.Infrastructure.Kafka.Version != "" {
+					config.Version = manifest.Infrastructure.Kafka.Version
+				}
+				if mm.HeapOpts != "" {
+					config.Metadata["heap_opts"] = mm.HeapOpts
+				}
+				if mm.Replicas > 0 {
+					config.Metadata["replicas"] = mm.Replicas
+				}
+				if mm.TaskCount > 0 {
+					config.Metadata["task_count"] = mm.TaskCount
+				}
+				views := allKafkaClusters(manifest)
+				var target *kafkaClusterView
+				for i := range views {
+					if views[i].RegionID == "" {
+						v := views[i]
+						target = &v
+						break
+					}
+				}
+				if target == nil && len(views) > 0 {
+					v := views[0]
+					target = &v
+				}
+				if target != nil {
+					config.Metadata["target"] = map[string]any{
+						"alias":             "central",
+						"region_id":         target.RegionID,
+						"bootstrap_servers": kafkaBrokersBootstrap(manifest, target),
+						"replicas":          replicasForCluster(target, mm.Replicas),
+					}
+				}
+				sources := make([]map[string]any, 0, len(views))
+				for i := range views {
+					v := views[i]
+					if v.RegionID == "" {
+						continue
+					}
+					alias := v.RegionID
+					sources = append(sources, map[string]any{
+						"alias":             alias,
+						"region_id":         v.RegionID,
+						"bootstrap_servers": kafkaBrokersBootstrap(manifest, &v),
+						"topics":            mirrorTopicsForRegional(manifest, v.RegionID),
+						"replicas":          replicasForCluster(&v, 0),
+					})
+				}
+				config.Metadata["sources"] = sources
 			}
 		case "kafka-controller":
 			if manifest.Infrastructure.Kafka != nil {
+				cluster := findKafkaClusterView(manifest, task.ClusterID)
+				if cluster == nil {
+					return config, fmt.Errorf("kafka-controller task %s: no cluster view for region %q", task.Name, task.ClusterID)
+				}
 				if manifest.Infrastructure.Kafka.Mode != "" {
 					config.Mode = manifest.Infrastructure.Kafka.Mode
 				}
@@ -2271,17 +2339,19 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					config.Version = manifest.Infrastructure.Kafka.Version
 				}
 				config.Metadata["role"] = "controller"
-				config.Metadata["cluster_id"] = manifest.Infrastructure.Kafka.ClusterID
-				config.Metadata["controllers"] = kafkaControllersToMetadata(manifest)
-				config.Metadata["controller_quorum_voters"] = buildDedicatedControllerQuorum(manifest)
-				config.Metadata["brokers"] = kafkaBrokersToMetadata(manifest)
-				config.Metadata["bootstrap_servers"] = buildBootstrapServers(manifest)
-				config.Metadata["initial_controllers"] = buildInitialControllers(manifest)
+				config.Metadata["cluster_id"] = cluster.ClusterID
+				if cluster.RegionID != "" {
+					config.Metadata["region_id"] = cluster.RegionID
+				}
+				config.Metadata["controllers"] = kafkaControllersToMetadata(manifest, cluster)
+				config.Metadata["controller_quorum_voters"] = buildDedicatedControllerQuorum(manifest, cluster)
+				config.Metadata["brokers"] = kafkaBrokersToMetadata(manifest, cluster)
+				config.Metadata["bootstrap_servers"] = buildBootstrapServers(manifest, cluster)
+				config.Metadata["initial_controllers"] = buildInitialControllers(manifest, cluster)
 				if task.InstanceID != "" {
 					if ctrlID, err := strconv.Atoi(task.InstanceID); err == nil {
 						config.Metadata["node_id"] = ctrlID
-						// Look up port from manifest controller with matching ID
-						for _, ctrl := range manifest.Infrastructure.Kafka.Controllers {
+						for _, ctrl := range cluster.Controllers {
 							if ctrl.ID == ctrlID {
 								if ctrl.Port != 0 {
 									config.Port = ctrl.Port
@@ -2322,7 +2392,14 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				if manifest.Infrastructure.Redis.Version != "" {
 					config.Version = manifest.Infrastructure.Redis.Version
 				}
-				if inst := resolveRedisInstanceByID(task.InstanceID, manifest); inst != nil {
+				// Sentinel replica/sentinel tasks carry the canonical
+				// instance name in task.Metadata["instance_label"]; primary
+				// tasks key off task.InstanceID directly.
+				lookupName := task.InstanceID
+				if label, ok := task.Metadata["instance_label"].(string); ok && label != "" {
+					lookupName = label
+				}
+				if inst := resolveRedisInstanceByID(lookupName, manifest); inst != nil {
 					engine := manifest.Infrastructure.Redis.Engine
 					if inst.Engine != "" {
 						engine = inst.Engine
@@ -2351,6 +2428,39 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					if _, ok := config.Metadata["bind"]; !ok {
 						if host, hostOK := manifest.GetHost(inst.Host); hostOK && strings.TrimSpace(host.WireguardIP) != "" {
 							config.Metadata["bind"] = fmt.Sprintf("127.0.0.1 %s", strings.TrimSpace(host.WireguardIP))
+						}
+					}
+					// HA role wiring. Default is "primary"; replica/sentinel
+					// tasks supply primary_host + (for sentinel) the
+					// quorum/master_name needed by the role's templates.
+					role := "primary"
+					if r, ok := task.Metadata["redis_role"].(string); ok && r != "" {
+						role = r
+					}
+					config.Metadata["redis_role"] = role
+					if role != "primary" {
+						if h, ok := task.Metadata["primary_host"].(string); ok && h != "" {
+							config.Metadata["redis_primary_host"] = manifest.MeshAddress(h)
+						}
+						port := inst.Port
+						if port == 0 {
+							port = 6379
+						}
+						config.Metadata["redis_primary_port"] = port
+					}
+					if role == "sentinel" {
+						master := strings.TrimSpace(inst.MasterName)
+						if master == "" {
+							master = inst.Name
+						}
+						config.Metadata["redis_master_name"] = master
+						if sp, ok := task.Metadata["sentinel_port"].(int); ok && sp > 0 {
+							config.Metadata["redis_sentinel_port"] = sp
+						}
+						// Quorum = floor(N/2) + 1 where N is the number of
+						// sentinels declared. Defaults to 2 if absent.
+						if n := len(inst.Sentinels); n > 0 {
+							config.Metadata["redis_sentinel_quorum"] = (n / 2) + 1
 						}
 					}
 				}
@@ -2481,7 +2591,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 	// Generate merged env vars for application/interface services.
 	// Infrastructure services (postgres, kafka, etc.) manage their own config.
 	if task.Phase != orchestrator.PhaseInfrastructure && manifest != nil {
-		envVars, err := buildServiceEnvVars(task, manifest, runtimeData, config.EnvFile, manifestDir, sharedEnv)
+		envVars, err := buildServiceEnvVars(task, manifest, runtimeData, config.EnvFile, manifestDir, sharedEnv, clusterEnvs)
 		if err != nil {
 			return config, fmt.Errorf("service %s: %w", task.Name, err)
 		}
@@ -3317,27 +3427,125 @@ func stringMapToAnyMap(values map[string]string) map[string]any {
 	return out
 }
 
-func buildControllerQuorum(manifest *inventory.Manifest) string {
-	if manifest == nil || manifest.Infrastructure.Kafka == nil {
+// kafkaClusterView is the flattened shape that planner + provisioner work
+// against. Both the primary KafkaConfig and each RegionalKafkaCluster project
+// into one view — the rest of the kafka plumbing reads only this view and is
+// unaware whether it's looking at the primary or a regional entry.
+type kafkaClusterView struct {
+	RegionID                             string // "" for the primary cluster
+	ClusterID                            string
+	ControllerPort                       int
+	Controllers                          []inventory.KafkaController
+	Brokers                              []inventory.KafkaBroker
+	Topics                               []inventory.KafkaTopic
+	DeleteTopicEnable                    *bool
+	MinInSyncReplicas                    int
+	OffsetsTopicReplicationFactor        int
+	TransactionStateLogReplicationFactor int
+	TransactionStateLogMinISR            int
+}
+
+// serviceKafkaCluster picks the kafka cluster view for a service task. The
+// task carries the media cluster ID (e.g. media-eu-1); we look up its
+// region and match against the regional kafka entries, falling back to the
+// primary cluster when no match exists. The primary is also returned for
+// non-cluster-scoped tasks (empty mediaClusterID).
+func serviceKafkaCluster(manifest *inventory.Manifest, mediaClusterID string) *kafkaClusterView {
+	views := allKafkaClusters(manifest)
+	if len(views) == 0 {
+		return &kafkaClusterView{}
+	}
+	primary := views[0]
+	if mediaClusterID == "" {
+		return &primary
+	}
+	cluster, ok := manifest.Clusters[mediaClusterID]
+	if !ok || cluster.Region == "" {
+		return &primary
+	}
+	for i := range views {
+		if views[i].RegionID == cluster.Region {
+			return &views[i]
+		}
+	}
+	return &primary
+}
+
+// allKafkaClusters returns one kafkaClusterView per declared Kafka cluster.
+// The primary KafkaConfig is always index 0 (with RegionID = ""); each
+// RegionalKafkaCluster follows. Returns nil when Kafka is disabled or
+// unconfigured.
+func allKafkaClusters(manifest *inventory.Manifest) []kafkaClusterView {
+	if manifest == nil || manifest.Infrastructure.Kafka == nil || !manifest.Infrastructure.Kafka.Enabled {
+		return nil
+	}
+	k := manifest.Infrastructure.Kafka
+	views := make([]kafkaClusterView, 0, 1+len(k.Regional))
+	if k.ClusterID != "" || len(k.Brokers) > 0 || len(k.Controllers) > 0 {
+		views = append(views, kafkaClusterView{
+			ClusterID:                            k.ClusterID,
+			ControllerPort:                       k.ControllerPort,
+			Controllers:                          k.Controllers,
+			Brokers:                              k.Brokers,
+			Topics:                               k.Topics,
+			DeleteTopicEnable:                    k.DeleteTopicEnable,
+			MinInSyncReplicas:                    k.MinInSyncReplicas,
+			OffsetsTopicReplicationFactor:        k.OffsetsTopicReplicationFactor,
+			TransactionStateLogReplicationFactor: k.TransactionStateLogReplicationFactor,
+			TransactionStateLogMinISR:            k.TransactionStateLogMinISR,
+		})
+	}
+	for _, rc := range k.Regional {
+		views = append(views, kafkaClusterView{
+			RegionID:                             rc.RegionID,
+			ClusterID:                            rc.ClusterID,
+			ControllerPort:                       rc.ControllerPort,
+			Controllers:                          rc.Controllers,
+			Brokers:                              rc.Brokers,
+			Topics:                               rc.Topics,
+			DeleteTopicEnable:                    rc.DeleteTopicEnable,
+			MinInSyncReplicas:                    rc.MinInSyncReplicas,
+			OffsetsTopicReplicationFactor:        rc.OffsetsTopicReplicationFactor,
+			TransactionStateLogReplicationFactor: rc.TransactionStateLogReplicationFactor,
+			TransactionStateLogMinISR:            rc.TransactionStateLogMinISR,
+		})
+	}
+	return views
+}
+
+// findKafkaClusterView returns the view matching task.ClusterID. Primary
+// cluster matches the empty-string region; regional entries match by their
+// RegionID. Returns nil when no kafka is configured or the region is unknown.
+func findKafkaClusterView(manifest *inventory.Manifest, regionID string) *kafkaClusterView {
+	for _, v := range allKafkaClusters(manifest) {
+		if v.RegionID == regionID {
+			return &v
+		}
+	}
+	return nil
+}
+
+func buildControllerQuorum(manifest *inventory.Manifest, c *kafkaClusterView) string {
+	if c == nil {
 		return ""
 	}
-	port := manifest.Infrastructure.Kafka.ControllerPort
+	port := c.ControllerPort
 	if port == 0 {
 		port = 9093
 	}
-	voters := make([]string, 0, len(manifest.Infrastructure.Kafka.Brokers))
-	for _, b := range manifest.Infrastructure.Kafka.Brokers {
+	voters := make([]string, 0, len(c.Brokers))
+	for _, b := range c.Brokers {
 		voters = append(voters, fmt.Sprintf("%d@%s:%d", b.ID, manifest.MeshAddress(b.Host), port))
 	}
 	return strings.Join(voters, ",")
 }
 
-func buildBootstrapServers(manifest *inventory.Manifest) string {
-	if manifest == nil || manifest.Infrastructure.Kafka == nil {
+func buildBootstrapServers(manifest *inventory.Manifest, c *kafkaClusterView) string {
+	if c == nil {
 		return ""
 	}
-	servers := make([]string, 0, len(manifest.Infrastructure.Kafka.Controllers))
-	for _, ctrl := range manifest.Infrastructure.Kafka.Controllers {
+	servers := make([]string, 0, len(c.Controllers))
+	for _, ctrl := range c.Controllers {
 		port := ctrl.Port
 		if port == 0 {
 			port = 9093
@@ -3347,12 +3555,12 @@ func buildBootstrapServers(manifest *inventory.Manifest) string {
 	return strings.Join(servers, ",")
 }
 
-func buildDedicatedControllerQuorum(manifest *inventory.Manifest) string {
-	if manifest == nil || manifest.Infrastructure.Kafka == nil {
+func buildDedicatedControllerQuorum(manifest *inventory.Manifest, c *kafkaClusterView) string {
+	if c == nil {
 		return ""
 	}
-	voters := make([]string, 0, len(manifest.Infrastructure.Kafka.Controllers))
-	for _, ctrl := range manifest.Infrastructure.Kafka.Controllers {
+	voters := make([]string, 0, len(c.Controllers))
+	for _, ctrl := range c.Controllers {
 		port := ctrl.Port
 		if port == 0 {
 			port = 9093
@@ -3362,12 +3570,12 @@ func buildDedicatedControllerQuorum(manifest *inventory.Manifest) string {
 	return strings.Join(voters, ",")
 }
 
-func kafkaControllersToMetadata(manifest *inventory.Manifest) []map[string]any {
-	if manifest == nil || manifest.Infrastructure.Kafka == nil {
+func kafkaControllersToMetadata(manifest *inventory.Manifest, c *kafkaClusterView) []map[string]any {
+	if c == nil {
 		return nil
 	}
-	controllers := make([]map[string]any, 0, len(manifest.Infrastructure.Kafka.Controllers))
-	for _, ctrl := range manifest.Infrastructure.Kafka.Controllers {
+	controllers := make([]map[string]any, 0, len(c.Controllers))
+	for _, ctrl := range c.Controllers {
 		port := ctrl.Port
 		if port == 0 {
 			port = 9093
@@ -3385,12 +3593,107 @@ func kafkaControllersToMetadata(manifest *inventory.Manifest) []map[string]any {
 	return controllers
 }
 
-func kafkaBrokersToMetadata(manifest *inventory.Manifest) []map[string]any {
+// isAggregatorKafkaRegion reports whether the given region_id designates the
+// aggregator-side Kafka cluster. Primary (empty regionID) is the aggregator
+// unless a RegionalKafkaCluster is explicitly marked Role="aggregator".
+func isAggregatorKafkaRegion(manifest *inventory.Manifest, regionID string) bool {
+	if manifest == nil || manifest.Infrastructure.Kafka == nil {
+		return false
+	}
+	for _, rc := range manifest.Infrastructure.Kafka.Regional {
+		if rc.Role == "aggregator" {
+			return rc.RegionID == regionID
+		}
+	}
+	return regionID == ""
+}
+
+// nonAggregatorKafkaRegionIDs returns the region_id of every regional Kafka
+// cluster that is not the aggregator. These are the MM2 source clusters and
+// therefore the prefixes the aggregator Periscope-Ingest subscribes to.
+func nonAggregatorKafkaRegionIDs(manifest *inventory.Manifest) []string {
 	if manifest == nil || manifest.Infrastructure.Kafka == nil {
 		return nil
 	}
-	brokers := make([]map[string]any, 0, len(manifest.Infrastructure.Kafka.Brokers))
-	for _, broker := range manifest.Infrastructure.Kafka.Brokers {
+	ids := make([]string, 0, len(manifest.Infrastructure.Kafka.Regional))
+	for _, rc := range manifest.Infrastructure.Kafka.Regional {
+		if rc.Role == "aggregator" {
+			continue
+		}
+		if rc.RegionID == "" {
+			continue
+		}
+		ids = append(ids, rc.RegionID)
+	}
+	return ids
+}
+
+// replicasForCluster returns the replication factor that lands within
+// `cluster`'s broker count. operatorDefault wins when it is non-zero AND fits;
+// otherwise we use the broker count itself. MM2's source-side topics
+// (offset-syncs, heartbeats) live in the source cluster, so a 1-broker US
+// source cannot host RF=3 — the worker startup would fail.
+func replicasForCluster(cluster *kafkaClusterView, operatorDefault int) int {
+	if cluster == nil {
+		if operatorDefault > 0 {
+			return operatorDefault
+		}
+		return 1
+	}
+	brokerCount := len(cluster.Brokers)
+	if brokerCount == 0 {
+		brokerCount = 1
+	}
+	if operatorDefault > 0 && operatorDefault <= brokerCount {
+		return operatorDefault
+	}
+	return brokerCount
+}
+
+// kafkaBrokersBootstrap renders a Kafka bootstrap.servers string from a cluster's
+// brokers using mesh-reachable hostnames.
+func kafkaBrokersBootstrap(manifest *inventory.Manifest, c *kafkaClusterView) string {
+	if c == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(c.Brokers))
+	for _, broker := range c.Brokers {
+		port := broker.Port
+		if port == 0 {
+			port = 9092
+		}
+		parts = append(parts, fmt.Sprintf("%s:%d", manifest.MeshAddress(broker.Host), port))
+	}
+	return strings.Join(parts, ",")
+}
+
+// mirrorTopicsForRegional returns the MM2 topics regex for a given regional
+// cluster, derived from RegionalKafkaCluster.MirrorTopics. When the manifest
+// list is empty, falls back to the canonical mirrored set.
+func mirrorTopicsForRegional(manifest *inventory.Manifest, regionID string) string {
+	if manifest == nil || manifest.Infrastructure.Kafka == nil {
+		return ""
+	}
+	var topics []string
+	for _, rc := range manifest.Infrastructure.Kafka.Regional {
+		if rc.RegionID != regionID {
+			continue
+		}
+		topics = rc.MirrorTopics
+		break
+	}
+	if len(topics) == 0 {
+		topics = []string{"analytics_events", "service_events", "decklog_events_dlq", "billing.usage_reports"}
+	}
+	return strings.Join(topics, ",")
+}
+
+func kafkaBrokersToMetadata(manifest *inventory.Manifest, c *kafkaClusterView) []map[string]any {
+	if c == nil {
+		return nil
+	}
+	brokers := make([]map[string]any, 0, len(c.Brokers))
+	for _, broker := range c.Brokers {
 		port := broker.Port
 		if port == 0 {
 			port = 9092
@@ -3404,12 +3707,12 @@ func kafkaBrokersToMetadata(manifest *inventory.Manifest) []map[string]any {
 	return brokers
 }
 
-func buildInitialControllers(manifest *inventory.Manifest) string {
-	if manifest == nil || manifest.Infrastructure.Kafka == nil {
+func buildInitialControllers(manifest *inventory.Manifest, c *kafkaClusterView) string {
+	if c == nil {
 		return ""
 	}
-	parts := make([]string, 0, len(manifest.Infrastructure.Kafka.Controllers))
-	for _, ctrl := range manifest.Infrastructure.Kafka.Controllers {
+	parts := make([]string, 0, len(c.Controllers))
+	for _, ctrl := range c.Controllers {
 		port := ctrl.Port
 		if port == 0 {
 			port = 9093
@@ -3658,7 +3961,7 @@ test -f /etc/privateer/privateer.env && sed 's/=.*/=<redacted>/' /etc/privateer/
 }
 
 // provisionTask provisions a single task
-func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]any, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (*taskProvisionOutcome, error) {
+func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]any, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string) (*taskProvisionOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -3677,7 +3980,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		beforeState = nil
 	}
 
-	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir, sharedEnv, releaseRepos)
+	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
 	if err != nil {
 		return nil, err
 	}
@@ -3789,7 +4092,7 @@ func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inv
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	config, err := buildTaskConfig(task, manifest, runtimeData, false, manifestDir, sharedEnv, releaseRepos)
+	config, err := buildTaskConfig(task, manifest, runtimeData, false, manifestDir, sharedEnv, nil, releaseRepos)
 	if err != nil {
 		return nil, err
 	}
@@ -3813,8 +4116,9 @@ func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inv
 }
 
 // buildServiceEnvVars generates merged environment variables for a service.
-// Merge order (later wins): auto-generated → shared env_files → per-service env_file → inline config.
-func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, perServiceEnvFile string, manifestDir string, sharedEnv map[string]string) (map[string]string, error) {
+// Merge order (later wins): auto-generated → shared env_files → cluster
+// env_files (matched by task.ClusterID) → per-service env_file → inline config.
+func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, perServiceEnvFile string, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string) (map[string]string, error) {
 	env := make(map[string]string)
 
 	// 1. Auto-generated infrastructure env vars
@@ -3855,8 +4159,13 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 
 	if kafka := manifest.Infrastructure.Kafka; kafka != nil && kafka.Enabled {
+		// Pick the kafka cluster whose region matches this task's media
+		// cluster (when set). Cluster-scoped services consume their
+		// region's brokers; falls back to the primary cluster when the
+		// service isn't cluster-scoped or no regional match exists.
+		kc := serviceKafkaCluster(manifest, task.ClusterID)
 		var brokers []string
-		for _, b := range kafka.Brokers {
+		for _, b := range kc.Brokers {
 			brokerHost := manifestMeshHostname(manifest, b.Host)
 			if brokerHost != "" {
 				port := b.Port
@@ -3869,11 +4178,10 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if len(brokers) > 0 {
 			env["KAFKA_BROKERS"] = strings.Join(brokers, ",")
 		}
-		// Kafka cluster ID for consumer group prefixing (required by signalman, decklog, periscope-ingest)
-		if task.ClusterID != "" {
-			env["KAFKA_CLUSTER_ID"] = task.ClusterID
-		} else if ids := manifest.AllClusterIDs(); len(ids) > 0 {
-			env["KAFKA_CLUSTER_ID"] = ids[0]
+		// Kafka cluster ID = the KRaft cluster UUID, used by signalman /
+		// decklog / periscope-ingest for consumer group prefixing.
+		if kc.ClusterID != "" {
+			env["KAFKA_CLUSTER_ID"] = kc.ClusterID
 		}
 	}
 
@@ -3894,31 +4202,79 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 
 	if redis := manifest.Infrastructure.Redis; redis != nil && redis.Enabled {
+		// Per-instance Cluster scoping: an instance with Cluster set is only
+		// visible under its Name to tasks whose ClusterID matches. Cluster-
+		// scoped wins over cluster-empty when both exist with the same Name.
+		// Without this, a single named "foghorn" instance would forcibly route
+		// every regional Foghorn at one Redis (transatlantic for the wrong cell).
+		selected := map[string]inventory.RedisInstance{}
 		for _, inst := range redis.Instances {
-			if rHost := manifestMeshHostname(manifest, inst.Host); rHost != "" {
-				port := inst.Port
-				if port == 0 {
-					port = 6379
-				}
-				if strings.TrimSpace(inst.Host) == strings.TrimSpace(task.Host) {
-					rHost = "127.0.0.1"
-					if task.ServiceID == "chatwoot" {
-						if host, ok := manifest.GetHost(inst.Host); ok && strings.TrimSpace(host.WireguardIP) != "" {
-							rHost = strings.TrimSpace(host.WireguardIP)
-						}
+			matchesCluster := inst.Cluster == "" || inst.Cluster == task.ClusterID
+			if !matchesCluster {
+				continue
+			}
+			key := strings.ToUpper(inst.Name)
+			cur, ok := selected[key]
+			if !ok {
+				selected[key] = inst
+				continue
+			}
+			if cur.Cluster == "" && inst.Cluster != "" {
+				selected[key] = inst
+			}
+		}
+		for _, inst := range selected {
+			rHost := manifestMeshHostname(manifest, inst.Host)
+			if rHost == "" {
+				continue
+			}
+			port := inst.Port
+			if port == 0 {
+				port = 6379
+			}
+			if strings.TrimSpace(inst.Host) == strings.TrimSpace(task.Host) {
+				rHost = "127.0.0.1"
+				if task.ServiceID == "chatwoot" {
+					if host, ok := manifest.GetHost(inst.Host); ok && strings.TrimSpace(host.WireguardIP) != "" {
+						rHost = strings.TrimSpace(host.WireguardIP)
 					}
 				}
-				// REDIS_{NAME}_ADDR for each named instance
-				prefix := fmt.Sprintf("REDIS_%s", strings.ToUpper(inst.Name))
-				env[prefix+"_ADDR"] = fmt.Sprintf("%s:%d", rHost, port)
-				if inst.Password != "" {
-					password, err := inventory.ResolveSharedEnvPlaceholder(inst.Password, sharedEnv)
-					if err != nil {
-						return nil, fmt.Errorf("redis %s password: %w", inst.Name, err)
+			}
+			prefix := fmt.Sprintf("REDIS_%s", strings.ToUpper(inst.Name))
+			env[prefix+"_ADDR"] = fmt.Sprintf("%s:%d", rHost, port)
+			if inst.Password != "" {
+				password, err := inventory.ResolveSharedEnvPlaceholder(inst.Password, sharedEnv)
+				if err != nil {
+					return nil, fmt.Errorf("redis %s password: %w", inst.Name, err)
+				}
+				env[prefix+"_PASSWORD"] = password
+			} else if password := strings.TrimSpace(sharedEnv[prefix+"_PASSWORD"]); password != "" {
+				env[prefix+"_PASSWORD"] = password
+			}
+			// Sentinel mode: surface the quorum addrs and master name so the
+			// consumer dials through go-redis' Sentinel client (HA with
+			// automatic failover on primary loss). Foghorn picks this up via
+			// REDIS_MODE/REDIS_ADDRS/REDIS_MASTER_NAME in its config.Load.
+			if strings.EqualFold(inst.Mode, "sentinel") && len(inst.Sentinels) > 0 {
+				sentinelAddrs := make([]string, 0, len(inst.Sentinels))
+				for _, sn := range inst.Sentinels {
+					sp := sn.Port
+					if sp == 0 {
+						sp = 26379
 					}
-					env[prefix+"_PASSWORD"] = password
-				} else if password := strings.TrimSpace(sharedEnv[prefix+"_PASSWORD"]); password != "" {
-					env[prefix+"_PASSWORD"] = password
+					sh := manifestMeshHostname(manifest, sn.Host)
+					if sh == "" {
+						continue
+					}
+					sentinelAddrs = append(sentinelAddrs, fmt.Sprintf("%s:%d", sh, sp))
+				}
+				if len(sentinelAddrs) > 0 {
+					master := strings.TrimSpace(inst.MasterName)
+					if master == "" {
+						master = inst.Name
+					}
+					env[prefix+"_SENTINEL_ADDRS"] = strings.Join(sentinelAddrs, ",")
+					env[prefix+"_MASTER_NAME"] = master
 				}
 			}
 		}
@@ -3938,15 +4294,51 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		env[grpc.EnvKey] = fmt.Sprintf("%s.internal:%d", grpc.ServiceID, port)
 	}
 
-	// Service-specific required env vars
-	baseName := task.ServiceID
+	// Region-local Decklog override. Producers (Foghorn, Bridge, Commodore,
+	// Quartermaster, Purser, Signalman) must dial the Decklog deployed in
+	// their own region so events land in the regional Kafka where they
+	// happen — that's the multi-region locality invariant MM2 then mirrors
+	// to the aggregator. Without this, the generic GRPCServices loop above
+	// emits `decklog.internal:<port>` which Privateer's mesh DNS may resolve
+	// to any cell. Falls back to the mesh DNS when no in-region Decklog
+	// exists (single-region dev clusters).
+	if decklogSvc, ok := manifest.Services["decklog"]; ok && decklogSvc.Enabled {
+		if region := manifestTaskRegion(manifest, task); region != "" {
+			if host := pickServiceHostInRegion(manifest, decklogSvc, region); host != "" {
+				port := decklogSvc.GRPCPort
+				if port == 0 {
+					port = defaultGRPCPort("decklog")
+				}
+				env["DECKLOG_GRPC_ADDR"] = fmt.Sprintf("%s:%d", manifestMeshHostname(manifest, host), port)
+			}
+		}
+	}
+
+	// Per-binary env injection. Keys off task.Type (the deploy slug) so
+	// multiple manifest entries that deploy the same binary against
+	// different clusters (e.g. foghorn-eu + foghorn-us both deploy foghorn)
+	// share the same env wiring.
+	baseName := task.Type
 	if baseName == "foghorn" {
 		env["FOGHORN_CONTROL_BIND_ADDR"] = fmt.Sprintf(":%d", defaultGRPCPort("foghorn"))
-		if chandler, ok := manifest.Services["chandler"]; ok && chandler.Enabled {
-			env["CHANDLER_INTERNAL_URL"] = strings.Join(chandlerInternalURLs(manifest, chandler), ",")
+		if chandlerSvc, ok := chandlerForCluster(manifest, task.ClusterID); ok {
+			env["CHANDLER_INTERNAL_URL"] = strings.Join(chandlerInternalURLs(manifest, chandlerSvc), ",")
 		}
-		// Wire REDIS_URL from the foghorn Redis instance for HA state sync
-		if addr := env["REDIS_FOGHORN_ADDR"]; addr != "" {
+		// Wire Redis for HA state sync. Sentinel mode (REDIS_FOGHORN_SENTINEL_ADDRS
+		// set) takes precedence: the Foghorn binary's pkgredis.Config picks up
+		// REDIS_MODE/REDIS_ADDRS/REDIS_MASTER_NAME and dials through the Sentinel
+		// quorum with automatic failover. Otherwise we keep REDIS_URL for the
+		// single-node path.
+		if sentinels := env["REDIS_FOGHORN_SENTINEL_ADDRS"]; sentinels != "" {
+			env["REDIS_MODE"] = "sentinel"
+			env["REDIS_ADDRS"] = sentinels
+			if master := env["REDIS_FOGHORN_MASTER_NAME"]; master != "" {
+				env["REDIS_MASTER_NAME"] = master
+			}
+			if pw := env["REDIS_FOGHORN_PASSWORD"]; pw != "" {
+				env["REDIS_PASSWORD"] = pw
+			}
+		} else if addr := env["REDIS_FOGHORN_ADDR"]; addr != "" {
 			env["REDIS_URL"] = redisURLWithOptionalPassword(addr, env["REDIS_FOGHORN_PASSWORD"])
 		}
 		// Instance ID for HA state sync — stable across restarts
@@ -3973,6 +4365,27 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 				port = defaultPort("skipper")
 			}
 			env["SKIPPER_SPOKE_URL"] = fmt.Sprintf("http://skipper.internal:%d/mcp/spoke", port)
+		}
+		// Per-region Signalman dial: the bridge running in region X should
+		// terminate subscriptions on Signalman in region X by default and
+		// only cross regions when a stream originates elsewhere.
+		if signalmanSvc, ok := manifest.Services["signalman"]; ok && signalmanSvc.Enabled {
+			region := manifestTaskRegion(manifest, task)
+			if host := pickServiceHostInRegion(manifest, signalmanSvc, region); host != "" {
+				port := signalmanSvc.GRPCPort
+				if port == 0 {
+					port = defaultGRPCPort("signalman")
+				}
+				env["SIGNALMAN_GRPC_ADDR"] = fmt.Sprintf("%s:%d", manifestMeshHostname(manifest, host), port)
+			}
+			if byRegion := signalmanAddrsByRegion(manifest); len(byRegion) > 0 {
+				pairs := make([]string, 0, len(byRegion))
+				for region, addr := range byRegion {
+					pairs = append(pairs, fmt.Sprintf("%s=%s", region, addr))
+				}
+				sort.Strings(pairs)
+				env["SIGNALMAN_GRPC_ADDR_BY_REGION"] = strings.Join(pairs, ",")
+			}
 		}
 	}
 	if baseName == "skipper" {
@@ -4029,6 +4442,19 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
+	// Aggregator-side consumers subscribe to mirrored topics from every
+	// regional Kafka cluster. RegionID prefix matches MM2's default rename
+	// (source-cluster alias added as topic prefix).
+	if (baseName == "periscope-ingest" || baseName == "signalman") && env["MIRROR_REGION_PREFIXES"] == "" {
+		hostRegion := manifestTaskRegion(manifest, task)
+		if isAggregatorKafkaRegion(manifest, hostRegion) {
+			prefixes := nonAggregatorKafkaRegionIDs(manifest)
+			if len(prefixes) > 0 {
+				env["MIRROR_REGION_PREFIXES"] = strings.Join(prefixes, ",")
+			}
+		}
+	}
+
 	// Cluster and node identity
 	if task.ClusterID != "" {
 		env["CLUSTER_ID"] = task.ClusterID
@@ -4066,7 +4492,17 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 	removeBootstrapOnlyEnv(env)
 
-	// 3. Per-service env_file override
+	// 3. Cluster env_files (preloaded per cluster from ClusterConfig.EnvFiles).
+	// Keyed by task.ClusterID so each (service, cluster) replica picks up only
+	// its own cluster's env. Cluster env wins over shared so region-specific
+	// values like STORAGE_S3_* can override platform defaults.
+	if task.ClusterID != "" {
+		if clusterEnv, ok := clusterEnvs[task.ClusterID]; ok {
+			maps.Copy(env, clusterEnv)
+		}
+	}
+
+	// 4. Per-service env_file override
 	if perServiceEnvFile != "" {
 		if manifestDir != "" && filepath.IsAbs(perServiceEnvFile) {
 			return nil, fmt.Errorf("service env_file: absolute path %q is not allowed — use a relative path from the manifest directory", perServiceEnvFile)
@@ -4182,13 +4618,28 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 				}
 			}
 		}
-		// Decklog endpoint discovery. Address comes from the manifest service map;
-		// auth token is provisioned via the standard service-token mechanism into
-		// SERVICE_TOKEN already, so the gateway reuses that. TLS mode follows the
-		// internal-CA convention: present → mtls, absent → disabled (dev only).
+		// Decklog endpoint discovery. Prefer an in-region Decklog so the
+		// gateway's per-orch telemetry lands in the regional Kafka before
+		// MM2 mirrors it. Falls back to the generic resolveServiceGRPCAddr
+		// (host-agnostic mesh DNS) when no in-region host exists. TLS mode
+		// follows the internal-CA convention: present → mtls, absent →
+		// disabled (dev only).
 		if env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] == "" {
-			if addr, err := resolveServiceGRPCAddr(manifest, "decklog", defaultGRPCPort("decklog")); err == nil {
-				env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] = addr
+			if decklogSvc, ok := manifest.Services["decklog"]; ok && decklogSvc.Enabled {
+				if region := manifestTaskRegion(manifest, task); region != "" {
+					if host := pickServiceHostInRegion(manifest, decklogSvc, region); host != "" {
+						port := decklogSvc.GRPCPort
+						if port == 0 {
+							port = defaultGRPCPort("decklog")
+						}
+						env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] = fmt.Sprintf("%s:%d", manifestMeshHostname(manifest, host), port)
+					}
+				}
+			}
+			if env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] == "" {
+				if addr, err := resolveServiceGRPCAddr(manifest, "decklog", defaultGRPCPort("decklog")); err == nil {
+					env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] = addr
+				}
 			}
 		}
 		if env["FRAMEWORKS_DECKLOG_TLS_MODE"] == "" {
@@ -4196,6 +4647,20 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 				env["FRAMEWORKS_DECKLOG_TLS_MODE"] = "mtls"
 			} else {
 				env["FRAMEWORKS_DECKLOG_TLS_MODE"] = "disabled"
+			}
+		}
+		// Per-cluster Foghorn for the auth webhook. Without this, every
+		// regional gateway resolves `foghorn.internal` to whichever Foghorn
+		// Privateer happens to return, including the wrong-cell one.
+		if env["auth_webhook_url"] == "" {
+			if foghornSvc, ok := foghornForCluster(manifest, task.ClusterID); ok {
+				if host, ok := firstServiceHost(manifest, foghornSvc); ok {
+					port := foghornSvc.Port
+					if port == 0 {
+						port = defaultPort("foghorn")
+					}
+					env["auth_webhook_url"] = fmt.Sprintf("http://%s:%d/webhooks/livepeer/auth", manifestMeshHostname(manifest, host.Name), port)
+				}
 			}
 		}
 	}
@@ -4522,6 +4987,80 @@ func manifestTaskRegion(manifest *inventory.Manifest, task *orchestrator.Task) s
 	return ""
 }
 
+// pickServiceHostInRegion returns the first declared host for svc whose
+// manifest cluster region matches region. Returns "" when no host matches —
+// the caller falls back to the default mesh DNS name.
+func pickServiceHostInRegion(manifest *inventory.Manifest, svc inventory.ServiceConfig, region string) string {
+	if manifest == nil || region == "" {
+		return ""
+	}
+	hosts := svc.Hosts
+	if len(hosts) == 0 && svc.Host != "" {
+		hosts = []string{svc.Host}
+	}
+	for _, hostName := range hosts {
+		host, ok := manifest.Hosts[hostName]
+		if !ok {
+			continue
+		}
+		if hostRegion := strings.TrimSpace(host.Labels["region"]); hostRegion == region {
+			return hostName
+		}
+		if clusterID := strings.TrimSpace(host.Cluster); clusterID != "" {
+			if cluster, ok := manifest.Clusters[clusterID]; ok {
+				if strings.TrimSpace(cluster.Region) == region {
+					return hostName
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// signalmanAddrsByRegion builds a region→mesh-addr map covering every region
+// that has at least one Signalman host. Used to emit
+// SIGNALMAN_GRPC_ADDR_BY_REGION on consumers that route per-stream-origin.
+func signalmanAddrsByRegion(manifest *inventory.Manifest) map[string]string {
+	if manifest == nil {
+		return nil
+	}
+	svc, ok := manifest.Services["signalman"]
+	if !ok || !svc.Enabled {
+		return nil
+	}
+	port := svc.GRPCPort
+	if port == 0 {
+		port = defaultGRPCPort("signalman")
+	}
+	hosts := svc.Hosts
+	if len(hosts) == 0 && svc.Host != "" {
+		hosts = []string{svc.Host}
+	}
+	out := map[string]string{}
+	for _, hostName := range hosts {
+		host, ok := manifest.Hosts[hostName]
+		if !ok {
+			continue
+		}
+		region := strings.TrimSpace(host.Labels["region"])
+		if region == "" {
+			if clusterID := strings.TrimSpace(host.Cluster); clusterID != "" {
+				if cluster, ok := manifest.Clusters[clusterID]; ok {
+					region = strings.TrimSpace(cluster.Region)
+				}
+			}
+		}
+		if region == "" {
+			continue
+		}
+		if _, set := out[region]; set {
+			continue
+		}
+		out[region] = fmt.Sprintf("%s:%d", manifestMeshHostname(manifest, hostName), port)
+	}
+	return out
+}
+
 const defaultLivepeerGatewayAuthWebhookURL = "http://foghorn.internal:18008/webhooks/livepeer/auth"
 
 // anyClusterRunsLivepeerGateway returns true when the manifest provisions a
@@ -4529,14 +5068,64 @@ const defaultLivepeerGatewayAuthWebhookURL = "http://foghorn.internal:18008/webh
 // resolution failures from "warn and continue" to a hard provisioning error
 // — gateway telemetry without a cluster owner tenant is silently dropped
 // downstream, which is worse than failing fast.
-func anyClusterRunsLivepeerGateway(manifest *inventory.Manifest) bool {
+// servicesByDeploy returns every Services entry whose Deploy slug matches,
+// including entries that omit Deploy and rely on the manifest key being the
+// canonical slug (foghorn, chandler, ...).
+func servicesByDeploy(manifest *inventory.Manifest, slug string) []inventory.ServiceConfig {
 	if manifest == nil {
-		return false
+		return nil
 	}
-	if _, ok := manifest.Services["livepeer-gateway"]; ok {
-		return true
+	out := []inventory.ServiceConfig{}
+	for name, svc := range manifest.Services {
+		if svc.Deploy == slug || (svc.Deploy == "" && name == slug) {
+			out = append(out, svc)
+		}
 	}
-	return false
+	return out
+}
+
+// foghornForCluster returns the Foghorn service entry assigned to the given
+// media cluster, or false when none matches. With M:N service split each
+// regional Foghorn (foghorn-eu / foghorn-us) deploys the same binary against
+// a different cluster, so the lookup keys on Cluster/Clusters.
+func foghornForCluster(manifest *inventory.Manifest, clusterID string) (inventory.ServiceConfig, bool) {
+	for _, svc := range servicesByDeploy(manifest, "foghorn") {
+		if !svc.Enabled {
+			continue
+		}
+		if svc.Cluster == clusterID {
+			return svc, true
+		}
+		for _, c := range svc.Clusters {
+			if c == clusterID {
+				return svc, true
+			}
+		}
+	}
+	return inventory.ServiceConfig{}, false
+}
+
+// chandlerForCluster returns the Chandler service entry assigned to the
+// given media cluster, or false when none matches.
+func chandlerForCluster(manifest *inventory.Manifest, clusterID string) (inventory.ServiceConfig, bool) {
+	for _, svc := range servicesByDeploy(manifest, "chandler") {
+		if !svc.Enabled {
+			continue
+		}
+		if svc.Cluster == clusterID {
+			return svc, true
+		}
+		for _, c := range svc.Clusters {
+			if c == clusterID {
+				return svc, true
+			}
+		}
+	}
+	return inventory.ServiceConfig{}, false
+}
+
+func anyClusterRunsLivepeerGateway(manifest *inventory.Manifest) bool {
+	return len(servicesByDeploy(manifest, "livepeer-gateway")) > 0
 }
 
 func normalizeLivepeerEnvVars(env map[string]string) {
@@ -4548,8 +5137,8 @@ func normalizeLivepeerEnvVars(env map[string]string) {
 }
 
 func validateGatewayMeshCoverage(manifest *inventory.Manifest) error {
-	gatewaySvc, ok := manifest.Services["livepeer-gateway"]
-	if !ok || !gatewaySvc.Enabled {
+	gateways := servicesByDeploy(manifest, "livepeer-gateway")
+	if len(gateways) == 0 {
 		return nil
 	}
 
@@ -4563,16 +5152,20 @@ func validateGatewayMeshCoverage(manifest *inventory.Manifest) error {
 		privateerHosts[hostName] = struct{}{}
 	}
 
-	var gatewayHosts []string
-	if len(gatewaySvc.Hosts) > 0 {
-		gatewayHosts = gatewaySvc.Hosts
-	} else if gatewaySvc.Host != "" {
-		gatewayHosts = []string{gatewaySvc.Host}
-	}
-
-	for _, hostName := range gatewayHosts {
-		if _, ok := privateerHosts[hostName]; !ok {
-			return fmt.Errorf("livepeer-gateway host %q is not covered by privateer; gateway auth webhook uses foghorn.internal", hostName)
+	for _, gatewaySvc := range gateways {
+		if !gatewaySvc.Enabled {
+			continue
+		}
+		var gatewayHosts []string
+		if len(gatewaySvc.Hosts) > 0 {
+			gatewayHosts = gatewaySvc.Hosts
+		} else if gatewaySvc.Host != "" {
+			gatewayHosts = []string{gatewaySvc.Host}
+		}
+		for _, hostName := range gatewayHosts {
+			if _, ok := privateerHosts[hostName]; !ok {
+				return fmt.Errorf("livepeer-gateway host %q is not covered by privateer; gateway auth webhook uses foghorn.internal", hostName)
+			}
 		}
 	}
 

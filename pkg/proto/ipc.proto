@@ -41,6 +41,14 @@ service DecklogService {
 }
 
 // ServiceEvent represents service-level telemetry emitted by core services.
+//
+// Envelope v2 fields (50-56) stamp event provenance for multi-region
+// MirrorMaker fan-in: source_region/source_cluster_id identify where the
+// event was produced; stream_origin_region/stream_origin_cluster_id identify
+// the originating region/cluster of the stream this event references (empty
+// for non-stream-scoped events). event_id should be a UUIDv7 so dedupe at
+// the aggregate consumer side is time-ordered. Decklog backfills any
+// envelope field a legacy producer left empty.
 message ServiceEvent {
   string event_id = 1;
   string event_type = 2;
@@ -61,6 +69,15 @@ message ServiceEvent {
     MessageLifecycleData support_event = 27;
     ArtifactEvent artifact_event = 28;
   }
+
+  // ===== Envelope v2 =====
+  string source_region = 50;
+  string source_cluster_id = 51;
+  string stream_origin_region = 52;
+  string stream_origin_cluster_id = 53;
+  int32  schema_version = 54;
+  string correlation_id = 55;
+  string causation_id = 56;
 }
 
 message AuthEvent {
@@ -457,8 +474,24 @@ message MistTrigger {
     StreamProcessTrigger stream_process = 38;
   }
 
-  optional string cluster_id = 33; // Emitting cluster identifier
-  optional string origin_cluster_id = 37; // Cluster where stream was originally ingested (for federation attribution)
+  optional string cluster_id = 33; // Emitting cluster identifier (source_cluster_id in envelope v2 terms)
+  optional string origin_cluster_id = 37; // Cluster where stream was originally ingested (stream_origin_cluster_id in envelope v2 terms)
+
+  // ===== Envelope v2 (region pair + schema/version + correlation) =====
+  // cluster_id (33) and origin_cluster_id (37) already play the
+  // source_cluster_id / stream_origin_cluster_id roles. These fields add the
+  // region pair plus schema/correlation metadata so MirrorMaker fan-in can
+  // dedupe and route without inspecting payload JSON.
+  string source_region = 50;
+  string stream_origin_region = 52;
+  int32  schema_version = 54;
+  string correlation_id = 55;
+  string causation_id = 56;
+  // event_id: UUIDv7 producer-stamped event identifier — the dedup key
+  // downstream consumers (Periscope, MirrorMaker peers) use to drop
+  // duplicates after at-least-once replication. Producers stamp at emit;
+  // Decklog backfills on ingest for backward compat.
+  string event_id = 57;
 
   reserved 20;               // Legacy: removed stream_bandwidth field
   reserved "stream_bandwidth";
@@ -1980,6 +2013,18 @@ message GatewayTelemetryEvent {
     OrchestratorTranscodeOutcome  transcode = 12;
     OrchestratorAIOutcome         ai        = 13;
   }
+
+  // ===== Envelope v2 =====
+  // gateway_region (2) plays source_region's role for the gateway-instance
+  // attribution; cluster_id (3) plays source_cluster_id. These fields cover
+  // the stream-origin pair (empty for cluster-scoped events) plus schema
+  // versioning and correlation.
+  string stream_origin_region = 52;
+  string stream_origin_cluster_id = 53;
+  int32  schema_version = 54;
+  string correlation_id = 55;
+  string causation_id = 56;
+  string event_id = 57; // UUIDv7 producer-stamped event identifier (dedupe key)
 }
 
 // Per-vantage geo + IP attachment. Emitted as part of every discovery / state

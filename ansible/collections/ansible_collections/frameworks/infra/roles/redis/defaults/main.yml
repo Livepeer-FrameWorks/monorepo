@@ -12,3 +12,17 @@ redis_conf_mode: "0644"
 # Named-instance suffix. Empty = default "redis" service; setting e.g.
 # "foghorn" yields frameworks-redis-foghorn on the target.
 redis_instance: ""
+
+# HA role for this task. "primary" (default) installs a normal Redis server.
+# "replica" stamps replicaof + masterauth so the server follows
+# {redis_primary_host}:{redis_primary_port}. "sentinel" installs a Sentinel
+# process watching the configured master. The Foghorn HA setup uses one
+# primary + N replicas + an odd-count Sentinel quorum.
+redis_role: "primary"
+redis_primary_host: ""
+redis_primary_port: 6379
+redis_master_name: ""
+redis_sentinel_port: 26379
+redis_sentinel_quorum: 2
+redis_sentinel_down_after_ms: 5000
+redis_sentinel_failover_timeout_ms: 30000

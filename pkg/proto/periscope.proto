@@ -11,8 +11,13 @@ import "ipc.proto";  // For StreamTrack
 
 
 // StreamEvent is the canonical analytics stream event returned by Periscope APIs.
+//
+// Envelope v2 fields (50-56) stamp event provenance so MirrorMaker fan-in
+// can dedupe and route. event_id (field 1) should be UUIDv7 so time-ordered
+// dedup works at the aggregate consumer. Decklog backfills any envelope
+// field a legacy producer left empty.
 message StreamEvent {
-  string event_id = 1;  // Used as cursor ID
+  string event_id = 1;  // Used as cursor ID; should be UUIDv7 for time-ordering + dedupe
   google.protobuf.Timestamp timestamp = 2;
   string event_type = 3;
   string status = 4;
@@ -42,6 +47,15 @@ message StreamEvent {
   optional string location = 28;
   optional string country_code = 29;
   optional string city = 30;
+
+  // ===== Envelope v2 =====
+  string source_region = 50;
+  string source_cluster_id = 51;
+  string stream_origin_region = 52;
+  string stream_origin_cluster_id = 53;
+  int32  schema_version = 54;
+  string correlation_id = 55;
+  string causation_id = 56;
 }
 
 message GetStreamEventsRequest {

@@ -17,11 +17,13 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/handlers"
+	"frameworks/api_balancing/internal/policybundle"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
 	"frameworks/api_balancing/internal/triggers"
@@ -116,6 +118,11 @@ type FoghornGRPCServer struct {
 	originPullMu        sync.Mutex
 	originPulling       map[string]struct{}
 	artifactCleaner     *artifacts.Cleaner
+	// Signed-policy-bundle cache wired in cmd/foghorn/main.go. nil
+	// disables the bundle pathway; admission falls back to per-request
+	// Commodore ResolvePlaybackPolicy calls.
+	policyBundleCache   *policybundle.Cache
+	policyBundleFetcher policybundle.FetchFunc
 }
 
 // quartermasterRoutingResolver is the narrow Quartermaster surface this
@@ -130,6 +137,16 @@ type quartermasterRoutingResolver interface {
 // config. Production wires it from cmd/foghorn/main.go to read the local
 // STORAGE_S3_* config and consult Quartermaster for advertised backings.
 type storageResolverFactory func(ctx context.Context, tenantID string) *storage.ClusterResolver
+
+// SetPolicyBundleCache wires the signed-policy-bundle cache and its
+// fetcher. May be called once at startup; nil disables the bundle pathway
+// and admission falls back to per-request policy lookups. The fetcher is
+// stored separately because the cache type doesn't hold a default
+// FetchFunc — admission supplies it per Get call.
+func (s *FoghornGRPCServer) SetPolicyBundleCache(c *policybundle.Cache, fetcher policybundle.FetchFunc) {
+	s.policyBundleCache = c
+	s.policyBundleFetcher = fetcher
+}
 
 // NewFoghornGRPCServer creates a new Foghorn gRPC server
 func NewFoghornGRPCServer(
@@ -415,7 +432,7 @@ func (s *FoghornGRPCServer) emitDVRStartFailure(req *pb.StartDVRRequest, reason 
 			return nil
 		}(),
 	}
-	go func() { _ = s.decklogClient.SendDVRLifecycle(dvrData) }()
+	go artifactoutbox.EnqueueDVRLifecycleLogged(dvrData)
 }
 
 // resolveEffectiveDVRConfig clamps the caller-requested DVR window through
@@ -746,7 +763,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 			clipData.OriginClusterId = &clipCluster
 			clipData.ServingClusterId = &clipCluster
 		}
-		go func() { _ = s.decklogClient.SendClipLifecycle(clipData) }()
+		go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
 	}
 
 	// Build requested_params JSON for audit
@@ -841,7 +858,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 			failedData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_FAILED, req, reqID, clipHash)
 			failedData.Error = func() *string { e := fmt.Sprintf("storage node unavailable: %v", err); return &e }()
 			go func() {
-				if errSend := s.decklogClient.SendClipLifecycle(failedData); errSend != nil {
+				if errSend := artifactoutbox.EnqueueClipLifecycle(failedData); errSend != nil {
 					s.logger.WithError(errSend).Error("Failed to emit clip failed event")
 				}
 			}()
@@ -859,7 +876,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	if s.decklogClient != nil {
 		clipData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_QUEUED, req, reqID, clipHash)
 		clipData.CompletedAt = func() *int64 { t := time.Now().Unix(); return &t }()
-		go func() { _ = s.decklogClient.SendClipLifecycle(clipData) }()
+		go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
 	}
 
 	// Update stream state
@@ -1217,7 +1234,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 					return nil
 				}(),
 			}
-			go func() { _ = s.decklogClient.SendDVRLifecycle(dvrData) }()
+			go artifactoutbox.EnqueueDVRLifecycleLogged(dvrData)
 		}
 		return &pb.StartDVRResponse{
 			Status:        responseStatus,
@@ -1319,7 +1336,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 				}(),
 			}
 			go func() {
-				if errSend := s.decklogClient.SendDVRLifecycle(failedData); errSend != nil {
+				if errSend := artifactoutbox.EnqueueDVRLifecycle(failedData); errSend != nil {
 					s.logger.WithError(errSend).Error("Failed to emit DVR failed event")
 				}
 			}()
@@ -1366,7 +1383,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 				return nil
 			}(),
 		}
-		go func() { _ = s.decklogClient.SendDVRLifecycle(dvrData) }()
+		go artifactoutbox.EnqueueDVRLifecycleLogged(dvrData)
 	}
 
 	// Update stream state
@@ -2532,7 +2549,7 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 			vodData.OriginClusterId = &cid
 			vodData.ServingClusterId = &cid
 		}
-		go func() { _ = s.decklogClient.SendVodLifecycle(vodData) }()
+		go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 	}
 
 	// Convert storage.UploadPart to proto
@@ -2758,7 +2775,7 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 			if sizeBytes.Valid && sizeBytes.Int64 > 0 {
 				vodData.SizeBytes = proto.Uint64(uint64(sizeBytes.Int64))
 			}
-			go func() { _ = s.decklogClient.SendVodLifecycle(vodData) }()
+			go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 		}
 		return nil, status.Errorf(codes.Internal, "failed to complete upload: %v", err)
 	}
@@ -2829,7 +2846,7 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 		if sizeBytes.Valid && sizeBytes.Int64 > 0 {
 			vodData.SizeBytes = proto.Uint64(uint64(sizeBytes.Int64))
 		}
-		go func() { _ = s.decklogClient.SendVodLifecycle(vodData) }()
+		go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 	}
 
 	// Fetch and return the asset
@@ -2914,7 +2931,7 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *pb.AbortVod
 		if userID.Valid && userID.String != "" {
 			vodData.UserId = &userID.String
 		}
-		go func() { _ = s.decklogClient.SendVodLifecycle(vodData) }()
+		go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 	}
 
 	return &pb.AbortVodUploadResponse{
@@ -3225,7 +3242,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 			exp := retentionUntil.Time.Unix()
 			vodData.ExpiresAt = &exp
 		}
-		go func() { _ = s.decklogClient.SendVodLifecycle(vodData) }()
+		go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 	}
 
 	return &pb.DeleteVodAssetResponse{
@@ -3514,7 +3531,7 @@ func (s *FoghornGRPCServer) emitClipDeletedLifecycle(
 	clipData.StopMs = stopMs
 	clipData.DurationSec = durationSec
 
-	go func() { _ = s.decklogClient.SendClipLifecycle(clipData) }()
+	go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
 }
 
 func (s *FoghornGRPCServer) emitDVRDeletedLifecycle(
@@ -3609,7 +3626,7 @@ func (s *FoghornGRPCServer) emitDVRDeletedLifecycle(
 		dvrData.EndedAt = &et
 	}
 
-	go func() { _ = s.decklogClient.SendDVRLifecycle(dvrData) }()
+	go artifactoutbox.EnqueueDVRLifecycleLogged(dvrData)
 }
 
 // TerminateTenantStreams stops all active streams for a suspended tenant
@@ -3689,6 +3706,15 @@ func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *pb.
 func (s *FoghornGRPCServer) InvalidatePlaybackAuth(ctx context.Context, req *pb.InvalidatePlaybackAuthRequest) (*pb.InvalidatePlaybackAuthResponse, error) {
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	// bundle_revoke fast path: bump the policy-bundle cache watermark so
+	// any cached bundle below bundle_min_version is rejected on its next
+	// Get. Must run before per-node session-invalidation fanout — the
+	// watermark guards admission and session invalidation re-fires
+	// USER_NEW; both surfaces have to agree on the new minimum.
+	if req.GetReason() == "bundle_revoke" && s.policyBundleCache != nil && req.GetBundleMinVersion() > 0 {
+		s.policyBundleCache.BumpWatermark(req.GetTenantId(), req.GetStreamId(), req.GetBundleMinVersion())
 	}
 
 	names := s.resolvePlaybackAuthInvalidationNames(ctx, req.GetTenantId(), req.GetInternalNames())

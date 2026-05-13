@@ -33,7 +33,7 @@ type fakeIssuer struct {
 	bundles []string
 }
 
-func (f *fakeIssuer) IssueCertificate(ctx context.Context, tenantID, domain, email string) (string, string, time.Time, error) {
+func (f *fakeIssuer) RenewCertificate(ctx context.Context, tenantID, domain, email string) (string, string, time.Time, error) {
 	f.calls = append(f.calls, domain)
 	if len(f.results) == 0 {
 		return "", "", time.Time{}, nil

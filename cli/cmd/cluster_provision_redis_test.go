@@ -29,7 +29,7 @@ func TestBuildTaskConfig_RedisEngineFromManifest(t *testing.T) {
 		InstanceID: "foghorn",
 		Host:       "media-1",
 		Phase:      orchestrator.PhaseInfrastructure,
-	}, manifest, map[string]interface{}{}, false, "", nil, nil)
+	}, manifest, map[string]interface{}{}, false, "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestBuildTaskConfig_RedisInstanceEngineOverridesManifest(t *testing.T) {
 		InstanceID: "platform",
 		Host:       "control-1",
 		Phase:      orchestrator.PhaseInfrastructure,
-	}, manifest, map[string]interface{}{}, false, "", nil, nil)
+	}, manifest, map[string]interface{}{}, false, "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestBuildTaskConfig_RedisInstanceConfigIncludesRoleKeys(t *testing.T) {
 		InstanceID: "foghorn",
 		Host:       "control-1",
 		Phase:      orchestrator.PhaseInfrastructure,
-	}, manifest, map[string]interface{}{}, false, "", nil, nil)
+	}, manifest, map[string]interface{}{}, false, "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestBuildTaskConfig_RedisDefaultsBindToLoopbackAndMeshIP(t *testing.T) {
 		InstanceID: "foghorn",
 		Host:       "control-1",
 		Phase:      orchestrator.PhaseInfrastructure,
-	}, manifest, map[string]interface{}{}, false, "", nil, nil)
+	}, manifest, map[string]interface{}{}, false, "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestBuildTaskConfig_RedisPasswordFromSharedEnv(t *testing.T) {
 		Phase:      orchestrator.PhaseInfrastructure,
 	}, manifest, map[string]interface{}{}, false, "", map[string]string{
 		"REDIS_CHATWOOT_PASSWORD": "redis secret",
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestBuildTaskConfig_RedisPasswordFromSharedEnvFallback(t *testing.T) {
 		Phase:      orchestrator.PhaseInfrastructure,
 	}, manifest, map[string]interface{}{}, false, "", map[string]string{
 		"REDIS_CHATWOOT_PASSWORD": "redis secret",
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}

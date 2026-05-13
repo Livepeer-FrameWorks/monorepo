@@ -41,6 +41,21 @@ service NavigatorService {
   // alias DNS pool before Foghorn drops that tenant's cert from future
   // ConfigSeeds.
   rpc RemoveTenantAliasCluster(RemoveTenantAliasClusterRequest) returns (RemoveTenantAliasClusterResponse);
+
+  // EnsureCustomDomain signals Navigator that a paying tenant is bringing
+  // their own domain (e.g. media.acme-inc.com). Navigator persists the row
+  // and asynchronously verifies the customer's CNAMEs + runs ACME issuance
+  // via ACME-DNS-01 delegation. Idempotent on (tenant_id, domain): the
+  // assigned acme_dns_subdomain is stable across calls so the customer
+  // never has to re-create the challenge CNAME.
+  rpc EnsureCustomDomain(EnsureCustomDomainRequest) returns (EnsureCustomDomainResponse);
+  // RemoveCustomDomain signals teardown. Navigator transitions the row to
+  // tearing_down and the worker clears state.
+  rpc RemoveCustomDomain(RemoveCustomDomainRequest) returns (RemoveCustomDomainResponse);
+  // GetCustomDomainStatus returns the verification/cert lifecycle state
+  // for a single (tenant_id, domain) pair. Used by the dashboard to render
+  // the per-CNAME instructions and verification progress.
+  rpc GetCustomDomainStatus(GetCustomDomainStatusRequest) returns (GetCustomDomainStatusResponse);
 }
 
 // EnsureTenantAliasRequest signals an intent. Navigator persists the
@@ -104,6 +119,50 @@ message RemoveTenantAliasClusterRequest {
 
 message RemoveTenantAliasClusterResponse {
   bool accepted = 1;
+}
+
+message EnsureCustomDomainRequest {
+  string tenant_id = 1;
+  string domain = 2; // Customer-owned FQDN, e.g. "media.acme-inc.com"
+}
+
+message EnsureCustomDomainResponse {
+  bool accepted = 1;
+  string status = 2;
+  // Customer must set two CNAMEs (one-time setup):
+  //   {domain}                       CNAME  {required_traffic_cname}
+  //   _acme-challenge.{domain}       CNAME  {required_acme_challenge_cname}
+  // Stable across re-issuance / renewal; no rotation required.
+  string required_traffic_cname = 3;
+  string required_acme_challenge_cname = 4;
+  string error = 5;
+}
+
+message RemoveCustomDomainRequest {
+  string tenant_id = 1;
+  string domain = 2;
+}
+
+message RemoveCustomDomainResponse {
+  bool accepted = 1;
+}
+
+message GetCustomDomainStatusRequest {
+  string tenant_id = 1;
+  string domain = 2;
+}
+
+message GetCustomDomainStatusResponse {
+  bool found = 1;
+  string tenant_id = 2;
+  string domain = 3;
+  string status = 4; // pending_verification | verified | cert_issuing | cert_issued | cert_failed | tearing_down
+  string required_traffic_cname = 5;
+  string required_acme_challenge_cname = 6;
+  int64 last_verified_at = 7;
+  int64 cert_issued_at = 8;
+  int64 cert_expires_at = 9;
+  string last_error = 10;
 }
 
 // SyncDNSRequest is sent by Quartermaster to trigger DNS synchronization.

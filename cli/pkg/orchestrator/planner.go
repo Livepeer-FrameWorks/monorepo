@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 
 	"frameworks/cli/pkg/inventory"
 	infra "github.com/Livepeer-FrameWorks/monorepo/pkg/models"
@@ -22,6 +23,70 @@ func NewPlanner(manifest *inventory.Manifest) *Planner {
 	return &Planner{
 		manifest: manifest,
 	}
+}
+
+// kafkaPlannerCluster is the minimal projection of a Kafka cluster the planner
+// needs — identity (region_id), the controllers, and the brokers. Topics
+// don't affect task generation so they're omitted here. Both the primary
+// KafkaConfig and each RegionalKafkaCluster project into one entry.
+type kafkaPlannerCluster struct {
+	RegionID    string
+	Controllers []inventory.KafkaController
+	Brokers     []inventory.KafkaBroker
+}
+
+// kafkaClusters returns one kafkaPlannerCluster per declared Kafka cluster.
+// Primary (RegionID="") is first, then each Regional. Returns nil when Kafka
+// is disabled or unconfigured.
+func (p *Planner) kafkaClusters() []kafkaPlannerCluster {
+	if p.manifest == nil || p.manifest.Infrastructure.Kafka == nil || !p.manifest.Infrastructure.Kafka.Enabled {
+		return nil
+	}
+	k := p.manifest.Infrastructure.Kafka
+	out := make([]kafkaPlannerCluster, 0, 1+len(k.Regional))
+	if len(k.Brokers) > 0 || len(k.Controllers) > 0 {
+		out = append(out, kafkaPlannerCluster{
+			Controllers: k.Controllers,
+			Brokers:     k.Brokers,
+		})
+	}
+	for _, rc := range k.Regional {
+		out = append(out, kafkaPlannerCluster{
+			RegionID:    rc.RegionID,
+			Controllers: rc.Controllers,
+			Brokers:     rc.Brokers,
+		})
+	}
+	return out
+}
+
+// kafkaBrokerTaskName returns the planner-generated task name for a broker in
+// the given cluster (matching the planner's emission rules above). Used by
+// downstream consumers (application-task dep wiring) so the naming convention
+// stays in one place.
+func kafkaBrokerTaskName(regionID string, brokerID int) string {
+	if regionID == "" {
+		return "kafka-broker-" + strconv.Itoa(brokerID)
+	}
+	return "kafka-broker-" + regionID + "-" + strconv.Itoa(brokerID)
+}
+
+// effectiveServiceCluster picks the cluster a service task should run
+// against. Service-scope (svc.Cluster / svc.Clusters[0]) wins over
+// host-scope (the cluster the box belongs to) because cluster-scoped
+// services like Foghorn / Chandler / livepeer-gateway live on a control-
+// plane host but serve a media cluster — their env (S3 creds, etc.) has
+// to be looked up against the media cluster, not the control cluster.
+// Multi-cluster M:N declarations are not supported for credential-bearing
+// services: declare one service entry per cluster instead.
+func effectiveServiceCluster(svc inventory.ServiceConfig, hostName string, manifest *inventory.Manifest) string {
+	if svc.Cluster != "" {
+		return svc.Cluster
+	}
+	if len(svc.Clusters) > 0 {
+		return svc.Clusters[0]
+	}
+	return manifest.HostCluster(hostName)
 }
 
 // Plan creates an execution plan based on options
@@ -157,12 +222,44 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 		}
 	}
 
-	// Add Redis
+	// Add Redis. Sentinel-mode instances fan out into N+1 server tasks
+	// (primary + each replica) plus M Sentinel tasks watching the master.
+	// Replica + sentinel tasks carry metadata pointing at the primary so
+	// the role-aware install can render replicaof / sentinel monitor.
 	if p.manifest.Infrastructure.Redis != nil && p.manifest.Infrastructure.Redis.Enabled {
 		for _, instance := range p.manifest.Infrastructure.Redis.Instances {
 			task := NewTask("redis", "redis", instance.Name, instance.Host, PhaseInfrastructure)
 			task.DependsOn = withMesh(task.DependsOn)
+			task.ClusterID = instance.Cluster
+			task.Metadata = map[string]any{"redis_role": "primary"}
 			graph.AddTask(task)
+			if !strings.EqualFold(instance.Mode, "sentinel") {
+				continue
+			}
+			for _, replicaHost := range instance.ReplicaHosts {
+				replica := NewTask("redis", "redis", instance.Name+"-replica-"+replicaHost, replicaHost, PhaseInfrastructure)
+				replica.DependsOn = withMesh([]string{task.Name})
+				replica.ClusterID = instance.Cluster
+				replica.Metadata = map[string]any{
+					"redis_role":     "replica",
+					"primary_host":   instance.Host,
+					"primary_task":   task.Name,
+					"instance_label": instance.Name,
+				}
+				graph.AddTask(replica)
+			}
+			for _, sn := range instance.Sentinels {
+				sentinel := NewTask("redis", "redis", instance.Name+"-sentinel-"+sn.Host, sn.Host, PhaseInfrastructure)
+				sentinel.DependsOn = withMesh([]string{task.Name})
+				sentinel.ClusterID = instance.Cluster
+				sentinel.Metadata = map[string]any{
+					"redis_role":     "sentinel",
+					"primary_host":   instance.Host,
+					"sentinel_port":  sn.Port,
+					"instance_label": instance.Name,
+				}
+				graph.AddTask(sentinel)
+			}
 		}
 	}
 
@@ -175,26 +272,54 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 		}
 	}
 
-	// Add Kafka (KRaft)
-	if p.manifest.Infrastructure.Kafka != nil && p.manifest.Infrastructure.Kafka.Enabled {
+	// Add Kafka (KRaft). Each declared cluster (primary + each Regional) gets
+	// its own controller + broker task set. Tasks are tagged via ClusterID
+	// with the region_id (empty for primary) so the task builder can look up
+	// the right cluster view. Task names get a region suffix when non-empty
+	// to avoid collisions if two clusters declare overlapping IDs.
+	for _, kc := range p.kafkaClusters() {
 		controllerDeps := []string{}
+		nameSuffix := ""
+		if kc.RegionID != "" {
+			nameSuffix = "-" + kc.RegionID
+		}
 
-		// Dedicated controllers (if defined)
-		for _, ctrl := range p.manifest.Infrastructure.Kafka.Controllers {
+		for _, ctrl := range kc.Controllers {
 			task := NewTask("kafka-controller", "kafka", strconv.Itoa(ctrl.ID), ctrl.Host, PhaseInfrastructure)
+			task.Name = "kafka-controller" + nameSuffix + "-" + strconv.Itoa(ctrl.ID)
+			task.ClusterID = kc.RegionID
 			task.DependsOn = withMesh(task.DependsOn)
 			graph.AddTask(task)
 			controllerDeps = append(controllerDeps, task.Name)
 		}
 
-		// Brokers depend on all controllers (if dedicated mode) and on every
-		// privateer-mesh task in the current graph.
-		for _, broker := range p.manifest.Infrastructure.Kafka.Brokers {
+		// Brokers depend on the controllers of their own cluster plus mesh.
+		for _, broker := range kc.Brokers {
 			task := NewTask("kafka", "kafka", strconv.Itoa(broker.ID), broker.Host, PhaseInfrastructure)
-			task.Name = "kafka-broker-" + strconv.Itoa(broker.ID)
+			task.Name = "kafka-broker" + nameSuffix + "-" + strconv.Itoa(broker.ID)
+			task.ClusterID = kc.RegionID
 			task.DependsOn = withMesh(controllerDeps)
 			graph.AddTask(task)
 		}
+	}
+
+	// MirrorMaker2 worker. Depends on every broker across every declared Kafka
+	// cluster so the worker only starts once source + aggregator clusters are
+	// live. One task on the configured host; no per-region split — connect-
+	// mirror-maker.sh handles multiple source clusters from a single process.
+	if mm := p.manifest.Infrastructure.Kafka; mm != nil && mm.Enabled && mm.MirrorMaker != nil && mm.MirrorMaker.Enabled {
+		task := NewTask("kafka-mirrormaker", "kafka-mirrormaker", "", mm.MirrorMaker.Host, PhaseInfrastructure)
+		task.DependsOn = withMesh(task.DependsOn)
+		for _, kc := range p.kafkaClusters() {
+			suffix := ""
+			if kc.RegionID != "" {
+				suffix = "-" + kc.RegionID
+			}
+			for _, broker := range kc.Brokers {
+				task.DependsOn = append(task.DependsOn, "kafka-broker"+suffix+"-"+strconv.Itoa(broker.ID))
+			}
+		}
+		graph.AddTask(task)
 	}
 
 	// Add ClickHouse
@@ -241,8 +366,12 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 	}
 
 	if p.manifest.Infrastructure.Kafka != nil && p.manifest.Infrastructure.Kafka.Enabled {
-		for _, broker := range p.manifest.Infrastructure.Kafka.Brokers {
-			infraDeps = appendIfInGraph(infraDeps, "kafka-broker-"+strconv.Itoa(broker.ID))
+		// App tasks depend on every kafka broker across every declared
+		// cluster (primary + each Regional). Naming follows kafkaBrokerTaskName.
+		for _, kc := range p.kafkaClusters() {
+			for _, broker := range kc.Brokers {
+				infraDeps = appendIfInGraph(infraDeps, kafkaBrokerTaskName(kc.RegionID, broker.ID))
+			}
 		}
 	}
 
@@ -254,7 +383,7 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 			return fmt.Errorf("unknown service id: quartermaster")
 		}
 		task := NewServiceTask(deploy, "quartermaster", "", svc.Host, PhaseApplications)
-		task.ClusterID = p.manifest.HostCluster(svc.Host)
+		task.ClusterID = effectiveServiceCluster(svc, svc.Host, p.manifest)
 		task.DependsOn = infraDeps
 		graph.AddTask(task)
 	}
@@ -290,7 +419,7 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 				instanceID = hostName
 			}
 			task := NewServiceTask(deploy, name, instanceID, hostName, PhaseApplications)
-			task.ClusterID = p.manifest.HostCluster(hostName)
+			task.ClusterID = effectiveServiceCluster(svc, hostName, p.manifest)
 			task.DependsOn = coreDeps
 			if name == "skipper" {
 				if bridge, ok := p.manifest.Services["bridge"]; ok && bridge.Enabled {
@@ -397,7 +526,7 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 				instanceID = hostName
 			}
 			task := NewServiceTask(deploy, name, instanceID, hostName, PhaseInterfaces)
-			task.ClusterID = p.manifest.HostCluster(hostName)
+			task.ClusterID = effectiveServiceCluster(iface, hostName, p.manifest)
 			task.DependsOn = appDeps
 			graph.AddTask(task)
 		}
@@ -423,7 +552,7 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 				instanceID = hostName
 			}
 			task := NewServiceTask(deploy, name, instanceID, hostName, PhaseInterfaces)
-			task.ClusterID = p.manifest.HostCluster(hostName)
+			task.ClusterID = effectiveServiceCluster(obs, hostName, p.manifest)
 			task.DependsOn = appDeps
 			graph.AddTask(task)
 		}

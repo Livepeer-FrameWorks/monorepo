@@ -132,9 +132,14 @@ func (StreamSummarySortField) EnumDescriptor() ([]byte, []int) {
 }
 
 // StreamEvent is the canonical analytics stream event returned by Periscope APIs.
+//
+// Envelope v2 fields (50-56) stamp event provenance so MirrorMaker fan-in
+// can dedupe and route. event_id (field 1) should be UUIDv7 so time-ordered
+// dedup works at the aggregate consumer. Decklog backfills any envelope
+// field a legacy producer left empty.
 type StreamEvent struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
-	EventId         string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"` // Used as cursor ID
+	EventId         string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"` // Used as cursor ID; should be UUIDv7 for time-ordering + dedupe
 	Timestamp       *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 	EventType       string                 `protobuf:"bytes,3,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
 	Status          string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
@@ -164,8 +169,16 @@ type StreamEvent struct {
 	Location        *string                `protobuf:"bytes,28,opt,name=location,proto3,oneof" json:"location,omitempty"`
 	CountryCode     *string                `protobuf:"bytes,29,opt,name=country_code,json=countryCode,proto3,oneof" json:"country_code,omitempty"`
 	City            *string                `protobuf:"bytes,30,opt,name=city,proto3,oneof" json:"city,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// ===== Envelope v2 =====
+	SourceRegion          string `protobuf:"bytes,50,opt,name=source_region,json=sourceRegion,proto3" json:"source_region,omitempty"`
+	SourceClusterId       string `protobuf:"bytes,51,opt,name=source_cluster_id,json=sourceClusterId,proto3" json:"source_cluster_id,omitempty"`
+	StreamOriginRegion    string `protobuf:"bytes,52,opt,name=stream_origin_region,json=streamOriginRegion,proto3" json:"stream_origin_region,omitempty"`
+	StreamOriginClusterId string `protobuf:"bytes,53,opt,name=stream_origin_cluster_id,json=streamOriginClusterId,proto3" json:"stream_origin_cluster_id,omitempty"`
+	SchemaVersion         int32  `protobuf:"varint,54,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	CorrelationId         string `protobuf:"bytes,55,opt,name=correlation_id,json=correlationId,proto3" json:"correlation_id,omitempty"`
+	CausationId           string `protobuf:"bytes,56,opt,name=causation_id,json=causationId,proto3" json:"causation_id,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *StreamEvent) Reset() {
@@ -404,6 +417,55 @@ func (x *StreamEvent) GetCountryCode() string {
 func (x *StreamEvent) GetCity() string {
 	if x != nil && x.City != nil {
 		return *x.City
+	}
+	return ""
+}
+
+func (x *StreamEvent) GetSourceRegion() string {
+	if x != nil {
+		return x.SourceRegion
+	}
+	return ""
+}
+
+func (x *StreamEvent) GetSourceClusterId() string {
+	if x != nil {
+		return x.SourceClusterId
+	}
+	return ""
+}
+
+func (x *StreamEvent) GetStreamOriginRegion() string {
+	if x != nil {
+		return x.StreamOriginRegion
+	}
+	return ""
+}
+
+func (x *StreamEvent) GetStreamOriginClusterId() string {
+	if x != nil {
+		return x.StreamOriginClusterId
+	}
+	return ""
+}
+
+func (x *StreamEvent) GetSchemaVersion() int32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *StreamEvent) GetCorrelationId() string {
+	if x != nil {
+		return x.CorrelationId
+	}
+	return ""
+}
+
+func (x *StreamEvent) GetCausationId() string {
+	if x != nil {
+		return x.CausationId
 	}
 	return ""
 }
@@ -15357,7 +15419,7 @@ var File_periscope_proto protoreflect.FileDescriptor
 
 const file_periscope_proto_rawDesc = "" +
 	"\n" +
-	"\x0fperiscope.proto\x12\tperiscope\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\fcommon.proto\x1a\tipc.proto\"\xf6\v\n" +
+	"\x0fperiscope.proto\x12\tperiscope\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\fcommon.proto\x1a\tipc.proto\"\xa3\x0e\n" +
 	"\vStreamEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x128\n" +
 	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x1d\n" +
@@ -15396,7 +15458,14 @@ const file_periscope_proto_rawDesc = "" +
 	"\tlongitude\x18\x1b \x01(\x01H\x12R\tlongitude\x88\x01\x01\x12\x1f\n" +
 	"\blocation\x18\x1c \x01(\tH\x13R\blocation\x88\x01\x01\x12&\n" +
 	"\fcountry_code\x18\x1d \x01(\tH\x14R\vcountryCode\x88\x01\x01\x12\x17\n" +
-	"\x04city\x18\x1e \x01(\tH\x15R\x04city\x88\x01\x01B\x0f\n" +
+	"\x04city\x18\x1e \x01(\tH\x15R\x04city\x88\x01\x01\x12#\n" +
+	"\rsource_region\x182 \x01(\tR\fsourceRegion\x12*\n" +
+	"\x11source_cluster_id\x183 \x01(\tR\x0fsourceClusterId\x120\n" +
+	"\x14stream_origin_region\x184 \x01(\tR\x12streamOriginRegion\x127\n" +
+	"\x18stream_origin_cluster_id\x185 \x01(\tR\x15streamOriginClusterId\x12%\n" +
+	"\x0eschema_version\x186 \x01(\x05R\rschemaVersion\x12%\n" +
+	"\x0ecorrelation_id\x187 \x01(\tR\rcorrelationId\x12!\n" +
+	"\fcausation_id\x188 \x01(\tR\vcausationIdB\x0f\n" +
 	"\r_buffer_stateB\r\n" +
 	"\v_has_issuesB\x0e\n" +
 	"\f_track_countB\x0f\n" +

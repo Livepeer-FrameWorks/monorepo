@@ -94,6 +94,10 @@ type resolvedCluster struct {
 	sharedEnvOnce sync.Once
 	sharedEnv     map[string]string
 	sharedEnvErr  error
+
+	clusterEnvsOnce sync.Once
+	clusterEnvs     map[string]map[string]string
+	clusterEnvsErr  error
 }
 
 // SharedEnv decrypts and merges the manifest's top-level env_files on
@@ -106,6 +110,18 @@ func (rc *resolvedCluster) SharedEnv() (map[string]string, error) {
 		)
 	})
 	return rc.sharedEnv, rc.sharedEnvErr
+}
+
+// ClusterEnvs decrypts and merges each ClusterConfig.EnvFiles list into a
+// per-cluster env map on first call and caches the result. Same secret-
+// handling discipline as SharedEnv.
+func (rc *resolvedCluster) ClusterEnvs() (map[string]map[string]string, error) {
+	rc.clusterEnvsOnce.Do(func() {
+		rc.clusterEnvs, rc.clusterEnvsErr = inventory.LoadClusterEnvs(
+			rc.Manifest, filepath.Dir(rc.ManifestPath), rc.AgeKey,
+		)
+	})
+	return rc.clusterEnvs, rc.clusterEnvsErr
 }
 
 func (rc *resolvedCluster) applyReleaseMetadata(metadata map[string]any) {

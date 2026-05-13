@@ -610,6 +610,404 @@ func (x *RemoveTenantAliasClusterResponse) GetAccepted() bool {
 	return false
 }
 
+type EnsureCustomDomainRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Domain        string                 `protobuf:"bytes,2,opt,name=domain,proto3" json:"domain,omitempty"` // Customer-owned FQDN, e.g. "media.acme-inc.com"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnsureCustomDomainRequest) Reset() {
+	*x = EnsureCustomDomainRequest{}
+	mi := &file_dns_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnsureCustomDomainRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnsureCustomDomainRequest) ProtoMessage() {}
+
+func (x *EnsureCustomDomainRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dns_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnsureCustomDomainRequest.ProtoReflect.Descriptor instead.
+func (*EnsureCustomDomainRequest) Descriptor() ([]byte, []int) {
+	return file_dns_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *EnsureCustomDomainRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *EnsureCustomDomainRequest) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+type EnsureCustomDomainResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Accepted bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	Status   string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	// Customer must set two CNAMEs (one-time setup):
+	//
+	//	{domain}                       CNAME  {required_traffic_cname}
+	//	_acme-challenge.{domain}       CNAME  {required_acme_challenge_cname}
+	//
+	// Stable across re-issuance / renewal; no rotation required.
+	RequiredTrafficCname       string `protobuf:"bytes,3,opt,name=required_traffic_cname,json=requiredTrafficCname,proto3" json:"required_traffic_cname,omitempty"`
+	RequiredAcmeChallengeCname string `protobuf:"bytes,4,opt,name=required_acme_challenge_cname,json=requiredAcmeChallengeCname,proto3" json:"required_acme_challenge_cname,omitempty"`
+	Error                      string `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
+}
+
+func (x *EnsureCustomDomainResponse) Reset() {
+	*x = EnsureCustomDomainResponse{}
+	mi := &file_dns_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnsureCustomDomainResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnsureCustomDomainResponse) ProtoMessage() {}
+
+func (x *EnsureCustomDomainResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dns_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnsureCustomDomainResponse.ProtoReflect.Descriptor instead.
+func (*EnsureCustomDomainResponse) Descriptor() ([]byte, []int) {
+	return file_dns_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *EnsureCustomDomainResponse) GetAccepted() bool {
+	if x != nil {
+		return x.Accepted
+	}
+	return false
+}
+
+func (x *EnsureCustomDomainResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *EnsureCustomDomainResponse) GetRequiredTrafficCname() string {
+	if x != nil {
+		return x.RequiredTrafficCname
+	}
+	return ""
+}
+
+func (x *EnsureCustomDomainResponse) GetRequiredAcmeChallengeCname() string {
+	if x != nil {
+		return x.RequiredAcmeChallengeCname
+	}
+	return ""
+}
+
+func (x *EnsureCustomDomainResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type RemoveCustomDomainRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Domain        string                 `protobuf:"bytes,2,opt,name=domain,proto3" json:"domain,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveCustomDomainRequest) Reset() {
+	*x = RemoveCustomDomainRequest{}
+	mi := &file_dns_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveCustomDomainRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveCustomDomainRequest) ProtoMessage() {}
+
+func (x *RemoveCustomDomainRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dns_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveCustomDomainRequest.ProtoReflect.Descriptor instead.
+func (*RemoveCustomDomainRequest) Descriptor() ([]byte, []int) {
+	return file_dns_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *RemoveCustomDomainRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *RemoveCustomDomainRequest) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+type RemoveCustomDomainResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveCustomDomainResponse) Reset() {
+	*x = RemoveCustomDomainResponse{}
+	mi := &file_dns_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveCustomDomainResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveCustomDomainResponse) ProtoMessage() {}
+
+func (x *RemoveCustomDomainResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dns_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveCustomDomainResponse.ProtoReflect.Descriptor instead.
+func (*RemoveCustomDomainResponse) Descriptor() ([]byte, []int) {
+	return file_dns_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *RemoveCustomDomainResponse) GetAccepted() bool {
+	if x != nil {
+		return x.Accepted
+	}
+	return false
+}
+
+type GetCustomDomainStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Domain        string                 `protobuf:"bytes,2,opt,name=domain,proto3" json:"domain,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCustomDomainStatusRequest) Reset() {
+	*x = GetCustomDomainStatusRequest{}
+	mi := &file_dns_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCustomDomainStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCustomDomainStatusRequest) ProtoMessage() {}
+
+func (x *GetCustomDomainStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dns_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCustomDomainStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetCustomDomainStatusRequest) Descriptor() ([]byte, []int) {
+	return file_dns_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *GetCustomDomainStatusRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *GetCustomDomainStatusRequest) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+type GetCustomDomainStatusResponse struct {
+	state                      protoimpl.MessageState `protogen:"open.v1"`
+	Found                      bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	TenantId                   string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Domain                     string                 `protobuf:"bytes,3,opt,name=domain,proto3" json:"domain,omitempty"`
+	Status                     string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"` // pending_verification | verified | cert_issuing | cert_issued | cert_failed | tearing_down
+	RequiredTrafficCname       string                 `protobuf:"bytes,5,opt,name=required_traffic_cname,json=requiredTrafficCname,proto3" json:"required_traffic_cname,omitempty"`
+	RequiredAcmeChallengeCname string                 `protobuf:"bytes,6,opt,name=required_acme_challenge_cname,json=requiredAcmeChallengeCname,proto3" json:"required_acme_challenge_cname,omitempty"`
+	LastVerifiedAt             int64                  `protobuf:"varint,7,opt,name=last_verified_at,json=lastVerifiedAt,proto3" json:"last_verified_at,omitempty"`
+	CertIssuedAt               int64                  `protobuf:"varint,8,opt,name=cert_issued_at,json=certIssuedAt,proto3" json:"cert_issued_at,omitempty"`
+	CertExpiresAt              int64                  `protobuf:"varint,9,opt,name=cert_expires_at,json=certExpiresAt,proto3" json:"cert_expires_at,omitempty"`
+	LastError                  string                 `protobuf:"bytes,10,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
+}
+
+func (x *GetCustomDomainStatusResponse) Reset() {
+	*x = GetCustomDomainStatusResponse{}
+	mi := &file_dns_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCustomDomainStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCustomDomainStatusResponse) ProtoMessage() {}
+
+func (x *GetCustomDomainStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dns_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCustomDomainStatusResponse.ProtoReflect.Descriptor instead.
+func (*GetCustomDomainStatusResponse) Descriptor() ([]byte, []int) {
+	return file_dns_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *GetCustomDomainStatusResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *GetCustomDomainStatusResponse) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *GetCustomDomainStatusResponse) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+func (x *GetCustomDomainStatusResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *GetCustomDomainStatusResponse) GetRequiredTrafficCname() string {
+	if x != nil {
+		return x.RequiredTrafficCname
+	}
+	return ""
+}
+
+func (x *GetCustomDomainStatusResponse) GetRequiredAcmeChallengeCname() string {
+	if x != nil {
+		return x.RequiredAcmeChallengeCname
+	}
+	return ""
+}
+
+func (x *GetCustomDomainStatusResponse) GetLastVerifiedAt() int64 {
+	if x != nil {
+		return x.LastVerifiedAt
+	}
+	return 0
+}
+
+func (x *GetCustomDomainStatusResponse) GetCertIssuedAt() int64 {
+	if x != nil {
+		return x.CertIssuedAt
+	}
+	return 0
+}
+
+func (x *GetCustomDomainStatusResponse) GetCertExpiresAt() int64 {
+	if x != nil {
+		return x.CertExpiresAt
+	}
+	return 0
+}
+
+func (x *GetCustomDomainStatusResponse) GetLastError() string {
+	if x != nil {
+		return x.LastError
+	}
+	return ""
+}
+
 // SyncDNSRequest is sent by Quartermaster to trigger DNS synchronization.
 type SyncDNSRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -622,7 +1020,7 @@ type SyncDNSRequest struct {
 
 func (x *SyncDNSRequest) Reset() {
 	*x = SyncDNSRequest{}
-	mi := &file_dns_proto_msgTypes[10]
+	mi := &file_dns_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -634,7 +1032,7 @@ func (x *SyncDNSRequest) String() string {
 func (*SyncDNSRequest) ProtoMessage() {}
 
 func (x *SyncDNSRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dns_proto_msgTypes[10]
+	mi := &file_dns_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -647,7 +1045,7 @@ func (x *SyncDNSRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncDNSRequest.ProtoReflect.Descriptor instead.
 func (*SyncDNSRequest) Descriptor() ([]byte, []int) {
-	return file_dns_proto_rawDescGZIP(), []int{10}
+	return file_dns_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *SyncDNSRequest) GetTenantId() string {
@@ -683,7 +1081,7 @@ type SyncDNSResponse struct {
 
 func (x *SyncDNSResponse) Reset() {
 	*x = SyncDNSResponse{}
-	mi := &file_dns_proto_msgTypes[11]
+	mi := &file_dns_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -695,7 +1093,7 @@ func (x *SyncDNSResponse) String() string {
 func (*SyncDNSResponse) ProtoMessage() {}
 
 func (x *SyncDNSResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dns_proto_msgTypes[11]
+	mi := &file_dns_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -708,7 +1106,7 @@ func (x *SyncDNSResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncDNSResponse.ProtoReflect.Descriptor instead.
 func (*SyncDNSResponse) Descriptor() ([]byte, []int) {
-	return file_dns_proto_rawDescGZIP(), []int{11}
+	return file_dns_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *SyncDNSResponse) GetSuccess() bool {
@@ -744,7 +1142,7 @@ type IssueCertificateRequest struct {
 
 func (x *IssueCertificateRequest) Reset() {
 	*x = IssueCertificateRequest{}
-	mi := &file_dns_proto_msgTypes[12]
+	mi := &file_dns_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -756,7 +1154,7 @@ func (x *IssueCertificateRequest) String() string {
 func (*IssueCertificateRequest) ProtoMessage() {}
 
 func (x *IssueCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dns_proto_msgTypes[12]
+	mi := &file_dns_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -769,7 +1167,7 @@ func (x *IssueCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueCertificateRequest.ProtoReflect.Descriptor instead.
 func (*IssueCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_dns_proto_rawDescGZIP(), []int{12}
+	return file_dns_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *IssueCertificateRequest) GetTenantId() string {
@@ -810,7 +1208,7 @@ type IssueCertificateResponse struct {
 
 func (x *IssueCertificateResponse) Reset() {
 	*x = IssueCertificateResponse{}
-	mi := &file_dns_proto_msgTypes[13]
+	mi := &file_dns_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -822,7 +1220,7 @@ func (x *IssueCertificateResponse) String() string {
 func (*IssueCertificateResponse) ProtoMessage() {}
 
 func (x *IssueCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dns_proto_msgTypes[13]
+	mi := &file_dns_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -835,7 +1233,7 @@ func (x *IssueCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueCertificateResponse.ProtoReflect.Descriptor instead.
 func (*IssueCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_dns_proto_rawDescGZIP(), []int{13}
+	return file_dns_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *IssueCertificateResponse) GetSuccess() bool {
@@ -905,7 +1303,7 @@ type GetCertificateRequest struct {
 
 func (x *GetCertificateRequest) Reset() {
 	*x = GetCertificateRequest{}
-	mi := &file_dns_proto_msgTypes[14]
+	mi := &file_dns_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -917,7 +1315,7 @@ func (x *GetCertificateRequest) String() string {
 func (*GetCertificateRequest) ProtoMessage() {}
 
 func (x *GetCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dns_proto_msgTypes[14]
+	mi := &file_dns_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -930,7 +1328,7 @@ func (x *GetCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCertificateRequest.ProtoReflect.Descriptor instead.
 func (*GetCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_dns_proto_rawDescGZIP(), []int{14}
+	return file_dns_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetCertificateRequest) GetTenantId() string {
@@ -963,7 +1361,7 @@ type GetCertificateResponse struct {
 
 func (x *GetCertificateResponse) Reset() {
 	*x = GetCertificateResponse{}
-	mi := &file_dns_proto_msgTypes[15]
+	mi := &file_dns_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -975,7 +1373,7 @@ func (x *GetCertificateResponse) String() string {
 func (*GetCertificateResponse) ProtoMessage() {}
 
 func (x *GetCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dns_proto_msgTypes[15]
+	mi := &file_dns_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -988,7 +1386,7 @@ func (x *GetCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCertificateResponse.ProtoReflect.Descriptor instead.
 func (*GetCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_dns_proto_rawDescGZIP(), []int{15}
+	return file_dns_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GetCertificateResponse) GetFound() bool {
@@ -1049,7 +1447,7 @@ type GetTLSBundleRequest struct {
 
 func (x *GetTLSBundleRequest) Reset() {
 	*x = GetTLSBundleRequest{}
-	mi := &file_dns_proto_msgTypes[16]
+	mi := &file_dns_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1061,7 +1459,7 @@ func (x *GetTLSBundleRequest) String() string {
 func (*GetTLSBundleRequest) ProtoMessage() {}
 
 func (x *GetTLSBundleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dns_proto_msgTypes[16]
+	mi := &file_dns_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1074,7 +1472,7 @@ func (x *GetTLSBundleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTLSBundleRequest.ProtoReflect.Descriptor instead.
 func (*GetTLSBundleRequest) Descriptor() ([]byte, []int) {
-	return file_dns_proto_rawDescGZIP(), []int{16}
+	return file_dns_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *GetTLSBundleRequest) GetBundleId() string {
@@ -1100,7 +1498,7 @@ type GetTLSBundleResponse struct {
 
 func (x *GetTLSBundleResponse) Reset() {
 	*x = GetTLSBundleResponse{}
-	mi := &file_dns_proto_msgTypes[17]
+	mi := &file_dns_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1112,7 +1510,7 @@ func (x *GetTLSBundleResponse) String() string {
 func (*GetTLSBundleResponse) ProtoMessage() {}
 
 func (x *GetTLSBundleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dns_proto_msgTypes[17]
+	mi := &file_dns_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1125,7 +1523,7 @@ func (x *GetTLSBundleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTLSBundleResponse.ProtoReflect.Descriptor instead.
 func (*GetTLSBundleResponse) Descriptor() ([]byte, []int) {
-	return file_dns_proto_rawDescGZIP(), []int{17}
+	return file_dns_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *GetTLSBundleResponse) GetFound() bool {
@@ -1192,7 +1590,7 @@ type GetCABundleRequest struct {
 
 func (x *GetCABundleRequest) Reset() {
 	*x = GetCABundleRequest{}
-	mi := &file_dns_proto_msgTypes[18]
+	mi := &file_dns_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1204,7 +1602,7 @@ func (x *GetCABundleRequest) String() string {
 func (*GetCABundleRequest) ProtoMessage() {}
 
 func (x *GetCABundleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dns_proto_msgTypes[18]
+	mi := &file_dns_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1217,7 +1615,7 @@ func (x *GetCABundleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCABundleRequest.ProtoReflect.Descriptor instead.
 func (*GetCABundleRequest) Descriptor() ([]byte, []int) {
-	return file_dns_proto_rawDescGZIP(), []int{18}
+	return file_dns_proto_rawDescGZIP(), []int{24}
 }
 
 type GetCABundleResponse struct {
@@ -1231,7 +1629,7 @@ type GetCABundleResponse struct {
 
 func (x *GetCABundleResponse) Reset() {
 	*x = GetCABundleResponse{}
-	mi := &file_dns_proto_msgTypes[19]
+	mi := &file_dns_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1243,7 +1641,7 @@ func (x *GetCABundleResponse) String() string {
 func (*GetCABundleResponse) ProtoMessage() {}
 
 func (x *GetCABundleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dns_proto_msgTypes[19]
+	mi := &file_dns_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1256,7 +1654,7 @@ func (x *GetCABundleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCABundleResponse.ProtoReflect.Descriptor instead.
 func (*GetCABundleResponse) Descriptor() ([]byte, []int) {
-	return file_dns_proto_rawDescGZIP(), []int{19}
+	return file_dns_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GetCABundleResponse) GetFound() bool {
@@ -1291,7 +1689,7 @@ type IssueInternalCertRequest struct {
 
 func (x *IssueInternalCertRequest) Reset() {
 	*x = IssueInternalCertRequest{}
-	mi := &file_dns_proto_msgTypes[20]
+	mi := &file_dns_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1303,7 +1701,7 @@ func (x *IssueInternalCertRequest) String() string {
 func (*IssueInternalCertRequest) ProtoMessage() {}
 
 func (x *IssueInternalCertRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dns_proto_msgTypes[20]
+	mi := &file_dns_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1316,7 +1714,7 @@ func (x *IssueInternalCertRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueInternalCertRequest.ProtoReflect.Descriptor instead.
 func (*IssueInternalCertRequest) Descriptor() ([]byte, []int) {
-	return file_dns_proto_rawDescGZIP(), []int{20}
+	return file_dns_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *IssueInternalCertRequest) GetNodeId() string {
@@ -1355,7 +1753,7 @@ type IssueInternalCertResponse struct {
 
 func (x *IssueInternalCertResponse) Reset() {
 	*x = IssueInternalCertResponse{}
-	mi := &file_dns_proto_msgTypes[21]
+	mi := &file_dns_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1367,7 +1765,7 @@ func (x *IssueInternalCertResponse) String() string {
 func (*IssueInternalCertResponse) ProtoMessage() {}
 
 func (x *IssueInternalCertResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dns_proto_msgTypes[21]
+	mi := &file_dns_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1380,7 +1778,7 @@ func (x *IssueInternalCertResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueInternalCertResponse.ProtoReflect.Descriptor instead.
 func (*IssueInternalCertResponse) Descriptor() ([]byte, []int) {
-	return file_dns_proto_rawDescGZIP(), []int{21}
+	return file_dns_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *IssueInternalCertResponse) GetSuccess() bool {
@@ -1478,7 +1876,37 @@ const file_dns_proto_rawDesc = "" +
 	"\n" +
 	"cluster_id\x18\x02 \x01(\tR\tclusterId\">\n" +
 	" RemoveTenantAliasClusterResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\bR\baccepted\"\x84\x01\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted\"P\n" +
+	"\x19EnsureCustomDomainRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x16\n" +
+	"\x06domain\x18\x02 \x01(\tR\x06domain\"\xdf\x01\n" +
+	"\x1aEnsureCustomDomainResponse\x12\x1a\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\x124\n" +
+	"\x16required_traffic_cname\x18\x03 \x01(\tR\x14requiredTrafficCname\x12A\n" +
+	"\x1drequired_acme_challenge_cname\x18\x04 \x01(\tR\x1arequiredAcmeChallengeCname\x12\x14\n" +
+	"\x05error\x18\x05 \x01(\tR\x05error\"P\n" +
+	"\x19RemoveCustomDomainRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x16\n" +
+	"\x06domain\x18\x02 \x01(\tR\x06domain\"8\n" +
+	"\x1aRemoveCustomDomainResponse\x12\x1a\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted\"S\n" +
+	"\x1cGetCustomDomainStatusRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x16\n" +
+	"\x06domain\x18\x02 \x01(\tR\x06domain\"\x92\x03\n" +
+	"\x1dGetCustomDomainStatusResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1b\n" +
+	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x16\n" +
+	"\x06domain\x18\x03 \x01(\tR\x06domain\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\x124\n" +
+	"\x16required_traffic_cname\x18\x05 \x01(\tR\x14requiredTrafficCname\x12A\n" +
+	"\x1drequired_acme_challenge_cname\x18\x06 \x01(\tR\x1arequiredAcmeChallengeCname\x12(\n" +
+	"\x10last_verified_at\x18\a \x01(\x03R\x0elastVerifiedAt\x12$\n" +
+	"\x0ecert_issued_at\x18\b \x01(\x03R\fcertIssuedAt\x12&\n" +
+	"\x0fcert_expires_at\x18\t \x01(\x03R\rcertExpiresAt\x12\x1d\n" +
+	"\n" +
+	"last_error\x18\n" +
+	" \x01(\tR\tlastError\"\x84\x01\n" +
 	"\x0eSyncDNSRequest\x12 \n" +
 	"\ttenant_id\x18\x01 \x01(\tH\x00R\btenantId\x88\x01\x01\x12!\n" +
 	"\fservice_type\x18\x02 \x01(\tR\vserviceType\x12\x1f\n" +
@@ -1557,7 +1985,8 @@ const file_dns_proto_rawDesc = "" +
 	"\akey_pem\x18\x05 \x01(\tR\x06keyPem\x12\x1d\n" +
 	"\n" +
 	"expires_at\x18\x06 \x01(\x03R\texpiresAt\x12\x14\n" +
-	"\x05error\x18\a \x01(\tR\x05error2\xa3\b\n" +
+	"\x05error\x18\a \x01(\tR\x05error2\xd5\n" +
+	"\n" +
 	"\x10NavigatorService\x12@\n" +
 	"\aSyncDNS\x12\x19.navigator.SyncDNSRequest\x1a\x1a.navigator.SyncDNSResponse\x12[\n" +
 	"\x10IssueCertificate\x12\".navigator.IssueCertificateRequest\x1a#.navigator.IssueCertificateResponse\x12U\n" +
@@ -1569,7 +1998,10 @@ const file_dns_proto_rawDesc = "" +
 	"\x11RemoveTenantAlias\x12#.navigator.RemoveTenantAliasRequest\x1a$.navigator.RemoveTenantAliasResponse\x12g\n" +
 	"\x14GetTenantAliasStatus\x12&.navigator.GetTenantAliasStatusRequest\x1a'.navigator.GetTenantAliasStatusResponse\x12|\n" +
 	"\x1bReportConfigSeedApplyResult\x12-.navigator.ReportConfigSeedApplyResultRequest\x1a..navigator.ReportConfigSeedApplyResultResponse\x12s\n" +
-	"\x18RemoveTenantAliasCluster\x12*.navigator.RemoveTenantAliasClusterRequest\x1a+.navigator.RemoveTenantAliasClusterResponseB3Z1github.com/Livepeer-FrameWorks/monorepo/pkg/protob\x06proto3"
+	"\x18RemoveTenantAliasCluster\x12*.navigator.RemoveTenantAliasClusterRequest\x1a+.navigator.RemoveTenantAliasClusterResponse\x12a\n" +
+	"\x12EnsureCustomDomain\x12$.navigator.EnsureCustomDomainRequest\x1a%.navigator.EnsureCustomDomainResponse\x12a\n" +
+	"\x12RemoveCustomDomain\x12$.navigator.RemoveCustomDomainRequest\x1a%.navigator.RemoveCustomDomainResponse\x12j\n" +
+	"\x15GetCustomDomainStatus\x12'.navigator.GetCustomDomainStatusRequest\x1a(.navigator.GetCustomDomainStatusResponseB3Z1github.com/Livepeer-FrameWorks/monorepo/pkg/protob\x06proto3"
 
 var (
 	file_dns_proto_rawDescOnce sync.Once
@@ -1583,7 +2015,7 @@ func file_dns_proto_rawDescGZIP() []byte {
 	return file_dns_proto_rawDescData
 }
 
-var file_dns_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_dns_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_dns_proto_goTypes = []any{
 	(*EnsureTenantAliasRequest)(nil),            // 0: navigator.EnsureTenantAliasRequest
 	(*EnsureTenantAliasResponse)(nil),           // 1: navigator.EnsureTenantAliasResponse
@@ -1595,46 +2027,58 @@ var file_dns_proto_goTypes = []any{
 	(*ReportConfigSeedApplyResultResponse)(nil), // 7: navigator.ReportConfigSeedApplyResultResponse
 	(*RemoveTenantAliasClusterRequest)(nil),     // 8: navigator.RemoveTenantAliasClusterRequest
 	(*RemoveTenantAliasClusterResponse)(nil),    // 9: navigator.RemoveTenantAliasClusterResponse
-	(*SyncDNSRequest)(nil),                      // 10: navigator.SyncDNSRequest
-	(*SyncDNSResponse)(nil),                     // 11: navigator.SyncDNSResponse
-	(*IssueCertificateRequest)(nil),             // 12: navigator.IssueCertificateRequest
-	(*IssueCertificateResponse)(nil),            // 13: navigator.IssueCertificateResponse
-	(*GetCertificateRequest)(nil),               // 14: navigator.GetCertificateRequest
-	(*GetCertificateResponse)(nil),              // 15: navigator.GetCertificateResponse
-	(*GetTLSBundleRequest)(nil),                 // 16: navigator.GetTLSBundleRequest
-	(*GetTLSBundleResponse)(nil),                // 17: navigator.GetTLSBundleResponse
-	(*GetCABundleRequest)(nil),                  // 18: navigator.GetCABundleRequest
-	(*GetCABundleResponse)(nil),                 // 19: navigator.GetCABundleResponse
-	(*IssueInternalCertRequest)(nil),            // 20: navigator.IssueInternalCertRequest
-	(*IssueInternalCertResponse)(nil),           // 21: navigator.IssueInternalCertResponse
-	nil,                                         // 22: navigator.SyncDNSResponse.ErrorsEntry
+	(*EnsureCustomDomainRequest)(nil),           // 10: navigator.EnsureCustomDomainRequest
+	(*EnsureCustomDomainResponse)(nil),          // 11: navigator.EnsureCustomDomainResponse
+	(*RemoveCustomDomainRequest)(nil),           // 12: navigator.RemoveCustomDomainRequest
+	(*RemoveCustomDomainResponse)(nil),          // 13: navigator.RemoveCustomDomainResponse
+	(*GetCustomDomainStatusRequest)(nil),        // 14: navigator.GetCustomDomainStatusRequest
+	(*GetCustomDomainStatusResponse)(nil),       // 15: navigator.GetCustomDomainStatusResponse
+	(*SyncDNSRequest)(nil),                      // 16: navigator.SyncDNSRequest
+	(*SyncDNSResponse)(nil),                     // 17: navigator.SyncDNSResponse
+	(*IssueCertificateRequest)(nil),             // 18: navigator.IssueCertificateRequest
+	(*IssueCertificateResponse)(nil),            // 19: navigator.IssueCertificateResponse
+	(*GetCertificateRequest)(nil),               // 20: navigator.GetCertificateRequest
+	(*GetCertificateResponse)(nil),              // 21: navigator.GetCertificateResponse
+	(*GetTLSBundleRequest)(nil),                 // 22: navigator.GetTLSBundleRequest
+	(*GetTLSBundleResponse)(nil),                // 23: navigator.GetTLSBundleResponse
+	(*GetCABundleRequest)(nil),                  // 24: navigator.GetCABundleRequest
+	(*GetCABundleResponse)(nil),                 // 25: navigator.GetCABundleResponse
+	(*IssueInternalCertRequest)(nil),            // 26: navigator.IssueInternalCertRequest
+	(*IssueInternalCertResponse)(nil),           // 27: navigator.IssueInternalCertResponse
+	nil,                                         // 28: navigator.SyncDNSResponse.ErrorsEntry
 }
 var file_dns_proto_depIdxs = []int32{
-	22, // 0: navigator.SyncDNSResponse.errors:type_name -> navigator.SyncDNSResponse.ErrorsEntry
-	10, // 1: navigator.NavigatorService.SyncDNS:input_type -> navigator.SyncDNSRequest
-	12, // 2: navigator.NavigatorService.IssueCertificate:input_type -> navigator.IssueCertificateRequest
-	14, // 3: navigator.NavigatorService.GetCertificate:input_type -> navigator.GetCertificateRequest
-	16, // 4: navigator.NavigatorService.GetTLSBundle:input_type -> navigator.GetTLSBundleRequest
-	18, // 5: navigator.NavigatorService.GetCABundle:input_type -> navigator.GetCABundleRequest
-	20, // 6: navigator.NavigatorService.IssueInternalCert:input_type -> navigator.IssueInternalCertRequest
+	28, // 0: navigator.SyncDNSResponse.errors:type_name -> navigator.SyncDNSResponse.ErrorsEntry
+	16, // 1: navigator.NavigatorService.SyncDNS:input_type -> navigator.SyncDNSRequest
+	18, // 2: navigator.NavigatorService.IssueCertificate:input_type -> navigator.IssueCertificateRequest
+	20, // 3: navigator.NavigatorService.GetCertificate:input_type -> navigator.GetCertificateRequest
+	22, // 4: navigator.NavigatorService.GetTLSBundle:input_type -> navigator.GetTLSBundleRequest
+	24, // 5: navigator.NavigatorService.GetCABundle:input_type -> navigator.GetCABundleRequest
+	26, // 6: navigator.NavigatorService.IssueInternalCert:input_type -> navigator.IssueInternalCertRequest
 	0,  // 7: navigator.NavigatorService.EnsureTenantAlias:input_type -> navigator.EnsureTenantAliasRequest
 	2,  // 8: navigator.NavigatorService.RemoveTenantAlias:input_type -> navigator.RemoveTenantAliasRequest
 	4,  // 9: navigator.NavigatorService.GetTenantAliasStatus:input_type -> navigator.GetTenantAliasStatusRequest
 	6,  // 10: navigator.NavigatorService.ReportConfigSeedApplyResult:input_type -> navigator.ReportConfigSeedApplyResultRequest
 	8,  // 11: navigator.NavigatorService.RemoveTenantAliasCluster:input_type -> navigator.RemoveTenantAliasClusterRequest
-	11, // 12: navigator.NavigatorService.SyncDNS:output_type -> navigator.SyncDNSResponse
-	13, // 13: navigator.NavigatorService.IssueCertificate:output_type -> navigator.IssueCertificateResponse
-	15, // 14: navigator.NavigatorService.GetCertificate:output_type -> navigator.GetCertificateResponse
-	17, // 15: navigator.NavigatorService.GetTLSBundle:output_type -> navigator.GetTLSBundleResponse
-	19, // 16: navigator.NavigatorService.GetCABundle:output_type -> navigator.GetCABundleResponse
-	21, // 17: navigator.NavigatorService.IssueInternalCert:output_type -> navigator.IssueInternalCertResponse
-	1,  // 18: navigator.NavigatorService.EnsureTenantAlias:output_type -> navigator.EnsureTenantAliasResponse
-	3,  // 19: navigator.NavigatorService.RemoveTenantAlias:output_type -> navigator.RemoveTenantAliasResponse
-	5,  // 20: navigator.NavigatorService.GetTenantAliasStatus:output_type -> navigator.GetTenantAliasStatusResponse
-	7,  // 21: navigator.NavigatorService.ReportConfigSeedApplyResult:output_type -> navigator.ReportConfigSeedApplyResultResponse
-	9,  // 22: navigator.NavigatorService.RemoveTenantAliasCluster:output_type -> navigator.RemoveTenantAliasClusterResponse
-	12, // [12:23] is the sub-list for method output_type
-	1,  // [1:12] is the sub-list for method input_type
+	10, // 12: navigator.NavigatorService.EnsureCustomDomain:input_type -> navigator.EnsureCustomDomainRequest
+	12, // 13: navigator.NavigatorService.RemoveCustomDomain:input_type -> navigator.RemoveCustomDomainRequest
+	14, // 14: navigator.NavigatorService.GetCustomDomainStatus:input_type -> navigator.GetCustomDomainStatusRequest
+	17, // 15: navigator.NavigatorService.SyncDNS:output_type -> navigator.SyncDNSResponse
+	19, // 16: navigator.NavigatorService.IssueCertificate:output_type -> navigator.IssueCertificateResponse
+	21, // 17: navigator.NavigatorService.GetCertificate:output_type -> navigator.GetCertificateResponse
+	23, // 18: navigator.NavigatorService.GetTLSBundle:output_type -> navigator.GetTLSBundleResponse
+	25, // 19: navigator.NavigatorService.GetCABundle:output_type -> navigator.GetCABundleResponse
+	27, // 20: navigator.NavigatorService.IssueInternalCert:output_type -> navigator.IssueInternalCertResponse
+	1,  // 21: navigator.NavigatorService.EnsureTenantAlias:output_type -> navigator.EnsureTenantAliasResponse
+	3,  // 22: navigator.NavigatorService.RemoveTenantAlias:output_type -> navigator.RemoveTenantAliasResponse
+	5,  // 23: navigator.NavigatorService.GetTenantAliasStatus:output_type -> navigator.GetTenantAliasStatusResponse
+	7,  // 24: navigator.NavigatorService.ReportConfigSeedApplyResult:output_type -> navigator.ReportConfigSeedApplyResultResponse
+	9,  // 25: navigator.NavigatorService.RemoveTenantAliasCluster:output_type -> navigator.RemoveTenantAliasClusterResponse
+	11, // 26: navigator.NavigatorService.EnsureCustomDomain:output_type -> navigator.EnsureCustomDomainResponse
+	13, // 27: navigator.NavigatorService.RemoveCustomDomain:output_type -> navigator.RemoveCustomDomainResponse
+	15, // 28: navigator.NavigatorService.GetCustomDomainStatus:output_type -> navigator.GetCustomDomainStatusResponse
+	15, // [15:29] is the sub-list for method output_type
+	1,  // [1:15] is the sub-list for method input_type
 	1,  // [1:1] is the sub-list for extension type_name
 	1,  // [1:1] is the sub-list for extension extendee
 	0,  // [0:1] is the sub-list for field type_name
@@ -1645,18 +2089,18 @@ func file_dns_proto_init() {
 	if File_dns_proto != nil {
 		return
 	}
-	file_dns_proto_msgTypes[10].OneofWrappers = []any{}
-	file_dns_proto_msgTypes[12].OneofWrappers = []any{}
-	file_dns_proto_msgTypes[13].OneofWrappers = []any{}
-	file_dns_proto_msgTypes[14].OneofWrappers = []any{}
-	file_dns_proto_msgTypes[15].OneofWrappers = []any{}
+	file_dns_proto_msgTypes[16].OneofWrappers = []any{}
+	file_dns_proto_msgTypes[18].OneofWrappers = []any{}
+	file_dns_proto_msgTypes[19].OneofWrappers = []any{}
+	file_dns_proto_msgTypes[20].OneofWrappers = []any{}
+	file_dns_proto_msgTypes[21].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dns_proto_rawDesc), len(file_dns_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   23,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

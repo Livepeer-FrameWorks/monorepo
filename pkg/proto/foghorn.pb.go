@@ -1233,9 +1233,16 @@ type InvalidatePlaybackAuthRequest struct {
 	// stream/artifact for the tenant" (used on signing-key revoke when the
 	// policy may reference the revoked kid on any object).
 	InternalNames []string `protobuf:"bytes,2,rep,name=internal_names,json=internalNames,proto3" json:"internal_names,omitempty"`
-	Reason        string   `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"` // e.g., "policy_change", "key_revoked", "webhook_rotated"
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Reason        string   `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"` // e.g., "policy_change", "key_revoked", "webhook_rotated", "bundle_revoke"
+	// Signed-policy-bundle revocation fields. When reason == "bundle_revoke",
+	// Foghorn calls policybundle.Cache.BumpWatermark(tenant_id, stream_id,
+	// bundle_min_version) on receipt, invalidating cached bundles below the
+	// watermark. stream_id empty means "all streams for this tenant" (used on
+	// tenant-wide plan downgrades; Foghorn loops over its cache).
+	StreamId         string `protobuf:"bytes,4,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	BundleMinVersion int64  `protobuf:"varint,5,opt,name=bundle_min_version,json=bundleMinVersion,proto3" json:"bundle_min_version,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *InvalidatePlaybackAuthRequest) Reset() {
@@ -1287,6 +1294,20 @@ func (x *InvalidatePlaybackAuthRequest) GetReason() string {
 		return x.Reason
 	}
 	return ""
+}
+
+func (x *InvalidatePlaybackAuthRequest) GetStreamId() string {
+	if x != nil {
+		return x.StreamId
+	}
+	return ""
+}
+
+func (x *InvalidatePlaybackAuthRequest) GetBundleMinVersion() int64 {
+	if x != nil {
+		return x.BundleMinVersion
+	}
+	return 0
 }
 
 type InvalidatePlaybackAuthResponse struct {
@@ -2078,11 +2099,13 @@ const file_foghorn_proto_rawDesc = "" +
 	"_longitude\"N\n" +
 	"\x14NodeComponentVersion\x12\x1c\n" +
 	"\tcomponent\x18\x01 \x01(\tR\tcomponent\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\tR\aversion\"{\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\"\xc6\x01\n" +
 	"\x1dInvalidatePlaybackAuthRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12%\n" +
 	"\x0einternal_names\x18\x02 \x03(\tR\rinternalNames\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xf0\x01\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x1b\n" +
+	"\tstream_id\x18\x04 \x01(\tR\bstreamId\x12,\n" +
+	"\x12bundle_min_version\x18\x05 \x01(\x03R\x10bundleMinVersion\"\xf0\x01\n" +
 	"\x1eInvalidatePlaybackAuthResponse\x12/\n" +
 	"\x13streams_invalidated\x18\x01 \x01(\x05R\x12streamsInvalidated\x12)\n" +
 	"\x10nodes_dispatched\x18\x02 \x01(\x05R\x0fnodesDispatched\x12'\n" +

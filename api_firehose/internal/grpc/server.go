@@ -41,17 +41,39 @@ type DecklogServer struct {
 	logger             logging.Logger
 	metrics            *DecklogMetrics
 	serviceEventsTopic string
+	// SourceRegion / SourceClusterID identify this Decklog instance for
+	// envelope v2 backfill. When a producer emits an event without stamping
+	// source_region or source_cluster_id, Decklog fills them with these
+	// values so MirrorMaker fan-in consumers always see a non-empty source.
+	sourceRegion    string
+	sourceClusterID string
+}
+
+// DecklogServerConfig carries optional construction parameters for the
+// Decklog gRPC server. Zero-value fields fall back to defaults documented
+// inline in NewDecklogServerWithConfig.
+type DecklogServerConfig struct {
+	ServiceEventsTopic string
+	SourceRegion       string
+	SourceClusterID    string
 }
 
 func NewDecklogServer(producer kafka.ProducerInterface, logger logging.Logger, metrics *DecklogMetrics, serviceEventsTopic string) *DecklogServer {
-	if serviceEventsTopic == "" {
-		serviceEventsTopic = "service_events"
+	return NewDecklogServerWithConfig(producer, logger, metrics, DecklogServerConfig{ServiceEventsTopic: serviceEventsTopic})
+}
+
+func NewDecklogServerWithConfig(producer kafka.ProducerInterface, logger logging.Logger, metrics *DecklogMetrics, cfg DecklogServerConfig) *DecklogServer {
+	topic := cfg.ServiceEventsTopic
+	if topic == "" {
+		topic = "service_events"
 	}
 	return &DecklogServer{
 		producer:           producer,
 		logger:             logger,
 		metrics:            metrics,
-		serviceEventsTopic: serviceEventsTopic,
+		serviceEventsTopic: topic,
+		sourceRegion:       cfg.SourceRegion,
+		sourceClusterID:    cfg.SourceClusterID,
 	}
 }
 
@@ -93,12 +115,14 @@ func (s *DecklogServer) convertProtobufToKafkaEvent(msg interface{}, eventType, 
 	}
 
 	event := &kafka.AnalyticsEvent{
-		EventID:   generateEventID(),
-		EventType: eventType,
-		Timestamp: time.Now(),
-		Source:    source,
-		TenantID:  normalized,
-		Data:      dataMap, // Transparent protobuf message as JSON
+		EventID:         generateEventID(),
+		EventType:       eventType,
+		Timestamp:       time.Now(),
+		Source:          source,
+		TenantID:        normalized,
+		Data:            dataMap, // Transparent protobuf message as JSON
+		SourceRegion:    s.sourceRegion,
+		SourceClusterID: s.sourceClusterID,
 	}
 
 	return event, nil
@@ -163,15 +187,31 @@ func (s *DecklogServer) SendServiceEvent(ctx context.Context, event *pb.ServiceE
 	}
 
 	serviceEvent := &kafka.ServiceEvent{
-		EventID:      eventID,
-		EventType:    eventType,
-		Timestamp:    timestamp,
-		Source:       event.GetSource(),
-		TenantID:     tenantID,
-		UserID:       event.GetUserId(),
-		ResourceType: event.GetResourceType(),
-		ResourceID:   event.GetResourceId(),
-		Data:         data,
+		EventID:               eventID,
+		EventType:             eventType,
+		Timestamp:             timestamp,
+		Source:                event.GetSource(),
+		TenantID:              tenantID,
+		UserID:                event.GetUserId(),
+		ResourceType:          event.GetResourceType(),
+		ResourceID:            event.GetResourceId(),
+		Data:                  data,
+		SourceRegion:          event.GetSourceRegion(),
+		SourceClusterID:       event.GetSourceClusterId(),
+		StreamOriginRegion:    event.GetStreamOriginRegion(),
+		StreamOriginClusterID: event.GetStreamOriginClusterId(),
+		SchemaVersion:         event.GetSchemaVersion(),
+		CorrelationID:         event.GetCorrelationId(),
+		CausationID:           event.GetCausationId(),
+	}
+	// Envelope v2 backfill: legacy producers don't stamp source_region or
+	// source_cluster_id; fall back to Decklog's own identity so MirrorMaker
+	// fan-in consumers always see a non-empty source.
+	if serviceEvent.SourceRegion == "" {
+		serviceEvent.SourceRegion = s.sourceRegion
+	}
+	if serviceEvent.SourceClusterID == "" {
+		serviceEvent.SourceClusterID = s.sourceClusterID
 	}
 
 	payload, err := json.Marshal(serviceEvent)
@@ -188,6 +228,18 @@ func (s *DecklogServer) SendServiceEvent(ctx context.Context, event *pb.ServiceE
 	}
 	if tenantID != "" {
 		headers["tenant_id"] = tenantID
+	}
+	if serviceEvent.SourceRegion != "" {
+		headers["source_region"] = serviceEvent.SourceRegion
+	}
+	if serviceEvent.SourceClusterID != "" {
+		headers["source_cluster_id"] = serviceEvent.SourceClusterID
+	}
+	if serviceEvent.StreamOriginRegion != "" {
+		headers["stream_origin_region"] = serviceEvent.StreamOriginRegion
+	}
+	if serviceEvent.StreamOriginClusterID != "" {
+		headers["stream_origin_cluster_id"] = serviceEvent.StreamOriginClusterID
 	}
 
 	kafkaStart := time.Now()
@@ -393,6 +445,33 @@ func (s *DecklogServer) SendEvent(ctx context.Context, trigger *pb.MistTrigger) 
 			s.metrics.GRPCRequests.WithLabelValues("SendEvent", "conversion_error").Inc()
 		}
 		return nil, err
+	}
+
+	// Envelope v2 fields from the MistTrigger override Decklog-level defaults.
+	// cluster_id (33) / origin_cluster_id (37) on the trigger play the
+	// source_cluster_id / stream_origin_cluster_id roles; the new region
+	// fields complete the pair. Producer-stamped values win; otherwise the
+	// Decklog instance's local source identity stands (set in convert).
+	if v := trigger.GetSourceRegion(); v != "" {
+		analyticsEvent.SourceRegion = v
+	}
+	if v := trigger.GetClusterId(); v != "" {
+		analyticsEvent.SourceClusterID = v
+	}
+	if v := trigger.GetStreamOriginRegion(); v != "" {
+		analyticsEvent.StreamOriginRegion = v
+	}
+	if v := trigger.GetOriginClusterId(); v != "" {
+		analyticsEvent.StreamOriginClusterID = v
+	}
+	if v := trigger.GetSchemaVersion(); v != 0 {
+		analyticsEvent.SchemaVersion = v
+	}
+	if v := trigger.GetCorrelationId(); v != "" {
+		analyticsEvent.CorrelationID = v
+	}
+	if v := trigger.GetCausationId(); v != "" {
+		analyticsEvent.CausationID = v
 	}
 
 	// Note: stream-level fields are in the protobuf data, not top-level Kafka fields
@@ -607,6 +686,11 @@ type GRPCServerConfig struct {
 	ServiceToken  string
 	// ServiceEventsTopic overrides the topic for ServiceEvent publishing.
 	ServiceEventsTopic string
+	// SourceRegion / SourceClusterID identify this Decklog instance for
+	// envelope v2 backfill. Empty values mean "no backfill at this instance"
+	// and the consumer-side dedupe relies on producer-stamped values.
+	SourceRegion    string
+	SourceClusterID string
 }
 
 // NewGRPCServer creates a new gRPC server with proper TLS configuration
@@ -646,7 +730,11 @@ func NewGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 	opts = append(opts, grpc.StreamInterceptor(streamInterceptor(cfg.Logger)))
 
 	server := grpc.NewServer(opts...)
-	pb.RegisterDecklogServiceServer(server, NewDecklogServer(cfg.Producer, cfg.Logger, cfg.Metrics, cfg.ServiceEventsTopic))
+	pb.RegisterDecklogServiceServer(server, NewDecklogServerWithConfig(cfg.Producer, cfg.Logger, cfg.Metrics, DecklogServerConfig{
+		ServiceEventsTopic: cfg.ServiceEventsTopic,
+		SourceRegion:       cfg.SourceRegion,
+		SourceClusterID:    cfg.SourceClusterID,
+	}))
 	// Register gRPC health checking service
 	hs := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(server, hs)

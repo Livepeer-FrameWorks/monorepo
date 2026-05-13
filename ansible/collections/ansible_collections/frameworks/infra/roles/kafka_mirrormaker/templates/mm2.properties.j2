@@ -1,0 +1,32 @@
+{# MirrorMaker2 standalone config. One target ("central") aggregates one or
+   more source clusters keyed by region_id. Source-side topics (heartbeats,
+   offset-syncs) live in the source cluster, so their replication factor
+   must fit the source's broker count. Target-side topics (checkpoints,
+   mirrored data, worker-internal storage) live in the target cluster and
+   use the target's replication factor. See
+   https://kafka.apache.org/documentation/#georeplication. #}
+{% set target_rf = kafka_mm_target.replicas | default(1) %}
+clusters = {{ kafka_mm_target.alias }}{% for src in kafka_mm_sources %},{{ src.alias }}{% endfor %}
+
+
+{{ kafka_mm_target.alias }}.bootstrap.servers = {{ kafka_mm_target.bootstrap_servers }}
+{% for src in kafka_mm_sources %}
+{{ src.alias }}.bootstrap.servers = {{ src.bootstrap_servers }}
+{% endfor %}
+
+{% for src in kafka_mm_sources %}
+{% set source_rf = src.replicas | default(1) %}
+{{ src.alias }}->{{ kafka_mm_target.alias }}.enabled = true
+{{ src.alias }}->{{ kafka_mm_target.alias }}.topics = {{ src.topics }}
+{{ src.alias }}->{{ kafka_mm_target.alias }}.groups = .*
+{{ src.alias }}->{{ kafka_mm_target.alias }}.replication.factor = {{ target_rf }}
+{{ src.alias }}->{{ kafka_mm_target.alias }}.checkpoints.topic.replication.factor = {{ target_rf }}
+{{ src.alias }}->{{ kafka_mm_target.alias }}.heartbeats.topic.replication.factor = {{ source_rf }}
+{{ src.alias }}->{{ kafka_mm_target.alias }}.offset-syncs.topic.replication.factor = {{ source_rf }}
+{{ src.alias }}->{{ kafka_mm_target.alias }}.tasks.max = {{ kafka_mm_task_count }}
+{{ src.alias }}->{{ kafka_mm_target.alias }}.sync.topic.acls.enabled = false
+{% endfor %}
+
+offset.storage.replication.factor = {{ target_rf }}
+status.storage.replication.factor = {{ target_rf }}
+config.storage.replication.factor = {{ target_rf }}

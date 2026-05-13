@@ -115,7 +115,12 @@ func runRestart(cmd *cobra.Command, rc *resolvedCluster, serviceName string, val
 		fmt.Fprintf(cmd.OutOrStderr(), "  warning: shared env decrypt failed: %v\n", envErr)
 		sharedEnv = nil
 	}
-	config, cfgErr := buildTaskConfig(task, manifest, map[string]any{}, false, manifestDir, sharedEnv, rc.ReleaseRepos)
+	clusterEnvs, clusterEnvsErr := rc.ClusterEnvs()
+	if clusterEnvsErr != nil {
+		fmt.Fprintf(cmd.OutOrStderr(), "  warning: cluster env decrypt failed: %v\n", clusterEnvsErr)
+		clusterEnvs = nil
+	}
+	config, cfgErr := buildTaskConfig(task, manifest, map[string]any{}, false, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
 	if cfgErr != nil {
 		return fmt.Errorf("build restart config: %w", cfgErr)
 	}

@@ -25,7 +25,7 @@ type renewalStore interface {
 }
 
 type certIssuer interface {
-	IssueCertificate(ctx context.Context, tenantID, domain, email string) (certPEM, keyPEM string, expiresAt time.Time, err error)
+	RenewCertificate(ctx context.Context, tenantID, domain, email string) (certPEM, keyPEM string, expiresAt time.Time, err error)
 	EnsureTLSBundle(ctx context.Context, bundleID string, domains []string, email string) (*store.TLSBundle, error)
 }
 
@@ -108,7 +108,7 @@ func (w *RenewalWorker) renewCertificates(ctx context.Context) {
 		// Attempt renewal with tenant context
 		var lastErr error
 		for attempt := 1; attempt <= 3; attempt++ {
-			_, _, _, issueErr := w.certManager.IssueCertificate(ctx, tenantID, cert.Domain, email)
+			_, _, _, issueErr := w.certManager.RenewCertificate(ctx, tenantID, cert.Domain, email)
 			if issueErr == nil {
 				lastErr = nil
 				break

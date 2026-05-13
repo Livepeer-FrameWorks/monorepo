@@ -45,6 +45,18 @@ service InternalService {
   // include_webhook_secret when they need the plaintext HMAC secret.
   rpc ResolvePlaybackPolicy(ResolvePlaybackPolicyRequest) returns (ResolvePlaybackPolicyResponse);
 
+  // Mints and returns a signed policy bundle for a (tenant_id, stream_id)
+  // pair. Foghorn caches the bundle with a soft TTL (background refresh)
+  // and hard TTL (refuse stale). The bundle JWT carries the tenant plan,
+  // allowed cluster set, playback policy snapshot, and a monotonic
+  // bundle_version. Revocation rides the existing
+  // playback_policy_invalidation_outbox channel with a 'bundle_revoke'
+  // reason carrying a minimum-acceptable bundle_version watermark; Foghorn
+  // drops cached entries below the watermark. Survives a central Commodore
+  // outage for the hard-TTL window without serving stale policy past plan
+  // downgrades.
+  rpc GetSignedPolicyBundle(GetSignedPolicyBundleRequest) returns (GetSignedPolicyBundleResponse);
+
   // Called by Foghorn after a JWT policy successfully verifies.
   rpc RecordSigningKeyUse(RecordSigningKeyUseRequest) returns (google.protobuf.Empty);
 
@@ -187,6 +199,23 @@ message ValidateStreamKeyRequest {
   string cluster_id = 2;  // Cluster where Foghorn is processing this ingest (for stream→cluster tracking)
 }
 
+// StreamKeyRejectionReason categorizes ValidateStreamKey rejections so
+// Foghorn admission and operator dashboards can present a structured
+// error rather than parsing the free-text `error` field.
+enum StreamKeyRejectionReason {
+  STREAM_KEY_REJECTION_UNSPECIFIED = 0;
+  STREAM_KEY_REJECTION_INVALID_KEY = 1;
+  STREAM_KEY_REJECTION_USER_INACTIVE = 2;
+  STREAM_KEY_REJECTION_PULL_MODE = 3;
+  STREAM_KEY_REJECTION_TENANT_SUSPENDED = 4;
+  STREAM_KEY_REJECTION_BALANCE_NEGATIVE = 5;
+  STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED = 6;
+  STREAM_KEY_REJECTION_CLUSTER_CLASS_MISMATCH = 7;
+  STREAM_KEY_REJECTION_PROTOCOL_NOT_SUPPORTED = 8;
+  STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY = 9;
+  STREAM_KEY_REJECTION_DUPLICATE_INGEST = 10;
+}
+
 // Matches pkg/api/commodore/types.go:ValidateStreamKeyResponse exactly
 message ValidateStreamKeyResponse {
   bool valid = 1;                       // json:"valid"
@@ -196,6 +225,10 @@ message ValidateStreamKeyResponse {
   string error = 5;                     // json:"error,omitempty"
   bool is_recording_enabled = 6;        // json:"is_recording_enabled,omitempty"
   string stream_id = 7;                 // Public stream ID (UUID)
+  // rejection_reason is set when Valid=false. Foghorn admission consults
+  // this for structured logging and metrics labels; the `error` field
+  // remains the human-readable detail.
+  StreamKeyRejectionReason rejection_reason = 30;
 
   // ===== BILLING MODEL & SUSPENSION =====
   // billing_model: "postpaid" (default) or "prepaid"
@@ -318,6 +351,32 @@ message ResolvePlaybackPolicyRequest {
   string playback_id = 1;
   string internal_name = 2; // MistServer internal stream name (USER_NEW trigger has this, not playback_id)
   bool include_webhook_secret = 3; // enforcement-only; public reads leave false
+}
+
+// Signed policy bundle issuance (Foghorn → Commodore). Bundle carries a
+// monotonic bundle_version, soft + hard expiry, and a signed JWT payload
+// with the tenant plan, allowed cluster IDs, and the playback policy.
+message GetSignedPolicyBundleRequest {
+  string tenant_id = 1;
+  string stream_id = 2; // Public stream UUID
+}
+
+message SignedPolicyBundle {
+  string bundle_jwt = 1;
+  int64 bundle_version = 2;
+  google.protobuf.Timestamp issued_at = 3;
+  // soft_expires_at: after this point Foghorn should background-refresh
+  // but may continue serving the cached bundle.
+  google.protobuf.Timestamp soft_expires_at = 4;
+  // expires_at: hard ceiling. Foghorn must not use the bundle past this
+  // point even under central outage.
+  google.protobuf.Timestamp expires_at = 5;
+  string tenant_id = 6;
+  string stream_id = 7;
+}
+
+message GetSignedPolicyBundleResponse {
+  SignedPolicyBundle bundle = 1;
 }
 
 message RecordSigningKeyUseRequest {
@@ -1052,6 +1111,13 @@ message Stream {
   reserved 19; // was thumbnail_url — thumbnails now resolved via deterministic Chandler URL
   string ingest_mode = 20;              // "push" (default) or "pull"
   PullSourceView pull_source = 21;      // redacted pull-source config for pull streams
+  // active_ingest_cluster_id is the cluster currently sinking ingest for the
+  // stream (set by ValidateStreamKey, cleared when the session ends). When
+  // unset, callers fall back to the tenant's primary cluster.
+  string active_ingest_cluster_id = 22;
+  // stream_origin_region is the region_id of active_ingest_cluster_id. Used
+  // by realtime subscriptions to attach to the stream-origin Signalman.
+  string stream_origin_region = 23;
 }
 
 // PullSourceAllowedClustersInput wraps the placement-pin list so callers can

@@ -245,6 +245,21 @@ func main() {
 	consumer.AddHandler(analyticsTopic, wrapWithDLQ("signalman-analytics", analyticsHandler))
 	consumer.AddHandler(serviceEventsTopic, wrapWithDLQ("signalman-service", serviceHandler))
 
+	// Mirrored topics from MM2 carry the source-region prefix (default MM2
+	// behaviour: source-cluster alias added as topic-prefix). Subscribe so a
+	// stream-origin Signalman in another region can still deliver events to
+	// viewers attached to this regional Signalman.
+	if mirrorPrefixes := strings.TrimSpace(config.GetEnv("MIRROR_REGION_PREFIXES", "")); mirrorPrefixes != "" {
+		for prefix := range strings.SplitSeq(mirrorPrefixes, ",") {
+			prefix = strings.TrimSpace(prefix)
+			if prefix == "" {
+				continue
+			}
+			consumer.AddHandler(prefix+"."+analyticsTopic, wrapWithDLQ("signalman-analytics-mirror", analyticsHandler))
+			consumer.AddHandler(prefix+"."+serviceEventsTopic, wrapWithDLQ("signalman-service-mirror", serviceHandler))
+		}
+	}
+
 	// Add health checks
 	healthChecker.AddCheck("kafka", monitoring.KafkaConsumerHealthCheck(consumer.GetClient()))
 	if dlqProducer != nil {

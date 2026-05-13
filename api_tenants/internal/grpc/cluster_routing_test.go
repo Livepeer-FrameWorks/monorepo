@@ -187,7 +187,13 @@ func TestGetClusterRouting(t *testing.T) {
 		"max_concurrent_streams", "health_status",
 	}
 	foghornCols := []string{"advertise_host", "port"}
-	peerCols := []string{"cluster_id", "cluster_name", "cluster_type", "base_url", "s3_bucket", "s3_endpoint", "s3_region", "foghorn_advertise_host", "foghorn_port"}
+	peerCols := []string{
+		"cluster_id", "cluster_name", "cluster_type", "base_url",
+		"s3_bucket", "s3_endpoint", "s3_region",
+		"region_id", "cell_id", "cluster_class",
+		"capabilities", "allowed_protocols", "public_reachable", "health_status",
+		"foghorn_advertise_host", "foghorn_port",
+	}
 
 	tests := []struct {
 		name      string
@@ -271,7 +277,7 @@ func TestGetClusterRouting(t *testing.T) {
 				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").
 					WithArgs("tenant-1").
 					WillReturnRows(sqlmock.NewRows(peerCols).
-						AddRow("cluster-1", "Primary Cluster", "shared-community", "frameworks.cloud", "", "", "", "foghorn.cluster-1", int32(50051)))
+						AddRow("cluster-1", "Primary Cluster", "shared-community", "frameworks.cloud", "", "", "", "", "", "", []byte("{}"), pq.Array([]string{}), true, "", "foghorn.cluster-1", int32(50051)))
 			},
 			assert: func(t *testing.T, resp *pb.ClusterRoutingResponse, err error) {
 				if err != nil {
@@ -334,8 +340,8 @@ func TestGetClusterRouting(t *testing.T) {
 				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").
 					WithArgs("tenant-1").
 					WillReturnRows(sqlmock.NewRows(peerCols).
-						AddRow("cluster-eu", "EU Cluster", "shared-community", "eu.frameworks.cloud", "", "", "", "foghorn.eu", int32(50051)).
-						AddRow("cluster-us", "US Cluster", "shared-community", "us.frameworks.cloud", "", "", "", "foghorn.us", int32(50051)))
+						AddRow("cluster-eu", "EU Cluster", "shared-community", "eu.frameworks.cloud", "", "", "", "", "", "", []byte("{}"), pq.Array([]string{}), true, "", "foghorn.eu", int32(50051)).
+						AddRow("cluster-us", "US Cluster", "shared-community", "us.frameworks.cloud", "", "", "", "", "", "", []byte("{}"), pq.Array([]string{}), true, "", "foghorn.us", int32(50051)))
 			},
 			assert: func(t *testing.T, resp *pb.ClusterRoutingResponse, err error) {
 				if err != nil {
@@ -398,9 +404,9 @@ func TestGetClusterRouting(t *testing.T) {
 				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").
 					WithArgs("tenant-1").
 					WillReturnRows(sqlmock.NewRows(peerCols).
-						AddRow("cluster-eu", "EU Cluster", "shared-community", "eu.frameworks.cloud", "", "", "", "foghorn.eu", int32(50051)).
-						AddRow("cluster-us", "US Cluster", "shared-community", "us.frameworks.cloud", "", "", "", "foghorn.us", int32(50051)).
-						AddRow("cluster-ap", "AP Cluster", "shared-community", "ap.frameworks.cloud", "", "", "", "foghorn.ap", int32(50051)))
+						AddRow("cluster-eu", "EU Cluster", "shared-community", "eu.frameworks.cloud", "", "", "", "", "", "", []byte("{}"), pq.Array([]string{}), true, "", "foghorn.eu", int32(50051)).
+						AddRow("cluster-us", "US Cluster", "shared-community", "us.frameworks.cloud", "", "", "", "", "", "", []byte("{}"), pq.Array([]string{}), true, "", "foghorn.us", int32(50051)).
+						AddRow("cluster-ap", "AP Cluster", "shared-community", "ap.frameworks.cloud", "", "", "", "", "", "", []byte("{}"), pq.Array([]string{}), true, "", "foghorn.ap", int32(50051)))
 			},
 			assert: func(t *testing.T, resp *pb.ClusterRoutingResponse, err error) {
 				if err != nil {
@@ -510,7 +516,13 @@ func TestGetClusterRouting_FormatsIPv6FoghornAddresses(t *testing.T) {
 		"kafka_brokers", "database_url", "periscope_url", "topic_prefix",
 		"max_concurrent_streams", "health_status",
 	}
-	peerCols := []string{"cluster_id", "cluster_name", "cluster_type", "base_url", "s3_bucket", "s3_endpoint", "s3_region", "foghorn_advertise_host", "foghorn_port"}
+	peerCols := []string{
+		"cluster_id", "cluster_name", "cluster_type", "base_url",
+		"s3_bucket", "s3_endpoint", "s3_region",
+		"region_id", "cell_id", "cluster_class",
+		"capabilities", "allowed_protocols", "public_reachable", "health_status",
+		"foghorn_advertise_host", "foghorn_port",
+	}
 
 	mock.ExpectQuery("FROM quartermaster.tenants").
 		WithArgs("tenant-1").
@@ -529,7 +541,7 @@ func TestGetClusterRouting_FormatsIPv6FoghornAddresses(t *testing.T) {
 	mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows(peerCols).
-			AddRow("cluster-v6", "IPv6 Cluster", "shared-community", "v6.frameworks.cloud", "", "", "", "2001:db8::10", int32(50051)))
+			AddRow("cluster-v6", "IPv6 Cluster", "shared-community", "v6.frameworks.cloud", "", "", "", "", "", "", []byte("{}"), pq.Array([]string{}), true, "", "2001:db8::10", int32(50051)))
 
 	server := &QuartermasterServer{db: db, logger: logrus.New()}
 	resp, err := server.GetClusterRouting(context.Background(), &pb.GetClusterRoutingRequest{TenantId: "tenant-1"})

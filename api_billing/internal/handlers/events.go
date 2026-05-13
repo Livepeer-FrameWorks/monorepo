@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
+
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 const (
@@ -22,25 +24,38 @@ const (
 	eventX402ReorgDetected     = "x402_reorg_detected"
 )
 
+// emitBillingEvent enqueues a billing event into purser.billing_event_outbox.
+// The Purser drain worker (runBillingOutboxWorker in api_billing/internal/grpc)
+// dispatches pending rows to Decklog with exponential backoff, so events
+// survive Decklog outages instead of getting lost. Best-effort durability:
+// this helper opens its own short tx for the INSERT, so it's NOT
+// transactionally atomic with the caller's billing state mutation. For
+// strict atomicity, callers should switch to the tx-aware variant on
+// PurserServer.EnqueueBillingEventTx when they hold their own tx.
 func emitBillingEvent(eventType, tenantID, resourceType, resourceID string, payload *pb.BillingEvent) {
-	if decklogClient == nil || tenantID == "" {
+	if db == nil || tenantID == "" {
 		return
 	}
 	if payload == nil {
 		payload = &pb.BillingEvent{}
 	}
-	payload.TenantId = tenantID
-
-	event := &pb.ServiceEvent{
-		EventType:    eventType,
-		Timestamp:    timestamppb.Now(),
-		Source:       "purser",
-		TenantId:     tenantID,
-		ResourceType: resourceType,
-		ResourceId:   resourceID,
-		Payload:      &pb.ServiceEvent_BillingEvent{BillingEvent: payload},
+	if payload.TenantId == "" {
+		payload.TenantId = tenantID
 	}
-	if err := decklogClient.SendServiceEvent(event); err != nil {
-		logger.WithError(err).WithField("event_type", eventType).Warn("Failed to emit billing event")
+	billingJSON, err := protojson.Marshal(payload)
+	if err != nil {
+		if logger != nil {
+			logger.WithError(err).WithField("event_type", eventType).
+				Warn("Failed to marshal billing event payload for outbox")
+		}
+		return
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO purser.billing_event_outbox
+			(event_type, tenant_id, user_id, resource_type, resource_id, billing_event)
+		VALUES ($1, $2::uuid, $3, $4, $5, $6::jsonb)
+	`, eventType, tenantID, "", resourceType, resourceID, billingJSON); err != nil && logger != nil {
+		logger.WithError(err).WithField("event_type", eventType).
+			Warn("Failed to enqueue billing event outbox row")
 	}
 }

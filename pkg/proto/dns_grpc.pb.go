@@ -30,6 +30,9 @@ const (
 	NavigatorService_GetTenantAliasStatus_FullMethodName        = "/navigator.NavigatorService/GetTenantAliasStatus"
 	NavigatorService_ReportConfigSeedApplyResult_FullMethodName = "/navigator.NavigatorService/ReportConfigSeedApplyResult"
 	NavigatorService_RemoveTenantAliasCluster_FullMethodName    = "/navigator.NavigatorService/RemoveTenantAliasCluster"
+	NavigatorService_EnsureCustomDomain_FullMethodName          = "/navigator.NavigatorService/EnsureCustomDomain"
+	NavigatorService_RemoveCustomDomain_FullMethodName          = "/navigator.NavigatorService/RemoveCustomDomain"
+	NavigatorService_GetCustomDomainStatus_FullMethodName       = "/navigator.NavigatorService/GetCustomDomainStatus"
 )
 
 // NavigatorServiceClient is the client API for NavigatorService service.
@@ -73,6 +76,20 @@ type NavigatorServiceClient interface {
 	// alias DNS pool before Foghorn drops that tenant's cert from future
 	// ConfigSeeds.
 	RemoveTenantAliasCluster(ctx context.Context, in *RemoveTenantAliasClusterRequest, opts ...grpc.CallOption) (*RemoveTenantAliasClusterResponse, error)
+	// EnsureCustomDomain signals Navigator that a paying tenant is bringing
+	// their own domain (e.g. media.acme-inc.com). Navigator persists the row
+	// and asynchronously verifies the customer's CNAMEs + runs ACME issuance
+	// via ACME-DNS-01 delegation. Idempotent on (tenant_id, domain): the
+	// assigned acme_dns_subdomain is stable across calls so the customer
+	// never has to re-create the challenge CNAME.
+	EnsureCustomDomain(ctx context.Context, in *EnsureCustomDomainRequest, opts ...grpc.CallOption) (*EnsureCustomDomainResponse, error)
+	// RemoveCustomDomain signals teardown. Navigator transitions the row to
+	// tearing_down and the worker clears state.
+	RemoveCustomDomain(ctx context.Context, in *RemoveCustomDomainRequest, opts ...grpc.CallOption) (*RemoveCustomDomainResponse, error)
+	// GetCustomDomainStatus returns the verification/cert lifecycle state
+	// for a single (tenant_id, domain) pair. Used by the dashboard to render
+	// the per-CNAME instructions and verification progress.
+	GetCustomDomainStatus(ctx context.Context, in *GetCustomDomainStatusRequest, opts ...grpc.CallOption) (*GetCustomDomainStatusResponse, error)
 }
 
 type navigatorServiceClient struct {
@@ -193,6 +210,36 @@ func (c *navigatorServiceClient) RemoveTenantAliasCluster(ctx context.Context, i
 	return out, nil
 }
 
+func (c *navigatorServiceClient) EnsureCustomDomain(ctx context.Context, in *EnsureCustomDomainRequest, opts ...grpc.CallOption) (*EnsureCustomDomainResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EnsureCustomDomainResponse)
+	err := c.cc.Invoke(ctx, NavigatorService_EnsureCustomDomain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *navigatorServiceClient) RemoveCustomDomain(ctx context.Context, in *RemoveCustomDomainRequest, opts ...grpc.CallOption) (*RemoveCustomDomainResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveCustomDomainResponse)
+	err := c.cc.Invoke(ctx, NavigatorService_RemoveCustomDomain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *navigatorServiceClient) GetCustomDomainStatus(ctx context.Context, in *GetCustomDomainStatusRequest, opts ...grpc.CallOption) (*GetCustomDomainStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCustomDomainStatusResponse)
+	err := c.cc.Invoke(ctx, NavigatorService_GetCustomDomainStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NavigatorServiceServer is the server API for NavigatorService service.
 // All implementations must embed UnimplementedNavigatorServiceServer
 // for forward compatibility.
@@ -234,6 +281,20 @@ type NavigatorServiceServer interface {
 	// alias DNS pool before Foghorn drops that tenant's cert from future
 	// ConfigSeeds.
 	RemoveTenantAliasCluster(context.Context, *RemoveTenantAliasClusterRequest) (*RemoveTenantAliasClusterResponse, error)
+	// EnsureCustomDomain signals Navigator that a paying tenant is bringing
+	// their own domain (e.g. media.acme-inc.com). Navigator persists the row
+	// and asynchronously verifies the customer's CNAMEs + runs ACME issuance
+	// via ACME-DNS-01 delegation. Idempotent on (tenant_id, domain): the
+	// assigned acme_dns_subdomain is stable across calls so the customer
+	// never has to re-create the challenge CNAME.
+	EnsureCustomDomain(context.Context, *EnsureCustomDomainRequest) (*EnsureCustomDomainResponse, error)
+	// RemoveCustomDomain signals teardown. Navigator transitions the row to
+	// tearing_down and the worker clears state.
+	RemoveCustomDomain(context.Context, *RemoveCustomDomainRequest) (*RemoveCustomDomainResponse, error)
+	// GetCustomDomainStatus returns the verification/cert lifecycle state
+	// for a single (tenant_id, domain) pair. Used by the dashboard to render
+	// the per-CNAME instructions and verification progress.
+	GetCustomDomainStatus(context.Context, *GetCustomDomainStatusRequest) (*GetCustomDomainStatusResponse, error)
 	mustEmbedUnimplementedNavigatorServiceServer()
 }
 
@@ -276,6 +337,15 @@ func (UnimplementedNavigatorServiceServer) ReportConfigSeedApplyResult(context.C
 }
 func (UnimplementedNavigatorServiceServer) RemoveTenantAliasCluster(context.Context, *RemoveTenantAliasClusterRequest) (*RemoveTenantAliasClusterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveTenantAliasCluster not implemented")
+}
+func (UnimplementedNavigatorServiceServer) EnsureCustomDomain(context.Context, *EnsureCustomDomainRequest) (*EnsureCustomDomainResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method EnsureCustomDomain not implemented")
+}
+func (UnimplementedNavigatorServiceServer) RemoveCustomDomain(context.Context, *RemoveCustomDomainRequest) (*RemoveCustomDomainResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveCustomDomain not implemented")
+}
+func (UnimplementedNavigatorServiceServer) GetCustomDomainStatus(context.Context, *GetCustomDomainStatusRequest) (*GetCustomDomainStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCustomDomainStatus not implemented")
 }
 func (UnimplementedNavigatorServiceServer) mustEmbedUnimplementedNavigatorServiceServer() {}
 func (UnimplementedNavigatorServiceServer) testEmbeddedByValue()                          {}
@@ -496,6 +566,60 @@ func _NavigatorService_RemoveTenantAliasCluster_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NavigatorService_EnsureCustomDomain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EnsureCustomDomainRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NavigatorServiceServer).EnsureCustomDomain(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NavigatorService_EnsureCustomDomain_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NavigatorServiceServer).EnsureCustomDomain(ctx, req.(*EnsureCustomDomainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NavigatorService_RemoveCustomDomain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveCustomDomainRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NavigatorServiceServer).RemoveCustomDomain(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NavigatorService_RemoveCustomDomain_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NavigatorServiceServer).RemoveCustomDomain(ctx, req.(*RemoveCustomDomainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NavigatorService_GetCustomDomainStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCustomDomainStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NavigatorServiceServer).GetCustomDomainStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NavigatorService_GetCustomDomainStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NavigatorServiceServer).GetCustomDomainStatus(ctx, req.(*GetCustomDomainStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NavigatorService_ServiceDesc is the grpc.ServiceDesc for NavigatorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -546,6 +670,18 @@ var NavigatorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RemoveTenantAliasCluster",
 			Handler:    _NavigatorService_RemoveTenantAliasCluster_Handler,
+		},
+		{
+			MethodName: "EnsureCustomDomain",
+			Handler:    _NavigatorService_EnsureCustomDomain_Handler,
+		},
+		{
+			MethodName: "RemoveCustomDomain",
+			Handler:    _NavigatorService_RemoveCustomDomain_Handler,
+		},
+		{
+			MethodName: "GetCustomDomainStatus",
+			Handler:    _NavigatorService_GetCustomDomainStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

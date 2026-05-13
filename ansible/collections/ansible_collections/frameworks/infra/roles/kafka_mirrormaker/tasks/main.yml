@@ -1,0 +1,20 @@
+---
+- name: KafkaMirrorMaker | install
+  ansible.builtin.import_tasks: install.yml
+  tags: [install]
+
+- name: KafkaMirrorMaker | configure
+  ansible.builtin.import_tasks: configure.yml
+  tags: [configure]
+
+- name: KafkaMirrorMaker | flush handlers before service
+  ansible.builtin.meta: flush_handlers
+  tags: [configure, service]
+
+- name: KafkaMirrorMaker | service
+  ansible.builtin.import_tasks: service.yml
+  tags: [service]
+
+- name: KafkaMirrorMaker | restart
+  ansible.builtin.import_tasks: restart.yml
+  tags: [restart, never]

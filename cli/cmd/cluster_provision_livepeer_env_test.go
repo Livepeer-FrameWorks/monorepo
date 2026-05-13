@@ -29,7 +29,7 @@ func TestBuildServiceEnvVarsMapsLivepeerRPCFromNetworkEnv(t *testing.T) {
 		Name:      "livepeer-gateway",
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestBuildServiceEnvVarsPrefersExplicitLivepeerConfig(t *testing.T) {
 		Name:      "livepeer-gateway",
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestBuildServiceEnvVarsMapsLivepeerUppercaseAliases(t *testing.T) {
 		Name:      "livepeer-gateway",
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestBuildServiceEnvVarsPreservesExplicitLivepeerGatewayHostConfig(t *testin
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestBuildServiceEnvVarsDoesNotDefaultGatewayHost(t *testing.T) {
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestBuildServiceEnvVarsIgnoresSharedLivepeerGatewayHostAlias(t *testing.T) 
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestBuildServiceEnvVarsSelectsLivepeerRPCPoolByGatewayHostOrder(t *testing.
 		ServiceID: "livepeer-gateway",
 		Host:      "gateway-b",
 		ClusterID: "media-central-primary",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestBuildServiceEnvVarsLivepeerGatewayRuntimeDefaults(t *testing.T) {
 		ServiceID: "livepeer-gateway",
 		Host:      "central-eu-1",
 		ClusterID: "core-central-primary",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}

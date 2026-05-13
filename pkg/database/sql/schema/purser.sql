@@ -1548,3 +1548,32 @@ SELECT *
 FROM purser.stripe_meter_events_outbox
 WHERE sent_at IS NULL
   AND attempt_count >= 5;
+
+-- ============================================================================
+-- BILLING EVENT OUTBOX
+-- ============================================================================
+-- Durable outbox for Purser-emitted service events to Decklog. Producers
+-- write a row in the same DB transaction as the billing mutation; a drain
+-- worker dispatches with exponential backoff.
+
+CREATE TABLE IF NOT EXISTS purser.billing_event_outbox (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_type    TEXT NOT NULL,
+    tenant_id     UUID NOT NULL,
+    user_id       TEXT NOT NULL DEFAULT '',
+    resource_type TEXT NOT NULL DEFAULT '',
+    resource_id   TEXT NOT NULL DEFAULT '',
+    billing_event JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    claimed_at   TIMESTAMPTZ,
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    last_error   TEXT,
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_purser_billing_event_outbox_pending
+    ON purser.billing_event_outbox(created_at)
+    WHERE completed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_purser_billing_event_outbox_tenant
+    ON purser.billing_event_outbox(tenant_id, created_at DESC);

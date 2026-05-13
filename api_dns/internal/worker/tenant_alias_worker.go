@@ -26,6 +26,13 @@ type TenantClusterEligibility interface {
 	TenantActiveInCluster(ctx context.Context, tenantID, clusterID string) (bool, error)
 }
 
+// ClusterControlCellHealth answers whether the cluster's owning Foghorn
+// control cell is currently healthy enough to be in tenant alias DNS.
+// Implemented by the Quartermaster-backed eligibility resolver.
+type ClusterControlCellHealth interface {
+	ClusterControlCellHealthy(ctx context.Context, clusterID string) (bool, error)
+}
+
 type tenantAliasDNSProvider interface {
 	FindZone(ctx context.Context, domain string) (*bunny.Zone, bool, error)
 	ReconcileRecordSet(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error
@@ -141,6 +148,10 @@ func (w *AliasApplyStateWorker) PublishTenantAlias(ctx context.Context, tenantID
 	if checker, ok := w.edges.(TenantClusterEligibility); ok {
 		eligibility = checker
 	}
+	var cellHealth ClusterControlCellHealth
+	if checker, ok := w.edges.(ClusterControlCellHealth); ok {
+		cellHealth = checker
+	}
 	for _, row := range rows {
 		if row.State != "applied" && row.State != "in_dns" {
 			continue
@@ -155,6 +166,20 @@ func (w *AliasApplyStateWorker) PublishTenantAlias(ctx context.Context, tenantID
 				return activeErr
 			}
 			if !active {
+				stale = append(stale, row)
+				continue
+			}
+		}
+		if cellHealth != nil {
+			healthy, healthErr := cellHealth.ClusterControlCellHealthy(ctx, row.ClusterID)
+			if healthErr != nil {
+				w.logger.WithError(healthErr).WithFields(logging.Fields{
+					"tenant_id":  tenantID,
+					"cluster_id": row.ClusterID,
+				}).Warn("Control-cell health check failed; preserving current tenant DNS")
+				return healthErr
+			}
+			if !healthy {
 				stale = append(stale, row)
 				continue
 			}

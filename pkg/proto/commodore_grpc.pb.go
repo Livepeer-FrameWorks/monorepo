@@ -24,6 +24,7 @@ const (
 	InternalService_ResolvePlaybackID_FullMethodName               = "/commodore.InternalService/ResolvePlaybackID"
 	InternalService_ResolvePullSourceByInternalName_FullMethodName = "/commodore.InternalService/ResolvePullSourceByInternalName"
 	InternalService_ResolvePlaybackPolicy_FullMethodName           = "/commodore.InternalService/ResolvePlaybackPolicy"
+	InternalService_GetSignedPolicyBundle_FullMethodName           = "/commodore.InternalService/GetSignedPolicyBundle"
 	InternalService_RecordSigningKeyUse_FullMethodName             = "/commodore.InternalService/RecordSigningKeyUse"
 	InternalService_ResolveInternalName_FullMethodName             = "/commodore.InternalService/ResolveInternalName"
 	InternalService_ValidateAPIToken_FullMethodName                = "/commodore.InternalService/ValidateAPIToken"
@@ -79,6 +80,17 @@ type InternalServiceClient interface {
 	// is true on the resolved playback object. Enforcement callers must set
 	// include_webhook_secret when they need the plaintext HMAC secret.
 	ResolvePlaybackPolicy(ctx context.Context, in *ResolvePlaybackPolicyRequest, opts ...grpc.CallOption) (*ResolvePlaybackPolicyResponse, error)
+	// Mints and returns a signed policy bundle for a (tenant_id, stream_id)
+	// pair. Foghorn caches the bundle with a soft TTL (background refresh)
+	// and hard TTL (refuse stale). The bundle JWT carries the tenant plan,
+	// allowed cluster set, playback policy snapshot, and a monotonic
+	// bundle_version. Revocation rides the existing
+	// playback_policy_invalidation_outbox channel with a 'bundle_revoke'
+	// reason carrying a minimum-acceptable bundle_version watermark; Foghorn
+	// drops cached entries below the watermark. Survives a central Commodore
+	// outage for the hard-TTL window without serving stale policy past plan
+	// downgrades.
+	GetSignedPolicyBundle(ctx context.Context, in *GetSignedPolicyBundleRequest, opts ...grpc.CallOption) (*GetSignedPolicyBundleResponse, error)
 	// Called by Foghorn after a JWT policy successfully verifies.
 	RecordSigningKeyUse(ctx context.Context, in *RecordSigningKeyUseRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Called by Decklog/Foghorn to enrich events with tenant context
@@ -209,6 +221,16 @@ func (c *internalServiceClient) ResolvePlaybackPolicy(ctx context.Context, in *R
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ResolvePlaybackPolicyResponse)
 	err := c.cc.Invoke(ctx, InternalService_ResolvePlaybackPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) GetSignedPolicyBundle(ctx context.Context, in *GetSignedPolicyBundleRequest, opts ...grpc.CallOption) (*GetSignedPolicyBundleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSignedPolicyBundleResponse)
+	err := c.cc.Invoke(ctx, InternalService_GetSignedPolicyBundle_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -547,6 +569,17 @@ type InternalServiceServer interface {
 	// is true on the resolved playback object. Enforcement callers must set
 	// include_webhook_secret when they need the plaintext HMAC secret.
 	ResolvePlaybackPolicy(context.Context, *ResolvePlaybackPolicyRequest) (*ResolvePlaybackPolicyResponse, error)
+	// Mints and returns a signed policy bundle for a (tenant_id, stream_id)
+	// pair. Foghorn caches the bundle with a soft TTL (background refresh)
+	// and hard TTL (refuse stale). The bundle JWT carries the tenant plan,
+	// allowed cluster set, playback policy snapshot, and a monotonic
+	// bundle_version. Revocation rides the existing
+	// playback_policy_invalidation_outbox channel with a 'bundle_revoke'
+	// reason carrying a minimum-acceptable bundle_version watermark; Foghorn
+	// drops cached entries below the watermark. Survives a central Commodore
+	// outage for the hard-TTL window without serving stale policy past plan
+	// downgrades.
+	GetSignedPolicyBundle(context.Context, *GetSignedPolicyBundleRequest) (*GetSignedPolicyBundleResponse, error)
 	// Called by Foghorn after a JWT policy successfully verifies.
 	RecordSigningKeyUse(context.Context, *RecordSigningKeyUseRequest) (*emptypb.Empty, error)
 	// Called by Decklog/Foghorn to enrich events with tenant context
@@ -654,6 +687,9 @@ func (UnimplementedInternalServiceServer) ResolvePullSourceByInternalName(contex
 }
 func (UnimplementedInternalServiceServer) ResolvePlaybackPolicy(context.Context, *ResolvePlaybackPolicyRequest) (*ResolvePlaybackPolicyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolvePlaybackPolicy not implemented")
+}
+func (UnimplementedInternalServiceServer) GetSignedPolicyBundle(context.Context, *GetSignedPolicyBundleRequest) (*GetSignedPolicyBundleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSignedPolicyBundle not implemented")
 }
 func (UnimplementedInternalServiceServer) RecordSigningKeyUse(context.Context, *RecordSigningKeyUseRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method RecordSigningKeyUse not implemented")
@@ -837,6 +873,24 @@ func _InternalService_ResolvePlaybackPolicy_Handler(srv interface{}, ctx context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).ResolvePlaybackPolicy(ctx, req.(*ResolvePlaybackPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_GetSignedPolicyBundle_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSignedPolicyBundleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).GetSignedPolicyBundle(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_GetSignedPolicyBundle_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).GetSignedPolicyBundle(ctx, req.(*GetSignedPolicyBundleRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1421,6 +1475,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResolvePlaybackPolicy",
 			Handler:    _InternalService_ResolvePlaybackPolicy_Handler,
+		},
+		{
+			MethodName: "GetSignedPolicyBundle",
+			Handler:    _InternalService_GetSignedPolicyBundle_Handler,
 		},
 		{
 			MethodName: "RecordSigningKeyUse",

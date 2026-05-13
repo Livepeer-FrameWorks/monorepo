@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/lib/pq"
 )
 
 // ReconcileClusters reconciles every Cluster row into
@@ -105,31 +107,51 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 			COALESCE(base_url, ''),
 			COALESCE(wg_mesh_cidr, ''),
 			COALESCE(wg_listen_port, 0),
-			is_default_cluster, is_platform_official, allow_private_pull_sources
+			is_default_cluster, is_platform_official, allow_private_pull_sources,
+			COALESCE(region_id, ''),
+			COALESCE(cell_id, ''),
+			COALESCE(cluster_class, ''),
+			COALESCE(control_cell_id, ''),
+			COALESCE(eligible_serving_cell_ids, ARRAY[]::TEXT[]),
+			COALESCE(s3_bucket, ''),
+			COALESCE(s3_endpoint, ''),
+			COALESCE(s3_region, '')
 		FROM quartermaster.infrastructure_clusters
 		WHERE cluster_id = $1`
 	var (
 		curName, curType, curOwner, curBaseURL, curCIDR  string
 		curListenPort                                    int
 		curIsDefault, curIsPlatform, curAllowPrivatePull bool
+		curRegion, curCell, curClass, curControlCell     string
+		curEligibleCells                                 pq.StringArray
+		curS3Bucket, curS3Endpoint, curS3Region          string
 	)
-	err := exec.QueryRowContext(ctx, probeSQL, c.ID).Scan(
-		&curName, &curType, &curOwner, &curBaseURL, &curCIDR, &curListenPort, &curIsDefault, &curIsPlatform, &curAllowPrivatePull,
+	probeErr := exec.QueryRowContext(ctx, probeSQL, c.ID).Scan(
+		&curName, &curType, &curOwner, &curBaseURL, &curCIDR, &curListenPort,
+		&curIsDefault, &curIsPlatform, &curAllowPrivatePull,
+		&curRegion, &curCell, &curClass, &curControlCell, &curEligibleCells,
+		&curS3Bucket, &curS3Endpoint, &curS3Region,
 	)
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
+	case errors.Is(probeErr, sql.ErrNoRows):
 		const insertSQL = `
 			INSERT INTO quartermaster.infrastructure_clusters (
 				cluster_id, cluster_name, cluster_type,
 				owner_tenant_id, base_url,
 				wg_mesh_cidr, wg_listen_port,
 				is_default_cluster, is_platform_official, allow_private_pull_sources,
+				region_id, cell_id, cluster_class,
+				control_cell_id, eligible_serving_cell_ids,
+				s3_bucket, s3_endpoint, s3_region,
 				created_at, updated_at
 			) VALUES (
 				$1, $2, $3,
 				NULLIF($4, '')::uuid, NULLIF($5, ''),
 				NULLIF($6, ''), NULLIF($7, 0),
 				$8, $9, $10,
+				NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''),
+				NULLIF($14, ''), $15,
+				NULLIF($16, ''), NULLIF($17, ''), NULLIF($18, ''),
 				NOW(), NOW()
 			)`
 		if _, insertErr := exec.ExecContext(ctx, insertSQL,
@@ -137,18 +159,21 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 			ownerID, c.BaseURL,
 			c.Mesh.CIDR, c.Mesh.ListenPort,
 			c.IsDefault, c.IsPlatformOfficial, c.AllowPrivatePullSources,
+			c.Region, c.Cell, c.Class,
+			c.ControlCell, pq.Array(c.EligibleServingCells),
+			c.S3Bucket, c.S3Endpoint, c.S3Region,
 		); insertErr != nil {
 			return "", fmt.Errorf("insert: %w", insertErr)
 		}
 		return "created", nil
-	case err != nil:
-		return "", fmt.Errorf("probe: %w", err)
+	case probeErr != nil:
+		return "", fmt.Errorf("probe: %w", probeErr)
 	}
 
-	// Stable-key drift: cluster_type, owner_tenant_id, and an existing
-	// wg_mesh_cidr must not change once set. These are facts the rest of the
-	// platform indexes against; reassigning them silently corrupts mesh
-	// allocations and tenant-scoped RBAC.
+	// Stable-key drift: cluster_type, owner_tenant_id, an existing
+	// wg_mesh_cidr, region_id, and cell_id must not change once set. These
+	// are facts the rest of the platform indexes against; reassigning them
+	// silently corrupts mesh allocations, geo routing, and apply-state ACK.
 	if curType != c.Type {
 		return "", fmt.Errorf("type drift: db=%q desired=%q (cluster_type is stable; refusing rewrite)", curType, c.Type)
 	}
@@ -158,6 +183,14 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 	if curCIDR != "" && curCIDR != c.Mesh.CIDR {
 		return "", fmt.Errorf("mesh.cidr drift: db=%q desired=%q (cidr is stable once set; refusing rewrite)", curCIDR, c.Mesh.CIDR)
 	}
+	if curRegion != "" && curRegion != c.Region {
+		return "", fmt.Errorf("region drift: db=%q desired=%q (region_id is stable once set; refusing rewrite)", curRegion, c.Region)
+	}
+	if curCell != "" && curCell != c.Cell {
+		return "", fmt.Errorf("cell drift: db=%q desired=%q (cell_id is stable once set; refusing rewrite)", curCell, c.Cell)
+	}
+
+	eligibleNoop := stringSlicesEqual([]string(curEligibleCells), c.EligibleServingCells)
 
 	if curName == c.Name &&
 		curBaseURL == c.BaseURL &&
@@ -165,7 +198,15 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 		curListenPort == c.Mesh.ListenPort &&
 		curIsDefault == c.IsDefault &&
 		curIsPlatform == c.IsPlatformOfficial &&
-		curAllowPrivatePull == c.AllowPrivatePullSources {
+		curAllowPrivatePull == c.AllowPrivatePullSources &&
+		curRegion == c.Region &&
+		curCell == c.Cell &&
+		curClass == c.Class &&
+		curControlCell == c.ControlCell &&
+		eligibleNoop &&
+		curS3Bucket == c.S3Bucket &&
+		curS3Endpoint == c.S3Endpoint &&
+		curS3Region == c.S3Region {
 		return "noop", nil
 	}
 
@@ -178,14 +219,37 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 		    is_default_cluster = $6,
 		    is_platform_official = $7,
 		    allow_private_pull_sources = $8,
+		    region_id = NULLIF($9, ''),
+		    cell_id = NULLIF($10, ''),
+		    cluster_class = NULLIF($11, ''),
+		    control_cell_id = NULLIF($12, ''),
+		    eligible_serving_cell_ids = $13,
+		    s3_bucket = NULLIF($14, ''),
+		    s3_endpoint = NULLIF($15, ''),
+		    s3_region = NULLIF($16, ''),
 		    updated_at = NOW()
 		WHERE cluster_id = $1`
 	if _, err := exec.ExecContext(ctx, updateSQL,
 		c.ID, c.Name, c.BaseURL,
 		c.Mesh.CIDR, c.Mesh.ListenPort,
 		c.IsDefault, c.IsPlatformOfficial, c.AllowPrivatePullSources,
+		c.Region, c.Cell, c.Class,
+		c.ControlCell, pq.Array(c.EligibleServingCells),
+		c.S3Bucket, c.S3Endpoint, c.S3Region,
 	); err != nil {
 		return "", fmt.Errorf("update: %w", err)
 	}
 	return "updated", nil
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

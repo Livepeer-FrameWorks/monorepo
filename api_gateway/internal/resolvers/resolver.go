@@ -44,8 +44,27 @@ type Resolver struct {
 func NewResolver(serviceClients *clients.ServiceClients, logger logging.Logger, metrics *GraphQLMetrics, serviceToken string) *Resolver {
 	// Initialize gRPC subscription manager
 	signalmanAddr := config.RequireEnv("SIGNALMAN_GRPC_ADDR")
+	signalmanByRegion := parseSignalmanAddrByRegion(config.GetEnv("SIGNALMAN_GRPC_ADDR_BY_REGION", ""))
 	maxConnections := config.GetEnvInt("WS_MAX_CONNECTIONS_PER_TENANT", 5)
-	subManager := NewSubscriptionManager(signalmanAddr, serviceToken, logger, metrics, maxConnections)
+	subManager := NewSubscriptionManager(signalmanAddr, serviceToken, logger, metrics, maxConnections, signalmanByRegion)
+	// Wire stream-origin lookup so stream-scoped subscriptions attach to the
+	// origin-region Signalman. Commodore's Stream proto carries
+	// stream_origin_region (derived from active_ingest_cluster_id's
+	// infrastructure_clusters.region_id). Resolver-level failures are
+	// swallowed in connectionAddrForStream so the local Signalman remains
+	// the always-available fallback.
+	if serviceClients != nil && serviceClients.Commodore != nil {
+		subManager.SetStreamOriginResolver(func(ctx context.Context, streamID string) (string, error) {
+			stream, err := serviceClients.Commodore.GetStream(ctx, streamID)
+			if err != nil {
+				return "", err
+			}
+			if stream == nil {
+				return "", nil
+			}
+			return stream.GetStreamOriginRegion(), nil
+		})
+	}
 
 	periscopeTTL := time.Duration(config.GetEnvInt("PERISCOPE_CACHE_TTL_SECONDS", 30)) * time.Second
 	periscopeSWR := time.Duration(config.GetEnvInt("PERISCOPE_CACHE_SWR_SECONDS", 15)) * time.Second

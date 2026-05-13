@@ -437,3 +437,39 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_queued ON foghorn.process
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_node ON foghorn.processing_jobs(processing_node_id) WHERE processing_node_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_parent ON foghorn.processing_jobs(parent_job_id) WHERE parent_job_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_artifact_status ON foghorn.processing_jobs(artifact_hash, status);
+
+-- ============================================================================
+-- ARTIFACT EVENT OUTBOX
+-- ============================================================================
+-- Durable outbox for Foghorn artifact-lifecycle (DVR / VOD / Clip) and
+-- federation peer-registry events. A drain worker dispatches pending rows
+-- to Decklog with exponential backoff.
+
+CREATE TABLE IF NOT EXISTS foghorn.artifact_event_outbox (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- event_kind discriminates the typed payload (clip_lifecycle,
+    -- dvr_lifecycle, vod_lifecycle, federation_event).
+    event_kind   TEXT NOT NULL,
+    tenant_id    UUID,
+    stream_id    TEXT NOT NULL DEFAULT '',
+    artifact_id  TEXT NOT NULL DEFAULT '',
+    -- protojson-encoded typed payload (pb.{ClipLifecycleData,
+    -- DVRLifecycleData,VodLifecycleData,FederationEventData}).
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    claimed_at   TIMESTAMPTZ,
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    last_error   TEXT,
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_event_outbox_pending
+    ON foghorn.artifact_event_outbox(created_at)
+    WHERE completed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_event_outbox_tenant
+    ON foghorn.artifact_event_outbox(tenant_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_event_outbox_stream
+    ON foghorn.artifact_event_outbox(stream_id, created_at DESC)
+    WHERE stream_id <> '';

@@ -63,6 +63,10 @@ type NavigatorServer struct {
 	Quartermaster     *quartermaster.GRPCClient
 	Logger            logging.Logger
 	Metrics           *ServerMetrics
+	// RootDomain is the operator base domain (e.g. "frameworks.network").
+	// Custom-domain RPCs use it to build the canonical CNAME instructions
+	// returned to the dashboard.
+	RootDomain string
 }
 
 func main() {
@@ -194,6 +198,7 @@ func main() {
 		Quartermaster:     qmClient,
 		Logger:            logger,
 		Metrics:           serverMetrics,
+		RootDomain:        rootDomain,
 	}
 
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
@@ -322,8 +327,9 @@ func main() {
 
 	// Best-effort service registration in Quartermaster
 	go func() {
-		grpcPortInt, _ := strconv.Atoi(config.GetEnv("NAVIGATOR_GRPC_PORT", "19004"))
-		if grpcPortInt <= 0 || grpcPortInt > 65535 {
+		grpcPortStr := config.GetEnv("NAVIGATOR_GRPC_PORT", "19004")
+		grpcPortInt, err := strconv.Atoi(grpcPortStr)
+		if err != nil || grpcPortInt <= 0 || grpcPortInt > 65535 {
 			logger.Warn("Quartermaster bootstrap skipped: invalid port")
 			return
 		}
@@ -698,6 +704,93 @@ func (s *NavigatorServer) RemoveTenantAliasCluster(ctx context.Context, req *pb.
 	return &pb.RemoveTenantAliasClusterResponse{Accepted: true}, nil
 }
 
+// EnsureCustomDomain persists tenant custom-domain intent and queues async
+// verification + ACME issuance. Returns the CNAMEs the customer must set
+// (stable across the lifecycle so the dashboard can render them
+// idempotently).
+func (s *NavigatorServer) EnsureCustomDomain(ctx context.Context, req *pb.EnsureCustomDomainRequest) (*pb.EnsureCustomDomainResponse, error) {
+	tenantID := req.GetTenantId()
+	domain := req.GetDomain()
+	log := s.Logger.WithFields(logging.Fields{"tenant_id": tenantID, "domain": domain})
+	log.Info("Received EnsureCustomDomain request")
+
+	row, err := s.CertManager.EnsureCustomDomain(ctx, tenantID, domain)
+	if err != nil {
+		log.WithError(err).Warn("Failed to persist custom domain intent")
+		return &pb.EnsureCustomDomainResponse{Error: err.Error()}, nil
+	}
+	alias, aliasErr := s.CertManager.GetTenantAlias(ctx, tenantID)
+	if aliasErr != nil || alias == nil || alias.Subdomain == "" {
+		// Soft failure reported to the caller via the response Error field;
+		// the RPC itself succeeds so callers can distinguish "lookup error"
+		// from "tenant alias not configured" without retrying.
+		return &pb.EnsureCustomDomainResponse{ //nolint:nilerr // soft error returned via Error field
+			Accepted: true,
+			Status:   row.Status,
+			Error:    "tenant alias not provisioned; configure the paid tenant alias first",
+		}, nil
+	}
+	traffic := alias.Subdomain + "." + logic.TenantAliasZoneLabel + "." + s.RootDomain + "."
+	acme := row.AcmeDNSSubdomain + "." + logic.AcmeDNSZoneLabel + "." + s.RootDomain + "."
+	return &pb.EnsureCustomDomainResponse{
+		Accepted:                   true,
+		Status:                     row.Status,
+		RequiredTrafficCname:       traffic,
+		RequiredAcmeChallengeCname: acme,
+	}, nil
+}
+
+// RemoveCustomDomain signals teardown.
+func (s *NavigatorServer) RemoveCustomDomain(ctx context.Context, req *pb.RemoveCustomDomainRequest) (*pb.RemoveCustomDomainResponse, error) {
+	if err := s.CertManager.RemoveCustomDomain(ctx, req.GetTenantId(), req.GetDomain()); err != nil {
+		s.Logger.WithError(err).WithFields(logging.Fields{
+			"tenant_id": req.GetTenantId(),
+			"domain":    req.GetDomain(),
+		}).Warn("Failed to mark custom domain for teardown")
+		return &pb.RemoveCustomDomainResponse{}, nil
+	}
+	return &pb.RemoveCustomDomainResponse{Accepted: true}, nil
+}
+
+// GetCustomDomainStatus returns lifecycle state for a single (tenant_id,
+// domain) pair plus the canonical CNAMEs to display in the dashboard.
+func (s *NavigatorServer) GetCustomDomainStatus(ctx context.Context, req *pb.GetCustomDomainStatusRequest) (*pb.GetCustomDomainStatusResponse, error) {
+	row, err := s.CertManager.GetTenantCustomDomain(ctx, req.GetTenantId(), req.GetDomain())
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return &pb.GetCustomDomainStatusResponse{Found: false}, nil
+		}
+		s.Logger.WithError(err).WithFields(logging.Fields{
+			"tenant_id": req.GetTenantId(),
+			"domain":    req.GetDomain(),
+		}).Warn("GetCustomDomainStatus lookup failed")
+		return nil, status.Errorf(codes.Internal, "lookup failed: %v", err)
+	}
+	resp := &pb.GetCustomDomainStatusResponse{
+		Found:    true,
+		TenantId: row.TenantID,
+		Domain:   row.Domain,
+		Status:   row.Status,
+	}
+	if alias, aliasErr := s.CertManager.GetTenantAlias(ctx, req.GetTenantId()); aliasErr == nil && alias != nil && alias.Subdomain != "" {
+		resp.RequiredTrafficCname = alias.Subdomain + "." + logic.TenantAliasZoneLabel + "." + s.RootDomain + "."
+	}
+	resp.RequiredAcmeChallengeCname = row.AcmeDNSSubdomain + "." + logic.AcmeDNSZoneLabel + "." + s.RootDomain + "."
+	if row.LastVerifiedAt.Valid {
+		resp.LastVerifiedAt = row.LastVerifiedAt.Time.Unix()
+	}
+	if row.CertIssuedAt.Valid {
+		resp.CertIssuedAt = row.CertIssuedAt.Time.Unix()
+	}
+	if row.CertExpiresAt.Valid {
+		resp.CertExpiresAt = row.CertExpiresAt.Time.Unix()
+	}
+	if row.LastError.Valid {
+		resp.LastError = row.LastError.String
+	}
+	return resp, nil
+}
+
 func (s *NavigatorServer) IssueInternalCert(ctx context.Context, req *pb.IssueInternalCertRequest) (*pb.IssueInternalCertResponse, error) {
 	log := s.Logger.WithFields(logging.Fields{
 		"node_id":      req.GetNodeId(),
@@ -765,4 +858,52 @@ func (r quartermasterEdgeResolver) TenantActiveInCluster(ctx context.Context, te
 		}
 	}
 	return false, nil
+}
+
+// ClusterControlCellHealthy returns true when the cluster's control cell
+// (the Foghorn cell that owns ConfigSeed + tenant-alias-bundle delivery
+// for it) reports healthy. Tenant alias DNS only publishes edges whose
+// owning cell can actually push config to them; a degraded or offline
+// cell drops out of the membership set until it recovers.
+func (r quartermasterEdgeResolver) ClusterControlCellHealthy(ctx context.Context, clusterID string) (bool, error) {
+	if r.qm == nil || strings.TrimSpace(clusterID) == "" {
+		return false, nil
+	}
+	resp, err := r.qm.GetCluster(ctx, clusterID)
+	if err != nil {
+		return false, err
+	}
+	cluster := resp.GetCluster()
+	if cluster == nil {
+		return false, nil
+	}
+	controlCell := strings.TrimSpace(cluster.GetControlCellId())
+	if controlCell == "" {
+		// Empty control_cell_id means the cluster controls itself
+		// (platform-official) or hasn't been assigned to a regional
+		// cell yet; either way fall back to the cluster's own health.
+		return clusterHealthy(cluster.GetHealthStatus()), nil
+	}
+	if controlCell == cluster.GetClusterId() {
+		return clusterHealthy(cluster.GetHealthStatus()), nil
+	}
+	cellResp, err := r.qm.GetCluster(ctx, controlCell)
+	if err != nil {
+		return false, err
+	}
+	cell := cellResp.GetCluster()
+	if cell == nil {
+		return false, nil
+	}
+	return clusterHealthy(cell.GetHealthStatus()), nil
+}
+
+// clusterHealthy maps cluster.health_status to a binary "DNS membership
+// may include this cluster's edges" decision.
+func clusterHealthy(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "degraded", "offline", "unhealthy":
+		return false
+	}
+	return true
 }

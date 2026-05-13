@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
@@ -183,7 +184,7 @@ func (pm *PeerManager) emitFederationEvent(data *pb.FederationEventData) {
 		return
 	}
 	go func() {
-		if err := pm.decklogClient.SendFederationEvent(data); err != nil {
+		if err := artifactoutbox.EnqueueFederationEvent(data); err != nil {
 			pm.logger.WithError(err).Debug("Failed to emit federation event")
 		}
 	}()

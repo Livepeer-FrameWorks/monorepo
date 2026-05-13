@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/federation"
@@ -336,7 +337,7 @@ func Init(
 				clipData.ProgressPercent = &percent
 			}
 			go func() {
-				if err := decklogClient.SendClipLifecycle(clipData); err != nil {
+				if err := artifactoutbox.EnqueueClipLifecycle(clipData); err != nil {
 					logger.WithError(err).WithField("request_id", clipData.GetRequestId()).Warn("Failed to send clip progress to Decklog")
 				}
 			}()
@@ -402,7 +403,7 @@ func Init(
 				clipData.Error = &er
 			}
 			go func() {
-				if err := decklogClient.SendClipLifecycle(clipData); err != nil {
+				if err := artifactoutbox.EnqueueClipLifecycle(clipData); err != nil {
 					logger.WithError(err).WithField("request_id", clipData.GetRequestId()).Warn("Failed to send clip done to Decklog")
 				}
 			}()
@@ -547,7 +548,7 @@ func Init(
 		}
 
 		go func() {
-			if err := decklogClient.SendDVRLifecycle(dvrData); err != nil {
+			if err := artifactoutbox.EnqueueDVRLifecycle(dvrData); err != nil {
 				logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to send DVR stopped event to Decklog")
 			}
 		}()
@@ -623,7 +624,7 @@ func Init(
 		}
 
 		go func() {
-			if err := decklogClient.SendDVRLifecycle(dvrData); err != nil {
+			if err := artifactoutbox.EnqueueDVRLifecycle(dvrData); err != nil {
 				logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to send DVR deleted event to Decklog")
 			}
 		}()
@@ -1946,7 +1947,7 @@ func emitFederationEvent(data *pb.FederationEventData) {
 		}
 	}
 	go func() {
-		if err := decklogClient.SendFederationEvent(data); err != nil {
+		if err := artifactoutbox.EnqueueFederationEvent(data); err != nil {
 			logger.WithError(err).Debug("Failed to emit federation event")
 		}
 	}()

@@ -801,6 +801,81 @@ func TestExtractInfraCredentialsFromSplitManifestEnvFiles(t *testing.T) {
 	}
 }
 
+func TestBuildServiceEnvVarsClusterEnvOverridesSharedAndIsOverriddenByInline(t *testing.T) {
+	// Shared env declares a platform-wide S3 default. Cluster env (US cell)
+	// overrides those secrets with the region-specific values. Per-service
+	// inline Config still wins over both — this proves the four-step merge
+	// order: shared → cluster → per-service env_file → inline config.
+	sharedFile := writeTestEnvFile(t, "STORAGE_S3_ACCESS_KEY=platform-default\nSTORAGE_S3_BUCKET=platform-bucket\nSTORAGE_S3_ENDPOINT=https://platform.example\n")
+	usEnv := writeTestEnvFile(t, "STORAGE_S3_ACCESS_KEY=r2-us-key\nSTORAGE_S3_BUCKET=frameworks-us-east\nSTORAGE_S3_ENDPOINT=https://r2.example\n")
+
+	manifest := &inventory.Manifest{
+		Profile:    "dev",
+		RootDomain: "frameworks.network",
+		EnvFiles:   []string{sharedFile},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-us-1": {
+				Name:     "Media US East 1",
+				EnvFiles: []string{usEnv},
+			},
+			"media-eu-1": {Name: "Media EU 1"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn": {
+				Enabled: true,
+				Config: map[string]string{
+					// Inline config wins over both shared and cluster.
+					"STORAGE_S3_BUCKET": "inline-override",
+				},
+			},
+		},
+	}
+
+	sharedEnv := testLoadSharedEnv(t, manifest)
+	clusterEnvs, err := inventory.LoadClusterEnvs(manifest, "", "")
+	if err != nil {
+		t.Fatalf("LoadClusterEnvs: %v", err)
+	}
+
+	usEnvVars, err := buildServiceEnvVars(&orchestrator.Task{
+		Name:      "foghorn",
+		Type:      "foghorn",
+		ServiceID: "foghorn",
+		ClusterID: "media-us-1",
+	}, manifest, map[string]any{}, "", "", sharedEnv, clusterEnvs)
+	if err != nil {
+		t.Fatalf("US buildServiceEnvVars: %v", err)
+	}
+
+	if got := usEnvVars["STORAGE_S3_ACCESS_KEY"]; got != "r2-us-key" {
+		t.Errorf("cluster env did not override shared: STORAGE_S3_ACCESS_KEY = %q, want r2-us-key", got)
+	}
+	if got := usEnvVars["STORAGE_S3_ENDPOINT"]; got != "https://r2.example" {
+		t.Errorf("cluster endpoint = %q, want https://r2.example", got)
+	}
+	if got := usEnvVars["STORAGE_S3_BUCKET"]; got != "inline-override" {
+		t.Errorf("inline service config did not override cluster env: STORAGE_S3_BUCKET = %q, want inline-override", got)
+	}
+
+	euEnvVars, err := buildServiceEnvVars(&orchestrator.Task{
+		Name:      "foghorn",
+		Type:      "foghorn",
+		ServiceID: "foghorn",
+		ClusterID: "media-eu-1",
+	}, manifest, map[string]any{}, "", "", sharedEnv, clusterEnvs)
+	if err != nil {
+		t.Fatalf("EU buildServiceEnvVars: %v", err)
+	}
+
+	// EU cluster has no env_files entry so it sees the platform default.
+	if got := euEnvVars["STORAGE_S3_ACCESS_KEY"]; got != "platform-default" {
+		t.Errorf("EU cluster without env_files leaked US value or lost shared: STORAGE_S3_ACCESS_KEY = %q, want platform-default", got)
+	}
+	if got := euEnvVars["STORAGE_S3_ENDPOINT"]; got != "https://platform.example" {
+		t.Errorf("EU endpoint = %q, want https://platform.example", got)
+	}
+}
+
 func TestBuildServiceEnvVarsLoadsSplitManifestEnvFiles(t *testing.T) {
 	baseEnv := writeTestEnvFile(t, strings.Join([]string{
 		"ARBITRUM_RPC_ENDPOINT=https://arb.example",
@@ -829,7 +904,7 @@ func TestBuildServiceEnvVarsLoadsSplitManifestEnvFiles(t *testing.T) {
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
-	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
+	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -864,7 +939,7 @@ func TestBuildServiceEnvVarsDerivesSharedRuntimeValues(t *testing.T) {
 		Name:      "foghorn",
 		Type:      "foghorn",
 		ServiceID: "foghorn",
-	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
+	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -903,7 +978,7 @@ func TestBuildServiceEnvVarsDerivesRegionFromHostLabels(t *testing.T) {
 		Type:      "foghorn",
 		ServiceID: "foghorn",
 		Host:      "regional-us-1",
-	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
+	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -965,7 +1040,7 @@ func TestBuildServiceEnvVarsProductionForcesSecureDefaults(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1008,7 +1083,7 @@ func TestBuildServiceEnvVarsProductionRequiresNavigatorManagedCA(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	_, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
+	_, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err == nil {
 		t.Fatal("expected managed CA env validation to fail")
 	}
@@ -1044,7 +1119,7 @@ func TestBuildServiceEnvVarsProductionAcceptsNavigatorManagedCABase64Env(t *test
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	if _, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest)); err != nil {
+	if _, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil); err != nil {
 		t.Fatalf("expected base64 CA envs to satisfy prod validation, got %v", err)
 	}
 }
@@ -1110,7 +1185,7 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1185,7 +1260,7 @@ func TestBuildServiceEnvVarsUsesMeshIPForColocatedChatwootRedis(t *testing.T) {
 
 	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", map[string]string{
 		"REDIS_CHATWOOT_PASSWORD": "redis-secret",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1226,7 +1301,7 @@ func TestBuildServiceEnvVarsIncludesFoghornRedisPasswordInURL(t *testing.T) {
 
 	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", map[string]string{
 		"REDIS_FOGHORN_PASSWORD": "redis secret",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1269,7 +1344,7 @@ func TestBuildTaskConfigPostgresInstanceDoesNotInheritYugabyteSettings(t *testin
 		Phase:      orchestrator.PhaseInfrastructure,
 	}
 
-	config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", map[string]string{}, nil)
+	config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -1324,7 +1399,7 @@ func TestBuildServiceEnvVarsDerivesAllChandlerInternalURLs(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1501,7 +1576,7 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 				Host:      "central-eu-1",
 				ClusterID: "core-central-primary",
 				Phase:     orchestrator.PhaseApplications,
-			}, manifest, runtimeData, "", "", sharedEnv)
+			}, manifest, runtimeData, "", "", sharedEnv, nil)
 			if err != nil {
 				t.Fatalf("buildServiceEnvVars returned error: %v", err)
 			}
@@ -1547,7 +1622,7 @@ func TestBuildServiceEnvVarsEscapesDatabaseURLPassword(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1591,7 +1666,7 @@ func TestBuildServiceEnvVarsUsesSharedPeriscopeDatabaseRole(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1643,7 +1718,7 @@ func TestBuildTaskConfigKafkaUsesMeshControllerQuorumAddresses(t *testing.T) {
 		Phase:      orchestrator.PhaseInfrastructure,
 	}
 
-	config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", map[string]string{}, nil)
+	config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -1683,7 +1758,7 @@ func TestBuildTaskConfigSetsObservabilityComponent(t *testing.T) {
 		ServiceID: "vmagent",
 		Host:      "core-1",
 		Phase:     orchestrator.PhaseInterfaces,
-	}, manifest, map[string]any{}, false, "", map[string]string{}, nil)
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -1719,7 +1794,7 @@ func TestBuildTaskConfigBuildsProxySitesForReverseProxy(t *testing.T) {
 		Host:      "edge-1",
 		ClusterID: "media-a",
 		Phase:     orchestrator.PhaseInterfaces,
-	}, manifest, map[string]any{}, false, "", map[string]string{}, nil)
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -1760,7 +1835,7 @@ func TestBuildTaskConfigAllowsNativeNginxProxySites(t *testing.T) {
 		Host:      "edge-1",
 		ClusterID: "media-a",
 		Phase:     orchestrator.PhaseInterfaces,
-	}, manifest, map[string]any{}, false, "", map[string]string{}, nil)
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -1825,7 +1900,7 @@ func TestBuildTaskConfigManagedBundleIDHasCanonicalTLSPaths(t *testing.T) {
 		Host:      "edge-1",
 		ClusterID: "media-a",
 		Phase:     orchestrator.PhaseInterfaces,
-	}, manifest, map[string]any{}, false, "", map[string]string{}, nil)
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -1885,7 +1960,7 @@ func TestBuildTaskConfigUnmanagedSiteRetainsManualTLSPaths(t *testing.T) {
 		Host:      "edge-1",
 		ClusterID: "media-a",
 		Phase:     orchestrator.PhaseInterfaces,
-	}, manifest, map[string]any{}, false, "", map[string]string{}, nil)
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -1929,7 +2004,7 @@ func TestBuildTaskConfigDedupesProxySites(t *testing.T) {
 		Host:      "edge-1",
 		ClusterID: "media-a",
 		Phase:     orchestrator.PhaseInterfaces,
-	}, manifest, map[string]any{}, false, "", map[string]string{}, nil)
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -2104,11 +2179,11 @@ func TestInternalCAFromRuntimeReturnsBootstrapPEM(t *testing.T) {
 	}
 }
 
-// TestBuildControlPlaneReportSurfacesQMResolutionFailureAsWarning pins the
-// Phase 0 fix for the silent-validate-green bug: when Quartermaster cannot
-// be resolved from the manifest, the report must carry Checked=true and a
-// warning, not the empty Checked=false that validateControlPlane's policy
-// gate would read as success.
+// TestBuildControlPlaneReportSurfacesQMResolutionFailureAsWarning pins
+// the invariant: when Quartermaster cannot be resolved from the
+// manifest, the report must carry Checked=true plus a warning, not the
+// empty Checked=false that validateControlPlane's policy gate would
+// read as success.
 func TestBuildControlPlaneReportSurfacesQMResolutionFailureAsWarning(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",

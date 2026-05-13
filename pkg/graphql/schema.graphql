@@ -2713,6 +2713,12 @@ input UpdateTenantInput {
   name: String
   "Custom settings JSON."
   settings: JSON
+  """
+  BYO domain. Empty string clears it; null leaves it unchanged. Navigator
+  picks up the change on the next reconciler tick and starts/teardowns the
+  verification + cert lifecycle accordingly.
+  """
+  customDomain: String
 }
 
 """
@@ -3385,6 +3391,47 @@ type Tenant {
   name: String!
   cluster: String
   createdAt: Time!
+  "BYO domain configured for this tenant. Null when the tenant has not opted in."
+  customDomain: String
+  """
+  Lifecycle state for the BYO domain, surfacing the CNAMEs the operator must
+  publish for verification + traffic plus any current error/expiry timestamps.
+  Null when no customDomain is configured.
+  """
+  customDomainStatus: CustomDomainStatus
+}
+
+"""
+Verification + certificate lifecycle for a tenant's BYO domain. Returned by
+Navigator's GetCustomDomainStatus and surfaced verbatim so the dashboard can
+guide the operator through the manual DNS setup.
+"""
+type CustomDomainStatus {
+  "The domain Navigator is tracking (mirrors Tenant.customDomain)."
+  domain: String!
+  """
+  pending_verification | verified | cert_issuing | cert_issued | cert_failed |
+  tearing_down — verbatim from Navigator.
+  """
+  state: String!
+  """
+  CNAME the operator points their public hostname at so the platform's TLS
+  ingress receives traffic.
+  """
+  requiredTrafficCname: String
+  """
+  CNAME the operator points `_acme-challenge.<their-domain>` at so Navigator
+  can complete DNS-01 issuance via the `acme-dns.<root>` delegated subzone.
+  """
+  requiredAcmeChallengeCname: String
+  "Wall-clock UTC of the last successful verification check (null when never)."
+  lastVerifiedAt: Time
+  "Wall-clock UTC of the most recent successful cert issuance (null when never)."
+  certIssuedAt: Time
+  "Wall-clock UTC of the current cert's expiry (null when no cert)."
+  certExpiresAt: Time
+  "Most recent error from verification / issuance, null when clean."
+  lastError: String
 }
 
 """

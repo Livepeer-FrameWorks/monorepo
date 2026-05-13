@@ -1442,17 +1442,33 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *pb.CreateSub
 		periodEnd = req.GetBillingPeriodEnd().AsTime()
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+
+	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO purser.tenant_subscriptions (
 			id, tenant_id, tier_id, status, billing_email, billing_model, started_at,
 			trial_ends_at, next_billing_date, billing_period_start, billing_period_end,
 			payment_method, custom_features, created_at, updated_at
 		)
 		VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9, $10, $11, $12, $6, $6)
-	`, subID, tenantID, tierID, billingEmail, billingModel, now, trialEndsAt, periodEnd, periodStart, periodEnd, req.GetPaymentMethod(), featuresJSON)
-
-	if err != nil {
+	`, subID, tenantID, tierID, billingEmail, billingModel, now, trialEndsAt, periodEnd, periodStart, periodEnd, req.GetPaymentMethod(), featuresJSON); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create subscription: %v", err)
+	}
+
+	if _, err := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionCreated, tenantID, userID, "subscription", subID, &pb.BillingEvent{
+		SubscriptionId: subID,
+		Status:         "active",
+		Provider:       req.GetPaymentMethod(),
+	}); err != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue subscription_created: %v", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "commit subscription create: %v", err)
 	}
 
 	sub := &pb.TenantSubscription{
@@ -1478,12 +1494,6 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *pb.CreateSub
 	if req.GetCustomFeatures() != nil {
 		sub.CustomFeatures = req.GetCustomFeatures()
 	}
-
-	s.emitBillingEvent(ctx, eventSubscriptionCreated, tenantID, userID, "subscription", subID, &pb.BillingEvent{
-		SubscriptionId: subID,
-		Status:         "active",
-		Provider:       req.GetPaymentMethod(),
-	})
 
 	return sub, nil
 }
@@ -1588,6 +1598,31 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSub
 	if overrideErr := s.applySubscriptionOverridesTx(ctx, tx, tenantID, req); overrideErr != nil {
 		return nil, overrideErr
 	}
+
+	var (
+		updatedSubID, updatedStatus string
+		updatedPaymentMethod        sql.NullString
+	)
+	if scanErr := tx.QueryRowContext(ctx, `
+		SELECT id, status, COALESCE(payment_method, '')
+		FROM purser.tenant_subscriptions
+		WHERE tenant_id = $1 AND status != 'cancelled'
+		ORDER BY started_at DESC
+		LIMIT 1
+	`, tenantID).Scan(&updatedSubID, &updatedStatus, &updatedPaymentMethod); scanErr == nil && updatedSubID != "" {
+		paymentMethod := ""
+		if updatedPaymentMethod.Valid {
+			paymentMethod = updatedPaymentMethod.String
+		}
+		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionUpdated, tenantID, userID, "subscription", updatedSubID, &pb.BillingEvent{
+			SubscriptionId: updatedSubID,
+			Status:         updatedStatus,
+			Provider:       paymentMethod,
+		}); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue subscription_updated: %v", enqErr)
+		}
+	}
+
 	if commitErr := tx.Commit(); commitErr != nil {
 		return nil, status.Errorf(codes.Internal, "commit subscription update: %v", commitErr)
 	}
@@ -1611,17 +1646,6 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSub
 	resp, err := s.GetSubscription(ctx, &pb.GetSubscriptionRequest{TenantId: tenantID})
 	if err != nil {
 		return nil, err
-	}
-	if resp.Subscription != nil {
-		paymentMethod := ""
-		if resp.Subscription.PaymentMethod != nil {
-			paymentMethod = *resp.Subscription.PaymentMethod
-		}
-		s.emitBillingEvent(ctx, eventSubscriptionUpdated, tenantID, userID, "subscription", resp.Subscription.Id, &pb.BillingEvent{
-			SubscriptionId: resp.Subscription.Id,
-			Status:         resp.Subscription.Status,
-			Provider:       paymentMethod,
-		})
 	}
 	return resp.Subscription, nil
 }
@@ -1758,12 +1782,21 @@ func (s *PurserServer) CancelSubscription(ctx context.Context, req *pb.CancelSub
 	}
 
 	userID := middleware.GetUserID(ctx)
-	var subscriptionID string
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1 AND status != 'cancelled'
-	`, tenantID).Scan(&subscriptionID)
 
-	result, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+
+	var subscriptionID string
+	if scanErr := tx.QueryRowContext(ctx, `
+		SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1 AND status != 'cancelled'
+	`, tenantID).Scan(&subscriptionID); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+		return nil, status.Errorf(codes.Internal, "lookup subscription: %v", scanErr)
+	}
+
+	result, err := tx.ExecContext(ctx, `
 		UPDATE purser.tenant_subscriptions
 		SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW()
 		WHERE tenant_id = $1 AND status != 'cancelled'
@@ -1778,10 +1811,16 @@ func (s *PurserServer) CancelSubscription(ctx context.Context, req *pb.CancelSub
 	}
 
 	if subscriptionID != "" {
-		s.emitBillingEvent(ctx, eventSubscriptionCanceled, tenantID, userID, "subscription", subscriptionID, &pb.BillingEvent{
+		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionCanceled, tenantID, userID, "subscription", subscriptionID, &pb.BillingEvent{
 			SubscriptionId: subscriptionID,
 			Status:         "cancelled",
-		})
+		}); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue subscription_canceled: %v", enqErr)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "commit subscription cancel: %v", err)
 	}
 
 	return &emptypb.Empty{}, nil
@@ -2190,6 +2229,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 
 	var txID string
 	paymentStored := false
+	paymentEventEnqueued := false
 
 	// Route to appropriate payment processor
 	switch method {
@@ -2300,10 +2340,21 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 			}).Error("Failed to store payment record")
 			return nil, status.Errorf(codes.Internal, "failed to create payment: %v", err)
 		}
+		if _, err = s.EnqueueBillingEventTx(ctx, dbTx, eventPaymentCreated, invoiceTenantID, userID, "payment", paymentID, &pb.BillingEvent{
+			PaymentId: paymentID,
+			InvoiceId: invoiceID,
+			Amount:    invoiceAmount,
+			Currency:  invoiceCurrency,
+			Provider:  method,
+			Status:    "pending",
+		}); err != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue payment_created: %v", err)
+		}
 		if err = dbTx.Commit(); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to commit payment transaction: %v", err)
 		}
 		paymentStored = true
+		paymentEventEnqueued = true
 
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported payment method: %s", method)
@@ -2311,27 +2362,47 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 
 	// Create payment record
 	if !paymentStored {
-		_, err = s.db.ExecContext(ctx, `
+		fallbackTx, beginErr := s.db.BeginTx(ctx, nil)
+		if beginErr != nil {
+			return nil, status.Errorf(codes.Internal, "begin payment tx: %v", beginErr)
+		}
+		defer fallbackTx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+		if _, err = fallbackTx.ExecContext(ctx, `
 				INSERT INTO purser.billing_payments (id, invoice_id, method, amount, currency, tx_id, payment_url, status, created_at, updated_at)
 				VALUES ($1, $2, $3, $4::numeric, $5, $6, NULLIF($7, ''), 'pending', NOW(), NOW())
-			`, paymentID, invoiceID, method, invoiceAmountDec.Round(2).String(), invoiceCurrency, txID, resp.PaymentUrl)
-		if err != nil {
+			`, paymentID, invoiceID, method, invoiceAmountDec.Round(2).String(), invoiceCurrency, txID, resp.PaymentUrl); err != nil {
 			s.logger.WithError(err).WithFields(logging.Fields{
 				"payment_id": paymentID,
 				"invoice_id": invoiceID,
 			}).Error("Failed to store payment record")
 			return nil, status.Errorf(codes.Internal, "failed to create payment: %v", err)
 		}
+		if _, err = s.EnqueueBillingEventTx(ctx, fallbackTx, eventPaymentCreated, invoiceTenantID, userID, "payment", paymentID, &pb.BillingEvent{
+			PaymentId: paymentID,
+			InvoiceId: invoiceID,
+			Amount:    invoiceAmount,
+			Currency:  invoiceCurrency,
+			Provider:  method,
+			Status:    "pending",
+		}); err != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue payment_created: %v", err)
+		}
+		if err = fallbackTx.Commit(); err != nil {
+			return nil, status.Errorf(codes.Internal, "commit payment tx: %v", err)
+		}
+		paymentEventEnqueued = true
 	}
 
-	s.emitBillingEvent(ctx, eventPaymentCreated, invoiceTenantID, userID, "payment", paymentID, &pb.BillingEvent{
-		PaymentId: paymentID,
-		InvoiceId: invoiceID,
-		Amount:    invoiceAmount,
-		Currency:  invoiceCurrency,
-		Provider:  method,
-		Status:    "pending",
-	})
+	if !paymentEventEnqueued {
+		s.emitBillingEvent(ctx, eventPaymentCreated, invoiceTenantID, userID, "payment", paymentID, &pb.BillingEvent{
+			PaymentId: paymentID,
+			InvoiceId: invoiceID,
+			Amount:    invoiceAmount,
+			Currency:  invoiceCurrency,
+			Provider:  method,
+			Status:    "pending",
+		})
+	}
 
 	s.logger.WithFields(logging.Fields{
 		"payment_id": paymentID,
@@ -4552,38 +4623,18 @@ const (
 	eventTopupFailed          = "topup_failed"
 )
 
-func (s *PurserServer) emitServiceEvent(ctx context.Context, event *pb.ServiceEvent) {
-	if s.decklogClient == nil || event == nil {
-		return
-	}
+// emitBillingEvent enqueues a billing service event into
+// purser.billing_event_outbox; runBillingOutboxWorker dispatches pending
+// rows to Decklog with exponential backoff. Best-effort durability: the
+// INSERT here runs in its own short tx, so it's not strictly atomic with
+// the caller's billing state mutation. Callers that already hold a tx
+// should switch to EnqueueBillingEventTx for strict atomicity. Demo-mode
+// requests still skip the outbox (no events emitted in demo).
+func (s *PurserServer) emitBillingEvent(ctx context.Context, eventType, tenantID, userID, resourceType, resourceID string, payload *pb.BillingEvent) {
 	if ctxkeys.IsDemoMode(ctx) {
 		return
 	}
-
-	go func(ev *pb.ServiceEvent) {
-		if err := s.decklogClient.SendServiceEvent(ev); err != nil {
-			s.logger.WithError(err).WithField("event_type", ev.EventType).Warn("Failed to emit service event")
-		}
-	}(event)
-}
-
-func (s *PurserServer) emitBillingEvent(ctx context.Context, eventType, tenantID, userID, resourceType, resourceID string, payload *pb.BillingEvent) {
-	if payload == nil {
-		payload = &pb.BillingEvent{}
-	}
-	payload.TenantId = tenantID
-
-	event := &pb.ServiceEvent{
-		EventType:    eventType,
-		Timestamp:    timestamppb.Now(),
-		Source:       "purser",
-		TenantId:     tenantID,
-		UserId:       userID,
-		ResourceType: resourceType,
-		ResourceId:   resourceID,
-		Payload:      &pb.ServiceEvent_BillingEvent{BillingEvent: payload},
-	}
-	s.emitServiceEvent(ctx, event)
+	s.enqueueBillingEvent(ctx, eventType, tenantID, userID, resourceType, resourceID, payload)
 }
 
 // ============================================================================
@@ -4643,6 +4694,13 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 
 	server := grpc.NewServer(opts...)
 	purserServer := NewPurserServer(cfg.DB, cfg.Logger, cfg.Metrics, cfg.StripeClient, cfg.MollieClient, cfg.QuartermasterClient, cfg.CommodoreClient, cfg.DecklogClient)
+
+	// Drain worker for purser.billing_event_outbox. Replaces the prior
+	// async decklogClient.SendServiceEvent path so Decklog outages don't
+	// drop billing/payment/subscription/x402 events. Pre-launch this runs
+	// on every Purser replica; SKIP LOCKED + lease in the claim query
+	// distributes work safely without leader election.
+	go purserServer.runBillingOutboxWorker(context.Background())
 
 	// Register all services
 	pb.RegisterBillingServiceServer(server, purserServer)
@@ -5176,6 +5234,22 @@ func (s *PurserServer) recordBalanceTransaction(
 		}
 	}
 
+	if txType == "topup" && amountCents > 0 {
+		topupID := ""
+		if referenceID != nil {
+			topupID = *referenceID
+		}
+		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventTopupCredited, tenantID, userID, "topup", txID, &pb.BillingEvent{
+			TopupId:  topupID,
+			Amount:   float64(amountCents) / 100.0,
+			Currency: currency,
+			Status:   "credited",
+		}); enqErr != nil {
+			s.logger.WithError(enqErr).Error("Failed to enqueue topup_credited event")
+			return nil, status.Error(codes.Internal, "failed to enqueue topup credited event")
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, status.Error(codes.Internal, "failed to commit transaction")
 	}
@@ -5184,19 +5258,6 @@ func (s *PurserServer) recordBalanceTransaction(
 		if err := s.thresholdEnforcer.EnforcePrepaidThresholds(ctx, tenantID, previousBalance, newBalance); err != nil {
 			s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to enforce prepaid thresholds after balance update")
 		}
-	}
-
-	if txType == "topup" && amountCents > 0 {
-		topupID := ""
-		if referenceID != nil {
-			topupID = *referenceID
-		}
-		s.emitBillingEvent(ctx, eventTopupCredited, tenantID, userID, "topup", txID, &pb.BillingEvent{
-			TopupId:  topupID,
-			Amount:   float64(amountCents) / 100.0,
-			Currency: currency,
-			Status:   "credited",
-		})
 	}
 
 	// Auto-reactivate suspended tenant if balance goes positive after top-up
@@ -5411,24 +5472,42 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create checkout session")
 		s.markProviderIntentFailed(ctx, providerIntentID, "checkout_session_create_failed", err)
-		if _, markErr := s.db.ExecContext(ctx, `
+		failTx, beginErr := s.db.BeginTx(ctx, nil)
+		if beginErr != nil {
+			s.logger.WithError(beginErr).WithField("topup_id", topupID).Warn("Failed to begin tx for topup_failed")
+			return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
+		}
+		defer failTx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+		if _, markErr := failTx.ExecContext(ctx, `
 			UPDATE purser.pending_topups
 			SET status = 'failed', updated_at = NOW()
 			WHERE id = $1 AND status = 'pending'
 		`, topupID); markErr != nil {
 			s.logger.WithError(markErr).WithField("topup_id", topupID).Warn("Failed to mark prepaid top-up failed")
+			return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
 		}
-		s.emitBillingEvent(ctx, eventTopupFailed, tenantID, userID, "topup", topupID, &pb.BillingEvent{
+		if _, enqErr := s.EnqueueBillingEventTx(ctx, failTx, eventTopupFailed, tenantID, userID, "topup", topupID, &pb.BillingEvent{
 			TopupId:  topupID,
 			Amount:   float64(amountCents) / 100.0,
 			Currency: currency,
 			Provider: provider,
 			Status:   "failed",
-		})
+		}); enqErr != nil {
+			s.logger.WithError(enqErr).WithField("topup_id", topupID).Warn("Failed to enqueue topup_failed event")
+			return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
+		}
+		if commitErr := failTx.Commit(); commitErr != nil {
+			s.logger.WithError(commitErr).WithField("topup_id", topupID).Warn("Failed to commit topup_failed tx")
+		}
 		return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
 	}
 
-	if _, err := s.db.ExecContext(ctx, `
+	createdTx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin topup created tx: %v", err)
+	}
+	defer createdTx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+	if _, err := createdTx.ExecContext(ctx, `
 		UPDATE purser.payment_provider_intents
 		SET provider_session_id = $1, expires_at = $2, status = 'provider_open', updated_at = NOW()
 		WHERE id = $3
@@ -5436,7 +5515,7 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 		s.logger.WithError(err).WithField("intent_id", providerIntentID).Error("Failed to attach provider session to top-up intent")
 		return nil, status.Error(codes.Internal, "failed to attach checkout to payment intent")
 	}
-	if _, err := s.db.ExecContext(ctx, `
+	if _, err := createdTx.ExecContext(ctx, `
 		UPDATE purser.pending_topups
 		SET checkout_id = $1, expires_at = $2, updated_at = NOW()
 		WHERE id = $3 AND status = 'pending'
@@ -5444,14 +5523,18 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 		s.logger.WithError(err).WithField("checkout_id", result.SessionID).Error("Failed to attach provider checkout to topup")
 		return nil, status.Error(codes.Internal, "failed to attach checkout to topup")
 	}
-
-	s.emitBillingEvent(ctx, eventTopupCreated, tenantID, userID, "topup", topupID, &pb.BillingEvent{
+	if _, err := s.EnqueueBillingEventTx(ctx, createdTx, eventTopupCreated, tenantID, userID, "topup", topupID, &pb.BillingEvent{
 		TopupId:  topupID,
 		Amount:   float64(amountCents) / 100.0,
 		Currency: currency,
 		Provider: provider,
 		Status:   "pending",
-	})
+	}); err != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue topup_created: %v", err)
+	}
+	if err := createdTx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "commit topup created tx: %v", err)
+	}
 
 	return &pb.CreateCardTopupResponse{
 		TopupId:     topupID,
@@ -5691,7 +5774,13 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryp
 	now := time.Now()
 	expiresAt := now.Add(24 * time.Hour)
 
-	walletID, address, err := s.hdwallet.GenerateDepositAddress(handlers.DepositAddressParams{
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin crypto topup tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+
+	walletID, address, err := s.hdwallet.GenerateDepositAddressTx(ctx, tx, handlers.DepositAddressParams{
 		TenantID:            tenantID,
 		Purpose:             "prepaid",
 		Asset:               assetStr,
@@ -5709,6 +5798,22 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryp
 	// "send exactly X" matches what the monitor compares against.
 	expectedAmountToken := decimal.NewFromBigInt(expectedBaseUnits, -tokenDecimals).StringFixedBank(tokenDecimals)
 
+	if _, err := s.EnqueueBillingEventTx(ctx, tx, eventTopupCreated, tenantID, userID, "topup", walletID, &pb.BillingEvent{
+		TopupId:  walletID,
+		Amount:   float64(expectedAmountCents) / 100.0,
+		Currency: normalizedCurrency,
+		Provider: "crypto",
+		Status:   "pending",
+		Asset:    assetStr,
+		Network:  networkName,
+	}); err != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue crypto topup_created: %v", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "commit crypto topup tx: %v", err)
+	}
+
 	s.logger.WithFields(logging.Fields{
 		"tenant_id":             tenantID,
 		"wallet_id":             walletID,
@@ -5720,16 +5825,6 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryp
 		"quoted_price_usd":      quote.QuotedPriceUSD.String(),
 		"quote_source":          quote.QuoteSource,
 	}).Info("Created crypto top-up deposit address")
-
-	s.emitBillingEvent(ctx, eventTopupCreated, tenantID, userID, "topup", walletID, &pb.BillingEvent{
-		TopupId:  walletID,
-		Amount:   float64(expectedAmountCents) / 100.0,
-		Currency: normalizedCurrency,
-		Provider: "crypto",
-		Status:   "pending",
-		Asset:    assetStr,
-		Network:  networkName,
-	})
 
 	return &pb.CreateCryptoTopupResponse{
 		TopupId:                 walletID,

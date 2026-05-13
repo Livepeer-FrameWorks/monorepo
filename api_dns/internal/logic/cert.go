@@ -7,6 +7,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"database/sql"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -34,6 +35,7 @@ const platformCertTenantID = ""
 type certStore interface {
 	GetCertificate(ctx context.Context, tenantID, domain string) (*store.Certificate, error)
 	SaveCertificate(ctx context.Context, tenantID string, cert *store.Certificate) error
+	DeleteCertificate(ctx context.Context, tenantID, domain string) error
 	GetTLSBundle(ctx context.Context, bundleID string) (*store.TLSBundle, error)
 	SaveTLSBundle(ctx context.Context, bundle *store.TLSBundle) error
 	GetACMEAccount(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error)
@@ -48,6 +50,14 @@ type certStore interface {
 	TenantAliasHasDNS(ctx context.Context, tenantID string) (bool, error)
 	DeleteTenantEdgeApplyState(ctx context.Context, tenantID string) error
 	DeleteTenantEdgeApplyStateForCluster(ctx context.Context, tenantID, clusterID string) error
+	// Tenant custom domain (BYO domain) lifecycle.
+	EnsureTenantCustomDomain(ctx context.Context, tenantID, domain, acmeDNSSubdomain string) (*store.TenantCustomDomain, error)
+	GetTenantCustomDomain(ctx context.Context, tenantID, domain string) (*store.TenantCustomDomain, error)
+	ListTenantCustomDomainsByStatus(ctx context.Context, statuses []string) ([]store.TenantCustomDomain, error)
+	ListTenantCustomDomains(ctx context.Context, tenantID string) ([]store.TenantCustomDomain, error)
+	SetTenantCustomDomainStatus(ctx context.Context, tenantID, domain, status, errMsg string) error
+	SetTenantCustomDomainCertMetadata(ctx context.Context, tenantID, domain, issuerID string, expiresAt sql.NullTime) error
+	DeleteTenantCustomDomain(ctx context.Context, tenantID, domain string) error
 }
 
 type acmeClient interface {
@@ -244,6 +254,111 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 	return newCert.CertPEM, newCert.KeyPEM, expiry, nil
 }
 
+// IssueCertificateViaBunny issues a certificate for an arbitrary domain
+// using Bunny as the DNS-01 provider. The challenge TXT lands in the
+// Navigator-owned acme-dns.{root} subzone; the customer points
+// `_acme-challenge.<domain>` at their assigned acme-dns record via CNAME.
+// Used for tenant custom domains where the cert domain is not under our
+// platform root. Wraps issueCertificateViaBunny so existing callers that
+// don't care about the issuer can ignore the extra return.
+func (m *CertManager) IssueCertificateViaBunny(ctx context.Context, tenantID, domain, email string) (certPEM, keyPEM string, expiresAt time.Time, err error) {
+	certPEM, keyPEM, expiresAt, _, err = m.issueCertificateViaBunny(ctx, tenantID, domain, email)
+	return
+}
+
+// IssueCertificateViaBunnyWithIssuer is the same as IssueCertificateViaBunny
+// but also returns the issuing CA so the caller (custom-domain lifecycle)
+// can persist it on the tenant_custom_domains row.
+func (m *CertManager) IssueCertificateViaBunnyWithIssuer(ctx context.Context, tenantID, domain, email string) (certPEM, keyPEM string, expiresAt time.Time, issuer string, err error) {
+	return m.issueCertificateViaBunny(ctx, tenantID, domain, email)
+}
+
+func (m *CertManager) issueCertificateViaBunny(ctx context.Context, tenantID, domain, email string) (certPEM, keyPEM string, expiresAt time.Time, issuer string, err error) {
+	if domain == "" || email == "" {
+		return "", "", time.Time{}, "", fmt.Errorf("domain and email are required")
+	}
+	domain = normalizeDomains([]string{domain})[0]
+
+	var existingIssuer CAProvider
+	cert, err := m.store.GetCertificate(ctx, tenantID, domain)
+	if err == nil {
+		if time.Until(cert.ExpiresAt) > 30*24*time.Hour {
+			return cert.CertPEM, cert.KeyPEM, cert.ExpiresAt, cert.IssuerCA, nil
+		}
+		if cert.IssuerCA != "" {
+			existingIssuer = CAProvider(cert.IssuerCA)
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return "", "", time.Time{}, "", fmt.Errorf("failed to check certificate cache: %w", err)
+	}
+
+	cas := caOrder()
+	if existingIssuer != "" {
+		cas = []CAProvider{existingIssuer}
+	}
+
+	providerFactory := m.bunnyDNSProviderFactory
+
+	var (
+		certificatePEM, privateKeyPEM string
+		expiry                        time.Time
+		issuedBy                      CAProvider
+		lastErr                       error
+	)
+	for _, ca := range cas {
+		certificatePEM, privateKeyPEM, expiry, lastErr = m.obtainCertificateWith(ctx, tenantID, []string{domain}, email, ca, providerFactory)
+		if lastErr == nil {
+			issuedBy = ca
+			break
+		}
+		if !isRateLimitError(lastErr) {
+			break
+		}
+	}
+	if lastErr != nil {
+		return "", "", time.Time{}, "", lastErr
+	}
+
+	newCert := &store.Certificate{
+		Domain:    domain,
+		CertPEM:   certificatePEM,
+		KeyPEM:    privateKeyPEM,
+		ExpiresAt: expiry,
+		IssuerCA:  string(issuedBy),
+	}
+	if err := m.store.SaveCertificate(ctx, tenantID, newCert); err != nil {
+		return "", "", time.Time{}, "", fmt.Errorf("failed to save certificate: %w", err)
+	}
+	return newCert.CertPEM, newCert.KeyPEM, expiry, string(issuedBy), nil
+}
+
+// RenewCertificate is the cert-renewal entry point used by the background
+// renewal worker. It dispatches custom-domain renewals to the Bunny ACME-DNS
+// path (which is the only provider configured for the acme-dns.{root}
+// delegated subzone) and platform domains through the standard
+// allowlisted-provider path.
+func (m *CertManager) RenewCertificate(ctx context.Context, tenantID, domain, email string) (certPEM, keyPEM string, expiresAt time.Time, err error) {
+	if tenantID != "" && domain != "" {
+		if row, lookupErr := m.store.GetTenantCustomDomain(ctx, tenantID, domain); lookupErr == nil && row != nil {
+			c, k, exp, issuer, issueErr := m.issueCertificateViaBunny(ctx, tenantID, domain, email)
+			if issueErr != nil {
+				return "", "", time.Time{}, issueErr
+			}
+			expSQL := sql.NullTime{}
+			if !exp.IsZero() {
+				expSQL = sql.NullTime{Valid: true, Time: exp}
+			}
+			if metaErr := m.store.SetTenantCustomDomainCertMetadata(ctx, tenantID, domain, issuer, expSQL); metaErr != nil {
+				return "", "", time.Time{}, fmt.Errorf("custom-domain cert metadata: %w", metaErr)
+			}
+			return c, k, exp, nil
+		} else if lookupErr != nil && !errors.Is(lookupErr, store.ErrNotFound) {
+			return "", "", time.Time{}, fmt.Errorf("custom-domain lookup: %w", lookupErr)
+		}
+	}
+	return m.IssueCertificate(ctx, tenantID, domain, email)
+}
+
 func (m *CertManager) EnsureTLSBundle(ctx context.Context, bundleID string, domains []string, email string) (*store.TLSBundle, error) {
 	bundleID = strings.TrimSpace(bundleID)
 	domains = normalizeDomains(domains)
@@ -327,6 +442,20 @@ func (m *CertManager) GetTLSBundle(ctx context.Context, bundleID string) (*store
 }
 
 func (m *CertManager) obtainCertificate(ctx context.Context, tenantID string, domains []string, email string, ca CAProvider) (certPEM, keyPEM string, expiresAt time.Time, err error) {
+	providerFactory := m.dnsProviderFactory
+	if m.dnsProviderForDomainsFactory != nil {
+		providerFactory = func() (challenge.Provider, error) {
+			return m.dnsProviderForDomainsFactory(domains)
+		}
+	}
+	return m.obtainCertificateWith(ctx, tenantID, domains, email, ca, providerFactory)
+}
+
+// obtainCertificateWith runs ACME issuance with an explicit DNS-01 provider
+// factory. Custom-domain issuance uses this so the lego client always
+// writes the TXT challenge through Bunny (Navigator owns the acme-dns
+// subzone the customer CNAMEs into), regardless of the cert domain.
+func (m *CertManager) obtainCertificateWith(ctx context.Context, tenantID string, domains []string, email string, ca CAProvider, providerFactory func() (challenge.Provider, error)) (certPEM, keyPEM string, expiresAt time.Time, err error) {
 	if ca == "" {
 		ca = CADefaultIssuer
 	}
@@ -349,11 +478,8 @@ func (m *CertManager) obtainCertificate(ctx context.Context, tenantID string, do
 		return "", "", time.Time{}, fmt.Errorf("failed to create lego client: %w", err)
 	}
 
-	providerFactory := m.dnsProviderFactory
-	if m.dnsProviderForDomainsFactory != nil {
-		providerFactory = func() (challenge.Provider, error) {
-			return m.dnsProviderForDomainsFactory(domains)
-		}
+	if providerFactory == nil {
+		providerFactory = m.dnsProviderFactory
 	}
 
 	provider, err := providerFactory()

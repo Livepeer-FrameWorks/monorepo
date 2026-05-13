@@ -1,0 +1,18 @@
+---
+- name: Render mm2.properties
+  ansible.builtin.template:
+    src: mm2.properties.j2
+    dest: "{{ kafka_mm_properties_path }}"
+    owner: "{{ kafka_mm_user }}"
+    group: "{{ kafka_mm_group }}"
+    mode: "0640"
+  notify: kafka_mirrormaker restart
+
+- name: Render systemd unit
+  ansible.builtin.template:
+    src: kafka-mirrormaker.service.j2
+    dest: /etc/systemd/system/frameworks-kafka-mirrormaker.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: kafka_mirrormaker restart

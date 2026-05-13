@@ -1,0 +1,17 @@
+[Unit]
+Description=Apache Kafka MirrorMaker 2 (standalone)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ kafka_mm_user }}
+Group={{ kafka_mm_group }}
+Environment="KAFKA_HEAP_OPTS={{ kafka_mm_heap_opts }}"
+Environment="LOG_DIR={{ kafka_mm_log_dir }}"
+ExecStart={{ kafka_mm_bin_dir }}/connect-mirror-maker.sh {{ kafka_mm_properties_path }}
+Restart=always
+RestartSec=10
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

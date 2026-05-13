@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"database/sql"
 	"encoding/pem"
 	"errors"
 	"math/big"
@@ -40,6 +41,10 @@ func (f *fakeStore) GetCertificate(ctx context.Context, tenantID, domain string)
 func (f *fakeStore) SaveCertificate(ctx context.Context, tenantID string, cert *store.Certificate) error {
 	f.saveCertCalled++
 	return f.saveCertFunc(ctx, tenantID, cert)
+}
+
+func (f *fakeStore) DeleteCertificate(_ context.Context, _, _ string) error {
+	return nil
 }
 
 func (f *fakeStore) GetTLSBundle(ctx context.Context, bundleID string) (*store.TLSBundle, error) {
@@ -94,6 +99,34 @@ func (f *fakeStore) DeleteTenantEdgeApplyState(_ context.Context, _ string) erro
 }
 
 func (f *fakeStore) DeleteTenantEdgeApplyStateForCluster(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (f *fakeStore) EnsureTenantCustomDomain(_ context.Context, tenantID, domain, acmeDNSSubdomain string) (*store.TenantCustomDomain, error) {
+	return &store.TenantCustomDomain{TenantID: tenantID, Domain: domain, AcmeDNSSubdomain: acmeDNSSubdomain, Status: "pending_verification"}, nil
+}
+
+func (f *fakeStore) GetTenantCustomDomain(_ context.Context, _, _ string) (*store.TenantCustomDomain, error) {
+	return nil, store.ErrNotFound
+}
+
+func (f *fakeStore) ListTenantCustomDomainsByStatus(_ context.Context, _ []string) ([]store.TenantCustomDomain, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ListTenantCustomDomains(_ context.Context, _ string) ([]store.TenantCustomDomain, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) SetTenantCustomDomainStatus(_ context.Context, _, _, _, _ string) error {
+	return nil
+}
+
+func (f *fakeStore) SetTenantCustomDomainCertMetadata(_ context.Context, _, _, _ string, _ sql.NullTime) error {
+	return nil
+}
+
+func (f *fakeStore) DeleteTenantCustomDomain(_ context.Context, _, _ string) error {
 	return nil
 }
 

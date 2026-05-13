@@ -1128,6 +1128,17 @@ func (c *GRPCClient) ResolvePlaybackPolicyByInternalName(ctx context.Context, in
 	})
 }
 
+// GetSignedPolicyBundle fetches a freshly minted signed policy bundle for a
+// (tenant_id, stream_id) pair. Foghorn caches the returned bundle with the
+// soft/hard TTLs encoded in the response; revocation arrives separately via
+// playback_policy_invalidation_outbox 'bundle_revoke' entries.
+func (c *GRPCClient) GetSignedPolicyBundle(ctx context.Context, tenantID, streamID string) (*pb.GetSignedPolicyBundleResponse, error) {
+	return c.internal.GetSignedPolicyBundle(ctx, &pb.GetSignedPolicyBundleRequest{
+		TenantId: tenantID,
+		StreamId: streamID,
+	})
+}
+
 // RecordSigningKeyUse records successful JWT use for rotation/audit metadata.
 func (c *GRPCClient) RecordSigningKeyUse(ctx context.Context, tenantID, kid string) error {
 	_, err := c.internal.RecordSigningKeyUse(ctx, &pb.RecordSigningKeyUseRequest{

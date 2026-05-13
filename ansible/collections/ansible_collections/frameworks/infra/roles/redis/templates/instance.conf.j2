@@ -22,4 +22,10 @@ maxmemory-policy noeviction
 
 {% if redis_password | length > 0 %}
 requirepass {{ redis_password }}
+{% if redis_role == 'replica' %}
+masterauth {{ redis_password }}
+{% endif %}
+{% endif %}
+{% if redis_role == 'replica' and redis_primary_host | length > 0 %}
+replicaof {{ redis_primary_host }} {{ redis_primary_port }}
 {% endif %}

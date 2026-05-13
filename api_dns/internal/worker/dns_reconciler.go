@@ -96,6 +96,36 @@ func (r *DNSReconciler) reconcile(ctx context.Context) {
 	r.ensureGlobalPlatformCerts(ctx)
 	r.ensureTLSBundles(ctx)
 	r.processPendingTenantAliases(ctx)
+	r.processPendingCustomDomains(ctx)
+}
+
+// processPendingCustomDomains drives the customer-owned (BYO) domain
+// lifecycle: DNS verification → ACME issuance → cert_issued → teardown.
+// Verification needs the tenant's alias subdomain (the custom domain
+// CNAMEs into the tenant alias zone), so we fetch it on demand.
+func (r *DNSReconciler) processPendingCustomDomains(ctx context.Context) {
+	if r.certManager == nil || strings.TrimSpace(r.acmeEmail) == "" || strings.TrimSpace(r.rootDomain) == "" {
+		return
+	}
+	if err := r.dnsManager.EnsureBunnyZone(ctx, logic.AcmeDNSZoneLabel); err != nil {
+		r.logger.WithError(err).WithField("zone_label", logic.AcmeDNSZoneLabel).Warn("Failed to ensure acme-dns Bunny zone")
+		return
+	}
+	lookup := func(ctx context.Context, tenantID string) (string, error) {
+		alias, err := r.certManager.GetTenantAlias(ctx, tenantID)
+		if err != nil {
+			return "", err
+		}
+		return alias.Subdomain, nil
+	}
+	processed, err := r.certManager.ProcessPendingCustomDomains(ctx, r.rootDomain, r.acmeEmail, lookup)
+	if err != nil {
+		r.logger.WithError(err).Warn("Custom-domain worker failed")
+		return
+	}
+	if processed > 0 {
+		r.logger.WithField("count", processed).Debug("Processed custom-domain transitions")
+	}
 }
 
 // processPendingTenantAliases runs the per-tick worker pass for tenant

@@ -85,6 +85,19 @@ type Cluster struct {
 	BaseURL                 string      `yaml:"base_url,omitempty"`
 	Mesh                    ClusterMesh `yaml:"mesh"`
 
+	// Cell membership + class + control assignment. See ClusterConfig in
+	// cli/pkg/inventory/types.go for field-level docs.
+	Cell                 string   `yaml:"cell,omitempty"`
+	Class                string   `yaml:"class,omitempty"`
+	ControlCell          string   `yaml:"control_cell,omitempty"`
+	EligibleServingCells []string `yaml:"eligible_serving_cells,omitempty"`
+
+	// S3 storage backend. Credentials stay in per-cluster env_files;
+	// only bucket + endpoint + region land on the cluster row.
+	S3Bucket   string `yaml:"s3_bucket,omitempty"`
+	S3Endpoint string `yaml:"s3_endpoint,omitempty"`
+	S3Region   string `yaml:"s3_region,omitempty"`
+
 	// Override = true on an Overlay item replaces the manifest-derived entry with
 	// the same ID. Ignored on Derived and Rendered.
 	Override bool `yaml:"override,omitempty"`

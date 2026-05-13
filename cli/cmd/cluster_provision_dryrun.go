@@ -32,10 +32,19 @@ func buildDryRunTaskCompare(ctx context.Context, cmd *cobra.Command, rc *resolve
 	// tokens as env drift, which is the truthful signal.
 	runtimeData := map[string]interface{}{}
 
+	// Cluster env files merge identically to a live run so --check --diff
+	// shows the same env surface the apply would produce. Load failures
+	// (missing file, bad SOPS) surface as inconclusive annotations rather
+	// than aborting the whole dry-run loop.
+	clusterEnvs, clusterEnvsErr := rc.ClusterEnvs()
+
 	annotate := func(task *orchestrator.Task) string {
 		host, ok := manifest.GetHost(task.Host)
 		if !ok {
 			return " | inconclusive: host not in manifest"
+		}
+		if clusterEnvsErr != nil {
+			return fmt.Sprintf(" | inconclusive: load cluster env_files: %v", clusterEnvsErr)
 		}
 
 		prov, provErr := provisioner.GetProvisioner(task.Type, sshPool)
@@ -47,7 +56,7 @@ func buildDryRunTaskCompare(ctx context.Context, cmd *cobra.Command, rc *resolve
 			return " | inconclusive: provisioner does not support --check --diff"
 		}
 
-		cfg, cfgErr := buildTaskConfig(task, manifest, runtimeData, false, manifestDir, sharedEnv, rc.ReleaseRepos)
+		cfg, cfgErr := buildTaskConfig(task, manifest, runtimeData, false, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
 		if cfgErr != nil {
 			return fmt.Sprintf(" | inconclusive: build task config: %v", cfgErr)
 		}

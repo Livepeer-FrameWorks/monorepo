@@ -26,18 +26,30 @@ func main() {
 	logger := logging.NewLoggerWithService("chandler")
 	config.LoadEnv(logger)
 
-	s3Bucket := config.GetEnv("STORAGE_S3_BUCKET", "")
-	if s3Bucket == "" {
-		logger.Warn("STORAGE_S3_BUCKET not set — asset requests will return 503 until configured")
-	}
+	serviceToken := config.GetEnv("SERVICE_TOKEN", "")
+	qmAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR",
+		config.GetEnv("QUARTERMASTER_HOST", "quartermaster")+":"+config.GetEnv("QUARTERMASTER_GRPC_PORT", "19002"))
+	clusterID := config.GetEnv("CLUSTER_ID", "")
+
+	// Bucket/endpoint/region default to env; per-cluster lookup below overrides
+	// when CLUSTER_ID is set and Quartermaster is reachable. Credentials stay
+	// env-sourced regardless — they are infrastructure secrets, not cluster-
+	// row data.
 	s3Cfg := handlers.S3Config{
-		Bucket:       s3Bucket,
+		Bucket:       config.GetEnv("STORAGE_S3_BUCKET", ""),
 		Prefix:       config.GetEnv("STORAGE_S3_PREFIX", ""),
 		Region:       config.GetEnv("STORAGE_S3_REGION", "us-east-1"),
 		Endpoint:     config.GetEnv("STORAGE_S3_ENDPOINT", ""),
 		AccessKey:    config.GetEnv("STORAGE_S3_ACCESS_KEY", ""),
 		SecretKey:    config.GetEnv("STORAGE_S3_SECRET_KEY", ""),
-		ServiceToken: config.GetEnv("SERVICE_TOKEN", ""),
+		ServiceToken: serviceToken,
+	}
+
+	if clusterID != "" {
+		applyClusterS3FromQuartermaster(logger, qmAddr, serviceToken, clusterID, &s3Cfg)
+	}
+	if s3Cfg.Bucket == "" {
+		logger.Warn("S3 bucket not configured (no cluster row, no env) — asset requests will return 503 until configured")
 	}
 
 	maxCacheBytes := int64(config.GetEnvInt("CACHE_MAX_BYTES", 50*1024*1024)) // 50MB default
@@ -121,5 +133,51 @@ func main() {
 
 	if err := server.Start(serverConfig, router, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
+	}
+}
+
+// applyClusterS3FromQuartermaster overrides bucket/endpoint/region with the
+// values stored on the local cluster's infrastructure_clusters row. Best-
+// effort: if Quartermaster is unreachable or returns no row, the existing
+// env-defaulted s3Cfg stands. Credentials are never sourced from Quartermaster
+// — they are infrastructure secrets and stay env-only.
+func applyClusterS3FromQuartermaster(logger logging.Logger, qmAddr, serviceToken, clusterID string, s3Cfg *handlers.S3Config) {
+	qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+		GRPCAddr:      qmAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Quartermaster gRPC client unavailable; falling back to env S3 config")
+		return
+	}
+	defer func() { _ = qc.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := qc.GetCluster(ctx, clusterID)
+	switch {
+	case err != nil:
+		logger.WithError(err).WithField("cluster_id", clusterID).
+			Warn("Quartermaster GetCluster failed; falling back to env S3 config")
+		return
+	case resp == nil || resp.GetCluster() == nil:
+		logger.WithField("cluster_id", clusterID).
+			Warn("Quartermaster returned no cluster row; falling back to env S3 config")
+		return
+	}
+	cluster := resp.GetCluster()
+	if v := cluster.GetS3Bucket(); v != "" {
+		s3Cfg.Bucket = v
+	}
+	if v := cluster.GetS3Endpoint(); v != "" {
+		s3Cfg.Endpoint = v
+	}
+	if v := cluster.GetS3Region(); v != "" {
+		s3Cfg.Region = v
 	}
 }

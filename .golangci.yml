@@ -20,6 +20,8 @@ linters:
     - nilerr # Returns nil on non-nil error
     - noctx # HTTP requests without context
     - sqlclosecheck # Unclosed SQL rows/statements
+    # Tier 3: Architectural boundaries
+    - depguard # Forbidden imports outside allowlisted owners
 
   settings:
     errcheck:
@@ -39,6 +41,20 @@ linters:
         - -ST1000 # Package comments (not enforced)
         - -ST1003 # CamelCase naming (generated code has odd names)
         - -ST1016 # Method receiver names (style preference)
+    depguard:
+      # ClickHouse topology is owned by Periscope. Other services must go
+      # through Periscope-Query gRPC for analytics reads. The allowlist below
+      # covers the shared driver wrapper (pkg/database/clickhouse.go) and the
+      # CLI health/provisioning helpers; all other paths are denied via
+      # exclusions.rules.
+      rules:
+        no-direct-clickhouse:
+          list-mode: lax
+          deny:
+            - pkg: github.com/ClickHouse/clickhouse-go/v2
+              desc: "Direct ClickHouse access is forbidden outside Periscope and the shared driver wrapper. Use Periscope-Query gRPC for reads; Periscope-Ingest for writes."
+            - pkg: github.com/ClickHouse/clickhouse-go/v2/lib/driver
+              desc: "Direct ClickHouse driver imports are forbidden outside pkg/database/clickhouse.go."
 
   exclusions:
     generated: lax
@@ -93,6 +109,19 @@ linters:
       - linters:
           - noctx
         path: cmd/
+
+      # ClickHouse driver allowlist: the shared wrapper and CLI tooling are
+      # the canonical entry points. Periscope-Ingest/Periscope-Query consume
+      # the wrapper rather than importing the driver directly.
+      - linters:
+          - depguard
+        path: pkg/database/clickhouse\.go$
+      - linters:
+          - depguard
+        path: cli/pkg/health/clickhouse\.go$
+      - linters:
+          - depguard
+        path: cli/pkg/provisioner/ch_executor\.go$
 
     paths:
       - vendor

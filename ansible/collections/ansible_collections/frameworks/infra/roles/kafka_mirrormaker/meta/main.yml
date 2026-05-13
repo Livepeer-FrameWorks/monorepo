@@ -1,0 +1,73 @@
+---
+galaxy_info:
+  role_name: kafka_mirrormaker
+  author: FrameWorks Infra
+  description: >-
+    Install and run the Apache Kafka MirrorMaker 2 standalone worker
+    (connect-mirror-maker.sh) on a single host. Source clusters and the
+    aggregator target are supplied by the FrameWorks CLI from the
+    Kafka.MirrorMaker manifest entry.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Install and run a standalone Kafka MirrorMaker2 worker.
+    options:
+      kafka_mm_artifact_url:
+        type: str
+        required: true
+      kafka_mm_artifact_checksum:
+        type: str
+        required: true
+      kafka_mm_version:
+        type: str
+        required: true
+      kafka_mm_heap_opts:
+        type: str
+        required: false
+        default: "-Xmx1G -Xms1G"
+      kafka_mm_task_count:
+        type: int
+        required: false
+        default: 2
+      kafka_mm_target:
+        type: dict
+        required: true
+        options:
+          alias:
+            type: str
+            required: true
+          region_id:
+            type: str
+            required: false
+          bootstrap_servers:
+            type: str
+            required: true
+          replicas:
+            type: int
+            required: false
+            default: 1
+      kafka_mm_sources:
+        type: list
+        elements: dict
+        required: true
+        options:
+          alias:
+            type: str
+            required: true
+          region_id:
+            type: str
+            required: true
+          bootstrap_servers:
+            type: str
+            required: true
+          topics:
+            type: str
+            required: true
+          replicas:
+            type: int
+            required: false
+            default: 1

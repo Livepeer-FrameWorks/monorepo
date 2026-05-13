@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/jobs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -149,7 +150,7 @@ func (p *VodPipeline) markArtifactReady(ctx context.Context, log *logrus.Entry, 
 			TenantId:    &tenantID,
 			CompletedAt: proto.Int64(time.Now().Unix()),
 		}
-		go func() { _ = p.decklogClient.SendVodLifecycle(vodData) }()
+		go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 	}
 }
 
@@ -176,7 +177,7 @@ func (p *VodPipeline) markArtifactFailed(ctx context.Context, log *logrus.Entry,
 			Error:    &errStr,
 		}
 		go func() {
-			if err := p.decklogClient.SendVodLifecycle(vodData); err != nil {
+			if err := artifactoutbox.EnqueueVodLifecycle(vodData); err != nil {
 				p.logger.WithError(err).Warn("Failed to send VOD failed lifecycle event")
 			}
 		}()

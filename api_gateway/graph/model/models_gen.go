@@ -939,6 +939,31 @@ type CryptoTopupStatus struct {
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 }
 
+// Verification + certificate lifecycle for a tenant's BYO domain. Returned by
+// Navigator's GetCustomDomainStatus and surfaced verbatim so the dashboard can
+// guide the operator through the manual DNS setup.
+type CustomDomainStatus struct {
+	// The domain Navigator is tracking (mirrors Tenant.customDomain).
+	Domain string `json:"domain"`
+	// pending_verification | verified | cert_issuing | cert_issued | cert_failed |
+	// tearing_down — verbatim from Navigator.
+	State string `json:"state"`
+	// CNAME the operator points their public hostname at so the platform's TLS
+	// ingress receives traffic.
+	RequiredTrafficCname *string `json:"requiredTrafficCname,omitempty"`
+	// CNAME the operator points `_acme-challenge.<their-domain>` at so Navigator
+	// can complete DNS-01 issuance via the `acme-dns.<root>` delegated subzone.
+	RequiredAcmeChallengeCname *string `json:"requiredAcmeChallengeCname,omitempty"`
+	// Wall-clock UTC of the last successful verification check (null when never).
+	LastVerifiedAt *time.Time `json:"lastVerifiedAt,omitempty"`
+	// Wall-clock UTC of the most recent successful cert issuance (null when never).
+	CertIssuedAt *time.Time `json:"certIssuedAt,omitempty"`
+	// Wall-clock UTC of the current cert's expiry (null when no cert).
+	CertExpiresAt *time.Time `json:"certExpiresAt,omitempty"`
+	// Most recent error from verification / issuance, null when clean.
+	LastError *string `json:"lastError,omitempty"`
+}
+
 // A single chapter view of a DVR recording.
 //
 // manifestUrl carries the Mist playback ID for this chapter
@@ -1991,6 +2016,10 @@ type UpdateTenantInput struct {
 	Name *string `json:"name,omitempty"`
 	// Custom settings JSON.
 	Settings *string `json:"settings,omitempty"`
+	// BYO domain. Empty string clears it; null leaves it unchanged. Navigator
+	// picks up the change on the next reconciler tick and starts/teardowns the
+	// verification + cert lifecycle accordingly.
+	CustomDomain *string `json:"customDomain,omitempty"`
 }
 
 type UsageEntry struct {

@@ -3423,6 +3423,7 @@ const (
 	ServiceRegistryService_ListServiceInstances_FullMethodName = "/quartermaster.ServiceRegistryService/ListServiceInstances"
 	ServiceRegistryService_ListServicesHealth_FullMethodName   = "/quartermaster.ServiceRegistryService/ListServicesHealth"
 	ServiceRegistryService_GetServiceHealth_FullMethodName     = "/quartermaster.ServiceRegistryService/GetServiceHealth"
+	ServiceRegistryService_EnqueueServiceEvent_FullMethodName  = "/quartermaster.ServiceRegistryService/EnqueueServiceEvent"
 )
 
 // ServiceRegistryServiceClient is the client API for ServiceRegistryService service.
@@ -3439,6 +3440,13 @@ type ServiceRegistryServiceClient interface {
 	ListServicesHealth(ctx context.Context, in *ListServicesHealthRequest, opts ...grpc.CallOption) (*ListServicesHealthResponse, error)
 	// Get health of specific service instances
 	GetServiceHealth(ctx context.Context, in *GetServiceHealthRequest, opts ...grpc.CallOption) (*ListServicesHealthResponse, error)
+	// Enqueue a service event for asynchronous dispatch to Decklog through
+	// quartermaster.service_event_outbox. Used by stateless producers
+	// (Deckhand) that don't own a local outbox; the row carries the
+	// originating service in event.source so the dispatcher can attribute
+	// correctly. The drain worker dispatches with exponential backoff —
+	// durability across a Decklog outage matches QM's own service events.
+	EnqueueServiceEvent(ctx context.Context, in *EnqueueServiceEventRequest, opts ...grpc.CallOption) (*EnqueueServiceEventResponse, error)
 }
 
 type serviceRegistryServiceClient struct {
@@ -3499,6 +3507,16 @@ func (c *serviceRegistryServiceClient) GetServiceHealth(ctx context.Context, in 
 	return out, nil
 }
 
+func (c *serviceRegistryServiceClient) EnqueueServiceEvent(ctx context.Context, in *EnqueueServiceEventRequest, opts ...grpc.CallOption) (*EnqueueServiceEventResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EnqueueServiceEventResponse)
+	err := c.cc.Invoke(ctx, ServiceRegistryService_EnqueueServiceEvent_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ServiceRegistryServiceServer is the server API for ServiceRegistryService service.
 // All implementations must embed UnimplementedServiceRegistryServiceServer
 // for forward compatibility.
@@ -3513,6 +3531,13 @@ type ServiceRegistryServiceServer interface {
 	ListServicesHealth(context.Context, *ListServicesHealthRequest) (*ListServicesHealthResponse, error)
 	// Get health of specific service instances
 	GetServiceHealth(context.Context, *GetServiceHealthRequest) (*ListServicesHealthResponse, error)
+	// Enqueue a service event for asynchronous dispatch to Decklog through
+	// quartermaster.service_event_outbox. Used by stateless producers
+	// (Deckhand) that don't own a local outbox; the row carries the
+	// originating service in event.source so the dispatcher can attribute
+	// correctly. The drain worker dispatches with exponential backoff —
+	// durability across a Decklog outage matches QM's own service events.
+	EnqueueServiceEvent(context.Context, *EnqueueServiceEventRequest) (*EnqueueServiceEventResponse, error)
 	mustEmbedUnimplementedServiceRegistryServiceServer()
 }
 
@@ -3537,6 +3562,9 @@ func (UnimplementedServiceRegistryServiceServer) ListServicesHealth(context.Cont
 }
 func (UnimplementedServiceRegistryServiceServer) GetServiceHealth(context.Context, *GetServiceHealthRequest) (*ListServicesHealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetServiceHealth not implemented")
+}
+func (UnimplementedServiceRegistryServiceServer) EnqueueServiceEvent(context.Context, *EnqueueServiceEventRequest) (*EnqueueServiceEventResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method EnqueueServiceEvent not implemented")
 }
 func (UnimplementedServiceRegistryServiceServer) mustEmbedUnimplementedServiceRegistryServiceServer() {
 }
@@ -3650,6 +3678,24 @@ func _ServiceRegistryService_GetServiceHealth_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ServiceRegistryService_EnqueueServiceEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EnqueueServiceEventRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ServiceRegistryServiceServer).EnqueueServiceEvent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ServiceRegistryService_EnqueueServiceEvent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ServiceRegistryServiceServer).EnqueueServiceEvent(ctx, req.(*EnqueueServiceEventRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ServiceRegistryService_ServiceDesc is the grpc.ServiceDesc for ServiceRegistryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -3676,6 +3722,10 @@ var ServiceRegistryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetServiceHealth",
 			Handler:    _ServiceRegistryService_GetServiceHealth_Handler,
+		},
+		{
+			MethodName: "EnqueueServiceEvent",
+			Handler:    _ServiceRegistryService_EnqueueServiceEvent_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -150,6 +150,8 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		Timeout:       cfg.Timeout,
 		Source:        "bridge",
 		ServiceToken:  cfg.ServiceToken,
+		ClusterID:     config.GetEnv("CLUSTER_ID", ""),
+		SourceRegion:  config.GetEnv("REGION", ""),
 	}, cfg.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Decklog gRPC client: %w", err)

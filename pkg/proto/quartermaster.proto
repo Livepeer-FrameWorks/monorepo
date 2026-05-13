@@ -8,6 +8,7 @@ import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/struct.proto";
 import "common.proto";
+import "ipc.proto";
 
 // ============================================================================
 // QUARTERMASTER CONTROL PLANE - TENANT & INFRASTRUCTURE MANAGEMENT
@@ -596,6 +597,31 @@ message InfrastructureCluster {
   // so platform-official clusters reject tenant-private upstreams. Sourced
   // from cluster.yaml during bootstrap reconcile.
   bool allow_private_pull_sources = 25;
+
+  // Per-cluster S3 storage configuration. Chandler reads these to serve
+  // artifacts from this cluster's bucket instead of a single global env.
+  // Foghorn's cross-cluster MintStorageURLs callee already mints against the
+  // local Foghorn's S3 config; these fields are the cluster-row source of
+  // truth that Chandler (and future operator UIs) consult.
+  string s3_bucket = 26;
+  string s3_endpoint = 27;
+  string s3_region = 28;
+
+  // Geographic region this cluster lives in.
+  string region_id = 29;
+  // Failure-isolation cell this cluster belongs to. Defaults to cluster_id.
+  string cell_id = 30;
+  // Ownership/billing class: platform_official | tenant_private |
+  // third_party_marketplace.
+  string cluster_class = 31;
+  // Cell that owns ConfigSeed + tenant-alias bundle + apply-state ACK for
+  // this cluster. Equal to cell_id for platform_official; for
+  // tenant_private / third_party_marketplace clusters it names the
+  // regional control cell.
+  string control_cell_id = 32;
+  // Cells permitted to serve this cluster's content; single-element
+  // [control_cell_id] is the common case.
+  repeated string eligible_serving_cell_ids = 33;
 }
 
 message ClusterResponse {
@@ -1473,6 +1499,27 @@ service ServiceRegistryService {
 
   // Get health of specific service instances
   rpc GetServiceHealth(GetServiceHealthRequest) returns (ListServicesHealthResponse);
+
+  // Enqueue a service event for asynchronous dispatch to Decklog through
+  // quartermaster.service_event_outbox. Used by stateless producers
+  // (Deckhand) that don't own a local outbox; the row carries the
+  // originating service in event.source so the dispatcher can attribute
+  // correctly. The drain worker dispatches with exponential backoff —
+  // durability across a Decklog outage matches QM's own service events.
+  rpc EnqueueServiceEvent(EnqueueServiceEventRequest) returns (EnqueueServiceEventResponse);
+}
+
+message EnqueueServiceEventRequest {
+  // The fully populated service event. event.source must identify the
+  // originating service (e.g. "deckhand"); event.tenant_id is required and
+  // must be a UUID string.
+  helmsmancontrol.ServiceEvent event = 1;
+}
+
+message EnqueueServiceEventResponse {
+  // Outbox row id (uuid) returned for observability. Empty on no-op
+  // (nil event or empty tenant_id).
+  string outbox_id = 1;
 }
 
 service IngressService {
@@ -1811,6 +1858,20 @@ message TenantClusterPeer {
   string s3_bucket = 20;        // Cluster S3 bucket (for cross-cluster artifact affinity)
   string s3_endpoint = 21;      // S3 endpoint URL
   string s3_region = 22;        // S3 region
+
+  // Multi-region routing fields surfaced for Commodore route filtering.
+  // region_id (e.g. "eu-west", "us-east", "ap-tokyo").
+  string region_id = 30;
+  // cell_id (failure-isolation cell; defaults to cluster_id today).
+  string cell_id = 31;
+  // cluster_class: platform_official | tenant_private | third_party_marketplace.
+  // Commodore's plan-aware filter rejects clusters whose class is not allowed
+  // by the tenant's plan tier (free→official only; premium→+marketplace;
+  // enterprise→+private).
+  string cluster_class = 32;
+  // health_status: healthy | degraded | offline. Resolver excludes
+  // non-healthy peers from the candidate set.
+  string health_status = 36;
 }
 
 // ============================================================================
@@ -1846,6 +1907,11 @@ message EnableSelfHostingRequest {
   string tenant_id = 1;                   // Defaults to JWT tenant
   string cluster_name = 2;               // Display name for the new cluster
   optional string short_description = 3;
+  // Operator-asserted region of the self-hosted edges. Steers the Foghorn
+  // selection so a US self-hosted cluster is controlled from a US Foghorn
+  // (avoids transatlantic reconcile latency). Empty = legacy behaviour: pick
+  // the least-loaded Foghorn in any region.
+  string region = 4;
 }
 
 message EnableSelfHostingResponse {

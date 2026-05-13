@@ -666,6 +666,15 @@ CREATE TABLE IF NOT EXISTS commodore.playback_policy_invalidation_outbox (
     -- Slugs (e.g. "demo-media", "peer-media"). Cluster IDs are VARCHAR(100)
     -- strings everywhere else in this codebase, never UUIDs.
     last_failed_clusters JSONB,
+    -- Signed-policy-bundle watermark. Set only when reason='bundle_revoke';
+    -- carries the minimum-acceptable bundle_version after which Foghorn must
+    -- drop cached bundles. Identifies the (tenant_id, stream_id) pair via
+    -- stream_id below. NULL for tenant+internal_names-scoped invalidations.
+    bundle_min_version BIGINT,
+    -- Bundle revocation target. Together with bundle_min_version this lets
+    -- Foghorn BumpWatermark(tenantID, streamID, minVersion) on receipt. NULL
+    -- when the row is a tenant+internal_names-scoped invalidation.
+    stream_id UUID,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     completed_at TIMESTAMP
 );
@@ -676,6 +685,37 @@ CREATE INDEX IF NOT EXISTS idx_commodore_invalidation_outbox_pending
 
 CREATE INDEX IF NOT EXISTS idx_commodore_invalidation_outbox_tenant
     ON commodore.playback_policy_invalidation_outbox(tenant_id, status);
+
+-- ============================================================================
+-- SERVICE EVENT OUTBOX
+-- ============================================================================
+-- Durable outbox for Commodore service events emitted to Decklog. Producers
+-- write a row in the same DB transaction as the state mutation; a drain
+-- worker dispatches with exponential backoff. Payload is the full
+-- pb.ServiceEvent serialized as protojson (StreamChangeEvent / AuthEvent /
+-- other oneof variants ride inside the payload).
+
+CREATE TABLE IF NOT EXISTS commodore.service_event_outbox (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_type    TEXT NOT NULL,
+    tenant_id     UUID NOT NULL,
+    user_id       TEXT NOT NULL DEFAULT '',
+    resource_type TEXT NOT NULL DEFAULT '',
+    resource_id   TEXT NOT NULL DEFAULT '',
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    claimed_at   TIMESTAMPTZ,
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    last_error   TEXT,
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_commodore_service_event_outbox_pending
+    ON commodore.service_event_outbox(created_at)
+    WHERE completed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_commodore_service_event_outbox_tenant
+    ON commodore.service_event_outbox(tenant_id, created_at DESC);
 
 -- ============================================================================
 -- SIGNING-KEY AUDIT LOG
@@ -702,3 +742,49 @@ CREATE INDEX IF NOT EXISTS idx_commodore_signing_key_audit_tenant_at
 
 CREATE INDEX IF NOT EXISTS idx_commodore_signing_key_audit_kid_at
     ON commodore.signing_key_audit(kid, at DESC);
+
+-- ============================================================================
+-- STREAM CLUSTER PINS
+-- ============================================================================
+-- Enterprise stream pinning: lock a specific stream to a constrained set of
+-- clusters regardless of tenant-wide tenant_cluster_access. Resolver joins
+-- LEFT to apply pins when present; absence (no row) means policy-derived
+-- placement applies normally. Empty for ~all rows in production, so the
+-- side-table shape avoids a perpetually-NULL TEXT[] on commodore.streams.
+
+CREATE TABLE IF NOT EXISTS commodore.stream_cluster_pins (
+    stream_id UUID PRIMARY KEY REFERENCES commodore.streams(id) ON DELETE CASCADE,
+    allowed_cluster_ids TEXT[] NOT NULL,
+    pinned_by UUID,
+    pin_reason TEXT,
+    pinned_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================================
+-- PLAYBACK POLICY BUNDLE VERSIONS
+-- ============================================================================
+-- Commodore mints a signed policy bundle per (tenant_id, stream_id) carrying
+-- the tenant's plan, allowed cluster set, JWT verification keys, webhook
+-- config, and a monotonic bundle_version. Foghorn caches by version with a
+-- soft TTL (background refresh) and a hard TTL (refuse stale past the cap).
+-- Revocation rides the existing playback_policy_invalidation_outbox with a
+-- 'bundle_revoke' entry carrying the new minimum-acceptable bundle_version;
+-- Foghorn invalidates cached entries below the watermark. This survives a
+-- central Commodore outage for the hard-TTL window without serving stale
+-- policy past plan downgrades.
+
+CREATE TABLE IF NOT EXISTS commodore.policy_bundle_versions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    stream_id UUID REFERENCES commodore.streams(id) ON DELETE CASCADE,
+    bundle_version BIGINT NOT NULL,
+    bundle_jwt TEXT NOT NULL,
+    issued_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMP NOT NULL,
+    revoked_at TIMESTAMP,
+    UNIQUE (tenant_id, stream_id, bundle_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_commodore_policy_bundle_versions_active
+    ON commodore.policy_bundle_versions(tenant_id, stream_id, bundle_version DESC)
+    WHERE revoked_at IS NULL;

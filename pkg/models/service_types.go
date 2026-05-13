@@ -68,14 +68,25 @@ type APIUsageBreakdown struct {
 }
 
 // UsageSummary represents usage summary for billing
+//
+// Envelope v2 fields (source_region, stream_origin_region) attribute per-row
+// regional cost. source_region records where the usage was incurred (egress
+// cost attribution); stream_origin_region records the originating region of
+// the stream (stream-health / usage attribution). The Purser consumer
+// groups by source_region for egress billing and by stream_origin_region
+// for usage rollups. Producers stamp these at emission time; Periscope-Query
+// backfills from cluster metadata when the producer doesn't supply them.
 type UsageSummary struct {
-	TenantID          string  `json:"tenant_id"`
-	ClusterID         string  `json:"cluster_id"`
-	Period            string  `json:"period"`
-	StreamHours       float64 `json:"stream_hours"`
-	EgressGB          float64 `json:"egress_gb"`
-	PeakBandwidthMbps float64 `json:"peak_bandwidth_mbps"`
-	AverageStorageGB  float64 `json:"average_storage_gb"`
+	TenantID              string  `json:"tenant_id"`
+	ClusterID             string  `json:"cluster_id"`
+	SourceRegion          string  `json:"source_region,omitempty"`
+	StreamOriginRegion    string  `json:"stream_origin_region,omitempty"`
+	StreamOriginClusterID string  `json:"stream_origin_cluster_id,omitempty"`
+	Period                string  `json:"period"`
+	StreamHours           float64 `json:"stream_hours"`
+	EgressGB              float64 `json:"egress_gb"`
+	PeakBandwidthMbps     float64 `json:"peak_bandwidth_mbps"`
+	AverageStorageGB      float64 `json:"average_storage_gb"`
 
 	// Per-codec breakdown: Livepeer (external gateway)
 	LivepeerH264Seconds float64 `json:"livepeer_h264_seconds"`

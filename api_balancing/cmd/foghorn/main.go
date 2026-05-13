@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/balancer"
 	foghornconfig "frameworks/api_balancing/internal/config"
@@ -12,6 +13,7 @@ import (
 	"frameworks/api_balancing/internal/handlers"
 	"frameworks/api_balancing/internal/jobs"
 	"frameworks/api_balancing/internal/orchestrator"
+	"frameworks/api_balancing/internal/policybundle"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
 	"frameworks/api_balancing/internal/triggers"
@@ -306,11 +308,19 @@ func main() {
 		Timeout:       10 * time.Second,
 		Source:        "foghorn",
 		ServiceToken:  serviceToken,
+		ClusterID:     config.GetEnv("CLUSTER_ID", ""),
+		SourceRegion:  config.GetEnv("REGION", ""),
 	}
 	decklogClient, err := decklog.NewBatchedClient(decklogConfig, logger)
 	if err != nil {
 		logger.WithError(err).Error("Failed to initialize Decklog gRPC client")
 	}
+
+	// Artifact-lifecycle + federation events enqueue into
+	// foghorn.artifact_event_outbox; the drain worker dispatches to
+	// Decklog with exponential backoff.
+	artifactoutbox.Init(db, logger, decklogClient)
+	go artifactoutbox.RunWorker(context.Background())
 
 	// Quartermaster (gRPC)
 	quartermasterGRPCURL := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
@@ -733,6 +743,31 @@ func main() {
 	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, geoipCache, decklogClient, s3ForGRPC, purserClient)
 	if qmClient != nil {
 		foghornServer.SetQuartermasterClient(qmClient)
+	}
+
+	// Signed-policy-bundle cache. FetchFunc dials Commodore; the cache
+	// lives across admission requests with soft/hard TTL semantics from
+	// policybundle.
+	if commodoreClient != nil {
+		bundleCache := policybundle.New()
+		fetcher := policybundle.FetchFunc(func(fctx context.Context, tenantID, streamID string) (policybundle.Entry, error) {
+			resp, fetchErr := commodoreClient.GetSignedPolicyBundle(fctx, tenantID, streamID)
+			if fetchErr != nil {
+				return policybundle.Entry{}, fetchErr
+			}
+			b := resp.GetBundle()
+			if b == nil {
+				return policybundle.Entry{}, fmt.Errorf("commodore returned empty bundle")
+			}
+			return policybundle.Entry{
+				BundleJWT:     b.GetBundleJwt(),
+				BundleVersion: b.GetBundleVersion(),
+				IssuedAt:      b.GetIssuedAt().AsTime(),
+				SoftExpiresAt: b.GetSoftExpiresAt().AsTime(),
+				ExpiresAt:     b.GetExpiresAt().AsTime(),
+			}, nil
+		})
+		foghornServer.SetPolicyBundleCache(bundleCache, fetcher)
 	}
 	// Storage resolver factory: builds a per-request storage.ClusterResolver
 	// using the local Foghorn S3 backing tuple and the tenant's advertised

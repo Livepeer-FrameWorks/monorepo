@@ -141,7 +141,23 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_clusters (
     database_url TEXT,
     periscope_url TEXT,
     kafka_brokers TEXT[],
-    
+
+    -- ===== REGION, CELL & CLASS =====
+    -- Geographic region this cluster lives in (e.g. "eu-west", "us-east",
+    -- "ap-tokyo"). Used by resolver scoring + GeoIP-based viewer/ingest
+    -- routing and by event envelope source_region stamping.
+    region_id VARCHAR(50),
+    -- Failure-isolation cell this cluster belongs to. Defaults to cluster_id
+    -- (every cluster is its own cell today); multi-cluster cells are reserved
+    -- for ops grouping later. Foghorn HA boundary is per-cell, not per-cluster.
+    cell_id VARCHAR(100),
+    -- Coarse ownership/billing classification driving plan-tier filter at the
+    -- resolver: platform_official | tenant_private | third_party_marketplace.
+    -- Free tenants are admitted only to platform_official; premium adds
+    -- third_party_marketplace; enterprise adds tenant_private. Self-hosted is
+    -- expressed via explicit tenant_cluster_access grants regardless of class.
+    cluster_class VARCHAR(50),
+
     -- ===== CAPACITY LIMITS =====
     max_concurrent_streams INTEGER DEFAULT 1000,
     max_concurrent_viewers INTEGER DEFAULT 100000,
@@ -185,9 +201,30 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_clusters (
     requires_approval BOOLEAN DEFAULT FALSE,
     short_description VARCHAR(500),
 
+    -- ===== VIRTUALFOGHORN CONTROL CELL =====
+    -- The regional Foghorn cell that owns Helmsman ConfigSeed distribution,
+    -- tenant alias TLS bundle distribution, and edge apply-state ACK for this
+    -- cluster. For platform_official clusters this equals cell_id (self-
+    -- control). For tenant_private / third_party_marketplace / self-hosted
+    -- clusters, it points to the regional cell assigned at creation time.
+    -- NULL until assignment runs. Navigator and resolvers consult this when
+    -- choosing which Foghorn to ask for apply-state.
+    control_cell_id VARCHAR(100),
+    -- Foghorn cells authorized to serve content from this cluster. Defaults
+    -- to ARRAY[control_cell_id]; populated explicitly when multi-cell serving
+    -- is opted-in per cluster.
+    eligible_serving_cell_ids TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    -- NULL during steady state; 'draining' while an operator-initiated
+    -- ReassignClusterControlCell drains the old cell and waits for the new
+    -- cell's GetEdgeApplyState ACK. Navigator filters tenant alias publication
+    -- against this.
+    reassignment_state VARCHAR(20),
+
     -- ===== CONSTRAINTS =====
     CONSTRAINT chk_cluster_visibility CHECK (visibility IN ('public', 'unlisted', 'private')),
-    CONSTRAINT chk_cluster_pricing_model CHECK (pricing_model IN ('free_unmetered', 'metered', 'monthly', 'custom', 'tier_inherit'))
+    CONSTRAINT chk_cluster_pricing_model CHECK (pricing_model IN ('free_unmetered', 'metered', 'monthly', 'custom', 'tier_inherit')),
+    CONSTRAINT chk_cluster_class CHECK (cluster_class IS NULL OR cluster_class IN ('platform_official', 'tenant_private', 'third_party_marketplace')),
+    CONSTRAINT chk_cluster_reassignment_state CHECK (reassignment_state IS NULL OR reassignment_state IN ('draining'))
 );
 
 -- ============================================================================
@@ -670,3 +707,58 @@ CREATE INDEX IF NOT EXISTS idx_qm_service_instances_status_last_check ON quarter
 CREATE UNIQUE INDEX IF NOT EXISTS idx_qm_infrastructure_nodes_wireguard_ip_unique
     ON quartermaster.infrastructure_nodes((wireguard_ip::text))
     WHERE wireguard_ip IS NOT NULL;
+
+-- ============================================================================
+-- SERVICE EVENT OUTBOX
+-- ============================================================================
+-- Durable outbox for Quartermaster-emitted service events (TenantEvent /
+-- ClusterEvent / etc.) to Decklog. Drain worker dispatches pending rows
+-- with exponential backoff. Payload is the full pb.ServiceEvent in
+-- protojson — the typed oneof variants ride inside it.
+
+CREATE TABLE IF NOT EXISTS quartermaster.service_event_outbox (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_type    TEXT NOT NULL,
+    tenant_id     UUID NOT NULL,
+    user_id       TEXT NOT NULL DEFAULT '',
+    resource_type TEXT NOT NULL DEFAULT '',
+    resource_id   TEXT NOT NULL DEFAULT '',
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    claimed_at   TIMESTAMPTZ,
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    last_error   TEXT,
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_qm_service_event_outbox_pending
+    ON quartermaster.service_event_outbox(created_at)
+    WHERE completed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_qm_service_event_outbox_tenant
+    ON quartermaster.service_event_outbox(tenant_id, created_at DESC);
+
+-- ============================================================================
+-- NAVIGATOR CUSTOM-DOMAIN OUTBOX
+-- ============================================================================
+-- Durable outbox for the BYO custom-domain hand-off to Navigator. UpdateTenant
+-- inserts a row in the same tx as the tenants UPDATE so a Navigator outage
+-- can't leave QM saying the tenant has a custom_domain while Navigator never
+-- created the verification + cert lifecycle row. Drain worker calls
+-- Navigator.EnsureCustomDomain / RemoveCustomDomain with exponential backoff.
+
+CREATE TABLE IF NOT EXISTS quartermaster.navigator_custom_domain_outbox (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    domain    TEXT NOT NULL,
+    action    TEXT NOT NULL CHECK (action IN ('ensure', 'remove')),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    claimed_at   TIMESTAMPTZ,
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    last_error   TEXT,
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_qm_navigator_custom_domain_outbox_pending
+    ON quartermaster.navigator_custom_domain_outbox(created_at)
+    WHERE completed_at IS NULL;

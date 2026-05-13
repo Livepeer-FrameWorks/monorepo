@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 )
 
 const (
@@ -27,6 +28,17 @@ const (
 	invalidationOutboxAlertAfterAttempts = 12
 )
 
+func invalidationOutboxConfig() outbox.Config {
+	return outbox.Config{
+		BaseBackoff:        invalidationOutboxBaseBackoff,
+		MaxBackoff:         invalidationOutboxMaxBackoff,
+		BatchSize:          invalidationOutboxBatchSize,
+		PollPeriod:         invalidationOutboxPollPeriod,
+		Lease:              invalidationOutboxLease,
+		AlertAfterAttempts: invalidationOutboxAlertAfterAttempts,
+	}
+}
+
 // outboxExecutor is the subset of *sql.Tx / *sql.DB this package needs for
 // enqueue. Lets RevokeSigningKey / SetPlaybackPolicy enqueue inside their own
 // transaction so the mutation rolls back if the outbox INSERT fails.
@@ -35,11 +47,13 @@ type outboxExecutor interface {
 }
 
 type invalidationOutboxRow struct {
-	id            string
-	tenantID      string
-	reason        string
-	internalNames []string
-	attempts      int
+	id               string
+	tenantID         string
+	reason           string
+	internalNames    []string
+	attempts         int
+	streamID         string
+	bundleMinVersion int64
 }
 
 // enqueueInvalidationOutbox writes a pending mutation row. The caller passes
@@ -117,10 +131,7 @@ func (s *CommodoreServer) recordInvalidationOutboxFailure(
 		failedJSON = []byte("null")
 	}
 
-	backoff := invalidationOutboxBaseBackoff << uint(currentAttempts)
-	if backoff > invalidationOutboxMaxBackoff || backoff <= 0 {
-		backoff = invalidationOutboxMaxBackoff
-	}
+	backoff := outbox.ComputeBackoff(invalidationOutboxConfig(), currentAttempts)
 	if _, err := s.db.ExecContext(ctx, `
 		UPDATE commodore.playback_policy_invalidation_outbox
 		SET attempts = $1,
@@ -144,40 +155,78 @@ func (s *CommodoreServer) recordInvalidationOutboxFailure(
 	}
 }
 
+// invalidationOutboxStore adapts CommodoreServer's existing per-table SQL to
+// the generic outbox.Store contract. Delegating rather than reimplementing
+// keeps the SQL pattern (and the existing tests that assert on it) as a
+// single source of truth.
+type invalidationOutboxStore struct {
+	server *CommodoreServer
+}
+
+// dispatchKey passes the per-row routing data (stream_id, bundle version)
+// alongside the payload so the Dispatcher can forward bundle_revoke fields
+// to Foghorn.
+func (st *invalidationOutboxStore) ClaimBatch(ctx context.Context, _ int, _ time.Duration) ([]outbox.Claim[invalidationOutboxRow], error) {
+	rows, err := st.server.claimInvalidationOutboxBatch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	claims := make([]outbox.Claim[invalidationOutboxRow], 0, len(rows))
+	for _, r := range rows {
+		claims = append(claims, outbox.Claim[invalidationOutboxRow]{
+			ID:       r.id,
+			Attempts: r.attempts,
+			Payload:  r,
+		})
+	}
+	return claims, nil
+}
+
+func (st *invalidationOutboxStore) MarkCompleted(ctx context.Context, id string) error {
+	st.server.markInvalidationOutboxCompleted(ctx, id)
+	return nil
+}
+
+func (st *invalidationOutboxStore) RecordFailure(ctx context.Context, id string, currentAttempts int, failedTargets []string, cause error, _ time.Duration) error {
+	// The server method recomputes backoff via the same outbox.ComputeBackoff
+	// call so the SQL pattern stays identical to the existing test
+	// expectations. The worker-supplied backoff is intentionally unused here.
+	st.server.recordInvalidationOutboxFailure(ctx, id, currentAttempts, failedTargets, cause)
+	return nil
+}
+
+// invalidationOutboxDispatcher adapts the route-lookup + Foghorn fanout to
+// outbox.Dispatcher. Worker calls this for both poll-loop and TryDispatch.
+type invalidationOutboxDispatcher struct {
+	server *CommodoreServer
+}
+
+func (d *invalidationOutboxDispatcher) Dispatch(ctx context.Context, row invalidationOutboxRow) ([]string, error) {
+	return d.server.dispatchInvalidationOutboxRow(ctx, row)
+}
+
 // runInvalidationOutboxWorker polls for due rows and replays them. SKIP LOCKED
 // + lease-window UPDATE makes this safe to run on every Commodore replica
 // without leader election.
+//
+// AlertAfterAttempts is zeroed on the worker config so the worker does not
+// double-log the on-call alert; recordInvalidationOutboxFailure already
+// fires it from within Store.RecordFailure.
 func (s *CommodoreServer) runInvalidationOutboxWorker(ctx context.Context) {
 	if s.foghornPool == nil {
 		s.logger.Info("invalidation outbox worker disabled: no foghorn pool")
 		return
 	}
-	ticker := time.NewTicker(invalidationOutboxPollPeriod)
-	defer ticker.Stop()
-	for {
-		s.processInvalidationOutboxBatch(ctx)
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+	cfg := invalidationOutboxConfig()
+	cfg.AlertAfterAttempts = 0
+	worker := &outbox.Worker[invalidationOutboxRow]{
+		Config:     cfg,
+		Store:      &invalidationOutboxStore{server: s},
+		Dispatcher: &invalidationOutboxDispatcher{server: s},
+		Logger:     s.logger,
+		AlertLabel: "playback-policy invalidation",
 	}
-}
-
-func (s *CommodoreServer) processInvalidationOutboxBatch(ctx context.Context) {
-	rows, err := s.claimInvalidationOutboxBatch(ctx)
-	if err != nil {
-		s.logger.WithError(err).Warn("claim invalidation outbox batch failed")
-		return
-	}
-	for _, row := range rows {
-		failed, dispatchErr := s.dispatchInvalidationOutbox(ctx, row.tenantID, row.reason, row.internalNames)
-		if dispatchErr == nil && len(failed) == 0 {
-			s.markInvalidationOutboxCompleted(ctx, row.id)
-			continue
-		}
-		s.recordInvalidationOutboxFailure(ctx, row.id, row.attempts, failed, dispatchErr)
-	}
+	worker.Run(ctx)
 }
 
 // claimInvalidationOutboxBatch selects pending rows, then in the SAME
@@ -194,7 +243,8 @@ func (s *CommodoreServer) claimInvalidationOutboxBatch(ctx context.Context) ([]i
 
 	out, err := func() ([]invalidationOutboxRow, error) {
 		rows, qerr := tx.QueryContext(ctx, `
-			SELECT id, tenant_id, reason, internal_names, attempts
+			SELECT id, tenant_id, reason, internal_names, attempts,
+			       COALESCE(stream_id::text, ''), COALESCE(bundle_min_version, 0)
 			FROM commodore.playback_policy_invalidation_outbox
 			WHERE status = 'pending' AND next_attempt_at <= NOW()
 			ORDER BY next_attempt_at
@@ -212,7 +262,7 @@ func (s *CommodoreServer) claimInvalidationOutboxBatch(ctx context.Context) ([]i
 				r        invalidationOutboxRow
 				rawNames []byte
 			)
-			if scanErr := rows.Scan(&r.id, &r.tenantID, &r.reason, &rawNames, &r.attempts); scanErr != nil {
+			if scanErr := rows.Scan(&r.id, &r.tenantID, &r.reason, &rawNames, &r.attempts, &r.streamID, &r.bundleMinVersion); scanErr != nil {
 				return nil, scanErr
 			}
 			if len(rawNames) > 0 {
@@ -266,6 +316,56 @@ func (s *CommodoreServer) tryDispatchInvalidationOutbox(
 		return
 	}
 	s.recordInvalidationOutboxFailure(ctx, outboxID, 0, failed, err)
+}
+
+// dispatchInvalidationOutboxRow forwards a claimed outbox row to Foghorn.
+// Per-stream invalidations and bundle_revoke entries share the path —
+// bundle_revoke carries stream_id + bundle_min_version through to Foghorn
+// so the cache watermark bump rides in-band with session invalidation.
+func (s *CommodoreServer) dispatchInvalidationOutboxRow(ctx context.Context, row invalidationOutboxRow) ([]string, error) {
+	route, err := s.resolveClusterRouteForTenant(ctx, row.tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("cluster route lookup: %w", err)
+	}
+	targets := buildClusterFanoutTargets(route)
+	if len(targets) == 0 {
+		return nil, nil
+	}
+
+	var failed []string
+	for _, target := range targets {
+		client, dialErr := s.foghornPool.GetOrCreate(foghornPoolKey(target.clusterID, target.addr), target.addr)
+		if dialErr != nil {
+			s.logger.WithError(dialErr).WithFields(logging.Fields{
+				"tenant_id":  row.tenantID,
+				"cluster_id": target.clusterID,
+			}).Warn("invalidation dispatch: dial failed")
+			failed = append(failed, target.clusterID)
+			continue
+		}
+		resp, _, callErr := client.InvalidatePlaybackAuthWithBundle(ctx, row.tenantID, row.reason, row.internalNames, row.streamID, row.bundleMinVersion)
+		if callErr != nil {
+			s.logger.WithError(callErr).WithFields(logging.Fields{
+				"tenant_id":  row.tenantID,
+				"cluster_id": target.clusterID,
+				"reason":     row.reason,
+			}).Warn("invalidation dispatch: InvalidatePlaybackAuth failed")
+			failed = append(failed, target.clusterID)
+			continue
+		}
+		if resp.GetNodesFailed() > 0 {
+			s.logger.WithFields(logging.Fields{
+				"tenant_id":       row.tenantID,
+				"cluster_id":      target.clusterID,
+				"reason":          row.reason,
+				"nodes_attempted": resp.GetNodesAttempted(),
+				"nodes_failed":    resp.GetNodesFailed(),
+				"failed_node_ids": resp.GetFailedNodeIds(),
+			}).Warn("invalidation dispatch: foghorn reported partial failure")
+			failed = append(failed, target.clusterID)
+		}
+	}
+	return failed, nil
 }
 
 // dispatchInvalidationOutbox does a route lookup + per-cluster Foghorn fanout

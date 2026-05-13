@@ -113,6 +113,34 @@ func (r *Resolver) DoGetTenant(ctx context.Context) (*pb.Tenant, error) {
 	return resp.Tenant, nil
 }
 
+// DoGetCustomDomainStatus calls Navigator for the BYO domain lifecycle state of
+// the tenant in context. Returns nil when the tenant has not configured a
+// custom domain or when Navigator reports `found=false` (so the field resolver
+// can map to GraphQL null without surfacing an error to the dashboard).
+func (r *Resolver) DoGetCustomDomainStatus(ctx context.Context, domain string) (*pb.GetCustomDomainStatusResponse, error) {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return nil, nil
+	}
+	if strings.TrimSpace(domain) == "" {
+		return nil, nil
+	}
+	if r.Clients == nil || r.Clients.Navigator == nil {
+		return nil, nil
+	}
+	resp, err := r.Clients.Navigator.GetCustomDomainStatus(ctx, &pb.GetCustomDomainStatusRequest{
+		TenantId: tenantID,
+		Domain:   domain,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil || !resp.Found {
+		return nil, nil
+	}
+	return resp, nil
+}
+
 // DoGetClusters returns available clusters
 func (r *Resolver) DoGetClusters(ctx context.Context, first *int, after *string) ([]*pb.InfrastructureCluster, error) {
 	if middleware.IsDemoMode(ctx) {
@@ -498,6 +526,17 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 				updates++
 				changedFields = append(changedFields, "primary_cluster_id")
 			}
+		}
+
+		if v, present := raw["customDomain"]; present {
+			val, ok := v.(string)
+			if !ok {
+				val = ""
+			}
+			trimmed := strings.TrimSpace(val)
+			updateReq.CustomDomain = &trimmed
+			updates++
+			changedFields = append(changedFields, "custom_domain")
 		}
 
 		if v := raw["deploymentModel"]; v != nil {

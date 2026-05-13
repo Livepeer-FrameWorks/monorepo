@@ -416,6 +416,13 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 // resolveClusterRouteForTenant returns cached or fresh cluster routing data
 // from Quartermaster. Never dials Foghorn. Safe to call from handlers that
 // only need cluster metadata (origin_cluster_id, cluster_peers, domain slugs).
+//
+// Plan-aware filtering: each peer is checked against the tenant's
+// plan-tier-allowed cluster_class set. Peers with missing class metadata
+// pass through; peers whose class isn't allowed by the tier are dropped.
+// Health filter excludes non-healthy peers. Tier lookup is cached on the
+// route row (5min TTL), so the Purser round-trip happens at most once
+// per tenant per cache cycle.
 func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tenantID string) (*clusterRoute, error) {
 	s.routeCacheMu.RLock()
 	if route, ok := s.routeCache[tenantID]; ok && time.Since(route.resolvedAt) < s.routeCacheTTL {
@@ -433,6 +440,9 @@ func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tena
 		return nil, status.Errorf(codes.Unavailable, "cluster routing failed: %v", err)
 	}
 
+	allowedClasses := s.allowedClusterClassesForTenant(ctx, tenantID)
+	filteredPeers := filterPeersByPolicy(resp.GetClusterPeers(), allowedClasses)
+
 	route := &clusterRoute{
 		clusterID:               resp.GetClusterId(),
 		foghornAddr:             resp.GetFoghornGrpcAddr(),
@@ -444,7 +454,7 @@ func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tena
 		officialBaseURL:         resp.GetOfficialBaseUrl(),
 		officialClusterName:     resp.GetOfficialClusterName(),
 		officialFoghornGrpcAddr: resp.GetOfficialFoghornGrpcAddr(),
-		clusterPeers:            resp.GetClusterPeers(),
+		clusterPeers:            filteredPeers,
 		tenantResourceLimits:    resp.GetTenantResourceLimits(),
 		resolvedAt:              time.Now(),
 	}
@@ -455,6 +465,82 @@ func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tena
 	s.routeCacheMu.Unlock()
 
 	return route, nil
+}
+
+// allowedClusterClassesForTenant returns the cluster_class set that the
+// tenant's plan tier may admit. Sourced from Purser's GetBillingTier
+// tier_level. Failure modes (no Purser client, RPC error, missing tier)
+// fall back to platform_official only — fail-closed on the safest class.
+//
+//	tier_level 0/1 (no sub / free) → platform_official only
+//	tier_level 2-3 (supporter / developer) → + third_party_marketplace
+//	tier_level 4+ (production / enterprise) → + tenant_private
+//
+// Self-hosted clusters carry no fixed class; they're entitled per-tenant
+// via tenant_cluster_access grants regardless of plan, and pass this
+// filter unchanged when their class is missing.
+func (s *CommodoreServer) allowedClusterClassesForTenant(ctx context.Context, tenantID string) map[string]struct{} {
+	free := map[string]struct{}{"platform_official": {}}
+	if s.purserClient == nil {
+		return free
+	}
+	subResp, err := s.purserClient.GetSubscription(ctx, tenantID)
+	if err != nil || subResp == nil || subResp.GetSubscription() == nil {
+		return free
+	}
+	tier, err := s.purserClient.GetBillingTier(ctx, subResp.GetSubscription().GetTierId())
+	if err != nil || tier == nil {
+		return free
+	}
+	out := map[string]struct{}{"platform_official": {}}
+	switch level := tier.GetTierLevel(); {
+	case level >= 4:
+		out["third_party_marketplace"] = struct{}{}
+		out["tenant_private"] = struct{}{}
+	case level >= 2:
+		out["third_party_marketplace"] = struct{}{}
+	}
+	return out
+}
+
+// findPeerByClusterID returns the matching peer or nil. Admission uses
+// this to verify the requested ingest cluster survived the plan-aware
+// filter applied at route fetch time.
+func findPeerByClusterID(peers []*pb.TenantClusterPeer, clusterID string) *pb.TenantClusterPeer {
+	for _, p := range peers {
+		if p != nil && p.GetClusterId() == clusterID {
+			return p
+		}
+	}
+	return nil
+}
+
+// filterPeersByPolicy drops peers whose cluster_class is non-empty and
+// not in the tenant's allowed set, and drops peers whose health_status
+// is explicitly degraded/offline. Peers with empty class or health pass
+// through.
+func filterPeersByPolicy(peers []*pb.TenantClusterPeer, allowedClasses map[string]struct{}) []*pb.TenantClusterPeer {
+	if len(peers) == 0 {
+		return peers
+	}
+	out := make([]*pb.TenantClusterPeer, 0, len(peers))
+	for _, peer := range peers {
+		if peer == nil {
+			continue
+		}
+		class := peer.GetClusterClass()
+		if class != "" {
+			if _, ok := allowedClasses[class]; !ok {
+				continue
+			}
+		}
+		switch peer.GetHealthStatus() {
+		case "offline", "degraded":
+			continue
+		}
+		out = append(out, peer)
+	}
+	return out
 }
 
 // resolveProcessesJSON returns the MistServer process config JSON for a tenant.
@@ -839,8 +925,9 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ValidateStreamKeyResponse{
-			Valid: false,
-			Error: "Invalid stream key",
+			Valid:           false,
+			Error:           "Invalid stream key",
+			RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY,
 		}, nil
 	}
 
@@ -854,15 +941,49 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 
 	if !isActive {
 		return &pb.ValidateStreamKeyResponse{
-			Valid: false,
-			Error: "User account is inactive",
+			Valid:           false,
+			Error:           "User account is inactive",
+			RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE,
 		}, nil
 	}
 	if ingestMode == "pull" {
 		return &pb.ValidateStreamKeyResponse{
-			Valid: false,
-			Error: "Pull streams do not accept push ingest",
+			Valid:           false,
+			Error:           "Pull streams do not accept push ingest",
+			RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_PULL_MODE,
 		}, nil
+	}
+
+	// Plan-aware cluster admission. The route here is already filtered by
+	// allowedClusterClassesForTenant against the peer's cluster_class
+	// metadata and excludes degraded/offline peers. Confirm the requested
+	// ingest cluster is in the filtered set and reject with a structured
+	// reason otherwise. Quartermaster dial failures fall through so a
+	// transient route-lookup failure doesn't block ingest; cluster_id is
+	// still recorded for placement.
+	requestedClusterID := strings.TrimSpace(req.GetClusterId())
+	if requestedClusterID != "" {
+		if route, routeErr := s.resolveClusterRouteForTenant(ctx, tenantID); routeErr == nil {
+			peer := findPeerByClusterID(route.clusterPeers, requestedClusterID)
+			if peer == nil {
+				s.logger.WithFields(logging.Fields{
+					"tenant_id":  tenantID,
+					"cluster_id": requestedClusterID,
+				}).Warn("ValidateStreamKey rejected: cluster not entitled or filtered by plan policy")
+				return &pb.ValidateStreamKeyResponse{
+					Valid:           false,
+					Error:           "Tenant not entitled to ingest cluster " + requestedClusterID,
+					RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED,
+				}, nil
+			}
+			if status := peer.GetHealthStatus(); status == "offline" || status == "degraded" {
+				return &pb.ValidateStreamKeyResponse{
+					Valid:           false,
+					Error:           "Ingest cluster " + requestedClusterID + " is " + status,
+					RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY,
+				}, nil
+			}
+		}
 	}
 
 	// Get billing status via Purser gRPC (not direct DB access)
@@ -971,10 +1092,37 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 		if updateErr != nil {
 			s.logger.WithError(updateErr).WithField("stream_key", streamKey).Warn("Failed to record ingest cluster")
 		} else if rows, rowsErr := res.RowsAffected(); rowsErr == nil && rows == 0 {
+			// Concurrent-claim guard: a fresh lease exists held by some
+			// cluster. If it's not the cluster trying to ingest now, reject
+			// the claim — single-active-ingest per stream is a hard
+			// invariant. Belt-and-suspenders to the PeerChannel
+			// StreamAdvertisement broadcast (which surfaces the same fact
+			// at federation cadence ~10s; this gate fires synchronously at
+			// admission time).
+			var heldCluster sql.NullString
+			if scanErr := s.db.QueryRowContext(ctx, `
+				SELECT active_ingest_cluster_id
+				FROM commodore.streams
+				WHERE stream_key = $1
+			`, streamKey).Scan(&heldCluster); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+				s.logger.WithError(scanErr).WithField("stream_key", streamKey).Warn("ValidateStreamKey: active-ingest lookup failed")
+			}
+			if heldCluster.Valid && heldCluster.String != "" && heldCluster.String != activeIngestClusterID {
+				s.logger.WithFields(logging.Fields{
+					"stream_key":            streamKey,
+					"requesting_cluster_id": activeIngestClusterID,
+					"active_ingest_cluster": heldCluster.String,
+				}).Warn("ValidateStreamKey rejected: duplicate ingest claim against fresh lease on another cluster")
+				return &pb.ValidateStreamKeyResponse{
+					Valid:           false,
+					Error:           "Stream is already ingesting on cluster " + heldCluster.String,
+					RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_DUPLICATE_INGEST,
+				}, nil
+			}
 			s.logger.WithFields(logging.Fields{
 				"stream_key":        streamKey,
 				"ingest_cluster_id": activeIngestClusterID,
-			}).Debug("Skipped ingest cluster update due to active lease")
+			}).Debug("Skipped ingest cluster update due to active lease (same cluster)")
 		}
 	}
 
@@ -5576,19 +5724,21 @@ const (
 	eventPlaybackPolicyChanged = "playback_policy_changed"
 )
 
+// emitServiceEvent enqueues a service event into
+// commodore.service_event_outbox. The drain worker (started in
+// NewGRPCServer via runServiceEventOutboxWorker) dispatches pending rows
+// to Decklog with exponential backoff. Replaces the previous async
+// fire-and-forget SendServiceEvent path so a Decklog outage no longer
+// drops stream/policy mutation events. For strict atomicity with a
+// caller-held state-mutation tx, use EnqueueServiceEventTx(ctx, tx, event).
 func (s *CommodoreServer) emitServiceEvent(ctx context.Context, event *pb.ServiceEvent) {
-	if s.decklogClient == nil || event == nil {
+	if event == nil {
 		return
 	}
 	if ctxkeys.IsDemoMode(ctx) {
 		return
 	}
-
-	go func(ev *pb.ServiceEvent) {
-		if err := s.decklogClient.SendServiceEvent(ev); err != nil {
-			s.logger.WithError(err).WithField("event_type", ev.EventType).Warn("Failed to emit service event")
-		}
-	}(event)
+	s.enqueueServiceEvent(ctx, event)
 }
 
 func (s *CommodoreServer) emitAuthEvent(ctx context.Context, eventType, userID, tenantID, authType, walletID, tokenID, errMsg string) {
@@ -5717,22 +5867,27 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStream
 
 func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, tenantID string) (*pb.Stream, error) {
 	var stream pb.Stream
-	var description, sourceURIEnc sql.NullString
+	var description, sourceURIEnc, activeIngest, originRegion sql.NullString
 	var pullEnabled sql.NullBool
 	var pullAllowedClusters pq.StringArray
 	var createdAt, updatedAt time.Time
 
-	// Query config only - operational state (status, started_at, ended_at) comes from Periscope Data Plane
+	// Query config only - operational state (status, started_at, ended_at) comes from Periscope Data Plane.
+	// LEFT JOIN onto infrastructure_clusters resolves the origin region from active_ingest_cluster_id
+	// so realtime subscribers can dial the origin-region Signalman without a second RPC.
 	err := s.db.QueryRowContext(ctx, `
 		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
 		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
-		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}')
+		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}'),
+		       s.active_ingest_cluster_id, c.region_id
 		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
+		LEFT JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = s.active_ingest_cluster_id
 		WHERE s.id = $1 AND s.user_id = $2 AND s.tenant_id = $3
 	`, streamID, userID, tenantID).Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
 		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt,
-		&stream.IngestMode, &sourceURIEnc, &pullEnabled, &pullAllowedClusters)
+		&stream.IngestMode, &sourceURIEnc, &pullEnabled, &pullAllowedClusters,
+		&activeIngest, &originRegion)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
@@ -5743,6 +5898,12 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 
 	if description.Valid {
 		stream.Description = description.String
+	}
+	if activeIngest.Valid {
+		stream.ActiveIngestClusterId = activeIngest.String
+	}
+	if originRegion.Valid {
+		stream.StreamOriginRegion = originRegion.String
 	}
 	stream.IsRecording = stream.IsRecordingEnabled
 	stream.CreatedAt = timestamppb.New(createdAt)
@@ -6893,6 +7054,11 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 	// synchronous Foghorn dispatch failed or returned a partial-success
 	// response (NodesFailed > 0). Runs for the lifetime of the binary.
 	go commodoreServer.runInvalidationOutboxWorker(context.Background())
+
+	// Drain commodore.service_event_outbox to Decklog. Replaces the previous
+	// async fire-and-forget go-routine — a Decklog outage now degrades to
+	// outbox-backlog growth rather than dropped events.
+	go commodoreServer.runServiceEventOutboxWorker(context.Background())
 
 	// Register all services
 	pb.RegisterInternalServiceServer(server, commodoreServer)

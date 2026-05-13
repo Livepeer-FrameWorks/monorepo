@@ -110,7 +110,7 @@
 
 - name: Render named Redis config
   ansible.builtin.template:
-    src: instance.conf.j2
+    src: "{{ 'sentinel.conf.j2' if redis_role == 'sentinel' else 'instance.conf.j2' }}"
     dest: "{{ redis_config_path }}"
     owner: root
     group: "{{ redis_runtime_group }}"
@@ -138,8 +138,8 @@
     if systemctl is-active --quiet "{{ redis_service_name }}"; then
       exit 0
     fi
-    if ss -ltn "sport = :{{ redis_port }}" | grep -q LISTEN; then
-      ss -ltnp "sport = :{{ redis_port }}" || true
+    if ss -ltn "sport = :{{ (redis_sentinel_port if redis_role == 'sentinel' else redis_port) }}" | grep -q LISTEN; then
+      ss -ltnp "sport = :{{ (redis_sentinel_port if redis_role == 'sentinel' else redis_port) }}" || true
       exit 1
     fi
   args:
@@ -154,7 +154,8 @@
 - name: Fail when named Redis port is already owned
   ansible.builtin.fail:
     msg: >-
-      Redis instance {{ redis_instance }} cannot bind {{ redis_bind_interface }}:{{ redis_port }};
+      Redis instance {{ redis_instance }} ({{ redis_role }}) cannot bind
+      {{ redis_bind_interface }}:{{ (redis_sentinel_port if redis_role == 'sentinel' else redis_port) }};
       another service is already listening. Existing listener:
       {{ redis_named_port_check.stdout | default('unknown') }}
   when:

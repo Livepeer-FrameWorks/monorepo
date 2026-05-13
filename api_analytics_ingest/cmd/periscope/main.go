@@ -157,7 +157,8 @@ func main() {
 		}
 	}
 
-	// Subscribe to topics with the handlers
+	// Subscribe to local regional topics. Cross-region mirrored topics
+	// from MIRROR_REGION_PREFIXES are wired separately below.
 	consumer.AddHandler(analyticsTopic, wrapWithDLQ("periscope-ingest-analytics", eventHandler.HandleMessage))
 
 	serviceHandler := func(ctx context.Context, msg kafka.Message) error {
@@ -176,10 +177,48 @@ func main() {
 			if k == "event_type" && event.EventType == "" {
 				event.EventType = v
 			}
+			// Envelope headers — propagate to the event when the producer
+			// didn't stamp the body. Decklog backfills source on emit so
+			// the headers normally agree; honor either source.
+			if k == "source_region" && event.SourceRegion == "" {
+				event.SourceRegion = v
+			}
+			if k == "source_cluster_id" && event.SourceClusterID == "" {
+				event.SourceClusterID = v
+			}
+			if k == "stream_origin_region" && event.StreamOriginRegion == "" {
+				event.StreamOriginRegion = v
+			}
+			if k == "stream_origin_cluster_id" && event.StreamOriginClusterID == "" {
+				event.StreamOriginClusterID = v
+			}
 		}
 		return analyticsHandler.HandleServiceEvent(event)
 	}
 	consumer.AddHandler(serviceEventsTopic, wrapWithDLQ("periscope-ingest-service", serviceHandler))
+
+	// Mirrored-topic subscriptions. MIRROR_REGION_PREFIXES is a comma-
+	// separated list of region IDs (e.g. "us-east,ap-tokyo"); each adds
+	// {region}.analytics_events and {region}.service_events to the
+	// subscription set. Empty = consume only local-cluster topics.
+	mirrorPrefixes := strings.TrimSpace(config.GetEnv("MIRROR_REGION_PREFIXES", ""))
+	if mirrorPrefixes != "" {
+		for _, prefix := range strings.Split(mirrorPrefixes, ",") {
+			prefix = strings.TrimSpace(prefix)
+			if prefix == "" {
+				continue
+			}
+			mirroredAnalytics := prefix + "." + analyticsTopic
+			mirroredServiceEvents := prefix + "." + serviceEventsTopic
+			consumer.AddHandler(mirroredAnalytics, wrapWithDLQ("periscope-ingest-analytics-mirror:"+prefix, eventHandler.HandleMessage))
+			consumer.AddHandler(mirroredServiceEvents, wrapWithDLQ("periscope-ingest-service-mirror:"+prefix, serviceHandler))
+			logger.WithFields(logging.Fields{
+				"region_prefix":   prefix,
+				"analytics_topic": mirroredAnalytics,
+				"service_events":  mirroredServiceEvents,
+			}).Info("Subscribed to MirrorMaker2 mirrored topics")
+		}
+	}
 
 	// Now add health checks with all dependencies
 	healthChecker.AddCheck("clickhouse", monitoring.ClickHouseNativeHealthCheck(clickhouse))

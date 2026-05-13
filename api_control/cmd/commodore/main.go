@@ -154,6 +154,8 @@ func main() {
 		Timeout:       5 * time.Second,
 		Source:        "commodore",
 		ServiceToken:  serviceToken,
+		ClusterID:     config.GetEnv("CLUSTER_ID", ""),
+		SourceRegion:  config.GetEnv("REGION", ""),
 	}, logger)
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Decklog gRPC client - service events will be disabled")

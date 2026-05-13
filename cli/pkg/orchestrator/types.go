@@ -33,7 +33,8 @@ type Task struct {
 	ClusterID  string   // Resolved cluster for this task (empty for infrastructure)
 	DependsOn  []string // Task names this depends on
 	Phase      Phase
-	Idempotent bool // Can be run multiple times safely
+	Idempotent bool           // Can be run multiple times safely
+	Metadata   map[string]any // Per-task data the provisioner consumes (e.g. redis_role, primary_host)
 }
 
 // NewTask creates a task with a derived Name. Use for infrastructure tasks where Name = Type-InstanceID.

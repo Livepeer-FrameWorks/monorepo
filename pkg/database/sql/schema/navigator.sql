@@ -138,3 +138,46 @@ CREATE INDEX IF NOT EXISTS idx_tenant_edge_apply_state_tenant
     ON navigator.tenant_edge_apply_state(tenant_id, state);
 CREATE INDEX IF NOT EXISTS idx_tenant_edge_apply_state_cluster
     ON navigator.tenant_edge_apply_state(cluster_id);
+
+-- Tenant-owned custom domain (`media.acme-inc.com`). Quartermaster signals
+-- via Navigator.EnsureCustomDomain when tenants.custom_domain changes on a
+-- paid tenant. Navigator runs the verification + cert-issuance state machine
+-- through ACME-DNS-01 delegation: the customer points
+-- `media.acme-inc.com` CNAME at `{tenant_subdomain}.cdn.{root}` for traffic,
+-- and `_acme-challenge.media.acme-inc.com` CNAME at
+-- `{acme_dns_subdomain}.acme-dns.{root}` so lego can write the challenge
+-- TXT into a Navigator-owned zone (no need for Navigator to touch the
+-- customer's DNS).
+CREATE TABLE IF NOT EXISTS navigator.tenant_custom_domains (
+    tenant_id UUID NOT NULL,
+    -- Customer-owned FQDN, e.g. "media.acme-inc.com". Lowercased + DNS-safe.
+    domain TEXT NOT NULL,
+    -- Lifecycle:
+    --   pending_verification   waiting for customer CNAMEs to point at platform
+    --   verified               CNAMEs verified; cert issuance queued
+    --   cert_issuing           ACME order in flight
+    --   cert_issued            cert active; ready for distribution to edges
+    --   cert_failed            ACME failed; manual intervention
+    --   tearing_down           remove requested; worker clearing state
+    status TEXT NOT NULL DEFAULT 'pending_verification',
+    -- Stable Navigator-owned subdomain for ACME-DNS-01 delegation. The
+    -- customer CNAMEs _acme-challenge.{domain} → {acme_dns_subdomain}.acme-dns.{root}
+    -- once and never has to touch it again. Each tenant_custom_domain gets
+    -- a fresh random slug so revoking one domain doesn't strand a shared
+    -- challenge path.
+    acme_dns_subdomain TEXT NOT NULL,
+    -- Issuer chosen at issuance time; persisted so renewals stay on the
+    -- same CA unless an operator-driven migration moves them.
+    issuer_id TEXT,
+    last_verified_at TIMESTAMPTZ,
+    cert_issued_at TIMESTAMPTZ,
+    cert_expires_at TIMESTAMPTZ,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, domain),
+    CONSTRAINT uq_tenant_custom_domains_domain UNIQUE (domain)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_custom_domains_status
+    ON navigator.tenant_custom_domains(status);

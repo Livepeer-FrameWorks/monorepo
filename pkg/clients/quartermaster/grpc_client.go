@@ -707,3 +707,18 @@ func (c *GRPCClient) GetServiceHealth(ctx context.Context, serviceID string) (*p
 		ServiceId: serviceID,
 	})
 }
+
+// EnqueueServiceEvent hands a ServiceEvent to Quartermaster's
+// service_event_outbox for asynchronous Decklog dispatch. Used by
+// stateless producers (Deckhand) that don't own a local outbox; durability
+// then matches the QM-originated event path. event.source must identify
+// the originating service so the dispatcher attributes correctly.
+func (c *GRPCClient) EnqueueServiceEvent(ctx context.Context, event *pb.ServiceEvent) (string, error) {
+	resp, err := c.serviceRegistry.EnqueueServiceEvent(ctx, &pb.EnqueueServiceEventRequest{
+		Event: event,
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.GetOutboxId(), nil
+}

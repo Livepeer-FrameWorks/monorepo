@@ -157,7 +157,10 @@ During provisioning, the CLI decrypts the hosts file, merges IPs and SSH targets
 
 **Purpose:** Domain management, geographic routing, load balancing
 
-**Required Provider:** Cloudflare for root/API/web/admin DNS. Bunny DNS is optional; when `BUNNY_API_KEY` is configured, Navigator delegates media cluster zones to Bunny.
+**Providers:**
+
+- **Cloudflare** — required. Authoritative for the root domain and root service records (api, app, control-plane hostnames).
+- **Bunny DNS** — optional, **highly recommended** for any deployment with more than a handful of edges. Owns cluster-scoped media and edge zones (`{cluster_slug}.{base}`, edge node records, the tenant alias `cdn.{base}` zone) when `BUNNY_API_KEY` is set. Recommended because Cloudflare's geo-load-balancing pools cap at 20 origins per pool — too small for an edge fleet that scales horizontally. Bunny's smart records handle arbitrary geo-routed origin sets. Deployments with fewer than ~20 edges total can operate on Cloudflare alone; once you grow past that threshold, add Bunny.
 
 **Managed By:** Navigator (`api_dns`) - automates DNS record management based on node inventory
 
@@ -179,14 +182,137 @@ decide which records to reconcile.
 
 ## SSL/TLS Certificates
 
-**Purpose:** HTTPS for public endpoints and platform-managed subdomains
+**Purpose:** HTTPS for public endpoints, platform-managed subdomains, and per-tenant wildcard bundles under `cdn.{base}`
 
-**Managed By:** Navigator (`api_dns`) - handles ACME certificate issuance and renewal
+**Providers:** **Both** Let's Encrypt and Google Trust Services. LE is primary; Google Trust is the fallback issuer required for production-scale tenant alias issuance.
 
-Navigator handles ACME certificate issuance and renewal via DNS-01. See
-[DNS and Cluster Routing](/operators/dns) for certificate routing and provider
-ownership. Set `NAVIGATOR_CERT_ALLOWED_SUFFIXES` when a deployment should
-restrict certificate requests beyond the manifest `root_domain`.
+- **Let's Encrypt** handles root, global service pools, and cluster wildcard certificates — well within LE rate limits at typical volume.
+- **Google Trust Services** is required as a fallback issuer for per-tenant wildcard bundles under `{tenant}.cdn.{base}`. Each paying tenant gets its own wildcard cert, so issuance volume scales with paid-tenant count; LE alone hits per-registered-domain rate limits as paid tenants grow. Configure External Account Binding (EAB) credentials via `NAVIGATOR_GOOGLE_TRUST_EAB_KID` / `NAVIGATOR_GOOGLE_TRUST_EAB_HMAC_KEY`. Navigator's CA order (`NAVIGATOR_ACME_CA_ORDER`) defaults to `letsencrypt,google-trust` when EAB credentials are present.
+
+**Managed By:** Navigator (`api_dns`) — DNS-01 ACME issuance + renewal, multi-CA fallback when one issuer rate-limits, per-domain issuer pinning so renewals stay on the same CA.
+
+See [DNS and Cluster Routing](/operators/dns) for certificate routing and provider ownership. Set `NAVIGATOR_CERT_ALLOWED_SUFFIXES` when a deployment should restrict certificate requests beyond the manifest `root_domain`.
+
+---
+
+## Object Storage (S3)
+
+**Purpose:** Durable storage for recordings, clips, DVR segments, VOD assets, and thumbnails
+
+**Providers:** Cloudflare R2 and Hetzner Object Storage are the supported defaults. Any S3-compatible backend works (the AWS SDK v2 client + `BaseEndpoint` + `UsePathStyle = true` cover MinIO, Wasabi, Backblaze B2, AWS S3 itself).
+
+**Consumed By:**
+
+- **Foghorn** (`api_balancing`) — mints presigned PUT/GET URLs for clip / DVR / VOD lifecycle, writes manifests directly
+- **Chandler** (`api_assets`) — serves artifacts and caches via local LRU; per-cluster S3 lookup via Quartermaster (see [`infrastructure_clusters.s3_*`](/operators/data-models))
+
+### Why a two-provider split
+
+Multiregion deployments map each tenant's artifacts to the bucket whose pricing model best fits that tenant's expected access pattern via `tenants.home_region` + `infrastructure_clusters.s3_*`.
+
+- **Hetzner Object Storage (EU)** is cheapest at-rest and on-egress in EU. Use for EU-home tenants when most viewers are same-region; storage savings dominate egress for that pattern.
+- **Cloudflare R2 (US/global)** has $0 egress with no AUP traps. Use where cross-region viewer fanout would otherwise compound egress bills, or where the bucket lives far from a meaningful portion of its readers. Standard storage class is the right default; Infrequent Access trades retrieval fees for storage savings and is wrong for live-streaming origins.
+
+Single-region deployments can use one provider for both EU and US clusters — the two-provider split is an optimization, not a requirement.
+
+### What You Need
+
+- Bucket per cluster (one Hetzner bucket for the EU cluster, one R2 bucket for the US cluster in the standard multiregion shape)
+- Access key + secret per provider, stored in SOPS-encrypted env files
+- CORS policy on each bucket (see below) — required for browser-direct VOD multipart uploads
+
+### Bucket setup
+
+**Cloudflare R2:**
+
+1. Create bucket via Cloudflare dashboard. Set **Location hint** explicitly (`ENAM` for Eastern North America, `WEUR` for Western Europe, etc.) — leaving Automatic places the bucket near the creating browser's region, which can be wrong.
+2. Generate API token under **R2 → Manage R2 API Tokens** scoped to the bucket with Object Read & Write.
+3. Enable **Local Uploads** — terminates customer browser PUTs at the nearest Cloudflare PoP and routes internally to the bucket's home region. Improves upload latency for geographically distributed customers; no downside for same-region writers.
+4. Leave default-disabled: Custom Domains, Public Development URL, R2 Data Catalog, Bucket Lock Rules, Event Notifications, On Demand Migration.
+5. Keep the default 7-day multipart-abort lifecycle rule. Tenant retention is FrameWorks-owned (`api_balancing/internal/jobs/retention.go`); bucket-level lifecycle would create a second authority over deletes.
+
+**Hetzner Object Storage:**
+
+1. Create bucket via Hetzner Cloud Console under the right project + region (`nbg1` Nuremberg, `fsn1` Falkenstein, `hel1` Helsinki).
+2. Generate an access key + secret via the bucket UI.
+
+### CORS policy (required for VOD uploads)
+
+VOD upload uses **browser-direct multipart presigned PUTs** — the webapp `fetch()`s straight to the S3 endpoint and reads the `ETag` response header per part. Without CORS on the bucket the browser's preflight `OPTIONS` request fails and uploads never start.
+
+The presigned URL is the auth boundary, not the `Origin` header — `"AllowedOrigins": ["*"]` is the correct shape, used by every major upload-backend deployment.
+
+The CORS policy is the same shape for both providers. Set via `aws s3api put-bucket-cors` once per bucket:
+
+```bash
+cat > /tmp/cors.json <<'EOF'
+{
+  "CORSRules": [
+    {
+      "AllowedOrigins": ["*"],
+      "AllowedMethods": ["PUT", "GET", "HEAD"],
+      "AllowedHeaders": ["*"],
+      "ExposeHeaders": ["ETag"],
+      "MaxAgeSeconds": 3600
+    }
+  ]
+}
+EOF
+
+# Hetzner
+aws s3api put-bucket-cors \
+  --bucket <hetzner-bucket> \
+  --endpoint-url https://<region>.your-objectstorage.com \
+  --region us-east-1 \
+  --cors-configuration file:///tmp/cors.json
+
+# Cloudflare R2
+aws s3api put-bucket-cors \
+  --bucket <r2-bucket> \
+  --endpoint-url https://<account-id>.r2.cloudflarestorage.com \
+  --region auto \
+  --cors-configuration file:///tmp/cors.json
+```
+
+Verify with an anonymous preflight curl (preflight precedes authentication, so no credentials needed):
+
+```bash
+curl -i -X OPTIONS --max-time 10 \
+  -H "Origin: https://example.com" \
+  -H "Access-Control-Request-Method: PUT" \
+  -H "Access-Control-Request-Headers: Content-Type" \
+  "https://<region>.your-objectstorage.com/<bucket>"
+```
+
+Expected: `200 OK` with `access-control-allow-origin`, `access-control-allow-methods: PUT`, `access-control-expose-headers: ETag`. Hetzner Ceph echoes the specific matched origin instead of literally `*` in the response — spec-correct CORS behavior, not a deviation.
+
+### Environment variables per cluster
+
+Same variable names on every host that runs Foghorn or Chandler; the values differ per cluster:
+
+```bash
+STORAGE_S3_ENDPOINT="https://<region>.your-objectstorage.com"   # Hetzner
+# or
+STORAGE_S3_ENDPOINT="https://<account-id>.r2.cloudflarestorage.com"  # R2
+
+STORAGE_S3_BUCKET="<bucket-name>"
+STORAGE_S3_REGION="us-east-1"     # Hetzner (signing-only; ignored for routing)
+# or
+STORAGE_S3_REGION="auto"          # R2 convention
+STORAGE_S3_ACCESS_KEY="<from provider>"
+STORAGE_S3_SECRET_KEY="<from provider>"
+STORAGE_S3_PREFIX=""              # optional key prefix inside the bucket
+```
+
+In multiregion deployments, EU and US clusters use different providers and therefore different credentials. The CLI assembles env per host so each box receives the credentials for the cluster it serves — see [Credential Delivery](#credential-delivery) above. Cluster-bound services pull `STORAGE_S3_*` from cluster-scoped env_files referenced by the manifest's service definitions.
+
+Chandler also consults `infrastructure_clusters.s3_endpoint` / `s3_bucket` / `s3_region` for the local `CLUSTER_ID` and overrides env defaults with the cluster-row values. Credentials are never stored in `infrastructure_clusters` — they remain env-only.
+
+### Known gotchas
+
+- **aws-cli 2.34.x throws `TypeError: argument of type 'NoneType' is not a container or iterable`** on the error path against ceph-RGW backends (Hetzner runs on Ceph). It's a cosmetic awscli bug parsing empty `<Message></Message>` tags; the actual HTTP exchange succeeds. Success-path operations work fine; error responses show the bug. Read `--debug` output for the real HTTP response, or use `mc` (MinIO Client) which handles ceph cleanly.
+- **Hetzner echoes specific origin, R2 echoes `*`**: when `AllowedOrigins` is `["*"]`, Hetzner Ceph returns `Access-Control-Allow-Origin: <requesting origin>` while R2 returns `Access-Control-Allow-Origin: *`. Both are spec-compliant; don't assert one shape in integration tests.
+- **Cloudflare R2 location hint is permanent.** Bucket name and location hint are set once at creation; you can't migrate later without copying objects to a new bucket. Pick the right region the first time.
 
 ---
 
@@ -247,18 +373,23 @@ GEOIP_CACHE_MAX=50000      # Max cached entries
 
 ## Configuring SMTP
 
-**Purpose:** Notifications, alerts, transactional emails
+**Purpose:** Transactional email — password reset, email verification, billing/invoice delivery, forms inbox
 
 **Providers:** Fastmail, SendGrid, AWS SES, or any SMTP provider
+
+**Required:** Yes. SMTP is required for production deployments. Without it:
+
+- Forgotten-password recovery is impossible — users locked out of accounts have no path back in.
+- Email verification at signup can't complete — new account creation breaks.
+- Billing invoices and payment-failure notifications never reach customers — they discover failed payments only by losing service.
+- Forms API (contact submissions, support intake) hard-fails on send.
+
+Auth flows degrade with warnings logged if SMTP is missing, but a degraded auth flow is not a viable production posture. Treat SMTP as required.
 
 **What You Need:**
 
 - SMTP credentials (host, port, username, password)
-- Verified sender domain (for production)
-
-**What's Automated:**
-
-- Service-specific email templates and dispatch logic
+- Verified sender domain (SPF / DKIM configured at the DNS layer for deliverability)
 
 **Manual Steps:**
 
@@ -277,14 +408,9 @@ GEOIP_CACHE_MAX=50000      # Max cached entries
 
 **Used By:**
 
-- Forms API (contact form submissions)
-- Billing (invoice/payment notifications)
 - Auth (email verification + password resets)
-
-**Notes:**
-
-- Billing/Auth email flows skip sending if SMTP is not configured (warnings are logged).
-- Forms API requires SMTP + `TO_EMAIL`; otherwise contact submissions will fail.
+- Billing (invoice + payment-failure notifications)
+- Forms API (contact form submissions — hard-fails without SMTP)
 
 ---
 
@@ -329,12 +455,13 @@ GEOIP_CACHE_MAX=50000      # Max cached entries
 
 ## Summary
 
-| Service    | Provider                      | Required    | Automated by                 |
-| ---------- | ----------------------------- | ----------- | ---------------------------- |
-| Database   | Postgres or YugabyteDB        | Yes         | CLI (user creation + grants) |
-| ClickHouse | ClickHouse                    | Yes         | CLI (users.xml deployment)   |
-| DNS        | Cloudflare (recommended)      | Yes         | Navigator (api_dns)          |
-| SSL/TLS    | Let's Encrypt (ACME)          | Yes         | Navigator (api_dns)          |
-| GeoIP      | MaxMind / DB-IP / IP2Location | Recommended | CLI (`cluster sync-geoip`)   |
-| SMTP       | Any provider                  | Optional    | Platform (email delivery)    |
-| Payments   | Stripe, Mollie                | Optional    | Purser (webhook handling)    |
+| Service        | Provider                                                  | Required                        | Automated by                                             |
+| -------------- | --------------------------------------------------------- | ------------------------------- | -------------------------------------------------------- |
+| Database       | Postgres or YugabyteDB                                    | Yes                             | CLI (user creation + grants)                             |
+| ClickHouse     | ClickHouse                                                | Yes                             | CLI (users.xml deployment)                               |
+| DNS            | Cloudflare (required) + Bunny DNS (optional, recommended) | Yes                             | Navigator (api_dns)                                      |
+| SSL/TLS        | Let's Encrypt + Google Trust Services (multi-CA)          | Yes                             | Navigator (api_dns)                                      |
+| Object Storage | Cloudflare R2 / Hetzner / any S3-compat                   | Yes                             | Operator (bucket + CORS); Chandler reads per-cluster row |
+| GeoIP          | MaxMind / DB-IP / IP2Location                             | Recommended                     | CLI (`cluster sync-geoip`)                               |
+| SMTP           | Any provider (Fastmail, SendGrid, AWS SES, ...)           | Yes                             | Platform (email delivery)                                |
+| Payments       | Stripe, Mollie                                            | Optional (required for billing) | Purser (webhook handling)                                |

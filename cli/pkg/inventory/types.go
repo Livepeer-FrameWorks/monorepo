@@ -94,6 +94,49 @@ type ClusterConfig struct {
 	OwnerTenant      string                `yaml:"owner_tenant,omitempty"`      // "frameworks" (system tenant) or bootstrap tenant alias
 	Pricing          *ClusterPricingConfig `yaml:"pricing,omitempty"`           // Purser cluster pricing (reconciled authoritatively when present)
 
+	// EnvFiles are env files merged into every cluster-scoped service replica
+	// running against this cluster. Merge order is shared Manifest.EnvFiles →
+	// ClusterConfig.EnvFiles → ServiceConfig.EnvFile → ServiceConfig.Config →
+	// CLI-composed runtime values. Used for per-cluster credentials (e.g.
+	// region-specific S3 access keys under the same STORAGE_S3_* names).
+	// Relative paths resolve against the manifest directory; absolute paths
+	// are rejected. SOPS-encrypted files are decrypted transparently.
+	EnvFiles []string `yaml:"env_files,omitempty"`
+
+	// Cell is the regional media cell this cluster belongs to. Multiple
+	// clusters can share a cell when ops wants blast-radius isolation inside
+	// a region. Defaults to the cluster id when unset (every cluster is its
+	// own cell). Maps to quartermaster.infrastructure_clusters.cell_id.
+	Cell string `yaml:"cell,omitempty"`
+
+	// Class classifies the cluster for the plan-tier admission filter.
+	// Values: platform_official | tenant_private | third_party_marketplace.
+	// Empty → derived: PlatformOfficial=true gives "platform_official",
+	// otherwise stays empty (operator must set explicitly for marketplace /
+	// tenant-private). Maps to cluster_class.
+	Class string `yaml:"class,omitempty"`
+
+	// ControlCell names the regional Foghorn cell that owns Helmsman
+	// ConfigSeed + tenant alias bundle delivery + edge apply-state ACK for
+	// this cluster. Platform-official clusters self-control: defaults to
+	// Cell when unset. Tenant-private / marketplace / self-hosted clusters
+	// set this explicitly. Maps to control_cell_id.
+	ControlCell string `yaml:"control_cell,omitempty"`
+
+	// EligibleServingCells lists the cells permitted to serve this cluster's
+	// content. Defaults to [ControlCell] when unset (single-cell). Multi-cell
+	// serving is opt-in. Maps to eligible_serving_cell_ids TEXT[].
+	EligibleServingCells []string `yaml:"eligible_serving_cells,omitempty"`
+
+	// S3Bucket / S3Endpoint / S3Region carry the artifact storage backend
+	// for this cluster. Reconciled into infrastructure_clusters and read by
+	// Chandler + cross-cluster federation. Credentials stay env-only via
+	// per-cluster env_files; only bucket + endpoint + region live on the
+	// cluster row.
+	S3Bucket   string `yaml:"s3_bucket,omitempty"`
+	S3Endpoint string `yaml:"s3_endpoint,omitempty"`
+	S3Region   string `yaml:"s3_region,omitempty"`
+
 	// AllowPrivatePullSources opts the cluster's pull-source validator in to
 	// RFC1918/multicast literals. Default false (strict) so platform-official
 	// clusters reject tenant-private upstreams. Self-hosted clusters set this
@@ -276,9 +319,11 @@ type ZookeeperNode struct {
 	Port int    `yaml:"port"`
 }
 
-// KafkaConfig represents Kafka cluster configuration (KRaft-only, no ZooKeeper).
-// If Controllers is non-empty, dedicated controller mode is used (separate controller + broker processes).
-// If Controllers is empty, combined broker+controller mode is used on each broker node.
+// KafkaConfig declares a Kafka cluster (KRaft-only, no ZooKeeper). The
+// top-level fields describe the primary cluster; Regional carries any
+// additional clusters in other regions. Non-empty Controllers selects
+// dedicated controller mode; empty Controllers selects combined
+// controller+broker mode on each broker node.
 type KafkaConfig struct {
 	Enabled                              bool              `yaml:"enabled"`
 	Mode                                 string            `yaml:"mode"` // native
@@ -293,6 +338,57 @@ type KafkaConfig struct {
 	OffsetsTopicReplicationFactor        int               `yaml:"offsets_topic_replication_factor,omitempty"`
 	TransactionStateLogReplicationFactor int               `yaml:"transaction_state_log_replication_factor,omitempty"`
 	TransactionStateLogMinISR            int               `yaml:"transaction_state_log_min_isr,omitempty"`
+
+	// Regional declares additional Kafka clusters in other regions, keyed
+	// by region_id. Each entry is an independent KRaft deployment. Role
+	// marks which cluster aggregates mirrored topics; empty defers to
+	// the primary's role. MirrorMaker2 mirrors topics between regional
+	// and aggregator clusters.
+	Regional []RegionalKafkaCluster `yaml:"regional,omitempty"`
+
+	// MirrorMaker is the standalone MM2 worker that mirrors RegionalKafkaCluster
+	// entries (Role="regional") into the aggregator cluster. When absent or
+	// disabled, no mirroring is provisioned regardless of Regional declarations.
+	MirrorMaker *KafkaMirrorMakerConfig `yaml:"mirrormaker,omitempty"`
+}
+
+// KafkaMirrorMakerConfig declares the host running the standalone MM2 worker.
+// Source clusters are derived from KafkaConfig.Regional with Role!="aggregator"
+// (or empty Role). The aggregator target is the first Role="aggregator" entry,
+// or the primary KafkaConfig when none is marked.
+type KafkaMirrorMakerConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	Mode      string `yaml:"mode,omitempty"`      // native (default; same Kafka tarball)
+	Host      string `yaml:"host"`                // Single host running connect-mirror-maker.sh
+	HeapOpts  string `yaml:"heap_opts,omitempty"` // JVM heap (default -Xmx1G -Xms1G)
+	Replicas  int    `yaml:"replicas,omitempty"`  // Source-cluster replication factor for mirrored topics; default 1
+	TaskCount int    `yaml:"task_count,omitempty"`
+}
+
+// RegionalKafkaCluster is an additional Kafka cluster pinned to a region.
+// Each cluster carries its own KRaft ID, controller/broker hosts, and
+// topic list. When Role="regional", topics in MirrorTopics are mirrored
+// to the cluster whose Role="aggregator" (or the primary KafkaConfig if
+// no aggregator is declared); aggregator-side topic names are prefixed
+// with "{region_id}." per MM2 default.
+type RegionalKafkaCluster struct {
+	RegionID                             string            `yaml:"region_id"`      // e.g. "us-east"
+	Role                                 string            `yaml:"role,omitempty"` // "regional" (default) | "aggregator"
+	ClusterID                            string            `yaml:"cluster_id"`     // KRaft cluster UUID (required)
+	ControllerPort                       int               `yaml:"controller_port,omitempty"`
+	Controllers                          []KafkaController `yaml:"controllers,omitempty"`
+	Brokers                              []KafkaBroker     `yaml:"brokers,omitempty"`
+	Topics                               []KafkaTopic      `yaml:"topics,omitempty"`
+	DeleteTopicEnable                    *bool             `yaml:"delete_topic_enable,omitempty"`
+	MinInSyncReplicas                    int               `yaml:"min_insync_replicas,omitempty"`
+	OffsetsTopicReplicationFactor        int               `yaml:"offsets_topic_replication_factor,omitempty"`
+	TransactionStateLogReplicationFactor int               `yaml:"transaction_state_log_replication_factor,omitempty"`
+	TransactionStateLogMinISR            int               `yaml:"transaction_state_log_min_isr,omitempty"`
+	// MirrorTopics names the topics MirrorMaker2 mirrors from this
+	// regional cluster onto the aggregator. Empty = mirror the canonical
+	// set: analytics_events, service_events, decklog_events_dlq,
+	// purser.usage_reports. Other topics stay regional-only.
+	MirrorTopics []string `yaml:"mirror_topics,omitempty"`
 }
 
 // KafkaController represents a dedicated KRaft controller node.
@@ -340,12 +436,24 @@ type RedisConfig struct {
 
 // RedisInstance represents a single named Redis instance
 type RedisInstance struct {
-	Name     string            `yaml:"name"`               // e.g., "foghorn", "platform"
-	Engine   string            `yaml:"engine,omitempty"`   // Optional override: "valkey" or "redis"
-	Host     string            `yaml:"host"`               // Host name from Hosts map
-	Port     int               `yaml:"port"`               // Default: 6379
-	Password string            `yaml:"password,omitempty"` // AUTH password
-	Config   map[string]string `yaml:"config,omitempty"`   // maxmemory, appendonly, etc.
+	Name         string              `yaml:"name"`                    // e.g., "foghorn", "platform"
+	Engine       string              `yaml:"engine,omitempty"`        // Optional override: "valkey" or "redis"
+	Mode         string              `yaml:"mode,omitempty"`          // "single" (default) | "sentinel" — Sentinel signals HA with replica nodes + sentinel quorum
+	Host         string              `yaml:"host"`                    // Primary host (mode=single) or initial master (mode=sentinel)
+	Port         int                 `yaml:"port"`                    // Default: 6379
+	Password     string              `yaml:"password,omitempty"`      // AUTH password
+	Cluster      string              `yaml:"cluster,omitempty"`       // Scope: only consumers in this cluster see this instance under its Name; empty = applies globally
+	MasterName   string              `yaml:"master_name,omitempty"`   // Sentinel master name; defaults to Name when empty
+	ReplicaHosts []string            `yaml:"replica_hosts,omitempty"` // Sentinel replica node hosts (excludes Host)
+	Sentinels    []RedisSentinelNode `yaml:"sentinels,omitempty"`     // Sentinel quorum members; consumers connect through these
+	Config       map[string]string   `yaml:"config,omitempty"`        // maxmemory, appendonly, etc.
+}
+
+// RedisSentinelNode is one member of a Sentinel quorum. Sentinel uses 26379
+// by default; the operator must run an odd-count quorum (3 or 5).
+type RedisSentinelNode struct {
+	Host string `yaml:"host"`
+	Port int    `yaml:"port,omitempty"` // Default: 26379
 }
 
 // ServiceConfig represents a FrameWorks application or interface service
@@ -392,10 +500,22 @@ type EdgeNode struct {
 	SSHKey     string            `yaml:"-"`                     // Populated from --ssh-key flag, not from YAML
 	Subdomain  string            `yaml:"subdomain,omitempty"`   // Individual subdomain (e.g., edge-us-east-1 -> edge-us-east-1.example.com)
 	Region     string            `yaml:"region,omitempty"`      // Region for registration
+	Cluster    string            `yaml:"cluster,omitempty"`     // Per-node cluster override; falls back to EdgeManifest.ClusterID when unset. Needed when one edge manifest registers nodes across multiple clusters (e.g. edge-eu-1 → media-eu-1, edge-us-1 → media-us-1).
 	Labels     map[string]string `yaml:"labels,omitempty"`      // Additional labels
 	ApplyTune  bool              `yaml:"apply_tune,omitempty"`  // Apply sysctl tuning
 	RegisterQM bool              `yaml:"register_qm,omitempty"` // Register in Quartermaster
 	Mode       string            `yaml:"mode,omitempty"`        // Per-node mode override ("docker"|"native")
+}
+
+// ResolvedCluster returns the cluster ID this edge node should register
+// against. Per-node Cluster wins over the EdgeManifest's top-level
+// ClusterID, so a single edges.yaml can spread nodes across multiple
+// clusters.
+func (n EdgeNode) ResolvedCluster(manifestClusterID string) string {
+	if n.Cluster != "" {
+		return n.Cluster
+	}
+	return manifestClusterID
 }
 
 // ResolvedChannel returns the effective release channel, defaulting to "stable".

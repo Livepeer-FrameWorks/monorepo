@@ -47,6 +47,28 @@ func redisRoleVars(ctx context.Context, host inventory.Host, config ServiceConfi
 	if appendonly, ok := config.Metadata["appendonly"].(string); ok && appendonly != "" {
 		vars["redis_appendonly"] = appendonly
 	}
+	// Sentinel-mode HA: redis_role gates which template + service args the
+	// Ansible role uses. Primary tasks get the default conf; replica tasks
+	// add replicaof + masterauth; sentinel tasks render sentinel.conf with
+	// the quorum the planner sized from the manifest.
+	if role := metaString(config.Metadata, "redis_role"); role != "" {
+		vars["redis_role"] = role
+	}
+	if primaryHost := metaString(config.Metadata, "redis_primary_host"); primaryHost != "" {
+		vars["redis_primary_host"] = primaryHost
+	}
+	if primaryPort, ok := config.Metadata["redis_primary_port"].(int); ok && primaryPort > 0 {
+		vars["redis_primary_port"] = primaryPort
+	}
+	if master := metaString(config.Metadata, "redis_master_name"); master != "" {
+		vars["redis_master_name"] = master
+	}
+	if sp, ok := config.Metadata["redis_sentinel_port"].(int); ok && sp > 0 {
+		vars["redis_sentinel_port"] = sp
+	}
+	if q, ok := config.Metadata["redis_sentinel_quorum"].(int); ok && q > 0 {
+		vars["redis_sentinel_quorum"] = q
+	}
 	return vars, nil
 }
 

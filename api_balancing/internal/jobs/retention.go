@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -294,9 +295,7 @@ func (j *RetentionJob) emitClipDeleted(
 	clipData.StopMs = stopMs
 	clipData.DurationSec = durationSec
 
-	go func() {
-		_ = j.decklogClient.SendClipLifecycle(clipData)
-	}()
+	go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
 }
 
 func (j *RetentionJob) emitDVRDeleted(
@@ -383,9 +382,7 @@ func (j *RetentionJob) emitDVRDeleted(
 		dvrData.ManifestPath = &manifestPath.String
 	}
 
-	go func() {
-		_ = j.decklogClient.SendDVRLifecycle(dvrData)
-	}()
+	go artifactoutbox.EnqueueDVRLifecycleLogged(dvrData)
 }
 
 func (j *RetentionJob) emitVodDeleted(
@@ -438,7 +435,5 @@ func (j *RetentionJob) emitVodDeleted(
 		vodData.ExpiresAt = &exp
 	}
 
-	go func() {
-		_ = j.decklogClient.SendVodLifecycle(vodData)
-	}()
+	go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 }

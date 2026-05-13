@@ -17,13 +17,48 @@ import (
 // Does NOT validate or require any specific keys. Per-service env_file
 // overrides are not handled here.
 func LoadSharedEnv(manifest *Manifest, manifestDir, ageKey string) (map[string]string, error) {
-	env := make(map[string]string)
 	if manifest == nil {
-		return env, nil
+		return map[string]string{}, nil
 	}
-	for _, envFile := range manifest.SharedEnvFiles() {
+	return mergeEnvFilesInto(map[string]string{}, manifest.SharedEnvFiles(), manifestDir, ageKey, "env_files")
+}
+
+// LoadClusterEnvs reads, decrypts, and merges each ClusterConfig.EnvFiles
+// list into a per-cluster env map keyed by cluster ID. SOPS-encrypted files
+// are decrypted using ageKey. Absolute paths are rejected; relative paths
+// resolve against manifestDir. Later files override earlier keys within a
+// cluster's list, but per-cluster envs never spill across clusters — each
+// (service, cluster) replica picks up only its own cluster's env at render
+// time. Clusters with no env_files entries are omitted from the result.
+func LoadClusterEnvs(manifest *Manifest, manifestDir, ageKey string) (map[string]map[string]string, error) {
+	out := make(map[string]map[string]string)
+	if manifest == nil {
+		return out, nil
+	}
+	for clusterID, cluster := range manifest.Clusters {
+		if len(cluster.EnvFiles) == 0 {
+			continue
+		}
+		env, err := mergeEnvFilesInto(map[string]string{}, cluster.EnvFiles, manifestDir, ageKey, fmt.Sprintf("clusters.%s.env_files", clusterID))
+		if err != nil {
+			return nil, err
+		}
+		out[clusterID] = env
+	}
+	return out, nil
+}
+
+// mergeEnvFilesInto resolves each env file (relative to manifestDir, SOPS-
+// decrypting where needed) and merges KEY=VALUE pairs into target. label
+// names the manifest field for error messages.
+func mergeEnvFilesInto(target map[string]string, envFiles []string, manifestDir, ageKey, label string) (map[string]string, error) {
+	for _, envFile := range envFiles {
+		envFile = strings.TrimSpace(envFile)
+		if envFile == "" {
+			continue
+		}
 		if manifestDir != "" && filepath.IsAbs(envFile) {
-			return nil, fmt.Errorf("env_files: absolute path %q is not allowed — use a relative path from the manifest directory", envFile)
+			return nil, fmt.Errorf("%s: absolute path %q is not allowed — use a relative path from the manifest directory", label, envFile)
 		}
 		envPath := envFile
 		if manifestDir != "" && !filepath.IsAbs(envPath) {
@@ -31,7 +66,7 @@ func LoadSharedEnv(manifest *Manifest, manifestDir, ageKey string) (map[string]s
 		}
 		data, err := fwsops.DecryptFileIfEncrypted(envPath, ageKey)
 		if err != nil {
-			return nil, fmt.Errorf("env file %s: %w", envPath, err)
+			return nil, fmt.Errorf("%s: env file %s: %w", label, envPath, err)
 		}
 		for line := range strings.SplitSeq(string(data), "\n") {
 			line = strings.TrimSpace(line)
@@ -42,10 +77,10 @@ func LoadSharedEnv(manifest *Manifest, manifestDir, ageKey string) (map[string]s
 			if !ok {
 				continue
 			}
-			env[strings.TrimSpace(key)] = strings.TrimSpace(value)
+			target[strings.TrimSpace(key)] = strings.TrimSpace(value)
 		}
 	}
-	return env, nil
+	return target, nil
 }
 
 // ResolveSharedEnvPlaceholder resolves a whole-string ${KEY} placeholder from

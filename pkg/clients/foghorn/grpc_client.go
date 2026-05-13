@@ -470,14 +470,25 @@ func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash 
 // internalNames lets Foghorn fan out across the tenant's known live streams
 // and artifact sessions. The re-fired USER_NEW decides allow/deny per session.
 func (c *GRPCClient) InvalidatePlaybackAuth(ctx context.Context, tenantID, reason string, internalNames []string) (*pb.InvalidatePlaybackAuthResponse, metadata.MD, error) {
+	return c.InvalidatePlaybackAuthWithBundle(ctx, tenantID, reason, internalNames, "", 0)
+}
+
+// InvalidatePlaybackAuthWithBundle extends InvalidatePlaybackAuth by
+// forwarding stream_id + bundle_min_version so Foghorn can bump its
+// policy-bundle cache watermark on bundle_revoke entries. When streamID
+// is empty + bundleMinVersion is 0, the call is equivalent to
+// InvalidatePlaybackAuth.
+func (c *GRPCClient) InvalidatePlaybackAuthWithBundle(ctx context.Context, tenantID, reason string, internalNames []string, streamID string, bundleMinVersion int64) (*pb.InvalidatePlaybackAuthResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	var trailers metadata.MD
 	resp, err := c.tenant.InvalidatePlaybackAuth(ctx, &pb.InvalidatePlaybackAuthRequest{
-		TenantId:      tenantID,
-		InternalNames: internalNames,
-		Reason:        reason,
+		TenantId:         tenantID,
+		InternalNames:    internalNames,
+		Reason:           reason,
+		StreamId:         streamID,
+		BundleMinVersion: bundleMinVersion,
 	}, grpc.Trailer(&trailers))
 	return resp, trailers, err
 }

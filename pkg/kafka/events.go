@@ -28,6 +28,19 @@ type AnalyticsEvent struct {
 	Source    string                 `json:"source"`
 	TenantID  string                 `json:"tenant_id,omitempty"`
 	Data      map[string]interface{} `json:"data"` // Transparent protobuf message as JSON
+
+	// Envelope v2: source_region/source_cluster_id attribute where the event
+	// was produced; stream_origin_region/stream_origin_cluster_id attribute
+	// the originating region/cluster of the stream this event references
+	// (empty for non-stream-scoped events). MirrorMaker fan-in consumers
+	// dedupe by EventID and route by these fields.
+	SourceRegion          string `json:"source_region,omitempty"`
+	SourceClusterID       string `json:"source_cluster_id,omitempty"`
+	StreamOriginRegion    string `json:"stream_origin_region,omitempty"`
+	StreamOriginClusterID string `json:"stream_origin_cluster_id,omitempty"`
+	SchemaVersion         int32  `json:"schema_version,omitempty"`
+	CorrelationID         string `json:"correlation_id,omitempty"`
+	CausationID           string `json:"causation_id,omitempty"`
 }
 
 // ServiceEvent represents a service-plane event published to the service_events topic.
@@ -41,6 +54,15 @@ type ServiceEvent struct {
 	ResourceType string                 `json:"resource_type,omitempty"`
 	ResourceID   string                 `json:"resource_id,omitempty"`
 	Data         map[string]interface{} `json:"data"`
+
+	// Envelope v2 — see AnalyticsEvent doc.
+	SourceRegion          string `json:"source_region,omitempty"`
+	SourceClusterID       string `json:"source_cluster_id,omitempty"`
+	StreamOriginRegion    string `json:"stream_origin_region,omitempty"`
+	StreamOriginClusterID string `json:"stream_origin_cluster_id,omitempty"`
+	SchemaVersion         int32  `json:"schema_version,omitempty"`
+	CorrelationID         string `json:"correlation_id,omitempty"`
+	CausationID           string `json:"causation_id,omitempty"`
 }
 
 // EventHandler interface for handling Kafka events

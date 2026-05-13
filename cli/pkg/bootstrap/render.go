@@ -71,12 +71,35 @@ func Derive(m *inventory.Manifest, opts DeriveOptions) (*Derived, error) {
 			c.IsDefault = cc.Default
 			c.IsPlatformOfficial = cc.PlatformOfficial
 			c.AllowPrivatePullSources = cc.AllowPrivatePullSources
+			c.Cell = cc.Cell
+			c.Class = cc.Class
+			c.ControlCell = cc.ControlCell
+			c.EligibleServingCells = cc.EligibleServingCells
+			c.S3Bucket = cc.S3Bucket
+			c.S3Endpoint = cc.S3Endpoint
+			c.S3Region = cc.S3Region
 		}
 		if c.Type == "" {
 			c.Type = m.Type
 		}
 		if c.Type == "" {
 			c.Type = "central"
+		}
+		// Defaults applied at render time so the rendered desired-state file is
+		// self-describing and the QM-side reconciler doesn't have to re-derive.
+		// Platform-official clusters self-control: cell = id, class derives
+		// from platform_official, control_cell = cell, eligible_serving = [cell].
+		if c.Cell == "" {
+			c.Cell = clusterID
+		}
+		if c.Class == "" && c.IsPlatformOfficial {
+			c.Class = "platform_official"
+		}
+		if c.ControlCell == "" {
+			c.ControlCell = c.Cell
+		}
+		if len(c.EligibleServingCells) == 0 && c.ControlCell != "" {
+			c.EligibleServingCells = []string{c.ControlCell}
 		}
 		if m.WireGuard != nil {
 			c.Mesh = ClusterMesh{

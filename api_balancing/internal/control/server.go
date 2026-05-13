@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/ingesterrors"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
@@ -4425,7 +4426,7 @@ func processProcessingJobProgress(progress *pb.ProcessingJobProgress, logger log
 			vodData.TenantId = &tenantID
 		}
 		go func() {
-			if err := decklogClient.SendVodLifecycle(vodData); err != nil {
+			if err := artifactoutbox.EnqueueVodLifecycle(vodData); err != nil {
 				logger.WithError(err).Warn("Failed to send processing progress lifecycle event")
 			}
 		}()

@@ -5607,6 +5607,54 @@ func (r *tenantResolver) CreatedAt(ctx context.Context, obj *proto.Tenant) (*tim
 	return &t, nil
 }
 
+// CustomDomainStatus is the resolver for the customDomainStatus field.
+//
+// Returns null when the tenant has no customDomain configured, when Navigator
+// reports the row absent (e.g. the lifecycle is mid-teardown), or when the
+// Navigator lookup itself fails — keeping the dashboard rendering rather
+// than surfacing a runtime panic. The protobuf timestamps are int64 unix
+// seconds; nil-out the pointer when zero so the dashboard can distinguish
+// "never" from "unknown".
+func (r *tenantResolver) CustomDomainStatus(ctx context.Context, obj *proto.Tenant) (*model.CustomDomainStatus, error) {
+	if obj == nil || obj.CustomDomain == nil || *obj.CustomDomain == "" {
+		return nil, nil
+	}
+	resp, err := r.DoGetCustomDomainStatus(ctx, *obj.CustomDomain)
+	if err != nil {
+		r.Logger.WithError(err).WithField("domain", *obj.CustomDomain).Warn("CustomDomainStatus: Navigator lookup failed")
+		return nil, nil
+	}
+	if resp == nil {
+		return nil, nil
+	}
+	out := &model.CustomDomainStatus{
+		Domain: resp.GetDomain(),
+		State:  resp.GetStatus(),
+	}
+	if c := resp.GetRequiredTrafficCname(); c != "" {
+		out.RequiredTrafficCname = &c
+	}
+	if c := resp.GetRequiredAcmeChallengeCname(); c != "" {
+		out.RequiredAcmeChallengeCname = &c
+	}
+	if ts := resp.GetLastVerifiedAt(); ts > 0 {
+		t := time.Unix(ts, 0).UTC()
+		out.LastVerifiedAt = &t
+	}
+	if ts := resp.GetCertIssuedAt(); ts > 0 {
+		t := time.Unix(ts, 0).UTC()
+		out.CertIssuedAt = &t
+	}
+	if ts := resp.GetCertExpiresAt(); ts > 0 {
+		t := time.Unix(ts, 0).UTC()
+		out.CertExpiresAt = &t
+	}
+	if e := resp.GetLastError(); e != "" {
+		out.LastError = &e
+	}
+	return out, nil
+}
+
 // Day is the resolver for the day field.
 func (r *tenantAnalyticsDailyResolver) Day(ctx context.Context, obj *proto.TenantAnalyticsDaily) (*time.Time, error) {
 	if obj.Day == nil {

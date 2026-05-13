@@ -1,0 +1,20 @@
+port {{ redis_sentinel_port }}
+bind {{ redis_bind_interface }}
+{% set sentinel_bind_addresses = redis_bind_interface.split() %}
+{% set sentinel_loopback_only = (sentinel_bind_addresses | difference(['127.0.0.1', '::1', 'localhost'])) | length == 0 %}
+protected-mode {{ 'yes' if (redis_password | length > 0) or sentinel_loopback_only else 'no' }}
+supervised systemd
+daemonize no
+
+dir {{ redis_data_dir }}
+logfile {{ redis_log_file }}
+pidfile /run/{{ redis_service_name }}/sentinel.pid
+
+sentinel monitor {{ redis_master_name }} {{ redis_primary_host }} {{ redis_primary_port }} {{ redis_sentinel_quorum }}
+sentinel down-after-milliseconds {{ redis_master_name }} {{ redis_sentinel_down_after_ms }}
+sentinel failover-timeout {{ redis_master_name }} {{ redis_sentinel_failover_timeout_ms }}
+sentinel parallel-syncs {{ redis_master_name }} 1
+{% if redis_password | length > 0 %}
+sentinel auth-pass {{ redis_master_name }} {{ redis_password }}
+requirepass {{ redis_password }}
+{% endif %}

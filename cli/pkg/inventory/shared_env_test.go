@@ -117,6 +117,84 @@ func TestResolveSharedEnvPlaceholderRejectsMissingKey(t *testing.T) {
 	}
 }
 
+func TestLoadClusterEnvsKeyedByClusterID(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "eu.env"), "STORAGE_S3_ACCESS_KEY=hetzner-key\nSTORAGE_S3_ENDPOINT=https://nbg1.example\n")
+	writeFile(t, filepath.Join(dir, "us.env"), "STORAGE_S3_ACCESS_KEY=r2-key\nSTORAGE_S3_ENDPOINT=https://r2.example\n")
+
+	m := &Manifest{Clusters: map[string]ClusterConfig{
+		"media-eu-1": {Name: "EU", EnvFiles: []string{"eu.env"}},
+		"media-us-1": {Name: "US", EnvFiles: []string{"us.env"}},
+		"core":       {Name: "Core"}, // no env_files — must be omitted from result
+	}}
+
+	envs, err := LoadClusterEnvs(m, dir, "")
+	if err != nil {
+		t.Fatalf("LoadClusterEnvs: %v", err)
+	}
+	if _, ok := envs["core"]; ok {
+		t.Errorf("clusters with no env_files must be omitted, got entry for core")
+	}
+	if envs["media-eu-1"]["STORAGE_S3_ACCESS_KEY"] != "hetzner-key" {
+		t.Errorf("EU access key = %q, want hetzner-key", envs["media-eu-1"]["STORAGE_S3_ACCESS_KEY"])
+	}
+	if envs["media-us-1"]["STORAGE_S3_ACCESS_KEY"] != "r2-key" {
+		t.Errorf("US access key = %q, want r2-key", envs["media-us-1"]["STORAGE_S3_ACCESS_KEY"])
+	}
+	// Per-cluster envs never spill across clusters.
+	if envs["media-eu-1"]["STORAGE_S3_ENDPOINT"] == envs["media-us-1"]["STORAGE_S3_ENDPOINT"] {
+		t.Errorf("EU and US endpoints must differ; got identical %q", envs["media-eu-1"]["STORAGE_S3_ENDPOINT"])
+	}
+}
+
+func TestLoadClusterEnvsMergesFilesInOrder(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "base.env"), "REGION=eu\nBUCKET=default\n")
+	writeFile(t, filepath.Join(dir, "override.env"), "BUCKET=override\nEXTRA=more\n")
+
+	m := &Manifest{Clusters: map[string]ClusterConfig{
+		"media-eu-1": {EnvFiles: []string{"base.env", "override.env"}},
+	}}
+	envs, err := LoadClusterEnvs(m, dir, "")
+	if err != nil {
+		t.Fatalf("LoadClusterEnvs: %v", err)
+	}
+	got := envs["media-eu-1"]
+	if got["REGION"] != "eu" || got["BUCKET"] != "override" || got["EXTRA"] != "more" {
+		t.Errorf("merge order broken: %+v", got)
+	}
+}
+
+func TestLoadClusterEnvsRejectsAbsolutePath(t *testing.T) {
+	m := &Manifest{Clusters: map[string]ClusterConfig{
+		"media-eu-1": {EnvFiles: []string{"/etc/passwd"}},
+	}}
+	if _, err := LoadClusterEnvs(m, "/tmp", ""); err == nil {
+		t.Fatal("expected error for absolute path")
+	}
+}
+
+func TestLoadClusterEnvsNilManifest(t *testing.T) {
+	envs, err := LoadClusterEnvs(nil, "", "")
+	if err != nil {
+		t.Fatalf("LoadClusterEnvs: %v", err)
+	}
+	if len(envs) != 0 {
+		t.Errorf("expected empty map, got %+v", envs)
+	}
+}
+
+func TestLoadClusterEnvsEmptyClusters(t *testing.T) {
+	m := &Manifest{}
+	envs, err := LoadClusterEnvs(m, "", "")
+	if err != nil {
+		t.Fatalf("LoadClusterEnvs: %v", err)
+	}
+	if len(envs) != 0 {
+		t.Errorf("expected empty map, got %+v", envs)
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {

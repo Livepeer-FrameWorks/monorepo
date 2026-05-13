@@ -76,6 +76,10 @@ message ClipInfo {
   optional string storage_location = 17;  // "local" or "s3"
   optional google.protobuf.Timestamp expires_at = 18;
   string playback_id = 20;                // Public playback key (artifact playback ID)
+  // storage_cluster_id is the cluster that holds the artifact's S3 bucket
+  // and serves its thumbnails through that cluster's Chandler. Empty when
+  // the artifact is still on the origin node's local disk.
+  string storage_cluster_id = 21;
   reserved 12, 19;
   reserved "access_count", "last_accessed";
 }
@@ -226,6 +230,9 @@ message DVRInfo {
   optional string stream_id = 19; // Public stream ID (UUID)
   optional string playback_id = 20; // Public playback key (artifact playback ID)
   optional string retention_source = 21; // tenant_default | per_asset_override | tier_entitlement
+  // storage_cluster_id is the cluster that owns the recording's S3 bucket
+  // and serves its thumbnails through that cluster's Chandler.
+  string storage_cluster_id = 22;
 }
 
 // ListDVRRecordingsRequest - request to list DVR recordings
@@ -357,6 +364,22 @@ message IngestEndpointRequest {
   optional string viewer_ip = 2;  // For geo-routing (client IP)
 }
 
+// IngestEndpointKind classifies the surface a resolved endpoint exposes,
+// so SDKs/dashboards can pick the best per-tenant default and fall back to
+// cluster-specific endpoints when needed.
+//
+//   TENANT_ALIAS  - {service}.{tenant}.cdn.{base} (paid plans only; tenant-branded)
+//   ROOT_POOL     - {service}.{base} (default for free + agnostic flows)
+//   CLUSTER_POOL  - {service}.{cluster_slug}.{base} (operator-stable cluster handle)
+//   NODE_SPECIFIC - edge-{node_id}.{cluster_slug}.{base} (per-node, for pinning)
+enum IngestEndpointKind {
+  INGEST_ENDPOINT_KIND_UNSPECIFIED = 0;
+  INGEST_ENDPOINT_KIND_TENANT_ALIAS = 1;
+  INGEST_ENDPOINT_KIND_ROOT_POOL = 2;
+  INGEST_ENDPOINT_KIND_CLUSTER_POOL = 3;
+  INGEST_ENDPOINT_KIND_NODE_SPECIFIC = 4;
+}
+
 // IngestEndpoint - resolved ingest endpoint for a stream
 message IngestEndpoint {
   string node_id = 1;
@@ -366,6 +389,8 @@ message IngestEndpoint {
   optional string srt_url = 5;    // SRT ingest URL
   optional string region = 6;
   optional double load_score = 7;
+  IngestEndpointKind kind = 8;     // Endpoint surface kind classification
+  string cluster_id = 9;           // Cluster this endpoint resolves into (for pinning + observability)
 }
 
 // IngestMetadata - metadata about the stream for ingest
@@ -550,6 +575,9 @@ message VodAssetInfo {
   // Error info
   optional string error_message = 19;
   optional string playback_id = 20; // Public playback key (artifact playback ID)
+  // storage_cluster_id is the cluster whose Chandler serves the VOD's
+  // thumbnails. Tracks the per-cluster S3 backend the upload landed in.
+  string storage_cluster_id = 21;
 }
 
 // VodMetadata - metadata extracted from video file (returned by validation)

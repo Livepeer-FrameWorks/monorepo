@@ -199,6 +199,38 @@ func (c *Client) ReportConfigSeedApplyResult(ctx context.Context, req *pb.Report
 	return resp, nil
 }
 
+// EnsureCustomDomain signals Navigator that a paying tenant is bringing
+// their own domain. Navigator persists the row, verifies CNAMEs, and
+// runs ACME-DNS-01 issuance asynchronously. Idempotent; the returned
+// CNAMEs are stable across calls.
+func (c *Client) EnsureCustomDomain(ctx context.Context, req *pb.EnsureCustomDomainRequest) (*pb.EnsureCustomDomainResponse, error) {
+	resp, err := c.service.EnsureCustomDomain(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure custom domain: %w", err)
+	}
+	return resp, nil
+}
+
+// RemoveCustomDomain signals Navigator to tear down a custom domain.
+// Idempotent.
+func (c *Client) RemoveCustomDomain(ctx context.Context, req *pb.RemoveCustomDomainRequest) (*pb.RemoveCustomDomainResponse, error) {
+	resp, err := c.service.RemoveCustomDomain(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to remove custom domain: %w", err)
+	}
+	return resp, nil
+}
+
+// GetCustomDomainStatus returns the lifecycle state for a (tenant_id,
+// domain) pair.
+func (c *Client) GetCustomDomainStatus(ctx context.Context, req *pb.GetCustomDomainStatusRequest) (*pb.GetCustomDomainStatusResponse, error) {
+	resp, err := c.service.GetCustomDomainStatus(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get custom domain status: %w", err)
+	}
+	return resp, nil
+}
+
 // RemoveTenantAliasCluster removes one cluster's edges from a tenant
 // alias DNS pool.
 func (c *Client) RemoveTenantAliasCluster(ctx context.Context, req *pb.RemoveTenantAliasClusterRequest) (*pb.RemoveTenantAliasClusterResponse, error) {

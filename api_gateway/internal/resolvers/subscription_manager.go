@@ -15,18 +15,95 @@ import (
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
-// SubscriptionManager manages gRPC streaming connections to Signalman for GraphQL subscriptions
+// SubscriptionManager manages gRPC streaming connections to Signalman for GraphQL subscriptions.
+//
+// signalmanAddr is the gateway's local-region Signalman (set by
+// SIGNALMAN_GRPC_ADDR). signalmanAddrByRegion maps stream-origin region to a
+// regional Signalman address (parsed from SIGNALMAN_GRPC_ADDR_BY_REGION); when
+// a caller knows a stream's origin region, AddrForRegion picks that region's
+// Signalman so live events stay in their origin cell. Empty region falls back
+// to the local addr.
+// StreamOriginResolver returns the region_id of the cluster currently sinking
+// ingest for streamID. Empty result means "unknown" (treat as local). Used by
+// stream-scoped subscribe paths so a viewer on EU bridge can attach to the
+// US-origin stream's Signalman.
+type StreamOriginResolver func(ctx context.Context, streamID string) (string, error)
+
 type SubscriptionManager struct {
-	clients                 map[string]*signalmanclient.GRPCClient // Key: userID:tenantID
+	clients                 map[string]*signalmanclient.GRPCClient // Key: userID:tenantID:addr
 	logger                  logging.Logger
 	mutex                   sync.RWMutex
 	signalmanAddr           string
+	signalmanAddrByRegion   map[string]string
 	serviceToken            string      // Service token for service-to-service authentication
 	cleanup                 chan string // Channel for cleanup signals
 	stopChan                chan struct{}
 	metrics                 *GraphQLMetrics
 	maxConnectionsPerTenant int
 	tenantConnectionCounts  map[string]int
+	streamOriginResolver    StreamOriginResolver
+}
+
+// SetStreamOriginResolver installs the resolver used by stream-scoped
+// subscribe paths. Safe to call once at startup; not safe to swap at runtime.
+func (sm *SubscriptionManager) SetStreamOriginResolver(r StreamOriginResolver) {
+	sm.streamOriginResolver = r
+}
+
+// connectionAddrForStream picks the Signalman addr for a stream-scoped
+// subscription. Empty streamID, no resolver, or a resolver lookup failure all
+// fall back to the local-region addr — viewers never hard-fail just because
+// origin lookup is degraded.
+func (sm *SubscriptionManager) connectionAddrForStream(ctx context.Context, streamID string) string {
+	if streamID == "" || sm.streamOriginResolver == nil {
+		return sm.signalmanAddr
+	}
+	region, err := sm.streamOriginResolver(ctx, streamID)
+	if err != nil {
+		sm.logger.WithError(err).WithField("stream_id", streamID).Debug("stream origin lookup failed; using local Signalman")
+		return sm.signalmanAddr
+	}
+	return sm.AddrForRegion(region)
+}
+
+// parseSignalmanAddrByRegion parses comma-separated `region=addr` pairs
+// from SIGNALMAN_GRPC_ADDR_BY_REGION into a map. Empty input returns nil.
+func parseSignalmanAddrByRegion(raw string) map[string]string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	out := map[string]string{}
+	for entry := range strings.SplitSeq(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		eq := strings.IndexByte(entry, '=')
+		if eq <= 0 || eq == len(entry)-1 {
+			continue
+		}
+		region := strings.TrimSpace(entry[:eq])
+		addr := strings.TrimSpace(entry[eq+1:])
+		if region == "" || addr == "" {
+			continue
+		}
+		out[region] = addr
+	}
+	return out
+}
+
+// AddrForRegion returns the Signalman address that should serve subscriptions
+// for a stream whose origin region is `region`. Empty region or unknown region
+// falls back to the local Signalman.
+func (sm *SubscriptionManager) AddrForRegion(region string) string {
+	if region == "" {
+		return sm.signalmanAddr
+	}
+	if addr, ok := sm.signalmanAddrByRegion[region]; ok && addr != "" {
+		return addr
+	}
+	return sm.signalmanAddr
 }
 
 func (sm *SubscriptionManager) incrementTenantConnection(tenantID string) {
@@ -66,12 +143,23 @@ type ConnectionConfig struct {
 	JWT      string // JWT is kept for compatibility but not used in gRPC (auth via metadata if needed)
 }
 
-// NewSubscriptionManager creates a new gRPC subscription connection manager
-func NewSubscriptionManager(signalmanAddr, serviceToken string, logger logging.Logger, metrics *GraphQLMetrics, maxConnectionsPerTenant int) *SubscriptionManager {
+// NewSubscriptionManager creates a new gRPC subscription connection manager.
+// signalmanAddrByRegion may be nil; entries with empty values are ignored.
+func NewSubscriptionManager(signalmanAddr, serviceToken string, logger logging.Logger, metrics *GraphQLMetrics, maxConnectionsPerTenant int, signalmanAddrByRegion map[string]string) *SubscriptionManager {
+	regional := make(map[string]string, len(signalmanAddrByRegion))
+	for region, addr := range signalmanAddrByRegion {
+		region = strings.TrimSpace(region)
+		addr = strings.TrimSpace(addr)
+		if region == "" || addr == "" {
+			continue
+		}
+		regional[region] = addr
+	}
 	sm := &SubscriptionManager{
 		clients:                 make(map[string]*signalmanclient.GRPCClient),
 		logger:                  logger,
 		signalmanAddr:           signalmanAddr,
+		signalmanAddrByRegion:   regional,
 		serviceToken:            serviceToken,
 		cleanup:                 make(chan string, 10),
 		stopChan:                make(chan struct{}),
@@ -86,9 +174,26 @@ func NewSubscriptionManager(signalmanAddr, serviceToken string, logger logging.L
 	return sm
 }
 
-// GetOrCreateConnection gets an existing connection or creates a new one for a user/tenant
+// GetOrCreateConnection gets an existing connection or creates a new one for a
+// user/tenant pair targeting the local-region Signalman.
 func (sm *SubscriptionManager) GetOrCreateConnection(ctx context.Context, config ConnectionConfig) (*signalmanclient.GRPCClient, error) {
-	key := fmt.Sprintf("%s:%s", config.UserID, config.TenantID)
+	return sm.getOrCreateConnectionAddr(ctx, config, sm.signalmanAddr)
+}
+
+// GetOrCreateConnectionForRegion picks the regional Signalman addr for the
+// stream-origin region and returns a connection to it. Empty/unknown region
+// falls back to the local-region addr — same behaviour as AddrForRegion. The
+// connection-cache key includes the addr so EU and US viewers of a US-origin
+// stream don't share a connection.
+func (sm *SubscriptionManager) GetOrCreateConnectionForRegion(ctx context.Context, config ConnectionConfig, region string) (*signalmanclient.GRPCClient, error) {
+	return sm.getOrCreateConnectionAddr(ctx, config, sm.AddrForRegion(region))
+}
+
+func (sm *SubscriptionManager) getOrCreateConnectionAddr(ctx context.Context, config ConnectionConfig, addr string) (*signalmanclient.GRPCClient, error) {
+	if addr == "" {
+		addr = sm.signalmanAddr
+	}
+	key := fmt.Sprintf("%s:%s:%s", config.UserID, config.TenantID, addr)
 
 	sm.mutex.RLock()
 	if client, exists := sm.clients[key]; exists && client.IsConnected() {
@@ -119,7 +224,7 @@ func (sm *SubscriptionManager) GetOrCreateConnection(ctx context.Context, config
 
 	// Create new gRPC client
 	client, err := signalmanclient.NewGRPCClient(signalmanclient.GRPCConfig{
-		GRPCAddr:      sm.signalmanAddr,
+		GRPCAddr:      addr,
 		Timeout:       30 * time.Second,
 		Logger:        sm.logger,
 		UserID:        config.UserID,
@@ -178,10 +283,19 @@ func (sm *SubscriptionManager) GetOrCreateConnection(ctx context.Context, config
 	return client, nil
 }
 
+// streamScopedAddr returns the Signalman addr to dial for a `*string` streamID
+// — nil means tenant-global so it falls back to the local addr.
+func (sm *SubscriptionManager) streamScopedAddr(ctx context.Context, streamID *string) string {
+	if streamID == nil {
+		return sm.signalmanAddr
+	}
+	return sm.connectionAddrForStream(ctx, *streamID)
+}
+
 // SubscribeToStreams subscribes to stream events and returns a channel of updates
 // Returns model.StreamEvent (canonical live stream event shape)
 func (sm *SubscriptionManager) SubscribeToStreams(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *model.StreamEvent, error) {
-	client, err := sm.GetOrCreateConnection(ctx, config)
+	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.streamScopedAddr(ctx, streamID))
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +312,7 @@ func (sm *SubscriptionManager) SubscribeToStreams(ctx context.Context, config Co
 // SubscribeToAnalytics subscribes to analytics events and returns a channel of updates
 // Returns proto.ClientLifecycleUpdate directly (bound to GraphQL ViewerMetrics)
 func (sm *SubscriptionManager) SubscribeToAnalytics(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *pb.ClientLifecycleUpdate, error) {
-	client, err := sm.GetOrCreateConnection(ctx, config)
+	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.streamScopedAddr(ctx, streamID))
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +329,7 @@ func (sm *SubscriptionManager) SubscribeToAnalytics(ctx context.Context, config 
 // SubscribeToConnections subscribes to viewer connection events and returns a channel of updates
 // Returns proto.ConnectionEvent directly (bound to GraphQL ConnectionEvent)
 func (sm *SubscriptionManager) SubscribeToConnections(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *pb.ConnectionEvent, error) {
-	client, err := sm.GetOrCreateConnection(ctx, config)
+	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.streamScopedAddr(ctx, streamID))
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +346,7 @@ func (sm *SubscriptionManager) SubscribeToConnections(ctx context.Context, confi
 // SubscribeToStorageEvents subscribes to storage lifecycle events and returns a channel of updates
 // Returns proto.StorageEvent (mapped from StorageLifecycleData)
 func (sm *SubscriptionManager) SubscribeToStorageEvents(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *pb.StorageEvent, error) {
-	client, err := sm.GetOrCreateConnection(ctx, config)
+	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.streamScopedAddr(ctx, streamID))
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +363,7 @@ func (sm *SubscriptionManager) SubscribeToStorageEvents(ctx context.Context, con
 // SubscribeToProcessingEvents subscribes to processing/transcoding events and returns a channel of updates
 // Returns proto.ProcessingUsageRecord (mapped from ProcessBillingEvent)
 func (sm *SubscriptionManager) SubscribeToProcessingEvents(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *pb.ProcessingUsageRecord, error) {
-	client, err := sm.GetOrCreateConnection(ctx, config)
+	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.streamScopedAddr(ctx, streamID))
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +397,7 @@ func (sm *SubscriptionManager) SubscribeToSystem(ctx context.Context, config Con
 // SubscribeToTrackList subscribes to track list events and returns a channel of updates
 // Returns proto.StreamTrackListTrigger directly (bound to GraphQL TrackListEvent)
 func (sm *SubscriptionManager) SubscribeToTrackList(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *pb.StreamTrackListTrigger, error) {
-	client, err := sm.GetOrCreateConnection(ctx, config)
+	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.connectionAddrForStream(ctx, streamID))
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +414,7 @@ func (sm *SubscriptionManager) SubscribeToTrackList(ctx context.Context, config 
 // SubscribeToLifecycle subscribes to lifecycle events (clip) and returns a channel
 // Returns proto.ClipLifecycleData directly (bound to GraphQL ClipLifecycle)
 func (sm *SubscriptionManager) SubscribeToLifecycle(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *pb.ClipLifecycleData, error) {
-	client, err := sm.GetOrCreateConnection(ctx, config)
+	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.connectionAddrForStream(ctx, streamID))
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +429,7 @@ func (sm *SubscriptionManager) SubscribeToLifecycle(ctx context.Context, config 
 // SubscribeToDVRLifecycle subscribes to DVR lifecycle events and returns a channel
 // Returns proto.DVRLifecycleData directly (bound to GraphQL DVREvent)
 func (sm *SubscriptionManager) SubscribeToDVRLifecycle(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *pb.DVRLifecycleData, error) {
-	client, err := sm.GetOrCreateConnection(ctx, config)
+	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.connectionAddrForStream(ctx, streamID))
 	if err != nil {
 		return nil, err
 	}

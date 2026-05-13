@@ -473,7 +473,11 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	if envErr != nil {
 		return fmt.Errorf("load manifest env_files: %w", envErr)
 	}
-	config, err := buildTaskConfig(task, manifest, map[string]any{}, true, manifestDir, sharedEnv, rc.ReleaseRepos)
+	clusterEnvs, clusterEnvsErr := rc.ClusterEnvs()
+	if clusterEnvsErr != nil {
+		return fmt.Errorf("load cluster env_files: %w", clusterEnvsErr)
+	}
+	config, err := buildTaskConfig(task, manifest, map[string]any{}, true, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
 	if err != nil {
 		return fmt.Errorf("build upgrade config: %w", err)
 	}

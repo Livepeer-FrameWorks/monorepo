@@ -1,0 +1,9 @@
+---
+kafka_mm_java_package_by_family:
+  Debian: openjdk-21-jre-headless
+  RedHat: java-21-openjdk-headless
+  Archlinux: jre21-openjdk-headless
+
+kafka_mm_bin_dir: "{{ kafka_mm_install_dir }}/bin"
+kafka_mm_properties_path: "{{ kafka_mm_install_dir }}/mm2.properties"
+kafka_mm_install_sentinel: "{{ kafka_mm_install_dir }}/.frameworks-kafka-installed"

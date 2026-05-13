@@ -90,6 +90,11 @@ func main() {
 		AllowInsecure:      allowInsecure,
 		ServiceToken:       serviceToken,
 		ServiceEventsTopic: serviceEventsTopic,
+		// Envelope identity for this Decklog instance — backfills onto
+		// events that arrive without source_region / source_cluster_id
+		// already set. Empty when running outside a regional deployment.
+		SourceRegion:    config.GetEnv("REGION", config.GetEnv("REGION_ID", config.GetEnv("DECKLOG_SOURCE_REGION", ""))),
+		SourceClusterID: config.GetEnv("CLUSTER_ID", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create gRPC server")

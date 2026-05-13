@@ -91,6 +91,24 @@ type TenantAlias struct {
 	UpdatedAt    time.Time
 }
 
+// TenantCustomDomain persists per-tenant custom domain state. Driven by
+// Quartermaster.EnsureCustomDomain when tenants.custom_domain changes for
+// a paid tenant. Navigator runs verification + ACME-DNS-01 delegation +
+// cert issuance through the same RenewalWorker that drives tenant aliases.
+type TenantCustomDomain struct {
+	TenantID         string
+	Domain           string
+	Status           string // pending_verification | verified | cert_issuing | cert_issued | cert_failed | tearing_down
+	AcmeDNSSubdomain string
+	IssuerID         sql.NullString
+	LastVerifiedAt   sql.NullTime
+	CertIssuedAt     sql.NullTime
+	CertExpiresAt    sql.NullTime
+	LastError        sql.NullString
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
 // TenantEdgeApplyState records per-(tenant, edge, bundle) state. Drives
 // DNS membership decisions for tenant smart record sets in cdn.{root}.
 type TenantEdgeApplyState struct {
@@ -229,6 +247,24 @@ func (s *Store) SaveCertificate(ctx context.Context, tenantID string, cert *Cert
 	return s.db.QueryRowContext(ctx, query,
 		tenantID, cert.Domain, cert.CertPEM, encryptedKey, cert.ExpiresAt, issuer,
 	).Scan(&cert.ID, &cert.TenantID, &cert.CreatedAt)
+}
+
+// DeleteCertificate removes a stored cert (and its encrypted key) for the
+// given (tenant_id, domain). Used during custom-domain teardown so cert
+// material doesn't outlive the lifecycle row. Idempotent on missing rows.
+func (s *Store) DeleteCertificate(ctx context.Context, tenantID, domain string) error {
+	if tenantID == "" {
+		_, err := s.db.ExecContext(ctx, `
+			DELETE FROM navigator.certificates
+			WHERE tenant_id IS NULL AND domain = $1
+		`, domain)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM navigator.certificates
+		WHERE tenant_id = $1::uuid AND domain = $2
+	`, tenantID, domain)
+	return err
 }
 
 // GetACMEAccount retrieves an ACME account scoped to (tenant, email, ca).

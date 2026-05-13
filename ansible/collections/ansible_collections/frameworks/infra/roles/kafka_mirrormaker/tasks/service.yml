@@ -1,0 +1,8 @@
+---
+- name: Enable + start frameworks-kafka-mirrormaker
+  ansible.builtin.systemd:
+    name: frameworks-kafka-mirrormaker
+    state: started
+    enabled: true
+    daemon_reload: true
+  when: not ansible_check_mode

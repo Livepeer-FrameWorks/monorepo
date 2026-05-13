@@ -7,6 +7,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/google/uuid"
 
 	"google.golang.org/grpc"
 	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
@@ -15,6 +16,20 @@ import (
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// envelopeSchemaVersion is the schema_version producers stamp on outbound
+// events. Bumped when an envelope-affecting proto change ships.
+const envelopeSchemaVersion = 2
+
+// newEventID returns a UUIDv7 string for the event_id envelope field. Falls
+// back to a v4 UUID if v7 generation fails (rare — only happens when the
+// system clock is broken).
+func newEventID() string {
+	if id, err := uuid.NewV7(); err == nil {
+		return id.String()
+	}
+	return uuid.New().String()
+}
 
 // Client represents a gRPC client for Decklog
 type Client struct {
@@ -89,6 +104,16 @@ type BatchedClient struct {
 	logger       logging.Logger
 	source       string
 	serviceToken string
+
+	// Envelope v2 metadata — populated from BatchedClientConfig at
+	// construction. Used by stampTriggerEnvelope / stampServiceEnvelope to
+	// fill source_cluster_id + source_region on outbound events when the
+	// caller didn't set them. Decklog still backfills at ingest, but
+	// producer-side stamping is preferred (each producer knows its own
+	// region; Decklog only knows the Decklog's region, which can be wrong
+	// during cross-region failover).
+	clusterID    string
+	sourceRegion string
 }
 
 // BatchedClientConfig represents configuration for the batched Decklog client
@@ -100,6 +125,14 @@ type BatchedClientConfig struct {
 	Timeout       time.Duration
 	Source        string // Source identifier for all events (e.g., "foghorn")
 	ServiceToken  string // Service token for authentication
+
+	// ClusterID is the producer's local cluster_id (CLUSTER_ID env var at
+	// the calling service). Stamped onto every outbound event's
+	// source_cluster_id envelope field when the caller didn't set it.
+	ClusterID string
+	// SourceRegion is the producer's local region (REGION env var). Stamped
+	// onto every outbound event's source_region envelope field.
+	SourceRegion string
 
 	// Optional, when true, makes the client tolerant of missing Target —
 	// NewBatchedClient returns a no-op stub instead of failing, and Send*
@@ -159,6 +192,8 @@ func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedC
 		logger:       logger,
 		source:       source,
 		serviceToken: cfg.ServiceToken,
+		clusterID:    cfg.ClusterID,
+		sourceRegion: cfg.SourceRegion,
 	}
 
 	logger.WithFields(logging.Fields{
@@ -178,8 +213,71 @@ func (c *BatchedClient) authContext() context.Context {
 	return ctx
 }
 
+// stampTriggerEnvelope fills envelope v2 fields on a MistTrigger when the
+// caller didn't set them. event_id is always stamped fresh (UUIDv7 — the
+// dedup key downstream consumers use). source_cluster_id / source_region
+// come from the BatchedClientConfig captured at construction. Decklog still
+// backfills at ingest as a safety net, but producer-side stamping is the
+// preferred path so cross-region failovers don't get the wrong source label.
+func (c *BatchedClient) stampTriggerEnvelope(trigger *pb.MistTrigger) {
+	if trigger == nil {
+		return
+	}
+	if trigger.EventId == "" {
+		trigger.EventId = newEventID()
+	}
+	if trigger.SchemaVersion == 0 {
+		trigger.SchemaVersion = envelopeSchemaVersion
+	}
+	if trigger.GetClusterId() == "" && c.clusterID != "" {
+		clusterID := c.clusterID
+		trigger.ClusterId = &clusterID
+	}
+	if trigger.SourceRegion == "" && c.sourceRegion != "" {
+		trigger.SourceRegion = c.sourceRegion
+	}
+}
+
+// stampServiceEnvelope fills envelope v2 fields on a ServiceEvent when the
+// caller didn't set them. Mirrors stampTriggerEnvelope but ServiceEvent has
+// the source_cluster_id field directly (no oneof).
+func (c *BatchedClient) stampServiceEnvelope(event *pb.ServiceEvent) {
+	if event == nil {
+		return
+	}
+	if event.EventId == "" {
+		event.EventId = newEventID()
+	}
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = envelopeSchemaVersion
+	}
+	if event.SourceClusterId == "" && c.clusterID != "" {
+		event.SourceClusterId = c.clusterID
+	}
+	if event.SourceRegion == "" && c.sourceRegion != "" {
+		event.SourceRegion = c.sourceRegion
+	}
+}
+
+// stampGatewayEnvelope fills envelope v2 fields on a GatewayTelemetryEvent.
+// The proto reuses gateway-specific fields (gateway_region, cluster_id) for
+// the source_* roles per the proto's own comment; we still stamp event_id
+// and schema_version + fall back the cluster/region pair where helpful.
+func (c *BatchedClient) stampGatewayEnvelope(event *pb.GatewayTelemetryEvent) {
+	if event == nil {
+		return
+	}
+	if event.EventId == "" {
+		event.EventId = newEventID()
+	}
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = envelopeSchemaVersion
+	}
+}
+
 // SendTrigger sends an enriched MistTrigger to Decklog
 func (c *BatchedClient) SendTrigger(trigger *pb.MistTrigger) error {
+	c.stampTriggerEnvelope(trigger)
 	ctx := c.authContext()
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
@@ -214,6 +312,7 @@ func (c *BatchedClient) SendLoadBalancing(data *pb.LoadBalancingData) error {
 		streamID := data.GetStreamId()
 		trigger.StreamId = &streamID
 	}
+	c.stampTriggerEnvelope(trigger)
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
 		c.logger.WithFields(logging.Fields{
@@ -245,6 +344,7 @@ func (c *BatchedClient) SendClipLifecycle(data *pb.ClipLifecycleData) error {
 		streamID := data.GetStreamId()
 		trigger.StreamId = &streamID
 	}
+	c.stampTriggerEnvelope(trigger)
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
 		c.logger.WithFields(logging.Fields{
@@ -288,6 +388,7 @@ func (c *BatchedClient) SendDVRLifecycle(data *pb.DVRLifecycleData) error {
 		streamID := data.GetStreamId()
 		trigger.StreamId = &streamID
 	}
+	c.stampTriggerEnvelope(trigger)
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
 		c.logger.WithFields(logging.Fields{
@@ -331,6 +432,7 @@ func (c *BatchedClient) SendVodLifecycle(data *pb.VodLifecycleData) error {
 		tenantID := data.GetTenantId()
 		trigger.TenantId = &tenantID
 	}
+	c.stampTriggerEnvelope(trigger)
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
 		c.logger.WithFields(logging.Fields{
@@ -371,6 +473,7 @@ func (c *BatchedClient) emitArtifactLifecycleEvent(event *pb.ServiceEvent) {
 	if event.Timestamp == nil {
 		event.Timestamp = timestamppb.Now()
 	}
+	c.stampServiceEnvelope(event)
 	go func(ev *pb.ServiceEvent) {
 		if _, err := c.client.SendServiceEvent(c.authContext(), ev); err != nil {
 			c.logger.WithError(err).WithField("event_type", ev.EventType).Warn("Failed to emit artifact lifecycle service event")
@@ -508,6 +611,7 @@ func (c *BatchedClient) SendAPIRequestBatch(data *pb.APIRequestBatch) error {
 			ApiRequestBatch: data,
 		},
 	}
+	c.stampTriggerEnvelope(trigger)
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
 		c.logger.WithFields(logging.Fields{
@@ -536,6 +640,7 @@ func (c *BatchedClient) SendMessageLifecycle(data *pb.MessageLifecycleData) erro
 			MessageLifecycleData: data,
 		},
 	}
+	c.stampTriggerEnvelope(trigger)
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
 		c.logger.WithFields(logging.Fields{
@@ -572,6 +677,7 @@ func (c *BatchedClient) SendFederationEvent(data *pb.FederationEventData) error 
 		clusterID := data.GetLocalCluster()
 		trigger.ClusterId = &clusterID
 	}
+	c.stampTriggerEnvelope(trigger)
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
 		c.logger.WithFields(logging.Fields{
@@ -603,6 +709,7 @@ func (c *BatchedClient) SendGatewayTelemetry(event *pb.GatewayTelemetryEvent) er
 	if c.disabled() {
 		return nil
 	}
+	c.stampGatewayEnvelope(event)
 	ctx := c.authContext()
 	_, err := c.client.SendGatewayTelemetry(ctx, event)
 	if err != nil {
@@ -621,6 +728,7 @@ func (c *BatchedClient) SendServiceEvent(event *pb.ServiceEvent) error {
 	if c.disabled() {
 		return nil
 	}
+	c.stampServiceEnvelope(event)
 	ctx := c.authContext()
 	_, err := c.client.SendServiceEvent(ctx, event)
 	if err != nil {

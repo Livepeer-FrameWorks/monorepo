@@ -269,7 +269,15 @@ message InvalidatePlaybackAuthRequest {
   // stream/artifact for the tenant" (used on signing-key revoke when the
   // policy may reference the revoked kid on any object).
   repeated string internal_names = 2;
-  string reason = 3; // e.g., "policy_change", "key_revoked", "webhook_rotated"
+  string reason = 3; // e.g., "policy_change", "key_revoked", "webhook_rotated", "bundle_revoke"
+
+  // Signed-policy-bundle revocation fields. When reason == "bundle_revoke",
+  // Foghorn calls policybundle.Cache.BumpWatermark(tenant_id, stream_id,
+  // bundle_min_version) on receipt, invalidating cached bundles below the
+  // watermark. stream_id empty means "all streams for this tenant" (used on
+  // tenant-wide plan downgrades; Foghorn loops over its cache).
+  string stream_id = 4;
+  int64 bundle_min_version = 5;
 }
 
 message InvalidatePlaybackAuthResponse {
