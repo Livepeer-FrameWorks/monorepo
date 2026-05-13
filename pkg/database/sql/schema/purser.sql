@@ -1327,6 +1327,15 @@ CREATE INDEX IF NOT EXISTS idx_payment_reversals_invoice
 CREATE INDEX IF NOT EXISTS idx_payment_reversals_review
     ON purser.payment_reversals(tenant_id) WHERE operator_review_required;
 
+CREATE TABLE IF NOT EXISTS purser.operator_credit_clawback_reversals (
+    payment_reversal_id UUID NOT NULL REFERENCES purser.payment_reversals(id) ON DELETE CASCADE,
+    operator_credit_ledger_id UUID NOT NULL REFERENCES purser.operator_credit_ledger(id) ON DELETE CASCADE,
+    accrual_ledger_id UUID NOT NULL REFERENCES purser.operator_credit_ledger(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (payment_reversal_id, accrual_ledger_id),
+    UNIQUE (operator_credit_ledger_id)
+);
+
 CREATE TABLE IF NOT EXISTS purser.mollie_payment_observations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
@@ -1531,7 +1540,7 @@ JOIN purser.payment_reversals pr
 LEFT JOIN purser.operator_credit_ledger clawback
     ON clawback.reverses_ledger_id = accrual.id
    AND clawback.entry_type = 'clawback'
-WHERE accrual.entry_type IN ('accrual', 'hold')
+WHERE accrual.entry_type = 'accrual'
   AND clawback.id IS NULL;
 
 CREATE OR REPLACE VIEW purser.payment_report_stripe_meter_outbox_stuck AS

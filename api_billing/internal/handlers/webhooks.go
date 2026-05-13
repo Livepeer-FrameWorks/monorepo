@@ -1664,12 +1664,10 @@ func applyInvoicePaymentReversalTx(ctx context.Context, tx *sql.Tx, paymentID, i
 	return nil
 }
 
-// applyOperatorCreditClawbackTx writes operator_credit_ledger clawback
-// rows for each open accrual on the invoice, prorated by the reversed
-// amount over the invoice total. The clawback inherits the accrual's
-// cluster/period/currency so payout reporting nets cleanly. Idempotent on
-// the original-accrual id: a second reversal that would clawback the same
-// accrual upserts the amount delta rather than inserting a duplicate.
+// applyOperatorCreditClawbackTx writes one clawback per reversal/accrual pair,
+// prorated by the reversed amount over the invoice total. The link table makes
+// replay idempotent while preserving every ledger row that affects payout
+// reporting.
 func applyOperatorCreditClawbackTx(ctx context.Context, tx *sql.Tx, invoiceID, reversalID string, reversedCents int64) error {
 	if invoiceID == "" || reversedCents <= 0 {
 		return nil
@@ -1720,6 +1718,7 @@ func applyOperatorCreditClawbackTx(ctx context.Context, tx *sql.Tx, invoiceID, r
 	// Proration factor: reversedCents / invoiceCents. We compute each
 	// clawback in cents by (accrual.x * reversedCents / invoiceCents)
 	// using integer math so totals stay exact for typical refunds.
+	var linkedClawbackID string
 	for _, a := range todo {
 		clawGross := (a.gross * reversedCents) / invoiceCents
 		clawFee := (a.fee * reversedCents) / invoiceCents
@@ -1727,21 +1726,51 @@ func applyOperatorCreditClawbackTx(ctx context.Context, tx *sql.Tx, invoiceID, r
 		if clawGross == 0 && clawFee == 0 && clawPayable == 0 {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO purser.operator_credit_ledger (
-				source_type, invoice_line_item_id, entry_type, reverses_ledger_id,
-				cluster_owner_tenant_id, cluster_id, invoice_id, period_start, period_end,
-				currency, gross_cents, platform_fee_cents, payable_cents, status, notes
-			)
+		var clawbackID string
+		if err := tx.QueryRowContext(ctx, `
+			WITH existing AS (
+				SELECT operator_credit_ledger_id AS id
+				FROM purser.operator_credit_clawback_reversals
+				WHERE payment_reversal_id = $5::uuid
+				  AND accrual_ledger_id = $1::uuid
+			),
+			inserted AS (
+				INSERT INTO purser.operator_credit_ledger (
+					source_type, invoice_line_item_id, entry_type, reverses_ledger_id,
+					cluster_owner_tenant_id, cluster_id, invoice_id, period_start, period_end,
+					currency, gross_cents, platform_fee_cents, payable_cents, status, notes
+				)
 			SELECT 'invoice_line', ol.invoice_line_item_id, 'clawback', ol.id,
 			       ol.cluster_owner_tenant_id, ol.cluster_id, ol.invoice_id,
 			       ol.period_start, ol.period_end, ol.currency,
-			       -$2, -$3, -$4, 'clawed_back',
-			       jsonb_build_object('payment_reversal_id', $5::text)
-			FROM purser.operator_credit_ledger ol
-			WHERE ol.id = $1
-		`, a.id, clawGross, clawFee, clawPayable, reversalID); err != nil {
+				       -$2, -$3, -$4, 'clawed_back',
+				       jsonb_build_object('payment_reversal_id', $5::text)
+				FROM purser.operator_credit_ledger ol
+				WHERE ol.id = $1
+				  AND NOT EXISTS (SELECT 1 FROM existing)
+				RETURNING id
+			),
+			chosen AS (
+				SELECT id FROM existing
+				UNION ALL
+				SELECT id FROM inserted
+				LIMIT 1
+			),
+			mapped AS (
+				INSERT INTO purser.operator_credit_clawback_reversals (
+					payment_reversal_id, operator_credit_ledger_id, accrual_ledger_id
+				)
+				SELECT $5::uuid, id, $1::uuid FROM chosen
+				ON CONFLICT (payment_reversal_id, accrual_ledger_id) DO UPDATE SET
+					operator_credit_ledger_id = EXCLUDED.operator_credit_ledger_id
+				RETURNING operator_credit_ledger_id
+			)
+			SELECT operator_credit_ledger_id FROM mapped
+		`, a.id, clawGross, clawFee, clawPayable, reversalID).Scan(&clawbackID); err != nil {
 			return fmt.Errorf("insert clawback for accrual %s: %w", a.id, err)
+		}
+		if linkedClawbackID == "" {
+			linkedClawbackID = clawbackID
 		}
 		// Mark the original accrual clawed_back if the clawback fully
 		// covers the payable amount; otherwise leave at its current state.
@@ -1755,19 +1784,14 @@ func applyOperatorCreditClawbackTx(ctx context.Context, tx *sql.Tx, invoiceID, r
 			}
 		}
 	}
-	// Tie the operator-credit ledger movement to the reversal row for
-	// audit lookups.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE purser.payment_reversals
-		SET operator_credit_ledger_id = (
-		    SELECT id FROM purser.operator_credit_ledger
-		    WHERE invoice_id = $1 AND entry_type = 'clawback'
-		    ORDER BY created_at DESC LIMIT 1
-		),
-		updated_at = NOW()
-		WHERE id = $2
-	`, invoiceID, reversalID); err != nil {
-		return fmt.Errorf("link reversal to clawback ledger row: %w", err)
+	if linkedClawbackID != "" {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE purser.payment_reversals
+			SET operator_credit_ledger_id = $1, updated_at = NOW()
+			WHERE id = $2
+		`, linkedClawbackID, reversalID); err != nil {
+			return fmt.Errorf("link reversal to clawback ledger row: %w", err)
+		}
 	}
 	return nil
 }

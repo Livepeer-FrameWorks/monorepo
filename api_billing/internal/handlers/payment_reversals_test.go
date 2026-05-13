@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/sirupsen/logrus"
@@ -109,6 +110,45 @@ func TestApplyProviderReversal_StripeRefundReopensInvoiceWhenNetDropsBelowAmount
 	}
 	if !applied {
 		t.Fatal("expected applied=true on first delivery")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestApplyOperatorCreditClawbackLinksReversalAuditRow(t *testing.T) {
+	mock, done := newReversalMock(t)
+	defer done()
+
+	now := time.Now()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \(amount \* 100\)::bigint FROM purser\.billing_invoices`).
+		WithArgs("invoice-op").
+		WillReturnRows(sqlmock.NewRows([]string{"cents"}).AddRow(int64(10000)))
+	mock.ExpectQuery(`SELECT id, cluster_owner_tenant_id, cluster_id, currency, gross_cents, platform_fee_cents, payable_cents, period_start, period_end\s+FROM purser\.operator_credit_ledger`).
+		WithArgs("invoice-op").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "owner", "cluster", "currency", "gross", "fee", "payable", "period_start", "period_end"}).
+			AddRow("accrual-1", "owner-1", "cluster-1", "EUR", int64(1000), int64(200), int64(800), now, now))
+	mock.ExpectQuery(`WITH existing AS \(\s+SELECT operator_credit_ledger_id AS id\s+FROM purser\.operator_credit_clawback_reversals`).
+		WithArgs("accrual-1", int64(1000), int64(200), int64(800), "reversal-1").
+		WillReturnRows(sqlmock.NewRows([]string{"operator_credit_ledger_id"}).AddRow("clawback-1"))
+	mock.ExpectExec(`UPDATE purser\.operator_credit_ledger\s+SET status = 'clawed_back'`).
+		WithArgs("accrual-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.payment_reversals\s+SET operator_credit_ledger_id = \$1`).
+		WithArgs("clawback-1", "reversal-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := applyOperatorCreditClawbackTx(context.Background(), tx, "invoice-op", "reversal-1", 10000); err != nil {
+		t.Fatalf("applyOperatorCreditClawbackTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit tx: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

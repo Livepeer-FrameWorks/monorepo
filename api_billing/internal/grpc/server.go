@@ -4207,9 +4207,10 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.Cr
 			billingEmail = fmt.Sprintf("tenant+%s@example.com", tenantID[:8]) // Fallback
 		}
 		cust, err := s.stripeClient.CreateOrGetCustomer(ctx, stripe.CustomerInfo{
-			TenantID: tenantID,
-			Email:    billingEmail,
-			Name:     fmt.Sprintf("Tenant %s", tenantID[:8]),
+			TenantID:       tenantID,
+			Email:          billingEmail,
+			Name:           fmt.Sprintf("Tenant %s", tenantID[:8]),
+			IdempotencyKey: "stripe-customer:" + tenantID,
 			Metadata: map[string]string{
 				"cluster_id": clusterID,
 			},
@@ -6304,9 +6305,10 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *pb.Create
 
 	// Get or create Stripe customer
 	customer, err := s.stripeClient.CreateOrGetCustomer(ctx, stripe.CustomerInfo{
-		TenantID: tenantID,
-		Email:    email,
-		Name:     name,
+		TenantID:       tenantID,
+		Email:          email,
+		Name:           name,
+		IdempotencyKey: "stripe-customer:" + tenantID,
 	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create/get Stripe customer")
@@ -6545,6 +6547,23 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 		return nil, status.Error(codes.Internal, "failed to parse billing tier price")
 	}
 
+	firstPaymentIntentKey := fmt.Sprintf("mollie-first-payment:%s:%s", tenantID, tierID)
+	var firstPaymentIntentID string
+	if intentErr := s.db.QueryRowContext(ctx, `
+		INSERT INTO purser.payment_provider_intents (
+			tenant_id, provider, purpose, local_reference_type, local_reference_id,
+			status, currency, amount_cents, idempotency_key
+		) VALUES ($1, 'mollie', 'mollie_first_payment', 'billing_tiers', $2::uuid,
+		          'pending', $3, $4, $5)
+		ON CONFLICT (provider, idempotency_key) DO UPDATE SET
+			attempt_count = purser.payment_provider_intents.attempt_count + 1,
+			updated_at = NOW()
+		RETURNING id
+	`, tenantID, tierID, currency, basePrice.Round(2).Shift(2).IntPart(), firstPaymentIntentKey).Scan(&firstPaymentIntentID); intentErr != nil {
+		s.logger.WithError(intentErr).Error("Failed to record Mollie first-payment intent")
+		return nil, status.Error(codes.Internal, "failed to record first-payment intent")
+	}
+
 	// Get or create Mollie customer
 	var mollieCustomerID string
 	err = s.db.QueryRowContext(ctx, `
@@ -6556,12 +6575,14 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 		primaryUser, primaryErr := s.commodoreClient.GetTenantPrimaryUser(ctx, tenantID)
 		if primaryErr != nil {
 			if status.Code(primaryErr) == codes.NotFound {
+				s.markProviderIntentFailed(ctx, firstPaymentIntentID, "missing_billing_email", primaryErr)
 				return nil, status.Error(codes.FailedPrecondition, "no billing email on account")
 			}
 			s.logger.WithFields(logging.Fields{
 				"tenant_id": tenantID,
 				"error":     primaryErr,
 			}).Error("Failed to get tenant primary user from Commodore")
+			s.markProviderIntentFailed(ctx, firstPaymentIntentID, "tenant_primary_user_lookup_failed", primaryErr)
 			return nil, status.Error(codes.Internal, "failed to get tenant info")
 		}
 		email := primaryUser.Email
@@ -6571,12 +6592,14 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 		}
 
 		customer, customerErr := s.mollieClient.CreateOrGetCustomer(ctx, mollie.CustomerInfo{
-			TenantID: tenantID,
-			Email:    email,
-			Name:     name,
+			TenantID:       tenantID,
+			Email:          email,
+			Name:           name,
+			IdempotencyKey: "mollie-customer:" + tenantID,
 		})
 		if customerErr != nil {
 			s.logger.WithError(customerErr).Error("Failed to create Mollie customer")
+			s.markProviderIntentFailed(ctx, firstPaymentIntentID, "customer_create_failed", customerErr)
 			return nil, status.Error(codes.Internal, "failed to create Mollie customer")
 		}
 
@@ -6585,16 +6608,28 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 			INSERT INTO purser.mollie_customers (tenant_id, mollie_customer_id)
 			VALUES ($1, $2)
 			ON CONFLICT (tenant_id) DO UPDATE SET mollie_customer_id = $2
-		`, tenantID, customer.ID)
+			`, tenantID, customer.ID)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to store Mollie customer mapping")
+			s.markProviderIntentFailed(ctx, firstPaymentIntentID, "customer_mapping_failed", err)
 			return nil, status.Error(codes.Internal, "failed to store customer mapping")
 		}
 
 		mollieCustomerID = customer.ID
 	} else if err != nil {
 		s.logger.WithError(err).Error("Failed to get Mollie customer")
+		s.markProviderIntentFailed(ctx, firstPaymentIntentID, "customer_lookup_failed", err)
 		return nil, status.Error(codes.Internal, "failed to get Mollie customer")
+	}
+
+	if _, linkErr := s.db.ExecContext(ctx, `
+			UPDATE purser.payment_provider_intents
+			SET provider_customer_id = $1, updated_at = NOW()
+			WHERE id = $2
+		`, mollieCustomerID, firstPaymentIntentID); linkErr != nil {
+		s.logger.WithError(linkErr).WithField("intent_id", firstPaymentIntentID).Warn("Failed to link Mollie customer to first-payment intent")
+		s.markProviderIntentFailed(ctx, firstPaymentIntentID, "customer_intent_link_failed", linkErr)
+		return nil, status.Error(codes.Internal, "failed to link first-payment intent")
 	}
 
 	// Build webhook URL (routed through Gateway)
@@ -6602,27 +6637,6 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 	webhookURL := ""
 	if webhookBaseURL != "" {
 		webhookURL = webhookBaseURL + "/webhooks/billing/mollie"
-	}
-
-	// Durable intent before the Mollie first-payment call. Idempotency key
-	// is deterministic on (tenant, tier) so retried setup attempts collapse
-	// to one row and provider_payment_id can be linked back after the
-	// webhook confirms.
-	firstPaymentIntentKey := fmt.Sprintf("mollie-first-payment:%s:%s", tenantID, tierID)
-	var firstPaymentIntentID string
-	if intentErr := s.db.QueryRowContext(ctx, `
-		INSERT INTO purser.payment_provider_intents (
-			tenant_id, provider, purpose, local_reference_type, local_reference_id,
-			provider_customer_id, status, currency, amount_cents, idempotency_key
-		) VALUES ($1, 'mollie', 'mollie_first_payment', 'billing_tiers', $2::uuid,
-		          $3, 'pending', $4, $5, $6)
-		ON CONFLICT (provider, idempotency_key) DO UPDATE SET
-			attempt_count = purser.payment_provider_intents.attempt_count + 1,
-			updated_at = NOW()
-		RETURNING id
-	`, tenantID, tierID, mollieCustomerID, currency, basePrice.Round(2).Shift(2).IntPart(), firstPaymentIntentKey).Scan(&firstPaymentIntentID); intentErr != nil {
-		s.logger.WithError(intentErr).Error("Failed to record Mollie first-payment intent")
-		return nil, status.Error(codes.Internal, "failed to record first-payment intent")
 	}
 
 	// Create first payment

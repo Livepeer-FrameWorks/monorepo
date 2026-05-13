@@ -55,10 +55,11 @@ func NewClient(config Config) (*Client, error) {
 
 // CustomerInfo for Mollie customer creation
 type CustomerInfo struct {
-	TenantID string
-	Email    string
-	Name     string
-	Locale   string // nl_NL, en_US, etc.
+	TenantID       string
+	Email          string
+	Name           string
+	Locale         string // nl_NL, en_US, etc.
+	IdempotencyKey string
 }
 
 // CreateOrGetCustomer finds existing customer by tenant ID metadata or creates a new one
@@ -70,14 +71,32 @@ func (c *Client) CreateOrGetCustomer(ctx context.Context, info CustomerInfo) (*m
 	if info.Locale == "" {
 		locale = mollie.English
 	}
-
-	_, customer, err := c.client.Customers.Create(ctx, mollie.CreateCustomer{
-		Name:   info.Name,
-		Email:  info.Email,
-		Locale: locale,
+	idempotencyKey := info.IdempotencyKey
+	if idempotencyKey == "" && info.TenantID != "" {
+		idempotencyKey = "mollie-customer:" + info.TenantID
+	}
+	if idempotencyKey == "" {
+		return nil, fmt.Errorf("CreateOrGetCustomer requires a deterministic IdempotencyKey")
+	}
+	body, err := json.Marshal(map[string]any{
+		"name":   info.Name,
+		"email":  info.Email,
+		"locale": locale,
 	})
 	if err != nil {
+		return nil, fmt.Errorf("marshal Mollie customer: %w", err)
+	}
+	u, err := c.mollieURL("v2/customers")
+	if err != nil {
+		return nil, fmt.Errorf("build Mollie customer URL: %w", err)
+	}
+	respBody, err := c.postJSON(ctx, u.String(), body, idempotencyKey)
+	if err != nil {
 		return nil, fmt.Errorf("failed to create Mollie customer: %w", err)
+	}
+	var customer mollie.Customer
+	if err := json.Unmarshal(respBody, &customer); err != nil {
+		return nil, fmt.Errorf("decode Mollie customer response: %w", err)
 	}
 
 	c.logger.WithFields(map[string]any{
@@ -85,7 +104,7 @@ func (c *Client) CreateOrGetCustomer(ctx context.Context, info CustomerInfo) (*m
 		"tenant_id":   info.TenantID,
 	}).Info("Created Mollie customer")
 
-	return customer, nil
+	return &customer, nil
 }
 
 // GetCustomer retrieves a customer by ID

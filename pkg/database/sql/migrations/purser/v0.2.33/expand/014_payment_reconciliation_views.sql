@@ -79,7 +79,7 @@ JOIN purser.payment_reversals pr
 LEFT JOIN purser.operator_credit_ledger clawback
     ON clawback.reverses_ledger_id = accrual.id
    AND clawback.entry_type = 'clawback'
-WHERE accrual.entry_type IN ('accrual', 'hold')
+WHERE accrual.entry_type = 'accrual'
   AND clawback.id IS NULL;
 
 CREATE OR REPLACE VIEW purser.payment_report_stripe_meter_outbox_stuck AS

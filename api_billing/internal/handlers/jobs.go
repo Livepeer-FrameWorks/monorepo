@@ -1504,6 +1504,8 @@ func mollieFailureCode(err error) string {
 	return msg
 }
 
+const maxProviderPaymentAttempts = 3
+
 // chargeStripeOverage collects the metered overage portion of an invoice
 // from a Stripe-backed tenant by creating an off-session PaymentIntent
 // against the customer's saved card. The Stripe subscription auto-collects
@@ -1515,7 +1517,10 @@ func mollieFailureCode(err error) string {
 // state on payment_provider_intents rather than being treated as a
 // failure — the customer must reauthorize before retry.
 func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoiceID string, overageAmount decimal.Decimal, currency string) error {
-	rounded := overageAmount.Round(2)
+	rounded, amountStr, amountCents, amountErr := overageAmountParts(overageAmount, currency)
+	if amountErr != nil {
+		return amountErr
+	}
 	if !rounded.GreaterThan(decimal.Zero) {
 		return nil
 	}
@@ -1542,17 +1547,20 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		return fmt.Errorf("stripe client not configured for active Stripe subscription")
 	}
 
-	exponent := stripeOverageMinorUnitExponent(currency)
-	amountCents := rounded.Shift(int32(exponent)).IntPart()
 	if amountCents <= 0 {
 		return nil
 	}
 
-	attemptNumber := 1
+	attemptNumber, err := jm.nextProviderPaymentAttempt(ctx, "stripe", invoiceID)
+	if err != nil {
+		return err
+	}
+	if attemptNumber == 0 {
+		return nil
+	}
 	intentKey := fmt.Sprintf("stripe-overage:%s:%d", invoiceID, attemptNumber)
 	paymentID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(intentKey)).String()
 	intentPlaceholder := "stripe-overage-intent:" + paymentID
-	amountStr := rounded.StringFixed(2)
 
 	var existingTxID, existingStatus string
 	if insertErr := jm.db.QueryRowContext(ctx, `
@@ -1627,12 +1635,18 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		Description:      fmt.Sprintf("Usage overage for invoice %s", invoiceID),
 	})
 	if chargeErr != nil {
-		nextRetry := time.Now().Add(1 * time.Hour)
+		terminal := attemptNumber >= maxProviderPaymentAttempts
+		intentStatus := "provider_call_failed"
+		var nextRetry any = time.Now().Add(1 * time.Hour)
+		if terminal {
+			intentStatus = "terminal_failed"
+			nextRetry = nil
+		}
 		if _, updateErr := jm.db.ExecContext(ctx, `
 			UPDATE purser.payment_provider_intents
-			SET status = 'provider_call_failed', last_error = $1, updated_at = NOW()
-			WHERE id = $2
-		`, chargeErr.Error(), providerIntentID); updateErr != nil {
+			SET status = $1, last_error = $2, updated_at = NOW()
+			WHERE id = $3
+		`, intentStatus, chargeErr.Error(), providerIntentID); updateErr != nil {
 			jm.logger.WithError(updateErr).WithField("intent_id", providerIntentID).Warn("mark Stripe overage intent provider_call_failed")
 		}
 		if _, attemptUpdateErr := jm.db.ExecContext(ctx, `
@@ -1642,9 +1656,18 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 			    failure_message = $1,
 			    next_retry_at = $2,
 			    updated_at = NOW()
-			WHERE payment_id = $3 AND attempt_number = 1
-		`, chargeErr.Error(), nextRetry, paymentID); attemptUpdateErr != nil {
+			WHERE payment_id = $3 AND attempt_number = $4
+		`, chargeErr.Error(), nextRetry, paymentID, attemptNumber); attemptUpdateErr != nil {
 			jm.logger.WithError(attemptUpdateErr).WithField("payment_id", paymentID).Warn("mark Stripe overage attempt provider_call_failed")
+		}
+		if terminal {
+			if _, markErr := jm.db.ExecContext(ctx, `
+				UPDATE purser.billing_payments
+				SET status = 'failed', updated_at = NOW()
+				WHERE id = $1 AND status = 'pending'
+			`, paymentID); markErr != nil {
+				jm.logger.WithError(markErr).WithField("payment_id", paymentID).Warn("mark Stripe overage payment terminal failed")
+			}
 		}
 		jm.logger.WithError(chargeErr).WithFields(logging.Fields{
 			"tenant_id":  tenantID,
@@ -1674,8 +1697,8 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		if _, attemptUpdateErr := jm.db.ExecContext(ctx, `
 			UPDATE purser.billing_payment_attempts
 			SET provider_payment_id = $1, updated_at = NOW()
-			WHERE payment_id = $2 AND attempt_number = 1
-		`, result.PaymentIntentID, paymentID); attemptUpdateErr != nil {
+			WHERE payment_id = $2 AND attempt_number = $3
+		`, result.PaymentIntentID, paymentID, attemptNumber); attemptUpdateErr != nil {
 			jm.logger.WithError(attemptUpdateErr).WithField("payment_id", paymentID).Warn("link provider_payment_id on attempt")
 		}
 	}
@@ -1695,8 +1718,8 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		if _, attemptUpdateErr := jm.db.ExecContext(ctx, `
 			UPDATE purser.billing_payment_attempts
 			SET status = 'sca_required', failure_code = $1, failure_message = $2, updated_at = NOW()
-			WHERE payment_id = $3 AND attempt_number = 1
-		`, result.FailureCode, result.FailureMessage, paymentID); attemptUpdateErr != nil {
+			WHERE payment_id = $3 AND attempt_number = $4
+		`, result.FailureCode, result.FailureMessage, paymentID, attemptNumber); attemptUpdateErr != nil {
 			jm.logger.WithError(attemptUpdateErr).WithField("payment_id", paymentID).Warn("mark attempt sca_required")
 		}
 		jm.logger.WithFields(logging.Fields{
@@ -1720,8 +1743,8 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		if _, attemptUpdateErr := jm.db.ExecContext(ctx, `
 			UPDATE purser.billing_payment_attempts
 			SET status = 'failed', failure_code = $1, failure_message = $2, updated_at = NOW()
-			WHERE payment_id = $3 AND attempt_number = 1
-		`, result.FailureCode, result.FailureMessage, paymentID); attemptUpdateErr != nil {
+			WHERE payment_id = $3 AND attempt_number = $4
+		`, result.FailureCode, result.FailureMessage, paymentID, attemptNumber); attemptUpdateErr != nil {
 			jm.logger.WithError(attemptUpdateErr).WithField("payment_id", paymentID).Warn("mark attempt failed")
 		}
 		if _, markErr := jm.db.ExecContext(ctx, `
@@ -1788,6 +1811,43 @@ func stripeOverageMinorUnitExponent(currency string) int {
 	}
 }
 
+func overageAmountParts(amount decimal.Decimal, currency string) (decimal.Decimal, string, int64, error) {
+	exponent := stripeOverageMinorUnitExponent(currency)
+	if exponent > 2 {
+		return decimal.Zero, "", 0, fmt.Errorf("currency %s has %d minor units, but Purser invoice/payment amount columns currently support at most 2", strings.ToUpper(currency), exponent)
+	}
+	rounded := amount.Round(int32(exponent))
+	amountCents := rounded.Shift(int32(exponent)).IntPart()
+	return rounded, rounded.StringFixed(int32(exponent)), amountCents, nil
+}
+
+func (jm *JobManager) nextProviderPaymentAttempt(ctx context.Context, provider, invoiceID string) (int, error) {
+	var attemptNumber int
+	var status string
+	err := jm.db.QueryRowContext(ctx, `
+		SELECT bpa.attempt_number, bpa.status
+		FROM purser.billing_payment_attempts bpa
+		JOIN purser.billing_payments bp ON bp.id = bpa.payment_id
+		WHERE bpa.provider = $1
+		  AND bp.invoice_id = $2
+		ORDER BY bpa.attempt_number DESC
+		LIMIT 1
+	`, provider, invoiceID).Scan(&attemptNumber, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 1, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("lookup latest %s payment attempt: %w", provider, err)
+	}
+	if status != "provider_call_failed" {
+		return 0, nil
+	}
+	if attemptNumber >= maxProviderPaymentAttempts {
+		return 0, nil
+	}
+	return attemptNumber + 1, nil
+}
+
 // chargeMollieOverage triggers an on-demand recurring-sequence charge against
 // the tenant's stored Mollie mandate for the metered (overage) portion of an
 // invoice. The Mollie subscription auto-collects the base; only the overage
@@ -1798,7 +1858,10 @@ func stripeOverageMinorUnitExponent(currency string) int {
 // and the mandate is rechecked just before the API call so a revoked mandate
 // is flagged terminal rather than failing in a loop.
 func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoiceID string, overageAmount decimal.Decimal, currency string) error {
-	rounded := overageAmount.Round(2)
+	rounded, amountStr, amountCents, amountErr := overageAmountParts(overageAmount, currency)
+	if amountErr != nil {
+		return amountErr
+	}
 	if !rounded.GreaterThan(decimal.Zero) {
 		return nil
 	}
@@ -1845,12 +1908,16 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 		return fmt.Errorf("mollie client not configured for active Mollie subscription")
 	}
 
-	attemptNumber := 1
+	attemptNumber, err := jm.nextProviderPaymentAttempt(ctx, "mollie", invoiceID)
+	if err != nil {
+		return err
+	}
+	if attemptNumber == 0 {
+		return nil
+	}
 	idemKey := fmt.Sprintf("mollie-overage:%s:%d", invoiceID, attemptNumber)
 	paymentID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(idemKey)).String()
 	intentID := "mollie-overage-intent:" + paymentID
-	amountStr := rounded.StringFixed(2)
-	amountCents := rounded.Shift(int32(stripeOverageMinorUnitExponent(currency))).IntPart()
 
 	var existingTxID, existingStatus string
 	if insertErr := jm.db.QueryRowContext(ctx, `
@@ -1934,6 +2001,8 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 		if mandateRevoked {
 			attemptStatus = "expired"
 			nextRetry = nil
+		} else if attemptNumber >= maxProviderPaymentAttempts {
+			nextRetry = nil
 		}
 		if _, attemptErr := jm.db.ExecContext(ctx, `
 			UPDATE purser.billing_payment_attempts
@@ -1942,11 +2011,11 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 			    failure_message = $3,
 			    next_retry_at = $4,
 			    updated_at = NOW()
-			WHERE payment_id = $5 AND attempt_number = 1
-		`, attemptStatus, mollieFailureCode(err), err.Error(), nextRetry, paymentID); attemptErr != nil {
+				WHERE payment_id = $5 AND attempt_number = $6
+		`, attemptStatus, mollieFailureCode(err), err.Error(), nextRetry, paymentID, attemptNumber); attemptErr != nil {
 			jm.logger.WithError(attemptErr).WithField("payment_id", paymentID).Warn("update billing_payment_attempt on failure")
 		}
-		if mandateRevoked {
+		if mandateRevoked || attemptNumber >= maxProviderPaymentAttempts {
 			if _, markErr := jm.db.ExecContext(ctx, `
 				UPDATE purser.billing_payments
 				SET status = 'failed', updated_at = NOW()
@@ -1967,7 +2036,7 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 			}
 		}
 		intentStatus := "provider_call_failed"
-		if mandateRevoked {
+		if mandateRevoked || attemptNumber >= maxProviderPaymentAttempts {
 			intentStatus = "terminal_failed"
 		}
 		if _, intentErr := jm.db.ExecContext(ctx, `
@@ -2340,11 +2409,19 @@ func (jm *JobManager) retryProviderPaymentAttempts(ctx context.Context) {
 		WHERE bpa.status = 'provider_call_failed'
 		  AND bpa.next_retry_at IS NOT NULL
 		  AND bpa.next_retry_at <= NOW()
-		  AND bpa.attempt_number < 3
+		  AND bpa.attempt_number < $1
 		  AND bi.status IN ('pending', 'overdue')
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM purser.billing_payment_attempts newer
+		      JOIN purser.billing_payments newer_bp ON newer_bp.id = newer.payment_id
+		      WHERE newer.provider = bpa.provider
+		        AND newer_bp.invoice_id = bp.invoice_id
+		        AND newer.attempt_number > bpa.attempt_number
+		  )
 		ORDER BY bpa.next_retry_at ASC
 		LIMIT 50
-	`)
+	`, maxProviderPaymentAttempts)
 	if err != nil {
 		jm.logger.WithError(err).Error("Failed to fetch provider payment attempts for retry")
 		return

@@ -319,6 +319,9 @@ func TestChargeMollieOverageCreatesLocalPaymentBeforeProviderCharge(t *testing.T
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"mollie_customer_id", "mollie_mandate_id", "mollie_mandate_status"}).
 			AddRow("cst_123", "mdt_123", "valid"))
+	mock.ExpectQuery(`SELECT bpa\.attempt_number, bpa\.status\s+FROM purser\.billing_payment_attempts bpa`).
+		WithArgs("mollie", "invoice-1").
+		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(`INSERT INTO purser\.billing_payments`).
 		WithArgs(
 			sqlArgFunc(func(v driver.Value) bool {

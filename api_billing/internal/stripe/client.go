@@ -50,10 +50,11 @@ func NewClient(config Config) *Client {
 
 // CustomerInfo represents tenant data for Stripe customer creation
 type CustomerInfo struct {
-	TenantID string
-	Email    string
-	Name     string
-	Metadata map[string]string
+	TenantID       string
+	Email          string
+	Name           string
+	Metadata       map[string]string
+	IdempotencyKey string
 }
 
 // CreateOrGetCustomer finds existing customer by tenant ID or creates a new one
@@ -81,6 +82,13 @@ func (c *Client) CreateOrGetCustomer(ctx context.Context, info CustomerInfo) (*s
 		},
 	}
 	maps.Copy(createParams.Metadata, info.Metadata)
+	idempotencyKey := info.IdempotencyKey
+	if idempotencyKey == "" && info.TenantID != "" {
+		idempotencyKey = "stripe-customer:" + info.TenantID
+	}
+	if idempotencyKey != "" {
+		createParams.SetIdempotencyKey(idempotencyKey)
+	}
 
 	cust, err := customer.New(createParams)
 	if err != nil {
