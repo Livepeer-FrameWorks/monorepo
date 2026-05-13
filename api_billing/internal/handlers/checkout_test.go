@@ -188,6 +188,9 @@ func TestHandleSubscriptionCheckoutCompletedPersistsTierAndPaymentMethod(t *test
 	mock.ExpectExec(subscriptionCheckoutUpdatePattern()).
 		WithArgs("cus_123", "sub_456", "tier-pro", "tenant-a").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET provider_subscription_id`).
+		WithArgs("sub_456", "cs_test_session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := handleSubscriptionCheckoutCompleted(
 		context.Background(),
@@ -258,6 +261,7 @@ func subscriptionCheckoutUpdatePattern() string {
 		`pending_tier_id = CASE.*pending_reason = 'stripe_checkout'.*pending_tier_id = NULLIF\(\$3, ''\)::uuid.*` +
 		`pending_effective_at = CASE.*pending_reason = 'stripe_checkout'.*pending_tier_id = NULLIF\(\$3, ''\)::uuid.*` +
 		`pending_reason = CASE.*pending_reason = 'stripe_checkout'.*pending_tier_id = NULLIF\(\$3, ''\)::uuid.*` +
+		`pending_intent_id = CASE.*pending_reason = 'stripe_checkout'.*pending_tier_id = NULLIF\(\$3, ''\)::uuid.*` +
 		`WHERE tenant_id = \$4`
 }
 

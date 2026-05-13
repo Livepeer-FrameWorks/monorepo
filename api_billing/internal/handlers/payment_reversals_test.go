@@ -116,6 +116,55 @@ func TestApplyProviderReversal_StripeRefundReopensInvoiceWhenNetDropsBelowAmount
 	}
 }
 
+func TestApplyProviderReversal_TransitionsPendingDisputeToSucceeded(t *testing.T) {
+	mock, done := newReversalMock(t)
+	defer done()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT p\.id, p\.invoice_id, i\.tenant_id, p\.currency`).
+		WithArgs("pi_dispute").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "currency"}).
+			AddRow("payment-dispute", "invoice-dispute", "tenant-dispute", "EUR"))
+	mock.ExpectQuery(`INSERT INTO purser\.payment_reversals[\s\S]*ON CONFLICT \(provider, provider_reversal_id\) DO UPDATE SET[\s\S]*status = 'succeeded'[\s\S]*WHERE purser\.payment_reversals\.status = 'pending'`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("reversal-dispute"))
+	mock.ExpectExec(`UPDATE purser\.billing_payments\s+SET reversed_amount_cents = reversed_amount_cents \+ \$1`).
+		WithArgs(int64(2500), "payment-dispute").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.billing_invoices\s+SET reversed_paid_cents = reversed_paid_cents \+ \$1`).
+		WithArgs(int64(2500), "invoice-dispute").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.billing_invoices i\s+SET status = 'pending'[\s\S]*reopened_at = NOW\(\)`).
+		WithArgs("invoice-dispute", "EUR").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT \(amount \* 100\)::bigint FROM purser\.billing_invoices`).
+		WithArgs("invoice-dispute").
+		WillReturnRows(sqlmock.NewRows([]string{"cents"}).AddRow(int64(10000)))
+	mock.ExpectQuery(`SELECT id, cluster_owner_tenant_id, cluster_id, currency, gross_cents, platform_fee_cents, payable_cents, period_start, period_end\s+FROM purser\.operator_credit_ledger`).
+		WithArgs("invoice-dispute").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "owner", "cluster", "currency", "gross", "fee", "payable", "period_start", "period_end"}))
+	mock.ExpectCommit()
+
+	applied, err := applyProviderReversal(context.Background(), providerReversalInput{
+		provider:           "stripe",
+		reversalType:       "dispute",
+		providerReversalID: "du_pending",
+		providerChargeID:   "ch_dispute",
+		providerPaymentID:  "pi_dispute",
+		amountCents:        2500,
+		currency:           "EUR",
+		reason:             "fraudulent",
+	})
+	if err != nil {
+		t.Fatalf("applyProviderReversal: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected applied=true when pending dispute transitions")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestApplyOperatorCreditClawbackLinksReversalAuditRow(t *testing.T) {
 	mock, done := newReversalMock(t)
 	defer done()

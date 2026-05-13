@@ -479,6 +479,12 @@ func handleSubscriptionCheckoutCompleted(ctx context.Context, sessionID, tenantI
 		        THEN NULL
 		        ELSE pending_reason
 		    END,
+		    pending_intent_id = CASE
+		        WHEN pending_reason = 'stripe_checkout'
+		         AND (NULLIF($3, '') IS NULL OR pending_tier_id = NULLIF($3, '')::uuid)
+		        THEN NULL
+		        ELSE pending_intent_id
+		    END,
 		    updated_at = NOW()
 		WHERE tenant_id = $4
 	`, customerID, subscriptionID, tierID, tenantID)
@@ -491,6 +497,17 @@ func handleSubscriptionCheckoutCompleted(ctx context.Context, sessionID, tenantI
 	}
 	if rows == 0 {
 		return fmt.Errorf("no tenant_subscriptions row for tenant %s; cannot activate Stripe subscription %s", tenantID, subscriptionID)
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE purser.payment_provider_intents
+		SET provider_subscription_id = COALESCE(provider_subscription_id, NULLIF($1, '')),
+		    status = 'succeeded',
+		    succeeded_at = COALESCE(succeeded_at, NOW()),
+		    updated_at = NOW()
+		WHERE provider = 'stripe'
+		  AND provider_session_id = $2
+	`, subscriptionID, sessionID); err != nil {
+		return fmt.Errorf("failed to mark subscription checkout intent succeeded: %w", err)
 	}
 
 	logger.WithFields(logging.Fields{
@@ -517,18 +534,36 @@ func handleClusterSubscriptionCheckoutCompleted(ctx context.Context, sessionID, 
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO purser.cluster_subscriptions (
 			tenant_id, cluster_id, status, stripe_customer_id, stripe_subscription_id,
-			stripe_subscription_status, checkout_session_id, created_at, updated_at
-		) VALUES ($1, $2, 'active', $3, $4, 'active', $5, NOW(), NOW())
+			stripe_subscription_status, checkout_session_id, intent_id, created_at, updated_at
+		) VALUES (
+			$1, $2, 'active', $3, $4, 'active', $5,
+			(SELECT id FROM purser.payment_provider_intents
+			 WHERE provider = 'stripe' AND provider_session_id = $5
+			 LIMIT 1),
+			NOW(), NOW()
+		)
 		ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
 			status = 'active',
 			stripe_customer_id = EXCLUDED.stripe_customer_id,
 			stripe_subscription_id = EXCLUDED.stripe_subscription_id,
 			stripe_subscription_status = 'active',
 			checkout_session_id = EXCLUDED.checkout_session_id,
+			intent_id = COALESCE(purser.cluster_subscriptions.intent_id, EXCLUDED.intent_id),
 			updated_at = NOW()
 	`, tenantID, clusterID, customerID, subscriptionID, sessionID)
 	if err != nil {
 		return fmt.Errorf("failed to update cluster subscription: %w", err)
+	}
+	if _, intentErr := db.ExecContext(ctx, `
+		UPDATE purser.payment_provider_intents
+		SET provider_subscription_id = COALESCE(provider_subscription_id, NULLIF($1, '')),
+		    status = 'succeeded',
+		    succeeded_at = COALESCE(succeeded_at, NOW()),
+		    updated_at = NOW()
+		WHERE provider = 'stripe'
+		  AND provider_session_id = $2
+	`, subscriptionID, sessionID); intentErr != nil {
+		return fmt.Errorf("failed to mark cluster checkout intent succeeded: %w", intentErr)
 	}
 
 	if qmClient != nil {

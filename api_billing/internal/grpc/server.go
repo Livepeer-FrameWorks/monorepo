@@ -4184,6 +4184,10 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.Cr
 		// Durable intent before any Stripe side effect. Idempotency key is
 		// deterministic on (tenant, cluster); repeated calls for the same
 		// cluster collapse to one intent row.
+		clusterCurrency := strings.ToUpper(pricing.GetCurrency())
+		if clusterCurrency == "" {
+			clusterCurrency = billing.DefaultCurrency()
+		}
 		intentKey := fmt.Sprintf("stripe-cluster-checkout:%s:%s", tenantID, clusterID)
 		var clusterIntentID string
 		if intentErr := s.db.QueryRowContext(ctx, `
@@ -4191,12 +4195,12 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.Cr
 				tenant_id, provider, purpose, local_reference_type, local_reference_id,
 				status, currency, idempotency_key
 			) VALUES ($1, 'stripe', 'cluster_subscription_checkout', 'cluster', NULL,
-			          'pending', 'EUR', $2)
+			          'pending', $2, $3)
 			ON CONFLICT (provider, idempotency_key) DO UPDATE SET
 				attempt_count = purser.payment_provider_intents.attempt_count + 1,
 				updated_at = NOW()
 			RETURNING id
-		`, tenantID, intentKey).Scan(&clusterIntentID); intentErr != nil {
+		`, tenantID, clusterCurrency, intentKey).Scan(&clusterIntentID); intentErr != nil {
 			s.logger.WithError(intentErr).Error("Failed to record Stripe cluster checkout intent")
 			return nil, status.Error(codes.Internal, "failed to record checkout intent")
 		}
@@ -6218,15 +6222,15 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *pb.Create
 
 	// Get billing tier to find Stripe price ID
 	var priceID sql.NullString
-	var tierName string
+	var tierName, currency string
 	priceCol := "stripe_price_id_monthly"
 	if billingPeriod == "yearly" {
 		priceCol = "stripe_price_id_yearly"
 	}
 
 	err := s.db.QueryRowContext(ctx, fmt.Sprintf(`
-		SELECT tier_name, %s FROM purser.billing_tiers WHERE id = $1
-	`, priceCol), tierID).Scan(&tierName, &priceID)
+		SELECT tier_name, currency, %s FROM purser.billing_tiers WHERE id = $1
+	`, priceCol), tierID).Scan(&tierName, &currency, &priceID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "tier not found: %s", tierID)
 	}
@@ -6236,6 +6240,10 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *pb.Create
 	}
 	if !priceID.Valid || priceID.String == "" {
 		return nil, status.Errorf(codes.FailedPrecondition, "tier %s has no Stripe %s price configured", tierName, billingPeriod)
+	}
+	currency = strings.ToUpper(currency)
+	if currency == "" {
+		currency = billing.DefaultCurrency()
 	}
 
 	// Preflight: confirm a tenant_subscriptions row exists and isn't holding
@@ -6298,7 +6306,7 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *pb.Create
 			attempt_count = purser.payment_provider_intents.attempt_count + 1,
 			updated_at = NOW()
 		RETURNING id
-	`, tenantID, tierID, "EUR", intentKey).Scan(&intentID); intentErr != nil {
+	`, tenantID, tierID, currency, intentKey).Scan(&intentID); intentErr != nil {
 		s.logger.WithError(intentErr).Error("Failed to record Stripe tenant checkout intent")
 		return nil, status.Error(codes.Internal, "failed to record checkout intent")
 	}
@@ -6361,10 +6369,11 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *pb.Create
 		SET pending_tier_id = $1::uuid,
 		    pending_reason = 'stripe_checkout',
 		    pending_effective_at = NULL,
+		    pending_intent_id = $3::uuid,
 		    updated_at = NOW()
 		WHERE tenant_id = $2
 		  AND (pending_tier_id IS NULL OR pending_reason = 'stripe_checkout')
-	`, tierID, tenantID)
+	`, tierID, tenantID, intentID)
 	if stageErr != nil {
 		s.logger.WithError(stageErr).WithField("session_id", sess.ID).Error("Failed to stage pending tier after Stripe checkout creation")
 		if expireErr := s.stripeClient.ExpireCheckoutSession(ctx, sess.ID); expireErr != nil {

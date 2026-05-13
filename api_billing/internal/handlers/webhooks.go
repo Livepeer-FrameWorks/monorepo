@@ -406,10 +406,13 @@ type webhookClaim struct {
 	previous string
 }
 
+const webhookClaimLease = 2 * time.Minute
+
 // claimWebhookEvent inserts a 'claimed' row for (provider, event_id), or
-// atomically reclaims a previous retryable/blocked row. Rows already in
-// claimed/processed/failed_terminal are returned as not claimed, so duplicate
-// deliveries cannot run reconciliation concurrently.
+// atomically reclaims a previous retryable/blocked row. Fresh claimed rows are
+// treated as in-flight so duplicate deliveries cannot run reconciliation
+// concurrently; stale claimed rows are reclaimed after webhookClaimLease so a
+// claim-then-crash does not suppress provider retries forever.
 func claimWebhookEvent(ctx context.Context, provider, eventID, eventType, signatureHeader string, rawPayload []byte) (*webhookClaim, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -435,6 +438,8 @@ func claimWebhookEvent(ctx context.Context, provider, eventID, eventType, signat
 				    raw_payload = COALESCE(EXCLUDED.raw_payload, purser.webhook_events.raw_payload),
 				    last_error = NULL
 				WHERE purser.webhook_events.status IN ('failed_retryable', 'blocked')
+				   OR (purser.webhook_events.status = 'claimed'
+				       AND purser.webhook_events.received_at < NOW() - ($6::int * INTERVAL '1 second'))
 			RETURNING status
 		)
 		SELECT status, TRUE FROM claimed
@@ -444,7 +449,7 @@ func claimWebhookEvent(ctx context.Context, provider, eventID, eventType, signat
 		WHERE provider = $1 AND event_id = $2
 		  AND NOT EXISTS (SELECT 1 FROM claimed)
 		LIMIT 1
-	`, provider, eventID, eventType, signatureHeader, rawPayload).Scan(&status, &acquired)
+	`, provider, eventID, eventType, signatureHeader, rawPayload, int(webhookClaimLease/time.Second)).Scan(&status, &acquired)
 	if err != nil {
 		return nil, fmt.Errorf("claim webhook event: %w", err)
 	}
@@ -1078,7 +1083,7 @@ func handleMolliePaymentWebhook(parentCtx context.Context, paymentID string, raw
 		return "", fmt.Errorf("missing Mollie payment status")
 	}
 
-	eventID := mollieEventID("payment", payment.ID, status)
+	eventID := mollieEventIDForPayment(payment, status)
 	claim, claimErr := claimWebhookEvent(ctx, "mollie", eventID, "payment", "", rawBody)
 	if claimErr != nil {
 		return eventID, claimErr
@@ -1089,14 +1094,10 @@ func handleMolliePaymentWebhook(parentCtx context.Context, paymentID string, raw
 
 	// Mollie reports refund/chargeback movement on the original payment
 	// rather than firing a separate event. Apply the reversal ledger
-	// movement before mapping the status; the reversal is idempotent on
-	// the Mollie refund id.
-	if applied, refundErr := applyMolliePaymentReversalsIfAny(ctx, payment); refundErr != nil {
+	// movement before mapping the status, then still reconcile the payment
+	// state in case this is the first local observation of the payment.
+	if _, refundErr := applyMolliePaymentReversalsIfAny(ctx, payment); refundErr != nil {
 		return eventID, refundErr
-	} else if applied {
-		// Reversal was the noteworthy event on this webhook delivery;
-		// no further status mapping required.
-		return eventID, nil
 	}
 
 	newStatus, ok := mapMolliePaymentStatus(status)
@@ -1284,6 +1285,20 @@ func mollieEventID(resource, id, status string) string {
 	return fmt.Sprintf("%s:%s:%s", resource, id, status)
 }
 
+func mollieEventIDForPayment(payment *mollie.Payment, status string) string {
+	if payment == nil {
+		return mollieEventID("payment", "", status)
+	}
+	parts := []string{"payment", payment.ID, status}
+	if payment.AmountRefunded != nil && payment.AmountRefunded.Value != "" {
+		parts = append(parts, "refunded", payment.AmountRefunded.Value, strings.ToUpper(payment.AmountRefunded.Currency))
+	}
+	if payment.AmountChargedBack != nil && payment.AmountChargedBack.Value != "" {
+		parts = append(parts, "charged_back", payment.AmountChargedBack.Value, strings.ToUpper(payment.AmountChargedBack.Currency))
+	}
+	return strings.Join(parts, ":")
+}
+
 // upsertMolliePaymentObservation records an out-of-order Mollie subscription
 // payment webhook when the local invoice has not been finalized yet. The
 // drain at invoice finalization time looks rows up by (tenant_id,
@@ -1423,11 +1438,14 @@ func handleStripeChargeDispute(payload StripeWebhookPayload) error {
 	// would be used if populated, otherwise we fall back to the charge id.
 	var providerPaymentID sql.NullString
 	if scanErr := db.QueryRowContext(ctx, `
-			SELECT MAX(metadata->>'payment_intent_id')
-			FROM purser.provider_payment_objects
-			WHERE provider = 'stripe' AND object_type = 'charge' AND provider_object_id = $1
-		`, dispute.Charge).Scan(&providerPaymentID); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+				SELECT MAX(metadata->>'payment_intent_id')
+				FROM purser.provider_payment_objects
+				WHERE provider = 'stripe' AND object_type = 'charge' AND provider_object_id = $1
+			`, dispute.Charge).Scan(&providerPaymentID); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
 		logger.WithError(scanErr).WithField("charge_id", dispute.Charge).Debug("provider_payment_objects lookup failed for dispute")
+	}
+	if !providerPaymentID.Valid || providerPaymentID.String == "" {
+		return fmt.Errorf("dispute %s references unmapped charge %s: %w", dispute.ID, dispute.Charge, errWebhookMissingLocalReference)
 	}
 
 	switch payload.Type {
@@ -1443,9 +1461,9 @@ func handleStripeChargeDispute(payload StripeWebhookPayload) error {
 			SELECT i.tenant_id, p.id, 'stripe', 'dispute',
 			       $1, $2, $3, $4, 'pending', $5
 			FROM purser.billing_payments p
-			JOIN purser.billing_invoices i ON p.invoice_id = i.id
-			WHERE p.tx_id = COALESCE(NULLIF($6, ''), p.tx_id)
-			  AND p.method = 'card'
+				JOIN purser.billing_invoices i ON p.invoice_id = i.id
+				WHERE p.tx_id = $6
+				  AND p.method = 'card'
 			ORDER BY p.created_at DESC
 			LIMIT 1
 			ON CONFLICT (provider, provider_reversal_id) DO NOTHING
@@ -1566,8 +1584,9 @@ func applyProviderReversal(parentCtx context.Context, in providerReversalInput) 
 		return false, fmt.Errorf("reversal currency %s != payment currency %s", in.currency, paymentCurrency)
 	}
 
-	// Idempotent reversal-ledger insert. ON CONFLICT keeps the original
-	// row and we treat the duplicate as a replay (applied=false).
+	// Idempotent reversal-ledger insert. A pending dispute observation may
+	// transition to succeeded when the money-moving provider event arrives;
+	// already-succeeded rows return no id and are treated as replays.
 	var reversalID string
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO purser.payment_reversals (
@@ -1575,7 +1594,14 @@ func applyProviderReversal(parentCtx context.Context, in providerReversalInput) 
 			provider, reversal_type, provider_reversal_id, provider_charge_id,
 			amount_cents, currency, status, reason
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'succeeded', $11)
-		ON CONFLICT (provider, provider_reversal_id) DO NOTHING
+		ON CONFLICT (provider, provider_reversal_id) DO UPDATE SET
+			payment_id = COALESCE(purser.payment_reversals.payment_id, EXCLUDED.payment_id),
+			pending_topup_id = COALESCE(purser.payment_reversals.pending_topup_id, EXCLUDED.pending_topup_id),
+			invoice_id = COALESCE(purser.payment_reversals.invoice_id, EXCLUDED.invoice_id),
+			provider_charge_id = COALESCE(purser.payment_reversals.provider_charge_id, EXCLUDED.provider_charge_id),
+			status = 'succeeded',
+			updated_at = NOW()
+			WHERE purser.payment_reversals.status = 'pending'
 		RETURNING id
 	`, tenantID, nullableString(paymentID), pendingTopupID, nullableString(invoiceID),
 		in.provider, in.reversalType, in.providerReversalID, nullableString(in.providerChargeID),

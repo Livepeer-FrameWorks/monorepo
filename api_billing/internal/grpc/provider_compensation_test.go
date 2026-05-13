@@ -34,15 +34,15 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 	}
 
 	tierID := "11111111-1111-1111-1111-111111111111"
-	mock.ExpectQuery(`SELECT tier_name, stripe_price_id_monthly FROM purser\.billing_tiers WHERE id = \$1`).
+	mock.ExpectQuery(`SELECT tier_name, currency, stripe_price_id_monthly FROM purser\.billing_tiers WHERE id = \$1`).
 		WithArgs(tierID).
-		WillReturnRows(sqlmock.NewRows([]string{"tier_name", "stripe_price_id_monthly"}).AddRow("Pro", "price_123"))
+		WillReturnRows(sqlmock.NewRows([]string{"tier_name", "currency", "stripe_price_id_monthly"}).AddRow("Pro", "USD", "price_123"))
 	mock.ExpectQuery(`SELECT pending_reason, pending_tier_id::text\s+FROM purser\.tenant_subscriptions`).
 		WithArgs("tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"pending_reason", "pending_tier_id"}).AddRow(nil, nil))
 	// Durable intent insert before any Stripe API call.
 	mock.ExpectQuery(`INSERT INTO purser\.payment_provider_intents`).
-		WithArgs("tenant-a", tierID, "EUR", "stripe-tenant-checkout:tenant-a:"+tierID).
+		WithArgs("tenant-a", tierID, "USD", "stripe-tenant-checkout:tenant-a:"+tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("intent-tenant"))
 	// Record provider_customer_id once Stripe returns the customer.
 	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET provider_customer_id`).
@@ -53,7 +53,7 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 		WithArgs("cs_test_123", "intent-tenant").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET pending_tier_id = \$1::uuid`).
-		WithArgs(tierID, "tenant-a").
+		WithArgs(tierID, "tenant-a", "intent-tenant").
 		WillReturnError(errors.New("db down"))
 
 	_, err = server.CreateCheckoutSession(context.Background(), &pb.CreateStripeCheckoutRequest{

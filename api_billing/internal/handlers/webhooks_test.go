@@ -8,10 +8,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	mollie "github.com/VictorAvelar/mollie-api-go/v4/mollie"
 	"github.com/sirupsen/logrus"
 )
 
@@ -53,7 +55,7 @@ func TestProcessStripeWebhookGRPCIdempotent(t *testing.T) {
 	// Claim/lock returns the row in its existing terminal state, so the
 	// caller short-circuits without re-processing or marking again.
 	mock.ExpectQuery(`INSERT INTO purser\.webhook_events`).
-		WithArgs("stripe", "evt_test_123", "payment_intent.succeeded", signature, sqlmock.AnyArg()).
+		WithArgs("stripe", "evt_test_123", "payment_intent.succeeded", signature, sqlmock.AnyArg(), int(webhookClaimLease/time.Second)).
 		WillReturnRows(sqlmock.NewRows([]string{"status", "acquired"}).AddRow("processed", false))
 
 	ok, msg, code := ProcessStripeWebhookGRPC(body, headers)
@@ -69,6 +71,27 @@ func TestProcessStripeWebhookGRPCIdempotent(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMollieEventIDForPaymentIncludesCumulativeReversalAmounts(t *testing.T) {
+	payment := &mollie.Payment{
+		ID:     "tr_123",
+		Status: "paid",
+		AmountRefunded: &mollie.Amount{
+			Value:    "12.00",
+			Currency: "eur",
+		},
+		AmountChargedBack: &mollie.Amount{
+			Value:    "3.50",
+			Currency: "usd",
+		},
+	}
+
+	got := mollieEventIDForPayment(payment, strings.ToLower(payment.Status))
+	want := "payment:tr_123:paid:refunded:12.00:EUR:charged_back:3.50:USD"
+	if got != want {
+		t.Fatalf("mollieEventIDForPayment() = %q, want %q", got, want)
 	}
 }
 
