@@ -45,6 +45,27 @@ MistServer can scale beyond one box, and MistLoadBalancer can support serious mu
 
 Raw MistServer plus MistLoadBalancer can already run large multi-region shows. FrameWorks is the managed version of that idea: Foghorn-to-Foghorn federation, stream advertisements, edge scoring, cross-cluster routing events, and dashboard/API visibility around the routing layer. Use it when you want the Mist media plane with less custom glue around regional placement. See [multi-cluster operations](/operators/multi-cluster) and the [federation architecture](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/docs/architecture/federation.md).
 
+### One branded URL across your own nodes + platform + marketplace capacity
+
+This is the bit no other managed video platform does, and it matters most for MistServer operators because you already run your own infrastructure.
+
+**Before (standalone MistServer):** your viewers hit one server IP, or a DNS name you operate. Adding a second region means you either run another Mist + your own GeoDNS, or you build a load balancer in front. If a node goes down, the failover is whatever you wired by hand.
+
+**After (FrameWorks paid tier):** your tenant gets a single branded hostname under our shared geo-routed DNS:
+
+```
+acme.cdn.frameworks.network
+foghorn.acme.cdn.frameworks.network        # HTTP playback (HLS, DASH, WHEP)
+edge-ingest.acme.cdn.frameworks.network    # RTMP / SRT / WHIP push
+edge-egress.acme.cdn.frameworks.network    # direct egress (SRT pull, etc.)
+```
+
+A single per-tenant TLS cert covers the whole namespace. The DNS smart record geo-routes viewers and streamers to the closest healthy edge across every cluster you subscribe to — your own self-hosted Mist nodes (running as a FrameWorks edge), any FrameWorks platform-official clusters you've enabled for burst coverage, and any third-party marketplace clusters you've added for regions you don't operate. One URL, one cert, one operational view.
+
+Bring your existing infrastructure in as a `tenant_private` cluster, optionally subscribe to one or two platform-official regions for failover or burst, and your `acme.cdn.frameworks.network` URL transparently spans all of it. When you add a new region (your own or via marketplace), DNS picks it up automatically — no client-side reconfiguration, no certificate juggling, no GeoDNS to operate.
+
+For free / unbranded use, FrameWorks also exposes global root entrypoints (`edge-ingest.frameworks.network`, `foghorn.frameworks.network`, etc.) that geo-route across platform-official capacity only. See [DNS architecture](/operators/dns) for the full URL tier model.
+
 ### Hybrid reach
 
 You can keep a Mist node where it already works and have FrameWorks pull from it over DTSC:
@@ -55,7 +76,10 @@ mutation CreateMistPullStream {
     input: {
       name: "Existing Mist origin"
       ingestMode: PULL
-      pullSource: { sourceUri: "dtsc://mist-origin.example.com:4200/main?pass=shared-secret" }
+      pullSource: {
+        sourceUri: "dtsc://mist-origin.example.com:4200/main?pass=shared-secret"
+        allowedClusters: { clusterIds: [] }
+      }
     }
   ) {
     ... on Stream {
@@ -68,7 +92,7 @@ mutation CreateMistPullStream {
 
 DTSC is commonly exposed for Mist-to-Mist replication, but it is still a media replication endpoint. Use a DTSC passphrase, firewall it to the peers that need it, or place the FrameWorks edge where it can reach your Mist node locally. If the stream is not meant to be public, a self-hosted edge pulling from local Mist is usually cleaner than exposing a new public origin.
 
-FrameWorks does not make pull inputs new; MistServer already does this by setting the stream source. What FrameWorks adds is a managed record for that source URI, encrypted storage, placement rules, and an `allow_private_pull_sources` gate for self-hosted edges that may reach RFC1918 or multicast sources. See [Pull-input streams](/builders/pull-streams).
+FrameWorks does not make pull inputs new; MistServer already does this by setting the stream source. What FrameWorks adds is a managed record for that source URI, encrypted storage, per-source placement rules, and an `allow_private_pull_sources` gate for self-hosted edges that may reach RFC1918 or multicast sources. See [Pull-input streams](/builders/pull-streams).
 
 ## Translation tables
 

@@ -120,6 +120,77 @@ func TestEligiblePullClusters(t *testing.T) {
 	})
 }
 
+func TestFilterPlacementClusters(t *testing.T) {
+	candidates := []ClusterCapability{
+		{ID: "demo-media", AllowPrivatePullSources: false},
+		{ID: "peer-media", AllowPrivatePullSources: false},
+		{ID: "selfhost-edge", AllowPrivatePullSources: true},
+	}
+
+	t.Run("public + empty allowed passes every candidate", func(t *testing.T) {
+		eligible, rejects := FilterPlacementClusters(ClassPublic, nil, candidates)
+		if len(eligible) != 3 || len(rejects) != 0 {
+			t.Fatalf("got eligible=%d rejects=%d", len(eligible), len(rejects))
+		}
+	})
+
+	t.Run("public + pin intersects", func(t *testing.T) {
+		eligible, rejects := FilterPlacementClusters(ClassPublic, []string{"peer-media"}, candidates)
+		if len(rejects) != 0 || len(eligible) != 1 || eligible[0].ID != "peer-media" {
+			t.Fatalf("got eligible=%+v rejects=%+v", eligible, rejects)
+		}
+	})
+
+	t.Run("public + unknown id rejected", func(t *testing.T) {
+		_, rejects := FilterPlacementClusters(ClassPublic, []string{"ghost-cluster"}, candidates)
+		if len(rejects) != 1 || rejects[0].Reason != PlacementRejectUnknownCluster || rejects[0].ClusterID != "ghost-cluster" {
+			t.Fatalf("got rejects=%+v", rejects)
+		}
+	})
+
+	t.Run("private + empty allowed rejects with empty_for_private", func(t *testing.T) {
+		eligible, rejects := FilterPlacementClusters(ClassPrivate, nil, candidates)
+		if len(eligible) != 0 || len(rejects) != 1 || rejects[0].Reason != PlacementRejectEmptyForPrivate {
+			t.Fatalf("got eligible=%+v rejects=%+v", eligible, rejects)
+		}
+	})
+
+	t.Run("private + opted-in cluster passes", func(t *testing.T) {
+		eligible, rejects := FilterPlacementClusters(ClassPrivate, []string{"selfhost-edge"}, candidates)
+		if len(rejects) != 0 || len(eligible) != 1 || eligible[0].ID != "selfhost-edge" {
+			t.Fatalf("got eligible=%+v rejects=%+v", eligible, rejects)
+		}
+	})
+
+	t.Run("private + non-opted cluster rejected for missing capability", func(t *testing.T) {
+		_, rejects := FilterPlacementClusters(ClassPrivate, []string{"demo-media"}, candidates)
+		if len(rejects) != 1 || rejects[0].Reason != PlacementRejectMissingPrivateCapability || rejects[0].ClusterID != "demo-media" {
+			t.Fatalf("got rejects=%+v", rejects)
+		}
+	})
+
+	t.Run("private + unknown id rejected as unknown", func(t *testing.T) {
+		_, rejects := FilterPlacementClusters(ClassPrivate, []string{"ghost"}, candidates)
+		if len(rejects) != 1 || rejects[0].Reason != PlacementRejectUnknownCluster {
+			t.Fatalf("got rejects=%+v", rejects)
+		}
+	})
+
+	t.Run("duplicates collapse", func(t *testing.T) {
+		eligible, rejects := FilterPlacementClusters(ClassPublic, []string{"peer-media", "peer-media", ""}, candidates)
+		if len(rejects) != 0 || len(eligible) != 1 {
+			t.Fatalf("got eligible=%+v rejects=%+v", eligible, rejects)
+		}
+	})
+
+	t.Run("blocked class always empty", func(t *testing.T) {
+		eligible, rejects := FilterPlacementClusters(ClassBlocked, []string{"selfhost-edge"}, candidates)
+		if len(eligible) != 0 || len(rejects) != 0 {
+			t.Fatalf("got eligible=%+v rejects=%+v", eligible, rejects)
+		}
+	})
+}
+
 func TestRedact(t *testing.T) {
 	got := Redact("rtsp://user:pass@example.com/live")
 	if got != "rtsp://example.com" {

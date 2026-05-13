@@ -761,9 +761,10 @@ func indexPullStreamByPlaybackID(ps []PullStream, id string) int {
 // it here — eligibility runs against the same cluster definitions the
 // reconciler will apply.
 //
-// A private URI (RFC1918 / multicast literal) requires at least one media
-// cluster in the manifest with allow_private_pull_sources=true. Public
-// URIs require any media cluster.
+// Private/multicast URI literals require explicit allowed_cluster_ids, and
+// every listed cluster must be a media cluster with allow_private_pull_sources.
+// Public URIs can omit allowed_cluster_ids to run on any media cluster, or set
+// it to pin placement.
 func pullStreamToRendered(p PullStream, resolver Resolver, clusters []Cluster) (PullStreamRendered, error) {
 	uri := p.SourceURI
 	hasInline := uri != ""
@@ -795,26 +796,76 @@ func pullStreamToRendered(p PullStream, resolver Resolver, clusters []Cluster) (
 		return PullStreamRendered{}, fmt.Errorf("source_uri: %w", classErr)
 	}
 	candidates := mediaClusterCapabilities(clusters)
-	eligible := pullsource.EligiblePullClusters(class, candidates)
+	if len(candidates) == 0 {
+		return PullStreamRendered{}, fmt.Errorf("no media (edge) cluster is registered to host pull streams")
+	}
+
+	allowedIDs := normalizeAllowedClusterIDs(p.AllowedClusterIDs)
+	eligible, rejects := pullsource.FilterPlacementClusters(class, allowedIDs, candidates)
+	if err := formatPlacementRejects(p.PlaybackID, pullsource.Redact(uri), rejects); err != nil {
+		return PullStreamRendered{}, err
+	}
 	if len(eligible) == 0 {
-		switch class {
-		case pullsource.ClassPrivate:
-			return PullStreamRendered{}, fmt.Errorf(
-				"source_uri %q is private but no manifest cluster has allow_private_pull_sources=true; "+
-					"set the flag on a media cluster or use a public source", pullsource.Redact(uri))
-		default:
-			return PullStreamRendered{}, fmt.Errorf("no media (edge) cluster is registered to host pull streams")
-		}
+		// Defensive: FilterPlacementClusters already emits a reject in every
+		// no-eligible case, so we should never reach here. Fail closed if we do.
+		return PullStreamRendered{}, fmt.Errorf("pull_stream %q: no eligible media cluster", p.PlaybackID)
 	}
 
 	return PullStreamRendered{
-		PlaybackID:  p.PlaybackID,
-		OwnerTenant: p.OwnerTenant,
-		Title:       p.Title,
-		Description: p.Description,
-		SourceURI:   uri,
-		Enabled:     p.Enabled,
+		PlaybackID:        p.PlaybackID,
+		OwnerTenant:       p.OwnerTenant,
+		Title:             p.Title,
+		Description:       p.Description,
+		SourceURI:         uri,
+		Enabled:           p.Enabled,
+		AllowedClusterIDs: allowedIDs,
 	}, nil
+}
+
+// normalizeAllowedClusterIDs dedups, drops empties, and sorts so the rendered
+// file, the persisted TEXT[], and idempotent reconcile compares are stable.
+func normalizeAllowedClusterIDs(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, id := range in {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// formatPlacementRejects turns pullsource.PlacementReject entries into a
+// single render-time error. Render is offline; we batch every reject into one
+// message so operators see the full set in a single CLI pass.
+func formatPlacementRejects(playbackID, redactedURI string, rejects []pullsource.PlacementReject) error {
+	if len(rejects) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(rejects))
+	for _, r := range rejects {
+		switch r.Reason {
+		case pullsource.PlacementRejectEmptyForPrivate:
+			parts = append(parts, fmt.Sprintf(
+				"source_uri %s is private/multicast and requires explicit allowed_cluster_ids", redactedURI))
+		case pullsource.PlacementRejectUnknownCluster:
+			parts = append(parts, fmt.Sprintf(
+				"allowed_cluster_ids entry %q is not a registered media (edge) cluster", r.ClusterID))
+		case pullsource.PlacementRejectMissingPrivateCapability:
+			parts = append(parts, fmt.Sprintf(
+				"allowed_cluster_ids entry %q does not have allow_private_pull_sources=true", r.ClusterID))
+		default:
+			parts = append(parts, fmt.Sprintf("allowed_cluster_ids entry %q rejected: %s", r.ClusterID, r.Reason))
+		}
+	}
+	return fmt.Errorf("pull_stream %q: %s", playbackID, strings.Join(parts, "; "))
 }
 
 // mediaClusterCapabilities maps the manifest's media-capable clusters to the

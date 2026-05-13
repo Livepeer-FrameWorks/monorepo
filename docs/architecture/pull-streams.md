@@ -91,7 +91,7 @@ Pull streams meter exactly like push live streams once viewers attach. Idle pull
 ## Tenant Responsibilities
 
 - **Licence and rights** for the upstream content are the tenant's responsibility. The platform validates that the URI matches a supported Mist input pattern and rejects localhost/private literal hosts where appropriate — it does not validate redistribution rights.
-- **Private-network sources are gated by `allow_private_pull_sources` on the target media cluster.** A pull-source URI is classified `Public`, `Private`, or `Blocked` by `pkg/pullsource.Classify`. Private (RFC1918 / ULA / non-link-local multicast literal) requires at least one media cluster with `allow_private_pull_sources=true`. The flag lives on `quartermaster.infrastructure_clusters.allow_private_pull_sources`, sourced from cluster.yaml and propagated through `api_tenants/internal/bootstrap` reconcile. CLI render derives the candidate set from the rendered manifest's media clusters; the Commodore reconciler re-checks against Quartermaster at apply time; runtime cold-start LB filters `pull+` placements to eligible clusters. Hostnames are `Public` by syntax — DNS resolution is the operator's responsibility per cluster, since the same hostname can resolve differently from each edge.
+- **Private-network sources require both a placement pin and a capable cluster.** A pull-source URI is classified `Public`, `Private`, or `Blocked` by `pkg/pullsource.Classify`. Private (RFC1918 / ULA / non-link-local multicast literal) requires explicit `allowed_cluster_ids` on the pull source; every listed cluster must be media-capable and have `allow_private_pull_sources=true`. The capability flag lives on `quartermaster.infrastructure_clusters.allow_private_pull_sources`, sourced from cluster.yaml and propagated through `api_tenants/internal/bootstrap` reconcile. CLI render validates pins against the rendered manifest's media clusters; the Commodore reconciler and runtime CRUD re-check against Quartermaster; Foghorn cold-start routing, `/source`, and STREAM_SOURCE enforce the same placement intersection. Public sources can leave `allowed_cluster_ids` empty to run on any media cluster, or set it to pin placement. Hostnames are `Public` by syntax — DNS resolution is the operator's responsibility per cluster, since the same hostname can resolve differently from each edge.
 - **Upstream credentials** carried in-URI (e.g. `rtsp://user:pass@host`) are encrypted at rest in `commodore.stream_pull_sources.source_uri_enc` using a purpose-isolated FieldEncryptor (`pull-source-uri`).
 - **Upstream availability** is the tenant's contract with their origin. If the source is unreachable, the Mist input exits and the next viewer triggers a fresh pull attempt.
 
@@ -99,15 +99,15 @@ Pull streams meter exactly like push live streams once viewers attach. Idle pull
 
 Validated and classified from the URI before being handed to Mist:
 
-| Scheme     | Mist input module | Notes                                                                                                                     |
-| ---------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `https://` | HLS / TS / EBML   | matched by URI suffix (`.m3u8`, `.ts`, `.mkv`)                                                                            |
-| `http://`  | HLS / TS / EBML   | accepted; prefer `https://`                                                                                               |
-| `rtsp://`  | RTSP              | basic-auth in URI; `rtsps://` not supported                                                                               |
-| `srt://`   | SRT               |                                                                                                                           |
-| `rist://`  | RIST              | MPEG-TS over RIST                                                                                                         |
-| `dtsc://`  | DTSC              | pull from another Mist node (self-hosted, etc.)                                                                           |
-| `tsudp://` | TS over UDP       | unicast / multicast; RFC1918 + non-link-local multicast literals require a cluster with `allow_private_pull_sources=true` |
+| Scheme     | Mist input module | Notes                                                                                                                                                         |
+| ---------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `https://` | HLS / TS / EBML   | matched by URI suffix (`.m3u8`, `.ts`, `.mkv`)                                                                                                                |
+| `http://`  | HLS / TS / EBML   | accepted; prefer `https://`                                                                                                                                   |
+| `rtsp://`  | RTSP              | basic-auth in URI; `rtsps://` not supported                                                                                                                   |
+| `srt://`   | SRT               |                                                                                                                                                               |
+| `rist://`  | RIST              | MPEG-TS over RIST                                                                                                                                             |
+| `dtsc://`  | DTSC              | pull from another Mist node (self-hosted, etc.)                                                                                                               |
+| `tsudp://` | TS over UDP       | unicast / multicast; RFC1918 + non-link-local multicast literals require explicit `allowed_cluster_ids` whose clusters have `allow_private_pull_sources=true` |
 
 **RTMP pull is NOT supported** — there is no `MistInRTMP` pull module in the FrameWorks fork. RTMP stays push-only.
 

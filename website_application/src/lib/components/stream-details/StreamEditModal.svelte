@@ -23,9 +23,12 @@
     record: false,
     pullSourceUri: "",
     pullSourceEnabled: true,
+    pullSourceAllowedClusterIds: "",
+    pullSourceAllowedClustersDirty: false,
   });
 
-  // Sync form when stream changes
+  // Sync form when stream changes — seed the allowed-clusters text field with
+  // the existing pin so an enabled-toggle preserves placement on save.
   $effect(() => {
     if (stream) {
       formData = {
@@ -34,6 +37,8 @@
         record: stream.record || false,
         pullSourceUri: "",
         pullSourceEnabled: stream.pullSource?.enabled ?? true,
+        pullSourceAllowedClusterIds: (stream.pullSource?.allowedClusterIds ?? []).join(", "),
+        pullSourceAllowedClustersDirty: false,
       };
     }
   });
@@ -108,6 +113,24 @@
         <div class="flex items-start space-x-2">
           <Checkbox id="editPullEnabled" bind:checked={formData.pullSourceEnabled} />
           <Label for="editPullEnabled" class="text-sm text-foreground">Enable Pull Source</Label>
+        </div>
+
+        <div class="space-y-2">
+          <label for="editPullAllowedClusters" class="block text-sm font-medium text-foreground">
+            Allowed clusters
+          </label>
+          <Input
+            id="editPullAllowedClusters"
+            type="text"
+            bind:value={formData.pullSourceAllowedClusterIds}
+            oninput={() => (formData.pullSourceAllowedClustersDirty = true)}
+            placeholder="warehouse-edge, eu-west-edge"
+            class="font-mono text-xs transition-all focus:ring-2 focus:ring-primary"
+          />
+          <p class="text-xs text-muted-foreground">
+            Comma-separated cluster IDs pinning this pull source. Leave the field as it loaded to
+            preserve the current pin; clear it to allow any media cluster (public sources only).
+          </p>
         </div>
       {/if}
     </form>

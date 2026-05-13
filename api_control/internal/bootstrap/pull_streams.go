@@ -5,6 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/lib/pq"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 )
@@ -39,10 +43,11 @@ type ClusterCapabilityResolver interface {
 // SourceURICipher decrypts existing values for idempotent comparison and
 // encrypts plaintext SourceURI before INSERT/UPDATE.
 //
-// ClusterCapabilityResolver is the eligibility gate: a private URI is rejected
-// at apply time when no media cluster has allow_private_pull_sources=true.
-// Defense-in-depth — the CLI render path enforces the same rule earlier, but
-// stale rendered files / out-of-band callers must still fail closed here.
+// ClusterCapabilityResolver is the eligibility gate: private/multicast sources
+// require explicit allowed_cluster_ids, and each listed cluster must be an edge
+// cluster with allow_private_pull_sources=true. Defense-in-depth — the CLI
+// render path enforces the same rule earlier, but stale rendered files /
+// out-of-band callers must still fail closed here.
 func ReconcilePullStreams(
 	ctx context.Context,
 	exec DBTX,
@@ -75,8 +80,11 @@ func ReconcilePullStreams(
 		if shapeErr != nil {
 			return Result{}, shapeErr
 		}
-		if eligibilityErr := validatePullStreamEligibility(ps, class, candidates); eligibilityErr != nil {
-			return Result{}, eligibilityErr
+		// Normalise in place so downstream INSERT/UPDATE and idempotent
+		// compare use the same canonical form (sorted, deduped).
+		ps.AllowedClusterIDs = normalizeAllowedClusterIDs(ps.AllowedClusterIDs)
+		if placementErr := validatePullStreamPlacement(ps, class, candidates); placementErr != nil {
+			return Result{}, placementErr
 		}
 		alias, err := AliasFromRef(ps.OwnerTenant.Ref)
 		if err != nil {
@@ -126,26 +134,75 @@ func validatePullStreamShape(p PullStream) (pullsource.Class, error) {
 	return class, nil
 }
 
-// validatePullStreamEligibility layers cluster eligibility on top of shape
-// validation. Apply path only — `--check` skips this since it's offline and
-// has no Quartermaster access.
-func validatePullStreamEligibility(p PullStream, class pullsource.Class, candidates []pullsource.ClusterCapability) error {
-	eligible := pullsource.EligiblePullClusters(class, candidates)
+// validatePullStreamPlacement layers placement validation on top of shape
+// validation. Combines the per-source allowed_cluster_ids list with the
+// capability gate via the shared pullsource.FilterPlacementClusters helper.
+// Apply path only — `--check` skips this since it's offline and has no
+// Quartermaster access.
+func validatePullStreamPlacement(p PullStream, class pullsource.Class, candidates []pullsource.ClusterCapability) error {
+	if len(candidates) == 0 {
+		return fmt.Errorf("pull_stream %q: no media (edge) cluster is registered", p.PlaybackID)
+	}
+	eligible, rejects := pullsource.FilterPlacementClusters(class, p.AllowedClusterIDs, candidates)
+	if err := formatPlacementRejects(p.PlaybackID, pullsource.Redact(p.SourceURI), rejects); err != nil {
+		return err
+	}
 	if len(eligible) == 0 {
-		switch class {
-		case pullsource.ClassPrivate:
-			return fmt.Errorf("pull_stream %q: source_uri is private but no registered cluster has allow_private_pull_sources=true", p.PlaybackID)
-		default:
-			return fmt.Errorf("pull_stream %q: source_uri %s but no media cluster is registered", p.PlaybackID, class)
-		}
+		return fmt.Errorf("pull_stream %q: no eligible media cluster", p.PlaybackID)
 	}
 	return nil
+}
+
+// formatPlacementRejects turns pullsource.PlacementReject entries into a
+// single apply-time error so operators see every offending ID + reason in
+// one CLI pass.
+func formatPlacementRejects(playbackID, redactedURI string, rejects []pullsource.PlacementReject) error {
+	if len(rejects) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(rejects))
+	for _, r := range rejects {
+		switch r.Reason {
+		case pullsource.PlacementRejectEmptyForPrivate:
+			parts = append(parts, fmt.Sprintf(
+				"source_uri %s is private/multicast and requires explicit allowed_cluster_ids", redactedURI))
+		case pullsource.PlacementRejectUnknownCluster:
+			parts = append(parts, fmt.Sprintf(
+				"allowed_cluster_ids entry %q is not a registered media (edge) cluster", r.ClusterID))
+		case pullsource.PlacementRejectMissingPrivateCapability:
+			parts = append(parts, fmt.Sprintf(
+				"allowed_cluster_ids entry %q does not have allow_private_pull_sources=true", r.ClusterID))
+		default:
+			parts = append(parts, fmt.Sprintf("allowed_cluster_ids entry %q rejected: %s", r.ClusterID, r.Reason))
+		}
+	}
+	return fmt.Errorf("pull_stream %q: %s", playbackID, strings.Join(parts, "; "))
+}
+
+// normalizeAllowedClusterIDs dedups, trims, and sorts so the persisted
+// TEXT[] column and idempotent compare use the same canonical form.
+func normalizeAllowedClusterIDs(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, id := range in {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func reconcilePullStream(ctx context.Context, exec DBTX, tenantID, alias string, p PullStream, cipher SourceURICipher) (string, error) {
 	const probeSQL = `
 			SELECT s.id::text, s.title, COALESCE(s.description, ''), s.ingest_mode,
-			       p.source_uri_enc, p.enabled
+			       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}')
 			FROM commodore.streams s
 			LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 			WHERE s.tenant_id = $1::uuid AND lower(s.playback_id::text) = lower($2)`
@@ -155,9 +212,10 @@ func reconcilePullStream(ctx context.Context, exec DBTX, tenantID, alias string,
 		curTitle, curDesc, curMode string
 		curURIEnc                  sql.NullString
 		curEnabled                 sql.NullBool
+		curAllowedClusters         pq.StringArray
 	)
 	err := exec.QueryRowContext(ctx, probeSQL, tenantID, p.PlaybackID).Scan(
-		&streamID, &curTitle, &curDesc, &curMode, &curURIEnc, &curEnabled,
+		&streamID, &curTitle, &curDesc, &curMode, &curURIEnc, &curEnabled, &curAllowedClusters,
 	)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -180,8 +238,10 @@ func reconcilePullStream(ctx context.Context, exec DBTX, tenantID, alias string,
 	}
 
 	streamFieldsEq := curTitle == p.Title && curDesc == p.Description
+	curAllowed := []string(curAllowedClusters)
 	pullFieldsEq := curURIEnc.Valid && curURI == p.SourceURI &&
-		curEnabled.Valid && curEnabled.Bool == p.Enabled
+		curEnabled.Valid && curEnabled.Bool == p.Enabled &&
+		slices.Equal(curAllowed, p.AllowedClusterIDs)
 
 	if streamFieldsEq && pullFieldsEq {
 		return "noop", nil
@@ -203,13 +263,14 @@ func reconcilePullStream(ctx context.Context, exec DBTX, tenantID, alias string,
 		}
 		const upsertPullSQL = `
 				INSERT INTO commodore.stream_pull_sources
-					(stream_id, source_uri_enc, enabled, created_at, updated_at)
-				VALUES ($1::uuid, $2, $3, NOW(), NOW())
+					(stream_id, source_uri_enc, enabled, allowed_cluster_ids, created_at, updated_at)
+				VALUES ($1::uuid, $2, $3, $4, NOW(), NOW())
 				ON CONFLICT (stream_id) DO UPDATE
-					SET source_uri_enc = EXCLUDED.source_uri_enc,
-					    enabled        = EXCLUDED.enabled,
-					    updated_at     = NOW()`
-		if _, err := exec.ExecContext(ctx, upsertPullSQL, streamID, encURI, p.Enabled); err != nil {
+					SET source_uri_enc      = EXCLUDED.source_uri_enc,
+					    enabled             = EXCLUDED.enabled,
+					    allowed_cluster_ids = EXCLUDED.allowed_cluster_ids,
+					    updated_at          = NOW()`
+		if _, err := exec.ExecContext(ctx, upsertPullSQL, streamID, encURI, p.Enabled, pq.Array(p.AllowedClusterIDs)); err != nil {
 			return "", fmt.Errorf("upsert stream_pull_sources: %w", err)
 		}
 	}
@@ -259,9 +320,9 @@ func createPullStream(ctx context.Context, exec DBTX, tenantID, alias string, p 
 
 	const insertPullSQL = `
 		INSERT INTO commodore.stream_pull_sources
-			(stream_id, source_uri_enc, enabled, created_at, updated_at)
-		VALUES ($1::uuid, $2, $3, NOW(), NOW())`
-	if _, err := exec.ExecContext(ctx, insertPullSQL, streamID, encURI, p.Enabled); err != nil {
+			(stream_id, source_uri_enc, enabled, allowed_cluster_ids, created_at, updated_at)
+		VALUES ($1::uuid, $2, $3, $4, NOW(), NOW())`
+	if _, err := exec.ExecContext(ctx, insertPullSQL, streamID, encURI, p.Enabled, pq.Array(p.AllowedClusterIDs)); err != nil {
 		return "", fmt.Errorf("insert stream_pull_sources: %w", err)
 	}
 	return "created", nil

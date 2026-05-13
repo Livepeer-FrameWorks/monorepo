@@ -51,18 +51,18 @@ The Mux shapes you know, mapped to FrameWorks:
 
 ### Streams
 
-| Mux                                                     | FrameWorks                                                                                                                                                                                          |
-| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /video/v1/live-streams`                           | `createStream(input)` mutation                                                                                                                                                                      |
-| `GET /video/v1/live-streams/{id}`                       | `stream(id)` query                                                                                                                                                                                  |
-| `PATCH /video/v1/live-streams/{id}`                     | `updateStream(id, input)` mutation                                                                                                                                                                  |
-| `DELETE /video/v1/live-streams/{id}`                    | `deleteStream(id)` mutation                                                                                                                                                                         |
-| `PUT /video/v1/live-streams/{id}/disable` and `/enable` | No direct equivalent; manage at the encoder side                                                                                                                                                    |
-| `latency_mode: "standard" \| "reduced" \| "low"`        | Choose the protocol/profile at the player — HLS for VOD/standard, LL-HLS for reduced, WHEP for low — see [Player (Playback)](/builders/playback)                                                    |
-| `new_asset_settings` for live-to-VOD                    | `record: true` at create, or `startDVR(streamId)` post-create                                                                                                                                       |
-| 12-hour continuous-stream auto-disconnect               | No fixed cap; 24/7 streams supported, including continuous DVR archive replay through chapters                                                                                                      |
-| URL pull is VOD-only; no live pull-source ingest        | `createStream(input: { ingestMode: PULL, pullSource: { sourceUri } })` for live URL pull from RTSP / SRT / RIST / HLS / DTSC / MKV / TS-over-UDP — see [Pull-input streams](/builders/pull-streams) |
-| _(RTMP pull is unsupported on Mux)_                     | RTMP pull is not supported on FrameWorks either; bridge via FFmpeg, MistServer, or `srt-live-transmit` to SRT / RIST / RTSP / HLS                                                                   |
+| Mux                                                     | FrameWorks                                                                                                                                                                                                           |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /video/v1/live-streams`                           | `createStream(input)` mutation                                                                                                                                                                                       |
+| `GET /video/v1/live-streams/{id}`                       | `stream(id)` query                                                                                                                                                                                                   |
+| `PATCH /video/v1/live-streams/{id}`                     | `updateStream(id, input)` mutation                                                                                                                                                                                   |
+| `DELETE /video/v1/live-streams/{id}`                    | `deleteStream(id)` mutation                                                                                                                                                                                          |
+| `PUT /video/v1/live-streams/{id}/disable` and `/enable` | No direct equivalent; manage at the encoder side                                                                                                                                                                     |
+| `latency_mode: "standard" \| "reduced" \| "low"`        | Choose the protocol/profile at the player — HLS for VOD/standard, LL-HLS for reduced, WHEP for low — see [Player (Playback)](/builders/playback)                                                                     |
+| `new_asset_settings` for live-to-VOD                    | `record: true` at create, or `startDVR(streamId)` post-create                                                                                                                                                        |
+| 12-hour continuous-stream auto-disconnect               | No fixed cap; 24/7 streams supported, including continuous DVR archive replay through chapters                                                                                                                       |
+| URL pull is VOD-only; no live pull-source ingest        | `createStream(input: { ingestMode: PULL, pullSource: { sourceUri, allowedClusters } })` for live URL pull from RTSP / SRT / RIST / HLS / DTSC / MKV / TS-over-UDP — see [Pull-input streams](/builders/pull-streams) |
+| _(RTMP pull is unsupported on Mux)_                     | RTMP pull is not supported on FrameWorks either; bridge via FFmpeg, MistServer, or `srt-live-transmit` to SRT / RIST / RTSP / HLS                                                                                    |
 
 ### Recordings, clips, and VOD
 
@@ -333,8 +333,8 @@ over once you trust the numbers.
   playlists over the same continuous archive.
 - **Pull-input streams** for live: `createStream(input: { ingestMode: PULL, pullSource })`
   pulls from RTSP, SRT, RIST, HLS, DTSC, MKV/WebM, or TS-over-UDP (unicast or multicast).
-  Self-hosted edges can pull from RFC1918 / multicast sources via an explicit
-  `allow_private_pull_sources` cluster flag. Mux's URL pull is VOD-only. RTMP pull is not
+  Self-hosted edges can pull from RFC1918 / multicast sources only when the pull source is
+  pinned to clusters with `allow_private_pull_sources=true`. Mux's URL pull is VOD-only. RTMP pull is not
   supported on either platform — bridge through FFmpeg/MistServer/`srt-live-transmit` if you
   need it. See [Pull-input streams](/builders/pull-streams). Experimental media-engine discovery
   exists locally today; FrameWorks packaging through Edge, Tray, CLI, API, and dashboard workflows

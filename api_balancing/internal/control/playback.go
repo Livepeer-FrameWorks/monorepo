@@ -273,14 +273,16 @@ func filterPullCandidatesByEligibility(ctx context.Context, nodes []balancer.Nod
 		return nodes, nil //nolint:nilerr // lookupErr is "not a pull stream", not a failure
 	}
 	class, _ := pullsource.Classify(src.GetSourceUri()) //nolint:errcheck // class encodes the rejection
-	if class == pullsource.ClassPublic {
+	allowed := src.GetAllowedClusterIds()
+	// Fast path: public source with no placement pin — legacy behavior, any cluster.
+	if class == pullsource.ClassPublic && len(allowed) == 0 {
 		return nodes, nil
 	}
 	localClusterID := ""
 	if deps != nil {
 		localClusterID = deps.LocalClusterID
 	}
-	return filterPullCandidatesByClass(ctx, nodes, internalName, localClusterID, class, ClusterAllowsPrivatePulls)
+	return filterPullCandidatesByClass(ctx, nodes, internalName, localClusterID, class, allowed, ClusterAllowsPrivatePulls)
 }
 
 func filterPullCandidatesByClass(
@@ -288,20 +290,21 @@ func filterPullCandidatesByClass(
 	nodes []balancer.NodeWithScore,
 	internalName, localClusterID string,
 	class pullsource.Class,
+	allowedClusterIDs []string,
 	allowsPrivatePulls func(context.Context, string) bool,
 ) ([]balancer.NodeWithScore, error) {
 	if class == pullsource.ClassBlocked {
 		return nil, fmt.Errorf("pull source for stream %q is in the always-blocked set; refusing to route", internalName)
 	}
-	if class == pullsource.ClassPublic {
+	if class == pullsource.ClassPublic && len(allowedClusterIDs) == 0 {
 		return nodes, nil
 	}
 
-	// Private URI — collect the unique cluster set, look up each cluster's
-	// flag, then route through EligiblePullClusters so this path shares the
-	// same chokepoint as bootstrap render and Commodore reconcile. The map
-	// guarantees one Quartermaster lookup per cluster_id seen, even if
-	// multiple nodes belong to the same cluster.
+	// Collect the unique cluster set seen across candidate nodes, build a
+	// ClusterCapability slice with each cluster's flag, then run the shared
+	// pullsource.FilterPlacementClusters helper so this path uses the same
+	// rules as bootstrap render, Commodore reconcile, /source, and
+	// STREAM_SOURCE. Capability lookup is per cluster_id, not per node.
 	clusterIDFor := func(n balancer.NodeWithScore) string {
 		if n.ClusterID != "" {
 			return n.ClusterID
@@ -317,7 +320,7 @@ func filterPullCandidatesByClass(
 		}
 		seen[clusterID] = true
 		allowPrivate := false
-		if allowsPrivatePulls != nil {
+		if class == pullsource.ClassPrivate && allowsPrivatePulls != nil {
 			allowPrivate = allowsPrivatePulls(ctx, clusterID)
 		}
 		candidates = append(candidates, pullsource.ClusterCapability{
@@ -325,7 +328,16 @@ func filterPullCandidatesByClass(
 			AllowPrivatePullSources: allowPrivate,
 		})
 	}
-	eligible := pullsource.EligiblePullClusters(class, candidates)
+	eligible, rejects := pullsource.FilterPlacementClusters(class, allowedClusterIDs, candidates)
+	if len(eligible) == 0 {
+		// Distinguish the two failure modes operators care about: "you forgot
+		// to configure placement" vs "the cluster set Commodore picked has
+		// nothing reachable". The first reject carries the canonical reason.
+		if len(rejects) > 0 {
+			return nil, fmt.Errorf("pull source for stream %q rejected: %s", internalName, summarizePlacementRejects(rejects))
+		}
+		return nil, fmt.Errorf("pull source for stream %q has no eligible media cluster reachable", internalName)
+	}
 	allow := make(map[string]bool, len(eligible))
 	for _, c := range eligible {
 		allow[c.ID] = true
@@ -337,9 +349,28 @@ func filterPullCandidatesByClass(
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("pull source for stream %q is private but no eligible media cluster (allow_private_pull_sources=true) is reachable", internalName)
+		return nil, fmt.Errorf("pull source for stream %q has no eligible candidate node in the allowed cluster set", internalName)
 	}
 	return out, nil
+}
+
+// summarizePlacementRejects flattens FilterPlacementClusters rejections into
+// a single line for runtime errors. Mirrored in handlers and triggers.
+func summarizePlacementRejects(rejects []pullsource.PlacementReject) string {
+	parts := make([]string, 0, len(rejects))
+	for _, r := range rejects {
+		switch r.Reason {
+		case pullsource.PlacementRejectEmptyForPrivate:
+			parts = append(parts, "private/multicast source has no allowed_cluster_ids configured")
+		case pullsource.PlacementRejectUnknownCluster:
+			parts = append(parts, fmt.Sprintf("cluster %q is not an eligible media cluster", r.ClusterID))
+		case pullsource.PlacementRejectMissingPrivateCapability:
+			parts = append(parts, fmt.Sprintf("cluster %q does not allow private pull sources", r.ClusterID))
+		default:
+			parts = append(parts, fmt.Sprintf("cluster %q rejected: %s", r.ClusterID, r.Reason))
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // ClusterAllowsPrivatePulls returns Quartermaster's allow_private_pull_sources

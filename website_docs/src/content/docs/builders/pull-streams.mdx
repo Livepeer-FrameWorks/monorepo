@@ -59,6 +59,7 @@ mutation CreatePullStream($input: CreateStreamInput!) {
         sourceUriRedacted
         enabled
         class
+        allowedClusterIds
       }
     }
   }
@@ -72,18 +73,26 @@ mutation CreatePullStream($input: CreateStreamInput!) {
     "ingestMode": "PULL",
     "pullSource": {
       "sourceUri": "rtsp://camera.example.net/live",
-      "enabled": true
+      "enabled": true,
+      "allowedClusters": {
+        "clusterIds": []
+      }
     }
   }
 }
 ```
 
-The source URI is stored encrypted and returned only in redacted form.
+The source URI is stored encrypted and returned only in redacted form. For public sources,
+`allowedClusters.clusterIds: []` means any media cluster may run the pull. Set cluster IDs to
+pin a public source to a specific cluster set.
 
 ## Private Upstreams on Self-hosted Edges
 
-Private literals are allowed only on media clusters that explicitly opt in with
-`allow_private_pull_sources: true`.
+Private literals require two pieces of configuration:
+
+- The target media cluster must opt in with `allow_private_pull_sources: true`.
+- The pull stream must explicitly pin itself to that cluster with `allowedClusters.clusterIds`
+  (GraphQL) or `allowed_cluster_ids` (bootstrap).
 
 ```yaml
 clusters:
@@ -95,14 +104,32 @@ clusters:
     allow_private_pull_sources: true
 ```
 
+Then create the pull stream with the placement pin:
+
+```json
+{
+  "input": {
+    "name": "Warehouse Camera",
+    "ingestMode": "PULL",
+    "pullSource": {
+      "sourceUri": "rtsp://192.168.10.50/live",
+      "enabled": true,
+      "allowedClusters": {
+        "clusterIds": ["warehouse-edge"]
+      }
+    }
+  }
+}
+```
+
 This protects platform-managed clusters from trying to reach sources they cannot access and keeps
 private-source placement constrained to edge nodes you operate.
 
 | Deployment shape                              | Result                                                               |
 | --------------------------------------------- | -------------------------------------------------------------------- |
 | Platform cluster, public source URI           | Allowed.                                                             |
-| Platform cluster, private literal source URI  | Rejected unless a media cluster opts in.                             |
-| Self-hosted edge with opt-in                  | Allowed and routed only to eligible media clusters.                  |
+| Platform cluster, private literal source URI  | Rejected.                                                            |
+| Self-hosted edge with opt-in + placement pin  | Allowed and routed only to the pinned eligible media clusters.       |
 | Hostname resolving to private IP from an edge | Treated as public at validation; DNS reachability is operator-owned. |
 
 <Aside type="caution" title="Hostname reachability is on you">

@@ -2694,6 +2694,13 @@ func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingCo
 		}
 	}
 
+	// TODO(slice-3): after `make graphql` regenerates the GraphQL model
+	// (adding Global*Domain and Tenant*Domain fields to
+	// model.StreamingConfig), uncomment populateTieredStreamingDomains
+	// below and remove this comment. The schema already exposes the
+	// new fields in pkg/graphql/schema.graphql.
+	// r.populateTieredStreamingDomains(ctx, cfg)
+
 	return cfg, nil
 }
 

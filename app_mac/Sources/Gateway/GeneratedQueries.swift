@@ -482,6 +482,7 @@ enum GQL {
       sourceUriRedacted
       enabled
       class
+      allowedClusterIds
     }
     createdAt
     updatedAt
@@ -3176,6 +3177,16 @@ enum GQL {
       officialEdgeDomain
       officialPlayDomain
       officialChandlerDomain
+      globalIngestDomain
+      globalEdgeDomain
+      globalPlayDomain
+      globalChandlerDomain
+      globalLivepeerDomain
+      tenantIngestDomain
+      tenantEdgeDomain
+      tenantPlayDomain
+      tenantChandlerDomain
+      tenantLivepeerDomain
       srtPort
       rtmpPort
     }

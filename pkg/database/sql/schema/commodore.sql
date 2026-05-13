@@ -220,6 +220,14 @@ CREATE TABLE IF NOT EXISTS commodore.stream_pull_sources (
     source_uri_enc TEXT NOT NULL,                -- encrypted upstream URI
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
 
+    -- Per-source placement pin. Empty = "any media (edge) cluster" for public
+    -- sources; required (non-empty) for private/multicast sources. Distinct
+    -- from quartermaster.infrastructure_clusters.allow_private_pull_sources,
+    -- which is the cluster-side capability flag. Placement is enforced at
+    -- render, bootstrap apply, CreateStream/UpdateStream, viewer routing,
+    -- /source, and the STREAM_SOURCE trigger via pkg/pullsource.FilterPlacementClusters.
+    allowed_cluster_ids TEXT[] NOT NULL DEFAULT '{}',
+
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );

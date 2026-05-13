@@ -898,25 +898,42 @@
     record?: boolean;
     pullSourceUri?: string;
     pullSourceEnabled?: boolean;
+    pullSourceAllowedClusterIds?: string;
+    pullSourceAllowedClustersDirty?: boolean;
   }) {
     if (!stream) return;
 
     try {
       actionLoading.editStream = true;
+      const pullURIChanged = !!formData.pullSourceUri?.trim();
+      const pullEnabledChanged = formData.pullSourceEnabled !== stream.pullSource?.enabled;
+      const pullAllowedDirty = !!formData.pullSourceAllowedClustersDirty;
+      // Only send pullSource when something actually changed. The wrapper
+      // contract is: any field we omit is preserved; any field we set is
+      // replaced. For allowed_clusters specifically: send the wrapper only
+      // when the user edited the field (dirty flag) — otherwise omit so the
+      // server preserves the existing pin.
+      const pullSource =
+        stream.ingestMode === "PULL" && (pullURIChanged || pullEnabledChanged || pullAllowedDirty)
+          ? {
+              sourceUri: pullURIChanged ? formData.pullSourceUri!.trim() : undefined,
+              enabled: pullEnabledChanged ? (formData.pullSourceEnabled ?? true) : undefined,
+              allowedClusters: pullAllowedDirty
+                ? {
+                    clusterIds: (formData.pullSourceAllowedClusterIds ?? "")
+                      .split(",")
+                      .map((s) => s.trim())
+                      .filter((s) => s.length > 0),
+                  }
+                : undefined,
+            }
+          : undefined;
       const input = {
         name: formData.name,
         description: formData.description,
         record: formData.record,
         ingestMode: stream.ingestMode,
-        pullSource:
-          stream.ingestMode === "PULL" &&
-          (formData.pullSourceUri?.trim() ||
-            formData.pullSourceEnabled !== stream.pullSource?.enabled)
-            ? {
-                sourceUri: formData.pullSourceUri?.trim() ?? "",
-                enabled: formData.pullSourceEnabled ?? true,
-              }
-            : undefined,
+        pullSource,
       };
       const result = await updateStreamMutation.mutate({
         id: streamId,

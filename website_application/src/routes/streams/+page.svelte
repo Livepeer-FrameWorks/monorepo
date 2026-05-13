@@ -111,6 +111,7 @@
   let newStreamIngestMode = $state<"PUSH" | "PULL">("PUSH");
   let newStreamPullSourceUri = $state("");
   let newStreamPullSourceEnabled = $state(true);
+  let newStreamPullSourceAllowedClusterIds = $state("");
 
   // Stream deletion
   let deletingStreamId = $state("");
@@ -285,6 +286,10 @@
 
     try {
       creatingStream = true;
+      const clusterIds = newStreamPullSourceAllowedClusterIds
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
       const input = {
         name: newStreamTitle.trim(),
         description: newStreamDescription.trim() || undefined,
@@ -295,6 +300,9 @@
             ? {
                 sourceUri: newStreamPullSourceUri.trim(),
                 enabled: newStreamPullSourceEnabled,
+                // Always send the wrapper on create — server interprets
+                // unset wrapper as "no pin" (rejected for private sources).
+                allowedClusters: { clusterIds },
               }
             : undefined,
       };
@@ -319,6 +327,7 @@
         newStreamIngestMode = "PUSH";
         newStreamPullSourceUri = "";
         newStreamPullSourceEnabled = true;
+        newStreamPullSourceAllowedClusterIds = "";
 
         toast.success("Stream created successfully!");
 
@@ -850,6 +859,7 @@
   bind:ingestMode={newStreamIngestMode}
   bind:pullSourceUri={newStreamPullSourceUri}
   bind:pullSourceEnabled={newStreamPullSourceEnabled}
+  bind:pullSourceAllowedClusterIds={newStreamPullSourceAllowedClusterIds}
   creating={creatingStream}
   onSubmit={createStream}
   onCancel={() => {
@@ -860,6 +870,7 @@
     newStreamIngestMode = "PUSH";
     newStreamPullSourceUri = "";
     newStreamPullSourceEnabled = true;
+    newStreamPullSourceAllowedClusterIds = "";
   }}
 />
 

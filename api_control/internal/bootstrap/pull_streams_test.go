@@ -28,10 +28,12 @@ func TestValidatePullStreamShapeChecksSourceURI(t *testing.T) {
 	}
 }
 
-// TestValidatePullStreamEligibility_PrivateRequiresOptedInCluster locks the
-// eligibility invariant: a private URI requires at least one registered cluster
-// with allow_private_pull_sources=true.
-func TestValidatePullStreamEligibility_PrivateRequiresOptedInCluster(t *testing.T) {
+// TestValidatePullStreamPlacement_PrivateRequiresExplicitAllowedClusters locks
+// the per-source placement invariant. A private URI:
+//   - with empty allowed_cluster_ids must fail (no implicit fallback)
+//   - pinned to a non-opted-in cluster must fail (missing capability)
+//   - pinned to an opted-in cluster must pass
+func TestValidatePullStreamPlacement_PrivateRequiresExplicitAllowedClusters(t *testing.T) {
 	ps := PullStream{
 		PlaybackID:  "private-demo",
 		OwnerTenant: TenantRef{Ref: "quartermaster.system_tenant"},
@@ -46,18 +48,32 @@ func TestValidatePullStreamEligibility_PrivateRequiresOptedInCluster(t *testing.
 		t.Fatalf("class = %s, want private", class)
 	}
 
-	platformOnly := []pullsource.ClusterCapability{
+	candidates := []pullsource.ClusterCapability{
 		{ID: "demo-media", AllowPrivatePullSources: false},
-	}
-	if err := validatePullStreamEligibility(ps, class, platformOnly); err == nil {
-		t.Fatal("private URI on platform-only manifest must fail eligibility")
+		{ID: "selfhost-edge", AllowPrivatePullSources: true},
 	}
 
-	withSelfHost := append(platformOnly, pullsource.ClusterCapability{
-		ID: "selfhost-edge", AllowPrivatePullSources: true,
-	})
-	if err := validatePullStreamEligibility(ps, class, withSelfHost); err != nil {
-		t.Fatalf("private URI with one opted-in cluster should pass: %v", err)
+	// empty allowed list ⇒ private rejected
+	if err := validatePullStreamPlacement(ps, class, candidates); err == nil {
+		t.Fatal("private URI with empty allowed_cluster_ids must fail placement")
+	}
+
+	// pinned to non-opted-in ⇒ rejected for missing capability
+	ps.AllowedClusterIDs = []string{"demo-media"}
+	if err := validatePullStreamPlacement(ps, class, candidates); err == nil {
+		t.Fatal("private URI pinned to cluster without capability must fail placement")
+	}
+
+	// pinned to opted-in ⇒ pass
+	ps.AllowedClusterIDs = []string{"selfhost-edge"}
+	if err := validatePullStreamPlacement(ps, class, candidates); err != nil {
+		t.Fatalf("private URI pinned to opted-in cluster should pass: %v", err)
+	}
+
+	// unknown id ⇒ rejected
+	ps.AllowedClusterIDs = []string{"ghost-cluster"}
+	if err := validatePullStreamPlacement(ps, class, candidates); err == nil {
+		t.Fatal("unknown allowed_cluster_ids entry must fail placement")
 	}
 }
 
@@ -91,8 +107,8 @@ func TestReconcilePullStreamRefusesPushToPullConversion(t *testing.T) {
 	tenantID := "00000000-0000-0000-0000-000000000001"
 	mock.ExpectQuery("FROM commodore.streams s").
 		WithArgs(tenantID, "demo").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "title", "description", "ingest_mode", "source_uri_enc", "enabled"}).
-			AddRow("00000000-0000-0000-0000-000000000010", "Demo", "", "push", nil, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "title", "description", "ingest_mode", "source_uri_enc", "enabled", "allowed_cluster_ids"}).
+			AddRow("00000000-0000-0000-0000-000000000010", "Demo", "", "push", nil, nil, "{}"))
 
 	ps := PullStream{
 		PlaybackID:  "demo",
@@ -171,8 +187,8 @@ func TestReconcilePullStreamEncryptsBeforeUpsert(t *testing.T) {
 
 	mock.ExpectQuery("FROM commodore.streams s").
 		WithArgs(tenantID, "demo").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "title", "description", "ingest_mode", "source_uri_enc", "enabled"}).
-			AddRow(streamID, "Demo", "", "pull", storedCiphertext, true))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "title", "description", "ingest_mode", "source_uri_enc", "enabled", "allowed_cluster_ids"}).
+			AddRow(streamID, "Demo", "", "pull", storedCiphertext, true, "{}"))
 
 	ps := PullStream{
 		PlaybackID:  "demo",
@@ -187,6 +203,88 @@ func TestReconcilePullStreamEncryptsBeforeUpsert(t *testing.T) {
 	}
 	if action != "noop" {
 		t.Fatalf("action = %q, want noop (encrypt/decrypt round-trip should match)", action)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+// TestReconcilePullStreamNoopWithSameAllowedClusters verifies the idempotent
+// compare extends to allowed_cluster_ids: same set in stored row and incoming
+// desired-state ⇒ noop, no UPDATE issued.
+func TestReconcilePullStreamNoopWithSameAllowedClusters(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	tenantID := "00000000-0000-0000-0000-000000000001"
+	streamID := "00000000-0000-0000-0000-000000000020"
+	plaintextURI := "rtsp://10.0.0.5/live"
+	storedCiphertext := "enc:" + plaintextURI
+
+	mock.ExpectQuery("FROM commodore.streams s").
+		WithArgs(tenantID, "demo").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "title", "description", "ingest_mode", "source_uri_enc", "enabled", "allowed_cluster_ids"}).
+			AddRow(streamID, "Demo", "", "pull", storedCiphertext, true, "{warehouse-edge}"))
+
+	ps := PullStream{
+		PlaybackID:        "demo",
+		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:             "Demo",
+		SourceURI:         plaintextURI,
+		Enabled:           true,
+		AllowedClusterIDs: []string{"warehouse-edge"},
+	}
+	action, err := reconcilePullStream(context.Background(), db, tenantID, "frameworks", ps, fakeCipher{})
+	if err != nil {
+		t.Fatalf("reconcilePullStream: %v", err)
+	}
+	if action != "noop" {
+		t.Fatalf("action = %q, want noop", action)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+// TestReconcilePullStreamUpdatesWhenAllowedClustersChange verifies a diff in
+// allowed_cluster_ids alone is enough to trigger the upsert.
+func TestReconcilePullStreamUpdatesWhenAllowedClustersChange(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	tenantID := "00000000-0000-0000-0000-000000000001"
+	streamID := "00000000-0000-0000-0000-000000000020"
+	plaintextURI := "rtsp://10.0.0.5/live"
+	storedCiphertext := "enc:" + plaintextURI
+
+	mock.ExpectQuery("FROM commodore.streams s").
+		WithArgs(tenantID, "demo").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "title", "description", "ingest_mode", "source_uri_enc", "enabled", "allowed_cluster_ids"}).
+			AddRow(streamID, "Demo", "", "pull", storedCiphertext, true, "{old-edge}"))
+
+	mock.ExpectExec("INSERT INTO commodore.stream_pull_sources").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	ps := PullStream{
+		PlaybackID:        "demo",
+		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:             "Demo",
+		SourceURI:         plaintextURI,
+		Enabled:           true,
+		AllowedClusterIDs: []string{"warehouse-edge"},
+	}
+	action, err := reconcilePullStream(context.Background(), db, tenantID, "frameworks", ps, fakeCipher{})
+	if err != nil {
+		t.Fatalf("reconcilePullStream: %v", err)
+	}
+	if action != "updated" {
+		t.Fatalf("action = %q, want updated", action)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

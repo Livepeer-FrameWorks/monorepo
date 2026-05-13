@@ -66,7 +66,7 @@ Bunny Stream does not currently expose a first-class live-ingest product, so thi
 | Clip API (`CLIP_NOW`, `DURATION`, `ABSOLUTE`, `RELATIVE`)                             |
 | Multistream / restream to Twitch, YouTube, Facebook, Kick, X, custom RTMP/RTMPS/SRT   |
 
-Pull-input streams use `createStream(input: { ingestMode: PULL, pullSource: { sourceUri } })` — see [Pull-input streams](/builders/pull-streams). Self-hosted edges can pull from RFC1918 / multicast sources via an explicit `allow_private_pull_sources` cluster flag.
+Pull-input streams use `createStream(input: { ingestMode: PULL, pullSource: { sourceUri, allowedClusters } })` — see [Pull-input streams](/builders/pull-streams). Self-hosted edges can pull from RFC1918 / multicast sources only when the source is pinned with `allowedClusters.clusterIds` to clusters that have `allow_private_pull_sources=true`.
 
 ### Captions, chapters, transcription
 

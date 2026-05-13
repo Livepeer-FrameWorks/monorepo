@@ -146,8 +146,8 @@ type ClusterCapability struct {
 // ClassPrivate filters to AllowPrivatePullSources=true; ClassPublic returns
 // every candidate.
 //
-// This is the single eligibility chokepoint. Additional cluster predicates
-// belong here so per-call-site filtering does not diverge.
+// This is the single capability chokepoint. Per-pull-source placement (the
+// allowed_cluster_ids list) belongs to FilterPlacementClusters instead.
 func EligiblePullClusters(class Class, candidates []ClusterCapability) []ClusterCapability {
 	if class == ClassBlocked {
 		return nil
@@ -160,6 +160,96 @@ func EligiblePullClusters(class Class, candidates []ClusterCapability) []Cluster
 		out = append(out, c)
 	}
 	return out
+}
+
+// PlacementRejectReason categorises why an allowed_cluster_ids entry could
+// not be honored. Callers convert these to context-appropriate errors at
+// render/apply/runtime; nobody reconstructs reasons from an empty slice.
+type PlacementRejectReason string
+
+const (
+	// PlacementRejectEmptyForPrivate is emitted once when class is Private
+	// and the allowed list is empty. ClusterID is unset.
+	PlacementRejectEmptyForPrivate PlacementRejectReason = "empty_for_private"
+	// PlacementRejectUnknownCluster: the ID does not appear in candidates.
+	// Either the cluster does not exist or it is not media-capable (edge);
+	// callers cannot distinguish without the full cluster list, which is
+	// outside this helper's scope.
+	PlacementRejectUnknownCluster PlacementRejectReason = "unknown_or_not_media_capable"
+	// PlacementRejectMissingPrivateCapability: the ID is known and
+	// media-capable, but its AllowPrivatePullSources flag is false. Only
+	// emitted for class=Private.
+	PlacementRejectMissingPrivateCapability PlacementRejectReason = "missing_private_capability"
+)
+
+// PlacementReject explains why a cluster cannot host a given pull source.
+type PlacementReject struct {
+	ClusterID string
+	Reason    PlacementRejectReason
+}
+
+// FilterPlacementClusters is the single placement chokepoint. It returns:
+//
+//   - eligible: the candidates that may host this pull source.
+//   - rejects: an explicit per-ID reason for every allowed entry that could
+//     not be honored, plus a single empty_for_private rejection when class
+//     is Private and allowed is empty.
+//
+// Semantics:
+//
+//   - class=Blocked  ⇒ empty eligible, no rejects (Classify already failed).
+//   - class=Public, allowed empty     ⇒ all candidates pass.
+//   - class=Public, allowed non-empty ⇒ intersection (unknown IDs rejected).
+//   - class=Private, allowed empty    ⇒ no candidates pass; one reject with
+//     PlacementRejectEmptyForPrivate.
+//   - class=Private, allowed non-empty ⇒ each ID must (a) exist in
+//     candidates and (b) carry AllowPrivatePullSources=true; failures are
+//     surfaced as rejects rather than silent drops.
+//
+// `candidates` is the media-capable (edge) cluster set: any input cluster
+// that is not edge-typed must be excluded by the caller before passing it
+// in. This keeps "is media-capable" a property of the input slice rather
+// than a field on ClusterCapability.
+func FilterPlacementClusters(
+	class Class,
+	allowed []string,
+	candidates []ClusterCapability,
+) (eligible []ClusterCapability, rejects []PlacementReject) {
+	if class == ClassBlocked {
+		return nil, nil
+	}
+
+	// Public + no pin: behaves like the existing capability gate.
+	if len(allowed) == 0 {
+		if class == ClassPrivate {
+			return nil, []PlacementReject{{Reason: PlacementRejectEmptyForPrivate}}
+		}
+		return append([]ClusterCapability(nil), candidates...), nil
+	}
+
+	byID := make(map[string]ClusterCapability, len(candidates))
+	for _, c := range candidates {
+		byID[c.ID] = c
+	}
+
+	seen := make(map[string]bool, len(allowed))
+	for _, id := range allowed {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		entry, ok := byID[id]
+		if !ok {
+			rejects = append(rejects, PlacementReject{ClusterID: id, Reason: PlacementRejectUnknownCluster})
+			continue
+		}
+		if class == ClassPrivate && !entry.AllowPrivatePullSources {
+			rejects = append(rejects, PlacementReject{ClusterID: id, Reason: PlacementRejectMissingPrivateCapability})
+			continue
+		}
+		eligible = append(eligible, entry)
+	}
+	return eligible, rejects
 }
 
 // validateSchemePath enforces the supported MistServer pull-input scheme +

@@ -24,12 +24,13 @@ type CommodoreSection struct {
 // subcommand encrypts via the same FieldEncryptor used by runtime CRUD before
 // inserting into commodore.stream_pull_sources.
 type PullStream struct {
-	PlaybackID  string    `yaml:"playback_id"`
-	OwnerTenant TenantRef `yaml:"owner_tenant"`
-	Title       string    `yaml:"title"`
-	Description string    `yaml:"description,omitempty"`
-	SourceURI   string    `yaml:"source_uri"`
-	Enabled     bool      `yaml:"enabled"`
+	PlaybackID        string    `yaml:"playback_id"`
+	OwnerTenant       TenantRef `yaml:"owner_tenant"`
+	Title             string    `yaml:"title"`
+	Description       string    `yaml:"description,omitempty"`
+	SourceURI         string    `yaml:"source_uri"`
+	Enabled           bool      `yaml:"enabled"`
+	AllowedClusterIDs []string  `yaml:"allowed_cluster_ids,omitempty"`
 }
 
 // Account mirrors cli/pkg/bootstrap.AccountRendered's wire format. Field shapes

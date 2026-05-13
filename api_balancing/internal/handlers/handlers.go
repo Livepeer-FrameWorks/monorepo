@@ -1326,25 +1326,45 @@ func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float6
 	return best.DtscUrl, originClusterID
 }
 
-// resolvePullUpstreamForSource looks up the configured upstream pull URI for a
-// pull+<internal_name> stream via Commodore. Returns "" on any failure or if
-// the source is disabled. This is the only source of an upstream URI used by
-// /source for pull streams; never use query.fallback.
-func resolvePullUpstreamForSource(ctx context.Context, streamName string) string {
+// resolvePullSourceForSource looks up the full pull-source row for a
+// pull+<internal_name> stream via Commodore. Returns nil on any failure or if
+// the source is disabled. The caller uses both the upstream URI and the
+// allowed_cluster_ids list for placement enforcement.
+func resolvePullSourceForSource(ctx context.Context, streamName string) *pb.ResolvePullSourceByInternalNameResponse {
 	internalName := strings.TrimPrefix(streamName, "pull+")
 	if internalName == "" {
-		return ""
+		return nil
 	}
 	if control.CommodoreClient == nil {
-		return ""
+		return nil
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	resp, err := control.CommodoreClient.ResolvePullSourceByInternalName(lookupCtx, internalName)
 	if err != nil || resp == nil || !resp.GetFound() || !resp.GetEnabled() {
-		return ""
+		return nil
 	}
-	return resp.GetSourceUri()
+	return resp
+}
+
+// summarizePullPlacementRejects flattens FilterPlacementClusters rejections
+// into a single log line. Mirrors api_balancing/internal/control:
+// summarizePlacementRejects so logs and errors describe the same reasons.
+func summarizePullPlacementRejects(rejects []pullsource.PlacementReject) string {
+	parts := make([]string, 0, len(rejects))
+	for _, r := range rejects {
+		switch r.Reason {
+		case pullsource.PlacementRejectEmptyForPrivate:
+			parts = append(parts, "private/multicast source has no allowed_cluster_ids configured")
+		case pullsource.PlacementRejectUnknownCluster:
+			parts = append(parts, fmt.Sprintf("cluster %q is not in allowed_cluster_ids", r.ClusterID))
+		case pullsource.PlacementRejectMissingPrivateCapability:
+			parts = append(parts, fmt.Sprintf("cluster %q does not allow private pull sources", r.ClusterID))
+		default:
+			parts = append(parts, fmt.Sprintf("cluster %q rejected: %s", r.ClusterID, r.Reason))
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 func pullUpstreamScore(upstream string, activeScore uint64) uint64 {
@@ -1358,33 +1378,44 @@ func pullUpstreamScore(upstream string, activeScore uint64) uint64 {
 }
 
 func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string, ctx context.Context, start time.Time) {
-	upstream := resolvePullUpstreamForSource(ctx, streamName)
-	if upstream == "" {
+	src := resolvePullSourceForSource(ctx, streamName)
+	if src == nil {
 		logger.WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI unavailable; refusing")
 		c.Status(http.StatusNotFound)
 		return
 	}
+	upstream := src.GetSourceUri()
 	class, classErr := pullsource.Classify(upstream)
 	if class == pullsource.ClassBlocked {
 		logger.WithError(classErr).WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI is in the always-blocked set; refusing")
 		c.Status(http.StatusNotFound)
 		return
 	}
+	// /source runs on a specific Foghorn — which serves a specific media
+	// cluster. Re-run the same placement filter we apply at viewer routing
+	// + STREAM_SOURCE so a stale route handed to this endpoint cannot leak
+	// the upstream onto a cluster the pull source isn't pinned to.
+	localClusterID := config.GetEnv("CLUSTER_ID", "")
+	localCapability := false
 	if class == pullsource.ClassPrivate {
-		// /source runs on a specific Foghorn — which serves a specific media
-		// cluster. Reject the upstream here if this cluster is not opted
-		// into private pulls. Otherwise routing could send a viewer to a
-		// platform-cluster Foghorn that hands MistServer a private upstream
-		// it cannot reach.
-		localClusterID := config.GetEnv("CLUSTER_ID", "")
-		if !control.ClusterAllowsPrivatePulls(ctx, localClusterID) {
-			logger.WithFields(logging.Fields{
-				"stream":     streamName,
-				"cluster_id": localClusterID,
-			}).Warn("Source lookup: pull stream is private but the serving cluster does not allow private pull sources; refusing")
-			c.Status(http.StatusNotFound)
-			return
-		}
+		localCapability = control.ClusterAllowsPrivatePulls(ctx, localClusterID)
+	}
+	localCandidates := []pullsource.ClusterCapability{}
+	if localClusterID != "" {
+		localCandidates = append(localCandidates, pullsource.ClusterCapability{
+			ID:                      localClusterID,
+			AllowPrivatePullSources: localCapability,
+		})
+	}
+	eligible, rejects := pullsource.FilterPlacementClusters(class, src.GetAllowedClusterIds(), localCandidates)
+	if len(eligible) == 0 {
+		logger.WithFields(logging.Fields{
+			"stream":     streamName,
+			"cluster_id": localClusterID,
+			"rejects":    summarizePullPlacementRejects(rejects),
+		}).Warn("Source lookup: pull source not placeable on this cluster; refusing")
+		c.Status(http.StatusNotFound)
+		return
 	}
 
 	bestNode, score, nodeLat, nodeLon, nodeName, err := lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, clientIP, true)

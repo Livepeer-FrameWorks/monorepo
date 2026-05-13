@@ -1677,19 +1677,36 @@ func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger
 		p.recordPullSourceEvent(resp, internalName, "blocked_uri", detail)
 		return "", true, nil
 	}
+	// Defensive placement check: the bootstrap/CLI layer + runtime CRUD
+	// validators should have rejected misconfigured pulls upfront, but if
+	// a stale row + new cluster policy / allowed_cluster_ids collide we
+	// deny here rather than dial. Same shared helper as render / Commodore
+	// apply / viewer routing / /source.
+	triggerClusterID := p.resolveNodeClusterID(trigger.GetNodeId())
+	localCapability := false
 	if class == pullsource.ClassPrivate {
-		// Defensive cluster check: the bootstrap/CLI layer should have
-		// rejected a private URI on a non-eligible cluster, but if a stale
-		// row + new cluster policy collide we deny rather than dial.
-		clusterID := p.resolveNodeClusterID(trigger.GetNodeId())
-		if !p.clusterAllowsPrivatePullSources(streamName, clusterID) {
-			p.logger.WithFields(logging.Fields{
-				"stream_name": streamName,
-				"cluster_id":  clusterID,
-			}).Warn("Pull source is private and the executing cluster does not allow private pull sources; refusing")
-			p.recordPullSourceEvent(resp, internalName, "private_not_allowed", clusterID)
-			return "", true, nil
+		localCapability = p.clusterAllowsPrivatePullSources(streamName, triggerClusterID)
+	}
+	localCandidates := []pullsource.ClusterCapability{}
+	if triggerClusterID != "" {
+		localCandidates = append(localCandidates, pullsource.ClusterCapability{
+			ID:                      triggerClusterID,
+			AllowPrivatePullSources: localCapability,
+		})
+	}
+	eligible, rejects := pullsource.FilterPlacementClusters(class, resp.GetAllowedClusterIds(), localCandidates)
+	if len(eligible) == 0 {
+		detail := triggerClusterID
+		if len(rejects) > 0 {
+			detail = formatTriggerPlacementRejects(rejects, triggerClusterID)
 		}
+		p.logger.WithFields(logging.Fields{
+			"stream_name": streamName,
+			"cluster_id":  triggerClusterID,
+			"detail":      detail,
+		}).Warn("Pull source not placeable on the executing cluster; refusing")
+		p.recordPullSourceEvent(resp, internalName, "cluster_not_allowed", detail)
+		return "", true, nil
 	}
 
 	if tid := resp.GetTenantId(); tid != "" {
@@ -1699,8 +1716,7 @@ func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger
 		trigger.StreamId = &sid
 	}
 
-	clusterID := p.resolveNodeClusterID(trigger.GetNodeId())
-	base := control.FoghornBalancerBase(clusterID)
+	base := control.FoghornBalancerBase(triggerClusterID)
 	if base == "" {
 		p.logger.WithField("node_id", trigger.GetNodeId()).Error("Foghorn balancer base unresolved for pull source")
 		p.recordPullSourceEvent(resp, internalName, "foghorn_base_unresolved", trigger.GetNodeId())
@@ -1711,13 +1727,33 @@ func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger
 		"stream_name":   streamName,
 		"internal_name": internalName,
 		"node_id":       trigger.GetNodeId(),
-		"cluster_id":    clusterID,
+		"cluster_id":    triggerClusterID,
 	}).Info("Resolved pull+ source to balance: URI; /source will pick origin")
 
 	// No fallback param — /source resolves the upstream URI server-side from
 	// Commodore. Trusting a fallback param here would be a source-injection vector.
-	p.recordPullSourceEvent(resp, internalName, "resolved", clusterID)
+	p.recordPullSourceEvent(resp, internalName, "resolved", triggerClusterID)
 	return "balance:" + base, false, nil
+}
+
+// formatTriggerPlacementRejects renders FilterPlacementClusters rejections
+// into a single recordPullSourceEvent detail string for STREAM_SOURCE refusals.
+// Uses the executing clusterID as fallback context for empty-list rejects.
+func formatTriggerPlacementRejects(rejects []pullsource.PlacementReject, triggerClusterID string) string {
+	parts := make([]string, 0, len(rejects))
+	for _, r := range rejects {
+		switch r.Reason {
+		case pullsource.PlacementRejectEmptyForPrivate:
+			parts = append(parts, fmt.Sprintf("cluster=%s reason=empty_for_private", triggerClusterID))
+		case pullsource.PlacementRejectUnknownCluster:
+			parts = append(parts, fmt.Sprintf("cluster=%s reason=not_in_allowed_cluster_ids", r.ClusterID))
+		case pullsource.PlacementRejectMissingPrivateCapability:
+			parts = append(parts, fmt.Sprintf("cluster=%s reason=missing_private_capability", r.ClusterID))
+		default:
+			parts = append(parts, fmt.Sprintf("cluster=%s reason=%s", r.ClusterID, r.Reason))
+		}
+	}
+	return strings.Join(parts, ";")
 }
 
 func (p *Processor) recordPullSourceEvent(resp *pb.ResolvePullSourceByInternalNameResponse, internalName, kind, detail string) {

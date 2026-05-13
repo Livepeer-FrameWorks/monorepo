@@ -1799,6 +1799,16 @@ type StreamingConfig struct {
 	OfficialEdgeDomain     *string `json:"officialEdgeDomain,omitempty"`
 	OfficialPlayDomain     *string `json:"officialPlayDomain,omitempty"`
 	OfficialChandlerDomain *string `json:"officialChandlerDomain,omitempty"`
+	GlobalIngestDomain     *string `json:"globalIngestDomain,omitempty"`
+	GlobalEdgeDomain       *string `json:"globalEdgeDomain,omitempty"`
+	GlobalPlayDomain       *string `json:"globalPlayDomain,omitempty"`
+	GlobalChandlerDomain   *string `json:"globalChandlerDomain,omitempty"`
+	GlobalLivepeerDomain   *string `json:"globalLivepeerDomain,omitempty"`
+	TenantIngestDomain     *string `json:"tenantIngestDomain,omitempty"`
+	TenantEdgeDomain       *string `json:"tenantEdgeDomain,omitempty"`
+	TenantPlayDomain       *string `json:"tenantPlayDomain,omitempty"`
+	TenantChandlerDomain   *string `json:"tenantChandlerDomain,omitempty"`
+	TenantLivepeerDomain   *string `json:"tenantLivepeerDomain,omitempty"`
 	SrtPort                *int    `json:"srtPort,omitempty"`
 	RtmpPort               *int    `json:"rtmpPort,omitempty"`
 }

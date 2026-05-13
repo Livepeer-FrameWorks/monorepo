@@ -2199,14 +2199,30 @@ enum IngestMode {
 }
 
 """
-Pull-input source configuration. The source URI is stored encrypted and is
-returned only in redacted form.
+Placement-pin wrapper for CreateStream / UpdateStream. The wrapper makes
+the field's *presence* meaningful: omitting allowedClusters on UpdateStream
+preserves the existing pin, while sending the wrapper (even with an empty
+clusterIds list) replaces it.
 """
+input PullSourceAllowedClustersInput {
+  "Cluster IDs this pull source may run on. Empty list clears the pin (only valid for public sources)."
+  clusterIds: [String!]!
+}
+
 input PullSourceInput {
   "Upstream RTSP, SRT, RIST, HLS, DTSC, or TS source URI. Required when creating or replacing a pull source."
   sourceUri: String
   "Whether the media plane may pull from the source."
   enabled: Boolean = true
+  """
+  Per-source placement pin. Omit on UpdateStream to preserve the existing
+  pin; send the wrapper to replace it (empty clusterIds clears the pin).
+  On CreateStream, omit means \"no pin\" — which is rejected for
+  private/multicast sources. Each cluster ID must be a registered
+  media-capable cluster, and for private sources must additionally have
+  allow_private_pull_sources=true.
+  """
+  allowedClusters: PullSourceAllowedClustersInput
 }
 
 """
@@ -2219,6 +2235,12 @@ type PullSourceView {
   enabled: Boolean!
   "Eligibility class: public or private."
   class: String!
+  """
+  Effective per-source placement pin. Empty list means \"any media cluster\"
+  (only valid for public sources). Surfaced so operators and admin UIs can
+  inspect placement without reading the database directly.
+  """
+  allowedClusterIds: [String!]!
 }
 
 """
@@ -5800,6 +5822,24 @@ type StreamingConfig {
   officialEdgeDomain: String
   officialPlayDomain: String
   officialChandlerDomain: String
+  # Global root entrypoints (Slice 3). Default user-facing URL surface
+  # for free / platform-official tenants. Bunny smart DNS does geo
+  # routing from one record per service. Webapp/SDK should prefer
+  # these over cluster-concrete URLs when no tenant alias is active.
+  globalIngestDomain: String
+  globalEdgeDomain: String
+  globalPlayDomain: String
+  globalChandlerDomain: String
+  globalLivepeerDomain: String
+  # Tenant alias entrypoints (Slice 3). Populated only when the tenant
+  # has an active paid alias (Navigator status=cert_issued). Spans every
+  # cluster the tenant subscribes to. When populated these should be
+  # the primary URLs surfaced to end users.
+  tenantIngestDomain: String
+  tenantEdgeDomain: String
+  tenantPlayDomain: String
+  tenantChandlerDomain: String
+  tenantLivepeerDomain: String
   srtPort: Int
   rtmpPort: Int
 }

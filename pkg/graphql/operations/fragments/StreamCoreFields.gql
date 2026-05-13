@@ -11,6 +11,7 @@ fragment StreamCoreFields on Stream {
     sourceUriRedacted
     enabled
     class
+    allowedClusterIds
   }
   createdAt
   updatedAt

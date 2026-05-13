@@ -292,6 +292,14 @@ type PullStream struct {
 
 	Enabled bool `yaml:"enabled"`
 
+	// AllowedClusterIDs pins this pull source to a specific cluster set.
+	// Each entry is a manifest cluster key (== infrastructure_clusters.cluster_id).
+	// Empty + public source ⇒ any media (edge) cluster (legacy behavior).
+	// Empty + private/multicast source ⇒ rejected at render. Non-empty refs
+	// must point at edge clusters; for private/multicast they must also
+	// carry allow_private_pull_sources=true.
+	AllowedClusterIDs []string `yaml:"allowed_cluster_ids,omitempty"`
+
 	// Override = true on an Overlay item replaces the manifest-derived entry
 	// with the same PlaybackID. Ignored on Derived and Rendered.
 	Override bool `yaml:"override,omitempty"`
@@ -299,12 +307,13 @@ type PullStream struct {
 
 // PullStreamRendered is the resolved-secrets shape consumed by `commodore bootstrap`.
 type PullStreamRendered struct {
-	PlaybackID  string    `yaml:"playback_id"`
-	OwnerTenant TenantRef `yaml:"owner_tenant"`
-	Title       string    `yaml:"title"`
-	Description string    `yaml:"description,omitempty"`
-	SourceURI   string    `yaml:"source_uri"`
-	Enabled     bool      `yaml:"enabled"`
+	PlaybackID        string    `yaml:"playback_id"`
+	OwnerTenant       TenantRef `yaml:"owner_tenant"`
+	Title             string    `yaml:"title"`
+	Description       string    `yaml:"description,omitempty"`
+	SourceURI         string    `yaml:"source_uri"`
+	Enabled           bool      `yaml:"enabled"`
+	AllowedClusterIDs []string  `yaml:"allowed_cluster_ids,omitempty"`
 }
 
 // CommodoreRenderedSection is the post-render counterpart to CommodoreSection.

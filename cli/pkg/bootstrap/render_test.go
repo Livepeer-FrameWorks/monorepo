@@ -910,11 +910,11 @@ func TestRenderPullStreamRejectsUnsupportedSourceURI(t *testing.T) {
 	}
 }
 
-// TestRenderPullStreamRejectsPrivateSourceWithoutOptedInCluster locks the
-// architecture rule: a private URI requires at least one media cluster
-// with allow_private_pull_sources=true. Platform-only manifest must reject.
-func TestRenderPullStreamRejectsPrivateSourceWithoutOptedInCluster(t *testing.T) {
-	d, err := Derive(manifestWithMedia(false), DeriveOptions{})
+// TestRenderPullStreamRejectsPrivateSourceWithoutAllowedClusters locks the
+// new architecture rule: a private URI must list explicit allowed_cluster_ids;
+// "any cluster with allow_private_pull_sources=true" is no longer a fallback.
+func TestRenderPullStreamRejectsPrivateSourceWithoutAllowedClusters(t *testing.T) {
+	d, err := Derive(manifestWithMedia(true), DeriveOptions{})
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -931,17 +931,46 @@ func TestRenderPullStreamRejectsPrivateSourceWithoutOptedInCluster(t *testing.T)
 	}
 	_, err = Render(d, overlay, nil)
 	if err == nil {
-		t.Fatal("private URI on platform-only manifest must fail render")
+		t.Fatal("private URI without allowed_cluster_ids must fail render")
 	}
-	if !strings.Contains(err.Error(), "allow_private_pull_sources") {
-		t.Fatalf("error %q does not name the missing flag", err)
+	if !strings.Contains(err.Error(), "allowed_cluster_ids") {
+		t.Fatalf("error %q does not name the missing field", err)
 	}
 }
 
-// TestRenderPullStreamAcceptsPrivateSourceOnOptedInCluster confirms the
-// other side of the rule: a self-host manifest with the flag set lets the
-// same private URI through.
-func TestRenderPullStreamAcceptsPrivateSourceOnOptedInCluster(t *testing.T) {
+// TestRenderPullStreamRejectsPrivateSourceWithoutCapability covers the
+// stricter check: an explicit allowed_cluster_ids entry must point at a
+// cluster that also carries allow_private_pull_sources=true.
+func TestRenderPullStreamRejectsPrivateSourceWithoutCapability(t *testing.T) {
+	d, err := Derive(manifestWithMedia(false), DeriveOptions{})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	overlay := &Overlay{
+		Commodore: CommodoreSection{
+			PullStreams: []PullStream{{
+				PlaybackID:        "private-demo",
+				OwnerTenant:       TenantRefSystem(),
+				Title:             "Private demo",
+				SourceURI:         "tsudp://10.0.0.5:9000",
+				AllowedClusterIDs: []string{"media-edge-primary"},
+				Enabled:           true,
+			}},
+		},
+	}
+	_, err = Render(d, overlay, nil)
+	if err == nil {
+		t.Fatal("private URI pinned to a cluster without capability must fail render")
+	}
+	if !strings.Contains(err.Error(), "allow_private_pull_sources") {
+		t.Fatalf("error %q does not name the capability flag", err)
+	}
+}
+
+// TestRenderPullStreamAcceptsPrivateSourceWithAllowedCluster confirms the
+// happy path: a private URI pinned to a cluster that has the capability
+// flag passes render with a normalized allowed_cluster_ids slice.
+func TestRenderPullStreamAcceptsPrivateSourceWithAllowedCluster(t *testing.T) {
 	d, err := Derive(manifestWithMedia(true), DeriveOptions{})
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
@@ -949,11 +978,12 @@ func TestRenderPullStreamAcceptsPrivateSourceOnOptedInCluster(t *testing.T) {
 	overlay := &Overlay{
 		Commodore: CommodoreSection{
 			PullStreams: []PullStream{{
-				PlaybackID:  "private-demo",
-				OwnerTenant: TenantRefSystem(),
-				Title:       "Private demo",
-				SourceURI:   "tsudp://10.0.0.5:9000",
-				Enabled:     true,
+				PlaybackID:        "private-demo",
+				OwnerTenant:       TenantRefSystem(),
+				Title:             "Private demo",
+				SourceURI:         "tsudp://10.0.0.5:9000",
+				AllowedClusterIDs: []string{"media-edge-primary", "media-edge-primary"}, // dedup
+				Enabled:           true,
 			}},
 		},
 	}
@@ -963,5 +993,68 @@ func TestRenderPullStreamAcceptsPrivateSourceOnOptedInCluster(t *testing.T) {
 	}
 	if len(r.Commodore.PullStreams) != 1 {
 		t.Fatalf("pull streams = %d, want 1", len(r.Commodore.PullStreams))
+	}
+	got := r.Commodore.PullStreams[0].AllowedClusterIDs
+	if len(got) != 1 || got[0] != "media-edge-primary" {
+		t.Fatalf("allowed_cluster_ids = %v, want [media-edge-primary] (deduped)", got)
+	}
+}
+
+// TestRenderPullStreamRejectsUnknownAllowedCluster covers the unknown-ID
+// branch: an allowed_cluster_ids entry that does not match any registered
+// edge cluster must fail render.
+func TestRenderPullStreamRejectsUnknownAllowedCluster(t *testing.T) {
+	d, err := Derive(manifestWithMedia(true), DeriveOptions{})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	overlay := &Overlay{
+		Commodore: CommodoreSection{
+			PullStreams: []PullStream{{
+				PlaybackID:        "pinned-demo",
+				OwnerTenant:       TenantRefSystem(),
+				Title:             "Pinned demo",
+				SourceURI:         "https://example.com/stream.m3u8",
+				AllowedClusterIDs: []string{"ghost-cluster"},
+				Enabled:           true,
+			}},
+		},
+	}
+	_, err = Render(d, overlay, nil)
+	if err == nil {
+		t.Fatal("unknown allowed_cluster_ids entry must fail render")
+	}
+	if !strings.Contains(err.Error(), "ghost-cluster") {
+		t.Fatalf("error %q does not name the offending ID", err)
+	}
+}
+
+// TestRenderPullStreamPinsPublicSource covers explicit public-source pinning:
+// an HTTPS source with a non-empty allowed_cluster_ids should pass render
+// and propagate the sorted/normalized list.
+func TestRenderPullStreamPinsPublicSource(t *testing.T) {
+	d, err := Derive(manifestWithMedia(false), DeriveOptions{})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	overlay := &Overlay{
+		Commodore: CommodoreSection{
+			PullStreams: []PullStream{{
+				PlaybackID:        "public-pinned",
+				OwnerTenant:       TenantRefSystem(),
+				Title:             "Public pinned",
+				SourceURI:         "https://example.com/stream.m3u8",
+				AllowedClusterIDs: []string{"media-edge-primary"},
+				Enabled:           true,
+			}},
+		},
+	}
+	r, err := Render(d, overlay, nil)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got := r.Commodore.PullStreams[0].AllowedClusterIDs
+	if len(got) != 1 || got[0] != "media-edge-primary" {
+		t.Fatalf("allowed_cluster_ids = %v, want [media-edge-primary]", got)
 	}
 }

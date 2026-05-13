@@ -107,6 +107,7 @@ func TestFilterPullCandidatesByClassFiltersRemoteClusters(t *testing.T) {
 		"pull-demo",
 		"local-allowed",
 		pullsource.ClassPrivate,
+		[]string{"local-allowed", "remote-allowed"},
 		func(_ context.Context, clusterID string) bool {
 			return clusterID == "local-allowed" || clusterID == "remote-allowed"
 		},
@@ -120,6 +121,58 @@ func TestFilterPullCandidatesByClassFiltersRemoteClusters(t *testing.T) {
 	}
 	if strings.Join(got, ",") != "local-a,remote-allowed" {
 		t.Fatalf("allowed nodes = %q, want local-a,remote-allowed", strings.Join(got, ","))
+	}
+}
+
+// TestFilterPullCandidatesByClassRefusesPrivateWithoutAllowedList locks the
+// new placement invariant: a private pull source with an empty
+// allowed_cluster_ids list refuses every candidate at the viewer-routing
+// chokepoint, regardless of whether candidate clusters have the capability
+// flag. No implicit fallback to "any opted-in cluster".
+func TestFilterPullCandidatesByClassRefusesPrivateWithoutAllowedList(t *testing.T) {
+	nodes := []balancer.NodeWithScore{
+		{NodeID: "local-a", Score: 90},
+		{NodeID: "remote-allowed", ClusterID: "remote-allowed", Score: 80},
+	}
+	_, err := filterPullCandidatesByClass(
+		context.Background(),
+		nodes,
+		"pull-demo",
+		"local-allowed",
+		pullsource.ClassPrivate,
+		nil, // empty allowed list — must refuse
+		func(_ context.Context, _ string) bool { return true },
+	)
+	if err == nil {
+		t.Fatal("private source with empty allowed_cluster_ids must error")
+	}
+	if !strings.Contains(err.Error(), "allowed_cluster_ids") {
+		t.Fatalf("error %q does not name the placement constraint", err)
+	}
+}
+
+// TestFilterPullCandidatesByClassPinsPublicSource verifies a public source
+// with explicit allowed_cluster_ids is pinned to those clusters.
+func TestFilterPullCandidatesByClassPinsPublicSource(t *testing.T) {
+	nodes := []balancer.NodeWithScore{
+		{NodeID: "local-a", Score: 90},
+		{NodeID: "remote-denied", ClusterID: "remote-denied", Score: 95},
+		{NodeID: "remote-allowed", ClusterID: "remote-allowed", Score: 80},
+	}
+	allowed, err := filterPullCandidatesByClass(
+		context.Background(),
+		nodes,
+		"pull-public",
+		"local-allowed",
+		pullsource.ClassPublic,
+		[]string{"local-allowed"},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("filterPullCandidatesByClass: %v", err)
+	}
+	if len(allowed) != 1 || allowed[0].NodeID != "local-a" {
+		t.Fatalf("allowed = %+v, want only local-a", allowed)
 	}
 }
 

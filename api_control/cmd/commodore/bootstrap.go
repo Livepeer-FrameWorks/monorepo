@@ -16,6 +16,7 @@ import (
 	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 
 	"gopkg.in/yaml.v3"
@@ -200,21 +201,38 @@ func (r *grpcClusterResolver) MediaClusterCapabilities(ctx context.Context) ([]p
 	if r.client == nil {
 		return nil, fmt.Errorf("quartermaster client unavailable")
 	}
-	resp, err := r.client.ListClusters(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("ListClusters: %w", err)
-	}
-	out := make([]pullsource.ClusterCapability, 0, len(resp.GetClusters()))
-	for _, c := range resp.GetClusters() {
-		// "edge" type is the media-capable role in this codebase. Central
-		// clusters host control plane only.
-		if c.GetClusterType() != "edge" {
-			continue
-		}
-		out = append(out, pullsource.ClusterCapability{
-			ID:                      c.GetClusterId(),
-			AllowPrivatePullSources: c.GetAllowPrivatePullSources(),
+	var (
+		out   []pullsource.ClusterCapability
+		after *string
+	)
+	for {
+		resp, err := r.client.ListClusters(ctx, &pb.CursorPaginationRequest{
+			First: 500,
+			After: after,
 		})
+		if err != nil {
+			return nil, fmt.Errorf("ListClusters: %w", err)
+		}
+		for _, c := range resp.GetClusters() {
+			// "edge" type is the media-capable role in this codebase. Central
+			// clusters host control plane only.
+			if c.GetClusterType() != "edge" {
+				continue
+			}
+			out = append(out, pullsource.ClusterCapability{
+				ID:                      c.GetClusterId(),
+				AllowPrivatePullSources: c.GetAllowPrivatePullSources(),
+			})
+		}
+		page := resp.GetPagination()
+		if page == nil || !page.GetHasNextPage() {
+			break
+		}
+		next := page.GetEndCursor()
+		if next == "" {
+			return nil, fmt.Errorf("ListClusters: pagination cursor missing")
+		}
+		after = &next
 	}
 	return out, nil
 }

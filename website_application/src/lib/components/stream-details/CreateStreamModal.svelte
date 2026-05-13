@@ -23,6 +23,7 @@
     ingestMode: "PUSH" | "PULL";
     pullSourceUri: string;
     pullSourceEnabled: boolean;
+    pullSourceAllowedClusterIds: string;
     creating: boolean;
     onSubmit: () => void;
     onCancel: () => void;
@@ -36,10 +37,22 @@
     ingestMode = $bindable(),
     pullSourceUri = $bindable(),
     pullSourceEnabled = $bindable(),
+    pullSourceAllowedClusterIds = $bindable(),
     creating,
     onSubmit,
     onCancel,
   }: Props = $props();
+
+  // Private-URI patterns require explicit allowed cluster pinning. Mirrors
+  // pkg/pullsource Class detection: RFC1918 / multicast on tsudp / .internal /
+  // .local — backend rejects empty allowed_cluster_ids for these.
+  const PRIVATE_URI_PATTERN =
+    /^(tsudp:\/\/|rtsp:\/\/(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|\[fc|\[fd))/i;
+  const looksPrivate = $derived(PRIVATE_URI_PATTERN.test(pullSourceUri.trim()));
+  const allowedListEmpty = $derived(pullSourceAllowedClusterIds.trim() === "");
+  const requiresAllowedClusters = $derived(
+    ingestMode === "PULL" && looksPrivate && allowedListEmpty
+  );
 
   const RadioIcon = getIconComponent("Radio");
   const LinkIcon = getIconComponent("Link");
@@ -174,6 +187,34 @@
             <p class="text-xs text-muted-foreground">Disabled sources are saved but not pulled.</p>
           </div>
         </div>
+
+        <div>
+          <label
+            for="pull-source-allowed-clusters"
+            class="block text-sm font-medium text-muted-foreground mb-2"
+          >
+            Allowed clusters
+            {#if looksPrivate}<span class="text-destructive">*</span>{/if}
+          </label>
+          <Input
+            id="pull-source-allowed-clusters"
+            type="text"
+            bind:value={pullSourceAllowedClusterIds}
+            placeholder="warehouse-edge, eu-west-edge"
+            class="w-full font-mono text-xs"
+            disabled={creating}
+            required={looksPrivate}
+          />
+          <p class="text-xs text-muted-foreground mt-1">
+            {#if looksPrivate}
+              Private / multicast sources must be pinned to a specific cluster set. Comma-separated
+              cluster IDs.
+            {:else}
+              Optional. Leave empty for public sources to run on any media cluster. Comma-separated
+              cluster IDs to pin placement.
+            {/if}
+          </p>
+        </div>
       {/if}
     </form>
 
@@ -191,7 +232,10 @@
         type="submit"
         variant="ghost"
         class="rounded-none h-12 flex-1 hover:bg-muted/10 text-primary hover:text-primary/80"
-        disabled={creating || !title.trim() || (ingestMode === "PULL" && !pullSourceUri.trim())}
+        disabled={creating ||
+          !title.trim() ||
+          (ingestMode === "PULL" && !pullSourceUri.trim()) ||
+          requiresAllowedClusters}
         form="create-stream-form"
       >
         {creating ? "Creating..." : "Create Stream"}

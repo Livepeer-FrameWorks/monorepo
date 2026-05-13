@@ -298,6 +298,12 @@ message ResolvePullSourceByInternalNameResponse {
   bool enabled = 3;        // tenant-controlled; false means honour the row but don't pull
   string tenant_id = 4;    // for trigger-envelope attribution at the caller
   string stream_id = 5;    // public stream UUID
+  // allowed_cluster_ids pins this pull source to a specific cluster set.
+  // Empty + public source ⇒ any media (edge) cluster (legacy behavior).
+  // Empty + private/multicast source ⇒ refused at every chokepoint.
+  // Non-empty ⇒ caller (Foghorn viewer routing, /source, STREAM_SOURCE) must
+  // intersect candidates with this list.
+  repeated string allowed_cluster_ids = 6;
 }
 
 // ============================================================================
@@ -988,6 +994,26 @@ message CreateStreamResponse {
   optional string official_cluster_label = 14;
   string ingest_mode = 15;
   PullSourceView pull_source = 16;
+
+  // Global root entrypoints (NEW). Default user-facing surface for the
+  // free + platform-official tier. Bunny smart DNS does geo routing
+  // from a single global record per service. Populated only when the
+  // global zones are live in this environment.
+  optional string global_ingest_domain   = 17;
+  optional string global_edge_domain     = 18;
+  optional string global_play_domain     = 19;
+  optional string global_chandler_domain = 20;
+  optional string global_livepeer_domain = 21;
+
+  // Tenant alias entrypoints (NEW). Populated only when the tenant has
+  // an active paid alias (Navigator status='cert_issued'). Spans every
+  // cluster the tenant subscribes to, regardless of cluster kind.
+  // Webapp/SDK should prefer these when present.
+  optional string tenant_ingest_domain   = 22;
+  optional string tenant_edge_domain     = 23;
+  optional string tenant_play_domain     = 24;
+  optional string tenant_chandler_domain = 25;
+  optional string tenant_livepeer_domain = 26;
 }
 
 message GetStreamRequest {
@@ -1028,15 +1054,30 @@ message Stream {
   PullSourceView pull_source = 21;      // redacted pull-source config for pull streams
 }
 
+// PullSourceAllowedClustersInput wraps the placement-pin list so callers can
+// distinguish "preserve existing" (field unset on UpdateStream) from "replace,
+// including with empty" (field set with cluster_ids).
+message PullSourceAllowedClustersInput {
+  repeated string cluster_ids = 1;
+}
+
 message PullSourceInput {
   string source_uri = 1;
   optional bool enabled = 2;
+  // Per-source placement pin. nil/unset on UpdateStream ⇒ preserve existing;
+  // on CreateStream, nil/unset ⇒ no pin (rejected for private/multicast
+  // sources). Set to replace (use empty cluster_ids to clear the pin
+  // entirely). See pkg/pullsource.FilterPlacementClusters for placement rules.
+  PullSourceAllowedClustersInput allowed_clusters = 3;
 }
 
 message PullSourceView {
   string source_uri_redacted = 1;
   bool enabled = 2;
   string class = 3;
+  // Effective per-source placement pin. Surfaced so operators and admin UIs
+  // can inspect placement without having to read SQL.
+  repeated string allowed_cluster_ids = 4;
 }
 
 message ListStreamsRequest {

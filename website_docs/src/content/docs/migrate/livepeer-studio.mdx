@@ -34,15 +34,15 @@ The shapes you know in Studio, mapped to FrameWorks:
 
 ### Streams
 
-| Studio                                        | FrameWorks                                                                                                                |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `POST /stream`                                | `createStream(input)` mutation                                                                                            |
-| `GET /stream/{id}`                            | `stream(id)` query                                                                                                        |
-| `PATCH /stream/{id}`                          | `updateStream(id, input)` mutation                                                                                        |
-| `DELETE /stream/{id}`                         | `deleteStream(id)` mutation                                                                                               |
-| `DELETE /stream/{id}/terminate`               | No direct equivalent today; stop the encoder, or delete the stream if you are retiring it                                 |
-| `record: true` flag at create                 | `record: true` at create, or `startDVR(streamId)` post-create                                                             |
-| `POST /stream` with `pull: { source }` config | `createStream(input: { ingestMode: PULL, pullSource: { sourceUri } })` — see [Pull-input streams](/builders/pull-streams) |
+| Studio                                        | FrameWorks                                                                                                                                 |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /stream`                                | `createStream(input)` mutation                                                                                                             |
+| `GET /stream/{id}`                            | `stream(id)` query                                                                                                                         |
+| `PATCH /stream/{id}`                          | `updateStream(id, input)` mutation                                                                                                         |
+| `DELETE /stream/{id}`                         | `deleteStream(id)` mutation                                                                                                                |
+| `DELETE /stream/{id}/terminate`               | No direct equivalent today; stop the encoder, or delete the stream if you are retiring it                                                  |
+| `record: true` flag at create                 | `record: true` at create, or `startDVR(streamId)` post-create                                                                              |
+| `POST /stream` with `pull: { source }` config | `createStream(input: { ingestMode: PULL, pullSource: { sourceUri, allowedClusters } })` — see [Pull-input streams](/builders/pull-streams) |
 
 ### Recordings, clips, and VOD
 
@@ -262,8 +262,8 @@ Run a low-traffic test stream through both platforms in parallel for a day. Watc
 - **SRT ingest** — available for encoders and networks where SRT is the better fit.
 - **Pull-input streams** — point FrameWorks at an RTSP camera, an SRT/RIST contribution feed, an
   HLS re-stream, or MPEG-TS over UDP and we open the upstream connection for you. Self-hosted
-  edges can pull from RFC1918 / multicast sources via an explicit `allow_private_pull_sources`
-  cluster flag — Studio doesn't have an equivalent. See [Pull-input streams](/builders/pull-streams).
+  edges can pull from RFC1918 / multicast sources when the source is pinned to clusters with
+  `allow_private_pull_sources=true` — Studio doesn't have an equivalent. See [Pull-input streams](/builders/pull-streams).
   Experimental media-engine discovery exists locally today; FrameWorks packaging through Edge,
   Tray, CLI, API, and dashboard workflows is tracked on the
   [roadmap](/roadmap#device-discovery-and-contribution-inputs).
