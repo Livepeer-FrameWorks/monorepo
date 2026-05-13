@@ -598,9 +598,8 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 // PrepareDVRChapter is the DVR equivalent of PrepareArtifact, scoped to a
 // single chapter. Origin Foghorn assembles segment refs + presigned GETs
 // against its own S3 so the requesting cluster can locally defrost without
-// holding origin's S3 credentials. First-pass scope: storage_cluster_id
-// must equal origin_cluster_id; split-write DVR returns
-// unsupported_split_write_dvr.
+// holding origin's S3 credentials. DVR segment storage is origin-owned;
+// split storage ownership is rejected with unsupported_split_write_dvr.
 func (s *FederationServer) PrepareDVRChapter(ctx context.Context, req *pb.PrepareDVRChapterRequest) (*pb.PrepareDVRChapterResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err

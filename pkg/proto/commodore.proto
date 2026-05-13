@@ -99,10 +99,9 @@ service InternalService {
   rpc UpdateDVRRetention(UpdateDVRRetentionRequest) returns (UpdateDVRRetentionResponse);
 
   // MarkArtifactThumbnailsReady flips has_thumbnails to TRUE and stamps the
-  // authoritative storage_cluster_id. Called by Foghorn's
-  // processThumbnailUploaded confirmation site (NOT the mint-URL request
-  // site). Idempotent; repeated calls with the same payload are no-ops.
-  // Live streams are excluded — they derive URLs from active_ingest_cluster_id.
+  // authoritative storage_cluster_id after Foghorn confirms the thumbnail
+  // bytes landed. Live streams are excluded — they derive URLs from
+  // active_ingest_cluster_id.
   rpc MarkArtifactThumbnailsReady(MarkArtifactThumbnailsReadyRequest) returns (MarkArtifactThumbnailsReadyResponse);
 
   // UpdateArtifactStorageCluster updates storage_cluster_id only. It never

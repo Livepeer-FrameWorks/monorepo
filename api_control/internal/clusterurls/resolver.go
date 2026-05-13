@@ -133,8 +133,7 @@ func (r *Resolver) refresh(ctx context.Context) error {
 // BuildThumbnailAssets composes the shared.ThumbnailAssets URLs from the
 // resolved Chandler base for the given cluster and the artifact's asset key.
 // Returns nil when the cluster has no Chandler base in the snapshot or the
-// asset key is empty. URL shape is single-sourced with Foghorn's
-// buildThumbnailAssets in api_balancing/internal/control/playback.go.
+// asset key is empty.
 func (r *Resolver) BuildThumbnailAssets(clusterID, assetKey string) *pb.ThumbnailAssets {
 	if assetKey == "" {
 		return nil

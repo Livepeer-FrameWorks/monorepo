@@ -1,5 +1,5 @@
 ---
-- name: kafka_mirrormaker restart
+- name: Restart Kafka MirrorMaker
   ansible.builtin.systemd:
     name: frameworks-kafka-mirrormaker
     state: restarted

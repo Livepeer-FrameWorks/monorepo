@@ -11,9 +11,8 @@ import (
 )
 
 // MarkArtifactThumbnailsReady flips has_thumbnails to TRUE and stamps
-// storage_cluster_id on the matching artifact row. Called by Foghorn from
-// processThumbnailUploaded — the confirmation site that knows the bytes
-// actually landed. Idempotent at the DB level via the WHERE clause.
+// storage_cluster_id on the matching artifact row after Foghorn confirms
+// the thumbnail bytes landed. Idempotent at the DB level via the WHERE clause.
 func (s *CommodoreServer) MarkArtifactThumbnailsReady(ctx context.Context, req *pb.MarkArtifactThumbnailsReadyRequest) (*pb.MarkArtifactThumbnailsReadyResponse, error) {
 	tenantID := req.GetTenantId()
 	assetKey := req.GetAssetKey()

@@ -507,7 +507,7 @@ type ClipInfo struct {
 	// the artifact is still on the origin node's local disk.
 	StorageClusterId string `protobuf:"bytes,21,opt,name=storage_cluster_id,json=storageClusterId,proto3" json:"storage_cluster_id,omitempty"`
 	// thumbnail_assets is populated server-side from Commodore's registry
-	// projection. Null until processThumbnailUploaded confirms the upload.
+	// projection. Null until Foghorn confirms the thumbnail upload.
 	ThumbnailAssets *ThumbnailAssets `protobuf:"bytes,22,opt,name=thumbnail_assets,json=thumbnailAssets,proto3,oneof" json:"thumbnail_assets,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -1522,7 +1522,7 @@ type DVRInfo struct {
 	// and serves its thumbnails through that cluster's Chandler.
 	StorageClusterId string `protobuf:"bytes,22,opt,name=storage_cluster_id,json=storageClusterId,proto3" json:"storage_cluster_id,omitempty"`
 	// thumbnail_assets is populated server-side from Commodore's registry
-	// projection. Null until processThumbnailUploaded confirms the upload.
+	// projection. Null until Foghorn confirms the thumbnail upload.
 	ThumbnailAssets *ThumbnailAssets `protobuf:"bytes,23,opt,name=thumbnail_assets,json=thumbnailAssets,proto3,oneof" json:"thumbnail_assets,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -4044,7 +4044,7 @@ type VodAssetInfo struct {
 	// thumbnails. Tracks the per-cluster S3 backend the upload landed in.
 	StorageClusterId string `protobuf:"bytes,21,opt,name=storage_cluster_id,json=storageClusterId,proto3" json:"storage_cluster_id,omitempty"`
 	// thumbnail_assets is populated server-side from Commodore's registry
-	// projection. Null until processThumbnailUploaded confirms the upload.
+	// projection. Null until Foghorn confirms the thumbnail upload.
 	ThumbnailAssets *ThumbnailAssets `protobuf:"bytes,22,opt,name=thumbnail_assets,json=thumbnailAssets,proto3,oneof" json:"thumbnail_assets,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache

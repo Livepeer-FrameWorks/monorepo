@@ -2532,8 +2532,7 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 
 	// Project the storage cluster onto Commodore's registry row when the
 	// resolver chose a non-origin cluster, so list/get APIs can derive
-	// thumbnail URLs from the authoritative cluster. Fire-and-forget;
-	// idempotent on the Commodore side.
+	// thumbnail URLs from the authoritative cluster.
 	if storageClusterArg.Valid && storageClusterArg.String != "" && control.CommodoreClient != nil {
 		go func(artifactHash, tenantID, cluster string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

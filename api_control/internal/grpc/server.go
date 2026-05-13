@@ -6391,8 +6391,9 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 		IDColumn:        "c.clip_hash",
 	}
 
-	// Base query. COALESCE(storage_cluster_id, origin_cluster_id) is the
-	// authoritative thumbnail cluster — see [[project_thumbnail_asset_keys]].
+	// Base query. Artifact thumbnails are served from storage_cluster_id when
+	// present; origin_cluster_id is the storage owner for rows without a
+	// separate storage cluster.
 	query := fmt.Sprintf(`
 		SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.description,
 		       c.start_time, c.duration, c.clip_mode, c.requested_params,
@@ -7342,6 +7343,7 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 		VodHash:      &vodHash, // Pass the hash we generated
 		PlaybackId:   &playbackID,
 		InternalName: &artifactInternalName,
+		ClusterId:    vodRoute.clusterID,
 	}
 
 	// Call Foghorn for S3 multipart upload setup

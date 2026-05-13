@@ -56,8 +56,8 @@ type FoghornFederationClient interface {
 	// storage-cluster's S3 credentials. Origin is the only writer of chapter
 	// rows; if the caller supplies range fields with no matching chapter row,
 	// origin materializes it via the same path Commodore.RetrieveDVRChapter
-	// uses. First-pass scope: storage_cluster_id must equal origin_cluster_id;
-	// split-write DVR returns unsupported_split_write_dvr.
+	// uses. DVR segment storage is origin-owned; split storage ownership is
+	// rejected with unsupported_split_write_dvr.
 	PrepareDVRChapter(ctx context.Context, in *PrepareDVRChapterRequest, opts ...grpc.CallOption) (*PrepareDVRChapterResponse, error)
 	// CreateRemoteClip requests the origin cluster to create a clip on behalf of a remote cluster.
 	CreateRemoteClip(ctx context.Context, in *RemoteClipRequest, opts ...grpc.CallOption) (*RemoteClipResponse, error)
@@ -263,8 +263,8 @@ type FoghornFederationServer interface {
 	// storage-cluster's S3 credentials. Origin is the only writer of chapter
 	// rows; if the caller supplies range fields with no matching chapter row,
 	// origin materializes it via the same path Commodore.RetrieveDVRChapter
-	// uses. First-pass scope: storage_cluster_id must equal origin_cluster_id;
-	// split-write DVR returns unsupported_split_write_dvr.
+	// uses. DVR segment storage is origin-owned; split storage ownership is
+	// rejected with unsupported_split_write_dvr.
 	PrepareDVRChapter(context.Context, *PrepareDVRChapterRequest) (*PrepareDVRChapterResponse, error)
 	// CreateRemoteClip requests the origin cluster to create a clip on behalf of a remote cluster.
 	CreateRemoteClip(context.Context, *RemoteClipRequest) (*RemoteClipResponse, error)

@@ -122,10 +122,9 @@ type InternalServiceClient interface {
 	// recordings carry NULL retention_until until they finalize.
 	UpdateDVRRetention(ctx context.Context, in *UpdateDVRRetentionRequest, opts ...grpc.CallOption) (*UpdateDVRRetentionResponse, error)
 	// MarkArtifactThumbnailsReady flips has_thumbnails to TRUE and stamps the
-	// authoritative storage_cluster_id. Called by Foghorn's
-	// processThumbnailUploaded confirmation site (NOT the mint-URL request
-	// site). Idempotent; repeated calls with the same payload are no-ops.
-	// Live streams are excluded — they derive URLs from active_ingest_cluster_id.
+	// authoritative storage_cluster_id after Foghorn confirms the thumbnail
+	// bytes landed. Live streams are excluded — they derive URLs from
+	// active_ingest_cluster_id.
 	MarkArtifactThumbnailsReady(ctx context.Context, in *MarkArtifactThumbnailsReadyRequest, opts ...grpc.CallOption) (*MarkArtifactThumbnailsReadyResponse, error)
 	// UpdateArtifactStorageCluster updates storage_cluster_id only. It never
 	// touches has_thumbnails — a storage move on a thumbnail-less artifact must
@@ -658,10 +657,9 @@ type InternalServiceServer interface {
 	// recordings carry NULL retention_until until they finalize.
 	UpdateDVRRetention(context.Context, *UpdateDVRRetentionRequest) (*UpdateDVRRetentionResponse, error)
 	// MarkArtifactThumbnailsReady flips has_thumbnails to TRUE and stamps the
-	// authoritative storage_cluster_id. Called by Foghorn's
-	// processThumbnailUploaded confirmation site (NOT the mint-URL request
-	// site). Idempotent; repeated calls with the same payload are no-ops.
-	// Live streams are excluded — they derive URLs from active_ingest_cluster_id.
+	// authoritative storage_cluster_id after Foghorn confirms the thumbnail
+	// bytes landed. Live streams are excluded — they derive URLs from
+	// active_ingest_cluster_id.
 	MarkArtifactThumbnailsReady(context.Context, *MarkArtifactThumbnailsReadyRequest) (*MarkArtifactThumbnailsReadyResponse, error)
 	// UpdateArtifactStorageCluster updates storage_cluster_id only. It never
 	// touches has_thumbnails — a storage move on a thumbnail-less artifact must

@@ -4759,6 +4759,9 @@ func StartDVRChapterDefrost(ctx context.Context, chapterID, nodeID string, timeo
 	if chapter != nil && chapter.ArtifactHash != "" && s3Client != nil {
 		return startDVRChapterDefrostLocal(ctx, chapter, chapterID, nodeID, timeout, logger)
 	}
+	if chapter != nil && chapter.ArtifactHash != "" && s3Client == nil {
+		return "", fmt.Errorf("s3 client not configured")
+	}
 
 	// Local row missing — route to the chapter's origin cluster.
 	if CommodoreClient == nil {
@@ -4778,10 +4781,35 @@ func StartDVRChapterDefrost(ctx context.Context, chapterID, nodeID string, timeo
 		return "", fmt.Errorf("DVR chapter has no origin cluster")
 	}
 	if originCluster == localClusterID {
-		// Origin says it's us but we have no local row — chapter row was
-		// evicted. Fall back to local materialization-on-demand via
-		// segment ledger; bail loudly if that path isn't viable.
-		return "", fmt.Errorf("DVR chapter %s missing locally but origin cluster matches; expected materialization", chapterID)
+		if s3Client == nil {
+			return "", fmt.Errorf("s3 client not configured")
+		}
+		if dvrChapterMaterializer == nil {
+			return "", fmt.Errorf("DVR chapter materializer not configured")
+		}
+		materResp, materErr := dvrChapterMaterializer.RetrieveDVRChapter(ctx, &pb.RetrieveDVRChapterRequest{
+			DvrArtifactId:   resolved.GetDvrHash(),
+			TenantId:        resolved.GetTenantId(),
+			Mode:            resolved.GetMode(),
+			IntervalSeconds: resolved.GetIntervalSeconds(),
+			StartMs:         resolved.GetStartMs(),
+			EndMs:           resolved.GetEndMs(),
+		})
+		if materErr != nil {
+			return "", fmt.Errorf("materialize local DVR chapter: %w", materErr)
+		}
+		materializedChapterID := chapterID
+		if materResp.GetChapterId() != "" {
+			materializedChapterID = materResp.GetChapterId()
+		}
+		chapter, err = GetChapter(ctx, materializedChapterID)
+		if err != nil {
+			return "", fmt.Errorf("read materialized DVR chapter: %w", err)
+		}
+		if chapter == nil || chapter.ArtifactHash == "" {
+			return "", fmt.Errorf("materialized DVR chapter has no artifact")
+		}
+		return startDVRChapterDefrostLocal(ctx, chapter, materializedChapterID, nodeID, timeout, logger)
 	}
 	if dvrChapterFedClient == nil || dvrChapterPeerResolver == nil {
 		return "", fmt.Errorf("federation client not configured for DVR chapter defrost")
@@ -4929,6 +4957,11 @@ type DVRChapterFederationClient interface {
 	PrepareDVRChapter(ctx context.Context, clusterID, addr string, req *pb.PrepareDVRChapterRequest) (*pb.PrepareDVRChapterResponse, error)
 }
 
+// DVRChapterMaterializer materializes a chapter row on the local origin.
+type DVRChapterMaterializer interface {
+	RetrieveDVRChapter(ctx context.Context, req *pb.RetrieveDVRChapterRequest) (*pb.RetrieveDVRChapterResponse, error)
+}
+
 // DVRChapterPeerResolver resolves a cluster_id to its peer dial address.
 // Mirrors federation.PeerAddrResolver to keep the control package free of
 // federation imports.
@@ -4938,6 +4971,7 @@ type DVRChapterPeerResolver interface {
 
 var (
 	dvrChapterFedClient    DVRChapterFederationClient
+	dvrChapterMaterializer DVRChapterMaterializer
 	dvrChapterPeerResolver DVRChapterPeerResolver
 )
 
@@ -4945,6 +4979,11 @@ var (
 // StartDVRChapterDefrost when the chapter's origin is a peer cluster.
 func SetDVRChapterFederationClient(c DVRChapterFederationClient) {
 	dvrChapterFedClient = c
+}
+
+// SetDVRChapterMaterializer wires local origin chapter materialization.
+func SetDVRChapterMaterializer(m DVRChapterMaterializer) {
+	dvrChapterMaterializer = m
 }
 
 // SetDVRChapterPeerResolver wires the peer-address resolver used by
@@ -6328,11 +6367,8 @@ func isArtifactThumbnail(thumbnailKey string) bool {
 	return true
 }
 
-// markArtifactHasThumbnails sets has_thumbnails=true on the artifact after
-// sprite upload and notifies Commodore so its registry projection
-// (commodore.{clips,dvr_recordings,vod_assets}) flips has_thumbnails too.
-// Idempotent at both sides: the Commodore call uses an IS DISTINCT FROM
-// guard so repeated calls with the same payload are no-ops.
+// markArtifactHasThumbnails flips has_thumbnails on the first confirmed
+// artifact thumbnail upload and projects that state to Commodore once.
 func markArtifactHasThumbnails(artifactHash string, logger logging.Logger) {
 	conn := GetDB()
 	if conn == nil {
@@ -6342,9 +6378,6 @@ func markArtifactHasThumbnails(artifactHash string, logger logging.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Read tenant + type + authoritative storage cluster in the same
-	// transaction as the flip so the Commodore notify carries the values
-	// Foghorn actually committed.
 	var (
 		tenantID         sql.NullString
 		artifactType     string
@@ -6355,9 +6388,13 @@ func markArtifactHasThumbnails(artifactHash string, logger logging.Logger) {
 		UPDATE foghorn.artifacts
 		   SET has_thumbnails = true, updated_at = NOW()
 		 WHERE artifact_hash = $1
+		   AND has_thumbnails IS DISTINCT FROM true
 		RETURNING tenant_id::text, artifact_type, storage_cluster_id, origin_cluster_id
 	`, artifactHash).Scan(&tenantID, &artifactType, &storageClusterID, &originClusterID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return
+		}
 		logger.WithFields(logging.Fields{
 			"artifact_hash": artifactHash,
 			"error":         err,
@@ -6374,10 +6411,7 @@ func markArtifactHasThumbnails(artifactHash string, logger logging.Logger) {
 		cluster = originClusterID.String
 	}
 	if cluster == "" {
-		// No cluster context to project. Commodore would reject the call;
-		// skip silently. The artifact row already records has_thumbnails on
-		// Foghorn side, so playback still works; only the list projection
-		// stays empty until a storage move fills cluster.
+		logger.WithField("artifact_hash", artifactHash).Warn("Artifact thumbnail readiness has no cluster projection")
 		return
 	}
 	assetType, ok := artifactAssetTypeFromString(artifactType)

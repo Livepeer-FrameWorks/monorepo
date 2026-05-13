@@ -81,7 +81,7 @@ message ClipInfo {
   // the artifact is still on the origin node's local disk.
   string storage_cluster_id = 21;
   // thumbnail_assets is populated server-side from Commodore's registry
-  // projection. Null until processThumbnailUploaded confirms the upload.
+  // projection. Null until Foghorn confirms the thumbnail upload.
   optional ThumbnailAssets thumbnail_assets = 22;
   reserved 12, 19;
   reserved "access_count", "last_accessed";
@@ -237,7 +237,7 @@ message DVRInfo {
   // and serves its thumbnails through that cluster's Chandler.
   string storage_cluster_id = 22;
   // thumbnail_assets is populated server-side from Commodore's registry
-  // projection. Null until processThumbnailUploaded confirms the upload.
+  // projection. Null until Foghorn confirms the thumbnail upload.
   optional ThumbnailAssets thumbnail_assets = 23;
 }
 
@@ -585,7 +585,7 @@ message VodAssetInfo {
   // thumbnails. Tracks the per-cluster S3 backend the upload landed in.
   string storage_cluster_id = 21;
   // thumbnail_assets is populated server-side from Commodore's registry
-  // projection. Null until processThumbnailUploaded confirms the upload.
+  // projection. Null until Foghorn confirms the thumbnail upload.
   optional ThumbnailAssets thumbnail_assets = 22;
 }
 

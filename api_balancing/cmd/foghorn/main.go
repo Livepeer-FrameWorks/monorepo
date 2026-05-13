@@ -797,6 +797,7 @@ func main() {
 	})
 	control.SetDecklogClient(decklogClient)
 	control.SetDVRStopRegistry(foghornServer)
+	control.SetDVRChapterMaterializer(foghornServer)
 
 	// Wire DVR service to trigger processor for auto-start recordings on stream start
 	triggerProcessor.SetDVRService(foghornServer)

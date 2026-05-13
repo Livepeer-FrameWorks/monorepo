@@ -2365,7 +2365,7 @@ type DVRRequest {
   s3Url: String
   """
   Server-resolved Chandler URLs for the DVR's poster and sprite thumbnails.
-  Null until processThumbnailUploaded confirms the upload.
+  Null until Foghorn confirms the thumbnail upload.
   """
   thumbnailAssets: ThumbnailAssets
 }
@@ -2645,7 +2645,7 @@ type VodAsset implements Node {
   playbackPolicy: PlaybackPolicy
   """
   Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails.
-  Null until processThumbnailUploaded confirms the upload.
+  Null until Foghorn confirms the thumbnail upload.
   """
   thumbnailAssets: ThumbnailAssets
 }
@@ -5505,7 +5505,7 @@ type Clip implements Node {
   playbackPolicy: PlaybackPolicy
   """
   Server-resolved Chandler URLs for the clip's poster and sprite thumbnails.
-  Null until processThumbnailUploaded confirms the upload.
+  Null until Foghorn confirms the thumbnail upload.
   """
   thumbnailAssets: ThumbnailAssets
 }
@@ -6364,9 +6364,7 @@ Chandler-served thumbnail asset URLs (poster, sprite, VTT cues). URL shape
 is `{chandlerBase}/assets/{assetKey}/poster.jpg`,
 `/assets/{assetKey}/sprite.jpg`, `/assets/{assetKey}/sprite.vtt`. assetKey
 is stream_id for live streams; clip_hash / dvr_hash / vod_hash
-(= artifact_hash) for artifacts. URL shape is single-sourced with
-Foghorn's `buildThumbnailAssets` in
-api_balancing/internal/control/playback.go.
+(= artifact_hash) for artifacts.
 """
 type ThumbnailAssets {
   posterUrl: String!
