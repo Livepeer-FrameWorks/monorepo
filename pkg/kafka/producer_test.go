@@ -5,10 +5,7 @@ import (
 )
 
 // TestAnalyticsEventHeadersEmitsEnvelopeWhenSet proves the producer-side
-// header map includes every envelope field when it carries a value. This is
-// the MirrorMaker-correctness path: regional → aggregator copies headers,
-// and aggregator consumers backfill body fields from those headers when the
-// JSON body left them empty.
+// header map includes every envelope field when it carries a value.
 func TestAnalyticsEventHeadersEmitsEnvelopeWhenSet(t *testing.T) {
 	event := &AnalyticsEvent{
 		EventID:               "evt-42",
@@ -42,10 +39,8 @@ func TestAnalyticsEventHeadersEmitsEnvelopeWhenSet(t *testing.T) {
 	}
 }
 
-// TestAnalyticsEventHeadersOmitsEmptyConditionals proves the producer does
-// not pollute Kafka headers with empty values. Backfill is driven off
-// "header present", so an empty-string header would override the body
-// field's emptiness intent in unhelpful ways downstream.
+// TestAnalyticsEventHeadersOmitsEmptyConditionals proves empty optional fields
+// do not produce Kafka headers.
 func TestAnalyticsEventHeadersOmitsEmptyConditionals(t *testing.T) {
 	event := &AnalyticsEvent{
 		EventID:   "evt-1",

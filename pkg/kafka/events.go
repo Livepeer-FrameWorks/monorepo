@@ -100,11 +100,7 @@ func (h *AnalyticsEventHandler) HandleMessage(ctx context.Context, msg Message) 
 		return fmt.Errorf("unmarshal analytics event: %w", err)
 	}
 
-	// Backfill envelope fields from Kafka headers when the JSON body left them
-	// empty. MirrorMaker copies headers between regional and aggregator
-	// clusters; a producer that stamps headers but not body still needs the
-	// envelope to materialise downstream. Body always wins — only fill on
-	// empty so producer intent is preserved.
+	// Body fields take precedence; headers fill missing envelope values.
 	for k, v := range msg.Headers {
 		switch k {
 		case "source":

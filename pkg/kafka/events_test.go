@@ -49,10 +49,8 @@ func TestAnalyticsEventHandlerMapsHeaders(t *testing.T) {
 	}
 }
 
-// TestAnalyticsEventHandlerBackfillsEnvelopeFromHeaders covers the
-// MirrorMaker case: a regional producer stamped envelope headers but the
-// body left those fields empty (e.g. older code paths). The aggregator
-// consumer must recover identity from the headers.
+// TestAnalyticsEventHandlerBackfillsEnvelopeFromHeaders covers Kafka records
+// that carry envelope identity in headers while the JSON body omits it.
 func TestAnalyticsEventHandlerBackfillsEnvelopeFromHeaders(t *testing.T) {
 	logger := logrus.New()
 	var got AnalyticsEvent
@@ -104,9 +102,8 @@ func TestAnalyticsEventHandlerBackfillsEnvelopeFromHeaders(t *testing.T) {
 	}
 }
 
-// TestAnalyticsEventHandlerBodyWinsOverHeaders proves producer intent
-// (envelope set on body) is preserved even when MirrorMaker re-stamps
-// headers from its own perspective during mirroring.
+// TestAnalyticsEventHandlerBodyWinsOverHeaders preserves explicit envelope
+// fields when headers also contain values.
 func TestAnalyticsEventHandlerBodyWinsOverHeaders(t *testing.T) {
 	logger := logrus.New()
 	var got AnalyticsEvent

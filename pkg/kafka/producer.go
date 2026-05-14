@@ -98,9 +98,7 @@ func (p *KafkaProducer) GetClient() *kgo.Client {
 }
 
 // analyticsEventHeaders builds the Kafka header set for an AnalyticsEvent.
-// `source` and `event_type` are always emitted (treated as required envelope);
-// the rest are conditional so empty values don't pollute headers that
-// downstream backfill keys off "header present".
+// Empty optional envelope fields are omitted.
 func analyticsEventHeaders(event *AnalyticsEvent) map[string]string {
 	headers := map[string]string{
 		"source":     event.Source,
