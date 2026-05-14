@@ -61,6 +61,32 @@
     - not ansible_check_mode
     - privateer_internal_ca_bundle_pem | length > 0
 
+- name: Privateer | discover existing service certificate files
+  ansible.builtin.find:
+    paths: "{{ ((privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname) + '/services' }}"
+    file_type: file
+    recurse: true
+    patterns:
+      - tls.crt
+      - tls.key
+  register: privateer_service_pki_files
+  when:
+    - not ansible_check_mode
+    - privateer_internal_ca_bundle_pem | length > 0
+
+- name: Privateer | normalize existing service certificate files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: "{{ privateer_user }}"
+    group: frameworks
+    mode: "{{ (item.path | basename == 'tls.key') | ternary('0640', '0644') }}"
+  loop: "{{ privateer_service_pki_files.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when:
+    - not ansible_check_mode
+    - privateer_internal_ca_bundle_pem | length > 0
+
 - name: Privateer | require internal CA trust bundle for TLS
   ansible.builtin.stat:
     path: "{{ privateer_env.GRPC_TLS_CA_PATH }}"

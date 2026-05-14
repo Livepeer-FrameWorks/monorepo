@@ -336,10 +336,17 @@ func TestPrivateerRoleLetsRuntimeRefreshPKIAndBootstrapUnhealthy(t *testing.T) {
 		"group: frameworks",
 		`mode: "2750"`,
 		"normalize existing service certificate directories",
+		"normalize existing service certificate files",
+		`mode: "{{ (item.path | basename == 'tls.key') | ternary('0640', '0644') }}"`,
 	} {
 		if !strings.Contains(pki, want) {
 			t.Fatalf("privateer PKI tasks should keep /etc/frameworks traversable and runtime PKI writable; missing %q:\n%s", want, pki)
 		}
+	}
+
+	unit := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/privateer/templates/privateer.service.j2")
+	if !strings.Contains(unit, "SupplementaryGroups=frameworks") {
+		t.Fatalf("privateer systemd unit must start with the service-read group for shared PKI:\n%s", unit)
 	}
 	for _, want := range []string{
 		`owner: "{{ privateer_user }}"`,

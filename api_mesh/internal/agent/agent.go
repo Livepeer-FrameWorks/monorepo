@@ -8,8 +8,10 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +34,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+var servicePKIReaderGroup = "frameworks"
 
 // Metrics holds Prometheus metrics for the agent
 type Metrics struct {
@@ -1301,13 +1305,35 @@ func (a *Agent) writeServiceCertificate(serviceType, certPEM, keyPEM string) err
 	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return err
 	}
+	readerGID, hasReaderGroup, groupErr := lookupGroupID(servicePKIReaderGroup)
+	if groupErr != nil {
+		return groupErr
+	}
+	if hasReaderGroup {
+		if err := chgrpIfNeeded(dir, readerGID); err != nil {
+			return err
+		}
+	}
 	if err := os.Chmod(dir, dirMode); err != nil {
 		return err
 	}
 	if err := writeAtomicFile(filepath.Join(dir, "tls.crt"), []byte(certPEM), 0644); err != nil {
 		return err
 	}
-	return writeAtomicFile(filepath.Join(dir, "tls.key"), []byte(keyPEM), 0640)
+	if hasReaderGroup {
+		if err := chgrpIfNeeded(filepath.Join(dir, "tls.crt"), readerGID); err != nil {
+			return err
+		}
+	}
+	if err := writeAtomicFile(filepath.Join(dir, "tls.key"), []byte(keyPEM), 0640); err != nil {
+		return err
+	}
+	if hasReaderGroup {
+		if err := chgrpIfNeeded(filepath.Join(dir, "tls.key"), readerGID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *Agent) writePKIFile(relativePath, content string, mode os.FileMode) error {
@@ -1327,6 +1353,39 @@ func writeAtomicFile(absPath string, content []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmpPath, absPath)
+}
+
+func lookupGroupID(name string) (int, bool, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return 0, false, nil
+	}
+	group, err := user.LookupGroup(name)
+	if err != nil {
+		if _, ok := err.(user.UnknownGroupError); ok {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("lookup group %s: %w", name, err)
+	}
+	gid, err := strconv.Atoi(group.Gid)
+	if err != nil {
+		return 0, false, fmt.Errorf("parse gid for group %s: %w", name, err)
+	}
+	return gid, true, nil
+}
+
+func chgrpIfNeeded(path string, gid int) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok && int(stat.Gid) == gid {
+		return nil
+	}
+	if err := os.Chown(path, -1, gid); err != nil {
+		return fmt.Errorf("chgrp %s: %w", path, err)
+	}
+	return nil
 }
 
 func (a *Agent) rollbackWireGuardConfig() {

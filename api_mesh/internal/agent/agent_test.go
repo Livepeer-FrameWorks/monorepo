@@ -5,10 +5,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"os"
+	"os/user"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -527,6 +530,52 @@ func TestSyncInternalCertificatesBypassesCooldownWhenFilesMissing(t *testing.T) 
 	}
 	if len(navigator.issueRequests) != 1 {
 		t.Fatalf("expected cooldown to skip second issuance, got %d requests", len(navigator.issueRequests))
+	}
+}
+
+func TestWriteServiceCertificateUsesConfiguredReaderGroup(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("gid assertion is Linux-specific")
+	}
+	current, err := user.Current()
+	if err != nil {
+		t.Fatalf("current user: %v", err)
+	}
+	group, err := user.LookupGroupId(current.Gid)
+	if err != nil {
+		t.Fatalf("lookup current group: %v", err)
+	}
+	wantGID, err := strconv.Atoi(group.Gid)
+	if err != nil {
+		t.Fatalf("parse current gid: %v", err)
+	}
+
+	previousGroup := servicePKIReaderGroup
+	servicePKIReaderGroup = group.Name
+	t.Cleanup(func() { servicePKIReaderGroup = previousGroup })
+
+	dir := t.TempDir()
+	agent := &Agent{pkiBasePath: dir}
+	if err := agent.writeServiceCertificate("decklog", "cert", "key"); err != nil {
+		t.Fatalf("writeServiceCertificate: %v", err)
+	}
+
+	for _, path := range []string{
+		filepath.Join(dir, "services", "decklog"),
+		filepath.Join(dir, "services", "decklog", "tls.crt"),
+		filepath.Join(dir, "services", "decklog", "tls.key"),
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			t.Fatalf("stat %s has unexpected sys type %T", path, info.Sys())
+		}
+		if int(stat.Gid) != wantGID {
+			t.Fatalf("%s gid = %d, want %d", path, stat.Gid, wantGID)
+		}
 	}
 }
 
