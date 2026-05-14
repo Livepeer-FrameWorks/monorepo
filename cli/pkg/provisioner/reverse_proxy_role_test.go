@@ -333,7 +333,9 @@ func TestPrivateerRoleLetsRuntimeRefreshPKIAndBootstrapUnhealthy(t *testing.T) {
 		"ensure runtime service certificate directory",
 		"+ '/services'",
 		`owner: "{{ privateer_user }}"`,
-		`group: "{{ privateer_group }}"`,
+		"group: frameworks",
+		`mode: "2750"`,
+		"normalize existing service certificate directories",
 	} {
 		if !strings.Contains(pki, want) {
 			t.Fatalf("privateer PKI tasks should keep /etc/frameworks traversable and runtime PKI writable; missing %q:\n%s", want, pki)
@@ -343,8 +345,8 @@ func TestPrivateerRoleLetsRuntimeRefreshPKIAndBootstrapUnhealthy(t *testing.T) {
 		`owner: "{{ privateer_user }}"`,
 		`group: "{{ privateer_group }}"`,
 	} {
-		if strings.Count(pki, want) < 3 {
-			t.Fatalf("privateer PKI tasks should make PKI directory, CA bundle, and service cert root privateer-owned; missing %q:\n%s", want, pki)
+		if strings.Count(pki, want) < 2 {
+			t.Fatalf("privateer PKI tasks should make the PKI root and CA bundle privateer-owned; missing %q:\n%s", want, pki)
 		}
 	}
 
@@ -361,6 +363,19 @@ func TestPrivateerRoleLetsRuntimeRefreshPKIAndBootstrapUnhealthy(t *testing.T) {
 
 func TestSharedFrameworksPKIRolesPreservePrivateerAccess(t *testing.T) {
 	goServicePKI := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/go_service/tasks/pki.yml")
+	certDirStart := strings.Index(goServicePKI, "- name: Ensure internal gRPC certificate directory")
+	certDirEnd := strings.Index(goServicePKI[certDirStart:], "- name: Render internal gRPC certificate")
+	certDirTask := goServicePKI[certDirStart : certDirStart+certDirEnd]
+	for _, want := range []string{
+		"owner: privateer",
+		`group: "{{ go_service_group }}"`,
+		`mode: "2750"`,
+	} {
+		if !strings.Contains(certDirTask, want) {
+			t.Fatalf("go_service cert directory must be writable by privateer and readable by service group; missing %q:\n%s", want, certDirTask)
+		}
+	}
+
 	caDirTask := goServicePKI[:strings.Index(goServicePKI, "- name: Render internal CA trust bundle")]
 	for _, forbidden := range []string{
 		"owner: root",

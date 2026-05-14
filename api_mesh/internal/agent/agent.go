@@ -1297,13 +1297,16 @@ func (a *Agent) touchIngressReloadTrigger() error {
 
 func (a *Agent) writeServiceCertificate(serviceType, certPEM, keyPEM string) error {
 	dir := filepath.Join(a.pkiBasePath, "services", serviceType)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 02750); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 02750); err != nil {
 		return err
 	}
 	if err := writeAtomicFile(filepath.Join(dir, "tls.crt"), []byte(certPEM), 0644); err != nil {
 		return err
 	}
-	return writeAtomicFile(filepath.Join(dir, "tls.key"), []byte(keyPEM), 0600)
+	return writeAtomicFile(filepath.Join(dir, "tls.key"), []byte(keyPEM), 0640)
 }
 
 func (a *Agent) writePKIFile(relativePath, content string, mode os.FileMode) error {

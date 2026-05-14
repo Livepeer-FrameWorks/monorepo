@@ -10,10 +10,17 @@
     name: "{{ privateer_group }}"
     system: true
 
+- name: Ensure frameworks group for shared service PKI
+  ansible.builtin.group:
+    name: frameworks
+    system: true
+
 - name: Ensure privateer user
   ansible.builtin.user:
     name: "{{ privateer_user }}"
     group: "{{ privateer_group }}"
+    groups: frameworks
+    append: true
     system: true
     shell: /usr/sbin/nologin
     create_home: false

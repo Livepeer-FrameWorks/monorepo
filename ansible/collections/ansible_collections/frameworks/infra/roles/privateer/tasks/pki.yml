@@ -33,8 +33,30 @@
     path: "{{ ((privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname) + '/services' }}"
     state: directory
     owner: "{{ privateer_user }}"
-    group: "{{ privateer_group }}"
-    mode: "0755"
+    group: frameworks
+    mode: "2750"
+  when:
+    - not ansible_check_mode
+    - privateer_internal_ca_bundle_pem | length > 0
+
+- name: Privateer | discover existing service certificate directories
+  ansible.builtin.find:
+    paths: "{{ ((privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname) + '/services' }}"
+    file_type: directory
+    depth: 1
+  register: privateer_service_pki_dirs
+  when:
+    - not ansible_check_mode
+    - privateer_internal_ca_bundle_pem | length > 0
+
+- name: Privateer | normalize existing service certificate directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ privateer_user }}"
+    group: frameworks
+    mode: "2750"
+  loop: "{{ privateer_service_pki_dirs.files | default([]) }}"
   when:
     - not ansible_check_mode
     - privateer_internal_ca_bundle_pem | length > 0

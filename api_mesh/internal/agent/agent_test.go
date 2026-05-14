@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -506,6 +507,19 @@ func TestSyncInternalCertificatesBypassesCooldownWhenFilesMissing(t *testing.T) 
 	}
 	if _, err := os.Stat(filepath.Join(dir, "services", "commodore", "tls.crt")); err != nil {
 		t.Fatalf("expected leaf cert to be written: %v", err)
+	}
+	serviceDir := filepath.Join(dir, "services", "commodore")
+	if info, err := os.Stat(serviceDir); err != nil {
+		t.Fatalf("stat service cert dir: %v", err)
+	} else if info.Mode().Perm() != 0o750 {
+		t.Fatalf("service cert dir mode = %v, want 0750", info.Mode().Perm())
+	} else if runtime.GOOS == "linux" && info.Mode()&os.ModeSetgid == 0 {
+		t.Fatalf("service cert dir mode = %v, want setgid", info.Mode())
+	}
+	if info, err := os.Stat(filepath.Join(serviceDir, "tls.key")); err != nil {
+		t.Fatalf("stat service key: %v", err)
+	} else if info.Mode().Perm() != 0o640 {
+		t.Fatalf("service key mode = %v, want 0640", info.Mode().Perm())
 	}
 
 	if err := agent.syncInternalCertificates(); err != nil {
