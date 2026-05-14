@@ -1,5 +1,5 @@
 ---
-- name: Validate Kafka MirrorMaker service and REST listener
+- name: Validate Kafka MirrorMaker dedicated worker
   block:
     - name: Refresh service facts
       ansible.builtin.service_facts:
@@ -12,13 +12,50 @@
           frameworks-kafka-mirrormaker.service is not running
           (state={{ ansible_facts.services.get('frameworks-kafka-mirrormaker.service', {}).get('state', 'missing') }})
 
+    - name: Read Kafka MirrorMaker main process id
+      ansible.builtin.command: "systemctl show frameworks-kafka-mirrormaker.service -p MainPID --value"
+      register: kafka_mm_main_pid
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: not ansible_check_mode
+
+    - name: Assert Kafka MirrorMaker has a live main process
+      ansible.builtin.assert:
+        that:
+          - kafka_mm_main_pid.stdout | int > 0
+        fail_msg: "frameworks-kafka-mirrormaker.service has no live MainPID"
+      when: not ansible_check_mode
+
+    - name: Read Kafka MirrorMaker process command
+      ansible.builtin.command: "ps -p {{ kafka_mm_main_pid.stdout | trim }} -o args="
+      register: kafka_mm_process_args
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: not ansible_check_mode
+
+    - name: Assert Kafka MirrorMaker dedicated process is running expected config
+      ansible.builtin.assert:
+        that:
+          - kafka_mm_process_args.rc == 0
+          - "'org.apache.kafka.connect.mirror.MirrorMaker' in kafka_mm_process_args.stdout"
+          - kafka_mm_properties_path in kafka_mm_process_args.stdout
+          - kafka_mm_local_cluster_alias | length == 0 or ('--clusters ' ~ kafka_mm_local_cluster_alias) in kafka_mm_process_args.stdout
+        fail_msg: >-
+          frameworks-kafka-mirrormaker.service is running an unexpected command:
+          {{ kafka_mm_process_args.stdout | default('(no process args)') }}
+      when: not ansible_check_mode
+
     - name: Wait for Kafka MirrorMaker REST port
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ kafka_mm_rest_port }}"
         state: started
         timeout: 60
-      when: not ansible_check_mode
+      when:
+        - not ansible_check_mode
+        - kafka_mm_validate_rest | bool
   rescue:
     - name: Capture Kafka MirrorMaker systemctl status after failed validation
       ansible.builtin.command: "systemctl status frameworks-kafka-mirrormaker.service --no-pager -l"

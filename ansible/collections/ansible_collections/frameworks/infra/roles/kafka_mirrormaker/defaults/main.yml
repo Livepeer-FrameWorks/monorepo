@@ -12,6 +12,7 @@ kafka_mm_tarball_path: /tmp/kafka-mirrormaker.tar.gz
 
 kafka_mm_heap_opts: "-Xmx1G -Xms1G"
 kafka_mm_rest_port: 8083
+kafka_mm_validate_rest: false
 kafka_mm_task_count: 2
 kafka_mm_local_cluster_alias: ""
 
