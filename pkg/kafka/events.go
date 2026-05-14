@@ -100,7 +100,11 @@ func (h *AnalyticsEventHandler) HandleMessage(ctx context.Context, msg Message) 
 		return fmt.Errorf("unmarshal analytics event: %w", err)
 	}
 
-	// Map headers to event fields if they exist and aren't already set
+	// Backfill envelope fields from Kafka headers when the JSON body left them
+	// empty. MirrorMaker copies headers between regional and aggregator
+	// clusters; a producer that stamps headers but not body still needs the
+	// envelope to materialise downstream. Body always wins — only fill on
+	// empty so producer intent is preserved.
 	for k, v := range msg.Headers {
 		switch k {
 		case "source":
@@ -110,6 +114,26 @@ func (h *AnalyticsEventHandler) HandleMessage(ctx context.Context, msg Message) 
 		case "tenant_id":
 			if event.TenantID == "" {
 				event.TenantID = v
+			}
+		case "event_id":
+			if event.EventID == "" {
+				event.EventID = v
+			}
+		case "source_region":
+			if event.SourceRegion == "" {
+				event.SourceRegion = v
+			}
+		case "source_cluster_id":
+			if event.SourceClusterID == "" {
+				event.SourceClusterID = v
+			}
+		case "stream_origin_region":
+			if event.StreamOriginRegion == "" {
+				event.StreamOriginRegion = v
+			}
+		case "stream_origin_cluster_id":
+			if event.StreamOriginClusterID == "" {
+				event.StreamOriginClusterID = v
 			}
 		}
 	}

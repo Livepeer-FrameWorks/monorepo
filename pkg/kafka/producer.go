@@ -97,29 +97,46 @@ func (p *KafkaProducer) GetClient() *kgo.Client {
 	return p.client
 }
 
+// analyticsEventHeaders builds the Kafka header set for an AnalyticsEvent.
+// `source` and `event_type` are always emitted (treated as required envelope);
+// the rest are conditional so empty values don't pollute headers that
+// downstream backfill keys off "header present".
+func analyticsEventHeaders(event *AnalyticsEvent) map[string]string {
+	headers := map[string]string{
+		"source":     event.Source,
+		"event_type": event.EventType,
+	}
+	conditional := [...]struct {
+		key string
+		val string
+	}{
+		{"event_id", event.EventID},
+		{"tenant_id", event.TenantID},
+		{"source_region", event.SourceRegion},
+		{"source_cluster_id", event.SourceClusterID},
+		{"stream_origin_region", event.StreamOriginRegion},
+		{"stream_origin_cluster_id", event.StreamOriginClusterID},
+	}
+	for _, c := range conditional {
+		if c.val != "" {
+			headers[c.key] = c.val
+		}
+	}
+	return headers
+}
+
 // PublishTypedEvent publishes a single typed AnalyticsEvent
 func (p *KafkaProducer) PublishTypedEvent(event *AnalyticsEvent) error {
 	if event == nil {
 		return fmt.Errorf("event cannot be nil")
 	}
 
-	// Marshal event to JSON
 	value, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("failed to marshal event: %w", err)
 	}
 
-	// Create headers
-	headers := map[string]string{
-		"source":     event.Source,
-		"event_type": event.EventType,
-	}
-	if event.TenantID != "" {
-		headers["tenant_id"] = event.TenantID
-	}
-
-	// Publish to Kafka
-	return p.ProduceMessage(p.defaultTopic, []byte(event.EventID), value, headers)
+	return p.ProduceMessage(p.defaultTopic, []byte(event.EventID), value, analyticsEventHeaders(event))
 }
 
 // PublishTypedBatch publishes a batch of typed AnalyticsEvents
@@ -128,38 +145,28 @@ func (p *KafkaProducer) PublishTypedBatch(events []AnalyticsEvent) error {
 		return nil // Nothing to publish
 	}
 
-	// Convert each event to a Kafka record
-	var records []*kgo.Record
-	for _, event := range events {
-		// Marshal the event
+	records := make([]*kgo.Record, 0, len(events))
+	for i := range events {
+		event := &events[i]
 		value, err := json.Marshal(event)
 		if err != nil {
 			return fmt.Errorf("failed to marshal event %s: %w", event.EventID, err)
 		}
 
-		// Create record with headers
-		record := &kgo.Record{
-			Topic: p.defaultTopic,
-			Key:   []byte(event.EventID),
-			Value: value,
-			Headers: []kgo.RecordHeader{
-				{Key: "source", Value: []byte(event.Source)},
-				{Key: "event_type", Value: []byte(event.EventType)},
-			},
+		headers := analyticsEventHeaders(event)
+		recordHeaders := make([]kgo.RecordHeader, 0, len(headers))
+		for k, v := range headers {
+			recordHeaders = append(recordHeaders, kgo.RecordHeader{Key: k, Value: []byte(v)})
 		}
 
-		// Add tenant_id header if present
-		if event.TenantID != "" {
-			record.Headers = append(record.Headers, kgo.RecordHeader{
-				Key:   "tenant_id",
-				Value: []byte(event.TenantID),
-			})
-		}
-
-		records = append(records, record)
+		records = append(records, &kgo.Record{
+			Topic:   p.defaultTopic,
+			Key:     []byte(event.EventID),
+			Value:   value,
+			Headers: recordHeaders,
+		})
 	}
 
-	// Produce all records with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
