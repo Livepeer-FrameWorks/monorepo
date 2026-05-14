@@ -687,6 +687,95 @@ func TestDeriveAutoTLSBundlesScopedPerRoot(t *testing.T) {
 	}
 }
 
+func TestDeriveDedupesRootTLSBundlesAcrossPhysicalClusters(t *testing.T) {
+	m := minimalManifest()
+	m.Hosts = map[string]inventory.Host{
+		"core-eu-1": {
+			ExternalIP:  "203.0.113.10",
+			WireguardIP: "10.99.0.1",
+			Cluster:     "core-central-primary",
+		},
+		"regional-eu-1": {
+			ExternalIP:  "203.0.113.20",
+			WireguardIP: "10.99.1.1",
+			Cluster:     "regional-eu-primary",
+		},
+		"regional-us-1": {
+			ExternalIP:  "203.0.113.30",
+			WireguardIP: "10.99.2.1",
+			Cluster:     "regional-us-primary",
+		},
+	}
+	m.Clusters = map[string]inventory.ClusterConfig{
+		"core-central-primary": {
+			Name:             "Core Central Primary",
+			Type:             "central",
+			Default:          true,
+			PlatformOfficial: true,
+			OwnerTenant:      "frameworks",
+		},
+		"regional-eu-primary": {
+			Name:             "Regional EU Primary",
+			Type:             "central",
+			Roles:            []string{"services", "interface", "mesh"},
+			PlatformOfficial: true,
+			OwnerTenant:      "frameworks",
+		},
+		"regional-us-primary": {
+			Name:             "Regional US Primary",
+			Type:             "central",
+			Roles:            []string{"services", "interface", "mesh"},
+			PlatformOfficial: true,
+			OwnerTenant:      "frameworks",
+		},
+		"media-eu-1": {
+			Name:        "Media EU 1",
+			Type:        "edge",
+			Roles:       []string{"media"},
+			OwnerTenant: "frameworks",
+		},
+		"media-us-1": {
+			Name:        "Media US 1",
+			Type:        "edge",
+			Roles:       []string{"media"},
+			OwnerTenant: "frameworks",
+		},
+	}
+	m.Services = map[string]inventory.ServiceConfig{
+		"chartroom": {Enabled: true, Hosts: []string{"regional-eu-1", "regional-us-1"}, Port: 18030},
+	}
+	m.Interfaces = map[string]inventory.ServiceConfig{
+		"foredeck": {Enabled: true, Hosts: []string{"regional-eu-1", "regional-us-1"}, Port: 18080},
+	}
+
+	d, err := Derive(m, DeriveOptions{SharedEnv: map[string]string{"ACME_EMAIL": "ops@example.com"}})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	r, err := Render(d, nil, nil)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	counts := map[string]int{}
+	bundles := map[string]TLSBundle{}
+	for _, b := range d.Quartermaster.Ingress.TLSBundles {
+		counts[b.ID]++
+		bundles[b.ID] = b
+	}
+	for _, id := range []string{"wildcard-frameworks-network", "apex-frameworks-network"} {
+		if counts[id] != 1 {
+			t.Fatalf("%s count = %d, want 1; bundles=%+v", id, counts[id], d.Quartermaster.Ingress.TLSBundles)
+		}
+		if got := bundles[id].ClusterID; got != "core-central-primary" {
+			t.Fatalf("%s cluster_id = %q, want core-central-primary", id, got)
+		}
+	}
+}
+
 func TestDeriveSupportsImplicitSingleClusterManifest(t *testing.T) {
 	m := minimalManifest()
 	m.Clusters = nil

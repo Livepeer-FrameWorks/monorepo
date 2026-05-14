@@ -192,8 +192,7 @@ func Derive(m *inventory.Manifest, opts DeriveOptions) (*Derived, error) {
 // Auto entries that collide with explicit manifest entries on the stable id key
 // defer to the explicit entry (operator wins over derivation).
 func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOptions) {
-	type bundleKey struct{ clusterID, bundleID string }
-	autoBundles := map[bundleKey]TLSBundle{}
+	autoBundles := map[string]TLSBundle{}
 	autoSites := map[string]IngressSite{}
 
 	for _, svcMap := range []map[string]inventory.ServiceConfig{m.Services, m.Interfaces, m.Observability} {
@@ -240,21 +239,18 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 						continue
 					}
 
-					key := bundleKey{clusterID: ingressClusterID, bundleID: bundleID}
-					if _, exists := autoBundles[key]; !exists {
-						bundleDomains := domains
-						if !strings.HasPrefix(bundleID, "apex-") {
-							bundleRoot := clusterderive.PublicServiceRootDomain(serviceType, m, ingressClusterID)
-							bundleDomains = clusterderive.WildcardBundleDomains(bundleRoot)
-						}
-						autoBundles[key] = TLSBundle{
-							ID:        bundleID,
-							ClusterID: ingressClusterID,
-							Domains:   bundleDomains,
-							Issuer:    "navigator",
-							Email:     resolveTLSBundleEmail(opts),
-						}
+					bundleDomains := domains
+					if !strings.HasPrefix(bundleID, "apex-") {
+						bundleRoot := clusterderive.PublicServiceRootDomain(serviceType, m, ingressClusterID)
+						bundleDomains = clusterderive.WildcardBundleDomains(bundleRoot)
 					}
+					upsertAutoTLSBundle(autoBundles, TLSBundle{
+						ID:        bundleID,
+						ClusterID: tlsBundleOwnerClusterID(m, serviceType, ingressClusterID),
+						Domains:   bundleDomains,
+						Issuer:    "navigator",
+						Email:     resolveTLSBundleEmail(opts),
+					})
 
 					host, hasHost := m.GetHost(hostKey)
 					if !hasHost {
@@ -381,6 +377,109 @@ func serviceIngressClusterIDs(serviceName string, m *inventory.Manifest, svc inv
 		return nil
 	}
 	return []string{physicalClusterID}
+}
+
+func upsertAutoTLSBundle(bundles map[string]TLSBundle, next TLSBundle) {
+	if existing, ok := bundles[next.ID]; ok {
+		existing.ClusterID = stableTLSBundleClusterID(existing.ClusterID, next.ClusterID)
+		existing.Domains = mergeStringSet(existing.Domains, next.Domains)
+		if existing.Issuer == "" {
+			existing.Issuer = next.Issuer
+		}
+		if existing.Email == "" {
+			existing.Email = next.Email
+		}
+		bundles[next.ID] = existing
+		return
+	}
+	next.Domains = mergeStringSet(nil, next.Domains)
+	bundles[next.ID] = next
+}
+
+func tlsBundleOwnerClusterID(m *inventory.Manifest, serviceType, ingressClusterID string) string {
+	if m == nil {
+		return ingressClusterID
+	}
+	root := clusterderive.PublicServiceRootDomain(serviceType, m, ingressClusterID)
+	if root != "" && root == strings.TrimSpace(m.RootDomain) {
+		if owner := platformTLSBundleClusterID(m); owner != "" {
+			return owner
+		}
+	}
+	return ingressClusterID
+}
+
+func platformTLSBundleClusterID(m *inventory.Manifest) string {
+	if m == nil || len(m.Clusters) == 0 {
+		if m != nil {
+			return m.ResolveCluster("")
+		}
+		return ""
+	}
+
+	priority := func(c inventory.ClusterConfig) int {
+		switch {
+		case c.Default && c.Type == "central" && c.PlatformOfficial:
+			return 0
+		case c.Default && c.Type == "central":
+			return 1
+		case c.Type == "central" && c.PlatformOfficial:
+			return 2
+		case c.Type == "central":
+			return 3
+		case c.Default && c.PlatformOfficial:
+			return 4
+		case c.Default:
+			return 5
+		case c.PlatformOfficial:
+			return 6
+		default:
+			return 7
+		}
+	}
+
+	bestID := ""
+	bestPriority := 99
+	for clusterID, cluster := range m.Clusters {
+		p := priority(cluster)
+		if bestID == "" || p < bestPriority || (p == bestPriority && clusterID < bestID) {
+			bestID = clusterID
+			bestPriority = p
+		}
+	}
+	return bestID
+}
+
+func stableTLSBundleClusterID(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	case b < a:
+		return b
+	default:
+		return a
+	}
+}
+
+func mergeStringSet(existing, incoming []string) []string {
+	seen := make(map[string]struct{}, len(existing)+len(incoming))
+	out := make([]string, 0, len(existing)+len(incoming))
+	for _, values := range [][]string{existing, incoming} {
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 // serviceHostKeys returns every host the service is deployed to. Single-host
