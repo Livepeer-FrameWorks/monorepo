@@ -1593,6 +1593,24 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 					t.Fatalf("expected %s to be populated", key)
 				}
 			}
+			if missing := missingRequiredGeneratedEnv(manifest, tc.serviceID, env); len(missing) > 0 {
+				t.Fatalf("generated runtime env missing: %v", missing)
+			}
+			for _, req := range generatedEnvRequirements[tc.serviceID] {
+				if req.serviceID != "" && !manifestServiceEnabledForDeploy(manifest, req.serviceID) {
+					continue
+				}
+				value := strings.TrimSpace(env[req.key])
+				if value == "" {
+					t.Fatalf("expected generated runtime env %s to be populated", req.key)
+				}
+				if strings.Contains(req.key, "GRPC_ADDR") && !strings.Contains(value, ".internal:") {
+					t.Fatalf("%s = %q, want rendered mesh address instead of binary fallback", req.key, value)
+				}
+				if strings.Contains(strings.ToUpper(req.key), "URL") && !strings.Contains(value, ".internal:") {
+					t.Fatalf("%s = %q, want rendered mesh address instead of binary fallback", req.key, value)
+				}
+			}
 		})
 	}
 }
@@ -2694,6 +2712,7 @@ func TestBuildServiceEnvVarsBridgeRegionalHostIncludesControlPlaneGRPCDeps(t *te
 
 func TestBuildTaskConfigBridgeRejectsMissingGeneratedDependencies(t *testing.T) {
 	manifest := threeRegionKafkaManifest()
+	manifest.Profile = "production"
 	manifest.Services["bridge"] = inventory.ServiceConfig{Enabled: true, Host: "regional-eu-2"}
 
 	task := &orchestrator.Task{Type: "bridge", ServiceID: "bridge", Host: "regional-eu-2", Phase: orchestrator.PhaseApplications}

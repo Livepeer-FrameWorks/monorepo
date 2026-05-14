@@ -2686,7 +2686,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			return config, fmt.Errorf("service %s: %w", task.Name, err)
 		}
 		config.EnvVars = envVars
-		if missing := missingRequiredGeneratedEnv(task.Type, config.EnvVars); len(missing) > 0 {
+		if missing := missingRequiredGeneratedEnv(manifest, task.Type, config.EnvVars); len(missing) > 0 {
 			return config, fmt.Errorf("service %s: missing generated env var(s): %s; check that required dependency services are enabled in the manifest", task.Name, strings.Join(missing, ", "))
 		}
 	}
@@ -5078,28 +5078,109 @@ func normalizeServiceEnvVars(serviceID string, env map[string]string) {
 	}
 }
 
-func missingRequiredGeneratedEnv(serviceID string, env map[string]string) []string {
-	required := map[string][]string{
-		"bridge": {
-			"COMMODORE_GRPC_ADDR",
-			"PERISCOPE_GRPC_ADDR",
-			"PURSER_GRPC_ADDR",
-			"QUARTERMASTER_GRPC_ADDR",
-			"SIGNALMAN_GRPC_ADDR",
-			"DECKLOG_GRPC_ADDR",
-		},
-	}
-	keys := required[serviceID]
-	if len(keys) == 0 {
+type generatedEnvRequirement struct {
+	key       string
+	serviceID string
+}
+
+var generatedEnvRequirements = map[string][]generatedEnvRequirement{
+	"bridge": {
+		{key: "COMMODORE_GRPC_ADDR"},
+		{key: "PERISCOPE_GRPC_ADDR"},
+		{key: "PURSER_GRPC_ADDR"},
+		{key: "QUARTERMASTER_GRPC_ADDR"},
+		{key: "SIGNALMAN_GRPC_ADDR"},
+		{key: "DECKLOG_GRPC_ADDR"},
+	},
+	"chandler": {
+		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
+	},
+	"commodore": {
+		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
+		{key: "PURSER_GRPC_ADDR", serviceID: "purser"},
+		{key: "DECKLOG_GRPC_ADDR", serviceID: "decklog"},
+	},
+	"deckhand": {
+		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
+		{key: "PURSER_GRPC_ADDR", serviceID: "purser"},
+		{key: "DECKLOG_GRPC_ADDR", serviceID: "decklog"},
+	},
+	"decklog": {
+		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
+	},
+	"foghorn": {
+		{key: "CHANDLER_INTERNAL_URL", serviceID: "chandler"},
+		{key: "COMMODORE_GRPC_ADDR", serviceID: "commodore"},
+		{key: "DECKLOG_GRPC_ADDR", serviceID: "decklog"},
+		{key: "PURSER_GRPC_ADDR", serviceID: "purser"},
+		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
+	},
+	"livepeer-gateway": {
+		{key: "FRAMEWORKS_DECKLOG_GRPC_ADDR", serviceID: "decklog"},
+		{key: "auth_webhook_url", serviceID: "foghorn"},
+	},
+	"navigator": {
+		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
+	},
+	"periscope-ingest": {
+		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
+	},
+	"periscope-query": {
+		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
+	},
+	"privateer": {
+		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
+	},
+	"purser": {
+		{key: "COMMODORE_GRPC_ADDR", serviceID: "commodore"},
+		{key: "DECKLOG_GRPC_ADDR", serviceID: "decklog"},
+		{key: "PERISCOPE_GRPC_ADDR", serviceID: "periscope-query"},
+		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
+	},
+	"quartermaster": {
+		{key: "DECKLOG_GRPC_ADDR", serviceID: "decklog"},
+		{key: "PURSER_GRPC_ADDR", serviceID: "purser"},
+		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
+	},
+	"signalman": {
+		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
+	},
+	"skipper": {
+		{key: "COMMODORE_GRPC_ADDR", serviceID: "commodore"},
+		{key: "DECKLOG_GRPC_ADDR", serviceID: "decklog"},
+		{key: "PERISCOPE_GRPC_ADDR", serviceID: "periscope-query"},
+		{key: "PURSER_GRPC_ADDR", serviceID: "purser"},
+		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
+	},
+}
+
+func missingRequiredGeneratedEnv(manifest *inventory.Manifest, serviceID string, env map[string]string) []string {
+	if isDevProfile(manifest) {
 		return nil
 	}
-	missing := make([]string, 0, len(keys))
-	for _, key := range keys {
-		if strings.TrimSpace(env[key]) == "" {
-			missing = append(missing, key)
+	requirements := generatedEnvRequirements[serviceID]
+	if len(requirements) == 0 {
+		return nil
+	}
+	missing := make([]string, 0, len(requirements))
+	for _, req := range requirements {
+		if req.serviceID != "" && !manifestServiceEnabledForDeploy(manifest, req.serviceID) {
+			continue
+		}
+		if strings.TrimSpace(env[req.key]) == "" {
+			missing = append(missing, req.key)
 		}
 	}
 	return missing
+}
+
+func manifestServiceEnabledForDeploy(manifest *inventory.Manifest, deploy string) bool {
+	for _, svc := range servicesByDeploy(manifest, deploy) {
+		if svc.Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 func applyLivepeerGatewayRuntimeDefaults(env map[string]string) {
