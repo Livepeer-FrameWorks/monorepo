@@ -2171,7 +2171,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 
 	if manifest != nil {
 		// Service overrides
-		if svc, ok := manifest.Services[baseName]; ok {
+		if _, svc, ok := serviceConfigForTask(manifest.Services, task); ok {
 			if svc.Mode != "" {
 				config.Mode = svc.Mode
 			}
@@ -2195,7 +2195,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			}
 		}
 		// Interface overrides
-		if iface, ok := manifest.Interfaces[baseName]; ok {
+		if _, iface, ok := serviceConfigForTask(manifest.Interfaces, task); ok {
 			if iface.Mode != "" {
 				config.Mode = iface.Mode
 			}
@@ -2219,7 +2219,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			}
 		}
 		// Observability overrides
-		if obs, ok := manifest.Observability[baseName]; ok {
+		if _, obs, ok := serviceConfigForTask(manifest.Observability, task); ok {
 			config.Metadata["component"] = baseName
 			if obs.Mode != "" {
 				config.Mode = obs.Mode
@@ -2489,7 +2489,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				if label, ok := task.Metadata["instance_label"].(string); ok && label != "" {
 					lookupName = label
 				}
-				if inst := resolveRedisInstanceByID(lookupName, manifest); inst != nil {
+				if inst := resolveRedisInstanceForTask(lookupName, task.ClusterID, task.Host, manifest); inst != nil {
 					engine := manifest.Infrastructure.Redis.Engine
 					if inst.Engine != "" {
 						engine = inst.Engine
@@ -2516,7 +2516,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 						config.Metadata[k] = v
 					}
 					if _, ok := config.Metadata["bind"]; !ok {
-						if host, hostOK := manifest.GetHost(inst.Host); hostOK && strings.TrimSpace(host.WireguardIP) != "" {
+						if host, hostOK := manifest.GetHost(task.Host); hostOK && strings.TrimSpace(host.WireguardIP) != "" {
 							config.Metadata["bind"] = fmt.Sprintf("127.0.0.1 %s", strings.TrimSpace(host.WireguardIP))
 						}
 					}
@@ -3467,16 +3467,27 @@ func resolveZookeeperNodeByID(instanceID string, manifest *inventory.Manifest) *
 	}
 }
 
-func resolveRedisInstanceByID(instanceID string, manifest *inventory.Manifest) *inventory.RedisInstance {
+func resolveRedisInstanceForTask(instanceID, clusterID, hostName string, manifest *inventory.Manifest) *inventory.RedisInstance {
 	if manifest.Infrastructure.Redis == nil || instanceID == "" {
 		return nil
 	}
+	var first *inventory.RedisInstance
 	for i := range manifest.Infrastructure.Redis.Instances {
-		if manifest.Infrastructure.Redis.Instances[i].Name == instanceID {
-			return &manifest.Infrastructure.Redis.Instances[i]
+		inst := &manifest.Infrastructure.Redis.Instances[i]
+		if inst.Name != instanceID {
+			continue
+		}
+		if first == nil {
+			first = inst
+		}
+		if clusterID != "" && inst.Cluster == clusterID {
+			return inst
+		}
+		if clusterID == "" && hostName != "" && inst.Host == hostName {
+			return inst
 		}
 	}
-	return nil
+	return first
 }
 
 func resolvePostgresInstanceByID(instanceID string, manifest *inventory.Manifest) *inventory.PostgresInstance {
@@ -4461,7 +4472,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	// Backend dependencies use mesh-reachable DNS names (resolved by Privateer after mesh is up).
 	// Public/external access is handled separately by service registration and edge provisioning.
 	for _, grpc := range servicedefs.GRPCServices() {
-		svc, ok := manifest.Services[grpc.ServiceID]
+		_, svc, ok := serviceConfigForDeploy(manifest.Services, grpc.ServiceID, task.ClusterID, task.Host)
 		if !ok || !svc.Enabled {
 			continue
 		}
@@ -4724,17 +4735,17 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 
 	// 4. Inline config map from manifest service definition
-	if svc, ok := manifest.Services[baseName]; ok {
+	if _, svc, ok := serviceConfigForTask(manifest.Services, task); ok {
 		for k, v := range svc.Config {
 			env[k] = v
 		}
 	}
-	if iface, ok := manifest.Interfaces[baseName]; ok {
+	if _, iface, ok := serviceConfigForTask(manifest.Interfaces, task); ok {
 		for k, v := range iface.Config {
 			env[k] = v
 		}
 	}
-	if obs, ok := manifest.Observability[baseName]; ok {
+	if _, obs, ok := serviceConfigForTask(manifest.Observability, task); ok {
 		for k, v := range obs.Config {
 			env[k] = v
 		}
@@ -5293,53 +5304,92 @@ func servicesByDeploy(manifest *inventory.Manifest, slug string) []inventory.Ser
 	return out
 }
 
+func serviceConfigForTask(configs map[string]inventory.ServiceConfig, task *orchestrator.Task) (string, inventory.ServiceConfig, bool) {
+	if task == nil {
+		return "", inventory.ServiceConfig{}, false
+	}
+	if svc, ok := configs[task.ServiceID]; ok {
+		return task.ServiceID, svc, true
+	}
+	return serviceConfigForDeploy(configs, task.Type, task.ClusterID, task.Host)
+}
+
+func serviceConfigForDeploy(configs map[string]inventory.ServiceConfig, deploy, clusterID, hostName string) (string, inventory.ServiceConfig, bool) {
+	bestName := ""
+	bestScore := -1
+	var best inventory.ServiceConfig
+	for name, svc := range configs {
+		if !serviceDeployMatches(name, svc, deploy) {
+			continue
+		}
+		score, ok := servicePlacementScore(svc, clusterID, hostName)
+		if !ok {
+			continue
+		}
+		if score > bestScore || (score == bestScore && (bestName == "" || name < bestName)) {
+			bestName = name
+			best = svc
+			bestScore = score
+		}
+	}
+	if bestScore < 0 {
+		return "", inventory.ServiceConfig{}, false
+	}
+	return bestName, best, true
+}
+
+func serviceDeployMatches(name string, svc inventory.ServiceConfig, deploy string) bool {
+	return svc.Deploy == deploy || (svc.Deploy == "" && name == deploy)
+}
+
+func servicePlacementScore(svc inventory.ServiceConfig, clusterID, hostName string) (int, bool) {
+	score := 0
+	if clusterID != "" {
+		if svc.Cluster == clusterID {
+			score += 20
+		} else if slices.Contains(svc.Clusters, clusterID) {
+			score += 19
+		} else if svc.Cluster != "" || len(svc.Clusters) > 0 {
+			return 0, false
+		}
+	}
+	hosts := serviceHosts(svc)
+	if hostName != "" && len(hosts) > 0 {
+		if slices.Contains(hosts, hostName) {
+			score += 10
+		} else {
+			return 0, false
+		}
+	}
+	return score, true
+}
+
 // foghornForCluster returns the Foghorn service entry assigned to the given
 // media cluster, or false when none matches. With M:N service split each
 // regional Foghorn (foghorn-eu / foghorn-us) deploys the same binary against
 // a different cluster, so the lookup keys on Cluster/Clusters.
 func foghornForCluster(manifest *inventory.Manifest, clusterID string) (inventory.ServiceConfig, bool) {
-	for _, svc := range servicesByDeploy(manifest, "foghorn") {
-		if !svc.Enabled {
-			continue
-		}
-		if svc.Cluster == clusterID {
-			return svc, true
-		}
-		for _, c := range svc.Clusters {
-			if c == clusterID {
-				return svc, true
-			}
-		}
+	if manifest == nil {
+		return inventory.ServiceConfig{}, false
 	}
-	return inventory.ServiceConfig{}, false
+	_, svc, ok := serviceConfigForDeploy(manifest.Services, "foghorn", clusterID, "")
+	if !ok || !svc.Enabled {
+		return inventory.ServiceConfig{}, false
+	}
+	return svc, true
 }
 
 // chandlerForCluster returns the Chandler service entry assigned to the
 // given media cluster, or false when none matches.
 func chandlerForCluster(manifest *inventory.Manifest, clusterID string) (inventory.ServiceConfig, bool) {
-	var fallback inventory.ServiceConfig
-	hasFallback := false
-	for _, svc := range servicesByDeploy(manifest, "chandler") {
-		if !svc.Enabled {
-			continue
-		}
-		if svc.Cluster == "" && len(svc.Clusters) == 0 && !hasFallback {
-			fallback = svc
-			hasFallback = true
-		}
-		if svc.Cluster == clusterID {
-			return svc, true
-		}
-		for _, c := range svc.Clusters {
-			if c == clusterID {
-				return svc, true
-			}
-		}
+	if manifest == nil {
+		return inventory.ServiceConfig{}, false
 	}
-	if hasFallback {
-		return fallback, true
+	_, svc, ok := serviceConfigForDeploy(manifest.Services, "chandler", clusterID, "")
+	if !ok || !svc.Enabled {
+		return inventory.ServiceConfig{}, false
 	}
-	return inventory.ServiceConfig{}, false
+	return svc, true
 }
 
 func anyClusterRunsLivepeerGateway(manifest *inventory.Manifest) bool {

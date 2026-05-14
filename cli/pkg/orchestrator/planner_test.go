@@ -76,6 +76,48 @@ func TestEffectivePrivateerHosts_AllCoreWhenNoEdge(t *testing.T) {
 	}
 }
 
+func TestPlan_RedisDuplicateNamesAreClusterScoped(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "10.0.0.1"},
+			"regional-eu-2": {ExternalIP: "10.0.0.2"},
+			"regional-us-1": {ExternalIP: "10.0.1.1"},
+			"regional-us-2": {ExternalIP: "10.0.1.2"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Redis: &inventory.RedisConfig{
+				Enabled: true,
+				Instances: []inventory.RedisInstance{
+					{Name: "foghorn", Cluster: "media-eu-1", Mode: "sentinel", Host: "regional-eu-1", ReplicaHosts: []string{"regional-eu-2"}},
+					{Name: "foghorn", Cluster: "media-us-1", Mode: "sentinel", Host: "regional-us-1", ReplicaHosts: []string{"regional-us-2"}},
+				},
+			},
+		},
+	}
+
+	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseInfrastructure})
+	if err != nil {
+		t.Fatalf("Plan returned error: %v", err)
+	}
+
+	names := map[string]bool{}
+	for _, batch := range plan.Batches {
+		for _, task := range batch {
+			names[task.Name] = true
+		}
+	}
+	for _, name := range []string{
+		"redis-foghorn-media-eu-1",
+		"redis-foghorn-media-us-1",
+		"redis-foghorn-media-eu-1-replica-regional-eu-2",
+		"redis-foghorn-media-us-1-replica-regional-us-2",
+	} {
+		if !names[name] {
+			t.Fatalf("missing Redis task %s; got %#v", name, names)
+		}
+	}
+}
+
 func TestPlan_PrivateerDepsExcludeEdge(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{

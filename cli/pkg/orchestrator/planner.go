@@ -150,6 +150,27 @@ func kafkaBrokerTaskName(regionID string, brokerID int) string {
 	return "kafka-broker-" + regionID + "-" + strconv.Itoa(brokerID)
 }
 
+func redisPrimaryTaskName(instance inventory.RedisInstance) string {
+	if instance.Cluster == "" {
+		return "redis-" + instance.Name
+	}
+	return "redis-" + instance.Name + "-" + instance.Cluster
+}
+
+func redisReplicaTaskName(instance inventory.RedisInstance, host string) string {
+	if instance.Cluster == "" {
+		return "redis-" + instance.Name + "-replica-" + host
+	}
+	return "redis-" + instance.Name + "-" + instance.Cluster + "-replica-" + host
+}
+
+func redisSentinelTaskName(instance inventory.RedisInstance, host string) string {
+	if instance.Cluster == "" {
+		return "redis-" + instance.Name + "-sentinel-" + host
+	}
+	return "redis-" + instance.Name + "-" + instance.Cluster + "-sentinel-" + host
+}
+
 // effectiveServiceCluster picks the cluster a service task should run
 // against. Service-scope (svc.Cluster / svc.Clusters[0]) wins over
 // host-scope (the cluster the box belongs to) because cluster-scoped
@@ -308,6 +329,7 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 	if p.manifest.Infrastructure.Redis != nil && p.manifest.Infrastructure.Redis.Enabled {
 		for _, instance := range p.manifest.Infrastructure.Redis.Instances {
 			task := NewTask("redis", "redis", instance.Name, instance.Host, PhaseInfrastructure)
+			task.Name = redisPrimaryTaskName(instance)
 			task.DependsOn = withMesh(task.DependsOn)
 			task.ClusterID = instance.Cluster
 			task.Metadata = map[string]any{"redis_role": "primary"}
@@ -317,6 +339,7 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 			}
 			for _, replicaHost := range instance.ReplicaHosts {
 				replica := NewTask("redis", "redis", instance.Name+"-replica-"+replicaHost, replicaHost, PhaseInfrastructure)
+				replica.Name = redisReplicaTaskName(instance, replicaHost)
 				replica.DependsOn = withMesh([]string{task.Name})
 				replica.ClusterID = instance.Cluster
 				replica.Metadata = map[string]any{
@@ -329,6 +352,7 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 			}
 			for _, sn := range instance.Sentinels {
 				sentinel := NewTask("redis", "redis", instance.Name+"-sentinel-"+sn.Host, sn.Host, PhaseInfrastructure)
+				sentinel.Name = redisSentinelTaskName(instance, sn.Host)
 				sentinel.DependsOn = withMesh([]string{task.Name})
 				sentinel.ClusterID = instance.Cluster
 				sentinel.Metadata = map[string]any{
@@ -462,7 +486,7 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 
 	if p.manifest.Infrastructure.Redis != nil && p.manifest.Infrastructure.Redis.Enabled {
 		for _, instance := range p.manifest.Infrastructure.Redis.Instances {
-			infraDeps = appendIfInGraph(infraDeps, NewTask("redis", "redis", instance.Name, "", PhaseInfrastructure).Name)
+			infraDeps = appendIfInGraph(infraDeps, redisPrimaryTaskName(instance))
 		}
 	}
 

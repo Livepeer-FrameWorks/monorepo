@@ -111,12 +111,28 @@
     group: "{{ item.group | default(redis_runtime_group) }}"
     mode: "{{ item.mode }}"
   loop:
+    - path: /etc/frameworks
+      owner: root
+      group: root
+      mode: "0755"
     - path: /etc/frameworks/redis
+      owner: root
+      group: root
+      mode: "0755"
+    - path: /var/lib/frameworks
+      owner: root
+      group: root
+      mode: "0755"
+    - path: /var/lib/frameworks/redis
       owner: root
       group: root
       mode: "0755"
     - path: "{{ redis_data_dir }}"
       mode: "0750"
+    - path: /var/log/frameworks
+      owner: root
+      group: root
+      mode: "0755"
     - path: "{{ redis_log_dir }}"
       mode: "0750"
   when:
@@ -146,6 +162,71 @@
   when:
     - not ansible_check_mode
     - redis_named_instance | bool
+
+- name: Verify named Redis bind addresses exist
+  ansible.builtin.shell: |
+    set -euo pipefail
+    configured_addresses="$(ip -o addr show | awk '{print $4}' | cut -d/ -f1)"
+    for addr in {{ redis_bind_interface }}; do
+      case "$addr" in
+        0.0.0.0|::|127.0.0.1|::1|localhost)
+          continue
+          ;;
+      esac
+      if ! printf '%s\n' "$configured_addresses" | grep -Fxq "$addr"; then
+        echo "$addr"
+        exit 1
+      fi
+    done
+  args:
+    executable: /bin/bash
+  register: redis_bind_address_check
+  changed_when: false
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+
+- name: Fail when named Redis bind address is absent
+  ansible.builtin.fail:
+    msg: >-
+      Redis instance {{ redis_instance }} ({{ redis_role }}) is configured to bind
+      {{ redis_bind_address_check.stdout }}, but that address is not present on this host.
+      Configured bind addresses: {{ redis_bind_interface }}.
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+    - redis_bind_address_check.rc != 0
+
+- name: Verify Redis runtime can access named paths
+  ansible.builtin.shell: |
+    set -euo pipefail
+    test -r "{{ redis_config_path }}"
+    test -d "{{ redis_data_dir }}"
+    test -w "{{ redis_data_dir }}"
+    test -d "{{ redis_log_dir }}"
+    test -w "{{ redis_log_dir }}"
+  args:
+    executable: /bin/bash
+  become: true
+  become_user: "{{ redis_runtime_user }}"
+  register: redis_runtime_access_check
+  changed_when: false
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+
+- name: Fail when Redis runtime cannot access named paths
+  ansible.builtin.fail:
+    msg: >-
+      Redis runtime user {{ redis_runtime_user }} cannot access the named instance paths.
+      config={{ redis_config_path }}, data={{ redis_data_dir }}, log={{ redis_log_dir }}.
+      Check output: {{ redis_runtime_access_check.stderr | default(redis_runtime_access_check.stdout) | default('permission check failed') }}
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+    - redis_runtime_access_check.rc != 0
 
 - name: Check named Redis port owner
   ansible.builtin.shell: |
@@ -186,11 +267,37 @@
     - redis_named_instance | bool
     - redis_named_unit.changed
 
-- name: Ensure named Redis is enabled and running
-  ansible.builtin.systemd:
-    name: "{{ redis_service_name }}"
-    enabled: true
-    state: "{{ 'restarted' if redis_named_config.changed or redis_named_unit.changed else 'started' }}"
+- name: Start named Redis service
+  block:
+    - name: Ensure named Redis is enabled and running
+      ansible.builtin.systemd:
+        name: "{{ redis_service_name }}"
+        enabled: true
+        state: "{{ 'restarted' if redis_named_config.changed or redis_named_unit.changed else 'started' }}"
+  rescue:
+    - name: Capture named Redis systemctl status after failed start
+      ansible.builtin.command: "systemctl status {{ redis_service_name }} --no-pager -l"
+      register: redis_systemctl_status
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Capture named Redis journal after failed start
+      ansible.builtin.command: "journalctl -u {{ redis_service_name }} --no-pager -n 120"
+      register: redis_journal
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Fail with named Redis startup diagnostics
+      ansible.builtin.fail:
+        msg: |-
+          {{ redis_service_name }} failed to start
+          systemctl status:
+          {{ redis_systemctl_status.stdout | default('(no systemctl output)') }}
+
+          journalctl:
+          {{ redis_journal.stdout | default('(no journal output)') }}
   when:
     - not ansible_check_mode
     - redis_named_instance | bool
