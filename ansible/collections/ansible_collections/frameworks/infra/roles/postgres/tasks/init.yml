@@ -6,7 +6,7 @@
   community.postgresql.postgresql_user:
     login_unix_socket: /var/run/postgresql
     name: "{{ item.owner | default(item.name) }}"
-    password: "{{ postgres_admin_password }}"
+    password: "{{ item.password | default(postgres_admin_password) }}"
     role_attr_flags: LOGIN
     state: present
   loop: "{{ postgres_databases }}"

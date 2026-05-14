@@ -73,6 +73,14 @@ func TestPostgresRoleCreatesRequestedDatabaseExtensions(t *testing.T) {
 	}
 }
 
+func TestPostgresRoleCreatesOwnerRolesWithPerDatabasePassword(t *testing.T) {
+	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/postgres/tasks/init.yml")
+	want := `password: "{{ item.password | default(postgres_admin_password) }}"`
+	if !strings.Contains(content, want) {
+		t.Fatalf("postgres init should use per-database owner passwords when provided; missing %q:\n%s", want, content)
+	}
+}
+
 func TestPostgresRoleVarsPassesStableInstanceName(t *testing.T) {
 	vars, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
 		DeployName: "postgres-support",
@@ -108,6 +116,27 @@ func TestPostgresRoleVarsRequestsChatwootExtensions(t *testing.T) {
 	extensions, ok := dbs[0]["extensions"].([]string)
 	if !ok || len(extensions) != 1 || extensions[0] != "pg_stat_statements" {
 		t.Fatalf("chatwoot extensions = %#v, want [pg_stat_statements]", dbs[0]["extensions"])
+	}
+}
+
+func TestPostgresRoleVarsPassesDatabaseOwnerPassword(t *testing.T) {
+	vars, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
+		Metadata: map[string]any{
+			"postgres_password": "admin-secret",
+			"databases": []map[string]string{
+				{"name": "foghorn_eu", "owner": "foghorn_eu", "password": "owner-secret"},
+			},
+		},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("postgresRoleVars: %v", err)
+	}
+	dbs, ok := vars["postgres_databases"].([]map[string]any)
+	if !ok || len(dbs) != 1 {
+		t.Fatalf("postgres_databases = %#v, want one database", vars["postgres_databases"])
+	}
+	if got := dbs[0]["password"]; got != "owner-secret" {
+		t.Fatalf("database password = %v, want owner-secret", got)
 	}
 }
 

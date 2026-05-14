@@ -1310,6 +1310,74 @@ func TestBuildServiceEnvVarsIncludesFoghornRedisPasswordInURL(t *testing.T) {
 	}
 }
 
+func TestBuildServiceEnvVarsBindsDeclaredPostgresInstanceDatabase(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "dev",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "10.0.0.11"},
+			"regional-eu-2": {ExternalIP: "10.0.0.12"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-eu-1": {Name: "Media EU"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled: true,
+				Instances: []inventory.PostgresInstance{
+					{
+						Name:     "foghorn-eu",
+						Host:     "regional-eu-1",
+						Port:     5432,
+						Password: "instance-secret",
+						Databases: []inventory.DatabaseConfig{
+							{Name: "foghorn_eu", Owner: "foghorn_eu"},
+						},
+					},
+				},
+			},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-eu": {
+				Enabled: true,
+				Deploy:  "foghorn",
+				Host:    "regional-eu-2",
+				Cluster: "media-eu-1",
+			},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Name:      "foghorn-eu@regional-eu-2",
+		Type:      "foghorn",
+		ServiceID: "foghorn-eu",
+		Host:      "regional-eu-2",
+		ClusterID: "media-eu-1",
+		Phase:     orchestrator.PhaseApplications,
+	}, manifest, map[string]any{}, "", "", map[string]string{}, map[string]map[string]string{
+		"media-eu-1": {"DATABASE_PASSWORD": "wrong-cluster-default"},
+	})
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+
+	if got := env["DATABASE_HOST"]; got != "regional-eu-1.internal" {
+		t.Fatalf("DATABASE_HOST = %q, want regional-eu-1.internal", got)
+	}
+	if got := env["DATABASE_USER"]; got != "foghorn_eu" {
+		t.Fatalf("DATABASE_USER = %q, want foghorn_eu", got)
+	}
+	if got := env["DATABASE_NAME"]; got != "foghorn_eu" {
+		t.Fatalf("DATABASE_NAME = %q, want foghorn_eu", got)
+	}
+	if got := env["DATABASE_PASSWORD"]; got != "instance-secret" {
+		t.Fatalf("DATABASE_PASSWORD = %q, want instance-secret", got)
+	}
+	if !strings.Contains(env["DATABASE_URL"], "foghorn_eu:instance-secret@regional-eu-1.internal:5432/foghorn_eu") {
+		t.Fatalf("DATABASE_URL did not use declared instance credentials: %q", env["DATABASE_URL"])
+	}
+}
+
 func TestBuildTaskConfigPostgresInstanceDoesNotInheritYugabyteSettings(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Channel: "stable",

@@ -55,6 +55,9 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 			if owner := db["owner"]; owner != "" {
 				entry["owner"] = owner
 			}
+			if password := db["password"]; password != "" {
+				entry["password"] = password
+			}
 			if name == "chatwoot" {
 				entry["extensions"] = []string{"pg_stat_statements"}
 			}

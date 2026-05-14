@@ -2262,18 +2262,15 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					config.Port = postgresInstancePort(inst)
 					config.Metadata["instance"] = inst.Name
 					config.Metadata["instance_name"] = inst.Name
+					instancePassword := postgresInstancePassword(inst, sharedEnv)
 					if len(inst.Databases) > 0 {
-						config.Metadata["databases"] = databaseConfigsToMetadata(inst.Databases)
+						config.Metadata["databases"] = databaseConfigsToMetadata(inst.Databases, instancePassword)
 					}
 					if len(inst.Tuning) > 0 {
 						config.Metadata["tuning"] = stringMapToAnyMap(inst.Tuning)
 					}
-					if inst.Password != "" {
-						config.Metadata["postgres_password"] = inst.Password
-					} else if password := strings.TrimSpace(sharedEnv["POSTGRES_"+envNameToken(inst.Name)+"_PASSWORD"]); password != "" {
-						config.Metadata["postgres_password"] = password
-					} else if password := strings.TrimSpace(sharedEnv["DATABASE_PASSWORD"]); password != "" {
-						config.Metadata["postgres_password"] = password
+					if instancePassword != "" {
+						config.Metadata["postgres_password"] = instancePassword
 					}
 					for k, v := range inst.Config {
 						config.Metadata["postgres_"+k] = v
@@ -2290,7 +2287,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 						config.Port = manifest.Infrastructure.Postgres.Port
 					}
 					if len(manifest.Infrastructure.Postgres.Databases) > 0 {
-						config.Metadata["databases"] = databaseConfigsToMetadata(manifest.Infrastructure.Postgres.Databases)
+						config.Metadata["databases"] = databaseConfigsToMetadata(manifest.Infrastructure.Postgres.Databases, "")
 					}
 				}
 			}
@@ -3512,15 +3509,33 @@ func postgresInstancePort(inst *inventory.PostgresInstance) int {
 	return inst.Port
 }
 
-func databaseConfigsToMetadata(databases []inventory.DatabaseConfig) []map[string]string {
+func databaseConfigsToMetadata(databases []inventory.DatabaseConfig, password string) []map[string]string {
 	items := make([]map[string]string, 0, len(databases))
 	for _, db := range databases {
-		items = append(items, map[string]string{
+		item := map[string]string{
 			"name":  db.Name,
 			"owner": db.Owner,
-		})
+		}
+		if password != "" {
+			item["password"] = password
+		}
+		items = append(items, item)
 	}
 	return items
+}
+
+func postgresInstancePassword(inst *inventory.PostgresInstance, sharedEnv map[string]string) string {
+	if inst == nil {
+		return ""
+	}
+	if inst.Password != "" {
+		return inst.Password
+	}
+	prefix := "POSTGRES_" + envNameToken(inst.Name)
+	if password := strings.TrimSpace(sharedEnv[prefix+"_PASSWORD"]); password != "" {
+		return password
+	}
+	return strings.TrimSpace(sharedEnv["DATABASE_PASSWORD"])
 }
 
 func stringMapToAnyMap(values map[string]string) map[string]any {
@@ -4942,6 +4957,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if env["DATABASE_USER"] == "" {
 		env["DATABASE_USER"] = strings.ReplaceAll(task.ServiceID, "-", "_")
 	}
+	applyDeclaredPostgresDatabaseDefaults(task, manifest, env)
 
 	// Construct DATABASE_URL from merged credentials (operator may have set
 	// DATABASE_USER / DATABASE_PASSWORD in their env_file).
@@ -4980,6 +4996,80 @@ func applySharedPostgresDatabaseDefaults(serviceID string, env map[string]string
 			env["DATABASE_NAME"] = "periscope"
 		}
 	}
+}
+
+func applyDeclaredPostgresDatabaseDefaults(task *orchestrator.Task, manifest *inventory.Manifest, env map[string]string) {
+	if task == nil || manifest == nil || manifest.Infrastructure.Postgres == nil {
+		return
+	}
+	if strings.TrimSpace(env["DATABASE_URL"]) != "" {
+		return
+	}
+	inst, db, ok := declaredPostgresDatabaseForService(task, manifest, env)
+	if !ok {
+		return
+	}
+
+	prefix := "POSTGRES_" + envNameToken(inst.Name)
+	if host := strings.TrimSpace(env[prefix+"_HOST"]); host != "" {
+		env["DATABASE_HOST"] = host
+	} else if host := manifestMeshHostname(manifest, inst.Host); host != "" {
+		if strings.TrimSpace(inst.Host) == strings.TrimSpace(task.Host) {
+			host = "127.0.0.1"
+		}
+		env["DATABASE_HOST"] = host
+	}
+	if port := strings.TrimSpace(env[prefix+"_PORT"]); port != "" {
+		env["DATABASE_PORT"] = port
+	} else {
+		env["DATABASE_PORT"] = strconv.Itoa(postgresInstancePort(inst))
+	}
+	if db.Name != "" {
+		env["DATABASE_NAME"] = db.Name
+	}
+	owner := db.Owner
+	if owner == "" {
+		owner = db.Name
+	}
+	if owner != "" {
+		env["DATABASE_USER"] = owner
+	}
+	if password := strings.TrimSpace(env[prefix+"_PASSWORD"]); password != "" {
+		env["DATABASE_PASSWORD"] = password
+	} else if password := strings.TrimSpace(inst.Password); password != "" {
+		env["DATABASE_PASSWORD"] = password
+	}
+}
+
+func declaredPostgresDatabaseForService(task *orchestrator.Task, manifest *inventory.Manifest, env map[string]string) (*inventory.PostgresInstance, inventory.DatabaseConfig, bool) {
+	pg := manifest.Infrastructure.Postgres
+	if pg == nil {
+		return nil, inventory.DatabaseConfig{}, false
+	}
+	serviceDBName := strings.ReplaceAll(task.ServiceID, "-", "_")
+	targetNames := map[string]struct{}{}
+	for _, value := range []string{serviceDBName, env["DATABASE_NAME"], env["DATABASE_USER"]} {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			targetNames[value] = struct{}{}
+		}
+	}
+	for i := range pg.Instances {
+		inst := &pg.Instances[i]
+		for _, db := range inst.Databases {
+			owner := db.Owner
+			if owner == "" {
+				owner = db.Name
+			}
+			if _, ok := targetNames[db.Name]; ok {
+				return inst, db, true
+			}
+			if _, ok := targetNames[owner]; ok {
+				return inst, db, true
+			}
+		}
+	}
+	return nil, inventory.DatabaseConfig{}, false
 }
 
 func isDevProfile(manifest *inventory.Manifest) bool {
