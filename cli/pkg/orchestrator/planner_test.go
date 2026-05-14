@@ -271,6 +271,27 @@ func TestPlan_KafkaMirrorMakerHostsFanOut(t *testing.T) {
 			t.Fatalf("MirrorMaker task %s deps = %v, want all Kafka brokers", task.Name, task.DependsOn)
 		}
 	}
+
+	lastKafkaBatch := -1
+	firstMMBatch := -1
+	for batchIdx, batch := range plan.Batches {
+		for _, task := range batch {
+			switch task.Type {
+			case "kafka":
+				lastKafkaBatch = batchIdx
+			case "kafka-mirrormaker":
+				if firstMMBatch == -1 {
+					firstMMBatch = batchIdx
+				}
+			}
+		}
+	}
+	if lastKafkaBatch == -1 || firstMMBatch == -1 {
+		t.Fatalf("expected kafka and MirrorMaker batches, got %#v", plan.Batches)
+	}
+	if firstMMBatch <= lastKafkaBatch {
+		t.Fatalf("MirrorMaker batch %d must be after final Kafka broker batch %d", firstMMBatch, lastKafkaBatch)
+	}
 }
 
 func TestPlan_KafkaMirrorMakerRejectsNonAggregatorHost(t *testing.T) {

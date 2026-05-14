@@ -15,6 +15,10 @@
   ansible.builtin.import_tasks: service.yml
   tags: [service]
 
+- name: KafkaMirrorMaker | validate
+  ansible.builtin.import_tasks: validate.yml
+  tags: [validate]
+
 - name: KafkaMirrorMaker | restart
   ansible.builtin.import_tasks: restart.yml
   tags: [restart, never]

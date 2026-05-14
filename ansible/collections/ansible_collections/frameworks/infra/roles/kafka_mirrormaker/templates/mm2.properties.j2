@@ -2,6 +2,7 @@
 {% set target_rf = kafka_mm_target.replicas | default(1) %}
 clusters = {{ kafka_mm_target.alias }}{% for src in kafka_mm_sources %},{{ src.alias }}{% endfor %}
 
+rest.port = {{ kafka_mm_rest_port }}
 
 {{ kafka_mm_target.alias }}.bootstrap.servers = {{ kafka_mm_target.bootstrap_servers }}
 {% for src in kafka_mm_sources %}

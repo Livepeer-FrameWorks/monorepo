@@ -1,0 +1,19 @@
+---
+- name: Refresh service facts
+  ansible.builtin.service_facts:
+
+- name: Assert Kafka MirrorMaker service is running
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services.get('frameworks-kafka-mirrormaker.service', {}).get('state') == 'running'
+    fail_msg: >-
+      frameworks-kafka-mirrormaker.service is not running
+      (state={{ ansible_facts.services.get('frameworks-kafka-mirrormaker.service', {}).get('state', 'missing') }})
+
+- name: Wait for Kafka MirrorMaker REST port
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ kafka_mm_rest_port }}"
+    state: started
+    timeout: 60
+  when: not ansible_check_mode

@@ -30,7 +30,11 @@ func kafkaMirrorMakerRoleVars(ctx context.Context, host inventory.Host, config S
 		"kafka_mm_artifact_checksum": art.Checksum,
 		"kafka_mm_version":           firstNonEmpty(config.Version, art.Version),
 		"kafka_mm_heap_opts":         "-Xmx1G -Xms1G",
+		"kafka_mm_rest_port":         8083,
 		"kafka_mm_task_count":        2,
+	}
+	if config.Port > 0 {
+		vars["kafka_mm_rest_port"] = config.Port
 	}
 	if heap, ok := config.Metadata["heap_opts"].(string); ok && heap != "" {
 		vars["kafka_mm_heap_opts"] = heap
