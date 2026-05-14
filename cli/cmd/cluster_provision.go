@@ -1131,14 +1131,9 @@ func initializeDeferredYugabyte(ctx context.Context, cmd *cobra.Command, manifes
 	if err != nil {
 		return err
 	}
-	databases := yugabyteDatabaseConfigsToMetadata(pg.Databases, manifest, sharedEnv, clusterEnvs, password)
-	schemaDatabases := make([]provisioner.SchemaDatabase, 0, len(pg.Databases))
-	for _, db := range pg.Databases {
-		schemaDatabases = append(schemaDatabases, provisioner.SchemaDatabase{
-			Name:  db.Name,
-			Owner: db.Owner,
-		})
-	}
+	yugabyteDatabases := expandedYugabyteDatabaseConfigs(pg.Databases, manifest)
+	databases := yugabyteDatabaseConfigsToMetadata(yugabyteDatabases, manifest, sharedEnv, clusterEnvs, password)
+	schemaDatabases := yugabyteSchemaDatabases(pg.Databases, manifest)
 
 	config := provisioner.ServiceConfig{
 		Version: pg.Version,
@@ -2561,7 +2556,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					}
 				}
 				if len(pg.Databases) > 0 {
-					config.Metadata["databases"] = yugabyteDatabaseConfigsToMetadata(pg.Databases, manifest, sharedEnv, clusterEnvs, "")
+					config.Metadata["databases"] = yugabyteDatabaseConfigsToMetadata(expandedYugabyteDatabaseConfigs(pg.Databases, manifest), manifest, sharedEnv, clusterEnvs, "")
 				}
 			}
 		}
@@ -3526,6 +3521,124 @@ func postgresInstancePassword(inst *inventory.PostgresInstance, sharedEnv map[st
 		return password
 	}
 	return strings.TrimSpace(sharedEnv["DATABASE_PASSWORD"])
+}
+
+func expandedYugabyteDatabaseConfigs(databases []inventory.DatabaseConfig, manifest *inventory.Manifest) []inventory.DatabaseConfig {
+	if manifest == nil || len(databases) == 0 {
+		return databases
+	}
+	items := make([]inventory.DatabaseConfig, 0, len(databases))
+	seen := map[string]struct{}{}
+	for _, db := range databases {
+		expanded := clusterScopedDatabaseAliases(db, manifest)
+		if len(expanded) == 0 {
+			key := databaseConfigKey(db)
+			if _, ok := seen[key]; !ok {
+				items = append(items, db)
+				seen[key] = struct{}{}
+			}
+			continue
+		}
+		for _, item := range expanded {
+			key := databaseConfigKey(item)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			items = append(items, item)
+			seen[key] = struct{}{}
+		}
+	}
+	return items
+}
+
+func yugabyteSchemaDatabases(databases []inventory.DatabaseConfig, manifest *inventory.Manifest) []provisioner.SchemaDatabase {
+	if manifest == nil || len(databases) == 0 {
+		return schemaDatabasesFromConfigs(databases)
+	}
+	items := make([]provisioner.SchemaDatabase, 0, len(databases))
+	seen := map[string]struct{}{}
+	for _, db := range databases {
+		logicalName := strings.TrimSpace(db.Name)
+		expanded := clusterScopedDatabaseAliases(db, manifest)
+		if len(expanded) == 0 {
+			addSchemaDatabase(&items, seen, db.Name, db.Owner, "", "")
+			continue
+		}
+		for _, item := range expanded {
+			addSchemaDatabase(&items, seen, item.Name, item.Owner, logicalName, logicalName)
+		}
+	}
+	return items
+}
+
+func schemaDatabasesFromConfigs(databases []inventory.DatabaseConfig) []provisioner.SchemaDatabase {
+	items := make([]provisioner.SchemaDatabase, 0, len(databases))
+	seen := map[string]struct{}{}
+	for _, db := range databases {
+		addSchemaDatabase(&items, seen, db.Name, db.Owner, "", "")
+	}
+	return items
+}
+
+func addSchemaDatabase(items *[]provisioner.SchemaDatabase, seen map[string]struct{}, name, owner, sourceName, schema string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		owner = name
+	}
+	key := name + "\x00" + owner + "\x00" + strings.TrimSpace(sourceName) + "\x00" + strings.TrimSpace(schema)
+	if _, ok := seen[key]; ok {
+		return
+	}
+	*items = append(*items, provisioner.SchemaDatabase{
+		Name:       name,
+		Owner:      owner,
+		SourceName: strings.TrimSpace(sourceName),
+		Schema:     strings.TrimSpace(schema),
+	})
+	seen[key] = struct{}{}
+}
+
+func clusterScopedDatabaseAliases(db inventory.DatabaseConfig, manifest *inventory.Manifest) []inventory.DatabaseConfig {
+	logicalName := strings.TrimSpace(db.Name)
+	if logicalName == "" {
+		return nil
+	}
+	serviceIDs := make([]string, 0, len(manifest.Services))
+	for serviceID, svc := range manifest.Services {
+		if !svc.Enabled || strings.TrimSpace(svc.Cluster) == "" {
+			continue
+		}
+		deploy := strings.TrimSpace(svc.Deploy)
+		if deploy == "" {
+			deploy = serviceID
+		}
+		if deploy != logicalName {
+			continue
+		}
+		alias := strings.ReplaceAll(serviceID, "-", "_")
+		if alias == logicalName {
+			continue
+		}
+		serviceIDs = append(serviceIDs, serviceID)
+	}
+	sort.Strings(serviceIDs)
+	items := make([]inventory.DatabaseConfig, 0, len(serviceIDs))
+	for _, serviceID := range serviceIDs {
+		alias := strings.ReplaceAll(serviceID, "-", "_")
+		item := db
+		item.Name = alias
+		item.Owner = alias
+		items = append(items, item)
+	}
+	return items
+}
+
+func databaseConfigKey(db inventory.DatabaseConfig) string {
+	return strings.TrimSpace(db.Name) + "\x00" + strings.TrimSpace(db.Owner)
 }
 
 func yugabyteDatabaseConfigsToMetadata(databases []inventory.DatabaseConfig, manifest *inventory.Manifest, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, fallbackPassword string) []map[string]string {

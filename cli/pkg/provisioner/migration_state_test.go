@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -115,6 +116,26 @@ func TestBuildMigrationItemsRejectsBadPhase(t *testing.T) {
 	_, err := BuildMigrationItems([]string{"purser"}, "bogus", "v0.1.0")
 	if err == nil {
 		t.Fatal("want error for invalid phase, got nil")
+	}
+}
+
+func TestBuildMigrationItemsCanUseLogicalSourceForPhysicalDatabase(t *testing.T) {
+	items, err := BuildMigrationItemsForDatabases([]SchemaDatabase{
+		{Name: "foghorn_eu", SourceName: "foghorn", Schema: "foghorn"},
+	}, "expand", "v0.2.33")
+	if err != nil {
+		t.Fatalf("BuildMigrationItemsForDatabases returned error: %v", err)
+	}
+	if len(items) == 0 {
+		t.Fatal("expected foghorn migrations for physical foghorn_eu database")
+	}
+	for _, item := range items {
+		if got := item["db"]; got != "foghorn_eu" {
+			t.Fatalf("migration target db = %v, want foghorn_eu", got)
+		}
+		if sql, _ := item["sql"].(string); !strings.Contains(sql, "foghorn.") {
+			t.Fatalf("expected logical foghorn migration SQL, got %q", sql)
+		}
 	}
 }
 

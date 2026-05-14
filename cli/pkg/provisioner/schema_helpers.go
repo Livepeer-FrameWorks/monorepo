@@ -14,8 +14,10 @@ import (
 )
 
 type SchemaDatabase struct {
-	Name  string
-	Owner string
+	Name       string
+	Owner      string
+	SourceName string
+	Schema     string
 }
 
 // BuildSchemaItems materializes embedded baseline schemas matching configured
@@ -36,7 +38,15 @@ func BuildSchemaItems(databases []SchemaDatabase) ([]map[string]any, func(), err
 			if owner == "" {
 				owner = db
 			}
-			unique[db] = SchemaDatabase{Name: db, Owner: owner}
+			source := strings.TrimSpace(database.SourceName)
+			if source == "" {
+				source = db
+			}
+			schema := strings.TrimSpace(database.Schema)
+			if schema == "" {
+				schema = source
+			}
+			unique[db] = SchemaDatabase{Name: db, Owner: owner, SourceName: source, Schema: schema}
 		}
 	}
 	names := make([]string, 0, len(unique))
@@ -54,7 +64,15 @@ func BuildSchemaItems(databases []SchemaDatabase) ([]map[string]any, func(), err
 	}
 	for _, db := range names {
 		database := unique[db]
-		schemaPath := path.Join("schema", db+".sql")
+		source := strings.TrimSpace(database.SourceName)
+		if source == "" {
+			source = db
+		}
+		schema := strings.TrimSpace(database.Schema)
+		if schema == "" {
+			schema = source
+		}
+		schemaPath := path.Join("schema", source+".sql")
 		data, err := dbsql.Content.ReadFile(schemaPath)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -90,7 +108,7 @@ func BuildSchemaItems(databases []SchemaDatabase) ([]map[string]any, func(), err
 		cleanupPaths = append(cleanupPaths, localPath)
 		items = append(items, map[string]any{
 			"db":     db,
-			"schema": db,
+			"schema": schema,
 			"owner":  database.Owner,
 			"src":    filepath.ToSlash(localPath),
 		})

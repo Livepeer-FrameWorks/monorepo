@@ -192,17 +192,15 @@ func runMigratePostgresBranch(ctx context.Context, cmd *cobra.Command, rc *resol
 		}
 	}
 
-	databases := pg.Databases
+	databases := schemaDatabasesFromConfigs(pg.Databases)
+	if pg.IsYugabyte() {
+		databases = yugabyteSchemaDatabases(pg.Databases, manifest)
+	}
 	if len(databases) == 0 {
 		fmt.Fprintln(out, "Postgres: no databases configured in manifest.")
 		return nil
 	}
-	dbNames := make([]string, 0, len(databases))
-	for _, d := range databases {
-		dbNames = append(dbNames, d.Name)
-	}
-
-	items, err := provisioner.BuildMigrationItems(dbNames, phase, target)
+	items, err := provisioner.BuildMigrationItemsForDatabases(databases, phase, target)
 	if err != nil {
 		return fmt.Errorf("collect postgres migrations: %w", err)
 	}

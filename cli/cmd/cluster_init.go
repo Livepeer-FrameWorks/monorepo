@@ -124,24 +124,6 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 		}
 	}
 
-	// Build config
-	databases := []map[string]string{}
-	for _, db := range pg.Databases {
-		databases = append(databases, map[string]string{
-			"name":  db.Name,
-			"owner": db.Owner,
-		})
-	}
-
-	config := provisioner.ServiceConfig{
-		Version: pg.Version,
-		Port:    pg.EffectivePort(),
-		Metadata: map[string]any{
-			"platform_channel": manifest.ResolvedChannel(),
-			"databases":        databases,
-		},
-	}
-
 	// Only decrypt manifest env_files when Yugabyte actually needs a password
 	// (i.e. IsYugabyte and no yaml pg.Password). Vanilla Postgres uses peer
 	// auth and doesn't need any secret.
@@ -153,10 +135,37 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 		}
 		sharedEnv = env
 	}
+	var clusterEnvs map[string]map[string]string
+	if pg.IsYugabyte() {
+		envs, err := rc.ClusterEnvs()
+		if err != nil {
+			return fmt.Errorf("load cluster env_files: %w", err)
+		}
+		clusterEnvs = envs
+	}
 	password, err := resolveYugabytePassword(pg, sharedEnv)
 	if err != nil {
 		return err
 	}
+
+	dbConfigs := pg.Databases
+	var databases []map[string]string
+	if pg.IsYugabyte() {
+		dbConfigs = expandedYugabyteDatabaseConfigs(pg.Databases, manifest)
+		databases = yugabyteDatabaseConfigsToMetadata(dbConfigs, manifest, sharedEnv, clusterEnvs, password)
+	} else {
+		databases = databaseConfigsToMetadata(dbConfigs, "")
+	}
+
+	config := provisioner.ServiceConfig{
+		Version: pg.Version,
+		Port:    pg.EffectivePort(),
+		Metadata: map[string]any{
+			"platform_channel": manifest.ResolvedChannel(),
+			"databases":        databases,
+		},
+	}
+
 	// The role's init tag uses community.postgresql over the network;
 	// password is propagated as a role var via the registry-provided
 	// provisioner, which reads postgres_password from metadata.
@@ -174,19 +183,14 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 		return initErr
 	}
 
-	schemaDatabases := make([]provisioner.SchemaDatabase, 0, len(pg.Databases))
-	for _, db := range pg.Databases {
-		schemaDatabases = append(schemaDatabases, provisioner.SchemaDatabase{
-			Name:  db.Name,
-			Owner: db.Owner,
-		})
-	}
-	dbNames := make([]string, 0, len(schemaDatabases))
-	for _, db := range schemaDatabases {
-		dbNames = append(dbNames, db.Name)
+	var schemaDatabases []provisioner.SchemaDatabase
+	if pg.IsYugabyte() {
+		schemaDatabases = yugabyteSchemaDatabases(pg.Databases, manifest)
+	} else {
+		schemaDatabases = schemaDatabasesFromConfigs(dbConfigs)
 	}
 	target := ""
-	if hasMigrations, hasErr := provisioner.HasMigrations(dbNames, "expand"); hasErr != nil {
+	if hasMigrations, hasErr := provisioner.HasMigrationsForDatabases(schemaDatabases, "expand"); hasErr != nil {
 		return hasErr
 	} else if hasMigrations {
 		var targetErr error
@@ -231,12 +235,8 @@ func applyPostgresSchemasAndMigrations(
 		ux.Success(out, fmt.Sprintf("%s baseline schemas applied", service))
 	}
 
-	dbNames := make([]string, 0, len(databases))
-	for _, db := range databases {
-		dbNames = append(dbNames, db.Name)
-	}
 	if targetVersion == "" {
-		hasMigrations, hasErr := provisioner.HasMigrations(dbNames, "expand")
+		hasMigrations, hasErr := provisioner.HasMigrationsForDatabases(databases, "expand")
 		if hasErr != nil {
 			return hasErr
 		}
@@ -246,7 +246,7 @@ func applyPostgresSchemasAndMigrations(
 		return fmt.Errorf("target version required when embedded expand migrations exist")
 	}
 	fmt.Fprintf(out, "Applying %s expand migrations up to %s...\n", service, targetVersion)
-	migrationItems, err := provisioner.BuildMigrationItems(dbNames, "expand", targetVersion)
+	migrationItems, err := provisioner.BuildMigrationItemsForDatabases(databases, "expand", targetVersion)
 	if err != nil {
 		return fmt.Errorf("collect migrations: %w", err)
 	}

@@ -105,8 +105,12 @@ func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
 			return pwErr
 		}
 
+		databases := pg.Databases
+		if pg.IsYugabyte() {
+			databases = expandedYugabyteDatabaseConfigs(pg.Databases, manifest)
+		}
 		var dbNames []string
-		for _, d := range pg.Databases {
+		for _, d := range databases {
 			dbNames = append(dbNames, d.Name)
 		}
 

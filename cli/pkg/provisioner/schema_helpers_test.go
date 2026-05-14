@@ -62,6 +62,36 @@ func TestBuildSchemaItemsSkipsExternallyManagedSchemas(t *testing.T) {
 	}
 }
 
+func TestBuildSchemaItemsCanUseLogicalSourceForPhysicalDatabase(t *testing.T) {
+	items, cleanup, err := BuildSchemaItems([]SchemaDatabase{
+		{Name: "foghorn_eu", Owner: "foghorn_eu", SourceName: "foghorn", Schema: "foghorn"},
+	})
+	defer cleanup()
+	if err != nil {
+		t.Fatalf("BuildSchemaItems returned error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected one schema item, got %d", len(items))
+	}
+	if got := items[0]["db"]; got != "foghorn_eu" {
+		t.Fatalf("expected physical db foghorn_eu, got %v", got)
+	}
+	if got := items[0]["schema"]; got != "foghorn" {
+		t.Fatalf("expected logical schema foghorn, got %v", got)
+	}
+	if got := items[0]["owner"]; got != "foghorn_eu" {
+		t.Fatalf("expected physical owner foghorn_eu, got %v", got)
+	}
+	src := items[0]["src"].(string)
+	decoded, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read schema src: %v", err)
+	}
+	if !strings.Contains(string(decoded), "CREATE SCHEMA IF NOT EXISTS foghorn") {
+		t.Fatalf("expected foghorn baseline schema, got %s", string(decoded))
+	}
+}
+
 func TestBuildSchemaItemsLeavesPortableSchemasUnchanged(t *testing.T) {
 	items, cleanup, err := BuildSchemaItems([]SchemaDatabase{
 		{Name: "commodore", Owner: "commodore"},
