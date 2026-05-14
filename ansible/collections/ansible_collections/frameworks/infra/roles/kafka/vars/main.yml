@@ -25,3 +25,6 @@ kafka_voters: >-
        kafka_controllers | map(attribute='id') | zip(kafka_controllers | map(attribute='host'))
        | map('join', '@') | map('regex_replace', '$', ':' ~ kafka_controller_port) | join(',')
      ) }}
+kafka_broker_probe_host: "127.0.0.1"
+kafka_controller_probe_host: >-
+  {{ kafka_bind_host if (kafka_bind_host | default('0.0.0.0')) != '0.0.0.0' else '127.0.0.1' }}

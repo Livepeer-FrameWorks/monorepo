@@ -42,6 +42,9 @@ func kafkaRoleVarsFor(role string) RoleVarsBuilder {
 		if controllerQuorumVoters, ok := config.Metadata["controller_quorum_voters"].(string); ok && controllerQuorumVoters != "" {
 			vars["kafka_controller_quorum_voters"] = controllerQuorumVoters
 		}
+		if bindHost, ok := config.Metadata["bind_host"].(string); ok && bindHost != "" {
+			vars["kafka_bind_host"] = bindHost
+		}
 		if brokers, ok := config.Metadata["brokers"].([]map[string]any); ok {
 			vars["kafka_bootstrap_brokers"] = brokers
 		}

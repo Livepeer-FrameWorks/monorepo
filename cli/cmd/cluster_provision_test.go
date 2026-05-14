@@ -1736,6 +1736,43 @@ func TestBuildTaskConfigKafkaUsesMeshControllerQuorumAddresses(t *testing.T) {
 	if host, _ := controllers[2]["host"].(string); host != "10.88.0.12" {
 		t.Fatalf("expected third controller host to use mesh IP, got %q", host)
 	}
+
+	controllerTask := &orchestrator.Task{
+		Name:       "kafka-controller-101",
+		Type:       "kafka-controller",
+		ServiceID:  "kafka-controller",
+		InstanceID: "101",
+		Host:       "regional-eu-1",
+		Phase:      orchestrator.PhaseInfrastructure,
+	}
+	controllerConfig, err := buildTaskConfig(controllerTask, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig for controller returned error: %v", err)
+	}
+	if got, _ := controllerConfig.Metadata["bind_host"].(string); got != "10.88.0.11" {
+		t.Fatalf("expected controller bind_host to use mesh IP, got %q", got)
+	}
+}
+
+func TestInfrastructureInitializeDeferralIncludesKafka(t *testing.T) {
+	for _, taskType := range []string{"yugabyte", "kafka", "kafka-controller", "kafka-mirrormaker"} {
+		if !deferInfrastructureInitialize(taskType) {
+			t.Fatalf("expected %s initialization to be deferred", taskType)
+		}
+	}
+	if deferInfrastructureInitialize("clickhouse") {
+		t.Fatal("did not expect clickhouse initialization to be deferred")
+	}
+}
+
+func TestKafkaBrokerRegistrationLagDetection(t *testing.T) {
+	err := errors.New("org.apache.kafka.common.errors.InvalidReplicationFactorException: Unable to replicate the partition 3 time(s): The target replication factor of 3 cannot be reached because only 2 broker(s) are registered")
+	if !isKafkaBrokerRegistrationLag(err) {
+		t.Fatal("expected broker registration lag error to be retryable")
+	}
+	if isKafkaBrokerRegistrationLag(errors.New("some other kafka error")) {
+		t.Fatal("unexpected retry classification for unrelated error")
+	}
 }
 
 func TestBuildTaskConfigKafkaMirrorMakerRendersHubAndSpokeLinks(t *testing.T) {

@@ -758,6 +758,16 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			}
 		}
 
+		if batchContainsService(batch, "kafka") && !remainingBatchesContainService(plan.Batches[batchNum+1:], "kafka") {
+			fmt.Fprintln(cmd.OutOrStdout(), "")
+			if err := initializeDeferredKafka(ctx, cmd, manifest, sshPool, releaseRepos); err != nil {
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Kafka topic initialization failed: %v", err))
+				fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
+				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+				return fmt.Errorf("kafka topic initialization failed: %w", err)
+			}
+		}
+
 		// Mesh preflight gate: after a batch containing Privateer tasks,
 		// verify mesh health before proceeding to application services.
 		if batchContainsPrivateer(batch) && batchNum+1 < len(plan.Batches) {
@@ -1157,6 +1167,90 @@ func initializeDeferredYugabyte(ctx context.Context, cmd *cobra.Command, manifes
 	}
 	ux.Success(cmd.OutOrStdout(), "YugabyteDB initialized")
 	return nil
+}
+
+func initializeDeferredKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool, releaseRepos []string) error {
+	clusters := allKafkaClusters(manifest)
+	if len(clusters) == 0 {
+		return nil
+	}
+
+	prov, err := provisioner.GetProvisioner("kafka", pool)
+	if err != nil {
+		return err
+	}
+
+	for i := range clusters {
+		cluster := clusters[i]
+		if len(cluster.Topics) == 0 {
+			continue
+		}
+		if len(cluster.Brokers) == 0 {
+			return fmt.Errorf("kafka cluster %s has topics but no brokers", kafkaClusterAlias(manifest, &cluster))
+		}
+
+		broker := cluster.Brokers[0]
+		host, ok := manifest.GetHost(broker.Host)
+		if !ok {
+			return fmt.Errorf("kafka broker host %s not found", broker.Host)
+		}
+
+		task := &orchestrator.Task{
+			Name:       fmt.Sprintf("kafka-topic-init-%s", kafkaClusterAlias(manifest, &cluster)),
+			Type:       "kafka",
+			ServiceID:  "kafka",
+			InstanceID: strconv.Itoa(broker.ID),
+			Host:       broker.Host,
+			Phase:      orchestrator.PhaseInfrastructure,
+			ClusterID:  cluster.RegionID,
+		}
+		config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", map[string]string{}, nil, releaseRepos)
+		if err != nil {
+			return err
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "  Initializing Kafka topics for %s on %s...\n", kafkaClusterAlias(manifest, &cluster), broker.Host)
+		if err := runProvisionPhase(ctx, provisionInitializeTimeout, "initialize", func(phaseCtx context.Context) error {
+			return initializeKafkaTopicsWithRetry(phaseCtx, cmd, prov, host, config)
+		}); err != nil {
+			return err
+		}
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Kafka topics initialized for %s", kafkaClusterAlias(manifest, &cluster)))
+	}
+
+	return nil
+}
+
+func initializeKafkaTopicsWithRetry(ctx context.Context, cmd *cobra.Command, prov provisioner.Provisioner, host inventory.Host, config provisioner.ServiceConfig) error {
+	var lastErr error
+	for attempt := 1; ; attempt++ {
+		err := prov.Initialize(ctx, host, config)
+		if err == nil {
+			return nil
+		}
+		if !isKafkaBrokerRegistrationLag(err) {
+			return err
+		}
+		lastErr = err
+		fmt.Fprintf(cmd.OutOrStdout(), "    Kafka brokers still registering; retrying topic init (attempt %d)...\n", attempt)
+
+		timer := time.NewTimer(5 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("broker registration did not reach topic replication factor before timeout: %w", lastErr)
+		case <-timer.C:
+		}
+	}
+}
+
+func isKafkaBrokerRegistrationLag(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "InvalidReplicationFactorException") &&
+		strings.Contains(msg, "broker(s) are registered")
 }
 
 func meshHostname(name string) string {
@@ -2348,6 +2442,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 						config.Metadata["node_id"] = ctrlID
 						for _, ctrl := range cluster.Controllers {
 							if ctrl.ID == ctrlID {
+								config.Metadata["bind_host"] = manifest.MeshAddress(ctrl.Host)
 								if ctrl.Port != 0 {
 									config.Port = ctrl.Port
 								} else {
@@ -4115,7 +4210,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 
 	// Infrastructure tasks: run Initialize after Provision/Validate.
 	if task.Phase == orchestrator.PhaseInfrastructure {
-		if task.Type != "yugabyte" {
+		if !deferInfrastructureInitialize(task.Type) {
 			if initErr := runProvisionPhase(ctx, provisionInitializeTimeout, "initialize", func(phaseCtx context.Context) error {
 				return prov.Initialize(phaseCtx, host, config)
 			}); initErr != nil {
@@ -4138,6 +4233,15 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		previouslyRunning: serviceRunning(beforeState),
 		running:           serviceRunning(afterState),
 	}, nil
+}
+
+func deferInfrastructureInitialize(taskType string) bool {
+	switch taskType {
+	case "yugabyte", "kafka", "kafka-controller", "kafka-mirrormaker":
+		return true
+	default:
+		return false
+	}
 }
 
 // publicServiceType is shared with cli/pkg/clusterderive so the post-Ansible
