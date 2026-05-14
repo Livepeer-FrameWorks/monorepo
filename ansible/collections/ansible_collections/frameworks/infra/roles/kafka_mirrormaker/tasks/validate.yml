@@ -12,23 +12,21 @@
           frameworks-kafka-mirrormaker.service is not running
           (state={{ ansible_facts.services.get('frameworks-kafka-mirrormaker.service', {}).get('state', 'missing') }})
 
-    - name: Read Kafka MirrorMaker main process id
-      ansible.builtin.command: "systemctl show frameworks-kafka-mirrormaker.service -p MainPID --value"
-      register: kafka_mm_main_pid
-      changed_when: false
-      failed_when: false
-      check_mode: false
+    - name: Read Kafka MirrorMaker systemd status
+      ansible.builtin.systemd:
+        name: frameworks-kafka-mirrormaker.service
+      register: kafka_mm_systemd_status
       when: not ansible_check_mode
 
     - name: Assert Kafka MirrorMaker has a live main process
       ansible.builtin.assert:
         that:
-          - kafka_mm_main_pid.stdout | int > 0
+          - kafka_mm_systemd_status.status.MainPID | int > 0
         fail_msg: "frameworks-kafka-mirrormaker.service has no live MainPID"
       when: not ansible_check_mode
 
     - name: Read Kafka MirrorMaker process command
-      ansible.builtin.command: "ps -p {{ kafka_mm_main_pid.stdout | trim }} -o args="
+      ansible.builtin.command: "ps -p {{ kafka_mm_systemd_status.status.MainPID }} -o args="
       register: kafka_mm_process_args
       changed_when: false
       failed_when: false
@@ -72,10 +70,9 @@
       check_mode: false
 
     - name: Capture Kafka MirrorMaker rendered systemd unit
-      ansible.builtin.command: "systemctl cat frameworks-kafka-mirrormaker.service"
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/frameworks-kafka-mirrormaker.service
       register: kafka_mm_unit
-      changed_when: false
-      failed_when: false
       check_mode: false
 
     - name: Fail with Kafka MirrorMaker diagnostics
@@ -89,4 +86,4 @@
           {{ kafka_mm_journal.stdout | default('(no journal output)') }}
 
           systemd unit:
-          {{ kafka_mm_unit.stdout | default('(no systemd unit output)') }}
+          {{ (kafka_mm_unit.content | default('') | b64decode) or '(no systemd unit output)' }}

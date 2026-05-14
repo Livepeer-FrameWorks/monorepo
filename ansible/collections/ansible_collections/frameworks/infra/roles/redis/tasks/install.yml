@@ -268,6 +268,9 @@
     - redis_named_unit.changed
 
 - name: Start named Redis service
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
   block:
     - name: Ensure named Redis is enabled and running
       ansible.builtin.systemd:
@@ -298,6 +301,3 @@
 
           journalctl:
           {{ redis_journal.stdout | default('(no journal output)') }}
-  when:
-    - not ansible_check_mode
-    - redis_named_instance | bool
