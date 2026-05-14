@@ -1039,7 +1039,7 @@ func (a *Agent) resolvedServiceTypes(ctx context.Context) ([]string, error) {
 	}
 
 	seen := make(map[string]struct{}, len(a.expectedServices))
-	serviceTypes := make([]string, 0, len(a.expectedServices))
+	expected := make([]string, 0, len(a.expectedServices))
 	for _, serviceType := range a.expectedServices {
 		serviceType = strings.TrimSpace(serviceType)
 		if serviceType == "" {
@@ -1049,9 +1049,28 @@ func (a *Agent) resolvedServiceTypes(ctx context.Context) ([]string, error) {
 			continue
 		}
 		seen[serviceType] = struct{}{}
-		serviceTypes = append(serviceTypes, serviceType)
+		expected = append(expected, serviceType)
 	}
-	sort.Strings(serviceTypes)
+	sort.Strings(expected)
+
+	if a.registryClient == nil {
+		return expected, nil
+	}
+
+	registered, err := a.listNodeServiceTypes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	registeredSet := make(map[string]struct{}, len(registered))
+	for _, serviceType := range registered {
+		registeredSet[serviceType] = struct{}{}
+	}
+	serviceTypes := make([]string, 0, len(expected))
+	for _, serviceType := range expected {
+		if _, ok := registeredSet[serviceType]; ok {
+			serviceTypes = append(serviceTypes, serviceType)
+		}
+	}
 	return serviceTypes, nil
 }
 

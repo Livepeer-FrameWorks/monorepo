@@ -614,6 +614,54 @@ func TestSyncInternalCertificatesUsesExpectedServicesWithoutRegistryLookup(t *te
 	}
 }
 
+func TestSyncInternalCertificatesFiltersExpectedServicesToRegisteredNodeServices(t *testing.T) {
+	dir := t.TempDir()
+	registry := &fakeServiceRegistryClient{
+		responses: []*pb.ListServiceInstancesResponse{
+			{Instances: []*pb.ServiceInstance{
+				{ServiceId: "decklog", Status: "running"},
+				{ServiceId: "signalman", Status: "stopped"},
+				{ServiceId: "privateer", Status: "running"},
+			}},
+		},
+	}
+	navigator := &fakeCertificateClient{
+		caResponse: &pb.GetCABundleResponse{
+			Found: true,
+			CaPem: "ca-pem",
+		},
+		issueResponse: &pb.IssueInternalCertResponse{
+			Success: true,
+			CertPem: "cert-pem",
+			KeyPem:  "key-pem",
+		},
+	}
+	agent := &Agent{
+		logger:           logging.NewLogger(),
+		nodeID:           "node-1",
+		registryClient:   registry,
+		navigatorClient:  navigator,
+		certIssueToken:   "token",
+		pkiBasePath:      dir,
+		syncTimeout:      time.Second,
+		certSyncInterval: 5 * time.Minute,
+		expectedServices: []string{"decklog", "signalman"},
+	}
+
+	if err := agent.syncInternalCertificates(); err != nil {
+		t.Fatalf("syncInternalCertificates returned error: %v", err)
+	}
+	if len(navigator.issueRequests) != 1 {
+		t.Fatalf("expected 1 issue request, got %d", len(navigator.issueRequests))
+	}
+	if got := navigator.issueRequests[0].GetServiceType(); got != "decklog" {
+		t.Fatalf("issued cert for %q, want decklog", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "services", "signalman", "tls.crt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("signalman cert stat err = %v, want not exist", err)
+	}
+}
+
 func TestSyncInternalCertificatesMintsTokenWhenMissing(t *testing.T) {
 	dir := t.TempDir()
 	navigator := &fakeCertificateClient{
