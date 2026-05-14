@@ -75,8 +75,8 @@ type ClusterMesh struct {
 	ListenPort int    `yaml:"listen_port"`
 }
 
-// Node reconciled into quartermaster.infrastructure_nodes. Stable: ID, ClusterID,
-// ExternalIP, WireGuard.IP. Drift = fail.
+// Node reconciled into quartermaster.infrastructure_nodes. Stable: ID,
+// ExternalIP, WireGuard.IP. Bootstrap-owned rows may move ClusterID.
 type Node struct {
 	ID         string        `yaml:"id"`
 	ClusterID  string        `yaml:"cluster_id"`

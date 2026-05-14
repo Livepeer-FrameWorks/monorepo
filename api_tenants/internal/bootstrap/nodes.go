@@ -25,14 +25,14 @@ type NodeOptions struct {
 //
 //   - node_id (cluster row pinned by node_id, since node_id is the table's
 //     UNIQUE constraint),
-//   - cluster_id,
 //   - external_ip,
 //   - wireguard.ip,
 //   - wireguard.public_key.
 //
-// Mutable: node_name, node_type, wireguard.listen_port. Heartbeats / runtime
-// status / mesh-revision columns are owned by the running node, not bootstrap;
-// this reconciler must not touch them.
+// Mutable for GitOps-owned rows: cluster_id, node_name, node_type,
+// wireguard.listen_port. Heartbeats / runtime status / mesh-revision columns
+// are owned by the running node, not bootstrap; this reconciler must not touch
+// them.
 //
 // enrollment_origin is set to "gitops_seed" on insert (cluster.yaml is the
 // declarative source); existing rows keep whatever origin runtime enrollment
@@ -100,17 +100,20 @@ func upsertNode(ctx context.Context, exec DBTX, n Node, opts NodeOptions) (strin
 			COALESCE(host(wireguard_ip), ''),
 			COALESCE(wireguard_public_key, ''),
 			COALESCE(wireguard_listen_port, 0),
+			enrollment_origin,
 			latitude, longitude
 		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = $1`
 	var (
 		curName, curType, curCluster, curExternal, curWGIP, curPubKey string
+		curEnrollmentOrigin                                           string
 		curWGPort                                                     int
 		curLat, curLon                                                sql.NullFloat64
 	)
 	lat, lon := geoForNode(opts.GeoIPReader, n.ExternalIP)
 	err := exec.QueryRowContext(ctx, probeSQL, n.ID).Scan(
-		&curName, &curType, &curCluster, &curExternal, &curWGIP, &curPubKey, &curWGPort, &curLat, &curLon,
+		&curName, &curType, &curCluster, &curExternal, &curWGIP, &curPubKey, &curWGPort,
+		&curEnrollmentOrigin, &curLat, &curLon,
 	)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -140,9 +143,6 @@ func upsertNode(ctx context.Context, exec DBTX, n Node, opts NodeOptions) (strin
 		return "", fmt.Errorf("probe: %w", err)
 	}
 
-	if curCluster != n.ClusterID {
-		return "", fmt.Errorf("cluster_id drift: db=%q desired=%q (stable; refusing rewrite)", curCluster, n.ClusterID)
-	}
 	if !sameHostIP(curExternal, n.ExternalIP) {
 		return "", fmt.Errorf("external_ip drift: db=%q desired=%q (stable; refusing rewrite)", curExternal, n.ExternalIP)
 	}
@@ -154,9 +154,24 @@ func upsertNode(ctx context.Context, exec DBTX, n Node, opts NodeOptions) (strin
 	}
 
 	desiredName := n.ID
+	clusterMoved := false
+	if curCluster != n.ClusterID {
+		if !bootstrapOwnsNode(curEnrollmentOrigin) {
+			return "", fmt.Errorf("cluster_id drift: db=%q desired=%q enrollment_origin=%q (only gitops_seed/adopted_local nodes can be moved by bootstrap)", curCluster, n.ClusterID, curEnrollmentOrigin)
+		}
+		if err := moveBootstrapOwnedNodeCluster(ctx, exec, n.ID, curCluster, n.ClusterID); err != nil {
+			return "", err
+		}
+		clusterMoved = true
+	}
+
 	needsGeoBackfill := lat != nil && lon != nil && (!curLat.Valid || !curLon.Valid)
-	if curName == desiredName && curType == n.Type && curWGPort == n.WireGuard.Port && !needsGeoBackfill {
+	needsMutableUpdate := curName != desiredName || curType != n.Type || curWGPort != n.WireGuard.Port || needsGeoBackfill
+	if !needsMutableUpdate && !clusterMoved {
 		return "noop", nil
+	}
+	if !needsMutableUpdate {
+		return "updated", nil
 	}
 
 	const updateSQL = `
@@ -172,6 +187,50 @@ func upsertNode(ctx context.Context, exec DBTX, n Node, opts NodeOptions) (strin
 		return "", fmt.Errorf("update: %w", err)
 	}
 	return "updated", nil
+}
+
+func bootstrapOwnsNode(enrollmentOrigin string) bool {
+	switch enrollmentOrigin {
+	case "gitops_seed", "adopted_local":
+		return true
+	default:
+		return false
+	}
+}
+
+func moveBootstrapOwnedNodeCluster(ctx context.Context, exec DBTX, nodeID, fromClusterID, toClusterID string) error {
+	if _, err := exec.ExecContext(ctx, `SET CONSTRAINTS fk_qm_service_instances_node_cluster, fk_qm_ingress_sites_node_cluster DEFERRED`); err != nil {
+		return fmt.Errorf("defer node cluster FKs: %w", err)
+	}
+
+	if _, err := exec.ExecContext(ctx, `
+		UPDATE quartermaster.service_instances
+		SET cluster_id = $2,
+		    updated_at = NOW()
+		WHERE node_id = $1
+		  AND cluster_id = $3`, nodeID, toClusterID, fromClusterID); err != nil {
+		return fmt.Errorf("move service_instances cluster_id: %w", err)
+	}
+
+	if _, err := exec.ExecContext(ctx, `
+		UPDATE quartermaster.ingress_sites
+		SET cluster_id = $2,
+		    updated_at = NOW()
+		WHERE node_id = $1
+		  AND cluster_id = $3`, nodeID, toClusterID, fromClusterID); err != nil {
+		return fmt.Errorf("move ingress_sites cluster_id: %w", err)
+	}
+
+	if _, err := exec.ExecContext(ctx, `
+		UPDATE quartermaster.infrastructure_nodes
+		SET cluster_id = $2,
+		    updated_at = NOW()
+		WHERE node_id = $1
+		  AND cluster_id = $3`, nodeID, toClusterID, fromClusterID); err != nil {
+		return fmt.Errorf("move infrastructure_nodes cluster_id: %w", err)
+	}
+
+	return nil
 }
 
 func geoForNode(reader GeoIPLookup, externalIP string) (any, any) {

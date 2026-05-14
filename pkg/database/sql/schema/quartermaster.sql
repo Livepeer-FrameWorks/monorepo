@@ -394,6 +394,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.service_instances (
     CONSTRAINT fk_qm_service_instances_node_cluster
         FOREIGN KEY (node_id, cluster_id)
         REFERENCES quartermaster.infrastructure_nodes(node_id, cluster_id)
+        DEFERRABLE INITIALLY IMMEDIATE
 );
 
 ALTER TABLE IF EXISTS quartermaster.service_instances
@@ -478,6 +479,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.ingress_sites (
     CONSTRAINT fk_qm_ingress_sites_node_cluster
         FOREIGN KEY (node_id, cluster_id)
         REFERENCES quartermaster.infrastructure_nodes(node_id, cluster_id)
+        DEFERRABLE INITIALLY IMMEDIATE
 );
 
 CREATE INDEX IF NOT EXISTS idx_qm_ingress_sites_cluster_id ON quartermaster.ingress_sites(cluster_id);

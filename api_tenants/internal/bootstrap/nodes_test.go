@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -86,8 +87,8 @@ func TestReconcileNodesBackfillsMissingGeoCoordinates(t *testing.T) {
 		WithArgs(node.ID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"node_name", "node_type", "cluster_id", "external_ip", "wireguard_ip",
-			"wireguard_public_key", "wireguard_listen_port", "latitude", "longitude",
-		}).AddRow(node.ID, node.Type, node.ClusterID, node.ExternalIP, node.WireGuard.IP, node.WireGuard.PublicKey, node.WireGuard.Port, nil, nil))
+			"wireguard_public_key", "wireguard_listen_port", "enrollment_origin", "latitude", "longitude",
+		}).AddRow(node.ID, node.Type, node.ClusterID, node.ExternalIP, node.WireGuard.IP, node.WireGuard.PublicKey, node.WireGuard.Port, "gitops_seed", nil, nil))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE quartermaster.infrastructure_nodes")).
 		WithArgs(
 			node.ID, node.ID, node.Type, node.WireGuard.Port,
@@ -103,6 +104,93 @@ func TestReconcileNodesBackfillsMissingGeoCoordinates(t *testing.T) {
 	}
 	if len(res.Updated) != 1 || res.Updated[0] != node.ID {
 		t.Fatalf("updated = %+v, want [%s]", res.Updated, node.ID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestReconcileNodesMovesGitOpsOwnedCluster(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	node := Node{
+		ID:         "regional-eu-1",
+		ClusterID:  "regional-eu-primary",
+		Type:       "core",
+		ExternalIP: "203.0.113.10",
+		WireGuard: NodeWireGuard{
+			IP:        "10.88.0.10",
+			PublicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+			Port:      51820,
+		},
+	}
+
+	mock.ExpectQuery(regexp.QuoteMeta("FROM quartermaster.infrastructure_nodes")).
+		WithArgs(node.ID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"node_name", "node_type", "cluster_id", "external_ip", "wireguard_ip",
+			"wireguard_public_key", "wireguard_listen_port", "enrollment_origin", "latitude", "longitude",
+		}).AddRow(node.ID, node.Type, "core-central-primary", node.ExternalIP, node.WireGuard.IP, node.WireGuard.PublicKey, node.WireGuard.Port, "gitops_seed", nil, nil))
+	mock.ExpectExec(regexp.QuoteMeta("SET CONSTRAINTS fk_qm_service_instances_node_cluster, fk_qm_ingress_sites_node_cluster DEFERRED")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE quartermaster.service_instances")).
+		WithArgs(node.ID, node.ClusterID, "core-central-primary").
+		WillReturnResult(sqlmock.NewResult(0, 6))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE quartermaster.ingress_sites")).
+		WithArgs(node.ID, node.ClusterID, "core-central-primary").
+		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE quartermaster.infrastructure_nodes")).
+		WithArgs(node.ID, node.ClusterID, "core-central-primary").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	res, err := ReconcileNodesWithOptions(context.Background(), db, []Node{node}, NodeOptions{})
+	if err != nil {
+		t.Fatalf("ReconcileNodesWithOptions: %v", err)
+	}
+	if len(res.Updated) != 1 || res.Updated[0] != node.ID {
+		t.Fatalf("updated = %+v, want [%s]", res.Updated, node.ID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestReconcileNodesRejectsRuntimeClusterMove(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	node := Node{
+		ID:         "regional-eu-1",
+		ClusterID:  "regional-eu-primary",
+		Type:       "core",
+		ExternalIP: "203.0.113.10",
+		WireGuard: NodeWireGuard{
+			IP:        "10.88.0.10",
+			PublicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+			Port:      51820,
+		},
+	}
+
+	mock.ExpectQuery(regexp.QuoteMeta("FROM quartermaster.infrastructure_nodes")).
+		WithArgs(node.ID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"node_name", "node_type", "cluster_id", "external_ip", "wireguard_ip",
+			"wireguard_public_key", "wireguard_listen_port", "enrollment_origin", "latitude", "longitude",
+		}).AddRow(node.ID, node.Type, "core-central-primary", node.ExternalIP, node.WireGuard.IP, node.WireGuard.PublicKey, node.WireGuard.Port, "runtime_enrolled", nil, nil))
+
+	_, err = ReconcileNodesWithOptions(context.Background(), db, []Node{node}, NodeOptions{})
+	if err == nil {
+		t.Fatal("ReconcileNodesWithOptions succeeded, want cluster drift error")
+	}
+	if !strings.Contains(err.Error(), `enrollment_origin="runtime_enrolled"`) {
+		t.Fatalf("error = %v, want runtime enrollment origin", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
