@@ -1,4 +1,12 @@
 ---
+- name: Privateer | refresh apt package cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  when:
+    - not ansible_check_mode
+    - ansible_facts.os_family == "Debian"
+
 - name: Privateer | install host networking tools
   ansible.builtin.package:
     name: "{{ privateer_network_packages_by_family[ansible_facts.os_family] | default(privateer_network_packages_by_family.RedHat) }}"
