@@ -50,6 +50,21 @@
     - not ansible_check_mode
     - redis_named_instance | bool
 
+- name: Stop default Redis services for named instance
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - redis.service
+    - redis-server.service
+    - valkey.service
+    - valkey-server.service
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+
 - name: Discover Redis server binary for named instance
   ansible.builtin.shell: |
     set -e
