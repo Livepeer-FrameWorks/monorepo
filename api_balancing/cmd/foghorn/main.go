@@ -402,23 +402,28 @@ func main() {
 		defer func() { _ = commodoreClient.Close() }()
 	}
 
-	// Navigator (gRPC) - wildcard certificate retrieval for edge ConfigSeed
-	navigatorAddr := config.GetEnv("NAVIGATOR_GRPC_ADDR", "navigator:18011")
-	navigatorClient, err := navclient.NewClient(navclient.Config{
-		Addr:          navigatorAddr,
-		Timeout:       10 * time.Second,
-		Logger:        logger,
-		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
-	})
-	if err != nil {
-		logger.WithError(err).Warn("Failed to create Navigator gRPC client - TLS bundles will not be seeded")
-		navigatorClient = nil
+	// Navigator is optional; dev compose does not run it, and the client
+	// connects lazily, so an unset address is the only reliable off switch.
+	navigatorAddr := strings.TrimSpace(config.GetEnv("NAVIGATOR_GRPC_ADDR", ""))
+	if navigatorAddr == "" {
+		logger.Info("Navigator gRPC address not configured; TLS bundles will not be seeded")
 	} else {
-		defer navigatorClient.Close()
-		control.SetNavigatorClient(navigatorClient)
+		navigatorClient, navErr := navclient.NewClient(navclient.Config{
+			Addr:          navigatorAddr,
+			Timeout:       10 * time.Second,
+			Logger:        logger,
+			ServiceToken:  serviceToken,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		})
+		if navErr != nil {
+			logger.WithError(navErr).Warn("Failed to create Navigator gRPC client - TLS bundles will not be seeded")
+			navigatorClient = nil
+		} else {
+			defer navigatorClient.Close()
+			control.SetNavigatorClient(navigatorClient)
+		}
 	}
 	// Purser (gRPC) - x402 settlement + billing checks
 	purserGRPCURL := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")

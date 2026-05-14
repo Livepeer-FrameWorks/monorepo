@@ -206,7 +206,7 @@ func (m *Manager) reconcile() {
 		m.scheduleRetry()
 		return
 	}
-	if err := m.ensureStreams(seed); err != nil {
+	if err := m.ensureStreams(current, seed); err != nil {
 		m.logger.WithError(err).Warn("ensureStreams failed")
 		m.scheduleRetry()
 		return
@@ -225,6 +225,18 @@ func (m *Manager) reconcile() {
 		m.scheduleRetry()
 		return
 	}
+
+	m.mu.Lock()
+	recoveredAfterAttempts := m.retryAttempt
+	m.mu.Unlock()
+	fields := logging.Fields{
+		"node_id":        seed.GetNodeId(),
+		"template_count": len(seed.GetTemplates()),
+	}
+	if recoveredAfterAttempts > 0 {
+		fields["recovered_after_attempts"] = recoveredAfterAttempts
+	}
+	m.logger.WithFields(fields).Info("Mist config reconcile succeeded")
 
 	// Record applied signature
 	if sum := hashSeed(seed); sum != "" {
@@ -1053,7 +1065,7 @@ func hostnameFromPublicURL(edgePublicURL string) string {
 	return u.Hostname()
 }
 
-func (m *Manager) ensureStreams(seed *pb.ConfigSeed) error {
+func (m *Manager) ensureStreams(current map[string]any, seed *pb.ConfigSeed) error {
 	if seed == nil || len(seed.GetTemplates()) == 0 {
 		return nil
 	}
@@ -1061,6 +1073,19 @@ func (m *Manager) ensureStreams(seed *pb.ConfigSeed) error {
 	if base == "" {
 		return fmt.Errorf("ConfigSeed missing foghorn_balancer_base; cannot wire MistServer balancer")
 	}
+	if stale := staleManagedWildcardStreams(current); len(stale) > 0 {
+		if err := m.mistClient.DeleteStreams(stale); err != nil {
+			return fmt.Errorf("delete stale wildcard streams: %w", err)
+		}
+	}
+	streams := streamConfigsFromSeed(seed, base)
+	if len(streams) == 0 {
+		return nil
+	}
+	return m.mistClient.AddStreams(streams)
+}
+
+func streamConfigsFromSeed(seed *pb.ConfigSeed, base string) map[string]map[string]any {
 	pushSource := "balance:" + base + "?fallback=push://"
 	pullSource := "balance:" + base
 
@@ -1068,6 +1093,9 @@ func (m *Manager) ensureStreams(seed *pb.ConfigSeed) error {
 	for _, t := range seed.GetTemplates() {
 		def := t.GetDef()
 		if def == nil || def.GetName() == "" {
+			continue
+		}
+		if strings.Contains(def.GetName(), "+") {
 			continue
 		}
 		source := pushSource
@@ -1082,9 +1110,10 @@ func (m *Manager) ensureStreams(seed *pb.ConfigSeed) error {
 			"tags":          def.GetTags(),
 		}
 
-		// processing+ sources are resolved dynamically via STREAM_SOURCE, but
-		// Mist still requires a syntactically valid configured source.
-		if def.GetName() == "processing" || strings.HasPrefix(def.GetName(), "processing+") {
+		// processing+ sources are resolved dynamically via STREAM_SOURCE. The
+		// base processing template exists only to give Mist a configured source
+		// for the wildcard family.
+		if def.GetName() == "processing" {
 			entry["source"] = inertMistSource
 		}
 
@@ -1092,10 +1121,34 @@ func (m *Manager) ensureStreams(seed *pb.ConfigSeed) error {
 		// No static processes in wildcard definitions.
 		streams[def.GetName()] = entry
 	}
-	if len(streams) == 0 {
+	return streams
+}
+
+func staleManagedWildcardStreams(current map[string]any) []string {
+	if current == nil {
 		return nil
 	}
-	return m.mistClient.AddStreams(streams)
+	rawStreams, ok := current["streams"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	var stale []string
+	for name := range rawStreams {
+		if isStaleManagedWildcardStream(name) {
+			stale = append(stale, name)
+		}
+	}
+	sort.Strings(stale)
+	return stale
+}
+
+func isStaleManagedWildcardStream(name string) bool {
+	for _, prefix := range []string{"live+", "vod+", "processing+", "pull+"} {
+		if strings.HasPrefix(name, prefix) && (name == prefix || strings.Contains(name, "$")) {
+			return true
+		}
+	}
+	return false
 }
 
 func join(base, path string) string {
