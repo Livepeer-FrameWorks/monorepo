@@ -143,7 +143,7 @@
   ansible.builtin.template:
     src: "{{ 'sentinel.conf.j2' if redis_role == 'sentinel' else 'instance.conf.j2' }}"
     dest: "{{ redis_config_path }}"
-    owner: root
+    owner: "{{ redis_runtime_user if redis_role == 'sentinel' else 'root' }}"
     group: "{{ redis_runtime_group }}"
     mode: "0640"
   register: redis_named_config
@@ -202,6 +202,9 @@
   ansible.builtin.shell: |
     set -euo pipefail
     test -r "{{ redis_config_path }}"
+    {% if redis_role == 'sentinel' %}
+    test -w "{{ redis_config_path }}"
+    {% endif %}
     test -d "{{ redis_data_dir }}"
     test -w "{{ redis_data_dir }}"
     test -d "{{ redis_log_dir }}"
@@ -292,6 +295,13 @@
       failed_when: false
       check_mode: false
 
+    - name: Capture named Redis log after failed start
+      ansible.builtin.slurp:
+        src: "{{ redis_log_file }}"
+      register: redis_log
+      failed_when: false
+      check_mode: false
+
     - name: Fail with named Redis startup diagnostics
       ansible.builtin.fail:
         msg: |-
@@ -301,3 +311,6 @@
 
           journalctl:
           {{ redis_journal.stdout | default('(no journal output)') }}
+
+          redis log:
+          {{ (redis_log.content | default('') | b64decode) or '(no redis log output)' }}
