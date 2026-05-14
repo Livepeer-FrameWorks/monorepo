@@ -2226,7 +2226,7 @@ type VodAsset struct {
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *PlaybackPolicy `json:"playbackPolicy,omitempty"`
 	// Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails.
-	// Null until processThumbnailUploaded confirms the upload.
+	// Null until Foghorn confirms the thumbnail upload.
 	ThumbnailAssets *proto.ThumbnailAssets `json:"thumbnailAssets,omitempty"`
 }
 

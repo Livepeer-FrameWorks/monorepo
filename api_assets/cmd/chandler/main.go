@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -31,10 +32,6 @@ func main() {
 		config.GetEnv("QUARTERMASTER_HOST", "quartermaster")+":"+config.GetEnv("QUARTERMASTER_GRPC_PORT", "19002"))
 	clusterID := config.GetEnv("CLUSTER_ID", "")
 
-	// Bucket/endpoint/region default to env; per-cluster lookup below overrides
-	// when CLUSTER_ID is set and Quartermaster is reachable. Credentials stay
-	// env-sourced regardless — they are infrastructure secrets, not cluster-
-	// row data.
 	s3Cfg := handlers.S3Config{
 		Bucket:       config.GetEnv("STORAGE_S3_BUCKET", ""),
 		Prefix:       config.GetEnv("STORAGE_S3_PREFIX", ""),
@@ -46,7 +43,12 @@ func main() {
 	}
 
 	if clusterID != "" {
-		applyClusterS3FromQuartermaster(logger, qmAddr, serviceToken, clusterID, &s3Cfg)
+		if err := applyClusterS3FromQuartermaster(logger, qmAddr, serviceToken, clusterID, &s3Cfg); err != nil {
+			if !config.GetEnvBool("CHANDLER_ALLOW_ENV_S3_FALLBACK", false) {
+				logger.WithError(err).WithField("cluster_id", clusterID).Fatal("Cluster S3 lookup failed")
+			}
+			logger.WithError(err).WithField("cluster_id", clusterID).Warn("Using env S3 config after cluster S3 lookup failed")
+		}
 	}
 	if s3Cfg.Bucket == "" {
 		logger.Warn("S3 bucket not configured (no cluster row, no env) — asset requests will return 503 until configured")
@@ -136,12 +138,9 @@ func main() {
 	}
 }
 
-// applyClusterS3FromQuartermaster overrides bucket/endpoint/region with the
-// values stored on the local cluster's infrastructure_clusters row. Best-
-// effort: if Quartermaster is unreachable or returns no row, the existing
-// env-defaulted s3Cfg stands. Credentials are never sourced from Quartermaster
-// — they are infrastructure secrets and stay env-only.
-func applyClusterS3FromQuartermaster(logger logging.Logger, qmAddr, serviceToken, clusterID string, s3Cfg *handlers.S3Config) {
+// applyClusterS3FromQuartermaster loads the local cluster's storage placement.
+// Credentials remain env-only infrastructure secrets.
+func applyClusterS3FromQuartermaster(logger logging.Logger, qmAddr, serviceToken, clusterID string, s3Cfg *handlers.S3Config) error {
 	qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
 		GRPCAddr:      qmAddr,
 		Timeout:       10 * time.Second,
@@ -152,8 +151,7 @@ func applyClusterS3FromQuartermaster(logger logging.Logger, qmAddr, serviceToken
 		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
-		logger.WithError(err).Warn("Quartermaster gRPC client unavailable; falling back to env S3 config")
-		return
+		return fmt.Errorf("quartermaster client: %w", err)
 	}
 	defer func() { _ = qc.Close() }()
 
@@ -162,13 +160,9 @@ func applyClusterS3FromQuartermaster(logger logging.Logger, qmAddr, serviceToken
 	resp, err := qc.GetCluster(ctx, clusterID)
 	switch {
 	case err != nil:
-		logger.WithError(err).WithField("cluster_id", clusterID).
-			Warn("Quartermaster GetCluster failed; falling back to env S3 config")
-		return
+		return fmt.Errorf("get cluster: %w", err)
 	case resp == nil || resp.GetCluster() == nil:
-		logger.WithField("cluster_id", clusterID).
-			Warn("Quartermaster returned no cluster row; falling back to env S3 config")
-		return
+		return fmt.Errorf("cluster row not found")
 	}
 	cluster := resp.GetCluster()
 	if v := cluster.GetS3Bucket(); v != "" {
@@ -180,4 +174,8 @@ func applyClusterS3FromQuartermaster(logger logging.Logger, qmAddr, serviceToken
 	if v := cluster.GetS3Region(); v != "" {
 		s3Cfg.Region = v
 	}
+	if s3Cfg.Bucket == "" {
+		return fmt.Errorf("cluster row has no s3_bucket")
+	}
+	return nil
 }

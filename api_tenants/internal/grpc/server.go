@@ -5422,7 +5422,11 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after commit
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			s.logger.WithError(rollbackErr).Debug("transaction rollback failed")
+		}
+	}()
 
 	// Validate token - check for single-use (used_at IS NULL) OR multi-use (usage_count < usage_limit)
 	var tokenID string
@@ -5632,7 +5636,11 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after commit
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			s.logger.WithError(rollbackErr).Debug("transaction rollback failed")
+		}
+	}()
 
 	// Replay short-circuit: if the caller supplies node_id + public_key and
 	// a matching row already exists for this token, this is a retry after a
@@ -9247,10 +9255,11 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 	}
 
 	// Validate invite token if provided
+	var inviteID string
 	var inviteAccessLevel string
 	var inviteResourceLimits sql.NullString
 	if inviteToken != nil && *inviteToken != "" {
-		var inviteID, inviteClusterID, inviteTenantID string
+		var inviteClusterID, inviteTenantID string
 		inviteErr := s.db.QueryRowContext(ctx, `
 			SELECT id, cluster_id, invited_tenant_id, access_level, resource_limits
 			FROM quartermaster.cluster_invites
@@ -9269,18 +9278,6 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 		if inviteTenantID != tenantID {
 			return nil, status.Error(codes.PermissionDenied, "invite token is for a different tenant")
 		}
-
-		// Mark invite as accepted
-		_, err = s.db.ExecContext(ctx, `
-			UPDATE quartermaster.cluster_invites SET status = 'accepted', accepted_at = NOW()
-			WHERE id = $1
-		`, inviteID)
-		if err != nil {
-			s.logger.WithFields(logging.Fields{
-				"invite_id": inviteID,
-				"error":     err,
-			}).Error("Failed to mark invite as accepted")
-		}
 	}
 
 	// Determine subscription status
@@ -9297,9 +9294,27 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 
 	now := time.Now()
 	id := uuid.New().String()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin transaction: %v", err)
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			s.logger.WithError(rollbackErr).Debug("transaction rollback failed")
+		}
+	}()
 
-	// Create or update subscription
-	_, err = s.db.ExecContext(ctx, `
+	if inviteID != "" {
+		if _, err = tx.ExecContext(ctx, `
+			UPDATE quartermaster.cluster_invites SET status = 'accepted', accepted_at = NOW()
+			WHERE id = $1
+		`, inviteID); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to accept invite: %v", err)
+		}
+	}
+
+	var subscriptionID string
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO quartermaster.tenant_cluster_access (
 			id, tenant_id, cluster_id, access_level, subscription_status,
 			resource_limits, requested_at, is_active, created_at, updated_at
@@ -9313,9 +9328,21 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 			updated_at = NOW()
 		RETURNING id
 	`, id, tenantID, clusterID, accessLevel, subscriptionStatus,
-		inviteResourceLimits, now)
+		inviteResourceLimits, now).Scan(&subscriptionID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create subscription: %v", err)
+	}
+
+	eventType := eventClusterSubscriptionRequested
+	if subscriptionStatus == "active" {
+		eventType = eventClusterSubscriptionApproved
+	}
+	if enqErr := s.emitClusterEventTx(ctx, tx, eventType, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, inviteID, subscriptionID, ""); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue cluster subscription event: %v", enqErr)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "commit subscription: %v", err)
 	}
 
 	// Fetch the created subscription
@@ -9323,12 +9350,6 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 	if err != nil {
 		return nil, err
 	}
-
-	eventType := eventClusterSubscriptionRequested
-	if sub.SubscriptionStatus == pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_ACTIVE {
-		eventType = eventClusterSubscriptionApproved
-	}
-	s.emitClusterEvent(ctx, eventType, tenantID, userID, clusterID, "cluster_subscription", sub.Id, "", sub.Id, "")
 
 	return sub, nil
 }
@@ -9376,20 +9397,28 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *pb.A
 		return nil, commercialErr
 	}
 
-	// Mark invite as accepted
-	_, err = s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin transaction: %v", err)
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			s.logger.WithError(rollbackErr).Debug("transaction rollback failed")
+		}
+	}()
+
+	if _, err = tx.ExecContext(ctx, `
 		UPDATE quartermaster.cluster_invites SET status = 'accepted', accepted_at = NOW()
 		WHERE id = $1
-	`, inviteID)
-	if err != nil {
+	`, inviteID); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to accept invite: %v", err)
 	}
 
 	now := time.Now()
 	id := uuid.New().String()
 
-	// Create subscription (active since it's via invite)
-	_, err = s.db.ExecContext(ctx, `
+	var subscriptionID string
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO quartermaster.tenant_cluster_access (
 			id, tenant_id, cluster_id, access_level, subscription_status,
 			resource_limits, approved_at, is_active, created_at, updated_at
@@ -9401,17 +9430,24 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *pb.A
 			approved_at = NOW(),
 			is_active = true,
 			updated_at = NOW()
-	`, id, tenantID, clusterID, accessLevel, resourceLimits, now)
+		RETURNING id
+	`, id, tenantID, clusterID, accessLevel, resourceLimits, now).Scan(&subscriptionID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create subscription: %v", err)
+	}
+
+	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterSubscriptionApproved, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, inviteID, subscriptionID, ""); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue cluster subscription event: %v", enqErr)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "commit invite acceptance: %v", err)
 	}
 
 	sub, err := s.getClusterSubscription(ctx, tenantID, clusterID)
 	if err != nil {
 		return nil, err
 	}
-
-	s.emitClusterEvent(ctx, eventClusterSubscriptionApproved, tenantID, userID, clusterID, "cluster_subscription", sub.Id, inviteID, sub.Id, "")
 
 	return sub, nil
 }
@@ -9539,11 +9575,21 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 	}
 
 	userID := middleware.GetUserID(ctx)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin transaction: %v", err)
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			s.logger.WithError(rollbackErr).Debug("transaction rollback failed")
+		}
+	}()
+
 	// Get subscription and verify ownership
 	var tenantID, clusterID, pricingModel string
 	var dbOwnerID sql.NullString
 	var isPlatformOfficial bool
-	err := s.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		SELECT a.tenant_id, a.cluster_id, c.owner_tenant_id, c.pricing_model, c.is_platform_official
 		FROM quartermaster.tenant_cluster_access a
 		JOIN quartermaster.infrastructure_clusters c ON a.cluster_id = c.cluster_id
@@ -9562,7 +9608,7 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 		return nil, commercialErr
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		UPDATE quartermaster.tenant_cluster_access
 		SET subscription_status = 'active', approved_at = NOW(), approved_by = $2, updated_at = NOW()
 		WHERE id = $1
@@ -9571,12 +9617,18 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 		return nil, status.Errorf(codes.Internal, "failed to approve subscription: %v", err)
 	}
 
+	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterSubscriptionApproved, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, "", subscriptionID, ""); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue cluster subscription event: %v", enqErr)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "commit subscription approval: %v", err)
+	}
+
 	sub, err := s.getClusterSubscription(ctx, tenantID, clusterID)
 	if err != nil {
 		return nil, err
 	}
-
-	s.emitClusterEvent(ctx, eventClusterSubscriptionApproved, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, "", subscriptionID, "")
 
 	return sub, nil
 }
@@ -9591,10 +9643,20 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 	}
 
 	userID := middleware.GetUserID(ctx)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin transaction: %v", err)
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			s.logger.WithError(rollbackErr).Debug("transaction rollback failed")
+		}
+	}()
+
 	// Get subscription and verify ownership
 	var tenantID, clusterID string
 	var dbOwnerID sql.NullString
-	err := s.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		SELECT a.tenant_id, a.cluster_id, c.owner_tenant_id
 		FROM quartermaster.tenant_cluster_access a
 		JOIN quartermaster.infrastructure_clusters c ON a.cluster_id = c.cluster_id
@@ -9614,7 +9676,7 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 	if req.Reason != nil {
 		reason = *req.Reason
 	}
-	_, err = s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		UPDATE quartermaster.tenant_cluster_access
 		SET subscription_status = 'rejected', rejection_reason = $2, is_active = false, updated_at = NOW()
 		WHERE id = $1
@@ -9623,12 +9685,18 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 		return nil, status.Errorf(codes.Internal, "failed to reject subscription: %v", err)
 	}
 
+	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterSubscriptionRejected, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, "", subscriptionID, reason); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue cluster subscription event: %v", enqErr)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "commit subscription rejection: %v", err)
+	}
+
 	sub, err := s.getClusterSubscription(ctx, tenantID, clusterID)
 	if err != nil {
 		return nil, err
 	}
-
-	s.emitClusterEvent(ctx, eventClusterSubscriptionRejected, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, "", subscriptionID, reason)
 
 	return sub, nil
 }

@@ -55,7 +55,11 @@ CREATE TABLE IF NOT EXISTS stream_event_log (
     city Nullable(String),
 
     -- Full event payload (typed JSON)
-    event_data String
+    event_data String,
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, event_id)
@@ -166,7 +170,11 @@ CREATE TABLE IF NOT EXISTS stream_health_samples (
     audio_channels Nullable(UInt8),
     audio_sample_rate Nullable(UInt32),
     audio_codec Nullable(String),
-    audio_bitrate Nullable(UInt32)
+    audio_bitrate Nullable(UInt32),
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
@@ -230,7 +238,11 @@ CREATE TABLE IF NOT EXISTS rebuffering_events (
     buffer_state LowCardinality(String),
     prev_state LowCardinality(String),
     rebuffer_start UInt8,
-    rebuffer_end UInt8
+    rebuffer_end UInt8,
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
@@ -277,7 +289,11 @@ CREATE TABLE IF NOT EXISTS track_list_events (
     primary_audio_channels Nullable(UInt8),
     primary_audio_sample_rate Nullable(UInt32),
     primary_audio_codec Nullable(String),
-    primary_audio_bitrate Nullable(UInt32)
+    primary_audio_bitrate Nullable(UInt32),
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, event_id)
@@ -358,7 +374,11 @@ CREATE TABLE IF NOT EXISTS viewer_connection_events (
 
     event_type LowCardinality(String),
     session_duration UInt32,
-    bytes_transferred UInt64
+    bytes_transferred UInt64,
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, event_id)
@@ -455,7 +475,11 @@ CREATE TABLE IF NOT EXISTS client_qoe_samples (
     packets_sent UInt64,
     packets_lost UInt64,
     packets_retransmitted UInt64,
-    connection_quality Nullable(Float32)
+    connection_quality Nullable(Float32),
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
@@ -750,7 +774,11 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
     latency_ms Nullable(Float32),
     candidates_count Nullable(Int32),
     event_type Nullable(String),
-    source Nullable(String)
+    source Nullable(String),
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
@@ -820,7 +848,11 @@ CREATE TABLE IF NOT EXISTS federation_events (
     local_lat Nullable(Float64),
     local_lon Nullable(Float64),
     remote_lat Nullable(Float64),
-    remote_lon Nullable(Float64)
+    remote_lon Nullable(Float64),
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, local_cluster, event_type, timestamp)
@@ -913,7 +945,11 @@ CREATE TABLE IF NOT EXISTS node_metrics_samples (
     latitude Float64,
     longitude Float64,
 
-    metadata JSON
+    metadata JSON,
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, cluster_id, node_id, timestamp)
@@ -1038,7 +1074,11 @@ CREATE TABLE IF NOT EXISTS artifact_events (
     file_path Nullable(String),
     s3_url Nullable(String),
     size_bytes Nullable(UInt64),
-    expires_at Nullable(Int64)
+    expires_at Nullable(Int64),
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, request_id)
@@ -1150,7 +1190,11 @@ CREATE TABLE IF NOT EXISTS storage_events (
     warm_duration_ms Nullable(Int64),
     error Nullable(String),
     cluster_id LowCardinality(String) DEFAULT '',
-    origin_cluster_id LowCardinality(String) DEFAULT ''
+    origin_cluster_id LowCardinality(String) DEFAULT '',
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, asset_hash)
@@ -1217,7 +1261,11 @@ CREATE TABLE IF NOT EXISTS processing_events (
     rtf_in Nullable(Float64),
     rtf_out Nullable(Float64),
     pipeline_lag_ms Nullable(Int64),
-    output_bitrate_bps Nullable(Int64)
+    output_bitrate_bps Nullable(Int64),
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
@@ -1325,7 +1373,11 @@ CREATE TABLE IF NOT EXISTS ingest_errors (
     tenant_id String,
     stream_id String,
     error String,
-    payload_json String
+    payload_json String,
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(received_at)
 ORDER BY (received_at, event_type, event_id)
@@ -1359,7 +1411,11 @@ CREATE TABLE IF NOT EXISTS api_requests (
     request_count UInt32 DEFAULT 1,
     error_count UInt32 DEFAULT 0,
     total_duration_ms UInt64 DEFAULT 0,              -- Sum of all request durations in aggregate
-    total_complexity UInt32 DEFAULT 0                -- Sum of all complexity scores in aggregate
+    total_complexity UInt32 DEFAULT 0,               -- Sum of all complexity scores in aggregate
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, timestamp)
@@ -1453,7 +1509,11 @@ CREATE TABLE IF NOT EXISTS tenant_acquisition_events (
     landing_page Nullable(String),
     referral_code Nullable(String),
     is_agent UInt8,
-    event_data String
+    event_data String,
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (signup_channel, timestamp, tenant_id)
@@ -1464,6 +1524,7 @@ TTL timestamp + INTERVAL 730 DAY;
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS api_events (
+    event_id UUID DEFAULT generateUUIDv4(),
     tenant_id UUID,
     event_type LowCardinality(String),
     source LowCardinality(String),
@@ -1472,6 +1533,11 @@ CREATE TABLE IF NOT EXISTS api_events (
     resource_id Nullable(String),
     details String,
     timestamp DateTime64(3),
+    cluster_id LowCardinality(String) DEFAULT '',
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0,
 
     INDEX idx_event_type event_type TYPE bloom_filter GRANULARITY 4,
     INDEX idx_resource_type resource_type TYPE bloom_filter GRANULARITY 4
@@ -1584,6 +1650,10 @@ CREATE TABLE IF NOT EXISTS orchestrator_discovery_samples (
     longitude Float64,
     country_code LowCardinality(String),
     geo_source LowCardinality(String) DEFAULT 'unknown',
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0,
 
     INDEX idx_orch_addr orch_addr TYPE bloom_filter GRANULARITY 4
 ) ENGINE = MergeTree()
@@ -1684,6 +1754,10 @@ CREATE TABLE IF NOT EXISTS orchestrator_transcode_outcomes (
     profiles Array(String),
     error_code String,
     error_kind LowCardinality(String),
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0,
 
     INDEX idx_orch_addr orch_addr TYPE bloom_filter GRANULARITY 4,
     INDEX idx_session_id session_id TYPE bloom_filter GRANULARITY 4

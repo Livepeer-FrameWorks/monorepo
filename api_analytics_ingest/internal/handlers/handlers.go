@@ -54,6 +54,41 @@ type clickhouseConn interface {
 	Query(ctx context.Context, query string, args ...interface{}) (clickhouseRows, error)
 }
 
+type envelopeColumns struct {
+	sourceRegion          string
+	streamOriginRegion    string
+	streamOriginClusterID string
+	schemaVersion         uint8
+}
+
+func analyticsEnvelopeColumns(event kafka.AnalyticsEvent) envelopeColumns {
+	return envelopeColumns{
+		sourceRegion:          event.SourceRegion,
+		streamOriginRegion:    event.StreamOriginRegion,
+		streamOriginClusterID: event.StreamOriginClusterID,
+		schemaVersion:         boundedSchemaVersion(event.SchemaVersion),
+	}
+}
+
+func serviceEnvelopeColumns(event kafka.ServiceEvent) envelopeColumns {
+	return envelopeColumns{
+		sourceRegion:          event.SourceRegion,
+		streamOriginRegion:    event.StreamOriginRegion,
+		streamOriginClusterID: event.StreamOriginClusterID,
+		schemaVersion:         boundedSchemaVersion(event.SchemaVersion),
+	}
+}
+
+func boundedSchemaVersion(version int32) uint8 {
+	if version <= 0 {
+		return 0
+	}
+	if version > 255 {
+		return 255
+	}
+	return uint8(version)
+}
+
 type clickhouseNativeConn struct {
 	conn database.ClickHouseNativeConn
 }
@@ -371,6 +406,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	streamLifecycle := tp.StreamLifecycleUpdate
 	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
 	internalName := mist.ExtractInternalName(streamLifecycle.GetInternalName())
+	env := analyticsEnvelopeColumns(event)
 
 	if h.metrics != nil {
 		h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "attempt").Inc()
@@ -466,10 +502,11 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	eventBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_event_log (
 			timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type, status,
-			buffer_state, downloaded_bytes, uploaded_bytes, total_viewers, total_inputs,
-			total_outputs, viewer_seconds, has_issues, issues_description,
-			track_count, quality_tier, primary_width, primary_height, primary_fps, event_data
-		)`)
+				buffer_state, downloaded_bytes, uploaded_bytes, total_viewers, total_inputs,
+				total_outputs, viewer_seconds, has_issues, issues_description,
+				track_count, quality_tier, primary_width, primary_height, primary_fps, event_data,
+				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+			)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare stream_events batch: %v", err)
 		if h.metrics != nil {
@@ -503,6 +540,10 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		nilIfZeroUint16(streamLifecycle.GetPrimaryHeight()),
 		nilIfZeroFloat32(streamLifecycle.GetPrimaryFps()),
 		marshalTypedEventData(&streamLifecycle),
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); appendErr != nil {
 		h.logger.Errorf("Failed to append to stream_events batch: %v", appendErr)
 		if h.metrics != nil {
@@ -534,10 +575,11 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 			timestamp, tenant_id, stream_id, internal_name, node_id,
 			bitrate, fps, width, height, codec, quality_tier,
 			buffer_state, buffer_size, buffer_health,
-			has_issues, issues_description, track_count,
-			track_metadata,
-			audio_channels, audio_sample_rate, audio_codec, audio_bitrate
-	)`)
+				has_issues, issues_description, track_count,
+				track_metadata,
+				audio_channels, audio_sample_rate, audio_codec, audio_bitrate,
+				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare stream_health_metrics batch: %v", err)
 		if h.metrics != nil {
@@ -594,6 +636,10 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		nilIfZeroUint32(streamLifecycle.GetAudioSampleRate()),
 		nilIfEmptyString(streamLifecycle.GetAudioCodec()),
 		nilIfZeroUint32(streamLifecycle.GetAudioBitrate()),
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); err != nil {
 		h.logger.Errorf("Failed to append to stream_health_metrics: %v", err)
 		if h.metrics != nil {
@@ -727,6 +773,7 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 	if originClusterID == "" {
 		originClusterID = clusterID
 	}
+	env := analyticsEnvelopeColumns(event)
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
         INSERT INTO viewer_connection_events (
@@ -736,7 +783,8 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
             request_url,
             country_code, city, latitude, longitude,
             client_bucket_h3, client_bucket_res, node_bucket_h3, node_bucket_res,
-            event_type, session_duration, bytes_transferred
+            event_type, session_duration, bytes_transferred,
+            source_region, stream_origin_region, stream_origin_cluster_id, schema_version
         )`)
 	if err != nil {
 		return err
@@ -778,6 +826,10 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 		eventType,
 		durationUI,
 		bytesTransferred,
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); err != nil {
 		return err
 	}
@@ -1007,10 +1059,12 @@ func (h *AnalyticsHandler) writeIngestError(ctx context.Context, event kafka.Ana
 	if cause != nil {
 		errorMessage = fmt.Sprintf("%s: %v", reason, cause)
 	}
+	env := analyticsEnvelopeColumns(event)
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO ingest_errors (
-			received_at, event_id, event_type, source, tenant_id, stream_id, error, payload_json
+			received_at, event_id, event_type, source, tenant_id, stream_id, error, payload_json,
+			source_region, stream_origin_region, stream_origin_cluster_id, schema_version
 		)`)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to prepare ingest_errors batch")
@@ -1029,6 +1083,10 @@ func (h *AnalyticsHandler) writeIngestError(ctx context.Context, event kafka.Ana
 		streamID,
 		errorMessage,
 		payloadJSON,
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); appendErr != nil {
 		h.logger.WithError(appendErr).Error("Failed to append ingest_errors batch")
 		if h.metrics != nil {
@@ -1099,13 +1157,14 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 	pr := tp.PushRewrite
 	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
 	internalName := mist.ExtractInternalName(pr.GetStreamName())
+	env := analyticsEnvelopeColumns(event)
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
         INSERT INTO stream_event_log (
             timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type, status,
             stream_key, request_url, protocol,
             latitude, longitude, location, country_code, city,
-            event_data
+            event_data, source_region, stream_origin_region, stream_origin_cluster_id, schema_version
         )`)
 	if err != nil {
 		return err
@@ -1157,6 +1216,10 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 		pubCountry,
 		pubCity,
 		marshalTypedEventData(pr),
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); appendErr != nil {
 		return appendErr
 	}
@@ -1185,6 +1248,7 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 
 	// Write to ClickHouse routing_events table - using ACTUAL fields from LoadBalancingPayload
 	remoteClusterID := loadBalancing.GetRemoteClusterId()
+	env := analyticsEnvelopeColumns(event)
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
         INSERT INTO routing_decisions (
@@ -1193,7 +1257,8 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
             node_latitude, node_longitude, node_name, node_bucket_h3, node_bucket_res,
             selected_node_id, routing_distance_km,
             stream_tenant_id, cluster_id, remote_cluster_id, latency_ms,
-            candidates_count, event_type, source
+            candidates_count, event_type, source,
+            source_region, stream_origin_region, stream_origin_cluster_id, schema_version
         )`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
@@ -1271,6 +1336,10 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 		candidatesCount,
 		nilIfEmptyString(eventType),
 		nilIfEmptyString(source),
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); appendErr != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", appendErr)
 		return appendErr
@@ -1319,12 +1388,14 @@ func (h *AnalyticsHandler) processClientLifecycleBatch(ctx context.Context, even
 	}
 
 	batchStreamID := parseUUID(batchPayload.GetStreamId())
+	env := analyticsEnvelopeColumns(event)
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO client_qoe_samples (
 			timestamp, event_id, tenant_id, stream_id, internal_name, session_id, node_id, protocol, host,
 			connection_time, position, bandwidth_in, bandwidth_out, bytes_downloaded, bytes_uploaded,
-			packets_sent, packets_lost, packets_retransmitted, connection_quality
+			packets_sent, packets_lost, packets_retransmitted, connection_quality,
+			source_region, stream_origin_region, stream_origin_cluster_id, schema_version
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
@@ -1369,6 +1440,10 @@ func (h *AnalyticsHandler) processClientLifecycleBatch(ctx context.Context, even
 			uint64(sample.GetPacketsLost()),
 			uint64(sample.GetPacketsRetransmitted()),
 			connectionQuality,
+			env.sourceRegion,
+			env.streamOriginRegion,
+			env.streamOriginClusterID,
+			env.schemaVersion,
 		); appendErr != nil {
 			h.logger.Errorf("Failed to append client QoE sample to ClickHouse batch: %v", appendErr)
 			return appendErr
@@ -1401,6 +1476,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	if h.metrics != nil {
 		h.metrics.ClickHouseInserts.WithLabelValues("live_nodes", "attempt").Inc()
 	}
+	env := analyticsEnvelopeColumns(event)
 
 	// 1. Write to live_nodes (current state - ReplacingMergeTree)
 	stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -1483,11 +1559,12 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	// 2. Write to node_metrics (historical log - MergeTree)
 	metricsBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO node_metrics_samples (
-			timestamp, tenant_id, cluster_id, node_id, cpu_usage, ram_max, ram_current,
-			shm_total_bytes, shm_used_bytes, disk_total_bytes, disk_used_bytes,
-			bandwidth_in, bandwidth_out, up_speed, down_speed, connections_current,
-			stream_count, is_healthy, operational_mode, latitude, longitude, metadata
-		)`)
+				timestamp, tenant_id, cluster_id, node_id, cpu_usage, ram_max, ram_current,
+				shm_total_bytes, shm_used_bytes, disk_total_bytes, disk_used_bytes,
+				bandwidth_in, bandwidth_out, up_speed, down_speed, connections_current,
+				stream_count, is_healthy, operational_mode, latitude, longitude, metadata,
+				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+			)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare node_metrics batch: %v", err)
 		if h.metrics != nil {
@@ -1519,6 +1596,10 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 		nodeLifecycle.GetLatitude(),
 		nodeLifecycle.GetLongitude(),
 		metadataJSON,
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); err != nil {
 		h.logger.Errorf("Failed to append to node_metrics batch: %v", err)
 		if h.metrics != nil {
@@ -1618,6 +1699,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 
 	// Extract primary video and audio tracks for dedicated columns
 	primaryVideo, primaryAudio := extractPrimaryTracks(streamBuffer.GetTracks())
+	env := analyticsEnvelopeColumns(event)
 
 	// Extract primary video track fields
 	var (
@@ -1729,10 +1811,11 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	// Write to ClickHouse stream_events table
 	streamEventsBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_event_log (
-			timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type, status,
-			buffer_state, has_issues, issues_description, track_count,
-			quality_tier, primary_width, primary_height, primary_fps, event_data
-		)`)
+				timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type, status,
+				buffer_state, has_issues, issues_description, track_count,
+				quality_tier, primary_width, primary_height, primary_fps, event_data,
+				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+			)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare stream_events batch: %v", err)
 		return err
@@ -1757,6 +1840,10 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		height,
 		fps,
 		marshalTypedEventData(&streamBuffer),
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); appendErr != nil {
 		h.logger.Errorf("Failed to append to stream_events batch: %v", appendErr)
 		return appendErr
@@ -1781,10 +1868,11 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 			timestamp, tenant_id, stream_id, internal_name, node_id, buffer_state,
 			has_issues, issues_description, track_count, track_metadata,
 			bitrate, fps, width, height, codec, quality_tier,
-			frame_ms_max, frame_ms_min, keyframe_ms_max, keyframe_ms_min, frame_jitter_ms,
-			frames_max, frames_min, gop_size, buffer_size, buffer_health,
-			audio_channels, audio_sample_rate, audio_codec, audio_bitrate
-		)`)
+				frame_ms_max, frame_ms_min, keyframe_ms_max, keyframe_ms_min, frame_jitter_ms,
+				frames_max, frames_min, gop_size, buffer_size, buffer_health,
+				audio_channels, audio_sample_rate, audio_codec, audio_bitrate,
+				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+			)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare stream_health_metrics batch: %v", err)
 		return err
@@ -1821,6 +1909,10 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		audioSampleRate,
 		audioCodec,
 		audioBitrate,
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); appendErr != nil {
 		h.logger.Errorf("Failed to append to stream_health_metrics batch: %v", appendErr)
 		return appendErr
@@ -1873,14 +1965,16 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 	streamEnd := tp.StreamEnd
 	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
 	internalName := mist.ExtractInternalName(streamEnd.GetStreamName())
+	env := analyticsEnvelopeColumns(event)
 
 	// Write to ClickHouse stream_events table using ONLY end-specific fields
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO stream_event_log (
-			timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type,
-			downloaded_bytes, uploaded_bytes, total_viewers, total_inputs, total_outputs,
-			viewer_seconds, event_data
-		)`)
+			INSERT INTO stream_event_log (
+				timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type,
+				downloaded_bytes, uploaded_bytes, total_viewers, total_inputs, total_outputs,
+				viewer_seconds, event_data,
+				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+			)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
 		return err
@@ -1922,6 +2016,10 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 		totalOutputs,
 		viewerSeconds,
 		marshalTypedEventData(&streamEnd),
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); appendErr != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", appendErr)
 		return appendErr
@@ -1960,16 +2058,18 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 	trackList := tp.TrackList
 	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
 	internalName := mist.ExtractInternalName(trackList.GetStreamName())
+	env := analyticsEnvelopeColumns(event)
 
 	// Write to track_list_events with enhanced quality metrics using typed data
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO track_list_events (
 			timestamp, event_id, tenant_id, stream_id, internal_name, node_id,
-			track_list, track_count, video_track_count, audio_track_count,
-			primary_width, primary_height, primary_fps, primary_video_codec, primary_video_bitrate,
-			quality_tier, primary_audio_channels, primary_audio_sample_rate, 
-			primary_audio_codec, primary_audio_bitrate
-		)`)
+				track_list, track_count, video_track_count, audio_track_count,
+				primary_width, primary_height, primary_fps, primary_video_codec, primary_video_bitrate,
+				quality_tier, primary_audio_channels, primary_audio_sample_rate,
+				primary_audio_codec, primary_audio_bitrate,
+				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+			)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare track list batch: %v", err)
 		return err
@@ -1998,6 +2098,10 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		nilIfZeroUint32(uint32(trackList.GetPrimaryAudioSampleRate())),
 		nilIfEmptyString(trackList.GetPrimaryAudioCodec()),
 		nilIfZeroUint32(uint32(trackList.GetPrimaryAudioBitrate())),
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); appendErr != nil {
 		h.logger.Errorf("Failed to append track list data: %v", appendErr)
 		return appendErr
@@ -2010,10 +2114,10 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 
 	// Also write a canonical stream event for lifecycle timelines
 	eventBatch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO stream_event_log (
-			timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type, status,
-			event_data
-		)`)
+			INSERT INTO stream_event_log (
+				timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type, status,
+				event_data, source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+			)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare stream events batch (track list): %v", err)
 		return err
@@ -2030,6 +2134,10 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		"track_list_update",
 		"live",
 		marshalTypedEventData(trackList),
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); appendErr != nil {
 		h.logger.Errorf("Failed to append stream event (track list): %v", appendErr)
 		return appendErr
@@ -2073,6 +2181,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	// Required - normalize internal name by stripping any prefix for consistent analytics keys
 	internalName := mist.ExtractInternalName(cl.GetStreamInternalName())
 	tenantID := event.TenantID
+	env := analyticsEnvelopeColumns(event)
 
 	// Prefer clip_hash as the canonical artifact identifier; fall back to request_id if missing.
 	requestID := cl.GetClipHash()
@@ -2188,12 +2297,13 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 
 	// 2. Write to clip_events (historical log - MergeTree)
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO artifact_events (
-			timestamp, tenant_id, stream_id, internal_name, cluster_id, origin_cluster_id,
-			filename, request_id, stage, content_type,
-			start_unix, stop_unix, ingest_node_id,
-			percent, message, file_path, s3_url, size_bytes, expires_at
-		)`)
+			INSERT INTO artifact_events (
+				timestamp, tenant_id, stream_id, internal_name, cluster_id, origin_cluster_id,
+				filename, request_id, stage, content_type,
+				start_unix, stop_unix, ingest_node_id,
+				percent, message, file_path, s3_url, size_bytes, expires_at,
+				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+			)`)
 	if err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
@@ -2221,6 +2331,10 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		s3url,
 		sizeBytes,
 		expiresAt,
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
@@ -2270,6 +2384,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		// Normalize internal name by stripping any prefix for consistent analytics keys
 		internalName = mist.ExtractInternalName(*dvrData.StreamInternalName)
 	}
+	env := analyticsEnvelopeColumns(event)
 
 	// Map status to stage (normalize proto enum to lowercase for ClickHouse)
 	stageStr := normalizeDVRStage(dvrData.GetStatus())
@@ -2344,10 +2459,11 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	// 2. Write to clip_events (historical log - MergeTree)
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO artifact_events (
-			timestamp, tenant_id, stream_id, internal_name, cluster_id, origin_cluster_id,
-			filename, request_id, stage, content_type,
-			start_unix, stop_unix, ingest_node_id, file_path, size_bytes, message, expires_at
-		)`)
+				timestamp, tenant_id, stream_id, internal_name, cluster_id, origin_cluster_id,
+				filename, request_id, stage, content_type,
+				start_unix, stop_unix, ingest_node_id, file_path, size_bytes, message, expires_at,
+				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+			)`)
 	if err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
@@ -2378,6 +2494,10 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		nilIfZeroUint64(dvrData.GetSizeBytes()),
 		message, // message
 		expiresAt,
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
@@ -2421,6 +2541,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 	if vodData.TenantId != nil && *vodData.TenantId != "" {
 		tenantID = *vodData.TenantId
 	}
+	env := analyticsEnvelopeColumns(event)
 
 	// Map status to stage string (normalize proto enum to lowercase for ClickHouse)
 	stageStr := normalizeVodStage(vodData.GetStatus())
@@ -2500,10 +2621,11 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 	// Reuse clip_events table for VOD lifecycle events (content_type differentiates)
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO artifact_events (
-			timestamp, tenant_id, stream_id, internal_name, cluster_id, origin_cluster_id,
-			filename, request_id, stage, content_type,
-			ingest_node_id, file_path, s3_url, size_bytes, message, expires_at
-		)`)
+				timestamp, tenant_id, stream_id, internal_name, cluster_id, origin_cluster_id,
+				filename, request_id, stage, content_type,
+				ingest_node_id, file_path, s3_url, size_bytes, message, expires_at,
+				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+			)`)
 	if err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
@@ -2533,6 +2655,10 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		nilIfZeroUint64Ptr(vodData.SizeBytes), // size_bytes
 		nilIfEmptyStringPtr(vodData.Error),    // message (error message)
 		expiresAt,                             // expires_at
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
@@ -2624,13 +2750,15 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 	}
 
 	actionStr := strings.ToLower(strings.TrimPrefix(sld.GetAction().String(), "ACTION_"))
+	env := analyticsEnvelopeColumns(event)
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO storage_events (
 			timestamp, tenant_id, stream_id, internal_name, asset_hash,
 			action, asset_type, size_bytes, s3_url, local_path,
 			node_id, duration_ms, warm_duration_ms, error,
-			cluster_id, origin_cluster_id
+			cluster_id, origin_cluster_id,
+			source_region, stream_origin_region, stream_origin_cluster_id, schema_version
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
@@ -2654,6 +2782,10 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 		nilIfEmptyString(sld.GetError()),
 		sld.GetClusterId(),
 		sld.GetOriginClusterId(),
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); err != nil {
 		h.logger.Errorf("Failed to append to storage_events batch: %v", err)
 		return err
@@ -2682,6 +2814,7 @@ func (h *AnalyticsHandler) processFederationEvent(ctx context.Context, event kaf
 	fed := tp.FederationEventData
 
 	eventType := strings.ToLower(fed.GetEventType().String())
+	env := analyticsEnvelopeColumns(event)
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO federation_events (
@@ -2691,7 +2824,8 @@ func (h *AnalyticsHandler) processFederationEvent(ctx context.Context, event kaf
 			queried_clusters, responding_clusters, total_candidates, best_remote_score,
 			peer_cluster, role, reason,
 			blocked_cluster, existing_replication_cluster,
-			local_lat, local_lon, remote_lat, remote_lon
+			local_lat, local_lon, remote_lat, remote_lon,
+			source_region, stream_origin_region, stream_origin_cluster_id, schema_version
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare federation_events batch: %v", err)
@@ -2725,6 +2859,10 @@ func (h *AnalyticsHandler) processFederationEvent(ctx context.Context, event kaf
 		valueOrNilFloat64Ptr(fed.LocalLon),
 		valueOrNilFloat64Ptr(fed.RemoteLat),
 		valueOrNilFloat64Ptr(fed.RemoteLon),
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); err != nil {
 		h.logger.Errorf("Failed to append to federation_events batch: %v", err)
 		return err
@@ -2809,6 +2947,7 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 	if originClusterID == "" {
 		originClusterID = mt.GetOriginClusterId()
 	}
+	env := analyticsEnvelopeColumns(event)
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO processing_events (
@@ -2823,7 +2962,8 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 			input_width, input_height, output_width, output_height,
 			input_fpks, output_fps_measured, sample_rate, channels,
 			source_timestamp_ms, sink_timestamp_ms, source_advanced_ms, sink_advanced_ms,
-			rtf_in, rtf_out, pipeline_lag_ms, output_bitrate_bps
+			rtf_in, rtf_out, pipeline_lag_ms, output_bitrate_bps,
+			source_region, stream_origin_region, stream_origin_cluster_id, schema_version
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare process_billing batch: %v", err)
@@ -2900,6 +3040,10 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 		nilIfZeroFloat64Ptr(pbe.RtfOut),
 		nilIfZeroInt64Ptr(pbe.PipelineLagMs),
 		nilIfZeroInt64Ptr(pbe.OutputBitrateBps),
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); err != nil {
 		h.logger.Errorf("Failed to append to process_billing batch: %v", err)
 		if h.metrics != nil {
@@ -2949,16 +3093,18 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 	if h.metrics != nil {
 		h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "attempt").Inc()
 	}
+	env := analyticsEnvelopeColumns(event)
 
 	// Prepare batch insert to api_requests table
 	// Each aggregate becomes one row with request_count > 1
 	chBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO api_requests (
-			timestamp, tenant_id, source_node,
-			auth_type, operation_name, operation_type,
-			request_count, error_count, total_duration_ms, total_complexity,
-			user_hashes, token_hashes
-		)`)
+				timestamp, tenant_id, source_node,
+				auth_type, operation_name, operation_type,
+				request_count, error_count, total_duration_ms, total_complexity,
+				user_hashes, token_hashes,
+				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+			)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare api_request_batch batch: %v", err)
 		if h.metrics != nil {
@@ -3011,6 +3157,10 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 			agg.GetTotalComplexity(),
 			userHashes,
 			tokenHashes,
+			env.sourceRegion,
+			env.streamOriginRegion,
+			env.streamOriginClusterID,
+			env.schemaVersion,
 		); err != nil {
 			h.logger.WithFields(logging.Fields{
 				"tenant_id": agg.GetTenantId(),
@@ -3081,6 +3231,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 		timestamp = time.Unix(ts, 0)
 	}
 	sourceNode := getStringFromMap(event.Data, "source_node")
+	env := serviceEnvelopeColumns(event)
 
 	aggregatesRaw, ok := event.Data["aggregates"]
 	if !ok {
@@ -3094,11 +3245,12 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 
 	chBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO api_requests (
-			timestamp, tenant_id, source_node,
-			auth_type, operation_name, operation_type,
-			request_count, error_count, total_duration_ms, total_complexity,
-			user_hashes, token_hashes
-		)`)
+				timestamp, tenant_id, source_node,
+				auth_type, operation_name, operation_type,
+				request_count, error_count, total_duration_ms, total_complexity,
+				user_hashes, token_hashes,
+				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+			)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare api_request_batch batch: %v", err)
 		if h.metrics != nil {
@@ -3152,6 +3304,10 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 			uint32(getUint64FromMap(aggMap, "total_complexity")),
 			userHashes,
 			tokenHashes,
+			env.sourceRegion,
+			env.streamOriginRegion,
+			env.streamOriginClusterID,
+			env.schemaVersion,
 		); err != nil {
 			h.logger.WithFields(logging.Fields{
 				"tenant_id": getStringFromMap(aggMap, "tenant_id"),
@@ -3218,9 +3374,11 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Contex
 		h.metrics.ClickHouseInserts.WithLabelValues("api_events", "attempt").Inc()
 	}
 
+	env := serviceEnvelopeColumns(event)
 	chBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO api_events (
-			tenant_id, event_type, source, user_id, resource_type, resource_id, details, timestamp
+			event_id, tenant_id, event_type, source, user_id, resource_type, resource_id, details, timestamp,
+			cluster_id, source_region, stream_origin_region, stream_origin_cluster_id, schema_version
 		)`)
 	if err != nil {
 		if h.metrics != nil {
@@ -3268,6 +3426,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Contex
 		}
 
 		if err := chBatch.Append(
+			parseUUID(event.EventID),
 			tenantID,
 			event.EventType,
 			event.Source,
@@ -3276,6 +3435,11 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Contex
 			nilIfEmptyString(event.ResourceID),
 			string(detailsJSON),
 			aggTimestamp,
+			event.SourceClusterID,
+			env.sourceRegion,
+			env.streamOriginRegion,
+			env.streamOriginClusterID,
+			env.schemaVersion,
 		); err != nil {
 			if h.metrics != nil {
 				h.metrics.ClickHouseInserts.WithLabelValues("api_events", "error").Inc()
@@ -3323,11 +3487,13 @@ func (h *AnalyticsHandler) processTenantCreated(ctx context.Context, event kafka
 	if err != nil {
 		return fmt.Errorf("failed to marshal tenant_created event data: %w", err)
 	}
+	env := serviceEnvelopeColumns(event)
 	chBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO tenant_acquisition_events (
 			timestamp, tenant_id, user_id, signup_channel, signup_method,
 			utm_source, utm_medium, utm_campaign, utm_content, utm_term,
-			http_referer, landing_page, referral_code, is_agent, event_data
+			http_referer, landing_page, referral_code, is_agent, event_data,
+			source_region, stream_origin_region, stream_origin_cluster_id, schema_version
 		)`)
 	if err != nil {
 		if h.metrics != nil {
@@ -3351,6 +3517,10 @@ func (h *AnalyticsHandler) processTenantCreated(ctx context.Context, event kafka
 		nilIfEmptyString(getString(attr, "referral_code")),
 		boolToUInt8(getBool(attr, "is_agent")),
 		string(eventDataJSON),
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("tenant_acquisition_events", "error").Inc()
@@ -3373,12 +3543,17 @@ func (h *AnalyticsHandler) processTenantCreated(ctx context.Context, event kafka
 func (h *AnalyticsHandler) processServiceEventAudit(ctx context.Context, event kafka.ServiceEvent) error {
 	if !isValidUUIDString(event.TenantID) {
 		h.writeIngestError(ctx, kafka.AnalyticsEvent{
-			EventID:   event.EventID,
-			EventType: event.EventType,
-			Timestamp: event.Timestamp,
-			Source:    event.Source,
-			TenantID:  event.TenantID,
-			Data:      event.Data,
+			EventID:               event.EventID,
+			EventType:             event.EventType,
+			Timestamp:             event.Timestamp,
+			Source:                event.Source,
+			TenantID:              event.TenantID,
+			Data:                  event.Data,
+			SourceRegion:          event.SourceRegion,
+			SourceClusterID:       event.SourceClusterID,
+			StreamOriginRegion:    event.StreamOriginRegion,
+			StreamOriginClusterID: event.StreamOriginClusterID,
+			SchemaVersion:         event.SchemaVersion,
 		}, "", "missing_or_invalid_tenant_id_service_event", nil)
 		h.logger.WithFields(logging.Fields{
 			"event_type": event.EventType,
@@ -3402,9 +3577,11 @@ func (h *AnalyticsHandler) processServiceEventAudit(ctx context.Context, event k
 		return fmt.Errorf("failed to marshal service event details: %w", err)
 	}
 
+	env := serviceEnvelopeColumns(event)
 	chBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO api_events (
-			tenant_id, event_type, source, user_id, resource_type, resource_id, details, timestamp
+			event_id, tenant_id, event_type, source, user_id, resource_type, resource_id, details, timestamp,
+			cluster_id, source_region, stream_origin_region, stream_origin_cluster_id, schema_version
 		)`)
 	if err != nil {
 		if h.metrics != nil {
@@ -3414,6 +3591,7 @@ func (h *AnalyticsHandler) processServiceEventAudit(ctx context.Context, event k
 	}
 
 	if err := chBatch.Append(
+		parseUUID(event.EventID),
 		parseUUID(event.TenantID),
 		event.EventType,
 		event.Source,
@@ -3422,6 +3600,11 @@ func (h *AnalyticsHandler) processServiceEventAudit(ctx context.Context, event k
 		nilIfEmptyString(event.ResourceID),
 		string(detailsJSON),
 		event.Timestamp,
+		event.SourceClusterID,
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
 	); err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("api_events", "error").Inc()

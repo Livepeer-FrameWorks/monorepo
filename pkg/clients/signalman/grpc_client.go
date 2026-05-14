@@ -13,14 +13,16 @@ import (
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
 )
 
 // GRPCClient is the gRPC streaming client for Signalman
 type GRPCClient struct {
-	conn   *grpc.ClientConn
-	client pb.SignalmanServiceClient
-	logger logging.Logger
+	conn    *grpc.ClientConn
+	client  pb.SignalmanServiceClient
+	logger  logging.Logger
+	timeout time.Duration
 
 	// Subscription state
 	stream    pb.SignalmanService_SubscribeClient
@@ -136,6 +138,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		conn:      conn,
 		client:    pb.NewSignalmanServiceClient(conn),
 		logger:    config.Logger,
+		timeout:   config.Timeout,
 		eventChan: make(chan *pb.SignalmanEvent, 256),
 		errorChan: make(chan error, 1),
 		stopChan:  make(chan struct{}),
@@ -162,6 +165,26 @@ func (c *GRPCClient) Close() error {
 	return nil
 }
 
+func (c *GRPCClient) waitUntilReady(ctx context.Context) error {
+	timeout := c.timeout
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	readyCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	c.conn.Connect()
+	for {
+		state := c.conn.GetState()
+		if state == connectivity.Ready {
+			return nil
+		}
+		if !c.conn.WaitForStateChange(readyCtx, state) {
+			return readyCtx.Err()
+		}
+	}
+}
+
 // Connect establishes the bidirectional stream
 func (c *GRPCClient) Connect(ctx context.Context) error {
 	c.mutex.Lock()
@@ -169,6 +192,10 @@ func (c *GRPCClient) Connect(ctx context.Context) error {
 
 	if c.connected {
 		return fmt.Errorf("already connected")
+	}
+
+	if err := c.waitUntilReady(ctx); err != nil {
+		return fmt.Errorf("signalman transport not ready: %w", err)
 	}
 
 	stream, err := c.client.Subscribe(ctx)

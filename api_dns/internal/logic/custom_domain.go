@@ -127,19 +127,15 @@ func (m *CertManager) IssueCustomDomainCertificate(ctx context.Context, row stor
 	if err := m.store.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, "cert_issuing", ""); err != nil {
 		return fmt.Errorf("status cert_issuing: %w", err)
 	}
-	alias, err := m.store.GetTenantAlias(ctx, row.TenantID)
-	if err != nil {
-		return m.failCustomDomainIssue(ctx, row, fmt.Errorf("tenant alias lookup: %w", err))
-	}
-	bundle, err := m.EnsureTenantWildcardCertificate(ctx, row.TenantID, alias.Subdomain, TenantAliasZoneLabel, rootDomain, email)
+	_, _, expiresAt, issuer, err := m.IssueCertificateViaBunnyWithIssuer(ctx, row.TenantID, row.Domain, email)
 	if err != nil {
 		return m.failCustomDomainIssue(ctx, row, err)
 	}
 	expSQL := sql.NullTime{}
-	if !bundle.ExpiresAt.IsZero() {
-		expSQL = sql.NullTime{Valid: true, Time: bundle.ExpiresAt}
+	if !expiresAt.IsZero() {
+		expSQL = sql.NullTime{Valid: true, Time: expiresAt}
 	}
-	if err := m.store.SetTenantCustomDomainCertMetadata(ctx, row.TenantID, row.Domain, bundle.IssuerCA, expSQL); err != nil {
+	if err := m.store.SetTenantCustomDomainCertMetadata(ctx, row.TenantID, row.Domain, issuer, expSQL); err != nil {
 		return fmt.Errorf("cert metadata: %w", err)
 	}
 	return m.store.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, "cert_issued", "")

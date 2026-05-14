@@ -158,12 +158,13 @@ func (f *fakeDNSProvider) CleanUp(domain, token, keyAuth string) error {
 }
 
 type fakeACMEClient struct {
-	provider       challenge.Provider
-	registerCalled int
-	obtainCalled   int
-	registerErr    error
-	obtainErr      error
-	resource       *certificate.Resource
+	provider        challenge.Provider
+	registerCalled  int
+	obtainCalled    int
+	obtainedDomains []string
+	registerErr     error
+	obtainErr       error
+	resource        *certificate.Resource
 }
 
 func (f *fakeACMEClient) SetDNS01Provider(provider challenge.Provider) error {
@@ -189,6 +190,7 @@ func (f *fakeACMEClient) RegisterWithEAB(_ registration.RegisterEABOptions) (*re
 
 func (f *fakeACMEClient) Obtain(request certificate.ObtainRequest) (*certificate.Resource, error) {
 	f.obtainCalled++
+	f.obtainedDomains = append([]string(nil), request.Domains...)
 	if f.provider != nil {
 		if err := f.provider.Present(request.Domains[0], "token", "keyAuth"); err != nil {
 			return nil, err
@@ -481,6 +483,65 @@ func TestEnsureTLSBundleRenewsTenantCustomDomainBundleWithBunnyProvider(t *testi
 	require.Equal(t, "tenant:tenant-123", bundle.BundleID)
 	require.Equal(t, 0, standardProvider.presentCalls)
 	require.Equal(t, 1, bunnyProvider.presentCalls)
+	require.Equal(t, 1, fakeStore.setCustomDomainMetadataCalled)
+}
+
+func TestIssueCustomDomainCertificateIssuesRequestedDomain(t *testing.T) {
+	ctx := context.Background()
+	notAfter := time.Now().Add(48 * time.Hour)
+	certPEM, keyPEM := buildTestCert(t, notAfter)
+
+	bunnyProvider := &fakeDNSProvider{}
+	acme := &fakeACMEClient{
+		resource: &certificate.Resource{
+			Certificate: certPEM,
+			PrivateKey:  keyPEM,
+		},
+	}
+	fakeStore := &fakeStore{
+		getCertFunc: func(ctx context.Context, tenantID, domain string) (*store.Certificate, error) {
+			require.Equal(t, "tenant-123", tenantID)
+			require.Equal(t, "media.example.com", domain)
+			return nil, store.ErrNotFound
+		},
+		saveCertFunc: func(ctx context.Context, tenantID string, cert *store.Certificate) error {
+			require.Equal(t, "tenant-123", tenantID)
+			require.Equal(t, "media.example.com", cert.Domain)
+			require.NotEmpty(t, cert.IssuerCA)
+			return nil
+		},
+		getAccountFunc: func(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error) {
+			return nil, store.ErrNotFound
+		},
+		saveAccountFunc: func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error {
+			return nil
+		},
+		setTenantCustomDomainCertMetadataFn: func(ctx context.Context, tenantID, domain, issuerID string, certExpiresAt sql.NullTime) error {
+			require.Equal(t, "tenant-123", tenantID)
+			require.Equal(t, "media.example.com", domain)
+			require.NotEmpty(t, issuerID)
+			require.True(t, certExpiresAt.Valid)
+			return nil
+		},
+	}
+
+	manager := NewCertManager(fakeStore)
+	manager.acmeClientFactory = func(config *lego.Config) (acmeClient, error) {
+		return acme, nil
+	}
+	manager.bunnyDNSProviderFactory = func() (challenge.Provider, error) {
+		return bunnyProvider, nil
+	}
+
+	err := manager.IssueCustomDomainCertificate(ctx, store.TenantCustomDomain{
+		TenantID: "tenant-123",
+		Domain:   "media.example.com",
+		Status:   "verified",
+	}, "frameworks.network", "ops@frameworks.network")
+	require.NoError(t, err)
+	require.Equal(t, []string{"media.example.com"}, acme.obtainedDomains)
+	require.Equal(t, 1, bunnyProvider.presentCalls)
+	require.Equal(t, 1, fakeStore.saveCertCalled)
 	require.Equal(t, 1, fakeStore.setCustomDomainMetadataCalled)
 }
 
