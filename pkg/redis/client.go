@@ -21,15 +21,17 @@ const (
 
 // Config configures a topology-agnostic Redis connection.
 type Config struct {
-	Mode         Mode
-	Addrs        []string // single: 1 addr, sentinel: sentinel addrs, cluster: seed nodes
-	MasterName   string   // sentinel only
-	Username     string
-	Password     string
-	DB           int
-	DialTimeout  time.Duration
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
+	Mode             Mode
+	Addrs            []string // single: 1 addr, sentinel: sentinel addrs, cluster: seed nodes
+	MasterName       string   // sentinel only
+	Username         string
+	Password         string
+	SentinelUsername string // sentinel only
+	SentinelPassword string // sentinel only
+	DB               int
+	DialTimeout      time.Duration
+	ReadTimeout      time.Duration
+	WriteTimeout     time.Duration
 }
 
 // NewUniversalClient creates a Redis client that works with single-node,
@@ -55,14 +57,16 @@ func NewUniversalClient(ctx context.Context, cfg Config) (goredis.UniversalClien
 	}
 
 	opts := &goredis.UniversalOptions{
-		Addrs:        cfg.Addrs,
-		MasterName:   cfg.MasterName,
-		Username:     cfg.Username,
-		Password:     cfg.Password,
-		DB:           cfg.DB,
-		DialTimeout:  dialTimeout,
-		ReadTimeout:  readTimeout,
-		WriteTimeout: writeTimeout,
+		Addrs:            cfg.Addrs,
+		MasterName:       cfg.MasterName,
+		Username:         cfg.Username,
+		Password:         cfg.Password,
+		SentinelUsername: cfg.SentinelUsername,
+		SentinelPassword: cfg.SentinelPassword,
+		DB:               cfg.DB,
+		DialTimeout:      dialTimeout,
+		ReadTimeout:      readTimeout,
+		WriteTimeout:     writeTimeout,
 	}
 
 	client := goredis.NewUniversalClient(opts)

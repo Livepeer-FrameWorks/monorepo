@@ -3723,8 +3723,8 @@ type kafkaClusterView struct {
 //   - purser / periscope-query: central billing producer and consumer.
 //   - commodore: central control-plane Kafka producer.
 //
-// Region-local services (decklog, signalman) and cluster-scoped services
-// (foghorn) are NOT pinned — they pick Kafka via serviceKafkaCluster's
+// Region-local services (decklog, signalman) and pool-assigned media services
+// (foghorn, chandler, livepeer-gateway) pick Kafka via serviceKafkaCluster's
 // region resolution. See docs/architecture/service-events.md.
 func isAggregatorPinnedService(serviceType string) bool {
 	switch serviceType {
@@ -4696,6 +4696,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 			}
 			if pw := env["REDIS_FOGHORN_PASSWORD"]; pw != "" {
 				env["REDIS_PASSWORD"] = pw
+				env["REDIS_SENTINEL_PASSWORD"] = pw
 			}
 		} else if addr := env["REDIS_FOGHORN_ADDR"]; addr != "" {
 			env["REDIS_URL"] = redisURLWithOptionalPassword(addr, env["REDIS_FOGHORN_PASSWORD"])

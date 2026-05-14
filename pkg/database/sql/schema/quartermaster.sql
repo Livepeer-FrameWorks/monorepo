@@ -412,11 +412,19 @@ ALTER TABLE IF EXISTS quartermaster.infrastructure_nodes
 -- cluster can have N instances. service_instances.cluster_id remains the
 -- physical/runtime cluster of the process (FK-bound to its node); this table
 -- carries the logical media-cluster identity used by DNS and DiscoverServices.
+-- source carries provenance, mirroring infrastructure_nodes.enrollment_origin:
+--   'gitops_seed'   — written by GitOps seeding that owns the row
+--   'runtime'       — written by AssignServiceToCluster / EnableSelfHosting at runtime
+--   'adopted_local' — runtime row that has been adopted into GitOps ownership
+-- Ordinary runtime upserts preserve the existing source on conflict; only
+-- explicit adopt/unmanage operations flip provenance. Default 'runtime'
+-- backfills correctly because every existing row was written by a runtime RPC.
 CREATE TABLE IF NOT EXISTS quartermaster.service_cluster_assignments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     service_instance_id UUID NOT NULL REFERENCES quartermaster.service_instances(id) ON DELETE CASCADE,
     cluster_id VARCHAR(100) NOT NULL REFERENCES quartermaster.infrastructure_clusters(cluster_id) ON DELETE CASCADE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    source VARCHAR(32) NOT NULL DEFAULT 'runtime' CHECK (source IN ('gitops_seed', 'runtime', 'adopted_local')),
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
     UNIQUE(service_instance_id, cluster_id)

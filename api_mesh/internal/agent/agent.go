@@ -127,6 +127,8 @@ type Agent struct {
 	expectedServices []string
 	certSyncInterval time.Duration
 	lastCertSyncUnix atomic.Int64
+	certDenyLogMu    sync.Mutex
+	certDenyLogTimes map[string]int64
 	lastIngressSync  atomic.Int64
 	ingressMu        sync.Mutex
 	ingressVersions  map[string]string
@@ -967,14 +969,14 @@ func (a *Agent) syncInternalCertificates() error {
 	ctx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
 	defer cancel()
 
-	serviceTypes, err := a.resolvedServiceTypes(ctx)
+	serviceTypes, registeredServiceTypes, registryAvailable, err := a.resolvedServiceTypes(ctx)
 	if err != nil {
 		return err
 	}
 
 	now := time.Now().Unix()
 	last := a.lastCertSyncUnix.Load()
-	if last > 0 && time.Duration(now-last)*time.Second < a.certSyncInterval && !a.missingInternalPKIMaterials(serviceTypes) {
+	if last > 0 && time.Duration(now-last)*time.Second < a.certSyncInterval && !a.missingInternalPKIMaterials(serviceTypes, registeredServiceTypes) {
 		return nil
 	}
 	if issueTokenErr := a.ensureCertIssueToken(ctx); issueTokenErr != nil {
@@ -992,32 +994,99 @@ func (a *Agent) syncInternalCertificates() error {
 		return fmt.Errorf("write ca bundle: %w", err)
 	}
 
+	// Per-service issuance is isolated so one service cannot block sibling
+	// rotations. Expected-only denials are just stale GitOps hints; registered
+	// service failures and local write failures are returned after the loop so
+	// the sync is visible as unhealthy without skipping the remaining services.
+	var syncErrs []error
 	for _, serviceType := range serviceTypes {
+		_, isRegistered := registeredServiceTypes[serviceType]
+		issueFailureIsFatal := isRegistered || !registryAvailable
 		resp, issueErr := a.navigatorClient.IssueInternalCert(ctx, &pb.IssueInternalCertRequest{
 			NodeId:      a.nodeID,
 			ServiceType: serviceType,
 			IssueToken:  a.certIssueToken,
 		})
 		if issueErr != nil {
-			return fmt.Errorf("issue internal cert for %s: %w", serviceType, issueErr)
+			err := fmt.Errorf("issue %s: %w", serviceType, issueErr)
+			a.recordCertIssueFailure(serviceType, now, err)
+			if issueFailureIsFatal {
+				syncErrs = append(syncErrs, err)
+			}
+			continue
 		}
 		if !resp.GetSuccess() {
-			return fmt.Errorf("issue internal cert for %s rejected: %s", serviceType, resp.GetError())
+			err := fmt.Errorf("issue %s rejected: %s", serviceType, resp.GetError())
+			a.recordCertIssueFailure(serviceType, now, err)
+			if issueFailureIsFatal {
+				syncErrs = append(syncErrs, err)
+			}
+			continue
 		}
-		if err := a.writeServiceCertificate(serviceType, resp.GetCertPem(), resp.GetKeyPem()); err != nil {
-			return fmt.Errorf("write internal cert for %s: %w", serviceType, err)
+		if writeErr := a.writeServiceCertificate(serviceType, resp.GetCertPem(), resp.GetKeyPem()); writeErr != nil {
+			wrapped := fmt.Errorf("write %s cert: %w", serviceType, writeErr)
+			a.recordCertIssueFailure(serviceType, now, wrapped)
+			syncErrs = append(syncErrs, wrapped)
+			continue
 		}
+		a.clearCertDenyLog(serviceType)
 	}
 
+	if len(syncErrs) > 0 {
+		return fmt.Errorf("internal cert sync failed: %w", errors.Join(syncErrs...))
+	}
 	a.lastCertSyncUnix.Store(now)
 	return nil
 }
 
-func (a *Agent) missingInternalPKIMaterials(serviceTypes []string) bool {
+// certDenyLogCooldown is the minimum interval between two log lines for the
+// same service's cert issuance failure. Set so a permanently-stale
+// EXPECTED_INTERNAL_GRPC_SERVICES entry produces at most one warning per
+// cooldown window instead of one per sync tick.
+const certDenyLogCooldown = 5 * 60
+
+func (a *Agent) recordCertIssueFailure(serviceType string, now int64, err error) {
+	if a.logger == nil || err == nil {
+		return
+	}
+	a.certDenyLogMu.Lock()
+	if a.certDenyLogTimes == nil {
+		a.certDenyLogTimes = make(map[string]int64)
+	}
+	last := a.certDenyLogTimes[serviceType]
+	suppress := last != 0 && now-last < certDenyLogCooldown
+	if !suppress {
+		a.certDenyLogTimes[serviceType] = now
+	}
+	a.certDenyLogMu.Unlock()
+	if suppress {
+		return
+	}
+	a.logger.WithFields(logging.Fields{
+		"service_type": serviceType,
+		"node_id":      a.nodeID,
+		"error":        err.Error(),
+	}).Warn("Internal cert sync failed for service; siblings continue")
+}
+
+func (a *Agent) clearCertDenyLog(serviceType string) {
+	a.certDenyLogMu.Lock()
+	defer a.certDenyLogMu.Unlock()
+	if a.certDenyLogTimes != nil {
+		delete(a.certDenyLogTimes, serviceType)
+	}
+}
+
+func (a *Agent) missingInternalPKIMaterials(serviceTypes []string, registeredServiceTypes map[string]struct{}) bool {
 	if !fileExistsAndNonEmpty(filepath.Join(a.pkiBasePath, "ca.crt")) {
 		return true
 	}
 	for _, serviceType := range serviceTypes {
+		if a.registryClient != nil {
+			if _, ok := registeredServiceTypes[serviceType]; !ok {
+				continue
+			}
+		}
 		if !fileExistsAndNonEmpty(filepath.Join(a.pkiBasePath, "services", serviceType, "tls.crt")) {
 			return true
 		}
@@ -1033,13 +1102,17 @@ func fileExistsAndNonEmpty(path string) bool {
 	return err == nil && info.Size() > 0
 }
 
-func (a *Agent) resolvedServiceTypes(ctx context.Context) ([]string, error) {
-	if len(a.expectedServices) == 0 {
-		return a.listNodeServiceTypes(ctx)
-	}
-
+// resolvedServiceTypes returns the union of expectedServices (GitOps-rendered
+// seed/hint, EXPECTED_INTERNAL_GRPC_SERVICES) and the services registered on
+// this node in Quartermaster's runtime registry. Union — not intersection —
+// supports two flows simultaneously: GitOps-declared services that haven't
+// self-registered yet still get a cert request (Navigator will deny until
+// they self-register, and per-service isolation in syncInternalCertificates
+// makes that harmless), and runtime-attached services not in GitOps still
+// get certs as soon as they appear in the registry.
+func (a *Agent) resolvedServiceTypes(ctx context.Context) ([]string, map[string]struct{}, bool, error) {
 	seen := make(map[string]struct{}, len(a.expectedServices))
-	expected := make([]string, 0, len(a.expectedServices))
+	serviceTypes := make([]string, 0, len(a.expectedServices))
 	for _, serviceType := range a.expectedServices {
 		serviceType = strings.TrimSpace(serviceType)
 		if serviceType == "" {
@@ -1049,29 +1122,37 @@ func (a *Agent) resolvedServiceTypes(ctx context.Context) ([]string, error) {
 			continue
 		}
 		seen[serviceType] = struct{}{}
-		expected = append(expected, serviceType)
-	}
-	sort.Strings(expected)
-
-	if a.registryClient == nil {
-		return expected, nil
+		serviceTypes = append(serviceTypes, serviceType)
 	}
 
-	registered, err := a.listNodeServiceTypes(ctx)
-	if err != nil {
-		return nil, err
-	}
-	registeredSet := make(map[string]struct{}, len(registered))
-	for _, serviceType := range registered {
-		registeredSet[serviceType] = struct{}{}
-	}
-	serviceTypes := make([]string, 0, len(expected))
-	for _, serviceType := range expected {
-		if _, ok := registeredSet[serviceType]; ok {
+	registeredSet := make(map[string]struct{})
+	if a.registryClient != nil {
+		registered, err := a.listNodeServiceTypes(ctx)
+		if err != nil {
+			if len(serviceTypes) == 0 {
+				return nil, nil, false, err
+			}
+			if a.logger != nil {
+				a.logger.WithFields(logging.Fields{
+					"node_id": a.nodeID,
+					"error":   err.Error(),
+				}).Warn("Failed to list registered services; using expected service seed for cert sync")
+			}
+			sort.Strings(serviceTypes)
+			return serviceTypes, registeredSet, false, nil
+		}
+		for _, serviceType := range registered {
+			registeredSet[serviceType] = struct{}{}
+			if _, ok := seen[serviceType]; ok {
+				continue
+			}
+			seen[serviceType] = struct{}{}
 			serviceTypes = append(serviceTypes, serviceType)
 		}
 	}
-	return serviceTypes, nil
+
+	sort.Strings(serviceTypes)
+	return serviceTypes, registeredSet, true, nil
 }
 
 func (a *Agent) listNodeServiceTypes(ctx context.Context) ([]string, error) {

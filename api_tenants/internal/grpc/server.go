@@ -763,6 +763,10 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 	}
 
 	var nodeIP string
+	registrationClusterID := clusterID
+	if req.NodeId == nil && dns.IsPoolAssignedServiceType(serviceType) {
+		return nil, status.Errorf(codes.InvalidArgument, "node_id required for pool-assigned service %q", serviceType)
+	}
 	if req.NodeId != nil {
 		var nodeClusterID string
 		var resolvedNodeIP sql.NullString
@@ -778,8 +782,21 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "database error: %v", err)
 		}
-		if nodeClusterID != clusterID {
+		var nodeClusterActive bool
+		err = exec.QueryRowContext(ctx, `
+			SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1
+		`, nodeClusterID).Scan(&nodeClusterActive)
+		if errors.Is(err, sql.ErrNoRows) || !nodeClusterActive {
+			return nil, status.Errorf(codes.InvalidArgument, "node '%s' belongs to inactive or unknown cluster '%s'", *req.NodeId, nodeClusterID)
+		}
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		}
+		if !dns.IsPoolAssignedServiceType(serviceType) && nodeClusterID != clusterID {
 			return nil, status.Errorf(codes.InvalidArgument, "node '%s' belongs to cluster '%s', not '%s'", *req.NodeId, nodeClusterID, clusterID)
+		}
+		if nodeClusterID != "" {
+			registrationClusterID = nodeClusterID
 		}
 		if resolvedNodeIP.Valid {
 			nodeIP = strings.TrimSpace(resolvedNodeIP.String)
@@ -850,7 +867,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 				WHERE cluster_id = $1
 				  AND (wireguard_ip = $2::inet OR internal_ip = $2::inet OR external_ip = $2::inet)
 				LIMIT 1
-			`, clusterID, matchIP).Scan(&matchedNodeID)
+			`, registrationClusterID, matchIP).Scan(&matchedNodeID)
 			if matchedNodeID != "" {
 				resolvedNodeID = &matchedNodeID
 				s.logger.WithFields(logging.Fields{
@@ -871,13 +888,13 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			WHERE service_id = $1 AND cluster_id = $2 AND protocol = $3 AND port = $4
 			  AND (node_id = $5 OR node_id IS NULL)
 			ORDER BY updated_at DESC NULLS LAST, started_at DESC NULLS LAST LIMIT 1
-		`, serviceID, clusterID, proto, port, *resolvedNodeID).Scan(&existingID, &existingInstanceID)
+		`, serviceID, registrationClusterID, proto, port, *resolvedNodeID).Scan(&existingID, &existingInstanceID)
 	} else {
 		_ = exec.QueryRowContext(ctx, `
 			SELECT id::text, instance_id FROM quartermaster.service_instances
 			WHERE service_id = $1 AND cluster_id = $2 AND protocol = $3 AND port = $4 AND advertise_host = $5
 			ORDER BY updated_at DESC NULLS LAST, started_at DESC NULLS LAST LIMIT 1
-		`, serviceID, clusterID, proto, port, advHost).Scan(&existingID, &existingInstanceID)
+		`, serviceID, registrationClusterID, proto, port, advHost).Scan(&existingID, &existingInstanceID)
 	}
 	registeredNodeID := ""
 	if resolvedNodeID != nil {
@@ -910,7 +927,8 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			"service_type":     serviceType,
 			"service_id":       serviceID,
 			"instance_id":      instanceID,
-			"cluster_id":       clusterID,
+			"cluster_id":       registrationClusterID,
+			"logical_cluster":  clusterID,
 			"node_id":          registeredNodeID,
 			"protocol":         proto,
 			"advertise_host":   advHost,
@@ -926,7 +944,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			INSERT INTO quartermaster.service_instances
 				(instance_id, cluster_id, node_id, service_id, protocol, advertise_host, health_endpoint_override, version, port, metadata, status, health_status, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::jsonb, '{}'::jsonb), 'running', 'unknown', NOW(), NOW())
-		`, instanceID, clusterID, resolvedNodeID, serviceID, proto, advHost, healthEndpoint, req.GetVersion(), port, metadataJSON)
+		`, instanceID, registrationClusterID, resolvedNodeID, serviceID, proto, advHost, healthEndpoint, req.GetVersion(), port, metadataJSON)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to create service instance")
 			return nil, status.Errorf(codes.Internal, "failed to create service instance: %v", err)
@@ -935,7 +953,8 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			"service_type":    serviceType,
 			"service_id":      serviceID,
 			"instance_id":     instanceID,
-			"cluster_id":      clusterID,
+			"cluster_id":      registrationClusterID,
+			"logical_cluster": clusterID,
 			"node_id":         registeredNodeID,
 			"protocol":        proto,
 			"advertise_host":  advHost,
@@ -984,7 +1003,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		  AND status != 'stopped'
 		  AND COALESCE(advertise_host, '') = $4
 		  AND COALESCE(port, 0) = $6
-	`, serviceID, clusterID, instanceID, advHost, proto, port)
+	`, serviceID, registrationClusterID, instanceID, advHost, proto, port)
 
 	resp := &pb.BootstrapServiceResponse{
 		ServiceId:  serviceID,
@@ -1471,9 +1490,13 @@ func (s *QuartermasterServer) AssignServiceToCluster(ctx context.Context, req *p
 
 	if ids := req.GetInstanceIds(); len(ids) > 0 {
 		for _, instID := range ids {
+			// ON CONFLICT preserves the existing source: a runtime
+			// AssignServiceToCluster against a GitOps-owned row reactivates
+			// without flipping ownership. Only explicit adopt/unmanage
+			// operations flip provenance.
 			res, err := s.db.ExecContext(ctx, `
-				INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id)
-				SELECT si.id, $1
+				INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id, source)
+				SELECT si.id, $1, 'runtime'
 				FROM quartermaster.service_instances si
 				JOIN quartermaster.services svc ON svc.service_id = si.service_id
 				WHERE si.id = $2::uuid AND svc.type = $3 AND si.status = 'running'
@@ -1489,9 +1512,11 @@ func (s *QuartermasterServer) AssignServiceToCluster(ctx context.Context, req *p
 			}
 		}
 	} else if count := req.GetCount(); count > 0 {
+		// Same ON CONFLICT contract as the instance-ids branch: preserve
+		// existing source on reactivation.
 		res, err := s.db.ExecContext(ctx, `
-			INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id)
-			SELECT si.id, $1
+			INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id, source)
+			SELECT si.id, $1, 'runtime'
 			FROM quartermaster.service_instances si
 			JOIN quartermaster.services svc ON svc.service_id = si.service_id
 			LEFT JOIN quartermaster.service_cluster_assignments sca
@@ -1689,9 +1714,12 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 		return nil, status.Errorf(codes.Internal, "failed to auto-subscribe owner to cluster: %v", err)
 	}
 
+	// EnableSelfHosting attaches a tenant's Foghorn to a cluster. New rows
+	// are runtime-owned; ON CONFLICT preserves source (a GitOps default for
+	// this Foghorn would not be silently demoted to runtime here).
 	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id)
-		SELECT si.id, $2
+		INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id, source)
+		SELECT si.id, $2, 'runtime'
 		FROM quartermaster.service_instances si
 		JOIN quartermaster.services svc ON svc.service_id = si.service_id
 		WHERE si.id = $1::uuid AND svc.type = 'foghorn'

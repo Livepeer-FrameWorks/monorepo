@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -56,15 +57,17 @@ func (f *fakeServiceRegistryClient) ListServiceInstances(_ context.Context, _, _
 }
 
 type fakeCertificateClient struct {
-	caResponse        *pb.GetCABundleResponse
-	caErr             error
-	issueResponse     *pb.IssueInternalCertResponse
-	issueErr          error
-	issueRequests     []*pb.IssueInternalCertRequest
-	caRequestCount    int
-	tlsBundles        map[string]*pb.GetTLSBundleResponse
-	tlsBundleErr      error
-	tlsBundleRequests []*pb.GetTLSBundleRequest
+	caResponse               *pb.GetCABundleResponse
+	caErr                    error
+	issueResponse            *pb.IssueInternalCertResponse
+	issueErr                 error
+	issueErrByServiceType    map[string]error
+	issueRejectByServiceType map[string]string
+	issueRequests            []*pb.IssueInternalCertRequest
+	caRequestCount           int
+	tlsBundles               map[string]*pb.GetTLSBundleResponse
+	tlsBundleErr             error
+	tlsBundleRequests        []*pb.GetTLSBundleRequest
 }
 
 func (f *fakeCertificateClient) GetCABundle(_ context.Context, _ *pb.GetCABundleRequest) (*pb.GetCABundleResponse, error) {
@@ -82,6 +85,12 @@ func (f *fakeCertificateClient) IssueInternalCert(_ context.Context, req *pb.Iss
 	f.issueRequests = append(f.issueRequests, req)
 	if f.issueErr != nil {
 		return nil, f.issueErr
+	}
+	if err, ok := f.issueErrByServiceType[req.GetServiceType()]; ok {
+		return nil, err
+	}
+	if msg, ok := f.issueRejectByServiceType[req.GetServiceType()]; ok {
+		return &pb.IssueInternalCertResponse{Success: false, Error: msg}, nil
 	}
 	if f.issueResponse == nil {
 		return &pb.IssueInternalCertResponse{}, nil
@@ -441,14 +450,14 @@ func TestMissingInternalPKIMaterials(t *testing.T) {
 	dir := t.TempDir()
 	agent := &Agent{pkiBasePath: dir}
 
-	if !agent.missingInternalPKIMaterials(nil) {
+	if !agent.missingInternalPKIMaterials(nil, nil) {
 		t.Fatal("expected missing CA bundle to require sync")
 	}
 
 	if err := os.WriteFile(filepath.Join(dir, "ca.crt"), []byte("ca"), 0o644); err != nil {
 		t.Fatalf("write ca bundle: %v", err)
 	}
-	if agent.missingInternalPKIMaterials(nil) {
+	if agent.missingInternalPKIMaterials(nil, nil) {
 		t.Fatal("did not expect sync when CA bundle exists and no services are registered")
 	}
 
@@ -456,7 +465,7 @@ func TestMissingInternalPKIMaterials(t *testing.T) {
 	if err := os.MkdirAll(serviceDir, 0o755); err != nil {
 		t.Fatalf("mkdir service dir: %v", err)
 	}
-	if !agent.missingInternalPKIMaterials([]string{"commodore"}) {
+	if !agent.missingInternalPKIMaterials([]string{"commodore"}, nil) {
 		t.Fatal("expected missing leaf certs to require sync")
 	}
 	if err := os.WriteFile(filepath.Join(serviceDir, "tls.crt"), []byte("cert"), 0o644); err != nil {
@@ -465,7 +474,7 @@ func TestMissingInternalPKIMaterials(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(serviceDir, "tls.key"), []byte("key"), 0o600); err != nil {
 		t.Fatalf("write key: %v", err)
 	}
-	if agent.missingInternalPKIMaterials([]string{"commodore"}) {
+	if agent.missingInternalPKIMaterials([]string{"commodore"}, nil) {
 		t.Fatal("did not expect sync when CA bundle and leaf certs exist")
 	}
 }
@@ -614,7 +623,7 @@ func TestSyncInternalCertificatesUsesExpectedServicesWithoutRegistryLookup(t *te
 	}
 }
 
-func TestSyncInternalCertificatesFiltersExpectedServicesToRegisteredNodeServices(t *testing.T) {
+func TestSyncInternalCertificatesUnionsExpectedAndRegisteredServices(t *testing.T) {
 	dir := t.TempDir()
 	registry := &fakeServiceRegistryClient{
 		responses: []*pb.ListServiceInstancesResponse{
@@ -651,14 +660,257 @@ func TestSyncInternalCertificatesFiltersExpectedServicesToRegisteredNodeServices
 	if err := agent.syncInternalCertificates(); err != nil {
 		t.Fatalf("syncInternalCertificates returned error: %v", err)
 	}
-	if len(navigator.issueRequests) != 1 {
-		t.Fatalf("expected 1 issue request, got %d", len(navigator.issueRequests))
+	// Union of expected={decklog, signalman} and registered-non-stopped={decklog, privateer}
+	// sorted alphabetically is {decklog, privateer, signalman}. The stopped signalman row
+	// is filtered by listNodeServiceTypes but signalman remains in the union via the
+	// expected seed.
+	want := []string{"decklog", "privateer", "signalman"}
+	if len(navigator.issueRequests) != len(want) {
+		t.Fatalf("expected %d issue requests, got %d", len(want), len(navigator.issueRequests))
 	}
-	if got := navigator.issueRequests[0].GetServiceType(); got != "decklog" {
-		t.Fatalf("issued cert for %q, want decklog", got)
+	for i, st := range want {
+		if got := navigator.issueRequests[i].GetServiceType(); got != st {
+			t.Fatalf("issue request %d: got %q, want %q", i, got, st)
+		}
+	}
+}
+
+func TestSyncInternalCertificatesIsolatesPerServiceFailure(t *testing.T) {
+	dir := t.TempDir()
+	registry := &fakeServiceRegistryClient{
+		responses: []*pb.ListServiceInstancesResponse{
+			{Instances: []*pb.ServiceInstance{
+				{ServiceId: "decklog", Status: "running"},
+			}},
+		},
+	}
+	navigator := &fakeCertificateClient{
+		caResponse: &pb.GetCABundleResponse{
+			Found: true,
+			CaPem: "ca-pem",
+		},
+		// Default response: success. Override below per-service-type to fail signalman.
+		issueResponse: &pb.IssueInternalCertResponse{
+			Success: true,
+			CertPem: "cert-pem",
+			KeyPem:  "key-pem",
+		},
+		issueRejectByServiceType: map[string]string{
+			"signalman": "service \"signalman\" is not registered on node \"node-1\"",
+		},
+	}
+	agent := &Agent{
+		logger:           logging.NewLogger(),
+		nodeID:           "node-1",
+		registryClient:   registry,
+		navigatorClient:  navigator,
+		certIssueToken:   "token",
+		pkiBasePath:      dir,
+		syncTimeout:      time.Second,
+		certSyncInterval: 5 * time.Minute,
+		expectedServices: []string{"decklog", "signalman"},
+	}
+
+	if err := agent.syncInternalCertificates(); err != nil {
+		t.Fatalf("syncInternalCertificates returned error on partial failure: %v", err)
+	}
+	if len(navigator.issueRequests) != 2 {
+		t.Fatalf("expected 2 issue requests (both attempted), got %d", len(navigator.issueRequests))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "services", "decklog", "tls.crt")); err != nil {
+		t.Fatalf("decklog cert should exist after sibling failure: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "services", "signalman", "tls.crt")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("signalman cert stat err = %v, want not exist", err)
+		t.Fatalf("signalman cert stat err = %v, want not exist (sync was rejected)", err)
+	}
+	// Cooldown was recorded for the failing service so subsequent ticks suppress repeat logs.
+	agent.certDenyLogMu.Lock()
+	last, ok := agent.certDenyLogTimes["signalman"]
+	agent.certDenyLogMu.Unlock()
+	if !ok || last == 0 {
+		t.Fatalf("expected certDenyLogTimes to record signalman failure, got %v (ok=%v)", last, ok)
+	}
+	agent.certDenyLogMu.Lock()
+	_, decklogLogged := agent.certDenyLogTimes["decklog"]
+	agent.certDenyLogMu.Unlock()
+	if decklogLogged {
+		t.Fatalf("expected certDenyLogTimes to NOT record decklog (it succeeded)")
+	}
+	// Sync timestamp advanced so the next tick doesn't immediately re-hammer.
+	if agent.lastCertSyncUnix.Load() == 0 {
+		t.Fatalf("lastCertSyncUnix must be set after partial failure to avoid hammering")
+	}
+	if err := agent.syncInternalCertificates(); err != nil {
+		t.Fatalf("second sync inside interval returned error: %v", err)
+	}
+	if len(navigator.issueRequests) != 2 {
+		t.Fatalf("expected no retry inside cooldown interval, got %d issue requests", len(navigator.issueRequests))
+	}
+}
+
+func TestSyncInternalCertificatesReturnsRegisteredServiceFailure(t *testing.T) {
+	dir := t.TempDir()
+	registry := &fakeServiceRegistryClient{
+		responses: []*pb.ListServiceInstancesResponse{
+			{Instances: []*pb.ServiceInstance{
+				{ServiceId: "decklog", Status: "running"},
+				{ServiceId: "privateer", Status: "running"},
+			}},
+		},
+	}
+	navigator := &fakeCertificateClient{
+		caResponse: &pb.GetCABundleResponse{
+			Found: true,
+			CaPem: "ca-pem",
+		},
+		issueResponse: &pb.IssueInternalCertResponse{
+			Success: true,
+			CertPem: "cert-pem",
+			KeyPem:  "key-pem",
+		},
+		issueRejectByServiceType: map[string]string{
+			"decklog": "service decklog denied",
+		},
+	}
+	agent := &Agent{
+		logger:           logging.NewLogger(),
+		nodeID:           "node-1",
+		registryClient:   registry,
+		navigatorClient:  navigator,
+		certIssueToken:   "token",
+		pkiBasePath:      dir,
+		syncTimeout:      time.Second,
+		certSyncInterval: 5 * time.Minute,
+	}
+
+	err := agent.syncInternalCertificates()
+	if err == nil {
+		t.Fatal("expected registered service failure to be returned")
+	}
+	if !strings.Contains(err.Error(), "decklog") {
+		t.Fatalf("expected error to name failing service, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "services", "privateer", "tls.crt")); statErr != nil {
+		t.Fatalf("privateer cert should still be written after decklog failure: %v", statErr)
+	}
+	if agent.lastCertSyncUnix.Load() != 0 {
+		t.Fatalf("lastCertSyncUnix should not advance when registered services fail")
+	}
+}
+
+func TestSyncInternalCertificatesReturnsWriteFailure(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "services"), []byte("not a directory"), 0600); err != nil {
+		t.Fatalf("write blocking services path: %v", err)
+	}
+	registry := &fakeServiceRegistryClient{
+		responses: []*pb.ListServiceInstancesResponse{
+			{Instances: []*pb.ServiceInstance{
+				{ServiceId: "decklog", Status: "running"},
+			}},
+		},
+	}
+	navigator := &fakeCertificateClient{
+		caResponse: &pb.GetCABundleResponse{
+			Found: true,
+			CaPem: "ca-pem",
+		},
+		issueResponse: &pb.IssueInternalCertResponse{
+			Success: true,
+			CertPem: "cert-pem",
+			KeyPem:  "key-pem",
+		},
+	}
+	agent := &Agent{
+		logger:           logging.NewLogger(),
+		nodeID:           "node-1",
+		registryClient:   registry,
+		navigatorClient:  navigator,
+		certIssueToken:   "token",
+		pkiBasePath:      dir,
+		syncTimeout:      time.Second,
+		certSyncInterval: 5 * time.Minute,
+	}
+
+	err := agent.syncInternalCertificates()
+	if err == nil {
+		t.Fatal("expected local cert write failure to be returned")
+	}
+	if !strings.Contains(err.Error(), "write decklog cert") {
+		t.Fatalf("expected write failure to name decklog, got %v", err)
+	}
+	if agent.lastCertSyncUnix.Load() != 0 {
+		t.Fatalf("lastCertSyncUnix should not advance on local write failure")
+	}
+}
+
+func TestSyncInternalCertificatesFallsBackToExpectedServicesWhenRegistryUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	registry := &fakeServiceRegistryClient{err: errors.New("registry unavailable")}
+	navigator := &fakeCertificateClient{
+		caResponse: &pb.GetCABundleResponse{
+			Found: true,
+			CaPem: "ca-pem",
+		},
+		issueResponse: &pb.IssueInternalCertResponse{
+			Success: true,
+			CertPem: "cert-pem",
+			KeyPem:  "key-pem",
+		},
+	}
+	agent := &Agent{
+		logger:           logging.NewLogger(),
+		nodeID:           "node-1",
+		registryClient:   registry,
+		navigatorClient:  navigator,
+		certIssueToken:   "token",
+		pkiBasePath:      dir,
+		syncTimeout:      time.Second,
+		certSyncInterval: 5 * time.Minute,
+		expectedServices: []string{"decklog"},
+	}
+
+	if err := agent.syncInternalCertificates(); err != nil {
+		t.Fatalf("syncInternalCertificates should use expected seed when registry is unavailable: %v", err)
+	}
+	if len(navigator.issueRequests) != 1 || navigator.issueRequests[0].GetServiceType() != "decklog" {
+		t.Fatalf("expected one decklog issue request, got %+v", navigator.issueRequests)
+	}
+}
+
+func TestSyncInternalCertificatesReturnsIssueFailureWhenRegistryUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	registry := &fakeServiceRegistryClient{err: errors.New("registry unavailable")}
+	navigator := &fakeCertificateClient{
+		caResponse: &pb.GetCABundleResponse{
+			Found: true,
+			CaPem: "ca-pem",
+		},
+		issueRejectByServiceType: map[string]string{
+			"decklog": "service decklog denied",
+		},
+	}
+	agent := &Agent{
+		logger:           logging.NewLogger(),
+		nodeID:           "node-1",
+		registryClient:   registry,
+		navigatorClient:  navigator,
+		certIssueToken:   "token",
+		pkiBasePath:      dir,
+		syncTimeout:      time.Second,
+		certSyncInterval: 5 * time.Minute,
+		expectedServices: []string{"decklog"},
+	}
+
+	err := agent.syncInternalCertificates()
+	if err == nil {
+		t.Fatal("expected issue failure to be returned when registry availability is unknown")
+	}
+	if !strings.Contains(err.Error(), "decklog") {
+		t.Fatalf("expected error to name decklog, got %v", err)
+	}
+	if agent.lastCertSyncUnix.Load() != 0 {
+		t.Fatalf("lastCertSyncUnix should not advance when registry-unavailable issue fails")
 	}
 }
 

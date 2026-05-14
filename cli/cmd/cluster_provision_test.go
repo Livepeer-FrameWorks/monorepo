@@ -1335,6 +1335,62 @@ func TestBuildServiceEnvVarsIncludesFoghornRedisPasswordInURL(t *testing.T) {
 	}
 }
 
+func TestBuildServiceEnvVarsIncludesFoghornSentinelPassword(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "dev",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "10.0.0.11", WireguardIP: "10.88.0.11"},
+			"regional-eu-2": {ExternalIP: "10.0.0.12", WireguardIP: "10.88.0.12"},
+			"regional-eu-3": {ExternalIP: "10.0.0.13", WireguardIP: "10.88.0.13"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Redis: &inventory.RedisConfig{
+				Enabled: true,
+				Instances: []inventory.RedisInstance{{
+					Name:       "foghorn",
+					Mode:       "sentinel",
+					Host:       "regional-eu-1",
+					Port:       6379,
+					Password:   "${REDIS_FOGHORN_PASSWORD}",
+					MasterName: "foghorn",
+					Sentinels: []inventory.RedisSentinelNode{
+						{Host: "regional-eu-1"},
+						{Host: "regional-eu-2"},
+						{Host: "regional-eu-3"},
+					},
+				}},
+			},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn": {Enabled: true, Host: "regional-eu-2"},
+		},
+	}
+	task := &orchestrator.Task{
+		Name:      "foghorn-eu",
+		Type:      "foghorn",
+		ServiceID: "foghorn",
+		Host:      "regional-eu-2",
+		Phase:     orchestrator.PhaseApplications,
+	}
+
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", map[string]string{
+		"REDIS_FOGHORN_PASSWORD": "redis secret",
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+	if env["REDIS_MODE"] != "sentinel" {
+		t.Fatalf("REDIS_MODE = %q, want sentinel", env["REDIS_MODE"])
+	}
+	if env["REDIS_PASSWORD"] != "redis secret" {
+		t.Fatalf("REDIS_PASSWORD = %q, want redis secret", env["REDIS_PASSWORD"])
+	}
+	if env["REDIS_SENTINEL_PASSWORD"] != "redis secret" {
+		t.Fatalf("REDIS_SENTINEL_PASSWORD = %q, want redis secret", env["REDIS_SENTINEL_PASSWORD"])
+	}
+}
+
 func TestBuildServiceEnvVarsBindsDeclaredPostgresInstanceDatabase(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile:    "dev",
