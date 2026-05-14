@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -1362,7 +1363,8 @@ func lookupGroupID(name string) (int, bool, error) {
 	}
 	group, err := user.LookupGroup(name)
 	if err != nil {
-		if _, ok := err.(user.UnknownGroupError); ok {
+		var unknownGroup user.UnknownGroupError
+		if errors.As(err, &unknownGroup) {
 			return 0, false, nil
 		}
 		return 0, false, fmt.Errorf("lookup group %s: %w", name, err)
