@@ -2665,6 +2665,47 @@ func TestBuildServiceEnvVarsBridgeMultiTargetSignalman(t *testing.T) {
 	}
 }
 
+func TestBuildServiceEnvVarsBridgeRegionalHostIncludesControlPlaneGRPCDeps(t *testing.T) {
+	manifest := threeRegionKafkaManifest()
+	manifest.Hosts["central-eu-1"] = inventory.Host{WireguardIP: "10.88.10.10", Labels: map[string]string{"region": "eu-west"}}
+	for _, svc := range []string{"bridge", "commodore", "quartermaster", "purser", "periscope-query", "decklog"} {
+		manifest.Services[svc] = inventory.ServiceConfig{Enabled: true, Host: "central-eu-1"}
+	}
+
+	task := &orchestrator.Task{Type: "bridge", ServiceID: "bridge", Host: "regional-eu-2", ClusterID: "eu-kafka"}
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars bridge: %v", err)
+	}
+
+	for _, key := range []string{
+		"COMMODORE_GRPC_ADDR",
+		"PERISCOPE_GRPC_ADDR",
+		"PURSER_GRPC_ADDR",
+		"QUARTERMASTER_GRPC_ADDR",
+		"SIGNALMAN_GRPC_ADDR",
+		"DECKLOG_GRPC_ADDR",
+	} {
+		if env[key] == "" {
+			t.Fatalf("%s missing from regional bridge env", key)
+		}
+	}
+}
+
+func TestBuildTaskConfigBridgeRejectsMissingGeneratedDependencies(t *testing.T) {
+	manifest := threeRegionKafkaManifest()
+	manifest.Services["bridge"] = inventory.ServiceConfig{Enabled: true, Host: "regional-eu-2"}
+
+	task := &orchestrator.Task{Type: "bridge", ServiceID: "bridge", Host: "regional-eu-2", Phase: orchestrator.PhaseApplications}
+	_, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", testLoadSharedEnv(t, manifest), nil, nil)
+	if err == nil {
+		t.Fatal("buildTaskConfig bridge succeeded without generated dependency env")
+	}
+	if !strings.Contains(err.Error(), "COMMODORE_GRPC_ADDR") {
+		t.Fatalf("missing dependency error = %v, want COMMODORE_GRPC_ADDR", err)
+	}
+}
+
 // threeRegionKafkaManifest builds an EU(aggregator)+US+AP-south topology with
 // 3 signalman replicas per region — the shape this hardening pass is designed
 // to support before the APAC media cell actually ships.

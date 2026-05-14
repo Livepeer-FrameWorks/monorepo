@@ -2686,6 +2686,9 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			return config, fmt.Errorf("service %s: %w", task.Name, err)
 		}
 		config.EnvVars = envVars
+		if missing := missingRequiredGeneratedEnv(task.Type, config.EnvVars); len(missing) > 0 {
+			return config, fmt.Errorf("service %s: missing generated env var(s): %s; check that required dependency services are enabled in the manifest", task.Name, strings.Join(missing, ", "))
+		}
 	}
 	if pki, ok := runtimeData["internal_pki_bootstrap"].(*internalPKIBootstrap); ok && pki != nil {
 		config.Metadata["internal_ca_bundle_pem"] = pki.CABundlePEM
@@ -4472,7 +4475,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	// Backend dependencies use mesh-reachable DNS names (resolved by Privateer after mesh is up).
 	// Public/external access is handled separately by service registration and edge provisioning.
 	for _, grpc := range servicedefs.GRPCServices() {
-		_, svc, ok := serviceConfigForDeploy(manifest.Services, grpc.ServiceID, task.ClusterID, task.Host)
+		_, svc, ok := serviceConfigForDependency(manifest.Services, grpc.ServiceID, task.ClusterID, task.Host)
 		if !ok || !svc.Enabled {
 			continue
 		}
@@ -5075,6 +5078,30 @@ func normalizeServiceEnvVars(serviceID string, env map[string]string) {
 	}
 }
 
+func missingRequiredGeneratedEnv(serviceID string, env map[string]string) []string {
+	required := map[string][]string{
+		"bridge": {
+			"COMMODORE_GRPC_ADDR",
+			"PERISCOPE_GRPC_ADDR",
+			"PURSER_GRPC_ADDR",
+			"QUARTERMASTER_GRPC_ADDR",
+			"SIGNALMAN_GRPC_ADDR",
+			"DECKLOG_GRPC_ADDR",
+		},
+	}
+	keys := required[serviceID]
+	if len(keys) == 0 {
+		return nil
+	}
+	missing := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if strings.TrimSpace(env[key]) == "" {
+			missing = append(missing, key)
+		}
+	}
+	return missing
+}
+
 func applyLivepeerGatewayRuntimeDefaults(env map[string]string) {
 	defaults := map[string]string{
 		"network":                "arbitrum-one-mainnet",
@@ -5325,6 +5352,39 @@ func serviceConfigForDeploy(configs map[string]inventory.ServiceConfig, deploy, 
 		score, ok := servicePlacementScore(svc, clusterID, hostName)
 		if !ok {
 			continue
+		}
+		if score > bestScore || (score == bestScore && (bestName == "" || name < bestName)) {
+			bestName = name
+			best = svc
+			bestScore = score
+		}
+	}
+	if bestScore < 0 {
+		return "", inventory.ServiceConfig{}, false
+	}
+	return bestName, best, true
+}
+
+func serviceConfigForDependency(configs map[string]inventory.ServiceConfig, deploy, clusterID, hostName string) (string, inventory.ServiceConfig, bool) {
+	if name, svc, ok := serviceConfigForDeploy(configs, deploy, clusterID, hostName); ok {
+		if svc.Enabled {
+			return name, svc, true
+		}
+	}
+
+	bestName := ""
+	bestScore := -1
+	var best inventory.ServiceConfig
+	for name, svc := range configs {
+		if !serviceDeployMatches(name, svc, deploy) || !svc.Enabled {
+			continue
+		}
+		score := 0
+		if svc.Cluster == "" && len(svc.Clusters) == 0 {
+			score += 20
+		}
+		if len(serviceHosts(svc)) == 0 {
+			score += 10
 		}
 		if score > bestScore || (score == bestScore && (bestName == "" || name < bestName)) {
 			bestName = name
