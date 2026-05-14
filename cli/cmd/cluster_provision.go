@@ -3440,8 +3440,8 @@ type kafkaClusterView struct {
 // bind the aggregator Kafka cluster, regardless of which region its host
 // happens to be in. Central writers/consumers belong here:
 //
-//   - periscope-ingest: writes central ClickHouse; a regional replica reading
-//     mirrored topics would dual-write rows.
+//   - periscope-ingest: writes central ClickHouse; every replica consumes the
+//     same aggregator Kafka topic set in one consumer group.
 //   - purser / periscope-query: central billing producer and consumer.
 //   - commodore: central control-plane Kafka producer.
 //
@@ -3611,26 +3611,6 @@ func kafkaControllersToMetadata(manifest *inventory.Manifest, c *kafkaClusterVie
 		controllers = append(controllers, entry)
 	}
 	return controllers
-}
-
-// isAggregatorKafkaRegion reports whether the given region_id designates the
-// aggregator-side Kafka cluster.
-func isAggregatorKafkaRegion(manifest *inventory.Manifest, regionID string) bool {
-	if manifest == nil || manifest.Infrastructure.Kafka == nil {
-		return false
-	}
-	for _, v := range allKafkaClusters(manifest) {
-		if v.Role == "aggregator" {
-			if v.RegionID != "" {
-				return v.RegionID == regionID
-			}
-			if regionID == "" {
-				return true
-			}
-			return singleKafkaBrokerRegion(manifest, &v) == regionID
-		}
-	}
-	return false
 }
 
 func aggregatorKafkaClusterView(manifest *inventory.Manifest) *kafkaClusterView {
@@ -4545,16 +4525,14 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
-	// Aggregator-side analytics consumers subscribe to mirrored topics from
-	// every regional Kafka cluster. RegionID prefix matches MM2's default
-	// rename (source-cluster alias added as topic prefix).
+	// Periscope-Ingest is pinned to aggregator Kafka even when its process is
+	// placed on a regional host. Every replica must consume the same local +
+	// mirrored topic set, otherwise regional placements are not HA-capable
+	// substitutes for aggregator-region workers.
 	if baseName == "periscope-ingest" && env["MIRROR_REGION_PREFIXES"] == "" {
-		hostRegion := manifestTaskRegion(manifest, task)
-		if isAggregatorKafkaRegion(manifest, hostRegion) {
-			prefixes := nonAggregatorKafkaRegionIDs(manifest)
-			if len(prefixes) > 0 {
-				env["MIRROR_REGION_PREFIXES"] = strings.Join(prefixes, ",")
-			}
+		prefixes := nonAggregatorKafkaRegionIDs(manifest)
+		if len(prefixes) > 0 {
+			env["MIRROR_REGION_PREFIXES"] = strings.Join(prefixes, ",")
 		}
 	}
 

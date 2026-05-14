@@ -52,6 +52,11 @@ func kafkaRoleVarsFor(role string) RoleVarsBuilder {
 			}
 			vars["kafka_topics"] = cleanTopics
 		}
+		ha := kafkaInternalTopicHA(config.Metadata)
+		vars["kafka_min_insync_replicas"] = ha.minISR
+		vars["kafka_offsets_topic_replication_factor"] = ha.offsetsRF
+		vars["kafka_transaction_state_log_replication_factor"] = ha.transactionRF
+		vars["kafka_transaction_state_log_min_isr"] = ha.transactionMinISR
 		if p := config.Port; p > 0 {
 			if role == "controller" {
 				vars["kafka_controller_port"] = p
@@ -60,6 +65,62 @@ func kafkaRoleVarsFor(role string) RoleVarsBuilder {
 			}
 		}
 		return vars, nil
+	}
+}
+
+type kafkaHASettings struct {
+	minISR            int
+	offsetsRF         int
+	transactionRF     int
+	transactionMinISR int
+}
+
+func kafkaInternalTopicHA(metadata map[string]any) kafkaHASettings {
+	brokers := metaIntOr(metadata, "broker_count", 1)
+	if brokers < 1 {
+		brokers = 1
+	}
+
+	rf := brokers
+	if rf > 3 {
+		rf = 3
+	}
+	minISR := 1
+	if rf >= 3 {
+		minISR = 2
+	}
+
+	if override := metaIntOr(metadata, "min_insync_replicas", 0); override > 0 && override <= rf {
+		minISR = override
+	}
+	offsetsRF := metaIntOr(metadata, "offsets_topic_replication_factor", rf)
+	if offsetsRF < 1 {
+		offsetsRF = 1
+	}
+	if offsetsRF > brokers {
+		offsetsRF = brokers
+	}
+
+	transactionRF := metaIntOr(metadata, "transaction_state_log_replication_factor", rf)
+	if transactionRF < 1 {
+		transactionRF = 1
+	}
+	if transactionRF > brokers {
+		transactionRF = brokers
+	}
+	transactionMinISR := metaIntOr(metadata, "transaction_state_log_min_isr", minISR)
+	if transactionMinISR < 1 {
+		transactionMinISR = 1
+	}
+	if transactionMinISR > transactionRF {
+		transactionMinISR = transactionRF
+	}
+
+	return kafkaHASettings{
+		minISR:            minISR,
+		offsetsRF:         offsetsRF,
+		transactionRF:     transactionRF,
+		transactionMinISR: transactionMinISR,
 	}
 }
 

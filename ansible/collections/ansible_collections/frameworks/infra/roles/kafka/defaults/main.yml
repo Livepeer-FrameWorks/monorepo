@@ -25,6 +25,10 @@ kafka_listener_wait_timeout: 30
 
 # Topic list for init-tag. [{name, partitions, replication_factor, config}]
 kafka_topics: []
+kafka_min_insync_replicas: 1
+kafka_offsets_topic_replication_factor: 1
+kafka_transaction_state_log_replication_factor: 1
+kafka_transaction_state_log_min_isr: 1
 
 # Resource limits.
 kafka_heap_opts: "-Xmx2G -Xms2G"

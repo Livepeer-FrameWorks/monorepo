@@ -2,6 +2,42 @@ package provisioner
 
 import "testing"
 
+func TestKafkaInternalTopicHADerivesThreeBrokerDefaults(t *testing.T) {
+	got := kafkaInternalTopicHA(map[string]any{"broker_count": 3})
+
+	if got.minISR != 2 {
+		t.Fatalf("minISR = %d, want 2", got.minISR)
+	}
+	if got.offsetsRF != 3 {
+		t.Fatalf("offsetsRF = %d, want 3", got.offsetsRF)
+	}
+	if got.transactionRF != 3 {
+		t.Fatalf("transactionRF = %d, want 3", got.transactionRF)
+	}
+	if got.transactionMinISR != 2 {
+		t.Fatalf("transactionMinISR = %d, want 2", got.transactionMinISR)
+	}
+}
+
+func TestKafkaInternalTopicHACapsOverridesToBrokerCount(t *testing.T) {
+	got := kafkaInternalTopicHA(map[string]any{
+		"broker_count":                             2,
+		"offsets_topic_replication_factor":         3,
+		"transaction_state_log_replication_factor": 3,
+		"transaction_state_log_min_isr":            3,
+	})
+
+	if got.offsetsRF != 2 {
+		t.Fatalf("offsetsRF = %d, want 2", got.offsetsRF)
+	}
+	if got.transactionRF != 2 {
+		t.Fatalf("transactionRF = %d, want 2", got.transactionRF)
+	}
+	if got.transactionMinISR != 2 {
+		t.Fatalf("transactionMinISR = %d, want 2", got.transactionMinISR)
+	}
+}
+
 func TestSanitizeKafkaTopicsAcceptsStringMapConfig(t *testing.T) {
 	topics := []map[string]any{
 		{

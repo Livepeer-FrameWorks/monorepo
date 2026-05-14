@@ -1862,7 +1862,7 @@ func TestBuildTaskConfigKafkaMirrorMakerThreeRegionTopology(t *testing.T) {
 	}
 }
 
-func TestBuildServiceEnvVarsSetsMirrorPrefixesForAggregatorPeriscopeOnly(t *testing.T) {
+func TestBuildServiceEnvVarsSetsMirrorPrefixesForEveryPeriscopeReplica(t *testing.T) {
 	manifest := &inventory.Manifest{
 		RootDomain: "frameworks.network",
 		Hosts: map[string]inventory.Host{
@@ -1912,8 +1912,8 @@ func TestBuildServiceEnvVarsSetsMirrorPrefixesForAggregatorPeriscopeOnly(t *test
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars us periscope: %v", err)
 	}
-	if periscopeEnv["MIRROR_REGION_PREFIXES"] != "" {
-		t.Fatalf("regional periscope MIRROR_REGION_PREFIXES = %q, want empty", periscopeEnv["MIRROR_REGION_PREFIXES"])
+	if periscopeEnv["MIRROR_REGION_PREFIXES"] != "us-east" {
+		t.Fatalf("regional periscope MIRROR_REGION_PREFIXES = %q, want us-east", periscopeEnv["MIRROR_REGION_PREFIXES"])
 	}
 }
 

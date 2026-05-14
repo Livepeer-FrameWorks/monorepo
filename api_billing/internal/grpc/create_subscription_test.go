@@ -25,6 +25,7 @@ func TestCreateSubscription_PersistsUUIDAndBillingModel(t *testing.T) {
 	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM purser\.billing_tiers`).
 		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO purser\.tenant_subscriptions`).
 		WithArgs(
 			sqlmock.AnyArg(), tenantID, tierID, "billing@example.com", "prepaid",
@@ -32,6 +33,10 @@ func TestCreateSubscription_PersistsUUIDAndBillingModel(t *testing.T) {
 			sqlmock.AnyArg(), "card", sqlmock.AnyArg(),
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs("subscription_created", tenantID, "", "subscription", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("22222222-2222-2222-2222-222222222222"))
+	mock.ExpectCommit()
 
 	resp, err := server.CreateSubscription(context.Background(), &pb.CreateSubscriptionRequest{
 		TenantId:      tenantID,

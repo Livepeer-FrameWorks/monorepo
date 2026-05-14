@@ -65,12 +65,12 @@ The CLI provisions MM2 as the `kafka-mirrormaker` infrastructure task (Ansible r
 
 ## Periscope-Ingest and Signalman consumption
 
-The aggregator-side Periscope-Ingest and Signalman consume the bare regional topics AND the source-prefixed mirror topics:
+Periscope-Ingest is pinned to the aggregator Kafka cluster while ClickHouse is central. Every Periscope-Ingest replica, even when the process is placed on a non-aggregator host for failure tolerance, consumes the same bare aggregator topics and source-prefixed mirror topics:
 
 - Bare topics: `analytics_events`, `service_events`, `decklog_events_dlq`, `billing.usage_reports` — events written directly to the aggregator-region Kafka.
 - Mirror topics: `us.analytics_events`, `us.service_events`, etc. — MM2-mirrored events from non-aggregator regions.
 
-The CLI emits `MIRROR_REGION_PREFIXES` automatically on aggregator-region instances of these services, listing every non-aggregator `region_id`. Each consumer registers an additional handler per prefix.
+The CLI emits `MIRROR_REGION_PREFIXES` automatically for every Periscope-Ingest instance, listing every non-aggregator `region_id`. Each consumer registers an additional handler per prefix. Signalman stays region-local and does not consume mirrored topics; Gateway routes stream-scoped subscriptions to the stream origin region.
 
 Idempotency: the envelope v2 fields (`event_id` UUIDv7, `source_region`, `source_cluster_id`) on every event allow `ReplacingMergeTree(event_id)` in ClickHouse and ingest-side duplicate checks. Mirroring is at-least-once; dedup at consume time makes it effectively-once.
 
@@ -91,8 +91,8 @@ Verification runbook:
 3. Stop the US Decklog process.
 4. Drive ingest traffic; observe Foghorn outbox grows.
 5. Restart US Decklog.
-6. Observe outbox drains; aggregator-region Periscope-Ingest receives the mirrored events with `event_id` dedup (no duplicates in ClickHouse).
+6. Observe outbox drains; Periscope-Ingest receives the mirrored events from aggregator Kafka with `event_id` dedup (no duplicates in ClickHouse).
 
 ## EU as aggregator
 
-EU Kafka serves a dual role: EU regional events land here directly; US-region mirror lands here under the `us-east.` prefix. The aggregator-region Periscope-Ingest consumes both bare EU topics and prefixed US mirror topics. When a third region is added, the operator either keeps the aggregator on EU or moves it to a dedicated cluster by marking that cluster's `role: aggregator` in `KafkaConfig.Regional`.
+EU Kafka serves a dual role: EU regional events land here directly; US-region mirror lands here under the `us-east.` prefix. Periscope-Ingest consumes both bare EU topics and prefixed US mirror topics from aggregator Kafka. When a third region is added, the operator either keeps the aggregator on EU or moves it to a dedicated cluster by marking that cluster's `role: aggregator` in `KafkaConfig.Regional`.
