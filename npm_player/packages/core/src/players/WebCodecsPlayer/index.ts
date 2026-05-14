@@ -1006,8 +1006,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
     // Add production path (may fail in dev but that's ok)
     try {
-      const workerURL = (filename: string) => new URL(`../workers/${filename}`, import.meta.url);
-      paths.push(workerURL("decoder.worker.js").href);
+      paths.push(new URL("../workers/decoder.worker.js", import.meta.url).href);
     } catch {
       // import.meta.url may not work in all environments
     }

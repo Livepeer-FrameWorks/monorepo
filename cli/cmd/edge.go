@@ -771,7 +771,7 @@ Multi-node manifest example:
 			// Registration handled before EdgeProvisioner (needs QM client)
 			if registerNode {
 				fmt.Fprintln(cmd.OutOrStdout(), "\nRegistering node in Quartermaster...")
-				externalIP, _ := getRemoteExternalIP(cmd.Context(), sshTarget, sshKey)
+				externalIP := resolveEdgeExternalIP(cmd.Context(), sshTarget, sshKey, "")
 				if errRegister := registerEdgeNode(cmd, cliCtx, nodeName, clusterID, externalIP, region); errRegister != nil {
 					return fmt.Errorf("node registration failed: %w", errRegister)
 				}
@@ -1009,10 +1009,7 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 	// Manifest-mode supplies the canonical IP via knownExternalIP; fall back
 	// to a remote probe for ad-hoc CLI paths where it isn't known.
 	if registerNode {
-		externalIP := knownExternalIP
-		if externalIP == "" {
-			externalIP, _ = getRemoteExternalIP(cmd.Context(), sshTarget, sshKey)
-		}
+		externalIP := resolveEdgeExternalIP(cmd.Context(), sshTarget, sshKey, knownExternalIP)
 		if err := registerEdgeNode(cmd, cliCtx, nodeName, clusterID, externalIP, region); err != nil {
 			return fmt.Errorf("node registration failed: %w", err)
 		}
@@ -1088,10 +1085,7 @@ func preRegisterEdgeLocal(ctx context.Context, foghornAddr, enrollmentToken, pre
 }
 
 func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP string) (*pb.PreRegisterEdgeResponse, error) {
-	externalIP := knownExternalIP
-	if externalIP == "" {
-		externalIP, _ = getRemoteExternalIP(ctx, sshTarget, sshKey)
-	}
+	externalIP := resolveEdgeExternalIP(ctx, sshTarget, sshKey, knownExternalIP)
 
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
@@ -1111,6 +1105,17 @@ func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarge
 		ExternalIp:      externalIP,
 		PreferredNodeId: preferredNodeID,
 	})
+}
+
+func resolveEdgeExternalIP(ctx context.Context, sshTarget, sshKey, knownExternalIP string) string {
+	if knownExternalIP != "" {
+		return knownExternalIP
+	}
+	externalIP, err := getRemoteExternalIP(ctx, sshTarget, sshKey)
+	if err != nil {
+		return ""
+	}
+	return externalIP
 }
 
 func deriveEdgeNodeName(nodeName, nodeDomain, sshTarget string, isLocal bool) string {
