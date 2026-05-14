@@ -737,7 +737,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
 				return fmt.Errorf("resolve migration target: %w", ybErr)
 			}
-			if err := initializeDeferredYugabyte(ctx, cmd, manifest, sshPool, sharedEnv, ybTarget); err != nil {
+			if err := initializeDeferredYugabyte(ctx, cmd, manifest, sshPool, sharedEnv, clusterEnvs, ybTarget); err != nil {
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Yugabyte initialization failed: %v", err))
 				fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
 				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
@@ -1114,7 +1114,7 @@ done
 	return nil
 }
 
-func initializeDeferredYugabyte(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool, sharedEnv map[string]string, targetVersion string) error {
+func initializeDeferredYugabyte(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, targetVersion string) error {
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled || !pg.IsYugabyte() || len(pg.Nodes) == 0 {
 		return nil
@@ -1125,22 +1125,17 @@ func initializeDeferredYugabyte(ctx context.Context, cmd *cobra.Command, manifes
 		return fmt.Errorf("yugabyte node host %s not found", pg.Nodes[0].Host)
 	}
 
-	databases := make([]map[string]string, 0, len(pg.Databases))
+	password, err := resolveYugabytePassword(pg, sharedEnv)
+	if err != nil {
+		return err
+	}
+	databases := yugabyteDatabaseConfigsToMetadata(pg.Databases, manifest, sharedEnv, clusterEnvs, password)
 	schemaDatabases := make([]provisioner.SchemaDatabase, 0, len(pg.Databases))
 	for _, db := range pg.Databases {
-		databases = append(databases, map[string]string{
-			"name":  db.Name,
-			"owner": db.Owner,
-		})
 		schemaDatabases = append(schemaDatabases, provisioner.SchemaDatabase{
 			Name:  db.Name,
 			Owner: db.Owner,
 		})
-	}
-
-	password, err := resolveYugabytePassword(pg, sharedEnv)
-	if err != nil {
-		return err
 	}
 
 	config := provisioner.ServiceConfig{
@@ -2564,14 +2559,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					}
 				}
 				if len(pg.Databases) > 0 {
-					databases := make([]map[string]string, 0, len(pg.Databases))
-					for _, db := range pg.Databases {
-						databases = append(databases, map[string]string{
-							"name":  db.Name,
-							"owner": db.Owner,
-						})
-					}
-					config.Metadata["databases"] = databases
+					config.Metadata["databases"] = yugabyteDatabaseConfigsToMetadata(pg.Databases, manifest, sharedEnv, clusterEnvs, "")
 				}
 			}
 		}
@@ -3534,6 +3522,52 @@ func postgresInstancePassword(inst *inventory.PostgresInstance, sharedEnv map[st
 	prefix := "POSTGRES_" + envNameToken(inst.Name)
 	if password := strings.TrimSpace(sharedEnv[prefix+"_PASSWORD"]); password != "" {
 		return password
+	}
+	return strings.TrimSpace(sharedEnv["DATABASE_PASSWORD"])
+}
+
+func yugabyteDatabaseConfigsToMetadata(databases []inventory.DatabaseConfig, manifest *inventory.Manifest, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, fallbackPassword string) []map[string]string {
+	items := make([]map[string]string, 0, len(databases))
+	for _, db := range databases {
+		item := map[string]string{
+			"name":  db.Name,
+			"owner": db.Owner,
+		}
+		if password := yugabyteDatabasePassword(db, manifest, sharedEnv, clusterEnvs, fallbackPassword); password != "" {
+			item["password"] = password
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func yugabyteDatabasePassword(db inventory.DatabaseConfig, manifest *inventory.Manifest, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, fallbackPassword string) string {
+	names := map[string]struct{}{}
+	for _, value := range []string{db.Name, db.Owner} {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			names[value] = struct{}{}
+		}
+	}
+	if manifest != nil {
+		for serviceID, svc := range manifest.Services {
+			serviceDBName := strings.ReplaceAll(serviceID, "-", "_")
+			if _, ok := names[serviceDBName]; !ok {
+				continue
+			}
+			clusterID := strings.TrimSpace(svc.Cluster)
+			if clusterID == "" {
+				continue
+			}
+			if clusterEnv := clusterEnvs[clusterID]; clusterEnv != nil {
+				if password := strings.TrimSpace(clusterEnv["DATABASE_PASSWORD"]); password != "" {
+					return password
+				}
+			}
+		}
+	}
+	if fallbackPassword != "" {
+		return fallbackPassword
 	}
 	return strings.TrimSpace(sharedEnv["DATABASE_PASSWORD"])
 }

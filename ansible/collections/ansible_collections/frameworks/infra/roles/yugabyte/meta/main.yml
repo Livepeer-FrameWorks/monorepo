@@ -64,6 +64,10 @@ argument_specs:
           owner:
             type: str
             required: false
+          password:
+            type: str
+            required: false
+            no_log: true
       yugabyte_application_password:
         type: str
         required: false

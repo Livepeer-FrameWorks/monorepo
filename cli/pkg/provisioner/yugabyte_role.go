@@ -59,6 +59,9 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 			if owner := db["owner"]; owner != "" {
 				entry["owner"] = owner
 			}
+			if password := db["password"]; password != "" {
+				entry["password"] = password
+			}
 			list = append(list, entry)
 		}
 		vars["yugabyte_databases"] = list

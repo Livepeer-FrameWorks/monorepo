@@ -1378,6 +1378,48 @@ func TestBuildServiceEnvVarsBindsDeclaredPostgresInstanceDatabase(t *testing.T) 
 	}
 }
 
+func TestYugabyteDatabaseMetadataUsesClusterPasswordForServiceDatabase(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-eu": {
+				Enabled: true,
+				Deploy:  "foghorn",
+				Cluster: "media-eu-1",
+			},
+			"foghorn-us": {
+				Enabled: true,
+				Deploy:  "foghorn",
+				Cluster: "media-us-1",
+			},
+		},
+	}
+	databases := []inventory.DatabaseConfig{
+		{Name: "foghorn_eu", Owner: "foghorn_eu"},
+		{Name: "foghorn_us", Owner: "foghorn_us"},
+		{Name: "quartermaster", Owner: "quartermaster"},
+	}
+	items := yugabyteDatabaseConfigsToMetadata(databases, manifest, map[string]string{
+		"DATABASE_PASSWORD": "shared-secret",
+	}, map[string]map[string]string{
+		"media-eu-1": {"DATABASE_PASSWORD": "eu-secret"},
+		"media-us-1": {"DATABASE_PASSWORD": "us-secret"},
+	}, "shared-secret")
+
+	got := map[string]string{}
+	for _, item := range items {
+		got[item["name"]] = item["password"]
+	}
+	if got["foghorn_eu"] != "eu-secret" {
+		t.Fatalf("foghorn_eu password = %q, want eu-secret", got["foghorn_eu"])
+	}
+	if got["foghorn_us"] != "us-secret" {
+		t.Fatalf("foghorn_us password = %q, want us-secret", got["foghorn_us"])
+	}
+	if got["quartermaster"] != "shared-secret" {
+		t.Fatalf("quartermaster password = %q, want shared-secret", got["quartermaster"])
+	}
+}
+
 func TestBuildTaskConfigPostgresInstanceDoesNotInheritYugabyteSettings(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Channel: "stable",

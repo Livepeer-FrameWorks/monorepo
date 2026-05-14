@@ -6,23 +6,20 @@
 - name: Ensure YSQL Ansible module prerequisites
   ansible.builtin.import_tasks: ysql_prereqs.yml
 
-- name: Assert application password is present
+- name: Assert application passwords are present
   ansible.builtin.assert:
-    that: yugabyte_application_password | length > 0
-    fail_msg: "yugabyte_application_password required for init; supply via SOPS-backed metadata.postgres_password"
-
-- name: Derive application owner roles
-  ansible.builtin.set_fact:
-    yugabyte_database_owners: "{{ (yugabyte_database_owners | default([])) + [item.owner | default(item.name)] }}"
+    that: (item.password | default(yugabyte_application_password)) | length > 0
+    fail_msg: "Yugabyte database {{ item.name }} requires an application password; supply per-database password or yugabyte_application_password"
   loop: "{{ yugabyte_databases }}"
   loop_control:
     label: "{{ item.name }}"
+  no_log: true
   when: yugabyte_databases | length > 0
 
-- name: Create application owner role (per unique owner)
+- name: Create application owner roles
   community.postgresql.postgresql_user:
-    name: "{{ item }}"
-    password: "{{ yugabyte_application_password }}"
+    name: "{{ item.owner | default(item.name) }}"
+    password: "{{ item.password | default(yugabyte_application_password) }}"
     role_attr_flags: LOGIN
     login_host: 127.0.0.1
     login_port: "{{ yugabyte_ysql_port }}"
@@ -30,11 +27,11 @@
     login_password: "{{ yugabyte_superuser_password }}"
     db: yugabyte
     state: present
-  loop: "{{ yugabyte_database_owners | default([]) | reject('equalto', '') | unique | list }}"
+  loop: "{{ yugabyte_databases }}"
+  loop_control:
+    label: "{{ item.owner | default(item.name) }}"
   no_log: true
-  when:
-    - yugabyte_application_password | length > 0
-    - yugabyte_databases | length > 0
+  when: yugabyte_databases | length > 0
 
 - name: Create databases
   community.postgresql.postgresql_db:
