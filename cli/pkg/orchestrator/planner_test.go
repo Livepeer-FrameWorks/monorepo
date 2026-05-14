@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
@@ -215,6 +216,95 @@ func TestPlan_ClickHouseDependsOnSameHostYugabyte(t *testing.T) {
 
 	if !slices.Contains(clickhouseTask.DependsOn, "yugabyte-node-1") {
 		t.Fatalf("expected clickhouse to depend on yugabyte-node-1, got %v", clickhouseTask.DependsOn)
+	}
+}
+
+func TestPlan_KafkaMirrorMakerHostsFanOut(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "10.0.0.1", Labels: map[string]string{"region": "eu-west"}},
+			"regional-eu-2": {ExternalIP: "10.0.0.2", Labels: map[string]string{"region": "eu-west"}},
+			"regional-eu-3": {ExternalIP: "10.0.0.3", Labels: map[string]string{"region": "eu-west"}},
+			"regional-us-1": {ExternalIP: "10.0.1.1", Labels: map[string]string{"region": "us-east"}},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Kafka: &inventory.KafkaConfig{
+				Enabled:  true,
+				RegionID: "eu-west",
+				Role:     "aggregator",
+				Brokers: []inventory.KafkaBroker{
+					{Host: "regional-eu-1", ID: 1},
+					{Host: "regional-eu-2", ID: 2},
+					{Host: "regional-eu-3", ID: 3},
+				},
+				Regional: []inventory.RegionalKafkaCluster{
+					{
+						RegionID: "us-east",
+						Brokers:  []inventory.KafkaBroker{{Host: "regional-us-1", ID: 11}},
+					},
+				},
+				MirrorMaker: &inventory.KafkaMirrorMakerConfig{
+					Enabled: true,
+					Hosts:   []string{"regional-eu-1", "regional-eu-2", "regional-eu-3"},
+				},
+			},
+		},
+	}
+
+	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseInfrastructure})
+	if err != nil {
+		t.Fatalf("Plan() failed: %v", err)
+	}
+
+	got := map[string]*Task{}
+	for _, task := range plan.AllTasks {
+		if task.Type == "kafka-mirrormaker" {
+			got[task.Host] = task
+		}
+	}
+	for _, host := range []string{"regional-eu-1", "regional-eu-2", "regional-eu-3"} {
+		task := got[host]
+		if task == nil {
+			t.Fatalf("missing MirrorMaker task on %s; got %#v", host, got)
+		}
+		if !slices.Contains(task.DependsOn, "kafka-broker-eu-west-1") || !slices.Contains(task.DependsOn, "kafka-broker-us-east-11") {
+			t.Fatalf("MirrorMaker task %s deps = %v, want all Kafka brokers", task.Name, task.DependsOn)
+		}
+	}
+}
+
+func TestPlan_KafkaMirrorMakerRejectsNonAggregatorHost(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "10.0.0.1", Labels: map[string]string{"region": "eu-west"}},
+			"regional-us-1": {ExternalIP: "10.0.1.1", Labels: map[string]string{"region": "us-east"}},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Kafka: &inventory.KafkaConfig{
+				Enabled:  true,
+				RegionID: "eu-west",
+				Role:     "aggregator",
+				Brokers:  []inventory.KafkaBroker{{Host: "regional-eu-1", ID: 1}},
+				Regional: []inventory.RegionalKafkaCluster{
+					{
+						RegionID: "us-east",
+						Brokers:  []inventory.KafkaBroker{{Host: "regional-us-1", ID: 11}},
+					},
+				},
+				MirrorMaker: &inventory.KafkaMirrorMakerConfig{
+					Enabled: true,
+					Hosts:   []string{"regional-us-1"},
+				},
+			},
+		},
+	}
+
+	_, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseInfrastructure})
+	if err == nil {
+		t.Fatal("Plan() succeeded with MirrorMaker outside aggregator region")
+	}
+	if !strings.Contains(err.Error(), "want aggregator region \"eu-west\"") {
+		t.Fatalf("Plan() error = %v", err)
 	}
 }
 

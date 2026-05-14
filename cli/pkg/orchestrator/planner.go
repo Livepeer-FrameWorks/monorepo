@@ -31,6 +31,7 @@ func NewPlanner(manifest *inventory.Manifest) *Planner {
 // KafkaConfig and each RegionalKafkaCluster project into one entry.
 type kafkaPlannerCluster struct {
 	RegionID    string
+	Role        string
 	Controllers []inventory.KafkaController
 	Brokers     []inventory.KafkaBroker
 }
@@ -46,6 +47,8 @@ func (p *Planner) kafkaClusters() []kafkaPlannerCluster {
 	out := make([]kafkaPlannerCluster, 0, 1+len(k.Regional))
 	if len(k.Brokers) > 0 || len(k.Controllers) > 0 {
 		out = append(out, kafkaPlannerCluster{
+			RegionID:    k.RegionID,
+			Role:        k.Role,
 			Controllers: k.Controllers,
 			Brokers:     k.Brokers,
 		})
@@ -53,11 +56,87 @@ func (p *Planner) kafkaClusters() []kafkaPlannerCluster {
 	for _, rc := range k.Regional {
 		out = append(out, kafkaPlannerCluster{
 			RegionID:    rc.RegionID,
+			Role:        rc.Role,
 			Controllers: rc.Controllers,
 			Brokers:     rc.Brokers,
 		})
 	}
 	return out
+}
+
+func (p *Planner) kafkaAggregatorRegion() string {
+	if p.manifest == nil || p.manifest.Infrastructure.Kafka == nil {
+		return ""
+	}
+	k := p.manifest.Infrastructure.Kafka
+	if k.Role == "aggregator" || k.Role == "" {
+		if k.RegionID != "" {
+			return k.RegionID
+		}
+		if region := p.kafkaNodeRegion(k.Controllers, k.Brokers); region != "" {
+			return region
+		}
+	}
+	for _, rc := range k.Regional {
+		if rc.Role != "aggregator" {
+			continue
+		}
+		if rc.RegionID != "" {
+			return rc.RegionID
+		}
+		if region := p.kafkaNodeRegion(rc.Controllers, rc.Brokers); region != "" {
+			return region
+		}
+	}
+	return ""
+}
+
+func (p *Planner) kafkaNodeRegion(controllers []inventory.KafkaController, brokers []inventory.KafkaBroker) string {
+	region := ""
+	record := func(hostName string) {
+		if region != "" || p.manifest == nil {
+			return
+		}
+		region = p.hostRegion(hostName)
+	}
+	for _, controller := range controllers {
+		record(controller.Host)
+	}
+	for _, broker := range brokers {
+		record(broker.Host)
+	}
+	return region
+}
+
+func (p *Planner) hostRegion(hostName string) string {
+	if p.manifest == nil {
+		return ""
+	}
+	host, ok := p.manifest.Hosts[hostName]
+	if !ok {
+		return ""
+	}
+	if region := strings.TrimSpace(host.Labels["region"]); region != "" {
+		return region
+	}
+	if host.Cluster != "" {
+		if cluster, ok := p.manifest.Clusters[host.Cluster]; ok {
+			return strings.TrimSpace(cluster.Region)
+		}
+	}
+	for _, kc := range p.kafkaClusters() {
+		for _, controller := range kc.Controllers {
+			if controller.Host == hostName && kc.RegionID != "" {
+				return kc.RegionID
+			}
+		}
+		for _, broker := range kc.Brokers {
+			if broker.Host == hostName && kc.RegionID != "" {
+				return kc.RegionID
+			}
+		}
+	}
+	return ""
 }
 
 // kafkaBrokerTaskName returns the planner-generated task name for a broker in
@@ -303,23 +382,45 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 		}
 	}
 
-	// MirrorMaker2 worker. Depends on every broker across every declared Kafka
-	// cluster so the worker only starts once source + aggregator clusters are
-	// live. One task on the configured host; no per-region split — connect-
-	// mirror-maker.sh handles multiple source clusters from a single process.
+	// MirrorMaker2 workers. They depend on every broker across every declared
+	// Kafka cluster so the worker cluster only starts once source + aggregator
+	// clusters are live. Multiple hosts run the same dedicated MM2 config and
+	// coordinate task ownership through Kafka Connect/MM2 internals.
 	if mm := p.manifest.Infrastructure.Kafka; mm != nil && mm.Enabled && mm.MirrorMaker != nil && mm.MirrorMaker.Enabled {
-		task := NewTask("kafka-mirrormaker", "kafka-mirrormaker", "", mm.MirrorMaker.Host, PhaseInfrastructure)
-		task.DependsOn = withMesh(task.DependsOn)
-		for _, kc := range p.kafkaClusters() {
-			suffix := ""
-			if kc.RegionID != "" {
-				suffix = "-" + kc.RegionID
-			}
-			for _, broker := range kc.Brokers {
-				task.DependsOn = append(task.DependsOn, "kafka-broker"+suffix+"-"+strconv.Itoa(broker.ID))
-			}
+		aggregatorRegion := p.kafkaAggregatorRegion()
+		hosts := mm.MirrorMaker.Hosts
+		if len(hosts) == 0 && mm.MirrorMaker.Host != "" {
+			hosts = []string{mm.MirrorMaker.Host}
 		}
-		graph.AddTask(task)
+		for _, host := range hosts {
+			if strings.TrimSpace(host) == "" {
+				continue
+			}
+			if aggregatorRegion != "" {
+				hostRegion := p.hostRegion(host)
+				if hostRegion == "" {
+					return fmt.Errorf("kafka mirrormaker host %q has no region; MM2 workers must run in aggregator region %q", host, aggregatorRegion)
+				}
+				if hostRegion != aggregatorRegion {
+					return fmt.Errorf("kafka mirrormaker host %q is in region %q, want aggregator region %q", host, hostRegion, aggregatorRegion)
+				}
+			}
+			task := NewTask("kafka-mirrormaker", "kafka-mirrormaker", host, host, PhaseInfrastructure)
+			task.DependsOn = withMesh(task.DependsOn)
+			if len(hosts) == 1 {
+				task.Name = "kafka-mirrormaker"
+			}
+			for _, kc := range p.kafkaClusters() {
+				suffix := ""
+				if kc.RegionID != "" {
+					suffix = "-" + kc.RegionID
+				}
+				for _, broker := range kc.Brokers {
+					task.DependsOn = append(task.DependsOn, "kafka-broker"+suffix+"-"+strconv.Itoa(broker.ID))
+				}
+			}
+			graph.AddTask(task)
+		}
 	}
 
 	// Add ClickHouse

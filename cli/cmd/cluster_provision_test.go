@@ -1801,6 +1801,9 @@ func TestBuildTaskConfigKafkaMirrorMakerRendersHubAndSpokeLinks(t *testing.T) {
 	if sources[0]["bootstrap_servers"] != "10.88.1.11:9092,10.88.1.12:9092,10.88.1.13:9092" {
 		t.Fatalf("source bootstrap_servers = %v", sources[0]["bootstrap_servers"])
 	}
+	if config.Metadata["local_cluster_alias"] != "eu-west" {
+		t.Fatalf("local_cluster_alias = %v, want eu-west", config.Metadata["local_cluster_alias"])
+	}
 
 	if _, ok := config.Metadata["fanout_targets"]; ok {
 		t.Fatalf("MM2 config must not mirror aggregate analytics back to regional Signalman")

@@ -1,6 +1,6 @@
 # Multi-Region Kafka via MirrorMaker2
 
-The EU Kafka cluster doubles as the aggregator. Each additional region (US-East today; future regions added the same way) runs its own KRaft cluster. MirrorMaker2 (MM2) mirrors a small canonical set of topics from every non-aggregator regional cluster onto the aggregator.
+The EU Kafka cluster doubles as the aggregator. Each additional region runs its own KRaft cluster. MirrorMaker2 (MM2) mirrors a small canonical set of topics from every non-aggregator regional cluster onto the aggregator.
 
 ## Topology
 
@@ -59,9 +59,9 @@ kafka:
     task_count: 2
 ```
 
-## MirrorMaker2 worker
+## MirrorMaker2 workers
 
-The CLI provisions MM2 as the `kafka-mirrormaker` infrastructure task (Ansible role `frameworks.infra.kafka_mirrormaker`). The role installs Kafka's standard tarball alongside the broker/controller install, renders `mm2.properties`, and runs the standalone `connect-mirror-maker.sh` worker under systemd as `frameworks-kafka-mirrormaker`. The source clusters and aggregator target come from `KafkaConfig.Regional` plus `KafkaConfig.MirrorMaker.Host`. MM2's default replication policy adds the source-cluster alias (the region_id) as the topic prefix.
+The CLI provisions MM2 as `kafka-mirrormaker` infrastructure tasks (Ansible role `frameworks.infra.kafka_mirrormaker`). The role installs Kafka's standard tarball alongside the broker/controller install, renders `mm2.properties`, and runs `connect-mirror-maker.sh` under systemd as `frameworks-kafka-mirrormaker`. The source clusters and aggregator target come from `KafkaConfig.Regional` plus `KafkaConfig.MirrorMaker.Hosts` (`Host` remains accepted for single-worker manifests). MM2 workers must run in the aggregator Kafka region; the planner rejects worker hosts in other regions. MM2's dedicated mode supports multiple worker processes using the same config. MM2's default replication policy adds the source-cluster alias (the region_id) as the topic prefix.
 
 ## Periscope-Ingest and Signalman consumption
 

@@ -10,7 +10,7 @@ import (
 	"frameworks/cli/pkg/ssh"
 )
 
-// kafkaMirrorMakerRoleVars renders vars for the standalone MM2 worker. Source
+// kafkaMirrorMakerRoleVars renders vars for a dedicated MM2 worker. Source
 // clusters and the aggregator target are derived from the manifest's
 // KafkaConfig.Regional list (passed via metadata at task-build time).
 func kafkaMirrorMakerRoleVars(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {
@@ -43,6 +43,9 @@ func kafkaMirrorMakerRoleVars(ctx context.Context, host inventory.Host, config S
 	}
 	if target, ok := config.Metadata["target"].(map[string]any); ok {
 		vars["kafka_mm_target"] = target
+	}
+	if alias, ok := config.Metadata["local_cluster_alias"].(string); ok && alias != "" {
+		vars["kafka_mm_local_cluster_alias"] = alias
 	}
 	if topics, ok := config.Metadata["topics_pattern"].(string); ok && topics != "" {
 		vars["kafka_mm_topics_pattern"] = topics

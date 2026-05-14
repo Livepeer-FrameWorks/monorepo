@@ -1,4 +1,4 @@
-{# MirrorMaker2 standalone config. #}
+{# MirrorMaker2 dedicated worker config. #}
 {% set target_rf = kafka_mm_target.replicas | default(1) %}
 clusters = {{ kafka_mm_target.alias }}{% for src in kafka_mm_sources %},{{ src.alias }}{% endfor %}
 

@@ -2315,6 +2315,11 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					})
 				}
 				config.Metadata["sources"] = sources
+				if local := serviceKafkaCluster(manifest, "", manifestTaskRegion(manifest, task)); local != nil {
+					if alias := kafkaClusterAlias(manifest, local); alias != "" {
+						config.Metadata["local_cluster_alias"] = alias
+					}
+				}
 			}
 		case "kafka-controller":
 			if manifest.Infrastructure.Kafka != nil {

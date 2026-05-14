@@ -1,5 +1,5 @@
 ---
-- name: Provision Kafka MirrorMaker 2 (standalone worker)
+- name: Provision Kafka MirrorMaker 2 worker
   hosts: all
   become: true
   gather_facts: true

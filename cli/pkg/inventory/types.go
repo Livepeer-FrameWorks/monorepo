@@ -348,23 +348,25 @@ type KafkaConfig struct {
 	// and aggregator clusters.
 	Regional []RegionalKafkaCluster `yaml:"regional,omitempty"`
 
-	// MirrorMaker is the standalone MM2 worker that mirrors RegionalKafkaCluster
-	// entries (Role="regional") into the aggregator cluster. When absent or
-	// disabled, no mirroring is provisioned regardless of Regional declarations.
+	// MirrorMaker declares the dedicated MM2 workers that mirror
+	// RegionalKafkaCluster entries (Role="regional") into the aggregator
+	// cluster. When absent or disabled, no mirroring is provisioned regardless
+	// of Regional declarations.
 	MirrorMaker *KafkaMirrorMakerConfig `yaml:"mirrormaker,omitempty"`
 }
 
-// KafkaMirrorMakerConfig declares the host running the standalone MM2 worker.
+// KafkaMirrorMakerConfig declares the hosts running the dedicated MM2 workers.
 // Source clusters are derived from KafkaConfig.Regional with Role!="aggregator"
 // (or empty Role). The aggregator target is the first Role="aggregator" entry,
 // or the primary KafkaConfig when none is marked.
 type KafkaMirrorMakerConfig struct {
-	Enabled   bool   `yaml:"enabled"`
-	Mode      string `yaml:"mode,omitempty"`      // native (default; same Kafka tarball)
-	Host      string `yaml:"host"`                // Single host running connect-mirror-maker.sh
-	HeapOpts  string `yaml:"heap_opts,omitempty"` // JVM heap (default -Xmx1G -Xms1G)
-	Replicas  int    `yaml:"replicas,omitempty"`  // Source-cluster replication factor for mirrored topics; default 1
-	TaskCount int    `yaml:"task_count,omitempty"`
+	Enabled   bool     `yaml:"enabled"`
+	Mode      string   `yaml:"mode,omitempty"`      // native (default; same Kafka tarball)
+	Host      string   `yaml:"host,omitempty"`      // Optional single worker host; prefer Hosts.
+	Hosts     []string `yaml:"hosts,omitempty"`     // Hosts running the dedicated MM2 worker cluster.
+	HeapOpts  string   `yaml:"heap_opts,omitempty"` // JVM heap (default -Xmx1G -Xms1G)
+	Replicas  int      `yaml:"replicas,omitempty"`  // Source-cluster replication factor for mirrored topics; default 1
+	TaskCount int      `yaml:"task_count,omitempty"`
 }
 
 // RegionalKafkaCluster is an additional Kafka cluster pinned to a region.
