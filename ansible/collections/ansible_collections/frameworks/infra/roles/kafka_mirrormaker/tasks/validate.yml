@@ -1,19 +1,55 @@
 ---
-- name: Refresh service facts
-  ansible.builtin.service_facts:
+- name: Validate Kafka MirrorMaker service and REST listener
+  block:
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
 
-- name: Assert Kafka MirrorMaker service is running
-  ansible.builtin.assert:
-    that:
-      - ansible_facts.services.get('frameworks-kafka-mirrormaker.service', {}).get('state') == 'running'
-    fail_msg: >-
-      frameworks-kafka-mirrormaker.service is not running
-      (state={{ ansible_facts.services.get('frameworks-kafka-mirrormaker.service', {}).get('state', 'missing') }})
+    - name: Assert Kafka MirrorMaker service is running
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services.get('frameworks-kafka-mirrormaker.service', {}).get('state') == 'running'
+        fail_msg: >-
+          frameworks-kafka-mirrormaker.service is not running
+          (state={{ ansible_facts.services.get('frameworks-kafka-mirrormaker.service', {}).get('state', 'missing') }})
 
-- name: Wait for Kafka MirrorMaker REST port
-  ansible.builtin.wait_for:
-    host: 127.0.0.1
-    port: "{{ kafka_mm_rest_port }}"
-    state: started
-    timeout: 60
-  when: not ansible_check_mode
+    - name: Wait for Kafka MirrorMaker REST port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ kafka_mm_rest_port }}"
+        state: started
+        timeout: 60
+      when: not ansible_check_mode
+  rescue:
+    - name: Capture Kafka MirrorMaker systemctl status after failed validation
+      ansible.builtin.command: "systemctl status frameworks-kafka-mirrormaker.service --no-pager -l"
+      register: kafka_mm_systemctl_status
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Capture Kafka MirrorMaker journal after failed validation
+      ansible.builtin.command: "journalctl -u frameworks-kafka-mirrormaker.service --no-pager -n 160"
+      register: kafka_mm_journal
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Capture Kafka MirrorMaker rendered systemd unit
+      ansible.builtin.command: "systemctl cat frameworks-kafka-mirrormaker.service"
+      register: kafka_mm_unit
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Fail with Kafka MirrorMaker diagnostics
+      ansible.builtin.fail:
+        msg: |-
+          frameworks-kafka-mirrormaker failed validation
+          systemctl status:
+          {{ kafka_mm_systemctl_status.stdout | default('(no systemctl output)') }}
+
+          journalctl:
+          {{ kafka_mm_journal.stdout | default('(no journal output)') }}
+
+          systemd unit:
+          {{ kafka_mm_unit.stdout | default('(no systemd unit output)') }}

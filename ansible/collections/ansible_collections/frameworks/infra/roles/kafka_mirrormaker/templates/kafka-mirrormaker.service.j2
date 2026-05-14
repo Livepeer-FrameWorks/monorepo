@@ -8,7 +8,11 @@ User={{ kafka_mm_user }}
 Group={{ kafka_mm_group }}
 Environment="KAFKA_HEAP_OPTS={{ kafka_mm_heap_opts }}"
 Environment="LOG_DIR={{ kafka_mm_log_dir }}"
-ExecStart={{ kafka_mm_bin_dir }}/connect-mirror-maker.sh {{ kafka_mm_properties_path }}{% if kafka_mm_local_cluster_alias | length > 0 %} --clusters {{ kafka_mm_local_cluster_alias }}{% endif %}
+{% if kafka_mm_local_cluster_alias | length > 0 %}
+ExecStart={{ kafka_mm_bin_dir }}/connect-mirror-maker.sh {{ kafka_mm_properties_path }} --clusters {{ kafka_mm_local_cluster_alias }}
+{% else %}
+ExecStart={{ kafka_mm_bin_dir }}/connect-mirror-maker.sh {{ kafka_mm_properties_path }}
+{% endif %}
 Restart=always
 RestartSec=10
 LimitNOFILE=1048576
