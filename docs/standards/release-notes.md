@@ -17,7 +17,7 @@ The release file is `docs/releases/vX.Y.Z.md` (or wherever your release pipeline
 
 1. `# Release vX.Y.Z`
 2. Optional preamble for first-of-a-format or unusual releases.
-3. `## Upgrade` with three persona subsections (see below).
+3. `## Upgrade` with persona subsections (see below).
 4. `## New`, `## Hardened`, `## Fixes`, `## Build / infra`, `## Docs`. Drop any heading that has nothing under it. No empty sections.
 
 ### Upgrade subsections
@@ -32,9 +32,13 @@ Open with a one-line migrations summary (count, which databases, expand vs postd
     frameworks cluster provision --manifest <path>
     frameworks cluster upgrade plan --manifest <path> --version vX.Y.Z
     frameworks cluster upgrade --manifest <path> --version vX.Y.Z --all
+    frameworks cluster migrate --manifest <path> --phase postdeploy --to-version vX.Y.Z
+    frameworks cluster migrate --manifest <path> --phase contract --to-version vX.Y.Z
     frameworks cluster status --manifest <path>
 
-The `cluster provision` step belongs between migrate and upgrade whenever the release changes systemd env, GitOps-rendered config, or anything else outside service binaries. Old binaries keep running fine against the expanded schema, so this is a routine rolling upgrade.
+Only include the `postdeploy` and `contract` lines when the release ships those phases. Put `contract` after binary rollout and after any postdeploy/data migration the release requires.
+
+The `cluster provision` step belongs between migrate and upgrade whenever the release changes systemd env, GitOps-rendered config, manifest-derived cluster metadata, provider credentials, or anything else outside service binaries. If the release does not need config reconciliation, omit the provision line and let `cluster upgrade` handle service rollout. Old binaries keep running fine against the expanded schema, so this is a routine rolling upgrade.
 
 End with a one-line rollback expectation (expand-only stays back-compatible; postdeploy or contract migrations need an explicit forward fix).
 
@@ -42,9 +46,13 @@ End with a one-line rollback expectation (expand-only stays back-compatible; pos
 
 Usually "Nothing to do" plus a one-liner on which new features show up automatically. If a behavior change is visible (e.g. plan tier admission tightening), name it here too.
 
-**`### Self-hosters`**
+**`### Edge-only self-hosters`**
 
 Usually "Nothing to do" because Foghorn's edge release reconciler pushes new Helmsman/Caddy versions over the existing Helmsman stream. Mention this mechanism explicitly so readers understand why.
+
+**`### Tenant-private / marketplace cluster operators`**
+
+Use this subsection when the release affects tenant-owned, marketplace, or otherwise non-platform-official clusters. These operators follow the cluster-operator upgrade path, but call out the specific manifest fields, DNS/TLS prerequisites, and provisioning steps they must perform. Do not collapse this into edge-only self-hosting; running a cluster and running a BYO edge node are different responsibilities.
 
 ### Body sections
 

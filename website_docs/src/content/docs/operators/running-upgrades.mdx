@@ -13,6 +13,13 @@ import { Aside, Steps } from "@astrojs/starlight/components";
   reconciliation, not as the routine way to roll a running cluster forward.
 </Aside>
 
+<Aside type="note" title="Release notes can require provisioning">
+  Some releases change manifest-rendered runtime config, service environment, DNS/TLS provider
+  settings, or cluster metadata that a binary-only upgrade cannot apply. When a release note
+  explicitly includes `frameworks cluster provision` in the upgrade sequence, run it at that point;
+  otherwise keep using `cluster upgrade` for normal service rollouts.
+</Aside>
+
 Use `frameworks cluster upgrade` for service binaries and images, and
 `frameworks cluster migrate` for PostgreSQL/YugabyteDB schema migrations. The
 upgrade command downloads or pulls the target release artifact, lets the role
