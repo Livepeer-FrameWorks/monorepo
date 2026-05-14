@@ -81,8 +81,8 @@ func TestSessionEndpointResolvesViaManifest(t *testing.T) {
 	if !strings.HasPrefix(ep.DialAddr, "127.0.0.1:") {
 		t.Errorf("DialAddr should bind to loopback; got %s", ep.DialAddr)
 	}
-	if ep.ServerName != "10.99.0.1" {
-		t.Errorf("ServerName = %q, want mesh address 10.99.0.1", ep.ServerName)
+	if ep.ServerName != "quartermaster.internal" {
+		t.Errorf("ServerName = %q, want quartermaster.internal", ep.ServerName)
 	}
 
 	if got := len(calls); got != 1 {
@@ -156,12 +156,9 @@ func TestSessionOpensSecondTunnelForDifferentPortOnSameHost(t *testing.T) {
 	}
 }
 
-// TestSessionServerNameIsAuthoritativeNotLoopback locks the security-relevant
-// invariant: a tunneled endpoint's ServerName must be the SAN-bearing hostname
-// the cert is issued against, never the loopback dial address. Without this,
-// a non-dev-profile caller would feed `127.0.0.1` into the gRPC TLS verifier
-// and either fail outright or — worse — silently succeed against a misconfigured cert.
-func TestSessionServerNameIsAuthoritativeNotLoopback(t *testing.T) {
+// TestSessionServerNameUsesInternalServiceDNS locks the production TLS
+// invariant: service leaf certificates are issued for <service>.internal.
+func TestSessionServerNameUsesInternalServiceDNS(t *testing.T) {
 	t.Parallel()
 	sess, _ := OpenSession(Options{Manifest: newTestManifest()})
 	t.Cleanup(func() { _ = sess.Close() })
@@ -182,8 +179,8 @@ func TestSessionServerNameIsAuthoritativeNotLoopback(t *testing.T) {
 	if strings.HasPrefix(ep.ServerName, "127.0.0.1") || ep.ServerName == "localhost" {
 		t.Fatalf("ServerName must not be a loopback name; got %q", ep.ServerName)
 	}
-	if ep.ServerName != "203.0.113.20" {
-		t.Errorf("ServerName = %q, want billing-host's external IP 203.0.113.20", ep.ServerName)
+	if ep.ServerName != "purser.internal" {
+		t.Errorf("ServerName = %q, want purser.internal", ep.ServerName)
 	}
 }
 

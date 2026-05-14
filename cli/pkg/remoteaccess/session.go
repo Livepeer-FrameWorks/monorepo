@@ -190,8 +190,8 @@ func (s *Session) Close() error {
 }
 
 // resolveTarget extracts (host, port, serverName) from the manifest for the
-// requested service. ServerName is the authoritative dial address that would
-// have been used without tunneling — preserves existing TLS SAN matching.
+// requested service. ServerName is the internal service DNS name because
+// privateer/navigator issue service leaf certs for <service>.internal.
 func (s *Session) resolveTarget(t ServiceTarget) (hostKey string, remotePort int, serverName string, err error) {
 	svc, ok := s.manifest.Services[t.Name]
 	if !ok {
@@ -204,8 +204,7 @@ func (s *Session) resolveTarget(t ServiceTarget) (hostKey string, remotePort int
 	if hostKey == "" {
 		return "", 0, "", fmt.Errorf("remoteaccess: service %q has no host", t.Name)
 	}
-	host, ok := s.manifest.GetHost(hostKey)
-	if !ok {
+	if _, ok := s.manifest.GetHost(hostKey); !ok {
 		return "", 0, "", fmt.Errorf("remoteaccess: service %q host %q not in manifest", t.Name, hostKey)
 	}
 
@@ -217,12 +216,7 @@ func (s *Session) resolveTarget(t ServiceTarget) (hostKey string, remotePort int
 		return "", 0, "", fmt.Errorf("remoteaccess: service %q has no gRPC port (default %d)", t.Name, t.DefaultGRPCPort)
 	}
 
-	// ServerName is the cert-bearing hostname for TLS callers: the mesh address
-	// if present, else the host's external IP.
-	serverName = s.manifest.MeshAddress(hostKey)
-	if serverName == "" || serverName == hostKey {
-		serverName = host.ExternalIP
-	}
+	serverName = fmt.Sprintf("%s.internal", t.Name)
 	if serverName == "" && !s.allowInsecure {
 		return "", 0, "", fmt.Errorf("remoteaccess: service %q has no usable address for TLS server name", t.Name)
 	}
