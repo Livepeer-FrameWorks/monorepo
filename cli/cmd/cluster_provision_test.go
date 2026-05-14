@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +70,30 @@ func fakeServiceInstance(id, serviceID, nodeID, status string) *pb.ServiceInstan
 		ServiceId:  serviceID,
 		NodeId:     &nodeID,
 		Status:     status,
+	}
+}
+
+func TestQuartermasterBootstrapUsesFreshContextForAliasResolution(t *testing.T) {
+	raw, err := os.ReadFile("cluster_provision.go")
+	if err != nil {
+		t.Fatalf("read cluster_provision.go: %v", err)
+	}
+	src := string(raw)
+	if strings.Contains(src, "resolveSystemTenantIDViaQM(bootstrapCtx") {
+		t.Fatalf("system tenant alias resolution must not reuse the Ansible bootstrap timeout context")
+	}
+	if strings.Contains(src, "resolveClusterOwnerTenantIDs(bootstrapCtx") {
+		t.Fatalf("cluster owner alias resolution must not reuse the Ansible bootstrap timeout context")
+	}
+
+	bootstrapCall := strings.Index(src, "runServiceBootstrap(bootstrapCtx")
+	resolveCtx := strings.Index(src, "resolveCtx, resolveCancel := context.WithTimeout(ctx, provisionInitializeTimeout)")
+	resolveCall := strings.Index(src, "resolveSystemTenantIDViaQM(resolveCtx")
+	if bootstrapCall < 0 || resolveCtx < 0 || resolveCall < 0 {
+		t.Fatalf("expected bootstrap call, fresh resolve context, and resolve call in cluster_provision.go")
+	}
+	if bootstrapCall >= resolveCtx || resolveCtx >= resolveCall {
+		t.Fatalf("fresh resolve context must be created after Quartermaster bootstrap and before alias resolution")
 	}
 }
 

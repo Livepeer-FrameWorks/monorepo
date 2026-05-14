@@ -666,13 +666,15 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
 				return fmt.Errorf("bootstrap failed: %w", err)
 			}
+			bootstrapCancel()
 
 			// Pull system_tenant_id from QM via gRPC; the readiness report and
 			// downstream bootstrap-admin user creation need it. Alias→UUID is
 			// QM-owned data and never read directly from the CLI.
-			systemTenantID, idErr := resolveSystemTenantIDViaQM(bootstrapCtx, manifest, runtimeData, raSession)
+			resolveCtx, resolveCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
+			systemTenantID, idErr := resolveSystemTenantIDViaQM(resolveCtx, manifest, runtimeData, raSession)
 			if idErr != nil {
-				bootstrapCancel()
+				resolveCancel()
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Resolve system tenant: %v", idErr))
 				fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
 				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
@@ -693,8 +695,8 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			// entirely (Decklog rejects events with no tenant), so a silent
 			// warning would turn a configuration error into invisible data
 			// loss. Clusters without livepeer-gateway can degrade gracefully.
-			ownerMap, ownerErr := resolveClusterOwnerTenantIDs(bootstrapCtx, manifest, runtimeData, raSession)
-			bootstrapCancel()
+			ownerMap, ownerErr := resolveClusterOwnerTenantIDs(resolveCtx, manifest, runtimeData, raSession)
+			resolveCancel()
 			if ownerErr != nil {
 				if anyClusterRunsLivepeerGateway(manifest) {
 					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Resolve cluster owner tenants: %v", ownerErr))
