@@ -253,9 +253,9 @@ func runEdgeDeploy(ctx context.Context, cmd *cobra.Command, cliCtx fwcfg.Context
 		err  error
 	)
 	if cfg.foghornAddr != "" {
-		resp, err = preRegisterEdge(ctx, cfg.foghornAddr, cfg.enrollmentToken, cfg.sshTarget, cfg.sshKey, preferredNodeID)
+		resp, err = preRegisterEdge(ctx, cfg.foghornAddr, cfg.enrollmentToken, cfg.sshTarget, cfg.sshKey, preferredNodeID, "")
 	} else {
-		resp, err = bootstrapEdgeViaBridge(ctx, cliCtx, cfg.enrollmentToken, cfg.sshTarget, cfg.sshKey, preferredNodeID)
+		resp, err = bootstrapEdgeViaBridge(ctx, cliCtx, cfg.enrollmentToken, cfg.sshTarget, cfg.sshKey, preferredNodeID, "")
 	}
 	if err != nil {
 		return fmt.Errorf("pre-registration failed: %w", err)

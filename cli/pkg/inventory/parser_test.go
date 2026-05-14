@@ -3,6 +3,7 @@ package inventory
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -259,20 +260,49 @@ func TestMergeEdgeHosts(t *testing.T) {
 	manifest := &EdgeManifest{
 		Nodes: []EdgeNode{
 			{Name: "edge-eu-1", Subdomain: "edge-eu-1"},
+			{Name: "edge-us-1", Subdomain: "edge-us-1"},
 		},
 	}
 
 	inv := &HostInventory{
 		EdgeNodes: map[string]EdgeConnection{
-			"edge-eu-1": {SSH: "root@1.2.3.4"},
+			"edge-eu-1": {ExternalIP: "1.2.3.4", User: "deploy"},
+			"edge-us-1": {ExternalIP: "5.6.7.8"}, // user defaults to root
 		},
 	}
 
 	if err := manifest.MergeEdgeHosts(inv); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if manifest.Nodes[0].SSH != "root@1.2.3.4" {
-		t.Errorf("edge SSH = %q, want %q", manifest.Nodes[0].SSH, "root@1.2.3.4")
+	if manifest.Nodes[0].SSH != "deploy@1.2.3.4" {
+		t.Errorf("edge SSH = %q, want %q", manifest.Nodes[0].SSH, "deploy@1.2.3.4")
+	}
+	if manifest.Nodes[0].ExternalIP != "1.2.3.4" {
+		t.Errorf("edge ExternalIP = %q, want %q", manifest.Nodes[0].ExternalIP, "1.2.3.4")
+	}
+	if manifest.Nodes[1].SSH != "root@5.6.7.8" {
+		t.Errorf("edge SSH = %q, want %q (default user=root)", manifest.Nodes[1].SSH, "root@5.6.7.8")
+	}
+	if manifest.Nodes[1].ExternalIP != "5.6.7.8" {
+		t.Errorf("edge ExternalIP = %q, want %q", manifest.Nodes[1].ExternalIP, "5.6.7.8")
+	}
+}
+
+func TestMergeEdgeHostsRejectsEmptyExternalIP(t *testing.T) {
+	manifest := &EdgeManifest{
+		Nodes: []EdgeNode{{Name: "edge-eu-1"}},
+	}
+	inv := &HostInventory{
+		EdgeNodes: map[string]EdgeConnection{
+			"edge-eu-1": {User: "root"}, // no external_ip
+		},
+	}
+	err := manifest.MergeEdgeHosts(inv)
+	if err == nil {
+		t.Fatal("expected error for empty external_ip")
+	}
+	if !strings.Contains(err.Error(), "external_ip required") {
+		t.Errorf("error = %q, want it to mention 'external_ip required'", err.Error())
 	}
 }
 
@@ -281,7 +311,8 @@ func TestLoadEdgeWithHostsAcceptsTypeField(t *testing.T) {
 
 	hostsYAML := `edge_nodes:
   edge-eu-1:
-    ssh: root@edge-eu-1.example.com
+    external_ip: edge-eu-1.example.com
+    user: root
 `
 	if err := os.WriteFile(filepath.Join(dir, "hosts.yaml"), []byte(hostsYAML), 0o600); err != nil {
 		t.Fatal(err)
@@ -314,6 +345,9 @@ nodes:
 	}
 	if manifest.Nodes[0].SSH != "root@edge-eu-1.example.com" {
 		t.Fatalf("SSH = %q, want host inventory value", manifest.Nodes[0].SSH)
+	}
+	if manifest.Nodes[0].ExternalIP != "edge-eu-1.example.com" {
+		t.Fatalf("ExternalIP = %q, want host inventory value", manifest.Nodes[0].ExternalIP)
 	}
 }
 

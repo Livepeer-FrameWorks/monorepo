@@ -144,12 +144,13 @@ hosts:
     user: root
 edge_nodes:
   edge-eu-1:
-    ssh: "root@203.0.113.20"
+    external_ip: "203.0.113.20"
+    user: root # optional; defaults to root
 ```
 
 Encrypt it: `sops -e -i clusters/production/hosts.enc.yaml`
 
-During provisioning, the CLI decrypts the hosts file, merges IPs and SSH targets into the manifest, then proceeds normally. Manifests with inline `external_ip` continue to work — `hosts_file` is optional.
+During provisioning, the CLI decrypts the hosts file, merges IPs into the manifest, and composes edge SSH targets as `user@external_ip`. Cluster manifests may still put `external_ip` inline under `hosts:`; edge manifests keep connection details in `hosts_file` or use inline `ssh`.
 
 ---
 

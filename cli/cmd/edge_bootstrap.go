@@ -17,15 +17,18 @@ import (
 // Returns the *pb.PreRegisterEdgeResponse shape the existing call sites
 // expect so the rest of the edge bootstrap pipeline (template rendering,
 // cert handling, runtime Foghorn addr) is unchanged.
-func bootstrapEdgeViaBridge(ctx context.Context, ctxCfg fwcfg.Context, enrollmentToken, sshTarget, sshKey, preferredNodeID string) (*pb.PreRegisterEdgeResponse, error) {
+func bootstrapEdgeViaBridge(ctx context.Context, ctxCfg fwcfg.Context, enrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP string) (*pb.PreRegisterEdgeResponse, error) {
 	if ctxCfg.Endpoints.BridgeURL == "" {
 		return nil, fmt.Errorf("bootstrap requires a Bridge URL on the active context (run 'frameworks setup' or 'frameworks context set-url bridge <url>')")
 	}
-	externalIP, ipErr := getRemoteExternalIP(ctx, sshTarget, sshKey)
-	if ipErr != nil {
+	externalIP := knownExternalIP
+	if externalIP == "" {
+		ip, ipErr := getRemoteExternalIP(ctx, sshTarget, sshKey)
+		if ipErr == nil {
+			externalIP = ip
+		}
 		// External IP is best-effort — Foghorn can assign one if the
-		// client doesn't provide it. Surface the miss in verbose logs.
-		externalIP = ""
+		// client doesn't provide it.
 	}
 
 	bc := bridge.New(ctxCfg.Endpoints.BridgeURL)

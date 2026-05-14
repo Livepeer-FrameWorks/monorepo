@@ -224,7 +224,7 @@ func newEdgeInitCmd() *cobra.Command {
 				// Explicit override: dial Foghorn directly. For admin debug only.
 				resp, preRegErr = preRegisterEdgeLocal(cmd.Context(), foghornAddr, enrollmentToken, deriveEdgeNodeName("", "", "", true))
 			} else {
-				resp, preRegErr = bootstrapEdgeViaBridge(cmd.Context(), cliCtx, enrollmentToken, "", "", deriveEdgeNodeName("", "", "", true))
+				resp, preRegErr = bootstrapEdgeViaBridge(cmd.Context(), cliCtx, enrollmentToken, "", "", deriveEdgeNodeName("", "", "", true), "")
 			}
 			if preRegErr != nil {
 				return fmt.Errorf("pre-registration failed: %w", preRegErr)
@@ -631,9 +631,9 @@ Multi-node manifest example:
 					preRegErr  error
 				)
 				if foghornAddrExplicit && foghornAddr != "" {
-					preRegResp, preRegErr = preRegisterEdge(cmd.Context(), foghornAddr, enrollmentToken, preRegTarget, sshKey, preferredNodeID)
+					preRegResp, preRegErr = preRegisterEdge(cmd.Context(), foghornAddr, enrollmentToken, preRegTarget, sshKey, preferredNodeID, "")
 				} else {
-					preRegResp, preRegErr = bootstrapEdgeViaBridge(cmd.Context(), cliCtx, enrollmentToken, preRegTarget, sshKey, preferredNodeID)
+					preRegResp, preRegErr = bootstrapEdgeViaBridge(cmd.Context(), cliCtx, enrollmentToken, preRegTarget, sshKey, preferredNodeID, "")
 				}
 				if preRegErr != nil {
 					return fmt.Errorf("pre-registration failed: %w", preRegErr)
@@ -917,7 +917,7 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 			if cmd.Flags().Changed("version") {
 				nodeVersion = cliVersion
 			}
-			err := provisionSingleEdgeNode(cmd, cliCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, n.ResolvedCluster(manifest.ClusterID), n.Region, manifest.Email, token, manifest.FetchCert, n.ApplyTune, n.RegisterQM, timeout, nodeMode, nodeVersion, "", "")
+			err := provisionSingleEdgeNode(cmd, cliCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, n.ResolvedCluster(manifest.ClusterID), n.Region, manifest.Email, token, n.ExternalIP, manifest.FetchCert, n.ApplyTune, n.RegisterQM, timeout, nodeMode, nodeVersion, "", "")
 			if err != nil {
 				result.Error = err
 				result.Success = false
@@ -962,7 +962,10 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 }
 
 // provisionSingleEdgeNode provisions a single edge node using EdgeProvisioner.
-func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken string, fetchCert, applyTuning, registerNode bool, timeout time.Duration, mode, version, telemetryURL, telemetryToken string) error {
+// knownExternalIP, when non-empty, is the canonical IP from the manifest's
+// hosts inventory; it bypasses the remote ifconfig.me probe in both the
+// preregistration and Quartermaster registration paths.
+func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken, knownExternalIP string, fetchCert, applyTuning, registerNode bool, timeout time.Duration, mode, version, telemetryURL, telemetryToken string) error {
 	// Same --register guards the single-node provision RunE applies. Manifest
 	// mode reaches this helper without going through that RunE, so duplicate
 	// the contract here to keep the rule single-source.
@@ -977,7 +980,7 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 	var preRegCABundle string
 	if enrollmentToken != "" {
 		preferredNodeID := deriveEdgeNodeName(nodeName, nodeDomain, sshTarget, false)
-		preRegResp, err := bootstrapEdgeViaBridge(cmd.Context(), cliCtx, enrollmentToken, sshTarget, sshKey, preferredNodeID)
+		preRegResp, err := bootstrapEdgeViaBridge(cmd.Context(), cliCtx, enrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP)
 		if err != nil {
 			return fmt.Errorf("pre-registration failed: %w", err)
 		}
@@ -1002,9 +1005,14 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		primaryDomain = nodeDomain
 	}
 
-	// Registration is done before calling EdgeProvisioner (needs QM client)
+	// Registration is done before calling EdgeProvisioner (needs QM client).
+	// Manifest-mode supplies the canonical IP via knownExternalIP; fall back
+	// to a remote probe for ad-hoc CLI paths where it isn't known.
 	if registerNode {
-		externalIP, _ := getRemoteExternalIP(cmd.Context(), sshTarget, sshKey)
+		externalIP := knownExternalIP
+		if externalIP == "" {
+			externalIP, _ = getRemoteExternalIP(cmd.Context(), sshTarget, sshKey)
+		}
 		if err := registerEdgeNode(cmd, cliCtx, nodeName, clusterID, externalIP, region); err != nil {
 			return fmt.Errorf("node registration failed: %w", err)
 		}
@@ -1076,11 +1084,14 @@ func sshTargetToHost(sshTarget string) inventory.Host {
 
 // getRemoteExternalIP detects the external IP of the remote host
 func preRegisterEdgeLocal(ctx context.Context, foghornAddr, enrollmentToken, preferredNodeID string) (*pb.PreRegisterEdgeResponse, error) {
-	return preRegisterEdge(ctx, foghornAddr, enrollmentToken, "", "", preferredNodeID)
+	return preRegisterEdge(ctx, foghornAddr, enrollmentToken, "", "", preferredNodeID, "")
 }
 
-func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarget, sshKey, preferredNodeID string) (*pb.PreRegisterEdgeResponse, error) {
-	externalIP, _ := getRemoteExternalIP(ctx, sshTarget, sshKey)
+func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP string) (*pb.PreRegisterEdgeResponse, error) {
+	externalIP := knownExternalIP
+	if externalIP == "" {
+		externalIP, _ = getRemoteExternalIP(ctx, sshTarget, sshKey)
+	}
 
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)

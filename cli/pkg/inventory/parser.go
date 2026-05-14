@@ -189,14 +189,25 @@ func (m *Manifest) MergeHostInventory(inv *HostInventory) error {
 	return nil
 }
 
-// MergeEdgeHosts populates SSH targets on edge nodes from the host inventory.
+// MergeEdgeHosts populates SSH targets and external IPs on edge nodes from the
+// host inventory. Composes user@external_ip into EdgeNode.SSH and stamps
+// EdgeNode.ExternalIP so registration call sites can use the canonical IP
+// directly instead of round-tripping via a remote ifconfig.me probe.
 func (m *EdgeManifest) MergeEdgeHosts(inv *HostInventory) error {
 	for i, node := range m.Nodes {
 		conn, ok := inv.EdgeNodes[node.Name]
 		if !ok {
 			return fmt.Errorf("edge node '%s' not found in host inventory", node.Name)
 		}
-		m.Nodes[i].SSH = conn.SSH
+		if conn.ExternalIP == "" {
+			return fmt.Errorf("edge node '%s': external_ip required", node.Name)
+		}
+		user := conn.User
+		if user == "" {
+			user = "root"
+		}
+		m.Nodes[i].SSH = user + "@" + conn.ExternalIP
+		m.Nodes[i].ExternalIP = conn.ExternalIP
 	}
 	return nil
 }

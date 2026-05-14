@@ -500,7 +500,7 @@ type EdgeManifest struct {
 // EdgeNode represents a single edge node in the manifest
 type EdgeNode struct {
 	Name       string            `yaml:"name"`                  // Unique node name (e.g., edge-us-east-1)
-	SSH        string            `yaml:"ssh"`                   // SSH target (user@host)
+	SSH        string            `yaml:"ssh"`                   // SSH target (user@host); composed by MergeEdgeHosts when loading via inventory
 	SSHKey     string            `yaml:"-"`                     // Populated from --ssh-key flag, not from YAML
 	Subdomain  string            `yaml:"subdomain,omitempty"`   // Individual subdomain (e.g., edge-us-east-1 -> edge-us-east-1.example.com)
 	Region     string            `yaml:"region,omitempty"`      // Region for registration
@@ -509,6 +509,7 @@ type EdgeNode struct {
 	ApplyTune  bool              `yaml:"apply_tune,omitempty"`  // Apply sysctl tuning
 	RegisterQM bool              `yaml:"register_qm,omitempty"` // Register in Quartermaster
 	Mode       string            `yaml:"mode,omitempty"`        // Per-node mode override ("docker"|"native")
+	ExternalIP string            `yaml:"-"`                     // Populated by MergeEdgeHosts from the inventory; lets registration skip the remote ifconfig.me probe.
 }
 
 // ResolvedCluster returns the cluster ID this edge node should register
@@ -550,9 +551,13 @@ type HostConnection struct {
 	WireguardPrivateKeyManaged *bool  `yaml:"wireguard_private_key_managed,omitempty"`
 }
 
-// EdgeConnection holds the sensitive SSH target for an edge node.
+// EdgeConnection holds the sensitive connection details for an edge node.
+// Mirrors HostConnection so operators see the same shape under hosts: and
+// edge_nodes: in the same encrypted file. Edges don't join the WireGuard mesh,
+// so no key fields here.
 type EdgeConnection struct {
-	SSH string `yaml:"ssh"`
+	ExternalIP string `yaml:"external_ip"`
+	User       string `yaml:"user,omitempty"`
 }
 
 // ResolvedMode returns the effective mode for this node, falling back to the
