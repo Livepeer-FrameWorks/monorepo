@@ -3,6 +3,7 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"sync"
 	"time"
@@ -29,19 +30,38 @@ import (
 // US-origin stream's Signalman.
 type StreamOriginResolver func(ctx context.Context, streamID string) (string, error)
 
+const subscriptionClientKeySep = "\x00"
+
 type SubscriptionManager struct {
 	clients                 map[string]*signalmanclient.GRPCClient // Key: userID:tenantID:addr
 	logger                  logging.Logger
 	mutex                   sync.RWMutex
-	signalmanAddr           string
-	signalmanAddrByRegion   map[string]string
-	serviceToken            string      // Service token for service-to-service authentication
-	cleanup                 chan string // Channel for cleanup signals
+	signalmanAddr           string              // single-target fallback
+	signalmanAddrsLocal     []string            // local-region replica list (preferred)
+	signalmanAddrByRegion   map[string]string   // per-region single-target fallback
+	signalmanAddrsByRegion  map[string][]string // multi-target replica list per region
+	serviceToken            string              // Service token for service-to-service authentication
+	cleanup                 chan string         // Channel for cleanup signals
 	stopChan                chan struct{}
 	metrics                 *GraphQLMetrics
 	maxConnectionsPerTenant int
 	tenantConnectionCounts  map[string]int
 	streamOriginResolver    StreamOriginResolver
+}
+
+func subscriptionClientKey(userID, tenantID, addr string) string {
+	return strings.Join([]string{userID, tenantID, addr}, subscriptionClientKeySep)
+}
+
+func tenantIDFromSubscriptionClientKey(key string) string {
+	if parts := strings.SplitN(key, subscriptionClientKeySep, 3); len(parts) == 3 {
+		return parts[1]
+	}
+	parts := strings.SplitN(key, ":", 3)
+	if len(parts) >= 2 {
+		return parts[1]
+	}
+	return ""
 }
 
 // SetStreamOriginResolver installs the resolver used by stream-scoped
@@ -50,20 +70,19 @@ func (sm *SubscriptionManager) SetStreamOriginResolver(r StreamOriginResolver) {
 	sm.streamOriginResolver = r
 }
 
-// connectionAddrForStream picks the Signalman addr for a stream-scoped
+// connectionAddrsForStream returns the Signalman replicas for a stream-scoped
 // subscription. Empty streamID, no resolver, or a resolver lookup failure all
-// fall back to the local-region addr — viewers never hard-fail just because
-// origin lookup is degraded.
-func (sm *SubscriptionManager) connectionAddrForStream(ctx context.Context, streamID string) string {
+// fall back to the local-region replicas.
+func (sm *SubscriptionManager) connectionAddrsForStream(ctx context.Context, streamID, tenantID string) []string {
 	if streamID == "" || sm.streamOriginResolver == nil {
-		return sm.signalmanAddr
+		return sm.addrsForRegion("", tenantID)
 	}
 	region, err := sm.streamOriginResolver(ctx, streamID)
 	if err != nil {
 		sm.logger.WithError(err).WithField("stream_id", streamID).Debug("stream origin lookup failed; using local Signalman")
-		return sm.signalmanAddr
+		return sm.addrsForRegion("", tenantID)
 	}
-	return sm.AddrForRegion(region)
+	return sm.addrsForRegion(region, tenantID)
 }
 
 // parseSignalmanAddrByRegion parses comma-separated `region=addr` pairs
@@ -93,17 +112,112 @@ func parseSignalmanAddrByRegion(raw string) map[string]string {
 	return out
 }
 
+// parseSignalmanAddrs parses a comma-separated list of "host:port" entries
+// from SIGNALMAN_GRPC_ADDRS. Empty input returns nil.
+func parseSignalmanAddrs(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	out := []string{}
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry != "" {
+			out = append(out, entry)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// parseSignalmanAddrsByRegion parses `region=a,b,c;region=d,e` from
+// SIGNALMAN_GRPC_ADDRS_BY_REGION into a region→[]addr map. Semicolons separate
+// regions; commas separate replicas within a region. Empty input returns nil.
+func parseSignalmanAddrsByRegion(raw string) map[string][]string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	out := map[string][]string{}
+	for _, entry := range strings.Split(raw, ";") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		eq := strings.IndexByte(entry, '=')
+		if eq <= 0 || eq == len(entry)-1 {
+			continue
+		}
+		region := strings.TrimSpace(entry[:eq])
+		addrs := parseSignalmanAddrs(entry[eq+1:])
+		if region == "" || len(addrs) == 0 {
+			continue
+		}
+		out[region] = addrs
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // AddrForRegion returns the Signalman address that should serve subscriptions
 // for a stream whose origin region is `region`. Empty region or unknown region
 // falls back to the local Signalman.
 func (sm *SubscriptionManager) AddrForRegion(region string) string {
-	if region == "" {
+	addrs := sm.addrsForRegion(region, "")
+	if len(addrs) == 0 {
 		return sm.signalmanAddr
 	}
-	if addr, ok := sm.signalmanAddrByRegion[region]; ok && addr != "" {
-		return addr
+	return addrs[0]
+}
+
+// addrsForRegion returns the ordered list of Signalman replicas to attempt for
+// the given region. The first entry is the preferred dial target; subsequent
+// entries are failover candidates. Order is rotated by tenantID hash so
+// distinct tenants prefer different replicas (load spread). Empty/unknown
+// region falls back to the local-region list, then the single-addr value.
+func (sm *SubscriptionManager) addrsForRegion(region, tenantID string) []string {
+	var addrs []string
+	if region != "" {
+		if multi := sm.signalmanAddrsByRegion[region]; len(multi) > 0 {
+			addrs = multi
+		} else if single, ok := sm.signalmanAddrByRegion[region]; ok && single != "" {
+			addrs = []string{single}
+		}
 	}
-	return sm.signalmanAddr
+	if len(addrs) == 0 {
+		if len(sm.signalmanAddrsLocal) > 0 {
+			addrs = sm.signalmanAddrsLocal
+		} else if sm.signalmanAddr != "" {
+			addrs = []string{sm.signalmanAddr}
+		}
+	}
+	return rotateAddrs(addrs, tenantID)
+}
+
+// rotateAddrs returns a copy of addrs rotated by hash(tenantID) so each tenant
+// prefers a stable but tenant-dependent entry. With one address the result is
+// a one-element slice; the failover loop in tryConnect uses the rest as
+// fallbacks in order.
+func rotateAddrs(addrs []string, tenantID string) []string {
+	if len(addrs) <= 1 {
+		out := make([]string, len(addrs))
+		copy(out, addrs)
+		return out
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(tenantID))
+	off := int(h.Sum32()) % len(addrs)
+	if off < 0 {
+		off += len(addrs)
+	}
+	out := make([]string, 0, len(addrs))
+	out = append(out, addrs[off:]...)
+	out = append(out, addrs[:off]...)
+	return out
 }
 
 func (sm *SubscriptionManager) incrementTenantConnection(tenantID string) {
@@ -143,28 +257,65 @@ type ConnectionConfig struct {
 	JWT      string // JWT is kept for compatibility but not used in gRPC (auth via metadata if needed)
 }
 
-// NewSubscriptionManager creates a new gRPC subscription connection manager.
-// signalmanAddrByRegion may be nil; entries with empty values are ignored.
-func NewSubscriptionManager(signalmanAddr, serviceToken string, logger logging.Logger, metrics *GraphQLMetrics, maxConnectionsPerTenant int, signalmanAddrByRegion map[string]string) *SubscriptionManager {
-	regional := make(map[string]string, len(signalmanAddrByRegion))
-	for region, addr := range signalmanAddrByRegion {
+// SubscriptionManagerConfig keeps the preferred replica lists and the
+// single-address fallbacks in one startup config.
+type SubscriptionManagerConfig struct {
+	SignalmanAddr           string              // single addr fallback
+	SignalmanAddrsLocal     []string            // local-region replica list (preferred)
+	SignalmanAddrByRegion   map[string]string   // per-region single addr fallback
+	SignalmanAddrsByRegion  map[string][]string // per-region replica lists (preferred)
+	ServiceToken            string
+	MaxConnectionsPerTenant int
+	Metrics                 *GraphQLMetrics
+}
+
+// NewSubscriptionManager creates a new gRPC subscription connection manager
+// from a SubscriptionManagerConfig. Entries with empty values are ignored.
+func NewSubscriptionManager(logger logging.Logger, cfg SubscriptionManagerConfig) *SubscriptionManager {
+	regionalSingle := make(map[string]string, len(cfg.SignalmanAddrByRegion))
+	for region, addr := range cfg.SignalmanAddrByRegion {
 		region = strings.TrimSpace(region)
 		addr = strings.TrimSpace(addr)
 		if region == "" || addr == "" {
 			continue
 		}
-		regional[region] = addr
+		regionalSingle[region] = addr
 	}
+	regionalMulti := make(map[string][]string, len(cfg.SignalmanAddrsByRegion))
+	for region, addrs := range cfg.SignalmanAddrsByRegion {
+		region = strings.TrimSpace(region)
+		clean := make([]string, 0, len(addrs))
+		for _, a := range addrs {
+			a = strings.TrimSpace(a)
+			if a != "" {
+				clean = append(clean, a)
+			}
+		}
+		if region == "" || len(clean) == 0 {
+			continue
+		}
+		regionalMulti[region] = clean
+	}
+	local := make([]string, 0, len(cfg.SignalmanAddrsLocal))
+	for _, a := range cfg.SignalmanAddrsLocal {
+		a = strings.TrimSpace(a)
+		if a != "" {
+			local = append(local, a)
+		}
+	}
+
 	sm := &SubscriptionManager{
 		clients:                 make(map[string]*signalmanclient.GRPCClient),
 		logger:                  logger,
-		signalmanAddr:           signalmanAddr,
-		signalmanAddrByRegion:   regional,
-		serviceToken:            serviceToken,
+		signalmanAddr:           cfg.SignalmanAddr,
+		signalmanAddrsLocal:     local,
+		signalmanAddrByRegion:   regionalSingle,
+		signalmanAddrsByRegion:  regionalMulti,
+		serviceToken:            cfg.ServiceToken,
 		cleanup:                 make(chan string, 10),
 		stopChan:                make(chan struct{}),
-		metrics:                 metrics,
-		maxConnectionsPerTenant: maxConnectionsPerTenant,
+		metrics:                 cfg.Metrics,
+		maxConnectionsPerTenant: cfg.MaxConnectionsPerTenant,
 		tenantConnectionCounts:  make(map[string]int),
 	}
 
@@ -175,43 +326,58 @@ func NewSubscriptionManager(signalmanAddr, serviceToken string, logger logging.L
 }
 
 // GetOrCreateConnection gets an existing connection or creates a new one for a
-// user/tenant pair targeting the local-region Signalman.
+// user/tenant pair targeting the local-region Signalman. With multiple local
+// replicas, the picker rotates by tenant hash and fails over to the next
+// replica if the chosen one cannot be reached.
 func (sm *SubscriptionManager) GetOrCreateConnection(ctx context.Context, config ConnectionConfig) (*signalmanclient.GRPCClient, error) {
-	return sm.getOrCreateConnectionAddr(ctx, config, sm.signalmanAddr)
+	return sm.getOrCreateConnectionFromList(ctx, config, sm.addrsForRegion("", config.TenantID))
 }
 
 // GetOrCreateConnectionForRegion picks the regional Signalman addr for the
 // stream-origin region and returns a connection to it. Empty/unknown region
-// falls back to the local-region addr — same behaviour as AddrForRegion. The
-// connection-cache key includes the addr so EU and US viewers of a US-origin
-// stream don't share a connection.
+// falls back to the local-region list. The connection-cache key includes the
+// addr so EU and US viewers of a US-origin stream don't share a connection.
 func (sm *SubscriptionManager) GetOrCreateConnectionForRegion(ctx context.Context, config ConnectionConfig, region string) (*signalmanclient.GRPCClient, error) {
-	return sm.getOrCreateConnectionAddr(ctx, config, sm.AddrForRegion(region))
+	return sm.getOrCreateConnectionFromList(ctx, config, sm.addrsForRegion(region, config.TenantID))
 }
 
-func (sm *SubscriptionManager) getOrCreateConnectionAddr(ctx context.Context, config ConnectionConfig, addr string) (*signalmanclient.GRPCClient, error) {
-	if addr == "" {
-		addr = sm.signalmanAddr
+// getOrCreateConnectionFromList tries each addr in order. Returns the first
+// connection that opens; on transient connect failures (network or grpc), it
+// tries the next addr. The returned error wraps the last failure. A successful
+// connection is cached keyed by addr so subsequent requests for the same user/
+// tenant/addr reuse it; when the stream dies the periodic cleanup evicts it
+// and the next request can land on any replica.
+func (sm *SubscriptionManager) getOrCreateConnectionFromList(ctx context.Context, config ConnectionConfig, addrs []string) (*signalmanclient.GRPCClient, error) {
+	if len(addrs) == 0 {
+		if sm.signalmanAddr == "" {
+			return nil, fmt.Errorf("no Signalman addresses configured")
+		}
+		addrs = []string{sm.signalmanAddr}
 	}
-	key := fmt.Sprintf("%s:%s:%s", config.UserID, config.TenantID, addr)
 
+	// Reuse any already-connected client across the candidate set first.
 	sm.mutex.RLock()
-	if client, exists := sm.clients[key]; exists && client.IsConnected() {
-		sm.mutex.RUnlock()
-		return client, nil
+	for _, addr := range addrs {
+		key := subscriptionClientKey(config.UserID, config.TenantID, addr)
+		if client, exists := sm.clients[key]; exists && client.IsConnected() {
+			sm.mutex.RUnlock()
+			return client, nil
+		}
 	}
 	sm.mutex.RUnlock()
 
-	// Need to create a new connection
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
 
-	// Double-check after acquiring write lock
-	if client, exists := sm.clients[key]; exists && client.IsConnected() {
-		return client, nil
-	}
-	if client, exists := sm.clients[key]; exists {
-		sm.removeClientLocked(key, client, config.TenantID)
+	// Double-check after acquiring write lock.
+	for _, addr := range addrs {
+		key := subscriptionClientKey(config.UserID, config.TenantID, addr)
+		if client, exists := sm.clients[key]; exists && client.IsConnected() {
+			return client, nil
+		}
+		if client, exists := sm.clients[key]; exists {
+			sm.removeClientLocked(key, client, config.TenantID)
+		}
 	}
 
 	if sm.maxConnectionsPerTenant > 0 && sm.tenantConnectionCounts[config.TenantID] >= sm.maxConnectionsPerTenant {
@@ -222,80 +388,77 @@ func (sm *SubscriptionManager) getOrCreateConnectionAddr(ctx context.Context, co
 		return nil, fmt.Errorf("tenant %s has reached the max number of active subscriptions", config.TenantID)
 	}
 
-	// Create new gRPC client
-	client, err := signalmanclient.NewGRPCClient(signalmanclient.GRPCConfig{
-		GRPCAddr:      addr,
-		Timeout:       30 * time.Second,
-		Logger:        sm.logger,
-		UserID:        config.UserID,
-		TenantID:      config.TenantID,
-		ServiceToken:  sm.serviceToken,
-		AllowInsecure: pkgconfig.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    pkgconfig.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    pkgconfig.GetEnv("GRPC_TLS_SERVER_NAME", ""),
-	})
-	if err != nil {
-		sm.logger.WithError(err).WithFields(logging.Fields{
-			"user_id":   config.UserID,
-			"tenant_id": config.TenantID,
-		}).Error("Failed to create Signalman gRPC client")
-
-		if sm.metrics != nil {
-			sm.metrics.WebSocketMessages.WithLabelValues("outbound", "connection_error").Inc()
+	var lastErr error
+	for _, addr := range addrs {
+		client, err := signalmanclient.NewGRPCClient(signalmanclient.GRPCConfig{
+			GRPCAddr:      addr,
+			Timeout:       30 * time.Second,
+			Logger:        sm.logger,
+			UserID:        config.UserID,
+			TenantID:      config.TenantID,
+			ServiceToken:  sm.serviceToken,
+			AllowInsecure: pkgconfig.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+			CACertFile:    pkgconfig.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    pkgconfig.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		})
+		if err != nil {
+			lastErr = err
+			sm.logger.WithError(err).WithFields(logging.Fields{
+				"signalman_addr": addr,
+				"tenant_id":      config.TenantID,
+			}).Warn("Failed to create Signalman gRPC client; trying next replica")
+			continue
 		}
-		return nil, fmt.Errorf("failed to create Signalman gRPC client: %w", err)
+
+		if err := client.Connect(ctx); err != nil {
+			lastErr = err
+			if closeErr := client.Close(); closeErr != nil {
+				sm.logger.WithError(closeErr).WithField("signalman_addr", addr).Warn("Failed to close Signalman client after connect failure")
+			}
+			sm.logger.WithError(err).WithFields(logging.Fields{
+				"signalman_addr": addr,
+				"tenant_id":      config.TenantID,
+			}).Warn("Failed to connect to Signalman replica; trying next")
+			continue
+		}
+
+		key := subscriptionClientKey(config.UserID, config.TenantID, addr)
+		sm.clients[key] = client
+		sm.incrementTenantConnection(config.TenantID)
+		if sm.metrics != nil {
+			sm.metrics.WebSocketConnections.WithLabelValues(config.TenantID).Inc()
+			sm.metrics.WebSocketMessages.WithLabelValues("outbound", "connection_success").Inc()
+		}
+		sm.logger.WithFields(logging.Fields{
+			"user_id":        config.UserID,
+			"tenant_id":      config.TenantID,
+			"signalman_addr": addr,
+		}).Info("Created new gRPC connection to Signalman")
+		return client, nil
 	}
 
-	// Connect the stream
-	if err := client.Connect(ctx); err != nil {
-		if closeErr := client.Close(); closeErr != nil {
-			sm.logger.WithError(closeErr).WithFields(logging.Fields{
-				"user_id":   config.UserID,
-				"tenant_id": config.TenantID,
-			}).Warn("Failed to close Signalman gRPC client after connect failure")
-		}
-		sm.logger.WithError(err).WithFields(logging.Fields{
-			"user_id":   config.UserID,
-			"tenant_id": config.TenantID,
-		}).Error("Failed to connect to Signalman gRPC")
-
-		if sm.metrics != nil {
-			sm.metrics.WebSocketMessages.WithLabelValues("outbound", "connection_error").Inc()
-		}
-		return nil, fmt.Errorf("failed to connect to Signalman gRPC: %w", err)
-	}
-
-	sm.clients[key] = client
-	sm.incrementTenantConnection(config.TenantID)
-
-	// Record successful connection
 	if sm.metrics != nil {
-		sm.metrics.WebSocketConnections.WithLabelValues(config.TenantID).Inc()
-		sm.metrics.WebSocketMessages.WithLabelValues("outbound", "connection_success").Inc()
+		sm.metrics.WebSocketMessages.WithLabelValues("outbound", "connection_error").Inc()
 	}
-
-	sm.logger.WithFields(logging.Fields{
-		"user_id":   config.UserID,
-		"tenant_id": config.TenantID,
-		"key":       key,
-	}).Info("Created new gRPC connection to Signalman")
-
-	return client, nil
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no Signalman addresses available")
+	}
+	return nil, fmt.Errorf("failed to connect to any Signalman replica (%d tried): %w", len(addrs), lastErr)
 }
 
-// streamScopedAddr returns the Signalman addr to dial for a `*string` streamID
-// — nil means tenant-global so it falls back to the local addr.
-func (sm *SubscriptionManager) streamScopedAddr(ctx context.Context, streamID *string) string {
+// streamScopedAddrs returns candidate Signalman replicas for a `*string`
+// streamID. Nil means tenant-global, so it falls back to local replicas.
+func (sm *SubscriptionManager) streamScopedAddrs(ctx context.Context, streamID *string, tenantID string) []string {
 	if streamID == nil {
-		return sm.signalmanAddr
+		return sm.addrsForRegion("", tenantID)
 	}
-	return sm.connectionAddrForStream(ctx, *streamID)
+	return sm.connectionAddrsForStream(ctx, *streamID, tenantID)
 }
 
 // SubscribeToStreams subscribes to stream events and returns a channel of updates
 // Returns model.StreamEvent (canonical live stream event shape)
 func (sm *SubscriptionManager) SubscribeToStreams(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *model.StreamEvent, error) {
-	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.streamScopedAddr(ctx, streamID))
+	client, err := sm.getOrCreateConnectionFromList(ctx, config, sm.streamScopedAddrs(ctx, streamID, config.TenantID))
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +475,7 @@ func (sm *SubscriptionManager) SubscribeToStreams(ctx context.Context, config Co
 // SubscribeToAnalytics subscribes to analytics events and returns a channel of updates
 // Returns proto.ClientLifecycleUpdate directly (bound to GraphQL ViewerMetrics)
 func (sm *SubscriptionManager) SubscribeToAnalytics(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *pb.ClientLifecycleUpdate, error) {
-	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.streamScopedAddr(ctx, streamID))
+	client, err := sm.getOrCreateConnectionFromList(ctx, config, sm.streamScopedAddrs(ctx, streamID, config.TenantID))
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +492,7 @@ func (sm *SubscriptionManager) SubscribeToAnalytics(ctx context.Context, config 
 // SubscribeToConnections subscribes to viewer connection events and returns a channel of updates
 // Returns proto.ConnectionEvent directly (bound to GraphQL ConnectionEvent)
 func (sm *SubscriptionManager) SubscribeToConnections(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *pb.ConnectionEvent, error) {
-	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.streamScopedAddr(ctx, streamID))
+	client, err := sm.getOrCreateConnectionFromList(ctx, config, sm.streamScopedAddrs(ctx, streamID, config.TenantID))
 	if err != nil {
 		return nil, err
 	}
@@ -346,7 +509,7 @@ func (sm *SubscriptionManager) SubscribeToConnections(ctx context.Context, confi
 // SubscribeToStorageEvents subscribes to storage lifecycle events and returns a channel of updates
 // Returns proto.StorageEvent (mapped from StorageLifecycleData)
 func (sm *SubscriptionManager) SubscribeToStorageEvents(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *pb.StorageEvent, error) {
-	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.streamScopedAddr(ctx, streamID))
+	client, err := sm.getOrCreateConnectionFromList(ctx, config, sm.streamScopedAddrs(ctx, streamID, config.TenantID))
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +526,7 @@ func (sm *SubscriptionManager) SubscribeToStorageEvents(ctx context.Context, con
 // SubscribeToProcessingEvents subscribes to processing/transcoding events and returns a channel of updates
 // Returns proto.ProcessingUsageRecord (mapped from ProcessBillingEvent)
 func (sm *SubscriptionManager) SubscribeToProcessingEvents(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *pb.ProcessingUsageRecord, error) {
-	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.streamScopedAddr(ctx, streamID))
+	client, err := sm.getOrCreateConnectionFromList(ctx, config, sm.streamScopedAddrs(ctx, streamID, config.TenantID))
 	if err != nil {
 		return nil, err
 	}
@@ -397,7 +560,7 @@ func (sm *SubscriptionManager) SubscribeToSystem(ctx context.Context, config Con
 // SubscribeToTrackList subscribes to track list events and returns a channel of updates
 // Returns proto.StreamTrackListTrigger directly (bound to GraphQL TrackListEvent)
 func (sm *SubscriptionManager) SubscribeToTrackList(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *pb.StreamTrackListTrigger, error) {
-	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.connectionAddrForStream(ctx, streamID))
+	client, err := sm.getOrCreateConnectionFromList(ctx, config, sm.connectionAddrsForStream(ctx, streamID, config.TenantID))
 	if err != nil {
 		return nil, err
 	}
@@ -414,7 +577,7 @@ func (sm *SubscriptionManager) SubscribeToTrackList(ctx context.Context, config 
 // SubscribeToLifecycle subscribes to lifecycle events (clip) and returns a channel
 // Returns proto.ClipLifecycleData directly (bound to GraphQL ClipLifecycle)
 func (sm *SubscriptionManager) SubscribeToLifecycle(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *pb.ClipLifecycleData, error) {
-	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.connectionAddrForStream(ctx, streamID))
+	client, err := sm.getOrCreateConnectionFromList(ctx, config, sm.connectionAddrsForStream(ctx, streamID, config.TenantID))
 	if err != nil {
 		return nil, err
 	}
@@ -429,7 +592,7 @@ func (sm *SubscriptionManager) SubscribeToLifecycle(ctx context.Context, config 
 // SubscribeToDVRLifecycle subscribes to DVR lifecycle events and returns a channel
 // Returns proto.DVRLifecycleData directly (bound to GraphQL DVREvent)
 func (sm *SubscriptionManager) SubscribeToDVRLifecycle(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *pb.DVRLifecycleData, error) {
-	client, err := sm.getOrCreateConnectionAddr(ctx, config, sm.connectionAddrForStream(ctx, streamID))
+	client, err := sm.getOrCreateConnectionFromList(ctx, config, sm.connectionAddrsForStream(ctx, streamID, config.TenantID))
 	if err != nil {
 		return nil, err
 	}
@@ -1356,12 +1519,15 @@ func parseConversationStatus(status *string) pb.ConversationStatus {
 
 // CleanupConnection removes a connection from the pool
 func (sm *SubscriptionManager) CleanupConnection(userID, tenantID string) {
-	key := fmt.Sprintf("%s:%s", userID, tenantID)
+	prefix := strings.Join([]string{userID, tenantID, ""}, subscriptionClientKeySep)
 
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
 
-	if client, exists := sm.clients[key]; exists {
+	for key, client := range sm.clients {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
 		sm.removeClientLocked(key, client, tenantID)
 
 		sm.logger.WithFields(logging.Fields{
@@ -1382,23 +1548,9 @@ func (sm *SubscriptionManager) cleanupWorker() {
 		case <-sm.stopChan:
 			return
 		case key := <-sm.cleanup:
-			// Handle specific cleanup request
 			sm.mutex.Lock()
 			if client, exists := sm.clients[key]; exists {
-				// Extract tenant ID from key
-				tenantID := ""
-				if len(key) > 0 {
-					if idx := len(key) - 1; idx > 0 {
-						// key is userID:tenantID format, extract tenantID
-						for i := len(key) - 1; i >= 0; i-- {
-							if key[i] == ':' {
-								tenantID = key[i+1:]
-								break
-							}
-						}
-					}
-				}
-				sm.removeClientLocked(key, client, tenantID)
+				sm.removeClientLocked(key, client, tenantIDFromSubscriptionClientKey(key))
 			}
 			sm.mutex.Unlock()
 		case <-ticker.C:
@@ -1421,15 +1573,7 @@ func (sm *SubscriptionManager) periodicCleanup() {
 
 	for key, client := range sm.clients {
 		if !client.IsConnected() {
-			// Extract tenant ID from key
-			tenantID := ""
-			for i := len(key) - 1; i >= 0; i-- {
-				if key[i] == ':' {
-					tenantID = key[i+1:]
-					break
-				}
-			}
-			toRemove = append(toRemove, clientInfo{key: key, tenantID: tenantID})
+			toRemove = append(toRemove, clientInfo{key: key, tenantID: tenantIDFromSubscriptionClientKey(key)})
 		}
 	}
 
@@ -1455,15 +1599,7 @@ func (sm *SubscriptionManager) Shutdown() error {
 
 	// Close all connections
 	for key, client := range sm.clients {
-		// Extract tenant ID from key
-		tenantID := ""
-		for i := len(key) - 1; i >= 0; i-- {
-			if key[i] == ':' {
-				tenantID = key[i+1:]
-				break
-			}
-		}
-		sm.removeClientLocked(key, client, tenantID)
+		sm.removeClientLocked(key, client, tenantIDFromSubscriptionClientKey(key))
 	}
 
 	sm.logger.Info("Subscription manager shutdown completed")

@@ -343,8 +343,8 @@ type KafkaConfig struct {
 
 	// Regional declares additional Kafka clusters in other regions, keyed
 	// by region_id. Each entry is an independent KRaft deployment. Role
-	// marks which cluster aggregates mirrored topics; empty defers to
-	// the primary's role. MirrorMaker2 mirrors topics between regional
+	// marks which cluster aggregates mirrored topics; empty on a regional
+	// entry means "regional". MirrorMaker2 mirrors topics between regional
 	// and aggregator clusters.
 	Regional []RegionalKafkaCluster `yaml:"regional,omitempty"`
 
@@ -387,9 +387,9 @@ type RegionalKafkaCluster struct {
 	TransactionStateLogReplicationFactor int               `yaml:"transaction_state_log_replication_factor,omitempty"`
 	TransactionStateLogMinISR            int               `yaml:"transaction_state_log_min_isr,omitempty"`
 	// MirrorTopics names the topics MirrorMaker2 mirrors from this
-	// regional cluster onto the aggregator. Empty = mirror the canonical
-	// set: analytics_events, service_events, decklog_events_dlq,
-	// purser.usage_reports. Other topics stay regional-only.
+	// regional cluster into the aggregator. Empty = mirror the canonical
+	// set: analytics_events, service_events, billing.usage_reports,
+	// decklog_events_dlq. Other topics stay regional-only.
 	MirrorTopics []string `yaml:"mirror_topics,omitempty"`
 }
 

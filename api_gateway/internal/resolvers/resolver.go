@@ -42,11 +42,23 @@ type Resolver struct {
 
 // NewResolver creates a new GraphQL resolver
 func NewResolver(serviceClients *clients.ServiceClients, logger logging.Logger, metrics *GraphQLMetrics, serviceToken string) *Resolver {
-	// Initialize gRPC subscription manager
+	// Initialize gRPC subscription manager. SIGNALMAN_GRPC_ADDRS /
+	// SIGNALMAN_GRPC_ADDRS_BY_REGION carry the multi-replica lists used for
+	// failover; the single-addr fields provide the required local target.
 	signalmanAddr := config.RequireEnv("SIGNALMAN_GRPC_ADDR")
+	signalmanAddrs := parseSignalmanAddrs(config.GetEnv("SIGNALMAN_GRPC_ADDRS", ""))
 	signalmanByRegion := parseSignalmanAddrByRegion(config.GetEnv("SIGNALMAN_GRPC_ADDR_BY_REGION", ""))
+	signalmanAddrsByRegion := parseSignalmanAddrsByRegion(config.GetEnv("SIGNALMAN_GRPC_ADDRS_BY_REGION", ""))
 	maxConnections := config.GetEnvInt("WS_MAX_CONNECTIONS_PER_TENANT", 5)
-	subManager := NewSubscriptionManager(signalmanAddr, serviceToken, logger, metrics, maxConnections, signalmanByRegion)
+	subManager := NewSubscriptionManager(logger, SubscriptionManagerConfig{
+		SignalmanAddr:           signalmanAddr,
+		SignalmanAddrsLocal:     signalmanAddrs,
+		SignalmanAddrByRegion:   signalmanByRegion,
+		SignalmanAddrsByRegion:  signalmanAddrsByRegion,
+		ServiceToken:            serviceToken,
+		MaxConnectionsPerTenant: maxConnections,
+		Metrics:                 metrics,
+	})
 	// Wire stream-origin lookup so stream-scoped subscriptions attach to the
 	// origin-region Signalman. Commodore's Stream proto carries
 	// stream_origin_region (derived from active_ingest_cluster_id's

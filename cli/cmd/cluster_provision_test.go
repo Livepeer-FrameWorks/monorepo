@@ -1807,6 +1807,61 @@ func TestBuildTaskConfigKafkaMirrorMakerRendersHubAndSpokeLinks(t *testing.T) {
 	}
 }
 
+// TestBuildTaskConfigKafkaMirrorMakerThreeRegionTopology verifies one
+// aggregator plus N regional sources: one fan-in source per regional Kafka and
+// no aggregator-to-regional fanout.
+func TestBuildTaskConfigKafkaMirrorMakerThreeRegionTopology(t *testing.T) {
+	manifest := threeRegionKafkaManifest()
+	manifest.Infrastructure.Kafka.MirrorMaker = &inventory.KafkaMirrorMakerConfig{
+		Enabled:   true,
+		Host:      "regional-eu-1",
+		TaskCount: 2,
+	}
+
+	task := &orchestrator.Task{
+		Name:      "kafka-mirrormaker",
+		Type:      "kafka-mirrormaker",
+		ServiceID: "kafka-mirrormaker",
+		Host:      "regional-eu-1",
+		Phase:     orchestrator.PhaseInfrastructure,
+	}
+
+	config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig: %v", err)
+	}
+
+	target := config.Metadata["target"].(map[string]any)
+	if target["alias"] != "eu-west" {
+		t.Fatalf("target = %v, want eu-west aggregator", target["alias"])
+	}
+
+	sources := config.Metadata["sources"].([]map[string]any)
+	wantSourceAliases := map[string]bool{"us-east": false, "ap-south": false}
+	for _, src := range sources {
+		alias := src["alias"].(string)
+		if _, ok := wantSourceAliases[alias]; !ok {
+			t.Fatalf("unexpected source alias %q (regional↔regional link?)", alias)
+		}
+		wantSourceAliases[alias] = true
+		if !strings.Contains(src["topics"].(string), "analytics_events") {
+			t.Errorf("source %s topics missing analytics_events: %v", alias, src["topics"])
+		}
+		if !strings.Contains(src["topics"].(string), "decklog_events_dlq") {
+			t.Errorf("source %s topics missing DLQ: %v", alias, src["topics"])
+		}
+	}
+	for alias, seen := range wantSourceAliases {
+		if !seen {
+			t.Errorf("missing source for region %s", alias)
+		}
+	}
+
+	if _, ok := config.Metadata["fanout_targets"]; ok {
+		t.Fatalf("MM2 config must not include aggregator-to-regional fanout: %#v", config.Metadata["fanout_targets"])
+	}
+}
+
 func TestBuildServiceEnvVarsSetsMirrorPrefixesForAggregatorPeriscopeOnly(t *testing.T) {
 	manifest := &inventory.Manifest{
 		RootDomain: "frameworks.network",
@@ -2455,5 +2510,186 @@ func TestBatchContainsServiceMatchesTaskType(t *testing.T) {
 	}
 	if !batchContainsService(batch, "yugabyte") {
 		t.Fatal("expected batchContainsService to match task type for Yugabyte nodes")
+	}
+}
+
+// TestBuildServiceEnvVarsAggregatorPinnedServicesIgnoreHostRegion proves that
+// periscope-ingest, purser, periscope-query, and commodore bind aggregator
+// Kafka regardless of which region's host they're deployed on. Pinning here
+// prevents a regional host placement from dual-writing central ClickHouse or
+// missing centralized billing rows.
+func TestBuildServiceEnvVarsAggregatorPinnedServicesIgnoreHostRegion(t *testing.T) {
+	manifest := threeRegionKafkaManifest()
+
+	pinned := []string{"periscope-ingest", "purser", "periscope-query", "commodore"}
+	for _, svc := range pinned {
+		for _, host := range []string{"regional-eu-1", "regional-us-1", "regional-ap-1"} {
+			task := &orchestrator.Task{Type: svc, ServiceID: svc, Host: host}
+			env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+			if err != nil {
+				t.Fatalf("buildServiceEnvVars(%s on %s): %v", svc, host, err)
+			}
+			if env["KAFKA_CLUSTER_ID"] != "eu-kafka" {
+				t.Fatalf("%s on %s: KAFKA_CLUSTER_ID = %q, want eu-kafka (aggregator)", svc, host, env["KAFKA_CLUSTER_ID"])
+			}
+			if !strings.Contains(env["KAFKA_BROKERS"], "regional-eu-1") {
+				t.Fatalf("%s on %s: KAFKA_BROKERS = %q, want aggregator brokers", svc, host, env["KAFKA_BROKERS"])
+			}
+		}
+	}
+}
+
+// TestBuildServiceEnvVarsSignalmanPerInstanceKafkaIdentity proves the
+// provisioner-owned per-replica group/client/reset env: each signalman host
+// gets a unique stable KAFKA_GROUP_ID derived from the hostname, and reset
+// is forced to latest so a fresh group doesn't replay retained history to
+// live clients.
+func TestBuildServiceEnvVarsSignalmanPerInstanceKafkaIdentity(t *testing.T) {
+	manifest := threeRegionKafkaManifest()
+
+	envByHost := map[string]map[string]string{}
+	for _, host := range []string{"regional-us-1", "regional-us-2", "regional-us-3"} {
+		task := &orchestrator.Task{Type: "signalman", ServiceID: "signalman", Host: host}
+		env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+		if err != nil {
+			t.Fatalf("buildServiceEnvVars signalman on %s: %v", host, err)
+		}
+		envByHost[host] = env
+	}
+
+	seenGroups := map[string]string{}
+	for host, env := range envByHost {
+		want := "signalman-" + host
+		if env["KAFKA_GROUP_ID"] != want {
+			t.Errorf("%s: KAFKA_GROUP_ID = %q, want %q", host, env["KAFKA_GROUP_ID"], want)
+		}
+		if env["KAFKA_CLIENT_ID"] != want {
+			t.Errorf("%s: KAFKA_CLIENT_ID = %q, want %q", host, env["KAFKA_CLIENT_ID"], want)
+		}
+		if env["KAFKA_CONSUME_RESET_OFFSET"] != "latest" {
+			t.Errorf("%s: KAFKA_CONSUME_RESET_OFFSET = %q, want latest", host, env["KAFKA_CONSUME_RESET_OFFSET"])
+		}
+		if prevHost, dup := seenGroups[env["KAFKA_GROUP_ID"]]; dup {
+			t.Errorf("KAFKA_GROUP_ID collision: %s and %s both → %s", host, prevHost, env["KAFKA_GROUP_ID"])
+		}
+		seenGroups[env["KAFKA_GROUP_ID"]] = host
+	}
+
+	// Stability across reruns: same host, same env.
+	again, err := buildServiceEnvVars(&orchestrator.Task{Type: "signalman", ServiceID: "signalman", Host: "regional-us-1"}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	if err != nil {
+		t.Fatalf("rerun: %v", err)
+	}
+	if again["KAFKA_GROUP_ID"] != envByHost["regional-us-1"]["KAFKA_GROUP_ID"] {
+		t.Fatalf("signalman group not stable across reruns")
+	}
+}
+
+// TestBuildServiceEnvVarsBridgeMultiTargetSignalman proves the bridge env
+// carries every Signalman replica in its region (SIGNALMAN_GRPC_ADDRS) plus
+// the full topology map (SIGNALMAN_GRPC_ADDRS_BY_REGION).
+func TestBuildServiceEnvVarsBridgeMultiTargetSignalman(t *testing.T) {
+	manifest := threeRegionKafkaManifest()
+
+	task := &orchestrator.Task{Type: "bridge", ServiceID: "bridge", Host: "regional-eu-1"}
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars bridge: %v", err)
+	}
+
+	if env["SIGNALMAN_GRPC_ADDR"] == "" {
+		t.Fatal("SIGNALMAN_GRPC_ADDR missing")
+	}
+	addrs := env["SIGNALMAN_GRPC_ADDRS"]
+	if addrs == "" {
+		t.Fatal("SIGNALMAN_GRPC_ADDRS missing")
+	}
+	for _, host := range []string{"regional-eu-1", "regional-eu-2", "regional-eu-3"} {
+		if !strings.Contains(addrs, host) {
+			t.Errorf("SIGNALMAN_GRPC_ADDRS missing %s: %q", host, addrs)
+		}
+	}
+
+	byRegion := env["SIGNALMAN_GRPC_ADDRS_BY_REGION"]
+	if byRegion == "" {
+		t.Fatal("SIGNALMAN_GRPC_ADDRS_BY_REGION missing")
+	}
+	for _, region := range []string{"eu-west", "us-east", "ap-south"} {
+		if !strings.Contains(byRegion, region+"=") {
+			t.Errorf("SIGNALMAN_GRPC_ADDRS_BY_REGION missing region %s: %q", region, byRegion)
+		}
+	}
+	// us-east should list all three US signalmans
+	if !strings.Contains(byRegion, "regional-us-1") || !strings.Contains(byRegion, "regional-us-2") || !strings.Contains(byRegion, "regional-us-3") {
+		t.Errorf("SIGNALMAN_GRPC_ADDRS_BY_REGION missing US replicas: %q", byRegion)
+	}
+}
+
+// threeRegionKafkaManifest builds an EU(aggregator)+US+AP-south topology with
+// 3 signalman replicas per region — the shape this hardening pass is designed
+// to support before the APAC media cell actually ships.
+func threeRegionKafkaManifest() *inventory.Manifest {
+	mk := func(ip string, region string) inventory.Host {
+		return inventory.Host{WireguardIP: ip, Labels: map[string]string{"region": region}}
+	}
+	return &inventory.Manifest{
+		Profile:    "dev",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": mk("10.88.0.11", "eu-west"),
+			"regional-eu-2": mk("10.88.0.12", "eu-west"),
+			"regional-eu-3": mk("10.88.0.13", "eu-west"),
+			"regional-us-1": mk("10.88.1.11", "us-east"),
+			"regional-us-2": mk("10.88.1.12", "us-east"),
+			"regional-us-3": mk("10.88.1.13", "us-east"),
+			"regional-ap-1": mk("10.88.2.11", "ap-south"),
+			"regional-ap-2": mk("10.88.2.12", "ap-south"),
+			"regional-ap-3": mk("10.88.2.13", "ap-south"),
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"signalman": {
+				Enabled: true,
+				Hosts: []string{
+					"regional-eu-1", "regional-eu-2", "regional-eu-3",
+					"regional-us-1", "regional-us-2", "regional-us-3",
+					"regional-ap-1", "regional-ap-2", "regional-ap-3",
+				},
+			},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Kafka: &inventory.KafkaConfig{
+				Enabled:   true,
+				ClusterID: "eu-kafka",
+				RegionID:  "eu-west",
+				Role:      "aggregator",
+				Brokers: []inventory.KafkaBroker{
+					{Host: "regional-eu-1", ID: 1, Port: 9092},
+					{Host: "regional-eu-2", ID: 2, Port: 9092},
+					{Host: "regional-eu-3", ID: 3, Port: 9092},
+				},
+				Regional: []inventory.RegionalKafkaCluster{
+					{
+						RegionID:  "us-east",
+						Role:      "regional",
+						ClusterID: "us-kafka",
+						Brokers: []inventory.KafkaBroker{
+							{Host: "regional-us-1", ID: 11, Port: 9092},
+							{Host: "regional-us-2", ID: 12, Port: 9092},
+							{Host: "regional-us-3", ID: 13, Port: 9092},
+						},
+					},
+					{
+						RegionID:  "ap-south",
+						Role:      "regional",
+						ClusterID: "ap-kafka",
+						Brokers: []inventory.KafkaBroker{
+							{Host: "regional-ap-1", ID: 21, Port: 9092},
+							{Host: "regional-ap-2", ID: 22, Port: 9092},
+							{Host: "regional-ap-3", ID: 23, Port: 9092},
+						},
+					},
+				},
+			},
+		},
 	}
 }

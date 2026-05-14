@@ -34,13 +34,42 @@ type Consumer struct {
 	mu        sync.RWMutex
 }
 
-// NewConsumer creates a new Kafka consumer
-func NewConsumer(brokers []string, groupID string, clusterID string, clientID string, logger *logrus.Logger) (*Consumer, error) {
+// ConsumerOption configures a Consumer at construction time. Callers wanting
+// non-default behaviour (e.g. broadcast/fanout consumer groups that must not
+// replay history) pass these to NewConsumer.
+type ConsumerOption func(*consumerOptions)
+
+type consumerOptions struct {
+	resetOffset kgo.Offset
+}
+
+// WithResetOffsetLatest configures the consumer to start at the end of the
+// log on first start (no committed offsets for the group). Use for per-instance
+// broadcast/fanout groups where replaying retained history to live clients is
+// not desired. Durable competing-consumer groups (analytics ingest, billing)
+// must stay on the default (earliest).
+func WithResetOffsetLatest() ConsumerOption {
+	return func(o *consumerOptions) {
+		o.resetOffset = kgo.NewOffset().AtEnd()
+	}
+}
+
+// NewConsumer creates a new Kafka consumer. Default reset offset is AtStart
+// (earliest), which is correct for durable consumers; broadcast groups should
+// pass WithResetOffsetLatest.
+func NewConsumer(brokers []string, groupID string, clusterID string, clientID string, logger *logrus.Logger, options ...ConsumerOption) (*Consumer, error) {
+	cfg := consumerOptions{
+		resetOffset: kgo.NewOffset().AtStart(),
+	}
+	for _, opt := range options {
+		opt(&cfg)
+	}
+
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(brokers...),
 		kgo.ConsumerGroup(groupID),
 		kgo.ClientID(clientID),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.ConsumeResetOffset(cfg.resetOffset),
 		kgo.DisableAutoCommit(),
 		kgo.BlockRebalanceOnPoll(),
 	}

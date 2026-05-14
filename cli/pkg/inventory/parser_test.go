@@ -479,3 +479,155 @@ func TestMergeHostInventory_CopiesAdoptedLocalFields(t *testing.T) {
 		t.Errorf("WireguardPrivateKeyManaged not merged: %+v", h.WireguardPrivateKeyManaged)
 	}
 }
+
+// TestManifestValidateKafkaTopLevelDefaultsToAggregator confirms the
+// back-compat path: an existing manifest with no top-level role and regional
+// entries declared today still parses, with the top-level treated as the
+// aggregator.
+func TestManifestValidateKafkaTopLevelDefaultsToAggregator(t *testing.T) {
+	manifest := &Manifest{
+		Version: "1",
+		Type:    "cluster",
+		Hosts: map[string]Host{
+			"eu-1": {ExternalIP: "10.0.0.10", User: "root", WireguardIP: "10.88.0.10"},
+			"us-1": {ExternalIP: "10.0.1.10", User: "root", WireguardIP: "10.88.1.10"},
+		},
+		Infrastructure: InfrastructureConfig{
+			Kafka: &KafkaConfig{
+				Enabled:   true,
+				ClusterID: "eu-cluster",
+				Brokers:   []KafkaBroker{{Host: "eu-1", ID: 1}},
+				Regional: []RegionalKafkaCluster{
+					{RegionID: "us-east", ClusterID: "us-cluster", Brokers: []KafkaBroker{{Host: "us-1", ID: 11}}},
+				},
+			},
+		},
+	}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("legacy shape (no top-level role) should validate as aggregator: %v", err)
+	}
+}
+
+func TestManifestValidateKafkaRejectsTwoAggregators(t *testing.T) {
+	manifest := &Manifest{
+		Version: "1",
+		Type:    "cluster",
+		Hosts: map[string]Host{
+			"eu-1": {ExternalIP: "10.0.0.10", User: "root", WireguardIP: "10.88.0.10"},
+			"us-1": {ExternalIP: "10.0.1.10", User: "root", WireguardIP: "10.88.1.10"},
+		},
+		Infrastructure: InfrastructureConfig{
+			Kafka: &KafkaConfig{
+				Enabled:   true,
+				ClusterID: "eu-cluster",
+				Role:      "aggregator",
+				Brokers:   []KafkaBroker{{Host: "eu-1", ID: 1}},
+				Regional: []RegionalKafkaCluster{
+					{RegionID: "us-east", Role: "aggregator", ClusterID: "us-cluster", Brokers: []KafkaBroker{{Host: "us-1", ID: 11}}},
+				},
+			},
+		},
+	}
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("two aggregators must be rejected")
+	}
+}
+
+func TestManifestValidateKafkaRejectsUnknownRole(t *testing.T) {
+	manifest := &Manifest{
+		Version: "1",
+		Type:    "cluster",
+		Hosts: map[string]Host{
+			"eu-1": {ExternalIP: "10.0.0.10", User: "root", WireguardIP: "10.88.0.10"},
+		},
+		Infrastructure: InfrastructureConfig{
+			Kafka: &KafkaConfig{
+				Enabled:   true,
+				ClusterID: "eu-cluster",
+				Role:      "lol",
+				Brokers:   []KafkaBroker{{Host: "eu-1", ID: 1}},
+			},
+		},
+	}
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("unknown role must be rejected")
+	}
+}
+
+func TestManifestValidateKafkaRejectsDuplicateRegionID(t *testing.T) {
+	manifest := &Manifest{
+		Version: "1",
+		Type:    "cluster",
+		Hosts: map[string]Host{
+			"eu-1": {ExternalIP: "10.0.0.10", User: "root", WireguardIP: "10.88.0.10"},
+			"us-1": {ExternalIP: "10.0.1.10", User: "root", WireguardIP: "10.88.1.10"},
+			"us-2": {ExternalIP: "10.0.1.11", User: "root", WireguardIP: "10.88.1.11"},
+		},
+		Infrastructure: InfrastructureConfig{
+			Kafka: &KafkaConfig{
+				Enabled:   true,
+				ClusterID: "eu-cluster",
+				Brokers:   []KafkaBroker{{Host: "eu-1", ID: 1}},
+				Regional: []RegionalKafkaCluster{
+					{RegionID: "us-east", ClusterID: "us-cluster-1", Brokers: []KafkaBroker{{Host: "us-1", ID: 11}}},
+					{RegionID: "us-east", ClusterID: "us-cluster-2", Brokers: []KafkaBroker{{Host: "us-2", ID: 12}}},
+				},
+			},
+		},
+	}
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("duplicate region_id must be rejected")
+	}
+}
+
+func TestManifestValidateKafkaRejectsRegionalWithoutRegionID(t *testing.T) {
+	manifest := &Manifest{
+		Version: "1",
+		Type:    "cluster",
+		Hosts: map[string]Host{
+			"eu-1": {ExternalIP: "10.0.0.10", User: "root", WireguardIP: "10.88.0.10"},
+			"us-1": {ExternalIP: "10.0.1.10", User: "root", WireguardIP: "10.88.1.10"},
+		},
+		Infrastructure: InfrastructureConfig{
+			Kafka: &KafkaConfig{
+				Enabled:   true,
+				ClusterID: "eu-cluster",
+				Brokers:   []KafkaBroker{{Host: "eu-1", ID: 1}},
+				Regional: []RegionalKafkaCluster{
+					{ClusterID: "us-cluster", Brokers: []KafkaBroker{{Host: "us-1", ID: 11}}},
+				},
+			},
+		},
+	}
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("regional entry without region_id must be rejected")
+	}
+}
+
+func TestManifestValidateKafkaAcceptsThreeRegionTopology(t *testing.T) {
+	manifest := &Manifest{
+		Version: "1",
+		Type:    "cluster",
+		Hosts: map[string]Host{
+			"eu-1": {ExternalIP: "10.0.0.10", User: "root", WireguardIP: "10.88.0.10"},
+			"us-1": {ExternalIP: "10.0.1.10", User: "root", WireguardIP: "10.88.1.10"},
+			"ap-1": {ExternalIP: "10.0.2.10", User: "root", WireguardIP: "10.88.2.10"},
+		},
+		Infrastructure: InfrastructureConfig{
+			Kafka: &KafkaConfig{
+				Enabled:   true,
+				ClusterID: "eu-cluster",
+				RegionID:  "eu-west",
+				Role:      "aggregator",
+				Brokers:   []KafkaBroker{{Host: "eu-1", ID: 1}},
+				Regional: []RegionalKafkaCluster{
+					{RegionID: "us-east", Role: "regional", ClusterID: "us-cluster", Brokers: []KafkaBroker{{Host: "us-1", ID: 11}}},
+					{RegionID: "ap-south", Role: "regional", ClusterID: "ap-cluster", Brokers: []KafkaBroker{{Host: "ap-1", ID: 21}}},
+				},
+			},
+		},
+	}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("explicit 3-region topology should validate: %v", err)
+	}
+}

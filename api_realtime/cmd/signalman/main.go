@@ -66,7 +66,11 @@ func main() {
 		grpcHub.SetMaxConnectionsPerTenant(maxConnectionsPerTenant)
 	}
 
-	// Setup Kafka consumer
+	// Setup Kafka consumer. Signalman runs N replicas per region with one
+	// consumer group per replica (set by the provisioner as
+	// KAFKA_GROUP_ID=signalman-{host}) so every replica receives every event
+	// for broadcast fanout. A fresh group has no committed offsets, so reset
+	// must be `latest` to avoid replaying retained history to live clients.
 	brokers := strings.Split(config.RequireEnv("KAFKA_BROKERS"), ",")
 	groupID := config.GetEnv("KAFKA_GROUP_ID", "signalman-group")
 	clusterID := config.RequireEnv("KAFKA_CLUSTER_ID")
@@ -78,7 +82,12 @@ func main() {
 	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 
-	consumer, err := kafka.NewConsumer(brokers, groupID, clusterID, clientID, logger)
+	consumerOpts := []kafka.ConsumerOption{}
+	if strings.EqualFold(config.GetEnv("KAFKA_CONSUME_RESET_OFFSET", "latest"), "latest") {
+		consumerOpts = append(consumerOpts, kafka.WithResetOffsetLatest())
+	}
+
+	consumer, err := kafka.NewConsumer(brokers, groupID, clusterID, clientID, logger, consumerOpts...)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to initialize Kafka consumer")
 	}

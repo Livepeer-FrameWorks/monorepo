@@ -5137,22 +5137,6 @@ func pickServiceHostInRegion(manifest *inventory.Manifest, svc inventory.Service
 	return ""
 }
 
-// signalmanAddrsByRegion builds a region→first-mesh-addr map covering every
-// region that has at least one Signalman host.
-func signalmanAddrsByRegion(manifest *inventory.Manifest) map[string]string {
-	multi := signalmanAddrsByRegionMulti(manifest)
-	if len(multi) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(multi))
-	for region, addrs := range multi {
-		if len(addrs) > 0 {
-			out[region] = addrs[0]
-		}
-	}
-	return out
-}
-
 // signalmanAddrsByRegionMulti builds region→list-of-mesh-addrs covering every
 // Signalman replica per region. The bridge picks one from its own region's
 // list and fails over within the list when the chosen replica disconnects.
