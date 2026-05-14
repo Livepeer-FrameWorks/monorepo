@@ -96,11 +96,39 @@
         state: absent
       when: service_bootstrap_apply is succeeded
 
-    - name: Service_bootstrap | apply | remove desired-state file on failure
+  rescue:
+    - name: Service_bootstrap | apply | preserve failed desired-state file
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ service_bootstrap_state_dir }}/bootstrap.yaml"
+        dest: "{{ service_bootstrap_state_dir }}/bootstrap-failed-{{ ansible_date_time.epoch }}.yaml"
+        owner: "{{ service_bootstrap_user }}"
+        group: "{{ service_bootstrap_group }}"
+        mode: "0600"
+      no_log: true
+      failed_when: false
+
+    - name: Service_bootstrap | apply | remove failed active desired-state file
       ansible.builtin.file:
         path: "{{ service_bootstrap_state_dir }}/bootstrap.yaml"
         state: absent
-      when: service_bootstrap_apply is failed
+      failed_when: false
+
+    - name: Service_bootstrap | apply | fail with bootstrap diagnostics
+      ansible.builtin.fail:
+        msg: |-
+          {{ service_bootstrap_service }} bootstrap failed
+          failed task: {{ ansible_failed_task.name | default('unknown') }}
+          rc: {{ ansible_failed_result.rc | default('unknown') }}
+
+          stdout:
+          {{ ansible_failed_result.stdout | default('(no stdout)') }}
+
+          stderr:
+          {{ ansible_failed_result.stderr | default('(no stderr)') }}
+
+          failed desired-state file:
+          {{ service_bootstrap_state_dir }}/bootstrap-failed-{{ ansible_date_time.epoch }}.yaml
 
 - name: Service_bootstrap | validate
   when: service_bootstrap_mode == "validate"

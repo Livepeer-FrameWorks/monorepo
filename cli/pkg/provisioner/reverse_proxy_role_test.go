@@ -403,6 +403,32 @@ func TestSharedFrameworksPKIRolesPreservePrivateerAccess(t *testing.T) {
 	}
 }
 
+func TestServiceBootstrapRolePreservesFailedDesiredStateAndDiagnostics(t *testing.T) {
+	tasks := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/service_bootstrap/tasks/main.yml")
+	for _, want := range []string{
+		"rescue:",
+		"preserve failed desired-state file",
+		"bootstrap-failed-{{ ansible_date_time.epoch }}.yaml",
+		"failed task: {{ ansible_failed_task.name | default('unknown') }}",
+		"{{ ansible_failed_result.stdout | default('(no stdout)') }}",
+		"{{ ansible_failed_result.stderr | default('(no stderr)') }}",
+	} {
+		if !strings.Contains(tasks, want) {
+			t.Fatalf("service_bootstrap role must preserve failed desired-state and emit command diagnostics; missing %q:\n%s", want, tasks)
+		}
+	}
+
+	diagnostics := readRepoFile(t, "cli/cmd/cluster_provision.go")
+	for _, want := range []string{
+		"== service bootstrap failure artifacts ==",
+		"/var/lib/frameworks/quartermaster/bootstrap-failed-*.yaml",
+	} {
+		if !strings.Contains(diagnostics, want) {
+			t.Fatalf("quartermaster failure diagnostics must list preserved bootstrap artifacts; missing %q", want)
+		}
+	}
+}
+
 func readRepoFile(t *testing.T, path string) string {
 	t.Helper()
 	content, err := os.ReadFile("../../../" + path)

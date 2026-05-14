@@ -4114,6 +4114,9 @@ echo
 echo "== journalctl -u frameworks-quartermaster -n 200 =="
 journalctl -u frameworks-quartermaster -n 200 --no-pager -o short-iso
 echo
+echo "== service bootstrap failure artifacts =="
+ls -l /var/lib/frameworks/quartermaster/bootstrap-failed-*.yaml 2>/dev/null || true
+echo
 echo "== listeners 18002/19002 =="
 ss -ltnp 2>/dev/null | awk '$4 ~ /:(18002|19002)$/ { print }'
 echo
