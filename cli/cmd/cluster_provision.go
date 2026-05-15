@@ -6545,7 +6545,7 @@ func verifyQuartermasterMeshReachability(ctx context.Context, cmd *cobra.Command
 			failures = append(failures, fmt.Sprintf("%s: not found in manifest", hostName))
 			continue
 		}
-		cmdText := fmt.Sprintf("nc -vz -w 3 %s %d", qmIP, qmPort)
+		cmdText := fmt.Sprintf("if command -v nc >/dev/null 2>&1; then nc -vz -w 3 %[1]s %[2]d; elif command -v timeout >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then timeout 4 bash -c 'cat < /dev/null > /dev/tcp/%[1]s/%[2]d'; else echo 'missing TCP probe tool: install nc or provide bash+timeout'; exit 127; fi", qmIP, qmPort)
 		result, err := base.RunCommand(ctx, hostInfo, cmdText)
 		if err != nil {
 			detail := strings.TrimSpace(routeResultOutput(result))
