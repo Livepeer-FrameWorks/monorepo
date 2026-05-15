@@ -444,7 +444,7 @@
         </div>
 
         <!-- Operational mode controls -->
-        {#if node.effectiveMode}
+        {#if node.nodeType?.toLowerCase() === "edge" && node.effectiveMode}
           <div class="slab col-span-full">
             <NodeModePanel
               relayId={node.id}

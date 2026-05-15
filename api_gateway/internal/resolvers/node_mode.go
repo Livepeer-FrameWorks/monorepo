@@ -69,6 +69,9 @@ func (r *Resolver) DoSetNodeMode(ctx context.Context, input model.SetNodeModeInp
 // Always reads through GetNodeHealth so the answer reflects Foghorn's live
 // view rather than a stale cached column.
 func (r *Resolver) DoNodeEffectiveMode(ctx context.Context, obj *pb.InfrastructureNode) (model.NodeOperationalMode, error) {
+	if nodeSkipsOperationalMode(obj) {
+		return model.NodeOperationalModeNormal, nil
+	}
 	health, err := r.nodeHealthFor(ctx, obj.GetNodeId())
 	if err != nil {
 		return model.NodeOperationalModeNormal, err
@@ -83,6 +86,9 @@ func (r *Resolver) DoNodeEffectiveMode(ctx context.Context, obj *pb.Infrastructu
 // DoNodeRoutingImpactPreview returns the node's current active streams and
 // viewers. Same single-fetch path as effectiveMode.
 func (r *Resolver) DoNodeRoutingImpactPreview(ctx context.Context, obj *pb.InfrastructureNode) (*model.RoutingImpactPreview, error) {
+	if nodeSkipsOperationalMode(obj) {
+		return &model.RoutingImpactPreview{}, nil
+	}
 	health, err := r.nodeHealthFor(ctx, obj.GetNodeId())
 	if err != nil {
 		return nil, err
@@ -93,12 +99,20 @@ func (r *Resolver) DoNodeRoutingImpactPreview(ctx context.Context, obj *pb.Infra
 	}, nil
 }
 
+func nodeSkipsOperationalMode(obj *pb.InfrastructureNode) bool {
+	nodeType := strings.TrimSpace(obj.GetNodeType())
+	return nodeType != "" && !strings.EqualFold(nodeType, "edge")
+}
+
 // nodeHealthFor returns the GetNodeHealth response for a node, memoised on
 // the request's context so concurrent field resolvers within a single
 // query share one RPC.
 func (r *Resolver) nodeHealthFor(ctx context.Context, nodeID string) (*pb.GetNodeHealthResponse, error) {
 	if nodeID == "" {
 		return nil, fmt.Errorf("node id is required")
+	}
+	if r == nil || r.Clients == nil || r.Clients.Commodore == nil {
+		return nil, fmt.Errorf("commodore client unavailable")
 	}
 	cache := nodeHealthCacheFromContext(ctx)
 	cache.mu.Lock()
