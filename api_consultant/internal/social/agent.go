@@ -13,6 +13,7 @@ const defaultSocialInterval = 2 * time.Hour
 type AgentConfig struct {
 	Interval  time.Duration
 	MaxPerDay int
+	Trigger   <-chan struct{}
 	Detector  *Detector
 	Composer  *Composer
 	Publisher Publisher
@@ -23,6 +24,7 @@ type AgentConfig struct {
 type Agent struct {
 	interval  time.Duration
 	maxPerDay int
+	trigger   <-chan struct{}
 	detector  *Detector
 	composer  *Composer
 	publisher Publisher
@@ -38,6 +40,7 @@ func NewAgent(cfg AgentConfig) *Agent {
 	return &Agent{
 		interval:  interval,
 		maxPerDay: cfg.MaxPerDay,
+		trigger:   cfg.Trigger,
 		detector:  cfg.Detector,
 		composer:  cfg.Composer,
 		publisher: cfg.Publisher,
@@ -57,6 +60,8 @@ func (a *Agent) Start(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-a.trigger:
+			a.runCycle(ctx)
 		case <-ticker.C:
 			a.runCycle(ctx)
 		}

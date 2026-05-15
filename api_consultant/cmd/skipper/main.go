@@ -526,6 +526,7 @@ func main() {
 			socialAgent := social.NewAgent(social.AgentConfig{
 				Interval:  cfg.SocialInterval,
 				MaxPerDay: cfg.SocialMaxPerDay,
+				Trigger:   socialCollector.Notify(),
 				Detector:  socialDetector,
 				Composer:  socialComposer,
 				Publisher: socialPublisher,
