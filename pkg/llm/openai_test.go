@@ -284,3 +284,34 @@ func TestOpenAIProviderStreamWithNoToolCalls(t *testing.T) {
 		t.Fatalf("expected no tool calls, got %d", len(toolCalls))
 	}
 }
+
+func TestOpenAIProviderAcceptsPlainDoneTerminator(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		send := func(v any) {
+			b, _ := json.Marshal(v)
+			fmt.Fprintf(w, "data: %s\n\n", b)
+		}
+		send(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"content": "done-compatible"}}}})
+		fmt.Fprint(w, "data: DONE\n\n")
+	}))
+	defer server.Close()
+
+	p := NewOpenAIProvider(Config{APIURL: server.URL, APIKey: "k", Model: "m"})
+	stream, err := p.Complete(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv content: %v", err)
+	}
+	if chunk.Content != "done-compatible" {
+		t.Fatalf("unexpected content %q", chunk.Content)
+	}
+	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected EOF after DONE sentinel, got %v", err)
+	}
+}

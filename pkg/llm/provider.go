@@ -73,7 +73,7 @@ func (s *sseStream) Recv() (Chunk, error) {
 		if payload == "" {
 			continue
 		}
-		if payload == "[DONE]" {
+		if isSSEDonePayload(payload) {
 			return Chunk{}, io.EOF
 		}
 		chunk, err := s.decode(data)
@@ -84,6 +84,15 @@ func (s *sseStream) Recv() (Chunk, error) {
 			continue
 		}
 		return chunk, nil
+	}
+}
+
+func isSSEDonePayload(payload string) bool {
+	switch strings.ToUpper(strings.TrimSpace(payload)) {
+	case "[DONE]", "DONE":
+		return true
+	default:
+		return false
 	}
 }
 
