@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -76,7 +77,7 @@ func runBootstrapCommand(args []string) int {
 	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "quartermaster bootstrap: begin tx: %v\n", err)
 		return 1
