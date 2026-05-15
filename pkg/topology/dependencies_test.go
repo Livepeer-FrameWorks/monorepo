@@ -9,3 +9,19 @@ func TestInfraDependenciesOnlyIncludeDirectInfraClients(t *testing.T) {
 		}
 	}
 }
+
+func TestServiceDependentsFindDirectCallers(t *testing.T) {
+	dependents := ServiceDependents([]string{"quartermaster"})
+	for _, want := range []string{"chandler", "privateer"} {
+		found := false
+		for _, got := range dependents {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("ServiceDependents(quartermaster) missing %q in %v", want, dependents)
+		}
+	}
+}

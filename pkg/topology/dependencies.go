@@ -190,6 +190,29 @@ func DNSDependenciesForServices(serviceIDs []string) []string {
 	return sortedKeys(seen)
 }
 
+// ServiceDependents returns service types that directly call any target service.
+func ServiceDependents(targetServiceIDs []string) []string {
+	targets := map[string]struct{}{}
+	for _, target := range targetServiceIDs {
+		if target != "" {
+			targets[target] = struct{}{}
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	for serviceID, deps := range serviceDependencies {
+		for _, dep := range deps {
+			if _, ok := targets[dep.TargetServiceID]; ok {
+				seen[serviceID] = struct{}{}
+				break
+			}
+		}
+	}
+	return sortedKeys(seen)
+}
+
 // FederationPeerServices returns direct peer services that are not ordinary DNS
 // dependencies. Foghorn federation dials concrete peer Foghorn addresses learned
 // from Quartermaster, so mesh policy must include peer nodes without making

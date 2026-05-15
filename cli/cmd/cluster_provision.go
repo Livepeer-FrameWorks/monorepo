@@ -685,6 +685,14 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			if qmAddr, addrErr := resolveServiceGRPCAddr(manifest, "quartermaster", defaultGRPCPort("quartermaster")); addrErr == nil {
 				runtimeData["quartermaster_grpc_addr"] = qmAddr
 			}
+			if err := verifyQuartermasterMeshReachability(ctx, cmd, manifest, sshPool); err != nil {
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Quartermaster mesh reachability failed: %v", err))
+				fmt.Fprintln(cmd.OutOrStdout(), "  Services depend on quartermaster.internal for bootstrap and runtime discovery.")
+				fmt.Fprintln(cmd.OutOrStdout(), "  Fix mesh reachability and re-run provisioning.")
+				fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
+				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+				return fmt.Errorf("quartermaster mesh reachability failed: %w", err)
+			}
 			// Pre-resolve every cluster's owner_tenant alias to its UUID so the
 			// per-cluster gateway env injection can populate
 			// FRAMEWORKS_CLUSTER_OWNER_TENANT_ID for non-platform clusters too
@@ -2969,6 +2977,9 @@ func privateerSeedPeerHosts(manifest *inventory.Manifest, selfHostName string) m
 	for hostName := range privateerDependencyPeerHosts(manifest, selfHostName) {
 		hosts[hostName] = struct{}{}
 	}
+	for hostName := range privateerReciprocalPeerHosts(manifest, selfHostName) {
+		hosts[hostName] = struct{}{}
+	}
 	return hosts
 }
 
@@ -3019,6 +3030,22 @@ func privateerDependencyPeerHosts(manifest *inventory.Manifest, selfHostName str
 	}
 	for _, hostName := range privateerConcretePeerHostsForHost(manifest, selfHostName) {
 		hosts[hostName] = struct{}{}
+	}
+	return hosts
+}
+
+func privateerReciprocalPeerHosts(manifest *inventory.Manifest, selfHostName string) map[string]struct{} {
+	hosts := map[string]struct{}{}
+	if manifest == nil || selfHostName == "" {
+		return hosts
+	}
+	for hostName, host := range manifest.Hosts {
+		if hostName == selfHostName || host.WireguardIP == "" || host.WireguardPublicKey == "" {
+			continue
+		}
+		if _, ok := privateerDependencyPeerHosts(manifest, hostName)[selfHostName]; ok {
+			hosts[hostName] = struct{}{}
+		}
 	}
 	return hosts
 }
@@ -6373,7 +6400,8 @@ func loadEnvFile(path string, target map[string]string) error {
 	return nil
 }
 
-// verifyMeshHealth checks that Privateer is running and mesh DNS works on privateer hosts.
+// verifyMeshHealth checks that Privateer is running and the rendered mesh
+// policy was actually applied on privateer hosts.
 // Called as a gate between Privateer provisioning and application service provisioning.
 func verifyMeshHealth(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool, privateerHosts []string) error {
 	fmt.Fprintf(cmd.OutOrStdout(), "  Verifying mesh health on %d privateer host(s)...\n", len(privateerHosts))
@@ -6423,6 +6451,26 @@ func verifyMeshHealth(ctx context.Context, cmd *cobra.Command, manifest *invento
 			continue
 		}
 
+		expectedPeerIPs := privateerExpectedPeerIPs(manifest, hostName)
+		if len(expectedPeerIPs) > 0 {
+			peerCmd := "wg show wg0 allowed-ips 2>/dev/null || true"
+			peerResult, peerErr := base.RunCommand(ctx, hostInfo, peerCmd)
+			if peerErr != nil {
+				detail := strings.TrimSpace(routeResultOutput(peerResult))
+				if detail == "" {
+					detail = peerErr.Error()
+				}
+				failures = append(failures, fmt.Sprintf("%s: cannot read wg0 peer allowed-ips: %s", hostName, detail))
+			} else {
+				applied := strings.TrimSpace(peerResult.Stdout)
+				for peerName, peerIP := range expectedPeerIPs {
+					if !strings.Contains(applied, peerIP+"/32") {
+						failures = append(failures, fmt.Sprintf("%s: expected mesh peer %s (%s/32) is missing from wg0 allowed-ips", hostName, peerName, peerIP))
+					}
+				}
+			}
+		}
+
 		for peerName, peerIP := range meshIPs {
 			if peerName == hostName {
 				continue
@@ -6446,6 +6494,71 @@ func verifyMeshHealth(ctx context.Context, cmd *cobra.Command, manifest *invento
 	}
 
 	ux.Success(cmd.OutOrStdout(), "Mesh healthy on all privateer hosts")
+	return nil
+}
+
+func privateerExpectedPeerIPs(manifest *inventory.Manifest, hostName string) map[string]string {
+	out := map[string]string{}
+	for _, peer := range buildPrivateerStaticPeers(manifest, hostName) {
+		name, _ := peer["name"].(string)
+		allowed, _ := peer["allowed_ips"].([]string)
+		if name == "" || len(allowed) == 0 {
+			continue
+		}
+		ip := strings.TrimSuffix(allowed[0], "/32")
+		if net.ParseIP(ip) == nil {
+			continue
+		}
+		out[name] = ip
+	}
+	return out
+}
+
+func verifyQuartermasterMeshReachability(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
+	privateerSvc, ok := manifest.Services["privateer"]
+	if !ok || !privateerSvc.Enabled {
+		return nil
+	}
+	qmSvc, ok := manifest.Services["quartermaster"]
+	if !ok || !qmSvc.Enabled {
+		return nil
+	}
+	qmHostName := qmSvc.Host
+	if qmHostName == "" && len(qmSvc.Hosts) > 0 {
+		qmHostName = qmSvc.Hosts[0]
+	}
+	qmIP := manifest.MeshAddress(qmHostName)
+	if net.ParseIP(qmIP) == nil {
+		return fmt.Errorf("quartermaster host %q has no mesh IP", qmHostName)
+	}
+	qmPort := defaultGRPCPort("quartermaster")
+	if qmSvc.GRPCPort != 0 {
+		qmPort = qmSvc.GRPCPort
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "  Verifying Quartermaster mesh reachability on %d privateer host(s)...\n", len(orchestrator.EffectivePrivateerHosts(privateerSvc, manifest.Hosts)))
+	base := provisioner.NewBaseProvisioner("quartermaster-mesh-verify", pool)
+	var failures []string
+	for _, hostName := range orchestrator.EffectivePrivateerHosts(privateerSvc, manifest.Hosts) {
+		hostInfo, ok := manifest.Hosts[hostName]
+		if !ok {
+			failures = append(failures, fmt.Sprintf("%s: not found in manifest", hostName))
+			continue
+		}
+		cmdText := fmt.Sprintf("nc -vz -w 3 %s %d", qmIP, qmPort)
+		result, err := base.RunCommand(ctx, hostInfo, cmdText)
+		if err != nil {
+			detail := strings.TrimSpace(routeResultOutput(result))
+			if detail == "" {
+				detail = err.Error()
+			}
+			failures = append(failures, fmt.Sprintf("%s: cannot reach quartermaster %s:%d over mesh: %s", hostName, qmIP, qmPort, detail))
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%d host(s) failed:\n  %s", len(failures), strings.Join(failures, "\n  "))
+	}
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Quartermaster reachable at %s:%d from all privateer hosts", qmIP, qmPort))
 	return nil
 }
 

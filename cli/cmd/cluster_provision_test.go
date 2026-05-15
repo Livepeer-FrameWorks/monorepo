@@ -2709,6 +2709,45 @@ func TestPrivateerStaticPeersIncludeQuartermasterAcrossClusters(t *testing.T) {
 	}
 }
 
+func TestPrivateerStaticPeersIncludeReciprocalDependencyConsumers(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Clusters: map[string]inventory.ClusterConfig{
+			"core":  {},
+			"media": {},
+		},
+		Hosts: map[string]inventory.Host{
+			"central-1": {
+				Cluster:            "core",
+				ExternalIP:         "203.0.113.10",
+				WireguardIP:        "10.88.0.10",
+				WireguardPublicKey: "central-pub",
+			},
+			"media-1": {
+				Cluster:            "media",
+				ExternalIP:         "203.0.113.20",
+				WireguardIP:        "10.88.1.20",
+				WireguardPublicKey: "media-pub",
+			},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Host: "central-1"},
+			"chandler-us":   {Enabled: true, Deploy: "chandler", Cluster: "media", Host: "media-1"},
+			"privateer":     {Enabled: true},
+		},
+	}
+
+	peers := buildPrivateerStaticPeers(manifest, "central-1")
+	got := map[string]struct{}{}
+	for _, peer := range peers {
+		name, _ := peer["name"].(string)
+		got[name] = struct{}{}
+	}
+
+	if _, ok := got["media-1"]; !ok {
+		t.Fatalf("expected provider central-1 to include reciprocal chandler consumer media-1, got %#v", peers)
+	}
+}
+
 func TestPrivateerSeedDNSUsesTopologyScopedAliases(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Clusters: map[string]inventory.ClusterConfig{
