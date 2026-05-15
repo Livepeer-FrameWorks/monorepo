@@ -214,6 +214,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 			logger.WithField("instance_id", it.id).WithField("service", it.serviceID).Warn("Skipping health check: missing host or port")
 			atomic.AddInt32(&skipped, 1)
 			serviceSummary.recordSkipped(it.serviceID)
+			recordSkippedHealthCheck(it.id)
 			continue
 		}
 		proto := strings.ToLower(strings.TrimSpace(it.proto))
@@ -230,6 +231,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				logger.WithField("instance_id", it.id).WithField("service", it.serviceID).Warn("Skipping HTTP health check: no path configured")
 				atomic.AddInt32(&skipped, 1)
 				serviceSummary.recordSkipped(it.serviceID)
+				recordSkippedHealthCheck(it.id)
 				continue
 			}
 			wg.Add(1)
@@ -286,7 +288,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				atomic.AddInt32(&checked, 1)
 				probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
-				transport, err := grpcHealthDialOption()
+				transport, err := grpcHealthDialOption(ii.serviceID)
 				if err != nil {
 					status = "unhealthy"
 					atomic.AddInt32(&unhealthy, 1)
@@ -330,6 +332,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 		logger.WithField("instance_id", it.id).WithField("service", it.serviceID).WithField("protocol", proto).Warn("Skipping health check: unsupported protocol")
 		atomic.AddInt32(&skipped, 1)
 		serviceSummary.recordSkipped(it.serviceID)
+		recordSkippedHealthCheck(it.id)
 	}
 	wg.Wait()
 	serviceHealth, healthyServices, unhealthyServices, skippedServices := serviceSummary.snapshot()
@@ -349,6 +352,15 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 		summary.Debug("Health poller completed")
 	}
 	return nil
+}
+
+func recordSkippedHealthCheck(instanceID string) {
+	if instanceID == "" {
+		return
+	}
+	if _, err := db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status='skipped', last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$1`, instanceID); err != nil {
+		logger.WithError(err).WithField("instance_id", instanceID).Warn("Failed to persist skipped health status")
+	}
 }
 
 func getenvInt(key string, def int) int {
@@ -490,7 +502,7 @@ func (m *grpcWatchManager) clearWatch(instanceID string) {
 
 func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceInstance, dialTimeout, backoff time.Duration) {
 	addr := fmt.Sprintf("%s:%d", inst.host, inst.port)
-	transport, err := grpcHealthDialOption()
+	transport, err := grpcHealthDialOption(inst.serviceID)
 	if err != nil {
 		logger.WithError(err).WithField("service", inst.serviceID).WithField("addr", addr).Debug("gRPC watch TLS config failed")
 		m.setBackoff(inst.id, backoff)
@@ -532,12 +544,29 @@ func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceIn
 	}
 }
 
-func grpcHealthDialOption() (grpc.DialOption, error) {
+func grpcHealthDialOption(serviceID string) (grpc.DialOption, error) {
+	caPath := strings.TrimSpace(os.Getenv("GRPC_TLS_CA_PATH"))
+	serverName := grpcHealthServerName(serviceID, caPath, os.Getenv("GRPC_TLS_SERVER_NAME"))
 	return grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
-		CACertFile:    strings.TrimSpace(os.Getenv("GRPC_TLS_CA_PATH")),
-		ServerName:    strings.TrimSpace(os.Getenv("GRPC_TLS_SERVER_NAME")),
+		CACertFile:    caPath,
+		ServerName:    serverName,
 		AllowInsecure: getenvBool("GRPC_ALLOW_INSECURE", false),
 	}, logger)
+}
+
+func grpcHealthServerName(serviceID, caPath, configured string) string {
+	serverName := strings.TrimSpace(configured)
+	if serverName != "" {
+		return serverName
+	}
+	if strings.TrimSpace(caPath) == "" {
+		return ""
+	}
+	serviceID = strings.TrimSpace(serviceID)
+	if serviceID == "" {
+		return ""
+	}
+	return serviceID + ".internal"
 }
 
 func (m *grpcWatchManager) setBackoff(instanceID string, backoff time.Duration) {

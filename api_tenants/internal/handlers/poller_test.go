@@ -33,3 +33,15 @@ func TestServiceHealthSummarySnapshot(t *testing.T) {
 		t.Fatalf("skipped services = %v", skippedServices)
 	}
 }
+
+func TestGrpcHealthServerNameDefaultsToServiceInternalWithCA(t *testing.T) {
+	if got := grpcHealthServerName("decklog", "/etc/frameworks/pki/ca.crt", ""); got != "decklog.internal" {
+		t.Fatalf("server name = %q", got)
+	}
+}
+
+func TestGrpcHealthServerNameHonorsExplicitValue(t *testing.T) {
+	if got := grpcHealthServerName("decklog", "/etc/frameworks/pki/ca.crt", "custom.internal"); got != "custom.internal" {
+		t.Fatalf("server name = %q", got)
+	}
+}
