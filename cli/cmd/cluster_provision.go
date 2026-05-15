@@ -2724,20 +2724,40 @@ func ensureNodeBaseline(ctx context.Context, cmd *cobra.Command, manifest *inven
 		return fmt.Errorf("node baseline: %w", err)
 	}
 	ux.Subheading(cmd.OutOrStdout(), fmt.Sprintf("Ensuring Node Baseline (%d host(s))", len(hostNames)))
+
+	type baselineTarget struct {
+		name string
+		host inventory.Host
+	}
+	targets := make([]baselineTarget, 0, len(hostNames))
 	for _, hostName := range hostNames {
 		host, ok := manifest.GetHost(hostName)
 		if !ok {
 			return fmt.Errorf("node baseline: host %s not found in manifest", hostName)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "  Ensuring node baseline on %s...\n", hostName)
-		if err := runProvisionPhase(ctx, provisionApplyTimeout, "node baseline", func(phaseCtx context.Context) error {
-			return prov.Provision(phaseCtx, host, provisioner.ServiceConfig{
-				Mode:     "native",
-				Metadata: map[string]any{},
-			})
-		}); err != nil {
-			return fmt.Errorf("node baseline %s: %w", hostName, err)
-		}
+		targets = append(targets, baselineTarget{name: hostName, host: host})
+	}
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(nodeBaselineConcurrency)
+	for _, target := range targets {
+		target := target
+		g.Go(func() error {
+			hostName := target.name
+			fmt.Fprintf(cmd.OutOrStdout(), "  Ensuring node baseline on %s...\n", hostName)
+			if err := runProvisionPhase(gCtx, provisionApplyTimeout, "node baseline", func(phaseCtx context.Context) error {
+				return prov.Provision(phaseCtx, target.host, provisioner.ServiceConfig{
+					Mode:     "native",
+					Metadata: map[string]any{},
+				})
+			}); err != nil {
+				return fmt.Errorf("node baseline %s: %w", hostName, err)
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return err
 	}
 	ux.Success(cmd.OutOrStdout(), "Node baseline ready")
 	return nil
@@ -4689,6 +4709,7 @@ const (
 	provisionInitializeTimeout = 2 * time.Minute
 	quartermasterRPCTimeout    = 5 * time.Second
 	frameworksSystemTenantID   = "00000000-0000-0000-0000-000000000001"
+	nodeBaselineConcurrency    = 8
 )
 
 func runProvisionPhase(parent context.Context, timeout time.Duration, phase string, fn func(context.Context) error) error {
