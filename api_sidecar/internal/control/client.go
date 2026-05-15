@@ -22,6 +22,7 @@ import (
 	"time"
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
+	"frameworks/api_sidecar/internal/leases"
 	"frameworks/api_sidecar/internal/storage"
 	"frameworks/api_sidecar/internal/updater"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
@@ -1291,6 +1292,13 @@ func handleClipDelete(logger logging.Logger, req *pb.ClipDeleteRequest, send fun
 	}
 
 	sizeBytes, err := deleteClipFn(clipHash)
+	if errors.Is(err, leases.ErrLeaseHeld) {
+		// Delete was queued because a lease (or boot pause) blocks immediate
+		// removal. The deferred-delete drain will send ArtifactDeleted when
+		// bytes are actually gone (see leases_init.go onDeleted callback).
+		logger.WithField("clip_hash", clipHash).Info("Clip delete queued; awaiting lease release")
+		return
+	}
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"clip_hash": clipHash,
@@ -1339,6 +1347,10 @@ func handleDVRDelete(logger logging.Logger, req *pb.DVRDeleteRequest, send func(
 	}
 
 	sizeBytes, err := deleteDVRFn(dvrHash)
+	if errors.Is(err, leases.ErrLeaseHeld) {
+		logger.WithField("dvr_hash", dvrHash).Info("DVR delete queued; awaiting lease release")
+		return
+	}
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"dvr_hash": dvrHash,
@@ -1379,6 +1391,10 @@ func handleVodDelete(logger logging.Logger, req *pb.VodDeleteRequest, send func(
 	}
 
 	sizeBytes, err := deleteVodFn(vodHash)
+	if errors.Is(err, leases.ErrLeaseHeld) {
+		logger.WithField("vod_hash", vodHash).Info("VOD delete queued; awaiting lease release")
+		return
+	}
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"vod_hash": vodHash,
@@ -1875,8 +1891,16 @@ func SendDefrostProgress(requestID, assetHash string, percent uint32, bytesDownl
 	return stream.Send(msg)
 }
 
-// SendDefrostComplete sends defrost completion status to Foghorn
+// SendDefrostComplete sends defrost completion status to Foghorn with no
+// typed reason (REASON_UNSPECIFIED). Success and ready statuses use this.
 func SendDefrostComplete(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string) error {
+	return SendDefrostCompleteWithReason(requestID, assetHash, status, localPath, sizeBytes, errMsg, pb.DefrostComplete_REASON_UNSPECIFIED)
+}
+
+// SendDefrostCompleteWithReason is the failure-path variant: lets the caller
+// classify the failure (out-of-space, S3 error, local IO, presigned invalid)
+// so Foghorn can route the retry logic.
+func SendDefrostCompleteWithReason(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string, reason pb.DefrostComplete_Reason) error {
 	complete := &pb.DefrostComplete{
 		RequestId: requestID,
 		AssetHash: assetHash,
@@ -1885,6 +1909,7 @@ func SendDefrostComplete(requestID, assetHash, status, localPath string, sizeByt
 		SizeBytes: sizeBytes,
 		Error:     errMsg,
 		NodeId:    getNodeID(),
+		Reason:    reason,
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_DefrostComplete{DefrostComplete: complete}}

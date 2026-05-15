@@ -75,10 +75,10 @@ func TestProcessProcessingJobResult_Completed_RegistersProcessedOutput(t *testin
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_url", "format"}).
 			AddRow("art-hash", "s3://old/upload.avi", "avi"))
 
-	// Update artifact format + reset sync while retaining the old source URL
-	// until the replacement upload is durably synced.
-	mock.ExpectExec("UPDATE foghorn.artifacts.*SET format.*sync_status = 'pending'.*storage_location = 'local'").
-		WithArgs("mp4", "art-hash").
+	// Update artifact format + size_bytes + reset sync while retaining the
+	// old source URL until the replacement upload is durably synced.
+	mock.ExpectExec("UPDATE foghorn.artifacts.*SET format.*size_bytes.*sync_status = 'pending'.*storage_location = 'local'").
+		WithArgs("mp4", "art-hash", int64(5000)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processProcessingJobResult(&pb.ProcessingJobResult{
@@ -137,7 +137,7 @@ func TestProcessProcessingJobResult_Completed_DoesNotDeleteOldS3UploadBeforeRepl
 			AddRow("art-hash", "s3://bucket/old/upload.avi", "avi"))
 
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("mp4", "art-hash").
+		WithArgs("mp4", "art-hash", int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processProcessingJobResult(&pb.ProcessingJobResult{
@@ -168,7 +168,7 @@ func TestProcessProcessingJobResult_Completed_SetsS3URLToNull(t *testing.T) {
 			AddRow("art-hash", "", "avi"))
 
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'pending'.*storage_location = 'local'").
-		WithArgs("mp4", "art-hash").
+		WithArgs("mp4", "art-hash", int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processProcessingJobResult(&pb.ProcessingJobResult{

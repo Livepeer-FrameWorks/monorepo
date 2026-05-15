@@ -277,6 +277,12 @@ func Init(
 	// Share database connection with control package for clip operations
 	control.SetDB(database)
 
+	// Hydrate the in-memory defrost tracker from existing 'defrosting' rows.
+	// This handles Foghorn restart: a defrost that the previous process started
+	// is still tracked by Helmsman, so PickDefrostNode must count it too.
+	// Best-effort — the tracker self-heals via Increment/Decrement going forward.
+	go control.BootstrapDefrostTracker(context.Background(), nil)
+
 	// Share Commodore client with control package for unified resolution logic
 	control.CommodoreClient = cClient
 

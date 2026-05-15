@@ -103,6 +103,13 @@ func main() {
 		if err := handlers.InitStorageManager(logger, cfg.StorageLocalPath, cfg.NodeID, thresholds); err != nil {
 			logger.WithError(err).Error("Failed to initialize storage manager")
 		}
+
+		// Initialize Mist-session disk leases. Must run AFTER InitStorageManager
+		// so the storage path is known; spawns goroutines for chapter registry
+		// rehydration and deferred-delete drain. Boot pause keeps destructive
+		// cleanup disabled until rehydration + first successful Mist
+		// reconciliation completes.
+		handlers.InitLeases(logger, cfg.StorageLocalPath)
 	}
 
 	var restoreMu sync.Mutex

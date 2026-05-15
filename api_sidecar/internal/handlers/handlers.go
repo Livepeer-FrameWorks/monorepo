@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -14,6 +15,7 @@ import (
 
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
+	"frameworks/api_sidecar/internal/leases"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -125,13 +127,40 @@ func Current() *Handlers {
 	return currentHandlers
 }
 
-// DeleteClip deletes clip files from local storage
-// Returns the total size of deleted files in bytes
+// DeleteClip is the public delete entry point. When destructive cleanup is
+// paused (boot state) or any matched file is currently leased, the intent is
+// enqueued into the deferred-delete store so it can drain when leases
+// release. Successful synchronous deletes return the deleted byte count;
+// queued intents return (0, nil) so Foghorn's control-plane state advances.
 func (h *Handlers) DeleteClip(clipHash string) (uint64, error) {
 	if clipHash == "" {
 		return 0, fmt.Errorf("clip hash is required")
 	}
+	if !leases.IsDestructiveCleanupAllowed() {
+		if store := leases.GlobalDeferredStore(); store != nil {
+			store.Enqueue(leases.PendingDelete{AssetType: "clip", AssetHash: clipHash})
+		}
+		logger.WithField("clip_hash", clipHash).Info("DeleteClip queued: destructive cleanup paused")
+		// Return ErrLeaseHeld so the control handler does NOT emit
+		// ArtifactDeleted now; the deferred-store drain will emit when bytes
+		// are actually gone (see leases_init.go onDeleted callback).
+		return 0, leases.ErrLeaseHeld
+	}
+	bytes, err := h.deleteClipImmediate(clipHash)
+	if errors.Is(err, leases.ErrLeaseHeld) {
+		if store := leases.GlobalDeferredStore(); store != nil {
+			store.Enqueue(leases.PendingDelete{AssetType: "clip", AssetHash: clipHash})
+		}
+		logger.WithField("clip_hash", clipHash).Info("DeleteClip partially queued: lease held")
+		return bytes, leases.ErrLeaseHeld
+	}
+	return bytes, err
+}
 
+// deleteClipImmediate performs the actual filesystem deletion. Returns
+// leases.ErrLeaseHeld if at least one matched file could not be deleted due
+// to an active lease; callers that hit ErrLeaseHeld should enqueue.
+func (h *Handlers) deleteClipImmediate(clipHash string) (uint64, error) {
 	clipsDir := filepath.Join(h.storagePath, "clips")
 	var totalSize uint64
 
@@ -152,6 +181,7 @@ func (h *Handlers) DeleteClip(clipHash string) (uint64, error) {
 		return 0, nil // Not an error, just nothing to delete
 	}
 
+	var leaseHeld bool
 	for _, filePath := range matches {
 		info, err := os.Stat(filePath)
 		if err != nil {
@@ -160,7 +190,12 @@ func (h *Handlers) DeleteClip(clipHash string) (uint64, error) {
 		}
 
 		fileSize := uint64(info.Size())
-		if err := os.Remove(filePath); err != nil {
+		if err := leases.DeleteFileIfUnleased(filePath); err != nil {
+			if errors.Is(err, leases.ErrLeaseHeld) {
+				leaseHeld = true
+				logger.WithField("file", filePath).Info("Clip file skipped: lease held")
+				continue
+			}
 			logger.WithError(err).WithField("file", filePath).Warn("Failed to remove clip file")
 			continue
 		}
@@ -173,24 +208,27 @@ func (h *Handlers) DeleteClip(clipHash string) (uint64, error) {
 		}).Debug("Deleted clip file")
 	}
 
-	// Also remove any VOD symlinks (like cleanup.go does)
-	// VOD symlinks may exist at clips/{clipHash}.{ext}
-	for _, ext := range VideoExtensions {
-		vodLinkPath := filepath.Join(clipsDir, clipHash+ext)
-		if info, err := os.Lstat(vodLinkPath); err == nil {
-			// Check if it's a symlink
-			if info.Mode()&os.ModeSymlink != 0 {
-				if err := os.Remove(vodLinkPath); err != nil {
-					logger.WithError(err).WithField("vod_path", vodLinkPath).Warn("Failed to remove VOD symlink")
-				} else {
-					logger.WithField("vod_path", vodLinkPath).Debug("Removed VOD symlink")
+	// Symlinks: never lease-protected, but only remove when the primary delete
+	// for that hash succeeded (i.e. no lease held), to avoid stripping pointers
+	// off a still-protected file.
+	if !leaseHeld {
+		for _, ext := range VideoExtensions {
+			vodLinkPath := filepath.Join(clipsDir, clipHash+ext)
+			if info, err := os.Lstat(vodLinkPath); err == nil {
+				if info.Mode()&os.ModeSymlink != 0 {
+					if err := os.Remove(vodLinkPath); err != nil {
+						logger.WithError(err).WithField("vod_path", vodLinkPath).Warn("Failed to remove VOD symlink")
+					} else {
+						logger.WithField("vod_path", vodLinkPath).Debug("Removed VOD symlink")
+					}
 				}
 			}
 		}
 	}
 
-	// Remove from artifact index if prometheus monitor is available
-	if prometheusMonitor != nil {
+	// Remove from artifact index if prometheus monitor is available — only on
+	// full success; partial deletes keep the entry so cleanup can still see it.
+	if !leaseHeld && prometheusMonitor != nil {
 		prometheusMonitor.mutex.Lock()
 		delete(prometheusMonitor.artifactIndex, clipHash)
 		prometheusMonitor.mutex.Unlock()
@@ -200,21 +238,42 @@ func (h *Handlers) DeleteClip(clipHash string) (uint64, error) {
 		"clip_hash":   clipHash,
 		"total_size":  totalSize,
 		"files_count": len(matches),
-	}).Info("Clip files deleted")
+		"lease_held":  leaseHeld,
+	}).Info("Clip files delete pass complete")
 
+	if leaseHeld {
+		return totalSize, leases.ErrLeaseHeld
+	}
 	return totalSize, nil
 }
 
-// DeleteDVR deletes DVR recording files from local storage
-// Returns the total size of deleted files in bytes
+// DeleteDVR is the public DVR delete entry. Queues to the deferred store
+// when destructive cleanup is paused or any chapter of dvrHash is leased.
 func (h *Handlers) DeleteDVR(dvrHash string) (uint64, error) {
 	if dvrHash == "" {
 		return 0, fmt.Errorf("DVR hash is required")
 	}
+	if !leases.IsDestructiveCleanupAllowed() {
+		if store := leases.GlobalDeferredStore(); store != nil {
+			store.Enqueue(leases.PendingDelete{AssetType: "dvr", AssetHash: dvrHash})
+		}
+		logger.WithField("dvr_hash", dvrHash).Info("DeleteDVR queued: destructive cleanup paused")
+		return 0, leases.ErrLeaseHeld
+	}
+	bytes, err := h.deleteDVRImmediate(dvrHash)
+	if errors.Is(err, leases.ErrLeaseHeld) {
+		if store := leases.GlobalDeferredStore(); store != nil {
+			store.Enqueue(leases.PendingDelete{AssetType: "dvr", AssetHash: dvrHash})
+		}
+		logger.WithField("dvr_hash", dvrHash).Info("DeleteDVR queued: lease held")
+		return bytes, leases.ErrLeaseHeld
+	}
+	return bytes, err
+}
 
+func (h *Handlers) deleteDVRImmediate(dvrHash string) (uint64, error) {
 	dvrDir := filepath.Join(h.storagePath, "dvr")
 
-	// Find the manifest file: /dvr/{stream_id}/{dvr_hash}/{dvr_hash}.m3u8
 	manifestPattern := filepath.Join(dvrDir, "*", dvrHash, dvrHash+".m3u8")
 	manifestMatches, _ := filepath.Glob(manifestPattern)
 
@@ -226,17 +285,40 @@ func (h *Handlers) DeleteDVR(dvrHash string) (uint64, error) {
 	var totalSize uint64
 
 	for _, manifestPath := range manifestMatches {
-		// The recording directory is the parent of the manifest (the dvr_hash directory)
 		recordingDir := filepath.Dir(manifestPath)
 
-		// Delete the entire recording directory recursively
+		// Pre-check: refuse if any chapter lease pins this dvr hash OR if
+		// degraded-DVR-cleanup is active (any DVR source lease without a
+		// resolved hash exists somewhere, and we cannot prove this specific
+		// dvr_hash is unaffected). The tracker-level check is the same one
+		// DeleteDVRDirIfUnleased makes; we check up-front here to avoid
+		// partial deletion accounting.
+		if tracker := leases.GlobalTracker(); tracker != nil {
+			if tracker.DegradedDvrCleanupActive() {
+				logger.WithFields(logging.Fields{
+					"dvr_hash":      dvrHash,
+					"recording_dir": recordingDir,
+				}).Info("DVR directory skipped: degraded-DVR cleanup paused")
+				return totalSize, leases.ErrLeaseHeld
+			}
+			if tracker.IsAssetLeased(leases.AssetKey{Type: "dvr", Hash: dvrHash}) {
+				logger.WithFields(logging.Fields{
+					"dvr_hash":      dvrHash,
+					"recording_dir": recordingDir,
+				}).Info("DVR directory skipped: chapter lease held")
+				return totalSize, leases.ErrLeaseHeld
+			}
+		}
+
+		// Tally size first so deferred reporting is accurate even on the
+		// rare case where RemoveAll succeeds for some children before
+		// returning an error.
 		size, err := h.deletePathRecursive(recordingDir)
 		if err != nil {
 			return totalSize, fmt.Errorf("failed to delete DVR directory: %w", err)
 		}
 		totalSize += size
 
-		// Clean up empty stream_id directory if it's now empty
 		streamDir := filepath.Dir(recordingDir)
 		h.removeEmptyDir(streamDir)
 	}
@@ -249,17 +331,34 @@ func (h *Handlers) DeleteDVR(dvrHash string) (uint64, error) {
 	return totalSize, nil
 }
 
-// DeleteVOD deletes VOD (uploaded) asset files from local storage
-// Returns the total size of deleted files in bytes
+// DeleteVOD is the public VOD delete entry. Queues to the deferred store
+// when destructive cleanup is paused or any matched file is leased.
 func (h *Handlers) DeleteVOD(vodHash string) (uint64, error) {
 	if vodHash == "" {
 		return 0, fmt.Errorf("VOD hash is required")
 	}
+	if !leases.IsDestructiveCleanupAllowed() {
+		if store := leases.GlobalDeferredStore(); store != nil {
+			store.Enqueue(leases.PendingDelete{AssetType: "vod", AssetHash: vodHash})
+		}
+		logger.WithField("vod_hash", vodHash).Info("DeleteVOD queued: destructive cleanup paused")
+		return 0, leases.ErrLeaseHeld
+	}
+	bytes, err := h.deleteVODImmediate(vodHash)
+	if errors.Is(err, leases.ErrLeaseHeld) {
+		if store := leases.GlobalDeferredStore(); store != nil {
+			store.Enqueue(leases.PendingDelete{AssetType: "vod", AssetHash: vodHash})
+		}
+		logger.WithField("vod_hash", vodHash).Info("DeleteVOD partially queued: lease held")
+		return bytes, leases.ErrLeaseHeld
+	}
+	return bytes, err
+}
 
+func (h *Handlers) deleteVODImmediate(vodHash string) (uint64, error) {
 	vodDir := filepath.Join(h.storagePath, "vod")
 	var totalSize uint64
 
-	// VOD files are stored as: vod/{vodHash}.{ext}
 	pattern := filepath.Join(vodDir, vodHash+"*")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
@@ -271,6 +370,7 @@ func (h *Handlers) DeleteVOD(vodHash string) (uint64, error) {
 		return 0, nil
 	}
 
+	var leaseHeld bool
 	for _, filePath := range matches {
 		info, err := os.Stat(filePath)
 		if err != nil {
@@ -279,7 +379,12 @@ func (h *Handlers) DeleteVOD(vodHash string) (uint64, error) {
 		}
 
 		fileSize := uint64(info.Size())
-		if err := os.Remove(filePath); err != nil {
+		if err := leases.DeleteFileIfUnleased(filePath); err != nil {
+			if errors.Is(err, leases.ErrLeaseHeld) {
+				leaseHeld = true
+				logger.WithField("file", filePath).Info("VOD file skipped: lease held")
+				continue
+			}
 			logger.WithError(err).WithField("file", filePath).Warn("Failed to remove VOD file")
 			continue
 		}
@@ -292,8 +397,7 @@ func (h *Handlers) DeleteVOD(vodHash string) (uint64, error) {
 		}).Debug("Deleted VOD file")
 	}
 
-	// Remove from artifact index if prometheus monitor is available
-	if prometheusMonitor != nil {
+	if !leaseHeld && prometheusMonitor != nil {
 		prometheusMonitor.mutex.Lock()
 		delete(prometheusMonitor.artifactIndex, vodHash)
 		prometheusMonitor.mutex.Unlock()
@@ -303,8 +407,12 @@ func (h *Handlers) DeleteVOD(vodHash string) (uint64, error) {
 		"vod_hash":    vodHash,
 		"total_size":  totalSize,
 		"files_count": len(matches),
-	}).Info("VOD asset deleted")
+		"lease_held":  leaseHeld,
+	}).Info("VOD asset delete pass complete")
 
+	if leaseHeld {
+		return totalSize, leases.ErrLeaseHeld
+	}
 	return totalSize, nil
 }
 
@@ -715,6 +823,13 @@ func HandleStreamSource(c *gin.Context) {
 		metrics.InfrastructureEvents.WithLabelValues("source_resolved").Inc()
 	}
 
+	// Acquire a primary disk lease for the local file Mist is about to open.
+	// The source lease lives until STREAM_END (or Mist API reconciliation
+	// proves the stream is gone).
+	if ss := mistTrigger.GetStreamSource(); ss != nil {
+		acquireSourceLeaseForStream(ss.GetStreamName(), result.Response)
+	}
+
 	// Return Foghorn's response to MistServer
 	c.String(http.StatusOK, result.Response)
 }
@@ -735,6 +850,168 @@ func extractVODHash(streamName string) string {
 		return streamName
 	}
 	return ""
+}
+
+// acquireSourceLeaseForStream installs a primary disk lease for the local
+// file Mist was just handed. Only fires when the response is a local
+// filesystem path; ignores balance:/HTTP/S3 indirections.
+func acquireSourceLeaseForStream(streamName, response string) {
+	tracker := leases.GlobalTracker()
+	if tracker == nil || streamName == "" {
+		return
+	}
+	if !leases.IsLocalFilesystemResponse(response) {
+		return
+	}
+
+	if internal, ok := leases.ParseVODInternalName(streamName); ok {
+		paths := []string{response}
+		for _, sidecar := range []string{response + ".dtsh", response + ".gop"} {
+			if _, err := os.Stat(sidecar); err == nil {
+				paths = append(paths, sidecar)
+			}
+		}
+		key := leases.AssetKey{Type: "vod", Hash: internal}
+		tracker.AcquireSource(streamName, paths, key, nil, false)
+		if reg := leases.GlobalSourceRegistry(); reg != nil {
+			reg.Record(leases.SourceEntry{
+				StreamName:   streamName,
+				LocalPath:    response,
+				AssetType:    "vod",
+				InternalName: internal,
+			})
+		}
+		return
+	}
+
+	if chapterID, ok := leases.ParseDVRChapterPlaybackID(streamName); ok {
+		paths := []string{response}
+		var dvrHash string
+		var segmentNames []string
+		degraded := false
+
+		if reg := leases.GlobalChapterRegistry(); reg != nil {
+			if entry, found := reg.Lookup(chapterID); found {
+				dvrHash = entry.DvrHash
+				segmentNames = entry.SegmentNames
+			}
+		}
+		if dvrHash == "" {
+			// Recovery: try to derive dvr_hash from the response path layout
+			// and parse the manifest for segment names.
+			if h := leases.DeriveDvrHashFromPath(response); h != "" {
+				dvrHash = h
+			}
+		}
+		if dvrHash != "" && len(segmentNames) == 0 {
+			// Parse the on-disk manifest to recover segment names.
+			if names := manifestSegmentsOnDisk(response); len(names) > 0 {
+				segmentNames = names
+				if reg := leases.GlobalChapterRegistry(); reg != nil {
+					reg.Register(leases.ChapterEntry{
+						ChapterID:    chapterID,
+						DvrHash:      dvrHash,
+						SegmentNames: names,
+						ManifestPath: response,
+					})
+				}
+			}
+		}
+		if dvrHash == "" || len(segmentNames) == 0 {
+			// Recovery failed — install degraded lease and pause DVR cleanup.
+			degraded = true
+			logger.WithFields(logging.Fields{
+				"stream_name": streamName,
+				"chapter_id":  chapterID,
+				"response":    response,
+			}).Warn("DVR chapter context unresolved; installing degraded source lease (DVR destructive cleanup paused while held)")
+		}
+		key := leases.AssetKey{Type: "dvr", Hash: dvrHash, ChapterID: chapterID}
+		tracker.AcquireSource(streamName, paths, key, segmentNames, degraded)
+		if reg := leases.GlobalSourceRegistry(); reg != nil {
+			reg.Record(leases.SourceEntry{
+				StreamName: streamName,
+				LocalPath:  response,
+				AssetType:  "dvr",
+				ChapterID:  chapterID,
+				DvrHash:    dvrHash,
+			})
+		}
+	}
+}
+
+// acquireViewerLeaseForSession installs a heat/accounting lease for a Mist
+// viewer session. The local path comes from the source registry (populated
+// by STREAM_SOURCE); when missing we still install the lease so reconciliation
+// can still release it, but cannot bump heat against a known path.
+func acquireViewerLeaseForSession(sessionID, streamName string) {
+	tracker := leases.GlobalTracker()
+	if tracker == nil || sessionID == "" {
+		return
+	}
+	localPath := ""
+	if reg := leases.GlobalSourceRegistry(); reg != nil {
+		if entry, ok := reg.Lookup(streamName); ok {
+			localPath = entry.LocalPath
+		}
+	}
+	if localPath == "" {
+		// Fall back to the artifact index: STREAM_SOURCE may have been
+		// resolved in a way that did not register (non-local response, or
+		// happened before lease wiring went live).
+		if hash := extractVODHash(streamName); hash != "" {
+			if prometheusMonitor != nil {
+				prometheusMonitor.mutex.RLock()
+				if info, ok := prometheusMonitor.artifactIndex[hash]; ok {
+					localPath = info.FilePath
+				}
+				prometheusMonitor.mutex.RUnlock()
+			}
+		}
+	}
+	if localPath == "" {
+		logger.WithFields(logging.Fields{
+			"session_id":  sessionID,
+			"stream_name": streamName,
+		}).Debug("USER_NEW: no source lease or artifact index entry; viewer lease has no path")
+	}
+	tracker.AcquireViewer(sessionID, streamName, localPath)
+}
+
+// releaseSourceLeaseForStream is the STREAM_END counterpart.
+func releaseSourceLeaseForStream(streamName string) {
+	if streamName == "" {
+		return
+	}
+	if tracker := leases.GlobalTracker(); tracker != nil {
+		tracker.ReleaseSource(streamName)
+	}
+	if reg := leases.GlobalSourceRegistry(); reg != nil {
+		reg.Forget(streamName)
+	}
+}
+
+// manifestSegmentsOnDisk reads a chapter manifest and returns its non-comment
+// segment basenames. Used during DVR source-lease recovery when the chapter
+// registry has not been populated yet.
+func manifestSegmentsOnDisk(manifestPath string) []string {
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		base := filepath.Base(line)
+		if base == "" || base == "." || base == "/" {
+			continue
+		}
+		out = append(out, base)
+	}
+	return out
 }
 
 // HandlePushEnd handles PUSH_END webhook
@@ -941,6 +1218,13 @@ func HandleStreamEnd(c *gin.Context) {
 		return
 	}
 
+	// Release the primary disk lease established at STREAM_SOURCE. Mist will
+	// no longer read this file; cleanup may proceed (subject to any viewer
+	// lease still pinning the path for ongoing playback).
+	if se := mistTrigger.GetStreamEnd(); se != nil {
+		releaseSourceLeaseForStream(se.GetStreamName())
+	}
+
 	// Forward trigger to Foghorn via gRPC (non-blocking)
 	applyTenantContext(mistTrigger)
 	_, err = sendMistTrigger(mistTrigger, logger)
@@ -1033,11 +1317,12 @@ func HandleUserNew(c *gin.Context) {
 	}).Info("USER_NEW approved by Foghorn")
 	incMistWebhook("USER_NEW", "success")
 
-	// Track VOD/clip/DVR access on viewer connect (canonical trigger).
+	// Acquire a viewer (heat) lease. Source protection is owned by the
+	// SourceLease installed at STREAM_SOURCE; viewer leases only bump heat
+	// and accounting and do NOT touch segment ActiveViews. Idempotent for
+	// session_id refires (auth invalidation, reconnect).
 	if mt := mistTrigger.GetViewerConnect(); mt != nil {
-		if hash := extractVODHash(mt.GetStreamName()); hash != "" {
-			touchArtifactAccess(hash)
-		}
+		acquireViewerLeaseForSession(mt.GetSessionId(), mt.GetStreamName())
 	}
 
 	// Return Foghorn's response to MistServer
@@ -1085,6 +1370,14 @@ func HandleUserEnd(c *gin.Context) {
 		}).Debug("Ignoring non-viewer USER_END connector")
 		c.String(http.StatusOK, "OK")
 		return
+	}
+
+	// Release the viewer lease. Source protection (and Mist's actual file
+	// handle) survives until STREAM_END.
+	if vd := mistTrigger.GetViewerDisconnect(); vd != nil {
+		if tracker := leases.GlobalTracker(); tracker != nil {
+			tracker.ReleaseViewer(vd.GetSessionId())
+		}
 	}
 
 	// Forward trigger to Foghorn via gRPC (non-blocking)

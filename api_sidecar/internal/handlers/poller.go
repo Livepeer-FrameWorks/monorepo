@@ -16,6 +16,7 @@ import (
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
+	"frameworks/api_sidecar/internal/leases"
 	"frameworks/api_sidecar/internal/updater"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -395,6 +396,7 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 	}
 
 	// Extract active streams data
+	present := make(map[string]struct{})
 	if activeStreams, ok := apiResponse["active_streams"].(map[string]any); ok {
 		monitorLogger.WithFields(logging.Fields{
 			"api_url": baseURL + "/api2",
@@ -402,6 +404,7 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 			"count":   len(activeStreams),
 		}).Info("Found active streams via Mist API")
 		for streamName, streamData := range activeStreams {
+			present[streamName] = struct{}{}
 			if streamInfo, ok := streamData.(map[string]any); ok {
 				pm.processActiveStreamData(nodeID, streamName, streamInfo)
 			}
@@ -411,6 +414,128 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 			"api_url": baseURL + "/api2",
 			"node_id": nodeID,
 		}).Warn("No active_streams found")
+	}
+	// Reconcile source leases against Mist's authoritative view. Only fires
+	// after a successful GetActiveStreams response — poll errors above already
+	// returned without reaching here, so no-poll-on-error is honored.
+	if tracker := leases.GlobalTracker(); tracker != nil {
+		// Boot-recovery: streams open in Mist before Helmsman restarted have
+		// no source lease yet because STREAM_SOURCE only fires once per
+		// session. Install leases for everything Mist currently serves before
+		// reconciliation releases anything.
+		rebuildSourceLeasesFromMist(tracker, present)
+
+		if released := tracker.ReconcileSources(present); len(released) > 0 {
+			// The source registry holds the (streamName → localPath) mapping
+			// USER_NEW reads to acquire viewer leases. Forget released names so
+			// a stale registry entry can't serve a path that's no longer leased.
+			if reg := leases.GlobalSourceRegistry(); reg != nil {
+				for _, name := range released {
+					reg.Forget(name)
+				}
+			}
+			monitorLogger.WithField("released", released).Info("Source leases released by Mist reconciliation")
+		}
+	}
+	markMistActiveStreamsPolled()
+}
+
+// rebuildSourceLeasesFromMist installs SourceLeases for active Mist streams
+// that don't currently have one. Used in two situations:
+//
+//  1. Helmsman just restarted: Mist sessions survived, but the in-process
+//     lease tracker is empty. Without this, cleanup unpauses after the
+//     first reconciliation and can delete files still being read by Mist.
+//  2. STREAM_SOURCE was not observed for some reason (e.g. Mist served a
+//     cached source resolution). Reconciliation backfills.
+//
+// VOD streams resolve via prometheusMonitor.artifactIndex (file scan).
+// DVR streams resolve via the chapter registry. Anything unresolved gets a
+// degraded source lease so cleanup paths see the protection — for DVR via
+// DegradedDvrCleanupActive; VOD path-keyed cleanup is safe because nothing
+// pins the (unknown) path, but operator DeleteVOD refuses because the
+// asset-keyed lease entry exists.
+func rebuildSourceLeasesFromMist(tracker *leases.Tracker, present map[string]struct{}) {
+	if tracker == nil {
+		return
+	}
+	for streamName := range present {
+		if tracker.HasSourceLease(streamName) {
+			continue
+		}
+		if internalName, ok := leases.ParseVODInternalName(streamName); ok {
+			localPath := ""
+			if prometheusMonitor != nil {
+				prometheusMonitor.mutex.RLock()
+				if info, found := prometheusMonitor.artifactIndex[internalName]; found {
+					localPath = info.FilePath
+				}
+				prometheusMonitor.mutex.RUnlock()
+			}
+			key := leases.AssetKey{Type: "vod", Hash: internalName}
+			if localPath != "" {
+				paths := []string{localPath}
+				for _, sidecar := range []string{localPath + ".dtsh", localPath + ".gop"} {
+					if _, statErr := os.Stat(sidecar); statErr == nil {
+						paths = append(paths, sidecar)
+					}
+				}
+				tracker.AcquireSource(streamName, paths, key, nil, false)
+				if reg := leases.GlobalSourceRegistry(); reg != nil {
+					reg.Record(leases.SourceEntry{
+						StreamName:   streamName,
+						LocalPath:    localPath,
+						AssetType:    "vod",
+						InternalName: internalName,
+					})
+				}
+				monitorLogger.WithFields(logging.Fields{
+					"stream_name": streamName,
+					"local_path":  localPath,
+				}).Info("Rebuilt VOD source lease for active Mist stream")
+				continue
+			}
+			// VOD path unresolved: install a degraded asset-only lease so
+			// operator DeleteVOD refuses. Path-keyed cleanup paths cannot
+			// match this lease (no LocalPaths) — log loudly so ops can act.
+			tracker.AcquireSource(streamName, nil, key, nil, true)
+			monitorLogger.WithFields(logging.Fields{
+				"stream_name":   streamName,
+				"internal_name": internalName,
+			}).Warn("Active VOD stream has no local-path mapping; installed degraded lease (DeleteVOD will refuse; path-keyed cleanup cannot protect)")
+			continue
+		}
+		if chapterID, ok := leases.ParseDVRChapterPlaybackID(streamName); ok {
+			var (
+				dvrHash      string
+				segmentNames []string
+				manifestPath string
+			)
+			if reg := leases.GlobalChapterRegistry(); reg != nil {
+				if entry, found := reg.Lookup(chapterID); found {
+					dvrHash = entry.DvrHash
+					segmentNames = entry.SegmentNames
+					manifestPath = entry.ManifestPath
+				}
+			}
+			key := leases.AssetKey{Type: "dvr", Hash: dvrHash, ChapterID: chapterID}
+			if dvrHash != "" && manifestPath != "" {
+				tracker.AcquireSource(streamName, []string{manifestPath}, key, segmentNames, false)
+				monitorLogger.WithFields(logging.Fields{
+					"stream_name": streamName,
+					"chapter_id":  chapterID,
+					"dvr_hash":    dvrHash,
+				}).Info("Rebuilt DVR source lease for active Mist stream")
+				continue
+			}
+			// DVR unresolved: degraded lease pauses DVR destructive cleanup
+			// (DegradedDvrCleanupActive) for the duration of this lease.
+			tracker.AcquireSource(streamName, nil, key, nil, true)
+			monitorLogger.WithFields(logging.Fields{
+				"stream_name": streamName,
+				"chapter_id":  chapterID,
+			}).Warn("Active DVR chapter has no registry mapping; installed degraded lease (DVR destructive cleanup paused while held)")
+		}
 	}
 }
 
@@ -891,6 +1016,7 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 	}
 
 	// Process client metrics
+	presentSessions := make(map[string]struct{})
 	if clients, ok := result["clients"].(map[string]any); ok {
 		if data, ok := clients["data"].([]any); ok {
 			fields, ok := clients["fields"].([]any)
@@ -1010,6 +1136,9 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 
 				// Extract client data directly for protobuf
 				sessionID := getString(client[fieldMap["sessid"]])
+				if sessionID != "" {
+					presentSessions[sessionID] = struct{}{}
+				}
 				connectionTime := getFloat64(client[fieldMap["conntime"]])
 				position := getFloat64(client[fieldMap["position"]])
 
@@ -1095,6 +1224,15 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 			}
 		}
 	}
+
+	// Reconcile viewer leases against Mist's authoritative client list. Only
+	// reached after a successful GetClients call.
+	if tracker := leases.GlobalTracker(); tracker != nil {
+		if released := tracker.ReconcileViewers(presentSessions); len(released) > 0 {
+			monitorLogger.WithField("released", released).Info("Viewer leases released by Mist reconciliation")
+		}
+	}
+	markMistClientsPolled()
 
 	return nil
 }
@@ -1534,20 +1672,6 @@ func GetStoredArtifacts() []*pb.StoredArtifact {
 	}
 
 	return artifacts
-}
-
-// touchArtifactAccess updates access metadata for a known artifact hash.
-func touchArtifactAccess(hash string) {
-	if hash == "" || prometheusMonitor == nil {
-		return
-	}
-
-	prometheusMonitor.mutex.Lock()
-	if clipInfo, ok := prometheusMonitor.artifactIndex[hash]; ok {
-		clipInfo.AccessCount++
-		clipInfo.LastAccessed = time.Now()
-	}
-	prometheusMonitor.mutex.Unlock()
 }
 
 // convertNodeAPIToMistTrigger converts MistServer JSON API response to MistTrigger

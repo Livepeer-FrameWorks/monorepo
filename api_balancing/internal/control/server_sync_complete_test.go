@@ -36,7 +36,12 @@ func TestProcessSyncComplete_Success_WithS3URL(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "format", "tenant_id", "s3_url"}).
 			AddRow("vod", "vod-int", "mp4", "tenant-1", "s3://bucket/key"))
 	mock.ExpectExec("UPDATE foghorn.artifacts.*SET storage_location = 'local'.*sync_status = 'synced'").
-		WithArgs("s3://bucket/key", true, "hash-1").
+		WithArgs("s3://bucket/key", true, "hash-1", int64(0)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Post-sync VOD also persists vod_metadata.s3_key so future defrosts
+	// read the synced location rather than the original upload key.
+	mock.ExpectExec("INSERT INTO foghorn.vod_metadata").
+		WithArgs("hash-1", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processSyncComplete(&pb.SyncComplete{
@@ -77,7 +82,7 @@ func TestProcessSyncComplete_Success_RebuildsClipURL(t *testing.T) {
 			AddRow("clip", "stream-1", "mp4", "tenant-1", ""))
 
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'synced'").
-		WithArgs(sqlmock.AnyArg(), false, "clip-hash").
+		WithArgs(sqlmock.AnyArg(), false, "clip-hash", int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processSyncComplete(&pb.SyncComplete{
@@ -106,7 +111,7 @@ func TestProcessSyncComplete_Success_RebuildsDVRURL(t *testing.T) {
 			AddRow("dvr", "stream-dvr", "", "tenant-1", ""))
 
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs(sqlmock.AnyArg(), false, "dvr-hash").
+		WithArgs(sqlmock.AnyArg(), false, "dvr-hash", int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processSyncComplete(&pb.SyncComplete{
@@ -129,7 +134,10 @@ func TestProcessSyncComplete_Success_RebuildsVodURL(t *testing.T) {
 			AddRow("vod", "stream-vod", "mkv", "tenant-1", ""))
 
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs(sqlmock.AnyArg(), false, "vod-hash").
+		WithArgs(sqlmock.AnyArg(), false, "vod-hash", int64(0)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO foghorn.vod_metadata").
+		WithArgs("vod-hash", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processSyncComplete(&pb.SyncComplete{
@@ -151,7 +159,7 @@ func TestProcessSyncComplete_Success_UsesReportingNodeID(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "format", "tenant_id", "s3_url"}).
 			AddRow("clip", "clip-int", "mp4", "tenant-1", "s3://pre-set"))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs(sqlmock.AnyArg(), false, "hash-1").
+		WithArgs(sqlmock.AnyArg(), false, "hash-1", int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processSyncComplete(&pb.SyncComplete{
@@ -177,7 +185,10 @@ func TestProcessSyncComplete_Success_DeletesReplacedVodSource(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "format", "tenant_id", "s3_url"}).
 			AddRow("vod", "vod-int", "mp4", "tenant-1", "s3://bucket/original.mp4"))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("s3://bucket/processed.mp4", false, "vod-hash").
+		WithArgs("s3://bucket/processed.mp4", false, "vod-hash", int64(0)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO foghorn.vod_metadata").
+		WithArgs("vod-hash", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processSyncComplete(&pb.SyncComplete{

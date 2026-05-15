@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"frameworks/api_sidecar/internal/control"
+	"frameworks/api_sidecar/internal/leases"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
@@ -381,6 +382,16 @@ func (cm *CleanupMonitor) calculateCleanupPriority(clip ClipCleanupInfo) float64
 
 // cleanupClip removes an artifact from storage (clip, dvr, or vod)
 func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
+	// Boot pause: destructive cleanup is disabled until lease state has been
+	// rebuilt (chapter registry rehydration + first Mist reconciliation).
+	if !leases.IsDestructiveCleanupAllowed() {
+		cm.logger.WithFields(logging.Fields{
+			"artifact_hash": artifact.ClipHash,
+			"asset_type":    artifact.AssetType,
+		}).Debug("Cleanup skipped: destructive cleanup paused")
+		return errCleanupSkip
+	}
+
 	// In dual-storage mode, artifacts are expected to have an authoritative S3 copy.
 	// Before evicting from local disk, ask Foghorn if it's safe (synced).
 	if !control.IsConnected() {
@@ -421,7 +432,11 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 	switch artifact.AssetType {
 	case "dvr":
 		// DVR is a directory - remove the entire recording directory
-		if err := os.RemoveAll(artifact.FilePath); err != nil {
+		if err := leases.DeleteDVRDirIfUnleased(artifact.FilePath, artifact.ClipHash); err != nil {
+			if errors.Is(err, leases.ErrLeaseHeld) {
+				cm.logger.WithField("dvr_hash", artifact.ClipHash).Info("Cleanup skipped: DVR chapter lease held")
+				return errCleanupSkip
+			}
 			errStr := err.Error()
 			_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
 				Action:    pb.StorageLifecycleData_ACTION_EVICT_FAILED,
@@ -434,7 +449,11 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 		}
 	default:
 		// Clip and VOD are single files
-		if err := os.Remove(artifact.FilePath); err != nil {
+		if err := leases.DeleteFileIfUnleased(artifact.FilePath); err != nil {
+			if errors.Is(err, leases.ErrLeaseHeld) {
+				cm.logger.WithField("file", artifact.FilePath).Info("Cleanup skipped: lease held")
+				return errCleanupSkip
+			}
 			errStr := err.Error()
 			_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
 				Action:    pb.StorageLifecycleData_ACTION_EVICT_FAILED,
@@ -445,7 +464,7 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 			})
 			return fmt.Errorf("failed to remove artifact file: %w", err)
 		}
-		// Remove auxiliary files (.dtsh, .gop) after main file succeeds.
+		// Sidecars are not lease-protected; remove only when primary succeeded.
 		_ = os.Remove(artifact.FilePath + ".dtsh")
 		_ = os.Remove(artifact.FilePath + ".gop")
 	}

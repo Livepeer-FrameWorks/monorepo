@@ -539,7 +539,11 @@ func RelayRequestID(req *pb.ForwardCommandRequest) string {
 	}
 }
 
-// SetDB sets the database connection for clip operations
+// SetDB sets the database connection for clip operations. The in-memory
+// defrost tracker is hydrated separately via BootstrapDefrostTracker, called
+// once at process startup from the binary's main after the DB is wired and
+// before serving traffic — never from SetDB, because that path is also used
+// by tests that wire mock DBs and don't expect a stray query.
 func SetDB(database *sql.DB) {
 	db = database
 }
@@ -3920,6 +3924,17 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 	localPath := complete.GetLocalPath()
 	sizeBytes := complete.GetSizeBytes()
 	errorMsg := complete.GetError()
+	reason := complete.GetReason()
+
+	// Decrement the per-node in-flight count on any terminal status. This
+	// keeps PickDefrostNode's spread signal honest.
+	reportingNodeID := complete.GetNodeId()
+	if reportingNodeID == "" {
+		reportingNodeID = nodeID
+	}
+	if status == "success" || status == "ready" || status == "failed" {
+		DecrementDefrost(reportingNodeID)
+	}
 
 	logger.WithFields(logging.Fields{
 		"request_id": requestID,
@@ -3928,6 +3943,7 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 		"local_path": localPath,
 		"size_bytes": sizeBytes,
 		"error":      errorMsg,
+		"reason":     reason.String(),
 		"node_id":    nodeID,
 	}).Info("Defrost operation completed")
 
@@ -4044,11 +4060,74 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 		logger.WithFields(logging.Fields{
 			"asset_hash": assetHash,
 			"error":      errorMsg,
+			"reason":     reason.String(),
 		}).Warn("Defrost failed, reverted to s3")
+
+		// REASON_INSUFFICIENT_SPACE: the chosen node could not make room for
+		// the artifact. Retry once on a different node (VOD only — DVR chapter
+		// defrost uses a separate entrypoint not yet routed through requestDefrost).
+		if reason == pb.DefrostComplete_REASON_INSUFFICIENT_SPACE {
+			go retryDefrostAfterInsufficientSpace(assetHash, reportingNodeID, logger)
+		}
 	}
 
 	// Notify any waiting defrost requests
 	notifyDefrostComplete(assetHash, status == "success", localPath)
+}
+
+// retryDefrostAfterInsufficientSpace handles the REASON_INSUFFICIENT_SPACE
+// retry path. Loads asset_type from foghorn.artifacts (authoritative — never
+// inferred); skips when DVR (chapter defrost goes through StartDVRChapterDefrost,
+// not requestDefrost, and is out of scope for P2 retry). In-memory guard caps
+// retries to one per artifact per 5 min; longer-tail recovery is owned by
+// StaleDefrostCleanupJob.
+func retryDefrostAfterInsufficientSpace(assetHash, failedNodeID string, logger logging.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if db == nil {
+		return
+	}
+
+	var assetType string
+	if err := db.QueryRowContext(ctx, `
+		SELECT artifact_type FROM foghorn.artifacts WHERE artifact_hash = $1
+	`, assetHash).Scan(&assetType); err != nil {
+		logger.WithError(err).WithField("asset_hash", assetHash).Warn("retry lookup failed; skipping")
+		return
+	}
+	if assetType == "dvr" {
+		logger.WithField("asset_hash", assetHash).Info("retry skipped: DVR retry not yet supported")
+		return
+	}
+
+	if !TryConsumeRetryGuard(assetHash, 5*time.Minute) {
+		logger.WithField("asset_hash", assetHash).Info("retry skipped: guard active (recent retry pending)")
+		return
+	}
+
+	excluded := map[string]struct{}{failedNodeID: {}}
+	nextNode, err := PickDefrostNode(0, 0, excluded)
+	if err != nil {
+		logger.WithError(err).WithFields(logging.Fields{
+			"asset_hash":     assetHash,
+			"failed_node_id": failedNodeID,
+		}).Warn("retry skipped: no alternate storage node available")
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"asset_hash":     assetHash,
+		"failed_node_id": failedNodeID,
+		"retry_node_id":  nextNode,
+	}).Info("Retrying defrost on alternate node after REASON_INSUFFICIENT_SPACE")
+
+	if _, retryErr := requestDefrost(ctx, assetType, assetHash, nextNode, 30*time.Second, logger, false, "", nil); retryErr != nil {
+		logger.WithError(retryErr).WithFields(logging.Fields{
+			"asset_hash":    assetHash,
+			"retry_node_id": nextNode,
+		}).Warn("retry defrost send failed")
+	}
 }
 
 func dvrChapterIDFromManifestPath(localPath string) (string, bool) {
@@ -4371,17 +4450,20 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 					Format:    newFormat,
 				})
 
-				// Update artifact format to match processed output and reset sync
-				// status so the processed file gets synced to S3. Keep the original
-				// upload URL in s3_url until the replacement upload is durably synced.
+				// Update artifact format, size, and sync status so the processed
+				// file gets synced to S3 and future defrosts use the correct
+				// size for admission control. Keep the original upload URL in
+				// s3_url until the replacement upload is durably synced (sync
+				// completion updates s3_url + vod_metadata.s3_key together).
 				if _, dbErr := db.ExecContext(ctx, `
 						UPDATE foghorn.artifacts
 						SET format = $1,
+						    size_bytes = $3,
 						    sync_status = 'pending',
 						    storage_location = 'local',
 						    updated_at = NOW()
-						WHERE artifact_hash = $2`, newFormat, artifactHash); dbErr != nil {
-					logger.WithError(dbErr).WithField("artifact_hash", artifactHash).Error("failed to update artifact format after processing")
+						WHERE artifact_hash = $2`, newFormat, artifactHash, sizeBytes); dbErr != nil {
+					logger.WithError(dbErr).WithField("artifact_hash", artifactHash).Error("failed to update artifact format/size after processing")
 				}
 
 				logger.WithFields(logging.Fields{
@@ -4872,7 +4954,9 @@ func StartDVRChapterDefrost(ctx context.Context, chapterID, nodeID string, timeo
 		ChapterIntervalSeconds: prepResp.GetIntervalSeconds(),
 		ChapterSegments:        prepResp.GetSegments(),
 	}
+	IncrementDefrost(nodeID)
 	if err := SendDefrostRequest(nodeID, req); err != nil {
+		DecrementDefrost(nodeID)
 		return "", fmt.Errorf("send DVR chapter defrost: %w", err)
 	}
 	logger.WithFields(logging.Fields{
@@ -4906,6 +4990,12 @@ func startDVRChapterDefrostLocal(ctx context.Context, chapter *DVRChapterRow, ch
 			Status:       r.Status,
 			Sequence:     r.Sequence,
 		}
+		// SizeBytes feeds Helmsman's chapter-defrost admission (sum of non-gap
+		// segment sizes). NULL is acceptable — Helmsman skips admission when
+		// the sum is 0.
+		if r.SizeBytes.Valid && r.SizeBytes.Int64 > 0 {
+			ref.SizeBytes = r.SizeBytes.Int64
+		}
 		if r.Status == "uploaded" || r.Status == "deleted_local" {
 			url, mintErr := s3Client.GeneratePresignedGET(r.S3Key, urlTTL)
 			if mintErr != nil {
@@ -4937,7 +5027,9 @@ func startDVRChapterDefrostLocal(ctx context.Context, chapter *DVRChapterRow, ch
 		ChapterIntervalSeconds: chapter.IntervalSeconds.Int32,
 		ChapterSegments:        refs,
 	}
+	IncrementDefrost(nodeID)
 	if err := SendDefrostRequest(nodeID, req); err != nil {
+		DecrementDefrost(nodeID)
 		return "", fmt.Errorf("send DVR chapter defrost: %w", err)
 	}
 	return localManifest, nil
@@ -5018,9 +5110,12 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 
 	artifactType := assetType
 
-	// Look up asset info from foghorn.artifacts
+	// Look up asset info from foghorn.artifacts. size_bytes is used by Helmsman
+	// for defrost admission (preflight HasSpaceFor + proactive background
+	// cleanup). NULL is acceptable — Helmsman skips admission when 0.
 	var streamName, storageLocation, format, tenantID string
 	var s3Key, filename, streamID, artifactInternalName sql.NullString
+	var artifactSizeBytes sql.NullInt64
 	err := db.QueryRowContext(ctx, `
 		SELECT a.stream_internal_name,
 		       COALESCE(a.storage_location, 'local'),
@@ -5029,11 +5124,12 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 		       COALESCE(v.s3_key, ''),
 		       COALESCE(v.filename, ''),
 		       a.stream_id::text,
-		       a.internal_name
+		       a.internal_name,
+		       a.size_bytes
 		FROM foghorn.artifacts a
 		LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
 		WHERE a.artifact_hash = $1 AND a.artifact_type = $2`,
-		assetHash, artifactType).Scan(&streamName, &storageLocation, &format, &tenantID, &s3Key, &filename, &streamID, &artifactInternalName)
+		assetHash, artifactType).Scan(&streamName, &storageLocation, &format, &tenantID, &s3Key, &filename, &streamID, &artifactInternalName, &artifactSizeBytes)
 	if err != nil {
 		return "", fmt.Errorf("asset not found: %w", err)
 	}
@@ -5135,6 +5231,11 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 	expiry := 30 * time.Minute
 	requestID := fmt.Sprintf("defrost-%s-%d", assetHash, time.Now().UnixNano())
 
+	expectedSizeBytes := uint64(0)
+	if artifactSizeBytes.Valid && artifactSizeBytes.Int64 > 0 {
+		expectedSizeBytes = uint64(artifactSizeBytes.Int64)
+	}
+
 	req := &pb.DefrostRequest{
 		RequestId:          requestID,
 		AssetType:          assetType,
@@ -5144,6 +5245,7 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 		InternalName:       artifactInternalName.String,
 		TimeoutSeconds:     int32(timeout.Seconds()),
 		UrlExpirySeconds:   int64(expiry.Seconds()),
+		ExpectedSizeBytes:  expectedSizeBytes,
 	}
 
 	storageBase := storageBasePathForNode(nodeID)
@@ -5203,8 +5305,13 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 		return "", fmt.Errorf("unsupported asset type for defrost: %s", assetType)
 	}
 
-	// Send defrost request to node
+	// Send defrost request to node. Track in-flight count for placement.
+	IncrementDefrost(nodeID)
 	if err := SendDefrostRequest(nodeID, req); err != nil {
+		// Send failed before the node could observe it; the tracker bump
+		// would otherwise leak so we decrement here. (A successful send
+		// pairs with a decrement on DefrostComplete arrival.)
+		DecrementDefrost(nodeID)
 		// Revert storage location
 		if _, dbErr := db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
@@ -5433,19 +5540,48 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 			logger.WithError(err).Error("Failed to add cached node")
 		}
 
-		// Update foghorn.artifacts with storage_location and dtsh_synced
+		// Update foghorn.artifacts with storage_location, dtsh_synced, and
+		// the post-sync size. size_bytes is critical for future defrost
+		// admission: processed VODs upload at a different size than the
+		// original, and admission preflights against the artifact row's size.
 		if _, dbErr := db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 'local',
 			    s3_url = COALESCE(NULLIF($1,''), s3_url),
 			    dtsh_synced = $2,
+			    size_bytes = COALESCE(NULLIF($4::BIGINT, 0), size_bytes),
 			    last_sync_attempt = NOW(),
 			    sync_error = NULL,
 			    updated_at = NOW()
 			WHERE artifact_hash = $3
 			  AND sync_status = 'synced'`,
-			s3URL, dtshIncluded, assetHash); dbErr != nil {
+			s3URL, dtshIncluded, assetHash, int64(sizeBytes)); dbErr != nil {
 			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to mark artifact as synced")
+		}
+
+		// For VOD, the s3_key in vod_metadata is the canonical defrost source.
+		// On processed-VOD replacement uploads the key derived above (from
+		// tenant/hash/format) differs from the original upload key; persist
+		// the new value so defrost reads the synced location, not the
+		// original-upload row.
+		if artifactType == "vod" && s3URL != "" && db != nil {
+			derivedKey := ""
+			if s3Client != nil && tenantID != "" {
+				f := format
+				if f == "" {
+					f = "mp4"
+				}
+				derivedKey = s3Client.BuildVodS3Key(tenantID, assetHash, assetHash+"."+f)
+			}
+			if derivedKey != "" {
+				if _, dbErr := db.ExecContext(ctx, `
+					INSERT INTO foghorn.vod_metadata (artifact_hash, s3_key, filename)
+					VALUES ($1, $2, $3)
+					ON CONFLICT (artifact_hash) DO UPDATE SET s3_key = EXCLUDED.s3_key`,
+					assetHash, derivedKey, assetHash+"."+format); dbErr != nil {
+					logger.WithError(dbErr).WithField("asset_hash", assetHash).Warn("failed to update vod_metadata.s3_key after sync")
+				}
+			}
 		}
 
 		logger.WithFields(logging.Fields{

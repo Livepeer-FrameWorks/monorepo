@@ -828,7 +828,7 @@ message FreezeComplete {
 // concurrent chapter requests for the same artifact don't collapse.
 message DefrostRequest {
   string request_id = 1;         // Request ID for tracking
-  string asset_type = 2;         // "clip" or "dvr"
+  string asset_type = 2;         // "clip" | "vod" | "dvr"
   string asset_hash = 3;         // clip_hash or dvr_hash
   string tenant_id = 4;          // Tenant owning the asset
   string stream_internal_name = 5; // Source stream's MistServer routing name (for DVR path reconstruction)
@@ -853,6 +853,11 @@ message DefrostRequest {
   // status='lost_local' rows have empty presigned_get_url and render as
   // #EXT-X-GAP in the local manifest writer.
   repeated DVRSegmentRef chapter_segments = 19;
+  // Total expected on-disk bytes after defrost. Helmsman uses this for
+  // admission control (preflight space check + optional background cleanup).
+  // 0 means "unknown" — Helmsman skips admission and falls back to the legacy
+  // write-then-fail behavior.
+  uint64 expected_size_bytes = 20;
 }
 
 // DVRSegmentRef is one segment in a chapter-aware defrost response.
@@ -869,6 +874,7 @@ message DVRSegmentRef {
   int64  duration_ms = 6;
   string status = 7;                  // 'uploaded' | 'lost_local' | 'deleted_local'
   int64  sequence = 8;                // foghorn.dvr_segments.sequence for HLS media sequence
+  int64  size_bytes = 9;              // foghorn.dvr_segments.size_bytes; 0 = unknown
 }
 
 // DefrostProgress reports download progress for defrosting operations
@@ -891,6 +897,16 @@ message DefrostComplete {
   uint64 size_bytes = 5;
   string error = 6;              // Error message if failed
   string node_id = 7;            // Node that now has a cached copy (for multi-node tracking)
+
+  // Typed failure reason. Set on status="failed"; UNSPECIFIED otherwise.
+  enum Reason {
+    REASON_UNSPECIFIED        = 0;
+    REASON_INSUFFICIENT_SPACE = 1;  // Helmsman tried to evict; still not enough room
+    REASON_DOWNLOAD_ERROR     = 2;  // presigned GET / network / S3
+    REASON_LOCAL_IO           = 3;  // mkdir/create/rename failed for non-space reasons
+    REASON_PRESIGNED_INVALID  = 4;  // missing/expired URL
+  }
+  Reason reason = 8;
 }
 
 // CanDeleteRequest is sent by Helmsman to check if a local asset can be safely deleted.
@@ -970,6 +986,9 @@ message StorageLifecycleData {
   optional int64 warm_duration_ms = 12; // For EVICTED: how long asset was cached before eviction
   optional string cluster_id = 14;          // Cluster where the storage operation happened
   optional string origin_cluster_id = 15;   // Cluster that originally created the artifact
+  // Mirrors DefrostComplete.Reason for CACHE_FAILED rows so analytics can
+  // distinguish "out of space" from "S3 5xx'd" from "local IO error."
+  optional DefrostComplete.Reason reason = 16;
 }
 
 // Typed MistServer trigger messages (matches mist package structures)

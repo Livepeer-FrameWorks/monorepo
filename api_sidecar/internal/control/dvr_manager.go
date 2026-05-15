@@ -251,10 +251,44 @@ func (dm *DVRManager) EvictUploadedSegments(dvrHash string, candidates []string,
 // lost_local so chapter manifests can render an explicit #EXT-X-GAP. Use
 // only when no other option remains. Reason should be one of disk_pressure /
 // retention_expired / operator_cleanup.
+// ErrDropRefusedByLease is returned by DropUnsyncedSegment when the lease
+// guard refuses the drop for a non-emergency reason (currently disk_pressure).
+// Retention-expired and operator-cleanup callers may force the drop after
+// logging escalation; disk-pressure callers must skip and let the lease
+// release before retrying.
+var ErrDropRefusedByLease = fmt.Errorf("drop refused by active lease")
+
+// DropLeaseChecker, if set, decides whether DropUnsyncedSegment may proceed
+// for a given reason. Returning true means "lease held" and the drop will be
+// refused for disk_pressure; for retention_expired / operator_cleanup the
+// check is informational only (escalated to a warning log). Wired by the
+// handlers package at startup so the control package stays free of a leases
+// import.
+var DropLeaseChecker func(dvrHash, segmentName string) bool
+
 func (dm *DVRManager) DropUnsyncedSegment(dvrHash, segmentName, reason string) error {
 	job, ok := LookupActiveDVR(dvrHash)
 	if !ok {
 		return fmt.Errorf("dvr %s not active", dvrHash)
+	}
+	if DropLeaseChecker != nil && DropLeaseChecker(dvrHash, segmentName) {
+		switch reason {
+		case "disk_pressure":
+			job.Logger.WithFields(map[string]any{
+				"dvr_hash":     dvrHash,
+				"segment_name": segmentName,
+				"reason":       reason,
+			}).Warn("Refusing DropUnsyncedSegment under disk_pressure: lease held")
+			return ErrDropRefusedByLease
+		default:
+			// retention_expired / operator_cleanup: data loss is the intent;
+			// log loudly but proceed.
+			job.Logger.WithFields(map[string]any{
+				"dvr_hash":     dvrHash,
+				"segment_name": segmentName,
+				"reason":       reason,
+			}).Warn("Forcing DropUnsyncedSegment despite active lease (non-disk-pressure caller)")
+		}
 	}
 	segPath := filepath.Join(job.OutputDir, "segments", segmentName)
 	var sizeBytes uint64

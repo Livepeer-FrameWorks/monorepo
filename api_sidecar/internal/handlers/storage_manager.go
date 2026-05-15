@@ -18,6 +18,7 @@ import (
 	"io"
 
 	"frameworks/api_sidecar/internal/control"
+	"frameworks/api_sidecar/internal/leases"
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/hls"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -98,22 +99,24 @@ type StorageManager struct {
 	presignedClient PresignedTransfer
 
 	// Control IPC — function fields so tests can inject fakes
-	requestFreezePermission func(ctx context.Context, assetType, assetHash, localPath string, sizeBytes uint64, filenames []string) (*pb.FreezePermissionResponse, error)
-	sendSyncComplete        func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool, localMissing bool) error
-	sendFreezeComplete      func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, localMissing bool) error
-	sendFreezeProgress      func(requestID, assetHash string, percent uint32, bytesUploaded uint64) error
-	sendStorageLifecycle    func(data *pb.StorageLifecycleData) error
-	sendDefrostComplete     func(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string) error
-	sendDefrostProgress     func(requestID, assetHash string, percent uint32, bytesDownloaded uint64, segmentsDownloaded, totalSegments int32, message string) error
-	requestCanDelete        func(ctx context.Context, assetHash string) (bool, string, int64, error)
-	sendArtifactDeleted     func(assetHash, filePath, reason, assetType string, sizeBytes uint64) error
+	requestFreezePermission       func(ctx context.Context, assetType, assetHash, localPath string, sizeBytes uint64, filenames []string) (*pb.FreezePermissionResponse, error)
+	sendSyncComplete              func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool, localMissing bool) error
+	sendFreezeComplete            func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, localMissing bool) error
+	sendFreezeProgress            func(requestID, assetHash string, percent uint32, bytesUploaded uint64) error
+	sendStorageLifecycle          func(data *pb.StorageLifecycleData) error
+	sendDefrostComplete           func(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string) error
+	sendDefrostCompleteWithReason func(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string, reason pb.DefrostComplete_Reason) error
+	sendDefrostProgress           func(requestID, assetHash string, percent uint32, bytesDownloaded uint64, segmentsDownloaded, totalSegments int32, message string) error
+	requestCanDelete              func(ctx context.Context, assetHash string) (bool, string, int64, error)
+	sendArtifactDeleted           func(assetHash, filePath, reason, assetType string, sizeBytes uint64) error
 
 	// Thresholds
-	freezeThreshold   float64       // Start freezing at this % (default: 85%)
-	targetThreshold   float64       // Target usage after freeze (default: 70%)
-	deleteThreshold   float64       // Delete even frozen assets if above this % (default: 95%)
-	minRetentionHours int           // Never freeze assets younger than this
-	checkInterval     time.Duration // Normal polling interval
+	freezeThreshold      float64       // Start freezing at this % (default: 85%)
+	targetThreshold      float64       // Target usage after freeze (default: 70%)
+	deleteThreshold      float64       // Delete even frozen assets if above this % (default: 95%)
+	softCleanupThreshold float64       // Defrost projected-usage trigger for proactive background cleanup (default: freezeThreshold)
+	minRetentionHours    int           // Never freeze assets younger than this
+	checkInterval        time.Duration // Normal polling interval
 
 	// Hybrid trigger mechanism
 	urgentFreezeCh  chan struct{}
@@ -151,33 +154,42 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 	presignedClient := storage.NewPresignedClient(logger)
 
 	storageManager = &StorageManager{
-		logger:            logger,
-		basePath:          basePath,
-		nodeID:            nodeID,
-		running:           false,
-		stopCh:            make(chan struct{}),
-		presignedClient:   presignedClient,
-		freezeThreshold:   thresholds.FreezeThreshold,
-		targetThreshold:   thresholds.TargetThreshold,
-		deleteThreshold:   0.95, // 95%
-		minRetentionHours: 1,
-		checkInterval:     5 * time.Minute,
-		urgentFreezeCh:    make(chan struct{}, 1),
-		urgentDebounce:    2 * time.Second,
+		logger:               logger,
+		basePath:             basePath,
+		nodeID:               nodeID,
+		running:              false,
+		stopCh:               make(chan struct{}),
+		presignedClient:      presignedClient,
+		freezeThreshold:      thresholds.FreezeThreshold,
+		targetThreshold:      thresholds.TargetThreshold,
+		deleteThreshold:      0.95, // 95%
+		softCleanupThreshold: thresholds.SoftCleanupThreshold,
+		minRetentionHours:    1,
+		checkInterval:        5 * time.Minute,
+		urgentFreezeCh:       make(chan struct{}, 1),
+		urgentDebounce:       2 * time.Second,
 
-		requestFreezePermission: control.RequestFreezePermission,
-		sendSyncComplete:        control.SendSyncComplete,
-		sendFreezeComplete:      control.SendFreezeComplete,
-		sendFreezeProgress:      control.SendFreezeProgress,
-		sendStorageLifecycle:    control.SendStorageLifecycle,
-		sendDefrostComplete:     control.SendDefrostComplete,
-		sendDefrostProgress:     control.SendDefrostProgress,
-		requestCanDelete:        control.RequestCanDelete,
-		sendArtifactDeleted:     control.SendArtifactDeleted,
+		requestFreezePermission:       control.RequestFreezePermission,
+		sendSyncComplete:              control.SendSyncComplete,
+		sendFreezeComplete:            control.SendFreezeComplete,
+		sendFreezeProgress:            control.SendFreezeProgress,
+		sendStorageLifecycle:          control.SendStorageLifecycle,
+		sendDefrostComplete:           control.SendDefrostComplete,
+		sendDefrostCompleteWithReason: control.SendDefrostCompleteWithReason,
+		sendDefrostProgress:           control.SendDefrostProgress,
+		requestCanDelete:              control.RequestCanDelete,
+		sendArtifactDeleted:           control.SendArtifactDeleted,
 	}
 
 	storageManager.defrostTracker.inFlight = make(map[string]*DefrostJob)
 	storageManager.freezeTracker.inFlight = make(map[string]bool)
+
+	// SoftCleanupThreshold defaults to freezeThreshold when caller didn't set
+	// it. Both gate "85% is getting full"; operators can tune the soft tier
+	// independently if they want to start proactive cleanup earlier.
+	if storageManager.softCleanupThreshold <= 0 {
+		storageManager.softCleanupThreshold = storageManager.freezeThreshold
+	}
 
 	// Start monitoring in background
 	go storageManager.start()
@@ -301,6 +313,10 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 type StorageThresholds struct {
 	FreezeThreshold float64
 	TargetThreshold float64
+	// SoftCleanupThreshold is the projected post-defrost usage at which the
+	// admission path kicks off proactive background cleanup. 0 means default
+	// to FreezeThreshold.
+	SoftCleanupThreshold float64
 }
 
 // StopStorageManager stops the storage manager
@@ -560,13 +576,28 @@ func (sm *StorageManager) getFreezeCandidates(dir string, assetType AssetType) (
 				return nil
 			}
 
+			// Skip files currently leased by an active Mist source or viewer.
+			if tracker := leases.GlobalTracker(); tracker != nil && tracker.IsPathLeased(path) {
+				return nil
+			}
+
+			lastAccessed := info.ModTime()
+			accessCount := 0
+			if heat := leases.GlobalHeat(); heat != nil {
+				if h, ok := heat.Lookup(path); ok {
+					lastAccessed = h.LastAccessed
+					accessCount = int(h.AccessCount)
+				}
+			}
+
 			candidate := FreezeCandidate{
 				AssetType:    AssetTypeClip,
 				AssetHash:    clipHash,
 				FilePath:     path,
 				SizeBytes:    uint64(info.Size()),
 				CreatedAt:    info.ModTime(),
-				LastAccessed: info.ModTime(),
+				LastAccessed: lastAccessed,
+				AccessCount:  accessCount,
 			}
 			candidate.Priority = sm.calculateFreezePriority(candidate)
 			candidates = append(candidates, candidate)
@@ -604,13 +635,28 @@ func (sm *StorageManager) getFreezeCandidates(dir string, assetType AssetType) (
 				continue
 			}
 
+			fullPath := filepath.Join(dir, filename)
+			if tracker := leases.GlobalTracker(); tracker != nil && tracker.IsPathLeased(fullPath) {
+				continue
+			}
+
+			lastAccessed := info.ModTime()
+			accessCount := 0
+			if heat := leases.GlobalHeat(); heat != nil {
+				if h, ok := heat.Lookup(fullPath); ok {
+					lastAccessed = h.LastAccessed
+					accessCount = int(h.AccessCount)
+				}
+			}
+
 			candidate := FreezeCandidate{
 				AssetType:    AssetTypeVOD,
 				AssetHash:    vodHash,
-				FilePath:     filepath.Join(dir, filename),
+				FilePath:     fullPath,
 				SizeBytes:    uint64(info.Size()),
 				CreatedAt:    info.ModTime(),
-				LastAccessed: info.ModTime(),
+				LastAccessed: lastAccessed,
+				AccessCount:  accessCount,
 			}
 			candidate.Priority = sm.calculateFreezePriority(candidate)
 			candidates = append(candidates, candidate)
@@ -728,9 +774,18 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 			"asset_type": asset.AssetType,
 		}).Info("Remote artifact skip_upload — evicting without S3 upload")
 
+		evictionDeferred := false
 		if asset.AssetType == AssetTypeClip || asset.AssetType == AssetTypeVOD {
-			if err := os.Remove(asset.FilePath); err != nil {
-				sm.logger.WithError(err).Warn("Failed to delete local copy of remote artifact")
+			if err := leases.DeleteFileIfUnleased(asset.FilePath); err != nil {
+				if errors.Is(err, leases.ErrLeaseHeld) {
+					sm.logger.WithFields(logging.Fields{
+						"asset_hash": asset.AssetHash,
+						"path":       asset.FilePath,
+					}).Info("skip_upload eviction deferred: lease held")
+					evictionDeferred = true
+				} else {
+					sm.logger.WithError(err).Warn("Failed to delete local copy of remote artifact")
+				}
 			} else {
 				_ = os.Remove(asset.FilePath + ".dtsh")
 				_ = os.Remove(asset.FilePath + ".gop")
@@ -749,9 +804,30 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 					"asset_hash": asset.AssetHash,
 					"path":       dvrDir,
 				}).Warn("Refusing skip_upload directory eviction for active DVR")
-			} else if err := os.RemoveAll(dvrDir); err != nil {
-				sm.logger.WithError(err).Warn("Failed to delete local DVR directory of remote artifact")
+				evictionDeferred = true
+			} else if err := leases.DeleteDVRDirIfUnleased(dvrDir, asset.AssetHash); err != nil {
+				if errors.Is(err, leases.ErrLeaseHeld) {
+					sm.logger.WithFields(logging.Fields{
+						"asset_hash": asset.AssetHash,
+						"path":       dvrDir,
+					}).Info("skip_upload DVR eviction deferred: chapter lease held")
+					evictionDeferred = true
+				} else {
+					sm.logger.WithError(err).Warn("Failed to delete local DVR directory of remote artifact")
+				}
 			}
+		}
+		if evictionDeferred {
+			errStr := "lease held"
+			_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{ //nolint:errcheck // best-effort report
+				Action:    pb.StorageLifecycleData_ACTION_EVICT_FAILED,
+				AssetType: string(asset.AssetType),
+				AssetHash: asset.AssetHash,
+				SizeBytes: asset.SizeBytes,
+				Error:     &errStr,
+			})
+			_ = sm.sendSyncComplete(permResp.RequestId, asset.AssetHash, "evict_deferred", "", asset.SizeBytes, "lease held", false, false) //nolint:errcheck // best-effort report
+			return nil
 		}
 		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:    pb.StorageLifecycleData_ACTION_EVICTED,
@@ -947,29 +1023,31 @@ func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.Defrost
 	if presignedURL == "" {
 		err := fmt.Errorf("no presigned GET URL provided for defrost")
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
-		errStr := err.Error()
-		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
-			AssetType: string(assetType),
-			AssetHash: req.AssetHash,
-			Error:     &errStr,
-		})
-		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
+		sm.failDefrost(req, assetType, err, pb.DefrostComplete_REASON_PRESIGNED_INVALID)
 		return nil, err
 	}
 
 	// Ensure destination directory exists
-	if err := os.MkdirAll(filepath.Dir(req.LocalPath), 0755); err != nil {
+	destDir := filepath.Dir(req.LocalPath)
+	if err := os.MkdirAll(destDir, 0755); err != nil {
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
-		errStr := err.Error()
-		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
-			AssetType: string(assetType),
-			AssetHash: req.AssetHash,
-			Error:     &errStr,
-		})
-		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
+		sm.failDefrost(req, assetType, err, pb.DefrostComplete_REASON_LOCAL_IO)
 		return nil, fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	// Two-tier admission: when expected size is known, ensure the disk can
+	// accept this download. Tier 1 kicks off background cleanup proactively;
+	// Tier 2 blocks until cleanup makes room. Fails typed on inability.
+	if req.GetExpectedSizeBytes() > 0 {
+		if err := sm.admitDefrost(ctx, destDir, req.GetExpectedSizeBytes()); err != nil {
+			sm.markDefrostJobDone(req.AssetHash, err, "", 0)
+			if errors.Is(err, storage.ErrInsufficientSpace) {
+				sm.failDefrost(req, assetType, err, pb.DefrostComplete_REASON_INSUFFICIENT_SPACE)
+				return nil, err
+			}
+			sm.failDefrost(req, assetType, err, pb.DefrostComplete_REASON_LOCAL_IO)
+			return nil, err
+		}
 	}
 
 	// Notify cache refill started
@@ -1003,14 +1081,7 @@ func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.Defrost
 
 	if err != nil {
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
-		errStr := err.Error()
-		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
-			AssetType: string(assetType),
-			AssetHash: req.AssetHash,
-			Error:     &errStr,
-		})
-		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
+		sm.failDefrost(req, assetType, err, pb.DefrostComplete_REASON_DOWNLOAD_ERROR)
 		return nil, fmt.Errorf("failed to download from S3: %w", err)
 	}
 
@@ -1099,9 +1170,15 @@ func (sm *StorageManager) DefrostVOD(ctx context.Context, req *pb.DefrostRequest
 // concurrent chapter requests for the same artifact don't collide.
 
 // emitChapterDefrostFailure emits the lifecycle + complete pair for a failed
-// chapter defrost. Send errors are logged and swallowed; control-stream
-// failures don't change the request's success/failure outcome.
+// chapter defrost. Defaults the typed Reason to REASON_LOCAL_IO; admission
+// callers can supply a more specific reason via emitChapterDefrostFailureWithReason.
+// Send errors are logged and swallowed; control-stream failures don't change
+// the request's success/failure outcome.
 func (sm *StorageManager) emitChapterDefrostFailure(req *pb.DefrostRequest, defrostErr error, localPath ...string) {
+	sm.emitChapterDefrostFailureWithReason(req, defrostErr, pb.DefrostComplete_REASON_LOCAL_IO, localPath...)
+}
+
+func (sm *StorageManager) emitChapterDefrostFailureWithReason(req *pb.DefrostRequest, defrostErr error, reason pb.DefrostComplete_Reason, localPath ...string) {
 	errStr := defrostErr.Error()
 	path := ""
 	if len(localPath) > 0 {
@@ -1112,8 +1189,15 @@ func (sm *StorageManager) emitChapterDefrostFailure(req *pb.DefrostRequest, defr
 		AssetType: string(AssetTypeDVR),
 		AssetHash: req.AssetHash,
 		Error:     &errStr,
+		Reason:    &reason,
 	}); err != nil {
 		sm.logger.WithError(err).Warn("emit chapter defrost cache_failed lifecycle")
+	}
+	if sm.sendDefrostCompleteWithReason != nil {
+		if err := sm.sendDefrostCompleteWithReason(req.RequestId, req.AssetHash, "failed", path, 0, errStr, reason); err != nil {
+			sm.logger.WithError(err).Warn("emit chapter defrost failure complete")
+		}
+		return
 	}
 	if err := sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", path, 0, errStr); err != nil {
 		sm.logger.WithError(err).Warn("emit chapter defrost failure complete")
@@ -1140,14 +1224,39 @@ func (sm *StorageManager) defrostDVRFromChapterRefs(ctx context.Context, req *pb
 	chaptersDir := filepath.Join(req.LocalPath, "chapters")
 	if err := os.MkdirAll(chaptersDir, 0755); err != nil {
 		sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
-		sm.emitChapterDefrostFailure(req, err)
+		sm.emitChapterDefrostFailureWithReason(req, err, pb.DefrostComplete_REASON_LOCAL_IO)
 		return nil, fmt.Errorf("create chapters dir: %w", err)
 	}
 	segmentsDir := filepath.Join(req.LocalPath, "segments")
 	if err := os.MkdirAll(segmentsDir, 0755); err != nil {
 		sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
-		sm.emitChapterDefrostFailure(req, err)
+		sm.emitChapterDefrostFailureWithReason(req, err, pb.DefrostComplete_REASON_LOCAL_IO)
 		return nil, fmt.Errorf("create segments dir: %w", err)
+	}
+
+	// Two-tier admission for chapter defrost. Sum the non-gap segment sizes
+	// from DVRSegmentRef.size_bytes (added in this phase). When the proto
+	// field is unset (0) admission is skipped and we fall back to legacy
+	// late-fail behavior.
+	var expectedChapterBytes uint64
+	for _, r := range refs {
+		if r.GetStatus() == "lost_local" {
+			continue
+		}
+		if sz := r.GetSizeBytes(); sz > 0 {
+			expectedChapterBytes += uint64(sz)
+		}
+	}
+	if expectedChapterBytes > 0 {
+		if err := sm.admitDefrost(ctx, segmentsDir, expectedChapterBytes); err != nil {
+			sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
+			if errors.Is(err, storage.ErrInsufficientSpace) {
+				sm.emitChapterDefrostFailureWithReason(req, err, pb.DefrostComplete_REASON_INSUFFICIENT_SPACE)
+				return nil, err
+			}
+			sm.emitChapterDefrostFailureWithReason(req, err, pb.DefrostComplete_REASON_LOCAL_IO)
+			return nil, err
+		}
 	}
 
 	// Refcount each non-gap segment for the defrost and refresh its local
@@ -1208,6 +1317,26 @@ func (sm *StorageManager) defrostDVRFromChapterRefs(ctx context.Context, req *pb
 		sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
 		sm.emitChapterDefrostFailure(req, err)
 		return nil, fmt.Errorf("write chapter manifest: %w", err)
+	}
+
+	// Register the chapter with the leases package so a subsequent STREAM_SOURCE
+	// for "dvr+<chapter_id>" can install a SourceLease that pins every
+	// non-gap segment via LocalSegmentIndex.AcquireView. Without this, USER_NEW
+	// for an unregistered chapter would fall back to degraded mode.
+	if reg := leases.GlobalChapterRegistry(); reg != nil {
+		nonGap := make([]string, 0, len(refs))
+		for _, r := range refs {
+			if r.GetStatus() == "lost_local" {
+				continue
+			}
+			nonGap = append(nonGap, r.GetSegmentName())
+		}
+		reg.Register(leases.ChapterEntry{
+			ChapterID:    chapterID,
+			DvrHash:      req.AssetHash,
+			SegmentNames: nonGap,
+			ManifestPath: manifestPath,
+		})
 	}
 
 	// Signal ready for playback (manifest exists; segment downloads
@@ -1549,8 +1678,30 @@ func (sm *StorageManager) calculateFreezePriority(asset FreezeCandidate) float64
 // fallbackCleanup performs deletion-based cleanup when S3 is not configured
 // In dual-storage mode, it asks Foghorn before deleting to ensure asset is synced
 func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes uint64) error {
+	if !leases.IsDestructiveCleanupAllowed() {
+		sm.logger.Debug("fallbackCleanup skipped: destructive cleanup paused")
+		return nil
+	}
 	targetBytes := uint64(float64(totalBytes) * sm.targetThreshold)
+	if usedBytes <= targetBytes {
+		return nil
+	}
 	bytesToFree := usedBytes - targetBytes
+	return sm.fallbackCleanupWithTarget(clipsDir, bytesToFree)
+}
+
+// fallbackCleanupWithTarget runs the same eviction loop as fallbackCleanup but
+// with an explicit byte target. Used by the defrost admission path
+// (admitDefrost / ensureRoomForDefrost) which knows exactly how much room it
+// needs and does not want to aggressively trim back to targetThreshold.
+func (sm *StorageManager) fallbackCleanupWithTarget(clipsDir string, bytesToFree uint64) error {
+	if !leases.IsDestructiveCleanupAllowed() {
+		sm.logger.Debug("fallbackCleanupWithTarget skipped: destructive cleanup paused")
+		return nil
+	}
+	if bytesToFree == 0 {
+		return nil
+	}
 
 	// Active-DVR-first pass. getFreezeCandidates skips active DVR hashes (so
 	// emergency cleanup never RemoveAlls an active recording's directory),
@@ -1607,7 +1758,11 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 			// Asset is synced to S3, safe to delete local copy
 			var deleteErr error
 			if candidate.AssetType == AssetTypeClip || candidate.AssetType == AssetTypeVOD {
-				deleteErr = os.Remove(candidate.FilePath)
+				deleteErr = leases.DeleteFileIfUnleased(candidate.FilePath)
+				if errors.Is(deleteErr, leases.ErrLeaseHeld) {
+					sm.logger.WithField("file", candidate.FilePath).Info("fallbackCleanup skipped: lease held")
+					continue
+				}
 				if deleteErr == nil {
 					// Clean up auxiliary files after main file deletion succeeds.
 					_ = os.Remove(candidate.FilePath + ".dtsh")
@@ -1630,7 +1785,11 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 					// freed-bytes accounting catches up via subsequent passes.
 					continue
 				}
-				deleteErr = os.RemoveAll(candidate.FilePath)
+				deleteErr = leases.DeleteDVRDirIfUnleased(candidate.FilePath, candidate.AssetHash)
+				if errors.Is(deleteErr, leases.ErrLeaseHeld) {
+					sm.logger.WithField("dvr_hash", candidate.AssetHash).Info("fallbackCleanup skipped: DVR chapter lease held")
+					continue
+				}
 			}
 
 			if deleteErr != nil {

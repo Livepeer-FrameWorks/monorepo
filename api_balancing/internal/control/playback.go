@@ -503,8 +503,10 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 			return nil, NewDefrostingError(10, "defrost in progress")
 		}
 		if sync == "synced" || location == "s3" {
-			// Pick a storage node for defrost
-			nodeID, err := pickStorageNodeID()
+			// Pick a storage node for defrost. Spread by active defrost count
+			// (primary), then viewer geo (when known), then disk pressure as
+			// tie-breaker. Disk is not a filter — Helmsman owns admission.
+			nodeID, err := PickDefrostNode(deps.GeoLat, deps.GeoLon, nil)
 			if err != nil {
 				return nil, fmt.Errorf("storage node unknown: %w", err)
 			}
