@@ -478,12 +478,6 @@
     const nodeMap: Record<string, NodeLocation> = {};
     const nodeTypeCountByCluster: Record<string, { core: number; edge: number; other: number }> =
       {};
-    // Compute cluster centroids for co-location detection
-    const clusterCentroid: Record<string, { lat: number; lng: number }> = {};
-    currentClusters.forEach((c) => {
-      clusterCentroid[c.id] = { lat: c.lat, lng: c.lng };
-    });
-
     currentNodes.forEach((node) => {
       nodeMap[node.id] = node;
       const clusterID = node.clusterId ?? "";
@@ -495,14 +489,6 @@
         if (normalizedType === "core") nodeTypeCountByCluster[clusterID].core++;
         else if (normalizedType === "edge") nodeTypeCountByCluster[clusterID].edge++;
         else nodeTypeCountByCluster[clusterID].other++;
-      }
-
-      // Suppress node dot when co-located with cluster centroid
-      const centroid = clusterCentroid[clusterID];
-      if (centroid) {
-        const dlat = Math.abs(node.lat - centroid.lat);
-        const dlng = Math.abs(node.lng - centroid.lng);
-        if (dlat < 0.05 && dlng < 0.05) return;
       }
 
       const color = NODE_STATUS_COLORS[node.status ?? "active"] || NODE_STATUS_COLORS.active;
@@ -734,8 +720,7 @@
 
   function applySpread() {
     if (!map) return;
-    spreadOverlappingMarkers(map, nodeSpreadables);
-    spreadOverlappingMarkers(map, clusterSpreadables);
+    spreadOverlappingMarkers(map, [...nodeSpreadables, ...clusterSpreadables]);
   }
 
   let drawTrigger = $derived({

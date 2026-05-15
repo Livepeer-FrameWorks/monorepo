@@ -237,15 +237,9 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
   });
   Object.values(servicesByCluster).forEach((svcs) => svcs.sort());
 
-  // 2. Individual nodes — suppress when co-located with cluster centroid
+  // 2. Individual nodes
   (data.nodes || []).forEach((node) => {
     if (!node.latitude && !node.longitude) return;
-    const cluster = clusterMap[node.clusterId];
-    if (cluster) {
-      const dlat = Math.abs(node.latitude - cluster.latitude);
-      const dlng = Math.abs(node.longitude - cluster.longitude);
-      if (dlat < 0.05 && dlng < 0.05) return;
-    }
 
     const color = NODE_STATUS_COLORS[node.status] || NODE_STATUS_COLORS.offline;
     const isEdge = (node.nodeType || "").toLowerCase() === "edge";
@@ -311,8 +305,10 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
     spreadablesRef.current.clusters.push({ marker: clusterMarker, iconRadius: radius });
   });
 
-  spreadOverlappingMarkers(map, spreadablesRef.current.nodes);
-  spreadOverlappingMarkers(map, spreadablesRef.current.clusters);
+  spreadOverlappingMarkers(map, [
+    ...spreadablesRef.current.nodes,
+    ...spreadablesRef.current.clusters,
+  ]);
 }
 
 function startPulse(L, layer, pulseTimersRef, from, to, color = "rgb(125, 207, 255)") {
@@ -428,8 +424,10 @@ function NetworkMapInner({ data }) {
       layersRef.current.clusters = L.layerGroup().addTo(map);
 
       map.on("zoomend", () => {
-        spreadOverlappingMarkers(map, spreadablesRef.current.nodes);
-        spreadOverlappingMarkers(map, spreadablesRef.current.clusters);
+        spreadOverlappingMarkers(map, [
+          ...spreadablesRef.current.nodes,
+          ...spreadablesRef.current.clusters,
+        ]);
       });
 
       leafletRef.current = L;
