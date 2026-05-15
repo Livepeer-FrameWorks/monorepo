@@ -116,6 +116,7 @@
   let clusterLiveStats = $derived(
     $networkStore.data?.networkStatus?.clusters?.find((c) => c.clusterId === clusterId) ?? null
   );
+  let isMediaCluster = $derived(cluster?.clusterType === "edge");
   let currentStreams = $derived(clusterLiveStats?.currentStreams ?? 0);
   let currentViewers = $derived(clusterLiveStats?.currentViewers ?? 0);
   let currentBandwidthMbps = $derived(clusterLiveStats?.currentBandwidthMbps ?? 0);
@@ -131,60 +132,87 @@
     ["24h", "7d", "30d"].includes(option.value)
   );
 
-  let metricCards = $derived([
-    {
-      key: "nodes",
-      label: "Nodes",
-      subtitle: "Registered to this cluster",
-      value: totalNodeCount,
-      tone: "text-primary",
-    },
-    {
-      key: "services",
-      label: "Services",
-      subtitle: "Running service instances",
-      value: serviceInstances.length,
-      tone: "text-info",
-    },
-    {
-      key: "streams",
-      label: "Active Streams",
-      subtitle: "Live right now",
-      value: currentStreams,
-      tone: "text-success",
-    },
-    {
-      key: "viewers",
-      label: "Active Viewers",
-      subtitle: "Across active streams",
-      value: currentViewers,
-      tone: "text-accent-purple",
-    },
-    {
-      key: "cpu",
-      label: "Avg CPU",
-      subtitle: "From current node live state",
-      value: `${clusterAvgCpu.toFixed(1)}%`,
-      tone:
-        clusterAvgCpu < 70
-          ? "text-success"
-          : clusterAvgCpu < 90
-            ? "text-warning"
-            : "text-destructive",
-    },
-    {
-      key: "memory",
-      label: "Avg Memory",
-      subtitle: "From current node live state",
-      value: `${clusterAvgMemory.toFixed(1)}%`,
-      tone:
-        clusterAvgMemory < 70
-          ? "text-success"
-          : clusterAvgMemory < 90
-            ? "text-warning"
-            : "text-destructive",
-    },
-  ]);
+  type ClusterMetricCard = {
+    key: string;
+    label: string;
+    subtitle: string;
+    value: string | number;
+    tone: string;
+  };
+
+  let metricCards = $derived.by(() => {
+    const cards: ClusterMetricCard[] = [
+      {
+        key: "nodes",
+        label: "Nodes",
+        subtitle: "Registered to this cluster",
+        value: totalNodeCount,
+        tone: "text-primary",
+      },
+      {
+        key: "services",
+        label: "Services",
+        subtitle: "Running service instances",
+        value: serviceInstances.length,
+        tone: "text-info",
+      },
+    ];
+
+    if (isMediaCluster) {
+      cards.push(
+        {
+          key: "streams",
+          label: "Active Streams",
+          subtitle: "Live right now",
+          value: currentStreams,
+          tone: "text-success",
+        },
+        {
+          key: "viewers",
+          label: "Active Viewers",
+          subtitle: "Across active streams",
+          value: currentViewers,
+          tone: "text-accent-purple",
+        },
+        {
+          key: "bandwidth",
+          label: "Bandwidth",
+          subtitle: "Current media traffic",
+          value: `${currentBandwidthMbps.toLocaleString()} Mbps`,
+          tone: "text-warning",
+        }
+      );
+    }
+
+    cards.push(
+      {
+        key: "cpu",
+        label: "Avg CPU",
+        subtitle: "From current node live state",
+        value: `${clusterAvgCpu.toFixed(1)}%`,
+        tone:
+          clusterAvgCpu < 70
+            ? "text-success"
+            : clusterAvgCpu < 90
+              ? "text-warning"
+              : "text-destructive",
+      },
+      {
+        key: "memory",
+        label: "Avg Memory",
+        subtitle: "From current node live state",
+        value: `${clusterAvgMemory.toFixed(1)}%`,
+        tone:
+          clusterAvgMemory < 70
+            ? "text-success"
+            : clusterAvgMemory < 90
+              ? "text-warning"
+              : "text-destructive",
+      }
+    );
+
+    return cards;
+  });
 
   const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
@@ -521,22 +549,6 @@
               <div class="space-y-1">
                 <p class="text-muted-foreground">Deployment</p>
                 <p class="font-medium">{cluster.deploymentModel}</p>
-              </div>
-              <div class="space-y-1">
-                <p class="text-muted-foreground">Max Streams</p>
-                <p class="font-medium">{cluster.maxConcurrentStreams.toLocaleString()}</p>
-              </div>
-              <div class="space-y-1">
-                <p class="text-muted-foreground">Max Viewers</p>
-                <p class="font-medium">{cluster.maxConcurrentViewers.toLocaleString()}</p>
-              </div>
-              <div class="space-y-1">
-                <p class="text-muted-foreground">Bandwidth Limit</p>
-                <p class="font-medium">{cluster.maxBandwidthMbps} Mbps</p>
-              </div>
-              <div class="space-y-1">
-                <p class="text-muted-foreground">Current Bandwidth</p>
-                <p class="font-medium">{currentBandwidthMbps} Mbps</p>
               </div>
               <div class="space-y-1">
                 <p class="text-muted-foreground">Visibility</p>

@@ -3800,11 +3800,16 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			shortDesc = c.ShortDescription
 		}
 
-		var currentStreams, currentViewers, currentBwMbps int
-		if ls, ok := liveStatsByCluster[c.ClusterId]; ok {
-			currentStreams = int(ls.ActiveStreams)
-			currentViewers = int(ls.CurrentViewers)
-			currentBwMbps = int((ls.UploadBytesPerSec + ls.DownloadBytesPerSec) * 8 / 1_000_000)
+		var maxStreams, currentStreams, maxViewers, currentViewers, maxBwMbps, currentBwMbps int
+		if c.ClusterType == "edge" {
+			maxStreams = int(c.MaxConcurrentStreams)
+			maxViewers = int(c.MaxConcurrentViewers)
+			maxBwMbps = int(c.MaxBandwidthMbps)
+			if ls, ok := liveStatsByCluster[c.ClusterId]; ok {
+				currentStreams = int(ls.ActiveStreams)
+				currentViewers = int(ls.CurrentViewers)
+				currentBwMbps = int((ls.UploadBytesPerSec + ls.DownloadBytesPerSec) * 8 / 1_000_000)
+			}
 		}
 
 		var clusterServices []string
@@ -3832,11 +3837,11 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			Status:               c.HealthStatus,
 			ClusterType:          c.ClusterType,
 			ShortDescription:     shortDesc,
-			MaxStreams:           int(c.MaxConcurrentStreams),
+			MaxStreams:           maxStreams,
 			CurrentStreams:       currentStreams,
-			MaxViewers:           int(c.MaxConcurrentViewers),
+			MaxViewers:           maxViewers,
 			CurrentViewers:       currentViewers,
-			MaxBandwidthMbps:     int(c.MaxBandwidthMbps),
+			MaxBandwidthMbps:     maxBwMbps,
 			CurrentBandwidthMbps: currentBwMbps,
 			Services:             clusterServices,
 		})

@@ -159,9 +159,9 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_clusters (
     cluster_class VARCHAR(50),
 
     -- ===== CAPACITY LIMITS =====
-    max_concurrent_streams INTEGER DEFAULT 1000,
-    max_concurrent_viewers INTEGER DEFAULT 100000,
-    max_bandwidth_mbps INTEGER DEFAULT 10000,
+    max_concurrent_streams INTEGER DEFAULT 0,
+    max_concurrent_viewers INTEGER DEFAULT 0,
+    max_bandwidth_mbps INTEGER DEFAULT 0,
 
     -- ===== STATUS & HEALTH =====
     is_active BOOLEAN DEFAULT TRUE,
