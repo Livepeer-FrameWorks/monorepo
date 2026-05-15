@@ -1,0 +1,96 @@
+---
+node_baseline_extra_packages: []
+
+node_baseline_packages_by_family:
+  Debian:
+    - bash
+    - ca-certificates
+    - coreutils
+    - curl
+    - dnsutils
+    - file
+    - gzip
+    - iproute2
+    - iputils-ping
+    - jq
+    - lsof
+    - netcat-openbsd
+    - openssl
+    - procps
+    - psmisc
+    - socat
+    - strace
+    - tar
+    - tcpdump
+    - traceroute
+    - unzip
+    - util-linux
+  RedHat:
+    - bash
+    - bind-utils
+    - ca-certificates
+    - coreutils
+    - curl
+    - file
+    - gzip
+    - iproute
+    - iputils
+    - jq
+    - lsof
+    - nmap-ncat
+    - openssl
+    - procps-ng
+    - psmisc
+    - socat
+    - strace
+    - tar
+    - tcpdump
+    - traceroute
+    - unzip
+    - util-linux
+  Archlinux:
+    - bash
+    - bind
+    - ca-certificates
+    - coreutils
+    - curl
+    - file
+    - gzip
+    - iproute2
+    - iputils
+    - jq
+    - lsof
+    - openbsd-netcat
+    - openssl
+    - procps-ng
+    - psmisc
+    - socat
+    - strace
+    - tar
+    - tcpdump
+    - traceroute
+    - unzip
+    - util-linux
+  Alpine:
+    - bash
+    - bind-tools
+    - ca-certificates
+    - coreutils
+    - curl
+    - file
+    - gzip
+    - iproute2
+    - iputils
+    - jq
+    - lsof
+    - netcat-openbsd
+    - openssl
+    - procps
+    - psmisc
+    - socat
+    - strace
+    - tar
+    - tcpdump
+    - traceroute
+    - unzip
+    - util-linux

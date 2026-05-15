@@ -2748,6 +2748,23 @@ func TestPrivateerStaticPeersIncludeReciprocalDependencyConsumers(t *testing.T) 
 	}
 }
 
+func TestPlannedProvisionHostsDedupesAndSorts(t *testing.T) {
+	plan := &orchestrator.ExecutionPlan{
+		AllTasks: []*orchestrator.Task{
+			{Host: "regional-2"},
+			{Host: "central-1"},
+			{Host: "regional-2"},
+			{Host: ""},
+			nil,
+		},
+	}
+	got := plannedProvisionHosts(plan)
+	want := []string{"central-1", "regional-2"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("plannedProvisionHosts = %v, want %v", got, want)
+	}
+}
+
 func TestPrivateerSeedDNSUsesTopologyScopedAliases(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Clusters: map[string]inventory.ClusterConfig{

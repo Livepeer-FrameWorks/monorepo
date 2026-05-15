@@ -517,6 +517,10 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 		runtimeData["service_token"] = token
 	}
 
+	if err := ensureNodeBaseline(ctx, cmd, manifest, plan, sshPool); err != nil {
+		return err
+	}
+
 	// Bootstrap and finalization helpers dial Quartermaster / Purser /
 	// Commodore from the operator host. When the operator is off-mesh those
 	// gRPC endpoints are unreachable directly, so route every operator-
@@ -2707,6 +2711,54 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 	}
 
 	return config, nil
+}
+
+func ensureNodeBaseline(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, pool *ssh.Pool) error {
+	hostNames := plannedProvisionHosts(plan)
+	if len(hostNames) == 0 {
+		return nil
+	}
+	prov, err := provisioner.NewNodeBaselineProvisioner(pool)
+	if err != nil {
+		return fmt.Errorf("node baseline: %w", err)
+	}
+	ux.Subheading(cmd.OutOrStdout(), fmt.Sprintf("Ensuring Node Baseline (%d host(s))", len(hostNames)))
+	for _, hostName := range hostNames {
+		host, ok := manifest.GetHost(hostName)
+		if !ok {
+			return fmt.Errorf("node baseline: host %s not found in manifest", hostName)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "  Ensuring node baseline on %s...\n", hostName)
+		if err := runProvisionPhase(ctx, provisionApplyTimeout, "node baseline", func(phaseCtx context.Context) error {
+			return prov.Provision(phaseCtx, host, provisioner.ServiceConfig{
+				Mode:     "native",
+				Metadata: map[string]any{},
+			})
+		}); err != nil {
+			return fmt.Errorf("node baseline %s: %w", hostName, err)
+		}
+	}
+	ux.Success(cmd.OutOrStdout(), "Node baseline ready")
+	return nil
+}
+
+func plannedProvisionHosts(plan *orchestrator.ExecutionPlan) []string {
+	if plan == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	for _, task := range plan.AllTasks {
+		if task == nil || task.Host == "" {
+			continue
+		}
+		seen[task.Host] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for hostName := range seen {
+		out = append(out, hostName)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // quartermasterMeshGRPCAddr returns "<mesh_ip>:<grpc_port>" for the host

@@ -1,0 +1,36 @@
+---
+- name: Node_baseline | resolve package list
+  ansible.builtin.set_fact:
+    node_baseline_resolved_packages: >-
+      {{
+        (
+          node_baseline_packages_by_family[ansible_facts.os_family] | default([])
+        )
+        + (node_baseline_extra_packages | default([]))
+      }}
+  tags: [install]
+
+- name: Node_baseline | skip unsupported package family
+  ansible.builtin.debug:
+    msg: "No node baseline package mapping for {{ ansible_facts.os_family }}; skipping package baseline."
+  when: node_baseline_resolved_packages | length == 0
+  tags: [install]
+
+- name: Node_baseline | refresh apt package cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  when:
+    - not ansible_check_mode
+    - ansible_facts.os_family == "Debian"
+    - node_baseline_resolved_packages | length > 0
+  tags: [install]
+
+- name: Node_baseline | install baseline packages
+  ansible.builtin.package:
+    name: "{{ node_baseline_resolved_packages | unique | list }}"
+    state: present
+  when:
+    - not ansible_check_mode
+    - node_baseline_resolved_packages | length > 0
+  tags: [install]

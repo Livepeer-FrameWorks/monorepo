@@ -1,0 +1,35 @@
+---
+galaxy_info:
+  role_name: node_baseline
+  author: FrameWorks Infra
+  description: Installs the baseline operator and diagnostic tools expected on provisioned nodes.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble]
+    - name: Debian
+      versions: [bookworm]
+    - name: EL
+      versions: ["9"]
+    - name: ArchLinux
+      versions: [all]
+    - name: Alpine
+      versions: [all]
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Install the FrameWorks node baseline package set.
+    options:
+      node_baseline_extra_packages:
+        type: list
+        elements: str
+        required: false
+        default: []
+        description: Additional packages to install on top of the distro baseline.
+      node_baseline_packages_by_family:
+        type: dict
+        required: false
+        description: Package names keyed by ansible_facts.os_family.
