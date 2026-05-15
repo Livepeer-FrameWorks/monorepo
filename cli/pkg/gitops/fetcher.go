@@ -356,9 +356,15 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 	// Search in services
 	for _, svc := range m.Services {
 		if svc.Name == serviceName {
-			version := svc.ServiceVersion
-			if shouldUsePlatformServiceVersion(m.PlatformVersion, version) {
-				version = m.PlatformVersion
+			// service_version is the artefact provenance label and is
+			// trusted as written: every release built from v0.2.40
+			// onward stamps the platform tag here, and carry-forward
+			// entries preserve the baseline's value verbatim. The only
+			// defensive fallback is when the field is literally empty,
+			// which would mean a malformed manifest.
+			version := strings.TrimSpace(svc.ServiceVersion)
+			if version == "" {
+				version = strings.TrimSpace(m.PlatformVersion)
 			}
 			info := &ServiceInfo{
 				Name:      svc.Name,
@@ -402,22 +408,6 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 	}
 
 	return nil, fmt.Errorf("service %s not found in manifest", serviceName)
-}
-
-func shouldUsePlatformServiceVersion(platformVersion, serviceVersion string) bool {
-	platformVersion = strings.TrimSpace(platformVersion)
-	serviceVersion = strings.TrimSpace(serviceVersion)
-	if platformVersion == "" {
-		return false
-	}
-	if serviceVersion == "" {
-		return true
-	}
-	// Older release manifests accidentally wrote per-component VERSION files
-	// such as "0.2.0" into service_version. First-party service artifacts are
-	// selected and installed by platform release tag, so status/upgrade checks
-	// should compare against the platform tag.
-	return !strings.HasPrefix(serviceVersion, "v")
 }
 
 // populateBinaries fills ServiceInfo.Binaries from native_binaries, preserving

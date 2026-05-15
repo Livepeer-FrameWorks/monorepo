@@ -518,6 +518,24 @@ func edgeReleaseComponentsFromManifest(manifest *gitops.Manifest, remoteOS, remo
 		}
 	}
 	if _, ok := components["caddy"]; !ok {
+		if infra := manifest.GetInfrastructure("caddy"); infra != nil {
+			artifacts, err := edgeInfraArtifacts(infra, remoteOS, remoteArch)
+			if err != nil {
+				if platformFilterSet(remoteOS, remoteArch) {
+					return nil, err
+				}
+			} else {
+				components["caddy"] = edgeReleaseComponentSpec{
+					Version:   strings.TrimSpace(infra.Version),
+					Artifacts: artifacts,
+				}
+				if err := validateEdgeReleaseComponent("caddy", components["caddy"]); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	if _, ok := components["caddy"]; !ok {
 		if info, err := manifest.GetServiceInfo("caddy"); err == nil {
 			artifacts, err := edgeServiceArtifacts(info, remoteOS, remoteArch)
 			if err != nil {
@@ -599,6 +617,37 @@ func edgeExternalArtifacts(dep *gitops.ExternalDependency, remoteOS, remoteArch 
 	}
 	if len(artifacts) == 0 {
 		return nil, fmt.Errorf("%s has no binary artifacts", dep.Name)
+	}
+	return artifacts, nil
+}
+
+func edgeInfraArtifacts(infra *gitops.InfrastructureEntry, remoteOS, remoteArch string) (map[string]edgeReleaseArtifactSpec, error) {
+	if infra == nil {
+		return nil, fmt.Errorf("infrastructure dependency missing")
+	}
+	if platformFilterSet(remoteOS, remoteArch) {
+		name := platformArtifactName(remoteOS, remoteArch)
+		artifact := infra.GetArtifact(name)
+		if artifact == nil {
+			return nil, fmt.Errorf("%s has no binary for %s", infra.Name, name)
+		}
+		return map[string]edgeReleaseArtifactSpec{
+			platformKey(remoteOS, remoteArch): {
+				ArtifactURL: artifact.URL,
+				Checksum:    artifact.Checksum,
+			},
+		}, nil
+	}
+	artifacts := make(map[string]edgeReleaseArtifactSpec, len(infra.Artifacts))
+	for _, artifact := range infra.Artifacts {
+		key, ok := platformKeyFromArtifactName(artifact.Arch)
+		if !ok {
+			return nil, fmt.Errorf("%s binary has invalid platform key %q", infra.Name, artifact.Arch)
+		}
+		artifacts[key] = edgeReleaseArtifactSpec{ArtifactURL: artifact.URL, Checksum: artifact.Checksum}
+	}
+	if len(artifacts) == 0 {
+		return nil, fmt.Errorf("%s has no binary artifacts", infra.Name)
 	}
 	return artifacts, nil
 }

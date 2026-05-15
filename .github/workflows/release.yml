@@ -19,18 +19,105 @@ env:
 jobs:
   define-release-components:
     name: Define Release Components
+    needs: [release-plan]
     runs-on: ubuntu-latest
     outputs:
       image_matrix: ${{ steps.components.outputs.image_matrix }}
       webapp_matrix: ${{ steps.components.outputs.webapp_matrix }}
     steps:
       - uses: actions/checkout@v6
+      - name: Download release-plan decision
+        uses: actions/download-artifact@v8
+        with:
+          name: release-plan
+          path: dist
       - id: components
         run: |
           set -euo pipefail
+          shopt -s nullglob
           COMPONENTS_FILE=".github/release-components.json"
-          printf 'image_matrix=%s\n' "$(jq -c '{service:[.services[] | select(.dockerfile != null) | {name, context, dockerfile}]}' "$COMPONENTS_FILE")" >> "$GITHUB_OUTPUT"
-          printf 'webapp_matrix=%s\n' "$(jq -c '{webapp:.webapps}' "$COMPONENTS_FILE")" >> "$GITHUB_OUTPUT"
+          # Keep full matrices so downstream jobs are never skipped by an
+          # empty matrix. Individual build steps inspect release-plan and
+          # skip expensive work for carry-forward components.
+          image_matrix=$(jq -c '{service:[.services[] | select(.dockerfile != null) | {name, context, dockerfile}]}' "$COMPONENTS_FILE")
+          webapp_matrix=$(jq -c '{webapp:.webapps}' "$COMPONENTS_FILE")
+          echo "image_matrix=${image_matrix}" >> "$GITHUB_OUTPUT"
+          echo "webapp_matrix=${webapp_matrix}" >> "$GITHUB_OUTPUT"
+          echo "Image matrix:" >&2
+          echo "${image_matrix}" | jq '.service | map(.name)' >&2
+          echo "Webapp matrix:" >&2
+          echo "${webapp_matrix}" | jq '.webapp | map(.name)' >&2
+
+  # ---------------------------------------------------------------------------
+  # release-plan: compute per-component source-hash + carry-forward decisions
+  # against the most recent on-track baseline release. Uploads the decision
+  # JSON as an artifact the build, merge, and manifest jobs consume to skip
+  # rebuilds and stamp source_hash on every manifest entry.
+  # See docs/architecture/build-and-packaging.md for the recipe.
+  # ---------------------------------------------------------------------------
+  release-plan:
+    name: Release Plan (source-hash, carry-forward)
+    runs-on: ubuntu-latest
+    outputs:
+      baseline_tag: ${{ steps.plan.outputs.baseline_tag }}
+      build_count: ${{ steps.plan.outputs.build_count }}
+      carry_forward_count: ${{ steps.plan.outputs.carry_forward_count }}
+    steps:
+      - name: Checkout monorepo
+        uses: actions/checkout@v6
+      - name: Generate GitOps token
+        id: gitops_app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.GITOPS_APP_ID }}
+          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+          repositories: gitops
+      - name: Checkout GitOps repo (read-only, for baseline lookup)
+        uses: actions/checkout@v6
+        with:
+          repository: Livepeer-FrameWorks/gitops
+          token: ${{ steps.gitops_app_token.outputs.token }}
+          path: gitops
+          fetch-depth: 1
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: tools/release-plan/go.sum
+        env:
+          GOTOOLCHAIN: local
+      - name: Run release-plan
+        id: plan
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cd tools/release-plan
+          go run . \
+            --monorepo "${GITHUB_WORKSPACE}" \
+            --gitops "${GITHUB_WORKSPACE}/gitops" \
+            --tag "${{ github.ref_name }}" \
+            --out "${GITHUB_WORKSPACE}/dist/release-plan.json"
+          # Surface key counts to the workflow summary.
+          jq -r '"baseline_tag=\(.baseline_tag // "")"' "${GITHUB_WORKSPACE}/dist/release-plan.json" >> "$GITHUB_OUTPUT"
+          jq -r '"build_count=\(.summary.build_count)"' "${GITHUB_WORKSPACE}/dist/release-plan.json" >> "$GITHUB_OUTPUT"
+          jq -r '"carry_forward_count=\(.summary.carry_forward_count)"' "${GITHUB_WORKSPACE}/dist/release-plan.json" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Release plan"
+            echo ""
+            jq -r '"- Platform: \(.platform_version) (track \(.track))\n- Baseline: \(.baseline_tag // "none")\n- Build: \(.summary.build_count)\n- Carry-forward: \(.summary.carry_forward_count)"' "${GITHUB_WORKSPACE}/dist/release-plan.json"
+            echo ""
+            echo "<details><summary>Per-component decisions</summary>"
+            echo ""
+            echo '```json'
+            jq '.decisions | map_values({action, source_hash, baseline_source_hash, baseline_tag})' "${GITHUB_WORKSPACE}/dist/release-plan.json"
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload release-plan artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-plan
+          path: dist/release-plan.json
 
   # ---------------------------------------------------------------------------
   # Service Docker images — split amd64 (ubuntu) + arm64 (native self-hosted)
@@ -49,10 +136,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Download release-plan decision
+        uses: actions/download-artifact@v8
+        with:
+          name: release-plan
+          path: dist
+
+      - name: Check release-plan decision
+        id: plan
+        run: |
+          action=$(jq -r --arg n "${{ matrix.service.name }}" '.decisions[$n].action // "build"' dist/release-plan.json)
+          echo "action=${action}" >> "$GITHUB_OUTPUT"
+          echo "${{ matrix.service.name }} action=${action}"
+
       - name: Set up Docker Buildx
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -60,26 +162,27 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to DockerHub
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Read service component version
+        if: ${{ steps.plan.outputs.action == 'build' }}
         id: svcver
         run: |
-          VERSION_FILE="${{ matrix.service.context }}/VERSION"
+          # Webapps keep their npm-aligned semver in package.json; Go services
+          # ship in lockstep with the platform tag, so we use github.ref_name.
           PACKAGE_JSON="${{ matrix.service.context }}/package.json"
-          if [[ -f "$VERSION_FILE" ]]; then
-            echo "version=$(tr -d '\n' < "$VERSION_FILE")" >> "$GITHUB_OUTPUT"
-          elif [[ -f "$PACKAGE_JSON" ]]; then
+          if [[ -f "$PACKAGE_JSON" ]]; then
             echo "version=$(jq -r .version "$PACKAGE_JSON")" >> "$GITHUB_OUTPUT"
           else
-            echo "ERROR: ${{ matrix.service.context }} has neither VERSION nor package.json" >&2
-            exit 1
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build & push ${{ matrix.service.name }} (amd64)
+        if: ${{ steps.plan.outputs.action == 'build' }}
         id: build
         uses: docker/build-push-action@v7
         with:
@@ -102,6 +205,7 @@ jobs:
           cache-to: type=gha,mode=max,ignore-error=true,scope=${{ matrix.service.name }}-amd64
 
       - name: Write digest artifact
+        if: ${{ steps.plan.outputs.action == 'build' }}
         run: |
           mkdir -p dist
           cat > dist/arch-digest-${{ matrix.service.name }}-amd64.json <<JSON
@@ -112,11 +216,17 @@ jobs:
           }
           JSON
 
+      - name: Write carry-forward placeholder
+        if: ${{ steps.plan.outputs.action != 'build' }}
+        run: |
+          mkdir -p dist
+          echo "${{ matrix.service.name }} carry_forward" > dist/skip-${{ matrix.service.name }}-amd64.txt
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: arch-digest-${{ matrix.service.name }}-amd64
-          path: dist/arch-digest-${{ matrix.service.name }}-amd64.json
+          path: dist/*
 
   build-images-arm64:
     name: Build Images (arm64)
@@ -132,10 +242,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Download release-plan decision
+        uses: actions/download-artifact@v8
+        with:
+          name: release-plan
+          path: dist
+
+      - name: Check release-plan decision
+        id: plan
+        run: |
+          action=$(jq -r --arg n "${{ matrix.service.name }}" '.decisions[$n].action // "build"' dist/release-plan.json)
+          echo "action=${action}" >> "$GITHUB_OUTPUT"
+          echo "${{ matrix.service.name }} action=${action}"
+
       - name: Set up Docker Buildx
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -143,26 +268,27 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to DockerHub
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Read service component version
+        if: ${{ steps.plan.outputs.action == 'build' }}
         id: svcver
         run: |
-          VERSION_FILE="${{ matrix.service.context }}/VERSION"
+          # Webapps keep their npm-aligned semver in package.json; Go services
+          # ship in lockstep with the platform tag, so we use github.ref_name.
           PACKAGE_JSON="${{ matrix.service.context }}/package.json"
-          if [[ -f "$VERSION_FILE" ]]; then
-            echo "version=$(tr -d '\n' < "$VERSION_FILE")" >> "$GITHUB_OUTPUT"
-          elif [[ -f "$PACKAGE_JSON" ]]; then
+          if [[ -f "$PACKAGE_JSON" ]]; then
             echo "version=$(jq -r .version "$PACKAGE_JSON")" >> "$GITHUB_OUTPUT"
           else
-            echo "ERROR: ${{ matrix.service.context }} has neither VERSION nor package.json" >&2
-            exit 1
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build & push ${{ matrix.service.name }} (arm64)
+        if: ${{ steps.plan.outputs.action == 'build' }}
         id: build
         uses: docker/build-push-action@v7
         with:
@@ -185,6 +311,7 @@ jobs:
           cache-to: type=gha,mode=max,ignore-error=true,scope=${{ matrix.service.name }}-arm64
 
       - name: Write digest artifact
+        if: ${{ steps.plan.outputs.action == 'build' }}
         run: |
           mkdir -p dist
           cat > dist/arch-digest-${{ matrix.service.name }}-arm64.json <<JSON
@@ -195,11 +322,17 @@ jobs:
           }
           JSON
 
+      - name: Write carry-forward placeholder
+        if: ${{ steps.plan.outputs.action != 'build' }}
+        run: |
+          mkdir -p dist
+          echo "${{ matrix.service.name }} carry_forward" > dist/skip-${{ matrix.service.name }}-arm64.txt
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: arch-digest-${{ matrix.service.name }}-arm64
-          path: dist/arch-digest-${{ matrix.service.name }}-arm64.json
+          path: dist/*
 
   # Merge per-arch images into multi-arch manifests
   merge-image-manifests:
@@ -212,6 +345,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Download release-plan decision
+        uses: actions/download-artifact@v8
+        with:
+          name: release-plan
+          path: dist
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -248,8 +387,15 @@ jobs:
           set -euo pipefail
           TAG="${{ github.ref_name }}"
           COMPONENTS_FILE=".github/release-components.json"
+          PLAN_FILE="dist/release-plan.json"
+          shopt -s nullglob
           mkdir -p final
           jq -r '.services[] | select(.dockerfile != null) | .name' "$COMPONENTS_FILE" | while read -r SVC; do
+            action=$(jq -r --arg n "$SVC" '.decisions[$n].action // "build"' "$PLAN_FILE")
+            if [[ "$action" == "carry_forward" ]]; then
+              echo "==> Skipping multi-arch manifest for ${SVC}: carry_forward"
+              continue
+            fi
             GHCR="${{ env.REGISTRY }}/frameworks-${SVC}"
             DH="livepeerframeworks/frameworks-${SVC}"
 
@@ -295,12 +441,13 @@ jobs:
           }
           JSON
           done
+          touch final/.keep
 
       - name: Upload merged digests
         uses: actions/upload-artifact@v7
         with:
           name: image-digest-services
-          path: final/image-*.json
+          path: final/*
 
   # ---------------------------------------------------------------------------
   # Webapp Docker images — split amd64 (ubuntu) + arm64 (native self-hosted)
@@ -319,7 +466,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Download release-plan decision
+        uses: actions/download-artifact@v8
+        with:
+          name: release-plan
+          path: dist
+
+      - name: Check release-plan decision
+        id: plan
+        run: |
+          action=$(jq -r --arg n "${{ matrix.webapp.name }}" '.decisions[$n].action // "build"' dist/release-plan.json)
+          echo "action=${action}" >> "$GITHUB_OUTPUT"
+          echo "${{ matrix.webapp.name }} action=${action}"
+
       - name: Create GitOps app token
+        if: ${{ steps.plan.outputs.action == 'build' }}
         id: gitops_app_token
         uses: actions/create-github-app-token@v3
         with:
@@ -328,6 +489,7 @@ jobs:
           repositories: gitops
 
       - name: Checkout GitOps config
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: actions/checkout@v6
         with:
           repository: Livepeer-FrameWorks/gitops
@@ -338,6 +500,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Set up Go
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: actions/setup-go@v6
         with:
           go-version-file: .go-version
@@ -346,6 +509,7 @@ jobs:
           GOTOOLCHAIN: local
 
       - name: Generate frontend build env
+        if: ${{ steps.plan.outputs.action == 'build' }}
         id: frontend_env
         run: |
           set -euo pipefail
@@ -375,19 +539,23 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js + pnpm
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: ./.github/actions/setup-node-pnpm
 
       - name: Build player package
+        if: ${{ steps.plan.outputs.action == 'build' }}
         run: |
           cd npm_player
           pnpm run build
 
       - name: Build studio package
+        if: ${{ steps.plan.outputs.action == 'build' }}
         run: |
           cd npm_studio
           pnpm run build
 
       - name: Build application
+        if: ${{ steps.plan.outputs.action == 'build' }}
         run: |
           set -a
           . "$RUNNER_TEMP/frontend.env"
@@ -396,14 +564,17 @@ jobs:
           pnpm run build
 
       - name: Create static bundle
+        if: ${{ steps.plan.outputs.action == 'build' }}
         run: |
           cd ${{ matrix.webapp.context }}
           tar czf ../${{ matrix.webapp.name }}-build.tar.gz ${{ matrix.webapp.build_dir }}/
 
       - name: Set up Docker Buildx
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -411,12 +582,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to DockerHub
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push Docker image (amd64)
+        if: ${{ steps.plan.outputs.action == 'build' }}
         id: build
         uses: docker/build-push-action@v7
         with:
@@ -434,6 +607,7 @@ jobs:
           cache-to: type=gha,mode=max,ignore-error=true,scope=${{ matrix.webapp.name }}-amd64
 
       - name: Write digest artifact
+        if: ${{ steps.plan.outputs.action == 'build' }}
         run: |
           mkdir -p dist
           cat > dist/arch-digest-${{ matrix.webapp.name }}-amd64.json <<JSON
@@ -443,13 +617,20 @@ jobs:
           }
           JSON
 
+      - name: Write carry-forward placeholder
+        if: ${{ steps.plan.outputs.action != 'build' }}
+        run: |
+          mkdir -p dist
+          echo "${{ matrix.webapp.name }} carry_forward" > dist/skip-${{ matrix.webapp.name }}-amd64.txt
+
       - name: Upload digest artifact
         uses: actions/upload-artifact@v7
         with:
           name: arch-digest-${{ matrix.webapp.name }}-amd64
-          path: dist/arch-digest-${{ matrix.webapp.name }}-amd64.json
+          path: dist/*
 
       - name: Upload static bundle artifact
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.webapp.name }}-bundle
@@ -469,7 +650,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Download release-plan decision
+        uses: actions/download-artifact@v8
+        with:
+          name: release-plan
+          path: dist
+
+      - name: Check release-plan decision
+        id: plan
+        run: |
+          action=$(jq -r --arg n "${{ matrix.webapp.name }}" '.decisions[$n].action // "build"' dist/release-plan.json)
+          echo "action=${action}" >> "$GITHUB_OUTPUT"
+          echo "${{ matrix.webapp.name }} action=${action}"
+
       - name: Create GitOps app token
+        if: ${{ steps.plan.outputs.action == 'build' }}
         id: gitops_app_token
         uses: actions/create-github-app-token@v3
         with:
@@ -478,6 +673,7 @@ jobs:
           repositories: gitops
 
       - name: Checkout GitOps config
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: actions/checkout@v6
         with:
           repository: Livepeer-FrameWorks/gitops
@@ -488,6 +684,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Set up Go
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: actions/setup-go@v6
         with:
           go-version-file: .go-version
@@ -496,6 +693,7 @@ jobs:
           GOTOOLCHAIN: local
 
       - name: Generate frontend build env
+        if: ${{ steps.plan.outputs.action == 'build' }}
         id: frontend_env
         run: |
           set -euo pipefail
@@ -525,9 +723,11 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -535,12 +735,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to DockerHub
+        if: ${{ steps.plan.outputs.action == 'build' }}
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push Docker image (arm64)
+        if: ${{ steps.plan.outputs.action == 'build' }}
         id: build
         uses: docker/build-push-action@v7
         with:
@@ -558,6 +760,7 @@ jobs:
           cache-to: type=gha,mode=max,ignore-error=true,scope=${{ matrix.webapp.name }}-arm64
 
       - name: Write digest artifact
+        if: ${{ steps.plan.outputs.action == 'build' }}
         run: |
           mkdir -p dist
           cat > dist/arch-digest-${{ matrix.webapp.name }}-arm64.json <<JSON
@@ -567,11 +770,17 @@ jobs:
           }
           JSON
 
+      - name: Write carry-forward placeholder
+        if: ${{ steps.plan.outputs.action != 'build' }}
+        run: |
+          mkdir -p dist
+          echo "${{ matrix.webapp.name }} carry_forward" > dist/skip-${{ matrix.webapp.name }}-arm64.txt
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: arch-digest-${{ matrix.webapp.name }}-arm64
-          path: dist/arch-digest-${{ matrix.webapp.name }}-arm64.json
+          path: dist/*
 
   # Merge per-arch webapp images into multi-arch manifests
   merge-webapp-manifests:
@@ -584,6 +793,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Download release-plan decision
+        uses: actions/download-artifact@v8
+        with:
+          name: release-plan
+          path: dist
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -620,8 +835,15 @@ jobs:
           set -euo pipefail
           TAG="${{ github.ref_name }}"
           COMPONENTS_FILE=".github/release-components.json"
+          PLAN_FILE="dist/release-plan.json"
+          shopt -s nullglob
           mkdir -p final
           jq -r '.webapps[].name' "$COMPONENTS_FILE" | while read -r APP; do
+            action=$(jq -r --arg n "$APP" '.decisions[$n].action // "build"' "$PLAN_FILE")
+            if [[ "$action" == "carry_forward" ]]; then
+              echo "==> Skipping multi-arch manifest for ${APP}: carry_forward"
+              continue
+            fi
             GHCR="${{ env.REGISTRY }}/frameworks-${APP}"
             DH="livepeerframeworks/frameworks-${APP}"
 
@@ -665,12 +887,13 @@ jobs:
           }
           JSON
           done
+          touch final/.keep
 
       - name: Upload merged digests
         uses: actions/upload-artifact@v7
         with:
           name: image-digest-webapps
-          path: final/image-*.json
+          path: final/*
 
   # CLI linux/amd64 — built on GitHub-hosted ubuntu runner
   build-cli:
@@ -681,8 +904,8 @@ jobs:
       - name: Read CLI component version
         id: compver
         run: |
-          ver=$(tr -d '\n' < cli/VERSION)
-          echo "value=${ver}" >> "$GITHUB_OUTPUT"
+          # CLI ships in lockstep with the platform tag.
+          echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v6
         with:
           go-version-file: .go-version
@@ -718,8 +941,8 @@ jobs:
       - name: Read CLI component version
         id: compver
         run: |
-          ver=$(tr -d '\n' < cli/VERSION)
-          echo "value=${ver}" >> "$GITHUB_OUTPUT"
+          # CLI ships in lockstep with the platform tag.
+          echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v6
         with:
           go-version-file: .go-version
@@ -777,10 +1000,17 @@ jobs:
   # Linux/amd64 service binaries — built on GitHub-hosted ubuntu runner
   build-service-binaries-amd64:
     name: Build Service Binaries (linux/amd64)
+    needs: [release-plan]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Download release-plan decision
+        uses: actions/download-artifact@v8
+        with:
+          name: release-plan
+          path: dist
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -798,10 +1028,13 @@ jobs:
           GOARCH: amd64
         run: |
           set -euo pipefail
+          shopt -s nullglob
           COMPONENTS_FILE=".github/release-components.json"
+          PLAN_FILE="dist/release-plan.json"
           VERSION="${{ github.ref_name }}"
           BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           mkdir -p dist/binaries
+          touch dist/binaries/.keep
 
           jq -c '.services[] | {name, context, cmd, cgo}' "$COMPONENTS_FILE" | while read -r svc; do
             name=$(echo "$svc" | jq -r .name)
@@ -809,13 +1042,18 @@ jobs:
             cmd=$(echo "$svc" | jq -r .cmd)
             cgo=$(echo "$svc" | jq -r .cgo)
 
+            # Skip carry-forward components; the manifest job re-emits
+            # their BOM from the baseline. Missing decision = build.
+            action=$(jq -r --arg n "$name" '.decisions[$n].action // "build"' "$PLAN_FILE")
+            if [[ "$action" == "carry_forward" ]]; then
+              echo "==> Skipping ${name} (linux/amd64): carry_forward from $(jq -r --arg n "$name" '.decisions[$n].baseline_tag' "$PLAN_FILE")"
+              continue
+            fi
+
             echo "==> Building ${name} (linux/amd64)"
 
-            if [[ -f "${context}/VERSION" ]]; then
-              svcver=$(tr -d '\n' < "${context}/VERSION")
-            else
-              svcver="0.0.0"
-            fi
+            # Go services ship in lockstep with the platform tag.
+            svcver="${VERSION}"
 
             BINARY="frameworks-${name}-linux-amd64"
             OUTPUT="frameworks-${name}-${VERSION}-linux-amd64"
@@ -854,15 +1092,22 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: binary-all-linux-amd64
-          path: dist/binaries/*.tar.gz
+          path: dist/binaries/*
 
   # Linux/arm64 service binaries — built on GitHub-hosted ARM runner (native, no QEMU)
   build-service-binaries-arm64:
     name: Build Service Binaries (linux/arm64)
+    needs: [release-plan]
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Download release-plan decision
+        uses: actions/download-artifact@v8
+        with:
+          name: release-plan
+          path: dist
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -881,9 +1126,11 @@ jobs:
         run: |
           set -euo pipefail
           COMPONENTS_FILE=".github/release-components.json"
+          PLAN_FILE="dist/release-plan.json"
           VERSION="${{ github.ref_name }}"
           BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           mkdir -p dist/binaries
+          touch dist/binaries/.keep
 
           jq -c '.services[] | {name, context, cmd, cgo}' "$COMPONENTS_FILE" | while read -r svc; do
             name=$(echo "$svc" | jq -r .name)
@@ -891,13 +1138,16 @@ jobs:
             cmd=$(echo "$svc" | jq -r .cmd)
             cgo=$(echo "$svc" | jq -r .cgo)
 
+            action=$(jq -r --arg n "$name" '.decisions[$n].action // "build"' "$PLAN_FILE")
+            if [[ "$action" == "carry_forward" ]]; then
+              echo "==> Skipping ${name} (linux/arm64): carry_forward from $(jq -r --arg n "$name" '.decisions[$n].baseline_tag' "$PLAN_FILE")"
+              continue
+            fi
+
             echo "==> Building ${name} (linux/arm64)"
 
-            if [[ -f "${context}/VERSION" ]]; then
-              svcver=$(tr -d '\n' < "${context}/VERSION")
-            else
-              svcver="0.0.0"
-            fi
+            # Go services ship in lockstep with the platform tag.
+            svcver="${VERSION}"
 
             BINARY="frameworks-${name}-linux-arm64"
             OUTPUT="frameworks-${name}-${VERSION}-linux-arm64"
@@ -936,16 +1186,23 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: binary-all-linux-arm64
-          path: dist/binaries/*.tar.gz
+          path: dist/binaries/*
 
   # Darwin/arm64 service binaries — built on self-hosted Mac, signed and notarized.
   # CGO services (quartermaster, foghorn) are skipped — no darwin binary for those.
   build-service-binaries-darwin:
     name: Build Service Binaries (darwin/arm64)
+    needs: [release-plan]
     runs-on: macos-arm64-self-hosted
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Download release-plan decision
+        uses: actions/download-artifact@v8
+        with:
+          name: release-plan
+          path: dist
 
       - name: Add Homebrew to PATH
         run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
@@ -967,22 +1224,27 @@ jobs:
         run: |
           set -euo pipefail
           COMPONENTS_FILE=".github/release-components.json"
+          PLAN_FILE="dist/release-plan.json"
           VERSION="${{ github.ref_name }}"
           BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           mkdir -p dist/binaries
+          touch dist/binaries/.keep
 
           jq -c '.services[] | select(.darwin_binary) | {name, context, cmd}' "$COMPONENTS_FILE" | while read -r svc; do
             name=$(echo "$svc" | jq -r .name)
             context=$(echo "$svc" | jq -r .context)
             cmd=$(echo "$svc" | jq -r .cmd)
 
+            action=$(jq -r --arg n "$name" '.decisions[$n].action // "build"' "$PLAN_FILE")
+            if [[ "$action" == "carry_forward" ]]; then
+              echo "==> Skipping ${name} (darwin/arm64): carry_forward from $(jq -r --arg n "$name" '.decisions[$n].baseline_tag' "$PLAN_FILE")"
+              continue
+            fi
+
             echo "==> Building ${name} (darwin/arm64)"
 
-            if [[ -f "${context}/VERSION" ]]; then
-              svcver=$(tr -d '\n' < "${context}/VERSION")
-            else
-              svcver="0.0.0"
-            fi
+            # Go services ship in lockstep with the platform tag.
+            svcver="${VERSION}"
 
             BINARY="frameworks-${name}-darwin-arm64"
             OUTPUT="frameworks-${name}-${VERSION}-darwin-arm64.zip"
@@ -1034,7 +1296,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: binary-all-darwin-arm64
-          path: dist/binaries/*.zip
+          path: dist/binaries/*
 
       - name: Clean up signing keychain
         if: always()
@@ -1248,6 +1510,7 @@ jobs:
   manifest:
     name: Generate & Publish Manifest
     needs:
+      - release-plan
       - merge-image-manifests
       - merge-webapp-manifests
       - build-cli
@@ -1283,6 +1546,12 @@ jobs:
           pattern: image-digest-*
           path: dist/digests
           merge-multiple: true
+
+      - name: Download release-plan decision
+        uses: actions/download-artifact@v8
+        with:
+          name: release-plan
+          path: dist
 
       # Native binary tarballs / zips are pulled in so the manifest can embed
       # per-artifact sha256 checksums. Without these, consumers that download
@@ -1405,6 +1674,7 @@ jobs:
       - name: Generate manifest
         run: |
           set -euo pipefail
+          shopt -s nullglob
           COMPONENTS_FILE=".github/release-components.json"
           WEBAPP_NAMES="$(jq -r '.webapps[].name' "$COMPONENTS_FILE")"
           CGO_SERVICES="$(jq -r '.services[] | select(.cgo) | .name' "$COMPONENTS_FILE")"
@@ -1435,12 +1705,24 @@ jobs:
             ghcr_image=$(jq -r '.ghcr_image // empty' "$f")
             ghcr_digest=$(jq -r '.ghcr_digest // empty' "$f")
 
+            # Source-hash from the pre-build release-plan decision; lets the
+            # next release decide carry-forward against this manifest.
+            source_hash=""
+            if [[ -f dist/release-plan.json ]]; then
+              source_hash=$(jq -r --arg n "$name" '.decisions[$n].source_hash // ""' dist/release-plan.json)
+            fi
+
             cat >> dist/manifest.yaml <<YAML
             - name: ${name}
               service_version: ${svcver}
               image: ${image}
               digest: ${digest}
           YAML
+            if [[ -n "$source_hash" ]]; then
+              cat >> dist/manifest.yaml <<YAML
+              source_hash: ${source_hash}
+          YAML
+            fi
             if [[ -n "$dockerhub_image" && -n "$ghcr_image" ]]; then
               cat >> dist/manifest.yaml <<YAML
               images:
@@ -1453,6 +1735,45 @@ jobs:
           YAML
             fi
           done
+
+          # Carry-forward services: the build job skipped these, so there's
+          # no dist/digests entry. Emit each carried service's BOM from the
+          # baseline release manifest, preserving the older service_version
+          # label so Foghorn's edge reconciler does not roll any node.
+          if [[ -f dist/release-plan.json ]]; then
+            jq -c '.decisions | to_entries[] | select(.value.kind == "service" and .value.action == "carry_forward")' dist/release-plan.json | while read -r dec; do
+              name=$(echo "$dec" | jq -r .key)
+              svc=$(echo "$dec" | jq -c .value.carried_service)
+              cf_from=$(echo "$dec" | jq -r .value.baseline_tag)
+              src_hash=$(echo "$dec" | jq -r .value.source_hash)
+              c_image=$(echo "$svc" | jq -r .image)
+              c_digest=$(echo "$svc" | jq -r .digest)
+              c_svcver=$(echo "$svc" | jq -r .service_version)
+              cat >> dist/manifest.yaml <<YAML
+            - name: ${name}
+              service_version: ${c_svcver}
+              image: ${c_image}
+              digest: ${c_digest}
+              source_hash: ${src_hash}
+              carried_from: ${cf_from}
+          YAML
+              if echo "$svc" | jq -e '.images.dockerhub.image != null and .images.ghcr.image != null' > /dev/null; then
+                c_dh_image=$(echo "$svc" | jq -r .images.dockerhub.image)
+                c_dh_digest=$(echo "$svc" | jq -r .images.dockerhub.digest)
+                c_ghcr_image=$(echo "$svc" | jq -r .images.ghcr.image)
+                c_ghcr_digest=$(echo "$svc" | jq -r .images.ghcr.digest)
+                cat >> dist/manifest.yaml <<YAML
+              images:
+                dockerhub:
+                  image: ${c_dh_image}
+                  digest: ${c_dh_digest}
+                ghcr:
+                  image: ${c_ghcr_image}
+                  digest: ${c_ghcr_digest}
+          YAML
+              fi
+            done
+          fi
 
           # Native Binaries (for bare-metal deployment).
           # Each artifact embeds a sha256 checksum computed from the built
@@ -1522,6 +1843,13 @@ jobs:
 
           # Binary-only services (no Docker image, only native binaries)
           for svc in $BINARY_ONLY_SERVICES; do
+            action="build"
+            if [[ -f dist/release-plan.json ]]; then
+              action=$(jq -r --arg n "$svc" '.decisions[$n].action // "build"' dist/release-plan.json)
+            fi
+            if [[ "$action" == "carry_forward" ]]; then
+              continue
+            fi
             cat >> dist/manifest.yaml <<YAML
             - name: ${svc}
               artifacts:
@@ -1529,6 +1857,22 @@ jobs:
             emit_linux_artifacts "$svc"
             emit_darwin_artifact "$svc"
           done
+
+          # Carry-forward native binaries: copy artifact URLs+checksums
+          # verbatim from the baseline release manifest. The URLs still
+          # point at the older release's immutable GitHub Release assets;
+          # operators do not re-download because Ansible.get_url
+          # checksum-skips when the local file already matches.
+          if [[ -f dist/release-plan.json ]]; then
+            jq -c '.decisions | to_entries[] | select(.value.action == "carry_forward" and .value.carried_native_binary != null)' dist/release-plan.json | while read -r dec; do
+              name=$(echo "$dec" | jq -r .key)
+              cat >> dist/manifest.yaml <<YAML
+            - name: ${name}
+              artifacts:
+          YAML
+              echo "$dec" | jq -r '.value.carried_native_binary.artifacts[] | "                - arch: \(.arch)\n                  file: \(.file)\n                  url: \(.url)\n                  checksum: \(.checksum)"' >> dist/manifest.yaml
+            done
+          fi
 
           # Interfaces (reference implementations)
           echo "" >> dist/manifest.yaml
@@ -1546,6 +1890,10 @@ jobs:
             dockerhub_digest=$(jq -r '.dockerhub_digest // empty' "$f")
             ghcr_image=$(jq -r '.ghcr_image // empty' "$f")
             ghcr_digest=$(jq -r '.ghcr_digest // empty' "$f")
+            source_hash=""
+            if [[ -f dist/release-plan.json ]]; then
+              source_hash=$(jq -r --arg n "$name" '.decisions[$n].source_hash // ""' dist/release-plan.json)
+            fi
 
             bundle="${name}-build.tar.gz"
 
@@ -1555,6 +1903,11 @@ jobs:
               digest: ${digest}
               static_bundle: ${bundle}
           YAML
+            if [[ -n "$source_hash" ]]; then
+              cat >> dist/manifest.yaml <<YAML
+              source_hash: ${source_hash}
+          YAML
+            fi
             if [[ -n "$dockerhub_image" && -n "$ghcr_image" ]]; then
               cat >> dist/manifest.yaml <<YAML
               images:
@@ -1567,6 +1920,44 @@ jobs:
           YAML
             fi
           done
+
+          # Carry-forward interfaces: same shape as carry-forward services
+          # but emitted into the interfaces[] section. Webapp source-hash
+          # recipe lives in tools/release-plan/webapp.go.
+          if [[ -f dist/release-plan.json ]]; then
+            jq -c '.decisions | to_entries[] | select(.value.kind == "interface" and .value.action == "carry_forward")' dist/release-plan.json | while read -r dec; do
+              name=$(echo "$dec" | jq -r .key)
+              iface=$(echo "$dec" | jq -c '.value.carried_interface')
+              cf_from=$(echo "$dec" | jq -r .value.baseline_tag)
+              src_hash=$(echo "$dec" | jq -r .value.source_hash)
+              i_image=$(echo "$iface" | jq -r .image)
+              i_digest=$(echo "$iface" | jq -r .digest)
+              bundle=$(echo "$iface" | jq -r --arg fallback "${name}-build.tar.gz" '.static_bundle // $fallback')
+              cat >> dist/manifest.yaml <<YAML
+            - name: ${name}
+              image: ${i_image}
+              digest: ${i_digest}
+              static_bundle: ${bundle}
+              source_hash: ${src_hash}
+              carried_from: ${cf_from}
+          YAML
+              if echo "$iface" | jq -e '.images.dockerhub.image != null and .images.ghcr.image != null' > /dev/null; then
+                c_dh_image=$(echo "$iface" | jq -r .images.dockerhub.image)
+                c_dh_digest=$(echo "$iface" | jq -r .images.dockerhub.digest)
+                c_ghcr_image=$(echo "$iface" | jq -r .images.ghcr.image)
+                c_ghcr_digest=$(echo "$iface" | jq -r .images.ghcr.digest)
+                cat >> dist/manifest.yaml <<YAML
+              images:
+                dockerhub:
+                  image: ${c_dh_image}
+                  digest: ${c_dh_digest}
+                ghcr:
+                  image: ${c_ghcr_image}
+                  digest: ${c_ghcr_digest}
+          YAML
+              fi
+            done
+          fi
 
           # External Dependencies (MistServer from separate repo)
           echo "" >> dist/manifest.yaml
@@ -1654,16 +2045,37 @@ jobs:
         with:
           name: chartroom-bundle
           path: dist/
+        continue-on-error: true
       - name: Download foredeck bundle
         uses: actions/download-artifact@v8
         with:
           name: foredeck-bundle
           path: dist/
+        continue-on-error: true
       - name: Download logbook bundle
         uses: actions/download-artifact@v8
         with:
           name: logbook-bundle
           path: dist/
+        continue-on-error: true
+      - name: Fetch carried webapp bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ ! -f dist/release-plan.json ]]; then
+            exit 0
+          fi
+          jq -c '.decisions | to_entries[] | select(.value.kind == "interface" and .value.action == "carry_forward")' dist/release-plan.json | while read -r dec; do
+            name=$(echo "$dec" | jq -r .key)
+            baseline=$(echo "$dec" | jq -r .value.baseline_tag)
+            bundle=$(echo "$dec" | jq -r --arg fallback "${name}-build.tar.gz" '(.value.carried_interface.static_bundle // $fallback)')
+            if [[ -f "dist/${bundle}" ]]; then
+              continue
+            fi
+            echo "Downloading carried bundle ${bundle} from ${baseline}"
+            gh release download "${baseline}" --repo "${{ github.repository }}" --pattern "${bundle}" --dir dist
+          done
       - name: Generate SHA256 checksums for webapp bundles
         run: |
           set -euo pipefail

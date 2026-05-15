@@ -110,6 +110,7 @@ api_tenants/quartermaster
 api_ticketing/deckhand
 api_assets/chandler
 scripts/registry/registry
+tools/release-plan/release-plan
 
 # Security & Sensitive
 *.pem

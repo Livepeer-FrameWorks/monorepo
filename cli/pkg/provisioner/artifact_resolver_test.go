@@ -56,6 +56,7 @@ infrastructure:
   - name: nginx
     version: "1.29.3"
     image: nginx:1.29.3-alpine
+    digest: sha256:nginxdigest
 `)
 
 	image, err := imageFromReleaseManifest("nginx", "stable", map[string]any{
@@ -64,7 +65,7 @@ infrastructure:
 	if err != nil {
 		t.Fatalf("imageFromReleaseManifest: %v", err)
 	}
-	if image != "nginx:1.29.3-alpine" {
+	if image != "nginx:1.29.3-alpine@sha256:nginxdigest" {
 		t.Fatalf("image = %q", image)
 	}
 }
@@ -121,6 +122,80 @@ interfaces:
 	}
 	if image != "ghcr.io/livepeer-frameworks/frameworks-chartroom:vtest@sha256:ghcr" {
 		t.Fatalf("image = %q", image)
+	}
+}
+
+func TestImageFromReleaseManifestPinsInfrastructureByDigest(t *testing.T) {
+	repo := writeTestGitopsRelease(t, `
+platform_version: vtest
+infrastructure:
+  - name: caddy
+    version: "2.8.4"
+    image: caddy:2.8.4
+    digest: sha256:226d1f059b75399fe19182893c7184591c07b97afc8dfcf44eeb80c9a77a530f
+`)
+
+	image, err := imageFromReleaseManifest("caddy", "stable", map[string]any{
+		"gitops_repository": repo,
+	})
+	if err != nil {
+		t.Fatalf("imageFromReleaseManifest: %v", err)
+	}
+	if want := "caddy:2.8.4@sha256:226d1f059b75399fe19182893c7184591c07b97afc8dfcf44eeb80c9a77a530f"; image != want {
+		t.Fatalf("image = %q, want %q", image, want)
+	}
+}
+
+func TestImageFromReleaseManifestInfrastructureRejectsMissingDigest(t *testing.T) {
+	repo := writeTestGitopsRelease(t, `
+platform_version: vtest
+infrastructure:
+  - name: nginx
+    version: "1.29.3"
+    image: nginx:1.29.3-alpine
+`)
+
+	_, err := imageFromReleaseManifest("nginx", "stable", map[string]any{
+		"gitops_repository": repo,
+	})
+	if err == nil {
+		t.Fatal("imageFromReleaseManifest accepted infrastructure image without digest")
+	}
+}
+
+func TestImageFromReleaseManifestPinsExternalDepByDigest(t *testing.T) {
+	repo := writeTestGitopsRelease(t, `
+platform_version: vtest
+external_dependencies:
+  - name: go-livepeer
+    image: ghcr.io/livepeer-frameworks/go-livepeer:vtest
+    digest: sha256:abc123
+`)
+
+	image, err := imageFromReleaseManifest("livepeer-gateway", "stable", map[string]any{
+		"gitops_repository": repo,
+	})
+	if err != nil {
+		t.Fatalf("imageFromReleaseManifest: %v", err)
+	}
+	if want := "ghcr.io/livepeer-frameworks/go-livepeer:vtest@sha256:abc123"; image != want {
+		t.Fatalf("image = %q, want %q", image, want)
+	}
+}
+
+func TestImageFromReleaseManifestExternalDepRejectsMissingDigest(t *testing.T) {
+	repo := writeTestGitopsRelease(t, `
+platform_version: vtest
+external_dependencies:
+  - name: go-livepeer
+    image: ghcr.io/livepeer-frameworks/go-livepeer:vtest
+`)
+
+	_, err := imageFromReleaseManifest("livepeer-gateway", "stable", map[string]any{
+		"gitops_repository": repo,
+	})
+	if err == nil {
+		t.Fatal("imageFromReleaseManifest accepted external dependency image without digest")
 	}
 }
 

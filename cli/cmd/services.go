@@ -16,6 +16,7 @@ import (
 	"frameworks/cli/internal/services"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/internal/xexec"
+	"frameworks/cli/pkg/provisioner"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/configgen"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -288,6 +289,8 @@ func newServicesPlanCmd() *cobra.Command {
 	var configSecrets string
 	var envOutput string
 	var envContext string
+	var version string
+	var unpinned bool
 	cmd := &cobra.Command{Use: "plan", Short: "Generate central-tier compose (.yml + .env)", RunE: func(cmd *cobra.Command, args []string) error {
 		if dir == "" {
 			dir = "."
@@ -304,6 +307,16 @@ func newServicesPlanCmd() *cobra.Command {
 			}
 		} else {
 			specs, err = services.ResolveSelection(c, profile, include, exclude)
+			if err != nil {
+				return err
+			}
+		}
+		// Resolve each spec's image from the gitops manifest so the
+		// generated compose pins by @digest, not the catalog's :latest.
+		// --unpinned keeps the catalog values (escape hatch for offline
+		// dev or for inspecting what the catalog itself ships).
+		if !unpinned {
+			specs, err = pinServiceSpecsToManifest(specs, version)
 			if err != nil {
 				return err
 			}
@@ -359,7 +372,32 @@ func newServicesPlanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&configSecrets, "config-secrets", "", "path to secrets env file (default: config/env/secrets.env)")
 	cmd.Flags().StringVar(&envOutput, "env-output", "", "path for generated env file (default: <dir>/.central.env)")
 	cmd.Flags().StringVar(&envContext, "env-context", "central", "value for ENV_CONTEXT in the generated env file")
+	cmd.Flags().StringVar(&version, "version", "stable", "release channel (stable|rc) or pinned version (vX.Y.Z) for image digest resolution")
+	cmd.Flags().BoolVar(&unpinned, "unpinned", false, "skip manifest resolution and emit the catalog's image strings verbatim (offline/dev escape hatch)")
 	return cmd
+}
+
+// pinServiceSpecsToManifest resolves each ServiceSpec.Image from the gitops
+// release manifest so generated compose fragments pin by image@digest. It
+// fails closed: callers that intentionally want catalog tags use --unpinned.
+func pinServiceSpecsToManifest(specs []services.ServiceSpec, version string) ([]services.ServiceSpec, error) {
+	if strings.TrimSpace(version) == "" {
+		version = "stable"
+	}
+	resolved := make([]services.ServiceSpec, len(specs))
+	for i, s := range specs {
+		resolved[i] = s
+		deploy := s.Deploy
+		if deploy == "" {
+			deploy = s.Name
+		}
+		img, err := provisioner.ImageFromReleaseManifest(deploy, version, nil)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s image from release manifest (%s): %w (use --unpinned for local/dev catalog tags)", deploy, version, err)
+		}
+		resolved[i].Image = img
+	}
+	return resolved, nil
 }
 
 func newServicesUpCmd() *cobra.Command {

@@ -234,6 +234,12 @@ func runUpgradePlan(cmd *cobra.Command, rc *resolvedCluster, version string) err
 		fmt.Fprintf(cmd.OutOrStdout(), "Services: %s\n", strings.Join(services, " -> "))
 	}
 
+	if err := printUpgradePlanTargetIdentities(cmd, rc, version, services); err != nil {
+		// Identity rendering is informational — a fetch failure here shouldn't
+		// abort the plan output; surface a warning and continue.
+		fmt.Fprintf(cmd.OutOrStderr(), "\nWarning: could not render target identities: %v\n", err)
+	}
+
 	dbNames := postgresDatabaseNames(manifest)
 	switch {
 	case len(dbNames) == 0:
@@ -264,6 +270,46 @@ func runUpgradePlan(cmd *cobra.Command, rc *resolvedCluster, version string) err
 	fmt.Fprintf(cmd.OutOrStdout(), "  frameworks cluster upgrade --all --version %s --dry-run\n", version)
 	fmt.Fprintf(cmd.OutOrStdout(), "  frameworks cluster upgrade --all --version %s --yes\n", version)
 	fmt.Fprintln(cmd.OutOrStdout(), "  frameworks cluster status")
+	return nil
+}
+
+// printUpgradePlanTargetIdentities renders the target Docker and native
+// identities each service would resolve to in the selected release. The
+// upgrade-plan command is cluster-wide and doesn't know each node's
+// deploy_mode, so we show both modes per service.
+func printUpgradePlanTargetIdentities(cmd *cobra.Command, rc *resolvedCluster, version string, services []string) error {
+	if len(services) == 0 {
+		return nil
+	}
+	channel, resolvedVersion := gitops.ResolveVersion(version)
+	gitopsManifest, err := gitops.FetchFromRepositories(gitops.FetchOptions{}, rc.ReleaseRepos, channel, resolvedVersion)
+	if err != nil {
+		return fmt.Errorf("fetch gitops manifest: %w", err)
+	}
+
+	fmt.Fprintln(cmd.OutOrStdout(), "\nTarget identities (per service, both modes):")
+	for _, svcName := range services {
+		// Plan service IDs may not match the manifest's deploy names
+		// (e.g. periscope vs periscope-ingest). When lookup fails we
+		// surface a "not in release manifest" note rather than aborting
+		// — operators still get the plan's main output even if a
+		// renamed service slips this view.
+		info, lookupErr := gitopsManifest.GetServiceInfo(svcName)
+		if lookupErr != nil || info == nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "  %-20s not in release manifest\n", svcName)
+			continue
+		}
+		dockerIdentity := info.Image
+		if info.Digest != "" {
+			dockerIdentity = info.FullImage
+		}
+		nativeIdentity := "no native binary"
+		if bin, ok := info.Binaries["linux-amd64"]; ok && bin.URL != "" {
+			nativeIdentity = fmt.Sprintf("%s (%s)", bin.URL, bin.Checksum)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "  %-20s docker: %s\n", svcName, dockerIdentity)
+		fmt.Fprintf(cmd.OutOrStdout(), "  %-20s native: %s\n", "", nativeIdentity)
+	}
 	return nil
 }
 

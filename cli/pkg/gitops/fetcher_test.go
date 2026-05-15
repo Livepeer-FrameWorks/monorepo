@@ -401,11 +401,15 @@ func TestGetServiceInfoPrefersURLOverFile(t *testing.T) {
 	}
 }
 
-func TestGetServiceInfoUsesPlatformVersionForLegacyComponentServiceVersion(t *testing.T) {
+func TestGetServiceInfoReturnsServiceVersionVerbatim(t *testing.T) {
+	// service_version is the artefact provenance label; trust it as
+	// written. Carry-forward entries preserve the baseline tag and we
+	// must not silently rewrite that to the umbrella platform_version
+	// (Foghorn would push a no-op update across every edge node).
 	m := &Manifest{
-		PlatformVersion: "v0.2.32",
+		PlatformVersion: "v0.2.40",
 		Services: []ServiceEntry{
-			{Name: "bridge", ServiceVersion: "0.2.0", Image: "img", Digest: "sha256:abc"},
+			{Name: "bridge", ServiceVersion: "v0.2.37", Image: "img", Digest: "sha256:abc"},
 		},
 	}
 
@@ -413,8 +417,29 @@ func TestGetServiceInfoUsesPlatformVersionForLegacyComponentServiceVersion(t *te
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if info.Version != "v0.2.32" {
-		t.Fatalf("version=%q, want platform version v0.2.32", info.Version)
+	if info.Version != "v0.2.37" {
+		t.Fatalf("version=%q, want carried baseline tag v0.2.37", info.Version)
+	}
+}
+
+func TestGetServiceInfoFallsBackToPlatformVersionWhenServiceVersionEmpty(t *testing.T) {
+	// Defensive fallback for a malformed manifest where service_version
+	// is missing entirely. From v0.2.40 the release workflow always
+	// stamps it, so this branch should be unreachable in practice — kept
+	// to avoid a downstream "" propagating into ComponentVersion display.
+	m := &Manifest{
+		PlatformVersion: "v0.2.40",
+		Services: []ServiceEntry{
+			{Name: "bridge", ServiceVersion: "", Image: "img", Digest: "sha256:abc"},
+		},
+	}
+
+	info, err := m.GetServiceInfo("bridge")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Version != "v0.2.40" {
+		t.Fatalf("version=%q, want platform_version fallback v0.2.40", info.Version)
 	}
 }
 

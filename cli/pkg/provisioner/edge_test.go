@@ -263,6 +263,32 @@ func TestEdgeExternalImagePinsDigest(t *testing.T) {
 	}
 }
 
+func TestEdgeCaddyBinaryPrefersInfrastructureEntry(t *testing.T) {
+	manifest := &gitops.Manifest{
+		Infrastructure: []gitops.InfrastructureEntry{{
+			Name:    "caddy",
+			Version: "2.8.4",
+			Image:   "caddy:2.8.4",
+			Digest:  "sha256:226d1f059b75399fe19182893c7184591c07b97afc8dfcf44eeb80c9a77a530f",
+			Artifacts: []gitops.Artifact{
+				{Arch: "linux-amd64", URL: "https://example.test/caddy_linux_amd64.tar.gz", Checksum: "sha512:b8bec15d"},
+				{Arch: "linux-arm64", URL: "https://example.test/caddy_linux_arm64.tar.gz", Checksum: "sha512:5466234b"},
+			},
+		}},
+	}
+
+	url, checksum, err := edgeCaddyBinary(manifest, "linux-amd64", "linux", "amd64")
+	if err != nil {
+		t.Fatalf("edgeCaddyBinary returned error: %v", err)
+	}
+	if url != "https://example.test/caddy_linux_amd64.tar.gz" {
+		t.Fatalf("url = %q", url)
+	}
+	if checksum != "sha512:b8bec15d" {
+		t.Fatalf("checksum = %q", checksum)
+	}
+}
+
 func TestEdgeExternalBinaryMatchesMistServerReleaseAssetName(t *testing.T) {
 	manifest := &gitops.Manifest{
 		ExternalDependencies: []gitops.ExternalDependency{{

@@ -484,6 +484,11 @@ func desiredEdgeComponentVersions(targetVersion string) (map[string]string, erro
 		desired["caddy"] = firstNonEmpty(strings.TrimSpace(dep.ReleaseTag), strings.TrimSpace(dep.Digest), strings.TrimSpace(dep.ReleaseURL), strings.TrimSpace(dep.Image))
 	}
 	if desired["caddy"] == "" {
+		if infra := manifest.GetInfrastructure("caddy"); infra != nil {
+			desired["caddy"] = strings.TrimSpace(infra.Version)
+		}
+	}
+	if desired["caddy"] == "" {
 		if info, err := manifest.GetServiceInfo("caddy"); err == nil {
 			desired["caddy"] = strings.TrimSpace(info.Version)
 		}

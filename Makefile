@@ -2,7 +2,7 @@
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
 		proto graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
-		validate-migrations verify-feature-registry \
+		validate-migrations verify-feature-registry release-plan \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
 		ansible-galaxy-install ansible-lint ansible-yamllint ansible-test ansible-check ansible-molecule ansible-molecule-run ansible-molecule-all provision-hello
 
@@ -13,19 +13,16 @@ BUILD_DATE ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 GO_BUILD_TAGS ?= nomsgpack
 GO_TAG_FLAGS = $(if $(strip $(GO_BUILD_TAGS)),-tags=$(GO_BUILD_TAGS),)
 
-# component_version(dir) returns the contents of <dir>/VERSION, failing the
-# make invocation loudly if the file is missing. Every buildable component
-# must carry a VERSION file; no silent 0.0.0 fallback.
-component_version = $(if $(wildcard $(1)/VERSION),$(shell tr -d '\n' < $(1)/VERSION),$(error VERSION file required but missing: $(1)/VERSION))
-
 # component_ldflags(binary_name, source_dir) returns the -ldflags block that
-# injects platform + per-component version fields into a go build.
+# injects platform + per-component version fields into a go build. Components
+# ship in lockstep with the platform, so ComponentVersion equals VERSION; the
+# field is kept for runtime logs/metrics that read it.
 define component_ldflags
 -ldflags "-X github.com/Livepeer-FrameWorks/monorepo/pkg/version.Version=$(VERSION) \
           -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.GitCommit=$(GIT_COMMIT) \
           -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.BuildDate=$(BUILD_DATE) \
           -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentName=$(1) \
-          -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentVersion=$(call component_version,$(2))"
+          -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentVersion=$(VERSION)"
 endef
 
 # component_build_args(binary_name, source_dir) returns the docker build-args
@@ -35,7 +32,7 @@ define component_build_args
 --build-arg GIT_COMMIT=$(GIT_COMMIT) \
 --build-arg BUILD_DATE=$(BUILD_DATE) \
 --build-arg COMPONENT_NAME=$(1) \
---build-arg COMPONENT_VERSION=$(call component_version,$(2))
+--build-arg COMPONENT_VERSION=$(VERSION)
 endef
 
 # All microservices (only services with actual binaries)
@@ -94,6 +91,18 @@ build:
 	done
 	@echo "Building cli..."
 	@$(MAKE) build-bin-cli
+
+# release-plan: compute per-artefact source hashes + carry-forward decisions
+# against a track-aware baseline release manifest. Output is JSON. The
+# release workflow runs this before the build matrix to skip rebuilds of
+# unchanged artefacts. Pass GITOPS=../gitops, TAG=v0.2.40, OUT=dist/release-plan.json
+# to override defaults.
+release-plan:
+	@cd tools/release-plan && go run . \
+		--monorepo $(CURDIR) \
+		--gitops $(if $(GITOPS),$(abspath $(GITOPS)),$(CURDIR)/../gitops) \
+		--tag $(if $(TAG),$(TAG),$(VERSION)) \
+		$(if $(OUT),--out $(OUT))
 
 # Verify (tidy, fmt, vet, test, build) all Go modules and build images when present
 verify:

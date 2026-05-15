@@ -9,7 +9,7 @@ version: "3.9"
 
 services:
   caddy:
-    image: caddy:2
+    image: "{{ edge_caddy_image }}"
     container_name: edge-proxy
     ports:
       - "80:80"
@@ -48,7 +48,7 @@ services:
     restart: unless-stopped
 
   helmsman:
-    image: frameworks/helmsman:latest
+    image: "{{ edge_helmsman_image }}"
     container_name: helmsman
     ulimits:
       nofile:

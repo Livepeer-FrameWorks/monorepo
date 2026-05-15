@@ -151,6 +151,8 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 		"edge_ca_bundle_pem":     config.CABundlePEM,
 		"edge_mist_api_password": mistPass,
 		"edge_mistserver_image":  "mistserver:latest",
+		"edge_caddy_image":       "caddy:2.8.4",
+		"edge_helmsman_image":    "frameworks/helmsman:latest",
 		"edge_apply_tuning":      config.ApplyTuning && remoteOS != "darwin",
 		"edge_darwin_domain":     darwinDomain,
 	}
@@ -169,6 +171,16 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 		if image != "" {
 			vars["edge_mistserver_image"] = image
 		}
+		caddyImage, caddyImageErr := edgeInfraImage(manifest, "caddy")
+		if caddyImageErr != nil {
+			return nil, caddyImageErr
+		}
+		vars["edge_caddy_image"] = caddyImage
+		helmsmanImage, helmsmanImageErr := edgeServiceImage(manifest, "helmsman")
+		if helmsmanImageErr != nil {
+			return nil, helmsmanImageErr
+		}
+		vars["edge_helmsman_image"] = helmsmanImage
 		for key, value := range map[string]string{
 			"edge_config_schema_version": strings.TrimSpace(manifest.PlatformVersion),
 			"edge_mistserver_version":    edgeExternalVersion(manifest, "mistserver"),
@@ -258,9 +270,37 @@ func edgeExternalImage(manifest *gitops.Manifest, name string) (string, error) {
 	return dep.Image + "@" + dep.Digest, nil
 }
 
+// edgeInfraImage returns image@digest for an infrastructure entry used by
+// compose-mode edge deployment.
+func edgeInfraImage(manifest *gitops.Manifest, name string) (string, error) {
+	infra := manifest.GetInfrastructure(name)
+	if infra == nil || infra.Image == "" {
+		return "", fmt.Errorf("release manifest has no infrastructure image for %s", name)
+	}
+	if infra.Digest == "" {
+		return "", fmt.Errorf("release manifest infrastructure %s has image %q but no digest", name, infra.Image)
+	}
+	return infra.Image + "@" + infra.Digest, nil
+}
+
+// edgeServiceImage returns image@digest for a first-party service entry.
+func edgeServiceImage(manifest *gitops.Manifest, name string) (string, error) {
+	svc, err := manifest.GetServiceInfo(name)
+	if err != nil {
+		return "", fmt.Errorf("release manifest has no service image for %s: %w", name, err)
+	}
+	if svc.Digest == "" {
+		return "", fmt.Errorf("release manifest service %s has image %q but no digest", name, svc.Image)
+	}
+	return svc.FullImage, nil
+}
+
 func edgeComponentVersion(manifest *gitops.Manifest, name string) string {
 	if version := edgeExternalVersion(manifest, name); version != "" {
 		return version
+	}
+	if infra := manifest.GetInfrastructure(name); infra != nil {
+		return strings.TrimSpace(infra.Version)
 	}
 	return edgeServiceVersion(manifest, name)
 }
@@ -324,10 +364,16 @@ func edgeServiceBinary(manifest *gitops.Manifest, name, remoteOS, remoteArch str
 	return bin.URL, bin.Checksum, nil
 }
 
-// edgeCaddyBinary mirrors edge.go's lookup order: external_dependencies
-// first (where Caddy binary pins have historically lived), service_info as
-// a fallback for deployments that ship caddy via the service channel.
+// edgeCaddyBinary resolves the caddy tarball pin in lookup order:
+// infrastructure[] (current home — caddy is a platform-pinned third-party
+// component), external_dependencies[] (release manifests with external pins),
+// service_info[] (deployments that ship caddy via the service channel).
 func edgeCaddyBinary(manifest *gitops.Manifest, arch, remoteOS, remoteArch string) (string, string, error) {
+	if infra := manifest.GetInfrastructure("caddy"); infra != nil {
+		if art := infra.GetArtifact(arch); art != nil && art.URL != "" {
+			return art.URL, art.Checksum, nil
+		}
+	}
 	if dep := manifest.GetExternalDependency("caddy"); dep != nil {
 		if bin := dep.GetBinary(arch); bin != nil && bin.URL != "" {
 			return bin.URL, bin.Checksum, nil

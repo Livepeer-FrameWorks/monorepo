@@ -77,11 +77,13 @@ type InterfaceEntry struct {
 // InfrastructureEntry represents an infrastructure component pinned by a
 // platform release. Artifacts is populated for components that raw-download
 // a tarball/binary instead of pulling from an OS package manager or Docker
-// registry.
+// registry. Digest is the OCI manifest digest for content-addressed Docker
+// pulls; when present, the resolver returns image@digest.
 type InfrastructureEntry struct {
 	Name      string     `yaml:"name"`
 	Version   string     `yaml:"version"`
 	Image     string     `yaml:"image,omitempty"`
+	Digest    string     `yaml:"digest,omitempty"`
 	Artifacts []Artifact `yaml:"artifacts,omitempty"`
 }
 

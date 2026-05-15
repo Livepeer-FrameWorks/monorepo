@@ -43,6 +43,8 @@ type EdgeVars struct {
 	SiteAddress      string // Caddy site address: "*.cluster.root" (wildcard) or "edge.cluster.root" (single)
 	MistAPIPassword  string // MistServer API auth password (used for -a flag and helmsman config sync)
 	MistServerImage  string // Docker image for local edge init; remote apply pins this from GitOps.
+	CaddyImage       string // Docker image for caddy in compose mode; manifest-pinned (image@digest) when a release is selected.
+	HelmsmanImage    string // Docker image for helmsman in compose mode; manifest-pinned (image@digest) when a release is selected.
 	ChandlerUpstream string // Docker: "chandler:18020", Native: "localhost:18020"
 	TelemetryURL     string
 	TelemetryToken   string
@@ -83,6 +85,12 @@ func (v *EdgeVars) SetModeDefaults() {
 	}
 	if v.MistServerImage == "" {
 		v.MistServerImage = "mistserver:latest"
+	}
+	if v.CaddyImage == "" {
+		v.CaddyImage = "caddy:2.8.4"
+	}
+	if v.HelmsmanImage == "" {
+		v.HelmsmanImage = "frameworks/helmsman:latest"
 	}
 }
 
@@ -212,6 +220,8 @@ scrape_configs:
 		content = strings.ReplaceAll(content, "{{DEPLOY_MODE}}", vars.Mode)
 		content = strings.ReplaceAll(content, "{{MIST_API_PASSWORD}}", vars.MistAPIPassword)
 		content = strings.ReplaceAll(content, "{{MISTSERVER_IMAGE}}", vars.MistServerImage)
+		content = strings.ReplaceAll(content, "{{CADDY_IMAGE}}", vars.CaddyImage)
+		content = strings.ReplaceAll(content, "{{HELMSMAN_IMAGE}}", vars.HelmsmanImage)
 		content = strings.ReplaceAll(content, "{{CHANDLER_UPSTREAM}}", vars.ChandlerUpstream)
 		content = strings.ReplaceAll(content, "{{TELEMETRY_URL}}", vars.TelemetryURL)
 		content = strings.ReplaceAll(content, "{{VMAGENT_EDGE_SERVICE}}", vmagentServiceBlock)

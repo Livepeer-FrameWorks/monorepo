@@ -76,13 +76,11 @@ func reverseProxyComposeVars(serviceName string, defaultPort int, config Service
 	image := config.Image
 	if image == "" {
 		switch serviceName {
-		case "caddy":
-			image = "caddy:2"
-		case "nginx":
+		case "caddy", "nginx":
 			var err error
-			image, err = imageFromReleaseManifest("nginx", config.Version, config.Metadata)
+			image, err = imageFromReleaseManifest(serviceName, config.Version, config.Metadata)
 			if err != nil {
-				return nil, fmt.Errorf("resolve nginx image: %w", err)
+				return nil, fmt.Errorf("resolve %s image: %w", serviceName, err)
 			}
 		default:
 			return nil, fmt.Errorf("%s: unsupported reverse proxy", serviceName)

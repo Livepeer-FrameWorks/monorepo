@@ -218,3 +218,32 @@ Use `frameworks cluster provision` for:
 - re-rendering infrastructure after changing role inputs.
 
 For routine release rollouts, use `cluster upgrade` plus `cluster migrate`.
+
+## Why some services keep their older version label
+
+A FrameWorks release manifest pins every service by content identity (Docker
+image digest, native tarball SHA-256), not by version label. When a service's
+source code did not change since an earlier release, the new manifest carries
+that service's previous `service_version` label forward verbatim — for
+example, a `v0.2.40` release can legitimately list `helmsman` with
+`service_version: v0.2.37` because that is the release that actually produced
+the bytes you are running.
+
+This is the **artefact provenance** model: `platform_version` says "what
+release this manifest belongs to," and `service_version` per component says
+"which release actually produced this component's bytes."
+
+Practical consequences:
+
+- `cluster upgrade --plan` shows each service's target image digest and native
+  tarball checksum, not just version labels. If your installed identity equals
+  the target identity, nothing is re-pulled regardless of the umbrella
+  version.
+- For edge nodes, Foghorn's release reconciler compares per-component versions
+  against `foghorn.node_components`. Carried-forward components keep their old
+  label, so a release that doesn't touch helmsman/mist/caddy does not roll any
+  edge node.
+- A "carried" service is not a downgrade. It is the same artefact that
+  shipped earlier, content-pinned forward into the new release.
+
+Release notes call out carried components when relevant.

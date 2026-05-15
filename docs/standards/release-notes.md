@@ -59,8 +59,16 @@ Use this subsection when the release affects tenant-owned, marketplace, or other
 - **New.** Net-new functionality only. Each bullet: name, then one to two sentences on what it actually is. Backtick literal identifiers.
 - **Hardened.** Improvements to things that already existed. Edge cases fixed, robustness work, better surfaces, perf passes.
 - **Fixes.** Bug fixes. Brief.
-- **Build / infra.** Build flags, dependency changes, migration runner changes, CI changes that operators or builders might notice.
+- **Build / infra.** Build flags, dependency changes, migration runner changes, CI changes that operators or builders might notice. Once the release-plan tool is wired into CI (see `docs/architecture/build-and-packaging.md`), this section also reports the per-release **carry-forward summary**: how many components rebuilt, how many carried, and (if non-trivial) which ones. Operators read this to know whether `cluster upgrade` will re-pull anything for them.
 - **Docs.** New or significantly rewritten documentation.
+
+### Carried components
+
+When release-plan emits `carry_forward` decisions, surface them honestly:
+
+- Use the **artefact provenance** language: "helmsman carries forward from v0.2.37" — never "helmsman is at v0.2.37 in this release" without context, since that reads as a downgrade.
+- If an edge component (`helmsman`, `mist`, `caddy`) carries forward, mention it under the `### Edge-only self-hosters` upgrade subsection too — Foghorn will not roll those nodes, and that is the desired outcome operators should see explicitly.
+- Don't mix "carried" with "unchanged behavior." A bumped third-party dep that doesn't change the binary's source-hash still rebuilds (because go.sum changed); a no-op release matters only when the operator-visible identity actually didn't move.
 
 ## Authoring checklist
 

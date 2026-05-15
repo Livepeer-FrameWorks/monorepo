@@ -82,6 +82,15 @@ func resolveReleaseArtifactFromChannel(name, arch, platformChannel string, metad
 	return ResolvedArtifact{}, fmt.Errorf("release manifest (%s/%s) has no infrastructure, service, interface, or native binary entry named %q", channel, resolved, name)
 }
 
+// ImageFromReleaseManifest resolves a service's deploy image (image@digest
+// when the manifest carries a digest) from the gitops release manifest
+// pinned by platformChannel. Public wrapper around the lookup chain
+// (services → infrastructure → external_dependencies) used by cluster
+// provisioning and the central-tier `services plan` command.
+func ImageFromReleaseManifest(name, platformChannel string, metadata map[string]any) (string, error) {
+	return imageFromReleaseManifest(name, platformChannel, metadata)
+}
+
 func imageFromReleaseManifest(name, platformChannel string, metadata map[string]any) (string, error) {
 	channel, version := gitops.ResolveVersion(platformChannel)
 	manifest, err := fetchGitopsManifest(channel, version, metadata)
@@ -92,11 +101,17 @@ func imageFromReleaseManifest(name, platformChannel string, metadata map[string]
 		return selectedReleaseImage(svc, metadata)
 	}
 	if infra := manifest.GetInfrastructure(name); infra != nil && infra.Image != "" {
-		return infra.Image, nil
+		if infra.Digest == "" {
+			return "", fmt.Errorf("infrastructure %s has image %q but no digest", name, infra.Image)
+		}
+		return fmt.Sprintf("%s@%s", infra.Image, infra.Digest), nil
 	}
 	if depName := externalDependencyForService(name); depName != "" {
 		if dep := manifest.GetExternalDependency(depName); dep != nil && dep.Image != "" {
-			return dep.Image, nil
+			if dep.Digest == "" {
+				return "", fmt.Errorf("external dependency %s has image %q but no digest", depName, dep.Image)
+			}
+			return fmt.Sprintf("%s@%s", dep.Image, dep.Digest), nil
 		}
 	}
 	return "", fmt.Errorf("service %s not found in release manifest", name)
@@ -115,6 +130,9 @@ func selectedReleaseImage(svc *gitops.ServiceInfo, metadata map[string]any) (str
 		if requested != "dockerhub" && !imageRegistryMatches(svc.Image, requested) {
 			return "", fmt.Errorf("release manifest has no %q image entry for %s", requested, svc.Name)
 		}
+		if svc.Digest == "" {
+			return "", fmt.Errorf("release manifest service %s has image %q but no digest", svc.Name, svc.Image)
+		}
 		return svc.FullImage, nil
 	}
 
@@ -123,7 +141,7 @@ func selectedReleaseImage(svc *gitops.ServiceInfo, metadata map[string]any) (str
 		return "", fmt.Errorf("release manifest has no %q image entry for %s", requested, svc.Name)
 	}
 	if img.Digest == "" {
-		return img.Image, nil
+		return "", fmt.Errorf("release manifest %s %q image has no digest", svc.Name, requested)
 	}
 	return fmt.Sprintf("%s@%s", img.Image, img.Digest), nil
 }

@@ -8,6 +8,7 @@ infrastructure:
   - name: postgresql
     version: "15.14"
     image: postgres:15
+    digest: sha256:f189cf3e8ad81c21e70c78735f18c65cf1a2635fe5aa2bb59220dda334ee26a9
     artifacts:
       - arch: linux-amd64
         url: https://ftp.postgresql.org/pub/source/v15.14/postgresql-15.14.tar.bz2
@@ -29,6 +30,7 @@ infrastructure:
   - name: kafka
     version: "4.2.0"
     image: apache/kafka:4.2.0
+    digest: sha256:9516fb7634bad307d17c33b589fde9023003b0cb761374f500002b980a3149b9
     artifacts:
       - arch: linux-amd64
         url: https://downloads.apache.org/kafka/4.2.0/kafka_2.13-4.2.0.tgz
@@ -50,6 +52,7 @@ infrastructure:
   - name: clickhouse
     version: "25.9.2.1"
     image: clickhouse/clickhouse-server:25.9.2.1
+    digest: sha256:bca6494fa85aea382ddf69e8b9e8b481d2f06603b083e3dd705013a8c260e91f
     artifacts:
       - arch: linux-amd64
         url: https://packages.clickhouse.com/tgz/stable/clickhouse-common-static-25.9.2.1-amd64.tgz
@@ -61,10 +64,12 @@ infrastructure:
   - name: prometheus
     version: "3.6.0"
     image: prom/prometheus:v3.6.0
+    digest: sha256:76947e7ef22f8a698fc638f706685909be425dbe09bd7a2cd7aca849f79b5f64
 
   - name: victoriametrics
     version: "v1.122.0"
     image: victoriametrics/victoria-metrics:v1.122.0
+    digest: sha256:0156d3e9c4be6a29dbb45b6b551a1a09d48fed3858143f1e3e0ad16d6e875cc9
     artifacts:
       - arch: linux-amd64
         url: https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v1.122.0/victoria-metrics-linux-amd64-v1.122.0.tar.gz
@@ -76,6 +81,7 @@ infrastructure:
   - name: vmauth
     version: "v1.122.0"
     image: victoriametrics/vmauth:v1.122.0
+    digest: sha256:3ee6cef6a7146d54633e4f95e7d5dc1efc404df56fcde22fc311fa4e8dbef1af
     artifacts:
       - arch: linux-amd64
         url: https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v1.122.0/vmutils-linux-amd64-v1.122.0.tar.gz
@@ -87,6 +93,7 @@ infrastructure:
   - name: vmagent
     version: "v1.122.0"
     image: victoriametrics/vmagent:v1.122.0
+    digest: sha256:beaec23c2e7470fa980df9ec6368c98c213b17978d4bccff3714b9c683b923d2
     artifacts:
       - arch: linux-amd64
         url: https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v1.122.0/vmutils-linux-amd64-v1.122.0.tar.gz
@@ -104,22 +111,45 @@ infrastructure:
   - name: grafana
     version: "12.2.0"
     image: grafana/grafana:12.2.0
+    digest: sha256:74144189b38447facf737dfd0f3906e42e0776212bf575dc3334c3609183adf7
 
   - name: nginx
     version: "1.29.3"
     image: nginx:1.29.3-alpine
+    digest: sha256:b3c656d55d7ad751196f21b7fd2e8d4da9cb430e32f646adcf92441b72f82b14
 
   - name: listmonk
     version: "v4.0.1"
     image: listmonk/listmonk:v4.0.1
+    digest: sha256:a22a9a1941ba717b61fac618f1c58123bf5bd9fe9d1fe0211e849abd615f1397
 
   - name: metabase
     version: "v0.52.5"
     image: metabase/metabase:v0.52.5
+    digest: sha256:5ead2fd7c85e44caac9758f9974704921af12e7f6c87be19dc54463596f2f8d9
 
   - name: valkey
     version: "8.1"
     image: valkey/valkey:8.1-alpine
+    digest: sha256:b027235326507cfdade9b6684056ec1d0b0c0757412e628245129b5d7b788618
+
+  - name: caddy
+    version: "2.8.4"
+    image: caddy:2.8.4
+    digest: sha256:226d1f059b75399fe19182893c7184591c07b97afc8dfcf44eeb80c9a77a530f
+    artifacts:
+      - arch: linux-amd64
+        url: https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_amd64.tar.gz
+        checksum: sha512:b8bec15d14fb033562af9f207850027bcbaa1f891edc9efe00d38bf39e1bf9944f8b6b8eba041ddd4c171cd70c905174c704d705be2f23bc678fe1eaf37a2485
+      - arch: linux-arm64
+        url: https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_arm64.tar.gz
+        checksum: sha512:5466234be3e988071cef937aedbdd94c15b6f75cf7307397e67c2641219ac9bfe2c2bb3b31fc05bc68d3b6398bbe50abfa16ccf3b127318ccac31115ad26507c
+      - arch: darwin-amd64
+        url: https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_mac_amd64.tar.gz
+        checksum: sha512:6784719ca63df7790fa36dc93b8d4b09d700a90bdc1a11c226257d2645766fbc014ffa444be1f16eac3b864a43675f6827753e9d8ae1500dd68d99f3ff794729
+      - arch: darwin-arm64
+        url: https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_mac_arm64.tar.gz
+        checksum: sha512:16b930bc4fc4d5c5e713cf4c6955c0c33215c7014244effc102c49d6552a8790c4bf53c2c5e89333aae5b6e4f057148e5ffd994e0249bdffacc65d8dd8ff8a87
 
   - name: goss
     version: "0.4.9"
