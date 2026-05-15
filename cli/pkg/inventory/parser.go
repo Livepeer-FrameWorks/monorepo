@@ -16,14 +16,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// isClusterScopedBunny reports whether the manifest service name is a
-// cluster-scoped Bunny media service whose `cluster`/`clusters` pin is a
-// logical media-cluster assignment (foghorn/chandler/livepeer-gateway). Used
-// by Validate to enforce the media/edge constraint on logical pins.
-func isClusterScopedBunny(serviceName string) bool {
-	return isClusterScopedBunnyDeploy(serviceName, "")
-}
-
 func isClusterScopedBunnyDeploy(serviceName, deployName string) bool {
 	serviceType := strings.TrimSpace(serviceName)
 	if pkgdns.ProviderForServiceType(serviceType) != pkgdns.ProviderBunny && strings.TrimSpace(deployName) != "" {

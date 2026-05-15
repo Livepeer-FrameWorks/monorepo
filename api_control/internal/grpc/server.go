@@ -5858,27 +5858,24 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStream
 
 func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, tenantID string) (*pb.Stream, error) {
 	var stream pb.Stream
-	var description, sourceURIEnc, activeIngest, originRegion sql.NullString
+	var description, sourceURIEnc, activeIngest sql.NullString
 	var pullEnabled sql.NullBool
 	var pullAllowedClusters pq.StringArray
 	var createdAt, updatedAt time.Time
 
 	// Query config only - operational state (status, started_at, ended_at) comes from Periscope Data Plane.
-	// LEFT JOIN onto infrastructure_clusters resolves the origin region from active_ingest_cluster_id
-	// so realtime subscribers can dial the origin-region Signalman without a second RPC.
 	err := s.db.QueryRowContext(ctx, `
 		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
 		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
 		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}'),
-		       s.active_ingest_cluster_id, c.region_id
+		       s.active_ingest_cluster_id
 		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
-		LEFT JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = s.active_ingest_cluster_id
 		WHERE s.id = $1 AND s.user_id = $2 AND s.tenant_id = $3
 	`, streamID, userID, tenantID).Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
 		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt,
 		&stream.IngestMode, &sourceURIEnc, &pullEnabled, &pullAllowedClusters,
-		&activeIngest, &originRegion)
+		&activeIngest)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
@@ -5892,9 +5889,6 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 	}
 	if activeIngest.Valid {
 		stream.ActiveIngestClusterId = activeIngest.String
-	}
-	if originRegion.Valid {
-		stream.StreamOriginRegion = originRegion.String
 	}
 	stream.IsRecording = stream.IsRecordingEnabled
 	stream.CreatedAt = timestamppb.New(createdAt)
