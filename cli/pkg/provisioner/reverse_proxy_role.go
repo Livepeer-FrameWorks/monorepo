@@ -454,6 +454,14 @@ func truthyString(value string) bool {
 	}
 }
 
+func metaIntOrDefault(metadata map[string]any, key string, fallback int) int {
+	value := metaInt(metadata, key)
+	if value == 0 {
+		return fallback
+	}
+	return value
+}
+
 func caddyTLSDirective(site proxySite) string {
 	switch site.TLSMode {
 	case "", "auto":

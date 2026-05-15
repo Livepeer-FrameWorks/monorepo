@@ -1,5 +1,6 @@
 ---
 nginx_http_port: 18090
+nginx_public_http_port: 80
 nginx_sites: []
 nginx_package_by_family:
   Debian: nginx

@@ -149,6 +149,9 @@ func TestNginxRoleVarsUsesProxySites(t *testing.T) {
 	if vars["nginx_http_port"] != 18090 {
 		t.Fatalf("nginx_http_port = %v", vars["nginx_http_port"])
 	}
+	if vars["nginx_public_http_port"] != 80 {
+		t.Fatalf("nginx_public_http_port = %v", vars["nginx_public_http_port"])
+	}
 	if sites[0]["profile"] != "api" {
 		t.Fatalf("profile = %v", sites[0]["profile"])
 	}
@@ -205,6 +208,9 @@ func TestNativeNginxTemplatesOwnRootConfigAndRouteProfiles(t *testing.T) {
 		"proxy_busy_buffers_size {{ site.proxy_busy_buffers_size | default(profile.proxy_busy_buffers_size) }};",
 		"proxy_set_header Upgrade $http_upgrade;",
 		"proxy_set_header Connection \"upgrade\";",
+		"listen {{ nginx_public_http_port }};",
+		"return 204;",
+		"return 308 https://$host$request_uri;",
 		"nginx_effective_http2_directive_mode == 'listen_parameter'",
 		"nginx_effective_http2_directive_mode == 'standalone'",
 		"proxy_read_timeout {{ site.proxy_read_timeout | default(profile.proxy_read_timeout) }};",
