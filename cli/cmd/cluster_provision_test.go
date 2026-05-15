@@ -99,6 +99,49 @@ func TestQuartermasterBootstrapUsesFreshContextForAliasResolution(t *testing.T) 
 	}
 }
 
+func TestClusterProvisionDoesNotUseFixedWholeRunDeadline(t *testing.T) {
+	raw, err := os.ReadFile("cluster_provision.go")
+	if err != nil {
+		t.Fatalf("read cluster_provision.go: %v", err)
+	}
+	if strings.Contains(string(raw), "context.WithTimeout(context.Background(), 30*time.Minute)") {
+		t.Fatalf("cluster provision must not impose a fixed whole-run deadline")
+	}
+}
+
+func TestRunProvisionPhaseReportsOwnTimeout(t *testing.T) {
+	err := runProvisionPhase(context.Background(), time.Millisecond, "provision", func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "provision timed out after") {
+		t.Fatalf("expected phase timeout error, got %v", err)
+	}
+}
+
+func TestRunProvisionPhaseReportsParentInterruption(t *testing.T) {
+	parent, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	<-parent.Done()
+
+	err := runProvisionPhase(parent, time.Hour, "provision", func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if err == nil {
+		t.Fatal("expected parent interruption error")
+	}
+	if !strings.Contains(err.Error(), "provision interrupted by parent context") {
+		t.Fatalf("expected parent interruption error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "timed out after 1h0m0s") {
+		t.Fatalf("parent interruption must not be reported as the phase timeout: %v", err)
+	}
+}
+
 func newTestCommandWithOutput(out *bytes.Buffer) *cobra.Command {
 	cmd := &cobra.Command{Use: "test"}
 	cmd.SetOut(out)

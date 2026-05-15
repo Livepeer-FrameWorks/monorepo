@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -136,7 +137,7 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 		fmt.Fprintln(out, "[DRY-RUN MODE - No changes will be made]")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()
 
 	var phase orchestrator.Phase
@@ -4717,15 +4718,21 @@ func runProvisionPhase(parent context.Context, timeout time.Duration, phase stri
 	defer cancel()
 
 	if err := fn(phaseCtx); err != nil {
-		if phaseCtx.Err() == context.DeadlineExceeded {
+		if parent.Err() != nil {
+			return fmt.Errorf("%s interrupted by parent context: %w", phase, err)
+		}
+		if errors.Is(phaseCtx.Err(), context.DeadlineExceeded) {
 			return fmt.Errorf("%s timed out after %s: %w", phase, timeout.Round(time.Second), err)
 		}
 		return err
 	}
-	if phaseCtx.Err() == context.DeadlineExceeded {
+	if parent.Err() != nil {
+		return parent.Err()
+	}
+	if errors.Is(phaseCtx.Err(), context.DeadlineExceeded) {
 		return fmt.Errorf("%s timed out after %s", phase, timeout.Round(time.Second))
 	}
-	return parent.Err()
+	return nil
 }
 
 // rollbackProvisionedTasks stops previously provisioned services in reverse order.
