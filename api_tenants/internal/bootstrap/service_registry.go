@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 )
 
 // ReconcileServiceRegistry reconciles every ServiceRegistryEntry into
@@ -83,6 +85,13 @@ func ensureServiceCatalogRow(ctx context.Context, exec DBTX, e ServiceRegistryEn
 	var serviceID string
 	err := exec.QueryRowContext(ctx, probeSQL, e.ServiceName).Scan(&serviceID)
 	if err == nil {
+		if _, updateErr := exec.ExecContext(ctx, `
+			UPDATE quartermaster.services
+			SET plane = $2, updated_at = NOW()
+			WHERE service_id = $1 AND COALESCE(plane, '') <> $2
+		`, serviceID, serviceEntryPlane(e)); updateErr != nil {
+			return "", fmt.Errorf("update service catalog plane: %w", updateErr)
+		}
 		return serviceID, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -93,13 +102,20 @@ func ensureServiceCatalogRow(ctx context.Context, exec DBTX, e ServiceRegistryEn
 		protocol = "http"
 	}
 	const insertSQL = `
-		INSERT INTO quartermaster.services
-			(service_id, name, plane, type, protocol, is_active, created_at, updated_at)
-		VALUES ($1, $2, 'control', $3, $4, true, NOW(), NOW())`
-	if _, err := exec.ExecContext(ctx, insertSQL, e.ServiceName, e.ServiceName, e.Type, protocol); err != nil {
+	INSERT INTO quartermaster.services
+		(service_id, name, plane, type, protocol, is_active, created_at, updated_at)
+	VALUES ($1, $2, $3, $4, $5, true, NOW(), NOW())`
+	if _, err := exec.ExecContext(ctx, insertSQL, e.ServiceName, e.ServiceName, serviceEntryPlane(e), e.Type, protocol); err != nil {
 		return "", fmt.Errorf("insert service catalog: %w", err)
 	}
 	return e.ServiceName, nil
+}
+
+func serviceEntryPlane(e ServiceRegistryEntry) string {
+	if topology.IsInfraKind(e.Type) || e.Metadata["topology_provider"] == "infra" || e.Metadata["peer_only"] == "true" {
+		return "infra"
+	}
+	return "control"
 }
 
 // resolveNodeAdvertiseHost resolves the node's WireGuard IP for use as

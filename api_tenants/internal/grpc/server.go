@@ -33,6 +33,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -1092,6 +1093,9 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 	serviceType := req.GetServiceType()
 	if serviceType == "" {
 		return nil, status.Error(codes.InvalidArgument, "service_type required")
+	}
+	if topology.IsInfraKind(serviceType) {
+		return nil, status.Error(codes.InvalidArgument, "infra providers are not service-discoverable")
 	}
 
 	// Parse bidirectional pagination
@@ -2929,8 +2933,8 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 	ownerTenantID := strings.TrimSpace(req.GetOwnerTenantId())
 
 	builder := &pagination.KeysetBuilder{
-		TimestampColumn: "created_at",
-		IDColumn:        "id",
+		TimestampColumn: "c.created_at",
+		IDColumn:        "c.id",
 	}
 
 	// Base WHERE clause for filtering by subscription or ownership
@@ -3971,8 +3975,8 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.L
 	}
 
 	builder := &pagination.KeysetBuilder{
-		TimestampColumn: "created_at",
-		IDColumn:        "id",
+		TimestampColumn: "c.created_at",
+		IDColumn:        "c.id",
 	}
 
 	baseWhere := `
@@ -4744,8 +4748,8 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 	tenantID := middleware.GetTenantID(ctx)
 
 	builder := &pagination.KeysetBuilder{
-		TimestampColumn: "created_at",
-		IDColumn:        "id",
+		TimestampColumn: "n.created_at",
+		IDColumn:        "n.id",
 	}
 
 	// Base WHERE clause to secure visibility
@@ -5698,9 +5702,10 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	var usageLimit sql.NullInt32
 	var usageCount int32
 	var expiresAt time.Time
+	var tokenMetadata string
 
 	err = tx.QueryRowContext(ctx, `
-		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip::text
+		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip::text, COALESCE(metadata::text, '{}')
 		FROM quartermaster.bootstrap_tokens
 		WHERE token_hash = $1 AND kind = 'infrastructure_node'
 		  AND (
@@ -5708,7 +5713,7 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		    (usage_limit IS NOT NULL AND usage_count < usage_limit)
 		  )
 		FOR UPDATE
-	`, hashBootstrapToken(token)).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP)
+	`, hashBootstrapToken(token)).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP, &tokenMetadata)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
 	}
@@ -5772,6 +5777,16 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	if err == nil {
 		if existingClusterID != resolvedClusterID {
 			return nil, status.Errorf(codes.FailedPrecondition, "node already exists in cluster %s", existingClusterID)
+		}
+		if strings.TrimSpace(tokenMetadata) != "" && tokenMetadata != "{}" {
+			if _, updateErr := tx.ExecContext(ctx, `
+					UPDATE quartermaster.infrastructure_nodes
+					SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+					    updated_at = NOW()
+					WHERE node_id = $1
+				`, nodeID, tokenMetadata); updateErr != nil {
+				return nil, status.Errorf(codes.Internal, "update node metadata: %v", updateErr)
+			}
 		}
 		// Commit the tx so subsequent reads see a consistent view even
 		// though we didn't mutate anything.
@@ -5888,9 +5903,9 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	// New row via the token/enrollment path → enrollment_origin=runtime_enrolled.
 	// The idempotent early return above preserves existing origins.
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, internal_ip, wireguard_ip, wireguard_public_key, wireguard_listen_port, enrollment_origin, latitude, longitude, tags, metadata, last_heartbeat, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6::inet, $7::inet, $8::inet, $9, $10, 'runtime_enrolled', $11, $12, '{}', '{}', NOW(), NOW(), NOW())
-	`, uuid.New().String(), nodeID, resolvedClusterID, hostname, nodeType, extIP, intIP, assignedIP, wgPubStr, assignedPort, lat, lng)
+			INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, internal_ip, wireguard_ip, wireguard_public_key, wireguard_listen_port, enrollment_origin, latitude, longitude, tags, metadata, last_heartbeat, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6::inet, $7::inet, $8::inet, $9, $10, 'runtime_enrolled', $11, $12, '{}', $13::jsonb, NOW(), NOW(), NOW())
+		`, uuid.New().String(), nodeID, resolvedClusterID, hostname, nodeType, extIP, intIP, assignedIP, wgPubStr, assignedPort, lat, lng, tokenMetadata)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create node: %v", err)
 	}
@@ -6152,21 +6167,27 @@ func loadClusterMeshConfig(ctx context.Context, db *sql.DB, clusterID string) (s
 // collectBootstrapSeed returns the seed peer set and service endpoints a
 // freshly-enrolled node should apply before its first SyncMesh. Excludes the
 // enrolling node itself. Errors are logged and produce empty results so
-// bootstrap never fails on auxiliary data — the node will rediscover via
+// bootstrap never fails on auxiliary data: the node will rediscover via
 // SyncMesh once connected.
 func (s *QuartermasterServer) collectBootstrapSeed(ctx context.Context, clusterID, excludeNodeID string) ([]*pb.InfrastructurePeer, map[string]*pb.ServiceEndpoints) {
+	dnsRequired, peerRequired, globalPeerRequired, infraRequired := s.meshServiceRequirements(ctx, excludeNodeID)
+	endpoints, requiredPeerNodeIDs := s.collectMeshServiceEndpoints(ctx, clusterID, excludeNodeID, dnsRequired, peerRequired, globalPeerRequired)
+	for nodeID := range s.collectInfraPeerNodeIDs(ctx, clusterID, excludeNodeID, infraRequired) {
+		requiredPeerNodeIDs[nodeID] = struct{}{}
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT n.node_name, n.wireguard_public_key, host(n.external_ip), host(n.internal_ip), host(n.wireguard_ip), n.wireguard_listen_port
 		FROM quartermaster.infrastructure_nodes n
 		WHERE n.node_id != $1
+		  AND (n.cluster_id = $2 OR n.node_id = ANY($3))
 		  AND n.wireguard_public_key IS NOT NULL
 		  AND n.wireguard_ip IS NOT NULL
-		  AND n.cluster_id = $2
 		  AND n.status = 'active'
-	`, excludeNodeID, clusterID)
+	`, excludeNodeID, clusterID, pq.Array(sortedStringKeys(requiredPeerNodeIDs)))
 	if err != nil {
 		s.logger.WithError(err).Warn("collectBootstrapSeed: peer query failed")
-		return nil, nil
+		return nil, endpoints
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -6196,27 +6217,172 @@ func (s *QuartermasterServer) collectBootstrapSeed(ctx context.Context, clusterI
 		p.KeepAlive = 25
 		peers = append(peers, &p)
 	}
+	return peers, endpoints
+}
 
-	endpoints := make(map[string]*pb.ServiceEndpoints)
+func (s *QuartermasterServer) meshServiceRequirements(ctx context.Context, nodeID string) (map[string]struct{}, map[string]struct{}, map[string]struct{}, []topology.InfraDependency) {
+	dnsRequired := map[string]struct{}{"quartermaster": {}}
+	peerRequired := map[string]struct{}{"quartermaster": {}}
+	globalPeerRequired := map[string]struct{}{}
+	var infraRequired []topology.InfraDependency
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT service_type
+		FROM (
+			SELECT s.type AS service_type
+			FROM quartermaster.service_instances si
+			JOIN quartermaster.services s ON s.service_id = si.service_id
+			WHERE si.node_id = $1
+			  AND si.status IN ('running', 'active')
+			  AND s.type IS NOT NULL
+			  AND s.type <> ''
+			UNION ALL
+			SELECT jsonb_array_elements_text(
+				CASE
+					WHEN jsonb_typeof(n.metadata->'desired_service_types') = 'array' THEN n.metadata->'desired_service_types'
+					ELSE '[]'::jsonb
+				END
+			) AS service_type
+			FROM quartermaster.infrastructure_nodes n
+			WHERE n.node_id = $1
+			UNION ALL
+			SELECT jsonb_array_elements_text(
+				CASE
+					WHEN jsonb_typeof(n.metadata->'service_types') = 'array' THEN n.metadata->'service_types'
+					ELSE '[]'::jsonb
+				END
+			) AS service_type
+			FROM quartermaster.infrastructure_nodes n
+			WHERE n.node_id = $1
+		) local_services
+		WHERE service_type IS NOT NULL AND service_type <> ''
+	`, nodeID)
+	if err != nil {
+		s.logger.WithError(err).Warn("meshServiceRequirements: local service query failed")
+		return dnsRequired, peerRequired, globalPeerRequired, infraRequired
+	}
+	defer func() { _ = rows.Close() }()
+
+	var localServices []string
+	for rows.Next() {
+		var serviceType string
+		if scanErr := rows.Scan(&serviceType); scanErr == nil && serviceType != "" {
+			localServices = append(localServices, serviceType)
+		}
+	}
+	for _, dep := range topology.DNSDependenciesForServices(localServices) {
+		dnsRequired[dep] = struct{}{}
+		peerRequired[dep] = struct{}{}
+	}
+	for _, serviceType := range localServices {
+		for _, dep := range topology.InfraDependencies(serviceType) {
+			if dep.Kind != "" {
+				infraRequired = append(infraRequired, dep)
+			}
+		}
+		for _, peerService := range topology.FederationPeerServices(serviceType) {
+			globalPeerRequired[peerService] = struct{}{}
+		}
+	}
+	return dnsRequired, peerRequired, globalPeerRequired, infraRequired
+}
+
+func (s *QuartermasterServer) collectMeshServiceEndpoints(ctx context.Context, clusterID, nodeID string, dnsRequired, peerRequired, globalPeerRequired map[string]struct{}) (map[string]*pb.ServiceEndpoints, map[string]struct{}) {
+	endpoints := map[string]*pb.ServiceEndpoints{}
+	requiredPeerNodeIDs := map[string]struct{}{}
+	peerTypes := sortedStringKeys(peerRequired)
+	globalPeerTypes := sortedStringKeys(globalPeerRequired)
+	if len(peerTypes) == 0 && len(globalPeerTypes) == 0 {
+		return endpoints, requiredPeerNodeIDs
+	}
 	svcRows, svcErr := s.db.QueryContext(ctx, `
-		SELECT s.type, host(n.wireguard_ip)
-		FROM quartermaster.services s
-		JOIN quartermaster.service_instances si ON si.service_id = s.service_id
-		JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
-		WHERE si.status IN ('running', 'active')
-		  AND n.wireguard_ip IS NOT NULL
-		  AND n.status = 'active'
-		  AND n.cluster_id = $1
-		  AND s.type IS NOT NULL AND s.type <> ''
-	`, clusterID)
+		WITH request_contexts AS (
+			SELECT $1::text AS cluster_id WHERE $1 <> ''
+			UNION
+			SELECT si.cluster_id
+			FROM quartermaster.service_instances si
+			WHERE si.node_id = $2
+			  AND si.status IN ('running', 'active')
+			  AND si.cluster_id IS NOT NULL
+			  AND si.cluster_id <> ''
+			UNION
+			SELECT sca.cluster_id
+			FROM quartermaster.service_instances si
+			JOIN quartermaster.service_cluster_assignments sca
+			  ON sca.service_instance_id = si.id AND sca.is_active = true
+			WHERE si.node_id = $2
+			  AND si.status IN ('running', 'active')
+			  AND sca.cluster_id IS NOT NULL
+			  AND sca.cluster_id <> ''
+			UNION
+			SELECT jsonb_array_elements_text(
+				CASE
+					WHEN jsonb_typeof(n.metadata->'desired_cluster_ids') = 'array' THEN n.metadata->'desired_cluster_ids'
+					ELSE '[]'::jsonb
+				END
+			) AS cluster_id
+			FROM quartermaster.infrastructure_nodes n
+			WHERE n.node_id = $2
+			UNION
+			SELECT jsonb_array_elements_text(
+				CASE
+					WHEN jsonb_typeof(n.metadata->'service_cluster_ids') = 'array' THEN n.metadata->'service_cluster_ids'
+					ELSE '[]'::jsonb
+				END
+			) AS cluster_id
+			FROM quartermaster.infrastructure_nodes n
+			WHERE n.node_id = $2
+			UNION
+			SELECT jsonb_array_elements_text(
+				CASE
+					WHEN jsonb_typeof(n.metadata->'logical_cluster_ids') = 'array' THEN n.metadata->'logical_cluster_ids'
+					ELSE '[]'::jsonb
+				END
+			) AS cluster_id
+			FROM quartermaster.infrastructure_nodes n
+			WHERE n.node_id = $2
+		),
+		eligible AS (
+			SELECT s.type,
+			       si.node_id,
+			       host(n.wireguard_ip) AS wireguard_ip,
+			       COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id) AS provider_cluster
+			FROM quartermaster.services s
+			JOIN quartermaster.service_instances si ON si.service_id = s.service_id
+			JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
+			LEFT JOIN quartermaster.service_cluster_assignments sca
+			  ON sca.service_instance_id = si.id AND sca.is_active = true
+			WHERE si.status IN ('running', 'active')
+			  AND n.wireguard_ip IS NOT NULL
+			  AND n.status = 'active'
+			  AND (s.type = ANY($3::text[]) OR s.type = ANY($4::text[]))
+		),
+		service_scope AS (
+			SELECT type, COUNT(DISTINCT provider_cluster) AS provider_cluster_count
+			FROM eligible
+			WHERE provider_cluster IS NOT NULL AND provider_cluster <> ''
+			GROUP BY type
+		)
+		SELECT DISTINCT e.type, e.node_id, e.wireguard_ip
+		FROM eligible e
+		JOIN service_scope ss ON ss.type = e.type
+		WHERE e.type = ANY($4::text[])
+		   OR e.provider_cluster IN (SELECT cluster_id FROM request_contexts)
+		   OR ss.provider_cluster_count = 1
+	`, clusterID, nodeID, pq.Array(peerTypes), pq.Array(globalPeerTypes))
 	if svcErr != nil {
-		s.logger.WithError(svcErr).Warn("collectBootstrapSeed: service endpoint query failed")
-		return peers, endpoints
+		s.logger.WithError(svcErr).Warn("collectMeshServiceEndpoints: service endpoint query failed")
+		return endpoints, requiredPeerNodeIDs
 	}
 	defer func() { _ = svcRows.Close() }()
 	for svcRows.Next() {
-		var svcType, svcIP string
-		if scanErr := svcRows.Scan(&svcType, &svcIP); scanErr != nil || svcIP == "" {
+		var svcType, svcNodeID, svcIP string
+		if scanErr := svcRows.Scan(&svcType, &svcNodeID, &svcIP); scanErr != nil || svcIP == "" {
+			continue
+		}
+		if svcNodeID != "" {
+			requiredPeerNodeIDs[svcNodeID] = struct{}{}
+		}
+		if _, ok := dnsRequired[svcType]; !ok {
 			continue
 		}
 		if endpoints[svcType] == nil {
@@ -6224,7 +6390,137 @@ func (s *QuartermasterServer) collectBootstrapSeed(ctx context.Context, clusterI
 		}
 		endpoints[svcType].Ips = append(endpoints[svcType].Ips, svcIP)
 	}
-	return peers, endpoints
+	return endpoints, requiredPeerNodeIDs
+}
+
+func (s *QuartermasterServer) collectInfraPeerNodeIDs(ctx context.Context, clusterID, nodeID string, infraRequired []topology.InfraDependency) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, dep := range dedupeInfraDependencies(infraRequired) {
+		rows, err := s.db.QueryContext(ctx, `
+			WITH request_contexts AS (
+				SELECT $1::text AS cluster_id WHERE $1 <> ''
+				UNION
+				SELECT si.cluster_id
+				FROM quartermaster.service_instances si
+				WHERE si.node_id = $2
+				  AND si.status IN ('running', 'active')
+				  AND si.cluster_id IS NOT NULL
+				  AND si.cluster_id <> ''
+				UNION
+				SELECT sca.cluster_id
+				FROM quartermaster.service_instances si
+					JOIN quartermaster.service_cluster_assignments sca
+					  ON sca.service_instance_id = si.id AND sca.is_active = true
+					WHERE si.node_id = $2
+					  AND si.status IN ('running', 'active')
+					  AND sca.cluster_id IS NOT NULL
+					  AND sca.cluster_id <> ''
+					UNION
+					SELECT jsonb_array_elements_text(
+						CASE
+							WHEN jsonb_typeof(n.metadata->'desired_cluster_ids') = 'array' THEN n.metadata->'desired_cluster_ids'
+							ELSE '[]'::jsonb
+						END
+					) AS cluster_id
+					FROM quartermaster.infrastructure_nodes n
+					WHERE n.node_id = $2
+					UNION
+					SELECT jsonb_array_elements_text(
+						CASE
+							WHEN jsonb_typeof(n.metadata->'service_cluster_ids') = 'array' THEN n.metadata->'service_cluster_ids'
+							ELSE '[]'::jsonb
+						END
+					) AS cluster_id
+					FROM quartermaster.infrastructure_nodes n
+					WHERE n.node_id = $2
+					UNION
+					SELECT jsonb_array_elements_text(
+						CASE
+							WHEN jsonb_typeof(n.metadata->'logical_cluster_ids') = 'array' THEN n.metadata->'logical_cluster_ids'
+							ELSE '[]'::jsonb
+						END
+					) AS cluster_id
+					FROM quartermaster.infrastructure_nodes n
+					WHERE n.node_id = $2
+				),
+			eligible AS (
+				SELECT si.node_id,
+				       COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id) AS provider_cluster,
+				       COALESCE(si.metadata->>'infra_role', '') AS infra_role,
+				       COALESCE(si.metadata->>'infra_name', '') AS infra_name
+				FROM quartermaster.services svc
+				JOIN quartermaster.service_instances si ON si.service_id = svc.service_id
+				JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
+				LEFT JOIN quartermaster.service_cluster_assignments sca
+				  ON sca.service_instance_id = si.id AND sca.is_active = true
+				WHERE si.status IN ('running', 'active')
+				  AND n.wireguard_ip IS NOT NULL
+				  AND n.status = 'active'
+				  AND svc.type = $3
+				  AND svc.plane = 'infra'
+			),
+			service_scope AS (
+				SELECT COUNT(DISTINCT provider_cluster) AS provider_cluster_count
+				FROM eligible
+				WHERE provider_cluster IS NOT NULL AND provider_cluster <> ''
+			)
+			SELECT DISTINCT e.node_id
+			FROM eligible e
+			CROSS JOIN service_scope ss
+			WHERE (
+				$4 = 'primary' AND e.infra_role = 'primary'
+			) OR (
+				$4 = 'aggregator' AND e.infra_role = 'aggregator'
+			) OR (
+				$4 = 'named' AND e.infra_name = $5 AND (
+					e.provider_cluster IN (SELECT cluster_id FROM request_contexts)
+					OR ss.provider_cluster_count = 1
+				)
+			) OR (
+				$4 = 'regional' AND e.infra_role = 'regional' AND (
+					e.provider_cluster IN (SELECT cluster_id FROM request_contexts)
+					OR ss.provider_cluster_count = 1
+				)
+			)
+		`, clusterID, nodeID, dep.Kind, dep.Provider, dep.Name)
+		if err != nil {
+			s.logger.WithError(err).WithField("infra_kind", dep.Kind).WithField("provider", dep.Provider).Warn("collectInfraPeerNodeIDs: infra provider query failed")
+			continue
+		}
+		func() {
+			defer rows.Close()
+			for rows.Next() {
+				var peerNodeID string
+				if scanErr := rows.Scan(&peerNodeID); scanErr == nil && peerNodeID != "" {
+					out[peerNodeID] = struct{}{}
+				}
+			}
+		}()
+	}
+	return out
+}
+
+func dedupeInfraDependencies(in []topology.InfraDependency) []topology.InfraDependency {
+	seen := map[string]struct{}{}
+	out := make([]topology.InfraDependency, 0, len(in))
+	for _, dep := range in {
+		key := dep.Kind + "\x00" + dep.Provider + "\x00" + dep.Name
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, dep)
+	}
+	return out
+}
+
+func sortedStringKeys(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // CreateBootstrapToken creates a new bootstrap token
@@ -6684,16 +6980,24 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		s.logger.WithError(err).Warn("Failed to update node heartbeat")
 	}
 
-	// 3. Get all peer nodes (same cluster, active, with WireGuard configured)
+	dnsRequired, peerRequired, globalPeerRequired, infraRequired := s.meshServiceRequirements(ctx, nodeID)
+	serviceEndpoints, requiredPeerNodeIDs := s.collectMeshServiceEndpoints(ctx, clusterID, nodeID, dnsRequired, peerRequired, globalPeerRequired)
+	for peerNodeID := range s.collectInfraPeerNodeIDs(ctx, clusterID, nodeID, infraRequired) {
+		requiredPeerNodeIDs[peerNodeID] = struct{}{}
+	}
+
+	// 3. Get active peer nodes with WireGuard configured. Nodes always see
+	// same-cluster peers; cross-cluster peers are limited to required service
+	// endpoints and direct federation targets.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT n.node_name, n.wireguard_public_key, host(n.external_ip), host(n.internal_ip), host(n.wireguard_ip), n.wireguard_listen_port
 		FROM quartermaster.infrastructure_nodes n
 		WHERE n.node_id != $1
+		  AND (n.cluster_id = $2 OR n.node_id = ANY($3))
 		  AND n.wireguard_public_key IS NOT NULL
 		  AND n.wireguard_ip IS NOT NULL
-		  AND n.cluster_id = (SELECT cluster_id FROM quartermaster.infrastructure_nodes WHERE node_id = $1)
 		  AND n.status = 'active'
-	`, nodeID)
+	`, nodeID, clusterID, pq.Array(sortedStringKeys(requiredPeerNodeIDs)))
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -6749,34 +7053,6 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		peer.AllowedIps = []string{peerWgIP.String + "/32"}
 		peer.KeepAlive = 25
 		peers = append(peers, &peer)
-	}
-
-	// 4. Fetch service endpoints for mesh DNS aliases (keyed by canonical service type)
-	serviceEndpoints := make(map[string]*pb.ServiceEndpoints)
-	svcRows, err := s.db.QueryContext(ctx, `
-		SELECT s.type, host(n.wireguard_ip)
-		FROM quartermaster.services s
-		JOIN quartermaster.service_instances si ON si.service_id = s.service_id
-		JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
-		WHERE si.status IN ('running', 'active')
-		  AND n.wireguard_ip IS NOT NULL
-		  AND n.status = 'active'
-		  AND n.cluster_id = $1
-		  AND s.type IS NOT NULL AND s.type <> ''
-	`, clusterID)
-	if err == nil {
-		defer func() { _ = svcRows.Close() }()
-		for svcRows.Next() {
-			var svcType, svcIP string
-			if scanErr := svcRows.Scan(&svcType, &svcIP); scanErr == nil && svcIP != "" {
-				if serviceEndpoints[svcType] == nil {
-					serviceEndpoints[svcType] = &pb.ServiceEndpoints{Ips: []string{}}
-				}
-				serviceEndpoints[svcType].Ips = append(serviceEndpoints[svcType].Ips, svcIP)
-			}
-		}
-	} else {
-		s.logger.WithError(err).Warn("Failed to fetch service endpoints for DNS")
 	}
 
 	return &pb.InfrastructureSyncResponse{
@@ -6844,12 +7120,13 @@ func (s *QuartermasterServer) EnqueueServiceEvent(ctx context.Context, req *pb.E
 // ListServices returns all services in the catalog
 func (s *QuartermasterServer) ListServices(ctx context.Context, req *pb.ListServicesRequest) (*pb.ListServicesResponse, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, service_id, name, plane, description, default_port,
-		       health_check_path, docker_image, version, dependencies,
-		       tags, is_active, type, protocol, created_at, updated_at
-		FROM quartermaster.services
-		ORDER BY name
-	`)
+			SELECT id, service_id, name, plane, description, default_port,
+			       health_check_path, docker_image, version, dependencies,
+			       tags, is_active, type, protocol, created_at, updated_at
+			FROM quartermaster.services
+			WHERE COALESCE(plane, '') <> 'infra'
+			ORDER BY name
+		`)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -7018,34 +7295,34 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 	}
 
 	builder := &pagination.KeysetBuilder{
-		TimestampColumn: "created_at",
-		IDColumn:        "id",
+		TimestampColumn: "si.created_at",
+		IDColumn:        "si.id",
 	}
 
 	// Build WHERE clause for filters
-	where := "WHERE 1=1"
-	countWhere := "WHERE 1=1"
+	where := "WHERE COALESCE(s.plane, '') <> 'infra'"
+	countWhere := "WHERE COALESCE(s.plane, '') <> 'infra'"
 	args := []any{}
 	countArgs := []any{}
 	argIdx := 1
 
 	if req.GetClusterId() != "" {
-		where += fmt.Sprintf(" AND cluster_id = $%d", argIdx)
-		countWhere += fmt.Sprintf(" AND cluster_id = $%d", argIdx)
+		where += fmt.Sprintf(" AND si.cluster_id = $%d", argIdx)
+		countWhere += fmt.Sprintf(" AND si.cluster_id = $%d", argIdx)
 		args = append(args, req.GetClusterId())
 		countArgs = append(countArgs, req.GetClusterId())
 		argIdx++
 	}
 	if req.GetServiceId() != "" {
-		where += fmt.Sprintf(" AND service_id = $%d", argIdx)
-		countWhere += fmt.Sprintf(" AND service_id = $%d", argIdx)
+		where += fmt.Sprintf(" AND si.service_id = $%d", argIdx)
+		countWhere += fmt.Sprintf(" AND si.service_id = $%d", argIdx)
 		args = append(args, req.GetServiceId())
 		countArgs = append(countArgs, req.GetServiceId())
 		argIdx++
 	}
 	if req.GetNodeId() != "" {
-		where += fmt.Sprintf(" AND node_id = $%d", argIdx)
-		countWhere += fmt.Sprintf(" AND node_id = $%d", argIdx)
+		where += fmt.Sprintf(" AND si.node_id = $%d", argIdx)
+		countWhere += fmt.Sprintf(" AND si.node_id = $%d", argIdx)
 		args = append(args, req.GetNodeId())
 		countArgs = append(countArgs, req.GetNodeId())
 		argIdx++
@@ -7053,7 +7330,10 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 
 	// Get total count
 	var total int32
-	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.service_instances %s`, countWhere)
+	countQuery := fmt.Sprintf(`SELECT COUNT(*)
+			FROM quartermaster.service_instances si
+			JOIN quartermaster.services s ON s.service_id = si.service_id
+			%s`, countWhere)
 	if countErr := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); countErr != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
@@ -7065,10 +7345,11 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, instance_id, service_id, cluster_id, node_id, protocol, advertise_host, port,
-		       health_endpoint_override, version, process_id, container_id, status, health_status, COALESCE(metadata, '{}'::jsonb),
-		       started_at, stopped_at, last_health_check, created_at, updated_at
-		FROM quartermaster.service_instances
+			SELECT si.id, si.instance_id, si.service_id, si.cluster_id, si.node_id, si.protocol, si.advertise_host, si.port,
+			       si.health_endpoint_override, si.version, si.process_id, si.container_id, si.status, si.health_status, COALESCE(si.metadata, '{}'::jsonb),
+			       si.started_at, si.stopped_at, si.last_health_check, si.created_at, si.updated_at
+			FROM quartermaster.service_instances si
+			JOIN quartermaster.services s ON s.service_id = si.service_id
 		%s
 		%s
 		LIMIT %d

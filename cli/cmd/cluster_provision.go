@@ -43,6 +43,7 @@ import (
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
@@ -2908,15 +2909,16 @@ func defaultVictoriaMetricsDatasourceURL(manifest *inventory.Manifest) string {
 }
 
 // buildPrivateerStaticPeers emits the static-peers.json payload for the
-// given self host: every other WireGuard-equipped host in the same cluster,
-// each as {name, public_key, allowed_ips, endpoint}. Hosts missing a mesh
-// IP or public key are skipped — they can't participate until the operator
-// reruns `frameworks mesh wg generate`.
+// given self host: same-cluster peers plus cross-cluster Privateer seed
+// peers needed for service, infrastructure, and federation reachability.
+// Hosts missing a mesh IP or public key are skipped — they can't participate
+// until the operator reruns `frameworks mesh wg generate`.
 func buildPrivateerStaticPeers(manifest *inventory.Manifest, selfHostName string) []map[string]any {
 	if manifest == nil || selfHostName == "" {
 		return nil
 	}
 	selfCluster := manifest.HostCluster(selfHostName)
+	seedPeerHosts := privateerSeedPeerHosts(manifest, selfHostName)
 	var peers []map[string]any
 	names := make([]string, 0, len(manifest.Hosts))
 	for name := range manifest.Hosts {
@@ -2932,7 +2934,9 @@ func buildPrivateerStaticPeers(manifest *inventory.Manifest, selfHostName string
 			continue
 		}
 		if selfCluster != "" && manifest.HostCluster(name) != selfCluster {
-			continue
+			if _, ok := seedPeerHosts[name]; !ok {
+				continue
+			}
 		}
 		port := h.WireguardPort
 		if port == 0 && manifest.WireGuard != nil {
@@ -2954,17 +2958,298 @@ func buildPrivateerStaticPeers(manifest *inventory.Manifest, selfHostName string
 	return peers
 }
 
+func privateerSeedPeerHosts(manifest *inventory.Manifest, selfHostName string) map[string]struct{} {
+	hosts := map[string]struct{}{}
+	if manifest == nil || selfHostName == "" {
+		return hosts
+	}
+	for hostName := range privateerBootstrapPeerHosts(manifest) {
+		hosts[hostName] = struct{}{}
+	}
+	for hostName := range privateerDependencyPeerHosts(manifest, selfHostName) {
+		hosts[hostName] = struct{}{}
+	}
+	return hosts
+}
+
+func privateerBootstrapPeerHosts(manifest *inventory.Manifest) map[string]struct{} {
+	hosts := map[string]struct{}{}
+	if manifest == nil {
+		return hosts
+	}
+	if svc, ok := manifest.Services["quartermaster"]; ok && svc.Enabled {
+		for _, hostName := range serviceHosts(svc) {
+			if hostName != "" {
+				hosts[hostName] = struct{}{}
+			}
+		}
+	}
+	return hosts
+}
+
+func privateerDNSAliasesForHost(manifest *inventory.Manifest, selfHostName string) map[string]struct{} {
+	aliases := map[string]struct{}{}
+	if manifest == nil || selfHostName == "" {
+		return aliases
+	}
+	aliases["quartermaster"] = struct{}{}
+	for _, serviceID := range privateerLocalServiceIDs(manifest, selfHostName) {
+		for _, dep := range topology.DNSServiceDependencies(serviceID) {
+			if manifestServiceEnabledForDeploy(manifest, dep) {
+				aliases[dep] = struct{}{}
+			}
+		}
+	}
+	return aliases
+}
+
+func privateerDependencyPeerHosts(manifest *inventory.Manifest, selfHostName string) map[string]struct{} {
+	hosts := map[string]struct{}{}
+	if manifest == nil || selfHostName == "" {
+		return hosts
+	}
+	contextClusters := privateerDNSContextClusters(manifest, selfHostName)
+	for alias := range privateerDNSAliasesForHost(manifest, selfHostName) {
+		for _, hostName := range serviceProviderHostsForAlias(manifest, alias, contextClusters) {
+			hosts[hostName] = struct{}{}
+		}
+	}
+	for _, hostName := range privateerInfraPeerHostsForHost(manifest, selfHostName) {
+		hosts[hostName] = struct{}{}
+	}
+	for _, hostName := range privateerConcretePeerHostsForHost(manifest, selfHostName) {
+		hosts[hostName] = struct{}{}
+	}
+	return hosts
+}
+
+func privateerLocalServiceIDs(manifest *inventory.Manifest, selfHostName string) []string {
+	seen := map[string]struct{}{}
+	addServices := func(services map[string]inventory.ServiceConfig) {
+		for name, svc := range services {
+			if !svc.Enabled || !slices.Contains(serviceHosts(svc), selfHostName) {
+				continue
+			}
+			serviceID := name
+			if svc.Deploy != "" {
+				serviceID = svc.Deploy
+			}
+			if serviceID != "" {
+				seen[serviceID] = struct{}{}
+			}
+		}
+	}
+	addServices(manifest.Services)
+	addServices(manifest.Interfaces)
+	addServices(manifest.Observability)
+	return sortedKeys(seen)
+}
+
+func serviceProviderHostsForAlias(manifest *inventory.Manifest, alias string, contextClusters map[string]struct{}) []string {
+	if manifest == nil || alias == "" {
+		return nil
+	}
+	var services []inventory.ServiceConfig
+	collect := func(configs map[string]inventory.ServiceConfig) {
+		for name, svc := range configs {
+			if serviceDeployMatches(name, svc, alias) && svc.Enabled {
+				services = append(services, svc)
+			}
+		}
+	}
+	collect(manifest.Services)
+	collect(manifest.Interfaces)
+	collect(manifest.Observability)
+	if len(services) == 0 {
+		return nil
+	}
+	if len(services) == 1 {
+		return serviceDNSHostsForContext(manifest, services[0], contextClusters)
+	}
+	return serviceDNSHostsForGroup(manifest, services, contextClusters)
+}
+
+func privateerInfraPeerHostsForHost(manifest *inventory.Manifest, selfHostName string) []string {
+	if manifest == nil || selfHostName == "" {
+		return nil
+	}
+	hosts := map[string]struct{}{}
+	addHost := func(hostName string) {
+		if strings.TrimSpace(hostName) != "" {
+			hosts[hostName] = struct{}{}
+		}
+	}
+	forEachLocalService(manifest, selfHostName, func(name string, svc inventory.ServiceConfig) {
+		serviceID := name
+		if svc.Deploy != "" {
+			serviceID = svc.Deploy
+		}
+		for _, dep := range topology.InfraDependencies(serviceID) {
+			switch dep.Kind {
+			case topology.InfraDatabase:
+				if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
+					switch dep.Provider {
+					case topology.InfraProviderPrimary, "":
+						if pg.IsYugabyte() && len(pg.Nodes) > 0 {
+							for _, node := range pg.Nodes {
+								addHost(node.Host)
+							}
+						} else {
+							addHost(pg.Host)
+						}
+					case topology.InfraProviderNamed:
+						for _, inst := range pg.Instances {
+							if inst.Name == dep.Name {
+								addHost(inst.Host)
+							}
+						}
+					}
+				}
+			case topology.InfraClickHouse:
+				if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
+					addHost(ch.Host)
+				}
+			case topology.InfraKafka:
+				if manifest.Infrastructure.Kafka == nil || !manifest.Infrastructure.Kafka.Enabled {
+					continue
+				}
+				var kafkaClusters []*kafkaClusterView
+				if dep.Provider == topology.InfraProviderAggregator || isAggregatorPinnedService(serviceID) {
+					kafkaClusters = append(kafkaClusters, aggregatorKafkaClusterView(manifest))
+				} else {
+					for _, clusterID := range serviceProviderClusterIDs(manifest, svc, selfHostName) {
+						kafkaClusters = append(kafkaClusters, serviceKafkaCluster(manifest, clusterID, privateerHostRegion(manifest, selfHostName)))
+					}
+				}
+				for _, kc := range kafkaClusters {
+					if kc == nil {
+						continue
+					}
+					for _, broker := range kc.Brokers {
+						addHost(broker.Host)
+					}
+				}
+			case topology.InfraRedis:
+				if redis := manifest.Infrastructure.Redis; redis != nil && redis.Enabled {
+					clusterSet := map[string]struct{}{}
+					for _, clusterID := range serviceProviderClusterIDs(manifest, svc, selfHostName) {
+						clusterSet[clusterID] = struct{}{}
+					}
+					for _, inst := range redis.Instances {
+						if dep.Provider == topology.InfraProviderNamed && inst.Name != dep.Name {
+							continue
+						}
+						if inst.Cluster != "" {
+							if _, ok := clusterSet[inst.Cluster]; !ok {
+								continue
+							}
+						}
+						addHost(inst.Host)
+						for _, replica := range inst.ReplicaHosts {
+							addHost(replica)
+						}
+						for _, sentinel := range inst.Sentinels {
+							addHost(sentinel.Host)
+						}
+					}
+				}
+			}
+		}
+	})
+	return sortedKeys(hosts)
+}
+
+func privateerConcretePeerHostsForHost(manifest *inventory.Manifest, selfHostName string) []string {
+	if manifest == nil || selfHostName == "" {
+		return nil
+	}
+	hosts := map[string]struct{}{}
+	addServiceHosts := func(svc inventory.ServiceConfig) {
+		for _, hostName := range serviceHosts(svc) {
+			if hostName != "" {
+				hosts[hostName] = struct{}{}
+			}
+		}
+	}
+	forEachLocalService(manifest, selfHostName, func(name string, svc inventory.ServiceConfig) {
+		serviceID := name
+		if svc.Deploy != "" {
+			serviceID = svc.Deploy
+		}
+		switch serviceID {
+		case "bridge":
+			if signalman, ok := manifest.Services["signalman"]; ok && signalman.Enabled {
+				addServiceHosts(signalman)
+			}
+		case "foghorn":
+			for _, clusterID := range serviceProviderClusterIDs(manifest, svc, selfHostName) {
+				if chandler, ok := chandlerForCluster(manifest, clusterID); ok {
+					addServiceHosts(chandler)
+				}
+			}
+			for _, peer := range servicesByDeploy(manifest, "foghorn") {
+				addServiceHosts(peer)
+			}
+		case "privateer":
+			if navigator, ok := manifest.Services["navigator"]; ok && navigator.Enabled {
+				addServiceHosts(navigator)
+			}
+		}
+		for _, peerServiceID := range topology.FederationPeerServices(serviceID) {
+			for _, peer := range servicesByDeploy(manifest, peerServiceID) {
+				addServiceHosts(peer)
+			}
+		}
+	})
+	return sortedKeys(hosts)
+}
+
+func forEachLocalService(manifest *inventory.Manifest, selfHostName string, fn func(name string, svc inventory.ServiceConfig)) {
+	if manifest == nil || selfHostName == "" || fn == nil {
+		return
+	}
+	walk := func(services map[string]inventory.ServiceConfig) {
+		for name, svc := range services {
+			if svc.Enabled && slices.Contains(serviceHosts(svc), selfHostName) {
+				fn(name, svc)
+			}
+		}
+	}
+	walk(manifest.Services)
+	walk(manifest.Interfaces)
+	walk(manifest.Observability)
+}
+
+func privateerHostRegion(manifest *inventory.Manifest, hostName string) string {
+	if manifest == nil || hostName == "" {
+		return ""
+	}
+	host, ok := manifest.Hosts[hostName]
+	if !ok {
+		return ""
+	}
+	if region := strings.TrimSpace(host.Labels["region"]); region != "" {
+		return region
+	}
+	if clusterID := strings.TrimSpace(host.Cluster); clusterID != "" {
+		if cluster, ok := manifest.Clusters[clusterID]; ok {
+			return strings.TrimSpace(cluster.Region)
+		}
+	}
+	return ""
+}
+
 func buildPrivateerSeedDNS(manifest *inventory.Manifest, selfHostName string) map[string][]string {
 	if manifest == nil || selfHostName == "" {
 		return nil
 	}
 	selfCluster := manifest.HostCluster(selfHostName)
+	contextClusters := privateerDNSContextClusters(manifest, selfHostName)
+	seedPeerHosts := privateerSeedPeerHosts(manifest, selfHostName)
+	dnsAliases := privateerDNSAliasesForHost(manifest, selfHostName)
 	dns := map[string][]string{}
-	addHost := func(recordName, hostName string) {
+	addRecord := func(recordName, hostName string) {
 		if recordName == "" || hostName == "" {
-			return
-		}
-		if selfCluster != "" && manifest.HostCluster(hostName) != selfCluster {
 			return
 		}
 		h, ok := manifest.Hosts[hostName]
@@ -2981,7 +3266,12 @@ func buildPrivateerSeedDNS(manifest *inventory.Manifest, selfHostName string) ma
 	}
 	sort.Strings(hostNames)
 	for _, hostName := range hostNames {
-		addHost(hostName, hostName)
+		if selfCluster != "" && manifest.HostCluster(hostName) != selfCluster {
+			if _, ok := seedPeerHosts[hostName]; !ok {
+				continue
+			}
+		}
+		addRecord(hostName, hostName)
 	}
 	addServices := func(services map[string]inventory.ServiceConfig) {
 		names := make([]string, 0, len(services))
@@ -2989,13 +3279,33 @@ func buildPrivateerSeedDNS(manifest *inventory.Manifest, selfHostName string) ma
 			names = append(names, name)
 		}
 		sort.Strings(names)
+		deployGroups := map[string][]inventory.ServiceConfig{}
 		for _, name := range names {
 			svc := services[name]
 			if !svc.Enabled {
 				continue
 			}
-			for _, hostName := range serviceHosts(svc) {
-				addHost(name, hostName)
+			if svc.Deploy != "" && svc.Deploy != name {
+				deployGroups[svc.Deploy] = append(deployGroups[svc.Deploy], svc)
+			}
+			for _, hostName := range serviceDNSHostsForContext(manifest, svc, contextClusters) {
+				addRecord(hostName, hostName)
+				if _, ok := dnsAliases[name]; ok {
+					addRecord(name, hostName)
+				}
+			}
+		}
+		deployNames := make([]string, 0, len(deployGroups))
+		for deployName := range deployGroups {
+			deployNames = append(deployNames, deployName)
+		}
+		sort.Strings(deployNames)
+		for _, deployName := range deployNames {
+			for _, hostName := range serviceDNSHostsForGroup(manifest, deployGroups[deployName], contextClusters) {
+				addRecord(hostName, hostName)
+				if _, ok := dnsAliases[deployName]; ok {
+					addRecord(deployName, hostName)
+				}
 			}
 		}
 	}
@@ -3006,6 +3316,137 @@ func buildPrivateerSeedDNS(manifest *inventory.Manifest, selfHostName string) ma
 		sort.Strings(ips)
 	}
 	return dns
+}
+
+func privateerDNSContextClusters(manifest *inventory.Manifest, selfHostName string) map[string]struct{} {
+	contexts := map[string]struct{}{}
+	if manifest == nil || selfHostName == "" {
+		return contexts
+	}
+	if clusterID := manifest.HostCluster(selfHostName); clusterID != "" {
+		contexts[clusterID] = struct{}{}
+	}
+	addServiceContexts := func(services map[string]inventory.ServiceConfig) {
+		for _, svc := range services {
+			if !svc.Enabled || !slices.Contains(serviceHosts(svc), selfHostName) {
+				continue
+			}
+			for _, clusterID := range serviceProviderClusterIDs(manifest, svc, selfHostName) {
+				contexts[clusterID] = struct{}{}
+			}
+		}
+	}
+	addServiceContexts(manifest.Services)
+	addServiceContexts(manifest.Interfaces)
+	addServiceContexts(manifest.Observability)
+	return contexts
+}
+
+func serviceDNSHostsForContext(manifest *inventory.Manifest, svc inventory.ServiceConfig, contextClusters map[string]struct{}) []string {
+	if manifest == nil {
+		return nil
+	}
+	hosts := serviceHosts(svc)
+	if len(hosts) == 0 {
+		return nil
+	}
+	var local []string
+	providerClusters := map[string]struct{}{}
+	for _, hostName := range hosts {
+		clusters := serviceProviderClusterIDs(manifest, svc, hostName)
+		for _, clusterID := range clusters {
+			providerClusters[clusterID] = struct{}{}
+			if _, ok := contextClusters[clusterID]; ok {
+				local = append(local, hostName)
+				break
+			}
+		}
+	}
+	if len(local) > 0 {
+		return sortedUniqueStrings(local)
+	}
+	if len(providerClusters) == 1 {
+		return sortedUniqueStrings(hosts)
+	}
+	return nil
+}
+
+func serviceDNSHostsForGroup(manifest *inventory.Manifest, services []inventory.ServiceConfig, contextClusters map[string]struct{}) []string {
+	if manifest == nil {
+		return nil
+	}
+	var local, allHosts []string
+	providerClusters := map[string]struct{}{}
+	for _, svc := range services {
+		if !svc.Enabled {
+			continue
+		}
+		for _, hostName := range serviceHosts(svc) {
+			allHosts = append(allHosts, hostName)
+			clusters := serviceProviderClusterIDs(manifest, svc, hostName)
+			for _, clusterID := range clusters {
+				providerClusters[clusterID] = struct{}{}
+				if _, ok := contextClusters[clusterID]; ok {
+					local = append(local, hostName)
+					break
+				}
+			}
+		}
+	}
+	if len(local) > 0 {
+		return sortedUniqueStrings(local)
+	}
+	if len(providerClusters) == 1 {
+		return sortedUniqueStrings(allHosts)
+	}
+	return nil
+}
+
+func serviceProviderClusterIDs(manifest *inventory.Manifest, svc inventory.ServiceConfig, hostName string) []string {
+	var out []string
+	if svc.Cluster != "" {
+		out = append(out, svc.Cluster)
+	}
+	for _, clusterID := range svc.Clusters {
+		if clusterID != "" {
+			out = append(out, clusterID)
+		}
+	}
+	if len(out) == 0 && manifest != nil && hostName != "" {
+		if clusterID := manifest.HostCluster(hostName); clusterID != "" {
+			out = append(out, clusterID)
+		}
+	}
+	return sortedUniqueStrings(out)
+}
+
+func sortedUniqueStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedKeys(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func internalGRPCLeafServicesForHost(manifest *inventory.Manifest, hostName string) []string {
@@ -5321,97 +5762,21 @@ func normalizeServiceEnvVars(serviceID string, env map[string]string) {
 	}
 }
 
-type generatedEnvRequirement struct {
-	key       string
-	serviceID string
-}
-
-var generatedEnvRequirements = map[string][]generatedEnvRequirement{
-	"bridge": {
-		{key: "COMMODORE_GRPC_ADDR"},
-		{key: "PERISCOPE_GRPC_ADDR"},
-		{key: "PURSER_GRPC_ADDR"},
-		{key: "QUARTERMASTER_GRPC_ADDR"},
-		{key: "SIGNALMAN_GRPC_ADDR"},
-		{key: "DECKLOG_GRPC_ADDR"},
-	},
-	"chandler": {
-		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
-	},
-	"commodore": {
-		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
-		{key: "PURSER_GRPC_ADDR", serviceID: "purser"},
-		{key: "DECKLOG_GRPC_ADDR", serviceID: "decklog"},
-	},
-	"deckhand": {
-		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
-		{key: "PURSER_GRPC_ADDR", serviceID: "purser"},
-		{key: "DECKLOG_GRPC_ADDR", serviceID: "decklog"},
-	},
-	"decklog": {
-		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
-	},
-	"foghorn": {
-		{key: "CHANDLER_INTERNAL_URL", serviceID: "chandler"},
-		{key: "COMMODORE_GRPC_ADDR", serviceID: "commodore"},
-		{key: "DECKLOG_GRPC_ADDR", serviceID: "decklog"},
-		{key: "PURSER_GRPC_ADDR", serviceID: "purser"},
-		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
-	},
-	"livepeer-gateway": {
-		{key: "FRAMEWORKS_DECKLOG_GRPC_ADDR", serviceID: "decklog"},
-		{key: "auth_webhook_url", serviceID: "foghorn"},
-	},
-	"navigator": {
-		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
-	},
-	"periscope-ingest": {
-		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
-	},
-	"periscope-query": {
-		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
-	},
-	"privateer": {
-		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
-	},
-	"purser": {
-		{key: "COMMODORE_GRPC_ADDR", serviceID: "commodore"},
-		{key: "DECKLOG_GRPC_ADDR", serviceID: "decklog"},
-		{key: "PERISCOPE_GRPC_ADDR", serviceID: "periscope-query"},
-		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
-	},
-	"quartermaster": {
-		{key: "DECKLOG_GRPC_ADDR", serviceID: "decklog"},
-		{key: "PURSER_GRPC_ADDR", serviceID: "purser"},
-		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
-	},
-	"signalman": {
-		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
-	},
-	"skipper": {
-		{key: "COMMODORE_GRPC_ADDR", serviceID: "commodore"},
-		{key: "DECKLOG_GRPC_ADDR", serviceID: "decklog"},
-		{key: "PERISCOPE_GRPC_ADDR", serviceID: "periscope-query"},
-		{key: "PURSER_GRPC_ADDR", serviceID: "purser"},
-		{key: "QUARTERMASTER_GRPC_ADDR", serviceID: "quartermaster"},
-	},
-}
-
 func missingRequiredGeneratedEnv(manifest *inventory.Manifest, serviceID string, env map[string]string) []string {
 	if isDevProfile(manifest) {
 		return nil
 	}
-	requirements := generatedEnvRequirements[serviceID]
+	requirements := topology.RequiredServiceEnv(serviceID)
 	if len(requirements) == 0 {
 		return nil
 	}
 	missing := make([]string, 0, len(requirements))
 	for _, req := range requirements {
-		if req.serviceID != "" && !manifestServiceEnabledForDeploy(manifest, req.serviceID) {
+		if req.TargetServiceID != "" && !manifestServiceEnabledForDeploy(manifest, req.TargetServiceID) {
 			continue
 		}
-		if strings.TrimSpace(env[req.key]) == "" {
-			missing = append(missing, req.key)
+		if strings.TrimSpace(env[req.EnvKey]) == "" {
+			missing = append(missing, req.EnvKey)
 		}
 	}
 	return missing

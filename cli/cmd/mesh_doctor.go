@@ -28,10 +28,10 @@ func newMeshDoctorCmd() *cobra.Command {
 		Use:   "doctor",
 		Short: "Simulate the runtime apply for each manifest host and report policy violations",
 		Long: `For each host declared in the GitOps cluster manifest, build the
-peer set Quartermaster would return on SyncMesh (same-cluster active
-nodes with WireGuard configured) and run the same FrameWorks policy
-rules that Privateer enforces before touching wg0. Two layers run per
-host:
+peer set Privateer should receive from the manifest-derived topology
+(same-cluster peers plus required cross-cluster service, infra, and
+federation peers) and run the same FrameWorks policy rules that Privateer
+enforces before touching wg0. Two layers run per host:
 
   Self identity (matches what runtime apply checks):
     - Self address is IPv4 /32
@@ -112,18 +112,17 @@ type doctorResult struct {
 	peerIssue     string
 }
 
-// diagnoseManifest walks each manifest host, constructs the peer set
-// Quartermaster would return for it (same-cluster nodes with WireGuard
-// identity, excluding self), and runs wgpolicy validation. Self public
-// key comes from the manifest — no private-key material is touched.
+// diagnoseManifest walks each manifest host, constructs the manifest-derived
+// peer set for it, and runs wgpolicy validation. Runtime SyncMesh derives the
+// same dependency shape from service_instances; doctor uses the manifest so it
+// remains read-only. Self public key comes from the manifest — no private-key
+// material is touched.
 func diagnoseManifest(manifest *inventory.Manifest, hostNames []string, qmNodes []*pb.InfrastructureNode) []doctorResult {
-	// Index QM rows by (cluster, node_name) for cluster-scoped peer lookup.
+	// Index QM rows by (cluster, node_name) for self identity lookup.
 	type qmKeyInner struct{ cluster, name string }
 	byKey := make(map[qmKeyInner]*pb.InfrastructureNode, len(qmNodes))
-	byCluster := make(map[string][]*pb.InfrastructureNode)
 	for _, n := range qmNodes {
 		byKey[qmKeyInner{cluster: n.GetClusterId(), name: n.GetNodeName()}] = n
-		byCluster[n.GetClusterId()] = append(byCluster[n.GetClusterId()], n)
 	}
 
 	out := make([]doctorResult, 0, len(hostNames))
@@ -195,9 +194,9 @@ func diagnoseManifest(manifest *inventory.Manifest, hostNames []string, qmNodes 
 			continue
 		}
 
-		// Peer set: same logic Quartermaster's SyncMesh applies — every
-		// active QM node in the cluster except the requesting host.
-		peers, peerBuildErr := buildPeerSetForHost(byCluster[clusterID], selfQM)
+		// Peer set: same-cluster nodes plus the cross-cluster nodes required
+		// by the shared topology catalog and concrete federation edges.
+		peers, peerBuildErr := buildPeerSetForHost(qmNodes, selfQM, clusterID, privateerSeedPeerHosts(manifest, name))
 		if peerBuildErr != nil {
 			res.peerIssue = peerBuildErr.Error()
 			out = append(out, res)
@@ -256,21 +255,26 @@ func selfIdentityMismatch(host inventory.Host, qm *pb.InfrastructureNode) string
 	return "manifest diverges from Quartermaster (real SyncMesh would FailedPrecondition): " + strings.Join(diffs, "; ")
 }
 
-// buildPeerSetForHost mirrors Quartermaster's SyncMesh peer construction:
-// every active QM node in the same cluster except self, with endpoint
-// built from external_ip (preferred) or internal_ip and AllowedIPs =
-// wireguard_ip/32. Nodes with missing required fields are skipped
-// silently here — those exclusions are surfaced by 'mesh wg audit' and
-// Quartermaster's own SyncMesh logging, not by doctor.
-func buildPeerSetForHost(clusterNodes []*pb.InfrastructureNode, self *pb.InfrastructureNode) ([]wgpolicy.Peer, error) {
+// buildPeerSetForHost mirrors the mesh peer construction: same-cluster nodes
+// plus explicit cross-cluster dependency peers, with endpoint built from
+// external_ip (preferred) or internal_ip and AllowedIPs = wireguard_ip/32.
+// Nodes with missing required fields are skipped silently here — those
+// exclusions are surfaced by 'mesh wg audit' and Quartermaster's own SyncMesh
+// logging, not by doctor.
+func buildPeerSetForHost(nodes []*pb.InfrastructureNode, self *pb.InfrastructureNode, clusterID string, crossClusterHosts map[string]struct{}) ([]wgpolicy.Peer, error) {
 	selfNodeID := ""
 	if self != nil {
 		selfNodeID = self.GetNodeId()
 	}
 	var peers []wgpolicy.Peer
-	for _, n := range clusterNodes {
+	for _, n := range nodes {
 		if n.GetNodeId() == selfNodeID {
 			continue
+		}
+		if clusterID != "" && n.GetClusterId() != clusterID {
+			if _, ok := crossClusterHosts[n.GetNodeName()]; !ok {
+				continue
+			}
 		}
 		// SyncMesh's SQL filters peers to status='active'; doctor must
 		// match or it will simulate peers Privateer would never receive.

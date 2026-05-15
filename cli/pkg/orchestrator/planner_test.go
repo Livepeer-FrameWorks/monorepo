@@ -429,10 +429,16 @@ func TestPlan_AllPhasesStillHaveCompleteDeps(t *testing.T) {
 			}
 		}
 	}
-	for _, need := range []string{"quartermaster", "privateer-mesh-core1", "postgres", "kafka-broker-1"} {
+	for _, need := range []string{"quartermaster", "privateer-mesh-core1"} {
 		if !bridgeDeps[need] {
 			t.Errorf("bridge missing expected dep %q (have %v)", need, bridgeDeps)
 		}
+	}
+	if bridgeDeps["postgres"] {
+		t.Errorf("bridge unexpectedly depends on postgres despite no direct database dependency (have %v)", bridgeDeps)
+	}
+	if bridgeDeps["kafka-broker-1"] {
+		t.Errorf("bridge unexpectedly depends on kafka despite no direct Kafka dependency (have %v)", bridgeDeps)
 	}
 }
 

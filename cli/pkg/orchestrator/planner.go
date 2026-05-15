@@ -11,6 +11,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	infra "github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 )
 
 // Planner creates execution plans from manifests
@@ -187,6 +188,118 @@ func effectiveServiceCluster(svc inventory.ServiceConfig, hostName string, manif
 		return svc.Clusters[0]
 	}
 	return manifest.HostCluster(hostName)
+}
+
+func (p *Planner) topologyInfraTaskDeps(serviceID string, svc inventory.ServiceConfig, clusterID string, appendIfInGraph func([]string, ...string) []string) []string {
+	var deps []string
+	for _, dep := range topology.InfraDependencies(serviceID) {
+		switch dep.Kind {
+		case topology.InfraDatabase:
+			deps = appendIfInGraph(deps, p.databaseTaskNames(dep)...)
+		case topology.InfraClickHouse:
+			deps = appendIfInGraph(deps, "clickhouse")
+		case topology.InfraKafka:
+			deps = appendIfInGraph(deps, p.kafkaTaskNames(dep, clusterID)...)
+		case topology.InfraRedis:
+			deps = appendIfInGraph(deps, p.redisTaskNames(dep, svc, clusterID)...)
+		}
+	}
+	return deps
+}
+
+func (p *Planner) databaseTaskNames(dep topology.InfraDependency) []string {
+	pg := p.manifest.Infrastructure.Postgres
+	if pg == nil || !pg.Enabled {
+		return nil
+	}
+	if dep.Provider == topology.InfraProviderNamed {
+		var out []string
+		for _, inst := range pg.Instances {
+			if inst.Name == dep.Name {
+				out = append(out, "postgres-"+inst.Name)
+			}
+		}
+		return out
+	}
+	if pg.IsYugabyte() && len(pg.Nodes) > 0 {
+		out := make([]string, 0, len(pg.Nodes))
+		for _, node := range pg.Nodes {
+			out = append(out, "yugabyte-node-"+strconv.Itoa(node.ID))
+		}
+		return out
+	}
+	return []string{"postgres"}
+}
+
+func (p *Planner) kafkaTaskNames(dep topology.InfraDependency, clusterID string) []string {
+	if p.manifest.Infrastructure.Kafka == nil || !p.manifest.Infrastructure.Kafka.Enabled {
+		return nil
+	}
+	var selected *kafkaPlannerCluster
+	if dep.Provider == topology.InfraProviderAggregator {
+		selected = p.aggregatorKafkaCluster()
+	} else {
+		selected = p.kafkaClusterForServiceCluster(clusterID)
+	}
+	if selected == nil {
+		return nil
+	}
+	out := make([]string, 0, len(selected.Brokers))
+	for _, broker := range selected.Brokers {
+		out = append(out, kafkaBrokerTaskName(selected.RegionID, broker.ID))
+	}
+	return out
+}
+
+func (p *Planner) aggregatorKafkaCluster() *kafkaPlannerCluster {
+	clusters := p.kafkaClusters()
+	for i := range clusters {
+		if strings.EqualFold(clusters[i].Role, "aggregator") {
+			return &clusters[i]
+		}
+	}
+	if len(clusters) == 0 {
+		return nil
+	}
+	return &clusters[0]
+}
+
+func (p *Planner) kafkaClusterForServiceCluster(clusterID string) *kafkaPlannerCluster {
+	clusters := p.kafkaClusters()
+	if len(clusters) == 0 {
+		return nil
+	}
+	region := ""
+	if clusterID != "" {
+		if cluster, ok := p.manifest.Clusters[clusterID]; ok {
+			region = strings.TrimSpace(cluster.Region)
+		}
+	}
+	if region != "" {
+		for i := range clusters {
+			if clusters[i].RegionID == region {
+				return &clusters[i]
+			}
+		}
+	}
+	return &clusters[0]
+}
+
+func (p *Planner) redisTaskNames(dep topology.InfraDependency, _ inventory.ServiceConfig, clusterID string) []string {
+	if p.manifest.Infrastructure.Redis == nil || !p.manifest.Infrastructure.Redis.Enabled {
+		return nil
+	}
+	var out []string
+	for _, inst := range p.manifest.Infrastructure.Redis.Instances {
+		if dep.Provider == topology.InfraProviderNamed && inst.Name != dep.Name {
+			continue
+		}
+		if inst.Cluster != "" && inst.Cluster != clusterID {
+			continue
+		}
+		out = append(out, redisPrimaryTaskName(inst))
+	}
+	return out
 }
 
 // Plan creates an execution plan based on options
@@ -472,34 +585,6 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 		return deps
 	}
 
-	infraDeps := []string{}
-
-	if pg := p.manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
-		if pg.IsYugabyte() && len(pg.Nodes) > 0 {
-			for _, node := range pg.Nodes {
-				infraDeps = appendIfInGraph(infraDeps, "yugabyte-node-"+strconv.Itoa(node.ID))
-			}
-		} else {
-			infraDeps = appendIfInGraph(infraDeps, "postgres")
-		}
-	}
-
-	if p.manifest.Infrastructure.Redis != nil && p.manifest.Infrastructure.Redis.Enabled {
-		for _, instance := range p.manifest.Infrastructure.Redis.Instances {
-			infraDeps = appendIfInGraph(infraDeps, redisPrimaryTaskName(instance))
-		}
-	}
-
-	if p.manifest.Infrastructure.Kafka != nil && p.manifest.Infrastructure.Kafka.Enabled {
-		// App tasks depend on every kafka broker across every declared
-		// cluster (primary + each Regional). Naming follows kafkaBrokerTaskName.
-		for _, kc := range p.kafkaClusters() {
-			for _, broker := range kc.Brokers {
-				infraDeps = appendIfInGraph(infraDeps, kafkaBrokerTaskName(kc.RegionID, broker.ID))
-			}
-		}
-	}
-
 	// 1. Quartermaster (Core Control Plane)
 	// Must run before Privateer and other apps
 	if svc, ok := p.manifest.Services["quartermaster"]; ok && svc.Enabled {
@@ -509,15 +594,14 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 		}
 		task := NewServiceTask(deploy, "quartermaster", "", svc.Host, PhaseApplications)
 		task.ClusterID = effectiveServiceCluster(svc, svc.Host, p.manifest)
-		task.DependsOn = infraDeps
+		task.DependsOn = p.topologyInfraTaskDeps("quartermaster", svc, task.ClusterID, appendIfInGraph)
 		graph.AddTask(task)
 	}
 
 	// Other Applications depend on Quartermaster AND every privateer-mesh
 	// instance (global mesh barrier), but only when those tasks are in the
 	// current graph.
-	coreDeps := append([]string{}, infraDeps...)
-	coreDeps = appendIfInGraph(coreDeps, "quartermaster")
+	coreDeps := appendIfInGraph(nil, "quartermaster")
 	if svc, ok := p.manifest.Services["privateer"]; ok && svc.Enabled {
 		privateerHosts := EffectivePrivateerHosts(svc, p.manifest.Hosts)
 		for _, h := range privateerHosts {
@@ -545,7 +629,7 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 			}
 			task := NewServiceTask(deploy, name, instanceID, hostName, PhaseApplications)
 			task.ClusterID = effectiveServiceCluster(svc, hostName, p.manifest)
-			task.DependsOn = coreDeps
+			task.DependsOn = append(p.topologyInfraTaskDeps(deploy, svc, task.ClusterID, appendIfInGraph), coreDeps...)
 			if name == "skipper" {
 				if bridge, ok := p.manifest.Services["bridge"]; ok && bridge.Enabled {
 					bridgeHosts := resolveHosts(bridge)

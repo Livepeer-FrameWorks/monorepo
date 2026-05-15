@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 
 	"github.com/spf13/cobra"
 )
@@ -1831,19 +1833,19 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 			if missing := missingRequiredGeneratedEnv(manifest, tc.serviceID, env); len(missing) > 0 {
 				t.Fatalf("generated runtime env missing: %v", missing)
 			}
-			for _, req := range generatedEnvRequirements[tc.serviceID] {
-				if req.serviceID != "" && !manifestServiceEnabledForDeploy(manifest, req.serviceID) {
+			for _, req := range topology.RequiredServiceEnv(tc.serviceID) {
+				if req.TargetServiceID != "" && !manifestServiceEnabledForDeploy(manifest, req.TargetServiceID) {
 					continue
 				}
-				value := strings.TrimSpace(env[req.key])
+				value := strings.TrimSpace(env[req.EnvKey])
 				if value == "" {
-					t.Fatalf("expected generated runtime env %s to be populated", req.key)
+					t.Fatalf("expected generated runtime env %s to be populated", req.EnvKey)
 				}
-				if strings.Contains(req.key, "GRPC_ADDR") && !strings.Contains(value, ".internal:") {
-					t.Fatalf("%s = %q, want rendered mesh address instead of binary fallback", req.key, value)
+				if strings.Contains(req.EnvKey, "GRPC_ADDR") && !strings.Contains(value, ".internal:") {
+					t.Fatalf("%s = %q, want rendered mesh address instead of binary fallback", req.EnvKey, value)
 				}
-				if strings.Contains(strings.ToUpper(req.key), "URL") && !strings.Contains(value, ".internal:") {
-					t.Fatalf("%s = %q, want rendered mesh address instead of binary fallback", req.key, value)
+				if strings.Contains(strings.ToUpper(req.EnvKey), "URL") && !strings.Contains(value, ".internal:") {
+					t.Fatalf("%s = %q, want rendered mesh address instead of binary fallback", req.EnvKey, value)
 				}
 			}
 		})
@@ -2647,6 +2649,111 @@ func TestQuartermasterMeshGRPCAddrMissingService(t *testing.T) {
 	}
 }
 
+func TestPrivateerStaticPeersIncludeQuartermasterAcrossClusters(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Clusters: map[string]inventory.ClusterConfig{
+			"core":     {},
+			"regional": {},
+		},
+		Hosts: map[string]inventory.Host{
+			"central-1": {
+				Cluster:            "core",
+				ExternalIP:         "203.0.113.10",
+				WireguardIP:        "10.88.0.10",
+				WireguardPublicKey: "central-pub",
+			},
+			"regional-1": {
+				Cluster:            "regional",
+				ExternalIP:         "203.0.113.20",
+				WireguardIP:        "10.88.1.20",
+				WireguardPublicKey: "regional-1-pub",
+			},
+			"regional-2": {
+				Cluster:            "regional",
+				ExternalIP:         "203.0.113.21",
+				WireguardIP:        "10.88.1.21",
+				WireguardPublicKey: "regional-2-pub",
+			},
+			"us-1": {
+				Cluster:            "us",
+				ExternalIP:         "203.0.113.30",
+				WireguardIP:        "10.88.2.30",
+				WireguardPublicKey: "us-pub",
+			},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Host: "central-1"},
+			"privateer":     {Enabled: true},
+		},
+	}
+
+	peers := buildPrivateerStaticPeers(manifest, "regional-1")
+	got := map[string][]string{}
+	for _, peer := range peers {
+		name, _ := peer["name"].(string)
+		allowed, _ := peer["allowed_ips"].([]string)
+		got[name] = allowed
+	}
+
+	if _, ok := got["central-1"]; !ok {
+		t.Fatalf("expected quartermaster host central-1 in privateer seed peers, got %#v", peers)
+	}
+	if got["central-1"][0] != "10.88.0.10/32" {
+		t.Fatalf("central-1 allowed IPs = %v, want 10.88.0.10/32", got["central-1"])
+	}
+	if _, ok := got["regional-2"]; !ok {
+		t.Fatalf("expected same-cluster peer regional-2, got %#v", peers)
+	}
+	if _, ok := got["us-1"]; ok {
+		t.Fatalf("unexpected unrelated cross-cluster privateer peer us-1, got %#v", peers)
+	}
+}
+
+func TestPrivateerSeedDNSUsesTopologyScopedAliases(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Clusters: map[string]inventory.ClusterConfig{
+			"core":     {},
+			"regional": {},
+			"media-eu": {},
+			"us":       {},
+		},
+		Hosts: map[string]inventory.Host{
+			"central-1":  {Cluster: "core", WireguardIP: "10.88.0.10"},
+			"central-2":  {Cluster: "core", WireguardIP: "10.88.0.11"},
+			"regional-1": {Cluster: "regional", WireguardIP: "10.88.1.20"},
+			"us-1":       {Cluster: "us", WireguardIP: "10.88.2.20"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Host: "central-1"},
+			"purser":        {Enabled: true, Host: "central-2"},
+			"decklog-eu":    {Enabled: true, Deploy: "decklog", Host: "regional-1"},
+			"decklog-us":    {Enabled: true, Deploy: "decklog", Host: "us-1"},
+			"chandler-eu":   {Enabled: true, Deploy: "chandler", Cluster: "media-eu", Host: "regional-1"},
+			"foghorn-eu":    {Enabled: true, Deploy: "foghorn", Cluster: "media-eu", Host: "regional-1"},
+		},
+	}
+
+	dns := buildPrivateerSeedDNS(manifest, "regional-1")
+	if got := dns["quartermaster"]; len(got) != 1 || got[0] != "10.88.0.10" {
+		t.Fatalf("quartermaster DNS = %v, want [10.88.0.10]", got)
+	}
+	if got := dns["purser"]; len(got) != 1 || got[0] != "10.88.0.11" {
+		t.Fatalf("purser DNS = %v, want [10.88.0.11]", got)
+	}
+	if got := dns["decklog"]; len(got) != 1 || got[0] != "10.88.1.20" {
+		t.Fatalf("decklog DNS = %v, want regional-local [10.88.1.20]", got)
+	}
+	if got := dns["chandler"]; len(got) != 1 || got[0] != "10.88.1.20" {
+		t.Fatalf("chandler DNS = %v, want logical-cluster local [10.88.1.20]", got)
+	}
+	if got := dns["central-1"]; len(got) != 1 || got[0] != "10.88.0.10" {
+		t.Fatalf("central-1 DNS = %v, want [10.88.0.10]", got)
+	}
+	if got := dns["central-2"]; len(got) != 1 || got[0] != "10.88.0.11" {
+		t.Fatalf("central-2 DNS = %v, want [10.88.0.11]", got)
+	}
+}
+
 // TestResolveServiceDialNoSessionPrefersMeshIP locks the no-session fallback:
 // when a Session is not in play (doctor / status callers, off-mesh provisioning
 // with --no-tunnel in the future), service-to-service addressing must still
@@ -2945,18 +3052,17 @@ func TestBuildServiceEnvVarsBridgeRegionalHostIncludesControlPlaneGRPCDeps(t *te
 	}
 }
 
-func TestBuildTaskConfigBridgeRejectsMissingGeneratedDependencies(t *testing.T) {
+func TestMissingRequiredGeneratedEnvBridgeRequiresEnabledDeps(t *testing.T) {
 	manifest := threeRegionKafkaManifest()
 	manifest.Profile = "production"
 	manifest.Services["bridge"] = inventory.ServiceConfig{Enabled: true, Host: "regional-eu-2"}
-
-	task := &orchestrator.Task{Type: "bridge", ServiceID: "bridge", Host: "regional-eu-2", Phase: orchestrator.PhaseApplications}
-	_, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", testLoadSharedEnv(t, manifest), nil, nil)
-	if err == nil {
-		t.Fatal("buildTaskConfig bridge succeeded without generated dependency env")
+	for _, svc := range []string{"commodore", "periscope-query", "purser", "quartermaster", "decklog"} {
+		manifest.Services[svc] = inventory.ServiceConfig{Enabled: true, Host: "regional-eu-1"}
 	}
-	if !strings.Contains(err.Error(), "COMMODORE_GRPC_ADDR") {
-		t.Fatalf("missing dependency error = %v, want COMMODORE_GRPC_ADDR", err)
+
+	missing := missingRequiredGeneratedEnv(manifest, "bridge", map[string]string{})
+	if !slices.Contains(missing, "COMMODORE_GRPC_ADDR") {
+		t.Fatalf("missing generated env = %v, want COMMODORE_GRPC_ADDR", missing)
 	}
 }
 

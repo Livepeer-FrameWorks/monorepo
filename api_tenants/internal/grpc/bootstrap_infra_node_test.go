@@ -90,8 +90,8 @@ func TestBootstrapInfrastructureNode_ExpiredToken(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT id, tenant_id::text").
 		WithArgs(hashBootstrapToken("expired-token")).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip"}).
-			AddRow("tok-1", "tenant-1", "cluster-1", nil, int32(0), expiredAt, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip", "metadata"}).
+			AddRow("tok-1", "tenant-1", "cluster-1", nil, int32(0), expiredAt, nil, "{}"))
 	mock.ExpectRollback()
 
 	_, err = server.BootstrapInfrastructureNode(context.Background(), &pb.BootstrapInfrastructureNodeRequest{
@@ -121,8 +121,8 @@ func TestBootstrapInfrastructureNode_ClusterMismatch(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT id, tenant_id::text").
 		WithArgs(hashBootstrapToken("bound-token")).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip"}).
-			AddRow("tok-1", "tenant-1", "cluster-a", nil, int32(0), expiresAt, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip", "metadata"}).
+			AddRow("tok-1", "tenant-1", "cluster-a", nil, int32(0), expiresAt, nil, "{}"))
 	mock.ExpectRollback()
 
 	targetCluster := "cluster-b"
@@ -154,8 +154,8 @@ func TestBootstrapInfrastructureNode_IdempotentReturnsExisting(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT id, tenant_id::text").
 		WithArgs(hashBootstrapToken("my-token")).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip"}).
-			AddRow("tok-1", "tenant-1", "cluster-1", nil, int32(0), expiresAt, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip", "metadata"}).
+			AddRow("tok-1", "tenant-1", "cluster-1", nil, int32(0), expiresAt, nil, "{}"))
 
 	// Idempotent check: node already exists in same cluster.
 	// New behaviour: return full assigned identity so a retrying client can
@@ -169,12 +169,9 @@ func TestBootstrapInfrastructureNode_IdempotentReturnsExisting(t *testing.T) {
 	mock.ExpectQuery(`SELECT wg_mesh_cidr, wg_listen_port FROM quartermaster.infrastructure_clusters`).
 		WithArgs("cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"wg_mesh_cidr", "wg_listen_port"}).AddRow("10.88.0.0/16", int32(51820)))
-	mock.ExpectQuery(`SELECT n.node_name, n.wireguard_public_key`).
-		WithArgs("node-existing", "cluster-1").
-		WillReturnRows(sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
-	mock.ExpectQuery(`SELECT s.type, host\(n\.wireguard_ip\)`).
-		WithArgs("cluster-1").
-		WillReturnRows(sqlmock.NewRows([]string{"type", "wireguard_ip"}))
+	expectMeshRequirements(mock, "node-existing")
+	expectMeshEndpoints(mock, "cluster-1", "node-existing", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}))
+	expectMeshPeers(mock, "node-existing", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
 
 	resp, err := server.BootstrapInfrastructureNode(context.Background(), &pb.BootstrapInfrastructureNodeRequest{
 		Token:    "my-token",
@@ -210,8 +207,8 @@ func TestBootstrapInfrastructureNode_ExistingNodeDifferentCluster(t *testing.T) 
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT id, tenant_id::text").
 		WithArgs(hashBootstrapToken("my-token")).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip"}).
-			AddRow("tok-1", "tenant-1", "cluster-1", nil, int32(0), expiresAt, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip", "metadata"}).
+			AddRow("tok-1", "tenant-1", "cluster-1", nil, int32(0), expiresAt, nil, "{}"))
 
 	// Node exists but in a different cluster
 	mock.ExpectQuery(`SELECT cluster_id, host\(wireguard_ip\), wireguard_listen_port FROM quartermaster.infrastructure_nodes`).
@@ -246,11 +243,19 @@ func TestBootstrapInfrastructureNode_FallbackCluster(t *testing.T) {
 	expiresAt := time.Now().Add(1 * time.Hour)
 
 	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT COALESCE\(cluster_id, ''\), expires_at, expected_ip::text`).
+		WithArgs(hashBootstrapToken("my-token")).
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "expires_at", "expected_ip"}).
+			AddRow("", expiresAt, nil))
+	mock.ExpectQuery(`SELECT\s+n\.cluster_id,\s+n\.wireguard_public_key`).
+		WithArgs("node-fallback").
+		WillReturnError(sql.ErrNoRows)
+
 	// Token has no cluster binding
 	mock.ExpectQuery("SELECT id, tenant_id::text").
 		WithArgs(hashBootstrapToken("my-token")).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip"}).
-			AddRow("tok-1", "tenant-1", "", nil, int32(0), expiresAt, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip", "metadata"}).
+			AddRow("tok-1", "tenant-1", "", nil, int32(0), expiresAt, nil, "{}"))
 
 	// No target_cluster_id in request, so falls back to first active cluster
 	mock.ExpectQuery("SELECT cluster_id FROM quartermaster.infrastructure_clusters").
@@ -258,7 +263,7 @@ func TestBootstrapInfrastructureNode_FallbackCluster(t *testing.T) {
 
 	// Node doesn't exist yet
 	mock.ExpectQuery(`SELECT cluster_id, host\(wireguard_ip\), wireguard_listen_port FROM quartermaster.infrastructure_nodes`).
-		WithArgs(sqlmock.AnyArg()). // auto-generated node-{uuid}
+		WithArgs("node-fallback").
 		WillReturnError(sql.ErrNoRows)
 
 	// Cluster mesh config lookup.
@@ -271,11 +276,11 @@ func TestBootstrapInfrastructureNode_FallbackCluster(t *testing.T) {
 		WithArgs("fallback-cluster").
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip"}))
 
-	// INSERT node: 12 placeholders — id, node_id, cluster_id, node_name, node_type,
+	// INSERT node: id, node_id, cluster_id, node_name, node_type,
 	// external_ip, internal_ip, wireguard_ip, wireguard_public_key, wireguard_listen_port,
-	// latitude, longitude. enrollment_origin is hard-coded 'runtime_enrolled' in the INSERT.
+	// latitude, longitude, metadata. enrollment_origin is hard-coded 'runtime_enrolled' in the INSERT.
 	mock.ExpectExec("INSERT INTO quartermaster.infrastructure_nodes").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "fallback-cluster", sqlmock.AnyArg(), "core", nil, nil, sqlmock.AnyArg(), "pub-key", int32(51820), nil, nil).
+		WithArgs(sqlmock.AnyArg(), "node-fallback", "fallback-cluster", "node-fallback", "core", nil, nil, sqlmock.AnyArg(), "pub-key", int32(51820), nil, nil, "{}").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Token usage update
@@ -284,11 +289,16 @@ func TestBootstrapInfrastructureNode_FallbackCluster(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	mock.ExpectCommit()
+	expectMeshRequirements(mock, "node-fallback")
+	expectMeshEndpoints(mock, "fallback-cluster", "node-fallback", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}))
+	expectMeshPeers(mock, "node-fallback", "fallback-cluster", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
 
 	wgPub := "pub-key"
+	nodeID := "node-fallback"
 	resp, err := server.BootstrapInfrastructureNode(context.Background(), &pb.BootstrapInfrastructureNodeRequest{
 		Token:              "my-token",
 		NodeType:           "core",
+		NodeId:             &nodeID,
 		WireguardPublicKey: &wgPub,
 	})
 	if err != nil {
@@ -338,12 +348,9 @@ func TestBootstrapInfrastructureNode_ReplayWithSpentToken(t *testing.T) {
 	mock.ExpectQuery(`SELECT wg_mesh_cidr, wg_listen_port FROM quartermaster.infrastructure_clusters`).
 		WithArgs("cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"wg_mesh_cidr", "wg_listen_port"}).AddRow("10.88.0.0/16", int32(51820)))
-	mock.ExpectQuery(`SELECT n.node_name, n.wireguard_public_key`).
-		WithArgs("node-existing", "cluster-1").
-		WillReturnRows(sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
-	mock.ExpectQuery(`SELECT s.type, host\(n\.wireguard_ip\)`).
-		WithArgs("cluster-1").
-		WillReturnRows(sqlmock.NewRows([]string{"type", "wireguard_ip"}))
+	expectMeshRequirements(mock, "node-existing")
+	expectMeshEndpoints(mock, "cluster-1", "node-existing", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}))
+	expectMeshPeers(mock, "node-existing", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
 
 	// No token-usage UPDATE, no INSERT, no Commit — replay returns without
 	// writing. The deferred tx.Rollback handles cleanup.
@@ -408,6 +415,38 @@ func TestBootstrapInfrastructureNode_ReplayPubkeyMismatch(t *testing.T) {
 	})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("expected FailedPrecondition for pubkey mismatch, got %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestCollectBootstrapSeedIncludesCrossClusterQuartermaster(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	expectMeshRequirements(mock, "regional-1", "bridge")
+	expectMeshEndpoints(mock, "regional", "regional-1", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}).
+		AddRow("quartermaster", "central-1", "10.88.0.10").
+		AddRow("purser", "central-1", "10.88.0.10"))
+	expectMeshPeers(mock, "regional-1", "regional", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}).
+		AddRow("central-1", "central-pub", "203.0.113.10", nil, "10.88.0.10", int32(51820)))
+
+	peers, endpoints := server.collectBootstrapSeed(context.Background(), "regional", "regional-1")
+	if len(peers) != 1 || peers[0].GetNodeName() != "central-1" {
+		t.Fatalf("expected cross-cluster central seed peer, got %#v", peers)
+	}
+	if got := endpoints["quartermaster"].GetIps(); len(got) != 1 || got[0] != "10.88.0.10" {
+		t.Fatalf("quartermaster endpoints = %v, want [10.88.0.10]", got)
+	}
+	if got := endpoints["purser"].GetIps(); len(got) != 1 || got[0] != "10.88.0.10" {
+		t.Fatalf("purser endpoints = %v, want [10.88.0.10]", got)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

@@ -229,7 +229,7 @@ func TestBuildPeerSet_PrefersExternalIP(t *testing.T) {
 	}
 	self := cluster[0]
 
-	peers, err := buildPeerSetForHost(cluster, self)
+	peers, err := buildPeerSetForHost(cluster, self, testCluster, nil)
 	if err != nil {
 		t.Fatalf("buildPeerSetForHost: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestBuildPeerSet_FallsBackToInternalIP(t *testing.T) {
 	}
 	self := cluster[0]
 
-	peers, err := buildPeerSetForHost(cluster, self)
+	peers, err := buildPeerSetForHost(cluster, self, testCluster, nil)
 	if err != nil {
 		t.Fatalf("buildPeerSetForHost: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestBuildPeerSet_SkipsInactivePeers(t *testing.T) {
 	}
 	self := cluster[0]
 
-	peers, err := buildPeerSetForHost(cluster, self)
+	peers, err := buildPeerSetForHost(cluster, self, testCluster, nil)
 	if err != nil {
 		t.Fatalf("buildPeerSetForHost: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestBuildPeerSet_SkipsPeerWithNoIP(t *testing.T) {
 	}
 	self := cluster[0]
 
-	peers, err := buildPeerSetForHost(cluster, self)
+	peers, err := buildPeerSetForHost(cluster, self, testCluster, nil)
 	if err != nil {
 		t.Fatalf("buildPeerSetForHost: %v", err)
 	}

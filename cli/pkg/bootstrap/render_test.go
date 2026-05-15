@@ -277,6 +277,38 @@ func TestDeriveWalksAllServiceMaps(t *testing.T) {
 	}
 }
 
+func TestDeriveInfrastructureRegistryForMeshTopology(t *testing.T) {
+	m := minimalManifest()
+	m.Hosts["db-1"] = inventory.Host{Cluster: "core-central-primary", ExternalIP: "203.0.113.11", WireguardIP: "10.99.0.11", WireguardPublicKey: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="}
+	m.Hosts["kafka-1"] = inventory.Host{Cluster: "core-central-primary", ExternalIP: "203.0.113.12", WireguardIP: "10.99.0.12", WireguardPublicKey: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC="}
+	m.Infrastructure.Postgres = &inventory.PostgresConfig{
+		Enabled: true,
+		Engine:  "yugabyte",
+		Nodes:   []inventory.PostgresNode{{Host: "db-1", ID: 1}},
+	}
+	m.Infrastructure.Kafka = &inventory.KafkaConfig{
+		Enabled:   true,
+		ClusterID: "kafka-core",
+		Brokers:   []inventory.KafkaBroker{{Host: "kafka-1", ID: 1, Port: 9092}},
+	}
+
+	d, err := Derive(m, DeriveOptions{})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+
+	got := map[string]string{}
+	for _, e := range d.Quartermaster.ServiceRegistry {
+		got[e.ServiceName+"@"+e.NodeID] = e.Type
+	}
+	if got["postgres-1@db-1"] != "database" {
+		t.Fatalf("postgres infra registry missing: %v", got)
+	}
+	if got["kafka-kafka-core-1@kafka-1"] != "kafka" {
+		t.Fatalf("kafka infra registry missing: %v", got)
+	}
+}
+
 // TestDeriveServiceRegistryFillsServicedefs exercises the servicedefs.Lookup
 // integration: HealthEndpoint and Protocol come from the canonical registry, not
 // from manifest input. Uses chartroom because chandler self-registers and is

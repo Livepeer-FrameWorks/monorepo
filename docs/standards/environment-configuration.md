@@ -44,6 +44,9 @@ Recommendation:
 - Keep `*_HOST` and `*_PORT` or `*_GRPC_PORT` as canonical inputs.
 - Derive `*_URL` and `*_GRPC_ADDR` only.
 - Avoid adding new handwritten `*_URL` or `*_GRPC_ADDR` entries outside config generation.
+- Keep service-to-service dependency facts in `pkg/topology/dependencies.go`;
+  provisioning, mesh DNS, and runtime reconciliation should consume that
+  catalog instead of adding service-specific discovery knobs.
 
 ### Runtime mode flags
 

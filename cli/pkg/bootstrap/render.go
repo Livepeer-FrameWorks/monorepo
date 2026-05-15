@@ -151,6 +151,8 @@ func Derive(m *inventory.Manifest, opts DeriveOptions) (*Derived, error) {
 		})
 	}
 
+	deriveInfrastructureRegistry(d, m)
+
 	// Service registry + ingress sites + TLS bundles, derived from manifest.Services.
 	deriveIngressAndRegistry(d, m, opts)
 
@@ -176,6 +178,135 @@ func Derive(m *inventory.Manifest, opts DeriveOptions) (*Derived, error) {
 	}
 
 	return d, nil
+}
+
+func deriveInfrastructureRegistry(d *Derived, m *inventory.Manifest) {
+	if d == nil || m == nil {
+		return
+	}
+	addEntry := func(serviceName, serviceType, host string, port int, metadata map[string]string) {
+		if serviceName == "" || serviceType == "" || host == "" || port == 0 {
+			return
+		}
+		clusterID := serviceClusterIDForHost(m, serviceName, host, inventory.ServiceConfig{})
+		if clusterID == "" {
+			return
+		}
+		d.Quartermaster.ServiceRegistry = append(d.Quartermaster.ServiceRegistry, ServiceRegistryEntry{
+			ServiceName: serviceName,
+			Type:        serviceType,
+			Protocol:    "tcp",
+			ClusterID:   clusterID,
+			NodeID:      host,
+			Port:        port,
+			Metadata:    metadata,
+		})
+	}
+	infraMetadata := func(kind, role, name string) map[string]string {
+		md := map[string]string{
+			"topology_provider": "infra",
+			"peer_only":         "true",
+			"infra_kind":        kind,
+			"infra_role":        role,
+		}
+		if name != "" {
+			md["infra_name"] = name
+		}
+		return md
+	}
+
+	if pg := m.Infrastructure.Postgres; pg != nil && pg.Enabled {
+		port := pg.EffectivePort()
+		if len(pg.Nodes) > 0 {
+			for _, node := range pg.Nodes {
+				addEntry(fmt.Sprintf("postgres-%d", node.ID), "database", node.Host, port, infraMetadata("database", "primary", ""))
+			}
+		} else {
+			addEntry("postgres", "database", pg.Host, port, infraMetadata("database", "primary", ""))
+		}
+		for _, inst := range pg.Instances {
+			instPort := inst.Port
+			if instPort == 0 {
+				instPort = port
+			}
+			addEntry("postgres-"+safeServiceNamePart(inst.Name), "database", inst.Host, instPort, infraMetadata("database", "named", inst.Name))
+		}
+	}
+
+	if kafka := m.Infrastructure.Kafka; kafka != nil && kafka.Enabled {
+		addKafka := func(label, role string, brokers []inventory.KafkaBroker) {
+			for _, broker := range brokers {
+				port := broker.Port
+				if port == 0 {
+					port = 9092
+				}
+				md := infraMetadata("kafka", role, "")
+				md["kafka_region_id"] = label
+				addEntry(fmt.Sprintf("kafka-%s-%d", safeServiceNamePart(label), broker.ID), "kafka", broker.Host, port, md)
+			}
+		}
+		label := kafka.RegionID
+		if label == "" {
+			label = kafka.ClusterID
+		}
+		if label == "" {
+			label = "primary"
+		}
+		addKafka(label, kafkaProviderRole(kafka.Role, "aggregator"), kafka.Brokers)
+		for _, regional := range kafka.Regional {
+			label := regional.RegionID
+			if label == "" {
+				label = regional.ClusterID
+			}
+			addKafka(label, kafkaProviderRole(regional.Role, "regional"), regional.Brokers)
+		}
+	}
+
+	if ch := m.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
+		port := ch.Port
+		if port == 0 {
+			port = 9000
+		}
+		addEntry("clickhouse", "clickhouse", ch.Host, port, infraMetadata("clickhouse", "primary", ""))
+	}
+
+	if redis := m.Infrastructure.Redis; redis != nil && redis.Enabled {
+		for _, inst := range redis.Instances {
+			port := inst.Port
+			if port == 0 {
+				port = 6379
+			}
+			namePart := safeServiceNamePart(inst.Name)
+			addEntry("redis-"+namePart, "redis", inst.Host, port, infraMetadata("redis", "primary", inst.Name))
+			for i, host := range inst.ReplicaHosts {
+				addEntry(fmt.Sprintf("redis-%s-replica-%d", namePart, i+1), "redis", host, port, infraMetadata("redis", "replica", inst.Name))
+			}
+			for i, sentinel := range inst.Sentinels {
+				sentinelPort := sentinel.Port
+				if sentinelPort == 0 {
+					sentinelPort = 26379
+				}
+				addEntry(fmt.Sprintf("redis-%s-sentinel-%d", namePart, i+1), "redis", sentinel.Host, sentinelPort, infraMetadata("redis", "sentinel", inst.Name))
+			}
+		}
+	}
+}
+
+func kafkaProviderRole(role, defaultRole string) string {
+	role = strings.TrimSpace(strings.ToLower(role))
+	if role == "" {
+		return defaultRole
+	}
+	return role
+}
+
+func safeServiceNamePart(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return "default"
+	}
+	replacer := strings.NewReplacer(" ", "-", "_", "-", ".", "-", "/", "-", ":", "-")
+	return replacer.Replace(value)
 }
 
 // deriveIngressAndRegistry walks every service section the manifest exposes
