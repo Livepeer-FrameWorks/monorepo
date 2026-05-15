@@ -37,11 +37,11 @@ successful `SyncMesh` and is then cached on disk.
 Privateer does not build a global all-to-all service network. Provisioning and
 runtime sync derive mesh reachability from three graphs:
 
-| Graph                    | Source of truth                                                                          | Examples                                                                                                                                 |
-| ------------------------ | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Direct service calls     | `pkg/topology/dependencies.go`, backed by actual client construction in service binaries | Bridge -> Quartermaster/Commodore/Purser/Periscope/Signalman/Decklog, Purser -> Periscope for invoice enrichment, Skipper <-> Bridge MCP |
-| Infrastructure calls     | rendered manifest endpoints                                                              | Postgres/Yugabyte, Kafka brokers, ClickHouse, Redis/Sentinel                                                                             |
-| Discovery and federation | Quartermaster service registry and tenant cluster peer metadata                          | Foghorn peer-to-peer federation, runtime service DNS, service bootstrap                                                                  |
+| Graph                    | Source of truth                                                                          | Examples                                                                                                                             |
+| ------------------------ | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Direct service calls     | `pkg/topology/dependencies.go`, backed by actual client construction in service binaries | Bridge → Quartermaster/Commodore/Purser/Periscope/Signalman/Decklog, Purser → Periscope for invoice enrichment, Skipper ↔ Bridge MCP |
+| Infrastructure calls     | rendered manifest endpoints                                                              | Postgres/Yugabyte, Kafka brokers, ClickHouse, Redis/Sentinel                                                                         |
+| Discovery and federation | Quartermaster service registry and tenant cluster peer metadata                          | Foghorn peer-to-peer federation, runtime service DNS, service bootstrap                                                              |
 
 `.internal` DNS is for dependencies of services running on the local node. A
 regional node can resolve a central singleton such as `quartermaster.internal`
