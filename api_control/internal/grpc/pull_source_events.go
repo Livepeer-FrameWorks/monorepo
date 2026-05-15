@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"google.golang.org/grpc/codes"
@@ -39,6 +40,21 @@ func (s *CommodoreServer) RecordPullSourceEvent(ctx context.Context, req *pb.Rec
 		VALUES      ($1::uuid, NULLIF($2, '')::uuid, $3, $4, NULLIF($5, ''))
 	`, req.GetTenantId(), req.GetStreamId(), req.GetInternalName(), req.GetEventKind(), req.GetDetail()); execErr != nil {
 		return nil, status.Errorf(codes.Internal, "pull_source_events insert failed: %v", execErr)
+	}
+	if req.GetEventKind() == "resolved" && req.GetStreamId() != "" {
+		clusterID := strings.TrimSpace(req.GetDetail())
+		if clusterID != "" {
+			if _, execErr := s.db.ExecContext(ctx, `
+				UPDATE commodore.streams
+				   SET active_ingest_cluster_id = $1,
+				       active_ingest_cluster_updated_at = NOW()
+				 WHERE id = $2::uuid
+				   AND tenant_id = $3::uuid
+				   AND ingest_mode = 'pull'
+			`, clusterID, req.GetStreamId(), req.GetTenantId()); execErr != nil {
+				s.logger.WithError(execErr).WithField("stream_id", req.GetStreamId()).Warn("Failed to stamp pull stream active ingest cluster")
+			}
+		}
 	}
 	return &emptypb.Empty{}, nil
 }

@@ -498,6 +498,23 @@ func findPeerByClusterID(peers []*pb.TenantClusterPeer, clusterID string) *pb.Te
 	return nil
 }
 
+func streamOriginRegionForRoute(route *clusterRoute, activeClusterID string) string {
+	if route == nil {
+		return ""
+	}
+	clusterID := strings.TrimSpace(activeClusterID)
+	if clusterID == "" {
+		clusterID = route.clusterID
+	}
+	if clusterID == "" {
+		return ""
+	}
+	if peer := findPeerByClusterID(route.clusterPeers, clusterID); peer != nil {
+		return peer.GetRegionId()
+	}
+	return ""
+}
+
 func filterPeersByPolicy(peers []*pb.TenantClusterPeer, allowedClasses map[string]struct{}) []*pb.TenantClusterPeer {
 	if len(peers) == 0 {
 		return peers
@@ -4445,11 +4462,22 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRe
 	defer func() { _ = rows.Close() }()
 
 	var streams []*pb.Stream
+	var route *clusterRoute
+	routeAttempted := false
 	for rows.Next() {
 		stream, err := s.scanStream(rows)
 		if err != nil {
 			s.logger.WithError(err).Warn("Error scanning stream")
 			continue
+		}
+		if !routeAttempted {
+			routeAttempted = true
+			if resolved, routeErr := s.resolveClusterRouteForTenant(ctx, tenantID); routeErr == nil {
+				route = resolved
+			}
+		}
+		if route != nil {
+			s.populateStreamOriginRegion(ctx, tenantID, stream, route)
 		}
 		streams = append(streams, stream)
 	}
@@ -5844,11 +5872,22 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStream
 	defer func() { _ = rows.Close() }()
 
 	var streams []*pb.Stream
+	var route *clusterRoute
+	routeAttempted := false
 	for rows.Next() {
 		stream, err := s.scanStream(rows)
 		if err != nil {
 			s.logger.WithError(err).Warn("Error scanning stream in batch")
 			continue
+		}
+		if !routeAttempted {
+			routeAttempted = true
+			if resolved, routeErr := s.resolveClusterRouteForTenant(ctx, tenantID); routeErr == nil {
+				route = resolved
+			}
+		}
+		if route != nil {
+			s.populateStreamOriginRegion(ctx, tenantID, stream, route)
 		}
 		streams = append(streams, stream)
 	}
@@ -5909,8 +5948,23 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 	}
 
 	stream.ThumbnailAssets = s.buildStreamThumbnailAssets(activeIngest, stream.StreamId)
+	s.populateStreamOriginRegion(ctx, tenantID, &stream, nil)
 
 	return &stream, nil
+}
+
+func (s *CommodoreServer) populateStreamOriginRegion(ctx context.Context, tenantID string, stream *pb.Stream, route *clusterRoute) {
+	if stream == nil {
+		return
+	}
+	if route == nil {
+		var err error
+		route, err = s.resolveClusterRouteForTenant(ctx, tenantID)
+		if err != nil {
+			return
+		}
+	}
+	stream.StreamOriginRegion = streamOriginRegionForRoute(route, stream.GetActiveIngestClusterId())
 }
 
 // buildStreamThumbnailAssets projects ThumbnailAssets for a live stream from
