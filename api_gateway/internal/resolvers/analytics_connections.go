@@ -561,7 +561,7 @@ func (r *Resolver) DoGetNodeMetricsAggregated(ctx context.Context, timeRange *mo
 	}
 	keyParts := []string{tenantID, nodeKey, timeKey(startTime), timeKey(endTime)}
 
-	val, err := r.fetchPeriscopeWithOptions(ctx, "node_metrics_aggregated", keyParts, func(ctx context.Context) (interface{}, error) {
+	val, err := r.fetchPeriscopeWithOptions(ctx, "node_metrics_aggregated", keyParts, func(ctx context.Context) (any, error) {
 		return r.Clients.Periscope.GetNodeMetricsAggregated(ctx, tenantID, nodeID, timePtrsToTimeRangeOpts(startTime, endTime))
 	}, skipCache)
 	if err != nil {
@@ -925,7 +925,7 @@ func (r *Resolver) DoGetBufferEventsConnection(ctx context.Context, streamId str
 		keyParts = append(keyParts, *opts.Before)
 	}
 
-	val, err := r.fetchPeriscopeWithOptions(ctx, "buffer_events", keyParts, func(ctx context.Context) (interface{}, error) {
+	val, err := r.fetchPeriscopeWithOptions(ctx, "buffer_events", keyParts, func(ctx context.Context) (any, error) {
 		return r.Clients.Periscope.GetBufferEvents(ctx, tenantID, streamId, timeOpts, opts)
 	}, skipCache)
 	if err != nil {
@@ -3196,7 +3196,7 @@ func (r *Resolver) DoGetRoutingEfficiency(ctx context.Context, streamID *string,
 	}
 	keyParts := []string{tenantID, streamKey, timeKey(startTime), timeKey(endTime)}
 
-	val, err := r.fetchPeriscopeWithOptions(ctx, "routing_efficiency", keyParts, func(ctx context.Context) (interface{}, error) {
+	val, err := r.fetchPeriscopeWithOptions(ctx, "routing_efficiency", keyParts, func(ctx context.Context) (any, error) {
 		return r.Clients.Periscope.GetRoutingEfficiency(ctx, tenantID, streamID, timePtrsToTimeRangeOpts(startTime, endTime))
 	}, skipCache)
 	if err != nil {
@@ -3249,7 +3249,7 @@ func (r *Resolver) DoGetStreamHealthSummary(ctx context.Context, streamID *strin
 	}
 	keyParts := []string{tenantID, streamKey, timeKey(startTime), timeKey(endTime)}
 
-	val, err := r.fetchPeriscopeWithOptions(ctx, "stream_health_summary", keyParts, func(ctx context.Context) (interface{}, error) {
+	val, err := r.fetchPeriscopeWithOptions(ctx, "stream_health_summary", keyParts, func(ctx context.Context) (any, error) {
 		return r.Clients.Periscope.GetStreamHealthSummary(ctx, tenantID, streamID, timePtrsToTimeRangeOpts(startTime, endTime))
 	}, skipCache)
 	if err != nil {
@@ -3301,7 +3301,7 @@ func (r *Resolver) DoGetClientQoeSummary(ctx context.Context, streamID *string, 
 	}
 	keyParts := []string{tenantID, streamKey, timeKey(startTime), timeKey(endTime)}
 
-	val, err := r.fetchPeriscopeWithOptions(ctx, "client_qoe_summary", keyParts, func(ctx context.Context) (interface{}, error) {
+	val, err := r.fetchPeriscopeWithOptions(ctx, "client_qoe_summary", keyParts, func(ctx context.Context) (any, error) {
 		return r.Clients.Periscope.GetClientQoeSummary(ctx, tenantID, streamID, timePtrsToTimeRangeOpts(startTime, endTime))
 	}, skipCache)
 	if err != nil {
@@ -3341,7 +3341,7 @@ func (r *Resolver) DoGetClusterTrafficMatrix(ctx context.Context, timeRange *mod
 	skipCache := noCache != nil && *noCache
 	keyParts := []string{tenantID, timeKey(startTime), timeKey(endTime)}
 
-	val, err := r.fetchPeriscopeWithOptions(ctx, "cluster_traffic_matrix", keyParts, func(ctx context.Context) (interface{}, error) {
+	val, err := r.fetchPeriscopeWithOptions(ctx, "cluster_traffic_matrix", keyParts, func(ctx context.Context) (any, error) {
 		return r.Clients.Periscope.GetClusterTrafficMatrix(ctx, tenantID, timePtrsToTimeRangeOpts(startTime, endTime))
 	}, skipCache)
 	if err != nil {
@@ -3547,7 +3547,7 @@ func (r *Resolver) DoGetFederationEventsConnection(ctx context.Context, timeRang
 	}
 	keyParts := []string{tenantID, timeKey(startTime), timeKey(endTime), evtTypeStr, fmt.Sprintf("%d", limit)}
 
-	val, err := r.fetchPeriscopeWithOptions(ctx, "federation_events", keyParts, func(ctx context.Context) (interface{}, error) {
+	val, err := r.fetchPeriscopeWithOptions(ctx, "federation_events", keyParts, func(ctx context.Context) (any, error) {
 		return r.Clients.Periscope.GetFederationEvents(ctx, tenantID, timePtrsToTimeRangeOpts(startTime, endTime), eventType, limit)
 	}, skipCache)
 	if err != nil {
@@ -3604,7 +3604,7 @@ func (r *Resolver) DoGetFederationSummary(ctx context.Context, timeRange *model.
 	skipCache := noCache != nil && *noCache
 	keyParts := []string{tenantID, timeKey(startTime), timeKey(endTime)}
 
-	val, err := r.fetchPeriscopeWithOptions(ctx, "federation_summary", keyParts, func(ctx context.Context) (interface{}, error) {
+	val, err := r.fetchPeriscopeWithOptions(ctx, "federation_summary", keyParts, func(ctx context.Context) (any, error) {
 		return r.Clients.Periscope.GetFederationSummary(ctx, tenantID, timePtrsToTimeRangeOpts(startTime, endTime))
 	}, skipCache)
 	if err != nil {
@@ -3626,8 +3626,8 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	// Fetch all active clusters (gateway uses service token → sees all active)
 	clustersResp, err := r.Clients.Quartermaster.ListClusters(ctx, &pb.CursorPaginationRequest{First: 500})
 	if err != nil {
-		r.Logger.WithError(err).Warn("networkStatus: Quartermaster unavailable, returning demo topology")
-		return demo.GenerateNetworkStatus(), nil
+		r.Logger.WithError(err).Error("networkStatus: Quartermaster unavailable")
+		return nil, fmt.Errorf("network topology unavailable: %w", err)
 	}
 
 	// Fetch pool assignments for peer connection derivation and virtual cluster geo.
