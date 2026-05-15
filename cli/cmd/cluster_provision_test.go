@@ -173,6 +173,15 @@ func (f *fakeIngressDesiredStateRegistrar) UpsertIngressSite(_ context.Context, 
 	return &pb.IngressSiteResponse{Site: site}, nil
 }
 
+func TestBootstrapInternalCertSANsIncludeHostInternalName(t *testing.T) {
+	dnsNames, _ := bootstrapInternalCertSANs("decklog", "media-eu-1", "frameworks.network", inventory.Host{Name: "regional-eu-1"})
+	for _, want := range []string{"decklog", "decklog.internal", "regional-eu-1.internal", "decklog.media-eu-1.frameworks.network"} {
+		if !slices.Contains(dnsNames, want) {
+			t.Fatalf("expected SAN %q in %v", want, dnsNames)
+		}
+	}
+}
+
 func TestReconcileServiceClusterAssignmentsWithClientAssignsMediaClusters(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",
@@ -286,6 +295,61 @@ func TestReconcileServiceClusterAssignmentsWithClientAssignsDeclaredPoolInstance
 	}
 }
 
+func TestReconcileServiceClusterAssignmentsWithClientAssignsAliasedPoolInstances(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "203.0.113.10"},
+			"regional-us-1": {ExternalIP: "203.0.113.11"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-eu-1": {Type: "edge", Roles: []string{"media"}},
+			"media-us-1": {Type: "edge", Roles: []string{"media"}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-eu": {
+				Enabled: true,
+				Deploy:  "foghorn",
+				Host:    "regional-eu-1",
+				Cluster: "media-eu-1",
+			},
+			"foghorn-us": {
+				Enabled: true,
+				Deploy:  "foghorn",
+				Host:    "regional-us-1",
+				Cluster: "media-us-1",
+			},
+		},
+	}
+	assigner := &fakeFoghornClusterAssigner{
+		services: fakePoolServices("foghorn"),
+		instances: map[string][]*pb.ServiceInstance{
+			"foghorn": {
+				fakeServiceInstance("foghorn-eu", "foghorn", "regional-eu-1", "running"),
+				fakeServiceInstance("foghorn-us", "foghorn", "regional-us-1", "running"),
+			},
+		},
+	}
+
+	if err := reconcileServiceClusterAssignmentsWithClient(context.Background(), &bytes.Buffer{}, manifest, assigner); err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	if len(assigner.calls) != 2 {
+		t.Fatalf("expected one assignment per alias cluster, got %d", len(assigner.calls))
+	}
+	got := map[string]string{}
+	for _, call := range assigner.calls {
+		got[call.GetClusterId()] = strings.Join(call.GetInstanceIds(), ",")
+	}
+	if got["media-eu-1"] != "foghorn-eu" || got["media-us-1"] != "foghorn-us" {
+		t.Fatalf("assignments = %+v, want eu/us split", got)
+	}
+	if len(assigner.drains) != 2 {
+		t.Fatalf("expected existing assignments to be cleared once per manifest instance, got %+v", assigner.drains)
+	}
+}
+
 func TestReconcileServiceClusterAssignmentsWithClientDrainsRemovedService(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",
@@ -312,6 +376,58 @@ func TestReconcileServiceClusterAssignmentsWithClientDrainsRemovedService(t *tes
 	}
 	if len(assigner.calls) != 0 {
 		t.Fatalf("disabled service must not be assigned, got %+v", assigner.calls)
+	}
+}
+
+func TestReconcileRemovedServicePlacementsKeepsAliasedPoolHosts(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"central-eu-1":  {ExternalIP: "203.0.113.10"},
+			"regional-eu-1": {ExternalIP: "203.0.113.11"},
+			"regional-us-1": {ExternalIP: "203.0.113.12"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"chandler-eu": {
+				Enabled: true,
+				Deploy:  "chandler",
+				Host:    "regional-eu-1",
+				Cluster: "media-eu-1",
+			},
+			"chandler-us": {
+				Enabled: true,
+				Deploy:  "chandler",
+				Host:    "regional-us-1",
+				Cluster: "media-us-1",
+			},
+		},
+	}
+	assigner := &fakeFoghornClusterAssigner{
+		services: fakePoolServices("chandler"),
+		instances: map[string][]*pb.ServiceInstance{
+			"chandler": {
+				fakeServiceInstance("chandler-central", "chandler", "central-eu-1", "running"),
+				fakeServiceInstance("chandler-eu", "chandler", "regional-eu-1", "running"),
+				fakeServiceInstance("chandler-us", "chandler", "regional-us-1", "running"),
+			},
+		},
+	}
+
+	var cleaned []string
+	cleanup := func(_ context.Context, placement removedServicePlacement) error {
+		cleaned = append(cleaned, placement.serviceName+"@"+placement.nodeID)
+		return nil
+	}
+
+	if err := reconcileRemovedServicePlacementsWithClient(context.Background(), &bytes.Buffer{}, manifest, orchestrator.PhaseApplications, assigner, cleanup); err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	if got := strings.Join(cleaned, ","); got != "chandler@central-eu-1" {
+		t.Fatalf("cleanup targets = %q, want stale central chandler only", got)
+	}
+	if len(assigner.drains) != 1 || assigner.drains[0].GetInstanceId() != "chandler-central" {
+		t.Fatalf("expected stale chandler assignment drain, got %+v", assigner.drains)
 	}
 }
 

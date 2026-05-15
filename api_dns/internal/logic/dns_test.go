@@ -1598,7 +1598,7 @@ func TestEnsureMonitor_RootIngressUsesCloudflareCompatibleExpectedCodes(t *testi
 	if id != "new-mon" {
 		t.Fatalf("expected new-mon, got %s", id)
 	}
-	if created.ExpectedCodes != "200-299" {
+	if created.ExpectedCodes != "2xx" {
 		t.Fatalf("expected Cloudflare-compatible 2xx range, got %q", created.ExpectedCodes)
 	}
 	if !created.FollowRedirects {

@@ -1292,7 +1292,7 @@ func (m *DNSManager) ensureMonitor(serviceType string) (string, error) {
 	if serviceType == rootIngressPoolServiceType {
 		path = "/"
 		port = 80
-		expectedCodes = "200-299"
+		expectedCodes = "2xx"
 		followRedirects = true
 	}
 	m.logger.WithFields(logging.Fields{"name": monitorName, "port": port}).Info("Creating health check monitor")

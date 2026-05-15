@@ -21,8 +21,16 @@ import (
 // logical media-cluster assignment (foghorn/chandler/livepeer-gateway). Used
 // by Validate to enforce the media/edge constraint on logical pins.
 func isClusterScopedBunny(serviceName string) bool {
-	return pkgdns.ProviderForServiceType(serviceName) == pkgdns.ProviderBunny &&
-		pkgdns.IsClusterScopedServiceType(serviceName)
+	return isClusterScopedBunnyDeploy(serviceName, "")
+}
+
+func isClusterScopedBunnyDeploy(serviceName, deployName string) bool {
+	serviceType := strings.TrimSpace(serviceName)
+	if pkgdns.ProviderForServiceType(serviceType) != pkgdns.ProviderBunny && strings.TrimSpace(deployName) != "" {
+		serviceType = strings.TrimSpace(deployName)
+	}
+	return pkgdns.ProviderForServiceType(serviceType) == pkgdns.ProviderBunny &&
+		pkgdns.IsClusterScopedServiceType(serviceType)
 }
 
 // strictUnmarshal rejects any YAML field that isn't declared on the target
@@ -492,7 +500,7 @@ func (m *Manifest) Validate() error {
 		// media/edge cluster. Physical placement (host/hosts) is independent
 		// and can live on a core/control cluster — this only checks logical
 		// assignment.
-		if isClusterScopedBunny(name) && len(m.Clusters) > 0 {
+		if isClusterScopedBunnyDeploy(name, svc.Deploy) && len(m.Clusters) > 0 {
 			pins := append([]string{}, svc.Clusters...)
 			if svc.Cluster != "" {
 				pins = append(pins, svc.Cluster)

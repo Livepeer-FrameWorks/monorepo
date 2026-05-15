@@ -616,6 +616,46 @@ func TestDeriveLivepeerGatewayWalletFromServiceConfig(t *testing.T) {
 	}
 }
 
+func TestDeriveLivepeerGatewayAliasUsesCanonicalServiceRegistry(t *testing.T) {
+	m := minimalManifest()
+	m.Clusters["media-us-1"] = inventory.ClusterConfig{Name: "Media US 1", Type: "edge", Roles: []string{"media"}}
+	m.Services = map[string]inventory.ServiceConfig{
+		"livepeer-gateway-us": {
+			Enabled: true,
+			Deploy:  "livepeer-gateway",
+			Host:    "core-eu-1",
+			Port:    8935,
+			Cluster: "media-us-1",
+			Config:  map[string]string{"eth_acct_addr": "0xdef456"},
+		},
+	}
+	d, err := Derive(m, DeriveOptions{})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if len(d.Quartermaster.ServiceRegistry) != 1 {
+		t.Fatalf("expected one service_registry entry, got %+v", d.Quartermaster.ServiceRegistry)
+	}
+	entry := d.Quartermaster.ServiceRegistry[0]
+	if entry.ServiceName != "livepeer-gateway" || entry.Type != "livepeer-gateway" {
+		t.Fatalf("registry identity = %q/%q, want canonical livepeer-gateway", entry.ServiceName, entry.Type)
+	}
+	if entry.Metadata["wallet_address"] != "0xdef456" {
+		t.Fatalf("wallet metadata missing from alias entry: %+v", entry.Metadata)
+	}
+
+	var found bool
+	for _, site := range d.Quartermaster.Ingress.Sites {
+		if slices.Equal(site.Domains, []string{"livepeer.media-us-1.frameworks.network"}) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("missing media-us-1 livepeer ingress site: %+v", d.Quartermaster.Ingress.Sites)
+	}
+}
+
 // TestDeriveLivepeerGatewayWalletMissingFailsValidate confirms the fail-loud
 // path: a livepeer-gateway entry without a resolvable wallet_address must
 // fail Validate(), so render time catches a misconfigured operator instead

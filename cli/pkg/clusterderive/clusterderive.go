@@ -49,6 +49,19 @@ func PublicServiceType(serviceName string) (string, bool) {
 	return "", false
 }
 
+// ManifestServiceType maps a manifest service key to the public service type it
+// implements. Aliased services such as foghorn-eu use svc.Deploy to point back
+// at the canonical public service surface.
+func ManifestServiceType(serviceName string, svc inventory.ServiceConfig) (string, bool) {
+	if serviceType, ok := PublicServiceType(serviceName); ok {
+		return serviceType, true
+	}
+	if deploy := strings.TrimSpace(svc.Deploy); deploy != "" {
+		return PublicServiceType(deploy)
+	}
+	return "", false
+}
+
 // SelfRegisters reports services that create their own service_registry rows at
 // startup via Quartermaster.BootstrapService. Bootstrap must not pre-register these,
 // or the runtime BootstrapService call collides with the bootstrap-seeded row.
@@ -122,7 +135,7 @@ func LogicalServiceClusterIDs(serviceName string, svc inventory.ServiceConfig, m
 	if c := strings.TrimSpace(svc.Cluster); c != "" {
 		return []string{c}
 	}
-	serviceType, ok := PublicServiceType(serviceName)
+	serviceType, ok := ManifestServiceType(serviceName, svc)
 	if !ok || pkgdns.ProviderForServiceType(serviceType) != pkgdns.ProviderBunny {
 		return nil
 	}
@@ -181,17 +194,22 @@ func WildcardBundleDomains(rootDomain string) []string {
 // the given cluster. Foredeck is the apex case (root domain + www); other public
 // services use a wildcard bundle keyed off their cluster-scoped root.
 func AutoIngressDomains(serviceName string, manifest *inventory.Manifest, clusterID string) ([]string, string) {
-	if serviceName == "foredeck" {
+	return AutoIngressDomainsForService(serviceName, inventory.ServiceConfig{}, manifest, clusterID)
+}
+
+// AutoIngressDomainsForService is AutoIngressDomains with manifest alias support.
+func AutoIngressDomainsForService(serviceName string, svc inventory.ServiceConfig, manifest *inventory.Manifest, clusterID string) ([]string, string) {
+	serviceType, ok := ManifestServiceType(serviceName, svc)
+	if !ok {
+		return nil, ""
+	}
+	if serviceType == "foredeck" {
 		if manifest == nil || manifest.RootDomain == "" {
 			return nil, ""
 		}
 		return []string{manifest.RootDomain, "www." + manifest.RootDomain}, TLSBundleID("apex", manifest.RootDomain)
 	}
 
-	serviceType, ok := PublicServiceType(serviceName)
-	if !ok {
-		return nil, ""
-	}
 	rootDomain := PublicServiceRootDomain(serviceType, manifest, clusterID)
 	if rootDomain == "" {
 		return nil, ""

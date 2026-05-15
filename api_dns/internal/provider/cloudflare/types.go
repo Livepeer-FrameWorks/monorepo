@@ -21,7 +21,7 @@ type HealthCheck struct {
 	Interval        int    `json:"interval,omitempty"`       // seconds
 	Timeout         int    `json:"timeout,omitempty"`        // seconds
 	Retries         int    `json:"retries,omitempty"`        // number of consecutive failures
-	ExpectedCodes   string `json:"expected_codes,omitempty"` // e.g. "200" or "200-299"
+	ExpectedCodes   string `json:"expected_codes,omitempty"` // e.g. "200" or "2xx"
 	ExpectedBody    string `json:"expected_body,omitempty"`  // substring to look for
 	Method          string `json:"method,omitempty"`         // GET, HEAD, etc.
 	Type            string `json:"type,omitempty"`           // http, https, tcp

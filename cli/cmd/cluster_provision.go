@@ -1605,6 +1605,9 @@ func bootstrapInternalCertSANs(serviceName, clusterID, rootDomain string, host i
 	addDNS(serviceName)
 	addDNS(serviceName + ".internal")
 	addDNS("localhost")
+	if host.Name != "" {
+		addDNS(host.Name + ".internal")
+	}
 	if clusterID != "" && rootDomain != "" {
 		addDNS(fmt.Sprintf("%s.%s.%s", serviceName, clusterID, rootDomain))
 	}
@@ -1682,7 +1685,7 @@ func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 	for _, serviceName := range poolAssignedServices {
 		serviceID := serviceIDs[serviceName]
 		if serviceID == "" {
-			if svc, ok := manifest.Services[serviceName]; ok && svc.Enabled {
+			if len(enabledPoolAssignedManifestServices(manifest, serviceName)) > 0 {
 				return fmt.Errorf("%s service is enabled but missing from Quartermaster service catalog", serviceName)
 			}
 			continue
@@ -1694,25 +1697,33 @@ func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 		}
 		instances = serviceInstancesOnManifestHosts(manifest, instances)
 
-		svc, ok := manifest.Services[serviceName]
-		if !ok || !svc.Enabled {
+		configs := enabledPoolAssignedManifestServices(manifest, serviceName)
+		if len(configs) == 0 {
 			plans = append(plans, serviceAssignmentPlan{serviceName: serviceName, instances: instances})
 			continue
 		}
-		targets := clusterderive.LogicalServiceClusterIDs(serviceName, svc, manifest)
-		if len(targets) == 0 {
-			return fmt.Errorf("%s has no logical media-cluster assignment", serviceName)
-		}
-		instanceIDs, err := desiredServiceInstanceIDs(serviceName, svc, instances)
-		if err != nil {
-			return err
-		}
-		plans = append(plans, serviceAssignmentPlan{
+		plan := serviceAssignmentPlan{
 			serviceName: serviceName,
 			instances:   instances,
-			targets:     targets,
-			instanceIDs: instanceIDs,
-		})
+		}
+		for _, cfg := range configs {
+			targets := clusterderive.LogicalServiceClusterIDs(cfg.name, cfg.svc, manifest)
+			if len(targets) == 0 {
+				return fmt.Errorf("%s has no logical media-cluster assignment", cfg.name)
+			}
+			instanceIDs, err := desiredServiceInstanceIDs(cfg.name, cfg.svc, instances)
+			if err != nil {
+				return err
+			}
+			for _, target := range targets {
+				plan.assignments = append(plan.assignments, serviceAssignmentTarget{
+					clusterID:   target,
+					instanceIDs: instanceIDs,
+					manifestKey: cfg.name,
+				})
+			}
+		}
+		plans = append(plans, plan)
 	}
 
 	for _, plan := range plans {
@@ -1721,19 +1732,19 @@ func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 				return err
 			}
 		}
-		for _, clusterID := range plan.targets {
+		for _, assignment := range plan.assignments {
 			assignCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			err := client.AssignServiceToCluster(assignCtx, &pb.AssignServiceToClusterRequest{
-				ClusterId:   clusterID,
-				InstanceIds: plan.instanceIDs,
+				ClusterId:   assignment.clusterID,
+				InstanceIds: assignment.instanceIDs,
 				ServiceType: plan.serviceName,
 			})
 			cancel()
 			if err != nil {
-				return fmt.Errorf("assign %s to cluster %s: %w", plan.serviceName, clusterID, err)
+				return fmt.Errorf("assign %s to cluster %s: %w", assignment.manifestKey, assignment.clusterID, err)
 			}
 
-			ux.Success(out, fmt.Sprintf("%s assigned %d instance(s) to cluster %s", plan.serviceName, len(plan.instanceIDs), clusterID))
+			ux.Success(out, fmt.Sprintf("%s assigned %d instance(s) to cluster %s", assignment.manifestKey, len(assignment.instanceIDs), assignment.clusterID))
 		}
 	}
 
@@ -1743,8 +1754,37 @@ func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 type serviceAssignmentPlan struct {
 	serviceName string
 	instances   []*pb.ServiceInstance
-	targets     []string
+	assignments []serviceAssignmentTarget
+}
+
+type serviceAssignmentTarget struct {
+	clusterID   string
 	instanceIDs []string
+	manifestKey string
+}
+
+type namedServiceConfig struct {
+	name string
+	svc  inventory.ServiceConfig
+}
+
+func enabledPoolAssignedManifestServices(manifest *inventory.Manifest, serviceType string) []namedServiceConfig {
+	if manifest == nil {
+		return nil
+	}
+	var configs []namedServiceConfig
+	for name, svc := range manifest.Services {
+		if !svc.Enabled {
+			continue
+		}
+		resolvedType, ok := clusterderive.ManifestServiceType(name, svc)
+		if !ok || resolvedType != serviceType || !pkgdns.IsPoolAssignedServiceType(resolvedType) {
+			continue
+		}
+		configs = append(configs, namedServiceConfig{name: name, svc: svc})
+	}
+	sort.Slice(configs, func(i, j int) bool { return configs[i].name < configs[j].name })
+	return configs
 }
 
 func serviceIDsByType(ctx context.Context, client serviceClusterAssignmentClient) (map[string]string, error) {
@@ -1761,7 +1801,9 @@ func serviceIDsByType(ctx context.Context, client serviceClusterAssignmentClient
 		if serviceType == "" || svc.GetServiceId() == "" {
 			continue
 		}
-		out[serviceType] = svc.GetServiceId()
+		if _, exists := out[serviceType]; !exists || svc.GetServiceId() == serviceType {
+			out[serviceType] = svc.GetServiceId()
+		}
 	}
 	return out, nil
 }
@@ -2052,6 +2094,13 @@ func serviceConfigsForPlacementPhase(manifest *inventory.Manifest, phase orchest
 		for name, svc := range manifest.Services {
 			out[name] = svc
 		}
+		for _, serviceType := range pkgdns.PoolAssignedServiceTypes() {
+			configs := enabledPoolAssignedManifestServices(manifest, serviceType)
+			if len(configs) == 0 {
+				continue
+			}
+			out[serviceType] = aggregatePlacementServiceConfig(serviceType, configs)
+		}
 	}
 	if phase == orchestrator.PhaseInterfaces || phase == orchestrator.PhaseAll {
 		for name, svc := range manifest.Interfaces {
@@ -2068,6 +2117,46 @@ func serviceConfigsForPlacementPhase(manifest *inventory.Manifest, phase orchest
 		out[name] = inventory.ServiceConfig{Enabled: false}
 	}
 	return out
+}
+
+func aggregatePlacementServiceConfig(serviceType string, configs []namedServiceConfig) inventory.ServiceConfig {
+	merged := inventory.ServiceConfig{
+		Enabled: true,
+		Deploy:  serviceType,
+	}
+	seenHosts := map[string]struct{}{}
+	var mode string
+	modeSet := false
+	for _, cfg := range configs {
+		if !cfg.svc.Enabled {
+			continue
+		}
+		for _, host := range serviceHosts(cfg.svc) {
+			host = strings.TrimSpace(host)
+			if host == "" {
+				continue
+			}
+			if _, ok := seenHosts[host]; ok {
+				continue
+			}
+			seenHosts[host] = struct{}{}
+			merged.Hosts = append(merged.Hosts, host)
+		}
+		if cfg.svc.Port != 0 && merged.Port == 0 {
+			merged.Port = cfg.svc.Port
+		}
+		cfgMode := strings.TrimSpace(cfg.svc.Mode)
+		switch {
+		case !modeSet:
+			mode = cfgMode
+			modeSet = true
+		case mode != cfgMode:
+			mode = ""
+		}
+	}
+	sort.Strings(merged.Hosts)
+	merged.Mode = mode
+	return merged
 }
 
 func phaseIncludesDeletedService(phase orchestrator.Phase, serviceName string) bool {

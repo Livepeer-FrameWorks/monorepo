@@ -163,7 +163,8 @@ func warnUnassignedClusterScopedBunny(out io.Writer, manifest *inventory.Manifes
 		if !svc.Enabled {
 			continue
 		}
-		if !pkgdns.IsPoolAssignedServiceType(name) {
+		serviceType, ok := clusterderive.ManifestServiceType(name, svc)
+		if !ok || !pkgdns.IsPoolAssignedServiceType(serviceType) {
 			continue
 		}
 		if len(clusterderive.LogicalServiceClusterIDs(name, svc, manifest)) == 0 {

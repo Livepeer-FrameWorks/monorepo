@@ -7,6 +7,7 @@ import (
 
 	"frameworks/cli/pkg/clusterderive"
 	"frameworks/cli/pkg/inventory"
+	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
@@ -331,10 +332,20 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 			if !svc.Enabled {
 				continue
 			}
-			defs, hasDefs := servicedefs.Lookup(serviceName)
+			serviceType, isPublic := clusterderive.ManifestServiceType(serviceName, svc)
+			defName := serviceName
+			if isPublic {
+				defName = serviceType
+			} else if deploy := strings.TrimSpace(svc.Deploy); deploy != "" {
+				defName = deploy
+			}
+			defs, hasDefs := servicedefs.Lookup(defName)
 			port := resolveServicePort(svc, defs)
-			serviceType, isPublic := clusterderive.PublicServiceType(serviceName)
-			notSelfRegister := !clusterderive.SelfRegisters(serviceName)
+			notSelfRegister := !clusterderive.SelfRegisters(serviceType)
+			registryServiceName := serviceName
+			if pkgdns.IsPoolAssignedServiceType(serviceType) {
+				registryServiceName = serviceType
+			}
 
 			// One service may be deployed across multiple hosts in different
 			// clusters. Resolve cluster id per host so every row carries the
@@ -348,7 +359,7 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 
 				if notSelfRegister && isPublic && port != 0 {
 					entry := ServiceRegistryEntry{
-						ServiceName: serviceName,
+						ServiceName: registryServiceName,
 						Type:        serviceType,
 						ClusterID:   clusterID,
 						NodeID:      hostKey,
@@ -358,14 +369,14 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 						entry.Protocol = defs.HealthProtocol
 						entry.HealthEndpoint = defs.HealthPath
 					}
-					if md := deriveServiceMetadata(serviceName, hostKey, port, m, svc, opts); len(md) > 0 {
+					if md := deriveServiceMetadata(serviceType, hostKey, port, m, svc, opts); len(md) > 0 {
 						entry.Metadata = md
 					}
 					d.Quartermaster.ServiceRegistry = append(d.Quartermaster.ServiceRegistry, entry)
 				}
 
 				for _, ingressClusterID := range serviceIngressClusterIDs(serviceName, m, svc, clusterID) {
-					domains, bundleID := clusterderive.AutoIngressDomains(serviceName, m, ingressClusterID)
+					domains, bundleID := clusterderive.AutoIngressDomainsForService(serviceName, svc, m, ingressClusterID)
 					if bundleID == "" || len(domains) == 0 {
 						continue
 					}

@@ -95,6 +95,30 @@ func TestLogicalServiceClusterIDsHonorsExplicitClusters(t *testing.T) {
 	}
 }
 
+func TestLogicalServiceClusterIDsSupportsManifestAliases(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-eu-1": {Type: "edge", Roles: []string{"media"}},
+			"media-us-1": {Type: "edge", Roles: []string{"media"}},
+		},
+	}
+
+	got := LogicalServiceClusterIDs("foghorn-us", inventory.ServiceConfig{
+		Enabled: true,
+		Deploy:  "foghorn",
+		Host:    "regional-us-1",
+		Cluster: "media-us-1",
+	}, manifest)
+	if !slices.Equal(got, []string{"media-us-1"}) {
+		t.Fatalf("alias cluster = %q, want media-us-1", got)
+	}
+
+	serviceType, ok := ManifestServiceType("livepeer-gateway-eu", inventory.ServiceConfig{Deploy: "livepeer-gateway"})
+	if !ok || serviceType != "livepeer-gateway" {
+		t.Fatalf("alias service type = %q, %v; want livepeer-gateway, true", serviceType, ok)
+	}
+}
+
 func TestMediaClusterIDsFiltersCoreClusters(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Clusters: map[string]inventory.ClusterConfig{
