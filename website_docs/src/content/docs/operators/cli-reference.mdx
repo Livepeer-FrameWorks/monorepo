@@ -908,6 +908,14 @@ Manage bootstrap tokens for edge node enrollment.
 # Create bootstrap token
 frameworks admin bootstrap-tokens create --name "edge-nyc-01" --kind edge_node --ttl 24h
 
+# Create runtime mesh token with pre-service topology intent
+frameworks admin bootstrap-tokens create \
+  --name "regional-eu-2 privateer" \
+  --kind infrastructure_node \
+  --cluster-id regional-eu-1 \
+  --desired-service-type foghorn \
+  --desired-cluster-id media-eu-1
+
 # List tokens (shows name and ID)
 frameworks admin bootstrap-tokens list
 

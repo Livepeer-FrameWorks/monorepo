@@ -120,6 +120,44 @@ func parseStructJSON(value string) (*structpb.Struct, error) {
 	return structpb.NewStruct(m)
 }
 
+func mergeMetadataStringList(metadata map[string]any, key string, values []string) {
+	if len(values) == 0 {
+		return
+	}
+	seen := map[string]struct{}{}
+	var out []any
+	if existing, ok := metadata[key]; ok {
+		if existingValues, ok := existing.([]any); ok {
+			for _, raw := range existingValues {
+				value, ok := raw.(string)
+				if !ok {
+					continue
+				}
+				value = strings.TrimSpace(value)
+				if value == "" {
+					continue
+				}
+				seen[value] = struct{}{}
+				out = append(out, value)
+			}
+		}
+	}
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	if len(out) > 0 {
+		metadata[key] = out
+	}
+}
+
 func optionalStringFlag(cmd *cobra.Command, name, value string) *string {
 	if cmd.Flags().Changed(name) {
 		v := value
@@ -480,6 +518,9 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 	var ttl string
 	var name string
 	var usageLimit int
+	var metadata string
+	var desiredServiceTypes []string
+	var desiredClusterIDs []string
 	cmd := &cobra.Command{Use: "create", Short: "Create bootstrap token (edge_node|service|infrastructure_node)", RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 		// Validate inputs first
@@ -529,6 +570,22 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 		if usageLimit < 0 {
 			return fmt.Errorf("--usage-limit cannot be negative")
 		}
+		metadataStruct, err := parseStructJSON(metadata)
+		if err != nil {
+			return fmt.Errorf("--metadata: %w", err)
+		}
+		metadataMap := map[string]any{}
+		if metadataStruct != nil {
+			metadataMap = metadataStruct.AsMap()
+		}
+		mergeMetadataStringList(metadataMap, "desired_service_types", desiredServiceTypes)
+		mergeMetadataStringList(metadataMap, "desired_cluster_ids", desiredClusterIDs)
+		if len(metadataMap) > 0 {
+			metadataStruct, err = structpb.NewStruct(metadataMap)
+			if err != nil {
+				return fmt.Errorf("metadata: %w", err)
+			}
+		}
 
 		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
 		if err != nil {
@@ -537,9 +594,10 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
 		req := &pb.CreateBootstrapTokenRequest{
-			Name: name,
-			Kind: kind,
-			Ttl:  normalizedTTL,
+			Name:     name,
+			Kind:     kind,
+			Ttl:      normalizedTTL,
+			Metadata: metadataStruct,
 		}
 		if tenantID != "" {
 			req.TenantId = &tenantID
@@ -587,6 +645,9 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&ttl, "ttl", "24h", "time-to-live (e.g., 24h, 7d)")
 	cmd.Flags().StringVar(&name, "name", "Bootstrap Token", "display name for the token")
 	cmd.Flags().IntVar(&usageLimit, "usage-limit", 0, "maximum allowed uses (default 0 = single use)")
+	cmd.Flags().StringVar(&metadata, "metadata", "", "metadata JSON (optional)")
+	cmd.Flags().StringSliceVar(&desiredServiceTypes, "desired-service-type", nil, "service type expected on runtime-enrolled nodes; repeatable for infrastructure_node tokens")
+	cmd.Flags().StringSliceVar(&desiredClusterIDs, "desired-cluster-id", nil, "logical service cluster id expected on runtime-enrolled nodes; repeatable for infrastructure_node tokens")
 	return cmd
 }
 

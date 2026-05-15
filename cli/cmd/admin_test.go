@@ -1,6 +1,9 @@
 package cmd
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestNormalizeDuration(t *testing.T) {
 	t.Parallel()
@@ -76,5 +79,23 @@ func TestNormalizeDuration(t *testing.T) {
 				t.Fatalf("normalizeDuration(%q) = %q, want %q", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestMergeMetadataStringList(t *testing.T) {
+	t.Parallel()
+
+	metadata := map[string]any{
+		"desired_service_types": []any{"bridge", "purser", 42, ""},
+	}
+	mergeMetadataStringList(metadata, "desired_service_types", []string{"purser", " foghorn ", ""})
+
+	got, ok := metadata["desired_service_types"].([]any)
+	if !ok {
+		t.Fatalf("desired_service_types type = %T, want []any", metadata["desired_service_types"])
+	}
+	want := []any{"bridge", "purser", "foghorn"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("desired_service_types = %#v, want %#v", got, want)
 	}
 }
