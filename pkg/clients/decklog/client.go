@@ -3,6 +3,7 @@ package decklog
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
@@ -54,7 +55,7 @@ func NewClient(cfg ClientConfig, logger logging.Logger) (*Client, error) {
 
 	transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
 		CACertFile:    cfg.CACertFile,
-		ServerName:    cfg.ServerName,
+		ServerName:    decklogTLSServerName(cfg.CACertFile, cfg.ServerName, cfg.AllowInsecure),
 		AllowInsecure: cfg.AllowInsecure,
 	}, logger)
 	if err != nil {
@@ -161,7 +162,7 @@ func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedC
 
 	transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
 		CACertFile:    cfg.CACertFile,
-		ServerName:    cfg.ServerName,
+		ServerName:    decklogTLSServerName(cfg.CACertFile, cfg.ServerName, cfg.AllowInsecure),
 		AllowInsecure: cfg.AllowInsecure,
 	}, logger)
 	if err != nil {
@@ -202,6 +203,14 @@ func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedC
 	}).Info("Decklog client initialized")
 
 	return client, nil
+}
+
+func decklogTLSServerName(caPath, configured string, allowInsecure bool) string {
+	configured = strings.TrimSpace(configured)
+	if configured != "" || allowInsecure || strings.TrimSpace(caPath) == "" {
+		return configured
+	}
+	return "decklog.internal"
 }
 
 // authContext returns a context with service token authorization metadata.

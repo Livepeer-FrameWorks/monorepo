@@ -11,6 +11,24 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+func TestDecklogTLSServerNameDefaultsWithCA(t *testing.T) {
+	if got := decklogTLSServerName("/etc/frameworks/pki/ca.crt", "", false); got != "decklog.internal" {
+		t.Fatalf("server name = %q", got)
+	}
+}
+
+func TestDecklogTLSServerNameHonorsExplicitValue(t *testing.T) {
+	if got := decklogTLSServerName("/etc/frameworks/pki/ca.crt", "regional-eu-1.internal", false); got != "regional-eu-1.internal" {
+		t.Fatalf("server name = %q", got)
+	}
+}
+
+func TestDecklogTLSServerNameLeavesDevInsecureUnset(t *testing.T) {
+	if got := decklogTLSServerName("", "", true); got != "" {
+		t.Fatalf("server name = %q", got)
+	}
+}
+
 func TestBuildArtifactLifecycleEvent(t *testing.T) {
 	startedAt := int64(100)
 	completedAt := int64(200)

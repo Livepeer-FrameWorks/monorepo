@@ -163,7 +163,7 @@ func foghornClientTLSConfig(config GRPCConfig) grpcutil.ClientTLSConfig {
 		tlsCfg.AllowInsecure = true
 		return tlsCfg
 	}
-	if config.UseTLS || grpcutil.AddrIsFQDN(config.GRPCAddr) {
+	if config.UseTLS || config.CACertFile != "" || config.ServerName != "" || grpcutil.AddrIsFQDN(config.GRPCAddr) {
 		return tlsCfg
 	}
 	tlsCfg.AllowInsecure = true

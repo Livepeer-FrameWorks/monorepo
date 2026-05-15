@@ -3543,6 +3543,13 @@ func buildPrivateerSeedDNS(manifest *inventory.Manifest, selfHostName string) ma
 	addServices(manifest.Services)
 	addServices(manifest.Interfaces)
 	addServices(manifest.Observability)
+	if _, ok := dnsAliases["signalman"]; ok {
+		for recordName, hosts := range signalmanRegionalDNSRecords(manifest) {
+			for _, hostName := range hosts {
+				addRecord(recordName, hostName)
+			}
+		}
+	}
 	for alias := range globalDNSAliases {
 		for _, hostName := range serviceProviderHostsForAliasGlobal(manifest, alias) {
 			addRecord(hostName, hostName)
@@ -5338,26 +5345,6 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		env[grpc.EnvKey] = fmt.Sprintf("%s.internal:%d", grpc.ServiceID, port)
 	}
 
-	// Region-local Decklog override. Producers (Foghorn, Bridge, Commodore,
-	// Quartermaster, Purser, Signalman) must dial the Decklog deployed in
-	// their own region so events land in the regional Kafka where they
-	// happen — that's the multi-region locality invariant MM2 then mirrors
-	// to the aggregator. Without this, the generic GRPCServices loop above
-	// emits `decklog.internal:<port>` which Privateer's mesh DNS may resolve
-	// to any cell. Falls back to the mesh DNS when no in-region Decklog
-	// exists (single-region dev clusters).
-	if decklogSvc, ok := manifest.Services["decklog"]; ok && decklogSvc.Enabled {
-		if region := manifestTaskRegion(manifest, task); region != "" {
-			if host := pickServiceHostInRegion(manifest, decklogSvc, region); host != "" {
-				port := decklogSvc.GRPCPort
-				if port == 0 {
-					port = defaultGRPCPort("decklog")
-				}
-				env["DECKLOG_GRPC_ADDR"] = fmt.Sprintf("%s:%d", manifestMeshHostname(manifest, host), port)
-			}
-		}
-	}
-
 	// Per-binary env injection. Keys off task.Type (the deploy slug) so
 	// multiple manifest entries that deploy the same binary against
 	// different clusters (e.g. foghorn-eu + foghorn-us both deploy foghorn)
@@ -5411,19 +5398,19 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 			}
 			env["SKIPPER_SPOKE_URL"] = fmt.Sprintf("http://skipper.internal:%d/mcp/spoke", port)
 		}
-		// Per-region Signalman dial: the bridge running in region X should
-		// terminate subscriptions on Signalman in region X by default and
-		// only cross regions when a stream originates elsewhere. With N
-		// replicas per region, the client picks one from the local list and
-		// fails over within the list on disconnect.
+		// Per-region Signalman dial: the default address remains
+		// signalman.internal so local placement is owned by mesh DNS. Stream
+		// origin overrides use region-scoped service aliases, not concrete
+		// node names, so TLS still verifies the Signalman service identity.
 		if signalmanSvc, ok := manifest.Services["signalman"]; ok && signalmanSvc.Enabled {
-			region := manifestTaskRegion(manifest, task)
-			byRegionMulti := signalmanAddrsByRegionMulti(manifest)
-
-			if addrs := byRegionMulti[region]; len(addrs) > 0 {
-				env["SIGNALMAN_GRPC_ADDR"] = addrs[0]
-				env["SIGNALMAN_GRPC_ADDRS"] = strings.Join(addrs, ",")
+			if env["SIGNALMAN_GRPC_ADDR"] == "" {
+				port := signalmanSvc.GRPCPort
+				if port == 0 {
+					port = defaultGRPCPort("signalman")
+				}
+				env["SIGNALMAN_GRPC_ADDR"] = fmt.Sprintf("signalman.internal:%d", port)
 			}
+			byRegionMulti := signalmanAddrsByRegionMulti(manifest)
 
 			if len(byRegionMulti) > 0 {
 				regions := make([]string, 0, len(byRegionMulti))
@@ -5698,28 +5685,12 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 				}
 			}
 		}
-		// Decklog endpoint discovery. Prefer an in-region Decklog so the
-		// gateway's per-orch telemetry lands in the regional Kafka before
-		// MM2 mirrors it. Falls back to the generic resolveServiceGRPCAddr
-		// (host-agnostic mesh DNS) when no in-region host exists. TLS mode
-		// follows the internal-CA convention: present → mtls, absent →
-		// disabled (dev only).
+		// Decklog endpoint discovery. Internal service DNS owns regional
+		// placement; clients dial the service identity so TLS verifies against
+		// decklog.internal instead of a concrete node name.
 		if env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] == "" {
-			if decklogSvc, ok := manifest.Services["decklog"]; ok && decklogSvc.Enabled {
-				if region := manifestTaskRegion(manifest, task); region != "" {
-					if host := pickServiceHostInRegion(manifest, decklogSvc, region); host != "" {
-						port := decklogSvc.GRPCPort
-						if port == 0 {
-							port = defaultGRPCPort("decklog")
-						}
-						env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] = fmt.Sprintf("%s:%d", manifestMeshHostname(manifest, host), port)
-					}
-				}
-			}
-			if env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] == "" {
-				if addr, err := resolveServiceGRPCAddr(manifest, "decklog", defaultGRPCPort("decklog")); err == nil {
-					env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] = addr
-				}
+			if addr, err := resolveServiceGRPCAddr(manifest, "decklog", defaultGRPCPort("decklog")); err == nil {
+				env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] = addr
 			}
 		}
 		if env["FRAMEWORKS_DECKLOG_TLS_MODE"] == "" {
@@ -6182,40 +6153,9 @@ func manifestHostRegion(manifest *inventory.Manifest, hostName string) string {
 	return ""
 }
 
-// pickServiceHostInRegion returns the first declared host for svc whose
-// manifest cluster region matches region. Returns "" when no host matches —
-// the caller falls back to the default mesh DNS name.
-func pickServiceHostInRegion(manifest *inventory.Manifest, svc inventory.ServiceConfig, region string) string {
-	if manifest == nil || region == "" {
-		return ""
-	}
-	hosts := svc.Hosts
-	if len(hosts) == 0 && svc.Host != "" {
-		hosts = []string{svc.Host}
-	}
-	for _, hostName := range hosts {
-		host, ok := manifest.Hosts[hostName]
-		if !ok {
-			continue
-		}
-		if hostRegion := strings.TrimSpace(host.Labels["region"]); hostRegion == region {
-			return hostName
-		}
-		if clusterID := strings.TrimSpace(host.Cluster); clusterID != "" {
-			if cluster, ok := manifest.Clusters[clusterID]; ok {
-				if strings.TrimSpace(cluster.Region) == region {
-					return hostName
-				}
-			}
-		}
-	}
-	return ""
-}
-
-// signalmanAddrsByRegionMulti builds region→list-of-mesh-addrs covering every
-// Signalman replica per region. The bridge picks one from its own region's
-// list and fails over within the list when the chosen replica disconnects.
-// Each list is sorted for stable env output across reruns.
+// signalmanAddrsByRegionMulti builds region→service-alias addrs. The alias
+// resolves through Privateer DNS to all Signalman replicas in that region, so
+// callers keep a service-identity target instead of concrete node names.
 func signalmanAddrsByRegionMulti(manifest *inventory.Manifest) map[string][]string {
 	if manifest == nil {
 		return nil
@@ -6228,32 +6168,36 @@ func signalmanAddrsByRegionMulti(manifest *inventory.Manifest) map[string][]stri
 	if port == 0 {
 		port = defaultGRPCPort("signalman")
 	}
-	hosts := svc.Hosts
-	if len(hosts) == 0 && svc.Host != "" {
-		hosts = []string{svc.Host}
+	out := map[string][]string{}
+	for recordName := range signalmanRegionalDNSRecords(manifest) {
+		region := strings.TrimPrefix(recordName, "signalman.")
+		if region == recordName || region == "" {
+			continue
+		}
+		out[region] = []string{fmt.Sprintf("%s.internal:%d", recordName, port)}
+	}
+	return out
+}
+
+func signalmanRegionalDNSRecords(manifest *inventory.Manifest) map[string][]string {
+	if manifest == nil {
+		return nil
+	}
+	svc, ok := manifest.Services["signalman"]
+	if !ok || !svc.Enabled {
+		return nil
 	}
 	out := map[string][]string{}
-	for _, hostName := range hosts {
-		host, ok := manifest.Hosts[hostName]
-		if !ok {
-			continue
-		}
-		region := strings.TrimSpace(host.Labels["region"])
-		if region == "" {
-			if clusterID := strings.TrimSpace(host.Cluster); clusterID != "" {
-				if cluster, ok := manifest.Clusters[clusterID]; ok {
-					region = strings.TrimSpace(cluster.Region)
-				}
-			}
-		}
+	for _, hostName := range serviceHosts(svc) {
+		region := pkgdns.SanitizeLabel(privateerHostRegion(manifest, hostName))
 		if region == "" {
 			continue
 		}
-		addr := fmt.Sprintf("%s:%d", manifestMeshHostname(manifest, hostName), port)
-		out[region] = append(out[region], addr)
+		recordName := "signalman." + region
+		out[recordName] = append(out[recordName], hostName)
 	}
-	for region := range out {
-		sort.Strings(out[region])
+	for recordName := range out {
+		sort.Strings(out[recordName])
 	}
 	return out
 }

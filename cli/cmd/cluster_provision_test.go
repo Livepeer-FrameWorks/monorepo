@@ -2980,9 +2980,9 @@ func TestPrivateerSeedDNSUsesTopologyScopedAliases(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Clusters: map[string]inventory.ClusterConfig{
 			"core":     {},
-			"regional": {},
+			"regional": {Region: "eu-west"},
 			"media-eu": {},
-			"us":       {},
+			"us":       {Region: "us-east"},
 		},
 		Hosts: map[string]inventory.Host{
 			"central-1":  {Cluster: "core", WireguardIP: "10.88.0.10"},
@@ -2995,6 +2995,8 @@ func TestPrivateerSeedDNSUsesTopologyScopedAliases(t *testing.T) {
 			"purser":        {Enabled: true, Host: "central-2"},
 			"decklog-eu":    {Enabled: true, Deploy: "decklog", Host: "regional-1"},
 			"decklog-us":    {Enabled: true, Deploy: "decklog", Host: "us-1"},
+			"signalman":     {Enabled: true, Hosts: []string{"regional-1", "us-1"}},
+			"bridge":        {Enabled: true, Host: "regional-1"},
 			"chandler-eu":   {Enabled: true, Deploy: "chandler", Cluster: "media-eu", Host: "regional-1"},
 			"foghorn-eu":    {Enabled: true, Deploy: "foghorn", Cluster: "media-eu", Host: "regional-1"},
 		},
@@ -3012,6 +3014,12 @@ func TestPrivateerSeedDNSUsesTopologyScopedAliases(t *testing.T) {
 	}
 	if got := dns["chandler"]; len(got) != 1 || got[0] != "10.88.1.20" {
 		t.Fatalf("chandler DNS = %v, want logical-cluster local [10.88.1.20]", got)
+	}
+	if got := dns["signalman.eu-west"]; len(got) != 1 || got[0] != "10.88.1.20" {
+		t.Fatalf("signalman.eu-west DNS = %v, want [10.88.1.20]", got)
+	}
+	if got := dns["signalman.us-east"]; len(got) != 1 || got[0] != "10.88.2.20" {
+		t.Fatalf("signalman.us-east DNS = %v, want [10.88.2.20]", got)
 	}
 	if got := dns["central-1"]; len(got) != 1 || got[0] != "10.88.0.10" {
 		t.Fatalf("central-1 DNS = %v, want [10.88.0.10]", got)
@@ -3304,17 +3312,11 @@ func TestBuildServiceEnvVarsBridgeMultiTargetSignalman(t *testing.T) {
 		t.Fatalf("buildServiceEnvVars bridge: %v", err)
 	}
 
-	if env["SIGNALMAN_GRPC_ADDR"] == "" {
-		t.Fatal("SIGNALMAN_GRPC_ADDR missing")
+	if got := env["SIGNALMAN_GRPC_ADDR"]; got != "signalman.internal:19005" {
+		t.Fatalf("SIGNALMAN_GRPC_ADDR = %q, want service DNS", got)
 	}
-	addrs := env["SIGNALMAN_GRPC_ADDRS"]
-	if addrs == "" {
-		t.Fatal("SIGNALMAN_GRPC_ADDRS missing")
-	}
-	for _, host := range []string{"regional-eu-1", "regional-eu-2", "regional-eu-3"} {
-		if !strings.Contains(addrs, host) {
-			t.Errorf("SIGNALMAN_GRPC_ADDRS missing %s: %q", host, addrs)
-		}
+	if got := env["SIGNALMAN_GRPC_ADDRS"]; got != "" {
+		t.Fatalf("SIGNALMAN_GRPC_ADDRS = %q, want unset; local placement belongs to service DNS", got)
 	}
 
 	byRegion := env["SIGNALMAN_GRPC_ADDRS_BY_REGION"]
@@ -3325,10 +3327,12 @@ func TestBuildServiceEnvVarsBridgeMultiTargetSignalman(t *testing.T) {
 		if !strings.Contains(byRegion, region+"=") {
 			t.Errorf("SIGNALMAN_GRPC_ADDRS_BY_REGION missing region %s: %q", region, byRegion)
 		}
+		if !strings.Contains(byRegion, "signalman."+region+".internal:19005") {
+			t.Errorf("SIGNALMAN_GRPC_ADDRS_BY_REGION missing service alias for %s: %q", region, byRegion)
+		}
 	}
-	// us-east should list all three US signalmans
-	if !strings.Contains(byRegion, "regional-us-1") || !strings.Contains(byRegion, "regional-us-2") || !strings.Contains(byRegion, "regional-us-3") {
-		t.Errorf("SIGNALMAN_GRPC_ADDRS_BY_REGION missing US replicas: %q", byRegion)
+	if strings.Contains(byRegion, "regional-us-1") || strings.Contains(byRegion, "regional-eu-1") {
+		t.Errorf("SIGNALMAN_GRPC_ADDRS_BY_REGION should not expose concrete node names: %q", byRegion)
 	}
 }
 

@@ -648,8 +648,11 @@ func main() {
 		})
 
 		fedPool := foghornpool.NewPool(foghornpool.PoolConfig{
-			ServiceToken: serviceToken,
-			Logger:       logger,
+			ServiceToken:  serviceToken,
+			Logger:        logger,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
 		defer fedPool.Close()
 
@@ -901,9 +904,12 @@ func main() {
 
 	if redisStore != nil && advertiseAddr != "" {
 		relayPool := foghornpool.NewPool(foghornpool.PoolConfig{
-			ServiceToken: serviceToken,
-			Timeout:      10 * time.Second,
-			Logger:       logger,
+			ServiceToken:  serviceToken,
+			Timeout:       10 * time.Second,
+			Logger:        logger,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
 		defer relayPool.Close()
 

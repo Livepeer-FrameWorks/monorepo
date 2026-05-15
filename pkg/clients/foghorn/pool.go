@@ -35,6 +35,9 @@ type PoolConfig struct {
 	MaxIdleTime         time.Duration // evict connections idle longer than this (default 10m)
 	HealthCheckInterval time.Duration // background sweep interval (default 30s)
 	UseTLS              bool          // enable TLS transport for all pooled connections
+	CACertFile          string
+	ServerName          string
+	AllowInsecure       bool
 }
 
 func (c PoolConfig) withDefaults() PoolConfig {
@@ -91,11 +94,14 @@ func (p *FoghornPool) GetOrCreate(clusterID, addr string) (*GRPCClient, error) {
 	}
 
 	client, err := NewGRPCClient(GRPCConfig{
-		GRPCAddr:     addr,
-		Timeout:      p.config.Timeout,
-		Logger:       p.logger,
-		ServiceToken: p.config.ServiceToken,
-		UseTLS:       p.config.UseTLS,
+		GRPCAddr:      addr,
+		Timeout:       p.config.Timeout,
+		Logger:        p.logger,
+		ServiceToken:  p.config.ServiceToken,
+		UseTLS:        p.config.UseTLS,
+		CACertFile:    p.config.CACertFile,
+		ServerName:    p.config.ServerName,
+		AllowInsecure: p.config.AllowInsecure,
 	})
 	if err != nil {
 		return nil, err

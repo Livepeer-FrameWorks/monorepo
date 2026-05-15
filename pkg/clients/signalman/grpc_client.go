@@ -109,7 +109,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 
 	tlsCfg := grpcutil.ClientTLSConfig{
 		CACertFile:    config.CACertFile,
-		ServerName:    config.ServerName,
+		ServerName:    signalmanTLSServerName(config.CACertFile, config.ServerName, config.AllowInsecure),
 		AllowInsecure: config.AllowInsecure,
 	}
 	transport, err := grpcutil.ClientTLS(tlsCfg, config.Logger)
@@ -146,6 +146,13 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		userID:    config.UserID,
 		tenantID:  config.TenantID,
 	}, nil
+}
+
+func signalmanTLSServerName(caPath, configured string, allowInsecure bool) string {
+	if configured != "" || caPath == "" || allowInsecure {
+		return configured
+	}
+	return "signalman.internal"
 }
 
 // Close closes the gRPC connection

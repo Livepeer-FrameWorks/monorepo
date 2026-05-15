@@ -42,6 +42,18 @@ func TestFoghornClientTLSConfigHonorsExplicitTLSForIPAddress(t *testing.T) {
 	}
 }
 
+func TestFoghornClientTLSConfigUsesCAForSingleLabelAddress(t *testing.T) {
+	t.Parallel()
+
+	cfg := foghornClientTLSConfig(GRPCConfig{
+		GRPCAddr:   "regional-us-1:18019",
+		CACertFile: "/etc/frameworks/pki/ca.crt",
+	})
+	if cfg.AllowInsecure {
+		t.Fatal("AllowInsecure = true, want false when CA is configured")
+	}
+}
+
 func TestFoghornClientTLSConfigHonorsExplicitInsecureForFQDN(t *testing.T) {
 	t.Parallel()
 
