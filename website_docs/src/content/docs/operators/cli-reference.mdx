@@ -355,6 +355,7 @@ frameworks cluster init postgres --manifest production.yaml
 | `frameworks cluster data-migrate verify <service>.<id>` | Run the migration's read-only verification on the service host.                                                                                                                                                                             |
 | `frameworks cluster data-migrate pause <service>.<id>`  | Mark a data migration paused.                                                                                                                                                                                                               |
 | `frameworks cluster data-migrate resume <service>.<id>` | Mark a paused data migration runnable again.                                                                                                                                                                                                |
+| `frameworks cluster skipper knowledge reset`            | Clear Skipper knowledge embeddings and crawl cache so configured sources are fetched and embedded again.                                                                                                                                    |
 | `frameworks cluster skipper posts`                      | Query recent Skipper social post drafts from the skipper database over the manifest-selected SSH/database path.                                                                                                                             |
 | `frameworks cluster sync-geoip`                         | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                              |
 | `frameworks cluster set-channel <channel>`              | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster upgrade` uses this when no explicit version is given.                                                                                                      |
@@ -380,6 +381,9 @@ frameworks cluster migrate --phase expand
 # Inspect recent Skipper social drafts
 frameworks cluster skipper posts --status draft --limit 25
 
+# Clear platform knowledge vectors and crawl cache before an embedding-model recrawl
+frameworks cluster skipper knowledge reset --yes
+
 # Distribute a local GeoIP database and restart target services
 frameworks cluster sync-geoip \
   --source file \
@@ -398,6 +402,39 @@ frameworks cluster set-channel rc
 ### frameworks cluster skipper
 
 Inspect Skipper operational state.
+
+### frameworks cluster skipper knowledge reset
+
+Clear Skipper knowledge embeddings and page-cache rows so the next crawl cycle
+fetches and embeds sources from scratch. The command does not delete
+conversations, usage rows, social posts, reports, or diagnostic baselines.
+
+By default it resets the active context's system tenant. Pass `--tenant-id` for
+a specific tenant, `--all-tenants` to reset every tenant, and `--source` to
+limit the reset to one source URL or source root.
+
+**Usage:**
+
+```bash
+frameworks cluster skipper knowledge reset [flags]
+```
+
+**Flags:**
+
+- `--tenant-id string` - Tenant UUID to reset (defaults to active context system tenant)
+- `--all-tenants` - Reset knowledge for every tenant
+- `--source string` - Limit reset to one source URL or source root
+- `--dry-run` - Show matching row counts without deleting data
+- `--yes` / `-y` - Skip confirmation prompt
+
+**Examples:**
+
+```bash
+frameworks cluster skipper knowledge reset --dry-run
+frameworks cluster skipper knowledge reset --yes
+frameworks cluster skipper knowledge reset --tenant-id 00000000-0000-0000-0000-000000000001 --yes
+frameworks cluster skipper knowledge reset --all-tenants --yes
+```
 
 ### frameworks cluster skipper posts
 
