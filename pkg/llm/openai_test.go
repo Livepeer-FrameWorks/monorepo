@@ -187,6 +187,32 @@ func TestOpenAIProviderStatus300(t *testing.T) {
 	}
 }
 
+func TestOpenAIProviderMalformedChunkErrorIncludesSample(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: Definitely not JSON\n\n")
+	}))
+	defer server.Close()
+
+	p := NewOpenAIProvider(Config{APIURL: server.URL, APIKey: "k", Model: "m"})
+	stream, err := p.Complete(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Recv()
+	if err == nil {
+		t.Fatal("expected malformed chunk error")
+	}
+	if !strings.Contains(err.Error(), `payload_sample="Definitely not JSON"`) {
+		t.Fatalf("error did not include payload sample: %v", err)
+	}
+	if !strings.Contains(err.Error(), "payload_len=19") {
+		t.Fatalf("error did not include payload length: %v", err)
+	}
+}
+
 func TestOpenAIProviderToolCallWithEmptyID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

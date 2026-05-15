@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -168,7 +169,7 @@ func newOpenAIChunkDecoder() func([]byte) (Chunk, error) {
 	return func(data []byte) (Chunk, error) {
 		var payload openAIStreamResponse
 		if err := json.Unmarshal(data, &payload); err != nil {
-			return Chunk{}, fmt.Errorf("openai: decode chunk: %w", err)
+			return Chunk{}, fmt.Errorf("openai: decode chunk: %w; payload_len=%d payload_sample=%s", err, len(data), badChunkSample(data))
 		}
 		if len(payload.Choices) == 0 {
 			return Chunk{}, nil
@@ -207,4 +208,13 @@ func newOpenAIChunkDecoder() func([]byte) (Chunk, error) {
 
 		return chunk, nil
 	}
+}
+
+func badChunkSample(data []byte) string {
+	const maxChunkSampleBytes = 256
+	sample := string(data)
+	if len(sample) > maxChunkSampleBytes {
+		sample = sample[:maxChunkSampleBytes] + "...<truncated>"
+	}
+	return strconv.QuoteToASCII(sample)
 }
