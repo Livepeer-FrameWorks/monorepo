@@ -441,7 +441,7 @@ jobs:
           }
           JSON
           done
-          touch final/.keep
+          touch final/keep.txt
 
       - name: Upload merged digests
         uses: actions/upload-artifact@v7
@@ -887,7 +887,7 @@ jobs:
           }
           JSON
           done
-          touch final/.keep
+          touch final/keep.txt
 
       - name: Upload merged digests
         uses: actions/upload-artifact@v7
@@ -1034,7 +1034,7 @@ jobs:
           VERSION="${{ github.ref_name }}"
           BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           mkdir -p dist/binaries
-          touch dist/binaries/.keep
+          touch dist/binaries/keep.txt
 
           jq -c '.services[] | {name, context, cmd, cgo}' "$COMPONENTS_FILE" | while read -r svc; do
             name=$(echo "$svc" | jq -r .name)
@@ -1130,7 +1130,7 @@ jobs:
           VERSION="${{ github.ref_name }}"
           BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           mkdir -p dist/binaries
-          touch dist/binaries/.keep
+          touch dist/binaries/keep.txt
 
           jq -c '.services[] | {name, context, cmd, cgo}' "$COMPONENTS_FILE" | while read -r svc; do
             name=$(echo "$svc" | jq -r .name)
@@ -1228,7 +1228,7 @@ jobs:
           VERSION="${{ github.ref_name }}"
           BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           mkdir -p dist/binaries
-          touch dist/binaries/.keep
+          touch dist/binaries/keep.txt
 
           jq -c '.services[] | select(.darwin_binary) | {name, context, cmd}' "$COMPONENTS_FILE" | while read -r svc; do
             name=$(echo "$svc" | jq -r .name)
@@ -1741,7 +1741,7 @@ jobs:
           # baseline release manifest, preserving the older service_version
           # label so Foghorn's edge reconciler does not roll any node.
           if [[ -f dist/release-plan.json ]]; then
-            jq -c '.decisions | to_entries[] | select(.value.kind == "service" and .value.action == "carry_forward")' dist/release-plan.json | while read -r dec; do
+            jq -c '.decisions | to_entries[] | select(.value.kind == "service" and .value.action == "carry_forward" and .value.carried_service != null)' dist/release-plan.json | while read -r dec; do
               name=$(echo "$dec" | jq -r .key)
               svc=$(echo "$dec" | jq -c .value.carried_service)
               cf_from=$(echo "$dec" | jq -r .value.baseline_tag)
@@ -1831,8 +1831,19 @@ jobs:
             if echo "$WEBAPP_NAMES" | grep -qx "$name"; then
               continue
             fi
+            source_hash=""
+            if [[ -f dist/release-plan.json ]]; then
+              source_hash=$(jq -r --arg n "$name" '.decisions[$n].source_hash // ""' dist/release-plan.json)
+            fi
             cat >> dist/manifest.yaml <<YAML
             - name: ${name}
+          YAML
+            if [[ -n "$source_hash" ]]; then
+              cat >> dist/manifest.yaml <<YAML
+              source_hash: ${source_hash}
+          YAML
+            fi
+            cat >> dist/manifest.yaml <<YAML
               artifacts:
           YAML
             emit_linux_artifacts "$name"
@@ -1852,6 +1863,17 @@ jobs:
             fi
             cat >> dist/manifest.yaml <<YAML
             - name: ${svc}
+          YAML
+            source_hash=""
+            if [[ -f dist/release-plan.json ]]; then
+              source_hash=$(jq -r --arg n "$svc" '.decisions[$n].source_hash // ""' dist/release-plan.json)
+            fi
+            if [[ -n "$source_hash" ]]; then
+              cat >> dist/manifest.yaml <<YAML
+              source_hash: ${source_hash}
+          YAML
+            fi
+            cat >> dist/manifest.yaml <<YAML
               artifacts:
           YAML
             emit_linux_artifacts "$svc"
@@ -1866,8 +1888,12 @@ jobs:
           if [[ -f dist/release-plan.json ]]; then
             jq -c '.decisions | to_entries[] | select(.value.action == "carry_forward" and .value.carried_native_binary != null)' dist/release-plan.json | while read -r dec; do
               name=$(echo "$dec" | jq -r .key)
+              cf_from=$(echo "$dec" | jq -r .value.baseline_tag)
+              src_hash=$(echo "$dec" | jq -r .value.source_hash)
               cat >> dist/manifest.yaml <<YAML
             - name: ${name}
+              source_hash: ${src_hash}
+              carried_from: ${cf_from}
               artifacts:
           YAML
               echo "$dec" | jq -r '.value.carried_native_binary.artifacts[] | "                - arch: \(.arch)\n                  file: \(.file)\n                  url: \(.url)\n                  checksum: \(.checksum)"' >> dist/manifest.yaml

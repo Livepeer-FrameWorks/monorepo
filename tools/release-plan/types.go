@@ -7,9 +7,9 @@
 // every build job (to skip carry_forward jobs) and at the end of the
 // manifest job (to copy carried entries from the baseline manifest).
 //
-// Identity is mode-aware: every component BOM carries both Docker
-// (image@digest) and native (URL+checksum) identities, and carry-forward
-// preserves both atomically.
+// Identity is mode-aware: each component carries its supported Docker
+// (image@digest) and/or native (URL+checksum) identities, and carry-forward
+// preserves them atomically.
 package main
 
 import "time"
@@ -72,8 +72,10 @@ type RegistryImage struct {
 }
 
 type NativeBinary struct {
-	Name      string     `yaml:"name" json:"name"`
-	Artifacts []Artifact `yaml:"artifacts" json:"artifacts"`
+	Name        string     `yaml:"name" json:"name"`
+	SourceHash  string     `yaml:"source_hash,omitempty" json:"source_hash,omitempty"`
+	CarriedFrom string     `yaml:"carried_from,omitempty" json:"carried_from,omitempty"`
+	Artifacts   []Artifact `yaml:"artifacts" json:"artifacts"`
 }
 
 type Artifact struct {
@@ -152,8 +154,9 @@ type Decision struct {
 	// originates in manifest.services[]. Workflows use the embedded Image,
 	// Digest, ServiceVersion fields to write the new manifest verbatim.
 	CarriedService *ServiceEntry `json:"carried_service,omitempty"`
-	// CarriedNativeBinary is populated alongside CarriedService when the
-	// service has native binaries to carry forward.
+	// CarriedNativeBinary is populated when the service has native binaries
+	// to carry forward. Binary-only services can carry this without
+	// CarriedService.
 	CarriedNativeBinary *NativeBinary `json:"carried_native_binary,omitempty"`
 	// CarriedInterface is populated when Action=carry_forward and the entry
 	// originates in manifest.interfaces[].

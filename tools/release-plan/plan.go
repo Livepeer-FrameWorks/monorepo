@@ -122,20 +122,28 @@ func (p *Planner) decideForGoService(comp ReleaseComponent, kind ComponentKind, 
 	}
 
 	prior := findServiceInManifest(baseline, comp.Name)
-	if prior == nil || prior.SourceHash == "" || prior.SourceHash != hash {
-		if prior != nil {
-			d.BaselineSourceHash = prior.SourceHash
-		}
+	priorNative := findNativeBinaryInManifest(baseline, comp.Name)
+	baselineHash := ""
+	if prior != nil {
+		baselineHash = prior.SourceHash
+	}
+	if baselineHash == "" && priorNative != nil {
+		baselineHash = priorNative.SourceHash
+	}
+	if baselineHash == "" || baselineHash != hash {
+		d.BaselineSourceHash = baselineHash
 		return d, nil
 	}
 
 	d.Action = ActionCarryForward
 	d.BaselineTag = baseline.PlatformVersion
-	d.BaselineSourceHash = prior.SourceHash
-	carried := *prior
-	d.CarriedService = &carried
-	if nb := findNativeBinaryInManifest(baseline, comp.Name); nb != nil {
-		copyNB := *nb
+	d.BaselineSourceHash = baselineHash
+	if prior != nil {
+		carried := *prior
+		d.CarriedService = &carried
+	}
+	if priorNative != nil {
+		copyNB := *priorNative
 		d.CarriedNativeBinary = &copyNB
 	}
 	return d, nil

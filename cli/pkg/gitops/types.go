@@ -41,6 +41,8 @@ type ServiceEntry struct {
 	Image          string                   `yaml:"image"`
 	Digest         string                   `yaml:"digest"`
 	Images         map[string]RegistryImage `yaml:"images,omitempty"`
+	SourceHash     string                   `yaml:"source_hash,omitempty"`
+	CarriedFrom    string                   `yaml:"carried_from,omitempty"`
 }
 
 // RegistryImage is an alternate registry location for the same release image.
@@ -51,8 +53,10 @@ type RegistryImage struct {
 
 // NativeBinary represents native binaries for a service
 type NativeBinary struct {
-	Name      string     `yaml:"name"`
-	Artifacts []Artifact `yaml:"artifacts"`
+	Name        string     `yaml:"name"`
+	SourceHash  string     `yaml:"source_hash,omitempty"`
+	CarriedFrom string     `yaml:"carried_from,omitempty"`
+	Artifacts   []Artifact `yaml:"artifacts"`
 }
 
 // Artifact represents a single binary artifact.
@@ -72,6 +76,8 @@ type InterfaceEntry struct {
 	Digest       string                   `yaml:"digest"`
 	StaticBundle string                   `yaml:"static_bundle,omitempty"`
 	Images       map[string]RegistryImage `yaml:"images,omitempty"`
+	SourceHash   string                   `yaml:"source_hash,omitempty"`
+	CarriedFrom  string                   `yaml:"carried_from,omitempty"`
 }
 
 // InfrastructureEntry represents an infrastructure component pinned by a

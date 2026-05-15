@@ -159,9 +159,9 @@ The hash inputs match `tools/release-plan/hash.go`:
 | `<service>/Dockerfile`                                                                                                  | Image build is a function of the Dockerfile too                                     |
 | The component's `release-components.json` entry (cgo, darwin_binary flags)                                              | Build flags affect output                                                           |
 | `.go-version` (Go toolchain)                                                                                            | Toolchain bumps invalidate everything                                               |
-| Workflow salt: `sha256(release.yml + tools/release-plan/**)`                                                            | CI build-logic changes force a full rebuild                                         |
+| Workflow salt: `sha256(release.yml + tools/release-plan/*.go excluding *_test.go)`                                      | CI build-logic changes force a full rebuild                                         |
 
-Test files (`*_test.go`) are excluded — they don't affect the binary. The import closure comes from `go list -deps -json <cmd>`, run from the service's module root.
+Test files (`*_test.go`) are excluded — they don't affect the binary. The import closure comes from `go list -deps -json <cmd>`, run from the service's module root with a canonical Linux/amd64 environment. CGO is enabled only for components marked `cgo: true` in `.github/release-components.json`.
 
 ### Baseline resolution (track-aware)
 
@@ -191,6 +191,8 @@ services:
     carried_from: v0.2.37
 native_binaries:
   - name: helmsman
+    source_hash: sha256:<unchanged>
+    carried_from: v0.2.37
     artifacts:
       - { arch: linux-amd64, url: <v0.2.37 url>, checksum: sha256:<v0.2.37> }
       - { arch: linux-arm64, ... }

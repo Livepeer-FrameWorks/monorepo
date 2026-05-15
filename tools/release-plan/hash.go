@@ -128,7 +128,7 @@ func goListDepSources(ctx context.Context, monorepoRoot string, comp ReleaseComp
 	}
 	cmd := exec.CommandContext(ctx, "go", "list", "-deps", "-json", target)
 	cmd.Dir = moduleDir
-	cmd.Env = append(os.Environ(), "GOFLAGS=") // Strip caller's flags; we want canonical output.
+	cmd.Env = canonicalGoListEnv(os.Environ(), comp.CGO)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -170,6 +170,32 @@ func goListDepSources(ctx context.Context, monorepoRoot string, comp ReleaseComp
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+func canonicalGoListEnv(base []string, cgo bool) []string {
+	out := make([]string, 0, len(base)+4)
+	for _, kv := range base {
+		key, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "GOFLAGS", "GOOS", "GOARCH", "CGO_ENABLED":
+			continue
+		default:
+			out = append(out, kv)
+		}
+	}
+	cgoEnabled := "0"
+	if cgo {
+		cgoEnabled = "1"
+	}
+	return append(out,
+		"GOFLAGS=",
+		"GOOS=linux",
+		"GOARCH=amd64",
+		"CGO_ENABLED="+cgoEnabled,
+	)
 }
 
 // goListPkg is the subset of `go list -json` we read. See `go help list`
@@ -252,7 +278,7 @@ func mustWrite(h hash.Hash, parts ...[]byte) {
 }
 
 // HashWorkflowFiles returns sha256:<hex> over release.yml + the
-// release-plan tool's own source tree (excluding generated files). This is
+// release-plan tool's own source tree (excluding test files). This is
 // the WorkflowSalt — a change to build logic forces all components to
 // rebuild on the next release.
 func HashWorkflowFiles(monorepoRoot string) (string, error) {
@@ -268,7 +294,7 @@ func HashWorkflowFiles(monorepoRoot string) (string, error) {
 		if info.IsDir() {
 			return nil
 		}
-		if strings.HasSuffix(path, ".go") {
+		if strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") {
 			paths = append(paths, path)
 		}
 		return nil
