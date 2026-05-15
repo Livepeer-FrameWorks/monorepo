@@ -521,7 +521,11 @@ func (bs *BillingSummarizer) queryClusterStorageGB(ctx context.Context, tenantID
 	out := map[string]float64{}
 	rows, err := bs.clickhouse.QueryContext(ctx, `
 		SELECT cluster_id,
-		       COALESCE(avgMerge(avg_total_bytes) / (1024*1024*1024), 0) as avg_storage_gb
+		       if(
+			       isFinite(avgMerge(avg_total_bytes)) AND avgMerge(avg_total_bytes) > 0,
+			       avgMerge(avg_total_bytes) / (1024*1024*1024),
+			       0
+		       ) as avg_storage_gb
 		FROM storage_usage_hourly
 		WHERE tenant_id = ?
 		AND hour BETWEEN ? AND ?

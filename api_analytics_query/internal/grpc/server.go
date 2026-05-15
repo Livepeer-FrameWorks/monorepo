@@ -5353,7 +5353,11 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
 	err = s.clickhouse.QueryRowContext(queryCtx, `
-		SELECT COALESCE(toUInt64(avgMerge(avg_total_bytes)), 0) AS avg_total_bytes
+		SELECT toUInt64(if(
+			isFinite(avgMerge(avg_total_bytes)) AND avgMerge(avg_total_bytes) > 0,
+			avgMerge(avg_total_bytes),
+			0
+		)) AS avg_total_bytes
 		FROM storage_usage_hourly
 		WHERE tenant_id = ?
 		  AND hour >= ?
