@@ -69,7 +69,7 @@ func expectReciprocalDependentNodes(mock sqlmock.Sqlmock, clusterID, nodeID, tar
 		rows.AddRow(id)
 	}
 	mock.ExpectQuery(`(?s)WITH provided AS .*SELECT DISTINCT n\.node_id`).
-		WithArgs(nodeID, clusterID, targetType, sqlmock.AnyArg()).
+		WithArgs(nodeID, clusterID, targetType, sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(rows)
 }
 
@@ -77,6 +77,32 @@ func expectMeshPeers(mock sqlmock.Sqlmock, nodeID, clusterID string, rows *sqlmo
 	mock.ExpectQuery(`(?s)SELECT n\.node_name, n\.wireguard_public_key.*AND \(n\.cluster_id = \$2 OR n\.node_id = ANY\(\$3\)\)`).
 		WithArgs(nodeID, clusterID, sqlmock.AnyArg()).
 		WillReturnRows(rows)
+}
+
+func TestMeshServiceRequirementsMarksSkipperBridgeGlobal(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	expectMeshRequirements(mock, "central-1", "skipper")
+
+	dnsRequired, peerRequired, globalPeerRequired, _ := server.meshServiceRequirements(t.Context(), "central-1")
+	for name, set := range map[string]map[string]struct{}{
+		"dns":    dnsRequired,
+		"peer":   peerRequired,
+		"global": globalPeerRequired,
+	} {
+		if _, ok := set["bridge"]; !ok {
+			t.Fatalf("%s requirements missing bridge: %v", name, sortedStringKeys(set))
+		}
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
 }
 
 func TestSyncMeshRequiresStoredWireGuardIdentity(t *testing.T) {

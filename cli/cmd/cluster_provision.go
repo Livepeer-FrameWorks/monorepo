@@ -3071,9 +3071,16 @@ func privateerDependencyPeerHosts(manifest *inventory.Manifest, selfHostName str
 	if manifest == nil || selfHostName == "" {
 		return hosts
 	}
+	globalAliases := privateerGlobalDNSAliasesForHost(manifest, selfHostName)
 	contextClusters := privateerDNSContextClusters(manifest, selfHostName)
 	for alias := range privateerDNSAliasesForHost(manifest, selfHostName) {
-		for _, hostName := range serviceProviderHostsForAlias(manifest, alias, contextClusters) {
+		var providerHosts []string
+		if _, ok := globalAliases[alias]; ok {
+			providerHosts = serviceProviderHostsForAliasGlobal(manifest, alias)
+		} else {
+			providerHosts = serviceProviderHostsForAlias(manifest, alias, contextClusters)
+		}
+		for _, hostName := range providerHosts {
 			hosts[hostName] = struct{}{}
 		}
 	}
@@ -3084,6 +3091,21 @@ func privateerDependencyPeerHosts(manifest *inventory.Manifest, selfHostName str
 		hosts[hostName] = struct{}{}
 	}
 	return hosts
+}
+
+func privateerGlobalDNSAliasesForHost(manifest *inventory.Manifest, selfHostName string) map[string]struct{} {
+	aliases := map[string]struct{}{}
+	if manifest == nil || selfHostName == "" {
+		return aliases
+	}
+	for _, serviceID := range privateerLocalServiceIDs(manifest, selfHostName) {
+		for _, dep := range topology.GlobalDNSServiceDependencies(serviceID) {
+			if manifestServiceEnabledForDeploy(manifest, dep) {
+				aliases[dep] = struct{}{}
+			}
+		}
+	}
+	return aliases
 }
 
 func privateerReciprocalPeerHosts(manifest *inventory.Manifest, selfHostName string) map[string]struct{} {
@@ -3146,6 +3168,24 @@ func serviceProviderHostsForAlias(manifest *inventory.Manifest, alias string, co
 		return serviceDNSHostsForContext(manifest, services[0], contextClusters)
 	}
 	return serviceDNSHostsForGroup(manifest, services, contextClusters)
+}
+
+func serviceProviderHostsForAliasGlobal(manifest *inventory.Manifest, alias string) []string {
+	if manifest == nil || alias == "" {
+		return nil
+	}
+	var hosts []string
+	collect := func(configs map[string]inventory.ServiceConfig) {
+		for name, svc := range configs {
+			if serviceDeployMatches(name, svc, alias) && svc.Enabled {
+				hosts = append(hosts, serviceHosts(svc)...)
+			}
+		}
+	}
+	collect(manifest.Services)
+	collect(manifest.Interfaces)
+	collect(manifest.Observability)
+	return sortedUniqueStrings(hosts)
 }
 
 func privateerInfraPeerHostsForHost(manifest *inventory.Manifest, selfHostName string) []string {
@@ -3326,6 +3366,7 @@ func buildPrivateerSeedDNS(manifest *inventory.Manifest, selfHostName string) ma
 	contextClusters := privateerDNSContextClusters(manifest, selfHostName)
 	seedPeerHosts := privateerSeedPeerHosts(manifest, selfHostName)
 	dnsAliases := privateerDNSAliasesForHost(manifest, selfHostName)
+	globalDNSAliases := privateerGlobalDNSAliasesForHost(manifest, selfHostName)
 	dns := map[string][]string{}
 	addRecord := func(recordName, hostName string) {
 		if recordName == "" || hostName == "" {
@@ -3391,6 +3432,12 @@ func buildPrivateerSeedDNS(manifest *inventory.Manifest, selfHostName string) ma
 	addServices(manifest.Services)
 	addServices(manifest.Interfaces)
 	addServices(manifest.Observability)
+	for alias := range globalDNSAliases {
+		for _, hostName := range serviceProviderHostsForAliasGlobal(manifest, alias) {
+			addRecord(hostName, hostName)
+			addRecord(alias, hostName)
+		}
+	}
 	for _, ips := range dns {
 		sort.Strings(ips)
 	}
@@ -5283,12 +5330,18 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 	if baseName == "skipper" {
-		if bridge, ok := manifest.Services["bridge"]; ok && bridge.Enabled {
-			port := bridge.Port
-			if port == 0 {
-				port = defaultPort("bridge")
+		if manifestServiceEnabledForDeploy(manifest, "bridge") {
+			urls := gatewayMCPURLs(manifest)
+			if len(urls) == 0 {
+				bridge := manifest.Services["bridge"]
+				port := bridge.Port
+				if port == 0 {
+					port = defaultPort("bridge")
+				}
+				urls = []string{fmt.Sprintf("http://bridge.internal:%d/mcp", port)}
 			}
-			env["GATEWAY_MCP_URL"] = fmt.Sprintf("http://bridge.internal:%d/mcp", port)
+			env["GATEWAY_MCP_URL"] = urls[0]
+			env["GATEWAY_MCP_URLS"] = strings.Join(urls, ",")
 		}
 	}
 
@@ -6347,6 +6400,28 @@ func chandlerInternalURLs(manifest *inventory.Manifest, svc inventory.ServiceCon
 		return []string{fmt.Sprintf("http://chandler.internal:%d", port)}
 	}
 	return urls
+}
+
+func gatewayMCPURLs(manifest *inventory.Manifest) []string {
+	if manifest == nil {
+		return nil
+	}
+	var urls []string
+	for _, svc := range servicesByDeploy(manifest, "bridge") {
+		if !svc.Enabled {
+			continue
+		}
+		port := svc.Port
+		if port == 0 {
+			port = defaultPort("bridge")
+		}
+		for _, hostName := range serviceHosts(svc) {
+			if hostName != "" {
+				urls = append(urls, fmt.Sprintf("http://%s.internal:%d/mcp", hostName, port))
+			}
+		}
+	}
+	return sortedUniqueStrings(urls)
 }
 
 func portFromBindAddr(raw string, fallback int) int {

@@ -9,6 +9,7 @@ type ServiceDependency struct {
 	TargetServiceID string
 	EnvKey          string
 	Transport       string
+	DNSScope        string
 	Optional        bool
 	Purpose         string
 }
@@ -24,6 +25,8 @@ type InfraDependency struct {
 }
 
 const (
+	DNSScopeGlobal = "global"
+
 	InfraDatabase   = "database"
 	InfraKafka      = "kafka"
 	InfraClickHouse = "clickhouse"
@@ -106,7 +109,7 @@ var serviceDependencies = map[string][]ServiceDependency{
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "service bootstrap"},
 	},
 	"skipper": {
-		{TargetServiceID: "bridge", EnvKey: "GATEWAY_MCP_URL", Transport: "mcp-http", Purpose: "platform MCP tools"},
+		{TargetServiceID: "bridge", EnvKey: "GATEWAY_MCP_URL", Transport: "mcp-http", DNSScope: DNSScopeGlobal, Purpose: "platform MCP tools"},
 		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "primary-user notifications"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "consultant usage events and notifications"},
 		{TargetServiceID: "periscope-query", EnvKey: "PERISCOPE_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "heartbeat and infrastructure diagnostics"},
@@ -190,6 +193,30 @@ func DNSDependenciesForServices(serviceIDs []string) []string {
 	return sortedKeys(seen)
 }
 
+// GlobalDNSServiceDependencies returns service aliases that must resolve across
+// provider clusters instead of only within the consumer's cluster context.
+func GlobalDNSServiceDependencies(serviceID string) []string {
+	seen := map[string]struct{}{}
+	for _, dep := range serviceDependencies[serviceID] {
+		if dep.TargetServiceID != "" && dep.DNSScope == DNSScopeGlobal {
+			seen[dep.TargetServiceID] = struct{}{}
+		}
+	}
+	return sortedKeys(seen)
+}
+
+// GlobalDNSDependenciesForServices returns the union of global DNS dependencies
+// for a set of services running on one node.
+func GlobalDNSDependenciesForServices(serviceIDs []string) []string {
+	seen := map[string]struct{}{}
+	for _, serviceID := range serviceIDs {
+		for _, dep := range GlobalDNSServiceDependencies(serviceID) {
+			seen[dep] = struct{}{}
+		}
+	}
+	return sortedKeys(seen)
+}
+
 // ServiceDependents returns service types that directly call any target service.
 func ServiceDependents(targetServiceIDs []string) []string {
 	targets := map[string]struct{}{}
@@ -204,6 +231,33 @@ func ServiceDependents(targetServiceIDs []string) []string {
 	seen := map[string]struct{}{}
 	for serviceID, deps := range serviceDependencies {
 		for _, dep := range deps {
+			if _, ok := targets[dep.TargetServiceID]; ok {
+				seen[serviceID] = struct{}{}
+				break
+			}
+		}
+	}
+	return sortedKeys(seen)
+}
+
+// GlobalDNSServiceDependents returns service types whose dependency on any
+// target service must be reachable across provider clusters.
+func GlobalDNSServiceDependents(targetServiceIDs []string) []string {
+	targets := map[string]struct{}{}
+	for _, target := range targetServiceIDs {
+		if target != "" {
+			targets[target] = struct{}{}
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	for serviceID, deps := range serviceDependencies {
+		for _, dep := range deps {
+			if dep.DNSScope != DNSScopeGlobal {
+				continue
+			}
 			if _, ok := targets[dep.TargetServiceID]; ok {
 				seen[serviceID] = struct{}{}
 				break

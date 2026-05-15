@@ -1647,6 +1647,52 @@ func TestBuildServiceEnvVarsDerivesAllChandlerInternalURLs(t *testing.T) {
 	}
 }
 
+func TestBuildServiceEnvVarsDerivesOrderedGatewayMCPURLs(t *testing.T) {
+	envFile := writeTestEnvFile(t, testSharedSecrets+strings.Join([]string{
+		"DATABASE_PASSWORD=test-db-pass",
+		"GATEWAY_PUBLIC_URL=https://api.frameworks.network",
+	}, "\n")+"\n")
+	manifest := &inventory.Manifest{
+		Profile:  "production",
+		EnvFiles: []string{envFile},
+		Hosts: map[string]inventory.Host{
+			"central-1":   {ExternalIP: "10.0.0.10"},
+			"regional-eu": {ExternalIP: "10.0.0.11"},
+			"regional-us": {ExternalIP: "10.0.0.12"},
+			"yuga-1":      {ExternalIP: "10.0.0.13"},
+			"kafka-1":     {ExternalIP: "10.0.0.14"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{Enabled: true, Engine: "yugabyte", Port: 5433, Nodes: []inventory.PostgresNode{{Host: "yuga-1", ID: 1}}},
+			Kafka:    &inventory.KafkaConfig{Enabled: true, Brokers: []inventory.KafkaBroker{{Host: "kafka-1", ID: 1, Port: 9092}}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"bridge-eu": {Enabled: true, Deploy: "bridge", Host: "regional-eu"},
+			"bridge-us": {Enabled: true, Deploy: "bridge", Host: "regional-us"},
+			"skipper":   {Enabled: true, Host: "central-1"},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Name:      "skipper",
+		Type:      "skipper",
+		ServiceID: "skipper",
+		Host:      "central-1",
+		Phase:     orchestrator.PhaseApplications,
+	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars skipper: %v", err)
+	}
+
+	want := "http://regional-eu.internal:18000/mcp,http://regional-us.internal:18000/mcp"
+	if env["GATEWAY_MCP_URLS"] != want {
+		t.Fatalf("GATEWAY_MCP_URLS = %q, want %q", env["GATEWAY_MCP_URLS"], want)
+	}
+	if env["GATEWAY_MCP_URL"] != "http://regional-eu.internal:18000/mcp" {
+		t.Fatalf("GATEWAY_MCP_URL = %q", env["GATEWAY_MCP_URL"])
+	}
+}
+
 func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 	envFile := writeTestEnvFile(t, testSharedSecrets+strings.Join([]string{
 		"DATABASE_PASSWORD=test-db-pass",
@@ -1798,9 +1844,10 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 		{
 			serviceID: "skipper",
 			want: map[string]string{
-				"GATEWAY_MCP_URL": "http://bridge.internal:18000/mcp",
+				"GATEWAY_MCP_URL":  "http://central-eu-1.internal:18000/mcp",
+				"GATEWAY_MCP_URLS": "http://central-eu-1.internal:18000/mcp",
 			},
-			keys: []string{"DATABASE_URL", "KAFKA_BROKERS", "KAFKA_CLUSTER_ID", "GATEWAY_PUBLIC_URL", "GATEWAY_MCP_URL", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
+			keys: []string{"DATABASE_URL", "KAFKA_BROKERS", "KAFKA_CLUSTER_ID", "GATEWAY_PUBLIC_URL", "GATEWAY_MCP_URL", "GATEWAY_MCP_URLS", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
 		},
 	}
 
@@ -2807,6 +2854,46 @@ func TestPrivateerSeedDNSUsesTopologyScopedAliases(t *testing.T) {
 	}
 	if got := dns["central-2"]; len(got) != 1 || got[0] != "10.88.0.11" {
 		t.Fatalf("central-2 DNS = %v, want [10.88.0.11]", got)
+	}
+}
+
+func TestPrivateerSeedDNSIncludesGlobalSkipperBridgeAlias(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Clusters: map[string]inventory.ClusterConfig{
+			"core": {},
+			"eu":   {},
+			"us":   {},
+		},
+		Hosts: map[string]inventory.Host{
+			"central-1": {Cluster: "core", WireguardIP: "10.88.0.10", WireguardPublicKey: "central-key"},
+			"bridge-eu": {Cluster: "eu", WireguardIP: "10.88.1.20", WireguardPublicKey: "eu-key"},
+			"bridge-us": {Cluster: "us", WireguardIP: "10.88.2.20", WireguardPublicKey: "us-key"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Host: "central-1"},
+			"skipper":       {Enabled: true, Host: "central-1"},
+			"bridge-eu":     {Enabled: true, Deploy: "bridge", Cluster: "eu", Host: "bridge-eu"},
+			"bridge-us":     {Enabled: true, Deploy: "bridge", Cluster: "us", Host: "bridge-us"},
+		},
+	}
+
+	dns := buildPrivateerSeedDNS(manifest, "central-1")
+	if got, want := dns["bridge"], []string{"10.88.1.20", "10.88.2.20"}; !slices.Equal(got, want) {
+		t.Fatalf("bridge DNS = %v, want %v", got, want)
+	}
+
+	peers := privateerSeedPeerHosts(manifest, "central-1")
+	for _, want := range []string{"bridge-eu", "bridge-us"} {
+		if _, ok := peers[want]; !ok {
+			t.Fatalf("central privateer peers missing %q in %v", want, sortedKeys(peers))
+		}
+	}
+
+	for _, bridgeHost := range []string{"bridge-eu", "bridge-us"} {
+		reciprocal := privateerSeedPeerHosts(manifest, bridgeHost)
+		if _, ok := reciprocal["central-1"]; !ok {
+			t.Fatalf("%s privateer peers missing central-1 in %v", bridgeHost, sortedKeys(reciprocal))
+		}
 	}
 }
 

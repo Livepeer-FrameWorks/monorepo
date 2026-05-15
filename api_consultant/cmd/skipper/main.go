@@ -334,10 +334,10 @@ func main() {
 	// Connect to the Gateway MCP for platform tools (diagnostics, streams, etc.).
 	var gatewayClient *mcpclient.GatewayClient
 	var gatewayTools chat.GatewayToolCaller
-	if mcpURL := cfg.GatewayMCPEndpoint(); mcpURL != "" {
+	if mcpURLs := cfg.GatewayMCPEndpoints(); len(mcpURLs) > 0 {
 		var connectErr error
 		gatewayClient, connectErr = mcpclient.New(context.Background(), mcpclient.Config{
-			GatewayURL:   mcpURL,
+			GatewayURLs:  mcpURLs,
 			ToolDenylist: []string{"ask_consultant"},
 			Logger:       logger,
 		})

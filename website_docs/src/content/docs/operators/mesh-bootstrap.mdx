@@ -47,8 +47,14 @@ runtime sync derive mesh reachability from three graphs:
 regional node can resolve a central singleton such as `quartermaster.internal`
 because a local service declares that dependency and there is one provider
 context. Sibling media clusters do not become visible just because they exist.
-Foghorn federation uses concrete peer Foghorn addresses from Quartermaster's
-tenant cluster context rather than a global `foghorn.internal` alias.
+Some direct service calls are intentionally global. Skipper receives an ordered
+`GATEWAY_MCP_URLS` list of concrete Bridge mesh host endpoints so the single
+central Skipper can attach to the first healthy regional Gateway MCP hub and
+fail over deterministically, while the regional Bridges keep
+`skipper.internal` as the reciprocal spoke endpoint.
+Foghorn federation still uses concrete peer Foghorn addresses from
+Quartermaster's tenant cluster context rather than a global `foghorn.internal`
+alias.
 
 Runtime-enrolled nodes use the same graph. When an `infrastructure_node`
 bootstrap token carries `desired_service_types` and `desired_cluster_ids`

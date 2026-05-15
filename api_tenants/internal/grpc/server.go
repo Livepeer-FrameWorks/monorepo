@@ -6276,6 +6276,11 @@ func (s *QuartermasterServer) meshServiceRequirements(ctx context.Context, nodeI
 		dnsRequired[dep] = struct{}{}
 		peerRequired[dep] = struct{}{}
 	}
+	for _, dep := range topology.GlobalDNSDependenciesForServices(localServices) {
+		dnsRequired[dep] = struct{}{}
+		peerRequired[dep] = struct{}{}
+		globalPeerRequired[dep] = struct{}{}
+	}
 	for _, serviceType := range localServices {
 		for _, dep := range topology.InfraDependencies(serviceType) {
 			if dep.Kind != "" {
@@ -6515,6 +6520,7 @@ func (s *QuartermasterServer) collectReciprocalServicePeerNodeIDs(ctx context.Co
 		if len(dependents) == 0 {
 			continue
 		}
+		globalDependents := topology.GlobalDNSServiceDependents([]string{targetType})
 		rows, queryErr := s.db.QueryContext(ctx, `
 			WITH provided AS (
 				SELECT DISTINCT COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id, $2) AS provider_cluster
@@ -6618,6 +6624,8 @@ func (s *QuartermasterServer) collectReciprocalServicePeerNodeIDs(ctx context.Co
 			  AND n.status = 'active'
 			  AND ns.service_type = ANY($4::text[])
 			  AND (
+				ns.service_type = ANY($5::text[])
+				OR
 				ss.provider_cluster_count <= 1
 				OR EXISTS (
 					SELECT 1
@@ -6625,7 +6633,7 @@ func (s *QuartermasterServer) collectReciprocalServicePeerNodeIDs(ctx context.Co
 					JOIN consumer_contexts cc ON cc.node_id = n.node_id AND cc.cluster_id = p.provider_cluster
 				)
 			  )
-		`, nodeID, clusterID, targetType, pq.Array(dependents))
+		`, nodeID, clusterID, targetType, pq.Array(dependents), pq.Array(globalDependents))
 		if queryErr != nil {
 			s.logger.WithError(queryErr).WithField("service_type", targetType).Warn("collectReciprocalServicePeerNodeIDs: dependent node query failed")
 			continue

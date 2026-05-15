@@ -25,3 +25,15 @@ func TestServiceDependentsFindDirectCallers(t *testing.T) {
 		}
 	}
 }
+
+func TestSkipperBridgeDependencyIsGlobalDNS(t *testing.T) {
+	deps := GlobalDNSServiceDependencies("skipper")
+	if len(deps) != 1 || deps[0] != "bridge" {
+		t.Fatalf("GlobalDNSServiceDependencies(skipper) = %v, want [bridge]", deps)
+	}
+
+	dependents := GlobalDNSServiceDependents([]string{"bridge"})
+	if len(dependents) != 1 || dependents[0] != "skipper" {
+		t.Fatalf("GlobalDNSServiceDependents(bridge) = %v, want [skipper]", dependents)
+	}
+}

@@ -34,6 +34,7 @@ type Config struct {
 	KafkaClusterID      string
 	GatewayPublicURL    string
 	GatewayMCPURL       string
+	GatewayMCPURLs      []string
 	AdminTenantID       string
 	Sitemaps            []string
 	SitemapsDir         string
@@ -65,13 +66,24 @@ type Config struct {
 // GatewayMCPEndpoint returns the MCP endpoint URL. Internal deployments can
 // set GatewayMCPURL to bypass public DNS and reach Bridge over the mesh.
 func (c Config) GatewayMCPEndpoint() string {
+	endpoints := c.GatewayMCPEndpoints()
+	if len(endpoints) > 0 {
+		return endpoints[0]
+	}
+	return ""
+}
+
+func (c Config) GatewayMCPEndpoints() []string {
+	if len(c.GatewayMCPURLs) > 0 {
+		return normalizeURLList(c.GatewayMCPURLs)
+	}
 	if c.GatewayMCPURL != "" {
-		return strings.TrimRight(c.GatewayMCPURL, "/")
+		return normalizeURLList([]string{c.GatewayMCPURL})
 	}
 	if c.GatewayPublicURL == "" {
-		return ""
+		return nil
 	}
-	return strings.TrimRight(c.GatewayPublicURL, "/") + "/mcp"
+	return []string{strings.TrimRight(c.GatewayPublicURL, "/") + "/mcp"}
 }
 
 // LoadConfig loads the Skipper configuration from environment variables.
@@ -112,6 +124,7 @@ func LoadConfig() Config {
 		KafkaClusterID:      config.GetEnv("KAFKA_CLUSTER_ID", "local"),
 		GatewayPublicURL:    config.GetEnv("GATEWAY_PUBLIC_URL", ""),
 		GatewayMCPURL:       config.GetEnv("GATEWAY_MCP_URL", ""),
+		GatewayMCPURLs:      parseSitemapList(config.GetEnv("GATEWAY_MCP_URLS", "")),
 		AdminTenantID:       config.GetEnv("SKIPPER_ADMIN_TENANT_ID", ""),
 		Sitemaps:            parseSitemapList(config.GetEnv("SITEMAPS", "")),
 		SitemapsDir:         config.GetEnv("SKIPPER_SITEMAPS_DIR", ""),
@@ -139,6 +152,23 @@ func LoadConfig() Config {
 		SocialMaxPerDay:     config.GetEnvInt("SKIPPER_SOCIAL_MAX_PER_DAY", 2),
 		SocialNotifyEmail:   config.GetEnv("SKIPPER_SOCIAL_NOTIFY_EMAIL", ""),
 	}
+}
+
+func normalizeURLList(urls []string) []string {
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(urls))
+	for _, raw := range urls {
+		u := strings.TrimRight(strings.TrimSpace(raw), "/")
+		if u == "" {
+			continue
+		}
+		if _, ok := seen[u]; ok {
+			continue
+		}
+		seen[u] = struct{}{}
+		result = append(result, u)
+	}
+	return result
 }
 
 func parseSitemapList(s string) []string {

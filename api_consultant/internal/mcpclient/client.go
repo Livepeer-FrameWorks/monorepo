@@ -19,10 +19,11 @@ import (
 // tools (diagnostics, stream management, billing, etc.) on behalf of the
 // chat orchestrator.
 type GatewayClient struct {
-	client  *mcp.Client
-	session *mcp.ClientSession
-	logger  logging.Logger
-	cfg     Config
+	client        *mcp.Client
+	session       *mcp.ClientSession
+	logger        logging.Logger
+	cfg           Config
+	endpointIndex int
 
 	mu        sync.RWMutex
 	tools     []llm.Tool
@@ -35,6 +36,8 @@ type GatewayClient struct {
 type Config struct {
 	// GatewayURL is the base URL for the Gateway MCP endpoint.
 	GatewayURL string
+	// GatewayURLs is the ordered Gateway MCP endpoint failover set.
+	GatewayURLs []string
 	// ToolAllowlist restricts which Gateway tools are exposed to the LLM.
 	// An empty list means all discovered tools are exposed.
 	ToolAllowlist []string
@@ -50,9 +53,11 @@ type Config struct {
 // publicly allowed). Each CallTool request injects the calling user's JWT
 // via context so the Gateway scopes operations to the correct tenant.
 func New(ctx context.Context, cfg Config) (*GatewayClient, error) {
-	if cfg.GatewayURL == "" {
+	cfg.GatewayURLs = normalizeGatewayURLs(cfg)
+	if len(cfg.GatewayURLs) == 0 {
 		return nil, fmt.Errorf("mcpclient: GatewayURL is required")
 	}
+	cfg.GatewayURL = cfg.GatewayURLs[0]
 
 	allowlist := make(map[string]struct{}, len(cfg.ToolAllowlist))
 	for _, name := range cfg.ToolAllowlist {
@@ -63,39 +68,46 @@ func New(ctx context.Context, cfg Config) (*GatewayClient, error) {
 		denylist[name] = struct{}{}
 	}
 
-	transport := &mcp.StreamableClientTransport{
-		Endpoint: cfg.GatewayURL,
-		HTTPClient: &http.Client{
-			Transport: &authTransport{base: http.DefaultTransport},
-		},
-	}
-
 	impl := &mcp.Implementation{
 		Name:    "skipper",
 		Version: "1.0.0",
 	}
 	client := mcp.NewClient(impl, nil)
 
-	session, err := client.Connect(ctx, transport, nil)
-	if err != nil {
-		return nil, fmt.Errorf("mcpclient: connect to gateway MCP: %w", err)
-	}
-
 	gc := &GatewayClient{
 		client:    client,
-		session:   session,
 		logger:    cfg.Logger,
 		cfg:       cfg,
 		allowlist: allowlist,
 		denylist:  denylist,
 	}
 
-	if err := gc.refreshTools(ctx); err != nil {
-		_ = session.Close()
-		return nil, fmt.Errorf("mcpclient: discover tools: %w", err)
+	if err := gc.connect(ctx, 0); err != nil {
+		return nil, err
 	}
 
 	return gc, nil
+}
+
+func normalizeGatewayURLs(cfg Config) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(raw string) {
+		u := strings.TrimRight(strings.TrimSpace(raw), "/")
+		if u == "" {
+			return
+		}
+		if _, ok := seen[u]; ok {
+			return
+		}
+		seen[u] = struct{}{}
+		out = append(out, u)
+	}
+	for _, u := range cfg.GatewayURLs {
+		add(u)
+	}
+	add(cfg.GatewayURL)
+	return out
 }
 
 // AvailableTools returns the Gateway tools converted to llm.Tool format,
@@ -178,35 +190,61 @@ func (gc *GatewayClient) CallTool(ctx context.Context, name string, arguments js
 // tryReconnect attempts a single reconnect to the Gateway MCP server.
 func (gc *GatewayClient) tryReconnect(ctx context.Context) error {
 	if gc.logger != nil {
-		gc.logger.Info("MCP session error — attempting reconnect")
+		gc.logger.Info("MCP session error; attempting Gateway MCP reconnect")
 	}
-	transport := &mcp.StreamableClientTransport{
-		Endpoint: gc.cfg.GatewayURL,
-		HTTPClient: &http.Client{
-			Transport: &authTransport{base: http.DefaultTransport},
-		},
-	}
-	session, err := gc.client.Connect(ctx, transport, nil)
-	if err != nil {
-		if gc.logger != nil {
-			gc.logger.WithField("error", err.Error()).Warn("MCP reconnect failed")
-		}
-		return err
-	}
-	gc.mu.Lock()
-	old := gc.session
-	gc.session = session
-	gc.mu.Unlock()
-	if old != nil {
-		_ = old.Close()
-	}
-	if err := gc.refreshTools(ctx); err != nil {
-		if gc.logger != nil {
-			gc.logger.WithField("error", err.Error()).Warn("MCP reconnect tool refresh failed")
-		}
+	gc.mu.RLock()
+	start := gc.endpointIndex + 1
+	gc.mu.RUnlock()
+	if err := gc.connect(ctx, start); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (gc *GatewayClient) connect(ctx context.Context, start int) error {
+	if len(gc.cfg.GatewayURLs) == 0 {
+		return fmt.Errorf("mcpclient: GatewayURL is required")
+	}
+	var errs []string
+	for offset := 0; offset < len(gc.cfg.GatewayURLs); offset++ {
+		idx := (start + offset) % len(gc.cfg.GatewayURLs)
+		endpoint := gc.cfg.GatewayURLs[idx]
+		session, err := gc.client.Connect(ctx, &mcp.StreamableClientTransport{
+			Endpoint: endpoint,
+			HTTPClient: &http.Client{
+				Transport: &authTransport{base: http.DefaultTransport},
+			},
+		}, nil)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", endpoint, err))
+			continue
+		}
+
+		tools, toolIndex, err := gc.fetchTools(ctx, session)
+		if err != nil {
+			_ = session.Close()
+			errs = append(errs, fmt.Sprintf("%s: discover tools: %v", endpoint, err))
+			continue
+		}
+
+		gc.mu.Lock()
+		old := gc.session
+		gc.session = session
+		gc.endpointIndex = idx
+		gc.cfg.GatewayURL = endpoint
+		gc.tools = tools
+		gc.toolIndex = toolIndex
+		gc.mu.Unlock()
+		if old != nil {
+			_ = old.Close()
+		}
+		if gc.logger != nil {
+			gc.logger.WithField("count", len(tools)).Info("Discovered Gateway MCP tools")
+			gc.logger.WithField("url", endpoint).Info("Connected to Gateway MCP")
+		}
+		return nil
+	}
+	return fmt.Errorf("mcpclient: connect to gateway MCP: %s", strings.Join(errs, "; "))
 }
 
 // Close shuts down the MCP client session.
@@ -223,9 +261,32 @@ func (gc *GatewayClient) Close() error {
 // refreshTools fetches the tool list from the Gateway and builds the
 // internal index, applying the allowlist filter.
 func (gc *GatewayClient) refreshTools(ctx context.Context) error {
-	result, err := gc.session.ListTools(ctx, nil)
+	gc.mu.RLock()
+	session := gc.session
+	gc.mu.RUnlock()
+	tools, toolIndex, err := gc.fetchTools(ctx, session)
 	if err != nil {
 		return err
+	}
+
+	gc.mu.Lock()
+	gc.tools = tools
+	gc.toolIndex = toolIndex
+	gc.mu.Unlock()
+
+	if gc.logger != nil {
+		gc.logger.WithField("count", len(tools)).Info("Discovered Gateway MCP tools")
+	}
+	return nil
+}
+
+func (gc *GatewayClient) fetchTools(ctx context.Context, session *mcp.ClientSession) ([]llm.Tool, map[string]struct{}, error) {
+	if session == nil {
+		return nil, nil, fmt.Errorf("gateway session is not connected")
+	}
+	result, err := session.ListTools(ctx, nil)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	var tools []llm.Tool
@@ -249,16 +310,7 @@ func (gc *GatewayClient) refreshTools(ctx context.Context) error {
 		})
 		toolIndex[t.Name] = struct{}{}
 	}
-
-	gc.mu.Lock()
-	gc.tools = tools
-	gc.toolIndex = toolIndex
-	gc.mu.Unlock()
-
-	if gc.logger != nil {
-		gc.logger.WithField("count", len(tools)).Info("Discovered Gateway MCP tools")
-	}
-	return nil
+	return tools, toolIndex, nil
 }
 
 // convertInputSchema converts the MCP SDK's InputSchema (any) to the
