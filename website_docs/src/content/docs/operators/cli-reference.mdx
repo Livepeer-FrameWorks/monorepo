@@ -1307,6 +1307,7 @@ frameworks cluster releases list
 frameworks cluster releases publish --version stable
 frameworks cluster releases target get
 frameworks cluster releases target set --channel stable --version v1.2.3
+frameworks cluster releases target sync
 ```
 
 ### frameworks cluster releases list
@@ -1353,6 +1354,14 @@ version confirmation, endpoint probing, and return-to-normal are reserved for
 Mist releases whose CI-generated update contract explicitly requires a
 disruptive apply strategy. Config-schema versions are reported for visibility;
 actual runtime config still flows through ConfigSeed.
+
+### frameworks cluster releases target sync
+
+Publish the selected GitOps release manifest and sync every manifest cluster's
+edge release target. Use `--version` to override the manifest channel with a
+specific GitOps version or release channel. This is the targeted repair command
+for the same edge release target sync that `cluster provision` and
+`cluster upgrade --all` run automatically.
 Supported rollout-plan controls are limited to implemented scheduler behavior
 such as `batch_size`, `canary`, `canary_count`, `error_abort`, and `max_failed`;
 capacity-floor fields are rejected until disruptive drain rollouts need them.

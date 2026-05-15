@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,6 +24,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+const edgeReleaseSyncRPCTimeout = 60 * time.Second
 
 func newClusterReleasesCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -46,13 +49,14 @@ func newClusterReleasesPublishCmd() *cobra.Command {
 			if strings.TrimSpace(version) == "" {
 				return fmt.Errorf("--version is required")
 			}
-			qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
+			qm, ctxCfg, releaseRepos, cleanup, err := edgeReleaseQMClientForCommand(cmd)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
 			defer func() { _ = qm.Close() }()
-			resp, err := publishEdgeReleaseFromGitOps(cmd, qm, ctxCfg, version, remoteOS, remoteArch)
+			channel, resolved := gitops.ResolveVersion(version)
+			resp, err := publishEdgeReleaseFromGitOpsResolvedRepos(cmd, qm, ctxCfg, releaseRepos, channel, resolved, remoteOS, remoteArch)
 			if err != nil {
 				return err
 			}
@@ -121,7 +125,30 @@ func newClusterReleaseTargetCmd() *cobra.Command {
 		Short: "Inspect or override a cluster edge release target",
 	}
 	cmd.AddCommand(newClusterReleaseTargetSetCmd())
+	cmd.AddCommand(newClusterReleaseTargetSyncCmd())
 	cmd.AddCommand(newClusterReleaseTargetGetCmd())
+	return cmd
+}
+
+func newClusterReleaseTargetSyncCmd() *cobra.Command {
+	var version string
+	cmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Sync cluster edge release targets from the GitOps manifest",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
+			}
+			defer rc.Cleanup()
+			selector := strings.TrimSpace(version)
+			if selector == "" {
+				selector = rc.Manifest.ResolvedChannel()
+			}
+			return syncClusterEdgeReleaseTargetFromGitOps(cmd, rc, selector, nil)
+		},
+	}
+	cmd.Flags().StringVar(&version, "version", "", "GitOps release version or channel (defaults to manifest channel)")
 	return cmd
 }
 
@@ -138,11 +165,11 @@ func newClusterReleaseTargetSetCmd() *cobra.Command {
 			if strings.TrimSpace(channel) == "" {
 				return fmt.Errorf("--channel is required")
 			}
-			ctxCfg, err := loadActiveContextLax()
-			if err != nil {
-				return err
-			}
+			ctxCfg, ctxErr := loadActiveContextLax()
 			if clusterID == "" {
+				if ctxErr != nil {
+					return ctxErr
+				}
 				clusterID = ctxCfg.ClusterID
 			}
 			if strings.TrimSpace(clusterID) == "" {
@@ -152,7 +179,7 @@ func newClusterReleaseTargetSetCmd() *cobra.Command {
 				}
 				clusterID = selected.GetClusterId()
 			}
-			qm, rpcCtxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
+			qm, rpcCtxCfg, releaseRepos, cleanup, err := edgeReleaseQMClientForCommand(cmd)
 			if err != nil {
 				return err
 			}
@@ -164,13 +191,13 @@ func newClusterReleaseTargetSetCmd() *cobra.Command {
 			}
 			targetVersion := normalizeReleaseTargetVersion(version)
 			if shouldPublishReleaseForTarget(rpcCtxCfg) {
-				if _, publishErr := publishEdgeReleaseFromGitOpsResolved(cmd, qm, rpcCtxCfg, channel, firstNonEmpty(targetVersion, "latest"), "", ""); publishErr != nil {
+				if _, publishErr := publishEdgeReleaseFromGitOpsResolvedRepos(cmd, qm, rpcCtxCfg, releaseRepos, channel, firstNonEmpty(targetVersion, "latest"), "", ""); publishErr != nil {
 					return fmt.Errorf("publish selected GitOps release before target update: %w", publishErr)
 				}
 			} else if ensureErr := ensureReleaseTargetExists(cmd, qm, rpcCtxCfg, channel, targetVersion); ensureErr != nil {
 				return ensureErr
 			}
-			cctx, cancel := clusterNodesRPCContext(cmd.Context(), rpcCtxCfg, 15*time.Second)
+			cctx, cancel := clusterNodesRPCContext(cmd.Context(), rpcCtxCfg, edgeReleaseSyncRPCTimeout)
 			defer cancel()
 			resp, err := qm.SetClusterReleaseTarget(cctx, &pb.SetClusterReleaseTargetRequest{Target: &pb.ClusterReleaseTarget{
 				ClusterId:       clusterID,
@@ -222,7 +249,7 @@ func normalizeReleaseTargetChannel(channel string) (string, error) {
 }
 
 func ensureReleaseTargetExists(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, channel, version string) error {
-	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 15*time.Second)
+	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
 	defer cancel()
 	resp, err := qm.ListEdgeReleases(cctx, &pb.ListEdgeReleasesRequest{
 		Channel: channel,
@@ -238,15 +265,6 @@ func ensureReleaseTargetExists(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxC
 		return fmt.Errorf("no edge releases published for channel %q; a provider context must publish the GitOps release before this owner context can target it", channel)
 	}
 	return fmt.Errorf("edge release %s/%s is not published; a provider context must publish the GitOps release before this owner context can target it", channel, version)
-}
-
-func publishEdgeReleaseFromGitOps(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, version, remoteOS, remoteArch string) (*pb.EdgeReleaseResponse, error) {
-	channel, resolved := gitops.ResolveVersion(version)
-	return publishEdgeReleaseFromGitOpsResolved(cmd, qm, ctxCfg, channel, resolved, remoteOS, remoteArch)
-}
-
-func publishEdgeReleaseFromGitOpsResolved(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, channel, resolved, remoteOS, remoteArch string) (*pb.EdgeReleaseResponse, error) {
-	return publishEdgeReleaseFromGitOpsResolvedRepos(cmd, qm, ctxCfg, nil, channel, resolved, remoteOS, remoteArch)
 }
 
 func publishEdgeReleaseFromGitOpsResolvedRepos(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, repos []string, channel, resolved, remoteOS, remoteArch string) (*pb.EdgeReleaseResponse, error) {
@@ -266,7 +284,7 @@ func upsertEdgeReleaseManifest(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxC
 	if err != nil {
 		return nil, err
 	}
-	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 15*time.Second)
+	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
 	defer cancel()
 	return qm.UpsertEdgeRelease(cctx, &pb.UpsertEdgeReleaseRequest{Release: &pb.EdgeRelease{
 		Channel:        channel,
@@ -305,12 +323,12 @@ func syncClusterEdgeReleaseTargetFromGitOps(cmd *cobra.Command, rc *resolvedClus
 		return err
 	}
 
-	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 15*time.Second)
-	defer cancel()
 	clusterIDs := rc.Manifest.AllClusterIDs()
 	for _, clusterID := range clusterIDs {
+		cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
 		rolloutPlan, paused, err := existingReleaseTargetControls(cctx, qm, clusterID)
 		if err != nil {
+			cancel()
 			return err
 		}
 		if _, err := qm.SetClusterReleaseTarget(cctx, &pb.SetClusterReleaseTargetRequest{Target: &pb.ClusterReleaseTarget{
@@ -320,8 +338,10 @@ func syncClusterEdgeReleaseTargetFromGitOps(cmd *cobra.Command, rc *resolvedClus
 			RolloutPlanJson: rolloutPlan,
 			Paused:          paused,
 		}}); err != nil {
+			cancel()
 			return fmt.Errorf("set edge release target for cluster %s: %w", clusterID, err)
 		}
+		cancel()
 	}
 	ux.Result(cmd.OutOrStdout(), []ux.ResultField{{
 		Key: "edge-release-target",
@@ -360,13 +380,17 @@ func edgeReleaseQMClientForGitOpsSync(cmd *cobra.Command, rc *resolvedCluster, s
 		return nil, fwcfg.Context{}, nil, err
 	}
 
-	serviceToken := strings.TrimSpace(sharedEnv["SERVICE_TOKEN"])
-	if serviceToken == "" {
-		env, envErr := rc.SharedEnv()
+	env := sharedEnv
+	serviceToken := strings.TrimSpace(env["SERVICE_TOKEN"])
+	if serviceToken == "" || internalPKIBootstrapRequired(rc.Manifest) {
+		loadedEnv, envErr := rc.SharedEnv()
 		if envErr != nil {
 			return nil, fwcfg.Context{}, nil, fmt.Errorf("%w; fallback service-token load failed: %w", err, envErr)
 		}
-		serviceToken = strings.TrimSpace(env["SERVICE_TOKEN"])
+		env = loadedEnv
+		if serviceToken == "" {
+			serviceToken = strings.TrimSpace(env["SERVICE_TOKEN"])
+		}
 	}
 	if serviceToken == "" {
 		return nil, fwcfg.Context{}, nil, fmt.Errorf("%w; SERVICE_TOKEN missing from manifest env_files", err)
@@ -392,13 +416,23 @@ func edgeReleaseQMClientForGitOpsSync(cmd *cobra.Command, rc *resolvedCluster, s
 		_ = sess.Close()
 		return nil, fwcfg.Context{}, nil, fmt.Errorf("%w; fallback Quartermaster endpoint failed: %w", err, epErr)
 	}
+	var caPEM string
+	if !ep.Insecure && internalPKIBootstrapRequired(rc.Manifest) {
+		pki, pkiErr := loadInternalPKIBootstrap(env, filepath.Dir(rc.ManifestPath))
+		if pkiErr != nil {
+			_ = sess.Close()
+			return nil, fwcfg.Context{}, nil, fmt.Errorf("%w; fallback internal CA load failed: %w", err, pkiErr)
+		}
+		caPEM = pki.CABundlePEM
+	}
 	fallbackQM, qmErr := qmclient.NewGRPCClient(qmclient.GRPCConfig{
 		GRPCAddr:      ep.DialAddr,
-		Timeout:       15 * time.Second,
+		Timeout:       edgeReleaseSyncRPCTimeout,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  serviceToken,
 		AllowInsecure: ep.Insecure,
 		ServerName:    ep.ServerName,
+		CACertPEM:     caPEM,
 	})
 	if qmErr != nil {
 		_ = sess.Close()
@@ -408,6 +442,26 @@ func edgeReleaseQMClientForGitOpsSync(cmd *cobra.Command, rc *resolvedCluster, s
 		Persona: fwcfg.PersonaPlatform,
 		Auth:    fwcfg.Auth{ServiceToken: serviceToken},
 	}, func() { _ = sess.Close() }, nil
+}
+
+func edgeReleaseQMClientForCommand(cmd *cobra.Command) (*qmclient.GRPCClient, fwcfg.Context, []string, func(), error) {
+	qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
+	if err == nil {
+		return qm, ctxCfg, nil, cleanup, nil
+	}
+	rc, rcErr := resolveClusterManifest(cmd)
+	if rcErr != nil {
+		return nil, fwcfg.Context{}, nil, nil, err
+	}
+	qm, ctxCfg, qmCleanup, qmErr := edgeReleaseQMClientForGitOpsSync(cmd, rc, nil)
+	if qmErr != nil {
+		rc.Cleanup()
+		return nil, fwcfg.Context{}, nil, nil, qmErr
+	}
+	return qm, ctxCfg, rc.ReleaseRepos, func() {
+		qmCleanup()
+		rc.Cleanup()
+	}, nil
 }
 
 func releaseTargetVersionForSelector(selector, platformVersion string) string {
