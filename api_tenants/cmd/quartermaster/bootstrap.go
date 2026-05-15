@@ -9,15 +9,19 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"frameworks/api_tenants/internal/bootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/lib/pq"
 
 	"gopkg.in/yaml.v3"
 )
+
+const bootstrapTransactionMaxAttempts = 5
 
 // runBootstrapCommand handles `quartermaster bootstrap …` invocations. main()
 // dispatches here when argv[1] == "bootstrap"; the remaining argv (after the
@@ -77,12 +81,7 @@ func runBootstrapCommand(args []string) int {
 	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "quartermaster bootstrap: begin tx: %v\n", err)
-		return 1
-	}
-	out, err := bootstrap.ReconcileWithOptions(ctx, tx, desired.Quartermaster, bootstrap.ReconcileOptions{GeoIPReader: geoIPReader})
+	out, err := runBootstrapTransaction(ctx, db, desired.Quartermaster, bootstrap.ReconcileOptions{GeoIPReader: geoIPReader}, *dryRun)
 	if out != nil {
 		printSection("tenants", out.Tenants)
 		printSection("clusters", out.Clusters)
@@ -92,23 +91,81 @@ func runBootstrapCommand(args []string) int {
 		printSection("system_tenant_cluster_access", out.SystemTenantAccess)
 	}
 	if err != nil {
-		_ = tx.Rollback() //nolint:errcheck // already in error path
 		fmt.Fprintf(os.Stderr, "quartermaster bootstrap: %v\n", err)
 		return 1
 	}
 	if *dryRun {
-		if err := tx.Rollback(); err != nil {
-			fmt.Fprintf(os.Stderr, "quartermaster bootstrap [dry-run] rollback: %v\n", err)
-			return 1
-		}
 		fmt.Fprintln(os.Stdout, "quartermaster bootstrap [dry-run] rolled back; no changes persisted")
-		return 0
-	}
-	if err := tx.Commit(); err != nil {
-		fmt.Fprintf(os.Stderr, "quartermaster bootstrap: commit: %v\n", err)
-		return 1
 	}
 	return 0
+}
+
+func runBootstrapTransaction(ctx context.Context, db *sql.DB, qm bootstrap.QuartermasterSection, opts bootstrap.ReconcileOptions, dryRun bool) (*bootstrap.Sections, error) {
+	var out *bootstrap.Sections
+	for attempt := 1; attempt <= bootstrapTransactionMaxAttempts; attempt++ {
+		var err error
+		out, err = runBootstrapTransactionOnce(ctx, db, qm, opts, dryRun)
+		if err == nil {
+			return out, nil
+		}
+		if !isRetryableBootstrapTransactionError(err) || attempt == bootstrapTransactionMaxAttempts {
+			return out, err
+		}
+		if sleepErr := sleepBootstrapRetry(ctx, attempt); sleepErr != nil {
+			return out, sleepErr
+		}
+	}
+	return out, nil
+}
+
+func runBootstrapTransactionOnce(ctx context.Context, db *sql.DB, qm bootstrap.QuartermasterSection, opts bootstrap.ReconcileOptions, dryRun bool) (*bootstrap.Sections, error) {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+
+	out, err := bootstrap.ReconcileWithOptions(ctx, tx, qm, opts)
+	if err != nil {
+		_ = tx.Rollback() //nolint:errcheck // already in error path
+		return out, err
+	}
+
+	if dryRun {
+		if err := tx.Rollback(); err != nil {
+			return out, fmt.Errorf("[dry-run] rollback: %w", err)
+		}
+		return out, nil
+	}
+
+	if err := tx.Commit(); err != nil {
+		return out, fmt.Errorf("commit: %w", err)
+	}
+	return out, nil
+}
+
+func isRetryableBootstrapTransactionError(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	switch string(pqErr.Code) {
+	case "40001", "40P01":
+		return true
+	default:
+		return false
+	}
+}
+
+func sleepBootstrapRetry(ctx context.Context, attempt int) error {
+	delay := time.Duration(attempt*attempt) * 100 * time.Millisecond
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func printSection(name string, r bootstrap.Result) {
