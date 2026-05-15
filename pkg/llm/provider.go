@@ -46,9 +46,10 @@ type ToolCall struct {
 }
 
 type sseStream struct {
-	resp   *http.Response
-	reader *bufio.Reader
-	decode func([]byte) (Chunk, error)
+	resp    *http.Response
+	reader  *bufio.Reader
+	decode  func([]byte) (Chunk, error)
+	pending [][]byte
 }
 
 func newSSEStream(resp *http.Response, decode func([]byte) (Chunk, error)) Stream {
@@ -65,7 +66,7 @@ func (s *sseStream) Close() error {
 
 func (s *sseStream) Recv() (Chunk, error) {
 	for {
-		data, err := s.readEvent()
+		data, err := s.nextPayload()
 		if err != nil {
 			return Chunk{}, err
 		}
@@ -85,6 +86,23 @@ func (s *sseStream) Recv() (Chunk, error) {
 		}
 		return chunk, nil
 	}
+}
+
+func (s *sseStream) nextPayload() ([]byte, error) {
+	if len(s.pending) > 0 {
+		data := s.pending[0]
+		s.pending = s.pending[1:]
+		return data, nil
+	}
+	payloads, err := s.readEvent()
+	if err != nil {
+		return nil, err
+	}
+	if len(payloads) == 0 {
+		return []byte{}, nil
+	}
+	s.pending = append(s.pending, payloads[1:]...)
+	return payloads[0], nil
 }
 
 func isSSEDonePayload(payload string) bool {
@@ -185,7 +203,7 @@ func parseRetryAfter(value string) *time.Duration {
 	return nil
 }
 
-func (s *sseStream) readEvent() ([]byte, error) {
+func (s *sseStream) readEvent() ([][]byte, error) {
 	var dataLines []string
 	for {
 		line, err := s.reader.ReadString('\n')
@@ -195,7 +213,7 @@ func (s *sseStream) readEvent() ([]byte, error) {
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
 			if len(dataLines) > 0 {
-				return []byte(strings.Join(dataLines, "\n")), nil
+				return normalizeSSEDataLines(dataLines), nil
 			}
 			if errors.Is(err, io.EOF) {
 				return nil, io.EOF
@@ -207,9 +225,56 @@ func (s *sseStream) readEvent() ([]byte, error) {
 		}
 		if errors.Is(err, io.EOF) {
 			if len(dataLines) > 0 {
-				return []byte(strings.Join(dataLines, "\n")), nil
+				return normalizeSSEDataLines(dataLines), nil
 			}
 			return nil, io.EOF
 		}
 	}
+}
+
+func normalizeSSEDataLines(dataLines []string) [][]byte {
+	nonDone := make([]string, 0, len(dataLines))
+	sawDone := false
+	for _, line := range dataLines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if isSSEDonePayload(line) {
+			sawDone = true
+			continue
+		}
+		nonDone = append(nonDone, line)
+	}
+	if len(nonDone) == 0 {
+		if sawDone {
+			return [][]byte{[]byte("[DONE]")}
+		}
+		return nil
+	}
+	if len(nonDone) == 1 {
+		return [][]byte{[]byte(nonDone[0])}
+	}
+	if allCompleteJSONPayloads(nonDone) {
+		payloads := make([][]byte, 0, len(nonDone))
+		for _, line := range nonDone {
+			payloads = append(payloads, []byte(line))
+		}
+		return payloads
+	}
+	return [][]byte{[]byte(strings.Join(nonDone, "\n"))}
+}
+
+func allCompleteJSONPayloads(lines []string) bool {
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if len(line) < 2 {
+			return false
+		}
+		if (!strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}")) &&
+			(!strings.HasPrefix(line, "[") || !strings.HasSuffix(line, "]")) {
+			return false
+		}
+	}
+	return true
 }

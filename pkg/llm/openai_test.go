@@ -341,3 +341,62 @@ func TestOpenAIProviderAcceptsPlainDoneTerminator(t *testing.T) {
 		t.Fatalf("expected EOF after DONE sentinel, got %v", err)
 	}
 }
+
+func TestOpenAIProviderIgnoresDoneLineInCoalescedEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: [DONE]\n")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"after-done-line"}}]}`+"\n\n")
+	}))
+	defer server.Close()
+
+	p := NewOpenAIProvider(Config{APIURL: server.URL, APIKey: "k", Model: "m"})
+	stream, err := p.Complete(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv content: %v", err)
+	}
+	if chunk.Content != "after-done-line" {
+		t.Fatalf("unexpected content %q", chunk.Content)
+	}
+	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected EOF after coalesced event, got %v", err)
+	}
+}
+
+func TestOpenAIProviderReadsCoalescedJSONEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"first "}}]}`+"\n")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"second"}}]}`+"\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	p := NewOpenAIProvider(Config{APIURL: server.URL, APIKey: "k", Model: "m"})
+	stream, err := p.Complete(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	defer stream.Close()
+
+	var content strings.Builder
+	for {
+		chunk, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+		content.WriteString(chunk.Content)
+	}
+	if content.String() != "first second" {
+		t.Fatalf("unexpected content %q", content.String())
+	}
+}
