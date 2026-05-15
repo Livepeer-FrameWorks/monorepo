@@ -1655,20 +1655,25 @@ func TestBuildServiceEnvVarsDerivesOrderedGatewayMCPURLs(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile:  "production",
 		EnvFiles: []string{envFile},
+		Clusters: map[string]inventory.ClusterConfig{
+			"core-eu":     {Region: "eu-west"},
+			"regional-eu": {Region: "eu-west"},
+			"regional-us": {Region: "us-west"},
+		},
 		Hosts: map[string]inventory.Host{
-			"central-1":   {ExternalIP: "10.0.0.10"},
-			"regional-eu": {ExternalIP: "10.0.0.11"},
-			"regional-us": {ExternalIP: "10.0.0.12"},
-			"yuga-1":      {ExternalIP: "10.0.0.13"},
-			"kafka-1":     {ExternalIP: "10.0.0.14"},
+			"central-1": {ExternalIP: "10.0.0.10", Cluster: "core-eu"},
+			"z-eu":      {ExternalIP: "10.0.0.11", Cluster: "regional-eu"},
+			"a-us":      {ExternalIP: "10.0.0.12", Cluster: "regional-us"},
+			"yuga-1":    {ExternalIP: "10.0.0.13", Cluster: "core-eu"},
+			"kafka-1":   {ExternalIP: "10.0.0.14", Cluster: "core-eu"},
 		},
 		Infrastructure: inventory.InfrastructureConfig{
 			Postgres: &inventory.PostgresConfig{Enabled: true, Engine: "yugabyte", Port: 5433, Nodes: []inventory.PostgresNode{{Host: "yuga-1", ID: 1}}},
 			Kafka:    &inventory.KafkaConfig{Enabled: true, Brokers: []inventory.KafkaBroker{{Host: "kafka-1", ID: 1, Port: 9092}}},
 		},
 		Services: map[string]inventory.ServiceConfig{
-			"bridge-eu": {Enabled: true, Deploy: "bridge", Host: "regional-eu"},
-			"bridge-us": {Enabled: true, Deploy: "bridge", Host: "regional-us"},
+			"bridge-eu": {Enabled: true, Deploy: "bridge", Host: "z-eu"},
+			"bridge-us": {Enabled: true, Deploy: "bridge", Host: "a-us"},
 			"skipper":   {Enabled: true, Host: "central-1"},
 		},
 	}
@@ -1684,11 +1689,11 @@ func TestBuildServiceEnvVarsDerivesOrderedGatewayMCPURLs(t *testing.T) {
 		t.Fatalf("buildServiceEnvVars skipper: %v", err)
 	}
 
-	want := "http://regional-eu.internal:18000/mcp,http://regional-us.internal:18000/mcp"
+	want := "http://z-eu.internal:18000/mcp,http://a-us.internal:18000/mcp"
 	if env["GATEWAY_MCP_URLS"] != want {
 		t.Fatalf("GATEWAY_MCP_URLS = %q, want %q", env["GATEWAY_MCP_URLS"], want)
 	}
-	if env["GATEWAY_MCP_URL"] != "http://regional-eu.internal:18000/mcp" {
+	if env["GATEWAY_MCP_URL"] != "http://z-eu.internal:18000/mcp" {
 		t.Fatalf("GATEWAY_MCP_URL = %q", env["GATEWAY_MCP_URL"])
 	}
 }

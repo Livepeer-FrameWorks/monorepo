@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
@@ -14,6 +16,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+const defaultConnectTimeout = 5 * time.Second
 
 // GatewayClient communicates with the Gateway MCP server to invoke platform
 // tools (diagnostics, stream management, billing, etc.) on behalf of the
@@ -38,6 +42,8 @@ type Config struct {
 	GatewayURL string
 	// GatewayURLs is the ordered Gateway MCP endpoint failover set.
 	GatewayURLs []string
+	// ConnectTimeout bounds endpoint dial/TLS setup and tools/list discovery.
+	ConnectTimeout time.Duration
 	// ToolAllowlist restricts which Gateway tools are exposed to the LLM.
 	// An empty list means all discovered tools are exposed.
 	ToolAllowlist []string
@@ -205,6 +211,10 @@ func (gc *GatewayClient) connect(ctx context.Context, start int) error {
 	if len(gc.cfg.GatewayURLs) == 0 {
 		return fmt.Errorf("mcpclient: GatewayURL is required")
 	}
+	connectTimeout := gc.cfg.ConnectTimeout
+	if connectTimeout <= 0 {
+		connectTimeout = defaultConnectTimeout
+	}
 	var errs []string
 	for offset := 0; offset < len(gc.cfg.GatewayURLs); offset++ {
 		idx := (start + offset) % len(gc.cfg.GatewayURLs)
@@ -212,7 +222,7 @@ func (gc *GatewayClient) connect(ctx context.Context, start int) error {
 		session, err := gc.client.Connect(ctx, &mcp.StreamableClientTransport{
 			Endpoint: endpoint,
 			HTTPClient: &http.Client{
-				Transport: &authTransport{base: http.DefaultTransport},
+				Transport: &authTransport{base: gatewayHTTPTransport(connectTimeout)},
 			},
 		}, nil)
 		if err != nil {
@@ -220,7 +230,9 @@ func (gc *GatewayClient) connect(ctx context.Context, start int) error {
 			continue
 		}
 
-		tools, toolIndex, err := gc.fetchTools(ctx, session)
+		toolsCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+		tools, toolIndex, err := gc.fetchTools(toolsCtx, session)
+		cancel()
 		if err != nil {
 			_ = session.Close()
 			errs = append(errs, fmt.Sprintf("%s: discover tools: %v", endpoint, err))
@@ -245,6 +257,22 @@ func (gc *GatewayClient) connect(ctx context.Context, start int) error {
 		return nil
 	}
 	return fmt.Errorf("mcpclient: connect to gateway MCP: %s", strings.Join(errs, "; "))
+}
+
+func gatewayHTTPTransport(connectTimeout time.Duration) http.RoundTripper {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   connectTimeout,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: connectTimeout,
+		TLSHandshakeTimeout:   connectTimeout,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 }
 
 // Close shuts down the MCP client session.

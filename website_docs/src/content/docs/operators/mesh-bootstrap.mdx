@@ -49,9 +49,10 @@ because a local service declares that dependency and there is one provider
 context. Sibling media clusters do not become visible just because they exist.
 Some direct service calls are intentionally global. Skipper receives an ordered
 `GATEWAY_MCP_URLS` list of concrete Bridge mesh host endpoints so the single
-central Skipper can attach to the first healthy regional Gateway MCP hub and
-fail over deterministically, while the regional Bridges keep
-`skipper.internal` as the reciprocal spoke endpoint.
+central Skipper prefers the Bridge in its own region, then fails over through
+the remaining Bridge hosts deterministically. Regional Bridges keep
+`skipper.internal` as the reciprocal spoke endpoint, so every Gateway MCP hub
+can still expose Skipper's tools.
 Foghorn federation still uses concrete peer Foghorn addresses from
 Quartermaster's tenant cluster context rather than a global `foghorn.internal`
 alias.

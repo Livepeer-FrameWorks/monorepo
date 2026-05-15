@@ -6170,13 +6170,29 @@ func loadClusterMeshConfig(ctx context.Context, db *sql.DB, clusterID string) (s
 // bootstrap never fails on auxiliary data: the node will rediscover via
 // SyncMesh once connected.
 func (s *QuartermasterServer) collectBootstrapSeed(ctx context.Context, clusterID, excludeNodeID string) ([]*pb.InfrastructurePeer, map[string]*pb.ServiceEndpoints) {
-	dnsRequired, peerRequired, globalPeerRequired, infraRequired := s.meshServiceRequirements(ctx, excludeNodeID)
-	endpoints, requiredPeerNodeIDs := s.collectMeshServiceEndpoints(ctx, clusterID, excludeNodeID, dnsRequired, peerRequired, globalPeerRequired)
-	for nodeID := range s.collectInfraPeerNodeIDs(ctx, clusterID, excludeNodeID, infraRequired) {
-		requiredPeerNodeIDs[nodeID] = struct{}{}
+	dnsRequired, peerRequired, globalPeerRequired, infraRequired, reqErr := s.meshServiceRequirements(ctx, excludeNodeID)
+	if reqErr != nil {
+		s.logger.WithError(reqErr).Warn("collectBootstrapSeed: service requirements unavailable")
+		return nil, nil
 	}
-	for nodeID := range s.collectReciprocalServicePeerNodeIDs(ctx, clusterID, excludeNodeID) {
-		requiredPeerNodeIDs[nodeID] = struct{}{}
+	endpoints, requiredPeerNodeIDs, endpointErr := s.collectMeshServiceEndpoints(ctx, clusterID, excludeNodeID, dnsRequired, peerRequired, globalPeerRequired)
+	if endpointErr != nil {
+		s.logger.WithError(endpointErr).Warn("collectBootstrapSeed: service endpoints unavailable")
+		return nil, endpoints
+	}
+	if infraPeers, infraErr := s.collectInfraPeerNodeIDs(ctx, clusterID, excludeNodeID, infraRequired); infraErr != nil {
+		s.logger.WithError(infraErr).Warn("collectBootstrapSeed: infra peers unavailable")
+	} else {
+		for nodeID := range infraPeers {
+			requiredPeerNodeIDs[nodeID] = struct{}{}
+		}
+	}
+	if reciprocalPeers, reciprocalErr := s.collectReciprocalServicePeerNodeIDs(ctx, clusterID, excludeNodeID); reciprocalErr != nil {
+		s.logger.WithError(reciprocalErr).Warn("collectBootstrapSeed: reciprocal peers unavailable")
+	} else {
+		for nodeID := range reciprocalPeers {
+			requiredPeerNodeIDs[nodeID] = struct{}{}
+		}
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
@@ -6223,7 +6239,7 @@ func (s *QuartermasterServer) collectBootstrapSeed(ctx context.Context, clusterI
 	return peers, endpoints
 }
 
-func (s *QuartermasterServer) meshServiceRequirements(ctx context.Context, nodeID string) (map[string]struct{}, map[string]struct{}, map[string]struct{}, []topology.InfraDependency) {
+func (s *QuartermasterServer) meshServiceRequirements(ctx context.Context, nodeID string) (map[string]struct{}, map[string]struct{}, map[string]struct{}, []topology.InfraDependency, error) {
 	dnsRequired := map[string]struct{}{"quartermaster": {}}
 	peerRequired := map[string]struct{}{"quartermaster": {}}
 	globalPeerRequired := map[string]struct{}{}
@@ -6260,17 +6276,22 @@ func (s *QuartermasterServer) meshServiceRequirements(ctx context.Context, nodeI
 		WHERE service_type IS NOT NULL AND service_type <> ''
 	`, nodeID)
 	if err != nil {
-		s.logger.WithError(err).Warn("meshServiceRequirements: local service query failed")
-		return dnsRequired, peerRequired, globalPeerRequired, infraRequired
+		return nil, nil, nil, nil, fmt.Errorf("local service query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	var localServices []string
 	for rows.Next() {
 		var serviceType string
-		if scanErr := rows.Scan(&serviceType); scanErr == nil && serviceType != "" {
+		if scanErr := rows.Scan(&serviceType); scanErr != nil {
+			return nil, nil, nil, nil, fmt.Errorf("scan local service: %w", scanErr)
+		}
+		if serviceType != "" {
 			localServices = append(localServices, serviceType)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("iterate local services: %w", err)
 	}
 	for _, dep := range topology.DNSDependenciesForServices(localServices) {
 		dnsRequired[dep] = struct{}{}
@@ -6291,16 +6312,16 @@ func (s *QuartermasterServer) meshServiceRequirements(ctx context.Context, nodeI
 			globalPeerRequired[peerService] = struct{}{}
 		}
 	}
-	return dnsRequired, peerRequired, globalPeerRequired, infraRequired
+	return dnsRequired, peerRequired, globalPeerRequired, infraRequired, nil
 }
 
-func (s *QuartermasterServer) collectMeshServiceEndpoints(ctx context.Context, clusterID, nodeID string, dnsRequired, peerRequired, globalPeerRequired map[string]struct{}) (map[string]*pb.ServiceEndpoints, map[string]struct{}) {
+func (s *QuartermasterServer) collectMeshServiceEndpoints(ctx context.Context, clusterID, nodeID string, dnsRequired, peerRequired, globalPeerRequired map[string]struct{}) (map[string]*pb.ServiceEndpoints, map[string]struct{}, error) {
 	endpoints := map[string]*pb.ServiceEndpoints{}
 	requiredPeerNodeIDs := map[string]struct{}{}
 	peerTypes := sortedStringKeys(peerRequired)
 	globalPeerTypes := sortedStringKeys(globalPeerRequired)
 	if len(peerTypes) == 0 && len(globalPeerTypes) == 0 {
-		return endpoints, requiredPeerNodeIDs
+		return endpoints, requiredPeerNodeIDs, nil
 	}
 	svcRows, svcErr := s.db.QueryContext(ctx, `
 		WITH request_contexts AS (
@@ -6378,13 +6399,15 @@ func (s *QuartermasterServer) collectMeshServiceEndpoints(ctx context.Context, c
 		   OR ss.provider_cluster_count = 1
 	`, clusterID, nodeID, pq.Array(peerTypes), pq.Array(globalPeerTypes))
 	if svcErr != nil {
-		s.logger.WithError(svcErr).Warn("collectMeshServiceEndpoints: service endpoint query failed")
-		return endpoints, requiredPeerNodeIDs
+		return nil, nil, fmt.Errorf("service endpoint query: %w", svcErr)
 	}
 	defer func() { _ = svcRows.Close() }()
 	for svcRows.Next() {
 		var svcType, svcNodeID, svcIP string
-		if scanErr := svcRows.Scan(&svcType, &svcNodeID, &svcIP); scanErr != nil || svcIP == "" {
+		if scanErr := svcRows.Scan(&svcType, &svcNodeID, &svcIP); scanErr != nil {
+			return nil, nil, fmt.Errorf("scan service endpoint: %w", scanErr)
+		}
+		if svcIP == "" {
 			continue
 		}
 		if svcNodeID != "" {
@@ -6398,10 +6421,13 @@ func (s *QuartermasterServer) collectMeshServiceEndpoints(ctx context.Context, c
 		}
 		endpoints[svcType].Ips = append(endpoints[svcType].Ips, svcIP)
 	}
-	return endpoints, requiredPeerNodeIDs
+	if err := svcRows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("iterate service endpoints: %w", err)
+	}
+	return endpoints, requiredPeerNodeIDs, nil
 }
 
-func (s *QuartermasterServer) collectInfraPeerNodeIDs(ctx context.Context, clusterID, nodeID string, infraRequired []topology.InfraDependency) map[string]struct{} {
+func (s *QuartermasterServer) collectInfraPeerNodeIDs(ctx context.Context, clusterID, nodeID string, infraRequired []topology.InfraDependency) (map[string]struct{}, error) {
 	out := map[string]struct{}{}
 	for _, dep := range dedupeInfraDependencies(infraRequired) {
 		rows, err := s.db.QueryContext(ctx, `
@@ -6492,28 +6518,30 @@ func (s *QuartermasterServer) collectInfraPeerNodeIDs(ctx context.Context, clust
 			)
 		`, clusterID, nodeID, dep.Kind, dep.Provider, dep.Name)
 		if err != nil {
-			s.logger.WithError(err).WithField("infra_kind", dep.Kind).WithField("provider", dep.Provider).Warn("collectInfraPeerNodeIDs: infra provider query failed")
-			continue
+			return nil, fmt.Errorf("infra provider query kind=%s provider=%s name=%s: %w", dep.Kind, dep.Provider, dep.Name, err)
 		}
-		func() {
-			defer rows.Close()
-			for rows.Next() {
-				var peerNodeID string
-				if scanErr := rows.Scan(&peerNodeID); scanErr == nil && peerNodeID != "" {
-					out[peerNodeID] = struct{}{}
-				}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var peerNodeID string
+			if scanErr := rows.Scan(&peerNodeID); scanErr != nil {
+				return nil, fmt.Errorf("scan infra provider kind=%s provider=%s name=%s: %w", dep.Kind, dep.Provider, dep.Name, scanErr)
 			}
-		}()
+			if peerNodeID != "" {
+				out[peerNodeID] = struct{}{}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate infra provider kind=%s provider=%s name=%s: %w", dep.Kind, dep.Provider, dep.Name, err)
+		}
 	}
-	return out
+	return out, nil
 }
 
-func (s *QuartermasterServer) collectReciprocalServicePeerNodeIDs(ctx context.Context, clusterID, nodeID string) map[string]struct{} {
+func (s *QuartermasterServer) collectReciprocalServicePeerNodeIDs(ctx context.Context, clusterID, nodeID string) (map[string]struct{}, error) {
 	out := map[string]struct{}{}
 	provided, err := s.meshProvidedServiceTypes(ctx, nodeID)
 	if err != nil {
-		s.logger.WithError(err).Warn("collectReciprocalServicePeerNodeIDs: provided service query failed")
-		return out
+		return nil, fmt.Errorf("provided service query: %w", err)
 	}
 	for _, targetType := range provided {
 		dependents := topology.ServiceDependents([]string{targetType})
@@ -6633,22 +6661,25 @@ func (s *QuartermasterServer) collectReciprocalServicePeerNodeIDs(ctx context.Co
 					JOIN consumer_contexts cc ON cc.node_id = n.node_id AND cc.cluster_id = p.provider_cluster
 				)
 			  )
-		`, nodeID, clusterID, targetType, pq.Array(dependents), pq.Array(globalDependents))
+			`, nodeID, clusterID, targetType, pq.Array(dependents), pq.Array(globalDependents))
 		if queryErr != nil {
-			s.logger.WithError(queryErr).WithField("service_type", targetType).Warn("collectReciprocalServicePeerNodeIDs: dependent node query failed")
-			continue
+			return nil, fmt.Errorf("dependent node query service_type=%s: %w", targetType, queryErr)
 		}
-		func() {
-			defer rows.Close()
-			for rows.Next() {
-				var peerNodeID string
-				if scanErr := rows.Scan(&peerNodeID); scanErr == nil && peerNodeID != "" {
-					out[peerNodeID] = struct{}{}
-				}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var peerNodeID string
+			if scanErr := rows.Scan(&peerNodeID); scanErr != nil {
+				return nil, fmt.Errorf("scan dependent node service_type=%s: %w", targetType, scanErr)
 			}
-		}()
+			if peerNodeID != "" {
+				out[peerNodeID] = struct{}{}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate dependent nodes service_type=%s: %w", targetType, err)
+		}
 	}
-	return out
+	return out, nil
 }
 
 func (s *QuartermasterServer) meshProvidedServiceTypes(ctx context.Context, nodeID string) ([]string, error) {
@@ -7177,12 +7208,26 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		s.logger.WithError(err).Warn("Failed to update node heartbeat")
 	}
 
-	dnsRequired, peerRequired, globalPeerRequired, infraRequired := s.meshServiceRequirements(ctx, nodeID)
-	serviceEndpoints, requiredPeerNodeIDs := s.collectMeshServiceEndpoints(ctx, clusterID, nodeID, dnsRequired, peerRequired, globalPeerRequired)
-	for peerNodeID := range s.collectInfraPeerNodeIDs(ctx, clusterID, nodeID, infraRequired) {
+	dnsRequired, peerRequired, globalPeerRequired, infraRequired, reqErr := s.meshServiceRequirements(ctx, nodeID)
+	if reqErr != nil {
+		return nil, status.Errorf(codes.Internal, "mesh service requirements unavailable: %v", reqErr)
+	}
+	serviceEndpoints, requiredPeerNodeIDs, endpointErr := s.collectMeshServiceEndpoints(ctx, clusterID, nodeID, dnsRequired, peerRequired, globalPeerRequired)
+	if endpointErr != nil {
+		return nil, status.Errorf(codes.Internal, "mesh service endpoints unavailable: %v", endpointErr)
+	}
+	infraPeers, infraErr := s.collectInfraPeerNodeIDs(ctx, clusterID, nodeID, infraRequired)
+	if infraErr != nil {
+		return nil, status.Errorf(codes.Internal, "mesh infra peers unavailable: %v", infraErr)
+	}
+	for peerNodeID := range infraPeers {
 		requiredPeerNodeIDs[peerNodeID] = struct{}{}
 	}
-	for peerNodeID := range s.collectReciprocalServicePeerNodeIDs(ctx, clusterID, nodeID) {
+	reciprocalPeers, reciprocalErr := s.collectReciprocalServicePeerNodeIDs(ctx, clusterID, nodeID)
+	if reciprocalErr != nil {
+		return nil, status.Errorf(codes.Internal, "mesh reciprocal peers unavailable: %v", reciprocalErr)
+	}
+	for peerNodeID := range reciprocalPeers {
 		requiredPeerNodeIDs[peerNodeID] = struct{}{}
 	}
 

@@ -336,10 +336,12 @@ func main() {
 	var gatewayTools chat.GatewayToolCaller
 	if mcpURLs := cfg.GatewayMCPEndpoints(); len(mcpURLs) > 0 {
 		var connectErr error
+		const gatewayMCPConnectTimeout = 5 * time.Second
 		gatewayClient, connectErr = mcpclient.New(context.Background(), mcpclient.Config{
-			GatewayURLs:  mcpURLs,
-			ToolDenylist: []string{"ask_consultant"},
-			Logger:       logger,
+			GatewayURLs:    mcpURLs,
+			ConnectTimeout: gatewayMCPConnectTimeout,
+			ToolDenylist:   []string{"ask_consultant"},
+			Logger:         logger,
 		})
 		if connectErr != nil {
 			logger.WithError(connectErr).Fatal("Failed to connect to Gateway MCP")

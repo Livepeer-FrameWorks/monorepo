@@ -116,7 +116,7 @@ Multi-turn conversations stored in `skipper_conversations` / `skipper_messages` 
 | `SKIPPER_CHAT_RATE_LIMIT_OVERRIDES` | Per-tenant overrides (`tenant_id:limit,...`)                                   | —                               |
 | `SKIPPER_ADMIN_TENANT_ID`           | Tenant ID for global/platform knowledge                                        | —                               |
 | `SKIPPER_API_KEY`                   | API key for admin WebUI authentication (see Web UI)                            | —                               |
-| `GATEWAY_MCP_URLS`                  | Ordered internal Gateway MCP endpoints for platform tools                      | derived from Bridge mesh hosts  |
+| `GATEWAY_MCP_URLS`                  | Ordered internal Gateway MCP endpoints for platform tools, same-region first   | derived from Bridge mesh hosts  |
 | `GATEWAY_MCP_URL`                   | First internal Gateway MCP endpoint for single-endpoint deployments            | derived from `GATEWAY_MCP_URLS` |
 | `GATEWAY_PUBLIC_URL`                | Public API Gateway base URL; fallback for MCP when no internal endpoint is set | —                               |
 | `SKIPPER_SOCIAL_ENABLED`            | Enable event-driven social posting agent                                       | `false`                         |

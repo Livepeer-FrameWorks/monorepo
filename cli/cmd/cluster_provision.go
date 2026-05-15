@@ -690,6 +690,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				runtimeData["quartermaster_grpc_addr"] = qmAddr
 			}
 			if err := verifyQuartermasterMeshReachability(ctx, cmd, manifest, sshPool); err != nil {
+				resolveCancel()
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Quartermaster mesh reachability failed: %v", err))
 				fmt.Fprintln(cmd.OutOrStdout(), "  Services depend on quartermaster.internal for bootstrap and runtime discovery.")
 				fmt.Fprintln(cmd.OutOrStdout(), "  Fix mesh reachability and re-run provisioning.")
@@ -5331,7 +5332,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 	if baseName == "skipper" {
 		if manifestServiceEnabledForDeploy(manifest, "bridge") {
-			urls := gatewayMCPURLs(manifest)
+			urls := gatewayMCPURLs(manifest, task)
 			if len(urls) == 0 {
 				bridge := manifest.Services["bridge"]
 				port := bridge.Port
@@ -6031,24 +6032,35 @@ func manifestTaskRegion(manifest *inventory.Manifest, task *orchestrator.Task) s
 		return ""
 	}
 	if task.Host != "" {
-		if host, ok := manifest.Hosts[task.Host]; ok {
-			if region := strings.TrimSpace(host.Labels["region"]); region != "" {
-				return region
-			}
-			clusterID := strings.TrimSpace(host.Cluster)
-			if clusterID != "" {
-				if cluster, ok := manifest.Clusters[clusterID]; ok {
-					if region := strings.TrimSpace(cluster.Region); region != "" {
-						return region
-					}
-				}
-			}
+		if region := manifestHostRegion(manifest, task.Host); region != "" {
+			return region
 		}
 	}
 	if task.ClusterID != "" {
 		if cluster, ok := manifest.Clusters[task.ClusterID]; ok {
 			return strings.TrimSpace(cluster.Region)
 		}
+	}
+	return ""
+}
+
+func manifestHostRegion(manifest *inventory.Manifest, hostName string) string {
+	if manifest == nil || hostName == "" {
+		return ""
+	}
+	host, ok := manifest.Hosts[hostName]
+	if !ok {
+		return ""
+	}
+	if region := strings.TrimSpace(host.Labels["region"]); region != "" {
+		return region
+	}
+	clusterID := strings.TrimSpace(host.Cluster)
+	if clusterID == "" {
+		return ""
+	}
+	if cluster, ok := manifest.Clusters[clusterID]; ok {
+		return strings.TrimSpace(cluster.Region)
 	}
 	return ""
 }
@@ -6131,11 +6143,6 @@ func signalmanAddrsByRegionMulti(manifest *inventory.Manifest) map[string][]stri
 
 const defaultLivepeerGatewayAuthWebhookURL = "http://foghorn.internal:18008/webhooks/livepeer/auth"
 
-// anyClusterRunsLivepeerGateway returns true when the manifest provisions a
-// livepeer-gateway service anywhere. Used to escalate owner-tenant
-// resolution failures from "warn and continue" to a hard provisioning error
-// — gateway telemetry without a cluster owner tenant is silently dropped
-// downstream, which is worse than failing fast.
 // servicesByDeploy returns every Services entry whose Deploy slug matches,
 // including entries that omit Deploy and rely on the manifest key being the
 // canonical slug (foghorn, chandler, ...).
@@ -6402,11 +6409,15 @@ func chandlerInternalURLs(manifest *inventory.Manifest, svc inventory.ServiceCon
 	return urls
 }
 
-func gatewayMCPURLs(manifest *inventory.Manifest) []string {
+func gatewayMCPURLs(manifest *inventory.Manifest, task *orchestrator.Task) []string {
 	if manifest == nil {
 		return nil
 	}
-	var urls []string
+	type candidate struct {
+		url    string
+		region string
+	}
+	var candidates []candidate
 	for _, svc := range servicesByDeploy(manifest, "bridge") {
 		if !svc.Enabled {
 			continue
@@ -6417,11 +6428,40 @@ func gatewayMCPURLs(manifest *inventory.Manifest) []string {
 		}
 		for _, hostName := range serviceHosts(svc) {
 			if hostName != "" {
-				urls = append(urls, fmt.Sprintf("http://%s.internal:%d/mcp", hostName, port))
+				candidates = append(candidates, candidate{
+					url:    fmt.Sprintf("http://%s.internal:%d/mcp", hostName, port),
+					region: manifestHostRegion(manifest, hostName),
+				})
 			}
 		}
 	}
-	return sortedUniqueStrings(urls)
+	preferredRegion := manifestTaskRegion(manifest, task)
+	sort.SliceStable(candidates, func(i, j int) bool {
+		iPreferred := preferredRegion != "" && candidates[i].region == preferredRegion
+		jPreferred := preferredRegion != "" && candidates[j].region == preferredRegion
+		if iPreferred != jPreferred {
+			return iPreferred
+		}
+		return candidates[i].url < candidates[j].url
+	})
+	urls := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		urls = append(urls, c.url)
+	}
+	return sortedUniqueStringsPreservingOrder(urls)
+}
+
+func sortedUniqueStringsPreservingOrder(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func portFromBindAddr(raw string, fallback int) int {
@@ -6627,8 +6667,11 @@ func verifyMeshHealth(ctx context.Context, cmd *cobra.Command, manifest *invento
 func privateerExpectedPeerIPs(manifest *inventory.Manifest, hostName string) map[string]string {
 	out := map[string]string{}
 	for _, peer := range buildPrivateerStaticPeers(manifest, hostName) {
-		name, _ := peer["name"].(string)
-		allowed, _ := peer["allowed_ips"].([]string)
+		name, nameOK := peer["name"].(string)
+		allowed, allowedOK := peer["allowed_ips"].([]string)
+		if !nameOK || !allowedOK {
+			continue
+		}
 		if name == "" || len(allowed) == 0 {
 			continue
 		}
