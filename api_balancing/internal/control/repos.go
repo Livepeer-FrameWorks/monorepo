@@ -5,9 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sort"
+	"time"
 
 	"frameworks/api_balancing/internal/state"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/lib/pq"
 )
 
 // ============================================================================
@@ -410,6 +413,32 @@ func (r *artifactRepositoryDB) UpsertArtifacts(ctx context.Context, nodeID strin
 		return nil
 	}
 
+	// Concurrent reports can overlap; stable row order keeps transactions from
+	// locking the same artifact set in opposite sequences.
+	records := append([]state.ArtifactRecord(nil), artifacts...)
+	sort.SliceStable(records, func(i, j int) bool {
+		if records[i].ArtifactHash != records[j].ArtifactHash {
+			return records[i].ArtifactHash < records[j].ArtifactHash
+		}
+		return records[i].FilePath < records[j].FilePath
+	})
+
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		err = r.upsertArtifactsOnce(ctx, nodeID, records)
+		if err == nil || !isRetryableArtifactUpsertError(err) || ctx.Err() != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * 25 * time.Millisecond):
+		}
+	}
+	return err
+}
+
+func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID string, artifacts []state.ArtifactRecord) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -417,9 +446,7 @@ func (r *artifactRepositoryDB) UpsertArtifacts(ctx context.Context, nodeID strin
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	for _, a := range artifacts {
-		// Update metadata on existing lifecycle rows (created by StartDVR/CreateClip/CreateVodUpload).
-		// Warm storage sync never creates lifecycle rows — it lacks tenant context.
-		_, _ = tx.ExecContext(ctx, `
+		_, errExec := tx.ExecContext(ctx, `
 			UPDATE foghorn.artifacts SET
 				stream_internal_name = COALESCE(stream_internal_name, $2),
 				access_count = GREATEST(COALESCE(access_count, 0), $3),
@@ -431,9 +458,12 @@ func (r *artifactRepositoryDB) UpsertArtifacts(ctx context.Context, nodeID strin
 				updated_at = NOW()
 			WHERE artifact_hash = $1
 		`, a.ArtifactHash, a.StreamName, a.AccessCount, a.LastAccessed)
+		if errExec != nil {
+			return errExec
+		}
 
 		// Upsert warm storage tracking — only if the lifecycle row exists (FK guard).
-		_, errExec := tx.ExecContext(ctx, `
+		_, errExec = tx.ExecContext(ctx, `
 			INSERT INTO foghorn.artifact_nodes
 				(artifact_hash, node_id, file_path, size_bytes, segment_count, segment_bytes, access_count, last_accessed, last_seen_at, is_orphaned, cached_at)
 			SELECT $1, $2, $3, $4, $5, $6, $7, CASE WHEN $8 > 0 THEN to_timestamp($8) ELSE NULL END, NOW(), false, COALESCE((SELECT cached_at FROM foghorn.artifact_nodes WHERE artifact_hash = $1::varchar AND node_id = $2::varchar), NOW())
@@ -470,6 +500,17 @@ func (r *artifactRepositoryDB) UpsertArtifacts(ctx context.Context, nodeID strin
 	}
 
 	return tx.Commit()
+}
+
+func isRetryableArtifactUpsertError(err error) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		switch string(pqErr.Code) {
+		case "40P01", "40001":
+			return true
+		}
+	}
+	return false
 }
 
 // GetArtifactSyncInfo retrieves sync tracking info for an artifact

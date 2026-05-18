@@ -10,6 +10,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 )
 
 func setupRepoTest(t *testing.T) (*artifactRepositoryDB, sqlmock.Sqlmock) {
@@ -67,6 +68,38 @@ func TestUpsertArtifacts_InsertsWithFKGuard(t *testing.T) {
 
 	err := repo.UpsertArtifacts(context.Background(), "node-1", []state.ArtifactRecord{
 		{ArtifactHash: "hash-1", FilePath: "/data/clip.mp4", SizeBytes: 1024},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpsertArtifacts_RetriesDeadlock(t *testing.T) {
+	repo, mock := setupRepoTest(t)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE foghorn.artifacts SET").
+		WithArgs("hash-1", "", int64(0), int64(0)).
+		WillReturnError(&pq.Error{Code: "40P01", Message: "deadlock detected"})
+	mock.ExpectRollback()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE foghorn.artifacts SET").
+		WithArgs("hash-1", "", int64(0), int64(0)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO foghorn.artifact_nodes.*WHERE EXISTS.*SELECT 1 FROM foghorn.artifacts").
+		WithArgs("hash-1", "node-1", "", int64(0), int64(0), int64(0), int64(0), int64(0)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE foghorn.artifact_nodes.*SET is_orphaned = true").
+		WithArgs("node-1").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	err := repo.UpsertArtifacts(context.Background(), "node-1", []state.ArtifactRecord{
+		{ArtifactHash: "hash-1"},
 	})
 	if err != nil {
 		t.Fatal(err)
