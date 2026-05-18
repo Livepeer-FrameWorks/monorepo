@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/google/uuid"
@@ -165,6 +166,56 @@ func TestDeductPrepaidBalanceForCreditTx_DuplicateNoOps(t *testing.T) {
 	}
 	if newBalance != 8000 {
 		t.Errorf("newBalance = %d, want 8000 (untouched on duplicate)", newBalance)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func TestApplyInvoicePrepaidCreditTxAppliesOnlyMissingDelta(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	currency := billing.DefaultCurrency()
+	tenantID := "tenant-1"
+	periodStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectBegin()
+	tx, err := mockDB.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+
+	mock.ExpectQuery(`SELECT COALESCE\(SUM\(-amount_cents\), 0\)`).
+		WithArgs(tenantID, "Invoice credit: 2026-04").
+		WillReturnRows(sqlmock.NewRows([]string{"applied"}).AddRow(int64(2000)))
+	mock.ExpectExec(`INSERT INTO purser\.prepaid_balances`).
+		WithArgs(tenantID, currency).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT balance_cents FROM purser\.prepaid_balances`).
+		WithArgs(tenantID, currency).
+		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(10000)))
+	mock.ExpectExec(`INSERT INTO purser\.balance_transactions`).
+		WithArgs(tenantID, int64(-8200), int64(1800), "Invoice credit: 2026-04", sqlmock.AnyArg(), "invoice_credit").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.prepaid_balances SET balance_cents`).
+		WithArgs(int64(1800), tenantID, currency).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectRollback()
+
+	applied, err := jm.applyInvoicePrepaidCreditTx(context.Background(), tx, tenantID, periodStart, 10200)
+	if err != nil {
+		t.Fatalf("applyInvoicePrepaidCreditTx: %v", err)
+	}
+	if applied != 10200 {
+		t.Fatalf("applied = %d, want 10200", applied)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet sqlmock expectations: %v", err)

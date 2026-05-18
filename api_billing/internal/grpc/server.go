@@ -5172,6 +5172,15 @@ func (s *PurserServer) recordBalanceTransaction(
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, low_balance_threshold_cents, created_at, updated_at)
+		VALUES ($1, 0, $2, 500, NOW(), NOW())
+		ON CONFLICT (tenant_id, currency) DO NOTHING
+	`, tenantID, currency); err != nil {
+		s.logger.WithError(err).Error("Failed to ensure prepaid balance")
+		return nil, status.Error(codes.Internal, "failed to initialize balance")
+	}
+
 	txID := uuid.New().String()
 	now := time.Now()
 	insertedWithReference := false

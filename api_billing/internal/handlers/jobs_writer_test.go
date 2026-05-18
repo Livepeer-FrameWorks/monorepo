@@ -143,9 +143,9 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"stripe_subscription_id", "mollie_subscription_id"}).
 			AddRow(nil, nil))
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT amount_cents FROM purser\.balance_transactions`).
-		WithArgs(tenantID, sqlmock.AnyArg()).
-		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`SELECT COALESCE\(SUM\(-amount_cents\), 0\)`).
+		WithArgs(tenantID, "Invoice credit: 2026-04").
+		WillReturnRows(sqlmock.NewRows([]string{"applied"}).AddRow(int64(0)))
 	mock.ExpectExec(`INSERT INTO purser\.prepaid_balances`).
 		WithArgs(tenantID, currency).
 		WillReturnResult(sqlmock.NewResult(0, 0))
@@ -223,9 +223,9 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"stripe_subscription_id", "mollie_subscription_id"}).
 			AddRow(nil, nil))
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT amount_cents FROM purser\.balance_transactions`).
-		WithArgs(tenantID, sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"amount_cents"}).AddRow(int64(-20_000)))
+	mock.ExpectQuery(`SELECT COALESCE\(SUM\(-amount_cents\), 0\)`).
+		WithArgs(tenantID, "Invoice credit: 2026-04").
+		WillReturnRows(sqlmock.NewRows([]string{"applied"}).AddRow(int64(20_000)))
 	mock.ExpectQuery(`INSERT INTO purser\.billing_invoices`).
 		WithArgs(tenantID, "0", currency, sqlmock.AnyArg(), "100", "2", "200", sqlmock.AnyArg(), periodStart, periodEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("invoice-1"))

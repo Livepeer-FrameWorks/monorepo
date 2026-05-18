@@ -583,8 +583,8 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 // double-debit even when concurrent transactions probe the ledger before
 // either commits.
 //
-// Used by updateInvoiceDraft so the credit deduction commits or rolls back
-// together with the invoice header and line items.
+// Used by invoice draft/finalization so the credit deduction commits or rolls
+// back together with the invoice header and line items.
 func (jm *JobManager) deductPrepaidBalanceForCreditTx(ctx context.Context, tx *sql.Tx, tenantID string, requestCents int64, description string, referenceID *string) (newBalance, appliedCents int64, isDuplicate bool, err error) {
 	currency := billing.DefaultCurrency()
 	referenceType := "invoice_credit"
@@ -651,6 +651,63 @@ func (jm *JobManager) deductPrepaidBalanceForCreditTx(ctx context.Context, tx *s
 		return 0, 0, false, updErr
 	}
 	return newBalance, applied, false, nil
+}
+
+func invoiceCreditDescription(periodStart time.Time) string {
+	return fmt.Sprintf("Invoice credit: %s", periodStart.Format("2006-01"))
+}
+
+func invoiceCreditReferenceID(tenantID string, periodStart time.Time, alreadyAppliedCents, requestCents int64) string {
+	raw := fmt.Sprintf(
+		"invoice_credit:%s:%s:%d:%d",
+		tenantID,
+		periodStart.Format("2006-01-02"),
+		alreadyAppliedCents,
+		requestCents,
+	)
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(raw)).String()
+}
+
+func (jm *JobManager) appliedInvoiceCreditCentsTx(ctx context.Context, tx *sql.Tx, tenantID string, periodStart time.Time) (int64, error) {
+	var applied int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(-amount_cents), 0)
+		FROM purser.balance_transactions
+		WHERE tenant_id = $1
+		  AND reference_type = 'invoice_credit'
+		  AND description = $2
+		  AND amount_cents < 0
+	`, tenantID, invoiceCreditDescription(periodStart)).Scan(&applied)
+	if err != nil {
+		return 0, err
+	}
+	return applied, nil
+}
+
+// applyInvoicePrepaidCreditTx brings invoice credit for a tenant/period up to
+// grossCents, bounded by the locked prepaid balance. It is delta-based: if an
+// early draft used EUR 2 of credit and later usage grows the invoice to EUR 150,
+// the next draft/finalization attempts to apply only the missing EUR 148.
+func (jm *JobManager) applyInvoicePrepaidCreditTx(ctx context.Context, tx *sql.Tx, tenantID string, periodStart time.Time, grossCents int64) (int64, error) {
+	if grossCents <= 0 {
+		return 0, nil
+	}
+
+	applied, err := jm.appliedInvoiceCreditCentsTx(ctx, tx, tenantID, periodStart)
+	if err != nil {
+		return 0, fmt.Errorf("lookup applied invoice credit: %w", err)
+	}
+	if applied >= grossCents {
+		return applied, nil
+	}
+
+	requestCents := grossCents - applied
+	referenceID := invoiceCreditReferenceID(tenantID, periodStart, applied, requestCents)
+	_, deltaApplied, _, err := jm.deductPrepaidBalanceForCreditTx(ctx, tx, tenantID, requestCents, invoiceCreditDescription(periodStart), &referenceID)
+	if err != nil {
+		return 0, fmt.Errorf("deduct invoice credit delta: %w", err)
+	}
+	return applied + deltaApplied, nil
 }
 
 // deductPrepaidBalanceForCredit deducts amount from prepaid balance for non-usage adjustments.
@@ -1115,36 +1172,23 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		}
 
 		// Check for an existing draft (or held manual_review) invoice for
-		// the previous month, and preserve any prepaid credit it had
-		// already applied so finalization doesn't accidentally re-charge
-		// the gross amount on top. Read the credit as a decimal string
-		// and parse via decimal, with no float64 hop. Errors abort: a DB
-		// read failure here would otherwise silently zero the credit and
-		// double-charge.
+		// the previous month. Finalization applies any missing prepaid credit
+		// in the same transaction as the invoice header write, so base-only
+		// invoices and drafts that grew after first credit both consume balance.
 		var draftInvoiceID string
-		var existingCreditStr sql.NullString
 		switch err := jm.db.QueryRowContext(ctx, `
-			SELECT id, COALESCE(prepaid_credit_applied, 0)::text
+			SELECT id
 			FROM purser.billing_invoices
 			WHERE tenant_id = $1
 			  AND period_start = $2
 			  AND status IN ('draft', 'manual_review')
 			LIMIT 1
-		`, tenantID, periodStart).Scan(&draftInvoiceID, &existingCreditStr); {
+		`, tenantID, periodStart).Scan(&draftInvoiceID); {
 		case err == nil, errors.Is(err, sql.ErrNoRows):
-			// nil err → draft found; ErrNoRows → no draft, leave zero values.
+			// nil err means draft found; ErrNoRows means no draft, leave zero values.
 		default:
-			jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to look up existing draft credit; skipping invoice for this period")
+			jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to look up existing draft invoice; skipping invoice for this period")
 			continue
-		}
-		existingCreditDec := decimal.Zero
-		if existingCreditStr.Valid && existingCreditStr.String != "" {
-			parsed, parseErr := decimal.NewFromString(existingCreditStr.String)
-			if parseErr != nil {
-				jm.logger.WithError(parseErr).WithField("tenant_id", tenantID).Error("Failed to parse existing prepaid_credit_applied; skipping invoice for this period")
-				continue
-			}
-			existingCreditDec = parsed
 		}
 
 		// Aggregate rollup-able usage metrics for billing period
@@ -1173,14 +1217,8 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		baseDec := ratingResult.BaseAmount
 		meteredDec := ratingResult.UsageAmount
 		grossDec := ratingResult.TotalAmount
-		// Preserve prepaid credit already applied to the draft. The credit was
-		// debited during the draft phase; finalization must not rewrite the
-		// invoice amount as if the credit were never applied.
-		creditDec := existingCreditDec
-		totalDec := grossDec.Sub(creditDec)
-		if totalDec.IsNegative() {
-			totalDec = decimal.Zero
-		}
+		creditDec := decimal.Zero
+		totalDec := grossDec
 
 		// Generate invoice
 		invoiceID := uuid.New().String()
@@ -1240,13 +1278,6 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			continue
 		}
 
-		// Bind decimals as strings into NUMERIC columns so no float64 rounding
-		// can sneak in at the SQL boundary.
-		totalAmt := totalDec.Round(2).String()
-		baseAmt := baseDec.Round(2).String()
-		meteredAmt := meteredDec.Round(2).String()
-		creditAmt := creditDec.Round(2).String()
-
 		periodDuration := periodEnd.Sub(periodStart)
 		if periodDuration <= 0 {
 			periodDuration = 30 * 24 * time.Hour
@@ -1261,6 +1292,31 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		// in the same transaction so a finalized invoice cannot leave the
 		// subscription pointing at the already-billed period.
 		err = withTx(ctx, jm.db, func(tx *sql.Tx) error {
+			var txErr error
+			if len(ratingResult.ManualReviewReasons) == 0 {
+				grossCents := grossDec.Mul(decimal.NewFromInt(100)).Round(0).IntPart()
+				var appliedCreditCents int64
+				appliedCreditCents, txErr = jm.applyInvoicePrepaidCreditTx(ctx, tx, tenantID, periodStart, grossCents)
+				if txErr != nil {
+					return txErr
+				}
+				creditDec = decimal.NewFromInt(appliedCreditCents).Div(decimal.NewFromInt(100))
+				totalDec = grossDec.Sub(creditDec)
+				if totalDec.IsNegative() {
+					totalDec = decimal.Zero
+				}
+				if totalDec.IsZero() {
+					status = "paid"
+				}
+			}
+
+			// Bind decimals as strings into NUMERIC columns so no float64 rounding
+			// can sneak in at the SQL boundary.
+			totalAmt := totalDec.Round(2).String()
+			baseAmt := baseDec.Round(2).String()
+			meteredAmt := meteredDec.Round(2).String()
+			creditAmt := creditDec.Round(2).String()
+
 			if draftInvoiceID != "" {
 				if txErr := tx.QueryRowContext(ctx, `
 						UPDATE purser.billing_invoices
@@ -1348,12 +1404,15 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			jm.logger.WithFields(logging.Fields{
 				"error":     err,
 				"tenant_id": tenantID,
-				"amount":    totalAmt,
+				"amount":    totalDec.Round(2).String(),
 			}).Error("Failed to create invoice")
 			continue
 		}
 
 		invoicesGenerated++
+		totalAmt := totalDec.Round(2).String()
+		baseAmt := baseDec.Round(2).String()
+		meteredAmt := meteredDec.Round(2).String()
 		jm.logger.WithFields(logging.Fields{
 			"invoice_id":       invoiceID,
 			"tenant_id":        tenantID,
@@ -1381,20 +1440,23 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		}
 
 		// Overage collection. Provider subscriptions auto-charge the base;
-		// metered overage has no native collector on either provider and
-		// must be billed by Purser. Branch by the tenant's stored
-		// provider id so each side only sees the tenants it can charge —
-		// the helper itself is a no-op if the tenant's not on that
-		// provider. Webhook reconciliation routes through the shared
-		// partial-payment-aware settlement path regardless of provider.
-		if status == "pending" && meteredDec.GreaterThan(decimal.Zero) {
-			if chargeErr := jm.chargeMollieOverage(ctx, tenantID, invoiceID, meteredDec, currency); chargeErr != nil {
+		// Purser collects the remaining invoice amount after prepaid credit.
+		// Branch by the tenant's stored provider id so each side only sees the
+		// tenants it can charge — the helper itself is a no-op if the tenant's
+		// not on that provider. Webhook reconciliation routes through the
+		// shared partial-payment-aware settlement path regardless of provider.
+		providerChargeDec := totalDec
+		if meteredDec.LessThan(providerChargeDec) {
+			providerChargeDec = meteredDec
+		}
+		if status == "pending" && providerChargeDec.GreaterThan(decimal.Zero) {
+			if chargeErr := jm.chargeMollieOverage(ctx, tenantID, invoiceID, providerChargeDec, currency); chargeErr != nil {
 				jm.logger.WithError(chargeErr).WithFields(logging.Fields{
 					"tenant_id":  tenantID,
 					"invoice_id": invoiceID,
 				}).Warn("Failed to trigger Mollie overage charge")
 			}
-			if chargeErr := jm.chargeStripeOverage(ctx, tenantID, invoiceID, meteredDec, currency); chargeErr != nil {
+			if chargeErr := jm.chargeStripeOverage(ctx, tenantID, invoiceID, providerChargeDec, currency); chargeErr != nil {
 				jm.logger.WithError(chargeErr).WithFields(logging.Fields{
 					"tenant_id":  tenantID,
 					"invoice_id": invoiceID,
@@ -2825,57 +2887,24 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 		usageJSON = []byte("{}")
 	}
 
-	creditReferenceID := uuid.NewSHA1(
-		uuid.NameSpaceOID,
-		[]byte(fmt.Sprintf("invoice_credit:%s:%s", tenantID, periodStart.Format("2006-01-02"))),
-	).String()
-
 	// Apply prepaid credit, write invoice header + line items in one
 	// transaction so the credit and the invoice always commit together. If any
 	// step fails, the credit is not deducted from the prepaid balance.
 	//
-	// Idempotency: the credit is keyed on (tenant_id, period). On rerun the
-	// prior ledger row is the source of truth; a newly computed gross amount
-	// must NOT override an already-applied credit. We look up the prior row
-	// first; if present we preserve it. Only when there is no prior row do we
-	// deduct fresh.
+	// Credit is delta-based for the period. Reruns preserve prior credit, while
+	// larger drafts apply only the missing amount up to the current balance.
 	dueDate := periodEnd.AddDate(0, 0, 14)
 	var invoiceID string
 	var prepaidCreditDec decimal.Decimal
 	var netDec decimal.Decimal
 	hundred := decimal.NewFromInt(100)
 	err = withTx(ctx, jm.db, func(tx *sql.Tx) error {
-		if grossDec.IsPositive() {
-			var priorAmountCents int64
-			priorErr := tx.QueryRowContext(ctx, `
-				SELECT amount_cents FROM purser.balance_transactions
-				WHERE tenant_id = $1 AND reference_type = 'invoice_credit' AND reference_id = $2
-				ORDER BY created_at DESC LIMIT 1
-			`, tenantID, creditReferenceID).Scan(&priorAmountCents)
-			switch {
-			case priorErr == nil && priorAmountCents < 0:
-				// Prior credit exists; preserve it. Do not deduct again.
-				prepaidCreditDec = decimal.NewFromInt(-priorAmountCents).Div(hundred)
-			case errors.Is(priorErr, sql.ErrNoRows), priorErr == nil:
-				// No prior credit: deduct fresh. gross-to-cents uses decimal so we
-				// don't lose precision on binary-float edges. The helper caps
-				// against the row-locked balance and returns the actual amount.
-				grossCents := grossDec.Mul(hundred).Round(0).IntPart()
-				requestCents := grossCents
-				if requestCents > 0 {
-					creditDesc := fmt.Sprintf("Invoice credit: %s", periodStart.Format("2006-01"))
-					_, applied, _, txErr := jm.deductPrepaidBalanceForCreditTx(ctx, tx, tenantID, requestCents, creditDesc, &creditReferenceID)
-					if txErr != nil {
-						return fmt.Errorf("deduct prepaid credit: %w", txErr)
-					}
-					if applied > 0 {
-						prepaidCreditDec = decimal.NewFromInt(applied).Div(hundred)
-					}
-				}
-			default:
-				return fmt.Errorf("lookup prior invoice credit: %w", priorErr)
-			}
+		grossCents := grossDec.Mul(hundred).Round(0).IntPart()
+		appliedCreditCents, txErr := jm.applyInvoicePrepaidCreditTx(ctx, tx, tenantID, periodStart, grossCents)
+		if txErr != nil {
+			return txErr
 		}
+		prepaidCreditDec = decimal.NewFromInt(appliedCreditCents).Div(hundred)
 		totalDec := grossDec.Sub(prepaidCreditDec)
 		if totalDec.IsNegative() {
 			totalDec = decimal.Zero
@@ -2890,7 +2919,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 		meteredAmt := meteredDec.Round(2).String()
 		creditAmt := prepaidCreditDec.Round(2).String()
 
-		txErr := tx.QueryRowContext(ctx, `
+		txErr = tx.QueryRowContext(ctx, `
 				INSERT INTO purser.billing_invoices (
 					id, tenant_id, amount, currency, status, due_date,
 					base_amount, metered_amount, prepaid_credit_applied, usage_details,

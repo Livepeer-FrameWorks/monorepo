@@ -33,6 +33,9 @@ func TestRecordBalanceTransaction_DuplicateReferenceReturnsExisting(t *testing.T
 	referenceType := "usage_summary"
 
 	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO purser.prepaid_balances").
+		WithArgs(tenantID, currency).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("INSERT INTO purser.balance_transactions").
 		WithArgs(
 			sqlmock.AnyArg(), tenantID, amountCents, txType, description,
