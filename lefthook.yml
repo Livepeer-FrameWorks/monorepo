@@ -35,9 +35,15 @@ pre-commit:
       run: pnpm eslint --fix {staged_files} || true
       stage_fixed: true
 
+    demo-recordings:
+      run: scripts/ensure-demo-recordings.sh
+
     no-binaries:
       run: |
         for f in {staged_files}; do
+          case "$f" in
+            infrastructure/demo-recordings/*) continue ;;
+          esac
           if file "$f" | grep -qE 'ELF|Mach-O'; then
             echo "ERROR: Refusing to commit binary file: $f"
             exit 1

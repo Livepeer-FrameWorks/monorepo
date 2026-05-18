@@ -1171,8 +1171,7 @@ ON CONFLICT (artifact_hash) DO UPDATE SET
 -- status='pending' is honest: the sidecar startup reconciliation will upload
 -- these to S3 (in dev environments with S3 creds) and flip them to 'uploaded'.
 -- Until then the segments stay as recovery-source-only durability for
--- chapter finalization; chapter playback itself runs through the chapter's
--- canonical .mkv VOD artifact, not these per-segment objects.
+-- chapter finalization; they are not a playback surface.
 
 INSERT INTO foghorn.dvr_segments (
     artifact_hash, segment_name, sequence,
@@ -1182,7 +1181,8 @@ INSERT INTO foghorn.dvr_segments (
 (
     'fedcba98765432109876543210fedcba',
     'segment_0.ts', 0,
-    0, 10417, 10417,
+    1779105600000, 1779105610417,
+    10417,
     NULL,
     'dvr/5eed517e-ba5e-da7a-517e-ba5eda7a0001/demo_live_stream_001/fedcba98765432109876543210fedcba/segments/segment_0.ts',
     'pending', NOW() - INTERVAL '4 hours'
@@ -1190,7 +1190,8 @@ INSERT INTO foghorn.dvr_segments (
 (
     'fedcba98765432109876543210fedcba',
     'segment_1.ts', 1,
-    10417, 18000, 7583,
+    1779105610417, 1779105618000,
+    7583,
     NULL,
     'dvr/5eed517e-ba5e-da7a-517e-ba5eda7a0001/demo_live_stream_001/fedcba98765432109876543210fedcba/segments/segment_1.ts',
     'pending', NOW() - INTERVAL '4 hours'
@@ -1200,32 +1201,31 @@ ON CONFLICT (artifact_hash, segment_name) DO NOTHING;
 -- ============================================================================
 -- FOGHORN: DVR chapter window (virtual view over the segment ledger)
 -- ============================================================================
--- One explicit-range chapter spans the entire seeded recording. has_gaps
--- starts false; the startup reconciliation flips it to true (via
--- FlagChaptersOverlappingSegment) if any segment turns lost_local.
+-- One fixed-interval chapter spans the seeded recording. It is terminal
+-- rather than playable because the seed set has no finalized chapter MKV.
 
 -- Demo chapter row: a single fixed-interval chapter covering the
 -- recorded DVR window. chapter_id is the canonical
 -- BuildChapterID(artifact_hash, mode, intervalSeconds, start_ms, end_ms)
 -- so chapter-sweeper / direct lookups find this row instead of
 -- regenerating a sibling:
---   sha256("fedcba98765432109876543210fedcba|fixed_interval|3600|0|18000")[:32]
---   = e1a3b65cb1c1bd0e9395f568a3e91ce1
+--   sha256("fedcba98765432109876543210fedcba|fixed_interval|3600|1779105600000|1779105618000")[:32]
+--   = 34d74b7acd7ec8cf78f6cc8c9f031a8a
 --
--- State 'finalized' simulates the chapter finalization pipeline having
--- produced a playback artifact; in demo mode there is no actual MKV,
--- so playback_artifact_hash stays NULL.
+-- Demo seed data has no chapter MKV fixture, so the chapter must not
+-- claim to be finalized/playable.
 INSERT INTO foghorn.dvr_chapters (
     chapter_id, artifact_hash, mode, interval_seconds,
     start_ms, end_ms, is_current,
     state, playback_artifact_hash,
     segment_count, has_gaps, created_at
 ) VALUES (
-    'e1a3b65cb1c1bd0e9395f568a3e91ce1',
+    '34d74b7acd7ec8cf78f6cc8c9f031a8a',
     'fedcba98765432109876543210fedcba',
     'fixed_interval', 3600,
-    0, 18000, false,
-    'finalized', NULL,
+    1779105600000, 1779105618000,
+    false,
+    'failed_source_missing', NULL,
     2, false,
     NOW() - INTERVAL '4 hours'
 )
