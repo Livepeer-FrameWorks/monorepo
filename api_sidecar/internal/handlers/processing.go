@@ -262,6 +262,7 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 
 	// Extract source duration for progress calculation
 	sourceDurationMs := sourceDurationFromOutputs(outputs)
+	h.sendProgress(send, req.GetJobId(), 0, 0, sourceDurationMs)
 
 	// Single select loop: 4 signal sources, one goroutine, no races.
 	progressTicker := time.NewTicker(30 * time.Second)
@@ -409,6 +410,7 @@ loop:
 		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("output validation failed: %v", err), nil, "", 0)
 		return
 	}
+	h.sendProgress(send, req.GetJobId(), 100, sourceDurationMs, sourceDurationMs)
 
 	// Send result with output path so Foghorn can register the artifact
 	// in the warm cache immediately (same pattern as defrost completion).

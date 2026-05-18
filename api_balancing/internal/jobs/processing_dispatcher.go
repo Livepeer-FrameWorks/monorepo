@@ -315,8 +315,9 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	`, job.JobID, nodeID, reason)
 	if err != nil {
 		d.logger.WithError(err).WithField("job_id", job.JobID).Warn("Failed to update job routing metadata")
+		return
 	}
-	d.emitProcessingStarted(job)
+	d.emitProcessingStarted(job, nodeID)
 
 	d.logger.WithFields(logging.Fields{
 		"job_id":   job.JobID,
@@ -326,37 +327,50 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	}).Info("Dispatched processing job")
 }
 
-func (d *ProcessingDispatcher) emitProcessingStarted(job *processingJob) {
+func (d *ProcessingDispatcher) emitProcessingStarted(job *processingJob, nodeID string) {
 	if job == nil || !job.ArtifactHash.Valid {
 		return
 	}
+	artifactHash := job.ArtifactHash.String
+	tenantID := job.TenantID
+	progress := uint32(0)
+	vodProgress := int32(0)
+
 	switch job.ArtifactType.String {
 	case "clip":
 		data := &pb.ClipLifecycleData{
 			Stage:           pb.ClipLifecycleData_STAGE_PROGRESS,
-			ClipHash:        job.ArtifactHash.String,
-			ProgressPercent: func() *uint32 { p := uint32(0); return &p }(),
+			ClipHash:        artifactHash,
+			ProgressPercent: &progress,
 		}
-		if job.TenantID != "" {
-			data.TenantId = &job.TenantID
+		if tenantID != "" {
+			data.TenantId = &tenantID
 		}
 		if job.StreamID.Valid && job.StreamID.String != "" {
-			data.StreamId = &job.StreamID.String
+			streamID := job.StreamID.String
+			data.StreamId = &streamID
 		}
 		if job.StreamInternal.Valid && job.StreamInternal.String != "" {
-			data.StreamInternalName = &job.StreamInternal.String
+			streamInternalName := job.StreamInternal.String
+			data.StreamInternalName = &streamInternalName
 		}
-		go artifactoutbox.EnqueueClipLifecycleLogged(data)
-	default:
+		if nodeID != "" {
+			data.NodeId = &nodeID
+		}
+		artifactoutbox.EnqueueClipLifecycleLogged(data)
+	case "vod":
 		data := &pb.VodLifecycleData{
 			Status:      pb.VodLifecycleData_STATUS_PROCESSING,
-			VodHash:     job.ArtifactHash.String,
-			ProgressPct: func() *int32 { p := int32(0); return &p }(),
+			VodHash:     artifactHash,
+			ProgressPct: &vodProgress,
 		}
-		if job.TenantID != "" {
-			data.TenantId = &job.TenantID
+		if tenantID != "" {
+			data.TenantId = &tenantID
 		}
-		go artifactoutbox.EnqueueVodLifecycleLogged(data)
+		if nodeID != "" {
+			data.NodeId = &nodeID
+		}
+		artifactoutbox.EnqueueVodLifecycleLogged(data)
 	}
 }
 
@@ -458,14 +472,24 @@ func (d *ProcessingDispatcher) recoverStale() {
 
 	// Fail jobs that exceeded max retries and reconcile their artifacts
 	rows, err := d.db.QueryContext(ctx, `
-		UPDATE foghorn.processing_jobs
-		SET status = 'failed',
-		    error_message = 'max retries exceeded',
-		    updated_at = NOW()
-		WHERE status IN ('dispatched', 'processing')
-		  AND updated_at < $1
-		  AND retry_count >= $2
-		RETURNING job_id, artifact_hash
+		WITH failed AS (
+			UPDATE foghorn.processing_jobs
+			SET status = 'failed',
+			    error_message = 'max retries exceeded',
+			    updated_at = NOW()
+			WHERE status IN ('dispatched', 'processing')
+			  AND updated_at < $1
+			  AND retry_count >= $2
+			RETURNING job_id, artifact_hash, tenant_id
+		)
+		SELECT f.job_id,
+		       f.artifact_hash,
+		       COALESCE(a.artifact_type, ''),
+		       COALESCE(a.tenant_id::text, f.tenant_id::text, ''),
+		       COALESCE(a.stream_id::text, ''),
+		       COALESCE(a.stream_internal_name, '')
+		  FROM failed f
+		  LEFT JOIN foghorn.artifacts a ON f.artifact_hash = a.artifact_hash
 	`, ttlCutoff, d.maxRetries)
 	if err != nil {
 		d.logger.WithError(err).Warn("Failed to mark exhausted processing jobs as failed")
@@ -475,17 +499,49 @@ func (d *ProcessingDispatcher) recoverStale() {
 	for rows.Next() {
 		var jobID string
 		var artifactHash sql.NullString
-		if scanErr := rows.Scan(&jobID, &artifactHash); scanErr != nil {
+		var artifactType, tenantID, streamID, streamInternalName string
+		if scanErr := rows.Scan(&jobID, &artifactHash, &artifactType, &tenantID, &streamID, &streamInternalName); scanErr != nil {
 			continue
 		}
 		d.logger.WithFields(logging.Fields{
 			"job_id":        jobID,
 			"artifact_hash": artifactHash.String,
 		}).Warn("Processing job exhausted max retries")
+		if artifactHash.Valid && artifactType == "clip" {
+			d.failClipArtifact(ctx, artifactHash.String, tenantID, streamID, streamInternalName, "max retries exceeded")
+		}
 		if d.onJobExhausted != nil && artifactHash.Valid {
 			d.onJobExhausted(ctx, jobID, artifactHash.String)
 		}
 	}
+}
+
+func (d *ProcessingDispatcher) failClipArtifact(ctx context.Context, artifactHash, tenantID, streamID, streamInternalName, errorMsg string) {
+	if _, err := d.db.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		   SET status = 'failed',
+		       error_message = $2,
+		       updated_at = NOW()
+		 WHERE artifact_hash = $1
+	`, artifactHash, errorMsg); err != nil {
+		d.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to mark exhausted clip artifact failed")
+	}
+
+	data := &pb.ClipLifecycleData{
+		Stage:    pb.ClipLifecycleData_STAGE_FAILED,
+		ClipHash: artifactHash,
+		Error:    &errorMsg,
+	}
+	if tenantID != "" {
+		data.TenantId = &tenantID
+	}
+	if streamID != "" {
+		data.StreamId = &streamID
+	}
+	if streamInternalName != "" {
+		data.StreamInternalName = &streamInternalName
+	}
+	artifactoutbox.EnqueueClipLifecycleLogged(data)
 }
 
 // InsertProcessingJob creates a new processing job. Exported for use by vod_pipeline.
