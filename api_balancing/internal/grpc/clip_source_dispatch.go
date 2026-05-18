@@ -151,6 +151,7 @@ const liveSHMWindowMs = 120 * 1000 // 120s — matches MistServer's default live
 type clipSourceDecision struct {
 	kind                pb.ClipPullRequest_SourceKind
 	streamName          string // dvr+<internal_name> for DVR_ROLLING, vod+<artifact_hash> for CHAPTER
+	sourceNodeID        string // recording/source node for live-style pulls when known
 	dvrHash             string // populated for DVR_ROLLING
 	chapterArtifactHash string // populated for CHAPTER
 }
@@ -194,7 +195,7 @@ func (s *FoghornGRPCServer) pickClipSource(ctx context.Context, tenantID, stream
 	// No covering chapter: fall back to rolling DVR, but only when an
 	// actively-recording DVR covers the range. The rolling stream
 	// (dvr+<internal_name>) is only resolvable while ingest is running.
-	dvrHash, dvrInternalName, dvrStartedAtMs, dvrStatus, err := s.findRecordingDVR(ctx, tenantID, streamInternalName)
+	dvrHash, dvrInternalName, dvrStartedAtMs, dvrStatus, dvrRecordingNode, err := s.findRecordingDVR(ctx, tenantID, streamInternalName)
 	if err != nil {
 		return clipSourceDecision{}, err
 	}
@@ -215,9 +216,10 @@ func (s *FoghornGRPCServer) pickClipSource(ctx context.Context, tenantID, stream
 		return clipSourceDecision{}, fmt.Errorf("range is older than the rolling DVR window and no covering finalized chapter exists yet")
 	}
 	return clipSourceDecision{
-		kind:       pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING,
-		streamName: "dvr+" + dvrInternalName,
-		dvrHash:    dvrHash,
+		kind:         pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING,
+		streamName:   "dvr+" + dvrInternalName,
+		sourceNodeID: dvrRecordingNode,
+		dvrHash:      dvrHash,
 	}, nil
 }
 
@@ -315,12 +317,12 @@ func isActiveDVRStatusString(s string) bool {
 // stream plus its current status. Caller decides whether to use it
 // based on the status — only 'starting'/'recording' should serve as
 // a DVR_ROLLING clip source.
-func (s *FoghornGRPCServer) findRecordingDVR(ctx context.Context, tenantID, streamInternalName string) (dvrHash, dvrInternalName string, startedAtMs int64, status string, err error) {
+func (s *FoghornGRPCServer) findRecordingDVR(ctx context.Context, tenantID, streamInternalName string) (dvrHash, dvrInternalName string, startedAtMs int64, status, recordingNodeID string, err error) {
 	if s.db == nil {
-		return "", "", 0, "", fmt.Errorf("db not configured")
+		return "", "", 0, "", "", fmt.Errorf("db not configured")
 	}
 	if tenantID == "" {
-		return "", "", 0, "", fmt.Errorf("tenant_id is required")
+		return "", "", 0, "", "", fmt.Errorf("tenant_id is required")
 	}
 	var hash, internalName, st sql.NullString
 	var started sql.NullInt64
@@ -338,9 +340,9 @@ func (s *FoghornGRPCServer) findRecordingDVR(ctx context.Context, tenantID, stre
 	`, streamInternalName, tenantID)
 	if scanErr := row.Scan(&hash, &internalName, &started, &st); scanErr != nil {
 		if errors.Is(scanErr, sql.ErrNoRows) {
-			return "", "", 0, "", nil
+			return "", "", 0, "", "", nil
 		}
-		return "", "", 0, "", scanErr
+		return "", "", 0, "", "", scanErr
 	}
 	if hash.Valid {
 		dvrHash = hash.String
@@ -354,7 +356,41 @@ func (s *FoghornGRPCServer) findRecordingDVR(ctx context.Context, tenantID, stre
 	if st.Valid {
 		status = st.String
 	}
-	return dvrHash, dvrInternalName, startedAtMs, status, nil
+	if !isActiveDVRStatusString(status) || dvrHash == "" {
+		return dvrHash, dvrInternalName, startedAtMs, status, "", nil
+	}
+
+	rows, rowsErr := s.db.QueryContext(ctx, `
+		SELECT node_id
+		  FROM foghorn.artifact_nodes
+		 WHERE artifact_hash = $1
+		   AND is_orphaned = false
+	`, dvrHash)
+	if rowsErr != nil {
+		return "", "", 0, "", "", rowsErr
+	}
+	defer rows.Close()
+	var candidates []string
+	for rows.Next() {
+		var nodeID string
+		if scanErr := rows.Scan(&nodeID); scanErr != nil {
+			return "", "", 0, "", "", scanErr
+		}
+		if nodeID != "" {
+			candidates = append(candidates, nodeID)
+		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return "", "", 0, "", "", rowsErr
+	}
+	switch len(candidates) {
+	case 0:
+		return dvrHash, dvrInternalName, startedAtMs, status, "", nil
+	case 1:
+		return dvrHash, dvrInternalName, startedAtMs, status, candidates[0], nil
+	default:
+		return "", "", 0, "", "", fmt.Errorf("active DVR %q has %d non-orphaned artifact nodes; recording origin ambiguous", dvrHash, len(candidates))
+	}
 }
 
 // chapterArtifactCoveringStream returns the playback_artifact_hash of

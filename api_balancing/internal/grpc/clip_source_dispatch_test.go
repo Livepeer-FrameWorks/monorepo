@@ -73,6 +73,9 @@ func TestPickClipSource_DVRRollingWhenPastShmAndActive(t *testing.T) {
 		WithArgs("stream-1", testTenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "internal_name", "started", "status"}).
 			AddRow("dvr-h", "dvr-internal", nowMs-3_600_000, "recording"))
+	mock.ExpectQuery(`SELECT node_id`).
+		WithArgs("dvr-h").
+		WillReturnRows(sqlmock.NewRows([]string{"node_id"}).AddRow("recording-node-1"))
 	// Rolling manifest scope: window length, then continuity sum over the segment ledger.
 	mock.ExpectQuery(`SELECT dvr_window_seconds FROM foghorn.artifacts`).
 		WithArgs("dvr-h").
@@ -91,6 +94,9 @@ func TestPickClipSource_DVRRollingWhenPastShmAndActive(t *testing.T) {
 	}
 	if dec.streamName != "dvr+dvr-internal" {
 		t.Fatalf("expected dvr+ stream, got %q", dec.streamName)
+	}
+	if dec.sourceNodeID != "recording-node-1" {
+		t.Fatalf("expected recording node, got %q", dec.sourceNodeID)
 	}
 }
 
@@ -152,6 +158,9 @@ func TestPickClipSource_RejectsRangeBeforeDVRStart(t *testing.T) {
 		WithArgs("stream-1", testTenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "internal_name", "started", "status"}).
 			AddRow("dvr-h", "dvr-internal", nowMs-5_400_000, "recording"))
+	mock.ExpectQuery(`SELECT node_id`).
+		WithArgs("dvr-h").
+		WillReturnRows(sqlmock.NewRows([]string{"node_id"}).AddRow("recording-node-1"))
 
 	_, err := srv.pickClipSource(context.Background(), testTenantID, "stream-1", startMs, endMs)
 	if err == nil || !strings.Contains(err.Error(), "before DVR recording") {

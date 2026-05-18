@@ -849,9 +849,12 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		return nil, status.Errorf(codes.FailedPrecondition, "clip source dispatch: %v", dispatchErr)
 	}
 
-	// Ingest selection is LIVE-only. Chapter and rolling-DVR sources
-	// pull from storage/relay, so the SourceBaseUrl stays empty and
-	// Helmsman defaults to its local Mist for VOD-style sources.
+	// Live-style sources are harvested from their recording node when
+	// that differs from the clip output node. Same-node pulls use the
+	// local Mist configured beside Helmsman; remote pulls use the source
+	// node's public /view surface.
+	var sourceHost string
+	var sourceNodeID string
 	var ingestHost string
 	if dispatch.kind == pb.ClipPullRequest_SOURCE_KIND_LIVE {
 		ictx := context.WithValue(ctx, ctxkeys.KeyCapability, "ingest")
@@ -860,12 +863,23 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 			return nil, status.Errorf(codes.Unavailable, "no ingest node available for live clip: %v", ingestErr)
 		}
 		ingestHost = host
+		sourceHost = host
+		sourceNodeID = s.lb.GetNodeIDByHost(host)
+	} else if dispatch.kind == pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING {
+		sourceNodeID = dispatch.sourceNodeID
+		if sourceNodeID == "" {
+			return nil, status.Error(codes.Unavailable, "active DVR recording node is not known")
+		}
+		host, hostErr := s.lb.GetNodeByID(sourceNodeID)
+		if hostErr != nil {
+			return nil, status.Errorf(codes.Unavailable, "active DVR recording node unavailable: %v", hostErr)
+		}
+		sourceHost = host
 	}
 	var sourceBaseURL string
-	if ingestHost != "" {
-		ingestNodeID := s.lb.GetNodeIDByHost(ingestHost)
-		if ingestNodeID != "" && ingestNodeID != storageNodeID {
-			sourceBaseURL = control.DeriveMistHTTPBase(ingestHost)
+	if sourceHost != "" {
+		if sourceNodeID != "" && sourceNodeID != storageNodeID {
+			sourceBaseURL = control.DeriveMistHTTPBase(sourceHost)
 		}
 	}
 
