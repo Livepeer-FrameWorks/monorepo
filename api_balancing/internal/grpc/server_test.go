@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"frameworks/api_balancing/internal/storage"
 	"frameworks/api_balancing/internal/triggers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -34,6 +35,22 @@ func (m *mockCacheInvalidator) GetBillingStatus(ctx context.Context, internalNam
 
 func (m *mockCacheInvalidator) GetClusterPeers(internalName, tenantID string) []*pb.TenantClusterPeer {
 	return nil
+}
+
+func TestResolveVodStorageClusterUsesConfiguredLocalCluster(t *testing.T) {
+	server := NewFoghornGRPCServer(nil, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
+	server.SetClusterID("central-primary")
+	server.SetStorageResolverFactory(func(ctx context.Context, tenantID string) *storage.ClusterResolver {
+		return &storage.ClusterResolver{
+			LocalClusterID:       "central-primary",
+			LocalS3ClientPresent: true,
+		}
+	})
+
+	cluster, mode := server.resolveVodStorageCluster(context.Background(), "tenant-1", "demo-media")
+	if cluster != "central-primary" || mode != storage.StorageMintLocal {
+		t.Fatalf("resolveVodStorageCluster() = (%q, %s), want (central-primary, local)", cluster, mode)
+	}
 }
 
 func TestInvalidateTenantCacheRequiresTenantID(t *testing.T) {

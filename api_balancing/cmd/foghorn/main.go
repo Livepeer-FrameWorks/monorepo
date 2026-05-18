@@ -754,6 +754,7 @@ func main() {
 
 	// Create Foghorn control plane gRPC server (for Commodore: clips, DVR, viewer resolution, VOD uploads)
 	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, geoipCache, decklogClient, s3ForGRPC, purserClient)
+	foghornServer.SetClusterID(foghornCfg.ClusterID)
 	if qmClient != nil {
 		foghornServer.SetQuartermasterClient(qmClient)
 	}

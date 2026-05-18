@@ -67,37 +67,32 @@ func (m StorageMintMode) String() string {
 }
 
 // ResolverInput is the cluster context drawn from the stream / artifact / tenant
-// row. The resolver applies the candidates in [Origin, Official, Legacy] order;
-// empty fields are skipped, duplicates are deduped.
+// row. The resolver applies request-owned candidates first, then its configured
+// LocalClusterID. Empty fields are skipped, duplicates are deduped.
 type ResolverInput struct {
 	OriginClusterID   string
 	OfficialClusterID string
-	LegacyClusterID   string // typically the Foghorn process p.clusterID
 }
 
 // ClusterResolver picks the storage cluster that should own a write/read for a
 // given stream/artifact and reports whether this Foghorn can mint URLs locally
 // or must delegate via federation.
 //
-// Resolution order, applied to [Origin, Official, Legacy]:
+// Resolution order, applied to [Origin, Official, LocalClusterID]:
 //
 //  1. If AdvertisedBacking returns a backing for the candidate AND the candidate
 //     is locally served AND LocalS3Backing matches the advertised backing on
 //     the full identity tuple → StorageMintLocal.
 //  2. If AdvertisedBacking returns a backing but local conditions don't hold →
 //     StorageMintViaFederation.
-//  3. If AdvertisedBacking returns nothing AND the candidate is the Legacy slot
-//     AND this Foghorn has a configured S3 client → StorageMintLocal (legacy
-//     fallback for deployments with STORAGE_S3_BUCKET configured but no
-//     Quartermaster S3 metadata yet).
+//  3. If the configured LocalClusterID has no advertised backing AND this
+//     Foghorn has a configured S3 client → StorageMintLocal.
 //  4. Otherwise: try the next candidate.
 //
 // If no candidate clears the chain, returns ("", StorageUnavailable) and
 // increments the rejected counter with reason="service_unavailable".
 type ClusterResolver struct {
-	// LocalClusterID is this Foghorn process's p.clusterID. Used only to gate
-	// the legacy-fallback step (rule 3); it is not implicitly added as a
-	// candidate.
+	// LocalClusterID is this Foghorn process's configured cluster identity.
 	LocalClusterID string
 
 	// LocalClusterServed reports whether this Foghorn pool serves the given
@@ -125,13 +120,14 @@ type ClusterResolver struct {
 // Resolve runs the chain. The returned clusterID is empty only when mode is
 // StorageUnavailable.
 func (r *ClusterResolver) Resolve(in ResolverInput) (clusterID string, mode StorageMintMode) {
+	localClusterID := strings.TrimSpace(r.LocalClusterID)
 	candidates := []string{
 		strings.TrimSpace(in.OriginClusterID),
 		strings.TrimSpace(in.OfficialClusterID),
-		strings.TrimSpace(in.LegacyClusterID),
+		localClusterID,
 	}
 
-	// Pass 1: advertised-backing path across all slots, deduped.
+	// Pass 1: advertised-backing path across all candidates, deduped.
 	seen := map[string]struct{}{}
 	for _, id := range candidates {
 		if id == "" {
@@ -155,16 +151,8 @@ func (r *ClusterResolver) Resolve(in ResolverInput) (clusterID string, mode Stor
 		return id, StorageMintViaFederation
 	}
 
-	// Pass 2: legacy local fallback. Only valid when the Legacy slot is
-	// populated, equals this process's LocalClusterID, and a local S3 client
-	// is present. Preserves single-cluster deployments where Foghorn has
-	// STORAGE_S3_BUCKET configured but Quartermaster doesn't yet advertise S3
-	// metadata for the cluster. Origin/Official slots never legacy-fallback —
-	// they don't carry the "this is the Foghorn's own cluster" guarantee that
-	// the legacy slot does.
-	legacy := strings.TrimSpace(in.LegacyClusterID)
-	if legacy != "" && legacy == r.LocalClusterID && r.LocalS3ClientPresent {
-		return legacy, StorageMintLocal
+	if localClusterID != "" && r.LocalS3ClientPresent {
+		return localClusterID, StorageMintLocal
 	}
 
 	if r.Metrics != nil {
@@ -172,9 +160,9 @@ func (r *ClusterResolver) Resolve(in ResolverInput) (clusterID string, mode Stor
 	}
 	if r.Logger != nil {
 		r.Logger.WithFields(logging.Fields{
-			"origin":   in.OriginClusterID,
-			"official": in.OfficialClusterID,
-			"legacy":   in.LegacyClusterID,
+			"origin":        in.OriginClusterID,
+			"official":      in.OfficialClusterID,
+			"local_cluster": localClusterID,
 		}).Warn("storage resolver: no candidate cluster has usable backing")
 	}
 	return "", StorageUnavailable

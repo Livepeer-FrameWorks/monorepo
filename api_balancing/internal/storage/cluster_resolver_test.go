@@ -123,7 +123,6 @@ func TestClusterResolver_OriginAdvertisedAndLocallyMintable_PicksOriginLocal(t *
 	cluster, mode := r.Resolve(ResolverInput{
 		OriginClusterID:   "platform-eu",
 		OfficialClusterID: "platform-eu",
-		LegacyClusterID:   "platform-eu",
 	})
 	if cluster != "platform-eu" || mode != StorageMintLocal {
 		t.Fatalf("got (%q, %s); want (platform-eu, local)", cluster, mode)
@@ -147,7 +146,6 @@ func TestClusterResolver_OriginAdvertisedButBucketDiffers_DelegatesNotLocalMint(
 
 	cluster, mode := r.Resolve(ResolverInput{
 		OriginClusterID: "selfhost-eu",
-		LegacyClusterID: "platform-us",
 	})
 	if cluster != "selfhost-eu" || mode != StorageMintViaFederation {
 		t.Fatalf("got (%q, %s); want (selfhost-eu, federation) — same bucket name across endpoints must NOT pass local-mint", cluster, mode)
@@ -167,7 +165,6 @@ func TestClusterResolver_OriginAdvertisedButNotServedHere_Delegates(t *testing.T
 
 	cluster, mode := r.Resolve(ResolverInput{
 		OriginClusterID: "selfhost-eu",
-		LegacyClusterID: "platform-us",
 	})
 	if cluster != "selfhost-eu" || mode != StorageMintViaFederation {
 		t.Fatalf("got (%q, %s); want (selfhost-eu, federation) — not-served clusters must delegate", cluster, mode)
@@ -189,17 +186,13 @@ func TestClusterResolver_OriginNotAdvertised_FallsBackToOfficialAdvertised(t *te
 	cluster, mode := r.Resolve(ResolverInput{
 		OriginClusterID:   "selfhost-tenant",
 		OfficialClusterID: "platform-eu",
-		LegacyClusterID:   "platform-eu",
 	})
 	if cluster != "platform-eu" || mode != StorageMintLocal {
 		t.Fatalf("got (%q, %s); want (platform-eu, local) — origin lacks backing, official wins", cluster, mode)
 	}
 }
 
-func TestClusterResolver_NeitherOriginNorOfficialAdvertised_LegacyLocalFallback(t *testing.T) {
-	// Existing single-cluster deployment: Foghorn has STORAGE_S3_BUCKET set
-	// but Quartermaster doesn't yet advertise S3 metadata for this cluster.
-	// The Legacy slot (== p.clusterID) must allow local mint.
+func TestClusterResolver_NeitherOriginNorOfficialAdvertised_UsesConfiguredLocalCluster(t *testing.T) {
 	f := &resolverFixture{
 		localCluster:   "central-primary",
 		servedClusters: map[string]bool{"central-primary": true},
@@ -212,41 +205,27 @@ func TestClusterResolver_NeitherOriginNorOfficialAdvertised_LegacyLocalFallback(
 	cluster, mode := r.Resolve(ResolverInput{
 		OriginClusterID:   "central-primary",
 		OfficialClusterID: "central-primary",
-		LegacyClusterID:   "central-primary",
 	})
 	if cluster != "central-primary" || mode != StorageMintLocal {
-		t.Fatalf("got (%q, %s); want (central-primary, local) — legacy slot must fall back when only local Foghorn knows it has S3", cluster, mode)
+		t.Fatalf("got (%q, %s); want (central-primary, local)", cluster, mode)
 	}
 }
 
-func TestClusterResolver_LegacyFallbackOnlyValidForLocalCluster(t *testing.T) {
-	// If the legacy slot is some OTHER cluster (i.e. not p.clusterID) and that
-	// cluster doesn't advertise, we must NOT legacy-mint — the local Foghorn's
-	// S3 client almost certainly belongs to a different bucket. Resolver
-	// must continue past and emit unavailable.
-	counter := newRejectedCounter(t)
+func TestClusterResolver_UnadvertisedOriginUsesConfiguredLocalCluster(t *testing.T) {
 	f := &resolverFixture{
-		localCluster:    "platform-us",
-		servedClusters:  map[string]bool{"platform-us": true},
-		localS3Backing:  S3Backing{Bucket: "frameworks", Region: "us-east-1"},
-		localS3Present:  true,
-		advertised:      map[string]S3Backing{}, // nothing advertises
-		rejectedCounter: counter,
+		localCluster:   "platform-us",
+		servedClusters: map[string]bool{"platform-us": true},
+		localS3Backing: S3Backing{Bucket: "frameworks", Region: "us-east-1"},
+		localS3Present: true,
+		advertised:     map[string]S3Backing{},
 	}
 	r := f.build()
 
 	cluster, mode := r.Resolve(ResolverInput{
 		OriginClusterID: "stale-cluster",
-		LegacyClusterID: "stale-cluster", // NOT == localCluster, so legacy path is invalid
 	})
-	if mode != StorageUnavailable {
-		t.Fatalf("got (%q, %s); want (\"\", unavailable) — legacy fallback must require legacy == LocalClusterID", cluster, mode)
-	}
-	if cluster != "" {
-		t.Fatalf("unavailable result must clear cluster id, got %q", cluster)
-	}
-	if got := counterValue(t, counter.WithLabelValues("service_unavailable", "storage")); got != 1 {
-		t.Fatalf("expected service_unavailable counter to increment once, got %v", got)
+	if cluster != "platform-us" || mode != StorageMintLocal {
+		t.Fatalf("got (%q, %s); want (platform-us, local)", cluster, mode)
 	}
 }
 
@@ -265,7 +244,7 @@ func TestClusterResolver_NoCandidates_Unavailable(t *testing.T) {
 }
 
 func TestClusterResolver_DedupesRepeatedCandidate(t *testing.T) {
-	// origin == official == legacy == "central-primary"; advertised lookup
+	// origin == official == local == "central-primary"; advertised lookup
 	// must be invoked at most once per distinct cluster id.
 	calls := map[string]int{}
 	r := &ClusterResolver{
@@ -282,7 +261,6 @@ func TestClusterResolver_DedupesRepeatedCandidate(t *testing.T) {
 	cluster, mode := r.Resolve(ResolverInput{
 		OriginClusterID:   "central-primary",
 		OfficialClusterID: "central-primary",
-		LegacyClusterID:   "central-primary",
 	})
 	if cluster != "central-primary" || mode != StorageMintLocal {
 		t.Fatalf("got (%q, %s); want (central-primary, local)", cluster, mode)
@@ -303,10 +281,7 @@ func TestClusterResolver_SkipsEmptyCandidates(t *testing.T) {
 	}
 	r := f.build()
 
-	// origin and official empty; only legacy populated.
-	cluster, mode := r.Resolve(ResolverInput{
-		LegacyClusterID: "central-primary",
-	})
+	cluster, mode := r.Resolve(ResolverInput{})
 	if cluster != "central-primary" || mode != StorageMintLocal {
 		t.Fatalf("got (%q, %s); want (central-primary, local)", cluster, mode)
 	}

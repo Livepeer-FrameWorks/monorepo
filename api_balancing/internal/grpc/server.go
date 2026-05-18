@@ -226,6 +226,11 @@ func (s *FoghornGRPCServer) SetRemoteEdgeCache(cache *federation.RemoteEdgeCache
 	s.clusterID = clusterID
 }
 
+// SetClusterID records this Foghorn's local cluster for storage placement.
+func (s *FoghornGRPCServer) SetClusterID(clusterID string) {
+	s.clusterID = clusterID
+}
+
 // SetFederationClient enables cross-cluster QueryStream/NotifyOriginPull RPCs.
 func (s *FoghornGRPCServer) SetFederationClient(fc *federation.FederationClient) {
 	s.federationClient = fc
@@ -273,7 +278,6 @@ func (s *FoghornGRPCServer) resolveVodStorageCluster(ctx context.Context, tenant
 	return resolver.Resolve(storage.ResolverInput{
 		OriginClusterID:   ingestClusterID,
 		OfficialClusterID: officialCluster,
-		LegacyClusterID:   s.clusterID,
 	})
 }
 

@@ -3228,7 +3228,6 @@ func resolveFreezeStorageCluster(ctx context.Context, tenantID, originClusterID 
 	return resolver.Resolve(storage.ResolverInput{
 		OriginClusterID:   originClusterID,
 		OfficialClusterID: resolveOfficialClusterID(ctx, tenantID),
-		LegacyClusterID:   localClusterID,
 	})
 }
 
@@ -3248,7 +3247,6 @@ func resolveThumbnailStorageCluster(ctx context.Context, tenantID, originCluster
 	return resolver.Resolve(storage.ResolverInput{
 		OriginClusterID:   originClusterID,
 		OfficialClusterID: resolveOfficialClusterID(ctx, tenantID),
-		LegacyClusterID:   localClusterID,
 	})
 }
 

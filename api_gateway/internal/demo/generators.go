@@ -4860,56 +4860,9 @@ func GenerateStreamingConfig() *model.StreamingConfig {
 	}
 }
 
-// GeneratePushTargets creates demo push targets for a stream
+// GeneratePushTargets returns no external push targets in demo mode.
 func GeneratePushTargets(streamID string) []*pb.PushTarget {
-	now := time.Now()
-
-	targets := []*pb.PushTarget{
-		{
-			Id:        "00000000-0000-0000-0000-00000000a001",
-			StreamId:  streamID,
-			Platform:  "twitch",
-			Name:      "My Twitch Channel",
-			TargetUri: "rtmp://live.twitch.tv/app/live_****xxxx",
-			IsEnabled: true,
-			Status:    "idle",
-			CreatedAt: timestamppb.New(now.Add(-48 * time.Hour)),
-			UpdatedAt: timestamppb.New(now.Add(-48 * time.Hour)),
-		},
-		{
-			Id:        "00000000-0000-0000-0000-00000000a002",
-			StreamId:  streamID,
-			Platform:  "youtube",
-			Name:      "YouTube Live",
-			TargetUri: "rtmp://a.rtmp.youtube.com/live2/****-****-****-****",
-			IsEnabled: true,
-			Status:    "idle",
-			CreatedAt: timestamppb.New(now.Add(-24 * time.Hour)),
-			UpdatedAt: timestamppb.New(now.Add(-24 * time.Hour)),
-		},
-		{
-			Id:        "00000000-0000-0000-0000-00000000a003",
-			StreamId:  streamID,
-			Platform:  "kick",
-			Name:      "Kick Stream",
-			TargetUri: "rtmps://fa723fc1b171.global-contribute.live-video.net/app/****xxxx",
-			IsEnabled: false,
-			Status:    "idle",
-			CreatedAt: timestamppb.New(now.Add(-12 * time.Hour)),
-			UpdatedAt: timestamppb.New(now.Add(-12 * time.Hour)),
-		},
-	}
-
-	// For the live demo stream, show active push status
-	if streamID == "00000000-0000-0000-0000-000000000001" {
-		targets[0].Status = "pushing"
-		lastPushed := now.Add(-30 * time.Minute)
-		targets[0].LastPushedAt = timestamppb.New(lastPushed)
-		targets[1].Status = "pushing"
-		targets[1].LastPushedAt = timestamppb.New(lastPushed)
-	}
-
-	return targets
+	return []*pb.PushTarget{}
 }
 
 func int32Ptr(v int32) *int32                                  { return &v }

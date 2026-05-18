@@ -364,10 +364,17 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 		}
 	}
 
-	lb.logger.WithFields(logging.Fields{
+	fields := logging.Fields{
 		"stream": streamName, "num_nodes": len(result), "winner": result[0].Host,
-		"score": result[0].Score, "lat": lat, "lon": lon,
-	}).Info("Load balancing decision")
+		"score": result[0].Score,
+	}
+	if !math.IsNaN(lat) && !math.IsInf(lat, 0) {
+		fields["lat"] = lat
+	}
+	if !math.IsNaN(lon) && !math.IsInf(lon, 0) {
+		fields["lon"] = lon
+	}
+	lb.logger.WithFields(fields).Info("Load balancing decision")
 
 	return result, nil
 }
