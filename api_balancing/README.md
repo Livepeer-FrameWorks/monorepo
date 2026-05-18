@@ -28,7 +28,7 @@ Routes streaming traffic to the best available media nodes based on:
 - Maintains persistent gRPC streams with all connected Helmsman instances
 - Receives configured MistServer triggers and synthetic lifecycle/storage/processing events forwarded by Helmsman
 - Sends responses for blocking triggers (stream key validation, viewer auth)
-- Dispatches commands such as `ConfigSeed`, `ClipPullRequest`, `DVRStartRequest`, `DVRStopRequest`, `DVRDeleteRequest`, `FreezeRequest`, `DefrostRequest`, session-stop, push-target, thumbnail-upload, and processing-job requests
+- Dispatches commands such as `ConfigSeed`, `DVRStartRequest`, `DVRStopRequest`, `DVRDeleteRequest`, `FreezeRequest`, `DefrostRequest`, session-stop, push-target, thumbnail-upload, and processing-job requests
 - Tracks node health, capabilities, and stream state
 
 ### Control Plane (Commodore, Quartermaster)

@@ -1793,6 +1793,9 @@ func handleClipDone(done *pb.ClipDone, nodeID string, logger logging.Logger) {
 	}).Info("Clip processing completed")
 
 	_ = state.DefaultManager().ApplyClipDone(streamCtx(), requestID, status, filePath, sizeBytes, errorMsg, nodeID)
+	if status == "success" {
+		projectArtifactSizeByRequestID(streamCtx(), requestID, int64(sizeBytes), logger)
+	}
 }
 
 func handleArtifactDeleted(deleted *pb.ArtifactDeleted, nodeID string, logger logging.Logger) {
@@ -1889,6 +1892,7 @@ func processDVRStopped(stopped *pb.DVRStopped, storageNodeID string, logger logg
 		if applyErr := state.DefaultManager().ApplyDVRStopped(streamCtx(), dvrHash, final.ArtifactStatus, int64(durationSeconds), uint64(sizeBytes), final.ManifestPath, errorMsg, storageNodeID); applyErr != nil {
 			logger.WithError(applyErr).WithField("dvr_hash", dvrHash).Warn("ApplyDVRStopped after FinalizeDVR failed")
 		}
+		projectArtifactSizeToCommodore(streamCtx(), dvrHash, int64(sizeBytes), logger)
 		if dvrStoppedHandler != nil {
 			go dvrStoppedHandler(dvrHash, final.ArtifactStatus, storageNodeID, uint64(sizeBytes), final.ManifestPath, errorMsg)
 		}
@@ -4413,12 +4417,12 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 		// Register processed output in warm cache + in-memory state so vod+
 		// STREAM_SOURCE resolves immediately (same pattern as defrost completion).
 		if outputPath := result.GetOutputPath(); outputPath != "" {
-			var artifactHash, oldS3URL, oldFormat string
+			var artifactHash, artifactType, tenantID, oldS3URL, oldFormat string
 			_ = db.QueryRowContext(ctx, `
-				SELECT artifact_hash, COALESCE(s3_url,''), COALESCE(format,'')
+				SELECT a.artifact_hash, COALESCE(a.artifact_type,''), COALESCE(a.tenant_id::text,''), COALESCE(a.s3_url,''), COALESCE(a.format,'')
 				FROM foghorn.processing_jobs pj
 				JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
-				WHERE pj.job_id = $1`, result.GetJobId()).Scan(&artifactHash, &oldS3URL, &oldFormat)
+				WHERE pj.job_id = $1`, result.GetJobId()).Scan(&artifactHash, &artifactType, &tenantID, &oldS3URL, &oldFormat)
 			if artifactHash != "" {
 				sizeBytes := result.GetOutputSizeBytes()
 				newFormat := strings.TrimPrefix(filepath.Ext(outputPath), ".")
@@ -4445,15 +4449,33 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 						UPDATE foghorn.artifacts
 						SET format = $1,
 						    size_bytes = $3,
+						    status = CASE WHEN artifact_type = 'clip' THEN 'ready' ELSE status END,
 						    sync_status = 'pending',
 						    storage_location = 'local',
 						    updated_at = NOW()
 						WHERE artifact_hash = $2`, newFormat, artifactHash, sizeBytes); dbErr != nil {
 					logger.WithError(dbErr).WithField("artifact_hash", artifactHash).Error("failed to update artifact format/size after processing")
+				} else {
+					projectArtifactSizeToCommodore(ctx, artifactHash, sizeBytes, logger)
+				}
+				if artifactType == "clip" && decklogClient != nil {
+					clipData := &pb.ClipLifecycleData{
+						Stage:       pb.ClipLifecycleData_STAGE_DONE,
+						ClipHash:    artifactHash,
+						FilePath:    &outputPath,
+						SizeBytes:   func() *uint64 { s := uint64(sizeBytes); return &s }(),
+						CompletedAt: func() *int64 { t := time.Now().Unix(); return &t }(),
+						NodeId:      &nodeID,
+					}
+					if tenantID != "" {
+						clipData.TenantId = &tenantID
+					}
+					go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
 				}
 
 				logger.WithFields(logging.Fields{
 					"artifact_hash": artifactHash,
+					"artifact_type": artifactType,
 					"node_id":       nodeID,
 					"output_path":   outputPath,
 					"old_format":    oldFormat,
@@ -4463,6 +4485,16 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 		}
 
 	case "failed":
+		var failedArtifactHash, failedArtifactType, failedTenantID string
+		failedLookupErr := db.QueryRowContext(ctx, `
+			SELECT a.artifact_hash, COALESCE(a.artifact_type,''), COALESCE(a.tenant_id::text,'')
+			  FROM foghorn.processing_jobs pj
+			  JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
+			 WHERE pj.job_id = $1
+		`, result.GetJobId()).Scan(&failedArtifactHash, &failedArtifactType, &failedTenantID)
+		if failedLookupErr != nil && failedLookupErr != sql.ErrNoRows {
+			logger.WithError(failedLookupErr).WithField("job_id", result.GetJobId()).Warn("Failed to look up artifact for processing failure")
+		}
 		_, err := db.ExecContext(ctx, `
 			UPDATE foghorn.processing_jobs
 			SET status = 'failed',
@@ -4475,6 +4507,29 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 			return
 		}
 		logger.WithFields(fields).WithField("error", result.GetError()).Warn("Processing job failed")
+		if failedArtifactHash != "" && failedArtifactType == "clip" {
+			if _, updateErr := db.ExecContext(ctx, `
+				UPDATE foghorn.artifacts
+				   SET status = 'failed',
+				       error_message = $2,
+				       updated_at = NOW()
+				 WHERE artifact_hash = $1
+			`, failedArtifactHash, result.GetError()); updateErr != nil {
+				logger.WithError(updateErr).WithField("artifact_hash", failedArtifactHash).Warn("Failed to mark clip artifact failed")
+			}
+			if decklogClient != nil {
+				errText := result.GetError()
+				clipData := &pb.ClipLifecycleData{
+					Stage:    pb.ClipLifecycleData_STAGE_FAILED,
+					ClipHash: failedArtifactHash,
+					Error:    &errText,
+				}
+				if failedTenantID != "" {
+					clipData.TenantId = &failedTenantID
+				}
+				go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
+			}
+		}
 
 	default:
 		logger.WithFields(fields).Warn("Unknown processing job result status")
@@ -4501,6 +4556,7 @@ func processProcessingJobProgress(progress *pb.ProcessingJobProgress, logger log
 
 	// Update job progress and refresh updated_at so stale recovery doesn't requeue
 	var artifactHash sql.NullString
+	var artifactType string
 	var tenantID string
 	err := db.QueryRowContext(ctx, `
 		UPDATE foghorn.processing_jobs
@@ -4519,8 +4575,38 @@ func processProcessingJobProgress(progress *pb.ProcessingJobProgress, logger log
 		return
 	}
 
-	// Emit VodLifecycleData with progress for Periscope
+	if artifactHash.Valid {
+		typeErr := db.QueryRowContext(ctx, `
+			SELECT COALESCE(artifact_type, '')
+			  FROM foghorn.artifacts
+			 WHERE artifact_hash = $1
+		`, artifactHash.String).Scan(&artifactType)
+		if typeErr != nil && typeErr != sql.ErrNoRows {
+			logger.WithError(typeErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to look up processing artifact type")
+		}
+	}
+
 	if decklogClient != nil && artifactHash.Valid {
+		if artifactType == "clip" {
+			clipData := &pb.ClipLifecycleData{
+				Stage:           pb.ClipLifecycleData_STAGE_PROGRESS,
+				ClipHash:        artifactHash.String,
+				ProgressPercent: func() *uint32 { p := uint32(progressPct); return &p }(),
+			}
+			if tenantID != "" {
+				clipData.TenantId = &tenantID
+			}
+			go func() {
+				if err := artifactoutbox.EnqueueClipLifecycle(clipData); err != nil {
+					logger.WithError(err).Warn("Failed to send clip processing progress lifecycle event")
+				}
+			}()
+			return
+		}
+
+		// Emit VodLifecycleData with progress for VOD processing. DVR chapter
+		// finalization has its own path above because chapter jobs are not in
+		// foghorn.processing_jobs.
 		vodData := &pb.VodLifecycleData{
 			Status:      pb.VodLifecycleData_STATUS_PROCESSING,
 			VodHash:     artifactHash.String,

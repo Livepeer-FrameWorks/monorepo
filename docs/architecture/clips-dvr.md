@@ -190,8 +190,9 @@ Gateway -> Commodore.CreateClip(tenant_id, stream_id, timing)
   |
   +-> Foghorn.CreateClip(clip_hash, timing, stream_internal_name)
         +-- 4. INSERT into foghorn.artifacts (status='requested')
-        +-- 5. Select storage node
-        +-- 6. Send ClipPullRequest to Helmsman
+        +-- 5. Resolve source kind (live, rolling DVR, or finalized chapter)
+        +-- 6. Queue processing job for canonical MKV output
+        +-- 7. Processing result finalizes foghorn artifact state
 ```
 
 ### ResolveViewerEndpoint Flow

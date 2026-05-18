@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,6 +24,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/handlers"
+	"frameworks/api_balancing/internal/jobs"
 	"frameworks/api_balancing/internal/policybundle"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
@@ -731,6 +733,48 @@ func buildClipLifecycleData(stage pb.ClipLifecycleData_Stage, req *pb.CreateClip
 	return data
 }
 
+func buildClipProcessingSourceURL(base, streamName, format, sourceKind string, startUnix, stopUnix int64) string {
+	query := url.Values{}
+	if sourceKind == "live" {
+		duration := stopUnix - startUnix
+		if duration < 1 {
+			duration = 1
+		}
+		query.Set("startunix", strconv.FormatInt(startUnix-time.Now().Unix(), 10))
+		query.Set("duration", strconv.FormatInt(duration, 10))
+	} else {
+		query.Set("startunix", strconv.FormatInt(startUnix, 10))
+		query.Set("stopunix", strconv.FormatInt(stopUnix, 10))
+	}
+
+	u, err := url.Parse(strings.TrimRight(strings.TrimSpace(base), "/"))
+	if err != nil || u.Host == "" {
+		return fmt.Sprintf("%s/%s.%s?%s", strings.TrimRight(base, "/"), streamName, format, query.Encode())
+	}
+	path := strings.TrimRight(u.Path, "/")
+	if path == "" {
+		path = "/" + streamName + "." + format
+	} else {
+		path += "/" + streamName + "." + format
+	}
+	u.Path = path
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+func isLoopbackSourceHost(base string) bool {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || u.Host == "" {
+		host := strings.TrimPrefix(base, "http://")
+		host = strings.TrimPrefix(host, "https://")
+		host = strings.Split(host, "/")[0]
+		host = strings.Split(host, ":")[0]
+		return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
 // CreateClip creates a new clip from a stream
 func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRequest) (*pb.CreateClipResponse, error) {
 	if req.StreamInternalName == "" {
@@ -749,32 +793,10 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		return nil, err
 	}
 
-	format := req.GetFormat()
-	if format == "" {
-		format = "mp4"
-	}
-
-	// Select storage node (cap=storage) — always required for the clip
-	// writer regardless of where the source bytes come from.
-	sctx := context.WithValue(ctx, ctxkeys.KeyCapability, "storage")
-	storageHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(sctx, "", 0, 0, map[string]int{}, "", false)
-	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "no storage node available: %v", err)
-	}
-
-	// Ingest node selection happens later, only for LIVE-source clips
-	// — the source dispatch picks the source kind and only LIVE needs
-	// an ingest host advertising the live shm window. Chapter and
-	// rolling-DVR sources read from storage/relay directly.
+	format := "mkv"
 
 	// Generate request_id for correlation
 	reqID := uuid.New().String()
-
-	// Get storage node ID
-	storageNodeID := s.lb.GetNodeIDByHost(storageHost)
-	if storageNodeID == "" {
-		return nil, status.Error(codes.Unavailable, "storage node not connected")
-	}
 
 	// Normalize the requested clip range to absolute Unix-ms across all
 	// ClipModes. The dispatcher (pickClipSource) compares against the
@@ -856,7 +878,8 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	var sourceHost string
 	var sourceNodeID string
 	var ingestHost string
-	if dispatch.kind == pb.ClipPullRequest_SOURCE_KIND_LIVE {
+	switch dispatch.kind {
+	case pb.ClipPullRequest_SOURCE_KIND_LIVE:
 		ictx := context.WithValue(ctx, ctxkeys.KeyCapability, "ingest")
 		host, _, _, _, _, ingestErr := s.lb.GetBestNodeWithScore(ictx, req.StreamInternalName, 0, 0, map[string]int{}, "", true)
 		if ingestErr != nil {
@@ -865,7 +888,10 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		ingestHost = host
 		sourceHost = host
 		sourceNodeID = s.lb.GetNodeIDByHost(host)
-	} else if dispatch.kind == pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING {
+		if sourceNodeID == "" {
+			return nil, status.Error(codes.Unavailable, "ingest node is not connected")
+		}
+	case pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING:
 		sourceNodeID = dispatch.sourceNodeID
 		if sourceNodeID == "" {
 			return nil, status.Error(codes.Unavailable, "active DVR recording node is not known")
@@ -876,115 +902,60 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		}
 		sourceHost = host
 	}
-	var sourceBaseURL string
-	if sourceHost != "" {
-		if sourceNodeID != "" && sourceNodeID != storageNodeID {
-			sourceBaseURL = control.DeriveMistHTTPBase(sourceHost)
-		}
-	}
 
-	// Store artifact lifecycle state in foghorn.artifacts
-	// NOTE: Business registry (tenant, user, title, etc.) is stored in commodore.clips.
-	// tenant_id and user_id are denormalized here for Decklog events and fallback
-	// when Commodore is unavailable. retention_until comes from the cascade:
-	// req.RetentionDays (Commodore-resolved per-class default) → 30-day system
-	// default → Free-tier cap. 0 = no auto-expire (NULL retention_until).
 	storagePath := clips.BuildClipStoragePath(req.StreamInternalName, clipHash, format)
 	clipRetentionUntil := resolveArtifactInitialRetention(ctx, s.purserClient, req.TenantId, req.RetentionDays, 30 /* clip system default */, s.logger)
-	_, err = s.db.ExecContext(ctx, `
+	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, stream_internal_name, internal_name, tenant_id, user_id, status, request_id, manifest_path, format, origin_cluster_id, retention_until, created_at, updated_at)
 		VALUES ($1, 'clip', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'requested', $6, $7, $8, $9, $10, NOW(), NOW())
 	`, clipHash, req.StreamInternalName, req.GetInternalName(), req.TenantId, req.GetUserId(), reqID, storagePath, format, clipCluster, clipRetentionUntil)
 
 	if err != nil {
-		// Commodore registration succeeded (clip_hash provided) but Foghorn insert failed
-		// Accept eventual consistency - Commodore record remains for audit/billing
-		// RetentionJob will eventually clean up orphan artifacts
 		s.logger.WithFields(logging.Fields{
 			"clip_hash":     clipHash,
 			"internal_name": req.StreamInternalName,
 			"error":         err,
-		}).Error("Failed to store clip artifact in database (Commodore record persists)")
+		}).Error("Failed to store clip artifact in database")
 		return nil, status.Error(codes.Internal, "failed to store artifact")
 	}
 
-	// Store node assignment in foghorn.artifact_nodes
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, file_path, base_url, cached_at)
-		VALUES ($1, $2, $3, $4, NOW())
-	`, clipHash, storageNodeID, storagePath, storageHost)
-
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to store artifact node assignment")
-		// Don't fail the request, the artifact was created
-	}
-
-	clipReq := &pb.ClipPullRequest{
-		ClipHash:   clipHash,
-		StreamName: dispatch.streamName,
-		// All clips for one stream share a single output namespace
-		// keyed on the owning stream's internal_name, regardless of
-		// which historical surface the dispatcher pulled from. Relay
-		// and DTSH paths resolve clip output by
-		// foghorn.artifacts.stream_internal_name.
-		OutputStreamName: req.StreamInternalName,
-		Format:           format,
-		OutputName:       clipHash,
-		SourceBaseUrl:    sourceBaseURL,
-		RequestId:        reqID,
-		SourceKind:       dispatch.kind,
-		// Helmsman needs the clip's vod+ routing name to boot it for
-		// .dtsh generation post-download. internal_name is the Foghorn
-		// artifact routing identifier, populated by the gRPC caller.
-		InternalName: req.GetInternalName(),
-	}
-	if dispatch.dvrHash != "" {
-		clipReq.SourceDvrHash = dispatch.dvrHash
-	}
-	if dispatch.chapterArtifactHash != "" {
-		clipReq.SourceChapterArtifactHash = dispatch.chapterArtifactHash
-	}
-	// Send ONLY the canonical absolute Unix-seconds range. The
-	// dispatcher already normalized every legal ClipMode into
-	// (clipStartMsAbs, clipEndMsAbs); forwarding the original mode
-	// fields would let Helmsman reinterpret "start_ms" as
-	// stream-relative seconds and ask the chapter VOD for the wrong
-	// time window. Helmsman builds Mist's /view URL purely from
-	// these two fields.
 	startUnix := clipStartMsAbs / 1000
 	stopUnix := clipEndMsAbs / 1000
-	durationSec := stopUnix - startUnix
-	if durationSec < 1 {
-		durationSec = 1
-	}
-	clipReq.StartUnix = &startUnix
-	clipReq.StopUnix = &stopUnix
-	clipReq.DurationSec = &durationSec
 
-	if err := control.SendClipPull(storageNodeID, clipReq); err != nil {
-		// Mark artifact as failed since we couldn't send to Helmsman
-		_, _ = s.db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW()
-			WHERE artifact_hash = $2 AND tenant_id = $3
-		`, fmt.Sprintf("storage node unavailable: %v", err), clipHash, req.TenantId)
-
-		// Emit FAILED event to Decklog
-		if s.decklogClient != nil {
-			failedData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_FAILED, req, reqID, clipHash)
-			failedData.Error = func() *string { e := fmt.Sprintf("storage node unavailable: %v", err); return &e }()
-			go func() {
-				if errSend := artifactoutbox.EnqueueClipLifecycle(failedData); errSend != nil {
-					s.logger.WithError(errSend).Error("Failed to emit clip failed event")
-				}
-			}()
+	sourceStreamName := dispatch.streamName
+	sourceKind := "chapter"
+	switch dispatch.kind {
+	case pb.ClipPullRequest_SOURCE_KIND_LIVE:
+		sourceKind = "live"
+		if !strings.Contains(sourceStreamName, "+") {
+			sourceStreamName = "live+" + sourceStreamName
 		}
-
-		s.logger.WithFields(logging.Fields{
-			"clip_hash": clipHash,
-			"node_id":   storageNodeID,
-			"error":     err,
-		}).Error("Failed to send clip request to storage node")
-		return nil, status.Errorf(codes.Unavailable, "storage node unavailable: %v", err)
+	case pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING:
+		sourceKind = "dvr_rolling"
+	}
+	sourceParams := map[string]string{
+		"source_kind":        sourceKind,
+		"source_stream_name": sourceStreamName,
+		"source_format":      "mp4",
+		"source_start_unix":  strconv.FormatInt(startUnix, 10),
+		"source_stop_unix":   strconv.FormatInt(stopUnix, 10),
+	}
+	sourceURL := ""
+	preferredNodeID := ""
+	if sourceHost != "" {
+		if isLoopbackSourceHost(sourceHost) {
+			preferredNodeID = sourceNodeID
+		} else {
+			sourceURL = buildClipProcessingSourceURL(sourceHost, sourceStreamName, "mp4", sourceKind, startUnix, stopUnix)
+		}
+	}
+	if _, err := jobs.InsertProcessingJobWithSourceParams(ctx, s.db, req.TenantId, clipHash, "process", nil, req.GetProcessesJson(), sourceURL, sourceParams, preferredNodeID); err != nil {
+		_, _ = s.db.ExecContext(ctx, `
+			UPDATE foghorn.artifacts
+			   SET status = 'failed', error_message = $1, updated_at = NOW()
+			 WHERE artifact_hash = $2 AND tenant_id = $3
+		`, fmt.Sprintf("processing queue unavailable: %v", err), clipHash, req.TenantId)
+		return nil, status.Errorf(codes.Internal, "failed to queue clip processing: %v", err)
 	}
 
 	// Emit STAGE_QUEUED event to Decklog (with enriched timing fields)
@@ -995,7 +966,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	}
 
 	// Update stream state
-	state.DefaultManager().UpdateStreamInstanceInfo(req.StreamInternalName, storageNodeID, map[string]any{
+	state.DefaultManager().UpdateStreamInstanceInfo(req.StreamInternalName, sourceNodeID, map[string]any{
 		"clip_status":     "requested",
 		"clip_request_id": reqID,
 		"clip_format":     format,
@@ -1004,8 +975,8 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	return &pb.CreateClipResponse{
 		Status:      "queued",
 		IngestHost:  ingestHost,
-		StorageHost: storageHost,
-		NodeId:      storageNodeID,
+		StorageHost: "",
+		NodeId:      sourceNodeID,
 		RequestId:   reqID,
 		ClipHash:    clipHash,
 		PlaybackId:  req.GetPlaybackId(),
@@ -1793,7 +1764,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 
 	// Check billing status for the content owner
 	if s.cacheInvalidator != nil && resolution.TenantId != "" {
-		billingTarget := control.ResolvePlaybackPolicyTarget(ctx, req.GetContentId(), resolution.InternalName)
+		billingTarget := control.ResolvePlaybackPolicyTarget(ctx, resolution.ContentId, resolution.InternalName)
 		billingInternalName := billingTarget.InternalName
 		billing := s.cacheInvalidator.GetBillingStatus(ctx, billingInternalName, resolution.TenantId)
 		if billing != nil {
@@ -1891,7 +1862,7 @@ func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, re
 		}).Warn("Rejecting protected resolve request")
 		return status.Error(codes.PermissionDenied, "playback access denied")
 	}
-	target := control.ResolvePlaybackPolicyTarget(ctx, req.GetContentId(), resolution.InternalName)
+	target := control.ResolvePlaybackPolicyTarget(ctx, resolution.ContentId, resolution.InternalName)
 	policy, err := control.CommodoreClient.ResolvePlaybackPolicyForEnforcement(ctx, target.ContentID)
 	if err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{

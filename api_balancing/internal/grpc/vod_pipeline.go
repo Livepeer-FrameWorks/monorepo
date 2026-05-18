@@ -64,14 +64,18 @@ func (p *VodPipeline) StartPipeline(ctx context.Context, tenantID, artifactHash,
 // Metadata (codec, resolution, etc.) is extracted from outputs and stored
 // in vod_metadata — MistServer provides this when the stream boots.
 func (p *VodPipeline) HandleJobResult(ctx context.Context, jobID, resultStatus string, outputs map[string]string, errorMsg string) {
-	var artifactHash, tenantID string
+	var artifactHash, tenantID, artifactType string
 	err := p.db.QueryRowContext(ctx, `
-		SELECT artifact_hash, tenant_id
-		FROM foghorn.processing_jobs
-		WHERE job_id = $1
-	`, jobID).Scan(&artifactHash, &tenantID)
+		SELECT pj.artifact_hash, pj.tenant_id, COALESCE(a.artifact_type, '')
+		FROM foghorn.processing_jobs pj
+		LEFT JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
+		WHERE pj.job_id = $1
+	`, jobID).Scan(&artifactHash, &tenantID, &artifactType)
 	if err != nil {
 		p.logger.WithError(err).WithField("job_id", jobID).Error("Failed to look up processing job for pipeline")
+		return
+	}
+	if artifactType != "vod" {
 		return
 	}
 

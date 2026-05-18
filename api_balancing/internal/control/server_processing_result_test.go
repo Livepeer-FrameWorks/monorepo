@@ -93,10 +93,10 @@ func TestProcessProcessingJobResult_Completed_RegistersProcessedOutput(t *testin
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Lookup artifact hash
-	mock.ExpectQuery("SELECT artifact_hash.*FROM foghorn.processing_jobs").
+	mock.ExpectQuery("SELECT a\\.artifact_hash.*FROM foghorn.processing_jobs").
 		WithArgs("job-1").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_url", "format"}).
-			AddRow("art-hash", "s3://old/upload.avi", "avi"))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "s3_url", "format"}).
+			AddRow("art-hash", "vod", "tenant-1", "s3://old/upload.avi", "avi"))
 
 	// Update artifact format + size_bytes + reset sync while retaining the
 	// old source URL until the replacement upload is durably synced.
@@ -154,7 +154,7 @@ func TestProcessProcessingJobResult_Completed_DoesNotDeleteOldS3UploadBeforeRepl
 		WithArgs("job-1", nil).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	mock.ExpectQuery("SELECT artifact_hash").
+	mock.ExpectQuery("SELECT a\\.artifact_hash").
 		WithArgs("job-1").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_url", "format"}).
 			AddRow("art-hash", "s3://bucket/old/upload.avi", "avi"))
@@ -185,10 +185,10 @@ func TestProcessProcessingJobResult_Completed_SetsS3URLToNull(t *testing.T) {
 		WithArgs("job-1", nil).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	mock.ExpectQuery("SELECT artifact_hash").
+	mock.ExpectQuery("SELECT a\\.artifact_hash").
 		WithArgs("job-1").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_url", "format"}).
-			AddRow("art-hash", "", "avi"))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "s3_url", "format"}).
+			AddRow("art-hash", "vod", "tenant-1", "", "avi"))
 
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'pending'.*storage_location = 'local'").
 		WithArgs("mp4", "art-hash", int64(0)).
@@ -209,6 +209,9 @@ func TestProcessProcessingJobResult_Failed(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
+	mock.ExpectQuery("SELECT a.artifact_hash").
+		WithArgs("job-fail").
+		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("UPDATE foghorn.processing_jobs.*SET status = 'failed'.*error_message").
 		WithArgs("job-fail", "ffmpeg crashed").
 		WillReturnResult(sqlmock.NewResult(0, 1))

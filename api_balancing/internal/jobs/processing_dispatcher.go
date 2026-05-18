@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -68,6 +69,9 @@ type processingJob struct {
 	Status         string
 	RetryCount     int
 	S3URL          sql.NullString
+	SourceURL      sql.NullString
+	SourceParams   sql.NullString
+	PreferredNode  sql.NullString
 	ProcessesJSON  sql.NullString
 	InternalName   sql.NullString
 }
@@ -156,11 +160,13 @@ func (d *ProcessingDispatcher) dispatch() {
 				FOR UPDATE SKIP LOCKED
 			)
 			RETURNING job_id, tenant_id, artifact_hash, job_type, input_codec,
-			          output_profiles, retry_count, processes_json
+			          output_profiles, retry_count, processes_json, source_url,
+			          source_params::text, preferred_node_id
 		)
 		SELECT c.job_id, c.tenant_id, c.artifact_hash, c.job_type, c.input_codec,
 		       c.output_profiles, 'dispatched'::text, c.retry_count,
-		       a.s3_url, c.processes_json, a.internal_name
+		       a.s3_url, c.source_url, c.source_params, c.preferred_node_id,
+		       c.processes_json, a.internal_name
 		FROM claimed c
 		LEFT JOIN foghorn.artifacts a ON c.artifact_hash = a.artifact_hash
 	`)
@@ -175,7 +181,8 @@ func (d *ProcessingDispatcher) dispatch() {
 		if err := rows.Scan(
 			&job.JobID, &job.TenantID, &job.ArtifactHash, &job.JobType,
 			&job.InputCodec, &job.OutputProfiles, &job.Status, &job.RetryCount,
-			&job.S3URL, &job.ProcessesJSON, &job.InternalName,
+			&job.S3URL, &job.SourceURL, &job.SourceParams, &job.PreferredNode,
+			&job.ProcessesJSON, &job.InternalName,
 		); err != nil {
 			d.logger.WithError(err).Warn("Failed to scan processing job")
 			continue
@@ -208,7 +215,9 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	}
 
 	sourceURL := ""
-	if job.S3URL.Valid {
+	if job.SourceURL.Valid && strings.TrimSpace(job.SourceURL.String) != "" {
+		sourceURL = strings.TrimSpace(job.SourceURL.String)
+	} else if job.S3URL.Valid {
 		presigned, err := control.GeneratePresignedGETForArtifact(ctx, job.S3URL.String)
 		if err != nil {
 			d.logger.WithError(err).WithField("job_id", job.JobID).Warn("Failed to generate presigned URL for processing job")
@@ -225,6 +234,17 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	}
 	if job.InputCodec.Valid {
 		params["input_codec"] = job.InputCodec.String
+	}
+	if job.SourceParams.Valid && strings.TrimSpace(job.SourceParams.String) != "" {
+		var sourceParams map[string]string
+		if err := json.Unmarshal([]byte(job.SourceParams.String), &sourceParams); err != nil {
+			d.logger.WithError(err).WithField("job_id", job.JobID).Warn("Failed to parse processing job source params")
+			d.revertToQueued(ctx, job.JobID)
+			return
+		}
+		for k, v := range sourceParams {
+			params[k] = v
+		}
 	}
 
 	// For HLS sources, generate presigned URLs for each segment
@@ -430,6 +450,14 @@ func (d *ProcessingDispatcher) recoverStale() {
 
 // InsertProcessingJob creates a new processing job. Exported for use by vod_pipeline.
 func InsertProcessingJob(ctx context.Context, db *sql.DB, tenantID, artifactHash, jobType string, parentJobID *string, processesJSON string) (string, error) {
+	return InsertProcessingJobWithSource(ctx, db, tenantID, artifactHash, jobType, parentJobID, processesJSON, "")
+}
+
+func InsertProcessingJobWithSource(ctx context.Context, db *sql.DB, tenantID, artifactHash, jobType string, parentJobID *string, processesJSON, sourceURL string) (string, error) {
+	return InsertProcessingJobWithSourceParams(ctx, db, tenantID, artifactHash, jobType, parentJobID, processesJSON, sourceURL, nil, "")
+}
+
+func InsertProcessingJobWithSourceParams(ctx context.Context, db *sql.DB, tenantID, artifactHash, jobType string, parentJobID *string, processesJSON, sourceURL string, sourceParams map[string]string, preferredNodeID string) (string, error) {
 	jobID := uuid.New().String()
 	var parentID *string
 	if parentJobID != nil && *parentJobID != "" {
@@ -439,14 +467,33 @@ func InsertProcessingJob(ctx context.Context, db *sql.DB, tenantID, artifactHash
 	if processesJSON != "" {
 		pJSON = &processesJSON
 	}
+	var srcURL *string
+	if strings.TrimSpace(sourceURL) != "" {
+		trimmed := strings.TrimSpace(sourceURL)
+		srcURL = &trimmed
+	}
+	var srcParams *string
+	if len(sourceParams) > 0 {
+		b, err := json.Marshal(sourceParams)
+		if err != nil {
+			return "", err
+		}
+		s := string(b)
+		srcParams = &s
+	}
+	var preferredNode *string
+	if strings.TrimSpace(preferredNodeID) != "" {
+		trimmed := strings.TrimSpace(preferredNodeID)
+		preferredNode = &trimmed
+	}
 
 	// Serialize enqueue per artifact/job-type so retry-after-timeout returns the
 	// existing active job instead of creating a duplicate queued job.
 	if artifactHash == "" {
 		_, err := db.ExecContext(ctx, `
-			INSERT INTO foghorn.processing_jobs (job_id, tenant_id, artifact_hash, job_type, status, parent_job_id, processes_json)
-			VALUES ($1, $2, $3, $4, 'queued', $5, $6)
-		`, jobID, tenantID, artifactHash, jobType, parentID, pJSON)
+			INSERT INTO foghorn.processing_jobs (job_id, tenant_id, artifact_hash, job_type, status, parent_job_id, processes_json, source_url, source_params, preferred_node_id)
+			VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8::jsonb, $9)
+		`, jobID, tenantID, artifactHash, jobType, parentID, pJSON, srcURL, srcParams, preferredNode)
 		return jobID, err
 	}
 
@@ -489,9 +536,9 @@ func InsertProcessingJob(ctx context.Context, db *sql.DB, tenantID, artifactHash
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO foghorn.processing_jobs (job_id, tenant_id, artifact_hash, job_type, status, parent_job_id, processes_json)
-		VALUES ($1, $2, $3, $4, 'queued', $5, $6)
-	`, jobID, tenantID, artifactHash, jobType, parentID, pJSON); err != nil {
+		INSERT INTO foghorn.processing_jobs (job_id, tenant_id, artifact_hash, job_type, status, parent_job_id, processes_json, source_url, source_params, preferred_node_id)
+		VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8::jsonb, $9)
+	`, jobID, tenantID, artifactHash, jobType, parentID, pJSON, srcURL, srcParams, preferredNode); err != nil {
 		return "", err
 	}
 

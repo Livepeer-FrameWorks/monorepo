@@ -230,6 +230,7 @@ type CreateClipRequest struct {
 	// the Free-tier cap. 0 = no auto-expire. Unset = Foghorn falls back to a
 	// 30-day system default.
 	RetentionDays *int32 `protobuf:"varint,19,opt,name=retention_days,json=retentionDays,proto3,oneof" json:"retention_days,omitempty"`
+	ProcessesJson string `protobuf:"bytes,20,opt,name=processes_json,json=processesJson,proto3" json:"processes_json,omitempty"` // Pre-computed MistServer process config for artifact processing
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -395,6 +396,13 @@ func (x *CreateClipRequest) GetRetentionDays() int32 {
 		return *x.RetentionDays
 	}
 	return 0
+}
+
+func (x *CreateClipRequest) GetProcessesJson() string {
+	if x != nil {
+		return x.ProcessesJson
+	}
+	return ""
 }
 
 // CreateClipResponse - response from clip creation
@@ -712,6 +720,10 @@ type GetClipsRequest struct {
 	TenantId      string                   `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	StreamId      *string                  `protobuf:"bytes,2,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"` // filter by stream (UUID)
 	Pagination    *CursorPaginationRequest `protobuf:"bytes,3,opt,name=pagination,proto3" json:"pagination,omitempty"`
+	Search        string                   `protobuf:"bytes,4,opt,name=search,proto3" json:"search,omitempty"`
+	SortField     string                   `protobuf:"bytes,5,opt,name=sort_field,json=sortField,proto3" json:"sort_field,omitempty"`             // created_at | title | size_bytes | expires_at
+	SortDirection string                   `protobuf:"bytes,6,opt,name=sort_direction,json=sortDirection,proto3" json:"sort_direction,omitempty"` // asc | desc
+	Offset        *int32                   `protobuf:"varint,7,opt,name=offset,proto3,oneof" json:"offset,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -765,6 +777,34 @@ func (x *GetClipsRequest) GetPagination() *CursorPaginationRequest {
 		return x.Pagination
 	}
 	return nil
+}
+
+func (x *GetClipsRequest) GetSearch() string {
+	if x != nil {
+		return x.Search
+	}
+	return ""
+}
+
+func (x *GetClipsRequest) GetSortField() string {
+	if x != nil {
+		return x.SortField
+	}
+	return ""
+}
+
+func (x *GetClipsRequest) GetSortDirection() string {
+	if x != nil {
+		return x.SortDirection
+	}
+	return ""
+}
+
+func (x *GetClipsRequest) GetOffset() int32 {
+	if x != nil && x.Offset != nil {
+		return *x.Offset
+	}
+	return 0
 }
 
 // GetClipsResponse - paginated list of clips
@@ -1753,6 +1793,10 @@ type ListDVRRecordingsRequest struct {
 	TenantId      string                   `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	StreamId      *string                  `protobuf:"bytes,2,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"` // filter by stream (UUID)
 	Pagination    *CursorPaginationRequest `protobuf:"bytes,3,opt,name=pagination,proto3" json:"pagination,omitempty"`
+	Search        string                   `protobuf:"bytes,4,opt,name=search,proto3" json:"search,omitempty"`
+	SortField     string                   `protobuf:"bytes,5,opt,name=sort_field,json=sortField,proto3" json:"sort_field,omitempty"`             // created_at | title | size_bytes | expires_at
+	SortDirection string                   `protobuf:"bytes,6,opt,name=sort_direction,json=sortDirection,proto3" json:"sort_direction,omitempty"` // asc | desc
+	Offset        *int32                   `protobuf:"varint,7,opt,name=offset,proto3,oneof" json:"offset,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1806,6 +1850,34 @@ func (x *ListDVRRecordingsRequest) GetPagination() *CursorPaginationRequest {
 		return x.Pagination
 	}
 	return nil
+}
+
+func (x *ListDVRRecordingsRequest) GetSearch() string {
+	if x != nil {
+		return x.Search
+	}
+	return ""
+}
+
+func (x *ListDVRRecordingsRequest) GetSortField() string {
+	if x != nil {
+		return x.SortField
+	}
+	return ""
+}
+
+func (x *ListDVRRecordingsRequest) GetSortDirection() string {
+	if x != nil {
+		return x.SortDirection
+	}
+	return ""
+}
+
+func (x *ListDVRRecordingsRequest) GetOffset() int32 {
+	if x != nil && x.Offset != nil {
+		return *x.Offset
+	}
+	return 0
 }
 
 // ListDVRRecordingsResponse - paginated list of DVR recordings
@@ -3953,6 +4025,10 @@ type ListVodAssetsRequest struct {
 	TenantId      string                   `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	Pagination    *CursorPaginationRequest `protobuf:"bytes,2,opt,name=pagination,proto3" json:"pagination,omitempty"`
 	StreamId      *string                  `protobuf:"bytes,3,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"` // filter stream-derived VOD artifacts by source stream UUID
+	Search        string                   `protobuf:"bytes,4,opt,name=search,proto3" json:"search,omitempty"`
+	SortField     string                   `protobuf:"bytes,5,opt,name=sort_field,json=sortField,proto3" json:"sort_field,omitempty"`             // created_at | title | size_bytes | expires_at
+	SortDirection string                   `protobuf:"bytes,6,opt,name=sort_direction,json=sortDirection,proto3" json:"sort_direction,omitempty"` // asc | desc
+	Offset        *int32                   `protobuf:"varint,7,opt,name=offset,proto3,oneof" json:"offset,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4006,6 +4082,34 @@ func (x *ListVodAssetsRequest) GetStreamId() string {
 		return *x.StreamId
 	}
 	return ""
+}
+
+func (x *ListVodAssetsRequest) GetSearch() string {
+	if x != nil {
+		return x.Search
+	}
+	return ""
+}
+
+func (x *ListVodAssetsRequest) GetSortField() string {
+	if x != nil {
+		return x.SortField
+	}
+	return ""
+}
+
+func (x *ListVodAssetsRequest) GetSortDirection() string {
+	if x != nil {
+		return x.SortDirection
+	}
+	return ""
+}
+
+func (x *ListVodAssetsRequest) GetOffset() int32 {
+	if x != nil && x.Offset != nil {
+		return *x.Offset
+	}
+	return 0
 }
 
 // ListVodAssetsResponse - paginated list of VOD assets
@@ -4580,7 +4684,7 @@ var File_shared_proto protoreflect.FileDescriptor
 
 const file_shared_proto_rawDesc = "" +
 	"\n" +
-	"\fshared.proto\x12\x06shared\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\"\xd8\x06\n" +
+	"\fshared.proto\x12\x06shared\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\"\xff\x06\n" +
 	"\x11CreateClipRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x120\n" +
 	"\x14stream_internal_name\x18\x02 \x01(\tR\x12streamInternalName\x12\x16\n" +
@@ -4606,7 +4710,8 @@ const file_shared_proto_rawDesc = "" +
 	"R\finternalName\x88\x01\x01\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x12 \x01(\tR\tclusterId\x12*\n" +
-	"\x0eretention_days\x18\x13 \x01(\x05H\vR\rretentionDays\x88\x01\x01B\r\n" +
+	"\x0eretention_days\x18\x13 \x01(\x05H\vR\rretentionDays\x88\x01\x01\x12%\n" +
+	"\x0eprocesses_json\x18\x14 \x01(\tR\rprocessesJsonB\r\n" +
 	"\v_start_unixB\f\n" +
 	"\n" +
 	"_stop_unixB\v\n" +
@@ -4671,15 +4776,21 @@ const file_shared_proto_rawDesc = "" +
 	"\x11_storage_locationB\r\n" +
 	"\v_expires_atB\x13\n" +
 	"\x11_thumbnail_assetsB\x13\n" +
-	"\x11_retention_sourceJ\x04\b\f\x10\rJ\x04\b\x13\x10\x14R\faccess_countR\rlast_accessed\"\x9f\x01\n" +
+	"\x11_retention_sourceJ\x04\b\f\x10\rJ\x04\b\x13\x10\x14R\faccess_countR\rlast_accessed\"\xa5\x02\n" +
 	"\x0fGetClipsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12 \n" +
 	"\tstream_id\x18\x02 \x01(\tH\x00R\bstreamId\x88\x01\x01\x12?\n" +
 	"\n" +
 	"pagination\x18\x03 \x01(\v2\x1f.common.CursorPaginationRequestR\n" +
-	"paginationB\f\n" +
+	"pagination\x12\x16\n" +
+	"\x06search\x18\x04 \x01(\tR\x06search\x12\x1d\n" +
 	"\n" +
-	"_stream_id\"|\n" +
+	"sort_field\x18\x05 \x01(\tR\tsortField\x12%\n" +
+	"\x0esort_direction\x18\x06 \x01(\tR\rsortDirection\x12\x1b\n" +
+	"\x06offset\x18\a \x01(\x05H\x01R\x06offset\x88\x01\x01B\f\n" +
+	"\n" +
+	"_stream_idB\t\n" +
+	"\a_offset\"|\n" +
 	"\x10GetClipsResponse\x12&\n" +
 	"\x05clips\x18\x01 \x03(\v2\x10.shared.ClipInfoR\x05clips\x12@\n" +
 	"\n" +
@@ -4797,15 +4908,21 @@ const file_shared_proto_rawDesc = "" +
 	"_stream_idB\x0e\n" +
 	"\f_playback_idB\x13\n" +
 	"\x11_retention_sourceB\x13\n" +
-	"\x11_thumbnail_assets\"\xa8\x01\n" +
+	"\x11_thumbnail_assets\"\xae\x02\n" +
 	"\x18ListDVRRecordingsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12 \n" +
 	"\tstream_id\x18\x02 \x01(\tH\x00R\bstreamId\x88\x01\x01\x12?\n" +
 	"\n" +
 	"pagination\x18\x03 \x01(\v2\x1f.common.CursorPaginationRequestR\n" +
-	"paginationB\f\n" +
+	"pagination\x12\x16\n" +
+	"\x06search\x18\x04 \x01(\tR\x06search\x12\x1d\n" +
 	"\n" +
-	"_stream_id\"\x95\x01\n" +
+	"sort_field\x18\x05 \x01(\tR\tsortField\x12%\n" +
+	"\x0esort_direction\x18\x06 \x01(\tR\rsortDirection\x12\x1b\n" +
+	"\x06offset\x18\a \x01(\x05H\x01R\x06offset\x88\x01\x01B\f\n" +
+	"\n" +
+	"_stream_idB\t\n" +
+	"\a_offset\"\x95\x01\n" +
 	"\x19ListDVRRecordingsResponse\x126\n" +
 	"\x0edvr_recordings\x18\x01 \x03(\v2\x0f.shared.DVRInfoR\rdvrRecordings\x12@\n" +
 	"\n" +
@@ -5037,15 +5154,21 @@ const file_shared_proto_rawDesc = "" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"V\n" +
 	"\x12GetVodAssetRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12#\n" +
-	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\"\xa4\x01\n" +
+	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\"\xaa\x02\n" +
 	"\x14ListVodAssetsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12?\n" +
 	"\n" +
 	"pagination\x18\x02 \x01(\v2\x1f.common.CursorPaginationRequestR\n" +
 	"pagination\x12 \n" +
-	"\tstream_id\x18\x03 \x01(\tH\x00R\bstreamId\x88\x01\x01B\f\n" +
+	"\tstream_id\x18\x03 \x01(\tH\x00R\bstreamId\x88\x01\x01\x12\x16\n" +
+	"\x06search\x18\x04 \x01(\tR\x06search\x12\x1d\n" +
 	"\n" +
-	"_stream_id\"\x87\x01\n" +
+	"sort_field\x18\x05 \x01(\tR\tsortField\x12%\n" +
+	"\x0esort_direction\x18\x06 \x01(\tR\rsortDirection\x12\x1b\n" +
+	"\x06offset\x18\a \x01(\x05H\x01R\x06offset\x88\x01\x01B\f\n" +
+	"\n" +
+	"_stream_idB\t\n" +
+	"\a_offset\"\x87\x01\n" +
 	"\x15ListVodAssetsResponse\x12,\n" +
 	"\x06assets\x18\x01 \x03(\v2\x14.shared.VodAssetInfoR\x06assets\x12@\n" +
 	"\n" +

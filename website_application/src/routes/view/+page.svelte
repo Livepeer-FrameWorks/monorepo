@@ -156,6 +156,33 @@
     return [...existing, ...incoming.filter((chapter) => !seen.has(chapter.chapterId))];
   }
 
+  function playRollingDvr() {
+    selectedDvrChapter = null;
+    selectedDvrChapterRef = null;
+    playerConfig = {
+      contentType: "dvr",
+      contentId,
+      endpoints: null,
+      options: {
+        autoplay: true,
+        muted: true,
+        controls: true,
+        debug: true,
+      },
+    };
+  }
+
+  function isPlayableDvrChapter(chapter: DVRChapterRef) {
+    return Boolean(chapter.playbackId);
+  }
+
+  function latestDvrChapter(chapters: DVRChapterRef[]) {
+    return chapters.reduce<DVRChapterRef | null>(
+      (latest, chapter) => (!latest || chapter.startMs > latest.startMs ? chapter : latest),
+      null
+    );
+  }
+
   async function selectDvrChapter(chapterRef: DVRChapterRef) {
     const chapter = await retrieveDvrChapter({
       dvrId: contentId,
@@ -168,6 +195,10 @@
     selectedDvrChapter = chapter;
     selectedDvrChapterRef = chapterRef;
     if (!chapter.playbackId) {
+      if (chapterRef.isCurrent) {
+        playRollingDvr();
+        return;
+      }
       playerConfig = {
         contentType: "dvr",
         contentId,
@@ -227,11 +258,7 @@
       dvrNextPageToken = page.nextPageToken || null;
 
       const defaultChapter =
-        dvrChapters.find((chapter) => chapter.isCurrent) ||
-        dvrChapters.reduce<DVRChapterRef | null>(
-          (latest, chapter) => (!latest || chapter.startMs > latest.startMs ? chapter : latest),
-          null
-        );
+        dvrChapters.find(isPlayableDvrChapter) || latestDvrChapter(dvrChapters);
 
       if (options.autoSelect && defaultChapter) {
         await selectDvrChapter(defaultChapter);
@@ -257,16 +284,19 @@
       dvrChapters = options.append ? mergeDvrChapters(dvrChapters, page.chapters) : page.chapters;
       dvrNextPageToken = page.nextPageToken || null;
 
+      const currentChapter = dvrChapters.find((chapter) => chapter.isCurrent);
       const defaultChapter =
-        dvrChapters.find((chapter) => chapter.isCurrent) ||
-        dvrChapters.reduce<DVRChapterRef | null>(
-          (latest, chapter) => (!latest || chapter.startMs > latest.startMs ? chapter : latest),
-          null
-        );
+        dvrChapters.find(isPlayableDvrChapter) || latestDvrChapter(dvrChapters);
       if (options.autoSelect && defaultChapter) {
         dvrRangeStartInput = toDatetimeLocal(defaultChapter.startMs);
         dvrRangeEndInput = toDatetimeLocal(defaultChapter.endMs);
-        await selectDvrChapter(defaultChapter);
+        if (currentChapter && !currentChapter.playbackId) {
+          playRollingDvr();
+        } else {
+          await selectDvrChapter(defaultChapter);
+        }
+      } else if (options.autoSelect) {
+        playRollingDvr();
       }
     } finally {
       dvrChapterLoading = false;
@@ -304,6 +334,7 @@
     if (!selectedDvrChapterRef) {
       dvrRangeStartInput = toDatetimeLocal(nowMs - 24 * 60 * 60 * 1000);
       dvrRangeEndInput = toDatetimeLocal(nowMs + 60 * 60 * 1000);
+      playRollingDvr();
     }
   }
 

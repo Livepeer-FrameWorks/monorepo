@@ -45,6 +45,7 @@ message CreateClipRequest {
   // the Free-tier cap. 0 = no auto-expire. Unset = Foghorn falls back to a
   // 30-day system default.
   optional int32 retention_days = 19;
+  string processes_json = 20;     // Pre-computed MistServer process config for artifact processing
 }
 
 // CreateClipResponse - response from clip creation
@@ -101,6 +102,10 @@ message GetClipsRequest {
   string tenant_id = 1;
   optional string stream_id = 2;      // filter by stream (UUID)
   common.CursorPaginationRequest pagination = 3;
+  string search = 4;
+  string sort_field = 5;              // created_at | title | size_bytes | expires_at
+  string sort_direction = 6;          // asc | desc
+  optional int32 offset = 7;
 }
 
 // GetClipsResponse - paginated list of clips
@@ -260,6 +265,10 @@ message ListDVRRecordingsRequest {
   string tenant_id = 1;
   optional string stream_id = 2;  // filter by stream (UUID)
   common.CursorPaginationRequest pagination = 3;
+  string search = 4;
+  string sort_field = 5;              // created_at | title | size_bytes | expires_at
+  string sort_direction = 6;          // asc | desc
+  optional int32 offset = 7;
 }
 
 // ListDVRRecordingsResponse - paginated list of DVR recordings
@@ -563,6 +572,10 @@ message ListVodAssetsRequest {
   string tenant_id = 1;
   common.CursorPaginationRequest pagination = 2;
   optional string stream_id = 3;  // filter stream-derived VOD artifacts by source stream UUID
+  string search = 4;
+  string sort_field = 5;              // created_at | title | size_bytes | expires_at
+  string sort_direction = 6;          // asc | desc
+  optional int32 offset = 7;
 }
 
 // ListVodAssetsResponse - paginated list of VOD assets

@@ -24,7 +24,7 @@ func TestInsertProcessingJob_InsertsNewActiveJob(t *testing.T) {
 		WithArgs("art-1", "process").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("INSERT INTO foghorn.processing_jobs").
-		WithArgs(sqlmock.AnyArg(), "tenant-1", "art-1", "process", nil, nil).
+		WithArgs(sqlmock.AnyArg(), "tenant-1", "art-1", "process", nil, nil, nil, nil, nil).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -77,10 +77,10 @@ func TestProcessingDispatcherDispatchScansNullOutputProfiles(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{
 		"job_id", "tenant_id", "artifact_hash", "job_type", "input_codec",
-		"output_profiles", "status", "retry_count", "s3_url", "processes_json", "internal_name",
+		"output_profiles", "status", "retry_count", "s3_url", "source_url", "source_params", "preferred_node_id", "processes_json", "internal_name",
 	}).AddRow(
 		"job-1", "tenant-1", "artifact-1", "process", nil,
-		nil, "dispatched", 0, nil, "", "vod_internal",
+		nil, "dispatched", 0, nil, nil, nil, nil, "", "vod_internal",
 	)
 	mock.ExpectQuery("WITH claimed AS").
 		WillReturnRows(rows)

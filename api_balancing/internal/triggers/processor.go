@@ -1955,8 +1955,32 @@ func (p *Processor) resolveProcessSource(artifactHash, nodeID string) (string, b
 		return "", true, nil
 	}
 
-	var format string
+	var jobSourceURL sql.NullString
 	err := db.QueryRowContext(context.Background(), `
+		SELECT source_url
+		FROM foghorn.processing_jobs
+		WHERE artifact_hash = $1
+		  AND status IN ('dispatched', 'processing')
+		  AND source_url IS NOT NULL
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`, artifactHash).Scan(&jobSourceURL)
+	if err == nil && jobSourceURL.Valid && strings.TrimSpace(jobSourceURL.String) != "" {
+		sourceURL := strings.TrimSpace(jobSourceURL.String)
+		p.logger.WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"node_id":       nodeID,
+			"source_url":    sourceURL,
+		}).Info("Resolved process+ source from processing job")
+		return sourceURL, false, nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		p.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to look up processing job source")
+		return "", true, nil
+	}
+
+	var format string
+	err = db.QueryRowContext(context.Background(), `
 		SELECT COALESCE(format,'')
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND s3_url IS NOT NULL

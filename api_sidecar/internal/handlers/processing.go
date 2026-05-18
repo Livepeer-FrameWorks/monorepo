@@ -47,6 +47,11 @@ var (
 	processingProcessOverridesMu sync.Mutex
 )
 
+var (
+	processingSourceOverrides   = map[string]string{}
+	processingSourceOverridesMu sync.Mutex
+)
+
 // HasPendingJob returns true if a processing job is currently in-flight for the stream.
 func HasPendingJob(streamName string) bool {
 	pendingJobsMu.Lock()
@@ -81,6 +86,9 @@ func clearProcessingProcessOverride(streamName string) {
 	processingProcessOverridesMu.Lock()
 	delete(processingProcessOverrides, streamName)
 	processingProcessOverridesMu.Unlock()
+	processingSourceOverridesMu.Lock()
+	delete(processingSourceOverrides, streamName)
+	processingSourceOverridesMu.Unlock()
 }
 
 func getProcessingProcessOverride(streamName string) (string, bool) {
@@ -88,6 +96,22 @@ func getProcessingProcessOverride(streamName string) (string, bool) {
 	processesJSON, ok := processingProcessOverrides[streamName]
 	processingProcessOverridesMu.Unlock()
 	return processesJSON, ok
+}
+
+func setProcessingSourceOverride(streamName, sourceURL string) {
+	if streamName == "" || sourceURL == "" {
+		return
+	}
+	processingSourceOverridesMu.Lock()
+	processingSourceOverrides[streamName] = sourceURL
+	processingSourceOverridesMu.Unlock()
+}
+
+func getProcessingSourceOverride(streamName string) (string, bool) {
+	processingSourceOverridesMu.Lock()
+	sourceURL, ok := processingSourceOverrides[streamName]
+	processingSourceOverridesMu.Unlock()
+	return sourceURL, ok
 }
 
 func NewProcessingJobHandler(logger logging.Logger, mistServerURL, storagePath string) *ProcessingJobHandler {
@@ -116,6 +140,15 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 	log.Info("Processing job received")
 	streamName := "processing+" + req.GetArtifactHash()
 	defer clearProcessingProcessOverride(streamName)
+	if req.GetSourceUrl() == "" {
+		sourceURL := h.buildLocalProcessingSourceURL(req)
+		if sourceURL == "" {
+			log.Warn("Processing job has no source URL or local source parameters")
+		} else {
+			setProcessingSourceOverride(streamName, sourceURL)
+			log.WithField("source_url", sourceURL).Info("Registered local processing source override")
+		}
+	}
 
 	// If a previous attempt for this artifact is still running on this node,
 	// silently drop the duplicate. Don't send a failure — the original attempt

@@ -16,12 +16,11 @@ Edge sidecar that turns a MistServer node into a fully managed, hands-off media 
 - Periodic health/metrics collection and reporting to Foghorn
 - Receives configuration from Foghorn via `ConfigSeed`: canonical node ID, geo placement, tenant ID, stream templates, processing config, operational mode, TLS/CA material, public site config, telemetry remote-write config, and balancer base URL
 - Executes storage operations on Foghorn's behalf:
-  - Clip generation (ClipPullRequest -> download from MistServer -> store locally)
+  - Processing jobs for clips, DVR chapters, VOD uploads, and transcode workloads
   - DVR recording (DVRStartRequest/DVRStopRequest -> HLS segment capture)
   - Clip/DVR/VOD deletion notifications
   - Freeze/defrost and incremental `.dtsh` sync for S3-backed storage
   - Thumbnail upload requests for `poster.jpg`, `sprite.jpg`, and `sprite.vtt`
-  - Processing jobs for VOD/transcode workloads
   - Session termination and push-target activation/deactivation commands
 
 ## Node capabilities
@@ -35,7 +34,7 @@ Helmsman registers with Foghorn announcing boolean capability fields and role la
 
 ## Communication
 
-- **MistServer** (local): HTTP triggers, metrics scraping, clip downloads
+- **MistServer** (local): HTTP triggers, metrics scraping, recording output, and processing sources
 - **Foghorn** (regional): Persistent bidirectional gRPC stream (HelmsmanControl)
 
 ## Event types (forwarded to Foghorn)

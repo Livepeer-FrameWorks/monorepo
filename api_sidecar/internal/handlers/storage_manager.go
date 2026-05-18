@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"io"
@@ -93,6 +92,7 @@ type StorageManager struct {
 	logger   logging.Logger
 	basePath string
 	nodeID   string
+	capacity uint64
 	running  bool
 	stopCh   chan struct{}
 
@@ -158,6 +158,7 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 		logger:               logger,
 		basePath:             basePath,
 		nodeID:               nodeID,
+		capacity:             thresholds.CapacityBytes,
 		running:              false,
 		stopCh:               make(chan struct{}),
 		presignedClient:      presignedClient,
@@ -224,9 +225,8 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 		procHandler.Handle(req, send)
 	})
 
-	// Register post-clip .dtsh generator. The clip-pull path lives in
-	// control, which can't import handlers (cycle); this callback lets
-	// us reuse GenerateDTSH from there.
+	// Register the clip .dtsh generator through control to keep package
+	// ownership acyclic while sharing the Mist polling implementation.
 	mistURL := os.Getenv("MISTSERVER_URL")
 	control.SetClipDTSHGenerator(func(streamName, clipHash string) {
 		if mistURL == "" {
@@ -363,6 +363,7 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 type StorageThresholds struct {
 	FreezeThreshold float64
 	TargetThreshold float64
+	CapacityBytes   uint64
 	// SoftCleanupThreshold is the projected post-defrost usage at which the
 	// admission path kicks off proactive background cleanup. 0 means default
 	// to FreezeThreshold.
@@ -1378,13 +1379,12 @@ func parseHLSManifest(content string) (*ParsedManifest, error) {
 }
 
 func (sm *StorageManager) getStorageUsage(path string) (float64, uint64, uint64, error) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
+	space, err := storage.EffectiveDiskSpace(path, sm.capacity)
+	if err != nil {
 		return 0, 0, 0, err
 	}
-
-	totalBytes := stat.Blocks * uint64(stat.Bsize)
-	freeBytes := stat.Bavail * uint64(stat.Bsize)
+	totalBytes := space.TotalBytes
+	freeBytes := space.AvailableBytes
 	usedBytes := totalBytes - freeBytes
 	usagePercent := float64(usedBytes) / float64(totalBytes)
 

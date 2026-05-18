@@ -8,7 +8,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"frameworks/api_sidecar/internal/admission"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -38,6 +40,60 @@ func unsafeWrapperExt(sourceURL string) string {
 	default:
 		return ""
 	}
+}
+
+func (h *ProcessingJobHandler) buildLocalProcessingSourceURL(req *pb.ProcessingJobRequest) string {
+	params := req.GetParams()
+	sourceStream := strings.TrimSpace(params["source_stream_name"])
+	if sourceStream == "" {
+		return ""
+	}
+	sourceFormat := strings.TrimSpace(params["source_format"])
+	if sourceFormat == "" {
+		sourceFormat = "mp4"
+	}
+	startUnix, startErr := strconv.ParseInt(params["source_start_unix"], 10, 64)
+	stopUnix, stopErr := strconv.ParseInt(params["source_stop_unix"], 10, 64)
+	if startErr != nil || stopErr != nil || stopUnix <= startUnix {
+		return ""
+	}
+
+	query := url.Values{}
+	if params["source_kind"] == "live" {
+		query.Set("startunix", strconv.FormatInt(startUnix-time.Now().Unix(), 10))
+		query.Set("duration", strconv.FormatInt(stopUnix-startUnix, 10))
+	} else {
+		query.Set("startunix", strconv.FormatInt(startUnix, 10))
+		query.Set("stopunix", strconv.FormatInt(stopUnix, 10))
+	}
+
+	base := deriveProcessingMistHTTPBase(h.mistServerURL)
+	u, err := url.Parse(strings.TrimRight(base, "/"))
+	if err != nil || u.Host == "" {
+		return fmt.Sprintf("%s/%s.%s?%s", strings.TrimRight(base, "/"), sourceStream, sourceFormat, query.Encode())
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/" + sourceStream + "." + sourceFormat
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+func deriveProcessingMistHTTPBase(base string) string {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || u.Host == "" {
+		host := strings.TrimPrefix(base, "http://")
+		host = strings.TrimPrefix(host, "https://")
+		host = strings.Split(host, "/")[0]
+		host = strings.Split(host, ":")[0]
+		if host == "" {
+			return strings.TrimRight(base, "/")
+		}
+		return "http://" + host + ":8080"
+	}
+	port := u.Port()
+	if port == "" || port == "4242" {
+		port = "8080"
+	}
+	return u.Scheme + "://" + u.Hostname() + ":" + port
 }
 
 // stageUnsafeWrapper downloads the source URL to {storage}/processing/<hash><ext>

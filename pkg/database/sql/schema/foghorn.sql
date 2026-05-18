@@ -481,7 +481,10 @@ CREATE TABLE IF NOT EXISTS foghorn.processing_jobs (
 ALTER TABLE foghorn.processing_jobs
   ADD COLUMN IF NOT EXISTS parent_job_id UUID REFERENCES foghorn.processing_jobs(job_id),
   ADD COLUMN IF NOT EXISTS output_metadata JSONB,
-  ADD COLUMN IF NOT EXISTS processes_json TEXT;
+  ADD COLUMN IF NOT EXISTS processes_json TEXT,
+  ADD COLUMN IF NOT EXISTS source_url TEXT,
+  ADD COLUMN IF NOT EXISTS source_params JSONB,
+  ADD COLUMN IF NOT EXISTS preferred_node_id VARCHAR(100);
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_tenant ON foghorn.processing_jobs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_status ON foghorn.processing_jobs(status);

@@ -862,6 +862,15 @@ func HandleStreamSource(c *gin.Context) {
 	if ss := mistTrigger.GetStreamSource(); ss != nil && strings.HasPrefix(ss.GetStreamName(), "processing+") {
 		hash := strings.TrimPrefix(ss.GetStreamName(), "processing+")
 		if HasPendingJob(ss.GetStreamName()) {
+			if sourceURL, ok := getProcessingSourceOverride(ss.GetStreamName()); ok {
+				logger.WithFields(logging.Fields{
+					"stream_name": ss.GetStreamName(),
+					"source_url":  sourceURL,
+				}).Info("STREAM_SOURCE resolved to processing source override")
+				incMistWebhook("STREAM_SOURCE", "local_processing_source")
+				c.String(http.StatusOK, sourceURL)
+				return
+			}
 			procDir := filepath.Join(config.GetStoragePath(), "processing")
 			if local := findStagedProcessingSource(procDir, hash); local != "" {
 				logger.WithFields(logging.Fields{
@@ -1614,10 +1623,8 @@ func HandleRecordingEnd(c *gin.Context) {
 		incMistWebhook("RECORDING_END", "success")
 	}
 
-	// Dual-storage: Trigger immediate sync to S3 for new clips
-	// This ensures clips are backed up to S3 immediately after creation
 	if rec := mistTrigger.GetRecordingComplete(); rec != nil && rec.FilePath != "" {
-		go triggerClipSync(rec.FilePath, uint64(rec.BytesWritten))
+		go triggerRecordingArtifactSync(rec.FilePath, uint64(rec.BytesWritten))
 	}
 	TriggerStorageCheck()
 
@@ -1673,7 +1680,16 @@ func HandleRecordingSegment(c *gin.Context) {
 	c.String(http.StatusOK, "OK")
 }
 
-// triggerClipSync initiates a background sync of a newly created clip to S3
+func triggerRecordingArtifactSync(filePath string, sizeBytes uint64) {
+	normalized := filepath.ToSlash(filePath)
+	if !strings.Contains(normalized, "/clips/") {
+		logger.WithField("file_path", filePath).Debug("Recording-end sync skipped for non-clip artifact")
+		return
+	}
+	triggerClipSync(filePath, sizeBytes)
+}
+
+// triggerClipSync initiates a background sync of a newly created clip to S3.
 func triggerClipSync(filePath string, sizeBytes uint64) {
 	sm := GetStorageManager()
 	if sm == nil {

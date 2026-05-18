@@ -6604,6 +6604,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		PlaybackId:         &playbackID,
 		InternalName:       &artifactInternalName,
 		Mode:               req.GetMode(),
+		ProcessesJson:      s.resolveProcessesJSON(ctx, tenantID, clipClusterID, "vod"),
 	}
 	if streamID != "" {
 		foghornReq.StreamId = &streamID
@@ -6631,11 +6632,62 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	resp, trailers, err := foghornClient.CreateClip(ctx, foghornReq)
 	if err != nil {
 		s.logger.WithError(err).WithField("clip_hash", clipHash).Error("Failed to create clip artifact via Foghorn")
-		// Don't rollback business registry - Foghorn can retry later
+		if _, cleanupErr := s.db.ExecContext(context.Background(), `
+			DELETE FROM commodore.clips
+			WHERE id = $1 AND tenant_id = $2
+		`, clipID, tenantID); cleanupErr != nil {
+			s.logger.WithError(cleanupErr).WithField("clip_hash", clipHash).Error("Failed to remove clip registry row after Foghorn rejection")
+		}
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
 	return resp, nil
+}
+
+func mediaListSortDirection(raw string) string {
+	if strings.EqualFold(raw, "asc") {
+		return "ASC"
+	}
+	return "DESC"
+}
+
+func clipListSortColumn(raw string) string {
+	switch raw {
+	case "title":
+		return "COALESCE(c.title, '')"
+	case "size_bytes":
+		return "c.size_bytes"
+	case "expires_at":
+		return "c.retention_until"
+	default:
+		return "c.created_at"
+	}
+}
+
+func dvrListSortColumn(raw string) string {
+	switch raw {
+	case "title":
+		return "COALESCE(st.title, d.internal_name, '')"
+	case "size_bytes":
+		return "d.size_bytes"
+	case "expires_at":
+		return "d.retention_until"
+	default:
+		return "d.created_at"
+	}
+}
+
+func vodListSortColumn(raw string) string {
+	switch raw {
+	case "title":
+		return "COALESCE(title, filename, '')"
+	case "size_bytes":
+		return "size_bytes"
+	case "expires_at":
+		return "retention_until"
+	default:
+		return "created_at"
+	}
 }
 
 // GetClips returns clips from Commodore business registry
@@ -6661,6 +6713,11 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 		args = append(args, streamID)
 		argIdx++
 	}
+	if search := strings.TrimSpace(req.GetSearch()); search != "" {
+		whereClause += fmt.Sprintf(" AND (LOWER(COALESCE(c.title, '')) LIKE $%d OR LOWER(COALESCE(c.description, '')) LIKE $%d OR LOWER(c.clip_hash) LIKE $%d)", argIdx, argIdx, argIdx)
+		args = append(args, "%"+strings.ToLower(search)+"%")
+		argIdx++
+	}
 
 	// Get total count
 	var total int32
@@ -6683,20 +6740,28 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 	query := fmt.Sprintf(`
 		SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.description,
 		       c.start_time, c.duration, c.clip_mode, c.requested_params,
-		       c.retention_until, COALESCE(c.retention_source, ''), c.created_at, c.updated_at,
+		       c.size_bytes, c.retention_until, COALESCE(c.retention_source, ''), c.created_at, c.updated_at,
 		       COALESCE(c.storage_cluster_id, c.origin_cluster_id), c.has_thumbnails
 		FROM commodore.clips c
 		WHERE %s`, whereClause)
 
-	// Add keyset condition if cursor provided
-	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
-		query += " AND " + condition
-		args = append(args, cursorArgs...)
+	offsetMode := req.Offset != nil || req.GetSortField() != "" || req.GetSortDirection() != ""
+	offset := int32(0)
+	if req.Offset != nil && req.GetOffset() > 0 {
+		offset = req.GetOffset()
 	}
-
-	// Add ORDER BY and LIMIT
-	query += " " + builder.OrderBy(params)
-	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
+	if offsetMode {
+		query += fmt.Sprintf(" ORDER BY %s %s NULLS LAST, c.created_at DESC, c.clip_hash DESC LIMIT %d OFFSET %d",
+			clipListSortColumn(req.GetSortField()), mediaListSortDirection(req.GetSortDirection()), params.Limit+1, offset)
+	} else {
+		// Add keyset condition if cursor provided
+		if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+			query += " AND " + condition
+			args = append(args, cursorArgs...)
+		}
+		query += " " + builder.OrderBy(params)
+		query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
+	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -6712,6 +6777,7 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 			startTime, duration                int64
 			clipMode                           sql.NullString
 			requestedParams                    sql.NullString
+			sizeBytes                          sql.NullInt64
 			retentionUntil                     sql.NullTime
 			retentionSource                    string
 			createdAt, updatedAt               time.Time
@@ -6720,7 +6786,7 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 		)
 		if err := rows.Scan(&id, &clipHash, &playbackID, &streamID, &title, &description,
 			&startTime, &duration, &clipMode, &requestedParams,
-			&retentionUntil, &retentionSource, &createdAt, &updatedAt,
+			&sizeBytes, &retentionUntil, &retentionSource, &createdAt, &updatedAt,
 			&thumbnailCluster, &hasThumbnails); err != nil {
 			s.logger.WithError(err).Warn("Error scanning clip")
 			continue
@@ -6752,6 +6818,10 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 		if retentionSource != "" {
 			src := retentionSource
 			clip.RetentionSource = &src
+		}
+		if sizeBytes.Valid {
+			size := sizeBytes.Int64
+			clip.SizeBytes = &size
 		}
 		if retentionUntil.Valid {
 			expiresAt := timestamppb.New(retentionUntil.Time)
@@ -6804,6 +6874,10 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 		resp.Pagination.HasPreviousPage = hasMore
 		resp.Pagination.HasNextPage = params.Cursor != nil
 	}
+	if offsetMode {
+		resp.Pagination.HasNextPage = hasMore
+		resp.Pagination.HasPreviousPage = offset > 0
+	}
 
 	return resp, nil
 }
@@ -6823,7 +6897,7 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 	query := `
 		SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.description,
 		       c.start_time, c.duration, c.clip_mode, c.requested_params,
-		       c.retention_until, COALESCE(c.retention_source, ''), c.created_at, c.updated_at,
+		       c.size_bytes, c.retention_until, COALESCE(c.retention_source, ''), c.created_at, c.updated_at,
 		       COALESCE(c.storage_cluster_id, c.origin_cluster_id), c.has_thumbnails
 		FROM commodore.clips c
 		WHERE c.tenant_id = $1 AND c.clip_hash = $2
@@ -6835,6 +6909,7 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 		startTime, duration      int64
 		clipMode                 sql.NullString
 		requestedParams          sql.NullString
+		sizeBytes                sql.NullInt64
 		retentionUntil           sql.NullTime
 		retentionSource          string
 		createdAt, updatedAt     time.Time
@@ -6845,7 +6920,7 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 	err = s.db.QueryRowContext(ctx, query, tenantID, clipHash).Scan(
 		&id, &clipHash, &playbackID, &streamID, &title, &description,
 		&startTime, &duration, &clipMode, &requestedParams,
-		&retentionUntil, &retentionSource, &createdAt, &updatedAt,
+		&sizeBytes, &retentionUntil, &retentionSource, &createdAt, &updatedAt,
 		&thumbnailCluster, &hasThumbnails,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -6880,6 +6955,10 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 	if retentionSource != "" {
 		src := retentionSource
 		clip.RetentionSource = &src
+	}
+	if sizeBytes.Valid {
+		size := sizeBytes.Int64
+		clip.SizeBytes = &size
 	}
 	if retentionUntil.Valid {
 		expiresAt := timestamppb.New(retentionUntil.Time)
@@ -7033,10 +7112,19 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 		args = append(args, streamID)
 		argIdx++
 	}
+	if search := strings.TrimSpace(req.GetSearch()); search != "" {
+		whereClause += fmt.Sprintf(" AND (LOWER(COALESCE(st.title, '')) LIKE $%d OR LOWER(d.dvr_hash) LIKE $%d OR LOWER(d.internal_name) LIKE $%d)", argIdx, argIdx, argIdx)
+		args = append(args, "%"+strings.ToLower(search)+"%")
+		argIdx++
+	}
 
 	// Get total count
 	var total int32
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM commodore.dvr_recordings d WHERE %s", whereClause)
+	countQuery := fmt.Sprintf(`
+		SELECT COUNT(*)
+		  FROM commodore.dvr_recordings d
+		  LEFT JOIN commodore.streams st ON d.stream_id = st.id
+		 WHERE %s`, whereClause)
 	if countErr := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); countErr != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
@@ -7050,21 +7138,29 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 	// Base query - join with streams to get title
 	query := fmt.Sprintf(`
 			SELECT d.id, d.dvr_hash, d.playback_id, d.internal_name, d.stream_id::text, COALESCE(st.title, d.internal_name),
-			       d.retention_until, COALESCE(d.retention_source, ''), d.created_at, d.updated_at,
+			       d.size_bytes, d.retention_until, COALESCE(d.retention_source, ''), d.created_at, d.updated_at,
 			       COALESCE(d.storage_cluster_id, d.origin_cluster_id), d.has_thumbnails
 			FROM commodore.dvr_recordings d
 			LEFT JOIN commodore.streams st ON d.stream_id = st.id
 			WHERE %s`, whereClause)
 
-	// Add keyset condition if cursor provided
-	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
-		query += " AND " + condition
-		args = append(args, cursorArgs...)
+	offsetMode := req.Offset != nil || req.GetSortField() != "" || req.GetSortDirection() != ""
+	offset := int32(0)
+	if req.Offset != nil && req.GetOffset() > 0 {
+		offset = req.GetOffset()
 	}
-
-	// Add ORDER BY and LIMIT
-	query += " " + builder.OrderBy(params)
-	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
+	if offsetMode {
+		query += fmt.Sprintf(" ORDER BY %s %s NULLS LAST, d.created_at DESC, d.dvr_hash DESC LIMIT %d OFFSET %d",
+			dvrListSortColumn(req.GetSortField()), mediaListSortDirection(req.GetSortDirection()), params.Limit+1, offset)
+	} else {
+		// Add keyset condition if cursor provided
+		if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+			query += " AND " + condition
+			args = append(args, cursorArgs...)
+		}
+		query += " " + builder.OrderBy(params)
+		query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
+	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -7077,13 +7173,14 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 		var (
 			id, dvrHash, playbackID, internalName, streamID, title string
 			retentionSource                                        string
+			sizeBytes                                              sql.NullInt64
 			retentionUntil                                         sql.NullTime
 			createdAt, updatedAt                                   time.Time
 			thumbnailCluster                                       sql.NullString
 			hasThumbnails                                          bool
 		)
 		if err := rows.Scan(&id, &dvrHash, &playbackID, &internalName, &streamID, &title,
-			&retentionUntil, &retentionSource, &createdAt, &updatedAt,
+			&sizeBytes, &retentionUntil, &retentionSource, &createdAt, &updatedAt,
 			&thumbnailCluster, &hasThumbnails); err != nil {
 			s.logger.WithError(err).Warn("Error scanning DVR recording")
 			continue
@@ -7103,6 +7200,10 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 		if retentionUntil.Valid {
 			expiresAt := timestamppb.New(retentionUntil.Time)
 			recording.ExpiresAt = expiresAt
+		}
+		if sizeBytes.Valid {
+			size := sizeBytes.Int64
+			recording.SizeBytes = &size
 		}
 		recording.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, thumbnailCluster, dvrHash)
 
@@ -7150,6 +7251,10 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 	} else {
 		resp.Pagination.HasPreviousPage = hasMore
 		resp.Pagination.HasNextPage = params.Cursor != nil
+	}
+	if offsetMode {
+		resp.Pagination.HasNextPage = hasMore
+		resp.Pagination.HasPreviousPage = offset > 0
 	}
 
 	return resp, nil
@@ -7656,7 +7761,12 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 	resp, trailers, err := foghornClient.CreateVodUpload(ctx, foghornReq)
 	if err != nil {
 		s.logger.WithError(err).WithField("vod_hash", vodHash).Error("Failed to create VOD upload via Foghorn")
-		// Don't rollback business registry - can be cleaned up later
+		if _, cleanupErr := s.db.ExecContext(context.Background(), `
+			DELETE FROM commodore.vod_assets
+			WHERE id = $1 AND tenant_id = $2
+		`, vodID, tenantID); cleanupErr != nil {
+			s.logger.WithError(cleanupErr).WithField("vod_hash", vodHash).Error("Failed to remove VOD registry row after Foghorn rejection")
+		}
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
@@ -7911,6 +8021,11 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 	} else {
 		whereClause += " AND library_visible = true"
 	}
+	if search := strings.TrimSpace(req.GetSearch()); search != "" {
+		whereClause += fmt.Sprintf(" AND (LOWER(COALESCE(title, '')) LIKE $%d OR LOWER(COALESCE(filename, '')) LIKE $%d OR LOWER(vod_hash) LIKE $%d)", argIdx, argIdx, argIdx)
+		args = append(args, "%"+strings.ToLower(search)+"%")
+		argIdx++
+	}
 
 	// Get total count
 	var total int32
@@ -7934,15 +8049,23 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 		FROM commodore.vod_assets
 		WHERE %s`, whereClause)
 
-	// Add keyset condition if cursor provided
-	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
-		query += " AND " + condition
-		args = append(args, cursorArgs...)
+	offsetMode := req.Offset != nil || req.GetSortField() != "" || req.GetSortDirection() != ""
+	offset := int32(0)
+	if req.Offset != nil && req.GetOffset() > 0 {
+		offset = req.GetOffset()
 	}
-
-	// Add ORDER BY and LIMIT
-	query += " " + builder.OrderBy(params)
-	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
+	if offsetMode {
+		query += fmt.Sprintf(" ORDER BY %s %s NULLS LAST, created_at DESC, vod_hash DESC LIMIT %d OFFSET %d",
+			vodListSortColumn(req.GetSortField()), mediaListSortDirection(req.GetSortDirection()), params.Limit+1, offset)
+	} else {
+		// Add keyset condition if cursor provided
+		if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+			query += " AND " + condition
+			args = append(args, cursorArgs...)
+		}
+		query += " " + builder.OrderBy(params)
+		query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
+	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -8060,8 +8183,267 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 		resp.Pagination.HasPreviousPage = hasMore
 		resp.Pagination.HasNextPage = params.Cursor != nil
 	}
+	if offsetMode {
+		resp.Pagination.HasNextPage = hasMore
+		resp.Pagination.HasPreviousPage = offset > 0
+	}
 
 	return resp, nil
+}
+
+// ListStorageArtifacts returns the account storage browser's canonical
+// registry projection. This is intentionally served from Commodore instead of
+// Bridge joining one page each of clips/DVR/VOD, so search, sorting, and
+// pagination run against the full tenant dataset.
+func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *pb.ListStorageArtifactsRequest) (*pb.ListStorageArtifactsResponse, error) {
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if req.GetTenantId() != "" && req.GetTenantId() != tenantID {
+		return nil, status.Error(codes.PermissionDenied, "tenant mismatch")
+	}
+
+	limit := int(req.GetLimit())
+	if limit <= 0 {
+		limit = 25
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := int(req.GetOffset())
+	if offset < 0 {
+		offset = 0
+	}
+
+	args := []any{tenantID}
+	filters := []string{"TRUE"}
+	argIdx := 2
+
+	if streamID := req.GetStreamId(); streamID != "" {
+		filters = append(filters, fmt.Sprintf("stream_id = $%d", argIdx))
+		args = append(args, streamID)
+		argIdx++
+	}
+
+	if len(req.GetKinds()) > 0 {
+		var placeholders []string
+		for _, kind := range req.GetKinds() {
+			normalized := strings.ToLower(strings.TrimSpace(kind))
+			switch normalized {
+			case "vod", "dvr", "chapter", "clip":
+				placeholders = append(placeholders, fmt.Sprintf("$%d", argIdx))
+				args = append(args, normalized)
+				argIdx++
+			}
+		}
+		if len(placeholders) > 0 {
+			filters = append(filters, fmt.Sprintf("kind IN (%s)", strings.Join(placeholders, ", ")))
+		}
+	}
+
+	if search := strings.TrimSpace(req.GetSearch()); search != "" {
+		filters = append(filters, fmt.Sprintf("(LOWER(title) LIKE $%d OR LOWER(artifact_hash) LIKE $%d OR LOWER(stream_title) LIKE $%d OR LOWER(secondary_label) LIKE $%d)", argIdx, argIdx, argIdx, argIdx))
+		args = append(args, "%"+strings.ToLower(search)+"%")
+	}
+
+	sortField := "created_at"
+	switch req.GetSortField() {
+	case "title", "kind", "size_bytes", "expires_at":
+		sortField = req.GetSortField()
+	}
+	sortDirection := "DESC"
+	if strings.EqualFold(req.GetSortDirection(), "asc") {
+		sortDirection = "ASC"
+	}
+	nulls := "NULLS LAST"
+	if sortField == "created_at" && sortDirection == "DESC" {
+		nulls = ""
+	}
+
+	baseQuery := `
+		SELECT kind, id, artifact_hash, playback_id, stream_id, stream_title, title, secondary_label,
+		       size_bytes, status, storage_location, is_frozen, created_at, updated_at, expires_at,
+		       retention_source, origin_type, origin_id, storage_cluster_id, has_thumbnails
+		FROM (
+			SELECT
+				CASE WHEN COALESCE(v.origin_type, '') = 'dvr_chapter' THEN 'chapter' ELSE 'vod' END AS kind,
+				v.id::text AS id,
+				v.vod_hash AS artifact_hash,
+				COALESCE(v.playback_id, '') AS playback_id,
+				COALESCE(v.stream_id::text, '') AS stream_id,
+				COALESCE(st.title, '') AS stream_title,
+				COALESCE(NULLIF(v.title, ''), NULLIF(v.filename, ''), v.vod_hash) AS title,
+				COALESCE(NULLIF(v.filename, ''), v.content_type, '') AS secondary_label,
+				v.size_bytes AS size_bytes,
+				'registry' AS status,
+				NULL::text AS storage_location,
+				NULL::boolean AS is_frozen,
+				v.created_at AS created_at,
+				v.updated_at AS updated_at,
+				v.retention_until AS expires_at,
+				COALESCE(v.retention_source, '') AS retention_source,
+				COALESCE(v.origin_type, '') AS origin_type,
+				COALESCE(v.origin_id, '') AS origin_id,
+				COALESCE(v.storage_cluster_id, v.origin_cluster_id, '') AS storage_cluster_id,
+				v.has_thumbnails AS has_thumbnails
+			FROM commodore.vod_assets v
+			LEFT JOIN commodore.streams st ON st.id = v.stream_id AND st.tenant_id = v.tenant_id
+			WHERE v.tenant_id = $1
+			  AND (v.library_visible = true OR COALESCE(v.origin_type, '') = 'dvr_chapter')
+
+			UNION ALL
+
+			SELECT
+				'dvr' AS kind,
+				d.id::text AS id,
+				d.dvr_hash AS artifact_hash,
+				COALESCE(d.playback_id, '') AS playback_id,
+				COALESCE(d.stream_id::text, '') AS stream_id,
+				COALESCE(st.title, '') AS stream_title,
+				COALESCE(st.title, d.internal_name, d.dvr_hash) AS title,
+				COALESCE(d.internal_name, '') AS secondary_label,
+				d.size_bytes AS size_bytes,
+				'registry' AS status,
+				NULL::text AS storage_location,
+				NULL::boolean AS is_frozen,
+				d.created_at AS created_at,
+				d.updated_at AS updated_at,
+				d.retention_until AS expires_at,
+				COALESCE(d.retention_source, '') AS retention_source,
+				'' AS origin_type,
+				'' AS origin_id,
+				COALESCE(d.storage_cluster_id, d.origin_cluster_id, '') AS storage_cluster_id,
+				d.has_thumbnails AS has_thumbnails
+			FROM commodore.dvr_recordings d
+			LEFT JOIN commodore.streams st ON st.id = d.stream_id AND st.tenant_id = d.tenant_id
+			WHERE d.tenant_id = $1 AND (d.retention_until IS NULL OR d.retention_until > NOW())
+
+			UNION ALL
+
+			SELECT
+				'clip' AS kind,
+				c.id::text AS id,
+				c.clip_hash AS artifact_hash,
+				COALESCE(c.playback_id, '') AS playback_id,
+				COALESCE(c.stream_id::text, '') AS stream_id,
+				COALESCE(st.title, '') AS stream_title,
+				COALESCE(NULLIF(c.title, ''), c.clip_hash) AS title,
+				COALESCE(c.clip_mode, '') AS secondary_label,
+				c.size_bytes AS size_bytes,
+				'registry' AS status,
+				NULL::text AS storage_location,
+				NULL::boolean AS is_frozen,
+				c.created_at AS created_at,
+				c.updated_at AS updated_at,
+				c.retention_until AS expires_at,
+				COALESCE(c.retention_source, '') AS retention_source,
+				'' AS origin_type,
+				'' AS origin_id,
+				COALESCE(c.storage_cluster_id, c.origin_cluster_id, '') AS storage_cluster_id,
+				c.has_thumbnails AS has_thumbnails
+			FROM commodore.clips c
+			LEFT JOIN commodore.streams st ON st.id = c.stream_id AND st.tenant_id = c.tenant_id
+			WHERE c.tenant_id = $1
+		) artifacts`
+
+	whereClause := strings.Join(filters, " AND ")
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM (%s WHERE %s) counted", baseQuery, whereClause)
+	var total int32
+	if countErr := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); countErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
+	}
+
+	dataArgs := append([]any{}, args...)
+	limitArg := len(dataArgs) + 1
+	offsetArg := len(dataArgs) + 2
+	dataArgs = append(dataArgs, limit+1, offset)
+	dataQuery := fmt.Sprintf(`%s WHERE %s ORDER BY %s %s %s, created_at DESC, artifact_hash DESC LIMIT $%d OFFSET $%d`,
+		baseQuery, whereClause, sortField, sortDirection, nulls, limitArg, offsetArg)
+
+	rows, err := s.db.QueryContext(ctx, dataQuery, dataArgs...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var artifacts []*pb.StorageArtifactInfo
+	for rows.Next() {
+		var (
+			kind, id, hash, playbackID, streamID, streamTitle, title, secondary string
+			sizeBytes                                                           sql.NullInt64
+			statusText, storageLocation                                         sql.NullString
+			isFrozen                                                            sql.NullBool
+			createdAt, updatedAt                                                time.Time
+			expiresAt                                                           sql.NullTime
+			retentionSource, originType, originID, storageClusterID             string
+			hasThumbnails                                                       bool
+		)
+		if err := rows.Scan(&kind, &id, &hash, &playbackID, &streamID, &streamTitle, &title, &secondary,
+			&sizeBytes, &statusText, &storageLocation, &isFrozen, &createdAt, &updatedAt, &expiresAt,
+			&retentionSource, &originType, &originID, &storageClusterID, &hasThumbnails); err != nil {
+			s.logger.WithError(err).Warn("Error scanning storage artifact")
+			continue
+		}
+
+		artifact := &pb.StorageArtifactInfo{
+			Kind:             kind,
+			Id:               id,
+			ArtifactHash:     hash,
+			StreamTitle:      streamTitle,
+			Title:            title,
+			SecondaryLabel:   secondary,
+			Status:           statusText.String,
+			CreatedAt:        timestamppb.New(createdAt),
+			UpdatedAt:        timestamppb.New(updatedAt),
+			StorageClusterId: storageClusterID,
+			HasThumbnails:    hasThumbnails,
+		}
+		if playbackID != "" {
+			artifact.PlaybackId = &playbackID
+		}
+		if streamID != "" {
+			artifact.StreamId = &streamID
+		}
+		if sizeBytes.Valid {
+			value := sizeBytes.Int64
+			artifact.SizeBytes = &value
+		}
+		if storageLocation.Valid && storageLocation.String != "" {
+			value := storageLocation.String
+			artifact.StorageLocation = &value
+		}
+		if isFrozen.Valid {
+			value := isFrozen.Bool
+			artifact.IsFrozen = &value
+		}
+		if expiresAt.Valid {
+			artifact.ExpiresAt = timestamppb.New(expiresAt.Time)
+		}
+		if retentionSource != "" {
+			artifact.RetentionSource = &retentionSource
+		}
+		if originType != "" {
+			artifact.OriginType = &originType
+		}
+		if originID != "" {
+			artifact.OriginId = &originID
+		}
+		artifact.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, sql.NullString{String: storageClusterID, Valid: storageClusterID != ""}, hash)
+
+		artifacts = append(artifacts, artifact)
+	}
+
+	hasNext := len(artifacts) > limit
+	if hasNext {
+		artifacts = artifacts[:limit]
+	}
+
+	return &pb.ListStorageArtifactsResponse{
+		Artifacts:   artifacts,
+		TotalCount:  total,
+		HasNextPage: hasNext,
+	}, nil
 }
 
 // DeleteVodAsset deletes a VOD asset via Foghorn

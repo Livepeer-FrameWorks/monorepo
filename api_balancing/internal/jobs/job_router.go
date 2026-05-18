@@ -7,11 +7,19 @@ import (
 
 // routeProcessingJob selects the best edge node for a processing job.
 // Returns (nodeID, reason). Empty nodeID means no suitable node found.
-func routeProcessingJob(_job *processingJob) (string, string) {
+func routeProcessingJob(job *processingJob) (string, string) {
 	sm := state.DefaultManager()
 	aliveIDs := sm.AliveNodeIDs(60 * time.Second)
 	if len(aliveIDs) == 0 {
 		return "", "no alive nodes"
+	}
+
+	if job != nil && job.PreferredNode.Valid && job.PreferredNode.String != "" {
+		node := sm.GetNodeState(job.PreferredNode.String)
+		if node != nil && node.CapProcessing && node.IsHealthy && (node.MaxTranscodes == 0 || node.CurrentTranscodes < node.MaxTranscodes) {
+			return job.PreferredNode.String, "preferred_source_node"
+		}
+		return "", "preferred source node unavailable"
 	}
 
 	var bestID string

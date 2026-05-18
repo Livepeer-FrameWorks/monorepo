@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -60,11 +61,8 @@ func (s *Server) serveFile(c *gin.Context, kind string) {
 }
 
 // serveClipRoute dispatches /clip/<stream>/<file> requests. Stream
-// identity stays in the path (not a query parameter) so Mist's input
-// + ".dtsh" sidecar mutation produces the right URL. The legacy flat
-// /clip/<file> shape is rejected — Foghorn always emits the
-// stream-scoped path now that output_stream_name is required on
-// ClipPullRequest.
+// identity stays in the path so Mist's input + ".dtsh" sidecar
+// mutation resolves against the same clip artifact.
 func (s *Server) serveClipRoute(c *gin.Context) {
 	stream, file := parseClipWildcardPath(c.Param("path"))
 	if file == "" || stream == "" {
@@ -108,10 +106,8 @@ func (s *Server) serveFileWithStream(c *gin.Context, kind, streamInternal string
 		return
 	}
 
-	// Clip paths are always stream-scoped now (Foghorn requires
-	// output_stream_name on ClipPullRequest, and the relay route
-	// matches /clip/<stream>/<file>). VOD/upload paths stay flat at
-	// storage/<kind>/<file>.
+	// Clip artifacts are stream-scoped; VOD and upload artifacts stay
+	// flat at storage/<kind>/<file>.
 	var localPath string
 	if kind == "clip" {
 		if streamInternal == "" {
@@ -181,9 +177,13 @@ func (s *Server) serveUpload(c *gin.Context) {
 		return
 	}
 	file = strings.TrimPrefix(file, "/")
+	if strings.HasSuffix(file, ".dtsh") {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
 
 	localPath := s.canonicalUploadPath(file)
-	if info, err := os.Stat(localPath); err == nil && info.Mode().IsRegular() {
+	if info, err := os.Stat(localPath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
 		// Unsafe-wrapper staging may have already materialized this file
 		// locally; serve directly when present.
 		f, err := os.Open(localPath)
@@ -216,7 +216,7 @@ func (s *Server) serveUpload(c *gin.Context) {
 	}
 	// Upload reads are always memory-only — sequential one-shot. Bypass disk
 	// admission entirely.
-	s.streamRangeNoCache(c, res)
+	s.streamRangeNoCacheWithOptions(c, res, noCacheOptions{RetryFullOn416: true})
 }
 
 // fetchAndServe is the cold-playback dispatcher. HEAD passes straight
@@ -241,12 +241,29 @@ func (s *Server) fetchAndServe(c *gin.Context, kind, hash, ext, localPath string
 // straight back, and never touches disk. Used for memory-only admission
 // outcomes and for processing-input reads.
 func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult) {
-	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, res.MediaPresignedURL, nil)
+	s.streamRangeNoCacheWithOptions(c, res, noCacheOptions{})
+}
+
+type noCacheOptions struct {
+	RetryFullOn416 bool
+}
+
+func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResult, opts noCacheOptions) {
+	method := c.Request.Method
+	if method == http.MethodHead {
+		method = http.MethodGet
+	}
+	req, err := http.NewRequestWithContext(c.Request.Context(), method, res.MediaPresignedURL, nil)
 	if err != nil {
 		s.serverError(c, "build s3 request", err)
 		return
 	}
-	if rng := c.Request.Header.Get("Range"); rng != "" {
+	requestRange := ""
+	if c.Request.Method == http.MethodHead {
+		requestRange = "bytes=0-0"
+		req.Header.Set("Range", "bytes=0-0")
+	} else if rng := c.Request.Header.Get("Range"); rng != "" {
+		requestRange = rng
 		req.Header.Set("Range", rng)
 	}
 	resp, err := s.httpc.Do(req)
@@ -256,6 +273,28 @@ func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult) {
 	}
 	defer resp.Body.Close()
 
+	if opts.RetryFullOn416 &&
+		c.Request.Method != http.MethodHead &&
+		requestRange != "" &&
+		resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+		if _, discardErr := io.Copy(io.Discard, resp.Body); discardErr != nil && s.logger != nil {
+			s.logger.WithError(discardErr).Debug("relay upload range retry discarded partial response")
+		}
+		resp.Body.Close()
+
+		retryReq, retryErr := http.NewRequestWithContext(c.Request.Context(), method, res.MediaPresignedURL, nil)
+		if retryErr != nil {
+			s.serverError(c, "build s3 retry request", retryErr)
+			return
+		}
+		resp, err = s.httpc.Do(retryReq)
+		if err != nil {
+			s.serverError(c, "s3 retry fetch", err)
+			return
+		}
+		defer resp.Body.Close()
+	}
+
 	// Mirror status and the headers that Mist cares about. Content-Length,
 	// Content-Range, Accept-Ranges drive seekability detection in
 	// HTTP::URIReader.
@@ -264,19 +303,39 @@ func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult) {
 			c.Writer.Header().Set(h, v)
 		}
 	}
+	if c.Request.Method == http.MethodHead {
+		if total, ok := totalFromContentRange(resp.Header.Get("Content-Range")); ok {
+			c.Writer.Header().Set("Content-Length", strconv.FormatInt(total, 10))
+			c.Writer.Header().Del("Content-Range")
+		}
+	}
 	if c.Writer.Header().Get("Accept-Ranges") == "" {
 		c.Writer.Header().Set("Accept-Ranges", "bytes")
 	}
-	c.Writer.WriteHeader(resp.StatusCode)
 	if c.Request.Method == http.MethodHead {
+		if resp.StatusCode == http.StatusPartialContent {
+			c.Writer.WriteHeader(http.StatusOK)
+		} else {
+			c.Writer.WriteHeader(resp.StatusCode)
+		}
 		return
 	}
+	c.Writer.WriteHeader(resp.StatusCode)
 	buf := make([]byte, 256*1024)
 	if _, copyErr := io.CopyBuffer(c.Writer, resp.Body, buf); copyErr != nil {
 		if s.logger != nil && !errors.Is(copyErr, context.Canceled) {
 			s.logger.WithError(copyErr).Debug("relay no-cache stream aborted")
 		}
 	}
+}
+
+func totalFromContentRange(v string) (int64, bool) {
+	slash := strings.LastIndex(v, "/")
+	if slash < 0 || slash == len(v)-1 {
+		return 0, false
+	}
+	total, err := strconv.ParseInt(v[slash+1:], 10, 64)
+	return total, err == nil && total >= 0
 }
 
 func (s *Server) notPlayable(c *gin.Context, res *ResolveResult) {
