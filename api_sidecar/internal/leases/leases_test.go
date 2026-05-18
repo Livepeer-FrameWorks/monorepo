@@ -51,8 +51,8 @@ func TestSourceLease_DVRFansOutSegmentViews(t *testing.T) {
 	seg := newFakeSegmentIndex()
 	tr := NewTracker(seg, NewHeatTracker())
 
-	key := AssetKey{Type: "dvr", Hash: "dvr1", ChapterID: "c1"}
-	tr.AcquireSource("dvr+c1", []string{"/data/dvr/s/dvr1/chapters/c1.m3u8"}, key, []string{"seg-1.ts", "seg-2.ts"}, false)
+	key := AssetKey{Type: "dvr", Hash: "dvr1"}
+	tr.AcquireSource("dvr+rolling1", []string{"/data/dvr/s/dvr1/dvr1.m3u8"}, key, []string{"seg-1.ts", "seg-2.ts"}, false)
 
 	if got := seg.count("dvr1", "seg-1.ts"); got != 1 {
 		t.Fatalf("seg-1 expected refcount 1, got %d", got)
@@ -61,7 +61,7 @@ func TestSourceLease_DVRFansOutSegmentViews(t *testing.T) {
 		t.Fatalf("seg-2 expected refcount 1, got %d", got)
 	}
 
-	tr.ReleaseSource("dvr+c1")
+	tr.ReleaseSource("dvr+rolling1")
 	if got := seg.count("dvr1", "seg-1.ts"); got != 0 {
 		t.Fatalf("seg-1 expected refcount 0 after release, got %d", got)
 	}
@@ -74,19 +74,19 @@ func TestViewerLease_IdempotentRefireDoesNotDoubleBumpHeatOrViews(t *testing.T) 
 
 	// Establish a source lease so DVR ActiveViews would be visible if
 	// viewer churn touched them.
-	key := AssetKey{Type: "dvr", Hash: "dvr1", ChapterID: "c1"}
-	tr.AcquireSource("dvr+c1", []string{"/dvr/c1.m3u8"}, key, []string{"seg-1.ts"}, false)
+	key := AssetKey{Type: "dvr", Hash: "dvr1"}
+	tr.AcquireSource("dvr+rolling1", []string{"/dvr/rolling1.m3u8"}, key, []string{"seg-1.ts"}, false)
 	startViews := seg.count("dvr1", "seg-1.ts")
 
 	// First viewer.
-	tr.AcquireViewer("session-1", "dvr+c1", "/dvr/c1.m3u8")
-	if got, _ := heat.Lookup("/dvr/c1.m3u8"); got.AccessCount != 1 {
+	tr.AcquireViewer("session-1", "dvr+rolling1", "/dvr/rolling1.m3u8")
+	if got, _ := heat.Lookup("/dvr/rolling1.m3u8"); got.AccessCount != 1 {
 		t.Fatalf("expected heat=1 after first viewer, got %d", got.AccessCount)
 	}
 
 	// Refire of same session_id (auth invalidation case).
-	tr.AcquireViewer("session-1", "dvr+c1", "/dvr/c1.m3u8")
-	if got, _ := heat.Lookup("/dvr/c1.m3u8"); got.AccessCount != 1 {
+	tr.AcquireViewer("session-1", "dvr+rolling1", "/dvr/rolling1.m3u8")
+	if got, _ := heat.Lookup("/dvr/rolling1.m3u8"); got.AccessCount != 1 {
 		t.Fatalf("expected heat=1 after refire of same session, got %d", got.AccessCount)
 	}
 	if got := seg.count("dvr1", "seg-1.ts"); got != startViews {
@@ -94,7 +94,7 @@ func TestViewerLease_IdempotentRefireDoesNotDoubleBumpHeatOrViews(t *testing.T) 
 	}
 
 	tr.ReleaseViewer("session-1")
-	if got, _ := heat.Lookup("/dvr/c1.m3u8"); got.AccessCount != 1 {
+	if got, _ := heat.Lookup("/dvr/rolling1.m3u8"); got.AccessCount != 1 {
 		t.Fatalf("heat count is monotonic; expected 1 after release, got %d", got.AccessCount)
 	}
 }
@@ -132,12 +132,12 @@ func TestIsPathLeased_AnyLeaseTypePins(t *testing.T) {
 	}
 }
 
-func TestIsAssetLeased_DVRMatchesAnyChapter(t *testing.T) {
+func TestIsAssetLeased_DVRMatchesByHash(t *testing.T) {
 	tr := NewTracker(nil, NewHeatTracker())
-	tr.AcquireSource("dvr+c1", []string{"/m1"}, AssetKey{Type: "dvr", Hash: "dvr1", ChapterID: "c1"}, nil, false)
+	tr.AcquireSource("dvr+rolling1", []string{"/m1"}, AssetKey{Type: "dvr", Hash: "dvr1"}, nil, false)
 
 	if !tr.IsAssetLeased(AssetKey{Type: "dvr", Hash: "dvr1"}) {
-		t.Fatalf("expected dvr1 to be asset-leased via chapter c1")
+		t.Fatalf("expected dvr1 to be asset-leased")
 	}
 	if tr.IsAssetLeased(AssetKey{Type: "dvr", Hash: "dvr2"}) {
 		t.Fatalf("did not expect dvr2 to be asset-leased")
@@ -194,7 +194,7 @@ func TestDegradedDvr_PausesUntilRelease(t *testing.T) {
 	if tr.DegradedDvrCleanupActive() {
 		t.Fatalf("expected non-degraded at start")
 	}
-	tr.AcquireSource("dvr+x", []string{"/x"}, AssetKey{Type: "dvr", Hash: "h", ChapterID: "x"}, nil, true)
+	tr.AcquireSource("dvr+x", []string{"/x"}, AssetKey{Type: "dvr", Hash: "h"}, nil, true)
 	if !tr.DegradedDvrCleanupActive() {
 		t.Fatalf("expected degraded after acquiring degraded source")
 	}

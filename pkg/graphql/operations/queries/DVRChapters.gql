@@ -24,9 +24,11 @@ query DVRChapters(
       startMs
       endMs
       isCurrent
-      manifestS3Key
+      state
+      playbackId
       hasGaps
       segmentCount
+      lastFailureReason
     }
     nextPageToken
   }

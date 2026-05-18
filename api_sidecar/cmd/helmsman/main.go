@@ -11,6 +11,8 @@ import (
 	sidecarconfig "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/handlers"
+	"frameworks/api_sidecar/internal/leases"
+	"frameworks/api_sidecar/internal/relay"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
@@ -172,6 +174,27 @@ func main() {
 		edge.GET("/metrics", handlers.HandleEdgeMetrics)
 	}
 
+	// Read-through artifact relay: Mist sees stable seekable HTTP sources
+	// for vod/clip/dvr-chapter playback and safe-wrapper processing input.
+	// Behind these URLs the relay materializes bytes from local disk
+	// (warm), from S3 into disk (cold + healthy), or from S3 straight to
+	// socket (cold + pressured). The route group lives on the existing
+	// internal-only Helmsman listener; no per-route auth.
+	var relayServer *relay.Server
+	if sm := handlers.GetStorageManager(); sm != nil {
+		relayServer = relay.New(relay.Options{
+			BasePath: cfg.StorageLocalPath,
+			Admitter: sm,
+			Resolver: relay.NewControlResolver(),
+			Freeze:   handlers.NewRelayFreezeHandoff(),
+			Heat:     leases.GlobalHeat(),
+			Logger:   logger,
+		})
+		relayServer.MountRoutes(r)
+	} else {
+		logger.Warn("Storage manager not initialized; relay /internal/artifact/* routes skipped")
+	}
+
 	// Webhook routes - MistServer triggers and webhooks
 	webhooks := r.Group("/webhooks")
 	{
@@ -210,6 +233,10 @@ func main() {
 	go func() {
 		sig := <-quit
 		logger.WithField("signal", sig.String()).Info("Shutdown signal received")
+
+		// Relay has no background fills to stop — cold fetches live
+		// inside HTTP request handlers and cancel through the request
+		// context when the HTTP server stops accepting.
 
 		// Stop storage manager
 		handlers.StopStorageManager()

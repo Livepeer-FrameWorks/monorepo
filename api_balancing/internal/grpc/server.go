@@ -484,17 +484,65 @@ func (s *FoghornGRPCServer) resolveEffectiveDVRConfig(req *pb.StartDVRRequest) d
 	return effective
 }
 
-// dvrRetentionDays returns the post-end retention days to snapshot onto
+// dvrRetentionDays extracts the post-end retention days to snapshot onto
 // foghorn.artifacts.dvr_retention_days at DVR start. FinalizeDVR reads this
-// snapshot months later, never re-resolving a tenant tier that may have changed.
+// snapshot months later, never re-resolving a tenant tier that may have
+// changed. Commodore has already run the per-class cascade and stamped the
+// optional field; we trust it. Unset means a direct-Foghorn caller (test
+// path, or a caller bypassing Commodore) — fall back to the 30-day system
+// default.
+//
+// Return semantics: 0 means "keep forever" (FinalizeDVR writes NULL
+// retention_until); >0 sets that many days.
 func dvrRetentionDays(p *pb.DVRPolicy) int32 {
-	if p == nil {
+	if p == nil || p.RecordingRetentionDays == nil {
 		return 30
 	}
-	if days := p.GetRecordingRetentionDays(); days > 0 {
-		return days
+	return *p.RecordingRetentionDays
+}
+
+// resolveArtifactInitialRetention computes the retention_until column for
+// a new artifact insert (clip / VOD). When commodoreDays is non-nil, the
+// upstream Commodore call has already run the full cascade (per-asset →
+// per-stream → per-class tenant → system default → tier cap); we trust it.
+// Otherwise (direct-Foghorn callers — tests, internal retries) we resolve
+// locally against the tier cap and the per-class system default.
+//
+// Returned NullTime: Valid=false means write NULL retention_until (artifact
+// never auto-expires).
+func resolveArtifactInitialRetention(ctx context.Context, purser *purserclient.GRPCClient, tenantID string, commodoreDays *int32, systemDefaultDays int32, logger logging.Logger) sql.NullTime {
+	const safeFallbackDays = 30
+
+	if commodoreDays != nil {
+		days := *commodoreDays
+		if days <= 0 {
+			return sql.NullTime{Valid: false}
+		}
+		return sql.NullTime{Valid: true, Time: time.Now().UTC().Add(time.Duration(days) * 24 * time.Hour)}
 	}
-	return 30
+
+	cap := int32(0)
+	if purser != nil && tenantID != "" {
+		bs, err := purser.GetTenantBillingStatus(ctx, tenantID)
+		if err != nil {
+			logger.WithError(err).WithField("tenant_id", tenantID).Warn("Artifact retention: Purser billing status lookup failed; falling back to 30-day horizon")
+			return sql.NullTime{Valid: true, Time: time.Now().UTC().Add(safeFallbackDays * 24 * time.Hour)}
+		}
+		if bs != nil {
+			cap = bs.GetRecordingRetentionDays()
+		}
+	}
+	intended := systemDefaultDays
+	if intended <= 0 {
+		if cap <= 0 {
+			return sql.NullTime{Valid: false}
+		}
+		return sql.NullTime{Valid: true, Time: time.Now().UTC().Add(time.Duration(cap) * 24 * time.Hour)}
+	}
+	if cap > 0 && intended > cap {
+		intended = cap
+	}
+	return sql.NullTime{Valid: true, Time: time.Now().UTC().Add(time.Duration(intended) * 24 * time.Hour)}
 }
 
 // dvrClusterPolicy returns the per-cluster DVR ceiling, if configured.
@@ -702,19 +750,18 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		format = "mp4"
 	}
 
-	// Select ingest node (cap=ingest)
-	ictx := context.WithValue(ctx, ctxkeys.KeyCapability, "ingest")
-	ingestHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(ictx, req.StreamInternalName, 0, 0, map[string]int{}, "", true)
-	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "no ingest node available: %v", err)
-	}
-
-	// Select storage node (cap=storage)
+	// Select storage node (cap=storage) — always required for the clip
+	// writer regardless of where the source bytes come from.
 	sctx := context.WithValue(ctx, ctxkeys.KeyCapability, "storage")
 	storageHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(sctx, "", 0, 0, map[string]int{}, "", false)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "no storage node available: %v", err)
 	}
+
+	// Ingest node selection happens later, only for LIVE-source clips
+	// — the source dispatch picks the source kind and only LIVE needs
+	// an ingest host advertising the live shm window. Chapter and
+	// rolling-DVR sources read from storage/relay directly.
 
 	// Generate request_id for correlation
 	reqID := uuid.New().String()
@@ -725,21 +772,18 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		return nil, status.Error(codes.Unavailable, "storage node not connected")
 	}
 
-	// Resolve timing for hash generation and DB storage
-	// Use start_unix or start_ms depending on mode, convert to milliseconds for storage
-	var startMs, durationMs int64
-	if req.StartUnix != nil {
-		startMs = *req.StartUnix * 1000 // Convert seconds to ms
-	} else if req.StartMs != nil {
-		startMs = *req.StartMs * 1000 // start_ms is actually seconds, convert to ms
+	// Normalize the requested clip range to absolute Unix-ms across all
+	// ClipModes. The dispatcher (pickClipSource) compares against the
+	// live shm boundary, rolling DVR window, and chapter ranges in
+	// absolute wall-clock — every mode has to land in that space
+	// before dispatch. Hash/storage still use the start+duration shape
+	// downstream.
+	clipStartMsAbs, clipEndMsAbs, normErr := resolveClipAbsoluteRangeMs(req, req.StreamInternalName)
+	if normErr != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "resolve clip range: %v", normErr)
 	}
-	if req.DurationSec != nil {
-		durationMs = *req.DurationSec * 1000 // Convert seconds to ms
-	} else if req.StopUnix != nil && req.StartUnix != nil {
-		durationMs = (*req.StopUnix - *req.StartUnix) * 1000
-	} else if req.StopMs != nil && req.StartMs != nil {
-		durationMs = (*req.StopMs - *req.StartMs) * 1000
-	}
+	startMs := clipStartMsAbs
+	durationMs := clipEndMsAbs - clipStartMsAbs
 
 	// Use provided clip_hash from Commodore if available, otherwise generate locally
 	var clipHash string
@@ -788,15 +832,48 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	// requestedParams is stored in Commodore business registry, not in Foghorn
 	// Retention policy (ExpiresAt) is also managed in Commodore
 
+	// Source dispatch first — pick LIVE / DVR_ROLLING / CHAPTER based
+	// on where the requested range falls relative to the live shm
+	// window, the rolling DVR window, and any finalized chapter
+	// artifacts. Cross-source ranges, invalid ranges, and "no
+	// covering chapter or active DVR" all reject HERE, before any
+	// foghorn.artifacts / artifact_nodes inserts, so a rejected
+	// request never leaves an orphan clip row behind.
+	clipEndMs := startMs + durationMs
+	dispatch, dispatchErr := s.pickClipSource(ctx, req.TenantId, req.StreamInternalName, startMs, clipEndMs)
+	if dispatchErr != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "clip source dispatch: %v", dispatchErr)
+	}
+
+	// Ingest selection is LIVE-only. Chapter and rolling-DVR sources
+	// pull from storage/relay, so the SourceBaseUrl stays empty and
+	// Helmsman defaults to its local Mist for VOD-style sources.
+	var ingestHost string
+	if dispatch.kind == pb.ClipPullRequest_SOURCE_KIND_LIVE {
+		ictx := context.WithValue(ctx, ctxkeys.KeyCapability, "ingest")
+		host, _, _, _, _, ingestErr := s.lb.GetBestNodeWithScore(ictx, req.StreamInternalName, 0, 0, map[string]int{}, "", true)
+		if ingestErr != nil {
+			return nil, status.Errorf(codes.Unavailable, "no ingest node available for live clip: %v", ingestErr)
+		}
+		ingestHost = host
+	}
+	var sourceBaseURL string
+	if ingestHost != "" {
+		sourceBaseURL = control.DeriveMistHTTPBase(ingestHost)
+	}
+
 	// Store artifact lifecycle state in foghorn.artifacts
-	// NOTE: Business registry (tenant, user, title, etc.) is stored in commodore.clips
-	// tenant_id and user_id are denormalized here for Decklog events and fallback when Commodore is unavailable
-	// retention_until defaults to 30 days (system default, not user-configured yet)
+	// NOTE: Business registry (tenant, user, title, etc.) is stored in commodore.clips.
+	// tenant_id and user_id are denormalized here for Decklog events and fallback
+	// when Commodore is unavailable. retention_until comes from the cascade:
+	// req.RetentionDays (Commodore-resolved per-class default) → 30-day system
+	// default → Free-tier cap. 0 = no auto-expire (NULL retention_until).
 	storagePath := clips.BuildClipStoragePath(req.StreamInternalName, clipHash, format)
+	clipRetentionUntil := resolveArtifactInitialRetention(ctx, s.purserClient, req.TenantId, req.RetentionDays, 30 /* clip system default */, s.logger)
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, stream_internal_name, internal_name, tenant_id, user_id, status, request_id, manifest_path, format, origin_cluster_id, retention_until, created_at, updated_at)
-		VALUES ($1, 'clip', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'requested', $6, $7, $8, $9, NOW() + INTERVAL '30 days', NOW(), NOW())
-	`, clipHash, req.StreamInternalName, req.GetInternalName(), req.TenantId, req.GetUserId(), reqID, storagePath, format, clipCluster)
+		VALUES ($1, 'clip', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'requested', $6, $7, $8, $9, $10, NOW(), NOW())
+	`, clipHash, req.StreamInternalName, req.GetInternalName(), req.TenantId, req.GetUserId(), reqID, storagePath, format, clipCluster, clipRetentionUntil)
 
 	if err != nil {
 		// Commodore registration succeeded (clip_hash provided) but Foghorn insert failed
@@ -821,30 +898,47 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		// Don't fail the request, the artifact was created
 	}
 
-	// Send gRPC message to storage Helmsman
 	clipReq := &pb.ClipPullRequest{
-		ClipHash:      clipHash,
-		StreamName:    req.StreamInternalName,
-		Format:        format,
-		OutputName:    clipHash,
-		SourceBaseUrl: control.DeriveMistHTTPBase(ingestHost),
-		RequestId:     reqID,
+		ClipHash:   clipHash,
+		StreamName: dispatch.streamName,
+		// All clips for one stream share a single output namespace
+		// keyed on the owning stream's internal_name, regardless of
+		// which historical surface the dispatcher pulled from. Relay
+		// and DTSH paths resolve clip output by
+		// foghorn.artifacts.stream_internal_name.
+		OutputStreamName: req.StreamInternalName,
+		Format:           format,
+		OutputName:       clipHash,
+		SourceBaseUrl:    sourceBaseURL,
+		RequestId:        reqID,
+		SourceKind:       dispatch.kind,
+		// Helmsman needs the clip's vod+ routing name to boot it for
+		// .dtsh generation post-download. internal_name is the Foghorn
+		// artifact routing identifier, populated by the gRPC caller.
+		InternalName: req.GetInternalName(),
 	}
-	if req.StartUnix != nil {
-		clipReq.StartUnix = req.StartUnix
+	if dispatch.dvrHash != "" {
+		clipReq.SourceDvrHash = dispatch.dvrHash
 	}
-	if req.StopUnix != nil {
-		clipReq.StopUnix = req.StopUnix
+	if dispatch.chapterArtifactHash != "" {
+		clipReq.SourceChapterArtifactHash = dispatch.chapterArtifactHash
 	}
-	if req.StartMs != nil {
-		clipReq.StartMs = req.StartMs
+	// Send ONLY the canonical absolute Unix-seconds range. The
+	// dispatcher already normalized every legal ClipMode into
+	// (clipStartMsAbs, clipEndMsAbs); forwarding the original mode
+	// fields would let Helmsman reinterpret "start_ms" as
+	// stream-relative seconds and ask the chapter VOD for the wrong
+	// time window. Helmsman builds Mist's /view URL purely from
+	// these two fields.
+	startUnix := clipStartMsAbs / 1000
+	stopUnix := clipEndMsAbs / 1000
+	durationSec := stopUnix - startUnix
+	if durationSec < 1 {
+		durationSec = 1
 	}
-	if req.StopMs != nil {
-		clipReq.StopMs = req.StopMs
-	}
-	if req.DurationSec != nil {
-		clipReq.DurationSec = req.DurationSec
-	}
+	clipReq.StartUnix = &startUnix
+	clipReq.StopUnix = &stopUnix
+	clipReq.DurationSec = &durationSec
 
 	if err := control.SendClipPull(storageNodeID, clipReq); err != nil {
 		// Mark artifact as failed since we couldn't send to Helmsman
@@ -1138,26 +1232,41 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	// months later applies the same policy even if the tenant's tier has changed
 	// during the recording. retention_until is left NULL here — FinalizeDVR
 	// computes it as ended_at + dvr_retention_days*24h (post-end semantics).
+	// Stream config is authoritative: empty/NULL mode means chapters
+	// are off, regardless of cluster defaults. The sweeper already
+	// filters on dvr_chapter_mode IS NOT NULL AND != '', so leaving
+	// this empty fully disables chapter rotation for the recording.
 	chapterMode := req.GetDvrChapterMode()
-	if chapterMode == "" {
-		chapterMode = "window_sized_chapters"
-	}
 	chapterInterval := req.GetDvrChapterIntervalSeconds()
 	retentionDays := dvrRetentionDays(req.GetDvrPolicy())
+	// Snapshot the tenant's live MistProc config so the rolling-DVR
+	// surface (dvr+<internal>) keeps serving thumbnails/sprites
+	// across Foghorn restarts and process-cache TTL expiry without
+	// re-resolving through Commodore on every STREAM_PROCESS boot.
+	// Same snapshot pattern as dvr_window_seconds / dvr_chapter_mode.
+	var dvrProcessesJSON string
+	if control.CommodoreClient != nil {
+		resp, perr := control.CommodoreClient.GetTenantProcessesJSON(ctx, req.TenantId, "live", dvrCluster)
+		if perr != nil {
+			s.logger.WithError(perr).WithField("tenant_id", req.TenantId).Error("StartDVR: live processes_json snapshot failed")
+			return nil, status.Errorf(codes.Unavailable, "live processes_json snapshot failed: %v", perr)
+		}
+		dvrProcessesJSON = resp.GetProcessesJson()
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (
 			artifact_hash, artifact_type, stream_internal_name, internal_name,
 			stream_id, tenant_id, user_id,
 			status, request_id, format, origin_cluster_id,
-			dvr_window_seconds, dvr_chapter_mode, dvr_chapter_interval, dvr_retention_days,
+			dvr_window_seconds, dvr_chapter_mode, dvr_chapter_interval, dvr_retention_days, dvr_processes_json,
 			created_at, updated_at
 		)
 		VALUES ($1, 'dvr', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid,
-		        'requested', $7, 'm3u8', $8, $9, NULLIF($10, '')::text, NULLIF($11, 0)::int, NULLIF($12, 0)::int,
+		        'requested', $7, 'm3u8', $8, $9, NULLIF($10, '')::text, NULLIF($11, 0)::int, NULLIF($12, 0)::int, NULLIF($13, '')::text,
 		        NOW(), NOW())
 	`,
 		dvrHash, req.InternalName, artifactInternalName, streamID, req.TenantId, req.GetUserId(), requestID, dvrCluster,
-		effective.DVRWindowSeconds, chapterMode, chapterInterval, retentionDays,
+		effective.DVRWindowSeconds, chapterMode, chapterInterval, retentionDays, dvrProcessesJSON,
 	)
 
 	if err != nil {
@@ -1271,7 +1380,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 		RetentionUntil: 0,
 	}
 
-	fullDTSC := control.BuildDTSCURI(sourceNodeID, req.InternalName, true, s.logger)
+	fullDTSC := control.BuildDTSCURI(sourceNodeID, "live+"+req.InternalName, s.logger)
 	if fullDTSC == "" {
 		final, finalErr := control.FinalizeDVR(ctx, dvrHash, control.FinalizeOptions{
 			ReportedStatus: "failed",
@@ -1709,7 +1818,9 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 	switch resolvedType {
 	case "live":
 		response, err = s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
-	case "dvr", "clip", "vod":
+	case "dvr":
+		response, err = s.resolveDVRViewerEndpoint(ctx, req, lat, lon, resolution)
+	case "clip", "vod":
 		response, err = s.resolveArtifactViewerEndpoint(ctx, req, lat, lon)
 	default:
 		return nil, status.Error(codes.InvalidArgument, "content_type must resolve to 'live', 'dvr', 'clip', or 'vod'")
@@ -2211,6 +2322,120 @@ func (s *FoghornGRPCServer) queryStreamFanOut(ctx context.Context, internalName,
 	return all
 }
 
+// resolveDVRViewerEndpoint routes DVR viewer requests by lifecycle:
+// active recordings use live-style edge selection so any healthy edge
+// can serve via Mist's PLAY_REWRITE → STREAM_SOURCE → DTSC pull path
+// from the recording origin; finalized DVRs fall through to the warm-
+// cache artifact routing used by clip/VOD.
+//
+// resolution.InternalName for a DVR artifact playbackID is already
+// "dvr+<dvr_internal_name>" (set by control.ResolveStream); the edge's
+// PLAY_REWRITE rewrites the public ID back to that stream name before
+// STREAM_SOURCE fires.
+//
+// Fail-closed semantics for active DVR: when a recording is in flight
+// but the recording-origin lookup is ambiguous or fails, we surface
+// Unavailable rather than route through the archive/warm-cache lane.
+// Archive routing would silently land viewers on nodes that don't own
+// the live segments and produce stale playback.
+func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*pb.ViewerEndpointResponse, error) {
+	dvrInternalName := mist.ExtractInternalName(resolution.InternalName)
+	dispatch, derr := control.ResolveDVRArtifactDispatch(ctx, dvrInternalName)
+	if derr != nil {
+		s.logger.WithError(derr).WithFields(logging.Fields{
+			"content_id":    req.GetContentId(),
+			"internal_name": dvrInternalName,
+		}).Warn("DVR dispatch lookup failed")
+		// Don't silently downgrade to artifact routing — the dispatch
+		// helper errors specifically on active-DVR ambiguity, which
+		// must not be papered over with stale-segment fallback.
+		return nil, status.Error(codes.Unavailable, "DVR routing unavailable")
+	}
+	if dispatch != nil && dispatch.Status != "" && control.IsActiveDVRStatus(dispatch.Status) {
+		if dispatch.RecordingNode == "" {
+			s.logger.WithFields(logging.Fields{
+				"content_id":    req.GetContentId(),
+				"internal_name": dvrInternalName,
+				"status":        dispatch.Status,
+			}).Warn("Active DVR has no resolvable recording origin; refusing to fall back to archive routing")
+			return nil, status.Error(codes.Unavailable, "active DVR recording origin not yet registered; retry")
+		}
+		resp, err := s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
+		if err != nil {
+			return nil, err
+		}
+		// The live resolver labels metadata as live; rewrite to DVR
+		// identity so clients see what they're actually playing.
+		overrideActiveDVRMetadata(resp, dispatch)
+		return resp, nil
+	}
+	latest, latestErr := s.latestPlayableChapterForDVR(ctx, dispatch)
+	if latestErr != nil {
+		s.logger.WithError(latestErr).WithFields(logging.Fields{
+			"content_id":    req.GetContentId(),
+			"internal_name": dvrInternalName,
+		}).Warn("Stopped DVR: latest-chapter lookup failed")
+		return nil, status.Error(codes.Unavailable, "DVR no longer active; chapter lookup failed")
+	}
+	if latest == "" {
+		return nil, status.Error(codes.FailedPrecondition, "DVR is no longer active and has no playable chapters yet; query dvrChapters when finalization completes")
+	}
+	chapterReq := &pb.ViewerEndpointRequest{
+		ContentId: latest,
+	}
+	if vip := req.GetViewerIp(); vip != "" {
+		chapterReq.ViewerIp = &vip
+	}
+	if vt := req.GetViewerToken(); vt != "" {
+		chapterReq.ViewerToken = &vt
+	}
+	return s.ResolveViewerEndpoint(ctx, chapterReq)
+}
+
+// latestPlayableChapterForDVR returns the Commodore-minted public
+// playback_id of the most-recent playable chapter for a stopped DVR.
+// Returns "" with no error when no chapter has been dispatched yet.
+func (s *FoghornGRPCServer) latestPlayableChapterForDVR(ctx context.Context, dispatch *control.DVRArtifactDispatch) (string, error) {
+	if dispatch == nil || dispatch.DVRHash == "" {
+		return "", nil
+	}
+	var pid sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT playback_id
+		  FROM foghorn.dvr_chapters
+		 WHERE artifact_hash = $1
+		   AND state IN ('finalized', 'frozen', 'reclaimed')
+		   AND playback_id IS NOT NULL
+		 ORDER BY end_ms DESC
+		 LIMIT 1
+	`, dispatch.DVRHash).Scan(&pid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !pid.Valid {
+		return "", nil
+	}
+	return pid.String, nil
+}
+
+// overrideActiveDVRMetadata rewrites PlaybackMetadata produced by the
+// live resolver so it reports the DVR identity that's actually being
+// served. Without this clients see ContentType="live" for an active
+// DVR endpoint and lose the rolling-window/seek semantics distinction.
+func overrideActiveDVRMetadata(resp *pb.ViewerEndpointResponse, dispatch *control.DVRArtifactDispatch) {
+	if resp == nil || resp.Metadata == nil || dispatch == nil {
+		return
+	}
+	resp.Metadata.ContentType = "dvr"
+	resp.Metadata.Status = "recording"
+	resp.Metadata.DvrStatus = "recording"
+	// IsLive stays true: the surface is live-replayable. The status
+	// field carries the distinction between "live" and "recording".
+}
+
 func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
@@ -2473,6 +2698,10 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 	if storageCluster != "" && storageCluster != req.GetClusterId() {
 		storageClusterArg = sql.NullString{String: storageCluster, Valid: true}
 	}
+	// VOD system default is infinite (Mux / Cloudflare Stream baseline).
+	// Commodore-supplied retention_days takes precedence; the tier cap
+	// (0=uncapped on paid, finite on Free) clamps the result.
+	vodRetentionUntil := resolveArtifactInitialRetention(ctx, s.purserClient, req.TenantId, req.RetentionDays, 0 /* infinite VOD default */, s.logger)
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (
 			id, artifact_hash, artifact_type, internal_name,
@@ -2480,8 +2709,8 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 			sync_status, size_bytes, s3_url, format, origin_cluster_id, storage_cluster_id, retention_until, created_at, updated_at
 		)
 		VALUES ($1, $2, 'vod', $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'uploading',
-		        'in_progress', $6, $7, $8, $9, $10, NOW() + INTERVAL '30 days', NOW(), NOW())
-	`, artifactID, artifactHash, req.GetInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat, req.GetClusterId(), storageClusterArg)
+		        'in_progress', $6, $7, $8, $9, $10, $11, NOW(), NOW())
+	`, artifactID, artifactHash, req.GetInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat, req.GetClusterId(), storageClusterArg, vodRetentionUntil)
 
 	if err != nil {
 		// Abort S3 upload since we can't track it

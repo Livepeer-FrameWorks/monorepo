@@ -29,7 +29,12 @@ func GetDiskSpace(path string) (*DiskSpace, error) {
 	return &DiskSpace{TotalBytes: totalBytes, AvailableBytes: availableBytes}, nil
 }
 
-func statfsExistingPath(path string) (*DiskSpace, error) {
+// GetDiskSpaceWalk returns disk space for the nearest existing
+// ancestor of path. Cold cache directories don't exist yet at
+// admission time, but their parent (the storage root) always does —
+// statfs on the parent gives the right filesystem stats without
+// pre-creating the leaf dir.
+func GetDiskSpaceWalk(path string) (*DiskSpace, error) {
 	p := path
 	for {
 		space, err := GetDiskSpace(p)
@@ -54,7 +59,7 @@ func HasSpaceFor(path string, requiredBytes uint64) error {
 	// This is a no-op if it already exists.
 	_ = os.MkdirAll(path, 0755)
 
-	space, err := statfsExistingPath(path)
+	space, err := GetDiskSpaceWalk(path)
 	if err != nil {
 		return fmt.Errorf("statfs failed for %s: %w", path, err)
 	}

@@ -1373,7 +1373,7 @@ func (pm *PeerManager) pushStreamAds() {
 			si.edges = append(si.edges, &pb.PeerStreamEdge{
 				NodeId:      snap.NodeID,
 				BaseUrl:     ns.BaseURL,
-				DtscUrl:     control.BuildDTSCURI(snap.NodeID, streamName, true, pm.logger),
+				DtscUrl:     control.BuildDTSCURI(snap.NodeID, "live+"+streamName, pm.logger),
 				IsOrigin:    isOrigin,
 				BwAvailable: snap.BWAvailable,
 				CpuPercent:  snap.CPU,

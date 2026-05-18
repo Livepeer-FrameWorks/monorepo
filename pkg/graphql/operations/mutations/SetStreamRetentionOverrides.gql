@@ -1,0 +1,24 @@
+# Write per-stream DVR / clip retention overrides for a single stream.
+# Each pair (value, clear flag) governs one column independently: clear
+# takes precedence; otherwise a non-null value writes it (0 = no
+# auto-expire, >0 = days, clamped to the tier cap); otherwise the column
+# is left alone.
+mutation SetStreamRetentionOverrides($input: SetStreamRetentionOverridesInput!) {
+  setStreamRetentionOverrides(input: $input) {
+    ... on StreamRetentionOverrides {
+      streamId
+      dvrRetentionDaysOverride
+      clipRetentionDaysOverride
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
+    }
+  }
+}

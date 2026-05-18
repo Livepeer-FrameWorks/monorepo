@@ -51,15 +51,13 @@ func maybeMarkReconcileDoneLocked() {
 // and cleanup paths.
 //
 // Boot order: this must be called AFTER InitStorageManager so the storage path
-// is known; it starts a goroutine that rehydrates the DVR chapter registry
-// from disk. Destructive cleanup stays paused until that rehydration finishes
-// AND the first successful Mist API reconciliation completes (see poller.go).
+// is known. Destructive cleanup stays paused until the first successful Mist
+// API reconciliation completes (see poller.go).
 func InitLeases(logger logging.Logger, storagePath string) {
 	segIndex := control.LocalSegmentIndexInstance(logger)
 	heat := leases.NewHeatTracker()
 	tracker := leases.NewTracker(segIndex, heat)
 	sourceReg := leases.NewSourceRegistry()
-	chapterReg := leases.NewChapterRegistry()
 
 	// Deferred-delete store: when an operator delete arrives for a leased
 	// asset, the intent persists here and a retry loop drains as leases
@@ -97,11 +95,12 @@ func InitLeases(logger logging.Logger, storagePath string) {
 			}).Warn("Deferred delete drain: failed to send ArtifactDeleted")
 		}
 	})
+	deferred.SetLogger(logger)
 	if err := deferred.Load(); err != nil {
 		logger.WithError(err).Warn("Deferred-delete store load failed; continuing with empty queue")
 	}
 
-	leases.Install(tracker, sourceReg, chapterReg, heat, deferred)
+	leases.Install(tracker, sourceReg, heat, deferred)
 
 	// Wire the control package's DropUnsyncedSegment lease guard. Returns
 	// true when any source lease pins the (dvr_hash, segment_name), so
@@ -116,17 +115,6 @@ func InitLeases(logger logging.Logger, storagePath string) {
 		// per-segment ActiveViews.
 		return tracker.IsAssetLeased(leases.AssetKey{Type: "dvr", Hash: dvrHash})
 	}
-
-	// Chapter registry rehydration is bounded by on-disk inventory. Done in
-	// a goroutine so startup is not blocked, but cleanup stays paused until
-	// it completes.
-	go func() {
-		if err := chapterReg.Rehydrate(storagePath); err != nil {
-			logger.WithError(err).Warn("DVR chapter registry rehydration failed; degraded leases may install on first DVR USER_NEW")
-		}
-		leases.MarkChapterRehydrateDone()
-		logger.Info("DVR chapter registry rehydrated")
-	}()
 
 	// Periodic deferred-delete drain. Cheap; only does work when the queue
 	// is non-empty.

@@ -17,12 +17,13 @@ import (
 
 	"io"
 
+	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/leases"
 	"frameworks/api_sidecar/internal/storage"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/hls"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/sirupsen/logrus"
 )
 
 // PresignedTransfer abstracts presigned-URL upload/download so tests can
@@ -194,15 +195,19 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 	// Start monitoring in background
 	go storageManager.start()
 
-	// Register handlers for cold storage operations from Foghorn
+	// Register handlers for cold storage operations from Foghorn. DVR
+	// "archive defrost" retired with the chapter-VOD refactor — Foghorn
+	// rejects those calls outright, and chapter playback flows through
+	// the standard vod/<chapter_artifact_hash> relay path.
 	control.SetDefrostRequestHandler(func(req *pb.DefrostRequest) {
 		ctx := context.Background()
-		if req.GetAssetType() == "clip" {
+		switch req.GetAssetType() {
+		case "clip":
 			_, _ = storageManager.DefrostClip(ctx, req)
-		} else if req.GetAssetType() == "dvr" {
-			_, _ = storageManager.DefrostDVR(ctx, req)
-		} else if req.GetAssetType() == "vod" {
+		case "vod":
 			_, _ = storageManager.DefrostVOD(ctx, req)
+		default:
+			logger.WithField("asset_type", req.GetAssetType()).Warn("Defrost ignored: unsupported asset_type")
 		}
 	})
 
@@ -219,15 +224,38 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 		procHandler.Handle(req, send)
 	})
 
+	// Register post-clip .dtsh generator. The clip-pull path lives in
+	// control, which can't import handlers (cycle); this callback lets
+	// us reuse GenerateDTSH from there.
+	mistURL := os.Getenv("MISTSERVER_URL")
+	control.SetClipDTSHGenerator(func(streamName, clipHash string) {
+		if mistURL == "" {
+			return
+		}
+		entry := logger.WithFields(logrus.Fields{
+			"clip_hash":   clipHash,
+			"stream_name": streamName,
+		})
+		if err := GenerateDTSH(mistURL, streamName, entry); err != nil {
+			entry.WithError(err).Debug("Post-clip DTSH generation failed (will regen on first playback)")
+			return
+		}
+		// Kick the storage manager so the freshly-generated .dtsh syncs
+		// to S3 in the same pass as the clip media, matching the VOD/chapter
+		// finalize path. Without this we'd wait for the late-DTSH poller scan.
+		TriggerStorageCheck()
+	})
+
 	// DVR finalize-time retry: Foghorn pushes RetryDVRSegmentUpload listing
 	// segments still pending/failed. For each, look up the local file under
 	// the active DVR's segments directory, the local segment index, or the
 	// on-disk DVR tree; if present, request a fresh presigned URL via
 	// RecordDVRSegment and re-upload. If absent, emit
 	// DVRSegmentDropped(was_uploaded=false) so Foghorn classifies it as
-	// lost_local and the chapter manifest renders #EXT-X-GAP. Transient
-	// presign/upload failures are not classified here; FinalizeDVR owns the
-	// retry deadline and marks remaining pending rows lost after the budget.
+	// lost_local — any chapter overlapping the row will then move to
+	// failed_source_missing at finalization. Transient presign/upload
+	// failures are not classified here; FinalizeDVR owns the retry
+	// deadline and marks remaining pending rows lost after the budget.
 	control.SetRetryDVRSegmentHandler(func(req *pb.RetryDVRSegmentUpload) {
 		dvrHash := req.GetDvrHash()
 		dm := control.GetDVRManager()
@@ -296,6 +324,28 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 				idx.MarkUploaded(dvrHash, name, segPath, info.Size())
 			}
 		}
+	})
+
+	// Chapter reclaim: Foghorn issues ReclaimDVRSegment once every
+	// overlapping chapter has reached state='frozen' (canonical .mkv +
+	// .dtsh durably on S3). The local TS files are now redundant and
+	// can be deleted. Foghorn deletes the recovery-bridge S3 objects
+	// directly; this handler only touches the local filesystem.
+	control.SetReclaimDVRSegmentHandler(func(req *pb.ReclaimDVRSegment) {
+		dm := control.GetDVRManager()
+		if dm == nil {
+			return
+		}
+		names := req.GetSegmentNames()
+		if len(names) == 0 {
+			return
+		}
+		deleted := dm.EvictUploadedSegments(req.GetDvrHash(), names, "chapter_reclaim")
+		logger.WithFields(logging.Fields{
+			"dvr_hash": req.GetDvrHash(),
+			"deleted":  deleted,
+			"asked":    len(names),
+		}).Info("Chapter reclaim: removed local DVR segments")
 	})
 
 	logger.WithFields(logging.Fields{
@@ -465,11 +515,19 @@ func (sm *StorageManager) checkAndManageStorage() error {
 		candidates = append(candidates, clipCandidates...)
 	}
 
-	vodCandidates, err := sm.getFreezeCandidates(vodDir, AssetTypeVOD)
-	if err != nil {
-		sm.logger.WithError(err).Warn("Failed to get VOD freeze candidates")
-	} else {
-		candidates = append(candidates, vodCandidates...)
+	// Skip VOD freeze candidates while any degraded VOD source lease is
+	// held: a degraded lease has no path mapping (boot rebuild couldn't
+	// resolve internal_name → artifact_hash on this node), so the freeze
+	// path's exact-path-lease check at the candidate level cannot
+	// protect the right file. Without this gate, skip_upload responses
+	// would happily evict the backing file of an active VOD stream.
+	if tracker := leases.GlobalTracker(); tracker == nil || !tracker.DegradedVodCleanupActive() {
+		vodCandidates, err := sm.getFreezeCandidates(vodDir, AssetTypeVOD)
+		if err != nil {
+			sm.logger.WithError(err).Warn("Failed to get VOD freeze candidates")
+		} else {
+			candidates = append(candidates, vodCandidates...)
+		}
 	}
 
 	if len(candidates) == 0 {
@@ -1153,370 +1211,76 @@ func (sm *StorageManager) DefrostVOD(ctx context.Context, req *pb.DefrostRequest
 	return sm.defrostSingleFile(ctx, req, AssetTypeVOD)
 }
 
-// defrostDVRFromChapterRefs is the chapter-aware streaming defrost path.
-// Foghorn pre-populated req.ChapterSegments from foghorn.dvr_segments;
-// each ref carries (segment_name, s3_key, presigned_get_url, media times,
-// duration, status). We build the local manifest from those refs (gaps
-// rendered for lost_local rows; HLS v8 if any gap), download only the
-// uploaded segments, and write the manifest into the artifact's local
-// directory.
-//
-// Local layout matches S3:
-//
-//	{LocalPath}/segments/{name}            shared segments
-//	{LocalPath}/chapters/{chapter_id}.m3u8 per-chapter manifest with ../segments/ URIs
-//
-// The cache-key already keys on (asset_hash, chapter_id_or_range) so two
-// concurrent chapter requests for the same artifact don't collide.
-
-// emitChapterDefrostFailure emits the lifecycle + complete pair for a failed
-// chapter defrost. Defaults the typed Reason to REASON_LOCAL_IO; admission
-// callers can supply a more specific reason via emitChapterDefrostFailureWithReason.
-// Send errors are logged and swallowed; control-stream failures don't change
-// the request's success/failure outcome.
-func (sm *StorageManager) emitChapterDefrostFailure(req *pb.DefrostRequest, defrostErr error, localPath ...string) {
-	sm.emitChapterDefrostFailureWithReason(req, defrostErr, pb.DefrostComplete_REASON_LOCAL_IO, localPath...)
-}
-
-func (sm *StorageManager) emitChapterDefrostFailureWithReason(req *pb.DefrostRequest, defrostErr error, reason pb.DefrostComplete_Reason, localPath ...string) {
-	errStr := defrostErr.Error()
-	path := ""
-	if len(localPath) > 0 {
-		path = localPath[0]
+// evictBlockCaches walks vod/ and clips/ for *.blocks/ directories and
+// RemoveAll's them in oldest-mtime-first order until bytesTarget is met
+// or the supply is exhausted. Returns the actual byte count freed.
+// Leased paths are skipped. Used by fallbackCleanupWithTarget as the
+// priority-zero eviction set before walking warm files through the
+// freeze candidate flow.
+func (sm *StorageManager) evictBlockCaches(bytesTarget uint64) uint64 {
+	type blockDirCandidate struct {
+		path    string
+		bytes   uint64
+		modTime time.Time
 	}
-	if err := sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-		Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
-		AssetType: string(AssetTypeDVR),
-		AssetHash: req.AssetHash,
-		Error:     &errStr,
-		Reason:    &reason,
-	}); err != nil {
-		sm.logger.WithError(err).Warn("emit chapter defrost cache_failed lifecycle")
-	}
-	if sm.sendDefrostCompleteWithReason != nil {
-		if err := sm.sendDefrostCompleteWithReason(req.RequestId, req.AssetHash, "failed", path, 0, errStr, reason); err != nil {
-			sm.logger.WithError(err).Warn("emit chapter defrost failure complete")
-		}
-		return
-	}
-	if err := sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", path, 0, errStr); err != nil {
-		sm.logger.WithError(err).Warn("emit chapter defrost failure complete")
-	}
-}
-
-// emitDefrostProgress wraps the progress send with logged-error handling.
-func (sm *StorageManager) emitDefrostProgress(req *pb.DefrostRequest, percent uint32, bytesDownloaded uint64, segmentsDownloaded, totalSegments int32, message string) {
-	if err := sm.sendDefrostProgress(req.RequestId, req.AssetHash, percent, bytesDownloaded, segmentsDownloaded, totalSegments, message); err != nil {
-		sm.logger.WithError(err).Warn("emit chapter defrost progress")
-	}
-}
-
-func (sm *StorageManager) defrostDVRFromChapterRefs(ctx context.Context, req *pb.DefrostRequest, jobKey string) (*pb.DefrostComplete, error) {
-	refs := req.GetChapterSegments()
-
-	// Local manifest path: chapter ID identifies the view. Fall back to
-	// a deterministic range hash when the caller didn't pass chapter_id
-	// (explicit_range case).
-	chapterID := req.GetChapterId()
-	if chapterID == "" {
-		chapterID = fmt.Sprintf("range-%d-%d", req.GetStartMs(), req.GetEndMs())
-	}
-	chaptersDir := filepath.Join(req.LocalPath, "chapters")
-	if err := os.MkdirAll(chaptersDir, 0755); err != nil {
-		sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
-		sm.emitChapterDefrostFailureWithReason(req, err, pb.DefrostComplete_REASON_LOCAL_IO)
-		return nil, fmt.Errorf("create chapters dir: %w", err)
-	}
-	segmentsDir := filepath.Join(req.LocalPath, "segments")
-	if err := os.MkdirAll(segmentsDir, 0755); err != nil {
-		sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
-		sm.emitChapterDefrostFailureWithReason(req, err, pb.DefrostComplete_REASON_LOCAL_IO)
-		return nil, fmt.Errorf("create segments dir: %w", err)
-	}
-
-	// Two-tier admission for chapter defrost. Sum the non-gap segment sizes
-	// from DVRSegmentRef.size_bytes (added in this phase). When the proto
-	// field is unset (0) admission is skipped and we fall back to legacy
-	// late-fail behavior.
-	var expectedChapterBytes uint64
-	for _, r := range refs {
-		if r.GetStatus() == "lost_local" {
-			continue
-		}
-		if sz := r.GetSizeBytes(); sz > 0 {
-			expectedChapterBytes += uint64(sz)
-		}
-	}
-	if expectedChapterBytes > 0 {
-		if err := sm.admitDefrost(ctx, segmentsDir, expectedChapterBytes); err != nil {
-			sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
-			if errors.Is(err, storage.ErrInsufficientSpace) {
-				sm.emitChapterDefrostFailureWithReason(req, err, pb.DefrostComplete_REASON_INSUFFICIENT_SPACE)
-				return nil, err
+	var candidates []blockDirCandidate
+	for _, sub := range []string{"vod", "clips"} {
+		root := filepath.Join(sm.basePath, sub)
+		_ = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error { //nolint:errcheck // missing/unreadable dirs just mean no candidates
+			if walkErr != nil || info == nil {
+				return nil //nolint:nilerr // skip unreadable nodes, continue walking siblings
 			}
-			sm.emitChapterDefrostFailureWithReason(req, err, pb.DefrostComplete_REASON_LOCAL_IO)
-			return nil, err
-		}
-	}
-
-	// Refcount each non-gap segment for the defrost and refresh its local
-	// cache timestamp. Eviction keeps recently warmed chapter segments on
-	// disk long enough for the playback session that requested them.
-	idx := control.LocalSegmentIndexInstance(sm.logger)
-	pinUntil := chapterPlaybackCacheUntil(req.GetStartMs(), req.GetEndMs())
-	if idx != nil {
-		for _, r := range refs {
-			if r.GetStatus() == "lost_local" {
-				continue
-			}
-			segName := r.GetSegmentName()
-			localSegPath := filepath.Join(segmentsDir, segName)
-			idx.TrackCachedSegment(req.AssetHash, segName, localSegPath, 0, false)
-			idx.PinCachedSegment(req.AssetHash, segName, pinUntil)
-			idx.AcquireView(req.AssetHash, segName)
-		}
-		defer func() {
-			for _, r := range refs {
-				if r.GetStatus() == "lost_local" {
-					continue
+			if !info.IsDir() || !strings.HasSuffix(path, ".blocks") {
+				if info.IsDir() && path != root {
+					return nil
 				}
-				idx.ReleaseView(req.AssetHash, r.GetSegmentName())
+				return nil
 			}
-		}()
-	}
-
-	// Build the local manifest from the ledger refs. ../segments/ matches
-	// the chapters/{id}.m3u8 to segments/{name} layout.
-	finalSegs := make([]hls.FinalSegment, 0, len(refs))
-	hasGaps := false
-	for _, r := range refs {
-		seg := hls.FinalSegment{
-			Name:              r.GetSegmentName(),
-			Sequence:          r.GetSequence(),
-			DurationMs:        r.GetDurationMs(),
-			MediaStartMs:      r.GetMediaStartMs(),
-			MediaEndMs:        r.GetMediaEndMs(),
-			ProgramDateTimeMs: r.GetMediaStartMs(),
-			Lost:              r.GetStatus() == "lost_local",
-		}
-		if seg.Lost {
-			hasGaps = true
-		}
-		finalSegs = append(finalSegs, seg)
-	}
-	manifestPath := filepath.Join(chaptersDir, chapterID+".m3u8")
-	writeManifest := func(event bool) error {
-		manifestBody := hls.BuildVOD(finalSegs, hls.BuildVODOptions{
-			HasGaps:          hasGaps,
-			SegmentURIPrefix: "../segments/",
-			Event:            event,
-		})
-		return os.WriteFile(manifestPath, []byte(manifestBody), 0644)
-	}
-	if err := writeManifest(true); err != nil {
-		sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
-		sm.emitChapterDefrostFailure(req, err)
-		return nil, fmt.Errorf("write chapter manifest: %w", err)
-	}
-
-	// Register the chapter with the leases package so a subsequent STREAM_SOURCE
-	// for "dvr+<chapter_id>" can install a SourceLease that pins every
-	// non-gap segment via LocalSegmentIndex.AcquireView. Without this, USER_NEW
-	// for an unregistered chapter would fall back to degraded mode.
-	if reg := leases.GlobalChapterRegistry(); reg != nil {
-		nonGap := make([]string, 0, len(refs))
-		for _, r := range refs {
-			if r.GetStatus() == "lost_local" {
-				continue
+			if tracker := leases.GlobalTracker(); tracker != nil && tracker.IsPathLeased(path) {
+				return filepath.SkipDir
 			}
-			nonGap = append(nonGap, r.GetSegmentName())
-		}
-		reg.Register(leases.ChapterEntry{
-			ChapterID:    chapterID,
-			DvrHash:      req.AssetHash,
-			SegmentNames: nonGap,
-			ManifestPath: manifestPath,
+			var dirBytes uint64
+			_ = filepath.Walk(path, func(_ string, fi os.FileInfo, innerErr error) error { //nolint:errcheck // size defaults to 0 on walk failure
+				if innerErr == nil && fi != nil && !fi.IsDir() {
+					dirBytes += uint64(fi.Size())
+				}
+				return nil
+			})
+			// Use HeatTracker.LastAccessed when the .blocks dir has been
+			// read warm — repeated playback should keep block caches
+			// off the eviction list ahead of cold caches with newer
+			// mtime but no actual viewer interest.
+			lastAccessed := info.ModTime()
+			if heat := leases.GlobalHeat(); heat != nil {
+				if h, ok := heat.Lookup(path); ok && h.LastAccessed.After(lastAccessed) {
+					lastAccessed = h.LastAccessed
+				}
+			}
+			candidates = append(candidates, blockDirCandidate{path: path, bytes: dirBytes, modTime: lastAccessed})
+			return filepath.SkipDir
 		})
 	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].modTime.Before(candidates[j].modTime) })
 
-	// Signal ready for playback (manifest exists; segment downloads
-	// stream into local cache as needed).
-	sm.emitDefrostProgress(req, 0, 0, 0, int32(len(refs)), "ready")
-	if err := sm.sendDefrostComplete(req.RequestId, req.AssetHash, "ready", manifestPath, 0, ""); err != nil {
-		sm.logger.WithError(err).Warn("emit chapter defrost ready complete")
-	}
-
-	// Download segments. lost_local rows have no URL and are already rendered as
-	// #EXT-X-GAP. uploaded/deleted_local rows have presigned GETs unless
-	// minting failed (a Foghorn-side error worth surfacing).
-	var totalBytes uint64
-	var downloaded int32
-	for i, r := range refs {
-		if r.GetStatus() == "lost_local" {
+	var freed uint64
+	for _, c := range candidates {
+		if freed >= bytesTarget {
+			break
+		}
+		if err := os.RemoveAll(c.path); err != nil {
+			sm.logger.WithError(err).WithField("path", c.path).Warn("Failed to evict relay block cache dir")
 			continue
 		}
-		segName := r.GetSegmentName()
-		localSegPath := filepath.Join(segmentsDir, segName)
-		// Reuse-on-disk: if a sibling chapter view already pulled this
-		// segment, skip the download. Local segments are shared across
-		// chapter views by design.
-		if info, statErr := os.Stat(localSegPath); statErr == nil && info.Size() > 0 {
-			totalBytes += uint64(info.Size())
-			downloaded++
-			if idx != nil {
-				idx.TrackCachedSegment(req.AssetHash, segName, localSegPath, info.Size(), false)
-				idx.PinCachedSegment(req.AssetHash, segName, pinUntil)
-			}
-			percent := uint32(((i + 1) * 100) / len(refs))
-			sm.emitDefrostProgress(req, percent, totalBytes, downloaded, int32(len(refs)), "reusing_local")
-			continue
-		}
-		presignedURL := r.GetPresignedGetUrl()
-		if presignedURL == "" {
-			// status=uploaded with no presigned URL indicates a Foghorn-side bug.
-			err := fmt.Errorf("uploaded segment %s has no presigned URL; Foghorn bug", segName)
-			sm.logger.WithError(err).WithField("segment", segName).Error("Chapter defrost: missing presigned URL on uploaded row")
-			sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
-			sm.emitChapterDefrostFailure(req, err, manifestPath)
-			return nil, err
-		}
-		if err := sm.presignedClient.DownloadToFileFromPresignedURL(ctx, presignedURL, localSegPath, nil); err != nil {
-			sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
-			sm.emitChapterDefrostFailure(req, err, manifestPath)
-			return nil, fmt.Errorf("download segment %s: %w", segName, err)
-		}
-		if info, statErr := os.Stat(localSegPath); statErr == nil && info != nil {
-			totalBytes += uint64(info.Size())
-			if idx != nil {
-				idx.TrackCachedSegment(req.AssetHash, segName, localSegPath, info.Size(), false)
-				idx.PinCachedSegment(req.AssetHash, segName, pinUntil)
-			}
-		}
-		downloaded++
-		percent := uint32(((i + 1) * 100) / len(refs))
-		sm.emitDefrostProgress(req, percent, totalBytes, downloaded, int32(len(refs)), "downloading")
+		freed += c.bytes
+		sm.logger.WithFields(logging.Fields{
+			"path":  c.path,
+			"bytes": c.bytes,
+		}).Info("Evicted relay block cache under pressure")
 	}
-
-	finalEvent := req.GetStreaming() && req.GetEndMs() > time.Now().UnixMilli()
-	if !finalEvent {
-		if err := writeManifest(false); err != nil {
-			sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
-			sm.emitChapterDefrostFailure(req, err, manifestPath)
-			return nil, fmt.Errorf("finalize chapter manifest: %w", err)
-		}
-	}
-
-	if err := sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-		Action:    pb.StorageLifecycleData_ACTION_CACHED,
-		AssetType: string(AssetTypeDVR),
-		AssetHash: req.AssetHash,
-		SizeBytes: totalBytes,
-		LocalPath: &manifestPath,
-	}); err != nil {
-		sm.logger.WithError(err).Warn("emit chapter defrost cached lifecycle")
-	}
-	if err := sm.sendDefrostComplete(req.RequestId, req.AssetHash, "success", manifestPath, totalBytes, ""); err != nil {
-		sm.logger.WithError(err).Warn("emit chapter defrost success complete")
-	}
-	sm.markDefrostJobDoneKeyed(req.AssetHash, nil, manifestPath, totalBytes, jobKey)
-	return &pb.DefrostComplete{
-		RequestId: req.RequestId,
-		AssetHash: req.AssetHash,
-		Status:    "success",
-		LocalPath: manifestPath,
-		SizeBytes: totalBytes,
-	}, nil
-}
-
-func chapterPlaybackCacheUntil(startMs, endMs int64) time.Time {
-	durationMs := endMs - startMs
-	if durationMs < 0 {
-		durationMs = 0
-	}
-	ttl := time.Duration(durationMs)*time.Millisecond + time.Hour
-	if ttl < 30*time.Minute {
-		ttl = 30 * time.Minute
-	}
-	if ttl > 7*24*time.Hour {
-		ttl = 7 * 24 * time.Hour
-	}
-	return time.Now().Add(ttl)
-}
-
-// DefrostDVR downloads a DVR recording from S3 using streaming defrost (HLS live mode)
-// Uses presigned GET URLs provided by Foghorn for each segment.
-//
-// Cache-key scope: distinct chapter requests for the same DVR artifact get
-// distinct in-flight jobs (key = asset_hash + ":" + chapter_id_or_range).
-// DVR archive playback passes chapter refs; requests without chapter context
-// use the asset-hash-only slot and cannot serve normal chapter playback.
-func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest) (*pb.DefrostComplete, error) {
-	jobKey := defrostJobKey(req.AssetHash, req.GetChapterId(), req.GetStartMs(), req.GetEndMs())
-	job, shouldInitiate := sm.getOrCreateDefrostJobKeyed(req.AssetHash, AssetTypeDVR, req.RequestId, jobKey)
-	if !shouldInitiate {
-		select {
-		case <-job.Done:
-			if job.Err != nil {
-				return nil, job.Err
-			}
-			return &pb.DefrostComplete{
-				RequestId: req.RequestId,
-				AssetHash: req.AssetHash,
-				Status:    "success",
-				LocalPath: job.LocalPath,
-				SizeBytes: job.SizeBytes,
-			}, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-
-	defer sm.completeDefrostJobKeyed(jobKey)
-
-	if isChapterDefrostRequest(req) {
-		if len(req.GetChapterSegments()) == 0 {
-			err := fmt.Errorf("chapter DVR defrost requires chapter segment refs")
-			sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
-			sm.emitChapterDefrostFailure(req, err)
-			return nil, err
-		}
-		return sm.defrostDVRFromChapterRefs(ctx, req, jobKey)
-	}
-
-	err := fmt.Errorf("DVR defrost requires chapter segment refs")
-	sm.markDefrostJobDoneKeyed(req.AssetHash, err, "", 0, jobKey)
-	sm.emitChapterDefrostFailure(req, err)
-	return nil, err
-}
-
-func isChapterDefrostRequest(req *pb.DefrostRequest) bool {
-	return len(req.GetChapterSegments()) > 0 ||
-		req.GetChapterId() != "" ||
-		req.GetStartMs() != 0 ||
-		req.GetEndMs() != 0 ||
-		req.GetDvrArtifactId() != "" ||
-		req.GetChapterMode() != ""
+	return freed
 }
 
 // Helper methods for defrost job tracking
-
-// defrostJobKey distinguishes concurrent chapter requests for the same DVR
-// artifact. Without this, two simultaneous chapter defrosts would collapse
-// onto one in-flight job and one would receive the other's result.
-//
-// Key shape: assetHash for clip/vod (no sub-resource concept); for DVR,
-// assetHash + ":" + chapter_id (or a hash of the explicit_range bounds
-// when no chapter_id is supplied). Callers without chapter context share the
-// asset-hash-only slot and should not be used for normal DVR playback.
-func defrostJobKey(assetHash, chapterID string, startMs, endMs int64) string {
-	if chapterID != "" {
-		return assetHash + ":" + chapterID
-	}
-	if startMs == 0 && endMs == 0 {
-		return assetHash
-	}
-	return fmt.Sprintf("%s:%d-%d", assetHash, startMs, endMs)
-}
 
 func (sm *StorageManager) getOrCreateDefrostJob(assetHash string, assetType AssetType, requestID string) (*DefrostJob, bool) {
 	return sm.getOrCreateDefrostJobKeyed(assetHash, assetType, requestID, assetHash)
@@ -1703,6 +1467,19 @@ func (sm *StorageManager) fallbackCleanupWithTarget(clipsDir string, bytesToFree
 		return nil
 	}
 
+	// First pass: evict relay block caches under vod/ and clips/. These
+	// are best-effort local caches rebuildable from S3; per the admission
+	// priority order (DVRRecording / ProcessingOutput > PlaybackCache),
+	// they must lose first when a higher-priority intent needs disk. No
+	// Foghorn safe-to-delete check is needed — block caches are not
+	// authoritative storage. Skips leased paths.
+	if freed := sm.evictBlockCaches(bytesToFree); freed > 0 {
+		if freed >= bytesToFree {
+			return nil
+		}
+		bytesToFree -= freed
+	}
+
 	// Active-DVR-first pass. getFreezeCandidates skips active DVR hashes (so
 	// emergency cleanup never RemoveAlls an active recording's directory),
 	// which means any "evict from active DVR under pressure" decision must
@@ -1724,11 +1501,17 @@ func (sm *StorageManager) fallbackCleanupWithTarget(clipsDir string, bytesToFree
 		return err
 	}
 
-	// Also get VOD candidates
-	vodDir := filepath.Join(sm.basePath, "vod")
-	vodCandidates, err := sm.getFreezeCandidates(vodDir, AssetTypeVOD)
-	if err == nil {
-		candidates = append(candidates, vodCandidates...)
+	// Skip VOD when any source lease is degraded: the lease cannot point
+	// at a specific file (internal_name → artifact_hash unresolved on
+	// this node) and the candidate list is LRU/heat-ordered, so we'd
+	// happily evict the file Mist is actively reading. Clips/DVR can
+	// still be reclaimed.
+	if tracker := leases.GlobalTracker(); tracker == nil || !tracker.DegradedVodCleanupActive() {
+		vodDir := filepath.Join(sm.basePath, "vod")
+		vodCandidates, err := sm.getFreezeCandidates(vodDir, AssetTypeVOD)
+		if err == nil {
+			candidates = append(candidates, vodCandidates...)
+		}
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
@@ -1905,6 +1688,48 @@ func (sm *StorageManager) SyncDtshOnly(ctx context.Context, req *pb.DtshSyncRequ
 				"asset_hash": assetHash,
 				"dtsh_path":  dtshPath,
 			}).Info("Uploaded clip .dtsh file")
+		}
+	} else if assetType == "vod" {
+		// Foghorn may send a storage-relative path (vod/<hash>.<ext>) for
+		// catch-up triggers where there's no warm artifact report yet to
+		// supply an absolute one. Join against the local storage root so
+		// the stat and any GenerateDTSH side-effects all land in the
+		// same place Mist writes to.
+		resolvedPath := localPath
+		if !filepath.IsAbs(resolvedPath) {
+			resolvedPath = filepath.Join(config.GetStoragePath(), resolvedPath)
+		}
+		dtshPath := resolvedPath + ".dtsh"
+		presignedURL := req.GetPresignedPutUrl()
+		if presignedURL == "" {
+			return fmt.Errorf("no presigned URL provided for vod .dtsh")
+		}
+		// On-demand generation: if Foghorn is asking us to sync .dtsh for
+		// a VOD artifact we haven't generated one for yet (chapter
+		// finalization where the inline DTSH boot missed), boot the asset
+		// now so the sidecar lands. Without this, chapter artifacts that
+		// failed inline DTSH gen would never reach frozen — the existing
+		// catch-up path only uploads pre-existing files.
+		if _, err := os.Stat(dtshPath); err != nil {
+			if !os.IsNotExist(err) {
+				return fmt.Errorf(".dtsh stat failed at %s: %w", dtshPath, err)
+			}
+			vodStreamName := "vod+" + assetHash
+			if genErr := GenerateDTSH(os.Getenv("MISTSERVER_URL"), vodStreamName, sm.logger.WithField("asset_hash", assetHash)); genErr != nil {
+				return fmt.Errorf("dtsh missing and on-demand generation failed: %w", genErr)
+			}
+			if _, err := os.Stat(dtshPath); err != nil {
+				return fmt.Errorf(".dtsh still missing after generation at %s: %w", dtshPath, err)
+			}
+		}
+		if err := sm.presignedClient.UploadFileToPresignedURL(ctx, presignedURL, dtshPath, nil); err != nil {
+			uploadErr = fmt.Errorf("failed to upload vod .dtsh: %w", err)
+		} else {
+			dtshUploaded = true
+			sm.logger.WithFields(logging.Fields{
+				"asset_hash": assetHash,
+				"dtsh_path":  dtshPath,
+			}).Info("Uploaded vod .dtsh file")
 		}
 	} else if assetType == "dvr" {
 		// For DVR: may have multiple .dtsh files in the directory

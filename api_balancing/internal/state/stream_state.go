@@ -1734,9 +1734,10 @@ func (sm *StreamStateManager) checkAndTriggerDtshSync(nodeID string, artifacts [
 	sm.mu.RLock()
 	clipsRepo := sm.repos.Clips
 	dvrRepo := sm.repos.DVR
+	artifactsRepo := sm.repos.Artifacts
 	sm.mu.RUnlock()
 
-	if clipsRepo == nil && dvrRepo == nil {
+	if clipsRepo == nil && dvrRepo == nil && artifactsRepo == nil {
 		return
 	}
 
@@ -1755,12 +1756,13 @@ func (sm *StreamStateManager) checkAndTriggerDtshSync(nodeID string, artifacts [
 
 		var needsSync bool
 
-		if artifactType == "clip" && clipsRepo != nil {
-			// Check if clip is synced but dtsh wasn't included
+		switch {
+		case artifactType == "clip" && clipsRepo != nil:
 			needsSync = clipsRepo.NeedsDtshSync(ctx, hash)
-		} else if artifactType == "dvr" && dvrRepo != nil {
-			// Check if DVR is synced but dtsh wasn't included
+		case artifactType == "dvr" && dvrRepo != nil:
 			needsSync = dvrRepo.NeedsDtshSync(ctx, hash)
+		case artifactType == "vod" && artifactsRepo != nil:
+			needsSync = artifactsRepo.NeedsVODDtshSync(ctx, hash)
 		}
 
 		if needsSync {
@@ -2948,6 +2950,10 @@ type ArtifactRepository interface {
 	ListAllNodeArtifacts(ctx context.Context) (map[string][]ArtifactRecord, error)
 	// MarkNodeArtifactsOrphaned sets is_orphaned=true for all artifacts on a node
 	MarkNodeArtifactsOrphaned(ctx context.Context, nodeID string) error
+	// NeedsDtshSync returns true if the VOD artifact is synced to S3 but .dtsh wasn't included.
+	// Chapter-VOD artifacts depend on this catch-up path to flip dtsh_synced=true so the chapter
+	// row can advance from finalized → frozen → reclaimed without waiting for a viewer.
+	NeedsVODDtshSync(ctx context.Context, artifactHash string) bool
 }
 
 // ArtifactRecord represents an artifact (clip or DVR) stored on a node

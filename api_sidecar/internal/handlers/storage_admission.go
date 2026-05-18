@@ -6,15 +6,16 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"frameworks/api_sidecar/internal/admission"
 	"frameworks/api_sidecar/internal/leases"
 	"frameworks/api_sidecar/internal/storage"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
-// failDefrost is the shared failure path for defrostSingleFile and
-// defrostDVRFromChapterRefs: emits a CACHE_FAILED lifecycle event and a
-// DefrostComplete with status="failed" and the typed reason. Foghorn routes
-// retry decisions off DefrostComplete.Reason.
+// failDefrost is the shared failure path for defrostSingleFile: emits a
+// CACHE_FAILED lifecycle event and a DefrostComplete with status="failed"
+// and the typed reason. Foghorn routes retry decisions off
+// DefrostComplete.Reason.
 func (sm *StorageManager) failDefrost(req *pb.DefrostRequest, assetType AssetType, err error, reason pb.DefrostComplete_Reason) {
 	errStr := err.Error()
 	_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{ //nolint:errcheck // best-effort report
@@ -49,6 +50,89 @@ func (sm *StorageManager) failDefrost(req *pb.DefrostRequest, assetType AssetTyp
 // targetThreshold. It frees just enough to keep room for the next defrost or
 // two, then stops.
 
+// Admission types live in the admission package so the relay can consume the
+// typed decision contract without an import cycle through handlers. The
+// StorageManager.Decide method below implements admission.Admitter.
+
+// criticalRelayThresholdDefault is the disk-used ratio above which playback
+// relay fills flip to CacheMemoryOnly. Below this, the existing two-tier
+// admission engine handles soft/hard pressure.
+const criticalRelayThresholdDefault = 0.95
+
+// Decide is the single typed admission entrypoint. Behavior per intent is
+// documented on the StorageIntent constants. Routes through the same
+// admitDefrost/ensureRoomForDefrost machinery for intents that require disk,
+// and short-circuits to CacheMemoryOnly/CacheReject for intents that can or
+// must avoid disk.
+func (sm *StorageManager) Decide(
+	ctx context.Context, dir string, intent admission.StorageIntent, sizeBytes uint64,
+) (admission.CacheDecision, error) {
+	switch intent {
+	case admission.IntentProcessingInput:
+		return admission.CacheMemoryOnly, nil
+
+	case admission.IntentDVRRecording, admission.IntentProcessingOutput, admission.IntentUnsafeImportStage,
+		admission.IntentDVRChapterFinalization:
+		if err := sm.admitDefrost(ctx, dir, sizeBytes); err != nil {
+			return admission.CacheReject, err
+		}
+		return admission.CacheToDisk, nil
+
+	case admission.IntentPlaybackCache:
+		// Walk to the nearest existing ancestor: the block-cache leaf
+		// dir (<asset>.blocks) doesn't exist until first fill, so a raw
+		// Statfs on it would ENOENT for cold assets. The storage root
+		// always exists, so the parent-walk delivers real filesystem
+		// stats without pre-creating the leaf.
+		space, err := storage.GetDiskSpaceWalk(dir)
+		if err != nil {
+			return admission.CacheMemoryOnly, nil //nolint:nilerr // safe fallback
+		}
+		if space.TotalBytes > 0 {
+			used := space.TotalBytes - space.AvailableBytes
+			if float64(used)/float64(space.TotalBytes) >= criticalRelayThresholdDefault {
+				return admission.CacheMemoryOnly, nil
+			}
+			if sizeBytes > 0 && sizeBytes > space.AvailableBytes {
+				if leases.IsDestructiveCleanupAllowed() {
+					if cleanupErr := sm.ensureRoomForDefrost(ctx, dir, sizeBytes); cleanupErr == nil {
+						return admission.CacheToDisk, nil
+					}
+				}
+				return admission.CacheMemoryOnly, nil
+			}
+		}
+		if admitErr := sm.admitDefrost(ctx, dir, sizeBytes); admitErr != nil {
+			// Playback cache is opportunistic — failed admission means we
+			// still serve, just without writing through to disk.
+			return admission.CacheMemoryOnly, nil //nolint:nilerr // intentional graceful degradation
+		}
+		return admission.CacheToDisk, nil
+
+	case admission.IntentWarmCache:
+		space, err := storage.GetDiskSpace(dir)
+		if err != nil {
+			// Warm cache is purely opportunistic; abort cleanly on any
+			// pressure signal including stat failure.
+			return admission.CacheReject, nil //nolint:nilerr // opportunistic skip
+		}
+		if space.TotalBytes > 0 {
+			used := space.TotalBytes - space.AvailableBytes
+			if sm.softCleanupThreshold > 0 &&
+				float64(used)/float64(space.TotalBytes) >= sm.softCleanupThreshold {
+				return admission.CacheReject, nil
+			}
+			if sizeBytes > 0 && sizeBytes > space.AvailableBytes {
+				return admission.CacheReject, nil
+			}
+		}
+		return admission.CacheToDisk, nil
+
+	default:
+		return admission.CacheReject, fmt.Errorf("unknown storage intent %q", intent)
+	}
+}
+
 // backgroundCleanupRunning is a single-runner sentinel. While set, repeated
 // kickoff calls are no-ops. Stored as atomic so the read path stays
 // lock-free.
@@ -59,7 +143,10 @@ var backgroundCleanupRunning atomic.Bool
 // make room.
 func (sm *StorageManager) admitDefrost(ctx context.Context, dir string, sizeBytes uint64) error {
 	if sizeBytes == 0 {
-		return nil // unknown size — skip admission, fall back to legacy late-fail
+		// Unknown size: skip preflight admission. The write itself will
+		// hit ENOSPC if the disk is too tight; that path remains the
+		// only signal when callers can't predict the on-disk footprint.
+		return nil
 	}
 
 	space, err := storage.GetDiskSpace(dir)

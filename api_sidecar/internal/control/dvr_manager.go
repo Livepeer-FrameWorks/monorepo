@@ -187,10 +187,11 @@ func SegmentInRollingManifest(job *DVRJob, segmentName string) bool {
 	return strings.Contains(string(data), "/"+segmentName) || strings.Contains(string(data), segmentName+"\n")
 }
 
-// EvictUploadedSegments evicts segments from local disk for an active DVR.
-// Caller passes the candidate segment names (from the local uploaded cache
-// for routine post-upload eviction, or from RequestEvictableSegments for
-// pressure-driven eviction). Each candidate is checked for active
+// EvictUploadedSegments evicts segments from local disk for a DVR.
+// Caller passes the candidate segment names. Only Foghorn-authoritative
+// sources should produce candidates — chapter reclaim sweep
+// (ReclaimDVRSegment control messages) or the disk-pressure fallback
+// (RequestEvictableSegments). Each candidate is checked for active
 // rolling-manifest membership before deletion; survivors emit a
 // DVRSegmentDropped(was_uploaded=true) so Foghorn marks deleted_local.
 //
@@ -199,29 +200,55 @@ func (dm *DVRManager) EvictUploadedSegments(dvrHash string, candidates []string,
 	if len(candidates) == 0 {
 		return 0
 	}
-	job, ok := LookupActiveDVR(dvrHash)
-	if !ok {
-		return 0
+	job, jobActive := LookupActiveDVR(dvrHash)
+	// Resolve the DVR segments directory. While the DVR job is active
+	// the canonical path is on job.OutputDir; after StopDVR the job is
+	// removed but the segments directory remains on disk until reclaim
+	// deletes it. Fall back to scanning storage/dvr/*/<dvr_hash>/
+	// segments so post-stop reclaim still works.
+	var (
+		segmentsDir string
+		logger      = dm.logger
+	)
+	if jobActive {
+		segmentsDir = filepath.Join(job.OutputDir, "segments")
+		logger = job.Logger
+	} else {
+		segmentsDir = resolveDVRSegmentsDirByHash(dvrHash)
+		if segmentsDir == "" {
+			// No active job AND no on-disk match — nothing to evict
+			// locally. Still report the eviction so Foghorn can move
+			// the ledger to deleted_local and run Phase B (S3 delete).
+			for _, name := range candidates {
+				if dropErr := SendDVRSegmentDropped(dvrHash, name, reason, "", 0, 0, 0, 0, true); dropErr != nil {
+					logger.WithError(dropErr).WithField("segment", name).Debug("Failed to report missing segment as dropped (post-stop, no dir)")
+				}
+			}
+			return 0
+		}
 	}
 	deleted := 0
 	idx := localSegmentIndex
 	for _, name := range candidates {
-		if SegmentInRollingManifest(job, name) {
+		// Rolling-manifest pin is only meaningful while the DVR is
+		// recording. After stop the manifest is closed and every
+		// segment is eligible.
+		if jobActive && SegmentInRollingManifest(job, name) {
 			continue
 		}
-		// Refuse to evict a segment currently under defrost or pinned by a
-		// warmed chapter playback cache.
+		// Refuse to evict a segment currently under defrost or pinned by an
+		// active view (clip harvest, in-flight finalization).
 		if idx != nil && !idx.EvictionEligible(dvrHash, name, 0) {
 			// Skip — caller will retry after the active view or pin clears.
 			continue
 		}
-		segPath := filepath.Join(job.OutputDir, "segments", name)
+		segPath := filepath.Join(segmentsDir, name)
 		info, statErr := os.Stat(segPath)
 		if statErr != nil {
 			// Already gone — still report the eviction so Foghorn's view
 			// matches reality.
 			if dropErr := SendDVRSegmentDropped(dvrHash, name, reason, segPath, 0, 0, 0, 0, true); dropErr != nil {
-				job.Logger.WithError(dropErr).WithField("segment", name).Debug("Failed to report missing segment as dropped")
+				logger.WithError(dropErr).WithField("segment", name).Debug("Failed to report missing segment as dropped")
 			}
 			if idx != nil {
 				idx.Forget(dvrHash, name)
@@ -229,15 +256,17 @@ func (dm *DVRManager) EvictUploadedSegments(dvrHash string, candidates []string,
 			continue
 		}
 		if err := os.Remove(segPath); err != nil {
-			job.Logger.WithError(err).WithField("segment", name).Warn("Failed to evict DVR segment")
+			logger.WithError(err).WithField("segment", name).Warn("Failed to evict DVR segment")
 			continue
 		}
 		if dropErr := SendDVRSegmentDropped(dvrHash, name, reason, segPath, 0, 0, 0, uint64(info.Size()), true); dropErr != nil {
-			job.Logger.WithError(dropErr).WithField("segment", name).Debug("Failed to report segment eviction")
+			logger.WithError(dropErr).WithField("segment", name).Debug("Failed to report segment eviction")
 		}
-		job.syncMutex.Lock()
-		delete(job.SyncedSegments, name)
-		job.syncMutex.Unlock()
+		if jobActive {
+			job.syncMutex.Lock()
+			delete(job.SyncedSegments, name)
+			job.syncMutex.Unlock()
+		}
 		if idx != nil {
 			idx.Forget(dvrHash, name)
 		}
@@ -246,11 +275,34 @@ func (dm *DVRManager) EvictUploadedSegments(dvrHash string, candidates []string,
 	return deleted
 }
 
+// resolveDVRSegmentsDirByHash scans storage/dvr/*/<dvr_hash>/segments for
+// a matching directory. Returns "" when no DVR layout for the hash
+// exists on disk. Used by post-stop reclaim where LookupActiveDVR
+// misses; mirrors the resolveDVRDir helper used by chapter finalize.
+func resolveDVRSegmentsDirByHash(dvrHash string) string {
+	dvrRoot := filepath.Join(sidecarcfg.GetStoragePath(), "dvr")
+	entries, err := os.ReadDir(dvrRoot)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		candidate := filepath.Join(dvrRoot, e.Name(), dvrHash, "segments")
+		if info, statErr := os.Stat(candidate); statErr == nil && info.IsDir() {
+			return candidate
+		}
+	}
+	return ""
+}
+
 // DropUnsyncedSegment force-evicts a single segment that has NOT been
 // uploaded to S3. This is the data-loss path: the segment is reported as
-// lost_local so chapter manifests can render an explicit #EXT-X-GAP. Use
-// only when no other option remains. Reason should be one of disk_pressure /
-// retention_expired / operator_cleanup.
+// lost_local; any chapter that overlaps the lost segment will be marked
+// failed_source_missing by the finalization queue. Use only when no other
+// option remains. Reason should be one of disk_pressure / retention_expired
+// / operator_cleanup.
 // ErrDropRefusedByLease is returned by DropUnsyncedSegment when the lease
 // guard refuses the drop for a non-emergency reason (currently disk_pressure).
 // Retention-expired and operator-cleanup callers may force the drop after
@@ -340,11 +392,23 @@ func (dm *DVRManager) HandleNewSegment(streamName, filePath string, mediaStartMs
 	go dm.syncSpecificSegment(targetJob, filePath, mediaStartMs, mediaEndMs, durationMs)
 }
 
-// syncSpecificSegment records a 'pending' ledger row in Foghorn, uploads the
-// segment to S3 against the returned presigned URL, then reports the upload
-// to mark the row 'uploaded'. Foghorn's ledger is the source of truth; the
-// in-memory SyncedSegments map remains as a hot cache so eviction decisions
-// avoid a Foghorn round-trip per segment.
+// syncSpecificSegment uploads a recorded TS segment to S3 as a
+// recovery-source durability artifact. The per-segment S3 object is NOT
+// playback infrastructure: active DVR playback reads the local rolling
+// manifest on the recording origin, and other edges DTSC-pull from that
+// origin. The S3 object exists so chapter finalization can recover from
+// local segment loss (disk corruption, eviction edge case) and so the
+// recording survives a recording-node loss until the chapter
+// finalization queue produces the canonical .mkv. Once the chapter's
+// playback artifact reaches state='frozen', the chapter_reclaim_sweep
+// deletes the local TS file and the temporary S3 object.
+//
+// Records a 'pending' ledger row in Foghorn, uploads the segment to S3
+// against the returned presigned URL, then reports the upload to mark
+// the row 'uploaded'. Foghorn's ledger is the source of truth for
+// eviction decisions; the in-memory SyncedSegments map only tracks
+// which uploads this process has already initiated to avoid duplicate
+// RecordDVRSegment calls.
 func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string, mediaStartMs, mediaEndMs, durationMs int64) {
 	if !IsConnected() {
 		return
@@ -431,9 +495,9 @@ func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string, mediaSta
 	job.SyncedSegments[segName] = true
 	job.syncMutex.Unlock()
 
-	// Update the per-segment local cache index. Eviction consults this
-	// index to keep active defrosts and recently warmed chapter playback
-	// segments out of the deletion set.
+	// Update the per-segment local index. Eviction consults this index
+	// to keep segments held by an active view (defrost, clip harvest,
+	// in-flight finalization) out of the deletion set.
 	if idx := localSegmentIndex; idx != nil {
 		idx.MarkUploaded(job.DVRHash, segName, filePath, info.Size())
 	}
@@ -446,28 +510,13 @@ func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string, mediaSta
 		"trigger":  "RECORDING_SEGMENT",
 	}).Debug("DVR segment synced to S3 via trigger")
 
-	// Routine post-upload eviction: any uploaded segment now outside the
-	// rolling-manifest window is safe to delete locally. We only consult
-	// the local uploaded cache here to avoid a Foghorn round-trip per
-	// segment; storage-pressure passes use RequestEvictableSegments for
-	// authoritative answers across the cluster.
-	dm.evictBeyondRollingManifest(job)
-}
-
-// evictBeyondRollingManifest deletes uploaded segment files absent from the
-// live rolling manifest. Cheap routine eviction so disk
-// stays bounded under nounlink=1 without per-segment Foghorn queries.
-func (dm *DVRManager) evictBeyondRollingManifest(job *DVRJob) {
-	job.syncMutex.Lock()
-	candidates := make([]string, 0, len(job.SyncedSegments))
-	for name := range job.SyncedSegments {
-		candidates = append(candidates, name)
-	}
-	job.syncMutex.Unlock()
-	if len(candidates) == 0 {
-		return
-	}
-	dm.EvictUploadedSegments(job.DVRHash, candidates, "rolling_window_passed")
+	// Source TS segments are pinned to local disk until every overlapping
+	// chapter is frozen/reclaimed. Foghorn's chapter reclaim sweep owns
+	// deletion via ReclaimDVRSegment; disk-pressure passes (see
+	// monitorActiveDVRPressure) ask Foghorn for an authoritative evictable
+	// list. Helmsman does NOT routinely evict on its own — that would
+	// turn S3 recovery into the normal source for chapter finalization
+	// instead of a recovery bridge.
 }
 
 // StartRecording starts a new DVR recording job
@@ -545,9 +594,9 @@ func (dm *DVRManager) StopRecording(dvrHash string) error {
 		}
 	}
 
-	// Mark the job finalizing. Archive playback is chapter-only via Foghorn-
-	// generated manifests; the rolling Mist playlist stays local-only and is
-	// not uploaded to S3 at any point.
+	// Mark the job finalizing. Archive playback is per-chapter VOD artifacts
+	// produced by the chapter-finalization pipeline; the rolling Mist playlist
+	// stays local-only and is never uploaded to S3.
 	job.Status = "finalizing"
 	dm.mutex.Unlock()
 
@@ -594,10 +643,11 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 	// Segments go to {outputDir}/segments/, manifest at {outputDir}/{hash}.m3u8
 	// From segments/, ../ goes to outputDir where manifest lives
 	// nounlink=1 stops Mist from deleting segment files when pruning the
-	// rolling playlist. Without it, archive integrity depends on S3 winning
-	// a race against Mist's targetAge cleanup. With ledger + segment-level
-	// eviction in place, the sidecar owns deletion and only after Foghorn
-	// confirms upload, so segments are never lost silently.
+	// rolling playlist. With ledger + segment-level eviction in place,
+	// segment removal is owned by the chapter reclaim sweep — only after the
+	// covering chapter is frozen (artifact + .dtsh durable on S3) and any
+	// overlapping clip leases have drained — so segments are never lost
+	// silently.
 	targetURI := fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts?m3u8=../%s.m3u8&split=%d&targetAge=%d&maxEntries=%d&append=1&noendlist=1&nounlink=1",
 		job.OutputDir,
 		"segments",
@@ -977,7 +1027,8 @@ func (dm *DVRManager) GetActiveJobs() map[string]string {
 // remains the primary writer; this path discovers segments present on disk
 // but absent from the in-memory uploaded cache and routes them through the
 // same ledger primitives — RecordDVRSegment + MarkDVRSegmentUploaded — so
-// they appear in foghorn.dvr_segments and, by extension, in chapter manifests.
+// they appear in foghorn.dvr_segments and are visible to the chapter
+// finalization queue.
 //
 // Media timing comes from #EXT-X-PROGRAM-DATE-TIME when Mist writes it; once
 // anchored, later entries in the same playlist advance by their EXTINF
@@ -1156,10 +1207,12 @@ func (dm *DVRManager) stopJobAfterTerminalRejection(job *DVRJob) {
 	dm.mutex.Unlock()
 }
 
-// uploadSegmentToS3 uploads a segment file using a presigned PUT URL
+// uploadSegmentToS3 uploads a segment file using a presigned PUT URL via
+// the shared HTTP client. Streaming the *os.File body uses constant
+// memory regardless of segment size; Content-Length is set explicitly so
+// the client never falls back to chunked encoding (some S3 endpoints
+// reject chunked PUTs against presigned URLs).
 func (dm *DVRManager) uploadSegmentToS3(ctx context.Context, filePath, presignedURL string) error {
-	// Use the storage package's presigned client
-	// For now, defer to a simple HTTP PUT implementation
 	file, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to open segment file: %w", err)
@@ -1178,7 +1231,6 @@ func (dm *DVRManager) uploadSegmentToS3(ctx context.Context, filePath, presigned
 	req.ContentLength = info.Size()
 	req.Header.Set("Content-Type", "video/MP2T")
 
-	// Use storage presigned client if available, otherwise fall back to http.DefaultClient
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to upload to S3: %w", err)
@@ -1192,5 +1244,5 @@ func (dm *DVRManager) uploadSegmentToS3(ctx context.Context, filePath, presigned
 	return nil
 }
 
-// Rolling manifest is local-only. Archive playback uses Foghorn-generated
-// chapter manifests at chapters/{chapter_id}.m3u8.
+// Rolling manifest is local-only. Archive playback uses chapter VOD
+// artifacts produced by the chapter finalization job.

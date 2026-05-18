@@ -628,6 +628,14 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 	if input.PullSource != nil {
 		req.PullSource = input.PullSource
 	}
+	if input.DvrChapterMode != nil {
+		mode := chapterModeToString(*input.DvrChapterMode)
+		req.DvrChapterMode = &mode
+	}
+	if input.DvrChapterIntervalSeconds != nil {
+		v := int32(*input.DvrChapterIntervalSeconds)
+		req.DvrChapterIntervalSeconds = &v
+	}
 
 	// Call Commodore gRPC (context metadata carries auth)
 	stream, err := r.Clients.Commodore.UpdateStream(ctx, req)

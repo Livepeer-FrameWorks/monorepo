@@ -767,6 +767,7 @@ func runClient(addr string, logger logging.Logger) error {
 		MemoryGb:        &hwSpecs.MemoryGB,
 		DiskGb:          &hwSpecs.DiskGB,
 		RequestedMode:   parseRequestedMode(cfg.RequestedMode),
+		RelayBaseUrl:    relayBaseURL(),
 	}}}
 	if err := stream.Send(reg); err != nil {
 		return err
@@ -876,6 +877,10 @@ func runClient(addr string, logger logging.Logger) error {
 				if retryDVRSegmentHandler != nil {
 					go retryDVRSegmentHandler(x.RetryDvrSegmentUpload)
 				}
+			case *pb.ControlMessage_ReclaimDvrSegment:
+				if reclaimDVRSegmentHandler != nil {
+					go reclaimDVRSegmentHandler(x.ReclaimDvrSegment)
+				}
 			case *pb.ControlMessage_DefrostRequest:
 				// Handle defrost request from Foghorn
 				if defrostRequestHandler != nil {
@@ -888,6 +893,10 @@ func runClient(addr string, logger logging.Logger) error {
 			case *pb.ControlMessage_CanDeleteResponse:
 				// Handle can-delete response from Foghorn
 				go handleCanDeleteResponse(x.CanDeleteResponse)
+			case *pb.ControlMessage_RelayResolveResponse:
+				// Relay resolve response: route to the waiting goroutine keyed
+				// by request_id.
+				go handleRelayResolveResponse(x.RelayResolveResponse)
 			case *pb.ControlMessage_DtshSyncRequest:
 				// Handle incremental .dtsh sync request from Foghorn
 				if dtshSyncRequestHandler != nil {
@@ -968,11 +977,48 @@ func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*p
 
 	// Use clip_hash for secure file naming (no tenant info exposed)
 	clipHash := req.GetClipHash()
-	streamName := req.GetStreamName()
+	// stream_name = the Mist source Foghorn picked (live internal_name,
+	// dvr+<internal>, or vod+<chapter_artifact_hash>). Used ONLY for
+	// the /view/ pull URL.
+	sourceStreamName := req.GetStreamName()
+	// output_stream_name = the owning stream's internal_name. All
+	// clips for a given stream share this storage namespace
+	// regardless of which historical surface they were cut from.
+	// Required — Foghorn always populates this field. A missing
+	// value is a Foghorn bug; reject the request rather than fall
+	// back to the source-stream namespace (which would scatter
+	// chapter clips under chapter-artifact-hashed dirs).
+	outputStreamName := req.GetOutputStreamName()
+	if outputStreamName == "" {
+		logger.WithFields(logging.Fields{
+			"clip_hash":     clipHash,
+			"source_stream": sourceStreamName,
+			"request_id":    req.GetRequestId(),
+		}).Error("Clip pull rejected: output_stream_name is required")
+		if send != nil {
+			send(&pb.ControlMessage{
+				SentAt: timestamppb.Now(),
+				Payload: &pb.ControlMessage_ClipDone{ClipDone: &pb.ClipDone{
+					RequestId: req.GetRequestId(),
+					Status:    "failed",
+					Error:     "missing output_stream_name (Foghorn bug)",
+				}},
+			})
+		}
+		return
+	}
+	logger.WithFields(logging.Fields{
+		"clip_hash":     clipHash,
+		"source_stream": sourceStreamName,
+		"output_stream": outputStreamName,
+		"source_kind":   req.GetSourceKind().String(),
+		"source_dvr":    req.GetSourceDvrHash(),
+		"source_vod":    req.GetSourceChapterArtifactHash(),
+	}).Debug("Clip pull source dispatch")
 
-	// Build MistServer URL using stream name
+	// Build MistServer URL using the source stream name.
 	q := buildClipParams(req)
-	clipURL := fmt.Sprintf("%s/view/%s.%s?%s", mistBase, streamName, format, q)
+	clipURL := fmt.Sprintf("%s/view/%s.%s?%s", mistBase, sourceStreamName, format, q)
 
 	root := cfg.StorageLocalPath
 	if root == "" {
@@ -980,8 +1026,11 @@ func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*p
 		return
 	}
 
-	// Create secure storage path: clips/{stream_name}/{clip_hash}.{format}
-	clipDir := filepath.Join(root, "clips", streamName)
+	// Storage path: clips/{output_stream_name}/{clip_hash}.{format}.
+	// Foghorn's relay URL generation and DTSH boot path both resolve
+	// the clip's owning stream via foghorn.artifacts.stream_internal_name,
+	// so the file MUST land under that name — not the source surface.
+	clipDir := filepath.Join(root, "clips", outputStreamName)
 	_ = os.MkdirAll(clipDir, 0755)
 	dst := filepath.Join(clipDir, fmt.Sprintf("%s.%s", clipHash, format))
 
@@ -1005,10 +1054,11 @@ func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*p
 	}
 	info, _ := os.Stat(dst)
 	logger.WithFields(logging.Fields{
-		"file":        dst,
-		"clip_hash":   clipHash,
-		"stream_name": streamName,
-		"request_id":  requestID,
+		"file":          dst,
+		"clip_hash":     clipHash,
+		"source_stream": sourceStreamName,
+		"output_stream": outputStreamName,
+		"request_id":    requestID,
 		"bytes": func() int64 {
 			if info != nil {
 				return info.Size()
@@ -1028,26 +1078,61 @@ func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*p
 	if onStorageWrite != nil {
 		onStorageWrite()
 	}
+
+	// Proactively generate .dtsh for the clip so the first relay viewer
+	// doesn't pay header-discovery latency over HTTP::URIReader and the
+	// freeze pipeline uploads the sidecar alongside the media file. The
+	// handlers package owns the actual GenerateDTSH HTTP poll, registered
+	// via SetClipDTSHGenerator at startup to avoid the
+	// handlers→control→handlers import cycle. Boots vod+<internal_name>
+	// — Foghorn's STREAM_SOURCE for vod+ resolves via internal_name, not
+	// clip_hash, so using the hash here would silently fail to resolve.
+	internalName := req.GetInternalName()
+	if gen := getClipDTSHGenerator(); gen != nil && internalName != "" {
+		clipStreamName := "vod+" + internalName
+		go gen(clipStreamName, clipHash)
+	}
+}
+
+// ClipDTSHGenerator is registered by handlers at startup. Invoked
+// asynchronously after a clip download completes; the implementation
+// boots the stream in Mist via /json_<streamName>.js which triggers the
+// input module to write a .dtsh sidecar.
+type ClipDTSHGenerator func(streamName, clipHash string)
+
+var (
+	clipDTSHGen   ClipDTSHGenerator
+	clipDTSHGenMu sync.RWMutex
+)
+
+// SetClipDTSHGenerator wires a clip-completion DTSH generator. Called by
+// handlers package init.
+func SetClipDTSHGenerator(g ClipDTSHGenerator) {
+	clipDTSHGenMu.Lock()
+	clipDTSHGen = g
+	clipDTSHGenMu.Unlock()
+}
+
+func getClipDTSHGenerator() ClipDTSHGenerator {
+	clipDTSHGenMu.RLock()
+	defer clipDTSHGenMu.RUnlock()
+	return clipDTSHGen
 }
 
 func buildClipParams(req *pb.ClipPullRequest) string {
+	// Foghorn sends ONLY the canonical absolute-Unix-seconds range
+	// (startunix/stopunix). The original ClipMode-shaped fields
+	// (start_ms / stop_ms / negative start_unix for CLIP_NOW) are
+	// normalized away in api_balancing/internal/grpc/server.go before
+	// the request leaves Foghorn — Helmsman must never reinterpret
+	// them or it would ask the chapter VOD for stream-relative
+	// seconds instead of the wall-clock range the chapter covers.
 	var parts []string
 	if req.StartUnix != nil {
 		parts = append(parts, "startunix="+strconv.FormatInt(req.GetStartUnix(), 10))
 	}
 	if req.StopUnix != nil {
 		parts = append(parts, "stopunix="+strconv.FormatInt(req.GetStopUnix(), 10))
-	}
-	if req.StartMs != nil {
-		// StartMs is media time in seconds (despite the name), MistServer expects seconds
-		parts = append(parts, "start="+strconv.FormatInt(req.GetStartMs(), 10))
-	}
-	if req.StopMs != nil {
-		// StopMs is media time in seconds (despite the name), MistServer expects seconds
-		parts = append(parts, "stop="+strconv.FormatInt(req.GetStopMs(), 10))
-	}
-	if req.DurationSec != nil {
-		parts = append(parts, "duration="+strconv.FormatInt(req.GetDurationSec(), 10))
 	}
 	parts = append(parts, "dl="+urlEscape(fmt.Sprintf("%s.%s", req.GetOutputName(), req.GetFormat())))
 	return strings.Join(parts, "&")
@@ -1464,6 +1549,12 @@ var (
 	// CanDelete request/response tracking
 	canDeleteHandlers = make(map[string]chan *pb.CanDeleteResponse)
 	canDeleteMutex    = make(chan struct{}, 1)
+
+	// RelayResolve request/response tracking. Keyed by request_id (the relay
+	// generates a UUID per outstanding resolve) because the same asset can be
+	// resolved concurrently for different sessions.
+	relayResolveHandlers = make(map[string]chan *pb.RelayResolveResponse)
+	relayResolveMutex    = make(chan struct{}, 1)
 )
 
 // SetDefrostRequestHandler sets the callback for defrost requests from Foghorn
@@ -1560,12 +1651,19 @@ func handleFreezePermissionResponse(response *pb.FreezePermissionResponse) {
 // node to re-attempt upload of specific segments during finalization.
 type RetryDVRSegmentUploadHandler func(*pb.RetryDVRSegmentUpload)
 
+// ReclaimDVRSegmentHandler is invoked when Foghorn issues a reclaim
+// order for local DVR segment files after every overlapping chapter
+// has reached state='frozen'. The handler MUST be idempotent
+// (missing-file is success).
+type ReclaimDVRSegmentHandler func(*pb.ReclaimDVRSegment)
+
 var (
 	recordDVRSegmentHandlers  = make(map[string]chan *pb.RecordDVRSegmentResponse)
 	recordDVRSegmentMutex     = make(chan struct{}, 1)
 	evictableSegmentsHandlers = make(map[string]chan *pb.EvictableSegmentsResponse)
 	evictableSegmentsMutex    = make(chan struct{}, 1)
 	retryDVRSegmentHandler    RetryDVRSegmentUploadHandler
+	reclaimDVRSegmentHandler  ReclaimDVRSegmentHandler
 )
 
 // SetRetryDVRSegmentHandler registers the callback for Foghorn-driven
@@ -1575,6 +1673,13 @@ var (
 // emit DVRSegmentDropped(was_uploaded=false) when the local copy is gone.
 func SetRetryDVRSegmentHandler(h RetryDVRSegmentUploadHandler) {
 	retryDVRSegmentHandler = h
+}
+
+// SetReclaimDVRSegmentHandler registers the callback for Foghorn-driven
+// reclaim orders. Invoked once every overlapping chapter has reached
+// state='frozen'; the local segment file is safe to delete.
+func SetReclaimDVRSegmentHandler(h ReclaimDVRSegmentHandler) {
+	reclaimDVRSegmentHandler = h
 }
 
 // RecordDVRSegment asks Foghorn to insert a 'pending' ledger row for a new
@@ -1683,8 +1788,9 @@ func SendMarkDVRSegmentUploaded(dvrHash, segmentName string, sizeBytes uint64) e
 }
 
 // SendDVRSegmentDropped reports a forced eviction. wasUploaded distinguishes
-// safe local cleanup (Foghorn marks deleted_local) from data loss before
-// upload (Foghorn marks lost_local; chapter manifests emit #EXT-X-GAP).
+// safe local cleanup (Foghorn marks deleted_local; chapter finalization
+// recovers from S3) from data loss before upload (Foghorn marks
+// lost_local; overlapping chapters move to failed_source_missing).
 func SendDVRSegmentDropped(
 	dvrHash, segmentName, reason, localPath string,
 	mediaStartMs, mediaEndMs, durationMs int64,
@@ -1972,6 +2078,18 @@ func IsConnected() bool {
 	return getStream() != nil
 }
 
+// relayBaseURL returns the URL Mist on this node uses to reach Helmsman's
+// /internal/artifact/* read-through relay. Reads HELMSMAN_RELAY_BASE_URL when
+// set (container deployments where Mist resolves to a service name like
+// http://helmsman:18007); falls back to http://127.0.0.1:18007 for the
+// production colocated-with-Mist case.
+func relayBaseURL() string {
+	if v := strings.TrimSpace(os.Getenv("HELMSMAN_RELAY_BASE_URL")); v != "" {
+		return strings.TrimRight(v, "/")
+	}
+	return "http://127.0.0.1:18007"
+}
+
 // RequestCanDelete asks Foghorn if it's safe to delete a local artifact copy.
 // Returns true if the asset is synced to S3 and can be safely deleted locally.
 // Also returns warm_duration_ms (how long the asset was cached before eviction).
@@ -2032,6 +2150,80 @@ func handleCanDeleteResponse(response *pb.CanDeleteResponse) {
 	responseChan, exists := canDeleteHandlers[response.AssetHash]
 	<-canDeleteMutex
 
+	if exists {
+		responseChan <- response
+	}
+}
+
+// RequestRelayResolve asks Foghorn for the durable source coordinates of an
+// asset Helmsman is about to serve via the /internal/artifact/* relay. The
+// response carries presigned media GET, optional .dtsh GET/PUT, expected
+// size, and (for DVR) the full chapter segment ref list.
+//
+// Caller-side semantics:
+//   - requestID must be unique per outstanding request (UUID recommended).
+//   - The TTL on media_presigned_url is in the response; the relay should
+//     cache resolves in memory for url_ttl_seconds * 0.8 and refresh on TTL
+//     expiry to handle long playback sessions.
+//   - state != PLAYABLE means the relay should not attempt to fetch S3 —
+//     handle SOURCE_MISSING (404/500), ACTIVE_DVR (refuse + retry-after),
+//     and GAP (HLS gap marker) at the HTTP layer.
+func RequestRelayResolve(ctx context.Context, req *pb.RelayResolveRequest) (*pb.RelayResolveResponse, error) {
+	stream := getStream()
+	if stream == nil {
+		return nil, fmt.Errorf("gRPC control stream not connected")
+	}
+	if req == nil || req.GetRequestId() == "" {
+		return nil, fmt.Errorf("relay resolve request must have a request_id")
+	}
+	if req.NodeId == "" {
+		req.NodeId = getNodeID()
+	}
+
+	responseChan := make(chan *pb.RelayResolveResponse, 1)
+
+	relayResolveMutex <- struct{}{}
+	relayResolveHandlers[req.GetRequestId()] = responseChan
+	<-relayResolveMutex
+
+	msg := &pb.ControlMessage{
+		RequestId: req.GetRequestId(),
+		SentAt:    timestamppb.Now(),
+		Payload:   &pb.ControlMessage_RelayResolveRequest{RelayResolveRequest: req},
+	}
+	if err := stream.Send(msg); err != nil {
+		relayResolveMutex <- struct{}{}
+		delete(relayResolveHandlers, req.GetRequestId())
+		<-relayResolveMutex
+		return nil, fmt.Errorf("failed to send relay resolve request: %w", err)
+	}
+
+	defer func() {
+		relayResolveMutex <- struct{}{}
+		delete(relayResolveHandlers, req.GetRequestId())
+		<-relayResolveMutex
+	}()
+
+	select {
+	case resp := <-responseChan:
+		return resp, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(10 * time.Second):
+		return nil, fmt.Errorf("timeout waiting for relay resolve response")
+	}
+}
+
+// handleRelayResolveResponse routes inbound RelayResolveResponse messages to
+// the waiting goroutine. Keyed by request_id (NOT asset_hash) because the
+// same asset is resolved concurrently per session.
+func handleRelayResolveResponse(response *pb.RelayResolveResponse) {
+	if response == nil || response.GetRequestId() == "" {
+		return
+	}
+	relayResolveMutex <- struct{}{}
+	responseChan, exists := relayResolveHandlers[response.GetRequestId()]
+	<-relayResolveMutex
 	if exists {
 		responseChan <- response
 	}

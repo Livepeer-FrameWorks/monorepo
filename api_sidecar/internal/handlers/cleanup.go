@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -150,9 +151,17 @@ func (cm *CleanupMonitor) checkAndCleanup() error {
 		candidates = append(candidates, dvrCandidates...)
 	}
 
-	vodDir := filepath.Join(cm.basePath, "vod")
-	if vodCandidates, vodErr := cm.getCleanupCandidates(vodDir, "vod"); vodErr == nil {
-		candidates = append(candidates, vodCandidates...)
+	// Skip VOD when any source lease is degraded: without an
+	// internal_name → artifact_hash mapping for the active stream we
+	// cannot pin the right backing file, and cleanup picks by
+	// LRU/heat — which would happily evict the file Mist is actively
+	// reading. Cleanup of clips/DVR continues; VOD resumes once
+	// reconciliation drops the degraded lease.
+	if tracker := leases.GlobalTracker(); tracker == nil || !tracker.DegradedVodCleanupActive() {
+		vodDir := filepath.Join(cm.basePath, "vod")
+		if vodCandidates, vodErr := cm.getCleanupCandidates(vodDir, "vod"); vodErr == nil {
+			candidates = append(candidates, vodCandidates...)
+		}
 	}
 
 	if len(candidates) == 0 {
@@ -255,8 +264,59 @@ func (cm *CleanupMonitor) getCleanupCandidates(dir string, assetType string) ([]
 			return nil
 		}
 
+		// Block cache dir: <asset>.<ext>.blocks/. Eligible for eviction
+		// like a warm file is — its parent canonical file may or may not
+		// exist (cold-only cache or warm + cache coexisting). Size is
+		// the sum of block files inside.
+		if info.IsDir() && strings.HasSuffix(path, ".blocks") && (assetType == "vod" || assetType == "clip") {
+			parentExt := filepath.Ext(strings.TrimSuffix(path, ".blocks"))
+			artifactHash := cm.extractArtifactHashFromPath(strings.TrimSuffix(path, ".blocks"), assetType)
+			if parentExt == "" || artifactHash == "" {
+				return filepath.SkipDir
+			}
+			if info.ModTime().After(minAge) {
+				return filepath.SkipDir
+			}
+			if tracker := leases.GlobalTracker(); tracker != nil && tracker.IsPathLeased(path) {
+				return filepath.SkipDir
+			}
+			var dirBytes uint64
+			_ = filepath.Walk(path, func(_ string, fi os.FileInfo, walkErr error) error { //nolint:errcheck // size defaults to 0 on walk failure
+				if walkErr == nil && fi != nil && !fi.IsDir() {
+					dirBytes += uint64(fi.Size())
+				}
+				return nil
+			})
+			// Block-cache heat: the relay's warm-block reads call
+			// HeatTracker.Touch with the .blocks dir as key, so repeated
+			// playback shows up here as AccessCount/LastAccessed and the
+			// LRU sort actually retains "requested every now and then"
+			// caches. Fall back to dir mtime when no heat record exists
+			// (cold cache that filled but was never read warm).
+			lastAccessed := info.ModTime()
+			accessCount := 0
+			if heat := leases.GlobalHeat(); heat != nil {
+				if h, ok := heat.Lookup(path); ok {
+					lastAccessed = h.LastAccessed
+					accessCount = int(h.AccessCount)
+				}
+			}
+			blockCandidate := ClipCleanupInfo{
+				ClipHash:     artifactHash,
+				FilePath:     path,
+				SizeBytes:    dirBytes,
+				CreatedAt:    info.ModTime(),
+				AccessCount:  accessCount,
+				LastAccessed: lastAccessed,
+				AssetType:    assetType,
+			}
+			blockCandidate.Priority = cm.calculateCleanupPriority(blockCandidate)
+			candidates = append(candidates, blockCandidate)
+			return filepath.SkipDir
+		}
+
 		if info.IsDir() {
-			return nil // Skip directories
+			return nil // Skip non-block directories
 		}
 
 		// Check if this is a valid artifact file for the asset type
@@ -448,6 +508,40 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 			return fmt.Errorf("failed to remove dvr directory: %w", err)
 		}
 	default:
+		// Block-cache dir candidates are evicted recursively; sidecar
+		// dirs share the same lease gate as files but need RemoveAll.
+		if strings.HasSuffix(artifact.FilePath, ".blocks") {
+			if tracker := leases.GlobalTracker(); tracker != nil && tracker.IsPathLeased(artifact.FilePath) {
+				cm.logger.WithField("file", artifact.FilePath).Info("Cleanup skipped: block dir lease held")
+				return errCleanupSkip
+			}
+			if err := os.RemoveAll(artifact.FilePath); err != nil {
+				errStr := err.Error()
+				_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{ //nolint:errcheck // best-effort report
+					Action:    pb.StorageLifecycleData_ACTION_EVICT_FAILED,
+					AssetType: assetType,
+					AssetHash: artifact.ClipHash,
+					SizeBytes: artifact.SizeBytes,
+					Error:     &errStr,
+				})
+				return fmt.Errorf("failed to remove block dir: %w", err)
+			}
+			// Block-cache eviction is a derived relay-cache action; the
+			// canonical artifact file (if any) is untouched. Skip the
+			// shared artifact-index purge and SendArtifactDeleted path so
+			// Foghorn doesn't observe a placement change for an asset
+			// that still has a warm copy on disk.
+			if isEviction {
+				_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{ //nolint:errcheck // best-effort report
+					Action:         pb.StorageLifecycleData_ACTION_EVICTED,
+					AssetType:      assetType,
+					AssetHash:      artifact.ClipHash,
+					SizeBytes:      artifact.SizeBytes,
+					WarmDurationMs: &warmDurationMs,
+				})
+			}
+			return nil
+		}
 		// Clip and VOD are single files
 		if err := leases.DeleteFileIfUnleased(artifact.FilePath); err != nil {
 			if errors.Is(err, leases.ErrLeaseHeld) {
@@ -464,9 +558,12 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 			})
 			return fmt.Errorf("failed to remove artifact file: %w", err)
 		}
-		// Sidecars are not lease-protected; remove only when primary succeeded.
+		// Sidecars are not lease-protected; remove only when primary
+		// succeeded. .blocks/ is the relay's per-asset block cache —
+		// when the canonical file is gone, the cache is meaningless.
 		_ = os.Remove(artifact.FilePath + ".dtsh")
 		_ = os.Remove(artifact.FilePath + ".gop")
+		_ = os.RemoveAll(artifact.FilePath + ".blocks")
 	}
 
 	// Remove from artifact index

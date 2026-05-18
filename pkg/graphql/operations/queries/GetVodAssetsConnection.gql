@@ -27,6 +27,16 @@ query GetVodAssetsConnection($first: Int = 50, $after: String, $last: Int, $befo
           spriteJpgUrl
           assetKey
         }
+        storageCost {
+          perDay
+          perMonth
+          currency
+        }
+        effectiveRetention {
+          retentionDays
+          retentionUntil
+          source
+        }
       }
     }
     pageInfo {

@@ -505,36 +505,18 @@ func rebuildSourceLeasesFromMist(tracker *leases.Tracker, present map[string]str
 			}).Warn("Active VOD stream has no local-path mapping; installed degraded lease (DeleteVOD will refuse; path-keyed cleanup cannot protect)")
 			continue
 		}
-		if chapterID, ok := leases.ParseDVRChapterPlaybackID(streamName); ok {
-			var (
-				dvrHash      string
-				segmentNames []string
-				manifestPath string
-			)
-			if reg := leases.GlobalChapterRegistry(); reg != nil {
-				if entry, found := reg.Lookup(chapterID); found {
-					dvrHash = entry.DvrHash
-					segmentNames = entry.SegmentNames
-					manifestPath = entry.ManifestPath
-				}
-			}
-			key := leases.AssetKey{Type: "dvr", Hash: dvrHash, ChapterID: chapterID}
-			if dvrHash != "" && manifestPath != "" {
-				tracker.AcquireSource(streamName, []string{manifestPath}, key, segmentNames, false)
+		// Active rolling DVR surface — rebuild artifact-level lease from
+		// the local rolling manifest path. Chapter playback flows
+		// through vod+ now, not dvr+.
+		if _, ok := leases.ParseDVRRollingPlaybackID(streamName); ok {
+			if dvrHash := leases.DeriveDvrHashFromRollingManifestPath(""); dvrHash != "" {
+				key := leases.AssetKey{Type: "dvr", Hash: dvrHash}
+				tracker.AcquireSource(streamName, nil, key, nil, true)
 				monitorLogger.WithFields(logging.Fields{
 					"stream_name": streamName,
-					"chapter_id":  chapterID,
 					"dvr_hash":    dvrHash,
-				}).Info("Rebuilt DVR source lease for active Mist stream")
-				continue
+				}).Debug("Rebuilt DVR rolling lease for active Mist stream")
 			}
-			// DVR unresolved: degraded lease pauses DVR destructive cleanup
-			// (DegradedDvrCleanupActive) for the duration of this lease.
-			tracker.AcquireSource(streamName, nil, key, nil, true)
-			monitorLogger.WithFields(logging.Fields{
-				"stream_name": streamName,
-				"chapter_id":  chapterID,
-			}).Warn("Active DVR chapter has no registry mapping; installed degraded lease (DVR destructive cleanup paused while held)")
 		}
 	}
 }
@@ -1314,7 +1296,7 @@ func scanVODDirectory(vodDir string, artifactIndex map[string]*ClipInfo) (uint64
 
 		name := entry.Name()
 		ext := filepath.Ext(name)
-		if ext == "" {
+		if ext == "" || ext == ".dtsh" {
 			continue
 		}
 		hash := strings.TrimSuffix(name, ext)
@@ -1331,6 +1313,10 @@ func scanVODDirectory(vodDir string, artifactIndex map[string]*ClipInfo) (uint64
 		}
 
 		filePath := fmt.Sprintf("%s/%s", vodDir, name)
+		hasDtsh := false
+		if _, err := os.Stat(filePath + ".dtsh"); err == nil {
+			hasDtsh = true
+		}
 		vodInfo := &ClipInfo{
 			FilePath:     filePath,
 			StreamName:   "", // VOD assets are not tied to a live stream name
@@ -1338,7 +1324,7 @@ func scanVODDirectory(vodDir string, artifactIndex map[string]*ClipInfo) (uint64
 			SizeBytes:    uint64(info.Size()),
 			CreatedAt:    info.ModTime(),
 			SegmentCount: 0,
-			HasDtsh:      false,
+			HasDtsh:      hasDtsh,
 			ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
 		}
 		artifactIndex[hash] = vodInfo

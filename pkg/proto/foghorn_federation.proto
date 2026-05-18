@@ -4,8 +4,6 @@ package foghorn_federation;
 
 option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto";
 
-import "ipc.proto";
-
 // FoghornFederation enables cross-cluster communication between Foghorn instances.
 // Unary RPCs (QueryStream, NotifyOriginPull, PrepareArtifact) are stateless and
 // load-balanced across all Foghorn instances via shared Redis state.
@@ -17,20 +15,11 @@ service FoghornFederation {
   // NotifyOriginPull tells the origin cluster that a peer intends to pull a stream via DTSC.
   rpc NotifyOriginPull(OriginPullNotification) returns (OriginPullAck);
 
-  // PrepareArtifact requests a clip or VOD be made available for cross-cluster access.
-  // DVR replay uses dvr+ chapter routing and chapter-bounded edge defrost.
+  // PrepareArtifact requests a clip, VOD, or finalized chapter artifact
+  // be made available for cross-cluster access. Chapter artifacts
+  // (origin_type='dvr_chapter') flow through this RPC just like
+  // ordinary VOD; the dvr+ chapter route no longer exists.
   rpc PrepareArtifact(PrepareArtifactRequest) returns (PrepareArtifactResponse);
-
-  // PrepareDVRChapter is the DVR equivalent of PrepareArtifact, scoped to a
-  // single chapter. The non-origin Foghorn calls the chapter's origin cluster
-  // to obtain presigned GETs for the chapter's segment ledger and chapter
-  // metadata, then locally defrosts the chapter without holding the
-  // storage-cluster's S3 credentials. Origin is the only writer of chapter
-  // rows; if the caller supplies range fields with no matching chapter row,
-  // origin materializes it via the same path Commodore.RetrieveDVRChapter
-  // uses. DVR segment storage is origin-owned; split storage ownership is
-  // rejected with unsupported_split_write_dvr.
-  rpc PrepareDVRChapter(PrepareDVRChapterRequest) returns (PrepareDVRChapterResponse);
 
   // CreateRemoteClip requests the origin cluster to create a clip on behalf of a remote cluster.
   rpc CreateRemoteClip(RemoteClipRequest) returns (RemoteClipResponse);
@@ -136,15 +125,13 @@ message OriginPullAck {
 }
 
 message PrepareArtifactRequest {
-  string artifact_id = 1;       // Artifact hash (clip/vod)
+  string artifact_id = 1;       // Artifact hash (clip/vod/chapter VOD)
   string clip_hash = 2;         // Clip hash fallback alias
   string requesting_cluster = 3;
-  string artifact_type = 4;     // "clip" or "vod"; DVR is rejected by PrepareArtifact
+  string artifact_type = 4;     // "clip" or "vod"; parent DVR artifacts are rejected (use the chapter VOD's artifact_hash)
   string tenant_id = 5;
-  // Reserved wire surface from the DVR chapter prototype. Current DVR
-  // playback uses RetrieveDVRChapter plus the returned dvr+ playback ID.
-  int64 dvr_start_ms = 6;
-  int64 dvr_end_ms = 7;
+  reserved 6, 7;                // retired dvr_start_ms / dvr_end_ms (chapter-range prototype; chapter playback now goes through the chapter VOD's playback_id)
+  reserved "dvr_start_ms", "dvr_end_ms";
 }
 
 message PrepareArtifactResponse {
@@ -154,7 +141,9 @@ message PrepareArtifactResponse {
   uint32 est_ready_seconds = 4; // Estimated time until ready (for async prep)
   string error = 5;
   // Filename -> presigned GET URL for segmented non-DVR artifacts.
-  // DVR chapter playback uses dvr+ routing and does not consume this field.
+  // Parent DVR artifacts are rejected by PrepareArtifact; finalized
+  // chapters are addressed as their own VOD artifacts and use the
+  // single-file url/segment_urls path like any other VOD.
   map<string, string> segment_urls = 6;
   string format = 7;            // Container format (mp4, m3u8, etc.)
   string internal_name = 8;     // Artifact routing name (vod+{this})
@@ -166,41 +155,10 @@ message PrepareArtifactResponse {
   // set. Single hop only — chained redirects fail closed at the consumer.
   string redirect_cluster_id = 10;
 
-  // Reserved wire surface from the DVR chapter prototype. Current DVR
-  // playback defrosts through the selected edge using the chapter ID.
-  repeated helmsmancontrol.DVRSegmentRef dvr_segments = 11;
-}
-
-message PrepareDVRChapterRequest {
-  string requesting_cluster = 1;
-  string tenant_id = 2;
-  string dvr_artifact_id = 3;          // dvr_hash; required
-
-  // Caller specifies either chapter_id (fast path) OR the range fields.
-  // Range support lets origin re-materialize when a stale alias points at
-  // a chapter row that has been evicted. Origin remains the only writer
-  // of chapter rows. Range fields mirror RetrieveDVRChapterRequest.
-  string chapter_id = 4;
-  string mode = 5;                      // explicit_range | fixed_interval | window_sized
-  int32 interval_seconds = 6;
-  int64 start_ms = 7;
-  int64 end_ms = 8;
-
-  uint32 url_expiry_seconds = 9;        // advisory; origin clamps
-}
-
-message PrepareDVRChapterResponse {
-  string chapter_id = 1;
-  repeated helmsmancontrol.DVRSegmentRef segments = 2;
-  int64 start_ms = 3;
-  int64 end_ms = 4;
-  string mode = 5;
-  int32 interval_seconds = 6;
-  string stream_internal_name = 7;
-  uint32 url_ttl_seconds = 8;
-  // Error sentinels: not_dvr_origin, unsupported_split_write_dvr,
-  // tenancy_mismatch, chapter_not_found. Empty string on success.
-  string error = 9;
+  // Reserved wire surface from the retired DVR chapter prototype. Chapter
+  // playback is per-chapter VOD artifacts now and never travels this RPC.
+  reserved 11;
+  reserved "dvr_segments";
 }
 
 message RemoteClipRequest {

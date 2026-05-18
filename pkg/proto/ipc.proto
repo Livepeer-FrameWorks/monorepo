@@ -240,6 +240,10 @@ message ControlMessage {
     EvictableSegmentsRequest evictable_segments_request = 124;
     EvictableSegmentsResponse evictable_segments_response = 125;
     RetryDVRSegmentUpload retry_dvr_segment_upload = 126;
+    // Foghorn -> Helmsman: delete a specific local TS segment file
+    // after the chapter that owned it has reached state=frozen. The
+    // recovery-bridge S3 object is deleted by Foghorn directly.
+    ReclaimDVRSegment reclaim_dvr_segment = 129;
     // Sidecar restart reconciliation: bounded by request size (sidecar
     // batches discovered (artifact_hash, segment_name) pairs from local
     // disk into pages of ~500). Foghorn answers with current ledger state
@@ -247,6 +251,14 @@ message ControlMessage {
     // cache index from the responses.
     RestoreLocalSegmentIndexRequest restore_local_segment_index_request = 127;
     RestoreLocalSegmentIndexResponse restore_local_segment_index_response = 128;
+    // Read-through relay resolution: sidecar asks Foghorn for the durable
+    // source coordinates (presigned media GET, .dtsh GET/PUT, expected size,
+    // DVR chapter segment refs) of an artifact it is about to serve via the
+    // /internal/artifact/* HTTP relay. Same pattern as CanDelete /
+    // FreezePermission: sidecar-originated request, Foghorn responds on the
+    // same stream.
+    RelayResolveRequest relay_resolve_request = 140;
+    RelayResolveResponse relay_resolve_response = 141;
   }
 }
 
@@ -377,6 +389,13 @@ message Register {
   // Requested operational mode (selfhosters can request drain/maintenance on connect).
   // Foghorn may honor or override based on DB-persisted state.
   NodeOperationalMode requested_mode = 15;
+  // Base URL Mist on this node uses to reach the /internal/artifact/* relay
+  // on this Helmsman. In production where Mist and Helmsman are colocated
+  // this is http://127.0.0.1:18007; in container deployments where Mist and
+  // Helmsman are separate services this is the inter-container address
+  // (e.g. http://helmsman:18007). Foghorn stamps STREAM_SOURCE responses
+  // with this prefix so Mist always resolves to the right Helmsman.
+  string relay_base_url = 16;
 }
 
 // NodeFingerprint carries stable identity hints from Helmsman.
@@ -394,7 +413,15 @@ message NodeFingerprint {
 message ClipPullRequest {
   // Security: Use opaque identifiers, never expose tenant_id on edge nodes
   string clip_hash = 1;           // Opaque identifier for the clip
-  string stream_name = 2;         // Stream name for MistServer (no tenant info)
+  // stream_name is the Mist routing name Helmsman pulls FROM. For live
+  // sources this is the live stream's internal_name; for DVR_ROLLING
+  // it is dvr+<dvr_internal_name>; for CHAPTER it is
+  // vod+<chapter_artifact_hash>. Helmsman uses this for /view/...
+  // when cutting the clip — it MUST NOT be used as a storage
+  // namespace for the output file (the chapter/DVR-rolling cases
+  // would otherwise scatter clips under chapter-artifact-hashed dirs
+  // that don't match the owning stream).
+  string stream_name = 2;
   // Timing (one of):
   optional int64 start_unix = 3;   // seconds
   optional int64 stop_unix = 4;    // seconds
@@ -408,6 +435,38 @@ message ClipPullRequest {
   string source_base_url = 10;
   // Request tracking
   string request_id = 11;         // Unique request ID for tracking
+  // The clip artifact's Mist routing name — what Mist will use as
+  // vod+<internal_name> when serving playback for this clip. Foghorn
+  // populates from foghorn.artifacts.internal_name at clip-create time.
+  // Helmsman uses it to boot the clip post-download for .dtsh
+  // generation; an empty value disables proactive sidecar creation.
+  string internal_name = 12;
+
+  // Source dispatch — Foghorn picks at CreateClip time based on the
+  // requested range. Helmsman branches on source_kind:
+  //   LIVE          — pull from the live MistServer process
+  //   DVR_ROLLING   — pull from local TS segments under the rolling
+  //                   DVR window; source_dvr_hash names the DVR row
+  //   CHAPTER       — pull from the chapter artifact's canonical .mkv
+  //                   via the relay; source_chapter_artifact_hash
+  //                   names the artifact
+  enum SourceKind {
+    SOURCE_KIND_UNSPECIFIED = 0;
+    SOURCE_KIND_LIVE = 1;
+    SOURCE_KIND_DVR_ROLLING = 2;
+    SOURCE_KIND_CHAPTER = 3;
+  }
+  SourceKind source_kind = 20;
+  string source_dvr_hash = 21;
+  string source_chapter_artifact_hash = 22;
+  // output_stream_name is the owning stream's internal_name — where
+  // Helmsman writes clips/{output_stream_name}/{clip_hash}.{format}.
+  // For LIVE sources this matches stream_name; for DVR_ROLLING and
+  // CHAPTER it is the DVR artifact's stream_internal_name, so all
+  // clips of one stream stay under one directory regardless of which
+  // historical surface they were cut from. Required — Helmsman
+  // rejects clip pulls with an empty value.
+  string output_stream_name = 23;
 }
 
 message ClipProgress {
@@ -618,10 +677,12 @@ message DVRStopRequest {
 
 // On every Mist RECORDING_SEGMENT, the sidecar records the segment with
 // Foghorn before uploading. Foghorn assigns a monotonic sequence and mints
-// a presigned PUT URL. After upload, sidecar marks the row uploaded. If a
-// segment must be evicted before upload (disk pressure, retention expiry),
-// the sidecar emits DVRSegmentDropped(was_uploaded=false) so Foghorn can
-// render an explicit gap in affected chapter manifests and bounded DVR views.
+// a presigned PUT URL (recovery bridge only — chapter finalization may
+// need to fetch the segment from S3 if the local TS file is gone). After
+// upload, sidecar marks the row uploaded. If a segment must be evicted
+// before upload (disk pressure, retention expiry), the sidecar emits
+// DVRSegmentDropped(was_uploaded=false) and any chapter whose range
+// overlaps the lost segment moves to state='failed_source_missing'.
 
 // Sidecar -> Foghorn: report a new segment from RECORDING_SEGMENT.
 message RecordDVRSegmentRequest {
@@ -662,9 +723,10 @@ message MarkDVRSegmentUploaded {
 }
 
 // Sidecar -> Foghorn: a segment has been evicted from local disk. Foghorn
-// updates the ledger row to deleted_local (was_uploaded=true) or lost_local
-// (was_uploaded=false). lost_local rows render as #EXT-X-GAP in affected
-// chapter manifests and bounded DVR views.
+// updates the ledger row to deleted_local (was_uploaded=true; chapter
+// finalization can recover from S3) or lost_local (was_uploaded=false;
+// any chapter overlapping the lost segment moves to
+// failed_source_missing).
 message DVRSegmentDropped {
   string request_id = 1;
   string dvr_hash = 2;
@@ -706,6 +768,19 @@ message RetryDVRSegmentUpload {
   string dvr_hash = 2;
   repeated string segment_names = 3;
   repeated DVRSegmentRef segments = 4;
+}
+
+// Foghorn -> Helmsman: delete local TS segment file(s) for a DVR
+// recording. Issued by the chapter reclaim sweep once every chapter
+// covering a segment range has reached state=frozen. Helmsman deletes
+// the local files via the existing eviction primitive; the matching
+// recovery-bridge S3 objects are deleted by Foghorn directly.
+//
+// Idempotent: missing-file responses are treated as success by Foghorn.
+message ReclaimDVRSegment {
+  string request_id = 1;
+  string dvr_hash = 2;
+  repeated string segment_names = 3;
 }
 
 // Sidecar -> Foghorn: restart reconciliation. After a sidecar restart, the
@@ -821,50 +896,44 @@ message FreezeComplete {
 
 // DefrostRequest tells Helmsman to download an asset from S3 cold storage.
 // Foghorn generates presigned URLs - Helmsman never sees S3 credentials.
-//
-// For DVR, the chapter-aware fields (start_ms/end_ms/mode/chapter_id) scope
-// the defrost to a single chapter view rather than the whole artifact. The
-// sidecar's defrost cache key uses (asset_hash, chapter_id_or_range) so
-// concurrent chapter requests for the same artifact don't collapse.
 message DefrostRequest {
   string request_id = 1;         // Request ID for tracking
-  string asset_type = 2;         // "clip" | "vod" | "dvr"
-  string asset_hash = 3;         // clip_hash or dvr_hash
+  string asset_type = 2;         // "clip" | "vod"
+  string asset_hash = 3;         // clip_hash or vod artifact hash
   string tenant_id = 4;          // Tenant owning the asset
-  string stream_internal_name = 5; // Source stream's MistServer routing name (for DVR path reconstruction)
+  string stream_internal_name = 5; // Source stream's MistServer routing name
   string presigned_get_url = 6;  // Presigned GET URL for download (time-limited, no creds needed)
   string local_path = 7;         // Target local file/directory path
   int32 timeout_seconds = 8;     // Max wait time for blocking defrost (0 = default 30s)
-  bool streaming = 9;            // For DVR: use streaming defrost (HLS live mode)
+  reserved 9;                    // bool streaming (DVR streaming defrost)
+  reserved "streaming";
   int64 url_expiry_seconds = 10; // When the presigned URL expires
-  // For DVR streaming defrost: map of segment filename -> presigned URL.
-  // Non-DVR defrost segment URLs. DVR chapter playback uses chapter_segments
-  // so lost_local rows can render as #EXT-X-GAP.
+  // Per-asset sidecar URLs (e.g. .dtsh). Keyed by filename relative to
+  // local_path.
   map<string, string> segment_urls = 11;
-  string internal_name = 12;          // Artifact routing name (for vod+ stream name construction)
-
-  string dvr_artifact_id = 13;        // = dvr_hash; stable across all chapter views
-  string chapter_id = 14;             // empty for explicit_range
-  int64  start_ms = 15;               // chapter range start (UTC epoch ms)
-  int64  end_ms = 16;                 // chapter range end (UTC epoch ms)
-  string chapter_mode = 17;           // 'window_sized_chapters' | 'fixed_interval' | 'explicit_range'
-  int32  chapter_interval_seconds = 18; // required for fixed_interval; ignored otherwise
-  // Per-segment metadata for chapter defrost; replaces segment_urls for DVR.
-  // status='lost_local' rows have empty presigned_get_url and render as
-  // #EXT-X-GAP in the local manifest writer.
-  repeated DVRSegmentRef chapter_segments = 19;
+  string internal_name = 12;     // Artifact routing name (for vod+ stream name construction)
+  reserved 13 to 19;             // dvr_artifact_id / chapter_id / start_ms / end_ms /
+                                 // chapter_mode / chapter_interval_seconds / chapter_segments
+  reserved "dvr_artifact_id", "chapter_id", "start_ms", "end_ms",
+           "chapter_mode", "chapter_interval_seconds", "chapter_segments";
   // Total expected on-disk bytes after defrost. Helmsman uses this for
   // admission control (preflight space check + optional background cleanup).
-  // 0 means "unknown" — Helmsman skips admission and falls back to the legacy
-  // write-then-fail behavior.
+  // 0 means "unknown" — Helmsman skips admission and writes-then-fails on
+  // out-of-space.
   uint64 expected_size_bytes = 20;
 }
 
-// DVRSegmentRef is one segment in a chapter-aware defrost response.
-// status semantics:
-//   uploaded       : normal #EXTINF + segment URI
-//   deleted_local  : same as uploaded (S3 has it; local copy was evicted post-upload)
-//   lost_local     : empty presigned_get_url; render #EXT-X-GAP + #EXTINF (preserves timeline)
+// DVRSegmentRef is one segment in the chapter-finalize segment list
+// Foghorn hands to Helmsman. Helmsman reads the local TS file when
+// available, falls back to presigned_get_url when the local copy is
+// gone (recovery bridge). status semantics:
+//   uploaded       : local file present + S3 freeze object exists
+//   deleted_local  : local file evicted post-upload; S3 freeze is the
+//                    sole source — presigned_get_url is required
+//   lost_local     : local file gone before upload; presigned_get_url
+//                    may be empty (terminal source loss). Chapters
+//                    overlapping a lost_local row without a recovery
+//                    URL move to state='failed_source_missing'.
 message DVRSegmentRef {
   string segment_name = 1;
   string s3_key = 2;
@@ -872,7 +941,7 @@ message DVRSegmentRef {
   int64  media_start_ms = 4;
   int64  media_end_ms = 5;
   int64  duration_ms = 6;
-  string status = 7;                  // 'uploaded' | 'lost_local' | 'deleted_local'
+  string status = 7;                  // 'uploaded' | 'lost_local' | 'deleted_local' | 'orphan_unreachable'
   int64  sequence = 8;                // foghorn.dvr_segments.sequence for HLS media sequence
   int64  size_bytes = 9;              // foghorn.dvr_segments.size_bytes; 0 = unknown
 }
@@ -922,6 +991,78 @@ message CanDeleteResponse {
   bool safe_to_delete = 2;       // True if asset is synced to S3
   string reason = 3;             // "synced", "sync_pending", "sync_failed", "not_found"
   int64 warm_duration_ms = 4;    // How long asset was cached (for EVICTED lifecycle events)
+}
+
+// RelayResolveRequest is sent by Helmsman to Foghorn to look up the durable
+// source coordinates of an artifact for the /internal/artifact/* HTTP relay.
+// The relay URL only encodes (kind, hash, ext); the actual S3 presigned URLs,
+// expected size, and (for DVR) chapter segment refs come from this resolve.
+//
+// Lifecycle: relay HTTP server calls this on first request per (asset, session)
+// and caches the response in memory for url_ttl_seconds * 0.8, then refreshes
+// mid-playback on TTL expiry to handle sessions outliving the first presigned
+// URL.
+message RelayResolveRequest {
+  string request_id = 1;
+  string asset_kind = 2;         // "vod" | "clip" | "dvr" | "upload"
+  string asset_hash = 3;         // artifact_hash / upload_hash / dvr_hash
+  reserved 4;                    // retired chapter_id — chapter playback is addressed as the chapter's own VOD artifact
+  reserved "chapter_id";
+  string ext = 5;                // "mp4" | "mkv" | "m3u8" | ...
+  // Read-pattern hint for sidecar admission policy. Foghorn echoes this back
+  // in policy_hint when it has a stronger opinion (e.g., processing input is
+  // always sequential one-shot regardless of caller).
+  enum RelayHint {
+    RELAY_HINT_UNSPECIFIED        = 0;
+    RELAY_HINT_RANDOM_ACCESS      = 1; // playback — seekable, replayable
+    RELAY_HINT_SEQUENTIAL_ONESHOT = 2; // processing input — read once
+  }
+  RelayHint hint = 6;
+  string node_id = 7;            // For locality decisions
+}
+
+// RelayResolveResponse carries the durable source plus optional sidecar/.dtsh
+// URLs and (for DVR) the full chapter segment ref list. AssetState lets the
+// relay handle missing/active/gap cases without inferring from absent fields.
+message RelayResolveResponse {
+  string request_id = 1;
+  string asset_hash = 2;
+  AssetState state = 3;
+  string media_presigned_url = 4; // S3 GET, range-capable (HEAD + Range)
+  string dtsh_presigned_get = 5;  // empty if no sidecar yet
+  string dtsh_presigned_put = 6;  // for Mist-generated .dtsh write-back
+  uint64 expected_size_bytes = 7;
+  string content_type = 8;
+  int64 url_ttl_seconds = 9;      // for refresh on long playbacks
+  reserved 10;                       // retired chapter_segments — chapter playback is the chapter VOD artifact, not a synthesized HLS manifest
+  reserved "chapter_segments";
+  // Foghorn's recommendation for admission policy. Sidecar honors as a hint;
+  // local pressure/intent still overrides.
+  enum CacheDecisionHint {
+    CACHE_HINT_UNSPECIFIED = 0;
+    CACHE_HINT_PREFER_DISK = 1;   // playback, replayable
+    CACHE_HINT_PREFER_MEM  = 2;   // processing input, one-shot
+  }
+  CacheDecisionHint policy_hint = 11;
+  string error = 12;              // populated when state != ASSET_STATE_PLAYABLE
+  // Mist routing name owning this artifact. For DVR this is the stream the
+  // recording belongs to; on-disk DVR layout nests as
+  // storage/dvr/<stream_internal_name>/<dvr_hash>/{chapters,segments} so the
+  // relay needs this value to find warm local files and write cold fills to
+  // the same canonical location the defrost/freeze paths use. For VOD/clip
+  // this is the Mist internal_name (vod+<name>) that addresses the artifact.
+  string stream_internal_name = 13;
+}
+
+// AssetState tells the relay how to dispose of a resolve. Drives the
+// active-DVR refuse-S3 rule and HLS gap marker rendering.
+enum AssetState {
+  ASSET_STATE_UNSPECIFIED    = 0;
+  ASSET_STATE_PLAYABLE       = 1; // resolved; media_presigned_url is valid
+  ASSET_STATE_SOURCE_MISSING = 2; // no durable source → 404/500
+  ASSET_STATE_ACTIVE_DVR     = 3; // active DVR; rolling-window playback rules
+  reserved 4;                     // retired ASSET_STATE_GAP — chapter artifacts are all-or-nothing; lost segments move the chapter to state='failed_source_missing' instead of emitting a per-segment gap
+  reserved "ASSET_STATE_GAP";
 }
 
 // SyncComplete indicates a sync (upload to S3 while keeping local) has finished.
@@ -1929,17 +2070,49 @@ message TranscodeJobComplete {
 }
 
 // Generic processing job request (Foghorn → Helmsman)
-// Used for probe, process+, DTSH generation, etc.
+// Used for probe, process+, DTSH generation, DVR chapter finalization.
 message ProcessingJobRequest {
   string job_id = 1;
   string tenant_id = 2;
   string artifact_hash = 3;
   string source_url = 4;          // Presigned HTTPS URL for source
-  string job_type = 5;            // "probe", "process"
+  string job_type = 5;            // "probe" | "process" | "dvr_chapter_finalize"
   string output_path = 6;         // Local disk path for output
   map<string, string> params = 7; // realtime_speed, process config JSON, segment_urls (for HLS)
   string processes_json = 8;      // Pre-computed MistServer process config from Commodore
   string internal_name = 9;       // Artifact routing name (for vod+ stream name construction)
+
+  // Deadline for the whole job. Helmsman aborts and reports timeout if
+  // PUSH_END hasn't fired by this absolute Unix-ms wall clock. Chapter
+  // intervals can be hours, so Foghorn picks
+  // max(2*chapter_duration, 30min) capped at 24h; missing/zero means
+  // Helmsman applies its own default.
+  int64 deadline_unix_ms = 10;
+
+  // DVR chapter finalization specifics. Only populated when
+  // job_type == "dvr_chapter_finalize".
+  string source_chapter_id = 20;
+  string source_dvr_hash = 21;
+  string source_stream_internal_name = 22;
+  int64  chapter_start_ms = 23;
+  int64  chapter_end_ms   = 24;
+  repeated DVRChapterSegmentRef source_segments = 25;
+}
+
+// One source segment for a chapter finalize job. local_path is the
+// recording origin's filesystem path (preferred). presigned_recovery_url
+// is set when the local copy is gone (dvr_segments.status='lost_local'
+// but the recovery freeze succeeded) — Helmsman pulls the bytes via
+// the existing block-cache machinery before remux.
+message DVRChapterSegmentRef {
+  string segment_name = 1;
+  int64  sequence = 2;
+  int64  duration_ms = 3;
+  int64  media_start_ms = 4;        // absolute Unix epoch ms; PROGRAM-DATE-TIME source
+  int64  media_end_ms = 5;
+  string local_path = 6;            // reserved; Helmsman resolves from its DVRManager job
+  string presigned_recovery_url = 7; // S3 GET fallback when local copy is missing
+  int64  size_bytes = 8;            // ledger size hint, drives admission preflight on Helmsman
 }
 
 // Processing job result (Helmsman → Foghorn)

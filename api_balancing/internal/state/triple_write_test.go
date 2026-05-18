@@ -67,6 +67,9 @@ func (r *tripleWriteArtifactRepo) MarkNodeArtifactsOrphaned(ctx context.Context,
 func (r *tripleWriteArtifactRepo) NeedsDtshSync(_ context.Context, _ string) bool {
 	return r.needsDtshSyncResult
 }
+func (r *tripleWriteArtifactRepo) NeedsVODDtshSync(_ context.Context, _ string) bool {
+	return r.needsDtshSyncResult
+}
 func (r *tripleWriteArtifactRepo) UpdateDVRProgressByHash(_ context.Context, _, _ string, _ int64) error {
 	return nil
 }

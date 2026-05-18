@@ -27,6 +27,27 @@ query GetClipsConnection($streamId: ID, $first: Int = 50, $after: String) {
         status
         storageLocation
         isFrozen
+        # Marginal storage cost for this clip on the tenant's tier. Null for
+        # self-hosted / fully tenant-private clusters.
+        storageCost {
+          perDay
+          perMonth
+          currency
+        }
+        # Resolved retention horizon for the storage browser UI.
+        effectiveRetention {
+          retentionDays
+          retentionUntil
+          source
+        }
+        # Chandler-generated poster + sprite assets (null when processing
+        # hasn't produced thumbnails yet).
+        thumbnailAssets {
+          posterUrl
+          spriteVttUrl
+          spriteJpgUrl
+          assetKey
+        }
       }
     }
     pageInfo {

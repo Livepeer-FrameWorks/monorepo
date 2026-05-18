@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_sidecar/internal/admission"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -24,8 +25,11 @@ import (
 
 // ProcessingJobHandler handles VOD processing jobs from Foghorn.
 // Activates the processing+{hash} wildcard stream in MistServer.
-// STREAM_SOURCE provides the presigned S3 URL for the source.
-// STREAM_PROCESS provides the MistProc* config (VP9/thumbs/audio) from Commodore.
+// STREAM_SOURCE returns the Helmsman read-through relay URL for the
+// source for safe wrappers (mp4/mov/mkv/webm/ts) and the local staged
+// file path for unsafe wrappers (avi/flv/m4v); see processSource for
+// the dispatch. STREAM_PROCESS provides the MistProc* config
+// (VP9/thumbs/audio) from Commodore.
 type ProcessingJobHandler struct {
 	logger        logging.Logger
 	mistServerURL string
@@ -103,6 +107,12 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 		"artifact_hash": req.GetArtifactHash(),
 	})
 
+	if req.GetJobType() == "dvr_chapter_finalize" {
+		log.Info("Processing job received (chapter finalize)")
+		h.handleChapterFinalize(req, send)
+		return
+	}
+
 	log.Info("Processing job received")
 	streamName := "processing+" + req.GetArtifactHash()
 	defer clearProcessingProcessOverride(streamName)
@@ -113,6 +123,30 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 	if HasPendingJob(streamName) {
 		log.Warn("Previous processing attempt still active, ignoring duplicate dispatch")
 		return
+	}
+
+	// Stage unsafe-wrapper sources to local disk before Mist tries to open
+	// them. Mist's FLV input is fopen-only and the AV input only auto-matches
+	// local paths, so .avi/.flv/.m4v inputs cannot stream via HTTP/relay —
+	// they must materialize locally first. Safe wrappers skip this branch:
+	// Foghorn's resolveProcessSource returns a Helmsman relay URL and Mist
+	// reads via HTTP::URIReader.
+	var stagedSourcePath string
+	defer func() {
+		if stagedSourcePath != "" {
+			if err := os.Remove(stagedSourcePath); err != nil && !os.IsNotExist(err) {
+				log.WithError(err).Warn("Failed to remove staged unsafe-wrapper source")
+			}
+		}
+	}()
+	if ext := unsafeWrapperExt(req.GetSourceUrl()); ext != "" {
+		path, err := h.stageUnsafeWrapper(log, req, ext)
+		if err != nil {
+			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("unsafe-wrapper stage failed: %v", err), nil, "", 0)
+			return
+		}
+		stagedSourcePath = path
+		log.WithField("staged_path", path).Info("Staged unsafe-wrapper source locally")
 	}
 
 	// For segmented (HLS) sources, rewrite manifest with presigned segment URLs
@@ -165,12 +199,10 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 		return
 	}
 	outputPath := filepath.Join(vodDir, req.GetArtifactHash()+".mkv")
-	if err := mistClient.PushStart(streamName, outputPath); err != nil {
-		log.WithError(err).Error("Failed to start push")
-		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("push_start failed: %v", err), nil, "", 0)
+	if err := h.startProcessingPush(log, mistClient, req, vodDir, streamName, outputPath); err != nil {
+		h.sendResult(send, req.GetJobId(), "failed", err.Error(), nil, "", 0)
 		return
 	}
-	log.WithField("output_path", outputPath).Info("Started push for processing stream")
 
 	// Poll for stream metadata while processing runs
 	outputs := h.pollStreamMetadata(log, mistClient, streamName)
@@ -228,9 +260,8 @@ loop:
 				pendingJobsMu.Lock()
 				pendingJobs[streamName] = doneCh
 				pendingJobsMu.Unlock()
-				if err := mistClient.PushStart(streamName, outputPath); err != nil {
-					log.WithError(err).Error("Failed to restart push after Livepeer fallback")
-					h.sendResult(send, req.GetJobId(), "failed", "livepeer fallback restart failed", nil, "", 0)
+				if err := h.startProcessingPush(log, mistClient, req, vodDir, streamName, outputPath); err != nil {
+					h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback restart: %v", err), nil, "", 0)
 					return
 				}
 				outputs, sourceDurationMs = h.refreshProcessingMetadata(log, mistClient, streamName, outputs)
@@ -291,9 +322,8 @@ loop:
 					pendingJobsMu.Lock()
 					pendingJobs[streamName] = doneCh
 					pendingJobsMu.Unlock()
-					if err := mistClient.PushStart(streamName, outputPath); err != nil {
-						log.WithError(err).Error("Failed to restart push after stall fallback")
-						h.sendResult(send, req.GetJobId(), "failed", "stall fallback restart failed", nil, "", 0)
+					if err := h.startProcessingPush(log, mistClient, req, vodDir, streamName, outputPath); err != nil {
+						h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("stall fallback restart: %v", err), nil, "", 0)
 						return
 					}
 					outputs, sourceDurationMs = h.refreshProcessingMetadata(log, mistClient, streamName, outputs)
@@ -343,6 +373,36 @@ loop:
 
 	// Trigger storage check so the .mkv + .dtsh freeze to S3 promptly
 	TriggerStorageCheck()
+}
+
+// startProcessingPush runs admission for the processing output and starts
+// the Mist push. Called for the initial push and for every fallback
+// restart (Livepeer→local-MistProcAV swap, stall recovery) so disk
+// pressure that developed during the first attempt — DVR recordings
+// rolling forward, parallel processing jobs — gets reconciled before
+// each restart instead of failing late with ENOSPC.
+//
+// Returns an error that is safe to surface to the caller's sendResult
+// "failed" path; admission rejection and push failure are both fatal
+// to the job.
+func (h *ProcessingJobHandler) startProcessingPush(log *logrus.Entry, mistClient *mist.Client, req *pb.ProcessingJobRequest, vodDir, streamName, outputPath string) error {
+	if sm := GetStorageManager(); sm != nil {
+		var estSize uint64
+		if hint, ok := headContentLength(req.GetSourceUrl()); ok {
+			estSize = hint
+		}
+		decision, decErr := sm.Decide(context.Background(), vodDir, admission.IntentProcessingOutput, estSize)
+		if decErr != nil || decision == admission.CacheReject {
+			log.WithError(decErr).WithField("est_size", estSize).Error("Processing output admission rejected")
+			return fmt.Errorf("admission rejected: %w", decErr)
+		}
+	}
+	if err := mistClient.PushStart(streamName, outputPath); err != nil {
+		log.WithError(err).Error("Failed to start push")
+		return fmt.Errorf("push_start failed: %w", err)
+	}
+	log.WithField("output_path", outputPath).Info("Started push for processing stream")
+	return nil
 }
 
 // pollStreamMetadata waits for MistServer to parse the stream headers and

@@ -564,11 +564,17 @@ models:
       # Viewer endpoint resolution types - bound to proto types
       stream:
         resolver: true
-  # VodAsset is fully gqlgen-generated; only the playbackPolicy field needs
-  # a resolver because it requires a Commodore round-trip.
+  # VodAsset is fully gqlgen-generated; fields below need resolvers because
+  # they require either a Commodore round-trip (playbackPolicy) or a
+  # Purser/projection lookup (storageCost) — gqlgen would otherwise expect
+  # them as struct fields on model.VodAsset.
   VodAsset:
     fields:
       playbackPolicy:
+        resolver: true
+      effectiveRetention:
+        resolver: true
+      storageCost:
         resolver: true
   # PlaybackJwtPolicy and PlaybackWebhookPolicy autobind to proto types, but
   # two fields don't line up:

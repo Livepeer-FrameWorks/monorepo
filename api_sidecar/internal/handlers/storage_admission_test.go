@@ -1,9 +1,81 @@
 package handlers
 
 import (
+	"context"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"frameworks/api_sidecar/internal/admission"
+	"frameworks/api_sidecar/internal/storage"
 )
+
+// Regression: cold playback-cache admission must read filesystem
+// stats even when the asset's <hash>.blocks dir doesn't exist yet.
+// The pre-fix code stat'd the leaf, hit ENOENT, and pinned every
+// cold asset to CacheMemoryOnly forever — the .blocks dir is created
+// only AFTER a CacheToDisk decision, so the disk cache could never
+// warm on first request.
+//
+// The fix routes IntentPlaybackCache through GetDiskSpaceWalk which
+// walks to the nearest existing ancestor (the storage root) and
+// returns real filesystem stats. We pin that contract here against
+// the walk helper directly — the end-to-end Decide() outcome also
+// depends on whether the dev volume is under pressure, which makes
+// the higher-level path environment-sensitive.
+// Pins every declared StorageIntent against the Decide switch so a
+// future enum addition can't silently fall through to "unknown
+// storage intent" — that was the bug that swallowed chapter
+// finalization (admission rejected before remux).
+func TestStorageManager_Decide_HandlesEveryDeclaredIntent(t *testing.T) {
+	intents := []admission.StorageIntent{
+		admission.IntentDVRRecording,
+		admission.IntentProcessingOutput,
+		admission.IntentDVRChapterFinalization,
+		admission.IntentUnsafeImportStage,
+		admission.IntentPlaybackCache,
+		admission.IntentProcessingInput,
+		admission.IntentWarmCache,
+	}
+	dir := t.TempDir()
+	sm := &StorageManager{
+		basePath:             dir,
+		freezeThreshold:      0.85,
+		targetThreshold:      0.70,
+		deleteThreshold:      0.95,
+		softCleanupThreshold: 0.85,
+	}
+	for _, intent := range intents {
+		t.Run(string(intent), func(t *testing.T) {
+			_, err := sm.Decide(context.Background(), dir, intent, 0)
+			if err != nil && strings.Contains(err.Error(), "unknown storage intent") {
+				t.Fatalf("intent %s fell through to default branch: %v", intent, err)
+			}
+		})
+	}
+}
+
+func TestGetDiskSpaceWalk_ColdLeafReturnsAncestorStats(t *testing.T) {
+	root := t.TempDir()
+	coldBlocksDir := filepath.Join(root, "vod", "abc123.mkv.blocks")
+
+	// Sanity: leaf must not exist.
+	if _, err := os.Stat(coldBlocksDir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("setup error: expected leaf missing, stat err=%v", err)
+	}
+
+	space, err := storage.GetDiskSpaceWalk(coldBlocksDir)
+	if err != nil {
+		t.Fatalf("walk must succeed against a missing leaf, got %v", err)
+	}
+	if space == nil || space.TotalBytes == 0 {
+		t.Fatalf("walk must return real fs stats, got %+v", space)
+	}
+}
 
 func resetBackgroundCleanupSentinel(t *testing.T) {
 	t.Helper()

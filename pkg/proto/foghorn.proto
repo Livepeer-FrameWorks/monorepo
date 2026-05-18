@@ -29,28 +29,18 @@ service DVRControlService {
   // DeleteDVR deletes a DVR recording and its files
   rpc DeleteDVR(shared.DeleteDVRRequest) returns (shared.DeleteDVRResponse);
 
-  // Chapters are virtual VOD-shaped views over foghorn.dvr_segments. The
-  // sweeper materializes the artifact's default chapter mode automatically;
-  // these RPCs cover ad-hoc retrieval (any mode), pagination for player UI,
-  // and policy changes from Gateway/Commodore.
+  // Chapters are produced by the finalization queue as canonical .mkv
+  // VOD artifacts (origin_type='dvr_chapter', library_visible=false).
+  // RetrieveDVRChapter returns the chapter row's range metadata + the
+  // playback artifact reference; ListDVRChapters paginates chapter
+  // rows for player navigation.
+  //
+  // Chapter mode is configured on commodore.streams and snapshotted
+  // onto the DVR artifact at StartDVR; there is no in-flight policy
+  // mutation RPC.
 
-  // RetrieveDVRChapter materializes (cache-on-request) and returns the
-  // chapter manifest's S3 location. UTC-only — civil-time chapters submit
-  // mode=explicit_range with caller-resolved (start_ms, end_ms).
   rpc RetrieveDVRChapter(RetrieveDVRChapterRequest) returns (RetrieveDVRChapterResponse);
-
-  // ListDVRChapters paginates chapter rows for player navigation. Bounded
-  // by page_size (default 200, max 1000) per the bounded-operations
-  // invariant for unbounded artifact lifetime.
   rpc ListDVRChapters(ListDVRChaptersRequest) returns (ListDVRChaptersResponse);
-
-  // SetDVRChapterPolicy updates the artifact's default chapter mode (the
-  // one the sweeper materializes automatically). Changing policy mid-
-  // recording closes the in-flight current chapter as VOD with ENDLIST and
-  // starts the new current chapter under the new mode. Old chapter
-  // manifests remain readable until cache expiry / retention cleanup so
-  // in-flight viewers are not interrupted.
-  rpc SetDVRChapterPolicy(SetDVRChapterPolicyRequest) returns (SetDVRChapterPolicyResponse);
 
   // OverrideArtifactRetention pushes a per-asset retention horizon into
   // foghorn.artifacts so the existing RetentionJob picks up the new value
@@ -75,7 +65,7 @@ service DVRControlService {
 
 message RetrieveDVRChapterRequest {
   string dvr_artifact_id = 1;
-  string mode = 2;                   // 'window_sized_chapters' | 'fixed_interval' | 'explicit_range'
+  string mode = 2;                   // 'window_sized_chapters' | 'fixed_interval' | '' (auto from policy)
   int32 interval_seconds = 3;        // required for fixed_interval
   int64 start_ms = 4;                // UTC epoch ms
   int64 end_ms = 5;                  // UTC epoch ms
@@ -84,13 +74,24 @@ message RetrieveDVRChapterRequest {
 
 message RetrieveDVRChapterResponse {
   string chapter_id = 1;
-  string manifest_s3_key = 2;        // e.g. dvr/{tenant}/{stream}/{artifact}/chapters/{chapter_id}.m3u8
-  string manifest_url = 3;           // Mist playback ID (dvr+{chapter_id}); field name retained for API stability
-  bool is_current = 4;               // EVENT-shaped (no ENDLIST) vs VOD-shaped
+  string playback_artifact_hash = 2; // Internal artifact hash. Mist routing uses this; public clients use playback_id.
+  string state = 3;                  // open | closed | finalizing | finalized | frozen | reclaimed | failed_source_missing | failed_permanent
+  bool is_current = 4;
   bool has_gaps = 5;
   int32 segment_count = 6;
-  reserved 7;
-  reserved "error";
+  int64 start_ms = 7;
+  int64 end_ms = 8;
+  string last_failure_reason = 9;
+  reserved 10;
+  reserved "manifest_s3_key", "manifest_url", "error";
+  string playback_id = 11;           // Commodore-minted public playback key; empty until the finalization queue dispatches.
+  // Actual MKV span = [first owned segment's media_start, last owned
+  // segment's media_end). May differ from start_ms/end_ms when chapter
+  // boundaries don't align with segment boundaries. 0 until the chapter
+  // finalizes. Players anchor video.currentTime to wall-clock using
+  // these so the timeline doesn't drift against the scheduled bounds.
+  int64 actual_media_start_ms = 12;
+  int64 actual_media_end_ms   = 13;
 }
 
 message ListDVRChaptersRequest {
@@ -111,26 +112,19 @@ message ChapterRef {
   int64 start_ms = 4;
   int64 end_ms = 5;
   bool is_current = 6;
-  string manifest_s3_key = 7;
+  string playback_artifact_hash = 7; // Internal artifact hash; public clients use playback_id.
   bool has_gaps = 8;
   int32 segment_count = 9;
+  string state = 10;
+  string last_failure_reason = 11;
+  string playback_id = 12;           // Commodore-minted public playback key; empty until the finalization queue dispatches.
+  int64 actual_media_start_ms = 13;
+  int64 actual_media_end_ms   = 14;
 }
 
 message ListDVRChaptersResponse {
   repeated ChapterRef chapters = 1;
   string next_page_token = 2;        // empty when no more pages
-}
-
-message SetDVRChapterPolicyRequest {
-  string dvr_artifact_id = 1;
-  string mode = 2;                   // 'window_sized_chapters' | 'fixed_interval' | '' (clear)
-  int32 interval_seconds = 3;        // required for fixed_interval
-  string tenant_id = 4;
-}
-
-message SetDVRChapterPolicyResponse {
-  bool success = 1;
-  string message = 2;
 }
 
 // ViewerControlService handles viewer and ingest endpoint resolution

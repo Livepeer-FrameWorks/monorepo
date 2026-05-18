@@ -2,6 +2,7 @@ package triggers
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/url"
 	"os"
@@ -1365,11 +1366,12 @@ func (p *Processor) handlePlayRewrite(trigger *pb.MistTrigger) (string, bool, er
 
 	// Resolve the playback ID to its canonical internal name (e.g. "live+uuid" or "vod+hash").
 	target, err := control.ResolveStream(context.Background(), playbackID)
-	if err != nil {
+	if err != nil || target == nil {
 		p.logger.WithFields(logging.Fields{
 			"playback_id": playbackID,
 			"error":       err,
-		}).Warn("Failed to resolve playback ID")
+		}).Warn("PLAY_REWRITE: resolver rejected token")
+		return "", false, nil //nolint:nilerr // resolver-rejection is not a Mist-level error; empty rewrite = not found
 	}
 
 	if target.InternalName == "" {
@@ -1513,33 +1515,72 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		return p.resolvePullSource(streamName, trigger)
 	}
 
-	if chapterID, ok := control.ParseDVRChapterPlaybackID(streamName); ok {
-		if localPath, ready := control.LocalDVRChapterManifestPath(chapterID, trigger.GetNodeId()); ready {
+	// dvr+<dvr_internal_name>: rolling DVR surface for an actively
+	// recording stream. The origin serves the local rolling manifest;
+	// other edges DTSC-pull the dvr+<internal_name> stream from the
+	// origin so the puller's Mist materializes the rolling view from
+	// the origin's frames-with-timestamps. Chapter playback is NOT
+	// served via dvr+ — finalized chapter artifacts are addressed by
+	// their VOD playback ID and flow through the standard vod+ path.
+	if strings.HasPrefix(streamName, "dvr+") {
+		token := strings.TrimPrefix(streamName, "dvr+")
+		if token == "" {
+			return "", true, nil
+		}
+		dispatch, dispatchErr := control.ResolveDVRArtifactDispatch(context.Background(), token)
+		if dispatchErr != nil {
+			p.logger.WithError(dispatchErr).WithFields(logging.Fields{
+				"stream_name": streamName,
+				"token":       token,
+			}).Warn("STREAM_SOURCE: dvr+ artifact dispatch lookup failed")
+		}
+		if dispatch == nil || dispatch.DVRHash == "" {
 			p.logger.WithFields(logging.Fields{
 				"stream_name": streamName,
-				"chapter_id":  chapterID,
+				"token":       token,
+			}).Warn("STREAM_SOURCE: dvr+ token did not resolve to a DVR artifact; chapter playback uses the chapter artifact's VOD playbackId")
+			return "", true, nil
+		}
+		if dispatch.RecordingNode == "" {
+			p.logger.WithFields(logging.Fields{
+				"stream_name": streamName,
+				"dvr_hash":    dispatch.DVRHash,
+			}).Warn("STREAM_SOURCE: dvr+ resolution for finalized DVR — use chapter playbackId")
+			return "", true, nil
+		}
+		if dispatch.RecordingNode == trigger.GetNodeId() {
+			localPath := control.LocalRollingDVRManifestPath(dispatch.StreamInternalName, dispatch.DVRHash, trigger.GetNodeId())
+			if localPath == "" {
+				p.logger.WithFields(logging.Fields{
+					"stream_name": streamName,
+					"dvr_hash":    dispatch.DVRHash,
+					"node_id":     trigger.GetNodeId(),
+				}).Warn("STREAM_SOURCE: dvr+ rolling manifest path unresolved on recording origin; aborting")
+				return "", true, nil
+			}
+			p.logger.WithFields(logging.Fields{
+				"stream_name": streamName,
+				"dvr_hash":    dispatch.DVRHash,
 				"local_path":  localPath,
-				"node_id":     trigger.GetNodeId(),
-			}).Debug("STREAM_SOURCE: DVR chapter resolved from warm edge cache")
+			}).Debug("STREAM_SOURCE: dvr+ rolling DVR served from local manifest on recording origin")
 			return localPath, false, nil
 		}
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if _, err := control.StartDVRChapterDefrost(ctx, chapterID, trigger.GetNodeId(), 30*time.Second, p.logger); err != nil {
-				p.logger.WithError(err).WithFields(logging.Fields{
-					"stream_name": streamName,
-					"chapter_id":  chapterID,
-					"node_id":     trigger.GetNodeId(),
-				}).Warn("STREAM_SOURCE: DVR chapter defrost trigger failed")
-			}
-		}()
+		dtscURL := control.BuildDTSCURI(dispatch.RecordingNode, streamName, p.logger)
+		if dtscURL == "" {
+			p.logger.WithFields(logging.Fields{
+				"stream_name":    streamName,
+				"recording_node": dispatch.RecordingNode,
+				"viewer_node":    trigger.GetNodeId(),
+			}).Warn("STREAM_SOURCE: dvr+ no DTSC output advertised on recording origin; aborting")
+			return "", true, nil
+		}
 		p.logger.WithFields(logging.Fields{
-			"stream_name": streamName,
-			"chapter_id":  chapterID,
-			"node_id":     trigger.GetNodeId(),
-		}).Debug("STREAM_SOURCE: DVR chapter defrost started, MistServer will retry")
-		return "", true, nil
+			"stream_name":    streamName,
+			"recording_node": dispatch.RecordingNode,
+			"viewer_node":    trigger.GetNodeId(),
+			"dtsc_url":       dtscURL,
+		}).Debug("STREAM_SOURCE: dvr+ rolling DVR pulled via DTSC from recording origin")
+		return dtscURL, false, nil
 	}
 
 	// Extract artifact internal name (strips vod+ or any other prefix)
@@ -1555,6 +1596,17 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 			originClusterID = resp.GetOriginClusterId()
 			contentType = resp.GetContentType()
 			tenantID = resp.GetTenantId()
+		}
+	}
+	if artifactHash == "" {
+		// Chapter artifacts are vod+<artifact_hash> by construction and
+		// aren't registered in Commodore — resolve via foghorn directly
+		// to recover tenant/origin context for the relay URL path below.
+		if chapter := control.ResolveChapterArtifactByHash(context.Background(), artifactInternal); chapter != nil {
+			artifactHash = chapter.ArtifactHash
+			originClusterID = chapter.OriginClusterID
+			contentType = "vod"
+			tenantID = chapter.TenantID
 		}
 	}
 	if artifactHash == "" {
@@ -1582,16 +1634,53 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		}
 	}
 
-	// Resolve artifact from in-memory state (populated by Helmsman with correct paths)
+	// Read-through relay: hand Mist a stable Helmsman URL for the artifact
+	// regardless of warm state. Helmsman either serves the local file
+	// (warm) or fetches from S3 via RelayResolve (cold), per admission
+	// policy. Defrost is no longer the playback gate.
 	_, artifactInfo := state.DefaultManager().FindNodeByArtifactHash(artifactHash)
+	format := ""
 	if artifactInfo != nil {
+		format = artifactInfo.GetFormat()
 		p.logger.WithFields(logging.Fields{
 			"artifact_hash": artifactHash,
 			"stream_name":   streamName,
 			"file_path":     artifactInfo.GetFilePath(),
-			"format":        artifactInfo.GetFormat(),
+			"format":        format,
 			"size_bytes":    artifactInfo.GetSizeBytes(),
-		}).Info("VOD artifact resolved from in-memory state")
+		}).Debug("VOD artifact warm on this node; routing through relay anyway")
+	}
+	// Persisted descriptor — format + stream_internal_name in one DB
+	// hit. The clip-writer nests as clips/<stream>/<hash>.<ext>, so
+	// passing the stream name lets the relay probe the nested warm path.
+	// VOD flat layout doesn't need it but the lookup is the same cost.
+	// Kind comes from the Commodore-resolved contentType above
+	// (authoritative for clip vs vod); foghorn.artifacts.artifact_type
+	// is the persisted mirror but Commodore is the source of truth.
+	desc := lookupArtifactDescriptor(context.Background(), artifactHash)
+	if format == "" {
+		format = desc.Format
+	}
+	if format != "" {
+		kind := kindFromAssetType(contentType)
+		if kind == "" {
+			kind = kindFromAssetType(desc.ArtifactType)
+		}
+		if kind == "" {
+			kind = "vod"
+		}
+		relayURL := buildVODRelayURL(trigger.GetNodeId(), kind, artifactHash, format, desc.StreamInternal)
+		if relayURL == "" {
+			// No advertised relay base URL on this node — abort so Mist
+			// retries rather than receiving a 127.0.0.1 URL that would dial
+			// itself in container deployments.
+			p.logger.WithFields(logging.Fields{
+				"artifact_hash": artifactHash,
+				"stream_name":   streamName,
+				"node_id":       trigger.GetNodeId(),
+			}).Warn("STREAM_SOURCE: VOD artifact — no relay base URL advertised by node; aborting")
+			return "", true, nil
+		}
 
 		go func(tr *pb.MistTrigger, name string) {
 			if err := p.sendTriggerToDecklog(tr); err != nil {
@@ -1603,8 +1692,12 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 			}
 		}(trigger, streamName)
 
-		// Return file path with shouldAbort=false to tell Helmsman to use this source
-		return artifactInfo.GetFilePath(), false, nil
+		p.logger.WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"stream_name":   streamName,
+			"relay_url":     relayURL,
+		}).Info("VOD STREAM_SOURCE routed through Helmsman read-through relay")
+		return relayURL, false, nil
 	}
 
 	// Cross-cluster: check local foghorn.artifacts DB for adopted copy
@@ -1833,7 +1926,22 @@ func (p *Processor) recordPullSourceEvent(resp *pb.ResolvePullSourceByInternalNa
 	}()
 }
 
-// resolveProcessSource returns a presigned HTTPS URL for a process+ stream's source.
+// resolveProcessSource returns the Mist source URL for a processing+ stream.
+//
+// Safe-wrapper inputs (.mp4, .mov, .mkv, .webm, .ts, .m3u8) route through
+// Helmsman's /internal/artifact/upload/<hash>.<ext> relay — Mist reads via
+// HTTP::URIReader and admission biases to memory-only for sequential
+// one-shot reads, so a multi-GB upload doesn't double-write disk during
+// processing.
+//
+// Unsafe wrappers (.avi, .flv, .m4v) cannot be opened by Mist over HTTP
+// (FLV is fopen-only, AV input only auto-matches local paths, .m4v has
+// no http source_match). For those the processing dispatcher stages the
+// upload to disk before booting Mist, and Helmsman's processing+
+// STREAM_SOURCE shortcut returns the local path. Foghorn should never
+// be asked to resolve an unsafe-wrapper source — if we are, the stage
+// is missing and handing Mist a presigned S3 URL it can't open would
+// just spin the job. Abort instead so the trigger retries.
 func (p *Processor) resolveProcessSource(artifactHash, nodeID string) (string, bool, error) {
 	if artifactHash == "" {
 		return "", true, nil
@@ -1844,34 +1952,67 @@ func (p *Processor) resolveProcessSource(artifactHash, nodeID string) (string, b
 		return "", true, nil
 	}
 
-	var s3URL string
+	var format string
 	err := db.QueryRowContext(context.Background(), `
-		SELECT s3_url FROM foghorn.artifacts
+		SELECT COALESCE(format,'')
+		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND s3_url IS NOT NULL
-	`, artifactHash).Scan(&s3URL)
+	`, artifactHash).Scan(&format)
 	if err != nil {
-		p.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to look up S3 URL for process+ source")
+		p.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to look up format for process+ source")
 		return "", true, nil
 	}
 
-	presigned, err := control.GeneratePresignedGETForArtifact(context.Background(), s3URL)
-	if err != nil {
-		p.logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to generate presigned URL for process+ source")
-		return "", true, nil
+	if isRelaySafeFormat(format) {
+		relayURL := buildUploadRelayURL(nodeID, artifactHash, format)
+		if relayURL == "" {
+			// No relay base URL advertised by this node. Abort the
+			// trigger so processing is rescheduled rather than handing
+			// Mist a direct presigned-S3 URL that bypasses Helmsman
+			// admission/pressure handling. Mist retries STREAM_SOURCE
+			// after the abort window; Foghorn can pick another node
+			// (or the operator fixes the missing config).
+			p.logger.WithFields(logging.Fields{
+				"artifact_hash": artifactHash,
+				"node_id":       nodeID,
+				"format":        format,
+			}).Warn("process+ source: no relay base URL advertised by node; aborting")
+			return "", true, nil
+		}
+		p.logger.WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"node_id":       nodeID,
+			"format":        format,
+			"relay_url":     relayURL,
+		}).Info("Resolved process+ source to Helmsman upload relay")
+		return relayURL, false, nil
 	}
 
 	p.logger.WithFields(logging.Fields{
 		"artifact_hash": artifactHash,
 		"node_id":       nodeID,
-	}).Info("Resolved process+ source to presigned URL")
-
-	return presigned, false, nil
+		"format":        format,
+	}).Warn("process+ source: unsafe-wrapper input not staged locally by Helmsman; aborting so Mist retries")
+	return "", true, nil
 }
 
-// handleStreamProcess returns cached MistServer process config for STREAM_PROCESS trigger.
-// For live+: populated during PUSH_REWRITE from ValidateStreamKeyResponse.
-// For processing+: populated by ProcessingDispatcher before job dispatch.
-// For vod+: checks artifact_type — DVR artifacts without thumbnails get MistProcThumbs.
+// handleStreamProcess returns cached MistServer process config for the
+// STREAM_PROCESS trigger. MistServer's MistProc pipeline only runs in
+// live / realtime modes — there is no VOD-mode processing. Stream-name
+// support matrix:
+//   - live+ / pull+   : live ingest. Config populated during
+//     PUSH_REWRITE from ValidateStreamKeyResponse.
+//   - dvr+<internal>  : rolling-DVR playback surface. Config resolves
+//     from the dvr_processes_json snapshot stamped
+//     onto foghorn.artifacts at StartDVR — that's the
+//     durable authority across Foghorn restarts and
+//     cache TTL, not the in-flight live cache.
+//   - processing+     : simulated-live processing pipeline. Config
+//     populated by ProcessingDispatcher (regular VOD
+//     processing) or the chapter finalization queue
+//     before job dispatch.
+//   - vod+            : read-only file playback. MistProc does not
+//     support VOD mode — NEVER returns config here.
 func (p *Processor) handleStreamProcess(trigger *pb.MistTrigger) (string, bool, error) {
 	streamName := trigger.GetStreamProcess().GetStreamName()
 	internalName := mist.ExtractInternalName(streamName)
@@ -1886,55 +2027,57 @@ func (p *Processor) handleStreamProcess(trigger *pb.MistTrigger) (string, bool, 
 		return "", false, nil
 	}
 
-	// Check cache first (handles live+, processing+, and previously resolved vod+ configs)
-	val, ok := p.streamCache.Peek("process:" + internalName)
-	if ok {
+	// vod+ is the read-only playback path — Mist has no VOD-mode
+	// MistProc. Return empty config explicitly so nothing tries to
+	// boot Thumbs/sprite/Livepeer for it.
+	if strings.HasPrefix(streamName, "vod+") {
+		return "", false, nil
+	}
+
+	if val, ok := p.streamCache.Peek("process:" + internalName); ok {
 		processesJSON, _ := val.(string)
 		return processesJSON, false, nil
 	}
 
-	// For vod+ streams: check if artifact is a DVR that needs thumbnail generation
-	if strings.HasPrefix(streamName, "vod+") {
-		return p.resolveVodProcessConfig(internalName)
+	// dvr+<dvr_internal_name>: the durable answer is the dvr_processes_json
+	// snapshot stamped onto foghorn.artifacts at StartDVR. The streamCache
+	// only carries the in-flight live config; the snapshot is what
+	// guarantees Thumbs/sprite/Livepeer tracks survive Foghorn restarts
+	// and cache TTL.
+	if strings.HasPrefix(streamName, "dvr+") {
+		if cfg := p.resolveRollingDVRProcessConfig(internalName); cfg != "" {
+			return cfg, false, nil
+		}
 	}
 
-	p.logger.WithField("stream_name", streamName).Debug("STREAM_PROCESS: no cached config, using defaults")
 	return "", false, nil
 }
 
-// resolveVodProcessConfig checks if a vod+ artifact is a DVR without thumbnails.
-// DVR artifacts get MistProcThumbs to generate seek-bar sprites on first playback.
-// Processed VODs already have embedded JPEG tracks — no extra processes needed.
-// Note: artifactInternalName is the routing identifier (from vod+ stream name),
-// NOT artifact_hash (32-char hex). They are different columns in foghorn.artifacts.
-func (p *Processor) resolveVodProcessConfig(artifactInternalName string) (string, bool, error) {
+// resolveRollingDVRProcessConfig returns the live processes_json
+// snapshot stored on the DVR artifact row at StartDVR. The snapshot
+// is the authority: it survives Foghorn restarts and cache TTL expiry
+// that the PUSH_REWRITE-populated streamCache does not. The in-memory
+// cache is only a fast path for live ingest — dvr+ playback must not
+// depend on it.
+func (p *Processor) resolveRollingDVRProcessConfig(dvrInternalName string) string {
 	db := control.GetDB()
-	if db == nil {
-		return "", false, nil
+	if db == nil || dvrInternalName == "" {
+		return ""
 	}
-
-	var artifactType string
-	var hasThumbnails bool
-	err := db.QueryRowContext(context.Background(),
-		`SELECT artifact_type, COALESCE(has_thumbnails, false) FROM foghorn.artifacts WHERE internal_name = $1`,
-		artifactInternalName,
-	).Scan(&artifactType, &hasThumbnails)
-	if err != nil {
-		return "", false, nil //nolint:nilerr // artifact not found = no extra processes
+	var processesJSON sql.NullString
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT dvr_processes_json
+		   FROM foghorn.artifacts
+		  WHERE internal_name = $1
+		    AND artifact_type = 'dvr'`,
+		dvrInternalName,
+	).Scan(&processesJSON); err != nil {
+		return ""
 	}
-
-	if artifactType != "dvr" || hasThumbnails {
-		p.streamCache.Set("process:"+artifactInternalName, "", 30*time.Minute)
-		return "", false, nil
+	if !processesJSON.Valid {
+		return ""
 	}
-
-	thumbsConfig := `[{"process":"Thumbs"}]`
-	p.streamCache.Set("process:"+artifactInternalName, thumbsConfig, 30*time.Minute)
-	p.logger.WithFields(logging.Fields{
-		"internal_name": artifactInternalName,
-		"artifact_type": artifactType,
-	}).Info("STREAM_PROCESS: adding MistProcThumbs for DVR artifact")
-	return thumbsConfig, false, nil
+	return processesJSON.String
 }
 
 // handlePushEnd processes PUSH_END trigger (non-blocking)

@@ -126,8 +126,8 @@ func (c *S3Client) GeneratePresignedPUT(key string, expiry time.Duration) (strin
 }
 
 // PutObject uploads bytes directly to S3 using the client's credentials.
-// Used by Foghorn-owned writes such as chapter manifests and playback
-// manifests. Edge nodes never call this — they use presigned URLs instead
+// Used by Foghorn-owned writes that don't go through a presigned-PUT
+// hand-off. Edge nodes never call this — they use presigned URLs instead
 // so credentials stay server-side.
 func (c *S3Client) PutObject(ctx context.Context, key string, body []byte, contentType string) error {
 	fullKey := c.fullKey(key)

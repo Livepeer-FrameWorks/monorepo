@@ -172,7 +172,6 @@ const (
 	DVRControlService_DeleteDVR_FullMethodName                 = "/foghorn.DVRControlService/DeleteDVR"
 	DVRControlService_RetrieveDVRChapter_FullMethodName        = "/foghorn.DVRControlService/RetrieveDVRChapter"
 	DVRControlService_ListDVRChapters_FullMethodName           = "/foghorn.DVRControlService/ListDVRChapters"
-	DVRControlService_SetDVRChapterPolicy_FullMethodName       = "/foghorn.DVRControlService/SetDVRChapterPolicy"
 	DVRControlService_OverrideArtifactRetention_FullMethodName = "/foghorn.DVRControlService/OverrideArtifactRetention"
 	DVRControlService_TestPlaybackAccess_FullMethodName        = "/foghorn.DVRControlService/TestPlaybackAccess"
 )
@@ -189,21 +188,8 @@ type DVRControlServiceClient interface {
 	StopDVR(ctx context.Context, in *StopDVRRequest, opts ...grpc.CallOption) (*StopDVRResponse, error)
 	// DeleteDVR deletes a DVR recording and its files
 	DeleteDVR(ctx context.Context, in *DeleteDVRRequest, opts ...grpc.CallOption) (*DeleteDVRResponse, error)
-	// RetrieveDVRChapter materializes (cache-on-request) and returns the
-	// chapter manifest's S3 location. UTC-only — civil-time chapters submit
-	// mode=explicit_range with caller-resolved (start_ms, end_ms).
 	RetrieveDVRChapter(ctx context.Context, in *RetrieveDVRChapterRequest, opts ...grpc.CallOption) (*RetrieveDVRChapterResponse, error)
-	// ListDVRChapters paginates chapter rows for player navigation. Bounded
-	// by page_size (default 200, max 1000) per the bounded-operations
-	// invariant for unbounded artifact lifetime.
 	ListDVRChapters(ctx context.Context, in *ListDVRChaptersRequest, opts ...grpc.CallOption) (*ListDVRChaptersResponse, error)
-	// SetDVRChapterPolicy updates the artifact's default chapter mode (the
-	// one the sweeper materializes automatically). Changing policy mid-
-	// recording closes the in-flight current chapter as VOD with ENDLIST and
-	// starts the new current chapter under the new mode. Old chapter
-	// manifests remain readable until cache expiry / retention cleanup so
-	// in-flight viewers are not interrupted.
-	SetDVRChapterPolicy(ctx context.Context, in *SetDVRChapterPolicyRequest, opts ...grpc.CallOption) (*SetDVRChapterPolicyResponse, error)
 	// OverrideArtifactRetention pushes a per-asset retention horizon into
 	// foghorn.artifacts so the existing RetentionJob picks up the new value
 	// on its next tick. Called by Commodore.UpdateAssetRetention /
@@ -282,16 +268,6 @@ func (c *dVRControlServiceClient) ListDVRChapters(ctx context.Context, in *ListD
 	return out, nil
 }
 
-func (c *dVRControlServiceClient) SetDVRChapterPolicy(ctx context.Context, in *SetDVRChapterPolicyRequest, opts ...grpc.CallOption) (*SetDVRChapterPolicyResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SetDVRChapterPolicyResponse)
-	err := c.cc.Invoke(ctx, DVRControlService_SetDVRChapterPolicy_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *dVRControlServiceClient) OverrideArtifactRetention(ctx context.Context, in *OverrideArtifactRetentionRequest, opts ...grpc.CallOption) (*OverrideArtifactRetentionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(OverrideArtifactRetentionResponse)
@@ -324,21 +300,8 @@ type DVRControlServiceServer interface {
 	StopDVR(context.Context, *StopDVRRequest) (*StopDVRResponse, error)
 	// DeleteDVR deletes a DVR recording and its files
 	DeleteDVR(context.Context, *DeleteDVRRequest) (*DeleteDVRResponse, error)
-	// RetrieveDVRChapter materializes (cache-on-request) and returns the
-	// chapter manifest's S3 location. UTC-only — civil-time chapters submit
-	// mode=explicit_range with caller-resolved (start_ms, end_ms).
 	RetrieveDVRChapter(context.Context, *RetrieveDVRChapterRequest) (*RetrieveDVRChapterResponse, error)
-	// ListDVRChapters paginates chapter rows for player navigation. Bounded
-	// by page_size (default 200, max 1000) per the bounded-operations
-	// invariant for unbounded artifact lifetime.
 	ListDVRChapters(context.Context, *ListDVRChaptersRequest) (*ListDVRChaptersResponse, error)
-	// SetDVRChapterPolicy updates the artifact's default chapter mode (the
-	// one the sweeper materializes automatically). Changing policy mid-
-	// recording closes the in-flight current chapter as VOD with ENDLIST and
-	// starts the new current chapter under the new mode. Old chapter
-	// manifests remain readable until cache expiry / retention cleanup so
-	// in-flight viewers are not interrupted.
-	SetDVRChapterPolicy(context.Context, *SetDVRChapterPolicyRequest) (*SetDVRChapterPolicyResponse, error)
 	// OverrideArtifactRetention pushes a per-asset retention horizon into
 	// foghorn.artifacts so the existing RetentionJob picks up the new value
 	// on its next tick. Called by Commodore.UpdateAssetRetention /
@@ -381,9 +344,6 @@ func (UnimplementedDVRControlServiceServer) RetrieveDVRChapter(context.Context, 
 }
 func (UnimplementedDVRControlServiceServer) ListDVRChapters(context.Context, *ListDVRChaptersRequest) (*ListDVRChaptersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListDVRChapters not implemented")
-}
-func (UnimplementedDVRControlServiceServer) SetDVRChapterPolicy(context.Context, *SetDVRChapterPolicyRequest) (*SetDVRChapterPolicyResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetDVRChapterPolicy not implemented")
 }
 func (UnimplementedDVRControlServiceServer) OverrideArtifactRetention(context.Context, *OverrideArtifactRetentionRequest) (*OverrideArtifactRetentionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method OverrideArtifactRetention not implemented")
@@ -502,24 +462,6 @@ func _DVRControlService_ListDVRChapters_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DVRControlService_SetDVRChapterPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetDVRChapterPolicyRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(DVRControlServiceServer).SetDVRChapterPolicy(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: DVRControlService_SetDVRChapterPolicy_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DVRControlServiceServer).SetDVRChapterPolicy(ctx, req.(*SetDVRChapterPolicyRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _DVRControlService_OverrideArtifactRetention_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(OverrideArtifactRetentionRequest)
 	if err := dec(in); err != nil {
@@ -582,10 +524,6 @@ var DVRControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListDVRChapters",
 			Handler:    _DVRControlService_ListDVRChapters_Handler,
-		},
-		{
-			MethodName: "SetDVRChapterPolicy",
-			Handler:    _DVRControlService_SetDVRChapterPolicy_Handler,
 		},
 		{
 			MethodName: "OverrideArtifactRetention",

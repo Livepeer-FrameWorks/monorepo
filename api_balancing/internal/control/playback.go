@@ -37,58 +37,89 @@ type ContentResolution struct {
 	RequiresAuth bool
 }
 
-const dvrChapterPlaybackPrefix = "dvr+"
-
-func DVRChapterPlaybackID(chapterID string) string {
-	chapterID = strings.TrimSpace(chapterID)
-	if chapterID == "" {
-		return ""
-	}
-	return dvrChapterPlaybackPrefix + chapterID
-}
-
-func ParseDVRChapterPlaybackID(input string) (string, bool) {
-	input = strings.TrimSpace(input)
-	if !strings.HasPrefix(input, dvrChapterPlaybackPrefix) {
-		return "", false
-	}
-	chapterID := strings.TrimSpace(strings.TrimPrefix(input, dvrChapterPlaybackPrefix))
-	if chapterID == "" {
-		return "", false
-	}
-	return chapterID, true
-}
-
+// DVRChapterPolicyPlaybackID resolves a chapter playback ID to its
+// parent DVR's playback ID so policy enforcement evaluates the
+// parent's protected-playback object. Non-chapter inputs pass
+// through unchanged.
+//
+// commodore.dvr_chapter_playback is the single authority for chapter
+// playback IDs (see docs/standards/dvr-chapters.md). Anything not in
+// that table is not a chapter playback ID and needs no walk.
 func DVRChapterPolicyPlaybackID(ctx context.Context, contentID string) string {
-	chapterID, ok := ParseDVRChapterPlaybackID(contentID)
-	if !ok || CommodoreClient == nil {
+	if contentID == "" || CommodoreClient == nil {
 		return contentID
 	}
+	chapterPB, err := CommodoreClient.ResolveChapterPlaybackID(ctx, contentID)
+	if err != nil || chapterPB == nil || !chapterPB.GetFound() {
+		return contentID
+	}
+	return chapterParentPlaybackID(ctx, chapterPB.GetChapterId(), contentID)
+}
+
+// chapterParentPlaybackID walks chapter row → parent DVR → Commodore
+// playback ID. Returns fallback when any hop fails so policy
+// enforcement defaults to the original input (treated as protected per
+// the existing fail-closed contract).
+func chapterParentPlaybackID(ctx context.Context, chapterID, fallback string) string {
 	chapter, err := GetChapter(ctx, chapterID)
 	if err != nil {
-		return contentID
+		return fallback
 	}
 	dvr, err := CommodoreClient.ResolveDVRHash(ctx, chapter.ArtifactHash)
 	if err != nil || !dvr.GetFound() || dvr.GetPlaybackId() == "" {
-		return contentID
+		return fallback
 	}
 	return dvr.GetPlaybackId()
 }
 
+// DVRChapterPolicyInternalName mirrors DVRChapterPolicyPlaybackID for
+// the Mist internal_name surface (USER_NEW). Chapter artifacts are
+// stored in foghorn.artifacts with internal_name == artifact_hash and
+// origin_type='dvr_chapter'; that row is the single authority for
+// "this internal_name is a chapter". Non-chapter inputs pass through
+// unchanged.
 func DVRChapterPolicyInternalName(ctx context.Context, internalName string) string {
-	chapterID, ok := ParseDVRChapterPlaybackID(internalName)
-	if !ok || CommodoreClient == nil {
+	if internalName == "" || CommodoreClient == nil {
 		return internalName
 	}
+	bare := strings.TrimPrefix(internalName, "vod+")
+	chapterID := chapterOriginIDForArtifact(ctx, bare)
+	if chapterID == "" {
+		return internalName
+	}
+	return chapterParentInternalName(ctx, chapterID, internalName)
+}
+
+func chapterParentInternalName(ctx context.Context, chapterID, fallback string) string {
 	chapter, err := GetChapter(ctx, chapterID)
 	if err != nil {
-		return internalName
+		return fallback
 	}
 	dvr, err := CommodoreClient.ResolveDVRHash(ctx, chapter.ArtifactHash)
 	if err != nil || !dvr.GetFound() || dvr.GetInternalName() == "" {
-		return internalName
+		return fallback
 	}
 	return dvr.GetInternalName()
+}
+
+// chapterOriginIDForArtifact returns origin_id when the artifact is a
+// chapter-origin VOD (origin_type='dvr_chapter'), else empty string.
+func chapterOriginIDForArtifact(ctx context.Context, artifactHash string) string {
+	if db == nil || artifactHash == "" {
+		return ""
+	}
+	var originType, originID sql.NullString
+	if err := db.QueryRowContext(ctx, `
+		SELECT origin_type, origin_id
+		  FROM foghorn.artifacts
+		 WHERE artifact_hash = $1
+	`, artifactHash).Scan(&originType, &originID); err != nil {
+		return ""
+	}
+	if originType.Valid && originType.String == "dvr_chapter" && originID.Valid {
+		return originID.String
+	}
+	return ""
 }
 
 type PlaybackPolicyTarget struct {
@@ -129,8 +160,14 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 		return nil, fmt.Errorf("empty input")
 	}
 
-	if chapterID, ok := ParseDVRChapterPlaybackID(input); ok {
-		return resolveDVRChapterContent(ctx, chapterID, input)
+	// 0. Chapter playback. Chapters are hidden VOD artifacts
+	// (origin_type='dvr_chapter', library_visible=false) addressed by
+	// the Commodore-minted chapter playback_id stored in
+	// commodore.dvr_chapter_playback. Auth + tenant context inherit
+	// from the parent DVR via the chapter row; viewer URLs use the
+	// public playback_id, never the raw artifact_hash.
+	if res := resolveChapterArtifactContent(ctx, input); res != nil {
+		return res, nil
 	}
 
 	// 1. Artifact playback_id (clip/dvr/vod)
@@ -142,12 +179,26 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 			default:
 				return nil, fmt.Errorf("invalid artifact content_type %q", resp.ContentType)
 			}
+			// InternalName must carry the Mist namespace prefix so that
+			// downstream resolvers (resolveDVRViewerEndpoint,
+			// ResolveLivePlayback, USER_NEW policy lookups) see the same
+			// stream identity Mist will see at PLAY_REWRITE time. DVR
+			// playback uses dvr+<dvr_internal_name>; clip/VOD share
+			// vod+<internal_name>. This mirrors what ResolveStream
+			// (trigger-time resolution) returns.
+			internalName := resp.InternalName
+			switch contentType {
+			case "dvr":
+				internalName = "dvr+" + resp.InternalName
+			case "clip", "vod":
+				internalName = "vod+" + resp.InternalName
+			}
 			res := &ContentResolution{
 				ContentType:  contentType,
 				ContentId:    input,
 				TenantId:     resp.TenantId,
 				StreamId:     resp.StreamId,
-				InternalName: resp.InternalName,
+				InternalName: internalName,
 				RequiresAuth: resp.GetRequiresAuth(),
 			}
 			if resp.ArtifactHash != "" {
@@ -179,41 +230,6 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 	}
 
 	return nil, fmt.Errorf("content not found")
-}
-
-func resolveDVRChapterContent(ctx context.Context, chapterID, playbackID string) (*ContentResolution, error) {
-	if CommodoreClient == nil {
-		return nil, fmt.Errorf("commodore client not available")
-	}
-	chapter, err := GetChapter(ctx, chapterID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("content not found")
-		}
-		return nil, fmt.Errorf("resolve DVR chapter: %w", err)
-	}
-	dvr, err := CommodoreClient.ResolveDVRHash(ctx, chapter.ArtifactHash)
-	if err != nil || dvr == nil || !dvr.GetFound() {
-		return nil, fmt.Errorf("content not found")
-	}
-	res := &ContentResolution{
-		ContentType:  "dvr",
-		ContentId:    playbackID,
-		TenantId:     dvr.GetTenantId(),
-		StreamId:     dvr.GetStreamId(),
-		InternalName: playbackID,
-	}
-	if dvr.GetPlaybackId() != "" {
-		if art, artErr := CommodoreClient.ResolveArtifactPlaybackID(ctx, dvr.GetPlaybackId()); artErr == nil && art != nil && art.GetFound() {
-			res.RequiresAuth = art.GetRequiresAuth()
-			res.ClusterPeers = art.GetClusterPeers()
-		} else {
-			res.RequiresAuth = true
-		}
-	} else {
-		res.RequiresAuth = true
-	}
-	return res, nil
 }
 
 // ArtifactFederationClient is the subset of federation.FederationClient needed for cross-cluster artifact resolution.
@@ -409,15 +425,31 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	if playbackID == "" {
 		return nil, fmt.Errorf("playback_id is required")
 	}
-	if chapterID, ok := ParseDVRChapterPlaybackID(playbackID); ok {
-		return ResolveDVRChapterPlayback(ctx, deps, chapterID, playbackID)
-	}
 	if CommodoreClient == nil {
 		return nil, fmt.Errorf("commodore client not available")
 	}
 
+	// Chapter playback IDs are minted by Commodore but the chapter's VOD
+	// artifact lives library_visible=false in foghorn — never registered
+	// in commodore.vod_assets. Resolve via the chapter playback table
+	// and synthesize a Commodore-shaped response so the normal artifact
+	// placement path takes it from here.
+	if artifactResp, ok := resolveChapterArtifactPlaybackResp(ctx, playbackID); ok {
+		return resolveArtifactPlaybackWithResp(ctx, deps, playbackID, artifactResp)
+	}
+
 	artifactResp, err := CommodoreClient.ResolveArtifactPlaybackID(ctx, playbackID)
 	if err != nil || !artifactResp.Found || artifactResp.ArtifactHash == "" || artifactResp.ContentType == "" {
+		return nil, fmt.Errorf("content not found")
+	}
+	return resolveArtifactPlaybackWithResp(ctx, deps, playbackID, artifactResp)
+}
+
+// resolveArtifactPlaybackWithResp completes the artifact playback
+// resolution from a pre-resolved artifactResp (Commodore-backed or
+// chapter-synthesized).
+func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependencies, playbackID string, artifactResp *pb.ResolveArtifactPlaybackIDResponse) (*pb.ViewerEndpointResponse, error) {
+	if artifactResp == nil {
 		return nil, fmt.Errorf("content not found")
 	}
 	if artifactResp.TenantId == "" {
@@ -442,7 +474,7 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	var hasThumbnails bool
 	var authoritativeCluster sql.NullString
 
-	err = deps.DB.QueryRowContext(ctx, `
+	err := deps.DB.QueryRowContext(ctx, `
 		SELECT COALESCE(internal_name, ''),
 		       status,
 		       duration_seconds,
@@ -496,33 +528,34 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 			}
 		}
 
-		// No cached nodes - trigger defrost if asset is in S3
+		// No warm nodes. The read-through artifact relay can stream from
+		// S3 to disk on demand, so we don't gate playback on defrost
+		// anymore — pick any storage-capable edge and let Mist
+		// STREAM_SOURCE → Helmsman relay → block cache materialize the
+		// bytes on the first viewer request.
 		location := strings.ToLower(strings.TrimSpace(storageLocation.String))
 		sync := strings.ToLower(strings.TrimSpace(syncStatus.String))
 		if location == "defrosting" {
+			// Existing in-flight defrost; let it finish.
 			return nil, NewDefrostingError(10, "defrost in progress")
 		}
 		if sync == "synced" || location == "s3" {
-			// Pick a storage node for defrost. Spread by active defrost count
-			// (primary), then viewer geo (when known), then disk pressure as
-			// tie-breaker. Disk is not a filter — Helmsman owns admission.
-			nodeID, err := PickDefrostNode(deps.GeoLat, deps.GeoLon, nil)
-			if err != nil {
-				return nil, fmt.Errorf("storage node unknown: %w", err)
+			lbctx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge,storage")
+			if tenantID != "" {
+				lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterScope, tenantID)
 			}
-			if _, err := StartDefrost(ctx, contentType, artifactResp.ArtifactHash, nodeID, 30*time.Second, controlLogger()); err != nil {
-				if defrostErr, ok := errors.AsType[*DefrostingError](err); ok {
-					return nil, defrostErr
-				}
-				return nil, fmt.Errorf("failed to start defrost: %w", err)
+			nodes, lbErr := deps.LB.GetTopNodesWithScores(lbctx, "", deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
+			if lbErr != nil || len(nodes) == 0 {
+				return nil, fmt.Errorf("no suitable edge for cold artifact playback: %w", lbErr)
 			}
-			return nil, NewDefrostingError(10, "defrost started")
-		}
-		// Federation fallback: artifact exists locally but not on any node and not in S3
-		if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
+			coldRanked := rankNodeScoresForArtifact(nodes, deps.GeoLat, deps.GeoLon)
+			artifactNodes = coldRanked
+		} else if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
+			// Federation fallback: artifact exists locally but not on any node and not in S3
 			return resolveRemoteArtifact(ctx, deps, artifactResp.ArtifactHash, originClusterID, contentType, tenantID, allowedClusters)
+		} else {
+			return nil, fmt.Errorf("storage node unknown: no node assignment found")
 		}
-		return nil, fmt.Errorf("storage node unknown: no node assignment found")
 	}
 
 	streamID := artifactResp.StreamId
@@ -657,7 +690,11 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	if format.Valid && format.String != "" {
 		metadata.Format = &format.String
 	}
-	if hasThumbnails && (contentType == "dvr" || contentType == "clip") {
+	// Chapter artifacts resolve as contentType="vod" but are produced
+	// through the chapter finalization processing pipeline that emits
+	// thumbnail/sprite assets the same way DVR/clip does. Expose them
+	// on chapter playback so the player has a poster/storyboard.
+	if hasThumbnails && (contentType == "dvr" || contentType == "clip" || contentType == "vod") {
 		// Pick the Chandler whose S3 actually serves this artifact's
 		// thumbnail. authoritativeCluster = COALESCE(storage_cluster_id,
 		// origin_cluster_id) — NULL on storage_cluster_id falls back to
@@ -679,121 +716,28 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	}, nil
 }
 
-func ResolveDVRChapterPlayback(ctx context.Context, deps *PlaybackDependencies, chapterID, playbackID string) (*pb.ViewerEndpointResponse, error) {
-	if deps == nil || deps.LB == nil {
-		return nil, fmt.Errorf("load balancer not available")
-	}
-	if CommodoreClient == nil {
-		return nil, fmt.Errorf("commodore client not available")
-	}
-	chapter, err := GetChapter(ctx, chapterID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("DVR chapter not found")
+// rankNodeScoresForArtifact projects load-balancer node candidates
+// into the ArtifactNodeInfo shape so the cold-artifact resolution path
+// can hand off to the same endpoint-building code as warm playback.
+// Used when sync_status='synced' / location='s3' and no warm copies
+// exist — Helmsman's relay+blockcache pulls bytes from S3 on demand.
+func rankNodeScoresForArtifact(nodes []balancer.NodeWithScore, viewerLat, viewerLon float64) []state.ArtifactNodeInfo {
+	out := make([]state.ArtifactNodeInfo, 0, len(nodes))
+	for _, n := range nodes {
+		// Skip remote-cluster candidates: cold-artifact relay reads run
+		// on the local cluster's edge against the artifact's S3 source.
+		if n.ClusterID != "" {
+			continue
 		}
-		return nil, fmt.Errorf("failed to query DVR chapter: %w", err)
+		out = append(out, state.ArtifactNodeInfo{
+			NodeID:       n.NodeID,
+			Host:         n.Host,
+			Score:        int64(n.Score),
+			GeoLatitude:  n.GeoLatitude,
+			GeoLongitude: n.GeoLongitude,
+		})
 	}
-	dvr, err := CommodoreClient.ResolveDVRHash(ctx, chapter.ArtifactHash)
-	if err != nil || dvr == nil || !dvr.GetFound() {
-		return nil, fmt.Errorf("DVR artifact not found")
-	}
-	if playbackID == "" {
-		playbackID = DVRChapterPlaybackID(chapterID)
-	}
-
-	var endpoints []*pb.ViewerEndpoint
-	if warmNodes := state.DefaultManager().FindNodesByArtifactHash(playbackID); len(warmNodes) > 0 {
-		for _, node := range rankArtifactNodes(warmNodes, deps.GeoLat, deps.GeoLon, 5) {
-			endpoint := dvrChapterEndpointFromNode(node.NodeID, node.Host, float64(node.Score), node.GeoLatitude, node.GeoLongitude, deps.GeoLat, deps.GeoLon, playbackID, chapter.IsCurrent)
-			if endpoint != nil {
-				endpoints = append(endpoints, endpoint)
-			}
-		}
-	}
-
-	if len(endpoints) == 0 {
-		lbctx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge,storage")
-		if tenantID := dvr.GetTenantId(); tenantID != "" {
-			lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterScope, tenantID)
-		}
-		nodes, err := deps.LB.GetTopNodesWithScores(lbctx, "", deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
-		if err != nil {
-			return nil, fmt.Errorf("no suitable DVR chapter playback nodes available: %w", err)
-		}
-		for _, node := range nodes {
-			if node.ClusterID != "" {
-				continue
-			}
-			endpoint := dvrChapterEndpointFromNode(node.NodeID, node.Host, float64(node.Score), node.GeoLatitude, node.GeoLongitude, deps.GeoLat, deps.GeoLon, playbackID, chapter.IsCurrent)
-			if endpoint != nil {
-				endpoints = append(endpoints, endpoint)
-			}
-		}
-	}
-	if len(endpoints) == 0 {
-		return nil, fmt.Errorf("no DVR chapter playback outputs available")
-	}
-
-	status := "available"
-	if chapter.IsCurrent {
-		status = "recording"
-	}
-	duration := int32(0)
-	if chapter.EndMs > chapter.StartMs {
-		duration = int32((chapter.EndMs - chapter.StartMs) / 1000)
-	}
-	metadata := &pb.PlaybackMetadata{
-		Status:          status,
-		IsLive:          chapter.IsCurrent,
-		TenantId:        dvr.GetTenantId(),
-		ContentId:       playbackID,
-		ContentType:     "dvr",
-		DvrStatus:       status,
-		DurationSeconds: &duration,
-	}
-	if streamID := dvr.GetStreamId(); streamID != "" {
-		metadata.StreamId = &streamID
-	}
-	if len(endpoints) > 0 && endpoints[0].Outputs != nil {
-		for proto := range endpoints[0].Outputs {
-			metadata.ProtocolHints = append(metadata.ProtocolHints, proto)
-		}
-	}
-
-	return &pb.ViewerEndpointResponse{
-		Primary:   endpoints[0],
-		Fallbacks: endpoints[1:],
-		Metadata:  metadata,
-	}, nil
-}
-
-func dvrChapterEndpointFromNode(nodeID, host string, score float64, nodeLat, nodeLon, viewerLat, viewerLon float64, playbackID string, isActive bool) *pb.ViewerEndpoint {
-	nodeOutputs, exists := GetNodeOutputs(nodeID)
-	if !exists || nodeOutputs.Outputs == nil {
-		return nil
-	}
-	baseURL := nodeOutputs.BaseURL
-	if baseURL == "" {
-		baseURL = host
-	}
-	protocol, endpointURL := selectPrimaryArtifactOutput(nodeOutputs.Outputs, baseURL, playbackID, "m3u8")
-	if endpointURL == "" {
-		endpointURL = EnsureTrailingSlash(baseURL) + "hls/" + playbackID + "/index.m3u8"
-		protocol = "hls"
-	}
-	geoDistance := 0.0
-	if geo.IsValidLatLon(viewerLat, viewerLon) && geo.IsValidLatLon(nodeLat, nodeLon) {
-		geoDistance = CalculateGeoDistance(viewerLat, viewerLon, nodeLat, nodeLon)
-	}
-	return &pb.ViewerEndpoint{
-		NodeId:      nodeID,
-		BaseUrl:     baseURL,
-		Protocol:    protocol,
-		Url:         endpointURL,
-		GeoDistance: geoDistance,
-		LoadScore:   score,
-		Outputs:     BuildOutputsMap(baseURL, nodeOutputs.Outputs, playbackID, isActive),
-	}
+	return rankArtifactNodes(out, viewerLat, viewerLon, 5)
 }
 
 func rankArtifactNodes(nodes []state.ArtifactNodeInfo, viewerLat, viewerLon float64, maxNodes int) []state.ArtifactNodeInfo {
@@ -863,16 +807,24 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 		return nil, fmt.Errorf("load balancer not available")
 	}
 
-	// Unified state tracks live streams by their bare internal_name (e.g. "demo_live_stream_001"),
-	// while MistServer uses wildcard names (e.g. "live+demo_live_stream_001" or
-	// "pull+demo_live_stream_001"). Normalize here so load balancing doesn't
-	// incorrectly filter out healthy nodes. Detect pull cold-start before the
-	// strip so we can drop the active-stream-presence requirement when no node
-	// is pulling yet.
+	// Unified state tracks live streams by their bare internal_name (e.g.
+	// "demo_live_stream_001"), while MistServer uses wildcard names
+	// (e.g. "live+...", "pull+...", "dvr+..."). Normalize here so load
+	// balancing doesn't incorrectly filter out healthy nodes. Two cases
+	// need the active-stream-presence filter dropped:
+	//   - pull cold start: no node has the stream active yet because no
+	//     PUSH_REWRITE precedent fills the cache.
+	//   - active DVR: the dvr+<dvr_internal_name> Mist stream is only
+	//     materialized on a node when a viewer connects; no node
+	//     advertises it in the state manager up front. STREAM_SOURCE
+	//     on the chosen edge resolves to local manifest (recording
+	//     origin) or dtsc:// pull (any other edge).
 	trimmed := strings.TrimSpace(internalName)
 	isPull := strings.HasPrefix(trimmed, "pull+")
+	isDVR := strings.HasPrefix(trimmed, "dvr+")
 	trimmed = strings.TrimPrefix(trimmed, "live+")
 	trimmed = strings.TrimPrefix(trimmed, "pull+")
+	trimmed = strings.TrimPrefix(trimmed, "dvr+")
 	internalName = trimmed
 
 	// Use load balancer with internal name to find nodes that have the stream
@@ -881,11 +833,11 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 		lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterScope, tenantID)
 	}
 	nodes, err := deps.LB.GetTopNodesWithScores(lbctx, internalName, deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
-	if isPull && (err != nil || len(nodes) == 0) {
-		// Pull-stream cold start: no node has the stream active yet because no
-		// PUSH_REWRITE precedent fills the cache. Drop the active-stream-presence
-		// filter so we can pick an eligible edge by capacity/geo. The chosen
-		// edge starts the input via STREAM_SOURCE → /source on first viewer.
+	if (isPull || isDVR) && (err != nil || len(nodes) == 0) {
+		// Cold-start fallback: drop the active-stream-presence filter
+		// so we can pick an eligible edge by capacity/geo. The chosen
+		// edge materializes the stream via STREAM_SOURCE on first
+		// viewer.
 		var coldErr error
 		nodes, coldErr = deps.LB.GetTopNodesWithScores(lbctx, "", deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
 		if coldErr == nil {
@@ -1068,6 +1020,46 @@ func buildThumbnailAssets(chandlerBase, assetKey string) *pb.ThumbnailAssets {
 		SpriteJpgUrl: base + "/sprite.jpg",
 		AssetKey:     assetKey,
 	}
+}
+
+type dvrThumbnailTarget struct {
+	artifactHash         string
+	tenantID             sql.NullString
+	authoritativeCluster sql.NullString
+	hasThumbnails        bool
+}
+
+type queryRower interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func resolveDVRThumbnailTarget(ctx context.Context, conn queryRower, token string) (dvrThumbnailTarget, error) {
+	var target dvrThumbnailTarget
+	if conn == nil || token == "" {
+		return target, sql.ErrNoRows
+	}
+
+	err := conn.QueryRowContext(ctx, `
+		SELECT artifact_hash, tenant_id::text, COALESCE(storage_cluster_id, origin_cluster_id), COALESCE(has_thumbnails, false)
+		  FROM foghorn.artifacts
+		 WHERE internal_name = $1
+		   AND artifact_type = 'dvr'
+	`, token).Scan(&target.artifactHash, &target.tenantID, &target.authoritativeCluster, &target.hasThumbnails)
+	if err == nil {
+		return target, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return target, err
+	}
+
+	err = conn.QueryRowContext(ctx, `
+		SELECT a.artifact_hash, a.tenant_id::text, COALESCE(a.storage_cluster_id, a.origin_cluster_id), COALESCE(a.has_thumbnails, false)
+		  FROM foghorn.dvr_chapters c
+		  JOIN foghorn.artifacts a ON a.artifact_hash = c.artifact_hash
+		 WHERE c.chapter_id = $1
+		   AND a.artifact_type = 'dvr'
+	`, token).Scan(&target.artifactHash, &target.tenantID, &target.authoritativeCluster, &target.hasThumbnails)
+	return target, err
 }
 
 // AppendViewerCorrelationID adds the virtual viewer ID to every playback URL in a response.

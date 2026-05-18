@@ -18,6 +18,7 @@ enum GQL {
   fragment BillingTierFields on BillingTier {
     id
     tierName
+    tierLevel
     displayName
     description
     basePrice
@@ -502,6 +503,13 @@ enum GQL {
       spriteJpgUrl
       assetKey
     }
+    dvrChapterMode
+    dvrChapterIntervalSeconds
+    retentionOverrides {
+      streamId
+      dvrRetentionDaysOverride
+      clipRetentionDaysOverride
+    }
     createdAt
     updatedAt
   }
@@ -662,11 +670,12 @@ enum GQL {
   // MARK: - queries
 
   static let DVRChapter = """
-  # Retrieve a single chapter manifest URL for a DVR recording.
-  # UTC-only; civil-time chapters resolve at the edge with mode=EXPLICIT_RANGE.
+  # Retrieve chapter metadata for a single chapter in a DVR recording.
+  # Chapter playback uses the chapter artifact's playbackId via the
+  # normal VOD playback path; this query exposes range + state.
   query DVRChapter(
     $dvrId: ID!
-    $mode: DVRChapterMode!
+    $mode: DVRChapterMode
     $intervalSeconds: Int
     $startMs: Float!
     $endMs: Float!
@@ -679,11 +688,15 @@ enum GQL {
       endMs: $endMs
     ) {
       chapterId
-      manifestS3Key
-      manifestUrl
+      state
+      playbackId
       isCurrent
       hasGaps
       segmentCount
+      wallClockStartUnixMs
+      wallClockEndUnixMs
+      playableNow
+      lastFailureReason
     }
   }
   """
@@ -715,9 +728,11 @@ enum GQL {
         startMs
         endMs
         isCurrent
-        manifestS3Key
+        state
+        playbackId
         hasGaps
         segmentCount
+        lastFailureReason
       }
       nextPageToken
     }
@@ -1051,6 +1066,7 @@ enum GQL {
     billingTiers {
       id
       tierName
+      tierLevel
       displayName
       description
       basePrice
@@ -1132,6 +1148,27 @@ enum GQL {
           status
           storageLocation
           isFrozen
+          # Marginal storage cost for this clip on the tenant's tier. Null for
+          # self-hosted / fully tenant-private clusters.
+          storageCost {
+            perDay
+            perMonth
+            currency
+          }
+          # Resolved retention horizon for the storage browser UI.
+          effectiveRetention {
+            retentionDays
+            retentionUntil
+            source
+          }
+          # Chandler-generated poster + sprite assets (null when processing
+          # hasn't produced thumbnails yet).
+          thumbnailAssets {
+            posterUrl
+            spriteVttUrl
+            spriteJpgUrl
+            assetKey
+          }
         }
       }
       pageInfo {
@@ -1339,6 +1376,23 @@ enum GQL {
           errorMessage
           storageLocation
           isFrozen
+          # Marginal storage cost for this recording on the tenant's tier.
+          storageCost {
+            perDay
+            perMonth
+            currency
+          }
+          effectiveRetention {
+            retentionDays
+            retentionUntil
+            source
+          }
+          thumbnailAssets {
+            posterUrl
+            spriteVttUrl
+            spriteJpgUrl
+            assetKey
+          }
         }
       }
       pageInfo {
@@ -3685,6 +3739,16 @@ enum GQL {
             spriteJpgUrl
             assetKey
           }
+          storageCost {
+            perDay
+            perMonth
+            currency
+          }
+          effectiveRetention {
+            retentionDays
+            retentionUntil
+            source
+          }
         }
       }
       pageInfo {
@@ -3734,13 +3798,17 @@ enum GQL {
   """
 
   static let MediaRetentionPolicy = """
-  # Tenant-default retention policy + entitlement bounds + the value the
-  # cascade resolves to today. Used by the webapp's "Storage retention
+  # Tenant per-class retention defaults + the effective horizons the cascade
+  # resolves to today (no per-stream context). Used by the "Storage retention
   # defaults" panel.
   query MediaRetentionPolicy {
     mediaRetentionPolicy {
-      recordingRetentionDays
-      effectiveRecordingRetentionDays
+      defaultVodRetentionDays
+      defaultDvrRetentionDays
+      defaultClipRetentionDays
+      effectiveVodRetentionDays
+      effectiveDvrRetentionDays
+      effectiveClipRetentionDays
       bounds {
         maxRecordingRetentionDays
       }
@@ -4580,27 +4648,20 @@ enum GQL {
   }
   """
 
-  static let SetDVRChapterPolicy = """
-  # Set the artifact's default chapter mode. Sweeper materializes manifests
-  # under this mode automatically while the recording is active. Pass NONE
-  # to clear (sweeper stops materializing; ad-hoc dvrChapter retrievals
-  # still work under any mode).
-  mutation SetDVRChapterPolicy($dvrId: ID!, $mode: DVRChapterMode!, $intervalSeconds: Int) {
-    setDVRChapterPolicy(dvrId: $dvrId, mode: $mode, intervalSeconds: $intervalSeconds) {
-      success
-      message
-    }
-  }
-  """
-
   static let SetMediaRetentionPolicy = """
-  # Set the tenant-default retention policy. Passing the current tier bound
-  # clears the tenant override so future tier changes flow through.
+  # Set the tenant per-class retention default. targetType picks the column
+  # (VOD, DVR, or CLIP); days is the value (0 = keep forever on uncapped
+  # tiers); clear = true NULLs the column so the tenant inherits the system
+  # default.
   mutation SetMediaRetentionPolicy($input: SetMediaRetentionPolicyInput!) {
     setMediaRetentionPolicy(input: $input) {
       ... on MediaRetentionPolicy {
-        recordingRetentionDays
-        effectiveRecordingRetentionDays
+        defaultVodRetentionDays
+        defaultDvrRetentionDays
+        defaultClipRetentionDays
+        effectiveVodRetentionDays
+        effectiveDvrRetentionDays
+        effectiveClipRetentionDays
         bounds {
           maxRecordingRetentionDays
         }
@@ -4708,6 +4769,33 @@ enum GQL {
       ... on AuthError {
         message
         code
+      }
+    }
+  }
+  """
+
+  static let SetStreamRetentionOverrides = """
+  # Write per-stream DVR / clip retention overrides for a single stream.
+  # Each pair (value, clear flag) governs one column independently: clear
+  # takes precedence; otherwise a non-null value writes it (0 = no
+  # auto-expire, >0 = days, clamped to the tier cap); otherwise the column
+  # is left alone.
+  mutation SetStreamRetentionOverrides($input: SetStreamRetentionOverridesInput!) {
+    setStreamRetentionOverrides(input: $input) {
+      ... on StreamRetentionOverrides {
+        streamId
+        dvrRetentionDaysOverride
+        clipRetentionDaysOverride
+      }
+      ... on ValidationError {
+        message
+        field
+      }
+      ... on NotFoundError {
+        message
+      }
+      ... on AuthError {
+        message
       }
     }
   }

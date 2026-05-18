@@ -15,8 +15,7 @@ type SourceEntry struct {
 	LocalPath    string
 	AssetType    string // "vod" | "dvr"
 	InternalName string // vod+: result of mist.ExtractInternalName; NOT artifact_hash
-	ChapterID    string // dvr only
-	DvrHash      string // dvr only; derived from chapter registry or path layout
+	DvrHash      string // dvr only; derived from the rolling-DVR artifact registry or path layout
 	Recorded     time.Time
 }
 

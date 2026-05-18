@@ -137,8 +137,8 @@ func (h *Handlers) DeleteClip(clipHash string) (uint64, error) {
 		return 0, fmt.Errorf("clip hash is required")
 	}
 	if !leases.IsDestructiveCleanupAllowed() {
-		if store := leases.GlobalDeferredStore(); store != nil {
-			store.Enqueue(leases.PendingDelete{AssetType: "clip", AssetHash: clipHash})
+		if err := enqueueDeferredDelete("clip", clipHash); err != nil {
+			return 0, err
 		}
 		logger.WithField("clip_hash", clipHash).Info("DeleteClip queued: destructive cleanup paused")
 		// Return ErrLeaseHeld so the control handler does NOT emit
@@ -148,13 +148,29 @@ func (h *Handlers) DeleteClip(clipHash string) (uint64, error) {
 	}
 	bytes, err := h.deleteClipImmediate(clipHash)
 	if errors.Is(err, leases.ErrLeaseHeld) {
-		if store := leases.GlobalDeferredStore(); store != nil {
-			store.Enqueue(leases.PendingDelete{AssetType: "clip", AssetHash: clipHash})
+		if qErr := enqueueDeferredDelete("clip", clipHash); qErr != nil {
+			return bytes, qErr
 		}
 		logger.WithField("clip_hash", clipHash).Info("DeleteClip partially queued: lease held")
 		return bytes, leases.ErrLeaseHeld
 	}
 	return bytes, err
+}
+
+// enqueueDeferredDelete records an operator delete intent in the
+// durable queue. Returns a wrapped error when persistence fails so the
+// caller can refuse the delete rather than pretending an in-memory-only
+// entry is durably queued — the queue file backs operator intent
+// across Helmsman restarts. Nil store (test wiring) is a silent no-op.
+func enqueueDeferredDelete(assetType, assetHash string) error {
+	store := leases.GlobalDeferredStore()
+	if store == nil {
+		return nil
+	}
+	if err := store.Enqueue(leases.PendingDelete{AssetType: assetType, AssetHash: assetHash}); err != nil {
+		return fmt.Errorf("deferred delete queue persistence failed: %w", err)
+	}
+	return nil
 }
 
 // deleteClipImmediate performs the actual filesystem deletion. Returns
@@ -186,6 +202,34 @@ func (h *Handlers) deleteClipImmediate(clipHash string) (uint64, error) {
 		info, err := os.Stat(filePath)
 		if err != nil {
 			logger.WithError(err).WithField("file", filePath).Warn("Failed to stat clip file")
+			continue
+		}
+
+		// Relay block-cache dir for this clip; recursive delete gated by
+		// the lease that covers the dir path.
+		if info.IsDir() && strings.HasSuffix(filePath, ".blocks") {
+			if tracker := leases.GlobalTracker(); tracker != nil && tracker.IsPathLeased(filePath) {
+				leaseHeld = true
+				logger.WithField("file", filePath).Info("Clip block dir skipped: lease held")
+				continue
+			}
+			var dirBytes uint64
+			_ = filepath.Walk(filePath, func(_ string, fi os.FileInfo, walkErr error) error { //nolint:errcheck // size defaults to 0 on walk failure
+				if walkErr == nil && fi != nil && !fi.IsDir() {
+					dirBytes += uint64(fi.Size())
+				}
+				return nil
+			})
+			if rmErr := os.RemoveAll(filePath); rmErr != nil {
+				logger.WithError(rmErr).WithField("file", filePath).Warn("Failed to remove clip block dir")
+				continue
+			}
+			totalSize += dirBytes
+			logger.WithFields(logging.Fields{
+				"clip_hash": clipHash,
+				"file":      filePath,
+				"size":      dirBytes,
+			}).Debug("Deleted clip block dir")
 			continue
 		}
 
@@ -254,16 +298,16 @@ func (h *Handlers) DeleteDVR(dvrHash string) (uint64, error) {
 		return 0, fmt.Errorf("DVR hash is required")
 	}
 	if !leases.IsDestructiveCleanupAllowed() {
-		if store := leases.GlobalDeferredStore(); store != nil {
-			store.Enqueue(leases.PendingDelete{AssetType: "dvr", AssetHash: dvrHash})
+		if err := enqueueDeferredDelete("dvr", dvrHash); err != nil {
+			return 0, err
 		}
 		logger.WithField("dvr_hash", dvrHash).Info("DeleteDVR queued: destructive cleanup paused")
 		return 0, leases.ErrLeaseHeld
 	}
 	bytes, err := h.deleteDVRImmediate(dvrHash)
 	if errors.Is(err, leases.ErrLeaseHeld) {
-		if store := leases.GlobalDeferredStore(); store != nil {
-			store.Enqueue(leases.PendingDelete{AssetType: "dvr", AssetHash: dvrHash})
+		if qErr := enqueueDeferredDelete("dvr", dvrHash); qErr != nil {
+			return bytes, qErr
 		}
 		logger.WithField("dvr_hash", dvrHash).Info("DeleteDVR queued: lease held")
 		return bytes, leases.ErrLeaseHeld
@@ -332,22 +376,33 @@ func (h *Handlers) deleteDVRImmediate(dvrHash string) (uint64, error) {
 }
 
 // DeleteVOD is the public VOD delete entry. Queues to the deferred store
-// when destructive cleanup is paused or any matched file is leased.
+// when destructive cleanup is paused, any matched file is leased, or any
+// degraded VOD source lease is held (active stream whose internal_name
+// did not resolve to an artifact_hash on this node — its backing file
+// cannot be pinned by path, so we refuse global VOD deletes until the
+// degraded lease clears).
 func (h *Handlers) DeleteVOD(vodHash string) (uint64, error) {
 	if vodHash == "" {
 		return 0, fmt.Errorf("VOD hash is required")
 	}
 	if !leases.IsDestructiveCleanupAllowed() {
-		if store := leases.GlobalDeferredStore(); store != nil {
-			store.Enqueue(leases.PendingDelete{AssetType: "vod", AssetHash: vodHash})
+		if err := enqueueDeferredDelete("vod", vodHash); err != nil {
+			return 0, err
 		}
 		logger.WithField("vod_hash", vodHash).Info("DeleteVOD queued: destructive cleanup paused")
 		return 0, leases.ErrLeaseHeld
 	}
+	if tracker := leases.GlobalTracker(); tracker != nil && tracker.DegradedVodCleanupActive() {
+		if err := enqueueDeferredDelete("vod", vodHash); err != nil {
+			return 0, err
+		}
+		logger.WithField("vod_hash", vodHash).Info("DeleteVOD queued: degraded VOD source lease active (internal_name → hash unresolved)")
+		return 0, leases.ErrLeaseHeld
+	}
 	bytes, err := h.deleteVODImmediate(vodHash)
 	if errors.Is(err, leases.ErrLeaseHeld) {
-		if store := leases.GlobalDeferredStore(); store != nil {
-			store.Enqueue(leases.PendingDelete{AssetType: "vod", AssetHash: vodHash})
+		if qErr := enqueueDeferredDelete("vod", vodHash); qErr != nil {
+			return bytes, qErr
 		}
 		logger.WithField("vod_hash", vodHash).Info("DeleteVOD partially queued: lease held")
 		return bytes, leases.ErrLeaseHeld
@@ -375,6 +430,37 @@ func (h *Handlers) deleteVODImmediate(vodHash string) (uint64, error) {
 		info, err := os.Stat(filePath)
 		if err != nil {
 			logger.WithError(err).WithField("file", filePath).Warn("Failed to stat VOD file")
+			continue
+		}
+
+		// .blocks/ is the relay's block cache dir for the asset. Single
+		// file delete won't reclaim it (rm on non-empty dir fails);
+		// remove it recursively, gated by the lease that already covers
+		// the dir path. Size accounting walks the dir to total real
+		// disk usage.
+		if info.IsDir() && strings.HasSuffix(filePath, ".blocks") {
+			if tracker := leases.GlobalTracker(); tracker != nil && tracker.IsPathLeased(filePath) {
+				leaseHeld = true
+				logger.WithField("file", filePath).Info("VOD block dir skipped: lease held")
+				continue
+			}
+			var dirBytes uint64
+			_ = filepath.Walk(filePath, func(_ string, fi os.FileInfo, walkErr error) error { //nolint:errcheck // size defaults to 0 on walk failure
+				if walkErr == nil && fi != nil && !fi.IsDir() {
+					dirBytes += uint64(fi.Size())
+				}
+				return nil
+			})
+			if rmErr := os.RemoveAll(filePath); rmErr != nil {
+				logger.WithError(rmErr).WithField("file", filePath).Warn("Failed to remove VOD block dir")
+				continue
+			}
+			totalSize += dirBytes
+			logger.WithFields(logging.Fields{
+				"vod_hash": vodHash,
+				"file":     filePath,
+				"size":     dirBytes,
+			}).Debug("Deleted VOD block dir")
 			continue
 		}
 
@@ -710,9 +796,12 @@ func HandleStreamProcess(c *gin.Context) {
 	c.String(http.StatusOK, result.Response)
 }
 
-// HandleStreamSource handles the STREAM_SOURCE trigger from MistServer
-// This is a critical blocking trigger - resolves VOD stream names (vod+{artifact_hash}) to actual file paths for playback
-// Supports both clip hashes (mp4 files) and DVR hashes (m3u8 manifests)
+// HandleStreamSource handles the STREAM_SOURCE trigger from MistServer.
+// Blocking trigger — Mist holds the boot until Foghorn resolves the
+// stream name to a playable source URL. Helmsman shortcuts the
+// processing+<hash> case to a locally-staged file (set up by the
+// processing/chapter-finalize handler); everything else forwards to
+// Foghorn over the control stream.
 func HandleStreamSource(c *gin.Context) {
 	start := time.Now()
 	incMistWebhook("STREAM_SOURCE", "received")
@@ -759,20 +848,28 @@ func HandleStreamSource(c *gin.Context) {
 		return
 	}
 
-	// Resolve processing+ HLS sources locally if rewritten manifest exists
-	// and there's an active processing job (prevents serving stale manifests
-	// with expired presigned URLs from a previous failed job)
+	// Resolve processing+ sources locally when an active job has staged
+	// the input on disk:
+	//
+	//   - HLS rewrites land at {storage}/processing/<hash>.m3u8.
+	//   - Unsafe-wrapper staging lands at {storage}/processing/<hash>.<ext>
+	//     for .avi/.flv/.m4v inputs that Mist cannot open over HTTP.
+	//     Foghorn's resolveProcessSource hands back relay URLs for safe
+	//     wrappers; only unsafe wrappers stage locally.
+	//
+	// Without an active pending job the shortcut is skipped so we never
+	// serve a stale staged file from a previous failed job.
 	if ss := mistTrigger.GetStreamSource(); ss != nil && strings.HasPrefix(ss.GetStreamName(), "processing+") {
 		hash := strings.TrimPrefix(ss.GetStreamName(), "processing+")
 		if HasPendingJob(ss.GetStreamName()) {
-			localManifest := filepath.Join(config.GetStoragePath(), "processing", hash+".m3u8")
-			if _, statErr := os.Stat(localManifest); statErr == nil {
+			procDir := filepath.Join(config.GetStoragePath(), "processing")
+			if local := findStagedProcessingSource(procDir, hash); local != "" {
 				logger.WithFields(logging.Fields{
-					"stream_name":    ss.GetStreamName(),
-					"local_manifest": localManifest,
-				}).Info("STREAM_SOURCE resolved to local HLS manifest")
-				incMistWebhook("STREAM_SOURCE", "local_hls")
-				c.String(http.StatusOK, localManifest)
+					"stream_name": ss.GetStreamName(),
+					"local_path":  local,
+				}).Info("STREAM_SOURCE resolved to local staged processing source")
+				incMistWebhook("STREAM_SOURCE", "local_processing_stage")
+				c.String(http.StatusOK, local)
 				return
 			}
 		}
@@ -852,12 +949,58 @@ func extractVODHash(streamName string) string {
 	return ""
 }
 
-// acquireSourceLeaseForStream installs a primary disk lease for the local
-// file Mist was just handed. Only fires when the response is a local
-// filesystem path; ignores balance:/HTTP/S3 indirections.
+// preferredHeatPath picks the canonical local path the relay is most
+// likely to read from for an asset, so HeatTracker.Touch records LRU
+// against the file that actually gets warm. Clips with a known stream
+// name resolve to the nested clip writer layout; everything else falls
+// back to the deterministic path list's first entry (the flat path).
+func preferredHeatPath(basePath string, key leases.AssetKey, mediaExt, streamInternal string, paths []string) string {
+	if key.Type == "clip" && streamInternal != "" && mediaExt != "" {
+		return filepath.Join(basePath, "clips", streamInternal, key.Hash+mediaExt)
+	}
+	if len(paths) > 0 {
+		return paths[0]
+	}
+	return ""
+}
+
+// findStagedProcessingSource returns the on-disk path of a staged
+// processing+<hash> input, or "" if none is present. Walks the canonical
+// extension set (HLS manifest + unsafe-wrapper formats) in priority order
+// so .m3u8 takes precedence when both exist (matches legacy behavior).
+func findStagedProcessingSource(procDir, hash string) string {
+	// Priority list: HLS manifest first (legacy), then unsafe-wrapper formats
+	// that need staging because Mist's FLV/AV inputs are local-only.
+	for _, ext := range []string{".m3u8", ".flv", ".avi", ".m4v"} {
+		p := filepath.Join(procDir, hash+ext)
+		if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+			return p
+		}
+	}
+	return ""
+}
+
+// acquireSourceLeaseForStream installs a primary disk lease for the asset
+// Mist was just handed. Two response shapes produce a lease:
+//
+//   - Local filesystem path: the warm-artifact form. AssetKey is derived
+//     from the StreamName prefix; lease paths are the response and its
+//     existing sidecars.
+//   - Helmsman relay URL (http://host/internal/artifact/...): the
+//     read-through form. AssetKey is derived from the URL; lease paths
+//     come from DeterministicPathsForAsset so the canonical media file,
+//     `.partial` fill tmpfile, and `.dtsh`/`.gop` sidecars stay
+//     protected from cleanup while in flight.
+//
+// External indirections (balance:, presigned S3, foreign HTTP) still produce
+// no lease — they live elsewhere.
 func acquireSourceLeaseForStream(streamName, response string) {
 	tracker := leases.GlobalTracker()
 	if tracker == nil || streamName == "" {
+		return
+	}
+	if leases.IsRelayArtifactResponse(response) {
+		acquireSourceLeaseFromRelayURL(streamName, response, tracker)
 		return
 	}
 	if !leases.IsLocalFilesystemResponse(response) {
@@ -884,60 +1027,69 @@ func acquireSourceLeaseForStream(streamName, response string) {
 		return
 	}
 
-	if chapterID, ok := leases.ParseDVRChapterPlaybackID(streamName); ok {
-		paths := []string{response}
-		var dvrHash string
-		var segmentNames []string
-		degraded := false
+	if _, ok := leases.ParseDVRRollingPlaybackID(streamName); ok {
+		// Active rolling DVR surface: dvr+<dvr_internal_name> with
+		// <dvr_hash>.m3u8 served from the recording origin's local
+		// disk. Artifact-level pin; the DVR Manager owns rotation and
+		// per-segment cleanup, not the lease layer.
+		if dvrHash := leases.DeriveDvrHashFromRollingManifestPath(response); dvrHash != "" {
+			key := leases.AssetKey{Type: "dvr", Hash: dvrHash}
+			tracker.AcquireSource(streamName, []string{response}, key, nil, false)
+			if reg := leases.GlobalSourceRegistry(); reg != nil {
+				reg.Record(leases.SourceEntry{
+					StreamName: streamName,
+					LocalPath:  response,
+					AssetType:  "dvr",
+					DvrHash:    dvrHash,
+				})
+			}
+		}
+	}
+}
 
-		if reg := leases.GlobalChapterRegistry(); reg != nil {
-			if entry, found := reg.Lookup(chapterID); found {
-				dvrHash = entry.DvrHash
-				segmentNames = entry.SegmentNames
-			}
-		}
-		if dvrHash == "" {
-			// Recovery: try to derive dvr_hash from the response path layout
-			// and parse the manifest for segment names.
-			if h := leases.DeriveDvrHashFromPath(response); h != "" {
-				dvrHash = h
-			}
-		}
-		if dvrHash != "" && len(segmentNames) == 0 {
-			// Parse the on-disk manifest to recover segment names.
-			if names := manifestSegmentsOnDisk(response); len(names) > 0 {
-				segmentNames = names
-				if reg := leases.GlobalChapterRegistry(); reg != nil {
-					reg.Register(leases.ChapterEntry{
-						ChapterID:    chapterID,
-						DvrHash:      dvrHash,
-						SegmentNames: names,
-						ManifestPath: response,
-					})
-				}
-			}
-		}
-		if dvrHash == "" || len(segmentNames) == 0 {
-			// Recovery failed — install degraded lease and pause DVR cleanup.
-			degraded = true
-			logger.WithFields(logging.Fields{
-				"stream_name": streamName,
-				"chapter_id":  chapterID,
-				"response":    response,
-			}).Warn("DVR chapter context unresolved; installing degraded source lease (DVR destructive cleanup paused while held)")
-		}
-		key := leases.AssetKey{Type: "dvr", Hash: dvrHash, ChapterID: chapterID}
-		tracker.AcquireSource(streamName, paths, key, segmentNames, degraded)
+// acquireSourceLeaseFromRelayURL handles STREAM_SOURCE responses that
+// point at Helmsman's own read-through artifact relay. AssetKey comes
+// from the URL; lease paths come from DeterministicPathsForAsset so the
+// canonical media file, the `.partial` background-fill tmpfile, and the
+// `.dtsh`/`.gop` sidecars are protected from cleanup even before they
+// exist on disk.
+func acquireSourceLeaseFromRelayURL(streamName, response string, tracker *leases.Tracker) {
+	key, ok := leases.ParseArtifactRelayURL(response)
+	if !ok {
+		return
+	}
+	basePath := config.GetStoragePath()
+	mediaExt := leases.ExtFromRelayURL(response)
+	streamInternal := leases.StreamInternalFromRelayURL(response)
+
+	switch key.Type {
+	case "vod", "clip", "upload":
+		paths := leases.DeterministicPathsForAsset(basePath, key, mediaExt, streamInternal, nil)
+		tracker.AcquireSource(streamName, paths, key, nil, false)
 		if reg := leases.GlobalSourceRegistry(); reg != nil {
+			internal := ""
+			if v, ok := leases.ParseVODInternalName(streamName); ok {
+				internal = v
+			}
+			// LocalPath is the canonical media file the viewer is most
+			// likely to actually read. For clips, that's the nested
+			// clips/<stream>/<hash>.<ext> the writer produces — record
+			// against THAT so HeatTracker.Touch bumps the right file's
+			// LRU position, not the flat fallback path that almost never
+			// exists for stream-tied clips. VOD/upload always use the
+			// flat layout (paths[0]).
+			canonicalLocal := preferredHeatPath(basePath, key, mediaExt, streamInternal, paths)
 			reg.Record(leases.SourceEntry{
-				StreamName: streamName,
-				LocalPath:  response,
-				AssetType:  "dvr",
-				ChapterID:  chapterID,
-				DvrHash:    dvrHash,
+				StreamName:   streamName,
+				LocalPath:    canonicalLocal,
+				AssetType:    key.Type,
+				InternalName: internal,
 			})
 		}
 	}
+	// DVR relay URLs (dvr/<dvr_hash>/chapter/...) are no longer
+	// parsed — chapter playback flows through vod/<chapter_hash>
+	// which the case "vod" branch above already covers.
 }
 
 // acquireViewerLeaseForSession installs a heat/accounting lease for a Mist
@@ -989,29 +1141,6 @@ func releaseSourceLeaseForStream(streamName string) {
 	if reg := leases.GlobalSourceRegistry(); reg != nil {
 		reg.Forget(streamName)
 	}
-}
-
-// manifestSegmentsOnDisk reads a chapter manifest and returns its non-comment
-// segment basenames. Used during DVR source-lease recovery when the chapter
-// registry has not been populated yet.
-func manifestSegmentsOnDisk(manifestPath string) []string {
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		base := filepath.Base(line)
-		if base == "" || base == "." || base == "/" {
-			continue
-		}
-		out = append(out, base)
-	}
-	return out
 }
 
 // HandlePushEnd handles PUSH_END webhook

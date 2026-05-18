@@ -713,10 +713,6 @@ func (s *CommodoreServer) resolveFoghornForContent(ctx context.Context, contentI
 		return nil, nil, status.Error(codes.InvalidArgument, "content_id required")
 	}
 
-	if chapterID, ok := parseDVRChapterPlaybackID(contentID); ok {
-		return s.resolveFoghornForDVRChapterAlias(ctx, chapterID)
-	}
-
 	var tenantID, activeClusterID sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 		SELECT tenant_id, active_ingest_cluster_id
@@ -760,29 +756,6 @@ func (s *CommodoreServer) resolveFoghornForContent(ctx context.Context, contentI
 		return nil, nil, err
 	}
 	return client, route, nil
-}
-
-func (s *CommodoreServer) resolveFoghornForDVRChapterAlias(ctx context.Context, chapterID string) (*foghornclient.GRPCClient, *clusterRoute, error) {
-	var tenantID, originClusterID string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id::text, origin_cluster_id
-		  FROM commodore.dvr_chapter_aliases
-		 WHERE chapter_id = $1
-	`, chapterID).Scan(&tenantID, &originClusterID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil, status.Errorf(codes.NotFound, "DVR chapter %q not found", chapterID)
-	}
-	if err != nil {
-		return nil, nil, status.Errorf(codes.Internal, "database error resolving DVR chapter: %v", err)
-	}
-	if tenantID == "" || originClusterID == "" {
-		return nil, nil, status.Error(codes.FailedPrecondition, "DVR chapter alias is missing routing context")
-	}
-	client, err := s.resolveFoghornForCluster(ctx, originClusterID, tenantID)
-	if err != nil {
-		return nil, nil, err
-	}
-	return client, &clusterRoute{clusterID: originClusterID}, nil
 }
 
 // resolveFoghornForStreamKey resolves a Foghorn client using the ingest stream key.
@@ -1564,25 +1537,50 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 	if billingStatus != nil && billingStatus.DvrPolicy != nil {
 		foghornReq.DvrPolicy = billingStatus.DvrPolicy
 	}
-	// Apply tenant-default retention override on top of the Purser
-	// entitlement before Foghorn snapshots it onto the artifact. Per-asset
-	// override doesn't apply at start (artifact doesn't exist yet); it
-	// kicks in via UpdateAssetRetention after finalize.
-	if foghornReq.DvrPolicy != nil {
-		if set, days, _, _, perr := s.readTenantPolicy(ctx, tenantID); perr == nil && set && days > 0 {
-			bound := foghornReq.DvrPolicy.GetRecordingRetentionDays()
-			if bound == 0 {
-				bound = defaultRetentionDays
-			}
-			if days < bound {
-				foghornReq.DvrPolicy.RecordingRetentionDays = days
-			}
+	// Run the per-class cascade (per-stream → tenant per-class → system
+	// default) clamped by the tier cap. Resolved value carries 0 = "keep
+	// forever" (NULL retention_until at finalize); >0 sets that many days.
+	// Per-asset override doesn't apply at start (artifact doesn't exist yet);
+	// it kicks in via UpdateAssetRetention after finalize.
+	if dvrDays, dvrErr := s.resolveInitialRetention(ctx, pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR, tenantID, streamID); dvrErr == nil {
+		if foghornReq.DvrPolicy == nil {
+			foghornReq.DvrPolicy = &pb.DVRPolicy{}
 		}
+		days := dvrDays
+		foghornReq.DvrPolicy.RecordingRetentionDays = &days
+	} else {
+		s.logger.WithError(dvrErr).WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"stream_id": streamID,
+		}).Warn("DVR retention resolution failed; Foghorn falls back to its 30-day default")
 	}
 	// Forward caller-supplied window so dvrpolicy.Resolve can clamp it
 	// against tier and cluster live-window bounds inside Foghorn.
 	if w := req.GetDvrWindowSeconds(); w > 0 {
 		foghornReq.DvrWindowSeconds = &w
+	}
+
+	// Snapshot Stream-level chapter config onto the DVR artifact. Reads
+	// happen on the same row we just resolved internal_name from; one
+	// extra query keeps the snapshot inside this critical section so
+	// concurrent Stream.dvrChapterMode mutations don't race the recording.
+	var chapterMode sql.NullString
+	var chapterIntervalSeconds sql.NullInt32
+	if scanErr := s.db.QueryRowContext(ctx, `
+		SELECT dvr_chapter_mode, dvr_chapter_interval_seconds
+		  FROM commodore.streams
+		 WHERE id = $1::uuid AND tenant_id = $2::uuid
+	`, streamID, tenantID).Scan(&chapterMode, &chapterIntervalSeconds); scanErr == nil {
+		if chapterMode.Valid && chapterMode.String != "" {
+			mode := chapterMode.String
+			foghornReq.DvrChapterMode = &mode
+		}
+		if chapterIntervalSeconds.Valid && chapterIntervalSeconds.Int32 > 0 {
+			iv := chapterIntervalSeconds.Int32
+			foghornReq.DvrChapterIntervalSeconds = &iv
+		}
+	} else if !errors.Is(scanErr, sql.ErrNoRows) {
+		s.logger.WithError(scanErr).WithField("stream_id", streamID).Warn("Failed to read Stream chapter config; recording starts without chapters")
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -2068,6 +2066,103 @@ func (s *CommodoreServer) ResolveVodID(ctx context.Context, req *pb.ResolveVodID
 		VodHash:      vodHash,
 		PlaybackId:   playbackID,
 		InternalName: artifactInternalName,
+	}, nil
+}
+
+// MintChapterPlaybackID mints (or returns the existing) public playback_id
+// for a hidden chapter artifact. Called by Foghorn at chapter finalization
+// dispatch. Idempotent on chapter_id — repeat calls return the same
+// playback_id even across finalization retries; artifact_hash is upserted
+// because retries may reuse the same hash via the deterministic
+// chapterPlaybackArtifactHash() derivation, but tenants change rarely.
+func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *pb.MintChapterPlaybackIDRequest) (*pb.MintChapterPlaybackIDResponse, error) {
+	chapterID := req.GetChapterId()
+	tenantID := req.GetTenantId()
+	artifactHash := req.GetArtifactHash()
+	if chapterID == "" || tenantID == "" || artifactHash == "" {
+		return nil, status.Error(codes.InvalidArgument, "chapter_id, tenant_id, and artifact_hash are required")
+	}
+
+	// Mint a fresh playback_id for the INSERT path. ON CONFLICT returns
+	// the existing row's playback_id; the freshly-generated value is
+	// discarded.
+	playbackID, err := generateArtifactPlaybackID()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate playback ID: %v", err)
+	}
+
+	var stored string
+	err = s.db.QueryRowContext(ctx, `
+		INSERT INTO commodore.dvr_chapter_playback (
+			chapter_id, tenant_id, playback_id, artifact_hash, created_at, updated_at
+		) VALUES ($1, $2::uuid, $3, $4, NOW(), NOW())
+		ON CONFLICT (chapter_id) DO UPDATE
+			SET artifact_hash = EXCLUDED.artifact_hash,
+			    updated_at    = NOW()
+		RETURNING playback_id
+	`, chapterID, tenantID, playbackID, artifactHash).Scan(&stored)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"chapter_id":    chapterID,
+			"tenant_id":     tenantID,
+			"artifact_hash": artifactHash,
+			"error":         err,
+		}).Error("Failed to mint chapter playback id")
+		return nil, status.Errorf(codes.Internal, "mint chapter playback id: %v", err)
+	}
+
+	return &pb.MintChapterPlaybackIDResponse{PlaybackId: stored}, nil
+}
+
+// GetTenantProcessesJSON exposes the tenant's resolved MistServer
+// process config for a given stream type. Foghorn-internal pipelines
+// (chapter finalize) call this to attach the same VOD-style processing
+// (Thumbs, sprites, optional Livepeer) that user-initiated VOD uploads
+// use.
+func (s *CommodoreServer) GetTenantProcessesJSON(ctx context.Context, req *pb.GetTenantProcessesJSONRequest) (*pb.GetTenantProcessesJSONResponse, error) {
+	tenantID := req.GetTenantId()
+	streamType := req.GetStreamType()
+	if tenantID == "" || streamType == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id and stream_type are required")
+	}
+	if streamType != "live" && streamType != "vod" {
+		return nil, status.Error(codes.InvalidArgument, `stream_type must be "live" or "vod"`)
+	}
+	processesJSON := s.resolveProcessesJSON(ctx, tenantID, req.GetClusterId(), streamType)
+	return &pb.GetTenantProcessesJSONResponse{ProcessesJson: processesJSON}, nil
+}
+
+// ResolveChapterPlaybackID maps a public chapter playback_id back to its
+// internal (chapter_id, tenant_id, artifact_hash). Foghorn's playback
+// resolver calls this to bridge the public ID into the artifact-hash
+// path that handles policy walk + artifact serving.
+func (s *CommodoreServer) ResolveChapterPlaybackID(ctx context.Context, req *pb.ResolveChapterPlaybackIDRequest) (*pb.ResolveChapterPlaybackIDResponse, error) {
+	playbackID := req.GetPlaybackId()
+	if playbackID == "" {
+		return nil, status.Error(codes.InvalidArgument, "playback_id is required")
+	}
+
+	var (
+		chapterID, artifactHash string
+		tenantID                string
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT chapter_id, tenant_id::text, artifact_hash
+		  FROM commodore.dvr_chapter_playback
+		 WHERE lower(playback_id::text) = lower($1)
+	`, playbackID).Scan(&chapterID, &tenantID, &artifactHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return &pb.ResolveChapterPlaybackIDResponse{Found: false}, nil
+	}
+	if err != nil {
+		s.logger.WithError(err).WithField("playback_id", playbackID).Error("Failed to resolve chapter playback id")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	return &pb.ResolveChapterPlaybackIDResponse{
+		Found:        true,
+		ChapterId:    chapterID,
+		TenantId:     tenantID,
+		ArtifactHash: artifactHash,
 	}, nil
 }
 
@@ -4438,7 +4533,8 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRe
 		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
 		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
 		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}'),
-		       s.active_ingest_cluster_id
+		       s.active_ingest_cluster_id,
+		       s.dvr_retention_days_override, s.clip_retention_days_override
 		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.user_id = $1 AND s.tenant_id = $2`
@@ -4659,6 +4755,58 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 		args = append(args, *req.Record)
 		argIdx++
 		changedFields = append(changedFields, "is_recording_enabled")
+	}
+	// Cross-field validation: fixed_interval requires interval >= 3600s.
+	// Sub-hour intervals would explode finalization-job count and storage
+	// churn; the DB CHECK enforces the floor but rejecting here gives a
+	// clean InvalidArgument surface to callers.
+	const minChapterIntervalSeconds int32 = 3600
+	if req.DvrChapterIntervalSeconds != nil && req.GetDvrChapterIntervalSeconds() > 0 &&
+		req.GetDvrChapterIntervalSeconds() < minChapterIntervalSeconds {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"dvr_chapter_interval_seconds must be >= %d (1 hour minimum)", minChapterIntervalSeconds)
+	}
+	if req.DvrChapterMode != nil {
+		normalized := strings.ToLower(strings.TrimSpace(req.GetDvrChapterMode()))
+		if normalized == "fixed_interval" {
+			// Interval must come in this request at >= the floor or
+			// already be on the row at >= the floor.
+			supplied := req.DvrChapterIntervalSeconds != nil && req.GetDvrChapterIntervalSeconds() >= minChapterIntervalSeconds
+			if !supplied {
+				var existing sql.NullInt32
+				lookupErr := s.db.QueryRowContext(ctx,
+					`SELECT dvr_chapter_interval_seconds FROM commodore.streams WHERE stream_id = $1::uuid AND tenant_id = $2::uuid`,
+					streamID, tenantID,
+				).Scan(&existing)
+				if lookupErr != nil || !existing.Valid || existing.Int32 < minChapterIntervalSeconds {
+					return nil, status.Errorf(codes.InvalidArgument,
+						"dvr_chapter_mode='fixed_interval' requires dvr_chapter_interval_seconds >= %d", minChapterIntervalSeconds)
+				}
+			}
+		}
+	}
+	if req.DvrChapterMode != nil {
+		// Empty/NONE → set NULL so the CHECK constraint accepts no-chapter
+		// streams. Validated values land verbatim; the CHECK enforces the
+		// allowed set on write.
+		var modeArg interface{}
+		if mode := strings.TrimSpace(req.GetDvrChapterMode()); mode != "" && strings.ToLower(mode) != "none" {
+			modeArg = mode
+		}
+		updates = append(updates, fmt.Sprintf("dvr_chapter_mode = $%d", argIdx))
+		args = append(args, modeArg)
+		argIdx++
+		changedFields = append(changedFields, "dvr_chapter_mode")
+	}
+	if req.DvrChapterIntervalSeconds != nil {
+		var ivArg interface{}
+		if iv := req.GetDvrChapterIntervalSeconds(); iv > 0 {
+			ivArg = iv
+		}
+		updates = append(updates, fmt.Sprintf("dvr_chapter_interval_seconds = $%d", argIdx))
+		args = append(args, ivArg)
+		argIdx++
+		changedFields = append(changedFields, "dvr_chapter_interval_seconds")
 	}
 
 	if len(updates) == 0 && pullSource == nil {
@@ -5861,7 +6009,8 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStream
 		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
 		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
 		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}'),
-		       s.active_ingest_cluster_id
+		       s.active_ingest_cluster_id,
+		       s.dvr_retention_days_override, s.clip_retention_days_override
 		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.id = ANY($1) AND s.user_id = $2 AND s.tenant_id = $3
@@ -5897,24 +6046,28 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStream
 
 func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, tenantID string) (*pb.Stream, error) {
 	var stream pb.Stream
-	var description, sourceURIEnc, activeIngest sql.NullString
+	var description, sourceURIEnc, activeIngest, chapterMode sql.NullString
 	var pullEnabled sql.NullBool
 	var pullAllowedClusters pq.StringArray
 	var createdAt, updatedAt time.Time
+	var chapterInterval, dvrRetOverride, clipRetOverride sql.NullInt32
 
 	// Query config only - operational state (status, started_at, ended_at) comes from Periscope Data Plane.
 	err := s.db.QueryRowContext(ctx, `
 		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
 		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
 		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}'),
-		       s.active_ingest_cluster_id
+		       s.active_ingest_cluster_id,
+		       s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
+		       s.dvr_retention_days_override, s.clip_retention_days_override
 		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.id = $1 AND s.user_id = $2 AND s.tenant_id = $3
 	`, streamID, userID, tenantID).Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
 		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt,
 		&stream.IngestMode, &sourceURIEnc, &pullEnabled, &pullAllowedClusters,
-		&activeIngest)
+		&activeIngest, &chapterMode, &chapterInterval,
+		&dvrRetOverride, &clipRetOverride)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
@@ -5948,6 +6101,21 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 	}
 
 	stream.ThumbnailAssets = s.buildStreamThumbnailAssets(activeIngest, stream.StreamId)
+	if chapterMode.Valid {
+		stream.DvrChapterMode = chapterMode.String
+	}
+	if chapterInterval.Valid && chapterInterval.Int32 > 0 {
+		iv := chapterInterval.Int32
+		stream.DvrChapterIntervalSeconds = &iv
+	}
+	if dvrRetOverride.Valid {
+		v := dvrRetOverride.Int32
+		stream.DvrRetentionDaysOverride = &v
+	}
+	if clipRetOverride.Valid {
+		v := clipRetOverride.Int32
+		stream.ClipRetentionDaysOverride = &v
+	}
 	s.populateStreamOriginRegion(ctx, tenantID, &stream, nil)
 
 	return &stream, nil
@@ -5996,10 +6164,12 @@ func (s *CommodoreServer) scanStream(rows *sql.Rows) (*pb.Stream, error) {
 	var pullEnabled sql.NullBool
 	var pullAllowedClusters pq.StringArray
 	var createdAt, updatedAt time.Time
+	var dvrRetOverride, clipRetOverride sql.NullInt32
 
 	err := rows.Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
 		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt,
-		&stream.IngestMode, &sourceURIEnc, &pullEnabled, &pullAllowedClusters, &activeIngest)
+		&stream.IngestMode, &sourceURIEnc, &pullEnabled, &pullAllowedClusters, &activeIngest,
+		&dvrRetOverride, &clipRetOverride)
 	if err != nil {
 		return nil, err
 	}
@@ -6029,6 +6199,14 @@ func (s *CommodoreServer) scanStream(rows *sql.Rows) (*pb.Stream, error) {
 	}
 
 	stream.ThumbnailAssets = s.buildStreamThumbnailAssets(activeIngest, stream.StreamId)
+	if dvrRetOverride.Valid {
+		v := dvrRetOverride.Int32
+		stream.DvrRetentionDaysOverride = &v
+	}
+	if clipRetOverride.Valid {
+		v := clipRetOverride.Int32
+		stream.ClipRetentionDaysOverride = &v
+	}
 
 	return &stream, nil
 }
@@ -6295,15 +6473,34 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		duration = (*req.StopUnix - *req.StartUnix) * 1000
 	}
 
-	// Resolve retention
+	// Resolve retention via the per-class cascade (per-stream override →
+	// tenant per-class default → system default), clamped by the tier cap.
+	// User-supplied expires_at is treated as a per-asset override and
+	// clamped to the same cap.
+	resolvedDays, retentionErr := s.resolveInitialRetention(ctx, pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP, tenantID, streamID)
+	if retentionErr != nil {
+		s.logger.WithError(retentionErr).WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"stream_id": streamID,
+		}).Warn("Clip retention resolution failed; falling back to 30-day system default")
+		resolvedDays = 30
+	}
 	var retentionUntil *time.Time
 	if req.ExpiresAt != nil {
 		t := time.Unix(*req.ExpiresAt, 0)
+		// Clamp user-supplied expiry to the same cap the cascade applies.
+		if resolvedDays > 0 {
+			ceiling := time.Now().Add(time.Duration(resolvedDays) * 24 * time.Hour)
+			if t.After(ceiling) {
+				t = ceiling
+			}
+		}
 		retentionUntil = &t
-	} else {
-		t := time.Now().Add(30 * 24 * time.Hour) // Default 30 days
+	} else if resolvedDays > 0 {
+		t := time.Now().Add(time.Duration(resolvedDays) * 24 * time.Hour)
 		retentionUntil = &t
 	}
+	// resolvedDays == 0 + no expires_at → infinite (retentionUntil stays nil).
 
 	// Store requested params as JSON for audit
 	requestedParams := map[string]interface{}{}
@@ -6353,6 +6550,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		ClipHash:           &clipHash, // Pass the hash we generated
 		PlaybackId:         &playbackID,
 		InternalName:       &artifactInternalName,
+		Mode:               req.GetMode(),
 	}
 	if streamID != "" {
 		foghornReq.StreamId = &streamID
@@ -6365,7 +6563,16 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	foghornReq.StartMs = req.StartMs
 	foghornReq.StopMs = req.StopMs
 	foghornReq.DurationSec = req.DurationSec
-	foghornReq.ExpiresAt = func() *int64 { t := retentionUntil.Unix(); return &t }()
+	if retentionUntil != nil {
+		t := retentionUntil.Unix()
+		foghornReq.ExpiresAt = &t
+	}
+	// Carry the resolved per-class horizon so Foghorn writes retention_until
+	// from the same value Commodore registered. 0 = no auto-expire (infinite).
+	{
+		days := resolvedDays
+		foghornReq.RetentionDays = &days
+	}
 
 	// Call Foghorn for artifact lifecycle management
 	resp, trailers, err := foghornClient.CreateClip(ctx, foghornReq)
@@ -6423,7 +6630,7 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 	query := fmt.Sprintf(`
 		SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.description,
 		       c.start_time, c.duration, c.clip_mode, c.requested_params,
-		       c.retention_until, c.created_at, c.updated_at,
+		       c.retention_until, COALESCE(c.retention_source, ''), c.created_at, c.updated_at,
 		       COALESCE(c.storage_cluster_id, c.origin_cluster_id), c.has_thumbnails
 		FROM commodore.clips c
 		WHERE %s`, whereClause)
@@ -6453,13 +6660,14 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 			clipMode                           sql.NullString
 			requestedParams                    sql.NullString
 			retentionUntil                     sql.NullTime
+			retentionSource                    string
 			createdAt, updatedAt               time.Time
 			thumbnailCluster                   sql.NullString
 			hasThumbnails                      bool
 		)
 		if err := rows.Scan(&id, &clipHash, &playbackID, &streamID, &title, &description,
 			&startTime, &duration, &clipMode, &requestedParams,
-			&retentionUntil, &createdAt, &updatedAt,
+			&retentionUntil, &retentionSource, &createdAt, &updatedAt,
 			&thumbnailCluster, &hasThumbnails); err != nil {
 			s.logger.WithError(err).Warn("Error scanning clip")
 			continue
@@ -6487,6 +6695,10 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 		}
 		if requestedParams.Valid {
 			clip.RequestedParams = &requestedParams.String
+		}
+		if retentionSource != "" {
+			src := retentionSource
+			clip.RetentionSource = &src
 		}
 		if retentionUntil.Valid {
 			expiresAt := timestamppb.New(retentionUntil.Time)
@@ -6558,7 +6770,7 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 	query := `
 		SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.description,
 		       c.start_time, c.duration, c.clip_mode, c.requested_params,
-		       c.retention_until, c.created_at, c.updated_at,
+		       c.retention_until, COALESCE(c.retention_source, ''), c.created_at, c.updated_at,
 		       COALESCE(c.storage_cluster_id, c.origin_cluster_id), c.has_thumbnails
 		FROM commodore.clips c
 		WHERE c.tenant_id = $1 AND c.clip_hash = $2
@@ -6571,6 +6783,7 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 		clipMode                 sql.NullString
 		requestedParams          sql.NullString
 		retentionUntil           sql.NullTime
+		retentionSource          string
 		createdAt, updatedAt     time.Time
 		thumbnailCluster         sql.NullString
 		hasThumbnails            bool
@@ -6579,7 +6792,7 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 	err = s.db.QueryRowContext(ctx, query, tenantID, clipHash).Scan(
 		&id, &clipHash, &playbackID, &streamID, &title, &description,
 		&startTime, &duration, &clipMode, &requestedParams,
-		&retentionUntil, &createdAt, &updatedAt,
+		&retentionUntil, &retentionSource, &createdAt, &updatedAt,
 		&thumbnailCluster, &hasThumbnails,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -6610,6 +6823,10 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 	}
 	if requestedParams.Valid {
 		clip.RequestedParams = &requestedParams.String
+	}
+	if retentionSource != "" {
+		src := retentionSource
+		clip.RetentionSource = &src
 	}
 	if retentionUntil.Valid {
 		expiresAt := timestamppb.New(retentionUntil.Time)
@@ -6892,9 +7109,7 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.Vie
 
 	var foghornClient *foghornclient.GRPCClient
 	var err error
-	if _, ok := parseDVRChapterPlaybackID(req.ContentId); ok {
-		foghornClient, _, err = s.resolveFoghornForContent(ctx, req.ContentId)
-	} else if tenantID == "" {
+	if tenantID == "" {
 		foghornClient, _, err = s.resolveFoghornForContent(ctx, req.ContentId)
 	} else {
 		foghornClient, _, err = s.resolveFoghornForTenant(ctx, tenantID)
@@ -7327,8 +7542,19 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 		return nil, status.Errorf(codes.Internal, "failed to generate VOD identifiers: %v", err)
 	}
 
-	// Resolve retention (default 90 days for VOD)
-	retentionUntil := time.Now().Add(90 * 24 * time.Hour)
+	// Resolve retention via the per-class cascade. VOD has no per-stream
+	// override (uploads aren't bound to a stream); cascade collapses to
+	// tenant per-class default → system default (keep forever), clamped
+	// by the tier cap (Free=30d, paid=uncapped).
+	resolvedDays, retentionErr := s.resolveInitialRetention(ctx, pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD, tenantID, "")
+	if retentionErr != nil {
+		s.logger.WithError(retentionErr).WithField("tenant_id", tenantID).Warn("VOD retention resolution failed; falling back to 30-day horizon for safety")
+		resolvedDays = 30
+	}
+	var retentionUntil sql.NullTime
+	if resolvedDays > 0 {
+		retentionUntil = sql.NullTime{Valid: true, Time: time.Now().UTC().Add(time.Duration(resolvedDays) * 24 * time.Hour)}
+	}
 
 	// Register in commodore.vod_assets (business registry)
 	_, err = s.db.ExecContext(ctx, `
@@ -7359,17 +7585,18 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 
 	// Build Foghorn request with pre-generated hash
 	foghornReq := &pb.CreateVodUploadRequest{
-		TenantId:     tenantID,
-		UserId:       userID,
-		Filename:     req.Filename,
-		SizeBytes:    req.SizeBytes,
-		ContentType:  req.ContentType,
-		Title:        req.Title,
-		Description:  req.Description,
-		VodHash:      &vodHash, // Pass the hash we generated
-		PlaybackId:   &playbackID,
-		InternalName: &artifactInternalName,
-		ClusterId:    vodRoute.clusterID,
+		TenantId:      tenantID,
+		UserId:        userID,
+		Filename:      req.Filename,
+		SizeBytes:     req.SizeBytes,
+		ContentType:   req.ContentType,
+		Title:         req.Title,
+		Description:   req.Description,
+		VodHash:       &vodHash, // Pass the hash we generated
+		PlaybackId:    &playbackID,
+		InternalName:  &artifactInternalName,
+		ClusterId:     vodRoute.clusterID,
+		RetentionDays: &resolvedDays,
 	}
 
 	// Call Foghorn for S3 multipart upload setup
@@ -7535,6 +7762,7 @@ func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRe
 		contentType          sql.NullString
 		sizeBytes            sql.NullInt64
 		retentionUntil       sql.NullTime
+		retentionSource      sql.NullString
 		createdAt, updatedAt time.Time
 	)
 	var (
@@ -7543,13 +7771,13 @@ func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRe
 	)
 	err = s.db.QueryRowContext(ctx, `
 		SELECT id, vod_hash, playback_id, title, description, filename, content_type,
-		       size_bytes, retention_until, created_at, updated_at,
+		       size_bytes, retention_until, retention_source, created_at, updated_at,
 		       COALESCE(storage_cluster_id, origin_cluster_id), has_thumbnails
 		FROM commodore.vod_assets
 		WHERE vod_hash = $1 AND tenant_id = $2
 	`, req.ArtifactHash, tenantID).Scan(
 		&id, &vodHash, &playbackID, &title, &description, &filename, &contentType,
-		&sizeBytes, &retentionUntil, &createdAt, &updatedAt,
+		&sizeBytes, &retentionUntil, &retentionSource, &createdAt, &updatedAt,
 		&thumbnailCluster, &hasThumbnails,
 	)
 	if err != nil {
@@ -7583,6 +7811,10 @@ func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRe
 	}
 	if retentionUntil.Valid {
 		asset.ExpiresAt = timestamppb.New(retentionUntil.Time)
+	}
+	if retentionSource.Valid && retentionSource.String != "" {
+		src := retentionSource.String
+		asset.RetentionSource = &src
 	}
 	asset.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, thumbnailCluster, vodHash)
 
@@ -7619,7 +7851,7 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 	// Base query
 	query := `
 		SELECT id, vod_hash, playback_id, title, description, filename, content_type,
-		       size_bytes, retention_until, created_at, updated_at,
+		       size_bytes, retention_until, retention_source, created_at, updated_at,
 		       COALESCE(storage_cluster_id, origin_cluster_id), has_thumbnails
 		FROM commodore.vod_assets
 		WHERE tenant_id = $1`
@@ -7653,12 +7885,13 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 			contentType          sql.NullString
 			sizeBytes            sql.NullInt64
 			retentionUntil       sql.NullTime
+			retentionSource      sql.NullString
 			createdAt, updatedAt time.Time
 			thumbnailCluster     sql.NullString
 			hasThumbnails        bool
 		)
 		if err := rows.Scan(&id, &vodHash, &playbackID, &title, &description, &filename, &contentType,
-			&sizeBytes, &retentionUntil, &createdAt, &updatedAt,
+			&sizeBytes, &retentionUntil, &retentionSource, &createdAt, &updatedAt,
 			&thumbnailCluster, &hasThumbnails); err != nil {
 			s.logger.WithError(err).Warn("Error scanning VOD asset")
 			continue
@@ -7687,6 +7920,10 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 		}
 		if retentionUntil.Valid {
 			asset.ExpiresAt = timestamppb.New(retentionUntil.Time)
+		}
+		if retentionSource.Valid && retentionSource.String != "" {
+			src := retentionSource.String
+			asset.RetentionSource = &src
 		}
 		asset.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, thumbnailCluster, vodHash)
 

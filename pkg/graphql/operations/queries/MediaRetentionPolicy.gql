@@ -1,10 +1,14 @@
-# Tenant-default retention policy + entitlement bounds + the value the
-# cascade resolves to today. Used by the webapp's "Storage retention
+# Tenant per-class retention defaults + the effective horizons the cascade
+# resolves to today (no per-stream context). Used by the "Storage retention
 # defaults" panel.
 query MediaRetentionPolicy {
   mediaRetentionPolicy {
-    recordingRetentionDays
-    effectiveRecordingRetentionDays
+    defaultVodRetentionDays
+    defaultDvrRetentionDays
+    defaultClipRetentionDays
+    effectiveVodRetentionDays
+    effectiveDvrRetentionDays
+    effectiveClipRetentionDays
     bounds {
       maxRecordingRetentionDays
     }

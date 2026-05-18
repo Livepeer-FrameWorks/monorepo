@@ -22,7 +22,6 @@ const (
 	FoghornFederation_QueryStream_FullMethodName             = "/foghorn_federation.FoghornFederation/QueryStream"
 	FoghornFederation_NotifyOriginPull_FullMethodName        = "/foghorn_federation.FoghornFederation/NotifyOriginPull"
 	FoghornFederation_PrepareArtifact_FullMethodName         = "/foghorn_federation.FoghornFederation/PrepareArtifact"
-	FoghornFederation_PrepareDVRChapter_FullMethodName       = "/foghorn_federation.FoghornFederation/PrepareDVRChapter"
 	FoghornFederation_CreateRemoteClip_FullMethodName        = "/foghorn_federation.FoghornFederation/CreateRemoteClip"
 	FoghornFederation_CreateRemoteDVR_FullMethodName         = "/foghorn_federation.FoghornFederation/CreateRemoteDVR"
 	FoghornFederation_PeerChannel_FullMethodName             = "/foghorn_federation.FoghornFederation/PeerChannel"
@@ -46,19 +45,11 @@ type FoghornFederationClient interface {
 	QueryStream(ctx context.Context, in *QueryStreamRequest, opts ...grpc.CallOption) (*QueryStreamResponse, error)
 	// NotifyOriginPull tells the origin cluster that a peer intends to pull a stream via DTSC.
 	NotifyOriginPull(ctx context.Context, in *OriginPullNotification, opts ...grpc.CallOption) (*OriginPullAck, error)
-	// PrepareArtifact requests a clip or VOD be made available for cross-cluster access.
-	// DVR replay uses dvr+ chapter routing and chapter-bounded edge defrost.
+	// PrepareArtifact requests a clip, VOD, or finalized chapter artifact
+	// be made available for cross-cluster access. Chapter artifacts
+	// (origin_type='dvr_chapter') flow through this RPC just like
+	// ordinary VOD; the dvr+ chapter route no longer exists.
 	PrepareArtifact(ctx context.Context, in *PrepareArtifactRequest, opts ...grpc.CallOption) (*PrepareArtifactResponse, error)
-	// PrepareDVRChapter is the DVR equivalent of PrepareArtifact, scoped to a
-	// single chapter. The non-origin Foghorn calls the chapter's origin cluster
-	// to obtain presigned GETs for the chapter's segment ledger and chapter
-	// metadata, then locally defrosts the chapter without holding the
-	// storage-cluster's S3 credentials. Origin is the only writer of chapter
-	// rows; if the caller supplies range fields with no matching chapter row,
-	// origin materializes it via the same path Commodore.RetrieveDVRChapter
-	// uses. DVR segment storage is origin-owned; split storage ownership is
-	// rejected with unsupported_split_write_dvr.
-	PrepareDVRChapter(ctx context.Context, in *PrepareDVRChapterRequest, opts ...grpc.CallOption) (*PrepareDVRChapterResponse, error)
 	// CreateRemoteClip requests the origin cluster to create a clip on behalf of a remote cluster.
 	CreateRemoteClip(ctx context.Context, in *RemoteClipRequest, opts ...grpc.CallOption) (*RemoteClipResponse, error)
 	// CreateRemoteDVR requests the origin cluster to start a DVR recording on behalf of a remote cluster.
@@ -141,16 +132,6 @@ func (c *foghornFederationClient) PrepareArtifact(ctx context.Context, in *Prepa
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PrepareArtifactResponse)
 	err := c.cc.Invoke(ctx, FoghornFederation_PrepareArtifact_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *foghornFederationClient) PrepareDVRChapter(ctx context.Context, in *PrepareDVRChapterRequest, opts ...grpc.CallOption) (*PrepareDVRChapterResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PrepareDVRChapterResponse)
-	err := c.cc.Invoke(ctx, FoghornFederation_PrepareDVRChapter_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -253,19 +234,11 @@ type FoghornFederationServer interface {
 	QueryStream(context.Context, *QueryStreamRequest) (*QueryStreamResponse, error)
 	// NotifyOriginPull tells the origin cluster that a peer intends to pull a stream via DTSC.
 	NotifyOriginPull(context.Context, *OriginPullNotification) (*OriginPullAck, error)
-	// PrepareArtifact requests a clip or VOD be made available for cross-cluster access.
-	// DVR replay uses dvr+ chapter routing and chapter-bounded edge defrost.
+	// PrepareArtifact requests a clip, VOD, or finalized chapter artifact
+	// be made available for cross-cluster access. Chapter artifacts
+	// (origin_type='dvr_chapter') flow through this RPC just like
+	// ordinary VOD; the dvr+ chapter route no longer exists.
 	PrepareArtifact(context.Context, *PrepareArtifactRequest) (*PrepareArtifactResponse, error)
-	// PrepareDVRChapter is the DVR equivalent of PrepareArtifact, scoped to a
-	// single chapter. The non-origin Foghorn calls the chapter's origin cluster
-	// to obtain presigned GETs for the chapter's segment ledger and chapter
-	// metadata, then locally defrosts the chapter without holding the
-	// storage-cluster's S3 credentials. Origin is the only writer of chapter
-	// rows; if the caller supplies range fields with no matching chapter row,
-	// origin materializes it via the same path Commodore.RetrieveDVRChapter
-	// uses. DVR segment storage is origin-owned; split storage ownership is
-	// rejected with unsupported_split_write_dvr.
-	PrepareDVRChapter(context.Context, *PrepareDVRChapterRequest) (*PrepareDVRChapterResponse, error)
 	// CreateRemoteClip requests the origin cluster to create a clip on behalf of a remote cluster.
 	CreateRemoteClip(context.Context, *RemoteClipRequest) (*RemoteClipResponse, error)
 	// CreateRemoteDVR requests the origin cluster to start a DVR recording on behalf of a remote cluster.
@@ -332,9 +305,6 @@ func (UnimplementedFoghornFederationServer) NotifyOriginPull(context.Context, *O
 }
 func (UnimplementedFoghornFederationServer) PrepareArtifact(context.Context, *PrepareArtifactRequest) (*PrepareArtifactResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PrepareArtifact not implemented")
-}
-func (UnimplementedFoghornFederationServer) PrepareDVRChapter(context.Context, *PrepareDVRChapterRequest) (*PrepareDVRChapterResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method PrepareDVRChapter not implemented")
 }
 func (UnimplementedFoghornFederationServer) CreateRemoteClip(context.Context, *RemoteClipRequest) (*RemoteClipResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateRemoteClip not implemented")
@@ -431,24 +401,6 @@ func _FoghornFederation_PrepareArtifact_Handler(srv interface{}, ctx context.Con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(FoghornFederationServer).PrepareArtifact(ctx, req.(*PrepareArtifactRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _FoghornFederation_PrepareDVRChapter_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PrepareDVRChapterRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(FoghornFederationServer).PrepareDVRChapter(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: FoghornFederation_PrepareDVRChapter_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FoghornFederationServer).PrepareDVRChapter(ctx, req.(*PrepareDVRChapterRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -604,10 +556,6 @@ var FoghornFederation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PrepareArtifact",
 			Handler:    _FoghornFederation_PrepareArtifact_Handler,
-		},
-		{
-			MethodName: "PrepareDVRChapter",
-			Handler:    _FoghornFederation_PrepareDVRChapter_Handler,
 		},
 		{
 			MethodName: "CreateRemoteClip",

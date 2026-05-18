@@ -294,50 +294,6 @@ func TestResolveFoghornForContent_RoutesActiveClusterOnPoolMiss(t *testing.T) {
 	}
 }
 
-func TestResolveFoghornForContent_RoutesDVRChapterAlias(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("failed to create sqlmock: %v", err)
-	}
-	defer db.Close()
-
-	pool := newTestPool(t)
-	server := &CommodoreServer{
-		db:            db,
-		logger:        logrus.New(),
-		foghornPool:   pool,
-		routeCacheTTL: 5 * time.Minute,
-		routeCache: map[string]*clusterRoute{
-			"tenant-1": {
-				clusterID:   "tenant-primary",
-				foghornAddr: "foghorn-primary:50051",
-				clusterPeers: []*pb.TenantClusterPeer{
-					{ClusterId: "dvr-origin", FoghornGrpcAddr: "foghorn-dvr:50051"},
-				},
-				resolvedAt: time.Now(),
-			},
-		},
-	}
-
-	mock.ExpectQuery("SELECT tenant_id::text, origin_cluster_id\\s+FROM commodore\\.dvr_chapter_aliases\\s+WHERE chapter_id = \\$1").
-		WithArgs("chapter-1").
-		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "origin_cluster_id"}).AddRow("tenant-1", "dvr-origin"))
-
-	client, route, err := server.resolveFoghornForContent(context.Background(), "dvr+chapter-1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if client == nil {
-		t.Fatal("expected client")
-	}
-	if route == nil || route.clusterID != "dvr-origin" {
-		t.Fatalf("expected DVR origin route, got %+v", route)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet SQL expectations: %v", err)
-	}
-}
-
 func TestResolveAddrFromRoute_PrimaryCluster(t *testing.T) {
 	route := &clusterRoute{
 		clusterID:   "cluster-primary",

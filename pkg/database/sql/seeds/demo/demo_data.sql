@@ -253,12 +253,15 @@ ON CONFLICT (tier_name) DO UPDATE SET
     is_default_prepaid = EXCLUDED.is_default_prepaid,
     is_default_postpaid = EXCLUDED.is_default_postpaid;
 
--- Tier entitlements (recording_retention_days drives Foghorn lifecycle).
+-- Tier cap on customer-set retention. 0 = no cap (paid baseline);
+-- Free's finite cap is the anti-abuse guardrail. Per-class system
+-- defaults (VOD: keep forever, DVR/clip: 30d) live in Commodore code,
+-- not in entitlements.
 INSERT INTO purser.tier_entitlements (tier_id, key, value)
 SELECT bt.id, 'recording_retention_days', to_jsonb(v.days)
 FROM purser.billing_tiers bt
 JOIN (VALUES
-    ('free', 7), ('supporter', 90), ('developer', 180), ('production', 365)
+    ('free', 30), ('supporter', 0), ('developer', 0), ('production', 0)
 ) AS v(tier_name, days) ON v.tier_name = bt.tier_name
 ON CONFLICT (tier_id, key) DO UPDATE SET value = EXCLUDED.value;
 
@@ -1220,8 +1223,9 @@ ON CONFLICT (artifact_hash) DO UPDATE SET
 -- which is bind-mounted into MistServer at /var/lib/mistserver/recordings.
 -- status='pending' is honest: the sidecar startup reconciliation will upload
 -- these to S3 (in dev environments with S3 creds) and flip them to 'uploaded'.
--- Until then chapter playback will gap them — never fake 'uploaded' with a
--- placeholder s3_key, since chapter playback presigns and serves that URL.
+-- Until then the segments stay as recovery-source-only durability for
+-- chapter finalization; chapter playback itself runs through the chapter's
+-- canonical .mkv VOD artifact, not these per-segment objects.
 
 INSERT INTO foghorn.dvr_segments (
     artifact_hash, segment_name, sequence,
@@ -1253,22 +1257,28 @@ ON CONFLICT (artifact_hash, segment_name) DO NOTHING;
 -- starts false; the startup reconciliation flips it to true (via
 -- FlagChaptersOverlappingSegment) if any segment turns lost_local.
 
--- chapter_id is the canonical BuildChapterID(artifact_hash, mode,
--- intervalSeconds=0, start_ms, end_ms) so chapter-sweeper / direct lookups
--- find this row instead of regenerating a sibling:
---   sha256("fedcba98765432109876543210fedcba|explicit_range|0|0|18000")[:32]
---   = 7b7144a4cdc7b787449107f93b4c66c5
+-- Demo chapter row: a single fixed-interval chapter covering the
+-- recorded DVR window. chapter_id is the canonical
+-- BuildChapterID(artifact_hash, mode, intervalSeconds, start_ms, end_ms)
+-- so chapter-sweeper / direct lookups find this row instead of
+-- regenerating a sibling:
+--   sha256("fedcba98765432109876543210fedcba|fixed_interval|3600|0|18000")[:32]
+--   = e1a3b65cb1c1bd0e9395f568a3e91ce1
+--
+-- State 'finalized' simulates the chapter finalization pipeline having
+-- produced a playback artifact; in demo mode there is no actual MKV,
+-- so playback_artifact_hash stays NULL.
 INSERT INTO foghorn.dvr_chapters (
-    chapter_id, artifact_hash, mode,
+    chapter_id, artifact_hash, mode, interval_seconds,
     start_ms, end_ms, is_current,
-    manifest_s3_key, materialized_at, last_rebuilt_at,
+    state, playback_artifact_hash,
     segment_count, has_gaps, created_at
 ) VALUES (
-    '7b7144a4cdc7b787449107f93b4c66c5',
+    'e1a3b65cb1c1bd0e9395f568a3e91ce1',
     'fedcba98765432109876543210fedcba',
-    'explicit_range',
+    'fixed_interval', 3600,
     0, 18000, false,
-    NULL, NULL, NULL,
+    'finalized', NULL,
     2, false,
     NOW() - INTERVAL '4 hours'
 )

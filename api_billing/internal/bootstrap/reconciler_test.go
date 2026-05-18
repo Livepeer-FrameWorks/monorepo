@@ -47,7 +47,7 @@ func twoTierFixture() []CatalogTier {
 			SupportLevel:    "community",
 			SLALevel:        "none",
 			MeteringEnabled: true,
-			Entitlements:    map[string]any{"recording_retention_days": 7},
+			Entitlements:    map[string]any{"recording_retention_days": 30},
 			PricingRules: []CatalogPricingRule{
 				{Meter: "delivered_minutes", Model: "tiered_graduated", UnitPrice: "0"},
 				{Meter: "average_storage_gb", Model: "tiered_graduated", UnitPrice: "0"},

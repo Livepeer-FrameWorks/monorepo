@@ -19,7 +19,8 @@ import (
 // upload completes the sidecar reports MarkDVRSegmentUploaded, transitioning
 // the row to 'uploaded'. Forced evictions report DVRSegmentDropped — those
 // transition the row to deleted_local (was_uploaded=true) or lost_local
-// (was_uploaded=false). Lost rows render as #EXT-X-GAP in chapter manifests.
+// (was_uploaded=false). Chapters that overlap a lost row fail
+// finalization with state=failed_source_missing.
 
 // presignTTL is how long an issued presigned PUT URL is valid. The sidecar
 // uploads immediately on receipt; allowing a generous TTL covers transient
@@ -172,8 +173,9 @@ func processMarkDVRSegmentUploaded(req *pb.MarkDVRSegmentUploaded, nodeID string
 }
 
 // processDVRSegmentDropped records a sidecar-reported eviction. was_uploaded
-// distinguishes safe local cleanup (deleted_local; chapter manifests remain
-// playable) from data loss (lost_local; chapter manifests emit #EXT-X-GAP).
+// distinguishes safe local cleanup (deleted_local; chapter finalization
+// recovers from S3) from data loss (lost_local; chapters overlapping the
+// row transition to failed_source_missing).
 func processDVRSegmentDropped(req *pb.DVRSegmentDropped, nodeID string, logger logging.Logger) {
 	dvrHash := req.GetDvrHash()
 	segmentName := req.GetSegmentName()
@@ -199,27 +201,17 @@ func processDVRSegmentDropped(req *pb.DVRSegmentDropped, nodeID string, logger l
 		}).Error("Failed to mark DVR segment dropped")
 	}
 	if !req.GetWasUploaded() {
-		// lost_local is the data-loss case; surface at warn so ops sees it.
+		// lost_local with was_uploaded=false is the data-loss case;
+		// surface at warn so ops sees it. Chapter finalization for any
+		// overlapping chapter will fall through to failed_source_missing
+		// if both local and S3 recovery are exhausted for this segment.
 		logger.WithFields(logging.Fields{
 			"dvr_hash":     dvrHash,
 			"segment_name": segmentName,
 			"reason":       reason,
 			"duration_ms":  req.GetDurationMs(),
 			"node_id":      nodeID,
-		}).Warn("DVR segment lost before S3 upload; chapter manifest will include #EXT-X-GAP")
-		// Invalidate any materialized chapters overlapping this segment so
-		// the next chapter-sweep tick re-materializes them with #EXT-X-GAP.
-		// Bounded: at most a handful of chapters overlap any single segment
-		// for any sane chapter mode; index-backed via
-		// idx_foghorn_dvr_chapters_overlap.
-		if affected, flagErr := FlagChaptersOverlappingSegment(ctx, dvrHash, req.GetMediaStartMs(), req.GetMediaEndMs()); flagErr != nil {
-			logger.WithError(flagErr).WithField("dvr_hash", dvrHash).Warn("Failed to flag overlapping chapters for has_gaps invalidation")
-		} else if affected > 0 {
-			logger.WithFields(logging.Fields{
-				"dvr_hash":          dvrHash,
-				"chapters_affected": affected,
-			}).Info("Flagged chapters has_gaps=true for re-materialization")
-		}
+		}).Warn("DVR segment lost before S3 upload; chapter finalization may degrade")
 	}
 }
 
@@ -430,6 +422,26 @@ func SendRetryDVRSegmentUpload(nodeID string, req *pb.RetryDVRSegmentUpload) err
 	msg := &pb.ControlMessage{
 		SentAt:  timestamppb.Now(),
 		Payload: &pb.ControlMessage_RetryDvrSegmentUpload{RetryDvrSegmentUpload: req},
+	}
+	return c.stream.Send(msg)
+}
+
+// SendReclaimDVRSegment asks the recording-origin Helmsman to delete
+// local TS segment files after every overlapping chapter has reached
+// state='frozen'. Idempotent on the sidecar side.
+func SendReclaimDVRSegment(nodeID string, req *pb.ReclaimDVRSegment) error {
+	if nodeID == "" {
+		return ErrNotConnected
+	}
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	msg := &pb.ControlMessage{
+		SentAt:  timestamppb.Now(),
+		Payload: &pb.ControlMessage_ReclaimDvrSegment{ReclaimDvrSegment: req},
 	}
 	return c.stream.Send(msg)
 }

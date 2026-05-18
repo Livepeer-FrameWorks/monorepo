@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 
 	"frameworks/api_balancing/internal/control"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -12,20 +11,20 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// Caller surface for chapter-aware playback:
-//   - RetrieveDVRChapter: materialize-on-request, returns chapter metadata.
-//   - ListDVRChapters:    paginated chapter index for player UI.
-//   - SetDVRChapterPolicy: change the artifact's default chapter mode.
+// Caller surface for chapter metadata. Chapters are produced by the
+// finalization queue as canonical .mkv VOD artifacts
+// (origin_type='dvr_chapter', library_visible=false). This RPC surface
+// reads the chapter row + its playback artifact; it never builds
+// manifests.
 //
-// All operate on UTC epoch ranges. Civil-time chapters (e.g. "yesterday in
-// Europe/Amsterdam") submit mode=explicit_range with caller-resolved
-// (start_ms, end_ms) — no timezone state lives in the backend.
+// All operate on UTC epoch ranges.
 
 const minAutomaticChapterIntervalSeconds int32 = 3600
 
-// RetrieveDVRChapter materializes cache-on-request chapter metadata. Playback
-// routes through MistServer using dvr+{chapter_id}; the response does not
-// expose object-store URLs.
+// RetrieveDVRChapter returns the chapter row metadata for a single
+// chapter. The chapter must already exist (the chapter sweeper opens
+// rows at boundary rotation); cache-on-request synthesis is not
+// supported in the new finalization model.
 func (s *FoghornGRPCServer) RetrieveDVRChapter(ctx context.Context, req *pb.RetrieveDVRChapterRequest) (*pb.RetrieveDVRChapterResponse, error) {
 	if req.GetDvrArtifactId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "dvr_artifact_id is required")
@@ -34,110 +33,77 @@ func (s *FoghornGRPCServer) RetrieveDVRChapter(ctx context.Context, req *pb.Retr
 		return nil, status.Error(codes.InvalidArgument, "end_ms must be greater than start_ms")
 	}
 	mode := req.GetMode()
-	if mode == "" {
-		mode = control.ChapterModeExplicitRange
+	switch mode {
+	case "", control.ChapterModeWindowSized, control.ChapterModeFixedInterval:
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "invalid mode: %q", mode)
 	}
-	if mode == control.ChapterModeFixedInterval && req.GetIntervalSeconds() <= 0 {
-		return nil, status.Error(codes.InvalidArgument, "interval_seconds is required for fixed_interval mode")
+	if mode == "" {
+		policy, hasPolicy, err := control.ReadDVRChapterPolicy(ctx, req.GetDvrArtifactId())
+		if err != nil {
+			return nil, status.Error(codes.Internal, "failed to read chapter policy")
+		}
+		if !hasPolicy {
+			return nil, status.Error(codes.FailedPrecondition, "DVR has no chapter policy")
+		}
+		mode = policy.Mode
 	}
 	if mode == control.ChapterModeFixedInterval && req.GetIntervalSeconds() < minAutomaticChapterIntervalSeconds {
 		return nil, status.Errorf(codes.InvalidArgument, "interval_seconds must be at least %d for fixed_interval mode", minAutomaticChapterIntervalSeconds)
 	}
-
 	if err := s.assertChapterTenant(ctx, req.GetDvrArtifactId(), req.GetTenantId()); err != nil {
 		return nil, err
 	}
-	maxRangeMs, err := control.DVRChapterMaxRangeMs(ctx, s.db, req.GetDvrArtifactId(), "")
-	if err != nil {
-		return nil, status.Error(codes.NotFound, "DVR artifact not found")
-	}
-	if req.GetEndMs()-req.GetStartMs() > maxRangeMs {
-		return nil, status.Errorf(codes.InvalidArgument, "chapter range exceeds maximum %dms", maxRangeMs)
-	}
-	if mode == control.ChapterModeFixedInterval && int64(req.GetIntervalSeconds())*1000 > maxRangeMs {
-		return nil, status.Errorf(codes.InvalidArgument, "interval_seconds exceeds maximum %d", maxRangeMs/1000)
-	}
 	intervalSeconds := req.GetIntervalSeconds()
-	policy, hasPolicy, policyErr := control.ReadDVRChapterPolicy(ctx, req.GetDvrArtifactId())
-	if policyErr != nil {
-		s.logger.WithError(policyErr).WithField("artifact_hash", req.GetDvrArtifactId()).Warn("Failed to read DVR chapter policy")
-		return nil, status.Error(codes.Internal, "failed to read chapter policy")
-	}
-	if mode == control.ChapterModeWindowSized && hasPolicy {
-		intervalSeconds = policy.EffectiveIntervalSeconds()
-	}
-
-	activeForPolicy := func(p control.DVRChapterPolicy, ok bool) bool {
-		if !ok || !control.DVRArtifactStillRecording(ctx, req.GetDvrArtifactId()) || mode != p.Mode || intervalSeconds != p.EffectiveIntervalSeconds() {
-			return false
+	if mode == control.ChapterModeWindowSized {
+		policy, hasPolicy, policyErr := control.ReadDVRChapterPolicy(ctx, req.GetDvrArtifactId())
+		if policyErr != nil {
+			return nil, status.Error(codes.Internal, "failed to read chapter policy")
 		}
-		currentStart, currentEnd, boundsOK := control.CurrentChapterBounds(p.Mode, intervalSeconds, p.StartedAtMs, time.Now().UnixMilli())
-		return boundsOK && req.GetStartMs() == currentStart && req.GetEndMs() == currentEnd
+		if hasPolicy {
+			intervalSeconds = policy.EffectiveIntervalSeconds()
+		}
 	}
-
 	chapterID := control.BuildChapterID(req.GetDvrArtifactId(), mode, intervalSeconds, req.GetStartMs(), req.GetEndMs())
-	existing, err := control.GetChapter(ctx, chapterID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	row, err := control.GetChapter(ctx, chapterID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Error(codes.NotFound, "chapter not found")
+		}
 		s.logger.WithError(err).WithField("chapter_id", chapterID).Error("Failed to read chapter row")
 		return nil, status.Error(codes.Internal, "failed to read chapter")
 	}
-
-	isActive := activeForPolicy(policy, hasPolicy)
-
-	// (Re)materialize when missing, when gap invalidation marked the row dirty, or
-	// when this is the active current chapter (the sweeper will keep it
-	// fresh on the next tick anyway, but cache-on-request gets the caller
-	// a non-stale manifest immediately).
-	needsBuild := existing == nil || !existing.MaterializedAt.Valid || !existing.LastRebuiltAt.Valid || isActive
-	if needsBuild {
-		build := func(active bool) error {
-			_, _, buildErr := control.GenerateChapter(ctx, control.GenerateChapterOptions{
-				ArtifactHash:    req.GetDvrArtifactId(),
-				Mode:            mode,
-				IntervalSeconds: intervalSeconds,
-				StartMs:         req.GetStartMs(),
-				EndMs:           req.GetEndMs(),
-				IsActive:        active,
-			}, s.logger)
-			return buildErr
-		}
-		var buildErr error
-		if isActive {
-			buildErr = control.WithDVRChapterMutationLock(ctx, req.GetDvrArtifactId(), func() error {
-				lockedPolicy, lockedHasPolicy, lockedErr := control.ReadDVRChapterPolicy(ctx, req.GetDvrArtifactId())
-				if lockedErr != nil {
-					return lockedErr
-				}
-				isActive = activeForPolicy(lockedPolicy, lockedHasPolicy)
-				return build(isActive)
-			})
-		} else {
-			buildErr = build(false)
-		}
-		if buildErr != nil {
-			s.logger.WithError(buildErr).WithField("chapter_id", chapterID).Error("Failed to materialize chapter")
-			return nil, status.Error(codes.Internal, "failed to materialize chapter")
-		}
-	}
-
-	// Re-read for fresh has_gaps / segment_count after the build.
-	row, err := control.GetChapter(ctx, chapterID)
-	if err != nil || row == nil {
-		s.logger.WithError(err).WithField("chapter_id", chapterID).Warn("Chapter row missing after materialization")
-		return nil, status.Error(codes.Internal, "chapter row missing after materialization")
-	}
 	resp := &pb.RetrieveDVRChapterResponse{
-		ChapterId:     row.ChapterID,
-		ManifestS3Key: row.ManifestS3Key.String,
-		ManifestUrl:   control.DVRChapterPlaybackID(row.ChapterID),
-		IsCurrent:     row.IsCurrent,
-		HasGaps:       row.HasGaps,
-		SegmentCount:  row.SegmentCount,
+		ChapterId:    row.ChapterID,
+		State:        row.State,
+		IsCurrent:    row.IsCurrent,
+		HasGaps:      row.HasGaps,
+		SegmentCount: row.SegmentCount,
+		StartMs:      row.StartMs,
+		EndMs:        row.EndMs,
+	}
+	if row.PlaybackArtifactHash.Valid {
+		resp.PlaybackArtifactHash = row.PlaybackArtifactHash.String
+	}
+	if row.PlaybackID.Valid {
+		resp.PlaybackId = row.PlaybackID.String
+	}
+	if row.LastFailureReason.Valid {
+		resp.LastFailureReason = row.LastFailureReason.String
+	}
+	if row.ActualMediaStartMs.Valid {
+		resp.ActualMediaStartMs = row.ActualMediaStartMs.Int64
+	}
+	if row.ActualMediaEndMs.Valid {
+		resp.ActualMediaEndMs = row.ActualMediaEndMs.Int64
 	}
 	return resp, nil
 }
 
 // ListDVRChapters returns a paginated chapter index for player UI.
+// Virtual chapters (computed from the artifact's policy) overlay
+// materialized rows so the player can address future boundaries
+// before the sweeper opens them.
 func (s *FoghornGRPCServer) ListDVRChapters(ctx context.Context, req *pb.ListDVRChaptersRequest) (*pb.ListDVRChaptersResponse, error) {
 	if req.GetDvrArtifactId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "dvr_artifact_id is required")
@@ -168,11 +134,7 @@ func (s *FoghornGRPCServer) ListDVRChapters(ctx context.Context, req *pb.ListDVR
 			return nil, status.Errorf(codes.InvalidArgument, "interval_seconds exceeds maximum %d", maxRangeMs/1000)
 		}
 	}
-	listFn := control.ListChaptersForArtifact
-	if mode != control.ChapterModeExplicitRange {
-		listFn = control.ListVirtualChaptersForArtifact
-	}
-	rows, nextToken, err := listFn(
+	rows, nextToken, err := control.ListVirtualChaptersForArtifact(
 		ctx,
 		req.GetDvrArtifactId(),
 		mode,
@@ -188,17 +150,33 @@ func (s *FoghornGRPCServer) ListDVRChapters(ctx context.Context, req *pb.ListDVR
 	}
 	out := make([]*pb.ChapterRef, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, &pb.ChapterRef{
+		ref := &pb.ChapterRef{
 			ChapterId:       r.ChapterID,
 			Mode:            r.Mode,
 			IntervalSeconds: r.IntervalSeconds.Int32,
 			StartMs:         r.StartMs,
 			EndMs:           r.EndMs,
 			IsCurrent:       r.IsCurrent,
-			ManifestS3Key:   r.ManifestS3Key.String,
+			State:           r.State,
 			HasGaps:         r.HasGaps,
 			SegmentCount:    r.SegmentCount,
-		})
+		}
+		if r.PlaybackArtifactHash.Valid {
+			ref.PlaybackArtifactHash = r.PlaybackArtifactHash.String
+		}
+		if r.PlaybackID.Valid {
+			ref.PlaybackId = r.PlaybackID.String
+		}
+		if r.LastFailureReason.Valid {
+			ref.LastFailureReason = r.LastFailureReason.String
+		}
+		if r.ActualMediaStartMs.Valid {
+			ref.ActualMediaStartMs = r.ActualMediaStartMs.Int64
+		}
+		if r.ActualMediaEndMs.Valid {
+			ref.ActualMediaEndMs = r.ActualMediaEndMs.Int64
+		}
+		out = append(out, ref)
 	}
 	return &pb.ListDVRChaptersResponse{
 		Chapters:      out,
@@ -206,71 +184,10 @@ func (s *FoghornGRPCServer) ListDVRChapters(ctx context.Context, req *pb.ListDVR
 	}, nil
 }
 
-// SetDVRChapterPolicy updates the artifact's default chapter mode.
-func (s *FoghornGRPCServer) SetDVRChapterPolicy(ctx context.Context, req *pb.SetDVRChapterPolicyRequest) (*pb.SetDVRChapterPolicyResponse, error) {
-	if req.GetDvrArtifactId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "dvr_artifact_id is required")
-	}
-	mode := req.GetMode()
-	switch mode {
-	case "", control.ChapterModeWindowSized, control.ChapterModeFixedInterval:
-		// valid
-	default:
-		return nil, status.Errorf(codes.InvalidArgument, "invalid mode: %q", mode)
-	}
-	if mode == control.ChapterModeFixedInterval && req.GetIntervalSeconds() <= 0 {
-		return nil, status.Error(codes.InvalidArgument, "interval_seconds is required for fixed_interval mode")
-	}
-	if mode == control.ChapterModeFixedInterval && req.GetIntervalSeconds() < minAutomaticChapterIntervalSeconds {
-		return nil, status.Errorf(codes.InvalidArgument, "interval_seconds must be at least %d for fixed_interval mode", minAutomaticChapterIntervalSeconds)
-	}
-	if err := s.assertChapterTenant(ctx, req.GetDvrArtifactId(), req.GetTenantId()); err != nil {
-		return nil, err
-	}
-	maxRangeMs, err := control.DVRChapterMaxRangeMs(ctx, s.db, req.GetDvrArtifactId(), "")
-	if err != nil {
-		return nil, status.Error(codes.NotFound, "DVR artifact not found")
-	}
-	if mode == control.ChapterModeFixedInterval && int64(req.GetIntervalSeconds())*1000 > maxRangeMs {
-		return nil, status.Errorf(codes.InvalidArgument, "interval_seconds exceeds maximum %d", maxRangeMs/1000)
-	}
-
-	err = control.WithDVRChapterMutationLock(ctx, req.GetDvrArtifactId(), func() error {
-		if cErr := control.FinalizeCurrentChapter(ctx, req.GetDvrArtifactId(), s.logger); cErr != nil {
-			s.logger.WithError(cErr).WithField("artifact_hash", req.GetDvrArtifactId()).Error("SetDVRChapterPolicy: close current chapter failed")
-			return status.Error(codes.Internal, "failed to close current chapter")
-		}
-
-		var intervalArg interface{}
-		if req.GetIntervalSeconds() > 0 {
-			intervalArg = req.GetIntervalSeconds()
-		}
-		var modeArg interface{}
-		if mode != "" {
-			modeArg = mode
-		}
-		if _, updateErr := s.db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			   SET dvr_chapter_mode     = $2::text,
-			       dvr_chapter_interval = $3::int,
-			       updated_at           = NOW()
-			 WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-		`, req.GetDvrArtifactId(), modeArg, intervalArg); updateErr != nil {
-			s.logger.WithError(updateErr).Error("SetDVRChapterPolicy: failed to update artifact policy")
-			return status.Error(codes.Internal, "failed to update chapter policy")
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &pb.SetDVRChapterPolicyResponse{Success: true, Message: "chapter policy updated"}, nil
-}
-
 // assertChapterTenant verifies the tenant_id on the request matches the
-// artifact's owner. Empty tenant_id on the request is allowed for internal
-// callers (federation / sweeper); external HTTP exposure should always
-// pass a tenant_id (api_gateway enforces).
+// artifact's owner. Empty tenant_id on the request is allowed for
+// internal callers (federation / sweeper); external HTTP exposure
+// should always pass a tenant_id (api_gateway enforces).
 func (s *FoghornGRPCServer) assertChapterTenant(ctx context.Context, artifactHash, claimedTenantID string) error {
 	if claimedTenantID == "" {
 		return nil

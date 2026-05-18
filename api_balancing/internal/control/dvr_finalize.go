@@ -20,16 +20,19 @@ import (
 // Inside finalizing:
 //   1. Bounded retry of pending/failed_upload segments via
 //      RetryDVRSegmentUpload (sidecar re-attempts + emits MarkDVRSegmentUploaded).
-//   2. Reclassify remaining non-uploaded rows as lost_local.
-//   3. Close the active current chapter by writing its VOD-shaped manifest
-//      with #EXT-X-ENDLIST and then flipping is_current=false.
+//   2. Reclassify remaining non-uploaded rows as lost_local. Chapters
+//      overlapping a lost_local row move to failed_source_missing at
+//      finalization (all-or-nothing chapter artifacts).
+//   3. Close the active current chapter row by flipping is_current=false
+//      and state=closed; the finalization queue then produces the chapter
+//      VOD artifact.
 //   4. Compute retention_until from the persisted dvr_retention_days
 //      snapshot (post-end semantics; tier days at start, applied at end).
 //   5. Transition the artifact: completed | completed_partial | failed.
 //
-// Archive playback is chapter-only; no whole-artifact manifest is written
-// to S3. Replay viewers go through RetrieveDVRChapter for bounded views
-// over the dvr_segments ledger.
+// Replay viewers use chapter VOD artifacts; no whole-artifact playlist
+// is written. Each chapter is addressed by its Commodore-minted public
+// playback_id (commodore.dvr_chapter_playback).
 
 // FinalizeRetrySeconds bounds how long FinalizeDVR will wait for outstanding
 // pending/failed_upload segments before classifying them as lost_local. The
@@ -115,7 +118,7 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 		logger.WithError(err).Warn("Failed to reclassify remaining segments as lost_local")
 	}
 	if lost > 0 {
-		logger.WithField("segments_lost", lost).Warn("DVR finalized with lost segments; chapter manifests will include #EXT-X-GAP")
+		logger.WithField("segments_lost", lost).Warn("DVR finalized with lost segments; chapters overlapping a lost segment will move to failed_source_missing")
 	}
 
 	// Compute retention_until from the persisted dvr_retention_days column,
@@ -165,10 +168,15 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 		finalStatus = "completed_partial"
 	}
 
+	// Close the terminal in-flight chapter. Truncates end_ms to the
+	// recording's ended_at when the recording stopped mid-interval.
+	// The closed row enters the finalization queue, which produces the
+	// canonical .mkv chapter artifact in the background.
+	terminalMs := endedAt.UnixMilli()
 	if cErr := WithDVRChapterMutationLock(ctx, dvrHash, func() error {
-		return FinalizeCurrentChapter(ctx, dvrHash, logger)
+		return CloseTerminalChapter(ctx, dvrHash, terminalMs, logger)
 	}); cErr != nil {
-		logger.WithError(cErr).WithField("dvr_hash", dvrHash).Warn("FinalizeDVR: close current chapter failed")
+		logger.WithError(cErr).WithField("dvr_hash", dvrHash).Warn("FinalizeDVR: close terminal chapter failed")
 	}
 
 	if _, err := db.ExecContext(ctx, `
@@ -190,14 +198,12 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 		"segments_uploaded": uploadedCount,
 		"segments_lost":     lostCount,
 		"retention_days":    retentionDays,
-	}).Info("DVR finalized (manifest is chapter-only, no whole-artifact write)")
+	}).Info("DVR finalized")
 
 	result := FinalizeResult{
 		ArtifactStatus: finalStatus,
-		// ManifestPath intentionally empty: archive playback is chapter-only;
-		// the canonical "what to play" surface is RetrieveDVRChapter.
-		UploadedCount: uploadedCount,
-		LostCount:     lostCount,
+		UploadedCount:  uploadedCount,
+		LostCount:      lostCount,
 	}
 	if backfillErr := backfillDVRRetention(ctx, dvrHash, retentionUntilArg); backfillErr != nil {
 		logger.WithError(backfillErr).WithField("dvr_hash", dvrHash).Error("DVR retention back-fill failed")

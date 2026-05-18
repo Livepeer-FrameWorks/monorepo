@@ -1,0 +1,337 @@
+package relay
+
+// Block-aware cold-fetch + serve. The relay's only persistent caching
+// path for single-file artifacts: each missing block is fetched from
+// S3 with a block-aligned Range GET, streamed to the client through a
+// range-clamped writer, and tee'd to a tmpfile that becomes the
+// canonical .blk on full successful download. Disk side is best-
+// effort; client side never waits on it.
+//
+// Concurrency: same-block cold fan-out coalesces via
+// blockFetchCoalescer when admission grants CacheToDisk — the first
+// viewer (leader) runs the S3 fetch + disk write + its own client
+// stream, late viewers wait briefly for the leader and then serve
+// from the warm block. Memory-only viewers bypass the coalescer
+// (no shared warm file to wait for) and each issue their own S3
+// range fetch.
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+
+	"frameworks/api_sidecar/internal/admission"
+)
+
+// serveViaBlockCache is the relay's cold-playback entrypoint for
+// single-file artifacts. It assumes res.ExpectedSizeBytes is set
+// (Foghorn always returns it for vod/clip/upload); when zero the path
+// falls back to a single S3 pass-through because block math needs the
+// total size up-front.
+func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult) {
+	totalSize := int64(res.ExpectedSizeBytes)
+	if totalSize <= 0 {
+		// Unknown size — block layout needs the upper bound. Fall back to
+		// memory-only pass-through; subsequent reads with a known size
+		// will populate the block cache.
+		s.streamRangeNoCache(c, res)
+		return
+	}
+
+	// Build a BlockStore handle but defer disk-touching setup (mkdir,
+	// EnsureMeta) until after admission. Under pressure admission
+	// returns CacheMemoryOnly and we must avoid creating .blocks/ +
+	// meta.json — pure S3 → memory passthrough is the contract.
+	store := NewBlockStore(localPath, s.blockSize)
+	cacheDecision := admission.CacheMemoryOnly
+	if s.admitter != nil {
+		dec, admitErr := s.admitter.Decide(c.Request.Context(), store.Dir(), admission.IntentPlaybackCache, uint64(store.BlockSize()))
+		if admitErr != nil && s.logger != nil {
+			s.logger.WithError(admitErr).WithField("local_path", localPath).Debug("blockcache: admission errored; degrading to memory-only")
+		}
+		cacheDecision = dec
+	}
+	// CacheReject means admission decided this request can't proceed
+	// (boot pause, truly full disk). Surface 503 with Retry-After so
+	// Mist retries and Foghorn can route elsewhere — silently degrading
+	// to S3-memory would hide a real pressure event.
+	if cacheDecision == admission.CacheReject {
+		c.Writer.Header().Set("Retry-After", "5")
+		c.AbortWithStatus(http.StatusServiceUnavailable)
+		return
+	}
+
+	// Disk-touching block-store setup happens only for CacheToDisk. For
+	// CacheMemoryOnly we still need block math (BlockSize, BlockPath,
+	// spansForRange), but no directory or meta file should land on
+	// disk. If EnsureMeta fails for the disk-cache decision, degrade to
+	// memory-only rather than failing the request.
+	if cacheDecision == admission.CacheToDisk {
+		store.CleanTmps()
+		if _, err := store.EnsureMeta(hash, ext, totalSize); err != nil {
+			if s.logger != nil {
+				s.logger.WithError(err).WithField("local_path", localPath).Debug("blockcache: EnsureMeta failed; degrading to memory-only")
+			}
+			cacheDecision = admission.CacheMemoryOnly
+		}
+	}
+
+	// Distinguish "Range header absent" (full-object 200 OK) from
+	// "Range header present but malformed/unsatisfiable" (must be 416,
+	// not silent 200).
+	rangeHeader := c.Request.Header.Get("Range")
+	start, end, hasRange := parseRangeHeader(rangeHeader, totalSize)
+	if rangeHeader != "" && !hasRange {
+		c.Writer.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", totalSize))
+		c.AbortWithStatus(http.StatusRequestedRangeNotSatisfiable)
+		return
+	}
+	if !hasRange {
+		start, end = 0, totalSize-1
+	}
+	if start > totalSize-1 {
+		c.Writer.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", totalSize))
+		c.AbortWithStatus(http.StatusRequestedRangeNotSatisfiable)
+		return
+	}
+
+	spans := spansForRange(start, end, store.BlockSize())
+	if len(spans) == 0 {
+		c.AbortWithStatus(http.StatusRequestedRangeNotSatisfiable)
+		return
+	}
+
+	// Headers. 206 for ranged requests, 200 for full asset; Content-Range
+	// only on 206. Content-Length is the served byte count, not
+	// total_size, when ranged.
+	served := end - start + 1
+	if res.ContentType != "" {
+		c.Writer.Header().Set("Content-Type", res.ContentType)
+	}
+	c.Writer.Header().Set("Accept-Ranges", "bytes")
+	c.Writer.Header().Set("Content-Length", strconv.FormatInt(served, 10))
+	if hasRange {
+		c.Writer.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, totalSize))
+		c.Writer.WriteHeader(http.StatusPartialContent)
+	} else {
+		c.Writer.WriteHeader(http.StatusOK)
+	}
+
+	for _, span := range spans {
+		if err := s.serveBlockSpan(c.Request.Context(), c.Writer, store, span, totalSize, res.MediaPresignedURL, cacheDecision); err != nil {
+			if s.logger != nil && !isClientGone(err) {
+				s.logger.WithError(err).WithField("block_idx", span.Idx).Debug("blockcache: span serve aborted")
+			}
+			return
+		}
+	}
+}
+
+// serveBlockSpan serves a single block's worth of bytes (clipped to
+// [from,to] within the block). Warm path: open the disk block and copy
+// the requested slice. Cold path: stream from S3 through a tolerant
+// tee — bytes go to the client (range-clamped) AND to a disk tmpfile
+// for the cache. First byte to client == first byte from S3; the
+// client never waits for the full block to land. If the disk side
+// fails (full, slow, permissions), the cache write is abandoned mid-
+// stream and the client continues to receive bytes from S3.
+//
+// Same-block cold-fan-out is coalesced when admission allows
+// CacheToDisk: the first viewer (leader) does the S3 fetch + disk
+// write + its own client stream; subsequent viewers wait briefly for
+// the leader to publish the warm block, then serve directly from
+// disk. Without coalescing, N viewers on the same cold block would
+// fire N parallel S3 range GETs and N tmpfiles. Memory-only viewers
+// bypass the coalescer (no shared warm file to wait for).
+func (s *Server) serveBlockSpan(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL string, decision admission.CacheDecision) error {
+	if served, err := s.serveWarmBlock(w, store, span); served || err != nil {
+		return err
+	}
+	if decision != admission.CacheToDisk || s.coldFetch == nil {
+		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, decision)
+	}
+
+	key := fmt.Sprintf("%s|%d", store.Dir(), span.Idx)
+	leader, fetch := s.coldFetch.claim(key)
+	if !leader {
+		// Late arrival: wait for the leader, then read the warm block.
+		// If the leader's disk write failed, fall through to an own
+		// S3 fetch (no coalescing this time).
+		select {
+		case <-fetch.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if fetch.diskOk {
+			if served, err := s.serveWarmBlock(w, store, span); served || err != nil {
+				return err
+			}
+		}
+		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, decision)
+	}
+
+	// Leader path: run the fetch, then publish disk-write outcome.
+	err := s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, decision)
+	s.coldFetch.finish(key, err == nil && store.HasBlock(span.Idx))
+	return err
+}
+
+// serveWarmBlock attempts to serve span from a warm on-disk block.
+// Returns (true, nil) when served, (false, nil) when no warm block
+// exists, (false, err) on I/O failure. A successful read records a
+// HeatTracker touch on the .blocks dir so cleanup/pressure eviction
+// see repeated playback as recency, not stale mtime.
+func (s *Server) serveWarmBlock(w io.Writer, store *BlockStore, span blockSpan) (bool, error) {
+	if !store.HasBlock(span.Idx) {
+		return false, nil
+	}
+	f, err := store.ReadBlock(span.Idx)
+	if err != nil {
+		return false, fmt.Errorf("open block %d: %w", span.Idx, err)
+	}
+	defer f.Close()
+	if span.From > 0 {
+		if _, seekErr := f.Seek(span.From, io.SeekStart); seekErr != nil {
+			return false, fmt.Errorf("seek block %d to %d: %w", span.Idx, span.From, seekErr)
+		}
+	}
+	if _, err := io.CopyN(w, f, span.To-span.From+1); err != nil {
+		return true, err
+	}
+	if s.heat != nil {
+		s.heat.Touch(store.Dir())
+	}
+	return true, nil
+}
+
+// streamBlockFromS3 issues a block-aligned S3 Range GET and streams
+// bytes to the client (range-clamped to the requested span) and,
+// opportunistically, to a tmp cache file. The tmp file is fsync+rename
+// to the canonical block path only on full successful download. Any
+// disk-side failure mid-stream is silently swallowed (the cache simply
+// doesn't land this time); the client keeps receiving bytes.
+//
+// Same-block fan-out: callers of streamBlockFromS3 with CacheToDisk
+// have already gone through the blockFetchCoalescer in serveBlockSpan,
+// so at most one leader reaches here per (asset, block). Memory-only
+// viewers bypass the coalescer and each issue their own S3 range
+// fetch. The first writer to finish wins the rename; later writers
+// see the warm block exists and drop their tmpfile.
+func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL string, decision admission.CacheDecision) error {
+	blockStart, blockEnd := store.BlockRange(span.Idx, totalSize)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
+	if err != nil {
+		return fmt.Errorf("build s3 block request: %w", err)
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", blockStart, blockEnd))
+	resp, err := s.httpc.Do(req)
+	if err != nil {
+		return fmt.Errorf("s3 block fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent {
+		// 200 OK is acceptable only when the requested range covers the
+		// whole asset — otherwise the upstream ignored Range and would
+		// pollute block N with bytes from the start of the object.
+		if resp.StatusCode != http.StatusOK || blockStart != 0 || blockEnd != totalSize-1 {
+			return fmt.Errorf("s3 block status %d (Range ignored?)", resp.StatusCode)
+		}
+	}
+
+	// Client side: range-clamped writer that only forwards the
+	// [span.From, span.To] subrange to the caller's writer. Tracks
+	// position relative to the block (offset 0 == blockStart).
+	clientSide := newClampedWriter(w, span.From, span.To)
+
+	// Disk side: tmp file we'll rename into the canonical block path
+	// on success. May be nil if admission disabled caching or if we
+	// can't open the tmpfile (degrade silently to client-only stream).
+	var (
+		tmpFile *os.File
+		tmpPath string
+	)
+	if decision == admission.CacheToDisk {
+		if mkErr := os.MkdirAll(store.Dir(), 0o755); mkErr == nil {
+			tmpPath = store.BlockPath(span.Idx) + ".tmp"
+			if f, openErr := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644); openErr == nil {
+				tmpFile = f
+			} else if s.logger != nil {
+				s.logger.WithError(openErr).WithField("block_idx", span.Idx).Debug("blockcache: open tmp failed; streaming without cache")
+			}
+		}
+	}
+
+	var (
+		tee    io.Writer = clientSide
+		teeTol *tolerantTee
+	)
+	if tmpFile != nil {
+		teeTol = newTolerantTee(clientSide, tmpFile, func(diskErr error) {
+			if s.logger != nil {
+				s.logger.WithError(diskErr).WithField("block_idx", span.Idx).Debug("blockcache: disk write failed or fell behind mid-stream; abandoning cache for this block")
+			}
+		})
+		tee = teeTol
+	}
+
+	// 256 KiB copy buffer — sized for syscall economy without holding
+	// any meaningful heap. Memory peak per in-flight fetch is this
+	// buffer plus the kernel's socket/file buffers plus the
+	// tolerantTee channel headroom (~4 buffers).
+	copyBuf := make([]byte, 256*1024)
+	expected := blockEnd - blockStart + 1
+	n, copyErr := io.CopyBuffer(tee, io.LimitReader(resp.Body, expected), copyBuf)
+	if teeTol != nil {
+		teeTol.Close() // drain the disk worker so SecondaryAlive reflects final state
+	}
+
+	// Disk-side close+rename happens only on a clean full transfer AND
+	// when the async disk writer kept up with every chunk. Anything
+	// else — short read, copy error, client gone, disk fell behind —
+	// means the tmpfile is incomplete and gets removed.
+	if tmpFile != nil {
+		if copyErr == nil && n == expected && teeTol != nil && teeTol.SecondaryAlive() {
+			syncErr := tmpFile.Sync()
+			closeErr := tmpFile.Close()
+			if syncErr == nil && closeErr == nil {
+				if renameErr := os.Rename(tmpPath, store.BlockPath(span.Idx)); renameErr != nil {
+					if s.logger != nil {
+						s.logger.WithError(renameErr).WithField("block_idx", span.Idx).Debug("blockcache: rename failed")
+					}
+					_ = os.Remove(tmpPath)
+				}
+			} else {
+				_ = os.Remove(tmpPath)
+			}
+		} else {
+			_ = tmpFile.Close()
+			_ = os.Remove(tmpPath)
+		}
+	}
+
+	if copyErr != nil {
+		return copyErr
+	}
+	if n != expected {
+		return fmt.Errorf("block %d short: copied %d bytes, expected %d", span.Idx, n, expected)
+	}
+	return nil
+}
+
+func isClientGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	// http.ErrAbortHandler, io.ErrShortWrite, and broken-pipe / connection-reset
+	// from client disconnects all look the same: not actionable, just log debug.
+	msg := err.Error()
+	return strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "context canceled")
+}

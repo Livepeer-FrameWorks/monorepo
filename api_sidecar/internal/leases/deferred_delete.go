@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // DeleterFunc executes a real delete for one AssetType/AssetHash. Returns
@@ -31,6 +33,21 @@ type DeferredStore struct {
 	entries   map[string]PendingDelete // key = assetType + "|" + assetHash
 	deleter   DeleterFunc
 	onDeleted func(p PendingDelete, bytes uint64)
+	logger    logging.Logger // optional; nil-safe via persistErr()
+}
+
+// SetLogger attaches a logger used by paths that can't propagate
+// persistence errors to a caller (notably Forget, which runs from a
+// background drain loop). Enqueue propagates its persistence error to
+// the caller directly, but the logger lets non-Enqueue mutations
+// surface failures without going silent.
+func (s *DeferredStore) SetLogger(l logging.Logger) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logger = l
 }
 
 const deferredFilename = ".pending-deletes.json"
@@ -68,9 +85,14 @@ func (s *DeferredStore) Load() error {
 	return nil
 }
 
-func (s *DeferredStore) Enqueue(p PendingDelete) {
+// Enqueue records an operator delete intent and persists the updated
+// queue to disk before returning. Returns the persistence error when
+// the on-disk write fails — callers must surface that to the control
+// plane rather than treating the intent as durably queued, because the
+// in-memory entry alone disappears on Helmsman restart.
+func (s *DeferredStore) Enqueue(p PendingDelete) error {
 	if s == nil || p.AssetHash == "" {
-		return
+		return nil
 	}
 	if p.Queued.IsZero() {
 		p.Queued = time.Now()
@@ -78,7 +100,13 @@ func (s *DeferredStore) Enqueue(p PendingDelete) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries[deferredKey(p.AssetType, p.AssetHash)] = p
-	_ = s.persistLocked() //nolint:errcheck // persistence is best-effort; queue survives in-memory and re-persists on next mutation
+	if err := s.persistLocked(); err != nil {
+		if s.logger != nil {
+			s.logger.WithError(err).WithField("path", s.path).Error("Deferred-delete persistence failed; in-memory entry will disappear on restart")
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *DeferredStore) List() []PendingDelete {
@@ -101,7 +129,9 @@ func (s *DeferredStore) Forget(assetType, assetHash string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.entries, deferredKey(assetType, assetHash))
-	_ = s.persistLocked() //nolint:errcheck // persistence is best-effort; queue survives in-memory and re-persists on next mutation
+	if err := s.persistLocked(); err != nil && s.logger != nil {
+		s.logger.WithError(err).WithField("path", s.path).Warn("Deferred-delete persistence failed; queue intact in memory but a restart will lose operator intent")
+	}
 }
 
 func (s *DeferredStore) Count() int {

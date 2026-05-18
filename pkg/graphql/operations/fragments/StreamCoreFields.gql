@@ -19,6 +19,13 @@ fragment StreamCoreFields on Stream {
     spriteJpgUrl
     assetKey
   }
+  dvrChapterMode
+  dvrChapterIntervalSeconds
+  retentionOverrides {
+    streamId
+    dvrRetentionDaysOverride
+    clipRetentionDaysOverride
+  }
   createdAt
   updatedAt
 }

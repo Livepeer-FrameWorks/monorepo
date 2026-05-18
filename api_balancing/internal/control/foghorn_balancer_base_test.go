@@ -45,12 +45,17 @@ func TestComposeConfigSeedScopesRealtimeToProcessing(t *testing.T) {
 	want := map[string]bool{
 		"live":       false,
 		"vod":        false,
+		"dvr":        false,
 		"processing": true,
 		"pull":       false,
 	}
 	for name, realtime := range want {
-		if realtimeByName[name] != realtime {
-			t.Fatalf("template %q realtime = %v, want %v", name, realtimeByName[name], realtime)
+		got, ok := realtimeByName[name]
+		if !ok {
+			t.Fatalf("template %q missing from ConfigSeed", name)
+		}
+		if got != realtime {
+			t.Fatalf("template %q realtime = %v, want %v", name, got, realtime)
 		}
 	}
 }

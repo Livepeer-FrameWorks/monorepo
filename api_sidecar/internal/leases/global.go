@@ -7,8 +7,8 @@ import (
 )
 
 // CleanupState reflects whether destructive cleanup paths may run. At boot
-// the state is StateBootPaused until chapter rehydration completes AND one
-// successful Mist reconciliation has happened.
+// the state is StateBootPaused until one successful Mist reconciliation
+// has happened.
 type CleanupState int32
 
 const (
@@ -19,28 +19,25 @@ const (
 // Process-global instances. Construct once in main; access via the package
 // accessors below.
 var (
-	globalMu              sync.RWMutex
-	globalTracker         *Tracker
-	globalSourceRegistry  *SourceRegistry
-	globalChapterRegistry *ChapterRegistry
-	globalHeat            *HeatTracker
-	globalDeferredStore   *DeferredStore
+	globalMu             sync.RWMutex
+	globalTracker        *Tracker
+	globalSourceRegistry *SourceRegistry
+	globalHeat           *HeatTracker
+	globalDeferredStore  *DeferredStore
 
-	cleanupState         = int32(StateBootPaused)
-	chapterRehydrateDone = false
-	mistReconcileDone    = false
-	bootMu               sync.Mutex
+	cleanupState      = int32(StateBootPaused)
+	mistReconcileDone = false
+	bootMu            sync.Mutex
 )
 
 // Install wires the singletons. Safe to call once at startup. Subsequent
 // calls overwrite, which is useful for tests; production callers should
 // invoke this exactly once.
-func Install(tracker *Tracker, sources *SourceRegistry, chapters *ChapterRegistry, heat *HeatTracker, deferred *DeferredStore) {
+func Install(tracker *Tracker, sources *SourceRegistry, heat *HeatTracker, deferred *DeferredStore) {
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	globalTracker = tracker
 	globalSourceRegistry = sources
-	globalChapterRegistry = chapters
 	globalHeat = heat
 	globalDeferredStore = deferred
 }
@@ -55,12 +52,6 @@ func GlobalSourceRegistry() *SourceRegistry {
 	globalMu.RLock()
 	defer globalMu.RUnlock()
 	return globalSourceRegistry
-}
-
-func GlobalChapterRegistry() *ChapterRegistry {
-	globalMu.RLock()
-	defer globalMu.RUnlock()
-	return globalChapterRegistry
 }
 
 func GlobalHeat() *HeatTracker {
@@ -83,27 +74,14 @@ func GetCleanupState() CleanupState {
 	return CleanupState(cleanupState)
 }
 
-// MarkChapterRehydrateDone records that chapter registry rehydration finished.
-// Cleanup unpauses once both this and a successful Mist reconciliation have
-// happened.
-func MarkChapterRehydrateDone() {
-	bootMu.Lock()
-	defer bootMu.Unlock()
-	chapterRehydrateDone = true
-	maybeUnpauseLocked()
-}
-
 // MarkMistReconcileDone records that the first successful Mist reconciliation
-// round trip completed (both GetActiveStreams and GetClients).
+// round trip completed (both GetActiveStreams and GetClients). Cleanup
+// unpauses once this fires.
 func MarkMistReconcileDone() {
 	bootMu.Lock()
 	defer bootMu.Unlock()
 	mistReconcileDone = true
-	maybeUnpauseLocked()
-}
-
-func maybeUnpauseLocked() {
-	if chapterRehydrateDone && mistReconcileDone {
+	if mistReconcileDone {
 		cleanupState = int32(StateNormal)
 	}
 }

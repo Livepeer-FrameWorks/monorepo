@@ -870,6 +870,35 @@ func (r *clipResolver) PlaybackPolicy(ctx context.Context, obj *proto.ClipInfo) 
 	return r.DoGetPlaybackPolicyByPlaybackID(ctx, obj.GetPlaybackId())
 }
 
+// EffectiveRetention is the resolver for the effectiveRetention field.
+func (r *clipResolver) EffectiveRetention(ctx context.Context, obj *proto.ClipInfo) (*model.EffectiveRetention, error) {
+	if obj == nil || obj.ExpiresAt == nil {
+		return nil, nil
+	}
+	until := obj.ExpiresAt.AsTime()
+	days := int((time.Until(until) + 24*time.Hour - 1) / (24 * time.Hour))
+	if days < 0 {
+		days = 0
+	}
+	src := model.RetentionSourceTierEntitlement
+	if rs := obj.GetRetentionSource(); rs != "" {
+		src = resolvers.RetentionSourceFromString(rs)
+	}
+	return &model.EffectiveRetention{
+		RetentionDays:  days,
+		RetentionUntil: &until,
+		Source:         src,
+	}, nil
+}
+
+// StorageCost is the resolver for the storageCost field.
+func (r *clipResolver) StorageCost(ctx context.Context, obj *proto.ClipInfo) (*model.StorageCostProjection, error) {
+	if obj == nil || obj.SizeBytes == nil {
+		return nil, nil
+	}
+	return r.ProjectStorageCostForCaller(ctx, *obj.SizeBytes)
+}
+
 // Stage is the resolver for the stage field.
 func (r *clipLifecycleResolver) Stage(ctx context.Context, obj *proto.ClipLifecycleData) (int, error) {
 	return int(obj.Stage), nil
@@ -1213,6 +1242,14 @@ func (r *dVRRequestResolver) IsExpired(ctx context.Context, obj *proto.DVRInfo) 
 // EffectiveRetention is the resolver for the effectiveRetention field.
 func (r *dVRRequestResolver) EffectiveRetention(ctx context.Context, obj *proto.DVRInfo) (*model.EffectiveRetention, error) {
 	return r.DoDVRRequestEffectiveRetention(ctx, obj)
+}
+
+// StorageCost is the resolver for the storageCost field.
+func (r *dVRRequestResolver) StorageCost(ctx context.Context, obj *proto.DVRInfo) (*model.StorageCostProjection, error) {
+	if obj == nil || obj.SizeBytes == nil {
+		return nil, nil
+	}
+	return r.ProjectStorageCostForCaller(ctx, *obj.SizeBytes)
 }
 
 // StorageNodeID is the resolver for the storageNodeId field.
@@ -2078,19 +2115,6 @@ func (r *mutationResolver) DeleteDvr(ctx context.Context, dvrHash string) (model
 	return r.DoDeleteDVR(ctx, dvrHash)
 }
 
-// SetDVRChapterPolicy is the resolver for the setDVRChapterPolicy field.
-func (r *mutationResolver) SetDVRChapterPolicy(ctx context.Context, dvrID string, mode model.DVRChapterMode, intervalSeconds *int) (*model.SetDVRChapterPolicyResult, error) {
-	dvrHash, err := resolvers.NormalizeDvrID(dvrID)
-	if err != nil {
-		return nil, err
-	}
-	interval := int32(0)
-	if intervalSeconds != nil {
-		interval = int32(*intervalSeconds)
-	}
-	return r.DoSetDVRChapterPolicy(ctx, dvrHash, mode, interval)
-}
-
 // CreateVodUpload is the resolver for the createVodUpload field.
 func (r *mutationResolver) CreateVodUpload(ctx context.Context, input model.CreateVodUploadInput) (model.CreateVodUploadResult, error) {
 	return r.DoCreateVodUpload(ctx, input)
@@ -2414,6 +2438,11 @@ func (r *mutationResolver) UpdateMediaRetention(ctx context.Context, input model
 // ResetMediaRetentionOverride is the resolver for the resetMediaRetentionOverride field.
 func (r *mutationResolver) ResetMediaRetentionOverride(ctx context.Context, input model.ResetMediaRetentionOverrideInput) (model.UpdateMediaRetentionResult, error) {
 	return r.DoResetMediaRetentionOverride(ctx, input)
+}
+
+// SetStreamRetentionOverrides is the resolver for the setStreamRetentionOverrides field.
+func (r *mutationResolver) SetStreamRetentionOverrides(ctx context.Context, input model.SetStreamRetentionOverridesInput) (model.SetStreamRetentionOverridesResult, error) {
+	return r.DoSetStreamRetentionOverrides(ctx, input)
 }
 
 // ID is the resolver for the id field.
@@ -4087,7 +4116,7 @@ func (r *queryResolver) DvrRecordingsConnection(ctx context.Context, page *model
 }
 
 // DvrChapter is the resolver for the dvrChapter field.
-func (r *queryResolver) DvrChapter(ctx context.Context, dvrID string, mode model.DVRChapterMode, intervalSeconds *int, startMs float64, endMs float64) (*model.DVRChapter, error) {
+func (r *queryResolver) DvrChapter(ctx context.Context, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, startMs float64, endMs float64) (*model.DVRChapter, error) {
 	dvrHash, err := resolvers.NormalizeDvrID(dvrID)
 	if err != nil {
 		return nil, err
@@ -4096,7 +4125,11 @@ func (r *queryResolver) DvrChapter(ctx context.Context, dvrID string, mode model
 	if intervalSeconds != nil {
 		interval = int32(*intervalSeconds)
 	}
-	return r.DoRetrieveDVRChapter(ctx, dvrHash, mode, interval, int64(startMs), int64(endMs))
+	var modeArg model.DVRChapterMode
+	if mode != nil {
+		modeArg = *mode
+	}
+	return r.DoRetrieveDVRChapter(ctx, dvrHash, modeArg, interval, int64(startMs), int64(endMs))
 }
 
 // DvrChapters is the resolver for the dvrChapters field.
@@ -4799,9 +4832,42 @@ func (r *streamResolver) PlaybackPolicy(ctx context.Context, obj *proto.Stream) 
 	return r.DoGetPlaybackPolicyByPlaybackID(ctx, obj.GetPlaybackId())
 }
 
+// DvrChapterMode is the resolver for the dvrChapterMode field.
+func (r *streamResolver) DvrChapterMode(ctx context.Context, obj *proto.Stream) (*model.DVRChapterMode, error) {
+	if obj == nil {
+		return nil, nil
+	}
+	m := resolvers.ChapterModeFromString(obj.GetDvrChapterMode())
+	return &m, nil
+}
+
 // RecentPullSourceEvents is the resolver for the recentPullSourceEvents field.
 func (r *streamResolver) RecentPullSourceEvents(ctx context.Context, obj *proto.Stream, limit *int) ([]*proto.PullSourceEvent, error) {
 	return r.DoStreamRecentPullSourceEvents(ctx, obj, limit)
+}
+
+// RetentionOverrides is the resolver for the retentionOverrides field.
+// Returns nil when neither column carries an override — the UI renders
+// "inheriting tenant default" in that case.
+func (r *streamResolver) RetentionOverrides(ctx context.Context, obj *proto.Stream) (*model.StreamRetentionOverrides, error) {
+	if obj == nil {
+		return nil, nil
+	}
+	dvr := obj.DvrRetentionDaysOverride
+	clip := obj.ClipRetentionDaysOverride
+	if dvr == nil && clip == nil {
+		return nil, nil
+	}
+	out := &model.StreamRetentionOverrides{StreamID: obj.GetStreamId()}
+	if dvr != nil {
+		v := int(*dvr)
+		out.DvrRetentionDaysOverride = &v
+	}
+	if clip != nil {
+		v := int(*clip)
+		out.ClipRetentionDaysOverride = &v
+	}
+	return out, nil
 }
 
 // ID is the resolver for the id field.
@@ -6386,6 +6452,29 @@ func (r *vodAssetResolver) PlaybackPolicy(ctx context.Context, obj *model.VodAss
 		return nil, nil
 	}
 	return r.DoGetPlaybackPolicyByPlaybackID(ctx, obj.PlaybackID)
+}
+
+// EffectiveRetention is the resolver for the effectiveRetention field.
+// model.VodAsset's ExpiresAt holds the persisted retention_until; we don't
+// have retention_source on the model so source defaults to TIER_ENTITLEMENT.
+func (r *vodAssetResolver) EffectiveRetention(ctx context.Context, obj *model.VodAsset) (*model.EffectiveRetention, error) {
+	if obj == nil {
+		return nil, nil
+	}
+	// The cascade source is populated at VodAsset construction time
+	// from commodore.vod_assets.retention_source (see vod.go's
+	// buildVodEffectiveRetention). Returning the precomputed value
+	// preserves the cascade layer; never substitute a hard-coded
+	// source enum here.
+	return obj.EffectiveRetention, nil
+}
+
+// StorageCost is the resolver for the storageCost field.
+func (r *vodAssetResolver) StorageCost(ctx context.Context, obj *model.VodAsset) (*model.StorageCostProjection, error) {
+	if obj == nil || obj.SizeBytes == nil {
+		return nil, nil
+	}
+	return r.ProjectStorageCostForCaller(ctx, int64(*obj.SizeBytes))
 }
 
 // Status is the resolver for the status field.

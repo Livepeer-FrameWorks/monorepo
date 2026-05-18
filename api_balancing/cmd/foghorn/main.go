@@ -805,7 +805,6 @@ func main() {
 	})
 	control.SetDecklogClient(decklogClient)
 	control.SetDVRStopRegistry(foghornServer)
-	control.SetDVRChapterMaterializer(foghornServer)
 
 	// Wire DVR service to trigger processor for auto-start recordings on stream start
 	triggerProcessor.SetDVRService(foghornServer)
@@ -821,12 +820,10 @@ func main() {
 	if fedClient != nil {
 		handlers.SetFederationClient(fedClient)
 		foghornServer.SetFederationClient(fedClient)
-		control.SetDVRChapterFederationClient(fedClient)
 	}
 	if peerManager != nil {
 		handlers.SetPeerManager(peerManager)
 		foghornServer.SetPeerManager(peerManager)
-		control.SetDVRChapterPeerResolver(peerManager)
 	}
 
 	// Wire the storage resolver factory + federated mint delegate into the
@@ -896,7 +893,6 @@ func main() {
 		federationServer.SetClipCreator(foghornServer)
 		federationServer.SetDVRCreator(foghornServer)
 		federationServer.SetArtifactCommandHandler(foghornServer)
-		federationServer.SetDVRChapterMaterializer(foghornServer)
 		if commodoreClient != nil {
 			federationServer.SetMintArtifactResolver(commodoreClient)
 		}
@@ -971,17 +967,45 @@ func main() {
 	retentionJob.Start()
 	defer retentionJob.Stop()
 
-	// DVR chapter sweeper. Materializes the active current-chapter manifest
-	// of every recording DVR every minute and rotates at boundary close.
-	// Foghorn-owned writes only — the sidecar never writes archive playlists.
+	// DVR chapter sweeper. Rotates chapter boundaries on every recording
+	// DVR: closes the current chapter when its end_ms has passed (the
+	// closed row enters the finalization queue) and opens the next.
 	chapterSweeper := jobs.NewChapterSweeper(jobs.ChapterSweeperConfig{
-		DB:                     db,
-		Logger:                 logger,
-		Interval:               1 * time.Minute,
-		RebuildIntervalSeconds: 60,
+		DB:       db,
+		Logger:   logger,
+		Interval: 1 * time.Minute,
 	})
 	chapterSweeper.Start()
 	defer chapterSweeper.Stop()
+
+	// Dispatches the chapter finalization processing job to the recording
+	// origin Helmsman once a chapter row reaches state='closed'. The
+	// triggerProcessor doubles as the GatewayResolver and the
+	// ProcessConfigCacher (same plumbing the normal VOD processing
+	// dispatcher uses below) so chapter jobs carry a substituted
+	// processes_json and the STREAM_PROCESS trigger that fires when
+	// Mist boots processing+<hash> finds the cached config.
+	chapterFinalizer := jobs.NewChapterFinalizationQueue(jobs.ChapterFinalizationQueueConfig{
+		DB:              db,
+		Logger:          logger,
+		GatewayResolver: triggerProcessor,
+		ConfigCacher:    triggerProcessor,
+	})
+	chapterFinalizer.Start()
+	defer chapterFinalizer.Stop()
+
+	// Reclaims source DVR segments after their covering chapters are
+	// frozen on S3. Deletes local TS files via Helmsman + the recovery
+	// bridge S3 objects directly.
+	if s3ForFederation != nil {
+		chapterReclaimer := jobs.NewChapterReclaimSweep(jobs.ChapterReclaimSweepConfig{
+			DB:       db,
+			Logger:   logger,
+			S3Delete: chapterReclaimS3Adapter{client: s3ForFederation},
+		})
+		chapterReclaimer.Start()
+		defer chapterReclaimer.Stop()
+	}
 
 	// Start stale defrost cleanup job (resets stuck defrosting artifacts)
 	staleDefrostJob := jobs.NewStaleDefrostCleanupJob(jobs.StaleDefrostCleanupConfig{
@@ -1278,4 +1302,18 @@ func (a *relayPoolAdapter) GetOrCreate(key, addr string) (control.CommandRelayCl
 		return nil, err
 	}
 	return client, nil
+}
+
+// chapterReclaimS3Adapter narrows *storage.S3Client to the small
+// Delete-by-key surface the reclaim sweep needs. Lets the sweep stay
+// in the jobs package without importing storage.
+type chapterReclaimS3Adapter struct {
+	client *storage.S3Client
+}
+
+func (a chapterReclaimS3Adapter) Delete(ctx context.Context, key string) error {
+	if a.client == nil || key == "" {
+		return nil
+	}
+	return a.client.Delete(ctx, key)
 }

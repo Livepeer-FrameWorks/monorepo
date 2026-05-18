@@ -31,7 +31,6 @@ const (
 	InternalService_StartDVR_FullMethodName                        = "/commodore.InternalService/StartDVR"
 	InternalService_RetrieveDVRChapter_FullMethodName              = "/commodore.InternalService/RetrieveDVRChapter"
 	InternalService_ListDVRChapters_FullMethodName                 = "/commodore.InternalService/ListDVRChapters"
-	InternalService_SetDVRChapterPolicy_FullMethodName             = "/commodore.InternalService/SetDVRChapterPolicy"
 	InternalService_RegisterClip_FullMethodName                    = "/commodore.InternalService/RegisterClip"
 	InternalService_RegisterDVR_FullMethodName                     = "/commodore.InternalService/RegisterDVR"
 	InternalService_UpdateDVRRetention_FullMethodName              = "/commodore.InternalService/UpdateDVRRetention"
@@ -39,13 +38,15 @@ const (
 	InternalService_UpdateArtifactStorageCluster_FullMethodName    = "/commodore.InternalService/UpdateArtifactStorageCluster"
 	InternalService_ResolveClipHash_FullMethodName                 = "/commodore.InternalService/ResolveClipHash"
 	InternalService_ResolveDVRHash_FullMethodName                  = "/commodore.InternalService/ResolveDVRHash"
-	InternalService_ResolveDVRChapter_FullMethodName               = "/commodore.InternalService/ResolveDVRChapter"
 	InternalService_ResolveArtifactPlaybackID_FullMethodName       = "/commodore.InternalService/ResolveArtifactPlaybackID"
 	InternalService_ResolveArtifactInternalName_FullMethodName     = "/commodore.InternalService/ResolveArtifactInternalName"
 	InternalService_ResolveIdentifier_FullMethodName               = "/commodore.InternalService/ResolveIdentifier"
 	InternalService_RegisterVod_FullMethodName                     = "/commodore.InternalService/RegisterVod"
 	InternalService_ResolveVodHash_FullMethodName                  = "/commodore.InternalService/ResolveVodHash"
 	InternalService_ResolveVodID_FullMethodName                    = "/commodore.InternalService/ResolveVodID"
+	InternalService_MintChapterPlaybackID_FullMethodName           = "/commodore.InternalService/MintChapterPlaybackID"
+	InternalService_ResolveChapterPlaybackID_FullMethodName        = "/commodore.InternalService/ResolveChapterPlaybackID"
+	InternalService_GetTenantProcessesJSON_FullMethodName          = "/commodore.InternalService/GetTenantProcessesJSON"
 	InternalService_GetOrCreateWalletUser_FullMethodName           = "/commodore.InternalService/GetOrCreateWalletUser"
 	InternalService_TerminateTenantStreams_FullMethodName          = "/commodore.InternalService/TerminateTenantStreams"
 	InternalService_InvalidateTenantCache_FullMethodName           = "/commodore.InternalService/InvalidateTenantCache"
@@ -56,6 +57,7 @@ const (
 	InternalService_SetMediaRetentionPolicy_FullMethodName         = "/commodore.InternalService/SetMediaRetentionPolicy"
 	InternalService_UpdateAssetRetention_FullMethodName            = "/commodore.InternalService/UpdateAssetRetention"
 	InternalService_ResetAssetRetention_FullMethodName             = "/commodore.InternalService/ResetAssetRetention"
+	InternalService_SetStreamRetentionOverrides_FullMethodName     = "/commodore.InternalService/SetStreamRetentionOverrides"
 	InternalService_TestPlaybackAccess_FullMethodName              = "/commodore.InternalService/TestPlaybackAccess"
 	InternalService_RecordPullSourceEvent_FullMethodName           = "/commodore.InternalService/RecordPullSourceEvent"
 	InternalService_ListPullSourceEvents_FullMethodName            = "/commodore.InternalService/ListPullSourceEvents"
@@ -105,12 +107,13 @@ type InternalServiceClient interface {
 	// Called by Foghorn to initiate DVR recording for a stream
 	StartDVR(ctx context.Context, in *StartDVRRequest, opts ...grpc.CallOption) (*StartDVRResponse, error)
 	// ===== DVR CHAPTERS (api_gateway -> Commodore -> Foghorn) =====
-	// Chapter retrieval, listing, and policy. Commodore is the customer-facing
+	// Chapter retrieval + listing. Commodore is the customer-facing
 	// intermediary: validates tenant ownership of the DVR artifact, then
-	// forwards to Foghorn (which owns ledger + materialization).
+	// forwards to Foghorn (which owns the chapter row + finalization
+	// queue). Chapter mode/interval is configured on the Stream and
+	// snapshotted at StartDVR — there is no mid-recording policy RPC.
 	RetrieveDVRChapter(ctx context.Context, in *RetrieveDVRChapterRequest, opts ...grpc.CallOption) (*RetrieveDVRChapterResponse, error)
 	ListDVRChapters(ctx context.Context, in *ListDVRChaptersRequest, opts ...grpc.CallOption) (*ListDVRChaptersResponse, error)
-	SetDVRChapterPolicy(ctx context.Context, in *SetDVRChapterPolicyRequest, opts ...grpc.CallOption) (*SetDVRChapterPolicyResponse, error)
 	// Register a new clip in the business registry (called by Foghorn during CreateClip)
 	RegisterClip(ctx context.Context, in *RegisterClipRequest, opts ...grpc.CallOption) (*RegisterClipResponse, error)
 	// Register a new DVR recording in the business registry (called by Foghorn during StartDVR)
@@ -135,12 +138,6 @@ type InternalServiceClient interface {
 	ResolveClipHash(ctx context.Context, in *ResolveClipHashRequest, opts ...grpc.CallOption) (*ResolveClipHashResponse, error)
 	// Resolve DVR hash to tenant context (for analytics enrichment and playback)
 	ResolveDVRHash(ctx context.Context, in *ResolveDVRHashRequest, opts ...grpc.CallOption) (*ResolveDVRHashResponse, error)
-	// ResolveDVRChapter resolves a chapter_id to its origin cluster + range
-	// via commodore.dvr_chapter_aliases. Used by a non-origin Foghorn that
-	// receives a dvr+chapter_id playback request and lacks the chapter row
-	// locally; the resolved origin is the target of FoghornFederation
-	// .PrepareDVRChapter.
-	ResolveDVRChapter(ctx context.Context, in *ResolveDVRChapterRequest, opts ...grpc.CallOption) (*ResolveDVRChapterResponse, error)
 	// Resolve artifact playback ID to artifact identity (clip/dvr/vod)
 	ResolveArtifactPlaybackID(ctx context.Context, in *ResolveArtifactPlaybackIDRequest, opts ...grpc.CallOption) (*ResolveArtifactPlaybackIDResponse, error)
 	// Resolve artifact internal routing name to artifact identity (clip/dvr/vod)
@@ -154,6 +151,19 @@ type InternalServiceClient interface {
 	ResolveVodHash(ctx context.Context, in *ResolveVodHashRequest, opts ...grpc.CallOption) (*ResolveVodHashResponse, error)
 	// Resolve VOD relay ID (vod_assets.id) to VOD hash + tenant context
 	ResolveVodID(ctx context.Context, in *ResolveVodIDRequest, opts ...grpc.CallOption) (*ResolveVodIDResponse, error)
+	// Mint (or fetch existing) public playback_id for a DVR chapter artifact.
+	// Called by Foghorn at chapter finalization dispatch.
+	MintChapterPlaybackID(ctx context.Context, in *MintChapterPlaybackIDRequest, opts ...grpc.CallOption) (*MintChapterPlaybackIDResponse, error)
+	// Resolve a chapter playback_id back to its tenant + chapter + artifact hash.
+	// Used by Foghorn's playback resolver to map the public ID to the internal
+	// artifact identity.
+	ResolveChapterPlaybackID(ctx context.Context, in *ResolveChapterPlaybackIDRequest, opts ...grpc.CallOption) (*ResolveChapterPlaybackIDResponse, error)
+	// GetTenantProcessesJSON returns the resolved MistServer process config
+	// for a tenant + stream type ("live" | "vod"). Foghorn calls this from
+	// the chapter finalization queue to attach the same VOD processing
+	// pipeline (Thumbs, sprites, optional Livepeer) that user-initiated VOD
+	// uploads use. Stream-type values match resolveProcessesJSON internally.
+	GetTenantProcessesJSON(ctx context.Context, in *GetTenantProcessesJSONRequest, opts ...grpc.CallOption) (*GetTenantProcessesJSONResponse, error)
 	// Lookup or create a tenant/user for a verified wallet address.
 	// Called by x402 middleware after verifying ERC-3009 payment signature.
 	// If wallet is unknown, creates: tenant (prepaid) + user (email=NULL) + wallet_identity
@@ -187,6 +197,10 @@ type InternalServiceClient interface {
 	SetMediaRetentionPolicy(ctx context.Context, in *SetMediaRetentionPolicyRequest, opts ...grpc.CallOption) (*SetMediaRetentionPolicyResponse, error)
 	UpdateAssetRetention(ctx context.Context, in *UpdateAssetRetentionRequest, opts ...grpc.CallOption) (*UpdateAssetRetentionResponse, error)
 	ResetAssetRetention(ctx context.Context, in *ResetAssetRetentionRequest, opts ...grpc.CallOption) (*UpdateAssetRetentionResponse, error)
+	// Per-stream retention overrides (DVR + clip only — VOD uploads aren't
+	// stream-bound). NULL on a field clears the override and falls back to
+	// the tenant default.
+	SetStreamRetentionOverrides(ctx context.Context, in *SetStreamRetentionOverridesRequest, opts ...grpc.CallOption) (*SetStreamRetentionOverridesResponse, error)
 	// Dry-run policy evaluation against a caller-supplied JWT or webhook test.
 	// Commodore validates tenant ownership of the playback target and forwards
 	// to the owning Foghorn — auth logic is NOT reimplemented here.
@@ -316,16 +330,6 @@ func (c *internalServiceClient) ListDVRChapters(ctx context.Context, in *ListDVR
 	return out, nil
 }
 
-func (c *internalServiceClient) SetDVRChapterPolicy(ctx context.Context, in *SetDVRChapterPolicyRequest, opts ...grpc.CallOption) (*SetDVRChapterPolicyResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SetDVRChapterPolicyResponse)
-	err := c.cc.Invoke(ctx, InternalService_SetDVRChapterPolicy_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *internalServiceClient) RegisterClip(ctx context.Context, in *RegisterClipRequest, opts ...grpc.CallOption) (*RegisterClipResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegisterClipResponse)
@@ -396,16 +400,6 @@ func (c *internalServiceClient) ResolveDVRHash(ctx context.Context, in *ResolveD
 	return out, nil
 }
 
-func (c *internalServiceClient) ResolveDVRChapter(ctx context.Context, in *ResolveDVRChapterRequest, opts ...grpc.CallOption) (*ResolveDVRChapterResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ResolveDVRChapterResponse)
-	err := c.cc.Invoke(ctx, InternalService_ResolveDVRChapter_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *internalServiceClient) ResolveArtifactPlaybackID(ctx context.Context, in *ResolveArtifactPlaybackIDRequest, opts ...grpc.CallOption) (*ResolveArtifactPlaybackIDResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ResolveArtifactPlaybackIDResponse)
@@ -460,6 +454,36 @@ func (c *internalServiceClient) ResolveVodID(ctx context.Context, in *ResolveVod
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ResolveVodIDResponse)
 	err := c.cc.Invoke(ctx, InternalService_ResolveVodID_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) MintChapterPlaybackID(ctx context.Context, in *MintChapterPlaybackIDRequest, opts ...grpc.CallOption) (*MintChapterPlaybackIDResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MintChapterPlaybackIDResponse)
+	err := c.cc.Invoke(ctx, InternalService_MintChapterPlaybackID_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ResolveChapterPlaybackID(ctx context.Context, in *ResolveChapterPlaybackIDRequest, opts ...grpc.CallOption) (*ResolveChapterPlaybackIDResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveChapterPlaybackIDResponse)
+	err := c.cc.Invoke(ctx, InternalService_ResolveChapterPlaybackID_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) GetTenantProcessesJSON(ctx context.Context, in *GetTenantProcessesJSONRequest, opts ...grpc.CallOption) (*GetTenantProcessesJSONResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTenantProcessesJSONResponse)
+	err := c.cc.Invoke(ctx, InternalService_GetTenantProcessesJSON_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -566,6 +590,16 @@ func (c *internalServiceClient) ResetAssetRetention(ctx context.Context, in *Res
 	return out, nil
 }
 
+func (c *internalServiceClient) SetStreamRetentionOverrides(ctx context.Context, in *SetStreamRetentionOverridesRequest, opts ...grpc.CallOption) (*SetStreamRetentionOverridesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetStreamRetentionOverridesResponse)
+	err := c.cc.Invoke(ctx, InternalService_SetStreamRetentionOverrides_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *internalServiceClient) TestPlaybackAccess(ctx context.Context, in *TestPlaybackAccessRequest, opts ...grpc.CallOption) (*TestPlaybackAccessResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TestPlaybackAccessResponse)
@@ -640,12 +674,13 @@ type InternalServiceServer interface {
 	// Called by Foghorn to initiate DVR recording for a stream
 	StartDVR(context.Context, *StartDVRRequest) (*StartDVRResponse, error)
 	// ===== DVR CHAPTERS (api_gateway -> Commodore -> Foghorn) =====
-	// Chapter retrieval, listing, and policy. Commodore is the customer-facing
+	// Chapter retrieval + listing. Commodore is the customer-facing
 	// intermediary: validates tenant ownership of the DVR artifact, then
-	// forwards to Foghorn (which owns ledger + materialization).
+	// forwards to Foghorn (which owns the chapter row + finalization
+	// queue). Chapter mode/interval is configured on the Stream and
+	// snapshotted at StartDVR — there is no mid-recording policy RPC.
 	RetrieveDVRChapter(context.Context, *RetrieveDVRChapterRequest) (*RetrieveDVRChapterResponse, error)
 	ListDVRChapters(context.Context, *ListDVRChaptersRequest) (*ListDVRChaptersResponse, error)
-	SetDVRChapterPolicy(context.Context, *SetDVRChapterPolicyRequest) (*SetDVRChapterPolicyResponse, error)
 	// Register a new clip in the business registry (called by Foghorn during CreateClip)
 	RegisterClip(context.Context, *RegisterClipRequest) (*RegisterClipResponse, error)
 	// Register a new DVR recording in the business registry (called by Foghorn during StartDVR)
@@ -670,12 +705,6 @@ type InternalServiceServer interface {
 	ResolveClipHash(context.Context, *ResolveClipHashRequest) (*ResolveClipHashResponse, error)
 	// Resolve DVR hash to tenant context (for analytics enrichment and playback)
 	ResolveDVRHash(context.Context, *ResolveDVRHashRequest) (*ResolveDVRHashResponse, error)
-	// ResolveDVRChapter resolves a chapter_id to its origin cluster + range
-	// via commodore.dvr_chapter_aliases. Used by a non-origin Foghorn that
-	// receives a dvr+chapter_id playback request and lacks the chapter row
-	// locally; the resolved origin is the target of FoghornFederation
-	// .PrepareDVRChapter.
-	ResolveDVRChapter(context.Context, *ResolveDVRChapterRequest) (*ResolveDVRChapterResponse, error)
 	// Resolve artifact playback ID to artifact identity (clip/dvr/vod)
 	ResolveArtifactPlaybackID(context.Context, *ResolveArtifactPlaybackIDRequest) (*ResolveArtifactPlaybackIDResponse, error)
 	// Resolve artifact internal routing name to artifact identity (clip/dvr/vod)
@@ -689,6 +718,19 @@ type InternalServiceServer interface {
 	ResolveVodHash(context.Context, *ResolveVodHashRequest) (*ResolveVodHashResponse, error)
 	// Resolve VOD relay ID (vod_assets.id) to VOD hash + tenant context
 	ResolveVodID(context.Context, *ResolveVodIDRequest) (*ResolveVodIDResponse, error)
+	// Mint (or fetch existing) public playback_id for a DVR chapter artifact.
+	// Called by Foghorn at chapter finalization dispatch.
+	MintChapterPlaybackID(context.Context, *MintChapterPlaybackIDRequest) (*MintChapterPlaybackIDResponse, error)
+	// Resolve a chapter playback_id back to its tenant + chapter + artifact hash.
+	// Used by Foghorn's playback resolver to map the public ID to the internal
+	// artifact identity.
+	ResolveChapterPlaybackID(context.Context, *ResolveChapterPlaybackIDRequest) (*ResolveChapterPlaybackIDResponse, error)
+	// GetTenantProcessesJSON returns the resolved MistServer process config
+	// for a tenant + stream type ("live" | "vod"). Foghorn calls this from
+	// the chapter finalization queue to attach the same VOD processing
+	// pipeline (Thumbs, sprites, optional Livepeer) that user-initiated VOD
+	// uploads use. Stream-type values match resolveProcessesJSON internally.
+	GetTenantProcessesJSON(context.Context, *GetTenantProcessesJSONRequest) (*GetTenantProcessesJSONResponse, error)
 	// Lookup or create a tenant/user for a verified wallet address.
 	// Called by x402 middleware after verifying ERC-3009 payment signature.
 	// If wallet is unknown, creates: tenant (prepaid) + user (email=NULL) + wallet_identity
@@ -722,6 +764,10 @@ type InternalServiceServer interface {
 	SetMediaRetentionPolicy(context.Context, *SetMediaRetentionPolicyRequest) (*SetMediaRetentionPolicyResponse, error)
 	UpdateAssetRetention(context.Context, *UpdateAssetRetentionRequest) (*UpdateAssetRetentionResponse, error)
 	ResetAssetRetention(context.Context, *ResetAssetRetentionRequest) (*UpdateAssetRetentionResponse, error)
+	// Per-stream retention overrides (DVR + clip only — VOD uploads aren't
+	// stream-bound). NULL on a field clears the override and falls back to
+	// the tenant default.
+	SetStreamRetentionOverrides(context.Context, *SetStreamRetentionOverridesRequest) (*SetStreamRetentionOverridesResponse, error)
 	// Dry-run policy evaluation against a caller-supplied JWT or webhook test.
 	// Commodore validates tenant ownership of the playback target and forwards
 	// to the owning Foghorn — auth logic is NOT reimplemented here.
@@ -774,9 +820,6 @@ func (UnimplementedInternalServiceServer) RetrieveDVRChapter(context.Context, *R
 func (UnimplementedInternalServiceServer) ListDVRChapters(context.Context, *ListDVRChaptersRequest) (*ListDVRChaptersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListDVRChapters not implemented")
 }
-func (UnimplementedInternalServiceServer) SetDVRChapterPolicy(context.Context, *SetDVRChapterPolicyRequest) (*SetDVRChapterPolicyResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetDVRChapterPolicy not implemented")
-}
 func (UnimplementedInternalServiceServer) RegisterClip(context.Context, *RegisterClipRequest) (*RegisterClipResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterClip not implemented")
 }
@@ -798,9 +841,6 @@ func (UnimplementedInternalServiceServer) ResolveClipHash(context.Context, *Reso
 func (UnimplementedInternalServiceServer) ResolveDVRHash(context.Context, *ResolveDVRHashRequest) (*ResolveDVRHashResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveDVRHash not implemented")
 }
-func (UnimplementedInternalServiceServer) ResolveDVRChapter(context.Context, *ResolveDVRChapterRequest) (*ResolveDVRChapterResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ResolveDVRChapter not implemented")
-}
 func (UnimplementedInternalServiceServer) ResolveArtifactPlaybackID(context.Context, *ResolveArtifactPlaybackIDRequest) (*ResolveArtifactPlaybackIDResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveArtifactPlaybackID not implemented")
 }
@@ -818,6 +858,15 @@ func (UnimplementedInternalServiceServer) ResolveVodHash(context.Context, *Resol
 }
 func (UnimplementedInternalServiceServer) ResolveVodID(context.Context, *ResolveVodIDRequest) (*ResolveVodIDResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveVodID not implemented")
+}
+func (UnimplementedInternalServiceServer) MintChapterPlaybackID(context.Context, *MintChapterPlaybackIDRequest) (*MintChapterPlaybackIDResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MintChapterPlaybackID not implemented")
+}
+func (UnimplementedInternalServiceServer) ResolveChapterPlaybackID(context.Context, *ResolveChapterPlaybackIDRequest) (*ResolveChapterPlaybackIDResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolveChapterPlaybackID not implemented")
+}
+func (UnimplementedInternalServiceServer) GetTenantProcessesJSON(context.Context, *GetTenantProcessesJSONRequest) (*GetTenantProcessesJSONResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTenantProcessesJSON not implemented")
 }
 func (UnimplementedInternalServiceServer) GetOrCreateWalletUser(context.Context, *GetOrCreateWalletUserRequest) (*GetOrCreateWalletUserResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetOrCreateWalletUser not implemented")
@@ -848,6 +897,9 @@ func (UnimplementedInternalServiceServer) UpdateAssetRetention(context.Context, 
 }
 func (UnimplementedInternalServiceServer) ResetAssetRetention(context.Context, *ResetAssetRetentionRequest) (*UpdateAssetRetentionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResetAssetRetention not implemented")
+}
+func (UnimplementedInternalServiceServer) SetStreamRetentionOverrides(context.Context, *SetStreamRetentionOverridesRequest) (*SetStreamRetentionOverridesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetStreamRetentionOverrides not implemented")
 }
 func (UnimplementedInternalServiceServer) TestPlaybackAccess(context.Context, *TestPlaybackAccessRequest) (*TestPlaybackAccessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TestPlaybackAccess not implemented")
@@ -1077,24 +1129,6 @@ func _InternalService_ListDVRChapters_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _InternalService_SetDVRChapterPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetDVRChapterPolicyRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(InternalServiceServer).SetDVRChapterPolicy(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: InternalService_SetDVRChapterPolicy_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(InternalServiceServer).SetDVRChapterPolicy(ctx, req.(*SetDVRChapterPolicyRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _InternalService_RegisterClip_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RegisterClipRequest)
 	if err := dec(in); err != nil {
@@ -1221,24 +1255,6 @@ func _InternalService_ResolveDVRHash_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
-func _InternalService_ResolveDVRChapter_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ResolveDVRChapterRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(InternalServiceServer).ResolveDVRChapter(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: InternalService_ResolveDVRChapter_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(InternalServiceServer).ResolveDVRChapter(ctx, req.(*ResolveDVRChapterRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _InternalService_ResolveArtifactPlaybackID_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ResolveArtifactPlaybackIDRequest)
 	if err := dec(in); err != nil {
@@ -1343,6 +1359,60 @@ func _InternalService_ResolveVodID_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).ResolveVodID(ctx, req.(*ResolveVodIDRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_MintChapterPlaybackID_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MintChapterPlaybackIDRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).MintChapterPlaybackID(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_MintChapterPlaybackID_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).MintChapterPlaybackID(ctx, req.(*MintChapterPlaybackIDRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ResolveChapterPlaybackID_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveChapterPlaybackIDRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ResolveChapterPlaybackID(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ResolveChapterPlaybackID_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ResolveChapterPlaybackID(ctx, req.(*ResolveChapterPlaybackIDRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_GetTenantProcessesJSON_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTenantProcessesJSONRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).GetTenantProcessesJSON(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_GetTenantProcessesJSON_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).GetTenantProcessesJSON(ctx, req.(*GetTenantProcessesJSONRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1527,6 +1597,24 @@ func _InternalService_ResetAssetRetention_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InternalService_SetStreamRetentionOverrides_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetStreamRetentionOverridesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).SetStreamRetentionOverrides(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_SetStreamRetentionOverrides_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).SetStreamRetentionOverrides(ctx, req.(*SetStreamRetentionOverridesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _InternalService_TestPlaybackAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TestPlaybackAccessRequest)
 	if err := dec(in); err != nil {
@@ -1633,10 +1721,6 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _InternalService_ListDVRChapters_Handler,
 		},
 		{
-			MethodName: "SetDVRChapterPolicy",
-			Handler:    _InternalService_SetDVRChapterPolicy_Handler,
-		},
-		{
 			MethodName: "RegisterClip",
 			Handler:    _InternalService_RegisterClip_Handler,
 		},
@@ -1665,10 +1749,6 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _InternalService_ResolveDVRHash_Handler,
 		},
 		{
-			MethodName: "ResolveDVRChapter",
-			Handler:    _InternalService_ResolveDVRChapter_Handler,
-		},
-		{
 			MethodName: "ResolveArtifactPlaybackID",
 			Handler:    _InternalService_ResolveArtifactPlaybackID_Handler,
 		},
@@ -1691,6 +1771,18 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResolveVodID",
 			Handler:    _InternalService_ResolveVodID_Handler,
+		},
+		{
+			MethodName: "MintChapterPlaybackID",
+			Handler:    _InternalService_MintChapterPlaybackID_Handler,
+		},
+		{
+			MethodName: "ResolveChapterPlaybackID",
+			Handler:    _InternalService_ResolveChapterPlaybackID_Handler,
+		},
+		{
+			MethodName: "GetTenantProcessesJSON",
+			Handler:    _InternalService_GetTenantProcessesJSON_Handler,
 		},
 		{
 			MethodName: "GetOrCreateWalletUser",
@@ -1731,6 +1823,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResetAssetRetention",
 			Handler:    _InternalService_ResetAssetRetention_Handler,
+		},
+		{
+			MethodName: "SetStreamRetentionOverrides",
+			Handler:    _InternalService_SetStreamRetentionOverrides_Handler,
 		},
 		{
 			MethodName: "TestPlaybackAccess",

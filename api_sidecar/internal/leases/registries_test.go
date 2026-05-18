@@ -1,9 +1,6 @@
 package leases
 
 import (
-	"os"
-	"path/filepath"
-	"sort"
 	"testing"
 )
 
@@ -49,92 +46,6 @@ func TestIsLocalFilesystemResponse(t *testing.T) {
 	}
 }
 
-func TestChapterRegistry_RegisterLookup(t *testing.T) {
-	r := NewChapterRegistry()
-	r.Register(ChapterEntry{
-		ChapterID:    "c1",
-		DvrHash:      "dvr1",
-		SegmentNames: []string{"a.ts", "b.ts"},
-		ManifestPath: "/dvr/s/dvr1/chapters/c1.m3u8",
-	})
-
-	got, ok := r.Lookup("c1")
-	if !ok || got.DvrHash != "dvr1" {
-		t.Fatalf("lookup failed: %+v ok=%v", got, ok)
-	}
-	if len(got.SegmentNames) != 2 || got.SegmentNames[0] != "a.ts" {
-		t.Fatalf("segment names not preserved: %+v", got.SegmentNames)
-	}
-
-	// Mutating the returned slice should not affect the stored entry.
-	got.SegmentNames[0] = "mutated"
-	again, _ := r.Lookup("c1")
-	if again.SegmentNames[0] != "a.ts" {
-		t.Fatalf("registry leaked internal slice; got %q", again.SegmentNames[0])
-	}
-}
-
-func TestChapterRegistry_RehydrateFromManifests(t *testing.T) {
-	root := t.TempDir()
-	chaptersDir := filepath.Join(root, "dvr", "streamA", "dvrhash1", "chapters")
-	if err := os.MkdirAll(chaptersDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	manifest := `#EXTM3U
-#EXT-X-VERSION:3
-#EXT-X-TARGETDURATION:6
-#EXTINF:6.0,
-../segments/seg-001.ts
-#EXTINF:6.0,
-../segments/seg-002.ts
-#EXT-X-GAP
-#EXTINF:6.0,
-../segments/lost.ts
-#EXTINF:6.0,
-../segments/seg-003.ts
-#EXT-X-ENDLIST
-`
-	if err := os.WriteFile(filepath.Join(chaptersDir, "chap-1.m3u8"), []byte(manifest), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	r := NewChapterRegistry()
-	if err := r.Rehydrate(root); err != nil {
-		t.Fatalf("rehydrate: %v", err)
-	}
-	entry, ok := r.Lookup("chap-1")
-	if !ok {
-		t.Fatalf("expected chap-1 entry, got none")
-	}
-	if entry.DvrHash != "dvrhash1" {
-		t.Errorf("expected DvrHash=dvrhash1, got %q", entry.DvrHash)
-	}
-	// We don't distinguish gap from non-gap during rehydrate (the manifest's
-	// segment URIs are all that's left to read); confirm we picked up the
-	// non-comment URIs.
-	sort.Strings(entry.SegmentNames)
-	want := []string{"lost.ts", "seg-001.ts", "seg-002.ts", "seg-003.ts"}
-	if len(entry.SegmentNames) != len(want) {
-		t.Fatalf("expected %d segments, got %d (%v)", len(want), len(entry.SegmentNames), entry.SegmentNames)
-	}
-	for i := range want {
-		if entry.SegmentNames[i] != want[i] {
-			t.Errorf("segment[%d]=%q want %q", i, entry.SegmentNames[i], want[i])
-		}
-	}
-}
-
-func TestDeriveDvrHashFromPath(t *testing.T) {
-	got := DeriveDvrHashFromPath("/storage/dvr/streamA/dvrhash1/chapters/c1.m3u8")
-	if got != "dvrhash1" {
-		t.Errorf("DeriveDvrHashFromPath returned %q", got)
-	}
-	if DeriveDvrHashFromPath("/foo/bar") != "" {
-		t.Errorf("expected empty derive for malformed path")
-	}
-}
-
 func TestHeatTracker_TouchAndLookup(t *testing.T) {
 	h := NewHeatTracker()
 	if _, ok := h.Lookup("/x"); ok {
@@ -158,8 +69,12 @@ func TestDeferredStore_RoundTrip(t *testing.T) {
 		deleted[assetType+"|"+assetHash] = true
 		return 100, nil
 	}, nil)
-	store.Enqueue(PendingDelete{AssetType: "clip", AssetHash: "h1"})
-	store.Enqueue(PendingDelete{AssetType: "vod", AssetHash: "h2"})
+	if err := store.Enqueue(PendingDelete{AssetType: "clip", AssetHash: "h1"}); err != nil {
+		t.Fatalf("enqueue clip: %v", err)
+	}
+	if err := store.Enqueue(PendingDelete{AssetType: "vod", AssetHash: "h2"}); err != nil {
+		t.Fatalf("enqueue vod: %v", err)
+	}
 	if store.Count() != 2 {
 		t.Fatalf("expected 2 pending, got %d", store.Count())
 	}
@@ -187,7 +102,9 @@ func TestDeferredStore_LeaseHeldStaysQueued(t *testing.T) {
 	store := NewDeferredStore(dir, func(assetType, assetHash string) (uint64, error) {
 		return 0, ErrLeaseHeld
 	}, nil)
-	store.Enqueue(PendingDelete{AssetType: "clip", AssetHash: "h1"})
+	if err := store.Enqueue(PendingDelete{AssetType: "clip", AssetHash: "h1"}); err != nil {
+		t.Fatalf("enqueue clip: %v", err)
+	}
 	store.Drain()
 	if store.Count() != 1 {
 		t.Fatalf("expected entry to remain queued under lease-held, got count=%d", store.Count())

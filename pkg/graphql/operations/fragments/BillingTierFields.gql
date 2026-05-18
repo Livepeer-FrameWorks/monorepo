@@ -1,6 +1,7 @@
 fragment BillingTierFields on BillingTier {
   id
   tierName
+  tierLevel
   displayName
   description
   basePrice

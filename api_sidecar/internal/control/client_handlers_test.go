@@ -44,7 +44,12 @@ func TestHandleDesiredStateUpdateQueuesResultOnSendFailure(t *testing.T) {
 	}
 }
 
-func TestBuildClipParams_AllFields(t *testing.T) {
+func TestBuildClipParams_CanonicalAbsoluteRange(t *testing.T) {
+	// Foghorn normalizes every ClipMode to canonical absolute
+	// Unix-seconds and sends only startunix/stopunix; Helmsman builds
+	// the /view URL from those alone. start_ms / stop_ms / duration_sec
+	// (mode-specific fields) are intentionally NOT forwarded — see
+	// api_balancing/internal/grpc/server.go's resolveClipAbsoluteRangeMs.
 	startUnix := int64(1000)
 	stopUnix := int64(2000)
 	startMs := int64(500)
@@ -66,13 +71,15 @@ func TestBuildClipParams_AllFields(t *testing.T) {
 	for _, want := range []string{
 		"startunix=1000",
 		"stopunix=2000",
-		"start=500",
-		"stop=1500",
-		"duration=60",
 		"dl=my%20clip.mp4",
 	} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("expected %q in result %q", want, result)
+		}
+	}
+	for _, leaked := range []string{"start=500", "stop=1500", "duration=60"} {
+		if strings.Contains(result, leaked) {
+			t.Fatalf("mode-specific field leaked into /view params: %q in %q", leaked, result)
 		}
 	}
 }

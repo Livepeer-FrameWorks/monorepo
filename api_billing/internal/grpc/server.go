@@ -686,20 +686,25 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 
 	retentionDays := parseRetentionDays(retentionRaw)
 	dvrPolicy := parseDVRPolicy(dvrEntitlements)
-	// Stamp recording_retention_days onto DVRPolicy so downstream callers
-	// (Commodore.ValidateStreamKey → Foghorn.StartDVR) carry the policy in
-	// one bundle. Foghorn snapshots this onto foghorn.artifacts.dvr_retention_days
-	// at start time; FinalizeDVR reads from the snapshot, never re-resolving.
-	if dvrPolicy == nil && retentionDays > 0 {
-		dvrPolicy = &pb.DVRPolicy{}
-	}
-	if dvrPolicy != nil {
-		dvrPolicy.RecordingRetentionDays = retentionDays
+	// Stamp the tier cap onto DVRPolicy.recording_retention_days so any
+	// direct-Foghorn caller (bypassing Commodore's per-class cascade) still
+	// gets a sensible horizon. Commodore.StartDVR overrides this with the
+	// fully-resolved value via resolveInitialRetention. Tier cap of 0
+	// (uncapped, paid baseline) leaves the field unset — Foghorn falls back
+	// to its 30-day system default.
+	if retentionDays > 0 {
+		if dvrPolicy == nil {
+			dvrPolicy = &pb.DVRPolicy{}
+		}
+		v := retentionDays
+		dvrPolicy.RecordingRetentionDays = &v
 	}
 	var allowances []*pb.MeterAllowance
+	var storagePricing *pb.StoragePricing
 	if tierID.Valid && tierID.String != "" {
 		periodStart, periodEnd := resolveCurrentPeriod(billingPeriodStart, billingPeriodEnd, time.Now().UTC())
 		allowances = s.computeAllowances(ctx, tenantID, tierID.String, periodStart, periodEnd)
+		storagePricing = s.loadStoragePricing(ctx, tierID.String)
 	}
 
 	return &pb.GetTenantBillingStatusResponse{
@@ -712,7 +717,47 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 		Allowances:             allowances,
 		StorageLimitBytes:      parseStorageLimitBytes(storageLimitRaw),
 		TenantResourceLimits:   parseTenantResourceLimits(resourceLimitsRaw),
+		StoragePricing:         storagePricing,
 	}, nil
+}
+
+// loadStoragePricing returns the tenant's marginal storage pricing for the
+// average_storage_gb meter. Returns nil when the tier has no rule. Drives the
+// per-asset cost projection on the storage browser.
+func (s *PurserServer) loadStoragePricing(ctx context.Context, tierID string) *pb.StoragePricing {
+	const meter = "average_storage_gb"
+	var (
+		included  float64
+		unitPrice float64
+		model     string
+		currency  string
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+		    COALESCE(tpr.included_quantity::double precision, 0),
+		    COALESCE(tpr.unit_price::double precision, 0),
+		    COALESCE(tpr.model, ''),
+		    COALESCE(bt.currency, '')
+		FROM purser.tier_pricing_rules tpr
+		JOIN purser.billing_tiers bt ON bt.id = tpr.tier_id
+		WHERE tpr.tier_id = $1 AND tpr.meter = $2
+	`, tierID, meter).Scan(&included, &unitPrice, &model, &currency)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"tier_id": tierID,
+			"meter":   meter,
+		}).Warn("Failed to load storage pricing rule")
+		return nil
+	}
+	return &pb.StoragePricing{
+		IncludedGb:          included,
+		UnitPricePerGbMonth: unitPrice,
+		Currency:            currency,
+		Model:               model,
+	}
 }
 
 // parseStorageLimitBytes decodes the storage_limit_gb entitlement (a bare JSON

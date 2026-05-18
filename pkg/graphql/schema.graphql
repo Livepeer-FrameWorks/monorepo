@@ -581,25 +581,21 @@ type Query {
   ): DVRRecordingsConnection
 
   """
-  Retrieve a chapter manifest URL for a DVR recording.
+  Retrieve a single DVR chapter, including its finalized playbackId.
 
-  Chapters are virtual VOD-shaped views over the recording's segment
-  timeline. Modes:
+  Chapters are produced by the finalization queue as canonical .mkv
+  VOD artifacts. Chapter mode is configured at the Stream level
+  (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes:
     - WINDOW_SIZED: sequential fixed-length chapters of size
       tier.MaxWindowSeconds since the recording's start.
     - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at
       unix epoch 0.
-    - EXPLICIT_RANGE: caller supplies (startMs, endMs) directly. Use
-      this for civil-time chapters — resolve "yesterday in
-      Europe/Amsterdam" → UTC range in your client (DST-correct via
-      a timezone library) before calling. The backend operates on UTC
-      epoch milliseconds only.
   """
   dvrChapter(
     "DVR recording identifier — accepts either DVRRequest.id (UUID) or DVRRequest.dvrHash."
     dvrId: ID!
-    "Chapter mode."
-    mode: DVRChapterMode!
+    "Chapter mode; null defaults to the recording's policy snapshot."
+    mode: DVRChapterMode
     "Required for FIXED_INTERVAL mode."
     intervalSeconds: Int
     "UTC epoch milliseconds (start of range)."
@@ -1206,25 +1202,6 @@ type Mutation {
   ): DeleteDVRResult!
 
   """
-  Set the artifact's default chapter mode. The chapter sweeper materializes
-  manifests under this mode automatically while the recording is active;
-  ad-hoc retrievals (via dvrChapter) work under any mode regardless.
-
-  Changing policy mid-recording closes the in-flight current chapter as
-  VOD with #EXT-X-ENDLIST and starts the new current chapter under the
-  new mode. Old chapter manifests remain readable in S3 — viewers
-  playing them see no interruption.
-  """
-  setDVRChapterPolicy(
-    "DVR recording identifier — accepts either DVRRequest.id (UUID) or DVRRequest.dvrHash."
-    dvrId: ID!
-    "New default mode. Pass NONE to clear (sweeper stops materializing)."
-    mode: DVRChapterMode!
-    "Required for FIXED_INTERVAL mode."
-    intervalSeconds: Int
-  ): SetDVRChapterPolicyResult!
-
-  """
   Create a new VOD upload session.
   Returns presigned URLs for multipart upload.
   """
@@ -1822,10 +1799,12 @@ type Mutation {
   testPlaybackAccess(input: TestPlaybackAccessInput!): TestPlaybackAccessResult!
 
   """
-  Set the tenant-default retention policy for finalized DVR recordings.
-  The proposed value must satisfy 1 ≤ value ≤ tier entitlement bound; the
-  bound is exposed via the `mediaRetentionPolicy` query. Passing the current
-  tier bound clears the tenant override so future tier changes flow through.
+  Set the tenant per-class retention default. `targetType` picks the asset
+  class (VOD, DVR, or CLIP). `days` is in [0, tier cap] where 0 means "keep
+  forever" — only honored on uncapped (paid) tiers; Free clamps to its cap
+  at write time. `clear: true` NULLs the column so the tenant inherits the
+  per-class system default (VOD: keep forever; DVR/clip: 30d). The tier
+  cap is exposed via `mediaRetentionPolicy.bounds.maxRecordingRetentionDays`.
   """
   setMediaRetentionPolicy(input: SetMediaRetentionPolicyInput!): SetMediaRetentionPolicyResult!
 
@@ -1842,6 +1821,16 @@ type Mutation {
   tenant default (or tier entitlement when no tenant default is set).
   """
   resetMediaRetentionOverride(input: ResetMediaRetentionOverrideInput!): UpdateMediaRetentionResult!
+
+  """
+  Write per-stream retention overrides for DVR and clip artifacts created
+  on this stream. Unspecified input fields are left alone; passing -1 on
+  a field clears the override (falls back to the tenant default). Values
+  exceeding the tier cap are clamped at write time.
+  """
+  setStreamRetentionOverrides(
+    input: SetStreamRetentionOverridesInput!
+  ): SetStreamRetentionOverridesResult!
 }
 
 # Error interface and types for mutation results
@@ -1905,6 +1894,11 @@ union VodUploadStatusResult = VodUploadStatus | ValidationError | NotFoundError 
 
 union SetMediaRetentionPolicyResult = MediaRetentionPolicy | ValidationError | AuthError
 union UpdateMediaRetentionResult = EffectiveRetention | ValidationError | NotFoundError | AuthError
+union SetStreamRetentionOverridesResult =
+  | StreamRetentionOverrides
+  | ValidationError
+  | NotFoundError
+  | AuthError
 
 union SetNodeModeResult = InfrastructureNode | ValidationError | NotFoundError | AuthError
 
@@ -2274,6 +2268,17 @@ input UpdateStreamInput {
   ingestMode: IngestMode
   "Update the pull-source configuration for an existing pull stream."
   pullSource: PullSourceInput
+  """
+  DVR chapter rotation mode. Snapshotted onto the DVR artifact at
+  StartDVR; changes take effect on the next recording, not in-flight.
+  Pass NONE to disable chapters.
+  """
+  dvrChapterMode: DVRChapterMode
+  """
+  Chapter interval in seconds. Required when dvrChapterMode =
+  FIXED_INTERVAL. Minimum 3600 (1 hour).
+  """
+  dvrChapterIntervalSeconds: Int
 }
 
 """
@@ -2349,6 +2354,12 @@ type DVRRequest {
   (retention applies post-finalize).
   """
   effectiveRetention: EffectiveRetention
+  """
+  Marginal storage cost for this recording on the tenant's tier. Null
+  for tenants without a storage meter (self-hosted, fully tenant-private
+  clusters). Computed from sizeBytes × marginal $/GB-month.
+  """
+  storageCost: StorageCostProjection
   # Lifecycle data (from Periscope via artifactStatesConnection)
   storageNodeId: String
   status: String
@@ -2386,14 +2397,16 @@ type DVRRecordingEdge {
 # ============================================================================
 # DVR CHAPTERS
 # ============================================================================
-# Chapters are virtual VOD-shaped views over the dvr_segments ledger.
-# Foghorn materializes chapter manifests in S3 under
-# dvr/{tenant}/{stream}/{artifact}/chapters/{chapter_id}.m3u8.
+# Chapters are produced by the finalization queue as canonical .mkv VOD
+# artifacts (library_visible=false). The chapter row carries the range
+# metadata and a playbackId that addresses the finalized artifact.
 # See: docs/architecture/dvr-continuous-archive.md
 # ============================================================================
 
 """
-DVR chapter mode. Determines how (startMs, endMs) ranges are produced.
+DVR chapter mode. Determines how chapter (startMs, endMs) ranges are
+produced. Configured at the Stream level via updateStream and
+snapshotted onto the DVR artifact at StartDVR.
 
 UTC-only — civil-time chapters resolve at the edge.
 """
@@ -2402,39 +2415,60 @@ enum DVRChapterMode {
   WINDOW_SIZED
   "UTC-only intervalSeconds buckets, anchored at unix epoch 0."
   FIXED_INTERVAL
-  "Caller-supplied (startMs, endMs); no recurrence semantics. Use for civil-time chapters."
-  EXPLICIT_RANGE
-  "Sweeper does not materialize automatic chapters (only ad-hoc retrievals work)."
+  "Chapters disabled for this stream."
   NONE
 }
 
 """
-A single chapter view of a DVR recording.
-
-manifestUrl carries the Mist playback ID for this chapter
-(`dvr+{chapterId}`). Resolve it through resolveViewerEndpoint and let
-the selected edge defrost the bounded chapter into its local segment
-bucket. Use manifestS3Key as the stable canonical chapter manifest key.
-
-isCurrent=true means the chapter is still being recorded into; the
-edge manifest is EVENT-shaped while defrost is filling segments.
-hasGaps=true means at least one segment in the chapter range was lost
-before upload; the manifest renders #EXT-X-GAP markers and the player
-will skip those segments while preserving the timeline.
+Chapter finalization state machine. Chapter playback resolves to the
+chapter artifact's playbackId once state >= FINALIZED.
 """
-type DVRChapter {
-  chapterId: ID!
-  manifestS3Key: String!
-  manifestUrl: String!
-  isCurrent: Boolean!
-  hasGaps: Boolean!
-  segmentCount: Int!
+enum DVRChapterState {
+  "Recording in progress (chapter sweeper opened the boundary)."
+  OPEN
+  "Boundary reached; awaiting finalization."
+  CLOSED
+  "Processing job in flight on the recording origin."
+  FINALIZING
+  "Chapter artifact produced; not yet synced to S3."
+  FINALIZED
+  "Chapter artifact + .dtsh synced to S3; safe to reclaim source segments."
+  FROZEN
+  "Source segments deleted; row remains as metadata. Playback uses the artifact."
+  RECLAIMED
+  "Recovery exhausted — at least one source segment was missing from both local and the recovery freeze."
+  FAILED_SOURCE_MISSING
+  "Unrecoverable input (ledger invariants violated, repeated retries exhausted)."
+  FAILED_PERMANENT
 }
 
 """
-A reference to a chapter without the manifest URL — used for chapter
-listing pages where the player only needs the chapter ID + range to
-build a navigation UI.
+A single chapter view of a DVR recording. playbackId is the
+Commodore-minted public key for the chapter's VOD-shaped artifact;
+chapter playback uses the same artifact playback path as any VOD
+(not dvr+).
+"""
+type DVRChapter {
+  chapterId: ID!
+  state: DVRChapterState!
+  "Public playback key minted by Commodore; null until finalization dispatches."
+  playbackId: String
+  isCurrent: Boolean!
+  hasGaps: Boolean!
+  segmentCount: Int!
+  "Absolute Unix epoch ms of the playable MKV span start; falls back to the scheduled chapter start before finalization."
+  wallClockStartUnixMs: Float!
+  "Absolute Unix epoch ms of the playable MKV span end; falls back to the scheduled chapter end before finalization."
+  wallClockEndUnixMs: Float!
+  "True when state ∈ {FINALIZED, FROZEN, RECLAIMED}."
+  playableNow: Boolean!
+  "Last finalization failure message (operator-facing); null on success or in-progress."
+  lastFailureReason: String
+}
+
+"""
+A reference to a chapter for the chapter list UI. Same shape as
+DVRChapter without the timeline-zero derivations.
 """
 type DVRChapterRef {
   chapterId: ID!
@@ -2443,9 +2477,12 @@ type DVRChapterRef {
   startMs: Float!
   endMs: Float!
   isCurrent: Boolean!
-  manifestS3Key: String
+  state: DVRChapterState!
+  "Public playback key minted by Commodore; null until finalization dispatches."
+  playbackId: String
   hasGaps: Boolean!
   segmentCount: Int!
+  lastFailureReason: String
 }
 
 """
@@ -2455,14 +2492,6 @@ default page size is 200 and maximum page size is 1000.
 type DVRChaptersPage {
   chapters: [DVRChapterRef!]!
   nextPageToken: String
-}
-
-"""
-Result of setDVRChapterPolicy.
-"""
-type SetDVRChapterPolicyResult {
-  success: Boolean!
-  message: String
 }
 
 # ============================================================================
@@ -2648,6 +2677,18 @@ type VodAsset implements Node {
   Null until Foghorn confirms the thumbnail upload.
   """
   thumbnailAssets: ThumbnailAssets
+  """
+  Resolved retention horizon with the source of the decision (per-asset
+  override → per-stream override → tenant default → tier entitlement).
+  Null while the asset's retention_until column is unset (infinite).
+  """
+  effectiveRetention: EffectiveRetention
+  """
+  Marginal storage cost for this asset on the tenant's tier. Null when
+  the tenant has no storage meter (self-hosted, fully tenant-private
+  cluster). Computed from sizeBytes × marginal $/GB-month.
+  """
+  storageCost: StorageCostProjection
 }
 
 # VOD Assets Connection (cursor-paginated)
@@ -3484,6 +3525,16 @@ type Stream implements Node {
   "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
   playbackPolicy: PlaybackPolicy
   """
+  DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
+  changes take effect on the next recording. null/NONE = chapters disabled.
+  """
+  dvrChapterMode: DVRChapterMode
+  """
+  Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
+  ignored otherwise. Minimum 3600 (1 hour).
+  """
+  dvrChapterIntervalSeconds: Int
+  """
   Recent pull-source resolution events for pull streams. Captures the
   customer-facing resolution outcome (resolved, not_found, disabled,
   blocked_uri, private_not_allowed, commodore_error,
@@ -3498,6 +3549,12 @@ type Stream implements Node {
   chain handles.
   """
   thumbnailAssets: ThumbnailAssets
+  """
+  Per-stream retention overrides for DVR and clips. Null when the stream
+  has no overrides set (inherits the tenant default). VOD uploads aren't
+  stream-bound, so they don't appear here.
+  """
+  retentionOverrides: StreamRetentionOverrides
 }
 
 """
@@ -4572,7 +4629,7 @@ type BillingTier {
   features: BillingFeatures!
   "Priced behaviors per meter (rating engine input)."
   pricingRules: [PricingRule!]!
-  "Non-billing grants (e.g. recordingRetentionDays). Values are JSON-encoded strings."
+  "Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings."
   entitlements: [EntitlementEntry!]!
   "Support level included (community, email, priority, dedicated)."
   supportLevel: String
@@ -5508,6 +5565,18 @@ type Clip implements Node {
   Null until Foghorn confirms the thumbnail upload.
   """
   thumbnailAssets: ThumbnailAssets
+  """
+  Resolved retention horizon with the source of the decision (per-asset
+  override → per-stream override → tenant default → tier entitlement).
+  Null when retention_until is unset (infinite).
+  """
+  effectiveRetention: EffectiveRetention
+  """
+  Marginal storage cost for this clip on the tenant's tier. Null when
+  the tenant has no storage meter (self-hosted, fully tenant-private
+  cluster). Computed from sizeBytes × marginal $/GB-month.
+  """
+  storageCost: StorageCostProjection
 }
 
 """
@@ -6999,68 +7068,95 @@ input PlaybackWebhookPolicyInput {
   timeoutMs: Int
 }
 
-# Customer-tunable storage retention. Cascade order at StartDVR-time and
-# at per-asset override application is:
-#   per-asset override → tenant default → tier entitlement.
+# Customer-tunable storage retention. Cascade at artifact-create / DVR-start:
+#   per-asset override → per-stream override (DVR / clip only) →
+#     per-class tenant default → system default (VOD: keep forever,
+#     DVR/clip: 30d) → tier cap (0 = no cap, paid baseline; Free has a
+#     finite cap).
 #
-# The tier entitlement (recordingRetentionDays) is the upper bound — tenant
-# defaults and per-asset overrides must satisfy 1 ≤ value ≤ entitlement.
-# Reducing retention is a destructive-adjacent operation: shortening the
-# horizon schedules the artifact for deletion at the new horizon during
-# Foghorn's next RetentionJob tick.
+# The resolved value is snapshotted onto the artifact at create time so the
+# horizon is stable across plan changes. Reducing retention on an existing
+# artifact schedules it for deletion at the new horizon during Foghorn's
+# next RetentionJob tick.
 
 """
-Tenant-default retention policy plus the entitlement bounds and the
-value the cascade would resolve to today.
+Tenant-default retention policy: per-class overrides + the values the
+cascade would resolve to today for a hypothetical new artifact of each
+class (no per-stream context).
 """
 type MediaRetentionPolicy {
-  """
-  Tenant override in days. Null when no tenant default has been set;
-  the cascade falls through to the tier entitlement.
-  """
-  recordingRetentionDays: Int
-  "Value the cascade would resolve to today (override → tenant → tier)."
-  effectiveRecordingRetentionDays: Int!
   bounds: MediaRetentionBounds!
   "User who last touched the policy. Null when no tenant override is set."
   updatedBy: String
   updatedAt: Time
+  """
+  Per-class tenant default for VOD uploads. Null = inherit the system
+  default (keep forever). 0 = no auto-expire (paid-tier baseline). Free
+  tier clamps to the tier cap at write time.
+  """
+  defaultVodRetentionDays: Int
+  """
+  Per-class tenant default for DVR recordings. Null = inherit the system
+  default (30d). 0 = no auto-expire (paid only).
+  """
+  defaultDvrRetentionDays: Int
+  """
+  Per-class tenant default for clips. Null = inherit the system default
+  (30d). 0 = no auto-expire (paid only).
+  """
+  defaultClipRetentionDays: Int
+  "Effective VOD horizon the cascade resolves to today (0 = keep forever)."
+  effectiveVodRetentionDays: Int!
+  "Effective DVR horizon the cascade resolves to today (0 = keep forever)."
+  effectiveDvrRetentionDays: Int!
+  "Effective clip horizon the cascade resolves to today (0 = keep forever)."
+  effectiveClipRetentionDays: Int!
 }
 
 """
-Upper bounds for media retention, derived from the tenant's tier
-entitlement at request time.
+Upper bounds for customer-set media retention, derived from the tenant's
+tier entitlement at request time.
 """
 type MediaRetentionBounds {
-  "Maximum recording retention days the tenant's tier permits."
+  """
+  Maximum retention days the tenant's tier permits. 0 = no cap (paid-tier
+  baseline); Free tier sets a finite cap as the anti-abuse guardrail.
+  """
   maxRecordingRetentionDays: Int!
 }
 
 """
 Resolved retention horizon for a single asset (DVR, clip, or VOD).
-Returned by the override / reset mutations and embedded on DVRRequest.
+Embedded on Clip, DVRRequest, and VodAsset.
 """
 type EffectiveRetention {
-  "Days from now until the artifact is scheduled for deletion."
+  """
+  Days from now until the artifact is scheduled for deletion. 0 = no
+  auto-expire (retentionUntil is null).
+  """
   retentionDays: Int!
-  retentionUntil: Time!
+  "Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever)."
+  retentionUntil: Time
   source: RetentionSource!
 }
 
 """
-Source of an effective retention horizon.
+Source of an effective retention horizon. Mirrors the cascade layers
+used at artifact create / asset reset (per-asset override → per-stream
+override → tenant per-class default → tier entitlement clamp).
 """
 enum RetentionSource {
   TENANT_DEFAULT
+  PER_STREAM_OVERRIDE
   PER_ASSET_OVERRIDE
   TIER_ENTITLEMENT
 }
 
 """
-Asset class targeted by an override / reset operation. Cascade order is
-identical for all three (per-asset override → tenant default → tier
-entitlement); the only thing that changes is which Commodore table the
-override is written to and which artifact_type Foghorn matches against.
+Asset class targeted by a retention operation. Each class has its own
+column in commodore.tenant_media_retention_policies and (for DVR/clip)
+on commodore.streams; the cascade reads them in order at artifact
+create time.
 """
 enum MediaRetentionTarget {
   DVR
@@ -7069,8 +7165,58 @@ enum MediaRetentionTarget {
 }
 
 input SetMediaRetentionPolicyInput {
-  "Days to retain finalized DVR recordings. Must be 1 ≤ value ≤ tier bound. The tier-bound value resets to tier default."
-  recordingRetentionDays: Int!
+  "Which class to write: VOD, DVR, or CLIP."
+  targetType: MediaRetentionTarget!
+  """
+  Days to retain new artifacts of this class. Range: 0 ≤ value ≤ tier
+  cap (tier cap of 0 means uncapped). 0 = no auto-expire (only honored
+  on uncapped tiers; Free clamps to the cap at write time). Ignored
+  when clear = true.
+  """
+  days: Int
+  """
+  When true, NULLs out the per-class column so the tenant inherits the
+  system default (VOD: keep forever, DVR/clip: 30d). days is ignored.
+  """
+  clear: Boolean
+}
+
+"""
+Per-stream retention overrides for DVR and clips. VOD uploads aren't
+stream-bound, so they have no stream-level knob here.
+"""
+type StreamRetentionOverrides {
+  streamId: ID!
+  "Null = no override (inherit tenant default). 0 = no auto-expire."
+  dvrRetentionDaysOverride: Int
+  clipRetentionDaysOverride: Int
+}
+
+input SetStreamRetentionOverridesInput {
+  streamId: ID!
+  """
+  Per-class override values. Unset on a field leaves the column alone;
+  setting a value writes it (0 = no auto-expire, >0 = days). To remove
+  an existing override and fall back to the tenant default, set the
+  matching clear*Override flag.
+  """
+  dvrRetentionDaysOverride: Int
+  clipRetentionDaysOverride: Int
+  clearDvrRetentionOverride: Boolean
+  clearClipRetentionOverride: Boolean
+}
+
+"""
+Marginal per-asset storage cost projection. Used by the customer-facing
+storage browser to show "this clip costs you ~$0.01/day". The unit is
+the tier's currency (typically EUR). PerDay = perMonth / 30; the cost
+estimate is intentionally simple — multiply marginal $/GB-month by the
+asset's byte count, render as the customer's currency.
+"""
+type StorageCostProjection {
+  perDay: Float!
+  perMonth: Float!
+  currency: String!
 }
 
 input UpdateMediaRetentionInput {

@@ -8,7 +8,13 @@
 # Schema notes (matches purser.billing_tiers + new normalized tables):
 #
 #   entitlements: non-billing grants. Examples:
-#     recording_retention_days: <int>  -- Foghorn post-end recording retention
+#     recording_retention_days: <int>  -- Tier cap on per-tenant media retention.
+#       0 means "no cap" (paid-tier baseline): tenant can set any retention,
+#       including infinite, on DVR / clips / VOD. Free tier sets a finite cap
+#       (anti-abuse) that clamps tenant overrides and the per-asset-class
+#       system defaults (VOD: infinite, DVR: 30d, clip: 30d). System defaults
+#       are not tier entitlements — they are coded constants clamped by this
+#       cap at resolve time.
 #     dvr_default_window_seconds: <int> -- live DVR seek window default (Mist targetAge)
 #     dvr_max_window_seconds: <int>     -- live DVR seek window ceiling
 #     dvr_default_segment_duration_seconds: <int> -- Mist split (6/12/24)
@@ -48,7 +54,7 @@ tiers:
     sla_level: none
     metering_enabled: true
     entitlements:
-      recording_retention_days: 30
+      recording_retention_days: 0
     pricing_rules:
       - meter: delivered_minutes
         model: tiered_graduated
@@ -85,7 +91,7 @@ tiers:
     sla_level: none
     metering_enabled: true
     entitlements:
-      recording_retention_days: 7
+      recording_retention_days: 30
       dvr_default_window_seconds: 1800 # 30m
       dvr_max_window_seconds: 3600 # 1h
       dvr_default_segment_duration_seconds: 6
@@ -137,7 +143,7 @@ tiers:
     sla_level: none
     metering_enabled: true
     entitlements:
-      recording_retention_days: 90
+      recording_retention_days: 0
       dvr_default_window_seconds: 7200 # 2h
       dvr_max_window_seconds: 21600 # 6h
       dvr_default_segment_duration_seconds: 6
@@ -177,7 +183,7 @@ tiers:
     sla_level: standard
     metering_enabled: true
     entitlements:
-      recording_retention_days: 180
+      recording_retention_days: 0
       dvr_default_window_seconds: 14400 # 4h
       dvr_max_window_seconds: 43200 # 12h
       dvr_default_segment_duration_seconds: 6
@@ -219,7 +225,7 @@ tiers:
     sla_level: premium
     metering_enabled: true
     entitlements:
-      recording_retention_days: 365
+      recording_retention_days: 0
       dvr_default_window_seconds: 14400 # 4h
       dvr_max_window_seconds: 86400 # 1d
       dvr_default_segment_duration_seconds: 12
@@ -262,7 +268,7 @@ tiers:
     sla_level: custom
     metering_enabled: true
     entitlements:
-      recording_retention_days: 365
+      recording_retention_days: 0
       dvr_default_window_seconds: 14400 # 4h
       dvr_max_window_seconds: 86400 # 1d, cluster opt-in extends up to 72h
       dvr_default_segment_duration_seconds: 24

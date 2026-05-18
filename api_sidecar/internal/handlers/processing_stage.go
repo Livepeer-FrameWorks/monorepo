@@ -1,0 +1,148 @@
+package handlers
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"frameworks/api_sidecar/internal/admission"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+
+	"github.com/sirupsen/logrus"
+)
+
+// unsafeWrapperExt inspects a source URL and returns the wrapper extension
+// when it's one Mist cannot open over HTTP (.avi/.flv/.m4v). Returns "" for
+// safe wrappers or unrecognized URLs.
+//
+// FLV uses fopen directly (mistserver/src/input/input_flv.cpp); AV input
+// only auto-matches local paths (input_av.cpp); .m4v has no http
+// source_match anywhere in MistServer.
+func unsafeWrapperExt(sourceURL string) string {
+	if sourceURL == "" {
+		return ""
+	}
+	u, err := url.Parse(sourceURL)
+	if err != nil {
+		return ""
+	}
+	ext := strings.ToLower(filepath.Ext(u.Path))
+	switch ext {
+	case ".avi", ".flv", ".m4v":
+		return ext
+	default:
+		return ""
+	}
+}
+
+// stageUnsafeWrapper downloads the source URL to {storage}/processing/<hash><ext>
+// before Mist's PushStart fires. The STREAM_SOURCE handler returns this
+// staged path locally (no Foghorn roundtrip) so Mist's local-only FLV/AV
+// inputs can open the file.
+//
+// Goes through Decide(IntentUnsafeImportStage) so admission can reject when
+// disk is too tight — Foghorn picks another node, or the job retries later.
+// The staged file is cleanup-eligible once processing completes (no playback
+// lease against it).
+func (h *ProcessingJobHandler) stageUnsafeWrapper(log *logrus.Entry, req *pb.ProcessingJobRequest, ext string) (string, error) {
+	procDir := filepath.Join(h.storagePath, "processing")
+	if err := os.MkdirAll(procDir, 0o755); err != nil {
+		return "", fmt.Errorf("mkdir processing dir: %w", err)
+	}
+
+	target := filepath.Join(procDir, req.GetArtifactHash()+ext)
+
+	// Admission gate. We don't know the source size ahead of time —
+	// HEAD-then-decide gives us a real number for the priority hierarchy
+	// instead of guessing zero. On HEAD failure (S3 quirk, network) fall
+	// back to admit-then-download with size=0; the engine handles unknowns.
+	var sizeBytes uint64
+	if size, ok := headContentLength(req.GetSourceUrl()); ok {
+		sizeBytes = size
+	}
+	sm := GetStorageManager()
+	if sm != nil {
+		decision, err := sm.Decide(context.Background(), procDir, admission.IntentUnsafeImportStage, sizeBytes)
+		if err != nil || decision == admission.CacheReject {
+			return "", fmt.Errorf("admission rejected unsafe-wrapper stage (size=%d): %w", sizeBytes, err)
+		}
+	}
+
+	// Download to a tmpfile, atomic-rename. Existing target is removed so
+	// a retry doesn't serve stale content from a previous failed attempt.
+	tmp := target + ".partial"
+	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("clear stale stage: %w", err)
+	}
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return "", fmt.Errorf("create stage tmpfile: %w", err)
+	}
+	resp, err := httpGetSource(req.GetSourceUrl())
+	if err != nil {
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("fetch source: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("source HTTP status %d", resp.StatusCode)
+	}
+	written, copyErr := io.Copy(out, resp.Body)
+	if copyErr != nil {
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("copy source: %w", copyErr)
+	}
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("fsync stage: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("close stage: %w", err)
+	}
+	if err := os.Rename(tmp, target); err != nil {
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("rename stage: %w", err)
+	}
+	log.WithField("bytes", written).Debug("Wrote unsafe-wrapper stage")
+	return target, nil
+}
+
+// headContentLength issues a HEAD to learn the source size for admission.
+// Returns (size, true) on success.
+func headContentLength(sourceURL string) (uint64, bool) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodHead, sourceURL, nil)
+	if err != nil {
+		return 0, false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.ContentLength <= 0 {
+		return 0, false
+	}
+	return uint64(resp.ContentLength), true
+}
+
+// httpGetSource fetches a presigned source URL. Uses
+// NewRequestWithContext so the project's noctx lint check is satisfied;
+// cancellation is via process shutdown for now.
+func httpGetSource(sourceURL string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, sourceURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	return http.DefaultClient.Do(req)
+}

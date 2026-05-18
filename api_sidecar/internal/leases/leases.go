@@ -27,9 +27,8 @@ var ErrLeaseHeld = errors.New("lease held")
 // internal_name (the suffix of vod+), not the artifact hash — those are not
 // the same value in Foghorn. For DVR the Hash is the dvr_artifact_id.
 type AssetKey struct {
-	Type      string // "vod" | "dvr"
-	Hash      string
-	ChapterID string // dvr only
+	Type string // "vod" | "dvr"
+	Hash string
 }
 
 // SegmentIndex is the subset of control.LocalSegmentIndex this package needs.
@@ -85,6 +84,15 @@ type Tracker struct {
 	// degradedDvrCount is the count of DVR source leases with Degraded=true.
 	// When >0, DVR destructive cleanup must pause.
 	degradedDvrCount int
+
+	// degradedVodCount is the count of VOD source leases with Degraded=true.
+	// Active streams whose stream-name internal_name does not resolve to an
+	// artifact_hash on this node (e.g. boot rebuild without a Commodore
+	// roundtrip) install a degraded lease with no LocalPaths. While >0,
+	// operator VOD destructive cleanup pauses globally — the alternative
+	// is letting cleanup delete a backing file whose hash this sidecar
+	// cannot map back to the active stream name.
+	degradedVodCount int
 }
 
 // NewTracker constructs a tracker. Pass a SegmentIndex implementation
@@ -144,7 +152,12 @@ func (t *Tracker) AcquireSource(streamName string, localPaths []string, key Asse
 	}
 
 	if degraded {
-		t.degradedDvrCount++
+		switch key.Type {
+		case "dvr":
+			t.degradedDvrCount++
+		case "vod":
+			t.degradedVodCount++
+		}
 	}
 }
 
@@ -179,8 +192,17 @@ func (t *Tracker) releaseSourceLocked(streamName string) {
 		}
 	}
 
-	if lease.Degraded && t.degradedDvrCount > 0 {
-		t.degradedDvrCount--
+	if lease.Degraded {
+		switch lease.Key.Type {
+		case "dvr":
+			if t.degradedDvrCount > 0 {
+				t.degradedDvrCount--
+			}
+		case "vod":
+			if t.degradedVodCount > 0 {
+				t.degradedVodCount--
+			}
+		}
 	}
 }
 
@@ -331,14 +353,28 @@ func (t *Tracker) IsAssetLeased(key AssetKey) bool {
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	// Asset-level check: match by Type+Hash regardless of ChapterID. Any
-	// chapter lease for the same DVR hash counts.
 	for k := range t.assetSource {
 		if k.Type == key.Type && k.Hash == key.Hash {
 			return true
 		}
 	}
 	return false
+}
+
+// DegradedVodCleanupActive reports whether any VOD source lease is in
+// degraded state (active stream whose internal_name does not map to a
+// known artifact_hash on this node). Callers of operator VOD destructive
+// cleanup refuse while this is true — without an internal_name→hash
+// mapping the lease cannot pin the backing file path, so the only safe
+// option is to block all VOD deletes globally until reconciliation clears
+// the ambiguity.
+func (t *Tracker) DegradedVodCleanupActive() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.degradedVodCount > 0
 }
 
 // DegradedDvrCleanupActive reports whether any DVR source lease is in degraded

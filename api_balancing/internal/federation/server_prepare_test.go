@@ -326,13 +326,11 @@ func TestPrepareArtifact_DVRRejected(t *testing.T) {
 	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
 		ArtifactId: "hash-dvr-ok",
 		TenantId:   "tenant-a",
-		DvrStartMs: 0,
-		DvrEndMs:   18000,
 	})
 	if err != nil {
 		t.Fatalf("PrepareArtifact() err = %v", err)
 	}
-	if resp.GetError() != "DVR playback uses dvrChapter and dvr+ chapter routing; PrepareArtifact is not a DVR playback surface" {
+	if resp.GetError() != "DVR playback is per-chapter; query dvrChapters and PrepareArtifact each chapter's VOD artifact_hash" {
 		t.Fatalf("expected DVR rejection, got %q", resp.GetError())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

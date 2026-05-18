@@ -226,6 +226,10 @@ func (m *mockArtifactRepo) NeedsDtshSync(_ context.Context, _ string) bool {
 	return false
 }
 
+func (m *mockArtifactRepo) NeedsVODDtshSync(_ context.Context, _ string) bool {
+	return false
+}
+
 func (m *mockArtifactRepo) UpdateDVRProgressByHash(_ context.Context, _ string, _ string, _ int64) error {
 	return nil
 }

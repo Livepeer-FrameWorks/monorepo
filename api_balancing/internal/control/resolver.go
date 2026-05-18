@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"frameworks/api_balancing/internal/state"
@@ -84,36 +85,76 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 		return target, nil
 	}
 
-	if chapterID, ok := ParseDVRChapterPlaybackID(input); ok {
-		target := &StreamTarget{
-			InternalName: input,
-			IsVod:        true,
-			ContentType:  "dvr",
-		}
-		if CommodoreClient != nil {
-			if chapter, err := GetChapter(ctx, chapterID); err == nil {
-				if dvr, derr := CommodoreClient.ResolveDVRHash(ctx, chapter.ArtifactHash); derr == nil && dvr.GetFound() {
-					target.TenantID = dvr.GetTenantId()
-					target.StreamID = dvr.GetStreamId()
-					if dvr.GetPlaybackId() != "" {
-						if policy, perr := CommodoreClient.ResolveArtifactPlaybackID(ctx, dvr.GetPlaybackId()); perr == nil && policy.GetFound() {
-							target.ClusterPeers = policy.GetClusterPeers()
-							target.RequiresAuth = policy.GetRequiresAuth()
-							target.RequiresAuthKnown = true
-						}
-					}
+	// Canonical "dvr+<dvr_internal_name>" — the rolling-DVR playback
+	// surface of an actively recording stream. Chapter playback flows
+	// through the chapter artifact's public playback_id (resolved by
+	// the artifact-playback path below); a dvr+ token whose body is
+	// NOT a DVR artifact internal name is treated as not-found so the
+	// legacy dvr+<chapter_id> shape does not silently masquerade as a
+	// DVR target.
+	if strings.HasPrefix(input, "dvr+") {
+		token := strings.TrimPrefix(input, "dvr+")
+		if CommodoreClient != nil && token != "" {
+			if resp, err := CommodoreClient.ResolveArtifactInternalName(ctx, token); err == nil && resp.Found && resp.GetContentType() == "dvr" {
+				target := &StreamTarget{
+					InternalName: input,
+					ContentType:  "dvr",
+					// Live-type transport (local manifest on origin, DTSC
+					// pull cross-node), not relay/S3 — IsVod stays false.
+					IsVod:             false,
+					TenantID:          resp.TenantId,
+					StreamID:          resp.StreamId,
+					ClusterPeers:      resp.ClusterPeers,
+					RequiresAuth:      resp.GetRequiresAuth(),
+					RequiresAuthKnown: true,
 				}
+				applyArtifactPlacement(ctx, resp.ArtifactHash, target)
+				return target, nil
 			}
 		}
+		// Sentinel empty target + error: callers branch on InternalName=="" to
+		// mean "not found" without nil-checking the target pointer.
+		return &StreamTarget{}, fmt.Errorf("dvr+ token does not resolve to a DVR artifact internal name")
+	}
+
+	// 2a. Chapter playback ID (Commodore-minted public ID for a chapter
+	// VOD artifact). Chapter artifacts are library_visible=false so
+	// they're not registered in commodore.vod_assets — the regular
+	// artifact-playback-id resolver below would miss them. PLAY_REWRITE
+	// must succeed here so a player handed a chapter playback URL by
+	// resolveViewerEndpoint can actually play.
+	if resp, ok := resolveChapterArtifactPlaybackResp(ctx, input); ok {
+		target := &StreamTarget{
+			InternalName:      "vod+" + resp.InternalName,
+			IsVod:             true,
+			TenantID:          resp.TenantId,
+			StreamID:          resp.StreamId,
+			ContentType:       resp.ContentType,
+			ClusterPeers:      resp.ClusterPeers,
+			RequiresAuth:      resp.GetRequiresAuth(),
+			RequiresAuthKnown: true,
+		}
+		applyArtifactPlacement(ctx, resp.ArtifactHash, target)
 		return target, nil
 	}
 
-	// 2. Artifact playback ID (clip/dvr/vod)
+	// 2b. Artifact playback ID (clip / dvr / vod). DVR rewrites to
+	// dvr+<dvr_internal_name> — its own Mist stream identity, distinct
+	// from vod+. Active DVR is served from the recording origin's
+	// rolling artefacts (local manifest on origin, DTSC pull on other
+	// edges); finalized DVR resolves to the latest playable chapter
+	// via the relay → S3 path. Clips and VODs share vod+<internal_name>.
 	if CommodoreClient != nil {
 		if resp, err := CommodoreClient.ResolveArtifactPlaybackID(ctx, input); err == nil && resp.Found {
+			prefix := "vod+"
+			isVod := true
+			if resp.GetContentType() == "dvr" {
+				prefix = "dvr+"
+				isVod = false
+			}
 			target := &StreamTarget{
-				InternalName:      "vod+" + resp.InternalName,
-				IsVod:             true,
+				InternalName:      prefix + resp.InternalName,
+				IsVod:             isVod,
 				TenantID:          resp.TenantId,
 				StreamID:          resp.StreamId,
 				ContentType:       resp.ContentType,

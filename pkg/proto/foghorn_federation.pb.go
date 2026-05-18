@@ -67,7 +67,7 @@ func (x MintStorageURLsRequest_Operation) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use MintStorageURLsRequest_Operation.Descriptor instead.
 func (MintStorageURLsRequest_Operation) EnumDescriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{32, 0}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{30, 0}
 }
 
 type QueryStreamRequest struct {
@@ -500,17 +500,13 @@ func (x *OriginPullAck) GetDtscUrl() string {
 
 type PrepareArtifactRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
-	ArtifactId        string                 `protobuf:"bytes,1,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"` // Artifact hash (clip/vod)
+	ArtifactId        string                 `protobuf:"bytes,1,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"` // Artifact hash (clip/vod/chapter VOD)
 	ClipHash          string                 `protobuf:"bytes,2,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`       // Clip hash fallback alias
 	RequestingCluster string                 `protobuf:"bytes,3,opt,name=requesting_cluster,json=requestingCluster,proto3" json:"requesting_cluster,omitempty"`
-	ArtifactType      string                 `protobuf:"bytes,4,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"` // "clip" or "vod"; DVR is rejected by PrepareArtifact
+	ArtifactType      string                 `protobuf:"bytes,4,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"` // "clip" or "vod"; parent DVR artifacts are rejected (use the chapter VOD's artifact_hash)
 	TenantId          string                 `protobuf:"bytes,5,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	// Reserved wire surface from the DVR chapter prototype. Current DVR
-	// playback uses RetrieveDVRChapter plus the returned dvr+ playback ID.
-	DvrStartMs    int64 `protobuf:"varint,6,opt,name=dvr_start_ms,json=dvrStartMs,proto3" json:"dvr_start_ms,omitempty"`
-	DvrEndMs      int64 `protobuf:"varint,7,opt,name=dvr_end_ms,json=dvrEndMs,proto3" json:"dvr_end_ms,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *PrepareArtifactRequest) Reset() {
@@ -578,20 +574,6 @@ func (x *PrepareArtifactRequest) GetTenantId() string {
 	return ""
 }
 
-func (x *PrepareArtifactRequest) GetDvrStartMs() int64 {
-	if x != nil {
-		return x.DvrStartMs
-	}
-	return 0
-}
-
-func (x *PrepareArtifactRequest) GetDvrEndMs() int64 {
-	if x != nil {
-		return x.DvrEndMs
-	}
-	return 0
-}
-
 type PrepareArtifactResponse struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Url             string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"` // Presigned S3 GET URL (clip/vod single file)
@@ -600,7 +582,9 @@ type PrepareArtifactResponse struct {
 	EstReadySeconds uint32                 `protobuf:"varint,4,opt,name=est_ready_seconds,json=estReadySeconds,proto3" json:"est_ready_seconds,omitempty"` // Estimated time until ready (for async prep)
 	Error           string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
 	// Filename -> presigned GET URL for segmented non-DVR artifacts.
-	// DVR chapter playback uses dvr+ routing and does not consume this field.
+	// Parent DVR artifacts are rejected by PrepareArtifact; finalized
+	// chapters are addressed as their own VOD artifacts and use the
+	// single-file url/segment_urls path like any other VOD.
 	SegmentUrls        map[string]string `protobuf:"bytes,6,rep,name=segment_urls,json=segmentUrls,proto3" json:"segment_urls,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Format             string            `protobuf:"bytes,7,opt,name=format,proto3" json:"format,omitempty"`                                                     // Container format (mp4, m3u8, etc.)
 	InternalName       string            `protobuf:"bytes,8,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                     // Artifact routing name (vod+{this})
@@ -610,11 +594,8 @@ type PrepareArtifactResponse struct {
 	// other fields on this response are ignored when redirect_cluster_id is
 	// set. Single hop only — chained redirects fail closed at the consumer.
 	RedirectClusterId string `protobuf:"bytes,10,opt,name=redirect_cluster_id,json=redirectClusterId,proto3" json:"redirect_cluster_id,omitempty"`
-	// Reserved wire surface from the DVR chapter prototype. Current DVR
-	// playback defrosts through the selected edge using the chapter ID.
-	DvrSegments   []*DVRSegmentRef `protobuf:"bytes,11,rep,name=dvr_segments,json=dvrSegments,proto3" json:"dvr_segments,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *PrepareArtifactResponse) Reset() {
@@ -717,235 +698,6 @@ func (x *PrepareArtifactResponse) GetRedirectClusterId() string {
 	return ""
 }
 
-func (x *PrepareArtifactResponse) GetDvrSegments() []*DVRSegmentRef {
-	if x != nil {
-		return x.DvrSegments
-	}
-	return nil
-}
-
-type PrepareDVRChapterRequest struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	RequestingCluster string                 `protobuf:"bytes,1,opt,name=requesting_cluster,json=requestingCluster,proto3" json:"requesting_cluster,omitempty"`
-	TenantId          string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	DvrArtifactId     string                 `protobuf:"bytes,3,opt,name=dvr_artifact_id,json=dvrArtifactId,proto3" json:"dvr_artifact_id,omitempty"` // dvr_hash; required
-	// Caller specifies either chapter_id (fast path) OR the range fields.
-	// Range support lets origin re-materialize when a stale alias points at
-	// a chapter row that has been evicted. Origin remains the only writer
-	// of chapter rows. Range fields mirror RetrieveDVRChapterRequest.
-	ChapterId        string `protobuf:"bytes,4,opt,name=chapter_id,json=chapterId,proto3" json:"chapter_id,omitempty"`
-	Mode             string `protobuf:"bytes,5,opt,name=mode,proto3" json:"mode,omitempty"` // explicit_range | fixed_interval | window_sized
-	IntervalSeconds  int32  `protobuf:"varint,6,opt,name=interval_seconds,json=intervalSeconds,proto3" json:"interval_seconds,omitempty"`
-	StartMs          int64  `protobuf:"varint,7,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"`
-	EndMs            int64  `protobuf:"varint,8,opt,name=end_ms,json=endMs,proto3" json:"end_ms,omitempty"`
-	UrlExpirySeconds uint32 `protobuf:"varint,9,opt,name=url_expiry_seconds,json=urlExpirySeconds,proto3" json:"url_expiry_seconds,omitempty"` // advisory; origin clamps
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
-}
-
-func (x *PrepareDVRChapterRequest) Reset() {
-	*x = PrepareDVRChapterRequest{}
-	mi := &file_foghorn_federation_proto_msgTypes[7]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PrepareDVRChapterRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PrepareDVRChapterRequest) ProtoMessage() {}
-
-func (x *PrepareDVRChapterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[7]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PrepareDVRChapterRequest.ProtoReflect.Descriptor instead.
-func (*PrepareDVRChapterRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *PrepareDVRChapterRequest) GetRequestingCluster() string {
-	if x != nil {
-		return x.RequestingCluster
-	}
-	return ""
-}
-
-func (x *PrepareDVRChapterRequest) GetTenantId() string {
-	if x != nil {
-		return x.TenantId
-	}
-	return ""
-}
-
-func (x *PrepareDVRChapterRequest) GetDvrArtifactId() string {
-	if x != nil {
-		return x.DvrArtifactId
-	}
-	return ""
-}
-
-func (x *PrepareDVRChapterRequest) GetChapterId() string {
-	if x != nil {
-		return x.ChapterId
-	}
-	return ""
-}
-
-func (x *PrepareDVRChapterRequest) GetMode() string {
-	if x != nil {
-		return x.Mode
-	}
-	return ""
-}
-
-func (x *PrepareDVRChapterRequest) GetIntervalSeconds() int32 {
-	if x != nil {
-		return x.IntervalSeconds
-	}
-	return 0
-}
-
-func (x *PrepareDVRChapterRequest) GetStartMs() int64 {
-	if x != nil {
-		return x.StartMs
-	}
-	return 0
-}
-
-func (x *PrepareDVRChapterRequest) GetEndMs() int64 {
-	if x != nil {
-		return x.EndMs
-	}
-	return 0
-}
-
-func (x *PrepareDVRChapterRequest) GetUrlExpirySeconds() uint32 {
-	if x != nil {
-		return x.UrlExpirySeconds
-	}
-	return 0
-}
-
-type PrepareDVRChapterResponse struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	ChapterId          string                 `protobuf:"bytes,1,opt,name=chapter_id,json=chapterId,proto3" json:"chapter_id,omitempty"`
-	Segments           []*DVRSegmentRef       `protobuf:"bytes,2,rep,name=segments,proto3" json:"segments,omitempty"`
-	StartMs            int64                  `protobuf:"varint,3,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"`
-	EndMs              int64                  `protobuf:"varint,4,opt,name=end_ms,json=endMs,proto3" json:"end_ms,omitempty"`
-	Mode               string                 `protobuf:"bytes,5,opt,name=mode,proto3" json:"mode,omitempty"`
-	IntervalSeconds    int32                  `protobuf:"varint,6,opt,name=interval_seconds,json=intervalSeconds,proto3" json:"interval_seconds,omitempty"`
-	StreamInternalName string                 `protobuf:"bytes,7,opt,name=stream_internal_name,json=streamInternalName,proto3" json:"stream_internal_name,omitempty"`
-	UrlTtlSeconds      uint32                 `protobuf:"varint,8,opt,name=url_ttl_seconds,json=urlTtlSeconds,proto3" json:"url_ttl_seconds,omitempty"`
-	// Error sentinels: not_dvr_origin, unsupported_split_write_dvr,
-	// tenancy_mismatch, chapter_not_found. Empty string on success.
-	Error         string `protobuf:"bytes,9,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PrepareDVRChapterResponse) Reset() {
-	*x = PrepareDVRChapterResponse{}
-	mi := &file_foghorn_federation_proto_msgTypes[8]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PrepareDVRChapterResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PrepareDVRChapterResponse) ProtoMessage() {}
-
-func (x *PrepareDVRChapterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[8]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PrepareDVRChapterResponse.ProtoReflect.Descriptor instead.
-func (*PrepareDVRChapterResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *PrepareDVRChapterResponse) GetChapterId() string {
-	if x != nil {
-		return x.ChapterId
-	}
-	return ""
-}
-
-func (x *PrepareDVRChapterResponse) GetSegments() []*DVRSegmentRef {
-	if x != nil {
-		return x.Segments
-	}
-	return nil
-}
-
-func (x *PrepareDVRChapterResponse) GetStartMs() int64 {
-	if x != nil {
-		return x.StartMs
-	}
-	return 0
-}
-
-func (x *PrepareDVRChapterResponse) GetEndMs() int64 {
-	if x != nil {
-		return x.EndMs
-	}
-	return 0
-}
-
-func (x *PrepareDVRChapterResponse) GetMode() string {
-	if x != nil {
-		return x.Mode
-	}
-	return ""
-}
-
-func (x *PrepareDVRChapterResponse) GetIntervalSeconds() int32 {
-	if x != nil {
-		return x.IntervalSeconds
-	}
-	return 0
-}
-
-func (x *PrepareDVRChapterResponse) GetStreamInternalName() string {
-	if x != nil {
-		return x.StreamInternalName
-	}
-	return ""
-}
-
-func (x *PrepareDVRChapterResponse) GetUrlTtlSeconds() uint32 {
-	if x != nil {
-		return x.UrlTtlSeconds
-	}
-	return 0
-}
-
-func (x *PrepareDVRChapterResponse) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
-}
-
 type RemoteClipRequest struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	StreamInternalName string                 `protobuf:"bytes,1,opt,name=stream_internal_name,json=streamInternalName,proto3" json:"stream_internal_name,omitempty"` // Source stream's MistServer routing name
@@ -967,7 +719,7 @@ type RemoteClipRequest struct {
 
 func (x *RemoteClipRequest) Reset() {
 	*x = RemoteClipRequest{}
-	mi := &file_foghorn_federation_proto_msgTypes[9]
+	mi := &file_foghorn_federation_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -979,7 +731,7 @@ func (x *RemoteClipRequest) String() string {
 func (*RemoteClipRequest) ProtoMessage() {}
 
 func (x *RemoteClipRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[9]
+	mi := &file_foghorn_federation_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -992,7 +744,7 @@ func (x *RemoteClipRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoteClipRequest.ProtoReflect.Descriptor instead.
 func (*RemoteClipRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{9}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RemoteClipRequest) GetStreamInternalName() string {
@@ -1098,7 +850,7 @@ type RemoteClipResponse struct {
 
 func (x *RemoteClipResponse) Reset() {
 	*x = RemoteClipResponse{}
-	mi := &file_foghorn_federation_proto_msgTypes[10]
+	mi := &file_foghorn_federation_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1110,7 +862,7 @@ func (x *RemoteClipResponse) String() string {
 func (*RemoteClipResponse) ProtoMessage() {}
 
 func (x *RemoteClipResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[10]
+	mi := &file_foghorn_federation_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1123,7 +875,7 @@ func (x *RemoteClipResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoteClipResponse.ProtoReflect.Descriptor instead.
 func (*RemoteClipResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{10}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RemoteClipResponse) GetAccepted() bool {
@@ -1169,7 +921,7 @@ type RemoteDVRRequest struct {
 
 func (x *RemoteDVRRequest) Reset() {
 	*x = RemoteDVRRequest{}
-	mi := &file_foghorn_federation_proto_msgTypes[11]
+	mi := &file_foghorn_federation_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1181,7 +933,7 @@ func (x *RemoteDVRRequest) String() string {
 func (*RemoteDVRRequest) ProtoMessage() {}
 
 func (x *RemoteDVRRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[11]
+	mi := &file_foghorn_federation_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1194,7 +946,7 @@ func (x *RemoteDVRRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoteDVRRequest.ProtoReflect.Descriptor instead.
 func (*RemoteDVRRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{11}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RemoteDVRRequest) GetStreamInternalName() string {
@@ -1257,7 +1009,7 @@ type RemoteDVRResponse struct {
 
 func (x *RemoteDVRResponse) Reset() {
 	*x = RemoteDVRResponse{}
-	mi := &file_foghorn_federation_proto_msgTypes[12]
+	mi := &file_foghorn_federation_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1269,7 +1021,7 @@ func (x *RemoteDVRResponse) String() string {
 func (*RemoteDVRResponse) ProtoMessage() {}
 
 func (x *RemoteDVRResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[12]
+	mi := &file_foghorn_federation_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1282,7 +1034,7 @@ func (x *RemoteDVRResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoteDVRResponse.ProtoReflect.Descriptor instead.
 func (*RemoteDVRResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{12}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RemoteDVRResponse) GetAccepted() bool {
@@ -1328,7 +1080,7 @@ type PeerMessage struct {
 
 func (x *PeerMessage) Reset() {
 	*x = PeerMessage{}
-	mi := &file_foghorn_federation_proto_msgTypes[13]
+	mi := &file_foghorn_federation_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1340,7 +1092,7 @@ func (x *PeerMessage) String() string {
 func (*PeerMessage) ProtoMessage() {}
 
 func (x *PeerMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[13]
+	mi := &file_foghorn_federation_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1353,7 +1105,7 @@ func (x *PeerMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerMessage.ProtoReflect.Descriptor instead.
 func (*PeerMessage) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{13}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *PeerMessage) GetClusterId() string {
@@ -1511,7 +1263,7 @@ type StreamLifecycleEvent struct {
 
 func (x *StreamLifecycleEvent) Reset() {
 	*x = StreamLifecycleEvent{}
-	mi := &file_foghorn_federation_proto_msgTypes[14]
+	mi := &file_foghorn_federation_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1523,7 +1275,7 @@ func (x *StreamLifecycleEvent) String() string {
 func (*StreamLifecycleEvent) ProtoMessage() {}
 
 func (x *StreamLifecycleEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[14]
+	mi := &file_foghorn_federation_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1536,7 +1288,7 @@ func (x *StreamLifecycleEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamLifecycleEvent.ProtoReflect.Descriptor instead.
 func (*StreamLifecycleEvent) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{14}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *StreamLifecycleEvent) GetInternalName() string {
@@ -1594,7 +1346,7 @@ type EdgeTelemetry struct {
 
 func (x *EdgeTelemetry) Reset() {
 	*x = EdgeTelemetry{}
-	mi := &file_foghorn_federation_proto_msgTypes[15]
+	mi := &file_foghorn_federation_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1606,7 +1358,7 @@ func (x *EdgeTelemetry) String() string {
 func (*EdgeTelemetry) ProtoMessage() {}
 
 func (x *EdgeTelemetry) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[15]
+	mi := &file_foghorn_federation_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1619,7 +1371,7 @@ func (x *EdgeTelemetry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EdgeTelemetry.ProtoReflect.Descriptor instead.
 func (*EdgeTelemetry) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{15}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *EdgeTelemetry) GetStreamName() string {
@@ -1709,7 +1461,7 @@ type ReplicationEvent struct {
 
 func (x *ReplicationEvent) Reset() {
 	*x = ReplicationEvent{}
-	mi := &file_foghorn_federation_proto_msgTypes[16]
+	mi := &file_foghorn_federation_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1721,7 +1473,7 @@ func (x *ReplicationEvent) String() string {
 func (*ReplicationEvent) ProtoMessage() {}
 
 func (x *ReplicationEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[16]
+	mi := &file_foghorn_federation_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1734,7 +1486,7 @@ func (x *ReplicationEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReplicationEvent.ProtoReflect.Descriptor instead.
 func (*ReplicationEvent) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{16}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ReplicationEvent) GetStreamName() string {
@@ -1793,7 +1545,7 @@ type ClusterEdgeSummary struct {
 
 func (x *ClusterEdgeSummary) Reset() {
 	*x = ClusterEdgeSummary{}
-	mi := &file_foghorn_federation_proto_msgTypes[17]
+	mi := &file_foghorn_federation_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1805,7 +1557,7 @@ func (x *ClusterEdgeSummary) String() string {
 func (*ClusterEdgeSummary) ProtoMessage() {}
 
 func (x *ClusterEdgeSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[17]
+	mi := &file_foghorn_federation_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1818,7 +1570,7 @@ func (x *ClusterEdgeSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterEdgeSummary.ProtoReflect.Descriptor instead.
 func (*ClusterEdgeSummary) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{17}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ClusterEdgeSummary) GetEdges() []*EdgeSnapshot {
@@ -1854,7 +1606,7 @@ type EdgeSnapshot struct {
 
 func (x *EdgeSnapshot) Reset() {
 	*x = EdgeSnapshot{}
-	mi := &file_foghorn_federation_proto_msgTypes[18]
+	mi := &file_foghorn_federation_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1866,7 +1618,7 @@ func (x *EdgeSnapshot) String() string {
 func (*EdgeSnapshot) ProtoMessage() {}
 
 func (x *EdgeSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[18]
+	mi := &file_foghorn_federation_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1879,7 +1631,7 @@ func (x *EdgeSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EdgeSnapshot.ProtoReflect.Descriptor instead.
 func (*EdgeSnapshot) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{18}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *EdgeSnapshot) GetNodeId() string {
@@ -1966,7 +1718,7 @@ type ArtifactAdvertisement struct {
 
 func (x *ArtifactAdvertisement) Reset() {
 	*x = ArtifactAdvertisement{}
-	mi := &file_foghorn_federation_proto_msgTypes[19]
+	mi := &file_foghorn_federation_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1978,7 +1730,7 @@ func (x *ArtifactAdvertisement) String() string {
 func (*ArtifactAdvertisement) ProtoMessage() {}
 
 func (x *ArtifactAdvertisement) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[19]
+	mi := &file_foghorn_federation_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1991,7 +1743,7 @@ func (x *ArtifactAdvertisement) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactAdvertisement.ProtoReflect.Descriptor instead.
 func (*ArtifactAdvertisement) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{19}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ArtifactAdvertisement) GetArtifacts() []*ArtifactLocation {
@@ -2027,7 +1779,7 @@ type ArtifactLocation struct {
 
 func (x *ArtifactLocation) Reset() {
 	*x = ArtifactLocation{}
-	mi := &file_foghorn_federation_proto_msgTypes[20]
+	mi := &file_foghorn_federation_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2039,7 +1791,7 @@ func (x *ArtifactLocation) String() string {
 func (*ArtifactLocation) ProtoMessage() {}
 
 func (x *ArtifactLocation) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[20]
+	mi := &file_foghorn_federation_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2052,7 +1804,7 @@ func (x *ArtifactLocation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactLocation.ProtoReflect.Descriptor instead.
 func (*ArtifactLocation) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{20}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ArtifactLocation) GetArtifactHash() string {
@@ -2144,7 +1896,7 @@ type StreamAdvertisement struct {
 
 func (x *StreamAdvertisement) Reset() {
 	*x = StreamAdvertisement{}
-	mi := &file_foghorn_federation_proto_msgTypes[21]
+	mi := &file_foghorn_federation_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2156,7 +1908,7 @@ func (x *StreamAdvertisement) String() string {
 func (*StreamAdvertisement) ProtoMessage() {}
 
 func (x *StreamAdvertisement) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[21]
+	mi := &file_foghorn_federation_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2169,7 +1921,7 @@ func (x *StreamAdvertisement) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamAdvertisement.ProtoReflect.Descriptor instead.
 func (*StreamAdvertisement) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{21}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *StreamAdvertisement) GetInternalName() string {
@@ -2240,7 +1992,7 @@ type PeerStreamEdge struct {
 
 func (x *PeerStreamEdge) Reset() {
 	*x = PeerStreamEdge{}
-	mi := &file_foghorn_federation_proto_msgTypes[22]
+	mi := &file_foghorn_federation_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2252,7 +2004,7 @@ func (x *PeerStreamEdge) String() string {
 func (*PeerStreamEdge) ProtoMessage() {}
 
 func (x *PeerStreamEdge) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[22]
+	mi := &file_foghorn_federation_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2265,7 +2017,7 @@ func (x *PeerStreamEdge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerStreamEdge.ProtoReflect.Descriptor instead.
 func (*PeerStreamEdge) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{22}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *PeerStreamEdge) GetNodeId() string {
@@ -2359,7 +2111,7 @@ type PeerHeartbeat struct {
 
 func (x *PeerHeartbeat) Reset() {
 	*x = PeerHeartbeat{}
-	mi := &file_foghorn_federation_proto_msgTypes[23]
+	mi := &file_foghorn_federation_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2371,7 +2123,7 @@ func (x *PeerHeartbeat) String() string {
 func (*PeerHeartbeat) ProtoMessage() {}
 
 func (x *PeerHeartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[23]
+	mi := &file_foghorn_federation_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2384,7 +2136,7 @@ func (x *PeerHeartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerHeartbeat.ProtoReflect.Descriptor instead.
 func (*PeerHeartbeat) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{23}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *PeerHeartbeat) GetProtocolVersion() uint32 {
@@ -2475,7 +2227,7 @@ type CapacitySummary struct {
 
 func (x *CapacitySummary) Reset() {
 	*x = CapacitySummary{}
-	mi := &file_foghorn_federation_proto_msgTypes[24]
+	mi := &file_foghorn_federation_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2487,7 +2239,7 @@ func (x *CapacitySummary) String() string {
 func (*CapacitySummary) ProtoMessage() {}
 
 func (x *CapacitySummary) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[24]
+	mi := &file_foghorn_federation_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2500,7 +2252,7 @@ func (x *CapacitySummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CapacitySummary.ProtoReflect.Descriptor instead.
 func (*CapacitySummary) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{24}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *CapacitySummary) GetTotalBandwidth() uint64 {
@@ -2563,7 +2315,7 @@ type ListTenantArtifactsRequest struct {
 
 func (x *ListTenantArtifactsRequest) Reset() {
 	*x = ListTenantArtifactsRequest{}
-	mi := &file_foghorn_federation_proto_msgTypes[25]
+	mi := &file_foghorn_federation_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2575,7 +2327,7 @@ func (x *ListTenantArtifactsRequest) String() string {
 func (*ListTenantArtifactsRequest) ProtoMessage() {}
 
 func (x *ListTenantArtifactsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[25]
+	mi := &file_foghorn_federation_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2588,7 +2340,7 @@ func (x *ListTenantArtifactsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTenantArtifactsRequest.ProtoReflect.Descriptor instead.
 func (*ListTenantArtifactsRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{25}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ListTenantArtifactsRequest) GetTenantId() string {
@@ -2615,7 +2367,7 @@ type ListTenantArtifactsResponse struct {
 
 func (x *ListTenantArtifactsResponse) Reset() {
 	*x = ListTenantArtifactsResponse{}
-	mi := &file_foghorn_federation_proto_msgTypes[26]
+	mi := &file_foghorn_federation_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2627,7 +2379,7 @@ func (x *ListTenantArtifactsResponse) String() string {
 func (*ListTenantArtifactsResponse) ProtoMessage() {}
 
 func (x *ListTenantArtifactsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[26]
+	mi := &file_foghorn_federation_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2640,7 +2392,7 @@ func (x *ListTenantArtifactsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTenantArtifactsResponse.ProtoReflect.Descriptor instead.
 func (*ListTenantArtifactsResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{26}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ListTenantArtifactsResponse) GetArtifacts() []*ArtifactMetadata {
@@ -2670,7 +2422,7 @@ type ArtifactMetadata struct {
 
 func (x *ArtifactMetadata) Reset() {
 	*x = ArtifactMetadata{}
-	mi := &file_foghorn_federation_proto_msgTypes[27]
+	mi := &file_foghorn_federation_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2682,7 +2434,7 @@ func (x *ArtifactMetadata) String() string {
 func (*ArtifactMetadata) ProtoMessage() {}
 
 func (x *ArtifactMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[27]
+	mi := &file_foghorn_federation_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2695,7 +2447,7 @@ func (x *ArtifactMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactMetadata.ProtoReflect.Descriptor instead.
 func (*ArtifactMetadata) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{27}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ArtifactMetadata) GetArtifactHash() string {
@@ -2787,7 +2539,7 @@ type MigrateArtifactMetadataRequest struct {
 
 func (x *MigrateArtifactMetadataRequest) Reset() {
 	*x = MigrateArtifactMetadataRequest{}
-	mi := &file_foghorn_federation_proto_msgTypes[28]
+	mi := &file_foghorn_federation_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2799,7 +2551,7 @@ func (x *MigrateArtifactMetadataRequest) String() string {
 func (*MigrateArtifactMetadataRequest) ProtoMessage() {}
 
 func (x *MigrateArtifactMetadataRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[28]
+	mi := &file_foghorn_federation_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2812,7 +2564,7 @@ func (x *MigrateArtifactMetadataRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrateArtifactMetadataRequest.ProtoReflect.Descriptor instead.
 func (*MigrateArtifactMetadataRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{28}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *MigrateArtifactMetadataRequest) GetTenantId() string {
@@ -2841,7 +2593,7 @@ type MigrateArtifactMetadataResponse struct {
 
 func (x *MigrateArtifactMetadataResponse) Reset() {
 	*x = MigrateArtifactMetadataResponse{}
-	mi := &file_foghorn_federation_proto_msgTypes[29]
+	mi := &file_foghorn_federation_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2853,7 +2605,7 @@ func (x *MigrateArtifactMetadataResponse) String() string {
 func (*MigrateArtifactMetadataResponse) ProtoMessage() {}
 
 func (x *MigrateArtifactMetadataResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[29]
+	mi := &file_foghorn_federation_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2866,7 +2618,7 @@ func (x *MigrateArtifactMetadataResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrateArtifactMetadataResponse.ProtoReflect.Descriptor instead.
 func (*MigrateArtifactMetadataResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{29}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *MigrateArtifactMetadataResponse) GetMigratedCount() int32 {
@@ -2903,7 +2655,7 @@ type ForwardArtifactCommandRequest struct {
 
 func (x *ForwardArtifactCommandRequest) Reset() {
 	*x = ForwardArtifactCommandRequest{}
-	mi := &file_foghorn_federation_proto_msgTypes[30]
+	mi := &file_foghorn_federation_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2915,7 +2667,7 @@ func (x *ForwardArtifactCommandRequest) String() string {
 func (*ForwardArtifactCommandRequest) ProtoMessage() {}
 
 func (x *ForwardArtifactCommandRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[30]
+	mi := &file_foghorn_federation_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2928,7 +2680,7 @@ func (x *ForwardArtifactCommandRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardArtifactCommandRequest.ProtoReflect.Descriptor instead.
 func (*ForwardArtifactCommandRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{30}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ForwardArtifactCommandRequest) GetCommand() string {
@@ -2969,7 +2721,7 @@ type ForwardArtifactCommandResponse struct {
 
 func (x *ForwardArtifactCommandResponse) Reset() {
 	*x = ForwardArtifactCommandResponse{}
-	mi := &file_foghorn_federation_proto_msgTypes[31]
+	mi := &file_foghorn_federation_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2981,7 +2733,7 @@ func (x *ForwardArtifactCommandResponse) String() string {
 func (*ForwardArtifactCommandResponse) ProtoMessage() {}
 
 func (x *ForwardArtifactCommandResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[31]
+	mi := &file_foghorn_federation_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2994,7 +2746,7 @@ func (x *ForwardArtifactCommandResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardArtifactCommandResponse.ProtoReflect.Descriptor instead.
 func (*ForwardArtifactCommandResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{31}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ForwardArtifactCommandResponse) GetHandled() bool {
@@ -3070,7 +2822,7 @@ type MintStorageURLsRequest struct {
 
 func (x *MintStorageURLsRequest) Reset() {
 	*x = MintStorageURLsRequest{}
-	mi := &file_foghorn_federation_proto_msgTypes[32]
+	mi := &file_foghorn_federation_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3082,7 +2834,7 @@ func (x *MintStorageURLsRequest) String() string {
 func (*MintStorageURLsRequest) ProtoMessage() {}
 
 func (x *MintStorageURLsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[32]
+	mi := &file_foghorn_federation_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3095,7 +2847,7 @@ func (x *MintStorageURLsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintStorageURLsRequest.ProtoReflect.Descriptor instead.
 func (*MintStorageURLsRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{32}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *MintStorageURLsRequest) GetTenantId() string {
@@ -3188,7 +2940,7 @@ type MintStorageURLsResponse struct {
 
 func (x *MintStorageURLsResponse) Reset() {
 	*x = MintStorageURLsResponse{}
-	mi := &file_foghorn_federation_proto_msgTypes[33]
+	mi := &file_foghorn_federation_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3200,7 +2952,7 @@ func (x *MintStorageURLsResponse) String() string {
 func (*MintStorageURLsResponse) ProtoMessage() {}
 
 func (x *MintStorageURLsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[33]
+	mi := &file_foghorn_federation_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3213,7 +2965,7 @@ func (x *MintStorageURLsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintStorageURLsResponse.ProtoReflect.Descriptor instead.
 func (*MintStorageURLsResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{33}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *MintStorageURLsResponse) GetAccepted() bool {
@@ -3299,7 +3051,7 @@ type DeleteStorageObjectsRequest struct {
 
 func (x *DeleteStorageObjectsRequest) Reset() {
 	*x = DeleteStorageObjectsRequest{}
-	mi := &file_foghorn_federation_proto_msgTypes[34]
+	mi := &file_foghorn_federation_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3311,7 +3063,7 @@ func (x *DeleteStorageObjectsRequest) String() string {
 func (*DeleteStorageObjectsRequest) ProtoMessage() {}
 
 func (x *DeleteStorageObjectsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[34]
+	mi := &file_foghorn_federation_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3324,7 +3076,7 @@ func (x *DeleteStorageObjectsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteStorageObjectsRequest.ProtoReflect.Descriptor instead.
 func (*DeleteStorageObjectsRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{34}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *DeleteStorageObjectsRequest) GetTenantId() string {
@@ -3431,7 +3183,7 @@ type DeleteStorageObjectsResponse struct {
 
 func (x *DeleteStorageObjectsResponse) Reset() {
 	*x = DeleteStorageObjectsResponse{}
-	mi := &file_foghorn_federation_proto_msgTypes[35]
+	mi := &file_foghorn_federation_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3443,7 +3195,7 @@ func (x *DeleteStorageObjectsResponse) String() string {
 func (*DeleteStorageObjectsResponse) ProtoMessage() {}
 
 func (x *DeleteStorageObjectsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_federation_proto_msgTypes[35]
+	mi := &file_foghorn_federation_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3456,7 +3208,7 @@ func (x *DeleteStorageObjectsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteStorageObjectsResponse.ProtoReflect.Descriptor instead.
 func (*DeleteStorageObjectsResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_federation_proto_rawDescGZIP(), []int{35}
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *DeleteStorageObjectsResponse) GetAccepted() bool {
@@ -3477,7 +3229,7 @@ var File_foghorn_federation_proto protoreflect.FileDescriptor
 
 const file_foghorn_federation_proto_rawDesc = "" +
 	"\n" +
-	"\x18foghorn_federation.proto\x12\x12foghorn_federation\x1a\tipc.proto\"\xef\x01\n" +
+	"\x18foghorn_federation.proto\x12\x12foghorn_federation\"\xef\x01\n" +
 	"\x12QueryStreamRequest\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12\x1d\n" +
@@ -3523,18 +3275,15 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\rOriginPullAck\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x19\n" +
-	"\bdtsc_url\x18\x03 \x01(\tR\adtscUrl\"\x87\x02\n" +
+	"\bdtsc_url\x18\x03 \x01(\tR\adtscUrl\"\xed\x01\n" +
 	"\x16PrepareArtifactRequest\x12\x1f\n" +
 	"\vartifact_id\x18\x01 \x01(\tR\n" +
 	"artifactId\x12\x1b\n" +
 	"\tclip_hash\x18\x02 \x01(\tR\bclipHash\x12-\n" +
 	"\x12requesting_cluster\x18\x03 \x01(\tR\x11requestingCluster\x12#\n" +
 	"\rartifact_type\x18\x04 \x01(\tR\fartifactType\x12\x1b\n" +
-	"\ttenant_id\x18\x05 \x01(\tR\btenantId\x12 \n" +
-	"\fdvr_start_ms\x18\x06 \x01(\x03R\n" +
-	"dvrStartMs\x12\x1c\n" +
-	"\n" +
-	"dvr_end_ms\x18\a \x01(\x03R\bdvrEndMs\"\xa5\x04\n" +
+	"\ttenant_id\x18\x05 \x01(\tR\btenantIdJ\x04\b\x06\x10\aJ\x04\b\a\x10\bR\fdvr_start_msR\n" +
+	"dvr_end_ms\"\xf6\x03\n" +
 	"\x17PrepareArtifactResponse\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x1d\n" +
 	"\n" +
@@ -3547,33 +3296,10 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\rinternal_name\x18\b \x01(\tR\finternalName\x120\n" +
 	"\x14stream_internal_name\x18\t \x01(\tR\x12streamInternalName\x12.\n" +
 	"\x13redirect_cluster_id\x18\n" +
-	" \x01(\tR\x11redirectClusterId\x12A\n" +
-	"\fdvr_segments\x18\v \x03(\v2\x1e.helmsmancontrol.DVRSegmentRefR\vdvrSegments\x1a>\n" +
+	" \x01(\tR\x11redirectClusterId\x1a>\n" +
 	"\x10SegmentUrlsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xcc\x02\n" +
-	"\x18PrepareDVRChapterRequest\x12-\n" +
-	"\x12requesting_cluster\x18\x01 \x01(\tR\x11requestingCluster\x12\x1b\n" +
-	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12&\n" +
-	"\x0fdvr_artifact_id\x18\x03 \x01(\tR\rdvrArtifactId\x12\x1d\n" +
-	"\n" +
-	"chapter_id\x18\x04 \x01(\tR\tchapterId\x12\x12\n" +
-	"\x04mode\x18\x05 \x01(\tR\x04mode\x12)\n" +
-	"\x10interval_seconds\x18\x06 \x01(\x05R\x0fintervalSeconds\x12\x19\n" +
-	"\bstart_ms\x18\a \x01(\x03R\astartMs\x12\x15\n" +
-	"\x06end_ms\x18\b \x01(\x03R\x05endMs\x12,\n" +
-	"\x12url_expiry_seconds\x18\t \x01(\rR\x10urlExpirySeconds\"\xd7\x02\n" +
-	"\x19PrepareDVRChapterResponse\x12\x1d\n" +
-	"\n" +
-	"chapter_id\x18\x01 \x01(\tR\tchapterId\x12:\n" +
-	"\bsegments\x18\x02 \x03(\v2\x1e.helmsmancontrol.DVRSegmentRefR\bsegments\x12\x19\n" +
-	"\bstart_ms\x18\x03 \x01(\x03R\astartMs\x12\x15\n" +
-	"\x06end_ms\x18\x04 \x01(\x03R\x05endMs\x12\x12\n" +
-	"\x04mode\x18\x05 \x01(\tR\x04mode\x12)\n" +
-	"\x10interval_seconds\x18\x06 \x01(\x05R\x0fintervalSeconds\x120\n" +
-	"\x14stream_internal_name\x18\a \x01(\tR\x12streamInternalName\x12&\n" +
-	"\x0furl_ttl_seconds\x18\b \x01(\rR\rurlTtlSeconds\x12\x14\n" +
-	"\x05error\x18\t \x01(\tR\x05error\"\xb8\x03\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\v\x10\fR\fdvr_segments\"\xb8\x03\n" +
 	"\x11RemoteClipRequest\x120\n" +
 	"\x14stream_internal_name\x18\x01 \x01(\tR\x12streamInternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
@@ -3802,13 +3528,11 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x06target\"R\n" +
 	"\x1cDeleteStorageObjectsResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason2\xb1\n" +
-	"\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason2\xbf\t\n" +
 	"\x11FoghornFederation\x12^\n" +
 	"\vQueryStream\x12&.foghorn_federation.QueryStreamRequest\x1a'.foghorn_federation.QueryStreamResponse\x12a\n" +
 	"\x10NotifyOriginPull\x12*.foghorn_federation.OriginPullNotification\x1a!.foghorn_federation.OriginPullAck\x12j\n" +
-	"\x0fPrepareArtifact\x12*.foghorn_federation.PrepareArtifactRequest\x1a+.foghorn_federation.PrepareArtifactResponse\x12p\n" +
-	"\x11PrepareDVRChapter\x12,.foghorn_federation.PrepareDVRChapterRequest\x1a-.foghorn_federation.PrepareDVRChapterResponse\x12a\n" +
+	"\x0fPrepareArtifact\x12*.foghorn_federation.PrepareArtifactRequest\x1a+.foghorn_federation.PrepareArtifactResponse\x12a\n" +
 	"\x10CreateRemoteClip\x12%.foghorn_federation.RemoteClipRequest\x1a&.foghorn_federation.RemoteClipResponse\x12^\n" +
 	"\x0fCreateRemoteDVR\x12$.foghorn_federation.RemoteDVRRequest\x1a%.foghorn_federation.RemoteDVRResponse\x12S\n" +
 	"\vPeerChannel\x12\x1f.foghorn_federation.PeerMessage\x1a\x1f.foghorn_federation.PeerMessage(\x010\x01\x12v\n" +
@@ -3831,7 +3555,7 @@ func file_foghorn_federation_proto_rawDescGZIP() []byte {
 }
 
 var file_foghorn_federation_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_foghorn_federation_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
+var file_foghorn_federation_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
 var file_foghorn_federation_proto_goTypes = []any{
 	(MintStorageURLsRequest_Operation)(0),   // 0: foghorn_federation.MintStorageURLsRequest.Operation
 	(*QueryStreamRequest)(nil),              // 1: foghorn_federation.QueryStreamRequest
@@ -3841,87 +3565,80 @@ var file_foghorn_federation_proto_goTypes = []any{
 	(*OriginPullAck)(nil),                   // 5: foghorn_federation.OriginPullAck
 	(*PrepareArtifactRequest)(nil),          // 6: foghorn_federation.PrepareArtifactRequest
 	(*PrepareArtifactResponse)(nil),         // 7: foghorn_federation.PrepareArtifactResponse
-	(*PrepareDVRChapterRequest)(nil),        // 8: foghorn_federation.PrepareDVRChapterRequest
-	(*PrepareDVRChapterResponse)(nil),       // 9: foghorn_federation.PrepareDVRChapterResponse
-	(*RemoteClipRequest)(nil),               // 10: foghorn_federation.RemoteClipRequest
-	(*RemoteClipResponse)(nil),              // 11: foghorn_federation.RemoteClipResponse
-	(*RemoteDVRRequest)(nil),                // 12: foghorn_federation.RemoteDVRRequest
-	(*RemoteDVRResponse)(nil),               // 13: foghorn_federation.RemoteDVRResponse
-	(*PeerMessage)(nil),                     // 14: foghorn_federation.PeerMessage
-	(*StreamLifecycleEvent)(nil),            // 15: foghorn_federation.StreamLifecycleEvent
-	(*EdgeTelemetry)(nil),                   // 16: foghorn_federation.EdgeTelemetry
-	(*ReplicationEvent)(nil),                // 17: foghorn_federation.ReplicationEvent
-	(*ClusterEdgeSummary)(nil),              // 18: foghorn_federation.ClusterEdgeSummary
-	(*EdgeSnapshot)(nil),                    // 19: foghorn_federation.EdgeSnapshot
-	(*ArtifactAdvertisement)(nil),           // 20: foghorn_federation.ArtifactAdvertisement
-	(*ArtifactLocation)(nil),                // 21: foghorn_federation.ArtifactLocation
-	(*StreamAdvertisement)(nil),             // 22: foghorn_federation.StreamAdvertisement
-	(*PeerStreamEdge)(nil),                  // 23: foghorn_federation.PeerStreamEdge
-	(*PeerHeartbeat)(nil),                   // 24: foghorn_federation.PeerHeartbeat
-	(*CapacitySummary)(nil),                 // 25: foghorn_federation.CapacitySummary
-	(*ListTenantArtifactsRequest)(nil),      // 26: foghorn_federation.ListTenantArtifactsRequest
-	(*ListTenantArtifactsResponse)(nil),     // 27: foghorn_federation.ListTenantArtifactsResponse
-	(*ArtifactMetadata)(nil),                // 28: foghorn_federation.ArtifactMetadata
-	(*MigrateArtifactMetadataRequest)(nil),  // 29: foghorn_federation.MigrateArtifactMetadataRequest
-	(*MigrateArtifactMetadataResponse)(nil), // 30: foghorn_federation.MigrateArtifactMetadataResponse
-	(*ForwardArtifactCommandRequest)(nil),   // 31: foghorn_federation.ForwardArtifactCommandRequest
-	(*ForwardArtifactCommandResponse)(nil),  // 32: foghorn_federation.ForwardArtifactCommandResponse
-	(*MintStorageURLsRequest)(nil),          // 33: foghorn_federation.MintStorageURLsRequest
-	(*MintStorageURLsResponse)(nil),         // 34: foghorn_federation.MintStorageURLsResponse
-	(*DeleteStorageObjectsRequest)(nil),     // 35: foghorn_federation.DeleteStorageObjectsRequest
-	(*DeleteStorageObjectsResponse)(nil),    // 36: foghorn_federation.DeleteStorageObjectsResponse
-	nil,                                     // 37: foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
-	nil,                                     // 38: foghorn_federation.MintStorageURLsResponse.SegmentUrlsEntry
-	(*DVRSegmentRef)(nil),                   // 39: helmsmancontrol.DVRSegmentRef
+	(*RemoteClipRequest)(nil),               // 8: foghorn_federation.RemoteClipRequest
+	(*RemoteClipResponse)(nil),              // 9: foghorn_federation.RemoteClipResponse
+	(*RemoteDVRRequest)(nil),                // 10: foghorn_federation.RemoteDVRRequest
+	(*RemoteDVRResponse)(nil),               // 11: foghorn_federation.RemoteDVRResponse
+	(*PeerMessage)(nil),                     // 12: foghorn_federation.PeerMessage
+	(*StreamLifecycleEvent)(nil),            // 13: foghorn_federation.StreamLifecycleEvent
+	(*EdgeTelemetry)(nil),                   // 14: foghorn_federation.EdgeTelemetry
+	(*ReplicationEvent)(nil),                // 15: foghorn_federation.ReplicationEvent
+	(*ClusterEdgeSummary)(nil),              // 16: foghorn_federation.ClusterEdgeSummary
+	(*EdgeSnapshot)(nil),                    // 17: foghorn_federation.EdgeSnapshot
+	(*ArtifactAdvertisement)(nil),           // 18: foghorn_federation.ArtifactAdvertisement
+	(*ArtifactLocation)(nil),                // 19: foghorn_federation.ArtifactLocation
+	(*StreamAdvertisement)(nil),             // 20: foghorn_federation.StreamAdvertisement
+	(*PeerStreamEdge)(nil),                  // 21: foghorn_federation.PeerStreamEdge
+	(*PeerHeartbeat)(nil),                   // 22: foghorn_federation.PeerHeartbeat
+	(*CapacitySummary)(nil),                 // 23: foghorn_federation.CapacitySummary
+	(*ListTenantArtifactsRequest)(nil),      // 24: foghorn_federation.ListTenantArtifactsRequest
+	(*ListTenantArtifactsResponse)(nil),     // 25: foghorn_federation.ListTenantArtifactsResponse
+	(*ArtifactMetadata)(nil),                // 26: foghorn_federation.ArtifactMetadata
+	(*MigrateArtifactMetadataRequest)(nil),  // 27: foghorn_federation.MigrateArtifactMetadataRequest
+	(*MigrateArtifactMetadataResponse)(nil), // 28: foghorn_federation.MigrateArtifactMetadataResponse
+	(*ForwardArtifactCommandRequest)(nil),   // 29: foghorn_federation.ForwardArtifactCommandRequest
+	(*ForwardArtifactCommandResponse)(nil),  // 30: foghorn_federation.ForwardArtifactCommandResponse
+	(*MintStorageURLsRequest)(nil),          // 31: foghorn_federation.MintStorageURLsRequest
+	(*MintStorageURLsResponse)(nil),         // 32: foghorn_federation.MintStorageURLsResponse
+	(*DeleteStorageObjectsRequest)(nil),     // 33: foghorn_federation.DeleteStorageObjectsRequest
+	(*DeleteStorageObjectsResponse)(nil),    // 34: foghorn_federation.DeleteStorageObjectsResponse
+	nil,                                     // 35: foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
+	nil,                                     // 36: foghorn_federation.MintStorageURLsResponse.SegmentUrlsEntry
 }
 var file_foghorn_federation_proto_depIdxs = []int32{
 	3,  // 0: foghorn_federation.QueryStreamResponse.candidates:type_name -> foghorn_federation.EdgeCandidate
-	37, // 1: foghorn_federation.PrepareArtifactResponse.segment_urls:type_name -> foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
-	39, // 2: foghorn_federation.PrepareArtifactResponse.dvr_segments:type_name -> helmsmancontrol.DVRSegmentRef
-	39, // 3: foghorn_federation.PrepareDVRChapterResponse.segments:type_name -> helmsmancontrol.DVRSegmentRef
-	16, // 4: foghorn_federation.PeerMessage.edge_telemetry:type_name -> foghorn_federation.EdgeTelemetry
-	17, // 5: foghorn_federation.PeerMessage.replication_event:type_name -> foghorn_federation.ReplicationEvent
-	18, // 6: foghorn_federation.PeerMessage.cluster_summary:type_name -> foghorn_federation.ClusterEdgeSummary
-	15, // 7: foghorn_federation.PeerMessage.stream_lifecycle:type_name -> foghorn_federation.StreamLifecycleEvent
-	22, // 8: foghorn_federation.PeerMessage.stream_ad:type_name -> foghorn_federation.StreamAdvertisement
-	20, // 9: foghorn_federation.PeerMessage.artifact_ad:type_name -> foghorn_federation.ArtifactAdvertisement
-	24, // 10: foghorn_federation.PeerMessage.peer_heartbeat:type_name -> foghorn_federation.PeerHeartbeat
-	25, // 11: foghorn_federation.PeerMessage.capacity_summary:type_name -> foghorn_federation.CapacitySummary
-	19, // 12: foghorn_federation.ClusterEdgeSummary.edges:type_name -> foghorn_federation.EdgeSnapshot
-	21, // 13: foghorn_federation.ArtifactAdvertisement.artifacts:type_name -> foghorn_federation.ArtifactLocation
-	23, // 14: foghorn_federation.StreamAdvertisement.edges:type_name -> foghorn_federation.PeerStreamEdge
-	28, // 15: foghorn_federation.ListTenantArtifactsResponse.artifacts:type_name -> foghorn_federation.ArtifactMetadata
-	0,  // 16: foghorn_federation.MintStorageURLsRequest.op:type_name -> foghorn_federation.MintStorageURLsRequest.Operation
-	38, // 17: foghorn_federation.MintStorageURLsResponse.segment_urls:type_name -> foghorn_federation.MintStorageURLsResponse.SegmentUrlsEntry
-	1,  // 18: foghorn_federation.FoghornFederation.QueryStream:input_type -> foghorn_federation.QueryStreamRequest
-	4,  // 19: foghorn_federation.FoghornFederation.NotifyOriginPull:input_type -> foghorn_federation.OriginPullNotification
-	6,  // 20: foghorn_federation.FoghornFederation.PrepareArtifact:input_type -> foghorn_federation.PrepareArtifactRequest
-	8,  // 21: foghorn_federation.FoghornFederation.PrepareDVRChapter:input_type -> foghorn_federation.PrepareDVRChapterRequest
-	10, // 22: foghorn_federation.FoghornFederation.CreateRemoteClip:input_type -> foghorn_federation.RemoteClipRequest
-	12, // 23: foghorn_federation.FoghornFederation.CreateRemoteDVR:input_type -> foghorn_federation.RemoteDVRRequest
-	14, // 24: foghorn_federation.FoghornFederation.PeerChannel:input_type -> foghorn_federation.PeerMessage
-	26, // 25: foghorn_federation.FoghornFederation.ListTenantArtifacts:input_type -> foghorn_federation.ListTenantArtifactsRequest
-	29, // 26: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:input_type -> foghorn_federation.MigrateArtifactMetadataRequest
-	31, // 27: foghorn_federation.FoghornFederation.ForwardArtifactCommand:input_type -> foghorn_federation.ForwardArtifactCommandRequest
-	33, // 28: foghorn_federation.FoghornFederation.MintStorageURLs:input_type -> foghorn_federation.MintStorageURLsRequest
-	35, // 29: foghorn_federation.FoghornFederation.DeleteStorageObjects:input_type -> foghorn_federation.DeleteStorageObjectsRequest
-	2,  // 30: foghorn_federation.FoghornFederation.QueryStream:output_type -> foghorn_federation.QueryStreamResponse
-	5,  // 31: foghorn_federation.FoghornFederation.NotifyOriginPull:output_type -> foghorn_federation.OriginPullAck
-	7,  // 32: foghorn_federation.FoghornFederation.PrepareArtifact:output_type -> foghorn_federation.PrepareArtifactResponse
-	9,  // 33: foghorn_federation.FoghornFederation.PrepareDVRChapter:output_type -> foghorn_federation.PrepareDVRChapterResponse
-	11, // 34: foghorn_federation.FoghornFederation.CreateRemoteClip:output_type -> foghorn_federation.RemoteClipResponse
-	13, // 35: foghorn_federation.FoghornFederation.CreateRemoteDVR:output_type -> foghorn_federation.RemoteDVRResponse
-	14, // 36: foghorn_federation.FoghornFederation.PeerChannel:output_type -> foghorn_federation.PeerMessage
-	27, // 37: foghorn_federation.FoghornFederation.ListTenantArtifacts:output_type -> foghorn_federation.ListTenantArtifactsResponse
-	30, // 38: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:output_type -> foghorn_federation.MigrateArtifactMetadataResponse
-	32, // 39: foghorn_federation.FoghornFederation.ForwardArtifactCommand:output_type -> foghorn_federation.ForwardArtifactCommandResponse
-	34, // 40: foghorn_federation.FoghornFederation.MintStorageURLs:output_type -> foghorn_federation.MintStorageURLsResponse
-	36, // 41: foghorn_federation.FoghornFederation.DeleteStorageObjects:output_type -> foghorn_federation.DeleteStorageObjectsResponse
-	30, // [30:42] is the sub-list for method output_type
-	18, // [18:30] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	35, // 1: foghorn_federation.PrepareArtifactResponse.segment_urls:type_name -> foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
+	14, // 2: foghorn_federation.PeerMessage.edge_telemetry:type_name -> foghorn_federation.EdgeTelemetry
+	15, // 3: foghorn_federation.PeerMessage.replication_event:type_name -> foghorn_federation.ReplicationEvent
+	16, // 4: foghorn_federation.PeerMessage.cluster_summary:type_name -> foghorn_federation.ClusterEdgeSummary
+	13, // 5: foghorn_federation.PeerMessage.stream_lifecycle:type_name -> foghorn_federation.StreamLifecycleEvent
+	20, // 6: foghorn_federation.PeerMessage.stream_ad:type_name -> foghorn_federation.StreamAdvertisement
+	18, // 7: foghorn_federation.PeerMessage.artifact_ad:type_name -> foghorn_federation.ArtifactAdvertisement
+	22, // 8: foghorn_federation.PeerMessage.peer_heartbeat:type_name -> foghorn_federation.PeerHeartbeat
+	23, // 9: foghorn_federation.PeerMessage.capacity_summary:type_name -> foghorn_federation.CapacitySummary
+	17, // 10: foghorn_federation.ClusterEdgeSummary.edges:type_name -> foghorn_federation.EdgeSnapshot
+	19, // 11: foghorn_federation.ArtifactAdvertisement.artifacts:type_name -> foghorn_federation.ArtifactLocation
+	21, // 12: foghorn_federation.StreamAdvertisement.edges:type_name -> foghorn_federation.PeerStreamEdge
+	26, // 13: foghorn_federation.ListTenantArtifactsResponse.artifacts:type_name -> foghorn_federation.ArtifactMetadata
+	0,  // 14: foghorn_federation.MintStorageURLsRequest.op:type_name -> foghorn_federation.MintStorageURLsRequest.Operation
+	36, // 15: foghorn_federation.MintStorageURLsResponse.segment_urls:type_name -> foghorn_federation.MintStorageURLsResponse.SegmentUrlsEntry
+	1,  // 16: foghorn_federation.FoghornFederation.QueryStream:input_type -> foghorn_federation.QueryStreamRequest
+	4,  // 17: foghorn_federation.FoghornFederation.NotifyOriginPull:input_type -> foghorn_federation.OriginPullNotification
+	6,  // 18: foghorn_federation.FoghornFederation.PrepareArtifact:input_type -> foghorn_federation.PrepareArtifactRequest
+	8,  // 19: foghorn_federation.FoghornFederation.CreateRemoteClip:input_type -> foghorn_federation.RemoteClipRequest
+	10, // 20: foghorn_federation.FoghornFederation.CreateRemoteDVR:input_type -> foghorn_federation.RemoteDVRRequest
+	12, // 21: foghorn_federation.FoghornFederation.PeerChannel:input_type -> foghorn_federation.PeerMessage
+	24, // 22: foghorn_federation.FoghornFederation.ListTenantArtifacts:input_type -> foghorn_federation.ListTenantArtifactsRequest
+	27, // 23: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:input_type -> foghorn_federation.MigrateArtifactMetadataRequest
+	29, // 24: foghorn_federation.FoghornFederation.ForwardArtifactCommand:input_type -> foghorn_federation.ForwardArtifactCommandRequest
+	31, // 25: foghorn_federation.FoghornFederation.MintStorageURLs:input_type -> foghorn_federation.MintStorageURLsRequest
+	33, // 26: foghorn_federation.FoghornFederation.DeleteStorageObjects:input_type -> foghorn_federation.DeleteStorageObjectsRequest
+	2,  // 27: foghorn_federation.FoghornFederation.QueryStream:output_type -> foghorn_federation.QueryStreamResponse
+	5,  // 28: foghorn_federation.FoghornFederation.NotifyOriginPull:output_type -> foghorn_federation.OriginPullAck
+	7,  // 29: foghorn_federation.FoghornFederation.PrepareArtifact:output_type -> foghorn_federation.PrepareArtifactResponse
+	9,  // 30: foghorn_federation.FoghornFederation.CreateRemoteClip:output_type -> foghorn_federation.RemoteClipResponse
+	11, // 31: foghorn_federation.FoghornFederation.CreateRemoteDVR:output_type -> foghorn_federation.RemoteDVRResponse
+	12, // 32: foghorn_federation.FoghornFederation.PeerChannel:output_type -> foghorn_federation.PeerMessage
+	25, // 33: foghorn_federation.FoghornFederation.ListTenantArtifacts:output_type -> foghorn_federation.ListTenantArtifactsResponse
+	28, // 34: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:output_type -> foghorn_federation.MigrateArtifactMetadataResponse
+	30, // 35: foghorn_federation.FoghornFederation.ForwardArtifactCommand:output_type -> foghorn_federation.ForwardArtifactCommandResponse
+	32, // 36: foghorn_federation.FoghornFederation.MintStorageURLs:output_type -> foghorn_federation.MintStorageURLsResponse
+	34, // 37: foghorn_federation.FoghornFederation.DeleteStorageObjects:output_type -> foghorn_federation.DeleteStorageObjectsResponse
+	27, // [27:38] is the sub-list for method output_type
+	16, // [16:27] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_foghorn_federation_proto_init() }
@@ -3929,8 +3646,7 @@ func file_foghorn_federation_proto_init() {
 	if File_foghorn_federation_proto != nil {
 		return
 	}
-	file_ipc_proto_init()
-	file_foghorn_federation_proto_msgTypes[13].OneofWrappers = []any{
+	file_foghorn_federation_proto_msgTypes[11].OneofWrappers = []any{
 		(*PeerMessage_EdgeTelemetry)(nil),
 		(*PeerMessage_ReplicationEvent)(nil),
 		(*PeerMessage_ClusterSummary)(nil),
@@ -3940,7 +3656,7 @@ func file_foghorn_federation_proto_init() {
 		(*PeerMessage_PeerHeartbeat)(nil),
 		(*PeerMessage_CapacitySummary)(nil),
 	}
-	file_foghorn_federation_proto_msgTypes[34].OneofWrappers = []any{
+	file_foghorn_federation_proto_msgTypes[32].OneofWrappers = []any{
 		(*DeleteStorageObjectsRequest_S3Key)(nil),
 		(*DeleteStorageObjectsRequest_S3Prefix)(nil),
 	}
@@ -3950,7 +3666,7 @@ func file_foghorn_federation_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_foghorn_federation_proto_rawDesc), len(file_foghorn_federation_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   38,
+			NumMessages:   36,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

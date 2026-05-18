@@ -153,11 +153,32 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
     -- ===== DVR RECORDING =====
     is_recording_enabled BOOLEAN DEFAULT FALSE,
 
+    -- ===== DVR CHAPTER POLICY =====
+    -- Snapshotted onto foghorn.artifacts at StartDVR. NULL = chapters
+    -- disabled. Changes take effect on the next recording, not in-flight.
+    dvr_chapter_mode             VARCHAR(32)
+        CONSTRAINT chk_streams_chapter_mode CHECK (
+            dvr_chapter_mode IS NULL
+            OR dvr_chapter_mode IN ('window_sized_chapters', 'fixed_interval')
+        ),
+    dvr_chapter_interval_seconds INTEGER
+        CONSTRAINT chk_streams_chapter_interval CHECK (
+            dvr_chapter_mode IS DISTINCT FROM 'fixed_interval'
+            OR (dvr_chapter_interval_seconds IS NOT NULL
+                AND dvr_chapter_interval_seconds >= 3600)
+        ),
+
     -- ===== INGEST MODE =====
     -- 'push': encoder pushes via RTMP/WHIP/SRT (default).
     -- 'pull': MistServer pulls from a configured upstream URI; see commodore.stream_pull_sources.
     ingest_mode TEXT NOT NULL DEFAULT 'push'
         CONSTRAINT streams_ingest_mode_chk CHECK (ingest_mode IN ('push', 'pull')),
+
+    -- ===== PER-STREAM RETENTION OVERRIDES =====
+    -- NULL = inherit tenant default; 0 = no auto-expire (infinite).
+    -- VOD uploads aren't stream-bound, so no override here for VOD.
+    dvr_retention_days_override  INTEGER,
+    clip_retention_days_override INTEGER,
 
     -- ===== CLUSTER TRACKING =====
     -- Set by ValidateStreamKey when Foghorn reports its cluster_id during ingest.
@@ -421,25 +442,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_dvr_playback_ci
     ON commodore.dvr_recordings((lower(playback_id::text)));
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_created ON commodore.dvr_recordings(created_at);
 
-CREATE TABLE IF NOT EXISTS commodore.dvr_chapter_aliases (
-    chapter_id VARCHAR(64) PRIMARY KEY,
-    dvr_hash VARCHAR(32) NOT NULL,
-    tenant_id UUID NOT NULL,
-    stream_id UUID,
-    origin_cluster_id VARCHAR(100) NOT NULL,
-    mode VARCHAR(32) NOT NULL,
-    interval_seconds INTEGER,
-    start_ms BIGINT NOT NULL,
-    end_ms BIGINT NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_commodore_dvr_chapter_alias_dvr
-    ON commodore.dvr_chapter_aliases(dvr_hash, start_ms, end_ms);
-CREATE INDEX IF NOT EXISTS idx_commodore_dvr_chapter_alias_tenant
-    ON commodore.dvr_chapter_aliases(tenant_id, created_at DESC);
-
 -- Generate clip hash (deterministic based on stream + timing)
 CREATE OR REPLACE FUNCTION commodore.generate_clip_hash(
     p_stream_id UUID,
@@ -528,6 +530,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_vod_playback_ci
     ON commodore.vod_assets((lower(playback_id::text)));
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_created ON commodore.vod_assets(created_at);
 
+-- ============================================================================
+-- DVR CHAPTER PLAYBACK ID REGISTRY
+-- ============================================================================
+-- Hidden chapter artifacts (origin_type='dvr_chapter', library_visible=false)
+-- get real Commodore-minted public playback IDs so chapter playback uses the
+-- same public-ID boundary as VOD. Keyed by chapter_id; artifact_hash is
+-- denormalized for the resolver hot path.
+
+CREATE TABLE IF NOT EXISTS commodore.dvr_chapter_playback (
+    chapter_id    VARCHAR(32) PRIMARY KEY,
+    tenant_id     UUID NOT NULL,
+    playback_id   CITEXT NOT NULL,
+    artifact_hash VARCHAR(32) NOT NULL,
+    created_at    TIMESTAMP DEFAULT NOW(),
+    updated_at    TIMESTAMP DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_dvr_chapter_playback_pid_ci
+    ON commodore.dvr_chapter_playback((lower(playback_id::text)));
+CREATE INDEX IF NOT EXISTS idx_commodore_dvr_chapter_playback_tenant
+    ON commodore.dvr_chapter_playback(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_commodore_dvr_chapter_playback_artifact
+    ON commodore.dvr_chapter_playback(artifact_hash);
+
 -- Generate VOD hash (includes tenant + user + filename + timestamp for uniqueness)
 CREATE OR REPLACE FUNCTION commodore.generate_vod_hash(
     p_tenant_id UUID,
@@ -562,17 +588,24 @@ CREATE TABLE IF NOT EXISTS commodore.tenant_processing_config (
 -- ============================================================================
 -- TENANT MEDIA RETENTION POLICY (Customer-Tunable Storage Cost Control)
 -- ============================================================================
--- Tenant-wide retention default. NULL columns fall back to the Purser
--- recording_retention_days entitlement for the tenant's tier. Cascade order
--- at Commodore.StartDVR is:
---   per-asset override → this tenant default → Purser entitlement.
--- The resolved value is snapshotted onto the artifact (foghorn) at start; the
--- enforcement loop in Foghorn is unchanged.
+-- Tenant-wide retention defaults, one row per tenant, one column per asset
+-- class. NULL means "inherit the per-class system default" (VOD: keep
+-- forever, DVR/clip: 30d), then clamp by the Purser recording_retention_days
+-- tier cap (Free has a finite cap; paid tiers carry 0 = no cap). 0 in a
+-- column means "no auto-expire" (only meaningful on uncapped tiers; Free
+-- clamps 0 up to its cap at write time). Resolution cascade at artifact
+-- create / Commodore.StartDVR is:
+--   per-asset override → per-stream override (DVR/clip) → this row → system
+--     default → tier cap.
+-- The resolved value is snapshotted onto the artifact (foghorn) at start;
+-- the enforcement loop in Foghorn is unchanged.
 
 CREATE TABLE IF NOT EXISTS commodore.tenant_media_retention_policies (
     tenant_id UUID PRIMARY KEY,
-    recording_retention_days INTEGER,    -- NULL = use Purser tier entitlement
-    updated_by UUID,                     -- User who last touched the policy
+    default_vod_retention_days  INTEGER,
+    default_dvr_retention_days  INTEGER,
+    default_clip_retention_days INTEGER,
+    updated_by UUID,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );

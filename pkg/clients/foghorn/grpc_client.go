@@ -235,9 +235,8 @@ func (c *GRPCClient) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb
 	return resp, trailers, err
 }
 
-// RetrieveDVRChapter materializes (cache-on-request) and returns the
-// chapter manifest's S3 location. UTC-only — civil-time chapters submit
-// mode=explicit_range with caller-resolved (start_ms, end_ms).
+// RetrieveDVRChapter returns the chapter row, including the canonical
+// VOD playback_id once finalization has completed. UTC-only.
 func (c *GRPCClient) RetrieveDVRChapter(ctx context.Context, req *pb.RetrieveDVRChapterRequest) (*pb.RetrieveDVRChapterResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -254,16 +253,6 @@ func (c *GRPCClient) ListDVRChapters(ctx context.Context, req *pb.ListDVRChapter
 	defer cancel()
 	var trailers metadata.MD
 	resp, err := c.dvr.ListDVRChapters(ctx, req, grpc.Trailer(&trailers))
-	return resp, trailers, err
-}
-
-// SetDVRChapterPolicy updates the artifact's default chapter mode (the
-// one the chapter sweeper materializes automatically).
-func (c *GRPCClient) SetDVRChapterPolicy(ctx context.Context, req *pb.SetDVRChapterPolicyRequest) (*pb.SetDVRChapterPolicyResponse, metadata.MD, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-	var trailers metadata.MD
-	resp, err := c.dvr.SetDVRChapterPolicy(ctx, req, grpc.Trailer(&trailers))
 	return resp, trailers, err
 }
 

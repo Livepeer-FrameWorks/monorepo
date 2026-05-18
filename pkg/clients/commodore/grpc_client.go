@@ -417,6 +417,13 @@ func (c *GRPCClient) ResetAssetRetention(ctx context.Context, req *pb.ResetAsset
 	return c.internal.ResetAssetRetention(ctx, req)
 }
 
+// SetStreamRetentionOverrides writes per-stream DVR/clip retention overrides.
+// Commodore clamps positive values down to the tier cap and treats -1 as a
+// clear sentinel; the response reports the resolved post-write state.
+func (c *GRPCClient) SetStreamRetentionOverrides(ctx context.Context, req *pb.SetStreamRetentionOverridesRequest) (*pb.SetStreamRetentionOverridesResponse, error) {
+	return c.internal.SetStreamRetentionOverrides(ctx, req)
+}
+
 // TestPlaybackAccess facades Foghorn's dry-run evaluator. Webhook mode can
 // take up to ~10s for the customer endpoint to respond — keep timeouts
 // generous on the caller side.
@@ -482,16 +489,6 @@ func (c *GRPCClient) ResolveDVRHash(ctx context.Context, dvrHash string) (*pb.Re
 
 	return c.internal.ResolveDVRHash(ctx, &pb.ResolveDVRHashRequest{
 		DvrHash: dvrHash,
-	})
-}
-
-// ResolveDVRChapter resolves a chapter_id to origin_cluster_id + range
-// via commodore.dvr_chapter_aliases. Used by a non-origin Foghorn when
-// StartDVRChapterDefrost lacks a local chapter row and needs to route to
-// the origin via FoghornFederation.PrepareDVRChapter.
-func (c *GRPCClient) ResolveDVRChapter(ctx context.Context, chapterID string) (*pb.ResolveDVRChapterResponse, error) {
-	return c.internal.ResolveDVRChapter(ctx, &pb.ResolveDVRChapterRequest{
-		ChapterId: chapterID,
 	})
 }
 
@@ -573,6 +570,53 @@ func (c *GRPCClient) ResolveVodHash(ctx context.Context, vodHash string) (*pb.Re
 func (c *GRPCClient) ResolveVodID(ctx context.Context, vodID string) (*pb.ResolveVodIDResponse, error) {
 	return c.internal.ResolveVodID(ctx, &pb.ResolveVodIDRequest{
 		VodId: vodID,
+	})
+}
+
+// MintChapterPlaybackID asks Commodore to mint (or return the existing)
+// public playback_id for a hidden chapter artifact. Idempotent on
+// chapter_id.
+func (c *GRPCClient) MintChapterPlaybackID(ctx context.Context, chapterID, tenantID, artifactHash string) (*pb.MintChapterPlaybackIDResponse, error) {
+	return c.internal.MintChapterPlaybackID(ctx, &pb.MintChapterPlaybackIDRequest{
+		ChapterId:    chapterID,
+		TenantId:     tenantID,
+		ArtifactHash: artifactHash,
+	})
+}
+
+// GetTenantProcessesJSON returns the tenant's MistServer process
+// config JSON for the given stream type ("live" | "vod"). Foghorn
+// uses this from the chapter finalization queue so the chapter
+// processing+<hash> boot carries the same Thumbs/sprite/Livepeer
+// config as user-initiated VOD uploads.
+func (c *GRPCClient) GetTenantProcessesJSON(ctx context.Context, tenantID, streamType, clusterID string) (*pb.GetTenantProcessesJSONResponse, error) {
+	return c.internal.GetTenantProcessesJSON(ctx, &pb.GetTenantProcessesJSONRequest{
+		TenantId:   tenantID,
+		StreamType: streamType,
+		ClusterId:  clusterID,
+	})
+}
+
+// ResolveChapterPlaybackID maps a public chapter playback_id back to its
+// internal identity (chapter_id, tenant_id, artifact_hash). Cached
+// because chapter playback lookups happen on every viewer connect.
+func (c *GRPCClient) ResolveChapterPlaybackID(ctx context.Context, playbackID string) (*pb.ResolveChapterPlaybackIDResponse, error) {
+	if c.cache != nil {
+		cacheKey := "commodore:chapter_pb:" + playbackID
+		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) { //nolint:errcheck // miss is recovered by the direct call below
+			resp, err := c.internal.ResolveChapterPlaybackID(ctx, &pb.ResolveChapterPlaybackIDRequest{
+				PlaybackId: playbackID,
+			})
+			if err != nil || !resp.GetFound() {
+				return nil, false, err
+			}
+			return resp, true, nil
+		}); ok {
+			return v.(*pb.ResolveChapterPlaybackIDResponse), nil //nolint:errcheck // type guaranteed by cache
+		}
+	}
+	return c.internal.ResolveChapterPlaybackID(ctx, &pb.ResolveChapterPlaybackIDRequest{
+		PlaybackId: playbackID,
 	})
 }
 
@@ -872,8 +916,8 @@ func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string) error {
 	return err
 }
 
-// RetrieveDVRChapter materializes (cache-on-request) and returns the
-// chapter manifest's S3 location. Customer-facing path:
+// RetrieveDVRChapter returns chapter metadata (state, range, public
+// playback_id) for a single chapter. Customer-facing path:
 // api_gateway → Commodore → Foghorn.
 func (c *GRPCClient) RetrieveDVRChapter(ctx context.Context, req *pb.RetrieveDVRChapterRequest) (*pb.RetrieveDVRChapterResponse, error) {
 	return c.internal.RetrieveDVRChapter(ctx, req)
@@ -882,11 +926,6 @@ func (c *GRPCClient) RetrieveDVRChapter(ctx context.Context, req *pb.RetrieveDVR
 // ListDVRChapters paginates chapter rows for player navigation.
 func (c *GRPCClient) ListDVRChapters(ctx context.Context, req *pb.ListDVRChaptersRequest) (*pb.ListDVRChaptersResponse, error) {
 	return c.internal.ListDVRChapters(ctx, req)
-}
-
-// SetDVRChapterPolicy updates the artifact's default chapter mode.
-func (c *GRPCClient) SetDVRChapterPolicy(ctx context.Context, req *pb.SetDVRChapterPolicyRequest) (*pb.SetDVRChapterPolicyResponse, error) {
-	return c.internal.SetDVRChapterPolicy(ctx, req)
 }
 
 // ListDVRRequests lists DVR recordings with filters

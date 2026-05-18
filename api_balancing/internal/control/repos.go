@@ -694,3 +694,23 @@ func (r *artifactRepositoryDB) MarkNodeArtifactsOrphaned(ctx context.Context, no
 	`, nodeID)
 	return err
 }
+
+func (r *artifactRepositoryDB) NeedsVODDtshSync(ctx context.Context, artifactHash string) bool {
+	if db == nil {
+		return false
+	}
+	var needsSync bool
+	err := db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM foghorn.artifacts
+			WHERE artifact_hash = $1
+			  AND artifact_type = 'vod'
+			  AND frozen_at IS NOT NULL
+			  AND COALESCE(dtsh_synced, false) = false
+		)
+	`, artifactHash).Scan(&needsSync)
+	if err != nil {
+		return false
+	}
+	return needsSync
+}

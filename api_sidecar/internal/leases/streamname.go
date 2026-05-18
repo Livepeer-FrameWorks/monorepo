@@ -2,28 +2,31 @@ package leases
 
 import "strings"
 
-// Stream-name prefixes Mist hands us. Constants keep this in lockstep with
-// the Foghorn-side definitions even though they live in different modules.
+// Stream-name prefixes Mist hands us. Constants keep this in lockstep
+// with the Foghorn-side definitions even though they live in different
+// modules.
 const (
 	VodPrefix        = "vod+"
-	DvrChapterPrefix = "dvr+"
+	DvrPrefix        = "dvr+"
 	LivePrefix       = "live+"
 	ProcessingPrefix = "processing+"
 	PullPrefix       = "pull+"
 )
 
-// ParseDVRChapterPlaybackID returns the chapter_id encoded in a "dvr+<chapter>"
-// stream name. The bool is false when streamName does not start with the DVR
-// chapter prefix or the chapter id is empty after trimming.
-func ParseDVRChapterPlaybackID(streamName string) (string, bool) {
-	if !strings.HasPrefix(streamName, DvrChapterPrefix) {
+// ParseDVRRollingPlaybackID returns the dvr_internal_name token
+// encoded in a "dvr+<dvr_internal_name>" stream name. The bool is
+// false when streamName does not start with the DVR prefix or the
+// token is empty after trimming. Only the rolling-DVR surface uses
+// dvr+; finalized chapter artifacts are served via vod+.
+func ParseDVRRollingPlaybackID(streamName string) (string, bool) {
+	if !strings.HasPrefix(streamName, DvrPrefix) {
 		return "", false
 	}
-	chapterID := strings.TrimSpace(strings.TrimPrefix(streamName, DvrChapterPrefix))
-	if chapterID == "" {
+	token := strings.TrimSpace(strings.TrimPrefix(streamName, DvrPrefix))
+	if token == "" {
 		return "", false
 	}
-	return chapterID, true
+	return token, true
 }
 
 // ParseVODInternalName returns the internal_name encoded in a "vod+<name>"

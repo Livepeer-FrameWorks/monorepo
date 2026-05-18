@@ -1,10 +1,16 @@
-# Set the tenant-default retention policy. Passing the current tier bound
-# clears the tenant override so future tier changes flow through.
+# Set the tenant per-class retention default. targetType picks the column
+# (VOD, DVR, or CLIP); days is the value (0 = keep forever on uncapped
+# tiers); clear = true NULLs the column so the tenant inherits the system
+# default.
 mutation SetMediaRetentionPolicy($input: SetMediaRetentionPolicyInput!) {
   setMediaRetentionPolicy(input: $input) {
     ... on MediaRetentionPolicy {
-      recordingRetentionDays
-      effectiveRecordingRetentionDays
+      defaultVodRetentionDays
+      defaultDvrRetentionDays
+      defaultClipRetentionDays
+      effectiveVodRetentionDays
+      effectiveDvrRetentionDays
+      effectiveClipRetentionDays
       bounds {
         maxRecordingRetentionDays
       }

@@ -676,8 +676,52 @@ func protoToVodAsset(p *pb.VodAssetInfo) *model.VodAsset {
 	if p.ThumbnailAssets != nil {
 		asset.ThumbnailAssets = p.ThumbnailAssets
 	}
+	asset.EffectiveRetention = buildVodEffectiveRetention(asset.ExpiresAt, p.RetentionSource)
 
 	return asset
+}
+
+// buildVodEffectiveRetention maps the asset's retention_until + the
+// cascade-source string stored on commodore.vod_assets.retention_source
+// into the GraphQL EffectiveRetention shape. Returns nil when no
+// retention_until is set (keep-forever VODs).
+func buildVodEffectiveRetention(expiresAt *time.Time, source *string) *model.EffectiveRetention {
+	if expiresAt == nil {
+		return nil
+	}
+	until := *expiresAt
+	days := int((time.Until(until) + 24*time.Hour - 1) / (24 * time.Hour))
+	if days < 0 {
+		days = 0
+	}
+	return &model.EffectiveRetention{
+		RetentionDays:  days,
+		RetentionUntil: &until,
+		Source:         vodRetentionSource(source),
+	}
+}
+
+// vodRetentionSource maps the cascade-source string (commodore writes
+// values like "tenant_default" / "per_asset_override" / "tier_entitlement")
+// onto the GraphQL enum. Unknown / empty strings fall back to
+// TIER_ENTITLEMENT — the conservative default for assets that
+// pre-date the retention-source column.
+func vodRetentionSource(s *string) model.RetentionSource {
+	if s == nil {
+		return model.RetentionSourceTierEntitlement
+	}
+	switch *s {
+	case "tenant_default":
+		return model.RetentionSourceTenantDefault
+	case "per_stream_override":
+		return model.RetentionSourcePerStreamOverride
+	case "per_asset_override":
+		return model.RetentionSourcePerAssetOverride
+	case "tier_entitlement":
+		return model.RetentionSourceTierEntitlement
+	default:
+		return model.RetentionSourceTierEntitlement
+	}
 }
 
 // enrichVodAssetWithLifecycle merges lifecycle data from Periscope into VOD proto

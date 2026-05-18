@@ -2772,6 +2772,53 @@ func queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, 
 
 // resolveArtifactViewerEndpoint queries database for VOD/Clip/DVR storage nodes via a single resolver.
 // It derives type from the public ID and does not depend on any caller-provided content type.
+// resolveDVRViewerEndpoint dispatches a DVR viewer request the same way
+// the gRPC server does: active recording → live-style edge selection
+// (so any healthy edge can serve via DTSC pull from the recording
+// origin), finalized → artifact warm-cache routing.
+//
+// resolution.InternalName is "dvr+<dvr_internal_name>" out of
+// ResolveContent. Fail-closed for active-DVR ambiguity — never silently
+// reroute live viewers through the archive lane.
+func resolveDVRViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*pb.ViewerEndpointResponse, error) {
+	dvrInternalName := mist.ExtractInternalName(resolution.InternalName)
+	dispatch, derr := control.ResolveDVRArtifactDispatch(ctx, dvrInternalName)
+	if derr != nil {
+		logger.WithError(derr).WithFields(logging.Fields{
+			"content_id":    req.GetContentId(),
+			"internal_name": dvrInternalName,
+		}).Warn("DVR dispatch lookup failed")
+		return nil, fmt.Errorf("DVR routing unavailable")
+	}
+	if dispatch != nil && dispatch.Status != "" && control.IsActiveDVRStatus(dispatch.Status) {
+		if dispatch.RecordingNode == "" {
+			logger.WithFields(logging.Fields{
+				"content_id":    req.GetContentId(),
+				"internal_name": dvrInternalName,
+				"status":        dispatch.Status,
+			}).Warn("Active DVR has no resolvable recording origin; refusing to fall back to archive routing")
+			return nil, fmt.Errorf("active DVR recording origin not yet registered; retry")
+		}
+		resp, err := resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
+		if err != nil {
+			return nil, err
+		}
+		// Rewrite live-shaped metadata to DVR identity.
+		if resp != nil && resp.Metadata != nil {
+			resp.Metadata.ContentType = "dvr"
+			resp.Metadata.Status = "recording"
+			resp.Metadata.DvrStatus = "recording"
+		}
+		return resp, nil
+	}
+	// Finalized DVR: the rolling surface is gone. Match the gRPC path
+	// (api_balancing/internal/grpc/server.go::resolveDVRViewerEndpoint)
+	// and require the client to query dvrChapters() then play a chapter
+	// playbackId — falling through to artifact playback would surface
+	// the parent DVR row, which has no playable artifact.
+	return nil, fmt.Errorf("DVR is no longer active; query dvrChapters and play a chapter playbackId")
+}
+
 func resolveArtifactViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
@@ -2911,9 +2958,6 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	ctx := context.Background()
 	resolution, err := control.ResolveContent(ctx, viewKey)
 	if err != nil {
-		if _, ok := control.ParseDVRChapterPlaybackID(viewKey); ok && handleDVRChapterCommodoreFallback(c, viewKey, protocol, manifestPath) {
-			return
-		}
 		logger.WithError(err).WithField("view_key", viewKey).Warn("Failed to resolve content")
 		respondPlaybackError(c, http.StatusNotFound, "VIEW_KEY_NOT_FOUND", "Invalid or expired view key", nil)
 		return
@@ -2988,11 +3032,18 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		}
 	}
 
-	// Resolve endpoint
+	// Resolve endpoint. Active DVR (recording in progress) takes the
+	// live-style lane so any healthy edge can serve via DTSC pull from
+	// the recording origin; finalized DVRs and clip/VOD ride the
+	// artifact warm-cache lane. The gRPC server has the same dispatch
+	// in resolveDVRViewerEndpoint — keep them in lockstep.
 	var response *pb.ViewerEndpointResponse
-	if contentType == "live" {
+	switch contentType {
+	case "live":
 		response, err = resolveLiveViewerEndpoint(c.Request.Context(), req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
-	} else {
+	case "dvr":
+		response, err = resolveDVRViewerEndpoint(c.Request.Context(), req, lat, lon, resolution)
+	default:
 		response, err = resolveArtifactViewerEndpoint(req, lat, lon)
 	}
 
@@ -3105,64 +3156,6 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// Return 307 Temporary Redirect
 	c.Redirect(http.StatusTemporaryRedirect, redirectURL)
-}
-
-func handleDVRChapterCommodoreFallback(c *gin.Context, playbackID, protocol, manifestPath string) bool {
-	if commodoreClient == nil {
-		return false
-	}
-	viewerIP := c.ClientIP()
-	viewerToken := viewerPlaybackTokenFromHTTPRequest(c.Request)
-	ctx := c.Request.Context()
-	if paymentHeader := x402.GetPaymentHeaderFromRequest(c.Request); paymentHeader != "" {
-		ctx = context.WithValue(ctx, ctxkeys.KeyXPayment, paymentHeader)
-	}
-	response, err := commodoreClient.ResolveViewerEndpoint(ctx, playbackID, viewerIP, viewerToken)
-	if err != nil || response == nil || response.Primary == nil {
-		logger.WithError(err).WithField("playback_id", playbackID).Warn("DVR chapter fallback through Commodore failed")
-		return false
-	}
-
-	protocol = normalizeProtocol(protocol)
-	if protocol == "" || protocol == "any" {
-		jsonBytes, marshalErr := protojson.Marshal(response)
-		if marshalErr != nil {
-			respondPlaybackError(c, http.StatusInternalServerError, "SERIALIZATION_FAILED", "Failed to serialize response", nil)
-			return true
-		}
-		logger.WithFields(logging.Fields{
-			"playback_id": playbackID,
-			"node_id":     response.Primary.NodeId,
-		}).Info("Resolved DVR chapter through Commodore fallback")
-		c.Data(http.StatusOK, "application/json", jsonBytes)
-		return true
-	}
-
-	redirectURL := ""
-	if response.Primary.Outputs != nil {
-		redirectURL = findProtocolURL(response.Primary.Outputs, protocol)
-	}
-	if redirectURL == "" {
-		redirectURL = response.Primary.Url
-	}
-	if redirectURL == "" {
-		respondPlaybackError(c, http.StatusNotFound, "PROTOCOL_NOT_AVAILABLE", fmt.Sprintf("Protocol '%s' not available for this DVR chapter", protocol), nil)
-		return true
-	}
-	if manifestPath != "" {
-		if !strings.HasSuffix(redirectURL, "/") && !strings.HasPrefix(manifestPath, "/") {
-			redirectURL += "/"
-		}
-		redirectURL += manifestPath
-	}
-	logger.WithFields(logging.Fields{
-		"playback_id":   playbackID,
-		"protocol":      protocol,
-		"redirect_url":  redirectURL,
-		"selected_node": response.Primary.NodeId,
-	}).Info("Redirecting DVR chapter through Commodore fallback")
-	c.Redirect(http.StatusTemporaryRedirect, redirectURL)
-	return true
 }
 
 func appendCorrelationID(redirectURL, viewerID string) string {

@@ -15,9 +15,10 @@ import (
 // a DVR artifact. Foghorn is the source of truth; the sidecar reports
 // segments via the helmsman control stream and never queries this table.
 //
-// Chapter materialization reads bounded ranges from this table. Lost segments
-// (status='lost_local') render as #EXT-X-GAP in chapter playlists so timeline
-// duration is preserved without inventing reachable media.
+// Chapter finalization reads bounded ranges from this table to remux
+// the canonical .mkv. A 'lost_local' row inside a chapter range moves
+// that chapter to state='failed_source_missing' (all-or-nothing
+// chapter artifacts; partial MKVs are never produced).
 
 // DVRSegmentRow is a row from foghorn.dvr_segments.
 type DVRSegmentRow struct {
@@ -242,19 +243,20 @@ func MarkDVRSegmentUploaded(ctx context.Context, artifactHash, segmentName strin
 }
 
 // MarkDVRSegmentDropped transitions a segment row to deleted_local (was
-// uploaded before eviction) or lost_local (lost before upload, renders as
-// #EXT-X-GAP in chapter manifests). drop_reason is recorded for ops
-// triage. Idempotent: a second call with the same (was_uploaded) classification
-// is a no-op.
+// uploaded before eviction; chapter finalization can recover from S3)
+// or lost_local (lost before upload; any chapter overlapping the row
+// moves to state='failed_source_missing'). drop_reason is recorded
+// for ops triage. Idempotent: a second call with the same
+// (was_uploaded) classification is a no-op.
 //
-// The mediaStart/mediaEnd/durationMs/sizeBytes args carry timing from the
-// sidecar's DVRSegmentDropped event. They are only used when the row does
-// not already exist — the terminal-rejection path emits DVRSegmentDropped
-// for a segment that was never registered via RecordDVRSegment, so there
-// is no row to UPDATE. Without those timing fields the chapter manifest
-// could not render an #EXT-X-GAP at the right place on the timeline. Pass
-// 0 for unknown/uninteresting timing (e.g. mid-stream eviction of a row
-// that already exists).
+// The mediaStart/mediaEnd/durationMs/sizeBytes args carry timing from
+// the sidecar's DVRSegmentDropped event. They are only used when the
+// row does not already exist — the terminal-rejection path emits
+// DVRSegmentDropped for a segment that was never registered via
+// RecordDVRSegment, so there is no row to UPDATE. Without those
+// timing fields the finalization queue couldn't locate the lost
+// segment on the chapter timeline. Pass 0 for unknown/uninteresting
+// timing (e.g. mid-stream eviction of a row that already exists).
 func MarkDVRSegmentDropped(
 	ctx context.Context,
 	artifactHash, segmentName, reason string,
@@ -269,6 +271,10 @@ func MarkDVRSegmentDropped(
 	if wasUploaded {
 		target = "deleted_local"
 	}
+	// Only transition from live source states. Excluding the terminal
+	// states (deleted_local, lost_local, reclaimed) keeps a delayed or
+	// duplicate Helmsman ack from regressing a fully reclaimed row back
+	// to deleted_local — reclaim is meant to be idempotent.
 	res, err := db.ExecContext(ctx, `
 		UPDATE foghorn.dvr_segments
 		   SET status = $3,
@@ -277,7 +283,7 @@ func MarkDVRSegmentDropped(
 		       dropped_at = NOW()
 		 WHERE artifact_hash = $1
 		   AND segment_name = $2
-		   AND status NOT IN ('deleted_local', 'lost_local')
+		   AND status NOT IN ('deleted_local', 'lost_local', 'reclaimed')
 	`, artifactHash, segmentName, target, reason, wasUploaded)
 	if err != nil {
 		return fmt.Errorf("mark dropped: %w", err)
@@ -292,8 +298,10 @@ func MarkDVRSegmentDropped(
 	// No existing row. Only insert a placeholder for the lost_local case —
 	// "deleted_local with no row" is meaningless (the upload would have
 	// created the row), but "lost_local with no row" is the real terminal-
-	// rejection path (RecordDVRSegment refused → no row exists → DVRSegmentDropped
-	// fired), and we MUST persist the gap so chapter manifests render it.
+	// rejection path (RecordDVRSegment refused → no row exists →
+	// DVRSegmentDropped fired). We persist the lost row so the chapter
+	// finalization queue can detect the missing segment and classify the
+	// overlapping chapter as failed_source_missing.
 	if wasUploaded {
 		return nil
 	}
@@ -322,6 +330,11 @@ func MarkDVRSegmentDropped(
 	if sizeBytes > 0 {
 		sizeArg = sizeBytes
 	}
+	// The ON CONFLICT clause exists to handle the race where the row
+	// gets inserted between the UPDATE above and this INSERT — we want
+	// to win the race only against live source states. A delayed
+	// was_uploaded=false drop must NOT regress a terminal row
+	// (deleted_local / reclaimed / already lost_local) back to lost_local.
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO foghorn.dvr_segments (
 			artifact_hash, segment_name, sequence,
@@ -333,6 +346,7 @@ func MarkDVRSegmentDropped(
 			status      = 'lost_local',
 			drop_reason = EXCLUDED.drop_reason,
 			dropped_at  = NOW()
+		  WHERE foghorn.dvr_segments.status NOT IN ('deleted_local', 'lost_local', 'reclaimed')
 	`, artifactHash, segmentName, nextSeq, mediaStartMs, mediaEndMs, durationMs, sizeArg, reason); err != nil {
 		return fmt.Errorf("insert lost_local row: %w", err)
 	}
@@ -343,12 +357,17 @@ func MarkDVRSegmentDropped(
 }
 
 // ListEvictableDVRSegments returns segment names that are safe to delete
-// locally for the given DVR: status='uploaded' AND media_end_ms older than
-// (nowMs - windowSeconds*1000). maxCount caps the result; non-positive values
-// use the server default. The result is always capped.
+// locally for the given DVR. A segment is evictable iff:
+//   - status='uploaded' (durable on S3 as recovery source), AND
+//   - media_end_ms is past the rolling DVR window, AND
+//   - every overlapping chapter is frozen or reclaimed (or none exists,
+//     i.e. chapters mode is off).
 //
-// Used by the sidecar's storage-pressure path so eviction decisions are
-// authoritative against the ledger, not just the local uploaded cache.
+// The chapter-state predicate is the load-bearing one: source segments
+// stay pinned until every overlapping chapter is durable so chapter
+// finalization always has a complete ledger to remux from. Used by the
+// sidecar's storage-pressure path; routine eviction is owned by the
+// chapter reclaim sweep, not the sidecar.
 func ListEvictableDVRSegments(
 	ctx context.Context,
 	artifactHash string,
@@ -369,12 +388,20 @@ func ListEvictableDVRSegments(
 		maxCount = 1000
 	}
 	rows, err := db.QueryContext(ctx, `
-		SELECT segment_name
-		  FROM foghorn.dvr_segments
-		 WHERE artifact_hash = $1
-		   AND status = 'uploaded'
-		   AND media_end_ms < $2
-		 ORDER BY sequence ASC
+		SELECT s.segment_name
+		  FROM foghorn.dvr_segments s
+		 WHERE s.artifact_hash = $1
+		   AND s.status = 'uploaded'
+		   AND s.media_end_ms < $2
+		   AND NOT EXISTS (
+		       SELECT 1
+		         FROM foghorn.dvr_chapters c
+		        WHERE c.artifact_hash = s.artifact_hash
+		          AND c.start_ms < s.media_end_ms
+		          AND c.end_ms   > s.media_start_ms
+		          AND c.state NOT IN ('frozen', 'reclaimed')
+		   )
+		 ORDER BY s.sequence ASC
 		 LIMIT $3
 	`, artifactHash, cutoffMs, maxCount)
 	if err != nil {
@@ -425,6 +452,36 @@ func ListPendingDVRSegments(
 	`, artifactHash, cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list pending: %w", err)
+	}
+	defer rows.Close()
+	return scanDVRSegmentRows(rows)
+}
+
+// ListDVRSegmentsOwnedByChapter returns segment rows whose
+// media_start_ms falls inside [startMs, endMs). The start-of-segment
+// ownership rule ensures every segment belongs to exactly one chapter
+// even when chapter boundaries don't align to segment boundaries, so
+// finalized chapter MKVs don't overlap and a boundary-straddling
+// segment isn't duplicated in two adjacent chapters.
+//
+// Index-backed via idx_foghorn_dvr_segments_media_order.
+func ListDVRSegmentsOwnedByChapter(ctx context.Context, artifactHash string, startMs, endMs int64) ([]DVRSegmentRow, error) {
+	if db == nil {
+		return nil, sql.ErrConnDone
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT artifact_hash, segment_name, sequence,
+		       media_start_ms, media_end_ms, duration_ms,
+		       size_bytes, s3_key, status, drop_reason,
+		       created_at, uploaded_at, deleted_local_at, dropped_at
+		  FROM foghorn.dvr_segments
+		 WHERE artifact_hash = $1
+		   AND media_start_ms >= $2
+		   AND media_start_ms <  $3
+		 ORDER BY media_start_ms ASC, sequence ASC
+	`, artifactHash, startMs, endMs)
+	if err != nil {
+		return nil, fmt.Errorf("list segments owned by chapter: %w", err)
 	}
 	defer rows.Close()
 	return scanDVRSegmentRows(rows)

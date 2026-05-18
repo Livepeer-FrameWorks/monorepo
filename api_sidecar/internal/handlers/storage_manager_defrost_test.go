@@ -352,40 +352,6 @@ func TestDefrostVOD_HappyPath(t *testing.T) {
 	}
 }
 
-// --- DefrostDVR ---
-
-func TestDefrostDVR_RequiresChapterRefs(t *testing.T) {
-	client := &configurablePresignedClient{}
-	sm := newDefrostTestSM(t, client)
-
-	var completedStatus string
-	sm.sendDefrostComplete = func(_, _, status, _ string, _ uint64, _ string) error {
-		completedStatus = status
-		return nil
-	}
-
-	req := &pb.DefrostRequest{
-		RequestId: "req-dvr-no-chapter",
-		AssetHash: "hash-dvr-no-chapter",
-		AssetType: "dvr",
-		LocalPath: filepath.Join(sm.basePath, "dvr", "stream-1", "hash-dvr-no-chapter"),
-	}
-
-	_, err := sm.DefrostDVR(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error for DVR defrost without chapter refs")
-	}
-	if !strings.Contains(err.Error(), "requires chapter segment refs") {
-		t.Fatalf("expected chapter refs error, got: %s", err.Error())
-	}
-	if completedStatus != "failed" {
-		t.Fatalf("expected failed status, got %s", completedStatus)
-	}
-	if atomic.LoadInt64(&client.downloadFileCalls) != 0 || atomic.LoadInt64(&client.downloadCalls) != 0 {
-		t.Fatal("expected no legacy DVR manifest or segment downloads")
-	}
-}
-
 // --- Defrost Job Deduplication ---
 
 func TestDefrostClip_Deduplication(t *testing.T) {

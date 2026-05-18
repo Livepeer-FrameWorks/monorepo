@@ -463,14 +463,22 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 	return mistTrigger, nil
 }
 
-// ExtractInternalName extracts internal name from stream name (handles wildcard format)
+// ExtractInternalName strips the Mist wildcard prefix from a stream
+// name. The returned bare token is what playback-policy / capacity /
+// streamContext lookups key on — every Mist namespace FrameWorks uses
+// must appear here or its tokens will leak the prefix into Commodore
+// lookups and miss the registered policy.
+//
+// dvr+ is the rolling-DVR surface for an actively-recording stream;
+// its bare token is the DVR artifact's internal_name. Chapter
+// playback uses the chapter VOD artifact's playback_id (resolved
+// through Commodore) and never produces a dvr+ token.
 func ExtractInternalName(streamName string) string {
-	for _, prefix := range []string{"live+", "vod+", "processing+"} {
+	for _, prefix := range []string{"live+", "vod+", "dvr+", "processing+"} {
 		if rest, ok := strings.CutPrefix(streamName, prefix); ok {
 			return rest
 		}
 	}
-	// For non-wildcard streams, use the stream name as-is
 	return streamName
 }
 

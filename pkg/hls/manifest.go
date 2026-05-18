@@ -1,15 +1,20 @@
 // Package hls builds and parses HLS m3u8 manifests for FrameWorks.
 //
-// Two manifest shapes:
+// Used by:
+//   - DVR rolling manifests: Mist writes these directly during recording;
+//     helpers here parse them on the sidecar's reconciliation backstop
+//     (RECORDING_SEGMENT missed-trigger recovery) and on cross-node
+//     reconstruction during DTSC pull.
+//   - Chapter finalize temp HLS: the finalization queue stages a one-shot
+//     VOD playlist that Mist's input_hls reads to remux source TS into
+//     the canonical chapter .mkv. This playlist is not a public artifact;
+//     it lives under storage/processing/ and is removed after the job.
 //
-//   - Live (rolling): Mist writes these directly during DVR. Helpers here are
-//     used during freeze/defrost to construct a fresh live manifest from
-//     segment listings (e.g. when reconstructing on a different node).
-//
-//   - VOD/Event chapter views: built by Foghorn from bounded dvr_segments
-//     ranges. Closed chapters include #EXT-X-ENDLIST; active chapters are
-//     reshaped as EVENT playlists. Lost rows render #EXT-X-GAP so the
-//     timeline remains explicit.
+// The package no longer emits chapter manifests as public artifacts —
+// chapter playback resolves to a canonical .mkv VOD artifact, not an
+// HLS playlist. BuildVOD's #EXT-X-GAP handling remains for the
+// reconstruction case where a single lost segment shouldn't break the
+// rolling playlist.
 package hls
 
 import (
@@ -41,8 +46,10 @@ type Segment struct {
 }
 
 // FinalSegment is one row from the durable DVR segment ledger, in the shape
-// the chapter manifest builder consumes. Sequence/media times are needed for
-// ordering and for inserting #EXT-X-DISCONTINUITY at media-time jumps.
+// internal HLS rebuilders consume (chapter finalization temp playlist,
+// rolling-DVR reconstruction from the segment pool). Sequence/media times
+// are needed for ordering and for inserting #EXT-X-DISCONTINUITY at
+// media-time jumps.
 type FinalSegment struct {
 	// Name is the segment filename written into the playlist when URI is
 	// empty.
@@ -181,27 +188,25 @@ type BuildVODOptions struct {
 	// rows do not themselves trigger discontinuity — they preserve duration.
 	DiscontinuityThresholdMs int64
 	// HasGaps forces #EXT-X-VERSION:8 even when no segment carries Lost=true.
-	// Caller sets this when rebuilding a chapter whose ledger is known to
-	// have gaps but the slice passed in happens not to include any (e.g.
-	// the gap segments fell outside the requested range).
+	// Caller sets this when the ledger is known to have gaps but the slice
+	// passed in happens not to include any (e.g. the gap segments fell
+	// outside the requested range).
 	HasGaps bool
 	// Event renders #EXT-X-PLAYLIST-TYPE:EVENT and omits #EXT-X-ENDLIST.
-	// Active DVR chapters use this shape while the stream is still recording
-	// into the chapter range.
+	// The rolling DVR manifest uses this shape while ingest is running.
 	Event bool
 	// SegmentURIPrefix is prepended to each segment's name in the manifest.
-	// Default "segments/" matches manifests written at the artifact root
-	// (dvr/{artifact}/{name}.m3u8) where segments live in a sibling segments/
-	// directory. Chapter manifests live at dvr/{artifact}/chapters/{id}.m3u8
-	// and need "../segments/" so HLS resolves to dvr/{artifact}/segments/{name}.
-	// Trailing slash required.
+	// Default "segments/" matches the rolling-DVR manifest written at the
+	// artifact root (dvr/{artifact}/{name}.m3u8) where segments live in a
+	// sibling segments/ directory. Trailing slash required.
 	SegmentURIPrefix string
 }
 
-// BuildVOD renders a chapter manifest from a ledger-ordered slice of segments.
-// Segments must already be sorted by (media_start_ms, sequence). By default the
-// output is VOD-shaped; BuildVODOptions.Event switches active chapters to EVENT
-// shape without closing ENDLIST.
+// BuildVOD renders an HLS manifest from a ledger-ordered slice of segments
+// (sorted by media_start_ms, sequence). Used by chapter-finalization temp
+// playlists (VOD shape) and the rolling-DVR reconstructor (EVENT shape via
+// BuildVODOptions.Event, which omits #EXT-X-ENDLIST so the manifest stays
+// open while ingest continues).
 //
 //   - Lost rows render as #EXT-X-GAP + #EXTINF (preserves timeline duration;
 //     player skips media but the seek bar stays correct).

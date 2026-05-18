@@ -156,9 +156,10 @@ message GetTenantBillingStatusResponse {
   bool is_suspended = 2;          // subscription status = 'suspended' (balance < -$10)
   bool is_balance_negative = 3;   // prepaid balance <= 0 (soft gate, return 402)
   int64 balance_cents = 4;        // current balance (for display/logging)
-  // Tier entitlements that downstream services need without a second RPC.
-  // recording_retention_days = 0 means "use the system default"
-  // (Foghorn / api_balancing fall back to 30 days).
+  // Tier cap on customer-set retention. 0 means "no cap" (paid-tier baseline);
+  // Free tier has a finite cap. Tenant per-class defaults and per-asset
+  // overrides clamp against this value. NOT a system default — system defaults
+  // are coded per asset class (VOD: infinite, DVR: 30d, clip: 30d).
   int32 recording_retention_days = 5;
   // Resolved DVR live-window policy (rolling Mist window + segment shape).
   // Distinct from recording_retention_days: that controls absolute artifact
@@ -177,6 +178,31 @@ message GetTenantBillingStatusResponse {
   // media-cluster capacity; Foghorn still computes cluster load dynamically
   // from edge state. nil/zero fields mean unlimited.
   quartermaster.TenantResourceLimits tenant_resource_limits = 9;
+  // Marginal storage pricing for the tenant's current tier. Drives the
+  // customer-facing cost projection on the storage browser ("this clip costs
+  // you ~$X/day"). Computed as the marginal $/GB-month above any included
+  // free allotment; callers multiply by asset bytes / 1 GB and divide by 30
+  // for per-day. Nil for tenants on tiers without a storage meter (e.g.
+  // self-hosted clusters fully tenant-private).
+  StoragePricing storage_pricing = 10;
+}
+
+// Marginal storage pricing snapshot exposed via GetTenantBillingStatus.
+// Reflects the tenant's tier-level pricing_rule for the average_storage_gb
+// meter; if the tier has no rule, all three fields are zero.
+message StoragePricing {
+  // Free allotment per billing period, in GB. Usage at or below this level
+  // is rated at zero; the UI may surface "first <included_gb> GB free".
+  double included_gb = 1;
+  // Marginal price per GB-month above included_gb, in the tier's currency.
+  // The UI projects per-asset cost as (bytes / 1 GB) * unit_price_per_gb_month.
+  double unit_price_per_gb_month = 2;
+  // Currency for unit_price_per_gb_month (e.g. "EUR", "USD").
+  string currency = 3;
+  // Pricing model identifier from tier_pricing_rules.model
+  // ("tiered_graduated", "all_usage"). UI may display "first N GB free"
+  // only when model == "tiered_graduated".
+  string model = 4;
 }
 
 // ============================================================================

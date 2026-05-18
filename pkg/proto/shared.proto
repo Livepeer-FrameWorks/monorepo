@@ -40,6 +40,11 @@ message CreateClipRequest {
   optional string playback_id = 16; // Pre-generated playback ID (Commodore)
   optional string internal_name = 17; // Pre-generated artifact routing name (Commodore)
   string cluster_id = 18;                      // Cluster this stream belongs to (set by caller)
+  // Retention horizon resolved by Commodore from the per-class cascade
+  // (per-stream override → tenant default → system default) and clamped by
+  // the Free-tier cap. 0 = no auto-expire. Unset = Foghorn falls back to a
+  // 30-day system default.
+  optional int32 retention_days = 19;
 }
 
 // CreateClipResponse - response from clip creation
@@ -83,6 +88,10 @@ message ClipInfo {
   // thumbnail_assets is populated server-side from Commodore's registry
   // projection. Null until Foghorn confirms the thumbnail upload.
   optional ThumbnailAssets thumbnail_assets = 22;
+  // retention_source records which cascade layer produced the artifact's
+  // current retention_until. Mirrors commodore.clips.retention_source.
+  // Values: tenant_default | per_asset_override | tier_entitlement.
+  optional string retention_source = 23;
   reserved 12, 19;
   reserved "access_count", "last_accessed";
 }
@@ -128,20 +137,25 @@ message DeleteClipResponse {
 // Three concepts that must NOT be conflated:
 //   - max_window_seconds:  rolling live seekback window (Mist targetAge)
 //   - default_window_seconds: live window default if caller didn't pick
-//   - recording_retention_days: how long the FINALIZED artifact is kept,
-//     ticking from ended_at — independent of the live window
+//   - recording_retention_days: post-end retention horizon Commodore has
+//     already resolved (per-asset override → per-stream override → tenant
+//     per-class default → system default → tier cap). Snapshotted onto
+//     foghorn.artifacts at DVR start. FinalizeDVR computes
+//     retention_until = ended_at + dvr_retention_days*24h.
 //
-// recording_retention_days is snapshotted onto foghorn.artifacts at DVR
-// start (dvr_retention_days column). FinalizeDVR computes
-// retention_until = ended_at + dvr_retention_days*24h. Live tier is never
-// re-resolved at end (the tenant's plan may have changed mid-stream).
+// recording_retention_days is optional. Unset means "Foghorn falls back
+// to its 30-day system default" (direct-Foghorn callers that don't run
+// the per-class cascade). Set to 0 means "no auto-expire" (Commodore
+// resolved an infinite horizon — keep forever). Set to a positive int
+// sets that many days. The tenant's plan is never re-resolved at finalize
+// (mid-stream tier changes don't retroactively apply).
 message DVRPolicy {
   int32 default_window_seconds = 1;     // Tier default if caller doesn't specify a window
   int32 max_window_seconds = 2;         // Tier ceiling on live DVR window (Mist targetAge)
   int32 default_segment_duration_seconds = 3; // Mist split for this tier (6/12/24)
   int32 max_entries = 4;                // Max HLS playlist entries (manifest size cap)
   bool allow_cluster_extension = 5;     // Cluster may raise max_window for this tenant (Enterprise)
-  int32 recording_retention_days = 6;   // Post-end retention; 0 = system default 30
+  optional int32 recording_retention_days = 6; // Unset = 30d default; 0 = keep forever; >0 = days.
 }
 
 // StartDVRRequest - request to start DVR recording
@@ -163,10 +177,10 @@ message StartDVRRequest {
   // from Foghorn's streamCache (already cached during PUSH_REWRITE). When nil,
   // pkg/dvrpolicy.Resolve uses zero-value defaults and a safe 1h fallback.
   DVRPolicy dvr_policy = 8;
-  // Default chapter mode for the chapter sweeper to materialize automatically.
-  // Empty string lets Foghorn use the default window_sized_chapters policy.
-  // Values: 'window_sized_chapters' | 'fixed_interval' | '' (none)
-  // For 'fixed_interval', dvr_chapter_interval_seconds is required.
+  // Chapter mode for the chapter sweeper to materialize.
+  // Values: 'window_sized_chapters' | 'fixed_interval' | '' (chapters off)
+  // Empty/unset disables chapter rotation entirely — Stream config is the
+  // authority. For 'fixed_interval', dvr_chapter_interval_seconds is required.
   optional string dvr_chapter_mode = 9;
   optional int32 dvr_chapter_interval_seconds = 10;
 }
@@ -443,6 +457,11 @@ message CreateVodUploadRequest {
   optional string playback_id = 9;          // Pre-generated playback ID (Commodore)
   optional string internal_name = 10; // Pre-generated artifact routing name (Commodore)
   string cluster_id = 11;                      // Cluster for this tenant's context (set by caller)
+  // Retention horizon resolved by Commodore from the per-class cascade
+  // (tenant default → system default) and clamped by the Free-tier cap.
+  // 0 = no auto-expire (paid-tier infinite VOD default). Unset = Foghorn
+  // falls back to its own resolver which only knows the tier cap.
+  optional int32 retention_days = 12;
 }
 
 // CreateVodUploadResponse - multipart upload instructions
@@ -587,6 +606,12 @@ message VodAssetInfo {
   // thumbnail_assets is populated server-side from Commodore's registry
   // projection. Null until Foghorn confirms the thumbnail upload.
   optional ThumbnailAssets thumbnail_assets = 22;
+  // retention_source records which cascade layer produced this VOD's
+  // current retention_until. Mirrors commodore.vod_assets.retention_source.
+  // Values: tenant_default | per_asset_override | tier_entitlement |
+  // per_stream_override (unused for VOD today). Empty when no override
+  // has been applied.
+  optional string retention_source = 23;
 }
 
 // VodMetadata - metadata extracted from video file (returned by validation)

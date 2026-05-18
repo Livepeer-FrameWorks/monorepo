@@ -163,6 +163,9 @@ func main() {
 	gqlHandler.AroundOperations(func(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
 		return next(resolvers.WithNodeHealthCache(ctx))
 	})
+	gqlHandler.AroundOperations(func(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
+		return next(resolvers.WithStoragePricingCache(ctx))
+	})
 
 	// Enable introspection for developer API explorer
 	gqlHandler.Use(extension.Introspection{})

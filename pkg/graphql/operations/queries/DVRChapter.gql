@@ -1,8 +1,9 @@
-# Retrieve a single chapter manifest URL for a DVR recording.
-# UTC-only; civil-time chapters resolve at the edge with mode=EXPLICIT_RANGE.
+# Retrieve chapter metadata for a single chapter in a DVR recording.
+# Chapter playback uses the chapter artifact's playbackId via the
+# normal VOD playback path; this query exposes range + state.
 query DVRChapter(
   $dvrId: ID!
-  $mode: DVRChapterMode!
+  $mode: DVRChapterMode
   $intervalSeconds: Int
   $startMs: Float!
   $endMs: Float!
@@ -15,10 +16,14 @@ query DVRChapter(
     endMs: $endMs
   ) {
     chapterId
-    manifestS3Key
-    manifestUrl
+    state
+    playbackId
     isCurrent
     hasGaps
     segmentCount
+    wallClockStartUnixMs
+    wallClockEndUnixMs
+    playableNow
+    lastFailureReason
   }
 }

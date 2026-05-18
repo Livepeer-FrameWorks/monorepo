@@ -20,18 +20,22 @@ import (
 //
 //	ledger          file       action
 //	-----------------------------------------------------------------------
-//	uploaded        present    no-op
-//	uploaded        missing    no-op (S3 authoritative; normal cache eviction)
-//	deleted_local   present    no-op (orphan; cleanup sweep will reclaim)
-//	deleted_local   missing    no-op
-//	pending         present    upload via existing path
-//	pending         missing    DVRSegmentDropped(was_uploaded=false) -> lost_local
-//	failed_upload   present    retry upload via existing path
-//	failed_upload   missing    DVRSegmentDropped(was_uploaded=false) -> lost_local
-//	lost_local      present + matching PDT  heal via RecordDVRSegment + upload
-//	lost_local      present + no PDT match  log unreconciliable
-//	lost_local      missing    no-op
-//	(no row)        present + PDT           RecordDVRSegment + upload (rebuild ledger)
+//	uploaded            present  no-op
+//	uploaded            missing  no-op (S3 authoritative; normal cache eviction)
+//	deleted_local       present  no-op (Helmsman ack already recorded)
+//	deleted_local       missing  no-op
+//	orphan_unreachable  present  delete file + DVRSegmentDropped(was_uploaded=true)
+//	                             so the row reconciles to deleted_local and Phase B
+//	                             can finish the S3 cleanup
+//	orphan_unreachable  missing  no-op (ledger declaration matches reality)
+//	pending             present  upload via existing path
+//	pending             missing  DVRSegmentDropped(was_uploaded=false) -> lost_local
+//	failed_upload       present  retry upload via existing path
+//	failed_upload       missing  DVRSegmentDropped(was_uploaded=false) -> lost_local
+//	lost_local          present + matching PDT  heal via RecordDVRSegment + upload
+//	lost_local          present + no PDT match  log unreconciliable
+//	lost_local          missing  no-op
+//	(no row)            present + PDT           RecordDVRSegment + upload (rebuild ledger)
 //	(no row)        present + no PDT        log unreconciliable
 //	(no row)        missing + PDT           RecordDVRSegment then DVRSegmentDropped (tombstone)
 //	(no row)        missing + no PDT        log unreconciliable
@@ -198,8 +202,34 @@ func reconcileSingleDVR(ctx context.Context, dvrHash, dvrDir string, logger logg
 
 		switch status {
 		case "uploaded", "deleted_local":
-			// S3 is authoritative for uploaded; deleted_local is already
-			// terminal. No transition either way.
+			// uploaded: S3 is authoritative; no transition.
+			// deleted_local: Helmsman previously acknowledged the local
+			// delete. No further action needed at startup.
+			continue
+		case "orphan_unreachable":
+			// Foghorn declared the local file presumed-gone while this
+			// node was absent past the chapter-reclaim grace. We've now
+			// rejoined and the file may or may not still be on disk. If
+			// it is, reconcile to the ledger by deleting + emitting
+			// DVRSegmentDropped(was_uploaded=true) so the row flips to
+			// deleted_local (Helmsman ack landed) and Phase B can finish
+			// the S3 cleanup. If the file is gone, the ledger declaration
+			// already matches reality.
+			if d.present {
+				if err := os.Remove(d.path); err != nil && !os.IsNotExist(err) {
+					logger.WithError(err).WithFields(logging.Fields{
+						"dvr_hash": dvrHash,
+						"segment":  name,
+					}).Warn("Startup reconcile: failed to delete orphan_unreachable segment file")
+					continue
+				}
+				if dropErr := SendDVRSegmentDropped(dvrHash, name, "orphan_reconciled",
+					d.path, lr.GetMediaStartMs(), lr.GetMediaEndMs(), lr.GetDurationMs(), uint64(d.size), true); dropErr != nil {
+					logger.WithError(dropErr).WithFields(logging.Fields{
+						"dvr_hash": dvrHash, "segment": name,
+					}).Warn("Startup reconcile: DVRSegmentDropped(orphan_reconciled) emit failed")
+				}
+			}
 			continue
 		case "pending", "failed_upload":
 			if d.present {
@@ -396,8 +426,10 @@ func reconcileInsertAndUpload(ctx context.Context, dvrHash, segmentName, localPa
 }
 
 // reconcileInsertAndDrop creates a 'pending' ledger row for a missing file
-// (manifest knew about it; on-disk gone) and immediately marks it lost_local
-// so chapter manifests can render the gap.
+// (manifest knew about it; on-disk gone) and immediately marks it
+// lost_local. Any chapter whose range overlaps a lost_local row without
+// a successful S3 upload will fail finalization with state=
+// failed_source_missing.
 func reconcileInsertAndDrop(ctx context.Context, dvrHash, segmentName string, mediaStartMs, mediaEndMs, durationMs int64, logger logging.Logger) {
 	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

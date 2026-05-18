@@ -162,6 +162,10 @@ type SetPreferredClusterResult interface {
 	IsSetPreferredClusterResult()
 }
 
+type SetStreamRetentionOverridesResult interface {
+	IsSetStreamRetentionOverridesResult()
+}
+
 type StartDVRResult interface {
 	IsStartDVRResult()
 }
@@ -294,6 +298,8 @@ func (AuthError) IsVodUploadStatusResult() {}
 func (AuthError) IsSetMediaRetentionPolicyResult() {}
 
 func (AuthError) IsUpdateMediaRetentionResult() {}
+
+func (AuthError) IsSetStreamRetentionOverridesResult() {}
 
 func (AuthError) IsSetNodeModeResult() {}
 
@@ -964,40 +970,43 @@ type CustomDomainStatus struct {
 	LastError *string `json:"lastError,omitempty"`
 }
 
-// A single chapter view of a DVR recording.
-//
-// manifestUrl carries the Mist playback ID for this chapter
-// (`dvr+{chapterId}`). Resolve it through resolveViewerEndpoint and let
-// the selected edge defrost the bounded chapter into its local segment
-// bucket. Use manifestS3Key as the stable canonical chapter manifest key.
-//
-// isCurrent=true means the chapter is still being recorded into; the
-// edge manifest is EVENT-shaped while defrost is filling segments.
-// hasGaps=true means at least one segment in the chapter range was lost
-// before upload; the manifest renders #EXT-X-GAP markers and the player
-// will skip those segments while preserving the timeline.
+// A single chapter view of a DVR recording. playbackId is the
+// Commodore-minted public key for the chapter's VOD-shaped artifact;
+// chapter playback uses the same artifact playback path as any VOD
+// (not dvr+).
 type DVRChapter struct {
-	ChapterID     string `json:"chapterId"`
-	ManifestS3Key string `json:"manifestS3Key"`
-	ManifestURL   string `json:"manifestUrl"`
-	IsCurrent     bool   `json:"isCurrent"`
-	HasGaps       bool   `json:"hasGaps"`
-	SegmentCount  int    `json:"segmentCount"`
+	ChapterID string          `json:"chapterId"`
+	State     DVRChapterState `json:"state"`
+	// Public playback key minted by Commodore; null until finalization dispatches.
+	PlaybackID   *string `json:"playbackId,omitempty"`
+	IsCurrent    bool    `json:"isCurrent"`
+	HasGaps      bool    `json:"hasGaps"`
+	SegmentCount int     `json:"segmentCount"`
+	// Absolute Unix epoch ms of the chapter range start.
+	WallClockStartUnixMs float64 `json:"wallClockStartUnixMs"`
+	// Absolute Unix epoch ms of the chapter range end.
+	WallClockEndUnixMs float64 `json:"wallClockEndUnixMs"`
+	// True when state ∈ {FINALIZED, FROZEN, RECLAIMED}.
+	PlayableNow bool `json:"playableNow"`
+	// Last finalization failure message (operator-facing); null on success or in-progress.
+	LastFailureReason *string `json:"lastFailureReason,omitempty"`
 }
 
-// A reference to a chapter without the manifest URL — used for chapter
-// listing pages where the player only needs the chapter ID + range to
-// build a navigation UI.
+// A reference to a chapter for the chapter list UI. Same shape as
+// DVRChapter without the timeline-zero derivations.
 type DVRChapterRef struct {
-	ChapterID       string         `json:"chapterId"`
-	Mode            DVRChapterMode `json:"mode"`
-	IntervalSeconds *int           `json:"intervalSeconds,omitempty"`
-	StartMs         float64        `json:"startMs"`
-	EndMs           float64        `json:"endMs"`
-	IsCurrent       bool           `json:"isCurrent"`
-	ManifestS3Key   *string        `json:"manifestS3Key,omitempty"`
-	HasGaps         bool           `json:"hasGaps"`
-	SegmentCount    int            `json:"segmentCount"`
+	ChapterID       string          `json:"chapterId"`
+	Mode            DVRChapterMode  `json:"mode"`
+	IntervalSeconds *int            `json:"intervalSeconds,omitempty"`
+	StartMs         float64         `json:"startMs"`
+	EndMs           float64         `json:"endMs"`
+	IsCurrent       bool            `json:"isCurrent"`
+	State           DVRChapterState `json:"state"`
+	// Public playback key minted by Commodore; null until finalization dispatches.
+	PlaybackID        *string `json:"playbackId,omitempty"`
+	HasGaps           bool    `json:"hasGaps"`
+	SegmentCount      int     `json:"segmentCount"`
+	LastFailureReason *string `json:"lastFailureReason,omitempty"`
 }
 
 // A page of DVR chapter refs. Paginated for unbounded artifact lifetime:
@@ -1065,11 +1074,13 @@ type EdgeTelemetrySetup struct {
 }
 
 // Resolved retention horizon for a single asset (DVR, clip, or VOD).
-// Returned by the override / reset mutations and embedded on DVRRequest.
+// Embedded on Clip, DVRRequest, and VodAsset.
 type EffectiveRetention struct {
-	// Days from now until the artifact is scheduled for deletion.
-	RetentionDays  int             `json:"retentionDays"`
-	RetentionUntil time.Time       `json:"retentionUntil"`
+	// Days from now until the artifact is scheduled for deletion. 0 = no
+	// auto-expire (retentionUntil is null).
+	RetentionDays int `json:"retentionDays"`
+	// Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever).
+	RetentionUntil *time.Time      `json:"retentionUntil,omitempty"`
 	Source         RetentionSource `json:"source"`
 }
 
@@ -1142,18 +1153,30 @@ type MarketplaceClusterEdge struct {
 	Node   *proto.MarketplaceClusterEntry `json:"node"`
 }
 
-// Tenant-default retention policy plus the entitlement bounds and the
-// value the cascade would resolve to today.
+// Tenant-default retention policy: per-class overrides + the values the
+// cascade would resolve to today for a hypothetical new artifact of each
+// class (no per-stream context).
 type MediaRetentionPolicy struct {
-	// Tenant override in days. Null when no tenant default has been set;
-	// the cascade falls through to the tier entitlement.
-	RecordingRetentionDays *int `json:"recordingRetentionDays,omitempty"`
-	// Value the cascade would resolve to today (override → tenant → tier).
-	EffectiveRecordingRetentionDays int                         `json:"effectiveRecordingRetentionDays"`
-	Bounds                          *proto.MediaRetentionBounds `json:"bounds"`
+	Bounds *proto.MediaRetentionBounds `json:"bounds"`
 	// User who last touched the policy. Null when no tenant override is set.
 	UpdatedBy *string    `json:"updatedBy,omitempty"`
 	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
+	// Per-class tenant default for VOD uploads. Null = inherit the system
+	// default (keep forever). 0 = no auto-expire (paid-tier baseline). Free
+	// tier clamps to the tier cap at write time.
+	DefaultVodRetentionDays *int `json:"defaultVodRetentionDays,omitempty"`
+	// Per-class tenant default for DVR recordings. Null = inherit the system
+	// default (30d). 0 = no auto-expire (paid only).
+	DefaultDvrRetentionDays *int `json:"defaultDvrRetentionDays,omitempty"`
+	// Per-class tenant default for clips. Null = inherit the system default
+	// (30d). 0 = no auto-expire (paid only).
+	DefaultClipRetentionDays *int `json:"defaultClipRetentionDays,omitempty"`
+	// Effective VOD horizon the cascade resolves to today (0 = keep forever).
+	EffectiveVodRetentionDays int `json:"effectiveVodRetentionDays"`
+	// Effective DVR horizon the cascade resolves to today (0 = keep forever).
+	EffectiveDvrRetentionDays int `json:"effectiveDvrRetentionDays"`
+	// Effective clip horizon the cascade resolves to today (0 = keep forever).
+	EffectiveClipRetentionDays int `json:"effectiveClipRetentionDays"`
 }
 
 func (MediaRetentionPolicy) IsSetMediaRetentionPolicyResult() {}
@@ -1380,6 +1403,8 @@ func (NotFoundError) IsDeleteVodAssetResult() {}
 func (NotFoundError) IsVodUploadStatusResult() {}
 
 func (NotFoundError) IsUpdateMediaRetentionResult() {}
+
+func (NotFoundError) IsSetStreamRetentionOverridesResult() {}
 
 func (NotFoundError) IsSetNodeModeResult() {}
 
@@ -1646,15 +1671,17 @@ type ServiceInstancesConnection struct {
 	TotalCount int                      `json:"totalCount"`
 }
 
-// Result of setDVRChapterPolicy.
-type SetDVRChapterPolicyResult struct {
-	Success bool    `json:"success"`
-	Message *string `json:"message,omitempty"`
-}
-
 type SetMediaRetentionPolicyInput struct {
-	// Days to retain finalized DVR recordings. Must be 1 ≤ value ≤ tier bound. The tier-bound value resets to tier default.
-	RecordingRetentionDays int `json:"recordingRetentionDays"`
+	// Which class to write: VOD, DVR, or CLIP.
+	TargetType MediaRetentionTarget `json:"targetType"`
+	// Days to retain new artifacts of this class. Range: 0 ≤ value ≤ tier
+	// cap (tier cap of 0 means uncapped). 0 = no auto-expire (only honored
+	// on uncapped tiers; Free clamps to the cap at write time). Ignored
+	// when clear = true.
+	Days *int `json:"days,omitempty"`
+	// When true, NULLs out the per-class column so the tenant inherits the
+	// system default (VOD: keep forever, DVR/clip: 30d). days is ignored.
+	Clear *bool `json:"clear,omitempty"`
 }
 
 type SetNodeModeInput struct {
@@ -1673,6 +1700,18 @@ type SetPlaybackPolicyInput struct {
 	Policy     *PlaybackPolicyInput `json:"policy"`
 }
 
+type SetStreamRetentionOverridesInput struct {
+	StreamID string `json:"streamId"`
+	// Per-class override values. Unset on a field leaves the column alone;
+	// setting a value writes it (0 = no auto-expire, >0 = days). To remove
+	// an existing override and fall back to the tenant default, set the
+	// matching clear*Override flag.
+	DvrRetentionDaysOverride   *int  `json:"dvrRetentionDaysOverride,omitempty"`
+	ClipRetentionDaysOverride  *int  `json:"clipRetentionDaysOverride,omitempty"`
+	ClearDvrRetentionOverride  *bool `json:"clearDvrRetentionOverride,omitempty"`
+	ClearClipRetentionOverride *bool `json:"clearClipRetentionOverride,omitempty"`
+}
+
 type SigningKeyEdge struct {
 	Cursor string            `json:"cursor"`
 	Node   *proto.SigningKey `json:"node"`
@@ -1689,6 +1728,17 @@ type SkipperReportsConnection struct {
 	Nodes       []*proto.SkipperReport `json:"nodes"`
 	TotalCount  int                    `json:"totalCount"`
 	UnreadCount int                    `json:"unreadCount"`
+}
+
+// Marginal per-asset storage cost projection. Used by the customer-facing
+// storage browser to show "this clip costs you ~$0.01/day". The unit is
+// the tier's currency (typically EUR). PerDay = perMonth / 30; the cost
+// estimate is intentionally simple — multiply marginal $/GB-month by the
+// asset's byte count, render as the customer's currency.
+type StorageCostProjection struct {
+	PerDay   float64 `json:"perDay"`
+	PerMonth float64 `json:"perMonth"`
+	Currency string  `json:"currency"`
 }
 
 type StorageEventEdge struct {
@@ -1806,6 +1856,17 @@ type StreamKeysConnection struct {
 	PageInfo   *PageInfo          `json:"pageInfo"`
 	TotalCount int                `json:"totalCount"`
 }
+
+// Per-stream retention overrides for DVR and clips. VOD uploads aren't
+// stream-bound, so they have no stream-level knob here.
+type StreamRetentionOverrides struct {
+	StreamID string `json:"streamId"`
+	// Null = no override (inherit tenant default). 0 = no auto-expire.
+	DvrRetentionDaysOverride  *int `json:"dvrRetentionDaysOverride,omitempty"`
+	ClipRetentionDaysOverride *int `json:"clipRetentionDaysOverride,omitempty"`
+}
+
+func (StreamRetentionOverrides) IsSetStreamRetentionOverridesResult() {}
 
 type StreamValidation struct {
 	Status    ValidationStatus `json:"status"`
@@ -1998,6 +2059,13 @@ type UpdateStreamInput struct {
 	IngestMode *IngestMode `json:"ingestMode,omitempty"`
 	// Update the pull-source configuration for an existing pull stream.
 	PullSource *proto.PullSourceInput `json:"pullSource,omitempty"`
+	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at
+	// StartDVR; changes take effect on the next recording, not in-flight.
+	// Pass NONE to disable chapters.
+	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode,omitempty"`
+	// Chapter interval in seconds. Required when dvrChapterMode =
+	// FIXED_INTERVAL. Minimum 3600 (1 hour).
+	DvrChapterIntervalSeconds *int `json:"dvrChapterIntervalSeconds,omitempty"`
 }
 
 // Input for updating enterprise subscription custom terms.
@@ -2069,6 +2137,8 @@ func (ValidationError) IsVodUploadStatusResult() {}
 func (ValidationError) IsSetMediaRetentionPolicyResult() {}
 
 func (ValidationError) IsUpdateMediaRetentionResult() {}
+
+func (ValidationError) IsSetStreamRetentionOverridesResult() {}
 
 func (ValidationError) IsSetNodeModeResult() {}
 
@@ -2228,6 +2298,14 @@ type VodAsset struct {
 	// Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails.
 	// Null until Foghorn confirms the thumbnail upload.
 	ThumbnailAssets *proto.ThumbnailAssets `json:"thumbnailAssets,omitempty"`
+	// Resolved retention horizon with the source of the decision (per-asset
+	// override → per-stream override → tenant default → tier entitlement).
+	// Null while the asset's retention_until column is unset (infinite).
+	EffectiveRetention *EffectiveRetention `json:"effectiveRetention,omitempty"`
+	// Marginal storage cost for this asset on the tenant's tier. Null when
+	// the tenant has no storage meter (self-hosted, fully tenant-private
+	// cluster). Computed from sizeBytes × marginal $/GB-month.
+	StorageCost *StorageCostProjection `json:"storageCost,omitempty"`
 }
 
 func (VodAsset) IsCompleteVodUploadResult() {}
@@ -2572,7 +2650,9 @@ func (e ClipCreationMode) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// DVR chapter mode. Determines how (startMs, endMs) ranges are produced.
+// DVR chapter mode. Determines how chapter (startMs, endMs) ranges are
+// produced. Configured at the Stream level via updateStream and
+// snapshotted onto the DVR artifact at StartDVR.
 //
 // UTC-only — civil-time chapters resolve at the edge.
 type DVRChapterMode string
@@ -2582,22 +2662,19 @@ const (
 	DVRChapterModeWindowSized DVRChapterMode = "WINDOW_SIZED"
 	// UTC-only intervalSeconds buckets, anchored at unix epoch 0.
 	DVRChapterModeFixedInterval DVRChapterMode = "FIXED_INTERVAL"
-	// Caller-supplied (startMs, endMs); no recurrence semantics. Use for civil-time chapters.
-	DVRChapterModeExplicitRange DVRChapterMode = "EXPLICIT_RANGE"
-	// Sweeper does not materialize automatic chapters (only ad-hoc retrievals work).
+	// Chapters disabled for this stream.
 	DVRChapterModeNone DVRChapterMode = "NONE"
 )
 
 var AllDVRChapterMode = []DVRChapterMode{
 	DVRChapterModeWindowSized,
 	DVRChapterModeFixedInterval,
-	DVRChapterModeExplicitRange,
 	DVRChapterModeNone,
 }
 
 func (e DVRChapterMode) IsValid() bool {
 	switch e {
-	case DVRChapterModeWindowSized, DVRChapterModeFixedInterval, DVRChapterModeExplicitRange, DVRChapterModeNone:
+	case DVRChapterModeWindowSized, DVRChapterModeFixedInterval, DVRChapterModeNone:
 		return true
 	}
 	return false
@@ -2633,6 +2710,83 @@ func (e *DVRChapterMode) UnmarshalJSON(b []byte) error {
 }
 
 func (e DVRChapterMode) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// Chapter finalization state machine. Chapter playback resolves to the
+// chapter artifact's playbackId once state >= FINALIZED.
+type DVRChapterState string
+
+const (
+	// Recording in progress (chapter sweeper opened the boundary).
+	DVRChapterStateOpen DVRChapterState = "OPEN"
+	// Boundary reached; awaiting finalization.
+	DVRChapterStateClosed DVRChapterState = "CLOSED"
+	// Processing job in flight on the recording origin.
+	DVRChapterStateFinalizing DVRChapterState = "FINALIZING"
+	// Chapter artifact produced; not yet synced to S3.
+	DVRChapterStateFinalized DVRChapterState = "FINALIZED"
+	// Chapter artifact + .dtsh synced to S3; safe to reclaim source segments.
+	DVRChapterStateFrozen DVRChapterState = "FROZEN"
+	// Source segments deleted; row remains as metadata. Playback uses the artifact.
+	DVRChapterStateReclaimed DVRChapterState = "RECLAIMED"
+	// Recovery exhausted — at least one source segment was missing from both local and the recovery freeze.
+	DVRChapterStateFailedSourceMissing DVRChapterState = "FAILED_SOURCE_MISSING"
+	// Unrecoverable input (ledger invariants violated, repeated retries exhausted).
+	DVRChapterStateFailedPermanent DVRChapterState = "FAILED_PERMANENT"
+)
+
+var AllDVRChapterState = []DVRChapterState{
+	DVRChapterStateOpen,
+	DVRChapterStateClosed,
+	DVRChapterStateFinalizing,
+	DVRChapterStateFinalized,
+	DVRChapterStateFrozen,
+	DVRChapterStateReclaimed,
+	DVRChapterStateFailedSourceMissing,
+	DVRChapterStateFailedPermanent,
+}
+
+func (e DVRChapterState) IsValid() bool {
+	switch e {
+	case DVRChapterStateOpen, DVRChapterStateClosed, DVRChapterStateFinalizing, DVRChapterStateFinalized, DVRChapterStateFrozen, DVRChapterStateReclaimed, DVRChapterStateFailedSourceMissing, DVRChapterStateFailedPermanent:
+		return true
+	}
+	return false
+}
+
+func (e DVRChapterState) String() string {
+	return string(e)
+}
+
+func (e *DVRChapterState) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = DVRChapterState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid DVRChapterState", str)
+	}
+	return nil
+}
+
+func (e DVRChapterState) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *DVRChapterState) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e DVRChapterState) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil
@@ -3075,24 +3229,28 @@ func (e PlaybackPolicyType) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Source of an effective retention horizon.
+// Source of an effective retention horizon. Mirrors the cascade layers
+// used at artifact create / asset reset (per-asset override → per-stream
+// override → tenant per-class default → tier entitlement clamp).
 type RetentionSource string
 
 const (
-	RetentionSourceTenantDefault    RetentionSource = "TENANT_DEFAULT"
-	RetentionSourcePerAssetOverride RetentionSource = "PER_ASSET_OVERRIDE"
-	RetentionSourceTierEntitlement  RetentionSource = "TIER_ENTITLEMENT"
+	RetentionSourceTenantDefault     RetentionSource = "TENANT_DEFAULT"
+	RetentionSourcePerStreamOverride RetentionSource = "PER_STREAM_OVERRIDE"
+	RetentionSourcePerAssetOverride  RetentionSource = "PER_ASSET_OVERRIDE"
+	RetentionSourceTierEntitlement   RetentionSource = "TIER_ENTITLEMENT"
 )
 
 var AllRetentionSource = []RetentionSource{
 	RetentionSourceTenantDefault,
+	RetentionSourcePerStreamOverride,
 	RetentionSourcePerAssetOverride,
 	RetentionSourceTierEntitlement,
 }
 
 func (e RetentionSource) IsValid() bool {
 	switch e {
-	case RetentionSourceTenantDefault, RetentionSourcePerAssetOverride, RetentionSourceTierEntitlement:
+	case RetentionSourceTenantDefault, RetentionSourcePerStreamOverride, RetentionSourcePerAssetOverride, RetentionSourceTierEntitlement:
 		return true
 	}
 	return false

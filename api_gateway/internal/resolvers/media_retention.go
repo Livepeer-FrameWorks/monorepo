@@ -14,13 +14,14 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Bridge → Commodore retention policy mutations + query.
-// All four operations are tenant-scoped via JWT; Commodore enforces tenant
-// isolation server-side. Cost-affecting: changes here resize the tenant's
-// storage bill for future / existing recordings.
+// Bridge → Commodore retention policy mutations + query. All operations
+// are tenant-scoped via JWT; Commodore enforces tenant isolation
+// server-side. Cost-affecting: changes here resize the tenant's storage
+// bill for future / existing recordings.
 
-// DoMediaRetentionPolicy reads the tenant default + entitlement bounds + the
-// value the cascade resolves to today.
+// DoMediaRetentionPolicy reads the tenant per-class defaults plus the
+// effective horizon the cascade resolves to today for each class (no
+// per-stream context).
 func (r *Resolver) DoMediaRetentionPolicy(ctx context.Context) (*model.MediaRetentionPolicy, error) {
 	if err := middleware.RequirePermission(ctx, "billing:read"); err != nil {
 		return nil, err
@@ -33,20 +34,50 @@ func (r *Resolver) DoMediaRetentionPolicy(ctx context.Context) (*model.MediaRete
 	return mediaRetentionPolicyFromProto(resp), nil
 }
 
-// DoSetMediaRetentionPolicy upserts the tenant default. Validation against
-// tier entitlement happens server-side in Commodore.
+// DoSetMediaRetentionPolicy writes a tenant per-class default. The input
+// must target a single asset class (VOD, DVR, or CLIP). clear=true NULLs
+// the column so the tenant inherits the system default.
 func (r *Resolver) DoSetMediaRetentionPolicy(ctx context.Context, input model.SetMediaRetentionPolicyInput) (model.SetMediaRetentionPolicyResult, error) {
 	if err := middleware.RequirePermission(ctx, "billing:write"); err != nil {
 		return nil, err
 	}
-	if input.RecordingRetentionDays < 1 {
+
+	target := protoTargetType(input.TargetType)
+	if target == pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_UNSPECIFIED {
 		return &model.ValidationError{
-			Message: "recordingRetentionDays must be at least 1",
-			Field:   strPtr("recordingRetentionDays"),
+			Message: "targetType must be VOD, DVR, or CLIP",
+			Field:   strPtr("targetType"),
 		}, nil
 	}
+
+	clear := false
+	if input.Clear != nil {
+		clear = *input.Clear
+	}
+	days := int32(0)
+	if input.Days != nil {
+		days = int32(*input.Days)
+	}
+
+	if !clear {
+		if input.Days == nil {
+			return &model.ValidationError{
+				Message: "days is required unless clear=true",
+				Field:   strPtr("days"),
+			}, nil
+		}
+		if days < 0 {
+			return &model.ValidationError{
+				Message: "days must be >= 0 (0 = no auto-expire)",
+				Field:   strPtr("days"),
+			}, nil
+		}
+	}
+
 	resp, err := r.Clients.Commodore.SetMediaRetentionPolicy(ctx, &pb.SetMediaRetentionPolicyRequest{
-		RecordingRetentionDays: int32(input.RecordingRetentionDays),
+		TargetType: target,
+		Days:       days,
+		Clear:      clear,
 	})
 	if err != nil {
 		if vErr := mapInvalidArgument(err); vErr != nil {
@@ -58,8 +89,74 @@ func (r *Resolver) DoSetMediaRetentionPolicy(ctx context.Context, input model.Se
 	return mediaRetentionPolicyFromProto(resp.GetPolicy()), nil
 }
 
-// DoUpdateMediaRetention applies a per-asset retention override on a
-// finalized DVR recording.
+// DoSetStreamRetentionOverrides writes per-stream DVR/clip retention
+// overrides. clearXxxOverride=true on a class takes precedence over a
+// value on that class. 0 = keep forever (clamped to the tier cap on
+// Free); >0 = days.
+func (r *Resolver) DoSetStreamRetentionOverrides(ctx context.Context, input model.SetStreamRetentionOverridesInput) (model.SetStreamRetentionOverridesResult, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
+	if input.StreamID == "" {
+		return &model.ValidationError{
+			Message: "streamId is required",
+			Field:   strPtr("streamId"),
+		}, nil
+	}
+
+	req := &pb.SetStreamRetentionOverridesRequest{
+		StreamId: input.StreamID,
+	}
+	if input.DvrRetentionDaysOverride != nil {
+		v := int32(*input.DvrRetentionDaysOverride)
+		req.DvrRetentionDaysOverride = &v
+	}
+	if input.ClipRetentionDaysOverride != nil {
+		v := int32(*input.ClipRetentionDaysOverride)
+		req.ClipRetentionDaysOverride = &v
+	}
+	if input.ClearDvrRetentionOverride != nil {
+		req.ClearDvrRetentionOverride = *input.ClearDvrRetentionOverride
+	}
+	if input.ClearClipRetentionOverride != nil {
+		req.ClearClipRetentionOverride = *input.ClearClipRetentionOverride
+	}
+	if req.DvrRetentionDaysOverride == nil && req.ClipRetentionDaysOverride == nil &&
+		!req.ClearDvrRetentionOverride && !req.ClearClipRetentionOverride {
+		return &model.ValidationError{
+			Message: "at least one override or clear flag must be set",
+		}, nil
+	}
+
+	resp, err := r.Clients.Commodore.SetStreamRetentionOverrides(ctx, req)
+	if err != nil {
+		if vErr := mapInvalidArgument(err); vErr != nil {
+			return vErr, nil
+		}
+		if nfErr := mapNotFound(err); nfErr != nil {
+			return nfErr, nil
+		}
+		if authErr := mapPermissionDenied(err); authErr != nil {
+			return authErr, nil
+		}
+		r.Logger.WithError(err).Error("SetStreamRetentionOverrides failed")
+		return nil, fmt.Errorf("set stream retention overrides: %w", err)
+	}
+	out := &model.StreamRetentionOverrides{StreamID: resp.GetStreamId()}
+	if v := resp.DvrRetentionDaysOverride; v != nil {
+		iv := int(*v)
+		out.DvrRetentionDaysOverride = &iv
+	}
+	if v := resp.ClipRetentionDaysOverride; v != nil {
+		iv := int(*v)
+		out.ClipRetentionDaysOverride = &iv
+	}
+	return out, nil
+}
+
+// DoUpdateMediaRetention applies a per-asset retention override.
+// retentionDays = 0 means "keep forever" (Commodore writes NULL
+// retention_until; Foghorn's RetentionJob skips the artifact).
 func (r *Resolver) DoUpdateMediaRetention(ctx context.Context, input model.UpdateMediaRetentionInput) (model.UpdateMediaRetentionResult, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
@@ -81,6 +178,12 @@ func (r *Resolver) DoUpdateMediaRetention(ctx context.Context, input model.Updat
 			Field:   strPtr("retentionDays"),
 		}, nil
 	}
+	if input.RetentionDays != nil && *input.RetentionDays < 0 {
+		return &model.ValidationError{
+			Message: "retentionDays must be >= 0 (0 = keep forever)",
+			Field:   strPtr("retentionDays"),
+		}, nil
+	}
 	req := &pb.UpdateAssetRetentionRequest{
 		TargetType: protoTargetType(input.TargetType),
 		TargetId:   input.TargetID,
@@ -89,7 +192,8 @@ func (r *Resolver) DoUpdateMediaRetention(ctx context.Context, input model.Updat
 		req.RetentionUntil = timestamppb.New(*input.RetentionUntil)
 	}
 	if input.RetentionDays != nil {
-		req.RetentionDays = int32(*input.RetentionDays)
+		v := int32(*input.RetentionDays)
+		req.RetentionDays = &v
 	}
 	resp, err := r.Clients.Commodore.UpdateAssetRetention(ctx, req)
 	if err != nil {
@@ -111,8 +215,9 @@ func (r *Resolver) DoUpdateMediaRetention(ctx context.Context, input model.Updat
 	return effectiveRetentionFromProto(resp), nil
 }
 
-// DoResetMediaRetentionOverride clears a per-asset override and recomputes
-// the horizon from the cascade (tenant default → tier entitlement).
+// DoResetMediaRetentionOverride clears a per-asset override and
+// recomputes the horizon from the per-class cascade (which itself
+// consults per-stream and tenant default).
 func (r *Resolver) DoResetMediaRetentionOverride(ctx context.Context, input model.ResetMediaRetentionOverrideInput) (model.UpdateMediaRetentionResult, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
@@ -148,7 +253,7 @@ func (r *Resolver) DoResetMediaRetentionOverride(ctx context.Context, input mode
 
 // DoDVRRequestEffectiveRetention is the field resolver for
 // DVRRequest.effectiveRetention. Returns nil while the recording is active
-// (no retention horizon yet) or when ExpiresAt isn't set.
+// (no horizon yet) or when ExpiresAt isn't set (artifact kept forever).
 func (r *Resolver) DoDVRRequestEffectiveRetention(ctx context.Context, info *pb.DVRInfo) (*model.EffectiveRetention, error) {
 	if info == nil || info.ExpiresAt == nil {
 		return nil, nil
@@ -161,8 +266,8 @@ func (r *Resolver) DoDVRRequestEffectiveRetention(ctx context.Context, info *pb.
 	}
 	return &model.EffectiveRetention{
 		RetentionDays:  days,
-		RetentionUntil: until,
-		Source:         retentionSourceFromString(info.GetRetentionSource()),
+		RetentionUntil: &until,
+		Source:         RetentionSourceFromString(info.GetRetentionSource()),
 	}, nil
 }
 
@@ -171,12 +276,22 @@ func mediaRetentionPolicyFromProto(p *pb.GetMediaRetentionPolicyResponse) *model
 		return nil
 	}
 	out := &model.MediaRetentionPolicy{
-		EffectiveRecordingRetentionDays: int(p.GetEffectiveRecordingRetentionDays()),
-		Bounds:                          p.GetBounds(),
+		Bounds:                     p.GetBounds(),
+		EffectiveVodRetentionDays:  int(p.GetEffectiveVodRetentionDays()),
+		EffectiveDvrRetentionDays:  int(p.GetEffectiveDvrRetentionDays()),
+		EffectiveClipRetentionDays: int(p.GetEffectiveClipRetentionDays()),
 	}
-	if p.GetRecordingRetentionDaysSet() {
-		v := int(p.GetRecordingRetentionDays())
-		out.RecordingRetentionDays = &v
+	if v := p.DefaultVodRetentionDays; v != nil {
+		iv := int(*v)
+		out.DefaultVodRetentionDays = &iv
+	}
+	if v := p.DefaultDvrRetentionDays; v != nil {
+		iv := int(*v)
+		out.DefaultDvrRetentionDays = &iv
+	}
+	if v := p.DefaultClipRetentionDays; v != nil {
+		iv := int(*v)
+		out.DefaultClipRetentionDays = &iv
 	}
 	if u := p.GetUpdatedBy(); u != "" {
 		out.UpdatedBy = &u
@@ -194,17 +309,18 @@ func effectiveRetentionFromProto(p *pb.UpdateAssetRetentionResponse) *model.Effe
 	}
 	out := &model.EffectiveRetention{
 		RetentionDays: int(p.GetRetentionDays()),
-		Source:        retentionSourceFromString(p.GetSource()),
+		Source:        RetentionSourceFromString(p.GetSource()),
 	}
 	if ts := p.GetRetentionUntil(); ts != nil {
-		out.RetentionUntil = ts.AsTime()
+		t := ts.AsTime()
+		out.RetentionUntil = &t
 	}
 	return out
 }
 
 // protoTargetType translates the GraphQL string enum to the wire-side proto
 // enum. Unsupported targets fall through to UNSPECIFIED so Commodore returns
-// a clear InvalidArgument; we don't silently coerce to DVR.
+// a clear InvalidArgument instead of silently coercing.
 func protoTargetType(t model.MediaRetentionTarget) pb.MediaRetentionTarget {
 	switch t {
 	case model.MediaRetentionTargetDvr:
@@ -218,7 +334,7 @@ func protoTargetType(t model.MediaRetentionTarget) pb.MediaRetentionTarget {
 	}
 }
 
-func retentionSourceFromString(s string) model.RetentionSource {
+func RetentionSourceFromString(s string) model.RetentionSource {
 	switch s {
 	case "tenant_default":
 		return model.RetentionSourceTenantDefault
@@ -229,9 +345,8 @@ func retentionSourceFromString(s string) model.RetentionSource {
 	}
 }
 
-// mapInvalidArgument converts Commodore's InvalidArgument gRPC errors into a
-// ValidationError union member so clients see a structured failure rather
-// than a raw RPC error. Returns nil if the error is something else.
+// mapInvalidArgument converts Commodore's InvalidArgument gRPC errors into
+// a ValidationError union member.
 func mapInvalidArgument(err error) *model.ValidationError {
 	if err == nil {
 		return nil
@@ -249,7 +364,6 @@ func mapInvalidArgument(err error) *model.ValidationError {
 	return v
 }
 
-// mapNotFound maps NotFound gRPC errors to NotFoundError union members.
 func mapNotFound(err error) *model.NotFoundError {
 	if err == nil {
 		return nil
@@ -262,9 +376,9 @@ func mapNotFound(err error) *model.NotFoundError {
 }
 
 // mapPermissionDenied maps PermissionDenied gRPC errors to AuthError union
-// members. Commodore returns this for tenant-mismatch on cross-tenant probes;
-// surfacing the structured error lets clients distinguish "not yours" from
-// transport failures.
+// members. Commodore returns this for tenant-mismatch on cross-tenant
+// probes; surfacing the structured error lets clients distinguish "not
+// yours" from transport failures.
 func mapPermissionDenied(err error) *model.AuthError {
 	if err == nil {
 		return nil
@@ -296,12 +410,23 @@ func mapFailedPrecondition(err error) *model.ValidationError {
 
 // guessFieldFromMessage extracts the first identifier-shaped token from an
 // error message so ValidationError.field gives the client a hint when
-// possible.
+// possible. Order matters — longer candidates first so substrings don't
+// shadow them.
 func guessFieldFromMessage(msg string) string {
-	for _, candidate := range []string{
-		"recording_retention_days", "retention_days", "retention_until",
-		"target_id", "target_type",
-	} {
+	candidates := []string{
+		"default_vod_retention_days",
+		"default_dvr_retention_days",
+		"default_clip_retention_days",
+		"dvr_retention_days_override",
+		"clip_retention_days_override",
+		"retention_days",
+		"retention_until",
+		"target_id",
+		"target_type",
+		"stream_id",
+		"days",
+	}
+	for _, candidate := range candidates {
 		if strings.Contains(msg, candidate) {
 			return camelCase(candidate)
 		}

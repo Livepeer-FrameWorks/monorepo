@@ -72,12 +72,13 @@ service InternalService {
   rpc StartDVR(shared.StartDVRRequest) returns (shared.StartDVRResponse);
 
   // ===== DVR CHAPTERS (api_gateway -> Commodore -> Foghorn) =====
-  // Chapter retrieval, listing, and policy. Commodore is the customer-facing
+  // Chapter retrieval + listing. Commodore is the customer-facing
   // intermediary: validates tenant ownership of the DVR artifact, then
-  // forwards to Foghorn (which owns ledger + materialization).
+  // forwards to Foghorn (which owns the chapter row + finalization
+  // queue). Chapter mode/interval is configured on the Stream and
+  // snapshotted at StartDVR — there is no mid-recording policy RPC.
   rpc RetrieveDVRChapter(foghorn.RetrieveDVRChapterRequest) returns (foghorn.RetrieveDVRChapterResponse);
   rpc ListDVRChapters(foghorn.ListDVRChaptersRequest) returns (foghorn.ListDVRChaptersResponse);
-  rpc SetDVRChapterPolicy(foghorn.SetDVRChapterPolicyRequest) returns (foghorn.SetDVRChapterPolicyResponse);
 
   // ============================================================================
   // CLIP/DVR REGISTRY (Foghorn → Commodore)
@@ -116,14 +117,7 @@ service InternalService {
   // Resolve DVR hash to tenant context (for analytics enrichment and playback)
   rpc ResolveDVRHash(ResolveDVRHashRequest) returns (ResolveDVRHashResponse);
 
-  // ResolveDVRChapter resolves a chapter_id to its origin cluster + range
-  // via commodore.dvr_chapter_aliases. Used by a non-origin Foghorn that
-  // receives a dvr+chapter_id playback request and lacks the chapter row
-  // locally; the resolved origin is the target of FoghornFederation
-  // .PrepareDVRChapter.
-  rpc ResolveDVRChapter(ResolveDVRChapterRequest) returns (ResolveDVRChapterResponse);
-
-  // Resolve artifact playback ID to artifact identity (clip/dvr/vod)
+// Resolve artifact playback ID to artifact identity (clip/dvr/vod)
   rpc ResolveArtifactPlaybackID(ResolveArtifactPlaybackIDRequest) returns (ResolveArtifactPlaybackIDResponse);
 
   // Resolve artifact internal routing name to artifact identity (clip/dvr/vod)
@@ -145,6 +139,30 @@ service InternalService {
   rpc ResolveVodHash(ResolveVodHashRequest) returns (ResolveVodHashResponse);
   // Resolve VOD relay ID (vod_assets.id) to VOD hash + tenant context
   rpc ResolveVodID(ResolveVodIDRequest) returns (ResolveVodIDResponse);
+
+  // ============================================================================
+  // DVR CHAPTER PLAYBACK ID REGISTRY (Foghorn → Commodore)
+  // Hidden chapter artifacts (origin_type='dvr_chapter', library_visible=false)
+  // get real Commodore-minted playback IDs so chapter playback goes through the
+  // same public-ID boundary as VOD. The mapping is keyed by chapter_id; mint is
+  // idempotent (returns the existing playback_id on retry).
+  // ============================================================================
+
+  // Mint (or fetch existing) public playback_id for a DVR chapter artifact.
+  // Called by Foghorn at chapter finalization dispatch.
+  rpc MintChapterPlaybackID(MintChapterPlaybackIDRequest) returns (MintChapterPlaybackIDResponse);
+
+  // Resolve a chapter playback_id back to its tenant + chapter + artifact hash.
+  // Used by Foghorn's playback resolver to map the public ID to the internal
+  // artifact identity.
+  rpc ResolveChapterPlaybackID(ResolveChapterPlaybackIDRequest) returns (ResolveChapterPlaybackIDResponse);
+
+  // GetTenantProcessesJSON returns the resolved MistServer process config
+  // for a tenant + stream type ("live" | "vod"). Foghorn calls this from
+  // the chapter finalization queue to attach the same VOD processing
+  // pipeline (Thumbs, sprites, optional Livepeer) that user-initiated VOD
+  // uploads use. Stream-type values match resolveProcessesJSON internally.
+  rpc GetTenantProcessesJSON(GetTenantProcessesJSONRequest) returns (GetTenantProcessesJSONResponse);
 
   // ============================================================================
   // WALLET IDENTITY (x402 / Agent Access)
@@ -195,6 +213,10 @@ service InternalService {
   rpc SetMediaRetentionPolicy(SetMediaRetentionPolicyRequest) returns (SetMediaRetentionPolicyResponse);
   rpc UpdateAssetRetention(UpdateAssetRetentionRequest) returns (UpdateAssetRetentionResponse);
   rpc ResetAssetRetention(ResetAssetRetentionRequest) returns (UpdateAssetRetentionResponse);
+  // Per-stream retention overrides (DVR + clip only — VOD uploads aren't
+  // stream-bound). NULL on a field clears the override and falls back to
+  // the tenant default.
+  rpc SetStreamRetentionOverrides(SetStreamRetentionOverridesRequest) returns (SetStreamRetentionOverridesResponse);
 
   // Dry-run policy evaluation against a caller-supplied JWT or webhook test.
   // Commodore validates tenant ownership of the playback target and forwards
@@ -616,27 +638,6 @@ message ResolveDVRHashResponse {
   string origin_cluster_id = 8;         // Cluster that originally created this DVR
 }
 
-// ResolveDVRChapter reads commodore.dvr_chapter_aliases. The alias is
-// upserted by RetrieveDVRChapter at materialization time and carries the
-// origin_cluster_id authoritatively. stream_internal_name is JOINed in
-// from commodore.dvr_recordings for local-path construction in
-// StartDVRChapterDefrost.
-message ResolveDVRChapterRequest {
-  string chapter_id = 1;
-}
-
-message ResolveDVRChapterResponse {
-  bool found = 1;
-  string tenant_id = 2;
-  string origin_cluster_id = 3;
-  string dvr_hash = 4;
-  string mode = 5;                      // explicit_range | fixed_interval | window_sized
-  int32 interval_seconds = 6;
-  int64 start_ms = 7;
-  int64 end_ms = 8;
-  string stream_internal_name = 9;
-}
-
 // Unified identifier resolution - single call to check all Commodore registries
 // Lookup order: streams (internal_name), streams (playback_id), clips, DVR, VOD
 // Used by Foghorn for analytics enrichment when local state cache misses
@@ -717,6 +718,48 @@ message ResolveVodIDResponse {
   string vod_hash = 4;
   string playback_id = 5;
   string internal_name = 6;
+}
+
+// Mint a public playback_id for a chapter artifact. Idempotent on
+// (chapter_id) — repeat calls return the existing playback_id even if
+// artifact_hash changes across retries (the latest artifact_hash wins
+// on UPSERT).
+message MintChapterPlaybackIDRequest {
+  string chapter_id    = 1;             // foghorn.dvr_chapters.chapter_id
+  string tenant_id     = 2;             // tenant scope
+  string artifact_hash = 3;             // chapter playback artifact (origin_type='dvr_chapter')
+}
+
+message MintChapterPlaybackIDResponse {
+  string playback_id = 1;               // 16-char Commodore-minted public key
+}
+
+// Resolve a chapter playback_id back to its internal identity. Returns
+// found=false when the playback_id doesn't match any chapter row (or
+// the row was deleted).
+message ResolveChapterPlaybackIDRequest {
+  string playback_id = 1;
+}
+
+message ResolveChapterPlaybackIDResponse {
+  bool   found         = 1;
+  string chapter_id    = 2;
+  string tenant_id     = 3;
+  string artifact_hash = 4;
+}
+
+// GetTenantProcessesJSON exposes the resolved MistServer process config
+// for use by Foghorn-internal pipelines (chapter finalize). cluster_id
+// is optional — when empty the resolver picks the tenant's default
+// origin cluster.
+message GetTenantProcessesJSONRequest {
+  string tenant_id   = 1;
+  string stream_type = 2;     // "live" | "vod"
+  string cluster_id  = 3;     // optional
+}
+
+message GetTenantProcessesJSONResponse {
+  string processes_json = 1;  // raw JSON array; "[]" when the tenant has no config
 }
 
 // Resolve artifact playback ID to artifact identity
@@ -1202,6 +1245,16 @@ message Stream {
   // active_ingest_cluster_id + stream_id. Null until the stream first ingests;
   // the underlying poster.jpg 404s until Helmsman uploads its first frame.
   optional shared.ThumbnailAssets thumbnail_assets = 24;
+  // DVR chapter rotation policy. Empty mode = chapters disabled.
+  // Snapshotted onto the DVR artifact at StartDVR; changes apply to
+  // the NEXT recording.
+  string dvr_chapter_mode             = 25;
+  optional int32 dvr_chapter_interval_seconds = 26;
+  // Per-stream retention overrides. Unset = inherit tenant per-class default.
+  // 0 = no auto-expire (keep forever). >0 = days. VOD uploads aren't
+  // stream-bound so no override is exposed here for VOD.
+  optional int32 dvr_retention_days_override  = 27;
+  optional int32 clip_retention_days_override = 28;
 }
 
 // PullSourceAllowedClustersInput wraps the placement-pin list so callers can
@@ -1248,6 +1301,11 @@ message UpdateStreamRequest {
   optional bool record = 4;             // json:"record,omitempty"
   optional string ingest_mode = 5;      // cannot be changed after create; used for explicit validation
   PullSourceInput pull_source = 6;      // update pull source for existing pull streams
+  // DVR chapter mode/interval — snapshotted onto the DVR artifact at
+  // StartDVR. NULL/empty mode disables chapters. Changes apply to the
+  // NEXT recording, not in-flight.
+  optional string dvr_chapter_mode             = 7;
+  optional int32  dvr_chapter_interval_seconds = 8;
 }
 
 message DeleteStreamRequest {
@@ -1656,9 +1714,9 @@ message ListPullSourceEventsResponse {
 }
 
 message MediaRetentionBounds {
-  // Tier entitlement upper bound for recording retention (days). Read from
-  // Purser at request time; tenant policy / per-asset overrides must be ≤
-  // this value. 0 = use system default 30.
+  // Tier entitlement upper bound for customer-set retention (days). Read
+  // from Purser at request time. 0 = no cap (paid-tier baseline); Free
+  // sets a finite cap as the anti-abuse guardrail.
   int32 max_recording_retention_days = 1;
 }
 
@@ -1667,22 +1725,36 @@ message GetMediaRetentionPolicyRequest {
 }
 
 message GetMediaRetentionPolicyResponse {
-  // Tenant default override. If recording_retention_days_set is false, the
-  // tenant has not set a custom default and Purser's entitlement applies.
-  bool recording_retention_days_set = 1;
-  int32 recording_retention_days = 2;
-  // Effective value the cascade would resolve to today (override → tenant → entitlement).
-  int32 effective_recording_retention_days = 3;
-  MediaRetentionBounds bounds = 4;
-  string updated_by = 5;
-  google.protobuf.Timestamp updated_at = 6;
+  // Per-class tenant defaults. Unset = inherit the per-class system default
+  // (VOD: keep forever, DVR/clip: 30d) clamped by the tier cap. 0 = no
+  // auto-expire (paid-tier override). >0 = days.
+  optional int32 default_vod_retention_days  = 1;
+  optional int32 default_dvr_retention_days  = 2;
+  optional int32 default_clip_retention_days = 3;
+  // Effective per-class horizon the cascade would resolve to today for a
+  // newly-created artifact (per-stream omitted — these are tenant-level).
+  // 0 means "keep forever"; >0 the resolved finite day count.
+  int32 effective_vod_retention_days  = 4;
+  int32 effective_dvr_retention_days  = 5;
+  int32 effective_clip_retention_days = 6;
+  MediaRetentionBounds bounds = 7;
+  string updated_by = 8;
+  google.protobuf.Timestamp updated_at = 9;
 }
 
 message SetMediaRetentionPolicyRequest {
   string tenant_id = 1;
   string updated_by = 2;
-  // Required; must satisfy 1 ≤ value ≤ bounds.max_recording_retention_days.
-  int32 recording_retention_days = 3;
+  // Which asset class to write. UNSPECIFIED is rejected — callers must
+  // pick VOD, DVR, or CLIP.
+  MediaRetentionTarget target_type = 3;
+  // Days to write. Range: 0 ≤ value ≤ tier_cap (cap=0 means uncapped). 0
+  // means "no auto-expire" (only meaningful on uncapped tiers; Free clamps
+  // 0 up to its cap at write time). Ignored when clear is true.
+  int32 days = 4;
+  // When true, NULLs out the target column and the tenant inherits the
+  // per-class system default. days is ignored.
+  bool clear = 5;
 }
 
 message SetMediaRetentionPolicyResponse {
@@ -1702,9 +1774,9 @@ message UpdateAssetRetentionRequest {
   // Canonical asset ID: dvr_id (UUID) or dvr_hash for DVR targets. Either is
   // accepted; resolver picks the right column.
   string target_id = 3;
-  // Exactly one of retention_days (relative to NOW) or retention_until
-  // (absolute) must be set.
-  int32 retention_days = 4;
+  // Exactly one of retention_days (relative to NOW; 0 = keep forever) or
+  // retention_until (absolute) must be set.
+  optional int32 retention_days = 4;
   google.protobuf.Timestamp retention_until = 5;
 }
 
@@ -1716,8 +1788,27 @@ message ResetAssetRetentionRequest {
 
 message UpdateAssetRetentionResponse {
   string target_id = 1;
-  int32 retention_days = 2;            // Effective horizon in days from now (informational)
-  google.protobuf.Timestamp retention_until = 3;
+  int32 retention_days = 2;            // Effective horizon in days from now (informational; 0 = keep forever)
+  optional google.protobuf.Timestamp retention_until = 3; // Unset when retention_days = 0 (keep forever).
   // 'tenant_default' | 'per_asset_override' | 'tier_entitlement'
   string source = 4;
+}
+
+message SetStreamRetentionOverridesRequest {
+  string tenant_id = 1;
+  string stream_id = 2;
+  // Unset leaves the corresponding column alone. Set writes the override
+  // (0 = keep forever, >0 = days). To clear a column, set the matching
+  // clear bool — clear takes precedence if both are provided.
+  optional int32 dvr_retention_days_override  = 3;
+  optional int32 clip_retention_days_override = 4;
+  bool clear_dvr_retention_override  = 5;
+  bool clear_clip_retention_override = 6;
+  string updated_by = 7;
+}
+
+message SetStreamRetentionOverridesResponse {
+  string stream_id = 1;
+  optional int32 dvr_retention_days_override  = 2;
+  optional int32 clip_retention_days_override = 3;
 }

@@ -3,6 +3,7 @@ query GetBillingTiers {
   billingTiers {
     id
     tierName
+    tierLevel
     displayName
     description
     basePrice

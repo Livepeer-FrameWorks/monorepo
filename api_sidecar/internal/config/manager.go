@@ -196,7 +196,7 @@ func (m *Manager) reconcile() {
 		"LIVEPEER_SEGMENT_COMPLETE":           []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/livepeer_segment_complete"), "sync": false}},
 		"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/process_av_segment_complete"), "sync": false}},
 		"THUMBNAIL_UPDATED":                   []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/thumbnail_updated"), "sync": false}},
-		"STREAM_PROCESS":                      []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/stream_process"), "sync": true, "streams": []string{"live+", "processing+", "vod+", "pull+"}}},
+		"STREAM_PROCESS":                      []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/stream_process"), "sync": true, "streams": []string{"live+", "processing+", "vod+", "pull+", "dvr+"}}},
 		"PROCESS_EXIT":                        []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/process_exit"), "sync": false, "streams": []string{"processing+"}}},
 	}
 	desiredConfig["triggers"] = triggers
@@ -1110,11 +1110,21 @@ func streamConfigsFromSeed(seed *pb.ConfigSeed, base string) map[string]map[stri
 			"tags":          def.GetTags(),
 		}
 
-		// processing+ sources are resolved dynamically via STREAM_SOURCE. The
-		// base processing template exists only to give Mist a configured source
-		// for the wildcard family.
-		if def.GetName() == "processing" {
+		// processing+ and dvr+ sources are resolved dynamically via
+		// STREAM_SOURCE. Their base templates exist only to give Mist a
+		// configured source for the wildcard families.
+		if def.GetName() == "processing" || def.GetName() == "dvr" {
 			entry["source"] = inertMistSource
+		}
+		if def.GetName() == "live" {
+			entry["DVR"] = 120000
+			entry["resume"] = 1
+			entry["inputtimeout"] = 12
+		}
+		if def.GetName() == "dvr" {
+			entry["DVR"] = 120000
+			entry["bufferTime"] = 120000
+			entry["inputtimeout"] = 12
 		}
 
 		// All stream types use STREAM_PROCESS trigger for per-instance process config.
@@ -1143,7 +1153,7 @@ func staleManagedWildcardStreams(current map[string]any) []string {
 }
 
 func isStaleManagedWildcardStream(name string) bool {
-	for _, prefix := range []string{"live+", "vod+", "processing+", "pull+"} {
+	for _, prefix := range []string{"live+", "vod+", "processing+", "pull+", "dvr+"} {
 		if strings.HasPrefix(name, prefix) && (name == prefix || strings.Contains(name, "$")) {
 			return true
 		}

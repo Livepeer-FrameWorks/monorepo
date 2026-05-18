@@ -165,11 +165,12 @@ type Registry struct {
 }
 
 type conn struct {
-	stream      pb.HelmsmanControl_ConnectServer
-	last        time.Time
-	peerAddr    string
-	canonicalID string // node ID after fingerprint/enrollment resolution (may differ from registry key)
-	clusterID   string
+	stream       pb.HelmsmanControl_ConnectServer
+	last         time.Time
+	peerAddr     string
+	canonicalID  string // node ID after fingerprint/enrollment resolution (may differ from registry key)
+	clusterID    string
+	relayBaseURL string // base URL Mist on this node uses to reach Helmsman's /internal/artifact/* relay
 }
 
 var registry *Registry
@@ -794,7 +795,12 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				peerAddr = p.Addr.String()
 			}
 			registry.mu.Lock()
-			registry.conns[nodeID] = &conn{stream: stream, last: time.Now(), peerAddr: peerAddr}
+			registry.conns[nodeID] = &conn{
+				stream:       stream,
+				last:         time.Now(),
+				peerAddr:     peerAddr,
+				relayBaseURL: strings.TrimRight(x.Register.GetRelayBaseUrl(), "/"),
+			}
 			registry.mu.Unlock()
 			registry.log.WithField("node_id", nodeID).Info("Helmsman registered")
 			// Mark node healthy in unified state (baseURL unknown at register)
@@ -1175,6 +1181,11 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 		case *pb.ControlMessage_CanDeleteRequest:
 			// Handle can-delete check from Helmsman (dual-storage architecture)
 			go processCanDeleteRequest(x.CanDeleteRequest, nodeID, stream, registry.log)
+		case *pb.ControlMessage_RelayResolveRequest:
+			// Read-through relay resolution: sidecar wants presigned URLs +
+			// chapter refs for an asset it's about to serve over
+			// /internal/artifact/*. Same control-stream pattern as CanDelete.
+			go processRelayResolveRequest(x.RelayResolveRequest, nodeID, stream, registry.log)
 		case *pb.ControlMessage_SyncComplete:
 			// Handle sync completion from Helmsman (dual-storage architecture)
 			go processSyncComplete(x.SyncComplete, nodeID, registry.log)
@@ -1982,19 +1993,17 @@ func GetDTSCBase(nodeID string, logger logging.Logger) string {
 	return getDTSCOutputURI(nodeID, logger)
 }
 
-// BuildDTSCURI returns a full DTSC URI for a stream on a node.
-// When live is true, it prefixes the stream name with "live+".
-func BuildDTSCURI(nodeID, internalName string, live bool, logger logging.Logger) string {
+// BuildDTSCURI returns a full DTSC URI for a Mist stream on a node.
+// streamName must include the Mist prefix (e.g. "live+<internal_name>",
+// "dvr+<dvr_internal_name>") — the prefix is meaningful to Mist's input
+// routing on the pulling node and this function is prefix-agnostic.
+func BuildDTSCURI(nodeID, streamName string, logger logging.Logger) string {
 	base := GetDTSCBase(nodeID, logger)
-	if base == "" || internalName == "" {
+	if base == "" || streamName == "" {
 		return ""
 	}
-	name := internalName
-	if live {
-		name = "live+" + internalName
-	}
 	base = strings.TrimSuffix(base, "/")
-	return base + "/" + name
+	return base + "/" + streamName
 }
 
 // GetNodeOutputs returns the outputs for a given node ID (for viewer endpoint resolution)
@@ -2195,6 +2204,12 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		{
 			Id:    "vod",
 			Def:   &pb.StreamDef{Name: "vod", Realtime: false, StopSessions: false, Tags: []string{"vod"}},
+			Roles: []string{"edge", "storage"},
+			Caps:  []string{"edge", "storage"},
+		},
+		{
+			Id:    "dvr",
+			Def:   &pb.StreamDef{Name: "dvr", Realtime: false, StopSessions: false, Tags: []string{"dvr"}},
 			Roles: []string{"edge", "storage"},
 			Caps:  []string{"edge", "storage"},
 		},
@@ -3926,13 +3941,17 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 	errorMsg := complete.GetError()
 	reason := complete.GetReason()
 
-	// Decrement the per-node in-flight count on any terminal status. This
-	// keeps PickDefrostNode's spread signal honest.
+	// Decrement the per-node in-flight count on terminal status only.
+	// DVR sends status="ready" once the local manifest is written and
+	// playback can start, but continues downloading segments — counting
+	// that as a terminal would let PickDefrostNode pile more defrosts on
+	// a node still doing disk/network work. "success" and "failed" are
+	// the actual terminals.
 	reportingNodeID := complete.GetNodeId()
 	if reportingNodeID == "" {
 		reportingNodeID = nodeID
 	}
-	if status == "success" || status == "ready" || status == "failed" {
+	if status == "success" || status == "failed" {
 		DecrementDefrost(reportingNodeID)
 	}
 
@@ -3946,45 +3965,6 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 		"reason":     reason.String(),
 		"node_id":    nodeID,
 	}).Info("Defrost operation completed")
-
-	if (status == "ready" || status == "success") && localPath != "" {
-		reportingNodeID := complete.GetNodeId()
-		if reportingNodeID == "" {
-			reportingNodeID = nodeID
-		}
-		if chapterID, ok := dvrChapterIDFromManifestPath(localPath); ok {
-			playbackID := DVRChapterPlaybackID(chapterID)
-			state.DefaultManager().AddNodeArtifact(reportingNodeID, &pb.StoredArtifact{
-				ClipHash:     playbackID,
-				StreamName:   playbackID,
-				FilePath:     localPath,
-				SizeBytes:    sizeBytes,
-				CreatedAt:    time.Now().Unix(),
-				Format:       "m3u8",
-				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_DVR,
-			})
-			notifyDefrostComplete(playbackID, true, localPath)
-			return
-		}
-	}
-
-	if status != "ready" && status != "success" && localPath != "" {
-		reportingNodeID := complete.GetNodeId()
-		if reportingNodeID == "" {
-			reportingNodeID = nodeID
-		}
-		if chapterID, ok := dvrChapterIDFromManifestPath(localPath); ok {
-			playbackID := DVRChapterPlaybackID(chapterID)
-			state.DefaultManager().RemoveNodeArtifact(reportingNodeID, playbackID)
-			notifyDefrostComplete(playbackID, false, "")
-			logger.WithFields(logging.Fields{
-				"chapter_id":  chapterID,
-				"playback_id": playbackID,
-				"node_id":     reportingNodeID,
-			}).Warn("Removed failed DVR chapter warm state")
-			return
-		}
-	}
 
 	if status == "success" {
 		// Update storage location back to local in database
@@ -4040,12 +4020,19 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 			})
 		}
 	} else {
-		// Revert storage_location on failure so future defrosts can retry
+		// Revert storage_location on failure so future defrosts can retry.
+		// CAS-gate on (storage_location='defrosting' AND
+		// defrost_node_id=reportingNode) so a stale failure from a node
+		// the row no longer points at cannot blow away a newer successful
+		// defrost's state. RowsAffected = 0 means somebody else (a fresh
+		// defrost, a successful complete, the stale-defrost cleaner)
+		// already moved the row; suppress the retry too.
 		reportingNodeID := complete.GetNodeId()
 		if reportingNodeID == "" {
 			reportingNodeID = nodeID
 		}
-		if _, dbErr := db.ExecContext(context.Background(), `
+		revertedRow := false
+		if res, dbErr := db.ExecContext(context.Background(), `
 			UPDATE foghorn.artifacts
 			SET storage_location = 's3',
 			    defrost_node_id = NULL,
@@ -4053,20 +4040,23 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 			    updated_at = NOW()
 			WHERE artifact_hash = $1
 			  AND storage_location = 'defrosting'
-			  AND (defrost_node_id = $2 OR defrost_node_id IS NULL)
+			  AND defrost_node_id = $2
 		`, assetHash, reportingNodeID); dbErr != nil {
 			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to revert artifact after defrost failure")
+		} else if n, raErr := res.RowsAffected(); raErr == nil && n > 0 {
+			revertedRow = true
 		}
 		logger.WithFields(logging.Fields{
-			"asset_hash": assetHash,
-			"error":      errorMsg,
-			"reason":     reason.String(),
-		}).Warn("Defrost failed, reverted to s3")
+			"asset_hash":   assetHash,
+			"error":        errorMsg,
+			"reason":       reason.String(),
+			"reverted_row": revertedRow,
+		}).Warn("Defrost failed; revert + retry gated by CAS")
 
-		// REASON_INSUFFICIENT_SPACE: the chosen node could not make room for
-		// the artifact. Retry once on a different node (VOD only — DVR chapter
-		// defrost uses a separate entrypoint not yet routed through requestDefrost).
-		if reason == pb.DefrostComplete_REASON_INSUFFICIENT_SPACE {
+		// REASON_INSUFFICIENT_SPACE: retry on a different node (VOD only).
+		// Skip when CAS missed — the failure is stale and a newer defrost
+		// owns the row now.
+		if reason == pb.DefrostComplete_REASON_INSUFFICIENT_SPACE && revertedRow {
 			go retryDefrostAfterInsufficientSpace(assetHash, reportingNodeID, logger)
 		}
 	}
@@ -4076,10 +4066,13 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 }
 
 // retryDefrostAfterInsufficientSpace handles the REASON_INSUFFICIENT_SPACE
-// retry path. Loads asset_type from foghorn.artifacts (authoritative — never
-// inferred); skips when DVR (chapter defrost goes through StartDVRChapterDefrost,
-// not requestDefrost, and is out of scope for P2 retry). In-memory guard caps
-// retries to one per artifact per 5 min; longer-tail recovery is owned by
+// retry path. Loads asset_type from foghorn.artifacts (authoritative —
+// never inferred). DVR rows can't reach this path: active DVR is served
+// directly from the recording origin's rolling manifest (or DTSC pull
+// cross-node); finalized chapters are addressed as their own VOD
+// artifacts and follow the normal VOD defrost path. The lookup still
+// loads asset_type for logging context. In-memory guard caps retries
+// to one per artifact per 5 min; longer-tail recovery is owned by
 // StaleDefrostCleanupJob.
 func retryDefrostAfterInsufficientSpace(assetHash, failedNodeID string, logger logging.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -4094,10 +4087,6 @@ func retryDefrostAfterInsufficientSpace(assetHash, failedNodeID string, logger l
 		SELECT artifact_type FROM foghorn.artifacts WHERE artifact_hash = $1
 	`, assetHash).Scan(&assetType); err != nil {
 		logger.WithError(err).WithField("asset_hash", assetHash).Warn("retry lookup failed; skipping")
-		return
-	}
-	if assetType == "dvr" {
-		logger.WithField("asset_hash", assetHash).Info("retry skipped: DVR retry not yet supported")
 		return
 	}
 
@@ -4128,17 +4117,6 @@ func retryDefrostAfterInsufficientSpace(assetHash, failedNodeID string, logger l
 			"retry_node_id": nextNode,
 		}).Warn("retry defrost send failed")
 	}
-}
-
-func dvrChapterIDFromManifestPath(localPath string) (string, bool) {
-	if localPath == "" || filepath.Ext(localPath) != ".m3u8" {
-		return "", false
-	}
-	if filepath.Base(filepath.Dir(localPath)) != "chapters" {
-		return "", false
-	}
-	chapterID := strings.TrimSuffix(filepath.Base(localPath), ".m3u8")
-	return chapterID, chapterID != ""
 }
 
 func SendLocalDefrostRequest(nodeID string, req *pb.DefrostRequest) error {
@@ -4394,6 +4372,16 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 	defer cancel()
 
 	jobStatus := result.GetStatus()
+
+	// Chapter finalization jobs use a string job_id ("chapter-finalize-<chapter_id>")
+	// and have no row in foghorn.processing_jobs (its job_id is UUID). Route
+	// them through a dedicated handler that advances chapter state + registers
+	// the chapter VOD artifact without touching the processing_jobs table.
+	if chapterID := chapterIDFromJobID(result.GetJobId()); chapterID != "" {
+		handleChapterFinalizeResult(ctx, chapterID, jobStatus, result, nodeID, logger)
+		return
+	}
+
 	switch jobStatus {
 	case "cache_update":
 		artifactHash := result.GetOutputs()["artifact_hash"]
@@ -4610,32 +4598,44 @@ func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Look up stream info from foghorn.artifacts
-	var streamName string
+	var (
+		streamName     string
+		tenantFromArti sql.NullString
+	)
 	err := db.QueryRowContext(ctx, `
-		SELECT stream_internal_name
+		SELECT stream_internal_name, tenant_id::text
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1`,
-		assetHash).Scan(&streamName)
+		assetHash).Scan(&streamName, &tenantFromArti)
 	if err != nil {
 		logger.WithError(err).Error("Failed to lookup asset for dtsh sync")
 		return
 	}
 
-	// Get tenant_id from Commodore (business registry owner)
 	var tenantID string
-	if CommodoreClient != nil {
-		rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer rpcCancel()
-		switch assetType {
-		case "clip":
+	switch assetType {
+	case "clip":
+		if CommodoreClient != nil {
+			rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer rpcCancel()
 			if resp, err := CommodoreClient.ResolveClipHash(rpcCtx, assetHash); err == nil && resp.Found {
 				tenantID = resp.TenantId
 			}
-		case "dvr":
+		}
+	case "dvr":
+		if CommodoreClient != nil {
+			rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer rpcCancel()
 			if resp, err := CommodoreClient.ResolveDVRHash(rpcCtx, assetHash); err == nil && resp.Found {
 				tenantID = resp.TenantId
 			}
+		}
+	case "vod":
+		// VOD artifacts (including hidden chapter-origin artifacts) are registered
+		// directly in foghorn.artifacts with tenant_id stamped at creation, so
+		// foghorn is the single authority for this lookup.
+		if tenantFromArti.Valid {
+			tenantID = tenantFromArti.String
 		}
 	}
 	if tenantID == "" {
@@ -4694,6 +4694,20 @@ func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
 			logger.Error("Failed to generate any presigned URLs for DVR .dtsh files")
 			return
 		}
+	} else if assetType == "vod" {
+		// VOD layout: vod/<tenant>/<hash>/<hash>.<ext> with sidecar at
+		// vod/<tenant>/<hash>/<hash>.<ext>.dtsh next to the main file.
+		format := "mp4"
+		if idx := strings.LastIndex(filePath, "."); idx != -1 {
+			format = filePath[idx+1:]
+		}
+		s3Key := s3Client.BuildVodS3Key(tenantID, assetHash, assetHash+"."+format) + ".dtsh"
+		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
+		if err != nil {
+			logger.WithError(err).Error("Failed to generate presigned URL for VOD .dtsh")
+			return
+		}
+		req.PresignedPutUrl = presignedURL
 	}
 
 	if err := SendDtshSyncRequest(nodeID, req); err != nil {
@@ -4787,316 +4801,6 @@ func StartDefrost(ctx context.Context, assetType, assetHash, nodeID string, time
 // lives in a different S3 bucket that the local s3Client cannot access.
 func StartRemoteDefrost(ctx context.Context, assetType, assetHash, nodeID string, timeout time.Duration, logger logging.Logger, remoteURL string, remoteSegmentURLs map[string]string) (string, error) {
 	return requestDefrost(ctx, assetType, assetHash, nodeID, timeout, logger, false, remoteURL, remoteSegmentURLs)
-}
-
-func LocalDVRChapterManifestPath(chapterID, nodeID string) (string, bool) {
-	playbackID := DVRChapterPlaybackID(chapterID)
-	if playbackID == "" || nodeID == "" {
-		return "", false
-	}
-	for _, node := range state.DefaultManager().FindNodesByArtifactHash(playbackID) {
-		if node.NodeID == nodeID && node.Artifact != nil && node.Artifact.GetFilePath() != "" {
-			return node.Artifact.GetFilePath(), true
-		}
-	}
-	return "", false
-}
-
-func RefreshWarmDVRChapterEdges(ctx context.Context, chapterID string, logger logging.Logger) {
-	playbackID := DVRChapterPlaybackID(chapterID)
-	if playbackID == "" {
-		return
-	}
-	nodes := state.DefaultManager().FindNodesByArtifactHash(playbackID)
-	for _, node := range nodes {
-		nodeID := node.NodeID
-		if nodeID == "" || node.Artifact == nil || node.Artifact.GetFilePath() == "" {
-			continue
-		}
-		go func(nodeID string) {
-			refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-			if _, err := StartDVRChapterDefrost(refreshCtx, chapterID, nodeID, 30*time.Second, logger); err != nil {
-				logger.WithError(err).WithFields(logging.Fields{
-					"chapter_id": chapterID,
-					"node_id":    nodeID,
-				}).Warn("Failed to refresh warm DVR chapter edge")
-			}
-		}(nodeID)
-	}
-}
-
-func StartDVRChapterDefrost(ctx context.Context, chapterID, nodeID string, timeout time.Duration, logger logging.Logger) (string, error) {
-	if db == nil {
-		return "", fmt.Errorf("database not available")
-	}
-
-	// Try local lookup first. A local chapter row means this Foghorn is the
-	// chapter's origin (origin is the sole writer of chapter rows). When
-	// present and the S3 client can mint, use the local fast path.
-	chapter, err := GetChapter(ctx, chapterID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("read DVR chapter: %w", err)
-	}
-	if chapter != nil && chapter.ArtifactHash != "" && s3Client != nil {
-		return startDVRChapterDefrostLocal(ctx, chapter, chapterID, nodeID, timeout, logger)
-	}
-	if chapter != nil && chapter.ArtifactHash != "" && s3Client == nil {
-		return "", fmt.Errorf("s3 client not configured")
-	}
-
-	// Local row missing — route to the chapter's origin cluster.
-	if CommodoreClient == nil {
-		return "", fmt.Errorf("DVR chapter not found locally and Commodore client unavailable")
-	}
-	resolveCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	resolved, err := CommodoreClient.ResolveDVRChapter(resolveCtx, chapterID)
-	cancel()
-	if err != nil {
-		return "", fmt.Errorf("resolve DVR chapter origin via Commodore: %w", err)
-	}
-	if !resolved.GetFound() {
-		return "", fmt.Errorf("DVR chapter not found")
-	}
-	originCluster := strings.TrimSpace(resolved.GetOriginClusterId())
-	if originCluster == "" {
-		return "", fmt.Errorf("DVR chapter has no origin cluster")
-	}
-	if originCluster == localClusterID {
-		if s3Client == nil {
-			return "", fmt.Errorf("s3 client not configured")
-		}
-		if dvrChapterMaterializer == nil {
-			return "", fmt.Errorf("DVR chapter materializer not configured")
-		}
-		materResp, materErr := dvrChapterMaterializer.RetrieveDVRChapter(ctx, &pb.RetrieveDVRChapterRequest{
-			DvrArtifactId:   resolved.GetDvrHash(),
-			TenantId:        resolved.GetTenantId(),
-			Mode:            resolved.GetMode(),
-			IntervalSeconds: resolved.GetIntervalSeconds(),
-			StartMs:         resolved.GetStartMs(),
-			EndMs:           resolved.GetEndMs(),
-		})
-		if materErr != nil {
-			return "", fmt.Errorf("materialize local DVR chapter: %w", materErr)
-		}
-		materializedChapterID := chapterID
-		if materResp.GetChapterId() != "" {
-			materializedChapterID = materResp.GetChapterId()
-		}
-		chapter, err = GetChapter(ctx, materializedChapterID)
-		if err != nil {
-			return "", fmt.Errorf("read materialized DVR chapter: %w", err)
-		}
-		if chapter == nil || chapter.ArtifactHash == "" {
-			return "", fmt.Errorf("materialized DVR chapter has no artifact")
-		}
-		return startDVRChapterDefrostLocal(ctx, chapter, materializedChapterID, nodeID, timeout, logger)
-	}
-	if dvrChapterFedClient == nil || dvrChapterPeerResolver == nil {
-		return "", fmt.Errorf("federation client not configured for DVR chapter defrost")
-	}
-	addr := dvrChapterPeerResolver.GetPeerAddr(originCluster)
-	if addr == "" {
-		return "", fmt.Errorf("origin cluster %s has no peer address", originCluster)
-	}
-	urlTTL := dvrChapterDefrostURLTTL(resolved.GetStartMs(), resolved.GetEndMs())
-	prepCtx, prepCancel := context.WithTimeout(ctx, 30*time.Second)
-	prepResp, prepErr := dvrChapterFedClient.PrepareDVRChapter(prepCtx, originCluster, addr, &pb.PrepareDVRChapterRequest{
-		RequestingCluster: localClusterID,
-		TenantId:          resolved.GetTenantId(),
-		DvrArtifactId:     resolved.GetDvrHash(),
-		ChapterId:         chapterID,
-		Mode:              resolved.GetMode(),
-		IntervalSeconds:   resolved.GetIntervalSeconds(),
-		StartMs:           resolved.GetStartMs(),
-		EndMs:             resolved.GetEndMs(),
-		UrlExpirySeconds:  uint32(urlTTL / time.Second),
-	})
-	prepCancel()
-	if prepErr != nil {
-		return "", fmt.Errorf("PrepareDVRChapter against origin %s: %w", originCluster, prepErr)
-	}
-	if errStr := strings.TrimSpace(prepResp.GetError()); errStr != "" {
-		return "", fmt.Errorf("origin cluster %s rejected PrepareDVRChapter: %s", originCluster, errStr)
-	}
-	if len(prepResp.GetSegments()) == 0 {
-		return "", fmt.Errorf("origin cluster %s returned no segments for chapter %s", originCluster, chapterID)
-	}
-
-	streamName := prepResp.GetStreamInternalName()
-	if streamName == "" {
-		streamName = resolved.GetStreamInternalName()
-	}
-	if ttlSec := prepResp.GetUrlTtlSeconds(); ttlSec > 0 {
-		urlTTL = time.Duration(ttlSec) * time.Second
-	}
-
-	storageBase := storageBasePathForNode(nodeID)
-	localRoot := filepath.Join(storageBase, "dvr", streamName, resolved.GetDvrHash())
-	localManifest := filepath.Join(localRoot, "chapters", chapterID+".m3u8")
-	requestID := fmt.Sprintf("dvr-chapter-defrost-%s-%d", chapterID, time.Now().UnixNano())
-	req := &pb.DefrostRequest{
-		RequestId:              requestID,
-		AssetType:              "dvr",
-		AssetHash:              resolved.GetDvrHash(),
-		TenantId:               resolved.GetTenantId(),
-		StreamInternalName:     streamName,
-		LocalPath:              localRoot,
-		TimeoutSeconds:         int32(timeout.Seconds()),
-		Streaming:              true,
-		UrlExpirySeconds:       int64(urlTTL.Seconds()),
-		DvrArtifactId:          resolved.GetDvrHash(),
-		ChapterId:              chapterID,
-		StartMs:                prepResp.GetStartMs(),
-		EndMs:                  prepResp.GetEndMs(),
-		ChapterMode:            prepResp.GetMode(),
-		ChapterIntervalSeconds: prepResp.GetIntervalSeconds(),
-		ChapterSegments:        prepResp.GetSegments(),
-	}
-	IncrementDefrost(nodeID)
-	if err := SendDefrostRequest(nodeID, req); err != nil {
-		DecrementDefrost(nodeID)
-		return "", fmt.Errorf("send DVR chapter defrost: %w", err)
-	}
-	logger.WithFields(logging.Fields{
-		"chapter_id":     chapterID,
-		"origin_cluster": originCluster,
-		"segment_count":  len(prepResp.GetSegments()),
-	}).Info("Started DVR chapter defrost via origin federation")
-	return localManifest, nil
-}
-
-// startDVRChapterDefrostLocal is the fast path used when this Foghorn is
-// the chapter's origin and can mint segment GET URLs against its own S3.
-func startDVRChapterDefrostLocal(ctx context.Context, chapter *DVRChapterRow, chapterID, nodeID string, timeout time.Duration, logger logging.Logger) (string, error) {
-	tenantID, streamName, ok := resolveDVRTenantAndStream(ctx, chapter.ArtifactHash, logger)
-	if !ok {
-		return "", fmt.Errorf("could not resolve tenant/stream for DVR chapter")
-	}
-	rows, err := ListDVRSegmentsForRange(ctx, chapter.ArtifactHash, chapter.StartMs, chapter.EndMs)
-	if err != nil {
-		return "", fmt.Errorf("list DVR chapter segments: %w", err)
-	}
-	refs := make([]*pb.DVRSegmentRef, 0, len(rows))
-	urlTTL := dvrChapterDefrostURLTTL(chapter.StartMs, chapter.EndMs)
-	for _, r := range rows {
-		ref := &pb.DVRSegmentRef{
-			SegmentName:  r.SegmentName,
-			S3Key:        r.S3Key,
-			MediaStartMs: r.MediaStartMs,
-			MediaEndMs:   r.MediaEndMs,
-			DurationMs:   r.DurationMs,
-			Status:       r.Status,
-			Sequence:     r.Sequence,
-		}
-		// SizeBytes feeds Helmsman's chapter-defrost admission (sum of non-gap
-		// segment sizes). NULL is acceptable — Helmsman skips admission when
-		// the sum is 0.
-		if r.SizeBytes.Valid && r.SizeBytes.Int64 > 0 {
-			ref.SizeBytes = r.SizeBytes.Int64
-		}
-		if r.Status == "uploaded" || r.Status == "deleted_local" {
-			url, mintErr := s3Client.GeneratePresignedGET(r.S3Key, urlTTL)
-			if mintErr != nil {
-				return "", fmt.Errorf("mint DVR chapter segment %s: %w", r.SegmentName, mintErr)
-			}
-			ref.PresignedGetUrl = url
-		}
-		refs = append(refs, ref)
-	}
-	storageBase := storageBasePathForNode(nodeID)
-	localRoot := filepath.Join(storageBase, "dvr", streamName, chapter.ArtifactHash)
-	localManifest := filepath.Join(localRoot, "chapters", chapterID+".m3u8")
-	requestID := fmt.Sprintf("dvr-chapter-defrost-%s-%d", chapterID, time.Now().UnixNano())
-	req := &pb.DefrostRequest{
-		RequestId:              requestID,
-		AssetType:              "dvr",
-		AssetHash:              chapter.ArtifactHash,
-		TenantId:               tenantID,
-		StreamInternalName:     streamName,
-		LocalPath:              localRoot,
-		TimeoutSeconds:         int32(timeout.Seconds()),
-		Streaming:              true,
-		UrlExpirySeconds:       int64(urlTTL.Seconds()),
-		DvrArtifactId:          chapter.ArtifactHash,
-		ChapterId:              chapterID,
-		StartMs:                chapter.StartMs,
-		EndMs:                  chapter.EndMs,
-		ChapterMode:            chapter.Mode,
-		ChapterIntervalSeconds: chapter.IntervalSeconds.Int32,
-		ChapterSegments:        refs,
-	}
-	IncrementDefrost(nodeID)
-	if err := SendDefrostRequest(nodeID, req); err != nil {
-		DecrementDefrost(nodeID)
-		return "", fmt.Errorf("send DVR chapter defrost: %w", err)
-	}
-	return localManifest, nil
-}
-
-// DVRChapterDefrostURLTTL is the exported form of dvrChapterDefrostURLTTL
-// for cross-package callers (e.g. federation.PrepareDVRChapter) that need
-// to mint segment GET URLs with the same TTL math as local defrost.
-func DVRChapterDefrostURLTTL(startMs, endMs int64) time.Duration {
-	return dvrChapterDefrostURLTTL(startMs, endMs)
-}
-
-// DVRChapterFederationClient is the subset of federation.FederationClient
-// needed by StartDVRChapterDefrost when the chapter's origin is a peer
-// cluster. Wired from main.go via SetDVRChapterFederationClient.
-type DVRChapterFederationClient interface {
-	PrepareDVRChapter(ctx context.Context, clusterID, addr string, req *pb.PrepareDVRChapterRequest) (*pb.PrepareDVRChapterResponse, error)
-}
-
-// DVRChapterMaterializer materializes a chapter row on the local origin.
-type DVRChapterMaterializer interface {
-	RetrieveDVRChapter(ctx context.Context, req *pb.RetrieveDVRChapterRequest) (*pb.RetrieveDVRChapterResponse, error)
-}
-
-// DVRChapterPeerResolver resolves a cluster_id to its peer dial address.
-// Mirrors federation.PeerAddrResolver to keep the control package free of
-// federation imports.
-type DVRChapterPeerResolver interface {
-	GetPeerAddr(clusterID string) string
-}
-
-var (
-	dvrChapterFedClient    DVRChapterFederationClient
-	dvrChapterMaterializer DVRChapterMaterializer
-	dvrChapterPeerResolver DVRChapterPeerResolver
-)
-
-// SetDVRChapterFederationClient wires the federation client used by
-// StartDVRChapterDefrost when the chapter's origin is a peer cluster.
-func SetDVRChapterFederationClient(c DVRChapterFederationClient) {
-	dvrChapterFedClient = c
-}
-
-// SetDVRChapterMaterializer wires local origin chapter materialization.
-func SetDVRChapterMaterializer(m DVRChapterMaterializer) {
-	dvrChapterMaterializer = m
-}
-
-// SetDVRChapterPeerResolver wires the peer-address resolver used by
-// StartDVRChapterDefrost when the chapter's origin is a peer cluster.
-func SetDVRChapterPeerResolver(r DVRChapterPeerResolver) {
-	dvrChapterPeerResolver = r
-}
-
-func dvrChapterDefrostURLTTL(startMs, endMs int64) time.Duration {
-	durationMs := endMs - startMs
-	if durationMs < 0 {
-		durationMs = 0
-	}
-	ttl := time.Duration(durationMs)*time.Millisecond + time.Hour
-	if ttl < 30*time.Minute {
-		return 30 * time.Minute
-	}
-	if ttl > 7*24*time.Hour {
-		return 7 * 24 * time.Hour
-	}
-	return ttl
 }
 
 func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, timeout time.Duration, logger logging.Logger, wait bool, remoteURL string, remoteSegmentURLs map[string]string) (string, error) {
@@ -5348,6 +5052,23 @@ func SetArtifactRepository(repo state.ArtifactRepository) {
 	artifactRepo = repo
 }
 
+// GetRelayBaseURL returns the URL Mist on the given node uses to reach
+// Helmsman's /internal/artifact/* relay. Captured at Register time from the
+// node's HELMSMAN_RELAY_BASE_URL env var. Returns "" when the node has not
+// connected or did not advertise a relay URL — callers must treat this as
+// "cannot route through relay, abort STREAM_SOURCE" rather than fabricating
+// 127.0.0.1, which is wrong for container deployments where Mist and
+// Helmsman are separate services.
+func GetRelayBaseURL(nodeID string) string {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	c, ok := registry.conns[nodeID]
+	if !ok || c == nil {
+		return ""
+	}
+	return c.relayBaseURL
+}
+
 // processCanDeleteRequest handles can-delete checks from Helmsman. Before
 // deleting a local asset copy, Helmsman asks Foghorn if it's safe.
 func processCanDeleteRequest(req *pb.CanDeleteRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
@@ -5557,6 +5278,26 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 			  AND sync_status = 'synced'`,
 			s3URL, dtshIncluded, assetHash, int64(sizeBytes)); dbErr != nil {
 			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to mark artifact as synced")
+		}
+
+		// Chapter artifacts (origin_type='dvr_chapter') advance their
+		// chapter row from finalized → frozen once both sync_status
+		// AND dtsh_synced are true. This is the trigger the reclaim
+		// sweep waits on; without it source TS segments stay pinned.
+		if dtshIncluded {
+			if chapterID := chapterOriginIDForArtifact(ctx, assetHash); chapterID != "" {
+				if frzErr := MarkChapterFrozen(ctx, chapterID); frzErr != nil {
+					logger.WithError(frzErr).WithFields(logging.Fields{
+						"chapter_id":    chapterID,
+						"artifact_hash": assetHash,
+					}).Warn("Chapter freeze transition failed")
+				} else {
+					logger.WithFields(logging.Fields{
+						"chapter_id":    chapterID,
+						"artifact_hash": assetHash,
+					}).Info("Chapter frozen — source segments eligible for reclaim")
+				}
+			}
 		}
 
 		// For VOD, the s3_key in vod_metadata is the canonical defrost source.
@@ -6240,8 +5981,35 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 			"internal_name": bareName,
 			"artifact_hash": thumbnailKey,
 		}).Info("Resolved artifact hash for thumbnail S3 key")
+	case strings.HasPrefix(internalName, "dvr+"):
+		conn := GetDB()
+		if conn == nil {
+			logger.Warn("DB not available for DVR thumbnail resolution")
+			return
+		}
+		token := strings.TrimPrefix(internalName, "dvr+")
+		target, err := resolveDVRThumbnailTarget(context.Background(), conn, token)
+		if err != nil {
+			logger.WithFields(logging.Fields{
+				"stream_name": internalName,
+				"dvr_token":   token,
+			}).Warn("Could not resolve dvr+ stream to artifact_hash for thumbnail upload")
+			return
+		}
+		thumbnailKey = target.artifactHash
+		if target.tenantID.Valid {
+			thumbTenantID = target.tenantID.String
+		}
+		if target.authoritativeCluster.Valid {
+			thumbOriginCluster = target.authoritativeCluster.String
+		}
+		logger.WithFields(logging.Fields{
+			"stream_name":   internalName,
+			"dvr_token":     token,
+			"artifact_hash": thumbnailKey,
+		}).Info("Resolved DVR artifact hash for thumbnail S3 key")
 	default:
-		logger.WithField("internal_name", internalName).Warn("Thumbnail upload from unrecognised stream prefix; expected live+ or vod+")
+		logger.WithField("internal_name", internalName).Warn("Thumbnail upload from unrecognised stream prefix; expected live+, vod+, or dvr+")
 		return
 	}
 

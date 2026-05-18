@@ -37,8 +37,8 @@ type LocalSegmentRef struct {
 	ActiveRecording bool      // belongs to an active DVRJob on this node
 	ActiveViews     int       // refcount of in-flight defrosts/playbacks holding this segment
 	LastAccessed    time.Time // bumped on view acquire
-	PinnedUntil     time.Time // chapter playback cache lease
-	LedgerStatus    string    // pending|uploaded|failed_upload|deleted_local|lost_local
+	PinnedUntil     time.Time // active-view lease (clip harvest, in-flight finalization)
+	LedgerStatus    string    // pending|uploaded|failed_upload|deleted_local|orphan_unreachable|lost_local|reclaimed
 }
 
 type localSegmentKey struct {

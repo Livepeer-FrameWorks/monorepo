@@ -270,7 +270,9 @@ CREATE TABLE IF NOT EXISTS purser.billing_tiers (
 -- ============================================================================
 -- The rating engine in api_billing/internal/rating consumes pricing rules to
 -- turn metered usage into invoice line items. Entitlements are non-billing
--- grants (e.g. recording_retention_days drives Foghorn lifecycle, not money).
+-- grants. recording_retention_days is the per-tier cap on customer-set
+-- retention; the per-class system defaults and the resolution cascade live
+-- in Commodore (see api_control/internal/grpc/media_retention.go).
 
 -- Non-pricing grants attached to a tier. Values are JSON-encoded scalars.
 -- Canonical shape: the bare YAML scalar (e.g. value=90, value="basic"). The

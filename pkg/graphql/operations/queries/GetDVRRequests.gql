@@ -26,6 +26,23 @@ query GetDVRRequests($streamId: ID, $first: Int = 50, $after: String) {
         errorMessage
         storageLocation
         isFrozen
+        # Marginal storage cost for this recording on the tenant's tier.
+        storageCost {
+          perDay
+          perMonth
+          currency
+        }
+        effectiveRetention {
+          retentionDays
+          retentionUntil
+          source
+        }
+        thumbnailAssets {
+          posterUrl
+          spriteVttUrl
+          spriteJpgUrl
+          assetKey
+        }
       }
     }
     pageInfo {

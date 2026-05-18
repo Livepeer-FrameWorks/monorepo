@@ -225,8 +225,13 @@ type CreateClipRequest struct {
 	PlaybackId         *string                `protobuf:"bytes,16,opt,name=playback_id,json=playbackId,proto3,oneof" json:"playback_id,omitempty"`       // Pre-generated playback ID (Commodore)
 	InternalName       *string                `protobuf:"bytes,17,opt,name=internal_name,json=internalName,proto3,oneof" json:"internal_name,omitempty"` // Pre-generated artifact routing name (Commodore)
 	ClusterId          string                 `protobuf:"bytes,18,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`                // Cluster this stream belongs to (set by caller)
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Retention horizon resolved by Commodore from the per-class cascade
+	// (per-stream override → tenant default → system default) and clamped by
+	// the Free-tier cap. 0 = no auto-expire. Unset = Foghorn falls back to a
+	// 30-day system default.
+	RetentionDays *int32 `protobuf:"varint,19,opt,name=retention_days,json=retentionDays,proto3,oneof" json:"retention_days,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateClipRequest) Reset() {
@@ -385,6 +390,13 @@ func (x *CreateClipRequest) GetClusterId() string {
 	return ""
 }
 
+func (x *CreateClipRequest) GetRetentionDays() int32 {
+	if x != nil && x.RetentionDays != nil {
+		return *x.RetentionDays
+	}
+	return 0
+}
+
 // CreateClipResponse - response from clip creation
 // Source: pkg/api/foghorn/types.go:CreateClipResponse
 type CreateClipResponse struct {
@@ -509,6 +521,10 @@ type ClipInfo struct {
 	// thumbnail_assets is populated server-side from Commodore's registry
 	// projection. Null until Foghorn confirms the thumbnail upload.
 	ThumbnailAssets *ThumbnailAssets `protobuf:"bytes,22,opt,name=thumbnail_assets,json=thumbnailAssets,proto3,oneof" json:"thumbnail_assets,omitempty"`
+	// retention_source records which cascade layer produced the artifact's
+	// current retention_until. Mirrors commodore.clips.retention_source.
+	// Values: tenant_default | per_asset_override | tier_entitlement.
+	RetentionSource *string `protobuf:"bytes,23,opt,name=retention_source,json=retentionSource,proto3,oneof" json:"retention_source,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -681,6 +697,13 @@ func (x *ClipInfo) GetThumbnailAssets() *ThumbnailAssets {
 		return x.ThumbnailAssets
 	}
 	return nil
+}
+
+func (x *ClipInfo) GetRetentionSource() string {
+	if x != nil && x.RetentionSource != nil {
+		return *x.RetentionSource
+	}
+	return ""
 }
 
 // GetClipsRequest - request to list clips
@@ -964,13 +987,18 @@ func (x *DeleteClipResponse) GetMessage() string {
 // Three concepts that must NOT be conflated:
 //   - max_window_seconds:  rolling live seekback window (Mist targetAge)
 //   - default_window_seconds: live window default if caller didn't pick
-//   - recording_retention_days: how long the FINALIZED artifact is kept,
-//     ticking from ended_at — independent of the live window
+//   - recording_retention_days: post-end retention horizon Commodore has
+//     already resolved (per-asset override → per-stream override → tenant
+//     per-class default → system default → tier cap). Snapshotted onto
+//     foghorn.artifacts at DVR start. FinalizeDVR computes
+//     retention_until = ended_at + dvr_retention_days*24h.
 //
-// recording_retention_days is snapshotted onto foghorn.artifacts at DVR
-// start (dvr_retention_days column). FinalizeDVR computes
-// retention_until = ended_at + dvr_retention_days*24h. Live tier is never
-// re-resolved at end (the tenant's plan may have changed mid-stream).
+// recording_retention_days is optional. Unset means "Foghorn falls back
+// to its 30-day system default" (direct-Foghorn callers that don't run
+// the per-class cascade). Set to 0 means "no auto-expire" (Commodore
+// resolved an infinite horizon — keep forever). Set to a positive int
+// sets that many days. The tenant's plan is never re-resolved at finalize
+// (mid-stream tier changes don't retroactively apply).
 type DVRPolicy struct {
 	state                         protoimpl.MessageState `protogen:"open.v1"`
 	DefaultWindowSeconds          int32                  `protobuf:"varint,1,opt,name=default_window_seconds,json=defaultWindowSeconds,proto3" json:"default_window_seconds,omitempty"`                              // Tier default if caller doesn't specify a window
@@ -978,7 +1006,7 @@ type DVRPolicy struct {
 	DefaultSegmentDurationSeconds int32                  `protobuf:"varint,3,opt,name=default_segment_duration_seconds,json=defaultSegmentDurationSeconds,proto3" json:"default_segment_duration_seconds,omitempty"` // Mist split for this tier (6/12/24)
 	MaxEntries                    int32                  `protobuf:"varint,4,opt,name=max_entries,json=maxEntries,proto3" json:"max_entries,omitempty"`                                                              // Max HLS playlist entries (manifest size cap)
 	AllowClusterExtension         bool                   `protobuf:"varint,5,opt,name=allow_cluster_extension,json=allowClusterExtension,proto3" json:"allow_cluster_extension,omitempty"`                           // Cluster may raise max_window for this tenant (Enterprise)
-	RecordingRetentionDays        int32                  `protobuf:"varint,6,opt,name=recording_retention_days,json=recordingRetentionDays,proto3" json:"recording_retention_days,omitempty"`                        // Post-end retention; 0 = system default 30
+	RecordingRetentionDays        *int32                 `protobuf:"varint,6,opt,name=recording_retention_days,json=recordingRetentionDays,proto3,oneof" json:"recording_retention_days,omitempty"`                  // Unset = 30d default; 0 = keep forever; >0 = days.
 	unknownFields                 protoimpl.UnknownFields
 	sizeCache                     protoimpl.SizeCache
 }
@@ -1049,8 +1077,8 @@ func (x *DVRPolicy) GetAllowClusterExtension() bool {
 }
 
 func (x *DVRPolicy) GetRecordingRetentionDays() int32 {
-	if x != nil {
-		return x.RecordingRetentionDays
+	if x != nil && x.RecordingRetentionDays != nil {
+		return *x.RecordingRetentionDays
 	}
 	return 0
 }
@@ -1075,10 +1103,10 @@ type StartDVRRequest struct {
 	// from Foghorn's streamCache (already cached during PUSH_REWRITE). When nil,
 	// pkg/dvrpolicy.Resolve uses zero-value defaults and a safe 1h fallback.
 	DvrPolicy *DVRPolicy `protobuf:"bytes,8,opt,name=dvr_policy,json=dvrPolicy,proto3" json:"dvr_policy,omitempty"`
-	// Default chapter mode for the chapter sweeper to materialize automatically.
-	// Empty string lets Foghorn use the default window_sized_chapters policy.
-	// Values: 'window_sized_chapters' | 'fixed_interval' | ” (none)
-	// For 'fixed_interval', dvr_chapter_interval_seconds is required.
+	// Chapter mode for the chapter sweeper to materialize.
+	// Values: 'window_sized_chapters' | 'fixed_interval' | ” (chapters off)
+	// Empty/unset disables chapter rotation entirely — Stream config is the
+	// authority. For 'fixed_interval', dvr_chapter_interval_seconds is required.
 	DvrChapterMode            *string `protobuf:"bytes,9,opt,name=dvr_chapter_mode,json=dvrChapterMode,proto3,oneof" json:"dvr_chapter_mode,omitempty"`
 	DvrChapterIntervalSeconds *int32  `protobuf:"varint,10,opt,name=dvr_chapter_interval_seconds,json=dvrChapterIntervalSeconds,proto3,oneof" json:"dvr_chapter_interval_seconds,omitempty"`
 	unknownFields             protoimpl.UnknownFields
@@ -2982,18 +3010,23 @@ func (x *IngestEndpointResponse) GetMetadata() *IngestMetadata {
 
 // CreateVodUploadRequest - initiate a multipart upload
 type CreateVodUploadRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	Filename      string                 `protobuf:"bytes,3,opt,name=filename,proto3" json:"filename,omitempty"`                                // Original filename
-	SizeBytes     int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`            // Total file size (for part calculation)
-	ContentType   *string                `protobuf:"bytes,5,opt,name=content_type,json=contentType,proto3,oneof" json:"content_type,omitempty"` // MIME type (video/mp4, etc.)
-	Title         *string                `protobuf:"bytes,6,opt,name=title,proto3,oneof" json:"title,omitempty"`
-	Description   *string                `protobuf:"bytes,7,opt,name=description,proto3,oneof" json:"description,omitempty"`
-	VodHash       *string                `protobuf:"bytes,8,opt,name=vod_hash,json=vodHash,proto3,oneof" json:"vod_hash,omitempty"`                 // Pre-generated by Commodore (if provided, Foghorn uses it)
-	PlaybackId    *string                `protobuf:"bytes,9,opt,name=playback_id,json=playbackId,proto3,oneof" json:"playback_id,omitempty"`        // Pre-generated playback ID (Commodore)
-	InternalName  *string                `protobuf:"bytes,10,opt,name=internal_name,json=internalName,proto3,oneof" json:"internal_name,omitempty"` // Pre-generated artifact routing name (Commodore)
-	ClusterId     string                 `protobuf:"bytes,11,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`                // Cluster for this tenant's context (set by caller)
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	TenantId     string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	UserId       string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Filename     string                 `protobuf:"bytes,3,opt,name=filename,proto3" json:"filename,omitempty"`                                // Original filename
+	SizeBytes    int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`            // Total file size (for part calculation)
+	ContentType  *string                `protobuf:"bytes,5,opt,name=content_type,json=contentType,proto3,oneof" json:"content_type,omitempty"` // MIME type (video/mp4, etc.)
+	Title        *string                `protobuf:"bytes,6,opt,name=title,proto3,oneof" json:"title,omitempty"`
+	Description  *string                `protobuf:"bytes,7,opt,name=description,proto3,oneof" json:"description,omitempty"`
+	VodHash      *string                `protobuf:"bytes,8,opt,name=vod_hash,json=vodHash,proto3,oneof" json:"vod_hash,omitempty"`                 // Pre-generated by Commodore (if provided, Foghorn uses it)
+	PlaybackId   *string                `protobuf:"bytes,9,opt,name=playback_id,json=playbackId,proto3,oneof" json:"playback_id,omitempty"`        // Pre-generated playback ID (Commodore)
+	InternalName *string                `protobuf:"bytes,10,opt,name=internal_name,json=internalName,proto3,oneof" json:"internal_name,omitempty"` // Pre-generated artifact routing name (Commodore)
+	ClusterId    string                 `protobuf:"bytes,11,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`                // Cluster for this tenant's context (set by caller)
+	// Retention horizon resolved by Commodore from the per-class cascade
+	// (tenant default → system default) and clamped by the Free-tier cap.
+	// 0 = no auto-expire (paid-tier infinite VOD default). Unset = Foghorn
+	// falls back to its own resolver which only knows the tier cap.
+	RetentionDays *int32 `protobuf:"varint,12,opt,name=retention_days,json=retentionDays,proto3,oneof" json:"retention_days,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3103,6 +3136,13 @@ func (x *CreateVodUploadRequest) GetClusterId() string {
 		return x.ClusterId
 	}
 	return ""
+}
+
+func (x *CreateVodUploadRequest) GetRetentionDays() int32 {
+	if x != nil && x.RetentionDays != nil {
+		return *x.RetentionDays
+	}
+	return 0
 }
 
 // CreateVodUploadResponse - multipart upload instructions
@@ -4046,6 +4086,12 @@ type VodAssetInfo struct {
 	// thumbnail_assets is populated server-side from Commodore's registry
 	// projection. Null until Foghorn confirms the thumbnail upload.
 	ThumbnailAssets *ThumbnailAssets `protobuf:"bytes,22,opt,name=thumbnail_assets,json=thumbnailAssets,proto3,oneof" json:"thumbnail_assets,omitempty"`
+	// retention_source records which cascade layer produced this VOD's
+	// current retention_until. Mirrors commodore.vod_assets.retention_source.
+	// Values: tenant_default | per_asset_override | tier_entitlement |
+	// per_stream_override (unused for VOD today). Empty when no override
+	// has been applied.
+	RetentionSource *string `protobuf:"bytes,23,opt,name=retention_source,json=retentionSource,proto3,oneof" json:"retention_source,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -4232,6 +4278,13 @@ func (x *VodAssetInfo) GetThumbnailAssets() *ThumbnailAssets {
 		return x.ThumbnailAssets
 	}
 	return nil
+}
+
+func (x *VodAssetInfo) GetRetentionSource() string {
+	if x != nil && x.RetentionSource != nil {
+		return *x.RetentionSource
+	}
+	return ""
 }
 
 // VodMetadata - metadata extracted from video file (returned by validation)
@@ -4495,7 +4548,7 @@ var File_shared_proto protoreflect.FileDescriptor
 
 const file_shared_proto_rawDesc = "" +
 	"\n" +
-	"\fshared.proto\x12\x06shared\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\"\x99\x06\n" +
+	"\fshared.proto\x12\x06shared\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\"\xd8\x06\n" +
 	"\x11CreateClipRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x120\n" +
 	"\x14stream_internal_name\x18\x02 \x01(\tR\x12streamInternalName\x12\x16\n" +
@@ -4520,7 +4573,8 @@ const file_shared_proto_rawDesc = "" +
 	"\rinternal_name\x18\x11 \x01(\tH\n" +
 	"R\finternalName\x88\x01\x01\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x12 \x01(\tR\tclusterIdB\r\n" +
+	"cluster_id\x18\x12 \x01(\tR\tclusterId\x12*\n" +
+	"\x0eretention_days\x18\x13 \x01(\x05H\vR\rretentionDays\x88\x01\x01B\r\n" +
 	"\v_start_unixB\f\n" +
 	"\n" +
 	"_stop_unixB\v\n" +
@@ -4536,7 +4590,8 @@ const file_shared_proto_rawDesc = "" +
 	"\n" +
 	"_stream_idB\x0e\n" +
 	"\f_playback_idB\x10\n" +
-	"\x0e_internal_name\"\xe6\x01\n" +
+	"\x0e_internal_nameB\x11\n" +
+	"\x0f_retention_days\"\xe6\x01\n" +
 	"\x12CreateClipResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x1f\n" +
 	"\vingest_host\x18\x02 \x01(\tR\n" +
@@ -4547,7 +4602,7 @@ const file_shared_proto_rawDesc = "" +
 	"request_id\x18\x05 \x01(\tR\trequestId\x12\x1b\n" +
 	"\tclip_hash\x18\x06 \x01(\tR\bclipHash\x12\x1f\n" +
 	"\vplayback_id\x18\a \x01(\tR\n" +
-	"playbackId\"\xa3\a\n" +
+	"playbackId\"\xe8\a\n" +
 	"\bClipInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tclip_hash\x18\x02 \x01(\tR\bclipHash\x12\x1b\n" +
@@ -4575,14 +4630,16 @@ const file_shared_proto_rawDesc = "" +
 	"\vplayback_id\x18\x14 \x01(\tR\n" +
 	"playbackId\x12,\n" +
 	"\x12storage_cluster_id\x18\x15 \x01(\tR\x10storageClusterId\x12G\n" +
-	"\x10thumbnail_assets\x18\x16 \x01(\v2\x17.shared.ThumbnailAssetsH\x05R\x0fthumbnailAssets\x88\x01\x01B\r\n" +
+	"\x10thumbnail_assets\x18\x16 \x01(\v2\x17.shared.ThumbnailAssetsH\x05R\x0fthumbnailAssets\x88\x01\x01\x12.\n" +
+	"\x10retention_source\x18\x17 \x01(\tH\x06R\x0fretentionSource\x88\x01\x01B\r\n" +
 	"\v_size_bytesB\f\n" +
 	"\n" +
 	"_clip_modeB\x13\n" +
 	"\x11_requested_paramsB\x13\n" +
 	"\x11_storage_locationB\r\n" +
 	"\v_expires_atB\x13\n" +
-	"\x11_thumbnail_assetsJ\x04\b\f\x10\rJ\x04\b\x13\x10\x14R\faccess_countR\rlast_accessed\"\x9f\x01\n" +
+	"\x11_thumbnail_assetsB\x13\n" +
+	"\x11_retention_sourceJ\x04\b\f\x10\rJ\x04\b\x13\x10\x14R\faccess_countR\rlast_accessed\"\x9f\x01\n" +
 	"\x0fGetClipsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12 \n" +
 	"\tstream_id\x18\x02 \x01(\tH\x00R\bstreamId\x88\x01\x01\x12?\n" +
@@ -4604,15 +4661,16 @@ const file_shared_proto_rawDesc = "" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\"H\n" +
 	"\x12DeleteClipResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xcb\x02\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xed\x02\n" +
 	"\tDVRPolicy\x124\n" +
 	"\x16default_window_seconds\x18\x01 \x01(\x05R\x14defaultWindowSeconds\x12,\n" +
 	"\x12max_window_seconds\x18\x02 \x01(\x05R\x10maxWindowSeconds\x12G\n" +
 	" default_segment_duration_seconds\x18\x03 \x01(\x05R\x1ddefaultSegmentDurationSeconds\x12\x1f\n" +
 	"\vmax_entries\x18\x04 \x01(\x05R\n" +
 	"maxEntries\x126\n" +
-	"\x17allow_cluster_extension\x18\x05 \x01(\bR\x15allowClusterExtension\x128\n" +
-	"\x18recording_retention_days\x18\x06 \x01(\x05R\x16recordingRetentionDays\"\xa6\x04\n" +
+	"\x17allow_cluster_extension\x18\x05 \x01(\bR\x15allowClusterExtension\x12=\n" +
+	"\x18recording_retention_days\x18\x06 \x01(\x05H\x00R\x16recordingRetentionDays\x88\x01\x01B\x1b\n" +
+	"\x19_recording_retention_days\"\xa6\x04\n" +
 	"\x0fStartDVRRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12#\n" +
 	"\rinternal_name\x18\x02 \x01(\tR\finternalName\x12 \n" +
@@ -4861,7 +4919,7 @@ const file_shared_proto_rawDesc = "" +
 	"\aprimary\x18\x01 \x01(\v2\x16.shared.IngestEndpointR\aprimary\x124\n" +
 	"\tfallbacks\x18\x02 \x03(\v2\x16.shared.IngestEndpointR\tfallbacks\x127\n" +
 	"\bmetadata\x18\x03 \x01(\v2\x16.shared.IngestMetadataH\x00R\bmetadata\x88\x01\x01B\v\n" +
-	"\t_metadata\"\xdc\x03\n" +
+	"\t_metadata\"\x9b\x04\n" +
 	"\x16CreateVodUploadRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1a\n" +
@@ -4877,13 +4935,15 @@ const file_shared_proto_rawDesc = "" +
 	"\rinternal_name\x18\n" +
 	" \x01(\tH\x05R\finternalName\x88\x01\x01\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\v \x01(\tR\tclusterIdB\x0f\n" +
+	"cluster_id\x18\v \x01(\tR\tclusterId\x12*\n" +
+	"\x0eretention_days\x18\f \x01(\x05H\x06R\rretentionDays\x88\x01\x01B\x0f\n" +
 	"\r_content_typeB\b\n" +
 	"\x06_titleB\x0e\n" +
 	"\f_descriptionB\v\n" +
 	"\t_vod_hashB\x0e\n" +
 	"\f_playback_idB\x10\n" +
-	"\x0e_internal_name\"\xa2\x02\n" +
+	"\x0e_internal_nameB\x11\n" +
+	"\x0f_retention_days\"\xa2\x02\n" +
 	"\x17CreateVodUploadResponse\x12\x1b\n" +
 	"\tupload_id\x18\x01 \x01(\tR\buploadId\x12\x1f\n" +
 	"\vartifact_id\x18\x02 \x01(\tR\n" +
@@ -4955,7 +5015,7 @@ const file_shared_proto_rawDesc = "" +
 	"\x06assets\x18\x01 \x03(\v2\x14.shared.VodAssetInfoR\x06assets\x12@\n" +
 	"\n" +
 	"pagination\x18\x02 \x01(\v2 .common.CursorPaginationResponseR\n" +
-	"pagination\"\xd1\b\n" +
+	"pagination\"\x96\t\n" +
 	"\fVodAssetInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12\x14\n" +
@@ -4991,7 +5051,8 @@ const file_shared_proto_rawDesc = "" +
 	"R\n" +
 	"playbackId\x88\x01\x01\x12,\n" +
 	"\x12storage_cluster_id\x18\x15 \x01(\tR\x10storageClusterId\x12G\n" +
-	"\x10thumbnail_assets\x18\x16 \x01(\v2\x17.shared.ThumbnailAssetsH\vR\x0fthumbnailAssets\x88\x01\x01B\r\n" +
+	"\x10thumbnail_assets\x18\x16 \x01(\v2\x17.shared.ThumbnailAssetsH\vR\x0fthumbnailAssets\x88\x01\x01\x12.\n" +
+	"\x10retention_source\x18\x17 \x01(\tH\fR\x0fretentionSource\x88\x01\x01B\r\n" +
 	"\v_size_bytesB\x0e\n" +
 	"\f_duration_msB\r\n" +
 	"\v_resolutionB\x0e\n" +
@@ -5003,7 +5064,8 @@ const file_shared_proto_rawDesc = "" +
 	"\v_expires_atB\x10\n" +
 	"\x0e_error_messageB\x0e\n" +
 	"\f_playback_idB\x13\n" +
-	"\x11_thumbnail_assets\"\xa5\x03\n" +
+	"\x11_thumbnail_assetsB\x13\n" +
+	"\x11_retention_source\"\xa5\x03\n" +
 	"\vVodMetadata\x12\x1f\n" +
 	"\vduration_ms\x18\x01 \x01(\x05R\n" +
 	"durationMs\x12\x1e\n" +
@@ -5205,6 +5267,7 @@ func file_shared_proto_init() {
 	file_shared_proto_msgTypes[0].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[2].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[3].OneofWrappers = []any{}
+	file_shared_proto_msgTypes[8].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[9].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[11].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[15].OneofWrappers = []any{}
