@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -966,8 +967,9 @@ func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*p
 	}
 
 	mistBase := req.GetSourceBaseUrl()
+	localMistSource := mistBase == ""
 	if mistBase == "" {
-		mistBase = cfg.MistServerURL
+		mistBase = deriveMistHTTPBase(cfg.MistServerURL)
 	}
 	mistBase = strings.TrimRight(mistBase, "/")
 	format := req.GetFormat()
@@ -1018,6 +1020,9 @@ func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*p
 
 	// Build MistServer URL using the source stream name.
 	q := buildClipParams(req)
+	if localMistSource && req.GetSourceKind() == pb.ClipPullRequest_SOURCE_KIND_LIVE && !strings.Contains(sourceStreamName, "+") {
+		sourceStreamName = "live+" + sourceStreamName
+	}
 	clipURL := fmt.Sprintf("%s/view/%s.%s?%s", mistBase, sourceStreamName, format, q)
 
 	root := cfg.StorageLocalPath
@@ -1040,7 +1045,7 @@ func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*p
 	if send != nil {
 		send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ClipProgress{ClipProgress: &pb.ClipProgress{RequestId: requestID, Percent: 0, Message: "starting"}}})
 	}
-	if err := downloadToFile(clipURL, dst); err != nil {
+	if err := downloadClipFile(clipURL, dst); err != nil {
 		userErr := sanitizeStorageError(err)
 		logger.WithError(err).WithFields(logging.Fields{
 			"clip_url":   clipURL,
@@ -1119,6 +1124,25 @@ func getClipDTSHGenerator() ClipDTSHGenerator {
 	return clipDTSHGen
 }
 
+func deriveMistHTTPBase(base string) string {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || u.Host == "" {
+		host := strings.TrimPrefix(base, "http://")
+		host = strings.TrimPrefix(host, "https://")
+		host = strings.Split(host, "/")[0]
+		host = strings.Split(host, ":")[0]
+		if host == "" {
+			return strings.TrimRight(base, "/")
+		}
+		return "http://" + host + ":8080"
+	}
+	port := u.Port()
+	if port == "" || port == "4242" {
+		port = "8080"
+	}
+	return u.Scheme + "://" + u.Hostname() + ":" + port
+}
+
 func buildClipParams(req *pb.ClipPullRequest) string {
 	// Foghorn sends ONLY the canonical absolute-Unix-seconds range
 	// (startunix/stopunix). The original ClipMode-shaped fields
@@ -1139,6 +1163,7 @@ func buildClipParams(req *pb.ClipPullRequest) string {
 }
 
 var hasSpaceFor = storage.HasSpaceFor
+var downloadClipFile = downloadToFile
 
 func downloadToFile(url, dst string) error {
 	ctx := context.Background()

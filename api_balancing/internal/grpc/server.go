@@ -863,7 +863,10 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	}
 	var sourceBaseURL string
 	if ingestHost != "" {
-		sourceBaseURL = control.DeriveMistHTTPBase(ingestHost)
+		ingestNodeID := s.lb.GetNodeIDByHost(ingestHost)
+		if ingestNodeID != "" && ingestNodeID != storageNodeID {
+			sourceBaseURL = control.DeriveMistHTTPBase(ingestHost)
+		}
 	}
 
 	// Store artifact lifecycle state in foghorn.artifacts
@@ -2683,9 +2686,6 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 		return nil, status.Errorf(codes.Internal, "failed to generate upload URLs: %v", err)
 	}
 
-	// Generate artifact ID (UUID)
-	artifactID := uuid.New().String()
-
 	// Extract format from filename extension (e.g., "video.mp4" → "mp4")
 	vodFormat := strings.TrimPrefix(filepath.Ext(req.Filename), ".")
 	if vodFormat == "" {
@@ -2708,13 +2708,13 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 	vodRetentionUntil := resolveArtifactInitialRetention(ctx, s.purserClient, req.TenantId, req.RetentionDays, 0 /* infinite VOD default */, s.logger)
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (
-			id, artifact_hash, artifact_type, internal_name,
+			artifact_hash, artifact_type, internal_name,
 			tenant_id, user_id, status,
 			sync_status, size_bytes, s3_url, format, origin_cluster_id, storage_cluster_id, retention_until, created_at, updated_at
 		)
-		VALUES ($1, $2, 'vod', $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'uploading',
-		        'in_progress', $6, $7, $8, $9, $10, $11, NOW(), NOW())
-	`, artifactID, artifactHash, req.GetInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat, req.GetClusterId(), storageClusterArg, vodRetentionUntil)
+		VALUES ($1, 'vod', $2, NULLIF($3, '')::uuid, NULLIF($4, '')::uuid, 'uploading',
+		        'in_progress', $5, $6, $7, $8, $9, $10, NOW(), NOW())
+	`, artifactHash, req.GetInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat, req.GetClusterId(), storageClusterArg, vodRetentionUntil)
 
 	if err != nil {
 		// Abort S3 upload since we can't track it
@@ -2812,7 +2812,7 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 
 	return &pb.CreateVodUploadResponse{
 		UploadId:     uploadID,
-		ArtifactId:   artifactID,
+		ArtifactId:   artifactHash,
 		ArtifactHash: artifactHash,
 		PartSize:     partSize,
 		Parts:        protoParts,
@@ -3242,7 +3242,7 @@ func (s *FoghornGRPCServer) ListVodAssets(ctx context.Context, req *pb.ListVodAs
 
 	// Build select query with keyset pagination
 	selectQuery := fmt.Sprintf(`
-		SELECT a.id, a.artifact_hash, a.status, a.size_bytes,
+		SELECT a.artifact_hash, a.artifact_hash, a.status, a.size_bytes,
 		       COALESCE(a.storage_location, 'pending'), COALESCE(a.s3_url, ''),
 		       a.error_message, a.created_at, a.updated_at, a.retention_until,
 		       COALESCE(v.filename, ''), COALESCE(v.title, ''), COALESCE(v.description, ''),
@@ -3504,7 +3504,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 
 func (s *FoghornGRPCServer) getVodAssetInfo(ctx context.Context, artifactHash string) (*pb.VodAssetInfo, error) {
 	query := `
-		SELECT a.id, a.artifact_hash, a.status, a.size_bytes,
+		SELECT a.artifact_hash, a.artifact_hash, a.status, a.size_bytes,
 		       COALESCE(a.storage_location, 'pending'), COALESCE(a.s3_url, ''),
 		       a.error_message, a.created_at, a.updated_at, a.retention_until,
 		       COALESCE(v.filename, ''), COALESCE(v.title, ''), COALESCE(v.description, ''),

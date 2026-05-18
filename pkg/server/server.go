@@ -161,6 +161,7 @@ func retryAlternateTrailingSlashPath(router *gin.Engine, c *gin.Context) {
 	}
 	c.Request.URL.Path = alternate
 	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), trailingSlashFallbackKey{}, true))
+	c.Status(http.StatusOK)
 	router.HandleContext(c)
 }
 

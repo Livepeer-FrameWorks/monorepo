@@ -45,3 +45,20 @@ func TestSetupServiceRouterHandlesAlternateTrailingSlash(t *testing.T) {
 		t.Fatalf("expected CORS header on slash mismatch, got %q", got)
 	}
 }
+
+func TestSetupServiceRouterAlternateTrailingSlashDefaultsToOK(t *testing.T) {
+	logger := logging.NewLogger()
+	hc := monitoring.NewHealthChecker("svc-slash-default", "v1")
+	mc := monitoring.NewMetricsCollector("svc-slash-default", "v1", "abc")
+	r := SetupServiceRouter(logger, "svc", hc, mc)
+	r.POST("/graphql", func(c *gin.Context) {
+		_, _ = c.Writer.Write([]byte(`{"data":{"__typename":"Query"}}`))
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", "/graphql/", nil)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected fallback handler to default to 200, got %d", w.Code)
+	}
+}

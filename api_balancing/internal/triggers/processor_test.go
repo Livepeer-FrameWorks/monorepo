@@ -1268,6 +1268,10 @@ func TestHandleDVRLifecycleData_UsesDVRHashFallback(t *testing.T) {
 }
 
 func TestHandlePushRewrite_CachesBillingContext(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	sm.SetNodeInfo("edge-node-1", "http://edge.example/view", true, nil, nil, "", "", nil)
+
 	response := &pb.ValidateStreamKeyResponse{
 		Valid:             true,
 		UserId:            "user-4",
@@ -1285,6 +1289,7 @@ func TestHandlePushRewrite_CachesBillingContext(t *testing.T) {
 	processor.commodoreClient = commodoreClient
 
 	trigger := &pb.MistTrigger{
+		NodeId: "edge-node-1",
 		TriggerPayload: &pb.MistTrigger_PushRewrite{
 			PushRewrite: &pb.PushRewriteTrigger{
 				StreamName: "push-stream",
@@ -1325,6 +1330,13 @@ func TestHandlePushRewrite_CachesBillingContext(t *testing.T) {
 	}
 	if info.BillingModel != "prepaid" || info.IsBalanceNegative || info.IsSuspended {
 		t.Fatalf("unexpected billing context: %+v", info)
+	}
+	nodeID, baseURL, ok := control.GetStreamSource("push-stream")
+	if !ok {
+		t.Fatal("expected PUSH_REWRITE to seed stream source for immediate DVR start")
+	}
+	if nodeID != "edge-node-1" || baseURL != "http://edge.example/view" {
+		t.Fatalf("unexpected stream source: node=%q base=%q", nodeID, baseURL)
 	}
 }
 

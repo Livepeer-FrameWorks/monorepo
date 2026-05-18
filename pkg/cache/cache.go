@@ -238,6 +238,10 @@ func (c *Cache) Set(key string, val interface{}, ttl time.Duration) {
 	c.mu.Unlock()
 }
 
+func (c *Cache) SetDefault(key string, val interface{}) {
+	c.Set(key, val, c.opts.TTL)
+}
+
 // Peek returns a cached value without triggering a load. Stale entries are allowed.
 func (c *Cache) Peek(key string) (interface{}, bool) {
 	now := time.Now()

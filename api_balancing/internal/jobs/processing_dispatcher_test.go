@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 func TestInsertProcessingJob_InsertsNewActiveJob(t *testing.T) {
@@ -62,6 +63,37 @@ func TestInsertProcessingJob_ReturnsExistingActiveJob(t *testing.T) {
 	if jobID != "existing-job" {
 		t.Fatalf("expected existing-job, got %s", jobID)
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProcessingDispatcherDispatchScansNullOutputProfiles(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{
+		"job_id", "tenant_id", "artifact_hash", "job_type", "input_codec",
+		"output_profiles", "status", "retry_count", "s3_url", "processes_json", "internal_name",
+	}).AddRow(
+		"job-1", "tenant-1", "artifact-1", "process", nil,
+		nil, "dispatched", 0, nil, "", "vod_internal",
+	)
+	mock.ExpectQuery("WITH claimed AS").
+		WillReturnRows(rows)
+	mock.ExpectExec("UPDATE foghorn.processing_jobs").
+		WithArgs("job-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	d := NewProcessingDispatcher(ProcessingDispatcherConfig{
+		DB:     db,
+		Logger: logging.NewLogger(),
+	})
+	d.dispatch()
+
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}

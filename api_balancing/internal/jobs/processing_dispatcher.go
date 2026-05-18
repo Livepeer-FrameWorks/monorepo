@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -65,7 +64,7 @@ type processingJob struct {
 	ArtifactHash   sql.NullString
 	JobType        string
 	InputCodec     sql.NullString
-	OutputProfiles json.RawMessage
+	OutputProfiles sql.NullString
 	Status         string
 	RetryCount     int
 	S3URL          sql.NullString
@@ -221,8 +220,8 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 
 	// Build params based on job type
 	params := map[string]string{}
-	if job.OutputProfiles != nil {
-		params["output_profiles"] = string(job.OutputProfiles)
+	if job.OutputProfiles.Valid && job.OutputProfiles.String != "" {
+		params["output_profiles"] = job.OutputProfiles.String
 	}
 	if job.InputCodec.Valid {
 		params["input_codec"] = job.InputCodec.String

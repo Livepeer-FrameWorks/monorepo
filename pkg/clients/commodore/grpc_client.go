@@ -154,7 +154,7 @@ func (c *GRPCClient) Close() error {
 	return nil
 }
 
-// InvalidateTenantCacheKeys removes cached ValidateStreamKey entries for a tenant.
+// InvalidateTenantCacheKeys removes tenant-scoped Commodore resolver entries.
 func (c *GRPCClient) InvalidateTenantCacheKeys(tenantID string) {
 	if c.cache == nil || tenantID == "" {
 		return
@@ -162,16 +162,7 @@ func (c *GRPCClient) InvalidateTenantCacheKeys(tenantID string) {
 	for _, entry := range c.cache.Snapshot() {
 		if strings.HasPrefix(entry.Key, tenantID+":") {
 			c.cache.Delete(entry.Key)
-			continue
 		}
-		if !strings.HasPrefix(entry.Key, "commodore:validate:") {
-			continue
-		}
-		resp, ok := entry.Value.(*pb.ValidateStreamKeyResponse)
-		if !ok || resp.GetTenantId() != tenantID {
-			continue
-		}
-		c.cache.Delete(entry.Key)
 	}
 }
 
@@ -194,28 +185,27 @@ func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string, cl
 	if len(clusterID) > 0 {
 		cid = clusterID[0]
 	}
-	buildReq := func() *pb.ValidateStreamKeyRequest {
-		return &pb.ValidateStreamKeyRequest{
-			StreamKey: streamKey,
-			ClusterId: cid,
+	cacheKey := buildValidateStreamKeyCacheKey(streamKey, cid)
+	resp, err := c.internal.ValidateStreamKey(ctx, &pb.ValidateStreamKeyRequest{
+		StreamKey: streamKey,
+		ClusterId: cid,
+	})
+	if err == nil {
+		if c.cache != nil && resp != nil && resp.GetValid() {
+			c.cache.SetDefault(cacheKey, resp)
 		}
+		return resp, nil
 	}
 
-	// Check cache first
 	if c.cache != nil {
-		cacheKey := buildValidateStreamKeyCacheKey(streamKey, cid)
-		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-			resp, err := c.internal.ValidateStreamKey(ctx, buildReq())
-			if err != nil || !resp.Valid {
-				return nil, false, err
+		if cached, ok := c.cache.Peek(cacheKey); ok {
+			if cachedResp, ok := cached.(*pb.ValidateStreamKeyResponse); ok && cachedResp.GetValid() {
+				return cachedResp, nil
 			}
-			return resp, true, nil
-		}); ok {
-			return v.(*pb.ValidateStreamKeyResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 
-	return c.internal.ValidateStreamKey(ctx, buildReq())
+	return nil, err
 }
 
 // ResolvePlaybackID resolves a playback ID to internal stream name

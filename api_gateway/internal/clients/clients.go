@@ -59,7 +59,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		GRPCAddr:      config.RequireEnv("COMMODORE_GRPC_ADDR"),
 		Timeout:       cfg.Timeout,
 		Logger:        cfg.Logger,
-		Cache:         qmCache, // Used for stream key validation caching
+		Cache:         qmCache,
 		ServiceToken:  cfg.ServiceToken,
 		AllowInsecure: grpcAllowInsecure,
 		CACertFile:    grpcCACertFile,

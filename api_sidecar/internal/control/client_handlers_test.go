@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -93,6 +95,27 @@ func TestBuildClipParams_Empty(t *testing.T) {
 	result := buildClipParams(req)
 	if result != "dl=simple.mp4" {
 		t.Fatalf("expected %q, got %q", "dl=simple.mp4", result)
+	}
+}
+
+func TestDeriveMistHTTPBase(t *testing.T) {
+	tests := []struct {
+		name string
+		base string
+		want string
+	}{
+		{name: "api endpoint", base: "http://mistserver:4242/api2", want: "http://mistserver:8080"},
+		{name: "already http output", base: "http://mistserver:8080", want: "http://mistserver:8080"},
+		{name: "hostname only", base: "mistserver:4242", want: "http://mistserver:8080"},
+		{name: "custom port", base: "http://mistserver:18090", want: "http://mistserver:18090"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := deriveMistHTTPBase(tc.base); got != tc.want {
+				t.Fatalf("deriveMistHTTPBase(%q) = %q, want %q", tc.base, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -411,6 +434,47 @@ func TestHandleClipPull_NilConfig(t *testing.T) {
 
 	if len(sent) != 0 {
 		t.Fatalf("expected no messages sent when config is nil, got %d", len(sent))
+	}
+}
+
+func TestHandleClipPull_LocalLiveSourceUsesMistStreamName(t *testing.T) {
+	prev := currentConfig
+	currentConfig = &sidecarcfg.HelmsmanConfig{
+		MistServerURL:    "http://mistserver:4242/api2",
+		StorageLocalPath: t.TempDir(),
+	}
+	t.Cleanup(func() { currentConfig = prev })
+
+	var requestedURL string
+	prevDownload := downloadClipFile
+	downloadClipFile = func(url, dst string) error {
+		requestedURL = url
+		return os.WriteFile(dst, []byte("clip-bytes"), 0600)
+	}
+	t.Cleanup(func() { downloadClipFile = prevDownload })
+
+	var sent []*pb.ControlMessage
+	req := &pb.ClipPullRequest{
+		ClipHash:         "clip-1",
+		StreamName:       "stream-1",
+		OutputStreamName: "stream-1",
+		Format:           "mp4",
+		OutputName:       "clip-1",
+		RequestId:        "req-clip-1",
+		SourceKind:       pb.ClipPullRequest_SOURCE_KIND_LIVE,
+	}
+	handleClipPull(logging.NewLogger(), req, func(m *pb.ControlMessage) { sent = append(sent, m) })
+
+	if !strings.HasPrefix(requestedURL, "http://mistserver:8080/view/live+stream-1.mp4?") {
+		t.Fatalf("requested URL = %q, want local Mist live stream path", requestedURL)
+	}
+	done := sent[len(sent)-1].GetClipDone()
+	if done == nil || done.GetStatus() != "success" {
+		t.Fatalf("expected successful clip done, got %#v", sent[len(sent)-1])
+	}
+	out := filepath.Join(currentConfig.StorageLocalPath, "clips", "stream-1", "clip-1.mp4")
+	if b, err := os.ReadFile(out); err != nil || string(b) != "clip-bytes" {
+		t.Fatalf("clip output = %q err=%v", string(b), err)
 	}
 }
 

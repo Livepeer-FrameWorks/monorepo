@@ -1197,6 +1197,9 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		streamID := streamValidation.StreamId
 		pushRewrite.StreamId = &streamID
 	}
+	if trigger.GetNodeId() != "" && streamValidation.GetInternalName() != "" {
+		state.DefaultManager().UpdateNodeStats(streamValidation.GetInternalName(), trigger.GetNodeId(), 0, 1, 0, 0, false)
+	}
 	if originClusterID := streamValidation.GetOriginClusterId(); originClusterID != "" {
 		trigger.OriginClusterId = &originClusterID
 	}
