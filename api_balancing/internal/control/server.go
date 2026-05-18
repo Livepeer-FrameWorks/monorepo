@@ -6540,6 +6540,10 @@ const chandlerPerClusterTTL = 5 * time.Minute
 // Returns "" if the cluster ID is empty, no cluster lookup is configured, the
 // Quartermaster lookup fails, or the cluster has no slug/base-domain.
 func getChandlerBaseURLForCluster(clusterID string) string {
+	if explicit := strings.TrimSpace(os.Getenv("CHANDLER_BASE_URL")); explicit != "" {
+		return strings.TrimRight(explicit, "/")
+	}
+
 	clusterID = strings.TrimSpace(clusterID)
 	if clusterID == "" {
 		return ""

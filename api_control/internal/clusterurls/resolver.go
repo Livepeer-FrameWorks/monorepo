@@ -8,6 +8,7 @@ package clusterurls
 
 import (
 	"context"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,8 @@ type Resolver struct {
 	qm     *qmclient.GRPCClient
 	logger logging.Logger
 
+	publicChandlerBase string
+
 	snapshot atomic.Pointer[map[string]string]
 
 	startOnce sync.Once
@@ -39,7 +42,11 @@ type Resolver struct {
 // NewResolver returns a resolver wired to the given Quartermaster client.
 // Call Start to begin the background refresh loop.
 func NewResolver(qm *qmclient.GRPCClient, logger logging.Logger) *Resolver {
-	r := &Resolver{qm: qm, logger: logger}
+	r := &Resolver{
+		qm:                 qm,
+		logger:             logger,
+		publicChandlerBase: strings.TrimRight(strings.TrimSpace(os.Getenv("CHANDLER_BASE_URL")), "/"),
+	}
 	empty := map[string]string{}
 	r.snapshot.Store(&empty)
 	return r
@@ -78,6 +85,9 @@ func (r *Resolver) Start(ctx context.Context, interval time.Duration) {
 // when the cluster is unknown. Pure map lookup; no I/O, no cache miss
 // fallback.
 func (r *Resolver) ChandlerBase(clusterID string) string {
+	if r.publicChandlerBase != "" {
+		return r.publicChandlerBase
+	}
 	clusterID = strings.TrimSpace(clusterID)
 	if clusterID == "" {
 		return ""
@@ -151,8 +161,10 @@ func (r *Resolver) BuildThumbnailAssets(clusterID, assetKey string) *pb.Thumbnai
 	}
 }
 
-// chandlerBaseFor mirrors getChandlerBaseURLForCluster in
-// api_balancing/internal/control/server.go: `https://<chandler-subdomain>.<cluster-slug>.<base-domain>`.
+// chandlerBaseFor mirrors the managed-cluster branch of
+// api_balancing/internal/control/server.go. Local/single-node deployments
+// bypass this path through CHANDLER_BASE_URL because Chandler is exposed by
+// the node's public HTTP surface, not by a per-cluster hostname.
 func chandlerBaseFor(c *pb.InfrastructureCluster) string {
 	baseDomain := strings.TrimSpace(c.GetBaseUrl())
 	if baseDomain == "" {

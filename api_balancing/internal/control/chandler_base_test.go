@@ -36,6 +36,24 @@ func TestGetChandlerBaseURLUsesExplicitOverride(t *testing.T) {
 	}
 }
 
+func TestGetChandlerBaseURLForClusterUsesExplicitOverride(t *testing.T) {
+	prevGetCluster := getClusterFn
+	clearChandlerPerClusterCache()
+	t.Cleanup(func() {
+		getClusterFn = prevGetCluster
+		clearChandlerPerClusterCache()
+	})
+
+	t.Setenv("CHANDLER_BASE_URL", "http://localhost:18090/")
+	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
+		return nil, errors.New("should not resolve cluster when override is set")
+	}
+
+	if got := getChandlerBaseURLForCluster("demo-media"); got != "http://localhost:18090" {
+		t.Fatalf("expected explicit Chandler base override, got %q", got)
+	}
+}
+
 func TestGetChandlerBaseURLDerivesPlatformDomainFromClusterMetadata(t *testing.T) {
 	prevClusterID := localClusterID
 	prevGetCluster := getClusterFn
