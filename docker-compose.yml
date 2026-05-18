@@ -217,6 +217,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       CLUSTER_ID: ${CLUSTER_ID}
+      NODE_ID: central-node-1
       REDIS_URL: ${FOGHORN_REDIS_URL}
       FOGHORN_INSTANCE_ID: foghorn-1
     ports:
@@ -281,6 +282,7 @@ services:
       STREAM_BONUS: ${STREAM_BONUS}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       CLUSTER_ID: ${CLUSTER_ID}
+      NODE_ID: central-node-1
       REDIS_URL: ${FOGHORN_REDIS_URL}
       FOGHORN_INSTANCE_ID: foghorn-2
       FOGHORN_HOST: foghorn-2
@@ -633,6 +635,9 @@ services:
       LOG_LEVEL: ${LOG_LEVEL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       HELMSMAN_STORAGE_LOCAL_PATH: /var/lib/mistserver/recordings
+      # Mist runs in a separate container in compose and reaches Helmsman
+      # via the service DNS name, not loopback.
+      HELMSMAN_RELAY_BASE_URL: http://helmsman:18007
     volumes:
       - ./infrastructure/edge/machine-id:/etc/machine-id:ro
       - ./infrastructure/demo-recordings:/var/lib/mistserver/recordings
