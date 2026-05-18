@@ -82,6 +82,36 @@
         | combine((node_tuning_profile == 'edge') | ternary(node_tuning_sysctl_edge, {}))
       }}
 
+- name: Node_tuning verify | core sysctl file present
+  ansible.builtin.slurp:
+    path: /etc/sysctl.d/10-frameworks-baseline.conf
+  register: node_tuning_core_sysctl_file
+
+- name: Node_tuning verify | core sysctl file entries
+  ansible.builtin.assert:
+    that:
+      - "'{{ item.key }} = {{ item.value }}' in (node_tuning_core_sysctl_file.content | b64decode)"
+    fail_msg: "/etc/sysctl.d/10-frameworks-baseline.conf missing {{ item.key }} = {{ item.value }}"
+  loop: "{{ node_tuning_sysctl_core | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Node_tuning verify | edge sysctl file present
+  ansible.builtin.slurp:
+    path: /etc/sysctl.d/20-frameworks-edge.conf
+  register: node_tuning_edge_sysctl_file
+  when: node_tuning_profile == "edge"
+
+- name: Node_tuning verify | edge sysctl file entries
+  ansible.builtin.assert:
+    that:
+      - "'{{ item.key }} = {{ item.value }}' in (node_tuning_edge_sysctl_file.content | b64decode)"
+    fail_msg: "/etc/sysctl.d/20-frameworks-edge.conf missing {{ item.key }} = {{ item.value }}"
+  loop: "{{ node_tuning_sysctl_edge | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: node_tuning_profile == "edge"
+
 - name: Node_tuning verify | sysctl runtime values
   ansible.builtin.command: sysctl -n {{ item.key }}
   loop: "{{ node_tuning_expected_sysctl | dict2items }}"
@@ -89,6 +119,21 @@
     label: "{{ item.key }}"
   register: sysctl_runtime
   changed_when: false
+  failed_when: false
+
+- name: Node_tuning verify | assert sysctl runtime reads
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.rc == 0
+        or (
+          ansible_facts.virtualization_type in ["docker", "container", "containerd", "podman"]
+          and ("cannot stat" in item.stderr or "No such file" in item.stderr)
+        )
+    fail_msg: "sysctl {{ item.item.key }} read failed: {{ item.stderr | default('?') }}"
+  loop: "{{ sysctl_runtime.results }}"
+  loop_control:
+    label: "{{ item.item.key }}"
 
 - name: Node_tuning verify | assert sysctl runtime values
   ansible.builtin.assert:
@@ -100,6 +145,7 @@
   loop: "{{ sysctl_runtime.results }}"
   loop_control:
     label: "{{ item.item.key }}"
+  when: item.rc == 0
 
 - name: Node_tuning verify | limits file present
   ansible.builtin.stat:

@@ -81,7 +81,6 @@ jobs:
           - mistserver
           - helmsman
           - edge
-          - node_tuning
         image:
           - geerlingguy/docker-ubuntu2404-ansible:latest
     steps:
@@ -127,6 +126,7 @@ jobs:
         image:
           - geerlingguy/docker-ubuntu2204-ansible:latest
           - geerlingguy/docker-ubuntu2404-ansible:latest
+          - geerlingguy/docker-ubuntu2604-ansible:latest
     steps:
       - uses: actions/checkout@v5
 
