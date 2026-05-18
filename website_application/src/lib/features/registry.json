@@ -294,15 +294,15 @@
       "examples": [
         {
           "title": "Test a JWT against the live policy",
-          "query": "mutation TestJWT {\n  testPlaybackAccess(input: {\n    playbackId: \"<playback-id>\"\n    viewerToken: \"eyJhbGciOiJFUzI1NiIs...\"\n    connector: \"hls\"\n  }) {\n    ... on PlaybackAccessDecision {\n      allowed\n      reason\n      kid\n      claimsJson\n    }\n    ... on ValidationError { message field }\n  }\n}\n"
+          "query": "mutation TestJWT {\n  testPlaybackAccess(input: {\n    playbackId: \"\u003cplayback-id\u003e\"\n    viewerToken: \"eyJhbGciOiJFUzI1NiIs...\"\n    connector: \"hls\"\n  }) {\n    ... on PlaybackAccessDecision {\n      allowed\n      reason\n      kid\n      claimsJson\n    }\n    ... on ValidationError { message field }\n  }\n}\n"
         },
         {
           "title": "Inspect webhook policy without firing",
-          "query": "mutation Inspect {\n  testPlaybackAccess(input: {\n    playbackId: \"<playback-id>\"\n    fireWebhook: false\n  }) {\n    ... on PlaybackAccessDecision { policyType reason detail }\n  }\n}\n"
+          "query": "mutation Inspect {\n  testPlaybackAccess(input: {\n    playbackId: \"\u003cplayback-id\u003e\"\n    fireWebhook: false\n  }) {\n    ... on PlaybackAccessDecision { policyType reason detail }\n  }\n}\n"
         },
         {
           "title": "Fire a real webhook test",
-          "query": "mutation Fire {\n  testPlaybackAccess(input: {\n    playbackId: \"<playback-id>\"\n    viewerIp: \"203.0.113.42\"\n    connector: \"hls\"\n    fireWebhook: true\n  }) {\n    ... on PlaybackAccessDecision {\n      allowed reason webhookStatus webhookLatencyMs\n    }\n  }\n}\n"
+          "query": "mutation Fire {\n  testPlaybackAccess(input: {\n    playbackId: \"\u003cplayback-id\u003e\"\n    viewerIp: \"203.0.113.42\"\n    connector: \"hls\"\n    fireWebhook: true\n  }) {\n    ... on PlaybackAccessDecision {\n      allowed reason webhookStatus webhookLatencyMs\n    }\n  }\n}\n"
         }
       ],
       "actual_surfaces": {
@@ -750,11 +750,11 @@
         },
         {
           "title": "Per-stream override (DVR 90d, clip cleared)",
-          "query": "mutation Override {\n  setStreamRetentionOverrides(input: {\n    streamId: \"<stream-id>\",\n    dvrRetentionDaysOverride: 90,\n    clearClipRetentionOverride: true\n  }) {\n    ... on StreamRetentionOverrides { dvrRetentionDaysOverride clipRetentionDaysOverride }\n    ... on ValidationError { message field }\n  }\n}\n"
+          "query": "mutation Override {\n  setStreamRetentionOverrides(input: {\n    streamId: \"\u003cstream-id\u003e\",\n    dvrRetentionDaysOverride: 90,\n    clearClipRetentionOverride: true\n  }) {\n    ... on StreamRetentionOverrides { dvrRetentionDaysOverride clipRetentionDaysOverride }\n    ... on ValidationError { message field }\n  }\n}\n"
         },
         {
           "title": "Per-asset override (clip kept forever)",
-          "query": "mutation Update {\n  updateMediaRetention(input: { targetType: CLIP, targetId: \"<clip-hash>\", retentionDays: 0 }) {\n    ... on EffectiveRetention { retentionDays retentionUntil source }\n    ... on ValidationError { message field }\n  }\n}\n"
+          "query": "mutation Update {\n  updateMediaRetention(input: { targetType: CLIP, targetId: \"\u003cclip-hash\u003e\", retentionDays: 0 }) {\n    ... on EffectiveRetention { retentionDays retentionUntil source }\n    ... on ValidationError { message field }\n  }\n}\n"
         }
       ],
       "actual_surfaces": {
@@ -1370,11 +1370,11 @@
       "examples": [
         {
           "title": "Drain a node",
-          "query": "mutation Drain { setNodeMode(input: { nodeId: \"<node-id>\", mode: DRAINING, reason: \"monthly maintenance\" }) {\n  ... on InfrastructureNode {\n    nodeId\n    effectiveMode\n    routingImpactPreview { activeStreams activeViewers }\n  }\n  ... on ValidationError { message field }\n  ... on NotFoundError { message }\n} }\n"
+          "query": "mutation Drain { setNodeMode(input: { nodeId: \"\u003cnode-id\u003e\", mode: DRAINING, reason: \"monthly maintenance\" }) {\n  ... on InfrastructureNode {\n    nodeId\n    effectiveMode\n    routingImpactPreview { activeStreams activeViewers }\n  }\n  ... on ValidationError { message field }\n  ... on NotFoundError { message }\n} }\n"
         },
         {
           "title": "Restore a node",
-          "query": "mutation Restore { setNodeMode(input: { nodeId: \"<node-id>\", mode: NORMAL }) {\n  ... on InfrastructureNode { effectiveMode }\n  ... on ValidationError { message field }\n} }\n"
+          "query": "mutation Restore { setNodeMode(input: { nodeId: \"\u003cnode-id\u003e\", mode: NORMAL }) {\n  ... on InfrastructureNode { effectiveMode }\n  ... on ValidationError { message field }\n} }\n"
         }
       ],
       "actual_surfaces": {
@@ -1492,7 +1492,7 @@
     },
     {
       "slug": "billing",
-      "name": "Billing & prepaid balance",
+      "name": "Billing \u0026 prepaid balance",
       "area": "billing",
       "description": "Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance.",
       "status": "shipped",
@@ -1570,7 +1570,7 @@
     },
     {
       "slug": "wallet",
-      "name": "Wallet & on-chain identity",
+      "name": "Wallet \u0026 on-chain identity",
       "area": "developer",
       "description": "Wallet sign-in, linked-wallet account identity, and x402 micropayments.",
       "status": "partial",
@@ -1942,7 +1942,7 @@
     },
     {
       "slug": "team-rbac",
-      "name": "Teams & RBAC",
+      "name": "Teams \u0026 RBAC",
       "area": "account",
       "description": "Multi-user tenants with role-based access control.",
       "status": "roadmap",
@@ -1978,7 +1978,7 @@
       "slug": "composer-ai",
       "name": "Processing and composition",
       "area": "streaming",
-      "description": "Server-side processing in the media engine \u2014 MistServer-native blitter for overlays, logos, and lower-thirds; Composer for server-side ad insertion (SSAI) and raw-pixel composition; transcription, object detection, picture-in-picture, and automated clipping on top.",
+      "description": "Server-side processing in the media engine — MistServer-native blitter for overlays, logos, and lower-thirds; Composer for server-side ad insertion (SSAI) and raw-pixel composition; transcription, object detection, picture-in-picture, and automated clipping on top.",
       "status": "roadmap",
       "gap_reason": "Not shipped. Requires product/API design for overlay placement and lifecycle, SSAI ad-decision integration, model execution boundaries for AI detection and transcription, billing meters, agent permissions, and dashboard/MCP surfaces for configuring composition.",
       "required_surfaces": {
@@ -2014,7 +2014,7 @@
       "area": "billing",
       "description": "Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes.",
       "status": "partial",
-      "gap_reason": "Cost preview shipped (2026-05-16): Purser surfaces per-tenant marginal storage pricing via GetTenantBillingStatus.StoragePricing, and pkg/billing/storagecost projects a per-asset $/day + $/month figure used on Clip / DVRRequest / VodAsset.storageCost. The storage browser route lists assets with their cost projection and resolved retention. Remaining gap: customer-set caps (configurable thresholds per meter) and alert delivery infrastructure (dedupe, notification channels, threshold-crossed semantics) \u2014 still real engineering projects, tracked as the rest of this row.\n",
+      "gap_reason": "Cost preview shipped (2026-05-16): Purser surfaces per-tenant marginal storage pricing via GetTenantBillingStatus.StoragePricing, and pkg/billing/storagecost projects a per-asset $/day + $/month figure used on Clip / DVRRequest / VodAsset.storageCost. The storage browser route lists assets with their cost projection and resolved retention. Remaining gap: customer-set caps (configurable thresholds per meter) and alert delivery infrastructure (dedupe, notification channels, threshold-crossed semantics) — still real engineering projects, tracked as the rest of this row.\n",
       "required_surfaces": {
         "docs": {
           "required": true
@@ -2082,7 +2082,7 @@
       "area": "infrastructure",
       "description": "Tenant-scoped incident feed aggregating node-health, certificate, DNS, capacity, and cluster alerts with acknowledge/resolve and realtime delivery.",
       "status": "roadmap",
-      "gap_reason": "Not shipped. Prometheus and Grafana cover internal monitoring. The customer-facing gap is a tenant incident feed \u2014 Alertmanager webhook ingestion, dedup/fingerprinting, an incident store, GraphQL queries + acknowledge/resolve mutations, realtime delivery via Signalman, and MCP tools so agents can triage. Self-hosted operators get visibility into their own clusters (cert expiry, port reachability, DNS resolution, CPU/memory thresholds) without standing up a separate monitoring stack.\n",
+      "gap_reason": "Not shipped. Prometheus and Grafana cover internal monitoring. The customer-facing gap is a tenant incident feed — Alertmanager webhook ingestion, dedup/fingerprinting, an incident store, GraphQL queries + acknowledge/resolve mutations, realtime delivery via Signalman, and MCP tools so agents can triage. Self-hosted operators get visibility into their own clusters (cert expiry, port reachability, DNS resolution, CPU/memory thresholds) without standing up a separate monitoring stack.\n",
       "required_surfaces": {
         "docs": {
           "required": true
