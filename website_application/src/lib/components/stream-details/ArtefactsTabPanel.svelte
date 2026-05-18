@@ -306,7 +306,7 @@
             <div class="px-4 pb-4 border-t border-[hsl(var(--tn-fg-gutter)/0.2)] bg-muted/5">
               <p class="pt-4 text-sm text-muted-foreground">
                 Chapter rotation is configured on the source stream and applies to the next
-                recording. Edit the stream to change <em>Chapter mode</em> or
+                recording. Edit the stream to change <em>Historical chapters</em> or
                 <em>Chapter interval</em>.
               </p>
             </div>

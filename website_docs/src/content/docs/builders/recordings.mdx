@@ -115,7 +115,7 @@ DVR recordings get their own `playbackId`, separate from the live stream's. This
 
 - **Live** (`streamPlaybackId`) — real-time playback at the live edge.
 - **Live DVR window** (`dvrPlaybackId`) — seekable playback while the stream is recording, bounded by the tier/cluster DVR window.
-- **Archive chapters** — bounded HLS playlists generated from the recording timeline for historical replay.
+- **Archive chapters** — optional finalized VOD artifacts generated from the recording timeline for historical replay.
 
 DVR playback URLs follow the same `/play/{playbackId}` pattern:
 
@@ -150,7 +150,7 @@ conferences, and always-on streams this is a feature: viewers can rewind a goal,
 <Aside type="tip" title="Always-On Streams">
   DVR supports 24/7-style streams without forcing a new recording artifact every few hours. The live
   DVR window stays bounded for player performance, while the archive is replayed through chapter
-  playlists.
+  artifacts when historical chapters are enabled.
 </Aside>
 
 ### Archive Chapters
@@ -217,7 +217,7 @@ query {
 }
 ```
 
-Chapter mode is configured on the Stream and snapshotted onto each recording at StartDVR. Changes apply to the next recording, not in-flight ones:
+Historical chapter mode is configured on the Stream and snapshotted onto each recording at StartDVR. Changes apply to the next recording, not in-flight ones. `NONE` keeps DVR recording and the active rolling DVR window enabled, but skips finalized chapter artifacts for historical replay:
 
 ```graphql
 mutation {

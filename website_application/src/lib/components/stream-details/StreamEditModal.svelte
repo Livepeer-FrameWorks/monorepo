@@ -190,16 +190,16 @@
       {#if formData.record}
         <div class="space-y-2 border-l border-[hsl(var(--tn-fg-gutter)/0.3)] pl-3">
           <Label for="editChapterMode" class="block text-sm font-medium text-foreground">
-            Chapter mode
+            Historical chapters
           </Label>
           <select
             id="editChapterMode"
             bind:value={formData.dvrChapterMode}
             class="w-full rounded-none border border-input bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-primary"
           >
-            <option value="NONE">Off</option>
-            <option value="WINDOW_SIZED">Window-sized (DVR window)</option>
-            <option value="FIXED_INTERVAL">Fixed interval (≥ 1 hour)</option>
+            <option value="NONE">Off — rolling DVR only</option>
+            <option value="WINDOW_SIZED">Window-sized archive chapters</option>
+            <option value="FIXED_INTERVAL">Fixed archive interval (≥ 1 hour)</option>
           </select>
           {#if formData.dvrChapterMode === "FIXED_INTERVAL"}
             <Label for="editChapterInterval" class="block text-sm font-medium text-foreground">
@@ -214,8 +214,9 @@
             />
           {/if}
           <p class="text-xs text-muted-foreground">
-            Chapter mode is snapshotted onto the recording at StartDVR. Changes apply to the next
-            recording, not in-flight ones.
+            Off still records the rolling DVR window for live time-shift playback. Historical
+            chapters create finalized VOD artifacts for replay after media rolls out of that window.
+            This setting is snapshotted at StartDVR; changes apply to the next recording.
           </p>
         </div>
       {/if}

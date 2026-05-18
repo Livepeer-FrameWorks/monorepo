@@ -115,7 +115,7 @@ Cross-reference with disk-pressure metrics on the recording sidecar (`storage_no
     WHERE artifact_hash = '<dvr_hash>';
    ```
 
-   `dvr_chapter_mode` is snapshotted from the Stream at StartDVR. If it's NULL, the recording was started without a chapter mode — chapters are off for this DVR. Configure `dvrChapterMode` on the Stream via `updateStream`; the change applies to the **next** recording, not this one.
+   `dvr_chapter_mode` is snapshotted from the Stream at StartDVR. If it's NULL, the recording was started with historical chapters off: the active rolling DVR window still records and serves live time-shift, but no finalized replay chapter artifacts will appear after media rolls out of that window. Configure `dvrChapterMode` on the Stream via `updateStream`; the change applies to the **next** recording, not this one.
 
 2. Inspect the chapter row's state:
 

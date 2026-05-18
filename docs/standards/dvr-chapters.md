@@ -12,7 +12,7 @@ chapter_id = sha256_hex(
 
 - Same `(dvr_artifact_id, mode, interval_seconds, start_ms, end_ms)` always produces the same `chapter_id`. The chapter sweeper writes the row idempotently on `chapter_id`.
 - `stream_id` is intentionally **not** in the hash. `dvr_artifact_id` already namespaces uniquely; including `stream_id` would destabilize the ID across the artifact's `stream_internal_name` rename edge case.
-- Chapter mode changes that yield different `(start_ms, end_ms)` boundaries produce **new** chapter IDs. Old chapter IDs from prior modes remain valid as long as their finalized VOD artifacts haven't been deleted by retention.
+- Historical chapter mode changes that yield different `(start_ms, end_ms)` boundaries produce **new** chapter IDs. Old chapter IDs from prior modes remain valid as long as their finalized VOD artifacts haven't been deleted by retention.
 
 ## Mode parameter validation
 
@@ -22,7 +22,7 @@ fixed_interval           interval_seconds >= 3600   UTC-only, anchored at unix e
 ```
 
 - `fixed_interval` below 3600 seconds is rejected at the API layer (`InvalidArgument`). Automatic chapters are for keeping the chapter list bounded on long archives; sub-hour granularity belongs to per-clip workflows.
-- `explicit_range` is retired. Chapter mode is configured per-stream (`commodore.streams.dvr_chapter_mode`) and snapshotted onto the DVR artifact at StartDVR; mid-recording mode changes are not supported.
+- `explicit_range` is retired. Historical chapter mode is configured per-stream (`commodore.streams.dvr_chapter_mode`) and snapshotted onto the DVR artifact at StartDVR; mid-recording mode changes are not supported.
 
 ## UTC-only API surface
 

@@ -584,7 +584,7 @@ type Query {
   Retrieve a single DVR chapter, including its finalized playbackId.
 
   Chapters are produced by the finalization queue as canonical .mkv
-  VOD artifacts. Chapter mode is configured at the Stream level
+  VOD artifacts. Historical chapter mode is configured at the Stream level
   (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes:
     - WINDOW_SIZED: sequential fixed-length chapters of size
       tier.MaxWindowSeconds since the recording's start.
@@ -594,7 +594,7 @@ type Query {
   dvrChapter(
     "DVR recording identifier — accepts either DVRRequest.id (UUID) or DVRRequest.dvrHash."
     dvrId: ID!
-    "Chapter mode; null defaults to the recording's policy snapshot."
+    "Historical chapter mode; null defaults to the recording's policy snapshot."
     mode: DVRChapterMode
     "Required for FIXED_INTERVAL mode."
     intervalSeconds: Int
@@ -2269,9 +2269,10 @@ input UpdateStreamInput {
   "Update the pull-source configuration for an existing pull stream."
   pullSource: PullSourceInput
   """
-  DVR chapter rotation mode. Snapshotted onto the DVR artifact at
-  StartDVR; changes take effect on the next recording, not in-flight.
-  Pass NONE to disable chapters.
+  Historical chapter rotation mode. Snapshotted onto the DVR artifact
+  at StartDVR; changes take effect on the next recording, not in-flight.
+  NONE means rolling DVR playback only: recording still runs, but no
+  finalized chapter artifacts are produced for historical replay.
   """
   dvrChapterMode: DVRChapterMode
   """
@@ -2404,9 +2405,10 @@ type DVRRecordingEdge {
 # ============================================================================
 
 """
-DVR chapter mode. Determines how chapter (startMs, endMs) ranges are
-produced. Configured at the Stream level via updateStream and
-snapshotted onto the DVR artifact at StartDVR.
+DVR historical chapter mode. Determines how chapter (startMs, endMs)
+ranges are produced for finalized replay artifacts. Configured at the
+Stream level via updateStream and snapshotted onto the DVR artifact at
+StartDVR.
 
 UTC-only — civil-time chapters resolve at the edge.
 """
@@ -2415,7 +2417,7 @@ enum DVRChapterMode {
   WINDOW_SIZED
   "UTC-only intervalSeconds buckets, anchored at unix epoch 0."
   FIXED_INTERVAL
-  "Chapters disabled for this stream."
+  "Rolling DVR only: recording still runs, but no historical chapter artifacts are produced."
   NONE
 }
 

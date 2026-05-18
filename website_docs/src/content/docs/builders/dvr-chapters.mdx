@@ -17,7 +17,9 @@ DVR chapters turn one continuous recording into smaller playback windows. Each c
 
 ## Configuring chapters on a stream
 
-Chapter mode is a property of the source **Stream**, snapshotted onto each recording at StartDVR. Changes apply to the next recording, not in-flight ones.
+Historical chapter mode is a property of the source **Stream**, snapshotted onto each recording at StartDVR. Changes apply to the next recording, not in-flight ones.
+
+`NONE` only disables historical chapter artifacts. It does **not** disable DVR recording. The active recording still has its rolling DVR playback surface (`dvr+<dvr_internal_name>`) for live time-shift within the configured DVR window. Without chapters, there is no finalized replay artifact after media rolls out of that window.
 
 ```graphql
 mutation EnableChapters {
@@ -34,11 +36,11 @@ mutation EnableChapters {
 }
 ```
 
-| Mode             | Best for                                                     |
-| ---------------- | ------------------------------------------------------------ |
-| `WINDOW_SIZED`   | Default replay buckets sized to the stream's DVR window.     |
-| `FIXED_INTERVAL` | Regular buckets such as hourly, 6-hour, or 24-hour chapters. |
-| `NONE`           | Chapters disabled for this stream.                           |
+| Mode             | Best for                                                                                     |
+| ---------------- | -------------------------------------------------------------------------------------------- |
+| `WINDOW_SIZED`   | Default historical replay buckets sized to the stream's DVR window.                          |
+| `FIXED_INTERVAL` | Regular historical replay buckets such as hourly, 6-hour, or 24-hour chapters.               |
+| `NONE`           | Rolling DVR only: record and serve the live DVR window, but do not create chapter artifacts. |
 
 `FIXED_INTERVAL` requires `dvrChapterIntervalSeconds ≥ 3600` (1 hour).
 
