@@ -364,8 +364,8 @@ func BuildDVRTarget(storagePath, dvrHash string, config map[string]interface{}) 
 	}
 
 	// Build target path with DVR parameters
-	// Format: /path/segments/$minute_$segmentCounter.ts?m3u8=../manifest.m3u8&split=6&targetAge=7200&append=1&noendlist=1
-	target := fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts?m3u8=../%s.m3u8&split=%d&targetAge=%d&append=1&noendlist=1",
+	// Format: /path/segments/$minute_$segmentCounter.ts#m3u8=../manifest.m3u8&split=6&targetAge=7200&append=1&noendlist=1
+	target := fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts#m3u8=../%s.m3u8&split=%d&targetAge=%d&append=1&noendlist=1",
 		storagePath,
 		dvrHash,
 		dvrHash,
