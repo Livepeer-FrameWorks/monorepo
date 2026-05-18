@@ -963,7 +963,6 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	// Emit STAGE_QUEUED event to Decklog (with enriched timing fields)
 	if s.decklogClient != nil {
 		clipData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_QUEUED, req, reqID, clipHash)
-		clipData.CompletedAt = func() *int64 { t := time.Now().Unix(); return &t }()
 		go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
 	}
 

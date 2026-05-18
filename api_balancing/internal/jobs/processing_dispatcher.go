@@ -335,6 +335,7 @@ func (d *ProcessingDispatcher) emitProcessingStarted(job *processingJob, nodeID 
 	tenantID := job.TenantID
 	progress := uint32(0)
 	vodProgress := int32(0)
+	startedAt := time.Now().Unix()
 
 	switch job.ArtifactType.String {
 	case "clip":
@@ -342,6 +343,7 @@ func (d *ProcessingDispatcher) emitProcessingStarted(job *processingJob, nodeID 
 			Stage:           pb.ClipLifecycleData_STAGE_PROGRESS,
 			ClipHash:        artifactHash,
 			ProgressPercent: &progress,
+			StartedAt:       &startedAt,
 		}
 		if tenantID != "" {
 			data.TenantId = &tenantID
@@ -363,6 +365,7 @@ func (d *ProcessingDispatcher) emitProcessingStarted(job *processingJob, nodeID 
 			Status:      pb.VodLifecycleData_STATUS_PROCESSING,
 			VodHash:     artifactHash,
 			ProgressPct: &vodProgress,
+			StartedAt:   &startedAt,
 		}
 		if tenantID != "" {
 			data.TenantId = &tenantID

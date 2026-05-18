@@ -1331,7 +1331,9 @@ func (r *Resolver) DoGetClipsConnection(ctx context.Context, streamID *string, f
 						sizeInt64 := int64(*state.SizeBytes)
 						clip.SizeBytes = &sizeInt64
 					}
-					clip.Status = state.Stage
+					if artifactLifecycleStageCanOverrideRegistry(clip.Status, state.Stage) {
+						clip.Status = state.Stage
+					}
 					if state.FilePath != nil {
 						clip.StoragePath = *state.FilePath
 					}
@@ -1452,7 +1454,9 @@ func (r *Resolver) DoGetDVRRecordingsConnection(ctx context.Context, streamID *s
 						sizeInt64 := int64(*state.SizeBytes)
 						dvr.SizeBytes = &sizeInt64
 					}
-					dvr.Status = state.Stage
+					if artifactLifecycleStageCanOverrideRegistry(dvr.Status, state.Stage) {
+						dvr.Status = state.Stage
+					}
 					if state.StartedAt != nil {
 						dvr.StartedAt = state.StartedAt
 					}

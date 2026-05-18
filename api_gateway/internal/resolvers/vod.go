@@ -751,18 +751,20 @@ func enrichVodAssetWithLifecycle(asset *pb.VodAssetInfo, state *pb.ArtifactState
 		return
 	}
 
-	// Map stage to VodStatus
-	switch state.Stage {
-	case "requested", "queued", "uploading":
-		asset.Status = pb.VodStatus_VOD_STATUS_UPLOADING
-	case "processing":
-		asset.Status = pb.VodStatus_VOD_STATUS_PROCESSING
-	case "completed", "complete", "done", "ready", "synced":
-		asset.Status = pb.VodStatus_VOD_STATUS_READY
-	case "failed", "failed_terminal", "error", "lost_local":
-		asset.Status = pb.VodStatus_VOD_STATUS_FAILED
-	case "deleted", "evicted":
-		asset.Status = pb.VodStatus_VOD_STATUS_DELETED
+	if artifactLifecycleStageCanOverrideRegistry(asset.Status.String(), state.Stage) {
+		// Map stage to VodStatus
+		switch state.Stage {
+		case "requested", "queued", "uploading":
+			asset.Status = pb.VodStatus_VOD_STATUS_UPLOADING
+		case "processing":
+			asset.Status = pb.VodStatus_VOD_STATUS_PROCESSING
+		case "completed", "complete", "done", "ready", "synced":
+			asset.Status = pb.VodStatus_VOD_STATUS_READY
+		case "failed", "failed_terminal", "error", "lost_local":
+			asset.Status = pb.VodStatus_VOD_STATUS_FAILED
+		case "deleted", "evicted":
+			asset.Status = pb.VodStatus_VOD_STATUS_DELETED
+		}
 	}
 
 	// Size from lifecycle (actual file size, not expected)
