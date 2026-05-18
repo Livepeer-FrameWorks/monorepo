@@ -89,10 +89,11 @@ type DVRManager struct {
 	jobs        map[string]*DVRJob // DVR hash -> job
 	mutex       sync.RWMutex
 	storagePath string
+	storageCap  uint64
 	mistClient  DVRMistClient
 	// diskCheck is the precondition called before starting/continuing a recording.
 	// Tests inject a stub so they don't depend on host disk pressure.
-	// Nil means use the production storage.HasSpaceFor.
+	// Nil means use the production storage admission check.
 	diskCheck func(path string, requiredBytes uint64) error
 }
 
@@ -100,7 +101,7 @@ func (dm *DVRManager) hasSpaceFor(path string, requiredBytes uint64) error {
 	if dm.diskCheck != nil {
 		return dm.diskCheck(path, requiredBytes)
 	}
-	return storage.HasSpaceFor(path, requiredBytes)
+	return storage.HasSpaceForWithinCapacity(path, requiredBytes, dm.storageCap)
 }
 
 // Global DVR manager instance
@@ -117,6 +118,7 @@ func initDVRManager() {
 			logger:      logger,
 			jobs:        make(map[string]*DVRJob),
 			storagePath: storagePath,
+			storageCap:  sidecarcfg.GetStorageCapacityBytes(),
 			mistClient:  mist.NewClient(logger),
 		}
 
@@ -648,7 +650,7 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 	// covering chapter is frozen (artifact + .dtsh durable on S3) and any
 	// overlapping clip leases have drained — so segments are never lost
 	// silently.
-	targetURI := fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts?m3u8=../%s.m3u8&split=%d&targetAge=%d&maxEntries=%d&append=1&noendlist=1&nounlink=1",
+	targetURI := fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts#m3u8=../%s.m3u8&split=%d&targetAge=%d&maxEntries=%d&append=1&noendlist=1&nounlink=1",
 		job.OutputDir,
 		"segments",
 		job.DVRHash,

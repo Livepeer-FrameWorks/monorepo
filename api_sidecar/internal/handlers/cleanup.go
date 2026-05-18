@@ -9,11 +9,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
+	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/leases"
+	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
@@ -224,13 +225,12 @@ func (cm *CleanupMonitor) checkAndCleanup() error {
 
 // getStorageUsage returns storage usage percentage, used bytes, and total bytes
 func (cm *CleanupMonitor) getStorageUsage(path string) (float64, uint64, uint64, error) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
+	space, err := storage.EffectiveDiskSpace(path, sidecarcfg.GetStorageCapacityBytes())
+	if err != nil {
 		return 0, 0, 0, err
 	}
-
-	totalBytes := stat.Blocks * uint64(stat.Bsize)
-	freeBytes := stat.Bavail * uint64(stat.Bsize)
+	totalBytes := space.TotalBytes
+	freeBytes := space.AvailableBytes
 	usedBytes := totalBytes - freeBytes
 
 	usagePercent := float64(usedBytes) / float64(totalBytes)

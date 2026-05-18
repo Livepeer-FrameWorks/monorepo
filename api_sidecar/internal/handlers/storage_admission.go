@@ -149,10 +149,10 @@ func (sm *StorageManager) admitDefrost(ctx context.Context, dir string, sizeByte
 		return nil
 	}
 
-	space, err := storage.GetDiskSpace(dir)
+	space, err := storage.EffectiveDiskSpace(dir, sm.capacity)
 	if err != nil {
 		// Path may not exist yet. Fall back to HasSpaceFor's stat-parent walk.
-		if err := storage.HasSpaceFor(dir, sizeBytes); err != nil {
+		if err := storage.HasSpaceForWithinCapacity(dir, sizeBytes, sm.capacity); err != nil {
 			if errors.Is(err, storage.ErrInsufficientSpace) {
 				return sm.ensureRoomForDefrost(ctx, dir, sizeBytes)
 			}
@@ -180,7 +180,7 @@ func (sm *StorageManager) admitDefrost(ctx context.Context, dir string, sizeByte
 
 // ensureRoomForDefrost is the Tier-2 synchronous path. Called when the disk
 // already has less free space than sizeBytes. Runs fallbackCleanup with an
-// explicit byte target (sizeBytes + headroom), then re-checks. Returns
+// explicit byte target (sizeBytes + the storage reserve), then re-checks. Returns
 // storage.ErrInsufficientSpace on failure so callers can emit
 // REASON_INSUFFICIENT_SPACE.
 func (sm *StorageManager) ensureRoomForDefrost(ctx context.Context, dir string, sizeBytes uint64) error {
@@ -190,16 +190,11 @@ func (sm *StorageManager) ensureRoomForDefrost(ctx context.Context, dir string, 
 		return fmt.Errorf("%w: destructive cleanup paused", storage.ErrInsufficientSpace)
 	}
 
-	space, err := storage.GetDiskSpace(dir)
+	space, err := storage.EffectiveDiskSpace(dir, sm.capacity)
 	if err != nil {
 		return fmt.Errorf("ensureRoomForDefrost statfs: %w", err)
 	}
-	// Compute bytesToFree as the gap to (sizeBytes + headroom).
-	headroom := space.TotalBytes / 20
-	if headroom == 0 {
-		headroom = sizeBytes / 10
-	}
-	needed := sizeBytes + headroom
+	needed := storage.RequiredAvailableBytes(sizeBytes)
 	if needed <= space.AvailableBytes {
 		return nil
 	}
@@ -211,7 +206,7 @@ func (sm *StorageManager) ensureRoomForDefrost(ctx context.Context, dir string, 
 	}
 
 	// Re-check.
-	space, err = storage.GetDiskSpace(dir)
+	space, err = storage.EffectiveDiskSpace(dir, sm.capacity)
 	if err != nil {
 		return fmt.Errorf("ensureRoomForDefrost recheck statfs: %w", err)
 	}

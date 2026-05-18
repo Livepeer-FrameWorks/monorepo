@@ -1023,7 +1023,7 @@ func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*p
 	if localMistSource && req.GetSourceKind() == pb.ClipPullRequest_SOURCE_KIND_LIVE && !strings.Contains(sourceStreamName, "+") {
 		sourceStreamName = "live+" + sourceStreamName
 	}
-	clipURL := fmt.Sprintf("%s/view/%s.%s?%s", mistBase, sourceStreamName, format, q)
+	clipURL := buildClipURL(mistBase, sourceStreamName, format, q)
 
 	root := cfg.StorageLocalPath
 	if root == "" {
@@ -1143,20 +1143,40 @@ func deriveMistHTTPBase(base string) string {
 	return u.Scheme + "://" + u.Hostname() + ":" + port
 }
 
-func buildClipParams(req *pb.ClipPullRequest) string {
-	// Foghorn sends ONLY the canonical absolute-Unix-seconds range
-	// (startunix/stopunix). The original ClipMode-shaped fields
-	// (start_ms / stop_ms / negative start_unix for CLIP_NOW) are
-	// normalized away in api_balancing/internal/grpc/server.go before
-	// the request leaves Foghorn — Helmsman must never reinterpret
-	// them or it would ask the chapter VOD for stream-relative
-	// seconds instead of the wall-clock range the chapter covers.
-	var parts []string
-	if req.StartUnix != nil {
-		parts = append(parts, "startunix="+strconv.FormatInt(req.GetStartUnix(), 10))
+func buildClipURL(base, streamName, format, query string) string {
+	u, err := url.Parse(strings.TrimRight(strings.TrimSpace(base), "/"))
+	if err != nil || u.Host == "" {
+		return fmt.Sprintf("%s/%s.%s?%s", strings.TrimRight(base, "/"), streamName, format, query)
 	}
-	if req.StopUnix != nil {
-		parts = append(parts, "stopunix="+strconv.FormatInt(req.GetStopUnix(), 10))
+	path := strings.TrimRight(u.Path, "/")
+	if path == "" {
+		path = "/" + streamName + "." + format
+	} else {
+		path = path + "/" + streamName + "." + format
+	}
+	u.Path = path
+	u.RawQuery = query
+	return u.String()
+}
+
+func buildClipParams(req *pb.ClipPullRequest) string {
+	return buildClipParamsAt(req, time.Now().Unix())
+}
+
+func buildClipParamsAt(req *pb.ClipPullRequest, nowUnix int64) string {
+	var parts []string
+	if req.GetSourceKind() == pb.ClipPullRequest_SOURCE_KIND_LIVE && req.StartUnix != nil && req.StopUnix != nil {
+		duration := req.GetStopUnix() - req.GetStartUnix()
+		if duration < 1 {
+			duration = 1
+		}
+		parts = append(parts, "startunix="+strconv.FormatInt(req.GetStartUnix()-nowUnix, 10))
+		parts = append(parts, "duration="+strconv.FormatInt(duration, 10))
+	} else if req.StartUnix != nil {
+		parts = append(parts, "startunix="+strconv.FormatInt(req.GetStartUnix(), 10))
+		if req.StopUnix != nil {
+			parts = append(parts, "stopunix="+strconv.FormatInt(req.GetStopUnix(), 10))
+		}
 	}
 	parts = append(parts, "dl="+urlEscape(fmt.Sprintf("%s.%s", req.GetOutputName(), req.GetFormat())))
 	return strings.Join(parts, "&")

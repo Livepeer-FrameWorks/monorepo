@@ -23,8 +23,9 @@ func GetDiskSpace(path string) (*DiskSpace, error) {
 		return nil, err
 	}
 
-	totalBytes := stat.Blocks * uint64(stat.Bsize)
-	availableBytes := stat.Bavail * uint64(stat.Bsize)
+	blockSize := statfsBlockSize(stat)
+	totalBytes := stat.Blocks * blockSize
+	availableBytes := stat.Bavail * blockSize
 
 	return &DiskSpace{TotalBytes: totalBytes, AvailableBytes: availableBytes}, nil
 }
@@ -54,27 +55,80 @@ func GetDiskSpaceWalk(path string) (*DiskSpace, error) {
 	}
 }
 
+func EffectiveDiskSpace(path string, capacityBytes uint64) (*DiskSpace, error) {
+	space, err := GetDiskSpaceWalk(path)
+	if err != nil {
+		return nil, err
+	}
+	if capacityBytes == 0 {
+		return space, nil
+	}
+	usedBytes, err := DirectorySize(path)
+	if err != nil {
+		return nil, err
+	}
+	logicalAvailable := uint64(0)
+	if usedBytes < capacityBytes {
+		logicalAvailable = capacityBytes - usedBytes
+	}
+	available := space.AvailableBytes
+	if logicalAvailable < available {
+		available = logicalAvailable
+	}
+	total := space.TotalBytes
+	if capacityBytes < total {
+		total = capacityBytes
+	}
+	return &DiskSpace{TotalBytes: total, AvailableBytes: available}, nil
+}
+
+func DirectorySize(path string) (uint64, error) {
+	var size uint64
+	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if info != nil && !info.IsDir() {
+			size += uint64(info.Size())
+		}
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	return size, err
+}
+
 func HasSpaceFor(path string, requiredBytes uint64) error {
+	return HasSpaceForWithinCapacity(path, requiredBytes, 0)
+}
+
+func HasSpaceForWithinCapacity(path string, requiredBytes uint64, capacityBytes uint64) error {
 	// Ensure the target directory exists so Statfs has a stable path.
 	// This is a no-op if it already exists.
 	_ = os.MkdirAll(path, 0755)
 
-	space, err := GetDiskSpaceWalk(path)
+	space, err := EffectiveDiskSpace(path, capacityBytes)
 	if err != nil {
 		return fmt.Errorf("statfs failed for %s: %w", path, err)
 	}
 
-	// Keep 5% of total disk free as headroom.
-	headroom := space.TotalBytes / 20
-	needed := requiredBytes
-	if needed < MinFreeBytes {
-		needed = MinFreeBytes
-	}
-	if needed+headroom > space.AvailableBytes {
-		return fmt.Errorf("%w: need=%dB headroom=%dB available=%dB path=%s", ErrInsufficientSpace, needed, headroom, space.AvailableBytes, path)
+	needed := RequiredAvailableBytes(requiredBytes)
+	if needed > space.AvailableBytes {
+		return fmt.Errorf("%w: need=%dB reserve=%dB available=%dB path=%s", ErrInsufficientSpace, requiredBytes, MinFreeBytes, space.AvailableBytes, path)
 	}
 
 	return nil
+}
+
+func RequiredAvailableBytes(requiredBytes uint64) uint64 {
+	if requiredBytes > ^uint64(0)-MinFreeBytes {
+		return ^uint64(0)
+	}
+	return requiredBytes + MinFreeBytes
 }
 
 func IsInsufficientSpace(err error) bool {

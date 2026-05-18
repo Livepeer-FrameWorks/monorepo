@@ -101,6 +101,7 @@ func main() {
 		thresholds := handlers.StorageThresholds{
 			FreezeThreshold: cfg.FreezeThreshold,
 			TargetThreshold: cfg.TargetAfterFreeze,
+			CapacityBytes:   cfg.StorageCapacityBytes,
 		}
 		if err := handlers.InitStorageManager(logger, cfg.StorageLocalPath, cfg.NodeID, thresholds); err != nil {
 			logger.WithError(err).Error("Failed to initialize storage manager")

@@ -353,6 +353,165 @@ func TestColdHEADDoesNotTriggerFullDownload(t *testing.T) {
 	}
 }
 
+func TestColdHEADUsesRangeGetWhenUpstreamRejectsHEAD(t *testing.T) {
+	dir := t.TempDir()
+	hash := "head-range"
+	file := hash + ".mov"
+	body := []byte("seekable upload body")
+	var headCalls int32
+	var rangeGetCalls int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			atomic.AddInt32(&headCalls, 1)
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if r.Method == http.MethodGet && r.Header.Get("Range") == "bytes=0-0" {
+			atomic.AddInt32(&rangeGetCalls, 1)
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-0/%d", len(body)))
+			w.Header().Set("Content-Length", "1")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(body[:1])
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer up.Close()
+
+	res := &ResolveResult{
+		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		MediaPresignedURL: up.URL + "/o",
+		URLTTLSeconds:     60,
+	}
+	resolver := &fakeResolver{out: map[string]*ResolveResult{"upload/" + hash: res}}
+	s := newTestServer(t, dir, admission.CacheToDisk, resolver, nil)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodHead, ts.URL+"/internal/artifact/upload/"+file, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("HEAD status=%d", resp.StatusCode)
+	}
+	if cl := resp.Header.Get("Content-Length"); cl != strconv.Itoa(len(body)) {
+		t.Fatalf("HEAD content-length=%q want %d", cl, len(body))
+	}
+	if atomic.LoadInt32(&headCalls) != 0 {
+		t.Fatalf("relay should not forward HEAD to presigned GET URL")
+	}
+	if atomic.LoadInt32(&rangeGetCalls) != 1 {
+		t.Fatalf("expected exactly one range GET probe, got %d", rangeGetCalls)
+	}
+	if got, _ := io.ReadAll(resp.Body); len(got) != 0 {
+		t.Fatalf("HEAD body should be empty; got %d bytes", len(got))
+	}
+}
+
+func TestUploadRangedGETRetriesFullOn416(t *testing.T) {
+	dir := t.TempDir()
+	hash := "uploadretry"
+	file := hash + ".mov"
+	body := []byte("full upload body")
+	var rangedGets int32
+	var fullGets int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		if r.Header.Get("Range") != "" {
+			atomic.AddInt32(&rangedGets, 1)
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		atomic.AddInt32(&fullGets, 1)
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		_, _ = w.Write(body)
+	}))
+	defer up.Close()
+
+	resolver := &fakeResolver{out: map[string]*ResolveResult{"upload/" + hash: {
+		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		MediaPresignedURL: up.URL,
+	}}}
+	s := newTestServer(t, dir, admission.CacheMemoryOnly, resolver, nil)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/internal/artifact/upload/"+file, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Range", "bytes=999999-")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(body) {
+		t.Fatalf("body=%q want %q", got, body)
+	}
+	if atomic.LoadInt32(&rangedGets) != 1 || atomic.LoadInt32(&fullGets) != 1 {
+		t.Fatalf("upstream ranged/full GETs = %d/%d, want 1/1", rangedGets, fullGets)
+	}
+}
+
+func TestUploadIgnoresZeroByteLocalPlaceholder(t *testing.T) {
+	dir := t.TempDir()
+	hash := "zeroupload"
+	file := hash + ".mov"
+	localPath := filepath.Join(dir, "upload", file)
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(localPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	up := upstreamServer(t, []byte("remote upload body"))
+	defer up.Close()
+
+	resolver := &fakeResolver{out: map[string]*ResolveResult{"upload/" + hash: {
+		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		MediaPresignedURL: up.URL,
+	}}}
+	s := newTestServer(t, dir, admission.CacheMemoryOnly, resolver, nil)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/internal/artifact/upload/"+file, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Range", "bytes=0-5")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("status=%d want 206", resp.StatusCode)
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "remote" {
+		t.Fatalf("body=%q want remote", got)
+	}
+}
+
 func TestColdRangedGETServesAndCachesBlock(t *testing.T) {
 	// Ranged GET returns a real 206 directly from S3 and the served
 	// block lands in the on-disk block cache so subsequent ranged

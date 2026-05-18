@@ -150,6 +150,10 @@ func GetStoragePath() string {
 	return storagePath
 }
 
+func GetStorageCapacityBytes() uint64 {
+	return parseUint64(os.Getenv("HELMSMAN_STORAGE_CAPACITY_BYTES"))
+}
+
 // HardwareSpecs holds detected hardware information
 type HardwareSpecs struct {
 	CPUCores int32

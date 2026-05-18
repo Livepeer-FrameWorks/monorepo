@@ -47,11 +47,6 @@ func TestHandleDesiredStateUpdateQueuesResultOnSendFailure(t *testing.T) {
 }
 
 func TestBuildClipParams_CanonicalAbsoluteRange(t *testing.T) {
-	// Foghorn normalizes every ClipMode to canonical absolute
-	// Unix-seconds and sends only startunix/stopunix; Helmsman builds
-	// the /view URL from those alone. start_ms / stop_ms / duration_sec
-	// (mode-specific fields) are intentionally NOT forwarded — see
-	// api_balancing/internal/grpc/server.go's resolveClipAbsoluteRangeMs.
 	startUnix := int64(1000)
 	stopUnix := int64(2000)
 	startMs := int64(500)
@@ -68,7 +63,7 @@ func TestBuildClipParams_CanonicalAbsoluteRange(t *testing.T) {
 		Format:      "mp4",
 	}
 
-	result := buildClipParams(req)
+	result := buildClipParamsAt(req, 3000)
 
 	for _, want := range []string{
 		"startunix=1000",
@@ -83,6 +78,33 @@ func TestBuildClipParams_CanonicalAbsoluteRange(t *testing.T) {
 		if strings.Contains(result, leaked) {
 			t.Fatalf("mode-specific field leaked into /view params: %q in %q", leaked, result)
 		}
+	}
+}
+
+func TestBuildClipParams_LiveUsesRelativeMistRange(t *testing.T) {
+	startUnix := int64(2990)
+	stopUnix := int64(3020)
+	req := &pb.ClipPullRequest{
+		SourceKind: pb.ClipPullRequest_SOURCE_KIND_LIVE,
+		StartUnix:  &startUnix,
+		StopUnix:   &stopUnix,
+		OutputName: "live clip",
+		Format:     "mp4",
+	}
+
+	result := buildClipParamsAt(req, 3030)
+
+	for _, want := range []string{
+		"startunix=-40",
+		"duration=30",
+		"dl=live%20clip.mp4",
+	} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("expected %q in result %q", want, result)
+		}
+	}
+	if strings.Contains(result, "stopunix=") {
+		t.Fatalf("live clip should use duration, not stopunix: %q", result)
 	}
 }
 
@@ -114,6 +136,36 @@ func TestDeriveMistHTTPBase(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := deriveMistHTTPBase(tc.base); got != tc.want {
 				t.Fatalf("deriveMistHTTPBase(%q) = %q, want %q", tc.base, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildClipURL(t *testing.T) {
+	tests := []struct {
+		name       string
+		base       string
+		streamName string
+		want       string
+	}{
+		{
+			name:       "direct mist http output",
+			base:       "http://mistserver:8080",
+			streamName: "live+stream-1",
+			want:       "http://mistserver:8080/live+stream-1.mp4?startunix=1",
+		},
+		{
+			name:       "edge view prefix",
+			base:       "http://edge.example/view",
+			streamName: "live+stream-1",
+			want:       "http://edge.example/view/live+stream-1.mp4?startunix=1",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildClipURL(tc.base, tc.streamName, "mp4", "startunix=1")
+			if got != tc.want {
+				t.Fatalf("buildClipURL() = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -465,7 +517,7 @@ func TestHandleClipPull_LocalLiveSourceUsesMistStreamName(t *testing.T) {
 	}
 	handleClipPull(logging.NewLogger(), req, func(m *pb.ControlMessage) { sent = append(sent, m) })
 
-	if !strings.HasPrefix(requestedURL, "http://mistserver:8080/view/live+stream-1.mp4?") {
+	if !strings.HasPrefix(requestedURL, "http://mistserver:8080/live+stream-1.mp4?") {
 		t.Fatalf("requested URL = %q, want local Mist live stream path", requestedURL)
 	}
 	done := sent[len(sent)-1].GetClipDone()
