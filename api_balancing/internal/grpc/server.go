@@ -906,9 +906,9 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	storagePath := clips.BuildClipStoragePath(req.StreamInternalName, clipHash, format)
 	clipRetentionUntil := resolveArtifactInitialRetention(ctx, s.purserClient, req.TenantId, req.RetentionDays, 30 /* clip system default */, s.logger)
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, stream_internal_name, internal_name, tenant_id, user_id, status, request_id, manifest_path, format, origin_cluster_id, retention_until, created_at, updated_at)
-		VALUES ($1, 'clip', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'requested', $6, $7, $8, $9, $10, NOW(), NOW())
-	`, clipHash, req.StreamInternalName, req.GetInternalName(), req.TenantId, req.GetUserId(), reqID, storagePath, format, clipCluster, clipRetentionUntil)
+		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, stream_internal_name, internal_name, stream_id, tenant_id, user_id, status, request_id, manifest_path, format, origin_cluster_id, retention_until, created_at, updated_at)
+		VALUES ($1, 'clip', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid, 'requested', $7, $8, $9, $10, $11, NOW(), NOW())
+	`, clipHash, req.StreamInternalName, req.GetInternalName(), req.GetStreamId(), req.TenantId, req.GetUserId(), reqID, storagePath, format, clipCluster, clipRetentionUntil)
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
@@ -1471,6 +1471,9 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 			ServingClusterId: &dvrCluster,
 			StartedAt:        func() *int64 { t := time.Now().Unix(); return &t }(),
 			StreamId: func() *string {
+				if streamID != "" {
+					return &streamID
+				}
 				if req.StreamId != nil && *req.StreamId != "" {
 					return req.StreamId
 				}

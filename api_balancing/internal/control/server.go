@@ -4466,6 +4466,13 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 					projectArtifactSizeToCommodore(ctx, artifactHash, sizeBytes, logger)
 				}
 				if artifactType == "clip" && decklogClient != nil {
+					if streamID == "" && streamInternalName != "" && CommodoreClient != nil {
+						resolveCtx, cancel := context.WithTimeout(ctx, time.Second)
+						if resp, resolveErr := CommodoreClient.ResolveInternalName(resolveCtx, streamInternalName); resolveErr == nil && resp != nil {
+							streamID = resp.GetStreamId()
+						}
+						cancel()
+					}
 					clipData := &pb.ClipLifecycleData{
 						Stage:       pb.ClipLifecycleData_STAGE_DONE,
 						ClipHash:    artifactHash,

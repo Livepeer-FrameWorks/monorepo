@@ -3145,8 +3145,9 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArti
 	defer func() { _ = rows.Close() }()
 
 	var artifacts []*pb.ArtifactState
+	artifactIndex := make(map[string]int)
 	for rows.Next() {
-		var artifact pb.ArtifactState
+		artifact := &pb.ArtifactState{}
 		var errorMessage, manifestPath, filePath, s3URL, processingNodeID *string
 		var startedAt, completedAt *time.Time
 		var clipStartUnix, clipStopUnix *int64
@@ -3189,7 +3190,14 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArti
 			artifact.ExpiresAt = timestamppb.New(*expiresAt)
 		}
 
-		artifacts = append(artifacts, &artifact)
+		if idx, ok := artifactIndex[artifact.GetRequestId()]; ok {
+			if preferArtifactState(artifact, artifacts[idx]) {
+				artifacts[idx] = artifact
+			}
+			continue
+		}
+		artifactIndex[artifact.GetRequestId()] = len(artifacts)
+		artifacts = append(artifacts, artifact)
 	}
 
 	resultsLen := len(artifacts)
@@ -3214,6 +3222,45 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArti
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Artifacts:  artifacts,
 	}, nil
+}
+
+func preferArtifactState(candidate, current *pb.ArtifactState) bool {
+	if candidate == nil {
+		return false
+	}
+	if current == nil {
+		return true
+	}
+	candidateTime := artifactUpdatedAt(candidate)
+	currentTime := artifactUpdatedAt(current)
+	if !candidateTime.Equal(currentTime) {
+		return candidateTime.After(currentTime)
+	}
+	return artifactStageRank(candidate.GetStage()) > artifactStageRank(current.GetStage())
+}
+
+func artifactUpdatedAt(artifact *pb.ArtifactState) time.Time {
+	if artifact == nil || artifact.GetUpdatedAt() == nil {
+		return time.Time{}
+	}
+	return artifact.GetUpdatedAt().AsTime()
+}
+
+func artifactStageRank(stage string) int {
+	switch strings.ToLower(stage) {
+	case "failed", "failed_terminal", "error", "deleted", "evicted", "lost_local":
+		return 100
+	case "completed", "complete", "done", "ready", "synced":
+		return 90
+	case "processing":
+		return 60
+	case "queued", "progress":
+		return 40
+	case "requested", "uploading", "started", "recording":
+		return 20
+	default:
+		return 0
+	}
 }
 
 // ============================================================================
