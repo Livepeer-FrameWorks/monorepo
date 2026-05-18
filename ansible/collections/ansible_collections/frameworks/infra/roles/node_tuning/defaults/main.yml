@@ -1,0 +1,52 @@
+---
+node_tuning_profile: core
+
+node_tuning_purge_snapd: true
+node_tuning_mask_e2scrub: true
+
+# Systemd units masked unconditionally. apt-daily* are masked to remove the
+# dpkg-lock-race surface; motd-news phones home; fwupd-refresh downloads
+# firmware metadata we don't use.
+node_tuning_masked_units:
+  - apt-daily.timer
+  - apt-daily-upgrade.timer
+  - apt-daily.service
+  - apt-daily-upgrade.service
+  - motd-news.timer
+  - motd-news.service
+  - fwupd-refresh.timer
+
+# snapd units masked after purge. failed_when:false in the task — units may
+# be gone already.
+node_tuning_snapd_units:
+  - snapd.service
+  - snapd.socket
+  - snapd.seeded.service
+
+# Core sysctl baseline. Keys are sysctl names, values are sysctl values.
+# Applied via /etc/sysctl.d/10-frameworks-baseline.conf + `sysctl --system`.
+node_tuning_sysctl_core:
+  net.core.somaxconn: 16384
+  net.core.netdev_max_backlog: 16384
+  net.ipv4.tcp_max_syn_backlog: 8192
+  fs.file-max: 2097152
+  kernel.pid_max: 4194304
+  vm.swappiness: 10
+  net.ipv4.ip_local_port_range: "10000 65535"
+  net.core.rmem_max: 67108864
+  net.core.wmem_max: 67108864
+
+# Edge sysctl additions. Merged on top of core when profile=edge.
+node_tuning_sysctl_edge:
+  net.ipv4.tcp_notsent_lowat: 16384
+  net.core.default_qdisc: fq
+  net.ipv4.tcp_congestion_control: bbr
+
+# /etc/security/limits.d/10-frameworks-baseline.conf entries.
+node_tuning_limits:
+  - { domain: "*", type: soft, item: nofile, value: 1048576 }
+  - { domain: "*", type: hard, item: nofile, value: 1048576 }
+  - { domain: "*", type: soft, item: nproc, value: 65535 }
+  - { domain: "*", type: hard, item: nproc, value: 65535 }
+  - { domain: "root", type: soft, item: nofile, value: 1048576 }
+  - { domain: "root", type: hard, item: nofile, value: 1048576 }

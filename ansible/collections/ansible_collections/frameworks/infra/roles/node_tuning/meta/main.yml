@@ -1,0 +1,52 @@
+---
+galaxy_info:
+  role_name: node_tuning
+  author: FrameWorks Infra
+  description: >-
+    Disables Ubuntu's background OS-mutation mechanisms (unattended-upgrades,
+    apt-daily timers, needrestart auto-restart, snapd, motd-news, fwupd-refresh)
+    and applies a sysctl/limits baseline. Production nodes do not install OS
+    updates in the background; all upgrades happen via `frameworks cluster os
+    update`.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble]
+    - name: Debian
+      versions: [bookworm]
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Apply the FrameWorks OS-tuning policy.
+    options:
+      node_tuning_profile:
+        type: str
+        required: false
+        default: core
+        choices: [core, edge]
+        description: >-
+          Tuning profile. `core` applies the general server baseline; `edge`
+          additionally applies video-delivery sysctl knobs (BBR, FQ qdisc,
+          tcp_notsent_lowat).
+      node_tuning_masked_units:
+        type: list
+        elements: str
+        required: false
+        description: >-
+          Systemd units to mask. Override to add or remove from the default
+          set (apt-daily*, motd-news*, fwupd-refresh.timer).
+      node_tuning_purge_snapd:
+        type: bool
+        required: false
+        default: true
+        description: Purge snapd packages and mask snapd units.
+      node_tuning_mask_e2scrub:
+        type: bool
+        required: false
+        default: true
+        description: >-
+          Mask e2scrub_all.timer when LVM is not in use (auto-detected when
+          true; set false to leave the timer alone unconditionally).

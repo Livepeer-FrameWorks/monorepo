@@ -1,0 +1,5 @@
+# Managed by frameworks.infra.node_tuning. Edits will be overwritten.
+
+{% for entry in node_tuning_limits %}
+{{ "%-12s" | format(entry.domain) }} {{ "%-6s" | format(entry.type) }} {{ "%-12s" | format(entry.item) }} {{ entry.value }}
+{% endfor %}

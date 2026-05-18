@@ -1,0 +1,20 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Run node_tuning verify tag
+      ansible.builtin.include_role:
+        name: frameworks.infra.node_tuning
+        tasks_from: verify
+
+    - name: Rerun for idempotence
+      ansible.builtin.include_role:
+        name: frameworks.infra.node_tuning
+      register: idem
+
+    - name: Fail if second apply changed anything
+      ansible.builtin.assert:
+        that: idem is not changed
+        fail_msg: "node_tuning role not idempotent"

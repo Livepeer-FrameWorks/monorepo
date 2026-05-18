@@ -1,0 +1,8 @@
+---
+- name: Node_tuning | write limits baseline
+  ansible.builtin.template:
+    src: limits_10-frameworks-baseline.conf.j2
+    dest: /etc/security/limits.d/10-frameworks-baseline.conf
+    owner: root
+    group: root
+    mode: "0644"

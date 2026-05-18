@@ -1,0 +1,28 @@
+---
+- name: Node_tuning | mask background units
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    masked: true
+    enabled: false
+  loop: "{{ node_tuning_masked_units }}"
+  failed_when: false
+
+# e2scrub_all.timer is useful only when LVM volumes exist. Detect LVM by
+# probing `lvs`; mask the timer only when there's nothing for it to do.
+- name: Node_tuning | detect LVM
+  ansible.builtin.command: lvs --noheadings
+  register: lvm_probe
+  changed_when: false
+  failed_when: false
+  when: node_tuning_mask_e2scrub | bool
+
+- name: Node_tuning | mask e2scrub_all.timer when LVM absent
+  ansible.builtin.systemd:
+    name: e2scrub_all.timer
+    masked: true
+    enabled: false
+  when:
+    - node_tuning_mask_e2scrub | bool
+    - lvm_probe.rc is defined
+    - lvm_probe.rc != 0 or (lvm_probe.stdout | trim) == ""
+  failed_when: false

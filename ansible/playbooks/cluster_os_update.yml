@@ -1,0 +1,164 @@
+---
+# Operator-driven OS upgrade. Run during a maintenance window.
+#
+# Per host:
+#   1. Acquire a persistent lock directory.
+#   2. Wait for apt/dpkg locks to clear.
+#   3. Refresh apt lists, upgrade packages (safe or full).
+#   4. Run needrestart -r l, parse affected units.
+#   5. systemctl try-restart each unit (no-op if inactive).
+#   6. Reboot if /var/run/reboot-required exists (unless no_reboot=true).
+#   7. Verify nothing pending; assert.
+#
+# Lock release + post-run cleanup runs in `always:`, so failures inside the
+# block still release the lock. SSH connection drops mid-run can leave the
+# lock behind; the next invocation fails closed and prints the lock owner.
+- name: Cluster OS update (mutating)
+  hosts: all
+  become: true
+  gather_facts: true
+  gather_subset:
+    - "!all"
+    - min
+  serial: "{{ os_update_serial | default(1) }}"
+  any_errors_fatal: "{{ os_update_halt_on_error | default(true) }}"
+  vars:
+    os_update_mode: safe
+    no_reboot: false
+  tasks:
+    - name: Skip non-Debian hosts
+      ansible.builtin.meta: end_host
+      when: ansible_facts.os_family != "Debian"
+
+    - name: OS update | host run
+      block:
+        - name: Acquire OS-update lock
+          ansible.builtin.shell: |
+            set -eu
+            lockroot=/var/lib/frameworks/locks
+            lockdir=$lockroot/os_update.lock
+            mkdir -p "$lockroot"
+            if ! mkdir "$lockdir" 2>/dev/null; then
+              echo "OS update lock already exists: $lockdir" >&2
+              if [ -f "$lockdir/owner" ]; then
+                cat "$lockdir/owner" >&2 || true
+              fi
+              exit 75
+            fi
+            {
+              echo "host={{ inventory_hostname }}"
+              echo "created=$(date -Is)"
+              echo "ansible_pid=$$"
+            } > "$lockdir/owner"
+          changed_when: false
+          register: lock_acquire
+
+        - name: Wait for apt/dpkg locks to clear
+          ansible.builtin.shell: |
+            set -u
+            for lock in /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock; do
+              tries=60
+              while fuser "$lock" >/dev/null 2>&1; do
+                tries=$((tries - 1))
+                if [ "$tries" -le 0 ]; then
+                  echo "timeout waiting on $lock" >&2
+                  exit 1
+                fi
+                sleep 2
+              done
+            done
+          changed_when: false
+
+        - name: Refresh apt lists
+          ansible.builtin.apt:
+            update_cache: true
+            cache_valid_time: 0
+            lock_timeout: 120
+
+        - name: Upgrade packages
+          ansible.builtin.apt:
+            upgrade: "{{ os_update_mode }}"
+            autoremove: true
+            lock_timeout: 120
+          register: upgrade_result
+
+        - name: Query needrestart
+          ansible.builtin.command: needrestart -r l -b
+          register: needrestart_out
+          changed_when: false
+
+        - name: Parse needrestart-affected units
+          ansible.builtin.set_fact:
+            needrestart_units: >-
+              {{ needrestart_out.stdout_lines
+                 | select('match', '^NEEDRESTART-SVC:')
+                 | map('regex_replace', '^NEEDRESTART-SVC:\\s*', '')
+                 | list }}
+
+        # try-restart is no-op for inactive units (won't accidentally start
+        # something the operator stopped deliberately). The ansible.builtin.systemd
+        # module's `state: restarted` starts inactive units; wrong semantics here.
+        - name: Try-restart affected services # noqa: command-instead-of-module
+          ansible.builtin.command: systemctl try-restart "{{ item }}"
+          loop: "{{ needrestart_units }}"
+          when: needrestart_units | length > 0
+          changed_when: true
+
+        - name: Stat reboot-required flag
+          ansible.builtin.stat:
+            path: /var/run/reboot-required
+          register: reboot_required_stat
+
+        - name: Reboot host
+          ansible.builtin.reboot:
+            reboot_timeout: 600
+          when:
+            - not (no_reboot | bool)
+            - reboot_required_stat.stat.exists
+
+        - name: Post-reboot uname
+          ansible.builtin.command: uname -r
+          changed_when: false
+          register: post_uname
+          when:
+            - not (no_reboot | bool)
+            - reboot_required_stat.stat.exists
+
+        - name: Re-query needrestart
+          ansible.builtin.command: needrestart -r l -b
+          register: post_needrestart
+          changed_when: false
+
+        - name: Assert no pending units
+          ansible.builtin.assert:
+            that:
+              - "(post_needrestart.stdout_lines | select('match', '^NEEDRESTART-SVC:') | list | length) == 0"
+            fail_msg: >-
+              Services still flagged after upgrade + try-restart:
+              {{ post_needrestart.stdout_lines | select('match', '^NEEDRESTART-SVC:') | list }}
+
+        - name: Re-stat reboot-required
+          ansible.builtin.stat:
+            path: /var/run/reboot-required
+          register: post_reboot_stat
+
+        - name: Assert no pending reboot (unless --no-reboot)
+          ansible.builtin.assert:
+            that:
+              - not post_reboot_stat.stat.exists
+            fail_msg: "/var/run/reboot-required still present after reboot"
+          when: not (no_reboot | bool)
+
+      rescue:
+        - name: Mark host failed
+          ansible.builtin.set_fact:
+            os_update_failed: true
+        - name: Re-raise
+          ansible.builtin.fail:
+            msg: "OS update failed on {{ inventory_hostname }}; see prior task error."
+
+      always:
+        - name: Release OS-update lock
+          ansible.builtin.file:
+            path: /var/lib/frameworks/locks/os_update.lock
+            state: absent

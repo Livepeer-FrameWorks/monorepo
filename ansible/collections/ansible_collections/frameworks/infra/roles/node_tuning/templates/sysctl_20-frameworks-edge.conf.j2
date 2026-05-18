@@ -1,0 +1,9 @@
+# Managed by frameworks.infra.node_tuning (profile=edge). Edits overwritten.
+#
+# Video-delivery additions on top of the core baseline.
+#   tcp_notsent_lowat: tighter write coalescing for HLS/WebRTC
+#   default_qdisc=fq + tcp_congestion_control=bbr: paced BBR, better WAN
+
+{% for key, value in node_tuning_sysctl_edge | dictsort %}
+{{ key }} = {{ value }}
+{% endfor %}

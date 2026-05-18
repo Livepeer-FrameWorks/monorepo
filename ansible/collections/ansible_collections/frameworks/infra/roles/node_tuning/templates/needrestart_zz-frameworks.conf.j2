@@ -1,0 +1,10 @@
+# Managed by frameworks.infra.node_tuning. Edits will be overwritten.
+#
+# List affected services; never restart them automatically. Operator-driven
+# updates handle restarts via `frameworks cluster os update`.
+
+$nrconf{restart} = 'l';
+$nrconf{kernelhints} = 0;
+$nrconf{ucodehints} = 0;
+
+1;

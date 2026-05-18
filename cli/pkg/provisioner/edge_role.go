@@ -17,10 +17,12 @@ import (
 // Linux + Darwin hosts. It resolves pinned artifacts for every edge
 // sub-service, renders a one-host inventory, and invokes the
 // frameworks.infra.edge playbook via ansiblerun. Preflight and HTTPS
-// verification stay in Go; sysctl/limits tuning lives in the role under
-// the edge_apply_tuning flag. config is passed by pointer so the generated
-// MistServer API password persists on the caller's struct — subsequent
-// reads of that password (e.g. logging, retry) see the same value.
+// verification stay in Go; sysctl/limits tuning is delegated to the
+// frameworks.infra.node_tuning role (invoked separately by Provision
+// step [2/7] when ApplyTuning is true). config is passed by pointer so
+// the generated MistServer API password persists on the caller's struct
+// — subsequent reads of that password (e.g. logging, retry) see the same
+// value.
 func runEdgeRole(ctx context.Context, pool *ssh.Pool, host inventory.Host, config *EdgeProvisionConfig, remoteOS, remoteArch string) error {
 	vars, err := edgeRoleVars(config, remoteOS, remoteArch)
 	if err != nil {
@@ -153,7 +155,6 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 		"edge_mistserver_image":  "mistserver:latest",
 		"edge_caddy_image":       "caddy:2.8.4",
 		"edge_helmsman_image":    "frameworks/helmsman:latest",
-		"edge_apply_tuning":      config.ApplyTuning && remoteOS != "darwin",
 		"edge_darwin_domain":     darwinDomain,
 	}
 

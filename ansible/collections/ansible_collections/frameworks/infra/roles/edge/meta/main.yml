@@ -57,7 +57,3 @@ argument_specs:
       edge_telemetry_token:
         type: str
         required: false
-      edge_apply_tuning:
-        type: bool
-        required: false
-        default: false

@@ -99,7 +99,7 @@ func (c *EdgeProvisionConfig) resolvedMode() string {
 // Provision runs the edge pipeline. Steps:
 //
 //	[1] preflight (direct SSH probes — kept Go-side for fast-fail messages)
-//	[2] tuning   (routed into the role's configure tag via edge_apply_tuning)
+//	[2] tuning   (frameworks.infra.node_tuning role, profile=edge)
 //	[3] registration (no-op — caller handles via Bridge/Foghorn)
 //	[4] certs   (post-enrollment via ConfigSeed — no-op here)
 //	[5-6] install + start (frameworks.infra.edge role, mode + OS aware)
@@ -123,11 +123,14 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 
 	switch {
 	case remoteOS == "darwin" && config.ApplyTuning:
-		fmt.Println("[2/7] Skipping sysctl tuning (macOS)")
+		fmt.Println("[2/7] Skipping OS tuning (macOS)")
 	case config.ApplyTuning:
-		fmt.Println("[2/7] Tuning will be applied by the edge role")
+		fmt.Println("[2/7] Applying OS tuning (node_tuning role, profile=edge)...")
+		if err := runNodeTuningRole(ctx, e.sshPool, host, "edge"); err != nil {
+			return fmt.Errorf("node tuning failed: %w", err)
+		}
 	default:
-		fmt.Println("[2/7] Skipping sysctl tuning")
+		fmt.Println("[2/7] Skipping OS tuning")
 	}
 
 	fmt.Println("[3/7] Registration handled by caller")

@@ -1,0 +1,18 @@
+---
+- name: Node_tuning | purge snapd packages
+  ansible.builtin.apt:
+    name:
+      - snapd
+      - gnome-software-plugin-snap
+    state: absent
+    purge: true
+    autoremove: true
+    lock_timeout: 120
+
+- name: Node_tuning | mask snapd units defensively
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    masked: true
+    enabled: false
+  loop: "{{ node_tuning_snapd_units }}"
+  failed_when: false

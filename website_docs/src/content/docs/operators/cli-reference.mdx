@@ -497,6 +497,49 @@ frameworks cluster logs decklog -n 100 -f
 
 ---
 
+### frameworks cluster os
+
+Run OS-level fleet maintenance operations.
+
+### frameworks cluster os update
+
+Inspect or apply pending OS updates across manifest hosts. Check mode is the
+default and exits with code `2` when updates, stale services, or a reboot are
+pending. Apply mode is mutating and should run only during a maintenance window.
+
+**Usage:**
+
+```bash
+frameworks cluster os update [flags]
+```
+
+**Flags:**
+
+- `--check` - Inspect pending OS updates (default when `--apply` is absent)
+- `--refresh` - Refresh apt indexes during check mode
+- `--apply` - Apply package upgrades, restart stale services, and reboot when needed
+- `--hosts string` - Comma-separated manifest host names to target
+- `--mode string` - Apt upgrade mode for apply: `safe` or `full` (default: `safe`)
+- `--serial int` - Number of hosts to process in parallel during apply (default: 1)
+- `--no-reboot` - Skip reboot even if `/var/run/reboot-required` exists
+- `--continue-on-error` - Continue after per-host failures during apply
+- `--json` - Emit one JSON object per host in check mode
+
+**Examples:**
+
+```bash
+# Inspect pending updates without refreshing apt indexes
+frameworks cluster os update
+
+# Refresh apt indexes first, then return exit code 2 if anything is pending
+frameworks cluster os update --refresh
+
+# Apply updates to one host without rebooting
+frameworks cluster os update --apply --hosts central-eu-1 --no-reboot
+```
+
+---
+
 ### frameworks cluster restart
 
 Restart services with optional health validation.

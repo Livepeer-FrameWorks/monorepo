@@ -522,6 +522,10 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 		return err
 	}
 
+	if err := ensureNodeTuning(ctx, cmd, manifest, plan, sshPool); err != nil {
+		return err
+	}
+
 	// Bootstrap and finalization helpers dial Quartermaster / Purser /
 	// Commodore from the operator host. When the operator is off-mesh those
 	// gRPC endpoints are unreachable directly, so route every operator-
@@ -2851,6 +2855,74 @@ func ensureNodeBaseline(ctx context.Context, cmd *cobra.Command, manifest *inven
 	}
 	ux.Success(cmd.OutOrStdout(), "Node baseline ready")
 	return nil
+}
+
+func ensureNodeTuning(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, pool *ssh.Pool) error {
+	hostNames := plannedProvisionHosts(plan)
+	if len(hostNames) == 0 {
+		return nil
+	}
+	prov, err := provisioner.NewNodeTuningProvisioner(pool)
+	if err != nil {
+		return fmt.Errorf("node tuning: %w", err)
+	}
+	ux.Subheading(cmd.OutOrStdout(), fmt.Sprintf("Ensuring Node Tuning (%d host(s))", len(hostNames)))
+
+	type tuningTarget struct {
+		name    string
+		host    inventory.Host
+		profile string
+	}
+	targets := make([]tuningTarget, 0, len(hostNames))
+	for _, hostName := range hostNames {
+		host, ok := manifest.GetHost(hostName)
+		if !ok {
+			return fmt.Errorf("node tuning: host %s not found in manifest", hostName)
+		}
+		targets = append(targets, tuningTarget{
+			name:    hostName,
+			host:    host,
+			profile: nodeTuningProfileForHost(manifest, host),
+		})
+	}
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(nodeBaselineConcurrency)
+	for _, target := range targets {
+		g.Go(func() error {
+			hostName := target.name
+			fmt.Fprintf(cmd.OutOrStdout(), "  Ensuring node tuning on %s (profile=%s)...\n", hostName, target.profile)
+			if err := runProvisionPhase(gCtx, provisionApplyTimeout, "node tuning", func(phaseCtx context.Context) error {
+				return prov.Provision(phaseCtx, target.host, provisioner.ServiceConfig{
+					Mode:     "native",
+					Metadata: map[string]any{"profile": target.profile},
+				})
+			}); err != nil {
+				return fmt.Errorf("node tuning %s: %w", hostName, err)
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return err
+	}
+	ux.Success(cmd.OutOrStdout(), "Node tuning ready")
+	return nil
+}
+
+func nodeTuningProfileForHost(manifest *inventory.Manifest, host inventory.Host) string {
+	if manifest != nil && manifest.Type == "edge" {
+		return "edge"
+	}
+	if slices.Contains(host.Roles, "edge") {
+		return "edge"
+	}
+	if manifest != nil && host.Cluster != "" {
+		if cluster, ok := manifest.Clusters[host.Cluster]; ok && cluster.Type == "edge" {
+			return "edge"
+		}
+	}
+	return "core"
 }
 
 func plannedProvisionHosts(plan *orchestrator.ExecutionPlan) []string {

@@ -53,10 +53,6 @@ edge_vmagent_artifact_url: ""
 edge_vmagent_artifact_checksum: ""
 edge_config_schema_version: ""
 
-# Optional kernel/fs tuning (sysctl + limits.d). Applied on native-linux
-# only — docker mode defers kernel concerns to the container host.
-edge_apply_tuning: false
-
 # Remote filesystem layout. Shared by docker + native modes.
 edge_base_dir: /opt/frameworks/edge
 edge_conf_dir: /etc/frameworks

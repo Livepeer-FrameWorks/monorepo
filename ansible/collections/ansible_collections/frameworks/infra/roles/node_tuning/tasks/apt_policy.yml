@@ -1,0 +1,10 @@
+---
+# Drop-in named zz-frameworks-policy so it sorts after every Ubuntu-shipped
+# file in /etc/apt/apt.conf.d/ (including 99needrestart). Last write wins.
+- name: Node_tuning | write apt policy drop-in
+  ansible.builtin.template:
+    src: apt_zz-frameworks-policy.j2
+    dest: /etc/apt/apt.conf.d/zz-frameworks-policy
+    owner: root
+    group: root
+    mode: "0644"

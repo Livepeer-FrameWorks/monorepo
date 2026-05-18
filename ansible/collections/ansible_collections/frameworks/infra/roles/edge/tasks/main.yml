@@ -3,11 +3,6 @@
   ansible.builtin.import_tasks: prepare.yml
   tags: [install, configure]
 
-- name: Edge | apply kernel/fs tuning
-  ansible.builtin.import_tasks: tune.yml
-  when: edge_apply_tuning | bool and ansible_facts.os_family != 'Darwin'
-  tags: [configure]
-
 - name: Edge | install (docker)
   ansible.builtin.import_tasks: install-docker.yml
   when: edge_mode == 'docker'

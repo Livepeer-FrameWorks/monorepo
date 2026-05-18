@@ -1,0 +1,13 @@
+// Managed by frameworks.infra.node_tuning. Edits will be overwritten.
+//
+// Production nodes do not install OS updates in the background. All upgrades
+// happen during provisioning or via `frameworks cluster os update`.
+
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Unattended-Upgrade "0";
+APT::Periodic::Download-Upgradeable-Packages "0";
+APT::Periodic::AutocleanInterval "0";
+
+// Belt-and-braces: even if u-u somehow runs, never reboot the host.
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "false";

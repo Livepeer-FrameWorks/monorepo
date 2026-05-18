@@ -1,0 +1,41 @@
+---
+- name: Node_tuning | skip on unsupported OS family
+  ansible.builtin.debug:
+    msg: "node_tuning supports Debian-family only; skipping on {{ ansible_facts.os_family }}."
+  when: ansible_facts.os_family != "Debian"
+
+- name: Node_tuning | apply policy on Debian-family
+  when: ansible_facts.os_family == "Debian"
+  block:
+    - name: Node_tuning | support packages
+      ansible.builtin.import_tasks: packages.yml
+      tags: [install]
+
+    - name: Node_tuning | apt policy
+      ansible.builtin.import_tasks: apt_policy.yml
+      tags: [apt]
+
+    - name: Node_tuning | needrestart policy
+      ansible.builtin.import_tasks: needrestart.yml
+      tags: [needrestart]
+
+    - name: Node_tuning | systemd timers
+      ansible.builtin.import_tasks: timers.yml
+      tags: [timers]
+
+    - name: Node_tuning | snapd removal
+      ansible.builtin.import_tasks: snapd.yml
+      when: node_tuning_purge_snapd | bool
+      tags: [snapd]
+
+    - name: Node_tuning | sysctl baseline
+      ansible.builtin.import_tasks: sysctl.yml
+      tags: [sysctl]
+
+    - name: Node_tuning | limits baseline
+      ansible.builtin.import_tasks: limits.yml
+      tags: [limits]
+
+    - name: Node_tuning | verify convergence
+      ansible.builtin.import_tasks: verify.yml
+      tags: [verify]

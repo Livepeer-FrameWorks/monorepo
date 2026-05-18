@@ -1,0 +1,33 @@
+---
+role_name_check: 1
+prerun: false
+
+dependency:
+  name: galaxy
+
+driver:
+  name: docker
+
+platforms:
+  - name: node-tuning-instance
+    image: "${MOLECULE_DOCKER_IMAGE:-geerlingguy/docker-ubuntu2404-ansible:latest}"
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    dns_servers:
+      - "1.1.1.1"
+      - "8.8.8.8"
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  playbooks:
+    prepare: ../../../../molecule/prepare-apt.yml
+
+verifier:
+  name: ansible

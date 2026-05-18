@@ -1,0 +1,118 @@
+---
+# Read-only convergence checks. Runnable standalone via --tags verify.
+# Honors --check because every probe here is read-only.
+
+- name: Node_tuning verify | apt periodic disabled
+  ansible.builtin.command: apt-config dump APT::Periodic::Unattended-Upgrade
+  register: apt_periodic_uu
+  changed_when: false
+
+- name: Node_tuning verify | assert apt periodic disabled
+  ansible.builtin.assert:
+    that:
+      - '"APT::Periodic::Unattended-Upgrade \"0\";" in apt_periodic_uu.stdout'
+    fail_msg: >-
+      Unattended-Upgrade is not disabled (apt-config dump returned:
+      {{ apt_periodic_uu.stdout | trim }}). The zz-frameworks-policy drop-in
+      may have lost the lex-sort race; check /etc/apt/apt.conf.d/ contents.
+
+- name: Node_tuning verify | apt automatic reboot disabled
+  ansible.builtin.command: apt-config dump Unattended-Upgrade::Automatic-Reboot
+  register: apt_auto_reboot
+  changed_when: false
+
+- name: Node_tuning verify | assert automatic reboot disabled
+  ansible.builtin.assert:
+    that:
+      - '"Unattended-Upgrade::Automatic-Reboot \"false\";" in apt_auto_reboot.stdout'
+
+- name: Node_tuning verify | apt timers masked # noqa: command-instead-of-module
+  ansible.builtin.command: systemctl is-enabled {{ item }}
+  loop:
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
+  register: timer_states
+  changed_when: false
+  failed_when: false
+
+- name: Node_tuning verify | assert apt timers masked
+  ansible.builtin.assert:
+    that:
+      - item.stdout == "masked"
+    fail_msg: "{{ item.item }} should be masked but is {{ item.stdout | default('?') }}"
+  loop: "{{ timer_states.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Node_tuning verify | needrestart drop-in present
+  ansible.builtin.stat:
+    path: /etc/needrestart/conf.d/zz-frameworks.conf
+  register: needrestart_stat
+
+- name: Node_tuning verify | assert needrestart drop-in present
+  ansible.builtin.assert:
+    that:
+      - needrestart_stat.stat.exists
+      - needrestart_stat.stat.mode == "0644"
+
+- name: Node_tuning verify | needrestart binary present
+  ansible.builtin.command: which needrestart
+  register: needrestart_bin
+  changed_when: false
+
+- name: Node_tuning verify | snapd absent
+  ansible.builtin.command: dpkg-query -W -f='${Status}\n' snapd
+  register: snapd_query
+  changed_when: false
+  failed_when: false
+  when: node_tuning_purge_snapd | bool
+
+- name: Node_tuning verify | assert snapd absent
+  ansible.builtin.assert:
+    that:
+      - snapd_query.rc != 0 or "deinstall" in snapd_query.stdout or "not-installed" in snapd_query.stdout or "not installed" in snapd_query.stdout
+    fail_msg: "snapd dpkg-query: {{ snapd_query.stdout | default('?') }}"
+  when: node_tuning_purge_snapd | bool
+
+- name: Node_tuning verify | expected sysctl map
+  ansible.builtin.set_fact:
+    node_tuning_expected_sysctl: >-
+      {{
+        node_tuning_sysctl_core
+        | combine((node_tuning_profile == 'edge') | ternary(node_tuning_sysctl_edge, {}))
+      }}
+
+- name: Node_tuning verify | sysctl runtime values
+  ansible.builtin.command: sysctl -n {{ item.key }}
+  loop: "{{ node_tuning_expected_sysctl | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: sysctl_runtime
+  changed_when: false
+
+- name: Node_tuning verify | assert sysctl runtime values
+  ansible.builtin.assert:
+    that:
+      - (item.stdout | trim | replace('\t', ' ')) == (item.item.value | string)
+    fail_msg: >-
+      sysctl {{ item.item.key }}: expected {{ item.item.value }},
+      runtime {{ item.stdout | trim }}
+  loop: "{{ sysctl_runtime.results }}"
+  loop_control:
+    label: "{{ item.item.key }}"
+
+- name: Node_tuning verify | limits file present
+  ansible.builtin.stat:
+    path: /etc/security/limits.d/10-frameworks-baseline.conf
+  register: limits_stat
+
+- name: Node_tuning verify | assert limits file present
+  ansible.builtin.assert:
+    that:
+      - limits_stat.stat.exists
+      - limits_stat.stat.mode == "0644"
+    fail_msg: >-
+      /etc/security/limits.d/10-frameworks-baseline.conf missing or wrong mode.
+      Note: PAM limits only apply to new login sessions; this verifies the
+      file exists, not the runtime ulimit (which Ansible's privilege
+      escalation does not exercise faithfully).

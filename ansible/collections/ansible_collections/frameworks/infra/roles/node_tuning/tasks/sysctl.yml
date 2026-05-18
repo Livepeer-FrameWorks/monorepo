@@ -1,0 +1,34 @@
+---
+- name: Node_tuning | write core sysctl baseline
+  ansible.builtin.template:
+    src: sysctl_10-frameworks-baseline.conf.j2
+    dest: /etc/sysctl.d/10-frameworks-baseline.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: sysctl_core
+
+- name: Node_tuning | write edge sysctl additions
+  ansible.builtin.template:
+    src: sysctl_20-frameworks-edge.conf.j2
+    dest: /etc/sysctl.d/20-frameworks-edge.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: node_tuning_profile == "edge"
+  register: sysctl_edge
+
+- name: Node_tuning | remove stale edge sysctl on core nodes
+  ansible.builtin.file:
+    path: /etc/sysctl.d/20-frameworks-edge.conf
+    state: absent
+  when: node_tuning_profile != "edge"
+  register: sysctl_edge_removed
+
+- name: Node_tuning | reload sysctl
+  ansible.builtin.command: sysctl --system
+  changed_when: false
+  when: >-
+    sysctl_core.changed
+    or (sysctl_edge is defined and sysctl_edge.changed)
+    or (sysctl_edge_removed is defined and sysctl_edge_removed.changed)

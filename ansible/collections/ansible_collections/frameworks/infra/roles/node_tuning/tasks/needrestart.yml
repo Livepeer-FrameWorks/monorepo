@@ -1,0 +1,23 @@
+---
+- name: Node_tuning | ensure needrestart conf.d exists
+  ansible.builtin.file:
+    path: /etc/needrestart/conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Drop-in named zz-frameworks so it sorts last in /etc/needrestart/conf.d/.
+- name: Node_tuning | write needrestart drop-in
+  ansible.builtin.template:
+    src: needrestart_zz-frameworks.conf.j2
+    dest: /etc/needrestart/conf.d/zz-frameworks.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: needrestart_dropin
+
+- name: Node_tuning | syntax-check needrestart drop-in # noqa: no-handler
+  ansible.builtin.command: perl -c /etc/needrestart/conf.d/zz-frameworks.conf
+  changed_when: false
+  when: needrestart_dropin.changed

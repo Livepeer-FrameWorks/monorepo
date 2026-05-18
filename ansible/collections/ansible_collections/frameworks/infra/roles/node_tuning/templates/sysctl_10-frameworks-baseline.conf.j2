@@ -1,0 +1,5 @@
+# Managed by frameworks.infra.node_tuning. Edits will be overwritten.
+
+{% for key, value in node_tuning_sysctl_core | dictsort %}
+{{ key }} = {{ value }}
+{% endfor %}
