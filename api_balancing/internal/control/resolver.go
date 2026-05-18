@@ -163,6 +163,12 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 			applyArtifactPlacement(ctx, resp.ArtifactHash, target)
 			return target, nil
 		}
+
+		if isArtifactHashCandidate(input) {
+			if target := resolveArtifactHashStreamTarget(ctx, input); target != nil {
+				return target, nil
+			}
+		}
 	}
 
 	// 3. Live view keys (playback_id) — prefix is kind-aware.
@@ -188,6 +194,72 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 
 	// 4. Nothing matched — stream does not exist.
 	return &StreamTarget{}, nil
+}
+
+func resolveArtifactHashStreamTarget(ctx context.Context, artifactHash string) *StreamTarget {
+	if CommodoreClient == nil || artifactHash == "" {
+		return nil
+	}
+
+	if resp, err := CommodoreClient.ResolveDVRHash(ctx, artifactHash); err == nil && resp.GetFound() {
+		requiresAuth, requiresKnown, clusterPeers := resolveArtifactPolicy(ctx, resp.GetInternalName())
+		target := &StreamTarget{
+			InternalName:      "dvr+" + resp.GetInternalName(),
+			IsVod:             false,
+			TenantID:          resp.GetTenantId(),
+			StreamID:          resp.GetStreamId(),
+			ContentType:       "dvr",
+			ClusterPeers:      clusterPeers,
+			RequiresAuth:      requiresAuth,
+			RequiresAuthKnown: requiresKnown,
+		}
+		applyArtifactPlacement(ctx, artifactHash, target)
+		return target
+	}
+
+	if resp, err := CommodoreClient.ResolveClipHash(ctx, artifactHash); err == nil && resp.GetFound() {
+		requiresAuth, requiresKnown, clusterPeers := resolveArtifactPolicy(ctx, resp.GetInternalName())
+		target := &StreamTarget{
+			InternalName:      "vod+" + resp.GetInternalName(),
+			IsVod:             true,
+			TenantID:          resp.GetTenantId(),
+			StreamID:          resp.GetStreamId(),
+			ContentType:       "clip",
+			ClusterPeers:      clusterPeers,
+			RequiresAuth:      requiresAuth,
+			RequiresAuthKnown: requiresKnown,
+		}
+		applyArtifactPlacement(ctx, artifactHash, target)
+		return target
+	}
+
+	if resp, err := CommodoreClient.ResolveVodHash(ctx, artifactHash); err == nil && resp.GetFound() {
+		requiresAuth, requiresKnown, clusterPeers := resolveArtifactPolicy(ctx, resp.GetInternalName())
+		target := &StreamTarget{
+			InternalName:      "vod+" + resp.GetInternalName(),
+			IsVod:             true,
+			TenantID:          resp.GetTenantId(),
+			ContentType:       "vod",
+			ClusterPeers:      clusterPeers,
+			RequiresAuth:      requiresAuth,
+			RequiresAuthKnown: requiresKnown,
+		}
+		applyArtifactPlacement(ctx, artifactHash, target)
+		return target
+	}
+
+	return nil
+}
+
+func resolveArtifactPolicy(ctx context.Context, artifactInternalName string) (bool, bool, []*pb.TenantClusterPeer) {
+	if CommodoreClient == nil || artifactInternalName == "" {
+		return false, false, nil
+	}
+	resp, err := CommodoreClient.ResolveArtifactInternalName(ctx, artifactInternalName)
+	if err != nil || resp == nil || !resp.GetFound() {
+		return false, false, nil
+	}
+	return resp.GetRequiresAuth(), true, resp.GetClusterPeers()
 }
 
 // ResolveArtifactByHash resolves an artifact hash to tenant/content context and placement.
