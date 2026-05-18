@@ -44,6 +44,26 @@ func hashFromFile(file string) string {
 	return stripped
 }
 
+func contentTypeForFile(file string) string {
+	ext := strings.ToLower(path.Ext(strings.TrimSuffix(file, ".dtsh")))
+	switch ext {
+	case ".m3u8":
+		return "application/vnd.apple.mpegurl"
+	case ".ts":
+		return "video/mp2t"
+	case ".mp4":
+		return "video/mp4"
+	case ".mov":
+		return "video/quicktime"
+	case ".mkv":
+		return "video/x-matroska"
+	case ".webm":
+		return "video/webm"
+	default:
+		return ""
+	}
+}
+
 // serveFile handles GET/HEAD for /internal/artifact/{vod|clip}/<file>.
 // Three branches:
 //
@@ -163,6 +183,9 @@ func (s *Server) serveWarmIfPresent(c *gin.Context, localPath string) bool {
 		return true
 	}
 	defer f.Close()
+	if contentType := contentTypeForFile(localPath); contentType != "" {
+		c.Header("Content-Type", contentType)
+	}
 	http.ServeContent(c.Writer, c.Request, filepath.Base(localPath), info.ModTime(), f)
 	return true
 }
@@ -192,6 +215,9 @@ func (s *Server) serveUpload(c *gin.Context) {
 			return
 		}
 		defer f.Close()
+		if contentType := contentTypeForFile(localPath); contentType != "" {
+			c.Header("Content-Type", contentType)
+		}
 		http.ServeContent(c.Writer, c.Request, filepath.Base(localPath), info.ModTime(), f)
 		return
 	}

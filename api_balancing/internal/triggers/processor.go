@@ -2067,6 +2067,12 @@ func (p *Processor) handleStreamProcess(trigger *pb.MistTrigger) (string, bool, 
 		return processesJSON, false, nil
 	}
 
+	if strings.HasPrefix(streamName, "processing+") {
+		if cfg := p.resolveProcessingProcessConfig(internalName); cfg != "" {
+			return cfg, false, nil
+		}
+	}
+
 	// dvr+<dvr_internal_name>: the durable answer is the dvr_processes_json
 	// snapshot stamped onto foghorn.artifacts at StartDVR. The streamCache
 	// only carries the in-flight live config; the snapshot is what
@@ -2079,6 +2085,35 @@ func (p *Processor) handleStreamProcess(trigger *pb.MistTrigger) (string, bool, 
 	}
 
 	return "", false, nil
+}
+
+func (p *Processor) resolveProcessingProcessConfig(artifactHash string) string {
+	db := control.GetDB()
+	if db == nil || artifactHash == "" {
+		return ""
+	}
+	var processesJSON sql.NullString
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT processes_json::text
+		   FROM foghorn.processing_jobs
+		  WHERE artifact_hash = $1
+		    AND status IN ('queued', 'dispatched', 'processing')
+		  ORDER BY created_at DESC
+		  LIMIT 1`,
+		artifactHash,
+	).Scan(&processesJSON); err != nil {
+		return ""
+	}
+	if !processesJSON.Valid {
+		return ""
+	}
+	cfg := strings.TrimSpace(processesJSON.String)
+	if cfg == "" {
+		return ""
+	}
+	cfg = p.SubstituteGatewayURL(cfg, nil)
+	p.CacheProcessConfig(artifactHash, cfg)
+	return cfg
 }
 
 // resolveRollingDVRProcessConfig returns the live processes_json
