@@ -26,16 +26,29 @@ import (
 // Manager maintains desired vs current MistServer configuration and reconciles them via the Mist API.
 type Manager struct {
 	mu               sync.Mutex
-	mistClient       *mist.Client
+	reconcileMu      sync.Mutex
+	mistClient       mistAPI
 	logger           logging.Logger
 	lastSeed         *pb.ConfigSeed
 	lastAppliedSum   string
 	retryTimer       *time.Timer
 	retryAttempt     int
+	driftRepairOnce  sync.Once
 	lastCaddyHash    string
 	caddyActivated   bool
 	ackSender        func(*pb.ControlMessage)
 	lastAckedSeedVer uint64
+}
+
+type mistAPI interface {
+	ConfigBackup() (map[string]interface{}, error)
+	UpdateConfig(partial map[string]interface{}) (map[string]interface{}, error)
+	Save() error
+	AddProtocols(protocols []map[string]interface{}) error
+	UpdateProtocol(oldConfig, newConfig map[string]interface{}) error
+	DeleteProtocols(protocols []map[string]interface{}) error
+	AddStreams(streams map[string]map[string]interface{}) error
+	DeleteStreams(names []string) error
 }
 
 // ApplySeedSender is the signature for the function Helmsman uses to send
@@ -45,6 +58,7 @@ type ApplySeedSender func(*pb.ControlMessage)
 
 const (
 	maxReconcileRetryDelay = 30 * time.Second
+	mistConfigRepairEvery  = 30 * time.Second
 	inertMistSource        = "/tmp/none"
 )
 
@@ -76,6 +90,7 @@ func ApplySeed(seed *pb.ConfigSeed, sender ApplySeedSender) {
 	}
 	manager.cancelRetryLocked()
 	manager.mu.Unlock()
+	manager.startDriftRepairLoop()
 	go manager.reconcile()
 }
 
@@ -112,6 +127,9 @@ func GetOperationalMode() pb.NodeOperationalMode {
 
 // reconcile computes desired config from seed + env and applies minimal changes idempotently.
 func (m *Manager) reconcile() {
+	m.reconcileMu.Lock()
+	defer m.reconcileMu.Unlock()
+
 	m.mu.Lock()
 	seed := m.lastSeed
 	ackSender := m.ackSender
@@ -226,6 +244,12 @@ func (m *Manager) reconcile() {
 		return
 	}
 
+	if err := m.repairMissingManagedStreams(seed); err != nil {
+		m.logger.WithError(err).Warn("Mist stream template verification failed")
+		m.scheduleRetry()
+		return
+	}
+
 	m.mu.Lock()
 	recoveredAfterAttempts := m.retryAttempt
 	m.mu.Unlock()
@@ -244,6 +268,33 @@ func (m *Manager) reconcile() {
 		m.lastAppliedSum = sum
 		m.retryAttempt = 0
 		m.mu.Unlock()
+	}
+}
+
+func (m *Manager) startDriftRepairLoop() {
+	m.driftRepairOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(mistConfigRepairEvery)
+			defer ticker.Stop()
+			for range ticker.C {
+				m.repairConfigDrift()
+			}
+		}()
+	})
+}
+
+func (m *Manager) repairConfigDrift() {
+	m.reconcileMu.Lock()
+	defer m.reconcileMu.Unlock()
+
+	m.mu.Lock()
+	seed := m.lastSeed
+	m.mu.Unlock()
+	if seed == nil {
+		return
+	}
+	if err := m.repairMissingManagedStreams(seed); err != nil {
+		m.logger.WithError(err).Warn("Mist managed stream repair failed")
 	}
 }
 
@@ -1085,6 +1136,48 @@ func (m *Manager) ensureStreams(current map[string]any, seed *pb.ConfigSeed) err
 	return m.mistClient.AddStreams(streams)
 }
 
+func (m *Manager) repairMissingManagedStreams(seed *pb.ConfigSeed) error {
+	if seed == nil || len(seed.GetTemplates()) == 0 {
+		return nil
+	}
+	base := strings.TrimSpace(seed.GetFoghornBalancerBase())
+	if base == "" {
+		return fmt.Errorf("ConfigSeed missing foghorn_balancer_base; cannot verify MistServer streams")
+	}
+	expected := streamConfigsFromSeed(seed, base)
+	if len(expected) == 0 {
+		return nil
+	}
+	current, err := m.mistClient.ConfigBackup()
+	if err != nil {
+		return fmt.Errorf("config backup: %w", err)
+	}
+	missing := missingManagedStreams(current, expected)
+	if len(missing) == 0 {
+		return nil
+	}
+
+	m.logger.WithFields(logging.Fields{
+		"missing": missing,
+		"count":   len(missing),
+	}).Warn("Mist config missing managed stream templates; repairing")
+	if addErr := m.mistClient.AddStreams(expected); addErr != nil {
+		return fmt.Errorf("add managed streams: %w", addErr)
+	}
+	if saveErr := m.mistClient.Save(); saveErr != nil {
+		return fmt.Errorf("save managed stream repair: %w", saveErr)
+	}
+
+	current, err = m.mistClient.ConfigBackup()
+	if err != nil {
+		return fmt.Errorf("verify repaired streams: %w", err)
+	}
+	if stillMissing := missingManagedStreams(current, expected); len(stillMissing) > 0 {
+		return fmt.Errorf("managed stream templates still missing after repair: %s", strings.Join(stillMissing, ","))
+	}
+	return nil
+}
+
 func streamConfigsFromSeed(seed *pb.ConfigSeed, base string) map[string]map[string]any {
 	pushSource := "balance:" + base + "?fallback=push://"
 	pullSource := "balance:" + base
@@ -1150,6 +1243,24 @@ func staleManagedWildcardStreams(current map[string]any) []string {
 	}
 	sort.Strings(stale)
 	return stale
+}
+
+func missingManagedStreams(current map[string]any, expected map[string]map[string]any) []string {
+	if len(expected) == 0 {
+		return nil
+	}
+	rawStreams, ok := current["streams"].(map[string]any)
+	if !ok {
+		rawStreams = map[string]any{}
+	}
+	missing := make([]string, 0, len(expected))
+	for name := range expected {
+		if _, ok := rawStreams[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+	return missing
 }
 
 func isStaleManagedWildcardStream(name string) bool {

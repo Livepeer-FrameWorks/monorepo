@@ -41,7 +41,7 @@ The player auto-detects the preview track: `PlayerController.detectPreviewUrl()`
 
 ## Sprite Sheets
 
-`process_thumbs.cpp` decodes video keyframes, scales them, and composes a grid as a JPEG sprite sheet plus a WebVTT timing manifest. Both are buffered as new tracks on the stream. MistProcThumbs is provisioned dynamically via the STREAM_PROCESS trigger for `live+` (live capture) and `processing+` (post-ingest pipeline — VOD upload finalization AND DVR chapter finalization both route through here). Foghorn returns the tenant's per-stream process config, which the chapter finalization queue resolves via `Commodore.GetTenantProcessesJSON("vod")` and attaches to the chapter `ProcessingJobRequest`. The later `vod+` boot is for `.dtsh` generation only and does NOT generate thumbnails.
+`process_thumbs.cpp` decodes video keyframes, scales them, and composes a grid as a JPEG sprite sheet plus a WebVTT timing manifest. Both are buffered as new tracks on the stream. MistProcThumbs is provisioned dynamically via the STREAM_PROCESS trigger for `live+` (live capture), `dvr+` (rolling DVR capture), and `processing+` (post-ingest pipeline). User-uploaded VOD uses the full VOD process config; live-derived assets such as clips and DVR chapters filter that config to MistProcThumbs only so they get fresh thumbnail tracks without re-transcoding existing A/V renditions. The later `vod+` boot is for `.dtsh` generation only and does NOT generate thumbnails.
 
 The source video track is selected via MistServer's [track selector](https://docs.mistserver.org/mistserver/concepts/track_selectors) syntax (default: `video=lowres` — picks the lowest resolution track to minimize CPU).
 

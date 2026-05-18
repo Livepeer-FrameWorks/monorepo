@@ -29,6 +29,30 @@ func StripLivepeerProcesses(processesJSON string) string {
 	return string(out)
 }
 
+// ThumbsOnlyProcesses keeps only MistProcThumbs entries from a process config.
+// Live-derived assets already carry their A/V renditions; their processing
+// pass only needs fresh thumbnails for the asset's own timeline.
+func ThumbsOnlyProcesses(processesJSON string) string {
+	var processes []map[string]interface{}
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return "[]"
+	}
+	filtered := make([]map[string]interface{}, 0, len(processes))
+	for _, p := range processes {
+		if procType, ok := p["process"].(string); ok && procType == "Thumbs" {
+			filtered = append(filtered, p)
+		}
+	}
+	if len(filtered) == 0 {
+		return "[]"
+	}
+	out, err := json.Marshal(filtered)
+	if err != nil {
+		return "[]"
+	}
+	return string(out)
+}
+
 // ReplaceLivepeerWithLocal converts Livepeer process entries into equivalent
 // local MistProcAV entries. Each Livepeer target_profile becomes a separate
 // AV process entry using MistProcAV's native option names.

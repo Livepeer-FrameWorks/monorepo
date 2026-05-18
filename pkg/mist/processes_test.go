@@ -92,6 +92,41 @@ func TestReplaceLivepeerWithLocalPreservesExplicitMistProcOptions(t *testing.T) 
 	}
 }
 
+func TestThumbsOnlyProcessesPreservesThumbOptions(t *testing.T) {
+	input := `[
+		{"process":"AV","codec":"AAC","track_select":"video=none"},
+		{"process":"Livepeer","target_profiles":[{"name":"360p","height":360}]},
+		{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}
+	]`
+
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(ThumbsOnlyProcesses(input)), &got); err != nil {
+		t.Fatalf("unmarshal thumbs-only processes: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 process, got %d: %#v", len(got), got)
+	}
+	proc := got[0]
+	checks := map[string]any{
+		"process":         "Thumbs",
+		"track_select":    "video=maxbps",
+		"track_inhibit":   "subtitle=all",
+		"inconsequential": true,
+		"exit_unmask":     true,
+	}
+	for key, want := range checks {
+		if got := proc[key]; got != want {
+			t.Errorf("%s = %#v, want %#v", key, got, want)
+		}
+	}
+}
+
+func TestThumbsOnlyProcessesInvalidJSONReturnsEmptyConfig(t *testing.T) {
+	if got := ThumbsOnlyProcesses(`not-json`); got != "[]" {
+		t.Fatalf("got %q, want []", got)
+	}
+}
+
 func TestValidateProcessConfigShapeRejectsLivepeerFieldsOnExplicitAV(t *testing.T) {
 	badConfig := `[{"process":"AV","codec":"H264","height":360,"fps":30,"profile":"H264ConstrainedHigh"}]`
 	if err := ValidateProcessConfigShape(badConfig); err == nil {

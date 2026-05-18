@@ -34,6 +34,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
@@ -831,7 +832,7 @@ func (s *CommodoreServer) resolveArtifactRouteForContent(ctx context.Context, co
 			SELECT cp.tenant_id,
 			       COALESCE(NULLIF(va.storage_cluster_id, ''), NULLIF(va.origin_cluster_id, '')) AS cluster_id
 			  FROM commodore.dvr_chapter_playback cp
-			  JOIN commodore.vod_assets va ON va.vod_hash = cp.artifact_hash
+			  LEFT JOIN commodore.vod_assets va ON va.vod_hash = cp.artifact_hash
 			 WHERE cp.playback_id = $1
 		  ) resolved
 		 LIMIT 1
@@ -2213,10 +2214,8 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *pb.Min
 }
 
 // GetTenantProcessesJSON exposes the tenant's resolved MistServer
-// process config for a given stream type. Foghorn-internal pipelines
-// (chapter finalize) call this to attach the same VOD-style processing
-// (Thumbs, sprites, optional Livepeer) that user-initiated VOD uploads
-// use.
+// process config for a given stream type. Foghorn-internal pipelines may
+// use it directly for VOD uploads or filter it for live-derived assets.
 func (s *CommodoreServer) GetTenantProcessesJSON(ctx context.Context, req *pb.GetTenantProcessesJSONRequest) (*pb.GetTenantProcessesJSONResponse, error) {
 	tenantID := req.GetTenantId()
 	streamType := req.GetStreamType()
@@ -6673,7 +6672,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		PlaybackId:         &playbackID,
 		InternalName:       &artifactInternalName,
 		Mode:               req.GetMode(),
-		ProcessesJson:      s.resolveProcessesJSON(ctx, tenantID, clipClusterID, "vod"),
+		ProcessesJson:      mist.ThumbsOnlyProcesses(s.resolveProcessesJSON(ctx, tenantID, clipClusterID, "vod")),
 	}
 	if streamID != "" {
 		foghornReq.StreamId = &streamID

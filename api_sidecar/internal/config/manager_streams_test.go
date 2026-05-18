@@ -78,3 +78,38 @@ func TestStaleManagedWildcardStreams(t *testing.T) {
 		t.Fatalf("staleManagedWildcardStreams() = %#v, want %#v", got, want)
 	}
 }
+
+func TestMissingManagedStreams(t *testing.T) {
+	expected := map[string]map[string]any{
+		"live":       {},
+		"vod":        {},
+		"dvr":        {},
+		"processing": {},
+		"pull":       {},
+	}
+	current := map[string]any{
+		"streams": map[string]any{
+			"live": map[string]any{},
+			"vod":  map[string]any{},
+		},
+	}
+
+	got := missingManagedStreams(current, expected)
+	want := []string{"dvr", "processing", "pull"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("missingManagedStreams() = %#v, want %#v", got, want)
+	}
+}
+
+func TestMissingManagedStreamsTreatsEmptyConfigAsMissingAll(t *testing.T) {
+	expected := map[string]map[string]any{
+		"live": {},
+		"vod":  {},
+	}
+
+	got := missingManagedStreams(map[string]any{"streams": map[string]any{}}, expected)
+	want := []string{"live", "vod"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("missingManagedStreams() = %#v, want %#v", got, want)
+	}
+}

@@ -591,10 +591,8 @@ func (c *GRPCClient) MintChapterPlaybackID(ctx context.Context, chapterID, tenan
 }
 
 // GetTenantProcessesJSON returns the tenant's MistServer process
-// config JSON for the given stream type ("live" | "vod"). Foghorn
-// uses this from the chapter finalization queue so the chapter
-// processing+<hash> boot carries the same Thumbs/sprite/Livepeer
-// config as user-initiated VOD uploads.
+// config JSON for the given stream type ("live" | "vod"). Callers may
+// filter the returned config for live-derived asset pipelines.
 func (c *GRPCClient) GetTenantProcessesJSON(ctx context.Context, tenantID, streamType, clusterID string) (*pb.GetTenantProcessesJSONResponse, error) {
 	return c.internal.GetTenantProcessesJSON(ctx, &pb.GetTenantProcessesJSONRequest{
 		TenantId:   tenantID,

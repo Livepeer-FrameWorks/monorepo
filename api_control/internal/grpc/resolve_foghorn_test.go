@@ -294,6 +294,36 @@ func TestResolveFoghornForContent_RoutesActiveClusterOnPoolMiss(t *testing.T) {
 	}
 }
 
+func TestResolveArtifactRouteForContent_DVRChapterWithoutVodRegistryRow(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	mock.ExpectQuery("SELECT tenant_id, cluster_id\\s+FROM").
+		WithArgs("chp_demo_recording_001").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "cluster_id"}).AddRow("tenant-1", nil))
+
+	found, tenantID, clusterID, err := server.resolveArtifactRouteForContent(context.Background(), "chp_demo_recording_001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !found {
+		t.Fatal("expected chapter playback route to resolve")
+	}
+	if !tenantID.Valid || tenantID.String != "tenant-1" {
+		t.Fatalf("unexpected tenant ID: %+v", tenantID)
+	}
+	if clusterID.Valid {
+		t.Fatalf("expected missing hidden VOD row to leave cluster invalid, got %+v", clusterID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
 func TestResolveAddrFromRoute_PrimaryCluster(t *testing.T) {
 	route := &clusterRoute{
 		clusterID:   "cluster-primary",

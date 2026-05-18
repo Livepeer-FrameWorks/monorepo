@@ -96,7 +96,7 @@ A chapter is **playable** at `finalized` or later — the canonical `.mkv` is th
 1. Read parent DVR (tenant, stream, origin cluster, recording node).
 2. Range-query `foghorn.dvr_segments`; abort with `failed_source_missing` if the range is empty.
 3. Build per-segment refs. Uploaded / deleted_local rows carry a presigned recovery URL minted by Foghorn; lost_local rows carry one too when an S3 object survives the local-loss. A presign error is fail-retryable — the chapter rolls back to `closed`.
-4. Resolve the tenant's VOD `processes_json` via Commodore (with `{{gateway_url}}` substitution + cache for the STREAM_PROCESS trigger). A miss here is fail-retryable; the chapter stays `closed` rather than finalizing without the tenant's processing pipeline.
+4. Resolve the tenant's VOD `processes_json` via Commodore, filter it to MistProcThumbs entries, then apply `{{gateway_url}}` substitution + cache for the STREAM_PROCESS trigger. A miss here is fail-retryable; the chapter stays `closed` rather than finalizing without the tenant's thumbnail pipeline.
 5. `MarkChapterFinalizing` — transitions `closed → finalizing` with the chapter's playback artifact hash.
 6. Pick the dispatch target: recording origin if alive, otherwise an alternate processing-capable node selected via `routeProcessingJob` (works whenever every ref has a recovery URL — the alternate Mist reads from S3).
 7. Dispatch `ProcessingJobRequest{job_type='dvr_chapter_finalize'}` with the resolved processes_json. On send error, `RetryChapterFinalize` rolls back to `closed`.
@@ -108,7 +108,7 @@ A chapter is **playable** at `finalized` or later — the canonical `.mkv` is th
 1. Reserve disk via `admission.Decide(IntentDVRChapterFinalization, estBytes)` — sum of source segment sizes is the floor.
 2. For each segment, prefer the local TS file at `storage/dvr/<stream>/<dvr_hash>/segments/<name>`; fall back to the presigned recovery URL when the local file is gone.
 3. Build a temp HLS VOD playlist at `storage/processing/<chapter_artifact_hash>.m3u8`. Each entry carries `#EXT-X-PROGRAM-DATE-TIME` rendered from `media_start_ms` directly (absolute Unix ms), so Mist's `input_hls → UTCOffset → output_ebml` chain preserves wall-clock end-to-end into the `.mkv`.
-4. Register a STREAM_SOURCE override mapping `processing+<chapter_artifact_hash>` → the local temp HLS path, and a STREAM_PROCESS override carrying the tenant's `processes_json`. Mist boots `processing+<hash>`; the tenant's MistProc tracks (Thumbs, sprites, Livepeer, etc.) fire during this boot.
+4. Register a STREAM_SOURCE override mapping `processing+<chapter_artifact_hash>` → the local temp HLS path, and a STREAM_PROCESS override carrying the thumbs-only `processes_json`. Mist boots `processing+<hash>`; MistProcThumbs generates fresh poster/sprite tracks for the chapter timeline during this boot.
 5. Push to `storage/vod/<chapter_artifact_hash>.mkv`. Wait for `PUSH_END` (success) or `PROCESS_EXIT` on a critical process (terminal). Non-critical exits, retries, and clean exits don't break the wait loop.
 6. Validate the output via `waitForProcessingOutput`. Send `ProcessingJobResult{status='completed', output_path}`.
 7. Trigger DTSH generation: boot `vod+<chapter_artifact_hash>` so Mist's input writes the `.dtsh` sidecar that the freeze pipeline uploads alongside the `.mkv`. This boot is for DTSH only — it does NOT generate thumbnails (that's the processing pipeline's job above).

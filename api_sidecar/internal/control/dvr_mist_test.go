@@ -2,6 +2,7 @@ package control
 
 import (
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -164,6 +165,11 @@ func TestStartRecording_PushStartCalled(t *testing.T) {
 
 	if mc.lastStreamName != "live+test-stream" {
 		t.Fatalf("expected stream name 'live+test-stream', got %s", mc.lastStreamName)
+	}
+	for _, want := range []string{"audio=all", "video=all", "subtitle=none", "meta=none"} {
+		if !strings.Contains(mc.lastTargetURI, want) {
+			t.Fatalf("target URI %q missing %q", mc.lastTargetURI, want)
+		}
 	}
 }
 

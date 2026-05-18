@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     dvr_chapter_interval INTEGER,           -- interval_seconds for fixed_interval mode
     dvr_retention_days   INTEGER,           -- per-class cascade snapshot (Commodore-resolved); NULL = keep forever
     dvr_chapter_backfill_complete BOOLEAN NOT NULL DEFAULT false, -- terminal chapter index materialized through ended_at
-    dvr_processes_json   TEXT,              -- Tenant's live MistProc config snapshot for the dvr+ rolling-DVR surface (resolved at StartDVR)
+    dvr_processes_json   TEXT,              -- Tenant's live thumbnail MistProc config snapshot for the dvr+ rolling-DVR surface (resolved at StartDVR)
 
     -- ===== ORIGIN / VISIBILITY =====
     -- origin_type identifies *how* this artifact was produced. NULL or

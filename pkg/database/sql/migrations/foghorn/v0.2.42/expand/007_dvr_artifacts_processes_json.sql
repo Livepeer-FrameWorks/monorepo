@@ -1,4 +1,4 @@
--- Snapshot the tenant's live processes_json onto the DVR artifact at
+-- Snapshot the tenant's live thumbnail processes_json onto the DVR artifact at
 -- recording start so the dvr+<internal_name> STREAM_PROCESS trigger
 -- can serve MistProc config without depending on the in-memory cache
 -- populated by PUSH_REWRITE. The cache has a short TTL and disappears
