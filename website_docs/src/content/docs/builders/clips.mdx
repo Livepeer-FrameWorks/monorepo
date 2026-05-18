@@ -19,7 +19,13 @@ For always-on streams, clips are the lightweight publishing layer on top of the 
 
 ## Creating a clip
 
-Clips are created against a live or recently-completed stream. You provide a time range (typically expressed as `startMs` / `endMs` epoch ms) and a name.
+Clips are created against a live or recently-completed stream. You provide a time range (typically expressed as `startMs` / `endMs` epoch ms) and a name. FrameWorks decides where the bytes come from based on where your range falls:
+
+- Inside the **live shm window** (last ~120s before now) → pulled from the live stream
+- Past shm but inside the **rolling DVR window** → pulled from the recording origin's DVR segments
+- Inside a **finalized chapter** (`state ∈ {FINALIZED, FROZEN, RECLAIMED}`) → pulled from the canonical chapter `.mkv`
+
+Cross-source ranges (spanning the shm boundary, or spanning two different chapters) are rejected — split the request into two clips on the same `streamId`.
 
 ```graphql
 mutation CreateClip {

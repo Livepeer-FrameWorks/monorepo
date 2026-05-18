@@ -1,96 +1,114 @@
 ---
 title: "DVR Chapters"
-description: "Replay long-running and 24/7 DVR archives as bounded HLS chapter playlists."
+description: "Replay long-running and 24/7 DVR archives as discrete chapter VOD artifacts."
 sidebar:
   order: 6
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-DVR chapters turn one continuous recording into smaller playback windows. You keep the operational simplicity of a single 24/7 archive, while viewers and apps request bounded HLS playlists for a match, class, meeting, daypart, or custom time range.
+DVR chapters turn one continuous recording into smaller playback windows. Each chapter is finalized as a canonical `.mkv` VOD artifact with a matching `.dtsh` seek index and runs through the tenant's standard VOD processing pipeline (Thumbs, sprite, optional Livepeer transcodes) just like a user-initiated VOD upload.
 
 <Aside type="tip" title="Why chapters matter">
   Chapters let always-on streams behave like an archive library without splitting the source into
-  dozens of separate recordings. The live DVR window stays fast for viewers, and historical replay
-  stays addressable through chapter URLs.
+  dozens of separate recordings. The live DVR window stays fast for viewers; finalized chapters play
+  through the standard VOD path with full seeking, low first-byte latency, and analytics parity.
 </Aside>
 
-## Chapter Shapes
+## Configuring chapters on a stream
 
-| Shape                 | Best for                                                                                      |
-| --------------------- | --------------------------------------------------------------------------------------------- |
-| Window-sized chapters | Default replay buckets sized to the stream's DVR window.                                      |
-| Fixed UTC intervals   | Regular buckets such as hourly, 6-hour, or 24-hour playlists.                                 |
-| Explicit ranges       | Civil-time or product-defined windows after your app converts them to UTC epoch milliseconds. |
+Chapter mode is a property of the source **Stream**, snapshotted onto each recording at StartDVR. Changes apply to the next recording, not in-flight ones.
 
-All chapter boundaries use UTC epoch milliseconds. If your product cares about local calendar days, resolve the local start/end time in your application first, then send the UTC values to FrameWorks.
+```graphql
+mutation EnableChapters {
+  updateStream(
+    id: "stream-id"
+    input: { record: true, dvrChapterMode: FIXED_INTERVAL, dvrChapterIntervalSeconds: 3600 }
+  ) {
+    ... on Stream {
+      id
+      dvrChapterMode
+      dvrChapterIntervalSeconds
+    }
+  }
+}
+```
 
-## Retrieve a Chapter
+| Mode             | Best for                                                     |
+| ---------------- | ------------------------------------------------------------ |
+| `WINDOW_SIZED`   | Default replay buckets sized to the stream's DVR window.     |
+| `FIXED_INTERVAL` | Regular buckets such as hourly, 6-hour, or 24-hour chapters. |
+| `NONE`           | Chapters disabled for this stream.                           |
+
+`FIXED_INTERVAL` requires `dvrChapterIntervalSeconds ≥ 3600` (1 hour).
+
+All chapter boundaries use UTC epoch milliseconds. Civil-time bucketing belongs in your app: convert "yesterday in Europe/Amsterdam" to a UTC range there, then read or play the chapter that covers it.
+
+## Chapter state
+
+```
+OPEN → CLOSED → FINALIZING → FINALIZED → FROZEN → RECLAIMED
+                                 ↓
+                                 └─→ FAILED_SOURCE_MISSING | FAILED_PERMANENT
+```
+
+A chapter becomes playable at `FINALIZED` (canonical `.mkv` produced on the recording origin). `FROZEN` means the artifact + `.dtsh` are durably on S3 and source TS segments are safe to delete. `RECLAIMED` is the steady state — the row remains as range metadata; the chapter artifact is the only thing serving playback.
+
+`playableNow` is true when `state ∈ {FINALIZED, FROZEN, RECLAIMED}`.
+
+## Retrieve a chapter
 
 ```graphql
 query DVRChapter {
-  dvrChapter(
-    dvrId: "dvr-hash"
-    mode: EXPLICIT_RANGE
-    startMs: 1715126400000
-    endMs: 1715212800000
-  ) {
+  dvrChapter(dvrId: "dvr-hash", startMs: 1715126400000, endMs: 1715212800000) {
     chapterId
-    manifestUrl
+    state
+    playbackId
     isCurrent
     hasGaps
     segmentCount
+    wallClockStartUnixMs
+    wallClockEndUnixMs
+    playableNow
+    lastFailureReason
   }
 }
 ```
 
-`manifestUrl` carries the Mist playback ID for the chapter (`dvr+{chapterId}`). Resolve that ID through the normal viewer endpoint API and play the returned edge URL. The edge defrosts the bounded chapter into its local chapter manifest and shared segment bucket, so DVR chapter playback uses the same auth, routing, analytics, and billing path as live, clip, and VOD playback. `isCurrent: true` means the chapter is still being recorded into, so the edge manifest is event-shaped while segments continue to arrive.
+`playbackId` is the Commodore-minted public playback key for the chapter's VOD artifact. Resolve playback through `resolveViewerEndpoint` against that ID; the resulting endpoint is a standard VOD edge URL. There is no `dvr+chapter_id` token — chapter playback uses the same path as any other VOD.
 
-## List Chapters
+`wallClockStartUnixMs` and `wallClockEndUnixMs` are absolute Unix epoch milliseconds. Use them to render the chapter's calendar time and to map player timeline position (`videoCurrentTime * 1000 + wallClockStartUnixMs`) back to absolute time. Mist preserves DateUTC end-to-end through the remux, so the artifact itself also carries `unixoffset` natively — but the API metadata is the product contract.
+
+## List chapters
 
 ```graphql
 query DVRChapters {
-  dvrChapters(dvrId: "dvr-hash", mode: WINDOW_SIZED) {
-    chapterId
-    startMs
-    endMs
-    segmentCount
-    hasGaps
+  dvrChapters(dvrId: "dvr-hash") {
+    chapters {
+      chapterId
+      state
+      playbackId
+      startMs
+      endMs
+      segmentCount
+      hasGaps
+      lastFailureReason
+    }
+    nextPageToken
   }
 }
 ```
 
-Use this when your UI needs a chapter picker, timeline markers, or quick links into a long archive.
+Paginate with `pageSize` (default 200, max 1000) + `nextPageToken`. Use this for chapter pickers, timeline markers, or quick links into a long archive.
 
-## Chapter Policy
+## Gaps and failed chapters
 
-Chapter policy controls how FrameWorks materializes replay windows for a DVR archive:
+If a segment was lost from both local disk AND the recovery-bridge S3 (severe storage pressure during recording), chapter finalization marks the chapter `FAILED_SOURCE_MISSING`. `lastFailureReason` carries the operator-facing explanation. The chapter row remains addressable as range metadata; the artifact does not exist.
 
-```graphql
-mutation SetChapterPolicy {
-  setDVRChapterPolicy(input: { dvrId: "dvr-hash", mode: FIXED_INTERVAL, intervalSeconds: 21600 }) {
-    ... on DVRRecording {
-      dvrHash
-      chapterPolicy {
-        mode
-        intervalSeconds
-      }
-    }
-    ... on ValidationError {
-      message
-      field
-    }
-  }
-}
-```
+`hasGaps=true` on a successful chapter means the output media has missing timeline coverage. Recovery from the temporary S3 segment object produces the original bytes and does not count as a gap.
 
-Use fixed intervals for predictable archive navigation, and explicit ranges when your app owns the editorial boundaries.
+## Related guides
 
-## Gaps and Lost Segments
-
-Under severe storage pressure, a recording can have missing local segments before upload completes. Chapter manifests preserve the timeline with `#EXT-X-GAP` markers, so players skip missing media while keeping the correct clock position.
-
-## Related Guides
-
-- [Recordings, Clips & VOD](/builders/recordings) covers the full recording lifecycle.
+- [Recordings, clips & VOD](/builders/recordings) covers the full recording lifecycle.
+- [Clips](/builders/clips) — chapter ranges can also be clipped via the same `createClip` mutation.
 - [Storage & retention](/builders/storage-and-retention) covers retention policy, per-asset overrides, and storage-cost control.

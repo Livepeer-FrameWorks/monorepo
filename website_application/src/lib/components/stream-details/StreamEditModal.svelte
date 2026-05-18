@@ -17,7 +17,24 @@
 
   let { open = $bindable(false), stream, loading = false, onSave } = $props();
 
-  let formData = $state({
+  // Per-stream retention overrides are an empty-string sentinel for
+  // "inherit tenant default" so a typed 0 (keep forever) survives the
+  // controlled-input round-trip.
+  type OverrideField = number | "" | null;
+
+  let formData = $state<{
+    name: string;
+    description: string;
+    record: boolean;
+    pullSourceUri: string;
+    pullSourceEnabled: boolean;
+    pullSourceAllowedClusterIds: string;
+    pullSourceAllowedClustersDirty: boolean;
+    dvrChapterMode: "WINDOW_SIZED" | "FIXED_INTERVAL" | "NONE";
+    dvrChapterIntervalSeconds: string;
+    dvrRetentionOverride: OverrideField;
+    clipRetentionOverride: OverrideField;
+  }>({
     name: "",
     description: "",
     record: false,
@@ -25,12 +42,24 @@
     pullSourceEnabled: true,
     pullSourceAllowedClusterIds: "",
     pullSourceAllowedClustersDirty: false,
+    dvrChapterMode: "NONE",
+    dvrChapterIntervalSeconds: "3600",
+    dvrRetentionOverride: null,
+    clipRetentionOverride: null,
   });
+
+  // Compare against initial values to decide which mutations to fire on save.
+  let initialDvrOverride = $state<OverrideField>(null);
+  let initialClipOverride = $state<OverrideField>(null);
 
   // Sync form when stream changes — seed the allowed-clusters text field with
   // the existing pin so an enabled-toggle preserves placement on save.
   $effect(() => {
     if (stream) {
+      const dvrOverride: OverrideField =
+        stream.retentionOverrides?.dvrRetentionDaysOverride ?? null;
+      const clipOverride: OverrideField =
+        stream.retentionOverrides?.clipRetentionDaysOverride ?? null;
       formData = {
         name: stream.name || "",
         description: stream.description || "",
@@ -39,12 +68,74 @@
         pullSourceEnabled: stream.pullSource?.enabled ?? true,
         pullSourceAllowedClusterIds: (stream.pullSource?.allowedClusterIds ?? []).join(", "),
         pullSourceAllowedClustersDirty: false,
+        dvrChapterMode: (stream.dvrChapterMode ?? "NONE") as
+          | "WINDOW_SIZED"
+          | "FIXED_INTERVAL"
+          | "NONE",
+        dvrChapterIntervalSeconds: stream.dvrChapterIntervalSeconds
+          ? String(stream.dvrChapterIntervalSeconds)
+          : "3600",
+        dvrRetentionOverride: dvrOverride,
+        clipRetentionOverride: clipOverride,
       };
+      initialDvrOverride = dvrOverride;
+      initialClipOverride = clipOverride;
     }
   });
 
+  function parseOverrideInput(raw: string): OverrideField {
+    if (raw === "") return "";
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return n;
+  }
+
+  function overrideChanged(current: OverrideField, initial: OverrideField): boolean {
+    // "" represents an intent to clear; null represents "field never had an
+    // override". They behave identically server-side but differ in user
+    // intent (only "" triggers a clear RPC when there was a prior value).
+    const norm = (v: OverrideField) => (v === "" || v === null ? null : v);
+    return norm(current) !== norm(initial);
+  }
+
   async function handleSubmit() {
-    await onSave?.(formData);
+    const interval =
+      formData.dvrChapterMode === "FIXED_INTERVAL"
+        ? Number(formData.dvrChapterIntervalSeconds)
+        : null;
+
+    // Pack the retention-override payload only when something changed; let
+    // the page handler decide whether to fire setStreamRetentionOverrides.
+    const dvrDirty = overrideChanged(formData.dvrRetentionOverride, initialDvrOverride);
+    const clipDirty = overrideChanged(formData.clipRetentionOverride, initialClipOverride);
+    const retentionPayload =
+      dvrDirty || clipDirty
+        ? {
+            dvr: dvrDirty
+              ? formData.dvrRetentionOverride === "" || formData.dvrRetentionOverride === null
+                ? { clear: true as const }
+                : { value: formData.dvrRetentionOverride }
+              : undefined,
+            clip: clipDirty
+              ? formData.clipRetentionOverride === "" || formData.clipRetentionOverride === null
+                ? { clear: true as const }
+                : { value: formData.clipRetentionOverride }
+              : undefined,
+          }
+        : undefined;
+
+    await onSave?.({
+      name: formData.name,
+      description: formData.description,
+      record: formData.record,
+      pullSourceUri: formData.pullSourceUri,
+      pullSourceEnabled: formData.pullSourceEnabled,
+      pullSourceAllowedClusterIds: formData.pullSourceAllowedClusterIds,
+      pullSourceAllowedClustersDirty: formData.pullSourceAllowedClustersDirty,
+      dvrChapterMode: formData.dvrChapterMode === "NONE" ? null : formData.dvrChapterMode,
+      dvrChapterIntervalSeconds: Number.isFinite(interval) && interval ? interval : null,
+      retentionOverrides: retentionPayload,
+    });
   }
 </script>
 
@@ -94,6 +185,77 @@
       <div class="flex items-start space-x-2">
         <Checkbox id="editRecord" bind:checked={formData.record} />
         <Label for="editRecord" class="text-sm text-foreground">Enable Recording</Label>
+      </div>
+
+      {#if formData.record}
+        <div class="space-y-2 border-l border-[hsl(var(--tn-fg-gutter)/0.3)] pl-3">
+          <Label for="editChapterMode" class="block text-sm font-medium text-foreground">
+            Chapter mode
+          </Label>
+          <select
+            id="editChapterMode"
+            bind:value={formData.dvrChapterMode}
+            class="w-full rounded-none border border-input bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-primary"
+          >
+            <option value="NONE">Off</option>
+            <option value="WINDOW_SIZED">Window-sized (DVR window)</option>
+            <option value="FIXED_INTERVAL">Fixed interval (≥ 1 hour)</option>
+          </select>
+          {#if formData.dvrChapterMode === "FIXED_INTERVAL"}
+            <Label for="editChapterInterval" class="block text-sm font-medium text-foreground">
+              Interval seconds (≥ 3600)
+            </Label>
+            <Input
+              id="editChapterInterval"
+              type="number"
+              min="3600"
+              step="3600"
+              bind:value={formData.dvrChapterIntervalSeconds}
+            />
+          {/if}
+          <p class="text-xs text-muted-foreground">
+            Chapter mode is snapshotted onto the recording at StartDVR. Changes apply to the next
+            recording, not in-flight ones.
+          </p>
+        </div>
+      {/if}
+
+      <div class="space-y-2 border-l border-[hsl(var(--tn-fg-gutter)/0.3)] pl-3">
+        <div class="text-sm font-medium text-foreground">Retention overrides</div>
+        <p class="text-xs text-muted-foreground">
+          Override the tenant DVR / clip retention defaults for artifacts from this stream. Leave
+          empty to inherit. 0 = keep forever (paid tiers only; Free clamps to its cap).
+        </p>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <Label for="editDvrRetention" class="text-xs">DVR retention (days)</Label>
+            <Input
+              id="editDvrRetention"
+              type="number"
+              min="0"
+              value={formData.dvrRetentionOverride ?? ""}
+              oninput={(e) =>
+                (formData.dvrRetentionOverride = parseOverrideInput(
+                  (e.target as HTMLInputElement).value
+                ))}
+              placeholder="inherit"
+            />
+          </div>
+          <div>
+            <Label for="editClipRetention" class="text-xs">Clip retention (days)</Label>
+            <Input
+              id="editClipRetention"
+              type="number"
+              min="0"
+              value={formData.clipRetentionOverride ?? ""}
+              oninput={(e) =>
+                (formData.clipRetentionOverride = parseOverrideInput(
+                  (e.target as HTMLInputElement).value
+                ))}
+              placeholder="inherit"
+            />
+          </div>
+        </div>
       </div>
 
       {#if stream?.ingestMode === "PULL"}

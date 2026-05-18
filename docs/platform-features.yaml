@@ -301,10 +301,10 @@ features:
       undo: present
     surfaces:
       graphql:
-        mutations: [setDVRChapterPolicy]
+        mutations: [updateStream]
         queries: [dvrChapter, dvrChapters]
       mcp:
-        tools: [set_dvr_chapter_policy]
+        tools: [update_stream]
       webapp:
         routes: ["/streams/:id", "/view"]
       docs:
@@ -396,25 +396,47 @@ features:
       docs:
         pages: [builders/storage-and-retention.mdx]
     examples:
-      - title: "Read tenant default + tier bounds"
+      - title: "Read per-class defaults + tier cap + effective horizons"
         query: |
           query MediaRetentionPolicy {
             mediaRetentionPolicy {
-              recordingRetentionDays
-              effectiveRecordingRetentionDays
+              defaultVodRetentionDays
+              defaultDvrRetentionDays
+              defaultClipRetentionDays
+              effectiveVodRetentionDays
+              effectiveDvrRetentionDays
+              effectiveClipRetentionDays
               bounds { maxRecordingRetentionDays }
             }
           }
-      - title: "Set tenant default to 14 days"
+      - title: "Keep VOD forever (paid tier)"
         query: |
-          mutation Set { setMediaRetentionPolicy(input: { recordingRetentionDays: 14 }) {
-            ... on MediaRetentionPolicy { effectiveRecordingRetentionDays }
+          mutation Set { setMediaRetentionPolicy(input: { targetType: VOD, days: 0 }) {
+            ... on MediaRetentionPolicy { effectiveVodRetentionDays }
             ... on ValidationError { message field }
           } }
-      - title: "Override one DVR to 90 days"
+      - title: "Set clip default to 14 days"
+        query: |
+          mutation Set { setMediaRetentionPolicy(input: { targetType: CLIP, days: 14 }) {
+            ... on MediaRetentionPolicy { effectiveClipRetentionDays }
+            ... on ValidationError { message field }
+          } }
+      - title: "Per-stream override (DVR 90d, clip cleared)"
+        query: |
+          mutation Override {
+            setStreamRetentionOverrides(input: {
+              streamId: "<stream-id>",
+              dvrRetentionDaysOverride: 90,
+              clearClipRetentionOverride: true
+            }) {
+              ... on StreamRetentionOverrides { dvrRetentionDaysOverride clipRetentionDaysOverride }
+              ... on ValidationError { message field }
+            }
+          }
+      - title: "Per-asset override (clip kept forever)"
         query: |
           mutation Update {
-            updateMediaRetention(input: { targetType: DVR, targetId: "<dvr-hash>", retentionDays: 90 }) {
+            updateMediaRetention(input: { targetType: CLIP, targetId: "<clip-hash>", retentionDays: 0 }) {
               ... on EffectiveRetention { retentionDays retentionUntil source }
               ... on ValidationError { message field }
             }
@@ -1069,9 +1091,9 @@ features:
     name: Usage caps, alerts, retention cost preview
     area: billing
     description: Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes.
-    status: roadmap
+    status: partial
     gap_reason: |
-      Purser data-availability check (2026-05-11): GetUsageAggregates exists and serves hourly/daily/monthly rollups by usage_type, so the read path is real. What's missing is two pieces of engineering: (1) a retention-aware cost projection model (assumptions about steady-state growth, finalization rate, per-tier storage pricing) — naive "% delta" is misleading; (2) alert delivery infrastructure (event dedupe, notification channels, threshold-crossed semantics). Both are real engineering projects beyond a single PR. Tracked here so the roadmap is honest rather than buried in a phase that pretends to ship them.
+      Cost preview shipped (2026-05-16): Purser surfaces per-tenant marginal storage pricing via GetTenantBillingStatus.StoragePricing, and pkg/billing/storagecost projects a per-asset $/day + $/month figure used on Clip / DVRRequest / VodAsset.storageCost. The storage browser route lists assets with their cost projection and resolved retention. Remaining gap: customer-set caps (configurable thresholds per meter) and alert delivery infrastructure (dedupe, notification channels, threshold-crossed semantics) — still real engineering projects, tracked as the rest of this row.
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }

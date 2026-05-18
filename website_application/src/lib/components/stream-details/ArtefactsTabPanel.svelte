@@ -1,14 +1,9 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
-  import { SetDVRChapterPolicyStore, type DVRChapterMode$options } from "$houdini";
   import { getIconComponent } from "$lib/iconUtils";
-  import { toast } from "$lib/stores/toast.js";
   import { formatDate, formatDuration } from "$lib/utils/stream-helpers";
   import { isExpired } from "$lib/utils/formatters.js";
   import { Button } from "$lib/components/ui/button";
-  import { Input } from "$lib/components/ui/input";
-  import { Label } from "$lib/components/ui/label";
-  import { Select, SelectTrigger, SelectContent, SelectItem } from "$lib/components/ui/select";
   import { getContentDeliveryUrls } from "$lib/config";
   import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
 
@@ -50,14 +45,8 @@
 
   let { recordings, clips, onEnableRecording }: Props = $props();
 
-  const setDvrChapterPolicyMutation = new SetDVRChapterPolicyStore();
-
   let expandedItem = $state<string | null>(null);
   let activeTab = $state<"all" | "dvr" | "clips">("all");
-  let chapterPolicyTarget = $state<string | null>(null);
-  let chapterPolicyMode = $state<DVRChapterMode$options>("WINDOW_SIZED");
-  let chapterPolicyIntervalSeconds = $state("3600");
-  let savingChapterPolicyHash = $state<string | null>(null);
 
   // Storage calculations
   const storageStats = $derived.by(() => {
@@ -100,69 +89,25 @@
   }
 
   function dvrViewUrl(recording: Recording) {
-    const params = new URLSearchParams({ type: "dvr", id: recording.dvrHash });
+    // /view resolves through resolveViewerEndpoint, which expects the
+    // public playback_id. The internal dvr_hash is not a playback
+    // identifier — callers without playbackId are not playable
+    // (recording in pre-flight, failed, or deleted state).
+    if (!recording.playbackId) return null;
+    const params = new URLSearchParams({ type: "dvr", id: recording.playbackId });
     return `/view?${params.toString()}`;
   }
 
   function playDvrRecording(recording: Recording) {
+    const url = dvrViewUrl(recording);
+    if (!url) return;
     // eslint-disable-next-line svelte/no-navigation-without-resolve
-    goto(dvrViewUrl(recording));
+    goto(url);
   }
 
   function toggleDvrDetails(recording: Recording) {
     const key = `dvr-${recording.dvrHash}`;
     expandedItem = expandedItem === key ? null : key;
-    if (expandedItem && chapterPolicyTarget !== recording.dvrHash) {
-      chapterPolicyTarget = recording.dvrHash;
-      chapterPolicyMode = "WINDOW_SIZED";
-      chapterPolicyIntervalSeconds = "3600";
-    }
-  }
-
-  function chapterPolicyLabel(mode: DVRChapterMode$options): string {
-    switch (mode) {
-      case "WINDOW_SIZED":
-        return "Window-sized";
-      case "FIXED_INTERVAL":
-        return "Fixed interval";
-      case "EXPLICIT_RANGE":
-        return "Explicit only";
-      case "NONE":
-        return "Off";
-      default:
-        return "Window-sized";
-    }
-  }
-
-  async function saveChapterPolicy(recording: Recording) {
-    let intervalSeconds: number | null = null;
-    if (chapterPolicyMode === "FIXED_INTERVAL") {
-      intervalSeconds = Number(chapterPolicyIntervalSeconds);
-      if (!Number.isFinite(intervalSeconds) || intervalSeconds < 3600) {
-        toast.warning("Fixed interval must be at least 3600 seconds");
-        return;
-      }
-    }
-
-    try {
-      savingChapterPolicyHash = recording.dvrHash;
-      const result = await setDvrChapterPolicyMutation.mutate({
-        dvrId: recording.dvrHash,
-        mode: chapterPolicyMode,
-        intervalSeconds,
-      });
-      const payload = result.data?.setDVRChapterPolicy;
-      if (!payload?.success) {
-        toast.error(payload?.message || "Failed to save DVR chapter policy");
-        return;
-      }
-      toast.success(payload.message || "DVR chapter policy saved");
-    } catch (err) {
-      console.error("Failed to save DVR chapter policy", err);
-      toast.error("Failed to save DVR chapter policy");
-    } finally {
-      savingChapterPolicyHash = null;
-    }
   }
 
   function getStatusClass(status: string | null | undefined): string {
@@ -283,7 +228,7 @@
       {#each visibleRecordings as recording (recording.dvrHash)}
         {@const isExpanded = expandedItem === `dvr-${recording.dvrHash}`}
         {@const expired = isExpired(recording.expiresAt)}
-        {@const canPlay = isPlayable(recording.status, recording.dvrHash, expired)}
+        {@const canPlay = isPlayable(recording.status, recording.playbackId, expired)}
         {@const displayId =
           recording.sourceStreamId ??
           recording.stream?.streamId ??
@@ -359,45 +304,11 @@
 
           {#if isExpanded && canPlay}
             <div class="px-4 pb-4 border-t border-[hsl(var(--tn-fg-gutter)/0.2)] bg-muted/5">
-              <div class="pt-4 grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
-                <div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]">
-                  <div class="space-y-2">
-                    <Label for={`chapter-policy-${recording.dvrHash}`}>Chapter policy</Label>
-                    <Select bind:value={chapterPolicyMode} type="single">
-                      <SelectTrigger id={`chapter-policy-${recording.dvrHash}`} class="w-full">
-                        {chapterPolicyLabel(chapterPolicyMode)}
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="WINDOW_SIZED">Window-sized</SelectItem>
-                        <SelectItem value="FIXED_INTERVAL">Fixed interval</SelectItem>
-                        <SelectItem value="EXPLICIT_RANGE">Explicit only</SelectItem>
-                        <SelectItem value="NONE">Off</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div class="space-y-2">
-                    <Label for={`chapter-interval-${recording.dvrHash}`}>Interval seconds</Label>
-                    <Input
-                      id={`chapter-interval-${recording.dvrHash}`}
-                      type="number"
-                      min="3600"
-                      step="3600"
-                      disabled={chapterPolicyMode !== "FIXED_INTERVAL"}
-                      bind:value={chapterPolicyIntervalSeconds}
-                    />
-                  </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  class="border border-border/30"
-                  disabled={savingChapterPolicyHash === recording.dvrHash}
-                  onclick={() => saveChapterPolicy(recording)}
-                >
-                  {savingChapterPolicyHash === recording.dvrHash
-                    ? "Saving..."
-                    : "Save chapter policy"}
-                </Button>
-              </div>
+              <p class="pt-4 text-sm text-muted-foreground">
+                Chapter rotation is configured on the source stream and applies to the next
+                recording. Edit the stream to change <em>Chapter mode</em> or
+                <em>Chapter interval</em>.
+              </p>
             </div>
           {/if}
         </div>

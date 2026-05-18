@@ -1,11 +1,11 @@
 ---
 title: 24/7 DVR — Operations
-description: Operating FrameWorks DVR for always-on streams. Tier policy, cluster ceilings, chapter sweeper, retention, and triage runbook.
+description: Operating FrameWorks DVR for always-on streams. Tier policy, cluster ceilings, chapter finalization, reclaim sweep, retention, and triage runbook.
 ---
 
 ## What you're operating
 
-FrameWorks ships a continuous DVR archive: one DVR artifact per stream session, with no per-artifact lifetime cap. Live viewers seek across a tier-bounded rolling Mist window; replay viewers navigate the full archive sliced into chapter manifests Foghorn generates from the per-segment ledger (`foghorn.dvr_segments`).
+FrameWorks ships a continuous DVR archive: one DVR artifact per stream session, with no per-artifact lifetime cap. Live viewers seek across a tier-bounded rolling Mist window. Replay viewers navigate the recording sliced into **chapter VOD artifacts** that the chapter finalization queue produces from the per-segment ledger (`foghorn.dvr_segments`) at each boundary close. Chapter playback uses the chapter artifact's normal VOD playback path — there is no `dvr+<chapter_id>` token anymore.
 
 If you're triaging a DVR issue, the engineering reference is `docs/architecture/dvr-continuous-archive.md`. This page is the operator-facing surface.
 
@@ -36,16 +36,40 @@ Resolved at DVR start by `pkg/dvrpolicy.Resolve`. Snapshot stored on `foghorn.ar
 
 Defined in `api_billing/internal/bootstrap/catalog/billing_tiers.yaml` as tier entitlements.
 
-## Chapter sweeper tuning
+## Chapter pipeline overview
 
-The chapter sweeper (`api_balancing/internal/jobs/chapter_sweeper.go`) materializes chapter manifests for active DVRs. Two knobs:
+Three Foghorn-side workers run the chapter lifecycle:
 
-| Setting                  | Default | Effect                                                  |
-| ------------------------ | ------- | ------------------------------------------------------- |
-| `Interval`               | 60s     | How often the sweeper wakes                             |
-| `RebuildIntervalSeconds` | 60      | Min seconds between rebuilds of the same active chapter |
+| Worker                          | Cadence | Job                                                                                                                 |
+| ------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
+| `chapter_sweeper.go`            | 60s     | Rotates chapter boundaries on active DVRs: closes the open chapter, opens the next.                                 |
+| `chapter_finalization_queue.go` | 30s     | Picks up `state='closed'` chapters and dispatches a `dvr_chapter_finalize` processing job to the recording origin.  |
+| `chapter_reclaim_sweep.go`      | 60s     | Once a chapter reaches `state='frozen'`, deletes its source TS segments locally and the recovery-bridge S3 objects. |
 
-Increase `RebuildIntervalSeconds` if S3 PUT cost is a concern at high stream concurrency; decrease if you need fresher current-chapter manifests for replay-while-live.
+### Chapter state machine
+
+```
+open → closed → finalizing → finalized → frozen → reclaimed
+           ↓        ↓
+           └───→ failed_source_missing | failed_permanent
+```
+
+| State                   | Meaning                                                                                                  |
+| ----------------------- | -------------------------------------------------------------------------------------------------------- |
+| `open`                  | Recording in progress; the rolling DVR surface serves viewers.                                           |
+| `closed`                | Boundary reached; finalization queue will pick it up.                                                    |
+| `finalizing`            | Processing job in flight on the recording origin (Mist remuxes TS → canonical .mkv).                     |
+| `finalized`             | PUSH_END fired; chapter artifact exists locally. Waiting on freeze + .dtsh sync.                         |
+| `frozen`                | Chapter artifact + .dtsh durably on S3. Safe to reclaim source segments.                                 |
+| `reclaimed`             | Source segments deleted; row remains as range metadata. Playback uses the canonical .mkv.                |
+| `failed_source_missing` | Recovery exhausted — at least one source segment was missing from both local and the recovery-bridge S3. |
+| `failed_permanent`      | Unrecoverable input (max retries exceeded, ledger invariants violated).                                  |
+
+### Active DVR durability boundary
+
+Per-segment S3 uploads stay as a **recovery bridge**, not playback infrastructure. Active DVR playback always reads the local rolling manifest on the recording origin (other edges DTSC-pull from that origin). The S3 segment objects exist only so that chapter finalization can recover from local segment loss (disk corruption, eviction edge case) and so the recording survives a recording-node loss until the chapter finalization queue produces the canonical .mkv.
+
+Recording-node loss **before** chapter finalization can lose history depending on S3 recovery state; recording-node loss **after** a chapter reaches `state='frozen'` cannot.
 
 ## Artifact statuses (DVR state machine)
 
@@ -55,19 +79,19 @@ requested → starting → recording → finalizing
               └────────────→ completed | completed_partial | failed → deleted
 ```
 
-| Status                   | Meaning                                                                               |
-| ------------------------ | ------------------------------------------------------------------------------------- |
-| `requested` / `starting` | Sidecar accepting DVR start; transient                                                |
-| `recording`              | Active recording; Mist push running, segments writing to ledger                       |
-| `finalizing`             | Stream ended; Foghorn running bounded retry on pending segments before classification |
-| `completed`              | All segments uploaded; archive complete                                               |
-| `completed_partial`      | Some segments are `lost_local`; chapter manifests render `#EXT-X-GAP` for those       |
-| `failed`                 | No playable segments; recording produced nothing usable                               |
-| `deleted`                | Past retention; soft-deleted by the retention job                                     |
+| Status                   | Meaning                                                                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `requested` / `starting` | Sidecar accepting DVR start; transient                                                                                                      |
+| `recording`              | Active recording; Mist push running, segments writing to ledger                                                                             |
+| `finalizing`             | Stream ended; Foghorn running bounded retry on pending segments before classification                                                       |
+| `completed`              | All segments uploaded; archive complete                                                                                                     |
+| `completed_partial`      | Some segments are `lost_local`; chapter finalization recovers from S3 where it can, otherwise the chapter is marked `failed_source_missing` |
+| `failed`                 | No playable segments; recording produced nothing usable                                                                                     |
+| `deleted`                | Past retention; soft-deleted by the retention job                                                                                           |
 
 ## Triage: what `completed_partial` means
 
-A `completed_partial` artifact has at least one segment that was force-evicted from local disk before the sidecar could upload it (disk pressure or retention edge case during recording). The chapter manifests covering those time ranges include `#EXT-X-GAP` markers — players see the timeline duration preserved, but skip the missing media.
+A `completed_partial` artifact has at least one segment that was force-evicted from local disk before the sidecar could upload it (disk pressure or retention edge case during recording). Chapter finalization first tries to recover those segments from S3; chapters that overlap an unrecoverable segment are marked `failed_source_missing` and produce no playback artifact (operator triage path).
 
 To inspect:
 
@@ -83,7 +107,7 @@ Cross-reference with disk-pressure metrics on the recording sidecar (`storage_no
 
 ## Triage: chapter not appearing for a viewer
 
-1. Confirm the artifact has a chapter mode set:
+1. Confirm the recording has a chapter mode snapshot:
 
    ```sql
    SELECT dvr_chapter_mode, dvr_chapter_interval, dvr_window_seconds
@@ -91,27 +115,46 @@ Cross-reference with disk-pressure metrics on the recording sidecar (`storage_no
     WHERE artifact_hash = '<dvr_hash>';
    ```
 
-   If `dvr_chapter_mode` is NULL, the sweeper isn't materializing chapters for this DVR — call `SetDVRChapterPolicy` to set one.
+   `dvr_chapter_mode` is snapshotted from the Stream at StartDVR. If it's NULL, the recording was started without a chapter mode — chapters are off for this DVR. Configure `dvrChapterMode` on the Stream via `updateStream`; the change applies to the **next** recording, not this one.
 
-2. Check whether the chapter row exists:
+2. Inspect the chapter row's state:
 
    ```sql
-   SELECT chapter_id, start_ms, end_ms, is_current, manifest_s3_key, has_gaps
+   SELECT chapter_id, start_ms, end_ms, is_current, state,
+          playback_artifact_hash, finalize_attempts, last_failure_reason
      FROM foghorn.dvr_chapters
     WHERE artifact_hash = '<dvr_hash>'
     ORDER BY start_ms DESC LIMIT 20;
    ```
 
-3. If `manifest_s3_key` is NULL the chapter exists but materialization failed — sweeper logs in Foghorn will say why. Common causes: S3 client unconfigured, tenant/stream lookup failed, no segments in range.
+3. Map the state to action:
 
-4. If the chapter row is missing, the sweeper hasn't reached it yet (debounced) or the artifact isn't active. `RetrieveDVRChapter` cache-on-request will materialize it on the next request.
+   | State                                | What to do                                                                                                             |
+   | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+   | `open` / `closed`                    | Recording still in flight or queue hasn't picked up yet. Wait one finalization tick (30s).                             |
+   | `finalizing`                         | Processing job dispatched. Check the recording origin's Helmsman logs for `chapter finalize` entries.                  |
+   | `finalized` / `frozen` / `reclaimed` | Chapter is playable. Use the chapter's `playback_id` (public Commodore-minted ID) as the player input.                 |
+   | `failed_source_missing`              | Source segments lost from both local AND the recovery freeze. Chapter is unrecoverable. Inspect `dvr_segments.status`. |
+   | `failed_permanent`                   | Repeated retries exhausted (`finalize_attempts` ≥ 5) or invalid ledger input. Inspect `last_failure_reason`.           |
+
+## Triage: chapter finalization stuck
+
+Chapter finalizations that hang in `state='finalizing'` past the dispatch deadline (default `max(2*chapter_duration, 30 min)` capped at 24h) are auto-re-queued by the next tick. To check manually:
+
+```sql
+SELECT chapter_id, state, finalize_attempts, last_failure_reason, created_at
+  FROM foghorn.dvr_chapters
+ WHERE state = 'finalizing'
+ ORDER BY created_at;
+```
+
+If `finalize_attempts` is climbing without state progress, the recording origin Helmsman is rejecting the job (admission, disk pressure, source unavailable). Check Helmsman logs for the chapter's job_id (`chapter-finalize-<chapter_id>`).
 
 ## Triage: storage node out of space during DVR
 
-1. `dropPressuredDVRSegments` on the recording sidecar will start evicting **uploaded-and-aged** segments first (safe local cleanup; chapter manifests unaffected).
-2. If pressure persists, the sidecar may be forced to evict **unsynced** segments — these emit `DVRSegmentDropped(was_uploaded=false)` and become `lost_local` ledger rows.
-3. Foghorn flags overlapping chapters as `has_gaps=true`; the next sweep tick re-materializes them with `#EXT-X-GAP` markers.
-4. If the sidecar can't keep up at all, it stops the push cleanly and emits `storage_node_out_of_space` — the artifact may end as `failed_storage_pressure` rather than `completed_partial`.
+1. `dropPressuredDVRSegments` on the recording sidecar will start evicting **uploaded-and-aged** segments first (safe local cleanup; the recovery-bridge S3 object remains intact).
+2. If pressure persists, the sidecar may be forced to evict **unsynced** segments — these emit `DVRSegmentDropped(was_uploaded=false)` and become `lost_local` ledger rows. Chapter finalization for overlapping chapters will surface this as `failed_source_missing` once recovery is exhausted.
+3. If the sidecar can't keep up at all, it stops the push cleanly and emits `storage_node_out_of_space` — the artifact may end as `failed_storage_pressure`.
 
 Lifecycle event types to alert on:
 
@@ -123,16 +166,21 @@ Lifecycle event types to alert on:
 
 ```
 s3://bucket/dvr/{tenant_id}/{stream_internal_name}/{dvr_artifact_id}/segments/{segment_name}
-s3://bucket/dvr/{tenant_id}/{stream_internal_name}/{dvr_artifact_id}/chapters/{chapter_id}.m3u8
+s3://bucket/vod/{tenant_id}/{chapter_artifact_hash}.mkv
+s3://bucket/vod/{tenant_id}/{chapter_artifact_hash}.dtsh
 ```
 
-Segment objects are shared across all chapter views — chapter manifests reference the same segment URIs, no duplication. Don't manually manipulate this prefix; use `RetrieveDVRChapter` and `SetDVRChapterPolicy` instead.
+The DVR segment prefix holds the **recovery-bridge** TS segments uploaded during recording. These are NOT playback objects: viewers never read them. Chapter finalization fetches them (or recovers from local disk) to build the canonical `.mkv`. Once a chapter reaches `state='frozen'` the reclaim sweep deletes both the local TS file and the corresponding S3 segment object.
+
+Chapter playback artifacts live at the normal VOD prefix — they're regular VOD artifacts whose `origin_type='dvr_chapter'` and `library_visible=false` keep them out of user-facing library listings but otherwise flow through the standard playback path.
+
+Don't manually manipulate any of these prefixes; let the chapter finalization + reclaim sweep do their work.
 
 ## Retention
 
 Retention only acts on terminal artifacts. An active DVR (status `recording` / `finalizing`) is never deleted by the retention job, regardless of age.
 
-`retention_until` is computed at FinalizeDVR as `ended_at + dvr_retention_days*24h`, where `dvr_retention_days` is snapshotted on `foghorn.artifacts` at DVR start from the tier policy. The live tier is **never** re-resolved at end — the tenant's plan may have changed during a months-long stream; we apply the policy that was in effect when the recording began.
+`retention_until` is computed at FinalizeDVR as `ended_at + dvr_retention_days*24h`, where `dvr_retention_days` is snapshotted on `foghorn.artifacts` at DVR start. Commodore resolves that value through the per-class cascade (per-stream override → tenant per-class default → 30-day system default → tier cap) before passing it to Foghorn; once stamped, the tenant's plan is **never** re-resolved at end. A `dvr_retention_days` of `0` or NULL means "keep forever" and the retention job skips the artifact entirely.
 
 If you need to extend retention on a specific terminal artifact, update `retention_until` directly:
 

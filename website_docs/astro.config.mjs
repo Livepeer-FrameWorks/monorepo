@@ -345,6 +345,7 @@ export default defineConfig({
               label: "Operations",
               items: [
                 { slug: "operators/operations" },
+                { slug: "operators/media-storage" },
                 { slug: "operators/dvr" },
                 { slug: "operators/external-services" },
               ],

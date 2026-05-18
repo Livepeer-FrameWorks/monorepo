@@ -13,7 +13,7 @@ MistServer internals are upstream source files, not vendored in this monorepo:
 FrameWorks integration points in this repo:
 
 - Connector provisioning: `api_sidecar/internal/config/manager.go` (ThumbVTT protocol)
-- Process provisioning: `api_sidecar/internal/config/manager.go` (STREAM_PROCESS trigger for live+/processing+, static config for vod+)
+- Process provisioning: `api_sidecar/internal/config/manager.go` (STREAM_PROCESS trigger for live+/processing+; vod+ runs without MistProc tracks)
 - Player sprite manager: `npm_player/packages/core/src/core/ThumbnailSpriteManager.ts`
 - VTT parser: `npm_player/packages/core/src/core/ThumbnailVttParser.ts`
 - Track detection: `npm_player/packages/core/src/core/PlayerController.ts` (`detectThumbnailVttUrl`, `detectPreviewUrl`)
@@ -41,7 +41,7 @@ The player auto-detects the preview track: `PlayerController.detectPreviewUrl()`
 
 ## Sprite Sheets
 
-`process_thumbs.cpp` decodes video keyframes, scales them, and composes a grid as a JPEG sprite sheet plus a WebVTT timing manifest. Both are buffered as new tracks on the stream. For live+ and processing+ streams, MistProcThumbs is provisioned dynamically via the STREAM_PROCESS trigger (Foghorn returns per-stream process config). For DVR artifacts played back as vod+, STREAM_PROCESS adds MistProcThumbs on first playback if thumbnails haven't been generated yet.
+`process_thumbs.cpp` decodes video keyframes, scales them, and composes a grid as a JPEG sprite sheet plus a WebVTT timing manifest. Both are buffered as new tracks on the stream. MistProcThumbs is provisioned dynamically via the STREAM_PROCESS trigger for `live+` (live capture) and `processing+` (post-ingest pipeline — VOD upload finalization AND DVR chapter finalization both route through here). Foghorn returns the tenant's per-stream process config, which the chapter finalization queue resolves via `Commodore.GetTenantProcessesJSON("vod")` and attaches to the chapter `ProcessingJobRequest`. The later `vod+` boot is for `.dtsh` generation only and does NOT generate thumbnails.
 
 The source video track is selected via MistServer's [track selector](https://docs.mistserver.org/mistserver/concepts/track_selectors) syntax (default: `video=lowres` — picks the lowest resolution track to minimize CPU).
 

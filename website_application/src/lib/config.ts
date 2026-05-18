@@ -319,7 +319,8 @@ export function getShareUrl(contentId: string): string {
 
 /**
  * Generate playback URLs for live streams, clips, and VOD assets that use a playbackId.
- * DVR archive replay is chapter-based and resolves a chapter manifest through GraphQL.
+ * DVR archive replay is split into chapters — each finalized chapter is a regular VOD
+ * artifact resolved by its own playbackId, fetched via the dvrChapters query.
  */
 export function getContentDeliveryUrls(
   contentId: string,

@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-FrameWorks treats recording as a first-class live workflow, not just a post-stream export. You can run a channel all day, keep one continuous DVR archive for the full session, let live viewers seek back through a bounded window, then expose historical replay through chapter playlists without creating a new asset every few hours.
+FrameWorks treats recording as a first-class live workflow, not just a post-stream export. You can run a channel all day, keep one continuous DVR archive for the full session, let live viewers seek back through a bounded window, then expose historical replay through finalized chapter artifacts without creating a new asset every few hours.
 
 That model is useful for always-on venues, sports, conferences, classrooms, public meetings, and monitoring feeds where the live moment and the archive both matter.
 
@@ -20,13 +20,13 @@ That model is useful for always-on venues, sports, conferences, classrooms, publ
 
 ## DVR Recording
 
-DVR records your live stream and preserves the broadcast for later playback. DVR content is playable **while the stream is still live**: viewers can seek back through the live DVR window, pause, and catch up. After that window, the same recording remains available as a continuous archive, split into bounded chapter playlists for replay.
+DVR records your live stream and preserves the broadcast for later playback. DVR content is playable **while the stream is still live**: viewers can seek back through the live DVR window, pause, and catch up. After that window, the same recording remains available as a continuous archive, split into bounded chapter artifacts for replay.
 
 The value prop is the split between capture, live UX, and replay UX:
 
 - **24/7 capture** — one stream session can keep recording continuously instead of rolling into arbitrary fixed-length assets.
 - **Fast live playlists** — the live DVR window stays bounded so viewers get seekback without enormous manifests.
-- **Archive replay** — chapters turn a long recording into navigable HLS views over the same segment archive.
+- **Archive replay** — chapters turn a long recording into hidden VOD-shaped artifacts with normal playback IDs.
 - **Cost control** — retention policies decide how long completed DVR, clips, and VOD assets stay in storage.
 
 That split matters:
@@ -155,39 +155,41 @@ conferences, and always-on streams this is a feature: viewers can rewind a goal,
 
 ### Archive Chapters
 
-For historical replay, FrameWorks treats chapters as **virtual playlist overlays** on top of one DVR archive. The segment files stay under one artifact prefix; each chapter playlist references the shared segment set.
+For historical replay, FrameWorks splits the DVR archive into **chapter VOD artifacts**. Each chapter is its own canonical `.mkv` produced by the chapter finalization pipeline at boundary close and addressed by a Commodore-minted public `playbackId` — pass it to `resolveViewerEndpoint` like any other VOD.
 
 For the full chapter-policy story (modes, defaults, resolution semantics) see [DVR Chapters](/builders/dvr-chapters). Storage cost behavior is covered in [Storage & retention](/builders/storage-and-retention).
 
 Common chapter shapes:
 
-| Shape                 | Use                                                                                                                                                           |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Window-sized chapters | Sequential chapters sized to the stream's DVR window. Useful default for long recordings.                                                                     |
-| Fixed UTC intervals   | Regular UTC buckets such as 6-hour or 24-hour spans. Automatic fixed intervals must be at least 1 hour; shorter views should use explicit ranges.             |
-| Explicit ranges       | Caller supplies `start_ms` and `end_ms`. Use this for civil-time views such as "yesterday in Europe/Amsterdam" after your app converts that local day to UTC. |
+| Shape                 | Use                                                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Window-sized chapters | Sequential chapters sized to the stream's DVR window. Useful default for long recordings.                     |
+| Fixed UTC intervals   | Regular UTC buckets such as 6-hour or 24-hour spans. Minimum interval is 1 hour (enforced by Commodore + DB). |
 
 All chapter time fields are UTC epoch milliseconds. The API does not store timezone names or offsets; clients that care about civil-day boundaries should resolve those boundaries before requesting the chapter.
 
-Chapter manifests can include `#EXT-X-GAP` markers if a segment was lost before upload under severe disk pressure. Players skip the missing media while preserving the timeline.
-
 #### Chapter API
 
-Retrieve a single chapter playback ID, then resolve it through the normal viewer endpoint API:
+Chapters become playable at boundary close once finalization produces the `.mkv`. Retrieve a chapter to get its public `playbackId`; pass that to `resolveViewerEndpoint` like any other VOD.
 
 ```graphql
 query {
-  dvrChapter(dvrId: "dvr-hash", mode: WINDOW_SIZED, startMs: 1715126400000, endMs: 1715212800000) {
+  dvrChapter(dvrId: "dvr-hash", startMs: 1715126400000, endMs: 1715212800000) {
     chapterId
-    manifestUrl
+    state
+    playbackId
     isCurrent
     hasGaps
     segmentCount
+    wallClockStartUnixMs
+    wallClockEndUnixMs
+    playableNow
+    lastFailureReason
   }
 }
 ```
 
-`manifestUrl` carries the Mist playback ID for the chapter (`dvr+{chapterId}`). Resolve it with `resolveViewerEndpoint` and use the returned edge URL in the player. The selected edge defrosts the bounded chapter into a local manifest and shared segment bucket, so chapter playback uses the same auth, routing, analytics, and billing path as live, clip, and VOD playback. For `FIXED_INTERVAL` mode pass `intervalSeconds`; for civil-day chapters resolve the local-day to a UTC range in your client and submit as `EXPLICIT_RANGE`.
+`playbackId` is non-null once `state` reaches `FINALIZED`. Use `wallClockStartUnixMs` / `wallClockEndUnixMs` for player timeline mapping — they reflect the chapter's actual MKV span (set at finalization to the first/last owned segment's media times) so `video.currentTime` maps to wall-clock without drift.
 
 Build a chapter index for player navigation with paginated listing:
 
@@ -195,41 +197,48 @@ Build a chapter index for player navigation with paginated listing:
 query {
   dvrChapters(
     dvrId: "dvr-hash"
-    mode: WINDOW_SIZED
     rangeStartMs: 1715040000000
     rangeEndMs: 1715212800000
     pageSize: 50
   ) {
     chapters {
       chapterId
-      mode
+      state
+      playbackId
       startMs
       endMs
       isCurrent
       hasGaps
       segmentCount
+      lastFailureReason
     }
     nextPageToken
   }
 }
 ```
 
-Set the artifact's default chapter mode (the sweeper materializes chapters under this mode automatically while the recording is active):
+Chapter mode is configured on the Stream and snapshotted onto each recording at StartDVR. Changes apply to the next recording, not in-flight ones:
 
 ```graphql
 mutation {
-  setDVRChapterPolicy(dvrId: "dvr-hash", mode: FIXED_INTERVAL, intervalSeconds: 21600) {
-    success
-    message
+  updateStream(
+    id: "stream-id"
+    input: { dvrChapterMode: FIXED_INTERVAL, dvrChapterIntervalSeconds: 21600 }
+  ) {
+    ... on Stream {
+      id
+      dvrChapterMode
+      dvrChapterIntervalSeconds
+    }
   }
 }
 ```
 
 ### Retention
 
-Recording retention is driven by the tier `recording_retention_days` entitlement. Retention starts after the DVR session ends; an active 24/7 recording is not deleted just because it has been live for longer than the retention period.
+DVR retention starts after the recording finalizes; an active 24/7 recording is not deleted while live, regardless of age. The resolved horizon is snapshotted onto the artifact at StartDVR — the tier policy in force at that moment is what applies, even if the tenant's plan changes mid-stream.
 
-Catalog defaults: Free 7 days, Supporter 90 days, Developer 180 days, Production 365 days, Enterprise custom.
+The DVR system default is 30 days. A tenant can lift or shorten it per-class via `setMediaRetentionPolicy(targetType: DVR)`, per-stream via `setStreamRetentionOverrides`, or per-recording via `updateMediaRetention` once the artifact is finalized. The full cascade and the tier cap behavior are covered in [Storage & retention](/builders/storage-and-retention).
 
 ### Listing Recordings
 

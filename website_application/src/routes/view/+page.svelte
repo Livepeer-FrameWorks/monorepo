@@ -86,7 +86,7 @@
   function normalizeDvrChapterMode(mode: string | null): DVRChapterMode {
     const normalized = (mode || "").toUpperCase();
     if (normalized === "FIXED_INTERVAL") return "FIXED_INTERVAL";
-    if (normalized === "EXPLICIT_RANGE") return "EXPLICIT_RANGE";
+    if (normalized === "NONE") return "NONE";
     return "WINDOW_SIZED";
   }
 
@@ -97,6 +97,41 @@
       hour: "2-digit",
       minute: "2-digit",
     }).format(new Date(valueMs));
+  }
+
+  function chapterStateLabel(state: DVRChapter["state"]): string {
+    switch (state) {
+      case "OPEN":
+        return "Recording in progress";
+      case "CLOSED":
+      case "FINALIZING":
+        return "Chapter finalizing";
+      case "FAILED_SOURCE_MISSING":
+        return "Chapter unavailable";
+      case "FAILED_PERMANENT":
+        return "Chapter failed";
+      default:
+        return "Chapter not yet playable";
+    }
+  }
+
+  function chapterStateDescription(chapter: DVRChapter): string {
+    if (chapter.lastFailureReason) {
+      return chapter.lastFailureReason;
+    }
+    switch (chapter.state) {
+      case "OPEN":
+        return "This chapter is still being recorded. Wait for the boundary close to publish a finalized artifact.";
+      case "CLOSED":
+      case "FINALIZING":
+        return "The finalization job is running. Reload in a few minutes.";
+      case "FAILED_SOURCE_MISSING":
+        return "Source segments for this chapter are no longer recoverable.";
+      case "FAILED_PERMANENT":
+        return "Finalization failed and cannot be retried.";
+      default:
+        return "No playable artifact yet.";
+    }
   }
 
   function formatDvrChapterLabel(chapter: DVRChapterRef) {
@@ -132,7 +167,21 @@
 
     selectedDvrChapter = chapter;
     selectedDvrChapterRef = chapterRef;
-    const playback = await resolveDvrChapterPlayback(chapter.manifestUrl);
+    if (!chapter.playbackId) {
+      playerConfig = {
+        contentType: "dvr",
+        contentId,
+        endpoints: null,
+        options: {
+          autoplay: false,
+          muted: true,
+          controls: true,
+          debug: true,
+        },
+      };
+      return;
+    }
+    const playback = await resolveDvrChapterPlayback(chapter.playbackId);
     playerConfig = {
       contentType: "dvr",
       contentId: playback.contentId,
@@ -187,20 +236,7 @@
       if (options.autoSelect && defaultChapter) {
         await selectDvrChapter(defaultChapter);
       } else if (options.autoSelect && options.fallbackExplicit) {
-        const fallbackRef: DVRChapterRef = {
-          chapterId: `range-${startMs}-${endMs}`,
-          mode: "EXPLICIT_RANGE",
-          intervalSeconds: null,
-          startMs,
-          endMs,
-          isCurrent: endMs >= Date.now(),
-          manifestS3Key: null,
-          hasGaps: false,
-          segmentCount: 0,
-        };
-        dvrChapters = [fallbackRef];
-        dvrNextPageToken = null;
-        await selectDvrChapter(fallbackRef);
+        error = "Chapter not found in this range; choose a different window";
       }
     } finally {
       dvrChapterLoading = false;
@@ -252,9 +288,11 @@
         startMs: explicitStart,
         endMs: explicitEnd,
         isCurrent: explicitEnd >= nowMs,
-        manifestS3Key: null,
+        state: "OPEN",
+        playbackId: null,
         hasGaps: false,
         segmentCount: 0,
+        lastFailureReason: null,
       };
       dvrChapters = [ref];
       await selectDvrChapter(ref);
@@ -378,13 +416,22 @@
           <div class="slab overflow-hidden bg-black shadow-xl border-none">
             <!-- Responsive Container -->
             <div class="relative w-full h-[65vh] min-h-[480px]">
-              <Player
-                contentId={playerConfig.contentId}
-                contentType={playerConfig.contentType}
-                endpoints={playerConfig.endpoints}
-                options={playerConfig.options}
-                onMetadata={handleMetadata}
-              />
+              {#if contentType === "dvr" && selectedDvrChapter && !selectedDvrChapter.playbackId}
+                <div class="flex h-full items-center justify-center text-center px-6">
+                  <EmptyState
+                    title={chapterStateLabel(selectedDvrChapter.state)}
+                    description={chapterStateDescription(selectedDvrChapter)}
+                  />
+                </div>
+              {:else}
+                <Player
+                  contentId={playerConfig.contentId}
+                  contentType={playerConfig.contentType}
+                  endpoints={playerConfig.endpoints}
+                  options={playerConfig.options}
+                  onMetadata={handleMetadata}
+                />
+              {/if}
             </div>
           </div>
         </div>

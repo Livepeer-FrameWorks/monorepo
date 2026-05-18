@@ -95,7 +95,7 @@ live stream:
   real-time playback and `CLIP_NOW` of recent moments.
 - **DVR stream** — segments are written to disk and archived under one recording artifact. Right
   for seek-back, longer clips, and post-event playback. The live DVR window is bounded for player
-  performance; historical replay uses virtual chapter playlists over the same segment archive.
+  performance; historical replay uses finalized chapter artifacts over the same segment archive.
 
 The live ring is configurable — private deployments often want a longer window — but every extra
 second costs cluster RAM, so the default stays tight. [Open an in-app ticket](%APP_URL%/support)

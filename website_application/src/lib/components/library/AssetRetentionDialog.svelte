@@ -73,9 +73,10 @@
     onClose();
   }
 
-  async function save() {
-    if (!proposedDays || proposedDays < 1) {
-      toast.error("Retention must be at least 1 day");
+  async function save(keepForever = false) {
+    const days = keepForever ? 0 : proposedDays;
+    if (days === null || days === undefined || days < 0) {
+      toast.error("Retention must be 0 (keep forever) or a positive day count");
       return;
     }
     saving = true;
@@ -84,13 +85,17 @@
         input: {
           targetType: assetType,
           targetId: assetId,
-          retentionDays: proposedDays,
+          retentionDays: days,
         },
       });
       const data = result.data?.updateMediaRetention;
       switch (data?.__typename) {
         case "EffectiveRetention":
-          toast.success(`Retention set to ${data.retentionDays} days`);
+          toast.success(
+            data.retentionDays === 0
+              ? "Retention set to keep forever"
+              : `Retention set to ${data.retentionDays} days`
+          );
           await onSaved?.();
           close();
           break;
@@ -165,10 +170,13 @@
         <Input
           id="retention-days"
           type="number"
-          min="1"
+          min="0"
           bind:value={proposedDays}
           disabled={saving}
         />
+        <div class="text-xs text-muted-foreground mt-1">
+          0 = keep forever (paid tiers only; Free clamps to the tier cap).
+        </div>
       </div>
       <div class="border border-warning/30 bg-warning/5 rounded p-2 text-xs flex items-start gap-2">
         <AlertTriangle class="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />
@@ -183,7 +191,8 @@
       <Button variant="outline" onclick={resetToDefault} disabled={saving}>
         <RotateCcw class="w-4 h-4 mr-1" /> Use default
       </Button>
-      <Button onclick={save} disabled={saving || !proposedDays}>
+      <Button variant="outline" onclick={() => save(true)} disabled={saving}>Keep forever</Button>
+      <Button onclick={() => save(false)} disabled={saving || proposedDays === null}>
         <Save class="w-4 h-4 mr-1" /> Save
       </Button>
     </DialogFooter>

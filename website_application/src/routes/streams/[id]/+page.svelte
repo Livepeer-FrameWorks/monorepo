@@ -13,6 +13,7 @@
     GetStreamOverviewChartsStore,
     GetStreamAnalyticsDailyConnectionStore,
     UpdateStreamStore,
+    SetStreamRetentionOverridesStore,
     DeleteStreamStore,
     RefreshStreamKeyStore,
     CreateStreamKeyStore,
@@ -85,6 +86,7 @@
   const streamOverviewCoreStore = new GetStreamOverviewCoreStore();
   const streamOverviewChartsStore = new GetStreamOverviewChartsStore();
   const updateStreamMutation = new UpdateStreamStore();
+  const setStreamRetentionOverridesMutation = new SetStreamRetentionOverridesStore();
   const deleteStreamMutation = new DeleteStreamStore();
   const refreshStreamKeyMutation = new RefreshStreamKeyStore();
   const createStreamKeyMutation = new CreateStreamKeyStore();
@@ -900,6 +902,12 @@
     pullSourceEnabled?: boolean;
     pullSourceAllowedClusterIds?: string;
     pullSourceAllowedClustersDirty?: boolean;
+    dvrChapterMode?: "WINDOW_SIZED" | "FIXED_INTERVAL" | "NONE" | null;
+    dvrChapterIntervalSeconds?: number | null;
+    retentionOverrides?: {
+      dvr?: { value: number } | { clear: true };
+      clip?: { value: number } | { clear: true };
+    };
   }) {
     if (!stream) return;
 
@@ -934,25 +942,66 @@
         record: formData.record,
         ingestMode: stream.ingestMode,
         pullSource,
+        dvrChapterMode: formData.dvrChapterMode,
+        dvrChapterIntervalSeconds: formData.dvrChapterIntervalSeconds,
       };
       const result = await updateStreamMutation.mutate({
         id: streamId,
         input,
       });
-      if (result.data?.updateStream?.__typename === "Stream") {
-        showEditModal = false;
-        toast.success("Stream updated successfully!");
-        addEvent("info", "Stream settings updated");
-        const analyticsStreamId = resolveOperationalStreamId({
-          routeParamId: streamId,
-          streamUuid: stream?.streamId,
-        });
-        if (analyticsStreamId) {
-          await streamStore.fetch({ variables: { id: streamId, streamId: analyticsStreamId } });
-        }
-      } else {
+      if (result.data?.updateStream?.__typename !== "Stream") {
         const errorResult = result.data?.updateStream as unknown as { message?: string };
         toast.error(errorResult?.message || "Failed to update stream");
+        return;
+      }
+
+      // Apply per-stream retention overrides as a separate RPC. The two
+      // mutations don't share an input shape and clear is per-field — keep
+      // them split so the wire contract stays explicit. Failure here
+      // surfaces but doesn't roll back the updateStream above (Commodore
+      // accepts both writes independently).
+      if (formData.retentionOverrides && stream?.streamId) {
+        const overrideInput: {
+          streamId: string;
+          dvrRetentionDaysOverride?: number;
+          clipRetentionDaysOverride?: number;
+          clearDvrRetentionOverride?: boolean;
+          clearClipRetentionOverride?: boolean;
+        } = { streamId: stream.streamId };
+        if (formData.retentionOverrides.dvr) {
+          if ("clear" in formData.retentionOverrides.dvr) {
+            overrideInput.clearDvrRetentionOverride = true;
+          } else {
+            overrideInput.dvrRetentionDaysOverride = formData.retentionOverrides.dvr.value;
+          }
+        }
+        if (formData.retentionOverrides.clip) {
+          if ("clear" in formData.retentionOverrides.clip) {
+            overrideInput.clearClipRetentionOverride = true;
+          } else {
+            overrideInput.clipRetentionDaysOverride = formData.retentionOverrides.clip.value;
+          }
+        }
+        const overrideResult = await setStreamRetentionOverridesMutation.mutate({
+          input: overrideInput,
+        });
+        const overrideData = overrideResult.data?.setStreamRetentionOverrides;
+        if (overrideData?.__typename !== "StreamRetentionOverrides") {
+          const errorResult = overrideData as unknown as { message?: string };
+          toast.error(errorResult?.message || "Failed to update retention overrides");
+          return;
+        }
+      }
+
+      showEditModal = false;
+      toast.success("Stream updated successfully!");
+      addEvent("info", "Stream settings updated");
+      const analyticsStreamId = resolveOperationalStreamId({
+        routeParamId: streamId,
+        streamUuid: stream?.streamId,
+      });
+      if (analyticsStreamId) {
+        await streamStore.fetch({ variables: { id: streamId, streamId: analyticsStreamId } });
       }
     } catch (err) {
       console.error("Failed to update stream:", err);

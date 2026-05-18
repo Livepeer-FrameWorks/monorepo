@@ -272,6 +272,13 @@ export const navigationConfig: Record<string, NavigationItem> = {
         active: true,
         description: "Manage billing, subscriptions, and payment methods",
       },
+      storage: {
+        name: "Storage",
+        href: "/account/storage",
+        icon: "HardDrive",
+        active: true,
+        description: "Browse assets with cost projection and adjust retention",
+      },
     },
   },
 

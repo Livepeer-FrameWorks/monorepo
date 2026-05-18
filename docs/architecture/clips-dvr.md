@@ -247,7 +247,7 @@ DEFROST (cold -> warm):
 
 ## Cross-Cluster Artifact Access
 
-When a viewer requests a clip or VOD that lives on a remote cluster, Foghorn uses the `PrepareArtifact` FoghornFederation RPC to obtain time-limited presigned S3 URLs without sharing S3 credentials across clusters. DVR archive playback is not a whole-artifact `PrepareArtifact` flow: public callers use the GraphQL DVR chapter API through Gateway → Commodore, Commodore routes to the DVR origin Foghorn, and Foghorn returns a `dvr+{chapter_id}` playback ID whose selected edge defrosts the bounded chapter while preserving `DVRSegmentRef` gap metadata.
+When a viewer requests a clip or VOD that lives on a remote cluster, Foghorn uses the `PrepareArtifact` FoghornFederation RPC to obtain time-limited presigned S3 URLs without sharing S3 credentials across clusters. DVR archive playback uses chapter VOD artifacts: each finalized chapter is a regular VOD-shaped artifact (`origin_type='dvr_chapter'`, `library_visible=false`) addressed by a Commodore-minted public `playbackId`, so cross-cluster chapter playback follows the same `PrepareArtifact` rules as any other VOD.
 
 ### Flow
 
@@ -260,19 +260,16 @@ Viewer → Foghorn A (clip/VOD not on local nodes, not in local S3)
       3. If in S3: generate presigned GET URL(s)
       4. Return PrepareArtifactResponse with URL(s), size, format
   → Foghorn A returns presigned URL to viewer via STREAM_SOURCE trigger chain
-
-DVR chapter playback follows a separate bounded path:
-
 ```
 
+DVR chapter listing (read-only metadata, not playback bytes) flows through:
+
+```
 Viewer/Webapp → Gateway GraphQL dvrChapter/dvrChapters
-→ Commodore validates tenant ownership and resolves origin_cluster_id
-→ Origin Foghorn reads foghorn.dvr_segments for the requested chapter/range
-→ Origin Foghorn materializes/signs a chapter playlist with per-segment access
-→ Viewer player loads that chapter manifest
-
-```
-
+→ Commodore validates tenant ownership (assertDVRTenant accepts dvr_hash, UUID, or playback_id)
+→ Origin Foghorn reads foghorn.dvr_chapters for the requested range
+→ Returns chapter metadata + Commodore-minted playbackId for each playable chapter
+→ Viewer player resolves each chapter playbackId through the standard VOD playback path
 ```
 
 ### PrepareArtifact Request/Response
@@ -282,7 +279,7 @@ message PrepareArtifactRequest {
   string artifact_id = 1;        // Artifact hash
   string clip_hash = 2;          // Clip hash fallback alias
   string requesting_cluster = 3;
-  string artifact_type = 4;      // "clip" or "vod" for public playback; DVR uses dvr+ chapter routing
+  string artifact_type = 4;      // "clip", "vod", or "dvr_chapter" — chapters are VOD-shaped
   string tenant_id = 5;
 }
 
@@ -299,7 +296,7 @@ message PrepareArtifactResponse {
 }
 ```
 
-Key design choice: clips and VODs must be S3-synced before cross-cluster access works. If an artifact is only on local disk (not yet frozen to S3), `PrepareArtifact` triggers an async freeze and returns `ready=false`. The requesting Foghorn can retry after `est_ready_seconds`. DVR archive playback is ledger-backed and bounded by chapter/range: Commodore resolves the chapter to the origin Foghorn, the origin returns a `dvr+{chapter_id}` Mist playback ID, and the selected edge defrosts only that chapter.
+Key design choice: clips and VODs must be S3-synced before cross-cluster access works. If an artifact is only on local disk (not yet frozen to S3), `PrepareArtifact` triggers an async freeze and returns `ready=false`. The requesting Foghorn can retry after `est_ready_seconds`. Chapter VOD artifacts follow the same rule — each finalized chapter has its own `frozen_at` and goes through `PrepareArtifact` when accessed cross-cluster, just like any other VOD.
 
 See `docs/architecture/federation.md` for the broader FoghornFederation protocol and `docs/architecture/stream-replication-topology.md` for how STREAM_SOURCE routes to PrepareArtifact for VOD/artifacts.
 

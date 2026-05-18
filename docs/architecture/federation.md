@@ -94,18 +94,25 @@ For clip/VOD: returns single presigned URL.
 ```
 
 DVR archive playback does not use whole-artifact `PrepareArtifact`. A DVR can
-run for months, so playback must be bounded by a chapter or explicit UTC range:
+run for months; replay is sliced into finalized chapter VOD artifacts:
 
 1. Gateway calls Commodore `RetrieveDVRChapter` / `ListDVRChapters`.
-2. Commodore validates tenant ownership and routes to the DVR artifact's
-   `origin_cluster_id`.
-3. The origin Foghorn materializes the bounded chapter from `foghorn.dvr_segments`
-   and returns the Mist playback ID `dvr+{chapter_id}`. The selected edge
-   defrosts that bounded chapter into a local manifest and shared segment bucket;
-   `lost_local` rows render as `#EXT-X-GAP`.
+2. Commodore validates tenant ownership, routes to the DVR's
+   `origin_cluster_id`, and returns the chapter metadata. Each chapter
+   carries a Commodore-minted public `playbackId` (in
+   `commodore.dvr_chapter_playback`) once the chapter has been dispatched
+   for finalization. Active-but-unfinalized chapters carry no `playbackId`;
+   the rolling DVR's own `playbackId` (`dvr+<dvr_internal_name>` surface)
+   serves the in-flight portion.
+3. Chapter playback flows through the standard artifact playback path —
+   the chapter `.mkv` is a regular `vod`-shaped artifact (with
+   `origin_type='dvr_chapter'`, `library_visible=false`). Edges resolve
+   the chapter playback_id through Commodore exactly the way they resolve
+   any VOD playback_id, and serve it via the relay/block-cache path.
 
-Federation `PrepareArtifact` rejects DVR. DVR replay uses the chapter API,
-then normal Mist playback and chapter-bounded defrost on the selected edge.
+Federation `PrepareArtifact` rejects DVR. Chapter replay uses the chapter
+API + normal artifact playback; cross-cluster requests for the chapter
+artifact follow the same federation rules as any other VOD.
 
 ### Cross-Cluster Artifact Command Routing
 

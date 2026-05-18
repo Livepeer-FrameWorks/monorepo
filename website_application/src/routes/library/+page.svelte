@@ -1676,8 +1676,8 @@
                                 {#if artifact.type === "dvr"}
                                   <div class="flex flex-col gap-2">
                                     <p class="text-sm text-muted-foreground">
-                                      DVR replay uses chapter manifests generated from the recording
-                                      ledger.
+                                      DVR replay is split into chapters. Each chapter finalizes into
+                                      its own VOD artifact you can scrub and share.
                                     </p>
                                     <Button
                                       variant="ghost"

@@ -1,7 +1,17 @@
 import { getGraphqlHttpUrl } from "$lib/config";
 import type { ContentEndpoints, PlayerMetadata } from "@livepeer-frameworks/player-svelte";
 
-export type DVRChapterMode = "WINDOW_SIZED" | "FIXED_INTERVAL" | "EXPLICIT_RANGE" | "NONE";
+export type DVRChapterMode = "WINDOW_SIZED" | "FIXED_INTERVAL" | "NONE";
+
+export type DVRChapterState =
+  | "OPEN"
+  | "CLOSED"
+  | "FINALIZING"
+  | "FINALIZED"
+  | "FROZEN"
+  | "RECLAIMED"
+  | "FAILED_SOURCE_MISSING"
+  | "FAILED_PERMANENT";
 
 export interface DVRChapterRef {
   chapterId: string;
@@ -10,18 +20,24 @@ export interface DVRChapterRef {
   startMs: number;
   endMs: number;
   isCurrent: boolean;
-  manifestS3Key?: string | null;
+  state: DVRChapterState;
+  playbackId?: string | null;
   hasGaps: boolean;
   segmentCount: number;
+  lastFailureReason?: string | null;
 }
 
 export interface DVRChapter {
   chapterId: string;
-  manifestS3Key: string;
-  manifestUrl: string;
+  state: DVRChapterState;
+  playbackId?: string | null;
   isCurrent: boolean;
   hasGaps: boolean;
   segmentCount: number;
+  wallClockStartUnixMs: number;
+  wallClockEndUnixMs: number;
+  playableNow: boolean;
+  lastFailureReason?: string | null;
 }
 
 interface ViewerEndpoint {
@@ -99,9 +115,11 @@ export async function listDvrChapters(options: {
             startMs
             endMs
             isCurrent
-            manifestS3Key
+            state
+            playbackId
             hasGaps
             segmentCount
+            lastFailureReason
           }
           nextPageToken
         }
@@ -115,7 +133,7 @@ export async function listDvrChapters(options: {
 
 export async function retrieveDvrChapter(options: {
   dvrId: string;
-  mode: DVRChapterMode;
+  mode?: DVRChapterMode;
   intervalSeconds?: number | null;
   startMs: number;
   endMs: number;
@@ -124,7 +142,7 @@ export async function retrieveDvrChapter(options: {
     `
       query WebDVRChapter(
         $dvrId: ID!
-        $mode: DVRChapterMode!
+        $mode: DVRChapterMode
         $intervalSeconds: Int
         $startMs: Float!
         $endMs: Float!
@@ -137,11 +155,15 @@ export async function retrieveDvrChapter(options: {
           endMs: $endMs
         ) {
           chapterId
-          manifestS3Key
-          manifestUrl
+          state
+          playbackId
           isCurrent
           hasGaps
           segmentCount
+          wallClockStartUnixMs
+          wallClockEndUnixMs
+          playableNow
+          lastFailureReason
         }
       }
     `,
@@ -154,6 +176,10 @@ export async function retrieveDvrChapter(options: {
   return data.dvrChapter;
 }
 
+// Chapter playback now resolves through the chapter artifact's VOD
+// playback ID. Callers pass the chapter's playbackId (or a
+// player-friendly playback ID derived from it) into the standard viewer
+// endpoint resolver.
 export async function resolveDvrChapterPlayback(playbackId: string): Promise<{
   contentId: string;
   endpoints: ContentEndpoints;
@@ -204,6 +230,12 @@ export async function resolveDvrChapterPlayback(playbackId: string): Promise<{
             recordingSizeBytes
             clipSource
             createdAt
+            thumbnailAssets {
+              posterUrl
+              spriteVttUrl
+              spriteJpgUrl
+              assetKey
+            }
           }
         }
       }

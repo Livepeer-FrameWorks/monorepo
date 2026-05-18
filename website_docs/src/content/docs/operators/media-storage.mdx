@@ -1,0 +1,231 @@
+---
+title: "Media Storage & Playback Paths"
+description: "Where clip, DVR, VOD, and processing bytes live, how they reach viewers, and what runs over S3 vs Mist-native transport."
+sidebar:
+  order: 7
+---
+
+This page is for operators sizing storage, debugging playback, or
+deciding how much S3 egress to budget. It explains the three storage
+tiers, how each media type moves between them, and which paths are
+S3-backed vs Mist-native.
+
+For DVR-specific operations (tier ceilings, chapter sweeper, retention),
+see [24/7 DVR — Operations](/operators/dvr).
+
+## Storage Tiers
+
+| Tier          | What lives here                                                     | Persistence                               | Cost driver        |
+| ------------- | ------------------------------------------------------------------- | ----------------------------------------- | ------------------ |
+| **S3**        | Durable archival copy of every clip, DVR segment, and processed VOD | Forever (until retention)                 | Storage + egress   |
+| **Edge disk** | Per-node warm cache (recent + active artifacts, relay block cache)  | Until evicted under pressure or retention | Local SSD capacity |
+| **Mist shm**  | Mist's in-process look-ahead window (~120s) for active playback     | Per-session                               | Edge RAM           |
+
+S3 is the only authoritative tier. Edge disk and Mist shm are
+caches/working memory — they can disappear at any time without data
+loss. Helmsman's admission and cleanup logic keeps edge disk usage
+bounded by an intent-priority hierarchy (active recordings and
+processing outputs evict viewer caches first).
+
+## The Two Lanes: Live vs Archival
+
+FrameWorks splits playback into two completely separate transport
+paths. Operators monitoring bandwidth, S3 egress, or edge-disk pressure
+need to know which lane drives which metric.
+
+### Live lane — Mist-native, no S3
+
+- **Cross-node ingest distribution**: Mist DTSC (origin Mist pushes to,
+  or peer-pulls between, edge Mist instances).
+- **Active stream playback**: viewers pull HLS / LL-HLS / WebRTC /
+  DASH from the nearest edge that has the DTSC pull running.
+- **Active DVR playback** (the rolling DVR surface for an in-flight
+  recording): the origin node owns the local rolling manifest; other
+  edges DTSC-pull `dvr+<dvr_internal_name>` from the recording origin.
+  No S3 reads — the per-segment S3 objects exist as recovery-bridge
+  durability only, not playback infrastructure.
+
+S3 sees zero traffic on the live lane.
+
+### Archival lane — relay through S3 → edge disk → Mist
+
+- **VOD playback**, **clip playback**, **finalized DVR chapter
+  artifact playback**, and **processing job input** all flow through
+  Helmsman's read-through artifact relay at
+  `http://<edge>:18007/internal/artifact/...`. Chapter artifacts are
+  ordinary VOD artifacts (`origin_type='dvr_chapter'`,
+  `library_visible=false`) — they share the VOD code path completely.
+- Mist sees a stable HTTP URL per artifact and reads it like any other
+  HTTP input source. Behind that URL Helmsman materializes bytes from
+  edge disk (warm), or from S3 into edge disk (cold + healthy), or from
+  S3 straight to socket (cold + memory-pressured).
+- The relay route is internal to each Helmsman; viewers and Mist never
+  talk to it directly. It is mounted on the existing Helmsman listener;
+  it is not a MistServer trigger and won't fire `STREAM_SOURCE`.
+
+```
+                    ┌───────────────────────┐
+   live ingest ─DTSC▶│ Mist (origin/edges) │── live playout ─▶ viewers
+                    └───────────────────────┘
+                                ▲
+                     active DVR │ (recorder owns local bytes)
+                                │
+                    ┌───────────────────────┐
+   clip / VOD /   ──▶│ Helmsman relay        │── stream ─▶ Mist ─▶ viewers
+   finalized DVR    │   /internal/artifact/  │           (shm look-ahead)
+   playback         │   S3 → disk cache      │
+                    │   stream-first tee     │
+                    └───────────────────────┘
+                                ▲
+                                │ S3 range GET (presigned)
+                                │
+                            ┌───────┐
+                            │  S3   │
+                            └───────┘
+```
+
+## Per-Asset Behavior
+
+### Live stream
+
+- **Ingest** lands on the origin node's MistServer.
+- **Distribution** to other edges is Mist DTSC; no S3 involvement.
+- **Recording** (if DVR is enabled for the stream) writes segments to
+  the origin's local disk and the freeze pipeline uploads each segment
+  to S3 in the background.
+- **Viewer playback** comes from any edge with the DTSC pull running.
+
+S3 egress: none. Edge disk: only on the recording origin, bounded by
+the DVR rolling window.
+
+### Active DVR (recording in progress)
+
+The active DVR stream is its own Mist playback identity
+(`dvr+<dvr_internal_name>`), distinct from the live ingest stream
+(`live+<playback_id>`). It is fed by the rolling HLS manifest that
+Mist's HLS push writes to the recording origin's disk
+(`storage/dvr/<stream>/<dvr_hash>/<dvr_hash>.m3u8`).
+
+- Foghorn detects recording state on viewer resolve and routes the
+  public DVR playbackId to any healthy edge.
+- On the chosen edge, Mist's `STREAM_SOURCE` resolves
+  `dvr+<dvr_internal_name>`: the recording origin returns the local
+  rolling manifest path; any other edge returns
+  `dtsc://<recording-origin>/dvr+<dvr_internal_name>` and pulls the
+  rolling stream via DTSC.
+- Viewer playback fan-out happens at the chosen edge's outputs, the
+  same way it does for live streams. The recording origin is not a
+  per-viewer bottleneck.
+
+### Chapter playback (finalized chapter artifacts)
+
+Chapters are produced by the finalization queue at each boundary close
+as canonical `.mkv` VOD artifacts:
+
+- The processing job runs on the recording origin, reading source TS
+  segments from local disk (or fetching from the recovery-bridge S3
+  when local copies are gone) and pushing a single MKV.
+- The resulting artifact lives at the standard VOD prefix and serves
+  through the standard archival lane.
+- `library_visible=false` keeps the chapter artifact out of user
+  library listings even though it shares the VOD storage tree.
+- Policy enforcement walks chapter artifact → parent DVR
+  (`origin_type='dvr_chapter'` + `origin_id=chapter_id`) so a protected
+  DVR's chapters inherit the parent's auth policy transparently.
+- The recovery-bridge S3 segment objects are deleted by the chapter
+  reclaim sweep once the chapter artifact + `.dtsh` are durably on S3
+  (`state='frozen'`).
+
+### Clip
+
+- Always created from a finalized stream window. The clip artifact has
+  a single canonical file (`clips/<hash>.<container>`).
+- Cold playback flows through the relay's block cache: edge disk fills
+  in 32 MiB blocks aligned to the file, only the blocks covering the
+  requested byte range are fetched.
+- `.dtsh` index sidecar generated by Mist on first cold play and
+  persisted alongside the media so subsequent cold plays skip the
+  per-block header scan.
+
+### VOD (uploaded video)
+
+- Uploads land in S3 first (direct upload via presigned PUT) and are
+  registered with Foghorn.
+- Playback identical to clip: read-through relay, 32 MiB block cache on
+  edge disk, `.dtsh` sidecar on first cold play.
+- Processed VOD output (the canonical container produced by a
+  processing job) replaces the original upload for playback once the
+  new file is durably synced to S3. Until sync completes, the relay
+  refuses to serve the artifact from S3 and falls back to warm-node
+  lookup; this prevents an edge without a local processed copy from
+  accidentally streaming the original raw upload.
+
+### Processing job input
+
+- Wrapper-safe containers (mp4, mov, mkv, webm, ts) read directly from
+  the relay's upload path. Admission forces memory-only — the relay
+  pass-through streams from S3 to Mist's process input without writing
+  to edge disk. A multi-GB upload contributes 0 bytes to edge disk
+  during a remux; only the output ever lands locally.
+- Wrapper-unsafe containers (avi, flv, m4v) cannot be opened by Mist
+  over HTTP. Helmsman fully stages the upload to local disk first, then
+  runs the job against the staged file. Staged files become cleanup-
+  eligible after the job completes.
+- Processing output is pushed to local disk by Mist and only registered
+  with Foghorn after the job finishes. The relay never serves a job's
+  output while it's still being written.
+
+## Edge Disk Pressure: Eviction Order
+
+Helmsman's storage admission ranks intents by priority. When disk fills
+and a high-priority write needs room, low-priority bytes are evicted
+first:
+
+| Intent                 | Priority                                                            | Behavior under pressure                                 |
+| ---------------------- | ------------------------------------------------------------------- | ------------------------------------------------------- |
+| DVR recording          | Highest                                                             | Must get disk. Evicts everything below to make room.    |
+| Processing output      | High                                                                | Must get disk. Evicts everything below to make room.    |
+| Unsafe wrapper staging | High                                                                | Disk required (Mist's FLV/AV inputs are file-only).     |
+| Playback cache (relay) | Medium                                                              | Opportunistic; degrades to memory-only above ~95% full. |
+| Processing input       | Memory-only by default for safe wrappers; doesn't compete for disk. |
+| Warm/aged cache        | Lowest                                                              | First to evict.                                         |
+
+Operationally: a single very large VOD or DVR chapter can never starve
+a live recording, but a sustained burst of cold VOD playback can
+exhaust edge disk and degrade to S3-direct (memory-only) until cleanup
+catches up. The two relevant metrics:
+
+- **`storage_node_out_of_space`** lifecycle events from Helmsman —
+  recording or processing wrote-then-failed because cleanup couldn't
+  keep up.
+- **Relay block cache hit ratio** vs cold fetch latency at the edge —
+  rising cold-fetch share usually means pressure-driven memory-only or
+  routine cache turnover; the eviction pass treats relay block caches
+  as the priority-zero candidates before touching warm canonical files.
+
+## S3 Layout (quick reference)
+
+```
+s3://bucket/clips/{tenant_id}/{stream_internal_name}/{clip_hash}.{container}
+s3://bucket/vod/{tenant_id}/{vod_hash}.{container}
+s3://bucket/dvr/{tenant_id}/{stream_internal_name}/{dvr_hash}/segments/{segment_name}
+s3://bucket/uploads/{tenant_id}/{upload_hash}.{container}
+```
+
+Sidecars (`.dtsh`, `.gop`) live next to their media object with the
+sidecar suffix appended. Don't hand-manipulate these prefixes — use
+the artifact APIs and the freeze/defrost flow so Foghorn's ledger stays
+consistent.
+
+## Multi-Cluster Sourcing
+
+When a viewer's edge isn't the origin cluster for the artifact, the
+relay's resolve step routes through Foghorn's federation client to mint
+a presigned URL against the artifact's home S3 bucket. The edge then
+streams from that S3, not from the home cluster's Helmsman.
+
+Operationally, this means cross-cluster playback adds S3 egress at the
+home cluster's S3 region but does not add cross-cluster bandwidth
+between Helmsman processes. For repeated cross-cluster playback of the
+same artifact, the requesting edge's block cache absorbs it after the
+first cold pass.
