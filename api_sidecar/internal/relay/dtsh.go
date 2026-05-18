@@ -213,6 +213,10 @@ func (s *Server) putClipRoute(c *gin.Context) {
 //     presigned URL was minted.
 func (s *Server) putSidecarWithStream(c *gin.Context, kind, streamInternal string) {
 	file := strings.TrimPrefix(c.Param("file"), "/")
+	if !safeRelayPathSegment(file) {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
 	if !strings.HasSuffix(file, ".dtsh") {
 		c.AbortWithStatus(http.StatusMethodNotAllowed)
 		return

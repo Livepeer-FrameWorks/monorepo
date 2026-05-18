@@ -135,6 +135,12 @@ func (rc *resolveCache) Put(kind, hash string, r *ResolveResult) {
 	rc.entries[cacheKey(kind, hash)] = r
 }
 
+func (rc *resolveCache) Delete(kind, hash string) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	delete(rc.entries, cacheKey(kind, hash))
+}
+
 // resolveCached returns a cached resolve when fresh, otherwise issues a
 // fresh resolve via s.resolver and stores the result in the cache.
 func (s *Server) resolveCached(rc ResolveContext) (*ResolveResult, error) {

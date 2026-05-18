@@ -102,8 +102,8 @@ func parseClipWildcardPath(p string) (string, string) {
 	if p == "" {
 		return "", ""
 	}
-	parts := strings.SplitN(p, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	parts := strings.Split(p, "/")
+	if len(parts) != 2 || !safeRelayPathSegment(parts[0]) || !safeRelayPathSegment(parts[1]) {
 		return "", ""
 	}
 	return parts[0], parts[1]
@@ -111,7 +111,7 @@ func parseClipWildcardPath(p string) (string, string) {
 
 func (s *Server) serveFileWithStream(c *gin.Context, kind, streamInternal string) {
 	file := c.Param("file")
-	if file == "" || file == "/" {
+	if !safeRelayPathSegment(file) {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}
@@ -195,11 +195,10 @@ func (s *Server) serveWarmIfPresent(c *gin.Context, localPath string) bool {
 // hash subdirectory — uploads are flat under {basePath}/upload/.
 func (s *Server) serveUpload(c *gin.Context) {
 	file := c.Param("file")
-	if file == "" || file == "/" {
+	if !safeRelayPathSegment(file) {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}
-	file = strings.TrimPrefix(file, "/")
 	if strings.HasSuffix(file, ".dtsh") {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
@@ -381,4 +380,11 @@ func (s *Server) serverError(c *gin.Context, what string, err error) {
 		s.logger.WithError(err).WithField("op", what).Error("relay server error")
 	}
 	c.String(http.StatusInternalServerError, "%s: %v", what, err)
+}
+
+func safeRelayPathSegment(seg string) bool {
+	if seg == "" || seg == "." || seg == ".." {
+		return false
+	}
+	return !strings.ContainsAny(seg, `/\`)
 }

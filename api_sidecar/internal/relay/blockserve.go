@@ -17,6 +17,7 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -67,21 +68,6 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 		return
 	}
 
-	// Disk-touching block-store setup happens only for CacheToDisk. For
-	// CacheMemoryOnly we still need block math (BlockSize, BlockPath,
-	// spansForRange), but no directory or meta file should land on
-	// disk. If EnsureMeta fails for the disk-cache decision, degrade to
-	// memory-only rather than failing the request.
-	if cacheDecision == admission.CacheToDisk {
-		store.CleanTmps()
-		if _, err := store.EnsureMeta(hash, ext, totalSize); err != nil {
-			if s.logger != nil {
-				s.logger.WithError(err).WithField("local_path", localPath).Debug("blockcache: EnsureMeta failed; degrading to memory-only")
-			}
-			cacheDecision = admission.CacheMemoryOnly
-		}
-	}
-
 	// Distinguish "Range header absent" (full-object 200 OK) from
 	// "Range header present but malformed/unsatisfiable" (must be 416,
 	// not silent 200).
@@ -105,6 +91,25 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	if len(spans) == 0 {
 		c.AbortWithStatus(http.StatusRequestedRangeNotSatisfiable)
 		return
+	}
+	if cacheDecision == admission.CacheToDisk && !hasRange {
+		if err := s.preflightFirstColdSpan(c.Request.Context(), store, spans[0], totalSize, res.MediaPresignedURL); err != nil {
+			s.cache.Delete(kind, hash)
+			s.respondColdFetchError(c, err)
+			return
+		}
+	}
+	// Disk-touching block-store setup happens only for CacheToDisk and after
+	// the cold preflight. Missing upstream sources should not leave a
+	// meta-only .blocks directory behind.
+	if cacheDecision == admission.CacheToDisk {
+		store.CleanTmps()
+		if _, err := store.EnsureMeta(hash, ext, totalSize); err != nil {
+			if s.logger != nil {
+				s.logger.WithError(err).WithField("local_path", localPath).Debug("blockcache: EnsureMeta failed; degrading to memory-only")
+			}
+			cacheDecision = admission.CacheMemoryOnly
+		}
 	}
 
 	// Headers. 206 for ranged requests, 200 for full asset; Content-Range
@@ -322,6 +327,58 @@ func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *Bloc
 		return fmt.Errorf("block %d short: copied %d bytes, expected %d", span.Idx, n, expected)
 	}
 	return nil
+}
+
+type upstreamStatusError struct {
+	StatusCode int
+}
+
+func (e upstreamStatusError) Error() string {
+	return fmt.Sprintf("upstream artifact fetch returned status %d", e.StatusCode)
+}
+
+func (s *Server) preflightFirstColdSpan(ctx context.Context, store *BlockStore, span blockSpan, totalSize int64, mediaURL string) error {
+	if store.HasBlock(span.Idx) {
+		return nil
+	}
+	blockStart, blockEnd := store.BlockRange(span.Idx, totalSize)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
+	if err != nil {
+		return fmt.Errorf("build s3 block preflight request: %w", err)
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", blockStart, blockEnd))
+	resp, err := s.httpc.Do(req)
+	if err != nil {
+		return fmt.Errorf("s3 block preflight fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4*1024))
+	if resp.StatusCode == http.StatusPartialContent {
+		return nil
+	}
+	if resp.StatusCode == http.StatusOK && blockStart == 0 && blockEnd == totalSize-1 {
+		return nil
+	}
+	return upstreamStatusError{StatusCode: resp.StatusCode}
+}
+
+func (s *Server) respondColdFetchError(c *gin.Context, err error) {
+	var statusErr upstreamStatusError
+	if errors.As(err, &statusErr) {
+		switch statusErr.StatusCode {
+		case http.StatusNotFound, http.StatusGone:
+			c.String(http.StatusNotFound, "source missing")
+		case http.StatusRequestedRangeNotSatisfiable:
+			c.Writer.Header().Set("Content-Range", "*")
+			c.String(http.StatusRequestedRangeNotSatisfiable, "source range unavailable")
+		case http.StatusUnauthorized, http.StatusForbidden:
+			c.String(http.StatusBadGateway, "source authorization failed")
+		default:
+			c.String(http.StatusBadGateway, "source fetch failed: upstream status %d", statusErr.StatusCode)
+		}
+		return
+	}
+	s.serverError(c, "s3 block preflight", err)
 }
 
 func isClientGone(err error) bool {

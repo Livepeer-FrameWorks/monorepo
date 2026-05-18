@@ -149,6 +149,55 @@ func TestServeWarmFile(t *testing.T) {
 	}
 }
 
+func TestServeWarmClipRequiresNestedSafePath(t *testing.T) {
+	dir := t.TempDir()
+	hash := "cliphash"
+	file := hash + ".mkv"
+	full := filepath.Join(dir, "clips", "streamA", file)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("nested clip bytes")
+	if err := os.WriteFile(full, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{}, nil)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	resp, err := doGet(t, ts.URL+"/internal/artifact/clip/streamA/"+file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("nested clip status=%d", resp.StatusCode)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	if !bytes.Equal(got, body) {
+		t.Fatalf("got=%q want=%q", got, body)
+	}
+
+	badResp, err := doGet(t, ts.URL+"/internal/artifact/clip/streamA/extra/"+file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer badResp.Body.Close()
+	if badResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("extra path segment status=%d want 404", badResp.StatusCode)
+	}
+
+	traversalResp, err := doGet(t, ts.URL+"/internal/artifact/clip/../"+file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer traversalResp.Body.Close()
+	if traversalResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("traversal status=%d want 404", traversalResp.StatusCode)
+	}
+}
+
 func TestServeColdFileWritesBlocksToDisk(t *testing.T) {
 	dir := t.TempDir()
 	hash := "abc"
@@ -206,6 +255,50 @@ func TestServeColdFileWritesBlocksToDisk(t *testing.T) {
 	}
 	if len(blocks) == 0 {
 		t.Fatalf("no .blk files in %s; entries=%v", blocksDir, entries)
+	}
+}
+
+func TestServeColdFilePropagatesUpstreamNotFoundBeforeMediaHeaders(t *testing.T) {
+	dir := t.TempDir()
+	hash := "missing"
+	file := hash + ".mkv"
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("no such key"))
+	}))
+	defer up.Close()
+
+	res := &ResolveResult{
+		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		MediaPresignedURL: up.URL + "/object",
+		ExpectedSizeBytes: 1024,
+		ContentType:       "video/x-matroska",
+		URLTTLSeconds:     60,
+	}
+	resolver := &fakeResolver{out: map[string]*ResolveResult{"vod/" + hash: res}}
+	s := New(Options{
+		BasePath:  dir,
+		Admitter:  &fakeAdmitter{decision: admission.CacheToDisk},
+		Resolver:  resolver,
+		BlockSize: 512,
+	})
+	ts := mount(t, s)
+	defer ts.Close()
+
+	resp, err := doGet(t, ts.URL+"/internal/artifact/vod/"+file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%q want 404 source missing", resp.StatusCode, body)
+	}
+	if cl := resp.Header.Get("Content-Length"); cl == "1024" {
+		t.Fatalf("relay must not advertise media length for missing upstream source")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "vod", file+".blocks")); !os.IsNotExist(err) {
+		t.Fatalf("missing upstream must not create block cache, stat err=%v", err)
 	}
 }
 
