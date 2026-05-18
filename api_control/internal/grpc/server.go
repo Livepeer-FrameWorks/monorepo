@@ -4691,9 +4691,10 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 
 	// Verify ownership and fetch immutable ingest mode for validation.
 	var internalName, currentIngestMode string
+	var currentRecordingEnabled bool
 	err = s.db.QueryRowContext(ctx, `
-		SELECT internal_name, ingest_mode FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3
-	`, streamID, userID, tenantID).Scan(&internalName, &currentIngestMode)
+		SELECT internal_name, ingest_mode, is_recording_enabled FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3
+	`, streamID, userID, tenantID).Scan(&internalName, &currentIngestMode, &currentRecordingEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
@@ -4828,7 +4829,7 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 			if !supplied {
 				var existing sql.NullInt32
 				lookupErr := s.db.QueryRowContext(ctx,
-					`SELECT dvr_chapter_interval_seconds FROM commodore.streams WHERE stream_id = $1::uuid AND tenant_id = $2::uuid`,
+					`SELECT dvr_chapter_interval_seconds FROM commodore.streams WHERE id = $1::uuid AND tenant_id = $2::uuid`,
 					streamID, tenantID,
 				).Scan(&existing)
 				if lookupErr != nil || !existing.Valid || existing.Int32 < minChapterIntervalSeconds {
@@ -4937,7 +4938,30 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 		s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, streamID, changedFields)
 	}
 
+	if req.Record != nil && req.GetRecord() && !currentRecordingEnabled {
+		go s.startDVRAfterStreamUpdate(userID, tenantID, streamID, internalName)
+	}
+
 	return s.queryStream(ctx, streamID, userID, tenantID)
+}
+
+func (s *CommodoreServer) startDVRAfterStreamUpdate(userID, tenantID, streamID, internalName string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ctx = context.WithValue(ctx, ctxkeys.KeyUserID, userID)
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
+
+	_, err := s.StartDVR(ctx, &pb.StartDVRRequest{
+		StreamId:     &streamID,
+		InternalName: internalName,
+	})
+	if err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"tenant_id":     tenantID,
+			"stream_id":     streamID,
+			"internal_name": internalName,
+		}).Warn("DVR start after stream update failed")
+	}
 }
 
 // DeleteStream deletes a stream

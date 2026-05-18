@@ -1,10 +1,16 @@
 package handlers
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/sirupsen/logrus"
 )
 
 func TestIsHLSSource_M3U8Extension(t *testing.T) {
@@ -163,6 +169,60 @@ func TestSignalProcessingComplete(t *testing.T) {
 
 	// Signaling an unregistered stream must not panic
 	SignalProcessingComplete("processing+nonexistent_stream")
+}
+
+func TestBuildLocalProcessingSourceURL_DefaultsToMKV(t *testing.T) {
+	h := &ProcessingJobHandler{mistServerURL: "http://mistserver:4242/api2"}
+	req := &pb.ProcessingJobRequest{Params: map[string]string{
+		"source_kind":        "live",
+		"source_stream_name": "live+stream-1",
+		"source_start_unix":  "100",
+		"source_stop_unix":   "130",
+	}}
+
+	got := h.buildLocalProcessingSourceURL(req)
+
+	if !strings.HasPrefix(got, "http://mistserver:8080/live+stream-1.mkv?") {
+		t.Fatalf("source URL = %q, want local Mist MKV clipping URL", got)
+	}
+	if !strings.Contains(got, "duration=30") {
+		t.Fatalf("source URL = %q, want duration query", got)
+	}
+}
+
+func TestStageProcessingSourceDownloadsSourceClip(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "10")
+			return
+		}
+		_, _ = w.Write([]byte("clip-bytes"))
+	}))
+	t.Cleanup(server.Close)
+
+	h := &ProcessingJobHandler{storagePath: t.TempDir()}
+	req := &pb.ProcessingJobRequest{
+		ArtifactHash: "cliphash",
+		Params: map[string]string{
+			"source_format": "mkv",
+		},
+	}
+
+	path, err := h.stageProcessingSource(logrus.NewEntry(logrus.New()), req, server.URL)
+	if err != nil {
+		t.Fatalf("stageProcessingSource failed: %v", err)
+	}
+
+	if filepath.Base(path) != "cliphash.mkv" {
+		t.Fatalf("staged path = %q, want cliphash.mkv", path)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read staged file: %v", err)
+	}
+	if string(got) != "clip-bytes" {
+		t.Fatalf("staged bytes = %q", got)
+	}
 }
 
 func TestShouldIgnoreProcessExitByBootCount(t *testing.T) {

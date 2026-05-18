@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"frameworks/api_sidecar/internal/admission"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/sirupsen/logrus"
@@ -50,7 +51,7 @@ func (h *ProcessingJobHandler) buildLocalProcessingSourceURL(req *pb.ProcessingJ
 	}
 	sourceFormat := strings.TrimSpace(params["source_format"])
 	if sourceFormat == "" {
-		sourceFormat = "mp4"
+		sourceFormat = "mkv"
 	}
 	startUnix, startErr := strconv.ParseInt(params["source_start_unix"], 10, 64)
 	stopUnix, stopErr := strconv.ParseInt(params["source_stop_unix"], 10, 64)
@@ -75,6 +76,26 @@ func (h *ProcessingJobHandler) buildLocalProcessingSourceURL(req *pb.ProcessingJ
 	u.Path = strings.TrimRight(u.Path, "/") + "/" + sourceStream + "." + sourceFormat
 	u.RawQuery = query.Encode()
 	return u.String()
+}
+
+func isClipProcessingSource(req *pb.ProcessingJobRequest) bool {
+	params := req.GetParams()
+	switch strings.TrimSpace(params["source_kind"]) {
+	case "live", "dvr_rolling", "chapter":
+		return strings.TrimSpace(params["source_stream_name"]) != ""
+	default:
+		return false
+	}
+}
+
+func processingSourceExt(req *pb.ProcessingJobRequest) string {
+	format := strings.Trim(strings.ToLower(strings.TrimSpace(req.GetParams()["source_format"])), ".")
+	switch format {
+	case "mp4", "mov", "mkv", "webm", "ts":
+		return "." + format
+	default:
+		return ".mkv"
+	}
 }
 
 func deriveProcessingMistHTTPBase(base string) string {
@@ -106,6 +127,18 @@ func deriveProcessingMistHTTPBase(base string) string {
 // The staged file is cleanup-eligible once processing completes (no playback
 // lease against it).
 func (h *ProcessingJobHandler) stageUnsafeWrapper(log *logrus.Entry, req *pb.ProcessingJobRequest, ext string) (string, error) {
+	return h.stageSourceToProcessingDir(log, req, req.GetSourceUrl(), ext, admission.IntentUnsafeImportStage, "unsafe-wrapper")
+}
+
+func (h *ProcessingJobHandler) stageProcessingSource(log *logrus.Entry, req *pb.ProcessingJobRequest, sourceURL string) (string, error) {
+	return h.stageSourceToProcessingDir(log, req, sourceURL, processingSourceExt(req), admission.IntentProcessingSourceStage, "processing-source")
+}
+
+func (h *ProcessingJobHandler) stageSourceToProcessingDir(log *logrus.Entry, req *pb.ProcessingJobRequest, sourceURL, ext string, intent admission.StorageIntent, label string) (string, error) {
+	sourceURL = strings.TrimSpace(sourceURL)
+	if sourceURL == "" {
+		return "", fmt.Errorf("source URL is required")
+	}
 	procDir := filepath.Join(h.storagePath, "processing")
 	if err := os.MkdirAll(procDir, 0o755); err != nil {
 		return "", fmt.Errorf("mkdir processing dir: %w", err)
@@ -118,14 +151,14 @@ func (h *ProcessingJobHandler) stageUnsafeWrapper(log *logrus.Entry, req *pb.Pro
 	// instead of guessing zero. On HEAD failure (S3 quirk, network) fall
 	// back to admit-then-download with size=0; the engine handles unknowns.
 	var sizeBytes uint64
-	if size, ok := headContentLength(req.GetSourceUrl()); ok {
+	if size, ok := headContentLength(sourceURL); ok {
 		sizeBytes = size
 	}
 	sm := GetStorageManager()
 	if sm != nil {
-		decision, err := sm.Decide(context.Background(), procDir, admission.IntentUnsafeImportStage, sizeBytes)
+		decision, err := sm.Decide(context.Background(), procDir, intent, sizeBytes)
 		if err != nil || decision == admission.CacheReject {
-			return "", fmt.Errorf("admission rejected unsafe-wrapper stage (size=%d): %w", sizeBytes, err)
+			return "", fmt.Errorf("admission rejected %s stage (size=%d): %w", label, sizeBytes, err)
 		}
 	}
 
@@ -139,7 +172,7 @@ func (h *ProcessingJobHandler) stageUnsafeWrapper(log *logrus.Entry, req *pb.Pro
 	if err != nil {
 		return "", fmt.Errorf("create stage tmpfile: %w", err)
 	}
-	resp, err := httpGetSource(req.GetSourceUrl())
+	resp, err := httpGetSource(sourceURL)
 	if err != nil {
 		_ = out.Close()
 		_ = os.Remove(tmp)
@@ -170,7 +203,10 @@ func (h *ProcessingJobHandler) stageUnsafeWrapper(log *logrus.Entry, req *pb.Pro
 		_ = os.Remove(tmp)
 		return "", fmt.Errorf("rename stage: %w", err)
 	}
-	log.WithField("bytes", written).Debug("Wrote unsafe-wrapper stage")
+	log.WithFields(logging.Fields{
+		"bytes":      written,
+		"stage_type": label,
+	}).Debug("Wrote processing source stage")
 	return target, nil
 }
 

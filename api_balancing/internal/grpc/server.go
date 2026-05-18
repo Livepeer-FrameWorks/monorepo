@@ -924,6 +924,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 
 	sourceStreamName := dispatch.streamName
 	sourceKind := "chapter"
+	sourceFormat := "mkv"
 	switch dispatch.kind {
 	case pb.ClipPullRequest_SOURCE_KIND_LIVE:
 		sourceKind = "live"
@@ -936,7 +937,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	sourceParams := map[string]string{
 		"source_kind":        sourceKind,
 		"source_stream_name": sourceStreamName,
-		"source_format":      "mp4",
+		"source_format":      sourceFormat,
 		"source_start_unix":  strconv.FormatInt(startUnix, 10),
 		"source_stop_unix":   strconv.FormatInt(stopUnix, 10),
 	}
@@ -946,7 +947,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		if isLoopbackSourceHost(sourceHost) {
 			preferredNodeID = sourceNodeID
 		} else {
-			sourceURL = buildClipProcessingSourceURL(sourceHost, sourceStreamName, "mp4", sourceKind, startUnix, stopUnix)
+			sourceURL = buildClipProcessingSourceURL(sourceHost, sourceStreamName, sourceFormat, sourceKind, startUnix, stopUnix)
 		}
 	}
 	if _, err := jobs.InsertProcessingJobWithSourceParams(ctx, s.db, req.TenantId, clipHash, "process", nil, req.GetProcessesJson(), sourceURL, sourceParams, preferredNodeID); err != nil {

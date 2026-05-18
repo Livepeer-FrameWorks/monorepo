@@ -71,8 +71,8 @@ func (sm *StorageManager) Decide(
 	case admission.IntentProcessingInput:
 		return admission.CacheMemoryOnly, nil
 
-	case admission.IntentDVRRecording, admission.IntentProcessingOutput, admission.IntentUnsafeImportStage,
-		admission.IntentDVRChapterFinalization:
+	case admission.IntentDVRRecording, admission.IntentProcessingOutput, admission.IntentProcessingSourceStage,
+		admission.IntentUnsafeImportStage, admission.IntentDVRChapterFinalization:
 		if err := sm.admitDefrost(ctx, dir, sizeBytes); err != nil {
 			return admission.CacheReject, err
 		}

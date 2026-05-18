@@ -25,11 +25,10 @@ import (
 
 // ProcessingJobHandler handles VOD processing jobs from Foghorn.
 // Activates the processing+{hash} wildcard stream in MistServer.
-// STREAM_SOURCE returns the Helmsman read-through relay URL for the
-// source for safe wrappers (mp4/mov/mkv/webm/ts) and the local staged
-// file path for unsafe wrappers (avi/flv/m4v); see processSource for
-// the dispatch. STREAM_PROCESS provides the MistProc* config
-// (VP9/thumbs/audio) from Commodore.
+// STREAM_SOURCE returns a local staged file for clip sources and
+// unsafe-wrapper uploads, and the Helmsman read-through relay URL for
+// regular safe-wrapper uploads. STREAM_PROCESS provides the MistProc*
+// config (VP9/thumbs/audio) from Commodore.
 type ProcessingJobHandler struct {
 	logger        logging.Logger
 	mistServerURL string
@@ -140,15 +139,6 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 	log.Info("Processing job received")
 	streamName := "processing+" + req.GetArtifactHash()
 	defer clearProcessingProcessOverride(streamName)
-	if req.GetSourceUrl() == "" {
-		sourceURL := h.buildLocalProcessingSourceURL(req)
-		if sourceURL == "" {
-			log.Warn("Processing job has no source URL or local source parameters")
-		} else {
-			setProcessingSourceOverride(streamName, sourceURL)
-			log.WithField("source_url", sourceURL).Info("Registered local processing source override")
-		}
-	}
 
 	// If a previous attempt for this artifact is still running on this node,
 	// silently drop the duplicate. Don't send a failure — the original attempt
@@ -164,27 +154,54 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 	// they must materialize locally first. Safe wrappers skip this branch:
 	// Foghorn's resolveProcessSource returns a Helmsman relay URL and Mist
 	// reads via HTTP::URIReader.
+	sourceURL := strings.TrimSpace(req.GetSourceUrl())
+	if sourceURL == "" {
+		sourceURL = h.buildLocalProcessingSourceURL(req)
+	}
+	clipSource := isClipProcessingSource(req)
 	var stagedSourcePath string
 	defer func() {
 		if stagedSourcePath != "" {
 			if err := os.Remove(stagedSourcePath); err != nil && !os.IsNotExist(err) {
-				log.WithError(err).Warn("Failed to remove staged unsafe-wrapper source")
+				log.WithError(err).Warn("Failed to remove staged processing source")
 			}
 		}
 	}()
-	if ext := unsafeWrapperExt(req.GetSourceUrl()); ext != "" {
-		path, err := h.stageUnsafeWrapper(log, req, ext)
+	if clipSource {
+		if sourceURL == "" {
+			h.sendResult(send, req.GetJobId(), "failed", "clip processing source URL unavailable", nil, "", 0)
+			return
+		}
+		path, err := h.stageProcessingSource(log, req, sourceURL)
 		if err != nil {
-			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("unsafe-wrapper stage failed: %v", err), nil, "", 0)
+			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("clip source stage failed: %v", err), nil, "", 0)
 			return
 		}
 		stagedSourcePath = path
-		log.WithField("staged_path", path).Info("Staged unsafe-wrapper source locally")
+		setProcessingSourceOverride(streamName, path)
+		log.WithField("staged_path", path).Info("Staged clip source for processing")
+	} else if sourceURL != "" && req.GetSourceUrl() == "" {
+		setProcessingSourceOverride(streamName, sourceURL)
+		log.WithField("source_url", sourceURL).Info("Registered local processing source override")
+	} else if sourceURL == "" {
+		log.Warn("Processing job has no source URL or local source parameters")
+	}
+
+	if !clipSource {
+		if ext := unsafeWrapperExt(req.GetSourceUrl()); ext != "" {
+			path, err := h.stageUnsafeWrapper(log, req, ext)
+			if err != nil {
+				h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("unsafe-wrapper stage failed: %v", err), nil, "", 0)
+				return
+			}
+			stagedSourcePath = path
+			log.WithField("staged_path", path).Info("Staged unsafe-wrapper source locally")
+		}
 	}
 
 	// For segmented (HLS) sources, rewrite manifest with presigned segment URLs
 	var hlsManifestPath string
-	if isHLSSource(req.GetSourceUrl(), req.GetParams()) {
+	if !clipSource && isHLSSource(req.GetSourceUrl(), req.GetParams()) {
 		var err error
 		hlsManifestPath, err = h.rewriteHLSManifest(log, req)
 		if err != nil {

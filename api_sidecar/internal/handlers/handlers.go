@@ -851,11 +851,12 @@ func HandleStreamSource(c *gin.Context) {
 	// Resolve processing+ sources locally when an active job has staged
 	// the input on disk:
 	//
+	//   - Clip jobs materialize the requested Mist clipping output before
+	//     the canonical processing pass starts.
 	//   - HLS rewrites land at {storage}/processing/<hash>.m3u8.
 	//   - Unsafe-wrapper staging lands at {storage}/processing/<hash>.<ext>
 	//     for .avi/.flv/.m4v inputs that Mist cannot open over HTTP.
-	//     Foghorn's resolveProcessSource hands back relay URLs for safe
-	//     wrappers; only unsafe wrappers stage locally.
+	//   - Regular safe-wrapper uploads still use the read-through relay.
 	//
 	// Without an active pending job the shortcut is skipped so we never
 	// serve a stale staged file from a previous failed job.

@@ -22,6 +22,10 @@ const (
 	// IntentProcessingOutput — Mist push target for a transcode/remux job.
 	// Must get disk; cleanup evicts relay cache first.
 	IntentProcessingOutput StorageIntent = "processing_output"
+	// IntentProcessingSourceStage — materialized clip source for processing.
+	// Disk required; removed after the canonical output is produced or the
+	// job fails.
+	IntentProcessingSourceStage StorageIntent = "processing_source_stage"
 	// IntentDVRChapterFinalization — canonical .mkv produced by the DVR
 	// chapter finalization job. Same priority class as
 	// IntentProcessingOutput; distinguished only for metrics + operator

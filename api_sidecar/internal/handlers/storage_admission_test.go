@@ -35,6 +35,7 @@ func TestStorageManager_Decide_HandlesEveryDeclaredIntent(t *testing.T) {
 	intents := []admission.StorageIntent{
 		admission.IntentDVRRecording,
 		admission.IntentProcessingOutput,
+		admission.IntentProcessingSourceStage,
 		admission.IntentDVRChapterFinalization,
 		admission.IntentUnsafeImportStage,
 		admission.IntentPlaybackCache,

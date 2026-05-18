@@ -1729,8 +1729,8 @@
                                 {#if artifact.type === "dvr"}
                                   <div class="flex flex-col gap-2">
                                     <p class="text-sm text-muted-foreground">
-                                      DVR replay is split into chapters. Each chapter finalizes into
-                                      its own VOD artifact you can scrub and share.
+                                      Open the live DVR window. Finalized chapters appear as VOD
+                                      artifacts for historical playback.
                                     </p>
                                     <Button
                                       variant="ghost"
@@ -1738,7 +1738,7 @@
                                       class="w-fit gap-2 border border-border/30"
                                       onclick={() => playArtifact(artifact)}
                                     >
-                                      Open chapters
+                                      Open DVR
                                     </Button>
                                   </div>
                                 {:else if artifact.playbackId}
