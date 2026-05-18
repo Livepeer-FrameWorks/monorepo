@@ -1318,7 +1318,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			creditAmt := creditDec.Round(2).String()
 
 			if draftInvoiceID != "" {
-				if txErr := tx.QueryRowContext(ctx, `
+				txErr = tx.QueryRowContext(ctx, `
 						UPDATE purser.billing_invoices
 						SET amount = $1::numeric, base_amount = $2::numeric, metered_amount = $3::numeric,
 						    prepaid_credit_applied = $4::numeric, currency = $5,
@@ -1326,10 +1326,12 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 						    period_start = $9, period_end = $10, updated_at = NOW()
 						WHERE id = $11 AND tenant_id = $12 AND status IN ('draft', 'manual_review')
 						RETURNING id
-					`, totalAmt, baseAmt, meteredAmt, creditAmt, currency, status, dueDate, usageJSON, periodStart, periodEnd, draftInvoiceID, tenantID).Scan(&invoiceID); txErr != nil {
+					`, totalAmt, baseAmt, meteredAmt, creditAmt, currency, status, dueDate, usageJSON, periodStart, periodEnd, draftInvoiceID, tenantID).Scan(&invoiceID)
+				if txErr != nil {
 					return fmt.Errorf("update invoice: %w", txErr)
 				}
-			} else if txErr := tx.QueryRowContext(ctx, `
+			} else {
+				txErr = tx.QueryRowContext(ctx, `
 					INSERT INTO purser.billing_invoices (
 						id, tenant_id, amount, currency, status, due_date,
 						base_amount, metered_amount, prepaid_credit_applied,
@@ -1354,22 +1356,27 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 						updated_at = NOW()
 					WHERE purser.billing_invoices.status IN ('draft', 'manual_review')
 					RETURNING id
-					`, invoiceID, tenantID, totalAmt, currency, status, dueDate, baseAmt, meteredAmt, creditAmt, usageJSON, periodStart, periodEnd).Scan(&invoiceID); txErr != nil {
-				return fmt.Errorf("upsert invoice: %w", txErr)
+					`, invoiceID, tenantID, totalAmt, currency, status, dueDate, baseAmt, meteredAmt, creditAmt, usageJSON, periodStart, periodEnd).Scan(&invoiceID)
+				if txErr != nil {
+					return fmt.Errorf("upsert invoice: %w", txErr)
+				}
 			}
-			if txErr := persistInvoiceLineItems(ctx, tx, invoiceID, tenantID, ratingResult); txErr != nil {
+			txErr = persistInvoiceLineItems(ctx, tx, invoiceID, tenantID, ratingResult)
+			if txErr != nil {
 				return txErr
 			}
 			// Operator credit ledger: write accrual rows for marketplace
 			// lines in the same tx as the invoice finalization. The
 			// helper skips manual_review invoices internally.
-			if txErr := operator.ComputeAndPersistCredits(ctx, tx, invoiceID, status); txErr != nil {
+			txErr = operator.ComputeAndPersistCredits(ctx, tx, invoiceID, status)
+			if txErr != nil {
 				return fmt.Errorf("persist operator credits: %w", txErr)
 			}
 			// Enqueue Stripe meter events in the outbox. The async
 			// flusher (separate worker) reads pending rows and pushes
 			// to Stripe; rollback discards the row.
-			if txErr := billingstripe.EnqueueMeterEvents(ctx, tx, invoiceID, tenantID, status); txErr != nil {
+			txErr = billingstripe.EnqueueMeterEvents(ctx, tx, invoiceID, tenantID, status)
+			if txErr != nil {
 				return fmt.Errorf("enqueue stripe meter events: %w", txErr)
 			}
 			// manual_review: do not advance the subscription period.
