@@ -40,7 +40,7 @@ jobs:
 
       - name: Send repository_dispatch
         if: steps.impact.outputs.affected == 'true'
-        uses: peter-evans/repository-dispatch@v3
+        uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ steps.go-livepeer-token.outputs.token }}
           repository: Livepeer-FrameWorks/go-livepeer
