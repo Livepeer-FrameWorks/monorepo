@@ -352,7 +352,9 @@ func (s *Server) preflightFirstColdSpan(ctx context.Context, store *BlockStore, 
 		return fmt.Errorf("s3 block preflight fetch: %w", err)
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4*1024))
+	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, 4*1024)); err != nil {
+		return fmt.Errorf("drain s3 block preflight response: %w", err)
+	}
 	if resp.StatusCode == http.StatusPartialContent {
 		return nil
 	}

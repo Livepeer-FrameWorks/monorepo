@@ -2076,8 +2076,8 @@ func (p *Processor) handleStreamProcess(trigger *pb.MistTrigger) (string, bool, 
 	// dvr+<dvr_internal_name>: the durable answer is the dvr_processes_json
 	// snapshot stamped onto foghorn.artifacts at StartDVR. The streamCache
 	// only carries the in-flight live config; the snapshot is what
-	// guarantees Thumbs/sprite/Livepeer tracks survive Foghorn restarts
-	// and cache TTL.
+	// guarantees DVR-specific Thumbs/sprite tracks survive Foghorn
+	// restarts and cache TTL.
 	if strings.HasPrefix(streamName, "dvr+") {
 		if cfg := p.resolveRollingDVRProcessConfig(internalName); cfg != "" {
 			return cfg, false, nil
@@ -2116,7 +2116,7 @@ func (p *Processor) resolveProcessingProcessConfig(artifactHash string) string {
 	return cfg
 }
 
-// resolveRollingDVRProcessConfig returns the live processes_json
+// resolveRollingDVRProcessConfig returns the live thumbnail processes_json
 // snapshot stored on the DVR artifact row at StartDVR. The snapshot
 // is the authority: it survives Foghorn restarts and cache TTL expiry
 // that the PUSH_REWRITE-populated streamCache does not. The in-memory
@@ -2932,6 +2932,9 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 
 	// Update disk usage from OS-level stats reported by Helmsman
 	state.DefaultManager().UpdateNodeDiskUsage(nu.GetNodeId(), nu.GetDiskTotalBytes(), nu.GetDiskUsedBytes())
+	if err := state.DefaultManager().ApplyNodeLifecycle(context.Background(), nu); err != nil {
+		p.logger.WithError(err).WithField("node_id", nu.GetNodeId()).Warn("Failed to persist node lifecycle snapshot")
+	}
 
 	// Calculate total connections across all streams for virtual viewer reconciliation
 	var totalConnections int

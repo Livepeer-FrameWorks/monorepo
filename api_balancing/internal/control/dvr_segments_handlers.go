@@ -67,6 +67,23 @@ func processRecordDVRSegment(
 		return
 	}
 
+	if db != nil && nodeID != "" {
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO foghorn.artifact_nodes
+				(artifact_hash, node_id, last_seen_at, is_orphaned, cached_at)
+			VALUES ($1, $2, NOW(), false, NOW())
+			ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
+				last_seen_at = NOW(),
+				is_orphaned = false,
+				cached_at = COALESCE(foghorn.artifact_nodes.cached_at, NOW())
+		`, dvrHash, nodeID); err != nil {
+			logger.WithError(err).WithFields(logging.Fields{
+				"dvr_hash": dvrHash,
+				"node_id":  nodeID,
+			}).Warn("Failed to refresh active DVR recording node from segment trigger")
+		}
+	}
+
 	if s3Client == nil {
 		sendRecordDVRSegmentResponse(stream, &pb.RecordDVRSegmentResponse{
 			RequestId:   requestID,

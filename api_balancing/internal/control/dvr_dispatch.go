@@ -92,22 +92,27 @@ func ResolveDVRArtifactDispatch(ctx context.Context, dvrInternalName string) (*D
 	// than one row exists while status is active, bail rather than guess
 	// which row is the recording origin.
 	rows, err := db.QueryContext(ctx, `
-		SELECT node_id
+		SELECT node_id, COALESCE(is_orphaned, false)
 		  FROM foghorn.artifact_nodes
 		 WHERE artifact_hash = $1
-		   AND is_orphaned = false
 	`, out.DVRHash)
 	if err != nil {
 		return out, err
 	}
 	defer rows.Close()
 	var candidates []string
+	var orphanedCandidates []string
 	for rows.Next() {
 		var nodeID string
-		if err := rows.Scan(&nodeID); err != nil {
+		var isOrphaned bool
+		if err := rows.Scan(&nodeID, &isOrphaned); err != nil {
 			return out, err
 		}
-		if nodeID != "" {
+		switch {
+		case nodeID == "":
+		case isOrphaned:
+			orphanedCandidates = append(orphanedCandidates, nodeID)
+		default:
 			candidates = append(candidates, nodeID)
 		}
 	}
@@ -116,9 +121,14 @@ func ResolveDVRArtifactDispatch(ctx context.Context, dvrInternalName string) (*D
 	}
 	switch len(candidates) {
 	case 0:
-		// Active status but no artifact_nodes row — recording row hasn't
-		// been written yet (StartDVR races) or was cleared. Leave
-		// RecordingNode empty; the caller can fall back / retry.
+		// Active status but no non-orphaned artifact_nodes row. If a single
+		// stale row exists, use it as the recording-origin hint: segment
+		// progress refreshes the row back to non-orphaned, and refusing it
+		// would wedge an otherwise healthy in-flight DVR until the next
+		// control-plane write.
+		if len(orphanedCandidates) == 1 {
+			out.RecordingNode = orphanedCandidates[0]
+		}
 	case 1:
 		out.RecordingNode = candidates[0]
 	default:

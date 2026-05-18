@@ -251,7 +251,43 @@ func GetStreamSource(internalName string) (nodeID string, baseURL string, ok boo
 		}
 		return st.NodeID, "", true
 	}
+	if nodeID, baseURL, ok := getStreamSourceFromLifecycleDB(internalName); ok {
+		return nodeID, baseURL, true
+	}
 
+	return "", "", false
+}
+
+func getStreamSourceFromLifecycleDB(internalName string) (nodeID string, baseURL string, ok bool) {
+	if db == nil || internalName == "" {
+		return "", "", false
+	}
+	rows, err := db.QueryContext(context.Background(), `
+		SELECT node_id, lifecycle::text
+		  FROM foghorn.node_lifecycle
+		 WHERE last_updated > NOW() - INTERVAL '2 minutes'
+		 ORDER BY last_updated DESC
+		 LIMIT 20
+	`)
+	if err != nil {
+		return "", "", false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			continue
+		}
+		var update pb.NodeLifecycleUpdate
+		if err := json.Unmarshal([]byte(raw), &update); err != nil {
+			continue
+		}
+		stream := update.GetStreams()[internalName]
+		if stream == nil || stream.GetInputs() <= 0 || stream.GetReplicated() {
+			continue
+		}
+		return id, update.GetBaseUrl(), true
+	}
 	return "", "", false
 }
 
@@ -1829,6 +1865,23 @@ func processDVRProgress(progress *pb.DVRProgress, storageNodeID string, logger l
 		"message":       message,
 	}).Info("DVR progress update")
 
+	if db != nil && dvrHash != "" && storageNodeID != "" {
+		if _, err := db.ExecContext(streamCtx(), `
+			UPDATE foghorn.artifact_nodes
+			   SET last_seen_at = NOW(),
+			       is_orphaned = false,
+			       segment_count = GREATEST(COALESCE(segment_count, 0), $3),
+			       size_bytes = GREATEST(COALESCE(size_bytes, 0), $4)
+			 WHERE artifact_hash = $1
+			   AND node_id = $2
+		`, dvrHash, storageNodeID, int(segmentCount), int64(sizeBytes)); err != nil {
+			logger.WithError(err).WithFields(logging.Fields{
+				"dvr_hash": dvrHash,
+				"node_id":  storageNodeID,
+			}).Warn("Failed to refresh active DVR artifact node from progress update")
+		}
+	}
+
 	_ = state.DefaultManager().ApplyDVRProgress(streamCtx(), dvrHash, status, uint64(sizeBytes), uint32(segmentCount), storageNodeID)
 }
 
@@ -2021,6 +2074,29 @@ func GetNodeOutputs(nodeID string) (*NodeOutputs, bool) {
 			Outputs:     ns.Outputs,
 			LastUpdate:  ns.LastUpdate,
 		}, true
+	}
+	if db != nil && nodeID != "" {
+		var baseURL, outputsRaw string
+		if err := db.QueryRowContext(context.Background(), `
+			SELECT COALESCE(base_url,''), COALESCE(outputs,'{}'::jsonb)::text
+			  FROM foghorn.node_outputs
+			 WHERE node_id = $1
+		`, nodeID).Scan(&baseURL, &outputsRaw); err == nil {
+			var outputs map[string]any
+			if outputsRaw != "" {
+				if err := json.Unmarshal([]byte(outputsRaw), &outputs); err != nil {
+					return nil, false
+				}
+			}
+			if len(outputs) > 0 {
+				return &NodeOutputs{
+					NodeID:      nodeID,
+					BaseURL:     baseURL,
+					OutputsJSON: outputsRaw,
+					Outputs:     outputs,
+				}, true
+			}
+		}
 	}
 	return nil, false
 }
@@ -6122,6 +6198,43 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 			"internal_name": bareName,
 			"artifact_hash": thumbnailKey,
 		}).Info("Resolved artifact hash for thumbnail S3 key")
+	case strings.HasPrefix(internalName, "processing+"):
+		conn := GetDB()
+		if conn == nil {
+			logger.Warn("DB not available for processing thumbnail resolution")
+			return
+		}
+		token := strings.TrimPrefix(internalName, "processing+")
+		var tenantID sql.NullString
+		var authoritativeCluster sql.NullString
+		var artifactType string
+		if err := conn.QueryRowContext(context.Background(),
+			`SELECT tenant_id::text, COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, '')), artifact_type
+			   FROM foghorn.artifacts
+			  WHERE artifact_hash = $1
+			    AND artifact_type IN ('clip','vod','dvr')`,
+			token,
+		).Scan(&tenantID, &authoritativeCluster, &artifactType); err != nil {
+			logger.WithFields(logging.Fields{
+				"stream_name":   internalName,
+				"artifact_hash": token,
+				"error":         err,
+			}).Warn("Could not resolve processing+ stream to artifact_hash for thumbnail upload")
+			return
+		}
+		thumbnailKey = token
+		if tenantID.Valid {
+			thumbTenantID = tenantID.String
+		}
+		if authoritativeCluster.Valid {
+			thumbOriginCluster = authoritativeCluster.String
+		}
+		logger.WithFields(logging.Fields{
+			"stream_name":     internalName,
+			"artifact_hash":   thumbnailKey,
+			"artifact_type":   artifactType,
+			"storage_cluster": thumbOriginCluster,
+		}).Info("Resolved processing artifact hash for thumbnail S3 key")
 	case strings.HasPrefix(internalName, "dvr+"):
 		conn := GetDB()
 		if conn == nil {
