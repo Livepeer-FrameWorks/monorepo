@@ -41,11 +41,17 @@ type ProcessingDispatcher struct {
 	maxRetries      int
 	jobTTL          time.Duration
 	stopCh          chan struct{}
+	wakeCh          chan struct{}
 	wg              sync.WaitGroup
 	configCacher    ProcessConfigCacher
 	gatewayResolver GatewayResolver
 	onJobExhausted  JobExhaustedHandler
 }
+
+var (
+	processingWakeMu    sync.Mutex
+	processingWakeChans = map[chan struct{}]struct{}{}
+)
 
 // ProcessConfigCacher caches process config for STREAM_PROCESS trigger lookup.
 // Implemented by triggers.Processor.
@@ -102,6 +108,7 @@ func NewProcessingDispatcher(cfg ProcessingDispatcherConfig) *ProcessingDispatch
 		maxRetries: maxRetries,
 		jobTTL:     jobTTL,
 		stopCh:     make(chan struct{}),
+		wakeCh:     make(chan struct{}, 1),
 	}
 }
 
@@ -118,12 +125,14 @@ func (d *ProcessingDispatcher) SetJobExhaustedHandler(h JobExhaustedHandler) {
 }
 
 func (d *ProcessingDispatcher) Start() {
+	registerProcessingDispatcherWake(d.wakeCh)
 	d.wg.Add(1)
 	go d.run()
 	d.logger.Info("Processing dispatcher started")
 }
 
 func (d *ProcessingDispatcher) Stop() {
+	unregisterProcessingDispatcherWake(d.wakeCh)
 	close(d.stopCh)
 	d.wg.Wait()
 	d.logger.Info("Processing dispatcher stopped")
@@ -134,13 +143,43 @@ func (d *ProcessingDispatcher) run() {
 	ticker := time.NewTicker(d.interval)
 	defer ticker.Stop()
 
+	d.dispatch()
+	d.recoverStale()
+
 	for {
 		select {
 		case <-ticker.C:
 			d.dispatch()
 			d.recoverStale()
+		case <-d.wakeCh:
+			d.dispatch()
 		case <-d.stopCh:
 			return
+		}
+	}
+}
+
+func registerProcessingDispatcherWake(ch chan struct{}) {
+	processingWakeMu.Lock()
+	defer processingWakeMu.Unlock()
+	processingWakeChans[ch] = struct{}{}
+}
+
+func unregisterProcessingDispatcherWake(ch chan struct{}) {
+	processingWakeMu.Lock()
+	defer processingWakeMu.Unlock()
+	delete(processingWakeChans, ch)
+}
+
+// NotifyProcessingJobQueued wakes local dispatchers after a durable queue write.
+// Polling remains the recovery path for missed notifications and HA peers.
+func NotifyProcessingJobQueued() {
+	processingWakeMu.Lock()
+	defer processingWakeMu.Unlock()
+	for ch := range processingWakeChans {
+		select {
+		case ch <- struct{}{}:
+		default:
 		}
 	}
 }
@@ -593,6 +632,9 @@ func InsertProcessingJobWithSourceParams(ctx context.Context, db *sql.DB, tenant
 			INSERT INTO foghorn.processing_jobs (job_id, tenant_id, artifact_hash, job_type, status, parent_job_id, processes_json, source_url, source_params, preferred_node_id)
 			VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8::jsonb, $9)
 		`, jobID, tenantID, artifactHash, jobType, parentID, pJSON, srcURL, srcParams, preferredNode)
+		if err == nil {
+			NotifyProcessingJobQueued()
+		}
 		return jobID, err
 	}
 
@@ -629,6 +671,7 @@ func InsertProcessingJobWithSourceParams(ctx context.Context, db *sql.DB, tenant
 			return "", commitErr
 		}
 		tx = nil
+		NotifyProcessingJobQueued()
 		return existingJobID, nil
 	case !errors.Is(err, sql.ErrNoRows):
 		return "", err
@@ -645,6 +688,7 @@ func InsertProcessingJobWithSourceParams(ctx context.Context, db *sql.DB, tenant
 		return "", commitErr
 	}
 	tx = nil
+	NotifyProcessingJobQueued()
 	return jobID, nil
 }
 

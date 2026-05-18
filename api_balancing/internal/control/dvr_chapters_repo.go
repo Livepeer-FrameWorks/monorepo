@@ -13,6 +13,18 @@ import (
 	"github.com/lib/pq"
 )
 
+var chapterClosedNotifier func()
+
+func SetChapterClosedNotifier(fn func()) {
+	chapterClosedNotifier = fn
+}
+
+func notifyChapterClosed() {
+	if chapterClosedNotifier != nil {
+		chapterClosedNotifier()
+	}
+}
+
 // Chapter rows record range metadata + the state machine that drives
 // finalization (chapter → VOD artifact remux) and reclaim (delete
 // source segments once the chapter artifact is durably frozen).
@@ -124,15 +136,20 @@ func OpenChapter(ctx context.Context, c DVRChapterRow) error {
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	if _, txErr := tx.ExecContext(ctx, `
+	res, txErr := tx.ExecContext(ctx, `
 		UPDATE foghorn.dvr_chapters
 		   SET is_current = false,
 		       state      = CASE WHEN state = 'open' THEN 'closed' ELSE state END
 		 WHERE artifact_hash = $1
 		   AND is_current = true
 		   AND chapter_id <> $2
-	`, c.ArtifactHash, c.ChapterID); txErr != nil {
+	`, c.ArtifactHash, c.ChapterID)
+	if txErr != nil {
 		return fmt.Errorf("close previous current chapter: %w", txErr)
+	}
+	closedPrevious, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("close previous current chapter rows affected: %w", err)
 	}
 
 	state := c.State
@@ -159,7 +176,13 @@ func OpenChapter(ctx context.Context, c DVRChapterRow) error {
 	if err != nil {
 		return fmt.Errorf("open chapter: %w", err)
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if state == ChapterStateClosed || closedPrevious > 0 {
+		notifyChapterClosed()
+	}
+	return nil
 }
 
 // CloseChapter flips a single chapter from is_current=true,state='open'
@@ -170,7 +193,7 @@ func CloseChapter(ctx context.Context, chapterID string) error {
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	_, err := db.ExecContext(ctx, `
+	res, err := db.ExecContext(ctx, `
 		UPDATE foghorn.dvr_chapters
 		   SET is_current = false,
 		       state      = 'closed'
@@ -179,6 +202,13 @@ func CloseChapter(ctx context.Context, chapterID string) error {
 	`, chapterID)
 	if err != nil {
 		return fmt.Errorf("close chapter: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("close chapter rows affected: %w", err)
+	}
+	if rows > 0 {
+		notifyChapterClosed()
 	}
 	return nil
 }
@@ -190,7 +220,7 @@ func CloseCurrentChapterForArtifact(ctx context.Context, artifactHash string) er
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	_, err := db.ExecContext(ctx, `
+	res, err := db.ExecContext(ctx, `
 		UPDATE foghorn.dvr_chapters
 		   SET is_current = false,
 		       state      = CASE WHEN state = 'open' THEN 'closed' ELSE state END
@@ -199,6 +229,13 @@ func CloseCurrentChapterForArtifact(ctx context.Context, artifactHash string) er
 	`, artifactHash)
 	if err != nil {
 		return fmt.Errorf("close current chapter for artifact: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("close current chapter rows affected: %w", err)
+	}
+	if rows > 0 {
+		notifyChapterClosed()
 	}
 	return nil
 }

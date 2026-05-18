@@ -14,6 +14,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
@@ -64,10 +65,16 @@ type ChapterFinalizationQueue struct {
 	logger          logging.Logger
 	interval        time.Duration
 	stopCh          chan struct{}
+	wakeCh          chan struct{}
 	wg              sync.WaitGroup
 	gatewayResolver GatewayResolver
 	configCacher    ProcessConfigCacher
 }
+
+var (
+	chapterFinalizeWakeMu    sync.Mutex
+	chapterFinalizeWakeChans = map[chan struct{}]struct{}{}
+)
 
 func NewChapterFinalizationQueue(cfg ChapterFinalizationQueueConfig) *ChapterFinalizationQueue {
 	interval := cfg.Interval
@@ -79,18 +86,21 @@ func NewChapterFinalizationQueue(cfg ChapterFinalizationQueueConfig) *ChapterFin
 		logger:          cfg.Logger,
 		interval:        interval,
 		stopCh:          make(chan struct{}),
+		wakeCh:          make(chan struct{}, 1),
 		gatewayResolver: cfg.GatewayResolver,
 		configCacher:    cfg.ConfigCacher,
 	}
 }
 
 func (q *ChapterFinalizationQueue) Start() {
+	registerChapterFinalizationWake(q.wakeCh)
 	q.wg.Add(1)
 	go q.run()
 	q.logger.WithField("interval_seconds", int(q.interval.Seconds())).Info("Chapter finalization queue started")
 }
 
 func (q *ChapterFinalizationQueue) Stop() {
+	unregisterChapterFinalizationWake(q.wakeCh)
 	close(q.stopCh)
 	q.wg.Wait()
 	q.logger.Info("Chapter finalization queue stopped")
@@ -101,17 +111,41 @@ func (q *ChapterFinalizationQueue) run() {
 	ticker := time.NewTicker(q.interval)
 	defer ticker.Stop()
 
-	firstTick := time.NewTimer(20 * time.Second)
-	defer firstTick.Stop()
+	q.tick()
 
 	for {
 		select {
-		case <-firstTick.C:
-			q.tick()
 		case <-ticker.C:
+			q.tick()
+		case <-q.wakeCh:
 			q.tick()
 		case <-q.stopCh:
 			return
+		}
+	}
+}
+
+func registerChapterFinalizationWake(ch chan struct{}) {
+	chapterFinalizeWakeMu.Lock()
+	defer chapterFinalizeWakeMu.Unlock()
+	chapterFinalizeWakeChans[ch] = struct{}{}
+}
+
+func unregisterChapterFinalizationWake(ch chan struct{}) {
+	chapterFinalizeWakeMu.Lock()
+	defer chapterFinalizeWakeMu.Unlock()
+	delete(chapterFinalizeWakeChans, ch)
+}
+
+// NotifyChapterFinalizationQueued wakes local chapter finalizers after a
+// chapter row enters the closed state. Polling remains recovery for HA peers.
+func NotifyChapterFinalizationQueued() {
+	chapterFinalizeWakeMu.Lock()
+	defer chapterFinalizeWakeMu.Unlock()
+	for ch := range chapterFinalizeWakeChans {
+		select {
+		case ch <- struct{}{}:
+		default:
 		}
 	}
 }
@@ -269,14 +303,14 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 	}
 
 	// Resolve the tenant's VOD processing pipeline BEFORE marking the
-	// chapter finalizing. Processing is the base config for chapter
-	// artifacts; without it the produced .mkv would skip optional
-	// MistProc tracks (Thumbs, sprites, Livepeer). If Commodore is
-	// unreachable or returns an error we must leave the chapter in
-	// 'closed' so the next queue tick retries — advancing to
-	// 'finalizing' first would wedge the chapter for the full
-	// chapterFinalizationMaxTimeout (up to 24h) before the stale-
-	// finalizing path picks it up again.
+	// chapter finalizing, then keep only MistProcThumbs. DVR chapters are
+	// live-derived assets: the source already carries A/V renditions, but
+	// the finalized chapter needs fresh thumbnail tracks for its own
+	// bounded timeline. If Commodore is unreachable or returns an error we
+	// must leave the chapter in 'closed' so the next queue tick retries —
+	// advancing to 'finalizing' first would wedge the chapter for the full
+	// chapterFinalizationMaxTimeout (up to 24h) before the stale-finalizing
+	// path picks it up again.
 	if control.CommodoreClient == nil {
 		return fmt.Errorf("commodore client not configured; cannot resolve tenant processes_json")
 	}
@@ -290,7 +324,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 			}).Warn("Chapter finalization queue: tenant processes_json lookup failed; chapter stays closed for retry")
 			return fmt.Errorf("resolve tenant processes_json: %w", perr)
 		}
-		processesJSON = resp.GetProcessesJson()
+		processesJSON = mist.ThumbsOnlyProcesses(resp.GetProcessesJson())
 	}
 	// Substitute {{gateway_url}} so Helmsman sees a concrete URL.
 	// Commodore returns the raw placeholder by design (the resolver

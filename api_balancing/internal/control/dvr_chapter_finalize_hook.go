@@ -159,9 +159,9 @@ func handleChapterFinalizeResult(
 	// DTSH generation runs on the Helmsman side immediately after
 	// PUSH_END (api_sidecar/internal/handlers/processing_chapter.go).
 	// Spritesheet / Chandler thumbnail tracks come from the tenant's
-	// VOD processing pipeline — chapter finalize attaches the same
-	// processes_json the VOD upload flow uses (see chapter_finalization_queue.go),
-	// so MistProc fires those tracks during the processing+<hash> boot.
+	// thumbnail process config. Chapter finalize filters the VOD
+	// processes_json down to MistProcThumbs (see chapter_finalization_queue.go),
+	// so MistProc fires fresh thumbnail tracks during the processing+<hash> boot.
 	// No further server-side fan-out is needed here.
 }
 

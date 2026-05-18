@@ -992,6 +992,7 @@ func main() {
 		GatewayResolver: triggerProcessor,
 		ConfigCacher:    triggerProcessor,
 	})
+	control.SetChapterClosedNotifier(jobs.NotifyChapterFinalizationQueued)
 	chapterFinalizer.Start()
 	defer chapterFinalizer.Stop()
 
