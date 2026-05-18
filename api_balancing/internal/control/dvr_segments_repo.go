@@ -145,7 +145,9 @@ func InsertDVRSegment(
 		if existing.mediaStartMs.Int64 != mediaStartMs ||
 			existing.mediaEndMs.Int64 != mediaEndMs ||
 			existing.durationMs.Int64 != durationMs {
-			return 0, ErrDVRSegmentTimingMismatch
+			if !sameSegmentDifferentClockDomain(existing.mediaStartMs.Int64, existing.mediaEndMs.Int64, mediaStartMs, mediaEndMs, durationMs) {
+				return 0, ErrDVRSegmentTimingMismatch
+			}
 		}
 		// The parent-terminal check only rejects retries for rows that are
 		// already settled — uploaded (S3 has it) or deleted_local (already
@@ -215,6 +217,16 @@ func InsertDVRSegment(
 		return 0, fmt.Errorf("commit: %w", err)
 	}
 	return nextSeq, nil
+}
+
+func sameSegmentDifferentClockDomain(existingStartMs, existingEndMs, incomingStartMs, incomingEndMs, durationMs int64) bool {
+	const unixEpochMsFloor = int64(1_000_000_000_000)
+	if durationMs <= 0 || existingEndMs-existingStartMs != durationMs || incomingEndMs-incomingStartMs != durationMs {
+		return false
+	}
+	existingAbsolute := existingStartMs >= unixEpochMsFloor
+	incomingAbsolute := incomingStartMs >= unixEpochMsFloor
+	return existingAbsolute != incomingAbsolute
 }
 
 // MarkDVRSegmentUploaded transitions a segment row to 'uploaded' and stamps

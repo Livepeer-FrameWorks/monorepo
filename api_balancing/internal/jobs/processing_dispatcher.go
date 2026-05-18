@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
@@ -63,6 +64,7 @@ type processingJob struct {
 	JobID          string
 	TenantID       string
 	ArtifactHash   sql.NullString
+	ArtifactType   sql.NullString
 	JobType        string
 	InputCodec     sql.NullString
 	OutputProfiles sql.NullString
@@ -74,6 +76,8 @@ type processingJob struct {
 	PreferredNode  sql.NullString
 	ProcessesJSON  sql.NullString
 	InternalName   sql.NullString
+	StreamID       sql.NullString
+	StreamInternal sql.NullString
 }
 
 func NewProcessingDispatcher(cfg ProcessingDispatcherConfig) *ProcessingDispatcher {
@@ -163,10 +167,10 @@ func (d *ProcessingDispatcher) dispatch() {
 			          output_profiles, retry_count, processes_json, source_url,
 			          source_params::text, preferred_node_id
 		)
-		SELECT c.job_id, c.tenant_id, c.artifact_hash, c.job_type, c.input_codec,
+		SELECT c.job_id, c.tenant_id, c.artifact_hash, COALESCE(a.artifact_type,''), c.job_type, c.input_codec,
 		       c.output_profiles, 'dispatched'::text, c.retry_count,
 		       a.s3_url, c.source_url, c.source_params, c.preferred_node_id,
-		       c.processes_json, a.internal_name
+		       c.processes_json, a.internal_name, a.stream_id::text, a.stream_internal_name
 		FROM claimed c
 		LEFT JOIN foghorn.artifacts a ON c.artifact_hash = a.artifact_hash
 	`)
@@ -179,10 +183,10 @@ func (d *ProcessingDispatcher) dispatch() {
 	for rows.Next() {
 		var job processingJob
 		if err := rows.Scan(
-			&job.JobID, &job.TenantID, &job.ArtifactHash, &job.JobType,
-			&job.InputCodec, &job.OutputProfiles, &job.Status, &job.RetryCount,
+			&job.JobID, &job.TenantID, &job.ArtifactHash, &job.ArtifactType,
+			&job.JobType, &job.InputCodec, &job.OutputProfiles, &job.Status, &job.RetryCount,
 			&job.S3URL, &job.SourceURL, &job.SourceParams, &job.PreferredNode,
-			&job.ProcessesJSON, &job.InternalName,
+			&job.ProcessesJSON, &job.InternalName, &job.StreamID, &job.StreamInternal,
 		); err != nil {
 			d.logger.WithError(err).Warn("Failed to scan processing job")
 			continue
@@ -302,7 +306,8 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	// Job was already claimed as 'dispatched' by the CTE; record routing metadata
 	_, err := d.db.ExecContext(ctx, `
 		UPDATE foghorn.processing_jobs
-		SET processing_node_id = $2,
+		SET status = 'processing',
+		    processing_node_id = $2,
 		    routing_reason = $3,
 		    started_at = NOW(),
 		    updated_at = NOW()
@@ -311,6 +316,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	if err != nil {
 		d.logger.WithError(err).WithField("job_id", job.JobID).Warn("Failed to update job routing metadata")
 	}
+	d.emitProcessingStarted(job)
 
 	d.logger.WithFields(logging.Fields{
 		"job_id":   job.JobID,
@@ -318,6 +324,40 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		"node_id":  nodeID,
 		"reason":   reason,
 	}).Info("Dispatched processing job")
+}
+
+func (d *ProcessingDispatcher) emitProcessingStarted(job *processingJob) {
+	if job == nil || !job.ArtifactHash.Valid {
+		return
+	}
+	switch job.ArtifactType.String {
+	case "clip":
+		data := &pb.ClipLifecycleData{
+			Stage:           pb.ClipLifecycleData_STAGE_PROGRESS,
+			ClipHash:        job.ArtifactHash.String,
+			ProgressPercent: func() *uint32 { p := uint32(0); return &p }(),
+		}
+		if job.TenantID != "" {
+			data.TenantId = &job.TenantID
+		}
+		if job.StreamID.Valid && job.StreamID.String != "" {
+			data.StreamId = &job.StreamID.String
+		}
+		if job.StreamInternal.Valid && job.StreamInternal.String != "" {
+			data.StreamInternalName = &job.StreamInternal.String
+		}
+		go artifactoutbox.EnqueueClipLifecycleLogged(data)
+	default:
+		data := &pb.VodLifecycleData{
+			Status:      pb.VodLifecycleData_STATUS_PROCESSING,
+			VodHash:     job.ArtifactHash.String,
+			ProgressPct: func() *int32 { p := int32(0); return &p }(),
+		}
+		if job.TenantID != "" {
+			data.TenantId = &job.TenantID
+		}
+		go artifactoutbox.EnqueueVodLifecycleLogged(data)
+	}
 }
 
 // resolveHLSSegmentURLs fetches an HLS manifest, parses segment filenames,

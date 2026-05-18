@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ type mockS3Client struct {
 	deleteFn               func(ctx context.Context, key string) error
 	deleteByURLFn          func(ctx context.Context, s3URL string) error
 	deletePrefixFn         func(ctx context.Context, prefix string) (int, error)
+	parseS3URLFn           func(s3URL string) (string, error)
 	buildClipS3KeyFn       func(tenantID, streamName, clipHash, format string) string
 	buildDVRS3KeyFn        func(tenantID, internalName, dvrHash string) string
 	buildVodS3KeyFn        func(tenantID, artifactHash, filename string) string
@@ -93,6 +95,19 @@ func (m *mockS3Client) DeletePrefix(ctx context.Context, prefix string) (int, er
 		return m.deletePrefixFn(ctx, prefix)
 	}
 	return 0, nil
+}
+
+func (m *mockS3Client) ParseS3URL(s3URL string) (string, error) {
+	if m.parseS3URLFn != nil {
+		return m.parseS3URLFn(s3URL)
+	}
+	if strings.HasPrefix(s3URL, "s3://") {
+		parts := strings.SplitN(strings.TrimPrefix(s3URL, "s3://"), "/", 2)
+		if len(parts) == 2 {
+			return parts[1], nil
+		}
+	}
+	return s3URL, nil
 }
 
 func (m *mockS3Client) PutObject(ctx context.Context, key string, body []byte, contentType string) error {

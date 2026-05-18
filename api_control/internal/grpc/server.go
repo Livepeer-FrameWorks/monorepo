@@ -729,6 +729,14 @@ func (s *CommodoreServer) resolveFoghornForContent(ctx context.Context, contentI
 	}
 
 	if errors.Is(err, sql.ErrNoRows) {
+		var found bool
+		found, tenantID, activeClusterID, err = s.resolveArtifactRouteForContent(ctx, contentID)
+		if !found && err == nil {
+			err = sql.ErrNoRows
+		}
+	}
+
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, status.Errorf(codes.NotFound, "content %q not found", contentID)
 	}
 	if err != nil {
@@ -798,6 +806,43 @@ func (s *CommodoreServer) resolveFoghornForStreamKey(ctx context.Context, stream
 		return nil, nil, err
 	}
 	return client, route, nil
+}
+
+func (s *CommodoreServer) resolveArtifactRouteForContent(ctx context.Context, contentID string) (bool, sql.NullString, sql.NullString, error) {
+	var tenantID, clusterID sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, cluster_id
+		  FROM (
+			SELECT tenant_id,
+			       COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, '')) AS cluster_id
+			  FROM commodore.clips
+			 WHERE playback_id = $1 OR clip_hash = $1
+			UNION ALL
+			SELECT tenant_id,
+			       COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, '')) AS cluster_id
+			  FROM commodore.vod_assets
+			 WHERE playback_id = $1 OR vod_hash = $1
+			UNION ALL
+			SELECT tenant_id,
+			       COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, '')) AS cluster_id
+			  FROM commodore.dvr_recordings
+			 WHERE playback_id = $1 OR dvr_hash = $1
+			UNION ALL
+			SELECT cp.tenant_id,
+			       COALESCE(NULLIF(va.storage_cluster_id, ''), NULLIF(va.origin_cluster_id, '')) AS cluster_id
+			  FROM commodore.dvr_chapter_playback cp
+			  JOIN commodore.vod_assets va ON va.vod_hash = cp.artifact_hash
+			 WHERE cp.playback_id = $1
+		  ) resolved
+		 LIMIT 1
+	`, contentID).Scan(&tenantID, &clusterID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, tenantID, clusterID, nil
+	}
+	if err != nil {
+		return false, tenantID, clusterID, status.Errorf(codes.Internal, "database error resolving artifact content: %v", err)
+	}
+	return true, tenantID, clusterID, nil
 }
 
 func clusterInPeers(peers []*pb.TenantClusterPeer, clusterID string) bool {

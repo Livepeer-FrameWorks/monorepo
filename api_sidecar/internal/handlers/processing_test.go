@@ -225,6 +225,40 @@ func TestStageProcessingSourceDownloadsSourceClip(t *testing.T) {
 	}
 }
 
+func TestProcessingOutputPath_ClipUsesStreamScopedClipDir(t *testing.T) {
+	root := t.TempDir()
+	h := &ProcessingJobHandler{storagePath: root}
+	req := &pb.ProcessingJobRequest{
+		ArtifactHash: "cliphash",
+		Params: map[string]string{
+			"output_stream_name": "demo_live_stream_001",
+		},
+	}
+
+	dir, path, err := h.processingOutputPath(req, true)
+	if err != nil {
+		t.Fatalf("processingOutputPath returned error: %v", err)
+	}
+
+	wantDir := filepath.Join(root, "clips", "demo_live_stream_001")
+	if dir != wantDir {
+		t.Fatalf("dir = %q, want %q", dir, wantDir)
+	}
+	wantPath := filepath.Join(wantDir, "cliphash.mkv")
+	if path != wantPath {
+		t.Fatalf("path = %q, want %q", path, wantPath)
+	}
+}
+
+func TestProcessingOutputPath_ClipRequiresOutputStream(t *testing.T) {
+	h := &ProcessingJobHandler{storagePath: t.TempDir()}
+	req := &pb.ProcessingJobRequest{ArtifactHash: "cliphash", Params: map[string]string{}}
+
+	if _, _, err := h.processingOutputPath(req, true); err == nil {
+		t.Fatal("expected missing output_stream_name error")
+	}
+}
+
 func TestShouldIgnoreProcessExitByBootCount(t *testing.T) {
 	ignored := map[string]int{}
 

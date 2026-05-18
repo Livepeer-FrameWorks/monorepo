@@ -195,7 +195,11 @@ func generateDtshPresignedPUT(mediaS3URL string, expiry time.Duration) (string, 
 	if s3Client == nil {
 		return "", fmt.Errorf("s3 client not configured")
 	}
-	return s3Client.GeneratePresignedPUT(dtshKeyFromMediaS3URL(mediaS3URL), expiry)
+	key, err := keyFromMediaS3URL(mediaS3URL)
+	if err != nil {
+		return "", err
+	}
+	return s3Client.GeneratePresignedPUT(key+".dtsh", expiry)
 }
 
 // generateDtshPresignedGET mirrors the PUT helper for sidecar reads.
@@ -205,20 +209,18 @@ func generateDtshPresignedGET(mediaS3URL string, expiry time.Duration) (string, 
 	if s3Client == nil {
 		return "", fmt.Errorf("s3 client not configured")
 	}
-	return s3Client.GeneratePresignedGET(dtshKeyFromMediaS3URL(mediaS3URL), expiry)
+	key, err := keyFromMediaS3URL(mediaS3URL)
+	if err != nil {
+		return "", err
+	}
+	return s3Client.GeneratePresignedGET(key+".dtsh", expiry)
 }
 
-// dtshKeyFromMediaS3URL strips the s3:// bucket prefix (if any) from the
-// media URL and appends ".dtsh" to produce the sidecar's S3 key.
-func dtshKeyFromMediaS3URL(mediaS3URL string) string {
-	key := mediaS3URL
-	if strings.HasPrefix(key, "s3://") {
-		parts := strings.SplitN(key[5:], "/", 2)
-		if len(parts) == 2 {
-			key = parts[1]
-		}
+func keyFromMediaS3URL(mediaS3URL string) (string, error) {
+	if strings.HasPrefix(mediaS3URL, "s3://") {
+		return s3Client.ParseS3URL(mediaS3URL)
 	}
-	return key + ".dtsh"
+	return mediaS3URL, nil
 }
 
 // contentTypeForFormat is a tiny map from artifact format strings to MIME

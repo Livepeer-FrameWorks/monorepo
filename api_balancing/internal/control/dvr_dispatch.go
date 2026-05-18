@@ -19,6 +19,7 @@ import (
 type DVRArtifactDispatch struct {
 	DVRHash            string
 	InternalName       string
+	StreamID           string
 	StreamInternalName string
 	PlaybackID         string
 	TenantID           string
@@ -52,6 +53,7 @@ func ResolveDVRArtifactDispatch(ctx context.Context, dvrInternalName string) (*D
 	out := &DVRArtifactDispatch{
 		DVRHash:            artifact.GetArtifactHash(),
 		InternalName:       artifact.GetInternalName(),
+		StreamID:           dvr.GetStreamId(),
 		StreamInternalName: dvr.GetStreamInternalName(),
 		PlaybackID:         dvr.GetPlaybackId(),
 		TenantID:           dvr.GetTenantId(),
@@ -149,14 +151,14 @@ func IsActiveDVRStatus(status string) bool {
 // DVR manifest on a node, derived from the node's StorageLocal root and
 // the canonical layout used by the DVR push:
 //
-//	<storage>/dvr/<stream_internal_name>/<dvr_hash>/<dvr_hash>.m3u8
+//	<storage>/dvr/<stream_id>/<dvr_hash>/<dvr_hash>.m3u8
 //
 // Returns "" when any input is missing or the node has no advertised
 // storage root.
-func LocalRollingDVRManifestPath(streamInternalName, dvrHash, nodeID string) string {
+func LocalRollingDVRManifestPath(streamID, dvrHash, nodeID string) string {
 	base := storageBasePathForNode(nodeID)
-	if base == "" || streamInternalName == "" || dvrHash == "" {
+	if base == "" || streamID == "" || dvrHash == "" {
 		return ""
 	}
-	return filepath.Join(base, "dvr", streamInternalName, dvrHash, dvrHash+".m3u8")
+	return filepath.Join(base, "dvr", streamID, dvrHash, dvrHash+".m3u8")
 }

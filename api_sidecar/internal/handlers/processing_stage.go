@@ -88,6 +88,18 @@ func isClipProcessingSource(req *pb.ProcessingJobRequest) bool {
 	}
 }
 
+func (h *ProcessingJobHandler) processingOutputPath(req *pb.ProcessingJobRequest, clipSource bool) (string, string, error) {
+	outputDir := filepath.Join(h.storagePath, "vod")
+	if clipSource {
+		outputStreamName := strings.TrimSpace(req.GetParams()["output_stream_name"])
+		if outputStreamName == "" {
+			return "", "", fmt.Errorf("clip processing output stream unavailable")
+		}
+		outputDir = filepath.Join(h.storagePath, "clips", outputStreamName)
+	}
+	return outputDir, filepath.Join(outputDir, req.GetArtifactHash()+".mkv"), nil
+}
+
 func processingSourceExt(req *pb.ProcessingJobRequest) string {
 	format := strings.Trim(strings.ToLower(strings.TrimSpace(req.GetParams()["source_format"])), ".")
 	switch format {

@@ -1552,11 +1552,12 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 			return "", true, nil
 		}
 		if dispatch.RecordingNode == trigger.GetNodeId() {
-			localPath := control.LocalRollingDVRManifestPath(dispatch.StreamInternalName, dispatch.DVRHash, trigger.GetNodeId())
+			localPath := control.LocalRollingDVRManifestPath(dispatch.StreamID, dispatch.DVRHash, trigger.GetNodeId())
 			if localPath == "" {
 				p.logger.WithFields(logging.Fields{
 					"stream_name": streamName,
 					"dvr_hash":    dispatch.DVRHash,
+					"stream_id":   dispatch.StreamID,
 					"node_id":     trigger.GetNodeId(),
 				}).Warn("STREAM_SOURCE: dvr+ rolling manifest path unresolved on recording origin; aborting")
 				return "", true, nil

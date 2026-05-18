@@ -238,18 +238,21 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 		mistClient.BaseURL = h.mistServerURL
 	}
 
-	// MKV: only container MistServer can push to AND re-ingest that supports
-	// the full codec set (H264/VP9/JPEG/AAC/opus). Raw absolute path — MistServer
-	// matches against push_urls pattern "/*.mkv" → MistOutEBML.
-	// Output goes to vod/ so the artifact poller discovers it for Foghorn registration.
-	vodDir := filepath.Join(h.storagePath, "vod")
-	if err := os.MkdirAll(vodDir, 0755); err != nil {
-		log.WithError(err).Error("Failed to create vod directory")
+	// MKV is the processing output container MistServer can push and
+	// re-ingest across the codec set we use. Clips land in the same
+	// stream-scoped clips/ namespace Foghorn registered for playback;
+	// VOD and upload processing land in vod/.
+	outputDir, outputPath, outputErr := h.processingOutputPath(req, clipSource)
+	if outputErr != nil {
+		h.sendResult(send, req.GetJobId(), "failed", outputErr.Error(), nil, "", 0)
+		return
+	}
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		log.WithError(err).Error("Failed to create processing output directory")
 		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("mkdir failed: %v", err), nil, "", 0)
 		return
 	}
-	outputPath := filepath.Join(vodDir, req.GetArtifactHash()+".mkv")
-	if err := h.startProcessingPush(log, mistClient, req, vodDir, streamName, outputPath); err != nil {
+	if err := h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath); err != nil {
 		h.sendResult(send, req.GetJobId(), "failed", err.Error(), nil, "", 0)
 		return
 	}
@@ -310,7 +313,7 @@ loop:
 				pendingJobsMu.Lock()
 				pendingJobs[streamName] = doneCh
 				pendingJobsMu.Unlock()
-				if err := h.startProcessingPush(log, mistClient, req, vodDir, streamName, outputPath); err != nil {
+				if err := h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath); err != nil {
 					h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback restart: %v", err), nil, "", 0)
 					return
 				}
@@ -372,7 +375,7 @@ loop:
 					pendingJobsMu.Lock()
 					pendingJobs[streamName] = doneCh
 					pendingJobsMu.Unlock()
-					if err := h.startProcessingPush(log, mistClient, req, vodDir, streamName, outputPath); err != nil {
+					if err := h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath); err != nil {
 						h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("stall fallback restart: %v", err), nil, "", 0)
 						return
 					}

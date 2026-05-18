@@ -104,6 +104,17 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 
 			// If allowlisted, proceed anonymously (ignore any tokens sent)
 			if isAllowlistedQuery(body) {
+				if authResult := optionalJWTAuthResult(c.Request, secret); authResult != nil {
+					c.Set(string(ctxkeys.KeyUserID), authResult.UserID)
+					c.Set(string(ctxkeys.KeyTenantID), authResult.TenantID)
+					c.Set(string(ctxkeys.KeyEmail), authResult.Email)
+					c.Set(string(ctxkeys.KeyRole), authResult.Role)
+					c.Set(string(ctxkeys.KeyAuthType), authResult.AuthType)
+					ctx := ApplyAuthToContext(c.Request.Context(), authResult)
+					c.Request = c.Request.WithContext(ctx)
+					c.Next()
+					return
+				}
 				c.Set(string(ctxkeys.KeyPublicAllowlisted), true)
 				ctx := context.WithValue(c.Request.Context(), ctxkeys.KeyPublicAllowlisted, true)
 				c.Request = c.Request.WithContext(ctx)
@@ -208,6 +219,40 @@ func hasAuthCredentials(r *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+func optionalJWTAuthResult(r *http.Request, secret []byte) *AuthResult {
+	if r == nil {
+		return nil
+	}
+	token := ""
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	if authHeader != "" {
+		parts := strings.Split(authHeader, " ")
+		if len(parts) == 2 && parts[0] == "Bearer" {
+			token = parts[1]
+		}
+	}
+	if token == "" {
+		if cookieToken, err := r.Cookie("access_token"); err == nil && cookieToken != nil {
+			token = cookieToken.Value
+		}
+	}
+	if token == "" {
+		return nil
+	}
+	claims, err := auth.ValidateJWT(token, secret)
+	if err != nil {
+		return nil
+	}
+	return &AuthResult{
+		UserID:   claims.UserID,
+		TenantID: claims.TenantID,
+		Email:    claims.Email,
+		Role:     claims.Role,
+		AuthType: "jwt",
+		JWTToken: token,
+	}
 }
 
 func applyX402SessionHeaders(c *gin.Context, authResult *AuthResult) {

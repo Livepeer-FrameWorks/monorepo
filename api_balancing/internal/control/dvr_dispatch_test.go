@@ -35,7 +35,7 @@ func TestIsActiveDVRStatus(t *testing.T) {
 // constructed for the recording origin's rolling DVR manifest. The
 // path shape must match what the Mist push writer produces (see
 // dvr_manager.go: targetURI uses `<outputDir>/<dvr_hash>.m3u8` with
-// outputDir = storage/dvr/<stream_internal_name>/<dvr_hash>/).
+// outputDir = storage/dvr/<stream_id>/<dvr_hash>/).
 func TestLocalRollingDVRManifestPath(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	defer sm.Shutdown()
@@ -52,17 +52,17 @@ func TestLocalRollingDVRManifestPath(t *testing.T) {
 	}{
 		{
 			name:       "happy path",
-			streamName: "stream_abc",
+			streamName: "5eedfeed-11fe-ca57-feed-11feca570001",
 			dvrHash:    "fedcba98",
 			node:       nodeID,
-			want:       filepath.Join(storageRoot, "dvr", "stream_abc", "fedcba98", "fedcba98.m3u8"),
+			want:       filepath.Join(storageRoot, "dvr", "5eedfeed-11fe-ca57-feed-11feca570001", "fedcba98", "fedcba98.m3u8"),
 		},
 		{
 			name:       "unknown node falls back to defaultStorageBase",
-			streamName: "stream_abc",
+			streamName: "5eedfeed-11fe-ca57-feed-11feca570001",
 			dvrHash:    "fedcba98",
 			node:       "node-does-not-exist",
-			want:       filepath.Join(defaultStorageBase, "dvr", "stream_abc", "fedcba98", "fedcba98.m3u8"),
+			want:       filepath.Join(defaultStorageBase, "dvr", "5eedfeed-11fe-ca57-feed-11feca570001", "fedcba98", "fedcba98.m3u8"),
 		},
 		{
 			name:       "missing stream name returns empty",

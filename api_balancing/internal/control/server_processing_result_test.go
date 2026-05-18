@@ -95,8 +95,8 @@ func TestProcessProcessingJobResult_Completed_RegistersProcessedOutput(t *testin
 	// Lookup artifact hash
 	mock.ExpectQuery("SELECT a\\.artifact_hash.*FROM foghorn.processing_jobs").
 		WithArgs("job-1").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "s3_url", "format"}).
-			AddRow("art-hash", "vod", "tenant-1", "s3://old/upload.avi", "avi"))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format"}).
+			AddRow("art-hash", "vod", "tenant-1", "", "", "s3://old/upload.avi", "avi"))
 
 	// Update artifact format + size_bytes + reset sync while retaining the
 	// old source URL until the replacement upload is durably synced.
@@ -156,8 +156,8 @@ func TestProcessProcessingJobResult_Completed_DoesNotDeleteOldS3UploadBeforeRepl
 
 	mock.ExpectQuery("SELECT a\\.artifact_hash").
 		WithArgs("job-1").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_url", "format"}).
-			AddRow("art-hash", "s3://bucket/old/upload.avi", "avi"))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format"}).
+			AddRow("art-hash", "vod", "tenant-1", "", "", "s3://bucket/old/upload.avi", "avi"))
 
 	mock.ExpectExec("UPDATE foghorn.artifacts").
 		WithArgs("mp4", "art-hash", int64(0)).
@@ -187,8 +187,8 @@ func TestProcessProcessingJobResult_Completed_SetsS3URLToNull(t *testing.T) {
 
 	mock.ExpectQuery("SELECT a\\.artifact_hash").
 		WithArgs("job-1").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "s3_url", "format"}).
-			AddRow("art-hash", "vod", "tenant-1", "", "avi"))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format"}).
+			AddRow("art-hash", "vod", "tenant-1", "", "", "", "avi"))
 
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'pending'.*storage_location = 'local'").
 		WithArgs("mp4", "art-hash", int64(0)).

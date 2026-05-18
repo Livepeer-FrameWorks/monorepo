@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -157,6 +158,50 @@ func TestConnOwnerEncodeDecode(t *testing.T) {
 			t.Fatalf("expected zero ConnOwner for missing key, got %+v", owner)
 		}
 	})
+}
+
+func TestGeneratePresignedGETForArtifact_ParsesStoredS3URL(t *testing.T) {
+	prev := s3Client
+	mock := &mockS3Client{
+		parseS3URLFn: func(s3URL string) (string, error) {
+			if s3URL != "s3://frameworks/dev/vod/tenant/hash/hash.mkv" {
+				t.Fatalf("ParseS3URL got %q", s3URL)
+			}
+			return "vod/tenant/hash/hash.mkv", nil
+		},
+	}
+	s3Client = mock
+	t.Cleanup(func() { s3Client = prev })
+
+	_, err := GeneratePresignedGETForArtifact(context.Background(), "s3://frameworks/dev/vod/tenant/hash/hash.mkv")
+	if err != nil {
+		t.Fatalf("GeneratePresignedGETForArtifact returned error: %v", err)
+	}
+	if got, want := mock.presignGETCalls, []string{"vod/tenant/hash/hash.mkv"}; !slices.Equal(got, want) {
+		t.Fatalf("presigned keys = %v, want %v", got, want)
+	}
+}
+
+func TestGenerateDtshPresignedGET_ParsesStoredS3URL(t *testing.T) {
+	prev := s3Client
+	mock := &mockS3Client{
+		parseS3URLFn: func(s3URL string) (string, error) {
+			if s3URL != "s3://frameworks/dev/vod/tenant/hash/hash.mkv" {
+				t.Fatalf("ParseS3URL got %q", s3URL)
+			}
+			return "vod/tenant/hash/hash.mkv", nil
+		},
+	}
+	s3Client = mock
+	t.Cleanup(func() { s3Client = prev })
+
+	_, err := generateDtshPresignedGET("s3://frameworks/dev/vod/tenant/hash/hash.mkv", time.Hour)
+	if err != nil {
+		t.Fatalf("generateDtshPresignedGET returned error: %v", err)
+	}
+	if got, want := mock.presignGETCalls, []string{"vod/tenant/hash/hash.mkv.dtsh"}; !slices.Equal(got, want) {
+		t.Fatalf("presigned keys = %v, want %v", got, want)
+	}
 }
 
 // --- forward() ---

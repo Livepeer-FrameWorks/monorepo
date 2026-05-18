@@ -753,15 +753,15 @@ func enrichVodAssetWithLifecycle(asset *pb.VodAssetInfo, state *pb.ArtifactState
 
 	// Map stage to VodStatus
 	switch state.Stage {
-	case "requested", "queued":
+	case "requested", "queued", "uploading":
 		asset.Status = pb.VodStatus_VOD_STATUS_UPLOADING
 	case "processing":
 		asset.Status = pb.VodStatus_VOD_STATUS_PROCESSING
-	case "completed":
+	case "completed", "complete", "done", "ready", "synced":
 		asset.Status = pb.VodStatus_VOD_STATUS_READY
-	case "failed":
+	case "failed", "failed_terminal", "error", "lost_local":
 		asset.Status = pb.VodStatus_VOD_STATUS_FAILED
-	case "deleted":
+	case "deleted", "evicted":
 		asset.Status = pb.VodStatus_VOD_STATUS_DELETED
 	}
 

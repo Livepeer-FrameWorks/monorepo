@@ -940,6 +940,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		"source_format":      sourceFormat,
 		"source_start_unix":  strconv.FormatInt(startUnix, 10),
 		"source_stop_unix":   strconv.FormatInt(stopUnix, 10),
+		"output_stream_name": req.StreamInternalName,
 	}
 	sourceURL := ""
 	preferredNodeID := ""
@@ -1450,6 +1451,15 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 			"error":    err,
 		}).Error("Failed to send DVR start request to storage node")
 		return nil, status.Error(codes.Internal, "failed to start DVR on storage node")
+	}
+	if _, updateErr := s.db.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		   SET status = 'recording',
+		       started_at = COALESCE(started_at, NOW()),
+		       updated_at = NOW()
+		 WHERE artifact_hash = $1 AND artifact_type = 'dvr'
+	`, dvrHash); updateErr != nil {
+		s.logger.WithError(updateErr).WithField("dvr_hash", dvrHash).Warn("Failed to mark DVR artifact recording after storage start")
 	}
 
 	// Emit DVR STATUS_STARTED event to Decklog

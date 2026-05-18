@@ -3138,6 +3138,7 @@ type S3ClientInterface interface {
 	Delete(ctx context.Context, key string) error
 	DeleteByURL(ctx context.Context, s3URL string) error
 	DeletePrefix(ctx context.Context, prefix string) (int, error)
+	ParseS3URL(s3URL string) (string, error)
 	BuildClipS3Key(tenantID, streamName, clipHash, format string) string
 	BuildDVRS3Key(tenantID, internalName, dvrHash string) string
 	BuildVodS3Key(tenantID, artifactHash, filename string) string
@@ -4417,12 +4418,18 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 		// Register processed output in warm cache + in-memory state so vod+
 		// STREAM_SOURCE resolves immediately (same pattern as defrost completion).
 		if outputPath := result.GetOutputPath(); outputPath != "" {
-			var artifactHash, artifactType, tenantID, oldS3URL, oldFormat string
+			var artifactHash, artifactType, tenantID, streamID, streamInternalName, oldS3URL, oldFormat string
 			_ = db.QueryRowContext(ctx, `
-				SELECT a.artifact_hash, COALESCE(a.artifact_type,''), COALESCE(a.tenant_id::text,''), COALESCE(a.s3_url,''), COALESCE(a.format,'')
+				SELECT a.artifact_hash,
+				       COALESCE(a.artifact_type,''),
+				       COALESCE(a.tenant_id::text,''),
+				       COALESCE(a.stream_id::text,''),
+				       COALESCE(a.stream_internal_name,''),
+				       COALESCE(a.s3_url,''),
+				       COALESCE(a.format,'')
 				FROM foghorn.processing_jobs pj
 				JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
-				WHERE pj.job_id = $1`, result.GetJobId()).Scan(&artifactHash, &artifactType, &tenantID, &oldS3URL, &oldFormat)
+				WHERE pj.job_id = $1`, result.GetJobId()).Scan(&artifactHash, &artifactType, &tenantID, &streamID, &streamInternalName, &oldS3URL, &oldFormat)
 			if artifactHash != "" {
 				sizeBytes := result.GetOutputSizeBytes()
 				newFormat := strings.TrimPrefix(filepath.Ext(outputPath), ".")
@@ -4469,6 +4476,12 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 					}
 					if tenantID != "" {
 						clipData.TenantId = &tenantID
+					}
+					if streamID != "" {
+						clipData.StreamId = &streamID
+					}
+					if streamInternalName != "" {
+						clipData.StreamInternalName = &streamInternalName
 					}
 					go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
 				}
@@ -4556,7 +4569,7 @@ func processProcessingJobProgress(progress *pb.ProcessingJobProgress, logger log
 
 	// Update job progress and refresh updated_at so stale recovery doesn't requeue
 	var artifactHash sql.NullString
-	var artifactType string
+	var artifactType, streamID, streamInternalName string
 	var tenantID string
 	err := db.QueryRowContext(ctx, `
 		UPDATE foghorn.processing_jobs
@@ -4577,10 +4590,12 @@ func processProcessingJobProgress(progress *pb.ProcessingJobProgress, logger log
 
 	if artifactHash.Valid {
 		typeErr := db.QueryRowContext(ctx, `
-			SELECT COALESCE(artifact_type, '')
+			SELECT COALESCE(artifact_type, ''),
+			       COALESCE(stream_id::text, ''),
+			       COALESCE(stream_internal_name, '')
 			  FROM foghorn.artifacts
 			 WHERE artifact_hash = $1
-		`, artifactHash.String).Scan(&artifactType)
+		`, artifactHash.String).Scan(&artifactType, &streamID, &streamInternalName)
 		if typeErr != nil && typeErr != sql.ErrNoRows {
 			logger.WithError(typeErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to look up processing artifact type")
 		}
@@ -4595,6 +4610,12 @@ func processProcessingJobProgress(progress *pb.ProcessingJobProgress, logger log
 			}
 			if tenantID != "" {
 				clipData.TenantId = &tenantID
+			}
+			if streamID != "" {
+				clipData.StreamId = &streamID
+			}
+			if streamInternalName != "" {
+				clipData.StreamInternalName = &streamInternalName
 			}
 			go func() {
 				if err := artifactoutbox.EnqueueClipLifecycle(clipData); err != nil {
@@ -4684,14 +4705,13 @@ func GeneratePresignedGETForArtifact(_ context.Context, s3URL string) (string, e
 	if s3Client == nil {
 		return "", fmt.Errorf("s3 client not configured")
 	}
-	// Extract key from s3:// URL — the S3 client's GeneratePresignedGET expects a key
 	key := s3URL
 	if strings.HasPrefix(s3URL, "s3://") {
-		// s3://bucket/key -> key (bucket is configured on the client)
-		parts := strings.SplitN(s3URL[5:], "/", 2)
-		if len(parts) == 2 {
-			key = parts[1]
+		parsed, err := s3Client.ParseS3URL(s3URL)
+		if err != nil {
+			return "", err
 		}
+		key = parsed
 	}
 	return s3Client.GeneratePresignedGET(key, 1*time.Hour)
 }

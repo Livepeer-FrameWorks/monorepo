@@ -72,6 +72,40 @@ func TestInsertDVRSegment_RejectsTimingMismatch(t *testing.T) {
 	}
 }
 
+func TestInsertDVRSegment_AcceptsExistingSegmentAcrossClockDomains(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+
+	const (
+		dvrHash      = "dvr-clock-domain"
+		segmentName  = "seg_011.ts"
+		existingSeq  = int64(11)
+		durationMs   = int64(8_000)
+		relativeFrom = int64(2_368_023)
+		absoluteFrom = int64(1_779_122_217_508)
+	)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT status FROM foghorn\.artifacts WHERE artifact_hash =`).
+		WithArgs(dvrHash).
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("recording"))
+	mock.ExpectQuery(`SELECT sequence, status, media_start_ms, media_end_ms, duration_ms`).
+		WithArgs(dvrHash, segmentName).
+		WillReturnRows(sqlmock.NewRows([]string{"sequence", "status", "media_start_ms", "media_end_ms", "duration_ms"}).
+			AddRow(existingSeq, "uploaded", relativeFrom, relativeFrom+durationMs, durationMs))
+	mock.ExpectCommit()
+
+	seq, err := InsertDVRSegment(context.Background(), dvrHash, segmentName, "s3/key", absoluteFrom, absoluteFrom+durationMs, durationMs, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if seq != existingSeq {
+		t.Fatalf("expected existing sequence %d, got %d", existingSeq, seq)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInsertDVRSegment_PendingRetryAllowedAfterParentCompleted(t *testing.T) {
 	// The seeded-completed-DVR + pending-segments case: parent reached
 	// 'completed' but segment rows never uploaded. InsertDVRSegment must
