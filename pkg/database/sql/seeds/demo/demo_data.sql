@@ -880,7 +880,7 @@ INSERT INTO commodore.clips (
     1640995200000,  -- Unix timestamp (ms): Jan 1, 2022 00:00:00 UTC
     5000,           -- Duration (ms): fixture is 5 seconds
     'absolute',
-    'central-primary',
+    'demo-media',
     NOW() + INTERVAL '7 days',   -- 7-day rolling retention for demo fixtures
     NOW() - INTERVAL '2 hours',
     NOW() - INTERVAL '2 hours'
@@ -899,7 +899,7 @@ INSERT INTO commodore.clips (
     1641081600000,  -- Jan 2, 2022 00:00:00 UTC
     300000,         -- 5 minutes
     'absolute',
-    'central-primary',
+    'demo-media',
     NOW() - INTERVAL '1 day',   -- Already expired (retention passed)
     NOW() - INTERVAL '2 days',
     NOW() - INTERVAL '1 day'
@@ -930,7 +930,7 @@ INSERT INTO commodore.dvr_recordings (
     'dvr_int_001',
     'dvr1a2b3c4d5e6fg',
     'demo_live_stream_001',
-    'central-primary',
+    'demo-media',
     NOW() + INTERVAL '7 days',   -- 7-day rolling retention for demo fixtures
     NOW() - INTERVAL '4 hours',
     NOW() - INTERVAL '4 hours'
@@ -945,7 +945,7 @@ INSERT INTO commodore.dvr_recordings (
     'dvr_int_002',
     'dvr2a2b3c4d5e6fh',
     'demo_live_stream_001',
-    'central-primary',
+    'demo-media',
     NOW() - INTERVAL '1 day',   -- Already expired (retention passed)
     NOW() - INTERVAL '2 days',
     NOW() - INTERVAL '1 day'
@@ -981,7 +981,7 @@ INSERT INTO commodore.vod_assets (
     title, description, filename, content_type,
     size_bytes, origin_cluster_id, retention_until, library_visible, created_at, updated_at
 ) VALUES
--- Demo VOD (ready) - WebM sample
+-- Demo VOD (ready) - HLS-compatible MP4 sample
 (
     '5eedb0d5-1e55-da7a-b0d5-1e55da7a0001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
@@ -991,14 +991,33 @@ INSERT INTO commodore.vod_assets (
     'vod1a2b3c4d5e6fg',
     'Product Demo 2024',
     'Annual product demonstration showcasing new streaming features',
-    'product_demo_2024.webm',
-    'video/webm',
-    157157,
-    'central-primary',
+    'product_demo_2024.mp4',
+    'video/mp4',
+    107553,
+    'demo-media',
     NOW() + INTERVAL '30 days',
     TRUE,
     NOW() - INTERVAL '1 day',
     NOW() - INTERVAL '1 day'
+),
+-- Hidden VOD artifact backing the seeded DVR chapter playback ID.
+(
+    '5eedb0d5-1e55-da7a-b0d5-1e55da7a0004',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eedface-5e1f-da7a-face-5e1fda7a0001',
+    '34d74b7acd7ec8cf78f6cc8c9f031a8a',
+    '34d74b7acd7ec8cf78f6cc8c9f031a8a',
+    'chp_demo_recording_001',
+    'Demo Stream Chapter',
+    'Finalized chapter artifact for the seeded DVR recording',
+    'demo_recording_chapter.mp4',
+    'video/mp4',
+    336471,
+    'demo-media',
+    NOW() + INTERVAL '7 days',
+    FALSE,
+    NOW() - INTERVAL '4 hours',
+    NOW() - INTERVAL '4 hours'
 ),
 -- Demo VOD (processing) - Still being validated
 (
@@ -1013,7 +1032,7 @@ INSERT INTO commodore.vod_assets (
     'webinar_recording.mp4',
     'video/mp4',
     104857600,
-    'central-primary',
+    'demo-media',
     NOW() + INTERVAL '30 days',
     FALSE,
     NOW() - INTERVAL '30 minutes',
@@ -1032,7 +1051,7 @@ INSERT INTO commodore.vod_assets (
     'corrupted_file.avi',
     'video/x-msvideo',
     15728640,
-    'central-primary',
+    'demo-media',
     NOW() - INTERVAL '1 day',
     FALSE,
     NOW() - INTERVAL '2 days',
@@ -1139,9 +1158,9 @@ INSERT INTO foghorn.artifacts (
     '34d74b7acd7ec8cf78f6cc8c9f031a8a',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'ready',
-    329231,
+    336471,
     NULL,
-    'mkv',
+    'mp4',
     'local',
     'pending',
     NOW() + INTERVAL '7 days',
@@ -1157,9 +1176,9 @@ INSERT INTO foghorn.artifacts (
     'vod_int_001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
     'ready',
-    157157,         -- Browser-safe VP9/Opus fixture
+    107553,         -- H264/AAC fixture compatible with HLS/MP4 playback
     NULL,            -- No manifest for VOD (direct file playback)
-    'webm',
+    'mp4',
     'local',         -- On disk, pending sync to S3
     'pending',
     NOW() + INTERVAL '30 days',   -- 30-day retention for VOD
@@ -1323,18 +1342,18 @@ INSERT INTO foghorn.vod_metadata (
 -- Demo VOD (ready) - Product demo video
 (
     'c3d4e5f678901234567890123456abcd',      -- Must match foghorn.artifacts + on-disk filename
-    'product_demo_2024.webm',
+    'product_demo_2024.mp4',
     'Product Demo 2024',
     'Annual product demonstration showcasing new streaming features',
-    'video/webm',
+    'video/mp4',
     NULL,            -- Upload completed
-    'vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/c3d4e5f678901234567890123456abcd/c3d4e5f678901234567890123456abcd.webm',
+    'vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/c3d4e5f678901234567890123456abcd/c3d4e5f678901234567890123456abcd.mp4',
     NULL,
     1,
-    4000,            -- 4 seconds
+    5000,            -- 5 seconds
     '640x360',
-    'vp9',
-    'opus',
+    'h264',
+    'aac',
     300,             -- ~300 kbps
     640, 360, 30.0, 2, 48000,
     NOW() - INTERVAL '1 day',
@@ -1418,8 +1437,8 @@ INSERT INTO foghorn.artifact_nodes (
 (
     '34d74b7acd7ec8cf78f6cc8c9f031a8a',
     'edge-node-1',
-    '/var/lib/mistserver/recordings/vod/34d74b7acd7ec8cf78f6cc8c9f031a8a.mkv',
-    329231,
+    '/var/lib/mistserver/recordings/vod/34d74b7acd7ec8cf78f6cc8c9f031a8a.mp4',
+    336471,
     7,
     NOW() - INTERVAL '3 hours',
     NOW(),
@@ -1429,8 +1448,8 @@ INSERT INTO foghorn.artifact_nodes (
 (
     'c3d4e5f678901234567890123456abcd',
     'edge-node-1',
-    '/var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.webm',
-    157157,
+    '/var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.mp4',
+    107553,
     128,
     NOW() - INTERVAL '2 hours',
     NOW(),
@@ -1584,9 +1603,8 @@ ON CONFLICT (instance_id) DO UPDATE SET
     updated_at = NOW();
 
 -- Assign HA Foghorn instances to the platform cluster and the demo media cluster.
--- Media clusters are served by the whole Foghorn HA set; a peer must not stop
--- serving demo-media just because Mist/Helmsman triggers currently arrive at
--- another peer.
+-- Foghorn HA is infrastructure-level: one HA pair may serve multiple media
+-- clusters, while edge/node state is shared through the Redis state store.
 INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id) VALUES
     ('5eedf0e1-0001-da7a-f0e1-0001da7a0001', 'central-primary'),
     ('5eedf0e1-0001-da7a-f0e1-0001da7a0001', 'demo-media'),
