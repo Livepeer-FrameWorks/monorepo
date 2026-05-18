@@ -81,7 +81,7 @@ func handleVODList(ctx context.Context, clients *clients.ServiceClients, logger 
 	}
 
 	// Get VOD assets from Commodore
-	resp, err := clients.Commodore.ListVodAssets(ctx, tenantID, pagination)
+	resp, err := clients.Commodore.ListVodAssets(ctx, tenantID, pagination, nil)
 	if err != nil {
 		logger.WithError(err).Warn("Failed to list VOD assets")
 		return nil, fmt.Errorf("failed to list VOD assets: %w", err)

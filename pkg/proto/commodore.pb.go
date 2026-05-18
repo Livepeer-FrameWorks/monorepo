@@ -3340,12 +3340,19 @@ func (x *ResolveVodIDResponse) GetInternalName() string {
 // artifact_hash changes across retries (the latest artifact_hash wins
 // on UPSERT).
 type MintChapterPlaybackIDRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ChapterId     string                 `protobuf:"bytes,1,opt,name=chapter_id,json=chapterId,proto3" json:"chapter_id,omitempty"`          // foghorn.dvr_chapters.chapter_id
-	TenantId      string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`             // tenant scope
-	ArtifactHash  string                 `protobuf:"bytes,3,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"` // chapter playback artifact (origin_type='dvr_chapter')
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	ChapterId        string                 `protobuf:"bytes,1,opt,name=chapter_id,json=chapterId,proto3" json:"chapter_id,omitempty"`                        // foghorn.dvr_chapters.chapter_id
+	TenantId         string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                           // tenant scope
+	ArtifactHash     string                 `protobuf:"bytes,3,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`               // chapter playback artifact (origin_type='dvr_chapter')
+	UserId           string                 `protobuf:"bytes,4,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                 // owner copied from the parent DVR registry/artifact
+	Filename         string                 `protobuf:"bytes,5,opt,name=filename,proto3" json:"filename,omitempty"`                                           // registry filename for the hidden VOD asset
+	Title            *string                `protobuf:"bytes,6,opt,name=title,proto3,oneof" json:"title,omitempty"`                                           // hidden VOD registry title
+	Description      *string                `protobuf:"bytes,7,opt,name=description,proto3,oneof" json:"description,omitempty"`                               // hidden VOD registry description
+	OriginClusterId  string                 `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`    // cluster where the chapter artifact is produced
+	StorageClusterId string                 `protobuf:"bytes,9,opt,name=storage_cluster_id,json=storageClusterId,proto3" json:"storage_cluster_id,omitempty"` // cluster owning storage, if different from origin
+	StreamId         string                 `protobuf:"bytes,10,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                          // source stream UUID for stream-scoped media queries
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *MintChapterPlaybackIDRequest) Reset() {
@@ -3395,6 +3402,55 @@ func (x *MintChapterPlaybackIDRequest) GetTenantId() string {
 func (x *MintChapterPlaybackIDRequest) GetArtifactHash() string {
 	if x != nil {
 		return x.ArtifactHash
+	}
+	return ""
+}
+
+func (x *MintChapterPlaybackIDRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *MintChapterPlaybackIDRequest) GetFilename() string {
+	if x != nil {
+		return x.Filename
+	}
+	return ""
+}
+
+func (x *MintChapterPlaybackIDRequest) GetTitle() string {
+	if x != nil && x.Title != nil {
+		return *x.Title
+	}
+	return ""
+}
+
+func (x *MintChapterPlaybackIDRequest) GetDescription() string {
+	if x != nil && x.Description != nil {
+		return *x.Description
+	}
+	return ""
+}
+
+func (x *MintChapterPlaybackIDRequest) GetOriginClusterId() string {
+	if x != nil {
+		return x.OriginClusterId
+	}
+	return ""
+}
+
+func (x *MintChapterPlaybackIDRequest) GetStorageClusterId() string {
+	if x != nil {
+		return x.StorageClusterId
+	}
+	return ""
+}
+
+func (x *MintChapterPlaybackIDRequest) GetStreamId() string {
+	if x != nil {
+		return x.StreamId
 	}
 	return ""
 }
@@ -11190,12 +11246,22 @@ const file_commodore_proto_rawDesc = "" +
 	"\bvod_hash\x18\x04 \x01(\tR\avodHash\x12\x1f\n" +
 	"\vplayback_id\x18\x05 \x01(\tR\n" +
 	"playbackId\x12#\n" +
-	"\rinternal_name\x18\x06 \x01(\tR\finternalName\"\x7f\n" +
+	"\rinternal_name\x18\x06 \x01(\tR\finternalName\"\x87\x03\n" +
 	"\x1cMintChapterPlaybackIDRequest\x12\x1d\n" +
 	"\n" +
 	"chapter_id\x18\x01 \x01(\tR\tchapterId\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12#\n" +
-	"\rartifact_hash\x18\x03 \x01(\tR\fartifactHash\"@\n" +
+	"\rartifact_hash\x18\x03 \x01(\tR\fartifactHash\x12\x17\n" +
+	"\auser_id\x18\x04 \x01(\tR\x06userId\x12\x1a\n" +
+	"\bfilename\x18\x05 \x01(\tR\bfilename\x12\x19\n" +
+	"\x05title\x18\x06 \x01(\tH\x00R\x05title\x88\x01\x01\x12%\n" +
+	"\vdescription\x18\a \x01(\tH\x01R\vdescription\x88\x01\x01\x12*\n" +
+	"\x11origin_cluster_id\x18\b \x01(\tR\x0foriginClusterId\x12,\n" +
+	"\x12storage_cluster_id\x18\t \x01(\tR\x10storageClusterId\x12\x1b\n" +
+	"\tstream_id\x18\n" +
+	" \x01(\tR\bstreamIdB\b\n" +
+	"\x06_titleB\x0e\n" +
+	"\f_description\"@\n" +
 	"\x1dMintChapterPlaybackIDResponse\x12\x1f\n" +
 	"\vplayback_id\x18\x01 \x01(\tR\n" +
 	"playbackId\"B\n" +
@@ -12593,6 +12659,7 @@ func file_commodore_proto_init() {
 	file_commodore_proto_msgTypes[21].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[23].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[35].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[41].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[76].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[82].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[89].OneofWrappers = []any{}

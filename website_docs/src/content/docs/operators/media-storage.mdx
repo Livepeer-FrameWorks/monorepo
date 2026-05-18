@@ -127,8 +127,12 @@ as canonical `.mkv` VOD artifacts:
   when local copies are gone) and pushing a single MKV.
 - The resulting artifact lives at the standard VOD prefix and serves
   through the standard archival lane.
-- `library_visible=false` keeps the chapter artifact out of user
-  library listings even though it shares the VOD storage tree.
+- `library_visible=false` keeps the chapter artifact out of tenant-wide
+  VOD library listings even though it shares the VOD storage tree.
+  The Commodore VOD registry row still carries `stream_id`,
+  `origin_type='dvr_chapter'`, and `origin_id=chapter_id`, so
+  stream-scoped VOD artifact queries can include finalized chapters
+  without joining through Foghorn.
 - Policy enforcement walks chapter artifact → parent DVR
   (`origin_type='dvr_chapter'` + `origin_id=chapter_id`) so a protected
   DVR's chapters inherit the parent's auth policy transparently.

@@ -3952,6 +3952,7 @@ type ListVodAssetsRequest struct {
 	state         protoimpl.MessageState   `protogen:"open.v1"`
 	TenantId      string                   `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	Pagination    *CursorPaginationRequest `protobuf:"bytes,2,opt,name=pagination,proto3" json:"pagination,omitempty"`
+	StreamId      *string                  `protobuf:"bytes,3,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"` // filter stream-derived VOD artifacts by source stream UUID
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3998,6 +3999,13 @@ func (x *ListVodAssetsRequest) GetPagination() *CursorPaginationRequest {
 		return x.Pagination
 	}
 	return nil
+}
+
+func (x *ListVodAssetsRequest) GetStreamId() string {
+	if x != nil && x.StreamId != nil {
+		return *x.StreamId
+	}
+	return ""
 }
 
 // ListVodAssetsResponse - paginated list of VOD assets
@@ -4092,6 +4100,9 @@ type VodAssetInfo struct {
 	// per_stream_override (unused for VOD today). Empty when no override
 	// has been applied.
 	RetentionSource *string `protobuf:"bytes,23,opt,name=retention_source,json=retentionSource,proto3,oneof" json:"retention_source,omitempty"`
+	StreamId        *string `protobuf:"bytes,24,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"`       // source stream UUID for stream-derived VOD artifacts
+	OriginType      *string `protobuf:"bytes,25,opt,name=origin_type,json=originType,proto3,oneof" json:"origin_type,omitempty"` // upload | dvr_chapter | null
+	OriginId        *string `protobuf:"bytes,26,opt,name=origin_id,json=originId,proto3,oneof" json:"origin_id,omitempty"`       // origin entity id (chapter_id for dvr_chapter)
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -4283,6 +4294,27 @@ func (x *VodAssetInfo) GetThumbnailAssets() *ThumbnailAssets {
 func (x *VodAssetInfo) GetRetentionSource() string {
 	if x != nil && x.RetentionSource != nil {
 		return *x.RetentionSource
+	}
+	return ""
+}
+
+func (x *VodAssetInfo) GetStreamId() string {
+	if x != nil && x.StreamId != nil {
+		return *x.StreamId
+	}
+	return ""
+}
+
+func (x *VodAssetInfo) GetOriginType() string {
+	if x != nil && x.OriginType != nil {
+		return *x.OriginType
+	}
+	return ""
+}
+
+func (x *VodAssetInfo) GetOriginId() string {
+	if x != nil && x.OriginId != nil {
+		return *x.OriginId
 	}
 	return ""
 }
@@ -5005,17 +5037,21 @@ const file_shared_proto_rawDesc = "" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"V\n" +
 	"\x12GetVodAssetRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12#\n" +
-	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\"t\n" +
+	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\"\xa4\x01\n" +
 	"\x14ListVodAssetsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12?\n" +
 	"\n" +
 	"pagination\x18\x02 \x01(\v2\x1f.common.CursorPaginationRequestR\n" +
-	"pagination\"\x87\x01\n" +
+	"pagination\x12 \n" +
+	"\tstream_id\x18\x03 \x01(\tH\x00R\bstreamId\x88\x01\x01B\f\n" +
+	"\n" +
+	"_stream_id\"\x87\x01\n" +
 	"\x15ListVodAssetsResponse\x12,\n" +
 	"\x06assets\x18\x01 \x03(\v2\x14.shared.VodAssetInfoR\x06assets\x12@\n" +
 	"\n" +
 	"pagination\x18\x02 \x01(\v2 .common.CursorPaginationResponseR\n" +
-	"pagination\"\x96\t\n" +
+	"pagination\"\xac\n" +
+	"\n" +
 	"\fVodAssetInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12\x14\n" +
@@ -5052,7 +5088,11 @@ const file_shared_proto_rawDesc = "" +
 	"playbackId\x88\x01\x01\x12,\n" +
 	"\x12storage_cluster_id\x18\x15 \x01(\tR\x10storageClusterId\x12G\n" +
 	"\x10thumbnail_assets\x18\x16 \x01(\v2\x17.shared.ThumbnailAssetsH\vR\x0fthumbnailAssets\x88\x01\x01\x12.\n" +
-	"\x10retention_source\x18\x17 \x01(\tH\fR\x0fretentionSource\x88\x01\x01B\r\n" +
+	"\x10retention_source\x18\x17 \x01(\tH\fR\x0fretentionSource\x88\x01\x01\x12 \n" +
+	"\tstream_id\x18\x18 \x01(\tH\rR\bstreamId\x88\x01\x01\x12$\n" +
+	"\vorigin_type\x18\x19 \x01(\tH\x0eR\n" +
+	"originType\x88\x01\x01\x12 \n" +
+	"\torigin_id\x18\x1a \x01(\tH\x0fR\boriginId\x88\x01\x01B\r\n" +
 	"\v_size_bytesB\x0e\n" +
 	"\f_duration_msB\r\n" +
 	"\v_resolutionB\x0e\n" +
@@ -5065,7 +5105,12 @@ const file_shared_proto_rawDesc = "" +
 	"\x0e_error_messageB\x0e\n" +
 	"\f_playback_idB\x13\n" +
 	"\x11_thumbnail_assetsB\x13\n" +
-	"\x11_retention_source\"\xa5\x03\n" +
+	"\x11_retention_sourceB\f\n" +
+	"\n" +
+	"_stream_idB\x0e\n" +
+	"\f_origin_typeB\f\n" +
+	"\n" +
+	"_origin_id\"\xa5\x03\n" +
 	"\vVodMetadata\x12\x1f\n" +
 	"\vduration_ms\x18\x01 \x01(\x05R\n" +
 	"durationMs\x12\x1e\n" +
@@ -5280,6 +5325,7 @@ func file_shared_proto_init() {
 	file_shared_proto_msgTypes[29].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[30].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[31].OneofWrappers = []any{}
+	file_shared_proto_msgTypes[45].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[47].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[48].OneofWrappers = []any{}
 	type x struct{}

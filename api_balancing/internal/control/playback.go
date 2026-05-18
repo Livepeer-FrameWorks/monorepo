@@ -429,11 +429,9 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 		return nil, fmt.Errorf("commodore client not available")
 	}
 
-	// Chapter playback IDs are minted by Commodore but the chapter's VOD
-	// artifact lives library_visible=false in foghorn — never registered
-	// in commodore.vod_assets. Resolve via the chapter playback table
-	// and synthesize a Commodore-shaped response so the normal artifact
-	// placement path takes it from here.
+	// Chapter playback IDs resolve before the generic VOD registry path
+	// because chapter artifacts inherit auth + stream context from the
+	// parent DVR even though Commodore also keeps a hidden VOD registry row.
 	if artifactResp, ok := resolveChapterArtifactPlaybackResp(ctx, playbackID); ok {
 		return resolveArtifactPlaybackWithResp(ctx, deps, playbackID, artifactResp)
 	}

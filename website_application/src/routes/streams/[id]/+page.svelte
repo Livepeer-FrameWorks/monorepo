@@ -9,6 +9,7 @@
     GetStreamKeysStore,
     GetDVRRequestsStore,
     GetClipsConnectionStore,
+    GetVodAssetsConnectionStore,
     GetStreamOverviewCoreStore,
     GetStreamOverviewChartsStore,
     GetStreamAnalyticsDailyConnectionStore,
@@ -83,6 +84,7 @@
   const streamKeysStore = new GetStreamKeysStore();
   const dvrRequestsStore = new GetDVRRequestsStore();
   const clipsStore = new GetClipsConnectionStore();
+  const vodArtifactsStore = new GetVodAssetsConnectionStore();
   const streamOverviewCoreStore = new GetStreamOverviewCoreStore();
   const streamOverviewChartsStore = new GetStreamOverviewChartsStore();
   const updateStreamMutation = new UpdateStreamStore();
@@ -116,6 +118,9 @@
   >["node"];
   type _RecordingType = NonNullable<
     NonNullable<NonNullable<typeof $dvrRequestsStore.data>["dvrRecordingsConnection"]>["edges"]
+  >[0]["node"];
+  type _VodArtifactType = NonNullable<
+    NonNullable<NonNullable<typeof $vodArtifactsStore.data>["vodAssetsConnection"]>["edges"]
   >[0]["node"];
   type TrackInfo = NonNullable<TrackListUpdates$result["liveTrackListUpdates"]>;
 
@@ -180,6 +185,9 @@
     $dvrRequestsStore.data?.dvrRecordingsConnection?.edges?.map((e) => e.node) ?? []
   );
   let clips = $derived($clipsStore.data?.clipsConnection?.edges?.map((e) => e.node) ?? []);
+  let vodArtifacts = $derived(
+    $vodArtifactsStore.data?.vodAssetsConnection?.edges?.map((e) => e.node) ?? []
+  );
 
   // Analytics and health from GetStreamOverview query
   let streamAnalyticsSummary = $derived(
@@ -779,6 +787,7 @@
         pushTargetsStore.fetch({ variables: { streamId } }),
         dvrRequestsStore.fetch({ variables: { streamId: resolvedStreamId } }),
         clipsStore.fetch({ variables: { streamId: resolvedStreamId, first: 100 } }),
+        vodArtifactsStore.fetch({ variables: { streamId: resolvedStreamId, first: 100 } }),
         streamOverviewCoreStore
           .fetch({
             variables: {
@@ -1394,7 +1403,7 @@
                   class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
                 >
                   <VideoIcon class="w-4 h-4" />
-                  Artefacts ({recordings.length + clips.length})
+                  Artefacts ({recordings.length + clips.length + vodArtifacts.length})
                 </TabsTrigger>
                 <TabsTrigger
                   value="multistream"
@@ -1453,6 +1462,7 @@
                 <ArtefactsTabPanel
                   {recordings}
                   {clips}
+                  {vodArtifacts}
                   onEnableRecording={() => (showEditModal = true)}
                 />
               </TabsContent>

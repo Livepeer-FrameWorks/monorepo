@@ -982,9 +982,9 @@ type DVRChapter struct {
 	IsCurrent    bool    `json:"isCurrent"`
 	HasGaps      bool    `json:"hasGaps"`
 	SegmentCount int     `json:"segmentCount"`
-	// Absolute Unix epoch ms of the chapter range start.
+	// Absolute Unix epoch ms of the playable MKV span start; falls back to the scheduled chapter start before finalization.
 	WallClockStartUnixMs float64 `json:"wallClockStartUnixMs"`
-	// Absolute Unix epoch ms of the chapter range end.
+	// Absolute Unix epoch ms of the playable MKV span end; falls back to the scheduled chapter end before finalization.
 	WallClockEndUnixMs float64 `json:"wallClockEndUnixMs"`
 	// True when state ∈ {FINALIZED, FROZEN, RECLAIMED}.
 	PlayableNow bool `json:"playableNow"`
@@ -2059,9 +2059,10 @@ type UpdateStreamInput struct {
 	IngestMode *IngestMode `json:"ingestMode,omitempty"`
 	// Update the pull-source configuration for an existing pull stream.
 	PullSource *proto.PullSourceInput `json:"pullSource,omitempty"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at
-	// StartDVR; changes take effect on the next recording, not in-flight.
-	// Pass NONE to disable chapters.
+	// Historical chapter rotation mode. Snapshotted onto the DVR artifact
+	// at StartDVR; changes take effect on the next recording, not in-flight.
+	// NONE means rolling DVR playback only: recording still runs, but no
+	// finalized chapter artifacts are produced for historical replay.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode,omitempty"`
 	// Chapter interval in seconds. Required when dvrChapterMode =
 	// FIXED_INTERVAL. Minimum 3600 (1 hour).
@@ -2263,6 +2264,12 @@ type VodAsset struct {
 	ArtifactHash string `json:"artifactHash"`
 	// Public playback identifier for generating playback URLs.
 	PlaybackID string `json:"playbackId"`
+	// Source stream UUID for stream-derived VOD artifacts such as DVR chapters.
+	StreamID *string `json:"streamId,omitempty"`
+	// Registry origin kind. Null/user_upload for ordinary uploads; dvr_chapter for finalized DVR chapters.
+	OriginType *string `json:"originType,omitempty"`
+	// Origin entity id, such as DVR chapter_id when originType=dvr_chapter.
+	OriginID *string `json:"originId,omitempty"`
 	// Optional display title for the asset.
 	Title *string `json:"title,omitempty"`
 	// Optional description of the asset content.
@@ -2650,9 +2657,10 @@ func (e ClipCreationMode) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// DVR chapter mode. Determines how chapter (startMs, endMs) ranges are
-// produced. Configured at the Stream level via updateStream and
-// snapshotted onto the DVR artifact at StartDVR.
+// DVR historical chapter mode. Determines how chapter (startMs, endMs)
+// ranges are produced for finalized replay artifacts. Configured at the
+// Stream level via updateStream and snapshotted onto the DVR artifact at
+// StartDVR.
 //
 // UTC-only — civil-time chapters resolve at the edge.
 type DVRChapterMode string
@@ -2662,7 +2670,7 @@ const (
 	DVRChapterModeWindowSized DVRChapterMode = "WINDOW_SIZED"
 	// UTC-only intervalSeconds buckets, anchored at unix epoch 0.
 	DVRChapterModeFixedInterval DVRChapterMode = "FIXED_INTERVAL"
-	// Chapters disabled for this stream.
+	// Rolling DVR only: recording still runs, but no historical chapter artifacts are produced.
 	DVRChapterModeNone DVRChapterMode = "NONE"
 )
 

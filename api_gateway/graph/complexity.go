@@ -256,7 +256,7 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 	c.Query.UsageRecordsConnection = func(childComplexity int, page *model.ConnectionInput, _ *model.TimeRangeInput) int {
 		return connectionComplexity(childComplexity, page)
 	}
-	c.Query.VodAssetsConnection = func(childComplexity int, page *model.ConnectionInput) int {
+	c.Query.VodAssetsConnection = func(childComplexity int, page *model.ConnectionInput, _ *string) int {
 		return connectionComplexity(childComplexity, page)
 	}
 

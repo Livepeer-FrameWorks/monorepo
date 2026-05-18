@@ -3710,14 +3710,26 @@ enum GQL {
   """
 
   static let GetVodAssetsConnection = """
-  query GetVodAssetsConnection($first: Int = 50, $after: String, $last: Int, $before: String) {
-    vodAssetsConnection(page: { first: $first, after: $after, last: $last, before: $before }) {
+  query GetVodAssetsConnection(
+    $streamId: ID
+    $first: Int = 50
+    $after: String
+    $last: Int
+    $before: String
+  ) {
+    vodAssetsConnection(
+      streamId: $streamId
+      page: { first: $first, after: $after, last: $last, before: $before }
+    ) {
       edges {
         cursor
         node {
           id
           artifactHash
           playbackId
+          streamId
+          originType
+          originId
           title
           description
           filename

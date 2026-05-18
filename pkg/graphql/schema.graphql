@@ -636,9 +636,15 @@ type Query {
   ): VodAsset
 
   """
-  List VOD assets uploaded by the tenant.
+  List VOD-shaped assets. By default this is the tenant's library-visible
+  uploads. When streamId is supplied, returns VOD-shaped artifacts derived
+  from that stream, including hidden DVR chapter artifacts.
   """
-  vodAssetsConnection(page: ConnectionInput): VodAssetsConnection!
+  vodAssetsConnection(
+    page: ConnectionInput
+    "Filter by source stream ID (Stream.id, Relay global ID)."
+    streamId: ID
+  ): VodAssetsConnection!
 
   """
   Read server-authoritative state of an in-flight VOD upload session.
@@ -2638,6 +2644,12 @@ type VodAsset implements Node {
   artifactHash: String!
   "Public playback identifier for generating playback URLs."
   playbackId: String!
+  "Source stream UUID for stream-derived VOD artifacts such as DVR chapters."
+  streamId: String
+  "Registry origin kind. Null/user_upload for ordinary uploads; dvr_chapter for finalized DVR chapters."
+  originType: String
+  "Origin entity id, such as DVR chapter_id when originType=dvr_chapter."
+  originId: String
   "Optional display title for the asset."
   title: String
   "Optional description of the asset content."

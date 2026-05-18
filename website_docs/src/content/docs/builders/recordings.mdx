@@ -31,12 +31,12 @@ The value prop is the split between capture, live UX, and replay UX:
 
 That split matters:
 
-| Concept            | What it controls                                                                                                                           |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Live DVR window    | How far back live viewers can seek while the stream is still recording. This is tier- and cluster-bounded so live playlists stay small.    |
-| Continuous archive | The full DVR segment timeline for one stream session. It can span hours, days, or months if the ingest stays live.                         |
-| Virtual chapters   | HLS playlist views over a time range in the archive. Chapters share the same segment files; they do not create separate media directories. |
-| Retention          | How long a completed recording is kept after the stream session ends. Retention is not the live seekback window.                           |
+| Concept            | What it controls                                                                                                                                                           |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Live DVR window    | How far back live viewers can seek while the stream is still recording. This is tier- and cluster-bounded so live playlists stay small.                                    |
+| Continuous archive | The full DVR segment timeline for one stream session. It can span hours, days, or months if the ingest stays live.                                                         |
+| DVR chapters       | Finalized VOD-shaped artifacts for historical replay. Each chapter is linked to its parent DVR and source stream, but stays out of the tenant-wide VOD library by default. |
+| Retention          | How long a completed recording is kept after the stream session ends. Retention is not the live seekback window.                                                           |
 
 ### Enabling Recording
 
@@ -217,6 +217,27 @@ query {
 }
 ```
 
+For stream-scoped media views, chapter artifacts also surface through `vodAssetsConnection(streamId: ...)` with `originType: "dvr_chapter"`. Omit `streamId` to get the normal tenant VOD library, which only returns library-visible user uploads.
+
+```graphql
+query StreamVodArtifacts {
+  vodAssetsConnection(streamId: "stream-global-id", page: { first: 20 }) {
+    edges {
+      node {
+        id
+        playbackId
+        streamId
+        originType
+        originId
+        title
+        status
+        createdAt
+      }
+    }
+  }
+}
+```
+
 Historical chapter mode is configured on the Stream and snapshotted onto each recording at StartDVR. Changes apply to the next recording, not in-flight ones. `NONE` keeps DVR recording and the active rolling DVR window enabled, but skips finalized chapter artifacts for historical replay:
 
 ```graphql
@@ -344,9 +365,10 @@ mutation {
   memory when a viewer is reading that range. Live seekback is bounded by the DVR window;
   historical replay uses archive chapters.
 
-**To clip further back than the live ring**, target the DVR recording, not the live
-stream. The API keeps live and DVR entities explicit so clipping, access control, and playback
-state resolve against the source that actually holds the media.
+**To clip further back than the live ring**, keep using the source stream id and request the
+absolute time range. The media plane chooses the source: live shared memory, the rolling DVR
+segments, or a finalized chapter artifact. Requests that span two source kinds are rejected so the
+clip output remains a single canonical artifact.
 
 </Aside>
 
@@ -507,7 +529,7 @@ Same URL pattern as all other content:
 ### Managing VOD Assets
 
 ```graphql
-# List all VOD assets
+# List all library VOD uploads
 query {
   vodAssetsConnection(page: { first: 20 }) {
     edges {
@@ -518,6 +540,24 @@ query {
         status
         sizeBytes
         durationSeconds
+        createdAt
+      }
+    }
+  }
+}
+
+# List VOD-shaped artifacts derived from a stream, including DVR chapters
+query {
+  vodAssetsConnection(streamId: "stream-global-id", page: { first: 20 }) {
+    edges {
+      node {
+        id
+        playbackId
+        streamId
+        originType
+        originId
+        title
+        status
         createdAt
       }
     }

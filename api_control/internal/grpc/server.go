@@ -1603,7 +1603,7 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 // ============================================================================
 // CLIP/DVR REGISTRY (Foghorn → Commodore)
 // Business registry for clips and DVR recordings.
-// See: docs/architecture/CLIP_DVR_REGISTRY.md
+// See: docs/architecture/clips-dvr.md
 // ============================================================================
 
 // RegisterClip creates a new clip in the business registry
@@ -2079,8 +2079,9 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *pb.Min
 	chapterID := req.GetChapterId()
 	tenantID := req.GetTenantId()
 	artifactHash := req.GetArtifactHash()
-	if chapterID == "" || tenantID == "" || artifactHash == "" {
-		return nil, status.Error(codes.InvalidArgument, "chapter_id, tenant_id, and artifact_hash are required")
+	userID := req.GetUserId()
+	if chapterID == "" || tenantID == "" || artifactHash == "" || userID == "" {
+		return nil, status.Error(codes.InvalidArgument, "chapter_id, tenant_id, artifact_hash, and user_id are required")
 	}
 
 	// Mint a fresh playback_id for the INSERT path. ON CONFLICT returns
@@ -2109,6 +2110,58 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *pb.Min
 			"error":         err,
 		}).Error("Failed to mint chapter playback id")
 		return nil, status.Errorf(codes.Internal, "mint chapter playback id: %v", err)
+	}
+
+	filename := req.GetFilename()
+	if filename == "" {
+		filename = "dvr-chapter-" + chapterID + ".mkv"
+	}
+	title := req.GetTitle()
+	if title == "" {
+		title = "DVR chapter"
+	}
+	description := req.GetDescription()
+	contentType := "video/x-matroska"
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO commodore.vod_assets (
+			id, tenant_id, user_id, stream_id, vod_hash, internal_name, playback_id,
+			title, description, filename, content_type,
+			origin_cluster_id, storage_cluster_id,
+			library_visible, origin_type, origin_id,
+			created_at, updated_at
+		) VALUES (
+			$1, $2::uuid, $3::uuid, NULLIF($4, '')::uuid, $5, $6, $7,
+			$8, NULLIF($9, ''), $10, $11,
+			NULLIF($12, ''), NULLIF($13, ''),
+			false, 'dvr_chapter', $14,
+			NOW(), NOW()
+		)
+		ON CONFLICT (vod_hash) DO UPDATE SET
+			user_id            = EXCLUDED.user_id,
+			stream_id          = EXCLUDED.stream_id,
+			internal_name      = EXCLUDED.internal_name,
+			playback_id        = EXCLUDED.playback_id,
+			title              = EXCLUDED.title,
+			description        = EXCLUDED.description,
+			filename           = EXCLUDED.filename,
+			content_type       = EXCLUDED.content_type,
+			origin_cluster_id  = EXCLUDED.origin_cluster_id,
+			storage_cluster_id = EXCLUDED.storage_cluster_id,
+			library_visible    = false,
+			origin_type        = 'dvr_chapter',
+			origin_id          = EXCLUDED.origin_id,
+			updated_at         = NOW()
+	`, uuid.New().String(), tenantID, userID, req.GetStreamId(), artifactHash, artifactHash, stored,
+		title, description, filename, contentType,
+		req.GetOriginClusterId(), req.GetStorageClusterId(), chapterID)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"chapter_id":    chapterID,
+			"tenant_id":     tenantID,
+			"artifact_hash": artifactHash,
+			"error":         err,
+		}).Error("Failed to register chapter VOD asset")
+		return nil, status.Errorf(codes.Internal, "register chapter VOD asset: %v", err)
 	}
 
 	return &pb.MintChapterPlaybackIDResponse{PlaybackId: stored}, nil
@@ -7757,6 +7810,9 @@ func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRe
 		id                   string
 		vodHash              string
 		playbackID           string
+		streamID             string
+		originType           string
+		originID             string
 		title, description   sql.NullString
 		filename             string
 		contentType          sql.NullString
@@ -7770,13 +7826,14 @@ func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRe
 		hasThumbnails    bool
 	)
 	err = s.db.QueryRowContext(ctx, `
-		SELECT id, vod_hash, playback_id, title, description, filename, content_type,
+		SELECT id, vod_hash, playback_id, COALESCE(stream_id::text, ''), COALESCE(origin_type, ''), COALESCE(origin_id, ''),
+		       title, description, filename, content_type,
 		       size_bytes, retention_until, retention_source, created_at, updated_at,
 		       COALESCE(storage_cluster_id, origin_cluster_id), has_thumbnails
 		FROM commodore.vod_assets
-		WHERE vod_hash = $1 AND tenant_id = $2
+		WHERE vod_hash = $1 AND tenant_id = $2 AND library_visible = true
 	`, req.ArtifactHash, tenantID).Scan(
-		&id, &vodHash, &playbackID, &title, &description, &filename, &contentType,
+		&id, &vodHash, &playbackID, &streamID, &originType, &originID, &title, &description, &filename, &contentType,
 		&sizeBytes, &retentionUntil, &retentionSource, &createdAt, &updatedAt,
 		&thumbnailCluster, &hasThumbnails,
 	)
@@ -7804,6 +7861,15 @@ func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRe
 	}
 	if description.Valid {
 		asset.Description = description.String
+	}
+	if streamID != "" {
+		asset.StreamId = &streamID
+	}
+	if originType != "" {
+		asset.OriginType = &originType
+	}
+	if originID != "" {
+		asset.OriginId = &originID
 	}
 	if sizeBytes.Valid {
 		size := sizeBytes.Int64
@@ -7835,10 +7901,21 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
+	whereClause := "tenant_id = $1"
+	args := []interface{}{tenantID}
+	argIdx := 2
+	if streamID := req.GetStreamId(); streamID != "" {
+		whereClause += fmt.Sprintf(" AND stream_id = $%d::uuid", argIdx)
+		args = append(args, streamID)
+		argIdx++
+	} else {
+		whereClause += " AND library_visible = true"
+	}
+
 	// Get total count
 	var total int32
-	countQuery := `SELECT COUNT(*) FROM commodore.vod_assets WHERE tenant_id = $1`
-	if countErr := s.db.QueryRowContext(ctx, countQuery, tenantID).Scan(&total); countErr != nil {
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM commodore.vod_assets WHERE %s", whereClause)
+	if countErr := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); countErr != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
 
@@ -7849,14 +7926,13 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 	}
 
 	// Base query
-	query := `
-		SELECT id, vod_hash, playback_id, title, description, filename, content_type,
+	query := fmt.Sprintf(`
+		SELECT id, vod_hash, playback_id, COALESCE(stream_id::text, ''), COALESCE(origin_type, ''), COALESCE(origin_id, ''),
+		       title, description, filename, content_type,
 		       size_bytes, retention_until, retention_source, created_at, updated_at,
 		       COALESCE(storage_cluster_id, origin_cluster_id), has_thumbnails
 		FROM commodore.vod_assets
-		WHERE tenant_id = $1`
-	args := []interface{}{tenantID}
-	argIdx := 2
+		WHERE %s`, whereClause)
 
 	// Add keyset condition if cursor provided
 	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
@@ -7880,6 +7956,9 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 			id                   string
 			vodHash              string
 			playbackID           string
+			streamID             string
+			originType           string
+			originID             string
 			title, description   sql.NullString
 			filename             string
 			contentType          sql.NullString
@@ -7890,7 +7969,7 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 			thumbnailCluster     sql.NullString
 			hasThumbnails        bool
 		)
-		if err := rows.Scan(&id, &vodHash, &playbackID, &title, &description, &filename, &contentType,
+		if err := rows.Scan(&id, &vodHash, &playbackID, &streamID, &originType, &originID, &title, &description, &filename, &contentType,
 			&sizeBytes, &retentionUntil, &retentionSource, &createdAt, &updatedAt,
 			&thumbnailCluster, &hasThumbnails); err != nil {
 			s.logger.WithError(err).Warn("Error scanning VOD asset")
@@ -7913,6 +7992,15 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 		}
 		if description.Valid {
 			asset.Description = description.String
+		}
+		if streamID != "" {
+			asset.StreamId = &streamID
+		}
+		if originType != "" {
+			asset.OriginType = &originType
+		}
+		if originID != "" {
+			asset.OriginId = &originID
 		}
 		if sizeBytes.Valid {
 			size := sizeBytes.Int64

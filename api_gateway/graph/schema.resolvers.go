@@ -4174,9 +4174,9 @@ func (r *queryResolver) VodAsset(ctx context.Context, id string) (*model.VodAsse
 }
 
 // VodAssetsConnection is the resolver for the vodAssetsConnection field.
-func (r *queryResolver) VodAssetsConnection(ctx context.Context, page *model.ConnectionInput) (*model.VodAssetsConnection, error) {
+func (r *queryResolver) VodAssetsConnection(ctx context.Context, page *model.ConnectionInput, streamID *string) (*model.VodAssetsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.DoGetVodAssetsConnection(ctx, first, after, last, before)
+	return r.DoGetVodAssetsConnectionFiltered(ctx, streamID, first, after, last, before)
 }
 
 // VodUploadStatus is the resolver for the vodUploadStatus field.

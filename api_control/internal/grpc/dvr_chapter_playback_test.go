@@ -23,12 +23,20 @@ func TestMintChapterPlaybackID_IdempotentOnChapterID(t *testing.T) {
 	mock.ExpectQuery(`INSERT INTO commodore\.dvr_chapter_playback`).
 		WithArgs("chap-1", "tenant-1", sqlmock.AnyArg(), "artifact-aaa").
 		WillReturnRows(sqlmock.NewRows([]string{"playback_id"}).AddRow("pb_existing_chapter"))
+	mock.ExpectExec(`INSERT INTO commodore\.vod_assets`).
+		WithArgs(sqlmock.AnyArg(), "tenant-1", "user-1", "stream-1", "artifact-aaa", "artifact-aaa", "pb_existing_chapter",
+			"DVR chapter", "", "chapter.mkv", "video/x-matroska", "cluster-1", "", "chap-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
 	resp, err := server.MintChapterPlaybackID(context.Background(), &pb.MintChapterPlaybackIDRequest{
-		ChapterId:    "chap-1",
-		TenantId:     "tenant-1",
-		ArtifactHash: "artifact-aaa",
+		ChapterId:       "chap-1",
+		TenantId:        "tenant-1",
+		ArtifactHash:    "artifact-aaa",
+		UserId:          "user-1",
+		Filename:        "chapter.mkv",
+		OriginClusterId: "cluster-1",
+		StreamId:        "stream-1",
 	})
 	if err != nil {
 		t.Fatalf("MintChapterPlaybackID: %v", err)
@@ -53,6 +61,7 @@ func TestMintChapterPlaybackID_RejectsMissingArgs(t *testing.T) {
 		{TenantId: "t", ArtifactHash: "a"},
 		{ChapterId: "c", ArtifactHash: "a"},
 		{ChapterId: "c", TenantId: "t"},
+		{ChapterId: "c", TenantId: "t", ArtifactHash: "a"},
 	}
 	for _, req := range cases {
 		if _, err := server.MintChapterPlaybackID(context.Background(), req); err == nil {

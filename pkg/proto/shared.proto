@@ -562,6 +562,7 @@ message GetVodAssetRequest {
 message ListVodAssetsRequest {
   string tenant_id = 1;
   common.CursorPaginationRequest pagination = 2;
+  optional string stream_id = 3;  // filter stream-derived VOD artifacts by source stream UUID
 }
 
 // ListVodAssetsResponse - paginated list of VOD assets
@@ -612,6 +613,9 @@ message VodAssetInfo {
   // per_stream_override (unused for VOD today). Empty when no override
   // has been applied.
   optional string retention_source = 23;
+  optional string stream_id = 24; // source stream UUID for stream-derived VOD artifacts
+  optional string origin_type = 25; // upload | dvr_chapter | null
+  optional string origin_id = 26;   // origin entity id (chapter_id for dvr_chapter)
 }
 
 // VodMetadata - metadata extracted from video file (returned by validation)

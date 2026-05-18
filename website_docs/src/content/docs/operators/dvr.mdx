@@ -172,7 +172,7 @@ s3://bucket/vod/{tenant_id}/{chapter_artifact_hash}.dtsh
 
 The DVR segment prefix holds the **recovery-bridge** TS segments uploaded during recording. These are NOT playback objects: viewers never read them. Chapter finalization fetches them (or recovers from local disk) to build the canonical `.mkv`. Once a chapter reaches `state='frozen'` the reclaim sweep deletes both the local TS file and the corresponding S3 segment object.
 
-Chapter playback artifacts live at the normal VOD prefix — they're regular VOD artifacts whose `origin_type='dvr_chapter'` and `library_visible=false` keep them out of user-facing library listings but otherwise flow through the standard playback path.
+Chapter playback artifacts live at the normal VOD prefix. They're regular VOD artifacts whose `origin_type='dvr_chapter'`, `origin_id=chapter_id`, and source `stream_id` are registered in Commodore. `library_visible=false` keeps them out of the tenant-wide VOD library, but stream-scoped VOD artifact queries can still return them for a stream's media overview.
 
 Don't manually manipulate any of these prefixes; let the chapter finalization + reclaim sweep do their work.
 

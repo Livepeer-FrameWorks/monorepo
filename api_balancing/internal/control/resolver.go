@@ -118,11 +118,9 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 	}
 
 	// 2a. Chapter playback ID (Commodore-minted public ID for a chapter
-	// VOD artifact). Chapter artifacts are library_visible=false so
-	// they're not registered in commodore.vod_assets — the regular
-	// artifact-playback-id resolver below would miss them. PLAY_REWRITE
-	// must succeed here so a player handed a chapter playback URL by
-	// resolveViewerEndpoint can actually play.
+	// VOD artifact). Resolve this before the generic VOD registry path
+	// because chapter artifacts inherit auth + stream context from the
+	// parent DVR, not from a standalone VOD policy row.
 	if resp, ok := resolveChapterArtifactPlaybackResp(ctx, input); ok {
 		target := &StreamTarget{
 			InternalName:      "vod+" + resp.InternalName,

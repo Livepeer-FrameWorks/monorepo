@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -22,6 +23,28 @@ func TestProcessProcessingJobResult_NilDB(t *testing.T) {
 		Status: "completed",
 	}, "node-1", logger)
 	// should not panic
+}
+
+func TestProcessProcessingJobProgress_ChapterFinalizeUsesChapterLedger(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	mock.ExpectQuery("UPDATE foghorn.processing_jobs").
+		WithArgs("chapter-finalize-chapter-1", int32(42)).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("UPDATE foghorn.dvr_chapters c").
+		WithArgs("chapter-1").
+		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash", "tenant_id"}).
+			AddRow("chapter-artifact-hash", "5eed517e-ba5e-da7a-517e-ba5eda7a0001"))
+
+	processProcessingJobProgress(&pb.ProcessingJobProgress{
+		JobId:       "chapter-finalize-chapter-1",
+		ProgressPct: 42,
+	}, logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestProcessProcessingJobResult_Completed_NoOutput(t *testing.T) {

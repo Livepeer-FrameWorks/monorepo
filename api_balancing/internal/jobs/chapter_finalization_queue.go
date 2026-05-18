@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -249,7 +250,8 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 	// leave the chapter in 'closed' so the next tick retries; we do
 	// NOT advance to 'finalizing' without a publicly addressable ID
 	// since there is no artifact-hash fallback anymore.
-	playbackID, mintErr := q.mintChapterPlaybackID(ctx, c.ChapterID, parent.tenantID, playbackHash)
+	filename := fmt.Sprintf("dvr-chapter-%s-%d-%d.mkv", c.ArtifactHash, c.StartMs, c.EndMs)
+	playbackID, mintErr := q.mintChapterPlaybackID(ctx, c.ChapterID, parent, playbackHash, filename)
 	if mintErr != nil {
 		q.logger.WithError(mintErr).WithFields(logging.Fields{
 			"chapter_id":    c.ChapterID,
@@ -313,6 +315,13 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 		// re-claimed this stale finalizing row within the same tick.
 		return nil
 	}
+	startedAt := time.Now().Unix()
+	artifactoutbox.EnqueueVodLifecycleLogged(&pb.VodLifecycleData{
+		Status:    pb.VodLifecycleData_STATUS_PROCESSING,
+		VodHash:   playbackHash,
+		TenantId:  &parent.tenantID,
+		StartedAt: &startedAt,
+	})
 
 	deadline := time.Now().Add(chapterFinalizationDeadline(c)).UnixMilli()
 	req := &pb.ProcessingJobRequest{
@@ -350,8 +359,11 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 
 type parentDVR struct {
 	tenantID           string
+	userID             string
+	streamID           string
 	streamInternalName string
 	originClusterID    string
+	storageClusterID   string
 	recordingNode      string
 }
 
@@ -359,8 +371,11 @@ func (q *ChapterFinalizationQueue) readParentDVR(ctx context.Context, dvrHash st
 	var p parentDVR
 	if err := q.db.QueryRowContext(ctx, `
 		SELECT a.tenant_id::text,
+		       COALESCE(a.user_id::text, ''),
+		       COALESCE(a.stream_id::text, ''),
 		       COALESCE(a.stream_internal_name, ''),
 		       COALESCE(a.origin_cluster_id, ''),
+		       COALESCE(a.storage_cluster_id, ''),
 		       COALESCE(
 		           (SELECT node_id
 		              FROM foghorn.artifact_nodes
@@ -371,7 +386,7 @@ func (q *ChapterFinalizationQueue) readParentDVR(ctx context.Context, dvrHash st
 		  FROM foghorn.artifacts a
 		 WHERE a.artifact_hash = $1
 		   AND a.artifact_type = 'dvr'
-	`, dvrHash).Scan(&p.tenantID, &p.streamInternalName, &p.originClusterID, &p.recordingNode); err != nil {
+	`, dvrHash).Scan(&p.tenantID, &p.userID, &p.streamID, &p.streamInternalName, &p.originClusterID, &p.storageClusterID, &p.recordingNode); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return p, fmt.Errorf("parent DVR row missing")
 		}
@@ -444,11 +459,11 @@ func (q *ChapterFinalizationQueue) buildSegmentRefs(_ /*tenantID*/, _ /*streamIn
 // so retries return the same playback_id. Returns "" + error when the
 // client is unavailable or the RPC fails; callers treat that as a soft
 // miss and retry on the next finalization tick.
-func (q *ChapterFinalizationQueue) mintChapterPlaybackID(ctx context.Context, chapterID, tenantID, artifactHash string) (string, error) {
+func (q *ChapterFinalizationQueue) mintChapterPlaybackID(ctx context.Context, chapterID string, parent parentDVR, artifactHash, filename string) (string, error) {
 	if control.CommodoreClient == nil {
 		return "", fmt.Errorf("commodore client not configured")
 	}
-	resp, err := control.CommodoreClient.MintChapterPlaybackID(ctx, chapterID, tenantID, artifactHash)
+	resp, err := control.CommodoreClient.MintChapterPlaybackID(ctx, chapterID, parent.tenantID, artifactHash, parent.userID, filename, parent.originClusterID, parent.storageClusterID, parent.streamID)
 	if err != nil {
 		return "", err
 	}
@@ -462,20 +477,20 @@ func (q *ChapterFinalizationQueue) ensurePlaybackArtifactRow(ctx context.Context
 	internalName := chapterInternalName(hash)
 	_, err := q.db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (
-			artifact_hash, artifact_type, tenant_id,
+			artifact_hash, artifact_type, tenant_id, user_id,
 			internal_name, stream_internal_name,
 			origin_type, origin_id, library_visible,
 			status, storage_location, sync_status, format,
 			origin_cluster_id, created_at, updated_at
 		) VALUES (
-			$1, 'vod', $2::uuid,
-			$3, $4,
-			'dvr_chapter', $5, false,
+			$1, 'vod', $2::uuid, NULLIF($3, '')::uuid,
+			$4, $5,
+			'dvr_chapter', $6, false,
 			'finalizing', 'pending', 'pending', 'mkv',
-			NULLIF($6, ''), NOW(), NOW()
+			NULLIF($7, ''), NOW(), NOW()
 		)
 		ON CONFLICT (artifact_hash) DO NOTHING
-	`, hash, parent.tenantID, internalName, parent.streamInternalName, c.ChapterID, parent.originClusterID)
+	`, hash, parent.tenantID, parent.userID, internalName, parent.streamInternalName, c.ChapterID, parent.originClusterID)
 	return err
 }
 

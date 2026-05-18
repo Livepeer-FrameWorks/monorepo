@@ -83,7 +83,7 @@ service InternalService {
   // ============================================================================
   // CLIP/DVR REGISTRY (Foghorn → Commodore)
   // Business registry for clips and DVR recordings.
-  // See: docs/architecture/CLIP_DVR_REGISTRY.md
+  // See: docs/architecture/clips-dvr.md
   // ============================================================================
 
   // Register a new clip in the business registry (called by Foghorn during CreateClip)
@@ -501,7 +501,7 @@ message ValidateAPITokenResponse {
 
 // ============================================================================
 // CLIP/DVR BUSINESS REGISTRY (Foghorn → Commodore)
-// See: docs/architecture/CLIP_DVR_REGISTRY.md
+// See: docs/architecture/clips-dvr.md
 // ============================================================================
 
 // Register a new clip in the business registry
@@ -728,6 +728,13 @@ message MintChapterPlaybackIDRequest {
   string chapter_id    = 1;             // foghorn.dvr_chapters.chapter_id
   string tenant_id     = 2;             // tenant scope
   string artifact_hash = 3;             // chapter playback artifact (origin_type='dvr_chapter')
+  string user_id       = 4;             // owner copied from the parent DVR registry/artifact
+  string filename      = 5;             // registry filename for the hidden VOD asset
+  optional string title = 6;            // hidden VOD registry title
+  optional string description = 7;      // hidden VOD registry description
+  string origin_cluster_id = 8;         // cluster where the chapter artifact is produced
+  string storage_cluster_id = 9;        // cluster owning storage, if different from origin
+  string stream_id = 10;                // source stream UUID for stream-scoped media queries
 }
 
 message MintChapterPlaybackIDResponse {

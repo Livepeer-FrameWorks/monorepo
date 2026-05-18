@@ -18,7 +18,7 @@ import (
 //   - foghorn.artifact_nodes = warm storage distribution (N rows per artifact)
 //
 // Business metadata (tenant_id, user_id, stream_id) is in Commodore.
-// See: docs/architecture/CLIP_DVR_REGISTRY.md
+// See: docs/architecture/clips-dvr.md
 // ============================================================================
 
 // clipRepositoryDB implements state.ClipRepository using foghorn.artifacts

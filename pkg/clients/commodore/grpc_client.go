@@ -347,7 +347,7 @@ func (c *GRPCClient) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb
 // ============================================================================
 // CLIP/DVR REGISTRY (Foghorn → Commodore)
 // Business registry for clips and DVR recordings.
-// See: docs/architecture/CLIP_DVR_REGISTRY.md
+// See: docs/architecture/clips-dvr.md
 // ============================================================================
 
 // RegisterClip registers a new clip in the business registry
@@ -576,11 +576,16 @@ func (c *GRPCClient) ResolveVodID(ctx context.Context, vodID string) (*pb.Resolv
 // MintChapterPlaybackID asks Commodore to mint (or return the existing)
 // public playback_id for a hidden chapter artifact. Idempotent on
 // chapter_id.
-func (c *GRPCClient) MintChapterPlaybackID(ctx context.Context, chapterID, tenantID, artifactHash string) (*pb.MintChapterPlaybackIDResponse, error) {
+func (c *GRPCClient) MintChapterPlaybackID(ctx context.Context, chapterID, tenantID, artifactHash, userID, filename, originClusterID, storageClusterID, streamID string) (*pb.MintChapterPlaybackIDResponse, error) {
 	return c.internal.MintChapterPlaybackID(ctx, &pb.MintChapterPlaybackIDRequest{
-		ChapterId:    chapterID,
-		TenantId:     tenantID,
-		ArtifactHash: artifactHash,
+		ChapterId:        chapterID,
+		TenantId:         tenantID,
+		ArtifactHash:     artifactHash,
+		UserId:           userID,
+		Filename:         filename,
+		OriginClusterId:  originClusterID,
+		StorageClusterId: storageClusterID,
+		StreamId:         streamID,
 	})
 }
 
@@ -1021,10 +1026,11 @@ func (c *GRPCClient) GetVodAsset(ctx context.Context, tenantID, artifactHash str
 }
 
 // ListVodAssets lists VOD assets with pagination
-func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, pagination *pb.CursorPaginationRequest) (*pb.ListVodAssetsResponse, error) {
+func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, pagination *pb.CursorPaginationRequest, streamID *string) (*pb.ListVodAssetsResponse, error) {
 	return c.vod.ListVodAssets(ctx, &pb.ListVodAssetsRequest{
 		TenantId:   tenantID,
 		Pagination: pagination,
+		StreamId:   streamID,
 	})
 }
 

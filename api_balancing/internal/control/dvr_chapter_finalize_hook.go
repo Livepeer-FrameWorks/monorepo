@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -56,6 +57,7 @@ func handleChapterFinalizeResult(
 			if err := MarkChapterFailed(ctx, chapterID, ChapterStateFailedSourceMissing, reason); err != nil {
 				logger.WithError(err).WithFields(fields).Warn("Chapter finalize: terminal-fail mark failed")
 			}
+			emitChapterVodLifecycle(ctx, logger, chapterID, pb.VodLifecycleData_STATUS_FAILED, 0, "", reason)
 			return
 		}
 		if err := RetryChapterFinalize(ctx, chapterID, result.GetError()); err != nil {
@@ -150,6 +152,7 @@ func handleChapterFinalizeResult(
 	// updateVodMetadata without the processing_jobs lookup it does
 	// first (chapter jobs are not in that table).
 	updateChapterVodMetadata(ctx, logger, fields, playbackHash, result.GetOutputs())
+	emitChapterVodLifecycle(ctx, logger, chapterID, pb.VodLifecycleData_STATUS_COMPLETED, sizeBytes, outputPath, "")
 
 	// DTSH generation runs on the Helmsman side immediately after
 	// PUSH_END (api_sidecar/internal/handlers/processing_chapter.go).
@@ -158,6 +161,58 @@ func handleChapterFinalizeResult(
 	// processes_json the VOD upload flow uses (see chapter_finalization_queue.go),
 	// so MistProc fires those tracks during the processing+<hash> boot.
 	// No further server-side fan-out is needed here.
+}
+
+func emitChapterVodLifecycle(
+	ctx context.Context,
+	logger logging.Logger,
+	chapterID string,
+	status pb.VodLifecycleData_Status,
+	sizeBytes int64,
+	filePath string,
+	errMsg string,
+) {
+	artifactHash, tenantID, lookupErr := chapterArtifactLifecycleIdentity(ctx, chapterID)
+	if lookupErr != nil {
+		logger.WithError(lookupErr).WithField("chapter_id", chapterID).Warn("Chapter finalize: lifecycle identity lookup failed")
+		return
+	}
+	now := time.Now().Unix()
+	data := &pb.VodLifecycleData{
+		Status:      status,
+		VodHash:     artifactHash,
+		TenantId:    &tenantID,
+		CompletedAt: &now,
+	}
+	if status == pb.VodLifecycleData_STATUS_PROCESSING {
+		data.StartedAt = &now
+		data.CompletedAt = nil
+	}
+	if sizeBytes > 0 {
+		u := uint64(sizeBytes)
+		data.SizeBytes = &u
+	}
+	if filePath != "" {
+		data.FilePath = &filePath
+	}
+	if errMsg != "" {
+		data.Error = &errMsg
+	}
+	artifactoutbox.EnqueueVodLifecycleLogged(data)
+}
+
+func chapterArtifactLifecycleIdentity(ctx context.Context, chapterID string) (artifactHash, tenantID string, err error) {
+	if db == nil {
+		return "", "", sql.ErrConnDone
+	}
+	err = db.QueryRowContext(ctx, `
+		SELECT c.playback_artifact_hash, a.tenant_id::text
+		  FROM foghorn.dvr_chapters c
+		  JOIN foghorn.artifacts a
+		    ON a.artifact_hash = c.playback_artifact_hash
+		 WHERE c.chapter_id = $1
+	`, chapterID).Scan(&artifactHash, &tenantID)
+	return artifactHash, tenantID, err
 }
 
 // updateChapterVodMetadata mirrors VodPipeline.updateVodMetadata's
@@ -323,9 +378,8 @@ func resolveChapterArtifactContent(ctx context.Context, input string) *ContentRe
 // resolveChapterArtifactPlaybackResp synthesizes a
 // ResolveArtifactPlaybackIDResponse for a chapter artifact_hash so
 // ResolveArtifactPlayback can flow through the standard
-// foghorn.artifacts placement/defrost path without a Commodore
-// playback row (chapter artifacts are library_visible=false, never
-// registered in commodore.vod_assets).
+// foghorn.artifacts placement/defrost path while preserving parent-DVR
+// auth inheritance for hidden chapter VODs.
 //
 // Returns (nil, false) for any input that isn't a chapter artifact —
 // caller falls through to the normal Commodore-backed resolution.
@@ -394,11 +448,9 @@ func resolveChapterArtifactPlaybackResp(ctx context.Context, input string) (*pb.
 }
 
 // ChapterArtifactInfo carries the routing context for a chapter VOD
-// artifact resolved by foghorn alone (no Commodore round-trip). Used
-// by STREAM_SOURCE when a `vod+<chapter_artifact_hash>` token reaches
-// Mist — the chapter artifact isn't registered in commodore.vod_assets
-// (library_visible=false), so the normal Commodore-side resolution
-// can't find it.
+// artifact resolved from Foghorn's media-plane rows. Used by
+// STREAM_SOURCE when a `vod+<chapter_artifact_hash>` token reaches
+// Mist; this path preserves parent-DVR policy inheritance.
 type ChapterArtifactInfo struct {
 	ArtifactHash    string
 	TenantID        string

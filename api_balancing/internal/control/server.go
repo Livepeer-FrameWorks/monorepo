@@ -4513,6 +4513,10 @@ func processProcessingJobProgress(progress *pb.ProcessingJobProgress, logger log
 	if err != nil {
 		if err != sql.ErrNoRows {
 			logger.WithError(err).WithField("job_id", progress.GetJobId()).Warn("Failed to update processing job progress")
+			return
+		}
+		if chapterID := chapterIDFromJobID(progress.GetJobId()); chapterID != "" {
+			processChapterFinalizeProgress(ctx, chapterID, progressPct, logger)
 		}
 		return
 	}
@@ -4533,6 +4537,32 @@ func processProcessingJobProgress(progress *pb.ProcessingJobProgress, logger log
 			}
 		}()
 	}
+}
+
+func processChapterFinalizeProgress(ctx context.Context, chapterID string, progressPct int32, logger logging.Logger) {
+	var artifactHash, tenantID string
+	err := db.QueryRowContext(ctx, `
+		UPDATE foghorn.dvr_chapters c
+		   SET finalize_started_at = NOW()
+		  FROM foghorn.artifacts a
+		 WHERE c.chapter_id = $1
+		   AND c.playback_artifact_hash = a.artifact_hash
+		   AND c.state = 'finalizing'
+		 RETURNING c.playback_artifact_hash, a.tenant_id::text
+	`, chapterID).Scan(&artifactHash, &tenantID)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			logger.WithError(err).WithField("chapter_id", chapterID).Warn("Failed to update chapter finalize progress")
+		}
+		return
+	}
+	vodData := &pb.VodLifecycleData{
+		Status:      pb.VodLifecycleData_STATUS_PROCESSING,
+		VodHash:     artifactHash,
+		TenantId:    &tenantID,
+		ProgressPct: &progressPct,
+	}
+	go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 }
 
 func SendLocalProcessingJob(nodeID string, req *pb.ProcessingJobRequest) error {

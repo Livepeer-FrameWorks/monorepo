@@ -479,6 +479,12 @@ func (r *Resolver) DoGetVodAsset(ctx context.Context, id string) (*model.VodAsse
 // DoGetVodAssetsConnection retrieves VOD assets with Relay-style cursor pagination
 // Business metadata comes from Commodore, lifecycle data from Periscope
 func (r *Resolver) DoGetVodAssetsConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.VodAssetsConnection, error) {
+	return r.DoGetVodAssetsConnectionFiltered(ctx, nil, first, after, last, before)
+}
+
+// DoGetVodAssetsConnectionFiltered retrieves VOD assets, optionally scoped to
+// stream-derived VOD artifacts for a single source stream.
+func (r *Resolver) DoGetVodAssetsConnectionFiltered(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string) (*model.VodAssetsConnection, error) {
 	// Build cursor pagination request with bidirectional support
 	paginationReq := &pb.CursorPaginationRequest{
 		First: int32(pagination.DefaultLimit),
@@ -510,7 +516,7 @@ func (r *Resolver) DoGetVodAssetsConnection(ctx context.Context, first *int, aft
 	}
 
 	// 1. Get business metadata from Commodore
-	resp, err := r.Clients.Commodore.ListVodAssets(ctx, tenantID, paginationReq)
+	resp, err := r.Clients.Commodore.ListVodAssets(ctx, tenantID, paginationReq, streamID)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to list VOD assets")
 		return nil, fmt.Errorf("failed to list VOD assets: %w", err)
@@ -635,6 +641,15 @@ func protoToVodAsset(p *pb.VodAssetInfo) *model.VodAsset {
 	// Optional fields
 	if p.PlaybackId != nil && *p.PlaybackId != "" {
 		asset.PlaybackID = *p.PlaybackId
+	}
+	if p.StreamId != nil && *p.StreamId != "" {
+		asset.StreamID = p.StreamId
+	}
+	if p.OriginType != nil && *p.OriginType != "" {
+		asset.OriginType = p.OriginType
+	}
+	if p.OriginId != nil && *p.OriginId != "" {
+		asset.OriginID = p.OriginId
 	}
 	if p.Title != "" {
 		asset.Title = &p.Title

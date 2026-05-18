@@ -39,7 +39,7 @@ type GRPCConfig struct {
 	Timeout time.Duration
 	// Logger for the client
 	Logger logging.Logger
-	// ServiceToken for service-to-service authentication (fallback when no user JWT)
+	// ServiceToken for service-to-service authentication.
 	ServiceToken string
 	// UseTLS enables TLS transport. Uses system CA pool for validation.
 	UseTLS     bool
@@ -49,13 +49,11 @@ type GRPCConfig struct {
 	AllowInsecure bool
 }
 
-// authInterceptor propagates authentication to gRPC metadata.
-// This reads user_id, tenant_id, and jwt_token from the Go context (set by Gateway middleware)
-// and adds them to outgoing gRPC metadata for downstream services.
-// If no user JWT is available, it falls back to the service token for service-to-service calls.
+// authInterceptor propagates service authentication to Foghorn.
+// Foghorn is a control-plane backend; callers that already validated a user
+// send SERVICE_TOKEN as the credential and carry user/tenant IDs as metadata.
 func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		// Extract user context from Go context and add to gRPC metadata
 		md := metadata.MD{}
 
 		if userID := ctxkeys.GetUserID(ctx); userID != "" {
@@ -65,11 +63,8 @@ func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 			md.Set("x-tenant-id", tenantID)
 		}
 
-		// Use user's JWT from context if available, otherwise fall back to service token
-		if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
-			md.Set("authorization", "Bearer "+jwtToken)
-		} else if serviceToken != "" {
-			md.Set("authorization", "Bearer "+serviceToken)
+		if token := outgoingAuthToken(ctx, serviceToken); token != "" {
+			md.Set("authorization", "Bearer "+token)
 		}
 
 		// Merge with existing outgoing metadata if any
@@ -93,10 +88,8 @@ func streamAuthInterceptor(serviceToken string) grpc.StreamClientInterceptor {
 			md.Set("x-tenant-id", tenantID)
 		}
 
-		if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
-			md.Set("authorization", "Bearer "+jwtToken)
-		} else if serviceToken != "" {
-			md.Set("authorization", "Bearer "+serviceToken)
+		if token := outgoingAuthToken(ctx, serviceToken); token != "" {
+			md.Set("authorization", "Bearer "+token)
 		}
 
 		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
@@ -106,6 +99,16 @@ func streamAuthInterceptor(serviceToken string) grpc.StreamClientInterceptor {
 		ctx = metadata.NewOutgoingContext(ctx, md)
 		return streamer(ctx, desc, cc, method, opts...)
 	}
+}
+
+func outgoingAuthToken(ctx context.Context, configuredServiceToken string) string {
+	if configuredServiceToken != "" {
+		return configuredServiceToken
+	}
+	if contextServiceToken := ctxkeys.GetServiceToken(ctx); contextServiceToken != "" {
+		return contextServiceToken
+	}
+	return ctxkeys.GetJWTToken(ctx)
 }
 
 // NewGRPCClient creates a new gRPC client for Foghorn
