@@ -251,7 +251,7 @@
         playbackId: clip.playbackId,
         streamId: clip.streamId,
         displayStreamId: clip.sourceStreamId ?? null,
-        status: displayArtifactStage(lifecycle?.stage || clip.status || "unknown"),
+        status: displayArtifactStage(artifactRowStage(clip.status, lifecycle?.stage)),
         duration: clip.duration,
         sizeBytes: lifecycle?.sizeBytes ?? clip.sizeBytes,
         createdAt: clip.createdAt,
@@ -273,7 +273,10 @@
         streamId: dvr.streamId,
         displayStreamId: dvr.sourceStreamId ?? null,
         status: displayArtifactStage(
-          lifecycle?.stage || dvr.status || (dvr.expiresAt ? "completed" : "unknown")
+          artifactRowStage(
+            dvr.status || (dvr.expiresAt ? "completed" : "unknown"),
+            lifecycle?.stage
+          )
         ),
         duration: dvr.durationSeconds,
         sizeBytes: lifecycle?.sizeBytes ?? dvr.sizeBytes,
@@ -297,7 +300,7 @@
         playbackId: vod.playbackId,
         streamId: vod.streamId ?? null,
         displayStreamId: vod.streamId ?? null,
-        status: displayArtifactStage(lifecycle?.stage || vod.status || "unknown"),
+        status: displayArtifactStage(artifactRowStage(vod.status, lifecycle?.stage)),
         duration: vod.durationMs ? Math.floor(vod.durationMs / 1000) : null,
         sizeBytes: lifecycle?.sizeBytes ?? vod.sizeBytes,
         createdAt: vod.createdAt,
@@ -1132,6 +1135,25 @@
       "error",
       "lost_local",
     ].includes(s || "");
+  }
+
+  function artifactRowStage(
+    connectionStage: string | null | undefined,
+    feedStage: string | null | undefined
+  ): string {
+    const connection = connectionStage?.toLowerCase();
+    const feed = feedStage?.toLowerCase();
+
+    if (connection && isTerminalArtifactStage(connection) && !isTerminalArtifactStage(feed)) {
+      return connection;
+    }
+    if (feed && isTerminalArtifactStage(feed)) {
+      return feed;
+    }
+    if (connection && connection !== "registry" && connection !== "unknown") {
+      return connection;
+    }
+    return feed || connection || "unknown";
   }
 
   function displayArtifactStage(stage: string): string {
