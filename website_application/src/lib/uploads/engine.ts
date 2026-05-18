@@ -128,9 +128,6 @@ export function createUploadEngine(cfg: UploadEngineConfig): UploadEngine {
           throw err;
         }
         const etag = (res.headers.get("ETag") ?? "").replace(/"/g, "");
-        if (!etag) {
-          throw Object.assign(new Error(`part ${part.partNumber} missing ETag`), { status: 500 });
-        }
         part.etag = etag;
         part.status = "completed";
         part.lastError = undefined;
@@ -201,9 +198,9 @@ export function createUploadEngine(cfg: UploadEngineConfig): UploadEngine {
 
     setState("completing");
     const completed: CompletedPart[] = partsState
-      .filter((p) => p.status === "completed" && p.etag)
+      .filter((p) => p.status === "completed")
       .sort((a, b) => a.partNumber - b.partNumber)
-      .map((p) => ({ partNumber: p.partNumber, etag: p.etag! }));
+      .map((p) => ({ partNumber: p.partNumber, etag: p.etag ?? "" }));
     emit({ type: "transferComplete", parts: completed });
     setState("completed");
   }

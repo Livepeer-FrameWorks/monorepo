@@ -107,6 +107,32 @@ describe("createUploadEngine", () => {
     ]);
   });
 
+  it("continues when CORS hides ETag so the caller can reconcile with the server", async () => {
+    const f = file(100);
+    const events: EngineEvent[] = [];
+    const engine = createUploadEngine({
+      uploadId: "u",
+      file: f,
+      partSize: 100,
+      parts: descriptors(1),
+      store: createMemorySessionStore(),
+      fetchImpl: (async () => new Response("", { status: 200 })) as typeof fetch,
+      delay: noDelay,
+    });
+    engine.on((e) => events.push(e));
+    engine.start();
+
+    await new Promise<void>((resolve) => {
+      engine.on((e) => {
+        if (e.type === "stateChange" && e.state === "completed") resolve();
+      });
+    });
+
+    const transfer = events.find((e) => e.type === "transferComplete");
+    expect(transfer).toBeTruthy();
+    expect((transfer as { parts: CompletedPart[] }).parts).toEqual([{ partNumber: 1, etag: "" }]);
+  });
+
   it("fails fast on 403 (expired presigned URL)", async () => {
     const f = file(100);
     const fetchImpl = async (): Promise<Response> => failResponse(403);
