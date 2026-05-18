@@ -878,7 +878,7 @@ INSERT INTO commodore.clips (
     'Demo Highlight Reel',
     'Amazing gameplay highlights from the demo stream',
     1640995200000,  -- Unix timestamp (ms): Jan 1, 2022 00:00:00 UTC
-    600000,         -- Duration (ms): 10 minutes
+    5000,           -- Duration (ms): fixture is 5 seconds
     'absolute',
     'central-primary',
     NOW() + INTERVAL '7 days',   -- 7-day rolling retention for demo fixtures
@@ -979,7 +979,7 @@ ON CONFLICT (chapter_id) DO UPDATE SET
 INSERT INTO commodore.vod_assets (
     id, tenant_id, user_id, vod_hash, internal_name, playback_id,
     title, description, filename, content_type,
-    size_bytes, origin_cluster_id, retention_until, created_at, updated_at
+    size_bytes, origin_cluster_id, retention_until, library_visible, created_at, updated_at
 ) VALUES
 -- Demo VOD (ready) - WebM sample
 (
@@ -993,9 +993,10 @@ INSERT INTO commodore.vod_assets (
     'Annual product demonstration showcasing new streaming features',
     'product_demo_2024.webm',
     'video/webm',
-    149099,
+    157157,
     'central-primary',
     NOW() + INTERVAL '30 days',
+    TRUE,
     NOW() - INTERVAL '1 day',
     NOW() - INTERVAL '1 day'
 ),
@@ -1014,6 +1015,7 @@ INSERT INTO commodore.vod_assets (
     104857600,
     'central-primary',
     NOW() + INTERVAL '30 days',
+    FALSE,
     NOW() - INTERVAL '30 minutes',
     NOW() - INTERVAL '30 minutes'
 ),
@@ -1032,12 +1034,15 @@ INSERT INTO commodore.vod_assets (
     15728640,
     'central-primary',
     NOW() - INTERVAL '1 day',
+    FALSE,
     NOW() - INTERVAL '2 days',
     NOW() - INTERVAL '2 days'
 )
 ON CONFLICT (vod_hash) DO UPDATE SET
     title = EXCLUDED.title,
     origin_cluster_id = EXCLUDED.origin_cluster_id,
+    size_bytes = EXCLUDED.size_bytes,
+    library_visible = EXCLUDED.library_visible,
     updated_at = NOW();
 
 -- ============================================================================
@@ -1051,7 +1056,7 @@ ON CONFLICT (vod_hash) DO UPDATE SET
 INSERT INTO foghorn.artifacts (
     artifact_hash, artifact_type, stream_internal_name, internal_name, tenant_id,
     status, size_bytes, manifest_path, format,
-    storage_location, sync_status, retention_until,
+    storage_location, sync_status, retention_until, library_visible,
     created_at, updated_at
 ) VALUES
 -- Demo clip (ready)
@@ -1062,12 +1067,13 @@ INSERT INTO foghorn.artifacts (
     'clip_int_001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant (denormalized for fallback)
     'ready',
-    140795,         -- Actual file size: ~137KB
+    107553,         -- Browser-safe H.264/AAC fixture
     '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
     'mp4',
     'local',
     'pending',
     NOW() + INTERVAL '7 days',   -- 7-day rolling retention for demo fixtures
+    TRUE,
     NOW() - INTERVAL '2 hours',
     NOW() - INTERVAL '2 hours'
 ),
@@ -1085,6 +1091,7 @@ INSERT INTO foghorn.artifacts (
     'local',
     'pending',
     NOW() - INTERVAL '1 day',    -- Already expired (past retention)
+    TRUE,
     NOW() - INTERVAL '2 days',
     NOW() - INTERVAL '1 day'
 ),
@@ -1102,6 +1109,7 @@ INSERT INTO foghorn.artifacts (
     'local',
     'pending',
     NOW() + INTERVAL '7 days',   -- 7-day rolling retention for demo fixtures
+    TRUE,
     NOW() - INTERVAL '4 hours',
     NOW() - INTERVAL '4 hours'
 ),
@@ -1119,6 +1127,7 @@ INSERT INTO foghorn.artifacts (
     'local',
     'pending',
     NOW() - INTERVAL '1 day',    -- Already expired (past retention)
+    TRUE,
     NOW() - INTERVAL '2 days',
     NOW() - INTERVAL '1 day'
 ),
@@ -1130,12 +1139,13 @@ INSERT INTO foghorn.artifacts (
     '34d74b7acd7ec8cf78f6cc8c9f031a8a',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'ready',
-    453741,
+    329231,
     NULL,
     'mkv',
     'local',
     'pending',
     NOW() + INTERVAL '7 days',
+    FALSE,
     NOW() - INTERVAL '4 hours',
     NOW() - INTERVAL '4 hours'
 ),
@@ -1147,12 +1157,13 @@ INSERT INTO foghorn.artifacts (
     'vod_int_001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
     'ready',
-    149099,         -- Actual file size: ~146KB
+    157157,         -- Browser-safe VP9/Opus fixture
     NULL,            -- No manifest for VOD (direct file playback)
     'webm',
     'local',         -- On disk, pending sync to S3
     'pending',
     NOW() + INTERVAL '30 days',   -- 30-day retention for VOD
+    TRUE,
     NOW() - INTERVAL '1 day',
     NOW() - INTERVAL '1 day'
 ),
@@ -1170,6 +1181,7 @@ INSERT INTO foghorn.artifacts (
     's3',
     'synced',
     NOW() + INTERVAL '30 days',
+    FALSE,
     NOW() - INTERVAL '30 minutes',
     NOW() - INTERVAL '30 minutes'
 ),
@@ -1187,11 +1199,18 @@ INSERT INTO foghorn.artifacts (
     's3',
     'synced',
     NOW() - INTERVAL '1 day',    -- Already expired
+    FALSE,
     NOW() - INTERVAL '2 days',
     NOW() - INTERVAL '2 days'
 )
 ON CONFLICT (artifact_hash) DO UPDATE SET
     status = EXCLUDED.status,
+    size_bytes = EXCLUDED.size_bytes,
+    manifest_path = EXCLUDED.manifest_path,
+    format = EXCLUDED.format,
+    storage_location = EXCLUDED.storage_location,
+    sync_status = EXCLUDED.sync_status,
+    library_visible = EXCLUDED.library_visible,
     updated_at = NOW();
 
 UPDATE foghorn.artifacts
@@ -1200,7 +1219,7 @@ SET artifact_type = 'vod',
     internal_name = '34d74b7acd7ec8cf78f6cc8c9f031a8a',
     tenant_id = '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     status = 'ready',
-    size_bytes = 453741,
+    size_bytes = 329231,
     manifest_path = NULL,
     format = 'mkv',
     storage_location = 'local',
@@ -1378,7 +1397,7 @@ INSERT INTO foghorn.artifact_nodes (
     'a1b2c3d4e5f6789012345678901234ab',
     'edge-node-1',
     '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
-    140795,
+    107553,
     42,
     NOW() - INTERVAL '3 hours',
     NOW(),
@@ -1400,7 +1419,7 @@ INSERT INTO foghorn.artifact_nodes (
     '34d74b7acd7ec8cf78f6cc8c9f031a8a',
     'edge-node-1',
     '/var/lib/mistserver/recordings/vod/34d74b7acd7ec8cf78f6cc8c9f031a8a.mkv',
-    453741,
+    329231,
     7,
     NOW() - INTERVAL '3 hours',
     NOW(),
@@ -1411,13 +1430,15 @@ INSERT INTO foghorn.artifact_nodes (
     'c3d4e5f678901234567890123456abcd',
     'edge-node-1',
     '/var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.webm',
-    149099,
+    157157,
     128,
     NOW() - INTERVAL '2 hours',
     NOW(),
     false
 )
 ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
+    file_path = EXCLUDED.file_path,
+    size_bytes = EXCLUDED.size_bytes,
     last_seen_at = NOW(),
     is_orphaned = false;
 

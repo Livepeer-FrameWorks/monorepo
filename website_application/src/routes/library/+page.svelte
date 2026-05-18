@@ -1167,7 +1167,7 @@
     const s = status.toLowerCase();
     if (["available", "completed", "ready"].includes(s))
       return "text-success bg-success/10 border-success/20";
-    if (["processing", "recording", "uploading", "requested"].includes(s))
+    if (["processing", "recording", "uploading", "requested", "queued", "progress"].includes(s))
       return "text-warning bg-warning/10 border-warning/20";
     if (s === "failed") return "text-destructive bg-destructive/10 border-destructive/20";
     if (s === "deleted") return "text-muted-foreground bg-muted border-border opacity-70";
@@ -1199,7 +1199,9 @@
     if (artifact.status.toLowerCase() === "failed") return false;
     if (artifact.status.toLowerCase() === "deleted") return false;
     if (
-      ["processing", "recording", "uploading", "requested"].includes(artifact.status.toLowerCase())
+      ["processing", "recording", "uploading", "requested", "queued", "progress"].includes(
+        artifact.status.toLowerCase()
+      )
     )
       return false;
     return true;
