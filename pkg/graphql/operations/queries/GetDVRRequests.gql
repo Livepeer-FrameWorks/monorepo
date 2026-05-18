@@ -6,8 +6,11 @@ query GetDVRRequests(
   $after: String
   $input: MediaArtifactConnectionInput
 ) {
-  dvrRecordingsConnection(streamId: $streamId, page: { first: $first, after: $after }, input: $input)
-    @paginate {
+  dvrRecordingsConnection(
+    streamId: $streamId
+    page: { first: $first, after: $after }
+    input: $input
+  ) @paginate {
     edges {
       cursor
       node {
