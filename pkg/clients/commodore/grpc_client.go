@@ -377,6 +377,17 @@ func (c *GRPCClient) UpdateArtifactStorageCluster(ctx context.Context, tenantID 
 	})
 }
 
+// UpdateArtifactSize projects Foghorn's authoritative artifact byte count into
+// the Commodore registry row used for catalog pagination and sorting.
+func (c *GRPCClient) UpdateArtifactSize(ctx context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey string, sizeBytes int64) (*pb.UpdateArtifactSizeResponse, error) {
+	return c.internal.UpdateArtifactSize(ctx, &pb.UpdateArtifactSizeRequest{
+		TenantId:  tenantID,
+		AssetType: assetType,
+		AssetKey:  assetKey,
+		SizeBytes: sizeBytes,
+	})
+}
+
 // UpdateDVRRetention back-fills retention_until on a finalized DVR.
 // Foghorn computes retention_until = ended_at + dvr_retention_days*24h
 // from the persisted policy snapshot at FinalizeDVR time and pushes it
@@ -859,13 +870,20 @@ func (c *GRPCClient) RevokeAPIToken(ctx context.Context, tokenID string) (*pb.Re
 // CLIP OPERATIONS (Gateway → Commodore → Foghorn proxy)
 // ============================================================================
 
+type MediaListOptions struct {
+	Search        string
+	SortField     string
+	SortDirection string
+	Offset        *int32
+}
+
 // CreateClip creates a new clip
 func (c *GRPCClient) CreateClip(ctx context.Context, req *pb.CreateClipRequest) (*pb.CreateClipResponse, error) {
 	return c.clip.CreateClip(ctx, req)
 }
 
 // GetClips lists clips with optional stream_id filter
-func (c *GRPCClient) GetClips(ctx context.Context, tenantID string, streamID *string, pagination *pb.CursorPaginationRequest) (*pb.GetClipsResponse, error) {
+func (c *GRPCClient) GetClips(ctx context.Context, tenantID string, streamID *string, pagination *pb.CursorPaginationRequest, opts ...MediaListOptions) (*pb.GetClipsResponse, error) {
 	req := &pb.GetClipsRequest{
 		TenantId:   tenantID,
 		Pagination: pagination,
@@ -873,6 +891,7 @@ func (c *GRPCClient) GetClips(ctx context.Context, tenantID string, streamID *st
 	if streamID != nil {
 		req.StreamId = streamID
 	}
+	applyMediaListOptionsToClips(req, opts...)
 	return c.clip.GetClips(ctx, req)
 }
 
@@ -923,8 +942,13 @@ func (c *GRPCClient) ListDVRChapters(ctx context.Context, req *pb.ListDVRChapter
 	return c.internal.ListDVRChapters(ctx, req)
 }
 
+// ListStorageArtifacts returns the unified account storage browser projection.
+func (c *GRPCClient) ListStorageArtifacts(ctx context.Context, req *pb.ListStorageArtifactsRequest) (*pb.ListStorageArtifactsResponse, error) {
+	return c.internal.ListStorageArtifacts(ctx, req)
+}
+
 // ListDVRRequests lists DVR recordings with filters
-func (c *GRPCClient) ListDVRRequests(ctx context.Context, tenantID string, streamID *string, pagination *pb.CursorPaginationRequest) (*pb.ListDVRRecordingsResponse, error) {
+func (c *GRPCClient) ListDVRRequests(ctx context.Context, tenantID string, streamID *string, pagination *pb.CursorPaginationRequest, opts ...MediaListOptions) (*pb.ListDVRRecordingsResponse, error) {
 	req := &pb.ListDVRRecordingsRequest{
 		TenantId:   tenantID,
 		Pagination: pagination,
@@ -932,6 +956,7 @@ func (c *GRPCClient) ListDVRRequests(ctx context.Context, tenantID string, strea
 	if streamID != nil {
 		req.StreamId = streamID
 	}
+	applyMediaListOptionsToDVR(req, opts...)
 	return c.dvr.ListDVRRequests(ctx, req)
 }
 
@@ -1016,12 +1041,47 @@ func (c *GRPCClient) GetVodAsset(ctx context.Context, tenantID, artifactHash str
 }
 
 // ListVodAssets lists VOD assets with pagination
-func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, pagination *pb.CursorPaginationRequest, streamID *string) (*pb.ListVodAssetsResponse, error) {
-	return c.vod.ListVodAssets(ctx, &pb.ListVodAssetsRequest{
+func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, pagination *pb.CursorPaginationRequest, streamID *string, opts ...MediaListOptions) (*pb.ListVodAssetsResponse, error) {
+	req := &pb.ListVodAssetsRequest{
 		TenantId:   tenantID,
 		Pagination: pagination,
 		StreamId:   streamID,
-	})
+	}
+	applyMediaListOptionsToVod(req, opts...)
+	return c.vod.ListVodAssets(ctx, req)
+}
+
+func applyMediaListOptionsToClips(req *pb.GetClipsRequest, opts ...MediaListOptions) {
+	if len(opts) == 0 {
+		return
+	}
+	opt := opts[0]
+	req.Search = opt.Search
+	req.SortField = opt.SortField
+	req.SortDirection = opt.SortDirection
+	req.Offset = opt.Offset
+}
+
+func applyMediaListOptionsToDVR(req *pb.ListDVRRecordingsRequest, opts ...MediaListOptions) {
+	if len(opts) == 0 {
+		return
+	}
+	opt := opts[0]
+	req.Search = opt.Search
+	req.SortField = opt.SortField
+	req.SortDirection = opt.SortDirection
+	req.Offset = opt.Offset
+}
+
+func applyMediaListOptionsToVod(req *pb.ListVodAssetsRequest, opts ...MediaListOptions) {
+	if len(opts) == 0 {
+		return
+	}
+	opt := opts[0]
+	req.Search = opt.Search
+	req.SortField = opt.SortField
+	req.SortDirection = opt.SortDirection
+	req.Offset = opt.Offset
 }
 
 // DeleteVodAsset deletes a VOD asset

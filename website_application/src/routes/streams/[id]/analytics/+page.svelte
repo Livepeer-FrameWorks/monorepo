@@ -18,6 +18,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
   import { GridSeam } from "$lib/components/layout";
+  import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import ViewerTrendChart from "$lib/components/charts/ViewerTrendChart.svelte";
   import QualityTierChart from "$lib/components/charts/QualityTierChart.svelte";
   import CodecDistributionChart from "$lib/components/charts/CodecDistributionChart.svelte";
@@ -205,46 +206,57 @@
         label: "Current Viewers",
         value: metrics?.currentViewers ?? 0,
         icon: UsersIcon,
-        tone: "text-info",
-        live: true,
+        iconColor: "text-info",
+        valueColor: "text-foreground",
+        statusIndicator: { connected: true, label: "LIVE" },
       },
       {
         key: "peakViewers",
         label: "Peak Viewers",
         value: summary?.rangePeakConcurrentViewers ?? 0,
         icon: TrendingUpIcon,
-        tone: "text-success",
+        iconColor: "text-success",
+        valueColor: "text-foreground",
+        statusIndicator: null,
       },
       {
         key: "viewerHours",
         label: "Viewer Hours",
         value: formatNumber(summary?.rangeViewerHours ?? 0) + "h",
         icon: ClockIcon,
-        tone: "text-primary",
+        iconColor: "text-primary",
+        valueColor: "text-foreground",
+        statusIndicator: null,
       },
       {
         key: "sessions",
         label: "Total Sessions",
         value: formatNumber(summary?.rangeTotalSessions ?? 0),
         icon: ActivityIcon,
-        tone: "text-accent-purple",
+        iconColor: "text-accent-purple",
+        valueColor: "text-foreground",
+        statusIndicator: null,
       },
       {
         key: "avgSession",
         label: "Avg Session",
         value: formatDuration(summary?.rangeAvgSessionSeconds ?? 0),
         icon: HeartIcon,
-        tone: "text-warning",
+        iconColor: "text-warning",
+        valueColor: "text-foreground",
+        statusIndicator: null,
       },
       {
         key: "packetLoss",
         label: "Packet Loss",
         value: `${((summary?.rangePacketLossRate ?? 0) * 100).toFixed(2)}%`,
         icon: ZapIcon,
-        tone:
+        iconColor:
           summary?.rangePacketLossRate && summary.rangePacketLossRate < 0.01
             ? "text-success"
             : "text-warning",
+        valueColor: "text-foreground",
+        statusIndicator: null,
       },
     ].filter((c) => c.value !== null && c.value !== undefined);
   });
@@ -348,45 +360,43 @@
 </script>
 
 <div class="h-full flex flex-col">
-  <!-- Header -->
-  <div class="border-b border-border/50 bg-muted/20 shrink-0">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-4">
-          <Button variant="ghost" size="sm" onclick={() => goto(resolve(`/streams/${streamId}`))}>
-            <ArrowLeftIcon class="w-4 h-4 mr-2" />
-            Back to Stream
-          </Button>
-          <div class="border-l border-border/50 pl-4">
-            <div class="flex items-center gap-2">
-              <BarChart2Icon class="w-5 h-5 text-info" />
-              <h1 class="text-lg font-semibold">Stream Analytics</h1>
-            </div>
-            {#if stream}
-              <p class="text-sm text-muted-foreground">{stream.name}</p>
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
+    <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <div class="flex items-center gap-3">
+        <Button variant="ghost" size="sm" onclick={() => goto(resolve(`/streams/${streamId}`))}>
+          <ArrowLeftIcon class="w-4 h-4" />
+        </Button>
+        <BarChart2Icon class="w-5 h-5 text-primary" />
+        <div>
+          <h1 class="text-xl font-bold text-foreground">Stream analytics</h1>
+          <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+            <span>{stream?.name ?? "Loading stream"}</span>
+            {#if stream?.streamId}
+              <span class="hidden sm:inline">·</span>
+              <span class="font-mono text-xs">{stream.streamId}</span>
             {/if}
           </div>
         </div>
-        <div class="flex items-center gap-3">
-          <Select value={timeRange} onValueChange={(v) => (timeRange = v)} type="single">
-            <SelectTrigger class="min-w-[120px]">
-              {timeRangeOptions.find((o) => o.value === timeRange)?.label ?? "7 Days"}
-            </SelectTrigger>
-            <SelectContent>
-              {#each timeRangeOptions as option (option.value)}
-                <SelectItem value={option.value}>{option.label}</SelectItem>
-              {/each}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            size="sm"
-            onclick={() => goto(resolve(`/streams/${streamId}/health`))}
-          >
-            <HeartIcon class="w-4 h-4 mr-2" />
-            Health
-          </Button>
-        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <Select value={timeRange} onValueChange={(v) => (timeRange = v)} type="single">
+          <SelectTrigger class="min-w-[120px]">
+            {timeRangeOptions.find((o) => o.value === timeRange)?.label ?? "7 Days"}
+          </SelectTrigger>
+          <SelectContent>
+            {#each timeRangeOptions as option (option.value)}
+              <SelectItem value={option.value}>{option.label}</SelectItem>
+            {/each}
+          </SelectContent>
+        </Select>
+        <Button
+          variant="outline"
+          size="sm"
+          onclick={() => goto(resolve(`/streams/${streamId}/health`))}
+        >
+          <HeartIcon class="w-4 h-4" />
+          Health
+        </Button>
       </div>
     </div>
   </div>
@@ -394,55 +404,54 @@
   <!-- Scrollable Content -->
   <div class="flex-1 overflow-y-auto">
     {#if loading && !stream}
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div class="p-4 sm:p-6 lg:p-8">
         <LoadingCard />
       </div>
     {:else if !stream}
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div class="text-center py-12">
-          <p class="text-muted-foreground">Stream not found</p>
-          <Button class="mt-4" onclick={() => goto(resolve("/streams"))}>Back to Streams</Button>
+      <div class="p-4 sm:p-6 lg:p-8">
+        <div class="slab">
+          <div class="slab-body--padded text-center py-12">
+            <p class="text-muted-foreground">Stream not found</p>
+            <Button class="mt-4" onclick={() => goto(resolve("/streams"))}>Back to Streams</Button>
+          </div>
         </div>
       </div>
     {:else}
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        <!-- Metric Cards -->
-        <GridSeam cols={3} stack="2x2" surface="panel" flush={true}>
+      <div class="page-transition">
+        <GridSeam cols={3} stack="2x2" surface="panel" flush={true} class="mb-0">
           {#each metricCards as card (card.key)}
-            <div class="p-4 border-r border-b border-border/30 last:border-r-0">
-              <div class="flex items-center gap-2 mb-2">
-                <card.icon class="w-4 h-4 text-muted-foreground" />
-                <span class="text-xs text-muted-foreground uppercase tracking-wide"
-                  >{card.label}</span
-                >
-                {#if card.live}
-                  <span class="text-[10px] px-1 py-0.5 rounded bg-success/20 text-success"
-                    >LIVE</span
-                  >
-                {/if}
-              </div>
-              <p class="text-2xl font-bold {card.tone}">{card.value}</p>
+            <div>
+              <DashboardMetricCard
+                icon={card.icon}
+                iconColor={card.iconColor}
+                value={card.value}
+                valueColor={card.valueColor}
+                label={card.label}
+                statusIndicator={card.statusIndicator}
+              />
             </div>
           {/each}
         </GridSeam>
 
-        <!-- Viewer Trend Chart -->
-        {#if viewerTrendData.length > 1}
-          <div class="slab">
-            <div class="slab-header">
-              <h3>Viewer Trend</h3>
+        <div class="dashboard-grid">
+          {#if viewerTrendData.length > 1}
+            <div class="slab col-span-full">
+              <div class="slab-header">
+                <h3>Viewer Trend</h3>
+              </div>
+              <div class="slab-body--padded">
+                <ViewerTrendChart
+                  data={viewerTrendData}
+                  height={250}
+                  seriesLabel="Unique Viewers"
+                />
+              </div>
             </div>
-            <div class="slab-body--padded">
-              <ViewerTrendChart data={viewerTrendData} height={250} seriesLabel="Unique Viewers" />
-            </div>
-          </div>
-        {/if}
+          {/if}
 
-        <!-- Quality & Codec Row -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <!-- Quality Tier Distribution -->
+          <!-- Quality & Codec -->
           {#if qualityData}
-            <div class="slab">
+            <div class="slab lg:col-span-6">
               <div class="slab-header">
                 <h3>Quality Distribution</h3>
               </div>
@@ -452,9 +461,8 @@
             </div>
           {/if}
 
-          <!-- Codec Distribution -->
           {#if codecDistribution.length > 0}
-            <div class="slab">
+            <div class="slab lg:col-span-6">
               <div class="slab-header">
                 <h3>Codec Usage</h3>
               </div>
@@ -463,13 +471,10 @@
               </div>
             </div>
           {/if}
-        </div>
 
-        <!-- Quality Tier Trend & Live Activity Row -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <!-- Quality Tier Daily Trend -->
+          <!-- Quality Trend & Live Activity -->
           {#if qualityTierTrendData.length > 1}
-            <div class="slab">
+            <div class="slab lg:col-span-6">
               <div class="slab-header">
                 <h3>Quality Trend ({currentRangeLabel})</h3>
               </div>
@@ -528,8 +533,7 @@
             </div>
           {/if}
 
-          <!-- Live Activity -->
-          <div class="slab">
+          <div class="slab lg:col-span-6">
             <div class="slab-header">
               <div class="flex items-center gap-2">
                 <h3>Live Activity</h3>
@@ -588,64 +592,62 @@
               {/if}
             </div>
           </div>
-        </div>
 
-        <!-- Daily Stats Table -->
-        {#if streamDailyAnalytics.length > 0}
-          <div class="slab">
-            <div class="slab-header">
-              <h3>Daily Breakdown</h3>
-            </div>
-            <div class="slab-body--flush overflow-x-auto max-h-80">
-              <table class="w-full text-sm">
-                <thead class="sticky top-0 bg-background">
-                  <tr
-                    class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide"
-                  >
-                    <th class="text-left py-3 px-4">Date</th>
-                    <th class="text-right py-3 px-4">Viewers</th>
-                    <th class="text-right py-3 px-4">Views</th>
-                    <th class="text-right py-3 px-4">Egress</th>
-                    <th class="text-right py-3 px-4">Countries</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each streamDailyAnalytics.slice().reverse() as day, i (`${day.day}-${i}`)}
-                    <tr class="border-b border-border/30 hover:bg-muted/10">
-                      <td class="py-3 px-4 font-mono text-xs"
-                        >{new Date(day.day).toLocaleDateString()}</td
-                      >
-                      <td class="py-3 px-4 text-right font-mono"
-                        >{formatNumber(day.uniqueViewers ?? 0)}</td
-                      >
-                      <td class="py-3 px-4 text-right font-mono"
-                        >{formatNumber(day.totalViews ?? 0)}</td
-                      >
-                      <td class="py-3 px-4 text-right font-mono text-info"
-                        >{((day.egressBytes ?? 0) / 1e9).toFixed(2)} GB</td
-                      >
-                      <td class="py-3 px-4 text-right font-mono text-primary"
-                        >{day.uniqueCountries ?? 0}</td
-                      >
+          {#if streamDailyAnalytics.length > 0}
+            <div class="slab col-span-full">
+              <div class="slab-header">
+                <h3>Daily Breakdown</h3>
+              </div>
+              <div class="slab-body--flush overflow-x-auto max-h-80">
+                <table class="w-full text-sm">
+                  <thead class="sticky top-0 bg-background">
+                    <tr
+                      class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide"
+                    >
+                      <th class="text-left py-3 px-4">Date</th>
+                      <th class="text-right py-3 px-4">Viewers</th>
+                      <th class="text-right py-3 px-4">Views</th>
+                      <th class="text-right py-3 px-4">Egress</th>
+                      <th class="text-right py-3 px-4">Countries</th>
                     </tr>
-                  {/each}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {#each streamDailyAnalytics.slice().reverse() as day, i (`${day.day}-${i}`)}
+                      <tr class="border-b border-border/30 hover:bg-muted/10">
+                        <td class="py-3 px-4 font-mono text-xs"
+                          >{new Date(day.day).toLocaleDateString()}</td
+                        >
+                        <td class="py-3 px-4 text-right font-mono"
+                          >{formatNumber(day.uniqueViewers ?? 0)}</td
+                        >
+                        <td class="py-3 px-4 text-right font-mono"
+                          >{formatNumber(day.totalViews ?? 0)}</td
+                        >
+                        <td class="py-3 px-4 text-right font-mono text-info"
+                          >{((day.egressBytes ?? 0) / 1e9).toFixed(2)} GB</td
+                        >
+                        <td class="py-3 px-4 text-right font-mono text-primary"
+                          >{day.uniqueCountries ?? 0}</td
+                        >
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        {/if}
+          {/if}
 
-        <!-- Event Log -->
-        {#if streamEvents.length > 0}
-          <div class="slab">
-            <div class="slab-header">
-              <h3>Recent Events</h3>
+          {#if streamEvents.length > 0}
+            <div class="slab col-span-full">
+              <div class="slab-header">
+                <h3>Recent Events</h3>
+              </div>
+              <div class="slab-body--flush">
+                <EventLog events={streamEvents} maxItems={20} />
+              </div>
             </div>
-            <div class="slab-body--flush">
-              <EventLog events={streamEvents} maxItems={20} />
-            </div>
-          </div>
-        {/if}
+          {/if}
+        </div>
       </div>
     {/if}
   </div>

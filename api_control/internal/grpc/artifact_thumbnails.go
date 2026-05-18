@@ -83,6 +83,40 @@ func (s *CommodoreServer) UpdateArtifactStorageCluster(ctx context.Context, req 
 	return &pb.UpdateArtifactStorageClusterResponse{Updated: rows > 0}, nil
 }
 
+// UpdateArtifactSize projects Foghorn's authoritative artifact byte count into
+// the registry row used by catalog/storage queries.
+func (s *CommodoreServer) UpdateArtifactSize(ctx context.Context, req *pb.UpdateArtifactSizeRequest) (*pb.UpdateArtifactSizeResponse, error) {
+	tenantID := req.GetTenantId()
+	assetKey := req.GetAssetKey()
+	sizeBytes := req.GetSizeBytes()
+	if tenantID == "" || assetKey == "" || sizeBytes < 0 {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id, asset_key, and non-negative size_bytes are required")
+	}
+
+	table, keyCol, err := artifactAssetTable(req.GetAssetType())
+	if err != nil {
+		return nil, err
+	}
+
+	query := `UPDATE ` + table + `
+		SET size_bytes = $1,
+		    updated_at = NOW()
+		WHERE tenant_id = $2::uuid
+		  AND ` + keyCol + ` = $3
+		  AND size_bytes IS DISTINCT FROM $1`
+	res, execErr := s.db.ExecContext(ctx, query, sizeBytes, tenantID, assetKey)
+	if execErr != nil {
+		s.logger.WithError(execErr).WithFields(logging.Fields{
+			"tenant_id":  tenantID,
+			"asset_type": req.GetAssetType().String(),
+			"asset_key":  assetKey,
+		}).Error("UpdateArtifactSize failed")
+		return nil, status.Errorf(codes.Internal, "update failed: %v", execErr)
+	}
+	rows, _ := res.RowsAffected() //nolint:errcheck // pq always populates RowsAffected on UPDATE
+	return &pb.UpdateArtifactSizeResponse{Updated: rows > 0}, nil
+}
+
 // artifactAssetTable maps the proto enum to the registry table and its
 // hash column. clip_hash, dvr_hash, vod_hash are the asset keys used at
 // the Foghorn thumbnail-upload path.

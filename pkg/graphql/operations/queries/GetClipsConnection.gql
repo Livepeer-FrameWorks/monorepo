@@ -1,7 +1,13 @@
 # Fetch paginated list of clips with metadata and lifecycle status
 # Returns clip metadata from Commodore (use artifactStatesConnection for live status)
-query GetClipsConnection($streamId: ID, $first: Int = 50, $after: String) {
-  clipsConnection(streamId: $streamId, page: { first: $first, after: $after }) @paginate {
+query GetClipsConnection(
+  $streamId: ID
+  $first: Int = 50
+  $after: String
+  $input: MediaArtifactConnectionInput
+) {
+  clipsConnection(streamId: $streamId, page: { first: $first, after: $after }, input: $input)
+    @paginate {
     edges {
       cursor
       node {

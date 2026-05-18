@@ -139,6 +139,10 @@ type Query {
     Filter by stream ID (Stream.id, Relay global ID).
     """
     streamId: ID
+    """
+    Server-side search and sorting for clip lists.
+    """
+    input: MediaArtifactConnectionInput
   ): ClipsConnection!
 
   """
@@ -578,6 +582,10 @@ type Query {
     Filter by stream ID (Stream.id, Relay global ID).
     """
     streamId: ID
+    """
+    Server-side search and sorting for DVR recording lists.
+    """
+    input: MediaArtifactConnectionInput
   ): DVRRecordingsConnection
 
   """
@@ -644,7 +652,16 @@ type Query {
     page: ConnectionInput
     "Filter by source stream ID (Stream.id, Relay global ID)."
     streamId: ID
+    "Server-side search and sorting for VOD asset lists."
+    input: MediaArtifactConnectionInput
   ): VodAssetsConnection!
+
+  """
+  Unified storage artifact browser for the account Storage page.
+  Search, kind filters, stream scoping, sorting, and pagination are
+  resolved server-side against the tenant artifact registry.
+  """
+  storageArtifactsConnection(input: StorageArtifactsInput): StorageArtifactsConnection!
 
   """
   Read server-authoritative state of an in-flight VOD upload session.
@@ -2716,6 +2733,75 @@ type VodAssetsConnection {
 type VodAssetEdge {
   cursor: String!
   node: VodAsset!
+}
+
+enum StorageArtifactKind {
+  VOD
+  DVR
+  CHAPTER
+  CLIP
+}
+
+enum StorageArtifactSortField {
+  CREATED_AT
+  TITLE
+  KIND
+  SIZE_BYTES
+  EXPIRES_AT
+}
+
+enum SortDirection {
+  ASC
+  DESC
+}
+
+input StorageArtifactsInput {
+  first: Int = 25
+  offset: Int = 0
+  streamId: ID
+  kinds: [StorageArtifactKind!]
+  search: String
+  sort: StorageArtifactSortField = CREATED_AT
+  direction: SortDirection = DESC
+}
+
+input MediaArtifactConnectionInput {
+  search: String
+  sort: StorageArtifactSortField = CREATED_AT
+  direction: SortDirection = DESC
+  offset: Int = 0
+}
+
+type StorageArtifact {
+  key: ID!
+  kind: StorageArtifactKind!
+  id: ID!
+  hash: String!
+  playbackId: String
+  streamId: ID
+  streamTitle: String!
+  title: String!
+  secondaryLabel: String!
+  sizeBytes: Float
+  status: String!
+  storageLocation: String
+  isFrozen: Boolean
+  createdAt: Time!
+  updatedAt: Time!
+  expiresAt: Time
+  effectiveRetention: EffectiveRetention
+  storageCost: StorageCostProjection
+  deleteId: ID!
+  retentionId: ID!
+  thumbnailUrl: String
+}
+
+type StorageArtifactsConnection {
+  nodes: [StorageArtifact!]!
+  totalCount: Int!
+  hasNextPage: Boolean!
+  limit: Int!
+  offset: Int!
 }
 
 input CreatePaymentInput {

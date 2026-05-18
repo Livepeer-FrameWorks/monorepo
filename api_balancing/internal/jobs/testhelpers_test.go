@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -89,8 +90,10 @@ type mockCommodoreClient struct {
 	dvrCalls            []string
 	vodCalls            []string
 	storageProjection   []string
+	sizeProjection      []string
 	thumbnailProjection []string
 	updateStorageErr    error
+	updateSizeErr       error
 	markThumbnailsErr   error
 }
 
@@ -132,6 +135,16 @@ func (m *mockCommodoreClient) UpdateArtifactStorageCluster(_ context.Context, te
 		return nil, m.updateStorageErr
 	}
 	return &pb.UpdateArtifactStorageClusterResponse{Updated: true}, nil
+}
+
+func (m *mockCommodoreClient) UpdateArtifactSize(_ context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey string, sizeBytes int64) (*pb.UpdateArtifactSizeResponse, error) {
+	m.mu.Lock()
+	m.sizeProjection = append(m.sizeProjection, fmt.Sprintf("%s|%s|%s|%d", tenantID, assetType.String(), assetKey, sizeBytes))
+	m.mu.Unlock()
+	if m.updateSizeErr != nil {
+		return nil, m.updateSizeErr
+	}
+	return &pb.UpdateArtifactSizeResponse{Updated: true}, nil
 }
 
 func (m *mockCommodoreClient) MarkArtifactThumbnailsReady(_ context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey, storageClusterID string) (*pb.MarkArtifactThumbnailsReadyResponse, error) {

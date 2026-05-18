@@ -847,6 +847,46 @@
     };
   }
 
+  type CompletedUploadParts =
+    | { kind: "parts"; parts: { partNumber: number; etag: string }[] }
+    | { kind: "finalized"; stage: "processing" | "done" };
+
+  async function reconcileCompletedUploadParts(
+    uploadId: string,
+    localParts: { partNumber: number; etag: string }[],
+    totalParts: number
+  ): Promise<CompletedUploadParts> {
+    const localComplete =
+      localParts.length === totalParts && localParts.every((part) => part.etag.trim() !== "");
+    if (localComplete) {
+      return { kind: "parts", parts: localParts };
+    }
+
+    const statusResult = await vodUploadStatusQuery.fetch({
+      variables: { uploadId },
+      policy: "NetworkOnly",
+    });
+    const data = statusResult.data?.vodUploadStatus;
+    if (!data || data.__typename !== "VodUploadStatus") {
+      throw new Error("Upload reached storage, but the server could not reconcile its parts");
+    }
+    if (data.state === "PROCESSING" || data.state === "READY") {
+      return { kind: "finalized", stage: data.state === "READY" ? "done" : "processing" };
+    }
+
+    const uploadedParts = data.uploadedParts.map((p) => ({
+      partNumber: p.partNumber,
+      etag: p.etag,
+    }));
+    if (uploadedParts.length !== totalParts || data.missingParts.length > 0) {
+      throw new Error("Upload did not reach storage completely; resume the upload to finish it");
+    }
+    if (uploadedParts.some((part) => part.etag.trim() === "")) {
+      throw new Error("Upload reached storage, but part ETags are unavailable");
+    }
+    return { kind: "parts", parts: uploadedParts };
+  }
+
   async function startUpload() {
     if (!uploadFile) {
       toast.warning("Please select a file to upload");
@@ -937,13 +977,26 @@
       );
 
       engine.start();
-      const completedParts = await transferComplete;
+      const localCompletedParts = await transferComplete;
       abortOnFailure = false;
+      const completed = await reconcileCompletedUploadParts(
+        activeUploadId,
+        localCompletedParts,
+        session.parts.length
+      );
+      if (completed.kind === "finalized") {
+        await getSessionStore().delete(activeUploadId);
+        recoveryOffer = null;
+        resumeRequested = false;
+        uploadStage = completed.stage;
+        await loadData();
+        return;
+      }
 
       uploadStage = "completing";
 
       const completeResult = await completeVodUploadMutation.mutate({
-        input: { uploadId: activeUploadId, parts: completedParts },
+        input: { uploadId: activeUploadId, parts: completed.parts },
       });
 
       if (completeResult.data?.completeVodUpload?.__typename !== "VodAsset") {

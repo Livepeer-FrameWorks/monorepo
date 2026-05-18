@@ -116,6 +116,8 @@ func handleChapterFinalizeResult(
 		 WHERE artifact_hash = $1
 	`, playbackHash, sizeBytes); dbErr != nil {
 		logger.WithError(dbErr).WithFields(fields).Warn("Chapter finalize: artifact row update failed")
+	} else {
+		projectArtifactSizeToCommodore(ctx, playbackHash, sizeBytes, logger)
 	}
 
 	// Warm-cache registration so the chapter VOD is immediately

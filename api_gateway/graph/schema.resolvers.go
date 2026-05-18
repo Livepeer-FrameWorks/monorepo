@@ -3287,9 +3287,9 @@ func (r *queryResolver) StreamKeysConnection(ctx context.Context, page *model.Co
 }
 
 // ClipsConnection is the resolver for the clipsConnection field.
-func (r *queryResolver) ClipsConnection(ctx context.Context, page *model.ConnectionInput, streamID *string) (*model.ClipsConnection, error) {
+func (r *queryResolver) ClipsConnection(ctx context.Context, page *model.ConnectionInput, streamID *string, input *model.MediaArtifactConnectionInput) (*model.ClipsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.DoGetClipsConnection(ctx, streamID, first, after, last, before)
+	return r.DoGetClipsConnection(ctx, streamID, first, after, last, before, input)
 }
 
 // Clip is the resolver for the clip field.
@@ -4110,9 +4110,9 @@ func (r *queryResolver) BootstrapTokensConnection(ctx context.Context, page *mod
 }
 
 // DvrRecordingsConnection is the resolver for the dvrRecordingsConnection field.
-func (r *queryResolver) DvrRecordingsConnection(ctx context.Context, page *model.ConnectionInput, streamID *string) (*model.DVRRecordingsConnection, error) {
+func (r *queryResolver) DvrRecordingsConnection(ctx context.Context, page *model.ConnectionInput, streamID *string, input *model.MediaArtifactConnectionInput) (*model.DVRRecordingsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.DoGetDVRRecordingsConnection(ctx, streamID, first, after, last, before)
+	return r.DoGetDVRRecordingsConnection(ctx, streamID, first, after, last, before, input)
 }
 
 // DvrChapter is the resolver for the dvrChapter field.
@@ -4174,9 +4174,14 @@ func (r *queryResolver) VodAsset(ctx context.Context, id string) (*model.VodAsse
 }
 
 // VodAssetsConnection is the resolver for the vodAssetsConnection field.
-func (r *queryResolver) VodAssetsConnection(ctx context.Context, page *model.ConnectionInput, streamID *string) (*model.VodAssetsConnection, error) {
+func (r *queryResolver) VodAssetsConnection(ctx context.Context, page *model.ConnectionInput, streamID *string, input *model.MediaArtifactConnectionInput) (*model.VodAssetsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.DoGetVodAssetsConnectionFiltered(ctx, streamID, first, after, last, before)
+	return r.DoGetVodAssetsConnectionFiltered(ctx, streamID, first, after, last, before, input)
+}
+
+// StorageArtifactsConnection is the resolver for the storageArtifactsConnection field.
+func (r *queryResolver) StorageArtifactsConnection(ctx context.Context, input *model.StorageArtifactsInput) (*model.StorageArtifactsConnection, error) {
+	return r.DoStorageArtifactsConnection(ctx, input)
 }
 
 // VodUploadStatus is the resolver for the vodUploadStatus field.

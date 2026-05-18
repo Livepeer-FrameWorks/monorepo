@@ -371,6 +371,9 @@ CREATE TABLE IF NOT EXISTS commodore.clips (
     origin_cluster_id VARCHAR(100),
     storage_cluster_id VARCHAR(100),
 
+    -- ===== SIZE PROJECTION =====
+    size_bytes BIGINT,
+
     -- ===== THUMBNAIL PROJECTION =====
     has_thumbnails BOOLEAN NOT NULL DEFAULT FALSE,
 
@@ -414,6 +417,9 @@ CREATE TABLE IF NOT EXISTS commodore.dvr_recordings (
     -- ===== CLUSTER ORIGIN / STORAGE =====
     origin_cluster_id VARCHAR(100),
     storage_cluster_id VARCHAR(100),
+
+    -- ===== SIZE PROJECTION =====
+    size_bytes BIGINT,
 
     -- ===== THUMBNAIL PROJECTION =====
     has_thumbnails BOOLEAN NOT NULL DEFAULT FALSE,

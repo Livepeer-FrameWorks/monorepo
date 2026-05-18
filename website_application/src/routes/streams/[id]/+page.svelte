@@ -7,9 +7,7 @@
     fragment,
     GetStreamStore,
     GetStreamKeysStore,
-    GetDVRRequestsStore,
-    GetClipsConnectionStore,
-    GetVodAssetsConnectionStore,
+    GetStorageArtifactsConnectionStore,
     GetStreamOverviewCoreStore,
     GetStreamOverviewChartsStore,
     GetStreamAnalyticsDailyConnectionStore,
@@ -38,6 +36,7 @@
     TrackListUpdates$result,
     ClipLifecycle$result,
     DvrLifecycle$result,
+    GetStorageArtifactsConnection$result,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import { streamMetrics as realtimeStreamMetrics } from "$lib/stores/realtime";
@@ -82,9 +81,7 @@
   // Houdini stores
   const streamStore = new GetStreamStore();
   const streamKeysStore = new GetStreamKeysStore();
-  const dvrRequestsStore = new GetDVRRequestsStore();
-  const clipsStore = new GetClipsConnectionStore();
-  const vodArtifactsStore = new GetVodAssetsConnectionStore();
+  const storageArtifactsStore = new GetStorageArtifactsConnectionStore();
   const streamOverviewCoreStore = new GetStreamOverviewCoreStore();
   const streamOverviewChartsStore = new GetStreamOverviewChartsStore();
   const updateStreamMutation = new UpdateStreamStore();
@@ -116,13 +113,27 @@
       NonNullable<NonNullable<typeof $streamKeysStore.data>["streamKeysConnection"]>["edges"]
     >[0]
   >["node"];
-  type _RecordingType = NonNullable<
-    NonNullable<NonNullable<typeof $dvrRequestsStore.data>["dvrRecordingsConnection"]>["edges"]
-  >[0]["node"];
-  type _VodArtifactType = NonNullable<
-    NonNullable<NonNullable<typeof $vodArtifactsStore.data>["vodAssetsConnection"]>["edges"]
-  >[0]["node"];
   type TrackInfo = NonNullable<TrackListUpdates$result["liveTrackListUpdates"]>;
+  type StorageArtifactNode =
+    NonNullable<GetStorageArtifactsConnection$result>["storageArtifactsConnection"]["nodes"][number];
+  type StreamArtifactKind = "vod" | "chapter" | "dvr" | "clip";
+  type StreamArtifact = {
+    key: string;
+    kind: StreamArtifactKind;
+    id: string;
+    hash: string;
+    playbackId?: string | null;
+    streamId?: string | null;
+    title?: string | null;
+    secondaryLabel?: string | null;
+    sizeBytes?: number | null;
+    status?: string | null;
+    storageLocation?: string | null;
+    isFrozen?: boolean | null;
+    createdAt?: string | null;
+    updatedAt?: string | null;
+    expiresAt?: string | null;
+  };
 
   // page is a store; derive the param so it stays in sync with navigation
   let streamId = $derived(page.params.id as string);
@@ -181,12 +192,68 @@
       createdAt: t.createdAt,
     })) ?? []
   );
-  let recordings = $derived(
-    $dvrRequestsStore.data?.dvrRecordingsConnection?.edges?.map((e) => e.node) ?? []
+  let storageArtifacts = $derived(
+    ($storageArtifactsStore.data?.storageArtifactsConnection?.nodes ?? []).map(
+      normalizeStreamArtifact
+    )
   );
-  let clips = $derived($clipsStore.data?.clipsConnection?.edges?.map((e) => e.node) ?? []);
+  let recordings = $derived(
+    storageArtifacts
+      .filter((asset) => asset.kind === "dvr")
+      .map((asset) => ({
+        id: asset.id,
+        dvrHash: asset.hash,
+        playbackId: asset.playbackId,
+        streamId: asset.streamId,
+        title: asset.title,
+        status: asset.status,
+        createdAt: asset.createdAt,
+        updatedAt: asset.updatedAt,
+        expiresAt: asset.expiresAt,
+        durationSeconds: null,
+        sizeBytes: asset.sizeBytes,
+        storageLocation: asset.storageLocation,
+        isFrozen: asset.isFrozen,
+      }))
+  );
+  let clips = $derived(
+    storageArtifacts
+      .filter((asset) => asset.kind === "clip")
+      .map((asset) => ({
+        id: asset.id,
+        clipHash: asset.hash,
+        playbackId: asset.playbackId,
+        streamId: asset.streamId,
+        title: asset.title,
+        status: asset.status,
+        createdAt: asset.createdAt,
+        updatedAt: asset.updatedAt,
+        expiresAt: asset.expiresAt,
+        duration: null,
+        sizeBytes: asset.sizeBytes,
+        storageLocation: asset.storageLocation,
+        isFrozen: asset.isFrozen,
+      }))
+  );
   let vodArtifacts = $derived(
-    $vodArtifactsStore.data?.vodAssetsConnection?.edges?.map((e) => e.node) ?? []
+    storageArtifacts
+      .filter((asset) => asset.kind === "vod" || asset.kind === "chapter")
+      .map((asset) => ({
+        id: asset.id,
+        artifactHash: asset.hash,
+        playbackId: asset.playbackId,
+        streamId: asset.streamId,
+        originType: asset.kind === "chapter" ? "dvr_chapter" : null,
+        originId: null,
+        title: asset.title,
+        filename: asset.secondaryLabel,
+        status: asset.status,
+        createdAt: asset.createdAt,
+        updatedAt: asset.updatedAt,
+        expiresAt: asset.expiresAt,
+        durationMs: null,
+        sizeBytes: asset.sizeBytes,
+      }))
   );
 
   // Analytics and health from GetStreamOverview query
@@ -366,6 +433,31 @@
     }
     return { viewerInterval: "1h", viewerFirst: 168 };
   };
+
+  function normalizeStreamArtifact(asset: StorageArtifactNode): StreamArtifact {
+    const rawKind = asset.kind.toLowerCase() as StreamArtifactKind;
+    return {
+      key: asset.key,
+      kind: rawKind,
+      id: asset.id,
+      hash: asset.hash,
+      playbackId: asset.playbackId,
+      streamId: asset.streamId,
+      title: asset.title,
+      secondaryLabel: asset.secondaryLabel,
+      sizeBytes: asset.sizeBytes,
+      status: asset.status,
+      storageLocation: asset.storageLocation,
+      isFrozen: asset.isFrozen,
+      createdAt: asset.createdAt,
+      updatedAt: asset.updatedAt,
+      expiresAt: asset.expiresAt,
+    };
+  }
+
+  function storageKindsForStream(): ("DVR" | "CHAPTER" | "CLIP")[] {
+    return ["DVR", "CHAPTER", "CLIP"];
+  }
 
   // Auto-refresh interval for live data (fallback)
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
@@ -785,9 +877,19 @@
       await Promise.all([
         streamKeysStore.fetch({ variables: { streamId: resolvedStreamId } }),
         pushTargetsStore.fetch({ variables: { streamId } }),
-        dvrRequestsStore.fetch({ variables: { streamId: resolvedStreamId } }),
-        clipsStore.fetch({ variables: { streamId: resolvedStreamId, first: 100 } }),
-        vodArtifactsStore.fetch({ variables: { streamId: resolvedStreamId, first: 100 } }),
+        storageArtifactsStore.fetch({
+          policy: "NetworkOnly",
+          variables: {
+            input: {
+              first: 100,
+              offset: 0,
+              streamId: resolvedStreamId,
+              kinds: storageKindsForStream(),
+              sort: "CREATED_AT",
+              direction: "DESC",
+            },
+          },
+        }),
         streamOverviewCoreStore
           .fetch({
             variables: {

@@ -1153,6 +1153,13 @@ type MarketplaceClusterEdge struct {
 	Node   *proto.MarketplaceClusterEntry `json:"node"`
 }
 
+type MediaArtifactConnectionInput struct {
+	Search    *string                   `json:"search,omitempty"`
+	Sort      *StorageArtifactSortField `json:"sort,omitempty"`
+	Direction *SortDirection            `json:"direction,omitempty"`
+	Offset    *int                      `json:"offset,omitempty"`
+}
+
 // Tenant-default retention policy: per-class overrides + the values the
 // cascade would resolve to today for a hypothetical new artifact of each
 // class (no per-stream context).
@@ -1728,6 +1735,48 @@ type SkipperReportsConnection struct {
 	Nodes       []*proto.SkipperReport `json:"nodes"`
 	TotalCount  int                    `json:"totalCount"`
 	UnreadCount int                    `json:"unreadCount"`
+}
+
+type StorageArtifact struct {
+	Key                string                 `json:"key"`
+	Kind               StorageArtifactKind    `json:"kind"`
+	ID                 string                 `json:"id"`
+	Hash               string                 `json:"hash"`
+	PlaybackID         *string                `json:"playbackId,omitempty"`
+	StreamID           *string                `json:"streamId,omitempty"`
+	StreamTitle        string                 `json:"streamTitle"`
+	Title              string                 `json:"title"`
+	SecondaryLabel     string                 `json:"secondaryLabel"`
+	SizeBytes          *float64               `json:"sizeBytes,omitempty"`
+	Status             string                 `json:"status"`
+	StorageLocation    *string                `json:"storageLocation,omitempty"`
+	IsFrozen           *bool                  `json:"isFrozen,omitempty"`
+	CreatedAt          time.Time              `json:"createdAt"`
+	UpdatedAt          time.Time              `json:"updatedAt"`
+	ExpiresAt          *time.Time             `json:"expiresAt,omitempty"`
+	EffectiveRetention *EffectiveRetention    `json:"effectiveRetention,omitempty"`
+	StorageCost        *StorageCostProjection `json:"storageCost,omitempty"`
+	DeleteID           string                 `json:"deleteId"`
+	RetentionID        string                 `json:"retentionId"`
+	ThumbnailURL       *string                `json:"thumbnailUrl,omitempty"`
+}
+
+type StorageArtifactsConnection struct {
+	Nodes       []*StorageArtifact `json:"nodes"`
+	TotalCount  int                `json:"totalCount"`
+	HasNextPage bool               `json:"hasNextPage"`
+	Limit       int                `json:"limit"`
+	Offset      int                `json:"offset"`
+}
+
+type StorageArtifactsInput struct {
+	First     *int                      `json:"first,omitempty"`
+	Offset    *int                      `json:"offset,omitempty"`
+	StreamID  *string                   `json:"streamId,omitempty"`
+	Kinds     []StorageArtifactKind     `json:"kinds,omitempty"`
+	Search    *string                   `json:"search,omitempty"`
+	Sort      *StorageArtifactSortField `json:"sort,omitempty"`
+	Direction *SortDirection            `json:"direction,omitempty"`
 }
 
 // Marginal per-asset storage cost projection. Used by the customer-facing
@@ -3404,6 +3453,181 @@ func (e *SigningKeyStatus) UnmarshalJSON(b []byte) error {
 }
 
 func (e SigningKeyStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type SortDirection string
+
+const (
+	SortDirectionAsc  SortDirection = "ASC"
+	SortDirectionDesc SortDirection = "DESC"
+)
+
+var AllSortDirection = []SortDirection{
+	SortDirectionAsc,
+	SortDirectionDesc,
+}
+
+func (e SortDirection) IsValid() bool {
+	switch e {
+	case SortDirectionAsc, SortDirectionDesc:
+		return true
+	}
+	return false
+}
+
+func (e SortDirection) String() string {
+	return string(e)
+}
+
+func (e *SortDirection) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = SortDirection(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid SortDirection", str)
+	}
+	return nil
+}
+
+func (e SortDirection) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *SortDirection) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e SortDirection) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type StorageArtifactKind string
+
+const (
+	StorageArtifactKindVod     StorageArtifactKind = "VOD"
+	StorageArtifactKindDvr     StorageArtifactKind = "DVR"
+	StorageArtifactKindChapter StorageArtifactKind = "CHAPTER"
+	StorageArtifactKindClip    StorageArtifactKind = "CLIP"
+)
+
+var AllStorageArtifactKind = []StorageArtifactKind{
+	StorageArtifactKindVod,
+	StorageArtifactKindDvr,
+	StorageArtifactKindChapter,
+	StorageArtifactKindClip,
+}
+
+func (e StorageArtifactKind) IsValid() bool {
+	switch e {
+	case StorageArtifactKindVod, StorageArtifactKindDvr, StorageArtifactKindChapter, StorageArtifactKindClip:
+		return true
+	}
+	return false
+}
+
+func (e StorageArtifactKind) String() string {
+	return string(e)
+}
+
+func (e *StorageArtifactKind) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = StorageArtifactKind(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid StorageArtifactKind", str)
+	}
+	return nil
+}
+
+func (e StorageArtifactKind) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *StorageArtifactKind) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e StorageArtifactKind) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type StorageArtifactSortField string
+
+const (
+	StorageArtifactSortFieldCreatedAt StorageArtifactSortField = "CREATED_AT"
+	StorageArtifactSortFieldTitle     StorageArtifactSortField = "TITLE"
+	StorageArtifactSortFieldKind      StorageArtifactSortField = "KIND"
+	StorageArtifactSortFieldSizeBytes StorageArtifactSortField = "SIZE_BYTES"
+	StorageArtifactSortFieldExpiresAt StorageArtifactSortField = "EXPIRES_AT"
+)
+
+var AllStorageArtifactSortField = []StorageArtifactSortField{
+	StorageArtifactSortFieldCreatedAt,
+	StorageArtifactSortFieldTitle,
+	StorageArtifactSortFieldKind,
+	StorageArtifactSortFieldSizeBytes,
+	StorageArtifactSortFieldExpiresAt,
+}
+
+func (e StorageArtifactSortField) IsValid() bool {
+	switch e {
+	case StorageArtifactSortFieldCreatedAt, StorageArtifactSortFieldTitle, StorageArtifactSortFieldKind, StorageArtifactSortFieldSizeBytes, StorageArtifactSortFieldExpiresAt:
+		return true
+	}
+	return false
+}
+
+func (e StorageArtifactSortField) String() string {
+	return string(e)
+}
+
+func (e *StorageArtifactSortField) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = StorageArtifactSortField(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid StorageArtifactSortField", str)
+	}
+	return nil
+}
+
+func (e StorageArtifactSortField) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *StorageArtifactSortField) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e StorageArtifactSortField) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

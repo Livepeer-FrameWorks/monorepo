@@ -13,6 +13,7 @@ import (
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
+	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
@@ -484,7 +485,7 @@ func (r *Resolver) DoGetVodAssetsConnection(ctx context.Context, first *int, aft
 
 // DoGetVodAssetsConnectionFiltered retrieves VOD assets, optionally scoped to
 // stream-derived VOD artifacts for a single source stream.
-func (r *Resolver) DoGetVodAssetsConnectionFiltered(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string) (*model.VodAssetsConnection, error) {
+func (r *Resolver) DoGetVodAssetsConnectionFiltered(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string, input ...*model.MediaArtifactConnectionInput) (*model.VodAssetsConnection, error) {
 	// Build cursor pagination request with bidirectional support
 	paginationReq := &pb.CursorPaginationRequest{
 		First: int32(pagination.DefaultLimit),
@@ -516,7 +517,11 @@ func (r *Resolver) DoGetVodAssetsConnectionFiltered(ctx context.Context, streamI
 	}
 
 	// 1. Get business metadata from Commodore
-	resp, err := r.Clients.Commodore.ListVodAssets(ctx, tenantID, paginationReq, streamID)
+	var opts commodoreclient.MediaListOptions
+	if len(input) > 0 {
+		opts = mediaListOptionsFromInput(input[0])
+	}
+	resp, err := r.Clients.Commodore.ListVodAssets(ctx, tenantID, paginationReq, streamID, opts)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to list VOD assets")
 		return nil, fmt.Errorf("failed to list VOD assets: %w", err)

@@ -199,7 +199,7 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 	c.Query.BootstrapTokensConnection = func(childComplexity int, page *model.ConnectionInput, _ *string) int {
 		return connectionComplexity(childComplexity, page)
 	}
-	c.Query.ClipsConnection = func(childComplexity int, page *model.ConnectionInput, _ *string) int {
+	c.Query.ClipsConnection = func(childComplexity int, page *model.ConnectionInput, _ *string, _ *model.MediaArtifactConnectionInput) int {
 		return connectionComplexity(childComplexity, page)
 	}
 	c.Query.ClusterInvitesConnection = func(childComplexity int, page *model.ConnectionInput, _ string) int {
@@ -223,7 +223,7 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 	c.Query.DiscoverServicesConnection = func(childComplexity int, page *model.ConnectionInput, _ string, _ *string) int {
 		return connectionComplexity(childComplexity, page)
 	}
-	c.Query.DvrRecordingsConnection = func(childComplexity int, page *model.ConnectionInput, _ *string) int {
+	c.Query.DvrRecordingsConnection = func(childComplexity int, page *model.ConnectionInput, _ *string, _ *model.MediaArtifactConnectionInput) int {
 		return connectionComplexity(childComplexity, page)
 	}
 	c.Query.InvoicesConnection = func(childComplexity int, page *model.ConnectionInput) int {
@@ -256,7 +256,7 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 	c.Query.UsageRecordsConnection = func(childComplexity int, page *model.ConnectionInput, _ *model.TimeRangeInput) int {
 		return connectionComplexity(childComplexity, page)
 	}
-	c.Query.VodAssetsConnection = func(childComplexity int, page *model.ConnectionInput, _ *string) int {
+	c.Query.VodAssetsConnection = func(childComplexity int, page *model.ConnectionInput, _ *string, _ *model.MediaArtifactConnectionInput) int {
 		return connectionComplexity(childComplexity, page)
 	}
 

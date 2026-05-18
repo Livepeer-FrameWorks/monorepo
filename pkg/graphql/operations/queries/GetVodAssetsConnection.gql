@@ -4,10 +4,12 @@ query GetVodAssetsConnection(
   $after: String
   $last: Int
   $before: String
+  $input: MediaArtifactConnectionInput
 ) {
   vodAssetsConnection(
     streamId: $streamId
     page: { first: $first, after: $after, last: $last, before: $before }
+    input: $input
   ) {
     edges {
       cursor

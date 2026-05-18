@@ -36,6 +36,7 @@ const (
 	InternalService_UpdateDVRRetention_FullMethodName              = "/commodore.InternalService/UpdateDVRRetention"
 	InternalService_MarkArtifactThumbnailsReady_FullMethodName     = "/commodore.InternalService/MarkArtifactThumbnailsReady"
 	InternalService_UpdateArtifactStorageCluster_FullMethodName    = "/commodore.InternalService/UpdateArtifactStorageCluster"
+	InternalService_UpdateArtifactSize_FullMethodName              = "/commodore.InternalService/UpdateArtifactSize"
 	InternalService_ResolveClipHash_FullMethodName                 = "/commodore.InternalService/ResolveClipHash"
 	InternalService_ResolveDVRHash_FullMethodName                  = "/commodore.InternalService/ResolveDVRHash"
 	InternalService_ResolveArtifactPlaybackID_FullMethodName       = "/commodore.InternalService/ResolveArtifactPlaybackID"
@@ -47,6 +48,7 @@ const (
 	InternalService_MintChapterPlaybackID_FullMethodName           = "/commodore.InternalService/MintChapterPlaybackID"
 	InternalService_ResolveChapterPlaybackID_FullMethodName        = "/commodore.InternalService/ResolveChapterPlaybackID"
 	InternalService_GetTenantProcessesJSON_FullMethodName          = "/commodore.InternalService/GetTenantProcessesJSON"
+	InternalService_ListStorageArtifacts_FullMethodName            = "/commodore.InternalService/ListStorageArtifacts"
 	InternalService_GetOrCreateWalletUser_FullMethodName           = "/commodore.InternalService/GetOrCreateWalletUser"
 	InternalService_TerminateTenantStreams_FullMethodName          = "/commodore.InternalService/TerminateTenantStreams"
 	InternalService_InvalidateTenantCache_FullMethodName           = "/commodore.InternalService/InvalidateTenantCache"
@@ -134,6 +136,9 @@ type InternalServiceClient interface {
 	// not falsely flip readiness. Called whenever Foghorn mutates
 	// foghorn.artifacts.storage_cluster_id.
 	UpdateArtifactStorageCluster(ctx context.Context, in *UpdateArtifactStorageClusterRequest, opts ...grpc.CallOption) (*UpdateArtifactStorageClusterResponse, error)
+	// UpdateArtifactSize projects Foghorn's authoritative artifact byte count
+	// into Commodore's registry rows for catalog pagination and sorting.
+	UpdateArtifactSize(ctx context.Context, in *UpdateArtifactSizeRequest, opts ...grpc.CallOption) (*UpdateArtifactSizeResponse, error)
 	// Resolve clip hash to tenant context (for analytics enrichment and playback)
 	ResolveClipHash(ctx context.Context, in *ResolveClipHashRequest, opts ...grpc.CallOption) (*ResolveClipHashResponse, error)
 	// Resolve DVR hash to tenant context (for analytics enrichment and playback)
@@ -164,6 +169,9 @@ type InternalServiceClient interface {
 	// pipeline (Thumbs, sprites, optional Livepeer) that user-initiated VOD
 	// uploads use. Stream-type values match resolveProcessesJSON internally.
 	GetTenantProcessesJSON(ctx context.Context, in *GetTenantProcessesJSONRequest, opts ...grpc.CallOption) (*GetTenantProcessesJSONResponse, error)
+	// Internal registry projection used by Bridge's GraphQL
+	// storageArtifactsConnection resolver. This is not a public HTTP surface.
+	ListStorageArtifacts(ctx context.Context, in *ListStorageArtifactsRequest, opts ...grpc.CallOption) (*ListStorageArtifactsResponse, error)
 	// Lookup or create a tenant/user for a verified wallet address.
 	// Called by x402 middleware after verifying ERC-3009 payment signature.
 	// If wallet is unknown, creates: tenant (prepaid) + user (email=NULL) + wallet_identity
@@ -380,6 +388,16 @@ func (c *internalServiceClient) UpdateArtifactStorageCluster(ctx context.Context
 	return out, nil
 }
 
+func (c *internalServiceClient) UpdateArtifactSize(ctx context.Context, in *UpdateArtifactSizeRequest, opts ...grpc.CallOption) (*UpdateArtifactSizeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateArtifactSizeResponse)
+	err := c.cc.Invoke(ctx, InternalService_UpdateArtifactSize_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *internalServiceClient) ResolveClipHash(ctx context.Context, in *ResolveClipHashRequest, opts ...grpc.CallOption) (*ResolveClipHashResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ResolveClipHashResponse)
@@ -484,6 +502,16 @@ func (c *internalServiceClient) GetTenantProcessesJSON(ctx context.Context, in *
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetTenantProcessesJSONResponse)
 	err := c.cc.Invoke(ctx, InternalService_GetTenantProcessesJSON_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ListStorageArtifacts(ctx context.Context, in *ListStorageArtifactsRequest, opts ...grpc.CallOption) (*ListStorageArtifactsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListStorageArtifactsResponse)
+	err := c.cc.Invoke(ctx, InternalService_ListStorageArtifacts_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -701,6 +729,9 @@ type InternalServiceServer interface {
 	// not falsely flip readiness. Called whenever Foghorn mutates
 	// foghorn.artifacts.storage_cluster_id.
 	UpdateArtifactStorageCluster(context.Context, *UpdateArtifactStorageClusterRequest) (*UpdateArtifactStorageClusterResponse, error)
+	// UpdateArtifactSize projects Foghorn's authoritative artifact byte count
+	// into Commodore's registry rows for catalog pagination and sorting.
+	UpdateArtifactSize(context.Context, *UpdateArtifactSizeRequest) (*UpdateArtifactSizeResponse, error)
 	// Resolve clip hash to tenant context (for analytics enrichment and playback)
 	ResolveClipHash(context.Context, *ResolveClipHashRequest) (*ResolveClipHashResponse, error)
 	// Resolve DVR hash to tenant context (for analytics enrichment and playback)
@@ -731,6 +762,9 @@ type InternalServiceServer interface {
 	// pipeline (Thumbs, sprites, optional Livepeer) that user-initiated VOD
 	// uploads use. Stream-type values match resolveProcessesJSON internally.
 	GetTenantProcessesJSON(context.Context, *GetTenantProcessesJSONRequest) (*GetTenantProcessesJSONResponse, error)
+	// Internal registry projection used by Bridge's GraphQL
+	// storageArtifactsConnection resolver. This is not a public HTTP surface.
+	ListStorageArtifacts(context.Context, *ListStorageArtifactsRequest) (*ListStorageArtifactsResponse, error)
 	// Lookup or create a tenant/user for a verified wallet address.
 	// Called by x402 middleware after verifying ERC-3009 payment signature.
 	// If wallet is unknown, creates: tenant (prepaid) + user (email=NULL) + wallet_identity
@@ -835,6 +869,9 @@ func (UnimplementedInternalServiceServer) MarkArtifactThumbnailsReady(context.Co
 func (UnimplementedInternalServiceServer) UpdateArtifactStorageCluster(context.Context, *UpdateArtifactStorageClusterRequest) (*UpdateArtifactStorageClusterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateArtifactStorageCluster not implemented")
 }
+func (UnimplementedInternalServiceServer) UpdateArtifactSize(context.Context, *UpdateArtifactSizeRequest) (*UpdateArtifactSizeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateArtifactSize not implemented")
+}
 func (UnimplementedInternalServiceServer) ResolveClipHash(context.Context, *ResolveClipHashRequest) (*ResolveClipHashResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveClipHash not implemented")
 }
@@ -867,6 +904,9 @@ func (UnimplementedInternalServiceServer) ResolveChapterPlaybackID(context.Conte
 }
 func (UnimplementedInternalServiceServer) GetTenantProcessesJSON(context.Context, *GetTenantProcessesJSONRequest) (*GetTenantProcessesJSONResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTenantProcessesJSON not implemented")
+}
+func (UnimplementedInternalServiceServer) ListStorageArtifacts(context.Context, *ListStorageArtifactsRequest) (*ListStorageArtifactsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListStorageArtifacts not implemented")
 }
 func (UnimplementedInternalServiceServer) GetOrCreateWalletUser(context.Context, *GetOrCreateWalletUserRequest) (*GetOrCreateWalletUserResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetOrCreateWalletUser not implemented")
@@ -1219,6 +1259,24 @@ func _InternalService_UpdateArtifactStorageCluster_Handler(srv interface{}, ctx 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InternalService_UpdateArtifactSize_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateArtifactSizeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).UpdateArtifactSize(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_UpdateArtifactSize_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).UpdateArtifactSize(ctx, req.(*UpdateArtifactSizeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _InternalService_ResolveClipHash_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ResolveClipHashRequest)
 	if err := dec(in); err != nil {
@@ -1413,6 +1471,24 @@ func _InternalService_GetTenantProcessesJSON_Handler(srv interface{}, ctx contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).GetTenantProcessesJSON(ctx, req.(*GetTenantProcessesJSONRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ListStorageArtifacts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListStorageArtifactsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ListStorageArtifacts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ListStorageArtifacts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ListStorageArtifacts(ctx, req.(*ListStorageArtifactsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1741,6 +1817,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _InternalService_UpdateArtifactStorageCluster_Handler,
 		},
 		{
+			MethodName: "UpdateArtifactSize",
+			Handler:    _InternalService_UpdateArtifactSize_Handler,
+		},
+		{
 			MethodName: "ResolveClipHash",
 			Handler:    _InternalService_ResolveClipHash_Handler,
 		},
@@ -1783,6 +1863,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTenantProcessesJSON",
 			Handler:    _InternalService_GetTenantProcessesJSON_Handler,
+		},
+		{
+			MethodName: "ListStorageArtifacts",
+			Handler:    _InternalService_ListStorageArtifacts_Handler,
 		},
 		{
 			MethodName: "GetOrCreateWalletUser",

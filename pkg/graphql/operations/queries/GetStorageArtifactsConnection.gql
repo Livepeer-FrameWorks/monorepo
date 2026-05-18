@@ -1,0 +1,39 @@
+query GetStorageArtifactsConnection($input: StorageArtifactsInput) {
+  storageArtifactsConnection(input: $input) {
+    nodes {
+      key
+      kind
+      id
+      hash
+      playbackId
+      streamId
+      streamTitle
+      title
+      secondaryLabel
+      sizeBytes
+      status
+      storageLocation
+      isFrozen
+      createdAt
+      updatedAt
+      expiresAt
+      effectiveRetention {
+        retentionDays
+        retentionUntil
+        source
+      }
+      storageCost {
+        perDay
+        perMonth
+        currency
+      }
+      deleteId
+      retentionId
+      thumbnailUrl
+    }
+    totalCount
+    hasNextPage
+    limit
+    offset
+  }
+}

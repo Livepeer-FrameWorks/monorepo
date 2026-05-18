@@ -153,8 +153,7 @@ func (r *ContentResolution) RoutingInternalName() string {
 	return internalName
 }
 
-// ResolveContent determines content type and resolution strategy for a public playback ID.
-// Input must be a public playback ID (live or artifact).
+// ResolveContent determines content type and resolution strategy for a playback request.
 func ResolveContent(ctx context.Context, input string) (*ContentResolution, error) {
 	if input == "" {
 		return nil, fmt.Errorf("empty input")
@@ -213,6 +212,30 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 		}
 	}
 
+	// The web viewer can be opened from DVR registry rows that carry the
+	// artifact hash. Normalize that hash through Commodore before routing;
+	// chapter artifacts remain playback_id-only.
+	if CommodoreClient != nil && isArtifactHashCandidate(input) {
+		if resp, err := CommodoreClient.ResolveDVRHash(ctx, input); err == nil && resp.GetFound() {
+			contentID := resp.GetPlaybackId()
+			if contentID == "" {
+				contentID = input
+			}
+			requiresAuth := false
+			if artifact, artErr := CommodoreClient.ResolveArtifactInternalName(ctx, resp.GetInternalName()); artErr == nil && artifact.GetFound() {
+				requiresAuth = artifact.GetRequiresAuth()
+			}
+			return &ContentResolution{
+				ContentType:  "dvr",
+				ContentId:    contentID,
+				TenantId:     resp.GetTenantId(),
+				StreamId:     resp.GetStreamId(),
+				InternalName: "dvr+" + resp.GetInternalName(),
+				RequiresAuth: requiresAuth,
+			}, nil
+		}
+	}
+
 	// 2. Live playback_id resolution
 	if CommodoreClient != nil {
 		if resp, err := CommodoreClient.ResolvePlaybackID(ctx, input); err == nil && resp.InternalName != "" {
@@ -230,6 +253,19 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 	}
 
 	return nil, fmt.Errorf("content not found")
+}
+
+func isArtifactHashCandidate(input string) bool {
+	if len(input) != 32 {
+		return false
+	}
+	for _, ch := range input {
+		if (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // ArtifactFederationClient is the subset of federation.FederationClient needed for cross-cluster artifact resolution.

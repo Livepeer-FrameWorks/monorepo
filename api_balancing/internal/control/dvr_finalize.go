@@ -192,6 +192,7 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 		logger.WithError(err).Error("Failed to write final artifact status")
 		return FinalizeResult{ArtifactStatus: finalStatus, UploadedCount: uploadedCount, LostCount: lostCount}, fmt.Errorf("write final artifact status: %w", err)
 	}
+	projectArtifactSizeToCommodore(ctx, dvrHash, int64(opts.SizeBytes), logger)
 
 	logger.WithFields(logging.Fields{
 		"final_status":      finalStatus,

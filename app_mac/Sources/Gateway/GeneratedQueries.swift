@@ -1121,8 +1121,14 @@ enum GQL {
   static let GetClipsConnection = """
   # Fetch paginated list of clips with metadata and lifecycle status
   # Returns clip metadata from Commodore (use artifactStatesConnection for live status)
-  query GetClipsConnection($streamId: ID, $first: Int = 50, $after: String) {
-    clipsConnection(streamId: $streamId, page: { first: $first, after: $after }) {
+  query GetClipsConnection(
+    $streamId: ID
+    $first: Int = 50
+    $after: String
+    $input: MediaArtifactConnectionInput
+  ) {
+    clipsConnection(streamId: $streamId, page: { first: $first, after: $after }, input: $input)
+   {
       edges {
         cursor
         node {
@@ -1350,8 +1356,14 @@ enum GQL {
   static let GetDVRRequests = """
   # Fetch paginated list of DVR recordings with lifecycle status and storage paths
   # Returns DVR metadata from Commodore (use artifactStatesConnection for live status)
-  query GetDVRRequests($streamId: ID, $first: Int = 50, $after: String) {
-    dvrRecordingsConnection(streamId: $streamId, page: { first: $first, after: $after }) {
+  query GetDVRRequests(
+    $streamId: ID
+    $first: Int = 50
+    $after: String
+    $input: MediaArtifactConnectionInput
+  ) {
+    dvrRecordingsConnection(streamId: $streamId, page: { first: $first, after: $after }, input: $input)
+   {
       edges {
         cursor
         node {
@@ -2617,6 +2629,48 @@ enum GQL {
   }
   """
 
+  static let GetStorageArtifactsConnection = """
+  query GetStorageArtifactsConnection($input: StorageArtifactsInput) {
+    storageArtifactsConnection(input: $input) {
+      nodes {
+        key
+        kind
+        id
+        hash
+        playbackId
+        streamId
+        streamTitle
+        title
+        secondaryLabel
+        sizeBytes
+        status
+        storageLocation
+        isFrozen
+        createdAt
+        updatedAt
+        expiresAt
+        effectiveRetention {
+          retentionDays
+          retentionUntil
+          source
+        }
+        storageCost {
+          perDay
+          perMonth
+          currency
+        }
+        deleteId
+        retentionId
+        thumbnailUrl
+      }
+      totalCount
+      hasNextPage
+      limit
+      offset
+    }
+  }
+  """
+
   static let GetStorageEventsConnection = """
   # Fetch storage lifecycle events (freeze/defrost)
   query GetStorageEventsConnection(
@@ -3716,10 +3770,12 @@ enum GQL {
     $after: String
     $last: Int
     $before: String
+    $input: MediaArtifactConnectionInput
   ) {
     vodAssetsConnection(
       streamId: $streamId
       page: { first: $first, after: $after, last: $last, before: $before }
+      input: $input
     ) {
       edges {
         cursor

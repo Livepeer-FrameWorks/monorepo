@@ -685,23 +685,26 @@ func TestProjectCommodoreArtifactStateRepairsStorageAndThumbnailProjection(t *te
 	r.batchSize = 10
 
 	rows := sqlmock.NewRows([]string{
-		"artifact_hash", "artifact_type", "tenant_id", "storage_cluster_id", "origin_cluster_id", "has_thumbnails",
-	}).AddRow("vod-hash", "vod", "tenant-1", "media-us-1", "media-eu-1", true).
-		AddRow("clip-hash", "clip", "tenant-1", "", "media-eu-1", true)
+		"artifact_hash", "artifact_type", "tenant_id", "storage_cluster_id", "origin_cluster_id", "has_thumbnails", "size_bytes",
+	}).AddRow("vod-hash", "vod", "tenant-1", "media-us-1", "media-eu-1", true, 1024).
+		AddRow("clip-hash", "clip", "tenant-1", "", "media-eu-1", true, 2048)
 
 	mock.ExpectQuery("FROM foghorn.artifacts").
 		WithArgs(10).
 		WillReturnRows(rows)
 
 	count := r.projectCommodoreArtifactState(context.Background())
-	if count != 3 {
-		t.Fatalf("expected 3 projection calls, got %d", count)
+	if count != 5 {
+		t.Fatalf("expected 5 projection calls, got %d", count)
 	}
 	if len(commodore.storageProjection) != 1 {
 		t.Fatalf("expected 1 storage projection, got %d", len(commodore.storageProjection))
 	}
 	if len(commodore.thumbnailProjection) != 2 {
 		t.Fatalf("expected 2 thumbnail projections, got %d", len(commodore.thumbnailProjection))
+	}
+	if len(commodore.sizeProjection) != 2 {
+		t.Fatalf("expected 2 size projections, got %d", len(commodore.sizeProjection))
 	}
 	if commodore.storageProjection[0] != "tenant-1|ARTIFACT_ASSET_TYPE_VOD|vod-hash|media-us-1" {
 		t.Fatalf("unexpected storage projection: %q", commodore.storageProjection[0])
@@ -711,6 +714,12 @@ func TestProjectCommodoreArtifactStateRepairsStorageAndThumbnailProjection(t *te
 	}
 	if commodore.thumbnailProjection[1] != "tenant-1|ARTIFACT_ASSET_TYPE_CLIP|clip-hash|media-eu-1" {
 		t.Fatalf("unexpected clip thumbnail projection: %q", commodore.thumbnailProjection[1])
+	}
+	if commodore.sizeProjection[0] != "tenant-1|ARTIFACT_ASSET_TYPE_VOD|vod-hash|1024" {
+		t.Fatalf("unexpected vod size projection: %q", commodore.sizeProjection[0])
+	}
+	if commodore.sizeProjection[1] != "tenant-1|ARTIFACT_ASSET_TYPE_CLIP|clip-hash|2048" {
+		t.Fatalf("unexpected clip size projection: %q", commodore.sizeProjection[1])
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

@@ -111,6 +111,10 @@ service InternalService {
   // foghorn.artifacts.storage_cluster_id.
   rpc UpdateArtifactStorageCluster(UpdateArtifactStorageClusterRequest) returns (UpdateArtifactStorageClusterResponse);
 
+  // UpdateArtifactSize projects Foghorn's authoritative artifact byte count
+  // into Commodore's registry rows for catalog pagination and sorting.
+  rpc UpdateArtifactSize(UpdateArtifactSizeRequest) returns (UpdateArtifactSizeResponse);
+
   // Resolve clip hash to tenant context (for analytics enrichment and playback)
   rpc ResolveClipHash(ResolveClipHashRequest) returns (ResolveClipHashResponse);
 
@@ -163,6 +167,10 @@ service InternalService {
   // pipeline (Thumbs, sprites, optional Livepeer) that user-initiated VOD
   // uploads use. Stream-type values match resolveProcessesJSON internally.
   rpc GetTenantProcessesJSON(GetTenantProcessesJSONRequest) returns (GetTenantProcessesJSONResponse);
+
+  // Internal registry projection used by Bridge's GraphQL
+  // storageArtifactsConnection resolver. This is not a public HTTP surface.
+  rpc ListStorageArtifacts(ListStorageArtifactsRequest) returns (ListStorageArtifactsResponse);
 
   // ============================================================================
   // WALLET IDENTITY (x402 / Agent Access)
@@ -599,6 +607,19 @@ message UpdateArtifactStorageClusterResponse {
   bool updated = 1;
 }
 
+// UpdateArtifactSize projects foghorn.artifacts.size_bytes onto the matching
+// commodore registry row. asset_key is clip_hash, dvr_hash, or vod_hash.
+message UpdateArtifactSizeRequest {
+  string tenant_id = 1;
+  ArtifactAssetType asset_type = 2;
+  string asset_key = 3;
+  int64 size_bytes = 4;
+}
+
+message UpdateArtifactSizeResponse {
+  bool updated = 1;
+}
+
 // Resolve clip hash to tenant context
 // Used for analytics enrichment and playback authorization
 message ResolveClipHashRequest {
@@ -767,6 +788,47 @@ message GetTenantProcessesJSONRequest {
 
 message GetTenantProcessesJSONResponse {
   string processes_json = 1;  // raw JSON array; "[]" when the tenant has no config
+}
+
+message ListStorageArtifactsRequest {
+  string tenant_id = 1;
+  optional string stream_id = 2;
+  repeated string kinds = 3;          // vod | dvr | chapter | clip
+  string search = 4;
+  string sort_field = 5;              // created_at | title | kind | size_bytes | expires_at
+  string sort_direction = 6;          // asc | desc
+  int32 limit = 7;
+  int32 offset = 8;
+}
+
+message StorageArtifactInfo {
+  string kind = 1;                    // vod | dvr | chapter | clip
+  string id = 2;
+  string artifact_hash = 3;
+  optional string playback_id = 4;
+  optional string stream_id = 5;
+  string stream_title = 6;
+  string title = 7;
+  string secondary_label = 8;
+  optional int64 size_bytes = 9;
+  string status = 10;
+  optional string storage_location = 11;
+  optional bool is_frozen = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+  optional google.protobuf.Timestamp expires_at = 15;
+  optional string retention_source = 16;
+  optional string origin_type = 17;
+  optional string origin_id = 18;
+  string storage_cluster_id = 19;
+  bool has_thumbnails = 20;
+  optional shared.ThumbnailAssets thumbnail_assets = 21;
+}
+
+message ListStorageArtifactsResponse {
+  repeated StorageArtifactInfo artifacts = 1;
+  int32 total_count = 2;
+  bool has_next_page = 3;
 }
 
 // Resolve artifact playback ID to artifact identity

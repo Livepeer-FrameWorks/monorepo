@@ -37,6 +37,7 @@ type ReconcilerCommodoreClient interface {
 	ResolveVodHash(ctx context.Context, hash string) (*pb.ResolveVodHashResponse, error)
 	MarkArtifactThumbnailsReady(ctx context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey, storageClusterID string) (*pb.MarkArtifactThumbnailsReadyResponse, error)
 	UpdateArtifactStorageCluster(ctx context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey, storageClusterID string) (*pb.UpdateArtifactStorageClusterResponse, error)
+	UpdateArtifactSize(ctx context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey string, sizeBytes int64) (*pb.UpdateArtifactSizeResponse, error)
 }
 
 // ArtifactReconcilerConfig holds configuration for the reconciler job.
@@ -178,11 +179,13 @@ func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) 
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT artifact_hash, artifact_type, tenant_id::text,
 		       COALESCE(storage_cluster_id, ''), COALESCE(origin_cluster_id, ''),
-		       COALESCE(has_thumbnails, false)
+		       COALESCE(has_thumbnails, false), COALESCE(size_bytes, 0)
 		FROM foghorn.artifacts
 		WHERE status != 'deleted'
 		  AND tenant_id IS NOT NULL
-		  AND (COALESCE(storage_cluster_id, '') <> '' OR COALESCE(has_thumbnails, false) = TRUE)
+		  AND (COALESCE(storage_cluster_id, '') <> ''
+		       OR COALESCE(has_thumbnails, false) = TRUE
+		       OR COALESCE(size_bytes, 0) > 0)
 		ORDER BY updated_at DESC
 		LIMIT $1
 	`, r.batchSize)
@@ -196,7 +199,8 @@ func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) 
 	for rows.Next() {
 		var hash, artifactType, tenantID, storageCluster, originCluster string
 		var hasThumbnails bool
-		if err := rows.Scan(&hash, &artifactType, &tenantID, &storageCluster, &originCluster, &hasThumbnails); err != nil {
+		var sizeBytes int64
+		if err := rows.Scan(&hash, &artifactType, &tenantID, &storageCluster, &originCluster, &hasThumbnails, &sizeBytes); err != nil {
 			r.logger.WithError(err).Warn("Failed to scan artifact projection row")
 			continue
 		}
@@ -218,6 +222,13 @@ func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) 
 		if hasThumbnails && thumbnailCluster != "" {
 			if _, err := r.commodore.MarkArtifactThumbnailsReady(ctx, tenantID, assetType, hash, thumbnailCluster); err != nil {
 				r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to repair Commodore artifact thumbnail projection")
+				continue
+			}
+			count++
+		}
+		if sizeBytes > 0 {
+			if _, err := r.commodore.UpdateArtifactSize(ctx, tenantID, assetType, hash, sizeBytes); err != nil {
+				r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to repair Commodore artifact size projection")
 				continue
 			}
 			count++

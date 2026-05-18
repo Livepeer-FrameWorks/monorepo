@@ -10,6 +10,7 @@ import (
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
+	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -1035,7 +1036,7 @@ func (r *Resolver) DoDeleteDVR(ctx context.Context, dvrHash string) (model.Delet
 }
 
 // DoListDVRRequests lists DVR recordings with cursor pagination
-func (r *Resolver) DoListDVRRequests(ctx context.Context, streamID *string, pagination *pb.CursorPaginationRequest) (*pb.ListDVRRecordingsResponse, error) {
+func (r *Resolver) DoListDVRRequests(ctx context.Context, streamID *string, pagination *pb.CursorPaginationRequest, opts ...commodoreclient.MediaListOptions) (*pb.ListDVRRecordingsResponse, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo: list DVR requests")
 		now := time.Now()
@@ -1089,7 +1090,7 @@ func (r *Resolver) DoListDVRRequests(ctx context.Context, streamID *string, pagi
 	if err != nil {
 		return nil, err
 	}
-	out, err := r.Clients.Commodore.ListDVRRequests(ctx, tenantID, normalizedStreamID, pagination)
+	out, err := r.Clients.Commodore.ListDVRRequests(ctx, tenantID, normalizedStreamID, pagination, opts...)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to list DVR requests")
 		return nil, fmt.Errorf("failed to list DVR requests: %w", err)
@@ -1262,7 +1263,7 @@ func (r *Resolver) buildStreamsConnectionFromSlice(streams []*pb.Stream, first *
 }
 
 // DoGetClipsConnection retrieves clips with Relay-style cursor pagination
-func (r *Resolver) DoGetClipsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string) (*model.ClipsConnection, error) {
+func (r *Resolver) DoGetClipsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string, input ...*model.MediaArtifactConnectionInput) (*model.ClipsConnection, error) {
 	// Build cursor pagination request with bidirectional support
 	paginationReq := &pb.CursorPaginationRequest{
 		First: int32(pagination.DefaultLimit),
@@ -1299,7 +1300,11 @@ func (r *Resolver) DoGetClipsConnection(ctx context.Context, streamID *string, f
 	}
 
 	// gRPC uses context metadata for auth (set by userContextInterceptor)
-	clipsResp, err := r.Clients.Commodore.GetClips(ctx, tenantID, normalizedStreamID, paginationReq)
+	var opts commodoreclient.MediaListOptions
+	if len(input) > 0 {
+		opts = mediaListOptionsFromInput(input[0])
+	}
+	clipsResp, err := r.Clients.Commodore.GetClips(ctx, tenantID, normalizedStreamID, paginationReq, opts)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get clips")
 		return nil, fmt.Errorf("failed to get clips: %w", err)
@@ -1394,7 +1399,7 @@ func (r *Resolver) buildClipsConnectionFromProto(clips []*pb.ClipInfo, paginatio
 }
 
 // DoGetDVRRecordingsConnection retrieves DVR recordings with Relay-style cursor pagination
-func (r *Resolver) DoGetDVRRecordingsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string) (*model.DVRRecordingsConnection, error) {
+func (r *Resolver) DoGetDVRRecordingsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string, input ...*model.MediaArtifactConnectionInput) (*model.DVRRecordingsConnection, error) {
 	// Build cursor pagination request with bidirectional support
 	paginationReq := &pb.CursorPaginationRequest{
 		First: int32(pagination.DefaultLimit),
@@ -1413,7 +1418,11 @@ func (r *Resolver) DoGetDVRRecordingsConnection(ctx context.Context, streamID *s
 	}
 
 	// Call the internal method that fetches from gRPC
-	response, err := r.DoListDVRRequests(ctx, streamID, paginationReq)
+	var opts commodoreclient.MediaListOptions
+	if len(input) > 0 {
+		opts = mediaListOptionsFromInput(input[0])
+	}
+	response, err := r.DoListDVRRequests(ctx, streamID, paginationReq, opts)
 	if err != nil {
 		return nil, err
 	}
