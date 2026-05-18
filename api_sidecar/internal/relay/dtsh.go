@@ -30,6 +30,8 @@ import (
 // (clip/<stream>/<file>.dtsh). It selects the nested sidecar layout so
 // generated sidecars land next to the clip's media file.
 func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, streamInternal string) {
+	forceCloseForMistReader(c)
+
 	nestedPath := s.nestedSidecarPathFor(kind, file, streamInternal)
 	if nestedPath != "" {
 		if info, err := os.Stat(nestedPath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
@@ -212,6 +214,8 @@ func (s *Server) putClipRoute(c *gin.Context) {
 //     sidecar up on its next pass if the direct PUT failed or no
 //     presigned URL was minted.
 func (s *Server) putSidecarWithStream(c *gin.Context, kind, streamInternal string) {
+	forceCloseForMistReader(c)
+
 	file := strings.TrimPrefix(c.Param("file"), "/")
 	if !safeRelayPathSegment(file) {
 		c.AbortWithStatus(http.StatusNotFound)

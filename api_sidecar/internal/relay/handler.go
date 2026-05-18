@@ -110,6 +110,8 @@ func parseClipWildcardPath(p string) (string, string) {
 }
 
 func (s *Server) serveFileWithStream(c *gin.Context, kind, streamInternal string) {
+	forceCloseForMistReader(c)
+
 	file := c.Param("file")
 	if !safeRelayPathSegment(file) {
 		c.AbortWithStatus(http.StatusNotFound)
@@ -194,6 +196,8 @@ func (s *Server) serveWarmIfPresent(c *gin.Context, localPath string) bool {
 // admission policy (sequential one-shot). The route does not include a
 // hash subdirectory — uploads are flat under {basePath}/upload/.
 func (s *Server) serveUpload(c *gin.Context) {
+	forceCloseForMistReader(c)
+
 	file := c.Param("file")
 	if !safeRelayPathSegment(file) {
 		c.AbortWithStatus(http.StatusNotFound)
@@ -242,6 +246,14 @@ func (s *Server) serveUpload(c *gin.Context) {
 	// Upload reads are always memory-only — sequential one-shot. Bypass disk
 	// admission entirely.
 	s.streamRangeNoCacheWithOptions(c, res, noCacheOptions{RetryFullOn416: true})
+}
+
+func forceCloseForMistReader(c *gin.Context) {
+	if !strings.Contains(c.Request.UserAgent(), "MistServer") {
+		return
+	}
+	c.Request.Close = true
+	c.Writer.Header().Set("Connection", "close")
 }
 
 // fetchAndServe is the cold-playback dispatcher. HEAD passes straight

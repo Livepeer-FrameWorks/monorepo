@@ -118,6 +118,16 @@ func doGet(t *testing.T, url string) (*http.Response, error) {
 	return http.DefaultClient.Do(req)
 }
 
+func doMistGet(t *testing.T, url string) (*http.Response, error) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "MistServer/Unknown")
+	return http.DefaultClient.Do(req)
+}
+
 func TestServeWarmFile(t *testing.T) {
 	dir := t.TempDir()
 	hash := "abc"
@@ -135,13 +145,16 @@ func TestServeWarmFile(t *testing.T) {
 	ts := mount(t, s)
 	defer ts.Close()
 
-	resp, err := doGet(t, ts.URL+"/internal/artifact/vod/"+file)
+	resp, err := doMistGet(t, ts.URL+"/internal/artifact/vod/"+file)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	if !resp.Close {
+		t.Fatal("expected warm relay response to close the connection for Mist URIReader")
 	}
 	got, _ := io.ReadAll(resp.Body)
 	if !bytes.Equal(got, body) {
