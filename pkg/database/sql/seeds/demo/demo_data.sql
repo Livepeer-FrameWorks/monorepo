@@ -955,6 +955,21 @@ ON CONFLICT (dvr_hash) DO UPDATE SET
     origin_cluster_id = EXCLUDED.origin_cluster_id,
     updated_at = NOW();
 
+INSERT INTO commodore.dvr_chapter_playback (
+    chapter_id, tenant_id, playback_id, artifact_hash, created_at, updated_at
+) VALUES (
+    '34d74b7acd7ec8cf78f6cc8c9f031a8a',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    'chp_demo_recording_001',
+    '34d74b7acd7ec8cf78f6cc8c9f031a8a',
+    NOW() - INTERVAL '4 hours',
+    NOW() - INTERVAL '4 hours'
+)
+ON CONFLICT (chapter_id) DO UPDATE SET
+    playback_id = EXCLUDED.playback_id,
+    artifact_hash = EXCLUDED.artifact_hash,
+    updated_at = NOW();
+
 -- ============================================================================
 -- COMMODORE: Demo VOD Assets (Business Registry)
 -- ============================================================================
@@ -1107,6 +1122,23 @@ INSERT INTO foghorn.artifacts (
     NOW() - INTERVAL '2 days',
     NOW() - INTERVAL '1 day'
 ),
+-- Demo DVR chapter artifact (hidden finalized VOD for the seeded recording)
+(
+    '34d74b7acd7ec8cf78f6cc8c9f031a8a',
+    'vod',
+    'demo_live_stream_001',
+    '34d74b7acd7ec8cf78f6cc8c9f031a8a',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    'ready',
+    453741,
+    NULL,
+    'mkv',
+    'local',
+    'pending',
+    NOW() + INTERVAL '7 days',
+    NOW() - INTERVAL '4 hours',
+    NOW() - INTERVAL '4 hours'
+),
 -- Demo VOD asset (ready, warmed to edge)
 (
     'c3d4e5f678901234567890123456abcd',      -- Must match on-disk filename
@@ -1162,6 +1194,23 @@ ON CONFLICT (artifact_hash) DO UPDATE SET
     status = EXCLUDED.status,
     updated_at = NOW();
 
+UPDATE foghorn.artifacts
+SET artifact_type = 'vod',
+    stream_internal_name = 'demo_live_stream_001',
+    internal_name = '34d74b7acd7ec8cf78f6cc8c9f031a8a',
+    tenant_id = '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    status = 'ready',
+    size_bytes = 453741,
+    manifest_path = NULL,
+    format = 'mkv',
+    storage_location = 'local',
+    sync_status = 'pending',
+    origin_type = 'dvr_chapter',
+    origin_id = '34d74b7acd7ec8cf78f6cc8c9f031a8a',
+    library_visible = FALSE,
+    updated_at = NOW()
+WHERE artifact_hash = '34d74b7acd7ec8cf78f6cc8c9f031a8a';
+
 -- ============================================================================
 -- FOGHORN: DVR segment ledger (per-segment source of truth)
 -- ============================================================================
@@ -1201,8 +1250,9 @@ ON CONFLICT (artifact_hash, segment_name) DO NOTHING;
 -- ============================================================================
 -- FOGHORN: DVR chapter window (virtual view over the segment ledger)
 -- ============================================================================
--- One fixed-interval chapter spans the seeded recording. It is terminal
--- rather than playable because the seed set has no finalized chapter MKV.
+-- One fixed-interval chapter spans the seeded recording. Its playback
+-- surface is the hidden VOD artifact above, matching production chapter
+-- finalization rather than the retired chapter-manifest path.
 
 -- Demo chapter row: a single fixed-interval chapter covering the
 -- recorded DVR window. chapter_id is the canonical
@@ -1212,24 +1262,32 @@ ON CONFLICT (artifact_hash, segment_name) DO NOTHING;
 --   sha256("fedcba98765432109876543210fedcba|fixed_interval|3600|1779105600000|1779105618000")[:32]
 --   = 34d74b7acd7ec8cf78f6cc8c9f031a8a
 --
--- Demo seed data has no chapter MKV fixture, so the chapter must not
--- claim to be finalized/playable.
 INSERT INTO foghorn.dvr_chapters (
     chapter_id, artifact_hash, mode, interval_seconds,
     start_ms, end_ms, is_current,
     state, playback_artifact_hash,
-    segment_count, has_gaps, created_at
+    playback_id, segment_count, has_gaps,
+    actual_media_start_ms, actual_media_end_ms,
+    created_at
 ) VALUES (
     '34d74b7acd7ec8cf78f6cc8c9f031a8a',
     'fedcba98765432109876543210fedcba',
     'fixed_interval', 3600,
     1779105600000, 1779105618000,
     false,
-    'failed_source_missing', NULL,
-    2, false,
+    'finalized', '34d74b7acd7ec8cf78f6cc8c9f031a8a',
+    'chp_demo_recording_001', 2, false,
+    1779105600000, 1779105618000,
     NOW() - INTERVAL '4 hours'
 )
-ON CONFLICT (chapter_id) DO NOTHING;
+ON CONFLICT (chapter_id) DO UPDATE SET
+    state = EXCLUDED.state,
+    playback_artifact_hash = EXCLUDED.playback_artifact_hash,
+    playback_id = EXCLUDED.playback_id,
+    segment_count = EXCLUDED.segment_count,
+    has_gaps = EXCLUDED.has_gaps,
+    actual_media_start_ms = EXCLUDED.actual_media_start_ms,
+    actual_media_end_ms = EXCLUDED.actual_media_end_ms;
 
 -- ============================================================================
 -- FOGHORN: VOD Metadata (User-Uploaded Video Details)
@@ -1334,6 +1392,17 @@ INSERT INTO foghorn.artifact_nodes (
     513176,
     7,
     NOW() - INTERVAL '1 day',
+    NOW(),
+    false
+),
+-- Finalized chapter VOD for the seeded DVR on edge-node-1
+(
+    '34d74b7acd7ec8cf78f6cc8c9f031a8a',
+    'edge-node-1',
+    '/var/lib/mistserver/recordings/vod/34d74b7acd7ec8cf78f6cc8c9f031a8a.mkv',
+    453741,
+    7,
+    NOW() - INTERVAL '3 hours',
     NOW(),
     false
 ),
