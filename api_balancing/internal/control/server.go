@@ -6513,11 +6513,10 @@ func getChandlerBaseURL() string {
 	return chandlerBase
 }
 
-// chandlerPerClusterCache caches per-cluster Chandler base URLs (chandler.<slug>.<base>)
-// resolved via Quartermaster. 5-minute TTL per cluster. The cache is keyed by
-// cluster_id; values are the fully-formed `https://chandler.<slug>.<base-domain>`
-// string. Empty cluster_id and resolution failures are NOT cached so transient
-// Quartermaster outages don't poison subsequent lookups.
+// chandlerPerClusterCache caches per-cluster Chandler asset origins resolved
+// via Quartermaster. 5-minute TTL per cluster. The cache is keyed by
+// cluster_id; empty cluster_id and resolution failures are NOT cached so
+// transient Quartermaster outages don't poison subsequent lookups.
 var (
 	chandlerPerClusterMu    sync.RWMutex
 	chandlerPerClusterCache = map[string]chandlerCachedURL{}
@@ -6530,12 +6529,12 @@ type chandlerCachedURL struct {
 
 const chandlerPerClusterTTL = 5 * time.Minute
 
-// getChandlerBaseURLForCluster returns the Chandler base URL for the named
-// cluster — `https://chandler.<cluster-slug>.<cluster-base-domain>` derived
-// from Quartermaster cluster metadata. Per-cluster cache with a 5-minute TTL
-// per entry; cache state is independent of `resolvedChandlerBaseURL`, so a
-// per-cluster lookup never mutates the platform-level Chandler URL that other
-// callers depend on.
+// getChandlerBaseURLForCluster returns the public Chandler asset origin for
+// the named cluster. Local/single-node deployments set CHANDLER_BASE_URL so
+// asset URLs stay on the nginx /assets route; managed deployments can derive a
+// per-cluster Chandler origin from Quartermaster metadata. Per-cluster cache
+// state is independent of `resolvedChandlerBaseURL`, so a per-cluster lookup
+// never mutates the platform-level Chandler URL that other callers depend on.
 //
 // Returns "" if the cluster ID is empty, no cluster lookup is configured, the
 // Quartermaster lookup fails, or the cluster has no slug/base-domain.

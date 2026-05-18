@@ -1,9 +1,8 @@
 // Package clusterurls is an in-process snapshot of cluster_id → Chandler
-// base URL, populated from Quartermaster on a fixed interval. Read paths
+// asset origin, populated from Quartermaster on a fixed interval. Read paths
 // (ListStreams/GetClips/etc.) hit it via ChandlerBase without any network
-// round-trip per row. Mirrors the URL shape used by Foghorn at
-// api_balancing/internal/control/server.go:6267 so live and artifact
-// paths can never disagree on a Chandler URL.
+// round-trip per row. Mirrors the URL shape used by Foghorn so live and
+// artifact paths can never disagree on a Chandler URL.
 package clusterurls
 
 import (
@@ -25,7 +24,7 @@ const (
 	listPageLimit          = 100
 )
 
-// Resolver holds an atomic snapshot of cluster_id → Chandler base URL.
+// Resolver holds an atomic snapshot of cluster_id → Chandler asset origin.
 // Read paths call ChandlerBase; writes happen only from the refresh
 // goroutine via Refresh.
 type Resolver struct {
@@ -161,10 +160,10 @@ func (r *Resolver) BuildThumbnailAssets(clusterID, assetKey string) *pb.Thumbnai
 	}
 }
 
-// chandlerBaseFor mirrors the managed-cluster branch of
-// api_balancing/internal/control/server.go. Local/single-node deployments
-// bypass this path through CHANDLER_BASE_URL because Chandler is exposed by
-// the node's public HTTP surface, not by a per-cluster hostname.
+// chandlerBaseFor mirrors the managed-deployment branch of
+// api_balancing/internal/control/server.go. Local/single-node deployments use
+// CHANDLER_BASE_URL because Chandler is exposed by the same public nginx
+// surface as the app, under /assets.
 func chandlerBaseFor(c *pb.InfrastructureCluster) string {
 	baseDomain := strings.TrimSpace(c.GetBaseUrl())
 	if baseDomain == "" {
