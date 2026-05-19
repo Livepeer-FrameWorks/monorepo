@@ -138,7 +138,12 @@
 - name: Node_tuning verify | assert sysctl runtime values
   ansible.builtin.assert:
     that:
-      - (item.stdout | trim | replace('\t', ' ')) == (item.item.value | string)
+      - >-
+        (item.stdout | trim | replace('\t', ' ')) == (item.item.value | string)
+        or (
+          ansible_facts.virtualization_type in ["docker", "container", "containerd", "podman"]
+          and item.item.key in node_tuning_container_runtime_sysctl_exceptions
+        )
     fail_msg: >-
       sysctl {{ item.item.key }}: expected {{ item.item.value }},
       runtime {{ item.stdout | trim }}
