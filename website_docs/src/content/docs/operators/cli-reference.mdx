@@ -1610,7 +1610,7 @@ frameworks edge provision --manifest edges.yaml
 1. Run preflight checks
 2. Apply system tuning (optional)
 3. Register node in Quartermaster (optional)
-4. Fetch TLS certificate from Navigator (optional)
+4. Deliver enrolled TLS/CA/site config through Foghorn `ConfigSeed`
 5. Generate and upload templates
 6. Start edge stack
 7. Verify HTTPS readiness
@@ -1628,11 +1628,16 @@ frameworks edge provision --manifest edges.yaml
 - `--timeout` - HTTPS readiness timeout (default: `3m`)
 - `--enrollment-token string` - Enrollment token for auto-provisioning (skips explicit domain flags)
 - `--manifest string` - Path to edge manifest file
+- `--cluster-manifest string` - Cluster manifest used to load platform `SERVICE_TOKEN` for edge manifest `register_qm`
 - `--parallel int` - Number of concurrent provisions (default: 1)
 - `--tune` - Apply sysctl/limits tuning
 - `--register` - Register node in Quartermaster (manual/admin path only — see note below)
 - `--fetch-cert` - Fetch TLS certificate from Navigator
 - `--skip-preflight` - Skip preflight checks
+- `--capability string` - Enabled capability for single-node provisioning; repeat for `ingest`, `edge`, `storage`, `processing`
+- `--bandwidth-mbps int` - Advertised edge bandwidth limit in Mbps; Helmsman writes it to MistServer `bwlimit` and reports it to Foghorn
+- `--max-transcodes int` - Maximum local transcodes reported by Helmsman
+- `--storage-capacity-bytes uint` - Local storage capacity limit reported by Helmsman
 
 `--register` is for the platform manual provisioning path, where an admin supplies `--pool-domain`/`--node-domain` directly without an enrollment token and wants to create the Quartermaster node row in the same step. It is rejected unless the active context uses the `platform` persona, and it is rejected when combined with `--enrollment-token` because the token path already registers the node through Foghorn's `PreRegisterEdge`. Manifest entries that set `register_qm: true` follow the same platform-only rule and cannot be combined with an enrollment token.
 

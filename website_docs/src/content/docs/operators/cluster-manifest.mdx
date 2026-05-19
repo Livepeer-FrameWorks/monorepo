@@ -577,10 +577,14 @@ root_domain: example.com
 pool_domain: edge.media-eu.example.com
 email: ops@example.com
 cluster_id: regional-production
+cluster_manifest: cluster.yaml
 enrollment_token: fw_edge_...
 hosts_file: clusters/edge/hosts.enc.yaml
-fetch_cert: true
 mode: docker
+capabilities: [ingest, edge, storage, processing]
+bandwidth_mbps: 2000
+max_transcodes: 4
+storage_capacity_bytes: 500000000000
 nodes:
   - name: edge-us-east-1
     ssh: admin@203.0.113.10
@@ -599,10 +603,15 @@ on the `frameworks edge provision` command when an explicit key is needed.
 - `root_domain` or `pool_domain` (at least one required)
 - `email` (ACME)
 - `cluster_id` (required when `register_qm: true`)
+- `cluster_manifest` (optional) - Cluster manifest used to load platform `SERVICE_TOKEN` for `register_qm`; relative paths resolve from the edge manifest directory. Can also be passed as `--cluster-manifest`.
 - `enrollment_token` (optional) - Token used for edge bootstrap
 - `hosts_file` (optional) - SOPS-encrypted edge host inventory
-- `fetch_cert` (optional) - Fetch certs from Navigator
+- `fetch_cert` (deprecated) - Ignored for edge manifests; enrolled edge TLS is delivered by Foghorn `ConfigSeed`
 - `mode` (optional) - Default node mode, `docker` by default or `native`
+- `capabilities` (optional) - Default enabled Helmsman capabilities: `ingest`, `edge`, `storage`, `processing`. Empty means all capabilities enabled.
+- `bandwidth_mbps` (optional) - Default node bandwidth limit advertised by Helmsman and reconciled into MistServer `bwlimit`.
+- `max_transcodes` (optional) - Default local transcoding concurrency limit reported by Helmsman.
+- `storage_capacity_bytes` (optional) - Default local storage capacity reported by Helmsman.
 - `nodes` (required)
 
 Edge telemetry ingress is control-plane managed. Enrolled edge nodes receive remote-write URL and auth material from Foghorn during preregistration and subsequent `ConfigSeed` updates.
@@ -616,6 +625,10 @@ Edge telemetry ingress is control-plane managed. Enrolled edge nodes receive rem
 - `apply_tune` (optional)
 - `register_qm` (optional)
 - `mode` (optional) - Per-node override, `docker` or `native`
+- `capabilities` (optional) - Per-node override for enabled capabilities
+- `bandwidth_mbps` (optional) - Per-node bandwidth override
+- `max_transcodes` (optional) - Per-node transcode limit override
+- `storage_capacity_bytes` (optional) - Per-node storage capacity override
 - `labels` (optional)
 
 ---
