@@ -389,8 +389,8 @@ func (d *ProcessingDispatcher) markArtifactStatus(ctx context.Context, job *proc
 	}
 	if _, err := d.db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
-		   SET status = $3,
-		       error_message = CASE WHEN $3 = 'processing' THEN NULL ELSE error_message END,
+		   SET status = $3::text,
+		       error_message = CASE WHEN $3::text = 'processing' THEN NULL ELSE error_message END,
 		       updated_at = NOW()
 		 WHERE artifact_hash = $1
 		   AND tenant_id::text = $2

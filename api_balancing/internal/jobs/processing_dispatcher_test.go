@@ -50,7 +50,7 @@ func TestProcessingDispatcherProjectsArtifactProcessingStatus(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectExec("UPDATE foghorn.artifacts").
+	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = \$3::text,\s+error_message = CASE WHEN \$3::text = 'processing'`).
 		WithArgs("art-1", "tenant-1", "processing").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
