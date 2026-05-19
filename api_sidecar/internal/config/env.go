@@ -154,6 +154,23 @@ func GetStorageCapacityBytes() uint64 {
 	return parseUint64(os.Getenv("HELMSMAN_STORAGE_CAPACITY_BYTES"))
 }
 
+// ConfiguredBandwidthLimitBytesPerSec returns an operator-pinned node bandwidth
+// limit. The canonical env uses bytes/sec because Foghorn's NodeLifecycleUpdate
+// stores bw_limit in bytes/sec; HELMSMAN_BW_LIMIT_MBPS is accepted for operator
+// convenience.
+func ConfiguredBandwidthLimitBytesPerSec() uint64 {
+	if v := parseUint64(os.Getenv("HELMSMAN_BW_LIMIT_BYTES_PER_SEC")); v > 0 {
+		return v
+	}
+	if v := parseUint64(os.Getenv("HELMSMAN_BW_LIMIT_BYTES")); v > 0 {
+		return v
+	}
+	if mbps := parseUint64(os.Getenv("HELMSMAN_BW_LIMIT_MBPS")); mbps > 0 {
+		return mbps * 1000 * 1000 / 8
+	}
+	return 0
+}
+
 // HardwareSpecs holds detected hardware information
 type HardwareSpecs struct {
 	CPUCores int32

@@ -187,6 +187,9 @@ func (m *Manager) reconcile() {
 	}
 
 	desiredConfig["prometheus"] = mist.MetricsConfigValue
+	if bwLimit := ConfiguredBandwidthLimitBytesPerSec(); bwLimit > 0 {
+		desiredConfig["bwlimit"] = bwLimit
+	}
 
 	// Trusted proxies: localhost (IPv4 + IPv6) + "nginx" Docker service name
 	desiredConfig["trustedproxy"] = []string{"127.0.0.1", "::1", "localhost", "nginx"}

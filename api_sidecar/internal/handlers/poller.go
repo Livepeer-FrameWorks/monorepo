@@ -1789,7 +1789,9 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 			}
 		}
 
-		if limit, ok := jsonData["bwlimit"].(float64); ok && limit > 0 {
+		if limit := sidecarcfg.ConfiguredBandwidthLimitBytesPerSec(); limit > 0 {
+			nodeUpdate.BwLimit = limit
+		} else if limit, ok := jsonData["bwlimit"].(float64); ok && limit > 0 {
 			nodeUpdate.BwLimit = uint64(limit)
 		} else {
 			// Default to 1Gbps when MistServer doesn't report bwlimit (same as C++ default)
@@ -1815,6 +1817,9 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 				nodeUpdate.OutputsJson = string(outputsJSON)
 			}
 		}
+	}
+	if nodeUpdate.BwLimit == 0 {
+		nodeUpdate.BwLimit = sidecarcfg.ConfiguredBandwidthLimitBytesPerSec()
 	}
 
 	// Get Disk Usage from OS

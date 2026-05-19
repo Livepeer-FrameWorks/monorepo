@@ -501,6 +501,22 @@ func TestConvertNodeAPI_MissingFields(t *testing.T) {
 	}
 }
 
+func TestConvertNodeAPI_ConfiguredBandwidthLimitOverridesMist(t *testing.T) {
+	t.Setenv("HELMSMAN_BW_LIMIT_BYTES_PER_SEC", "250000000")
+	pm := &PrometheusMonitor{baseURL: "http://mist:4242"}
+	jsonData := map[string]interface{}{
+		"cpu":     float64(10),
+		"bwlimit": float64(134217728),
+	}
+
+	trigger := pm.convertNodeAPIToMistTrigger("node-override", jsonData, logging.NewLogger())
+	nlu := trigger.GetNodeLifecycleUpdate()
+
+	if nlu.BwLimit != 250000000 {
+		t.Fatalf("expected configured bwlimit 250000000, got %d", nlu.BwLimit)
+	}
+}
+
 func TestConvertNodeAPI_NilData(t *testing.T) {
 	pm := &PrometheusMonitor{baseURL: "http://mist:4242"}
 	trigger := pm.convertNodeAPIToMistTrigger("node-3", nil, logging.NewLogger())
