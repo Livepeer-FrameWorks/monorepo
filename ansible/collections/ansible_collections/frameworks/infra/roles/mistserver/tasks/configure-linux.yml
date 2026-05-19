@@ -1,4 +1,14 @@
 ---
+- name: Render MistServer config
+  ansible.builtin.template:
+    src: mistserver.conf.j2
+    dest: "{{ mistserver_config_file }}"
+    owner: "{{ mistserver_user }}"
+    group: "{{ mistserver_group }}"
+    mode: "0600"
+    force: false
+  notify: mistserver restart
+
 - name: Render env file
   ansible.builtin.copy:
     dest: "{{ mistserver_env_file }}"
