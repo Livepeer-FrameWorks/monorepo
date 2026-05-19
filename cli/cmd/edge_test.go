@@ -58,6 +58,46 @@ func TestCanonicalEdgeNodeID(t *testing.T) {
 	}
 }
 
+func TestEdgeManifestNodeDomain(t *testing.T) {
+	tests := []struct {
+		name       string
+		rootDomain string
+		clusterID  string
+		subdomain  string
+		want       string
+	}{
+		{
+			name:       "cluster scoped node domain",
+			rootDomain: "frameworks.network",
+			clusterID:  "media-eu-1",
+			subdomain:  "edge-eu-1",
+			want:       "edge-eu-1.media-eu-1.frameworks.network",
+		},
+		{
+			name:       "explicit fqdn is preserved",
+			rootDomain: "frameworks.network",
+			clusterID:  "media-eu-1",
+			subdomain:  "edge-eu-1.example.net",
+			want:       "edge-eu-1.example.net",
+		},
+		{
+			name:       "fallback when cluster absent",
+			rootDomain: "frameworks.network",
+			subdomain:  "edge-eu-1",
+			want:       "edge-eu-1.frameworks.network",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := edgeManifestNodeDomain(tt.rootDomain, tt.clusterID, tt.subdomain)
+			if got != tt.want {
+				t.Fatalf("edgeManifestNodeDomain(%q, %q, %q) = %q, want %q", tt.rootDomain, tt.clusterID, tt.subdomain, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEdgeManifestChannelNotVersion(t *testing.T) {
 	// Verify that manifest.Version (schema version) is never used as a release
 	// version. Only manifest.Channel should be used for release resolution.

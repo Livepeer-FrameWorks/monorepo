@@ -17,8 +17,9 @@ func TestEdgeProvisionConfig_PrimaryDomain(t *testing.T) {
 		nodeDomain string
 		want       string
 	}{
-		{"pool takes precedence", "edge.example.com", "edge-1.example.com", "edge.example.com"},
-		{"falls back to node domain", "", "edge-1.example.com", "edge-1.example.com"},
+		{"node takes precedence", "edge.example.com", "edge-1.example.com", "edge-1.example.com"},
+		{"falls back to pool domain", "edge.example.com", "", "edge.example.com"},
+		{"trims domains", " edge.example.com ", " edge-1.example.com ", "edge-1.example.com"},
 		{"both empty", "", "", ""},
 	}
 	for _, tt := range tests {
@@ -26,6 +27,27 @@ func TestEdgeProvisionConfig_PrimaryDomain(t *testing.T) {
 			c := EdgeProvisionConfig{PoolDomain: tt.poolDomain, NodeDomain: tt.nodeDomain}
 			if got := c.primaryDomain(); got != tt.want {
 				t.Errorf("primaryDomain() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEdgeProvisionConfig_VerificationDomain(t *testing.T) {
+	tests := []struct {
+		name       string
+		poolDomain string
+		nodeDomain string
+		want       string
+	}{
+		{"node takes precedence", "edge.example.com", "edge-1.example.com", "edge-1.example.com"},
+		{"falls back to pool domain", "edge.example.com", "", "edge.example.com"},
+		{"both empty", "", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := EdgeProvisionConfig{PoolDomain: tt.poolDomain, NodeDomain: tt.nodeDomain}
+			if got := c.verificationDomain(); got != tt.want {
+				t.Errorf("verificationDomain() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -134,6 +156,9 @@ func TestWriteEdgeTemplates_DockerMode(t *testing.T) {
 	if !strings.Contains(content, "helmsman:18007") {
 		t.Error("Bootstrap Caddyfile should contain Docker upstream helmsman:18007 for webhooks")
 	}
+	if !strings.Contains(content, "handle /health") || !strings.Contains(content, `respond "ok" 200`) {
+		t.Error("Bootstrap Caddyfile should expose a 200 /health endpoint")
+	}
 	if !strings.Contains(content, "503") {
 		t.Error("Bootstrap Caddyfile should serve 503 during bootstrap")
 	}
@@ -211,6 +236,9 @@ func TestWriteEdgeTemplates_NativeMode(t *testing.T) {
 	if !strings.Contains(content, "localhost:2019") {
 		t.Error("Bootstrap Caddyfile should contain native admin localhost:2019")
 	}
+	if !strings.Contains(content, "handle /health") || !strings.Contains(content, `respond "ok" 200`) {
+		t.Error("Bootstrap Caddyfile should expose a 200 /health endpoint")
+	}
 
 	envContent, _ := os.ReadFile(filepath.Join(tmpDir, ".edge.env"))
 	if !strings.Contains(string(envContent), "DEPLOY_MODE=native") {
@@ -238,6 +266,9 @@ func TestWriteEdgeTemplates_BootstrapCaddyfile(t *testing.T) {
 	}
 	if strings.Contains(content, "tls /etc") {
 		t.Error("Bootstrap Caddyfile should NOT contain file-based TLS directive")
+	}
+	if !strings.Contains(content, "handle /health") || !strings.Contains(content, `respond "ok" 200`) {
+		t.Error("Bootstrap Caddyfile should expose a 200 /health endpoint")
 	}
 	if !strings.Contains(content, "503") {
 		t.Error("Bootstrap Caddyfile should serve 503")

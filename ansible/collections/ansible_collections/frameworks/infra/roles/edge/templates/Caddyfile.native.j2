@@ -8,6 +8,10 @@
 :443 {
     tls internal
 
+    handle /health {
+        respond "ok" 200
+    }
+
     handle_path /webhooks/* {
         reverse_proxy localhost:18007
     }

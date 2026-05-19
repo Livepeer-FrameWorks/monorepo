@@ -869,8 +869,13 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 			if cmd.Flags().Changed("mode") {
 				nodeMode = cliMode
 			}
+			clusterID := node.ResolvedCluster(manifest.ClusterID)
+			nodeDomain := edgeManifestNodeDomain(manifest.RootDomain, clusterID, node.Subdomain)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Node: %-20s SSH: %-30s Region: %-12s Mode: %s\n",
 				node.Name, node.SSH, node.Region, nodeMode)
+			if nodeDomain != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "    Domain: %s\n", nodeDomain)
+			}
 			caps := node.ResolvedCapabilities(manifest.Capabilities)
 			if bw := node.ResolvedBandwidthMbps(manifest.BandwidthMbps); bw > 0 || len(caps) > 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "    Capacity: bandwidth_mbps=%d capabilities=%s\n", bw, strings.Join(caps, ","))
@@ -922,22 +927,14 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 				SSHAddr:  n.SSH,
 			}
 
-			// Build node domain
-			nodeDomain := ""
-			if n.Subdomain != "" {
-				if manifest.RootDomain != "" {
-					nodeDomain = n.Subdomain + "." + manifest.RootDomain
-				}
-			}
-
-			// Use pool domain from manifest
+			// Keep the manifest pool domain available for compatibility, but
+			// the concrete node domain is the runtime identity for this host.
 			poolDomain := manifest.PoolDomain
+			clusterID := n.ResolvedCluster(manifest.ClusterID)
+			nodeDomain := edgeManifestNodeDomain(manifest.RootDomain, clusterID, n.Subdomain)
 
-			// Primary domain for Caddy config
-			primaryDomain := poolDomain
-			if primaryDomain == "" {
-				primaryDomain = nodeDomain
-			}
+			// Domain used for the node's own runtime identity and readiness.
+			primaryDomain := firstNonEmpty(nodeDomain, poolDomain)
 
 			fmt.Fprintf(cmd.OutOrStdout(), "\n[%s] Starting provisioning...\n", n.Name)
 
@@ -954,7 +951,6 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 			if cmd.Flags().Changed("version") {
 				nodeVersion = cliVersion
 			}
-			clusterID := n.ResolvedCluster(manifest.ClusterID)
 			err := provisionSingleEdgeNode(cmd, controlCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, clusterID, n.Region, manifest.Email, token, n.ExternalIP, false, n.ApplyTune, n.RegisterQM, timeout, nodeMode, nodeVersion, edgeManifestFoghornGRPCAddr(manifest.RootDomain, clusterID), controlCABundlePEM, "", "", n.ResolvedCapabilities(manifest.Capabilities), n.ResolvedBandwidthMbps(manifest.BandwidthMbps), n.ResolvedMaxTranscodes(manifest.MaxTranscodes), n.ResolvedStorageBytes(manifest.StorageBytes), dryRun)
 			if err != nil {
 				result.Error = err
@@ -1120,6 +1116,25 @@ func edgeManifestFoghornGRPCAddr(rootDomain, clusterID string) string {
 		return ""
 	}
 	return fmt.Sprintf("foghorn.%s.%s:%d", clusterID, rootDomain, defaultGRPCPort("foghorn"))
+}
+
+func edgeManifestNodeDomain(rootDomain, clusterID, subdomain string) string {
+	rootDomain = strings.Trim(strings.TrimSpace(rootDomain), ".")
+	clusterID = strings.TrimSpace(clusterID)
+	if clusterID != "" {
+		clusterID = pkgdns.SanitizeLabel(clusterID)
+	}
+	label := strings.Trim(strings.TrimSpace(subdomain), ".")
+	if label == "" || rootDomain == "" {
+		return ""
+	}
+	if strings.Contains(label, ".") {
+		return label
+	}
+	if clusterID == "" {
+		return label + "." + rootDomain
+	}
+	return label + "." + clusterID + "." + rootDomain
 }
 
 // provisionSingleEdgeNode provisions a single edge node using EdgeProvisioner.

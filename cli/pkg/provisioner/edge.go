@@ -88,10 +88,14 @@ func generateEdgePassword() (string, error) {
 }
 
 func (c *EdgeProvisionConfig) primaryDomain() string {
-	if c.PoolDomain != "" {
-		return c.PoolDomain
+	if domain := strings.TrimSpace(c.NodeDomain); domain != "" {
+		return domain
 	}
-	return c.NodeDomain
+	return strings.TrimSpace(c.PoolDomain)
+}
+
+func (c *EdgeProvisionConfig) verificationDomain() string {
+	return c.primaryDomain()
 }
 
 func (c *EdgeProvisionConfig) resolvedMode() string {
@@ -174,7 +178,7 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 		return nil
 	}
 
-	domain := config.primaryDomain()
+	domain := config.verificationDomain()
 	if domain != "" {
 		fmt.Printf("[7/7] Verifying HTTPS readiness at %s...\n", domain)
 		timeout := config.Timeout
@@ -279,6 +283,9 @@ func (e *EdgeProvisioner) verifyHTTPS(domain string, timeout time.Duration) erro
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
 	}
 	deadline := time.Now().Add(timeout)
+	var lastErr error
+	var lastStatus string
+	var lastTLS string
 
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), httpClient.Timeout)
@@ -289,23 +296,68 @@ func (e *EdgeProvisioner) verifyHTTPS(domain string, timeout time.Duration) erro
 		}
 		resp, err := httpClient.Do(req)
 		cancel()
+		lastErr = err
 		if err == nil && resp != nil && resp.StatusCode == 200 {
+			tlsSummary := tlsConnectionSummary(resp.TLS)
 			if resp.Body != nil {
 				_ = resp.Body.Close()
 			}
-			fmt.Printf("  HTTPS ready at %s\n", url)
+			fmt.Printf("  HTTPS ready at %s (%s)\n", url, tlsSummary)
 			return nil
 		}
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
+		if resp != nil {
+			lastStatus = resp.Status
+			lastTLS = tlsConnectionSummary(resp.TLS)
+			if resp.Body != nil {
+				_ = resp.Body.Close()
+			}
 		}
 		if time.Now().After(deadline) {
-			if err != nil {
-				return fmt.Errorf("HTTPS check failed: %w", err)
+			if lastErr != nil {
+				return fmt.Errorf("HTTPS check failed for %s: %w", url, lastErr)
 			}
-			return fmt.Errorf("HTTPS not ready before timeout")
+			if lastStatus != "" {
+				return fmt.Errorf("HTTPS check failed for %s: last status %s (%s)", url, lastStatus, lastTLS)
+			}
+			return fmt.Errorf("HTTPS check failed for %s: not ready before timeout", url)
 		}
 		time.Sleep(5 * time.Second)
+	}
+}
+
+func tlsConnectionSummary(state *tls.ConnectionState) string {
+	if state == nil {
+		return "tls: unavailable"
+	}
+	parts := []string{"tls=" + tlsVersionName(state.Version)}
+	if len(state.PeerCertificates) == 0 {
+		return strings.Join(parts, " ")
+	}
+	cert := state.PeerCertificates[0]
+	if cn := strings.TrimSpace(cert.Subject.CommonName); cn != "" {
+		parts = append(parts, "subject="+cn)
+	}
+	if issuer := strings.TrimSpace(cert.Issuer.CommonName); issuer != "" {
+		parts = append(parts, "issuer="+issuer)
+	}
+	if len(cert.DNSNames) > 0 {
+		parts = append(parts, "dns="+strings.Join(cert.DNSNames, ","))
+	}
+	return strings.Join(parts, " ")
+}
+
+func tlsVersionName(version uint16) string {
+	switch version {
+	case tls.VersionTLS13:
+		return "1.3"
+	case tls.VersionTLS12:
+		return "1.2"
+	case tls.VersionTLS11:
+		return "1.1"
+	case tls.VersionTLS10:
+		return "1.0"
+	default:
+		return fmt.Sprintf("0x%x", version)
 	}
 }
 
