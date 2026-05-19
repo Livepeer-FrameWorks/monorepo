@@ -452,11 +452,15 @@ func (h *ProcessingJobHandler) startProcessingPush(log *logrus.Entry, mistClient
 			return fmt.Errorf("admission rejected: %w", decErr)
 		}
 	}
-	if err := mistClient.PushStart(streamName, outputPath); err != nil {
+	targetURI := outputPath + "#audio=all&video=all&meta=all&subtitle=all"
+	if err := mistClient.PushStart(streamName, targetURI); err != nil {
 		log.WithError(err).Error("Failed to start push")
 		return fmt.Errorf("push_start failed: %w", err)
 	}
-	log.WithField("output_path", outputPath).Info("Started push for processing stream")
+	log.WithFields(logrus.Fields{
+		"output_path": outputPath,
+		"target_uri":  targetURI,
+	}).Info("Started push for processing stream")
 	return nil
 }
 

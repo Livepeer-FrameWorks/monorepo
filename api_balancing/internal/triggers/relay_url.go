@@ -34,7 +34,7 @@ func buildVODRelayURL(nodeID, kind, artifactHash, format, streamInternal string)
 	}
 	ext := normalizeExt(format)
 	if ext == "" {
-		ext = ".mp4"
+		return ""
 	}
 	if kind == "clip" && streamInternal != "" {
 		return fmt.Sprintf("%s/internal/artifact/clip/%s/%s%s", base, url.PathEscape(streamInternal), artifactHash, ext)
@@ -94,6 +94,13 @@ type artifactDescriptor struct {
 	Format         string
 	ArtifactType   string
 	StreamInternal string
+}
+
+func selectArtifactRelayFormat(desc artifactDescriptor, warmFormat string) string {
+	if strings.TrimSpace(desc.Format) != "" {
+		return desc.Format
+	}
+	return warmFormat
 }
 
 func lookupArtifactDescriptor(ctx context.Context, artifactHash string) artifactDescriptor {

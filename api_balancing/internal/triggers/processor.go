@@ -1658,13 +1658,10 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 	// hit. The clip-writer nests as clips/<stream>/<hash>.<ext>, so
 	// passing the stream name lets the relay probe the nested warm path.
 	// VOD flat layout doesn't need it but the lookup is the same cost.
-	// Kind comes from the Commodore-resolved contentType above
-	// (authoritative for clip vs vod); foghorn.artifacts.artifact_type
-	// is the persisted mirror but Commodore is the source of truth.
+	// The DB format is the storage contract. Warm node state is telemetry
+	// and may lag seed or processing corrections, so it only fills blanks.
 	desc := lookupArtifactDescriptor(context.Background(), artifactHash)
-	if format == "" {
-		format = desc.Format
-	}
+	format = selectArtifactRelayFormat(desc, format)
 	if format != "" {
 		kind := kindFromAssetType(contentType)
 		if kind == "" {
@@ -1699,6 +1696,7 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		p.logger.WithFields(logging.Fields{
 			"artifact_hash": artifactHash,
 			"stream_name":   streamName,
+			"format":        format,
 			"relay_url":     relayURL,
 		}).Info("VOD STREAM_SOURCE routed through Helmsman read-through relay")
 		return relayURL, false, nil

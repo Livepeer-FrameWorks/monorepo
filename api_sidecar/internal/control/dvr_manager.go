@@ -650,9 +650,10 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 	// covering chapter is frozen (artifact + .dtsh durable on S3) and any
 	// overlapping clip leases have drained — so segments are never lost
 	// silently.
-	// Explicit audio/video selectors preserve parallel live audio renditions
-	// such as AAC and Opus instead of relying on protocol defaults.
-	targetURI := fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts#m3u8=../%s.m3u8&audio=all&video=all&subtitle=none&meta=none&split=%d&targetAge=%d&maxEntries=%d&append=1&noendlist=1&nounlink=1",
+	// Record only source A/V tracks. Live processing may add Opus or other
+	// derived renditions to the stream buffer; writing those into MPEG-TS/HLS
+	// makes MistInHLS reject the rolling DVR playlist on playback.
+	targetURI := fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts#m3u8=../%s.m3u8&audio=source&video=source&subtitle=none&meta=none&split=%d&targetAge=%d&maxEntries=%d&append=1&noendlist=1&nounlink=1",
 		job.OutputDir,
 		"segments",
 		job.DVRHash,

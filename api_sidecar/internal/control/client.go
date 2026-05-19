@@ -2636,7 +2636,27 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *pb.ThumbnailUplo
 			continue
 		}
 
-		if err := presignedClient.UploadFileToPresignedURL(ctx, upload.GetPresignedUrl(), localPath, nil); err != nil {
+		if upload.GetFileName() == "sprite.vtt" {
+			data, err := os.ReadFile(localPath)
+			if err != nil {
+				logger.WithFields(logging.Fields{
+					"file_name":  upload.GetFileName(),
+					"local_path": localPath,
+					"error":      err,
+				}).Error("Failed to read thumbnail VTT")
+				continue
+			}
+			normalized := normalizeThumbnailVTTReferences(string(data))
+			if err := presignedClient.UploadToPresignedURL(ctx, upload.GetPresignedUrl(), strings.NewReader(normalized), int64(len(normalized)), nil); err != nil {
+				logger.WithFields(logging.Fields{
+					"file_name":  upload.GetFileName(),
+					"local_path": localPath,
+					"s3_key":     upload.GetS3Key(),
+					"error":      err,
+				}).Error("Failed to upload thumbnail to S3")
+				continue
+			}
+		} else if err := presignedClient.UploadFileToPresignedURL(ctx, upload.GetPresignedUrl(), localPath, nil); err != nil {
 			logger.WithFields(logging.Fields{
 				"file_name":  upload.GetFileName(),
 				"local_path": localPath,
@@ -2667,4 +2687,17 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *pb.ThumbnailUplo
 		SentAt:  timestamppb.Now(),
 		Payload: &pb.ControlMessage_ThumbnailUploaded{ThumbnailUploaded: uploaded},
 	})
+}
+
+func normalizeThumbnailVTTReferences(vtt string) string {
+	lines := strings.Split(vtt, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		xywhIdx := strings.Index(trimmed, "#xywh=")
+		if xywhIdx < 0 || !strings.Contains(trimmed[:xywhIdx], ".jpg") {
+			continue
+		}
+		lines[i] = "sprite.jpg" + trimmed[xywhIdx:]
+	}
+	return strings.Join(lines, "\n")
 }
