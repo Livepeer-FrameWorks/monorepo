@@ -26,9 +26,11 @@ import (
 	"frameworks/cli/internal/templates"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/internal/xexec"
+	fwgitops "frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/mistdiag"
 	"frameworks/cli/pkg/provisioner"
+	"frameworks/cli/pkg/remoteaccess"
 	fwssh "frameworks/cli/pkg/ssh"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
@@ -1331,31 +1333,30 @@ func getRemoteExternalIP(ctx context.Context, sshTarget, sshKey string) (string,
 // Quartermaster auth. The normal edge bootstrap flow (Bridge +
 // enrollment token) does not need this function.
 func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, clusterID, externalIP, region string) error {
-	ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(cmd.Context(), 90*time.Second)
 	defer cancel()
 
 	fmt.Fprintln(cmd.OutOrStdout(), "    Resolving platform service token")
 	if err := ensureContextServiceToken(ctx, &cliCtx); err != nil {
 		return err
 	}
+
 	fmt.Fprintln(cmd.OutOrStdout(), "    Resolving Quartermaster gRPC endpoint")
-	ep, err := controlplane.ResolveGRPC(ctx, cliCtx, "quartermaster")
+	qmClient, qmAddr, cleanup, err := edgeQuartermasterRegistrationClient(ctx, cliCtx)
 	if err != nil {
 		return err
 	}
-	defer ep.Cleanup()
-	fmt.Fprintf(cmd.OutOrStdout(), "    Connecting to Quartermaster at %s\n", ep.Address)
-	qmClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:      ep.Address,
-		Timeout:       30 * time.Second,
-		ServiceToken:  cliCtx.Auth.ServiceToken,
-		AllowInsecure: ep.AllowInsecure,
-		ServerName:    ep.ServerName,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to connect to Quartermaster: %w", err)
-	}
+	defer cleanup()
+	fmt.Fprintf(cmd.OutOrStdout(), "    Connecting to Quartermaster at %s\n", qmAddr)
 	defer func() { _ = qmClient.Close() }()
+
+	fmt.Fprintln(cmd.OutOrStdout(), "    Checking Quartermaster gRPC health")
+	healthCtx, healthCancel := context.WithTimeout(ctx, 10*time.Second)
+	if err := qmClient.CheckHealth(healthCtx); err != nil {
+		healthCancel()
+		return fmt.Errorf("Quartermaster gRPC health check failed at %s: %w", qmAddr, err)
+	}
+	healthCancel()
 
 	nodeID := canonicalEdgeNodeID(nodeName)
 	if nodeID == "" {
@@ -1379,15 +1380,121 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, cluste
 		req.Region = &region
 	}
 
-	resp, err := qmClient.CreateNode(ctx, req)
+	fmt.Fprintln(cmd.OutOrStdout(), "    Calling Quartermaster CreateNode (deadline 30s)")
+	createCtx, createCancel := context.WithTimeout(ctx, 30*time.Second)
+	resp, err := qmClient.CreateNode(createCtx, req)
+	createCancel()
 	if err != nil {
-		return fmt.Errorf("failed to create node: %w", err)
+		return fmt.Errorf("failed to create node via Quartermaster at %s: %w", qmAddr, err)
 	}
 
 	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Node registered: %s (ID: %s)", nodeName, resp.GetNode().GetNodeId()))
 	ux.Success(cmd.OutOrStdout(), "Node registered (DNS will be synced by Navigator reconciler)")
 
 	return nil
+}
+
+func edgeQuartermasterRegistrationClient(ctx context.Context, cliCtx fwcfg.Context) (*quartermaster.GRPCClient, string, func(), error) {
+	if cliCtx.Gitops != nil && strings.TrimSpace(string(cliCtx.Gitops.Source)) != "" {
+		return edgeQuartermasterRegistrationClientFromManifest(ctx, cliCtx)
+	}
+
+	ep, err := controlplane.ResolveGRPC(ctx, cliCtx, "quartermaster")
+	if err != nil {
+		return nil, "", nil, err
+	}
+	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:           ep.Address,
+		Timeout:            30 * time.Second,
+		ServiceToken:       cliCtx.Auth.ServiceToken,
+		PreferServiceToken: true,
+		AllowInsecure:      ep.AllowInsecure,
+		ServerName:         ep.ServerName,
+	})
+	if err != nil {
+		ep.Cleanup()
+		return nil, "", nil, fmt.Errorf("failed to connect to Quartermaster: %w", err)
+	}
+	return client, ep.Address, ep.Cleanup, nil
+}
+
+func edgeQuartermasterRegistrationClientFromManifest(ctx context.Context, cliCtx fwcfg.Context) (*quartermaster.GRPCClient, string, func(), error) {
+	cfg, err := fwcfg.Load()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	rm, err := inventory.ResolveManifestSource(inventory.ResolveInput{
+		Env:         fwcfg.MapEnv{},
+		Context:     cliCtx,
+		GitHubCfg:   cfg.GitHub,
+		GithubFetch: fwgitops.NewGithubAppFetcher(),
+		Stdout:      io.Discard,
+		Ctx:         ctx,
+	})
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("resolve cluster manifest for Quartermaster: %w", err)
+	}
+
+	cleanup := func() {
+		if rm.Cleanup != nil {
+			rm.Cleanup()
+		}
+	}
+	manifest, err := inventory.LoadWithHosts(rm.Path, rm.AgeKey)
+	if err != nil {
+		cleanup()
+		return nil, "", nil, fmt.Errorf("load cluster manifest for Quartermaster: %w", err)
+	}
+	manifestDir := filepath.Dir(rm.Path)
+	sharedEnv, err := inventory.LoadSharedEnv(manifest, manifestDir, rm.AgeKey)
+	if err != nil {
+		cleanup()
+		return nil, "", nil, fmt.Errorf("load cluster env_files for Quartermaster: %w", err)
+	}
+	runtimeData := map[string]any{
+		"service_token": firstNonEmpty(cliCtx.Auth.ServiceToken, sharedEnv["SERVICE_TOKEN"]),
+	}
+	if internalPKIBootstrapRequired(manifest) {
+		pki, pkiErr := loadInternalPKIBootstrap(sharedEnv, manifestDir)
+		if pkiErr != nil {
+			cleanup()
+			return nil, "", nil, fmt.Errorf("load internal PKI bootstrap material for Quartermaster: %w", pkiErr)
+		}
+		runtimeData["internal_pki_bootstrap"] = pki
+	}
+
+	sess, err := remoteaccess.OpenSession(remoteaccess.Options{
+		Manifest:      manifest,
+		AllowInsecure: isDevProfile(manifest),
+	})
+	if err != nil {
+		cleanup()
+		return nil, "", nil, fmt.Errorf("open Quartermaster remote-access session: %w", err)
+	}
+	cleanupWithSession := func() {
+		_ = sess.Close()
+		cleanup()
+	}
+
+	serviceToken, grpcAddr, serverName, insecure, err := quartermasterDialEndpoint(ctx, manifest, runtimeData, sess)
+	if err != nil {
+		cleanupWithSession()
+		return nil, "", nil, err
+	}
+	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:           grpcAddr,
+		Timeout:            30 * time.Second,
+		ServiceToken:       serviceToken,
+		PreferServiceToken: true,
+		AllowInsecure:      insecure,
+		ServerName:         serverName,
+		CACertPEM:          internalCAFromRuntime(runtimeData),
+	})
+	if err != nil {
+		cleanupWithSession()
+		return nil, "", nil, fmt.Errorf("failed to connect to Quartermaster: %w", err)
+	}
+	return client, grpcAddr, cleanupWithSession, nil
 }
 
 func ensureContextServiceToken(ctx context.Context, ctxCfg *fwcfg.Context) error {
