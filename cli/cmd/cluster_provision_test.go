@@ -3027,6 +3027,11 @@ func TestPrivateerSeedDNSUsesTopologyScopedAliases(t *testing.T) {
 	if got := dns["central-2"]; len(got) != 1 || got[0] != "10.88.0.11" {
 		t.Fatalf("central-2 DNS = %v, want [10.88.0.11]", got)
 	}
+
+	centralDNS := buildPrivateerSeedDNS(manifest, "central-1")
+	if got, want := centralDNS["decklog"], []string{"10.88.1.20", "10.88.2.20"}; !slices.Equal(got, want) {
+		t.Fatalf("central decklog DNS = %v, want global Decklog providers %v", got, want)
+	}
 }
 
 func TestPrivateerSeedDNSIncludesGlobalSkipperBridgeAlias(t *testing.T) {

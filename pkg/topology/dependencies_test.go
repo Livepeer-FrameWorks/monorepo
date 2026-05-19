@@ -26,14 +26,32 @@ func TestServiceDependentsFindDirectCallers(t *testing.T) {
 	}
 }
 
-func TestSkipperBridgeDependencyIsGlobalDNS(t *testing.T) {
-	deps := GlobalDNSServiceDependencies("skipper")
-	if len(deps) != 1 || deps[0] != "bridge" {
-		t.Fatalf("GlobalDNSServiceDependencies(skipper) = %v, want [bridge]", deps)
+func TestGlobalDNSDependencies(t *testing.T) {
+	cases := map[string][]string{
+		"commodore":     {"decklog"},
+		"quartermaster": {"decklog"},
+		"skipper":       {"bridge", "decklog"},
 	}
 
-	dependents := GlobalDNSServiceDependents([]string{"bridge"})
-	if len(dependents) != 1 || dependents[0] != "skipper" {
-		t.Fatalf("GlobalDNSServiceDependents(bridge) = %v, want [skipper]", dependents)
+	for serviceID, want := range cases {
+		if got := GlobalDNSServiceDependencies(serviceID); !equalStrings(got, want) {
+			t.Fatalf("GlobalDNSServiceDependencies(%s) = %v, want %v", serviceID, got, want)
+		}
 	}
+
+	if got, want := GlobalDNSServiceDependents([]string{"bridge"}), []string{"skipper"}; !equalStrings(got, want) {
+		t.Fatalf("GlobalDNSServiceDependents(bridge) = %v, want %v", got, want)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

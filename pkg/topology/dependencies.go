@@ -57,13 +57,13 @@ var serviceDependencies = map[string][]ServiceDependency{
 	"commodore": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "tenant aliases, cluster capabilities, and cluster URL cache"},
 		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Purpose: "billing and entitlement checks"},
-		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", Purpose: "service events"},
+		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "service events"},
 		{TargetServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "DNS/certificate operations"},
 	},
 	"deckhand": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "tenant and bootstrap lookups"},
 		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Purpose: "support billing context"},
-		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", Purpose: "support service events"},
+		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "support service events"},
 	},
 	"decklog": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "service bootstrap"},
@@ -95,12 +95,12 @@ var serviceDependencies = map[string][]ServiceDependency{
 	},
 	"purser": {
 		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", Purpose: "stream termination and account state updates"},
-		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", Purpose: "billing service events"},
+		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "billing service events"},
 		{TargetServiceID: "periscope-query", EnvKey: "PERISCOPE_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "invoice enrichment with unique counts and geo"},
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "tenant and cluster access lookups"},
 	},
 	"quartermaster": {
-		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", Purpose: "tenant and infrastructure service events"},
+		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "tenant and infrastructure service events"},
 		{TargetServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "DNS and certificate workflows"},
 		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "billing-tier reconciliation"},
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "self-bootstrap service registration"},
@@ -111,7 +111,7 @@ var serviceDependencies = map[string][]ServiceDependency{
 	"skipper": {
 		{TargetServiceID: "bridge", EnvKey: "GATEWAY_MCP_URL", Transport: "mcp-http", DNSScope: DNSScopeGlobal, Purpose: "platform MCP tools"},
 		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "primary-user notifications"},
-		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "consultant usage events and notifications"},
+		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "consultant usage events and notifications"},
 		{TargetServiceID: "periscope-query", EnvKey: "PERISCOPE_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "heartbeat and infrastructure diagnostics"},
 		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "tier gating and billing checks"},
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "cluster and infrastructure diagnostics"},
