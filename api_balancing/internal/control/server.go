@@ -6398,9 +6398,7 @@ func processThumbnailUploaded(req *pb.ThumbnailUploaded, nodeID string, logger l
 		"node_id":       nodeID,
 	}).Info("Thumbnail upload confirmed")
 
-	if isArtifactThumbnail(thumbnailKey) {
-		markArtifactHasThumbnails(thumbnailKey, logger)
-	}
+	markArtifactHasThumbnails(thumbnailKey, logger)
 	invalidateChandlerThumbnailCache(thumbnailKey, s3Keys, logger)
 }
 
@@ -6511,20 +6509,6 @@ func splitChandlerBaseURLs(raw string) []string {
 	return baseURLs
 }
 
-// isArtifactThumbnail checks if the thumbnail key is an artifact hash.
-// Artifact hashes are 32-char hex strings. Stream IDs are UUIDs (36 chars with dashes).
-func isArtifactThumbnail(thumbnailKey string) bool {
-	if len(thumbnailKey) != 32 {
-		return false
-	}
-	for _, c := range thumbnailKey {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
 // markArtifactHasThumbnails flips has_thumbnails on the first confirmed
 // artifact thumbnail upload and projects that state to Commodore once.
 func markArtifactHasThumbnails(artifactHash string, logger logging.Logger) {
@@ -6551,15 +6535,26 @@ func markArtifactHasThumbnails(artifactHash string, logger logging.Logger) {
 	`, artifactHash).Scan(&tenantID, &artifactType, &storageClusterID, &originClusterID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			err = conn.QueryRowContext(ctx, `
+				SELECT tenant_id::text, artifact_type, storage_cluster_id, origin_cluster_id
+				  FROM foghorn.artifacts
+				 WHERE artifact_hash = $1
+				   AND has_thumbnails IS TRUE
+			`, artifactHash).Scan(&tenantID, &artifactType, &storageClusterID, &originClusterID)
+			if errors.Is(err, sql.ErrNoRows) {
+				return
+			}
+		}
+		if err != nil {
+			logger.WithFields(logging.Fields{
+				"artifact_hash": artifactHash,
+				"error":         err,
+			}).Error("Failed to mark artifact has_thumbnails")
 			return
 		}
-		logger.WithFields(logging.Fields{
-			"artifact_hash": artifactHash,
-			"error":         err,
-		}).Error("Failed to mark artifact has_thumbnails")
-		return
+	} else {
+		logger.WithField("artifact_hash", artifactHash).Info("Artifact thumbnails marked as uploaded")
 	}
-	logger.WithField("artifact_hash", artifactHash).Info("Artifact thumbnails marked as uploaded")
 
 	if CommodoreClient == nil || !tenantID.Valid || tenantID.String == "" {
 		return
