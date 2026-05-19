@@ -154,7 +154,7 @@ func (c *GRPCClient) CheckHealth(ctx context.Context) error {
 		return err
 	}
 	if resp.GetStatus() != healthpb.HealthCheckResponse_SERVING {
-		return fmt.Errorf("Quartermaster health status is %s", resp.GetStatus().String())
+		return fmt.Errorf("quartermaster health status is %s", resp.GetStatus().String())
 	}
 	return nil
 }

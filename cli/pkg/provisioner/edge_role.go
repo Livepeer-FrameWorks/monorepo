@@ -180,8 +180,9 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 	if config.StorageBytes > 0 {
 		vars["edge_storage_capacity_bytes"] = config.StorageBytes
 	}
-	if capEnv, err := edgeCapabilityEnv(config.Capabilities); err != nil {
-		return nil, err
+	capEnv, capErr := edgeCapabilityEnv(config.Capabilities)
+	if capErr != nil {
+		return nil, capErr
 	} else {
 		for k, v := range capEnv {
 			vars[k] = v

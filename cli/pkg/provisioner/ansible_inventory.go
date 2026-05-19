@@ -11,7 +11,10 @@ import (
 )
 
 func ansiblePythonVars(ctx context.Context, pool *ssh.Pool, host inventory.Host, address, connection string) map[string]any {
-	path, _ := probeAnsiblePython(ctx, pool, host, address, connection)
+	path, err := probeAnsiblePython(ctx, pool, host, address, connection)
+	if err != nil {
+		return nil
+	}
 	if path == "" {
 		return nil
 	}
@@ -72,7 +75,10 @@ func probeAnsiblePython(ctx context.Context, pool *ssh.Pool, host inventory.Host
 		return "", nil
 	}
 	result, err := pool.Run(ctx, ansibleSSHConfig(host, address), "command -v python3 || command -v python || command -v python2")
-	if err != nil || result == nil || result.ExitCode != 0 {
+	if err != nil {
+		return "", err
+	}
+	if result == nil || result.ExitCode != 0 {
 		return "", nil
 	}
 	for _, line := range strings.Split(result.Stdout, "\n") {

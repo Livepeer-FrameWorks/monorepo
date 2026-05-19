@@ -232,8 +232,8 @@ func readLedgerYugabyteSSH(ctx context.Context, sshPool *ssh.Pool, host inventor
 		FROM _migrations
 		ORDER BY version, phase, seq`, nil, func(scan func(dest ...any) error) error {
 		var e LedgerEntry
-		if err := scan(&e.Version, &e.Phase, &e.Seq, &e.Checksum); err != nil {
-			return err
+		if scanErr := scan(&e.Version, &e.Phase, &e.Seq, &e.Checksum); scanErr != nil {
+			return scanErr
 		}
 		out = append(out, e)
 		return nil

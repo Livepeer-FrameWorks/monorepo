@@ -1405,9 +1405,9 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshKey, nodeName
 
 	fmt.Fprintln(cmd.OutOrStdout(), "    Checking Quartermaster gRPC health")
 	healthCtx, healthCancel := context.WithTimeout(ctx, 10*time.Second)
-	if err := qmClient.CheckHealth(healthCtx); err != nil {
+	if healthErr := qmClient.CheckHealth(healthCtx); healthErr != nil {
 		healthCancel()
-		return fmt.Errorf("Quartermaster gRPC health check failed at %s: %w", qmAddr, err)
+		return fmt.Errorf("quartermaster gRPC health check failed at %s: %w", qmAddr, healthErr)
 	}
 	healthCancel()
 
@@ -1573,8 +1573,8 @@ func ensureContextServiceToken(ctx context.Context, ctxCfg *fwcfg.Context) error
 
 // fetchCertFromNavigator fetches a TLS certificate from Navigator service
 func fetchCertFromNavigator(cmd *cobra.Command, cliCtx fwcfg.Context, domain, email string) (certPEM, keyPEM string, err error) {
-	if err := ensureContextServiceToken(cmd.Context(), &cliCtx); err != nil {
-		return "", "", err
+	if serviceTokenErr := ensureContextServiceToken(cmd.Context(), &cliCtx); serviceTokenErr != nil {
+		return "", "", serviceTokenErr
 	}
 	ep, err := controlplane.ResolveGRPC(cmd.Context(), cliCtx, "navigator")
 	if err != nil {
