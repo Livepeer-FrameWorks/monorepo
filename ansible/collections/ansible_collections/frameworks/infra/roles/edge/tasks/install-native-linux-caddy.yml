@@ -104,6 +104,11 @@
       Group=caddy
       WorkingDirectory=/etc/caddy
       EnvironmentFile=/etc/frameworks/caddy.env
+      Environment=HOME=/var/lib/caddy
+      Environment=XDG_DATA_HOME=/var/lib/caddy
+      Environment=XDG_CONFIG_HOME=/etc/caddy
+      AmbientCapabilities=CAP_NET_BIND_SERVICE
+      CapabilityBoundingSet=CAP_NET_BIND_SERVICE
       ExecStart=/opt/frameworks/caddy/caddy run --config /etc/caddy/Caddyfile
       Restart=always
       RestartSec=5
