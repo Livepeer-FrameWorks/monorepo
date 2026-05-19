@@ -59,6 +59,10 @@ func runUpgradePreDeployGate(
 	}
 
 	password, _ := resolveYugabytePassword(pg, sharedEnvForGate(rc)) //nolint:errcheck // missing yugabyte password is reported by ReadMigrationLedger
+	databases := schemaDatabasesFromConfigs([]inventory.DatabaseConfig{{Name: dbName}})
+	if pg.IsYugabyte() {
+		databases = yugabyteSchemaDatabases([]inventory.DatabaseConfig{{Name: dbName}}, manifest)
+	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[gate] Pre-deploy migration gate (target %s, current platform %s)\n", targetPlatformVersion, currentPlatformVersion)
 
@@ -69,7 +73,7 @@ func runUpgradePreDeployGate(
 
 	// (a) expand <= target.
 	if !skipMigrationCheck {
-		missingExpand, err := provisioner.MissingMigrations(ctx, sshPool, dbHost, pg, password, []string{dbName}, "expand", targetPlatformVersion)
+		missingExpand, err := provisioner.MissingMigrationsForDatabases(ctx, sshPool, dbHost, pg, password, databases, "expand", targetPlatformVersion)
 		if err != nil {
 			return fmt.Errorf("[gate] check expand migrations: %w", err)
 		}
@@ -83,7 +87,7 @@ func runUpgradePreDeployGate(
 			if rel.Version == targetPlatformVersion {
 				continue
 			}
-			missing, err := provisioner.MissingMigrations(ctx, sshPool, dbHost, pg, password, []string{dbName}, "postdeploy", rel.Version)
+			missing, err := provisioner.MissingMigrationsForDatabases(ctx, sshPool, dbHost, pg, password, databases, "postdeploy", rel.Version)
 			if err != nil {
 				return fmt.Errorf("[gate] check postdeploy at %s: %w", rel.Version, err)
 			}

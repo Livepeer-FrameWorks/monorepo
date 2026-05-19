@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"frameworks/cli/internal/readiness"
+	"frameworks/cli/pkg/inventory"
 )
 
 func TestDoctorServiceRemediation_mapsKnownServicesToRunnableCmd(t *testing.T) {
@@ -62,5 +63,52 @@ func TestDoctorControlPlaneDetail_distinguishesAllStates(t *testing.T) {
 		if !strings.Contains(got, tc.want) {
 			t.Errorf("%s: detail = %q, want contains %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestClickHouseDoctorCheckerUsesSharedCredentials(t *testing.T) {
+	t.Parallel()
+
+	checker := clickHouseDoctorChecker(
+		&inventory.ClickHouseConfig{Databases: []string{"periscope"}},
+		map[string]string{
+			"CLICKHOUSE_USER":     "frameworks",
+			"CLICKHOUSE_PASSWORD": "secret",
+		},
+	)
+	if checker.User != "frameworks" {
+		t.Fatalf("User = %q, want frameworks", checker.User)
+	}
+	if checker.Password != "secret" {
+		t.Fatalf("Password = %q, want secret", checker.Password)
+	}
+	if checker.Database != "periscope" {
+		t.Fatalf("Database = %q, want periscope", checker.Database)
+	}
+}
+
+func TestDoctorServiceProbeUsesDeployHealthPathForAlias(t *testing.T) {
+	t.Parallel()
+
+	probe := doctorServiceProbe("livepeer-gateway-eu", inventory.ServiceConfig{Deploy: "livepeer-gateway"})
+	if probe.Protocol != "http" {
+		t.Fatalf("Protocol = %q, want http", probe.Protocol)
+	}
+	if probe.Path != "/healthz" {
+		t.Fatalf("Path = %q, want /healthz", probe.Path)
+	}
+}
+
+func TestDoctorServiceProbeUsesTCPForGRPCAndNoHTTPHealthPath(t *testing.T) {
+	t.Parallel()
+
+	decklogProbe := doctorServiceProbe("decklog", inventory.ServiceConfig{})
+	if decklogProbe.Protocol != "tcp" {
+		t.Fatalf("decklog Protocol = %q, want tcp", decklogProbe.Protocol)
+	}
+
+	nginxProbe := doctorServiceProbe("nginx", inventory.ServiceConfig{})
+	if nginxProbe.Protocol != "tcp" {
+		t.Fatalf("nginx Protocol = %q, want tcp", nginxProbe.Protocol)
 	}
 }

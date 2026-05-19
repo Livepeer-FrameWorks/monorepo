@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"frameworks/cli/pkg/inventory"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
@@ -20,8 +21,18 @@ func resolvePort(id string, cfg inventory.ServiceConfig) (int, error) {
 	if cfg.Port != 0 {
 		return cfg.Port, nil
 	}
-	if port, ok := servicedefs.DefaultPort(id); ok {
-		return port, nil
+	if def, ok := resolveServiceDefinition(id, cfg); ok {
+		return def.DefaultPort, nil
 	}
 	return 0, fmt.Errorf("no default port for service id: %s", id)
+}
+
+func resolveServiceDefinition(id string, cfg inventory.ServiceConfig) (servicedefs.Service, bool) {
+	if def, ok := servicedefs.Lookup(id); ok {
+		return def, true
+	}
+	if deploy := strings.TrimSpace(cfg.Deploy); deploy != "" {
+		return servicedefs.Lookup(deploy)
+	}
+	return servicedefs.Service{}, false
 }

@@ -139,6 +139,24 @@ func TestBuildMigrationItemsCanUseLogicalSourceForPhysicalDatabase(t *testing.T)
 	}
 }
 
+func TestMigrationLedgerDatabaseNamesUsesPhysicalTargets(t *testing.T) {
+	got := migrationLedgerDatabaseNames([]SchemaDatabase{
+		{Name: "foghorn_eu", SourceName: "foghorn"},
+		{Name: "foghorn_us", SourceName: "foghorn"},
+		{Name: "foghorn_eu", SourceName: "foghorn"},
+		{Name: "  "},
+	})
+	want := []string{"foghorn_eu", "foghorn_us"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
 func TestDiffExpectedAgainstLedger(t *testing.T) {
 	expected := []map[string]any{
 		{"db": "purser", "version": "v0.3.0", "phase": "expand", "sequence": 1, "checksum": "aaa", "filename": "001.sql"},

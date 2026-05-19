@@ -2,11 +2,8 @@ package provisioner
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
-	"net"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -56,7 +53,9 @@ func (k MigrationKey) String() string {
 //   - vanilla pg:  SSH host + `sudo -u postgres psql -d <db> -tAF '|' -c "SELECT ..."`
 //     This matches the prod migration role (login_unix_socket,
 //     postgres user) — see ansible/.../postgres/tasks/migrate.yml.
-//   - yugabyte:    TCP+password as the role does for YB.
+//   - yugabyte:    SSH host + local ysqlsh as the built-in yugabyte role.
+//     This matches the prod Yugabyte role, whose generated HBA trusts local
+//     admin traffic from 127.0.0.1 and does not set a built-in admin password.
 //
 // A missing _migrations table is treated as an empty ledger (the database
 // has not yet been migrated).
@@ -78,7 +77,7 @@ func ReadMigrationLedger(
 			err     error
 		)
 		if pg.IsYugabyte() {
-			entries, err = readLedgerTCP(ctx, pg, host.ExternalIP, password, db)
+			entries, err = readLedgerYugabyteSSH(ctx, sshPool, host, pg, db)
 		} else {
 			entries, err = readLedgerSSH(ctx, sshPool, host, db)
 		}
@@ -103,18 +102,55 @@ func MissingMigrations(
 	phase string,
 	targetVersion string,
 ) ([]MigrationKey, error) {
-	expected, err := BuildMigrationItems(dbNames, phase, targetVersion)
+	databases := make([]SchemaDatabase, 0, len(dbNames))
+	for _, db := range dbNames {
+		databases = append(databases, SchemaDatabase{Name: db})
+	}
+	return MissingMigrationsForDatabases(ctx, sshPool, host, pg, password, databases, phase, targetVersion)
+}
+
+// MissingMigrationsForDatabases is MissingMigrations with full schema database
+// mapping support. Use this for physical databases whose embedded SQL source
+// comes from a logical database name, such as regional Yugabyte aliases.
+func MissingMigrationsForDatabases(
+	ctx context.Context,
+	sshPool *ssh.Pool,
+	host inventory.Host,
+	pg *inventory.PostgresConfig,
+	password string,
+	databases []SchemaDatabase,
+	phase string,
+	targetVersion string,
+) ([]MigrationKey, error) {
+	expected, err := BuildMigrationItemsForDatabases(databases, phase, targetVersion)
 	if err != nil {
 		return nil, err
 	}
 	if len(expected) == 0 {
 		return nil, nil
 	}
-	ledger, err := ReadMigrationLedger(ctx, sshPool, host, pg, password, dbNames)
+	ledger, err := ReadMigrationLedger(ctx, sshPool, host, pg, password, migrationLedgerDatabaseNames(databases))
 	if err != nil {
 		return nil, err
 	}
 	return diffExpectedAgainstLedger(expected, ledger), nil
+}
+
+func migrationLedgerDatabaseNames(databases []SchemaDatabase) []string {
+	out := make([]string, 0, len(databases))
+	seen := map[string]struct{}{}
+	for _, database := range databases {
+		name := strings.TrimSpace(database.Name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		out = append(out, name)
+		seen[name] = struct{}{}
+	}
+	return out
 }
 
 // diffExpectedAgainstLedger compares embedded migration items against the
@@ -160,56 +196,56 @@ func ledgerKey(version, phase string, seq int) string {
 	return version + ":" + phase + ":" + strconv.Itoa(seq)
 }
 
-func readLedgerTCP(ctx context.Context, pg *inventory.PostgresConfig, host, password, dbName string) ([]LedgerEntry, error) {
-	if password == "" {
-		return nil, fmt.Errorf("yugabyte ledger read requires DATABASE_PASSWORD; set postgres.password or load shared env")
+func readLedgerYugabyteSSH(ctx context.Context, sshPool *ssh.Pool, host inventory.Host, pg *inventory.PostgresConfig, dbName string) ([]LedgerEntry, error) {
+	if sshPool == nil {
+		return nil, errors.New("ssh pool is nil")
+	}
+	if host.ExternalIP == "" {
+		return nil, errors.New("host has no external IP")
 	}
 	if !simpleDBIdentifier.MatchString(dbName) {
 		return nil, fmt.Errorf("invalid database name %q", dbName)
 	}
-	connURL := url.URL{
-		Scheme: "postgres",
-		User:   url.UserPassword(yugabyteLedgerUser(), password),
-		Host:   net.JoinHostPort(host, strconv.Itoa(pg.EffectivePort())),
-		Path:   "/" + dbName,
-	}
-	query := connURL.Query()
-	query.Set("sslmode", "disable")
-	query.Set("connect_timeout", "5")
-	connURL.RawQuery = query.Encode()
-	db, err := sql.Open("postgres", connURL.String())
-	if err != nil {
-		return nil, fmt.Errorf("open connection: %w", err)
-	}
-	defer db.Close()
 
+	runner, err := sshPool.Get(&ssh.ConnectionConfig{
+		Address:  host.ExternalIP,
+		Port:     22,
+		User:     host.User,
+		HostName: host.Name,
+		Timeout:  30 * time.Second,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ssh connect: %w", err)
+	}
 	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	rows, err := db.QueryContext(queryCtx, `
+	exec := &SSHExecutor{Runner: runner, BinaryPath: "/opt/yugabyte/bin/ysqlsh"}
+	conn := ConnParams{
+		Port:     pg.EffectivePort(),
+		User:     "yugabyte",
+		Database: dbName,
+	}
+	var out []LedgerEntry
+	err = exec.QueryRows(queryCtx, conn, `
 		SELECT version, phase, seq, checksum
 		FROM _migrations
-		ORDER BY version, phase, seq`)
+		ORDER BY version, phase, seq`, nil, func(scan func(dest ...any) error) error {
+		var e LedgerEntry
+		if err := scan(&e.Version, &e.Phase, &e.Seq, &e.Checksum); err != nil {
+			return err
+		}
+		out = append(out, e)
+		return nil
+	})
 	if err != nil {
 		if isUndefinedTable(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	defer rows.Close()
-
-	var out []LedgerEntry
-	for rows.Next() {
-		var e LedgerEntry
-		if scanErr := rows.Scan(&e.Version, &e.Phase, &e.Seq, &e.Checksum); scanErr != nil {
-			return nil, scanErr
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return out, nil
 }
-
-func yugabyteLedgerUser() string { return "yugabyte" }
 
 func readLedgerSSH(ctx context.Context, sshPool *ssh.Pool, host inventory.Host, dbName string) ([]LedgerEntry, error) {
 	if sshPool == nil {

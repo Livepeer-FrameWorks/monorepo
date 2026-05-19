@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -181,6 +182,10 @@ func runLogs(cmd *cobra.Command, manifest *inventory.Manifest, serviceName strin
 		return fmt.Errorf("unknown service mode: %s (cannot determine log location)", state.Mode)
 	}
 
+	if follow {
+		return streamLogCommand(ctx, host, stringFlag(cmd, "ssh-key").Value, logCmd)
+	}
+
 	// Get runner
 	var runner ssh.Runner
 	if host.ExternalIP == "" || host.ExternalIP == "localhost" || host.ExternalIP == "127.0.0.1" {
@@ -214,4 +219,33 @@ func runLogs(cmd *cobra.Command, manifest *inventory.Manifest, serviceName strin
 	fmt.Fprint(cmd.OutOrStdout(), result.Stdout)
 
 	return nil
+}
+
+func streamLogCommand(ctx context.Context, host inventory.Host, sshKey, command string) error {
+	if host.ExternalIP == "" || host.ExternalIP == "localhost" || host.ExternalIP == "127.0.0.1" {
+		c := exec.CommandContext(ctx, "sh", "-c", command)
+		c.Stdout = os.Stdout
+		c.Stderr = os.Stderr
+		return c.Run()
+	}
+
+	cfg := &ssh.ConnectionConfig{
+		Address:  host.ExternalIP,
+		Port:     22,
+		User:     host.User,
+		KeyPath:  sshKey,
+		HostName: host.Name,
+		Timeout:  30 * time.Second,
+	}
+	resolver := &ssh.DefaultResolver{}
+	resolution, err := resolver.Resolve(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("resolve ssh target: %w", err)
+	}
+	args := ssh.BuildSSHArgs(cfg, resolution)
+	args = append(args, resolution.Target, "sh", "-c", ssh.ShellQuote(command))
+	c := exec.CommandContext(ctx, "ssh", args...)
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	return c.Run()
 }

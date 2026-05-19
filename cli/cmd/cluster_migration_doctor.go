@@ -16,8 +16,9 @@ import (
 )
 
 // doctorPostgresMigrations validates the _migrations LEDGER (not the live
-// schema) using the same access path the prod migration role uses: Unix
-// socket via SSH+psql for vanilla pg, TCP+password for Yugabyte.
+// schema) using the same access path the prod migration roles use: Unix
+// socket via SSH+psql for vanilla pg, and SSH-local ysqlsh with the built-in
+// yugabyte role for YugabyteDB.
 //
 // "Ledger consistent" / "ledger missing N entries" wording is deliberate —
 // this check does NOT detect schema drift.
@@ -42,13 +43,6 @@ func doctorPostgresMigrations(
 		return result
 	}
 
-	if pg.IsYugabyte() && password == "" {
-		result.OK = false
-		result.Status = "degraded"
-		result.Error = "Yugabyte ledger check requires DATABASE_PASSWORD; rerun with --deep or set postgres.password"
-		return result
-	}
-
 	if targetVersion == "" {
 		result.OK = false
 		result.Status = "degraded"
@@ -56,8 +50,11 @@ func doctorPostgresMigrations(
 		return result
 	}
 
-	dbNames := postgresDatabaseNames(manifest)
-	if len(dbNames) == 0 {
+	databases := schemaDatabasesFromConfigs(pg.Databases)
+	if pg.IsYugabyte() {
+		databases = yugabyteSchemaDatabases(pg.Databases, manifest)
+	}
+	if len(databases) == 0 {
 		result.OK = true
 		result.Status = "healthy"
 		result.Message = "no databases configured in manifest"
@@ -70,7 +67,7 @@ func doctorPostgresMigrations(
 		details       []string
 	)
 	for _, phase := range []string{"expand", "postdeploy"} {
-		missing, err := provisioner.MissingMigrations(ctx, sshPool, host, pg, password, dbNames, phase, targetVersion)
+		missing, err := provisioner.MissingMigrationsForDatabases(ctx, sshPool, host, pg, password, databases, phase, targetVersion)
 		if err != nil {
 			result.OK = false
 			result.Status = "degraded"
@@ -87,7 +84,7 @@ func doctorPostgresMigrations(
 		}
 	}
 	var pendingContract int
-	contractMissing, err := provisioner.MissingMigrations(ctx, sshPool, host, pg, password, dbNames, "contract", targetVersion)
+	contractMissing, err := provisioner.MissingMigrationsForDatabases(ctx, sshPool, host, pg, password, databases, "contract", targetVersion)
 	if err != nil {
 		result.OK = false
 		result.Status = "degraded"

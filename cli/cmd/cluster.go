@@ -18,8 +18,8 @@ import (
 	fwgitops "frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/provisioner"
 	fwssh "frameworks/cli/pkg/ssh"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -703,20 +703,24 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 		if !ok {
 			recordMiss("Postgres/Yugabyte", fmt.Sprintf("host %q not found in manifest", pgHostName))
 		} else {
-			password, pwErr := resolveYugabytePassword(manifest.Infrastructure.Postgres, sharedEnv)
-			if pwErr != nil {
-				if manifest.Infrastructure.Postgres.IsYugabyte() && !deep {
-					ux.Warn(out, fmt.Sprintf("Postgres/Yugabyte: authenticated check unavailable without decrypted Yugabyte password (%v); run with --deep to include it", pwErr))
-					remediationSteps = append(remediationSteps, ux.NextStep{
-						Cmd: "frameworks cluster doctor --deep",
-						Why: "Decrypt gitops secrets so doctor can run authenticated Yugabyte probes.",
-					})
-				} else {
-					recordMiss("Postgres/Yugabyte", pwErr.Error())
-				}
+			if manifest.Infrastructure.Postgres.IsYugabyte() {
+				runInfraCheck("Postgres/Yugabyte", checkYugabyteLocalYSQL(cmd.Context(), doctorSSHPool, host, manifest.Infrastructure.Postgres))
 			} else {
-				checker := &health.PostgresChecker{User: postgresDoctorUser(manifest.Infrastructure.Postgres), Password: password, Database: "postgres"}
-				runInfraCheck("Postgres/Yugabyte", checker.Check(host.ExternalIP, manifest.Infrastructure.Postgres.EffectivePort()))
+				password, pwErr := resolveYugabytePassword(manifest.Infrastructure.Postgres, sharedEnv)
+				if pwErr != nil {
+					if manifest.Infrastructure.Postgres.IsYugabyte() && !deep {
+						ux.Warn(out, fmt.Sprintf("Postgres/Yugabyte: authenticated check unavailable without decrypted Yugabyte password (%v); run with --deep to include it", pwErr))
+						remediationSteps = append(remediationSteps, ux.NextStep{
+							Cmd: "frameworks cluster doctor --deep",
+							Why: "Decrypt gitops secrets so doctor can run authenticated Yugabyte probes.",
+						})
+					} else {
+						recordMiss("Postgres/Yugabyte", pwErr.Error())
+					}
+				} else {
+					checker := &health.PostgresChecker{User: postgresDoctorUser(manifest.Infrastructure.Postgres), Password: password, Database: "postgres"}
+					runInfraCheck("Postgres/Yugabyte", checker.Check(host.ExternalIP, manifest.Infrastructure.Postgres.EffectivePort()))
+				}
 			}
 		}
 	}
@@ -726,7 +730,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 		if !ok {
 			recordMiss("ClickHouse", fmt.Sprintf("host %q not found in manifest", manifest.Infrastructure.ClickHouse.Host))
 		} else {
-			checker := &health.ClickHouseChecker{User: "default", Password: "", Database: "default"}
+			checker := clickHouseDoctorChecker(manifest.Infrastructure.ClickHouse, sharedEnv)
 			runInfraCheck("ClickHouse", checker.Check(host.ExternalIP, manifest.Infrastructure.ClickHouse.Port))
 		}
 	}
@@ -773,12 +777,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			recordMiss(name, fmt.Sprintf("resolve port: %v", err))
 			continue
 		}
-		path := "/health"
-		if def, ok := servicedefs.Lookup(name); ok && def.HealthPath != "" {
-			path = def.HealthPath
-		}
-		checker := &health.HTTPChecker{Path: path, Timeout: 5 * time.Second}
-		runInfraCheck(name, checker.Check(host.ExternalIP, port))
+		runInfraCheck(name, checkServiceEndpoint(name, svc, host.ExternalIP, port))
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "")
@@ -801,12 +800,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			continue
 		}
 
-		path := "/health"
-		if def, ok := servicedefs.Lookup(name); ok && def.HealthPath != "" {
-			path = def.HealthPath
-		}
-		checker := &health.HTTPChecker{Path: path, Timeout: 5 * time.Second}
-		runInfraCheck(name, checker.Check(host.ExternalIP, port))
+		runInfraCheck(name, checkServiceEndpoint(name, svc, host.ExternalIP, port))
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "")
@@ -828,12 +822,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 				recordMiss(name, fmt.Sprintf("resolve port: %v", err))
 				continue
 			}
-			path := "/health"
-			if def, ok := servicedefs.Lookup(name); ok && def.HealthPath != "" {
-				path = def.HealthPath
-			}
-			checker := &health.HTTPChecker{Path: path, Timeout: 5 * time.Second}
-			runInfraCheck(name, checker.Check(host.ExternalIP, port))
+			runInfraCheck(name, checkServiceEndpoint(name, svc, host.ExternalIP, port))
 		}
 		fmt.Fprintln(out, "")
 	}
@@ -853,30 +842,21 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			if targetErr != nil {
 				doctorTarget = ""
 			}
-			password, pwErr := resolveYugabytePassword(manifest.Infrastructure.Postgres, sharedEnv)
-			if pwErr != nil && manifest.Infrastructure.Postgres.IsYugabyte() && !deep {
-				ux.Warn(out, fmt.Sprintf("Postgres migrations: ledger check unavailable without decrypted Yugabyte password (%v); run with --deep to include it", pwErr))
+			totalChecks++
+			result := doctorPostgresMigrations(cmd.Context(), doctorSSHPool, manifest, host, "", doctorTarget)
+			printHealthResult(cmd, "Postgres migrations", result)
+			if result.OK {
+				passedChecks++
+			} else if strings.Contains(result.Error, "--deep") {
 				remediationSteps = append(remediationSteps, ux.NextStep{
 					Cmd: "frameworks cluster doctor --deep",
 					Why: "Decrypt gitops secrets so doctor can query Yugabyte _migrations.",
 				})
 			} else {
-				totalChecks++
-				result := doctorPostgresMigrations(cmd.Context(), doctorSSHPool, manifest, host, password, doctorTarget)
-				printHealthResult(cmd, "Postgres migrations", result)
-				if result.OK {
-					passedChecks++
-				} else if strings.Contains(result.Error, "--deep") {
-					remediationSteps = append(remediationSteps, ux.NextStep{
-						Cmd: "frameworks cluster doctor --deep",
-						Why: "Decrypt gitops secrets so doctor can query Yugabyte _migrations.",
-					})
-				} else {
-					remediationSteps = append(remediationSteps, ux.NextStep{
-						Cmd: "frameworks cluster migrate --phase expand --dry-run",
-						Why: "Preview pending embedded PostgreSQL/YugabyteDB migrations and checksum drift.",
-					})
-				}
+				remediationSteps = append(remediationSteps, ux.NextStep{
+					Cmd: "frameworks cluster migrate --phase expand --dry-run",
+					Why: "Preview pending embedded PostgreSQL/YugabyteDB migrations and checksum drift.",
+				})
 			}
 
 			totalChecks++
@@ -912,6 +892,115 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 	ux.PrintNextSteps(out, steps)
 
 	return nil
+}
+
+func clickHouseDoctorChecker(ch *inventory.ClickHouseConfig, sharedEnv map[string]string) *health.ClickHouseChecker {
+	database := "default"
+	if ch != nil && len(ch.Databases) > 0 && strings.TrimSpace(ch.Databases[0]) != "" {
+		database = strings.TrimSpace(ch.Databases[0])
+	}
+
+	user := "default"
+	password := ""
+	if sharedEnv != nil && sharedEnv["CLICKHOUSE_PASSWORD"] != "" {
+		user = "frameworks"
+		if sharedEnv["CLICKHOUSE_USER"] != "" {
+			user = sharedEnv["CLICKHOUSE_USER"]
+		}
+		password = sharedEnv["CLICKHOUSE_PASSWORD"]
+	}
+
+	return &health.ClickHouseChecker{User: user, Password: password, Database: database}
+}
+
+func checkYugabyteLocalYSQL(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, pg *inventory.PostgresConfig) *health.CheckResult {
+	result := &health.CheckResult{
+		Name:      "yugabyte",
+		CheckedAt: time.Now(),
+		Metadata:  map[string]string{"access": "ssh-local-ysqlsh"},
+	}
+	if sshPool == nil {
+		result.OK = false
+		result.Status = "unhealthy"
+		result.Error = "ssh pool is nil"
+		return result
+	}
+	runner, err := sshPool.Get(&fwssh.ConnectionConfig{
+		Address:  host.ExternalIP,
+		Port:     22,
+		User:     host.User,
+		HostName: host.Name,
+		Timeout:  30 * time.Second,
+	})
+	if err != nil {
+		result.OK = false
+		result.Status = "unhealthy"
+		result.Error = fmt.Sprintf("ssh connect: %v", err)
+		return result
+	}
+
+	exec := &provisioner.SSHExecutor{Runner: runner, BinaryPath: "/opt/yugabyte/bin/ysqlsh"}
+	conn := provisioner.ConnParams{
+		Port:     pg.EffectivePort(),
+		User:     "yugabyte",
+		Database: "yugabyte",
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	var one int
+	if err := exec.QueryRow(queryCtx, conn, "SELECT 1", nil, &one); err != nil {
+		result.OK = false
+		result.Status = "unhealthy"
+		result.Error = fmt.Sprintf("local YSQL query failed: %v", err)
+		return result
+	}
+	result.Latency = time.Since(start)
+
+	var version string
+	if err := exec.QueryRow(queryCtx, conn, "SELECT version()", nil, &version); err == nil {
+		result.Metadata["version"] = version
+		if strings.Contains(version, "YugabyteDB") {
+			result.Metadata["type"] = "yugabyte"
+		}
+	}
+
+	result.OK = true
+	result.Status = "healthy"
+	result.Message = fmt.Sprintf("Local YSQL query OK (latency: %v)", result.Latency)
+	return result
+}
+
+func checkServiceEndpoint(name string, svc inventory.ServiceConfig, address string, port int) *health.CheckResult {
+	probe := doctorServiceProbe(name, svc)
+	if probe.Protocol == "tcp" {
+		return (&health.TCPChecker{Timeout: 5 * time.Second}).Check(address, port)
+	}
+	return (&health.HTTPChecker{Path: probe.Path, Timeout: 5 * time.Second}).Check(address, port)
+}
+
+type doctorProbe struct {
+	Protocol string
+	Path     string
+}
+
+func doctorServiceProbe(name string, svc inventory.ServiceConfig) doctorProbe {
+	def, ok := resolveServiceDefinition(name, svc)
+	if !ok {
+		return doctorProbe{Protocol: "http", Path: "/health"}
+	}
+	switch def.HealthProtocol {
+	case "grpc", "tcp":
+		return doctorProbe{Protocol: "tcp"}
+	case "http":
+		if def.HealthPath == "" {
+			return doctorProbe{Protocol: "tcp"}
+		}
+		return doctorProbe{Protocol: "http", Path: def.HealthPath}
+	default:
+		return doctorProbe{Protocol: "http", Path: "/health"}
+	}
 }
 
 // doctorControlPlane runs ControlPlaneReadiness, prints its section, and
