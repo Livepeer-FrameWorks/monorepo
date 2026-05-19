@@ -32,6 +32,10 @@
       ansible.builtin.command: >-
         {{ kafka_bin_dir }}/kafka-broker-api-versions.sh
         --bootstrap-server 127.0.0.1:{{ kafka_broker_port }}
+      environment:
+        KAFKA_HEAP_OPTS: "-Xms64m -Xmx256m"
+        KAFKA_JMX_OPTS: "-Djava.awt.headless=true"
+        JMX_PORT: ""
       register: broker_probe
       changed_when: false
       failed_when: broker_probe.rc != 0
@@ -43,6 +47,10 @@
         {{ kafka_bin_dir }}/kafka-metadata-quorum.sh
         --bootstrap-server 127.0.0.1:{{ kafka_broker_port }}
         describe --status
+      environment:
+        KAFKA_HEAP_OPTS: "-Xms64m -Xmx256m"
+        KAFKA_JMX_OPTS: "-Djava.awt.headless=true"
+        JMX_PORT: ""
       register: kafka_quorum_probe
       changed_when: false
       failed_when: kafka_quorum_probe.rc != 0

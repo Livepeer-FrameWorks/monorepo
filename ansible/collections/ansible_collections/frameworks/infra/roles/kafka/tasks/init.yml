@@ -8,6 +8,10 @@
     --partitions {{ item.partitions | default(1) }}
     --replication-factor {{ item.replication_factor | default(1) }}
     {% for k, v in (item.config | default({})).items() %} --config {{ k }}={{ v }}{% endfor %}
+  environment:
+    KAFKA_HEAP_OPTS: "-Xms64m -Xmx256m"
+    KAFKA_JMX_OPTS: "-Djava.awt.headless=true"
+    JMX_PORT: ""
   loop: "{{ kafka_topics }}"
   loop_control:
     label: "{{ item.name }}"

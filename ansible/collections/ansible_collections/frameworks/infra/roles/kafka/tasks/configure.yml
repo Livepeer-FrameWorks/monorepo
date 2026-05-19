@@ -23,6 +23,10 @@
     -t {{ kafka_cluster_id }}
     -c {{ kafka_properties_path }}
     --ignore-formatted
+  environment:
+    KAFKA_HEAP_OPTS: "-Xms64m -Xmx256m"
+    KAFKA_JMX_OPTS: "-Djava.awt.headless=true"
+    JMX_PORT: ""
   args:
     creates: "{{ kafka_format_sentinel }}"
   become: true
