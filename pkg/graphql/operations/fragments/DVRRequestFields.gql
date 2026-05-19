@@ -18,6 +18,10 @@ fragment DVRRequestFields on DVRRequest {
   manifestPath
   errorMessage
   storageLocation
+  syncStatus
+  isHot
+  isSynced
+  isFinalized
   isFrozen
   thumbnailAssets {
     posterUrl

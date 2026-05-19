@@ -32,6 +32,10 @@ query GetClipsConnection(
         sizeBytes
         status
         storageLocation
+        syncStatus
+        isHot
+        isSynced
+        isFinalized
         isFrozen
         # Marginal storage cost for this clip on the tenant's tier. Null for
         # self-hosted / fully tenant-private clusters.

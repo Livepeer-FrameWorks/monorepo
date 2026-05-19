@@ -34,6 +34,10 @@ query GetDVRRequests(
         manifestPath
         errorMessage
         storageLocation
+        syncStatus
+        isHot
+        isSynced
+        isFinalized
         isFrozen
         # Marginal storage cost for this recording on the tenant's tier.
         storageCost {

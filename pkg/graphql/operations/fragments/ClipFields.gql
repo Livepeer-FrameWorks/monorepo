@@ -18,6 +18,10 @@ fragment ClipFields on Clip {
   clipMode
   requestedParams
   storageLocation
+  syncStatus
+  isHot
+  isSynced
+  isFinalized
   isFrozen
   expiresAt
   thumbnailAssets {

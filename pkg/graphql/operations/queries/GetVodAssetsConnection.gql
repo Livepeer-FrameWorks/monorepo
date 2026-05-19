@@ -25,6 +25,10 @@ query GetVodAssetsConnection(
         filename
         status
         storageLocation
+        syncStatus
+        isHot
+        isSynced
+        isFinalized
         sizeBytes
         durationMs
         resolution

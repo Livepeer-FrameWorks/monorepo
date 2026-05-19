@@ -100,6 +100,10 @@
     expiresAt: string | null;
     isFrozen?: boolean;
     storageLocation?: string;
+    syncStatus?: string | null;
+    isHot?: boolean | null;
+    isSynced?: boolean | null;
+    isFinalized?: boolean | null;
     thumbnailAssets: ThumbnailAssetsView | null;
     rawData: ClipData | DvrData | VodData;
   }
@@ -253,6 +257,12 @@
         sizeBytes: lifecycle?.sizeBytes ?? clip.sizeBytes,
         createdAt: clip.createdAt,
         expiresAt: clip.expiresAt,
+        isFrozen: clip.isFrozen ?? undefined,
+        storageLocation: clip.storageLocation ?? undefined,
+        syncStatus: clip.syncStatus ?? null,
+        isHot: clip.isHot ?? null,
+        isSynced: clip.isSynced ?? null,
+        isFinalized: clip.isFinalized ?? null,
         thumbnailAssets: clip.thumbnailAssets ?? null,
         rawData: clip,
       });
@@ -281,6 +291,10 @@
         expiresAt: dvr.expiresAt,
         isFrozen: dvr.isFrozen ?? undefined,
         storageLocation: lifecycle?.s3Url ? "s3" : (dvr.storageLocation ?? undefined),
+        syncStatus: dvr.syncStatus ?? null,
+        isHot: dvr.isHot ?? null,
+        isSynced: dvr.isSynced ?? null,
+        isFinalized: dvr.isFinalized ?? null,
         thumbnailAssets: dvr.thumbnailAssets ?? null,
         rawData: dvr,
       });
@@ -302,6 +316,11 @@
         sizeBytes: lifecycle?.sizeBytes ?? vod.sizeBytes,
         createdAt: vod.createdAt,
         expiresAt: vod.expiresAt,
+        storageLocation: vod.storageLocation ?? undefined,
+        syncStatus: vod.syncStatus ?? null,
+        isHot: vod.isHot ?? null,
+        isSynced: vod.isSynced ?? null,
+        isFinalized: vod.isFinalized ?? null,
         thumbnailAssets: vod.thumbnailAssets ?? null,
         rawData: vod,
       });
@@ -1208,23 +1227,55 @@
     return "Unknown";
   }
 
+  const playableArtifactStages = new Set([
+    "available",
+    "completed",
+    "complete",
+    "done",
+    "ready",
+    "synced",
+  ]);
+  const blockedArtifactStages = new Set([
+    "registry",
+    "requested",
+    "queued",
+    "processing",
+    "progress",
+    "uploading",
+    "pending",
+    "unknown",
+  ]);
+  const failedArtifactStages = new Set([
+    "deleted",
+    "evicted",
+    "failed",
+    "failed_terminal",
+    "error",
+    "lost_local",
+  ]);
+
+  function hasPlayableStorage(artifact: UnifiedArtifact): boolean {
+    return (
+      artifact.isHot === true ||
+      artifact.isSynced === true ||
+      artifact.isFinalized === true ||
+      artifact.syncStatus?.toLowerCase() === "synced"
+    );
+  }
+
   function canPlayArtifact(artifact: UnifiedArtifact): boolean {
     if (artifact.type === "dvr") {
       if (!artifact.playbackId && !artifact.hash) return false;
-      if (isExpired(artifact.expiresAt)) return false;
-      if (["failed", "deleted"].includes(artifact.status.toLowerCase())) return false;
-      return true;
     } else if (!artifact.playbackId) return false;
+
     if (isExpired(artifact.expiresAt)) return false;
-    if (artifact.status.toLowerCase() === "failed") return false;
-    if (artifact.status.toLowerCase() === "deleted") return false;
-    if (
-      ["processing", "recording", "uploading", "requested", "queued", "progress"].includes(
-        artifact.status.toLowerCase()
-      )
-    )
-      return false;
-    return true;
+
+    const status = artifact.status.toLowerCase();
+    if (failedArtifactStages.has(status)) return false;
+    if (artifact.type === "dvr" && (status === "started" || status === "recording")) return true;
+    if (blockedArtifactStages.has(status) && !hasPlayableStorage(artifact)) return false;
+    if (playableArtifactStages.has(status)) return true;
+    return hasPlayableStorage(artifact);
   }
 
   function dvrViewUrl(artifact: UnifiedArtifact) {
@@ -1235,6 +1286,7 @@
   }
 
   function playArtifact(artifact: UnifiedArtifact) {
+    if (!canPlayArtifact(artifact)) return;
     if (artifact.type === "dvr") {
       const url = dvrViewUrl(artifact);
       if (!url) return;
