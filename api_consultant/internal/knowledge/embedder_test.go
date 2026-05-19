@@ -23,6 +23,21 @@ func (f fakeEmbeddingClient) Embed(_ context.Context, inputs []string) ([][]floa
 	return vectors, nil
 }
 
+type sizeLimitedEmbeddingClient struct {
+	maxInputs int
+}
+
+func (f sizeLimitedEmbeddingClient) Embed(_ context.Context, inputs []string) ([][]float32, error) {
+	if len(inputs) > f.maxInputs {
+		return nil, errors.New("unexpected status 400 Bad Request: Invalid 'input': maximum request size is 300000 tokens per request")
+	}
+	vectors := make([][]float32, 0, len(inputs))
+	for i := range inputs {
+		vectors = append(vectors, []float32{float32(i)})
+	}
+	return vectors, nil
+}
+
 func TestEmbedderChunksDocument(t *testing.T) {
 	embedder, err := NewEmbedder(fakeEmbeddingClient{}, WithTokenLimit(7), WithTokenOverlap(3))
 	if err != nil {
@@ -60,6 +75,20 @@ func TestEmbedderQuery(t *testing.T) {
 	}
 	if len(vector) != 1 || vector[0] != 0.5 {
 		t.Fatalf("unexpected vector: %v", vector)
+	}
+}
+
+func TestEmbedBatchedSplitsProviderTooLargeErrors(t *testing.T) {
+	embedder, err := NewEmbedder(sizeLimitedEmbeddingClient{maxInputs: 2})
+	if err != nil {
+		t.Fatalf("new embedder: %v", err)
+	}
+	vectors, err := embedder.embedBatched(context.Background(), []string{"one", "two", "three", "four", "five"})
+	if err != nil {
+		t.Fatalf("embedBatched returned error: %v", err)
+	}
+	if len(vectors) != 5 {
+		t.Fatalf("vectors = %d, want 5", len(vectors))
 	}
 }
 

@@ -23,7 +23,7 @@ const (
 	defaultTokenLimit   = 500
 	defaultTokenOverlap = 50
 	maxEmbedBatchSize   = 2048
-	maxBatchTokens      = 250_000 // stay under typical 300K per-request API limits
+	maxBatchTokens      = 150_000 // estimator is approximate; keep a wide margin under 300K request caps
 	minChunkTokens      = 20
 	bpeMultiplier       = 1.3
 
@@ -182,17 +182,48 @@ func (e *Embedder) EmbedDocument(ctx context.Context, url, title, content string
 func (e *Embedder) embedBatched(ctx context.Context, chunks []string) ([][]float32, error) {
 	batches := splitBatches(chunks, maxEmbedBatchSize, maxBatchTokens)
 	if len(batches) == 1 {
-		return e.client.Embed(ctx, batches[0])
+		return e.embedBatchWithRetry(ctx, batches[0])
 	}
 	var all [][]float32
 	for i, batch := range batches {
-		vecs, err := e.client.Embed(ctx, batch)
+		vecs, err := e.embedBatchWithRetry(ctx, batch)
 		if err != nil {
 			return nil, fmt.Errorf("embed batch %d: %w", i, err)
 		}
 		all = append(all, vecs...)
 	}
 	return all, nil
+}
+
+func (e *Embedder) embedBatchWithRetry(ctx context.Context, batch []string) ([][]float32, error) {
+	vecs, err := e.client.Embed(ctx, batch)
+	if err == nil {
+		return vecs, nil
+	}
+	if len(batch) <= 1 || !isEmbeddingRequestTooLarge(err) {
+		return nil, err
+	}
+	mid := len(batch) / 2
+	left, leftErr := e.embedBatchWithRetry(ctx, batch[:mid])
+	if leftErr != nil {
+		return nil, leftErr
+	}
+	right, rightErr := e.embedBatchWithRetry(ctx, batch[mid:])
+	if rightErr != nil {
+		return nil, rightErr
+	}
+	return append(left, right...), nil
+}
+
+func isEmbeddingRequestTooLarge(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "maximum request size") ||
+		strings.Contains(msg, "too many tokens") ||
+		strings.Contains(msg, "token limit") ||
+		strings.Contains(msg, "300000 tokens")
 }
 
 // splitBatches groups chunks into batches respecting both a maximum chunk
