@@ -10,4 +10,6 @@
     host: 127.0.0.1
     port: 443
     timeout: 60
-  when: not (ansible_facts.os_family == 'Darwin' and edge_darwin_domain == 'user')
+  when:
+    - not ansible_check_mode
+    - not (ansible_facts.os_family == 'Darwin' and edge_darwin_domain == 'user')

@@ -45,6 +45,7 @@
     remote_src: true
     creates: "{{ helmsman_install_sentinel }}"
   notify: helmsman restart
+  when: not ansible_check_mode
 
 - name: Normalize extracted binary name
   ansible.builtin.shell: |
@@ -59,3 +60,4 @@
     touch "{{ helmsman_install_sentinel }}"
   args:
     creates: "{{ helmsman_install_sentinel }}"
+  when: not ansible_check_mode

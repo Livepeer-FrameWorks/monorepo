@@ -6,7 +6,9 @@
     state: restarted
     daemon_reload: true
   register: mistserver_restarted
-  when: ansible_facts.os_family != 'Darwin'
+  when:
+    - not ansible_check_mode
+    - ansible_facts.os_family != 'Darwin'
 
 - name: Restart mistserver (darwin)
   listen: mistserver restart
@@ -14,4 +16,6 @@
     name: "{{ mistserver_darwin_label }}"
     state: restarted
   register: mistserver_restarted
-  when: ansible_facts.os_family == 'Darwin'
+  when:
+    - not ansible_check_mode
+    - ansible_facts.os_family == 'Darwin'

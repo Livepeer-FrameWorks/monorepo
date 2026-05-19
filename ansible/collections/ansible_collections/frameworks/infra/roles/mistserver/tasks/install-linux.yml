@@ -46,6 +46,7 @@
     group: "{{ mistserver_group }}"
     creates: "{{ mistserver_install_sentinel }}"
   notify: mistserver restart
+  when: not ansible_check_mode
 
 - name: Ensure MistServer binary is executable and mark install sentinel
   ansible.builtin.shell: |
@@ -58,6 +59,7 @@
     chown {{ mistserver_user }}:{{ mistserver_group }} "{{ mistserver_install_sentinel }}"
   args:
     creates: "{{ mistserver_install_sentinel }}"
+  when: not ansible_check_mode
 
 - name: Preflight MistServer native binary shared libraries
   ansible.builtin.shell: |
@@ -70,10 +72,13 @@
   register: mistserver_ldd_missing
   changed_when: false
   failed_when: false
+  when: not ansible_check_mode
 
 - name: Fail when MistServer native binary dependencies are missing
   ansible.builtin.fail:
     msg: |
       MistServer native artifact has unresolved shared libraries:
       {{ mistserver_ldd_missing.stdout }}
-  when: mistserver_ldd_missing.stdout | trim | length > 0
+  when:
+    - not ansible_check_mode
+    - mistserver_ldd_missing.stdout | trim | length > 0

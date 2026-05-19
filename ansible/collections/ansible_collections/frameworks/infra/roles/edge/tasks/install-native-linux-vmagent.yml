@@ -53,6 +53,7 @@
     remote_src: true
     creates: "{{ edge_vmagent_install_sentinel }}"
   notify: edge vmagent restart
+  when: not ansible_check_mode
 
 - name: Install vmagent-prod binary and mark sentinel
   ansible.builtin.shell: |
@@ -62,6 +63,7 @@
     chown frameworks:frameworks "{{ edge_vmagent_install_sentinel }}"
   args:
     creates: "{{ edge_vmagent_install_sentinel }}"
+  when: not ansible_check_mode
 
 - name: Render vmagent systemd unit
   ansible.builtin.copy:
@@ -99,3 +101,4 @@
     state: started
     enabled: true
     daemon_reload: true
+  when: not ansible_check_mode

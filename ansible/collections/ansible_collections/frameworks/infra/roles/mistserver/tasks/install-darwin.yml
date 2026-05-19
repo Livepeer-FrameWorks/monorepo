@@ -45,6 +45,7 @@
     remote_src: true
     creates: "{{ mistserver_install_sentinel }}"
   notify: mistserver restart
+  when: not ansible_check_mode
 
 - name: Ensure MistServer binary is executable and mark install sentinel
   ansible.builtin.shell: |
@@ -54,3 +55,4 @@
     touch "{{ mistserver_install_sentinel }}"
   args:
     creates: "{{ mistserver_install_sentinel }}"
+  when: not ansible_check_mode

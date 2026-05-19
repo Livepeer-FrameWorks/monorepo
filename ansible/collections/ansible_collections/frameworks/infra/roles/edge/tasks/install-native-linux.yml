@@ -1,15 +1,50 @@
 ---
-- name: Apply mistserver sub-role
+- name: Apply mistserver install sub-role
   ansible.builtin.include_role:
     name: frameworks.infra.mistserver
+    tasks_from: install.yml
   vars:
     mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
     mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
     mistserver_api_password: "{{ edge_mist_api_password }}"
 
-- name: Apply helmsman sub-role
+- name: Apply mistserver configure sub-role
+  ansible.builtin.include_role:
+    name: frameworks.infra.mistserver
+    tasks_from: configure.yml
+  vars:
+    mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
+    mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
+    mistserver_api_password: "{{ edge_mist_api_password }}"
+
+- name: Flush mistserver handlers before service
+  ansible.builtin.meta: flush_handlers
+
+- name: Apply mistserver service sub-role
+  ansible.builtin.include_role:
+    name: frameworks.infra.mistserver
+    tasks_from: service.yml
+  vars:
+    mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
+    mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
+    mistserver_api_password: "{{ edge_mist_api_password }}"
+
+- name: Flush mistserver handlers before validate
+  ansible.builtin.meta: flush_handlers
+
+- name: Apply mistserver validate sub-role
+  ansible.builtin.include_role:
+    name: frameworks.infra.mistserver
+    tasks_from: validate.yml
+  vars:
+    mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
+    mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
+    mistserver_api_password: "{{ edge_mist_api_password }}"
+
+- name: Apply helmsman install sub-role
   ansible.builtin.include_role:
     name: frameworks.infra.helmsman
+    tasks_from: install.yml
   vars:
     helmsman_artifact_url: "{{ edge_helmsman_artifact_url }}"
     helmsman_artifact_checksum: "{{ edge_helmsman_artifact_checksum }}"
@@ -29,6 +64,112 @@
       MISTSERVER_VERSION: "{{ edge_mistserver_version }}"
       CADDY_VERSION: "{{ edge_caddy_version }}"
       FRAMEWORKS_CONFIG_SCHEMA_VERSION: "{{ edge_config_schema_version }}"
+      HELMSMAN_BW_LIMIT_BYTES_PER_SEC: "{{ edge_bandwidth_limit_bytes_per_sec }}"
+      HELMSMAN_MAX_TRANSCODES: "{{ edge_max_transcodes }}"
+      HELMSMAN_STORAGE_CAPACITY_BYTES: "{{ edge_storage_capacity_bytes }}"
+      HELMSMAN_CAP_INGEST: "{{ edge_cap_ingest }}"
+      HELMSMAN_CAP_EDGE: "{{ edge_cap_edge }}"
+      HELMSMAN_CAP_STORAGE: "{{ edge_cap_storage }}"
+      HELMSMAN_CAP_PROCESSING: "{{ edge_cap_processing }}"
+
+- name: Apply helmsman configure sub-role
+  ansible.builtin.include_role:
+    name: frameworks.infra.helmsman
+    tasks_from: configure.yml
+  vars:
+    helmsman_artifact_url: "{{ edge_helmsman_artifact_url }}"
+    helmsman_artifact_checksum: "{{ edge_helmsman_artifact_checksum }}"
+    helmsman_node_id: "{{ edge_node_id }}"
+    helmsman_edge_domain: "{{ edge_domain }}"
+    helmsman_acme_email: "{{ edge_acme_email | default('', true) }}"
+    helmsman_foghorn_grpc_addr: "{{ edge_foghorn_grpc_addr }}"
+    helmsman_enrollment_token: "{{ edge_enrollment_token }}"
+    helmsman_deploy_mode: native
+    helmsman_mist_upstream: "localhost:8080"
+    helmsman_webhook_upstream: "localhost:18007"
+    helmsman_mist_api_password: "{{ edge_mist_api_password }}"
+    helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_ca_bundle_pem | length > 0 else '' }}"
+    helmsman_extra_env:
+      CLUSTER_ID: "{{ edge_cluster_id }}"
+      HELMSMAN_VERSION: "{{ edge_helmsman_version }}"
+      MISTSERVER_VERSION: "{{ edge_mistserver_version }}"
+      CADDY_VERSION: "{{ edge_caddy_version }}"
+      FRAMEWORKS_CONFIG_SCHEMA_VERSION: "{{ edge_config_schema_version }}"
+      HELMSMAN_BW_LIMIT_BYTES_PER_SEC: "{{ edge_bandwidth_limit_bytes_per_sec }}"
+      HELMSMAN_MAX_TRANSCODES: "{{ edge_max_transcodes }}"
+      HELMSMAN_STORAGE_CAPACITY_BYTES: "{{ edge_storage_capacity_bytes }}"
+      HELMSMAN_CAP_INGEST: "{{ edge_cap_ingest }}"
+      HELMSMAN_CAP_EDGE: "{{ edge_cap_edge }}"
+      HELMSMAN_CAP_STORAGE: "{{ edge_cap_storage }}"
+      HELMSMAN_CAP_PROCESSING: "{{ edge_cap_processing }}"
+
+- name: Flush helmsman handlers before service
+  ansible.builtin.meta: flush_handlers
+
+- name: Apply helmsman service sub-role
+  ansible.builtin.include_role:
+    name: frameworks.infra.helmsman
+    tasks_from: service.yml
+  vars:
+    helmsman_artifact_url: "{{ edge_helmsman_artifact_url }}"
+    helmsman_artifact_checksum: "{{ edge_helmsman_artifact_checksum }}"
+    helmsman_node_id: "{{ edge_node_id }}"
+    helmsman_edge_domain: "{{ edge_domain }}"
+    helmsman_acme_email: "{{ edge_acme_email | default('', true) }}"
+    helmsman_foghorn_grpc_addr: "{{ edge_foghorn_grpc_addr }}"
+    helmsman_enrollment_token: "{{ edge_enrollment_token }}"
+    helmsman_deploy_mode: native
+    helmsman_mist_upstream: "localhost:8080"
+    helmsman_webhook_upstream: "localhost:18007"
+    helmsman_mist_api_password: "{{ edge_mist_api_password }}"
+    helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_ca_bundle_pem | length > 0 else '' }}"
+    helmsman_extra_env:
+      CLUSTER_ID: "{{ edge_cluster_id }}"
+      HELMSMAN_VERSION: "{{ edge_helmsman_version }}"
+      MISTSERVER_VERSION: "{{ edge_mistserver_version }}"
+      CADDY_VERSION: "{{ edge_caddy_version }}"
+      FRAMEWORKS_CONFIG_SCHEMA_VERSION: "{{ edge_config_schema_version }}"
+      HELMSMAN_BW_LIMIT_BYTES_PER_SEC: "{{ edge_bandwidth_limit_bytes_per_sec }}"
+      HELMSMAN_MAX_TRANSCODES: "{{ edge_max_transcodes }}"
+      HELMSMAN_STORAGE_CAPACITY_BYTES: "{{ edge_storage_capacity_bytes }}"
+      HELMSMAN_CAP_INGEST: "{{ edge_cap_ingest }}"
+      HELMSMAN_CAP_EDGE: "{{ edge_cap_edge }}"
+      HELMSMAN_CAP_STORAGE: "{{ edge_cap_storage }}"
+      HELMSMAN_CAP_PROCESSING: "{{ edge_cap_processing }}"
+
+- name: Flush helmsman handlers before validate
+  ansible.builtin.meta: flush_handlers
+
+- name: Apply helmsman validate sub-role
+  ansible.builtin.include_role:
+    name: frameworks.infra.helmsman
+    tasks_from: validate.yml
+  vars:
+    helmsman_artifact_url: "{{ edge_helmsman_artifact_url }}"
+    helmsman_artifact_checksum: "{{ edge_helmsman_artifact_checksum }}"
+    helmsman_node_id: "{{ edge_node_id }}"
+    helmsman_edge_domain: "{{ edge_domain }}"
+    helmsman_acme_email: "{{ edge_acme_email | default('', true) }}"
+    helmsman_foghorn_grpc_addr: "{{ edge_foghorn_grpc_addr }}"
+    helmsman_enrollment_token: "{{ edge_enrollment_token }}"
+    helmsman_deploy_mode: native
+    helmsman_mist_upstream: "localhost:8080"
+    helmsman_webhook_upstream: "localhost:18007"
+    helmsman_mist_api_password: "{{ edge_mist_api_password }}"
+    helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_ca_bundle_pem | length > 0 else '' }}"
+    helmsman_extra_env:
+      CLUSTER_ID: "{{ edge_cluster_id }}"
+      HELMSMAN_VERSION: "{{ edge_helmsman_version }}"
+      MISTSERVER_VERSION: "{{ edge_mistserver_version }}"
+      CADDY_VERSION: "{{ edge_caddy_version }}"
+      FRAMEWORKS_CONFIG_SCHEMA_VERSION: "{{ edge_config_schema_version }}"
+      HELMSMAN_BW_LIMIT_BYTES_PER_SEC: "{{ edge_bandwidth_limit_bytes_per_sec }}"
+      HELMSMAN_MAX_TRANSCODES: "{{ edge_max_transcodes }}"
+      HELMSMAN_STORAGE_CAPACITY_BYTES: "{{ edge_storage_capacity_bytes }}"
+      HELMSMAN_CAP_INGEST: "{{ edge_cap_ingest }}"
+      HELMSMAN_CAP_EDGE: "{{ edge_cap_edge }}"
+      HELMSMAN_CAP_STORAGE: "{{ edge_cap_storage }}"
+      HELMSMAN_CAP_PROCESSING: "{{ edge_cap_processing }}"
 
 - name: Apply caddy bootstrap
   ansible.builtin.import_tasks: install-native-linux-caddy.yml

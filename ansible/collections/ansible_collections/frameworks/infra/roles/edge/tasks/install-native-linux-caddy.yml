@@ -59,6 +59,7 @@
     remote_src: true
     creates: "{{ edge_caddy_install_sentinel }}"
   notify: edge caddy restart
+  when: not ansible_check_mode
 
 - name: Ensure Caddy binary is executable and mark install sentinel
   ansible.builtin.shell: |
@@ -67,6 +68,7 @@
     touch "{{ edge_caddy_install_sentinel }}"
   args:
     creates: "{{ edge_caddy_install_sentinel }}"
+  when: not ansible_check_mode
 
 - name: Render bootstrap Caddyfile
   ansible.builtin.template:
@@ -135,3 +137,4 @@
     state: started
     enabled: true
     daemon_reload: true
+  when: not ansible_check_mode

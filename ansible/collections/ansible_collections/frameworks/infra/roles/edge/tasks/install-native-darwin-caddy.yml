@@ -33,6 +33,7 @@
     dest: "{{ edge_darwin_base_dir }}/caddy"
     remote_src: true
     creates: "{{ edge_caddy_install_sentinel }}"
+  when: not ansible_check_mode
 
 - name: Mark caddy install sentinel and ensure binary is executable (darwin)
   ansible.builtin.shell: |
@@ -41,6 +42,7 @@
     touch "{{ edge_caddy_install_sentinel }}"
   args:
     creates: "{{ edge_caddy_install_sentinel }}"
+  when: not ansible_check_mode
 
 - name: Render Caddyfile (darwin)
   ansible.builtin.template:
@@ -83,3 +85,4 @@
     name: com.livepeer.frameworks.caddy
     state: started
     enabled: true
+  when: not ansible_check_mode

@@ -30,6 +30,16 @@ edge_ca_bundle_pem: ""
 edge_telemetry_url: ""
 edge_telemetry_token: ""
 
+# Optional node capacity and capability controls. Capabilities default to
+# Helmsman's built-in all-enabled behavior when left empty.
+edge_bandwidth_limit_bytes_per_sec: 0
+edge_max_transcodes: 0
+edge_storage_capacity_bytes: 0
+edge_cap_ingest: ""
+edge_cap_edge: ""
+edge_cap_storage: ""
+edge_cap_processing: ""
+
 # Generated upstream (Go caller passes a random 32-char hex). Shared between
 # mistserver (-a frameworks:<pw>) and helmsman (MIST_API_PASSWORD env).
 edge_mist_api_password: ""

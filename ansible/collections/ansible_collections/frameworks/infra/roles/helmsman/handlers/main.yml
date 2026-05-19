@@ -6,7 +6,9 @@
     state: restarted
     daemon_reload: true
   register: helmsman_restarted
-  when: ansible_facts.os_family != 'Darwin'
+  when:
+    - not ansible_check_mode
+    - ansible_facts.os_family != 'Darwin'
 
 - name: Restart helmsman (darwin)
   listen: helmsman restart
@@ -14,4 +16,6 @@
     name: "{{ helmsman_darwin_label }}"
     state: restarted
   register: helmsman_restarted
-  when: ansible_facts.os_family == 'Darwin'
+  when:
+    - not ansible_check_mode
+    - ansible_facts.os_family == 'Darwin'

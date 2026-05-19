@@ -4,3 +4,4 @@
     host: 127.0.0.1
     port: "{{ mistserver_port }}"
     timeout: 60
+  when: not ansible_check_mode

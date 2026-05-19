@@ -5,11 +5,15 @@
     state: started
     enabled: true
     daemon_reload: true
-  when: ansible_facts.os_family != 'Darwin'
+  when:
+    - not ansible_check_mode
+    - ansible_facts.os_family != 'Darwin'
 
 - name: Ensure launchd job loaded (darwin)
   community.general.launchd:
     name: "{{ mistserver_darwin_label }}"
     state: started
     enabled: true
-  when: ansible_facts.os_family == 'Darwin'
+  when:
+    - not ansible_check_mode
+    - ansible_facts.os_family == 'Darwin'

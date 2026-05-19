@@ -50,6 +50,7 @@
     group: "{{ helmsman_group }}"
     creates: "{{ helmsman_install_sentinel }}"
   notify: helmsman restart
+  when: not ansible_check_mode
 
 # Release archives ship the binary under one of three names; normalize to
 # "helmsman" then mark the sentinel so this block is a true once-per-pin op.
@@ -67,3 +68,4 @@
     chown {{ helmsman_user }}:{{ helmsman_group }} "{{ helmsman_install_sentinel }}"
   args:
     creates: "{{ helmsman_install_sentinel }}"
+  when: not ansible_check_mode
