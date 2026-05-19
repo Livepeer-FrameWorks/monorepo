@@ -111,6 +111,9 @@ func (c *EdgeProvisionConfig) resolvedMode() string {
 //	[7] HTTPS verify (direct HTTP probe of /health)
 func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
 	mode := config.resolvedMode()
+	if strings.TrimSpace(config.FoghornGRPCAddr) == "" {
+		return fmt.Errorf("edge Foghorn gRPC address is required; use Bridge enrollment or a cluster manifest that can derive the target Foghorn endpoint")
+	}
 	if config.DryRun {
 		fmt.Println("Dry-run mode: remote preflight plus Ansible --check --diff; registration, ConfigSeed delivery, service start, and HTTPS verification are skipped")
 	}

@@ -36,6 +36,10 @@ func newEdgeDeployCmd() *cobra.Command {
 		version         string
 		timeout         time.Duration
 		tokenTTL        string
+		capabilities    []string
+		bandwidthMbps   int
+		maxTranscodes   int
+		storageBytes    uint64
 	)
 
 	cmd := &cobra.Command{
@@ -103,6 +107,10 @@ Mode B — Pre-existing token (no login needed):
 				version:            version,
 				timeout:            timeout,
 				enrollmentTokenTTL: tokenTTL,
+				capabilities:       capabilities,
+				bandwidthMbps:      bandwidthMbps,
+				maxTranscodes:      maxTranscodes,
+				storageBytes:       storageBytes,
 			}
 
 			if modeA {
@@ -148,6 +156,10 @@ Mode B — Pre-existing token (no login needed):
 	cmd.Flags().StringVar(&version, "version", "", "platform version for binary resolution")
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "HTTPS verification timeout")
 	cmd.Flags().StringVar(&tokenTTL, "token-ttl", "", "enrollment token TTL when --cluster-id mints a token")
+	cmd.Flags().StringSliceVar(&capabilities, "capability", nil, "Edge capability to enable (repeatable: ingest, edge, storage, processing)")
+	cmd.Flags().IntVar(&bandwidthMbps, "bandwidth-mbps", 0, "Advertised edge bandwidth limit in Mbps")
+	cmd.Flags().IntVar(&maxTranscodes, "max-transcodes", 0, "Maximum local transcodes for Helmsman to report")
+	cmd.Flags().Uint64Var(&storageBytes, "storage-capacity-bytes", 0, "Local storage capacity limit for Helmsman to report")
 	return cmd
 }
 
@@ -166,6 +178,10 @@ type deployConfig struct {
 	version            string
 	timeout            time.Duration
 	enrollmentTokenTTL string
+	capabilities       []string
+	bandwidthMbps      int
+	maxTranscodes      int
+	storageBytes       uint64
 }
 
 // deployWithToken runs Mode B and populates nodeID / domain /
@@ -373,6 +389,10 @@ func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, res
 		KeyPEM:          resp.GetKeyPem(),
 		CABundlePEM:     string(resp.GetInternalCaBundle()),
 		Email:           cfg.email,
+		Capabilities:    cfg.capabilities,
+		BandwidthMbps:   cfg.bandwidthMbps,
+		MaxTranscodes:   cfg.maxTranscodes,
+		StorageBytes:    cfg.storageBytes,
 		SkipPreflight:   cfg.skipPreflight,
 		ApplyTuning:     cfg.applyTuning,
 		Timeout:         cfg.timeout,
@@ -407,6 +427,10 @@ func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp
 		KeyPEM:          resp.GetKeyPem(),
 		CABundlePEM:     string(resp.GetInternalCaBundle()),
 		Email:           cfg.email,
+		Capabilities:    cfg.capabilities,
+		BandwidthMbps:   cfg.bandwidthMbps,
+		MaxTranscodes:   cfg.maxTranscodes,
+		StorageBytes:    cfg.storageBytes,
 		SkipPreflight:   cfg.skipPreflight,
 		ApplyTuning:     cfg.applyTuning,
 		Timeout:         cfg.timeout,

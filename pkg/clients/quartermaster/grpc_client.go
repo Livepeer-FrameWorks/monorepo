@@ -149,7 +149,7 @@ func (c *GRPCClient) Close() error {
 // CheckHealth verifies that the Quartermaster gRPC endpoint is reachable and
 // serving through this client's configured transport and interceptors.
 func (c *GRPCClient) CheckHealth(ctx context.Context) error {
-	resp, err := healthpb.NewHealthClient(c.conn).Check(ctx, &healthpb.HealthCheckRequest{})
+	resp, err := healthpb.NewHealthClient(c.conn).Check(ctx, &healthpb.HealthCheckRequest{}, grpc.WaitForReady(false))
 	if err != nil {
 		return err
 	}
