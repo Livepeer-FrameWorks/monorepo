@@ -757,3 +757,42 @@ func TestBuildThumbnailAssets(t *testing.T) {
 		})
 	}
 }
+
+func TestArtifactNodesFromDBBuildsWarmNodeFallback(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+
+	mock.ExpectQuery("SELECT an.node_id").
+		WithArgs("hash-1", "vod").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"node_id", "file_path", "size_bytes", "format", "stream_internal_name",
+		}).AddRow("edge-node-1", "/recordings/vod/hash-1.mp4", int64(2048), "mp4", "source-stream"))
+
+	nodes, err := artifactNodesFromDB(context.Background(), mockDB, "hash-1", "vod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected one node, got %d", len(nodes))
+	}
+	got := nodes[0]
+	if got.NodeID != "edge-node-1" {
+		t.Fatalf("node id = %q", got.NodeID)
+	}
+	if got.Artifact.GetClipHash() != "hash-1" {
+		t.Fatalf("artifact hash = %q", got.Artifact.GetClipHash())
+	}
+	if got.Artifact.GetFormat() != "mp4" {
+		t.Fatalf("format = %q", got.Artifact.GetFormat())
+	}
+	if got.Artifact.GetArtifactType() != pb.ArtifactEvent_ARTIFACT_TYPE_VOD {
+		t.Fatalf("artifact type = %v", got.Artifact.GetArtifactType())
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

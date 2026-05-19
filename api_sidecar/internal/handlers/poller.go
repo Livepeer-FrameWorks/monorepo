@@ -1303,6 +1303,13 @@ func scanVODDirectory(vodDir string, artifactIndex map[string]*ClipInfo) (uint64
 		if len(hash) < 18 || !isHex(hash) {
 			continue
 		}
+		if _, exists := artifactIndex[hash]; exists {
+			monitorLogger.WithFields(logging.Fields{
+				"artifact_hash": hash,
+				"file_name":     name,
+			}).Warn("Ignoring duplicate VOD artifact file for hash")
+			continue
+		}
 
 		info, err := entry.Info()
 		if err != nil {

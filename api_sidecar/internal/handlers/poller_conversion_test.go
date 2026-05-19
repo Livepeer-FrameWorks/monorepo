@@ -696,6 +696,44 @@ func TestScanVODDirectory_WithFiles(t *testing.T) {
 	}
 }
 
+func TestScanVODDirectory_DuplicateHashKeepsFirstSortedFile(t *testing.T) {
+	setupScanLogger(t)
+
+	oldThreshold := fileStabilityThreshold
+	fileStabilityThreshold = 0
+	t.Cleanup(func() { fileStabilityThreshold = oldThreshold })
+
+	vodDir := filepath.Join(t.TempDir(), "vod")
+	if err := os.MkdirAll(vodDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	hash := "aabbccddeeff001122"
+	if err := os.WriteFile(filepath.Join(vodDir, hash+".mp4"), make([]byte, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vodDir, hash+".webm"), make([]byte, 8192), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx := make(map[string]*ClipInfo)
+	size, count := scanVODDirectory(vodDir, idx)
+
+	if count != 1 {
+		t.Fatalf("expected one indexed artifact, got %d", count)
+	}
+	if size != 4096 {
+		t.Fatalf("expected duplicate file to be ignored, got size=%d", size)
+	}
+	info, ok := idx[hash]
+	if !ok {
+		t.Fatal("expected hash in index")
+	}
+	if info.Format != "mp4" {
+		t.Fatalf("format = %q, want mp4", info.Format)
+	}
+}
+
 func TestScanClipsDirectory_Empty(t *testing.T) {
 	setupScanLogger(t)
 	clipsDir := filepath.Join(t.TempDir(), "clips")

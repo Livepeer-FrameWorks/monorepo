@@ -537,6 +537,11 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		artifactNodes = manager.FindNodesByArtifactHash(artifactResp.ArtifactHash)
 	}
 	if len(artifactNodes) == 0 {
+		if rows, rowErr := artifactNodesFromDB(ctx, deps.DB, artifactResp.ArtifactHash, artifactType); rowErr == nil {
+			artifactNodes = rows
+		}
+	}
+	if len(artifactNodes) == 0 {
 		// Check peer clusters for hot copies before falling through to S3/defrost
 		if deps.RemoteArtifacts != nil {
 			remoteHits, _ := deps.RemoteArtifacts.GetRemoteArtifacts(ctx, artifactResp.ArtifactHash)
@@ -772,6 +777,67 @@ func rankNodeScoresForArtifact(nodes []balancer.NodeWithScore, viewerLat, viewer
 		})
 	}
 	return rankArtifactNodes(out, viewerLat, viewerLon, 5)
+}
+
+func artifactNodesFromDB(ctx context.Context, db *sql.DB, artifactHash, artifactType string) ([]state.ArtifactNodeInfo, error) {
+	if db == nil || strings.TrimSpace(artifactHash) == "" {
+		return nil, nil
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT an.node_id,
+		       COALESCE(an.file_path, ''),
+		       COALESCE(an.size_bytes, a.size_bytes, 0),
+		       COALESCE(NULLIF(a.format, ''), ''),
+		       COALESCE(NULLIF(a.stream_internal_name, ''), '')
+		  FROM foghorn.artifact_nodes an
+		  JOIN foghorn.artifacts a ON a.artifact_hash = an.artifact_hash
+		 WHERE an.artifact_hash = $1
+		   AND a.artifact_type = $2
+		   AND an.is_orphaned = false
+		 ORDER BY an.last_seen_at DESC NULLS LAST
+	`, artifactHash, artifactType)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []state.ArtifactNodeInfo
+	for rows.Next() {
+		var nodeID, filePath, format, streamName string
+		var sizeBytes int64
+		if scanErr := rows.Scan(&nodeID, &filePath, &sizeBytes, &format, &streamName); scanErr != nil {
+			return nil, scanErr
+		}
+		if sizeBytes < 0 {
+			sizeBytes = 0
+		}
+		nodes = append(nodes, state.ArtifactNodeInfo{
+			NodeID: nodeID,
+			Score:  0,
+			Artifact: &pb.StoredArtifact{
+				ClipHash:     artifactHash,
+				StreamName:   streamName,
+				FilePath:     filePath,
+				SizeBytes:    uint64(sizeBytes),
+				Format:       format,
+				ArtifactType: playbackArtifactTypeToProto(artifactType),
+			},
+		})
+	}
+	return nodes, rows.Err()
+}
+
+func playbackArtifactTypeToProto(artifactType string) pb.ArtifactEvent_ArtifactType {
+	switch strings.ToLower(strings.TrimSpace(artifactType)) {
+	case "clip":
+		return pb.ArtifactEvent_ARTIFACT_TYPE_CLIP
+	case "dvr":
+		return pb.ArtifactEvent_ARTIFACT_TYPE_DVR
+	case "vod":
+		return pb.ArtifactEvent_ARTIFACT_TYPE_VOD
+	default:
+		return pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED
+	}
 }
 
 func rankArtifactNodes(nodes []state.ArtifactNodeInfo, viewerLat, viewerLon float64, maxNodes int) []state.ArtifactNodeInfo {
