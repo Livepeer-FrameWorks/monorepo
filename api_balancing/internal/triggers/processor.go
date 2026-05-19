@@ -80,6 +80,10 @@ type DVRStarter interface {
 	StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error)
 }
 
+type DVRStarterWithSourceHint interface {
+	StartDVRWithSourceHint(ctx context.Context, req *pb.StartDVRRequest, sourceNodeID string) (*pb.StartDVRResponse, error)
+}
+
 // Processor implements the MistTriggerProcessor interface for handling MistServer triggers
 type Processor struct {
 	logger              logging.Logger
@@ -1299,13 +1303,20 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			userID := streamValidation.UserId
 			dvrCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			dvrResponse, err := p.dvrService.StartDVR(dvrCtx, &pb.StartDVRRequest{
+			dvrReq := &pb.StartDVRRequest{
 				TenantId:     streamValidation.TenantId,
 				InternalName: streamValidation.InternalName,
 				UserId:       &userID,
 				ClusterId:    streamValidation.GetOriginClusterId(),
 				DvrPolicy:    streamValidation.GetDvrPolicy(),
-			})
+			}
+			var dvrResponse *pb.StartDVRResponse
+			var err error
+			if hinted, ok := p.dvrService.(DVRStarterWithSourceHint); ok {
+				dvrResponse, err = hinted.StartDVRWithSourceHint(dvrCtx, dvrReq, trigger.GetNodeId())
+			} else {
+				dvrResponse, err = p.dvrService.StartDVR(dvrCtx, dvrReq)
+			}
 			if err != nil {
 				p.logger.WithFields(logging.Fields{
 					"internal_name": streamValidation.InternalName,

@@ -532,6 +532,25 @@ func waitForStreamSource(ctx context.Context, internalName string, timeout time.
 	}
 }
 
+func waitForStreamSourceWithHint(ctx context.Context, internalName, sourceNodeHint string, timeout time.Duration) (nodeID string, baseURL string, ok bool) {
+	if nodeID, baseURL, ok = sourceNodeFromHint(sourceNodeHint); ok {
+		return nodeID, baseURL, true
+	}
+	return waitForStreamSource(ctx, internalName, timeout)
+}
+
+func sourceNodeFromHint(sourceNodeHint string) (nodeID string, baseURL string, ok bool) {
+	sourceNodeHint = strings.TrimSpace(sourceNodeHint)
+	if sourceNodeHint == "" {
+		return "", "", false
+	}
+	ns := state.DefaultManager().GetNodeState(sourceNodeHint)
+	if ns == nil || !ns.IsHealthy || ns.LastHeartbeat.IsZero() || time.Since(ns.LastHeartbeat) > 2*time.Minute {
+		return "", "", false
+	}
+	return sourceNodeHint, ns.BaseURL, true
+}
+
 // dvrRetentionDays extracts the post-end retention days to snapshot onto
 // foghorn.artifacts.dvr_retention_days at DVR start. FinalizeDVR reads this
 // snapshot months later, never re-resolving a tenant tier that may have
@@ -1156,6 +1175,18 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 
 // StartDVR initiates DVR recording for a stream
 func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
+	return s.startDVR(ctx, req, "")
+}
+
+// StartDVRWithSourceHint starts DVR with the node that just accepted ingest.
+// Auto-record calls this from PUSH_REWRITE before active-stream lifecycle
+// state may have propagated through Redis/DB. Manual API starts intentionally
+// use StartDVR so they still require observed live source state.
+func (s *FoghornGRPCServer) StartDVRWithSourceHint(ctx context.Context, req *pb.StartDVRRequest, sourceNodeID string) (*pb.StartDVRResponse, error) {
+	return s.startDVR(ctx, req, sourceNodeID)
+}
+
+func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRRequest, sourceNodeHint string) (*pb.StartDVRResponse, error) {
 	if req.InternalName == "" {
 		return nil, status.Error(codes.InvalidArgument, "internal_name is required")
 	}
@@ -1191,7 +1222,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	// but manual DVR starts can race the stream lifecycle write. Wait
 	// briefly so the command can still route through the HA control relay
 	// once we know the node ID.
-	sourceNodeID, baseURL, ok := waitForStreamSource(ctx, req.InternalName, 6*time.Second)
+	sourceNodeID, baseURL, ok := waitForStreamSourceWithHint(ctx, req.InternalName, sourceNodeHint, 6*time.Second)
 	if !ok {
 		s.emitDVRStartFailure(req, "no source node available")
 		return nil, status.Error(codes.Unavailable, "no source node available")
