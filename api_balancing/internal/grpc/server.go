@@ -3022,7 +3022,7 @@ func mapArtifactStatusToVodStatus(s string) pb.VodStatus {
 		return pb.VodStatus_VOD_STATUS_UPLOADING
 	case "processing":
 		return pb.VodStatus_VOD_STATUS_PROCESSING
-	case "ready":
+	case "completed", "complete", "done", "ready", "synced":
 		return pb.VodStatus_VOD_STATUS_READY
 	case "failed":
 		return pb.VodStatus_VOD_STATUS_FAILED
@@ -3712,7 +3712,7 @@ func buildVodAssetInfo(
 		protoStatus = pb.VodStatus_VOD_STATUS_UPLOADING
 	case "processing":
 		protoStatus = pb.VodStatus_VOD_STATUS_PROCESSING
-	case "ready":
+	case "completed", "complete", "done", "ready", "synced":
 		protoStatus = pb.VodStatus_VOD_STATUS_READY
 	case "failed":
 		protoStatus = pb.VodStatus_VOD_STATUS_FAILED

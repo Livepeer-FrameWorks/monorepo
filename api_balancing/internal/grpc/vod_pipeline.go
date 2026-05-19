@@ -148,11 +148,13 @@ func (p *VodPipeline) markArtifactReady(ctx context.Context, log *logrus.Entry, 
 	log.Info("Artifact marked ready")
 
 	if p.decklogClient != nil {
+		progress := int32(100)
 		vodData := &pb.VodLifecycleData{
 			Status:      pb.VodLifecycleData_STATUS_COMPLETED,
 			VodHash:     artifactHash,
 			TenantId:    &tenantID,
 			CompletedAt: proto.Int64(time.Now().Unix()),
+			ProgressPct: &progress,
 		}
 		go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 	}

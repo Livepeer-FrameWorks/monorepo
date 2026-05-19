@@ -4484,6 +4484,7 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 		_, err := db.ExecContext(ctx, `
 			UPDATE foghorn.processing_jobs
 			SET status = 'completed',
+			    progress = 100,
 			    output_metadata = $2,
 			    completed_at = NOW(),
 			    updated_at = NOW()
@@ -4536,7 +4537,7 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 						UPDATE foghorn.artifacts
 						SET format = $1,
 						    size_bytes = $3,
-						    status = CASE WHEN artifact_type = 'clip' THEN 'ready' ELSE status END,
+						    status = CASE WHEN artifact_type IN ('clip', 'vod') THEN 'ready' ELSE status END,
 						    sync_status = 'pending',
 						    storage_location = 'local',
 						    updated_at = NOW()
@@ -4554,8 +4555,12 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 						cancel()
 					}
 					clipData := &pb.ClipLifecycleData{
-						Stage:       pb.ClipLifecycleData_STAGE_DONE,
-						ClipHash:    artifactHash,
+						Stage:    pb.ClipLifecycleData_STAGE_DONE,
+						ClipHash: artifactHash,
+						ProgressPercent: func() *uint32 {
+							p := uint32(100)
+							return &p
+						}(),
 						FilePath:    &outputPath,
 						SizeBytes:   func() *uint64 { s := uint64(sizeBytes); return &s }(),
 						CompletedAt: func() *int64 { t := time.Now().Unix(); return &t }(),

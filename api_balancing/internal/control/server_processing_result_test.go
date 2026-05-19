@@ -88,7 +88,7 @@ func TestProcessProcessingJobResult_Completed_RegistersProcessedOutput(t *testin
 	mock, _, repo := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	mock.ExpectExec("UPDATE foghorn.processing_jobs.*SET status = 'completed'").
+	mock.ExpectExec("(?s)UPDATE foghorn.processing_jobs.*SET status = 'completed'.*progress = 100").
 		WithArgs("job-1", nil).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -100,7 +100,7 @@ func TestProcessProcessingJobResult_Completed_RegistersProcessedOutput(t *testin
 
 	// Update artifact format + size_bytes + reset sync while retaining the
 	// old source URL until the replacement upload is durably synced.
-	mock.ExpectExec("UPDATE foghorn.artifacts.*SET format.*size_bytes.*sync_status = 'pending'.*storage_location = 'local'").
+	mock.ExpectExec("(?s)UPDATE foghorn.artifacts.*SET format.*size_bytes.*artifact_type IN \\('clip', 'vod'\\).*sync_status = 'pending'.*storage_location = 'local'").
 		WithArgs("mp4", "art-hash", int64(5000)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 

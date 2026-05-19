@@ -182,6 +182,14 @@ func TestGetVodUploadStatus_TerminalStateSkipsS3(t *testing.T) {
 	}
 }
 
+func TestMapArtifactStatusToVodStatus_TerminalAliases(t *testing.T) {
+	for _, status := range []string{"completed", "complete", "done", "ready", "synced"} {
+		if got := mapArtifactStatusToVodStatus(status); got != pb.VodStatus_VOD_STATUS_READY {
+			t.Fatalf("expected %q to map to READY, got %v", status, got)
+		}
+	}
+}
+
 func TestGetVodUploadStatus_FailedStateReturnsErrorCode(t *testing.T) {
 	srv, mock, cleanup := newStatusServer(t, &fakeVodS3Client{})
 	defer cleanup()
