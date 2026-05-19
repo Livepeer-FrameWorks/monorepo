@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -66,10 +67,11 @@ type EdgeProvisionConfig struct {
 	FetchCert     bool
 	DryRun        bool
 
-	Timeout      time.Duration
-	Force        bool
-	Version      string
-	DarwinDomain DarwinDomain
+	Timeout       time.Duration
+	Force         bool
+	Version       string
+	DarwinDomain  DarwinDomain
+	BeforeInstall func(context.Context, *EdgeProvisionConfig) error
 
 	// mistPassword is lazily populated by mistAPIPassword() so a single
 	// Provision invocation sees one consistent MIST_API_PASSWORD across
@@ -109,7 +111,7 @@ func (c *EdgeProvisionConfig) resolvedMode() string {
 //
 //	[1] preflight (direct SSH probes — kept Go-side for fast-fail messages)
 //	[2] tuning   (frameworks.infra.node_tuning role, profile=edge)
-//	[3] registration (no-op — caller handles via Bridge/Foghorn)
+//	[3] registration / enrollment hook (after host readiness, before install)
 //	[4] certs   (post-enrollment via ConfigSeed — no-op here)
 //	[5-6] install + start (frameworks.infra.edge role, mode + OS aware)
 //	[7] HTTPS verify (direct HTTP probe of /health)
@@ -159,7 +161,14 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 		fmt.Println("[2/7] Skipping OS tuning")
 	}
 
-	fmt.Println("[3/7] Registration handled by caller")
+	if config.BeforeInstall != nil {
+		fmt.Println("[3/7] Running control-plane registration/enrollment")
+		if err := config.BeforeInstall(ctx, &config); err != nil {
+			return err
+		}
+	} else {
+		fmt.Println("[3/7] No control-plane registration step")
+	}
 	fmt.Println("[4/7] TLS certificates will be delivered after enrollment via ConfigSeed")
 
 	if remoteOS == "darwin" && mode != "native" {
@@ -240,7 +249,9 @@ func (e *EdgeProvisioner) runPreflight(ctx context.Context, host inventory.Host,
 	}
 	result, err := e.RunCommand(ctx, host, portCheckCmd)
 	if err == nil && result.ExitCode == 0 && strings.TrimSpace(result.Stdout) != "" {
-		return fmt.Errorf("ports 80/443 already in use:\n%s", result.Stdout)
+		if ownershipErr := e.checkEdgePortOwnership(ctx, host, remoteOS, mode, result.Stdout); ownershipErr != nil {
+			return ownershipErr
+		}
 	}
 
 	const minDiskFreeBytes = 20 * 1024 * 1024 * 1024
@@ -271,6 +282,81 @@ func (e *EdgeProvisioner) runPreflight(ctx context.Context, host inventory.Host,
 	}
 
 	return nil
+}
+
+func (e *EdgeProvisioner) checkEdgePortOwnership(ctx context.Context, host inventory.Host, remoteOS, mode, listenerOutput string) error {
+	listenerOutput = strings.TrimSpace(listenerOutput)
+	if listenerOutput == "" {
+		return nil
+	}
+	if remoteOS == "darwin" {
+		return fmt.Errorf("ports 80/443 already in use:\n%s", listenerOutput)
+	}
+
+	nativePIDs := e.frameworksCaddyPIDs(ctx, host)
+	nativeOwnsPorts := len(nativePIDs) > 0 && listenerPIDsSubset(listenerOutput, nativePIDs)
+	dockerRunning := e.edgeDockerStackRunning(ctx, host)
+
+	switch mode {
+	case "native":
+		if nativeOwnsPorts {
+			fmt.Println("  ports 80/443: already held by managed frameworks-caddy; continuing")
+			return nil
+		}
+		if dockerRunning {
+			return fmt.Errorf("ports 80/443 are held while an existing docker edge stack is running; requested native mode. Stop the docker edge stack or provision with --mode docker")
+		}
+	case "docker":
+		if dockerRunning && listenerLooksDockerManaged(listenerOutput) {
+			fmt.Println("  ports 80/443: already held by managed docker edge stack; continuing")
+			return nil
+		}
+		if len(nativePIDs) > 0 {
+			return fmt.Errorf("ports 80/443 are held while frameworks-caddy is running; requested docker mode. Stop frameworks-caddy or provision with --mode native")
+		}
+	}
+
+	return fmt.Errorf("ports 80/443 already in use by unmanaged process:\n%s", listenerOutput)
+}
+
+func (e *EdgeProvisioner) frameworksCaddyPIDs(ctx context.Context, host inventory.Host) map[string]struct{} {
+	result, err := e.RunCommand(ctx, host, "systemctl show -p MainPID --value frameworks-caddy 2>/dev/null")
+	if err != nil || result.ExitCode != 0 {
+		return nil
+	}
+	pid := strings.TrimSpace(result.Stdout)
+	if pid == "" || pid == "0" {
+		return nil
+	}
+	return map[string]struct{}{pid: {}}
+}
+
+func (e *EdgeProvisioner) edgeDockerStackRunning(ctx context.Context, host inventory.Host) bool {
+	result, err := e.RunCommand(ctx, host, "docker ps --filter name=edge-proxy --format '{{.Names}}' 2>/dev/null")
+	return err == nil && result.ExitCode == 0 && strings.Contains(result.Stdout, "edge-proxy")
+}
+
+var listenerPIDPattern = regexp.MustCompile(`pid=([0-9]+)`)
+
+func listenerPIDsSubset(listenerOutput string, allowed map[string]struct{}) bool {
+	pids := listenerPIDPattern.FindAllStringSubmatch(listenerOutput, -1)
+	if len(pids) == 0 || len(allowed) == 0 {
+		return false
+	}
+	for _, match := range pids {
+		if len(match) < 2 {
+			return false
+		}
+		if _, ok := allowed[match[1]]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func listenerLooksDockerManaged(listenerOutput string) bool {
+	output := strings.ToLower(listenerOutput)
+	return strings.Contains(output, "docker-proxy") || strings.Contains(output, "com.docker")
 }
 
 // verifyHTTPS polls the edge domain's /health endpoint until it returns 200

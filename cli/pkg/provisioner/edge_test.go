@@ -73,6 +73,29 @@ func TestEdgeProvisionConfig_ResolvedMode(t *testing.T) {
 	}
 }
 
+func TestListenerPIDsSubset(t *testing.T) {
+	listeners := `LISTEN 0 16384 *:443 *:* users:(("caddy",pid=328964,fd=8))
+LISTEN 0 16384 *:80 *:* users:(("caddy",pid=328964,fd=7))`
+	if !listenerPIDsSubset(listeners, map[string]struct{}{"328964": {}}) {
+		t.Fatal("expected listener PIDs to be owned by frameworks-caddy")
+	}
+	if listenerPIDsSubset(listeners, map[string]struct{}{"1": {}}) {
+		t.Fatal("unexpectedly accepted an unrelated PID")
+	}
+	if listenerPIDsSubset("LISTEN *:443", map[string]struct{}{"328964": {}}) {
+		t.Fatal("unexpectedly accepted output without pid data")
+	}
+}
+
+func TestListenerLooksDockerManaged(t *testing.T) {
+	if !listenerLooksDockerManaged(`users:(("docker-proxy",pid=123,fd=4))`) {
+		t.Fatal("expected docker-proxy listener to be classified as docker managed")
+	}
+	if listenerLooksDockerManaged(`users:(("caddy",pid=123,fd=4))`) {
+		t.Fatal("unexpectedly classified native caddy listener as docker managed")
+	}
+}
+
 func TestSetEdgeComponentVersionVarRejectsControlCharacters(t *testing.T) {
 	t.Parallel()
 
