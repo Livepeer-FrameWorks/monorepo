@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc/connectivity"
 )
 
+const defaultInternalServerName = "foghorn.internal"
+
 // FoghornPool manages a map of cluster_id -> *GRPCClient with lazy creation,
 // health checks, and idle eviction. Each connection gets its own auth and
 // failsafe interceptors via NewGRPCClient.
@@ -100,7 +102,7 @@ func (p *FoghornPool) GetOrCreate(clusterID, addr string) (*GRPCClient, error) {
 		ServiceToken:  p.config.ServiceToken,
 		UseTLS:        p.config.UseTLS,
 		CACertFile:    p.config.CACertFile,
-		ServerName:    p.config.ServerName,
+		ServerName:    p.serverName(),
 		AllowInsecure: p.config.AllowInsecure,
 	})
 	if err != nil {
@@ -120,6 +122,16 @@ func (p *FoghornPool) GetOrCreate(clusterID, addr string) (*GRPCClient, error) {
 	}).Info("Foghorn pool: created connection")
 
 	return client, nil
+}
+
+func (p *FoghornPool) serverName() string {
+	if p.config.ServerName != "" || p.config.AllowInsecure {
+		return p.config.ServerName
+	}
+	if p.config.UseTLS || p.config.CACertFile != "" {
+		return defaultInternalServerName
+	}
+	return ""
 }
 
 // Get returns the GRPCClient for clusterID if it exists.

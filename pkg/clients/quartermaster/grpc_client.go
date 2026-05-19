@@ -12,6 +12,7 @@ import (
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/grpc"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -38,18 +39,20 @@ type GRPCConfig struct {
 	// Logger for the client
 	Logger logging.Logger
 	// ServiceToken for service-to-service authentication (fallback when no user JWT)
-	ServiceToken  string
-	AllowInsecure bool
-	CACertFile    string
-	CACertPEM     string
-	ServerName    string
+	ServiceToken string
+	// PreferServiceToken sends ServiceToken even when the context carries a user JWT.
+	PreferServiceToken bool
+	AllowInsecure      bool
+	CACertFile         string
+	CACertPEM          string
+	ServerName         string
 }
 
 // authInterceptor propagates authentication to gRPC metadata.
 // This reads user_id, tenant_id, and jwt_token from the Go context (set by Gateway middleware)
 // and adds them to outgoing gRPC metadata for downstream services.
 // If no user JWT is available, it falls back to the service token for service-to-service calls.
-func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
+func authInterceptor(serviceToken string, preferServiceToken bool) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		// Extract user context from Go context and add to gRPC metadata
 		md := metadata.MD{}
@@ -64,11 +67,8 @@ func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 			md.Set("x-demo-mode", "true")
 		}
 
-		// Use user's JWT from context if available, otherwise fall back to service token
-		if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
-			md.Set("authorization", "Bearer "+jwtToken)
-		} else if serviceToken != "" {
-			md.Set("authorization", "Bearer "+serviceToken)
+		if token := outgoingAuthToken(ctx, serviceToken, preferServiceToken); token != "" {
+			md.Set("authorization", "Bearer "+token)
 		}
 
 		// Merge with existing outgoing metadata if any
@@ -79,6 +79,19 @@ func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 		ctx = metadata.NewOutgoingContext(ctx, md)
 		return invoker(ctx, method, req, reply, cc, opts...)
 	}
+}
+
+func outgoingAuthToken(ctx context.Context, configuredServiceToken string, preferServiceToken bool) string {
+	if preferServiceToken && configuredServiceToken != "" {
+		return configuredServiceToken
+	}
+	if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
+		return jwtToken
+	}
+	if contextServiceToken := ctxkeys.GetServiceToken(ctx); contextServiceToken != "" {
+		return contextServiceToken
+	}
+	return configuredServiceToken
 }
 
 // NewGRPCClient creates a new gRPC client for Quartermaster
@@ -104,7 +117,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		transport,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
-			authInterceptor(config.ServiceToken),
+			authInterceptor(config.ServiceToken, config.PreferServiceToken),
 			clients.FailsafeUnaryInterceptor("quartermaster", config.Logger),
 		),
 	)
@@ -129,6 +142,19 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 func (c *GRPCClient) Close() error {
 	if c.conn != nil {
 		return c.conn.Close()
+	}
+	return nil
+}
+
+// CheckHealth verifies that the Quartermaster gRPC endpoint is reachable and
+// serving through this client's configured transport and interceptors.
+func (c *GRPCClient) CheckHealth(ctx context.Context) error {
+	resp, err := healthpb.NewHealthClient(c.conn).Check(ctx, &healthpb.HealthCheckRequest{})
+	if err != nil {
+		return err
+	}
+	if resp.GetStatus() != healthpb.HealthCheckResponse_SERVING {
+		return fmt.Errorf("Quartermaster health status is %s", resp.GetStatus().String())
 	}
 	return nil
 }

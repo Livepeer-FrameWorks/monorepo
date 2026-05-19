@@ -103,13 +103,14 @@ func main() {
 
 	// Create Quartermaster gRPC client for tenant lookups (used by webhooks)
 	qmGRPCClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:      quartermasterGRPCAddr,
-		Timeout:       10 * time.Second,
-		Logger:        logger,
-		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		GRPCAddr:           quartermasterGRPCAddr,
+		Timeout:            10 * time.Second,
+		Logger:             logger,
+		ServiceToken:       serviceToken,
+		PreferServiceToken: true,
+		AllowInsecure:      config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+		CACertFile:         config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:         config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client")
