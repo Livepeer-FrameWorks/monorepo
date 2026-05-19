@@ -1,10 +1,10 @@
 ---
 - name: Node_tuning | skip on unsupported OS family
   ansible.builtin.debug:
-    msg: "node_tuning supports Debian-family only; skipping on {{ ansible_facts.os_family }}."
-  when: ansible_facts.os_family != "Debian"
+    msg: "node_tuning supports Linux only; skipping on {{ ansible_facts['system'] | default('unknown') }}."
+  when: (ansible_facts['system'] | default('')) != "Linux"
 
-- name: Node_tuning | apply policy on Debian-family
+- name: Node_tuning | apply Debian-family package and update policy
   when: ansible_facts.os_family == "Debian"
   block:
     - name: Node_tuning | support packages
@@ -28,6 +28,9 @@
       when: node_tuning_purge_snapd | bool
       tags: [snapd]
 
+- name: Node_tuning | apply Linux kernel and limits policy
+  when: (ansible_facts['system'] | default('')) == "Linux"
+  block:
     - name: Node_tuning | sysctl baseline
       ansible.builtin.import_tasks: sysctl.yml
       tags: [sysctl]

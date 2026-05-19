@@ -24,7 +24,9 @@ node_tuning_snapd_units:
   - snapd.seeded.service
 
 # Core sysctl baseline. Keys are sysctl names, values are sysctl values.
-# Applied via /etc/sysctl.d/10-frameworks-baseline.conf + `sysctl --system`.
+# Applied via /etc/sysctl.d/90-frameworks-baseline.conf + `sysctl --system`.
+# The late prefix intentionally wins over distro defaults such as Arch's
+# /usr/lib/sysctl.d/50-default.conf.
 node_tuning_sysctl_core:
   net.core.somaxconn: 16384
   net.core.netdev_max_backlog: 16384

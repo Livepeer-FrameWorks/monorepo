@@ -6,6 +6,7 @@
   ansible.builtin.command: apt-config dump APT::Periodic::Unattended-Upgrade
   register: apt_periodic_uu
   changed_when: false
+  when: ansible_facts.os_family == "Debian"
 
 - name: Node_tuning verify | assert apt periodic disabled
   ansible.builtin.assert:
@@ -15,16 +16,19 @@
       Unattended-Upgrade is not disabled (apt-config dump returned:
       {{ apt_periodic_uu.stdout | trim }}). The zz-frameworks-policy drop-in
       may have lost the lex-sort race; check /etc/apt/apt.conf.d/ contents.
+  when: ansible_facts.os_family == "Debian"
 
 - name: Node_tuning verify | apt automatic reboot disabled
   ansible.builtin.command: apt-config dump Unattended-Upgrade::Automatic-Reboot
   register: apt_auto_reboot
   changed_when: false
+  when: ansible_facts.os_family == "Debian"
 
 - name: Node_tuning verify | assert automatic reboot disabled
   ansible.builtin.assert:
     that:
       - '"Unattended-Upgrade::Automatic-Reboot \"false\";" in apt_auto_reboot.stdout'
+  when: ansible_facts.os_family == "Debian"
 
 - name: Node_tuning verify | apt timers masked # noqa: command-instead-of-module
   ansible.builtin.command: systemctl is-enabled {{ item }}
@@ -34,6 +38,7 @@
   register: timer_states
   changed_when: false
   failed_when: false
+  when: ansible_facts.os_family == "Debian"
 
 - name: Node_tuning verify | assert apt timers masked
   ansible.builtin.assert:
@@ -43,36 +48,44 @@
   loop: "{{ timer_states.results }}"
   loop_control:
     label: "{{ item.item }}"
+  when: ansible_facts.os_family == "Debian"
 
 - name: Node_tuning verify | needrestart drop-in present
   ansible.builtin.stat:
     path: /etc/needrestart/conf.d/zz-frameworks.conf
   register: needrestart_stat
+  when: ansible_facts.os_family == "Debian"
 
 - name: Node_tuning verify | assert needrestart drop-in present
   ansible.builtin.assert:
     that:
       - needrestart_stat.stat.exists
       - needrestart_stat.stat.mode == "0644"
+  when: ansible_facts.os_family == "Debian"
 
 - name: Node_tuning verify | needrestart binary present
   ansible.builtin.command: which needrestart
   register: needrestart_bin
   changed_when: false
+  when: ansible_facts.os_family == "Debian"
 
 - name: Node_tuning verify | snapd absent
   ansible.builtin.command: dpkg-query -W -f='${Status}\n' snapd
   register: snapd_query
   changed_when: false
   failed_when: false
-  when: node_tuning_purge_snapd | bool
+  when:
+    - ansible_facts.os_family == "Debian"
+    - node_tuning_purge_snapd | bool
 
 - name: Node_tuning verify | assert snapd absent
   ansible.builtin.assert:
     that:
       - snapd_query.rc != 0 or "deinstall" in snapd_query.stdout or "not-installed" in snapd_query.stdout or "not installed" in snapd_query.stdout
     fail_msg: "snapd dpkg-query: {{ snapd_query.stdout | default('?') }}"
-  when: node_tuning_purge_snapd | bool
+  when:
+    - ansible_facts.os_family == "Debian"
+    - node_tuning_purge_snapd | bool
 
 - name: Node_tuning verify | expected sysctl map
   ansible.builtin.set_fact:
@@ -84,29 +97,29 @@
 
 - name: Node_tuning verify | core sysctl file present
   ansible.builtin.slurp:
-    path: /etc/sysctl.d/10-frameworks-baseline.conf
+    path: /etc/sysctl.d/90-frameworks-baseline.conf
   register: node_tuning_core_sysctl_file
 
 - name: Node_tuning verify | core sysctl file entries
   ansible.builtin.assert:
     that:
-      - "'{{ item.key }} = {{ item.value }}' in (node_tuning_core_sysctl_file.content | b64decode)"
-    fail_msg: "/etc/sysctl.d/10-frameworks-baseline.conf missing {{ item.key }} = {{ item.value }}"
+      - (item.key ~ ' = ' ~ (item.value | string)) in (node_tuning_core_sysctl_file.content | b64decode)
+    fail_msg: "/etc/sysctl.d/90-frameworks-baseline.conf missing {{ item.key }} = {{ item.value }}"
   loop: "{{ node_tuning_sysctl_core | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
 
 - name: Node_tuning verify | edge sysctl file present
   ansible.builtin.slurp:
-    path: /etc/sysctl.d/20-frameworks-edge.conf
+    path: /etc/sysctl.d/91-frameworks-edge.conf
   register: node_tuning_edge_sysctl_file
   when: node_tuning_profile == "edge"
 
 - name: Node_tuning verify | edge sysctl file entries
   ansible.builtin.assert:
     that:
-      - "'{{ item.key }} = {{ item.value }}' in (node_tuning_edge_sysctl_file.content | b64decode)"
-    fail_msg: "/etc/sysctl.d/20-frameworks-edge.conf missing {{ item.key }} = {{ item.value }}"
+      - (item.key ~ ' = ' ~ (item.value | string)) in (node_tuning_edge_sysctl_file.content | b64decode)
+    fail_msg: "/etc/sysctl.d/91-frameworks-edge.conf missing {{ item.key }} = {{ item.value }}"
   loop: "{{ node_tuning_sysctl_edge | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
@@ -127,7 +140,7 @@
       - >-
         item.rc == 0
         or (
-          ansible_facts.virtualization_type in ["docker", "container", "containerd", "podman"]
+          (ansible_facts['virtualization_type'] | default('')) in ["docker", "container", "containerd", "podman"]
           and ("cannot stat" in item.stderr or "No such file" in item.stderr)
         )
     fail_msg: "sysctl {{ item.item.key }} read failed: {{ item.stderr | default('?') }}"
@@ -141,7 +154,7 @@
       - >-
         (item.stdout | trim | replace('\t', ' ')) == (item.item.value | string)
         or (
-          ansible_facts.virtualization_type in ["docker", "container", "containerd", "podman"]
+          (ansible_facts['virtualization_type'] | default('')) in ["docker", "container", "containerd", "podman"]
           and item.item.key in node_tuning_container_runtime_sysctl_exceptions
         )
     fail_msg: >-

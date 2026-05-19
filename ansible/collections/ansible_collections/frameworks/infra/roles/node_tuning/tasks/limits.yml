@@ -1,4 +1,12 @@
 ---
+- name: Node_tuning | ensure limits.d exists
+  ansible.builtin.file:
+    path: /etc/security/limits.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Node_tuning | write limits baseline
   ansible.builtin.template:
     src: limits_10-frameworks-baseline.conf.j2

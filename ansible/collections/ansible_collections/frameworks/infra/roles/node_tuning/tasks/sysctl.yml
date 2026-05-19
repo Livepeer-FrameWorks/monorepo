@@ -2,7 +2,7 @@
 - name: Node_tuning | write core sysctl baseline
   ansible.builtin.template:
     src: sysctl_10-frameworks-baseline.conf.j2
-    dest: /etc/sysctl.d/10-frameworks-baseline.conf
+    dest: /etc/sysctl.d/90-frameworks-baseline.conf
     owner: root
     group: root
     mode: "0644"
@@ -11,16 +11,28 @@
 - name: Node_tuning | write edge sysctl additions
   ansible.builtin.template:
     src: sysctl_20-frameworks-edge.conf.j2
-    dest: /etc/sysctl.d/20-frameworks-edge.conf
+    dest: /etc/sysctl.d/91-frameworks-edge.conf
     owner: root
     group: root
     mode: "0644"
   when: node_tuning_profile == "edge"
   register: sysctl_edge
 
-- name: Node_tuning | remove stale edge sysctl on core nodes
+- name: Node_tuning | remove stale early core sysctl file
+  ansible.builtin.file:
+    path: /etc/sysctl.d/10-frameworks-baseline.conf
+    state: absent
+  register: sysctl_core_removed
+
+- name: Node_tuning | remove stale early edge sysctl file
   ansible.builtin.file:
     path: /etc/sysctl.d/20-frameworks-edge.conf
+    state: absent
+  register: sysctl_edge_removed_old
+
+- name: Node_tuning | remove stale edge sysctl on core nodes
+  ansible.builtin.file:
+    path: /etc/sysctl.d/91-frameworks-edge.conf
     state: absent
   when: node_tuning_profile != "edge"
   register: sysctl_edge_removed
@@ -31,4 +43,6 @@
   when: >-
     sysctl_core.changed
     or (sysctl_edge is defined and sysctl_edge.changed)
+    or sysctl_core_removed.changed
+    or sysctl_edge_removed_old.changed
     or (sysctl_edge_removed is defined and sysctl_edge_removed.changed)
