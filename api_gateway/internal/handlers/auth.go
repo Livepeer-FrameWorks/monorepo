@@ -13,6 +13,8 @@ import (
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -101,6 +103,10 @@ func (h *AuthHandlers) Login() gin.HandlerFunc {
 		})
 		if err != nil {
 			h.logger.WithError(err).Debug("Login failed")
+			if isAuthServiceUnavailable(err) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication service temporarily unavailable"})
+				return
+			}
 			errMsg := gatewayerrors.SanitizeGRPCError(err, "invalid credentials", loginAllowedErrors)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": errMsg})
 			return
@@ -198,6 +204,10 @@ func (h *AuthHandlers) WalletLogin() gin.HandlerFunc {
 		}))
 		if err != nil {
 			h.logger.WithError(err).Debug("Wallet login failed")
+			if isAuthServiceUnavailable(err) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication service temporarily unavailable"})
+				return
+			}
 			errMsg := gatewayerrors.SanitizeGRPCError(err, "wallet authentication failed", walletLoginAllowedErrors)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": errMsg})
 			return
@@ -367,6 +377,10 @@ func (h *AuthHandlers) RefreshToken() gin.HandlerFunc {
 		resp, err := h.commodore.RefreshToken(c.Request.Context(), refreshToken)
 		if err != nil {
 			h.logger.WithError(err).Debug("Token refresh failed")
+			if isAuthServiceUnavailable(err) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication service temporarily unavailable"})
+				return
+			}
 			// Clear invalid cookies (must match Secure flag to actually clear).
 			isDev := config.IsDevelopment()
 			secure := !isDev
@@ -538,11 +552,31 @@ func (h *AuthHandlers) GetMe() gin.HandlerFunc {
 		user, err := h.commodore.GetMe(c.Request.Context())
 		if err != nil {
 			h.logger.WithError(err).Error("Get profile failed")
+			if isAuthServiceUnavailable(err) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication service temporarily unavailable"})
+				return
+			}
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
 
 		c.JSON(http.StatusOK, userToJSON(user))
+	}
+}
+
+func isAuthServiceUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	switch st.Code() {
+	case codes.Unavailable, codes.DeadlineExceeded:
+		return true
+	default:
+		return false
 	}
 }
 

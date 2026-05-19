@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestAuthHandlers_InvalidJSONBindingsReturnBadRequest(t *testing.T) {
@@ -46,6 +49,29 @@ func TestAuthHandlers_InvalidJSONBindingsReturnBadRequest(t *testing.T) {
 			}
 			if !strings.Contains(rec.Body.String(), "invalid request") {
 				t.Fatalf("body: expected invalid request error, got %q", rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestIsAuthServiceUnavailable(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "plain error", err: errors.New("network sad"), want: false},
+		{name: "unavailable", err: status.Error(codes.Unavailable, "circuit breaker open"), want: true},
+		{name: "deadline", err: status.Error(codes.DeadlineExceeded, "timeout"), want: true},
+		{name: "unauthenticated", err: status.Error(codes.Unauthenticated, "invalid credentials"), want: false},
+		{name: "permission denied", err: status.Error(codes.PermissionDenied, "nope"), want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isAuthServiceUnavailable(tc.err); got != tc.want {
+				t.Fatalf("isAuthServiceUnavailable() = %v, want %v", got, tc.want)
 			}
 		})
 	}
