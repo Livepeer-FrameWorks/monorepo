@@ -1190,7 +1190,7 @@
 
   function canPlayArtifact(artifact: UnifiedArtifact): boolean {
     if (artifact.type === "dvr") {
-      if (!artifact.hash) return false;
+      if (!artifact.playbackId && !artifact.hash) return false;
       if (isExpired(artifact.expiresAt)) return false;
       if (["failed", "deleted"].includes(artifact.status.toLowerCase())) return false;
       return true;
@@ -1207,15 +1207,19 @@
     return true;
   }
 
-  function dvrViewUrl(hash: string) {
-    const params = new URLSearchParams({ type: "dvr", id: hash });
+  function dvrViewUrl(artifact: UnifiedArtifact) {
+    const id = artifact.playbackId || artifact.hash;
+    if (!id) return null;
+    const params = new URLSearchParams({ type: "dvr", id });
     return `/view?${params.toString()}`;
   }
 
   function playArtifact(artifact: UnifiedArtifact) {
-    if (artifact.type === "dvr" && artifact.hash) {
+    if (artifact.type === "dvr") {
+      const url = dvrViewUrl(artifact);
+      if (!url) return;
       // eslint-disable-next-line svelte/no-navigation-without-resolve
-      goto(dvrViewUrl(artifact.hash));
+      goto(url);
       return;
     }
     if (artifact.playbackId) {

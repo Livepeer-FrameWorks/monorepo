@@ -675,13 +675,13 @@ INSERT INTO periscope.artifact_events (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     '5eedfeed-11fe-ca57-feed-11feca570001',
     'vod_int_001',
-    'product_demo_2024.webm',
+    'product_demo_2024.mp4',
     'c3d4e5f678901234567890123456abcd',
     'done', 'vod', NULL, NULL,
     'edge-node-1', 100, 'vod uploaded',
-    '/var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.webm',
-    's3://frameworks/dev/vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/c3d4e5f678901234567890123456abcd/c3d4e5f678901234567890123456abcd.webm',
-    157157,
+    '/var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.mp4',
+    's3://frameworks/dev/vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/c3d4e5f678901234567890123456abcd/c3d4e5f678901234567890123456abcd.mp4',
+    107553,
     toUnixTimestamp(now() + INTERVAL 30 DAY)
 );
 
@@ -732,14 +732,14 @@ INSERT INTO periscope.artifact_state_current (
     '5eedfeed-11fe-ca57-feed-11feca570001',
     'c3d4e5f678901234567890123456abcd',
     'vod_int_001',
-    'product_demo_2024.webm',
+    'product_demo_2024.mp4',
     'vod', 'done', 100, NULL,
     now() - INTERVAL 10 HOUR, now() - INTERVAL 10 HOUR, now() - INTERVAL 10 HOUR,
     NULL, NULL,
     NULL, NULL,
-    '/var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.webm',
-    's3://frameworks/dev/vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/c3d4e5f678901234567890123456abcd/c3d4e5f678901234567890123456abcd.webm',
-    157157,
+    '/var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.mp4',
+    's3://frameworks/dev/vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/c3d4e5f678901234567890123456abcd/c3d4e5f678901234567890123456abcd.mp4',
+    107553,
     'edge-node-1',
     now(), now() + INTERVAL 30 DAY
 );
@@ -804,9 +804,9 @@ INSERT INTO periscope.storage_events (
     'demo_live_stream_001',
     'c3d4e5f678901234567890123456abcd',
     'store', 'vod',
-    157157,
-    's3://frameworks/dev/vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/c3d4e5f678901234567890123456abcd/c3d4e5f678901234567890123456abcd.webm',
-    '/var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.webm',
+    107553,
+    's3://frameworks/dev/vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/c3d4e5f678901234567890123456abcd/c3d4e5f678901234567890123456abcd.mp4',
+    '/var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.mp4',
     'edge-node-1',
     8000, 0, NULL
 );

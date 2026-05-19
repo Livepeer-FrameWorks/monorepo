@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -318,6 +319,54 @@ func TestResolveArtifactRouteForContent_DVRChapterWithoutVodRegistryRow(t *testi
 	}
 	if clusterID.Valid {
 		t.Fatalf("expected missing hidden VOD row to leave cluster invalid, got %+v", clusterID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestNormalizeArtifactPlaybackID_DVRHash(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := &CommodoreServer{db: db}
+	mock.ExpectQuery("SELECT playback_id\\s+FROM").
+		WithArgs("dvr-hash").
+		WillReturnRows(sqlmock.NewRows([]string{"playback_id"}).AddRow("dvr-playback"))
+
+	got, ok, err := server.normalizeArtifactPlaybackID(context.Background(), "dvr-hash")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok || got != "dvr-playback" {
+		t.Fatalf("normalizeArtifactPlaybackID() = (%q, %v), want (dvr-playback, true)", got, ok)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestNormalizeArtifactPlaybackID_NoMatch(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := &CommodoreServer{db: db}
+	mock.ExpectQuery("SELECT playback_id\\s+FROM").
+		WithArgs("public-playback").
+		WillReturnError(sql.ErrNoRows)
+
+	got, ok, err := server.normalizeArtifactPlaybackID(context.Background(), "public-playback")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok || got != "" {
+		t.Fatalf("normalizeArtifactPlaybackID() = (%q, %v), want empty false", got, ok)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)

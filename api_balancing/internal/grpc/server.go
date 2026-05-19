@@ -490,6 +490,26 @@ func (s *FoghornGRPCServer) resolveEffectiveDVRConfig(req *pb.StartDVRRequest) d
 	return effective
 }
 
+func waitForStreamSource(ctx context.Context, internalName string, timeout time.Duration) (nodeID string, baseURL string, ok bool) {
+	if nodeID, baseURL, ok = control.GetStreamSource(internalName); ok {
+		return nodeID, baseURL, true
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-waitCtx.Done():
+			return "", "", false
+		case <-ticker.C:
+			if nodeID, baseURL, ok = control.GetStreamSource(internalName); ok {
+				return nodeID, baseURL, true
+			}
+		}
+	}
+}
+
 // dvrRetentionDays extracts the post-end retention days to snapshot onto
 // foghorn.artifacts.dvr_retention_days at DVR start. FinalizeDVR reads this
 // snapshot months later, never re-resolving a tenant tier that may have
@@ -1143,8 +1163,13 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	// snapshot column we set below).
 	effective := s.resolveEffectiveDVRConfig(req)
 
-	// Resolve actual source node for this stream
-	sourceNodeID, baseURL, ok := control.GetStreamSource(req.InternalName)
+	// Resolve actual source node for this stream. In HA mode the Foghorn
+	// receiving StartDVR may not be the Foghorn that handled the latest
+	// Helmsman trigger; shared Redis state usually catches up immediately,
+	// but manual DVR starts can race the stream lifecycle write. Wait
+	// briefly so the command can still route through the HA control relay
+	// once we know the node ID.
+	sourceNodeID, baseURL, ok := waitForStreamSource(ctx, req.InternalName, 6*time.Second)
 	if !ok {
 		s.emitDVRStartFailure(req, "no source node available")
 		return nil, status.Error(codes.Unavailable, "no source node available")

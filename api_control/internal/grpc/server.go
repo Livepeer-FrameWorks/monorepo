@@ -7332,11 +7332,17 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 // and enriches the response with stream metadata from Commodore's database
 func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
+	contentID := req.GetContentId()
+	if normalized, ok, err := s.normalizeArtifactPlaybackID(ctx, contentID); err != nil {
+		return nil, err
+	} else if ok {
+		contentID = normalized
+	}
 
 	var foghornClient *foghornclient.GRPCClient
 	var err error
 	if tenantID == "" {
-		foghornClient, _, err = s.resolveFoghornForContent(ctx, req.ContentId)
+		foghornClient, _, err = s.resolveFoghornForContent(ctx, contentID)
 	} else {
 		foghornClient, _, err = s.resolveFoghornForTenant(ctx, tenantID)
 	}
@@ -7360,7 +7366,7 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.Vie
 		}
 	}
 
-	resp, trailers, err := foghornClient.ResolveViewerEndpoint(outCtx, req.ContentId, req.ViewerIp, req.ViewerToken)
+	resp, trailers, err := foghornClient.ResolveViewerEndpoint(outCtx, contentID, req.ViewerIp, req.ViewerToken)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to resolve viewer endpoint from Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
@@ -7406,6 +7412,39 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.Vie
 	}
 
 	return resp, nil
+}
+
+func (s *CommodoreServer) normalizeArtifactPlaybackID(ctx context.Context, contentID string) (string, bool, error) {
+	if s == nil || s.db == nil || contentID == "" {
+		return "", false, nil
+	}
+	var playbackID string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT playback_id
+		  FROM (
+			SELECT playback_id
+			  FROM commodore.clips
+			 WHERE clip_hash = $1
+			UNION ALL
+			SELECT playback_id
+			  FROM commodore.vod_assets
+			 WHERE vod_hash = $1
+			UNION ALL
+			SELECT playback_id
+			  FROM commodore.dvr_recordings
+			 WHERE dvr_hash = $1
+		  ) resolved
+		 WHERE playback_id IS NOT NULL
+		   AND playback_id != ''
+		 LIMIT 1
+	`, contentID).Scan(&playbackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, status.Errorf(codes.Internal, "database error normalizing artifact playback id: %v", err)
+	}
+	return playbackID, true, nil
 }
 
 // ResolveIngestEndpoint proxies ingest endpoint resolution to Foghorn
