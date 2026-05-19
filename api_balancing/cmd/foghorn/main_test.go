@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
+)
 
 func TestControlPortFromBindAddr(t *testing.T) {
 	tests := []struct {
@@ -20,6 +24,28 @@ func TestControlPortFromBindAddr(t *testing.T) {
 			got := controlPortFromBindAddr(tc.bindAddr, tc.fallback)
 			if got != tc.want {
 				t.Fatalf("controlPortFromBindAddr(%q)=%d, want %d", tc.bindAddr, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRelayHealthResult(t *testing.T) {
+	tests := []struct {
+		name       string
+		ready      bool
+		required   bool
+		wantStatus string
+	}{
+		{name: "ready", ready: true, required: true, wantStatus: monitoring.StatusHealthy},
+		{name: "optional missing", ready: false, required: false, wantStatus: monitoring.StatusDegraded},
+		{name: "required missing", ready: false, required: true, wantStatus: monitoring.StatusUnhealthy},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := relayHealthResult(tc.ready, tc.required)
+			if got.Status != tc.wantStatus {
+				t.Fatalf("relayHealthResult() status=%q, want %q", got.Status, tc.wantStatus)
 			}
 		})
 	}

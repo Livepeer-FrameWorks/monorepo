@@ -93,6 +93,53 @@ func TestDeleteConnOwnerIfMatch(t *testing.T) {
 	}
 }
 
+func TestPendingDVRStopConsumeIsSingleUse(t *testing.T) {
+	store, mr, _ := newRedisStateStore(t)
+	ctx := context.Background()
+
+	if err := store.RegisterPendingDVRStop(ctx, "tenant+stream", time.Now()); err != nil {
+		t.Fatalf("RegisterPendingDVRStop: %v", err)
+	}
+
+	consumed, err := store.ConsumePendingDVRStop(ctx, "tenant+stream")
+	if err != nil {
+		t.Fatalf("ConsumePendingDVRStop first: %v", err)
+	}
+	if !consumed {
+		t.Fatal("expected first consume to find pending stop")
+	}
+
+	consumed, err = store.ConsumePendingDVRStop(ctx, "tenant+stream")
+	if err != nil {
+		t.Fatalf("ConsumePendingDVRStop second: %v", err)
+	}
+	if consumed {
+		t.Fatal("expected pending stop to be single-use")
+	}
+
+	if mr.Exists(store.keyPendingDVRStop("tenant+stream")) {
+		t.Fatal("expected pending stop key to be deleted after consume")
+	}
+}
+
+func TestPendingDVRStopExpires(t *testing.T) {
+	store, mr, _ := newRedisStateStore(t)
+	ctx := context.Background()
+
+	if err := store.RegisterPendingDVRStop(ctx, "tenant+stream", time.Now()); err != nil {
+		t.Fatalf("RegisterPendingDVRStop: %v", err)
+	}
+	mr.FastForward(pendingDVRStopTTL + time.Second)
+
+	consumed, err := store.ConsumePendingDVRStop(ctx, "tenant+stream")
+	if err != nil {
+		t.Fatalf("ConsumePendingDVRStop: %v", err)
+	}
+	if consumed {
+		t.Fatal("expected expired pending stop to be absent")
+	}
+}
+
 func TestConnOwnerRedisUnavailable(t *testing.T) {
 	store, mr, client := newRedisStateStore(t)
 	mr.Close()

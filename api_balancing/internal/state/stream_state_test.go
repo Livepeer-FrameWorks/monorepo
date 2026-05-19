@@ -4,6 +4,10 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/alicebob/miniredis/v2"
+	goredis "github.com/redis/go-redis/v9"
 )
 
 func TestReconcileVirtualViewers_CleansUpAbandonedViewers(t *testing.T) {
@@ -48,6 +52,56 @@ func TestReconcileVirtualViewers_CleansUpAbandonedViewers(t *testing.T) {
 	}
 	if stats["total_viewers"].(int) != 0 {
 		t.Fatalf("expected 0 total viewers after cleanup, got %v", stats["total_viewers"])
+	}
+}
+
+func TestVirtualViewerAggregatePenaltyPersistsToRedis(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+
+	store := NewRedisStateStore(client, "test-cluster")
+	sm := NewStreamStateManager()
+	t.Cleanup(sm.Shutdown)
+	if err := sm.EnableRedisSync(context.Background(), store, "instance-a", logging.NewLogger()); err != nil {
+		t.Fatalf("EnableRedisSync: %v", err)
+	}
+
+	nodeID := "node-1"
+	streamName := "tenant+stream"
+	viewerID := sm.CreateVirtualViewer(nodeID, streamName, "203.0.113.10")
+	if viewerID == "" {
+		t.Fatal("expected viewer ID")
+	}
+
+	nodes, err := store.GetAllNodes()
+	if err != nil {
+		t.Fatalf("GetAllNodes after create: %v", err)
+	}
+	node := nodes[nodeID]
+	if node == nil {
+		t.Fatal("expected node state in Redis after virtual viewer create")
+	}
+	if node.PendingRedirects != 1 {
+		t.Fatalf("expected pending redirects to persist, got %d", node.PendingRedirects)
+	}
+	if node.AddBandwidth == 0 {
+		t.Fatal("expected AddBandwidth penalty to persist")
+	}
+
+	if !sm.ConfirmVirtualViewerByID(viewerID, nodeID, streamName, "203.0.113.10", "mist-session-1") {
+		t.Fatal("expected virtual viewer confirm")
+	}
+	nodes, err = store.GetAllNodes()
+	if err != nil {
+		t.Fatalf("GetAllNodes after confirm: %v", err)
+	}
+	node = nodes[nodeID]
+	if node.PendingRedirects != 0 {
+		t.Fatalf("expected pending redirects to clear after confirm, got %d", node.PendingRedirects)
+	}
+	if node.AddBandwidth != 0 {
+		t.Fatalf("expected AddBandwidth penalty to clear after confirm, got %d", node.AddBandwidth)
 	}
 }
 

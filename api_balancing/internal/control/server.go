@@ -538,6 +538,10 @@ func RelayCommandType(req *pb.ForwardCommandRequest) string {
 		return "stop_sessions"
 	case *pb.ForwardCommandRequest_InvalidateSessions:
 		return "invalidate_sessions"
+	case *pb.ForwardCommandRequest_ActivatePushTargets:
+		return "activate_push_targets"
+	case *pb.ForwardCommandRequest_DeactivatePushTargets:
+		return "deactivate_push_targets"
 	case *pb.ForwardCommandRequest_ProcessingJob:
 		return "processing_job"
 	case *pb.ForwardCommandRequest_Freeze:

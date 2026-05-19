@@ -115,6 +115,8 @@ type FoghornGRPCServer struct {
 	quartermasterClient quartermasterRoutingResolver
 	storageResolver     storageResolverFactory
 	clusterID           string
+	instanceID          string
+	redisStore          *state.RedisStateStore
 	pendingDVRStops     map[string]time.Time
 	pendingDVRMu        sync.Mutex
 	originPullMu        sync.Mutex
@@ -223,14 +225,21 @@ func (s *FoghornGRPCServer) SetArtifactCleaner(c *artifacts.Cleaner) {
 }
 
 // SetRemoteEdgeCache enables remote edge scoring for cross-cluster viewer routing.
-func (s *FoghornGRPCServer) SetRemoteEdgeCache(cache *federation.RemoteEdgeCache, clusterID string) {
+func (s *FoghornGRPCServer) SetRemoteEdgeCache(cache *federation.RemoteEdgeCache, clusterID, instanceID string) {
 	s.remoteEdgeCache = cache
 	s.clusterID = clusterID
+	s.instanceID = instanceID
 }
 
 // SetClusterID records this Foghorn's local cluster for storage placement.
 func (s *FoghornGRPCServer) SetClusterID(clusterID string) {
 	s.clusterID = clusterID
+}
+
+// SetRedisStateStore enables shared HA helpers that use Foghorn's cluster
+// Redis state store but are owned by the gRPC server surface.
+func (s *FoghornGRPCServer) SetRedisStateStore(store *state.RedisStateStore) {
+	s.redisStore = store
 }
 
 // SetFederationClient enables cross-cluster QueryStream/NotifyOriginPull RPCs.
@@ -388,6 +397,12 @@ func (s *FoghornGRPCServer) RegisterPendingDVRStop(internalName string) {
 	if internalName == "" {
 		return
 	}
+	if s.redisStore != nil {
+		if err := s.redisStore.RegisterPendingDVRStop(context.Background(), internalName, time.Now()); err != nil {
+			s.logger.WithError(err).WithField("internal_name", internalName).Warn("Failed to register pending DVR stop in Redis")
+		}
+		return
+	}
 	s.pendingDVRMu.Lock()
 	s.pendingDVRStops[internalName] = time.Now()
 	s.pendingDVRMu.Unlock()
@@ -396,6 +411,13 @@ func (s *FoghornGRPCServer) RegisterPendingDVRStop(internalName string) {
 func (s *FoghornGRPCServer) consumePendingDVRStop(internalName string) bool {
 	if internalName == "" {
 		return false
+	}
+	if s.redisStore != nil {
+		ok, err := s.redisStore.ConsumePendingDVRStop(context.Background(), internalName)
+		if err != nil {
+			s.logger.WithError(err).WithField("internal_name", internalName).Warn("Failed to consume pending DVR stop from Redis")
+		}
+		return ok
 	}
 	s.pendingDVRMu.Lock()
 	_, ok := s.pendingDVRStops[internalName]
@@ -2163,6 +2185,21 @@ func (s *FoghornGRPCServer) arrangeOriginPull(ctx context.Context, remote *pb.Ed
 		}
 		_ = s.remoteEdgeCache.DeleteActiveReplication(ctx, internalName)
 	}
+
+	lockOwner := s.instanceID
+	if lockOwner == "" {
+		lockOwner = "foghorn-grpc"
+	}
+	if !s.remoteEdgeCache.TryAcquireOriginPullLock(ctx, internalName, lockOwner) {
+		time.Sleep(50 * time.Millisecond)
+		if record, err := s.remoteEdgeCache.GetActiveReplication(ctx, internalName); err == nil && record != nil {
+			if endpoint := s.buildLocalEndpoint(record, viewKey); endpoint != nil {
+				return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}
+			}
+		}
+		return nil
+	}
+	defer s.remoteEdgeCache.ReleaseOriginPullLock(ctx, internalName, lockOwner)
 
 	// Loop prevention: don't pull from a cluster already pulling from us
 	if replications, _ := s.remoteEdgeCache.GetRemoteReplications(ctx, internalName); len(replications) > 0 {

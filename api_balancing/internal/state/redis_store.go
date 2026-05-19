@@ -14,6 +14,7 @@ import (
 )
 
 const connOwnerTTL = 60 * time.Second
+const pendingDVRStopTTL = 30 * time.Minute
 
 var ErrConnOwnerMissing = errors.New("conn owner key missing")
 
@@ -26,6 +27,14 @@ if redis.call('get', KEYS[1]) == ARGV[1] then
 else
   return 0
 end
+`)
+
+var getAndDelete = goredis.NewScript(`
+local val = redis.call('get', KEYS[1])
+if val then
+  redis.call('del', KEYS[1])
+end
+return val
 `)
 
 type StateEntity string
@@ -203,6 +212,10 @@ func (r *RedisStateStore) keyConnOwner(nodeID string) string {
 	return fmt.Sprintf("{%s}:conn_owner:%s", r.clusterID, nodeID)
 }
 
+func (r *RedisStateStore) keyPendingDVRStop(internalName string) string {
+	return fmt.Sprintf("{%s}:pending_dvr_stop:%s", r.clusterID, internalName)
+}
+
 // ConnOwner is the compound value stored in the conn_owner Redis key.
 type ConnOwner struct {
 	InstanceID string
@@ -262,6 +275,30 @@ func (r *RedisStateStore) RefreshConnOwner(ctx context.Context, nodeID string) e
 		return ErrConnOwnerMissing
 	}
 	return nil
+}
+
+func (r *RedisStateStore) RegisterPendingDVRStop(ctx context.Context, internalName string, at time.Time) error {
+	if internalName == "" {
+		return nil
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	return r.client.Set(ctx, r.keyPendingDVRStop(internalName), at.UTC().Format(time.RFC3339Nano), pendingDVRStopTTL).Err()
+}
+
+func (r *RedisStateStore) ConsumePendingDVRStop(ctx context.Context, internalName string) (bool, error) {
+	if internalName == "" {
+		return false, nil
+	}
+	val, err := getAndDelete.Run(ctx, r.client, []string{r.keyPendingDVRStop(internalName)}).Result()
+	if errors.Is(err, goredis.Nil) || val == nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *RedisStateStore) PublishStateChange(change StateChange) error {

@@ -279,6 +279,41 @@ func TestLeaderLease_AcquireRenewRelease(t *testing.T) {
 	}
 }
 
+func TestOriginPullLock_AcquireRelease(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	ctx := context.Background()
+
+	if !cache.TryAcquireOriginPullLock(ctx, "tenant+stream", "instance-a") {
+		t.Fatal("expected instance-a to acquire origin-pull lock")
+	}
+	if cache.TryAcquireOriginPullLock(ctx, "tenant+stream", "instance-b") {
+		t.Fatal("expected instance-b to be blocked while lock is held")
+	}
+
+	cache.ReleaseOriginPullLock(ctx, "tenant+stream", "instance-b")
+	if cache.TryAcquireOriginPullLock(ctx, "tenant+stream", "instance-b") {
+		t.Fatal("expected stale non-owner release not to free the lock")
+	}
+
+	cache.ReleaseOriginPullLock(ctx, "tenant+stream", "instance-a")
+	if !cache.TryAcquireOriginPullLock(ctx, "tenant+stream", "instance-b") {
+		t.Fatal("expected instance-b to acquire after owner release")
+	}
+}
+
+func TestOriginPullLock_Expires(t *testing.T) {
+	cache, mr := setupTestCache(t)
+	ctx := context.Background()
+
+	if !cache.TryAcquireOriginPullLock(ctx, "tenant+stream", "instance-a") {
+		t.Fatal("expected initial origin-pull lock acquire")
+	}
+	mr.FastForward(originPullLockTTL + time.Second)
+	if !cache.TryAcquireOriginPullLock(ctx, "tenant+stream", "instance-b") {
+		t.Fatal("expected lock to be acquirable after TTL expiry")
+	}
+}
+
 func TestRenewLeaderLease_ExpiredLease(t *testing.T) {
 	cache, mr := setupTestCache(t)
 	ctx := context.Background()

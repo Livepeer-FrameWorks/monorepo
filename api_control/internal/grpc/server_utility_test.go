@@ -285,6 +285,9 @@ func TestBuildClusterFanoutTargets_Dedup(t *testing.T) {
 		foghornAddr:             "addr1",
 		officialClusterID:       "c1",
 		officialFoghornGrpcAddr: "addr1",
+		foghornAddrsByCluster: map[string][]string{
+			"c1": []string{"addr1", "addr1b"},
+		},
 		clusterPeers: []*pb.TenantClusterPeer{
 			{ClusterId: "c1", FoghornGrpcAddr: "addr1"},
 			{ClusterId: "c2", FoghornGrpcAddr: "addr2"},
@@ -292,7 +295,51 @@ func TestBuildClusterFanoutTargets_Dedup(t *testing.T) {
 	}
 	targets := buildClusterFanoutTargets(route)
 	if len(targets) != 2 {
-		t.Fatalf("expected 2 deduplicated targets, got %d", len(targets))
+		t.Fatalf("expected 2 deduplicated cluster targets, got %d", len(targets))
+	}
+}
+
+func TestFoghornCandidatesFromRoute_DedupesAllSources(t *testing.T) {
+	route := &clusterRoute{
+		clusterID:   "c1",
+		foghornAddr: "addr1",
+		foghornAddrsByCluster: map[string][]string{
+			"c1": []string{"addr1", "addr2"},
+		},
+		clusterPeers: []*pb.TenantClusterPeer{
+			{ClusterId: "c1", FoghornGrpcAddr: "addr2"},
+			{ClusterId: "c1", FoghornGrpcAddr: "addr3"},
+		},
+	}
+
+	got := foghornCandidatesFromRoute(route, "c1")
+	want := []string{"addr1", "addr2", "addr3"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("expected %v, got %v", want, got)
+		}
+	}
+}
+
+func TestNextFoghornAddr_RotatesPerCluster(t *testing.T) {
+	s := &CommodoreServer{foghornCandidateNext: map[string]int{}}
+	candidates := []string{"addr1", "addr2"}
+
+	if got := s.nextFoghornAddr("c1", candidates); got != "addr1" {
+		t.Fatalf("first candidate=%q, want addr1", got)
+	}
+	if got := s.nextFoghornAddr("c1", candidates); got != "addr2" {
+		t.Fatalf("second candidate=%q, want addr2", got)
+	}
+	if got := s.nextFoghornAddr("c1", candidates); got != "addr1" {
+		t.Fatalf("third candidate=%q, want addr1", got)
+	}
+
+	if got := s.nextFoghornAddr("c2", candidates); got != "addr1" {
+		t.Fatalf("separate cluster first candidate=%q, want addr1", got)
 	}
 }
 

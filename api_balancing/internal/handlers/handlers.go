@@ -2557,6 +2557,21 @@ func arrangeOriginPull(ctx context.Context, remote *pb.EdgeCandidate, remoteClus
 		return nil
 	}
 
+	lockOwner := originPullInstanceID
+	if lockOwner == "" {
+		lockOwner = "foghorn-http"
+	}
+	if !remoteEdgeCache.TryAcquireOriginPullLock(ctx, internalName, lockOwner) {
+		time.Sleep(50 * time.Millisecond)
+		if record, err := remoteEdgeCache.GetActiveReplication(ctx, internalName); err == nil && record != nil {
+			if endpoint := buildLocalEndpointFromReplication(record, viewKey); endpoint != nil {
+				return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: metadata}
+			}
+		}
+		return nil
+	}
+	defer remoteEdgeCache.ReleaseOriginPullLock(ctx, internalName, lockOwner)
+
 	// Loop prevention: don't pull from a cluster that's already pulling from us
 	if replications, _ := remoteEdgeCache.GetRemoteReplications(ctx, internalName); len(replications) > 0 {
 		for _, r := range replications {

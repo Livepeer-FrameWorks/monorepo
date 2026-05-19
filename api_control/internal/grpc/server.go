@@ -10,10 +10,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/smtp"
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -127,10 +129,12 @@ type CommodoreServer struct {
 	// Separate FieldEncryptor for pull-input source URIs (purpose
 	// "pull-source-uri"). Used by ResolvePullSourceByInternalName and the
 	// commodore bootstrap reconciler when persisting stream_pull_sources.
-	pullSourceEncryptor *fieldcrypt.FieldEncryptor
-	routeCache          map[string]*clusterRoute
-	routeCacheMu        sync.RWMutex
-	routeCacheTTL       time.Duration
+	pullSourceEncryptor  *fieldcrypt.FieldEncryptor
+	routeCache           map[string]*clusterRoute
+	routeCacheMu         sync.RWMutex
+	routeCacheTTL        time.Duration
+	foghornCandidateMu   sync.Mutex
+	foghornCandidateNext map[string]int
 	// clusterURLs resolves cluster_id → Chandler base URL from an in-process
 	// snapshot refreshed off Quartermaster. Used by list/get handlers to
 	// project thumbnailAssets onto Stream/Clip/DVR/VOD rows without per-row
@@ -151,6 +155,7 @@ type clusterRoute struct {
 	officialBaseURL         string
 	officialClusterName     string
 	officialFoghornGrpcAddr string
+	foghornAddrsByCluster   map[string][]string
 	clusterPeers            []*pb.TenantClusterPeer  // full tenant cluster context (includes per-peer foghorn addrs)
 	tenantResourceLimits    *pb.TenantResourceLimits // access-specific cap override; nil = use Purser tier entitlement
 	resolvedAt              time.Time
@@ -162,6 +167,66 @@ type clusterFanoutTarget struct {
 }
 
 const activeIngestClusterFreshnessWindow = 2 * time.Minute
+
+func dedupeAddrs(addrs ...string) []string {
+	seen := make(map[string]struct{}, len(addrs))
+	out := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			continue
+		}
+		if _, ok := seen[addr]; ok {
+			continue
+		}
+		seen[addr] = struct{}{}
+		out = append(out, addr)
+	}
+	return out
+}
+
+func serviceInstanceAddr(inst *pb.ServiceInstance) string {
+	if inst == nil || inst.GetHost() == "" || inst.GetPort() <= 0 {
+		return ""
+	}
+	return net.JoinHostPort(inst.GetHost(), strconv.Itoa(int(inst.GetPort())))
+}
+
+func (s *CommodoreServer) discoverFoghornAddrs(ctx context.Context, clusterID string) []string {
+	if s.quartermasterClient == nil || clusterID == "" {
+		return nil
+	}
+	resp, err := s.quartermasterClient.DiscoverServices(ctx, "foghorn", clusterID, &pb.CursorPaginationRequest{First: 20})
+	if err != nil {
+		s.logger.WithError(err).WithField("cluster_id", clusterID).Debug("Foghorn candidate discovery failed")
+		return nil
+	}
+	addrs := make([]string, 0, len(resp.GetInstances()))
+	for _, inst := range resp.GetInstances() {
+		if inst.GetStatus() != "running" && inst.GetStatus() != "active" {
+			continue
+		}
+		if addr := serviceInstanceAddr(inst); addr != "" {
+			addrs = append(addrs, addr)
+		}
+	}
+	return dedupeAddrs(addrs...)
+}
+
+func (s *CommodoreServer) nextFoghornAddr(clusterID string, candidates []string) string {
+	candidates = dedupeAddrs(candidates...)
+	if len(candidates) == 0 {
+		return ""
+	}
+	if len(candidates) == 1 || clusterID == "" {
+		return candidates[0]
+	}
+	s.foghornCandidateMu.Lock()
+	idx := s.foghornCandidateNext[clusterID] % len(candidates)
+	s.foghornCandidateNext[clusterID] = idx + 1
+	s.foghornCandidateMu.Unlock()
+	return candidates[idx]
+}
 
 func buildClusterFanoutTargets(route *clusterRoute) []clusterFanoutTarget {
 	if route == nil {
@@ -186,11 +251,20 @@ func buildClusterFanoutTargets(route *clusterRoute) []clusterFanoutTarget {
 	}
 
 	addTarget(route.clusterID, route.foghornAddr)
+	for _, addr := range route.foghornAddrsByCluster[route.clusterID] {
+		addTarget(route.clusterID, addr)
+	}
 	if route.officialClusterID != route.clusterID {
 		addTarget(route.officialClusterID, route.officialFoghornGrpcAddr)
+		for _, addr := range route.foghornAddrsByCluster[route.officialClusterID] {
+			addTarget(route.officialClusterID, addr)
+		}
 	}
 	for _, peer := range route.clusterPeers {
 		addTarget(peer.ClusterId, peer.FoghornGrpcAddr)
+		for _, addr := range route.foghornAddrsByCluster[peer.ClusterId] {
+			addTarget(peer.ClusterId, addr)
+		}
 	}
 
 	return targets
@@ -238,6 +312,50 @@ func normalizeClusterRoute(route *clusterRoute) {
 			}
 		}
 	}
+}
+
+func foghornCandidatesFromRoute(route *clusterRoute, clusterID string) []string {
+	if route == nil || clusterID == "" {
+		return nil
+	}
+	candidates := make([]string, 0, 4)
+	if route.clusterID == clusterID {
+		candidates = append(candidates, route.foghornAddr)
+	}
+	if route.officialClusterID == clusterID {
+		candidates = append(candidates, route.officialFoghornGrpcAddr)
+	}
+	for _, peer := range route.clusterPeers {
+		if peer.GetClusterId() == clusterID {
+			candidates = append(candidates, peer.GetFoghornGrpcAddr())
+		}
+	}
+	candidates = append(candidates, route.foghornAddrsByCluster[clusterID]...)
+	return dedupeAddrs(candidates...)
+}
+
+func routeClusterIDs(route *clusterRoute) []string {
+	if route == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var ids []string
+	add := func(id string) {
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	add(route.clusterID)
+	add(route.officialClusterID)
+	for _, peer := range route.clusterPeers {
+		add(peer.GetClusterId())
+	}
+	return ids
 }
 
 func selectActiveIngestCluster(clusterID sql.NullString, updatedAt sql.NullTime, now time.Time) (string, bool) {
@@ -419,6 +537,7 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 		pullSourceEncryptor:      pse,
 		routeCache:               make(map[string]*clusterRoute),
 		routeCacheTTL:            5 * time.Minute,
+		foghornCandidateNext:     make(map[string]int),
 	}
 }
 
@@ -453,9 +572,14 @@ func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tena
 		officialBaseURL:         resp.GetOfficialBaseUrl(),
 		officialClusterName:     resp.GetOfficialClusterName(),
 		officialFoghornGrpcAddr: resp.GetOfficialFoghornGrpcAddr(),
+		foghornAddrsByCluster:   make(map[string][]string),
 		clusterPeers:            filteredPeers,
 		tenantResourceLimits:    resp.GetTenantResourceLimits(),
 		resolvedAt:              time.Now(),
+	}
+	for _, cid := range routeClusterIDs(route) {
+		discovered := s.discoverFoghornAddrs(ctx, cid)
+		route.foghornAddrsByCluster[cid] = dedupeAddrs(append(foghornCandidatesFromRoute(route, cid), discovered...)...)
 	}
 	normalizeClusterRoute(route)
 
@@ -622,11 +746,13 @@ func (s *CommodoreServer) resolveFoghornForTenant(ctx context.Context, tenantID 
 			return nil, nil, err
 		}
 
-		if route.foghornAddr == "" {
+		candidates := foghornCandidatesFromRoute(route, route.clusterID)
+		addr := s.nextFoghornAddr(route.clusterID, candidates)
+		if addr == "" {
 			return nil, route, status.Errorf(codes.Unavailable, "no foghorn registered for cluster %s", route.clusterID)
 		}
 
-		client, err := s.foghornPool.GetOrCreate(foghornPoolKey(route.clusterID, route.foghornAddr), route.foghornAddr)
+		client, err := s.foghornPool.GetOrCreate(foghornPoolKey(route.clusterID, addr), addr)
 		if err != nil {
 			return nil, route, status.Errorf(codes.Unavailable, "foghorn connection failed for cluster %s: %v", route.clusterID, err)
 		}
@@ -661,7 +787,8 @@ func (s *CommodoreServer) resolveFoghornForCluster(ctx context.Context, clusterI
 		return nil, err
 	}
 
-	addr := resolveAddrFromRoute(route, clusterID)
+	candidates := foghornCandidatesFromRoute(route, clusterID)
+	addr := s.nextFoghornAddr(clusterID, candidates)
 	if addr == "" {
 		// Evict cache and retry once — Foghorn may have been assigned since last fill
 		s.routeCacheMu.Lock()
@@ -672,7 +799,8 @@ func (s *CommodoreServer) resolveFoghornForCluster(ctx context.Context, clusterI
 		if err != nil {
 			return nil, err
 		}
-		addr = resolveAddrFromRoute(route, clusterID)
+		candidates = foghornCandidatesFromRoute(route, clusterID)
+		addr = s.nextFoghornAddr(clusterID, candidates)
 	}
 
 	if addr == "" {

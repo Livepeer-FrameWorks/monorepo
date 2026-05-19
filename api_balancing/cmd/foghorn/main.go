@@ -121,6 +121,8 @@ func main() {
 
 	// Create load balancer instance
 	lb := balancer.NewLoadBalancer(logger)
+	relayReady := false
+	haRequired := config.GetEnvBool("FOGHORN_HA_REQUIRED", false)
 
 	instanceID := config.GetEnv("FOGHORN_INSTANCE_ID", "")
 	if instanceID == "" {
@@ -209,6 +211,9 @@ func main() {
 			Message: "rehydrate ok",
 			Latency: time.Since(at).String(),
 		}
+	})
+	healthChecker.AddCheck("ha_relay", func() monitoring.CheckResult {
+		return relayHealthResult(relayReady, haRequired)
 	})
 	healthChecker.AddCheck("quartermaster", func() monitoring.CheckResult {
 		ok, err := clients.quartermasterStatus()
@@ -806,6 +811,7 @@ func main() {
 	})
 	control.SetDecklogClient(decklogClient)
 	control.SetDVRStopRegistry(foghornServer)
+	foghornServer.SetRedisStateStore(redisStore)
 
 	// Wire DVR service to trigger processor for auto-start recordings on stream start
 	triggerProcessor.SetDVRService(foghornServer)
@@ -815,8 +821,9 @@ func main() {
 
 	// Wire federation remote edge cache for cross-cluster viewer routing
 	if remoteEdgeCache != nil {
-		foghornServer.SetRemoteEdgeCache(remoteEdgeCache, foghornCfg.ClusterID)
+		foghornServer.SetRemoteEdgeCache(remoteEdgeCache, foghornCfg.ClusterID, instanceID)
 		handlers.SetRemoteEdgeCache(remoteEdgeCache)
+		handlers.SetOriginPullInstanceID(instanceID)
 	}
 	if fedClient != nil {
 		handlers.SetFederationClient(fedClient)
@@ -917,6 +924,12 @@ func main() {
 			"instance_id":    instanceID,
 			"advertise_addr": advertiseAddr,
 		}).Info("HA command relay enabled")
+		relayReady = true
+	} else if haRequired {
+		logger.WithFields(logging.Fields{
+			"redis_configured": redisStore != nil,
+			"advertise_addr":   advertiseAddr,
+		}).Fatal("FOGHORN_HA_REQUIRED is true but HA command relay could not be enabled")
 	}
 
 	// Start unified gRPC server with both Helmsman control and Foghorn control plane services
@@ -1279,6 +1292,22 @@ func startEdgeHealthSync(qm *qmclient.GRPCClient, log logging.Logger) {
 		if err != nil {
 			log.WithError(err).WithField("count", len(nodeIDs)).Warn("edge health sync failed")
 		}
+	}
+}
+
+func relayHealthResult(relayReady, haRequired bool) monitoring.CheckResult {
+	if relayReady {
+		return monitoring.CheckResult{Status: monitoring.StatusHealthy}
+	}
+	if haRequired {
+		return monitoring.CheckResult{
+			Status:  monitoring.StatusUnhealthy,
+			Message: "HA relay required but not ready",
+		}
+	}
+	return monitoring.CheckResult{
+		Status:  monitoring.StatusDegraded,
+		Message: "HA relay not ready",
 	}
 }
 

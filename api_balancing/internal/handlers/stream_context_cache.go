@@ -18,6 +18,7 @@ import (
 var triggerProcessor *triggers.Processor
 var remoteEdgeCache *federation.RemoteEdgeCache
 var federationClient *federation.FederationClient
+var originPullInstanceID string
 
 // peerAddrResolver is satisfied by *federation.PeerManager.
 type peerAddrResolver interface {
@@ -42,6 +43,12 @@ func SetTriggerProcessor(p *triggers.Processor) {
 // SetRemoteEdgeCache enables remote edge scoring for cross-cluster viewer routing in HTTP handlers.
 func SetRemoteEdgeCache(cache *federation.RemoteEdgeCache) {
 	remoteEdgeCache = cache
+}
+
+// SetOriginPullInstanceID identifies this Foghorn instance when taking
+// cluster-wide origin-pull leases from HTTP handlers.
+func SetOriginPullInstanceID(instanceID string) {
+	originPullInstanceID = instanceID
 }
 
 // SetFederationClient wires the federation client for cross-cluster QueryStream/NotifyOriginPull RPCs.

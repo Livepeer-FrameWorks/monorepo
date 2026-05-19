@@ -37,6 +37,7 @@ const (
 	remoteEdgeTTL        = 30 * time.Second
 	remoteReplicationTTL = 5 * time.Minute
 	activeReplicationTTL = 5 * time.Minute
+	originPullLockTTL    = 15 * time.Second
 	edgeSummaryTTL       = 60 * time.Second
 	leaderLeaseTTL       = 15 * time.Second
 	peerAddrTTL          = 30 * time.Second
@@ -114,6 +115,10 @@ func (c *RemoteEdgeCache) keyRemoteReplicationPattern(streamName string) string 
 
 func (c *RemoteEdgeCache) keyActiveReplication(streamName string) string {
 	return fmt.Sprintf("{%s}:active_replications:%s", c.clusterID, streamName)
+}
+
+func (c *RemoteEdgeCache) keyOriginPullLock(streamName string) string {
+	return fmt.Sprintf("{%s}:origin_pull_lock:%s", c.clusterID, streamName)
 }
 
 func (c *RemoteEdgeCache) keyEdgeSummary(peerClusterID string) string {
@@ -245,6 +250,26 @@ func (c *RemoteEdgeCache) GetActiveReplication(ctx context.Context, streamName s
 // DeleteActiveReplication removes the in-flight record (stream now in Local-RIB).
 func (c *RemoteEdgeCache) DeleteActiveReplication(ctx context.Context, streamName string) error {
 	return c.client.Del(ctx, c.keyActiveReplication(streamName)).Err()
+}
+
+// TryAcquireOriginPullLock elects one Foghorn instance to arrange the initial
+// origin pull for a stream. The active replication record remains the durable
+// handoff; this short lease only closes the concurrent arrange race.
+func (c *RemoteEdgeCache) TryAcquireOriginPullLock(ctx context.Context, streamName, owner string) bool {
+	if streamName == "" || owner == "" {
+		return false
+	}
+	ok, err := c.client.SetNX(ctx, c.keyOriginPullLock(streamName), owner, originPullLockTTL).Result()
+	return err == nil && ok
+}
+
+// ReleaseOriginPullLock releases the origin-pull lock only if this instance
+// still owns it.
+func (c *RemoteEdgeCache) ReleaseOriginPullLock(ctx context.Context, streamName, owner string) {
+	if streamName == "" || owner == "" {
+		return
+	}
+	releaseLeaseScript.Run(ctx, c.client, []string{c.keyOriginPullLock(streamName)}, owner) //nolint:errcheck
 }
 
 // GetAllActiveReplications returns all in-flight replication records for this cluster.
