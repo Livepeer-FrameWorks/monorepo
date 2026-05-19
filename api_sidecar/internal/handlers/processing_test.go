@@ -116,12 +116,112 @@ func TestExtractTrackMetadata_VideoOnly(t *testing.T) {
 	}
 }
 
+func TestExtractTrackMetadata_IgnoresThumbnailJPEGForPrimaryVideo(t *testing.T) {
+	meta := map[string]interface{}{
+		"meta": map[string]interface{}{
+			"tracks": map[string]interface{}{
+				"video_h264": map[string]interface{}{
+					"codec":  "H264",
+					"width":  float64(640),
+					"height": float64(360),
+				},
+				"video_jpeg": map[string]interface{}{
+					"codec":  "JPEG",
+					"width":  float64(1600),
+					"height": float64(900),
+				},
+			},
+		},
+	}
+
+	got := extractTrackMetadata(meta)
+
+	if got["video_codec"] != "H264" {
+		t.Fatalf("video_codec = %q, want H264", got["video_codec"])
+	}
+	if got["resolution"] != "640x360" {
+		t.Fatalf("resolution = %q, want 640x360", got["resolution"])
+	}
+}
+
 func TestExtractTrackMetadata_EmptyMeta(t *testing.T) {
 	for _, meta := range []map[string]interface{}{nil, {}, {"unrelated": "data"}} {
 		got := extractTrackMetadata(meta)
 		if len(got) != 0 {
 			t.Errorf("expected empty map for meta %v, got %v", meta, got)
 		}
+	}
+}
+
+func TestProcessingTracksReadyRequiresConfiguredProcTracks(t *testing.T) {
+	req := expectedProcessingTracks(`[{"process":"AV","codec":"opus","track_select":"video=none"},{"process":"Thumbs"}]`)
+	presence := processingTrackPresence{
+		audioCodecs: map[string]bool{"AAC": true},
+		videoCodecs: map[string]bool{"H264": true, "JPEG": true},
+		metaCodecs:  map[string]bool{"thumbvtt": true},
+		sourceMedia: true,
+	}
+	if processingTracksReady(presence, req) {
+		t.Fatal("expected missing opus track to block readiness")
+	}
+
+	presence.audioCodecs["opus"] = true
+	if !processingTracksReady(presence, req) {
+		t.Fatal("expected source, opus, and thumbnail tracks to satisfy readiness")
+	}
+}
+
+func TestMistJSONURLUsesHTTPPortForAPIURL(t *testing.T) {
+	got := mistJSONURL("http://mistserver:4242", "processing+abc", "metaeverywhere=1")
+	want := "http://mistserver:8080/json_processing+abc.js?metaeverywhere=1"
+	if got != want {
+		t.Fatalf("mistJSONURL = %q, want %q", got, want)
+	}
+}
+
+func TestBootMistStreamRequestsJSONEndpoint(t *testing.T) {
+	var gotPath string
+	var gotQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"meta":{"tracks":{}}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	h := &ProcessingJobHandler{mistServerURL: server.URL}
+	if err := h.bootMistStream("processing+artifact123"); err != nil {
+		t.Fatalf("bootMistStream failed: %v", err)
+	}
+	if gotPath != "/json_processing+artifact123.js" {
+		t.Fatalf("path = %q, want json endpoint", gotPath)
+	}
+	if gotQuery != "metaeverywhere=1&inclzero=1" {
+		t.Fatalf("query = %q, want meta query", gotQuery)
+	}
+}
+
+func TestGenerateDTSHFetchesJSONEndpoint(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"meta":{"tracks":{}}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	if err := GenerateDTSH(server.URL, "vod+artifact123", logrus.NewEntry(logrus.New())); err != nil {
+		t.Fatalf("GenerateDTSH failed: %v", err)
+	}
+	if gotPath != "/json_vod+artifact123.js" {
+		t.Fatalf("path = %q, want DTSH json endpoint", gotPath)
+	}
+}
+
+func TestProcessingMuxTargetURISelectsAllTracks(t *testing.T) {
+	got := processingMuxTargetURI("/var/lib/mistserver/recordings/vod/hash.mkv")
+	want := "/var/lib/mistserver/recordings/vod/hash.mkv#audio=all&video=all&meta=all&subtitle=all"
+	if got != want {
+		t.Fatalf("target URI = %q, want %q", got, want)
 	}
 }
 

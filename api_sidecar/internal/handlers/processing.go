@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -252,17 +253,19 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("mkdir failed: %v", err), nil, "", 0)
 		return
 	}
-	if err := h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath); err != nil {
-		h.sendResult(send, req.GetJobId(), "failed", err.Error(), nil, "", 0)
+
+	outputs, sourceDurationMs, waitErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName)
+	if waitErr != nil {
+		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+		h.sendResult(send, req.GetJobId(), "failed", waitErr.Error(), nil, "", 0)
 		return
 	}
-
-	// Poll for stream metadata while processing runs
-	outputs := h.pollStreamMetadata(log, mistClient, streamName)
-
-	// Extract source duration for progress calculation
-	sourceDurationMs := sourceDurationFromOutputs(outputs)
 	h.sendProgress(send, req.GetJobId(), 0, 0, sourceDurationMs)
+
+	if pushErr := h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath); pushErr != nil {
+		h.sendResult(send, req.GetJobId(), "failed", pushErr.Error(), nil, "", 0)
+		return
+	}
 
 	// Single select loop: 4 signal sources, one goroutine, no races.
 	progressTicker := time.NewTicker(30 * time.Second)
@@ -305,8 +308,8 @@ loop:
 				localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
 				setProcessingProcessOverride(streamName, localConfig)
 				h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
-				if err := mistClient.DeleteStream(streamName); err != nil {
-					log.WithError(err).Warn("Failed to delete stream for Livepeer fallback")
+				if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
+					log.WithError(deleteErr).Warn("Failed to delete stream for Livepeer fallback")
 				}
 				// Fresh doneCh so any PUSH_END from the old push doesn't
 				// satisfy the completion check for the restarted push.
@@ -314,11 +317,15 @@ loop:
 				pendingJobsMu.Lock()
 				pendingJobs[streamName] = doneCh
 				pendingJobsMu.Unlock()
-				if err := h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath); err != nil {
-					h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback restart: %v", err), nil, "", 0)
+				outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName)
+				if waitErr != nil {
+					h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
 					return
 				}
-				outputs, sourceDurationMs = h.refreshProcessingMetadata(log, mistClient, streamName, outputs)
+				if pushErr := h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath); pushErr != nil {
+					h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback restart: %v", pushErr), nil, "", 0)
+					return
+				}
 				lastMs = 0
 				lastAdvance = time.Now()
 				fallbackAttempted = true
@@ -369,18 +376,22 @@ loop:
 					localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
 					setProcessingProcessOverride(streamName, localConfig)
 					h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
-					if err := mistClient.DeleteStream(streamName); err != nil {
-						log.WithError(err).Warn("Failed to delete stream for stall fallback")
+					if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
+						log.WithError(deleteErr).Warn("Failed to delete stream for stall fallback")
 					}
 					doneCh = make(chan struct{}, 1)
 					pendingJobsMu.Lock()
 					pendingJobs[streamName] = doneCh
 					pendingJobsMu.Unlock()
-					if err := h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath); err != nil {
-						h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("stall fallback restart: %v", err), nil, "", 0)
+					outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName)
+					if waitErr != nil {
+						h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("stall fallback readiness: %v", waitErr), nil, "", 0)
 						return
 					}
-					outputs, sourceDurationMs = h.refreshProcessingMetadata(log, mistClient, streamName, outputs)
+					if pushErr := h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath); pushErr != nil {
+						h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("stall fallback restart: %v", pushErr), nil, "", 0)
+						return
+					}
 					lastMs = 0
 					lastAdvance = time.Now()
 					fallbackAttempted = true
@@ -452,7 +463,7 @@ func (h *ProcessingJobHandler) startProcessingPush(log *logrus.Entry, mistClient
 			return fmt.Errorf("admission rejected: %w", decErr)
 		}
 	}
-	targetURI := outputPath + "#audio=all&video=all&meta=all&subtitle=all"
+	targetURI := processingMuxTargetURI(outputPath)
 	if err := mistClient.PushStart(streamName, targetURI); err != nil {
 		log.WithError(err).Error("Failed to start push")
 		return fmt.Errorf("push_start failed: %w", err)
@@ -464,38 +475,63 @@ func (h *ProcessingJobHandler) startProcessingPush(log *logrus.Entry, mistClient
 	return nil
 }
 
-// pollStreamMetadata waits for MistServer to parse the stream headers and
-// extracts codec, resolution, duration, etc. from the stream info API.
-func (h *ProcessingJobHandler) pollStreamMetadata(log *logrus.Entry, mistClient *mist.Client, streamName string) map[string]string {
-	outputs := map[string]string{}
+type processingTrackRequirements struct {
+	audioCodecs map[string]bool
+	videoCodecs map[string]bool
+	wantThumbs  bool
+}
 
-	for i := 0; i < 30; i++ {
-		time.Sleep(1 * time.Second)
+type processingTrackPresence struct {
+	audioCodecs map[string]bool
+	videoCodecs map[string]bool
+	metaCodecs  map[string]bool
+	outputs     map[string]string
+	sourceMedia bool
+}
+
+// waitForProcessingStreamReady boots the processing+ wildcard stream and waits
+// until Mist has exposed the source tracks plus the configured MistProc output
+// tracks. Starting the file push before this point can permanently exclude
+// generated tracks from the muxed artifact.
+func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, mistClient *mist.Client, req *pb.ProcessingJobRequest, streamName string) (map[string]string, int64, error) {
+	requirements := expectedProcessingTracks(req.GetProcessesJson())
+	deadline := time.Now().Add(45 * time.Second)
+	var lastPresence processingTrackPresence
+	var lastErr error
+	bootTicker := time.NewTicker(500 * time.Millisecond)
+	defer bootTicker.Stop()
+
+	for {
+		if err := h.bootMistStream(streamName); err != nil {
+			lastErr = err
+		}
 
 		info, err := mistClient.GetStreamInfo(streamName)
 		if err != nil {
-			continue
-		}
-		if info.Metadata == nil {
-			continue
+			lastErr = err
+		} else if info.Metadata != nil {
+			lastPresence = inspectProcessingTracks(info.Metadata)
+			if processingTracksReady(lastPresence, requirements) {
+				log.WithFields(logrus.Fields{
+					"audio_codecs": mapKeys(lastPresence.audioCodecs),
+					"video_codecs": mapKeys(lastPresence.videoCodecs),
+					"meta_codecs":  mapKeys(lastPresence.metaCodecs),
+				}).Info("Processing stream ready for muxed output")
+				return lastPresence.outputs, sourceDurationFromOutputs(lastPresence.outputs), nil
+			}
 		}
 
-		extracted := extractTrackMetadata(info.Metadata)
-		if len(extracted) > 0 {
-			return extracted
+		if time.Now().After(deadline) {
+			if lastErr != nil && len(lastPresence.outputs) == 0 {
+				return nil, 0, fmt.Errorf("processing stream did not boot: %w", lastErr)
+			}
+			return nil, 0, fmt.Errorf("processing stream missing required tracks: have audio=%v video=%v meta=%v want audio=%v video=%v thumbs=%t",
+				mapKeys(lastPresence.audioCodecs), mapKeys(lastPresence.videoCodecs), mapKeys(lastPresence.metaCodecs),
+				mapKeys(requirements.audioCodecs), mapKeys(requirements.videoCodecs), requirements.wantThumbs)
 		}
+
+		<-bootTicker.C
 	}
-
-	log.Warn("Timed out waiting for stream metadata")
-	return outputs
-}
-
-func (h *ProcessingJobHandler) refreshProcessingMetadata(log *logrus.Entry, mistClient *mist.Client, streamName string, current map[string]string) (map[string]string, int64) {
-	refreshed := h.pollStreamMetadata(log, mistClient, streamName)
-	if len(refreshed) == 0 {
-		return current, sourceDurationFromOutputs(current)
-	}
-	return refreshed, sourceDurationFromOutputs(refreshed)
 }
 
 func sourceDurationFromOutputs(outputs map[string]string) int64 {
@@ -505,6 +541,216 @@ func sourceDurationFromOutputs(outputs map[string]string) int64 {
 		}
 	}
 	return 0
+}
+
+func (h *ProcessingJobHandler) bootMistStream(streamName string) error {
+	if h.mistServerURL == "" {
+		return fmt.Errorf("MISTSERVER_URL not configured")
+	}
+	url := mistJSONURL(h.mistServerURL, streamName, "metaeverywhere=1&inclzero=1")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+	}
+	return nil
+}
+
+func mistJSONURL(mistServerURL, streamName, rawQuery string) string {
+	url := strings.TrimRight(deriveProcessingMistHTTPBase(mistServerURL), "/") + "/json_" + streamName + ".js"
+	if rawQuery != "" {
+		url += "?" + rawQuery
+	}
+	return url
+}
+
+func processingMuxTargetURI(outputPath string) string {
+	return outputPath + "#audio=all&video=all&meta=all&subtitle=all"
+}
+
+func expectedProcessingTracks(processesJSON string) processingTrackRequirements {
+	req := processingTrackRequirements{
+		audioCodecs: map[string]bool{},
+		videoCodecs: map[string]bool{},
+	}
+	var processes []map[string]interface{}
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return req
+	}
+	for _, proc := range processes {
+		processName, processOK := proc["process"].(string)
+		if !processOK {
+			continue
+		}
+		switch processName {
+		case "Thumbs":
+			req.wantThumbs = true
+		case "AV":
+			codec, codecOK := proc["codec"].(string)
+			if !codecOK {
+				continue
+			}
+			codec = normalizeTrackCodec(codec)
+			if codec == "" {
+				continue
+			}
+			if isAudioCodec(codec) {
+				req.audioCodecs[codec] = true
+			} else {
+				req.videoCodecs[codec] = true
+			}
+		}
+	}
+	return req
+}
+
+func inspectProcessingTracks(meta map[string]interface{}) processingTrackPresence {
+	p := processingTrackPresence{
+		audioCodecs: map[string]bool{},
+		videoCodecs: map[string]bool{},
+		metaCodecs:  map[string]bool{},
+		outputs:     extractTrackMetadata(meta),
+	}
+
+	metaRaw, ok := meta["meta"]
+	if !ok {
+		return p
+	}
+	metaMap, ok := metaRaw.(map[string]interface{})
+	if !ok {
+		return p
+	}
+	tracksRaw, ok := metaMap["tracks"]
+	if !ok {
+		return p
+	}
+	tracks, ok := tracksRaw.(map[string]interface{})
+	if !ok {
+		return p
+	}
+	for name, trackRaw := range tracks {
+		track, ok := trackRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		codec := ""
+		if v, ok := track["codec"].(string); ok {
+			codec = normalizeTrackCodec(v)
+		}
+		trackType := ""
+		if v, ok := track["type"].(string); ok {
+			trackType = strings.ToLower(v)
+		}
+		if trackType == "" {
+			switch {
+			case strings.HasPrefix(name, "audio"):
+				trackType = "audio"
+			case strings.HasPrefix(name, "video"):
+				trackType = "video"
+			case strings.HasPrefix(name, "meta"), strings.HasPrefix(name, "subtitle"):
+				trackType = "meta"
+			}
+		}
+		switch trackType {
+		case "audio":
+			if codec != "" {
+				p.audioCodecs[codec] = true
+				p.sourceMedia = true
+			}
+		case "video":
+			if codec != "" {
+				p.videoCodecs[codec] = true
+				if codec != "JPEG" {
+					p.sourceMedia = true
+				}
+			}
+		case "meta", "subtitle":
+			if codec != "" {
+				p.metaCodecs[codec] = true
+			}
+		default:
+			switch {
+			case isAudioCodec(codec):
+				p.audioCodecs[codec] = true
+				p.sourceMedia = true
+			case codec == "JPEG":
+				p.videoCodecs[codec] = true
+			case codec != "":
+				p.videoCodecs[codec] = true
+				p.sourceMedia = true
+			}
+		}
+	}
+	return p
+}
+
+func processingTracksReady(p processingTrackPresence, req processingTrackRequirements) bool {
+	if !p.sourceMedia {
+		return false
+	}
+	for codec := range req.audioCodecs {
+		if !p.audioCodecs[codec] {
+			return false
+		}
+	}
+	for codec := range req.videoCodecs {
+		if !p.videoCodecs[codec] {
+			return false
+		}
+	}
+	if req.wantThumbs && (!p.videoCodecs["JPEG"] || !p.metaCodecs["thumbvtt"]) {
+		return false
+	}
+	return true
+}
+
+func normalizeTrackCodec(codec string) string {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "aac":
+		return "AAC"
+	case "h264":
+		return "H264"
+	case "h265", "hevc":
+		return "HEVC"
+	case "opus":
+		return "opus"
+	case "jpeg", "mjpeg":
+		return "JPEG"
+	case "thumbvtt":
+		return "thumbvtt"
+	default:
+		return strings.TrimSpace(codec)
+	}
+}
+
+func isAudioCodec(codec string) bool {
+	switch normalizeTrackCodec(codec) {
+	case "AAC", "opus", "MP3", "MP2", "AC3", "FLAC", "PCM":
+		return true
+	default:
+		return false
+	}
+}
+
+func mapKeys(values map[string]bool) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func waitForProcessingOutput(outputPath string, timeout time.Duration) (int64, error) {
@@ -561,8 +807,14 @@ func extractTrackMetadata(meta map[string]interface{}) map[string]string {
 		}
 
 		if strings.HasPrefix(name, "video") {
+			if v, ok := track["codec"].(string); ok && normalizeTrackCodec(v) == "JPEG" {
+				continue
+			}
+			if _, exists := outputs["video_codec"]; exists {
+				continue
+			}
 			if v, ok := track["codec"].(string); ok {
-				outputs["video_codec"] = v
+				outputs["video_codec"] = normalizeTrackCodec(v)
 			}
 			if v, ok := track["width"].(float64); ok {
 				outputs["width"] = strconv.Itoa(int(v))
@@ -830,7 +1082,7 @@ func GenerateDTSH(mistServerURL, streamName string, log *logrus.Entry) error {
 	if mistServerURL == "" {
 		return fmt.Errorf("MISTSERVER_URL not configured")
 	}
-	url := strings.TrimRight(mistServerURL, "/") + "/json_" + streamName + ".js"
+	url := mistJSONURL(mistServerURL, streamName, "")
 
 	for i := 0; i < 15; i++ {
 		if i > 0 {

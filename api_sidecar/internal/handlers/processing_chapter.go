@@ -160,17 +160,20 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 		setProcessingProcessOverride(streamName, pj)
 		defer clearProcessingProcessOverride(streamName)
 	}
-	if err := mistClient.PushStart(streamName, outputPath); err != nil {
-		log.WithError(err).Error("Chapter finalize: push_start failed")
-		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("push_start failed: %v", err), nil, "", 0)
+
+	streamOutputs, _, readinessErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName)
+	if readinessErr != nil {
+		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+		h.sendResult(send, req.GetJobId(), "failed",
+			fmt.Sprintf("chapter finalize readiness failed: %v", readinessErr), nil, "", 0)
 		return
 	}
-	log.WithField("output_path", outputPath).Info("Chapter finalize: push started")
 
-	// Block until Mist has populated duration/resolution/codecs before
-	// entering the supervision loop — mirrors processing.go so the
-	// result never races PUSH_END with a half-populated metadata map.
-	streamOutputs := h.pollStreamMetadata(log, mistClient, streamName)
+	if pushErr := h.startChapterFinalizePush(log, mistClient, streamName, outputPath); pushErr != nil {
+		log.WithError(pushErr).Error("Chapter finalize: push_start failed")
+		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("push_start failed: %v", pushErr), nil, "", 0)
+		return
+	}
 
 	progressTicker := time.NewTicker(30 * time.Second)
 	defer progressTicker.Stop()
@@ -188,19 +191,21 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 		localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
 		setProcessingProcessOverride(streamName, localConfig)
 		h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
-		if err := mistClient.DeleteStream(streamName); err != nil {
-			log.WithError(err).Warn("Chapter finalize: failed to delete stream for fallback")
+		if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
+			log.WithError(deleteErr).Warn("Chapter finalize: failed to delete stream for fallback")
 		}
 		doneCh = make(chan struct{}, 1)
 		pendingJobsMu.Lock()
 		pendingJobs[streamName] = doneCh
 		pendingJobsMu.Unlock()
-		if err := mistClient.PushStart(streamName, outputPath); err != nil {
-			return fmt.Errorf("%s fallback restart: %w", reason, err)
+		var waitErr error
+		streamOutputs, _, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName)
+		if waitErr != nil {
+			return fmt.Errorf("%s fallback readiness: %w", reason, waitErr)
 		}
-		// Re-poll metadata on the restarted stream so vod_metadata reflects
-		// the local-MistProc output, not the abandoned Livepeer attempt.
-		streamOutputs, _ = h.refreshProcessingMetadata(log, mistClient, streamName, streamOutputs)
+		if pushErr := h.startChapterFinalizePush(log, mistClient, streamName, outputPath); pushErr != nil {
+			return fmt.Errorf("%s fallback restart: %w", reason, pushErr)
+		}
 		lastMs = 0
 		lastAdvance = time.Now()
 		fallbackAttempted = true
@@ -229,9 +234,9 @@ loop:
 			switch {
 			case evt.Status == "unrecoverable" && evt.ProcessType == "Livepeer" && !fallbackAttempted:
 				log.WithFields(evtFields).Warn("Chapter finalize: Livepeer unrecoverable, falling back to local MistProcAV")
-				if err := restartWithLocalMistProc("livepeer"); err != nil {
+				if restartErr := restartWithLocalMistProc("livepeer"); restartErr != nil {
 					h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-					h.sendResult(send, req.GetJobId(), "failed", err.Error(), nil, "", 0)
+					h.sendResult(send, req.GetJobId(), "failed", restartErr.Error(), nil, "", 0)
 					return
 				}
 			case evt.Status == "unrecoverable" && isCriticalProcess(evt):
@@ -256,9 +261,9 @@ loop:
 			if time.Since(lastAdvance) >= stallTimeout {
 				if hasLivepeer && !fallbackAttempted {
 					log.WithField("last_ms", lastMs).Warn("Chapter finalize: Livepeer stalled, falling back to local MistProcAV")
-					if err := restartWithLocalMistProc("stall"); err != nil {
+					if restartErr := restartWithLocalMistProc("stall"); restartErr != nil {
 						h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-						h.sendResult(send, req.GetJobId(), "failed", err.Error(), nil, "", 0)
+						h.sendResult(send, req.GetJobId(), "failed", restartErr.Error(), nil, "", 0)
 						return
 					}
 					continue loop
@@ -350,6 +355,18 @@ func (h *ProcessingJobHandler) retryChapterDTSH(vodStreamName string, log *logru
 		}
 	}
 	log.Warn("Chapter finalize: DTSH generation exhausted retries; chapter remains finalized pending operator triage")
+}
+
+func (h *ProcessingJobHandler) startChapterFinalizePush(log *logrus.Entry, mistClient *mist.Client, streamName, outputPath string) error {
+	targetURI := processingMuxTargetURI(outputPath)
+	if err := mistClient.PushStart(streamName, targetURI); err != nil {
+		return err
+	}
+	log.WithFields(logrus.Fields{
+		"output_path": outputPath,
+		"target_uri":  targetURI,
+	}).Info("Chapter finalize: push started")
+	return nil
 }
 
 // buildChapterHLS writes a VOD HLS manifest covering the chapter's
