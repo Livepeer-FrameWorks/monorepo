@@ -96,6 +96,7 @@
     status: string;
     duration: number | null;
     sizeBytes: number | null;
+    segmentCount?: number | null;
     createdAt: string | null;
     expiresAt: string | null;
     isFrozen?: boolean;
@@ -271,6 +272,8 @@
     // Add DVR recordings
     for (const dvr of dvrRecordings) {
       const lifecycle = lifecycleStateForPlaybackId(dvr.playbackId);
+      const dvrConnectionStage =
+        dvr.status || (dvr.endedAt ? "completed" : dvr.expiresAt ? "completed" : "started");
       unified.push({
         id: dvr.dvrHash,
         type: "dvr",
@@ -279,14 +282,10 @@
         playbackId: dvr.playbackId,
         streamId: dvr.streamId,
         displayStreamId: dvr.sourceStreamId ?? null,
-        status: displayArtifactStage(
-          artifactRowStage(
-            dvr.status || (dvr.expiresAt ? "completed" : "unknown"),
-            lifecycle?.stage
-          )
-        ),
+        status: displayArtifactStage(artifactRowStage(dvrConnectionStage, lifecycle?.stage)),
         duration: dvr.durationSeconds,
         sizeBytes: lifecycle?.sizeBytes ?? dvr.sizeBytes,
+        segmentCount: lifecycle?.segmentCount ?? null,
         createdAt: dvr.createdAt,
         expiresAt: dvr.expiresAt,
         isFrozen: dvr.isFrozen ?? undefined,
@@ -1206,7 +1205,17 @@
     const s = status.toLowerCase();
     if (["available", "completed", "ready"].includes(s))
       return "text-success bg-success/10 border-success/20";
-    if (["processing", "recording", "uploading", "requested", "queued", "progress"].includes(s))
+    if (
+      [
+        "started",
+        "processing",
+        "recording",
+        "uploading",
+        "requested",
+        "queued",
+        "progress",
+      ].includes(s)
+    )
       return "text-warning bg-warning/10 border-warning/20";
     if (s === "failed") return "text-destructive bg-destructive/10 border-destructive/20";
     if (s === "deleted") return "text-muted-foreground bg-muted border-border opacity-70";
@@ -1263,6 +1272,14 @@
     );
   }
 
+  function hasRollingDvrMedia(artifact: UnifiedArtifact): boolean {
+    return (
+      artifact.segmentCount != null ||
+      (artifact.sizeBytes != null && artifact.sizeBytes > 0) ||
+      hasPlayableStorage(artifact)
+    );
+  }
+
   function canPlayArtifact(artifact: UnifiedArtifact): boolean {
     if (artifact.type === "dvr") {
       if (!artifact.playbackId && !artifact.hash) return false;
@@ -1272,7 +1289,9 @@
 
     const status = artifact.status.toLowerCase();
     if (failedArtifactStages.has(status)) return false;
-    if (artifact.type === "dvr" && (status === "started" || status === "recording")) return true;
+    if (artifact.type === "dvr" && (status === "started" || status === "recording")) {
+      return hasRollingDvrMedia(artifact);
+    }
     if (blockedArtifactStages.has(status) && !hasPlayableStorage(artifact)) return false;
     if (playableArtifactStages.has(status)) return true;
     return hasPlayableStorage(artifact);
@@ -1775,12 +1794,27 @@
                                   <SnowflakeIcon class="w-3 h-3" />
                                   Frozen
                                 </span>
-                              {:else if artifact.storageLocation === "cloud" && artifact.type === "dvr"}
+                              {:else if artifact.isHot}
+                                <span
+                                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border text-amber-400 bg-amber-400/10 border-amber-400/20"
+                                >
+                                  <ZapIcon class="w-3 h-3" />
+                                  Hot
+                                </span>
+                              {:else if artifact.isSynced}
                                 <span
                                   class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border text-emerald-400 bg-emerald-400/10 border-emerald-400/20"
                                 >
                                   <CloudIcon class="w-3 h-3" />
-                                  Cloud
+                                  Synced
+                                </span>
+                              {/if}
+                              {#if artifact.isFinalized}
+                                <span
+                                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border text-violet-400 bg-violet-400/10 border-violet-400/20"
+                                >
+                                  <ActivityIcon class="w-3 h-3" />
+                                  Finalized
                                 </span>
                               {/if}
                             </div>
