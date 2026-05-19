@@ -1362,8 +1362,11 @@ enum GQL {
     $after: String
     $input: MediaArtifactConnectionInput
   ) {
-    dvrRecordingsConnection(streamId: $streamId, page: { first: $first, after: $after }, input: $input)
-   {
+    dvrRecordingsConnection(
+      streamId: $streamId
+      page: { first: $first, after: $after }
+      input: $input
+    ) {
       edges {
         cursor
         node {
