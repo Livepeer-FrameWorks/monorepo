@@ -98,18 +98,20 @@ describe("LoadingPoster", () => {
     const svg = container.querySelector("svg") as SVGSVGElement;
     expect(svg).toBeTruthy();
     expect(svg.getAttribute("preserveAspectRatio")).toBe("xMidYMid meet");
-    // First cue (0,0,160,90)
-    expect(svg.getAttribute("viewBox")).toBe("0 0 160 90");
+    // First cue with a half-pixel inset to avoid bleeding neighboring tiles.
+    expect(svg.getAttribute("viewBox")).toBe("0 0 159 89");
     const image = svg.querySelector("image") as SVGImageElement;
     expect(image.getAttribute("href")).toContain("sprite.jpg");
     expect(image.getAttribute("preserveAspectRatio")).toBe("none");
     expect(image.getAttribute("width")).toBe("320");
     expect(image.getAttribute("height")).toBe("180");
-    expect(svg.querySelector("clipPath rect")?.getAttribute("width")).toBe("160");
+    expect(image.getAttribute("x")).toBe("-0.5");
+    expect(image.getAttribute("y")).toBe("-0.5");
+    expect(svg.querySelector("clipPath rect")?.getAttribute("width")).toBe("159");
     expect(svg.querySelector("g")?.getAttribute("clip-path")).toContain("fw-loading-poster-clip-");
   });
 
-  it("animate-measured: crops non-zero tiles by translating the image behind a tile viewBox", async () => {
+  it("animate-measured: crops non-zero tiles by translating the sheet behind a clipped tile viewport", async () => {
     const secondTile: LoadingPosterInfo = {
       ...measured10x10,
       cues: [measured10x10.cues[1]],
@@ -120,11 +122,11 @@ describe("LoadingPoster", () => {
       expect(container.querySelector("svg")).toBeTruthy();
     });
     const svg = container.querySelector("svg") as SVGSVGElement;
-    expect(svg.getAttribute("viewBox")).toBe("0 0 160 90");
+    expect(svg.getAttribute("viewBox")).toBe("0 0 159 89");
 
     const image = svg.querySelector("image") as SVGImageElement;
-    expect(image.getAttribute("x")).toBe("-160");
-    expect(image.getAttribute("y")).toBe("0");
+    expect(image.getAttribute("x")).toBe("-160.5");
+    expect(image.getAttribute("y")).toBe("-0.5");
     expect(image.getAttribute("width")).toBe("320");
     expect(image.getAttribute("height")).toBe("180");
   });
@@ -138,20 +140,54 @@ describe("LoadingPoster", () => {
       });
 
       const image = () => container.querySelector("image") as SVGImageElement;
-      expect(image().getAttribute("x")).toBe("0");
-      expect(image().getAttribute("y")).toBe("0");
+      const svg = () => container.querySelector("svg") as SVGSVGElement;
+      expect(svg().getAttribute("viewBox")).toBe("0 0 159 89");
+      expect(image().getAttribute("x")).toBe("-0.5");
+      expect(image().getAttribute("y")).toBe("-0.5");
 
       await act(async () => {
-        vi.advanceTimersByTime(1500);
+        vi.advanceTimersByTime(1000);
       });
-      expect(image().getAttribute("x")).toBe("-160");
-      expect(image().getAttribute("y")).toBe("-90");
+      expect(image()).toBeTruthy();
+      expect(svg().getAttribute("viewBox")).toBe("0 0 159 89");
+      expect(image().getAttribute("x")).toBe("-0.5");
+      expect(image().getAttribute("y")).toBe("-90.5");
 
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(container.querySelector("img")?.getAttribute("src")).toContain("poster.jpg");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("animate-measured: does not restart after live sprite URL refreshes", async () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = render(<LoadingPoster loadingPoster={measured10x10} />);
+      await act(async () => {
+        await Promise.resolve();
+      });
       await act(async () => {
         vi.advanceTimersByTime(2000);
       });
-      expect(image().getAttribute("x")).toBe("-160");
-      expect(image().getAttribute("y")).toBe("-90");
+      expect(container.querySelector("img")?.getAttribute("src")).toContain("poster.jpg");
+
+      await act(async () => {
+        rerender(
+          <LoadingPoster
+            loadingPoster={{
+              ...measured10x10,
+              generation: 2,
+              spriteJpgUrl: "https://chandler.example/assets/k/sprite.jpg?_fw_thumb=2",
+            }}
+          />
+        );
+      });
+
+      expect(container.querySelector("img")?.getAttribute("src")).toContain("poster.jpg");
+      expect(container.querySelector("svg")).toBeNull();
     } finally {
       vi.useRealTimers();
     }

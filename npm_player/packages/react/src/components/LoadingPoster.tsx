@@ -11,6 +11,9 @@ export interface LoadingPosterProps {
 }
 
 const CYCLE_MS = 2000;
+const CROP_INSET_PX = 0.5;
+const animationStartTimes = new Map<string, number>();
+const completedAnimations = new Set<string>();
 
 const POSTER_ROOT_STYLE: React.CSSProperties = {
   position: "absolute",
@@ -61,6 +64,29 @@ function withCacheBust(p: LoadingPosterInfo): string | undefined {
   return `${p.staticUrl}${sep}_g=${p.generation}`;
 }
 
+function animationKeyFor(p: LoadingPosterInfo | null): string | null {
+  if (!p || p.mode !== "animate" || p.geometry !== "measured" || !p.spriteJpgUrl) return null;
+  if (p.cues.length < 2) return null;
+  const first = p.cues[0];
+  const last = p.cues[p.cues.length - 1];
+  return [
+    p.prerollKey ?? p.staticUrl ?? p.spriteJpgUrl,
+    p.cues.length,
+    first.x,
+    first.y,
+    first.width,
+    first.height,
+    last.x,
+    last.y,
+    last.width,
+    last.height,
+  ].join("|");
+}
+
+function cueIndexFor(tickIdx: number, cueCount: number): number {
+  return Math.max(0, Math.min(tickIdx, cueCount - 1));
+}
+
 /**
  * Loading-state poster overlay shown while the stream is booting / connecting.
  * Dumb renderer: dispatches on `loadingPoster.mode` and reads the spec's
@@ -75,6 +101,7 @@ export const LoadingPoster: React.FC<LoadingPosterProps> = ({
   style,
 }) => {
   const [tickIdx, setTickIdx] = useState(0);
+  const [animationCompleted, setAnimationCompleted] = useState(false);
   const [spriteSize, setSpriteSize] = useState<SpriteNaturalSize | null>(null);
   const [spriteFailed, setSpriteFailed] = useState(false);
   const measureUrlRef = useRef<string | null>(null);
@@ -83,23 +110,47 @@ export const LoadingPoster: React.FC<LoadingPosterProps> = ({
   const isAnimate = loadingPoster?.mode === "animate";
   const cueCount = loadingPoster?.cues.length ?? 0;
   const tileCount = isAnimate && loadingPoster?.geometry === "measured" ? cueCount : 0;
+  const animationKey = useMemo(() => animationKeyFor(loadingPoster), [loadingPoster]);
 
-  // Advance through the loading sequence once, then hold the final tile until playback starts.
+  // Advance through the loading sequence once, then hold the result across overlay remounts.
   useEffect(() => {
-    if (!isAnimate || tileCount < 2) {
+    if (!animationKey || tileCount < 2) {
       setTickIdx(0);
+      setAnimationCompleted(false);
       return;
     }
-    let current = 0;
-    setTickIdx(0);
+
+    if (completedAnimations.has(animationKey)) {
+      setTickIdx(tileCount - 1);
+      setAnimationCompleted(true);
+      return;
+    }
+
     const stepMs = Math.max(20, Math.floor(CYCLE_MS / tileCount));
-    const id = setInterval(() => {
-      current = Math.min(current + 1, tileCount - 1);
+    const now = Date.now();
+    const existingStart = animationStartTimes.get(animationKey);
+    const startedAt = existingStart !== undefined && existingStart <= now ? existingStart : now;
+    animationStartTimes.set(animationKey, startedAt);
+
+    const updateFrame = () => {
+      const elapsed = Date.now() - startedAt;
+      const current = Math.min(Math.floor(elapsed / stepMs), tileCount - 1);
       setTickIdx(current);
-      if (current >= tileCount - 1) clearInterval(id);
+      if (current >= tileCount - 1) {
+        completedAnimations.add(animationKey);
+        setAnimationCompleted(true);
+        return true;
+      }
+      return false;
+    };
+
+    setAnimationCompleted(false);
+    if (updateFrame()) return;
+    const id = setInterval(() => {
+      if (updateFrame()) clearInterval(id);
     }, stepMs);
     return () => clearInterval(id);
-  }, [isAnimate, tileCount, loadingPoster?.generation, loadingPoster?.spriteJpgUrl]);
+  }, [animationKey, tileCount]);
 
   useEffect(() => {
     if (!isAnimate || loadingPoster?.geometry !== "measured") return;
@@ -139,12 +190,21 @@ export const LoadingPoster: React.FC<LoadingPosterProps> = ({
   }
 
   // Animate branch.
+  const staticSrc = withCacheBust(loadingPoster);
+  if (animationCompleted && staticSrc) {
+    return (
+      <div className={className} style={{ ...POSTER_ROOT_STYLE, ...style }} aria-hidden="true">
+        <img src={staticSrc} alt="" style={STATIC_IMG_STYLE} />
+      </div>
+    );
+  }
+
   // Resolve current tile's pixel rect.
   let cueRect: { x: number; y: number; width: number; height: number } | null = null;
   let imageWidth = 0;
   let imageHeight = 0;
   if (loadingPoster.geometry === "measured") {
-    const cue = loadingPoster.cues[tickIdx % Math.max(loadingPoster.cues.length, 1)];
+    const cue = loadingPoster.cues[cueIndexFor(tickIdx, loadingPoster.cues.length)];
     if (
       cue &&
       spriteSize &&
@@ -152,7 +212,13 @@ export const LoadingPoster: React.FC<LoadingPosterProps> = ({
       spriteSize.width > 0 &&
       spriteSize.height > 0
     ) {
-      cueRect = { x: cue.x, y: cue.y, width: cue.width, height: cue.height };
+      const inset = Math.min(CROP_INSET_PX, cue.width / 4, cue.height / 4);
+      cueRect = {
+        x: cue.x + inset,
+        y: cue.y + inset,
+        width: Math.max(1, cue.width - inset * 2),
+        height: Math.max(1, cue.height - inset * 2),
+      };
       imageWidth = spriteSize.width;
       imageHeight = spriteSize.height;
     }
@@ -160,7 +226,7 @@ export const LoadingPoster: React.FC<LoadingPosterProps> = ({
 
   // Real VTT cues or the sprite image dimensions are not available yet — show static fallback.
   if (!cueRect || !loadingPoster.spriteJpgUrl) {
-    const src = withCacheBust(loadingPoster);
+    const src = staticSrc;
     if (!src) return null;
     return (
       <div className={className} style={{ ...POSTER_ROOT_STYLE, ...style }} aria-hidden="true">

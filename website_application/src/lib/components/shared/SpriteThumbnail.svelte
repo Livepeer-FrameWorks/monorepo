@@ -53,7 +53,14 @@
         animating = true;
         frameIndex = 0;
         intervalId = setInterval(() => {
-          frameIndex = (frameIndex + 1) % cues.length;
+          if (frameIndex >= cues.length - 1) {
+            if (intervalId) {
+              clearInterval(intervalId);
+              intervalId = null;
+            }
+            return;
+          }
+          frameIndex += 1;
         }, 500);
       };
       img.src = data.spriteUrl;

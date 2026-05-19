@@ -13,12 +13,16 @@ export class FwLoadingPoster extends LitElement {
   @property({ attribute: false }) loadingPoster: LoadingPosterInfo | null = null;
 
   @state() private _tickIdx = 0;
+  @state() private _animationCompleted = false;
   @state() private _measuredW = 0;
   @state() private _measuredH = 0;
   @state() private _spriteFailed = false;
   private _measuredUrl: string | null = null;
   private _intervalId: ReturnType<typeof setInterval> | null = null;
   private static readonly CYCLE_MS = 2000;
+  private static readonly CROP_INSET_PX = 0.5;
+  private static readonly animationStartTimes = new Map<string, number>();
+  private static readonly completedAnimations = new Set<string>();
   private readonly _clipId = `fw-loading-poster-clip-${Math.random().toString(36).slice(2)}`;
 
   static styles = css`
@@ -72,21 +76,71 @@ export class FwLoadingPoster extends LitElement {
     return lp.geometry === "measured" ? lp.cues.length : 0;
   }
 
+  private _animationKey(): string | null {
+    const lp = this.loadingPoster;
+    if (!lp || lp.mode !== "animate" || lp.geometry !== "measured" || !lp.spriteJpgUrl) {
+      return null;
+    }
+    if (lp.cues.length < 2) return null;
+    const first = lp.cues[0];
+    const last = lp.cues[lp.cues.length - 1];
+    return [
+      lp.prerollKey ?? lp.staticUrl ?? lp.spriteJpgUrl,
+      lp.cues.length,
+      first.x,
+      first.y,
+      first.width,
+      first.height,
+      last.x,
+      last.y,
+      last.width,
+      last.height,
+    ].join("|");
+  }
+
+  private _cueIndex(cueCount: number): number {
+    return Math.max(0, Math.min(this._tickIdx, cueCount - 1));
+  }
+
   private _restartCycle() {
     this._stopCycle();
     const tiles = this._tileCount();
-    if (tiles < 2) {
+    const key = this._animationKey();
+    if (!key || tiles < 2) {
       this._tickIdx = 0;
+      this._animationCompleted = false;
       return;
     }
-    let current = 0;
-    this._tickIdx = 0;
+
+    if (FwLoadingPoster.completedAnimations.has(key)) {
+      this._tickIdx = tiles - 1;
+      this._animationCompleted = true;
+      return;
+    }
+
     const stepMs = Math.max(20, Math.floor(FwLoadingPoster.CYCLE_MS / tiles));
-    this._intervalId = setInterval(() => {
-      current = Math.min(current + 1, tiles - 1);
+    const now = Date.now();
+    const existingStart = FwLoadingPoster.animationStartTimes.get(key);
+    const startedAt = existingStart !== undefined && existingStart <= now ? existingStart : now;
+    FwLoadingPoster.animationStartTimes.set(key, startedAt);
+
+    const updateFrame = () => {
+      const elapsed = Date.now() - startedAt;
+      const current = Math.min(Math.floor(elapsed / stepMs), tiles - 1);
       this._tickIdx = current;
-      if (current >= tiles - 1) this._stopCycle();
-    }, stepMs);
+      if (current >= tiles - 1) {
+        FwLoadingPoster.completedAnimations.add(key);
+        this._animationCompleted = true;
+        this._stopCycle();
+        return true;
+      }
+      return false;
+    };
+
+    this._animationCompleted = false;
+    if (!updateFrame()) {
+      this._intervalId = setInterval(updateFrame, stepMs);
+    }
   }
 
   private _stopCycle() {
@@ -137,28 +191,34 @@ export class FwLoadingPoster extends LitElement {
     const lp = this.loadingPoster;
     if (!lp) return nothing;
 
+    const url = this._withCacheBust(lp);
+    if (this._animationCompleted && url) {
+      return html`<div class="root" aria-hidden="true"><img src=${url} alt="" /></div>`;
+    }
+
     if (lp.mode === "animate" && lp.spriteJpgUrl) {
       let cueRect: {
         x: number;
         y: number;
-        w: number;
-        h: number;
+        viewW: number;
+        viewH: number;
         imgW: number;
         imgH: number;
       } | null = null;
       if (lp.geometry === "measured") {
-        const cue = lp.cues[this._tickIdx % Math.max(lp.cues.length, 1)];
+        const cue = lp.cues[this._cueIndex(lp.cues.length)];
         if (
           cue &&
           this._measuredUrl === lp.spriteJpgUrl &&
           this._measuredW > 0 &&
           this._measuredH > 0
         ) {
+          const inset = Math.min(FwLoadingPoster.CROP_INSET_PX, cue.width / 4, cue.height / 4);
           cueRect = {
-            x: cue.x,
-            y: cue.y,
-            w: cue.width,
-            h: cue.height,
+            x: cue.x + inset,
+            y: cue.y + inset,
+            viewW: Math.max(1, cue.width - inset * 2),
+            viewH: Math.max(1, cue.height - inset * 2),
             imgW: this._measuredW,
             imgH: this._measuredH,
           };
@@ -169,12 +229,12 @@ export class FwLoadingPoster extends LitElement {
         return html`<div class="root" aria-hidden="true">
           <svg
             class="sprite"
-            viewBox=${`0 0 ${cueRect.w} ${cueRect.h}`}
+            viewBox=${`0 0 ${cueRect.viewW} ${cueRect.viewH}`}
             preserveAspectRatio="xMidYMid meet"
           >
             <defs>
               <clipPath id=${this._clipId} clipPathUnits="userSpaceOnUse">
-                <rect x="0" y="0" width=${cueRect.w} height=${cueRect.h}></rect>
+                <rect x="0" y="0" width=${cueRect.viewW} height=${cueRect.viewH}></rect>
               </clipPath>
             </defs>
             <g clip-path=${`url(#${this._clipId})`}>
@@ -192,7 +252,6 @@ export class FwLoadingPoster extends LitElement {
       }
     }
 
-    const url = this._withCacheBust(lp);
     if (!url) return nothing;
     return html`<div class="root" aria-hidden="true"><img src=${url} alt="" /></div>`;
   }

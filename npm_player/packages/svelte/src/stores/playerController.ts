@@ -22,6 +22,8 @@ import {
 // Types
 // ============================================================================
 
+type AutoplayStatus = "success" | "muted" | "failed";
+
 export interface PlayerControllerStoreConfig extends Omit<PlayerControllerConfig, "playerManager"> {
   /** Enable/disable the store */
   enabled?: boolean;
@@ -102,6 +104,8 @@ export interface PlayerControllerState {
   thumbnailCues: ThumbnailCue[];
   /** Loading-state poster snapshot for the boot/connecting overlay. */
   loadingPoster: LoadingPosterInfo | null;
+  /** Last autoplay attempt result, used to expose a manual play affordance when blocked. */
+  autoplayStatus: AutoplayStatus | null;
   /**
    * Controller's verdict on whether the loading-poster overlay should be visible.
    * Wrappers should mask this with their own displayedError fade lifecycle.
@@ -214,6 +218,7 @@ const initialState: PlayerControllerState = {
   controllerHasAudio: true,
   thumbnailCues: [],
   loadingPoster: null,
+  autoplayStatus: null,
   shouldShowLoadingPoster: false,
 };
 
@@ -296,6 +301,7 @@ export function createPlayerControllerStore(
       streamInfo: controller!.getStreamInfo(),
       thumbnailCues: controller!.getThumbnailCues?.() ?? prev.thumbnailCues,
       loadingPoster: controller!.getLoadingPoster?.() ?? prev.loadingPoster,
+      autoplayStatus: controller!.isPlaying() ? null : prev.autoplayStatus,
     }));
   }
 
@@ -457,6 +463,15 @@ export function createPlayerControllerStore(
     unsubscribers.push(
       controller.on("muteChange", ({ muted }) => {
         store.update((prev) => ({ ...prev, isMuted: muted, volume: controller!.getVolume() }));
+      })
+    );
+
+    unsubscribers.push(
+      controller.on("autoplayResult", ({ status }) => {
+        store.update((prev) => ({
+          ...prev,
+          autoplayStatus: status,
+        }));
       })
     );
 
@@ -625,6 +640,7 @@ export function createPlayerControllerStore(
   // Action methods
   async function play(): Promise<void> {
     await controller?.play();
+    store.update((prev) => ({ ...prev, autoplayStatus: null }));
   }
 
   function pause(): void {

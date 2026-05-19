@@ -246,6 +246,9 @@ export interface LoadingPosterInfo {
   /** Sprite-grid source. Set when mode === "animate". */
   spriteJpgUrl?: string;
 
+  /** Stable identity for the one-shot loading preroll; not tied to refreshed sprite URLs. */
+  prerollKey?: string;
+
   /** Cue geometry provenance. Set only when mode === "animate". */
   geometry?: "measured" | "synthetic";
 

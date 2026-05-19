@@ -416,6 +416,12 @@
   // Controller owns the visibility decision (PlayerController.getShouldShowLoadingPoster).
   // Wrapper masks with its local displayedError fade lifecycle.
   let showLoadingPosterOverlay = $derived(storeState.shouldShowLoadingPoster && !displayedError);
+  let showClickToPlay = $derived(
+    storeState.autoplayStatus === "failed" &&
+      !storeState.hasPlaybackStarted &&
+      !!storeState.videoElement &&
+      !displayedError
+  );
 </script>
 
 <ContextMenu>
@@ -515,6 +521,26 @@
             <div class="absolute inset-0 z-[4]">
               <LoadingPoster loadingPoster={storeState.loadingPoster} />
             </div>
+          {/if}
+
+          {#if showClickToPlay}
+            <button
+              type="button"
+              class="fw-click-to-play"
+              onclick={() => playerStore?.play()}
+              aria-label={$translatorStore("play")}
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d="M8 5v14l11-7z" />
+              </svg>
+              <span>{$translatorStore("play")}</span>
+            </button>
           {/if}
 
           <!-- Idle screen -->
@@ -787,3 +813,29 @@
     </ContextMenuContent>
   </ContextMenuPortal>
 </ContextMenu>
+
+<style>
+  .fw-click-to-play {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    z-index: 32;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    transform: translate(-50%, -50%);
+    border: 1px solid rgb(255 255 255 / 0.16);
+    border-radius: 6px;
+    background: rgb(0 0 0 / 0.72);
+    color: white;
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    line-height: 1;
+    pointer-events: auto;
+  }
+
+  .fw-click-to-play:hover {
+    background: rgb(0 0 0 / 0.86);
+  }
+</style>

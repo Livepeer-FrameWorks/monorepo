@@ -1,4 +1,10 @@
 export type AutoplayResult = "success" | "muted" | "failed";
+export type AutoplayStage = "initial" | "muted";
+
+export interface AutoplayAttemptFailure {
+  stage: AutoplayStage;
+  error: unknown;
+}
 
 /**
  * Upstream-parity autoplay recovery: unmuted → muted retry → give up.
@@ -7,26 +13,32 @@ export type AutoplayResult = "success" | "muted" | "failed";
 export async function attemptAutoplay(
   video: HTMLVideoElement,
   callbacks?: {
+    play?: () => Promise<void> | void;
+    onAttemptFailed?: (failure: AutoplayAttemptFailure) => void;
     onMutedFallback?: () => void;
-    onFailed?: () => void;
+    onFailed?: (failure: AutoplayAttemptFailure) => void;
   }
 ): Promise<AutoplayResult> {
+  const play = callbacks?.play ?? (() => video.play());
   try {
-    await video.play();
+    await play();
     return "success";
-  } catch {
+  } catch (error) {
+    callbacks?.onAttemptFailed?.({ stage: "initial", error });
     // Stage 2: retry muted
     const wasMuted = video.muted;
     video.muted = true;
     try {
-      await video.play();
+      await play();
       callbacks?.onMutedFallback?.();
       return "muted";
-    } catch {
+    } catch (mutedError) {
       // Restore mute state and pause to halt server download
       video.muted = wasMuted;
       video.pause();
-      callbacks?.onFailed?.();
+      const failure = { stage: "muted" as const, error: mutedError };
+      callbacks?.onAttemptFailed?.(failure);
+      callbacks?.onFailed?.(failure);
       return "failed";
     }
   }

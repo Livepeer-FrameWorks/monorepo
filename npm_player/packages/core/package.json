@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/player-core",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "type": "module",
   "description": "Core player logic for FrameWorks streaming - framework agnostic",
   "main": "dist/esm/index.js",

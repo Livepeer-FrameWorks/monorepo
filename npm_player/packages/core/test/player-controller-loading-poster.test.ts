@@ -153,6 +153,17 @@ describe("PlayerController.emitLoadingPosterChange (generation/dedup)", () => {
     expect(lastPoster(c)!.generation).toBe(gen1);
   });
 
+  it("returns the last emitted poster object until poster inputs actually change", () => {
+    const c = makeController();
+    setAssets(c, { posterUrl: "https://c/p.jpg", assetKey: "k" });
+
+    emitPoster(c);
+    const first = c.getLoadingPoster();
+    const second = c.getLoadingPoster();
+
+    expect(second).toBe(first);
+  });
+
   it("bumps generation on URL change", () => {
     const c = makeController();
     setAssets(c, { posterUrl: "https://c/p.jpg", assetKey: "k" });

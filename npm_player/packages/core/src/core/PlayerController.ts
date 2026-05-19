@@ -184,7 +184,12 @@ export interface PlayerControllerEvents {
   /** Mute state changed (e.g. autoplay muted fallback) */
   muteChange: { muted: boolean };
   /** Autoplay attempt resolved */
-  autoplayResult: { status: AutoplayResult };
+  autoplayResult: {
+    status: AutoplayResult;
+    reason?: string;
+    errorName?: string;
+    errorMessage?: string;
+  };
 
   // ============================================================================
   // Seeking & Live State Events (Centralized from wrappers)
@@ -701,6 +706,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private _lastVolume: number = 1;
   private _supportsPlaybackRate: boolean = true;
   private _isWebRTC: boolean = false;
+  private _autoplayAttemptInFlight: boolean = false;
+  private _lastAutoplayAttemptAt: number = 0;
+  private _deferredAutoplayTimer: ReturnType<typeof setTimeout> | null = null;
+  private _autoplayActivationCleanup: (() => void) | null = null;
+  private _autoplayActivationVideo: HTMLVideoElement | null = null;
 
   // Error handling constants
   private static readonly AUTO_CLEAR_ERROR_DELAY_MS = 2000;
@@ -860,6 +870,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this._liveEdge = 0;
     this._canSeek = false;
     this._isNearLive = true;
+    this._autoplayAttemptInFlight = false;
+    this._lastAutoplayAttemptAt = 0;
     this._qualityFallbackInProgress = false;
   }
 
@@ -1107,7 +1119,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
   /** Get the loading-state poster snapshot (sprite cues + URLs + tile geometry), or null. */
   getLoadingPoster(): LoadingPosterInfo | null {
-    return this.buildLoadingPosterInfo();
+    return this._lastLoadingPoster ?? this.buildLoadingPosterInfo();
   }
 
   /** Get video element (null if not ready) */
@@ -3091,24 +3103,23 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
       this.emit("streamStateChange", { state });
 
-      // Auto-play when stream transitions from offline to online
-      // This handles the case where user is watching IdleScreen and stream comes online
+      // Auto-play when stream transitions from offline to online. Cold live
+      // starts can already have a selected edge while the media source is still
+      // booting, so a plain video.play() is not enough; the original attach may
+      // have failed before a usable manifest/source existed.
       if (wasOnline === false && isNowOnline === true && this.isEffectivelyLive()) {
         // Clear any stale UI error from the offline phase, including errors that
         // were emitted directly (outside setPassiveError) and only exist in wrapper state.
         this.clearError();
         this.emit("errorCleared", undefined as never);
-        this.log("Stream came online, triggering auto-play");
-        if (this.videoElement) {
-          // Player already initialized - just play
-          this.videoElement
-            .play()
-            .catch((e) => this.log(`Auto-play on online transition failed: ${e}`));
-        } else if (this.container && !this.endpoints?.primary) {
-          // Player wasn't initialized because stream was offline - re-attempt full initialization
-          this.log("Stream came online, attempting late initialization");
-          this.initializeLateFromStreamState(state.streamInfo);
-        }
+        void this.recoverPlaybackAfterOnlineTransition(state.streamInfo);
+      } else if (
+        isNowOnline === true &&
+        this.isEffectivelyLive() &&
+        this.videoElement?.paused &&
+        !this._hasPlaybackStarted
+      ) {
+        void this.attemptConfiguredAutoplay(this.videoElement, "online poll", 3000);
       }
     });
     this.cleanupFns.push(unsubState);
@@ -3118,6 +3129,237 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     });
 
     this.streamStateClient.start();
+  }
+
+  private async recoverPlaybackAfterOnlineTransition(
+    streamInfo: MistStreamInfo | undefined
+  ): Promise<void> {
+    if (!this.container) return;
+
+    const needsFreshAttach =
+      !this.videoElement ||
+      !this.currentPlayer ||
+      this.state === "error" ||
+      this.state === "gateway_error" ||
+      this.state === "no_endpoint";
+
+    if (needsFreshAttach) {
+      this.log("Stream came online, refreshing player attach from Mist state");
+      if (streamInfo?.source && Array.isArray(streamInfo.source) && streamInfo.source.length > 0) {
+        await this.initializeLateFromStreamState(streamInfo);
+        return;
+      }
+      await this.retry();
+      return;
+    }
+
+    this.log("Stream came online, resuming playback");
+    const video = this.videoElement;
+    if (!video) return;
+
+    if (await this.attemptConfiguredAutoplay(video, "online transition", 0)) {
+      return;
+    }
+
+    try {
+      await this.currentPlayer?.play?.();
+    } catch (e) {
+      this.log(`Play on online transition failed: ${e}`);
+    }
+  }
+
+  private async attemptConfiguredAutoplay(
+    video: HTMLVideoElement,
+    reason: string,
+    throttleMs: number = 1000
+  ): Promise<boolean> {
+    const skipReasons: string[] = [];
+    if (this.config.autoplay === false) skipReasons.push("autoplay=false");
+    if (this._hasPlaybackStarted) skipReasons.push("hasPlaybackStarted=true");
+    if (!video.paused) skipReasons.push("video.paused=false");
+    if (skipReasons.length > 0) {
+      this.log(
+        `[autoplay:${reason}] skipped ${skipReasons.join(",")} ${this.describeAutoplayContext(video)}`
+      );
+      return false;
+    }
+    if (this._autoplayAttemptInFlight) {
+      this.log(`[autoplay:${reason}] skipped inFlight=true ${this.describeAutoplayContext(video)}`);
+      return true;
+    }
+
+    const now = Date.now();
+    if (throttleMs > 0 && now - this._lastAutoplayAttemptAt < throttleMs) {
+      const retryInMs = throttleMs - (now - this._lastAutoplayAttemptAt);
+      this.log(
+        `[autoplay:${reason}] skipped throttled=${now - this._lastAutoplayAttemptAt}ms ${this.describeAutoplayContext(video)}`
+      );
+      this.scheduleDeferredAutoplayRetry(video, reason, retryInMs);
+      return true;
+    }
+
+    this._autoplayAttemptInFlight = true;
+    this._lastAutoplayAttemptAt = now;
+    try {
+      let lastFailureName: string | undefined;
+      let lastFailureMessage: string | undefined;
+      this.log(`[autoplay:${reason}] attempt start ${this.describeAutoplayContext(video)}`);
+      const result = await attemptAutoplay(video, {
+        play: () => {
+          if (this.currentPlayer?.play) return this.currentPlayer.play();
+          return video.play();
+        },
+        onAttemptFailed: ({ stage, error }) => {
+          const details = this.getErrorDetails(error);
+          lastFailureName = details.name;
+          lastFailureMessage = details.message;
+          this.log(
+            `[autoplay:${reason}] ${stage} play rejected ${this.describeError(error)} ${this.describeAutoplayContext(video)}`
+          );
+        },
+        onMutedFallback: () => {
+          this.log(
+            `[autoplay:${reason}] succeeded with muted fallback ${this.describeAutoplayContext(video)}`
+          );
+          this.emit("muteChange", { muted: true });
+          this.emit("volumeChange", { volume: video.volume, muted: true });
+        },
+        onFailed: ({ error }) => {
+          const details = this.getErrorDetails(error);
+          lastFailureName = details.name;
+          lastFailureMessage = details.message;
+          this.log(
+            `[autoplay:${reason}] failed; awaiting user interaction ${this.describeError(error)} ${this.describeAutoplayContext(video)}`
+          );
+        },
+      });
+      this.mistReporter?.setAutoplayStatus(result);
+      if (result === "failed") {
+        this.armAutoplayActivationRecovery(video, reason);
+      } else {
+        this.clearAutoplayActivationRecovery();
+        this.clearDeferredAutoplayRetry();
+      }
+      this.emit("autoplayResult", {
+        status: result,
+        reason,
+        errorName: lastFailureName,
+        errorMessage: lastFailureMessage,
+      });
+      return result !== "failed";
+    } finally {
+      this._autoplayAttemptInFlight = false;
+    }
+  }
+
+  private getErrorDetails(error: unknown): { name: string; message: string } {
+    if (error instanceof Error) {
+      return {
+        name: error.name || error.constructor.name || "Error",
+        message: error.message || String(error),
+      };
+    }
+    if (error && typeof error === "object") {
+      const record = error as Record<string, unknown>;
+      return {
+        name: String(record.name ?? record.code ?? "UnknownError"),
+        message: String(record.message ?? error),
+      };
+    }
+    return { name: typeof error, message: String(error) };
+  }
+
+  private describeError(error: unknown): string {
+    const details = this.getErrorDetails(error);
+    return `error=${details.name}:${details.message}`;
+  }
+
+  private describeAutoplayContext(video: HTMLVideoElement): string {
+    const player = this._currentPlayerInfo?.shortname ?? this.currentPlayer?.capability?.shortname;
+    const source = this._currentSourceInfo?.type;
+    const streamStatus = this.streamState?.status;
+    const online = this.streamState?.isOnline;
+    const readyState = video.readyState;
+    const networkState = video.networkState;
+    const currentSrc = video.currentSrc || video.src || "";
+    return [
+      `player=${player ?? "unknown"}`,
+      `source=${source ?? "unknown"}`,
+      `state=${this.state}`,
+      `stream=${streamStatus ?? "unknown"}`,
+      `online=${String(online)}`,
+      `paused=${String(video.paused)}`,
+      `muted=${String(video.muted)}`,
+      `volume=${video.volume}`,
+      `readyState=${readyState}`,
+      `networkState=${networkState}`,
+      `currentSrc=${currentSrc ? currentSrc.slice(0, 120) : "none"}`,
+    ].join(" ");
+  }
+
+  private scheduleDeferredAutoplayRetry(
+    video: HTMLVideoElement,
+    reason: string,
+    retryInMs: number
+  ): void {
+    this.clearDeferredAutoplayRetry();
+    this._deferredAutoplayTimer = setTimeout(
+      () => {
+        this._deferredAutoplayTimer = null;
+        if (this.isDestroyed || this.videoElement !== video || !video.paused) return;
+        void this.attemptConfiguredAutoplay(video, `${reason} deferred`, 0);
+      },
+      Math.max(0, retryInMs)
+    );
+  }
+
+  private clearDeferredAutoplayRetry(): void {
+    if (this._deferredAutoplayTimer) {
+      clearTimeout(this._deferredAutoplayTimer);
+      this._deferredAutoplayTimer = null;
+    }
+  }
+
+  private armAutoplayActivationRecovery(video: HTMLVideoElement, reason: string): void {
+    if (this.config.autoplay === false) return;
+    if (this._autoplayActivationCleanup && this._autoplayActivationVideo === video) return;
+    this.clearAutoplayActivationRecovery();
+
+    const doc = video.ownerDocument ?? globalThis.document;
+    if (!doc?.addEventListener) return;
+
+    const retry = () => {
+      this.clearAutoplayActivationRecovery();
+      if (this.isDestroyed || this.videoElement !== video || !video.paused) return;
+      this.log(
+        `[autoplay:${reason}] retrying after user activation ${this.describeAutoplayContext(video)}`
+      );
+      this.play().catch((error) => {
+        this.log(
+          `[autoplay:${reason}] user activation retry failed ${this.describeError(error)} ${this.describeAutoplayContext(video)}`
+        );
+        this.armAutoplayActivationRecovery(video, reason);
+      });
+    };
+    const options: AddEventListenerOptions = { capture: true };
+    doc.addEventListener("pointerdown", retry, options);
+    doc.addEventListener("keydown", retry, options);
+    doc.addEventListener("touchstart", retry, options);
+    this._autoplayActivationVideo = video;
+    this._autoplayActivationCleanup = () => {
+      doc.removeEventListener("pointerdown", retry, options);
+      doc.removeEventListener("keydown", retry, options);
+      doc.removeEventListener("touchstart", retry, options);
+      this._autoplayActivationVideo = null;
+      this._autoplayActivationCleanup = null;
+    };
+    this.log(
+      `[autoplay:${reason}] armed user activation retry ${this.describeAutoplayContext(video)}`
+    );
+  }
+
+  private clearAutoplayActivationRecovery(): void {
+    this._autoplayActivationCleanup?.();
   }
 
   /**
@@ -3143,6 +3385,17 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
 
     try {
+      try {
+        this.playerManager.destroy();
+      } catch {
+        // Ignore stale player cleanup failures during cold-start recovery.
+      }
+      if (this.container) {
+        this.container.innerHTML = "";
+      }
+      this.videoElement = null;
+      this.currentPlayer = null;
+
       const sources =
         normalizeMistSourceUrls(streamInfo.source as StreamSource[], mistUrl) ??
         (streamInfo.source as StreamSource[]);
@@ -3364,6 +3617,12 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     // Falls back to the static Chandler URL when no cues have arrived yet.
     const liveSpriteUrl = cues[0]?.url;
     const spriteJpgUrl = liveSpriteUrl ?? assets?.spriteJpgUrl ?? undefined;
+    const prerollKey = [
+      this.config.contentId,
+      this.getMistStreamName(),
+      this._thumbnailVttUrl ?? assets?.spriteVttUrl ?? "",
+      assets?.assetKey ?? staticUrl ?? "",
+    ].join("|");
 
     const usableCues = cues.filter(
       (c) =>
@@ -3391,6 +3650,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           mode: "animate",
           geometry: "measured",
           spriteJpgUrl,
+          prerollKey,
           cues: usableCues.map((c) => ({
             x: c.x ?? 0,
             y: c.y ?? 0,
@@ -3416,6 +3676,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         mode: "animate",
         geometry: "synthetic",
         spriteJpgUrl,
+        prerollKey,
         cues: [],
         tileWidth: 0,
         tileHeight: 0,
@@ -3464,6 +3725,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     if (prev.mode !== next.mode) return true;
     if (prev.geometry !== next.geometry) return true;
     if (prev.spriteJpgUrl !== next.spriteJpgUrl) return true;
+    if (prev.prerollKey !== next.prerollKey) return true;
     if (prev.staticUrl !== next.staticUrl) return true;
     if (prev.staticSource !== next.staticSource) return true;
     if (
@@ -3645,32 +3907,25 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         this.initializeSubControllers();
         this.emit("volumeChange", { volume: el.volume, muted: this.isMuted() });
         this.emit("ready", { videoElement: el });
+        this.log(`[video:ready] ${this.describeAutoplayContext(el)}`);
 
         // Drain queued play intent from pre-boot play() calls
         if (this._pendingPlayIntent) {
           this._pendingPlayIntent = false;
-          el.play().catch(() => {});
+          this.play().catch(() => {});
         }
 
-        // Centralized autoplay recovery (upstream parity: unmuted → muted → give up)
+        // Centralized autoplay recovery (upstream parity: unmuted → muted → give up).
+        // If the media backend is still warming up, readiness events below retry.
         if (autoplay !== false && el.paused) {
-          attemptAutoplay(el, {
-            onMutedFallback: () => {
-              this.log("[initializePlayer] Autoplay succeeded with muted fallback");
-              this.emit("muteChange", { muted: true });
-              this.emit("volumeChange", { volume: el.volume, muted: true });
-            },
-            onFailed: () => {
-              this.log("[initializePlayer] Autoplay failed entirely — awaiting user interaction");
-            },
-          }).then((result: AutoplayResult) => {
-            this.mistReporter?.setAutoplayStatus(result);
-            this.emit("autoplayResult", { status: result });
-          });
+          void this.attemptConfiguredAutoplay(el, "ready", 0);
         } else if (autoplay !== false) {
           // Already playing (browser autoplay attribute worked)
+          this.log(
+            `[autoplay:ready] native autoplay already playing ${this.describeAutoplayContext(el)}`
+          );
           this.mistReporter?.setAutoplayStatus("success");
-          this.emit("autoplayResult", { status: "success" as AutoplayResult });
+          this.emit("autoplayResult", { status: "success" as AutoplayResult, reason: "ready" });
         }
       },
       onTimeUpdate: (_t) => {
@@ -3747,6 +4002,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     };
     const onPlaying = () => {
       if (this.shouldSuppressVideoEvents()) return;
+      this.log(`[video:playing] ${this.describeAutoplayContext(el)}`);
+      this.clearDeferredAutoplayRetry();
+      this.clearAutoplayActivationRecovery();
       this._isBuffering = false;
       this._hasPlaybackStarted = true;
       // Clear stall timer on successful playback
@@ -3759,16 +4017,22 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       this.attemptClearError();
     };
     const onCanPlay = () => {
+      this.log(`[video:canplay] ${this.describeAutoplayContext(el)}`);
       this._isBuffering = false;
       // Clear stall timer on canplay
       this._stallStartTime = 0;
-      this.setState("playing");
+      if (el.paused) {
+        void this.attemptConfiguredAutoplay(el, "canplay");
+      } else {
+        this.setState("playing");
+      }
       this.metaTrackManager?.setPaused(false);
       // Attempt to clear error on canplay
       this.attemptClearError();
     };
     const onPause = () => {
       if (this.shouldSuppressVideoEvents()) return;
+      this.log(`[video:pause] ${this.describeAutoplayContext(el)}`);
       this.setState("paused");
       this.metaTrackManager?.setPaused(true);
     };
@@ -3804,12 +4068,16 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       this.detectAudioTracks();
     };
     const onLoadedMetadata = () => {
+      this.log(`[video:loadedmetadata] ${this.describeAutoplayContext(el)}`);
       // Detect audio tracks and WebRTC source
       this.detectAudioTracks();
       this._isWebRTC = isMediaStreamSource(el);
       this._supportsPlaybackRate = !this._isWebRTC;
       // Initial seeking state calculation
       this.updateSeekingState();
+      if (el.paused) {
+        void this.attemptConfiguredAutoplay(el, "loadedmetadata");
+      }
       // Safari: audioTracks may be populated after loadedmetadata for HLS streams
       if (elWithAudio.audioTracks?.addEventListener) {
         elWithAudio.audioTracks.addEventListener("addtrack", onAudioTracksChange);
@@ -4224,6 +4492,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   }
 
   private cleanup(): void {
+    this.clearDeferredAutoplayRetry();
+    this.clearAutoplayActivationRecovery();
     // Run all cleanup functions
     this.cleanupFns.forEach((fn) => {
       try {
