@@ -225,6 +225,39 @@ func TestUserViewerHandlersIgnoreNonPlaybackConnectors(t *testing.T) {
 	}
 }
 
+func TestHandlePlayRewriteAllowsLocalProcessingJob(t *testing.T) {
+	setupTriggerTest(t, "tenant-39b")
+
+	const streamName = "processing+artifact123"
+	pendingJobsMu.Lock()
+	pendingJobs[streamName] = make(chan struct{}, 1)
+	pendingJobsMu.Unlock()
+	t.Cleanup(func() {
+		pendingJobsMu.Lock()
+		delete(pendingJobs, streamName)
+		pendingJobsMu.Unlock()
+	})
+
+	forwarded := false
+	stubSendMistTrigger(t, func(trigger *pb.MistTrigger) (*control.MistTriggerResult, error) {
+		forwarded = true
+		return &control.MistTriggerResult{Response: "should-not-forward"}, nil
+	})
+
+	ctx, recorder := newWebhookContext(streamName + "\n172.18.0.10\nJSON\nhttp://mistserver/json_" + streamName + ".js")
+	HandlePlayRewrite(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	if recorder.Body.String() != streamName {
+		t.Fatalf("expected response %q, got %q", streamName, recorder.Body.String())
+	}
+	if forwarded {
+		t.Fatal("expected local processing PLAY_REWRITE to bypass Foghorn")
+	}
+}
+
 func TestHandleStreamProcessUsesLocalOverride(t *testing.T) {
 	setupTriggerTest(t, "tenant-39b")
 

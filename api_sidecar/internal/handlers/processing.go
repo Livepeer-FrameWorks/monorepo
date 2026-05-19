@@ -509,11 +509,11 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 			lastErr = err
 		}
 
-		info, err := mistClient.GetStreamInfo(streamName)
+		streamData, err := h.getActiveProcessingStreamData(mistClient, streamName)
 		if err != nil {
 			lastErr = err
-		} else if info.Metadata != nil {
-			lastPresence = inspectProcessingTracks(info.Metadata)
+		} else {
+			lastPresence = inspectProcessingActiveStream(streamData)
 			if processingTracksComplete(lastPresence, requirements) {
 				log.WithFields(logrus.Fields{
 					"audio_codecs": mapKeys(lastPresence.audioCodecs),
@@ -657,31 +657,19 @@ func processRequired(proc map[string]interface{}) bool {
 	return false
 }
 
-func inspectProcessingTracks(meta map[string]interface{}) processingTrackPresence {
+func inspectProcessingActiveStream(streamData map[string]interface{}) processingTrackPresence {
 	p := processingTrackPresence{
 		audioCodecs: map[string]bool{},
 		videoCodecs: map[string]bool{},
 		metaCodecs:  map[string]bool{},
-		outputs:     extractTrackMetadata(meta),
+		outputs:     extractActiveStreamMetadata(streamData),
 	}
 
-	metaRaw, ok := meta["meta"]
+	health, ok := streamData["health"].(map[string]interface{})
 	if !ok {
 		return p
 	}
-	metaMap, ok := metaRaw.(map[string]interface{})
-	if !ok {
-		return p
-	}
-	tracksRaw, ok := metaMap["tracks"]
-	if !ok {
-		return p
-	}
-	tracks, ok := tracksRaw.(map[string]interface{})
-	if !ok {
-		return p
-	}
-	for name, trackRaw := range tracks {
+	for name, trackRaw := range health {
 		track, ok := trackRaw.(map[string]interface{})
 		if !ok {
 			continue
@@ -690,45 +678,20 @@ func inspectProcessingTracks(meta map[string]interface{}) processingTrackPresenc
 		if v, ok := track["codec"].(string); ok {
 			codec = normalizeTrackCodec(v)
 		}
-		trackType := ""
-		if v, ok := track["type"].(string); ok {
-			trackType = strings.ToLower(v)
-		}
-		if trackType == "" {
-			switch {
-			case strings.HasPrefix(name, "audio"):
-				trackType = "audio"
-			case strings.HasPrefix(name, "video"):
-				trackType = "video"
-			case strings.HasPrefix(name, "meta"), strings.HasPrefix(name, "subtitle"):
-				trackType = "meta"
-			}
-		}
-		switch trackType {
-		case "audio":
+		switch {
+		case isAudioCodec(codec) || strings.HasPrefix(name, "audio_"):
 			if codec != "" {
 				p.audioCodecs[codec] = true
 				p.sourceMedia = true
 			}
-		case "video":
-			if codec != "" {
-				p.videoCodecs[codec] = true
-				if codec != "JPEG" {
-					p.sourceMedia = true
-				}
-			}
-		case "meta", "subtitle":
+		case codec == "JPEG":
+			p.videoCodecs[codec] = true
+		case strings.HasPrefix(name, "meta_") || codec == "thumbvtt" || codec == "JSON":
 			if codec != "" {
 				p.metaCodecs[codec] = true
 			}
-		default:
-			switch {
-			case isAudioCodec(codec):
-				p.audioCodecs[codec] = true
-				p.sourceMedia = true
-			case codec == "JPEG":
-				p.videoCodecs[codec] = true
-			case codec != "":
+		case strings.HasPrefix(name, "video_") || codec != "":
+			if codec != "" {
 				p.videoCodecs[codec] = true
 				p.sourceMedia = true
 			}
@@ -947,6 +910,64 @@ func extractTrackMetadata(meta map[string]interface{}) map[string]string {
 	return outputs
 }
 
+func extractActiveStreamMetadata(streamData map[string]interface{}) map[string]string {
+	outputs := map[string]string{}
+	health, ok := streamData["health"].(map[string]interface{})
+	if !ok {
+		return outputs
+	}
+	for name, trackRaw := range health {
+		track, ok := trackRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		codec := ""
+		if v, ok := track["codec"].(string); ok {
+			codec = normalizeTrackCodec(v)
+		}
+		if strings.HasPrefix(name, "video_") && codec != "JPEG" {
+			if _, exists := outputs["video_codec"]; exists {
+				continue
+			}
+			if codec != "" {
+				outputs["video_codec"] = codec
+			}
+			if v, ok := track["width"].(float64); ok {
+				outputs["width"] = strconv.Itoa(int(v))
+			}
+			if v, ok := track["height"].(float64); ok {
+				outputs["height"] = strconv.Itoa(int(v))
+			}
+			if w, ok := outputs["width"]; ok {
+				if ht, ok := outputs["height"]; ok {
+					outputs["resolution"] = w + "x" + ht
+				}
+			}
+			if v, ok := track["fpks"].(float64); ok && v > 0 {
+				outputs["fps"] = fmt.Sprintf("%.2f", v/1000.0)
+			}
+			if v, ok := track["kbits"].(float64); ok && v > 0 {
+				outputs["bitrate_kbps"] = strconv.Itoa(int(v))
+			}
+		}
+		if strings.HasPrefix(name, "audio_") {
+			if codec != "" {
+				outputs["audio_codec"] = codec
+			}
+			if v, ok := track["channels"].(float64); ok {
+				outputs["audio_channels"] = strconv.Itoa(int(v))
+			}
+			if v, ok := track["rate"].(float64); ok {
+				outputs["audio_sample_rate"] = strconv.Itoa(int(v))
+			}
+		}
+	}
+	if v, ok := streamData["lastms"].(float64); ok && v > 0 {
+		outputs["duration_ms"] = strconv.Itoa(int(v))
+	}
+	return outputs
+}
+
 // ProcessExitEvent represents a PROCESS_EXIT trigger from MistServer.
 type ProcessExitEvent struct {
 	StreamName  string
@@ -1098,22 +1119,30 @@ func (h *ProcessingJobHandler) updateProcessConfigCache(send func(*pb.ControlMes
 // getStreamLastMs queries MistServer's active_streams for the current lastms
 // of the given stream. Returns 0 if the stream is not found or query fails.
 func (h *ProcessingJobHandler) getStreamLastMs(mistClient *mist.Client, streamName string) int64 {
-	resp, err := mistClient.GetActiveStreams()
+	streamData, err := h.getActiveProcessingStreamData(mistClient, streamName)
 	if err != nil {
-		return 0
-	}
-	activeStreams, ok := resp["active_streams"].(map[string]interface{})
-	if !ok {
-		return 0
-	}
-	streamData, ok := activeStreams[streamName].(map[string]interface{})
-	if !ok {
 		return 0
 	}
 	if lastms, ok := streamData["lastms"].(float64); ok {
 		return int64(lastms)
 	}
 	return 0
+}
+
+func (h *ProcessingJobHandler) getActiveProcessingStreamData(mistClient *mist.Client, streamName string) (map[string]interface{}, error) {
+	resp, err := mistClient.GetActiveStreams()
+	if err != nil {
+		return nil, err
+	}
+	activeStreams, ok := resp["active_streams"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("active_streams missing from Mist response")
+	}
+	streamData, ok := activeStreams[streamName].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("stream %s not active", streamName)
+	}
+	return streamData, nil
 }
 
 // isCriticalProcess returns true if the dying process is essential for output.

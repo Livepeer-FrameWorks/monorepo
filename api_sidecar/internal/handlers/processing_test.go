@@ -192,6 +192,57 @@ func TestProcessingTracksReadyRequiresExplicitRequiredTracks(t *testing.T) {
 	}
 }
 
+func TestInspectProcessingActiveStreamUsesHealthTracks(t *testing.T) {
+	presence := inspectProcessingActiveStream(map[string]interface{}{
+		"lastms": float64(33000),
+		"health": map[string]interface{}{
+			"audio_AAC_1ch_44100hz_1": map[string]interface{}{
+				"codec":    "AAC",
+				"channels": float64(1),
+				"rate":     float64(44100),
+			},
+			"audio_opus_1ch_48000hz_2": map[string]interface{}{
+				"codec": "opus",
+			},
+			"video_H264_640x360_0fps_0": map[string]interface{}{
+				"codec":  "H264",
+				"width":  float64(640),
+				"height": float64(360),
+				"kbits":  float64(2200),
+			},
+			"video_JPEG_160x90_0fps_3": map[string]interface{}{
+				"codec": "JPEG",
+			},
+			"meta_thumbvtt_4": map[string]interface{}{
+				"codec": "thumbvtt",
+			},
+		},
+	})
+
+	if !presence.sourceMedia {
+		t.Fatal("expected source media to be detected")
+	}
+	for _, codec := range []string{"AAC", "opus"} {
+		if !presence.audioCodecs[codec] {
+			t.Fatalf("expected audio codec %s", codec)
+		}
+	}
+	for _, codec := range []string{"H264", "JPEG"} {
+		if !presence.videoCodecs[codec] {
+			t.Fatalf("expected video codec %s", codec)
+		}
+	}
+	if !presence.metaCodecs["thumbvtt"] {
+		t.Fatal("expected thumbvtt metadata track")
+	}
+	if got := presence.outputs["duration_ms"]; got != "33000" {
+		t.Fatalf("duration_ms = %q, want 33000", got)
+	}
+	if got := presence.outputs["resolution"]; got != "640x360" {
+		t.Fatalf("resolution = %q, want 640x360", got)
+	}
+}
+
 func TestMistJSONURLUsesHTTPPortForAPIURL(t *testing.T) {
 	got := mistJSONURL("http://mistserver:4242", "processing+abc", "metaeverywhere=1")
 	want := "http://mistserver:8080/json_processing+abc.js?metaeverywhere=1"

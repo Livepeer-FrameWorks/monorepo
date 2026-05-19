@@ -700,6 +700,16 @@ func HandlePlayRewrite(c *gin.Context) {
 		return
 	}
 
+	if play := mistTrigger.GetPlayRewrite(); play != nil {
+		requested := play.GetRequestedStream()
+		if strings.HasPrefix(requested, "processing+") && HasPendingJob(requested) {
+			logger.WithField("stream_name", requested).Info("PLAY_REWRITE resolved local processing stream")
+			incMistWebhook("PLAY_REWRITE", "success")
+			c.String(http.StatusOK, requested)
+			return
+		}
+	}
+
 	// Forward trigger to Foghorn via gRPC and get response
 	applyTenantContext(mistTrigger)
 	result, err := sendMistTrigger(mistTrigger, logger)
