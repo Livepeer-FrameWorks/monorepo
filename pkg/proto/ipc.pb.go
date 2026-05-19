@@ -8475,6 +8475,7 @@ type StorageLifecycleData struct {
 	WarmDurationMs  *int64                      `protobuf:"varint,12,opt,name=warm_duration_ms,json=warmDurationMs,proto3,oneof" json:"warm_duration_ms,omitempty"`   // For EVICTED: how long asset was cached before eviction
 	ClusterId       *string                     `protobuf:"bytes,14,opt,name=cluster_id,json=clusterId,proto3,oneof" json:"cluster_id,omitempty"`                     // Cluster where the storage operation happened
 	OriginClusterId *string                     `protobuf:"bytes,15,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"` // Cluster that originally created the artifact
+	DtshIncluded    *bool                       `protobuf:"varint,17,opt,name=dtsh_included,json=dtshIncluded,proto3,oneof" json:"dtsh_included,omitempty"`           // True when the S3 sync included a Mist .dtsh index.
 	// Mirrors DefrostComplete.Reason for CACHE_FAILED rows so analytics can
 	// distinguish "out of space" from "S3 5xx'd" from "local IO error."
 	Reason        *DefrostComplete_Reason `protobuf:"varint,16,opt,name=reason,proto3,enum=helmsmancontrol.DefrostComplete_Reason,oneof" json:"reason,omitempty"`
@@ -8615,6 +8616,13 @@ func (x *StorageLifecycleData) GetOriginClusterId() string {
 		return *x.OriginClusterId
 	}
 	return ""
+}
+
+func (x *StorageLifecycleData) GetDtshIncluded() bool {
+	if x != nil && x.DtshIncluded != nil {
+		return *x.DtshIncluded
+	}
+	return false
 }
 
 func (x *StorageLifecycleData) GetReason() DefrostComplete_Reason {
@@ -11473,6 +11481,12 @@ type ClipLifecycleData struct {
 	UserId           *string `protobuf:"bytes,22,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`                                 // User who initiated the clip (if known)
 	OriginClusterId  *string `protobuf:"bytes,23,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`    // Cluster where clip was originally created
 	ServingClusterId *string `protobuf:"bytes,24,opt,name=serving_cluster_id,json=servingClusterId,proto3,oneof" json:"serving_cluster_id,omitempty"` // Cluster serving the clip to the viewer
+	StorageLocation  *string `protobuf:"bytes,25,opt,name=storage_location,json=storageLocation,proto3,oneof" json:"storage_location,omitempty"`
+	SyncStatus       *string `protobuf:"bytes,26,opt,name=sync_status,json=syncStatus,proto3,oneof" json:"sync_status,omitempty"`
+	IsHot            *bool   `protobuf:"varint,27,opt,name=is_hot,json=isHot,proto3,oneof" json:"is_hot,omitempty"`
+	IsSynced         *bool   `protobuf:"varint,28,opt,name=is_synced,json=isSynced,proto3,oneof" json:"is_synced,omitempty"`
+	IsFinalized      *bool   `protobuf:"varint,29,opt,name=is_finalized,json=isFinalized,proto3,oneof" json:"is_finalized,omitempty"`
+	IsFrozen         *bool   `protobuf:"varint,30,opt,name=is_frozen,json=isFrozen,proto3,oneof" json:"is_frozen,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -11675,6 +11689,48 @@ func (x *ClipLifecycleData) GetServingClusterId() string {
 	return ""
 }
 
+func (x *ClipLifecycleData) GetStorageLocation() string {
+	if x != nil && x.StorageLocation != nil {
+		return *x.StorageLocation
+	}
+	return ""
+}
+
+func (x *ClipLifecycleData) GetSyncStatus() string {
+	if x != nil && x.SyncStatus != nil {
+		return *x.SyncStatus
+	}
+	return ""
+}
+
+func (x *ClipLifecycleData) GetIsHot() bool {
+	if x != nil && x.IsHot != nil {
+		return *x.IsHot
+	}
+	return false
+}
+
+func (x *ClipLifecycleData) GetIsSynced() bool {
+	if x != nil && x.IsSynced != nil {
+		return *x.IsSynced
+	}
+	return false
+}
+
+func (x *ClipLifecycleData) GetIsFinalized() bool {
+	if x != nil && x.IsFinalized != nil {
+		return *x.IsFinalized
+	}
+	return false
+}
+
+func (x *ClipLifecycleData) GetIsFrozen() bool {
+	if x != nil && x.IsFrozen != nil {
+		return *x.IsFrozen
+	}
+	return false
+}
+
 // DVR lifecycle specific data (separate from DVR control messages)
 //
 // FOGHORN ENRICHMENT REQUIRED:
@@ -11702,6 +11758,12 @@ type DVRLifecycleData struct {
 	UserId             *string `protobuf:"bytes,14,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`                                 // User who initiated the DVR (if known)
 	OriginClusterId    *string `protobuf:"bytes,15,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`    // Cluster where DVR recording started
 	ServingClusterId   *string `protobuf:"bytes,16,opt,name=serving_cluster_id,json=servingClusterId,proto3,oneof" json:"serving_cluster_id,omitempty"` // Cluster serving the DVR to the viewer
+	StorageLocation    *string `protobuf:"bytes,17,opt,name=storage_location,json=storageLocation,proto3,oneof" json:"storage_location,omitempty"`
+	SyncStatus         *string `protobuf:"bytes,18,opt,name=sync_status,json=syncStatus,proto3,oneof" json:"sync_status,omitempty"`
+	IsHot              *bool   `protobuf:"varint,19,opt,name=is_hot,json=isHot,proto3,oneof" json:"is_hot,omitempty"`
+	IsSynced           *bool   `protobuf:"varint,20,opt,name=is_synced,json=isSynced,proto3,oneof" json:"is_synced,omitempty"`
+	IsFinalized        *bool   `protobuf:"varint,21,opt,name=is_finalized,json=isFinalized,proto3,oneof" json:"is_finalized,omitempty"`
+	IsFrozen           *bool   `protobuf:"varint,22,opt,name=is_frozen,json=isFrozen,proto3,oneof" json:"is_frozen,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -11848,6 +11910,48 @@ func (x *DVRLifecycleData) GetServingClusterId() string {
 	return ""
 }
 
+func (x *DVRLifecycleData) GetStorageLocation() string {
+	if x != nil && x.StorageLocation != nil {
+		return *x.StorageLocation
+	}
+	return ""
+}
+
+func (x *DVRLifecycleData) GetSyncStatus() string {
+	if x != nil && x.SyncStatus != nil {
+		return *x.SyncStatus
+	}
+	return ""
+}
+
+func (x *DVRLifecycleData) GetIsHot() bool {
+	if x != nil && x.IsHot != nil {
+		return *x.IsHot
+	}
+	return false
+}
+
+func (x *DVRLifecycleData) GetIsSynced() bool {
+	if x != nil && x.IsSynced != nil {
+		return *x.IsSynced
+	}
+	return false
+}
+
+func (x *DVRLifecycleData) GetIsFinalized() bool {
+	if x != nil && x.IsFinalized != nil {
+		return *x.IsFinalized
+	}
+	return false
+}
+
+func (x *DVRLifecycleData) GetIsFrozen() bool {
+	if x != nil && x.IsFrozen != nil {
+		return *x.IsFrozen
+	}
+	return false
+}
+
 // VOD lifecycle specific data (for user-uploaded video assets)
 //
 // VOD uploads differ from clips/DVR:
@@ -11882,6 +11986,12 @@ type VodLifecycleData struct {
 	OriginClusterId  *string `protobuf:"bytes,21,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`    // Cluster where VOD was uploaded
 	ServingClusterId *string `protobuf:"bytes,22,opt,name=serving_cluster_id,json=servingClusterId,proto3,oneof" json:"serving_cluster_id,omitempty"` // Cluster serving the VOD to the viewer
 	ProgressPct      *int32  `protobuf:"varint,23,opt,name=progress_pct,json=progressPct,proto3,oneof" json:"progress_pct,omitempty"`                 // 0-100 processing progress (STATUS_PROCESSING only)
+	StorageLocation  *string `protobuf:"bytes,24,opt,name=storage_location,json=storageLocation,proto3,oneof" json:"storage_location,omitempty"`
+	SyncStatus       *string `protobuf:"bytes,25,opt,name=sync_status,json=syncStatus,proto3,oneof" json:"sync_status,omitempty"`
+	IsHot            *bool   `protobuf:"varint,26,opt,name=is_hot,json=isHot,proto3,oneof" json:"is_hot,omitempty"`
+	IsSynced         *bool   `protobuf:"varint,27,opt,name=is_synced,json=isSynced,proto3,oneof" json:"is_synced,omitempty"`
+	IsFinalized      *bool   `protobuf:"varint,28,opt,name=is_finalized,json=isFinalized,proto3,oneof" json:"is_finalized,omitempty"`
+	IsFrozen         *bool   `protobuf:"varint,29,opt,name=is_frozen,json=isFrozen,proto3,oneof" json:"is_frozen,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -12075,6 +12185,48 @@ func (x *VodLifecycleData) GetProgressPct() int32 {
 		return *x.ProgressPct
 	}
 	return 0
+}
+
+func (x *VodLifecycleData) GetStorageLocation() string {
+	if x != nil && x.StorageLocation != nil {
+		return *x.StorageLocation
+	}
+	return ""
+}
+
+func (x *VodLifecycleData) GetSyncStatus() string {
+	if x != nil && x.SyncStatus != nil {
+		return *x.SyncStatus
+	}
+	return ""
+}
+
+func (x *VodLifecycleData) GetIsHot() bool {
+	if x != nil && x.IsHot != nil {
+		return *x.IsHot
+	}
+	return false
+}
+
+func (x *VodLifecycleData) GetIsSynced() bool {
+	if x != nil && x.IsSynced != nil {
+		return *x.IsSynced
+	}
+	return false
+}
+
+func (x *VodLifecycleData) GetIsFinalized() bool {
+	if x != nil && x.IsFinalized != nil {
+		return *x.IsFinalized
+	}
+	return false
+}
+
+func (x *VodLifecycleData) GetIsFrozen() bool {
+	if x != nil && x.IsFrozen != nil {
+		return *x.IsFrozen
+	}
+	return false
 }
 
 // MessageLifecycleData tracks support messaging events for real-time UI updates
@@ -17279,7 +17431,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\tdtsh_urls\x18\a \x03(\v2..helmsmancontrol.DtshSyncRequest.DtshUrlsEntryR\bdtshUrls\x1a;\n" +
 	"\rDtshUrlsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xcb\b\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x87\t\n" +
 	"\x14StorageLifecycleData\x12D\n" +
 	"\x06action\x18\x01 \x01(\x0e2,.helmsmancontrol.StorageLifecycleData.ActionR\x06action\x12\x1d\n" +
 	"\n" +
@@ -17303,8 +17455,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"cluster_id\x18\x0e \x01(\tH\tR\tclusterId\x88\x01\x01\x12/\n" +
 	"\x11origin_cluster_id\x18\x0f \x01(\tH\n" +
-	"R\x0foriginClusterId\x88\x01\x01\x12D\n" +
-	"\x06reason\x18\x10 \x01(\x0e2'.helmsmancontrol.DefrostComplete.ReasonH\vR\x06reason\x88\x01\x01\"\x85\x02\n" +
+	"R\x0foriginClusterId\x88\x01\x01\x12(\n" +
+	"\rdtsh_included\x18\x11 \x01(\bH\vR\fdtshIncluded\x88\x01\x01\x12D\n" +
+	"\x06reason\x18\x10 \x01(\x0e2'.helmsmancontrol.DefrostComplete.ReasonH\fR\x06reason\x88\x01\x01\"\x85\x02\n" +
 	"\x06Action\x12\x16\n" +
 	"\x12ACTION_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13ACTION_SYNC_STARTED\x10\x01\x12\x11\n" +
@@ -17331,7 +17484,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\f_duration_msB\x13\n" +
 	"\x11_warm_duration_msB\r\n" +
 	"\v_cluster_idB\x14\n" +
-	"\x12_origin_cluster_idB\t\n" +
+	"\x12_origin_cluster_idB\x10\n" +
+	"\x0e_dtsh_includedB\t\n" +
 	"\a_reason\"\xcf\a\n" +
 	"\x12PushRewriteTrigger\x12\x19\n" +
 	"\bpush_url\x18\x01 \x01(\tR\apushUrl\x12\x1a\n" +
@@ -17869,8 +18023,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x11_candidates_countB\r\n" +
 	"\v_event_typeB\t\n" +
 	"\a_sourceB\x14\n" +
-	"\x12_remote_cluster_id\"\xff\n" +
-	"\n" +
+	"\x12_remote_cluster_id\"\xba\r\n" +
 	"\x11ClipLifecycleData\x12>\n" +
 	"\x05stage\x18\x01 \x01(\x0e2(.helmsmancontrol.ClipLifecycleData.StageR\x05stage\x12\x1b\n" +
 	"\tclip_hash\x18\x02 \x01(\tR\bclipHash\x12\"\n" +
@@ -17902,7 +18055,14 @@ const file_ipc_proto_rawDesc = "" +
 	"\tstream_id\x18\x15 \x01(\tH\x12R\bstreamId\x88\x01\x01\x12\x1c\n" +
 	"\auser_id\x18\x16 \x01(\tH\x13R\x06userId\x88\x01\x01\x12/\n" +
 	"\x11origin_cluster_id\x18\x17 \x01(\tH\x14R\x0foriginClusterId\x88\x01\x01\x121\n" +
-	"\x12serving_cluster_id\x18\x18 \x01(\tH\x15R\x10servingClusterId\x88\x01\x01\"\x8e\x01\n" +
+	"\x12serving_cluster_id\x18\x18 \x01(\tH\x15R\x10servingClusterId\x88\x01\x01\x12.\n" +
+	"\x10storage_location\x18\x19 \x01(\tH\x16R\x0fstorageLocation\x88\x01\x01\x12$\n" +
+	"\vsync_status\x18\x1a \x01(\tH\x17R\n" +
+	"syncStatus\x88\x01\x01\x12\x1a\n" +
+	"\x06is_hot\x18\x1b \x01(\bH\x18R\x05isHot\x88\x01\x01\x12 \n" +
+	"\tis_synced\x18\x1c \x01(\bH\x19R\bisSynced\x88\x01\x01\x12&\n" +
+	"\fis_finalized\x18\x1d \x01(\bH\x1aR\visFinalized\x88\x01\x01\x12 \n" +
+	"\tis_frozen\x18\x1e \x01(\bH\x1bR\bisFrozen\x88\x01\x01\"\x8e\x01\n" +
 	"\x05Stage\x12\x15\n" +
 	"\x11STAGE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fSTAGE_REQUESTED\x10\x01\x12\x10\n" +
@@ -17941,7 +18101,16 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"\b_user_idB\x14\n" +
 	"\x12_origin_cluster_idB\x15\n" +
-	"\x13_serving_cluster_id\"\xef\a\n" +
+	"\x13_serving_cluster_idB\x13\n" +
+	"\x11_storage_locationB\x0e\n" +
+	"\f_sync_statusB\t\n" +
+	"\a_is_hotB\f\n" +
+	"\n" +
+	"_is_syncedB\x0f\n" +
+	"\r_is_finalizedB\f\n" +
+	"\n" +
+	"_is_frozen\"\xaa\n" +
+	"\n" +
 	"\x10DVRLifecycleData\x12@\n" +
 	"\x06status\x18\x01 \x01(\x0e2(.helmsmancontrol.DVRLifecycleData.StatusR\x06status\x12\x19\n" +
 	"\bdvr_hash\x18\x02 \x01(\tR\advrHash\x12(\n" +
@@ -17963,7 +18132,14 @@ const file_ipc_proto_rawDesc = "" +
 	"R\bstreamId\x88\x01\x01\x12\x1c\n" +
 	"\auser_id\x18\x0e \x01(\tH\vR\x06userId\x88\x01\x01\x12/\n" +
 	"\x11origin_cluster_id\x18\x0f \x01(\tH\fR\x0foriginClusterId\x88\x01\x01\x121\n" +
-	"\x12serving_cluster_id\x18\x10 \x01(\tH\rR\x10servingClusterId\x88\x01\x01\"\x85\x01\n" +
+	"\x12serving_cluster_id\x18\x10 \x01(\tH\rR\x10servingClusterId\x88\x01\x01\x12.\n" +
+	"\x10storage_location\x18\x11 \x01(\tH\x0eR\x0fstorageLocation\x88\x01\x01\x12$\n" +
+	"\vsync_status\x18\x12 \x01(\tH\x0fR\n" +
+	"syncStatus\x88\x01\x01\x12\x1a\n" +
+	"\x06is_hot\x18\x13 \x01(\bH\x10R\x05isHot\x88\x01\x01\x12 \n" +
+	"\tis_synced\x18\x14 \x01(\bH\x11R\bisSynced\x88\x01\x01\x12&\n" +
+	"\fis_finalized\x18\x15 \x01(\bH\x12R\visFinalized\x88\x01\x01\x12 \n" +
+	"\tis_frozen\x18\x16 \x01(\bH\x13R\bisFrozen\x88\x01\x01\"\x85\x01\n" +
 	"\x06Status\x12\x16\n" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eSTATUS_STARTED\x10\x01\x12\x14\n" +
@@ -17988,8 +18164,15 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"\b_user_idB\x14\n" +
 	"\x12_origin_cluster_idB\x15\n" +
-	"\x13_serving_cluster_id\"\xd4\n" +
+	"\x13_serving_cluster_idB\x13\n" +
+	"\x11_storage_locationB\x0e\n" +
+	"\f_sync_statusB\t\n" +
+	"\a_is_hotB\f\n" +
 	"\n" +
+	"_is_syncedB\x0f\n" +
+	"\r_is_finalizedB\f\n" +
+	"\n" +
+	"_is_frozen\"\x8f\r\n" +
 	"\x10VodLifecycleData\x12@\n" +
 	"\x06status\x18\x01 \x01(\x0e2(.helmsmancontrol.VodLifecycleData.StatusR\x06status\x12\x19\n" +
 	"\bvod_hash\x18\x02 \x01(\tR\avodHash\x12 \n" +
@@ -18023,7 +18206,14 @@ const file_ipc_proto_rawDesc = "" +
 	"\fbitrate_kbps\x18\x14 \x01(\x05H\x11R\vbitrateKbps\x88\x01\x01\x12/\n" +
 	"\x11origin_cluster_id\x18\x15 \x01(\tH\x12R\x0foriginClusterId\x88\x01\x01\x121\n" +
 	"\x12serving_cluster_id\x18\x16 \x01(\tH\x13R\x10servingClusterId\x88\x01\x01\x12&\n" +
-	"\fprogress_pct\x18\x17 \x01(\x05H\x14R\vprogressPct\x88\x01\x01\"\xa0\x01\n" +
+	"\fprogress_pct\x18\x17 \x01(\x05H\x14R\vprogressPct\x88\x01\x01\x12.\n" +
+	"\x10storage_location\x18\x18 \x01(\tH\x15R\x0fstorageLocation\x88\x01\x01\x12$\n" +
+	"\vsync_status\x18\x19 \x01(\tH\x16R\n" +
+	"syncStatus\x88\x01\x01\x12\x1a\n" +
+	"\x06is_hot\x18\x1a \x01(\bH\x17R\x05isHot\x88\x01\x01\x12 \n" +
+	"\tis_synced\x18\x1b \x01(\bH\x18R\bisSynced\x88\x01\x01\x12&\n" +
+	"\fis_finalized\x18\x1c \x01(\bH\x19R\visFinalized\x88\x01\x01\x12 \n" +
+	"\tis_frozen\x18\x1d \x01(\bH\x1aR\bisFrozen\x88\x01\x01\"\xa0\x01\n" +
 	"\x06Status\x12\x16\n" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10STATUS_REQUESTED\x10\x01\x12\x14\n" +
@@ -18057,7 +18247,15 @@ const file_ipc_proto_rawDesc = "" +
 	"\r_bitrate_kbpsB\x14\n" +
 	"\x12_origin_cluster_idB\x15\n" +
 	"\x13_serving_cluster_idB\x0f\n" +
-	"\r_progress_pct\"\x94\x05\n" +
+	"\r_progress_pctB\x13\n" +
+	"\x11_storage_locationB\x0e\n" +
+	"\f_sync_statusB\t\n" +
+	"\a_is_hotB\f\n" +
+	"\n" +
+	"_is_syncedB\x0f\n" +
+	"\r_is_finalizedB\f\n" +
+	"\n" +
+	"_is_frozen\"\x94\x05\n" +
 	"\x14MessageLifecycleData\x12N\n" +
 	"\n" +
 	"event_type\x18\x01 \x01(\x0e2/.helmsmancontrol.MessageLifecycleData.EventTypeR\teventType\x12'\n" +

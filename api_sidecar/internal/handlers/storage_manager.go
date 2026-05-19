@@ -1010,11 +1010,12 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 
 	durationMs := duration.Milliseconds()
 	_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-		Action:     pb.StorageLifecycleData_ACTION_SYNCED,
-		AssetType:  string(asset.AssetType),
-		AssetHash:  asset.AssetHash,
-		SizeBytes:  actualSizeBytes,
-		DurationMs: &durationMs,
+		Action:       pb.StorageLifecycleData_ACTION_SYNCED,
+		AssetType:    string(asset.AssetType),
+		AssetHash:    asset.AssetHash,
+		SizeBytes:    actualSizeBytes,
+		DurationMs:   &durationMs,
+		DtshIncluded: &dtshIncluded,
 	})
 
 	_ = sm.sendSyncComplete(requestID, asset.AssetHash, "success", "", actualSizeBytes, "", dtshIncluded, false) //nolint:errcheck // best-effort report

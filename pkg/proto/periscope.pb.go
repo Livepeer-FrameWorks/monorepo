@@ -5704,6 +5704,12 @@ type ArtifactState struct {
 	ProcessingNodeId *string                `protobuf:"bytes,18,opt,name=processing_node_id,json=processingNodeId,proto3,oneof" json:"processing_node_id,omitempty"`
 	UpdatedAt        *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	ExpiresAt        *timestamppb.Timestamp `protobuf:"bytes,20,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`
+	StorageLocation  *string                `protobuf:"bytes,21,opt,name=storage_location,json=storageLocation,proto3,oneof" json:"storage_location,omitempty"` // "local", "s3", "freezing", "defrosting"
+	SyncStatus       *string                `protobuf:"bytes,22,opt,name=sync_status,json=syncStatus,proto3,oneof" json:"sync_status,omitempty"`                // "pending", "in_progress", "synced", "failed", "lost_local"
+	IsHot            *bool                  `protobuf:"varint,23,opt,name=is_hot,json=isHot,proto3,oneof" json:"is_hot,omitempty"`                              // A warm edge copy is available.
+	IsSynced         *bool                  `protobuf:"varint,24,opt,name=is_synced,json=isSynced,proto3,oneof" json:"is_synced,omitempty"`                     // S3 has an authoritative copy.
+	IsFinalized      *bool                  `protobuf:"varint,25,opt,name=is_finalized,json=isFinalized,proto3,oneof" json:"is_finalized,omitempty"`            // S3 sync included the .dtsh index.
+	IsFrozen         *bool                  `protobuf:"varint,26,opt,name=is_frozen,json=isFrozen,proto3,oneof" json:"is_frozen,omitempty"`                     // No warm edge copy remains; playback must defrost/cache.
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -5876,6 +5882,48 @@ func (x *ArtifactState) GetExpiresAt() *timestamppb.Timestamp {
 		return x.ExpiresAt
 	}
 	return nil
+}
+
+func (x *ArtifactState) GetStorageLocation() string {
+	if x != nil && x.StorageLocation != nil {
+		return *x.StorageLocation
+	}
+	return ""
+}
+
+func (x *ArtifactState) GetSyncStatus() string {
+	if x != nil && x.SyncStatus != nil {
+		return *x.SyncStatus
+	}
+	return ""
+}
+
+func (x *ArtifactState) GetIsHot() bool {
+	if x != nil && x.IsHot != nil {
+		return *x.IsHot
+	}
+	return false
+}
+
+func (x *ArtifactState) GetIsSynced() bool {
+	if x != nil && x.IsSynced != nil {
+		return *x.IsSynced
+	}
+	return false
+}
+
+func (x *ArtifactState) GetIsFinalized() bool {
+	if x != nil && x.IsFinalized != nil {
+		return *x.IsFinalized
+	}
+	return false
+}
+
+func (x *ArtifactState) GetIsFrozen() bool {
+	if x != nil && x.IsFrozen != nil {
+		return *x.IsFrozen
+	}
+	return false
 }
 
 type GetArtifactStateRequest struct {
@@ -16137,7 +16185,8 @@ const file_periscope_proto_rawDesc = "" +
 	"\n" +
 	"pagination\x18\x01 \x01(\v2 .common.CursorPaginationResponseR\n" +
 	"pagination\x12,\n" +
-	"\x06events\x18\x02 \x03(\v2\x14.periscope.ClipEventR\x06events\"\xc0\b\n" +
+	"\x06events\x18\x02 \x03(\v2\x14.periscope.ClipEventR\x06events\"\xfb\n" +
+	"\n" +
 	"\rArtifactState\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
 	"\n" +
@@ -16165,7 +16214,14 @@ const file_periscope_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\x13 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12>\n" +
 	"\n" +
-	"expires_at\x18\x14 \x01(\v2\x1a.google.protobuf.TimestampH\vR\texpiresAt\x88\x01\x01B\x10\n" +
+	"expires_at\x18\x14 \x01(\v2\x1a.google.protobuf.TimestampH\vR\texpiresAt\x88\x01\x01\x12.\n" +
+	"\x10storage_location\x18\x15 \x01(\tH\fR\x0fstorageLocation\x88\x01\x01\x12$\n" +
+	"\vsync_status\x18\x16 \x01(\tH\rR\n" +
+	"syncStatus\x88\x01\x01\x12\x1a\n" +
+	"\x06is_hot\x18\x17 \x01(\bH\x0eR\x05isHot\x88\x01\x01\x12 \n" +
+	"\tis_synced\x18\x18 \x01(\bH\x0fR\bisSynced\x88\x01\x01\x12&\n" +
+	"\fis_finalized\x18\x19 \x01(\bH\x10R\visFinalized\x88\x01\x01\x12 \n" +
+	"\tis_frozen\x18\x1a \x01(\bH\x11R\bisFrozen\x88\x01\x01B\x10\n" +
 	"\x0e_error_messageB\r\n" +
 	"\v_started_atB\x0f\n" +
 	"\r_completed_atB\x12\n" +
@@ -16178,7 +16234,15 @@ const file_periscope_proto_rawDesc = "" +
 	"\a_s3_urlB\r\n" +
 	"\v_size_bytesB\x15\n" +
 	"\x13_processing_node_idB\r\n" +
-	"\v_expires_at\"U\n" +
+	"\v_expires_atB\x13\n" +
+	"\x11_storage_locationB\x0e\n" +
+	"\f_sync_statusB\t\n" +
+	"\a_is_hotB\f\n" +
+	"\n" +
+	"_is_syncedB\x0f\n" +
+	"\r_is_finalizedB\f\n" +
+	"\n" +
+	"_is_frozen\"U\n" +
 	"\x17GetArtifactStateRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
 	"\n" +

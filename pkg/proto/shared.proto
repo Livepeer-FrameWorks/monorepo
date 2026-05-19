@@ -93,6 +93,11 @@ message ClipInfo {
   // current retention_until. Mirrors commodore.clips.retention_source.
   // Values: tenant_default | per_asset_override | tier_entitlement.
   optional string retention_source = 23;
+  optional string sync_status = 24;
+  optional bool is_hot = 25;
+  optional bool is_synced = 26;
+  optional bool is_finalized = 27;
+  optional bool is_frozen = 28;
   reserved 12, 19;
   reserved "access_count", "last_accessed";
 }
@@ -258,6 +263,11 @@ message DVRInfo {
   // thumbnail_assets is populated server-side from Commodore's registry
   // projection. Null until Foghorn confirms the thumbnail upload.
   optional ThumbnailAssets thumbnail_assets = 23;
+  optional string sync_status = 24;
+  optional bool is_hot = 25;
+  optional bool is_synced = 26;
+  optional bool is_finalized = 27;
+  optional bool is_frozen = 28;
 }
 
 // ListDVRRecordingsRequest - request to list DVR recordings
@@ -629,6 +639,11 @@ message VodAssetInfo {
   optional string stream_id = 24; // source stream UUID for stream-derived VOD artifacts
   optional string origin_type = 25; // upload | dvr_chapter | null
   optional string origin_id = 26;   // origin entity id (chapter_id for dvr_chapter)
+  string sync_status = 27;
+  bool is_hot = 28;
+  bool is_synced = 29;
+  bool is_finalized = 30;
+  bool is_frozen = 31;
 }
 
 // VodMetadata - metadata extracted from video file (returned by validation)

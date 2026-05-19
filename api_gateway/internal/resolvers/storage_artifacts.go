@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
@@ -63,6 +65,28 @@ func (r *Resolver) DoStorageArtifactsConnection(ctx context.Context, input *mode
 	if err != nil {
 		r.Logger.WithError(err).Error("ListStorageArtifacts failed")
 		return nil, fmt.Errorf("list storage artifacts: %w", err)
+	}
+
+	if l := loaders.FromContext(ctx); l != nil && l.ArtifactLifecycle != nil && len(resp.GetArtifacts()) > 0 {
+		tenantID := ctxkeys.GetTenantID(ctx)
+		hashes := make([]string, 0, len(resp.GetArtifacts()))
+		for _, artifact := range resp.GetArtifacts() {
+			if hash := artifact.GetArtifactHash(); hash != "" {
+				hashes = append(hashes, hash)
+			}
+		}
+		if tenantID != "" && len(hashes) > 0 {
+			states, stateErr := l.ArtifactLifecycle.LoadMany(ctx, tenantID, hashes)
+			if stateErr != nil {
+				r.Logger.WithError(stateErr).Warn("Failed to load storage artifact lifecycle data")
+			} else {
+				for _, artifact := range resp.GetArtifacts() {
+					if state, ok := states[artifact.GetArtifactHash()]; ok && state != nil {
+						applyArtifactStorageStateToStorageArtifact(artifact, state)
+					}
+				}
+			}
+		}
 	}
 
 	nodes := make([]*model.StorageArtifact, 0, len(resp.GetArtifacts()))
@@ -138,6 +162,10 @@ func (r *Resolver) storageArtifactFromProto(ctx context.Context, artifact *pb.St
 		SizeBytes:          sizeBytes,
 		Status:             artifact.GetStatus(),
 		StorageLocation:    artifact.StorageLocation,
+		SyncStatus:         artifact.SyncStatus,
+		IsHot:              artifact.IsHot,
+		IsSynced:           artifact.IsSynced,
+		IsFinalized:        artifact.IsFinalized,
 		IsFrozen:           artifact.IsFrozen,
 		CreatedAt:          createdAt,
 		UpdatedAt:          updatedAt,
@@ -148,6 +176,23 @@ func (r *Resolver) storageArtifactFromProto(ctx context.Context, artifact *pb.St
 		RetentionID:        hash,
 		ThumbnailURL:       thumbnailURL,
 	}, nil
+}
+
+func applyArtifactStorageStateToStorageArtifact(artifact *pb.StorageArtifactInfo, state *pb.ArtifactState) {
+	if artifact == nil || state == nil {
+		return
+	}
+	if state.StorageLocation != nil && *state.StorageLocation != "" {
+		artifact.StorageLocation = state.StorageLocation
+	} else if state.FilePath != nil && *state.FilePath != "" {
+		loc := "local"
+		artifact.StorageLocation = &loc
+	}
+	artifact.SyncStatus = state.SyncStatus
+	artifact.IsHot = state.IsHot
+	artifact.IsSynced = state.IsSynced
+	artifact.IsFinalized = state.IsFinalized
+	artifact.IsFrozen = state.IsFrozen
 }
 
 func storageArtifactKind(kind string) model.StorageArtifactKind {

@@ -628,6 +628,34 @@ func TestVodProgressPercent(t *testing.T) {
 	}
 }
 
+func TestStorageStateFromAction(t *testing.T) {
+	tests := []struct {
+		name       string
+		action     pb.StorageLifecycleData_Action
+		location   string
+		syncStatus string
+		hot        bool
+		synced     bool
+		frozen     bool
+	}{
+		{name: "synced keeps local hot", action: pb.StorageLifecycleData_ACTION_SYNCED, location: "local", syncStatus: "synced", hot: true, synced: true, frozen: false},
+		{name: "evicted is frozen cold", action: pb.StorageLifecycleData_ACTION_EVICTED, location: "s3", syncStatus: "synced", hot: false, synced: true, frozen: true},
+		{name: "cached restores hot", action: pb.StorageLifecycleData_ACTION_CACHED, location: "local", syncStatus: "synced", hot: true, synced: true, frozen: false},
+		{name: "sync failure keeps hot local", action: pb.StorageLifecycleData_ACTION_SYNC_FAILED, location: "local", syncStatus: "failed", hot: true, synced: false, frozen: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			location, syncStatus, hot, synced, frozen := storageStateFromAction(tc.action)
+			if location != tc.location || syncStatus != tc.syncStatus || hot != tc.hot || synced != tc.synced || frozen != tc.frozen {
+				t.Fatalf("storageStateFromAction(%s) = (%q,%q,%v,%v,%v), want (%q,%q,%v,%v,%v)",
+					tc.action, location, syncStatus, hot, synced, frozen,
+					tc.location, tc.syncStatus, tc.hot, tc.synced, tc.frozen)
+			}
+		})
+	}
+}
+
 func TestNormalizeDVRStage(t *testing.T) {
 	cases := []struct {
 		name     string

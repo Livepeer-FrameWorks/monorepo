@@ -639,8 +639,16 @@ func protoToVodAsset(p *pb.VodAssetInfo) *model.VodAsset {
 		PlaybackID:      "",
 		Status:          status,
 		StorageLocation: p.StorageLocation,
+		IsHot:           p.GetIsHot(),
+		IsSynced:        p.GetIsSynced(),
+		IsFinalized:     p.GetIsFinalized(),
+		IsFrozen:        p.GetIsFrozen(),
 		CreatedAt:       p.CreatedAt.AsTime(),
 		UpdatedAt:       p.UpdatedAt.AsTime(),
+	}
+	if p.GetSyncStatus() != "" {
+		syncStatus := p.GetSyncStatus()
+		asset.SyncStatus = &syncStatus
 	}
 
 	// Optional fields
@@ -773,12 +781,16 @@ func enrichVodAssetWithLifecycle(asset *pb.VodAssetInfo, state *pb.ArtifactState
 		asset.SizeBytes = &sizeInt64
 	}
 
-	// Storage location from S3 URL presence
-	if state.S3Url != nil && *state.S3Url != "" {
-		asset.StorageLocation = "s3"
+	if state.StorageLocation != nil && *state.StorageLocation != "" {
+		asset.StorageLocation = *state.StorageLocation
 	} else if state.FilePath != nil && *state.FilePath != "" {
 		asset.StorageLocation = "local"
 	}
+	asset.SyncStatus = state.GetSyncStatus()
+	asset.IsHot = state.GetIsHot()
+	asset.IsSynced = state.GetIsSynced()
+	asset.IsFinalized = state.GetIsFinalized()
+	asset.IsFrozen = state.GetIsFrozen()
 
 	// Error message
 	if state.ErrorMessage != nil {

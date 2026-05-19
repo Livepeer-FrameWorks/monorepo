@@ -3959,6 +3959,10 @@ type StorageArtifactInfo struct {
 	StorageClusterId string                 `protobuf:"bytes,19,opt,name=storage_cluster_id,json=storageClusterId,proto3" json:"storage_cluster_id,omitempty"`
 	HasThumbnails    bool                   `protobuf:"varint,20,opt,name=has_thumbnails,json=hasThumbnails,proto3" json:"has_thumbnails,omitempty"`
 	ThumbnailAssets  *ThumbnailAssets       `protobuf:"bytes,21,opt,name=thumbnail_assets,json=thumbnailAssets,proto3,oneof" json:"thumbnail_assets,omitempty"`
+	SyncStatus       *string                `protobuf:"bytes,22,opt,name=sync_status,json=syncStatus,proto3,oneof" json:"sync_status,omitempty"`
+	IsHot            *bool                  `protobuf:"varint,23,opt,name=is_hot,json=isHot,proto3,oneof" json:"is_hot,omitempty"`
+	IsSynced         *bool                  `protobuf:"varint,24,opt,name=is_synced,json=isSynced,proto3,oneof" json:"is_synced,omitempty"`
+	IsFinalized      *bool                  `protobuf:"varint,25,opt,name=is_finalized,json=isFinalized,proto3,oneof" json:"is_finalized,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -4138,6 +4142,34 @@ func (x *StorageArtifactInfo) GetThumbnailAssets() *ThumbnailAssets {
 		return x.ThumbnailAssets
 	}
 	return nil
+}
+
+func (x *StorageArtifactInfo) GetSyncStatus() string {
+	if x != nil && x.SyncStatus != nil {
+		return *x.SyncStatus
+	}
+	return ""
+}
+
+func (x *StorageArtifactInfo) GetIsHot() bool {
+	if x != nil && x.IsHot != nil {
+		return *x.IsHot
+	}
+	return false
+}
+
+func (x *StorageArtifactInfo) GetIsSynced() bool {
+	if x != nil && x.IsSynced != nil {
+		return *x.IsSynced
+	}
+	return false
+}
+
+func (x *StorageArtifactInfo) GetIsFinalized() bool {
+	if x != nil && x.IsFinalized != nil {
+		return *x.IsFinalized
+	}
+	return false
 }
 
 type ListStorageArtifactsResponse struct {
@@ -11780,7 +11812,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\x05limit\x18\a \x01(\x05R\x05limit\x12\x16\n" +
 	"\x06offset\x18\b \x01(\x05R\x06offsetB\f\n" +
 	"\n" +
-	"_stream_id\"\x89\b\n" +
+	"_stream_id\"\xcf\t\n" +
 	"\x13StorageArtifactInfo\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12#\n" +
@@ -11809,7 +11841,13 @@ const file_commodore_proto_rawDesc = "" +
 	"\torigin_id\x18\x12 \x01(\tH\bR\boriginId\x88\x01\x01\x12,\n" +
 	"\x12storage_cluster_id\x18\x13 \x01(\tR\x10storageClusterId\x12%\n" +
 	"\x0ehas_thumbnails\x18\x14 \x01(\bR\rhasThumbnails\x12G\n" +
-	"\x10thumbnail_assets\x18\x15 \x01(\v2\x17.shared.ThumbnailAssetsH\tR\x0fthumbnailAssets\x88\x01\x01B\x0e\n" +
+	"\x10thumbnail_assets\x18\x15 \x01(\v2\x17.shared.ThumbnailAssetsH\tR\x0fthumbnailAssets\x88\x01\x01\x12$\n" +
+	"\vsync_status\x18\x16 \x01(\tH\n" +
+	"R\n" +
+	"syncStatus\x88\x01\x01\x12\x1a\n" +
+	"\x06is_hot\x18\x17 \x01(\bH\vR\x05isHot\x88\x01\x01\x12 \n" +
+	"\tis_synced\x18\x18 \x01(\bH\fR\bisSynced\x88\x01\x01\x12&\n" +
+	"\fis_finalized\x18\x19 \x01(\bH\rR\visFinalized\x88\x01\x01B\x0e\n" +
 	"\f_playback_idB\f\n" +
 	"\n" +
 	"_stream_idB\r\n" +
@@ -11822,7 +11860,12 @@ const file_commodore_proto_rawDesc = "" +
 	"\f_origin_typeB\f\n" +
 	"\n" +
 	"_origin_idB\x13\n" +
-	"\x11_thumbnail_assets\"\xa1\x01\n" +
+	"\x11_thumbnail_assetsB\x0e\n" +
+	"\f_sync_statusB\t\n" +
+	"\a_is_hotB\f\n" +
+	"\n" +
+	"_is_syncedB\x0f\n" +
+	"\r_is_finalized\"\xa1\x01\n" +
 	"\x1cListStorageArtifactsResponse\x12<\n" +
 	"\tartifacts\x18\x01 \x03(\v2\x1e.commodore.StorageArtifactInfoR\tartifacts\x12\x1f\n" +
 	"\vtotal_count\x18\x02 \x01(\x05R\n" +

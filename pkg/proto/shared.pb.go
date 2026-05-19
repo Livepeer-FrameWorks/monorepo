@@ -533,6 +533,11 @@ type ClipInfo struct {
 	// current retention_until. Mirrors commodore.clips.retention_source.
 	// Values: tenant_default | per_asset_override | tier_entitlement.
 	RetentionSource *string `protobuf:"bytes,23,opt,name=retention_source,json=retentionSource,proto3,oneof" json:"retention_source,omitempty"`
+	SyncStatus      *string `protobuf:"bytes,24,opt,name=sync_status,json=syncStatus,proto3,oneof" json:"sync_status,omitempty"`
+	IsHot           *bool   `protobuf:"varint,25,opt,name=is_hot,json=isHot,proto3,oneof" json:"is_hot,omitempty"`
+	IsSynced        *bool   `protobuf:"varint,26,opt,name=is_synced,json=isSynced,proto3,oneof" json:"is_synced,omitempty"`
+	IsFinalized     *bool   `protobuf:"varint,27,opt,name=is_finalized,json=isFinalized,proto3,oneof" json:"is_finalized,omitempty"`
+	IsFrozen        *bool   `protobuf:"varint,28,opt,name=is_frozen,json=isFrozen,proto3,oneof" json:"is_frozen,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -712,6 +717,41 @@ func (x *ClipInfo) GetRetentionSource() string {
 		return *x.RetentionSource
 	}
 	return ""
+}
+
+func (x *ClipInfo) GetSyncStatus() string {
+	if x != nil && x.SyncStatus != nil {
+		return *x.SyncStatus
+	}
+	return ""
+}
+
+func (x *ClipInfo) GetIsHot() bool {
+	if x != nil && x.IsHot != nil {
+		return *x.IsHot
+	}
+	return false
+}
+
+func (x *ClipInfo) GetIsSynced() bool {
+	if x != nil && x.IsSynced != nil {
+		return *x.IsSynced
+	}
+	return false
+}
+
+func (x *ClipInfo) GetIsFinalized() bool {
+	if x != nil && x.IsFinalized != nil {
+		return *x.IsFinalized
+	}
+	return false
+}
+
+func (x *ClipInfo) GetIsFrozen() bool {
+	if x != nil && x.IsFrozen != nil {
+		return *x.IsFrozen
+	}
+	return false
 }
 
 // GetClipsRequest - request to list clips
@@ -1592,6 +1632,11 @@ type DVRInfo struct {
 	// thumbnail_assets is populated server-side from Commodore's registry
 	// projection. Null until Foghorn confirms the thumbnail upload.
 	ThumbnailAssets *ThumbnailAssets `protobuf:"bytes,23,opt,name=thumbnail_assets,json=thumbnailAssets,proto3,oneof" json:"thumbnail_assets,omitempty"`
+	SyncStatus      *string          `protobuf:"bytes,24,opt,name=sync_status,json=syncStatus,proto3,oneof" json:"sync_status,omitempty"`
+	IsHot           *bool            `protobuf:"varint,25,opt,name=is_hot,json=isHot,proto3,oneof" json:"is_hot,omitempty"`
+	IsSynced        *bool            `protobuf:"varint,26,opt,name=is_synced,json=isSynced,proto3,oneof" json:"is_synced,omitempty"`
+	IsFinalized     *bool            `protobuf:"varint,27,opt,name=is_finalized,json=isFinalized,proto3,oneof" json:"is_finalized,omitempty"`
+	IsFrozen        *bool            `protobuf:"varint,28,opt,name=is_frozen,json=isFrozen,proto3,oneof" json:"is_frozen,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1785,6 +1830,41 @@ func (x *DVRInfo) GetThumbnailAssets() *ThumbnailAssets {
 		return x.ThumbnailAssets
 	}
 	return nil
+}
+
+func (x *DVRInfo) GetSyncStatus() string {
+	if x != nil && x.SyncStatus != nil {
+		return *x.SyncStatus
+	}
+	return ""
+}
+
+func (x *DVRInfo) GetIsHot() bool {
+	if x != nil && x.IsHot != nil {
+		return *x.IsHot
+	}
+	return false
+}
+
+func (x *DVRInfo) GetIsSynced() bool {
+	if x != nil && x.IsSynced != nil {
+		return *x.IsSynced
+	}
+	return false
+}
+
+func (x *DVRInfo) GetIsFinalized() bool {
+	if x != nil && x.IsFinalized != nil {
+		return *x.IsFinalized
+	}
+	return false
+}
+
+func (x *DVRInfo) GetIsFrozen() bool {
+	if x != nil && x.IsFrozen != nil {
+		return *x.IsFrozen
+	}
+	return false
 }
 
 // ListDVRRecordingsRequest - request to list DVR recordings
@@ -4207,6 +4287,11 @@ type VodAssetInfo struct {
 	StreamId        *string `protobuf:"bytes,24,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"`       // source stream UUID for stream-derived VOD artifacts
 	OriginType      *string `protobuf:"bytes,25,opt,name=origin_type,json=originType,proto3,oneof" json:"origin_type,omitempty"` // upload | dvr_chapter | null
 	OriginId        *string `protobuf:"bytes,26,opt,name=origin_id,json=originId,proto3,oneof" json:"origin_id,omitempty"`       // origin entity id (chapter_id for dvr_chapter)
+	SyncStatus      string  `protobuf:"bytes,27,opt,name=sync_status,json=syncStatus,proto3" json:"sync_status,omitempty"`
+	IsHot           bool    `protobuf:"varint,28,opt,name=is_hot,json=isHot,proto3" json:"is_hot,omitempty"`
+	IsSynced        bool    `protobuf:"varint,29,opt,name=is_synced,json=isSynced,proto3" json:"is_synced,omitempty"`
+	IsFinalized     bool    `protobuf:"varint,30,opt,name=is_finalized,json=isFinalized,proto3" json:"is_finalized,omitempty"`
+	IsFrozen        bool    `protobuf:"varint,31,opt,name=is_frozen,json=isFrozen,proto3" json:"is_frozen,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -4421,6 +4506,41 @@ func (x *VodAssetInfo) GetOriginId() string {
 		return *x.OriginId
 	}
 	return ""
+}
+
+func (x *VodAssetInfo) GetSyncStatus() string {
+	if x != nil {
+		return x.SyncStatus
+	}
+	return ""
+}
+
+func (x *VodAssetInfo) GetIsHot() bool {
+	if x != nil {
+		return x.IsHot
+	}
+	return false
+}
+
+func (x *VodAssetInfo) GetIsSynced() bool {
+	if x != nil {
+		return x.IsSynced
+	}
+	return false
+}
+
+func (x *VodAssetInfo) GetIsFinalized() bool {
+	if x != nil {
+		return x.IsFinalized
+	}
+	return false
+}
+
+func (x *VodAssetInfo) GetIsFrozen() bool {
+	if x != nil {
+		return x.IsFrozen
+	}
+	return false
 }
 
 // VodMetadata - metadata extracted from video file (returned by validation)
@@ -4739,7 +4859,7 @@ const file_shared_proto_rawDesc = "" +
 	"request_id\x18\x05 \x01(\tR\trequestId\x12\x1b\n" +
 	"\tclip_hash\x18\x06 \x01(\tR\bclipHash\x12\x1f\n" +
 	"\vplayback_id\x18\a \x01(\tR\n" +
-	"playbackId\"\xe8\a\n" +
+	"playbackId\"\xde\t\n" +
 	"\bClipInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tclip_hash\x18\x02 \x01(\tR\bclipHash\x12\x1b\n" +
@@ -4768,7 +4888,14 @@ const file_shared_proto_rawDesc = "" +
 	"playbackId\x12,\n" +
 	"\x12storage_cluster_id\x18\x15 \x01(\tR\x10storageClusterId\x12G\n" +
 	"\x10thumbnail_assets\x18\x16 \x01(\v2\x17.shared.ThumbnailAssetsH\x05R\x0fthumbnailAssets\x88\x01\x01\x12.\n" +
-	"\x10retention_source\x18\x17 \x01(\tH\x06R\x0fretentionSource\x88\x01\x01B\r\n" +
+	"\x10retention_source\x18\x17 \x01(\tH\x06R\x0fretentionSource\x88\x01\x01\x12$\n" +
+	"\vsync_status\x18\x18 \x01(\tH\aR\n" +
+	"syncStatus\x88\x01\x01\x12\x1a\n" +
+	"\x06is_hot\x18\x19 \x01(\bH\bR\x05isHot\x88\x01\x01\x12 \n" +
+	"\tis_synced\x18\x1a \x01(\bH\tR\bisSynced\x88\x01\x01\x12&\n" +
+	"\fis_finalized\x18\x1b \x01(\bH\n" +
+	"R\visFinalized\x88\x01\x01\x12 \n" +
+	"\tis_frozen\x18\x1c \x01(\bH\vR\bisFrozen\x88\x01\x01B\r\n" +
 	"\v_size_bytesB\f\n" +
 	"\n" +
 	"_clip_modeB\x13\n" +
@@ -4776,7 +4903,14 @@ const file_shared_proto_rawDesc = "" +
 	"\x11_storage_locationB\r\n" +
 	"\v_expires_atB\x13\n" +
 	"\x11_thumbnail_assetsB\x13\n" +
-	"\x11_retention_sourceJ\x04\b\f\x10\rJ\x04\b\x13\x10\x14R\faccess_countR\rlast_accessed\"\xa5\x02\n" +
+	"\x11_retention_sourceB\x0e\n" +
+	"\f_sync_statusB\t\n" +
+	"\a_is_hotB\f\n" +
+	"\n" +
+	"_is_syncedB\x0f\n" +
+	"\r_is_finalizedB\f\n" +
+	"\n" +
+	"_is_frozenJ\x04\b\f\x10\rJ\x04\b\x13\x10\x14R\faccess_countR\rlast_accessed\"\xa5\x02\n" +
 	"\x0fGetClipsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12 \n" +
 	"\tstream_id\x18\x02 \x01(\tH\x00R\bstreamId\x88\x01\x01\x12?\n" +
@@ -4860,7 +4994,7 @@ const file_shared_proto_rawDesc = "" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\"G\n" +
 	"\x11DeleteDVRResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xd8\t\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xce\v\n" +
 	"\aDVRInfo\x12\x19\n" +
 	"\bdvr_hash\x18\x01 \x01(\tR\advrHash\x12#\n" +
 	"\rinternal_name\x18\x02 \x01(\tR\finternalName\x12&\n" +
@@ -4892,7 +5026,13 @@ const file_shared_proto_rawDesc = "" +
 	"playbackId\x88\x01\x01\x12.\n" +
 	"\x10retention_source\x18\x15 \x01(\tH\fR\x0fretentionSource\x88\x01\x01\x12,\n" +
 	"\x12storage_cluster_id\x18\x16 \x01(\tR\x10storageClusterId\x12G\n" +
-	"\x10thumbnail_assets\x18\x17 \x01(\v2\x17.shared.ThumbnailAssetsH\rR\x0fthumbnailAssets\x88\x01\x01B\r\n" +
+	"\x10thumbnail_assets\x18\x17 \x01(\v2\x17.shared.ThumbnailAssetsH\rR\x0fthumbnailAssets\x88\x01\x01\x12$\n" +
+	"\vsync_status\x18\x18 \x01(\tH\x0eR\n" +
+	"syncStatus\x88\x01\x01\x12\x1a\n" +
+	"\x06is_hot\x18\x19 \x01(\bH\x0fR\x05isHot\x88\x01\x01\x12 \n" +
+	"\tis_synced\x18\x1a \x01(\bH\x10R\bisSynced\x88\x01\x01\x12&\n" +
+	"\fis_finalized\x18\x1b \x01(\bH\x11R\visFinalized\x88\x01\x01\x12 \n" +
+	"\tis_frozen\x18\x1c \x01(\bH\x12R\bisFrozen\x88\x01\x01B\r\n" +
 	"\v_started_atB\v\n" +
 	"\t_ended_atB\x13\n" +
 	"\x11_duration_secondsB\r\n" +
@@ -4908,7 +5048,14 @@ const file_shared_proto_rawDesc = "" +
 	"_stream_idB\x0e\n" +
 	"\f_playback_idB\x13\n" +
 	"\x11_retention_sourceB\x13\n" +
-	"\x11_thumbnail_assets\"\xae\x02\n" +
+	"\x11_thumbnail_assetsB\x0e\n" +
+	"\f_sync_statusB\t\n" +
+	"\a_is_hotB\f\n" +
+	"\n" +
+	"_is_syncedB\x0f\n" +
+	"\r_is_finalizedB\f\n" +
+	"\n" +
+	"_is_frozen\"\xae\x02\n" +
 	"\x18ListDVRRecordingsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12 \n" +
 	"\tstream_id\x18\x02 \x01(\tH\x00R\bstreamId\x88\x01\x01\x12?\n" +
@@ -5173,8 +5320,7 @@ const file_shared_proto_rawDesc = "" +
 	"\x06assets\x18\x01 \x03(\v2\x14.shared.VodAssetInfoR\x06assets\x12@\n" +
 	"\n" +
 	"pagination\x18\x02 \x01(\v2 .common.CursorPaginationResponseR\n" +
-	"pagination\"\xac\n" +
-	"\n" +
+	"pagination\"\xc1\v\n" +
 	"\fVodAssetInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12\x14\n" +
@@ -5215,7 +5361,13 @@ const file_shared_proto_rawDesc = "" +
 	"\tstream_id\x18\x18 \x01(\tH\rR\bstreamId\x88\x01\x01\x12$\n" +
 	"\vorigin_type\x18\x19 \x01(\tH\x0eR\n" +
 	"originType\x88\x01\x01\x12 \n" +
-	"\torigin_id\x18\x1a \x01(\tH\x0fR\boriginId\x88\x01\x01B\r\n" +
+	"\torigin_id\x18\x1a \x01(\tH\x0fR\boriginId\x88\x01\x01\x12\x1f\n" +
+	"\vsync_status\x18\x1b \x01(\tR\n" +
+	"syncStatus\x12\x15\n" +
+	"\x06is_hot\x18\x1c \x01(\bR\x05isHot\x12\x1b\n" +
+	"\tis_synced\x18\x1d \x01(\bR\bisSynced\x12!\n" +
+	"\fis_finalized\x18\x1e \x01(\bR\visFinalized\x12\x1b\n" +
+	"\tis_frozen\x18\x1f \x01(\bR\bisFrozenB\r\n" +
 	"\v_size_bytesB\x0e\n" +
 	"\f_duration_msB\r\n" +
 	"\v_resolutionB\x0e\n" +

@@ -1750,6 +1750,10 @@ type StorageArtifact struct {
 	SizeBytes          *float64               `json:"sizeBytes,omitempty"`
 	Status             string                 `json:"status"`
 	StorageLocation    *string                `json:"storageLocation,omitempty"`
+	SyncStatus         *string                `json:"syncStatus,omitempty"`
+	IsHot              *bool                  `json:"isHot,omitempty"`
+	IsSynced           *bool                  `json:"isSynced,omitempty"`
+	IsFinalized        *bool                  `json:"isFinalized,omitempty"`
 	IsFrozen           *bool                  `json:"isFrozen,omitempty"`
 	CreatedAt          time.Time              `json:"createdAt"`
 	UpdatedAt          time.Time              `json:"updatedAt"`
@@ -2329,6 +2333,16 @@ type VodAsset struct {
 	Status VodAssetStatus `json:"status"`
 	// Where the asset is stored (s3, local, freezing, defrosting).
 	StorageLocation string `json:"storageLocation"`
+	// Current S3 sync state (pending, in_progress, synced, failed, lost_local).
+	SyncStatus *string `json:"syncStatus,omitempty"`
+	// True when at least one edge has a warm local copy.
+	IsHot bool `json:"isHot"`
+	// True when S3 has an authoritative copy.
+	IsSynced bool `json:"isSynced"`
+	// True when the S3 copy includes the Mist .dtsh index.
+	IsFinalized bool `json:"isFinalized"`
+	// True when playback requires defrost/caching because no warm edge copy remains.
+	IsFrozen bool `json:"isFrozen"`
 	// File size in bytes (available after validation).
 	SizeBytes *float64 `json:"sizeBytes,omitempty"`
 	// Video duration in milliseconds.

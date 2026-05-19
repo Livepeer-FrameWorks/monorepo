@@ -117,7 +117,7 @@ func (r *clipRepositoryDB) NeedsDtshSync(ctx context.Context, clipHash string) b
 			SELECT 1 FROM foghorn.artifacts
 			WHERE artifact_hash = $1
 			  AND artifact_type = 'clip'
-			  AND frozen_at IS NOT NULL
+			  AND sync_status = 'synced'
 			  AND COALESCE(dtsh_synced, false) = false
 		)
 	`, clipHash).Scan(&needsSync)
@@ -228,7 +228,7 @@ func (r *dvrRepositoryDB) NeedsDtshSync(ctx context.Context, dvrHash string) boo
 			SELECT 1 FROM foghorn.artifacts
 			WHERE artifact_hash = $1
 			  AND artifact_type = 'dvr'
-			  AND frozen_at IS NOT NULL
+			  AND sync_status = 'synced'
 			  AND COALESCE(dtsh_synced, false) = false
 		)
 	`, dvrHash).Scan(&needsSync)
@@ -585,8 +585,7 @@ func (r *artifactRepositoryDB) SetSyncStatus(ctx context.Context, artifactHash, 
 			SET sync_status = 'synced',
 			    s3_url = NULLIF($2, ''),
 			    last_sync_attempt = NOW(),
-			    sync_error = NULL,
-			    frozen_at = NOW()
+			    sync_error = NULL
 			WHERE artifact_hash = $1
 		`, artifactHash, s3URL)
 		return err
@@ -746,7 +745,7 @@ func (r *artifactRepositoryDB) NeedsVODDtshSync(ctx context.Context, artifactHas
 			SELECT 1 FROM foghorn.artifacts
 			WHERE artifact_hash = $1
 			  AND artifact_type = 'vod'
-			  AND frozen_at IS NOT NULL
+			  AND sync_status = 'synced'
 			  AND COALESCE(dtsh_synced, false) = false
 		)
 	`, artifactHash).Scan(&needsSync)

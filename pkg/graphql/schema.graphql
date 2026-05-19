@@ -2395,6 +2395,15 @@ type DVRRequest {
   errorMessage: String
   # Cold storage info
   storageLocation: String # "local", "s3", "freezing", "defrosting"
+  "Current S3 sync state (pending, in_progress, synced, failed, lost_local)."
+  syncStatus: String
+  "True when at least one edge has a warm local copy."
+  isHot: Boolean
+  "True when S3 has an authoritative copy."
+  isSynced: Boolean
+  "True when the S3 copy includes the Mist .dtsh index."
+  isFinalized: Boolean
+  "True when playback requires defrost/caching because no warm edge copy remains."
   isFrozen: Boolean
   frozenAt: Time
   s3Url: String
@@ -2677,6 +2686,16 @@ type VodAsset implements Node {
   status: VodAssetStatus!
   "Where the asset is stored (s3, local, freezing, defrosting)."
   storageLocation: String!
+  "Current S3 sync state (pending, in_progress, synced, failed, lost_local)."
+  syncStatus: String
+  "True when at least one edge has a warm local copy."
+  isHot: Boolean!
+  "True when S3 has an authoritative copy."
+  isSynced: Boolean!
+  "True when the S3 copy includes the Mist .dtsh index."
+  isFinalized: Boolean!
+  "True when playback requires defrost/caching because no warm edge copy remains."
+  isFrozen: Boolean!
 
   "File size in bytes (available after validation)."
   sizeBytes: Float
@@ -2785,6 +2804,10 @@ type StorageArtifact {
   sizeBytes: Float
   status: String!
   storageLocation: String
+  syncStatus: String
+  isHot: Boolean
+  isSynced: Boolean
+  isFinalized: Boolean
   isFrozen: Boolean
   createdAt: Time!
   updatedAt: Time!
@@ -5646,7 +5669,15 @@ type Clip implements Node {
   requestedParams: JSON
   "Storage backend (local, s3)."
   storageLocation: String
-  "Whether the clip has been moved to cold storage."
+  "Current S3 sync state (pending, in_progress, synced, failed, lost_local)."
+  syncStatus: String
+  "True when at least one edge has a warm local copy."
+  isHot: Boolean
+  "True when S3 has an authoritative copy."
+  isSynced: Boolean
+  "True when the S3 copy includes the Mist .dtsh index."
+  isFinalized: Boolean
+  "True when playback requires defrost/caching because no warm edge copy remains."
   isFrozen: Boolean
   "When the clip will be auto-deleted."
   expiresAt: Time

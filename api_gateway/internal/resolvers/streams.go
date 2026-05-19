@@ -886,6 +886,28 @@ func (r *Resolver) DoGetClip(ctx context.Context, id string) (*pb.ClipInfo, erro
 		r.Logger.WithError(err).Error("Failed to get clip")
 		return nil, fmt.Errorf("failed to get clip: %w", err)
 	}
+	if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
+		if l := loaders.FromContext(ctx); l != nil && l.ArtifactLifecycle != nil {
+			if state, stateErr := l.ArtifactLifecycle.Load(ctx, tenantID, clip.GetClipHash()); stateErr != nil {
+				r.Logger.WithError(stateErr).Warn("Failed to load clip lifecycle data")
+			} else if state != nil {
+				applyArtifactStorageStateToClip(clip, state)
+				if state.GetStreamId() != "" {
+					clip.StreamId = state.GetStreamId()
+				}
+				if state.SizeBytes != nil {
+					size := int64(*state.SizeBytes)
+					clip.SizeBytes = &size
+				}
+				if artifactLifecycleStageCanOverrideRegistry(clip.Status, state.Stage) {
+					clip.Status = state.Stage
+				}
+				if state.FilePath != nil {
+					clip.StoragePath = *state.FilePath
+				}
+			}
+		}
+	}
 
 	return clip, nil
 }
@@ -1337,10 +1359,7 @@ func (r *Resolver) DoGetClipsConnection(ctx context.Context, streamID *string, f
 					if state.FilePath != nil {
 						clip.StoragePath = *state.FilePath
 					}
-					if state.S3Url != nil {
-						storageLocation := "s3"
-						clip.StorageLocation = &storageLocation
-					}
+					applyArtifactStorageStateToClip(clip, state)
 				}
 			}
 		}
@@ -1398,6 +1417,43 @@ func (r *Resolver) buildClipsConnectionFromProto(clips []*pb.ClipInfo, paginatio
 		PageInfo:   pageInfo,
 		TotalCount: totalCount,
 	}
+}
+
+func applyArtifactStorageStateToClip(clip *pb.ClipInfo, state *pb.ArtifactState) {
+	if clip == nil || state == nil {
+		return
+	}
+	if state.StorageLocation != nil && *state.StorageLocation != "" {
+		clip.StorageLocation = state.StorageLocation
+	} else if state.FilePath != nil && *state.FilePath != "" {
+		loc := "local"
+		clip.StorageLocation = &loc
+	}
+	clip.SyncStatus = state.SyncStatus
+	clip.IsHot = state.IsHot
+	clip.IsSynced = state.IsSynced
+	clip.IsFinalized = state.IsFinalized
+	clip.IsFrozen = state.IsFrozen
+}
+
+func applyArtifactStorageStateToDVR(dvr *pb.DVRInfo, state *pb.ArtifactState) {
+	if dvr == nil || state == nil {
+		return
+	}
+	if state.S3Url != nil {
+		dvr.S3Url = state.S3Url
+	}
+	if state.StorageLocation != nil && *state.StorageLocation != "" {
+		dvr.StorageLocation = state.StorageLocation
+	} else if state.FilePath != nil && *state.FilePath != "" {
+		loc := "local"
+		dvr.StorageLocation = &loc
+	}
+	dvr.SyncStatus = state.SyncStatus
+	dvr.IsHot = state.IsHot
+	dvr.IsSynced = state.IsSynced
+	dvr.IsFinalized = state.IsFinalized
+	dvr.IsFrozen = state.IsFrozen
 }
 
 // DoGetDVRRecordingsConnection retrieves DVR recordings with Relay-style cursor pagination
@@ -1466,11 +1522,7 @@ func (r *Resolver) DoGetDVRRecordingsConnection(ctx context.Context, streamID *s
 					if state.ManifestPath != nil {
 						dvr.ManifestPath = *state.ManifestPath
 					}
-					if state.S3Url != nil {
-						dvr.S3Url = state.S3Url
-						storageLocation := "s3"
-						dvr.StorageLocation = &storageLocation
-					}
+					applyArtifactStorageStateToDVR(dvr, state)
 				}
 			}
 		}

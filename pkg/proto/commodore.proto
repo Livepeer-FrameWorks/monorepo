@@ -823,6 +823,10 @@ message StorageArtifactInfo {
   string storage_cluster_id = 19;
   bool has_thumbnails = 20;
   optional shared.ThumbnailAssets thumbnail_assets = 21;
+  optional string sync_status = 22;
+  optional bool is_hot = 23;
+  optional bool is_synced = 24;
+  optional bool is_finalized = 25;
 }
 
 message ListStorageArtifactsResponse {

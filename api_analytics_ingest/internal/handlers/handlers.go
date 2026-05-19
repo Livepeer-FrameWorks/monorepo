@@ -2240,7 +2240,8 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 			tenant_id, stream_id, request_id, internal_name, filename, content_type, stage,
 			progress_percent, error_message, requested_at, started_at, completed_at,
 			clip_start_unix, clip_stop_unix, file_path, s3_url, size_bytes,
-			processing_node_id, updated_at, expires_at
+			processing_node_id, updated_at, expires_at,
+			storage_location, sync_status, is_hot, is_synced, is_finalized, is_frozen
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare live_artifacts batch: %v", err)
@@ -2274,6 +2275,12 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		nilIfEmptyString(cl.GetNodeId()),
 		event.Timestamp,
 		expiresAtTime,
+		nilIfEmptyString(cl.GetStorageLocation()),
+		nilIfEmptyString(cl.GetSyncStatus()),
+		cl.IsHot,
+		cl.IsSynced,
+		cl.IsFinalized,
+		cl.IsFrozen,
 	); appendErr != nil {
 		h.logger.Errorf("Failed to append to live_artifacts batch: %v", appendErr)
 		if h.metrics != nil {
@@ -2405,7 +2412,8 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		INSERT INTO artifact_state_current (
 			tenant_id, stream_id, request_id, internal_name, filename, content_type, stage,
 			progress_percent, error_message, requested_at, started_at, completed_at,
-			segment_count, manifest_path, file_path, size_bytes, processing_node_id, updated_at, expires_at
+			segment_count, manifest_path, file_path, size_bytes, processing_node_id, updated_at, expires_at,
+			storage_location, sync_status, is_hot, is_synced, is_finalized, is_frozen
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare live_artifacts batch: %v", err)
@@ -2435,6 +2443,12 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		nilIfEmptyString(mt.GetNodeId()),
 		event.Timestamp,
 		expiresAtTime,
+		nilIfEmptyString(dvrData.GetStorageLocation()),
+		nilIfEmptyString(dvrData.GetSyncStatus()),
+		dvrData.IsHot,
+		dvrData.IsSynced,
+		dvrData.IsFinalized,
+		dvrData.IsFrozen,
 	); appendErr != nil {
 		h.logger.Errorf("Failed to append to live_artifacts batch: %v", appendErr)
 		if h.metrics != nil {
@@ -2561,7 +2575,8 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		INSERT INTO artifact_state_current (
 			tenant_id, stream_id, request_id, internal_name, filename, content_type, stage,
 			progress_percent, error_message, requested_at, started_at, completed_at,
-			file_path, s3_url, size_bytes, processing_node_id, updated_at, expires_at
+			file_path, s3_url, size_bytes, processing_node_id, updated_at, expires_at,
+			storage_location, sync_status, is_hot, is_synced, is_finalized, is_frozen
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare live_artifacts batch for VOD: %v", err)
@@ -2596,6 +2611,12 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		nilIfEmptyStringPtr(vodData.NodeId),    // processing_node_id
 		event.Timestamp,                        // updated_at
 		expiresAtTime,                          // expires_at
+		nilIfEmptyString(vodData.GetStorageLocation()),
+		nilIfEmptyString(vodData.GetSyncStatus()),
+		vodData.IsHot,
+		vodData.IsSynced,
+		vodData.IsFinalized,
+		vodData.IsFrozen,
 	); appendErr != nil {
 		h.logger.Errorf("Failed to append to live_artifacts batch for VOD: %v", appendErr)
 		if h.metrics != nil {
@@ -2796,7 +2817,113 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 		return err
 	}
 
+	if err := h.upsertArtifactStorageState(ctx, event, &mt, sld, internalName, actionStr); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (h *AnalyticsHandler) upsertArtifactStorageState(
+	ctx context.Context,
+	event kafka.AnalyticsEvent,
+	mt *pb.MistTrigger,
+	sld *pb.StorageLifecycleData,
+	internalName string,
+	actionStr string,
+) error {
+	if sld == nil || sld.GetAssetHash() == "" {
+		return nil
+	}
+	storageLocation, syncStatus, isHot, isSynced, isFrozen := storageStateFromAction(sld.GetAction())
+	if storageLocation == "" && syncStatus == "" {
+		return nil
+	}
+	stage := "completed"
+	switch sld.GetAction() {
+	case pb.StorageLifecycleData_ACTION_DELETED:
+		stage = "deleted"
+	case pb.StorageLifecycleData_ACTION_SYNC_FAILED,
+		pb.StorageLifecycleData_ACTION_EVICT_FAILED,
+		pb.StorageLifecycleData_ACTION_CACHE_FAILED,
+		pb.StorageLifecycleData_ACTION_LOCAL_MISSING:
+		stage = "failed"
+	}
+
+	stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO artifact_state_current (
+			tenant_id, stream_id, request_id, internal_name, filename, content_type, stage,
+			progress_percent, error_message, requested_at, started_at, completed_at,
+			file_path, s3_url, size_bytes, processing_node_id, updated_at,
+			storage_location, sync_status, is_hot, is_synced, is_finalized, is_frozen
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare artifact storage state batch: %v", err)
+		return err
+	}
+
+	isFinalized := sld.DtshIncluded
+	if err := stateBatch.Append(
+		event.TenantID,
+		parseUUID(mt.GetStreamId()),
+		sld.GetAssetHash(),
+		internalName,
+		nil,
+		sld.GetAssetType(),
+		stage,
+		uint8(100),
+		nilIfEmptyString(sld.GetError()),
+		event.Timestamp,
+		nil,
+		event.Timestamp,
+		nilIfEmptyString(sld.GetLocalPath()),
+		nilIfEmptyString(sld.GetS3Url()),
+		nilIfZeroUint64(sld.GetSizeBytes()),
+		nilIfEmptyString(mt.GetNodeId()),
+		event.Timestamp,
+		nilIfEmptyString(storageLocation),
+		nilIfEmptyString(syncStatus),
+		&isHot,
+		&isSynced,
+		isFinalized,
+		&isFrozen,
+	); err != nil {
+		h.logger.Errorf("Failed to append artifact storage state for %s: %v", actionStr, err)
+		return err
+	}
+
+	if err := stateBatch.Send(); err != nil {
+		h.logger.Errorf("Failed to send artifact storage state batch: %v", err)
+		return err
+	}
+	return nil
+}
+
+func storageStateFromAction(action pb.StorageLifecycleData_Action) (storageLocation, syncStatus string, isHot, isSynced, isFrozen bool) {
+	switch action {
+	case pb.StorageLifecycleData_ACTION_SYNC_STARTED:
+		return "local", "in_progress", true, false, false
+	case pb.StorageLifecycleData_ACTION_SYNCED:
+		return "local", "synced", true, true, false
+	case pb.StorageLifecycleData_ACTION_EVICTED:
+		return "s3", "synced", false, true, true
+	case pb.StorageLifecycleData_ACTION_CACHE_STARTED:
+		return "defrosting", "synced", false, true, false
+	case pb.StorageLifecycleData_ACTION_CACHED:
+		return "local", "synced", true, true, false
+	case pb.StorageLifecycleData_ACTION_DELETED:
+		return "deleted", "deleted", false, false, false
+	case pb.StorageLifecycleData_ACTION_SYNC_FAILED:
+		return "local", "failed", true, false, false
+	case pb.StorageLifecycleData_ACTION_EVICT_FAILED:
+		return "local", "synced", true, true, false
+	case pb.StorageLifecycleData_ACTION_CACHE_FAILED:
+		return "s3", "synced", false, true, true
+	case pb.StorageLifecycleData_ACTION_LOCAL_MISSING:
+		return "local", "lost_local", false, false, false
+	default:
+		return "", "", false, false, false
+	}
 }
 
 // processFederationEvent handles federation operation events (origin-pull, peer topology, query fan-out)

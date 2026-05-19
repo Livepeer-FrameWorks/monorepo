@@ -3008,13 +3008,14 @@ func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *pb.GetArtif
 		SELECT tenant_id, request_id, stream_id, content_type, stage,
 		       progress_percent, error_message, requested_at, started_at, completed_at,
 		       clip_start_unix, clip_stop_unix, segment_count, manifest_path,
-		       file_path, s3_url, size_bytes, processing_node_id, updated_at, expires_at
+		       file_path, s3_url, size_bytes, processing_node_id, updated_at, expires_at,
+		       storage_location, sync_status, is_hot, is_synced, is_finalized, is_frozen
 		FROM artifact_state_current FINAL
 		WHERE tenant_id = ? AND request_id = ?
 	`
 
 	var artifact pb.ArtifactState
-	var errorMessage, manifestPath, filePath, s3URL, processingNodeID *string
+	var errorMessage, manifestPath, filePath, s3URL, processingNodeID, storageLocation, syncStatus *string
 	var startedAt, completedAt *time.Time
 	var clipStartUnix, clipStopUnix *int64
 	var segmentCount *uint32
@@ -3022,12 +3023,14 @@ func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *pb.GetArtif
 	var requestedAt, updatedAt time.Time
 	var expiresAt *time.Time
 	var progressPercent uint8
+	var isHot, isSynced, isFinalized, isFrozen *bool
 
 	err = s.clickhouse.QueryRowContext(ctx, query, tenantID, requestID).Scan(
 		&artifact.TenantId, &artifact.RequestId, &artifact.StreamId, &artifact.ContentType, &artifact.Stage,
 		&progressPercent, &errorMessage, &requestedAt, &startedAt, &completedAt,
 		&clipStartUnix, &clipStopUnix, &segmentCount, &manifestPath,
 		&filePath, &s3URL, &sizeBytes, &processingNodeID, &updatedAt, &expiresAt,
+		&storageLocation, &syncStatus, &isHot, &isSynced, &isFinalized, &isFrozen,
 	)
 	if err != nil {
 		s.logger.WithError(err).WithField("request_id", requestID).Info("Artifact not found")
@@ -3055,6 +3058,12 @@ func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *pb.GetArtif
 	if expiresAt != nil {
 		artifact.ExpiresAt = timestamppb.New(*expiresAt)
 	}
+	artifact.StorageLocation = storageLocation
+	artifact.SyncStatus = syncStatus
+	artifact.IsHot = isHot
+	artifact.IsSynced = isSynced
+	artifact.IsFinalized = isFinalized
+	artifact.IsFrozen = isFrozen
 
 	return &pb.GetArtifactStateResponse{
 		Artifact: &artifact,
@@ -3103,7 +3112,8 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArti
 		SELECT tenant_id, request_id, stream_id, content_type, stage,
 		       progress_percent, error_message, requested_at, started_at, completed_at,
 		       clip_start_unix, clip_stop_unix, segment_count, manifest_path,
-		       file_path, s3_url, size_bytes, processing_node_id, updated_at, expires_at
+		       file_path, s3_url, size_bytes, processing_node_id, updated_at, expires_at,
+		       storage_location, sync_status, is_hot, is_synced, is_finalized, is_frozen
 		FROM artifact_state_current FINAL
 		WHERE tenant_id = ?
 	`
@@ -3148,7 +3158,7 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArti
 	artifactIndex := make(map[string]int)
 	for rows.Next() {
 		artifact := &pb.ArtifactState{}
-		var errorMessage, manifestPath, filePath, s3URL, processingNodeID *string
+		var errorMessage, manifestPath, filePath, s3URL, processingNodeID, storageLocation, syncStatus *string
 		var startedAt, completedAt *time.Time
 		var clipStartUnix, clipStopUnix *int64
 		var segmentCount *uint32
@@ -3156,12 +3166,14 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArti
 		var requestedAt, updatedAt time.Time
 		var expiresAt *time.Time
 		var progressPercent uint8
+		var isHot, isSynced, isFinalized, isFrozen *bool
 
 		err := rows.Scan(
 			&artifact.TenantId, &artifact.RequestId, &artifact.StreamId, &artifact.ContentType, &artifact.Stage,
 			&progressPercent, &errorMessage, &requestedAt, &startedAt, &completedAt,
 			&clipStartUnix, &clipStopUnix, &segmentCount, &manifestPath,
 			&filePath, &s3URL, &sizeBytes, &processingNodeID, &updatedAt, &expiresAt,
+			&storageLocation, &syncStatus, &isHot, &isSynced, &isFinalized, &isFrozen,
 		)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to scan artifact row")
@@ -3189,6 +3201,12 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArti
 		if expiresAt != nil {
 			artifact.ExpiresAt = timestamppb.New(*expiresAt)
 		}
+		artifact.StorageLocation = storageLocation
+		artifact.SyncStatus = syncStatus
+		artifact.IsHot = isHot
+		artifact.IsSynced = isSynced
+		artifact.IsFinalized = isFinalized
+		artifact.IsFrozen = isFrozen
 
 		if idx, ok := artifactIndex[artifact.GetRequestId()]; ok {
 			if preferArtifactState(artifact, artifacts[idx]) {

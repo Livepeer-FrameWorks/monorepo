@@ -712,6 +712,12 @@ message ArtifactState {
   optional string processing_node_id = 18;
   google.protobuf.Timestamp updated_at = 19;
   optional google.protobuf.Timestamp expires_at = 20;
+  optional string storage_location = 21; // "local", "s3", "freezing", "defrosting"
+  optional string sync_status = 22;      // "pending", "in_progress", "synced", "failed", "lost_local"
+  optional bool is_hot = 23;             // A warm edge copy is available.
+  optional bool is_synced = 24;          // S3 has an authoritative copy.
+  optional bool is_finalized = 25;       // S3 sync included the .dtsh index.
+  optional bool is_frozen = 26;          // No warm edge copy remains; playback must defrost/cache.
 }
 
 message GetArtifactStateRequest {

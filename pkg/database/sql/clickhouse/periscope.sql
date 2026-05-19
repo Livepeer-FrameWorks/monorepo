@@ -1114,7 +1114,14 @@ CREATE TABLE IF NOT EXISTS artifact_state_current (
     processing_node_id Nullable(String),
 
     updated_at DateTime,
-    expires_at Nullable(DateTime)
+    expires_at Nullable(DateTime),
+
+    storage_location Nullable(String),
+    sync_status Nullable(String),
+    is_hot Nullable(Bool),
+    is_synced Nullable(Bool),
+    is_finalized Nullable(Bool),
+    is_frozen Nullable(Bool)
 ) ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (tenant_id, request_id);
 

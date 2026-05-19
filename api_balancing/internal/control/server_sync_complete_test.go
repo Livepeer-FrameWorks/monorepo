@@ -31,10 +31,10 @@ func TestProcessSyncComplete_Success_WithS3URL(t *testing.T) {
 	mock, _, repo := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	mock.ExpectQuery("SELECT COALESCE\\(artifact_type,''\\), COALESCE\\(stream_internal_name,''\\), COALESCE\\(format,''\\), COALESCE\\(tenant_id::text,''\\), COALESCE\\(s3_url,''\\)").
+	mock.ExpectQuery("SELECT COALESCE\\(artifact_type,''\\), COALESCE\\(stream_internal_name,''\\), COALESCE\\(format,''\\), COALESCE\\(tenant_id::text,''\\), COALESCE\\(stream_id::text,''\\), COALESCE\\(s3_url,''\\)").
 		WithArgs("hash-1").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "format", "tenant_id", "s3_url"}).
-			AddRow("vod", "vod-int", "mp4", "tenant-1", "s3://bucket/key"))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "format", "tenant_id", "stream_id", "s3_url"}).
+			AddRow("vod", "vod-int", "mp4", "tenant-1", "", "s3://bucket/key"))
 	mock.ExpectExec("UPDATE foghorn.artifacts.*SET storage_location = 'local'.*sync_status = 'synced'").
 		WithArgs("s3://bucket/key", true, "hash-1", int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -78,8 +78,8 @@ func TestProcessSyncComplete_Success_RebuildsClipURL(t *testing.T) {
 	// s3_url empty → triggers rebuild
 	mock.ExpectQuery("SELECT.*FROM foghorn.artifacts.*WHERE artifact_hash").
 		WithArgs("clip-hash").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "format", "tenant_id", "s3_url"}).
-			AddRow("clip", "stream-1", "mp4", "tenant-1", ""))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "format", "tenant_id", "stream_id", "s3_url"}).
+			AddRow("clip", "stream-1", "mp4", "tenant-1", "", ""))
 
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'synced'").
 		WithArgs(sqlmock.AnyArg(), false, "clip-hash", int64(0)).
@@ -107,8 +107,8 @@ func TestProcessSyncComplete_Success_RebuildsDVRURL(t *testing.T) {
 
 	mock.ExpectQuery("SELECT.*FROM foghorn.artifacts").
 		WithArgs("dvr-hash").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "format", "tenant_id", "s3_url"}).
-			AddRow("dvr", "stream-dvr", "", "tenant-1", ""))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "format", "tenant_id", "stream_id", "s3_url"}).
+			AddRow("dvr", "stream-dvr", "", "tenant-1", "", ""))
 
 	mock.ExpectExec("UPDATE foghorn.artifacts").
 		WithArgs(sqlmock.AnyArg(), false, "dvr-hash", int64(0)).
@@ -130,8 +130,8 @@ func TestProcessSyncComplete_Success_RebuildsVodURL(t *testing.T) {
 
 	mock.ExpectQuery("SELECT.*FROM foghorn.artifacts").
 		WithArgs("vod-hash").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "format", "tenant_id", "s3_url"}).
-			AddRow("vod", "stream-vod", "mkv", "tenant-1", ""))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "format", "tenant_id", "stream_id", "s3_url"}).
+			AddRow("vod", "stream-vod", "mkv", "tenant-1", "", ""))
 
 	mock.ExpectExec("UPDATE foghorn.artifacts").
 		WithArgs(sqlmock.AnyArg(), false, "vod-hash", int64(0)).
@@ -154,10 +154,10 @@ func TestProcessSyncComplete_Success_UsesReportingNodeID(t *testing.T) {
 	mock, _, repo := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	mock.ExpectQuery("SELECT COALESCE\\(artifact_type,''\\), COALESCE\\(stream_internal_name,''\\), COALESCE\\(format,''\\), COALESCE\\(tenant_id::text,''\\), COALESCE\\(s3_url,''\\)").
+	mock.ExpectQuery("SELECT COALESCE\\(artifact_type,''\\), COALESCE\\(stream_internal_name,''\\), COALESCE\\(format,''\\), COALESCE\\(tenant_id::text,''\\), COALESCE\\(stream_id::text,''\\), COALESCE\\(s3_url,''\\)").
 		WithArgs("hash-1").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "format", "tenant_id", "s3_url"}).
-			AddRow("clip", "clip-int", "mp4", "tenant-1", "s3://pre-set"))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "format", "tenant_id", "stream_id", "s3_url"}).
+			AddRow("clip", "clip-int", "mp4", "tenant-1", "", "s3://pre-set"))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
 		WithArgs(sqlmock.AnyArg(), false, "hash-1", int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -180,10 +180,10 @@ func TestProcessSyncComplete_Success_DeletesReplacedVodSource(t *testing.T) {
 	mock, s3Mock, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	mock.ExpectQuery("SELECT COALESCE\\(artifact_type,''\\), COALESCE\\(stream_internal_name,''\\), COALESCE\\(format,''\\), COALESCE\\(tenant_id::text,''\\), COALESCE\\(s3_url,''\\)").
+	mock.ExpectQuery("SELECT COALESCE\\(artifact_type,''\\), COALESCE\\(stream_internal_name,''\\), COALESCE\\(format,''\\), COALESCE\\(tenant_id::text,''\\), COALESCE\\(stream_id::text,''\\), COALESCE\\(s3_url,''\\)").
 		WithArgs("vod-hash").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "format", "tenant_id", "s3_url"}).
-			AddRow("vod", "vod-int", "mp4", "tenant-1", "s3://bucket/original.mp4"))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "format", "tenant_id", "stream_id", "s3_url"}).
+			AddRow("vod", "vod-int", "mp4", "tenant-1", "", "s3://bucket/original.mp4"))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
 		WithArgs("s3://bucket/processed.mp4", false, "vod-hash", int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))

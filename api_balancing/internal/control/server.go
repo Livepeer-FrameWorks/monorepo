@@ -3911,7 +3911,6 @@ func processFreezeComplete(ctx context.Context, complete *pb.FreezeComplete, nod
 				SET storage_location = 'local',
 				    sync_status = 'synced',
 				    s3_url = NULLIF($1, ''),
-				    frozen_at = NOW(),
 			    last_sync_attempt = NOW(),
 			    sync_error = NULL,
 			    failure_count = 0,
@@ -4561,10 +4560,16 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 							p := uint32(100)
 							return &p
 						}(),
-						FilePath:    &outputPath,
-						SizeBytes:   func() *uint64 { s := uint64(sizeBytes); return &s }(),
-						CompletedAt: func() *int64 { t := time.Now().Unix(); return &t }(),
-						NodeId:      &nodeID,
+						FilePath:        &outputPath,
+						SizeBytes:       func() *uint64 { s := uint64(sizeBytes); return &s }(),
+						CompletedAt:     func() *int64 { t := time.Now().Unix(); return &t }(),
+						NodeId:          &nodeID,
+						StorageLocation: func() *string { v := "local"; return &v }(),
+						SyncStatus:      func() *string { v := "pending"; return &v }(),
+						IsHot:           func() *bool { v := true; return &v }(),
+						IsSynced:        func() *bool { v := false; return &v }(),
+						IsFinalized:     func() *bool { v := false; return &v }(),
+						IsFrozen:        func() *bool { v := false; return &v }(),
 					}
 					if tenantID != "" {
 						clipData.TenantId = &tenantID
@@ -4576,6 +4581,27 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 						clipData.StreamInternalName = &streamInternalName
 					}
 					go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
+				}
+				if artifactType == "vod" && decklogClient != nil {
+					vodData := &pb.VodLifecycleData{
+						Status:          pb.VodLifecycleData_STATUS_COMPLETED,
+						VodHash:         artifactHash,
+						FilePath:        &outputPath,
+						SizeBytes:       func() *uint64 { s := uint64(sizeBytes); return &s }(),
+						CompletedAt:     func() *int64 { t := time.Now().Unix(); return &t }(),
+						NodeId:          &nodeID,
+						ProgressPct:     func() *int32 { p := int32(100); return &p }(),
+						StorageLocation: func() *string { v := "local"; return &v }(),
+						SyncStatus:      func() *string { v := "pending"; return &v }(),
+						IsHot:           func() *bool { v := true; return &v }(),
+						IsSynced:        func() *bool { v := false; return &v }(),
+						IsFinalized:     func() *bool { v := false; return &v }(),
+						IsFrozen:        func() *bool { v := false; return &v }(),
+					}
+					if tenantID != "" {
+						vodData.TenantId = &tenantID
+					}
+					go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 				}
 
 				logger.WithFields(logging.Fields{
@@ -5442,14 +5468,14 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 
 	switch status {
 	case "success":
-		var artifactType, internalName, format, tenantID, previousS3URL string
+		var artifactType, internalName, format, tenantID, streamID, previousS3URL string
 		// If Helmsman didn't provide s3_url (typical), compute it from stored artifact metadata.
 		if db != nil {
 			_ = db.QueryRowContext(ctx, `
-				SELECT COALESCE(artifact_type,''), COALESCE(stream_internal_name,''), COALESCE(format,''), COALESCE(tenant_id::text,''), COALESCE(s3_url,'')
+				SELECT COALESCE(artifact_type,''), COALESCE(stream_internal_name,''), COALESCE(format,''), COALESCE(tenant_id::text,''), COALESCE(stream_id::text,''), COALESCE(s3_url,'')
 				FROM foghorn.artifacts
 				WHERE artifact_hash = $1
-			`, assetHash).Scan(&artifactType, &internalName, &format, &tenantID, &previousS3URL)
+			`, assetHash).Scan(&artifactType, &internalName, &format, &tenantID, &streamID, &previousS3URL)
 		}
 		if s3URL == "" && s3Client != nil {
 			if tenantID != "" {
@@ -5557,6 +5583,22 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 			"node_id":       reportingNodeID,
 			"dtsh_included": dtshIncluded,
 		}).Info("Asset synced to S3, local copy retained")
+		emitArtifactStorageStateLifecycle(ctx, logger, artifactStorageStateLifecycle{
+			artifactHash:    assetHash,
+			artifactType:    artifactType,
+			tenantID:        tenantID,
+			streamID:        streamID,
+			streamInternal:  internalName,
+			s3URL:           s3URL,
+			sizeBytes:       sizeBytes,
+			nodeID:          reportingNodeID,
+			storageLocation: "local",
+			syncStatus:      "synced",
+			hot:             true,
+			synced:          true,
+			finalized:       dtshIncluded,
+			frozen:          false,
+		})
 
 		if artifactType == "vod" && previousS3URL != "" && s3URL != "" && previousS3URL != s3URL && s3Client != nil {
 			if err := s3Client.DeleteByURL(ctx, previousS3URL); err != nil {
@@ -5585,6 +5627,7 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 			UPDATE foghorn.artifacts
 			SET storage_location = 's3',
 			    sync_status = 'synced',
+			    frozen_at = COALESCE(frozen_at, NOW()),
 			    last_sync_attempt = NOW(),
 			    sync_error = NULL,
 			    updated_at = NOW()
@@ -5605,6 +5648,16 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 			"asset_hash": assetHash,
 			"node_id":    reportingNodeID,
 		}).Info("Remote artifact evicted locally, marked as S3-resident")
+		emitArtifactStorageStateLifecycle(ctx, logger, artifactStorageStateLifecycle{
+			artifactHash:    assetHash,
+			nodeID:          reportingNodeID,
+			storageLocation: "s3",
+			syncStatus:      "synced",
+			hot:             false,
+			synced:          true,
+			finalized:       false,
+			frozen:          true,
+		})
 
 	default:
 		// Sync failed. local_missing=true is terminal lost_local; transient
@@ -5637,6 +5690,158 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 		}).Warn("Asset sync to S3 failed")
 	}
 }
+
+type artifactStorageStateLifecycle struct {
+	artifactHash    string
+	artifactType    string
+	tenantID        string
+	streamID        string
+	streamInternal  string
+	s3URL           string
+	sizeBytes       uint64
+	nodeID          string
+	storageLocation string
+	syncStatus      string
+	hot             bool
+	synced          bool
+	finalized       bool
+	frozen          bool
+}
+
+func emitArtifactStorageStateLifecycle(ctx context.Context, logger logging.Logger, state artifactStorageStateLifecycle) {
+	if decklogClient == nil || state.artifactHash == "" {
+		return
+	}
+	if state.frozen && state.synced && !state.finalized {
+		state.finalized = dtshSyncedForArtifact(ctx, state.artifactHash)
+	}
+	if state.tenantID == "" || state.artifactType == "" {
+		artifactType, tenantID, streamInternal, streamID := artifactLifecycleIdentity(ctx, state.artifactHash)
+		if state.artifactType == "" {
+			state.artifactType = artifactType
+		}
+		if state.tenantID == "" {
+			state.tenantID = tenantID
+		}
+		if state.streamInternal == "" {
+			state.streamInternal = streamInternal
+		}
+		if state.streamID == "" {
+			state.streamID = streamID
+		}
+	}
+
+	switch state.artifactType {
+	case "clip":
+		data := &pb.ClipLifecycleData{
+			Stage:              pb.ClipLifecycleData_STAGE_DONE,
+			ClipHash:           state.artifactHash,
+			S3Url:              stringPtrIfNotEmpty(state.s3URL),
+			SizeBytes:          uint64PtrIfNonZero(state.sizeBytes),
+			NodeId:             stringPtrIfNotEmpty(state.nodeID),
+			TenantId:           stringPtrIfNotEmpty(state.tenantID),
+			StreamId:           stringPtrIfNotEmpty(state.streamID),
+			StreamInternalName: stringPtrIfNotEmpty(state.streamInternal),
+			StorageLocation:    stringPtrIfNotEmpty(state.storageLocation),
+			SyncStatus:         stringPtrIfNotEmpty(state.syncStatus),
+			IsHot:              boolPtr(state.hot),
+			IsSynced:           boolPtr(state.synced),
+			IsFinalized:        boolPtr(state.finalized),
+			IsFrozen:           boolPtr(state.frozen),
+			ProgressPercent:    uint32Ptr(100),
+			CompletedAt:        int64Ptr(time.Now().Unix()),
+		}
+		go artifactoutbox.EnqueueClipLifecycleLogged(data)
+	case "vod":
+		data := &pb.VodLifecycleData{
+			Status:          pb.VodLifecycleData_STATUS_COMPLETED,
+			VodHash:         state.artifactHash,
+			S3Url:           stringPtrIfNotEmpty(state.s3URL),
+			SizeBytes:       uint64PtrIfNonZero(state.sizeBytes),
+			NodeId:          stringPtrIfNotEmpty(state.nodeID),
+			TenantId:        stringPtrIfNotEmpty(state.tenantID),
+			StorageLocation: stringPtrIfNotEmpty(state.storageLocation),
+			SyncStatus:      stringPtrIfNotEmpty(state.syncStatus),
+			IsHot:           boolPtr(state.hot),
+			IsSynced:        boolPtr(state.synced),
+			IsFinalized:     boolPtr(state.finalized),
+			IsFrozen:        boolPtr(state.frozen),
+			ProgressPct:     int32Ptr(100),
+			CompletedAt:     int64Ptr(time.Now().Unix()),
+		}
+		go artifactoutbox.EnqueueVodLifecycleLogged(data)
+	case "dvr":
+		data := &pb.DVRLifecycleData{
+			Status:             pb.DVRLifecycleData_STATUS_STOPPED,
+			DvrHash:            state.artifactHash,
+			SizeBytes:          uint64PtrIfNonZero(state.sizeBytes),
+			NodeId:             stringPtrIfNotEmpty(state.nodeID),
+			TenantId:           stringPtrIfNotEmpty(state.tenantID),
+			StreamId:           stringPtrIfNotEmpty(state.streamID),
+			StreamInternalName: stringPtrIfNotEmpty(state.streamInternal),
+			StorageLocation:    stringPtrIfNotEmpty(state.storageLocation),
+			SyncStatus:         stringPtrIfNotEmpty(state.syncStatus),
+			IsHot:              boolPtr(state.hot),
+			IsSynced:           boolPtr(state.synced),
+			IsFinalized:        boolPtr(state.finalized),
+			IsFrozen:           boolPtr(state.frozen),
+		}
+		go artifactoutbox.EnqueueDVRLifecycleLogged(data)
+	default:
+		logger.WithFields(logging.Fields{"artifact_hash": state.artifactHash, "artifact_type": state.artifactType}).Debug("Skipping storage state lifecycle for unknown artifact type")
+	}
+}
+
+func artifactLifecycleIdentity(ctx context.Context, artifactHash string) (artifactType, tenantID, streamInternal, streamID string) {
+	if db == nil || artifactHash == "" {
+		return "", "", "", ""
+	}
+	if err := db.QueryRowContext(ctx, `
+		SELECT COALESCE(artifact_type,''), COALESCE(tenant_id::text,''), COALESCE(stream_internal_name,''), COALESCE(stream_id::text,'')
+		FROM foghorn.artifacts
+		WHERE artifact_hash = $1
+	`, artifactHash).Scan(&artifactType, &tenantID, &streamInternal, &streamID); err != nil {
+		return "", "", "", ""
+	}
+	return artifactType, tenantID, streamInternal, streamID
+}
+
+func dtshSyncedForArtifact(ctx context.Context, artifactHash string) bool {
+	if db == nil || artifactHash == "" {
+		return false
+	}
+	var synced bool
+	if err := db.QueryRowContext(ctx, `
+		SELECT COALESCE(dtsh_synced, false)
+		FROM foghorn.artifacts
+		WHERE artifact_hash = $1
+	`, artifactHash).Scan(&synced); err != nil {
+		return false
+	}
+	return synced
+}
+
+func stringPtrIfNotEmpty(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
+}
+
+func uint64PtrIfNonZero(v uint64) *uint64 {
+	if v == 0 {
+		return nil
+	}
+	return &v
+}
+
+func uint32Ptr(v uint32) *uint32 { return &v }
+
+func int32Ptr(v int32) *int32 { return &v }
+
+func int64Ptr(v int64) *int64 { return &v }
+
+func boolPtr(v bool) *bool { return &v }
 
 const tlsStateNoCert = "<no-cert>"
 
