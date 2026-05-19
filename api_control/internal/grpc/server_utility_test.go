@@ -24,6 +24,27 @@ func TestValidateBehavior_AllValid(t *testing.T) {
 	}
 }
 
+func TestPosterOnlyThumbnailAssets(t *testing.T) {
+	got := posterOnlyThumbnailAssets(&pb.ThumbnailAssets{
+		PosterUrl:    "http://localhost:18090/assets/stream/poster.jpg",
+		SpriteVttUrl: "http://localhost:18090/assets/stream/sprite.vtt",
+		SpriteJpgUrl: "http://localhost:18090/assets/stream/sprite.jpg",
+		AssetKey:     "stream",
+	})
+	if got == nil {
+		t.Fatal("expected poster-only thumbnail assets")
+	}
+	if got.GetPosterUrl() != "http://localhost:18090/assets/stream/poster.jpg" {
+		t.Fatalf("poster URL = %q", got.GetPosterUrl())
+	}
+	if got.GetAssetKey() != "stream" {
+		t.Fatalf("asset key = %q", got.GetAssetKey())
+	}
+	if got.GetSpriteVttUrl() != "" || got.GetSpriteJpgUrl() != "" {
+		t.Fatalf("expected no sprite URLs, got vtt=%q jpg=%q", got.GetSpriteVttUrl(), got.GetSpriteJpgUrl())
+	}
+}
+
 func TestValidateBehavior_HoneypotFilled(t *testing.T) {
 	req := &pb.RegisterRequest{
 		PhoneNumber: "555-1234",

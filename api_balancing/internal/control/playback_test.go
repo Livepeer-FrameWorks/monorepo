@@ -758,6 +758,22 @@ func TestBuildThumbnailAssets(t *testing.T) {
 	}
 }
 
+func TestBuildPosterThumbnailAssets(t *testing.T) {
+	got := buildPosterThumbnailAssets("https://chandler.example.com/", "stream-uuid-123")
+	if got == nil {
+		t.Fatal("expected poster thumbnail assets")
+	}
+	if got.PosterUrl != "https://chandler.example.com/assets/stream-uuid-123/poster.jpg" {
+		t.Fatalf("PosterUrl: got %q", got.PosterUrl)
+	}
+	if got.AssetKey != "stream-uuid-123" {
+		t.Fatalf("AssetKey: got %q", got.AssetKey)
+	}
+	if got.SpriteVttUrl != "" || got.SpriteJpgUrl != "" {
+		t.Fatalf("expected poster-only assets, got spriteVtt=%q spriteJpg=%q", got.SpriteVttUrl, got.SpriteJpgUrl)
+	}
+}
+
 func TestArtifactNodesFromDBBuildsWarmNodeFallback(t *testing.T) {
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {

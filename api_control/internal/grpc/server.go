@@ -6406,6 +6406,16 @@ func (s *CommodoreServer) buildArtifactThumbnailAssets(hasThumbnails bool, clust
 	return s.clusterURLs.BuildThumbnailAssets(cluster.String, assetKey)
 }
 
+func posterOnlyThumbnailAssets(assets *pb.ThumbnailAssets) *pb.ThumbnailAssets {
+	if assets == nil || assets.GetPosterUrl() == "" {
+		return nil
+	}
+	return &pb.ThumbnailAssets{
+		PosterUrl: assets.GetPosterUrl(),
+		AssetKey:  assets.GetAssetKey(),
+	}
+}
+
 // scanStream scans config-only stream data; operational state comes from Periscope Data Plane
 func (s *CommodoreServer) scanStream(rows *sql.Rows) (*pb.Stream, error) {
 	var stream pb.Stream
@@ -7335,7 +7345,8 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 	query := fmt.Sprintf(`
 			SELECT d.id, d.dvr_hash, d.playback_id, d.internal_name, d.stream_id::text, COALESCE(st.title, d.internal_name),
 			       d.size_bytes, d.retention_until, COALESCE(d.retention_source, ''), d.created_at, d.updated_at,
-			       COALESCE(d.storage_cluster_id, d.origin_cluster_id), d.has_thumbnails
+			       COALESCE(d.storage_cluster_id, d.origin_cluster_id), d.has_thumbnails,
+			       st.active_ingest_cluster_id
 			FROM commodore.dvr_recordings d
 			LEFT JOIN commodore.streams st ON d.stream_id = st.id
 			WHERE %s`, whereClause)
@@ -7374,10 +7385,11 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 			createdAt, updatedAt                                   time.Time
 			thumbnailCluster                                       sql.NullString
 			hasThumbnails                                          bool
+			activeIngestCluster                                    sql.NullString
 		)
 		if err := rows.Scan(&id, &dvrHash, &playbackID, &internalName, &streamID, &title,
 			&sizeBytes, &retentionUntil, &retentionSource, &createdAt, &updatedAt,
-			&thumbnailCluster, &hasThumbnails); err != nil {
+			&thumbnailCluster, &hasThumbnails, &activeIngestCluster); err != nil {
 			s.logger.WithError(err).Warn("Error scanning DVR recording")
 			continue
 		}
@@ -7402,6 +7414,9 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 			recording.SizeBytes = &size
 		}
 		recording.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, thumbnailCluster, dvrHash)
+		if recording.ThumbnailAssets == nil {
+			recording.ThumbnailAssets = posterOnlyThumbnailAssets(s.buildStreamThumbnailAssets(activeIngestCluster, streamID))
+		}
 
 		recordings = append(recordings, recording)
 	}

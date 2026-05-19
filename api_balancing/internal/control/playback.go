@@ -598,6 +598,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	}
 
 	streamID := artifactResp.StreamId
+	streamInternalName := ""
 	title := ""
 	description := ""
 	clipDurationMs := int64(0)
@@ -630,6 +631,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 			if resp.StreamId != "" {
 				streamID = resp.StreamId
 			}
+			streamInternalName = resp.GetStreamInternalName()
 			if resp.PlaybackId != "" {
 				resolvedPlaybackID = resp.PlaybackId
 			}
@@ -746,6 +748,10 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 			}
 		}
 		metadata.ThumbnailAssets = buildThumbnailAssets(chandlerBase, artifactResp.ArtifactHash)
+	}
+	if metadata.ThumbnailAssets == nil && contentType == "dvr" && streamID != "" && streamInternalName != "" {
+		chandlerBase := resolveLiveThumbnailChandlerBase(ctx, tenantID, streamInternalName)
+		metadata.ThumbnailAssets = buildPosterThumbnailAssets(chandlerBase, streamID)
 	}
 
 	return &pb.ViewerEndpointResponse{
@@ -1119,6 +1125,17 @@ func buildThumbnailAssets(chandlerBase, assetKey string) *pb.ThumbnailAssets {
 		SpriteVttUrl: base + "/sprite.vtt",
 		SpriteJpgUrl: base + "/sprite.jpg",
 		AssetKey:     assetKey,
+	}
+}
+
+func buildPosterThumbnailAssets(chandlerBase, assetKey string) *pb.ThumbnailAssets {
+	if chandlerBase == "" || assetKey == "" {
+		return nil
+	}
+	base := strings.TrimRight(chandlerBase, "/") + "/assets/" + assetKey
+	return &pb.ThumbnailAssets{
+		PosterUrl: base + "/poster.jpg",
+		AssetKey:  assetKey,
 	}
 }
 
