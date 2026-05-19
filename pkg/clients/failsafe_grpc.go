@@ -2,6 +2,8 @@ package clients
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/failsafe-go/failsafe-go"
@@ -28,37 +30,80 @@ func isRetryableGRPCError(err error) bool {
 	if err == nil {
 		return false
 	}
-
-	switch status.Code(err) {
-	case codes.Unavailable,
-		codes.DeadlineExceeded,
-		codes.ResourceExhausted,
-		codes.Aborted:
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
 		return true
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		return true
+	}
+
+	switch st.Code() {
+	case codes.DeadlineExceeded:
+		return true
+	case codes.Unavailable:
+		return isTransportUnavailableMessage(st.Message())
 	default:
 		return false
 	}
 }
 
-// isCircuitBreakerFailure determines if a gRPC error should count
-// as a failure for circuit breaker purposes. Broader than retry:
-// includes Internal and Unknown since they indicate server health issues.
+// isCircuitBreakerFailure determines if a gRPC error should count against the
+// client-side service breaker. The breaker protects callers from an unreachable
+// downstream service, not from a healthy service returning a domain error or
+// propagating one of its own dependencies.
 func isCircuitBreakerFailure(err error) bool {
 	if err == nil {
 		return false
 	}
-
-	switch status.Code(err) {
-	case codes.Internal,
-		codes.Unavailable,
-		codes.DeadlineExceeded,
-		codes.ResourceExhausted,
-		codes.Aborted,
-		codes.Unknown:
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
 		return true
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		return true
+	}
+
+	switch st.Code() {
+	case codes.DeadlineExceeded:
+		return true
+	case codes.Unavailable:
+		return isTransportUnavailableMessage(st.Message())
 	default:
 		return false
 	}
+}
+
+func isTransportUnavailableMessage(message string) bool {
+	msg := strings.ToLower(message)
+	for _, marker := range []string{
+		"connection error",
+		"connection refused",
+		"connection reset",
+		"client connection is closing",
+		"transport is closing",
+		"transport: error",
+		"name resolver error",
+		"no such host",
+		"broken pipe",
+		"eof",
+		"keepalive ping failed",
+		"server preface",
+		"connect:",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // newGRPCRetryPolicy creates a retry policy for gRPC calls with sensible defaults.

@@ -1,6 +1,7 @@
 package clients
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"sync/atomic"
@@ -63,13 +64,66 @@ func TestNewHTTPRetryPolicy_RetriesUpToConfiguredLimit(t *testing.T) {
 }
 
 func TestIsRetryableGRPCError_Boundaries(t *testing.T) {
-	if !isRetryableGRPCError(status.Error(codes.Unavailable, "peer down")) {
-		t.Fatal("expected unavailable to be retryable")
+	if !isRetryableGRPCError(status.Error(codes.Unavailable, "connection error: desc = transport: error while dialing")) {
+		t.Fatal("expected transport unavailable to be retryable")
+	}
+	if isRetryableGRPCError(status.Error(codes.Unavailable, "service temporarily unavailable")) {
+		t.Fatal("expected downstream unavailable to be non-retryable")
 	}
 	if !isRetryableGRPCError(status.Error(codes.DeadlineExceeded, "timeout")) {
 		t.Fatal("expected deadline exceeded to be retryable")
 	}
+	if isRetryableGRPCError(status.Error(codes.ResourceExhausted, "tenant storage quota exceeded")) {
+		t.Fatal("expected resource exhausted to be non-retryable")
+	}
 	if isRetryableGRPCError(status.Error(codes.PermissionDenied, "tenant mismatch")) {
 		t.Fatal("expected permission denied to be non-retryable")
+	}
+}
+
+func TestIsCircuitBreakerFailure_Boundaries(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "transport unavailable counts",
+			err:  status.Error(codes.Unavailable, "connection error: desc = transport: error while dialing: dial tcp: connect: connection refused"),
+			want: true,
+		},
+		{
+			name: "propagated downstream unavailable does not count",
+			err:  status.Error(codes.Unavailable, "service temporarily unavailable"),
+			want: false,
+		},
+		{
+			name: "internal application error does not count",
+			err:  status.Error(codes.Internal, "createClip failed to create clip"),
+			want: false,
+		},
+		{
+			name: "resource exhausted domain pressure does not count",
+			err:  status.Error(codes.ResourceExhausted, "tenant storage quota exceeded"),
+			want: false,
+		},
+		{
+			name: "deadline exceeded counts",
+			err:  status.Error(codes.DeadlineExceeded, "deadline exceeded"),
+			want: true,
+		},
+		{
+			name: "caller cancellation does not count",
+			err:  context.Canceled,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isCircuitBreakerFailure(tt.err); got != tt.want {
+				t.Fatalf("isCircuitBreakerFailure() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
