@@ -153,7 +153,7 @@ func TestExtractTrackMetadata_EmptyMeta(t *testing.T) {
 	}
 }
 
-func TestProcessingTracksReadyRequiresConfiguredProcTracks(t *testing.T) {
+func TestProcessingTracksCompleteAllowsMissingOptionalProcTracks(t *testing.T) {
 	req := expectedProcessingTracks(`[{"process":"AV","codec":"opus","track_select":"video=none"},{"process":"Thumbs"}]`)
 	presence := processingTrackPresence{
 		audioCodecs: map[string]bool{"AAC": true},
@@ -161,13 +161,34 @@ func TestProcessingTracksReadyRequiresConfiguredProcTracks(t *testing.T) {
 		metaCodecs:  map[string]bool{"thumbvtt": true},
 		sourceMedia: true,
 	}
-	if processingTracksReady(presence, req) {
-		t.Fatal("expected missing opus track to block readiness")
+	if !processingRequiredTracksReady(presence, req) {
+		t.Fatal("expected source media to satisfy required readiness")
+	}
+	if processingTracksComplete(presence, req) {
+		t.Fatal("expected missing optional opus track to leave enrichment incomplete")
 	}
 
 	presence.audioCodecs["opus"] = true
-	if !processingTracksReady(presence, req) {
-		t.Fatal("expected source, opus, and thumbnail tracks to satisfy readiness")
+	if !processingTracksComplete(presence, req) {
+		t.Fatal("expected source, opus, and thumbnail tracks to satisfy complete readiness")
+	}
+}
+
+func TestProcessingTracksReadyRequiresExplicitRequiredTracks(t *testing.T) {
+	req := expectedProcessingTracks(`[{"process":"AV","codec":"opus","required":true}]`)
+	presence := processingTrackPresence{
+		audioCodecs: map[string]bool{"AAC": true},
+		videoCodecs: map[string]bool{"H264": true},
+		metaCodecs:  map[string]bool{},
+		sourceMedia: true,
+	}
+	if processingRequiredTracksReady(presence, req) {
+		t.Fatal("expected missing required opus track to block readiness")
+	}
+
+	presence.audioCodecs["opus"] = true
+	if !processingRequiredTracksReady(presence, req) {
+		t.Fatal("expected required opus track to satisfy readiness")
 	}
 }
 

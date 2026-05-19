@@ -476,9 +476,12 @@ func (h *ProcessingJobHandler) startProcessingPush(log *logrus.Entry, mistClient
 }
 
 type processingTrackRequirements struct {
-	audioCodecs map[string]bool
-	videoCodecs map[string]bool
-	wantThumbs  bool
+	requiredAudioCodecs map[string]bool
+	requiredVideoCodecs map[string]bool
+	expectedAudioCodecs map[string]bool
+	expectedVideoCodecs map[string]bool
+	expectThumbs        bool
+	requireThumbs       bool
 }
 
 type processingTrackPresence struct {
@@ -511,7 +514,7 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 			lastErr = err
 		} else if info.Metadata != nil {
 			lastPresence = inspectProcessingTracks(info.Metadata)
-			if processingTracksReady(lastPresence, requirements) {
+			if processingTracksComplete(lastPresence, requirements) {
 				log.WithFields(logrus.Fields{
 					"audio_codecs": mapKeys(lastPresence.audioCodecs),
 					"video_codecs": mapKeys(lastPresence.videoCodecs),
@@ -525,9 +528,25 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 			if lastErr != nil && len(lastPresence.outputs) == 0 {
 				return nil, 0, fmt.Errorf("processing stream did not boot: %w", lastErr)
 			}
-			return nil, 0, fmt.Errorf("processing stream missing required tracks: have audio=%v video=%v meta=%v want audio=%v video=%v thumbs=%t",
-				mapKeys(lastPresence.audioCodecs), mapKeys(lastPresence.videoCodecs), mapKeys(lastPresence.metaCodecs),
-				mapKeys(requirements.audioCodecs), mapKeys(requirements.videoCodecs), requirements.wantThumbs)
+			if !processingRequiredTracksReady(lastPresence, requirements) {
+				return nil, 0, fmt.Errorf("processing stream missing required tracks: have audio=%v video=%v meta=%v want audio=%v video=%v thumbs=%t",
+					mapKeys(lastPresence.audioCodecs), mapKeys(lastPresence.videoCodecs), mapKeys(lastPresence.metaCodecs),
+					mapKeys(requirements.requiredAudioCodecs), mapKeys(requirements.requiredVideoCodecs), requirements.requireThumbs)
+			}
+			missing := missingProcessingTracks(lastPresence, requirements)
+			outputs := cloneStringMap(lastPresence.outputs)
+			if len(missing) > 0 {
+				outputs["processing_degraded"] = "true"
+				outputs["processing_missing_tracks"] = strings.Join(missing, ",")
+			}
+			log.WithFields(logrus.Fields{
+				"audio_codecs":    mapKeys(lastPresence.audioCodecs),
+				"video_codecs":    mapKeys(lastPresence.videoCodecs),
+				"meta_codecs":     mapKeys(lastPresence.metaCodecs),
+				"missing_tracks":  missing,
+				"required_tracks": requiredTrackSummary(requirements),
+			}).Warn("Processing stream proceeding with degraded enrichment")
+			return outputs, sourceDurationFromOutputs(outputs), nil
 		}
 
 		<-bootTicker.C
@@ -582,8 +601,10 @@ func processingMuxTargetURI(outputPath string) string {
 
 func expectedProcessingTracks(processesJSON string) processingTrackRequirements {
 	req := processingTrackRequirements{
-		audioCodecs: map[string]bool{},
-		videoCodecs: map[string]bool{},
+		requiredAudioCodecs: map[string]bool{},
+		requiredVideoCodecs: map[string]bool{},
+		expectedAudioCodecs: map[string]bool{},
+		expectedVideoCodecs: map[string]bool{},
 	}
 	var processes []map[string]interface{}
 	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
@@ -596,7 +617,8 @@ func expectedProcessingTracks(processesJSON string) processingTrackRequirements 
 		}
 		switch processName {
 		case "Thumbs":
-			req.wantThumbs = true
+			req.expectThumbs = true
+			req.requireThumbs = processRequired(proc)
 		case "AV":
 			codec, codecOK := proc["codec"].(string)
 			if !codecOK {
@@ -607,13 +629,32 @@ func expectedProcessingTracks(processesJSON string) processingTrackRequirements 
 				continue
 			}
 			if isAudioCodec(codec) {
-				req.audioCodecs[codec] = true
+				req.expectedAudioCodecs[codec] = true
+				if processRequired(proc) {
+					req.requiredAudioCodecs[codec] = true
+				}
 			} else {
-				req.videoCodecs[codec] = true
+				req.expectedVideoCodecs[codec] = true
+				if processRequired(proc) {
+					req.requiredVideoCodecs[codec] = true
+				}
 			}
 		}
 	}
 	return req
+}
+
+func processRequired(proc map[string]interface{}) bool {
+	if required, ok := proc["required"].(bool); ok {
+		return required
+	}
+	if consequential, ok := proc["consequential"].(bool); ok {
+		return consequential
+	}
+	if inconsequential, ok := proc["inconsequential"].(bool); ok && inconsequential {
+		return false
+	}
+	return false
 }
 
 func inspectProcessingTracks(meta map[string]interface{}) processingTrackPresence {
@@ -696,24 +737,75 @@ func inspectProcessingTracks(meta map[string]interface{}) processingTrackPresenc
 	return p
 }
 
-func processingTracksReady(p processingTrackPresence, req processingTrackRequirements) bool {
+func processingRequiredTracksReady(p processingTrackPresence, req processingTrackRequirements) bool {
 	if !p.sourceMedia {
 		return false
 	}
-	for codec := range req.audioCodecs {
+	for codec := range req.requiredAudioCodecs {
 		if !p.audioCodecs[codec] {
 			return false
 		}
 	}
-	for codec := range req.videoCodecs {
+	for codec := range req.requiredVideoCodecs {
 		if !p.videoCodecs[codec] {
 			return false
 		}
 	}
-	if req.wantThumbs && (!p.videoCodecs["JPEG"] || !p.metaCodecs["thumbvtt"]) {
+	if req.requireThumbs && (!p.videoCodecs["JPEG"] || !p.metaCodecs["thumbvtt"]) {
 		return false
 	}
 	return true
+}
+
+func processingTracksComplete(p processingTrackPresence, req processingTrackRequirements) bool {
+	return processingRequiredTracksReady(p, req) && len(missingProcessingTracks(p, req)) == 0
+}
+
+func missingProcessingTracks(p processingTrackPresence, req processingTrackRequirements) []string {
+	var missing []string
+	for codec := range req.expectedAudioCodecs {
+		if !p.audioCodecs[codec] {
+			missing = append(missing, "audio:"+codec)
+		}
+	}
+	for codec := range req.expectedVideoCodecs {
+		if !p.videoCodecs[codec] {
+			missing = append(missing, "video:"+codec)
+		}
+	}
+	if req.expectThumbs {
+		if !p.videoCodecs["JPEG"] {
+			missing = append(missing, "video:JPEG")
+		}
+		if !p.metaCodecs["thumbvtt"] {
+			missing = append(missing, "meta:thumbvtt")
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
+func requiredTrackSummary(req processingTrackRequirements) map[string][]string {
+	return map[string][]string{
+		"audio":  mapKeys(req.requiredAudioCodecs),
+		"video":  mapKeys(req.requiredVideoCodecs),
+		"thumbs": boolKeys(req.requireThumbs),
+	}
+}
+
+func boolKeys(enabled bool) []string {
+	if !enabled {
+		return nil
+	}
+	return []string{"required"}
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func normalizeTrackCodec(codec string) string {
