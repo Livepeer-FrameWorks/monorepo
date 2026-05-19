@@ -15,7 +15,7 @@ import (
 // against a single host. Used by EdgeProvisioner step [2/7] for standalone
 // edge deploys; cluster_provision's ensureNodeTuning uses the higher-level
 // NodeTuningProvisioner for fleet-wide application.
-func runNodeTuningRole(ctx context.Context, pool *ssh.Pool, host inventory.Host, profile string) error {
+func runNodeTuningRole(ctx context.Context, pool *ssh.Pool, host inventory.Host, profile string, dryRun bool) error {
 	if profile == "" {
 		profile = "core"
 	}
@@ -62,6 +62,7 @@ func runNodeTuningRole(ctx context.Context, pool *ssh.Pool, host inventory.Host,
 				User:       host.User,
 				PrivateKey: privateKey,
 				Connection: connection,
+				Vars:       ansiblePythonVars(ctx, pool, host, address, connection),
 			},
 		},
 	})
@@ -83,6 +84,8 @@ func runNodeTuningRole(ctx context.Context, pool *ssh.Pool, host inventory.Host,
 		Playbook:   filepath.Join(root, "playbooks/node_tuning.yml"),
 		Inventory:  invPath,
 		ExtraVars:  map[string]any{"node_tuning_profile": profile},
+		Check:      dryRun,
+		Diff:       dryRun,
 		PrivateKey: privateKey,
 		User:       host.User,
 		Become:     true,

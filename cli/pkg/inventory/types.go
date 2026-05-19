@@ -490,26 +490,35 @@ type EdgeManifest struct {
 	PoolDomain      string     `yaml:"pool_domain"` // Shared edge pool domain (e.g., edge.media-eu.example.com)
 	Email           string     `yaml:"email"`       // ACME email
 	ClusterID       string     `yaml:"cluster_id,omitempty"`
+	ClusterManifest string     `yaml:"cluster_manifest,omitempty"` // Cluster manifest used to resolve platform SERVICE_TOKEN for register_qm
 	EnrollmentToken string     `yaml:"enrollment_token,omitempty"` // Token for node bootstrap
 	HostsFile       string     `yaml:"hosts_file,omitempty"`       // SOPS-encrypted host inventory
-	FetchCert       bool       `yaml:"fetch_cert,omitempty"`       // Fetch certs from Navigator
+	FetchCert       bool       `yaml:"fetch_cert,omitempty"`       // Deprecated for manifest provisioning; edge TLS is delivered by ConfigSeed
 	Mode            string     `yaml:"mode,omitempty"`             // "docker" (default) or "native"
+	Capabilities    []string   `yaml:"capabilities,omitempty"`     // Default node capabilities: ingest, edge, storage, processing
+	BandwidthMbps   int        `yaml:"bandwidth_mbps,omitempty"`   // Default egress bandwidth limit advertised by Helmsman
+	MaxTranscodes   int        `yaml:"max_transcodes,omitempty"`   // Default local transcoding concurrency limit
+	StorageBytes    uint64     `yaml:"storage_capacity_bytes,omitempty"`
 	Nodes           []EdgeNode `yaml:"nodes"`
 }
 
 // EdgeNode represents a single edge node in the manifest
 type EdgeNode struct {
-	Name       string            `yaml:"name"`                  // Unique node name (e.g., edge-us-east-1)
-	SSH        string            `yaml:"ssh"`                   // SSH target (user@host); composed by MergeEdgeHosts when loading via inventory
-	SSHKey     string            `yaml:"-"`                     // Populated from --ssh-key flag, not from YAML
-	Subdomain  string            `yaml:"subdomain,omitempty"`   // Individual subdomain (e.g., edge-us-east-1 -> edge-us-east-1.example.com)
-	Region     string            `yaml:"region,omitempty"`      // Region for registration
-	Cluster    string            `yaml:"cluster,omitempty"`     // Per-node cluster override; falls back to EdgeManifest.ClusterID when unset. Needed when one edge manifest registers nodes across multiple clusters (e.g. edge-eu-1 → media-eu-1, edge-us-1 → media-us-1).
-	Labels     map[string]string `yaml:"labels,omitempty"`      // Additional labels
-	ApplyTune  bool              `yaml:"apply_tune,omitempty"`  // Apply sysctl tuning
-	RegisterQM bool              `yaml:"register_qm,omitempty"` // Register in Quartermaster
-	Mode       string            `yaml:"mode,omitempty"`        // Per-node mode override ("docker"|"native")
-	ExternalIP string            `yaml:"-"`                     // Populated by MergeEdgeHosts from the inventory; lets registration skip the remote ifconfig.me probe.
+	Name          string            `yaml:"name"`                   // Unique node name (e.g., edge-us-east-1)
+	SSH           string            `yaml:"ssh"`                    // SSH target (user@host); composed by MergeEdgeHosts when loading via inventory
+	SSHKey        string            `yaml:"-"`                      // Populated from --ssh-key flag, not from YAML
+	Subdomain     string            `yaml:"subdomain,omitempty"`    // Individual subdomain (e.g., edge-us-east-1 -> edge-us-east-1.example.com)
+	Region        string            `yaml:"region,omitempty"`       // Region for registration
+	Cluster       string            `yaml:"cluster,omitempty"`      // Per-node cluster override; falls back to EdgeManifest.ClusterID when unset. Needed when one edge manifest registers nodes across multiple clusters (e.g. edge-eu-1 → media-eu-1, edge-us-1 → media-us-1).
+	Labels        map[string]string `yaml:"labels,omitempty"`       // Additional labels
+	ApplyTune     bool              `yaml:"apply_tune,omitempty"`   // Apply sysctl tuning
+	RegisterQM    bool              `yaml:"register_qm,omitempty"`  // Register in Quartermaster
+	Mode          string            `yaml:"mode,omitempty"`         // Per-node mode override ("docker"|"native")
+	Capabilities  []string          `yaml:"capabilities,omitempty"` // Per-node capability override
+	BandwidthMbps int               `yaml:"bandwidth_mbps,omitempty"`
+	MaxTranscodes int               `yaml:"max_transcodes,omitempty"`
+	StorageBytes  uint64            `yaml:"storage_capacity_bytes,omitempty"`
+	ExternalIP    string            `yaml:"-"` // Populated by MergeEdgeHosts from the inventory; lets registration skip the remote ifconfig.me probe.
 }
 
 // ResolvedCluster returns the cluster ID this edge node should register
@@ -521,6 +530,34 @@ func (n EdgeNode) ResolvedCluster(manifestClusterID string) string {
 		return n.Cluster
 	}
 	return manifestClusterID
+}
+
+func (n EdgeNode) ResolvedCapabilities(defaults []string) []string {
+	if len(n.Capabilities) > 0 {
+		return append([]string(nil), n.Capabilities...)
+	}
+	return append([]string(nil), defaults...)
+}
+
+func (n EdgeNode) ResolvedBandwidthMbps(defaultValue int) int {
+	if n.BandwidthMbps > 0 {
+		return n.BandwidthMbps
+	}
+	return defaultValue
+}
+
+func (n EdgeNode) ResolvedMaxTranscodes(defaultValue int) int {
+	if n.MaxTranscodes > 0 {
+		return n.MaxTranscodes
+	}
+	return defaultValue
+}
+
+func (n EdgeNode) ResolvedStorageBytes(defaultValue uint64) uint64 {
+	if n.StorageBytes > 0 {
+		return n.StorageBytes
+	}
+	return defaultValue
 }
 
 // ResolvedChannel returns the effective release channel, defaulting to "stable".

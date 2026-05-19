@@ -60,6 +60,41 @@ func TestSetEdgeComponentVersionVarRejectsControlCharacters(t *testing.T) {
 	}
 }
 
+func TestEdgeRoleVarsCapacityControls(t *testing.T) {
+	vars, err := edgeRoleVars(&EdgeProvisionConfig{
+		Mode:          "docker",
+		NodeID:        "edge-eu-1",
+		Capabilities:  []string{"edge", "storage"},
+		BandwidthMbps: 2000,
+		MaxTranscodes: 4,
+		StorageBytes:  500 * 1000 * 1000 * 1000,
+	}, "linux", "amd64")
+	if err != nil {
+		t.Fatalf("edgeRoleVars returned error: %v", err)
+	}
+	if got := vars["edge_bandwidth_limit_bytes_per_sec"]; got != uint64(250000000) {
+		t.Fatalf("edge_bandwidth_limit_bytes_per_sec = %#v, want 250000000", got)
+	}
+	if got := vars["edge_max_transcodes"]; got != 4 {
+		t.Fatalf("edge_max_transcodes = %#v, want 4", got)
+	}
+	if got := vars["edge_storage_capacity_bytes"]; got != uint64(500000000000) {
+		t.Fatalf("edge_storage_capacity_bytes = %#v, want 500000000000", got)
+	}
+	if got := vars["edge_cap_ingest"]; got != false {
+		t.Fatalf("edge_cap_ingest = %#v, want false", got)
+	}
+	if got := vars["edge_cap_edge"]; got != true {
+		t.Fatalf("edge_cap_edge = %#v, want true", got)
+	}
+	if got := vars["edge_cap_storage"]; got != true {
+		t.Fatalf("edge_cap_storage = %#v, want true", got)
+	}
+	if got := vars["edge_cap_processing"]; got != false {
+		t.Fatalf("edge_cap_processing = %#v, want false", got)
+	}
+}
+
 // The templates package is still used by `edge init` for operators who
 // render the compose/env/Caddyfile locally before running the role against
 // their own host. These tests pin the bootstrap shape so renames don't

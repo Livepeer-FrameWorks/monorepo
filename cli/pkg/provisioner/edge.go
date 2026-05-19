@@ -56,10 +56,15 @@ type EdgeProvisionConfig struct {
 	CABundlePEM     string
 	TelemetryURL    string
 	TelemetryToken  string
+	Capabilities    []string
+	BandwidthMbps   int
+	MaxTranscodes   int
+	StorageBytes    uint64
 
 	SkipPreflight bool
 	ApplyTuning   bool
 	FetchCert     bool
+	DryRun        bool
 
 	Timeout      time.Duration
 	Force        bool
@@ -106,10 +111,20 @@ func (c *EdgeProvisionConfig) resolvedMode() string {
 //	[7] HTTPS verify (direct HTTP probe of /health)
 func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
 	mode := config.resolvedMode()
+	if config.DryRun {
+		fmt.Println("Dry-run mode: remote preflight plus Ansible --check --diff; registration, ConfigSeed delivery, service start, and HTTPS verification are skipped")
+	}
 
+	fmt.Printf("Preparing remote host %s...\n", host.ExternalIP)
 	remoteOS, remoteArch, err := e.DetectRemoteArch(ctx, host)
 	if err != nil {
 		return fmt.Errorf("failed to detect remote OS: %w", err)
+	}
+	fmt.Printf("  platform: %s/%s\n", remoteOS, remoteArch)
+
+	fmt.Println("  ensuring Python for Ansible")
+	if err := ensureRemoteAnsiblePython(ctx, e.sshPool, host, config.DryRun); err != nil {
+		return err
 	}
 
 	if !config.SkipPreflight {
@@ -125,8 +140,12 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 	case remoteOS == "darwin" && config.ApplyTuning:
 		fmt.Println("[2/7] Skipping OS tuning (macOS)")
 	case config.ApplyTuning:
-		fmt.Println("[2/7] Applying OS tuning (node_tuning role, profile=edge)...")
-		if err := runNodeTuningRole(ctx, e.sshPool, host, "edge"); err != nil {
+		if config.DryRun {
+			fmt.Println("[2/7] Checking OS tuning (node_tuning role, profile=edge)...")
+		} else {
+			fmt.Println("[2/7] Applying OS tuning (node_tuning role, profile=edge)...")
+		}
+		if err := runNodeTuningRole(ctx, e.sshPool, host, "edge", config.DryRun); err != nil {
 			return fmt.Errorf("node tuning failed: %w", err)
 		}
 	default:
@@ -139,9 +158,17 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 	if remoteOS == "darwin" && mode != "native" {
 		return fmt.Errorf("unsupported mode for darwin: %s (only native)", mode)
 	}
-	fmt.Printf("[5-6/7] Installing edge stack (%s, %s)...\n", mode, remoteOS)
-	if err := runEdgeRole(ctx, e.sshPool, host, &config, remoteOS, remoteArch); err != nil {
+	if config.DryRun {
+		fmt.Printf("[5-6/7] Checking edge stack (%s, %s)...\n", mode, remoteOS)
+	} else {
+		fmt.Printf("[5-6/7] Installing edge stack (%s, %s)...\n", mode, remoteOS)
+	}
+	if err := runEdgeRole(ctx, e.sshPool, host, &config, remoteOS, remoteArch, config.DryRun); err != nil {
 		return fmt.Errorf("edge role apply failed: %w", err)
+	}
+	if config.DryRun {
+		fmt.Println("[7/7] Skipping HTTPS verification in dry-run mode")
+		return nil
 	}
 
 	domain := config.primaryDomain()

@@ -23,7 +23,7 @@ import (
 // the generated MistServer API password persists on the caller's struct
 // — subsequent reads of that password (e.g. logging, retry) see the same
 // value.
-func runEdgeRole(ctx context.Context, pool *ssh.Pool, host inventory.Host, config *EdgeProvisionConfig, remoteOS, remoteArch string) error {
+func runEdgeRole(ctx context.Context, pool *ssh.Pool, host inventory.Host, config *EdgeProvisionConfig, remoteOS, remoteArch string, dryRun bool) error {
 	vars, err := edgeRoleVars(config, remoteOS, remoteArch)
 	if err != nil {
 		return err
@@ -82,6 +82,7 @@ func runEdgeRole(ctx context.Context, pool *ssh.Pool, host inventory.Host, confi
 				User:       host.User,
 				PrivateKey: privateKey,
 				Connection: connection,
+				Vars:       ansiblePythonVars(ctx, pool, host, address, connection),
 			},
 		},
 		Groups: []ansiblerun.Group{{
@@ -106,11 +107,18 @@ func runEdgeRole(ctx context.Context, pool *ssh.Pool, host inventory.Host, confi
 		}
 	}
 
+	tags := []string{"install", "configure", "service", "validate"}
+	if dryRun {
+		tags = []string{"install", "configure"}
+	}
+
 	return executor.Execute(ctx, ansiblerun.ExecuteOptions{
 		Playbook:   filepath.Join(root, "playbooks/edge.yml"),
 		Inventory:  invPath,
 		ExtraVars:  vars,
-		Tags:       []string{"install", "configure", "service", "validate"},
+		Tags:       tags,
+		Check:      dryRun,
+		Diff:       dryRun,
 		PrivateKey: privateKey,
 		User:       host.User,
 		Become:     become,
@@ -156,6 +164,28 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 		"edge_caddy_image":       "caddy:2.8.4",
 		"edge_helmsman_image":    "frameworks/helmsman:latest",
 		"edge_darwin_domain":     darwinDomain,
+	}
+	if config.BandwidthMbps < 0 {
+		return nil, fmt.Errorf("edge: bandwidth_mbps must be non-negative")
+	}
+	if config.MaxTranscodes < 0 {
+		return nil, fmt.Errorf("edge: max_transcodes must be non-negative")
+	}
+	if config.BandwidthMbps > 0 {
+		vars["edge_bandwidth_limit_bytes_per_sec"] = uint64(config.BandwidthMbps) * 1000 * 1000 / 8
+	}
+	if config.MaxTranscodes > 0 {
+		vars["edge_max_transcodes"] = config.MaxTranscodes
+	}
+	if config.StorageBytes > 0 {
+		vars["edge_storage_capacity_bytes"] = config.StorageBytes
+	}
+	if capEnv, err := edgeCapabilityEnv(config.Capabilities); err != nil {
+		return nil, err
+	} else {
+		for k, v := range capEnv {
+			vars[k] = v
+		}
 	}
 
 	var manifest *gitops.Manifest
@@ -239,6 +269,31 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 	}
 
 	return vars, nil
+}
+
+func edgeCapabilityEnv(caps []string) (map[string]any, error) {
+	if len(caps) == 0 {
+		return nil, nil
+	}
+	enabled := map[string]bool{
+		"ingest":     false,
+		"edge":       false,
+		"storage":    false,
+		"processing": false,
+	}
+	for _, raw := range caps {
+		capability := strings.ToLower(strings.TrimSpace(raw))
+		if _, ok := enabled[capability]; !ok {
+			return nil, fmt.Errorf("edge: unsupported capability %q", raw)
+		}
+		enabled[capability] = true
+	}
+	return map[string]any{
+		"edge_cap_ingest":     enabled["ingest"],
+		"edge_cap_edge":       enabled["edge"],
+		"edge_cap_storage":    enabled["storage"],
+		"edge_cap_processing": enabled["processing"],
+	}, nil
 }
 
 func fetchEdgeManifest(version string) (*gitops.Manifest, error) {

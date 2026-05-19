@@ -722,6 +722,15 @@ func (m *EdgeManifest) Validate() error {
 	if len(m.Nodes) == 0 {
 		return fmt.Errorf("at least one node is required")
 	}
+	if m.BandwidthMbps < 0 {
+		return fmt.Errorf("bandwidth_mbps must be non-negative")
+	}
+	if m.MaxTranscodes < 0 {
+		return fmt.Errorf("max_transcodes must be non-negative")
+	}
+	if err := validateEdgeCapabilities(m.Capabilities); err != nil {
+		return err
+	}
 
 	for i, node := range m.Nodes {
 		if node.Name == "" {
@@ -730,7 +739,27 @@ func (m *EdgeManifest) Validate() error {
 		if node.SSH == "" {
 			return fmt.Errorf("node '%s': ssh target is required", node.Name)
 		}
+		if node.BandwidthMbps < 0 {
+			return fmt.Errorf("node '%s': bandwidth_mbps must be non-negative", node.Name)
+		}
+		if node.MaxTranscodes < 0 {
+			return fmt.Errorf("node '%s': max_transcodes must be non-negative", node.Name)
+		}
+		if err := validateEdgeCapabilities(node.Capabilities); err != nil {
+			return fmt.Errorf("node '%s': %w", node.Name, err)
+		}
 	}
 
+	return nil
+}
+
+func validateEdgeCapabilities(caps []string) error {
+	for _, cap := range caps {
+		switch strings.TrimSpace(strings.ToLower(cap)) {
+		case "ingest", "edge", "storage", "processing":
+		default:
+			return fmt.Errorf("unsupported edge capability %q", cap)
+		}
+	}
 	return nil
 }

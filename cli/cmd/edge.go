@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -19,7 +20,6 @@ import (
 
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/internal/controlplane"
-	fwcredentials "frameworks/cli/internal/credentials"
 	"frameworks/cli/internal/platformauth"
 	"frameworks/cli/internal/preflight"
 	"frameworks/cli/internal/readiness"
@@ -33,7 +33,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	infra "github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -540,6 +539,7 @@ func newEdgeProvisionCmd() *cobra.Command {
 	var registerNode bool
 	var fetchCert bool
 	var manifestPath string
+	var clusterManifestPath string
 	var parallel int
 	var mode string
 	var version string
@@ -548,6 +548,10 @@ func newEdgeProvisionCmd() *cobra.Command {
 	var dryRun bool
 	var telemetryURL string
 	var telemetryToken string
+	var capabilities []string
+	var bandwidthMbps int
+	var maxTranscodes int
+	var storageCapacityBytes uint64
 
 	cmd := &cobra.Command{
 		Use:   "provision",
@@ -556,7 +560,7 @@ func newEdgeProvisionCmd() *cobra.Command {
   1. Run preflight checks (Docker, ports, sysctl, limits)
   2. Apply sysctl/limits tuning (optional)
   3. Register node in Quartermaster (triggers DNS sync via Navigator)
-  4. Fetch TLS certificate from Navigator (optional, uses centralized DNS-01 challenge)
+  4. Receive enrolled TLS/site config from Foghorn ConfigSeed
   5. Generate and upload edge templates (docker-compose, Caddyfile, .env)
   6. Start edge stack (docker compose up)
   7. Wait for HTTPS readiness
@@ -587,7 +591,7 @@ Multi-node manifest example:
 
 			// Check if using manifest mode
 			if manifestPath != "" {
-				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, sshKey, enrollmentToken, parallel, timeout, mode, version, ageKeyFile, dryRun)
+				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, clusterManifestPath, sshKey, enrollmentToken, parallel, timeout, mode, version, ageKeyFile, dryRun)
 			}
 
 			// Default --cluster-id from context. --foghorn-addr is intentionally
@@ -758,6 +762,10 @@ Multi-node manifest example:
 				CABundlePEM:     preRegCABundle,
 				TelemetryURL:    telemetryURL,
 				TelemetryToken:  telemetryToken,
+				Capabilities:    capabilities,
+				BandwidthMbps:   bandwidthMbps,
+				MaxTranscodes:   maxTranscodes,
+				StorageBytes:    storageCapacityBytes,
 				SkipPreflight:   skipPreflight,
 				ApplyTuning:     applyTuning,
 				Timeout:         timeout,
@@ -806,12 +814,17 @@ Multi-node manifest example:
 	cmd.Flags().BoolVar(&registerNode, "register", false, "Register node in Quartermaster (DNS synced by Navigator reconciler)")
 	cmd.Flags().BoolVar(&fetchCert, "fetch-cert", false, "Fetch TLS certificate from Navigator (DNS-01 challenge)")
 	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Path to edge manifest file (edges.yaml) for multi-node provisioning")
+	cmd.Flags().StringVar(&clusterManifestPath, "cluster-manifest", "", "Path to cluster manifest used for platform SERVICE_TOKEN in edge manifest mode")
 	cmd.Flags().IntVar(&parallel, "parallel", 1, "Number of nodes to provision in parallel (for manifest mode)")
 	cmd.Flags().StringVar(&mode, "mode", "docker", "Deployment mode: docker (compose) or native (systemd)")
 	cmd.Flags().StringVar(&version, "version", "", "Platform version for binary resolution (e.g., stable, v1.2.3)")
 	cmd.Flags().BoolVar(&local, "local", false, "Provision this machine as a user LaunchAgent (no admin required, macOS only)")
 	cmd.Flags().StringVar(&ageKeyFile, "age-key", "", "Path to age private key for SOPS-encrypted host files (default: $SOPS_AGE_KEY_FILE)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Load and validate manifest, show provision plan, but do not execute")
+	cmd.Flags().StringSliceVar(&capabilities, "capability", nil, "Edge capability to enable (repeatable: ingest, edge, storage, processing)")
+	cmd.Flags().IntVar(&bandwidthMbps, "bandwidth-mbps", 0, "Advertised edge bandwidth limit in Mbps")
+	cmd.Flags().IntVar(&maxTranscodes, "max-transcodes", 0, "Maximum local transcodes for Helmsman to report")
+	cmd.Flags().Uint64Var(&storageCapacityBytes, "storage-capacity-bytes", 0, "Local storage capacity limit for Helmsman to report")
 
 	return cmd
 }
@@ -825,7 +838,7 @@ type EdgeProvisionResult struct {
 }
 
 // runEdgeProvisionFromManifest provisions multiple edge nodes from a manifest file
-func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, manifestPath, defaultSSHKey, enrollmentToken string, parallel int, timeout time.Duration, cliMode, cliVersion, ageKeyFile string, dryRun bool) error {
+func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, manifestPath, clusterManifestOverride, defaultSSHKey, enrollmentToken string, parallel int, timeout time.Duration, cliMode, cliVersion, ageKeyFile string, dryRun bool) error {
 	// Load manifest (with host inventory merge if hosts_file is set)
 	manifest, err := inventory.LoadEdgeWithHosts(manifestPath, ageKeyFile)
 	if err != nil {
@@ -856,8 +869,15 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "  Node: %-20s SSH: %-30s Region: %-12s Mode: %s\n",
 				node.Name, node.SSH, node.Region, nodeMode)
+			caps := node.ResolvedCapabilities(manifest.Capabilities)
+			if bw := node.ResolvedBandwidthMbps(manifest.BandwidthMbps); bw > 0 || len(caps) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "    Capacity: bandwidth_mbps=%d capabilities=%s\n", bw, strings.Join(caps, ","))
+			}
 		}
-		return nil
+		fmt.Fprintln(cmd.OutOrStdout(), "\nRunning remote dry-run checks...")
+	}
+	if manifest.FetchCert {
+		fmt.Fprintln(cmd.OutOrStdout(), "Note: fetch_cert is ignored for edge manifests; enrolled edge TLS is delivered by Foghorn ConfigSeed.")
 	}
 
 	if parallel < 1 {
@@ -865,6 +885,19 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 	}
 	if parallel > len(manifest.Nodes) {
 		parallel = len(manifest.Nodes)
+	}
+
+	controlCtx := cliCtx
+	if !dryRun && edgeManifestNeedsControlPlane(manifest) {
+		clusterManifestPath, ctxErr := resolveEdgeClusterManifestPath(manifestPath, manifest, clusterManifestOverride)
+		if ctxErr != nil {
+			return ctxErr
+		}
+		resolvedCtx, ctxErr := edgeManifestControlPlaneContext(cmd.Context(), cliCtx, clusterManifestPath, ageKeyFile)
+		if ctxErr != nil {
+			return ctxErr
+		}
+		controlCtx = resolvedCtx
 	}
 
 	// Semaphore for parallelism control
@@ -917,14 +950,18 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 			if cmd.Flags().Changed("version") {
 				nodeVersion = cliVersion
 			}
-			err := provisionSingleEdgeNode(cmd, cliCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, n.ResolvedCluster(manifest.ClusterID), n.Region, manifest.Email, token, n.ExternalIP, manifest.FetchCert, n.ApplyTune, n.RegisterQM, timeout, nodeMode, nodeVersion, "", "")
+			err := provisionSingleEdgeNode(cmd, controlCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, n.ResolvedCluster(manifest.ClusterID), n.Region, manifest.Email, token, n.ExternalIP, false, n.ApplyTune, n.RegisterQM, timeout, nodeMode, nodeVersion, "", "", n.ResolvedCapabilities(manifest.Capabilities), n.ResolvedBandwidthMbps(manifest.BandwidthMbps), n.ResolvedMaxTranscodes(manifest.MaxTranscodes), n.ResolvedStorageBytes(manifest.StorageBytes), dryRun)
 			if err != nil {
 				result.Error = err
 				result.Success = false
 				fmt.Fprintf(cmd.OutOrStdout(), "[%s] FAILED: %v\n", n.Name, err)
 			} else {
 				result.Success = true
-				fmt.Fprintf(cmd.OutOrStdout(), "[%s] SUCCESS: https://%s/health\n", n.Name, primaryDomain)
+				if dryRun {
+					fmt.Fprintf(cmd.OutOrStdout(), "[%s] DRY-RUN OK\n", n.Name)
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "[%s] SUCCESS: https://%s/health\n", n.Name, primaryDomain)
+				}
 			}
 
 			results <- result
@@ -961,26 +998,98 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 	return nil
 }
 
+func edgeManifestNeedsControlPlane(manifest *inventory.EdgeManifest) bool {
+	if manifest == nil {
+		return false
+	}
+	for _, node := range manifest.Nodes {
+		if node.RegisterQM {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveEdgeClusterManifestPath(edgeManifestPath string, manifest *inventory.EdgeManifest, override string) (string, error) {
+	raw := strings.TrimSpace(override)
+	if raw == "" && manifest != nil {
+		raw = strings.TrimSpace(manifest.ClusterManifest)
+	}
+	if raw != "" {
+		if !filepath.IsAbs(raw) {
+			raw = filepath.Join(filepath.Dir(edgeManifestPath), raw)
+		}
+		if _, err := os.Stat(raw); err != nil {
+			return "", fmt.Errorf("edge cluster manifest %s is unavailable: %w", raw, err)
+		}
+		return raw, nil
+	}
+
+	fallback := filepath.Join(filepath.Dir(edgeManifestPath), "cluster.yaml")
+	if _, err := os.Stat(fallback); err != nil {
+		return "", fmt.Errorf("edge manifest needs control-plane access; set --cluster-manifest or cluster_manifest because fallback %s is unavailable: %w", fallback, err)
+	}
+	return fallback, nil
+}
+
+func edgeManifestControlPlaneContext(ctx context.Context, base fwcfg.Context, clusterManifestPath, ageKeyFile string) (fwcfg.Context, error) {
+	if base.Persona == fwcfg.PersonaPlatform && base.Gitops != nil {
+		cfg, err := fwcfg.Load()
+		if err != nil {
+			return fwcfg.Context{}, err
+		}
+		token, err := platformauth.ResolveManifestServiceToken(ctx, base, cfg)
+		if err != nil {
+			return fwcfg.Context{}, err
+		}
+		base.Auth = fwcfg.Auth{ServiceToken: token}
+		return base, nil
+	}
+
+	derived := base
+	derived.Name = firstNonEmpty(base.Name, "edge-manifest")
+	derived.Persona = fwcfg.PersonaPlatform
+	derived.AccessMode = fwcfg.AccessModeSSH
+	derived.Gitops = &fwcfg.Gitops{
+		Source:       fwcfg.GitopsManifest,
+		ManifestPath: clusterManifestPath,
+		AgeKeyPath:   ageKeyFile,
+	}
+	cfg, err := fwcfg.Load()
+	if err != nil {
+		return fwcfg.Context{}, err
+	}
+	token, err := platformauth.ResolveManifestServiceToken(ctx, derived, cfg)
+	if err != nil {
+		return fwcfg.Context{}, err
+	}
+	derived.Auth = fwcfg.Auth{ServiceToken: token}
+	return derived, nil
+}
+
 // provisionSingleEdgeNode provisions a single edge node using EdgeProvisioner.
 // knownExternalIP, when non-empty, is the canonical IP from the manifest's
 // hosts inventory; it bypasses the remote ifconfig.me probe in both the
 // preregistration and Quartermaster registration paths.
-func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken, knownExternalIP string, fetchCert, applyTuning, registerNode bool, timeout time.Duration, mode, version, telemetryURL, telemetryToken string) error {
+func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken, knownExternalIP string, fetchCert, applyTuning, registerNode bool, timeout time.Duration, mode, version, telemetryURL, telemetryToken string, capabilities []string, bandwidthMbps, maxTranscodes int, storageCapacityBytes uint64, dryRun bool) error {
 	// Same --register guards the single-node provision RunE applies. Manifest
 	// mode reaches this helper without going through that RunE, so duplicate
 	// the contract here to keep the rule single-source.
-	if registerNode && enrollmentToken != "" {
+	if registerNode && enrollmentToken != "" && !dryRun {
 		return fmt.Errorf("register_qm is for the manual provisioning path; the token path already registers the node via Foghorn")
 	}
-	if registerNode && cliCtx.Persona != fwcfg.PersonaPlatform {
+	if registerNode && cliCtx.Persona != fwcfg.PersonaPlatform && !dryRun {
 		return fmt.Errorf("register_qm requires Quartermaster access; use a platform context for manual node registration")
 	}
 
 	var preRegFoghornAddr string
 	var preRegCABundle string
-	if enrollmentToken != "" {
+	if enrollmentToken != "" && !dryRun {
 		preferredNodeID := deriveEdgeNodeName(nodeName, nodeDomain, sshTarget, false)
-		preRegResp, err := bootstrapEdgeViaBridge(cmd.Context(), cliCtx, enrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP)
+		fmt.Fprintf(cmd.OutOrStdout(), "  - Pre-registering edge node %s via Bridge bootstrap\n", firstNonEmpty(preferredNodeID, nodeName, sshTarget))
+		preRegCtx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
+		preRegResp, err := bootstrapEdgeViaBridge(preRegCtx, cliCtx, enrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP)
+		cancel()
 		if err != nil {
 			return fmt.Errorf("pre-registration failed: %w", err)
 		}
@@ -1009,24 +1118,36 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 	// Manifest-mode supplies the canonical IP via knownExternalIP; fall back
 	// to a remote probe for ad-hoc CLI paths where it isn't known.
 	if registerNode {
-		externalIP := resolveEdgeExternalIP(cmd.Context(), sshTarget, sshKey, knownExternalIP)
-		if err := registerEdgeNode(cmd, cliCtx, nodeName, clusterID, externalIP, region); err != nil {
-			return fmt.Errorf("node registration failed: %w", err)
+		if dryRun {
+			fmt.Fprintf(cmd.OutOrStdout(), "  - Would register node %s in cluster %s\n", nodeName, clusterID)
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "  - Registering node %s in cluster %s via Quartermaster\n", nodeName, clusterID)
+			externalIP := resolveEdgeExternalIP(cmd.Context(), sshTarget, sshKey, knownExternalIP)
+			if err := registerEdgeNode(cmd, cliCtx, nodeName, clusterID, externalIP, region); err != nil {
+				return fmt.Errorf("node registration failed: %w", err)
+			}
 		}
 	}
 
 	// Fetch certs from Navigator if requested
 	var certPEM, keyPEM string
 	if fetchCert && email != "" {
-		var err error
-		certPEM, keyPEM, err = fetchCertFromNavigator(cmd, cliCtx, primaryDomain, email)
-		if err != nil {
-			return fmt.Errorf("certificate fetch failed: %w", err)
+		if dryRun {
+			fmt.Fprintf(cmd.OutOrStdout(), "  - Would request certificate for %s\n", primaryDomain)
+		} else {
+			var err error
+			certPEM, keyPEM, err = fetchCertFromNavigator(cmd, cliCtx, primaryDomain, email)
+			if err != nil {
+				return fmt.Errorf("certificate fetch failed: %w", err)
+			}
 		}
 	}
 
 	// Parse SSH target (user@host) into inventory.Host
 	host := sshTargetToHost(sshTarget)
+	if host.Name == "" {
+		host.Name = firstNonEmpty(canonicalEdgeNodeID(nodeName), nodeName)
+	}
 
 	// Build EdgeProvisionConfig
 	config := provisioner.EdgeProvisionConfig{
@@ -1039,15 +1160,21 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		Email:           email,
 		EnrollmentToken: enrollmentToken,
 		FoghornGRPCAddr: firstNonEmpty(preRegFoghornAddr, cliCtx.Endpoints.FoghornGRPCAddr),
+		NodeID:          firstNonEmpty(canonicalEdgeNodeID(nodeName), nodeName),
 		CertPEM:         certPEM,
 		KeyPEM:          keyPEM,
 		CABundlePEM:     preRegCABundle,
 		TelemetryURL:    telemetryURL,
 		TelemetryToken:  telemetryToken,
+		Capabilities:    capabilities,
+		BandwidthMbps:   bandwidthMbps,
+		MaxTranscodes:   maxTranscodes,
+		StorageBytes:    storageCapacityBytes,
 		SkipPreflight:   false, // Preflight always runs for manifest mode
 		ApplyTuning:     applyTuning,
 		Timeout:         timeout,
 		Version:         version,
+		DryRun:          dryRun,
 	}
 
 	pool := fwssh.NewPool(30*time.Second, sshKey)
@@ -1204,24 +1331,20 @@ func getRemoteExternalIP(ctx context.Context, sshTarget, sshKey string) (string,
 // Quartermaster auth. The normal edge bootstrap flow (Bridge +
 // enrollment token) does not need this function.
 func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, clusterID, externalIP, region string) error {
-	cfg, err := fwcfg.Load()
-	if err != nil {
+	ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
+	defer cancel()
+
+	fmt.Fprintln(cmd.OutOrStdout(), "    Resolving platform service token")
+	if err := ensureContextServiceToken(ctx, &cliCtx); err != nil {
 		return err
 	}
-	jwt, err := fwcredentials.ResolveUserAuth(fwcfg.OSEnv{}, fwcredentials.DefaultStore())
-	if err != nil {
-		return err
-	}
-	token, err := platformauth.ResolveManifestServiceToken(cmd.Context(), cliCtx, cfg)
-	if err != nil {
-		return err
-	}
-	cliCtx.Auth = fwcfg.Auth{JWT: jwt, ServiceToken: token}
-	ep, err := controlplane.ResolveGRPC(cmd.Context(), cliCtx, "quartermaster")
+	fmt.Fprintln(cmd.OutOrStdout(), "    Resolving Quartermaster gRPC endpoint")
+	ep, err := controlplane.ResolveGRPC(ctx, cliCtx, "quartermaster")
 	if err != nil {
 		return err
 	}
 	defer ep.Cleanup()
+	fmt.Fprintf(cmd.OutOrStdout(), "    Connecting to Quartermaster at %s\n", ep.Address)
 	qmClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
 		GRPCAddr:      ep.Address,
 		Timeout:       30 * time.Second,
@@ -1238,6 +1361,7 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, cluste
 	if nodeID == "" {
 		nodeID = uuid.New().String()
 	}
+	fmt.Fprintf(cmd.OutOrStdout(), "    Upserting node id=%s external_ip=%s region=%s\n", nodeID, firstNonEmpty(externalIP, "<unset>"), firstNonEmpty(region, "<unset>"))
 
 	// Create node request
 	req := &pb.CreateNodeRequest{
@@ -1255,12 +1379,6 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, cluste
 		req.Region = &region
 	}
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
-	defer cancel()
-	if cliCtx.Auth.JWT != "" {
-		ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, cliCtx.Auth.JWT)
-	}
-
 	resp, err := qmClient.CreateNode(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to create node: %w", err)
@@ -1272,16 +1390,45 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, cluste
 	return nil
 }
 
+func ensureContextServiceToken(ctx context.Context, ctxCfg *fwcfg.Context) error {
+	if ctxCfg == nil {
+		return fmt.Errorf("nil context")
+	}
+	if strings.TrimSpace(ctxCfg.Auth.ServiceToken) != "" {
+		ctxCfg.Auth.JWT = ""
+		return nil
+	}
+	cfg, err := fwcfg.Load()
+	if err != nil {
+		return err
+	}
+	token, err := platformauth.ResolveManifestServiceToken(ctx, *ctxCfg, cfg)
+	if err != nil {
+		return err
+	}
+	ctxCfg.Auth = fwcfg.Auth{ServiceToken: token}
+	return nil
+}
+
 // fetchCertFromNavigator fetches a TLS certificate from Navigator service
 func fetchCertFromNavigator(cmd *cobra.Command, cliCtx fwcfg.Context, domain, email string) (certPEM, keyPEM string, err error) {
+	if err := ensureContextServiceToken(cmd.Context(), &cliCtx); err != nil {
+		return "", "", err
+	}
+	ep, err := controlplane.ResolveGRPC(cmd.Context(), cliCtx, "navigator")
+	if err != nil {
+		return "", "", err
+	}
+	defer ep.Cleanup()
+
 	// Create Navigator gRPC client
 	navClient, err := navigator.NewClient(navigator.Config{
-		Addr:          cliCtx.Endpoints.NavigatorGRPCAddr,
+		Addr:          ep.Address,
 		Timeout:       120 * time.Second, // ACME can take a while
 		ServiceToken:  cliCtx.Auth.ServiceToken,
-		AllowInsecure: os.Getenv("GRPC_ALLOW_INSECURE") != "false",
+		AllowInsecure: ep.AllowInsecure,
 		CACertFile:    os.Getenv("GRPC_TLS_CA_PATH"),
-		ServerName:    os.Getenv("GRPC_TLS_SERVER_NAME"),
+		ServerName:    ep.ServerName,
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("failed to connect to Navigator: %w", err)

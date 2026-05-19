@@ -351,6 +351,57 @@ nodes:
 	}
 }
 
+func TestLoadEdgeWithHostsAcceptsCapacityControls(t *testing.T) {
+	dir := t.TempDir()
+
+	hostsYAML := `edge_nodes:
+  edge-eu-1:
+    external_ip: edge-eu-1.example.com
+    user: root
+`
+	if err := os.WriteFile(filepath.Join(dir, "hosts.yaml"), []byte(hostsYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manifestYAML := `version: v1
+type: edge
+root_domain: frameworks.network
+pool_domain: edge.frameworks.network
+email: ops@frameworks.network
+hosts_file: hosts.yaml
+capabilities: [edge, storage]
+bandwidth_mbps: 2000
+max_transcodes: 4
+storage_capacity_bytes: 500000000000
+nodes:
+  - name: edge-eu-1
+    subdomain: edge-eu-1
+    capabilities: [edge]
+    bandwidth_mbps: 1000
+`
+	manifestPath := filepath.Join(dir, "edge.yaml")
+	if err := os.WriteFile(manifestPath, []byte(manifestYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := LoadEdgeWithHosts(manifestPath, "")
+	if err != nil {
+		t.Fatalf("LoadEdgeWithHosts returned error: %v", err)
+	}
+	if got := manifest.Nodes[0].ResolvedBandwidthMbps(manifest.BandwidthMbps); got != 1000 {
+		t.Fatalf("resolved bandwidth = %d, want 1000", got)
+	}
+	if got := strings.Join(manifest.Nodes[0].ResolvedCapabilities(manifest.Capabilities), ","); got != "edge" {
+		t.Fatalf("resolved capabilities = %q, want edge", got)
+	}
+	if got := manifest.Nodes[0].ResolvedMaxTranscodes(manifest.MaxTranscodes); got != 4 {
+		t.Fatalf("resolved max transcodes = %d, want 4", got)
+	}
+	if got := manifest.Nodes[0].ResolvedStorageBytes(manifest.StorageBytes); got != 500000000000 {
+		t.Fatalf("resolved storage bytes = %d, want 500000000000", got)
+	}
+}
+
 func TestLoadWithHostsFile(t *testing.T) {
 	dir := t.TempDir()
 

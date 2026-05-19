@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
@@ -107,5 +109,70 @@ func TestEdgeManifestVersionFlagOverridesChannel(t *testing.T) {
 	}
 	if nodeVersion == manifest.Version {
 		t.Fatal("nodeVersion must not equal schema version")
+	}
+}
+
+func TestResolveEdgeClusterManifestPathUsesOverride(t *testing.T) {
+	dir := t.TempDir()
+	edgePath := filepath.Join(dir, "edge.yaml")
+	clusterPath := filepath.Join(dir, "platform.yaml")
+	writeEdgeTestFile(t, edgePath, "version: v1\n")
+	writeEdgeTestFile(t, clusterPath, "version: v1\ntype: cluster\n")
+
+	got, err := resolveEdgeClusterManifestPath(edgePath, &inventory.EdgeManifest{ClusterManifest: "ignored.yaml"}, clusterPath)
+	if err != nil {
+		t.Fatalf("resolveEdgeClusterManifestPath returned error: %v", err)
+	}
+	if got != clusterPath {
+		t.Fatalf("path = %q, want %q", got, clusterPath)
+	}
+}
+
+func TestResolveEdgeClusterManifestPathUsesManifestField(t *testing.T) {
+	dir := t.TempDir()
+	edgePath := filepath.Join(dir, "edge.yaml")
+	clusterPath := filepath.Join(dir, "manifests", "cluster.yaml")
+	writeEdgeTestFile(t, edgePath, "version: v1\n")
+	writeEdgeTestFile(t, clusterPath, "version: v1\ntype: cluster\n")
+
+	got, err := resolveEdgeClusterManifestPath(edgePath, &inventory.EdgeManifest{ClusterManifest: "manifests/cluster.yaml"}, "")
+	if err != nil {
+		t.Fatalf("resolveEdgeClusterManifestPath returned error: %v", err)
+	}
+	if got != clusterPath {
+		t.Fatalf("path = %q, want %q", got, clusterPath)
+	}
+}
+
+func TestResolveEdgeClusterManifestPathFallsBackToSiblingClusterYAML(t *testing.T) {
+	dir := t.TempDir()
+	edgePath := filepath.Join(dir, "custom-edge.yaml")
+	clusterPath := filepath.Join(dir, "cluster.yaml")
+	writeEdgeTestFile(t, edgePath, "version: v1\n")
+	writeEdgeTestFile(t, clusterPath, "version: v1\ntype: cluster\n")
+
+	got, err := resolveEdgeClusterManifestPath(edgePath, &inventory.EdgeManifest{}, "")
+	if err != nil {
+		t.Fatalf("resolveEdgeClusterManifestPath returned error: %v", err)
+	}
+	if got != clusterPath {
+		t.Fatalf("path = %q, want %q", got, clusterPath)
+	}
+}
+
+func TestEdgeManifestFetchCertDoesNotRequireControlPlane(t *testing.T) {
+	manifest := &inventory.EdgeManifest{FetchCert: true}
+	if edgeManifestNeedsControlPlane(manifest) {
+		t.Fatal("fetch_cert is deprecated for manifest provisioning and must not force platform control-plane context")
+	}
+}
+
+func writeEdgeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
 	}
 }
