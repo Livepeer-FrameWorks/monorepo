@@ -3,7 +3,7 @@ set -euo pipefail
 
 required_files=(
   "infrastructure/demo-recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4"
-  "infrastructure/demo-recordings/vod/c3d4e5f678901234567890123456abcd.webm"
+  "infrastructure/demo-recordings/vod/c3d4e5f678901234567890123456abcd.mp4"
   "infrastructure/demo-recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/fedcba98765432109876543210fedcba/fedcba98765432109876543210fedcba.m3u8"
   "infrastructure/demo-recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/fedcba98765432109876543210fedcba/segments/segment_0.ts"
   "infrastructure/demo-recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/fedcba98765432109876543210fedcba/segments/segment_1.ts"
