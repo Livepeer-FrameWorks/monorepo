@@ -26,6 +26,9 @@ func TestInsertProcessingJob_InsertsNewActiveJob(t *testing.T) {
 	mock.ExpectExec("INSERT INTO foghorn.processing_jobs").
 		WithArgs(sqlmock.AnyArg(), "tenant-1", "art-1", "process", nil, nil, nil, nil, nil).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE foghorn.artifacts").
+		WithArgs("art-1", "tenant-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	jobID, err := InsertProcessingJob(context.Background(), db, "tenant-1", "art-1", "process", nil, "")
@@ -35,6 +38,56 @@ func TestInsertProcessingJob_InsertsNewActiveJob(t *testing.T) {
 	if jobID == "" {
 		t.Fatal("expected non-empty job ID")
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProcessingDispatcherProjectsArtifactProcessingStatus(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec("UPDATE foghorn.artifacts").
+		WithArgs("art-1", "tenant-1", "processing").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	d := NewProcessingDispatcher(ProcessingDispatcherConfig{
+		DB:     db,
+		Logger: logging.NewLogger(),
+	})
+	d.markArtifactProcessing(context.Background(), &processingJob{
+		JobID:        "job-1",
+		TenantID:     "tenant-1",
+		ArtifactHash: sql.NullString{String: "art-1", Valid: true},
+		ArtifactType: sql.NullString{String: "clip", Valid: true},
+	})
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProcessingDispatcherDoesNotProjectNonMediaArtifactStatus(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	d := NewProcessingDispatcher(ProcessingDispatcherConfig{
+		DB:     db,
+		Logger: logging.NewLogger(),
+	})
+	d.markArtifactProcessing(context.Background(), &processingJob{
+		JobID:        "job-1",
+		TenantID:     "tenant-1",
+		ArtifactHash: sql.NullString{String: "art-1", Valid: true},
+		ArtifactType: sql.NullString{String: "dvr", Valid: true},
+	})
+
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}

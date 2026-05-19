@@ -254,6 +254,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 			"reason":   reason,
 		}).Debug("No processing node available for job")
 		d.revertToQueued(ctx, job.JobID)
+		d.markArtifactQueued(ctx, job, "no processing node available")
 		return
 	}
 
@@ -265,6 +266,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		if err != nil {
 			d.logger.WithError(err).WithField("job_id", job.JobID).Warn("Failed to generate presigned URL for processing job")
 			d.revertToQueued(ctx, job.JobID)
+			d.markArtifactQueued(ctx, job, "presign failed")
 			return
 		}
 		sourceURL = presigned
@@ -283,6 +285,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		if err := json.Unmarshal([]byte(job.SourceParams.String), &sourceParams); err != nil {
 			d.logger.WithError(err).WithField("job_id", job.JobID).Warn("Failed to parse processing job source params")
 			d.revertToQueued(ctx, job.JobID)
+			d.markArtifactQueued(ctx, job, "invalid source params")
 			return
 		}
 		for k, v := range sourceParams {
@@ -339,6 +342,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 			"node_id": nodeID,
 		}).Warn("Failed to dispatch processing job")
 		d.revertToQueued(ctx, job.JobID)
+		d.markArtifactQueued(ctx, job, "dispatch failed")
 		return
 	}
 
@@ -356,6 +360,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		d.logger.WithError(err).WithField("job_id", job.JobID).Warn("Failed to update job routing metadata")
 		return
 	}
+	d.markArtifactProcessing(ctx, job)
 	d.emitProcessingStarted(job, nodeID)
 
 	d.logger.WithFields(logging.Fields{
@@ -364,6 +369,43 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		"node_id":  nodeID,
 		"reason":   reason,
 	}).Info("Dispatched processing job")
+}
+
+func (d *ProcessingDispatcher) markArtifactQueued(ctx context.Context, job *processingJob, reason string) {
+	d.markArtifactStatus(ctx, job, "queued", reason)
+}
+
+func (d *ProcessingDispatcher) markArtifactProcessing(ctx context.Context, job *processingJob) {
+	d.markArtifactStatus(ctx, job, "processing", "")
+}
+
+func (d *ProcessingDispatcher) markArtifactStatus(ctx context.Context, job *processingJob, nextStatus, reason string) {
+	if job == nil || !job.ArtifactHash.Valid || job.ArtifactHash.String == "" || job.TenantID == "" {
+		return
+	}
+	artifactType := job.ArtifactType.String
+	if artifactType != "clip" && artifactType != "vod" {
+		return
+	}
+	if _, err := d.db.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		   SET status = $3,
+		       error_message = CASE WHEN $3 = 'processing' THEN NULL ELSE error_message END,
+		       updated_at = NOW()
+		 WHERE artifact_hash = $1
+		   AND tenant_id::text = $2
+		   AND artifact_type IN ('clip', 'vod')
+		   AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
+	`, job.ArtifactHash.String, job.TenantID, nextStatus); err != nil {
+		fields := logging.Fields{
+			"artifact_hash": job.ArtifactHash.String,
+			"status":        nextStatus,
+		}
+		if reason != "" {
+			fields["reason"] = reason
+		}
+		d.logger.WithError(err).WithFields(fields).Warn("Failed to project processing job status onto artifact")
+	}
 }
 
 func (d *ProcessingDispatcher) emitProcessingStarted(job *processingJob, nodeID string) {
@@ -495,21 +537,32 @@ func (d *ProcessingDispatcher) recoverStale() {
 
 	// Requeue jobs that haven't exceeded max retries
 	result, err := d.db.ExecContext(ctx, `
-		UPDATE foghorn.processing_jobs
-		SET status = 'queued',
-		    processing_node_id = NULL,
-		    retry_count = retry_count + 1,
-		    updated_at = NOW()
-		WHERE status IN ('dispatched', 'processing')
-		  AND updated_at < $1
-		  AND retry_count < $2
+		WITH requeued AS (
+			UPDATE foghorn.processing_jobs
+			SET status = 'queued',
+			    processing_node_id = NULL,
+			    retry_count = retry_count + 1,
+			    updated_at = NOW()
+			WHERE status IN ('dispatched', 'processing')
+			  AND updated_at < $1
+			  AND retry_count < $2
+			RETURNING artifact_hash, tenant_id
+		)
+		UPDATE foghorn.artifacts a
+		   SET status = 'queued',
+		       updated_at = NOW()
+		  FROM requeued r
+		 WHERE a.artifact_hash = r.artifact_hash
+		   AND a.tenant_id = r.tenant_id
+		   AND a.artifact_type IN ('clip', 'vod')
+		   AND a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
 	`, ttlCutoff, d.maxRetries)
 	if err != nil {
 		d.logger.WithError(err).Warn("Failed to recover stale processing jobs")
 		return
 	}
 	if n, _ := result.RowsAffected(); n > 0 {
-		d.logger.WithField("count", n).Info("Recovered stale processing jobs (requeued)")
+		d.logger.WithField("artifacts", n).Info("Recovered stale processing jobs (requeued)")
 	}
 
 	// Fail jobs that exceeded max retries and reconcile their artifacts
@@ -549,12 +602,30 @@ func (d *ProcessingDispatcher) recoverStale() {
 			"job_id":        jobID,
 			"artifact_hash": artifactHash.String,
 		}).Warn("Processing job exhausted max retries")
-		if artifactHash.Valid && artifactType == "clip" {
-			d.failClipArtifact(ctx, artifactHash.String, tenantID, streamID, streamInternalName, "max retries exceeded")
+		if artifactHash.Valid {
+			switch artifactType {
+			case "clip":
+				d.failClipArtifact(ctx, artifactHash.String, tenantID, streamID, streamInternalName, "max retries exceeded")
+			case "vod":
+				d.failVODArtifact(ctx, artifactHash.String, tenantID, "max retries exceeded")
+			}
 		}
 		if d.onJobExhausted != nil && artifactHash.Valid {
 			d.onJobExhausted(ctx, jobID, artifactHash.String)
 		}
+	}
+}
+
+func (d *ProcessingDispatcher) failVODArtifact(ctx context.Context, artifactHash, tenantID, errorMsg string) {
+	if _, err := d.db.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		   SET status = 'failed',
+		       error_message = $3,
+		       updated_at = NOW()
+		 WHERE artifact_hash = $1
+		   AND tenant_id::text = $2
+	`, artifactHash, tenantID, errorMsg); err != nil {
+		d.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to mark exhausted VOD artifact failed")
 	}
 }
 
@@ -681,6 +752,18 @@ func InsertProcessingJobWithSourceParams(ctx context.Context, db *sql.DB, tenant
 		INSERT INTO foghorn.processing_jobs (job_id, tenant_id, artifact_hash, job_type, status, parent_job_id, processes_json, source_url, source_params, preferred_node_id)
 		VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8::jsonb, $9)
 	`, jobID, tenantID, artifactHash, jobType, parentID, pJSON, srcURL, srcParams, preferredNode); err != nil {
+		return "", err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		   SET status = 'queued',
+		       updated_at = NOW()
+		 WHERE artifact_hash = $1
+		   AND tenant_id::text = $2
+		   AND artifact_type = 'clip'
+		   AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
+	`, artifactHash, tenantID); err != nil {
 		return "", err
 	}
 
