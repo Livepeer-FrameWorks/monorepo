@@ -202,9 +202,6 @@
     }
     return byID;
   });
-  let inProgressArtifacts = $derived(
-    artifactStates.filter((s) => !isTerminalArtifactStage(s.stage))
-  );
 
   // Storage events (freeze/defrost) — deduplicate by id to avoid keyed-each errors
   let storageEvents = $derived.by(() => {
@@ -314,6 +311,27 @@
     return unified.sort((a, b) => {
       const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
       const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return dateB - dateA;
+    });
+  });
+  let artifactStatusByPlaybackId = $derived.by(() => {
+    const byID = new SvelteMap<string, string>();
+    for (const artifact of allArtifacts) {
+      if (artifact.playbackId) {
+        byID.set(artifact.playbackId, artifact.status);
+      }
+    }
+    return byID;
+  });
+  let inProgressArtifacts = $derived.by(() => {
+    const unresolved = [...artifactStatesByPlaybackId.values()].filter((state) => {
+      const rowStatus = state.playbackId ? artifactStatusByPlaybackId.get(state.playbackId) : null;
+      if (rowStatus && isTerminalArtifactStage(rowStatus)) return false;
+      return !isTerminalArtifactStage(state.stage);
+    });
+    return unresolved.sort((a, b) => {
+      const dateA = new Date(a.startedAt ?? a.requestedAt ?? 0).getTime();
+      const dateB = new Date(b.startedAt ?? b.requestedAt ?? 0).getTime();
       return dateB - dateA;
     });
   });
@@ -608,6 +626,8 @@
 
   // Create clip
   async function createClip() {
+    if (creatingClip) return;
+
     if (!clipTitle.trim() || !selectedStreamId) {
       toast.warning("Please fill in all required fields");
       return;

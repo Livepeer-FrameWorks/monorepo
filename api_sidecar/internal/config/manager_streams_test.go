@@ -33,6 +33,9 @@ func TestStreamConfigsFromSeedSkipsWildcardInstances(t *testing.T) {
 	if got := streams["dvr"]["source"]; got != inertMistSource {
 		t.Fatalf("dvr source = %v, want %q", got, inertMistSource)
 	}
+	if got := streams["dvr"]["realtime"]; got != false {
+		t.Fatalf("dvr realtime = %v, want false from seed", got)
+	}
 	if got := streams["dvr"]["DVR"]; got != 120000 {
 		t.Fatalf("dvr DVR = %v, want 120000", got)
 	}
