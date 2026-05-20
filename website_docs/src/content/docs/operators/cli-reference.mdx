@@ -495,6 +495,36 @@ frameworks cluster logs bridge --tail 500
 frameworks cluster logs decklog -n 100 -f
 ```
 
+### frameworks cluster logs snapshot
+
+Collect a bounded debugging snapshot from every cluster host. Each host gets a
+local log file with host metadata, failed units, `frameworks-*` service status,
+journal excerpts, suspicious log summaries, and internal PKI cert/key checks.
+
+**Usage:**
+
+```bash
+frameworks cluster logs snapshot [flags]
+```
+
+**Flags:**
+
+- `--manifest string` - Cluster manifest file
+- `--since string` - Journal window when `--boot` is not set (default: `4 hours ago`)
+- `--boot` - Collect logs from the current boot instead of `--since`
+- `--tail int` - Maximum journal lines per unit; set `0` for all lines in scope (default: 500)
+- `--output, -o string` - Local output directory; defaults to a temp directory
+- `--parallel int` - Maximum hosts to collect in parallel (default: 6)
+- `--edge-manifest string` - Optional edge manifest to include edge nodes
+
+**Examples:**
+
+```bash
+frameworks cluster logs snapshot --since "2 hours ago"
+frameworks cluster logs snapshot --boot --tail 800 --edge-manifest ./clusters/production/edge.yaml
+frameworks cluster logs snapshot --output /tmp/fw-logs
+```
+
 ---
 
 ### frameworks cluster os
