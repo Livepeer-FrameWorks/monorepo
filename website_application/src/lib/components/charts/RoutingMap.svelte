@@ -173,6 +173,7 @@
 
   let mapContainer = $state<HTMLElement>();
   let mapWrapper = $state<HTMLElement>();
+  let mapControls = $state<HTMLElement>();
   let map: LeafletMap | null = null;
   let layerGroup: LayerGroup | null = null;
   let bucketLayer: LayerGroup | null = null;
@@ -261,6 +262,10 @@
 
     // Enable scroll zoom only with modifier key (Alt/Option or Ctrl)
     mapContainer.addEventListener("wheel", handleWheel, { passive: false });
+    if (mapControls) {
+      L.DomEvent.disableClickPropagation(mapControls);
+      L.DomEvent.disableScrollPropagation(mapControls);
+    }
 
     // Order matters: first added is at the bottom
     bucketLayer = L.layerGroup().addTo(map);
@@ -275,7 +280,7 @@
     orchestratorLayer = L.layerGroup().addTo(map);
 
     drawMap(routes, nodes, buckets, flows, clusters, relationships);
-    drawOrchestrators(orchestratorVantages);
+    drawOrchestrators(showOrchestrators ? orchestratorVantages : []);
   }
 
   function handleWheel(e: WheelEvent) {
@@ -297,6 +302,14 @@
 
   function resetView() {
     map?.setView(center, zoom);
+  }
+
+  function toggleOrchestrators(event: MouseEvent) {
+    event.stopPropagation();
+    const next = !showOrchestrators;
+    showOrchestrators = next;
+    if (!next) selectedDetail = null;
+    drawOrchestrators(next ? orchestratorVantages : []);
   }
 
   function formatLoad(current: number | undefined, max: number | undefined): string {
@@ -988,7 +1001,10 @@
     const leaflet = L;
     orchestratorLayer.clearLayers();
     orchestratorSpreadables = [];
-    if (!vantages.length) return;
+    if (!vantages.length) {
+      applySpread();
+      return;
+    }
 
     const visibleVantages = dedupeOrchestratorVantages(vantages);
     for (const v of visibleVantages) {
@@ -1054,23 +1070,22 @@
   {/if}
 
   <!-- Map Controls -->
-  <div class="map-controls">
-    <button class="map-control-btn" onclick={resetView} title="Reset view">
+  <div bind:this={mapControls} class="map-controls">
+    <button class="map-control-btn" type="button" onclick={resetView} title="Reset view">
       <HomeIcon class="w-4 h-4" />
     </button>
     <button
       class="map-control-btn"
+      type="button"
       class:map-control-btn--active={showOrchestrators}
-      onclick={() => {
-        showOrchestrators = !showOrchestrators;
-        if (!showOrchestrators) selectedDetail = null;
-      }}
+      onclick={toggleOrchestrators}
       title={showOrchestrators ? "Hide Livepeer compute" : "Show Livepeer compute"}
     >
       <CpuIcon class="w-4 h-4" />
     </button>
     <button
       class="map-control-btn"
+      type="button"
       onclick={toggleFullscreen}
       title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
     >

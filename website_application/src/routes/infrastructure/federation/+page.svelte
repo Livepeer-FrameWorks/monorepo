@@ -8,8 +8,6 @@
     GetFederationSummaryStore,
     GetFederationEventsStore,
     GetOrchestratorVantagesStore,
-    GetOrchestratorStore,
-    GetOrchestratorPerformanceSeriesStore,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
@@ -17,7 +15,6 @@
   import EmptyState from "$lib/components/EmptyState.svelte";
   import InfrastructureMetricCard from "$lib/components/shared/InfrastructureMetricCard.svelte";
   import RoutingMap from "$lib/components/charts/RoutingMap.svelte";
-  import OrchestratorSidePanel from "$lib/components/dashboard/OrchestratorSidePanel.svelte";
   import { Badge } from "$lib/components/ui/badge";
   import { getIconComponent } from "$lib/iconUtils";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
@@ -36,10 +33,6 @@
   const summaryStore = new GetFederationSummaryStore();
   const eventsStore = new GetFederationEventsStore();
   const orchVantagesStore = new GetOrchestratorVantagesStore();
-  const orchDetailStore = new GetOrchestratorStore();
-  const orchPerformanceStore = new GetOrchestratorPerformanceSeriesStore();
-
-  let selectedOrchAddr = $state<string | null>(null);
 
   let isAuthenticated = false;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -113,27 +106,6 @@
       instanceCount: instanceCountByOrch.get(v.orchAddr)?.size ?? 1,
     }))
   );
-
-  let selectedOrchestrator = $derived($orchDetailStore.data?.orchestrator ?? null);
-  let selectedOrchestratorPerformance = $derived(
-    $orchPerformanceStore.data?.orchestratorPerformanceSeries ?? []
-  );
-
-  function handleOrchestratorClick(orchAddr: string) {
-    selectedOrchAddr = orchAddr;
-    void orchDetailStore.fetch({ variables: { orchAddr } });
-    void orchPerformanceStore.fetch({
-      variables: {
-        orchAddr,
-        interval: "1h",
-        timeRange: { start: currentRange.start, end: currentRange.end },
-      },
-    });
-  }
-
-  function closeOrchestratorPanel() {
-    selectedOrchAddr = null;
-  }
 
   // Transform nodes for RoutingMap
   let mapNodes = $derived(
@@ -352,15 +324,6 @@
     if (!value) return;
     timeRange = value;
     await loadData();
-    if (selectedOrchAddr) {
-      await orchPerformanceStore.fetch({
-        variables: {
-          orchAddr: selectedOrchAddr,
-          interval: "1h",
-          timeRange: { start: currentRange.start, end: currentRange.end },
-        },
-      });
-    }
   }
 
   // Metric cards
@@ -579,22 +542,9 @@
               relationships={mapRelationships}
               {serviceInstances}
               orchestratorVantages={mapOrchestratorVantages}
-              onOrchestratorClick={handleOrchestratorClick}
               height={450}
               zoom={2}
             />
-
-            {#if selectedOrchAddr}
-              <div class="mt-3">
-                <OrchestratorSidePanel
-                  orchestrator={selectedOrchestrator?.orchestrator ?? null}
-                  instances={selectedOrchestrator?.instances ?? []}
-                  vantages={selectedOrchestrator?.vantages ?? []}
-                  performancePoints={selectedOrchestratorPerformance}
-                  onClose={closeOrchestratorPanel}
-                />
-              </div>
-            {/if}
 
             <!-- Summary footer -->
             <div
