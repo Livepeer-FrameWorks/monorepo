@@ -207,6 +207,22 @@ func TestEdgeManifestFetchCertDoesNotRequireControlPlane(t *testing.T) {
 	}
 }
 
+func TestEdgeEnrollmentTokenRequestBindsClusterOwnerTenant(t *testing.T) {
+	req := edgeEnrollmentTokenRequest("media-eu-1", "edge-eu-1", "00000000-0000-0000-0000-000000000001")
+	if req.GetClusterId() != "media-eu-1" {
+		t.Fatalf("ClusterId = %q, want media-eu-1", req.GetClusterId())
+	}
+	if req.GetTenantId() != "00000000-0000-0000-0000-000000000001" {
+		t.Fatalf("TenantId = %q, want system tenant", req.GetTenantId())
+	}
+	if req.GetName() != "edge provision: edge-eu-1" {
+		t.Fatalf("Name = %q, want edge provision name", req.GetName())
+	}
+	if req.GetTtl() != edgeProvisionEnrollmentTokenTTL {
+		t.Fatalf("Ttl = %q, want %q", req.GetTtl(), edgeProvisionEnrollmentTokenTTL)
+	}
+}
+
 func writeEdgeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

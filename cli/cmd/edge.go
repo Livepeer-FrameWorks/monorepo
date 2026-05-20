@@ -44,9 +44,10 @@ import (
 )
 
 const (
-	minDiskFreeBytes   = 20 * 1024 * 1024 * 1024
-	minDiskFreePercent = 10.0
-	darwinLogDir       = "/usr/local/var/log/frameworks"
+	minDiskFreeBytes                = 20 * 1024 * 1024 * 1024
+	minDiskFreePercent              = 10.0
+	darwinLogDir                    = "/usr/local/var/log/frameworks"
+	edgeProvisionEnrollmentTokenTTL = "2h"
 )
 
 var edgeNodeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,99}$`)
@@ -760,8 +761,12 @@ Multi-node manifest example:
 					if registerNode {
 						fmt.Fprintln(cmd.OutOrStdout(), "  - Registering node in Quartermaster")
 						externalIP := resolveEdgeExternalIP(ctx, sshTarget, sshKey, "")
-						if errRegister := registerEdgeNode(cmd, cliCtx, sshKey, nodeName, clusterID, externalIP, region); errRegister != nil {
+						mintedToken, errRegister := registerEdgeNode(cmd, cliCtx, sshKey, nodeName, clusterID, externalIP, region)
+						if errRegister != nil {
 							return fmt.Errorf("node registration failed: %w", errRegister)
+						}
+						if strings.TrimSpace(cfg.EnrollmentToken) == "" {
+							cfg.EnrollmentToken = mintedToken
 						}
 					}
 					if fetchCert {
@@ -1238,8 +1243,12 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 				} else {
 					fmt.Fprintf(cmd.OutOrStdout(), "  - Registering node %s in cluster %s via Quartermaster\n", nodeName, clusterID)
 					externalIP := resolveEdgeExternalIP(ctx, sshTarget, sshKey, knownExternalIP)
-					if err := registerEdgeNode(cmd, cliCtx, sshKey, nodeName, clusterID, externalIP, region); err != nil {
+					mintedToken, err := registerEdgeNode(cmd, cliCtx, sshKey, nodeName, clusterID, externalIP, region)
+					if err != nil {
 						return fmt.Errorf("node registration failed: %w", err)
+					}
+					if strings.TrimSpace(cfg.EnrollmentToken) == "" {
+						cfg.EnrollmentToken = mintedToken
 					}
 				}
 			}
@@ -1412,19 +1421,19 @@ func getRemoteExternalIP(ctx context.Context, sshTarget, sshKey string) (string,
 // Platform-admin direct path — uses the gitops-sourced SERVICE_TOKEN for
 // Quartermaster auth. The normal edge bootstrap flow (Bridge +
 // enrollment token) does not need this function.
-func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshKey, nodeName, clusterID, externalIP, region string) error {
+func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshKey, nodeName, clusterID, externalIP, region string) (string, error) {
 	ctx, cancel := context.WithTimeout(cmd.Context(), 90*time.Second)
 	defer cancel()
 
 	fmt.Fprintln(cmd.OutOrStdout(), "    Resolving platform service token")
 	if err := ensureContextServiceToken(ctx, &cliCtx); err != nil {
-		return err
+		return "", err
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "    Resolving Quartermaster gRPC endpoint")
 	qmClient, qmAddr, cleanup, err := edgeQuartermasterRegistrationClient(ctx, cliCtx, sshKey)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer cleanup()
 	fmt.Fprintf(cmd.OutOrStdout(), "    Connecting to Quartermaster at %s\n", qmAddr)
@@ -1434,7 +1443,7 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshKey, nodeName
 	healthCtx, healthCancel := context.WithTimeout(ctx, 10*time.Second)
 	if healthErr := qmClient.CheckHealth(healthCtx); healthErr != nil {
 		healthCancel()
-		return fmt.Errorf("quartermaster gRPC health check failed at %s: %w", qmAddr, healthErr)
+		return "", fmt.Errorf("quartermaster gRPC health check failed at %s: %w", qmAddr, healthErr)
 	}
 	healthCancel()
 
@@ -1465,13 +1474,45 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshKey, nodeName
 	resp, err := qmClient.CreateNode(createCtx, req)
 	createCancel()
 	if err != nil {
-		return fmt.Errorf("failed to create node via Quartermaster at %s: %w", qmAddr, err)
+		return "", fmt.Errorf("failed to create node via Quartermaster at %s: %w", qmAddr, err)
 	}
 
 	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Node registered: %s (ID: %s)", nodeName, resp.GetNode().GetNodeId()))
 	ux.Success(cmd.OutOrStdout(), "Node registered (DNS will be synced by Navigator reconciler)")
 
-	return nil
+	tokenTenantID := strings.TrimSpace(resp.GetNode().GetOwnerTenantId())
+	if tokenTenantID == "" {
+		return "", fmt.Errorf("node %s is in cluster %s, but Quartermaster returned no cluster owner_tenant_id for enrollment token binding", nodeID, clusterID)
+	}
+	enrollmentReq := edgeEnrollmentTokenRequest(clusterID, nodeName, tokenTenantID)
+	fmt.Fprintln(cmd.OutOrStdout(), "    Minting short-lived enrollment token")
+	tokenCtx, tokenCancel := context.WithTimeout(ctx, 15*time.Second)
+	tokenResp, err := qmClient.CreateEnrollmentToken(tokenCtx, enrollmentReq)
+	tokenCancel()
+	if err != nil {
+		return "", fmt.Errorf("failed to create enrollment token via Quartermaster at %s: %w", qmAddr, err)
+	}
+	token := tokenResp.GetToken().GetToken()
+	if token == "" {
+		return "", fmt.Errorf("quartermaster returned an empty enrollment token")
+	}
+
+	return token, nil
+}
+
+func edgeEnrollmentTokenRequest(clusterID, nodeName, tenantID string) *pb.CreateEnrollmentTokenRequest {
+	tokenName := "edge provision"
+	if trimmed := strings.TrimSpace(nodeName); trimmed != "" {
+		tokenName = "edge provision: " + trimmed
+	}
+	tokenTTL := edgeProvisionEnrollmentTokenTTL
+	tenantID = strings.TrimSpace(tenantID)
+	return &pb.CreateEnrollmentTokenRequest{
+		ClusterId: clusterID,
+		TenantId:  &tenantID,
+		Name:      &tokenName,
+		Ttl:       &tokenTTL,
+	}
 }
 
 func edgeQuartermasterRegistrationClient(ctx context.Context, cliCtx fwcfg.Context, sshKey string) (*quartermaster.GRPCClient, string, func(), error) {
