@@ -1948,6 +1948,7 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 			"navigator":        {Enabled: true, Host: "central-eu-1"},
 			"chandler":         {Enabled: true, Host: "central-eu-1"},
 			"foghorn":          {Enabled: true, Host: "central-eu-1"},
+			"livepeer-gateway": {Enabled: true, Host: "central-eu-1", Cluster: "core-central-primary"},
 			"deckhand":         {Enabled: true, Host: "central-eu-1"},
 			"skipper":          {Enabled: true, Host: "central-eu-1"},
 			"chatwoot":         {Enabled: true, Host: "central-eu-1", Port: 18092},
@@ -2032,6 +2033,14 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 				"NAVIGATOR_GRPC_ADDR":       "navigator.internal:18011",
 			},
 			keys: []string{"DATABASE_URL", "SERVICE_TOKEN", "DECKLOG_GRPC_ADDR", "PURSER_GRPC_ADDR", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
+		},
+		{
+			serviceID: "livepeer-gateway",
+			want: map[string]string{
+				"FRAMEWORKS_DECKLOG_GRPC_ADDR": "decklog.internal:18006",
+				"FRAMEWORKS_DECKLOG_TLS_MODE":  "mtls",
+			},
+			keys: []string{"SERVICE_TOKEN", "GRPC_TLS_CA_PATH"},
 		},
 		{
 			serviceID: "deckhand",

@@ -5769,14 +5769,11 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 				}
 			}
 		}
-		// Decklog endpoint discovery. Internal service DNS owns regional
-		// placement; clients dial the service identity so TLS verifies against
-		// decklog.internal instead of a concrete node name.
-		if env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] == "" {
-			if addr, err := resolveServiceGRPCAddr(manifest, "decklog", defaultGRPCPort("decklog")); err == nil {
-				env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] = addr
-			}
+		decklogPort := defaultGRPCPort("decklog")
+		if decklogSvc, ok := manifest.Services["decklog"]; ok && decklogSvc.GRPCPort != 0 {
+			decklogPort = decklogSvc.GRPCPort
 		}
+		env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] = fmt.Sprintf("decklog.internal:%d", decklogPort)
 		if env["FRAMEWORKS_DECKLOG_TLS_MODE"] == "" {
 			if _, ok := manifest.Services["navigator"]; ok {
 				env["FRAMEWORKS_DECKLOG_TLS_MODE"] = "mtls"
@@ -5789,12 +5786,14 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		// Privateer happens to return, including the wrong-cell one.
 		if env["auth_webhook_url"] == "" {
 			if foghornSvc, ok := foghornForCluster(manifest, task.ClusterID); ok {
-				if host, ok := firstServiceHost(manifest, foghornSvc); ok {
+				if hostName, ok := firstServiceHostName(foghornSvc); ok {
 					port := foghornSvc.Port
 					if port == 0 {
 						port = defaultPort("foghorn")
 					}
-					env["auth_webhook_url"] = fmt.Sprintf("http://%s:%d/webhooks/livepeer/auth", manifestMeshHostname(manifest, host.Name), port)
+					if meshHost := manifestMeshHostname(manifest, hostName); meshHost != "" {
+						env["auth_webhook_url"] = fmt.Sprintf("http://%s:%d/webhooks/livepeer/auth", meshHost, port)
+					}
 				}
 			}
 		}
@@ -6410,6 +6409,16 @@ func foghornForCluster(manifest *inventory.Manifest, clusterID string) (inventor
 		return inventory.ServiceConfig{}, false
 	}
 	return svc, true
+}
+
+func firstServiceHostName(svc inventory.ServiceConfig) (string, bool) {
+	if svc.Host != "" {
+		return svc.Host, true
+	}
+	if len(svc.Hosts) > 0 && svc.Hosts[0] != "" {
+		return svc.Hosts[0], true
+	}
+	return "", false
 }
 
 // chandlerForCluster returns the Chandler service entry assigned to the
