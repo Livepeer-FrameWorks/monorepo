@@ -83,3 +83,20 @@ edge-caddy  caddy     Up 2 hours
 		t.Errorf("expected caddy, got %s", checks[0].Name)
 	}
 }
+
+func TestEdgeFoghornUsesInternalCA(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		addr string
+		want bool
+	}{
+		{addr: "foghorn.internal:18019", want: true},
+		{addr: "foghorn.media-eu-1.frameworks.network:18019", want: false},
+		{addr: "foghorn.frameworks.network:18019", want: false},
+	}
+	for _, tt := range cases {
+		if got := edgeFoghornUsesInternalCA(tt.addr); got != tt.want {
+			t.Fatalf("edgeFoghornUsesInternalCA(%q) = %v, want %v", tt.addr, got, tt.want)
+		}
+	}
+}

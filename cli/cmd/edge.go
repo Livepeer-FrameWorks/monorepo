@@ -1114,6 +1114,18 @@ func edgeManifestFoghornGRPCAddr(rootDomain, clusterID string) string {
 	return fmt.Sprintf("foghorn.%s.%s:%d", clusterID, rootDomain, defaultGRPCPort("foghorn"))
 }
 
+func edgeFoghornUsesInternalCA(addr string) bool {
+	host := strings.TrimSpace(addr)
+	if host == "" {
+		return false
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	return host == "foghorn.internal" || strings.HasSuffix(host, ".internal")
+}
+
 func edgeManifestNodeDomain(rootDomain, clusterID, subdomain string) string {
 	rootDomain = strings.Trim(strings.TrimSpace(rootDomain), ".")
 	clusterID = strings.TrimSpace(clusterID)
@@ -1187,6 +1199,12 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		host.Name = firstNonEmpty(canonicalEdgeNodeID(nodeName), nodeName)
 	}
 
+	foghornAddr := firstNonEmpty(preRegFoghornAddr, foghornGRPCAddr, cliCtx.Endpoints.FoghornGRPCAddr)
+	edgeCABundlePEM := firstNonEmpty(preRegCABundle, caBundlePEM)
+	if !edgeFoghornUsesInternalCA(foghornAddr) {
+		edgeCABundlePEM = ""
+	}
+
 	// Build EdgeProvisionConfig
 	config := provisioner.EdgeProvisionConfig{
 		Mode:            mode,
@@ -1197,9 +1215,9 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		Region:          region,
 		Email:           email,
 		EnrollmentToken: enrollmentToken,
-		FoghornGRPCAddr: firstNonEmpty(preRegFoghornAddr, foghornGRPCAddr, cliCtx.Endpoints.FoghornGRPCAddr),
+		FoghornGRPCAddr: foghornAddr,
 		NodeID:          firstNonEmpty(canonicalEdgeNodeID(nodeName), nodeName),
-		CABundlePEM:     firstNonEmpty(preRegCABundle, caBundlePEM),
+		CABundlePEM:     edgeCABundlePEM,
 		TelemetryURL:    telemetryURL,
 		TelemetryToken:  telemetryToken,
 		Capabilities:    capabilities,

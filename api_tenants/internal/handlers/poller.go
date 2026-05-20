@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -80,6 +81,7 @@ func StartHealthPoller() {
 
 type serviceInstance struct {
 	id, serviceID, proto, defaultProto, host, path string
+	assignedClusterID, assignedBaseURL             string
 	port                                           int
 }
 
@@ -167,9 +169,18 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 	rows, err := db.QueryContext(ctx, `
         SELECT si.instance_id, si.service_id, si.cluster_id, si.protocol, si.advertise_host, si.port,
                COALESCE(si.health_endpoint_override, s.health_check_path) AS path,
-               si.last_health_check, s.protocol AS default_protocol
+               si.last_health_check, s.protocol AS default_protocol,
+               assigned.cluster_id, assigned.base_url
         FROM quartermaster.service_instances si
         JOIN quartermaster.services s ON si.service_id = s.service_id
+        LEFT JOIN LATERAL (
+            SELECT sca.cluster_id, c.base_url
+            FROM quartermaster.service_cluster_assignments sca
+            JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = sca.cluster_id
+            WHERE sca.service_instance_id = si.id AND sca.is_active = TRUE
+            ORDER BY sca.cluster_id
+            LIMIT 1
+        ) assigned ON TRUE
         WHERE si.status IN ('running','starting')
           AND si.service_id NOT LIKE 'edge-%'
           AND (si.last_health_check IS NULL OR si.last_health_check < $1)
@@ -187,7 +198,8 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 		var proto, defaultProto sql.NullString
 		var host sql.NullString
 		var path sql.NullString
-		if err := rows.Scan(&i.id, &i.serviceID, new(string), &proto, &host, &i.port, &path, new(sql.NullTime), &defaultProto); err == nil {
+		var assignedClusterID, assignedBaseURL sql.NullString
+		if err := rows.Scan(&i.id, &i.serviceID, new(string), &proto, &host, &i.port, &path, new(sql.NullTime), &defaultProto, &assignedClusterID, &assignedBaseURL); err == nil {
 			if proto.Valid {
 				i.proto = proto.String
 			}
@@ -199,6 +211,12 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 			}
 			if path.Valid {
 				i.path = path.String
+			}
+			if assignedClusterID.Valid {
+				i.assignedClusterID = assignedClusterID.String
+			}
+			if assignedBaseURL.Valid {
+				i.assignedBaseURL = assignedBaseURL.String
 			}
 			list = append(list, i)
 		}
@@ -288,7 +306,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				atomic.AddInt32(&checked, 1)
 				probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
-				transport, err := grpcHealthDialOption(ii.serviceID)
+				transport, err := grpcHealthDialOption(ii)
 				if err != nil {
 					status = "unhealthy"
 					atomic.AddInt32(&unhealthy, 1)
@@ -418,9 +436,18 @@ func (m *grpcWatchManager) refreshGrpcWatches(dialTimeout, backoff time.Duration
 	defer cancel()
 
 	rows, err := db.QueryContext(ctx, `
-		SELECT si.instance_id, si.service_id, si.advertise_host, si.port, si.protocol, s.protocol AS default_protocol
+		SELECT si.instance_id, si.service_id, si.advertise_host, si.port, si.protocol, s.protocol AS default_protocol,
+		       assigned.cluster_id, assigned.base_url
 		FROM quartermaster.service_instances si
 		JOIN quartermaster.services s ON si.service_id = s.service_id
+		LEFT JOIN LATERAL (
+		    SELECT sca.cluster_id, c.base_url
+		    FROM quartermaster.service_cluster_assignments sca
+		    JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = sca.cluster_id
+		    WHERE sca.service_instance_id = si.id AND sca.is_active = TRUE
+		    ORDER BY sca.cluster_id
+		    LIMIT 1
+		) assigned ON TRUE
 		WHERE si.status IN ('running','starting')
 	`)
 	if err != nil {
@@ -434,7 +461,8 @@ func (m *grpcWatchManager) refreshGrpcWatches(dialTimeout, backoff time.Duration
 	for rows.Next() {
 		var i serviceInstance
 		var host, proto, defaultProto sql.NullString
-		if err := rows.Scan(&i.id, &i.serviceID, &host, &i.port, &proto, &defaultProto); err != nil {
+		var assignedClusterID, assignedBaseURL sql.NullString
+		if err := rows.Scan(&i.id, &i.serviceID, &host, &i.port, &proto, &defaultProto, &assignedClusterID, &assignedBaseURL); err != nil {
 			continue
 		}
 		if host.Valid {
@@ -445,6 +473,12 @@ func (m *grpcWatchManager) refreshGrpcWatches(dialTimeout, backoff time.Duration
 		}
 		if defaultProto.Valid {
 			i.defaultProto = defaultProto.String
+		}
+		if assignedClusterID.Valid {
+			i.assignedClusterID = assignedClusterID.String
+		}
+		if assignedBaseURL.Valid {
+			i.assignedBaseURL = assignedBaseURL.String
 		}
 		finalProto := strings.ToLower(strings.TrimSpace(i.proto))
 		if finalProto == "" {
@@ -502,7 +536,7 @@ func (m *grpcWatchManager) clearWatch(instanceID string) {
 
 func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceInstance, dialTimeout, backoff time.Duration) {
 	addr := fmt.Sprintf("%s:%d", inst.host, inst.port)
-	transport, err := grpcHealthDialOption(inst.serviceID)
+	transport, err := grpcHealthDialOption(inst)
 	if err != nil {
 		logger.WithError(err).WithField("service", inst.serviceID).WithField("addr", addr).Debug("gRPC watch TLS config failed")
 		m.setBackoff(inst.id, backoff)
@@ -544,9 +578,9 @@ func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceIn
 	}
 }
 
-func grpcHealthDialOption(serviceID string) (grpc.DialOption, error) {
+func grpcHealthDialOption(inst serviceInstance) (grpc.DialOption, error) {
 	caPath := strings.TrimSpace(os.Getenv("GRPC_TLS_CA_PATH"))
-	serverName := grpcHealthServerName(serviceID, caPath, os.Getenv("GRPC_TLS_SERVER_NAME"))
+	serverName, caPath := grpcHealthTLSConfig(inst, caPath, os.Getenv("GRPC_TLS_SERVER_NAME"))
 	return grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
 		CACertFile:    caPath,
 		ServerName:    serverName,
@@ -554,19 +588,56 @@ func grpcHealthDialOption(serviceID string) (grpc.DialOption, error) {
 	}, logger)
 }
 
-func grpcHealthServerName(serviceID, caPath, configured string) string {
-	serverName := strings.TrimSpace(configured)
-	if serverName != "" {
-		return serverName
+func grpcHealthTLSConfig(inst serviceInstance, caPath, configured string) (serverName, caFile string) {
+	configuredName := strings.TrimSpace(configured)
+	if configuredName != "" {
+		return configuredName, caPath
+	}
+	if publicName := foghornPublicHealthServerName(inst); publicName != "" {
+		return publicName, ""
 	}
 	if strings.TrimSpace(caPath) == "" {
-		return ""
+		return "", ""
 	}
-	serviceID = strings.TrimSpace(serviceID)
+	serviceID := strings.TrimSpace(inst.serviceID)
 	if serviceID == "" {
+		return "", caPath
+	}
+	return serviceID + ".internal", caPath
+}
+
+func grpcHealthServerName(inst serviceInstance, caPath, configured string) string {
+	serverName, _ := grpcHealthTLSConfig(inst, caPath, configured)
+	return serverName
+}
+
+func foghornPublicHealthServerName(inst serviceInstance) string {
+	if strings.TrimSpace(inst.serviceID) != "foghorn" {
 		return ""
 	}
-	return serviceID + ".internal"
+	clusterID := strings.Trim(strings.TrimSpace(inst.assignedClusterID), ".")
+	rootDomain := rootDomainFromBaseURL(inst.assignedBaseURL)
+	if clusterID == "" || rootDomain == "" {
+		return ""
+	}
+	return "foghorn." + clusterID + "." + rootDomain
+}
+
+func rootDomainFromBaseURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+		return strings.Trim(strings.TrimSpace(u.Hostname()), ".")
+	}
+	raw = strings.TrimPrefix(raw, "https://")
+	raw = strings.TrimPrefix(raw, "http://")
+	host := strings.Split(raw, "/")[0]
+	if h, _, ok := strings.Cut(host, ":"); ok {
+		host = h
+	}
+	return strings.Trim(strings.TrimSpace(host), ".")
 }
 
 func (m *grpcWatchManager) setBackoff(instanceID string, backoff time.Duration) {
