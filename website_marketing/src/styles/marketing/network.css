@@ -145,10 +145,6 @@
     max-height: none !important;
   }
 
-  .network-viz .leaflet-container * {
-    border-style: none;
-  }
-
   .network-viz .leaflet-control-attribution {
     display: none;
   }

@@ -257,6 +257,16 @@ function orchestratorColor(vantage) {
   return ROLE_COLORS.compute;
 }
 
+// At low zoom many orchestrator vantages pile up across a region; the spread
+// fan plus the glow halo can paint over a whole continent. Scale the icon and
+// its drop-shadow blur with zoom so they only get loud once the user is close
+// enough to disambiguate them.
+function orchestratorSizeForZoom(zoom) {
+  if (zoom <= 3) return { size: 8, glow: 2 };
+  if (zoom <= 5) return { size: 11, glow: 4 };
+  return { size: 14, glow: 6 };
+}
+
 function dedupeOrchestratorVantages(vantages) {
   const byInstance = new Map();
   (vantages || []).forEach((vantage) => {
@@ -420,13 +430,14 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data, onS
   });
 
   const visibleOrchestrators = dedupeOrchestratorVantages(data.orchestratorVantages);
+  const orchSizing = orchestratorSizeForZoom(map.getZoom());
   visibleOrchestrators.forEach((vantage) => {
     const [lat, lng] = vantageLatLng(vantage);
     const color = orchestratorColor(vantage);
-    const size = 14;
+    const { size, glow } = orchSizing;
     const icon = L.divIcon({
       className: "network-viz__marker",
-      html: `<div class="network-viz__shape-wrap network-viz__shape-wrap--glow" style="--glow-color: ${color};"><div class="network-viz__orch-triangle" style="width:${size}px; height:${size}px; --glow-color: ${color};"></div></div>`,
+      html: `<div class="network-viz__shape-wrap" style="filter: drop-shadow(0 0 ${glow}px ${color});"><div class="network-viz__orch-triangle" style="width:${size}px; height:${size}px; --glow-color: ${color};"></div></div>`,
       iconSize: [size, size],
       iconAnchor: [size / 2, size / 2 + 1],
     });
@@ -725,7 +736,7 @@ function NetworkMapInner({ data }) {
         center: [25, 10],
         zoom: 2,
         minZoom: 2,
-        maxZoom: 10,
+        maxZoom: 8,
         zoomControl: false,
         attributionControl: false,
         scrollWheelZoom: false,

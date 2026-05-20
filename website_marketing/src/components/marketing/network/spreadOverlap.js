@@ -56,63 +56,54 @@ export function spreadOverlappingMarkers(map, items, opts = {}) {
   groups.forEach((indices) => {
     if (indices.length < 2) return;
 
-    let cx = 0;
-    let cy = 0;
-    let maxRadius = 0;
-    indices.forEach((idx) => {
-      cx += points[idx].x;
-      cy += points[idx].y;
-      if (items[idx].iconRadius > maxRadius) maxRadius = items[idx].iconRadius;
-    });
-    cx /= indices.length;
-    cy /= indices.length;
-
-    const step = 2 * maxRadius + gap;
+    // Anchor at the largest item so big clusters don't drift onto a node and
+    // smaller items fan around them. Tie-break by original index for stability.
+    indices.sort((a, b) => items[b].iconRadius - items[a].iconRadius || a - b);
+    const anchor = points[indices[0]];
+    const rMax = items[indices[0]].iconRadius;
+    const rSecond = items[indices[1]].iconRadius;
+    // Step = clearance between the two largest + gap. For uniform groups this
+    // collapses to 2r+gap; for mixed groups (cluster + nodes) it stays tight
+    // instead of inflating to 2 * cluster radius and leaving dead space.
+    const step = rMax + rSecond + gap;
     const offsets = groupOffsets(indices.length, step);
 
     indices.forEach((idx, i) => {
       const [ox, oy] = offsets[i];
-      const newLatLng = map.containerPointToLatLng([cx + ox, cy + oy]);
+      const newLatLng = map.containerPointToLatLng([anchor.x + ox, anchor.y + oy]);
       items[idx].marker.setLatLng(newLatLng);
     });
   });
 }
 
 /**
- * Hex/pin packed offsets around (0,0) so the centroid stays put. Small groups
- * get hand-tuned layouts (pair, billiards-rack tri); larger groups fall back to
- * a pointy-top hex spiral with the centroid recentered.
+ * Hex/pin packed offsets with item 0 fixed at (0,0). The caller anchors that
+ * slot at the largest item's real position so it stays put; smaller items fan
+ * out around it. Small groups get hand-tuned layouts; larger groups use a
+ * pointy-top hex spiral whose first cell is the anchor.
  *
  * @param {number} n
  * @param {number} step
  * @returns {Array<[number, number]>}
  */
 function groupOffsets(n, step) {
+  // Item 0 always sits at (0,0) — the caller anchors that slot at the largest
+  // item's real pixel position, so it doesn't move.
   if (n === 2) {
     return [
-      [-step / 2, 0],
-      [step / 2, 0],
+      [0, 0],
+      [step, 0],
     ];
   }
   if (n === 3) {
-    const R = step / Math.sqrt(3);
+    const h = (step * Math.sqrt(3)) / 2;
     return [
-      [0, -R],
-      [-step / 2, R / 2],
-      [step / 2, R / 2],
+      [0, 0],
+      [-step / 2, h],
+      [step / 2, h],
     ];
   }
-  const axial = hexSpiral(n);
-  const pts = axial.map(([q, r]) => [step * (q + r / 2), step * (Math.sqrt(3) / 2) * r]);
-  let cx = 0;
-  let cy = 0;
-  pts.forEach(([x, y]) => {
-    cx += x;
-    cy += y;
-  });
-  cx /= n;
-  cy /= n;
-  return pts.map(([x, y]) => [x - cx, y - cy]);
+  return hexSpiral(n).map(([q, r]) => [step * (q + r / 2), step * (Math.sqrt(3) / 2) * r]);
 }
 
 function hexSpiral(n) {

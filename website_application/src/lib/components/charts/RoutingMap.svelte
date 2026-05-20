@@ -251,7 +251,7 @@
       center: center,
       zoom: zoom,
       minZoom: 2,
-      maxZoom: 10,
+      maxZoom: 8,
       zoomControl: false,
       attributionControl: false,
       scrollWheelZoom: false, // Disabled by default - use modifier key
@@ -894,7 +894,10 @@
     applySpread();
 
     if (!zoomHandlerAttached && map) {
-      map.on("zoomend", () => drawMap(routes, nodes, buckets, flows, clusters, relationships));
+      map.on("zoomend", () => {
+        drawMap(routes, nodes, buckets, flows, clusters, relationships);
+        drawOrchestrators(showOrchestrators ? orchestratorVantages : []);
+      });
       zoomHandlerAttached = true;
     }
   }
@@ -1141,6 +1144,15 @@
     return h >>> 0;
   }
 
+  // At low zoom many vantages pile across a region; spread + glow can paint
+  // over a continent. Scale icon and shadow with zoom so they only get loud
+  // once the user is close enough to disambiguate them.
+  function orchestratorSizeForZoom(z: number): { size: number; glow: number } {
+    if (z <= 3) return { size: 8, glow: 2 };
+    if (z <= 5) return { size: 11, glow: 4 };
+    return { size: 14, glow: 6 };
+  }
+
   function orchestratorPinColor(vantage: OrchestratorVantagePin): string {
     if (vantage.latestLatencyMs >= 750) return "rgb(74, 111, 91)";
     if (vantage.latestLatencyMs >= 250) return "rgb(45, 150, 96)";
@@ -1179,6 +1191,7 @@
     }
 
     const visibleVantages = dedupeOrchestratorVantages(vantages);
+    const { size: orchSize, glow: orchGlow } = orchestratorSizeForZoom(map.getZoom());
     for (const v of visibleVantages) {
       let lat = v.lat;
       let lng = v.lng;
@@ -1189,10 +1202,9 @@
         lng = UNKNOWN_GEO_ANCHOR[1] + (seed & 0xff) / 64.0;
       }
       const orchColor = orchestratorPinColor(v);
-      const orchSize = 14;
       const orchIcon = leaflet.divIcon({
         className: "node-dot-marker",
-        html: `<div class="shape-wrap shape-wrap--glow" style="--glow-color:${orchColor};"><div class="orch-triangle" style="width:${orchSize}px; height:${orchSize}px; --glow-color:${orchColor};"></div></div>`,
+        html: `<div class="shape-wrap" style="filter: drop-shadow(0 0 ${orchGlow}px ${orchColor});"><div class="orch-triangle" style="width:${orchSize}px; height:${orchSize}px; --glow-color:${orchColor};"></div></div>`,
         iconSize: [orchSize, orchSize],
         iconAnchor: [orchSize / 2, orchSize / 2 + 1],
       });
