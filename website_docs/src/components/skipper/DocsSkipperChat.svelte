@@ -158,11 +158,21 @@
     messages = messages.map((message) => (message.id === id ? { ...message, ...update } : message));
   }
 
-  async function scrollToBottom() {
+  let stickToBottom = true;
+  const STICK_THRESHOLD_PX = 80;
+
+  function handleScroll() {
+    if (!scrollRef) return;
+    const distance = scrollRef.scrollHeight - scrollRef.scrollTop - scrollRef.clientHeight;
+    stickToBottom = distance <= STICK_THRESHOLD_PX;
+  }
+
+  async function scrollToBottom(force = false) {
     await tick();
-    if (scrollRef) {
-      scrollRef.scrollTop = scrollRef.scrollHeight;
-    }
+    if (!scrollRef) return;
+    if (!force && !stickToBottom) return;
+    scrollRef.scrollTop = scrollRef.scrollHeight;
+    stickToBottom = true;
   }
 
   async function handleSend(content: string) {
@@ -186,7 +196,7 @@
       },
     ];
 
-    await scrollToBottom();
+    await scrollToBottom(true);
     await streamResponse(assistantId, content);
     persistMessages();
   }
@@ -358,7 +368,7 @@
         </div>
       </div>
 
-      <div class="docs-skipper-panel__body" bind:this={scrollRef}>
+      <div class="docs-skipper-panel__body" bind:this={scrollRef} onscroll={handleScroll}>
         {#if !isAuthenticated}
           <div class="docs-skipper-panel__empty">
             <div class="docs-skipper-panel__empty-text">

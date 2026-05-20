@@ -147,12 +147,21 @@
   }
 
   let scrollRafPending = false;
+  let stickToBottom = true;
+  const STICK_THRESHOLD_PX = 80;
 
-  async function scrollToBottom() {
+  function handleScroll() {
+    if (!scrollRef) return;
+    const distance = scrollRef.scrollHeight - scrollRef.scrollTop - scrollRef.clientHeight;
+    stickToBottom = distance <= STICK_THRESHOLD_PX;
+  }
+
+  async function scrollToBottom(force = false) {
     await tick();
-    if (scrollRef) {
-      scrollRef.scrollTop = scrollRef.scrollHeight;
-    }
+    if (!scrollRef) return;
+    if (!force && !stickToBottom) return;
+    scrollRef.scrollTop = scrollRef.scrollHeight;
+    stickToBottom = true;
   }
 
   function scheduleScroll() {
@@ -224,7 +233,7 @@
           createdAt: msg.createdAt,
         };
       });
-      await scrollToBottom();
+      await scrollToBottom(true);
     } catch (err) {
       if (!destroyed) {
         console.error("Failed to load conversation:", err);
@@ -348,7 +357,7 @@
       ...messages,
       { id: assistantId, role: "assistant", content: "", confidence: "best_guess" },
     ];
-    await scrollToBottom();
+    await scrollToBottom(true);
 
     isStreaming = true;
     activeToolName = "";
@@ -567,7 +576,11 @@
     {#if showChat}
       <div class="flex flex-1 flex-col overflow-hidden">
         <!-- Messages -->
-        <div bind:this={scrollRef} class="flex-1 overflow-y-auto bg-background/50 p-4 sm:p-6">
+        <div
+          bind:this={scrollRef}
+          onscroll={handleScroll}
+          class="flex-1 overflow-y-auto bg-background/50 p-4 sm:p-6"
+        >
           {#if messages.length === 0 && !loadingMessages}
             {#if loadError}
               <div
