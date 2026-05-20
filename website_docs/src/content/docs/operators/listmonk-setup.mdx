@@ -17,11 +17,13 @@ Set these before provisioning:
 ```bash
 # gitops/config/<env>.env
 LISTMONK_FRONTEND_URL=https://listmonk.example.com
-LISTMONK_USERNAME=admin
+LISTMONK_ADMIN_USER=admin
+LISTMONK_API_USERNAME=frameworks-api
 DEFAULT_MAILING_LIST_ID=1
 
 # gitops/secrets/<env>.env, edited via gitops/scripts/sops-env.sh
-LISTMONK_PASSWORD=<admin-password>
+LISTMONK_ADMIN_PASSWORD=<admin-password>
+LISTMONK_API_TOKEN=<api-token-shown-once>
 ```
 
 `cluster provision` maps `LISTMONK_FRONTEND_URL` into Listmonk's
@@ -34,8 +36,8 @@ subscription URLs.
 
 Open your deployed Listmonk URL and sign in with:
 
-- Username: `LISTMONK_USERNAME`
-- Password: `LISTMONK_PASSWORD`
+- Username: `LISTMONK_ADMIN_USER`
+- Password: `LISTMONK_ADMIN_PASSWORD`
 
 If the browser redirects to `http://localhost:9000`, force-refresh the login
 page. If it persists, verify `settings.app.root_url` in the `listmonk`
@@ -84,3 +86,16 @@ users to `DEFAULT_MAILING_LIST_ID`.
 - Keep private/internal lists separate from public forms.
 - Update `DEFAULT_MAILING_LIST_ID` in GitOps when changing which list the
   FrameWorks forms service targets.
+
+## API User
+
+FrameWorks services do not use the admin login for Listmonk API calls. Create a
+Listmonk user with user type **API**, give it a dedicated username such as
+`frameworks-api`, and assign permissions for subscriber lookup and subscriber
+updates on the newsletter list. Listmonk displays the API access token only once
+when the API user is created.
+
+Store the API username in `LISTMONK_API_USERNAME` and the one-time token in
+`LISTMONK_API_TOKEN`. The admin login remains `LISTMONK_ADMIN_USER` /
+`LISTMONK_ADMIN_PASSWORD` and is only used for first-install bootstrap and web
+console access.
