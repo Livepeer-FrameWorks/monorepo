@@ -1062,7 +1062,7 @@ func TestBuildServiceEnvVarsClusterEnvOverridesSharedAndIsOverriddenByInline(t *
 	}
 }
 
-func TestBuildServiceEnvVarsUsesDeployNameForAliasedInternalTLS(t *testing.T) {
+func TestBuildServiceEnvVarsKeepsInternalLeafForFoghornControl(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile:    "production",
 		RootDomain: "frameworks.network",
@@ -1085,10 +1085,10 @@ func TestBuildServiceEnvVarsUsesDeployNameForAliasedInternalTLS(t *testing.T) {
 	}
 
 	if got := env["GRPC_TLS_CERT_PATH"]; got != "/etc/frameworks/pki/services/foghorn/tls.crt" {
-		t.Fatalf("GRPC_TLS_CERT_PATH = %q, want foghorn deploy service cert path", got)
+		t.Fatalf("GRPC_TLS_CERT_PATH = %q, want foghorn internal cert path", got)
 	}
 	if got := env["GRPC_TLS_KEY_PATH"]; got != "/etc/frameworks/pki/services/foghorn/tls.key" {
-		t.Fatalf("GRPC_TLS_KEY_PATH = %q, want foghorn deploy service key path", got)
+		t.Fatalf("GRPC_TLS_KEY_PATH = %q, want foghorn internal key path", got)
 	}
 	if got := env["CLUSTER_ID"]; got != "media-us-1" {
 		t.Fatalf("CLUSTER_ID = %q, want media-us-1", got)
@@ -2039,6 +2039,7 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 			want: map[string]string{
 				"FRAMEWORKS_DECKLOG_GRPC_ADDR": "decklog.internal:18006",
 				"FRAMEWORKS_DECKLOG_TLS_MODE":  "mtls",
+				"GRPC_TLS_SERVER_NAME":         "decklog.internal",
 			},
 			keys: []string{"SERVICE_TOKEN", "GRPC_TLS_CA_PATH"},
 		},
