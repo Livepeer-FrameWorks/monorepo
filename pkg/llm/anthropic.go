@@ -234,12 +234,24 @@ func (s *anthropicStream) decodeEvent(data []byte) (Chunk, error) {
 func anthropicMessagesFrom(messages []Message) ([]anthropicMessage, string) {
 	var systemParts []string
 	out := make([]anthropicMessage, 0, len(messages))
-	for _, message := range messages {
+	for i := 0; i < len(messages); i++ {
+		message := messages[i]
 		if message.Role == "system" {
 			systemParts = append(systemParts, message.Content)
 			continue
 		}
 		if message.Role == "assistant" && len(message.ToolCalls) > 0 {
+			toolResults, consumed := collectAnthropicToolResults(messages[i+1:], message.ToolCalls)
+			if len(toolResults) != len(message.ToolCalls) {
+				if message.Content != "" {
+					out = append(out, anthropicMessage{
+						Role:    "assistant",
+						Content: []anthropicContent{{Type: "text", Text: message.Content}},
+					})
+				}
+				continue
+			}
+
 			contents := make([]anthropicContent, 0, 1+len(message.ToolCalls))
 			if message.Content != "" {
 				contents = append(contents, anthropicContent{Type: "text", Text: message.Content})
@@ -257,6 +269,8 @@ func anthropicMessagesFrom(messages []Message) ([]anthropicMessage, string) {
 				})
 			}
 			out = append(out, anthropicMessage{Role: "assistant", Content: contents})
+			out = append(out, anthropicMessage{Role: "user", Content: toolResults})
+			i += consumed
 			continue
 		}
 		content := anthropicContent{
@@ -266,18 +280,7 @@ func anthropicMessagesFrom(messages []Message) ([]anthropicMessage, string) {
 		role := message.Role
 		if role == "tool" {
 			role = "user"
-			content = anthropicContent{
-				Type:      "tool_result",
-				ToolUseID: message.ToolCallID,
-				Content:   message.Content,
-			}
-			// Anthropic requires all tool_result blocks for a tool_use set
-			// to appear in a single user message. Merge consecutive tool
-			// results instead of creating separate user messages.
-			if n := len(out); n > 0 && out[n-1].Role == "user" && allToolResults(out[n-1].Content) {
-				out[n-1].Content = append(out[n-1].Content, content)
-				continue
-			}
+			content.Text = formatOrphanToolResult(message)
 		}
 		out = append(out, anthropicMessage{
 			Role:    role,
@@ -287,14 +290,51 @@ func anthropicMessagesFrom(messages []Message) ([]anthropicMessage, string) {
 	return out, strings.Join(systemParts, "\n")
 }
 
-func allToolResults(contents []anthropicContent) bool {
-	if len(contents) == 0 {
-		return false
+func collectAnthropicToolResults(messages []Message, calls []ToolCall) ([]anthropicContent, int) {
+	if len(calls) == 0 || len(messages) == 0 {
+		return nil, 0
 	}
-	for _, c := range contents {
-		if c.Type != "tool_result" {
-			return false
+	expected := make(map[string]struct{}, len(calls))
+	for _, call := range calls {
+		if call.ID != "" {
+			expected[call.ID] = struct{}{}
 		}
 	}
-	return true
+	if len(expected) != len(calls) {
+		return nil, 0
+	}
+
+	consumed := 0
+	resultsByID := make(map[string]anthropicContent, len(calls))
+	for consumed < len(messages) {
+		message := messages[consumed]
+		if message.Role != "tool" {
+			break
+		}
+		consumed++
+		if _, ok := expected[message.ToolCallID]; !ok {
+			continue
+		}
+		resultsByID[message.ToolCallID] = anthropicContent{
+			Type:      "tool_result",
+			ToolUseID: message.ToolCallID,
+			Content:   message.Content,
+		}
+	}
+	if len(resultsByID) != len(calls) {
+		return nil, consumed
+	}
+
+	results := make([]anthropicContent, 0, len(calls))
+	for _, call := range calls {
+		results = append(results, resultsByID[call.ID])
+	}
+	return results, consumed
+}
+
+func formatOrphanToolResult(message Message) string {
+	if message.ToolCallID == "" {
+		return "Tool result from an omitted tool call:\n" + message.Content
+	}
+	return "Tool result from omitted tool call " + message.ToolCallID + ":\n" + message.Content
 }

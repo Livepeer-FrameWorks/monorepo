@@ -181,6 +181,9 @@ func TestAnthropicProviderToolResultMessage(t *testing.T) {
 	p := NewAnthropicProvider(Config{APIURL: server.URL, APIKey: "k", Model: "m"})
 	stream, err := p.Complete(context.Background(), []Message{
 		{Role: "user", Content: "hi"},
+		{Role: "assistant", ToolCalls: []ToolCall{
+			{ID: "toolu_1", Name: "search", Arguments: `{}`},
+		}},
 		{Role: "tool", Content: "search result", ToolCallID: "toolu_1"},
 	}, nil)
 	if err != nil {
@@ -259,6 +262,62 @@ func TestAnthropicMessagesFromSingleToolResult(t *testing.T) {
 	}
 	if out[2].Content[0].Type != "tool_result" {
 		t.Fatalf("expected tool_result, got %s", out[2].Content[0].Type)
+	}
+}
+
+func TestAnthropicMessagesFromDoesNotEmitOrphanToolResult(t *testing.T) {
+	t.Parallel()
+
+	out, _ := anthropicMessagesFrom([]Message{
+		{Role: "system", Content: "sys"},
+		{Role: "tool", Content: "orphaned result", ToolCallID: "toolu_orphan"},
+	})
+
+	if len(out) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(out))
+	}
+	if out[0].Role != "user" {
+		t.Fatalf("expected orphan tool result to become user text, got role %q", out[0].Role)
+	}
+	if len(out[0].Content) != 1 || out[0].Content[0].Type != "text" {
+		t.Fatalf("expected text content, got %+v", out[0].Content)
+	}
+	if strings.Contains(out[0].Content[0].Type, "tool_result") || out[0].Content[0].ToolUseID != "" {
+		t.Fatalf("orphan tool result leaked Anthropic tool_result metadata: %+v", out[0].Content[0])
+	}
+	if !strings.Contains(out[0].Content[0].Text, "toolu_orphan") {
+		t.Fatalf("expected orphan tool id in text, got %q", out[0].Content[0].Text)
+	}
+}
+
+func TestAnthropicMessagesFromDropsIncompleteToolUsePairing(t *testing.T) {
+	t.Parallel()
+
+	out, _ := anthropicMessagesFrom([]Message{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", Content: "checking", ToolCalls: []ToolCall{
+			{ID: "toolu_a", Name: "search", Arguments: `{}`},
+			{ID: "toolu_b", Name: "lookup", Arguments: `{}`},
+		}},
+		{Role: "tool", Content: "result A", ToolCallID: "toolu_a"},
+		{Role: "user", Content: "continue"},
+	})
+
+	for _, msg := range out {
+		for _, content := range msg.Content {
+			if content.Type == "tool_use" || content.Type == "tool_result" {
+				t.Fatalf("incomplete tool pairing leaked Anthropic tool block: %+v", content)
+			}
+		}
+	}
+	if len(out) != 4 {
+		t.Fatalf("expected assistant text plus orphan result text to remain, got %d messages", len(out))
+	}
+	if out[1].Role != "assistant" || out[1].Content[0].Text != "checking" {
+		t.Fatalf("expected assistant text to remain, got %+v", out[1])
+	}
+	if out[2].Role != "user" || !strings.Contains(out[2].Content[0].Text, "toolu_a") {
+		t.Fatalf("expected partial tool result to become user text, got %+v", out[2])
 	}
 }
 
