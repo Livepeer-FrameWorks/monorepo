@@ -4,6 +4,7 @@
   import type { Map as LeafletMap, LayerGroup, Marker } from "leaflet";
   import { getIconComponent } from "$lib/iconUtils";
   import { spreadOverlappingMarkers, type Spreadable } from "./spreadOverlap";
+  import { pointOnPath, samplePath } from "./arc";
   import "leaflet/dist/leaflet.css";
   import markerIconUrl from "leaflet/dist/images/marker-icon.png";
   import markerIconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png";
@@ -191,6 +192,7 @@
   let aggregateNodeMarkersByClusterID: Record<string, Marker> = {};
   let clusterMarkersByID: Record<string, Marker> = {};
   let renderedNodes: NodeLocation[] = [];
+  let renderedClusters: ClusterMarker[] = [];
   let renderedRelationships: RelationshipLine[] = [];
   let renderedServicesByNode: Record<string, string[]> = {};
   let zoomHandlerAttached = false;
@@ -411,6 +413,93 @@
     return rgb.replace("rgb(", "rgba(").replace(")", `, ${alpha})`);
   }
 
+  function convexHull(pts: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
+    if (pts.length < 3) return pts.slice();
+    const sorted = [...pts].sort((a, b) => a.x - b.x || a.y - b.y);
+    const cross = (
+      o: { x: number; y: number },
+      a: { x: number; y: number },
+      b: { x: number; y: number }
+    ) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    const lower: Array<{ x: number; y: number }> = [];
+    for (const p of sorted) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+        lower.pop();
+      }
+      lower.push(p);
+    }
+    const upper: Array<{ x: number; y: number }> = [];
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      const p = sorted[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+        upper.pop();
+      }
+      upper.push(p);
+    }
+    lower.pop();
+    upper.pop();
+    return lower.concat(upper);
+  }
+
+  function inflateHull(
+    points: Array<{ x: number; y: number }>,
+    padding: number
+  ): Array<{ x: number; y: number }> {
+    if (!points.length) return points;
+    let cx = 0;
+    let cy = 0;
+    points.forEach((p) => {
+      cx += p.x;
+      cy += p.y;
+    });
+    cx /= points.length;
+    cy /= points.length;
+    return points.map((p) => {
+      const dx = p.x - cx;
+      const dy = p.y - cy;
+      const len = Math.hypot(dx, dy) || 1;
+      return { x: p.x + (dx / len) * padding, y: p.y + (dy / len) * padding };
+    });
+  }
+
+  // Rounds each polygon vertex with a quadratic Bezier so the hull reads as a
+  // soft blob. cornerRadius is in pixels; clamped per-vertex to half the
+  // adjacent edge length so tight clusters don't fold in on themselves.
+  function smoothPolygon(
+    points: Array<{ x: number; y: number }>,
+    cornerRadius: number,
+    samplesPerCorner = 6
+  ): Array<{ x: number; y: number }> {
+    const n = points.length;
+    if (n < 3) return points;
+    const out: Array<{ x: number; y: number }> = [];
+    for (let i = 0; i < n; i++) {
+      const prev = points[(i - 1 + n) % n];
+      const curr = points[i];
+      const next = points[(i + 1) % n];
+      const vpx = prev.x - curr.x;
+      const vpy = prev.y - curr.y;
+      const vnx = next.x - curr.x;
+      const vny = next.y - curr.y;
+      const lp = Math.hypot(vpx, vpy) || 1;
+      const ln = Math.hypot(vnx, vny) || 1;
+      const r = Math.min(cornerRadius, lp / 2, ln / 2);
+      const sx = curr.x + (vpx / lp) * r;
+      const sy = curr.y + (vpy / lp) * r;
+      const ex = curr.x + (vnx / ln) * r;
+      const ey = curr.y + (vny / ln) * r;
+      for (let s = 0; s <= samplesPerCorner; s++) {
+        const t = s / samplesPerCorner;
+        const u = 1 - t;
+        out.push({
+          x: u * u * sx + 2 * u * t * curr.x + t * t * ex,
+          y: u * u * sy + 2 * u * t * curr.y + t * t * ey,
+        });
+      }
+    }
+    return out;
+  }
+
   function relationshipColor(type: RelationshipLine["type"]): string {
     if (type === "traffic") return "rgba(34, 197, 94, 0.6)";
     if (type === "assignment") return "rgba(168, 85, 247, 0.72)";
@@ -436,8 +525,7 @@
       const timerId = window.setTimeout(() => {
         const id = window.setInterval(() => {
           const t = step / steps;
-          const lat = from[0] + (to[0] - from[0]) * t;
-          const lng = from[1] + (to[1] - from[1]) * t;
+          const [lat, lng] = pointOnPath(from, to, t);
 
           if (!marker) {
             marker = leaflet
@@ -488,6 +576,7 @@
     aggregateNodeMarkersByClusterID = {};
     clusterMarkersByID = {};
     renderedNodes = currentNodes;
+    renderedClusters = currentClusters;
     renderedRelationships = currentRelationships;
 
     // Remove old layer groups from map entirely
@@ -647,16 +736,25 @@
       const nodeSvcs = servicesByNode[node.id];
       const isComputeNode = serviceRole(nodeSvcs) === "compute";
       const color = roleColor(nodeRole(node, nodeSvcs), node.status);
-      const isEdge = (node.nodeType ?? "").toLowerCase() === "edge";
-      const size = isComputeNode ? 8 : isEdge ? 10 : 14;
-      const glow = isComputeNode ? "7px" : isEdge ? "6px" : "12px";
-      const nodeStyle = isComputeNode
-        ? `background-color: rgba(15, 23, 42, 0.85); width: ${size}px; height: ${size}px; border-radius: 50%; border: 2px solid ${color}; box-shadow: 0 0 ${glow} ${color};`
-        : `background-color: ${color}; width: ${size}px; height: ${size}px; border-radius: 50%; box-shadow: 0 0 ${glow} ${color};`;
+      const nt = (node.nodeType ?? "").toLowerCase();
+      const isCoreNode = !isComputeNode && (nt === "core" || nt === "central");
+
+      let size: number;
+      let html: string;
+      if (isComputeNode) {
+        size = 9;
+        html = `<div class="node-shape node-shape--ring" style="width:${size}px; height:${size}px; --node-color:${color}; box-shadow: 0 0 7px ${color};"></div>`;
+      } else if (isCoreNode) {
+        size = 14;
+        html = `<div class="shape-wrap shape-wrap--glow" style="--glow-color:${color};"><div class="node-shape node-shape--diamond" style="width:${size}px; height:${size}px; --node-color:${color};"></div></div>`;
+      } else {
+        size = 10;
+        html = `<div class="node-shape node-shape--circle" style="width:${size}px; height:${size}px; --node-color:${color}; box-shadow: 0 0 6px ${color};"></div>`;
+      }
 
       const nodeIcon = leaflet.divIcon({
         className: "node-dot-marker",
-        html: `<div style="${nodeStyle}"></div>`,
+        html,
         iconSize: [size, size],
         iconAnchor: [size / 2, size / 2],
       });
@@ -724,21 +822,24 @@
       const radius = Math.max(10, Math.min(24, 10 + cluster.nodeCount * 2));
       const ct = (cluster.clusterType ?? "").toLowerCase();
       const isCore = ct === "central" || ct === "core";
-      const borderRadius = isCore ? "6px" : "50%";
-      const borderStyle = isCore ? `3px solid ${color}` : `2px dashed ${color}`;
+      const size = radius * 2;
+
+      const clusterHtml = isCore
+        ? `<div class="cluster-shape cluster-shape--core cluster-marker--glow" style="width:${size}px; height:${size}px; --node-color:${color};">${cluster.nodeCount}</div>`
+        : `<div class="cluster-shape cluster-shape--edge" style="width:${size}px; height:${size}px; --node-color:${color};">
+            <svg class="cluster-shape__hex" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <polygon points="50,6 92,30 92,70 50,94 8,70 8,30"
+                fill="color-mix(in srgb, ${color} 22%, rgba(15,23,42,0.7))"
+                stroke="${color}" stroke-width="3"
+                stroke-dasharray="6 4" stroke-linejoin="round" stroke-linecap="round" />
+            </svg>
+            <span class="cluster-shape__count" style="color:${color};">${cluster.nodeCount}</span>
+          </div>`;
 
       const icon = leaflet.divIcon({
         className: "cluster-marker",
-        html: `<div class="cluster-marker--glow" style="
-          width: ${radius * 2}px; height: ${radius * 2}px; border-radius: ${borderRadius};
-          background: radial-gradient(circle, color-mix(in srgb, ${color} 25%, transparent), color-mix(in srgb, ${color} 9%, transparent));
-          border: ${borderStyle};
-          display: flex; align-items: center; justify-content: center;
-          font-size: 10px; font-weight: 600; color: ${color};
-          box-shadow: 0 0 12px color-mix(in srgb, ${color} 30%, transparent);
-          --node-color: ${color};
-        ">${cluster.nodeCount}</div>`,
-        iconSize: [radius * 2, radius * 2],
+        html: clusterHtml,
+        iconSize: [size, size],
         iconAnchor: [radius, radius],
       });
 
@@ -805,11 +906,12 @@
       ...clusterSpreadables,
       ...orchestratorSpreadables,
     ]);
-    drawTopologyLines(renderedNodes, renderedRelationships);
+    drawTopologyLines(renderedNodes, renderedClusters, renderedRelationships);
   }
 
   function drawTopologyLines(
     currentNodes: NodeLocation[],
+    currentClusters: ClusterMarker[],
     currentRelationships: RelationshipLine[]
   ): void {
     if (!L || !membershipLayer || !relationshipLayer) return;
@@ -818,33 +920,95 @@
     membershipLayer.clearLayers();
     relationshipLayer.clearLayers();
 
-    const aggregateMembershipDrawn: Record<string, true> = {};
+    // Group nodes by cluster: clusters with ≥2 visible nodes get a hull halo;
+    // solo nodes keep a single radial line for legibility.
+    const nodesByCluster: Record<string, NodeLocation[]> = {};
+    const aggregateClusters: Record<string, true> = {};
     currentNodes.forEach((node) => {
       if (!node.clusterId) return;
-      const clusterMarker = clusterMarkersByID[node.clusterId];
-      if (!clusterMarker) return;
-
-      const aggregateMarker = aggregateNodeMarkersByClusterID[node.clusterId];
-      if (aggregateMarker) {
-        if (aggregateMembershipDrawn[node.clusterId]) return;
-        aggregateMembershipDrawn[node.clusterId] = true;
+      if (!clusterMarkersByID[node.clusterId]) return;
+      if (aggregateNodeMarkersByClusterID[node.clusterId]) {
+        aggregateClusters[node.clusterId] = true;
+        return;
       }
-      const nodeMarker = aggregateMarker ?? nodeMarkersByID[node.id];
-      if (!nodeMarker) return;
+      if (!nodeMarkersByID[node.id]) return;
+      (nodesByCluster[node.clusterId] ??= []).push(node);
+    });
 
-      const from = markerLatLng(nodeMarker, [node.lat, node.lng]);
+    // Aggregate-node clusters: one line from cluster center to the aggregate
+    // marker (drawing a hull around a single aggregate marker is pointless).
+    Object.keys(aggregateClusters).forEach((clusterId) => {
+      const clusterMarker = clusterMarkersByID[clusterId];
+      const aggregateMarker = aggregateNodeMarkersByClusterID[clusterId];
+      if (!clusterMarker || !aggregateMarker) return;
+      const clusterCenter = clusterMarker.getLatLng();
+      const from = markerLatLng(aggregateMarker, [clusterCenter.lat, clusterCenter.lng]);
       const to = markerLatLng(clusterMarker, from);
       if (from[0] === to[0] && from[1] === to[1]) return;
-
-      const color = withAlpha(
-        roleColor(nodeRole(node, renderedServicesByNode[node.id]), node.status),
-        aggregateMarker ? 0.42 : 0.3
-      );
+      const repNode = currentNodes.find((n) => n.clusterId === clusterId);
+      const baseColor = repNode
+        ? roleColor(nodeRole(repNode, renderedServicesByNode[repNode.id]), repNode.status)
+        : "rgb(148, 163, 184)";
       leaflet
         .polyline([from, to], {
-          color,
-          weight: aggregateMarker ? 2 : 1.4,
+          color: withAlpha(baseColor, 0.42),
+          weight: 2,
           opacity: 0.7,
+          smoothFactor: 1,
+          interactive: false,
+        })
+        .addTo(membershipLayer!);
+    });
+
+    Object.entries(nodesByCluster).forEach(([clusterId, members]) => {
+      const clusterMarker = clusterMarkersByID[clusterId];
+      if (!clusterMarker) return;
+      const cluster = currentClusters.find((c) => c.id === clusterId);
+      const clusterColor = cluster
+        ? roleColor(cluster.clusterType, cluster.status)
+        : "rgb(148, 163, 184)";
+
+      if (members.length === 1) {
+        const node = members[0];
+        const from = markerLatLng(nodeMarkersByID[node.id], [node.lat, node.lng]);
+        const to = markerLatLng(clusterMarker, from);
+        if (from[0] === to[0] && from[1] === to[1]) return;
+        const lineColor = withAlpha(
+          roleColor(nodeRole(node, renderedServicesByNode[node.id]), node.status),
+          0.3
+        );
+        leaflet
+          .polyline([from, to], {
+            color: lineColor,
+            weight: 1.4,
+            opacity: 0.7,
+            smoothFactor: 1,
+            interactive: false,
+          })
+          .addTo(membershipLayer!);
+        return;
+      }
+
+      if (!map) return;
+      const markersForHull = [clusterMarker, ...members.map((n) => nodeMarkersByID[n.id])].filter(
+        Boolean
+      );
+      const pts = markersForHull.map((m) => map!.latLngToContainerPoint(m.getLatLng()));
+      if (pts.length < 3) return;
+      const hull = convexHull(pts);
+      const inflated = inflateHull(hull, 10);
+      const smoothed = smoothPolygon(inflated, 14);
+      const ring = smoothed.map((p) => {
+        const ll = map!.containerPointToLatLng([p.x, p.y]);
+        return [ll.lat, ll.lng] as [number, number];
+      });
+      leaflet
+        .polygon(ring, {
+          className: "cluster-hull",
+          color: withAlpha(clusterColor, 0.5),
+          weight: 1,
+          fillColor: clusterColor,
+          fillOpacity: 0.12,
           smoothFactor: 1,
           interactive: false,
         })
@@ -858,7 +1022,15 @@
       const to = rel.targetClusterId
         ? markerLatLng(clusterMarkersByID[rel.targetClusterId], rel.to)
         : rel.to;
-      const lineWeight = rel.active ? Math.max(2, Math.min(4, (rel.weight ?? 1) * 0.5)) : 1.5;
+      const eventCount = rel.metrics?.eventCount ?? 0;
+      // Log-scale traffic into a weight: a single event still draws, busy
+      // pairs go thick. Inactive links collapse to a hair-thin trace.
+      const trafficWeight = Math.min(5, 1.2 + Math.log10(1 + eventCount) * 1.1);
+      const lineWeight = rel.active
+        ? Math.max(trafficWeight, Math.min(4, (rel.weight ?? 1) * 0.5))
+        : 1.2;
+      const successRate = rel.metrics?.successRate ?? 1;
+      const baseOpacity = rel.active ? 0.55 + 0.35 * successRate : 0.4;
       const dashMap: Record<RelationshipLine["type"], string | undefined> = {
         peering: "8 4",
         assignment: "12 6",
@@ -866,10 +1038,10 @@
         traffic: undefined,
       };
 
-      const line = leaflet.polyline([from, to], {
+      const line = leaflet.polyline(samplePath(from, to), {
         color: relationshipColor(rel.type),
         weight: lineWeight,
-        opacity: rel.active ? 0.8 : 0.4,
+        opacity: baseOpacity,
         dashArray: dashMap[rel.type],
         smoothFactor: 1,
       });
@@ -1016,13 +1188,15 @@
         lat = UNKNOWN_GEO_ANCHOR[0] + ((seed >> 8) & 0xff) / 64.0;
         lng = UNKNOWN_GEO_ANCHOR[1] + (seed & 0xff) / 64.0;
       }
-      const marker = leaflet.circleMarker([lat, lng], {
-        radius: 6,
-        color: orchestratorPinColor(v),
-        weight: 2,
-        fillColor: orchestratorPinColor(v),
-        fillOpacity: 0.82,
+      const orchColor = orchestratorPinColor(v);
+      const orchSize = 14;
+      const orchIcon = leaflet.divIcon({
+        className: "node-dot-marker",
+        html: `<div class="shape-wrap shape-wrap--glow" style="--glow-color:${orchColor};"><div class="orch-triangle" style="width:${orchSize}px; height:${orchSize}px; --glow-color:${orchColor};"></div></div>`,
+        iconSize: [orchSize, orchSize],
+        iconAnchor: [orchSize / 2, orchSize / 2 + 1],
       });
+      const marker = leaflet.marker([lat, lng], { icon: orchIcon });
       const rows = [
         detailRow("Orch", v.orchAddr, true),
         detailRow("IP", v.resolvedIp),
@@ -1051,7 +1225,7 @@
         if (onOrchestratorClick) onOrchestratorClick(v.orchAddr);
       });
       marker.addTo(orchestratorLayer);
-      orchestratorSpreadables.push({ marker, iconRadius: 7 });
+      orchestratorSpreadables.push({ marker, iconRadius: orchSize / 2 });
     }
     applySpread();
   }
@@ -1435,5 +1609,61 @@
     :global(.cluster-marker--glow) {
       animation: none;
     }
+  }
+
+  /* --- Marker shape vocabulary (parallel to website_marketing/network.css) --- */
+  :global(.shape-wrap) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* drop-shadow respects clip-path; box-shadow doesn't. */
+  :global(.shape-wrap--glow) {
+    filter: drop-shadow(0 0 6px var(--glow-color, currentColor));
+  }
+  :global(.node-shape) {
+    background-color: var(--node-color);
+  }
+  :global(.node-shape--circle) {
+    border-radius: 50%;
+  }
+  :global(.node-shape--ring) {
+    background-color: rgba(15, 23, 42, 0.85);
+    border: 2px solid var(--node-color);
+    border-radius: 50%;
+  }
+  :global(.node-shape--diamond) {
+    clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  }
+  :global(.orch-triangle) {
+    background-color: var(--glow-color);
+    clip-path: polygon(50% 8%, 100% 92%, 0 92%);
+  }
+  :global(.cluster-shape) {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--node-color);
+  }
+  :global(.cluster-shape--core) {
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--node-color) 22%, rgba(15, 23, 42, 0.85));
+    border: 2px solid var(--node-color);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--node-color) 40%, transparent);
+  }
+  :global(.cluster-shape--edge) {
+    filter: drop-shadow(0 0 10px color-mix(in srgb, var(--node-color) 35%, transparent));
+  }
+  :global(.cluster-shape__hex) {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  :global(.cluster-shape__count) {
+    position: relative;
+    z-index: 1;
   }
 </style>

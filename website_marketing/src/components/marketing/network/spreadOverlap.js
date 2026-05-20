@@ -2,8 +2,9 @@ const DEFAULT_GAP_PX = 4;
 
 /**
  * Offsets markers in screen space when their icons would visually overlap at the
- * current zoom. Members of an overlapping group are placed in a ring around the
- * group's pixel centroid; detail panels read from source data, not marker coords.
+ * current zoom. Members of an overlapping group are placed in a compact hex/pin
+ * pack around the group's pixel centroid; detail panels read from source data,
+ * not marker coords.
  *
  * @param {import("leaflet").Map} map
  * @param {Array<{marker: import("leaflet").Marker, iconRadius: number}>} items
@@ -66,17 +67,80 @@ export function spreadOverlappingMarkers(map, items, opts = {}) {
     cx /= indices.length;
     cy /= indices.length;
 
-    const ringRadius = maxRadius + gap + 2;
-    const startAngle = -Math.PI / 2;
+    const step = 2 * maxRadius + gap;
+    const offsets = groupOffsets(indices.length, step);
 
     indices.forEach((idx, i) => {
-      const angle = startAngle + (2 * Math.PI * i) / indices.length;
-      const px = cx + ringRadius * Math.cos(angle);
-      const py = cy + ringRadius * Math.sin(angle);
-      const newLatLng = map.containerPointToLatLng([px, py]);
+      const [ox, oy] = offsets[i];
+      const newLatLng = map.containerPointToLatLng([cx + ox, cy + oy]);
       items[idx].marker.setLatLng(newLatLng);
     });
   });
+}
+
+/**
+ * Hex/pin packed offsets around (0,0) so the centroid stays put. Small groups
+ * get hand-tuned layouts (pair, billiards-rack tri); larger groups fall back to
+ * a pointy-top hex spiral with the centroid recentered.
+ *
+ * @param {number} n
+ * @param {number} step
+ * @returns {Array<[number, number]>}
+ */
+function groupOffsets(n, step) {
+  if (n === 2) {
+    return [
+      [-step / 2, 0],
+      [step / 2, 0],
+    ];
+  }
+  if (n === 3) {
+    const R = step / Math.sqrt(3);
+    return [
+      [0, -R],
+      [-step / 2, R / 2],
+      [step / 2, R / 2],
+    ];
+  }
+  const axial = hexSpiral(n);
+  const pts = axial.map(([q, r]) => [step * (q + r / 2), step * (Math.sqrt(3) / 2) * r]);
+  let cx = 0;
+  let cy = 0;
+  pts.forEach(([x, y]) => {
+    cx += x;
+    cy += y;
+  });
+  cx /= n;
+  cy /= n;
+  return pts.map(([x, y]) => [x - cx, y - cy]);
+}
+
+function hexSpiral(n) {
+  const out = [[0, 0]];
+  if (n <= 1) return out;
+  const dirs = [
+    [1, 0],
+    [1, -1],
+    [0, -1],
+    [-1, 0],
+    [-1, 1],
+    [0, 1],
+  ];
+  let k = 1;
+  while (out.length < n) {
+    let q = k * dirs[0][0];
+    let r = k * dirs[0][1];
+    for (let side = 0; side < 6 && out.length < n; side++) {
+      const [dq, dr] = dirs[(side + 2) % 6];
+      for (let i = 0; i < k && out.length < n; i++) {
+        out.push([q, r]);
+        q += dq;
+        r += dr;
+      }
+    }
+    k++;
+  }
+  return out;
 }
 
 function resetToOriginal(marker) {

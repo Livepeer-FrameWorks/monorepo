@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { motion } from "framer-motion";
 import { useNetworkStatus } from "./useNetworkStatus";
 import { spreadOverlappingMarkers } from "./spreadOverlap";
+import { pointOnPath, samplePath } from "./arc";
 import "leaflet/dist/leaflet.css";
 
 const TILE_URL = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
@@ -39,6 +40,7 @@ const MEMBERSHIP_COLORS = {
 const UNKNOWN_GEO_ANCHOR = [-42, -145];
 
 function overallStatus(clusters) {
+  if (!clusters?.length) return "unknown";
   if (clusters.every((c) => c.status === "healthy")) return "healthy";
   if (clusters.some((c) => c.status === "down")) return "down";
   return "degraded";
@@ -297,7 +299,7 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data, onS
   spreadablesRef.current.orchestrators = [];
 
   const clusterMap = {};
-  data.clusters.forEach((c) => {
+  (data.clusters || []).forEach((c) => {
     clusterMap[c.clusterId] = c;
   });
   const nodeMarkersById = {};
@@ -341,16 +343,25 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data, onS
     const nodeSvcs = servicesByNode[node.nodeId];
     const isComputeNode = serviceRole(nodeSvcs) === "compute";
     const color = roleColor(nodeRole(node, nodeSvcs), node.status);
-    const isEdge = (node.nodeType || "").toLowerCase() === "edge";
-    const size = isComputeNode ? 8 : isEdge ? 10 : 14;
-    const glow = isComputeNode ? "7px" : isEdge ? "6px" : "12px";
-    const nodeStyle = isComputeNode
-      ? `--node-dot-color: rgba(15, 23, 42, 0.85); width: ${size}px; height: ${size}px; border: 2px solid ${color}; box-shadow: 0 0 ${glow} ${color};`
-      : `--node-dot-color: ${color}; width: ${size}px; height: ${size}px; box-shadow: 0 0 ${glow} ${color};`;
+    const nt = (node.nodeType || "").toLowerCase();
+    const isCoreNode = !isComputeNode && (nt === "core" || nt === "central");
+
+    let size;
+    let html;
+    if (isComputeNode) {
+      size = 9;
+      html = `<div class="network-viz__node-dot network-viz__node-dot--compute-ring" style="width:${size}px; height:${size}px; --node-dot-color: ${color}; box-shadow: 0 0 7px ${color};"></div>`;
+    } else if (isCoreNode) {
+      size = 14;
+      html = `<div class="network-viz__shape-wrap network-viz__shape-wrap--glow" style="--glow-color: ${color};"><div class="network-viz__node-dot network-viz__node-dot--core" style="width:${size}px; height:${size}px; --node-dot-color: ${color};"></div></div>`;
+    } else {
+      size = 10;
+      html = `<div class="network-viz__node-dot" style="width:${size}px; height:${size}px; --node-dot-color: ${color}; box-shadow: 0 0 6px ${color};"></div>`;
+    }
 
     const icon = L.divIcon({
       className: "network-viz__marker",
-      html: `<div class="network-viz__node-dot" style="${nodeStyle}"></div>`,
+      html,
       iconSize: [size, size],
       iconAnchor: [size / 2, size / 2],
     });
@@ -364,25 +375,29 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data, onS
     spreadablesRef.current.nodes.push({ marker: nodeMarker, iconRadius: size / 2 });
   });
 
-  data.clusters.forEach((cluster) => {
+  (data.clusters || []).forEach((cluster) => {
     const color = roleColor(cluster.clusterType, cluster.status);
     const radius = Math.max(10, Math.min(24, 10 + cluster.nodeCount * 2));
     const ct = (cluster.clusterType || "").toLowerCase();
     const isCore = ct === "central" || ct === "core";
-    const borderRadius = isCore ? "6px" : "50%";
-    const borderStyle = isCore ? `3px solid ${color}` : `2px dashed ${color}`;
+    const size = radius * 2;
+
+    const html = isCore
+      ? `<div class="network-viz__cluster network-viz__cluster--core" style="width:${size}px; height:${size}px; --cluster-color: ${color};">${cluster.nodeCount}</div>`
+      : `<div class="network-viz__cluster network-viz__cluster--edge" style="width:${size}px; height:${size}px; --cluster-color: ${color};">
+          <svg class="network-viz__cluster-hex" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <polygon points="50,6 92,30 92,70 50,94 8,70 8,30"
+              fill="color-mix(in srgb, ${color} 22%, rgba(15,23,42,0.7))"
+              stroke="${color}" stroke-width="3"
+              stroke-dasharray="6 4" stroke-linejoin="round" stroke-linecap="round" />
+          </svg>
+          <span class="network-viz__cluster-count" style="color:${color};">${cluster.nodeCount}</span>
+        </div>`;
 
     const icon = L.divIcon({
       className: "network-viz__marker",
-      html: `<div style="
-        width: ${radius * 2}px; height: ${radius * 2}px; border-radius: ${borderRadius};
-        background: radial-gradient(circle, color-mix(in srgb, ${color} 25%, transparent), color-mix(in srgb, ${color} 9%, transparent));
-        border: ${borderStyle};
-        display: flex; align-items: center; justify-content: center;
-        font-size: 10px; font-weight: 600; color: ${color};
-        box-shadow: 0 0 12px color-mix(in srgb, ${color} 30%, transparent);
-      ">${cluster.nodeCount}</div>`,
-      iconSize: [radius * 2, radius * 2],
+      html,
+      iconSize: [size, size],
       iconAnchor: [radius, radius],
     });
 
@@ -408,14 +423,14 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data, onS
   visibleOrchestrators.forEach((vantage) => {
     const [lat, lng] = vantageLatLng(vantage);
     const color = orchestratorColor(vantage);
-    const marker = L.circleMarker([lat, lng], {
-      radius: 7,
-      fillColor: color,
-      fillOpacity: 0.82,
-      color: withAlpha(color, 0.7),
-      weight: 2,
-      interactive: true,
-    }).addTo(orchestratorLayer);
+    const size = 14;
+    const icon = L.divIcon({
+      className: "network-viz__marker",
+      html: `<div class="network-viz__shape-wrap network-viz__shape-wrap--glow" style="--glow-color: ${color};"><div class="network-viz__orch-triangle" style="width:${size}px; height:${size}px; --glow-color: ${color};"></div></div>`,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2 + 1],
+    });
+    const marker = L.marker([lat, lng], { icon, interactive: true }).addTo(orchestratorLayer);
     marker.on("click", () =>
       onSelectFeature(
         orchestratorDetail(
@@ -424,7 +439,7 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data, onS
         )
       )
     );
-    spreadablesRef.current.orchestrators.push({ marker, iconRadius: 7 });
+    spreadablesRef.current.orchestrators.push({ marker, iconRadius: size / 2 });
   });
 
   spreadOverlappingMarkers(map, [
@@ -432,7 +447,83 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data, onS
     ...spreadablesRef.current.clusters,
     ...spreadablesRef.current.orchestrators,
   ]);
-  redrawNetworkLines(L, layersRef, pulseTimersRef, data, nodeMarkersById, clusterMarkersById);
+  redrawNetworkLines(L, map, layersRef, pulseTimersRef, data, nodeMarkersById, clusterMarkersById);
+}
+
+function convexHull(points) {
+  if (points.length < 3) return points.slice();
+  const pts = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+      lower.pop();
+    }
+    lower.push(p);
+  }
+  const upper = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+      upper.pop();
+    }
+    upper.push(p);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+function inflateHull(points, padding) {
+  if (!points.length) return points;
+  let cx = 0;
+  let cy = 0;
+  points.forEach((p) => {
+    cx += p.x;
+    cy += p.y;
+  });
+  cx /= points.length;
+  cy /= points.length;
+  return points.map((p) => {
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    const len = Math.hypot(dx, dy) || 1;
+    return { x: p.x + (dx / len) * padding, y: p.y + (dy / len) * padding };
+  });
+}
+
+// Rounds each polygon vertex with a quadratic Bezier so the hull reads as a
+// soft blob instead of a sharp polygon. cornerRadius is in pixels; per vertex
+// it's clamped to half the adjacent edge length so tight clusters don't fold.
+function smoothPolygon(points, cornerRadius, samplesPerCorner = 6) {
+  const n = points.length;
+  if (n < 3) return points;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const prev = points[(i - 1 + n) % n];
+    const curr = points[i];
+    const next = points[(i + 1) % n];
+    const vpx = prev.x - curr.x;
+    const vpy = prev.y - curr.y;
+    const vnx = next.x - curr.x;
+    const vny = next.y - curr.y;
+    const lp = Math.hypot(vpx, vpy) || 1;
+    const ln = Math.hypot(vnx, vny) || 1;
+    const r = Math.min(cornerRadius, lp / 2, ln / 2);
+    const sx = curr.x + (vpx / lp) * r;
+    const sy = curr.y + (vpy / lp) * r;
+    const ex = curr.x + (vnx / ln) * r;
+    const ey = curr.y + (vny / ln) * r;
+    for (let s = 0; s <= samplesPerCorner; s++) {
+      const t = s / samplesPerCorner;
+      const u = 1 - t;
+      out.push({
+        x: u * u * sx + 2 * u * t * curr.x + t * t * ex,
+        y: u * u * sy + 2 * u * t * curr.y + t * t * ey,
+      });
+    }
+  }
+  return out;
 }
 
 function startPulse(L, layer, pulseTimersRef, from, to, color = "rgb(125, 207, 255)") {
@@ -446,8 +537,7 @@ function startPulse(L, layer, pulseTimersRef, from, to, color = "rgb(125, 207, 2
     const timerId = setTimeout(() => {
       const id = setInterval(() => {
         const t = step / steps;
-        const lat = from[0] + (to[0] - from[0]) * t;
-        const lng = from[1] + (to[1] - from[1]) * t;
+        const [lat, lng] = pointOnPath(from, to, t);
 
         if (!marker) {
           marker = L.circleMarker([lat, lng], {
@@ -483,6 +573,7 @@ function startPulse(L, layer, pulseTimersRef, from, to, color = "rgb(125, 207, 2
 
 function redrawNetworkLines(
   L,
+  map,
   layersRef,
   pulseTimersRef,
   data,
@@ -500,7 +591,7 @@ function redrawNetworkLines(
   pulseLayer.clearLayers();
 
   const clusterMap = {};
-  data.clusters.forEach((c) => {
+  (data.clusters || []).forEach((c) => {
     clusterMap[c.clusterId] = c;
   });
   const servicesByNode = {};
@@ -512,30 +603,64 @@ function redrawNetworkLines(
     }
   });
 
+  // Group nodes by cluster so we can draw a hull per cluster (≥2 members) or
+  // fall back to a single radial line for solo nodes.
+  const nodesByCluster = {};
   (data.nodes || []).forEach((node) => {
     if (!node.latitude && !node.longitude) return;
-    const nodeMarker = nodeMarkersById[node.nodeId];
-    const clusterMarker = clusterMarkersById[node.clusterId];
-    if (!nodeMarker || !clusterMarker) return;
-    const from = markerLatLng(nodeMarker, [node.latitude, node.longitude]);
-    const to = markerLatLng(clusterMarker, [
-      clusterMap[node.clusterId]?.latitude,
-      clusterMap[node.clusterId]?.longitude,
-    ]);
-    if (!Number.isFinite(to[0]) || !Number.isFinite(to[1])) return;
-    if (from[0] === to[0] && from[1] === to[1]) return;
-    const role = nodeRole(node, servicesByNode[node.nodeId]);
-    const lineColor = MEMBERSHIP_COLORS[role] || withAlpha(roleColor(role, node.status), 0.3);
-    L.polyline([from, to], {
-      color: lineColor,
-      weight: 1.5,
-      opacity: 0.65,
+    if (!node.clusterId) return;
+    if (!nodeMarkersById[node.nodeId] || !clusterMarkersById[node.clusterId]) return;
+    if (!nodesByCluster[node.clusterId]) nodesByCluster[node.clusterId] = [];
+    nodesByCluster[node.clusterId].push(node);
+  });
+
+  Object.entries(nodesByCluster).forEach(([clusterId, members]) => {
+    const clusterMarker = clusterMarkersById[clusterId];
+    const cluster = clusterMap[clusterId];
+    if (!clusterMarker || !cluster) return;
+    const clusterColor = roleColor(cluster.clusterType, cluster.status);
+
+    if (members.length === 1) {
+      const node = members[0];
+      const from = markerLatLng(nodeMarkersById[node.nodeId], [node.latitude, node.longitude]);
+      const to = markerLatLng(clusterMarker, [cluster.latitude, cluster.longitude]);
+      if (!Number.isFinite(to[0]) || !Number.isFinite(to[1])) return;
+      if (from[0] === to[0] && from[1] === to[1]) return;
+      const role = nodeRole(node, servicesByNode[node.nodeId]);
+      const lineColor = MEMBERSHIP_COLORS[role] || withAlpha(roleColor(role, node.status), 0.3);
+      L.polyline([from, to], {
+        color: lineColor,
+        weight: 1.5,
+        opacity: 0.65,
+        smoothFactor: 1,
+        interactive: false,
+      }).addTo(memberLayer);
+      return;
+    }
+
+    const pts = [clusterMarker, ...members.map((n) => nodeMarkersById[n.nodeId])]
+      .filter(Boolean)
+      .map((m) => map.latLngToContainerPoint(m.getLatLng()));
+    if (pts.length < 3) return;
+    const hull = convexHull(pts);
+    const inflated = inflateHull(hull, 10);
+    const smoothed = smoothPolygon(inflated, 14);
+    const ring = smoothed.map((p) => {
+      const ll = map.containerPointToLatLng([p.x, p.y]);
+      return [ll.lat, ll.lng];
+    });
+    L.polygon(ring, {
+      className: "network-viz__hull",
+      color: withAlpha(clusterColor, 0.5),
+      weight: 1,
+      fillColor: clusterColor,
+      fillOpacity: 0.12,
       smoothFactor: 1,
       interactive: false,
     }).addTo(memberLayer);
   });
 
-  data.peerConnections.forEach((pc) => {
+  (data.peerConnections || []).forEach((pc) => {
     const src = clusterMap[pc.sourceCluster];
     const tgt = clusterMap[pc.targetCluster];
     const srcMarker = clusterMarkersById[pc.sourceCluster];
@@ -545,7 +670,7 @@ function redrawNetworkLines(
     const to = markerLatLng(tgtMarker, [tgt.latitude, tgt.longitude]);
     const isFederation = pc.connectionType === "federation";
 
-    L.polyline([from, to], {
+    L.polyline(samplePath(from, to), {
       color: isFederation ? FEDERATION_COLOR : ASSIGNMENT_COLOR,
       weight: isFederation ? 2 : 1.5,
       opacity: pc.connected ? 0.8 : 0.4,

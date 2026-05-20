@@ -239,10 +239,74 @@
     border: none !important;
   }
 
-  /* --- Individual node dots (size and glow set inline per core/edge) --- */
+  /* --- Individual node dots (size and glow set inline per role) --- */
   .network-viz__node-dot {
     border-radius: 50%;
     background-color: var(--node-dot-color);
+  }
+
+  /* Filled diamond used for core nodes — clip-path requires drop-shadow on a
+     wrapper for the glow effect because box-shadow gets clipped. */
+  .network-viz__node-dot--core {
+    border-radius: 0;
+    clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  }
+
+  /* Hollow ring used for compute (Livepeer) nodes. Border + dark fill reads
+     as "open" vs the solid filled circle for media/edge nodes. */
+  .network-viz__node-dot--compute-ring {
+    background-color: rgba(15, 23, 42, 0.85);
+    border: 2px solid var(--node-dot-color);
+  }
+
+  /* Wrapper that hosts the drop-shadow glow for clip-path shapes. */
+  .network-viz__shape-wrap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .network-viz__shape-wrap--glow {
+    filter: drop-shadow(0 0 6px var(--glow-color, currentColor));
+  }
+
+  /* Orchestrator vantage: small triangle to flag "external compute". */
+  .network-viz__orch-triangle {
+    background-color: var(--glow-color);
+    clip-path: polygon(50% 8%, 100% 92%, 0 92%);
+  }
+
+  /* --- Cluster markers (rounded square for core, hex for edge sites) --- */
+  .network-viz__cluster {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--cluster-color);
+  }
+  .network-viz__cluster--core {
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--cluster-color) 22%, rgba(15, 23, 42, 0.85));
+    border: 2px solid var(--cluster-color);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--cluster-color) 40%, transparent);
+  }
+  .network-viz__cluster--edge {
+    filter: drop-shadow(0 0 10px color-mix(in srgb, var(--cluster-color) 35%, transparent));
+  }
+  .network-viz__cluster-hex {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .network-viz__cluster-count {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Membership hull behind cluster nodes — soft halo replaces N radial lines. */
+  .network-viz__hull {
+    pointer-events: none;
   }
 
   .map-popup {
