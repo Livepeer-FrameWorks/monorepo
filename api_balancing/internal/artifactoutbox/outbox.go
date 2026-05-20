@@ -12,6 +12,7 @@ import (
 	"time"
 
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -273,6 +274,19 @@ func (dispatcher) Dispatch(ctx context.Context, row outboxRow) ([]string, error)
 }
 
 func claimBatch(ctx context.Context) ([]outboxRow, error) {
+	var out []outboxRow
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		batch, err := claimBatchOnce(ctx)
+		if err != nil {
+			return err
+		}
+		out = batch
+		return nil
+	})
+	return out, err
+}
+
+func claimBatchOnce(ctx context.Context) ([]outboxRow, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err

@@ -23,6 +23,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
@@ -4214,6 +4215,21 @@ func (s *QuartermasterServer) ListEdgeReleases(ctx context.Context, req *pb.List
 		args = append(args, version)
 		where = append(where, fmt.Sprintf("version = $%d", len(args)))
 	}
+	var releases []*pb.EdgeRelease
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		rows, err := s.listEdgeReleasesNoRetry(ctx, where, args)
+		if err == nil {
+			releases = rows
+		}
+		return err
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	return &pb.ListEdgeReleasesResponse{Releases: releases}, nil
+}
+
+func (s *QuartermasterServer) listEdgeReleasesNoRetry(ctx context.Context, where []string, args []any) ([]*pb.EdgeRelease, error) {
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 			SELECT channel, version, components::text, published_at
 		FROM quartermaster.edge_releases
@@ -4221,21 +4237,21 @@ func (s *QuartermasterServer) ListEdgeReleases(ctx context.Context, req *pb.List
 		ORDER BY channel, published_at DESC, version DESC
 	`, strings.Join(where, " AND ")), args...)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	var releases []*pb.EdgeRelease
 	for rows.Next() {
 		release, err := scanEdgeRelease(rows)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "scan release: %v", err)
+			return nil, fmt.Errorf("scan release: %w", err)
 		}
 		releases = append(releases, release)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "read releases: %v", err)
+		return nil, fmt.Errorf("read releases: %w", err)
 	}
-	return &pb.ListEdgeReleasesResponse{Releases: releases}, nil
+	return releases, nil
 }
 
 func (s *QuartermasterServer) UpsertEdgeRelease(ctx context.Context, req *pb.UpsertEdgeReleaseRequest) (*pb.EdgeReleaseResponse, error) {
@@ -4419,6 +4435,21 @@ func (s *QuartermasterServer) ListClusterReleaseTargets(ctx context.Context, req
 			return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 		}
 	}
+	var targets []*pb.ClusterReleaseTarget
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		rows, err := s.listClusterReleaseTargetsNoRetry(ctx, where, args)
+		if err == nil {
+			targets = rows
+		}
+		return err
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	return &pb.ListClusterReleaseTargetsResponse{Targets: targets}, nil
+}
+
+func (s *QuartermasterServer) listClusterReleaseTargetsNoRetry(ctx context.Context, where []string, args []any) ([]*pb.ClusterReleaseTarget, error) {
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 			SELECT cluster_id, channel, COALESCE(target_version, ''), rollout_plan::text, COALESCE(paused, false), updated_at
 		FROM quartermaster.cluster_release_targets
@@ -4426,21 +4457,21 @@ func (s *QuartermasterServer) ListClusterReleaseTargets(ctx context.Context, req
 		ORDER BY updated_at DESC, cluster_id
 	`, strings.Join(where, " AND ")), args...)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	var targets []*pb.ClusterReleaseTarget
 	for rows.Next() {
 		target, err := scanClusterReleaseTarget(rows)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "scan release target: %v", err)
+			return nil, fmt.Errorf("scan release target: %w", err)
 		}
 		targets = append(targets, target)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "read release targets: %v", err)
+		return nil, fmt.Errorf("read release targets: %w", err)
 	}
-	return &pb.ListClusterReleaseTargetsResponse{Targets: targets}, nil
+	return targets, nil
 }
 
 func (s *QuartermasterServer) SetClusterReleaseTarget(ctx context.Context, req *pb.SetClusterReleaseTargetRequest) (*pb.ClusterReleaseTargetResponse, error) {

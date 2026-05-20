@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/lib/pq"
 )
 
@@ -469,6 +470,19 @@ func ListChaptersNeedingFinalization(ctx context.Context, limit int, finalizingT
 // MarkChapterReclaimStarted before issuing reclaim orders to prevent
 // duplicate work.
 func ListChaptersNeedingReclaim(ctx context.Context, limit int, freshness time.Duration) ([]DVRChapterRow, error) {
+	var out []DVRChapterRow
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		rows, err := listChaptersNeedingReclaimOnce(ctx, limit, freshness)
+		if err != nil {
+			return err
+		}
+		out = rows
+		return nil
+	})
+	return out, err
+}
+
+func listChaptersNeedingReclaimOnce(ctx context.Context, limit int, freshness time.Duration) ([]DVRChapterRow, error) {
 	if db == nil {
 		return nil, sql.ErrConnDone
 	}
