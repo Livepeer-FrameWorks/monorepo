@@ -1,10 +1,12 @@
 package foghorn
 
 import (
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"google.golang.org/grpc/connectivity"
@@ -102,7 +104,7 @@ func (p *FoghornPool) GetOrCreate(clusterID, addr string) (*GRPCClient, error) {
 		ServiceToken:  p.config.ServiceToken,
 		UseTLS:        p.config.UseTLS,
 		CACertFile:    p.config.CACertFile,
-		ServerName:    p.serverName(),
+		ServerName:    p.serverName(addr),
 		AllowInsecure: p.config.AllowInsecure,
 	})
 	if err != nil {
@@ -124,14 +126,25 @@ func (p *FoghornPool) GetOrCreate(clusterID, addr string) (*GRPCClient, error) {
 	return client, nil
 }
 
-func (p *FoghornPool) serverName() string {
+func (p *FoghornPool) serverName(addr string) string {
 	if p.config.ServerName != "" || p.config.AllowInsecure {
 		return p.config.ServerName
 	}
 	if p.config.UseTLS || p.config.CACertFile != "" {
+		if grpcutil.AddrIsFQDN(addr) && !isInternalFoghornAddr(addr) {
+			return ""
+		}
 		return defaultInternalServerName
 	}
 	return ""
+}
+
+func isInternalFoghornAddr(addr string) bool {
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	return host == defaultInternalServerName || host == "foghorn" || host == "localhost"
 }
 
 // Get returns the GRPCClient for clusterID if it exists.
