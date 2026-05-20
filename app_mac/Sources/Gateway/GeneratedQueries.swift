@@ -91,6 +91,10 @@ enum GQL {
     clipMode
     requestedParams
     storageLocation
+    syncStatus
+    isHot
+    isSynced
+    isFinalized
     isFrozen
     expiresAt
     thumbnailAssets {
@@ -161,6 +165,10 @@ enum GQL {
     manifestPath
     errorMessage
     storageLocation
+    syncStatus
+    isHot
+    isSynced
+    isFinalized
     isFrozen
     thumbnailAssets {
       posterUrl
@@ -1153,6 +1161,10 @@ enum GQL {
           sizeBytes
           status
           storageLocation
+          syncStatus
+          isHot
+          isSynced
+          isFinalized
           isFrozen
           # Marginal storage cost for this clip on the tenant's tier. Null for
           # self-hosted / fully tenant-private clusters.
@@ -1390,6 +1402,10 @@ enum GQL {
           manifestPath
           errorMessage
           storageLocation
+          syncStatus
+          isHot
+          isSynced
+          isFinalized
           isFrozen
           # Marginal storage cost for this recording on the tenant's tier.
           storageCost {
@@ -3794,6 +3810,10 @@ enum GQL {
           filename
           status
           storageLocation
+          syncStatus
+          isHot
+          isSynced
+          isFinalized
           sizeBytes
           durationMs
           resolution
