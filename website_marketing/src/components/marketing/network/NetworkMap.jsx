@@ -38,14 +38,6 @@ const MEMBERSHIP_COLORS = {
 };
 const UNKNOWN_GEO_ANCHOR = [-42, -145];
 
-function escapeHtml(s) {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 function overallStatus(clusters) {
   if (clusters.every((c) => c.status === "healthy")) return "healthy";
   if (clusters.some((c) => c.status === "down")) return "down";
@@ -77,12 +69,56 @@ function formatLoad(current, max) {
   return `${current} / ${max}`;
 }
 
-function popupRow(label, value) {
-  return `<tr><td class="map-popup__label">${escapeHtml(label)}</td><td class="map-popup__value">${value}</td></tr>`;
+function detailRow(label, value, code = false) {
+  return { label, value, code };
 }
 
-function popupSection(title, rows) {
-  return `<div class="map-popup__section-title">${escapeHtml(title)}</div><table class="map-popup__table">${rows}</table>`;
+function renderDetail(detail) {
+  if (!detail) return null;
+  return (
+    <div className="map-popup">
+      <div className="map-popup__title">{detail.title}</div>
+      <table className="map-popup__table">
+        <tbody>
+          {detail.rows.map((row) => (
+            <tr key={`${row.label}:${row.value}`}>
+              <td className="map-popup__label">{row.label}</td>
+              <td className="map-popup__value">
+                {row.code ? <code className="map-popup__code">{row.value}</code> : row.value}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {(detail.sections || []).map((section) => (
+        <div key={section.title}>
+          <div className="map-popup__section-title">{section.title}</div>
+          <table className="map-popup__table">
+            <tbody>
+              {section.rows.map((row) => (
+                <tr key={`${section.title}:${row.label}:${row.value}`}>
+                  <td className="map-popup__label">{row.label}</td>
+                  <td className="map-popup__value">
+                    {row.code ? <code className="map-popup__code">{row.value}</code> : row.value}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+      {!!detail.tags?.length && (
+        <div className="map-popup__tags">
+          {detail.tags.map((tag) => (
+            <span className="map-popup__tag" key={tag}>
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+      {detail.description && <div className="map-popup__desc">{detail.description}</div>}
+    </div>
+  );
 }
 
 function roleColor(role, status) {
@@ -134,88 +170,110 @@ function markerLatLng(marker, fallback) {
   return [ll.lat, ll.lng];
 }
 
-function clusterPopupHtml(cluster, nodeTypeCounts, clusterServices) {
-  let infoRows =
-    (cluster.region ? popupRow("Region", escapeHtml(cluster.region)) : "") +
-    (cluster.clusterType ? popupRow("Type", escapeHtml(cluster.clusterType)) : "") +
-    popupRow("Nodes", `${cluster.healthyNodeCount} / ${cluster.nodeCount}`) +
-    popupRow("Peers", `${cluster.peerCount}`) +
-    popupRow("Status", escapeHtml(cluster.status));
+function clusterDetail(cluster, nodeTypeCounts, clusterServices) {
+  const rows = [
+    ...(cluster.region ? [detailRow("Region", cluster.region)] : []),
+    ...(cluster.clusterType ? [detailRow("Type", cluster.clusterType)] : []),
+    detailRow("Nodes", `${cluster.healthyNodeCount} / ${cluster.nodeCount}`),
+    detailRow("Peers", `${cluster.peerCount}`),
+    detailRow("Status", cluster.status),
+  ];
 
   if (nodeTypeCounts) {
-    if (nodeTypeCounts.core > 0) infoRows += popupRow("Core Nodes", `${nodeTypeCounts.core}`);
-    if (nodeTypeCounts.edge > 0) infoRows += popupRow("Edge Nodes", `${nodeTypeCounts.edge}`);
+    if (nodeTypeCounts.core > 0) rows.push(detailRow("Core Nodes", `${nodeTypeCounts.core}`));
+    if (nodeTypeCounts.edge > 0) rows.push(detailRow("Edge Nodes", `${nodeTypeCounts.edge}`));
   }
 
-  let html =
-    `<div class="map-popup"><div class="map-popup__title">${escapeHtml(cluster.name)}</div>` +
-    `<table class="map-popup__table">${infoRows}</table>`;
+  const sections = [];
 
   if (cluster.maxStreams > 0 || cluster.currentStreams > 0) {
-    const loadRows =
-      popupRow("Streams", formatLoad(cluster.currentStreams, cluster.maxStreams)) +
-      popupRow("Viewers", formatLoad(cluster.currentViewers, cluster.maxViewers)) +
-      popupRow(
-        "Bandwidth",
-        `${formatLoad(cluster.currentBandwidthMbps, cluster.maxBandwidthMbps)} Mbps`
-      );
-    html += popupSection("Load", loadRows);
+    sections.push({
+      title: "Load",
+      rows: [
+        detailRow("Streams", formatLoad(cluster.currentStreams, cluster.maxStreams)),
+        detailRow("Viewers", formatLoad(cluster.currentViewers, cluster.maxViewers)),
+        detailRow(
+          "Bandwidth",
+          `${formatLoad(cluster.currentBandwidthMbps, cluster.maxBandwidthMbps)} Mbps`
+        ),
+      ],
+    });
   }
 
   const services = clusterServices?.length ? clusterServices : cluster.services;
-  if (services?.length) {
-    html += `<div class="map-popup__tags">${services.map((s) => `<span class="map-popup__tag">${escapeHtml(s)}</span>`).join("")}</div>`;
-  }
-
-  if (cluster.shortDescription) {
-    html += `<div class="map-popup__desc">${escapeHtml(cluster.shortDescription)}</div>`;
-  }
-
-  return html + "</div>";
+  return {
+    title: cluster.name,
+    rows,
+    sections,
+    tags: services,
+    description: cluster.shortDescription,
+  };
 }
 
-function nodePopupHtml(node, services) {
-  const rows =
-    popupRow("Type", escapeHtml(node.nodeType)) +
-    popupRow("Status", escapeHtml(node.status)) +
-    popupRow("Cluster", escapeHtml(node.clusterId));
-  let html =
-    `<div class="map-popup"><div class="map-popup__title">${escapeHtml(node.name)}</div>` +
-    `<table class="map-popup__table">${rows}</table>`;
-  if (services?.length) {
-    html += `<div class="map-popup__tags">${services.map((s) => `<span class="map-popup__tag">${escapeHtml(s)}</span>`).join("")}</div>`;
-  }
-  return html + "</div>";
+function nodeDetail(node, services) {
+  return {
+    title: node.name,
+    rows: [
+      detailRow("Type", node.nodeType),
+      detailRow("Status", node.status),
+      detailRow("Cluster", node.clusterId),
+    ],
+    tags: services,
+  };
 }
 
-function orchestratorPopupHtml(vantage) {
+function orchestratorDetail(vantage, peerVantages = []) {
   const hasGeo = Number(vantage.latitude) !== 0 || Number(vantage.longitude) !== 0;
-  const rows =
-    popupRow("Instance IP", escapeHtml(vantage.resolvedIp || "unknown")) +
-    popupRow("Gateway", escapeHtml(vantage.gatewayId || "unknown")) +
-    popupRow("Region", escapeHtml(vantage.gatewayRegion || "unknown")) +
-    popupRow("Latency", `${Number(vantage.latestLatencyMs || 0).toFixed(0)}ms`) +
-    popupRow("Score", `${Number(vantage.score || 0).toFixed(2)}`) +
-    popupRow("Geo", hasGeo ? escapeHtml(vantage.geoSource || "mmdb") : "unknown");
-  return (
-    `<div class="map-popup"><div class="map-popup__title">${escapeHtml(vantage.orchAddr || "Orchestrator")}</div>` +
-    `<table class="map-popup__table">${rows}</table>` +
-    (!hasGeo
-      ? `<div class="map-popup__desc">Unknown geo: check gateway GeoIP and DNS resolution.</div>`
-      : "") +
-    "</div>"
-  );
+  const rows = [
+    detailRow("Orch", vantage.orchAddr || "unknown", true),
+    detailRow("Instance IP", vantage.resolvedIp || "unknown"),
+    detailRow("Gateway", vantage.gatewayId || "unknown"),
+    detailRow("Region", vantage.gatewayRegion || "unknown"),
+    detailRow("Latency", `${Number(vantage.latestLatencyMs || 0).toFixed(0)}ms`),
+    detailRow("Score", `${Number(vantage.score || 0).toFixed(2)}`),
+  ];
+  if (hasGeo) rows.push(detailRow("Geo", vantage.geoSource || "mmdb"));
+  const instanceRows = [...peerVantages]
+    .sort((a, b) => String(a.resolvedIp || "").localeCompare(String(b.resolvedIp || "")))
+    .map((peer) =>
+      detailRow(
+        peer.resolvedIp || "unknown",
+        `${peer.gatewayId || "unknown"} (${peer.gatewayRegion || "unknown"}) · ${Number(peer.latestLatencyMs || 0).toFixed(0)}ms`
+      )
+    );
+  return {
+    title: "Orchestrator",
+    rows,
+    sections: instanceRows.length ? [{ title: "Observed Instances", rows: instanceRows }] : [],
+  };
 }
 
 function orchestratorColor(vantage) {
-  if (!vantage.dialedRecently) return ROLE_COLORS.default;
   const latency = Number(vantage.latestLatencyMs || 0);
-  if (latency >= 1000) return "rgb(239, 68, 68)";
-  if (latency >= 250) return "rgb(234, 179, 8)";
+  if (latency >= 750) return "rgb(74, 111, 91)";
+  if (latency >= 250) return "rgb(45, 150, 96)";
   return ROLE_COLORS.compute;
 }
 
-function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
+function dedupeOrchestratorVantages(vantages) {
+  const byInstance = new Map();
+  (vantages || []).forEach((vantage) => {
+    if (!vantage.dialedRecently) return;
+    const key = `${vantage.orchAddr}:${vantage.resolvedIp}`;
+    const current = byInstance.get(key);
+    if (
+      !current ||
+      Number(vantage.latestLatencyMs || 0) < Number(current.latestLatencyMs || 0) ||
+      (Number(vantage.latestLatencyMs || 0) === Number(current.latestLatencyMs || 0) &&
+        Number(vantage.score || 0) > Number(current.score || 0))
+    ) {
+      byInstance.set(key, vantage);
+    }
+  });
+  return [...byInstance.values()];
+}
+
+function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data, onSelectFeature) {
   const {
     membership: memberLayer,
     clusters: clusterLayer,
@@ -236,6 +294,7 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
   pulseLayer.clearLayers();
   spreadablesRef.current.nodes = [];
   spreadablesRef.current.clusters = [];
+  spreadablesRef.current.orchestrators = [];
 
   const clusterMap = {};
   data.clusters.forEach((c) => {
@@ -280,25 +339,27 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
     if (!node.latitude && !node.longitude) return;
 
     const nodeSvcs = servicesByNode[node.nodeId];
+    const isComputeNode = serviceRole(nodeSvcs) === "compute";
     const color = roleColor(nodeRole(node, nodeSvcs), node.status);
     const isEdge = (node.nodeType || "").toLowerCase() === "edge";
-    const size = isEdge ? 10 : 14;
-    const glow = isEdge ? "6px" : "12px";
+    const size = isComputeNode ? 8 : isEdge ? 10 : 14;
+    const glow = isComputeNode ? "7px" : isEdge ? "6px" : "12px";
+    const nodeStyle = isComputeNode
+      ? `--node-dot-color: rgba(15, 23, 42, 0.85); width: ${size}px; height: ${size}px; border: 2px solid ${color}; box-shadow: 0 0 ${glow} ${color};`
+      : `--node-dot-color: ${color}; width: ${size}px; height: ${size}px; box-shadow: 0 0 ${glow} ${color};`;
 
     const icon = L.divIcon({
       className: "network-viz__marker",
-      html: `<div class="network-viz__node-dot" style="--node-dot-color: ${color}; width: ${size}px; height: ${size}px; box-shadow: 0 0 ${glow} ${color};"></div>`,
+      html: `<div class="network-viz__node-dot" style="${nodeStyle}"></div>`,
       iconSize: [size, size],
       iconAnchor: [size / 2, size / 2],
     });
 
-    const nodeMarker = L.marker([node.latitude, node.longitude], { icon, interactive: true })
-      .bindPopup(nodePopupHtml(node, nodeSvcs), {
-        className: "network-viz__popup",
-        maxWidth: 400,
-        minWidth: 200,
-      })
-      .addTo(nodeLayer);
+    const nodeMarker = L.marker([node.latitude, node.longitude], {
+      icon,
+      interactive: true,
+    }).addTo(nodeLayer);
+    nodeMarker.on("click", () => onSelectFeature(nodeDetail(node, nodeSvcs)));
     nodeMarkersById[node.nodeId] = nodeMarker;
     spreadablesRef.current.nodes.push({ marker: nodeMarker, iconRadius: size / 2 });
   });
@@ -329,42 +390,47 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
       icon,
       interactive: true,
       zIndexOffset: 1000,
-    })
-      .bindPopup(
-        clusterPopupHtml(
+    }).addTo(clusterLayer);
+    clusterMarker.on("click", () =>
+      onSelectFeature(
+        clusterDetail(
           cluster,
           nodeTypeCountByCluster[cluster.clusterId],
           servicesByCluster[cluster.clusterId]
-        ),
-        { className: "network-viz__popup", maxWidth: 400, minWidth: 220 }
+        )
       )
-      .addTo(clusterLayer);
+    );
     clusterMarkersById[cluster.clusterId] = clusterMarker;
     spreadablesRef.current.clusters.push({ marker: clusterMarker, iconRadius: radius });
   });
 
-  (data.orchestratorVantages || []).forEach((vantage) => {
+  const visibleOrchestrators = dedupeOrchestratorVantages(data.orchestratorVantages);
+  visibleOrchestrators.forEach((vantage) => {
     const [lat, lng] = vantageLatLng(vantage);
     const color = orchestratorColor(vantage);
-    L.circleMarker([lat, lng], {
+    const marker = L.circleMarker([lat, lng], {
       radius: 7,
       fillColor: color,
-      fillOpacity: 0.9,
+      fillOpacity: 0.82,
       color: withAlpha(color, 0.7),
       weight: 2,
       interactive: true,
-    })
-      .bindPopup(orchestratorPopupHtml(vantage), {
-        className: "network-viz__popup",
-        maxWidth: 420,
-        minWidth: 240,
-      })
-      .addTo(orchestratorLayer);
+    }).addTo(orchestratorLayer);
+    marker.on("click", () =>
+      onSelectFeature(
+        orchestratorDetail(
+          vantage,
+          visibleOrchestrators.filter((candidate) => candidate.orchAddr === vantage.orchAddr)
+        )
+      )
+    );
+    spreadablesRef.current.orchestrators.push({ marker, iconRadius: 7 });
   });
 
   spreadOverlappingMarkers(map, [
     ...spreadablesRef.current.nodes,
     ...spreadablesRef.current.clusters,
+    ...spreadablesRef.current.orchestrators,
   ]);
   redrawNetworkLines(L, layersRef, pulseTimersRef, data, nodeMarkersById, clusterMarkersById);
 }
@@ -497,6 +563,7 @@ function redrawNetworkLines(
 const ICON_MAXIMIZE = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`;
 const ICON_MINIMIZE = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`;
 const ICON_HOME = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>`;
+const ICON_CPU = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></svg>`;
 
 function NetworkMapInner({ data }) {
   const containerRef = useRef(null);
@@ -513,9 +580,14 @@ function NetworkMapInner({ data }) {
     pulses: null,
   });
   const pulseTimersRef = useRef([]);
-  const spreadablesRef = useRef({ nodes: [], clusters: [] });
+  const spreadablesRef = useRef({ nodes: [], clusters: [], orchestrators: [] });
   const [mapReady, setMapReady] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showOrchestrators, setShowOrchestrators] = useState(true);
+  const [selectedDetail, setSelectedDetail] = useState(null);
+  const selectFeatureRef = useRef((html) => setSelectedDetail(html));
+
+  selectFeatureRef.current = (html) => setSelectedDetail(html);
 
   // Init map once
   useEffect(() => {
@@ -563,7 +635,15 @@ function NetworkMapInner({ data }) {
       layersRef.current.orchestrators = L.layerGroup().addTo(map);
 
       map.on("zoomend", () =>
-        drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, dataRef.current)
+        drawLayers(
+          L,
+          map,
+          layersRef,
+          pulseTimersRef,
+          spreadablesRef,
+          dataRef.current,
+          selectFeatureRef.current
+        )
       );
 
       leafletRef.current = L;
@@ -584,11 +664,22 @@ function NetworkMapInner({ data }) {
 
   // Redraw when data changes or map becomes ready
   useEffect(() => {
-    dataRef.current = data;
+    dataRef.current = {
+      ...data,
+      orchestratorVantages: showOrchestrators ? data.orchestratorVantages : [],
+    };
     const L = leafletRef.current;
     if (!L || !mapRef.current) return;
-    drawLayers(L, mapRef.current, layersRef, pulseTimersRef, spreadablesRef, data);
-  }, [data, mapReady]);
+    drawLayers(
+      L,
+      mapRef.current,
+      layersRef,
+      pulseTimersRef,
+      spreadablesRef,
+      dataRef.current,
+      selectFeatureRef.current
+    );
+  }, [data, mapReady, showOrchestrators]);
 
   const toggleFullscreen = useCallback(() => {
     setIsFullscreen((v) => !v);
@@ -605,6 +696,19 @@ function NetworkMapInner({ data }) {
       className={`network-viz__map-wrapper${isFullscreen ? " network-viz__map-wrapper--fullscreen" : ""}`}
     >
       <div ref={containerRef} className="network-viz__map" />
+      {selectedDetail && (
+        <aside className="network-viz__detail-panel" aria-label="Map selection details">
+          <button
+            type="button"
+            className="network-viz__detail-close"
+            aria-label="Close details"
+            onClick={() => setSelectedDetail(null)}
+          >
+            ×
+          </button>
+          <div className="network-viz__detail-body">{renderDetail(selectedDetail)}</div>
+        </aside>
+      )}
       <div className="network-viz__controls">
         <button
           type="button"
@@ -612,6 +716,18 @@ function NetworkMapInner({ data }) {
           onClick={resetView}
           title="Reset view"
           dangerouslySetInnerHTML={{ __html: ICON_HOME }}
+        />
+        <button
+          type="button"
+          className={`network-viz__control-btn${showOrchestrators ? " network-viz__control-btn--active" : ""}`}
+          onClick={() => {
+            setShowOrchestrators((value) => {
+              if (value) setSelectedDetail(null);
+              return !value;
+            });
+          }}
+          title={showOrchestrators ? "Hide Livepeer compute" : "Show Livepeer compute"}
+          dangerouslySetInnerHTML={{ __html: ICON_CPU }}
         />
         <button
           type="button"

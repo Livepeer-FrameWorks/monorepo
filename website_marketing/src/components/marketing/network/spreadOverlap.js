@@ -3,7 +3,7 @@ const DEFAULT_GAP_PX = 4;
 /**
  * Offsets markers in screen space when their icons would visually overlap at the
  * current zoom. Members of an overlapping group are placed in a ring around the
- * group's pixel centroid; popups still report the true location stored on the marker.
+ * group's pixel centroid; detail panels read from source data, not marker coords.
  *
  * @param {import("leaflet").Map} map
  * @param {Array<{marker: import("leaflet").Marker, iconRadius: number}>} items

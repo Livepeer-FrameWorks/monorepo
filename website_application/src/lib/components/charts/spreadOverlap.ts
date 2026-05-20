@@ -1,11 +1,13 @@
-import type { Map as LMap, Marker } from "leaflet";
+import type { CircleMarker, Map as LMap, Marker } from "leaflet";
 
 export interface Spreadable {
-  marker: Marker;
+  marker: Marker | CircleMarker;
   iconRadius: number;
 }
 
-interface MarkerWithOriginal extends Marker {
+interface MarkerWithOriginal {
+  getLatLng: Marker["getLatLng"];
+  setLatLng: Marker["setLatLng"];
   __originalLatLng?: ReturnType<Marker["getLatLng"]>;
 }
 
@@ -14,7 +16,7 @@ const DEFAULT_GAP_PX = 4;
 /**
  * Offsets markers in screen space when their icons would visually overlap at the
  * current zoom. Members of an overlapping group are placed in a ring around the
- * group's pixel centroid; popups still report the true location stored on the marker.
+ * group's pixel centroid; detail panels read from source data, not marker coords.
  */
 export function spreadOverlappingMarkers(
   map: LMap,
@@ -93,7 +95,7 @@ export function spreadOverlappingMarkers(
   });
 }
 
-function resetToOriginal(marker: Marker): void {
+function resetToOriginal(marker: Marker | CircleMarker): void {
   const m = marker as MarkerWithOriginal;
   if (m.__originalLatLng === undefined) {
     m.__originalLatLng = marker.getLatLng();

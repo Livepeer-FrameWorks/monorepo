@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { SvelteMap } from "svelte/reactivity";
   import type { Map as LeafletMap, LayerGroup, Marker } from "leaflet";
   import { getIconComponent } from "$lib/iconUtils";
   import { spreadOverlappingMarkers, type Spreadable } from "./spreadOverlap";
@@ -11,18 +12,11 @@
   // Leaflet is client-side only
   let L: typeof import("leaflet") | null = null;
 
-  function escapeHtml(s: string): string {
-    return s
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
-
   // Icons for controls
   const MaximizeIcon = getIconComponent("Maximize2");
   const MinimizeIcon = getIconComponent("Minimize2");
   const HomeIcon = getIconComponent("Home");
+  const CpuIcon = getIconComponent("Cpu");
 
   interface Route {
     from: [number, number]; // [lat, lng]
@@ -110,7 +104,7 @@
   }
 
   // Orchestrator vantage pin: one per (gateway, orch_addr, resolved_ip).
-  // Multi-IP orchs surface as multiple pins; the side panel groups by orch.
+  // Multi-IP orchs surface as multiple pins; the detail panel groups by orch.
   interface OrchestratorVantagePin {
     orchAddr: string;
     resolvedIp: string;
@@ -122,6 +116,25 @@
     score: number;
     dialedRecently: boolean;
     instanceCount?: number;
+  }
+
+  interface DetailRow {
+    label: string;
+    value: string;
+    code?: boolean;
+  }
+
+  interface DetailSection {
+    title: string;
+    rows: DetailRow[];
+  }
+
+  interface MapDetail {
+    title: string;
+    rows: DetailRow[];
+    sections?: DetailSection[];
+    tags?: string[];
+    description?: string;
   }
 
   interface Props {
@@ -172,6 +185,7 @@
   let pulseTimers: number[] = [];
   let nodeSpreadables: Spreadable[] = [];
   let clusterSpreadables: Spreadable[] = [];
+  let orchestratorSpreadables: Spreadable[] = [];
   let nodeMarkersByID: Record<string, Marker> = {};
   let aggregateNodeMarkersByClusterID: Record<string, Marker> = {};
   let clusterMarkersByID: Record<string, Marker> = {};
@@ -196,6 +210,8 @@
   // UX state
   let isFullscreen = $state(false);
   let showScrollHint = $state(true);
+  let showOrchestrators = $state(true);
+  let selectedDetail = $state<MapDetail | null>(null);
 
   onMount(async () => {
     const leafletModule = await import("leaflet");
@@ -288,12 +304,12 @@
     return `${current ?? 0} / ${max}`;
   }
 
-  function popupRow(label: string, value: string): string {
-    return `<tr><td class="map-popup__label">${escapeHtml(label)}</td><td class="map-popup__value">${value}</td></tr>`;
+  function detailRow(label: string, value: string, code = false): DetailRow {
+    return { label, value, code };
   }
 
-  function popupSection(title: string, rows: string): string {
-    return `<div class="map-popup__section-title">${escapeHtml(title)}</div><table class="map-popup__table">${rows}</table>`;
+  function openDetail(detail: MapDetail): void {
+    selectedDetail = detail;
   }
 
   function stopPulseTimers(): void {
@@ -306,22 +322,28 @@
     return (map?.getZoom() ?? zoom) <= 3;
   }
 
-  function nodePopupRows(node: NodeLocation, services: string[] | undefined): string {
-    let rows =
-      popupRow("Type", escapeHtml(node.nodeType || "node")) +
-      popupRow("Status", escapeHtml(node.status || "active"));
-    if (node.clusterId) rows += popupRow("Cluster", escapeHtml(node.clusterId));
-    if (services?.length) rows += popupRow("Services", escapeHtml(services.join(", ")));
-    return rows;
+  function nodeDetail(node: NodeLocation, services: string[] | undefined): MapDetail {
+    const rows = [
+      detailRow("Type", node.nodeType || "node"),
+      detailRow("Status", node.status || "active"),
+    ];
+    if (node.clusterId) rows.push(detailRow("Cluster", node.clusterId));
+    if (services?.length) rows.push(detailRow("Services", services.join(", ")));
+    return {
+      title: node.name,
+      rows,
+      tags: services,
+    };
   }
 
-  function aggregateNodePopup(
+  function aggregateNodeDetail(
     nodesInGroup: NodeLocation[],
     servicesByNode: Record<string, string[]>
-  ): string {
+  ): MapDetail {
     const sorted = [...nodesInGroup].sort((a, b) => a.name.localeCompare(b.name));
-    const rows = sorted
-      .map((node) => {
+    return {
+      title: `${nodesInGroup.length} nodes`,
+      rows: sorted.map((node) => {
         const services = servicesByNode[node.id];
         const meta = [
           node.nodeType || "node",
@@ -330,10 +352,9 @@
         ]
           .filter(Boolean)
           .join(" · ");
-        return `<tr><td class="map-popup__label">${escapeHtml(node.name)}</td><td class="map-popup__value">${escapeHtml(meta)}</td></tr>`;
-      })
-      .join("");
-    return `<div class="map-popup"><div class="map-popup__title">${nodesInGroup.length} nodes</div><table class="map-popup__table">${rows}</table></div>`;
+        return detailRow(node.name, meta);
+      }),
+    };
   }
 
   function markerLatLng(marker: Marker | undefined, fallback: [number, number]): [number, number] {
@@ -496,18 +517,17 @@
         opacity: 0.8,
       });
       // Bucket popup with stats
-      let bucketRows = popupRow("Type", b.kind === "client" ? "Viewer Bucket" : "Node Bucket");
-      if (b.stats?.count != null) bucketRows += popupRow("Events", `${b.stats.count}`);
+      const bucketRows = [detailRow("Type", b.kind === "client" ? "Viewer Bucket" : "Node Bucket")];
+      if (b.stats?.count != null) bucketRows.push(detailRow("Events", `${b.stats.count}`));
       if (b.stats?.successRate != null)
-        bucketRows += popupRow("Success", `${(b.stats.successRate * 100).toFixed(1)}%`);
+        bucketRows.push(detailRow("Success", `${(b.stats.successRate * 100).toFixed(1)}%`));
       if (b.stats?.avgDistance != null)
-        bucketRows += popupRow("Avg Distance", `${b.stats.avgDistance.toFixed(0)}km`);
-      poly.bindPopup(
-        `<div class="map-popup"><table class="map-popup__table">${bucketRows}</table></div>`,
-        { className: "dark-popup", maxWidth: 280, minWidth: 160 }
-      );
-
+        bucketRows.push(detailRow("Avg Distance", `${b.stats.avgDistance.toFixed(0)}km`));
       poly.on("click", () => {
+        openDetail({
+          title: b.kind === "client" ? "Viewer Bucket" : "Node Bucket",
+          rows: bucketRows,
+        });
         if (onBucketClick) onBucketClick(b.id);
       });
       poly.on("mouseover", () => poly.setStyle({ weight: 2 }));
@@ -598,14 +618,8 @@
           iconSize: [size, size],
           iconAnchor: [size / 2, size / 2],
         });
-        const marker = leaflet
-          .marker([avgLat, avgLng], { icon })
-          .bindPopup(aggregateNodePopup(nodesInGroup, servicesByNode), {
-            className: "dark-popup",
-            maxWidth: 520,
-            minWidth: 260,
-          })
-          .addTo(layerGroup!);
+        const marker = leaflet.marker([avgLat, avgLng], { icon }).addTo(layerGroup!);
+        marker.on("click", () => openDetail(aggregateNodeDetail(nodesInGroup, servicesByNode)));
         aggregateNodeMarkersByClusterID[clusterID] = marker;
         nodeSpreadables.push({ marker, iconRadius: size / 2 });
         nodesInGroup.forEach((node) => {
@@ -618,30 +632,26 @@
       if (collapsedNodeIDs[node.id]) return;
 
       const nodeSvcs = servicesByNode[node.id];
+      const isComputeNode = serviceRole(nodeSvcs) === "compute";
       const color = roleColor(nodeRole(node, nodeSvcs), node.status);
       const isEdge = (node.nodeType ?? "").toLowerCase() === "edge";
-      const size = isEdge ? 10 : 14;
-      const glow = isEdge ? "6px" : "12px";
+      const size = isComputeNode ? 8 : isEdge ? 10 : 14;
+      const glow = isComputeNode ? "7px" : isEdge ? "6px" : "12px";
+      const nodeStyle = isComputeNode
+        ? `background-color: rgba(15, 23, 42, 0.85); width: ${size}px; height: ${size}px; border-radius: 50%; border: 2px solid ${color}; box-shadow: 0 0 ${glow} ${color};`
+        : `background-color: ${color}; width: ${size}px; height: ${size}px; border-radius: 50%; box-shadow: 0 0 ${glow} ${color};`;
 
       const nodeIcon = leaflet.divIcon({
         className: "node-dot-marker",
-        html: `<div style="background-color: ${color}; width: ${size}px; height: ${size}px; border-radius: 50%; box-shadow: 0 0 ${glow} ${color};"></div>`,
+        html: `<div style="${nodeStyle}"></div>`,
         iconSize: [size, size],
         iconAnchor: [size / 2, size / 2],
       });
 
-      let nodePopup =
-        `<div class="map-popup"><div class="map-popup__title">${escapeHtml(node.name)}</div>` +
-        `<table class="map-popup__table">${nodePopupRows(node, nodeSvcs)}</table>`;
-      if (nodeSvcs?.length) {
-        nodePopup += `<div class="map-popup__tags">${nodeSvcs.map((s) => `<span class="map-popup__tag">${escapeHtml(s)}</span>`).join("")}</div>`;
-      }
-      nodePopup += "</div>";
-
       const nodeMarker: Marker = leaflet
         .marker([node.lat, node.lng], { icon: nodeIcon })
-        .bindPopup(nodePopup, { className: "dark-popup", maxWidth: 400, minWidth: 200 })
         .addTo(layerGroup!);
+      nodeMarker.on("click", () => openDetail(nodeDetail(node, nodeSvcs)));
       nodeMarkersByID[node.id] = nodeMarker;
       nodeSpreadables.push({ marker: nodeMarker, iconRadius: size / 2 });
     });
@@ -672,13 +682,10 @@
         smoothFactor: 1,
       });
 
-      let routeRows = popupRow("Status", isSuccess ? "Success" : "Failed");
-      if (route.score != null) routeRows += popupRow("Score", `${route.score}`);
-      if (route.details) routeRows += popupRow("Details", escapeHtml(route.details));
-      line.bindPopup(
-        `<div class="map-popup"><table class="map-popup__table">${routeRows}</table></div>`,
-        { className: "dark-popup", maxWidth: 280, minWidth: 160 }
-      );
+      const routeRows = [detailRow("Status", isSuccess ? "Success" : "Failed")];
+      if (route.score != null) routeRows.push(detailRow("Score", `${route.score}`));
+      if (route.details) routeRows.push(detailRow("Details", route.details));
+      line.on("click", () => openDetail({ title: "Route", rows: routeRows }));
       line.addTo(layerGroup!);
 
       // Draw Client (Origin) dot
@@ -689,19 +696,13 @@
         iconAnchor: [3, 3],
       });
 
-      let clientRows = popupRow("Status", isSuccess ? "Success" : "Failed");
-      if (route.score != null) clientRows += popupRow("Score", `${route.score}`);
-      clientRows += popupRow(
-        "Location",
-        `${route.from[0].toFixed(2)}, ${route.from[1].toFixed(2)}`
-      );
-      leaflet
-        .marker(route.from, { icon: clientIcon })
-        .bindPopup(
-          `<div class="map-popup"><div class="map-popup__title">Viewer</div><table class="map-popup__table">${clientRows}</table></div>`,
-          { className: "dark-popup", maxWidth: 280, minWidth: 160 }
-        )
-        .addTo(layerGroup!);
+      const clientRows = [
+        detailRow("Status", isSuccess ? "Success" : "Failed"),
+        detailRow("Location", `${route.from[0].toFixed(2)}, ${route.from[1].toFixed(2)}`),
+      ];
+      if (route.score != null) clientRows.splice(1, 0, detailRow("Score", `${route.score}`));
+      const clientMarker = leaflet.marker(route.from, { icon: clientIcon }).addTo(layerGroup!);
+      clientMarker.on("click", () => openDetail({ title: "Viewer", rows: clientRows }));
     });
 
     // 4. Draw cluster markers
@@ -729,48 +730,49 @@
       });
 
       // Build cluster popup with structured table layout
-      let infoRows =
-        (cluster.region ? popupRow("Region", escapeHtml(cluster.region)) : "") +
-        (cluster.clusterType ? popupRow("Type", escapeHtml(cluster.clusterType)) : "") +
-        popupRow("Nodes", `${cluster.healthyNodeCount} / ${cluster.nodeCount}`) +
-        (cluster.peerCount != null ? popupRow("Peers", `${cluster.peerCount}`) : "") +
-        popupRow("Status", escapeHtml(cluster.status));
+      const infoRows: DetailRow[] = [];
+      if (cluster.region) infoRows.push(detailRow("Region", cluster.region));
+      if (cluster.clusterType) infoRows.push(detailRow("Type", cluster.clusterType));
+      infoRows.push(detailRow("Nodes", `${cluster.healthyNodeCount} / ${cluster.nodeCount}`));
+      if (cluster.peerCount != null) infoRows.push(detailRow("Peers", `${cluster.peerCount}`));
+      infoRows.push(detailRow("Status", cluster.status));
       const nodeTypeCounts = nodeTypeCountByCluster[cluster.id];
       if (nodeTypeCounts) {
-        if (nodeTypeCounts.core > 0) infoRows += popupRow("Core Nodes", `${nodeTypeCounts.core}`);
-        if (nodeTypeCounts.edge > 0) infoRows += popupRow("Edge Nodes", `${nodeTypeCounts.edge}`);
+        if (nodeTypeCounts.core > 0)
+          infoRows.push(detailRow("Core Nodes", `${nodeTypeCounts.core}`));
+        if (nodeTypeCounts.edge > 0)
+          infoRows.push(detailRow("Edge Nodes", `${nodeTypeCounts.edge}`));
       }
 
-      let popup =
-        `<div class="map-popup"><div class="map-popup__title">${escapeHtml(cluster.name)}</div>` +
-        `<table class="map-popup__table">${infoRows}</table>`;
+      const sections: DetailSection[] = [];
 
       if ((cluster.maxStreams ?? 0) > 0 || (cluster.currentStreams ?? 0) > 0) {
-        const loadRows =
-          popupRow("Streams", formatLoad(cluster.currentStreams, cluster.maxStreams)) +
-          popupRow("Viewers", formatLoad(cluster.currentViewers, cluster.maxViewers)) +
-          popupRow(
-            "Bandwidth",
-            `${formatLoad(cluster.currentBandwidthMbps, cluster.maxBandwidthMbps)} Mbps`
-          );
-        popup += popupSection("Load", loadRows);
+        sections.push({
+          title: "Load",
+          rows: [
+            detailRow("Streams", formatLoad(cluster.currentStreams, cluster.maxStreams)),
+            detailRow("Viewers", formatLoad(cluster.currentViewers, cluster.maxViewers)),
+            detailRow(
+              "Bandwidth",
+              `${formatLoad(cluster.currentBandwidthMbps, cluster.maxBandwidthMbps)} Mbps`
+            ),
+          ],
+        });
       }
 
       const clusterNodeServices = servicesByClusterFromNodes[cluster.id] ?? [];
-      if (clusterNodeServices.length) {
-        popup += `<div class="map-popup__tags">${clusterNodeServices.map((s) => `<span class="map-popup__tag">${escapeHtml(s)}</span>`).join("")}</div>`;
-      }
-
-      if (cluster.shortDescription) {
-        popup += `<div class="map-popup__desc">${escapeHtml(cluster.shortDescription)}</div>`;
-      }
-
-      popup += "</div>";
+      const clusterDetail: MapDetail = {
+        title: cluster.name,
+        rows: infoRows,
+        sections,
+        tags: clusterNodeServices,
+        description: cluster.shortDescription,
+      };
 
       const clusterMarker: Marker = leaflet
         .marker([cluster.lat, cluster.lng], { icon, zIndexOffset: 1000 })
-        .bindPopup(popup, { className: "dark-popup", maxWidth: 400, minWidth: 220 })
         .addTo(clusterLayer!);
+      clusterMarker.on("click", () => openDetail(clusterDetail));
       clusterMarkersByID[cluster.id] = clusterMarker;
       clusterSpreadables.push({ marker: clusterMarker, iconRadius: radius });
     });
@@ -785,7 +787,11 @@
 
   function applySpread() {
     if (!map || !L) return;
-    spreadOverlappingMarkers(map, [...nodeSpreadables, ...clusterSpreadables]);
+    spreadOverlappingMarkers(map, [
+      ...nodeSpreadables,
+      ...clusterSpreadables,
+      ...orchestratorSpreadables,
+    ]);
     drawTopologyLines(renderedNodes, renderedRelationships);
   }
 
@@ -855,21 +861,14 @@
         smoothFactor: 1,
       });
 
-      let rows = popupRow("Type", escapeHtml(rel.type));
+      const rows = [detailRow("Type", rel.type)];
       if (rel.metrics?.eventCount != null)
-        rows += popupRow("Events", rel.metrics.eventCount.toLocaleString());
+        rows.push(detailRow("Events", rel.metrics.eventCount.toLocaleString()));
       if (rel.metrics?.avgLatencyMs != null)
-        rows += popupRow("Latency", `${rel.metrics.avgLatencyMs.toFixed(1)}ms`);
+        rows.push(detailRow("Latency", `${rel.metrics.avgLatencyMs.toFixed(1)}ms`));
       if (rel.metrics?.successRate != null)
-        rows += popupRow("Success", `${(rel.metrics.successRate * 100).toFixed(1)}%`);
-      line.bindPopup(
-        `<div class="map-popup"><table class="map-popup__table">${rows}</table></div>`,
-        {
-          className: "dark-popup",
-          maxWidth: 280,
-          minWidth: 160,
-        }
-      );
+        rows.push(detailRow("Success", `${(rel.metrics.successRate * 100).toFixed(1)}%`));
+      line.on("click", () => openDetail({ title: "Topology Link", rows }));
       line.addTo(relationshipLayer!);
 
       if (
@@ -941,7 +940,7 @@
   // discovery rollups) updates on a different cadence than nodes/clusters.
   $effect(() => {
     if (map) {
-      drawOrchestrators(orchestratorVantages);
+      drawOrchestrators(showOrchestrators ? orchestratorVantages : []);
     }
   });
 
@@ -957,33 +956,46 @@
     return h >>> 0;
   }
 
-  // Color a vantage pin by recent reachability + latency. Failed-recently
-  // (dialed_recently=false) is amber even when latency is unknown.
   function orchestratorPinColor(vantage: OrchestratorVantagePin): string {
-    if (!vantage.dialedRecently) return "rgb(245, 158, 11)"; // amber — stale or last attempt failed
-    if (vantage.latestLatencyMs >= 500) return "rgb(248, 113, 113)"; // red — slow
-    if (vantage.latestLatencyMs >= 200) return "rgb(250, 204, 21)"; // yellow — degraded
-    return "rgb(74, 222, 128)"; // green — healthy
+    if (vantage.latestLatencyMs >= 750) return "rgb(74, 111, 91)";
+    if (vantage.latestLatencyMs >= 250) return "rgb(45, 150, 96)";
+    return "rgb(34, 197, 94)";
   }
 
-  // Visible Pacific gutter for vantages without resolved geo.
   const UNKNOWN_GEO_ANCHOR: [number, number] = [-42, -145];
+
+  function dedupeOrchestratorVantages(
+    vantages: OrchestratorVantagePin[]
+  ): OrchestratorVantagePin[] {
+    const byInstance = new SvelteMap<string, OrchestratorVantagePin>();
+    for (const v of vantages) {
+      if (!v.dialedRecently) continue;
+      const key = `${v.orchAddr}:${v.resolvedIp}`;
+      const current = byInstance.get(key);
+      if (
+        !current ||
+        v.latestLatencyMs < current.latestLatencyMs ||
+        (v.latestLatencyMs === current.latestLatencyMs && v.score > current.score)
+      ) {
+        byInstance.set(key, v);
+      }
+    }
+    return [...byInstance.values()];
+  }
 
   function drawOrchestrators(vantages: OrchestratorVantagePin[]): void {
     if (!L || !orchestratorLayer || !map) return;
     const leaflet = L;
     orchestratorLayer.clearLayers();
+    orchestratorSpreadables = [];
     if (!vantages.length) return;
 
-    for (const v of vantages) {
+    const visibleVantages = dedupeOrchestratorVantages(vantages);
+    for (const v of visibleVantages) {
       let lat = v.lat;
       let lng = v.lng;
       const unknownGeo = lat === 0 && lng === 0;
       if (unknownGeo) {
-        // Spread unknown-geo pins around the off-map anchor so they don't
-        // stack on a single coordinate. Spread is deterministic per
-        // (orchAddr + resolvedIp) so the same pin stays in place across
-        // refresh cycles.
         const seed = hashStringForSpread(v.orchAddr + ":" + v.resolvedIp);
         lat = UNKNOWN_GEO_ANCHOR[0] + ((seed >> 8) & 0xff) / 64.0;
         lng = UNKNOWN_GEO_ANCHOR[1] + (seed & 0xff) / 64.0;
@@ -993,35 +1005,39 @@
         color: orchestratorPinColor(v),
         weight: 2,
         fillColor: orchestratorPinColor(v),
-        fillOpacity: 0.65,
+        fillOpacity: 0.82,
       });
       const rows = [
-        popupRow("Orch", `<code>${escapeHtml(v.orchAddr)}</code>`),
-        popupRow("IP", escapeHtml(v.resolvedIp)),
-        popupRow("Gateway", `${escapeHtml(v.gatewayId)} (${escapeHtml(v.gatewayRegion)})`),
-        popupRow(
-          "Latency",
-          v.dialedRecently ? `${v.latestLatencyMs} ms` : "stale (last dial failed)"
-        ),
-        popupRow("Score", v.score.toFixed(2)),
+        detailRow("Orch", v.orchAddr, true),
+        detailRow("IP", v.resolvedIp),
+        detailRow("Gateway", `${v.gatewayId} (${v.gatewayRegion})`),
+        detailRow("Latency", `${v.latestLatencyMs} ms`),
+        detailRow("Score", v.score.toFixed(2)),
       ];
       if (unknownGeo) {
-        rows.unshift(
-          popupRow(
-            "Geo",
-            "unknown — pinned to off-map anchor (check GEOIP_MMDB_PATH or DNS resolution)"
+        rows.unshift(detailRow("Geo", "unknown"));
+      }
+      const instanceRows: DetailRow[] = visibleVantages
+        .filter((candidate) => candidate.orchAddr === v.orchAddr)
+        .sort((a, b) => a.resolvedIp.localeCompare(b.resolvedIp))
+        .map((candidate) =>
+          detailRow(
+            candidate.resolvedIp || "unknown",
+            `${candidate.gatewayId} (${candidate.gatewayRegion}) · ${candidate.latestLatencyMs} ms`
           )
         );
-      }
-      if (v.instanceCount && v.instanceCount > 1) {
-        rows.push(popupRow("Instances", `${v.instanceCount} (multi-IP — see side panel)`));
-      }
-      marker.bindPopup(popupSection("Orchestrator", rows.join("")));
-      if (onOrchestratorClick) {
-        marker.on("click", () => onOrchestratorClick!(v.orchAddr));
-      }
+      const sections = instanceRows.length
+        ? [{ title: "Observed Instances", rows: instanceRows }]
+        : [];
+      const detail = { title: "Orchestrator", rows, sections };
+      marker.on("click", () => {
+        openDetail(detail);
+        if (onOrchestratorClick) onOrchestratorClick(v.orchAddr);
+      });
       marker.addTo(orchestratorLayer);
+      orchestratorSpreadables.push({ marker, iconRadius: 7 });
     }
+    applySpread();
   }
 </script>
 
@@ -1044,6 +1060,17 @@
     </button>
     <button
       class="map-control-btn"
+      class:map-control-btn--active={showOrchestrators}
+      onclick={() => {
+        showOrchestrators = !showOrchestrators;
+        if (!showOrchestrators) selectedDetail = null;
+      }}
+      title={showOrchestrators ? "Hide Livepeer compute" : "Show Livepeer compute"}
+    >
+      <CpuIcon class="w-4 h-4" />
+    </button>
+    <button
+      class="map-control-btn"
       onclick={toggleFullscreen}
       title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
     >
@@ -1063,6 +1090,69 @@
   {/if}
 
   <div bind:this={mapContainer} class="map-container"></div>
+
+  {#if selectedDetail}
+    <aside class="map-detail-panel" aria-label="Map selection details">
+      <button
+        class="map-detail-panel__close"
+        type="button"
+        onclick={() => (selectedDetail = null)}
+        aria-label="Close details"
+      >
+        ×
+      </button>
+      <div class="map-detail-panel__body">
+        <div class="map-popup">
+          <div class="map-popup__title">{selectedDetail.title}</div>
+          <table class="map-popup__table">
+            <tbody>
+              {#each selectedDetail.rows as row (`${row.label}:${row.value}`)}
+                <tr>
+                  <td class="map-popup__label">{row.label}</td>
+                  <td class="map-popup__value">
+                    {#if row.code}
+                      <code class="map-popup__code">{row.value}</code>
+                    {:else}
+                      {row.value}
+                    {/if}
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+          {#each selectedDetail.sections ?? [] as section (section.title)}
+            <div class="map-popup__section-title">{section.title}</div>
+            <table class="map-popup__table">
+              <tbody>
+                {#each section.rows as row (`${section.title}:${row.label}:${row.value}`)}
+                  <tr>
+                    <td class="map-popup__label">{row.label}</td>
+                    <td class="map-popup__value">
+                      {#if row.code}
+                        <code class="map-popup__code">{row.value}</code>
+                      {:else}
+                        {row.value}
+                      {/if}
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          {/each}
+          {#if selectedDetail.tags?.length}
+            <div class="map-popup__tags">
+              {#each selectedDetail.tags as tag (tag)}
+                <span class="map-popup__tag">{tag}</span>
+              {/each}
+            </div>
+          {/if}
+          {#if selectedDetail.description}
+            <div class="map-popup__desc">{selectedDetail.description}</div>
+          {/if}
+        </div>
+      </div>
+    </aside>
+  {/if}
 </div>
 
 <style>
@@ -1086,6 +1176,48 @@
     width: 100%;
     height: 100%;
     z-index: 1;
+  }
+
+  .map-detail-panel {
+    position: absolute;
+    top: 0.75rem;
+    right: 3.25rem;
+    bottom: 0.75rem;
+    z-index: 25;
+    width: min(360px, calc(100% - 4.75rem));
+    overflow: hidden;
+    border: 1px solid rgba(51, 65, 85, 0.78);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.94);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.36);
+    backdrop-filter: blur(10px);
+  }
+
+  .map-detail-panel__close {
+    position: absolute;
+    top: 0.45rem;
+    right: 0.55rem;
+    z-index: 1;
+    width: 1.5rem;
+    height: 1.5rem;
+    border: 1px solid rgba(71, 85, 105, 0.72);
+    border-radius: 6px;
+    background: rgba(30, 41, 59, 0.92);
+    color: rgb(148, 163, 184);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .map-detail-panel__close:hover {
+    color: rgb(226, 232, 240);
+    border-color: rgba(148, 163, 184, 0.72);
+  }
+
+  .map-detail-panel__body {
+    height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .map-controls {
@@ -1115,6 +1247,12 @@
   .map-control-btn:hover {
     background-color: rgba(51, 65, 85, 0.9);
     color: rgb(226, 232, 240);
+  }
+
+  .map-control-btn--active {
+    border-color: rgba(34, 197, 94, 0.65);
+    color: rgb(134, 239, 172);
+    box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.18);
   }
 
   .scroll-hint {
@@ -1179,47 +1317,10 @@
     border-style: none;
   }
 
-  :global(.dark-popup) {
-    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.5));
-  }
-
-  :global(.dark-popup .leaflet-popup-content-wrapper) {
-    background-color: rgb(30, 41, 59) !important;
-    border: 1px solid rgb(51, 65, 85) !important;
-    color: rgb(226, 232, 240) !important;
-    border-radius: 6px !important;
-    font-size: 0.8rem;
-    line-height: 1.5;
-    padding: 0 !important;
-  }
-
-  :global(.dark-popup .leaflet-popup-content) {
-    margin: 0 !important;
-    width: auto !important;
-  }
-
-  :global(.dark-popup .leaflet-popup-tip) {
-    background-color: rgb(30, 41, 59) !important;
-    border: 1px solid rgb(51, 65, 85) !important;
-    border-top: none !important;
-    border-left: none !important;
-  }
-
-  :global(.dark-popup .leaflet-popup-close-button) {
-    color: rgb(148, 163, 184) !important;
-    font-size: 1.1rem !important;
-    top: 6px !important;
-    right: 8px !important;
-  }
-
-  :global(.dark-popup .leaflet-popup-close-button:hover) {
-    color: rgb(226, 232, 240) !important;
-  }
-
   :global(.map-popup) {
     padding: 0.75rem 1rem;
-    max-height: 300px;
-    overflow-y: auto;
+    max-height: none;
+    overflow: visible;
   }
 
   :global(.map-popup__title) {
@@ -1252,8 +1353,20 @@
     color: rgb(226, 232, 240);
     padding: 0.2rem 0;
     text-align: right;
-    white-space: nowrap;
+    white-space: normal;
     font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  :global(.map-popup__code) {
+    display: block;
+    max-width: 100%;
+    font-size: 0.72rem;
+    line-height: 1.25;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-all;
   }
 
   :global(.map-popup__section-title) {

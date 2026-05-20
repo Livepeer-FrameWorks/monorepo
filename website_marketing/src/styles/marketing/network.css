@@ -88,6 +88,48 @@
     height: 400px;
   }
 
+  .network-viz__detail-panel {
+    position: absolute;
+    top: 0.75rem;
+    right: 3.25rem;
+    bottom: 0.75rem;
+    z-index: 1000;
+    width: min(360px, calc(100% - 4.75rem));
+    overflow: hidden;
+    border: 1px solid rgba(51, 65, 85, 0.78);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.94);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.36);
+    backdrop-filter: blur(10px);
+  }
+
+  .network-viz__detail-close {
+    position: absolute;
+    top: 0.45rem;
+    right: 0.55rem;
+    z-index: 1;
+    width: 1.5rem;
+    height: 1.5rem;
+    border: 1px solid rgba(71, 85, 105, 0.72);
+    border-radius: 6px;
+    background: rgba(30, 41, 59, 0.92);
+    color: rgb(148, 163, 184);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .network-viz__detail-close:hover {
+    color: rgb(226, 232, 240);
+    border-color: rgba(148, 163, 184, 0.72);
+  }
+
+  .network-viz__detail-body {
+    height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
   .network-viz .leaflet-container {
     background-color: rgb(15, 23, 42) !important;
   }
@@ -155,6 +197,12 @@
     color: rgb(226, 232, 240);
   }
 
+  .network-viz__control-btn--active {
+    border-color: rgba(34, 197, 94, 0.65);
+    color: rgb(134, 239, 172);
+    box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.18);
+  }
+
   /* --- Scroll hint overlay --- */
   .network-viz__scroll-hint {
     position: absolute;
@@ -197,48 +245,10 @@
     background-color: var(--node-dot-color);
   }
 
-  /* --- Dark popups --- */
-  .network-viz__popup {
-    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.5));
-  }
-
-  .network-viz__popup .leaflet-popup-content-wrapper {
-    background-color: rgb(30, 41, 59) !important;
-    border: 1px solid rgb(51, 65, 85) !important;
-    color: rgb(226, 232, 240) !important;
-    border-radius: 6px !important;
-    font-size: 0.8rem;
-    line-height: 1.5;
-    padding: 0 !important;
-  }
-
-  .network-viz__popup .leaflet-popup-content {
-    margin: 0 !important;
-    width: auto !important;
-  }
-
-  .network-viz__popup .leaflet-popup-tip {
-    background-color: rgb(30, 41, 59) !important;
-    border: 1px solid rgb(51, 65, 85) !important;
-    border-top: none !important;
-    border-left: none !important;
-  }
-
-  .network-viz__popup .leaflet-popup-close-button {
-    color: rgb(148, 163, 184) !important;
-    font-size: 1.1rem !important;
-    top: 6px !important;
-    right: 8px !important;
-  }
-
-  .network-viz__popup .leaflet-popup-close-button:hover {
-    color: rgb(226, 232, 240) !important;
-  }
-
   .map-popup {
     padding: 0.75rem 1rem;
-    max-height: 300px;
-    overflow-y: auto;
+    max-height: none;
+    overflow: visible;
   }
 
   .map-popup__title {
@@ -271,8 +281,20 @@
     color: rgb(226, 232, 240);
     padding: 0.2rem 0;
     text-align: right;
-    white-space: nowrap;
+    white-space: normal;
     font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .map-popup__code {
+    display: block;
+    max-width: 100%;
+    font-size: 0.72rem;
+    line-height: 1.25;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-all;
   }
 
   .map-popup__section-title {
