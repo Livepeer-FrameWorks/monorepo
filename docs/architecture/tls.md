@@ -52,7 +52,7 @@ such as Bridge must pass one ServerName per downstream client.
 | ------------------------------------------------------------- | --------------------------------------------------------------- |
 | `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`, `GRPC_TLS_CA_PATH` | Internal gRPC TLS files                                         |
 | `GRPC_ALLOW_INSECURE`                                         | Internal gRPC dev/test escape hatch only                        |
-| `<SERVICE>_TLS_SERVER_NAME`                                   | Per-client override at service entrypoints                      |
+| `<SERVICE>_GRPC_TLS_SERVER_NAME`                              | Per-client override at service entrypoints                      |
 | `FOGHORN_INTERNAL_GRPC_BIND_ADDR`                             | Foghorn internal listener, default `:18019`                     |
 | `FOGHORN_EXTERNAL_GRPC_BIND_ADDR`                             | Foghorn external listener, default `:18029`                     |
 | `FOGHORN_EXTERNAL_GRPC_PORT`                                  | Port advertised to Quartermaster for external Foghorn consumers |

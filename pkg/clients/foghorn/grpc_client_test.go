@@ -71,7 +71,7 @@ func TestFoghornClientTLSConfigHonorsExplicitInsecureForFQDN(t *testing.T) {
 	}
 }
 
-func TestFoghornClientTLSConfigKeepsLegacyDefaults(t *testing.T) {
+func TestFoghornClientTLSConfigDevelopmentDefaults(t *testing.T) {
 	t.Parallel()
 
 	fqdn := foghornClientTLSConfig(GRPCConfig{GRPCAddr: "foghorn.frameworks.example:18029"})
@@ -81,6 +81,15 @@ func TestFoghornClientTLSConfigKeepsLegacyDefaults(t *testing.T) {
 	local := foghornClientTLSConfig(GRPCConfig{GRPCAddr: "foghorn:18019"})
 	if !local.AllowInsecure {
 		t.Fatal("single-label default AllowInsecure = false, want true")
+	}
+}
+
+func TestFoghornClientTLSConfigProductionDoesNotDefaultToInsecure(t *testing.T) {
+	t.Setenv("BUILD_ENV", "production")
+
+	cfg := foghornClientTLSConfig(GRPCConfig{GRPCAddr: "foghorn:18019"})
+	if cfg.AllowInsecure {
+		t.Fatal("AllowInsecure = true, want false for production default")
 	}
 }
 

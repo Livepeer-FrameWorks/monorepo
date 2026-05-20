@@ -38,6 +38,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const foghornInternalServerName = "foghorn.internal"
+
 // DeleteClipFunc is the function type for clip deletion
 type DeleteClipFunc func(clipHash string) (uint64, error)
 
@@ -708,11 +710,14 @@ func runClient(addr string, logger logging.Logger) error {
 				MinVersion:   tls.VersionTLS12,
 				RootCAs:      rootCAs,
 				Certificates: []tls.Certificate{cert},
+				ServerName:   foghornControlServerName(addr, cfg.GRPCTLSServerName),
 			})
 		} else {
 			var err error
 			creds, err = grpcutil.ClientTransportCredentials(grpcutil.ClientTLSConfig{
-				CACertFile: cfg.GRPCTLSCAPath,
+				CACertFile:        cfg.GRPCTLSCAPath,
+				ServerName:        foghornControlServerName(addr, cfg.GRPCTLSServerName),
+				DefaultServerName: foghornInternalServerName,
 			}, logger)
 			if err != nil {
 				return err
@@ -957,6 +962,21 @@ func loadSidecarRootCAs(caPath string) (*x509.CertPool, error) {
 		return nil, fmt.Errorf("append sidecar CA cert %q: invalid PEM", caPath)
 	}
 	return pool, nil
+}
+
+func foghornControlServerName(addr, override string) string {
+	if override = strings.TrimSpace(override); override != "" {
+		return override
+	}
+	host := strings.TrimSpace(addr)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if grpcutil.AddrIsFQDN(addr) && host != foghornInternalServerName && !strings.HasSuffix(host, ".internal") {
+		return host
+	}
+	return foghornInternalServerName
 }
 
 func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*pb.ControlMessage)) {

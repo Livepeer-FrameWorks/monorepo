@@ -1191,6 +1191,9 @@ func foghornRelayAdvertiseAddr(internalBindAddr, fallbackAddr string) string {
 		}
 	}
 	if relayHost == "" {
+		if config.IsProduction() {
+			return ""
+		}
 		relayHost = "127.0.0.1"
 	}
 	relayPort := controlPortFromBindAddr(internalBindAddr, 18019)

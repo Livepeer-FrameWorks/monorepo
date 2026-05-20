@@ -55,6 +55,15 @@ func TestFoghornRelayAdvertiseAddr(t *testing.T) {
 			t.Fatalf("relay addr=%q", got)
 		}
 	})
+
+	t.Run("production rejects loopback fallback", func(t *testing.T) {
+		t.Setenv("BUILD_ENV", "production")
+
+		got := foghornRelayAdvertiseAddr(":18019", "")
+		if got != "" {
+			t.Fatalf("relay addr=%q, want empty without production-safe advertise host", got)
+		}
+	})
 }
 
 func TestRelayHealthResult(t *testing.T) {

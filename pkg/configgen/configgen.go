@@ -355,7 +355,7 @@ func computeDerived(env map[string]string) error {
 		return errSet
 	}
 
-	foghornInternalPort, err := require(env, "FOGHORN_CONTROL_PORT")
+	foghornInternalPort, err := require(env, "FOGHORN_INTERNAL_GRPC_PORT")
 	if err != nil {
 		return err
 	}

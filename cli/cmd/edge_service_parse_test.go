@@ -91,9 +91,9 @@ func TestEdgeFoghornUsesInternalCA(t *testing.T) {
 		want bool
 	}{
 		{addr: "foghorn.internal:18019", want: true},
-		{addr: "foghorn.media-eu-1.frameworks.network:18019", want: true},
+		{addr: "foghorn.media-eu-1.frameworks.network:18019", want: false},
 		{addr: "foghorn.media-eu-1.frameworks.network:18029", want: false},
-		{addr: "foghorn.frameworks.network:18019", want: true},
+		{addr: "foghorn.frameworks.network:18019", want: false},
 		{addr: "foghorn.frameworks.network:18029", want: false},
 		{addr: "foghorn.frameworks.network:443", want: false},
 		{addr: "api.frameworks.network:18019", want: false},

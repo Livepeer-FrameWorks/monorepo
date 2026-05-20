@@ -57,7 +57,7 @@ func TestGrpcHealthTLSConfigUsesClusterFQDNForFoghorn(t *testing.T) {
 	if serverName != "foghorn.media-eu-1.frameworks.network" {
 		t.Fatalf("server name = %q", serverName)
 	}
-	if caFile != "/etc/frameworks/pki/ca.crt" {
+	if caFile != "" {
 		t.Fatalf("ca file = %q", caFile)
 	}
 }
@@ -73,7 +73,7 @@ func TestGrpcHealthTLSConfigUsesClusterFQDNForFoghornEvenWithGlobalServerName(t 
 	if serverName != "foghorn.media-us-1.frameworks.network" {
 		t.Fatalf("server name = %q", serverName)
 	}
-	if caFile != "/etc/frameworks/pki/ca.crt" {
+	if caFile != "" {
 		t.Fatalf("ca file = %q", caFile)
 	}
 }

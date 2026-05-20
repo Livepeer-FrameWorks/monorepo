@@ -8,9 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"net"
 	"net/url"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -37,9 +35,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvrpolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -48,10 +44,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -672,75 +665,6 @@ func (s *FoghornGRPCServer) emitRoutingEvent(
 		EventType:       eventType,
 		Source:          source,
 	})
-}
-
-// StartGRPCServer starts the Foghorn gRPC server
-func StartGRPCServer(ctx context.Context, addr string, server *FoghornGRPCServer) error {
-	lc := net.ListenConfig{}
-	lis, err := lc.Listen(ctx, "tcp", addr)
-	if err != nil {
-		return fmt.Errorf("failed to listen on %s: %w", addr, err)
-	}
-
-	serverOpts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(nodeControlAuthInterceptor(server.logger), grpcutil.SanitizeUnaryServerInterceptor()),
-	}
-	tlsCfg := grpcutil.ServerTLSConfig{
-		CertFile:      strings.TrimSpace(os.Getenv("GRPC_TLS_CERT_PATH")),
-		KeyFile:       strings.TrimSpace(os.Getenv("GRPC_TLS_KEY_PATH")),
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	err = grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, server.logger)
-	if err != nil {
-		return fmt.Errorf("wait for foghorn gRPC TLS files: %w", err)
-	}
-	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, server.logger)
-	if err != nil {
-		return fmt.Errorf("configure foghorn gRPC TLS: %w", err)
-	}
-	if tlsOpt != nil {
-		serverOpts = append(serverOpts, tlsOpt)
-	}
-	grpcServer := grpc.NewServer(serverOpts...)
-	server.RegisterServices(grpcServer)
-
-	// gRPC health service for Foghorn control APIs
-	hs := health.NewServer()
-	hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-	hs.SetServingStatus(pb.ClipControlService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
-	hs.SetServingStatus(pb.DVRControlService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
-	hs.SetServingStatus(pb.ViewerControlService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
-	hs.SetServingStatus(pb.VodControlService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
-	grpc_health_v1.RegisterHealthServer(grpcServer, hs)
-	reflection.Register(grpcServer)
-
-	server.logger.WithField("addr", addr).Info("Starting Foghorn gRPC server")
-	return grpcServer.Serve(lis)
-}
-
-func nodeControlAuthInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
-	protected := map[string]bool{
-		pb.NodeControlService_SetNodeOperationalMode_FullMethodName: true,
-		pb.NodeControlService_GetNodeHealth_FullMethodName:          true,
-	}
-	serviceToken := strings.TrimSpace(os.Getenv("SERVICE_TOKEN"))
-	jwtSecret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
-	authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
-		ServiceToken: serviceToken,
-		JWTSecret:    []byte(jwtSecret),
-		Logger:       logger,
-	})
-	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if !protected[info.FullMethod] {
-			return handler(ctx, req)
-		}
-		if serviceToken == "" && jwtSecret == "" {
-			return nil, status.Error(codes.Unauthenticated, "node lifecycle auth is not configured")
-		}
-		return authInterceptor(ctx, req, info, handler)
-	}
 }
 
 // CLIP CONTROL SERVICE IMPLEMENTATION

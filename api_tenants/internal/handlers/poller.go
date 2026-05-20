@@ -603,7 +603,7 @@ func perServiceTLSServerNameForHealth(inst serviceInstance) string {
 
 func grpcHealthTLSConfig(inst serviceInstance, caPath, configured string) (serverName, caFile string) {
 	if publicName := foghornPublicHealthServerName(inst); publicName != "" {
-		return publicName, caPath
+		return publicName, ""
 	}
 	configuredName := strings.TrimSpace(configured)
 	if configuredName != "" {

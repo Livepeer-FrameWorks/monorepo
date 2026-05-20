@@ -2,6 +2,7 @@ package foghorn
 
 import (
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -103,7 +104,7 @@ func (p *FoghornPool) GetOrCreate(clusterID, addr string) (*GRPCClient, error) {
 		Logger:        p.logger,
 		ServiceToken:  p.config.ServiceToken,
 		UseTLS:        p.config.UseTLS,
-		CACertFile:    p.config.CACertFile,
+		CACertFile:    p.caCertFile(addr),
 		ServerName:    p.serverName(addr),
 		AllowInsecure: p.config.AllowInsecure,
 	})
@@ -146,12 +147,22 @@ func (p *FoghornPool) serverName(addr string) string {
 	return ""
 }
 
+func (p *FoghornPool) caCertFile(addr string) string {
+	if p.config.AllowInsecure {
+		return ""
+	}
+	if grpcutil.AddrIsFQDN(addr) && !isInternalFoghornAddr(addr) {
+		return ""
+	}
+	return p.config.CACertFile
+}
+
 func isInternalFoghornAddr(addr string) bool {
 	host := addr
 	if h, _, err := net.SplitHostPort(addr); err == nil {
 		host = h
 	}
-	return host == defaultInternalServerName || host == "foghorn" || host == "localhost"
+	return host == defaultInternalServerName || strings.HasSuffix(host, ".internal") || host == "foghorn" || host == "localhost"
 }
 
 // Get returns the GRPCClient for clusterID if it exists.

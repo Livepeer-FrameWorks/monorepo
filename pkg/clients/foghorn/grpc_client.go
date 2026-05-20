@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients"
+	configpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -169,7 +170,7 @@ func foghornClientTLSConfig(config GRPCConfig) grpcutil.ClientTLSConfig {
 		tlsCfg.AllowInsecure = true
 		return tlsCfg
 	}
-	if config.UseTLS || config.CACertFile != "" || config.ServerName != "" || grpcutil.AddrIsFQDN(config.GRPCAddr) {
+	if config.UseTLS || config.CACertFile != "" || config.ServerName != "" || grpcutil.AddrIsFQDN(config.GRPCAddr) || configpkg.IsProduction() {
 		return tlsCfg
 	}
 	tlsCfg.AllowInsecure = true

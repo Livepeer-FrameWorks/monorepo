@@ -129,7 +129,7 @@ These should remain the human-edited source of truth:
 - Shared runtime: `BUILD_ENV`, `GIN_MODE`, `LOG_LEVEL`, `ALLOWED_ORIGINS`, `TRUSTED_PROXY_CIDRS`
 - Shared secrets: `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`
 - Shared TLS: `GRPC_ALLOW_INSECURE`, `GRPC_TLS_CA_PATH`, `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`
-- Per-client TLS authority overrides: `<SERVICE>_TLS_SERVER_NAME`
+- Per-client TLS authority overrides: `<SERVICE>_GRPC_TLS_SERVER_NAME`
 
 ### Derive instead of editing directly
 
@@ -162,7 +162,7 @@ These are real operator-owned inputs that should stay covered by env examples an
 - `GRPC_TLS_CA_PATH`
 - `GRPC_TLS_CERT_PATH`
 - `GRPC_TLS_KEY_PATH`
-- `<SERVICE>_TLS_SERVER_NAME`
+- `<SERVICE>_GRPC_TLS_SERVER_NAME`
 - `GRPC_TLS_PKI_DIR`
 - `ACME_ENV`
 - `CERT_ISSUANCE_TOKEN`
