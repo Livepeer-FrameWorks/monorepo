@@ -2102,13 +2102,48 @@ jobs:
             echo "Downloading carried bundle ${bundle} from ${baseline}"
             gh release download "${baseline}" --repo "${{ github.repository }}" --pattern "${bundle}" --dir dist
           done
-      - name: Generate SHA256 checksums for webapp bundles
+      - name: Validate and checksum webapp bundles
+        # release-plan.json is the authority for expected webapp release assets:
+        # both this gate and the manifest emitter (interfaces loop above) read it,
+        # so they cannot drift on which static_bundle ships per webapp.
         run: |
           set -euo pipefail
-          cd dist
-          for bundle in chartroom-build.tar.gz foredeck-build.tar.gz logbook-build.tar.gz; do
-            [ -f "$bundle" ] || continue
-            sha256sum "$bundle" > "${bundle}.sha256"
+          if [[ ! -f dist/release-plan.json ]]; then
+            echo "missing dist/release-plan.json — cannot validate webapp bundles" >&2
+            exit 1
+          fi
+          webapps=$(jq -r '.webapps[].name' .github/release-components.json)
+          for name in $webapps; do
+            decision=$(jq -c --arg n "$name" '.decisions[$n] // empty' dist/release-plan.json)
+            if [[ -z "$decision" ]]; then
+              echo "no release-plan decision for webapp ${name}" >&2
+              exit 1
+            fi
+            kind=$(echo "$decision" | jq -r '.kind // ""')
+            if [[ "$kind" != "interface" ]]; then
+              echo "release-plan decision for webapp ${name} has kind=${kind:-<empty>}, expected interface" >&2
+              exit 1
+            fi
+            action=$(echo "$decision" | jq -r '.action // ""')
+            if [[ "$action" != "build" && "$action" != "carry_forward" ]]; then
+              echo "release-plan decision for webapp ${name} has action=${action:-<empty>}, expected build or carry_forward" >&2
+              exit 1
+            fi
+            if [[ "$action" == "carry_forward" ]]; then
+              bundle=$(echo "$decision" | jq -r --arg fallback "${name}-build.tar.gz" '(.carried_interface.static_bundle // $fallback)')
+            else
+              bundle="${name}-build.tar.gz"
+            fi
+            path="dist/${bundle}"
+            if [[ ! -s "$path" ]]; then
+              if [[ -e "$path" ]]; then
+                echo "webapp bundle ${path} is empty (webapp=${name}, action=${action})" >&2
+              else
+                echo "webapp bundle ${path} is missing (webapp=${name}, action=${action})" >&2
+              fi
+              exit 1
+            fi
+            sha256sum "$path" > "${path}.sha256"
           done
       - name: Download macOS .pkg
         uses: actions/download-artifact@v8
