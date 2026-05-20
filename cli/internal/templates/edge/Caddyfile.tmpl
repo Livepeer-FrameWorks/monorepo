@@ -5,7 +5,7 @@
   }
 }
 
-:443 {
+{{EDGE_DOMAIN}}:443 {
   tls internal
 
   handle /health {
@@ -19,6 +19,6 @@
   respond "Node bootstrapping - awaiting activation" 503
 }
 
-:80 {
+{{EDGE_DOMAIN}}:80 {
   respond "Node bootstrapping" 503
 }

@@ -61,6 +61,12 @@ func TestEdgeTemplateParity(t *testing.T) {
 			t.Errorf("jinja Caddyfile.docker missing bootstrap marker %q", needle)
 		}
 	}
+	if !strings.Contains(goCaddyfile, "edge.parity.test:443") {
+		t.Error("go Caddyfile should bind bootstrap HTTPS to EDGE_DOMAIN for SNI")
+	}
+	if !strings.Contains(jinjaCaddyfileDocker, "{{ edge_domain }}:443") {
+		t.Error("jinja Caddyfile.docker should bind bootstrap HTTPS to edge_domain for SNI")
+	}
 
 	wantEnvKeys := []string{"NODE_ID", "EDGE_DOMAIN", "FOGHORN_CONTROL_ADDR", "EDGE_ENROLLMENT_TOKEN", "DEPLOY_MODE"}
 	for _, key := range wantEnvKeys {

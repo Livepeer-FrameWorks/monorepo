@@ -197,6 +197,9 @@ func TestWriteEdgeTemplates_DockerMode(t *testing.T) {
 	if !strings.Contains(content, "tls internal") {
 		t.Error("Bootstrap Caddyfile should contain 'tls internal'")
 	}
+	if !strings.Contains(content, "edge-1.example.com:443") {
+		t.Error("Bootstrap Caddyfile should bind HTTPS to EDGE_DOMAIN so Caddy can issue an SNI certificate")
+	}
 	if !strings.Contains(content, "helmsman:18007") {
 		t.Error("Bootstrap Caddyfile should contain Docker upstream helmsman:18007 for webhooks")
 	}
@@ -274,6 +277,9 @@ func TestWriteEdgeTemplates_NativeMode(t *testing.T) {
 	if !strings.Contains(content, "tls internal") {
 		t.Error("Bootstrap Caddyfile should contain 'tls internal'")
 	}
+	if !strings.Contains(content, "edge-1.example.com:443") {
+		t.Error("Bootstrap Caddyfile should bind HTTPS to EDGE_DOMAIN so Caddy can issue an SNI certificate")
+	}
 	if !strings.Contains(content, "localhost:18007") {
 		t.Error("Bootstrap Caddyfile should contain native upstream localhost:18007 for webhooks")
 	}
@@ -307,6 +313,9 @@ func TestWriteEdgeTemplates_BootstrapCaddyfile(t *testing.T) {
 	content := string(caddyfile)
 	if !strings.Contains(content, "tls internal") {
 		t.Error("Bootstrap Caddyfile should use 'tls internal'")
+	}
+	if !strings.Contains(content, "edge-1.example.com:443") {
+		t.Error("Bootstrap Caddyfile should bind HTTPS to EDGE_DOMAIN so Caddy can issue an SNI certificate")
 	}
 	if strings.Contains(content, "tls /etc") {
 		t.Error("Bootstrap Caddyfile should NOT contain file-based TLS directive")
