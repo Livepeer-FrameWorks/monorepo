@@ -377,7 +377,10 @@ func TestPrivateerRoleLetsRuntimeRefreshPKIAndBootstrapUnhealthy(t *testing.T) {
 func TestSharedFrameworksPKIRolesPreservePrivateerAccess(t *testing.T) {
 	goServicePKI := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/go_service/tasks/pki.yml")
 	certDirStart := strings.Index(goServicePKI, "- name: Ensure internal gRPC certificate directory")
-	certDirEnd := strings.Index(goServicePKI[certDirStart:], "- name: Render internal gRPC certificate")
+	certDirEnd := strings.Index(goServicePKI[certDirStart:], "- name: Stat existing bootstrap internal gRPC certificate")
+	if certDirStart < 0 || certDirEnd < 0 {
+		t.Fatalf("go_service PKI role missing expected internal gRPC certificate directory task:\n%s", goServicePKI)
+	}
 	certDirTask := goServicePKI[certDirStart : certDirStart+certDirEnd]
 	for _, want := range []string{
 		"owner: privateer",
@@ -386,6 +389,16 @@ func TestSharedFrameworksPKIRolesPreservePrivateerAccess(t *testing.T) {
 	} {
 		if !strings.Contains(certDirTask, want) {
 			t.Fatalf("go_service cert directory must be writable by privateer and readable by service group; missing %q:\n%s", want, certDirTask)
+		}
+	}
+	for _, want := range []string{
+		"flock -x 9",
+		"install -o privateer -g {{ go_service_group | quote }} -m 0644",
+		"install -o privateer -g {{ go_service_group | quote }} -m 0640",
+		"Fail when internal gRPC certificate and key do not match",
+	} {
+		if !strings.Contains(goServicePKI, want) {
+			t.Fatalf("go_service PKI role must install bootstrap cert/key as a locked pair readable by services; missing %q:\n%s", want, goServicePKI)
 		}
 	}
 
