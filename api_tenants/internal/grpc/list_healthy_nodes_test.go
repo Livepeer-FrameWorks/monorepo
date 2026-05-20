@@ -439,6 +439,33 @@ func TestListHealthyNodesForDNS_EdgeSubtypeUsesServiceInstancePath(t *testing.T)
 	}
 }
 
+func TestReportAliveNodesMarksEdgeCapabilitiesHealthyByServiceType(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes\s+SET last_heartbeat = NOW\(\), updated_at = NOW\(\)\s+WHERE node_id = ANY\(\$1\)`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`(?s)UPDATE quartermaster\.service_instances si\s+SET health_status = 'healthy'.*FROM quartermaster\.services svc.*si\.service_id = svc\.service_id.*svc\.type LIKE 'edge-%'`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 4))
+
+	if _, err := server.ReportAliveNodes(context.Background(), &pb.ReportAliveNodesRequest{
+		NodeIds: []string{"edge-eu-1"},
+	}); err != nil {
+		t.Fatalf("ReportAliveNodes returned error: %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 // TestListHealthyNodesForDNS_PoolServiceUsesAssignmentClusterForDNS pins the
 // generic assignment-aware path: foghorn / chandler / livepeer-gateway all
 // route through listHealthyAssignedServiceNodes. The returned cluster_id

@@ -4755,11 +4755,17 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 		return nil, status.Errorf(codes.Internal, "failed to update heartbeats: %v", err)
 	}
 
-	// Mark edge-* service instances healthy on these nodes (health comes from foghorn heartbeat, not the poller)
+	// Mark edge-* service instances healthy on these nodes. Capability health
+	// is authoritative from Foghorn's control-stream heartbeat; join the service
+	// catalog by type so this keeps working even when service_id is not the type.
 	_, err = s.db.ExecContext(ctx, `
-		UPDATE quartermaster.service_instances
+		UPDATE quartermaster.service_instances si
 		SET health_status = 'healthy', last_health_check = NOW(), updated_at = NOW()
-		WHERE node_id = ANY($1) AND service_id LIKE 'edge-%' AND status IN ('running','starting')
+		FROM quartermaster.services svc
+		WHERE si.service_id = svc.service_id
+		  AND si.node_id = ANY($1)
+		  AND svc.type LIKE 'edge-%'
+		  AND si.status IN ('running','starting')
 	`, pq.Array(nodeIDs))
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update edge service health: %v", err)
@@ -5279,14 +5285,17 @@ func (s *QuartermasterServer) CreateNode(ctx context.Context, req *pb.CreateNode
 	if req.WireguardPort != nil && *req.WireguardPort > 0 {
 		wgPort = *req.WireguardPort
 	}
+
+	lat, lng := s.geoForExternalIP(req.ExternalIp)
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type,
 		                                                internal_ip, external_ip, wireguard_ip, wireguard_public_key,
 		                                                wireguard_listen_port,
 		                                                region, availability_zone,
+		                                                latitude, longitude,
 		                                                cpu_cores, memory_gb, disk_gb, status,
 		                                                created_at, updated_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'active', $15, $15)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'active', $17, $17)
 		ON CONFLICT (node_id) DO UPDATE SET
 			cluster_id            = EXCLUDED.cluster_id,
 			node_name             = EXCLUDED.node_name,
@@ -5298,6 +5307,8 @@ func (s *QuartermasterServer) CreateNode(ctx context.Context, req *pb.CreateNode
 			wireguard_listen_port = COALESCE(EXCLUDED.wireguard_listen_port, quartermaster.infrastructure_nodes.wireguard_listen_port),
 			region                = COALESCE(EXCLUDED.region, quartermaster.infrastructure_nodes.region),
 			availability_zone     = COALESCE(EXCLUDED.availability_zone, quartermaster.infrastructure_nodes.availability_zone),
+			latitude              = COALESCE(EXCLUDED.latitude, quartermaster.infrastructure_nodes.latitude),
+			longitude             = COALESCE(EXCLUDED.longitude, quartermaster.infrastructure_nodes.longitude),
 			cpu_cores             = COALESCE(EXCLUDED.cpu_cores, quartermaster.infrastructure_nodes.cpu_cores),
 			memory_gb             = COALESCE(EXCLUDED.memory_gb, quartermaster.infrastructure_nodes.memory_gb),
 			disk_gb               = COALESCE(EXCLUDED.disk_gb, quartermaster.infrastructure_nodes.disk_gb),
@@ -5306,6 +5317,7 @@ func (s *QuartermasterServer) CreateNode(ctx context.Context, req *pb.CreateNode
 	`, nodeID, clusterID, req.GetNodeName(), req.GetNodeType(),
 		req.InternalIp, req.ExternalIp, req.WireguardIp, req.WireguardPublicKey, wgPort,
 		req.Region, req.AvailabilityZone,
+		lat, lng,
 		req.CpuCores, req.MemoryGb, req.DiskGb, now)
 
 	if err != nil {
@@ -5323,6 +5335,19 @@ func (s *QuartermasterServer) CreateNode(ctx context.Context, req *pb.CreateNode
 	// and node_type (e.g. "core") is not a valid service type for DNS lookup.
 
 	return &pb.NodeResponse{Node: node}, nil
+}
+
+func (s *QuartermasterServer) geoForExternalIP(externalIP *string) (any, any) {
+	if externalIP == nil || *externalIP == "" || s.geoipReader == nil {
+		return nil, nil
+	}
+
+	geo := s.geoipReader.Lookup(*externalIP)
+	if geo == nil {
+		return nil, nil
+	}
+	geobucket.BucketGeoData(geo)
+	return geo.Latitude, geo.Longitude
 }
 
 // ResolveNodeFingerprint resolves a node identity from fingerprint data.

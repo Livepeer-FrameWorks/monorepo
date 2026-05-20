@@ -622,6 +622,14 @@ func (m *DNSManager) SyncBunnyRootService(ctx context.Context, serviceType strin
 		}
 	}
 	nodes := dnsNodesFromProto(filtered)
+	if len(nodes) == 0 {
+		m.logger.WithFields(logging.Fields{
+			"service_type": serviceType,
+			"zone":         zoneDomain,
+			"scope":        "global_root",
+		}).Warn("No platform-official healthy nodes for global root service; preserving existing Bunny DNS")
+		return nil, nil
+	}
 
 	// Global root records live at the apex of {label}.{root}; record name
 	// is empty (apex).

@@ -971,6 +971,70 @@ func TestSyncServiceByCluster_UsesBunnyForMediaClusterService(t *testing.T) {
 	}
 }
 
+func TestSyncBunnyRootServicePreservesDNSWhenNoPlatformNodes(t *testing.T) {
+	reconciled := false
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
+			ClusterId:          "media-eu-1",
+			IsActive:           true,
+			IsPlatformOfficial: true,
+		}}},
+		response: &proto.ListHealthyNodesForDNSResponse{},
+	}
+	cf := &fakeCloudflareClient{}
+	manager := newTestManager(cf)
+	manager.qmClient = qm
+	manager.bunnyClient = &fakeBunnyClient{
+		reconcileRecordSet: func(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error {
+			reconciled = true
+			return nil
+		},
+	}
+
+	if _, err := manager.SyncBunnyRootService(context.Background(), "edge-ingest"); err != nil {
+		t.Fatalf("SyncBunnyRootService returned error: %v", err)
+	}
+	if reconciled {
+		t.Fatal("SyncBunnyRootService should preserve existing root DNS when no platform nodes are healthy")
+	}
+}
+
+func TestSyncBunnyRootServicePublishesOnlyPlatformOfficialNodes(t *testing.T) {
+	var got []bunny.Record
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{
+			{ClusterId: "media-eu-1", IsActive: true, IsPlatformOfficial: true},
+			{ClusterId: "tenant-private-1", IsActive: true, IsPlatformOfficial: false},
+		}},
+		response: &proto.ListHealthyNodesForDNSResponse{Nodes: []*proto.InfrastructureNode{
+			{NodeId: "edge-eu-1", ClusterId: "media-eu-1", ExternalIp: strPtr("198.51.100.10")},
+			{NodeId: "edge-private-1", ClusterId: "tenant-private-1", ExternalIp: strPtr("203.0.113.50")},
+		}},
+	}
+	cf := &fakeCloudflareClient{}
+	manager := newTestManager(cf)
+	manager.qmClient = qm
+	manager.bunnyClient = &fakeBunnyClient{
+		reconcileRecordSet: func(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error {
+			if name != "" {
+				t.Fatalf("root service record name = %q, want apex", name)
+			}
+			got = append([]bunny.Record(nil), desired...)
+			return nil
+		},
+	}
+
+	if _, err := manager.SyncBunnyRootService(context.Background(), "edge-ingest"); err != nil {
+		t.Fatalf("SyncBunnyRootService returned error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("root records = %d, want 1", len(got))
+	}
+	if got[0].Value != "198.51.100.10" {
+		t.Fatalf("root record IP = %q, want official node IP", got[0].Value)
+	}
+}
+
 func TestSyncServiceByCluster_PublishesBunnyEdgeNodeRecords(t *testing.T) {
 	qm := &fakeQuartermasterClient{
 		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{

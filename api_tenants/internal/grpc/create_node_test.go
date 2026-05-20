@@ -34,6 +34,7 @@ func TestCreateNode_Success(t *testing.T) {
 			"node-1", "cluster-1", "my-node", "core",
 			nil, nil, nil, nil, nil, // internal_ip, external_ip, wireguard_ip, wireguard_public_key, wireguard_listen_port
 			nil, nil, // region, availability_zone
+			nil, nil, // latitude, longitude
 			nil, nil, nil, // cpu_cores, memory_gb, disk_gb
 			sqlmock.AnyArg(), // now
 		).
@@ -139,6 +140,7 @@ func TestCreateNode_Idempotent(t *testing.T) {
 			WithArgs(
 				"node-1", "cluster-1", "my-node", "core",
 				nil, &extIP, nil, nil, nil,
+				nil, nil,
 				nil, nil,
 				nil, nil, nil,
 				sqlmock.AnyArg(),
