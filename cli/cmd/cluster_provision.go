@@ -1295,6 +1295,19 @@ func usesInternalGRPCLeaf(serviceName string) bool {
 	}
 }
 
+func internalGRPCLeafServiceName(task *orchestrator.Task) string {
+	if task == nil {
+		return ""
+	}
+	if usesInternalGRPCLeaf(task.Type) {
+		return task.Type
+	}
+	if usesInternalGRPCLeaf(task.ServiceID) {
+		return task.ServiceID
+	}
+	return ""
+}
+
 func phaseRequiresGatewayMeshValidation(phase orchestrator.Phase) bool {
 	return phase == orchestrator.PhaseApplications || phase == orchestrator.PhaseAll
 }
@@ -2782,9 +2795,9 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 	}
 	if pki, ok := runtimeData["internal_pki_bootstrap"].(*internalPKIBootstrap); ok && pki != nil {
 		config.Metadata["internal_ca_bundle_pem"] = pki.CABundlePEM
-		if usesInternalGRPCLeaf(baseName) {
+		if leafServiceName := internalGRPCLeafServiceName(task); leafServiceName != "" {
 			host, _ := manifest.GetHost(task.Host)
-			certPEM, keyPEM, certErr := pki.issueLeaf(baseName, task.ClusterID, manifest.RootDomain, host)
+			certPEM, keyPEM, certErr := pki.issueLeaf(leafServiceName, task.ClusterID, manifest.RootDomain, host)
 			if certErr != nil {
 				return config, fmt.Errorf("service %s: issue bootstrap internal gRPC certificate: %w", task.Name, certErr)
 			}
@@ -5607,10 +5620,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if _, ok := manifest.Services["navigator"]; ok {
 		env["GRPC_TLS_CA_PATH"] = "/etc/frameworks/pki/ca.crt"
 	}
-	if usesInternalGRPCLeaf(task.ServiceID) {
-		serviceName := task.ServiceID
-		env["GRPC_TLS_CERT_PATH"] = fmt.Sprintf("/etc/frameworks/pki/services/%s/tls.crt", serviceName)
-		env["GRPC_TLS_KEY_PATH"] = fmt.Sprintf("/etc/frameworks/pki/services/%s/tls.key", serviceName)
+	if leafServiceName := internalGRPCLeafServiceName(task); leafServiceName != "" {
+		env["GRPC_TLS_CERT_PATH"] = fmt.Sprintf("/etc/frameworks/pki/services/%s/tls.crt", leafServiceName)
+		env["GRPC_TLS_KEY_PATH"] = fmt.Sprintf("/etc/frameworks/pki/services/%s/tls.key", leafServiceName)
 	}
 
 	// Service token

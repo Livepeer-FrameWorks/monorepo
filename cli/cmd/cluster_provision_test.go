@@ -1062,6 +1062,39 @@ func TestBuildServiceEnvVarsClusterEnvOverridesSharedAndIsOverriddenByInline(t *
 	}
 }
 
+func TestBuildServiceEnvVarsUsesDeployNameForAliasedInternalTLS(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "production",
+		RootDomain: "frameworks.network",
+		Services: map[string]inventory.ServiceConfig{
+			"navigator":  {Enabled: true, Host: "central-eu-1"},
+			"foghorn-us": {Enabled: true, Deploy: "foghorn", Host: "regional-us-1", Cluster: "media-us-1"},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Name:      "foghorn-us@regional-us-1",
+		Type:      "foghorn",
+		ServiceID: "foghorn-us",
+		Host:      "regional-us-1",
+		ClusterID: "media-us-1",
+		Phase:     orchestrator.PhaseApplications,
+	}, manifest, map[string]any{"service_token": "runtime-service-token"}, "", "", nil, nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+
+	if got := env["GRPC_TLS_CERT_PATH"]; got != "/etc/frameworks/pki/services/foghorn/tls.crt" {
+		t.Fatalf("GRPC_TLS_CERT_PATH = %q, want foghorn deploy service cert path", got)
+	}
+	if got := env["GRPC_TLS_KEY_PATH"]; got != "/etc/frameworks/pki/services/foghorn/tls.key" {
+		t.Fatalf("GRPC_TLS_KEY_PATH = %q, want foghorn deploy service key path", got)
+	}
+	if got := env["CLUSTER_ID"]; got != "media-us-1" {
+		t.Fatalf("CLUSTER_ID = %q, want media-us-1", got)
+	}
+}
+
 func TestBuildServiceEnvVarsLoadsSplitManifestEnvFiles(t *testing.T) {
 	baseEnv := writeTestEnvFile(t, strings.Join([]string{
 		"ARBITRUM_RPC_ENDPOINT=https://arb.example",
