@@ -53,22 +53,22 @@ func TestEdgeProvisionConfig_VerificationDomain(t *testing.T) {
 	}
 }
 
-func TestEdgeProvisionConfig_ShouldVerifyPublicHTTPS(t *testing.T) {
+func TestEdgeProvisionConfig_RequireEnrollmentToken(t *testing.T) {
 	tests := []struct {
 		name string
 		cfg  EdgeProvisionConfig
 		want bool
 	}{
-		{"cert and key staged", EdgeProvisionConfig{CertPEM: "cert", KeyPEM: "key"}, true},
-		{"missing cert", EdgeProvisionConfig{KeyPEM: "key"}, false},
-		{"missing key", EdgeProvisionConfig{CertPEM: "cert"}, false},
-		{"configseed delivered", EdgeProvisionConfig{}, false},
-		{"trims whitespace", EdgeProvisionConfig{CertPEM: " cert ", KeyPEM: " key "}, true},
+		{"present", EdgeProvisionConfig{EnrollmentToken: "tok"}, false},
+		{"trims whitespace", EdgeProvisionConfig{EnrollmentToken: " tok "}, false},
+		{"missing", EdgeProvisionConfig{}, true},
+		{"blank", EdgeProvisionConfig{EnrollmentToken: " \t\n"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cfg.shouldVerifyPublicHTTPS(); got != tt.want {
-				t.Errorf("shouldVerifyPublicHTTPS() = %v, want %v", got, tt.want)
+			err := tt.cfg.requireEnrollmentToken()
+			if got := err != nil; got != tt.want {
+				t.Errorf("requireEnrollmentToken() error = %v, want error %v", err, tt.want)
 			}
 		})
 	}

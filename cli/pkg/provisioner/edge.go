@@ -30,9 +30,9 @@ const (
 // EdgeProvisioner drives the edge provisioning pipeline. Install / configure /
 // service / validate are delegated to the frameworks.infra.edge Ansible role
 // (see edge_role.go). Preflight stays Go-side so operators see fast-fail
-// messages before the role runs. Public HTTPS verification only runs when this
-// invocation stages TLS material directly; ConfigSeed-delivered TLS activates
-// asynchronously after Helmsman connects to Foghorn.
+// messages before the role runs. Public HTTPS verification is Go-side because
+// the final readiness signal must cover the full Helmsman/Foghorn ConfigSeed
+// bootstrap, not just local service startup.
 type EdgeProvisioner struct {
 	*BaseProvisioner
 }
@@ -103,15 +103,18 @@ func (c *EdgeProvisionConfig) verificationDomain() string {
 	return c.primaryDomain()
 }
 
-func (c *EdgeProvisionConfig) shouldVerifyPublicHTTPS() bool {
-	return strings.TrimSpace(c.CertPEM) != "" && strings.TrimSpace(c.KeyPEM) != ""
-}
-
 func (c *EdgeProvisionConfig) resolvedMode() string {
 	if c.Mode == "" {
 		return "docker"
 	}
 	return c.Mode
+}
+
+func (c *EdgeProvisionConfig) requireEnrollmentToken() error {
+	if strings.TrimSpace(c.EnrollmentToken) != "" {
+		return nil
+	}
+	return fmt.Errorf("edge enrollment token is required before installing Helmsman; Foghorn rejects first boot without one")
 }
 
 // Provision runs the edge pipeline. Steps:
@@ -121,7 +124,7 @@ func (c *EdgeProvisionConfig) resolvedMode() string {
 //	[3] registration / enrollment hook (after host readiness, before install)
 //	[4] certs   (post-enrollment via ConfigSeed — no-op here)
 //	[5-6] install + start (frameworks.infra.edge role, mode + OS aware)
-//	[7] public HTTPS verify when certs were staged by this invocation
+//	[7] public HTTPS verify after ConfigSeed activation
 func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
 	mode := config.resolvedMode()
 	if strings.TrimSpace(config.FoghornGRPCAddr) == "" {
@@ -177,6 +180,11 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 		fmt.Println("[3/7] No control-plane registration step")
 	}
 	fmt.Println("[4/7] TLS certificates will be delivered after enrollment via ConfigSeed")
+	if !config.DryRun {
+		if err := config.requireEnrollmentToken(); err != nil {
+			return err
+		}
+	}
 
 	if remoteOS == "darwin" && mode != "native" {
 		return fmt.Errorf("unsupported mode for darwin: %s (only native)", mode)
@@ -195,7 +203,7 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 	}
 
 	domain := config.verificationDomain()
-	if domain != "" && config.shouldVerifyPublicHTTPS() {
+	if domain != "" {
 		fmt.Printf("[7/7] Verifying HTTPS readiness at %s...\n", domain)
 		timeout := config.Timeout
 		if timeout == 0 {
@@ -204,8 +212,6 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 		if err := e.verifyHTTPS(domain, host.ExternalIP, timeout); err != nil {
 			return fmt.Errorf("HTTPS verification failed: %w", err)
 		}
-	} else if domain != "" {
-		fmt.Printf("[7/7] Public TLS for %s is ConfigSeed-delivered; skipping immediate HTTPS verification\n", domain)
 	} else {
 		fmt.Println("[7/7] No domain set, skipping HTTPS verification")
 	}
@@ -369,11 +375,12 @@ func listenerLooksDockerManaged(listenerOutput string) bool {
 }
 
 // verifyHTTPS polls the edge domain's /health endpoint until it returns 200
-// or the timeout elapses. The endpoint is self-signed during bootstrap so
-// InsecureSkipVerify is intentional.
+// with a publicly trusted certificate for that domain. Bootstrap Caddy serves
+// /health with an internal self-signed certificate, so TLS verification is the
+// signal that ConfigSeed activation actually completed.
 func (e *EdgeProvisioner) verifyHTTPS(domain, dialAddress string, timeout time.Duration) error {
 	url := "https://" + domain + "/health"
-	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
 	if dialHost := edgeHTTPSDialHost(dialAddress); dialHost != "" && dialHost != domain {
 		dialer := &net.Dialer{Timeout: 5 * time.Second}
 		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
