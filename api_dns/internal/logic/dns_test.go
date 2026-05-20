@@ -187,6 +187,7 @@ type fakeQuartermasterClient struct {
 
 type fakeBunnyClient struct {
 	ensureZone         func(ctx context.Context, domain string) (*bunny.Zone, bool, error)
+	listRecords        func(ctx context.Context, zoneID int64) ([]bunny.Record, error)
 	reconcileRecordSet func(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error
 }
 
@@ -200,6 +201,13 @@ func (f *fakeBunnyClient) EnsureZone(ctx context.Context, domain string) (*bunny
 func (f *fakeBunnyClient) FindZone(ctx context.Context, domain string) (*bunny.Zone, bool, error) {
 	zone, _, err := f.EnsureZone(ctx, domain)
 	return zone, err == nil && zone != nil, err
+}
+
+func (f *fakeBunnyClient) ListRecords(ctx context.Context, zoneID int64) ([]bunny.Record, error) {
+	if f.listRecords != nil {
+		return f.listRecords(ctx, zoneID)
+	}
+	return nil, nil
 }
 
 func (f *fakeBunnyClient) ReconcileRecordSet(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error {
@@ -960,6 +968,72 @@ func TestSyncServiceByCluster_UsesBunnyForMediaClusterService(t *testing.T) {
 		if record.GeolocationLatitude == nil || record.GeolocationLongitude == nil {
 			t.Fatal("expected geolocation coordinates on Bunny record")
 		}
+	}
+}
+
+func TestSyncServiceByCluster_PublishesBunnyEdgeNodeRecords(t *testing.T) {
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
+			ClusterId:   "media-eu",
+			ClusterName: "Media EU",
+			ClusterType: "edge",
+			IsActive:    true,
+		}}},
+		response: &proto.ListHealthyNodesForDNSResponse{Nodes: []*proto.InfrastructureNode{{
+			NodeId:     "edge-eu-1",
+			ClusterId:  "media-eu",
+			ExternalIp: strPtr("198.51.100.10"),
+		}}},
+	}
+
+	reconciled := map[string][]bunny.Record{}
+	bc := &fakeBunnyClient{
+		ensureZone: func(ctx context.Context, domain string) (*bunny.Zone, bool, error) {
+			if domain != "media-eu.example.com" {
+				t.Fatalf("EnsureZone domain = %q, want media-eu.example.com", domain)
+			}
+			return &bunny.Zone{ID: 42, Domain: domain, Nameserver1: "kiki.bunny.net", Nameserver2: "coco.bunny.net"}, false, nil
+		},
+		listRecords: func(ctx context.Context, zoneID int64) ([]bunny.Record, error) {
+			if zoneID != 42 {
+				t.Fatalf("zoneID = %d, want 42", zoneID)
+			}
+			return []bunny.Record{{ID: 7, Type: bunny.RecordTypeA, Name: "edge-stale", Value: "203.0.113.10"}}, nil
+		},
+		reconcileRecordSet: func(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error {
+			if zoneID != 42 || recordType != bunny.RecordTypeA {
+				t.Fatalf("unexpected Bunny reconcile: zone=%d type=%d", zoneID, recordType)
+			}
+			reconciled[name] = append([]bunny.Record(nil), desired...)
+			return nil
+		},
+	}
+
+	cf := &fakeCloudflareClient{
+		listDNSRecords: func(recordType, name string) ([]cloudflare.DNSRecord, error) {
+			return nil, nil
+		},
+	}
+
+	manager := NewDNSManager(cf, qm, logrus.New(), "example.com", 30, 60, 5*time.Minute, MonitorConfig{})
+	manager.SetBunnyClient(bc)
+
+	partialErrors, err := manager.SyncServiceByCluster(context.Background(), "edge-egress")
+	if err != nil {
+		t.Fatalf("SyncServiceByCluster returned error: %v", err)
+	}
+	if len(partialErrors) > 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+
+	if got := reconciled["edge-egress"]; len(got) != 1 || got[0].Value != "198.51.100.10" {
+		t.Fatalf("edge-egress records = %+v, want node IP", got)
+	}
+	if got := reconciled["edge-eu-1"]; len(got) != 1 || got[0].Value != "198.51.100.10" {
+		t.Fatalf("edge-eu-1 records = %+v, want node IP", got)
+	}
+	if got, ok := reconciled["edge-stale"]; !ok || got != nil {
+		t.Fatalf("expected stale edge record cleared with nil desired, got %+v ok=%v", got, ok)
 	}
 }
 

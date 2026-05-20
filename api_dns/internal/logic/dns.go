@@ -71,6 +71,7 @@ type cloudflareClient interface {
 type bunnyClient interface {
 	EnsureZone(ctx context.Context, domain string) (*bunny.Zone, bool, error)
 	FindZone(ctx context.Context, domain string) (*bunny.Zone, bool, error)
+	ListRecords(ctx context.Context, zoneID int64) ([]bunny.Record, error)
 	ReconcileRecordSet(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error
 }
 
@@ -380,8 +381,14 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 		}
 
 		if provider == pkgdns.ProviderBunny {
-			for k, v := range m.clearEdgeNodeRecords(rootDomain) {
-				partialErrors[k] = v
+			if useBunny {
+				for k, v := range m.syncBunnyEdgeNodeRecords(ctx, rootDomain, nodes) {
+					partialErrors[k] = v
+				}
+			} else {
+				for k, v := range m.clearEdgeNodeRecords(rootDomain) {
+					partialErrors[k] = v
+				}
 			}
 			continue
 		}
@@ -432,6 +439,71 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 		return nil, nil
 	}
 	return partialErrors, nil
+}
+
+func edgeNodeRecordLabel(nodeID string) string {
+	nodeLabel := SanitizeLabel(nodeID)
+	if strings.HasPrefix(nodeLabel, "edge-") {
+		return nodeLabel
+	}
+	return "edge-" + nodeLabel
+}
+
+func (m *DNSManager) syncBunnyEdgeNodeRecords(ctx context.Context, zoneDomain string, nodes []dnsNode) map[string]string {
+	partialErrors := map[string]string{}
+	zone, ok, err := m.bunnyClient.FindZone(ctx, zoneDomain)
+	if err != nil {
+		return map[string]string{fmt.Sprintf("edge-nodes.%s", zoneDomain): err.Error()}
+	}
+	if !ok || zone == nil {
+		return map[string]string{fmt.Sprintf("edge-nodes.%s", zoneDomain): "Bunny zone not found"}
+	}
+
+	desiredLabels := map[string]struct{}{}
+	for _, node := range nodes {
+		if node.ExternalIP == "" {
+			continue
+		}
+		label := edgeNodeRecordLabel(node.NodeID)
+		fqdn := bunnyRecordFQDN(label, zoneDomain)
+		desiredLabels[label] = struct{}{}
+		records := []bunny.Record{{
+			Type:             bunny.RecordTypeA,
+			Name:             label,
+			Value:            node.ExternalIP,
+			TTL:              m.recordTTL,
+			Weight:           100,
+			MonitorType:      bunny.MonitorTypeNone,
+			SmartRoutingType: bunny.SmartRoutingNone,
+			Comment:          fmt.Sprintf("Managed by Navigator for %s", fqdn),
+		}}
+		if reconcileErr := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, label, bunny.RecordTypeA, records); reconcileErr != nil {
+			partialErrors[fqdn] = reconcileErr.Error()
+		}
+	}
+
+	current, listErr := m.bunnyClient.ListRecords(ctx, zone.ID)
+	if listErr != nil {
+		partialErrors[fmt.Sprintf("edge-nodes.%s", zoneDomain)] = listErr.Error()
+		return partialErrors
+	}
+	for _, record := range current {
+		if record.Type != bunny.RecordTypeA || !isEdgeNodeRecordLabel(record.Name) {
+			continue
+		}
+		label := SanitizeLabel(record.Name)
+		if _, keep := desiredLabels[label]; keep {
+			continue
+		}
+		if reconcileErr := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, label, bunny.RecordTypeA, nil); reconcileErr != nil {
+			partialErrors[bunnyRecordFQDN(label, zoneDomain)] = reconcileErr.Error()
+		}
+	}
+
+	if len(partialErrors) == 0 {
+		return nil
+	}
+	return partialErrors
 }
 
 func (m *DNSManager) clearEdgeNodeRecords(rootDomain string) map[string]string {
@@ -737,6 +809,11 @@ func isEdgeNodeRecord(recordName, prefix, suffix string) bool {
 	}
 
 	return true
+}
+
+func isEdgeNodeRecordLabel(recordName string) bool {
+	label := SanitizeLabel(recordName)
+	return strings.HasPrefix(label, "edge-") && label != "edge-egress" && !strings.Contains(label, ".")
 }
 
 func (m *DNSManager) clusterServiceFQDN(serviceType, rootDomain string) string {

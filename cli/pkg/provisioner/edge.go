@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -194,7 +195,7 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 		if timeout == 0 {
 			timeout = 3 * time.Minute
 		}
-		if err := e.verifyHTTPS(domain, timeout); err != nil {
+		if err := e.verifyHTTPS(domain, host.ExternalIP, timeout); err != nil {
 			return fmt.Errorf("HTTPS verification failed: %w", err)
 		}
 	} else {
@@ -362,11 +363,22 @@ func listenerLooksDockerManaged(listenerOutput string) bool {
 // verifyHTTPS polls the edge domain's /health endpoint until it returns 200
 // or the timeout elapses. The endpoint is self-signed during bootstrap so
 // InsecureSkipVerify is intentional.
-func (e *EdgeProvisioner) verifyHTTPS(domain string, timeout time.Duration) error {
+func (e *EdgeProvisioner) verifyHTTPS(domain, dialAddress string, timeout time.Duration) error {
 	url := "https://" + domain + "/health"
+	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	if dialHost := edgeHTTPSDialHost(dialAddress); dialHost != "" && dialHost != domain {
+		dialer := &net.Dialer{Timeout: 5 * time.Second}
+		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			_, port, err := net.SplitHostPort(addr)
+			if err != nil || port == "" {
+				port = "443"
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort(dialHost, port))
+		}
+	}
 	httpClient := &http.Client{
 		Timeout:   5 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		Transport: transport,
 	}
 	deadline := time.Now().Add(timeout)
 	var lastErr error
@@ -388,7 +400,11 @@ func (e *EdgeProvisioner) verifyHTTPS(domain string, timeout time.Duration) erro
 			if resp.Body != nil {
 				_ = resp.Body.Close()
 			}
-			fmt.Printf("  HTTPS ready at %s (%s)\n", url, tlsSummary)
+			if dialHost := edgeHTTPSDialHost(dialAddress); dialHost != "" && dialHost != domain {
+				fmt.Printf("  HTTPS ready at %s via %s (%s)\n", url, dialHost, tlsSummary)
+			} else {
+				fmt.Printf("  HTTPS ready at %s (%s)\n", url, tlsSummary)
+			}
 			return nil
 		}
 		if resp != nil {
@@ -409,6 +425,17 @@ func (e *EdgeProvisioner) verifyHTTPS(domain string, timeout time.Duration) erro
 		}
 		time.Sleep(5 * time.Second)
 	}
+}
+
+func edgeHTTPSDialHost(dialAddress string) string {
+	dialAddress = strings.TrimSpace(dialAddress)
+	if dialAddress == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(dialAddress); err == nil {
+		return strings.Trim(host, "[]")
+	}
+	return strings.Trim(dialAddress, "[]")
 }
 
 func tlsConnectionSummary(state *tls.ConnectionState) string {
