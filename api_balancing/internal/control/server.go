@@ -2635,11 +2635,7 @@ func parseEdgeTelemetryPrivateKey() (*ecdsa.PrivateKey, error) {
 	if block == nil {
 		return nil, fmt.Errorf("decode telemetry private key PEM: no PEM block found")
 	}
-	if block.Type == "EC PRIVATE KEY" {
-		key, parseErr := x509.ParseECPrivateKey(block.Bytes)
-		if parseErr != nil {
-			return nil, fmt.Errorf("parse telemetry private key: %w", parseErr)
-		}
+	if key, parseErr := x509.ParseECPrivateKey(block.Bytes); parseErr == nil {
 		return key, nil
 	}
 	keyAny, err := x509.ParsePKCS8PrivateKey(block.Bytes)

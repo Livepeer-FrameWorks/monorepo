@@ -47,6 +47,24 @@ func TestParseEdgeTelemetryPrivateKeyAcceptsPKCS8Key(t *testing.T) {
 	}
 }
 
+func TestParseEdgeTelemetryPrivateKeyAcceptsMislabeledECKey(t *testing.T) {
+	key := mustGenerateTelemetryTestKey(t)
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("MarshalECPrivateKey failed: %v", err)
+	}
+
+	t.Setenv("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64", encodeTelemetryTestPEM("PRIVATE KEY", der))
+
+	got, err := parseEdgeTelemetryPrivateKey()
+	if err != nil {
+		t.Fatalf("parseEdgeTelemetryPrivateKey failed: %v", err)
+	}
+	if !sameTelemetryTestPublicKey(t, got, key) {
+		t.Fatal("parsed key does not match input key")
+	}
+}
+
 func TestParseEdgeTelemetryPrivateKeyRequiresEnv(t *testing.T) {
 	t.Setenv("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64", "")
 	if _, err := parseEdgeTelemetryPrivateKey(); err == nil {
