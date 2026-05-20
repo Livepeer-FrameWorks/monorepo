@@ -19,9 +19,17 @@
     - not ansible_check_mode
     - go_service_internal_ca_bundle_pem | length > 0
 
+- name: Set internal gRPC certificate paths
+  ansible.builtin.set_fact:
+    go_service_internal_tls_cert_path: "{{ go_service_env.GRPC_TLS_CERT_PATH | default(go_service_internal_tls_cert_default_path) }}"
+    go_service_internal_tls_key_path: "{{ go_service_env.GRPC_TLS_KEY_PATH | default(go_service_internal_tls_key_default_path) }}"
+  when:
+    - go_service_internal_tls_cert_pem | length > 0
+    - go_service_internal_tls_key_pem | length > 0
+
 - name: Ensure internal gRPC certificate directory
   ansible.builtin.file:
-    path: "{{ (go_service_env.GRPC_TLS_CERT_PATH | default(go_service_internal_tls_cert_default_path)) | dirname }}"
+    path: "{{ go_service_internal_tls_cert_path | dirname }}"
     state: directory
     owner: privateer
     group: "{{ go_service_group }}"
@@ -31,32 +39,117 @@
     - go_service_internal_tls_cert_pem | length > 0
     - go_service_internal_tls_key_pem | length > 0
 
-- name: Render internal gRPC certificate
-  ansible.builtin.copy:
-    dest: "{{ go_service_env.GRPC_TLS_CERT_PATH | default(go_service_internal_tls_cert_default_path) }}"
-    content: "{{ go_service_internal_tls_cert_pem }}"
-    owner: root
-    group: "{{ go_service_group }}"
-    mode: "0644"
-  notify: go_service restart
+- name: Stat existing bootstrap internal gRPC certificate
+  ansible.builtin.stat:
+    path: "{{ go_service_internal_tls_cert_path }}"
+  register: go_service_internal_tls_bootstrap_cert_stat
   when:
     - not ansible_check_mode
     - go_service_internal_tls_cert_pem | length > 0
     - go_service_internal_tls_key_pem | length > 0
 
-- name: Render internal gRPC key
-  ansible.builtin.copy:
-    dest: "{{ go_service_env.GRPC_TLS_KEY_PATH | default(go_service_internal_tls_key_default_path) }}"
-    content: "{{ go_service_internal_tls_key_pem }}"
-    owner: root
-    group: "{{ go_service_group }}"
-    mode: "0640"
-  no_log: true
-  notify: go_service restart
+- name: Stat existing bootstrap internal gRPC key
+  ansible.builtin.stat:
+    path: "{{ go_service_internal_tls_key_path }}"
+  register: go_service_internal_tls_bootstrap_key_stat
   when:
     - not ansible_check_mode
     - go_service_internal_tls_cert_pem | length > 0
     - go_service_internal_tls_key_pem | length > 0
+
+- name: Check existing internal gRPC certificate/key pair
+  ansible.builtin.shell: |
+    set -eu
+    cert_hash="$(openssl x509 -in {{ go_service_internal_tls_cert_path | quote }} -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform der 2>/dev/null | sha256sum | awk '{print $1}')"
+    key_hash="$(openssl pkey -in {{ go_service_internal_tls_key_path | quote }} -pubout -outform der 2>/dev/null | sha256sum | awk '{print $1}')"
+    test -n "$cert_hash"
+    test "$cert_hash" = "$key_hash"
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+  register: go_service_internal_tls_existing_pair_check
+  when:
+    - not ansible_check_mode
+    - go_service_internal_tls_cert_pem | length > 0
+    - go_service_internal_tls_key_pem | length > 0
+    - go_service_internal_tls_bootstrap_cert_stat.stat.exists | default(false)
+    - go_service_internal_tls_bootstrap_key_stat.stat.exists | default(false)
+
+- name: Decide whether to render bootstrap internal gRPC certificate pair
+  ansible.builtin.set_fact:
+    go_service_internal_tls_render_bootstrap: >-
+      {{
+        not (
+          (go_service_internal_tls_bootstrap_cert_stat.stat.exists | default(false))
+          and (go_service_internal_tls_bootstrap_key_stat.stat.exists | default(false))
+          and (go_service_internal_tls_existing_pair_check.rc | default(1) == 0)
+        )
+      }}
+  when:
+    - go_service_internal_tls_cert_pem | length > 0
+    - go_service_internal_tls_key_pem | length > 0
+
+- name: Create temporary internal gRPC certificate file
+  ansible.builtin.tempfile:
+    state: file
+    suffix: ".crt"
+  register: go_service_internal_tls_temp_cert
+  when:
+    - not ansible_check_mode
+    - go_service_internal_tls_render_bootstrap | default(false)
+
+- name: Create temporary internal gRPC key file
+  ansible.builtin.tempfile:
+    state: file
+    suffix: ".key"
+  register: go_service_internal_tls_temp_key
+  no_log: true
+  when:
+    - not ansible_check_mode
+    - go_service_internal_tls_render_bootstrap | default(false)
+
+- name: Stage bootstrap internal gRPC certificate
+  ansible.builtin.copy:
+    dest: "{{ go_service_internal_tls_temp_cert.path }}"
+    content: "{{ go_service_internal_tls_cert_pem }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when:
+    - not ansible_check_mode
+    - go_service_internal_tls_render_bootstrap | default(false)
+
+- name: Stage bootstrap internal gRPC key
+  ansible.builtin.copy:
+    dest: "{{ go_service_internal_tls_temp_key.path }}"
+    content: "{{ go_service_internal_tls_key_pem }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when:
+    - not ansible_check_mode
+    - go_service_internal_tls_render_bootstrap | default(false)
+
+- name: Install bootstrap internal gRPC certificate pair atomically
+  ansible.builtin.shell: |
+    set -eu
+    cert_dir={{ (go_service_internal_tls_cert_path | dirname) | quote }}
+    lock_path="$cert_dir/.tls.write.lock"
+    install -d -o privateer -g {{ go_service_group | quote }} -m 2750 "$cert_dir"
+    (
+      flock -x 9
+      install -o privateer -g {{ go_service_group | quote }} -m 0644 {{ go_service_internal_tls_temp_cert.path | quote }} {{ go_service_internal_tls_cert_path | quote }}
+      install -o privateer -g {{ go_service_group | quote }} -m 0640 {{ go_service_internal_tls_temp_key.path | quote }} {{ go_service_internal_tls_key_path | quote }}
+    ) 9>"$lock_path"
+    rm -f {{ go_service_internal_tls_temp_cert.path | quote }} {{ go_service_internal_tls_temp_key.path | quote }}
+  args:
+    executable: /bin/bash
+  notify: go_service restart
+  when:
+    - not ansible_check_mode
+    - go_service_internal_tls_render_bootstrap | default(false)
 
 - name: Stat internal CA trust bundle
   ansible.builtin.stat:
@@ -81,6 +174,37 @@
   when:
     - not ansible_check_mode
     - go_service_env.GRPC_TLS_KEY_PATH is defined
+
+- name: Verify internal gRPC certificate/key pair
+  ansible.builtin.shell: |
+    set -eu
+    cert_hash="$(openssl x509 -in {{ go_service_env.GRPC_TLS_CERT_PATH | quote }} -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform der 2>/dev/null | sha256sum | awk '{print $1}')"
+    key_hash="$(openssl pkey -in {{ go_service_env.GRPC_TLS_KEY_PATH | quote }} -pubout -outform der 2>/dev/null | sha256sum | awk '{print $1}')"
+    test -n "$cert_hash"
+    test "$cert_hash" = "$key_hash"
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+  register: go_service_internal_tls_pair_check
+  when:
+    - not ansible_check_mode
+    - go_service_env.GRPC_TLS_CERT_PATH is defined
+    - go_service_env.GRPC_TLS_KEY_PATH is defined
+    - go_service_internal_tls_cert_stat.stat.exists | default(false)
+    - go_service_internal_tls_key_stat.stat.exists | default(false)
+
+- name: Fail when internal gRPC certificate and key do not match
+  ansible.builtin.fail:
+    msg: >-
+      {{ go_service_name }} internal gRPC TLS certificate and key do not match:
+      cert={{ go_service_env.GRPC_TLS_CERT_PATH }}, key={{ go_service_env.GRPC_TLS_KEY_PATH }}.
+      Re-run provisioning with Privateer updated so ConfigSeed and bootstrap writers
+      share the PKI write lock.
+  when:
+    - not ansible_check_mode
+    - go_service_internal_tls_pair_check is defined
+    - go_service_internal_tls_pair_check.rc | default(0) != 0
 
 - name: Fail when internal PKI material is missing
   ansible.builtin.fail:

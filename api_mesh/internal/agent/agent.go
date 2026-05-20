@@ -1418,6 +1418,11 @@ func (a *Agent) writeServiceCertificate(serviceType, certPEM, keyPEM string) err
 	if err := os.Chmod(dir, dirMode); err != nil {
 		return err
 	}
+	unlock, err := lockServiceCertificateDir(dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if err := writeAtomicFile(filepath.Join(dir, "tls.crt"), []byte(certPEM), 0644); err != nil {
 		return err
 	}
@@ -1435,6 +1440,26 @@ func (a *Agent) writeServiceCertificate(serviceType, certPEM, keyPEM string) err
 		}
 	}
 	return nil
+}
+
+func lockServiceCertificateDir(dir string) (func(), error) {
+	lockPath := filepath.Join(dir, ".tls.write.lock")
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		_ = lockFile.Close()
+		return nil, err
+	}
+	return func() {
+		if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN); err != nil {
+			return
+		}
+		if err := lockFile.Close(); err != nil {
+			return
+		}
+	}, nil
 }
 
 func (a *Agent) writePKIFile(relativePath, content string, mode os.FileMode) error {
