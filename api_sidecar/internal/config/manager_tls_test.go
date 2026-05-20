@@ -168,6 +168,7 @@ func TestRenderCaddyfileMultiBundle(t *testing.T) {
 		"header {",
 		"import common_handlers",
 		"reverse_proxy mistserver:8080",
+		"keepalive 64s",
 	}
 	for _, want := range mustContain {
 		if !contains(out, want) {
@@ -176,6 +177,9 @@ func TestRenderCaddyfileMultiBundle(t *testing.T) {
 	}
 	if contains(out, "headers {") {
 		t.Fatalf("rendered Caddyfile uses invalid Caddy directive \"headers\":\n%s", out)
+	}
+	if contains(out, "keepalive 64\n") {
+		t.Fatalf("rendered Caddyfile uses invalid unitless keepalive duration:\n%s", out)
 	}
 }
 

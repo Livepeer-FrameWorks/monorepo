@@ -71,7 +71,7 @@ const caddyfileTmpl = `{
       transport http {
         read_timeout 0
         write_timeout 0
-        keepalive 64
+        keepalive 64s
       }
       header_up X-Forwarded-Proto {scheme}
       header_up X-Forwarded-For {remote_host}

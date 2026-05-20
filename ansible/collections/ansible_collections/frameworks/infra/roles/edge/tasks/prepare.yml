@@ -17,6 +17,8 @@
   ansible.builtin.copy:
     dest: "{{ edge_ca_path }}"
     content: "{{ edge_ca_bundle_pem }}"
+    owner: frameworks
+    group: frameworks
     mode: "0644"
   when: edge_ca_bundle_pem | length > 0
   no_log: true
