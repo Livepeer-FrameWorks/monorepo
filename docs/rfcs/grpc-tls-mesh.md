@@ -4,7 +4,8 @@
 
 Partially implemented. Shared gRPC TLS helpers now exist in `pkg/grpcutil`, and
 most service clients/servers use `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`,
-`GRPC_TLS_CA_PATH`, `GRPC_TLS_SERVER_NAME`, and `GRPC_ALLOW_INSECURE`. The
+`GRPC_TLS_CA_PATH`, per-service TLS ServerName overrides, and
+`GRPC_ALLOW_INSECURE`. The
 original `GRPC_USE_TLS` toggle proposal was not adopted. Foghorn↔Helmsman
 transport TLS also supports file-based certificates and Navigator-backed
 wildcard certificates. mTLS is not implemented. See
@@ -20,8 +21,8 @@ wildcard certificates. mTLS is not implemented. See
 ## Current State
 
 - Shared server/client TLS helpers live in `pkg/grpcutil`.
-- Most service clients pass `GRPC_ALLOW_INSECURE`, `GRPC_TLS_CA_PATH`, and
-  `GRPC_TLS_SERVER_NAME` into their generated client config.
+- Most service clients pass `GRPC_ALLOW_INSECURE`, `GRPC_TLS_CA_PATH`, and a
+  service-specific ServerName into their generated client config.
 - Most gRPC servers use `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`, and
   `GRPC_ALLOW_INSECURE`.
 - Foghorn control gRPC can use file-based certificates or Navigator-issued wildcard
@@ -60,10 +61,10 @@ The common gRPC TLS config pattern that exists today is:
 - `GRPC_TLS_CERT_PATH=/path/server.crt`
 - `GRPC_TLS_KEY_PATH=/path/server.key`
 - `GRPC_TLS_CA_PATH=/path/ca.crt`
-- `GRPC_TLS_SERVER_NAME=service.internal.example`
+- `<SERVICE>_GRPC_TLS_SERVER_NAME=service.internal.example`
 - `GRPC_ALLOW_INSECURE=true|false`
 
-`GRPC_TLS_SERVER_NAME` is only a default for mesh/internal endpoints. Endpoint
+ServerName is part of the endpoint tuple, not a process-global default. Endpoint
 resolution must own the full tuple: dial address, TLS server name, and trust
 roots. If a client dials a public media FQDN such as
 `foghorn.media-eu-1.frameworks.network`, it must verify that FQDN with public

@@ -54,6 +54,6 @@ Injected per-gateway from gitops cluster facts:
 - `FRAMEWORKS_GATEWAY_REGION`
 - `FRAMEWORKS_DECKLOG_GRPC_ADDR`
 - `FRAMEWORKS_DECKLOG_TLS_MODE`
-- `GRPC_TLS_CA_PATH` and `GRPC_TLS_SERVER_NAME=decklog.internal`
+- `GRPC_TLS_CA_PATH` and `DECKLOG_GRPC_TLS_SERVER_NAME=decklog.internal`
 - `SERVICE_TOKEN` for Decklog auth; `FRAMEWORKS_DECKLOG_AUTH_TOKEN` may override it for a distinct gateway token.
 - `GEOIP_MMDB_PATH`

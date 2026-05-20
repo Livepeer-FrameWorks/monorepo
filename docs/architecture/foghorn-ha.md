@@ -113,7 +113,12 @@ Lifecycle: set on Helmsman connect, refreshed on every heartbeat, deleted on dis
 
 #### Address Discovery
 
-Foghorn registers at Quartermaster via `BootstrapService` on startup, passing its `node_id`. QM resolves the node's mesh address (`wireguard_ip > internal_ip > external_ip`) and returns the full `advertise_addr` (e.g., `10.0.0.5:18019`). No manual address configuration required.
+Foghorn publishes two addresses with different audiences:
+
+- Quartermaster service registration advertises the external Foghorn gRPC listener, normally `foghorn.<cluster>.<root>:18029`. Edge bootstrap, Helmsman, Quartermaster polling, and federation use this address with the public ACME cluster wildcard.
+- HA relay ownership stores `FOGHORN_RELAY_ADVERTISE_ADDR` in Redis, normally the mesh host on `:18019`. Relay traffic uses the internal gRPC listener and internal CA identity `foghorn.internal`.
+
+Provisioning should set `FOGHORN_RELAY_ADVERTISE_ADDR` from the node's mesh DNS or mesh IP. If it is absent, Foghorn falls back to `FOGHORN_RELAY_ADVERTISE_HOST`, then `FOGHORN_HOST`, then the external advertise host with the internal port.
 
 #### Cross-Cluster Interaction
 
@@ -180,10 +185,12 @@ foghorn:
     CLUSTER_ID: ${CLUSTER_ID}
     REDIS_URL: redis://foghorn-redis:6379
     FOGHORN_INSTANCE_ID: foghorn-1
-    FOGHORN_CONTROL_BIND_ADDR: 0.0.0.0:18019
-    FOGHORN_GRPC_PORT: 18019 # optional override; defaults to control bind port
-    NODE_ID: regional-1 # used by BootstrapService to resolve mesh address for relay
-  ports: [18008, 18019]
+    FOGHORN_INTERNAL_GRPC_BIND_ADDR: 0.0.0.0:18019
+    FOGHORN_EXTERNAL_GRPC_BIND_ADDR: 0.0.0.0:18029
+    FOGHORN_EXTERNAL_GRPC_PORT: 18029
+    FOGHORN_RELAY_ADVERTISE_ADDR: foghorn:18019
+    NODE_ID: regional-1 # used by BootstrapService for service registration
+  ports: [18008, 18019, 18029]
 
 # foghorn-2 (instance 2): FOGHORN_INSTANCE_ID=foghorn-2
 foghorn-2:
@@ -191,13 +198,15 @@ foghorn-2:
     CLUSTER_ID: ${CLUSTER_ID}
     REDIS_URL: redis://foghorn-redis:6379
     FOGHORN_INSTANCE_ID: foghorn-2
-    FOGHORN_CONTROL_BIND_ADDR: 0.0.0.0:18029
-    FOGHORN_GRPC_PORT: 18029
+    FOGHORN_INTERNAL_GRPC_BIND_ADDR: 0.0.0.0:18019
+    FOGHORN_EXTERNAL_GRPC_BIND_ADDR: 0.0.0.0:18029
+    FOGHORN_EXTERNAL_GRPC_PORT: 18029
+    FOGHORN_RELAY_ADVERTISE_ADDR: foghorn-2:18019
     NODE_ID: regional-2
-  ports: [18018, 18029]
+  ports: [18018, "18039:18029"]
 ```
 
-Both instances register independently with Quartermaster via `BootstrapService`. QM resolves each instance's mesh address from its `NODE_ID` and returns a full `advertise_addr` used for relay forwarding. An upstream load balancer (Nginx, Caddy, or cloud LB) distributes requests across instances.
+Both instances register independently with Quartermaster via `BootstrapService` using the external gRPC port. HA relay addressing is not taken from Quartermaster; it is the internal `FOGHORN_RELAY_ADVERTISE_ADDR` value stored in Redis connection ownership. An upstream load balancer (Nginx, Caddy, or cloud LB) distributes public requests across instances.
 
 ### Local HA Relay Validation Matrix
 

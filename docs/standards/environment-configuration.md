@@ -68,12 +68,14 @@ There is a strong shared set already:
 - `GRPC_TLS_CA_PATH`
 - `GRPC_TLS_CERT_PATH`
 - `GRPC_TLS_KEY_PATH`
-- `GRPC_TLS_SERVER_NAME`
 
 Recommendation:
 
-- Prefer the shared `GRPC_*` keys in application code.
-- Do not add service-specific TLS names.
+- Prefer shared `GRPC_*` keys for TLS material and insecure dev/test policy.
+- Use service-specific TLS authority names, for example
+  `QUARTERMASTER_GRPC_TLS_SERVER_NAME`, when a process dials more than one gRPC
+  service. A single process-wide ServerName is not valid for multi-client
+  services.
 
 ### Frontend/public URL mirrors
 
@@ -126,7 +128,8 @@ These should remain the human-edited source of truth:
 - Service placement: `*_HOST`, `*_PORT`, `*_GRPC_PORT`
 - Shared runtime: `BUILD_ENV`, `GIN_MODE`, `LOG_LEVEL`, `ALLOWED_ORIGINS`, `TRUSTED_PROXY_CIDRS`
 - Shared secrets: `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`
-- Shared TLS: `GRPC_ALLOW_INSECURE`, `GRPC_TLS_CA_PATH`, `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`, `GRPC_TLS_SERVER_NAME`
+- Shared TLS: `GRPC_ALLOW_INSECURE`, `GRPC_TLS_CA_PATH`, `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`
+- Per-client TLS authority overrides: `<SERVICE>_TLS_SERVER_NAME`
 
 ### Derive instead of editing directly
 
@@ -137,7 +140,7 @@ These are outputs and should not be treated as first-class editable config:
 - `COMMODORE_URL`, `QUARTERMASTER_URL`, `PURSER_URL`, `PERISCOPE_QUERY_URL`, `PERISCOPE_INGEST_URL`, `MISTSERVER_URL`, `HELMSMAN_WEBHOOK_URL`
 - `COMMODORE_GRPC_ADDR`, `QUARTERMASTER_GRPC_ADDR`, `PURSER_GRPC_ADDR`, `PERISCOPE_GRPC_ADDR`, `SIGNALMAN_GRPC_ADDR`, `DECKHAND_GRPC_ADDR`, `SKIPPER_GRPC_ADDR`
 - `GATEWAY_MCP_URLS`, `GATEWAY_MCP_URL` (derived from Bridge mesh hosts for Skipper)
-- `FOGHORN_CONTROL_ADDR`, `FOGHORN_CONTROL_BIND_ADDR`
+- `FOGHORN_CONTROL_ADDR`, `FOGHORN_INTERNAL_GRPC_BIND_ADDR`, `FOGHORN_EXTERNAL_GRPC_BIND_ADDR`, `FOGHORN_EXTERNAL_GRPC_PORT`, `FOGHORN_RELAY_ADVERTISE_ADDR`
 - All `VITE_*` (derived by configgen from canonical public URLs)
 - `AUTH_PUBLIC_URL` (derived from `GATEWAY_PUBLIC_URL + /auth`)
 
@@ -159,7 +162,7 @@ These are real operator-owned inputs that should stay covered by env examples an
 - `GRPC_TLS_CA_PATH`
 - `GRPC_TLS_CERT_PATH`
 - `GRPC_TLS_KEY_PATH`
-- `GRPC_TLS_SERVER_NAME`
+- `<SERVICE>_TLS_SERVER_NAME`
 - `GRPC_TLS_PKI_DIR`
 - `ACME_ENV`
 - `CERT_ISSUANCE_TOKEN`

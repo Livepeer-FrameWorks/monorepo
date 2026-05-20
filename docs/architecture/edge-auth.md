@@ -4,7 +4,7 @@ Edge nodes authenticate to Foghorn over the public internet using three layers:
 transport encryption via TLS, identity enrollment through Quartermaster-validated
 tokens, and service-to-service authorization via a shared static token.
 
-## Transport: SNI-Routed TLS for Internal and Cluster Names
+## Transport: Split gRPC Listeners
 
 Foghorn has multiple legitimate inbound surfaces:
 
@@ -13,30 +13,33 @@ Foghorn has multiple legitimate inbound surfaces:
 - Logical-cluster gRPC endpoints used by Quartermaster health polling.
 - Peer/federation gRPC endpoints between physical Foghorn instances.
 
-Those callers do not all use the same DNS name, so Foghorn must not choose one
-certificate family globally. In production it loads both:
+Those callers do not all share a trust boundary, so Foghorn uses two gRPC
+listeners in one process:
 
-1. The **file-based internal service leaf** (`GRPC_TLS_CERT_PATH`,
-   `GRPC_TLS_KEY_PATH`) for mesh/internal names such as `foghorn.internal`.
-2. The **Navigator cluster TLS bundle** (`cluster:{cluster_slug}`) for
-   `{cluster_slug}.{root_domain}` and `*.{cluster_slug}.{root_domain}`. This
-   covers names such as `foghorn.media-eu-1.frameworks.network` and
-   `edge-eu-1.media-eu-1.frameworks.network`.
+| Listener | Default bind | Certificate                                                                 | Names                                  | Audience                                                                           |
+| -------- | ------------ | --------------------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------- |
+| Internal | `:18019`     | File-based internal-CA leaf from `GRPC_TLS_CERT_PATH` / `GRPC_TLS_KEY_PATH` | `foghorn.internal` and mesh names      | Foghorn HA relay                                                                   |
+| External | `:18029`     | Navigator ACME cluster wildcard (`cluster:{cluster_slug}`)                  | `foghorn.{cluster_slug}.{root_domain}` | Helmsman control, edge bootstrap/enrollment, Quartermaster polling, and federation |
 
-The gRPC listener serves these bundles together through `tls.Config.GetCertificate`
-and selects by SNI. Exact SAN/name matches win, wildcard cluster matches are next,
-and the internal service leaf is the default. Bundle refreshes replace the whole
-served set atomically. If Foghorn is configured with Navigator in production but
-cannot load a cluster bundle for its served clusters, startup fails instead of
-running a process that Quartermaster and edge bootstrap cannot trust.
+The external listener serves only Navigator-backed cluster TLS bundles. If
+Foghorn is configured with Navigator in production but cannot load a cluster
+bundle for its served clusters, startup fails instead of running a process that
+Quartermaster, federation peers, and edge bootstrap cannot trust.
 
-Insecure fallback is local-dev only, when neither file TLS nor Navigator TLS is
-configured.
+Federation belongs on the external listener. The peer manager reads
+`TenantClusterPeer.foghorn_grpc_addr` from Quartermaster and, when absent, falls
+back to `foghorn.{cluster_slug}.{base_url}:18029` in
+`api_balancing/internal/federation/peer_manager.go`. That address is a cluster
+FQDN backed by the public ACME wildcard, not an internal mesh identity.
 
-Client-side TLS is auto-detected in Helmsman. TLS is used whenever the Foghorn
-address is an FQDN, trust material is provided via `GRPC_TLS_*`, or
-`GRPC_ALLOW_INSECURE=false`. Docker service names without dots can still use
-insecure connections for local development when explicitly allowed.
+Insecure fallback is local-dev only, when neither internal file TLS nor
+Navigator TLS is configured.
+
+Client-side TLS is explicit. Edge provisioning only writes `GRPC_TLS_CA_PATH`
+when Helmsman is configured to dial an internal-CA address such as
+`foghorn.internal:18019`. Managed edge nodes normally dial the external listener
+at `foghorn.{cluster_slug}.{root_domain}:18029` and validate the public ACME
+certificate with system roots.
 
 **Implementation:** `api_balancing/internal/control` (server),
 `api_sidecar/internal/control` (client)

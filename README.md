@@ -157,7 +157,8 @@ Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Mak
 | Network  | Privateer                | 18012    | WireGuard mesh agent & Local DNS (production deployments; intentionally excluded from single-node dev compose) |
 | Media    | Helmsman                 | 18007    | Edge API                                                                                                       |
 | Media    | Foghorn                  | 18008    | Balancer                                                                                                       |
-| Media    | Foghorn (control)        | 18019    | gRPC control API + FoghornFederation (cross-cluster peering)                                                   |
+| Media    | Foghorn (internal gRPC)  | 18019    | Internal-CA gRPC listener for Foghorn HA relay                                                                 |
+| Media    | Foghorn (external gRPC)  | 18029    | Public-ACME gRPC listener for Helmsman, edge bootstrap/enrollment, and FoghornFederation                       |
 | Media    | Foghorn Redis            | 6379     | Foghorn state sync (HA). Separate from Chatwoot Redis                                                          |
 | Media    | MistServer (control)     | 4242     | Control API                                                                                                    |
 | Media    | MistServer (RTMP/E-RTMP) | 1935     | Ingest                                                                                                         |

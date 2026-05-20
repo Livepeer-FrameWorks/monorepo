@@ -62,7 +62,8 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 | Signalman                | 18009 (WS), 19005 (gRPC)   | Regional | Real-time updates & WebSocket hub                                   |
 | **Media Plane**          |                            |          |                                                                     |
 | Foghorn                  | 18008                      | Regional | Load balancer, stream replication orchestrator (HA via Redis)       |
-| Foghorn (control)        | 18019 (gRPC)               | Regional | gRPC control API + FoghornFederation (cross-cluster peering)        |
+| Foghorn (internal gRPC)  | 18019 (gRPC)               | Regional | Internal control API and HA relay over the internal CA              |
+| Foghorn (external gRPC)  | 18029 (gRPC)               | Regional | Edge bootstrap, Helmsman control, and FoghornFederation over ACME   |
 | Helmsman                 | 18007 (HTTP)               | Edge     | MistServer sidecar                                                  |
 | **Data**                 |                            |          |                                                                     |
 | Chandler                 | 18020 (HTTP)               | Regional | Static asset server (thumbnails from S3 with LRU cache)             |

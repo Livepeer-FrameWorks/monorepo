@@ -108,8 +108,8 @@ The edge environment file contains the required settings:
 ```bash
 NODE_ID=edge-us-sea-1
 EDGE_PUBLIC_URL=https://stream.yourdomain.com/view
-FOGHORN_CONTROL_ADDR=foghorn.<media-cluster>.example.com:18019
-GRPC_TLS_CA_PATH=/etc/frameworks/pki/ca.crt
+FOGHORN_CONTROL_ADDR=foghorn.<media-cluster>.example.com:18029
+GRPC_TLS_CA_PATH=
 EDGE_ENROLLMENT_TOKEN=your-enrollment-token
 EDGE_DOMAIN=stream.yourdomain.com
 ACME_EMAIL=ops@yourdomain.com
@@ -118,7 +118,7 @@ DEPLOY_MODE=docker
 
 `NODE_ID` must be stable and unique per node. `EDGE_PUBLIC_URL` should include the `/view` path. `FOGHORN_CONTROL_ADDR` is the Foghorn gRPC endpoint Helmsman needs at boot — the HTTP balancer base, TLS bundle, telemetry, and SiteConfig arrive over the live gRPC `ConfigSeed` stream once Helmsman connects.
 
-When using `--enrollment-token` with `edge init`, the CLI populates `NODE_ID`, `EDGE_DOMAIN`, and `FOGHORN_CONTROL_ADDR` from the PreRegisterEdge response. It also stages the internal CA bundle so Helmsman can trust Foghorn immediately; public wildcard TLS still arrives later through ConfigSeed.
+When using `--enrollment-token` with `edge init`, the CLI populates `NODE_ID`, `EDGE_DOMAIN`, and `FOGHORN_CONTROL_ADDR` from the PreRegisterEdge response. Managed clusters use Foghorn's external gRPC listener, for example `foghorn.<media-cluster>.example.com:18029`, and validate it with the public ACME certificate. `GRPC_TLS_CA_PATH` is only set for internal-CA Foghorn addresses such as `foghorn.internal:18019`.
 
 Optional Helmsman overrides (add only if needed, in `.edge.env`):
 

@@ -19,6 +19,7 @@
 | Analytics pipeline, event types | `docs/architecture/analytics-pipeline.md`  |
 | Service events backbone         | `docs/architecture/service-events.md`      |
 | Viewer routing algorithm        | `docs/architecture/viewer-routing.md`      |
+| TLS and service identity        | `docs/architecture/tls.md`                 |
 | Agent/wallet/x402/MCP           | `docs/architecture/agent-access.md`        |
 | Multistreaming / push targets   | `docs/architecture/multistreaming.md`      |
 | OS tuning & cluster os update   | `docs/architecture/os-tuning.md`           |
