@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"frameworks/cli/pkg/clusterderive"
+	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/remoteaccess"
@@ -38,6 +39,16 @@ type fakeFoghornClusterAssigner struct {
 	services  []*pb.Service
 	instances map[string][]*pb.ServiceInstance
 	errFor    map[string]error
+}
+
+func TestServiceExistsTracksPreexistingStoppedServices(t *testing.T) {
+	state := &detect.ServiceState{Exists: true, Running: false}
+	if !serviceExists(state) {
+		t.Fatal("expected existing stopped service to count as preexisting")
+	}
+	if serviceRunning(state) {
+		t.Fatal("expected existing stopped service not to count as running")
+	}
 }
 
 func (f *fakeFoghornClusterAssigner) AssignServiceToCluster(_ context.Context, req *pb.AssignServiceToClusterRequest) error {

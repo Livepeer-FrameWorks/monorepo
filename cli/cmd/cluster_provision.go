@@ -494,10 +494,10 @@ type provisionedTask struct {
 }
 
 type taskProvisionOutcome struct {
-	config            provisioner.ServiceConfig
-	previouslyRunning bool
-	running           bool
-	deferred          bool
+	config      provisioner.ServiceConfig
+	preexisting bool
+	running     bool
+	deferred    bool
 }
 
 // executeProvision runs the provisioning tasks
@@ -608,7 +608,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 				mu.Lock()
 				results = append(results, batchResult{task: task, host: host, outcome: outcome, runtimeData: taskRD})
-				if !outcome.previouslyRunning {
+				if !outcome.preexisting {
 					completed = append(completed, provisionedTask{task: task, host: host, config: outcome.config})
 				}
 				mu.Unlock()
@@ -1314,6 +1314,10 @@ func phaseRequiresGatewayMeshValidation(phase orchestrator.Phase) bool {
 
 func serviceRunning(state *detect.ServiceState) bool {
 	return state != nil && state.Exists && state.Running
+}
+
+func serviceExists(state *detect.ServiceState) bool {
+	return state != nil && state.Exists
 }
 
 type serviceClusterAssignmentClient interface {
@@ -5097,7 +5101,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		beforeState, detectErr = prov.Detect(phaseCtx, host)
 		return detectErr
 	}); phaseErr != nil {
-		beforeState = nil
+		beforeState = &detect.ServiceState{Exists: true, Running: true}
 	}
 
 	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
@@ -5150,9 +5154,9 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	if config.DeferStart {
 		fmt.Printf("  ⏸ %s deployed but not started. Add missing config to the shared env files or service env_file, then re-run.\n", task.Name)
 		return &taskProvisionOutcome{
-			config:            config,
-			previouslyRunning: serviceRunning(beforeState),
-			deferred:          true,
+			config:      config,
+			preexisting: serviceExists(beforeState),
+			deferred:    true,
 		}, nil
 	}
 
@@ -5187,9 +5191,9 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	}
 
 	return &taskProvisionOutcome{
-		config:            config,
-		previouslyRunning: serviceRunning(beforeState),
-		running:           serviceRunning(afterState),
+		config:      config,
+		preexisting: serviceExists(beforeState),
+		running:     serviceRunning(afterState),
 	}, nil
 }
 
