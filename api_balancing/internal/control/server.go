@@ -189,18 +189,112 @@ var quartermasterClient *qmclient.GRPCClient
 var navigatorClient *navclient.Client
 var serverCert serverCertHolder
 
-// serverCertHolder stores the current server TLS certificate, updated atomically
-// by the CertRefreshLoop when Navigator renews the cluster TLS bundle.
+// serverCertHolder stores the current server TLS certificate set, updated
+// atomically by the CertRefreshLoop when file-based or Navigator-backed TLS
+// material changes.
 type serverCertHolder struct {
-	cert atomic.Pointer[tls.Certificate]
+	certs atomic.Pointer[serverCertSet]
 }
 
-func (h *serverCertHolder) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-	c := h.cert.Load()
-	if c == nil {
+type serverCertSet struct {
+	defaultCert *tls.Certificate
+	byName      map[string]*tls.Certificate
+}
+
+func (h *serverCertHolder) StoreBundles(bundles []*pb.TLSCertBundle) error {
+	set := &serverCertSet{byName: map[string]*tls.Certificate{}}
+	for _, bundle := range bundles {
+		if bundle == nil || strings.TrimSpace(bundle.GetCertPem()) == "" || strings.TrimSpace(bundle.GetKeyPem()) == "" {
+			continue
+		}
+		cert, err := tls.X509KeyPair([]byte(bundle.GetCertPem()), []byte(bundle.GetKeyPem()))
+		if err != nil {
+			return fmt.Errorf("parse TLS bundle %q: %w", bundle.GetBundleId(), err)
+		}
+		leaf, err := x509.ParseCertificate(cert.Certificate[0])
+		if err != nil {
+			return fmt.Errorf("parse TLS leaf certificate %q: %w", bundle.GetBundleId(), err)
+		}
+		cert.Leaf = leaf
+		certPtr := &cert
+		if set.defaultCert == nil {
+			set.defaultCert = certPtr
+		}
+		for _, name := range tlsBundleNames(bundle, cert.Leaf) {
+			set.byName[name] = certPtr
+		}
+	}
+	if set.defaultCert == nil {
+		return fmt.Errorf("no usable TLS bundles")
+	}
+	h.certs.Store(set)
+	return nil
+}
+
+func (h *serverCertHolder) Loaded() bool {
+	return h.certs.Load() != nil
+}
+
+func (h *serverCertHolder) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	set := h.certs.Load()
+	if set == nil || set.defaultCert == nil {
 		return nil, fmt.Errorf("no TLS certificate loaded")
 	}
-	return c, nil
+	serverName := ""
+	if hello != nil {
+		serverName = strings.Trim(strings.ToLower(hello.ServerName), ".")
+	}
+	if serverName != "" {
+		if cert := set.byName[serverName]; cert != nil {
+			return cert, nil
+		}
+		for pattern, cert := range set.byName {
+			if cert != nil && wildcardMatches(pattern, serverName) {
+				return cert, nil
+			}
+		}
+	}
+	return set.defaultCert, nil
+}
+
+func tlsBundleNames(bundle *pb.TLSCertBundle, cert *x509.Certificate) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	add := func(value string) {
+		value = strings.Trim(strings.ToLower(strings.TrimSpace(value)), ".")
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	add(bundle.GetDomain())
+	for _, name := range bundle.GetSiteAddresses() {
+		add(name)
+	}
+	if cert != nil {
+		for _, name := range cert.DNSNames {
+			add(name)
+		}
+	}
+	return out
+}
+
+func wildcardMatches(pattern, serverName string) bool {
+	pattern = strings.Trim(strings.ToLower(strings.TrimSpace(pattern)), ".")
+	serverName = strings.Trim(strings.ToLower(strings.TrimSpace(serverName)), ".")
+	if !strings.HasPrefix(pattern, "*.") || serverName == "" {
+		return false
+	}
+	suffix := strings.TrimPrefix(pattern, "*.")
+	if !strings.HasSuffix(serverName, "."+suffix) {
+		return false
+	}
+	prefix := strings.TrimSuffix(serverName, "."+suffix)
+	return prefix != "" && !strings.Contains(prefix, ".")
 }
 
 // validateBootstrapTokenFn allows tests to override token validation.
@@ -1620,12 +1714,17 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 		return nil, err
 	}
 
-	// Auto-detect TLS: file-based cert → Navigator wildcard → insecure fallback
+	// Auto-detect TLS: file-based internal cert + Navigator wildcards →
+	// insecure fallback. Foghorn serves internal HA/mesh callers and public
+	// cluster-FQDN callers on the same gRPC port, so file and Navigator
+	// identities must be co-resident instead of one source shadowing the other.
 	var opts []grpc.ServerOption
 	certFile := os.Getenv("GRPC_TLS_CERT_PATH")
 	keyFile := os.Getenv("GRPC_TLS_KEY_PATH")
+	rootDomain := platformRootDomain()
+	tlsBundles := []*pb.TLSCertBundle{}
 
-	if certFile != "" && keyFile != "" {
+	if certFile != "" || keyFile != "" {
 		tlsCfg := grpcutil.ServerTLSConfig{
 			CertFile: certFile,
 			KeyFile:  keyFile,
@@ -1635,40 +1734,52 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 		if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
 			return nil, fmt.Errorf("timed out waiting for file-based gRPC TLS: %w", err)
 		}
-		tlsOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
+		bundle, err := fileServerTLSBundle(certFile, keyFile)
 		if err != nil {
 			return nil, fmt.Errorf("failed to configure file-based TLS: %w", err)
 		}
-		opts = append(opts, tlsOpt)
+		tlsBundles = append(tlsBundles, bundle)
 		cfg.Logger.WithFields(logging.Fields{
 			"cert_file": certFile,
 			"key_file":  keyFile,
 		}).Info("gRPC server TLS: file-based")
-	} else if navigatorClient != nil {
-		rootDomain := platformRootDomain()
-		bundle, found, certErr := fetchClusterTLSBundleByClusterID(localClusterID, rootDomain)
-		if certErr == nil && found && bundle != nil {
-			cert, err := tls.X509KeyPair([]byte(bundle.GetCertPem()), []byte(bundle.GetKeyPem()))
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse Navigator certificate: %w", err)
+	}
+
+	if navigatorClient != nil {
+		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		bundles, certErr := waitForServedClusterTLSBundles(waitCtx, rootDomain)
+		if certErr == nil && len(bundles) > 0 {
+			tlsBundles = append(tlsBundles, bundles...)
+			bundleIDs := make([]string, 0, len(bundles))
+			domains := make([]string, 0, len(bundles))
+			for _, bundle := range bundles {
+				bundleIDs = append(bundleIDs, bundle.GetBundleId())
+				domains = append(domains, bundle.GetDomain())
 			}
-			serverCert.cert.Store(&cert)
-			creds := credentials.NewTLS(&tls.Config{
-				GetCertificate: serverCert.GetCertificate,
-			})
-			opts = append(opts, grpc.Creds(creds))
 			cfg.Logger.WithFields(logging.Fields{
-				"bundle_id":  bundle.GetBundleId(),
-				"domain":     bundle.GetDomain(),
-				"expires_at": bundle.GetExpiresAt(),
+				"bundle_ids": bundleIDs,
+				"domains":    domains,
 			}).Info("gRPC server TLS: Navigator-backed")
 		} else {
-			if !allowInsecureControlGRPC() {
-				_ = lis.Close()
-				return nil, fmt.Errorf("navigator certificate unavailable and insecure control gRPC is disabled")
+			_ = lis.Close()
+			if certErr == nil {
+				certErr = fmt.Errorf("no served cluster TLS bundles found")
 			}
-			cfg.Logger.WithError(certErr).Warn("Navigator available but no cert found; gRPC server running without TLS")
+			return nil, fmt.Errorf("navigator certificate unavailable for served Foghorn clusters: %w", certErr)
 		}
+	}
+
+	if len(tlsBundles) > 0 {
+		if err := serverCert.StoreBundles(tlsBundles); err != nil {
+			_ = lis.Close()
+			return nil, fmt.Errorf("failed to parse gRPC TLS certificates: %w", err)
+		}
+		creds := credentials.NewTLS(&tls.Config{
+			GetCertificate: serverCert.GetCertificate,
+			MinVersion:     tls.VersionTLS12,
+		})
+		opts = append(opts, grpc.Creds(creds))
 	} else {
 		if !allowInsecureControlGRPC() {
 			_ = lis.Close()
@@ -5850,15 +5961,29 @@ func StartCertRefreshLoop(ctx context.Context, interval time.Duration, log loggi
 }
 
 func refreshTLSBundles(log logging.Logger) {
-	// Refresh the server's own TLS certificate if Navigator-backed
-	if navigatorClient != nil && serverCert.cert.Load() != nil {
+	// Refresh the server's own TLS certificates. The Foghorn control listener
+	// serves both internal mesh callers and public cluster-FQDN callers.
+	if serverCert.Loaded() {
+		bundles := []*pb.TLSCertBundle{}
+		if certFile, keyFile := os.Getenv("GRPC_TLS_CERT_PATH"), os.Getenv("GRPC_TLS_KEY_PATH"); certFile != "" || keyFile != "" {
+			if bundle, err := fileServerTLSBundle(certFile, keyFile); err == nil {
+				bundles = append(bundles, bundle)
+			} else {
+				log.WithError(err).Warn("Failed to refresh file-based server TLS certificate")
+			}
+		}
 		rootDomain := platformRootDomain()
-		bundle, found, certErr := fetchClusterTLSBundleByClusterID(localClusterID, rootDomain)
-		if certErr == nil && found && bundle != nil {
-			cert, err := tls.X509KeyPair([]byte(bundle.GetCertPem()), []byte(bundle.GetKeyPem()))
-			if err == nil {
-				serverCert.cert.Store(&cert)
-				log.WithField("bundle_id", bundle.GetBundleId()).WithField("domain", bundle.GetDomain()).Debug("Refreshed server TLS certificate from Navigator")
+		navBundles, certErr := fetchServedClusterTLSBundles(rootDomain)
+		if certErr == nil && len(navBundles) > 0 {
+			bundles = append(bundles, navBundles...)
+		}
+		if len(bundles) > 0 {
+			if err := serverCert.StoreBundles(bundles); err == nil {
+				bundleIDs := make([]string, 0, len(bundles))
+				for _, bundle := range bundles {
+					bundleIDs = append(bundleIDs, bundle.GetBundleId())
+				}
+				log.WithField("bundle_ids", bundleIDs).Debug("Refreshed server TLS certificates")
 			}
 		}
 	}
@@ -6087,6 +6212,94 @@ func fetchClusterTLSBundleByClusterID(clusterID, rootDomain string) (*pb.TLSCert
 		BundleId:      bundleID,
 		SiteAddresses: []string{wildcardDomain},
 	}, true, nil
+}
+
+func fileServerTLSBundle(certFile, keyFile string) (*pb.TLSCertBundle, error) {
+	if strings.TrimSpace(certFile) == "" || strings.TrimSpace(keyFile) == "" {
+		return nil, fmt.Errorf("both GRPC_TLS_CERT_PATH and GRPC_TLS_KEY_PATH are required together")
+	}
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		return nil, fmt.Errorf("read cert file %q: %w", certFile, err)
+	}
+	keyPEM, err := os.ReadFile(keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("read key file %q: %w", keyFile, err)
+	}
+	return &pb.TLSCertBundle{
+		BundleId: "file:" + certFile,
+		CertPem:  string(certPEM),
+		KeyPem:   string(keyPEM),
+	}, nil
+}
+
+func waitForServedClusterTLSBundles(ctx context.Context, rootDomain string) ([]*pb.TLSCertBundle, error) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	var lastErr error
+	for {
+		bundles, err := fetchServedClusterTLSBundles(rootDomain)
+		if err == nil && len(bundles) > 0 {
+			return bundles, nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return nil, fmt.Errorf("%w: %w", ctx.Err(), lastErr)
+			}
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func fetchServedClusterTLSBundles(rootDomain string) ([]*pb.TLSCertBundle, error) {
+	clusterIDs := servedClusterIDsForTLS()
+	if len(clusterIDs) == 0 {
+		return nil, nil
+	}
+	bundles := make([]*pb.TLSCertBundle, 0, len(clusterIDs))
+	var lastErr error
+	for _, clusterID := range clusterIDs {
+		bundle, found, err := fetchClusterTLSBundleByClusterID(clusterID, rootDomain)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if found && bundle != nil {
+			bundles = append(bundles, bundle)
+		}
+	}
+	if len(bundles) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	return bundles, nil
+}
+
+func servedClusterIDsForTLS() []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	add := func(clusterID string) {
+		clusterID = strings.TrimSpace(clusterID)
+		if clusterID == "" {
+			return
+		}
+		if _, ok := seen[clusterID]; ok {
+			return
+		}
+		seen[clusterID] = struct{}{}
+		out = append(out, clusterID)
+	}
+	add(localClusterID)
+	for _, clusterID := range ServedClustersSnapshot() {
+		add(clusterID)
+	}
+	return out
 }
 
 func clusterTLSBundleLookup(clusterID, rootDomain string) (string, string, bool) {

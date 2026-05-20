@@ -2,6 +2,13 @@ package control
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +30,71 @@ type mockStream struct {
 func (m *mockStream) Send(msg *pb.ControlMessage) error {
 	m.sent = append(m.sent, msg)
 	return nil
+}
+
+func testTLSBundle(t *testing.T, bundleID string, dnsNames ...string) *pb.TLSCertBundle {
+	t.Helper()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: dnsNames[0]},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+		DNSNames:     dnsNames,
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	return &pb.TLSCertBundle{
+		BundleId:  bundleID,
+		Domain:    dnsNames[0],
+		CertPem:   string(certPEM),
+		KeyPem:    string(keyPEM),
+		ExpiresAt: time.Now().Add(time.Hour).Unix(),
+	}
+}
+
+func TestServerCertHolderSelectsServedClusterBySNI(t *testing.T) {
+	var holder serverCertHolder
+	internal := testTLSBundle(t, "file:/etc/frameworks/pki/services/foghorn/tls.crt", "foghorn.internal")
+	eu := testTLSBundle(t, "cluster:media-eu-1", "*.media-eu-1.frameworks.network")
+	us := testTLSBundle(t, "cluster:media-us-1", "*.media-us-1.frameworks.network")
+
+	if err := holder.StoreBundles([]*pb.TLSCertBundle{internal, eu, us}); err != nil {
+		t.Fatalf("StoreBundles: %v", err)
+	}
+
+	cert, err := holder.GetCertificate(&tls.ClientHelloInfo{ServerName: "foghorn.media-us-1.frameworks.network"})
+	if err != nil {
+		t.Fatalf("GetCertificate: %v", err)
+	}
+	if cert.Leaf == nil || len(cert.Leaf.DNSNames) == 0 || cert.Leaf.DNSNames[0] != "*.media-us-1.frameworks.network" {
+		t.Fatalf("selected SANs = %v, want US wildcard", cert.Leaf.DNSNames)
+	}
+
+	cert, err = holder.GetCertificate(&tls.ClientHelloInfo{ServerName: "foghorn.internal"})
+	if err != nil {
+		t.Fatalf("GetCertificate internal: %v", err)
+	}
+	if cert.Leaf == nil || len(cert.Leaf.DNSNames) == 0 || cert.Leaf.DNSNames[0] != "foghorn.internal" {
+		t.Fatalf("selected SANs = %v, want internal leaf", cert.Leaf.DNSNames)
+	}
+}
+
+func TestServerCertHolderRejectsEmptyBundles(t *testing.T) {
+	var holder serverCertHolder
+	if err := holder.StoreBundles(nil); err == nil {
+		t.Fatal("expected empty bundle set to fail")
+	}
 }
 
 func TestRefreshTLSBundles_UsesCanonicalID(t *testing.T) {

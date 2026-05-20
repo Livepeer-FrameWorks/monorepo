@@ -81,6 +81,15 @@
     - go_service_internal_tls_bootstrap_cert_stat.stat.exists | default(false)
     - go_service_internal_tls_bootstrap_key_stat.stat.exists | default(false)
 
+- name: Calculate desired bootstrap internal gRPC certificate checksums
+  ansible.builtin.set_fact:
+    go_service_internal_tls_desired_cert_checksum: "{{ go_service_internal_tls_cert_pem | hash('sha1') }}"
+    go_service_internal_tls_desired_key_checksum: "{{ go_service_internal_tls_key_pem | hash('sha1') }}"
+  no_log: true
+  when:
+    - go_service_internal_tls_cert_pem | length > 0
+    - go_service_internal_tls_key_pem | length > 0
+
 - name: Decide whether to render bootstrap internal gRPC certificate pair
   ansible.builtin.set_fact:
     go_service_internal_tls_render_bootstrap: >-
@@ -89,6 +98,14 @@
           (go_service_internal_tls_bootstrap_cert_stat.stat.exists | default(false))
           and (go_service_internal_tls_bootstrap_key_stat.stat.exists | default(false))
           and (go_service_internal_tls_existing_pair_check.rc | default(1) == 0)
+          and (
+            go_service_internal_tls_bootstrap_cert_stat.stat.checksum | default('')
+            == go_service_internal_tls_desired_cert_checksum | default('__missing__')
+          )
+          and (
+            go_service_internal_tls_bootstrap_key_stat.stat.checksum | default('')
+            == go_service_internal_tls_desired_key_checksum | default('__missing__')
+          )
         )
       }}
   when:

@@ -4,21 +4,34 @@ Edge nodes authenticate to Foghorn over the public internet using three layers:
 transport encryption via TLS, identity enrollment through Quartermaster-validated
 tokens, and service-to-service authorization via a shared static token.
 
-## Transport: TLS with Navigator-Backed Cluster Bundle
+## Transport: SNI-Routed TLS for Internal and Cluster Names
 
-Foghorn auto-detects TLS configuration using three fallback sources:
+Foghorn has multiple legitimate inbound surfaces:
 
-1. **File-based certificates** (`GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`)
-2. **Navigator cluster TLS bundle** (`cluster:{cluster_slug}`) for
-   `{cluster_slug}.{root_domain}` and `*.{cluster_slug}.{root_domain}` with
-   hot-reload via `tls.Config.GetCertificate` and `atomic.Value` storage
-3. **Insecure fallback** (local dev only)
+- Public HTTP redirect/source endpoints used by viewers and MistServer.
+- Public gRPC endpoints used by Helmsman and self-hosted edge bootstrap.
+- Logical-cluster gRPC endpoints used by Quartermaster health polling.
+- Peer/federation gRPC endpoints between physical Foghorn instances.
 
-The server checks for file-based env vars first, then queries Navigator if
-available. Navigator returns the cluster bundle which Foghorn stores atomically
-and rotates at runtime without restart. The apex SAN covers the cluster-level
-Bunny record; the wildcard SAN covers `foghorn.{cluster}`, service labels, and
-per-node edge hostnames.
+Those callers do not all use the same DNS name, so Foghorn must not choose one
+certificate family globally. In production it loads both:
+
+1. The **file-based internal service leaf** (`GRPC_TLS_CERT_PATH`,
+   `GRPC_TLS_KEY_PATH`) for mesh/internal names such as `foghorn.internal`.
+2. The **Navigator cluster TLS bundle** (`cluster:{cluster_slug}`) for
+   `{cluster_slug}.{root_domain}` and `*.{cluster_slug}.{root_domain}`. This
+   covers names such as `foghorn.media-eu-1.frameworks.network` and
+   `edge-eu-1.media-eu-1.frameworks.network`.
+
+The gRPC listener serves these bundles together through `tls.Config.GetCertificate`
+and selects by SNI. Exact SAN/name matches win, wildcard cluster matches are next,
+and the internal service leaf is the default. Bundle refreshes replace the whole
+served set atomically. If Foghorn is configured with Navigator in production but
+cannot load a cluster bundle for its served clusters, startup fails instead of
+running a process that Quartermaster and edge bootstrap cannot trust.
+
+Insecure fallback is local-dev only, when neither file TLS nor Navigator TLS is
+configured.
 
 Client-side TLS is auto-detected in Helmsman. TLS is used whenever the Foghorn
 address is an FQDN, trust material is provided via `GRPC_TLS_*`, or

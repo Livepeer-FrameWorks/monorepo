@@ -932,6 +932,11 @@ func main() {
 		}).Fatal("FOGHORN_HA_REQUIRED is true but HA command relay could not be enabled")
 	}
 
+	// Bulk-load served cluster assignments before the TLS listener starts so
+	// Foghorn can present cluster wildcard certificates for every assigned
+	// control-plane name.
+	control.LoadServedClusters()
+
 	// Start unified gRPC server with both Helmsman control and Foghorn control plane services
 	registrars := []control.ServiceRegistrar{foghornServer.RegisterServices}
 	if federationServer != nil {
@@ -956,8 +961,7 @@ func main() {
 	defer certRefreshCancel()
 	go control.StartCertRefreshLoop(certRefreshCtx, 1*time.Hour, logger)
 
-	// Bulk-load served cluster assignments from DB and refresh every 5 minutes
-	control.LoadServedClusters()
+	// Refresh served cluster assignments from DB every 5 minutes.
 	clusterRefreshCtx, clusterRefreshCancel := context.WithCancel(context.Background())
 	defer clusterRefreshCancel()
 	go control.StartServedClustersRefresh(clusterRefreshCtx, 5*time.Minute, logger)
