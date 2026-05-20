@@ -2775,7 +2775,21 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPl
 		s.logger.WithError(err).Info("Failed to get total views from tenant_analytics_daily")
 	}
 
+	sanitizePlatformOverviewResponse(resp)
 	return resp, nil
+}
+
+func sanitizePlatformOverviewResponse(resp *pb.GetPlatformOverviewResponse) {
+	if resp == nil {
+		return
+	}
+	resp.AverageViewers = sanitizeFloat64(resp.AverageViewers)
+	resp.PeakBandwidth = sanitizeFloat64(resp.PeakBandwidth)
+	resp.StreamHours = sanitizeFloat64(resp.StreamHours)
+	resp.EgressGb = sanitizeFloat64(resp.EgressGb)
+	resp.ViewerHours = sanitizeFloat64(resp.ViewerHours)
+	resp.DeliveredMinutes = sanitizeFloat64(resp.DeliveredMinutes)
+	resp.IngestHours = sanitizeFloat64(resp.IngestHours)
 }
 
 // GetNetworkLiveStats returns platform-wide live stats per cluster (no tenant filter).

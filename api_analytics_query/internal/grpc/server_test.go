@@ -893,3 +893,28 @@ func TestSanitizeFloat64(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizePlatformOverviewResponse(t *testing.T) {
+	resp := &pb.GetPlatformOverviewResponse{
+		AverageViewers:   math.NaN(),
+		PeakBandwidth:    math.Inf(1),
+		StreamHours:      math.Inf(-1),
+		EgressGb:         42,
+		ViewerHours:      math.NaN(),
+		DeliveredMinutes: math.Inf(1),
+		IngestHours:      7,
+	}
+
+	sanitizePlatformOverviewResponse(resp)
+
+	if resp.AverageViewers != 0 ||
+		resp.PeakBandwidth != 0 ||
+		resp.StreamHours != 0 ||
+		resp.ViewerHours != 0 ||
+		resp.DeliveredMinutes != 0 {
+		t.Fatalf("expected non-finite platform overview fields to be zeroed: %+v", resp)
+	}
+	if resp.EgressGb != 42 || resp.IngestHours != 7 {
+		t.Fatalf("expected finite platform overview fields to be preserved: %+v", resp)
+	}
+}

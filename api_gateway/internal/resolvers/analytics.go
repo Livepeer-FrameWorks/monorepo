@@ -3,6 +3,7 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -117,7 +118,28 @@ func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.T
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for platform overview: %T", val)
 	}
-	return resp, nil
+	return sanitizePlatformOverviewGraphQL(resp), nil
+}
+
+func sanitizePlatformOverviewGraphQL(resp *pb.GetPlatformOverviewResponse) *pb.GetPlatformOverviewResponse {
+	if resp == nil {
+		return nil
+	}
+	resp.AverageViewers = sanitizeGraphQLFloat(resp.AverageViewers)
+	resp.PeakBandwidth = sanitizeGraphQLFloat(resp.PeakBandwidth)
+	resp.StreamHours = sanitizeGraphQLFloat(resp.StreamHours)
+	resp.EgressGb = sanitizeGraphQLFloat(resp.EgressGb)
+	resp.ViewerHours = sanitizeGraphQLFloat(resp.ViewerHours)
+	resp.DeliveredMinutes = sanitizeGraphQLFloat(resp.DeliveredMinutes)
+	resp.IngestHours = sanitizeGraphQLFloat(resp.IngestHours)
+	return resp
+}
+
+func sanitizeGraphQLFloat(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return v
 }
 
 // DoGetViewerCountTimeSeries returns time-bucketed viewer counts for charts
