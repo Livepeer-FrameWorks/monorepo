@@ -774,10 +774,10 @@ func (m *Manager) activateCaddy(seed *pb.ConfigSeed, certChanged bool) bool {
 
 	params := CaddyfileParams{
 		Bundles:          bundles,
-		CaddyAdminAddr:   caddyAdminAddr(),
+		CaddyAdminAddr:   caddyfileAdminAddr(),
 		HelmsmanUpstream: envDefault("HELMSMAN_WEBHOOK_URL", "http://localhost:18007"),
 		ChandlerUpstream: envDefault("CHANDLER_URL", "chandler:18020"),
-		MistUpstream:     envDefault("MISTSERVER_URL", "http://mistserver:8080"),
+		MistUpstream:     envDefault("MISTSERVER_HTTP_URL", "http://mistserver:8080"),
 	}
 	if site := seed.GetSite(); site != nil {
 		params.AcmeEmail = site.GetAcmeEmail()
@@ -848,6 +848,18 @@ func caddyAdminAddr() string {
 		return url
 	}
 	return "localhost:2019"
+}
+
+func caddyfileAdminAddr() string {
+	raw := caddyAdminAddr()
+	if strings.HasPrefix(raw, "unix/") {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err == nil && u.Host != "" {
+		return u.Host
+	}
+	return raw
 }
 
 func envDefault(key, fallback string) string {

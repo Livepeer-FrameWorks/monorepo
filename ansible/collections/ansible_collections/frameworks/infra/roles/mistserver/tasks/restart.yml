@@ -15,9 +15,9 @@
     - not ansible_check_mode
     - ansible_facts.os_family == 'Darwin'
 
-- name: Wait for MistServer HTTP port after restart
+- name: Wait for MistServer controller port after restart
   ansible.builtin.wait_for:
     host: 127.0.0.1
-    port: "{{ mistserver_port }}"
+    port: "{{ mistserver_controller_port }}"
     timeout: 60
   when: not ansible_check_mode

@@ -74,8 +74,59 @@ func TestBuildOutputsMap(t *testing.T) {
 	if outputs["HLS"].Url != "//public.example.com:18090/view/stream/index.m3u8" {
 		t.Fatalf("unexpected HLS url: %q", outputs["HLS"].Url)
 	}
-	if outputs["RTMP"].Url != "rtmp://edge-egress.example.com/live:1935/live/stream" {
+	if outputs["RTMP"].Url != "rtmp://public.example.com:1935/live/stream" {
 		t.Fatalf("unexpected RTMP url: %q", outputs["RTMP"].Url)
+	}
+}
+
+func TestBuildOutputsMapNormalizesMistMetricsOutputs(t *testing.T) {
+	rawOutputs := map[string]any{
+		"AAC":    "[\"https://mist-seattle.stronk.rocks/view/$.aac",
+		"CMAF":   "[\"https://mist-seattle.stronk.rocks/view/cmaf/$/",
+		"DTSC":   "dtsc://HOST/$",
+		"EBML":   "[\"https://mist-seattle.stronk.rocks/view/$.webm",
+		"H264":   "[\"https://mist-seattle.stronk.rocks/view/$.h264",
+		"HLS":    "[\"https://mist-seattle.stronk.rocks/view/hls/$/index.m3u8",
+		"HTTP":   "[\"https://mist-seattle.stronk.rocks/view/$.html",
+		"HTTPTS": "[\"https://mist-seattle.stronk.rocks/view/$.ts",
+		"RTMP":   "rtmp://HOST/play/$",
+		"RTSP":   "rtsp://HOST:5554/$",
+		"TSSRT":  "srt://HOST/?streamid=$",
+		"WebRTC": "ws://HOST:18203/webrtc/$",
+	}
+
+	outputs := BuildOutputsMap("https://mist-seattle.stronk.rocks/view", rawOutputs, "live+titan", true)
+
+	expected := map[string]string{
+		"HLS":         "https://mist-seattle.stronk.rocks/view/hls/live+titan/index.m3u8",
+		"HLS_CMAF":    "https://mist-seattle.stronk.rocks/view/cmaf/live+titan/",
+		"WEBM":        "https://mist-seattle.stronk.rocks/view/live+titan.webm",
+		"TS":          "https://mist-seattle.stronk.rocks/view/live+titan.ts",
+		"AAC":         "https://mist-seattle.stronk.rocks/view/live+titan.aac",
+		"H264":        "https://mist-seattle.stronk.rocks/view/live+titan.h264",
+		"MIST_WEBRTC": "ws://mist-seattle.stronk.rocks:18203/webrtc/live+titan",
+		"RTMP":        "rtmp://mist-seattle.stronk.rocks/play/live+titan",
+		"RTSP":        "rtsp://mist-seattle.stronk.rocks:5554/live+titan",
+		"SRT":         "srt://mist-seattle.stronk.rocks/?streamid=live+titan",
+		"DTSC":        "dtsc://mist-seattle.stronk.rocks/live+titan",
+	}
+	for protocol, expectedURL := range expected {
+		got, ok := outputs[protocol]
+		if !ok {
+			t.Fatalf("missing %s output", protocol)
+		}
+		if got.Url != expectedURL {
+			t.Fatalf("unexpected %s url: %q", protocol, got.Url)
+		}
+	}
+	if _, ok := outputs["TSSRT"]; ok {
+		t.Fatal("TSSRT should be normalized to SRT")
+	}
+	if _, ok := outputs["HTTPTS"]; ok {
+		t.Fatal("HTTPTS should be normalized to TS")
+	}
+	if _, ok := outputs["EBML"]; ok {
+		t.Fatal("EBML should be normalized to WEBM")
 	}
 }
 
@@ -286,7 +337,7 @@ func TestResolveTemplateURL(t *testing.T) {
 			raw:        "rtmp://HOST:1935/live/$",
 			baseURL:    "https://edge-egress.example.com/live",
 			streamName: "stream",
-			expected:   "rtmp://edge-egress.example.com/live:1935/live/stream",
+			expected:   "rtmp://edge-egress.example.com:1935/live/stream",
 		},
 	}
 

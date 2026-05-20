@@ -15,7 +15,8 @@ helmsman_acme_email: ""
 helmsman_foghorn_grpc_addr: ""
 helmsman_enrollment_token: ""
 helmsman_deploy_mode: native
-helmsman_mist_upstream: "localhost:8080"
+helmsman_mist_api_upstream: "localhost:4242"
+helmsman_mist_http_upstream: "localhost:8080"
 helmsman_webhook_upstream: "localhost:18007"
 helmsman_caddy_admin_url: "http://localhost:2019"
 helmsman_mist_api_user: frameworks

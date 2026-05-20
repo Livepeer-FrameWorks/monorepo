@@ -2265,10 +2265,7 @@ func (s *FoghornGRPCServer) buildLocalEndpoint(record *federation.ActiveReplicat
 	var protocol, endpointURL string
 	if webrtcURL, ok := outputs.Outputs["WebRTC"]; ok {
 		protocol = "webrtc"
-		endpointURL = control.ResolveTemplateURL(webrtcURL, outputs.BaseURL, viewKey)
-		if publicHost != "" {
-			endpointURL = strings.ReplaceAll(endpointURL, "HOST", publicHost)
-		}
+		endpointURL = control.ResolveTemplateURLWithHost(webrtcURL, outputs.BaseURL, viewKey, publicHost)
 	} else if hlsURL, ok := outputs.Outputs["HLS (TS)"]; ok {
 		protocol = "hls"
 		endpointURL = control.ResolveTemplateURL(hlsURL, outputs.BaseURL, viewKey)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/url"
 	"sort"
 	"strings"
@@ -1010,11 +1011,7 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 
 		if webrtcURL, ok := nodeOutputs.Outputs["WebRTC"]; ok {
 			protocol = "webrtc"
-			endpointURL = ResolveTemplateURL(webrtcURL, nodeOutputs.BaseURL, viewKey)
-			// If HOST wasn't replaced (direct protocol), use extracted public host
-			if strings.Contains(endpointURL, "HOST") && publicHost != "" {
-				endpointURL = strings.ReplaceAll(endpointURL, "HOST", publicHost)
-			}
+			endpointURL = ResolveTemplateURLWithHost(webrtcURL, nodeOutputs.BaseURL, viewKey, publicHost)
 		} else if hlsURL, ok := nodeOutputs.Outputs["HLS"]; ok {
 			protocol = "hls"
 			endpointURL = ResolveTemplateURL(hlsURL, nodeOutputs.BaseURL, viewKey)
@@ -1283,8 +1280,35 @@ func findOutputRaw(outputs map[string]any, keys ...string) (any, bool) {
 	return nil, false
 }
 
+func hostOnlyForMistTemplate(value string) string {
+	host := strings.TrimSpace(value)
+	if host == "" {
+		return ""
+	}
+	if strings.HasPrefix(host, "//") {
+		host = "http:" + host
+	}
+	if u, err := url.Parse(host); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	if before, _, ok := strings.Cut(host, "/"); ok {
+		host = before
+	}
+	if before, _, ok := strings.Cut(host, "?"); ok {
+		host = before
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return strings.Trim(h, "[]")
+	}
+	return strings.Trim(host, "[]")
+}
+
 // ResolveTemplateURL replaces placeholders in Mist outputs ($ for stream name, HOST for hostname)
 func ResolveTemplateURL(raw any, baseURL, streamName string) string {
+	return ResolveTemplateURLWithHost(raw, baseURL, streamName, "")
+}
+
+func ResolveTemplateURLWithHost(raw any, baseURL, streamName string, hostOverride string) string {
 	var s string
 	switch v := raw.(type) {
 	case string:
@@ -1303,10 +1327,10 @@ func ResolveTemplateURL(raw any, baseURL, streamName string) string {
 	}
 	s = strings.ReplaceAll(s, "$", streamName)
 	if strings.Contains(s, "HOST") {
-		host := baseURL
-		host = strings.TrimPrefix(host, "https://")
-		host = strings.TrimPrefix(host, "http://")
-		host = strings.TrimSuffix(host, "/")
+		host := hostOnlyForMistTemplate(hostOverride)
+		if host == "" {
+			host = hostOnlyForMistTemplate(baseURL)
+		}
 		if host == "" {
 			return ""
 		}
@@ -1406,14 +1430,18 @@ func BuildOutputsMap(baseURL string, rawOutputs map[string]any, streamName strin
 		}
 	}
 
-	addResolvedOutput(outputs, rawOutputs, "MIST_WEBRTC", base, streamName, isLive, "WebRTC", "WebRTC with WebSocket signalling")
+	if raw, ok := findOutputRaw(rawOutputs, "WebRTC", "WebRTC with WebSocket signalling"); ok {
+		if u := ResolveTemplateURLWithHost(raw, base, streamName, publicHost); u != "" {
+			outputs["MIST_WEBRTC"] = &pb.OutputEndpoint{Protocol: "MIST_WEBRTC", Url: u, Capabilities: BuildOutputCapabilities("MIST_WEBRTC", isLive)}
+		}
+	}
 	addResolvedOutput(outputs, rawOutputs, "HLS", base, streamName, isLive, "HLS", "HLS (TS)")
 	addResolvedOutput(outputs, rawOutputs, "DASH", base, streamName, isLive, "DASH")
 	addResolvedOutput(outputs, rawOutputs, "HLS_CMAF", base, streamName, isLive, "HLS (CMAF)", "CMAF")
 	addResolvedOutput(outputs, rawOutputs, "MP4", base, streamName, isLive, "MP4", "MP4 progressive")
-	addResolvedOutput(outputs, rawOutputs, "WEBM", base, streamName, isLive, "WEBM", "MKV", "MKV progressive", "WebM progressive")
+	addResolvedOutput(outputs, rawOutputs, "WEBM", base, streamName, isLive, "WEBM", "EBML", "MKV", "MKV progressive", "WebM progressive")
 	addResolvedOutput(outputs, rawOutputs, "AAC", base, streamName, isLive, "AAC", "AAC progressive")
-	addResolvedOutput(outputs, rawOutputs, "TS", base, streamName, isLive, "TS", "TS HTTP progressive")
+	addResolvedOutput(outputs, rawOutputs, "TS", base, streamName, isLive, "TS", "HTTPTS", "TS HTTP progressive")
 	addResolvedOutput(outputs, rawOutputs, "H264", base, streamName, isLive, "H264", "Annex B progressive")
 	if !isLive {
 		addResolvedOutput(outputs, rawOutputs, "HTTP", base, streamName, isLive, "HTTP")
@@ -1434,20 +1462,22 @@ func BuildOutputsMap(baseURL string, rawOutputs map[string]any, streamName strin
 	addDerivedOutput(outputs, "MP4", base, streamName, isLive, ".mp4")
 	addDerivedOutput(outputs, "HLS", base, "hls/"+streamName, isLive, "/index.m3u8")
 
-	// Direct protocols (bypass nginx, need HOST replacement with public host)
-	directProtocols := []string{"RTMP", "RTSP", "SRT", "DTSC"}
-	for _, proto := range directProtocols {
-		if raw, ok := rawOutputs[proto]; ok {
-			if u := ResolveTemplateURL(raw, base, streamName); u != "" {
-				// Replace HOST with public host extracted from HTTP outputs
-				if strings.Contains(u, "HOST") && publicHost != "" {
-					// For direct protocols, just use the hostname (no port from publicHost)
-					// since they have their own ports in the URL
-					hostOnly := strings.Split(publicHost, ":")[0]
-					u = strings.ReplaceAll(u, "HOST", hostOnly)
-				}
-				outputs[proto] = &pb.OutputEndpoint{Protocol: proto, Url: u, Capabilities: BuildOutputCapabilities(proto, isLive)}
-			}
+	directProtocols := []struct {
+		protocol string
+		keys     []string
+	}{
+		{protocol: "RTMP", keys: []string{"RTMP"}},
+		{protocol: "RTSP", keys: []string{"RTSP"}},
+		{protocol: "SRT", keys: []string{"SRT", "TSSRT"}},
+		{protocol: "DTSC", keys: []string{"DTSC"}},
+	}
+	for _, direct := range directProtocols {
+		raw, ok := findOutputRaw(rawOutputs, direct.keys...)
+		if !ok {
+			continue
+		}
+		if u := ResolveTemplateURLWithHost(raw, base, streamName, publicHost); u != "" {
+			outputs[direct.protocol] = &pb.OutputEndpoint{Protocol: direct.protocol, Url: u, Capabilities: BuildOutputCapabilities(direct.protocol, isLive)}
 		}
 	}
 

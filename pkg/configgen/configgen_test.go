@@ -52,6 +52,8 @@ FOGHORN_PORT=18008
 FOGHORN_INTERNAL_GRPC_PORT=18019
 MISTSERVER_HOST=mistserver
 MISTSERVER_PORT=4242
+MISTSERVER_HTTP_HOST=mistserver
+MISTSERVER_HTTP_PORT=8080
 NAVIGATOR_HOST=navigator
 NAVIGATOR_GRPC_PORT=18011
 GATEWAY_PUBLIC_URL=http://localhost:18090
@@ -96,6 +98,12 @@ SERVICE_TOKEN=change-me
 	}
 	if got := env["NAVIGATOR_GRPC_ADDR"]; got != "navigator:18011" {
 		t.Fatalf("expected NAVIGATOR_GRPC_ADDR to be derived, got %q", got)
+	}
+	if got := env["MISTSERVER_URL"]; got != "http://mistserver:4242" {
+		t.Fatalf("expected MISTSERVER_URL to be derived from controller port, got %q", got)
+	}
+	if got := env["MISTSERVER_HTTP_URL"]; got != "http://mistserver:8080" {
+		t.Fatalf("expected MISTSERVER_HTTP_URL to be derived from HTTP output port, got %q", got)
 	}
 	if _, ok := env["NAVIGATOR_URL"]; ok {
 		t.Fatalf("expected NAVIGATOR_URL to be absent from generated env")

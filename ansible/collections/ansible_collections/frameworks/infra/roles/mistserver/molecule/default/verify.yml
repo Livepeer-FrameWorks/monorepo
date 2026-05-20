@@ -15,10 +15,10 @@
       ansible.builtin.assert:
         that: ansible_facts.services['frameworks-mistserver.service'].state == 'running'
 
-    - name: Wait for MistServer HTTP port
+    - name: Wait for MistServer controller port
       ansible.builtin.wait_for:
         host: 127.0.0.1
-        port: "{{ mistserver_port }}"
+        port: "{{ mistserver_controller_port }}"
         timeout: 30
 
     - name: Rerun role (idempotence)

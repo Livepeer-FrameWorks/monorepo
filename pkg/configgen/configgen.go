@@ -319,6 +319,9 @@ func computeDerived(env map[string]string) error {
 	if errSet := setHTTPURL(env, "MISTSERVER_URL", "MISTSERVER_HOST", "MISTSERVER_PORT"); errSet != nil {
 		return errSet
 	}
+	if errSet := setHTTPURL(env, "MISTSERVER_HTTP_URL", "MISTSERVER_HTTP_HOST", "MISTSERVER_HTTP_PORT"); errSet != nil {
+		return errSet
+	}
 
 	// Navigator gRPC address (no scheme, just host:port).
 	navHost, err := require(env, "NAVIGATOR_HOST")

@@ -50,6 +50,14 @@ argument_specs:
       helmsman_grpc_tls_ca_path:
         type: str
         required: false
+      helmsman_mist_api_upstream:
+        type: str
+        required: false
+        default: localhost:4242
+      helmsman_mist_http_upstream:
+        type: str
+        required: false
+        default: localhost:8080
       helmsman_extra_env:
         type: dict
         required: false

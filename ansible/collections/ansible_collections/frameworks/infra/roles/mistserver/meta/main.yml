@@ -35,6 +35,14 @@ argument_specs:
         type: str
         required: false
         default: /etc/mistserver.conf
+      mistserver_controller_port:
+        type: int
+        required: false
+        default: 4242
+      mistserver_controller_interface:
+        type: str
+        required: false
+        default: 127.0.0.1
       mistserver_env:
         type: dict
         required: false

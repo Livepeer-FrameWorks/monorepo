@@ -2679,10 +2679,7 @@ func buildLocalEndpointFromReplication(record *federation.ActiveReplicationRecor
 
 	if webrtcURL, ok := nodeOutputs.Outputs["WebRTC"]; ok {
 		protocol = "webrtc"
-		endpointURL = control.ResolveTemplateURL(webrtcURL, nodeOutputs.BaseURL, viewKey)
-		if strings.Contains(endpointURL, "HOST") && publicHost != "" {
-			endpointURL = strings.ReplaceAll(endpointURL, "HOST", publicHost)
-		}
+		endpointURL = control.ResolveTemplateURLWithHost(webrtcURL, nodeOutputs.BaseURL, viewKey, publicHost)
 	} else if hlsURL, ok := nodeOutputs.Outputs["HLS"]; ok {
 		protocol = "hls"
 		endpointURL = control.ResolveTemplateURL(hlsURL, nodeOutputs.BaseURL, viewKey)

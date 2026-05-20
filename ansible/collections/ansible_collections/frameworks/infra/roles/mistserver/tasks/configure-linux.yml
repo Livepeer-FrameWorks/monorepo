@@ -1,13 +1,44 @@
 ---
-- name: Render MistServer config
-  ansible.builtin.template:
-    src: mistserver.conf.j2
-    dest: "{{ mistserver_config_file }}"
+- name: Reconcile MistServer controller config
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('/usr/bin/python3') }}"
+      - -c
+      - |
+        import json
+        import os
+        import sys
+
+        path, interface, port_raw = sys.argv[1], sys.argv[2], sys.argv[3]
+        wanted = {"interface": interface, "port": int(port_raw)}
+        data = {}
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        config = data.setdefault("config", {})
+        if config.get("controller") == wanted:
+            print("unchanged")
+            sys.exit(0)
+        config["controller"] = wanted
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, separators=(",", ":"))
+            handle.write("\n")
+        os.replace(tmp_path, path)
+        print("changed")
+      - "{{ mistserver_config_file }}"
+      - "{{ mistserver_controller_interface }}"
+      - "{{ mistserver_controller_port | string }}"
+  register: mistserver_controller_config
+  changed_when: mistserver_controller_config.stdout == "changed"
+  notify: mistserver restart
+
+- name: Ensure MistServer config permissions
+  ansible.builtin.file:
+    path: "{{ mistserver_config_file }}"
     owner: "{{ mistserver_user }}"
     group: "{{ mistserver_group }}"
     mode: "0600"
-    force: false
-  notify: mistserver restart
 
 - name: Render env file
   ansible.builtin.copy:

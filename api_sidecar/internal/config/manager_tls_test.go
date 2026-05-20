@@ -189,6 +189,20 @@ func TestRenderCaddyfileEmptyBundlesFails(t *testing.T) {
 	}
 }
 
+func TestCaddyfileAdminAddrUsesAddressNotURL(t *testing.T) {
+	t.Setenv("CADDY_ADMIN_URL", "http://localhost:2019")
+	if got := caddyfileAdminAddr(); got != "localhost:2019" {
+		t.Fatalf("caddyfileAdminAddr() = %q, want localhost:2019", got)
+	}
+}
+
+func TestCaddyfileAdminAddrKeepsUnixSocket(t *testing.T) {
+	t.Setenv("CADDY_ADMIN_SOCKET", "/run/caddy/admin.sock")
+	if got := caddyfileAdminAddr(); got != "unix//run/caddy/admin.sock" {
+		t.Fatalf("caddyfileAdminAddr() = %q, want unix//run/caddy/admin.sock", got)
+	}
+}
+
 func contains(haystack, needle string) bool {
 	return len(haystack) >= len(needle) && indexOf(haystack, needle) >= 0
 }

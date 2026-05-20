@@ -408,6 +408,21 @@
     goto(resolve(`/view?type=live&id=${streamId}`));
   }
 
+  function canWatchStream(stream: (typeof unmaskedStreams)[number]) {
+    return (
+      !!stream.playbackId &&
+      (stream.metrics?.isLive ||
+        (stream.ingestMode === "PULL" && stream.pullSource?.enabled !== false))
+    );
+  }
+
+  function watchStreamTitle(stream: (typeof unmaskedStreams)[number]) {
+    if (stream.ingestMode === "PULL" && !stream.metrics?.isLive) {
+      return "Start Pull Playback";
+    }
+    return "Watch Stream";
+  }
+
   // Show delete confirmation
   function confirmDeleteStream(stream: (typeof unmaskedStreams)[number]) {
     streamToDelete = stream;
@@ -682,11 +697,13 @@
                                 variant="ghost"
                                 size="sm"
                                 class="h-7 w-7 p-0 text-muted-foreground hover:text-primary disabled:opacity-30"
-                                title="Watch Stream"
-                                disabled={!stream.metrics?.isLive}
+                                title={watchStreamTitle(stream)}
+                                disabled={!canWatchStream(stream)}
                                 onclick={(e) => {
                                   e.stopPropagation();
-                                  watchStream(stream.playbackId);
+                                  if (stream.playbackId) {
+                                    watchStream(stream.playbackId);
+                                  }
                                 }}
                               >
                                 <PlayIcon class="w-3.5 h-3.5" />
