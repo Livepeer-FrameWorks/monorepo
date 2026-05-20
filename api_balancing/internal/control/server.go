@@ -1696,54 +1696,128 @@ func StopDVRByInternalName(internalName string, logger logging.Logger) {
 // ServiceRegistrar is a function that registers additional gRPC services
 type ServiceRegistrar func(srv *grpc.Server)
 
-// GRPCServerConfig contains configuration for starting the control gRPC server
+// GRPCServerConfig contains configuration for starting the Foghorn control gRPC
+// listeners. The control plane is split into two listeners sharing one process:
+//
+//   - Internal: internal-CA leaf only, serves `foghorn.internal`. Audience is
+//     intra-cluster Foghorn HA relay. Wire HA-only registrars via
+//     InternalRegistrars.
+//
+//   - External: Navigator-backed ACME wildcard, serves `foghorn.<cluster>.<root>`.
+//     Audience is cross-cluster + edge: Helmsman control, edge bootstrap, the
+//     full FoghornGRPCServer surface, federation peers. Wire those via
+//     ExternalRegistrars.
 type GRPCServerConfig struct {
-	Addr         string
-	Logger       logging.Logger
-	ServiceToken string
-	JWTSecret    string
-	Registrars   []ServiceRegistrar
+	InternalBindAddr   string
+	ExternalBindAddr   string
+	Logger             logging.Logger
+	ServiceToken       string
+	JWTSecret          string
+	InternalRegistrars []ServiceRegistrar
+	ExternalRegistrars []ServiceRegistrar
 }
 
-// StartGRPCServer starts the control gRPC server on the given addr (e.g., ":18009")
-// Additional services can be registered via Registrars in the config.
-func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
+// GRPCServers is the pair of gRPC servers returned by StartGRPCServers.
+type GRPCServers struct {
+	Internal *grpc.Server
+	External *grpc.Server
+}
+
+// StartGRPCServers starts the Foghorn internal and external control gRPC
+// listeners. The two listeners differ in cert source, audience, and registered
+// services; see GRPCServerConfig.
+func StartGRPCServers(ctx context.Context, cfg GRPCServerConfig) (*GRPCServers, error) {
+	if strings.TrimSpace(cfg.InternalBindAddr) == "" {
+		return nil, fmt.Errorf("InternalBindAddr is required")
+	}
+	if strings.TrimSpace(cfg.ExternalBindAddr) == "" {
+		return nil, fmt.Errorf("ExternalBindAddr is required")
+	}
+
+	internal, err := startInternalGRPCListener(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("start internal gRPC listener: %w", err)
+	}
+
+	external, err := startExternalGRPCListener(ctx, cfg)
+	if err != nil {
+		internal.GracefulStop()
+		return nil, fmt.Errorf("start external gRPC listener: %w", err)
+	}
+
+	return &GRPCServers{Internal: internal, External: external}, nil
+}
+
+// startInternalGRPCListener listens on the internal-CA bind addr. Serves
+// `foghorn.internal`. Registers HA relay (via InternalRegistrars) + health +
+// reflection. No HelmsmanControl, no EdgeProvisioning, no FoghornGRPCServer,
+// no federation — those are external.
+func startInternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
 	lc := net.ListenConfig{}
-	lis, err := lc.Listen(ctx, "tcp", cfg.Addr)
+	lis, err := lc.Listen(ctx, "tcp", cfg.InternalBindAddr)
 	if err != nil {
 		return nil, err
 	}
 
-	// Auto-detect TLS: file-based internal cert + Navigator wildcards →
-	// insecure fallback. Foghorn serves internal HA/mesh callers and public
-	// cluster-FQDN callers on the same gRPC port, so file and Navigator
-	// identities must be co-resident instead of one source shadowing the other.
-	var opts []grpc.ServerOption
 	certFile := os.Getenv("GRPC_TLS_CERT_PATH")
 	keyFile := os.Getenv("GRPC_TLS_KEY_PATH")
-	rootDomain := platformRootDomain()
-	tlsBundles := []*pb.TLSCertBundle{}
 
+	var opts []grpc.ServerOption
 	if certFile != "" || keyFile != "" {
-		tlsCfg := grpcutil.ServerTLSConfig{
-			CertFile: certFile,
-			KeyFile:  keyFile,
-		}
+		tlsCfg := grpcutil.ServerTLSConfig{CertFile: certFile, KeyFile: keyFile}
 		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
+			_ = lis.Close()
 			return nil, fmt.Errorf("timed out waiting for file-based gRPC TLS: %w", err)
 		}
-		bundle, err := fileServerTLSBundle(certFile, keyFile)
+		serverOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
 		if err != nil {
-			return nil, fmt.Errorf("failed to configure file-based TLS: %w", err)
+			_ = lis.Close()
+			return nil, fmt.Errorf("configure internal listener TLS: %w", err)
 		}
-		tlsBundles = append(tlsBundles, bundle)
+		opts = append(opts, serverOpt)
 		cfg.Logger.WithFields(logging.Fields{
+			"bind_addr": cfg.InternalBindAddr,
 			"cert_file": certFile,
 			"key_file":  keyFile,
-		}).Info("gRPC server TLS: file-based")
+		}).Info("Foghorn internal gRPC listener TLS: file-based internal-CA leaf")
+	} else if !allowInsecureControlGRPC() {
+		_ = lis.Close()
+		return nil, fmt.Errorf("internal gRPC listener requires GRPC_TLS_CERT_PATH/GRPC_TLS_KEY_PATH or GRPC_ALLOW_INSECURE=true")
+	} else {
+		cfg.Logger.WithField("bind_addr", cfg.InternalBindAddr).Info("Foghorn internal gRPC listener running without TLS")
 	}
+
+	opts = appendCommonInterceptors(opts, cfg)
+
+	srv := grpc.NewServer(opts...)
+	registerHealthAndReflection(srv)
+	for _, reg := range cfg.InternalRegistrars {
+		reg(srv)
+	}
+
+	go func() {
+		if err := srv.Serve(lis); err != nil {
+			cfg.Logger.WithError(err).Error("Foghorn internal gRPC listener exited")
+		}
+	}()
+	return srv, nil
+}
+
+// startExternalGRPCListener listens on the external bind addr. Serves cluster
+// FQDNs via Navigator-backed ACME wildcards.
+// Registers HelmsmanControl + EdgeProvisioning + ExternalRegistrars (typically
+// FoghornGRPCServer + federation) + health + reflection.
+func startExternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
+	lc := net.ListenConfig{}
+	lis, err := lc.Listen(ctx, "tcp", cfg.ExternalBindAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	rootDomain := platformRootDomain()
+	tlsBundles := []*pb.TLSCertBundle{}
 
 	if navigatorClient != nil {
 		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -1758,9 +1832,10 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 				domains = append(domains, bundle.GetDomain())
 			}
 			cfg.Logger.WithFields(logging.Fields{
+				"bind_addr":  cfg.ExternalBindAddr,
 				"bundle_ids": bundleIDs,
 				"domains":    domains,
-			}).Info("gRPC server TLS: Navigator-backed")
+			}).Info("Foghorn external gRPC listener TLS: Navigator ACME cluster wildcards")
 		} else {
 			_ = lis.Close()
 			if certErr == nil {
@@ -1770,24 +1845,53 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 		}
 	}
 
+	var opts []grpc.ServerOption
 	if len(tlsBundles) > 0 {
 		if err := serverCert.StoreBundles(tlsBundles); err != nil {
 			_ = lis.Close()
-			return nil, fmt.Errorf("failed to parse gRPC TLS certificates: %w", err)
+			return nil, fmt.Errorf("parse external listener TLS certificates: %w", err)
 		}
 		creds := credentials.NewTLS(&tls.Config{
 			GetCertificate: serverCert.GetCertificate,
 			MinVersion:     tls.VersionTLS12,
 		})
 		opts = append(opts, grpc.Creds(creds))
+	} else if !allowInsecureControlGRPC() {
+		_ = lis.Close()
+		return nil, fmt.Errorf("external gRPC listener requires Navigator bundles or GRPC_ALLOW_INSECURE=true")
 	} else {
-		if !allowInsecureControlGRPC() {
-			_ = lis.Close()
-			return nil, fmt.Errorf("no TLS certificate source configured and insecure control gRPC is disabled")
-		}
-		cfg.Logger.Info("gRPC server running without TLS (no cert source)")
+		cfg.Logger.WithField("bind_addr", cfg.ExternalBindAddr).Info("Foghorn external gRPC listener running without TLS")
 	}
 
+	opts = appendCommonInterceptors(opts, cfg)
+
+	srv := grpc.NewServer(opts...)
+	pb.RegisterHelmsmanControlServer(srv, &Server{})
+	RegisterEdgeProvisioningService(srv)
+	registerHealthAndReflection(srv, pb.HelmsmanControl_ServiceDesc.ServiceName, "foghorn.EdgeProvisioningService")
+	for _, reg := range cfg.ExternalRegistrars {
+		reg(srv)
+	}
+
+	go func() {
+		if err := srv.Serve(lis); err != nil {
+			cfg.Logger.WithError(err).Error("Foghorn external gRPC listener exited")
+		}
+	}()
+	return srv, nil
+}
+
+func registerHealthAndReflection(srv *grpc.Server, serviceNames ...string) {
+	hs := health.NewServer()
+	hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	for _, serviceName := range serviceNames {
+		hs.SetServingStatus(serviceName, grpc_health_v1.HealthCheckResponse_SERVING)
+	}
+	grpc_health_v1.RegisterHealthServer(srv, hs)
+	reflection.Register(srv)
+}
+
+func appendCommonInterceptors(opts []grpc.ServerOption, cfg GRPCServerConfig) []grpc.ServerOption {
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
 		grpcutil.SanitizeUnaryServerInterceptor(),
 	}
@@ -1801,9 +1905,7 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 		skipMethods := []string{
 			"/grpc.health.v1.Health/Check",
 			"/grpc.health.v1.Health/Watch",
-			// HelmsmanControl uses bootstrap token validated in-method
 			pb.HelmsmanControl_Connect_FullMethodName,
-			// EdgeProvisioning uses enrollment token validated in-method
 			"/foghorn.EdgeProvisioningService/PreRegisterEdge",
 		}
 		if strings.TrimSpace(cfg.JWTSecret) != "" {
@@ -1823,42 +1925,18 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 
 	opts = append(opts, grpc.ChainUnaryInterceptor(unaryInterceptors...))
 
-	// Add stream auth interceptor for PeerChannel and other streaming RPCs
 	if cfg.ServiceToken != "" {
 		streamAuth := middleware.GRPCStreamAuthInterceptor(middleware.GRPCAuthConfig{
 			ServiceToken: cfg.ServiceToken,
 			Logger:       cfg.Logger,
 			SkipMethods: []string{
 				"/grpc.health.v1.Health/Watch",
-				// HelmsmanControl uses bootstrap token validated in-method
 				pb.HelmsmanControl_Connect_FullMethodName,
 			},
 		})
 		opts = append(opts, grpc.ChainStreamInterceptor(streamAuth))
 	}
-
-	srv := grpc.NewServer(opts...)
-	pb.RegisterHelmsmanControlServer(srv, &Server{})
-	RegisterEdgeProvisioningService(srv)
-
-	// gRPC health service for control plane
-	hs := health.NewServer()
-	hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-	hs.SetServingStatus(pb.HelmsmanControl_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
-	grpc_health_v1.RegisterHealthServer(srv, hs)
-	reflection.Register(srv)
-
-	// Register additional services
-	for _, reg := range cfg.Registrars {
-		reg(srv)
-	}
-
-	go func() {
-		if err := srv.Serve(lis); err != nil {
-			cfg.Logger.WithError(err).Error("Control gRPC server exited")
-		}
-	}()
-	return srv, nil
+	return opts
 }
 
 func nodeControlAuthInterceptor(serviceToken, jwtSecret string, logger logging.Logger) grpc.UnaryServerInterceptor {
@@ -6475,7 +6553,7 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 
 	edgeDomain := fmt.Sprintf("%s.%s.%s", edgeNodeRecordLabel(nodeID), clusterSlug, rootDomain)
 	poolDomain := fmt.Sprintf("edge.%s.%s", clusterSlug, rootDomain)
-	foghornAddr := fmt.Sprintf("foghorn.%s.%s:18019", clusterSlug, rootDomain)
+	foghornAddr := fmt.Sprintf("foghorn.%s.%s:18029", clusterSlug, rootDomain)
 
 	resp := &pb.PreRegisterEdgeResponse{
 		NodeId:           nodeID,

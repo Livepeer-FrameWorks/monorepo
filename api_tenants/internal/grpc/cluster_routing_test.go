@@ -498,7 +498,7 @@ func TestListPeers_UsesFoghornClusterAssignments(t *testing.T) {
 	defer db.Close()
 
 	rows := sqlmock.NewRows([]string{"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr"}).
-		AddRow("peer-cluster", pq.Array([]string{"tenant-a"}), "Peer Cluster", "shared-lb", "foghorn.peer.example.com:18019")
+		AddRow("peer-cluster", pq.Array([]string{"tenant-a"}), "Peer Cluster", "shared-lb", "foghorn.peer.example.com:18029")
 
 	mock.ExpectQuery("(?s)WITH my_tenants AS.*service_cluster_assignments").
 		WithArgs("local-cluster").
@@ -512,7 +512,7 @@ func TestListPeers_UsesFoghornClusterAssignments(t *testing.T) {
 	if len(resp.Peers) != 1 {
 		t.Fatalf("expected 1 peer, got %d", len(resp.Peers))
 	}
-	if resp.Peers[0].GetFoghornAddr() != "foghorn.peer.example.com:18019" {
+	if resp.Peers[0].GetFoghornAddr() != "foghorn.peer.example.com:18029" {
 		t.Fatalf("unexpected foghorn addr: %s", resp.Peers[0].GetFoghornAddr())
 	}
 

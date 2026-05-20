@@ -5436,7 +5436,14 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	// share the same env wiring.
 	baseName := task.Type
 	if baseName == "foghorn" {
-		env["FOGHORN_CONTROL_BIND_ADDR"] = fmt.Sprintf(":%d", defaultGRPCPort("foghorn"))
+		internalPort := defaultGRPCPort("foghorn")
+		externalPort := 18029
+		env["FOGHORN_INTERNAL_GRPC_BIND_ADDR"] = fmt.Sprintf(":%d", internalPort)
+		env["FOGHORN_EXTERNAL_GRPC_BIND_ADDR"] = fmt.Sprintf(":%d", externalPort)
+		env["FOGHORN_EXTERNAL_GRPC_PORT"] = strconv.Itoa(externalPort)
+		if relayHost := manifestMeshHostname(manifest, task.Host); relayHost != "" {
+			env["FOGHORN_RELAY_ADVERTISE_ADDR"] = fmt.Sprintf("%s:%d", relayHost, internalPort)
+		}
 		if chandlerSvc, ok := chandlerForCluster(manifest, task.ClusterID); ok {
 			env["CHANDLER_INTERNAL_URL"] = strings.Join(chandlerInternalURLs(manifest, chandlerSvc), ",")
 		}
@@ -5773,9 +5780,6 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 			decklogPort = decklogSvc.GRPCPort
 		}
 		env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] = fmt.Sprintf("decklog.internal:%d", decklogPort)
-		if env["GRPC_TLS_SERVER_NAME"] == "" {
-			env["GRPC_TLS_SERVER_NAME"] = "decklog.internal"
-		}
 		if env["FRAMEWORKS_DECKLOG_TLS_MODE"] == "" {
 			if _, ok := manifest.Services["navigator"]; ok {
 				env["FRAMEWORKS_DECKLOG_TLS_MODE"] = "mtls"

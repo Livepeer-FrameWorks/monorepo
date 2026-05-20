@@ -64,6 +64,17 @@ func GetEnvBool(key string, defaultValue bool) bool {
 	return defaultValue
 }
 
+// GetServiceGRPCTLSServerName returns a service-scoped TLS authority override.
+// Internal service clients should leave this empty unless they need to override
+// the canonical <service>.internal name owned by the client package.
+func GetServiceGRPCTLSServerName(serviceID string) string {
+	key := strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(strings.TrimSpace(serviceID)))
+	if key == "" {
+		return ""
+	}
+	return GetEnv(key+"_GRPC_TLS_SERVER_NAME", "")
+}
+
 func GetCookieDomain() string {
 	return strings.TrimPrefix(strings.TrimSpace(os.Getenv("COOKIE_DOMAIN")), ".")
 }

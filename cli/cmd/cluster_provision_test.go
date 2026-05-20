@@ -2035,11 +2035,13 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 		{
 			serviceID: "foghorn",
 			want: map[string]string{
-				"FOGHORN_CONTROL_BIND_ADDR": ":18019",
-				"CHANDLER_INTERNAL_URL":     "http://central-eu-1.internal:18020",
-				"COMMODORE_GRPC_ADDR":       "commodore.internal:19001",
-				"QUARTERMASTER_GRPC_ADDR":   "quartermaster.internal:19002",
-				"NAVIGATOR_GRPC_ADDR":       "navigator.internal:18011",
+				"FOGHORN_INTERNAL_GRPC_BIND_ADDR": ":18019",
+				"FOGHORN_EXTERNAL_GRPC_BIND_ADDR": ":18029",
+				"FOGHORN_EXTERNAL_GRPC_PORT":      "18029",
+				"CHANDLER_INTERNAL_URL":           "http://central-eu-1.internal:18020",
+				"COMMODORE_GRPC_ADDR":             "commodore.internal:19001",
+				"QUARTERMASTER_GRPC_ADDR":         "quartermaster.internal:19002",
+				"NAVIGATOR_GRPC_ADDR":             "navigator.internal:18011",
 			},
 			keys: []string{"DATABASE_URL", "SERVICE_TOKEN", "DECKLOG_GRPC_ADDR", "PURSER_GRPC_ADDR", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
 		},
@@ -2048,7 +2050,6 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 			want: map[string]string{
 				"FRAMEWORKS_DECKLOG_GRPC_ADDR": "decklog.internal:18006",
 				"FRAMEWORKS_DECKLOG_TLS_MODE":  "mtls",
-				"GRPC_TLS_SERVER_NAME":         "decklog.internal",
 			},
 			keys: []string{"SERVICE_TOKEN", "GRPC_TLS_CA_PATH"},
 		},

@@ -131,7 +131,11 @@ func (p *FoghornPool) serverName(addr string) string {
 		return p.config.ServerName
 	}
 	if grpcutil.AddrIsFQDN(addr) && !isInternalFoghornAddr(addr) {
-		return ""
+		host := addr
+		if h, _, err := net.SplitHostPort(addr); err == nil {
+			host = h
+		}
+		return host
 	}
 	if p.config.ServerName != "" {
 		return p.config.ServerName

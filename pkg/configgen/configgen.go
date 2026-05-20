@@ -355,7 +355,7 @@ func computeDerived(env map[string]string) error {
 		return errSet
 	}
 
-	foghornControlPort, err := require(env, "FOGHORN_CONTROL_PORT")
+	foghornInternalPort, err := require(env, "FOGHORN_CONTROL_PORT")
 	if err != nil {
 		return err
 	}
@@ -363,8 +363,14 @@ func computeDerived(env map[string]string) error {
 	if err != nil {
 		return err
 	}
-	env["FOGHORN_CONTROL_BIND_ADDR"] = fmt.Sprintf(":%s", foghornControlPort)
-	env["FOGHORN_CONTROL_ADDR"] = fmt.Sprintf("%s:%s", foghornHost, foghornControlPort)
+	foghornExternalPort := env["FOGHORN_EXTERNAL_GRPC_PORT"]
+	if foghornExternalPort == "" {
+		foghornExternalPort = "18029"
+	}
+	env["FOGHORN_INTERNAL_GRPC_BIND_ADDR"] = fmt.Sprintf(":%s", foghornInternalPort)
+	env["FOGHORN_EXTERNAL_GRPC_BIND_ADDR"] = fmt.Sprintf(":%s", foghornExternalPort)
+	env["FOGHORN_CONTROL_ADDR"] = fmt.Sprintf("%s:%s", foghornHost, foghornExternalPort)
+	env["FOGHORN_RELAY_ADVERTISE_ADDR"] = fmt.Sprintf("%s:%s", foghornHost, foghornInternalPort)
 
 	// Foghorn HA via Redis (optional — empty means standalone mode)
 	if redisURL := env["FOGHORN_REDIS_URL"]; redisURL != "" {

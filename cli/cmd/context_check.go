@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -164,7 +163,7 @@ func runJWTPersonaCheck(name string, env fwcfg.Env, store fwcredentials.Store) [
 func runReachabilityChecks(parent context.Context, c fwcfg.Context, timeout time.Duration) []checkResult {
 	ep := c.Endpoints
 	var res []checkResult
-	httpClient := &http.Client{Timeout: timeout, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	httpClient := &http.Client{Timeout: timeout}
 
 	// helper to check http health
 	checkHTTP := func(name, base string) checkResult {

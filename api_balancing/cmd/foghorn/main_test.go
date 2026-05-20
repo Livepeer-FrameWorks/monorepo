@@ -29,6 +29,34 @@ func TestControlPortFromBindAddr(t *testing.T) {
 	}
 }
 
+func TestFoghornRelayAdvertiseAddr(t *testing.T) {
+	t.Run("explicit addr wins", func(t *testing.T) {
+		t.Setenv("FOGHORN_RELAY_ADVERTISE_ADDR", "regional-eu-1.internal:18019")
+		t.Setenv("FOGHORN_RELAY_ADVERTISE_HOST", "ignored.internal")
+
+		got := foghornRelayAdvertiseAddr(":19000", "public.example:18029")
+		if got != "regional-eu-1.internal:18019" {
+			t.Fatalf("relay addr=%q, want explicit", got)
+		}
+	})
+
+	t.Run("host override uses internal bind port", func(t *testing.T) {
+		t.Setenv("FOGHORN_RELAY_ADVERTISE_HOST", "regional-eu-2.internal")
+
+		got := foghornRelayAdvertiseAddr("0.0.0.0:18019", "foghorn.media-eu-1.example:18029")
+		if got != "regional-eu-2.internal:18019" {
+			t.Fatalf("relay addr=%q", got)
+		}
+	})
+
+	t.Run("fallback host is only a last resort", func(t *testing.T) {
+		got := foghornRelayAdvertiseAddr(":18019", "foghorn.media-eu-1.example:18029")
+		if got != "foghorn.media-eu-1.example:18019" {
+			t.Fatalf("relay addr=%q", got)
+		}
+	})
+}
+
 func TestRelayHealthResult(t *testing.T) {
 	tests := []struct {
 		name       string

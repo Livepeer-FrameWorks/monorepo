@@ -91,7 +91,7 @@ func main() {
 		ServiceToken:  serviceToken,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client")
@@ -106,7 +106,7 @@ func main() {
 		ServiceToken:  serviceToken,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("purser"),
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Purser gRPC client")
@@ -118,7 +118,7 @@ func main() {
 		Target:        decklogGRPCAddr,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("decklog"),
 		Timeout:       5 * time.Second,
 		Source:        "deckhand",
 		ServiceToken:  serviceToken,

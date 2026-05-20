@@ -500,7 +500,7 @@ func (sm *SubscriptionManager) getOrCreateConnectionFromList(ctx context.Context
 			ServiceToken:  sm.serviceToken,
 			AllowInsecure: pkgconfig.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 			CACertFile:    pkgconfig.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    pkgconfig.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+			ServerName:    pkgconfig.GetServiceGRPCTLSServerName("signalman"),
 		})
 		if err != nil {
 			lastErr = err

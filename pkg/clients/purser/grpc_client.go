@@ -15,6 +15,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+const DefaultServerName = "purser.internal"
+
 // GRPCClient is the gRPC client for Purser
 type GRPCClient struct {
 	conn           *grpc.ClientConn
@@ -91,10 +93,11 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 
 	tlsCfg := grpcutil.ClientTLSConfig{
-		CACertFile:    config.CACertFile,
-		CACertPEM:     config.CACertPEM,
-		ServerName:    config.ServerName,
-		AllowInsecure: config.AllowInsecure,
+		CACertFile:        config.CACertFile,
+		CACertPEM:         config.CACertPEM,
+		ServerName:        config.ServerName,
+		DefaultServerName: DefaultServerName,
+		AllowInsecure:     config.AllowInsecure,
 	}
 	transport, err := grpcutil.ClientTLS(tlsCfg, config.Logger)
 	if err != nil {

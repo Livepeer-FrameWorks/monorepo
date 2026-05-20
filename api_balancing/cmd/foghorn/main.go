@@ -309,7 +309,7 @@ func main() {
 		Target:        decklogGRPCAddr,
 		AllowInsecure: allowInsecure,
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("decklog"),
 		Timeout:       10 * time.Second,
 		Source:        "foghorn",
 		ServiceToken:  serviceToken,
@@ -336,7 +336,7 @@ func main() {
 		ServiceToken:  serviceToken,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
 	})
 	if err != nil {
 		logger.WithError(err).Error("Failed to create Quartermaster gRPC client - starting in degraded mode")
@@ -392,7 +392,7 @@ func main() {
 		ServiceToken:  serviceToken,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("commodore"),
 	})
 	if err != nil {
 		logger.WithError(err).Error("Failed to create Commodore gRPC client - starting in degraded mode")
@@ -420,7 +420,7 @@ func main() {
 			ServiceToken:  serviceToken,
 			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+			ServerName:    config.GetServiceGRPCTLSServerName("navigator"),
 		})
 		if navErr != nil {
 			logger.WithError(navErr).Warn("Failed to create Navigator gRPC client - TLS bundles will not be seeded")
@@ -439,7 +439,7 @@ func main() {
 		ServiceToken:  serviceToken,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("purser"),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - x402 payments will be unavailable")
@@ -534,14 +534,15 @@ func main() {
 	// Initialize handlers with injected clients before bootstrap metadata is applied.
 	handlers.Init(db, logger, lb, metrics, decklogClient, commodoreClient, purserClient, qmClient, geoipReader, geoipCache)
 
-	controlAddr := config.RequireEnv("FOGHORN_CONTROL_BIND_ADDR")
+	internalGRPCBindAddr := config.GetEnv("FOGHORN_INTERNAL_GRPC_BIND_ADDR", ":18019")
+	externalGRPCBindAddr := config.GetEnv("FOGHORN_EXTERNAL_GRPC_BIND_ADDR", ":18029")
 
 	// Register at QM before federation starts so leadership events have stable
 	// cluster ownership metadata. QM resolves the address as wireguard_ip >
 	// internal_ip > external_ip.
 	advertiseAddr := ""
 	if qmClient != nil {
-		grpcPort := config.GetEnvInt("FOGHORN_GRPC_PORT", controlPortFromBindAddr(controlAddr, 18019))
+		grpcPort := config.GetEnvInt("FOGHORN_EXTERNAL_GRPC_PORT", controlPortFromBindAddr(externalGRPCBindAddr, 18029))
 		bsReq := &pb.BootstrapServiceRequest{
 			Type:      "foghorn",
 			Version:   version.Version,
@@ -657,7 +658,7 @@ func main() {
 			Logger:        logger,
 			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+			ServerName:    config.GetServiceGRPCTLSServerName("foghorn"),
 		})
 		defer fedPool.Close()
 
@@ -906,29 +907,31 @@ func main() {
 		}
 	}
 
-	if redisStore != nil && advertiseAddr != "" {
+	relayAdvertiseAddr := foghornRelayAdvertiseAddr(internalGRPCBindAddr, advertiseAddr)
+	if redisStore != nil && relayAdvertiseAddr != "" {
 		relayPool := foghornpool.NewPool(foghornpool.PoolConfig{
 			ServiceToken:  serviceToken,
 			Timeout:       10 * time.Second,
 			Logger:        logger,
 			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+			ServerName:    config.GetServiceGRPCTLSServerName("foghorn"),
 		})
 		defer relayPool.Close()
 
-		control.InitRelay(redisStore, instanceID, advertiseAddr, &relayPoolAdapter{pool: relayPool}, logger)
+		control.InitRelay(redisStore, instanceID, relayAdvertiseAddr, &relayPoolAdapter{pool: relayPool}, logger)
 		relayServer = foghorngrpc.NewRelayServer(logger)
 
 		logger.WithFields(logging.Fields{
-			"instance_id":    instanceID,
-			"advertise_addr": advertiseAddr,
+			"external_advertise_addr": advertiseAddr,
+			"instance_id":             instanceID,
+			"relay_advertise_addr":    relayAdvertiseAddr,
 		}).Info("HA command relay enabled")
 		relayReady = true
 	} else if haRequired {
 		logger.WithFields(logging.Fields{
 			"redis_configured": redisStore != nil,
-			"advertise_addr":   advertiseAddr,
+			"advertise_addr":   relayAdvertiseAddr,
 		}).Fatal("FOGHORN_HA_REQUIRED is true but HA command relay could not be enabled")
 	}
 
@@ -937,20 +940,22 @@ func main() {
 	// control-plane name.
 	control.LoadServedClusters()
 
-	// Start unified gRPC server with both Helmsman control and Foghorn control plane services
-	registrars := []control.ServiceRegistrar{foghornServer.RegisterServices}
+	externalRegistrars := []control.ServiceRegistrar{foghornServer.RegisterServices}
 	if federationServer != nil {
-		registrars = append(registrars, federationServer.RegisterServices)
+		externalRegistrars = append(externalRegistrars, federationServer.RegisterServices)
 	}
+	var internalRegistrars []control.ServiceRegistrar
 	if relayServer != nil {
-		registrars = append(registrars, relayServer.RegisterServices)
+		internalRegistrars = append(internalRegistrars, relayServer.RegisterServices)
 	}
-	grpcServer, err := control.StartGRPCServer(context.Background(), control.GRPCServerConfig{
-		Addr:         controlAddr,
-		Logger:       logger,
-		ServiceToken: serviceToken,
-		JWTSecret:    os.Getenv("JWT_SECRET"),
-		Registrars:   registrars,
+	grpcServers, err := control.StartGRPCServers(context.Background(), control.GRPCServerConfig{
+		InternalBindAddr:   internalGRPCBindAddr,
+		ExternalBindAddr:   externalGRPCBindAddr,
+		Logger:             logger,
+		ServiceToken:       serviceToken,
+		JWTSecret:          os.Getenv("JWT_SECRET"),
+		InternalRegistrars: internalRegistrars,
+		ExternalRegistrars: externalRegistrars,
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to start control gRPC server")
@@ -1159,14 +1164,37 @@ func main() {
 
 	done := make(chan struct{})
 	go func() {
-		grpcServer.GracefulStop()
+		grpcServers.Internal.GracefulStop()
+		grpcServers.External.GracefulStop()
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-shutdownCtx.Done():
-		grpcServer.Stop()
+		grpcServers.Internal.Stop()
+		grpcServers.External.Stop()
 	}
+}
+
+func foghornRelayAdvertiseAddr(internalBindAddr, fallbackAddr string) string {
+	if addr := strings.TrimSpace(os.Getenv("FOGHORN_RELAY_ADVERTISE_ADDR")); addr != "" {
+		return addr
+	}
+	relayHost := strings.TrimSpace(os.Getenv("FOGHORN_RELAY_ADVERTISE_HOST"))
+	if relayHost == "" {
+		relayHost = strings.TrimSpace(os.Getenv("FOGHORN_HOST"))
+	}
+	if relayHost == "" {
+		host, _, err := net.SplitHostPort(strings.TrimSpace(fallbackAddr))
+		if err == nil {
+			relayHost = host
+		}
+	}
+	if relayHost == "" {
+		relayHost = "127.0.0.1"
+	}
+	relayPort := controlPortFromBindAddr(internalBindAddr, 18019)
+	return net.JoinHostPort(relayHost, strconv.Itoa(relayPort))
 }
 
 func controlPortFromBindAddr(bindAddr string, fallback int) int {
@@ -1205,7 +1233,7 @@ func reconnectQuartermaster(
 			ServiceToken:  serviceToken,
 			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+			ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
 		})
 		if err != nil {
 			clients.setQuartermaster(false, err)
@@ -1260,7 +1288,7 @@ func reconnectCommodore(
 			ServiceToken:  serviceToken,
 			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+			ServerName:    config.GetServiceGRPCTLSServerName("commodore"),
 		})
 		if err != nil {
 			clients.setCommodore(false, err)

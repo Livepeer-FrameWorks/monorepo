@@ -545,7 +545,7 @@ func TestRemoteArtifactFiltering_AllUnauthorizedYieldsNoHits(t *testing.T) {
 
 type stubPeerResolver struct{}
 
-func (s stubPeerResolver) GetPeerAddr(clusterID string) string { return "foghorn.example:18019" }
+func (s stubPeerResolver) GetPeerAddr(clusterID string) string { return "foghorn.example:18029" }
 
 type stubFedClient struct{}
 

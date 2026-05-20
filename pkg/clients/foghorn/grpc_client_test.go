@@ -63,7 +63,7 @@ func TestFoghornClientTLSConfigHonorsExplicitInsecureForFQDN(t *testing.T) {
 	t.Parallel()
 
 	cfg := foghornClientTLSConfig(GRPCConfig{
-		GRPCAddr:      "foghorn.frameworks.example:18019",
+		GRPCAddr:      "foghorn.frameworks.example:18029",
 		AllowInsecure: true,
 	})
 	if !cfg.AllowInsecure {
@@ -74,7 +74,7 @@ func TestFoghornClientTLSConfigHonorsExplicitInsecureForFQDN(t *testing.T) {
 func TestFoghornClientTLSConfigKeepsLegacyDefaults(t *testing.T) {
 	t.Parallel()
 
-	fqdn := foghornClientTLSConfig(GRPCConfig{GRPCAddr: "foghorn.frameworks.example:18019"})
+	fqdn := foghornClientTLSConfig(GRPCConfig{GRPCAddr: "foghorn.frameworks.example:18029"})
 	if fqdn.AllowInsecure {
 		t.Fatal("FQDN default AllowInsecure = true, want false")
 	}

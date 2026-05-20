@@ -580,12 +580,25 @@ func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceIn
 
 func grpcHealthDialOption(inst serviceInstance) (grpc.DialOption, error) {
 	caPath := strings.TrimSpace(os.Getenv("GRPC_TLS_CA_PATH"))
-	serverName, caPath := grpcHealthTLSConfig(inst, caPath, os.Getenv("GRPC_TLS_SERVER_NAME"))
+	serverName, caPath := grpcHealthTLSConfig(inst, caPath, perServiceTLSServerNameForHealth(inst))
 	return grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
 		CACertFile:    caPath,
 		ServerName:    serverName,
 		AllowInsecure: getenvBool("GRPC_ALLOW_INSECURE", false),
 	}, logger)
+}
+
+// perServiceTLSServerNameForHealth reads <SERVICE>_GRPC_TLS_SERVER_NAME as an
+// override for the cert authority the health poller will validate against.
+// Empty string falls through to the grpcHealthTLSConfig fallback chain
+// (foghorn public name, then "<serviceID>.internal").
+func perServiceTLSServerNameForHealth(inst serviceInstance) string {
+	serviceID := strings.TrimSpace(inst.serviceID)
+	if serviceID == "" {
+		return ""
+	}
+	key := strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(serviceID))
+	return os.Getenv(key + "_GRPC_TLS_SERVER_NAME")
 }
 
 func grpcHealthTLSConfig(inst serviceInstance, caPath, configured string) (serverName, caFile string) {

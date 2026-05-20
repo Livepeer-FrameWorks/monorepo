@@ -136,7 +136,7 @@ func main() {
 		ServiceToken:  serviceToken,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("periscope"),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Periscope gRPC client - diagnostics disabled")
@@ -155,7 +155,7 @@ func main() {
 		ServiceToken:  serviceToken,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("purser"),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - tier gating unavailable")
@@ -172,7 +172,7 @@ func main() {
 		ServiceToken:  serviceToken,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("commodore"),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Commodore gRPC client - primary-user notification fallback unavailable")
@@ -195,7 +195,7 @@ func main() {
 		Target:        decklogGRPCAddr,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("decklog"),
 		Timeout:       5 * time.Second,
 		Source:        "skipper",
 		ServiceToken:  serviceToken,
@@ -218,7 +218,7 @@ func main() {
 		ServiceToken:  serviceToken,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Quartermaster gRPC client - heartbeat disabled")

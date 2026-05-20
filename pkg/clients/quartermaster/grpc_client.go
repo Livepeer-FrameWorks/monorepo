@@ -17,6 +17,8 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+const DefaultServerName = "quartermaster.internal"
+
 // GRPCClient is the gRPC client for Quartermaster
 type GRPCClient struct {
 	conn            *grpc.ClientConn
@@ -101,10 +103,11 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 
 	tlsCfg := grpcutil.ClientTLSConfig{
-		CACertFile:    config.CACertFile,
-		CACertPEM:     config.CACertPEM,
-		ServerName:    config.ServerName,
-		AllowInsecure: config.AllowInsecure,
+		CACertFile:        config.CACertFile,
+		CACertPEM:         config.CACertPEM,
+		ServerName:        config.ServerName,
+		DefaultServerName: DefaultServerName,
+		AllowInsecure:     config.AllowInsecure,
 	}
 	transport, err := grpcutil.ClientTLS(tlsCfg, config.Logger)
 	if err != nil {

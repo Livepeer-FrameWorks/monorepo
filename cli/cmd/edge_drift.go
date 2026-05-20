@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -300,7 +299,7 @@ func classifyEdgeDomain(envValue, flagValue string) edgeDriftConfigStatus {
 
 func probeEdgeHTTPS(ctx context.Context, domain string) *edgeDriftHealth {
 	url := "https://" + domain + "/health"
-	client := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	client := &http.Client{Timeout: 3 * time.Second}
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, url, nil)

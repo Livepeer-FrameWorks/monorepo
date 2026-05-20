@@ -486,7 +486,7 @@ const (
 	artifactPushInterval  = 30 * time.Second
 	peerReconnectBackoff  = 10 * time.Second
 	heartbeatPushInterval = 10 * time.Second
-	federationPort        = "18019" // standard Foghorn gRPC port for federation
+	federationPort        = "18029" // external Foghorn gRPC listener for federation
 	leaderAcquireInterval = 5 * time.Second
 	leaderRole            = "peer_manager"
 	protocolVersion       = uint32(1)

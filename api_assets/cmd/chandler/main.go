@@ -88,7 +88,7 @@ func main() {
 			ServiceToken:  serviceToken,
 			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+			ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
 		})
 		if err != nil {
 			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
@@ -148,7 +148,7 @@ func applyClusterS3FromQuartermaster(logger logging.Logger, qmAddr, serviceToken
 		ServiceToken:  serviceToken,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
 	})
 	if err != nil {
 		return fmt.Errorf("quartermaster client: %w", err)

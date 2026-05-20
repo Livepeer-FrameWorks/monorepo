@@ -18,6 +18,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const DefaultServerName = "periscope-query.internal"
+
 // GRPCClient is the gRPC client for Periscope analytics
 type GRPCClient struct {
 	conn         *grpc.ClientConn
@@ -104,9 +106,10 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 
 	tlsCfg := grpcutil.ClientTLSConfig{
-		CACertFile:    config.CACertFile,
-		ServerName:    config.ServerName,
-		AllowInsecure: config.AllowInsecure,
+		CACertFile:        config.CACertFile,
+		ServerName:        config.ServerName,
+		DefaultServerName: DefaultServerName,
+		AllowInsecure:     config.AllowInsecure,
 	}
 	transport, err := grpcutil.ClientTLS(tlsCfg, config.Logger)
 	if err != nil {

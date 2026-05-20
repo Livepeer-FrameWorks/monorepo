@@ -350,8 +350,8 @@ func TestSetGetPeerAddresses(t *testing.T) {
 	ctx := context.Background()
 
 	addrs := map[string]string{
-		"cluster-1": "foghorn.c1.example.com:18019",
-		"cluster-2": "foghorn.c2.example.com:18019",
+		"cluster-1": "foghorn.c1.example.com:18029",
+		"cluster-2": "foghorn.c2.example.com:18029",
 	}
 	if err := cache.SetPeerAddresses(ctx, addrs); err != nil {
 		t.Fatalf("SetPeerAddresses: %v", err)

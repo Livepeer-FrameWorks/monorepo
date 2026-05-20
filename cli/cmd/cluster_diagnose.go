@@ -205,6 +205,7 @@ func buildStandardPorts() map[int]string {
 	standardPorts := map[int]string{
 		53:    "privateer-dns",
 		18019: "foghorn-control",
+		18029: "foghorn-external-grpc",
 	}
 
 	ids := make([]string, 0, len(servicedefs.Services))

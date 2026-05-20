@@ -17,6 +17,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+const DefaultServerName = "signalman.internal"
+
 // GRPCClient is the gRPC streaming client for Signalman
 type GRPCClient struct {
 	conn    *grpc.ClientConn
@@ -108,9 +110,10 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 
 	tlsCfg := grpcutil.ClientTLSConfig{
-		CACertFile:    config.CACertFile,
-		ServerName:    signalmanTLSServerName(config.CACertFile, config.ServerName, config.AllowInsecure),
-		AllowInsecure: config.AllowInsecure,
+		CACertFile:        config.CACertFile,
+		ServerName:        config.ServerName,
+		DefaultServerName: DefaultServerName,
+		AllowInsecure:     config.AllowInsecure,
 	}
 	transport, err := grpcutil.ClientTLS(tlsCfg, config.Logger)
 	if err != nil {
@@ -146,13 +149,6 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		userID:    config.UserID,
 		tenantID:  config.TenantID,
 	}, nil
-}
-
-func signalmanTLSServerName(caPath, configured string, allowInsecure bool) string {
-	if configured != "" || caPath == "" || allowInsecure {
-		return configured
-	}
-	return "signalman.internal"
 }
 
 // Close closes the gRPC connection

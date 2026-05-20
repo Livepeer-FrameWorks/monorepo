@@ -92,7 +92,9 @@ func TestEdgeFoghornUsesInternalCA(t *testing.T) {
 	}{
 		{addr: "foghorn.internal:18019", want: true},
 		{addr: "foghorn.media-eu-1.frameworks.network:18019", want: true},
+		{addr: "foghorn.media-eu-1.frameworks.network:18029", want: false},
 		{addr: "foghorn.frameworks.network:18019", want: true},
+		{addr: "foghorn.frameworks.network:18029", want: false},
 		{addr: "foghorn.frameworks.network:443", want: false},
 		{addr: "api.frameworks.network:18019", want: false},
 	}
@@ -100,5 +102,14 @@ func TestEdgeFoghornUsesInternalCA(t *testing.T) {
 		if got := edgeFoghornUsesInternalCA(tt.addr); got != tt.want {
 			t.Fatalf("edgeFoghornUsesInternalCA(%q) = %v, want %v", tt.addr, got, tt.want)
 		}
+	}
+}
+
+func TestEdgeManifestFoghornGRPCAddrUsesExternalListener(t *testing.T) {
+	t.Parallel()
+
+	got := edgeManifestFoghornGRPCAddr("frameworks.network", "media-eu-1")
+	if got != "foghorn.media-eu-1.frameworks.network:18029" {
+		t.Fatalf("edgeManifestFoghornGRPCAddr() = %q, want external listener", got)
 	}
 }

@@ -3,7 +3,6 @@ package decklog
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
@@ -17,6 +16,8 @@ import (
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+const DefaultServerName = "decklog.internal"
 
 // envelopeSchemaVersion is the schema_version producers stamp on outbound
 // events. Bumped when an envelope-affecting proto change ships.
@@ -54,9 +55,10 @@ func NewClient(cfg ClientConfig, logger logging.Logger) (*Client, error) {
 	var connectParams *grpc.ConnectParams
 
 	transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
-		CACertFile:    cfg.CACertFile,
-		ServerName:    decklogTLSServerName(cfg.CACertFile, cfg.ServerName, cfg.AllowInsecure),
-		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:        cfg.CACertFile,
+		ServerName:        cfg.ServerName,
+		DefaultServerName: DefaultServerName,
+		AllowInsecure:     cfg.AllowInsecure,
 	}, logger)
 	if err != nil {
 		return nil, fmt.Errorf("configure Decklog gRPC TLS: %w", err)
@@ -161,9 +163,10 @@ func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedC
 	var connectParams *grpc.ConnectParams
 
 	transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
-		CACertFile:    cfg.CACertFile,
-		ServerName:    decklogTLSServerName(cfg.CACertFile, cfg.ServerName, cfg.AllowInsecure),
-		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:        cfg.CACertFile,
+		ServerName:        cfg.ServerName,
+		DefaultServerName: DefaultServerName,
+		AllowInsecure:     cfg.AllowInsecure,
 	}, logger)
 	if err != nil {
 		return nil, fmt.Errorf("configure Decklog batched client TLS: %w", err)
@@ -203,14 +206,6 @@ func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedC
 	}).Info("Decklog client initialized")
 
 	return client, nil
-}
-
-func decklogTLSServerName(caPath, configured string, allowInsecure bool) string {
-	configured = strings.TrimSpace(configured)
-	if configured != "" || allowInsecure || strings.TrimSpace(caPath) == "" {
-		return configured
-	}
-	return "decklog.internal"
 }
 
 // authContext returns a context with service token authorization metadata.

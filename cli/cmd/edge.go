@@ -48,6 +48,7 @@ const (
 	minDiskFreePercent              = 10.0
 	darwinLogDir                    = "/usr/local/var/log/frameworks"
 	edgeProvisionEnrollmentTokenTTL = "2h"
+	foghornExternalGRPCPort         = 18029
 )
 
 var edgeNodeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,99}$`)
@@ -259,6 +260,12 @@ func newEdgeInitCmd() *cobra.Command {
 		if preRegFoghornAddr != "" {
 			foghornGRPC = preRegFoghornAddr
 		}
+		grpcTLSCAPath := ""
+		if edgeFoghornUsesInternalCA(foghornGRPC) && strings.TrimSpace(preRegCABundle) != "" {
+			grpcTLSCAPath = "/etc/frameworks/pki/ca.crt"
+		} else {
+			preRegCABundle = ""
+		}
 
 		vars := templates.EdgeVars{
 			NodeID:          preRegNodeID,
@@ -266,7 +273,7 @@ func newEdgeInitCmd() *cobra.Command {
 			AcmeEmail:       email,
 			FoghornGRPCAddr: foghornGRPC,
 			EnrollmentToken: enrollmentToken,
-			GRPCTLSCAPath:   "/etc/frameworks/pki/ca.crt",
+			GRPCTLSCAPath:   grpcTLSCAPath,
 			CABundlePEM:     preRegCABundle,
 			Mode:            initMode,
 			TelemetryURL:    telemetryURL,
@@ -328,7 +335,7 @@ func newEdgeEnrollCmd() *cobra.Command {
 			return nil
 		}
 		url := "https://" + domain + "/health"
-		httpClient := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+		httpClient := &http.Client{Timeout: 5 * time.Second}
 		deadline := time.Now().Add(timeout)
 		for {
 			ctx, cancel := context.WithTimeout(context.Background(), httpClient.Timeout)
@@ -713,6 +720,9 @@ Multi-node manifest example:
 			}
 			if foghornGRPC == "" {
 				foghornGRPC = cliCtx.Endpoints.FoghornGRPCAddr
+			}
+			if !edgeFoghornUsesInternalCA(foghornGRPC) {
+				preRegCABundle = ""
 			}
 
 			var host inventory.Host
@@ -1116,7 +1126,7 @@ func edgeManifestFoghornGRPCAddr(rootDomain, clusterID string) string {
 	if rootDomain == "" || clusterID == "" {
 		return ""
 	}
-	return fmt.Sprintf("foghorn.%s.%s:%d", clusterID, rootDomain, defaultGRPCPort("foghorn"))
+	return fmt.Sprintf("foghorn.%s.%s:%d", clusterID, rootDomain, foghornExternalGRPCPort)
 }
 
 func edgeFoghornUsesInternalCA(addr string) bool {
@@ -1134,7 +1144,7 @@ func edgeFoghornUsesInternalCA(addr string) bool {
 		return true
 	}
 	if strings.HasPrefix(host, "foghorn.") {
-		return port == "" || port == fmt.Sprintf("%d", defaultGRPCPort("foghorn"))
+		return port == fmt.Sprintf("%d", defaultGRPCPort("foghorn"))
 	}
 	return false
 }
@@ -1770,7 +1780,7 @@ func newEdgeStatusCmd() *cobra.Command {
 		// HTTPS health
 		if strings.TrimSpace(domain) != "" {
 			url := "https://" + domain + "/health"
-			httpClient := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+			httpClient := &http.Client{Timeout: 3 * time.Second}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 			if err != nil {
@@ -2152,7 +2162,7 @@ func newEdgeDoctorCmd() *cobra.Command {
 		httpsURL := ""
 		if domain != "" {
 			httpsURL = "https://" + domain + "/health"
-			httpClient := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+			httpClient := &http.Client{Timeout: 3 * time.Second}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, httpsURL, nil)
 			if err != nil {

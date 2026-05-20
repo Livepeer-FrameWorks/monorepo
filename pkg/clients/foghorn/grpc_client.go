@@ -15,6 +15,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+const InternalServerName = "foghorn.internal"
+
 // GRPCClient is the gRPC client for Foghorn control plane services
 type GRPCClient struct {
 	conn       *grpc.ClientConn
@@ -159,8 +161,9 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 
 func foghornClientTLSConfig(config GRPCConfig) grpcutil.ClientTLSConfig {
 	tlsCfg := grpcutil.ClientTLSConfig{
-		CACertFile: config.CACertFile,
-		ServerName: config.ServerName,
+		CACertFile:        config.CACertFile,
+		ServerName:        config.ServerName,
+		DefaultServerName: InternalServerName,
 	}
 	if config.AllowInsecure {
 		tlsCfg.AllowInsecure = true

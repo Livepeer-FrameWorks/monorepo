@@ -16,7 +16,7 @@ func defaultEndpoints() Endpoints {
 		BridgeURL:             "http://localhost:18000",
 		QuartermasterGRPCAddr: "localhost:19002",
 		CommodoreGRPCAddr:     "localhost:19001",
-		FoghornGRPCAddr:       "localhost:18019",
+		FoghornGRPCAddr:       "localhost:18029",
 		DecklogGRPCAddr:       "localhost:18006",
 		PeriscopeGRPCAddr:     "localhost:19004",
 		PurserGRPCAddr:        "localhost:19003",

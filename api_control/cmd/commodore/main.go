@@ -92,7 +92,7 @@ func main() {
 		ServiceToken:  serviceToken,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Quartermaster gRPC client - tenant creation will use fallback")
@@ -116,7 +116,7 @@ func main() {
 			ServiceToken:  serviceToken,
 			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+			ServerName:    config.GetServiceGRPCTLSServerName("navigator"),
 		})
 		if err != nil {
 			logger.WithError(err).Warn("Failed to create Navigator gRPC client - tenant alias status lookups disabled")
@@ -136,7 +136,7 @@ func main() {
 		ServiceToken:  serviceToken,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("purser"),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - user limit checks will be skipped")
@@ -152,7 +152,7 @@ func main() {
 		Target:        decklogGRPCAddr,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("decklog"),
 		Timeout:       5 * time.Second,
 		Source:        "commodore",
 		ServiceToken:  serviceToken,

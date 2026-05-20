@@ -26,8 +26,8 @@ func TestFoghornPoolServerNameForManagedTLS(t *testing.T) {
 		{
 			name: "cluster fqdn uses target hostname",
 			cfg:  PoolConfig{CACertFile: "/etc/frameworks/pki/ca.crt"},
-			addr: "foghorn.media-us-1.frameworks.network:18019",
-			want: "",
+			addr: "foghorn.media-us-1.frameworks.network:18029",
+			want: "foghorn.media-us-1.frameworks.network",
 		},
 		{
 			name: "explicit server name wins for internal address",
@@ -38,8 +38,8 @@ func TestFoghornPoolServerNameForManagedTLS(t *testing.T) {
 		{
 			name: "cluster fqdn ignores leaked internal override",
 			cfg:  PoolConfig{CACertFile: "/etc/frameworks/pki/ca.crt", ServerName: "foghorn.internal"},
-			addr: "foghorn.media-us-1.frameworks.network:18019",
-			want: "",
+			addr: "foghorn.media-us-1.frameworks.network:18029",
+			want: "foghorn.media-us-1.frameworks.network",
 		},
 		{
 			name: "insecure does not default",
@@ -56,7 +56,6 @@ func TestFoghornPoolServerNameForManagedTLS(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 

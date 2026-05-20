@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,10 +24,11 @@ type ServerTLSConfig struct {
 }
 
 type ClientTLSConfig struct {
-	CACertFile    string
-	CACertPEM     string
-	ServerName    string
-	AllowInsecure bool
+	CACertFile        string
+	CACertPEM         string
+	ServerName        string
+	DefaultServerName string
+	AllowInsecure     bool
 }
 
 func ServerTLS(cfg ServerTLSConfig, logger logging.Logger) (grpc.ServerOption, error) {
@@ -171,6 +173,10 @@ func statServerTLSFiles(certFile, keyFile string) (fileStamp, fileStamp, error) 
 }
 
 func buildClientTLSConfig(cfg ClientTLSConfig) (*tls.Config, bool, error) {
+	cfg.CACertFile = strings.TrimSpace(cfg.CACertFile)
+	cfg.CACertPEM = strings.TrimSpace(cfg.CACertPEM)
+	cfg.ServerName = strings.TrimSpace(cfg.ServerName)
+	cfg.DefaultServerName = strings.TrimSpace(cfg.DefaultServerName)
 	if cfg.AllowInsecure && config.IsProduction() {
 		return nil, false, fmt.Errorf("client TLS cannot use AllowInsecure in production")
 	}
@@ -199,6 +205,12 @@ func buildClientTLSConfig(cfg ClientTLSConfig) (*tls.Config, bool, error) {
 		if !rootCAs.AppendCertsFromPEM([]byte(cfg.CACertPEM)) {
 			return nil, false, fmt.Errorf("append inline CA cert: invalid PEM")
 		}
+	}
+	if rootCAs != nil && cfg.ServerName == "" {
+		cfg.ServerName = cfg.DefaultServerName
+	}
+	if rootCAs != nil && cfg.ServerName == "" {
+		return nil, false, fmt.Errorf("client TLS with custom CA requires ServerName or DefaultServerName")
 	}
 	if rootCAs == nil {
 		rootCAs, err = x509.SystemCertPool()

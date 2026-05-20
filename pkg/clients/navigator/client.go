@@ -14,6 +14,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+const DefaultServerName = "navigator.internal"
+
 // Client represents a Navigator gRPC client
 type Client struct {
 	conn    *grpc.ClientConn
@@ -60,9 +62,10 @@ func NewClient(config Config) (*Client, error) {
 	}
 
 	transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
-		CACertFile:    config.CACertFile,
-		ServerName:    config.ServerName,
-		AllowInsecure: config.AllowInsecure,
+		CACertFile:        config.CACertFile,
+		ServerName:        config.ServerName,
+		DefaultServerName: DefaultServerName,
+		AllowInsecure:     config.AllowInsecure,
 	}, config.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("configure Navigator gRPC TLS: %w", err)

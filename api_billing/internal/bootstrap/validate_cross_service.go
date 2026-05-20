@@ -30,17 +30,17 @@ func ValidatePlatformOfficialPricingCoverage(
 
 	// TLS posture mirrors the runtime client config used by the Purser server
 	// (see api_billing/cmd/purser/main.go's QM client setup): same
-	// GRPC_ALLOW_INSECURE / GRPC_TLS_CA_PATH / GRPC_TLS_SERVER_NAME envs. Hard-
-	// coding AllowInsecure here would have made `purser bootstrap validate`
-	// silently downgrade the in-cluster TLS posture, defeating the certs the
-	// runtime gRPC chain depends on.
+	// GRPC_ALLOW_INSECURE / GRPC_TLS_CA_PATH / QUARTERMASTER_GRPC_TLS_SERVER_NAME
+	// envs. Hard-coding AllowInsecure here would have made `purser bootstrap
+	// validate` silently downgrade the in-cluster TLS posture, defeating the
+	// certs the runtime gRPC chain depends on.
 	qm, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
 		GRPCAddr:      qmAddr,
 		ServiceToken:  serviceToken,
 		Logger:        logger,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("connect Quartermaster at %s: %w", qmAddr, err)

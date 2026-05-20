@@ -95,7 +95,7 @@ func main() {
 			ServiceToken:  serviceToken,
 			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+			ServerName:    config.GetServiceGRPCTLSServerName("navigator"),
 		})
 		if err != nil {
 			logger.WithError(err).Error("Failed to create Navigator client - DNS features will be disabled")
@@ -112,7 +112,7 @@ func main() {
 		Target:        decklogGRPCAddr,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("decklog"),
 		Timeout:       5 * time.Second,
 		Source:        "quartermaster",
 		ServiceToken:  serviceToken,
@@ -137,7 +137,7 @@ func main() {
 		ServiceToken:  serviceToken,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("purser"),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - billing status lookups will use defaults")
@@ -265,7 +265,7 @@ func main() {
 			ServiceToken:  serviceToken,
 			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
+			ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
 		})
 		if err != nil {
 			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client for self-registration")

@@ -230,6 +230,52 @@ func TestBuildClientTLSConfigRejectsMissingCAFile(t *testing.T) {
 	}
 }
 
+func TestBuildClientTLSConfigRejectsCAFileWithoutServerName(t *testing.T) {
+	dir := t.TempDir()
+	certFile, _ := writeSelfSignedPair(t, dir, "server.local")
+
+	_, _, err := buildClientTLSConfig(ClientTLSConfig{CACertFile: certFile})
+	if err == nil {
+		t.Fatal("expected error when custom CA file is set without ServerName or DefaultServerName")
+	}
+}
+
+func TestBuildClientTLSConfigRejectsCAPEMWithoutServerName(t *testing.T) {
+	dir := t.TempDir()
+	certFile, _ := writeSelfSignedPair(t, dir, "server.local")
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	_, _, err = buildClientTLSConfig(ClientTLSConfig{CACertPEM: string(certPEM)})
+	if err == nil {
+		t.Fatal("expected error when inline CA PEM is set without ServerName or DefaultServerName")
+	}
+}
+
+func TestBuildClientTLSConfigDefaultServerNameFallback(t *testing.T) {
+	dir := t.TempDir()
+	certFile, _ := writeSelfSignedPair(t, dir, "server.local")
+
+	cfg, insecureAllowed, err := buildClientTLSConfig(ClientTLSConfig{
+		CACertFile:        certFile,
+		DefaultServerName: "server.local",
+	})
+	if err != nil {
+		t.Fatalf("buildClientTLSConfig returned error: %v", err)
+	}
+	if insecureAllowed {
+		t.Fatal("expected TLS mode")
+	}
+	if cfg == nil {
+		t.Fatal("expected tls config")
+	}
+	if cfg.ServerName != "server.local" {
+		t.Fatalf("expected ServerName fallback to DefaultServerName, got %q", cfg.ServerName)
+	}
+}
+
 func TestBuildClientTLSConfigSystemPoolFallback(t *testing.T) {
 	cfg, insecureAllowed, err := buildClientTLSConfig(ClientTLSConfig{ServerName: "example.com"})
 	if err != nil {

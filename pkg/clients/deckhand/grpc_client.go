@@ -15,6 +15,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+const DefaultServerName = "deckhand.internal"
+
 // GRPCClient is the gRPC client for Deckhand (Support Messaging)
 type GRPCClient struct {
 	conn    *grpc.ClientConn
@@ -74,9 +76,10 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 
 	tlsCfg := grpcutil.ClientTLSConfig{
-		CACertFile:    config.CACertFile,
-		ServerName:    config.ServerName,
-		AllowInsecure: config.AllowInsecure,
+		CACertFile:        config.CACertFile,
+		ServerName:        config.ServerName,
+		DefaultServerName: DefaultServerName,
+		AllowInsecure:     config.AllowInsecure,
 	}
 	transport, err := grpcutil.ClientTLS(tlsCfg, config.Logger)
 	if err != nil {

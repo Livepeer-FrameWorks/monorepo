@@ -189,8 +189,10 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       PORT: ${FOGHORN_PORT}
-      FOGHORN_CONTROL_BIND_ADDR: ${FOGHORN_CONTROL_BIND_ADDR}
-      FOGHORN_GRPC_PORT: ${FOGHORN_CONTROL_PORT}
+      FOGHORN_INTERNAL_GRPC_BIND_ADDR: 0.0.0.0:${FOGHORN_CONTROL_PORT}
+      FOGHORN_EXTERNAL_GRPC_BIND_ADDR: 0.0.0.0:${FOGHORN_EXTERNAL_GRPC_PORT:-18029}
+      FOGHORN_EXTERNAL_GRPC_PORT: ${FOGHORN_EXTERNAL_GRPC_PORT:-18029}
+      FOGHORN_RELAY_ADVERTISE_ADDR: foghorn:${FOGHORN_CONTROL_PORT}
       LOG_LEVEL: ${LOG_LEVEL}
       GIN_MODE: ${GIN_MODE}
       # gRPC addresses (internal)
@@ -224,6 +226,7 @@ services:
     ports:
       - "18008:18008"
       - "18019:18019"
+      - "18029:18029"
     depends_on:
       postgres:
         condition: service_healthy
@@ -260,8 +263,10 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       PORT: 18018
-      FOGHORN_CONTROL_BIND_ADDR: 0.0.0.0:18029
-      FOGHORN_GRPC_PORT: 18029
+      FOGHORN_INTERNAL_GRPC_BIND_ADDR: 0.0.0.0:18019
+      FOGHORN_EXTERNAL_GRPC_BIND_ADDR: 0.0.0.0:18029
+      FOGHORN_EXTERNAL_GRPC_PORT: 18029
+      FOGHORN_RELAY_ADVERTISE_ADDR: foghorn-2:18019
       LOG_LEVEL: ${LOG_LEVEL}
       GIN_MODE: ${GIN_MODE}
       COMMODORE_GRPC_ADDR: ${COMMODORE_GRPC_ADDR}
@@ -291,7 +296,7 @@ services:
       FOGHORN_HOST: foghorn-2
     ports:
       - "18028:18018"
-      - "18029:18029"
+      - "18039:18029"
     depends_on:
       postgres:
         condition: service_healthy

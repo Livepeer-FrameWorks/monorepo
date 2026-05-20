@@ -375,6 +375,10 @@ func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, res
 	if clusterID == "" {
 		clusterID = resp.GetClusterId()
 	}
+	caBundlePEM := string(resp.GetInternalCaBundle())
+	if !edgeFoghornUsesInternalCA(foghornGRPC) {
+		caBundlePEM = ""
+	}
 
 	epConfig := provisioner.EdgeProvisionConfig{
 		Mode:            cfg.mode,
@@ -387,7 +391,7 @@ func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, res
 		ClusterID:       clusterID,
 		CertPEM:         resp.GetCertPem(),
 		KeyPEM:          resp.GetKeyPem(),
-		CABundlePEM:     string(resp.GetInternalCaBundle()),
+		CABundlePEM:     caBundlePEM,
 		Email:           cfg.email,
 		Capabilities:    cfg.capabilities,
 		BandwidthMbps:   cfg.bandwidthMbps,
@@ -413,6 +417,10 @@ func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp
 	if clusterID == "" {
 		clusterID = resp.GetClusterId()
 	}
+	caBundlePEM := string(resp.GetInternalCaBundle())
+	if !edgeFoghornUsesInternalCA(foghornGRPC) {
+		caBundlePEM = ""
+	}
 
 	epConfig := provisioner.EdgeProvisionConfig{
 		Mode:            "native",
@@ -425,7 +433,7 @@ func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp
 		ClusterID:       clusterID,
 		CertPEM:         resp.GetCertPem(),
 		KeyPEM:          resp.GetKeyPem(),
-		CABundlePEM:     string(resp.GetInternalCaBundle()),
+		CABundlePEM:     caBundlePEM,
 		Email:           cfg.email,
 		Capabilities:    cfg.capabilities,
 		BandwidthMbps:   cfg.bandwidthMbps,

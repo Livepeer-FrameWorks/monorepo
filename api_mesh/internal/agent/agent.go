@@ -153,7 +153,6 @@ type Config struct {
 	DataDir                 string // defaults to /var/lib/privateer
 	AllowInsecure           bool
 	CACertFile              string
-	ServerName              string
 	QuartermasterServerName string
 	NavigatorServerName     string
 	NavigatorGRPCAddr       string
@@ -245,7 +244,7 @@ func New(cfg Config) (*Agent, error) {
 			Timeout:       10 * time.Second,
 			AllowInsecure: cfg.AllowInsecure,
 			CACertFile:    cfg.CACertFile,
-			ServerName:    firstNonEmpty(cfg.QuartermasterServerName, cfg.ServerName),
+			ServerName:    cfg.QuartermasterServerName,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create quartermaster gRPC client: %w", err)
@@ -279,7 +278,7 @@ func New(cfg Config) (*Agent, error) {
 			ServiceToken:  cfg.ServiceToken,
 			AllowInsecure: cfg.AllowInsecure,
 			CACertFile:    cfg.CACertFile,
-			ServerName:    firstNonEmpty(cfg.NavigatorServerName, cfg.ServerName),
+			ServerName:    cfg.NavigatorServerName,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create navigator gRPC client: %w", err)
@@ -324,15 +323,6 @@ func New(cfg Config) (*Agent, error) {
 		wireguardIP:      cfg.WireguardIP,
 		lastKnownPath:    cfg.LastKnownPath,
 	}, nil
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func (a *Agent) Start() error {

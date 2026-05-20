@@ -45,7 +45,6 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 	}
 	grpcAllowInsecure := config.GetEnvBool("GRPC_ALLOW_INSECURE", false)
 	grpcCACertFile := config.GetEnv("GRPC_TLS_CA_PATH", "")
-	grpcServerName := config.GetEnv("GRPC_TLS_SERVER_NAME", "")
 
 	// Quartermaster cache
 	qmTTL := time.Duration(config.GetEnvInt("QUARTERMASTER_CACHE_TTL_SECONDS", 60)) * time.Second
@@ -63,7 +62,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		ServiceToken:  cfg.ServiceToken,
 		AllowInsecure: grpcAllowInsecure,
 		CACertFile:    grpcCACertFile,
-		ServerName:    grpcServerName,
+		ServerName:    config.GetServiceGRPCTLSServerName("commodore"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Commodore gRPC client: %w", err)
@@ -77,7 +76,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		ServiceToken:  cfg.ServiceToken,
 		AllowInsecure: grpcAllowInsecure,
 		CACertFile:    grpcCACertFile,
-		ServerName:    grpcServerName,
+		ServerName:    config.GetServiceGRPCTLSServerName("periscope"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Periscope gRPC client: %w", err)
@@ -91,7 +90,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		ServiceToken:  cfg.ServiceToken,
 		AllowInsecure: grpcAllowInsecure,
 		CACertFile:    grpcCACertFile,
-		ServerName:    grpcServerName,
+		ServerName:    config.GetServiceGRPCTLSServerName("purser"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Purser gRPC client: %w", err)
@@ -105,7 +104,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		ServiceToken:  cfg.ServiceToken,
 		AllowInsecure: grpcAllowInsecure,
 		CACertFile:    grpcCACertFile,
-		ServerName:    grpcServerName,
+		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Quartermaster gRPC client: %w", err)
@@ -120,7 +119,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 			ServiceToken:  cfg.ServiceToken,
 			AllowInsecure: grpcAllowInsecure,
 			CACertFile:    grpcCACertFile,
-			ServerName:    grpcServerName,
+			ServerName:    config.GetServiceGRPCTLSServerName("navigator"),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Navigator gRPC client: %w", err)
@@ -135,7 +134,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		ServiceToken:  cfg.ServiceToken,
 		AllowInsecure: grpcAllowInsecure,
 		CACertFile:    grpcCACertFile,
-		ServerName:    grpcServerName,
+		ServerName:    config.GetServiceGRPCTLSServerName("signalman"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Signalman gRPC client: %w", err)
@@ -146,7 +145,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		Target:        config.RequireEnv("DECKLOG_GRPC_ADDR"),
 		AllowInsecure: grpcAllowInsecure,
 		CACertFile:    grpcCACertFile,
-		ServerName:    grpcServerName,
+		ServerName:    config.GetServiceGRPCTLSServerName("decklog"),
 		Timeout:       cfg.Timeout,
 		Source:        "bridge",
 		ServiceToken:  cfg.ServiceToken,
@@ -168,7 +167,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 			ServiceToken:  cfg.ServiceToken,
 			AllowInsecure: grpcAllowInsecure,
 			CACertFile:    grpcCACertFile,
-			ServerName:    grpcServerName,
+			ServerName:    config.GetServiceGRPCTLSServerName("deckhand"),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Deckhand gRPC client: %w", err)
@@ -186,7 +185,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 			ServiceToken:  cfg.ServiceToken,
 			AllowInsecure: grpcAllowInsecure,
 			CACertFile:    grpcCACertFile,
-			ServerName:    grpcServerName,
+			ServerName:    config.GetServiceGRPCTLSServerName("skipper"),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Skipper gRPC client: %w", err)

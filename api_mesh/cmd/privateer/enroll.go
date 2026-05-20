@@ -236,7 +236,7 @@ func tryEnrollIfNeeded(ctx context.Context, logger logging.Logger, privateKeyFil
 		reqBody["target_cluster_id"] = cluster
 	}
 
-	resp, err := postBootstrap(ctx, bootstrapURL, reqBody)
+	resp, err := postBootstrap(ctx, logger, bootstrapURL, reqBody)
 	if err != nil {
 		// Request failed before any response was decoded. If the error
 		// happened before the server committed, the token is still valid
@@ -482,10 +482,8 @@ type bootstrapResponse struct {
 }
 
 // postBootstrap POSTs the enrollment request to Bridge and decodes the JSON
-// response. Respects GRPC_ALLOW_INSECURE / GRPC_TLS_CA_PATH env hints only
-// for parity with other Privateer connections; since Bridge speaks standard
-// HTTPS, this is mostly about test/dev environments.
-func postBootstrap(ctx context.Context, baseURL string, body map[string]any) (*bootstrapResponse, error) {
+// response.
+func postBootstrap(ctx context.Context, logger logging.Logger, baseURL string, body map[string]any) (*bootstrapResponse, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal bootstrap request: %w", err)
@@ -501,9 +499,12 @@ func postBootstrap(ctx context.Context, baseURL string, body map[string]any) (*b
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 	}
-	if config.GetEnvBool("GRPC_ALLOW_INSECURE", false) && strings.HasPrefix(url, "https://") {
+	if config.GetEnvBool("FRAMEWORKS_BOOTSTRAP_INSECURE", false) && strings.HasPrefix(url, "https://") {
+		if logger != nil {
+			logger.WithField("url", url).Warn("bootstrap HTTPS verification disabled via FRAMEWORKS_BOOTSTRAP_INSECURE")
+		}
 		client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // opt-in via env for dev/test
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // opt-in bootstrap-only dev/test override
 		}
 	}
 

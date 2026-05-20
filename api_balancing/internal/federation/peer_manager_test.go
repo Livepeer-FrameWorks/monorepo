@@ -213,7 +213,7 @@ func TestNotifyPeers_NonLeaderRegistersAddressOnly(t *testing.T) {
 	if addr == "" {
 		t.Fatal("expected non-leader to have peer address registered")
 	}
-	if addr != "foghorn.remote.example.com:18019" {
+	if addr != "foghorn.remote.example.com:18029" {
 		t.Fatalf("unexpected address: %s", addr)
 	}
 
@@ -287,7 +287,7 @@ func TestNotifyPeers_LeaderSyncsToRedis(t *testing.T) {
 	if len(addrs) != 1 {
 		t.Fatalf("expected 1 address in Redis, got %d", len(addrs))
 	}
-	if addrs["remote-1"] != "foghorn.r1.example.com:18019" {
+	if addrs["remote-1"] != "foghorn.r1.example.com:18029" {
 		t.Fatalf("unexpected Redis address: %s", addrs["remote-1"])
 	}
 }
@@ -301,18 +301,18 @@ func TestLoadPeerAddressesFromRedis(t *testing.T) {
 	// Pre-populate Redis with addresses (as if written by leader)
 	ctx := context.Background()
 	cache.SetPeerAddresses(ctx, map[string]string{
-		"remote-1": "foghorn.r1.example.com:18019",
-		"remote-2": "foghorn.r2.example.com:18019",
+		"remote-1": "foghorn.r1.example.com:18029",
+		"remote-2": "foghorn.r2.example.com:18029",
 	})
 
 	pm := newTestPeerManager(t, "local-cluster", cache, false)
 
 	pm.loadPeerAddressesFromRedis()
 
-	if addr := pm.GetPeerAddr("remote-1"); addr != "foghorn.r1.example.com:18019" {
+	if addr := pm.GetPeerAddr("remote-1"); addr != "foghorn.r1.example.com:18029" {
 		t.Fatalf("expected remote-1 addr, got %q", addr)
 	}
-	if addr := pm.GetPeerAddr("remote-2"); addr != "foghorn.r2.example.com:18019" {
+	if addr := pm.GetPeerAddr("remote-2"); addr != "foghorn.r2.example.com:18029" {
 		t.Fatalf("expected remote-2 addr, got %q", addr)
 	}
 }
@@ -327,18 +327,18 @@ func TestLoadPeerAddressesFromRedis_UpdatesExistingAddress(t *testing.T) {
 
 	// Seed a peer with old address
 	pm.mu.Lock()
-	pm.peers["remote-1"] = &peerState{addr: "old-addr:18019", lastRefresh: time.Now()}
+	pm.peers["remote-1"] = &peerState{addr: "old-addr:18029", lastRefresh: time.Now()}
 	pm.mu.Unlock()
 
 	// Leader wrote updated address to Redis
 	ctx := context.Background()
 	cache.SetPeerAddresses(ctx, map[string]string{
-		"remote-1": "new-addr:18019",
+		"remote-1": "new-addr:18029",
 	})
 
 	pm.loadPeerAddressesFromRedis()
 
-	if addr := pm.GetPeerAddr("remote-1"); addr != "new-addr:18019" {
+	if addr := pm.GetPeerAddr("remote-1"); addr != "new-addr:18029" {
 		t.Fatalf("expected updated address, got %q", addr)
 	}
 }
@@ -351,8 +351,8 @@ func TestLoadPeerAddressesFromRedis_SkipsSelf(t *testing.T) {
 
 	ctx := context.Background()
 	cache.SetPeerAddresses(ctx, map[string]string{
-		"local-cluster": "should-be-skipped:18019",
-		"remote-1":      "foghorn.r1.example.com:18019",
+		"local-cluster": "should-be-skipped:18029",
+		"remote-1":      "foghorn.r1.example.com:18029",
 	})
 
 	pm := newTestPeerManager(t, "local-cluster", cache, false)
@@ -371,12 +371,12 @@ func TestLoadPeerAddressesFromRedis_RemovesStaleRedisPeers(t *testing.T) {
 	pm := newTestPeerManager(t, "local-cluster", cache, false)
 
 	pm.mu.Lock()
-	pm.peers["redis-peer"] = &peerState{addr: "old:18019", fromRedis: true, lastRefresh: time.Now()}
-	pm.peers["hint-peer"] = &peerState{addr: "hint:18019", fromRedis: false, lastRefresh: time.Now()}
+	pm.peers["redis-peer"] = &peerState{addr: "old:18029", fromRedis: true, lastRefresh: time.Now()}
+	pm.peers["hint-peer"] = &peerState{addr: "hint:18029", fromRedis: false, lastRefresh: time.Now()}
 	pm.mu.Unlock()
 
 	ctx := context.Background()
-	if err := cache.SetPeerAddresses(ctx, map[string]string{"other-peer": "new:18019"}); err != nil {
+	if err := cache.SetPeerAddresses(ctx, map[string]string{"other-peer": "new:18029"}); err != nil {
 		t.Fatalf("SetPeerAddresses: %v", err)
 	}
 
@@ -388,7 +388,7 @@ func TestLoadPeerAddressesFromRedis_RemovesStaleRedisPeers(t *testing.T) {
 	if pm.GetPeerAddr("hint-peer") == "" {
 		t.Fatal("expected non-redis hint peer to remain")
 	}
-	if pm.GetPeerAddr("other-peer") != "new:18019" {
+	if pm.GetPeerAddr("other-peer") != "new:18029" {
 		t.Fatal("expected redis peer address to be loaded")
 	}
 }
@@ -416,8 +416,8 @@ func TestSyncPeerAddressesToRedis(t *testing.T) {
 	pm := newTestPeerManager(t, "local-cluster", cache, true)
 
 	pm.mu.Lock()
-	pm.peers["remote-1"] = &peerState{addr: "foghorn.r1.example.com:18019"}
-	pm.peers["remote-2"] = &peerState{addr: "foghorn.r2.example.com:18019"}
+	pm.peers["remote-1"] = &peerState{addr: "foghorn.r1.example.com:18029"}
+	pm.peers["remote-2"] = &peerState{addr: "foghorn.r2.example.com:18029"}
 	pm.mu.Unlock()
 
 	pm.syncPeerAddressesToRedis()
@@ -430,7 +430,7 @@ func TestSyncPeerAddressesToRedis(t *testing.T) {
 	if len(addrs) != 2 {
 		t.Fatalf("expected 2 addresses in Redis, got %d", len(addrs))
 	}
-	if addrs["remote-1"] != "foghorn.r1.example.com:18019" {
+	if addrs["remote-1"] != "foghorn.r1.example.com:18029" {
 		t.Fatalf("unexpected address for remote-1: %s", addrs["remote-1"])
 	}
 }
@@ -593,7 +593,7 @@ func TestNotifyPeers_UpdatesExistingPeerMetadata(t *testing.T) {
 	if !ok {
 		t.Fatal("expected peer to exist")
 	}
-	if ps.addr != "foghorn.remote-new.example.net:18019" {
+	if ps.addr != "foghorn.remote-new.example.net:18029" {
 		t.Fatalf("unexpected addr: %s", ps.addr)
 	}
 	if ps.lifecycle != peerAlwaysOn {
@@ -631,7 +631,7 @@ func TestNotifyPeers_LeaderSyncsToRedisOnAddressChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPeerAddresses: %v", err)
 	}
-	if addrs["remote-1"] != "foghorn.r1.new.example.com:18019" {
+	if addrs["remote-1"] != "foghorn.r1.new.example.com:18029" {
 		t.Fatalf("expected updated address in Redis, got %q", addrs["remote-1"])
 	}
 }
@@ -1528,7 +1528,7 @@ func TestUptimeSecondsAndStrPtr(t *testing.T) {
 
 func TestConnectPeer_NoPoolReturns(t *testing.T) {
 	pm := newTestPeerManager(t, "cluster-a", nil, false)
-	ps := &peerState{addr: "unused:18019"}
+	ps := &peerState{addr: "unused:18029"}
 	pm.connectPeer("remote-1", ps)
 }
 
@@ -1570,12 +1570,12 @@ func TestRefreshPeers_ListErrorKeepsExistingPeers(t *testing.T) {
 	pm := newTestPeerManager(t, "cluster-a", nil, false)
 	pm.peerDiscovery = &fakeClusterPeerDiscovery{err: errors.New("boom")}
 	pm.mu.Lock()
-	pm.peers["remote-1"] = &peerState{addr: "old:18019", lastRefresh: time.Now()}
+	pm.peers["remote-1"] = &peerState{addr: "old:18029", lastRefresh: time.Now()}
 	pm.mu.Unlock()
 
 	pm.refreshPeers()
 
-	if addr := pm.GetPeerAddr("remote-1"); addr != "old:18019" {
+	if addr := pm.GetPeerAddr("remote-1"); addr != "old:18029" {
 		t.Fatalf("expected existing peer to be preserved, got addr=%q", addr)
 	}
 }
@@ -1584,14 +1584,14 @@ func TestRefreshPeers_ReconcilesAddUpdateAndRemove(t *testing.T) {
 	pm := newTestPeerManager(t, "cluster-a", nil, false)
 
 	unchanged := &peerState{
-		addr:      "same:18019",
+		addr:      "same:18029",
 		connected: true,
 		tenantIDs: []string{"tenant-old"},
 	}
 	changedCanceled := 0
 	changedS3 := &ClusterS3Config{ClusterID: "changed", S3Bucket: "bucket-a"}
 	changed := &peerState{
-		addr:      "old:18019",
+		addr:      "old:18029",
 		connected: true,
 		cancel: func() {
 			changedCanceled++
@@ -1600,7 +1600,7 @@ func TestRefreshPeers_ReconcilesAddUpdateAndRemove(t *testing.T) {
 	}
 	staleCanceled := 0
 	stale := &peerState{
-		addr: "stale:18019",
+		addr: "stale:18029",
 		cancel: func() {
 			staleCanceled++
 		},
@@ -1614,9 +1614,9 @@ func TestRefreshPeers_ReconcilesAddUpdateAndRemove(t *testing.T) {
 	pm.peerDiscovery = &fakeClusterPeerDiscovery{
 		resp: &pb.ListPeersResponse{
 			Peers: []*pb.PeerCluster{
-				{ClusterId: "same", FoghornAddr: "same:18019", SharedTenantIds: []string{"tenant-a"}},
-				{ClusterId: "changed", FoghornAddr: "new:18019", SharedTenantIds: []string{"tenant-b"}},
-				{ClusterId: "new-peer", FoghornAddr: "new-peer:18019", SharedTenantIds: []string{"tenant-c"}},
+				{ClusterId: "same", FoghornAddr: "same:18029", SharedTenantIds: []string{"tenant-a"}},
+				{ClusterId: "changed", FoghornAddr: "new:18029", SharedTenantIds: []string{"tenant-b"}},
+				{ClusterId: "new-peer", FoghornAddr: "new-peer:18029", SharedTenantIds: []string{"tenant-c"}},
 				{ClusterId: "skip-empty", FoghornAddr: ""},
 			},
 		},
@@ -1644,7 +1644,7 @@ func TestRefreshPeers_ReconcilesAddUpdateAndRemove(t *testing.T) {
 	if updated == changed {
 		t.Fatal("expected changed peer state to be replaced")
 	}
-	if updated.addr != "new:18019" {
+	if updated.addr != "new:18029" {
 		t.Fatalf("expected changed peer address to update, got %q", updated.addr)
 	}
 	if updated.s3Config != changedS3 {
@@ -1681,7 +1681,7 @@ func TestConnectPeer_ExitsWhenPeerEntryMissing(t *testing.T) {
 	}
 	pm.pool = pool
 
-	pm.connectPeer("remote-1", &peerState{addr: "remote-1:18019"})
+	pm.connectPeer("remote-1", &peerState{addr: "remote-1:18029"})
 	if got := pool.callCount(); got != 0 {
 		t.Fatalf("expected no pool calls when peer is missing, got %d", got)
 	}
@@ -1697,7 +1697,7 @@ func TestConnectPeer_RetriesOnGetOrCreateErrorUntilDone(t *testing.T) {
 	}
 	pm.pool = pool
 
-	ps := &peerState{addr: "remote-1:18019"}
+	ps := &peerState{addr: "remote-1:18029"}
 	pm.mu.Lock()
 	pm.peers["remote-1"] = ps
 	pm.mu.Unlock()
@@ -1738,7 +1738,7 @@ func TestConnectPeer_RetriesOnOpenPeerChannelErrorUntilDone(t *testing.T) {
 	}
 	pm.pool = pool
 
-	ps := &peerState{addr: "remote-1:18019"}
+	ps := &peerState{addr: "remote-1:18029"}
 	pm.mu.Lock()
 	pm.peers["remote-1"] = ps
 	pm.mu.Unlock()
@@ -1773,7 +1773,7 @@ func TestConnectPeer_ConnectsThenMarksDisconnectedOnEOF(t *testing.T) {
 	}
 	pm.pool = pool
 
-	ps := &peerState{addr: "remote-1:18019"}
+	ps := &peerState{addr: "remote-1:18029"}
 	pm.mu.Lock()
 	pm.peers["remote-1"] = ps
 	pm.mu.Unlock()
